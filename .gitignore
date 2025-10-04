@@ -1,0 +1,13 @@
+# Workspace
+.vscode
+.cache
+node_modules
+package-lock.json
+
+# C++ Core
+build
+test.[cm]js
+*.test.[cm]js
+
+# Electron APP
+.dist
