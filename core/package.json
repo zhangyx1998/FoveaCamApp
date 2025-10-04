@@ -1,0 +1,16 @@
+{
+  "name": "fovea-cam-core",
+  "private": true,
+  "devDependencies": {
+    "cmake-js": "^7.3.1",
+    "node-addon-api": "^8.5.0",
+    "node-api-headers": "^1.5.0"
+  },
+  "exports": {
+    ".": {
+      "import": "./index.mjs",
+      "require": "./index.cjs",
+      "types": "./index.d.ts"
+    }
+  }
+}

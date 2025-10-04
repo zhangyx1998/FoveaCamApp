@@ -1,0 +1,15 @@
+{
+    "name": "fovea-cam",
+    "private": true,
+    "dependencies": {
+        "core": "file:core"
+    },
+    "workspaces": [
+        "app",
+        "core"
+    ],
+    "scripts": {
+        "make": "cd core && make",
+        "app": "cd app && npm run dev"
+    }
+}
