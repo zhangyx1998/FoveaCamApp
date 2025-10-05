@@ -7,7 +7,7 @@
 type Awaitable<T> = T | Promise<T>;
 
 declare module "core" {
-    /** Path to the resolved native module */
+    /** Path to the resolved native module injected by JS loader */
     export const __origin__: string;
 
     class CoreObject {
@@ -24,51 +24,86 @@ declare module "core" {
         public release(): void;
     }
 
+    interface Range {
+        min: number;
+        max: number;
+    }
+
+    type AutoMode = "Off" | "Once" | "Continuous";
+    type AcquisitionMode = "Continuous" | "SingleFrame" | "MultiFrame";
+
     export class Camera extends CoreObject {
         static list(): Array<Camera>;
+
+        // Device identification
+        readonly physical_id: string;
+        readonly device_id: string;
+        readonly vendor: string;
         readonly model: string;
         readonly serial: string;
-        readonly sensor: string;
-        // configure(key: string, value: number, type = "int"): boolean;
-        // configure(key: string, value: number, type = "float"): boolean;
-        // configure(key: string, value: string): boolean;
 
-        fps: number;
-        fps_enable: boolean;
+        // Acquisition control
+        acquisition_mode: AcquisitionMode;
+        frame_count: number;
+        readonly frame_count_range: Range;
 
+        // Frame rate control
+        frame_rate_enable: boolean;
+        readonly frame_rate_available: boolean;
+        frame_rate: number;
+        readonly frame_rate_range: Range;
+
+        // Trigger control
+        readonly trigger_options: string[];
+        clearTriggers(): void;
+        softwareTrigger(): void;
+        trigger_source: string;
+        readonly trigger_source_options: string[];
+
+        // Exposure control
+        readonly exposure_time_available: boolean;
+        readonly exposure_auto_available: boolean;
         exposure: number;
-        exposure_auto: "Off" | "Continuous" | "Once";
+        readonly exposure_range: Range;
+        exposure_auto: AutoMode;
+        setExposureMode(mode: string): boolean;
 
+        // Gain control
+        readonly gain_available: boolean;
+        readonly gain_auto_available: boolean;
+        selectGain(selector: string): boolean;
+        readonly gain_options: string[];
         gain: number;
-        gain_auto: "Off" | "Continuous" | "Once";
+        readonly gain_range: Range;
+        gain_auto: AutoMode;
 
-        acquire(timeout = 1000): Promise<Frame>;
-        // A camera can only have one active stream at a time.
-        readonly stream: Stream | null;
-        /**
-         * Creates a stream, holds startAcquisition() until the first consumer
-         * (i.e. async iterator) is attached to the stream.
-         * Throws if a stream already exists.
-         */
-        start(): Stream;
-        /**
-         * An active stream can be terminated by calling stop()
-         * This will cause all async iterators to end, and set stream to null.
-         * Does nothing if no active stream.
-         */
-        stop(): void;
+        // Black level control
+        readonly black_level_available: boolean;
+        readonly black_level_auto_available: boolean;
+        selectBlackLevel(selector: string): boolean;
+        readonly black_level_options: string[];
+        black_level: number;
+        readonly black_level_range: Range;
+        black_level_auto: AutoMode;
+
+        // Frame acquisition
+        grab(timeout?: number): Promise<Frame>;
+
+        // Stream control
+        readonly stream: Stream;
     }
 
     export class Frame extends CoreObject {
         readonly width: number;
         readonly height: number;
-        readonly format: PixelFormat;
         readonly timestamp: bigint;
         view(format?: PixelFormat, buffer?: BufferSource): ArrayBuffer;
     }
 
     export class Stream extends CoreObject {
         // Skip frames if the consumer is slower than the producer.
+        // Generates null if consumer is faster than producer.
+        // Consumer MUST yield (await) upon null so producer can push data.
         [Symbol.iterator](): IterableIterator<Frame | null>;
         // Queue all frames
         [Symbol.asyncIterator](): AsyncIterableIterator<Frame>;

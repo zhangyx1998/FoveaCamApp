@@ -5,12 +5,17 @@
 // -------------------------------------------------------
 #pragma once
 
-#include "napi.h"
-#include "utils/pointer.h"
-#include "utils/stacktrace.h"
+#include <napi.h>
+
 #include <exception>
 #include <functional>
 #include <sstream>
+
+#include <utils/debug.h>
+#include <utils/error.h>
+#include <utils/pointer.h>
+#include <utils/stacktrace.h>
+#include <utils/type-name.h>
 
 #define FN(NAME) Napi::Value NAME(const Napi::CallbackInfo &info)
 #define GET(NAME) FN(get_##NAME)
@@ -35,21 +40,19 @@ inline const Napi::Error &injectNativeStack(const Napi::Error &error,
   return error;
 }
 
-inline const Napi::Error injectNativeStack(const Napi::Error error) {
-  return injectNativeStack(error, Stacktrace::capture());
-}
-
 #define JS_THROW(ERR, MSG)                                                     \
   {                                                                            \
     auto error = Napi::Error::New(env, MSG);                                   \
-    injectNativeStack(error).ThrowAsJavaScriptException();                     \
+    injectNativeStack(error, Stacktrace::capture())                            \
+        .ThrowAsJavaScriptException();                                         \
     return;                                                                    \
   }
 
 #define JS_THROW_RET(ERR, MSG, RET)                                            \
   {                                                                            \
     auto error = Napi::Error::New(env, MSG);                                   \
-    injectNativeStack(error).ThrowAsJavaScriptException();                     \
+    injectNativeStack(error, Stacktrace::capture())                            \
+        .ThrowAsJavaScriptException();                                         \
     return RET;                                                                \
   }
 
@@ -64,8 +67,9 @@ inline const Napi::Error injectNativeStack(const Napi::Error error) {
 #define JS_EXCEPT(CODE)                                                        \
   try {                                                                        \
     CODE;                                                                      \
-  } catch (JS::Error & e) {                                                    \
+  } catch (JS::ErrorBase & e) {                                                \
     e.Throw();                                                                 \
+    return;                                                                    \
   } catch (const std::exception &e) {                                          \
     JS_THROW(Error, e.what());                                                 \
   }
@@ -73,58 +77,49 @@ inline const Napi::Error injectNativeStack(const Napi::Error error) {
 #define JS_EXCEPT_RET(CODE, RET)                                               \
   try {                                                                        \
     CODE;                                                                      \
-  } catch (JS::Error & e) {                                                    \
+  } catch (JS::ErrorBase & e) {                                                \
     e.Throw();                                                                 \
     return RET;                                                                \
   } catch (const std::exception &e) {                                          \
     JS_THROW_RET(Error, e.what(), RET);                                        \
   }
 
-#if defined(DEBUG) || defined(_DEBUG)
-#include <cstdio>
-#define VERBOSE(...)                                                           \
-  {                                                                            \
-    std::fprintf(stderr, "[FoveaCam] " __VA_ARGS__);                           \
-    std::putc('\n', stderr);                                                   \
-    std::fflush(stderr);                                                       \
-  }
-#else
-#define VERBOSE(MSG)
-#endif
-
 namespace JS {
 
-class Error : public std::exception {
-  const Napi::Error error;
+class ErrorBase : public TracedError {
+  virtual Napi::Error createJsError() const = 0;
 
 public:
-  Error(Napi::Error error) : error(injectNativeStack(error)) {}
-  Error(Napi::Env env, std::string message)
-      : error(injectNativeStack(
-            Napi::Error::New(env, Napi::String::New(env, message)))) {}
-  void Throw() const { error.ThrowAsJavaScriptException(); }
-  const char *what() const noexcept override { return error.Message().c_str(); }
+  Napi::Env const env;
+  inline ErrorBase(Napi::Env env, std::string message)
+      : TracedError(message), env(env) {};
+  void Throw() const {
+    auto e = injectNativeStack(createJsError(), stack);
+    e.ThrowAsJavaScriptException();
+  }
 };
 
-class TypeError : public Error {
-  const Napi::Error error;
+class Error : public ErrorBase {
+  Napi::Error createJsError() const override {
+    return Napi::Error::New(env, Napi::String::New(env, message));
+  }
 
 public:
-  TypeError(Napi::Env env, std::string message)
-      : Error(Napi::TypeError::New(env, Napi::String::New(env, message))) {}
+  using ErrorBase::ErrorBase;
 };
 
-class RangeError : public Error {
-  const Napi::Error error;
+class TypeError : public ErrorBase {
+  Napi::Error createJsError() const override {
+    return Napi::TypeError::New(env, Napi::String::New(env, message));
+  }
 
 public:
-  RangeError(Napi::Env env, std::string message)
-      : Error(Napi::RangeError::New(env, Napi::String::New(env, message))) {}
+  using ErrorBase::ErrorBase;
 };
 
 } // namespace JS
 
-#include "utils/type-name.h"
+#include <utils/type-name.h>
 
 template <typename T> inline T noNull(T ptr, std::string message) {
   if (!ptr)
@@ -154,6 +149,17 @@ template <typename T> T &extract(const Napi::Value &value, std::string action) {
 template <typename T> T &extract(const Napi::Value &value) {
   static const auto type = type_name<T>();
   return extract<T>(value, "extract " + type);
+}
+
+template <typename T> void deleter(Napi::Env, void *, void *hint) {
+  if (hint) {
+    delete static_cast<T *>(hint);
+    auto name = type_name<T>();
+    VERBOSE("[deleter] Collected: %.*s %p", static_cast<int>(name.size()),
+            name.data(), hint);
+  } else {
+    throw std::runtime_error("Got null deleter hint pointer");
+  }
 }
 
 template <SmartPtrLike R> class OneShotWorker : public Napi::AsyncWorker {

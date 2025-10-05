@@ -91,7 +91,7 @@ export default defineConfig(({ command }) => {
             },
         },
         build: {
-            outDir: resolve(PROJECT_ROOT, ".dist", "static"),
+            outDir: resolve(PROJECT_ROOT, ".dist", "renderer"),
         },
     };
 });

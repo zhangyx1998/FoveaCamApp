@@ -8,10 +8,11 @@
 #include <napi.h>
 #include <stdexcept>
 
-#include "utils/map-set.h"
-#include "utils/napi-helper.h"
-#include "utils/pointer.h"
-#include "utils/type-name.h"
+#include "Threading/Guard.h"
+#include "napi-helper.h"
+#include <utils/map-set.h>
+#include <utils/pointer.h>
+#include <utils/type-name.h>
 
 #define CORE_OBJECT_FEAT_STRICT_EQ 0
 #if defined(CORE_OBJECT_FEAT_STRICT_EQ) && CORE_OBJECT_FEAT_STRICT_EQ
@@ -58,12 +59,8 @@ template <class Obj, SmartPtrLike Core>
 class CoreObject : public Napi::ObjectWrap<Obj> {
 protected:
   /** Context-aware local storage per Node Env */
-  class Local {
+  class Local : public Shared<Local> {
   public:
-    typedef std::shared_ptr<Local> Ptr;
-    template <typename... Args> static inline Ptr create(Args &&...args) {
-      return std::make_shared<Local>(std::forward<Args>(args)...);
-    }
     Napi::FunctionReference constructor;
     FEAT_STRICT_EQ(Map<uintptr_t, Napi::Reference<Napi::Value>> instances);
     Local(Napi::Function &fn)
@@ -82,54 +79,55 @@ protected:
     const Core core;
   } Payload;
   /** Local DB Per Env */
-  static inline std::mutex local_mutex;
-  static inline Map<napi_env, typename Local::Ptr> locals;
+  typedef Map<napi_env, typename Local::Ptr> Locals;
+  typedef Threading::Guard<Locals> LocalsGuard;
+  static inline LocalsGuard locals;
   // Retrieve or create local context
   static inline Local::Ptr getLocal(Napi::Env env) {
-    std::scoped_lock lock(local_mutex);
-    if (!locals.has(env)) {
-      __init__(env);
-      auto success = locals.has(env);
+    auto ref = locals.ref();
+    if (!ref->has(env)) {
+      CoreObjectInit(env, ref);
+      auto success = ref->has(env);
       if (!success)
         throw JS::Error(env,
                         "Cannot dynamically initialize " + type_name<Obj>());
     }
-    return locals.get(env);
+    return ref->get(env);
   }
 
 private:
-  static inline Napi::Value __init__(Napi::Env env) {
-    if (!locals.has(env)) {
+  static inline Napi::Value CoreObjectInit(Napi::Env env,
+                                           LocalsGuard::Ref &ref) {
+    if (!ref->has(env)) {
       VERBOSE("Initializing local context for %s", Obj::name.c_str());
       auto fn = Obj::Init(env);
-      locals.set(env, Local::create(fn));
-      env.AddCleanupHook(__deinit__, static_cast<napi_env>(env));
+      ref->set(env, Local::create(fn));
+      env.AddCleanupHook(CoreObjectDeinit, static_cast<napi_env>(env));
     }
-    return locals.get(env)->constructor.Value();
+    return ref->get(env)->constructor.Value();
   }
 
-  static void __deinit__(napi_env env) {
+  static void CoreObjectDeinit(napi_env env) {
     VERBOSE("De-initializing local context for %s", Obj::name.c_str());
-    std::scoped_lock lock(local_mutex);
-    locals.erase(env);
+    auto ref = locals.ref();
+    ref->erase(env);
   }
 
 public:
   // Place holder function for dynamic initialization during JS runtime.
-  // local_mutex is locked by caller.
   static Napi::Function Init(Napi::Env env) {
     throw std::runtime_error("Init() not implemented by CoreObject subclass");
   }
   // Static initialization during module-load.
   static inline void Export(Napi::Env env, Napi::Object &exports) {
-    std::scoped_lock lock(local_mutex);
-    exports.Set(Obj::name, __init__(env));
+    auto ref = locals.ref();
+    exports.Set(Obj::name, CoreObjectInit(env, ref));
   }
 
 private:
   typedef CoreObject<Obj, Core> Self;
-  static inline Napi::Value __create__(Napi::Env env, Local::Ptr &local,
-                                       Payload *p) {
+  static inline Napi::Value CoreObjectCreate(Napi::Env env, Local::Ptr &local,
+                                             Payload *p) {
     auto ext = Napi::External<Payload>::New(env, p);
     auto obj = local->constructor.New({ext});
     FEAT_STRICT_EQ(local->instances.set(uintptr(p->core), obj));
@@ -151,8 +149,8 @@ public:
         {
           auto local = getLocal(env);
           FEAT_STRICT_EQ(TRY_REUSE(local->instances, uintptr(core)));
-          return __create__(env, local,
-                            new Payload{.local = local, .core = core});
+          return CoreObjectCreate(env, local,
+                                  new Payload{.local = local, .core = core});
         },
         env.Undefined());
   }
@@ -164,7 +162,7 @@ public:
           Core core(std::forward<Args>(args)...);
           auto local = getLocal(env);
           FEAT_STRICT_EQ(TRY_REUSE(local->instances, uintptr(core)));
-          return __create__(
+          return CoreObjectCreate(
               env, local, new Payload{.local = local, .core = std::move(core)});
         },
         env.Undefined());
@@ -179,8 +177,8 @@ public:
         {
           auto local = getLocal(env);
           FEAT_STRICT_EQ(TRY_REUSE(local->instances, uintptr(core)));
-          return __create__(env, local,
-                            new Payload{.local = local, .core = core});
+          return CoreObjectCreate(env, local,
+                                  new Payload{.local = local, .core = core});
         },
         env.Undefined());
   }
@@ -196,7 +194,7 @@ public:
           Core core(std::forward<Args>(args)...);
           auto local = getLocal(env);
           FEAT_STRICT_EQ(TRY_REUSE(local->instances, uintptr(core)));
-          return __create__(
+          return CoreObjectCreate(
               env, local, new Payload{.local = local, .core = std::move(core)});
         },
         env.Undefined());
@@ -280,11 +278,11 @@ public:
     ss << "0x" << std::hex << address();
     return ss.str();
   }
-  inline const Core &core() const {
-    // Accessing core of a releaseed object will crash the program.
+  inline Core const &core() const {
+    // Accessing core of a released object will crash the program.
     // This is strictly forbidden, and is not recoverable by JS try-catch.
     if (payload == nullptr)
-      throw JS::Error(env, type() + " object already releaseed");
+      throw JS::Error(env, type() + " object already released");
     return payload->core;
   }
   CoreObject(const Napi::CallbackInfo &info)

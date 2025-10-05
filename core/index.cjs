@@ -26,10 +26,6 @@ const { resolve } = require("node:path");
 const dir = resolve(__filename, "..");
 const path = resolve(dir, `./build/${prefix}`);
 
-if (!existsSync(path + ".node")) {
-    throw new Error(`Error loading core: no such file: ${path}.node`);
-}
-
 const core = require(path);
 Object.defineProperty(core, "__origin__", {
     value: path + ".node",

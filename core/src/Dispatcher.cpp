@@ -4,136 +4,190 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 #include <deque>
-#include <mutex>
-#include <stdexcept>
+
+#include <uv.h>
 
 #include "Dispatcher.h"
+#include "Threading/Guard.h"
+#include "napi-helper.h"
+#include "utils/debug.h"
+#include "utils/error.h"
+#include "utils/pointer.h"
 
-#include "utils/map-set.h"
-#include "utils/napi-helper.h"
-#include "uv.h"
+#include <iostream>
+#include <utils/map-set.h>
 
 namespace Dispatcher {
 
-class Dispatcher {
-public:
-  typedef std::shared_ptr<Dispatcher> Ptr;
-  static inline Ptr create(Napi::Env env) {
-    return std::make_shared<Dispatcher>(env);
-  }
-  static void onAsync(uv_async_t *handle);
-  Dispatcher(Napi::Env env);
-  ~Dispatcher();
-  Task getNextTask();
-  void updateRef();
-  inline void notify() { uv_async_send(&async); }
-  inline bool isClosing() {
-    return uv_is_closing(reinterpret_cast<uv_handle_t *>(&async));
-  }
+using Threading::Guard;
 
-  Napi::Env env;
-  bool active = true;
-  bool referenced = true; // uv handle is referenced by default
-  uv_loop_t *loop = nullptr;
+static void async_cb(uv_async_t *handle);
+
+struct Context {
   uv_async_t async;
-  std::mutex mutex;
-  std::deque<Task> queue;
-};
+  uv_handle_t *handle() { return reinterpret_cast<uv_handle_t *>(&async); }
 
-static std::mutex registry_mutex;
-static Map<napi_env, Dispatcher::Ptr> registry;
+  unsigned future = 0;
 
-void Dispatcher::onAsync(uv_async_t *handle) {
-  const auto self = static_cast<Dispatcher *>(handle->data);
-  auto &env = self->env;
-  // Main thread: run queued tasks with proper N-API scopes
-  Napi::HandleScope hs(env);
-  for (;;) {
-    Task t = self->getNextTask();
-    if (t)
-      t(env);
+  inline void incFuture() {
+    future++;
+    updateRef();
+  }
+
+  inline void decFuture() {
+    if (future > 0)
+      future--;
     else
-      break;
+      throw TracedError("Dispatcher::future decremented below zero");
+    updateRef();
   }
-  self->updateRef();
-}
 
-Dispatcher::Dispatcher(Napi::Env env) : env(env) {
-  napi_status s = napi_get_uv_event_loop(env, &loop);
-  if (s != napi_ok)
-    throw std::runtime_error("get_uv_event_loop failed");
-  async.data = this;
-  if (uv_async_init(loop, &async, onAsync) != 0)
-    throw std::runtime_error("uv_async_init failed");
-  updateRef();
-}
+  std::deque<Task> queue;
 
-Dispatcher::~Dispatcher() {
-  {
-    std::lock_guard<std::mutex> lock(mutex);
-    active = false;
-    queue.clear();
+  void dispatch(Task &&task) {
+    queue.push_back(std::move(task));
+    updateRef();
+    uv_async_send(&async);
   }
-  updateRef();
-}
 
-Task Dispatcher::getNextTask() {
-  Task out = nullptr;
-  {
-    std::lock_guard<std::mutex> lock(mutex);
-    if (active && !queue.empty()) {
-      out = std::move(queue.front());
-      queue.pop_front();
+  Task getNextTask() {
+    if (queue.empty())
+      return nullptr;
+    auto task = std::move(queue.front());
+    queue.pop_front();
+    return task;
+  }
+
+  bool referenced = true; // uv handle is referenced by default
+
+  void updateRef() {
+    if (uv_is_closing(handle()))
+      return;
+    bool shouldReference = future > 0 || !queue.empty();
+    if (!referenced && shouldReference) {
+      uv_ref(handle());
+      referenced = true;
+    } else if (referenced && !shouldReference) {
+      uv_unref(handle());
+      referenced = false;
     }
   }
-  return out;
-}
 
-void Dispatcher::updateRef() {
-  auto handle = reinterpret_cast<uv_handle_t *>(&async);
-  if (isClosing())
-    return;
-  std::scoped_lock lock(mutex);
-  if (!referenced && !queue.empty()) {
-    uv_ref(handle);
-    referenced = true;
-  } else if (referenced && (queue.empty() || !active)) {
-    uv_unref(handle);
-    referenced = false;
+  Context(napi_env env) : async({.data = env}) {
+    VERBOSE("Dispatcher created");
+    uv_loop_t *loop;
+    napi_status s = napi_get_uv_event_loop(env, &loop);
+    if (s != napi_ok)
+      throw JS::Error(env, "napi_get_uv_event_loop failed");
+    if (uv_async_init(loop, &async, async_cb) != 0)
+      throw JS::Error(env, "uv_async_init failed");
+    updateRef();
   }
-}
+
+  ~Context() {
+    if (referenced) {
+      std::cerr << "[WARN] Dispatcher destroyed with active references"
+                << std::endl;
+      uv_unref(handle());
+    }
+    // if (!uv_is_closing(handle())) {
+    //   uv_close(handle(), nullptr);
+    // }
+  }
+};
+
+class Dispatcher : public Shared<Dispatcher> {
+  friend void async_cb(uv_async_t *handle);
+
+public:
+  Napi::Env env;
+  Guard<Context> ctx;
+  inline Guard<Context>::Ref ref() { return ctx.ref(); }
+  Dispatcher(Napi::Env env) : env(env), ctx(env) {};
+  ~Dispatcher() { VERBOSE("Dispatcher destroyed"); }
+};
+
+typedef Guard<Map<napi_env, Dispatcher::Ptr>> Registry;
+static Registry registry;
 
 Dispatcher::Ptr get(Napi::Env env) {
-  std::scoped_lock lock(registry_mutex);
-  if (!registry.has(env))
-    throw JS::Error(env, "Dispatcher not initialized for this env");
-  return registry.get(env);
+  auto ref = registry.ref();
+  if (ref->has(env))
+    return ref->get(env);
+  else
+    return nullptr;
 }
 
-void dispatch(Napi::Env env, Task task) {
+static void async_cb(uv_async_t *handle) {
+  const auto &env = static_cast<napi_env>(handle->data);
   auto dispatcher = get(env);
-  {
-    std::lock_guard<std::mutex> lock(dispatcher->mutex);
-    if (!dispatcher->active)
-      return;
-    dispatcher->queue.push_back(std::move(task));
+  if (!dispatcher) {
+    std::cerr << "[ERROR] Dispatcher async_cb called after cleanup"
+              << std::endl;
+    return;
   }
-  dispatcher->updateRef();
-  dispatcher->notify();
+  Napi::HandleScope hs(env);
+  while (true) {
+    auto task = dispatcher->ref()->getNextTask();
+    if (!task)
+      break;
+    try {
+      task(env);
+    } catch (const std::exception &e) {
+      std::cerr << "[ERROR] Unhandled exception in Dispatcher task: "
+                << e.what() << std::endl;
+    } catch (...) {
+      std::cerr << "[ERROR] Unknown exception in Dispatcher task" << std::endl;
+    }
+    dispatcher->ref()->updateRef();
+  }
 }
 
 void cleanup(napi_env env) {
-  std::scoped_lock lock(registry_mutex);
-  if (registry.has(env))
-    registry.erase(env);
+  auto ref = registry.ref();
+  if (ref->has(env))
+    ref->erase(env);
 }
 
-void init(Napi::Env &env) {
-  std::scoped_lock lock(registry_mutex);
-  if (registry.has(env))
+void init(Napi::Env env) {
+  auto ref = registry.ref();
+  if (ref->has(env))
     throw JS::Error(env, "Dispatcher already initialized for this env");
-  registry.set(env, Dispatcher::create(env));
+  auto dispatcher = Dispatcher::create(env);
+  ref->set(env, dispatcher);
   env.AddCleanupHook(cleanup, static_cast<napi_env>(env));
+}
+
+void dispatch(Napi::Env env, Task &&task) {
+  auto dispatcher = get(env);
+  if (!dispatcher)
+    throw JS::Error(env, "Dispatcher not initialized for this env");
+  dispatcher->ref()->dispatch(std::move(task));
+}
+
+Future::Future(Napi::Env env) : Deferred(env) {
+  auto dispatcher = get(Env());
+  if (!dispatcher)
+    throw JS::Error(Env(), "Dispatcher not initialized for this env");
+  dispatcher->ref()->incFuture();
+}
+
+Future::Future(Deferred &&other) : Deferred(other) {
+  auto dispatcher = get(Env());
+  if (!dispatcher)
+    throw JS::Error(Env(), "Dispatcher not initialized for this env");
+  dispatcher->ref()->incFuture();
+}
+
+Future::~Future() {
+  auto dispatcher = get(Env());
+  if (dispatcher) {
+    dispatcher->ref()->decFuture();
+  } else {
+    // Dispatcher already cleaned up, this is fine during shutdown
+    std::cerr << "[WARN] Future destroyed after Dispatcher cleanup"
+              << std::endl;
+  }
 }
 
 } // namespace Dispatcher

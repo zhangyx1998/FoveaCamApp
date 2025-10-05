@@ -7,7 +7,7 @@ console.log(...cameras);
 
 function getStream(camera: Camera | undefined) {
     if (!camera) return undefined;
-    return markRaw(camera.start());
+    return markRaw(camera.stream);
 }
 
 const fovea_l = computed(() => cameras.get("24155467") as Camera);
