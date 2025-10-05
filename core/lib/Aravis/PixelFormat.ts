@@ -1,0 +1,14 @@
+export type PixelFormat =
+    | "Mono8"
+    | "Mono16"
+    | "RGB8"
+    | "BGR8"
+    | "RGBA8"
+    | "BGRA8"
+    | "BayerGR8"
+    | "BayerRG8"
+    | "BayerGB8"
+    | "BayerBG8"
+    | "BayerGR16"
+    | "BayerRG16"
+    | "BayerGB16";

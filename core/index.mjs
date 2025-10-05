@@ -6,7 +6,6 @@
 // ESM wrapper: use createRequire to load the .node file
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
-import { resolve } from "node:path";
 /**
  * @param {URL} url
  */
@@ -25,4 +24,4 @@ const Module = require("./index.cjs");
 
 export default Module;
 // (optional) re-expose named exports for nicer ESM ergonomics:
-export const { Camera, Frame, Stream, __origin__ } = Module;
+export const { Camera, Frame, __origin__ } = Module;

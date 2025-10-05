@@ -12,14 +12,14 @@ const DIR = path.dirname(fileURLToPath(import.meta.url));
 // │ │ └── index.js    > Electron-Main
 // │ └─┬ preload
 // │   └── index.mjs   > Preload-Scripts
-// ├─┬ .dist/static
+// ├─┬ .dist/renderer
 // │ └── index.html    > Electron-Renderer
 //
 const DIST = path.join(DIR, "..");
 process.env.APP_ROOT = path.join(DIR, "../..");
 
 export const MAIN_DIST = path.join(DIST, "electron");
-export const RENDERER_DIST = path.join(DIST, "static");
+export const RENDERER_DIST = path.join(DIST, "renderer");
 export const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL;
 
 process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL

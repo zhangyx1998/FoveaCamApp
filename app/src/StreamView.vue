@@ -58,11 +58,11 @@ watch(() => props.stream, async (stream, prev) => {
             if (props.stream?.id !== stream.id) break;
             if (!frame) { await new Promise(requestAnimationFrame); continue; }
             if (!image.value) image.value = new ImageData(
-                new Uint8ClampedArray(frame.view("RGBa8")),
+                new Uint8ClampedArray(frame.view("BGRA8")),
                 frame.width,
                 frame.height
             )
-            else frame.view("RGBa8", image.value.data);
+            else frame.view("BGRA8", image.value.data);
             frame.release();
             if (canvas.value)
                 render(canvas.value, image.value);

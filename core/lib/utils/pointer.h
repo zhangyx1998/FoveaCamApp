@@ -7,6 +7,9 @@
 
 #include <concepts>
 #include <cstdint>
+#include <memory>
+
+#include <utils/type-name.h>
 
 // Detect common aliases, when present
 template <class P>
@@ -14,6 +17,12 @@ concept HasPointerAlias = requires { typename P::pointer; };
 
 template <class P>
 concept HasElementType = requires { typename P::element_type; };
+
+template <typename T> inline T *noNull(T *ptr) {
+  if (ptr == nullptr)
+    throw std::runtime_error("Null pointer to " + type_name<T>());
+  return ptr;
+}
 
 // Matches any "smart pointer" that provides .get() returning a pointer-like
 // value. We accept three common shapes:
@@ -49,3 +58,19 @@ template <typename T> inline uintptr_t uintptr(T *ptr) {
 template <SmartPtrLike T> inline uintptr_t uintptr(T &ptr) {
   return reinterpret_cast<uintptr_t>(ptr.get());
 }
+
+template <typename Derived> class Shared {
+public:
+  using Ptr = std::shared_ptr<Derived>;
+  template <typename... Args> static inline Ptr create(Args &&...args) {
+    return std::make_shared<Derived>(std::forward<Args>(args)...);
+  }
+};
+
+template <typename Derived> class Unique {
+public:
+  using Ptr = std::unique_ptr<Derived>;
+  template <typename... Args> static inline Ptr create(Args &&...args) {
+    return std::make_unique<Derived>(std::forward<Args>(args)...);
+  }
+};

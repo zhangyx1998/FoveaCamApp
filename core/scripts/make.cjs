@@ -14,16 +14,19 @@ async function make(runtime, version, arch, options = {}) {
         runtime: runtime,
         runtimeVersion: version,
         arch: arch,
-        cMakeOptions: options,
+        cMakeOptions: {
+            CMAKE_COLOR_DIAGNOSTICS: process.stdout.isTTY ? "ON" : "OFF",
+            ...options,
+        },
     });
     if (typeof buildSystem[cmd] !== "function")
         throw new Error(`Unknown command: ${cmd}`);
     console.log(`[${cmd.toUpperCase()}] ${prefix}`);
     await buildSystem[cmd]();
-    const src = `${prefix}/Release/FoveaCam.node`;
+    const src = `build/${prefix}/Release/core.node`;
     const dst = `build/${prefix}.node`;
     if (["build", "rebuild", "install"].includes(cmd))
-        execSync(`ln -sf ${src} ${dst}`, { stdio: "inherit" });
+        execSync(`cp ${src} ${dst}`, { stdio: "inherit" });
     if (["configure", "build", "rebuild", "install"].includes(cmd)) {
         const db = `build/${prefix}/compile_commands.json`;
         if (existsSync(db))
