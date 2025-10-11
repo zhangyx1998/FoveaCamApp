@@ -5,10 +5,10 @@
 // -------------------------------------------------------
 #pragma once
 
-#include "utils/pointer.h"
+#include <pointer.h>
 #include <mutex>
 
-#include <utils/type-name.h>
+#include <type_name.h>
 
 namespace Threading {
 

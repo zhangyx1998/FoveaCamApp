@@ -11,8 +11,8 @@
 #include "Threading/Guard.h"
 #include "napi-helper.h"
 #include <utils/map-set.h>
-#include <utils/pointer.h>
-#include <utils/type-name.h>
+#include <pointer.h>
+#include <type_name.h>
 
 #define CORE_OBJECT_FEAT_STRICT_EQ 0
 #if defined(CORE_OBJECT_FEAT_STRICT_EQ) && CORE_OBJECT_FEAT_STRICT_EQ
@@ -145,7 +145,7 @@ public:
   }
 
   static Napi::Value inline Create(Napi::Env env, Core &core) noexcept {
-    JS_EXCEPT_RET(
+    JS_EXCEPT(
         {
           auto local = getLocal(env);
           FEAT_STRICT_EQ(TRY_REUSE(local->instances, uintptr(core)));
@@ -157,7 +157,7 @@ public:
 
   template <typename... Args>
   static Napi::Value inline Create(Napi::Env env, Args &&...args) noexcept {
-    JS_EXCEPT_RET(
+    JS_EXCEPT(
         {
           Core core(std::forward<Args>(args)...);
           auto local = getLocal(env);
@@ -173,7 +173,7 @@ public:
     auto obj = Unwrap(value);
     if (!obj)
       return Create(env, core);
-    JS_EXCEPT_RET(
+    JS_EXCEPT(
         {
           auto local = getLocal(env);
           FEAT_STRICT_EQ(TRY_REUSE(local->instances, uintptr(core)));
@@ -189,7 +189,7 @@ public:
     auto obj = Unwrap(value);
     if (!obj)
       return Create(env, std::forward<Args>(args)...);
-    JS_EXCEPT_RET(
+    JS_EXCEPT(
         {
           Core core(std::forward<Args>(args)...);
           auto local = getLocal(env);

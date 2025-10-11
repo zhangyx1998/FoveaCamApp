@@ -15,9 +15,9 @@
 
 #include <utils/debug.h>
 #include <utils/map-set.h>
-#include <utils/pointer.h>
+#include <pointer.h>
 #include <utils/stacktrace.h>
-#include <utils/type-name.h>
+#include <type_name.h>
 
 class StreamError : public std::runtime_error {
 public:

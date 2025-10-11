@@ -5,17 +5,16 @@
 // -------------------------------------------------------
 #pragma once
 
-#include <stdexcept>
-
 #include <arv.h>
 #include <string>
 
+#include <utils/error.h>
 namespace Arv {
 
-class Error : public std::runtime_error {
+class Error : public TracedError {
 public:
-  using std::runtime_error::runtime_error;
-  Error(std::string message) : std::runtime_error("[Aravis] " + message) {}
+  using TracedError::TracedError;
+  Error(std::string message) : TracedError("[Aravis] " + message) {}
   static thread_local GError *error;
   static void check(const char action[] = "");
 };

@@ -5,7 +5,7 @@
 // -------------------------------------------------------
 #pragma once
 
-#include "utils/pointer.h"
+#include <pointer.h>
 #include "utils/stacktrace.h"
 
 class TracedError : public std::exception, public Shared<TracedError> {

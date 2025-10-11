@@ -9,7 +9,7 @@
 #include <Aravis/Stream.h>
 #include <Stream/Stream.h>
 #include <Threading/Guard.h>
-#include <utils/pointer.h>
+#include <pointer.h>
 
 #include "Dispatcher.h"
 #include "napi-helper.h"

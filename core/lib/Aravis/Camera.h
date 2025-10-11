@@ -6,6 +6,8 @@
 
 #include <arv.h>
 
+#include <utils/ref-count.h>
+
 #include "Error.h"
 #include "Frame.h"
 #include "Object.h"
@@ -19,23 +21,22 @@ template <typename T> struct Range {
 
 class Camera : public Object<ArvCamera, Camera> {
 public:
-  static std::vector<Camera> list();
-
-private:
-  const std::string physical_id;
+  typedef RefCount::Reference<Camera> Ptr;
+  static std::vector<Ptr> list();
 
 public:
+  const std::string id;
   // Construct from device ID
-  Camera(const char *id = nullptr);
-  // Default copy/move/destroy
-  Camera(const Camera &other) = default;
-  Camera(Camera &&other) = default;
-  ~Camera() = default;
+  Camera(std::string id);
+  // Disallow copy/move
+  Camera(const Camera &other) = delete;
+  Camera(Camera &&other) = delete;
 
-  std::string tag() const;
+public:
+  const std::string tag;
   Frame::Ptr grab(uint64_t timeout = 0) const;
 
-  inline const std::string &get_physical_id() const { return physical_id; }
+  inline const std::string &get_physical_id() const { return id; }
 
 #define ARV_CAMERA_FN(type, name, prop)                                        \
   inline type name() const {                                                   \

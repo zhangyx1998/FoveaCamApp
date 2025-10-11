@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 
-import { Camera } from "core";
+import { Camera, CoreObject } from "core";
 import { reactive, markRaw } from "vue";
 
 (window as any).Camera = Camera; // for debug
@@ -13,21 +13,36 @@ export const cameras = reactive(new Map<string, Camera>());
 
 (window as any).cameras = cameras; // for debug
 
-export function updateCameras() {
-    const existing = new Set(cameras.keys());
-    const list = Camera.list();
-    console.log(list);
-    for (const camera of list) {
-        existing.delete(camera.serial);
-        if (cameras.has(camera.serial)) continue;
-        cameras.set(camera.serial, markRaw(camera));
-        console.log("Connected:", camera);
-    }
-    for (const serial of existing) {
-        console.log("Disconnected:", cameras.get(serial));
-        cameras.delete(serial);
+function is(a: CoreObject | undefined, b: CoreObject | undefined) {
+    return a?.id === b?.id;
+}
+
+let updating = false;
+export async function updateCameras() {
+    if (updating) return;
+    updating = true;
+    try {
+        const existing = new Set(cameras.keys());
+        const list = await Camera.list();
+        for (const camera of list) {
+            if (is(cameras.get(camera.serial), camera)) continue;
+            existing.delete(camera.serial);
+        }
+        for (const serial of existing) {
+            const camera = cameras.get(serial);
+            console.log("Disconnected:", camera?.toString());
+            cameras.delete(serial);
+            camera?.release();
+        }
+        for (const camera of list) {
+            if (is(cameras.get(camera.serial), camera)) continue;
+            console.log("Connected:", camera.toString());
+            cameras.set(camera.serial, markRaw(camera));
+        }
+    } finally {
+        updating = false;
     }
 }
 
-updateCameras();
+await updateCameras();
 (window as any).updateCameras = updateCameras; // for debug

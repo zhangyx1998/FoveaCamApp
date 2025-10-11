@@ -5,8 +5,6 @@ const { readFileSync, existsSync, writeFileSync, rmSync } = require("fs");
 const cmd = process.argv[2];
 const arch = process.arch;
 
-const compile_commands = [];
-
 async function make(runtime, version, arch, options = {}) {
     const prefix = [runtime, version, arch].join("-");
     const buildSystem = new BuildSystem({
@@ -27,12 +25,6 @@ async function make(runtime, version, arch, options = {}) {
     const dst = `build/${prefix}.node`;
     if (["build", "rebuild", "install"].includes(cmd))
         execSync(`cp ${src} ${dst}`, { stdio: "inherit" });
-    if (["configure", "build", "rebuild", "install"].includes(cmd)) {
-        const db = `build/${prefix}/compile_commands.json`;
-        if (existsSync(db))
-            compile_commands.push(...JSON.parse(readFileSync(db)));
-        else console.warn(`Warning: ${db} not found`);
-    }
     if (cmd === "clean" && existsSync(dst)) rmSync(dst);
 }
 
@@ -56,16 +48,6 @@ async function main() {
     } catch (e) {
         console.log(e.message);
         console.log("Electron not found, skipping electron build");
-    }
-
-    const db = "compile_commands.json";
-    if (compile_commands.length === 0) {
-        if (existsSync(db)) rmSync(db);
-    } else {
-        writeFileSync(
-            "compile_commands.json",
-            JSON.stringify(compile_commands, null, 2)
-        );
     }
 }
 

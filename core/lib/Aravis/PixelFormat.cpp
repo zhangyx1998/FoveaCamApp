@@ -3,16 +3,17 @@
 // This source code is licensed under the MIT license.
 // You may find the full license in project root directory.
 // -------------------------------------------------------
-#include "PixelFormat.h"
-#include "convert.h"
+#include <convert.h>
 
-namespace Arv {
+#include "PixelFormat.h"
+
+using namespace Arv;
 
 #define CASE(SRC, DST)                                                         \
   case SRC:                                                                    \
     return DST;
 template <>
-PixelFormat convert<PixelFormat, ArvPixelFormat>(const ArvPixelFormat &fmt) {
+PixelFormat convert(const ArvPixelFormat &fmt) {
   switch (fmt) {
     CASE(ARV_PIXEL_FORMAT_MONO_8, Mono8);
     CASE(ARV_PIXEL_FORMAT_MONO_16, Mono16);
@@ -34,8 +35,9 @@ PixelFormat convert<PixelFormat, ArvPixelFormat>(const ArvPixelFormat &fmt) {
 }
 #undef CASE
 
-PixelFormat getPixelFormat(ArvBuffer *buffer) {
-  return convert<PixelFormat>(arv_buffer_get_image_pixel_format(buffer));
+PixelFormat Arv::getPixelFormat(ArvBuffer *buffer) {
+  auto fmt = arv_buffer_get_image_pixel_format(buffer);
+  return convert<PixelFormat>(fmt);
 }
 
 #define CASE(F)                                                                \
@@ -114,7 +116,7 @@ template <> cv::Format convert(const PixelFormat &fmt) {
   default:                                                                     \
     throw UnknownPixelFormat("Unsupported conversion");
 
-cv::ColorConversionCodes cvtColorCode(PixelFormat src, PixelFormat dst) {
+cv::ColorConversionCodes Arv::cvtColorCode(PixelFormat src, PixelFormat dst) {
   switch (src) {
   case Mono8:
   case Mono16:
@@ -159,34 +161,34 @@ cv::ColorConversionCodes cvtColorCode(PixelFormat src, PixelFormat dst) {
     }
   case BayerGR8:
     switch (dst) {
-      CASE(RGB8, BayerGR2BGR);
-      CASE(BGR8, BayerGR2RGB);
-      CASE(RGBA8, BayerGR2BGRA);
-      CASE(BGRA8, BayerGR2RGBA);
+      CASE(RGB8, BayerGR2RGB);
+      CASE(BGR8, BayerGR2BGR);
+      CASE(RGBA8, BayerGR2RGBA);
+      CASE(BGRA8, BayerGR2BGRA);
       DEFAULT;
     }
   case BayerRG8:
     switch (dst) {
-      CASE(RGB8, BayerRG2BGR);
-      CASE(BGR8, BayerRG2RGB);
-      CASE(RGBA8, BayerRG2BGRA);
-      CASE(BGRA8, BayerRG2RGBA);
+      CASE(RGB8, BayerRG2RGB);
+      CASE(BGR8, BayerRG2BGR);
+      CASE(RGBA8, BayerRG2RGBA);
+      CASE(BGRA8, BayerRG2BGRA);
       DEFAULT;
     }
   case BayerGB8:
     switch (dst) {
-      CASE(RGB8, BayerGB2BGR);
-      CASE(BGR8, BayerGB2RGB);
-      CASE(RGBA8, BayerGB2BGRA);
-      CASE(BGRA8, BayerGB2RGBA);
+      CASE(RGB8, BayerGB2RGB);
+      CASE(BGR8, BayerGB2BGR);
+      CASE(RGBA8, BayerGB2RGBA);
+      CASE(BGRA8, BayerGB2BGRA);
       DEFAULT;
     }
   case BayerBG8:
     switch (dst) {
-      CASE(RGB8, BayerBG2BGR);
-      CASE(BGR8, BayerBG2RGB);
-      CASE(RGBA8, BayerBG2BGRA);
-      CASE(BGRA8, BayerBG2RGBA);
+      CASE(RGB8, BayerBG2RGB);
+      CASE(BGR8, BayerBG2BGR);
+      CASE(RGBA8, BayerBG2RGBA);
+      CASE(BGRA8, BayerBG2BGRA);
       DEFAULT;
     }
   case BayerGR16:
@@ -218,5 +220,3 @@ cv::ColorConversionCodes cvtColorCode(PixelFormat src, PixelFormat dst) {
 }
 #undef CASE
 #undef DEFAULT
-
-} // namespace Arv

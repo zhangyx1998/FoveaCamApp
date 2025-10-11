@@ -12,7 +12,7 @@
 #include "napi-helper.h"
 #include "utils/debug.h"
 #include "utils/error.h"
-#include "utils/pointer.h"
+#include <pointer.h>
 
 #include <iostream>
 #include <utils/map-set.h>

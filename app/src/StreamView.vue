@@ -3,8 +3,25 @@ import { type Camera, type Stream } from 'core';
 import { computed, onUnmounted, ref, shallowRef, useTemplateRef, watch } from 'vue';
 
 import { ElementSize } from '@lib/util/dom';
+import Overlay from './components/Overlay.vue';
 
-const props = defineProps<{ camera?: Camera, stream?: Stream }>();
+const props = defineProps({
+    name: {
+        type: String,
+        required: false,
+        default: null
+    },
+    stream: {
+        type: Object as () => Stream | undefined,
+        required: false,
+        default: undefined
+    },
+    overlay: {
+        type: Object as () => Boolean | Record<string, string>,
+        required: false,
+        default: true
+    },
+});
 const container = useTemplateRef<HTMLDivElement>("container");
 const canvas = useTemplateRef<HTMLCanvasElement>("canvas");
 const size = new ElementSize(container);
@@ -17,7 +34,7 @@ const image = shallowRef<ImageData | null>(null);
 let t0: number | null = null;
 let dt: number | null = null;
 
-function updateFPS(t1: number, decay = 0.9) {
+function updateFPS(t1: number, decay = 0.95) {
     if (t0 !== null) {
         const delta = t1 - t0;
         dt = dt === null ? delta : dt * decay + delta * (1 - decay);
@@ -58,11 +75,11 @@ watch(() => props.stream, async (stream, prev) => {
             if (props.stream?.id !== stream.id) break;
             if (!frame) { await new Promise(requestAnimationFrame); continue; }
             if (!image.value) image.value = new ImageData(
-                new Uint8ClampedArray(frame.view("BGRA8")),
+                new Uint8ClampedArray(await frame.view("BGRA8")),
                 frame.width,
                 frame.height
             )
-            else frame.view("BGRA8", image.value.data);
+            else await frame.view("BGRA8", image.value.data);
             frame.release();
             if (canvas.value)
                 render(canvas.value, image.value);
@@ -76,13 +93,10 @@ watch(() => props.stream, async (stream, prev) => {
 
 function info() {
     const ret: Record<string, string> = {};
-    if (props.camera) {
-        ret["Model"] = props.camera.model;
-        ret["Serial"] = props.camera.serial;
-    }
-    if (image.value) {
+    if (typeof props.overlay === "object")
+        Object.assign(ret, props.overlay);
+    if (image.value)
         ret["Size"] = `${image.value.width} x ${image.value.height}`;
-    }
     ret["FPS"] = fps.value.toFixed(4);
     return ret;
 }
@@ -90,60 +104,82 @@ function info() {
 function format(obj: Record<string, string>) {
     const pad = Math.max(...Object.keys(obj).map(k => k.length)) + 1;
     return Object.entries(obj)
-        .map(([k, v]) => `${k.padEnd(pad, ' ')}: ${v}`)
-        .join("\n");
+        .map(([k, v]) => k.padEnd(pad, ' ') + ": " + v);
 }
 </script>
 
 <template>
-    <div class="container" ref="container" v-if="stream">
-        <canvas ref="canvas" v-show="image" :width="image?.width" :height="image?.height" :style="canvasStyle"></canvas>
-        <pre class="overlay" v-html="format(info())"></pre>
+    <div class="container" :class="{ 'no-stream': !stream }" :style="{ fontSize: size.width / 20 + 'px' }"
+        ref="container">
+        <template v-if="stream">
+            <canvas ref="canvas" v-show="image" :width="image?.width" :height="image?.height"
+                :style="canvasStyle"></canvas>
+            <Overlay v-if="overlay !== false" class="stream-info" display="flex" type="hover-only" :font-size="4">
+                <template v-if="name !== null">
+                    <div style="width: 100%; text-align: center; margin: 1em 0; font-size: 1.4em">{{ name }}</div>
+                    <div class="ruler" style="width: 100%; height: 1px; background-color: white; margin: 1em 0;"></div>
+                </template>
+                <div v-for="line, i in format(info())" :key="i" style="margin: 0.4em 0;">{{ line }}</div>
+            </Overlay>
+        </template>
+        <template v-else>
+            <Overlay class="no-stream-text" display="flex" :font-size="10">No Stream</Overlay>
+        </template>
     </div>
-    <div class="container no-stream" v-else></div>
 </template>
 
-<style scoped>
+<style scoped lang="scss">
 .container {
     position: relative;
     background-color: black;
-    overflow: hidden;
-}
-
-.container.no-stream {
     background: repeating-linear-gradient(45deg,
-            #222,
+            #111,
+            #111 10px,
             #222 10px,
-            #333 10px,
-            #333 20px);
+            #222 20px);
+    overflow: hidden;
+
+    canvas {
+        margin: 0;
+    }
+
+    .stream-info {
+        flex-direction: column;
+        align-items: flex-start;
+        padding: 0 1em;
+        overflow-y: scroll;
+    }
+
+    &.no-stream {
+        outline-color: #444 !important;
+    }
+
+    .no-stream-text {
+        color: #444;
+        justify-content: center;
+        align-items: center;
+        font-size: 2em;
+    }
+
+    &>* {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+    }
+
+    &:not(:hover) {
+        outline: none !important;
+    }
 }
 
-.container>* {
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-}
-
-.overlay {
-    position: absolute;
-    width: 100%;
-    height: 100%;
-    padding: 1em;
-    vertical-align: middle;
+:deep(.overlay) {
     background-color: rgba(0, 0, 0, 0.5);
-    backdrop-filter: blur(5px) saturate(50%);
-    -webkit-backdrop-filter: blur(5px) saturate(50%);
+    backdrop-filter: blur(2px) saturate(50%);
+    -webkit-backdrop-filter: blur(2px) saturate(50%);
     color: white;
     font-family: 'Cascadia Code', 'Courier New', Courier, monospace;
     z-index: 10;
-}
-
-.container .overlay {
-    display: none;
-}
-
-.container:hover .overlay {
-    display: block;
+    white-space: pre;
 }
 </style>

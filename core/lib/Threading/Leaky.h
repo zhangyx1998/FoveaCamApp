@@ -6,7 +6,7 @@
 #pragma once
 
 #include "exception.h"
-#include <utils/pointer.h>
+#include <pointer.h>
 
 #include <condition_variable>
 #include <mutex>

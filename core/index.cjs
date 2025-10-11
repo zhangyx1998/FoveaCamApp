@@ -21,7 +21,6 @@ if (runtime === undefined || version === undefined || arch === undefined) {
 
 const prefix = [runtime, version, arch].join("-");
 
-const { existsSync } = require("node:fs");
 const { resolve } = require("node:path");
 const dir = resolve(__filename, "..");
 const path = resolve(dir, `./build/${prefix}`);
@@ -33,4 +32,5 @@ Object.defineProperty(core, "__origin__", {
     enumerable: false,
     configurable: false,
 });
-module.exports = require(path);
+
+module.exports = core;

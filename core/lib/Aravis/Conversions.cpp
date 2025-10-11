@@ -1,23 +1,17 @@
-#pragma once
-#include "Aravis/Error.h"
+// ------------------------------------------------------
+// Copyright (c) 2025 Yuxuan Zhang, zhangyuxuan@ufl.edu
+// This source code is licensed under the MIT license.
+// You may find the full license in project root directory.
+// -------------------------------------------------------
 #include <arv.h>
 #include <string>
 
-namespace Arv {
+#include <Aravis/Error.h>
+#include <convert.h>
 
-template <typename DST, typename SRC> DST convert(const SRC &src);
+using namespace Arv;
 
-template <typename T> inline T convert(const T &src) { return src; }
-
-template <> inline std::string convert(const char *const &src) {
-  return src ? std::string(src) : std::string();
-}
-
-template <> inline const char *convert(const std::string &src) {
-  return src.c_str();
-}
-
-template <> inline ArvAcquisitionMode convert(const std::string &src) {
+template <> ArvAcquisitionMode convert(const std::string &src) {
   if (src == "Continuous")
     return ARV_ACQUISITION_MODE_CONTINUOUS;
   if (src == "SingleFrame")
@@ -27,7 +21,7 @@ template <> inline ArvAcquisitionMode convert(const std::string &src) {
   throw Error("Invalid ArvAcquisitionMode string: " + src);
 }
 
-template <> inline std::string convert(const ArvAcquisitionMode &src) {
+template <> std::string convert(const ArvAcquisitionMode &src) {
   switch (src) {
   case ARV_ACQUISITION_MODE_CONTINUOUS:
     return "Continuous";
@@ -40,7 +34,7 @@ template <> inline std::string convert(const ArvAcquisitionMode &src) {
   }
 }
 
-template <> inline ArvAuto convert(const std::string &src) {
+template <> ArvAuto convert(const std::string &src) {
   if (src == "Off")
     return ARV_AUTO_OFF;
   if (src == "Once")
@@ -50,7 +44,7 @@ template <> inline ArvAuto convert(const std::string &src) {
   throw Error("Invalid ArvAuto string: " + src);
 }
 
-template <> inline std::string convert(const ArvAuto &src) {
+template <> std::string convert(const ArvAuto &src) {
   switch (src) {
   case ARV_AUTO_OFF:
     return "Off";
@@ -62,5 +56,3 @@ template <> inline std::string convert(const ArvAuto &src) {
     throw Error("Invalid ArvAuto value: " + std::to_string(src));
   }
 }
-
-} // namespace Arv

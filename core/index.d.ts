@@ -5,6 +5,7 @@
 // -------------------------------------------------------
 
 type Awaitable<T> = T | Promise<T>;
+type BufferLike = Buffer | ArrayBuffer | ArrayBufferView;
 
 declare module "core" {
     /** Path to the resolved native module injected by JS loader */
@@ -33,7 +34,7 @@ declare module "core" {
     type AcquisitionMode = "Continuous" | "SingleFrame" | "MultiFrame";
 
     export class Camera extends CoreObject {
-        static list(): Array<Camera>;
+        static list(): Promise<Array<Camera>>;
 
         // Device identification
         readonly physical_id: string;
@@ -97,10 +98,11 @@ declare module "core" {
         readonly width: number;
         readonly height: number;
         readonly timestamp: bigint;
-        view(format?: PixelFormat, buffer?: BufferSource): ArrayBuffer;
+        view(format?: PixelFormat, buffer?: BufferLike): Promise<ArrayBuffer>;
     }
 
     export class Stream extends CoreObject {
+        readonly camera: Camera;
         // Skip frames if the consumer is slower than the producer.
         // Generates null if consumer is faster than producer.
         // Consumer MUST yield (await) upon null so producer can push data.
@@ -123,4 +125,84 @@ declare module "core" {
         | "BayerGR16"
         | "BayerRG16"
         | "BayerGB16";
+
+    // Internally distinguishable objects that can be converted to buffer.
+    const bufferAccessor: unique symbol;
+    const factoryAccessor: unique symbol;
+    const propNameAccessor: unique symbol;
+    type PacketInstance<I, O = I> = Readonly<O> & {
+        readonly [bufferAccessor]: ArrayBuffer;
+    };
+
+    type PacketFactory<I, O = I> = ((
+        v: I | BufferLike
+    ) => PacketInstance<I, O>) & {
+        readonly [propNameAccessor]: string;
+        readonly [bufferAccessor]: null;
+    };
+
+    type Packet<T> = PacketInstance<T> | PacketFactory<T>;
+
+    export class Protocol {
+        static readonly Log: Packet<String>;
+        static readonly System: {
+            readonly Info: PacketFactory<String>;
+            readonly Version: PacketFactory<FirmwareVersion> &
+                Readonly<FirmwareVersion>;
+            readonly Reset: PacketFactory<"SOFT" | "HARD">;
+            readonly Enable: PacketFactory<Boolean>;
+        };
+        static readonly Config: {
+            readonly Log: PacketFactory<
+                "OFF" | "ERR" | "WARN" | "INFO" | "VERB"
+            >;
+            readonly LPF: PacketFactory<Number>;
+            readonly Bias: PacketFactory<Number>;
+        };
+        static readonly Command: {
+            readonly Actuate: PacketFactory<{
+                left: MirrorPosition;
+                right: MirrorPosition;
+                settle_time?: number; // in microseconds
+                complete_time?: number; // in microseconds
+            }>;
+            readonly Trigger: PacketFactory<Number>;
+        };
+        // Need to be registered to forward outbound data
+        __tx__: ((data: ArrayBuffer) => any) | null;
+        // Called by serial data receiver to parse inbound data
+        __rx__(buffer: BufferLike);
+        // Async API
+        get<T>(fn: PacketFactory<T>): Promise<PacketInstance<T>>;
+        set<T>(
+            fn: PacketFactory<T>,
+            arg: T | BufferLike
+        ): Promise<PacketInstance<T>>;
+    }
+
+    type RawPacket = {
+        method: ProtocolMethod;
+        property: ProtocolProperty;
+        sequence: number;
+        payload: ArrayBuffer;
+    };
+    type FirmwareVersion = {
+        major: number;
+        minor: number;
+        patch: number;
+    };
+    type MirrorPosition = [number, number, number, number];
+    type ProtocolMethod = "NOP" | "GET" | "SET" | "ACK" | "REJ" | "SYN";
+    type ProtocolProperty =
+        | "NONE"
+        | "SYS_INFO"
+        | "SYS_VERSION"
+        | "SYS_RESET"
+        | "SYS_ENABLE"
+        | "CFG_LOG"
+        | "CFG_LPF"
+        | "CFG_BIAS"
+        | "CMD_ACTUATE"
+        | "CMD_TRIGGER"
+        | "LOG";
 }

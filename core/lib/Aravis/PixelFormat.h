@@ -5,11 +5,11 @@
 #include <arv.h>
 #include <opencv2/opencv.hpp>
 
-#include "convert.h"
+#include <convert.h>
 
 namespace cv {
 
-typedef enum Format: int {
+typedef enum Format : int {
   U8C1 = CV_8UC1,
   U8C2 = CV_8UC2,
   U8C3 = CV_8UC3,
@@ -72,12 +72,10 @@ typedef enum PixelFormat : uint32_t {
 
 Format getPixelFormat(ArvBuffer *buffer);
 
-template <> PixelFormat convert(const std::string &fmt);
-
-template <> std::string convert(const PixelFormat &fmt);
-
-template <> cv::Format convert(const PixelFormat &fmt);
-
 cv::ColorConversionCodes cvtColorCode(PixelFormat src, PixelFormat dst);
 
 } // namespace Arv
+
+template <> Arv::PixelFormat convert(const std::string &fmt);
+template <> std::string convert(const Arv::PixelFormat &fmt);
+template <> cv::Format convert(const Arv::PixelFormat &fmt);

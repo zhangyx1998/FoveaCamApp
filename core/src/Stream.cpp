@@ -11,7 +11,7 @@
 #include <Aravis/Camera.h>
 #include <Aravis/Frame.h>
 #include <Aravis/Stream.h>
-#include <Aravis/convert.h>
+#include <convert.h>
 
 #include "CoreObject.h"
 #include "Iterators.h"
@@ -32,10 +32,16 @@ public:
         env, StreamObject::name.c_str(),
         {
             CORE_OBJECT_REGISTER(StreamObject, env),                      //
+            INSTANCE_GETTER(StreamObject, camera),                        //
             InstanceMethod<&StreamObject::iterator>(iterator),            //
             InstanceMethod<&StreamObject::async_iterator>(asyncIterator), //
         });
     return fn;
+  }
+
+  GET(camera) {
+    auto env = info.Env();
+    return CreateObject(env, core()->camera);
   }
 
   FN(iterator) {
@@ -47,6 +53,10 @@ public:
     auto env = info.Env();
     return CreateObject(env, FrameQueue::create(env, core().get()));
   }
+
+  // TODO
+  // GET(active) {}
+  // SET(active) {}
 };
 
 CORE_OBJECT(Arv::Stream::Ptr, StreamObject);
