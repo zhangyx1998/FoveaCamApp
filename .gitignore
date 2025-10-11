@@ -9,5 +9,11 @@ build
 test.[cm]js
 *.test.[cm]js
 
+# Firmware
+.pio
+
 # Electron APP
 .dist
+
+# Temporary files
+*.tmp

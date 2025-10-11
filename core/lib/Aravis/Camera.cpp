@@ -1,23 +1,27 @@
-#include "Camera.h"
-#include "Error.h"
-
 #include <iostream>
 #include <sstream>
 
+#include <utils/ref-count.h>
+
+#include "Camera.h"
+#include "Error.h"
+
 namespace Arv {
 
-std::vector<Camera> Camera::list() {
+static RefCount::Map<std::string, Camera> registry;
+
+std::vector<Camera::Ptr> Camera::list() {
   arv_update_device_list();
   auto count = arv_get_n_devices();
-  std::vector<Camera> cameras;
+  std::vector<Camera::Ptr> cameras;
   cameras.reserve(count);
   for (unsigned int i = 0; i < count; i++) {
-    const char *device_id = arv_get_device_id(i);
+    auto id = arv_get_device_id(i);
     try {
-      cameras.push_back(Camera(device_id));
+      cameras.push_back(registry.get(id));
     } catch (const Error &e) {
-      std::cerr << "Warning: Could not connect to camera " << i << " ("
-                << device_id << "): " << e.what() << std::endl;
+      std::cerr << "Warning: Could not connect to camera " << i << " (" << id
+                << "): " << e.what() << std::endl;
     }
   }
   return cameras;
@@ -31,19 +35,25 @@ ArvCamera *checkCamera(ArvCamera *cam) {
   return cam;
 }
 
-inline ArvCamera *initCamera(const char *id) {
-  ArvCamera *cam = arv_camera_new(id, nullptr);
+inline ArvCamera *initCamera(std::string id) {
+  ArvCamera *cam = arv_camera_new(id.c_str(), nullptr);
   Error::check("arv_camera_new");
   return checkCamera(cam);
 }
 
-Camera::Camera(const char *id) : Object(initCamera(id)), physical_id(id) {}
-
-std::string Camera::tag() const {
+static inline std::string getTag(Camera *camera) {
   std::stringstream ss;
-  ss << get_vendor() << " " << get_model() << " #" << get_serial();
+  try {
+    ss << camera->get_vendor() << " " << camera->get_model() << " #"
+       << camera->get_serial();
+  } catch (...) {
+    ss << "(ERROR)";
+  }
   return ss.str();
 }
+
+Camera::Camera(std::string id)
+    : Object(initCamera(id)), id(id), tag(getTag(this)) {}
 
 Frame::Ptr Camera::grab(uint64_t timeout) const {
   auto buffer = arv_camera_acquisition(get(), timeout, &Error::error);

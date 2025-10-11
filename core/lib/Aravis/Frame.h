@@ -6,25 +6,46 @@
 #pragma once
 #include <cstddef>
 #include <cstring>
-#include <mutex>
 #include <opencv2/imgproc.hpp>
 #include <sys/types.h>
 
 #include <arv.h>
 #include <opencv2/opencv.hpp>
 
-#include "PixelFormat.h"
+#include <Threading/Guard.h>
+#include <pointer.h>
 #include <utils/map-set.h>
-#include <utils/pointer.h>
 
+#include "PixelFormat.h"
 namespace Arv {
+
+#define CASE(S)                                                                \
+  case ARV_BUFFER_STATUS_##S:                                                  \
+    return #S;
+inline std::string status(int status) {
+  switch (status) {
+    CASE(SUCCESS);
+    CASE(CLEARED);
+    CASE(TIMEOUT);
+    CASE(MISSING_PACKETS);
+    CASE(WRONG_PACKET_ID);
+    CASE(SIZE_MISMATCH);
+    CASE(FILLING);
+    CASE(ABORTED);
+    CASE(PAYLOAD_NOT_SUPPORTED);
+  default:
+    return "UNKNOWN";
+  };
+}
+#undef CASE
 
 class Frame : public Shared<Frame> {
   static inline const cv::Mat fromArvBuffer(ArvBuffer *buffer) {
     if (buffer == nullptr)
       throw std::runtime_error("ArvBuffer is null");
     if (arv_buffer_get_status(buffer) != ARV_BUFFER_STATUS_SUCCESS)
-      throw std::runtime_error("Bad ArvBuffer status");
+      throw std::runtime_error("Bad ArvBuffer status: " +
+                               status(arv_buffer_get_status(buffer)));
     // Get source buffer information
     size_t src_size;
     const void *data = arv_buffer_get_data(buffer, &src_size);
@@ -49,14 +70,12 @@ public:
   const cv::Mat raw;
   const PixelFormat format;
   const uint64_t timestamp;
+  const std::string tag =
+      std::to_string(width()) + "×" + std::to_string(height()) + " " +
+      convert<std::string>(format) + " @ " + std::to_string(timestamp);
 
-  std::mutex conversion_mutex;
-  Map<PixelFormat, const cv::Mat> conversions;
+  Threading::Guard<Map<PixelFormat, const cv::Mat>> conversions;
 
-  inline std::string tag() const {
-    return std::to_string(width()) + "×" + std::to_string(height()) + " " +
-           convert<std::string>(format) + " @ " + std::to_string(timestamp);
-  }
   inline size_t width() const { return raw.cols; };
   inline size_t height() const { return raw.rows; };
   const cv::Mat &view(PixelFormat format);
@@ -64,12 +83,11 @@ public:
     return view(convert<PixelFormat>(format));
   };
   // Quick check if conversion requires computation
-  inline bool isCached(PixelFormat format) {
-    std::scoped_lock lock(conversion_mutex);
-    return this->format == format || conversions.contains(format);
+  inline bool isAvailable(PixelFormat format) {
+    return this->format == format || conversions.ref()->contains(format);
   }
-  inline bool isCached(const std::string &format) {
-    return isCached(convert<PixelFormat>(format));
+  inline bool isAvailable(const std::string &format) {
+    return isAvailable(convert<PixelFormat>(format));
   }
 };
 

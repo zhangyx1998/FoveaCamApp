@@ -7,22 +7,25 @@
 
 #include <arv.h>
 
-#include "Frame.h"
-#include "Stream/Stream.h"
-#include <utils/pointer.h>
+#include <Stream/Stream.h>
+#include <pointer.h>
 #include <utils/ref-count.h>
+
+#include "Camera.h"
+#include "Frame.h"
 
 namespace Arv {
 
 class Stream : public ::Stream<Frame::Ptr> {
 public:
   typedef RefCount::Reference<Stream> Ptr;
-  static Ptr get(ArvCamera *camera);
-  Stream(ArvCamera *camera);
+  static Ptr get(Camera::Ptr camera);
+
+  const Camera::Ptr camera;
+  Stream(const Camera::Ptr &camera);
   ~Stream();
 
 private:
-  ArvCamera *const camera;
   ArvStream *stream = nullptr;
   void start() override;
   void stop() override;

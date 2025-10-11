@@ -19,7 +19,7 @@ using namespace Napi;
 
 // Handles incoming data from stream.
 void FrameQueue::push(const Arv::Frame::Ptr &value) {
-  VERBOSE("FrameQueue::push(%s)", value ? value->tag().c_str() : "null");
+  VERBOSE("FrameQueue::push(%s)", value ? value->tag.c_str() : "null");
   auto ref = data.ref();
   if (ref->future_queue.empty())
     ref->data_queue.push(value);
@@ -72,7 +72,7 @@ FN(FrameQueue::next) {
     auto value = std::move(ref->data_queue.front());
     ref->data_queue.pop();
     ref.release();
-    VERBOSE("FrameQueue::next(%s)", value ? value->tag().c_str() : "null");
+    VERBOSE("FrameQueue::next(%s)", value ? value->tag.c_str() : "null");
     deferred.Resolve(IterNext(env, CreateObject(env, std::move(value))));
   } else {
     ref->future_queue.push(Future::create(std::move(deferred)));

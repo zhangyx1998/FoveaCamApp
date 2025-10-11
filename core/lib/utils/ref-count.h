@@ -9,13 +9,34 @@
 #include <mutex>
 #include <string>
 
+#include "debug.h"
 #include "map-set.h"
-#include <utils/type-name.h>
+#include <type_name.h>
 
 namespace RefCount {
 
-template <typename K, typename V> class Map;
+template <typename K, typename V, auto Index, typename I> class RootReference;
 template <typename V> class Reference;
+
+template <typename K, typename I = K> I index(const K &key) { return key; }
+
+template <typename K, typename V, auto Index = index<K>,
+          typename I = decltype(Index(std::declval<K>()))>
+class Map : private ::Map<I, std::unique_ptr<RootReference<K, V, Index, I>>> {
+private:
+  friend class RootReference<K, V, Index, I>;
+  std::mutex mtx;
+
+public:
+  Reference<V> get(const K &key) {
+    std::lock_guard<std::mutex> lock(mtx);
+    const I index = Index(key);
+    if (!this->has(index))
+      this->insert(
+          {index, std::make_unique<RootReference<K, V, Index, I>>(*this, key)});
+    return this->at(index)->reference();
+  }
+};
 
 // Base class that handles reference counting without knowing about K
 template <typename V> class RootReferenceBase {
@@ -25,19 +46,25 @@ protected:
   size_t count = 0;
 
 public:
-  template <typename K> RootReferenceBase(const K &key) : value(key) {}
+  template <typename K> RootReferenceBase(const K &key) : value(key) {
+    VERBOSE("RefCountMap: Created root reference for %s @ %p",
+            type_name<V>().c_str(), this);
+  }
 
   virtual ~RootReferenceBase() {
-    if (count != 0) {
-      std::cerr << "[FATAL] RootReference of " + type_name<V>() +
-                       " destroyed with non-zero count (" +
-                       std::to_string(count) + ")";
-      std::terminate();
-    }
+    if (count != 0)
+      std::cerr << "[WARN] RootReference of " + type_name<V>() +
+                       " destroyed with non-zero reference (" +
+                       std::to_string(count) + ")"
+                << std::endl;
+    VERBOSE("RefCountMap: Destroyed root reference for %s @ %p",
+            type_name<V>().c_str(), this);
   }
 
   void incRef() {
     std::scoped_lock<std::mutex> lock(mtx);
+    VERBOSE("RefCountMap: Incremented reference count for %s @ %p: %zu -> %zu",
+            type_name<V>().c_str(), this, count, count + 1);
     count++;
   }
 
@@ -50,22 +77,24 @@ public:
   const V &getValue() const { return value; }
 };
 
-template <typename K, typename V>
+template <typename K, typename V, auto Index, typename I>
 class RootReference : public RootReferenceBase<V> {
 private:
   friend class Reference<V>;
-  Map<K, V> &map;
+  Map<K, V, Index, I> &map;
   const K key;
 
   void decRef() override {
     std::scoped_lock<std::mutex, std::mutex> lock(this->mtx, map.mtx);
+    VERBOSE("RefCountMap: Decremented reference count for %s @ %p: %zu -> %zu",
+            type_name<V>().c_str(), this, this->count, this->count - 1);
     this->count--;
     if (this->count == 0)
-      map.erase(key);
+      map.erase(Index(key));
   }
 
 public:
-  RootReference(Map<K, V> &m, const K &k)
+  RootReference(Map<K, V, Index, I> &m, const K &k)
       : RootReferenceBase<V>(k), map(m), key(k) {}
 };
 
@@ -98,20 +127,6 @@ public:
   V *get() const { return &ref().getValue(); }
   V &operator*() const { return ref().getValue(); }
   V *operator->() const { return &ref().getValue(); }
-};
-
-template <typename K, typename V>
-class Map : private ::Map<K, std::unique_ptr<RootReference<K, V>>> {
-  friend class RootReference<K, V>;
-  std::mutex mtx;
-
-public:
-  Reference<V> get(const K &key) {
-    std::lock_guard<std::mutex> lock(mtx);
-    if (!this->has(key))
-      this->insert({key, std::make_unique<RootReference<K, V>>(*this, key)});
-    return this->at(key)->reference();
-  }
 };
 
 } // namespace RefCount

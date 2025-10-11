@@ -9,7 +9,8 @@
 #include <cstdint>
 #include <memory>
 
-#include <utils/type-name.h>
+#include "crash.h"
+#include <type_name.h>
 
 // Detect common aliases, when present
 template <class P>
@@ -20,7 +21,7 @@ concept HasElementType = requires { typename P::element_type; };
 
 template <typename T> inline T *noNull(T *ptr) {
   if (ptr == nullptr)
-    throw std::runtime_error("Null pointer to " + type_name<T>());
+    CRASH(runtime_error, "Null pointer to " + type_name<T>());
   return ptr;
 }
 

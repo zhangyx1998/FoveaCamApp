@@ -8,10 +8,34 @@
 #include <Aravis/Frame.h>
 #include <utils/map-set.h>
 
+#include "Buffer/Buffer.h"
 #include "CoreObject.h"
 #include "napi-helper.h"
 
 using namespace Napi;
+
+template <> Value convert(Env env, const Value &container, const cv::Mat &mat) {
+  const auto data = mat.data;
+  const auto size = mat.size().area() * mat.elemSize();
+  if (isBufferLike(container)) {
+    auto buffer = bufferView(container);
+    JS_ASSERT(buffer.size >= size, RangeError,
+              "Destination buffer size too small", container);
+    buffer.copyFrom(data, size);
+    return container;
+  } else {
+#ifdef V8_MEMORY_CAGE
+    auto ret = ArrayBuffer::New(env, size);
+    std::memcpy(ret.Data(), data, size);
+    return ret;
+#else
+    // Increment reference count on ImagePtr holding the buffer pointer
+    auto ref = new cv::Mat(mat);
+    // Return a borrowed ArrayBuffer pointing to external Mat data
+    return ArrayBuffer::New(env, data, size, deleter<cv::Mat>, ref);
+#endif
+  }
+}
 
 class FrameObject : public CoreObject<FrameObject, Arv::Frame::Ptr> {
   CORE_OBJECT_DECL(FrameObject);
@@ -31,48 +55,34 @@ public:
   }
 
   static std::string describe(const FrameObject *obj) {
-    return obj->core()->tag();
+    return obj->core()->tag;
   }
 
 private:
   FN(view) {
-    cv::Mat view;
+    VERBOSE("Frame::view() called with %lu args", info.Length());
+    auto fmt = core()->format;
     if (info.Length() > 0) {
-      JS_ASSERT_RET(info[0].IsString(), TypeError,
-                    "Pixel format must be a string", env.Undefined());
+      JS_ASSERT(info[0].IsString(), TypeError, "Pixel format must be a string",
+                env.Undefined());
       const auto format = info[0].As<String>().Utf8Value();
-      view = core()->view(format);
+      JS_EXCEPT({ fmt = convert<Arv::PixelFormat>(format); }, env.Undefined());
+    }
+    auto container = info.Length() > 1 ? info[1] : env.Undefined();
+    if (core()->isAvailable(fmt)) {
+      // Resolve immediately if already available
+      auto deferred = Promise::Deferred::New(env);
+      JS_EXCEPT(
+          {
+            deferred.Resolve(convert(env, container, core()->view(fmt)));
+            return deferred.Promise();
+          },
+          env.Undefined());
     } else {
-      view = core()->raw;
+      // Launch one-shot async worker to convert
+      auto task = [core = core(), fmt]() { return core->view(fmt); };
+      return OneShotWorker<cv::Mat>::run(container, task);
     }
-    const auto data = view.data;
-    const auto size = view.size().area() * view.elemSize();
-    if (info.Length() > 1) {
-      ArrayBuffer buffer;
-      if (info[1].IsArrayBuffer()) {
-        buffer = info[1].As<ArrayBuffer>();
-      } else if (info[1].IsTypedArray()) {
-        buffer = info[1].As<TypedArray>().ArrayBuffer();
-      } else if (info[1].IsDataView()) {
-        buffer = info[1].As<DataView>().ArrayBuffer();
-      } else {
-        JS_THROW_RET(TypeError, "Destination cannot be casted into ArrayBuffer",
-                     env.Undefined());
-      }
-      JS_ASSERT_RET(buffer.ByteLength() >= size, RangeError,
-                    "Destination buffer size too small", env.Undefined());
-      std::memcpy(buffer.Data(), data, size);
-      return buffer;
-    }
-#ifdef V8_MEMORY_CAGE
-    auto buffer = Napi::ArrayBuffer::New(env, size);
-    std::memcpy(buffer.Data(), data, size);
-    return buffer;
-#else
-    // Increment reference count on ImagePtr holding the buffer pointer
-    auto ref = new cv::Mat(view);
-    return Napi::ArrayBuffer::New(env, data, size, deleter<cv::Mat>, ref);
-#endif
   }
 
   GET(width) { return Number::New(env, core()->width()); }

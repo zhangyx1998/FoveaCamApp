@@ -11,31 +11,27 @@
 #include <Aravis/Camera.h>
 #include <Aravis/Frame.h>
 #include <Aravis/Stream.h>
-#include <Aravis/convert.h>
+#include <convert.h>
 
 #include "CoreObject.h"
 #include "napi-helper.h"
 
 using namespace Napi;
-using Arv::convert;
 
 #define GET_PROP(prop, JsType, ...)                                            \
   GET(prop) {                                                                  \
-    try {                                                                      \
-      return JsType::New(env, __VA_ARGS__(core().get_##prop()));               \
-    } catch (const std::exception &e) {                                        \
-      JS_THROW_RET(Error, e.what(), env.Undefined());                          \
-    }                                                                          \
+    JS_EXCEPT(return JsType::New(env, __VA_ARGS__(core()->get_##prop())),      \
+                     env.Undefined())                                          \
   }
 
 #define SET_PROP(Prop, Value, ...)                                             \
-  SET(Prop) { JS_EXCEPT(core().set_##Prop(__VA_ARGS__(Value));) }
+  SET(Prop) { JS_EXCEPT(core()->set_##Prop(__VA_ARGS__(Value));) }
 
 #define RANGE(name)                                                            \
   GET(name##_range) {                                                          \
-    JS_EXCEPT_RET(                                                             \
+    JS_EXCEPT(                                                                 \
         {                                                                      \
-          auto range = core().get_##name##_range();                            \
+          auto range = core()->get_##name##_range();                           \
           auto obj = Napi::Object::New(env);                                   \
           obj.Set("min", Number::New(env, range.min));                         \
           obj.Set("max", Number::New(env, range.max));                         \
@@ -46,9 +42,9 @@ using Arv::convert;
 
 #define OPTIONS(name)                                                          \
   GET(name##_options) {                                                        \
-    JS_EXCEPT_RET(                                                             \
+    JS_EXCEPT(                                                                 \
         {                                                                      \
-          auto options = core().get_##name##_options();                        \
+          auto options = core()->get_##name##_options();                       \
           auto ret = Array::New(env, options.size());                          \
           for (size_t i = 0; i < options.size(); ++i)                          \
             ret.Set(i, String::New(env, options[i]));                          \
@@ -57,7 +53,7 @@ using Arv::convert;
         env.Undefined());                                                      \
   }
 
-class CameraObject : public CoreObject<CameraObject, Arv::Camera> {
+class CameraObject : public CoreObject<CameraObject, Arv::Camera::Ptr> {
   CORE_OBJECT_DECL(CameraObject);
 
 public:
@@ -114,34 +110,24 @@ public:
   }
 
   static std::string describe(const CameraObject *obj) {
-    return obj->core().tag();
+    return obj->core()->tag;
   }
 
 private:
+  using Cameras = std::vector<Arv::Camera::Ptr>;
   static FN(list) {
-    const auto env = info.Env();
-    JS_EXCEPT_RET(
-        {
-          auto cameras = Arv::Camera::list();
-          auto array = Array::New(env, cameras.size());
-          for (size_t i = 0; i < cameras.size(); ++i) {
-            auto obj = CameraObject::Create(env, cameras[i]);
-            array.Set(i, obj);
-          }
-          return array;
-        },
-        env.Undefined());
+    return OneShotWorker<Cameras>::run(info.Env(), Arv::Camera::list);
   }
 
   FN(grab) {
     const auto timeout = info.Length() > 0 && info[0].IsNumber()
                              ? info[0].As<Number>().Int32Value()
                              : 0;
-    auto task = [this, timeout]() { return core().grab(timeout); };
+    auto task = [core = core(), timeout]() { return core->grab(timeout); };
     return OneShotWorker<Arv::Frame::Ptr>::run(env, task);
   }
 
-  GET(stream) { return CreateObject(env, Arv::Stream::get(core().get())); }
+  GET(stream) { return CreateObject(env, Arv::Stream::get(core())); }
 
   GET_PROP(physical_id, String);
   GET_PROP(device_id, String);
@@ -167,10 +153,10 @@ private:
   RANGE(frame_rate);
 
   FN(setTrigger) {
-    JS_EXCEPT_RET(
+    JS_EXCEPT(
         {
           auto mode = info[0].As<String>().Utf8Value();
-          core().set_trigger(mode.c_str());
+          core()->set_trigger(mode.c_str());
           return Boolean::New(env, true);
         },
         Boolean::New(env, false));
@@ -178,18 +164,18 @@ private:
   OPTIONS(trigger);
 
   FN(clearTriggers) {
-    JS_EXCEPT_RET(
+    JS_EXCEPT(
         {
-          core().clear_triggers();
+          core()->clear_triggers();
           return env.Undefined();
         },
         env.Undefined());
   }
 
   FN(softwareTrigger) {
-    JS_EXCEPT_RET(
+    JS_EXCEPT(
         {
-          core().software_trigger();
+          core()->software_trigger();
           return env.Undefined();
         },
         env.Undefined());
@@ -213,10 +199,10 @@ private:
            (convert<ArvAuto, std::string>));
 
   FN(setExposureMode) {
-    JS_EXCEPT_RET(
+    JS_EXCEPT(
         {
           auto mode = info[0].As<String>().Utf8Value();
-          core().set_exposure_mode(Arv::convert<ArvExposureMode>(mode));
+          core()->set_exposure_mode(convert<ArvExposureMode>(mode));
           return Boolean::New(env, true);
         },
         Boolean::New(env, false));
@@ -227,10 +213,10 @@ private:
   GET_PROP(gain_available, Boolean);
   GET_PROP(gain_auto_available, Boolean);
   FN(selectGain) {
-    JS_EXCEPT_RET(
+    JS_EXCEPT(
         {
           auto selector = info[0].As<String>().Utf8Value();
-          core().select_gain(selector.c_str());
+          core()->select_gain(selector.c_str());
           return Boolean::New(env, true);
         },
         Boolean::New(env, false));
@@ -247,10 +233,10 @@ private:
   GET_PROP(black_level_available, Boolean);
   GET_PROP(black_level_auto_available, Boolean);
   FN(selectBlackLevel) {
-    JS_EXCEPT_RET(
+    JS_EXCEPT(
         {
           auto selector = info[0].As<String>().Utf8Value();
-          core().select_black_level(selector.c_str());
+          core()->select_black_level(selector.c_str());
           return Boolean::New(env, true);
         },
         Boolean::New(env, false));
@@ -266,4 +252,13 @@ private:
            (convert<ArvAuto, std::string>));
 };
 
-CORE_OBJECT(Arv::Camera, CameraObject);
+CORE_OBJECT(Arv::Camera::Ptr, CameraObject);
+
+template <>
+Napi::Value convert(Napi::Env env, const Napi::Value &container,
+                    const CameraObject::Cameras &cameras) {
+  auto array = Array::New(env, cameras.size());
+  for (size_t i = 0; i < cameras.size(); ++i)
+    array.Set(i, CameraObject::Create(env, cameras[i]));
+  return array;
+}

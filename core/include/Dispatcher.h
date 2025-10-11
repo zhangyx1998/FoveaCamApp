@@ -8,7 +8,7 @@
 
 #include <napi.h>
 
-#include "utils/pointer.h"
+#include <pointer.h>
 
 namespace Dispatcher {
 
