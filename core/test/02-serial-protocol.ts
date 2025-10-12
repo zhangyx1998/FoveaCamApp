@@ -88,7 +88,7 @@ function dac2volt(ch: number) {
     return (200 * ch) / 65535;
 }
 
-async function actuate(v: number, settle_time = 1000) {
+async function actuate(v: number, settle_time = 10_000) {
     const dv = v / 2;
     // Top left -> bottom right
     const l: MirrorPosition = [
@@ -122,9 +122,9 @@ async function actuate(v: number, settle_time = 1000) {
 try {
     console.log(await protocol.set(Protocol.System.Enable, true));
     let v = 0;
-    for (; v <= 170; v += 0.1) console.log(await actuate(v));
-    for (; v >= -170; v -= 0.1) console.log(await actuate(v));
-    for (; v <= 0; v += 0.1) console.log(await actuate(v));
+    for (; v <= 170; v += 1) console.log(await actuate(v));
+    for (; v >= -170; v -= 1) console.log(await actuate(v));
+    for (; v <= 0; v += 1) console.log(await actuate(v));
     console.log("Loop finished");
 } catch (error) {
     console.error("Error occurred:", error);

@@ -60,7 +60,6 @@ public:
 
 private:
   FN(view) {
-    VERBOSE("Frame::view() called with %lu args", info.Length());
     auto fmt = core()->format;
     if (info.Length() > 0) {
       JS_ASSERT(info[0].IsString(), TypeError, "Pixel format must be a string",

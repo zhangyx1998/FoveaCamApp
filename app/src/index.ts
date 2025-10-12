@@ -11,5 +11,5 @@ function preventZoom(e: WheelEvent) {
 
 document.addEventListener("wheel", preventZoom, { passive: false });
 
-// import controller from "@lib/serial";
-// (window as any).controller = controller; // for debug
+import controller from "@lib/serial";
+(window as any).controller = controller; // for debug
