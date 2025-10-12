@@ -4,12 +4,10 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 
-import { Packet, Protocol, ProtocolMethod, ProtocolProperty } from "core";
+import { Protocol, type LogLevel, type PacketFactory } from "core";
 import { SerialPort } from "serialport";
 import type { PortInfo } from "@serialport/bindings-interface";
 import { clamp, defer } from "./util";
-
-type PendingRequest = ReturnType<typeof defer<BufferSource>>;
 
 function volt2dac(volt: number) {
     return clamp((65535 * volt) / 200, [0, 65535]) | 0;
@@ -29,57 +27,17 @@ class Controller {
     }
     private readonly port: SerialPort;
     private readonly protocol = new Protocol();
-    private readonly pending = new Map<number, PendingRequest>();
-    private __seq__: number = 1;
-    private get sequence() {
-        const sequence = this.__seq__;
-        this.__seq__ = (this.__seq__ % 65535) + 1;
-        return sequence;
-    }
     public readonly ready: Promise<void>;
-    private onData(data: Buffer) {
-        for (const recv of this.protocol.recv(data)) {
-            if (recv instanceof Error) {
-                console.error("Error parsing packet:", recv);
-                continue;
-            }
-            const { method, property, sequence, payload } = recv;
-            try {
-                if (method === "ACK") {
-                    this.pending.get(sequence)?.resolve(payload);
-                } else if (method === "REJ") {
-                    this.pending.get(sequence)?.reject("Request rejected: " + Protocol.Log(payload).toString());
-                } else if (
-                    method === "SYN" &&
-                    property === "LOG" &&
-                    sequence === 0
-                ) {
-                    console.log(
-                        ["[Controller]", Protocol.Log(payload)].join(" ")
-                    );
-                } else {
-                    console.warn("Unexpected packet:", recv);
-                }
-            } catch (e) {
-                this.pending.get(sequence)?.reject(e);
-                this.pending.delete(sequence);
-                console.error("Error handling packet:", e, recv);
-            } finally {
-                this.pending
-                    .get(sequence)
-                    ?.reject(
-                        new Error("Dangling request: " + JSON.stringify(recv))
-                    );
-                this.pending.delete(sequence);
-            }
-        }
-    }
     constructor(info: PortInfo) {
         this.port = new SerialPort({ ...info, baudRate: 115200 });
         this.ready = new Promise((resolve, reject) => {
             this.port.on("open", resolve);
             this.port.on("error", reject);
         }).then(async () => {
+            this.protocol.__tx__ = (data) => this.port.write(Buffer.from(data));
+            this.port.on("close", () => {
+                this.protocol.__tx__ = null;
+            });
             console.log("Controller connected:", info);
             console.log("  Info:", await this.info);
             console.log("  Version:", await this.version);
@@ -93,87 +51,48 @@ class Controller {
                 this.port.close();
             });
         });
-        this.port.on("data", this.onData.bind(this));
+        this.port.on("data", (data: Buffer) => this.protocol.__rx__(data));
     }
-    private send<T>(
-        method: ProtocolMethod,
-        property: ProtocolProperty,
-        payload: Packet | undefined | null,
-        handler: (value: BufferSource) => T
-    ): Promise<T> {
-        const { sequence } = this;
-        const pending = defer<BufferSource>();
-        // Clear previous pending request if exists
-        this.pending.get(sequence)?.reject(new Error("Timeout"));
-        this.pending.set(sequence, pending);
-        const buffer = this.protocol.send(method, property, sequence, payload);
-        this.port.write(Buffer.from(buffer));
-        return pending.promise.then(handler);
+    private get<T>(prop: PacketFactory<T>) {
+        return this.protocol.get(prop);
     }
-    // Protocol-level API
-    get<T>(property: ProtocolProperty, handler: (value: BufferSource) => T) {
-        return this.send("GET", property, null, handler);
-    }
-    set<T>(
-        property: ProtocolProperty,
-        payload: Packet,
-        handler: (value: BufferSource) => T
-    ) {
-        return this.send("SET", property, payload, handler);
+    private set<T>(prop: PacketFactory<T>, arg: T | BufferLike) {
+        return this.protocol.set(prop, arg);
     }
     // Application-level API
     get info() {
-        return this.get("SYS_INFO", Protocol.System.Info).then(String);
+        return this.get(Protocol.System.Info);
     }
     get version() {
-        return this.get("SYS_VERSION", Protocol.System.Version);
+        return this.get(Protocol.System.Version);
     }
     enable() {
-        return this.set(
-            "SYS_ENABLE",
-            Protocol.System.Enable(true),
-            Protocol.System.Enable
-        );
+        return this.set(Protocol.System.Enable, true);
     }
     disable() {
-        return this.set(
-            "SYS_ENABLE",
-            Protocol.System.Enable(false),
-            Protocol.System.Enable
-        );
+        return this.set(Protocol.System.Enable, false);
     }
     getLogLevel() {
-        return this.get("CFG_LOG", Protocol.Config.Log).then(String);
+        return this.get(Protocol.Config.Log);
     }
-    setLogLevel(level: "OFF" | "ERR" | "WARN" | "INFO" | "VERB") {
-        return this.set(
-            "CFG_LOG",
-            Protocol.Config.Log(level),
-            Protocol.Config.Log
-        );
+    setLogLevel(level: LogLevel) {
+        return this.set(Protocol.Config.Log, level);
     }
     getLPF() {
-        return this.get("CFG_LPF", Protocol.Config.LPF);
+        return this.get(Protocol.Config.LPF);
     }
     setLPF(value: number) {
-        return this.set(
-            "CFG_LPF",
-            Protocol.Config.LPF(value),
-            Protocol.Config.LPF
-        );
+        return this.set(Protocol.Config.LPF, value);
     }
+
     private bias: number = 0;
     async getBias() {
-        const bias = await this.get("CFG_BIAS", Protocol.Config.Bias);
+        const bias = await this.get(Protocol.Config.Bias);
         this.bias = dac2volt(Number(bias));
         return this.bias;
     }
     async setBias(value: number) {
-        const bias = await this.set(
-            "CFG_BIAS",
-            Protocol.Config.Bias(volt2dac(value)),
-            Protocol.Config.Bias
-        );
+        const bias = await this.set(Protocol.Config.Bias, volt2dac(value));
         this.bias = dac2volt(Number(bias));
         return this.bias;
     }
@@ -196,15 +115,11 @@ class Controller {
         right: [number, number],
         settle_time = 0
     ) {
-        const ack = await this.set(
-            "CMD_ACTUATE",
-            Protocol.Command.Actuate({
-                left: this.pos(left),
-                right: this.pos(right),
-                settle_time,
-            }),
-            Protocol.Command.Actuate
-        );
+        const ack = await this.set(Protocol.Command.Actuate, {
+            left: this.pos(left),
+            right: this.pos(right),
+            settle_time,
+        });
         {
             const { left, right, complete_time } = ack;
             return {
@@ -221,11 +136,20 @@ class Controller {
         }
     }
     trigger(duration_ns: number) {
-        return this.set(
-            "CMD_TRIGGER",
-            Protocol.Command.Trigger(duration_ns),
-            Protocol.Command.Trigger
-        );
+        return this.set(Protocol.Command.Trigger, duration_ns);
+    }
+    // Demo movement
+    async demo() {
+        await this.enable();
+        let v = 0;
+        for (; v <= 170; v += 1)
+            console.log(await this.actuate([+v, +v], [-v, +v], 10_000));
+        for (; v >= -170; v -= 1)
+            console.log(await this.actuate([+v, +v], [-v, +v], 10_000));
+        for (; v <= 0; v += 1)
+            console.log(await this.actuate([+v, +v], [-v, +v], 10_000));
+        await this.disable();
+        console.log("Demo finished");
     }
 }
 

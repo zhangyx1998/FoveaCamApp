@@ -141,21 +141,17 @@ declare module "core" {
         readonly [bufferAccessor]: null;
     };
 
-    type Packet<T> = PacketInstance<T> | PacketFactory<T>;
-
     export class Protocol {
-        static readonly Log: Packet<String>;
+        static readonly Log: PacketFactory<String>;
         static readonly System: {
             readonly Info: PacketFactory<String>;
             readonly Version: PacketFactory<FirmwareVersion> &
                 Readonly<FirmwareVersion>;
-            readonly Reset: PacketFactory<"SOFT" | "HARD">;
+            readonly Reset: PacketFactory<ResetType>;
             readonly Enable: PacketFactory<Boolean>;
         };
         static readonly Config: {
-            readonly Log: PacketFactory<
-                "OFF" | "ERR" | "WARN" | "INFO" | "VERB"
-            >;
+            readonly Log: PacketFactory<LogLevel>;
             readonly LPF: PacketFactory<Number>;
             readonly Bias: PacketFactory<Number>;
         };
@@ -191,6 +187,8 @@ declare module "core" {
         minor: number;
         patch: number;
     };
+    type ResetType = "SOFT" | "HARD";
+    type LogLevel = "OFF" | "ERR" | "WARN" | "INFO" | "VERB";
     type MirrorPosition = [number, number, number, number];
     type ProtocolMethod = "NOP" | "GET" | "SET" | "ACK" | "REJ" | "SYN";
     type ProtocolProperty =

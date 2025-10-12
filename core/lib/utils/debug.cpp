@@ -14,7 +14,8 @@
 
 static class VerboseTargets {
   bool enabled = false;
-  std::vector<std::string> targets;
+  std::vector<std::string> includes;
+  std::vector<std::string> excludes;
 
 public:
   VerboseTargets() {
@@ -37,23 +38,38 @@ public:
         start = end + 1;
       }
       auto trimmed = trim(token);
-      if (!trimmed.empty())
-        targets.push_back(trimmed);
+      if (!trimmed.empty()) {
+        if (trimmed[0] == '!')
+          excludes.push_back(trimmed.substr(1));
+        else
+          includes.push_back(trimmed);
+      }
     }
   }
-  bool match(const char *filename) {
+  bool match(const char *filename) const {
     if (!enabled)
       return false;
-    if (targets.empty())
-      return true;
     std::string target(filename);
-    for (const auto &pattern : targets)
+    bool included = false, excluded = false;
+    if (includes.empty())
+      included = true;
+    else {
+      for (const auto &pattern : includes)
+        if (target == pattern) {
+          included = true;
+          break;
+        }
+    }
+    if (!included)
+      return false;
+    for (const auto &pattern : excludes) {
       if (target == pattern)
-        return true;
-    return false;
+        return false;
+    }
+    return true;
   }
-} TARGETS;
+} const targets;
 
-bool VERBOSE_MATCH(const char *filename) { return TARGETS.match(filename); }
+bool VERBOSE_MATCH(const char *filename) { return targets.match(filename); }
 
 #endif

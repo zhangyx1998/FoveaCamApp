@@ -10,19 +10,18 @@
 
 using namespace Napi;
 
-#define EXTERN(FN, ...)                                                        \
-  extern void FN(__VA_ARGS__);                                                 \
-  FN
-
-Object init(Env env, Object exports) {
-  Dispatcher::init(env);
-  CORE_OBJECT_EXPORT(CameraObject, env, exports);
-  CORE_OBJECT_EXPORT(FrameObject, env, exports);
-  CORE_OBJECT_EXPORT(ProtocolObject, env, exports);
-  return exports;
+static Object init(Env env, Object exports) {
+  JS_EXCEPT(
+      {
+        VERBOSE("Initializing core module");
+        Dispatcher::init(env);
+        CORE_OBJECT_EXPORT(CameraObject, env, exports);
+        CORE_OBJECT_EXPORT(FrameObject, env, exports);
+        CORE_OBJECT_EXPORT(ProtocolObject, env, exports);
+        VERBOSE("Core module initialized");
+        return exports;
+      },
+      exports);
 }
 
-Object ModuleInit(Env env, Object exports){JS_EXCEPT(
-    { return init(env, exports); }, exports)}
-
-NODE_API_MODULE(core, ModuleInit)
+NODE_API_MODULE(core, init);
