@@ -165,6 +165,8 @@ cv::ColorConversionCodes Arv::cvtColorCode(PixelFormat src, PixelFormat dst) {
       CASE(BGR8, BayerGR2BGR);
       CASE(RGBA8, BayerGR2RGBA);
       CASE(BGRA8, BayerGR2BGRA);
+      CASE(Mono8, BayerGR2GRAY);
+      CASE(Mono16, BayerGR2GRAY);
       DEFAULT;
     }
   case BayerRG8:
@@ -173,6 +175,8 @@ cv::ColorConversionCodes Arv::cvtColorCode(PixelFormat src, PixelFormat dst) {
       CASE(BGR8, BayerRG2BGR);
       CASE(RGBA8, BayerRG2RGBA);
       CASE(BGRA8, BayerRG2BGRA);
+      CASE(Mono8, BayerRG2GRAY);
+      CASE(Mono16, BayerRG2GRAY);
       DEFAULT;
     }
   case BayerGB8:
@@ -181,6 +185,8 @@ cv::ColorConversionCodes Arv::cvtColorCode(PixelFormat src, PixelFormat dst) {
       CASE(BGR8, BayerGB2BGR);
       CASE(RGBA8, BayerGB2RGBA);
       CASE(BGRA8, BayerGB2BGRA);
+      CASE(Mono8, BayerGB2GRAY);
+      CASE(Mono16, BayerGB2GRAY);
       DEFAULT;
     }
   case BayerBG8:
@@ -189,6 +195,8 @@ cv::ColorConversionCodes Arv::cvtColorCode(PixelFormat src, PixelFormat dst) {
       CASE(BGR8, BayerBG2BGR);
       CASE(RGBA8, BayerBG2RGBA);
       CASE(BGRA8, BayerBG2BGRA);
+      CASE(Mono8, BayerBG2GRAY);
+      CASE(Mono16, BayerBG2GRAY);
       DEFAULT;
     }
   case BayerGR16:
@@ -197,6 +205,8 @@ cv::ColorConversionCodes Arv::cvtColorCode(PixelFormat src, PixelFormat dst) {
       CASE(BGR8, BayerGR2BGR);
       CASE(RGBA8, BayerGR2RGBA);
       CASE(BGRA8, BayerGR2BGRA);
+      CASE(Mono8, BayerGR2GRAY);
+      CASE(Mono16, BayerGR2GRAY);
       DEFAULT;
     }
   case BayerRG16:
@@ -205,6 +215,8 @@ cv::ColorConversionCodes Arv::cvtColorCode(PixelFormat src, PixelFormat dst) {
       CASE(BGR8, BayerRG2BGR);
       CASE(RGBA8, BayerRG2RGBA);
       CASE(BGRA8, BayerRG2BGRA);
+      CASE(Mono8, BayerRG2GRAY);
+      CASE(Mono16, BayerRG2GRAY);
       DEFAULT;
     }
   case BayerGB16:
@@ -213,6 +225,8 @@ cv::ColorConversionCodes Arv::cvtColorCode(PixelFormat src, PixelFormat dst) {
       CASE(BGR8, BayerGB2BGR);
       CASE(RGBA8, BayerGB2RGBA);
       CASE(BGRA8, BayerGB2BGRA);
+      CASE(Mono8, BayerGB2GRAY);
+      CASE(Mono16, BayerGB2GRAY);
       DEFAULT;
     }
     DEFAULT;
