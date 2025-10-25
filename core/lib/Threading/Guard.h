@@ -5,8 +5,9 @@
 // -------------------------------------------------------
 #pragma once
 
-#include <pointer.h>
+#include <condition_variable>
 #include <mutex>
+#include <pointer.h>
 
 #include <type_name.h>
 
@@ -71,6 +72,11 @@ public:
     void release() {
       if (lock.owns_lock())
         lock.unlock();
+    }
+    void wait(std::condition_variable &cond) {
+      if (!lock.owns_lock())
+        throw ReferenceAlreadyReleasedError();
+      cond.wait(lock);
     }
   };
   // Accesses the guarded data exclusively (locks the mutex)

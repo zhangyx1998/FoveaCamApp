@@ -236,3 +236,7 @@ export function getCursorOffset(el: Node, offset: number) {
         crash(`Unsupported node ${el}`, getCursorOffset);
     }
 }
+
+export function deepCopy<T>(obj: T): T {
+    return JSON.parse(JSON.stringify(obj));
+}

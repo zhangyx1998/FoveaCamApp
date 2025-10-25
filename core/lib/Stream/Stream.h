@@ -13,11 +13,11 @@
 #include <mutex>
 #include <thread>
 
+#include <pointer.h>
+#include <type_name.h>
 #include <utils/debug.h>
 #include <utils/map-set.h>
-#include <pointer.h>
 #include <utils/stacktrace.h>
-#include <type_name.h>
 
 class StreamError : public std::runtime_error {
 public:
@@ -26,14 +26,22 @@ public:
       : std::runtime_error(e.what()), stack(Stacktrace::capture()) {}
 };
 
+class StopIteration : public std::exception {};
+
 template <SmartPtrLike T> class Subscriber;
 
+// Shared<Stream> is intentionally not supported:
+// Add it to inherited classes if needed.
 template <SmartPtrLike T> class Stream {
+public:
+  using Payload = T;
   friend class Subscriber<T>;
   static inline const std::string NAME = "Stream<" + type_name<T>() + ">";
+
+private:
   // State transfer: false -> true (not the other way)
   // The flag is not protected by mutex given its state transfer type.
-  bool flag_terminate = false;
+  std::atomic<bool> flag_terminate{false};
   std::mutex mutex;
   std::condition_variable unfreeze;
   Set<Subscriber<T> *> subscribers;
@@ -41,7 +49,9 @@ template <SmartPtrLike T> class Stream {
 
 protected:
   Stream() : thread(&Stream::thread_main, this) {}
-  ~Stream() {
+  ~Stream() { assert_shutdown_called(); };
+
+  void assert_shutdown_called() {
     // Thread must be joined before derived class destruction
     // Because the thread may call into virtual functions of derived class.
     // This is checked here to avoid potential hard-to-debug issues.
@@ -50,13 +60,13 @@ protected:
       std::cerr << "[ERROR] " << NAME
                 << " destroyed without calling shutdown(). " << std::endl
                 << "Aborting..." << std::endl;
-      // Likely going to call into already cleared derived class vtable.
-      shutdown();
+      std::terminate();
     }
-  };
+  }
 
   // Call this from derived class destructor to safely stop the thread
   void shutdown() {
+    VERBOSE("Shutting down Stream<%s> [%p]", type_name<T>().c_str(), this);
     flag_terminate = true;
     unfreeze.notify_all();
     if (thread.joinable())
@@ -106,13 +116,14 @@ protected:
     try {
       while (!flag_terminate) {
         auto item = iterate();
-        std::scoped_lock lock(mutex);
         if (item == nullptr) {
           std::this_thread::yield();
           continue;
         }
+        std::scoped_lock lock(mutex);
         if (subscribers.empty())
           break;
+        std::vector<Subscriber<T> *> to_remove;
         for (auto sub : subscribers) {
           try {
             auto ref = sub->state.ref();
@@ -120,17 +131,22 @@ protected:
               sub->push(item);
           } catch (Subscriber<T>::Unsubscribe) {
             sub->close(false);
-            subscribers.erase(sub);
+            to_remove.push_back(sub);
           } catch (const std::exception &e) {
             sub->close(false, TracedError::create(e));
-            subscribers.erase(sub);
+            to_remove.push_back(sub);
           } catch (...) {
             sub->close(false, TracedError::create(
                                   "Unknown exception when pushing item"));
-            subscribers.erase(sub);
+            to_remove.push_back(sub);
           }
         }
+        for (auto sub : to_remove) {
+          subscribers.erase(sub);
+        }
       }
+    } catch (StopIteration &) {
+      // Normal termination
     } catch (std::exception &e) {
       crash(NAME + "::loop crashed: " + e.what());
     } catch (...) {
@@ -163,17 +179,21 @@ protected:
     unfreeze.wait(lock, [this] { return __activate__(); });
   }
   void thread_main() {
+    pthread_setname_np(("Stream<" + type_name<T>() + "> @ " +
+                        std::to_string(reinterpret_cast<uintptr_t>(this)))
+                           .c_str());
     while (true) {
-      VERBOSE("Stream<%s> waiting", type_name<T>().c_str());
+      VERBOSE("Stream<%s> [%p] waiting", type_name<T>().c_str(), this);
       wait_activate();
       if (flag_terminate)
         break;
-      VERBOSE("Stream<%s> starting", type_name<T>().c_str());
+      VERBOSE("Stream<%s> [%p] starting", type_name<T>().c_str(), this);
       loop();
-      VERBOSE("Stream<%s> stopped", type_name<T>().c_str());
+      VERBOSE("Stream<%s> [%p] paused", type_name<T>().c_str(), this);
       if (flag_terminate)
         break;
     }
+    VERBOSE("Stream<%s> [%p] terminated", type_name<T>().c_str(), this);
   }
 
   typedef void (*OnClose)(void *hint);
@@ -193,17 +213,15 @@ protected:
 template <SmartPtrLike T> class Subscriber {
   friend class Stream<T>;
 
-protected:
+public:
   class State {
   public:
     State() = delete;
     inline State(Stream<T> *stream) : stream(stream) {}
     // Pointer back to the stream we are subscribed to.
     // This is used to notify the stream to remove us when destructed.
-    // State transfer: no-null -> null (not the other way)
     Stream<T> *stream;
     // Error state set by Stream::crash().
-    // State transfer: null -> non-null (not the other way)
     // Once set, the error message is immutable and can be read without lock.
     // i.e. It's safe to check and read error without acquiring state_mutex.
     TracedError::Ptr error = nullptr;
@@ -220,6 +238,8 @@ protected:
    * setting the state to inactive.
    */
   virtual void push(const T &item) = 0;
+
+public:
   // NOTE: All calls from Stream must specify `unsubscribe = false` to avoid
   //       calling back to Stream::unsubscribe, which will cause deadlock.
   // Overrides of the function must first call the base class close().
@@ -237,8 +257,7 @@ protected:
 public:
   // Throw Unsubscribe from push() to unsubscribe self from stream.
   class Unsubscribe {};
-  // Implicit constructor assigns stream = nullptr, which is not allowed.
-  Subscriber() = delete;
-  Subscriber(Stream<T> *stream) : state(stream->subscribe(this)) {}
+  Subscriber(Stream<T> *stream)
+      : state(stream ? stream->subscribe(this) : nullptr) {}
   ~Subscriber() { close(); }
 };

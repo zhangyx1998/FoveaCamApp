@@ -1,5 +1,6 @@
 {
   "name": "fovea-cam-core",
+  "productName": "FoveaCam Duo",
   "private": true,
   "devDependencies": {
     "cmake-js": "^7.3.1",

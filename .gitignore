@@ -17,3 +17,5 @@ test.[cm]js
 
 # Temporary files
 *.tmp
+*.txt
+.DS_Store

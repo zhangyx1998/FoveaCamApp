@@ -14,43 +14,49 @@
 #include <convert.h>
 
 #include "CoreObject.h"
+#include "Iterator.h"
 #include "napi-helper.h"
 
 using namespace Napi;
 
 #define GET_PROP(prop, JsType, ...)                                            \
   GET(prop) {                                                                  \
-    JS_EXCEPT(return JsType::New(env, __VA_ARGS__(core()->get_##prop())),      \
-                     env.Undefined())                                          \
+    try {                                                                      \
+      return JsType::New(env, __VA_ARGS__(core()->get_##prop()));              \
+    }                                                                          \
+    JS_EXCEPT(env.Undefined())                                                 \
   }
 
 #define SET_PROP(Prop, Value, ...)                                             \
-  SET(Prop) { JS_EXCEPT(core()->set_##Prop(__VA_ARGS__(Value));) }
+  SET(Prop) {                                                                  \
+    try {                                                                      \
+      core()->set_##Prop(__VA_ARGS__(Value));                                  \
+    }                                                                          \
+    JS_EXCEPT()                                                                \
+  }
 
 #define RANGE(name)                                                            \
   GET(name##_range) {                                                          \
-    JS_EXCEPT(                                                                 \
-        {                                                                      \
-          auto range = core()->get_##name##_range();                           \
-          auto obj = Napi::Object::New(env);                                   \
-          obj.Set("min", Number::New(env, range.min));                         \
-          obj.Set("max", Number::New(env, range.max));                         \
-          return obj;                                                          \
-        },                                                                     \
-        env.Undefined());                                                      \
+    try {                                                                      \
+      auto range = core()->get_##name##_range();                               \
+      auto obj = Napi::Object::New(env);                                       \
+      obj.Set("min", Number::New(env, range.min));                             \
+      obj.Set("max", Number::New(env, range.max));                             \
+      return obj;                                                              \
+    }                                                                          \
+    JS_EXCEPT(env.Undefined())                                                 \
   }
 
 #define OPTIONS(name)                                                          \
   GET(name##_options) {                                                        \
-    JS_EXCEPT(                                                                 \
-        {                                                                      \
-          auto options = core()->get_##name##_options();                       \
-          auto ret = Array::New(env, options.size());                          \
-          for (size_t i = 0; i < options.size(); ++i)                          \
-            ret.Set(i, String::New(env, options[i]));                          \
-          return ret;                                                          \
-        },                                                                     \
-        env.Undefined());                                                      \
+    try {                                                                      \
+      auto options = core()->get_##name##_options();                           \
+      auto ret = Array::New(env, options.size());                              \
+      for (size_t i = 0; i < options.size(); ++i)                              \
+        ret.Set(i, String::New(env, options[i]));                              \
+      return ret;                                                              \
+    }                                                                          \
+    JS_EXCEPT(env.Undefined())                                                 \
   }
 
 class CameraObject : public CoreObject<CameraObject, Arv::Camera::Ptr> {
@@ -65,7 +71,6 @@ public:
         {
             CORE_OBJECT_REGISTER(CameraObject, env),                   //
             INSTANCE_METHOD(CameraObject, grab),                       //
-            INSTANCE_GETTER(CameraObject, stream),                     //
             INSTANCE_GETTER(CameraObject, physical_id),                //
             INSTANCE_GETTER(CameraObject, device_id),                  //
             INSTANCE_GETTER(CameraObject, vendor),                     //
@@ -113,6 +118,12 @@ public:
     return obj->core()->tag;
   }
 
+  static void construct(const Napi::CallbackInfo &info, CameraObject *obj) {
+    auto stream = Arv::Stream::get(obj->core());
+    auto object = StreamObject<Arv::Stream>::Create(info.Env(), stream);
+    info.This().As<Napi::Object>().Set("stream", object);
+  }
+
 private:
   using Cameras = std::vector<Arv::Camera::Ptr>;
   static FN(list) {
@@ -120,14 +131,15 @@ private:
   }
 
   FN(grab) {
-    const auto timeout = info.Length() > 0 && info[0].IsNumber()
-                             ? info[0].As<Number>().Int32Value()
-                             : 0;
-    auto task = [core = core(), timeout]() { return core->grab(timeout); };
-    return OneShotWorker<Arv::Frame::Ptr>::run(env, task);
+    try {
+      const auto timeout = info.Length() > 0 && info[0].IsNumber()
+                               ? info[0].As<Number>().Int32Value()
+                               : 0;
+      auto task = [core = core(), timeout]() { return core->grab(timeout); };
+      return OneShotWorker<Arv::Frame::Ptr>::run(env, task);
+    }
+    JS_EXCEPT(env.Undefined())
   }
-
-  GET(stream) { return CreateObject(env, Arv::Stream::get(core())); }
 
   GET_PROP(physical_id, String);
   GET_PROP(device_id, String);
@@ -153,32 +165,29 @@ private:
   RANGE(frame_rate);
 
   FN(setTrigger) {
-    JS_EXCEPT(
-        {
-          auto mode = info[0].As<String>().Utf8Value();
-          core()->set_trigger(mode.c_str());
-          return Boolean::New(env, true);
-        },
-        Boolean::New(env, false));
+    try {
+      auto mode = info[0].As<String>().Utf8Value();
+      core()->set_trigger(mode.c_str());
+      return Boolean::New(env, true);
+    }
+    JS_EXCEPT(Boolean::New(env, false))
   }
   OPTIONS(trigger);
 
   FN(clearTriggers) {
-    JS_EXCEPT(
-        {
-          core()->clear_triggers();
-          return env.Undefined();
-        },
-        env.Undefined());
+    try {
+      core()->clear_triggers();
+      return env.Undefined();
+    }
+    JS_EXCEPT(env.Undefined())
   }
 
   FN(softwareTrigger) {
-    JS_EXCEPT(
-        {
-          core()->software_trigger();
-          return env.Undefined();
-        },
-        env.Undefined());
+    try {
+      core()->software_trigger();
+      return env.Undefined();
+    }
+    JS_EXCEPT(env.Undefined())
   }
 
   SET_PROP(trigger_source, val.As<String>().Utf8Value(),
@@ -199,13 +208,12 @@ private:
            (convert<ArvAuto, std::string>));
 
   FN(setExposureMode) {
-    JS_EXCEPT(
-        {
-          auto mode = info[0].As<String>().Utf8Value();
-          core()->set_exposure_mode(convert<ArvExposureMode>(mode));
-          return Boolean::New(env, true);
-        },
-        Boolean::New(env, false));
+    try {
+      auto mode = info[0].As<String>().Utf8Value();
+      core()->set_exposure_mode(convert<ArvExposureMode>(mode));
+      return Boolean::New(env, true);
+    }
+    JS_EXCEPT(Boolean::New(env, false))
   }
 
   /* Analog control */
@@ -213,13 +221,12 @@ private:
   GET_PROP(gain_available, Boolean);
   GET_PROP(gain_auto_available, Boolean);
   FN(selectGain) {
-    JS_EXCEPT(
-        {
-          auto selector = info[0].As<String>().Utf8Value();
-          core()->select_gain(selector.c_str());
-          return Boolean::New(env, true);
-        },
-        Boolean::New(env, false));
+    try {
+      auto selector = info[0].As<String>().Utf8Value();
+      core()->select_gain(selector.c_str());
+      return Boolean::New(env, true);
+    }
+    JS_EXCEPT(Boolean::New(env, false))
   }
   OPTIONS(gain)
 
@@ -233,13 +240,12 @@ private:
   GET_PROP(black_level_available, Boolean);
   GET_PROP(black_level_auto_available, Boolean);
   FN(selectBlackLevel) {
-    JS_EXCEPT(
-        {
-          auto selector = info[0].As<String>().Utf8Value();
-          core()->select_black_level(selector.c_str());
-          return Boolean::New(env, true);
-        },
-        Boolean::New(env, false));
+    try {
+      auto selector = info[0].As<String>().Utf8Value();
+      core()->select_black_level(selector.c_str());
+      return Boolean::New(env, true);
+    }
+    JS_EXCEPT(Boolean::New(env, false))
   }
   OPTIONS(black_level)
 
@@ -252,13 +258,15 @@ private:
            (convert<ArvAuto, std::string>));
 };
 
-CORE_OBJECT(Arv::Camera::Ptr, CameraObject);
+CORE_OBJECT(CameraObject);
 
 template <>
 Napi::Value convert(Napi::Env env, const Napi::Value &container,
-                    const CameraObject::Cameras &cameras) {
+                    const CameraObject::Cameras &cameras) noexcept {
   auto array = Array::New(env, cameras.size());
   for (size_t i = 0; i < cameras.size(); ++i)
     array.Set(i, CameraObject::Create(env, cameras[i]));
   return array;
 }
+
+CORE_OBJECT_CONVERSIONS(StreamObject<Arv::Stream>);

@@ -29,8 +29,7 @@
 
 using namespace Napi;
 
-using SymbolRegistry =
-    Threading::Guard<Map<napi_env, Napi::Reference<Napi::Symbol>>>;
+using SymbolRegistry = Isolated<Napi::Reference<Napi::Symbol>>;
 
 static SymbolRegistry bufferAccessor;
 static SymbolRegistry propNameAccessor;
@@ -49,7 +48,7 @@ inline std::string hexFormat(const void *data, size_t size) {
 
 static bool access(SymbolRegistry &registry, Napi::Value &value) {
   auto env = value.Env();
-  auto accessor = registry.ref()->get(env).Value();
+  auto accessor = registry.get(env).Value();
   if (value.IsObject() && value.As<Napi::Object>().Has(accessor)) {
     value = value.As<Napi::Object>().Get(accessor);
     return true;
@@ -63,7 +62,7 @@ using Protocol::Property;
 
 static Napi::Value getBuffer(Napi::Value value) {
   auto env = value.Env();
-  auto accessor = bufferAccessor.ref()->get(env).Value();
+  auto accessor = bufferAccessor.get(env).Value();
   std::ignore = access(bufferAccessor, value);
   return value;
 }
@@ -85,7 +84,7 @@ Function factory(Napi::Env env, std::string name,
     cfg(fn);
   // Inject [[PropertyName]] property
   {
-    auto symbol = propNameAccessor.ref()->get(env).Value();
+    auto symbol = propNameAccessor.get(env).Value();
     fn.DefineProperty(PropertyDescriptor::Value(
         symbol, String::New(env, convert<std::string>(P))));
   }
@@ -108,7 +107,7 @@ static inline Napi::Object inject(const Napi::CallbackInfo &info,
   std::memcpy(buffer.Data(), data, size);
   {
     // Inject [[Buffer]] property
-    auto symbol = bufferAccessor.ref()->get(env).Value();
+    auto symbol = bufferAccessor.get(env).Value();
     ret.DefineProperty(PropertyDescriptor::Value(symbol, buffer));
   }
   ret.Freeze();
@@ -206,13 +205,12 @@ static FN(VersionPacket) {
     bufferView(arg) >> version;
   } else if (arg.IsObject() && !arg.IsNull()) {
     const auto &obj = arg.As<Napi::Object>();
-    JS_EXCEPT(
-        {
-          propertyMap(obj, "major", version.major, false);
-          propertyMap(obj, "minor", version.minor, false);
-          propertyMap(obj, "patch", version.patch, false);
-        },
-        env.Undefined());
+    try {
+      propertyMap(obj, "major", version.major, false);
+      propertyMap(obj, "minor", version.minor, false);
+      propertyMap(obj, "patch", version.patch, false);
+    }
+    JS_EXCEPT(env.Undefined())
   } else {
     JS_THROW(TypeError, "Argument must be an object or buffer like",
              env.Undefined());
@@ -286,18 +284,17 @@ static FN(ActuatePacket) {
     bufferView(arg) >> command;
   } else if (arg.IsObject() && !arg.IsNull()) {
     const auto &obj = arg.As<Napi::Object>();
-    JS_EXCEPT(
-        {
-          assignMirrorPosition(obj.Get("left"), command.left);
-          assignMirrorPosition(obj.Get("right"), command.right);
-          if (obj.Has("settle_time"))
-            command.settle_time =
-                convert<Packet::Command::Microseconds>(obj.Get("settle_time"));
-          if (obj.Has("complete_time"))
-            command.complete_time = convert<Packet::Command::Microseconds>(
-                obj.Get("complete_time"));
-        },
-        env.Undefined());
+    try {
+      assignMirrorPosition(obj.Get("left"), command.left);
+      assignMirrorPosition(obj.Get("right"), command.right);
+      if (obj.Has("settle_time"))
+        command.settle_time =
+            convert<Packet::Command::Microseconds>(obj.Get("settle_time"));
+      if (obj.Has("complete_time"))
+        command.complete_time =
+            convert<Packet::Command::Microseconds>(obj.Get("complete_time"));
+    }
+    JS_EXCEPT(env.Undefined())
   } else {
     JS_THROW(TypeError, "Argument must be an object or buffer like",
              env.Undefined());
@@ -347,7 +344,11 @@ public:
         deferred(Napi::Promise::Deferred::New(env)) {}
   ~PendingRequest() {
     if (!resolved)
-      Reject(Napi::Error::New(env, "Request timeout").Value());
+      try {
+        Reject(Napi::Error::New(env, "Request timeout").Value());
+      } catch (...) {
+        // Allow silently fail during module cleanup
+      }
   }
   inline void Resolve(Napi::Value value) {
     resolved = true;
@@ -363,10 +364,10 @@ public:
 class ProtocolObject : public ObjectWrap<ProtocolObject> {
 public:
   static Function Init(Napi::Env env) {
-    bufferAccessor.ref()->set(
-        env, Napi::Persistent(Napi::Symbol::New(env, "Buffer")));
-    propNameAccessor.ref()->set(
-        env, Napi::Persistent(Napi::Symbol::New(env, "PropertyName")));
+    bufferAccessor.get(env) =
+        Napi::Persistent(Napi::Symbol::New(env, "Buffer"));
+    propNameAccessor.get(env) =
+        Napi::Persistent(Napi::Symbol::New(env, "PropertyName"));
     auto fn = DefineClass(env, "Protocol",
                           {
                               INSTANCE_METHOD(ProtocolObject, __rx__),   //
@@ -375,11 +376,6 @@ public:
                               INSTANCE_METHOD(ProtocolObject, set),      //
                           });
     return fn;
-  }
-
-  static void Deinit(Napi::Env env) {
-    bufferAccessor.ref()->erase(env);
-    propNameAccessor.ref()->erase(env);
   }
 
   ProtocolObject(const CallbackInfo &info)
@@ -489,27 +485,26 @@ private:
 
   Napi::Value send(uint16_t sequence, Property property,
                    const Napi::Function &factory, Protocol::RawPacket &packet) {
-    JS_EXCEPT(
-        {
-          if (tx.encode(packet.finalize())) {
-            auto buffer = Napi::ArrayBuffer::New(env, tx.size());
-            std::memcpy(buffer.Data(), tx.data(), tx.size());
-            // Hand over
-            if (__tx__.IsEmpty())
-              JS_THROW(Error, "No __tx__ function defined", env.Null());
-            auto fn = __tx__.Value();
-            fn.Call({buffer});
-            // Create promise
-            auto pr = PendingRequest::create(env, Method::ACK, property);
-            // Create return promise.then(callback)
-            auto promise = pr->Promise().Then(factory);
-            pending[sequence] = std::move(pr);
-            return promise;
-          } else {
-            throw JS::Error(env, "Failed to encode packet");
-          }
-        },
-        env.Null());
+    try {
+      if (tx.encode(packet.finalize())) {
+        auto buffer = Napi::ArrayBuffer::New(env, tx.size());
+        std::memcpy(buffer.Data(), tx.data(), tx.size());
+        // Hand over
+        if (__tx__.IsEmpty())
+          JS_THROW(Error, "No __tx__ function defined", env.Null());
+        auto fn = __tx__.Value();
+        fn.Call({buffer});
+        // Create promise
+        auto pr = PendingRequest::create(env, Method::ACK, property);
+        // Create return promise.then(callback)
+        auto promise = pr->Promise().Then(factory);
+        pending[sequence] = std::move(pr);
+        return promise;
+      } else {
+        throw JS::Error(env, "Failed to encode packet");
+      }
+    }
+    JS_EXCEPT(env.Null())
   }
 
   FN(get) {

@@ -6,6 +6,7 @@
     "devDependencies": {
         "@vitejs/plugin-vue": "^5.0.4",
         "electron": "^38.2.0",
+        "electron-store": "^11.0.2",
         "sass": "^1.93.2",
         "typescript": "^5.4.2",
         "vite": "^7.1.7",

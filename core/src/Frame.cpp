@@ -6,15 +6,16 @@
 #include <cstring>
 
 #include <Aravis/Frame.h>
+#include <Buffer/Buffer.h>
 #include <utils/map-set.h>
 
-#include "Buffer/Buffer.h"
 #include "CoreObject.h"
 #include "napi-helper.h"
 
 using namespace Napi;
 
-template <> Value convert(Env env, const Value &container, const cv::Mat &mat) {
+template <>
+Value convert(Env env, const Value &container, const cv::Mat &mat) noexcept {
   const auto data = mat.data;
   const auto size = mat.size().area() * mat.elemSize();
   if (isBufferLike(container)) {
@@ -60,28 +61,40 @@ public:
 
 private:
   FN(view) {
-    auto fmt = core()->format;
-    if (info.Length() > 0) {
-      JS_ASSERT(info[0].IsString(), TypeError, "Pixel format must be a string",
-                env.Undefined());
-      const auto format = info[0].As<String>().Utf8Value();
-      JS_EXCEPT({ fmt = convert<Arv::PixelFormat>(format); }, env.Undefined());
+    try {
+      auto tag = core()->tag;
+      auto fmt = core()->format;
+      if (info.Length() > 0) {
+        JS_ASSERT(info[0].IsString(), TypeError,
+                  "Pixel format must be a string", env.Undefined());
+        const auto arg = info[0].As<String>().Utf8Value();
+        try {
+          fmt = convert<Arv::PixelFormat>(arg);
+        }
+        JS_EXCEPT(env.Undefined())
+      }
+      const auto action =
+          "Frame[" + tag + "].view(" + convert<std::string>(fmt) + ")";
+      VERBOSE("[Requested] %s", action.c_str());
+      auto container = info.Length() > 1 ? info[1] : env.Undefined();
+      if (core()->isAvailable(fmt)) {
+        // Resolve immediately if already available
+        auto deferred = Promise::Deferred::New(env);
+        deferred.Resolve(convert(env, container, core()->view(fmt)));
+        VERBOSE("[Resolved] (cached) %s", action.c_str());
+        return deferred.Promise();
+      } else {
+        // Launch one-shot async worker to convert
+        auto task = [core = core(), fmt, action]() {
+          VERBOSE("[Dispatched] %s", action.c_str());
+          auto result = core->view(fmt);
+          VERBOSE("[Completed] %s", action.c_str());
+          return result;
+        };
+        return OneShotWorker<cv::Mat>::run(container, task);
+      }
     }
-    auto container = info.Length() > 1 ? info[1] : env.Undefined();
-    if (core()->isAvailable(fmt)) {
-      // Resolve immediately if already available
-      auto deferred = Promise::Deferred::New(env);
-      JS_EXCEPT(
-          {
-            deferred.Resolve(convert(env, container, core()->view(fmt)));
-            return deferred.Promise();
-          },
-          env.Undefined());
-    } else {
-      // Launch one-shot async worker to convert
-      auto task = [core = core(), fmt]() { return core->view(fmt); };
-      return OneShotWorker<cv::Mat>::run(container, task);
-    }
+    JS_EXCEPT(env.Undefined())
   }
 
   GET(width) { return Number::New(env, core()->width()); }
@@ -91,4 +104,4 @@ private:
   GET(timestamp) { return BigInt::New(env, core()->timestamp); }
 };
 
-CORE_OBJECT(Arv::Frame::Ptr, FrameObject);
+CORE_OBJECT(FrameObject);
