@@ -7,6 +7,7 @@
 
 #include <uv.h>
 
+#include "Cleanup.h"
 #include "Dispatcher.h"
 #include "Threading/Guard.h"
 #include "napi-helper.h"
@@ -27,7 +28,17 @@ struct Context {
   uv_async_t async;
   uv_handle_t *handle() { return reinterpret_cast<uv_handle_t *>(&async); }
 
+  bool closed = false;
   unsigned future = 0;
+
+  // Get Context pointer from uv_handle_t pointer
+  // This is safe because uv_async_t is the first member of Context
+  static Context *from_handle(uv_handle_t *handle) {
+    static_assert(offsetof(Context, async) == 0,
+                  "async must be the first member of Context");
+    auto *async = reinterpret_cast<uv_async_t *>(handle);
+    return reinterpret_cast<Context *>(async);
+  }
 
   inline void incFuture() {
     future++;
@@ -61,8 +72,11 @@ struct Context {
   bool referenced = true; // uv handle is referenced by default
 
   void updateRef() {
-    if (uv_is_closing(handle()))
+    if (uv_is_closing(handle())) {
+      std::cerr << "[WARN] Dispatcher UV handle is closing, cannot updateRef()"
+                << std::endl;
       return;
+    }
     bool shouldReference = future > 0 || !queue.empty();
     if (!referenced && shouldReference) {
       uv_ref(handle());
@@ -74,7 +88,7 @@ struct Context {
   }
 
   Context(napi_env env) : async({.data = env}) {
-    VERBOSE("Dispatcher created");
+    VERBOSE("Dispatcher created @ %p (async handle)", &async);
     uv_loop_t *loop;
     napi_status s = napi_get_uv_event_loop(env, &loop);
     if (s != napi_ok)
@@ -84,15 +98,31 @@ struct Context {
     updateRef();
   }
 
+  static void close_cb(uv_handle_t *handle) {
+    VERBOSE("Dispatcher UV handle closed @ %p", handle);
+    Context *ctx = from_handle(handle);
+    ctx->closed = true;
+  }
+
   ~Context() {
     if (referenced) {
       std::cerr << "[WARN] Dispatcher destroyed with active references"
                 << std::endl;
       uv_unref(handle());
     }
-    // if (!uv_is_closing(handle())) {
-    //   uv_close(handle(), nullptr);
-    // }
+    if (!uv_is_closing(handle())) {
+      VERBOSE("Closing dispatcher UV handle");
+      uv_close(handle(), close_cb);
+    }
+    // Wait for the handle to finish closing
+    // This is necessary because uv_close is asynchronous and the handle
+    // must not be freed until the close callback has been invoked
+    VERBOSE("Waiting for dispatcher UV handle to close...");
+    while (!closed) {
+      // Run the event loop to allow the close callback to execute
+      uv_run(async.loop, UV_RUN_NOWAIT);
+    }
+    VERBOSE("Dispatcher UV handle closed");
   }
 };
 
@@ -104,7 +134,6 @@ public:
   Guard<Context> ctx;
   inline Guard<Context>::Ref ref() { return ctx.ref(); }
   Dispatcher(Napi::Env env) : env(env), ctx(env) {};
-  ~Dispatcher() { VERBOSE("Dispatcher destroyed"); }
 };
 
 typedef Guard<Map<napi_env, Dispatcher::Ptr>> Registry;
@@ -147,6 +176,8 @@ void cleanup(napi_env env) {
   auto ref = registry.ref();
   if (ref->has(env))
     ref->erase(env);
+  VERBOSE("Dispatcher cleaned up for env %p, %lu handles left", env,
+          ref->size());
 }
 
 void init(Napi::Env env) {
@@ -156,6 +187,7 @@ void init(Napi::Env env) {
   auto dispatcher = Dispatcher::create(env);
   ref->set(env, dispatcher);
   env.AddCleanupHook(cleanup, static_cast<napi_env>(env));
+  Cleanup::add(env, static_cast<napi_env>(env), &cleanup, "Dispatcher");
 }
 
 void dispatch(Napi::Env env, Task &&task) {

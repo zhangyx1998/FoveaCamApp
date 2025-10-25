@@ -1,74 +1,191 @@
+<!-- -------------------------------------------------
+Copyright (c) 2025 Yuxuan Zhang, zhangyuxuan@ufl.edu
+This source code is licensed under the MIT license.
+You may find the full license in project root directory.
+--------------------------------------------------- -->
 <script setup lang="ts">
-import { computed, markRaw, ref, watch } from "vue";
-import { cameras, updateCameras } from "./store";
-import StreamView from "./StreamView.vue";
-import type { Camera, Stream } from "core";
+import { ref, shallowRef, Suspense } from "vue";
+import TitleBar from "./components/TitleBar.vue";
+import Controller from "./components/Controller.vue";
+const currentModule = shallowRef<any>(null);
+const currentModuleName = ref<string | null>(null);
+const titleBarHeight = ref(0);
+// Sub task modules
+import Cameras from "../modules/cameras/index.vue";
+import CalibrateWideAngle from "../modules/calibrate-wide-angle/index.vue";
+import CalibrateFovea from "../modules/calibrate-fovea/index.vue";
+import Playground from "../modules/playground/index.vue";
+import Loading from "./components/Loading.vue";
 
-const wide_cam = computed(() => cameras.get("22071833") as Camera | undefined);
-const fovea_l = computed(() => cameras.get("24044020") as Camera | undefined);
-const fovea_r = computed(() => cameras.get("24155467") as Camera | undefined);
-
-function configCamera(camera?: Camera) {
-    if (!camera) return;
-    camera.exposure_auto = "Off";
-    camera.exposure = 16e3; // 60 FPS
-    camera.gain_auto = "Off";
-    camera.gain = 30;
+function launch(module: any, name: string) {
+    currentModule.value = module;
+    currentModuleName.value = name;
 }
 
-watch(fovea_l, (cam) => configCamera(cam), { immediate: true });
-watch(fovea_r, (cam) => configCamera(cam), { immediate: true });
-
-function info(camera?: Camera) {
-    return camera && {
-        Vendor: camera.vendor ?? "Unknown",
-        Camera: camera.model ?? "Unknown",
-        Serial: camera.serial ?? "Unknown",
-        Exposure: `${(camera.exposure / 1000).toFixed(2)} ms`,
-        Gain: `${(camera.gain).toFixed(2)} dB`,
-    }
+function backToHome() {
+    currentModule.value = null;
+    currentModuleName.value = null;
 }
-
-function getStream(camera?: Camera) {
-    return camera && markRaw(camera.stream);
-}
-
-function releaseStream(stream?: Stream) {
-    stream?.release();
-}
-
-watch(() => getStream(fovea_l.value), (stream, old) => {
-    releaseStream(old);
-});
-watch(() => getStream(fovea_r.value), (stream, old) => {
-    releaseStream(old);
-});
 </script>
 
 <template>
-    <div class="cameras">
-        <StreamView name="Left Fovea" :stream="getStream(fovea_l)" :overlay="info(fovea_l)"
-            style="outline: 2px solid cyan;" />
-        <StreamView name="Wide Camera" :stream="getStream(wide_cam)" :overlay="info(wide_cam)"
-            style="outline: 2px solid orange;" />
-        <StreamView name="Right Fovea" :stream="getStream(fovea_r)" :overlay="info(fovea_r)"
-            style="outline: 2px solid greenyellow;" />
+    <div class="main" :style="{ top: titleBarHeight + 'px' }">
+        <template v-if="currentModule">
+            <suspense>
+                <component v-if="currentModule" :is="currentModule" />
+                <template #fallback>
+                    <Loading />
+                </template>
+            </suspense>
+        </template>
+        <div v-else class="main-menu">
+            <div class="welcome">
+                <img
+                    src="/FoveaCam Duo Mini.png"
+                    style="
+                        width: max(40vw, 40vh, 80%);
+                        margin: 3em;
+                        max-width: 50vw;
+                    "
+                />
+                <h1>FoveaCam Duo Mini</h1>
+            </div>
+            <div class="modules">
+                <div class="group">
+                    <h2>Applications</h2>
+                    <button>Disparity Scope</button>
+                    <button>3D Tracking (Single)</button>
+                    <button>3D Tracking (Multi)</button>
+                    <button>3D Reconstruction</button>
+                    <button @click="launch(Playground, 'Calibrate')">
+                        Playground
+                    </button>
+                </div>
+                <div class="group">
+                    <h2>Utilities</h2>
+                    <button @click="launch(Cameras, 'Manage Cameras')">
+                        Manage Cameras
+                    </button>
+                    <button
+                        @click="
+                            launch(CalibrateWideAngle, 'Calibrate Wide Angle')
+                        "
+                    >
+                        Calibrate Wide Angle
+                    </button>
+                    <button @click="launch(CalibrateFovea, 'Calibrate Fovea')">
+                        Calibrate Fovea
+                    </button>
+                    <button>Manage Calibrations</button>
+                </div>
+                <div style="flex-grow: 1"></div>
+                <div class="footnote">Copyright © 2025 Yuxuan Zhang</div>
+            </div>
+        </div>
     </div>
+    <TitleBar
+        title="FoveaCam Duo"
+        :subtitle="currentModuleName"
+        @height="(h) => (titleBarHeight = h)"
+        @back-to-home="backToHome"
+    >
+        <Controller />
+    </TitleBar>
 </template>
 
 <style scoped lang="scss">
-.cameras {
-    display: flex;
-    justify-content: space-evenly;
-    flex-wrap: wrap;
-    flex-direction: row;
-    width: 100%;
-    padding: 1vw 0;
-    margin: 0;
+.main {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    overflow: auto;
+    * {
+        user-select: none;
+    }
+}
 
-    &>* {
-        width: 32vw;
-        height: 24vw;
+.main-menu {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    overflow-y: scroll;
+    width: 100%;
+    height: 100%;
+
+    h1 {
+        font-size: 2rem;
+        font-weight: 500;
+        color: #666;
+        width: 100%;
+        text-align: center;
+        margin: 0;
+        padding: 0;
+    }
+
+    .welcome {
+        height: 100%;
+        flex-grow: 1;
+        background-color: #333;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        position: relative;
+    }
+
+    .modules {
+        background-color: #222;
+        display: flex;
+        height: 100%;
+        flex-direction: column;
+        justify-content: flex-start;
+        min-width: 40ch;
+        border-left: 1px solid #fff4;
+        --color: white;
+        .group {
+            display: flex;
+            flex-direction: column;
+            padding: 0.5rem 0;
+            margin: 0.5rem 0;
+            &:not(:first-child) {
+                border-top: 1px solid #fff4;
+            }
+            h2 {
+                margin: 1rem 1.5rem;
+                padding: unset;
+                color: #aaa;
+            }
+        }
+
+        button {
+            font-size: 1.2em;
+            padding: 0.5em 1em;
+            background: none;
+            border: none;
+            color: #ddd;
+            cursor: pointer;
+            min-width: 12ch;
+            text-align: left;
+            font-family: inherit;
+            border-left: 0.8ch solid transparent;
+
+            &:hover {
+                border-left: 0.8ch solid var(--color);
+                color: var(--color);
+                background-color: #fff1;
+            }
+
+            &:active {
+                border-left: 0.8ch solid var(--color);
+                background-color: #fff2;
+            }
+        }
+    }
+    .footnote {
+        color: #666;
+        text-align: center;
+        padding: 1em 0;
     }
 }
 </style>

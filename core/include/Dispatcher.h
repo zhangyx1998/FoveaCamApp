@@ -26,6 +26,7 @@ public:
   Future(Future &&other) = delete;
   Future(const Future &) = delete;
   Future &operator=(Future &&) = delete;
+  using Deferred::Env;
   using Deferred::Promise;
   using Deferred::Reject;
   using Deferred::Resolve;

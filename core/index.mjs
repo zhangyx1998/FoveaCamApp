@@ -23,5 +23,12 @@ const require = createRequire(getRequirePath(new URL(import.meta.url)));
 const Module = require("./index.cjs");
 
 export default Module;
-// (optional) re-expose named exports for nicer ESM ergonomics:
-export const { Camera, Frame, Protocol, __origin__ } = Module;
+// Re-expose named exports for nicer ESM ergonomics:
+export const {
+    Camera, //
+    Frame, //
+    Protocol, //
+    ArUcoDetector, //
+    cleanup, //
+    __origin__, //
+} = Module;

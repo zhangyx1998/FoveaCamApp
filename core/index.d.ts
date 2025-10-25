@@ -11,6 +11,9 @@ declare module "core" {
     /** Path to the resolved native module injected by JS loader */
     export const __origin__: string;
 
+    // Explicitly cleanup all resources (cameras, streams, frames, etc.)
+    export function cleanup(): void;
+
     class CoreObject {
         /**
          * Hex string ID of the underlying native object.
@@ -91,7 +94,7 @@ declare module "core" {
         grab(timeout?: number): Promise<Frame>;
 
         // Stream control
-        readonly stream: Stream;
+        readonly stream: Stream<Frame>;
     }
 
     export class Frame extends CoreObject {
@@ -101,14 +104,13 @@ declare module "core" {
         view(format?: PixelFormat, buffer?: BufferLike): Promise<ArrayBuffer>;
     }
 
-    export class Stream extends CoreObject {
-        readonly camera: Camera;
+    export class Stream<T> extends CoreObject {
         // Skip frames if the consumer is slower than the producer.
         // Generates null if consumer is faster than producer.
         // Consumer MUST yield (await) upon null so producer can push data.
-        [Symbol.iterator](): IterableIterator<Frame | null>;
+        [Symbol.iterator](): IterableIterator<T | null>;
         // Queue all frames
-        [Symbol.asyncIterator](): AsyncIterableIterator<Frame>;
+        [Symbol.asyncIterator](): AsyncIterableIterator<T>;
     }
 
     type PixelFormat =
@@ -203,4 +205,47 @@ declare module "core" {
         | "CMD_ACTUATE"
         | "CMD_TRIGGER"
         | "LOG";
+
+    export class ArUcoDetector extends CoreObject {
+        static enhance(
+            frame: Frame,
+            scale?: number = 1.0
+        ): Promise<ArrayBuffer>;
+        constructor(type: PreDefinedDictionary);
+        detect(
+            frame: Frame,
+            scale?: number = 1.0
+        ): Promise<ArUcoDetectResult[]>;
+        stream(
+            stream: Stream<Frame>,
+            scale?: number = 1.0
+        ): Stream<ArUcoDetectResult[]>;
+    }
+
+    type Corner = { x: number; y: number };
+    type ArUcoDetectResult = { id: number; w: number; h: number } & Corner[];
+
+    type PreDefinedDictionary =
+        | "4X4_50"
+        | "4X4_100"
+        | "4X4_250"
+        | "4X4_1000"
+        | "5X5_50"
+        | "5X5_100"
+        | "5X5_250"
+        | "5X5_1000"
+        | "6X6_50"
+        | "6X6_100"
+        | "6X6_250"
+        | "6X6_1000"
+        | "7X7_50"
+        | "7X7_100"
+        | "7X7_250"
+        | "7X7_1000"
+        | "ARUCO_ORIGINAL"
+        | "APRILTAG_16h5"
+        | "APRILTAG_25h9"
+        | "APRILTAG_36h10"
+        | "APRILTAG_36h11"
+        | "ARUCO_MIP_36h12";
 }

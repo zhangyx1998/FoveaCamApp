@@ -54,7 +54,7 @@ public:
       : std::runtime_error("Unknown pixel format: " + fmt) {}
 };
 
-typedef enum PixelFormat : uint32_t {
+typedef enum PixelFormat : uint8_t {
   Mono8,
   Mono16,
   RGB8,

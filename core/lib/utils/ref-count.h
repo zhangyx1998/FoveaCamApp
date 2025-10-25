@@ -47,23 +47,22 @@ protected:
 
 public:
   template <typename K> RootReferenceBase(const K &key) : value(key) {
-    VERBOSE("RefCountMap: Created root reference for %s @ %p",
-            type_name<V>().c_str(), this);
+    VERBOSE("Created root reference for %s @ %p", type_name<V>().c_str(), this);
   }
 
   virtual ~RootReferenceBase() {
     if (count != 0)
-      std::cerr << "[WARN] RootReference of " + type_name<V>() +
+      std::cerr << "[ref-count] [WARN] RootReference of " + type_name<V>() +
                        " destroyed with non-zero reference (" +
                        std::to_string(count) + ")"
                 << std::endl;
-    VERBOSE("RefCountMap: Destroyed root reference for %s @ %p",
-            type_name<V>().c_str(), this);
+    VERBOSE("Destroyed root reference for %s @ %p", type_name<V>().c_str(),
+            this);
   }
 
   void incRef() {
     std::scoped_lock<std::mutex> lock(mtx);
-    VERBOSE("RefCountMap: Incremented reference count for %s @ %p: %zu -> %zu",
+    VERBOSE("Incremented reference count for %s @ %p: %zu -> %zu",
             type_name<V>().c_str(), this, count, count + 1);
     count++;
   }
@@ -86,7 +85,7 @@ private:
 
   void decRef() override {
     std::scoped_lock<std::mutex, std::mutex> lock(this->mtx, map.mtx);
-    VERBOSE("RefCountMap: Decremented reference count for %s @ %p: %zu -> %zu",
+    VERBOSE("Decremented reference count for %s @ %p: %zu -> %zu",
             type_name<V>().c_str(), this, this->count, this->count - 1);
     this->count--;
     if (this->count == 0)

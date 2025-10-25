@@ -5,16 +5,19 @@
 // -------------------------------------------------------
 #pragma once
 
+#include <iostream>
 #include <napi.h>
 
 #include <exception>
 #include <functional>
 #include <sstream>
 
+#include <Threading/Guard.h>
 #include <pointer.h>
 #include <type_name.h>
 #include <utils/debug.h>
 #include <utils/error.h>
+#include <utils/map-set.h>
 #include <utils/stacktrace.h>
 
 #define FN(NAME) Napi::Value NAME(const Napi::CallbackInfo &info)
@@ -23,13 +26,13 @@
   void set_##NAME(const Napi::CallbackInfo &info, const Napi::Value &val)
 
 #define INSTANCE_METHOD(CLS, NAME)                                             \
-  InstanceWrap<CLS>::template InstanceMethod<&CLS::NAME>(#NAME)
+  Napi::InstanceWrap<CLS>::template InstanceMethod<&CLS::NAME>(#NAME)
 #define INSTANCE_GETTER(CLS, NAME)                                             \
-  InstanceWrap<CLS>::template InstanceAccessor<&CLS::get_##NAME>(              \
+  Napi::InstanceWrap<CLS>::template InstanceAccessor<&CLS::get_##NAME>(        \
       #NAME, napi_enumerable)
 #define INSTANCE_ACCESSOR(CLS, NAME)                                           \
-  InstanceWrap<CLS>::template InstanceAccessor<&CLS::get_##NAME,               \
-                                               &CLS::set_##NAME>(              \
+  Napi::InstanceWrap<CLS>::template InstanceAccessor<&CLS::get_##NAME,         \
+                                                     &CLS::set_##NAME>(        \
       #NAME, (napi_property_attributes)(napi_writable | napi_enumerable))
 
 inline const Napi::Error &injectNativeStack(const Napi::Error &error,
@@ -55,22 +58,37 @@ inline const Napi::Error &injectNativeStack(const Napi::Error &error,
   if (!(COND))                                                                 \
     JS_THROW(ERR, MSG, __VA_ARGS__);
 
-#define JS_EXCEPT(CODE, ...)                                                   \
-  try {                                                                        \
-    CODE;                                                                      \
-  } catch (JS::ErrorBase & e) {                                                \
+#define JS_EXCEPT(...)                                                         \
+  catch (JS::ErrorBase & e) {                                                  \
     e.Throw();                                                                 \
     return __VA_ARGS__;                                                        \
-  } catch (const std::exception &e) {                                          \
+  }                                                                            \
+  catch (const std::exception &e) {                                            \
     JS_THROW(Error, e.what(), __VA_ARGS__);                                    \
-  } catch (...) {                                                              \
+  }                                                                            \
+  catch (...) {                                                                \
     JS_THROW(Error, "Unknown error occurred", __VA_ARGS__);                    \
   }
+
+template <typename D>
+class Isolated : private Threading::Guard<Map<napi_env, D>> {
+public:
+  D &get(Napi::Env env) {
+    auto ref = this->ref();
+    if (!ref->has(env)) {
+      ref->set(env, D());
+      env.AddCleanupHook([this](napi_env env) { this->ref()->erase(env); },
+                         static_cast<napi_env>(env));
+    }
+    return ref->get(env);
+  }
+};
 
 namespace JS {
 
 class ErrorBase : public TracedError {
   virtual Napi::Error createJsError() const = 0;
+  mutable std::string full_message = "";
 
 public:
   Napi::Env const env;
@@ -79,6 +97,12 @@ public:
   void Throw() const {
     auto e = injectNativeStack(createJsError(), stack);
     e.ThrowAsJavaScriptException();
+  }
+  const char *what() const noexcept override {
+    auto e = createJsError();
+    full_message = e.Value().Get("stack").ToString().Utf8Value() +
+                   "\n\n==== Native Stack ====\n" + stack;
+    return full_message.c_str();
   }
 };
 
@@ -143,12 +167,10 @@ template <typename T> void deleter(Napi::Env, void *, void *hint) {
   }
 }
 
-template <typename... Args> Napi::Value convert(Napi::Env, const Args &...);
-
-template <typename T>
-Napi::Value convert(Napi::Env, const Napi::Value &container, const T &value) {
-  return CreateObject(container, value);
-}
+// Conversion from native C++ type to Napi::Value
+// C++ Exceptions should be translated to JS Exceptions.
+template <typename... Args>
+Napi::Value convert(Napi::Env, const Args &...) noexcept;
 
 template <typename R> class OneShotWorker : public Napi::AsyncWorker {
   static inline const std::string NAME = type_name<OneShotWorker>();
@@ -180,12 +202,20 @@ template <typename R> class OneShotWorker : public Napi::AsyncWorker {
     }
   }
   void OnOK() override {
-    auto container =
-        this->container.IsEmpty() ? env.Undefined() : this->container.Value();
-    deferred.Resolve(convert(env, container, result));
+    try {
+      Napi::HandleScope scope(env);
+      auto container =
+          this->container.IsEmpty() ? env.Undefined() : this->container.Value();
+      deferred.Resolve(convert(env, container, result));
+    } catch (...) {
+    }
   }
   void OnError(const Napi::Error &e) override {
-    deferred.Reject(injectNativeStack(e, stacktrace).Value());
+    try {
+      Napi::HandleScope scope(env);
+      deferred.Reject(injectNativeStack(e, stacktrace).Value());
+    } catch (...) {
+    }
   }
 
 public:
@@ -205,7 +235,7 @@ public:
   }
 };
 
-inline Napi::Object IterNext(Napi::Env env, Napi::Value value) {
+inline Napi::Object IterNext(Napi::Env env, Napi::Value &&value) {
   auto obj = Napi::Object::New(env);
   obj.Set("value", value);
   obj.Set("done", Napi::Boolean::New(env, false));

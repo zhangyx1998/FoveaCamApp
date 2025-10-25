@@ -88,6 +88,7 @@ export default defineConfig(({ command }) => {
                 "@": resolve(PROJECT_ROOT, "src"),
                 "@lib": resolve(PROJECT_ROOT, "lib"),
                 "@src": resolve(PROJECT_ROOT, "src"),
+                "@modules": resolve(PROJECT_ROOT, "modules"),
             },
         },
         build: {

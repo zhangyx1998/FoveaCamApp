@@ -27,8 +27,13 @@ set(CMAKE_CXX_FLAGS_RELEASE "-O3")
 # Dependencies
 find_package(NodeApiHeaders REQUIRED)
 find_package(NodeAddonApi REQUIRED)
-find_package(OpenCV REQUIRED)
 find_package(Aravis REQUIRED)
+find_package(OpenCV REQUIRED COMPONENTS
+  core        # cv::Mat and basic structures
+  imgproc     # cv::cvtColor and image processing
+  aruco       # ArUco marker detection (future)
+  tracking    # KCF tracker (future)
+)
 # header files and libraries
 include_directories(
   ${INC_DIR}      # project local include directory
@@ -69,7 +74,7 @@ link_libraries(
 
 # Build Targets
 add_library(core SHARED
-  addon.cpp
+  Addon.cpp
   ${SRCS}
   ${LIB_SRCS}
   ${SHARED_LIB_SRCS}

@@ -4,16 +4,19 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 #pragma once
-#include <memory>
 #include <napi.h>
 #include <stdexcept>
 
-#include "Threading/Guard.h"
-#include "napi-helper.h"
-#include <utils/map-set.h>
+#include <Threading/Guard.h>
+#include <convert.h>
 #include <pointer.h>
 #include <type_name.h>
+#include <utils/map-set.h>
 
+#include "Cleanup.h"
+#include "napi-helper.h"
+
+// TODO: Strict equality for CoreObjects pointing to the same native object
 #define CORE_OBJECT_FEAT_STRICT_EQ 0
 #if defined(CORE_OBJECT_FEAT_STRICT_EQ) && CORE_OBJECT_FEAT_STRICT_EQ
 #define FEAT_STRICT_EQ(...) __VA_ARGS__
@@ -21,30 +24,39 @@
 #define FEAT_STRICT_EQ(...)
 #endif
 
-template <SmartPtrLike P>
-Napi::Value CreateObject(Napi::Env, const P &) noexcept;
-
-template <SmartPtrLike P>
-Napi::Value CreateObject(Napi::Value, const P &) noexcept;
-
-#define CORE_OBJECT(CORE, OBJECT)                                              \
+#define CORE_OBJECT_CONVERSIONS(OBJECT)                                        \
+  /* Conversion from CoreObject pointer to JS object */                        \
   template <>                                                                  \
-  Napi::Value CreateObject<CORE>(Napi::Env env, const CORE &core) noexcept {   \
+  Napi::Value convert<OBJECT::Core>(Napi::Env env,                             \
+                                    const OBJECT::Core &core) noexcept {       \
     return OBJECT::Create(env, core);                                          \
   }                                                                            \
-  template <>                                                                  \
-  Napi::Value CreateObject<CORE>(Napi::Value value,                            \
-                                 const CORE &core) noexcept {                  \
-    return OBJECT::Create(value, core);                                        \
-  }                                                                            \
-  void export##OBJECT(Napi::Env env, Napi::Object &exports) {                  \
-    OBJECT::Export(env, exports);                                              \
+  /* Conversion from JS object to CoreObject pointer */                        \
+  template <> OBJECT::Core convert(const Napi::Value &value) {                 \
+    if (!value.IsObject())                                                     \
+      throw JS::TypeError(value.Env(), "Argument must be an object");          \
+    auto obj = value.As<Napi::Object>();                                       \
+    auto wrapped = Napi::ObjectWrap<OBJECT>::Unwrap(obj);                      \
+    if (!wrapped)                                                              \
+      throw JS::TypeError(value.Env(),                                         \
+                          "Argument is not instance of " + OBJECT::name);      \
+    return wrapped->core();                                                    \
   }
 
+#define CORE_OBJECT(OBJECT)                                                    \
+  /* Export CoreObject constructor to exports */                               \
+  void export##OBJECT(Napi::Env env, Napi::Object &exports) {                  \
+    OBJECT::Export(env, exports);                                              \
+  }                                                                            \
+  CORE_OBJECT_CONVERSIONS(OBJECT)
+
 #define CORE_OBJECT_EXPORT(OBJECT, ...)                                        \
-  void export##OBJECT(Napi::Env, Napi::Object &);                              \
-  VERBOSE("Calling export" #OBJECT "() @ %p", &export##OBJECT);                \
-  export##OBJECT(__VA_ARGS__);
+  {                                                                            \
+    void export##OBJECT(Napi::Env, Napi::Object &);                            \
+    VERBOSE_TIMER("export " #OBJECT);                                          \
+    VERBOSE("Calling export" #OBJECT "() @ %p", &export##OBJECT);              \
+    export##OBJECT(__VA_ARGS__);                                               \
+  }
 
 /**
  * CoreObject is an abstraction for JS objects that corresponds to a native
@@ -55,8 +67,11 @@ Napi::Value CreateObject(Napi::Value, const P &) noexcept;
  * object, CoreObject::Create() will always return the same JS object - thus
  * ensuring strict equality (===) for the same native object.
  */
-template <class Obj, SmartPtrLike Core>
+template <class Obj, SmartPtrLike _Core>
 class CoreObject : public Napi::ObjectWrap<Obj> {
+public:
+  using Core = _Core;
+
 protected:
   /** Context-aware local storage per Node Env */
   class Local : public Shared<Local> {
@@ -70,11 +85,7 @@ protected:
     ~Local() { constructor.Reset(); }
   };
   /** Packed by Napi::External and passed to object constructor */
-  typedef struct Payload {
-    typedef std::shared_ptr<Payload> Ptr;
-    static inline Ptr extract(Napi::Value val) {
-      return Ptr(&::extract<Payload>(val));
-    }
+  typedef struct Payload : public Shared<Payload> {
     const Local::Ptr local;
     const Core core;
   } Payload;
@@ -102,15 +113,15 @@ private:
       VERBOSE("Initializing local context for %s", Obj::name.c_str());
       auto fn = Obj::Init(env);
       ref->set(env, Local::create(fn));
-      env.AddCleanupHook(CoreObjectDeinit, static_cast<napi_env>(env));
+      Cleanup::add(env, static_cast<napi_env>(env),
+                   &CoreObject::CoreObjectDeinit, "Context[" + Obj::name + "]");
     }
     return ref->get(env)->constructor.Value();
   }
 
   static void CoreObjectDeinit(napi_env env) {
     VERBOSE("De-initializing local context for %s", Obj::name.c_str());
-    auto ref = locals.ref();
-    ref->erase(env);
+    locals.ref()->erase(env);
   }
 
 public:
@@ -145,27 +156,25 @@ public:
   }
 
   static Napi::Value inline Create(Napi::Env env, Core &core) noexcept {
-    JS_EXCEPT(
-        {
-          auto local = getLocal(env);
-          FEAT_STRICT_EQ(TRY_REUSE(local->instances, uintptr(core)));
-          return CoreObjectCreate(env, local,
-                                  new Payload{.local = local, .core = core});
-        },
-        env.Undefined());
+    try {
+      auto local = getLocal(env);
+      FEAT_STRICT_EQ(TRY_REUSE(local->instances, uintptr(core)));
+      return CoreObjectCreate(env, local,
+                              new Payload{.local = local, .core = core});
+    }
+    JS_EXCEPT(env.Undefined())
   }
 
   template <typename... Args>
   static Napi::Value inline Create(Napi::Env env, Args &&...args) noexcept {
-    JS_EXCEPT(
-        {
-          Core core(std::forward<Args>(args)...);
-          auto local = getLocal(env);
-          FEAT_STRICT_EQ(TRY_REUSE(local->instances, uintptr(core)));
-          return CoreObjectCreate(
-              env, local, new Payload{.local = local, .core = std::move(core)});
-        },
-        env.Undefined());
+    try {
+      Core core(std::forward<Args>(args)...);
+      auto local = getLocal(env);
+      FEAT_STRICT_EQ(TRY_REUSE(local->instances, uintptr(core)));
+      return CoreObjectCreate(
+          env, local, new Payload{.local = local, .core = std::move(core)});
+    }
+    JS_EXCEPT(env.Undefined())
   }
 
   static Napi::Value inline Create(Napi::Value value, Core &core) noexcept {
@@ -173,14 +182,13 @@ public:
     auto obj = Unwrap(value);
     if (!obj)
       return Create(env, core);
-    JS_EXCEPT(
-        {
-          auto local = getLocal(env);
-          FEAT_STRICT_EQ(TRY_REUSE(local->instances, uintptr(core)));
-          return CoreObjectCreate(env, local,
-                                  new Payload{.local = local, .core = core});
-        },
-        env.Undefined());
+    try {
+      auto local = getLocal(env);
+      FEAT_STRICT_EQ(TRY_REUSE(local->instances, uintptr(core)));
+      return CoreObjectCreate(env, local,
+                              new Payload{.local = local, .core = core});
+    }
+    JS_EXCEPT(env.Undefined())
   }
 
   template <typename... Args>
@@ -189,15 +197,14 @@ public:
     auto obj = Unwrap(value);
     if (!obj)
       return Create(env, std::forward<Args>(args)...);
-    JS_EXCEPT(
-        {
-          Core core(std::forward<Args>(args)...);
-          auto local = getLocal(env);
-          FEAT_STRICT_EQ(TRY_REUSE(local->instances, uintptr(core)));
-          return CoreObjectCreate(
-              env, local, new Payload{.local = local, .core = std::move(core)});
-        },
-        env.Undefined());
+    try {
+      Core core(std::forward<Args>(args)...);
+      auto local = getLocal(env);
+      FEAT_STRICT_EQ(TRY_REUSE(local->instances, uintptr(core)));
+      return CoreObjectCreate(
+          env, local, new Payload{.local = local, .core = std::move(core)});
+    }
+    JS_EXCEPT(env.Undefined())
   }
 
   static Obj *Unwrap(const Napi::Value &value) {
@@ -210,7 +217,7 @@ public:
   static inline const std::string name = type_name<Obj>();
   /** Override this method to provide custom description */
   static std::string describe(const CoreObject *) { return "..."; }
-  static void construct(Obj *) {};
+  static void construct(const Napi::CallbackInfo &, Obj *) {};
   static void destruct(Obj *) {};
 
   static inline std::string str(const Obj *obj) {
@@ -231,17 +238,22 @@ public:                                                                        \
   GET(tag) { return Napi::String::New(info.Env(), SELF::describe(this)); }     \
   FN(toString) { return Napi::String::New(info.Env(), SELF::str(this)); }      \
   FN(release) {                                                                \
-    this->__release__();                                                       \
+    this->releaseCoreObject();                                                 \
+    Cleanup::remove(SELF::env, this);                                          \
     return this->undefined();                                                  \
   }
 
 #define CORE_OBJECT_REGISTER(CLS, ENV)                                         \
-  InstanceWrap<CLS>::template InstanceMethod<&CLS::toString>("toString"),      \
-      InstanceWrap<CLS>::template InstanceAccessor<&CLS::get_id, nullptr>(     \
+  Napi::InstanceWrap<CLS>::template InstanceMethod<&CLS::toString>(            \
+      "toString"),                                                             \
+      Napi::InstanceWrap<CLS>::template InstanceAccessor<&CLS::get_id,         \
+                                                         nullptr>(             \
           "id", napi_enumerable),                                              \
-      InstanceWrap<CLS>::template InstanceAccessor<&CLS::get_tag, nullptr>(    \
+      Napi::InstanceWrap<CLS>::template InstanceAccessor<&CLS::get_tag,        \
+                                                         nullptr>(             \
           Napi::Symbol::WellKnown(ENV, "toStringTag"), napi_enumerable),       \
-      InstanceWrap<CLS>::template InstanceMethod<&CLS::release>("release")
+      Napi::InstanceWrap<CLS>::template InstanceMethod<&CLS::release>(         \
+          "release")
 
   Napi::Env const env;
   inline auto null() const { return env.Null(); }
@@ -249,26 +261,22 @@ public:                                                                        \
 
 private:
   mutable Payload::Ptr payload;
-  void __assign__(const Napi::CallbackInfo &info) {
-    if (info.Env() != env)
-      throw JS::Error(env, "Mismatched Napi::Env");
-    payload = Payload::extract(info[0]);
-    FEAT_STRICT_EQ(auto ref = Napi::Weak(info.This());
-                   payload->local->instances.set(address(), ref);)
-    Obj::construct(static_cast<Obj *>(this));
-    VERBOSE("Constructed: %s", str(static_cast<Obj *>(this)).c_str());
-  }
 
 protected:
-  void __release__() {
+  Napi::Env::CleanupHook<std::function<void(napi_env)>> cleanup;
+  void releaseCoreObject() {
     if (!payload)
       return;
     auto tag = str(static_cast<Obj *>(this));
     Obj::destruct(static_cast<Obj *>(this));
     FEAT_STRICT_EQ(payload->local->instances.erase(address()));
     payload.reset();
-    VERBOSE("Destructed: %s", tag.c_str());
+    VERBOSE("Released: %s", tag.c_str());
   };
+  static void CleanupThunk(Self *self) {
+    if (self)
+      self->releaseCoreObject();
+  }
 
 public:
   inline constexpr std::string type() const { return type_name<Obj>(); }
@@ -285,9 +293,39 @@ public:
       throw JS::Error(env, type() + " object already released");
     return payload->core;
   }
+  static inline Core ConstructFromJS(const Napi::CallbackInfo &info) {
+    throw JS::TypeError(info.Env(),
+                        "Cannot construct " + Obj::name + " from JS");
+  };
   CoreObject(const Napi::CallbackInfo &info)
       : Napi::ObjectWrap<Obj>(info), env(info.Env()) {
-    __assign__(info);
+    VERBOSE("Constructing %s", Obj::name.c_str());
+    Cleanup::add(env, this, &Self::CleanupThunk, Obj::name);
+    if (info[0].IsExternal()) {
+      try {
+        payload = typename Payload::Ptr(&::extract<Payload>(info[0]));
+      }
+      JS_EXCEPT()
+    } else {
+      try {
+        payload = typename Payload::Ptr(new Payload{
+            .local = getLocal(env),
+            .core = Obj::ConstructFromJS(info),
+        });
+      }
+      JS_EXCEPT()
+    }
+    FEAT_STRICT_EQ(auto ref = Napi::Weak(info.This());
+                   payload->local->instances.set(address(), ref);)
+    try {
+      Obj::construct(info, static_cast<Obj *>(this));
+    }
+    JS_EXCEPT()
+    VERBOSE("Constructed %s", str(static_cast<Obj *>(this)).c_str());
   }
-  ~CoreObject() { __release__(); }
+  ~CoreObject() {
+    Cleanup::remove(env, this);
+    releaseCoreObject();
+    VERBOSE("Destructed: %s", str(static_cast<Obj *>(this)).c_str());
+  }
 };

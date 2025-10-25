@@ -9,9 +9,9 @@
         "core"
     ],
     "scripts": {
-        "make": "cd core && make",
         "app": "cd app && npm run dev",
-        "compiledb": "node compiledb.cjs > compile_commands.json"
+        "compiledb": "node compiledb.cjs > compile_commands.json",
+        "postinstall": "cd core && make"
     },
     "devDependencies": {
         "glob": "^11.0.3"

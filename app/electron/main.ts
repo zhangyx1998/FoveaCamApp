@@ -1,7 +1,13 @@
-import { app, BrowserWindow, shell, ipcMain } from "electron";
-import { createRequire } from "node:module";
+// ------------------------------------------------------
+// Copyright (c) 2025 Yuxuan Zhang, zhangyuxuan@ufl.edu
+// This source code is licensed under the MIT license.
+// You may find the full license in project root directory.
+// -------------------------------------------------------
+import { app, BrowserWindow, shell } from "electron";
+// import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { getIcon } from "./util";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 
@@ -41,22 +47,39 @@ const indexHtml = path.join(RENDERER_DIST, "index.html");
 async function createWindow() {
     win = new BrowserWindow({
         title: "FoveaCam Duo",
-        icon: path.join(process.env.VITE_PUBLIC, "favicon.ico"),
+        icon: getIcon("icon.ico"),
+        // Don't show until ready
+        // show: false,
+        // Window customization
+        // frame: false,
+        titleBarStyle: "hidden",
+        titleBarOverlay: {
+            color: "#2f3241",
+            symbolColor: "#74b1be",
+            height: 40,
+        },
+        minHeight: 600,
+        minWidth: 800,
+        height: 900,
+        width: 1200,
+        backgroundColor: "black",
         webPreferences: {
             preload,
             // Warning: Enable nodeIntegration and disable contextIsolation is not secure in production
             nodeIntegration: true,
-
             // Consider using contextBridge.exposeInMainWorld
             // Read more on https://www.electronjs.org/docs/latest/tutorial/context-isolation
             contextIsolation: false,
         },
     });
 
+    // Show window when ready to avoid white/black flash
+    // win.once("ready-to-show", () => win.show());
+
     if (VITE_DEV_SERVER_URL) {
         win.loadURL(VITE_DEV_SERVER_URL);
         // Open devTool if the app is not packaged
-        // win.webContents.openDevTools();
+        win.webContents.openDevTools();
     } else {
         win.loadFile(indexHtml);
     }
@@ -69,10 +92,19 @@ async function createWindow() {
     // win.webContents.on('will-navigate', (event, url) => { }) #344
 }
 
-app.whenReady().then(createWindow);
+function customizeApp() {
+    if (process.platform === "darwin") {
+        const icon = getIcon("1024x1024.png");
+        app.dock.setIcon(icon);
+    }
+    app.setName("FoveaCam Duo");
+}
+
+app.whenReady().then(customizeApp).then(createWindow);
 
 app.on("window-all-closed", () => {
-    win = null;
+    // On macOS it is common for applications and their menu bar
+    // to stay active until the user quits explicitly with Cmd + Q
     if (process.platform !== "darwin") app.quit();
 });
 
@@ -81,6 +113,8 @@ app.on("second-instance", () => {
         // Focus on the main window if the user tried to open another
         if (win.isMinimized()) win.restore();
         win.focus();
+    } else {
+        createWindow();
     }
 });
 
@@ -90,22 +124,5 @@ app.on("activate", () => {
         allWindows[0].focus();
     } else {
         createWindow();
-    }
-});
-
-// New window example arg: new windows url
-ipcMain.handle("open-win", (_, arg) => {
-    const childWindow = new BrowserWindow({
-        webPreferences: {
-            preload,
-            nodeIntegration: true,
-            contextIsolation: false,
-        },
-    });
-
-    if (VITE_DEV_SERVER_URL) {
-        childWindow.loadURL(`${VITE_DEV_SERVER_URL}#${arg}`);
-    } else {
-        childWindow.loadFile(indexHtml, { hash: arg });
     }
 });
