@@ -27,9 +27,13 @@
 #define CORE_OBJECT_CONVERSIONS(OBJECT)                                        \
   /* Conversion from CoreObject pointer to JS object */                        \
   template <>                                                                  \
-  Napi::Value convert<OBJECT::Core>(Napi::Env env,                             \
-                                    const OBJECT::Core &core) noexcept {       \
+  Napi::Value convert(Napi::Env env, const OBJECT::Core &core) noexcept {      \
     return OBJECT::Create(env, core);                                          \
+  }                                                                            \
+  template <>                                                                  \
+  Napi::Value convert(Napi::Env env, const Napi::Value &container,             \
+                      const OBJECT::Core &core) noexcept {                     \
+    return OBJECT::Create(container, core);                                    \
   }                                                                            \
   /* Conversion from JS object to CoreObject pointer */                        \
   template <> OBJECT::Core convert(const Napi::Value &value) {                 \
@@ -237,9 +241,16 @@ public:                                                                        \
   GET(id) { return Napi::String::New(info.Env(), SELF::id()); }                \
   GET(tag) { return Napi::String::New(info.Env(), SELF::describe(this)); }     \
   FN(toString) { return Napi::String::New(info.Env(), SELF::str(this)); }      \
+  FN(ref) {                                                                    \
+    const auto env = info.Env();                                               \
+    try {                                                                      \
+      return SELF::Create(env, this->core());                                  \
+    }                                                                          \
+    JS_EXCEPT(env.Undefined())                                                 \
+  }                                                                            \
   FN(release) {                                                                \
     this->releaseCoreObject();                                                 \
-    Cleanup::remove(SELF::env, this);                                          \
+    Cleanup::remove(info.Env(), this);                                         \
     return this->undefined();                                                  \
   }
 
@@ -252,6 +263,7 @@ public:                                                                        \
       Napi::InstanceWrap<CLS>::template InstanceAccessor<&CLS::get_tag,        \
                                                          nullptr>(             \
           Napi::Symbol::WellKnown(ENV, "toStringTag"), napi_enumerable),       \
+      Napi::InstanceWrap<CLS>::template InstanceMethod<&CLS::ref>("ref"),      \
       Napi::InstanceWrap<CLS>::template InstanceMethod<&CLS::release>(         \
           "release")
 

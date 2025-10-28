@@ -29,6 +29,7 @@ static Object init(Env env, Object exports) {
     CORE_OBJECT_EXPORT(FrameObject, env, exports);
     CORE_OBJECT_EXPORT(ProtocolObject, env, exports);
     CORE_OBJECT_EXPORT(ArUcoDetectorObject, env, exports);
+    CORE_OBJECT_EXPORT(VisionNamespace, env, exports);
     exports.Set("cleanup", Function::New(env, cleanup));
     VERBOSE("Core module initialized");
     if (std::getenv("WAIT_DEBUGGER")) {

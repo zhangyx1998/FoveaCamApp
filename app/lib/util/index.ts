@@ -210,10 +210,6 @@ export function reverse<T>(sequence: Sequence<T>) {
     };
 }
 
-export function nextTick() {
-    return new Promise<void>((resolve) => queueMicrotask(resolve));
-}
-
 export function getCurrentSelection(): Partial<Selection> | null {
     const selection = window.getSelection();
     if (!selection || selection.rangeCount === 0) return null;

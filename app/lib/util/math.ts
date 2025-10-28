@@ -17,3 +17,11 @@ export function diff(...args: number[]) {
     if (args.length === 0) return 0;
     return Math.max(...args) - Math.min(...args);
 }
+
+export function rad(deg: number) {
+    return (deg * Math.PI) / 180;
+}
+
+export function deg(rad: number) {
+    return (rad * 180) / Math.PI;
+}

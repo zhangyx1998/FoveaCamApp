@@ -11,9 +11,9 @@ const currentModule = shallowRef<any>(null);
 const currentModuleName = ref<string | null>(null);
 const titleBarHeight = ref(0);
 // Sub task modules
-import Cameras from "../modules/cameras/index.vue";
-import CalibrateWideAngle from "../modules/calibrate-wide-angle/index.vue";
-import CalibrateFovea from "../modules/calibrate-fovea/index.vue";
+import ManageCameras from "../modules/manage-cameras/index.vue";
+import CalibrateIntrinsic from "../modules/calibrate-intrinsic/index.vue";
+import CalibrateExtrinsic from "../modules/calibrate-extrinsic/calibrate.vue";
 import Playground from "../modules/playground/index.vue";
 import Loading from "./components/Loading.vue";
 
@@ -63,18 +63,22 @@ function backToHome() {
                 </div>
                 <div class="group">
                     <h2>Utilities</h2>
-                    <button @click="launch(Cameras, 'Manage Cameras')">
+                    <button @click="launch(ManageCameras, 'Manage Cameras')">
                         Manage Cameras
                     </button>
                     <button
                         @click="
-                            launch(CalibrateWideAngle, 'Calibrate Wide Angle')
+                            launch(CalibrateIntrinsic, 'Calibrate - Intrinsic')
                         "
                     >
-                        Calibrate Wide Angle
+                        Calibrate - Intrinsic
                     </button>
-                    <button @click="launch(CalibrateFovea, 'Calibrate Fovea')">
-                        Calibrate Fovea
+                    <button
+                        @click="
+                            launch(CalibrateExtrinsic, 'Calibrate - Extrinsic')
+                        "
+                    >
+                        Calibrate - Extrinsic
                     </button>
                     <button>Manage Calibrations</button>
                 </div>

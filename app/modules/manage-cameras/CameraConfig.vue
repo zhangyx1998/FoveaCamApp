@@ -12,8 +12,12 @@ import type { Camera } from "core";
 
 import StreamView from "@src/components/StreamView.vue";
 import { info } from "@lib/camera-config";
+import { describeCamera, getCameraStore, initCamera } from "@lib/camera-store";
+import Store from "@lib/store";
 
-const props = defineProps<{ camera: Camera }>();
+const { camera } = defineProps<{ camera: Camera }>();
+const store = await getCameraStore(camera);
+initCamera(camera, store);
 
 let timeout_handle: ReturnType<typeof setInterval> | null = null;
 
@@ -23,17 +27,18 @@ const config = customRef<Camera>((track, trigger) => {
         {
             get(_, prop) {
                 track();
-                return (props.camera as any)[prop];
+                return (camera as any)[prop];
             },
             set(_, prop, value) {
-                const prev = (props.camera as any)[prop];
+                const prev = (camera as any)[prop];
                 try {
                     if (typeof value !== typeof prev) value = JSON.parse(value);
                     if (typeof value !== typeof prev)
                         throw new TypeError(
                             `Type mismatch: expected ${typeof prev}, got ${typeof value}`
                         );
-                    (props.camera as any)[prop] = value;
+                    (camera as any)[prop] = value;
+                    (store as any)[prop] = value;
                     return true;
                 } catch (e) {
                     console.error(
@@ -84,13 +89,22 @@ const log_exposure = computed({
         config.value.exposure = Math.round(val / 100) * 100;
     },
 });
+
+function reset() {
+    camera.frame_rate_enable = false;
+    camera.exposure_auto = "Once";
+    camera.gain_auto = "Once";
+    if (camera.black_level_auto_available)
+        camera.black_level_auto = "Once";
+    Store.clear(store);
+}
 </script>
 
 <template>
     <div class="view">
         <StreamView
             class="stream"
-            :name="camera.vendor + ' ' + camera.model + ' #' + camera.serial"
+            :name="describeCamera(camera)"
             :stream="markRaw(camera.stream)"
             :overlay="info(camera)"
             width="100%"
@@ -98,11 +112,11 @@ const log_exposure = computed({
         />
         <fieldset>
             <legend>Role Assignment</legend>
-            <select>
-                <option>[Unknown]</option>
-                <option>Fovea Left</option>
-                <option>Wide Angle</option>
-                <option>Fovea Right</option>
+            <select v-model="store.role">
+                <option :value="undefined">[ NONE ]</option>
+                <option value="L">Fovea Left</option>
+                <option value="C">Wide Angle</option>
+                <option value="R">Fovea Right</option>
             </select>
         </fieldset>
         <fieldset v-if="config.frame_rate_available">
@@ -209,6 +223,9 @@ const log_exposure = computed({
                 {{ config.black_level.toFixed(2) }} dB
             </label>
         </fieldset>
+        <div>
+            <button @click="reset">Reset Config</button>
+        </div>
     </div>
 </template>
 

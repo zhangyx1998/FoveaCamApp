@@ -9,33 +9,14 @@
 #include <Buffer/Buffer.h>
 #include <utils/map-set.h>
 
+#include "Aravis/PixelFormat.h"
 #include "CoreObject.h"
 #include "napi-helper.h"
 
 using namespace Napi;
 
-template <>
-Value convert(Env env, const Value &container, const cv::Mat &mat) noexcept {
-  const auto data = mat.data;
-  const auto size = mat.size().area() * mat.elemSize();
-  if (isBufferLike(container)) {
-    auto buffer = bufferView(container);
-    JS_ASSERT(buffer.size >= size, RangeError,
-              "Destination buffer size too small", container);
-    buffer.copyFrom(data, size);
-    return container;
-  } else {
-#ifdef V8_MEMORY_CAGE
-    auto ret = ArrayBuffer::New(env, size);
-    std::memcpy(ret.Data(), data, size);
-    return ret;
-#else
-    // Increment reference count on ImagePtr holding the buffer pointer
-    auto ref = new cv::Mat(mat);
-    // Return a borrowed ArrayBuffer pointing to external Mat data
-    return ArrayBuffer::New(env, data, size, deleter<cv::Mat>, ref);
-#endif
-  }
+template <> Arv::PixelFormat convert(const Napi::Value &value) {
+  return convert<Arv::PixelFormat>(value.As<Napi::String>().Utf8Value());
 }
 
 class FrameObject : public CoreObject<FrameObject, Arv::Frame::Ptr> {
@@ -63,20 +44,11 @@ private:
   FN(view) {
     try {
       auto tag = core()->tag;
-      auto fmt = core()->format;
-      if (info.Length() > 0) {
-        JS_ASSERT(info[0].IsString(), TypeError,
-                  "Pixel format must be a string", env.Undefined());
-        const auto arg = info[0].As<String>().Utf8Value();
-        try {
-          fmt = convert<Arv::PixelFormat>(arg);
-        }
-        JS_EXCEPT(env.Undefined())
-      }
+      const auto fmt = optionalArgument(info[0], Arv::PixelFormat::BGRA8);
+      const auto container = optionalArgument(info[1]);
       const auto action =
           "Frame[" + tag + "].view(" + convert<std::string>(fmt) + ")";
       VERBOSE("[Requested] %s", action.c_str());
-      auto container = info.Length() > 1 ? info[1] : env.Undefined();
       if (core()->isAvailable(fmt)) {
         // Resolve immediately if already available
         auto deferred = Promise::Deferred::New(env);
