@@ -13,7 +13,7 @@ const handler = () => {
 };
 process.on("SIGINT", handler);
 
-import { Camera, __origin__, type Stream } from "core";
+import { Camera, __origin__, type Frame, type Stream } from "core";
 console.log("imported", { Camera }, "from", __origin__);
 
 const cameras = await Camera.list();
@@ -21,7 +21,7 @@ const cameras = await Camera.list();
 console.log("Found", cameras.length, "cameras");
 console.log(...cameras);
 
-async function capture(stream: Stream, sync = true) {
+async function capture(stream: Stream<Frame>, sync = true) {
     let count = 0;
     if (sync) {
         console.log("Acquiring latest frame (sync iter)");

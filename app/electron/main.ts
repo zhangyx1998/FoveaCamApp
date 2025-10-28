@@ -3,13 +3,14 @@
 // This source code is licensed under the MIT license.
 // You may find the full license in project root directory.
 // -------------------------------------------------------
-import { app, BrowserWindow, shell } from "electron";
+import { app, BrowserWindow, shell, ipcMain } from "electron";
 // import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { getIcon } from "./util";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
+const DATA = app.getPath("userData");
 
 // The built directory structure
 //
@@ -99,6 +100,9 @@ function customizeApp() {
     }
     app.setName("FoveaCam Duo");
 }
+
+// IPC handler to provide DATA path to renderer
+ipcMain.handle('get-data-path', () => DATA);
 
 app.whenReady().then(customizeApp).then(createWindow);
 

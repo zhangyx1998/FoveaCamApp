@@ -29,6 +29,7 @@ export const {
     Frame, //
     Protocol, //
     ArUcoDetector, //
+    Vision, //
     cleanup, //
     __origin__, //
 } = Module;

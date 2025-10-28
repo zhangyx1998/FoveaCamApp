@@ -6,34 +6,66 @@
 
 import { ref } from "vue";
 
-export class FreqMeter {
-    private readonly freq = ref(0);
-    private lastTick = performance.now();
+export class RollingAverage {
+    private init = true;
+    private readonly __value__ = ref(0);
+    get value() {
+        return this.__value__.value;
+    }
     constructor(
         public readonly decay: number = 0.9,
-        public readonly digits: number = 2
+        private readonly digits: number = 2,
+        private readonly unit: string | null = null
     ) {}
-    public get value() {
-        return this.freq.value;
+    public roll(v: number) {
+        if (this.init) {
+            this.__value__.value = v;
+            this.init = false;
+        } else {
+            this.__value__.value =
+                this.__value__.value * this.decay + v * (1.0 - this.decay);
+        }
+    }
+    public reset(v: number | null = null) {
+        if (v === null) {
+            this.init = true;
+            this.__value__.value = 0;
+        } else {
+            this.__value__.value = v;
+        }
     }
     public toString() {
-        return this.value.toFixed(this.digits);
+        const ret = this.value.toFixed(this.digits);
+        if (this.unit) return ret + " " + this.unit;
+        else return ret;
+    }
+}
+
+export class FreqMeter extends RollingAverage {
+    private lastTick = performance.now();
+    constructor(
+        decay: number = 0.9,
+        digits: number = 2,
+        unit: string | null = "Hz"
+    ) {
+        super(decay, digits, unit);
     }
     public tick() {
         const now = performance.now();
         const mea = 1000.0 / (now - this.lastTick);
-        this.freq.value =
-            this.freq.value * this.decay + mea * (1.0 - this.decay);
+        this.roll(mea);
         this.lastTick = now;
     }
 }
 
-export class PerfTimer {
-    private readonly perf = ref(0);
+export class PerfTimer extends RollingAverage {
     constructor(
-        public readonly decay: number = 0.9,
-        public readonly digits: number = 2
-    ) {}
+        decay: number = 0.9,
+        digits: number = 2,
+        unit: string | null = "ms"
+    ) {
+        super(decay, digits, unit);
+    }
     public measure<T>(fn: () => T): T {
         const start = performance.now();
         const result = fn();
@@ -41,18 +73,14 @@ export class PerfTimer {
             return result.then((res) => {
                 const end = performance.now();
                 const mea = end - start;
-                this.perf.value =
-                    this.perf.value * this.decay + mea * (1.0 - this.decay);
+                this.roll(mea);
                 return res;
             }) as unknown as T;
+        } else {
+            const end = performance.now();
+            const mea = end - start;
+            this.roll(mea);
+            return result;
         }
-        const end = performance.now();
-        const mea = end - start;
-        this.perf.value =
-            this.perf.value * this.decay + mea * (1.0 - this.decay);
-        return result;
-    }
-    public toString() {
-        return this.perf.value.toFixed(this.digits);
     }
 }

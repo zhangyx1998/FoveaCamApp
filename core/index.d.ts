@@ -6,6 +6,18 @@
 
 type Awaitable<T> = T | Promise<T>;
 type BufferLike = Buffer | ArrayBuffer | ArrayBufferView;
+type TypedArray =
+    | Int8Array
+    | Uint8Array
+    | Uint8ClampedArray
+    | Int16Array
+    | Uint16Array
+    | Int32Array
+    | Uint32Array
+    | Float32Array
+    | Float64Array
+    | BigInt64Array
+    | BigUint64Array;
 
 declare module "core" {
     /** Path to the resolved native module injected by JS loader */
@@ -14,12 +26,17 @@ declare module "core" {
     // Explicitly cleanup all resources (cameras, streams, frames, etc.)
     export function cleanup(): void;
 
-    class CoreObject {
+    class CoreObject<T extends CoreObject<T>> {
         /**
          * Hex string ID of the underlying native object.
          * Can be used to check if two JS objects point to the same native object.
          */
         readonly id: string;
+        /**
+         * Creates another reference to the same underlying native object.
+         * Releasing either reference will not affect the other.
+         */
+        public ref(): T;
         /**
          * Releases underlying native resources.
          * After calling release(), any further access to the object will throw an error.
@@ -36,7 +53,7 @@ declare module "core" {
     type AutoMode = "Off" | "Once" | "Continuous";
     type AcquisitionMode = "Continuous" | "SingleFrame" | "MultiFrame";
 
-    export class Camera extends CoreObject {
+    export class Camera extends CoreObject<Camera> {
         static list(): Promise<Array<Camera>>;
 
         // Device identification
@@ -97,14 +114,22 @@ declare module "core" {
         readonly stream: Stream<Frame>;
     }
 
-    export class Frame extends CoreObject {
+    export class Frame extends CoreObject<Frame> {
         readonly width: number;
         readonly height: number;
         readonly timestamp: bigint;
-        view(format?: PixelFormat, buffer?: BufferLike): Promise<ArrayBuffer>;
+        view(): Promise<Mat>;
+        view(
+            format: PixelFormat8,
+            buffer?: BufferLike | null
+        ): Promise<Mat<Uint8Array>>;
+        view(
+            format: PixelFormat16,
+            buffer?: BufferLike | null
+        ): Promise<Mat<Uint16Array>>;
     }
 
-    export class Stream<T> extends CoreObject {
+    export class Stream<T> extends CoreObject<Stream<T>> {
         // Skip frames if the consumer is slower than the producer.
         // Generates null if consumer is faster than producer.
         // Consumer MUST yield (await) upon null so producer can push data.
@@ -113,9 +138,8 @@ declare module "core" {
         [Symbol.asyncIterator](): AsyncIterableIterator<T>;
     }
 
-    type PixelFormat =
+    type PixelFormat8 =
         | "Mono8"
-        | "Mono16"
         | "RGB8"
         | "BGR8"
         | "RGBA8"
@@ -123,10 +147,11 @@ declare module "core" {
         | "BayerGR8"
         | "BayerRG8"
         | "BayerGB8"
-        | "BayerBG8"
-        | "BayerGR16"
-        | "BayerRG16"
-        | "BayerGB16";
+        | "BayerBG8";
+
+    type PixelFormat16 = "Mono16" | "BayerGR16" | "BayerRG16" | "BayerGB16";
+
+    type PixelFormat = PixelFormat8 | PixelFormat16;
 
     // Internally distinguishable objects that can be converted to buffer.
     const bufferAccessor: unique symbol;
@@ -207,23 +232,16 @@ declare module "core" {
         | "LOG";
 
     export class ArUcoDetector extends CoreObject {
-        static enhance(
-            frame: Frame,
-            scale?: number = 1.0
-        ): Promise<ArrayBuffer>;
         constructor(type: PreDefinedDictionary);
-        detect(
-            frame: Frame,
-            scale?: number = 1.0
-        ): Promise<ArUcoDetectResult[]>;
+        detect(frame: Frame, scale?: number = 1.0): Promise<ArUcoDetectResults>;
         stream(
             stream: Stream<Frame>,
             scale?: number = 1.0
-        ): Stream<ArUcoDetectResult[]>;
+        ): Stream<ArUcoDetectResults>;
     }
 
-    type Corner = { x: number; y: number };
-    type ArUcoDetectResult = { id: number; w: number; h: number } & Corner[];
+    type ArUcoDetectResult = { id: number; } & Size & Corner[];
+    type ArUcoDetectResults = ArUcoDetectResult[] & { frame: Frame };
 
     type PreDefinedDictionary =
         | "4X4_50"
@@ -248,4 +266,71 @@ declare module "core" {
         | "APRILTAG_36h10"
         | "APRILTAG_36h11"
         | "ARUCO_MIP_36h12";
+
+    export type Size<T = number> = { width: T; height: T };
+    export type Point3d<T = number> = { x: T; y: T; z: T };
+    export type Point2d<T = number> = { x: T; y: T };
+    export type Point = Point2d;
+    export type Mat<A extends TypedArray = TypedArray> = A & {
+        // Mat.length === shape.reduce((a, b) => a * b, channels)
+        shape: number[];
+        channels: number;
+    };
+
+    export type CameraCalibration = {
+        sensor_size: Size;
+        // Camera Matrix - 3 row x 3 col
+        camera_matrix: Mat<Float64Array>;
+        // Distortion coefficients - 1 row x N col
+        dist_coeffs: Mat<Float64Array>;
+        // Rectification transform vectors - 3 row x 3 col
+        rvecs: Mat<Float64Array>[];
+        // Projection transform vectors - 3 row x 4 col
+        tvecs: Mat<Float64Array>[];
+    };
+
+    // Default: { max_count: 30, epsilon: 0.01 }
+    export type TermCriteria = {
+        // Type is auto deducted.
+        max_count?: number;
+        epsilon?: number;
+    };
+
+    class Undistort {
+        constructor(calibration: CameraCalibration);
+        readonly calibration: CameraCalibration;
+        get sensor_size(): Size;
+        get focal(): Point2d;
+        get center(): Point2d;
+        get fov(): Point2d; // X and Y field of view in radians
+        apply(mat: Mat): Mat;
+        undistortPoints(...points: Point2d[]): Point2d[];
+        distortPoints(...points: Point2d[]): Point2d[];
+        angular(...points: Point2d[]): Point2d[];
+        position(...angles: Point2d[]): Point2d[];
+    }
+
+    export class Vision {
+        static findChessboardCorners(
+            mat: Mat,
+            pattern_size: Size | number
+        ): Promise<Point[]>;
+
+        static cornerSubPix(
+            mat: Mat,
+            corners: Point[],
+            win_size?: Size | number | null, // default 5
+            zero_zone?: Size | number | null, // default -1
+            term_criteria?: TermCriteria
+        ): Promise<Point[]>;
+
+        static calibrateCamera(
+            sensor_size: Size,
+            img_points: Point2d[][],
+            obj_points: Point3d[][],
+            term_criteria?: TermCriteria
+        ): Promise<CameraCalibration>;
+
+        static Undistort: typeof Undistort;
+    }
 }

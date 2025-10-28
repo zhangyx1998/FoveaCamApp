@@ -162,7 +162,6 @@ export class Controller {
         return this.__pos__.value;
     }
     async actuate(pos: { left?: Pos; right?: Pos }, settle_time = 0) {
-        console.log("Actuating to:", pos);
         const { left, right, complete_time } = await this.set(
             Protocol.Command.Actuate,
             {

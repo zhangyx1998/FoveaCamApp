@@ -94,10 +94,10 @@ public:
   Napi::Env const env;
   inline ErrorBase(Napi::Env env, std::string message)
       : TracedError(message), env(env) {};
-  void Throw() const {
-    auto e = injectNativeStack(createJsError(), stack);
-    e.ThrowAsJavaScriptException();
+  inline Napi::Error error() const {
+    return injectNativeStack(createJsError(), stack);
   }
+  void Throw() const { error().ThrowAsJavaScriptException(); }
   const char *what() const noexcept override {
     auto e = createJsError();
     full_message = e.Value().Get("stack").ToString().Utf8Value() +
@@ -167,6 +167,19 @@ template <typename T> void deleter(Napi::Env, void *, void *hint) {
   }
 }
 
+template <typename T>
+inline T optionalArgument(const Napi::Value &arg, T &&fallback) {
+  if (arg.IsUndefined() || arg.IsNull())
+    return std::forward<T>(fallback);
+  return convert<std::remove_reference_t<T>>(arg);
+}
+
+inline Napi::Value optionalArgument(const Napi::Value &arg) {
+  if (arg.IsUndefined() || arg.IsNull())
+    return arg.Env().Undefined();
+  return arg;
+}
+
 // Conversion from native C++ type to Napi::Value
 // C++ Exceptions should be translated to JS Exceptions.
 template <typename... Args>
@@ -207,14 +220,24 @@ template <typename R> class OneShotWorker : public Napi::AsyncWorker {
       auto container =
           this->container.IsEmpty() ? env.Undefined() : this->container.Value();
       deferred.Resolve(convert(env, container, result));
+    } catch (JS::ErrorBase &e) {
+      deferred.Reject(e.error().Value());
+    } catch (const std::exception &e) {
+      deferred.Reject(JS::Error(env, e.what()).error().Value());
     } catch (...) {
+      deferred.Reject(
+          JS::Error(env, "Unknown error occurred in OnOK()").error().Value());
     }
   }
   void OnError(const Napi::Error &e) override {
     try {
       Napi::HandleScope scope(env);
       deferred.Reject(injectNativeStack(e, stacktrace).Value());
+    } catch (const std::exception &e) {
+      std::cerr << "Fatal: Exception occurred in OnError(): " << e.what()
+                << std::endl;
     } catch (...) {
+      std::cerr << "Fatal: Unknown error occurred in OnError()" << std::endl;
     }
   }
 
@@ -335,7 +358,44 @@ inline Buffer<T> bufferView(const Napi::Value &value) {
   throw JS::TypeError(value.Env(), "Value is not buffer-like");
 }
 
-// Conversion from JS value to native value
+// Conversion between JS value and native value
+
+#define CONVERT_ARRAY_OF(EL, ...)                                              \
+  template <> std::vector<EL> __VA_ARGS__ convert(const Napi::Value &value) {  \
+    if (!value.IsArray())                                                      \
+      throw JS::TypeError(                                                     \
+          value.Env(),                                                         \
+          "Argument must be an array (converting array of " #EL ")");          \
+    auto arr = value.As<Napi::Array>();                                        \
+    std::vector<EL> result;                                                    \
+    result.reserve(arr.Length());                                              \
+    for (size_t i = 0; i < arr.Length(); ++i) {                                \
+      result.push_back(convert<EL>(arr.Get(i)));                               \
+    }                                                                          \
+    return result;                                                             \
+  }                                                                            \
+  template <>                                                                  \
+  Napi::Value __VA_ARGS__ convert(Napi::Env env,                               \
+                                  const std::vector<EL> &value) noexcept {     \
+    auto arr = Napi::Array::New(env, value.size());                            \
+    for (size_t i = 0; i < value.size(); ++i) {                                \
+      arr.Set(i, convert(env, value[i]));                                      \
+    }                                                                          \
+    return arr;                                                                \
+  };                                                                           \
+  template <>                                                                  \
+  Napi::Value __VA_ARGS__ convert(Napi::Env env, const Napi::Value &container, \
+                                  const std::vector<EL> &value) noexcept {     \
+    if (container.IsArray()) {                                                 \
+      const auto &arr = container.As<Napi::Array>();                           \
+      for (const auto &el : value)                                             \
+        arr.Set(arr.Length(), convert(env, el));                               \
+      return arr;                                                              \
+    } else {                                                                   \
+      return convert(env, value);                                              \
+    }                                                                          \
+  };
+
 template <> inline uint8_t convert(const Napi::Value &value) {
   if (!value.IsNumber())
     throw JS::TypeError(value.Env(), "Value is not a number");
@@ -345,6 +405,19 @@ template <> inline uint8_t convert(const Napi::Value &value) {
                     "Value " + std::to_string(v) + " out of range for uint8.");
   return static_cast<uint8_t>(v);
 }
+
+template <>
+inline Napi::Value convert(Napi::Env env, const uint8_t &value) noexcept {
+  return Napi::Number::New(env, static_cast<double>(value));
+}
+
+template <>
+inline Napi::Value convert(Napi::Env env, const Napi::Value &container,
+                           const uint8_t &value) noexcept {
+  return convert(env, value);
+}
+
+CONVERT_ARRAY_OF(uint8_t, inline);
 
 template <> inline int8_t convert(const Napi::Value &value) {
   if (!value.IsNumber())
@@ -356,6 +429,19 @@ template <> inline int8_t convert(const Napi::Value &value) {
   return static_cast<int8_t>(v);
 }
 
+template <>
+inline Napi::Value convert(Napi::Env env, const int8_t &value) noexcept {
+  return Napi::Number::New(env, static_cast<double>(value));
+}
+
+template <>
+inline Napi::Value convert(Napi::Env env, const Napi::Value &container,
+                           const int8_t &value) noexcept {
+  return convert(env, value);
+}
+
+CONVERT_ARRAY_OF(int8_t, inline);
+
 template <> inline uint16_t convert(const Napi::Value &value) {
   if (!value.IsNumber())
     throw JS::TypeError(value.Env(), "Value is not a number");
@@ -365,6 +451,19 @@ template <> inline uint16_t convert(const Napi::Value &value) {
                     "Value " + std::to_string(v) + " out of range for uint16.");
   return static_cast<uint16_t>(v);
 }
+
+template <>
+inline Napi::Value convert(Napi::Env env, const uint16_t &value) noexcept {
+  return Napi::Number::New(env, static_cast<double>(value));
+}
+
+template <>
+inline Napi::Value convert(Napi::Env env, const Napi::Value &container,
+                           const uint16_t &value) noexcept {
+  return convert(env, value);
+}
+
+CONVERT_ARRAY_OF(uint16_t, inline);
 
 template <> inline int16_t convert(const Napi::Value &value) {
   if (!value.IsNumber())
@@ -376,12 +475,38 @@ template <> inline int16_t convert(const Napi::Value &value) {
   return static_cast<int16_t>(v);
 }
 
+template <>
+inline Napi::Value convert(Napi::Env env, const int16_t &value) noexcept {
+  return Napi::Number::New(env, static_cast<double>(value));
+}
+
+template <>
+inline Napi::Value convert(Napi::Env env, const Napi::Value &container,
+                           const int16_t &value) noexcept {
+  return convert(env, value);
+}
+
+CONVERT_ARRAY_OF(int16_t, inline);
+
 template <> inline uint32_t convert(const Napi::Value &value) {
   if (!value.IsNumber())
     throw JS::TypeError(value.Env(), "Value is not a number");
   auto v = value.As<Napi::Number>().Uint32Value();
   return static_cast<uint32_t>(v);
 }
+
+template <>
+inline Napi::Value convert(Napi::Env env, const uint32_t &value) noexcept {
+  return Napi::Number::New(env, static_cast<double>(value));
+}
+
+template <>
+inline Napi::Value convert(Napi::Env env, const Napi::Value &container,
+                           const uint32_t &value) noexcept {
+  return convert(env, value);
+}
+
+CONVERT_ARRAY_OF(uint32_t, inline);
 
 template <> inline int32_t convert(const Napi::Value &value) {
   if (!value.IsNumber())
@@ -390,6 +515,75 @@ template <> inline int32_t convert(const Napi::Value &value) {
   return static_cast<int32_t>(v);
 }
 
+template <>
+inline Napi::Value convert(Napi::Env env, const int32_t &value) noexcept {
+  return Napi::Number::New(env, static_cast<double>(value));
+}
+
+template <>
+inline Napi::Value convert(Napi::Env env, const Napi::Value &container,
+                           const int32_t &value) noexcept {
+  return convert(env, value);
+}
+
+CONVERT_ARRAY_OF(int32_t, inline);
+
+template <> inline uint64_t convert(const Napi::Value &value) {
+  if (value.IsNumber()) {
+    auto v = value.As<Napi::Number>().Uint32Value();
+    return static_cast<uint64_t>(v);
+  }
+  if (value.IsBigInt()) {
+    bool lossless = false;
+    auto v = value.As<Napi::BigInt>().Uint64Value(&lossless);
+    if (!lossless)
+      throw JS::Error(value.Env(), "BigInt value is too large for uint64.");
+    return static_cast<uint64_t>(v);
+  }
+  throw JS::TypeError(value.Env(), "Value cannot be converted to uint64.");
+}
+
+template <>
+inline Napi::Value convert(Napi::Env env, const uint64_t &value) noexcept {
+  return Napi::BigInt::New(env, value);
+}
+
+template <>
+inline Napi::Value convert(Napi::Env env, const Napi::Value &container,
+                           const uint64_t &value) noexcept {
+  return convert(env, value);
+}
+
+CONVERT_ARRAY_OF(uint64_t, inline);
+
+template <> inline int64_t convert(const Napi::Value &value) {
+  if (value.IsNumber()) {
+    auto v = value.As<Napi::Number>().Int32Value();
+    return static_cast<int64_t>(v);
+  }
+  if (value.IsBigInt()) {
+    bool lossless = false;
+    auto v = value.As<Napi::BigInt>().Int64Value(&lossless);
+    if (!lossless)
+      throw JS::Error(value.Env(), "BigInt value is too large for int64.");
+    return static_cast<int64_t>(v);
+  }
+  throw JS::TypeError(value.Env(), "Value cannot be converted to int64.");
+}
+
+template <>
+inline Napi::Value convert(Napi::Env env, const int64_t &value) noexcept {
+  return Napi::BigInt::New(env, value);
+}
+
+template <>
+inline Napi::Value convert(Napi::Env env, const Napi::Value &container,
+                           const int64_t &value) noexcept {
+  return convert(env, value);
+}
+
+CONVERT_ARRAY_OF(int64_t, inline);
+
 template <> inline float convert(const Napi::Value &value) {
   if (!value.IsNumber())
     throw JS::TypeError(value.Env(), "Value is not a number");
@@ -397,9 +591,35 @@ template <> inline float convert(const Napi::Value &value) {
   return static_cast<float>(v);
 }
 
+template <>
+inline Napi::Value convert(Napi::Env env, const float &value) noexcept {
+  return Napi::Number::New(env, static_cast<double>(value));
+}
+
+template <>
+inline Napi::Value convert(Napi::Env env, const Napi::Value &container,
+                           const float &value) noexcept {
+  return convert(env, value);
+}
+
+CONVERT_ARRAY_OF(float, inline);
+
 template <> inline double convert(const Napi::Value &value) {
   if (!value.IsNumber())
     throw JS::TypeError(value.Env(), "Value is not a number");
   auto v = value.As<Napi::Number>().DoubleValue();
   return static_cast<double>(v);
 }
+
+template <>
+inline Napi::Value convert(Napi::Env env, const double &value) noexcept {
+  return Napi::Number::New(env, static_cast<double>(value));
+}
+
+template <>
+inline Napi::Value convert(Napi::Env env, const Napi::Value &container,
+                           const double &value) noexcept {
+  return convert(env, value);
+}
+
+CONVERT_ARRAY_OF(double, inline);

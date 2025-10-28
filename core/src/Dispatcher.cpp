@@ -176,8 +176,6 @@ void cleanup(napi_env env) {
   auto ref = registry.ref();
   if (ref->has(env))
     ref->erase(env);
-  VERBOSE("Dispatcher cleaned up for env %p, %lu handles left", env,
-          ref->size());
 }
 
 void init(Napi::Env env) {

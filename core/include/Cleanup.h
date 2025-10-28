@@ -52,6 +52,7 @@ private:
         } catch (const std::exception &e) {
           std::cerr << "[ERROR] Exception in Cleanup hook: " << e.what()
                     << std::endl;
+          std::abort();
         }
       }
     }

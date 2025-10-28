@@ -101,9 +101,9 @@ typedef struct Detection {
 } Detection;
 
 typedef struct ArUcoDetectionResult : public Shared<ArUcoDetectionResult> {
-  const size_t width, height;
+  const Arv::Frame::Ptr frame;
   std::vector<Detection> detections;
-  ArUcoDetectionResult(size_t w, size_t h) : width(w), height(h) {};
+  ArUcoDetectionResult(const Arv::Frame::Ptr &frame) : frame(frame) {};
 } ArUcoDetectionResult;
 
 using Result = ArUcoDetectionResult;
@@ -115,11 +115,11 @@ template <> Value convert(Napi::Env env, const Result::Ptr &results) noexcept {
   for (size_t i = 0; i < results->detections.size(); ++i) {
     const auto &result = results->detections[i];
     auto el = Array::New(env, result.corners.size());
-    const auto w = Number::New(env, results->width);
-    const auto h = Number::New(env, results->height);
+    const auto w = Number::New(env, results->frame->width());
+    const auto h = Number::New(env, results->frame->height());
     el.Set("id", Number::New(env, result.id));
-    el.Set("w", w);
-    el.Set("h", h);
+    el.Set("width", w);
+    el.Set("height", h);
     for (size_t j = 0; j < result.corners.size(); ++j) {
       auto pt = Napi::Object::New(env);
       pt.Set("x", Number::New(env, result.corners[j].x));
@@ -130,28 +130,30 @@ template <> Value convert(Napi::Env env, const Result::Ptr &results) noexcept {
     el.Freeze();
     arr.Set(i, el);
   }
+  arr.Set("frame", convert(env, results->frame));
   arr.Freeze();
   return arr;
 };
 
-inline cv::Mat enhance(Arv::Frame::Ptr frame, double scale = 1.0) {
+template <>
+Value convert(Napi::Env env, const Napi::Value &container,
+              const Result::Ptr &results) noexcept {
+  return convert(env, results);
+};
+
+inline Result::Ptr detect(const Arv::Frame::Ptr &frame,
+                          const cv::Ptr<aruco::Dictionary> &dict,
+                          double scale = 1.0) {
   auto gray = frame->view(Arv::PixelFormat::Mono8);
-  frame = nullptr;
   cv::Mat mat;
   if (scale != 1.0)
     cv::resize(gray, mat, {}, scale, scale, cv::INTER_AREA);
   else
     mat = gray;
-  cv::Mat processed;
-  cv::normalize(mat, processed, 0, 255, cv::NORM_MINMAX);
-  return processed;
-}
-
-inline Result::Ptr detect(cv::Mat frame, const cv::Ptr<aruco::Dictionary> &dict,
-                          double scale = 1.0) {
+  cv::normalize(mat, mat, 0, 255, cv::NORM_MINMAX);
   std::vector<int> ids;
   std::vector<std::vector<cv::Point2f>> corners;
-  aruco::detectMarkers(frame, dict, corners, ids);
+  aruco::detectMarkers(mat, dict, corners, ids);
   if (ids.size() != corners.size())
     throw std::runtime_error("Detected ids and corners size mismatch");
   auto n = ids.size();
@@ -161,9 +163,7 @@ inline Result::Ptr detect(cv::Mat frame, const cv::Ptr<aruco::Dictionary> &dict,
       for (auto &pt : corner_set)
         pt /= scale;
   // Save results
-  size_t width = static_cast<size_t>(frame.cols / scale);
-  size_t height = static_cast<size_t>(frame.rows / scale);
-  auto results = Result::create(width, height);
+  auto results = Result::create(frame);
   results->detections.reserve(n);
   for (size_t i = 0; i < n; ++i)
     results->detections.push_back(Detection{ids[i], corners[i]});
@@ -183,7 +183,7 @@ public:
   Stream<Arv::Frame::Ptr> *upstream() override { return stream.get(); }
   Result::Ptr transform(const Arv::Frame::Ptr &input) override {
     VERBOSE("ArUcoStream::transform(%p) start", input.get());
-    auto result = detect(::enhance(input, scale), dict, scale);
+    auto result = detect(input, dict, scale);
     VERBOSE("ArUcoStream::transform(%p) done", input.get());
     return result;
   }
@@ -205,25 +205,6 @@ public:
                        });
   }
 
-  static FN(enhance) {
-    auto env = info.Env();
-    try {
-      auto frame = convert<Arv::Frame::Ptr>(info[0]);
-      double scale = 1.0;
-      if (info.Length() >= 2)
-        scale = info[1].As<Napi::Number>().DoubleValue();
-      if (scale <= 0.0)
-        throw std::invalid_argument("Scale must be positive");
-      auto task = [frame, scale]() {
-        auto enhanced = ::enhance(frame, scale);
-        cv::cvtColor(enhanced, enhanced, cv::COLOR_GRAY2BGRA);
-        return enhanced;
-      };
-      return OneShotWorker<cv::Mat>::run(env, task);
-    }
-    JS_EXCEPT(env.Undefined())
-  }
-
   FN(detect) {
     auto env = info.Env();
     try {
@@ -238,7 +219,7 @@ public:
       VERBOSE("[Requested] %s", action.c_str());
       auto task = [dict, frame, scale, action]() {
         VERBOSE("[Dispatched] %s", action.c_str());
-        auto result = ::detect(::enhance(frame, scale), dict, scale);
+        auto result = ::detect(frame, dict, scale);
         VERBOSE("[Completed] %s", action.c_str());
         return result;
       };
