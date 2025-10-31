@@ -1,22 +1,17 @@
 <script setup lang="ts">
-import {
-    ref,
-    markRaw,
-    shallowRef,
-    customRef,
-    onUnmounted,
-    watch,
-    computed,
-} from "vue";
+import { markRaw, customRef, onUnmounted, computed } from "vue";
 import type { Camera } from "core";
-
 import StreamView from "@src/components/StreamView.vue";
-import { info } from "@lib/camera-config";
-import { describeCamera, getCameraStore, initCamera } from "@lib/camera-store";
+import {
+    describeCamera,
+    useCameraConfig,
+    initCamera,
+    getCameraInfo,
+} from "@lib/camera";
 import Store from "@lib/store";
 
 const { camera } = defineProps<{ camera: Camera }>();
-const store = await getCameraStore(camera);
+const store = await useCameraConfig(camera);
 initCamera(camera, store);
 
 let timeout_handle: ReturnType<typeof setInterval> | null = null;
@@ -94,8 +89,7 @@ function reset() {
     camera.frame_rate_enable = false;
     camera.exposure_auto = "Once";
     camera.gain_auto = "Once";
-    if (camera.black_level_auto_available)
-        camera.black_level_auto = "Once";
+    if (camera.black_level_auto_available) camera.black_level_auto = "Once";
     Store.clear(store);
 }
 </script>
@@ -104,9 +98,9 @@ function reset() {
     <div class="view">
         <StreamView
             class="stream"
-            :name="describeCamera(camera)"
+            :title="describeCamera(camera)"
             :stream="markRaw(camera.stream)"
-            :overlay="info(camera)"
+            :overlay="getCameraInfo(camera)"
             width="100%"
             theme="white"
         />

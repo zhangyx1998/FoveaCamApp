@@ -1,25 +1,27 @@
 <script setup lang="ts">
-import { computed, markRaw, onUnmounted, reactive, watch } from "vue";
-import type { Camera } from "core";
-import { ArUcoDetector } from "core";
-
-import { useMatchedCameras } from "@lib/camera-store";
+import { computed, markRaw, onUnmounted, watch } from "vue";
+import type { Camera, Undistort } from "core";
+import { ArUcoDetector, Vision } from "core";
+import { getCameraInfo, MatchedCameras, ROLE, THEME } from "@lib/camera";
 import StreamView from "@src/components/StreamView.vue";
-import ArUcoDetection from "./ArUcoDetection.vue";
+import Marker from "./Marker.vue";
 import PosView from "@src/components/PosView.vue";
-import { getController, Pos } from "@src/components/Controller.vue";
-import { info } from "@lib/camera-config";
-import Tracker, { actuate } from "./tracker";
-import { useIntrinsicCalibration } from "@lib/camera-calibration";
+import { getController } from "@src/components/Controller.vue";
+import Tracker, { actuate, record } from "./tracker";
 import FrameCursor from "@src/components/FrameCursor.vue";
-import { ExtrinsicRecord } from "./record";
+import { ExtrinsicRecord } from "./calibrate";
+import ConfigEntry from "@src/components/ConfigEntry.vue";
+import Plot from "@src/components/Plot.vue";
 
 const emit = defineEmits<{
-    (e: "finalize", records: ExtrinsicRecord[]): void;
+    (e: "finalize"): void;
 }>();
-const cam = await useMatchedCameras();
 
-const { undistort } = await useIntrinsicCalibration(cam.C);
+const props = defineProps<{
+    cameras: MatchedCameras<true>;
+    undistort: Undistort;
+    records: ExtrinsicRecord[];
+}>();
 
 function getStream(camera?: Camera) {
     return camera && markRaw(camera.stream);
@@ -28,9 +30,9 @@ function getStream(camera?: Camera) {
 const detector = new ArUcoDetector("4X4_50");
 
 const tracker = {
-    L: cam.L && new Tracker(cam.L, detector, 1, 0.25),
-    C: cam.C && new Tracker(cam.C, detector, 0, 0.5),
-    R: cam.R && new Tracker(cam.R, detector, 2, 0.25),
+    L: props.cameras.L && new Tracker(props.cameras.L, detector, 1, 0.25),
+    C: props.cameras.C && new Tracker(props.cameras.C, detector, 0, 1.0),
+    R: props.cameras.R && new Tracker(props.cameras.R, detector, 2, 0.25),
 };
 
 const controller = computed(getController);
@@ -42,20 +44,53 @@ watch(actuator, (_, prev) => prev?.abort());
 const recordable = computed(() => {
     return (
         controller.value &&
-        [tracker.L, tracker.C, tracker.R].every((t) => t?.isRecordable)
+        [tracker.L, tracker.C, tracker.R].every((t) => t?.target)
     );
 });
 
-const records = reactive([]) as ExtrinsicRecord[];
-
-async function appendToRecord() {
+async function capture() {
     if (!recordable.value) return;
     const { pos } = controller.value!;
-    records.push({
-        L: await tracker.L!.record({ pos: pos.left }),
-        C: await tracker.C!.record(),
-        R: await tracker.R!.record({ pos: pos.right }),
-    } as ExtrinsicRecord);
+    const [gl, gc, gr] = await Promise.all([
+        tracker.L!.frame!.view("Mono8"),
+        tracker.C!.frame!.view("Mono8"),
+        tracker.R!.frame!.view("Mono8"),
+    ]);
+    const [L, C, R] = await Promise.all([
+        record(detector, tracker.L!.target!, gl, true).then((r) => ({
+            ...r,
+            frame: gl,
+            voltage: pos.left,
+        })),
+        record(detector, tracker.C!.target!, gc, false).then(async (r) => {
+            const { img_points, obj_points } = r;
+            const { undistort } = props;
+            const projection = await Vision.Projector.solve(
+                img_points,
+                obj_points,
+                undistort.calibration
+            );
+            return {
+                ...r,
+                frame: gc,
+                angle: undistort.angular(
+                    projection.obj2img([
+                        {
+                            x: 0,
+                            y: 0,
+                            z: 0,
+                        },
+                    ])
+                )[0],
+            };
+        }),
+        record(detector, tracker.R!.target!, gr, true).then((r) => ({
+            ...r,
+            frame: gr,
+            voltage: pos.right,
+        })),
+    ]);
+    props.records.push({ L, C, R });
 }
 
 onUnmounted(async () => {
@@ -65,7 +100,7 @@ onUnmounted(async () => {
         tracker.R?.task.abort(),
         actuator.value?.abort(),
     ]);
-    cam.release();
+    console.log("Released: trackers and actuator.");
 });
 </script>
 
@@ -74,52 +109,60 @@ onUnmounted(async () => {
         <div class="view">
             <StreamView
                 class="stream"
-                name="Left Fovea"
+                :title="ROLE.L"
                 :footnote="`ArUco Tracker @ ${tracker.L?.fps ?? 'N/A'}`"
-                :stream="getStream(cam.L)"
-                :overlay="info(cam.L)"
-                theme="cyan"
+                :stream="getStream(cameras.L)"
+                :overlay="getCameraInfo(cameras.L)"
+                :theme="THEME.L"
             >
-                <ArUcoDetection
+                <Marker
                     v-if="tracker.L?.target"
                     :detection="tracker.L.target"
                 />
-                <ArUcoDetection
+                <Marker
                     v-for="(d, i) in tracker.L?.other_targets"
                     :key="i"
                     :detection="d"
                     color="gray"
                 />
             </StreamView>
-            <div class="config-entry" v-if="tracker.L">
+            <ConfigEntry v-if="tracker.L">
                 <span>
                     {{ tracker.L?.target ? "✓" : "✗" }}
                     ArUco ID to Track:
                 </span>
                 <input v-model.number="tracker.L.target_id" />
-            </div>
+            </ConfigEntry>
             <PosView
                 v-if="controller"
                 :pos="controller.pos.left"
                 :lim="controller.dv"
-                color="cyan"
+                :color="THEME.L"
                 style="width: 100%"
-            />
+            >
+                <Plot
+                    :data="[
+                        ...records.map((r) => r.L.voltage),
+                        controller.pos.left,
+                    ]"
+                    marker="."
+                />
+            </PosView>
         </div>
         <div class="view">
             <StreamView
                 class="stream"
-                name="Wide Camera"
+                :title="ROLE.C"
                 :footnote="`ArUco Tracker @ ${tracker.C?.fps ?? 'N/A'}`"
-                :stream="getStream(cam.C)"
-                :overlay="info(cam.C)"
-                theme="orange"
+                :stream="getStream(cameras.C)"
+                :overlay="getCameraInfo(cameras.C)"
+                :theme="THEME.C"
             >
-                <ArUcoDetection
+                <Marker
                     v-if="tracker.C?.target"
                     :detection="tracker.C.target"
                 />
-                <ArUcoDetection
+                <Marker
                     v-for="(d, i) in tracker.C?.other_targets"
                     :key="i"
                     :detection="d"
@@ -132,20 +175,20 @@ onUnmounted(async () => {
                     box="rect"
                 />
             </StreamView>
-            <div class="config-entry" v-if="tracker.C">
+            <ConfigEntry v-if="tracker.C">
                 <span>
                     {{ tracker.C?.target ? "✓" : "✗" }}
                     ArUco ID to Track:
                 </span>
                 <input v-model.number="tracker.C.target_id" />
-            </div>
+            </ConfigEntry>
             <div class="actions">
-                <button :disabled="!recordable" @click="appendToRecord">
-                    Record ({{ records.length }})
+                <button :disabled="!recordable" @click="capture">
+                    Capture ({{ records.length }} records)
                 </button>
                 <button
                     :disabled="records.length === 0"
-                    @click="emit('finalize', records)"
+                    @click="emit('finalize')"
                 >
                     Finalize Calibration
                 </button>
@@ -154,37 +197,47 @@ onUnmounted(async () => {
         <div class="view">
             <StreamView
                 class="stream"
-                name="Right Fovea"
+                :title="ROLE.R"
                 :footnote="`ArUco Tracker @ ${tracker.R?.fps ?? 'N/A'}`"
-                :stream="getStream(cam.R)"
-                :overlay="info(cam.R)"
-                theme="greenyellow"
+                :stream="getStream(cameras.R)"
+                :overlay="getCameraInfo(cameras.R)"
+                :theme="THEME.R"
             >
-                <ArUcoDetection
+                <Marker
                     v-if="tracker.R?.target"
                     :detection="tracker.R.target"
                 />
-                <ArUcoDetection
+                <Marker
                     v-for="(d, i) in tracker.R?.other_targets"
                     :key="i"
                     :detection="d"
                     color="gray"
                 />
             </StreamView>
-            <div class="config-entry" v-if="tracker.R">
+            <ConfigEntry v-if="tracker.R">
                 <span>
                     {{ tracker.R?.target ? "✓" : "✗" }}
                     ArUco ID to Track:
                 </span>
-                <input v-model.number="tracker.R.target_id" />
-            </div>
+                <input
+                    v-model.number="tracker.R.target_id"
+                    style="width: 2ch"
+                />
+            </ConfigEntry>
             <PosView
                 v-if="controller"
                 :pos="controller.pos.right"
                 :lim="controller.dv"
-                color="greenyellow"
+                :color="THEME.R"
                 style="width: 100%"
-            />
+            >
+                <Plot
+                    :data="[
+                        ...records.map((r) => r.R.voltage),
+                        controller.pos.right,
+                    ]"
+                    marker="."
+            /></PosView>
         </div>
     </div>
 </template>
@@ -224,39 +277,6 @@ onUnmounted(async () => {
         width: 0;
         flex-grow: 1;
         height: 2rem;
-    }
-}
-
-.config-entry {
-    padding-left: 1ch;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    border-bottom: 1px solid transparent;
-
-    & > * {
-        text-wrap: nowrap;
-    }
-
-    &:hover {
-        border-bottom: 1.5px solid #fff4;
-    }
-
-    &:focus-within {
-        border-bottom: 1.5px solid #fff8;
-    }
-
-    margin: 0.4em 0;
-
-    input {
-        width: 2ch;
-        text-align: center;
-        background: none;
-        border: 1.5px solid transparent;
-        color: #ccc;
-        outline: none !important;
-        font-size: inherit;
-        font-family: inherit;
     }
 }
 </style>

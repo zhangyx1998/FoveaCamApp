@@ -396,6 +396,40 @@ inline Buffer<T> bufferView(const Napi::Value &value) {
     }                                                                          \
   };
 
+template <> inline std::string convert(const Napi::Value &value) {
+  return value.ToString().Utf8Value();
+}
+
+template <>
+inline Napi::Value convert(Napi::Env env, const std::string &value) noexcept {
+  return Napi::String::New(env, value);
+}
+
+template <>
+inline Napi::Value convert(Napi::Env env, const Napi::Value &container,
+                           const std::string &value) noexcept {
+  return convert(env, value);
+}
+
+CONVERT_ARRAY_OF(std::string, inline);
+
+template <> inline bool convert(const Napi::Value &value) {
+  return value.ToBoolean().Value();
+}
+
+template <>
+inline Napi::Value convert(Napi::Env env, const bool &value) noexcept {
+  return Napi::Boolean::New(env, value);
+}
+
+template <>
+inline Napi::Value convert(Napi::Env env, const Napi::Value &container,
+                           const bool &value) noexcept {
+  return convert(env, value);
+}
+
+CONVERT_ARRAY_OF(bool, inline);
+
 template <> inline uint8_t convert(const Napi::Value &value) {
   if (!value.IsNumber())
     throw JS::TypeError(value.Env(), "Value is not a number");

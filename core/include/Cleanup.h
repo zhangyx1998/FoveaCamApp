@@ -13,6 +13,7 @@
 #include <Threading/Guard.h>
 #include <utils/debug.h>
 #include <utils/map-set.h>
+#include <utils/stacktrace.h>
 
 class Cleanup {
 public:
@@ -52,7 +53,8 @@ private:
         } catch (const std::exception &e) {
           std::cerr << "[ERROR] Exception in Cleanup hook: " << e.what()
                     << std::endl;
-          std::abort();
+          std::cerr << "Stack trace:" << std::endl << Stacktrace::capture();
+          std::terminate();
         }
       }
     }

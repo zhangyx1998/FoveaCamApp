@@ -1,7 +1,4 @@
 <script setup lang="ts">
-import { ElementSize } from "@lib/util/dom";
-import { FreqMeter, PerfTimer } from "@lib/util/perf";
-import Overlay from "./Overlay.vue";
 import { Pos } from "./Controller.vue";
 import { computed } from "vue";
 
@@ -65,6 +62,8 @@ function format(v: number, unit: string, radix: number = 1) {
             :r="thickness / 2"
             fill="gray"
         />
+        <!-- Slots -->
+        <slot></slot>
         <!-- Dashed lines -->
         <line
             v-if="pos.y - R * 2 > -lim"

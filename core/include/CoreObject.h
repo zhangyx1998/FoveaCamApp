@@ -83,9 +83,7 @@ protected:
     Napi::FunctionReference constructor;
     FEAT_STRICT_EQ(Map<uintptr_t, Napi::Reference<Napi::Value>> instances);
     Local(Napi::Function &fn)
-        : constructor(Napi::Persistent(fn)) FEAT_STRICT_EQ(, instances())
-
-    {}
+        : constructor(Napi::Persistent(fn)) FEAT_STRICT_EQ(, instances()) {}
     ~Local() { constructor.Reset(); }
   };
   /** Packed by Napi::External and passed to object constructor */

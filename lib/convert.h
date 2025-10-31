@@ -15,3 +15,11 @@ template <> inline const char *convert(const std::string &src) {
 template <uintptr_t, typename T> inline uintptr_t convert(const T *src) {
   return reinterpret_cast<uintptr_t>(src);
 }
+
+#define CASE_ENUM_TO_STRING(VAL, NAME, ...)                                    \
+  if (VAL == __VA_OPT__(__VA_ARGS__)##NAME)                                    \
+    return #NAME;
+
+#define CASE_STRING_TO_ENUM(VAL, NAME, ...)                                    \
+  if (VAL == #NAME)                                                            \
+    return __VA_OPT__(__VA_ARGS__)##NAME;

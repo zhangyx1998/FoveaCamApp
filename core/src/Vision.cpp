@@ -18,18 +18,44 @@
 #include <opencv2/core/types.hpp>
 #include <pointer.h>
 
+#include "CoreObject.h"
 #include "Vision.h"
 #include "napi-helper.h"
 
 using namespace Napi;
 using namespace cv;
-using Corners = std::vector<Point2f>;
-using Points3D = std::vector<Point3f>;
+using std::string;
+using std::to_string;
+using std::vector;
+using Points2D = vector<Point2f>;
+using Points3D = vector<Point3f>;
 
-static inline std::string tag(const cv::Mat &mat) {
-  return std::to_string(mat.cols) + "x" + std::to_string(mat.rows) + "x" +
-         std::to_string(mat.channels()) + "@" +
-         std::to_string(mat.elemSize1() * 8) + "bit";
+static inline string tag(const cv::Mat &mat) {
+  return to_string(mat.cols) + "x" + to_string(mat.rows) + "x" +
+         to_string(mat.channels()) + "@" + to_string(mat.elemSize1() * 8) +
+         "bit";
+}
+
+static FN(slice) {
+  auto env = info.Env();
+  try {
+    auto mat = convert<cv::Mat>(info[0]);
+    auto rect = convert<cv::Rect>(info[1]);
+    if (rect.width <= 0 || rect.height <= 0)
+      throw JS::Error(env, "Invalid slice size " + to_string(rect.width) + "x" +
+                               to_string(rect.height));
+    // Allow slice out of bounds, fill with zeros
+    cv::Mat sliced = cv::Mat::zeros(rect.height, rect.width, mat.type());
+    cv::Point tl(std::max(rect.x, 0), std::max(rect.y, 0));
+    cv::Point br(std::min(rect.x + rect.width, mat.cols),
+                 std::min(rect.y + rect.height, mat.rows));
+    auto src = mat(cv::Rect(tl, br));
+    cv::Point dst_tl(std::max(-rect.x, 0), std::max(-rect.y, 0));
+    cv::Point dst_br(dst_tl.x + src.cols, dst_tl.y + src.rows);
+    src.copyTo(sliced(cv::Rect(dst_tl, dst_br)));
+    return convert(env, sliced);
+  }
+  JS_EXCEPT(env.Undefined())
 }
 
 static FN(findChessboardCorners) {
@@ -41,14 +67,14 @@ static FN(findChessboardCorners) {
     VERBOSE("[Requested] %s", action.c_str());
     auto task = [mat, pattern_size, action]() {
       VERBOSE("[Dispatched] %s", action.c_str());
-      Corners corners;
+      Points2D corners;
       cv::findChessboardCorners(mat, pattern_size, corners,
                                 cv::CALIB_CB_ADAPTIVE_THRESH |
                                     cv::CALIB_CB_NORMALIZE_IMAGE);
       VERBOSE("[Completed] %s", action.c_str());
       return corners;
     };
-    return OneShotWorker<Corners>::run(env, task);
+    return OneShotWorker<Points2D>::run(env, task);
   }
   JS_EXCEPT(env.Undefined())
 }
@@ -57,7 +83,7 @@ static FN(cornerSubPix) {
   auto env = info.Env();
   try {
     const auto mat = convert<cv::Mat>(info[0]);
-    auto corners = convert<Corners>(info[1]);
+    auto corners = convert<Points2D>(info[1]);
     const auto win_size = optionalArgument(info[2], cv::Size2i(9, 9));
     const auto zero_zone = optionalArgument(info[3], cv::Size2i(-1, -1));
     const auto criteria = optionalArgument<cv::TermCriteria>(
@@ -72,7 +98,7 @@ static FN(cornerSubPix) {
       VERBOSE("[Completed] %s", action.c_str());
       return corners;
     };
-    return OneShotWorker<Corners>::run(env, task);
+    return OneShotWorker<Points2D>::run(env, task);
   }
   JS_EXCEPT(env.Undefined())
 }
@@ -81,12 +107,12 @@ static FN(calibrateCamera) {
   auto env = info.Env();
   try {
     auto sensor_size = convert<cv::Size2i>(info[0]);
-    auto img_points = convert<std::vector<Corners>>(info[1]);
-    auto obj_points = convert<std::vector<Points3D>>(info[2]);
+    auto img_points = convert<vector<Points2D>>(info[1]);
+    auto obj_points = convert<vector<Points3D>>(info[2]);
     auto criteria = optionalArgument<cv::TermCriteria>(
         info[3],
         {cv::TermCriteria::EPS + cv::TermCriteria::MAX_ITER, 30, 0.01});
-    const auto action = std::string{"calibrateCamera()"};
+    const auto action = string{"calibrateCamera()"};
     VERBOSE("[Requested] %s", action.c_str());
     auto task = [env, sensor_size, img_points, obj_points, action]() {
       VERBOSE("[Dispatched] %s", action.c_str());
@@ -114,8 +140,8 @@ public:
                         INSTANCE_GETTER(Undistort, center),
                         INSTANCE_GETTER(Undistort, fov),
                         INSTANCE_METHOD(Undistort, apply),
-                        INSTANCE_METHOD(Undistort, undistortPoints),
-                        INSTANCE_METHOD(Undistort, distortPoints),
+                        INSTANCE_METHOD(Undistort, undistort),
+                        INSTANCE_METHOD(Undistort, distort),
                         INSTANCE_METHOD(Undistort, angular),
                         INSTANCE_METHOD(Undistort, position),
                     });
@@ -203,54 +229,48 @@ private:
     JS_EXCEPT(env.Undefined())
   }
 
-  FN(undistortPoints) {
+  // Perform undistort
+  inline void __undistort__(Points2D &in, Points2D &out) {
+    const auto &mtx = calibration->camera_matrix;
+    const auto &dist = calibration->dist_coeffs;
+    cv::undistortPoints(in, out, mtx, dist, cv::noArray(), mtx);
+  }
+
+  FN(undistort) {
     const auto env = info.Env();
     try {
       // Get pixel position
-      std::vector<Point2f> src;
-      src.reserve(info.Length());
-      for (size_t i = 0; i < info.Length(); ++i) {
-        src.push_back(convert<Point2f>(info[i]));
-      }
-      std::vector<Point2f> dst;
-
-      const auto &mtx = calibration->camera_matrix;
-      const auto &dist = calibration->dist_coeffs;
-      cv::undistortPoints(src, dst, mtx, dist, cv::noArray(), mtx);
-      return convert(env, dst);
+      auto points = convert<Points2D>(info[0]);
+      __undistort__(points, points);
+      return convert(env, points);
     }
     JS_EXCEPT(env.Undefined())
   }
 
-  FN(distortPoints) {
+  // Perform distort
+  inline void __distort__(Points2D &in, Points2D &out) {
+    const auto &mtx = calibration->camera_matrix;
+    const auto &dist = calibration->dist_coeffs;
+    const auto f = focal(), c = center();
+    Points3D obj_points;
+    obj_points.reserve(in.size());
+    for (const auto &p : in) {
+      const double x = (p.x - c.x) / f.x;
+      const double y = (p.y - c.y) / f.y;
+      obj_points.push_back(Point3f(x, y, 1.0));
+    }
+    // Project 3D points back to 2D with distortion
+    const auto zeros = cv::Vec3d::zeros();
+    cv::projectPoints(obj_points, zeros, zeros, mtx, dist, out);
+  }
+
+  FN(distort) {
     const auto env = info.Env();
     try {
       // Get undistorted pixel positions
-      std::vector<Point2d> undistorted;
-      undistorted.reserve(info.Length());
-      for (size_t i = 0; i < info.Length(); ++i) {
-        undistorted.push_back(convert<Point2d>(info[i]));
-      }
-
-      const auto &mtx = calibration->camera_matrix;
-      const auto &dist = calibration->dist_coeffs;
-      const auto f = focal(), c = center();
-
-      // Convert undistorted 2D points to 3D points at z=1 plane
-      std::vector<Point3d> obj_points;
-      obj_points.reserve(undistorted.size());
-      for (const auto &pt : undistorted) {
-        const double x = (pt.x - c.x) / f.x;
-        const double y = (pt.y - c.y) / f.y;
-        obj_points.push_back(Point3d(x, y, 1.0));
-      }
-
-      // Project 3D points back to 2D with distortion
-      std::vector<Point2d> distorted;
-      const auto zeros = cv::Vec3d::zeros();
-      cv::projectPoints(obj_points, zeros, zeros, mtx, dist, distorted);
-
-      return convert(env, distorted);
+      auto points = convert<Points2D>(info[0]);
+      __distort__(points, points);
+      return convert(env, points);
     }
     JS_EXCEPT(env.Undefined())
   }
@@ -259,12 +279,12 @@ private:
     const auto env = info.Env();
     try {
       // Get pixel position
-      std::vector<Point2d> src;
-      src.reserve(info.Length());
-      for (size_t i = 0; i < info.Length(); ++i)
-        src.push_back(convert<Point2d>(info[i]));
+      auto src = convert<Points2D>(info[0]);
+      auto undistort = optionalArgument(info[1], false);
+      if (undistort)
+        __undistort__(src, src);
       const auto f = focal(), c = center();
-      std::vector<Point2d> angles;
+      Points2D angles;
       angles.reserve(src.size());
       for (const auto &p : src) {
         const auto x = (p.x - c.x) / f.x;
@@ -280,30 +300,187 @@ private:
     const auto env = info.Env();
     try {
       // Get angular position
-      std::vector<Point2d> src;
-      src.reserve(info.Length());
-      for (size_t i = 0; i < info.Length(); ++i)
-        src.push_back(convert<Point2d>(info[i]));
+      auto ang = convert<Points2D>(info[0]);
+      auto distort = optionalArgument(info[1], false);
       // Convert to pixel position
       const auto f = focal(), c = center();
-      std::vector<Point2d> pos;
-      pos.reserve(src.size());
-      for (const auto &p : src) {
-        pos.push_back(Point2d(tan(p.x) * f.x + c.x, tan(p.y) * f.y + c.y));
+      Points2D pos;
+      pos.reserve(ang.size());
+      for (const auto &a : ang) {
+        pos.push_back(Point2d(tan(a.x) * f.x + c.x, tan(a.y) * f.y + c.y));
       }
+      // Optional: apply distortion
+      if (distort)
+        __distort__(pos, pos);
       return convert(env, pos);
     }
     JS_EXCEPT(env.Undefined())
   }
 };
 
+typedef struct Projection : public Shared<Projection> {
+  cv::Mat rvec, tvec, mtx, dist;
+} Projection;
+
+template <>
+Napi ::Value convert(Napi ::Env env, const Projection::Ptr &core) noexcept;
+template <>
+Napi ::Value convert(Napi ::Env env, const Napi ::Value &container,
+                     const Projection::Ptr &core) noexcept;
+template <> Projection::Ptr convert(const Napi ::Value &value);
+
+class Projector : public CoreObject<Projector, Projection::Ptr> {
+  CORE_OBJECT_DECL(Projector);
+
+public:
+  using CoreObject::CoreObject;
+  static inline const std::string name = "Projector";
+  static Napi::Function Init(Napi::Env env) {
+    auto fn = DefineClass(env, Projector::name.c_str(),
+                          {
+                              CORE_OBJECT_REGISTER(Projector, env),
+                              INSTANCE_GETTER(Projector, rvec),
+                              INSTANCE_GETTER(Projector, tvec),
+                              INSTANCE_GETTER(Projector, mtx),
+                              INSTANCE_GETTER(Projector, dist),
+                              INSTANCE_METHOD(Projector, obj2img),
+                              INSTANCE_METHOD(Projector, img2obj),
+                          });
+    fn.Set("solve", Function::New(env, solve, "solve"));
+    return fn;
+  }
+
+private:
+  GET(rvec) {
+    try {
+      return convert(env, core()->rvec);
+    }
+    JS_EXCEPT(env.Undefined())
+  }
+
+  GET(tvec) {
+    try {
+      return convert(env, core()->tvec);
+    }
+    JS_EXCEPT(env.Undefined())
+  }
+
+  GET(mtx) {
+    try {
+      return convert(env, core()->mtx);
+    }
+    JS_EXCEPT(env.Undefined())
+  }
+
+  GET(dist) {
+    try {
+      return convert(env, core()->dist);
+    }
+    JS_EXCEPT(env.Undefined())
+  }
+
+  FN(obj2img) {
+    try {
+      // Collect all 3D points to project
+      auto obj_points = convert<Points3D>(info[0]);
+      // Project points using stored rvec, tvec, mtx, dist
+      Points2D img_points;
+      cv::projectPoints(obj_points, core()->rvec, core()->tvec, core()->mtx,
+                        core()->dist, img_points);
+      return convert(env, img_points);
+    }
+    JS_EXCEPT(env.Undefined())
+  }
+
+  FN(img2obj) {
+    try {
+      // Collect all 2D image points to back-project
+      auto img_points = convert<Points2D>(info[0]);
+      const auto z_plane = optionalArgument(info[1], 0.0);
+      // Undistort image points to normalized camera coordinates
+      Points2D normalized_points;
+      cv::undistortPoints(img_points, normalized_points, core()->mtx,
+                          core()->dist);
+      // Convert rotation vector to rotation matrix
+      cv::Mat R;
+      cv::Rodrigues(core()->rvec, R);
+      // Get inverse rotation and translation
+      cv::Mat R_inv = R.t(); // Transpose = inverse for rotation matrix
+      cv::Mat t_inv = -R_inv * core()->tvec;
+      // Back-project to 3D points at specified Z-plane in world coordinates
+      Points3D obj_points;
+      obj_points.reserve(normalized_points.size());
+      for (const auto &pt : normalized_points) {
+        // Ray direction in camera coordinates (normalized coordinates are
+        // already dx/dz, dy/dz)
+        cv::Mat ray_camera = (cv::Mat_<double>(3, 1) << pt.x, pt.y, 1.0);
+        // Transform ray to world coordinates
+        cv::Mat ray_world = R_inv * ray_camera;
+        cv::Mat cam_origin_world = t_inv;
+        // Find intersection with Z=z_plane
+        // Point on ray: P = cam_origin + t * ray_direction
+        // We want P.z = z_plane, so: cam_origin.z + t * ray_direction.z =
+        // z_plane
+        double t = (z_plane - cam_origin_world.at<double>(2)) /
+                   ray_world.at<double>(2);
+        double x = cam_origin_world.at<double>(0) + t * ray_world.at<double>(0);
+        double y = cam_origin_world.at<double>(1) + t * ray_world.at<double>(1);
+
+        obj_points.push_back(Point3f(x, y, z_plane));
+      }
+      return convert(env, obj_points);
+    }
+    JS_EXCEPT(env.Undefined())
+  }
+
+  static FN(solve) {
+    auto env = info.Env();
+    try {
+      auto img_points = convert<Points2D>(info[0]);
+      auto obj_points = convert<Points3D>(info[1]);
+      // Optional calibration parameter - if not provided, use identity matrix
+      auto calibration =
+          optionalArgument<CameraCalibration::Ptr>(info[2], nullptr);
+      auto projection = Projection::create();
+      if (calibration) {
+        projection->mtx = calibration->camera_matrix;
+        projection->dist = calibration->dist_coeffs;
+      } else {
+        // Use identity matrix for camera matrix (normalized coordinates)
+        projection->mtx = cv::Mat::eye(3, 3, CV_64F);
+        projection->dist = cv::Mat(); // Empty distortion coefficients
+      }
+      const auto use_extrinsic_guess = optionalArgument(info[3], false);
+      const auto method = optionalArgument(info[4], cv::SOLVEPNP_ITERATIVE);
+      const auto action = string("Projector.solvePnP()");
+      VERBOSE("[Requested] %s", action.c_str());
+      auto task = [img_points, obj_points, projection, use_extrinsic_guess,
+                   method, action]() {
+        VERBOSE("[Dispatched] %s", action.c_str());
+        // Solve PnP to get rotation and translation vectors
+        cv::solvePnP(obj_points, img_points, projection->mtx, projection->dist,
+                     projection->rvec, projection->tvec, use_extrinsic_guess,
+                     method);
+        VERBOSE("[Completed] %s", action.c_str());
+        return projection;
+      };
+      return OneShotWorker<Projection::Ptr>::run(env, task);
+    }
+    JS_EXCEPT(env.Undefined())
+  }
+};
+
+CORE_OBJECT(Projector);
+
 #define EXPORT(OBJ, F) OBJ.Set(#F, Function::New<F>(env, #F));
 void exportVisionNamespace(Napi::Env env, Napi::Object &exports) {
   Napi::Object vision = Napi::Object::New(env);
+  EXPORT(vision, slice);
   EXPORT(vision, findChessboardCorners);
   EXPORT(vision, cornerSubPix);
   EXPORT(vision, calibrateCamera);
   Undistort::Init(env, vision);
+  exportProjector(env, vision);
   exports.Set("Vision", vision);
 }
 #undef EXPORT

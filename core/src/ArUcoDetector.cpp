@@ -17,7 +17,6 @@
 #include <pointer.h>
 #include <stdexcept>
 
-#include "CoreObject.h"
 #include "Iterator.h"
 #include "napi-helper.h"
 
@@ -90,9 +89,20 @@ template <> DictType convert(const std::string &type) {
 }
 
 template <> DictType convert(const Napi::Value &value) {
-  if (!value.IsString())
-    throw JS::TypeError(value.Env(), "Argument must be a string");
-  return convert<DictType>(value.As<Napi::String>().Utf8Value());
+  return convert<DictType>(convert<std::string>(value));
+}
+
+template <> Napi::Value convert(Napi::Env env, const DictType &type) noexcept {
+  try {
+    return convert(env, convert<std::string>(type));
+  }
+  JS_EXCEPT(env.Undefined())
+}
+
+template <>
+Napi::Value convert(Napi::Env env, const Napi::Value &container,
+                    const DictType &type) noexcept {
+  return convert(env, type);
 }
 
 typedef struct Detection {
@@ -165,8 +175,13 @@ inline Result::Ptr detect(const Arv::Frame::Ptr &frame,
   // Save results
   auto results = Result::create(frame);
   results->detections.reserve(n);
-  for (size_t i = 0; i < n; ++i)
+  for (size_t i = 0; i < n; ++i) {
+    cv::cornerSubPix(
+        gray, corners[i], cv::Size(9, 9), cv::Size(-1, -1),
+        cv::TermCriteria(cv::TermCriteria::EPS + cv::TermCriteria::MAX_ITER,
+                         100, 0.1));
     results->detections.push_back(Detection{ids[i], corners[i]});
+  }
   return results;
 }
 
@@ -189,26 +204,52 @@ public:
   }
 };
 
-class ArUcoDetectorObject
-    : public CoreObject<ArUcoDetectorObject, Ptr<aruco::Dictionary>> {
-  CORE_OBJECT_DECL(ArUcoDetectorObject);
-
+class ArUcoDetectorObject : public ObjectWrap<ArUcoDetectorObject> {
 public:
-  using CoreObject::CoreObject;
-  static inline const std::string name = "ArUcoDetector";
   static Function Init(Napi::Env env) {
-    return DefineClass(env, ArUcoDetectorObject::name.c_str(),
+    return DefineClass(env, "ArUcoDetector",
                        {
-                           CORE_OBJECT_REGISTER(ArUcoDetectorObject, env), //
-                           INSTANCE_METHOD(ArUcoDetectorObject, detect),   //
-                           INSTANCE_METHOD(ArUcoDetectorObject, stream),   //
+                           INSTANCE_GETTER(ArUcoDetectorObject, type),       //
+                           INSTANCE_GETTER(ArUcoDetectorObject, markerSize), //
+                           INSTANCE_METHOD(ArUcoDetectorObject, detect),     //
+                           INSTANCE_METHOD(ArUcoDetectorObject, stream),     //
+                           INSTANCE_METHOD(ArUcoDetectorObject, pattern),    //
                        });
+  }
+
+  ArUcoDetectorObject(const Napi::CallbackInfo &info)
+      : Napi::ObjectWrap<ArUcoDetectorObject>(info) {
+    auto env = info.Env();
+    try {
+      const auto type = convert<DictType>(info[0]);
+      dict = makePtr<aruco::Dictionary>(aruco::getPredefinedDictionary(type));
+    }
+    JS_EXCEPT()
+  }
+
+private:
+  DictType dictType;
+  Ptr<aruco::Dictionary> dict;
+
+  GET(type) {
+    const auto env = info.Env();
+    try {
+      return convert(env, dictType);
+    }
+    JS_EXCEPT(env.Undefined())
+  }
+
+  GET(markerSize) {
+    const auto env = info.Env();
+    try {
+      return Number::New(env, dict->markerSize);
+    }
+    JS_EXCEPT(env.Undefined())
   }
 
   FN(detect) {
     auto env = info.Env();
     try {
-      auto dict = core();
       auto frame = convert<Arv::Frame::Ptr>(info[0]);
       const auto action = "ArUcoDetector.detect(" + frame->tag + ")";
       double scale = 1.0;
@@ -217,7 +258,7 @@ public:
       if (scale <= 0.0)
         throw std::invalid_argument("Scale must be positive");
       VERBOSE("[Requested] %s", action.c_str());
-      auto task = [dict, frame, scale, action]() {
+      auto task = [dict = dict, frame, scale, action]() {
         VERBOSE("[Dispatched] %s", action.c_str());
         auto result = ::detect(frame, dict, scale);
         VERBOSE("[Completed] %s", action.c_str());
@@ -235,7 +276,6 @@ public:
           info.Length() >= 2 ? info[1].As<Napi::Number>().DoubleValue() : 1.0;
       if (scale <= 0.0)
         throw std::invalid_argument("Scale must be positive");
-      const auto dict = core();
       const auto upstream = convert<Arv::Stream::Ptr>(info[0]);
       const auto downstream = ArUcoStream::create(upstream, dict, scale);
       auto stream = StreamObject<ArUcoStream>::Create(env, downstream);
@@ -246,13 +286,36 @@ public:
     JS_EXCEPT(env.Undefined())
   }
 
-public:
-  static inline Ptr<aruco::Dictionary>
-  ConstructFromJS(const Napi::CallbackInfo &info) {
-    const auto type_name = info[0].As<Napi::String>().Utf8Value();
-    const auto type = convert<DictType>(type_name);
-    return makePtr<aruco::Dictionary>(aruco::getPredefinedDictionary(type));
-  };
+  FN(pattern) {
+    auto env = info.Env();
+    try {
+      const auto id = convert<int>(info[0]);
+      if (id < 0 || id >= dict->bytesList.rows)
+        throw JS::Error(env,
+                        "Marker ID " + std::to_string(id) + " out of range");
+      const auto &markerSize = dict->markerSize;
+      const uchar *bytes = dict->bytesList.row(id).data;
+      auto ret = Napi::Array::New(env, markerSize);
+      unsigned index = 0;
+      for (unsigned y = 0; y < markerSize; y++) {
+        auto row = Array::New(env, markerSize);
+        for (unsigned x = 0; x < markerSize; x++) {
+          const auto byteIndex = index >> 3;
+          const auto bitIndex = 0b111 - (index & 0b111);
+          unsigned bit = (bytes[byteIndex] >> bitIndex) & 0b1;
+          row.Set(x, Number::New(env, bit));
+          index++;
+        }
+        ret.Set(y, row);
+      }
+      ret.Set("width", Number::New(env, markerSize));
+      ret.Set("height", Number::New(env, markerSize));
+      return ret;
+    }
+    JS_EXCEPT(env.Undefined())
+  }
 };
 
-CORE_OBJECT(ArUcoDetectorObject);
+void exportArUcoDetectorObject(Napi::Env env, Napi::Object &exports) {
+  exports.Set("ArUcoDetector", ArUcoDetectorObject::Init(env));
+}

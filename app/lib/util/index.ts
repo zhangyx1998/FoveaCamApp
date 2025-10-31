@@ -32,6 +32,8 @@ export function defer<T = any>() {
     };
 }
 
+export type Deferred<T> = ReturnType<typeof defer<T>>;
+
 export function delay(ms: number) {
     if (ms <= 0) return Promise.resolve();
     return new Promise<void>((resolve) => setTimeout(resolve, ms));

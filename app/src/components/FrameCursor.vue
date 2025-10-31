@@ -4,7 +4,7 @@ import type { Point, Size, Undistort } from "core";
 import { deg } from "@lib/util/math";
 
 const props = defineProps<{
-    cursor: (Point & Size) | null;
+    cursor: (Point & Partial<Size>) | null;
     undistort?: Undistort;
     color?: string;
     box?: "rect" | "circle" | "dot";
@@ -21,7 +21,7 @@ const r = computed(() => {
 const a = computed(() => {
     const { undistort: u } = props;
     if (!props.cursor || !u) return { x: 0, y: 0 };
-    const [angle] = u.angular(...u.undistortPoints(props.cursor));
+    const [angle] = u.angular(u.undistort([props.cursor]));
     return {
         x: deg(angle.x),
         y: deg(angle.y),

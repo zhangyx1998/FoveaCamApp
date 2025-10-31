@@ -6,7 +6,7 @@
 import { markRaw } from "vue";
 import { Awaitable } from "../types";
 
-import { defer } from ".";
+import { defer, Deferred } from ".";
 
 export class AsyncChain<T = any> {
     // Value is only valid when next is an AsyncChain node.
@@ -80,3 +80,56 @@ export class AsyncChain<T = any> {
         }
     }
 }
+
+export class Latest<T = any> implements AsyncIterable<T>, AsyncIterator<T> {
+    private open = true;
+    private available = false;
+    private current?: T;
+    private pending: Deferred<IteratorResult<T>>[] = [];
+    [Symbol.asyncIterator]() {
+        return this;
+    }
+    async next(): Promise<IteratorResult<T>> {
+        if (!this.open) {
+            return Promise.resolve({ value: null, done: true });
+        } else if (this.available) {
+            const value = this.current!;
+            delete this.current;
+            this.available = false;
+            return Promise.resolve({ value, done: false });
+        } else {
+            const deferred = defer<IteratorResult<T>>();
+            this.pending.push(deferred);
+            return deferred.promise;
+        }
+    }
+    push(value: T) {
+        if (!this.open) return;
+        if (this.pending.length > 0) {
+            const p = this.pending.shift()!;
+            p.resolve({ value, done: false });
+        } else {
+            this.current = value;
+            this.available = true;
+        }
+    }
+    close() {
+        this.open = false;
+        for (const p of this.pending) {
+            p.resolve({ value: undefined, done: true });
+        }
+        this.pending = [];
+    }
+}
+
+export function combinations<T>(arr: T[], k: number = 2): T[][] {
+    if (k <= 0) return [];
+    if (k === 1) return arr.map((v) => [v]);
+    // k >= 2
+    return arr.slice(0, arr.length - k + 1).flatMap((v, i) => {
+        const rest = combinations(arr.slice(i + 1), k - 1);
+        return rest.map((comb) => [v, ...comb]);
+    });
+}
+
+(window as any).combinations = combinations;

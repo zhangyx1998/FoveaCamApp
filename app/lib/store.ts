@@ -144,7 +144,7 @@ function reviver(key: string, value: any) {
 
 export default class Store {
     private static readonly registry = new Map<string, WeakRef<Object>>();
-    private static track(obj: Object, path: string) {
+    private static track<T extends Object>(obj: Partial<T>, path: string) {
         const tracked = reactive(obj);
         let writePending = false;
         const queueWrite = () => {
@@ -157,7 +157,7 @@ export default class Store {
         };
         watch(() => tracked, queueWrite, { deep: true });
         this.registry.set(path, new WeakRef(tracked));
-        return tracked;
+        return tracked as Partial<T>;
     }
     private static resolveStorePath(tracked: Object) {
         for (const [path, ref] of this.registry) {
@@ -166,27 +166,27 @@ export default class Store {
         }
         throw new Error("Object is not a store instance");
     }
-
-    static async open<T>(...segments: string[]) {
+    static async open<T extends Object>(
+        segments: string | string[],
+        fallback: Partial<T> = {}
+    ): Promise<Partial<T>> {
+        if (typeof segments === "string") segments = [segments];
         const path = resolve(STORE, ...segments) + ".json";
         if (this.registry.has(path)) {
             const entry = this.registry.get(path)!.deref();
             if (entry !== undefined) return entry as Partial<T>;
             else this.registry.delete(path);
         }
-        if (!existsSync(path)) return this.track({}, path) as Partial<T>;
+        if (!existsSync(path)) return this.track(fallback, path);
         if (await isDirectory(path))
             throw new Error(`Store ${path} is a directory`);
         // If read failed, error should propagate out.
         const file = await readFile(path);
         try {
-            return this.track(
-                JSON.parse(file.toString(), reviver),
-                path
-            ) as Partial<T>;
+            return this.track<T>(JSON.parse(file.toString(), reviver), path);
         } catch (error) {
             process.stderr.write(`Error loading store data: ${error}\n`);
-            return this.track({}, path) as Partial<T>;
+            return this.track<T>(fallback, path);
         }
     }
     static clear(store: Object): Promise<void>;
@@ -212,7 +212,6 @@ export default class Store {
             process.stderr.write(`Error removing store data: ${error}\n`);
         }
     }
-
     static async list(...segments: string[]) {
         const path = resolve(STORE, ...segments);
         if (!existsSync(path)) return [];
@@ -228,7 +227,6 @@ export default class Store {
         );
         return files.filter((f): f is string => f !== null);
     }
-
     static async save(data: any, path?: string) {
         path ??= this.resolveStorePath(data);
         const dir = dirname(path);

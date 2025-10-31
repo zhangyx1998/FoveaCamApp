@@ -11,9 +11,10 @@ const currentModule = shallowRef<any>(null);
 const currentModuleName = ref<string | null>(null);
 const titleBarHeight = ref(0);
 // Sub task modules
+import DisparityScope from "../modules/disparity-scope/index.vue";
 import ManageCameras from "../modules/manage-cameras/index.vue";
 import CalibrateIntrinsic from "../modules/calibrate-intrinsic/index.vue";
-import CalibrateExtrinsic from "../modules/calibrate-extrinsic/calibrate.vue";
+import CalibrateExtrinsic from "../modules/calibrate-extrinsic/index.vue";
 import Playground from "../modules/playground/index.vue";
 import Loading from "./components/Loading.vue";
 
@@ -53,7 +54,9 @@ function backToHome() {
             <div class="modules">
                 <div class="group">
                     <h2>Applications</h2>
-                    <button>Disparity Scope</button>
+                    <button @click="launch(DisparityScope, 'Disparity Scope')">
+                        Disparity Scope
+                    </button>
                     <button>3D Tracking (Single)</button>
                     <button>3D Tracking (Multi)</button>
                     <button>3D Reconstruction</button>
