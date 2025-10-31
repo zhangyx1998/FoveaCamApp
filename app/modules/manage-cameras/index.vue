@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { markRaw, onUnmounted } from "vue";
 
-import useCameras from "@lib/camera-store";
+import useCameras from "@lib/camera";
 import CameraConfig from "./CameraConfig.vue";
 
 const cameras = await useCameras();

@@ -238,9 +238,10 @@ declare module "core" {
             stream: Stream<Frame>,
             scale?: number = 1.0
         ): Stream<ArUcoDetectResults>;
+        pattern(id: number): (0 | 1)[][] & Size;
     }
 
-    type ArUcoDetectResult = { id: number; } & Size & Corner[];
+    type ArUcoDetectResult = { id: number } & Size & Point[];
     type ArUcoDetectResults = ArUcoDetectResult[] & { frame: Frame };
 
     type PreDefinedDictionary =
@@ -271,6 +272,7 @@ declare module "core" {
     export type Point3d<T = number> = { x: T; y: T; z: T };
     export type Point2d<T = number> = { x: T; y: T };
     export type Point = Point2d;
+    export type Rect = Point2d & Size;
     export type Mat<A extends TypedArray = TypedArray> = A & {
         // Mat.length === shape.reduce((a, b) => a * b, channels)
         shape: number[];
@@ -278,6 +280,8 @@ declare module "core" {
     };
 
     export type CameraCalibration = {
+        date: Date;
+        // Sensor Size - width x height in pixels
         sensor_size: Size;
         // Camera Matrix - 3 row x 3 col
         camera_matrix: Mat<Float64Array>;
@@ -304,13 +308,51 @@ declare module "core" {
         get center(): Point2d;
         get fov(): Point2d; // X and Y field of view in radians
         apply(mat: Mat): Mat;
-        undistortPoints(...points: Point2d[]): Point2d[];
-        distortPoints(...points: Point2d[]): Point2d[];
-        angular(...points: Point2d[]): Point2d[];
-        position(...angles: Point2d[]): Point2d[];
+        undistort(points: Point2d[]): Point2d[];
+        distort(points: Point2d[]): Point2d[];
+        angular(points: Point2d[], undistort: boolean = false): Point2d[];
+        position(angles: Point2d[], distort: boolean = false): Point2d[];
+    }
+
+    type SolvePnPMethod =
+        | "ITERATIVE"
+        | "EPNP"
+        | "P3P"
+        | "DLS"
+        | "UPNP"
+        | "AP3P"
+        | "IPPE"
+        | "IPPE_SQUARE"
+        | "SQPNP";
+
+    class Projector extends CoreObject<Projector> {
+        /**
+         * Finds an object pose from 3D-2D point correspondences.
+         * @param img_points Array of corresponding 2D image points
+         * @param obj_points Array of 3D object points
+         * @param calibration Camera calibration data (optional - uses identity matrix if not provided)
+         * @param use_extrinsic_guess Use initial guess for rvec/tvec (default: false)
+         * @param method Method to use (default: ITERATIVE)
+         * @returns Object containing rvec (rotation vector) and tvec (translation vector)
+         */
+        static async solve(
+            img_points: Point2d[],
+            obj_points: Point3d[],
+            calibration?: CameraCalibration | null,
+            use_extrinsic_guess?: boolean,
+            method?: SolvePnPMethod
+        ): Promise<Projector>;
+        get rvec(): Mat<Float64Array>;
+        get tvec(): Mat<Float64Array>;
+        get mtx(): Mat<Float64Array>;
+        get dist(): Mat<Float64Array>;
+        obj2img(obj_points: Point3d[]): Point2d[];
+        img2obj(img_points: Point2d[], z: number = 0.0): Point3d[];
     }
 
     export class Vision {
+        static slice<T extends TypedArray>(mat: Mat<T>, rect: Rect): Mat<T>;
+
         static findChessboardCorners(
             mat: Mat,
             pattern_size: Size | number
@@ -332,5 +374,6 @@ declare module "core" {
         ): Promise<CameraCalibration>;
 
         static Undistort: typeof Undistort;
+        static Projector: typeof Projector;
     }
 }

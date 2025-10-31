@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { Mat, Frame, Stream, Size, Point } from "core";
+import type { Mat, Frame, Stream, Size, Point, Rect } from "core";
 import { computed, onUnmounted, ref, watch } from "vue";
 
 import { FreqMeter, PerfTimer } from "@lib/util/perf";
@@ -18,7 +18,7 @@ const emit = defineEmits<{
 }>();
 
 const props = defineProps({
-    name: {
+    title: {
         type: String,
         required: false,
         default: null,
@@ -50,6 +50,11 @@ const props = defineProps({
     },
     height: {
         type: String,
+        required: false,
+        default: null,
+    },
+    slice: {
+        type: Object as () => Rect | null,
         required: false,
         default: null,
     },
@@ -95,11 +100,12 @@ const overlay = computed(() => ({
     <FrameView
         :mat="mat"
         :overlay="overlay"
-        :name="name"
+        :title="title"
         :footnote="footnote"
         :theme="theme"
         :width="width"
         :height="height"
+        :slice="slice"
         @mousedown="(e) => emit('mousedown', e)"
         @mouseup="(e) => emit('mouseup', e)"
         @mousemove="(e) => emit('mousemove', e)"

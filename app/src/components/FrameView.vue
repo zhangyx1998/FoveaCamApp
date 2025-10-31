@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { Mat, Point, Size } from "core";
+import { Vision, type Mat, type Point, type Rect, type Size } from "core";
 import {
     computed,
     onUnmounted,
@@ -14,7 +14,7 @@ import { ElementSize } from "@lib/util/dom";
 import Overlay from "./Overlay.vue";
 
 const props = defineProps({
-    name: {
+    title: {
         type: String,
         required: false,
         default: null,
@@ -46,6 +46,11 @@ const props = defineProps({
     },
     height: {
         type: String,
+        required: false,
+        default: null,
+    },
+    slice: {
+        type: Object as () => Rect | null,
         required: false,
         default: null,
     },
@@ -95,19 +100,57 @@ watch(canvas, (canvas) => {
 watch(
     () => props.mat,
     (mat) => {
-        if (mat) {
-            const [height, width] = mat.shape;
-            const clamped = new Uint8ClampedArray(mat.buffer);
-            image.value = new ImageData(
-                clamped as Uint8ClampedArray<ArrayBuffer>,
-                width,
-                height
-            );
-            const ctx = canvas.value?.getContext("2d");
-            if (ctx) ctx.putImageData(image.value, 0, 0);
-        } else {
-            image.value = null;
+        if (!mat) return (image.value = null);
+        if (props.slice) mat = Vision.slice(mat, props.slice);
+        const [height, width] = mat.shape;
+        switch (mat.channels) {
+            case 1: {
+                // Convert Gray to RGBA
+                const rgba = new Uint8Array(width * height * 4);
+                for (let i = 0; i < width * height; i++) {
+                    const byte = mat[i];
+                    rgba[i * 4] = byte;
+                    rgba[i * 4 + 1] = byte;
+                    rgba[i * 4 + 2] = byte;
+                    rgba[i * 4 + 3] = 255;
+                }
+                mat = Object.assign(rgba, {
+                    channels: 4,
+                    shape: [height, width],
+                });
+                break;
+            }
+            case 3: {
+                // Convert RGB to RGBA
+                const rgba = new Uint8Array(width * height * 4);
+                for (let i = 0; i < width * height; i++) {
+                    rgba[i * 4] = mat[i * 3];
+                    rgba[i * 4 + 1] = mat[i * 3 + 1];
+                    rgba[i * 4 + 2] = mat[i * 3 + 2];
+                    rgba[i * 4 + 3] = 255;
+                }
+                mat = Object.assign(rgba, {
+                    channels: 4,
+                    shape: [height, width],
+                });
+                break;
+            }
+            case 4:
+                break;
+            default:
+                console.error(
+                    `Unsupported number of channels: ${mat.channels}`
+                );
+                return;
         }
+        const clamped = new Uint8ClampedArray(mat.buffer);
+        image.value = new ImageData(
+            clamped as Uint8ClampedArray<ArrayBuffer>,
+            width,
+            height
+        );
+        const ctx = canvas.value?.getContext("2d");
+        if (ctx) ctx.putImageData(image.value, 0, 0);
     },
     { immediate: true }
 );
@@ -124,7 +167,7 @@ const style = computed<StyleValue>(() => {
         fontSize: size.width / 20 + "px",
         "--theme": props.theme,
     };
-    if (props.name !== null) ret.marginTop = "1.6em";
+    if (props.title !== null) ret.marginTop = "1.6em";
     if (props.footnote !== null) ret.marginBottom = "1.6em";
     if (props.width !== null || props.height !== null) {
         if (props.width !== null && props.height !== null) {
@@ -162,7 +205,32 @@ function translatePos<T extends MouseEvent | PointerEvent>(
     const { width: iw, height: ih } = image.value!;
     const x = (cx / cw) * iw;
     const y = (cy / ch) * ih;
-    return { ...e, x, y, width, height } as Point & Size & T;
+    const {
+        button,
+        buttons,
+        clientX,
+        clientY,
+        ctrlKey,
+        shiftKey,
+        altKey,
+        metaKey,
+        target,
+    } = e;
+    return {
+        button,
+        buttons,
+        clientX,
+        clientY,
+        ctrlKey,
+        shiftKey,
+        altKey,
+        metaKey,
+        target,
+        x,
+        y,
+        width,
+        height,
+    } as Point & Size & T;
 }
 </script>
 
@@ -174,8 +242,8 @@ function translatePos<T extends MouseEvent | PointerEvent>(
         ref="container"
         @mousedown.right.prevent="overlayToggle = !overlayToggle"
     >
-        <div class="title" v-if="name !== null">
-            {{ name }}
+        <div class="title" v-if="title !== null">
+            {{ title }}
         </div>
         <div class="footnote" v-if="footnote !== null">
             {{ footnote }}

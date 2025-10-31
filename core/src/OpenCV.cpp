@@ -17,60 +17,82 @@
 #include <opencv2/core/mat.hpp>
 #include <opencv2/core/types.hpp>
 #include <pointer.h>
+#include <stdexcept>
 #include <string>
 
 #include "Vision.h"
 #include "napi-helper.h"
 
-#define CVT(TPL, EL, KX, KY, ...)                                              \
+#define CVT(TPL, EL, N, ...)                                                   \
   template <> TPL<EL> convert(const Napi::Value &value) {                      \
-    if (value.IsNumber()) {                                                    \
-      const auto s = convert<EL>(value);                                       \
-      return {s, s __VA_OPT__(, s)};                                           \
-    }                                                                          \
     if (!value.IsObject())                                                     \
       throw JS::TypeError(value.Env(), "Argument must be an object");          \
     auto obj = value.As<Napi::Object>();                                       \
-    return TPL<EL>(convert<EL>(obj.Get(#KX)),                                  \
-                   convert<EL>(obj.Get(#KY))                                   \
-                       __VA_OPT__(, convert<EL>(obj.Get(#__VA_ARGS__))));      \
+    return CVT_CONSTRUCT_NATIVE_##N(TPL, EL, __VA_ARGS__);                     \
   }                                                                            \
   template <>                                                                  \
   Napi::Value convert(Napi::Env env, const Napi::Value &container,             \
-                      const TPL<EL> &size) noexcept {                          \
+                      const TPL<EL> &src) noexcept {                           \
     if (!container.IsObject())                                                 \
       JS_THROW(TypeError, "Container of " #TPL "<" #EL "> must be an object",  \
                container);                                                     \
     auto obj = container.As<Napi::Object>();                                   \
-    obj.Set(#KX, convert(env, size.KX));                                       \
-    obj.Set(#KY, convert(env, size.KY));                                       \
-    __VA_OPT__(obj.Set(#__VA_ARGS__, convert(env, size.__VA_ARGS__));)         \
-    return container;                                                          \
+    CVT_CONSTRUCT_JS_OBJ_##N(__VA_ARGS__) return container;                    \
   }                                                                            \
-                                                                               \
   template <>                                                                  \
-  Napi::Value convert(Napi::Env env, const TPL<EL> &size) noexcept {           \
-    return convert(env, Napi::Object::New(env).As<Napi::Value>(), size);       \
+  Napi::Value convert(Napi::Env env, const TPL<EL> &src) noexcept {            \
+    return convert(env, Napi::Object::New(env).As<Napi::Value>(), src);        \
   }                                                                            \
   /* 1D Vector */                                                              \
   CONVERT_ARRAY_OF(TPL<EL>);                                                   \
   /* 2D Vector */                                                              \
   CONVERT_ARRAY_OF(std::vector<TPL<EL>>);
 
-CVT(cv::Size_, int, width, height)
-CVT(cv::Size_, int64, width, height)
-CVT(cv::Size_, float, width, height)
-CVT(cv::Size_, double, width, height)
+#define CVT_CONSTRUCT_NATIVE_2(TPL, EL, KX, KY)                                \
+  TPL<EL>(convert<EL>(obj.Get(#KX)), convert<EL>(obj.Get(#KY)))
 
-CVT(cv::Point_, int, x, y)
-CVT(cv::Point_, int64, x, y)
-CVT(cv::Point_, float, x, y)
-CVT(cv::Point_, double, x, y)
+#define CVT_CONSTRUCT_JS_OBJ_2(KX, KY)                                         \
+  obj.Set(#KX, convert(env, src.KX));                                          \
+  obj.Set(#KY, convert(env, src.KY));
 
-CVT(cv::Point3_, int, x, y, z)
-CVT(cv::Point3_, int64, x, y, z)
-CVT(cv::Point3_, float, x, y, z)
-CVT(cv::Point3_, double, x, y, z)
+#define CVT_CONSTRUCT_NATIVE_3(TPL, EL, KX, KY, KZ)                            \
+  TPL<EL>(convert<EL>(obj.Get(#KX)), convert<EL>(obj.Get(#KY)),                \
+          convert<EL>(obj.Get(#KZ)))
+
+#define CVT_CONSTRUCT_JS_OBJ_3(KX, KY, KZ)                                     \
+  obj.Set(#KX, convert(env, src.KX));                                          \
+  obj.Set(#KY, convert(env, src.KY));                                          \
+  obj.Set(#KZ, convert(env, src.KZ));
+
+#define CVT_CONSTRUCT_NATIVE_4(TPL, EL, KX, KY, KW, KH)                        \
+  TPL<EL>(convert<EL>(obj.Get(#KX)), convert<EL>(obj.Get(#KY)),                \
+          convert<EL>(obj.Get(#KW)), convert<EL>(obj.Get(#KH)))
+
+#define CVT_CONSTRUCT_JS_OBJ_4(KX, KY, KW, KH)                                 \
+  obj.Set(#KX, convert(env, src.KX));                                          \
+  obj.Set(#KY, convert(env, src.KY));                                          \
+  obj.Set(#KW, convert(env, src.KW));                                          \
+  obj.Set(#KH, convert(env, src.KH));
+
+CVT(cv::Size_, int, 2, width, height)
+CVT(cv::Size_, int64, 2, width, height)
+CVT(cv::Size_, float, 2, width, height)
+CVT(cv::Size_, double, 2, width, height)
+
+CVT(cv::Point_, int, 2, x, y)
+CVT(cv::Point_, int64, 2, x, y)
+CVT(cv::Point_, float, 2, x, y)
+CVT(cv::Point_, double, 2, x, y)
+
+CVT(cv::Point3_, int, 3, x, y, z)
+CVT(cv::Point3_, int64, 3, x, y, z)
+CVT(cv::Point3_, float, 3, x, y, z)
+CVT(cv::Point3_, double, 3, x, y, z)
+
+CVT(cv::Rect_, int, 4, x, y, width, height)
+CVT(cv::Rect_, int64, 4, x, y, width, height)
+CVT(cv::Rect_, float, 4, x, y, width, height)
+CVT(cv::Rect_, double, 4, x, y, width, height)
 
 #define MATCH_MAT_TYPE_CASE(E, T, RET, SIZE, AB, OFFSET)                       \
   case E:                                                                      \
@@ -113,23 +135,26 @@ Napi::Value convert(Napi::Env env, const Napi::Value &container,
 }
 
 template <> Napi::Value convert(Napi::Env env, const cv::Mat &mat) noexcept {
-  const auto m = mat.isContinuous() ? mat : mat.clone();
-  const auto size = m.size().area() * m.elemSize();
+  try {
+    const auto m = (mat.empty() || mat.isContinuous()) ? mat : mat.clone();
+    const auto size = m.size().area() * m.elemSize();
 #ifdef V8_MEMORY_CAGE
-  auto array_buffer = Napi::ArrayBuffer::New(env, size);
-  std::memcpy(array_buffer.Data(), m.data, size);
+    auto array_buffer = Napi::ArrayBuffer::New(env, size);
+    std::memcpy(array_buffer.Data(), m.data, size);
 #else
-  // Increment reference count on ImagePtr holding the buffer pointer
-  auto ref = new cv::Mat(m);
-  // Return a borrowed ArrayBuffer pointing to external Mat data
-  auto array_buffer =
-      Napi::ArrayBuffer::New(env, ref->data, size, deleter<cv::Mat>, ref);
+    // Increment reference count on ImagePtr holding the buffer pointer
+    auto ref = new cv::Mat(m);
+    // Return a borrowed ArrayBuffer pointing to external Mat data
+    auto array_buffer =
+        Napi::ArrayBuffer::New(env, ref->data, size, deleter<cv::Mat>, ref);
 #endif
-  Napi::Object ret;
-  MATCH_MAT_TYPE(m, ret, size, array_buffer, 0);
-  ret.Set("shape", convert(env, m.size));
-  ret.Set("channels", convert(env, m.channels()));
-  return ret;
+    Napi::Object ret;
+    MATCH_MAT_TYPE(m, ret, size, array_buffer, 0);
+    ret.Set("shape", convert(env, m.size));
+    ret.Set("channels", convert(env, m.channels()));
+    return ret;
+  }
+  JS_EXCEPT(env.Null())
 }
 
 template <>
@@ -296,4 +321,51 @@ template <> cv::TermCriteria convert(const Napi::Value &value) {
     throw JS::TypeError(value.Env(), "TermCriteria must have at least one of "
                                      "max_count or epsilon defined");
   return cv::TermCriteria(type, max_count, epsilon);
+}
+
+// Enums
+
+template <> std::string convert(const cv::SolvePnPMethod &value) {
+  CASE_ENUM_TO_STRING(value, ITERATIVE, cv::SOLVEPNP_);
+  CASE_ENUM_TO_STRING(value, P3P, cv::SOLVEPNP_);
+  CASE_ENUM_TO_STRING(value, AP3P, cv::SOLVEPNP_);
+  CASE_ENUM_TO_STRING(value, EPNP, cv::SOLVEPNP_);
+  CASE_ENUM_TO_STRING(value, DLS, cv::SOLVEPNP_);
+  CASE_ENUM_TO_STRING(value, UPNP, cv::SOLVEPNP_);
+  CASE_ENUM_TO_STRING(value, IPPE, cv::SOLVEPNP_);
+  CASE_ENUM_TO_STRING(value, IPPE_SQUARE, cv::SOLVEPNP_);
+  throw std::range_error("Unsupported SolvePnPMethod enum value: " +
+                         std::to_string(value));
+}
+
+template <> cv::SolvePnPMethod convert(const std::string &value) {
+  CASE_STRING_TO_ENUM(value, ITERATIVE, cv::SOLVEPNP_);
+  CASE_STRING_TO_ENUM(value, P3P, cv::SOLVEPNP_);
+  CASE_STRING_TO_ENUM(value, AP3P, cv::SOLVEPNP_);
+  CASE_STRING_TO_ENUM(value, EPNP, cv::SOLVEPNP_);
+  CASE_STRING_TO_ENUM(value, DLS, cv::SOLVEPNP_);
+  CASE_STRING_TO_ENUM(value, UPNP, cv::SOLVEPNP_);
+  CASE_STRING_TO_ENUM(value, IPPE, cv::SOLVEPNP_);
+  CASE_STRING_TO_ENUM(value, IPPE_SQUARE, cv::SOLVEPNP_);
+  throw std::range_error("Unsupported SolvePnPMethod enum string: " + value);
+}
+
+template <> cv::SolvePnPMethod convert(const Napi::Value &value) {
+  if (!value.IsString())
+    throw JS::TypeError(value.Env(), "SolvePnPMethod must be a string");
+  return convert<cv::SolvePnPMethod>(value.As<Napi::String>().Utf8Value());
+}
+
+template <>
+Napi::Value convert(Napi::Env env, const cv::SolvePnPMethod &value) noexcept {
+  try {
+    return convert(env, convert<std::string>(value));
+  }
+  JS_EXCEPT(env.Undefined())
+}
+
+template <>
+Napi::Value convert(Napi::Env env, const Napi::Value &container,
+                    const cv::SolvePnPMethod &value) noexcept {
+  return convert(env, value);
 }

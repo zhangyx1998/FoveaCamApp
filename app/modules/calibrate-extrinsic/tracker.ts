@@ -4,12 +4,17 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 import { computed, markRaw, ref, shallowRef, watch } from "vue";
+import { Vision } from "core";
 import type {
     ArUcoDetectResult,
     ArUcoDetectResults,
     Camera,
-    Frame,
+    Projector,
     Mat,
+    Point2d,
+    Point3d,
+    Size,
+    Frame,
 } from "core";
 import { ArUcoDetector } from "core";
 import { clamp, delay } from "@lib/util";
@@ -17,12 +22,37 @@ import type { Controller, Pos } from "@src/components/Controller.vue";
 import { avg } from "@lib/util/math";
 import abortable from "@lib/abortable";
 import { FreqMeter } from "@lib/util/perf";
+import {
+    bilinearInterpolate,
+    CORNER_OBJ_POINTS,
+    getInternalObjectPoints,
+} from "@lib/marker";
 
-export type TrackerRecord = {
-    gray: Mat<Uint8Array>;
-    rgba: Mat<Uint8Array>;
-    detection: ArUcoDetectResult;
-};
+export async function record(
+    detector: ArUcoDetector,
+    result: ArUcoDetectResult,
+    frame?: Mat<Uint8Array>,
+    internal: boolean = true
+) {
+    const img_points = [...result];
+    const obj_points = [...CORNER_OBJ_POINTS];
+    if (frame && internal) {
+        const internal_obj_points = Array.from(
+            getInternalObjectPoints(detector.pattern(result.id))
+        );
+        obj_points.push(...internal_obj_points);
+        const internal_img_points = bilinearInterpolate(
+            result,
+            internal_obj_points
+        );
+        img_points.push(
+            ...(await Vision.cornerSubPix(frame, internal_img_points))
+        );
+    }
+    return { img_points, obj_points };
+}
+
+export type TrackerRecord = Awaited<ReturnType<typeof record>>;
 
 export default class Tracker {
     public readonly fps = new FreqMeter();
@@ -39,7 +69,7 @@ export default class Tracker {
     get target() {
         return this.__target__.value;
     }
-    private readonly __center__ = computed(() => {
+    private readonly __center_relative__ = computed(() => {
         const { value } = this.__target__;
         if (!value) return value;
         const { width, height } = value;
@@ -48,8 +78,8 @@ export default class Tracker {
             y: avg(...value.map((p) => p.y)) / height - 0.5,
         };
     });
-    get center() {
-        return this.__center__.value;
+    get center_relative() {
+        return this.__center_relative__.value;
     }
     private readonly __center_absolute__ = computed(() => {
         const { value } = this.__target__;
@@ -98,7 +128,6 @@ export default class Tracker {
         scale: number = 1.0
     ) {
         this.target_id = target_id;
-        watch(this.__frame__, (_, prev) => prev?.release());
         this.task = abortable(async (aborted) => {
             try {
                 if (!camera) return;
@@ -115,28 +144,8 @@ export default class Tracker {
                 }
             } catch (e) {
                 console.error("Detection error:", e);
-            } finally {
-                this.__frame__.value = null;
             }
         });
-    }
-    get isRecordable() {
-        return this.target !== null && this.frame !== null;
-    }
-    async record<T extends Record<string, unknown> = {}>(
-        mixin?: T
-    ): Promise<TrackerRecord & T> {
-        const { target, frame: borrowed } = this;
-        if (!target || !borrowed) throw new Error("No target to record");
-        const frame = borrowed.ref();
-        const record: TrackerRecord & T = {
-            gray: await frame.view("Mono8"),
-            rgba: await frame.view("BGRA8"),
-            detection: target,
-            ...(mixin ?? ({} as T)),
-        };
-        frame.release();
-        return markRaw(record) as TrackerRecord & T;
     }
 }
 
@@ -155,7 +164,7 @@ export function actuate(
         const pending: { left?: Pos; right?: Pos } = {};
         const handles = [
             watch(
-                () => left?.center,
+                () => left?.center_relative,
                 (c) => {
                     const dt = 1 / Math.max(10, left?.fps?.value ?? 0);
                     const { x, y } = controller.pos.left;
@@ -174,7 +183,7 @@ export function actuate(
                 }
             ),
             watch(
-                () => right?.center,
+                () => right?.center_relative,
                 (c) => {
                     const dt = 1 / Math.max(10, right?.fps?.value ?? 0);
                     const { x, y } = controller.pos.right;

@@ -73,7 +73,7 @@ export class Controller {
         public readonly dv: number = 170.0,
         bias: number = 90.0,
         lpf: number = 120,
-        log_level: LogLevel = "INFO"
+        log_level: LogLevel = "VERB"
     ) {
         this.port = new SerialPort({ ...info, baudRate: 115200 });
         this.release = async () => {
