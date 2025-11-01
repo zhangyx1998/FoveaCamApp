@@ -5,8 +5,8 @@
 // -------------------------------------------------------
 #pragma once
 
-#include <pointer.h>
 #include "utils/stacktrace.h"
+#include <pointer.h>
 
 class TracedError : public std::exception, public Shared<TracedError> {
 public:
@@ -19,3 +19,16 @@ public:
         full_message(message + "\n" + stack) {}
   TracedError(const std::exception &e) : TracedError(e.what()) {}
 };
+
+class AssertionError : public TracedError {
+public:
+  // Inherit the constructors from TracedError
+  using TracedError::TracedError;
+};
+
+#define ASSERT(COND, MESSAGE)                                                  \
+  {                                                                            \
+    if (!(COND)) {                                                             \
+      throw AssertionError(std::string(MESSAGE));                              \
+    }                                                                          \
+  }

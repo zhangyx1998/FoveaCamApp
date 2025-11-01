@@ -135,7 +135,7 @@ private:
       const auto timeout = info.Length() > 0 && info[0].IsNumber()
                                ? info[0].As<Number>().Int32Value()
                                : 0;
-      auto task = [core = core(), timeout]() { return core->grab(timeout); };
+      auto task = [core = core(), timeout] { return core->grab(timeout); };
       return OneShotWorker<Arv::Frame::Ptr>::run(env, task);
     }
     JS_EXCEPT(env.Undefined())

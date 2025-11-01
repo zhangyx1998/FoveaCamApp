@@ -172,20 +172,20 @@ static void async_cb(uv_async_t *handle) {
   }
 }
 
-void cleanup(napi_env env) {
-  auto ref = registry.ref();
-  if (ref->has(env))
-    ref->erase(env);
-}
-
 void init(Napi::Env env) {
   auto ref = registry.ref();
   if (ref->has(env))
     throw JS::Error(env, "Dispatcher already initialized for this env");
   auto dispatcher = Dispatcher::create(env);
   ref->set(env, dispatcher);
-  env.AddCleanupHook(cleanup, static_cast<napi_env>(env));
-  Cleanup::add(env, static_cast<napi_env>(env), &cleanup, "Dispatcher");
+  Cleanup::add(
+      env,
+      [env] {
+        auto ref = registry.ref();
+        if (ref->has(env))
+          ref->erase(env);
+      },
+      "Dispatcher");
 }
 
 void dispatch(Napi::Env env, Task &&task) {

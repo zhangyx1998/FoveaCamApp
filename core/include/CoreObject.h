@@ -115,15 +115,15 @@ private:
       VERBOSE("Initializing local context for %s", Obj::name.c_str());
       auto fn = Obj::Init(env);
       ref->set(env, Local::create(fn));
-      Cleanup::add(env, static_cast<napi_env>(env),
-                   &CoreObject::CoreObjectDeinit, "Context[" + Obj::name + "]");
+      Cleanup::add(
+          env,
+          [env] {
+            VERBOSE("De-initializing local context for %s", Obj::name.c_str());
+            locals.ref()->erase(env);
+          },
+          "Context[" + Obj::name + "]");
     }
     return ref->get(env)->constructor.Value();
-  }
-
-  static void CoreObjectDeinit(napi_env env) {
-    VERBOSE("De-initializing local context for %s", Obj::name.c_str());
-    locals.ref()->erase(env);
   }
 
 public:
@@ -248,7 +248,7 @@ public:                                                                        \
   }                                                                            \
   FN(release) {                                                                \
     this->releaseCoreObject();                                                 \
-    Cleanup::remove(info.Env(), this);                                         \
+    Cleanup::remove(info.Env(), this->cleanup_hook);                           \
     return this->undefined();                                                  \
   }
 
@@ -273,7 +273,8 @@ private:
   mutable Payload::Ptr payload;
 
 protected:
-  Napi::Env::CleanupHook<std::function<void(napi_env)>> cleanup;
+  Cleanup::UID cleanup_hook =
+      Cleanup::add(env, [this] { this->releaseCoreObject(); }, Obj::name);
   void releaseCoreObject() {
     if (!payload)
       return;
@@ -310,7 +311,6 @@ public:
   CoreObject(const Napi::CallbackInfo &info)
       : Napi::ObjectWrap<Obj>(info), env(info.Env()) {
     VERBOSE("Constructing %s", Obj::name.c_str());
-    Cleanup::add(env, this, &Self::CleanupThunk, Obj::name);
     if (info[0].IsExternal()) {
       try {
         payload = typename Payload::Ptr(&::extract<Payload>(info[0]));
@@ -334,7 +334,7 @@ public:
     VERBOSE("Constructed %s", str(static_cast<Obj *>(this)).c_str());
   }
   ~CoreObject() {
-    Cleanup::remove(env, this);
+    Cleanup::remove(env, cleanup_hook);
     releaseCoreObject();
     VERBOSE("Destructed: %s", str(static_cast<Obj *>(this)).c_str());
   }

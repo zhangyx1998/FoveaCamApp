@@ -9,6 +9,10 @@
 #include <cstring>
 
 #include <napi.h>
+#include <stdexcept>
+#include <sys/fcntl.h>
+#include <termios.h>
+#include <unistd.h>
 
 #include <Aravis/Camera.h>
 #include <Aravis/Frame.h>
@@ -19,13 +23,11 @@
 #include <Threading/Guard.h>
 #include <convert.h>
 #include <pointer.h>
-#include <stdexcept>
 
+#include "Cleanup.h"
+#include "Dispatcher.h"
 #include "Protocol/Version.h"
-#include "js_native_api.h"
-#include "js_native_api_types.h"
 #include "napi-helper.h"
-#include "utils/map-set.h"
 
 using namespace Napi;
 
@@ -325,10 +327,10 @@ static Napi::Object Init(Napi::Env env) {
 
 }; // namespace Command
 
-class PendingRequest : public Unique<PendingRequest> {
+class PendingRequest : public Shared<PendingRequest> {
 private:
   bool resolved = false;
-  Napi::Promise::Deferred deferred;
+  Dispatcher::Future future;
 
 public:
   const Napi::Env env;
@@ -341,7 +343,7 @@ public:
   } expect;
   PendingRequest(Napi::Env env, Method method, Property property)
       : env(env), expect{method, property},
-        deferred(Napi::Promise::Deferred::New(env)) {}
+        future(Napi::Promise::Deferred::New(env)) {}
   ~PendingRequest() {
     if (!resolved)
       try {
@@ -352,14 +354,16 @@ public:
   }
   inline void Resolve(Napi::Value value) {
     resolved = true;
-    deferred.Resolve(value);
+    future.Resolve(value);
   }
   inline void Reject(Napi::Value reason) {
     resolved = true;
-    deferred.Reject(reason);
+    future.Reject(reason);
   }
-  inline Napi::Promise Promise() { return deferred.Promise(); }
+  inline Napi::Promise Promise() { return future.Promise(); }
 };
+
+extern int SerialOpen(const Napi::CallbackInfo &info) noexcept;
 
 class ProtocolObject : public ObjectWrap<ProtocolObject> {
 public:
@@ -370,34 +374,52 @@ public:
         Napi::Persistent(Napi::Symbol::New(env, "PropertyName"));
     auto fn = DefineClass(env, "Protocol",
                           {
-                              INSTANCE_METHOD(ProtocolObject, __rx__),   //
-                              INSTANCE_ACCESSOR(ProtocolObject, __tx__), //
-                              INSTANCE_METHOD(ProtocolObject, get),      //
-                              INSTANCE_METHOD(ProtocolObject, set),      //
+                              INSTANCE_GETTER(ProtocolObject, connected), //
+                              INSTANCE_METHOD(ProtocolObject, get),       //
+                              INSTANCE_METHOD(ProtocolObject, set),       //
+                              INSTANCE_METHOD(ProtocolObject, release),   //
                           });
     return fn;
   }
 
   ProtocolObject(const CallbackInfo &info)
-      : ObjectWrap<ProtocolObject>(info), env(info.Env()), tx(), rx() {
-    VERBOSE("ProtocolObject::construct @ %p", this);
-  }
+      : ObjectWrap<ProtocolObject>(info), env(info.Env()), fd(SerialOpen(info)),
+        tx(), rx(), rx_thread(&ProtocolObject::rxLoop, this) {}
 
   ~ProtocolObject() {
-    VERBOSE("ProtocolObject::destruct @ %p", this);
-    if (!__tx__.IsEmpty()) {
-      __tx__.Reset();
+    Cleanup::remove(env, cleanup_hook);
+    destroy();
+  }
+
+  void destroy() noexcept {
+    if (flag_term)
+      return;
+    flag_term = true;
+    if (rx_thread.joinable())
+      rx_thread.join();
+    if (fd >= 0) {
+      // Write disable command
+      Protocol::RawPacket packet(Method::SET, Property::SYS_ENABLE, 0);
+      uint8_t enable = 0;
+      packet.setData(&enable, sizeof(enable));
+      tx.encode(packet.finalize());
+      ::write(fd, tx.data(), tx.size());
+      // Close fd
+      ::close(fd);
     }
-    // PR Destructor automatically rejects pending promises
-    pending.clear();
   }
 
 private:
   const Napi::Env env;
+  Cleanup::UID cleanup_hook =
+      Cleanup::add(env, [this] { this->destroy(); }, "ProtocolObject");
+  bool flag_term = false;
+  const int fd;
   COBS::TX tx;
   COBS::RX rx;
-  Napi::FunctionReference __tx__;
-  Map<uint16_t, PendingRequest::Ptr> pending;
+  Threading::Guard<Map<uint16_t, PendingRequest::Ptr>> pending;
+  std::thread rx_thread;
+  // Napi::FunctionReference __tx__;
   uint16_t __sequence__ = 0;
   inline uint16_t sequence() {
     if (__sequence__ == 0)
@@ -405,100 +427,100 @@ private:
     return __sequence__++;
   }
 
-  GET(__tx__) {
-    if (__tx__.IsEmpty())
-      return env.Null();
-    return __tx__.Value();
-  }
+  GET(connected) { return Napi::Boolean::New(env, !flag_term); }
 
-  SET(__tx__) {
-    if (val.IsNull() || val.IsUndefined()) {
-      __tx__.Reset();
-      return;
-    }
-    JS_ASSERT(val.IsFunction(), TypeError,
-              "__tx__ must be a function or null", );
-    __tx__ = Napi::Persistent(val.As<Napi::Function>());
-  }
-
-  FN(__rx__) {
-    if (info.Length() != 1)
-      JS_THROW(TypeError, "Invalid argument, expected array buffer like",
-               env.Undefined());
-    auto &value = info[0];
-    if (!isBufferLike(value))
-      JS_THROW(TypeError, "Invalid argument, expected array buffer like",
-               env.Undefined());
-    const auto buffer = bufferView(value);
-    VERBOSE("Protocol::recv() prev %u bytes + incoming %zu bytes", rx.len(),
-            buffer.size);
-    for (auto &byte : buffer) {
-      if (!rx.recv(byte))
-        continue;
-      Protocol::RawPacket packet(rx.get());
+  inline void handleRawPacket(Protocol::RawPacket &&packet) noexcept {
+    try {
       auto header = packet.validate();
-      try {
-        if (header == Protocol::INVALID)
-          throw std::invalid_argument("Corrupted packet");
-        const auto method = Protocol::method(header);
-        const auto property = Protocol::property(header);
-        const auto &sequence = packet.header().sequence;
-        auto payload = ArrayBuffer::New(env, packet.dataSize());
-        std::memcpy(payload.Data(), packet.data(), packet.dataSize());
-        VERBOSE("Protocol::recv %s:%s (seq=%u) payload %zu bytes",
-                convert<std::string>(method).c_str(),
-                convert<std::string>(property).c_str(), sequence,
-                packet.dataSize());
-        if (pending.has(sequence)) {
-          if (pending[sequence]->expect.match(method, property)) {
-            pending[sequence]->Resolve(payload);
+      if (header == Protocol::INVALID)
+        throw std::invalid_argument("Corrupted packet");
+      const auto method = Protocol::method(header);
+      const auto property = Protocol::property(header);
+      const auto &sequence = packet.header().sequence;
+      VERBOSE("recv %s:%s (seq=%u) payload %zu bytes",
+              convert<std::string>(method).c_str(),
+              convert<std::string>(property).c_str(), sequence,
+              packet.dataSize());
+      auto p = pending.ref();
+      if (p->has(sequence)) {
+        Dispatcher::dispatch(env, [pr = std::move(p->at(sequence)), method,
+                                   property,
+                                   packet = std::move(packet)](napi_env env) {
+          auto payload = ArrayBuffer::New(env, packet.dataSize());
+          std::memcpy(payload.Data(), packet.data(), packet.dataSize());
+          if (pr->expect.match(method, property)) {
+            pr->Resolve(payload);
           } else if (method == Method::REJ) {
             // REJ packets always have a string payload
-            auto reason = std::string((char *)packet.data(), packet.dataSize());
-            pending[sequence]->Reject(Napi::Error::New(env, reason).Value());
+            auto reason =
+                std::string((char *)payload.Data(), payload.ByteLength());
+            pr->Reject(Napi::Error::New(pr->env, reason).Value());
           } else {
-            pending[sequence]->Reject(
-                Napi::Error::New(env, "Unexpected response " +
-                                          convert<std::string>(method) + ":" +
-                                          convert<std::string>(property))
-                    .Value());
+            pr->Reject(Napi::Error::New(pr->env,
+                                        "Unexpected response " +
+                                            convert<std::string>(method) + ":" +
+                                            convert<std::string>(property))
+                           .Value());
           }
-          pending.erase(sequence);
-        } else if (method == Method::SYN && property == Property::LOG) {
-          // Unsolicited log packet
-          std::string log_msg((char *)packet.data(), packet.dataSize());
-          std::cout << "[Protocol] Device log: " << log_msg << std::endl;
-        } else {
-          std::cerr << "[Protocol] [WARN] Unmatched packet "
-                    << convert<std::string>(method) << ":"
-                    << convert<std::string>(property) << " (seq=" << sequence
-                    << ")" << hexFormat(packet.data(), packet.dataSize())
-                    << std::endl;
-        }
-      } catch (std::invalid_argument &e) {
-        std::cerr << "[Protocol] [WARN] Bad rx data: " << e.what() << std::endl;
+        });
+        p->erase(sequence);
+      } else if (method == Method::SYN && property == Property::LOG) {
+        // Unsolicited log packet
+        std::string log_msg((char *)packet.data(), packet.dataSize());
+        std::cout << "[Protocol] Device log: " << log_msg << std::endl;
+      } else {
+        std::cerr << "[Protocol] [WARN] Unmatched packet "
+                  << convert<std::string>(method) << ":"
+                  << convert<std::string>(property) << " (seq=" << sequence
+                  << ")" << hexFormat(packet.data(), packet.dataSize())
+                  << std::endl;
+      }
+    } catch (std::invalid_argument &e) {
+      std::cerr << "[Protocol] [WARN] Bad rx data: " << e.what() << std::endl;
+    }
+  }
+
+  void rxLoop() {
+    VERBOSE("Protocol::rxLoop started for fd %d", fd);
+    char byte;
+    ssize_t count;
+    while (!flag_term) {
+      auto count = ::read(fd, &byte, 1);
+      if (count < 0) {
+        std::cerr << "[Protocol] [ERROR] Failed to read from serial port: "
+                  << std::strerror(errno) << std::endl;
+        continue;
+      } else if (count == 0) {
+        std::this_thread::yield();
         continue;
       }
+      VERBOSE("Protocol::recv() %u bytes + incoming byte: %X", rx.len(), byte);
+      if (rx.recv(byte))
+        handleRawPacket(Protocol::RawPacket(rx.get()));
     }
-    return env.Undefined();
   }
 
   Napi::Value send(uint16_t sequence, Property property,
                    const Napi::Function &factory, Protocol::RawPacket &packet) {
     try {
       if (tx.encode(packet.finalize())) {
-        auto buffer = Napi::ArrayBuffer::New(env, tx.size());
-        std::memcpy(buffer.Data(), tx.data(), tx.size());
-        // Hand over
-        if (__tx__.IsEmpty())
-          JS_THROW(Error, "No __tx__ function defined", env.Null());
-        auto fn = __tx__.Value();
-        fn.Call({buffer});
+        VERBOSE("send %u bytes: %s", tx.size(),
+                hexFormat(tx.data(), tx.size()).c_str());
+        // Write buffer to serial fd
+        auto written = ::write(fd, tx.data(), tx.size());
+        VERBOSE("wrote %zd bytes to fd %d", written, fd);
+        if (written < 0)
+          JS_THROW(Error,
+                   "Failed to write to serial port: " +
+                       std::string(std::strerror(errno)),
+                   env.Undefined());
+        if (written != static_cast<ssize_t>(tx.size()))
+          JS_THROW(Error, "Incomplete write to serial port", env.Undefined());
         // Create promise
         auto pr = PendingRequest::create(env, Method::ACK, property);
         // Create return promise.then(callback)
         auto promise = pr->Promise().Then(factory);
-        pending[sequence] = std::move(pr);
+        pending.ref()->set(sequence, std::move(pr));
         return promise;
       } else {
         throw JS::Error(env, "Failed to encode packet");
@@ -515,6 +537,7 @@ private:
     Protocol::RawPacket packet(Method::GET, property, sequence);
     return send(sequence, property, factory, packet);
   }
+
   FN(set) {
     auto env = info.Env();
     if (info.Length() < 1)
@@ -533,6 +556,11 @@ private:
       packet.setData(bufferView(buffer));
     }
     return send(sequence, property, factory, packet);
+  }
+
+  FN(release) {
+    destroy();
+    return env.Undefined();
   }
 };
 

@@ -191,16 +191,20 @@ declare module "core" {
             }>;
             readonly Trigger: PacketFactory<Number>;
         };
-        // Need to be registered to forward outbound data
-        __tx__: ((data: ArrayBuffer) => any) | null;
-        // Called by serial data receiver to parse inbound data
-        __rx__(buffer: BufferLike);
+        // Properties
+        readonly connected: boolean;
         // Async API
         get<T>(fn: PacketFactory<T>): Promise<PacketInstance<T>>;
         set<T>(
             fn: PacketFactory<T>,
             arg: T | BufferLike
         ): Promise<PacketInstance<T>>;
+        release(): void;
+        // Construction
+        constructor(
+            port: string,
+            baudrate?: number // default 115200
+        );
     }
 
     type RawPacket = {
@@ -231,12 +235,15 @@ declare module "core" {
         | "CMD_TRIGGER"
         | "LOG";
 
-    export class ArUcoDetector extends CoreObject {
+    export class ArUcoDetector extends CoreObject<ArUcoDetector> {
         constructor(type: PreDefinedDictionary);
-        detect(frame: Frame, scale?: number = 1.0): Promise<ArUcoDetectResults>;
+        detect(
+            frame: Frame,
+            scale?: number // default 1.0
+        ): Promise<ArUcoDetectResults>;
         stream(
             stream: Stream<Frame>,
-            scale?: number = 1.0
+            scale?: number // default 1.0
         ): Stream<ArUcoDetectResults>;
         pattern(id: number): (0 | 1)[][] & Size;
     }
@@ -310,8 +317,14 @@ declare module "core" {
         apply(mat: Mat): Mat;
         undistort(points: Point2d[]): Point2d[];
         distort(points: Point2d[]): Point2d[];
-        angular(points: Point2d[], undistort: boolean = false): Point2d[];
-        position(angles: Point2d[], distort: boolean = false): Point2d[];
+        angular(
+            points: Point2d[],
+            undistort?: boolean // default: false
+        ): Point2d[];
+        position(
+            angles: Point2d[],
+            distort?: boolean // default: false
+        ): Point2d[];
     }
 
     type SolvePnPMethod =
@@ -335,7 +348,7 @@ declare module "core" {
          * @param method Method to use (default: ITERATIVE)
          * @returns Object containing rvec (rotation vector) and tvec (translation vector)
          */
-        static async solve(
+        static solve(
             img_points: Point2d[],
             obj_points: Point3d[],
             calibration?: CameraCalibration | null,
@@ -347,7 +360,10 @@ declare module "core" {
         get mtx(): Mat<Float64Array>;
         get dist(): Mat<Float64Array>;
         obj2img(obj_points: Point3d[]): Point2d[];
-        img2obj(img_points: Point2d[], z: number = 0.0): Point3d[];
+        img2obj(
+            img_points: Point2d[],
+            z?: number // default: 0
+        ): Point3d[];
     }
 
     export class Vision {
@@ -363,14 +379,14 @@ declare module "core" {
             corners: Point[],
             win_size?: Size | number | null, // default 5
             zero_zone?: Size | number | null, // default -1
-            term_criteria?: TermCriteria
+            term_criteria?: TermCriteria | null // default: refer to TermCriteria
         ): Promise<Point[]>;
 
         static calibrateCamera(
             sensor_size: Size,
             img_points: Point2d[][],
             obj_points: Point3d[][],
-            term_criteria?: TermCriteria
+            term_criteria?: TermCriteria | null // default: refer to TermCriteria
         ): Promise<CameraCalibration>;
 
         static Undistort: typeof Undistort;
