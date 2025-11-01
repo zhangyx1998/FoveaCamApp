@@ -25,36 +25,14 @@ async function getPort(match: Partial<PortInfo>) {
 const info = await getPort({ vendorId: "16c0", productId: "0483" });
 
 if (info === null) {
-    console.error("Device not connected");
+    console.error("Device not found, did you plug it in?");
     process.exit(1);
 } else {
     console.log("Device found:", info);
 }
 
-function defer<T = void>() {
-    let resolve!: (value: T) => void;
-    let reject!: (err: any) => void;
-    const promise = new Promise<T>((res, rej) => {
-        resolve = res;
-        reject = rej;
-    });
-    return { promise, resolve, reject };
-}
-
-const ready = defer();
-const protocol = new Protocol();
-const port = new SerialPort({ ...info, baudRate: 115200 }, (err) => {
-    if (err) ready.reject(err);
-    else ready.resolve();
-});
-
-await ready.promise;
-
-protocol.__tx__ = (data) => port.write(Buffer.from(data));
-port.on("data", (data: Buffer) => protocol.__rx__(data));
-port.on("close", () => {
-    protocol.__tx__ = null;
-});
+const protocol = new Protocol(info.path);
+console.log("Connected:", protocol);
 
 const bias = 90;
 await protocol.set(Protocol.System.Enable, false);
@@ -63,13 +41,6 @@ console.log(await protocol.get(Protocol.System.Version));
 console.log(await protocol.set(Protocol.Config.Log, "INFO"));
 console.log(await protocol.set(Protocol.Config.Bias, 90));
 console.log(await protocol.set(Protocol.Config.LPF, 120));
-
-process.on("exit", () => {
-    console.log("Disabling...");
-    protocol.set(Protocol.System.Enable, false);
-    port.flush();
-    port.close();
-});
 
 function clamp(val: number, [min, max]: [number, number]) {
     if (val < min) {
@@ -88,7 +59,7 @@ function dac2volt(ch: number) {
     return (200 * ch) / 65535;
 }
 
-async function actuate(v: number, settle_time = 10_000) {
+async function actuate(v: number, settle_time = 100_000) {
     const dv = v / 2;
     // Top left -> bottom right
     const l: MirrorPosition = [
@@ -122,9 +93,9 @@ async function actuate(v: number, settle_time = 10_000) {
 try {
     console.log(await protocol.set(Protocol.System.Enable, true));
     let v = 0;
-    for (; v <= 170; v += 1) console.log(await actuate(v));
-    for (; v >= -170; v -= 1) console.log(await actuate(v));
-    for (; v <= 0; v += 1) console.log(await actuate(v));
+    for (; v <= 170; v += 10) console.log(await actuate(v));
+    for (; v >= -170; v -= 10) console.log(await actuate(v));
+    for (; v <= 0; v += 10) console.log(await actuate(v));
     console.log("Loop finished");
 } catch (error) {
     console.error("Error occurred:", error);

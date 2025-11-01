@@ -258,7 +258,7 @@ private:
       if (scale <= 0.0)
         throw std::invalid_argument("Scale must be positive");
       VERBOSE("[Requested] %s", action.c_str());
-      auto task = [dict = dict, frame, scale, action]() {
+      auto task = [dict = dict, frame, scale, action] {
         VERBOSE("[Dispatched] %s", action.c_str());
         auto result = ::detect(frame, dict, scale);
         VERBOSE("[Completed] %s", action.c_str());

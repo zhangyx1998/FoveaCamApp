@@ -65,7 +65,7 @@ static FN(findChessboardCorners) {
     const auto action = "findChessboardCorners(" + tag(mat) + ")";
     auto pattern_size = convert<cv::Size2i>(info[1]);
     VERBOSE("[Requested] %s", action.c_str());
-    auto task = [mat, pattern_size, action]() {
+    auto task = [mat, pattern_size, action] {
       VERBOSE("[Dispatched] %s", action.c_str());
       Points2D corners;
       cv::findChessboardCorners(mat, pattern_size, corners,
@@ -114,7 +114,7 @@ static FN(calibrateCamera) {
         {cv::TermCriteria::EPS + cv::TermCriteria::MAX_ITER, 30, 0.01});
     const auto action = string{"calibrateCamera()"};
     VERBOSE("[Requested] %s", action.c_str());
-    auto task = [env, sensor_size, img_points, obj_points, action]() {
+    auto task = [env, sensor_size, img_points, obj_points, action] {
       VERBOSE("[Dispatched] %s", action.c_str());
       auto ret = CameraCalibration::create();
       ret->sensor_size = sensor_size;
@@ -455,7 +455,7 @@ private:
       const auto action = string("Projector.solvePnP()");
       VERBOSE("[Requested] %s", action.c_str());
       auto task = [img_points, obj_points, projection, use_extrinsic_guess,
-                   method, action]() {
+                   method, action] {
         VERBOSE("[Dispatched] %s", action.c_str());
         // Solve PnP to get rotation and translation vectors
         cv::solvePnP(obj_points, img_points, projection->mtx, projection->dist,

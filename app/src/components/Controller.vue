@@ -63,11 +63,9 @@ export class Controller {
             return info;
         }
     }
-    private readonly port: SerialPort;
-    private readonly protocol = new Protocol();
+    private readonly protocol: Protocol;
     public readonly ready: Promise<void>;
-    public readonly release: () => Promise<void>;
-    private connected: boolean = false;
+    public readonly release: () => void;
     constructor(
         info: PortInfo,
         public readonly dv: number = 170.0,
@@ -75,21 +73,9 @@ export class Controller {
         lpf: number = 120,
         log_level: LogLevel = "VERB"
     ) {
-        this.port = new SerialPort({ ...info, baudRate: 115200 });
-        this.release = async () => {
-            await this.disable();
-            this.connected = false;
-            this.port.flush();
-            this.port.close();
-            window.removeEventListener("beforeunload", this.release);
-        };
-        this.ready = new Promise((resolve, reject) => {
-            this.port.on("open", resolve);
-            this.port.on("error", reject);
-            this.port.on("close", () => (this.protocol.__tx__ = null));
-        }).then(async () => {
-            this.protocol.__tx__ = (data) => this.port.write(Buffer.from(data));
-            this.connected = true;
+        this.protocol = new Protocol(info.path);
+        this.release = () => this.protocol.release();
+        this.ready = (async () => {
             await this.disable();
             console.log("Controller connected:", info);
             console.log("  Info:", await this.info);
@@ -97,16 +83,16 @@ export class Controller {
             console.log("  Bias Voltage:", await this.setBias(bias));
             console.log("  LPF Frequency:", await this.setLPF(lpf));
             console.log("  Log Level:", await this.setLogLevel(log_level));
-            window.addEventListener("beforeunload", this.release);
-        });
-        this.port.on("data", (data: Buffer) => this.protocol.__rx__(data));
+        })();
     }
     private get<T>(prop: PacketFactory<T>) {
-        if (!this.connected) throw new Error("Controller not connected");
+        if (!this.protocol.connected)
+            throw new Error("Controller not connected");
         return this.protocol.get(prop);
     }
     private set<T>(prop: PacketFactory<T>, arg: T | BufferLike) {
-        if (!this.connected) throw new Error("Controller not connected");
+        if (!this.protocol.connected)
+            throw new Error("Controller not connected");
         return this.protocol.set(prop, arg);
     }
     // Application-level API

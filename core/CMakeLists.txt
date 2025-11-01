@@ -23,10 +23,12 @@ file(GLOB SRCS ${SRC_DIR}/*.cpp ${SRC_DIR}/**/*.cpp)
 # set(CMAKE_CXX_FLAGS "-Wall -Wno-ignored-qualifiers")
 set(CMAKE_CXX_FLAGS_DEBUG "-g -DDEBUG")
 set(CMAKE_CXX_FLAGS_RELEASE "-O3")
+add_definitions(${CXX_FLAGS})
 
 # Dependencies
 find_package(NodeApiHeaders REQUIRED)
 find_package(NodeAddonApi REQUIRED)
+find_package(LibUSB REQUIRED)
 find_package(Aravis REQUIRED)
 find_package(OpenCV REQUIRED COMPONENTS
   core        # cv::Mat and basic structures
@@ -45,32 +47,19 @@ include_directories(
   ${NodeAddonApi_INCLUDE_DIRS}
   ${OpenCV_INCLUDE_DIRS}
   ${ARAVIS_INCLUDE_DIRS}
+  ${LibUSB_INCLUDE_DIRS}
 )
 
 # Library linkables
 link_directories(
   ${OpenCV_LIBRARY_DIRS}
   ${ARAVIS_LIBRARY_DIRS}
+  ${LibUSB_LIBRARY_DIRS}
 )
 
 # Project Local Library
 file(GLOB LIB_SRCS ${PROJECT_HOME}/lib/**/*.cpp)
 file(GLOB SHARED_LIB_SRCS ${PROJECT_HOME}/../lib/**/*.cpp)
-
-# Get all the generates assets
-file(GLOB ASSETS ${PROJECT_HOME}/assets/*.o)
-SET_SOURCE_FILES_PROPERTIES(
-  ${ASSETS}
-  PROPERTIES
-  EXTERNAL_OBJECT true
-  GENERATED true
-)
-
-# Link with libraries
-link_libraries(
-  ${OpenCV_LIBS}
-  ${ARAVIS_LIBRARIES}
-)
 
 # Build Targets
 add_library(core SHARED
@@ -80,7 +69,6 @@ add_library(core SHARED
   ${SHARED_LIB_SRCS}
 )
 
-add_definitions(${CXX_FLAGS})
 
 set_target_properties(core PROPERTIES
   PREFIX ""
@@ -91,4 +79,11 @@ set_target_properties(core PROPERTIES
   INSTALL_RPATH "@loader_path;/usr/local/lib"
   INSTALL_NAME_DIR "@rpath"
 )
-target_link_libraries(core ${CMAKE_JS_LIB})
+
+# Link with libraries
+target_link_libraries(core PRIVATE
+  ${CMAKE_JS_LIB}
+  ${OpenCV_LIBS}
+  ${ARAVIS_LIBRARIES}
+  ${LibUSB_LIBRARIES}
+)

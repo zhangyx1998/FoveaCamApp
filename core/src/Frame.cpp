@@ -57,7 +57,7 @@ private:
         return deferred.Promise();
       } else {
         // Launch one-shot async worker to convert
-        auto task = [core = core(), fmt, action]() {
+        auto task = [core = core(), fmt, action] {
           VERBOSE("[Dispatched] %s", action.c_str());
           auto result = core->view(fmt);
           VERBOSE("[Completed] %s", action.c_str());

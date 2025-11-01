@@ -5,6 +5,7 @@
 // -------------------------------------------------------
 #pragma once
 
+#include "utils/debug.h"
 #include <condition_variable>
 #include <mutex>
 #include <pointer.h>
