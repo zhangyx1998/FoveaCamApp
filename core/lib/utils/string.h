@@ -8,6 +8,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <string>
+#include <string_view>
+#include <vector>
 
 // Constexpr function to extract just the filename from a full path
 #if defined(__APPLE__) || defined(__linux__)
@@ -56,4 +58,34 @@ static inline std::string trim(const std::string &str,
     return "";
   size_t last = str.find_last_not_of(whitespace);
   return str.substr(first, last - first + 1);
+}
+
+// Split by delimiter
+static inline std::vector<std::string_view> split(std::string_view str,
+                                                  char delimiter) {
+  std::vector<std::string_view> result;
+  size_t start = 0;
+  while (start < str.size()) {
+    size_t end = str.find(delimiter, start);
+    if (end == std::string::npos) {
+      result.push_back(str.substr(start));
+      break;
+    } else {
+      result.push_back(str.substr(start, end - start));
+      start = end + 1;
+    }
+  }
+  return result;
+}
+
+// Join strings with delimiter
+static inline std::string join(const std::vector<std::string> &strings,
+                               const std::string &delimiter = " ") {
+  std::string result;
+  for (size_t i = 0; i < strings.size(); ++i) {
+    if (i != 0)
+      result += delimiter;
+    result += strings[i];
+  }
+  return result;
 }

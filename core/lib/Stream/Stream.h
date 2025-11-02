@@ -57,9 +57,8 @@ protected:
     // This is checked here to avoid potential hard-to-debug issues.
     // Derived classes should call shutdown() in their destructor
     if (thread.joinable()) {
-      std::cerr << "[ERROR] " << NAME
-                << " destroyed without calling shutdown(). " << std::endl
-                << "Aborting..." << std::endl;
+      ERROR("%s [%p] destroyed without calling shutdown(). Aborting...",
+            NAME.c_str(), this);
       std::terminate();
     }
   }
@@ -77,9 +76,7 @@ protected:
     if (!subscriber)
       return nullptr;
     if (flag_terminate) {
-      std::cerr << "[WARNING] " + NAME +
-                       "::subscribing an already terminated stream."
-                << std::endl;
+      WARN("[%s] Subscribing an already terminated stream.", NAME.c_str());
       subscriber->close(false);
       return nullptr;
     }

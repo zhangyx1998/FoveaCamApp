@@ -1,13 +1,8 @@
 <script setup lang="ts">
-import { markRaw, customRef, onUnmounted, computed } from "vue";
+import { customRef, onUnmounted, computed } from "vue";
 import type { Camera } from "core";
 import StreamView from "@src/components/StreamView.vue";
-import {
-    describeCamera,
-    useCameraConfig,
-    initCamera,
-    getCameraInfo,
-} from "@lib/camera";
+import { describeCamera, useCameraConfig, initCamera } from "@lib/camera";
 import Store from "@lib/store";
 
 const { camera } = defineProps<{ camera: Camera }>();
@@ -99,8 +94,7 @@ function reset() {
         <StreamView
             class="stream"
             :title="describeCamera(camera)"
-            :stream="markRaw(camera.stream)"
-            :overlay="getCameraInfo(camera)"
+            :camera="camera"
             width="100%"
             theme="white"
         />

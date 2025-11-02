@@ -71,7 +71,7 @@ export class Controller {
         public readonly dv: number = 170.0,
         bias: number = 90.0,
         lpf: number = 120,
-        log_level: LogLevel = "VERB"
+        log_level: LogLevel = "INFO"
     ) {
         this.protocol = new Protocol(info.path);
         this.release = () => this.protocol.release();

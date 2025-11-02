@@ -52,10 +52,8 @@ public:
 
   virtual ~RootReferenceBase() {
     if (count != 0)
-      std::cerr << "[ref-count] [WARN] RootReference of " + type_name<V>() +
-                       " destroyed with non-zero reference (" +
-                       std::to_string(count) + ")"
-                << std::endl;
+      WARN("RootReference of %s destroyed with non-zero reference (%zu)",
+           type_name<V>().c_str(), count);
     VERBOSE("Destroyed root reference for %s @ %p", type_name<V>().c_str(),
             this);
   }

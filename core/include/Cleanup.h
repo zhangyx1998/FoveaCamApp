@@ -47,8 +47,7 @@ private:
           VERBOSE("Calling Hook %s @ %p", entry.info.c_str(), &entry.callback);
           entry.callback();
         } catch (const std::exception &e) {
-          std::cerr << "[ERROR] [Cleanup] During cleanup of " << entry.info
-                    << ": " << e.what() << std::endl;
+          ERROR("Error calling %s: %s", entry.info.c_str(), e.what());
           VERBOSE("Stack trace:\n%s", Stacktrace::capture().c_str());
         }
         hooks.pop_back();

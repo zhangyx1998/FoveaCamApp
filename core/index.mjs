@@ -30,6 +30,7 @@ export const {
     Protocol, //
     ArUcoDetector, //
     Vision, //
+    Log,
     cleanup, //
     __origin__, //
 } = Module;

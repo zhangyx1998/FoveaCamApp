@@ -18,6 +18,7 @@
 #include <opencv2/core/types.hpp>
 #include <pointer.h>
 
+#include "AsyncTask.h"
 #include "CoreObject.h"
 #include "Vision.h"
 #include "napi-helper.h"
@@ -62,19 +63,16 @@ static FN(findChessboardCorners) {
   auto env = info.Env();
   try {
     auto mat = convert<cv::Mat>(info[0]);
-    const auto action = "findChessboardCorners(" + tag(mat) + ")";
     auto pattern_size = convert<cv::Size2i>(info[1]);
-    VERBOSE("[Requested] %s", action.c_str());
-    auto task = [mat, pattern_size, action] {
-      VERBOSE("[Dispatched] %s", action.c_str());
+    auto task = [mat, pattern_size] {
       Points2D corners;
       cv::findChessboardCorners(mat, pattern_size, corners,
                                 cv::CALIB_CB_ADAPTIVE_THRESH |
                                     cv::CALIB_CB_NORMALIZE_IMAGE);
-      VERBOSE("[Completed] %s", action.c_str());
       return corners;
     };
-    return OneShotWorker<Points2D>::run(env, task);
+    return AsyncTask<Points2D>::run(env, task,
+                                    "findChessboardCorners(" + tag(mat) + ")");
   }
   JS_EXCEPT(env.Undefined())
 }
@@ -89,16 +87,12 @@ static FN(cornerSubPix) {
     const auto criteria = optionalArgument<cv::TermCriteria>(
         info[4],
         {cv::TermCriteria::EPS + cv::TermCriteria::MAX_ITER, 30, 0.01});
-    const auto action = "cornerSubPix(" + tag(mat) + ")";
-    VERBOSE("[Requested] %s", action.c_str());
-    auto task = [mat, corners, win_size, zero_zone, criteria,
-                 action]() mutable {
-      VERBOSE("[Dispatched] %s", action.c_str());
+    auto task = [mat, corners, win_size, zero_zone, criteria] {
       cv::cornerSubPix(mat, corners, win_size, zero_zone, criteria);
-      VERBOSE("[Completed] %s", action.c_str());
       return corners;
     };
-    return OneShotWorker<Points2D>::run(env, task);
+    return AsyncTask<Points2D>::run(env, task,
+                                    "cornerSubPix(" + tag(mat) + ")");
   }
   JS_EXCEPT(env.Undefined())
 }
@@ -112,19 +106,16 @@ static FN(calibrateCamera) {
     auto criteria = optionalArgument<cv::TermCriteria>(
         info[3],
         {cv::TermCriteria::EPS + cv::TermCriteria::MAX_ITER, 30, 0.01});
-    const auto action = string{"calibrateCamera()"};
-    VERBOSE("[Requested] %s", action.c_str());
-    auto task = [env, sensor_size, img_points, obj_points, action] {
-      VERBOSE("[Dispatched] %s", action.c_str());
+    auto task = [env, sensor_size, img_points, obj_points, criteria] {
       auto ret = CameraCalibration::create();
       ret->sensor_size = sensor_size;
       cv::calibrateCamera(obj_points, img_points, sensor_size,
                           ret->camera_matrix, ret->dist_coeffs, ret->rvecs,
-                          ret->tvecs);
-      VERBOSE("[Completed] %s", action.c_str());
+                          ret->tvecs, 0, criteria);
       return ret;
     };
-    return OneShotWorker<CameraCalibration::Ptr>::run(env, task);
+    return AsyncTask<CameraCalibration::Ptr>::run(env, task,
+                                                  "calibrateCamera()");
   }
   JS_EXCEPT(env.Undefined())
 }
@@ -452,19 +443,15 @@ private:
       }
       const auto use_extrinsic_guess = optionalArgument(info[3], false);
       const auto method = optionalArgument(info[4], cv::SOLVEPNP_ITERATIVE);
-      const auto action = string("Projector.solvePnP()");
-      VERBOSE("[Requested] %s", action.c_str());
       auto task = [img_points, obj_points, projection, use_extrinsic_guess,
-                   method, action] {
-        VERBOSE("[Dispatched] %s", action.c_str());
+                   method] {
         // Solve PnP to get rotation and translation vectors
         cv::solvePnP(obj_points, img_points, projection->mtx, projection->dist,
                      projection->rvec, projection->tvec, use_extrinsic_guess,
                      method);
-        VERBOSE("[Completed] %s", action.c_str());
         return projection;
       };
-      return OneShotWorker<Projection::Ptr>::run(env, task);
+      return AsyncTask<Projection::Ptr>::run(env, task, "Projector.solve()");
     }
     JS_EXCEPT(env.Undefined())
   }

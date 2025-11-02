@@ -8,9 +8,8 @@ import {
     shallowRef,
     watch,
 } from "vue";
-import { Camera, Point2d, Rect, Size } from "core";
+import type { Point2d, Rect } from "core";
 import {
-    getCameraInfo,
     Regression,
     ROLE,
     THEME,
@@ -26,7 +25,6 @@ import FrameCursor from "@src/components/FrameCursor.vue";
 import ConfigEntry from "@src/components/ConfigEntry.vue";
 import abortable from "@lib/abortable";
 import { Latest } from "@lib/util/iter";
-import { delay } from "@lib/util";
 
 const controller = computed(getController);
 const cameras = await useMatchedCameras(true);
@@ -86,7 +84,7 @@ function isDrag(b?: number) {
     return b && b & 1;
 }
 
-const task = abortable(async (aborted, onAbort) => {
+const task = abortable(async (_, onAbort) => {
     const c = controller.value;
     if (!c) return;
     const updated = new Latest<Point2d>();
@@ -97,7 +95,6 @@ const task = abortable(async (aborted, onAbort) => {
     try {
         await c.enable();
         for await (const pos of updated) {
-            if (aborted()) break;
             const [target] = undistort.angular([pos], false);
             const { left, right } = await c.actuate({
                 left: {
@@ -111,18 +108,12 @@ const task = abortable(async (aborted, onAbort) => {
             });
             volt.L = left;
             volt.R = right;
-            await delay(1);
-            continue;
         }
     } finally {
         await c.disable();
         handle.stop();
     }
 });
-
-function getStream(camera?: Camera) {
-    return camera && markRaw(camera.stream);
-}
 
 onUnmounted(async () => {
     await task.abort();
@@ -136,8 +127,7 @@ onUnmounted(async () => {
             <StreamView
                 class="stream"
                 :title="ROLE.L"
-                :stream="getStream(cameras.L)"
-                :overlay="getCameraInfo(cameras.L)"
+                :camera="cameras.L"
                 :theme="THEME.L"
             >
             </StreamView>
@@ -152,8 +142,7 @@ onUnmounted(async () => {
             <StreamView
                 class="stream"
                 :title="ROLE.C + ' (Sliced View)'"
-                :stream="getStream(cameras.C)"
-                :overlay="getCameraInfo(cameras.C)"
+                :camera="cameras.C"
                 :theme="THEME.C"
                 :slice="rect"
             />
@@ -167,8 +156,7 @@ onUnmounted(async () => {
             <StreamView
                 class="stream"
                 :title="ROLE.C"
-                :stream="getStream(cameras.C)"
-                :overlay="getCameraInfo(cameras.C)"
+                :camera="cameras.C"
                 :theme="THEME.C"
                 @mousedown="(e) => (cursor = e)"
                 @mouseup="(e) => (cursor = e)"
@@ -200,8 +188,7 @@ onUnmounted(async () => {
             <StreamView
                 class="stream"
                 :title="ROLE.R"
-                :stream="getStream(cameras.R)"
-                :overlay="getCameraInfo(cameras.R)"
+                :camera="cameras.R"
                 :theme="THEME.R"
             >
             </StreamView>

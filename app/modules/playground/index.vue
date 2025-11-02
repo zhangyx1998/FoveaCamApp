@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import abortable from "@lib/abortable";
-import useCameras, { describeCamera, getCameraInfo } from "@lib/camera";
+import useCameras, { describeCamera } from "@lib/camera";
 import { delay } from "@lib/util";
 import { FreqMeter } from "@lib/util/perf";
 import StreamView from "@src/components/StreamView.vue";
 import { ArUcoDetector, type Frame } from "core";
-import { computed, markRaw, onUnmounted, ref, watch } from "vue";
+import { computed, onUnmounted, ref, watch } from "vue";
 const cameras = await useCameras();
 
 const observer = ref<"NONE" | "SYNC" | "ASYNC">("NONE");
@@ -74,8 +74,7 @@ onUnmounted(async () => {
     <div class="playground">
         <StreamView
             :title="describeCamera(cam)"
-            :stream="stream && markRaw(stream)"
-            :overlay="getCameraInfo(cam)"
+            :camera="cam"
             :footnote="task ? 'FPS: ' + fps.toString() : '(Observer inactive)'"
             theme="white"
             width="min(50vw, 100vh)"

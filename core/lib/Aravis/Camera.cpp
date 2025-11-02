@@ -5,6 +5,7 @@
 
 #include "Camera.h"
 #include "Error.h"
+#include "utils/debug.h"
 
 namespace Arv {
 
@@ -20,8 +21,7 @@ std::vector<Camera::Ptr> Camera::list() {
     try {
       cameras.push_back(registry.get(id));
     } catch (const Error &e) {
-      std::cerr << "Warning: Could not connect to camera " << i << " (" << id
-                << "): " << e.what() << std::endl;
+      WARN("Could not connect to camera %u (%s): %s", i, id, e.what());
     }
   }
   return cameras;

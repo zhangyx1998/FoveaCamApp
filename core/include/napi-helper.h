@@ -8,8 +8,6 @@
 #include <iostream>
 #include <napi.h>
 
-#include <exception>
-#include <functional>
 #include <sstream>
 
 #include <Threading/Guard.h>
@@ -185,79 +183,6 @@ inline Napi::Value optionalArgument(const Napi::Value &arg) {
 template <typename... Args>
 Napi::Value convert(Napi::Env, const Args &...) noexcept;
 
-template <typename R> class OneShotWorker : public Napi::AsyncWorker {
-  static inline const std::string NAME = type_name<OneShotWorker>();
-  // To be executed in worker thread, performs the actual task
-  using Task = std::function<R()>;
-  Napi::Env const env;
-  Task const task;
-  // const Napi::Value container;
-  const Napi::Reference<Napi::Value> container;
-  const Napi::Promise::Deferred deferred;
-  R result;
-  std::string stacktrace;
-  OneShotWorker(Napi::Env env, Task task)
-      : Napi::AsyncWorker(env), env(env), task(task), container(),
-        deferred(Napi::Promise::Deferred::New(env)) {}
-  OneShotWorker(const Napi::Value &container, Task task)
-      : Napi::AsyncWorker(container.Env()), env(container.Env()), task(task),
-        container(Napi::Persistent(container)),
-        deferred(Napi::Promise::Deferred::New(env)) {}
-  void Execute() override {
-    try {
-      result = task();
-    } catch (const std::exception &e) {
-      stacktrace = Stacktrace::capture();
-      SetError(e.what());
-    } catch (...) {
-      stacktrace = Stacktrace::capture();
-      SetError("Unknown error");
-    }
-  }
-  void OnOK() override {
-    try {
-      Napi::HandleScope scope(env);
-      auto container =
-          this->container.IsEmpty() ? env.Undefined() : this->container.Value();
-      deferred.Resolve(convert(env, container, result));
-    } catch (JS::ErrorBase &e) {
-      deferred.Reject(e.error().Value());
-    } catch (const std::exception &e) {
-      deferred.Reject(JS::Error(env, e.what()).error().Value());
-    } catch (...) {
-      deferred.Reject(
-          JS::Error(env, "Unknown error occurred in OnOK()").error().Value());
-    }
-  }
-  void OnError(const Napi::Error &e) override {
-    try {
-      Napi::HandleScope scope(env);
-      deferred.Reject(injectNativeStack(e, stacktrace).Value());
-    } catch (const std::exception &e) {
-      std::cerr << "Fatal: Exception occurred in OnError(): " << e.what()
-                << std::endl;
-    } catch (...) {
-      std::cerr << "Fatal: Unknown error occurred in OnError()" << std::endl;
-    }
-  }
-
-public:
-  static inline Napi::Promise run(Napi::Env env, Task task) {
-    auto worker = new OneShotWorker(env, task);
-    auto promise = worker->deferred.Promise();
-    worker->Queue();
-    return promise;
-  }
-  static inline Napi::Promise run(const Napi::Value &container, Task task) {
-    if (container.IsUndefined() || container.IsNull())
-      return run(container.Env(), task);
-    auto worker = new OneShotWorker(container, task);
-    auto promise = worker->deferred.Promise();
-    worker->Queue();
-    return promise;
-  }
-};
-
 inline Napi::Object IterNext(Napi::Env env, Napi::Value &&value) {
   auto obj = Napi::Object::New(env);
   obj.Set("value", value);
@@ -271,6 +196,8 @@ inline Napi::Object IterNext(Napi::Env env) {
   obj.Set("done", Napi::Boolean::New(env, true));
   return obj;
 }
+
+std::string repr(const Napi::Value &value, int depth = 0, int max_depth = 3);
 
 #include <convert.h>
 
