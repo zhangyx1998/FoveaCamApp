@@ -5,11 +5,25 @@
 // -------------------------------------------------------
 #include <chrono>
 #include <cstdlib>
+#include <unistd.h>
 #include <vector>
 
 #include "debug.h"
 
-#include "string.h"
+static const auto PROGRAM_START_TIME = std::chrono::steady_clock::now();
+
+std::string DEBUG_NOW() {
+  const auto millis = std::chrono::duration<double, std::milli>(
+                          std::chrono::steady_clock::now() - PROGRAM_START_TIME)
+                          .count();
+  const auto minutes = int(millis / 60000);
+  const auto seconds = (millis - minutes * 60000) / 1000;
+  // MM:SS.mmm
+  char buffer[16];
+  std::snprintf(buffer, sizeof(buffer), "%02d:%06.3f", minutes, seconds);
+  return TermColor::C(std::string(buffer),
+                      {TermColor::DIM, TermColor::UNDERLINE}, STDERR_FILENO);
+}
 
 #if defined(DEBUG)
 
@@ -72,19 +86,5 @@ public:
 } const targets;
 
 bool VERBOSE_MATCH(const char *filename) { return targets.match(filename); }
-
-static const auto PROGRAM_START_TIME = std::chrono::steady_clock::now();
-
-std::string VERBOSE_NOW() {
-  const auto millis = std::chrono::duration<double, std::milli>(
-                          std::chrono::steady_clock::now() - PROGRAM_START_TIME)
-                          .count();
-  const auto minutes = int(millis / 60000);
-  const auto seconds = (millis - minutes * 60000) / 1000;
-  // MM:SS.mmm
-  char buffer[16];
-  std::snprintf(buffer, sizeof(buffer), "%02d:%06.3f", minutes, seconds);
-  return std::string(buffer);
-}
 
 #endif

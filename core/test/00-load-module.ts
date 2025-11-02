@@ -5,13 +5,15 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 import { Worker } from "worker_threads";
+import { Log, cleanup, __origin__ } from "core";
+Log.info("imported core from", __origin__);
 
 function isolated() {
     return new Promise<void>((resolve, reject) => {
         const worker = new Worker(
             `
-            import { Camera, cleanup, __origin__ } from "core";
-            console.log("imported", { Camera }, "from", __origin__);
+            import { Log, Camera, cleanup, __origin__ } from "core";
+            Log.info("imported", { Camera }, "from", __origin__);
             cleanup();
         `,
             { eval: true }
@@ -26,7 +28,9 @@ function isolated() {
 }
 
 for (let i = 0; i < 3; i++) {
-    console.log(`Iteration ${i + 1}:`);
+    Log.warn(`Iteration ${i + 1}:`);
     await isolated();
-    console.log("Isolated import and cleanup succeeded.");
+    Log.warn("Isolated import and cleanup succeeded.");
 }
+cleanup();
+Log.warn("Global cleanup succeeded.");

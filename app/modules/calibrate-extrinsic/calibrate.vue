@@ -2,7 +2,7 @@
 import { computed, markRaw, onUnmounted, watch } from "vue";
 import type { Camera, Undistort } from "core";
 import { ArUcoDetector, Vision } from "core";
-import { getCameraInfo, MatchedCameras, ROLE, THEME } from "@lib/camera";
+import { MatchedCameras, ROLE, THEME } from "@lib/camera";
 import StreamView from "@src/components/StreamView.vue";
 import Marker from "./Marker.vue";
 import PosView from "@src/components/PosView.vue";
@@ -22,10 +22,6 @@ const props = defineProps<{
     undistort: Undistort;
     records: ExtrinsicRecord[];
 }>();
-
-function getStream(camera?: Camera) {
-    return camera && markRaw(camera.stream);
-}
 
 const detector = new ArUcoDetector("4X4_50");
 
@@ -111,8 +107,7 @@ onUnmounted(async () => {
                 class="stream"
                 :title="ROLE.L"
                 :footnote="`ArUco Tracker @ ${tracker.L?.fps ?? 'N/A'}`"
-                :stream="getStream(cameras.L)"
-                :overlay="getCameraInfo(cameras.L)"
+                :camera="cameras.L"
                 :theme="THEME.L"
             >
                 <Marker
@@ -154,8 +149,7 @@ onUnmounted(async () => {
                 class="stream"
                 :title="ROLE.C"
                 :footnote="`ArUco Tracker @ ${tracker.C?.fps ?? 'N/A'}`"
-                :stream="getStream(cameras.C)"
-                :overlay="getCameraInfo(cameras.C)"
+                :camera="cameras.C"
                 :theme="THEME.C"
             >
                 <Marker
@@ -199,8 +193,7 @@ onUnmounted(async () => {
                 class="stream"
                 :title="ROLE.R"
                 :footnote="`ArUco Tracker @ ${tracker.R?.fps ?? 'N/A'}`"
-                :stream="getStream(cameras.R)"
-                :overlay="getCameraInfo(cameras.R)"
+                :camera="cameras.R"
                 :theme="THEME.R"
             >
                 <Marker

@@ -10,6 +10,7 @@
 #include <utils/map-set.h>
 
 #include "Aravis/PixelFormat.h"
+#include "AsyncTask.h"
 #include "CoreObject.h"
 #include "napi-helper.h"
 
@@ -43,27 +44,22 @@ public:
 private:
   FN(view) {
     try {
-      auto tag = core()->tag;
       const auto fmt = optionalArgument(info[0], Arv::PixelFormat::BGRA8);
       const auto container = optionalArgument(info[1]);
-      const auto action =
-          "Frame[" + tag + "].view(" + convert<std::string>(fmt) + ")";
-      VERBOSE("[Requested] %s", action.c_str());
       if (core()->isAvailable(fmt)) {
         // Resolve immediately if already available
         auto deferred = Promise::Deferred::New(env);
         deferred.Resolve(convert(env, container, core()->view(fmt)));
-        VERBOSE("[Resolved] (cached) %s", action.c_str());
         return deferred.Promise();
       } else {
         // Launch one-shot async worker to convert
-        auto task = [core = core(), fmt, action] {
-          VERBOSE("[Dispatched] %s", action.c_str());
+        auto task = [core = core(), fmt] {
           auto result = core->view(fmt);
-          VERBOSE("[Completed] %s", action.c_str());
           return result;
         };
-        return OneShotWorker<cv::Mat>::run(container, task);
+        return AsyncTask<cv::Mat>::run(container, task,
+                                       "Frame[" + core()->tag + "].view(" +
+                                           convert<std::string>(fmt) + ")");
       }
     }
     JS_EXCEPT(env.Undefined())

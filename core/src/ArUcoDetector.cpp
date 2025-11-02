@@ -17,6 +17,7 @@
 #include <pointer.h>
 #include <stdexcept>
 
+#include "AsyncTask.h"
 #include "Iterator.h"
 #include "napi-helper.h"
 
@@ -197,9 +198,10 @@ public:
   ~ArUcoStream() { shutdown(); }
   Stream<Arv::Frame::Ptr> *upstream() override { return stream.get(); }
   Result::Ptr transform(const Arv::Frame::Ptr &input) override {
-    VERBOSE("ArUcoStream::transform(%p) start", input.get());
+    std::string name = "Frame[" + input->tag + "]";
+    VERBOSE("ArUcoStream::transform(%s) start", name.c_str());
     auto result = detect(input, dict, scale);
-    VERBOSE("ArUcoStream::transform(%p) done", input.get());
+    VERBOSE("ArUcoStream::transform(%s) done", name.c_str());
     return result;
   }
 };
@@ -251,20 +253,17 @@ private:
     auto env = info.Env();
     try {
       auto frame = convert<Arv::Frame::Ptr>(info[0]);
-      const auto action = "ArUcoDetector.detect(" + frame->tag + ")";
       double scale = 1.0;
       if (info.Length() >= 2)
         scale = info[1].As<Napi::Number>().DoubleValue();
       if (scale <= 0.0)
         throw std::invalid_argument("Scale must be positive");
-      VERBOSE("[Requested] %s", action.c_str());
-      auto task = [dict = dict, frame, scale, action] {
-        VERBOSE("[Dispatched] %s", action.c_str());
+      auto task = [dict = dict, frame, scale] {
         auto result = ::detect(frame, dict, scale);
-        VERBOSE("[Completed] %s", action.c_str());
         return result;
       };
-      return OneShotWorker<Result::Ptr>::run(env, task);
+      return AsyncTask<Result::Ptr>::run(
+          env, task, "ArUcoDetector.detect(" + frame->tag + ")");
     }
     JS_EXCEPT(env.Undefined())
   }

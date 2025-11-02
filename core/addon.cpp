@@ -30,12 +30,12 @@ static Object init(Env env, Object exports) {
     CORE_OBJECT_EXPORT(ProtocolObject, env, exports);
     CORE_OBJECT_EXPORT(ArUcoDetectorObject, env, exports);
     CORE_OBJECT_EXPORT(VisionNamespace, env, exports);
+    CORE_OBJECT_EXPORT(LogNamespace, env, exports);
     exports.Set("cleanup", Function::New(env, cleanup));
     VERBOSE("Core module initialized");
     if (std::getenv("WAIT_DEBUGGER")) {
-      std::cerr << "[INFO] WAIT_DEBUGGER is set. Waiting for debugger to "
-                   "connect (pid="
-                << getpid() << ")..." << std::endl;
+      INFO("WAIT_DEBUGGER is set. Waiting for debugger to connect (pid=%d)...",
+           getpid());
       while (!DEBUGGER_CONNECTED)
         std::this_thread::yield();
     }

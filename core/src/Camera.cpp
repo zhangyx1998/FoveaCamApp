@@ -13,6 +13,7 @@
 #include <Aravis/Stream.h>
 #include <convert.h>
 
+#include "AsyncTask.h"
 #include "CoreObject.h"
 #include "Iterator.h"
 #include "napi-helper.h"
@@ -127,7 +128,7 @@ public:
 private:
   using Cameras = std::vector<Arv::Camera::Ptr>;
   static FN(list) {
-    return OneShotWorker<Cameras>::run(info.Env(), Arv::Camera::list);
+    return AsyncTask<Cameras>::run(info.Env(), Arv::Camera::list);
   }
 
   FN(grab) {
@@ -136,7 +137,7 @@ private:
                                ? info[0].As<Number>().Int32Value()
                                : 0;
       auto task = [core = core(), timeout] { return core->grab(timeout); };
-      return OneShotWorker<Arv::Frame::Ptr>::run(env, task);
+      return AsyncTask<Arv::Frame::Ptr>::run(env, task);
     }
     JS_EXCEPT(env.Undefined())
   }
@@ -260,13 +261,6 @@ private:
 
 CORE_OBJECT(CameraObject);
 
-template <>
-Napi::Value convert(Napi::Env env, const Napi::Value &container,
-                    const CameraObject::Cameras &cameras) noexcept {
-  auto array = Array::New(env, cameras.size());
-  for (size_t i = 0; i < cameras.size(); ++i)
-    array.Set(i, CameraObject::Create(env, cameras[i]));
-  return array;
-}
+CONVERT_ARRAY_OF(Arv::Camera::Ptr);
 
 CORE_OBJECT_CONVERSIONS(StreamObject<Arv::Stream>);

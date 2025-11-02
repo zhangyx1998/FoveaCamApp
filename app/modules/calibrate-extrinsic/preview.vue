@@ -80,10 +80,6 @@ const task = abortable(async (aborted, onAbort) => {
         handle.stop();
     }
 });
-
-function getStream(camera?: Camera) {
-    return camera && markRaw(camera.stream);
-}
 </script>
 
 <template>
@@ -92,8 +88,7 @@ function getStream(camera?: Camera) {
             <StreamView
                 class="stream"
                 :title="ROLE.L"
-                :stream="getStream(cameras.L)"
-                :overlay="getCameraInfo(cameras.L)"
+                :camera="cameras.L"
                 :theme="THEME.L"
             >
             </StreamView>
@@ -108,8 +103,7 @@ function getStream(camera?: Camera) {
             <StreamView
                 class="stream"
                 :title="ROLE.C"
-                :stream="getStream(cameras.C)"
-                :overlay="getCameraInfo(cameras.C)"
+                :camera="cameras.C"
                 :theme="THEME.C"
                 @mousedown="(e) => (cursor = e)"
                 @mouseup="(e) => (cursor = e)"
@@ -148,8 +142,7 @@ function getStream(camera?: Camera) {
             <StreamView
                 class="stream"
                 :title="ROLE.R"
-                :stream="getStream(cameras.R)"
-                :overlay="getCameraInfo(cameras.R)"
+                :camera="cameras.R"
                 :theme="THEME.R"
             >
             </StreamView>

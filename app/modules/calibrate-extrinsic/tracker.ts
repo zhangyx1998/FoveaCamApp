@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 import { computed, markRaw, ref, shallowRef, watch } from "vue";
-import { Vision } from "core";
+import { Log, Vision } from "core";
 import type {
     ArUcoDetectResult,
     ArUcoDetectResults,
@@ -137,10 +137,17 @@ export default class Tracker {
                 )) {
                     if (aborted()) break;
                     if (detections !== null) {
+                        Log.info(
+                            "Got",
+                            detections.length,
+                            "detections for",
+                            detections.frame.toString()
+                        );
                         this.fps.tick();
                         this.handleDetections(detections);
+                    } else {
+                        await new Promise((r) => setImmediate(r));
                     }
-                    await delay(1);
                 }
             } catch (e) {
                 console.error("Detection error:", e);
@@ -166,7 +173,8 @@ export function actuate(
             watch(
                 () => left?.center_relative,
                 (c) => {
-                    const dt = 1 / Math.max(10, left?.fps?.value ?? 0);
+                    // const dt = 1 / Math.max(10, left?.fps?.value ?? 0);
+                    const dt = 0.02;
                     const { x, y } = controller.pos.left;
                     if (c) {
                         const { x: dx, y: dy } = c;
@@ -185,7 +193,8 @@ export function actuate(
             watch(
                 () => right?.center_relative,
                 (c) => {
-                    const dt = 1 / Math.max(10, right?.fps?.value ?? 0);
+                    // const dt = 1 / Math.max(10, right?.fps?.value ?? 0);
+                    const dt = 0.02;
                     const { x, y } = controller.pos.right;
                     if (c) {
                         const { x: dx, y: dy } = c;
@@ -209,7 +218,7 @@ export function actuate(
                     await controller.actuate(pending);
                     delete pending.left;
                     delete pending.right;
-                } else await delay(1);
+                } else await new Promise((r) => setImmediate(r));
             }
         } finally {
             await controller.disable();

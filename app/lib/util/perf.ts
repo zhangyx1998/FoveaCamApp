@@ -42,7 +42,7 @@ export class RollingAverage {
 }
 
 export class FreqMeter extends RollingAverage {
-    private lastTick = performance.now();
+    private lastTick: number | null = null;
     constructor(
         decay: number = 0.9,
         digits: number = 2,
@@ -52,9 +52,15 @@ export class FreqMeter extends RollingAverage {
     }
     public tick() {
         const now = performance.now();
-        const mea = 1000.0 / (now - this.lastTick);
-        this.roll(mea);
+        if (this.lastTick !== null) this.roll(now - this.lastTick);
         this.lastTick = now;
+    }
+    public get value() {
+        return super.value === 0 ? 0 : 1000 / super.value;
+    }
+    public reset(v: number | null = null) {
+        super.reset(v);
+        this.lastTick = null;
     }
 }
 

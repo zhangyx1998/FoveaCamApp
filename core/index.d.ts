@@ -300,7 +300,7 @@ declare module "core" {
         tvecs: Mat<Float64Array>[];
     };
 
-    // Default: { max_count: 30, epsilon: 0.01 }
+    // Default: { max_count: 30, epsilon: 1e-8 }
     export type TermCriteria = {
         // Type is auto deducted.
         max_count?: number;
@@ -391,5 +391,12 @@ declare module "core" {
 
         static Undistort: typeof Undistort;
         static Projector: typeof Projector;
+    }
+
+    export class Log {
+        static error(...args: any[]): void;
+        static warn(...args: any[]): void;
+        static info(...args: any[]): void;
+        static verbose(...args: any[]): void;
     }
 }

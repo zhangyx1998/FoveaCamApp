@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import type { Mat, Frame, Stream, Size, Point, Rect } from "core";
-import { computed, onUnmounted, ref, watch } from "vue";
+import { Log } from "core";
+import type { Mat, Frame, Stream, Size, Point, Rect, Camera } from "core";
+import { computed, markRaw, onUnmounted, ref, watch } from "vue";
 
 import { FreqMeter, PerfTimer } from "@lib/util/perf";
 import abortable from "@lib/abortable";
 import FrameView from "./FrameView.vue";
+import { getCameraInfo } from "@lib/camera";
 
 const emit = defineEmits<{
     (e: "mousedown", event: MouseEvent & Point & Size): void;
@@ -30,6 +32,11 @@ const props = defineProps({
     },
     stream: {
         type: Object as () => Stream<Frame> | undefined,
+        required: false,
+        default: undefined,
+    },
+    camera: {
+        type: Object as () => Camera | undefined,
         required: false,
         default: undefined,
     },
@@ -64,6 +71,12 @@ const mat = ref<Mat<Uint8Array> | null>(null);
 const fps = new FreqMeter();
 const perf = new PerfTimer();
 
+const stream = computed(() => {
+    if (props.stream) return markRaw(props.stream);
+    if (props.camera) return markRaw(props.camera.stream);
+    return undefined;
+});
+
 function createTask(stream?: Stream<Frame>) {
     if (!stream) return null;
     return abortable(async (aborted) => {
@@ -71,9 +84,12 @@ function createTask(stream?: Stream<Frame>) {
             for (const frame of stream) {
                 if (aborted()) break;
                 if (frame) {
-                    mat.value = await perf.measure(() =>
-                        frame.view("BGRA8", mat.value)
-                    );
+                    mat.value = await perf.measure(async () => {
+                        Log.info(`Requested: ${frame}.view(${"BGRA8"})`);
+                        const m = await frame.view("BGRA8", mat.value);
+                        Log.info(` Resolved: ${frame}.view(${"BGRA8"})`);
+                        return m;
+                    });
                     frame.release();
                     fps.tick();
                 }
@@ -85,12 +101,17 @@ function createTask(stream?: Stream<Frame>) {
     });
 }
 
-const task = computed(() => createTask(props.stream));
+const task = computed(() => createTask(stream.value));
 watch(task, (_, prev) => prev?.abort());
 onUnmounted(() => task.value?.abort());
 
+const cameraInfo = computed(() =>
+    props.camera ? getCameraInfo(props.camera) : {}
+);
+
 const overlay = computed(() => ({
     ...(props.overlay ?? {}),
+    ...cameraInfo.value,
     "Frame Rate": fps.toString(),
     "CVT Time": perf.toString(),
 }));

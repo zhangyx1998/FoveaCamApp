@@ -231,7 +231,7 @@ public:
   }
 
   static inline std::string str(std::string tag) {
-    return Obj::name + " [" + tag + "]";
+    return Obj::name + "[" + tag + "]";
   }
 
 #define CORE_OBJECT_DECL(SELF)                                                 \

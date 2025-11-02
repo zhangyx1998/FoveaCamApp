@@ -28,6 +28,7 @@
 #include "Dispatcher.h"
 #include "Protocol/Version.h"
 #include "napi-helper.h"
+#include "utils/debug.h"
 
 using namespace Napi;
 
@@ -328,12 +329,15 @@ static Napi::Object Init(Napi::Env env) {
 }; // namespace Command
 
 class PendingRequest : public Shared<PendingRequest> {
-private:
-  bool resolved = false;
-  Dispatcher::Future future;
-
 public:
   const Napi::Env env;
+
+private:
+  bool resolved = false;
+  Dispatcher::Future future = {env};
+
+public:
+  Napi::Reference<Napi::Function> factory;
   const struct {
     Method method;
     Property property;
@@ -342,8 +346,10 @@ public:
     }
   } expect;
   PendingRequest(Napi::Env env, Method method, Property property)
-      : env(env), expect{method, property},
-        future(Napi::Promise::Deferred::New(env)) {}
+      : env(env), expect{method, property} {}
+  PendingRequest(Napi::Env env, Method method, Property property,
+                 Napi::Function fn)
+      : env(env), expect{method, property}, factory(Napi::Persistent(fn)) {}
   ~PendingRequest() {
     if (!resolved)
       try {
@@ -354,7 +360,7 @@ public:
   }
   inline void Resolve(Napi::Value value) {
     resolved = true;
-    future.Resolve(value);
+    future.Resolve(factory.IsEmpty() ? value : factory.Value().Call({value}));
   }
   inline void Reject(Napi::Value reason) {
     resolved = true;
@@ -467,16 +473,15 @@ private:
       } else if (method == Method::SYN && property == Property::LOG) {
         // Unsolicited log packet
         std::string log_msg((char *)packet.data(), packet.dataSize());
-        std::cout << "[Protocol] Device log: " << log_msg << std::endl;
+        __LOG__("%s", "LOG ", GREEN, "Protocol", log_msg.c_str());
       } else {
-        std::cerr << "[Protocol] [WARN] Unmatched packet "
-                  << convert<std::string>(method) << ":"
-                  << convert<std::string>(property) << " (seq=" << sequence
-                  << ")" << hexFormat(packet.data(), packet.dataSize())
-                  << std::endl;
+        WARN("Unmatched packet %s:%s (seq=%u) %s",
+             convert<std::string>(method).c_str(),
+             convert<std::string>(property).c_str(), sequence,
+             hexFormat(packet.data(), packet.dataSize()).c_str());
       }
     } catch (std::invalid_argument &e) {
-      std::cerr << "[Protocol] [WARN] Bad rx data: " << e.what() << std::endl;
+      WARN("Bad rx data: %s", e.what());
     }
   }
 
@@ -487,14 +492,14 @@ private:
     while (!flag_term) {
       auto count = ::read(fd, &byte, 1);
       if (count < 0) {
-        std::cerr << "[Protocol] [ERROR] Failed to read from serial port: "
-                  << std::strerror(errno) << std::endl;
+        ERROR("Failed to read from serial port: %s", std::strerror(errno));
         continue;
       } else if (count == 0) {
         std::this_thread::yield();
         continue;
       }
-      VERBOSE("Protocol::recv() %u bytes + incoming byte: %X", rx.len(), byte);
+      VERBOSE("Protocol::recv() %u bytes + incoming 0x%s", rx.len(),
+              hexFormat(&byte, 1).c_str());
       if (rx.recv(byte))
         handleRawPacket(Protocol::RawPacket(rx.get()));
     }
@@ -517,11 +522,9 @@ private:
         if (written != static_cast<ssize_t>(tx.size()))
           JS_THROW(Error, "Incomplete write to serial port", env.Undefined());
         // Create promise
-        auto pr = PendingRequest::create(env, Method::ACK, property);
-        // Create return promise.then(callback)
-        auto promise = pr->Promise().Then(factory);
-        pending.ref()->set(sequence, std::move(pr));
-        return promise;
+        auto pr = PendingRequest::create(env, Method::ACK, property, factory);
+        pending.ref()->set(sequence, pr);
+        return pr->Promise();
       } else {
         throw JS::Error(env, "Failed to encode packet");
       }

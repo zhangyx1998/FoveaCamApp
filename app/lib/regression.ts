@@ -151,7 +151,7 @@ export abstract class Model<T> extends Float64Array {
     async train(data: BatchItem[], epochs: number = 100) {
         for (let epoch = 0; epoch < epochs; epoch++) {
             await this.step(data);
-            await new Promise(process.nextTick);
+            await new Promise(r => setImmediate(r));
         }
         return this;
     }

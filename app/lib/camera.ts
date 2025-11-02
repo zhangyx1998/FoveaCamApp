@@ -9,7 +9,7 @@ import { Camera, cleanup, Vision } from "core";
 import type { CameraCalibration, Point2d, Point3d } from "core";
 import Store from "./store";
 import { Mutable } from "./types";
-import { computed, toRaw } from "vue";
+import { computed, markRaw, toRaw } from "vue";
 import { Adam, Batch, Model, MSE } from "./regression";
 
 window.addEventListener("beforeunload", cleanup);
@@ -91,7 +91,7 @@ export async function useMatchedCameras<Strict extends true | false = false>(
         for (const role of Object.keys(ROLE) as Array<keyof Triple>)
             if (!matched[role])
                 throw new Error(`Camera ${ROLE[role]} not found`);
-    return matched as MatchedCameras<Strict>;
+    return markRaw(matched) as MatchedCameras<Strict>;
 }
 
 export function describeCamera(camera: Camera | undefined | null) {

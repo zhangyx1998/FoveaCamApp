@@ -18,7 +18,7 @@ import CheckerDetection from "./CheckerDetection.vue";
 import FrameView from "@src/components/FrameView.vue";
 import FrameCursor from "@src/components/FrameCursor.vue";
 import { deg } from "@lib/util/math";
-import { describeCamera, getCameraInfo, type CameraConfig } from "@lib/camera";
+import { describeCamera, type CameraConfig } from "@lib/camera";
 import NavBack from "@src/components/NavBack.vue";
 import ConfigEntry from "@src/components/ConfigEntry.vue";
 import CameraRole from "@src/components/CameraRole.vue";
@@ -145,8 +145,7 @@ onUnmounted(async () => {
             <StreamView
                 class="stream"
                 :footnote="`Chess Board  Detector @ ${freq}`"
-                :stream="stream"
-                :overlay="getCameraInfo(camera)"
+                :camera="camera"
                 height="min(60vh, 80vw)"
                 @mousemove="(e) => (cursor = e)"
                 @mouseleave="() => (cursor = null)"

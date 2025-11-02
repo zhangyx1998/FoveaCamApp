@@ -27,7 +27,7 @@ import { FreqMeter } from "@lib/util/perf";
 import { delay } from "@lib/util";
 import FrameView from "@src/components/FrameView.vue";
 import { deg } from "@lib/util/math";
-import { describeCamera, getCameraInfo, type CameraConfig } from "@lib/camera";
+import { describeCamera, type CameraConfig } from "@lib/camera";
 import NavBack from "@src/components/NavBack.vue";
 import ConfigEntry from "@src/components/ConfigEntry.vue";
 import CameraRole from "@src/components/CameraRole.vue";
@@ -38,7 +38,7 @@ import {
     DictionaryTypeSelector,
     getInternalObjectPoints,
 } from "@lib/marker";
-import rainbow, { light_rainbow } from "@lib/swatch";
+import rainbow from "@lib/swatch";
 
 const props = defineProps<{
     camera: Camera;
@@ -180,8 +180,7 @@ onUnmounted(async () => {
             <StreamView
                 class="stream"
                 :footnote="`Marker Detector @ ${freq}`"
-                :stream="stream"
-                :overlay="getCameraInfo(camera)"
+                :camera="camera"
                 height="min(60vh, 80vw)"
                 @mousemove="(e) => (cursor = e)"
                 @mouseleave="() => (cursor = null)"

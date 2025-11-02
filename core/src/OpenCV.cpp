@@ -109,7 +109,7 @@ CVT(cv::Rect_, double, 4, x, y, width, height)
     MATCH_MAT_TYPE_CASE(CV_32F, float32_t, RET, SIZE, AB, OFFSET);             \
     MATCH_MAT_TYPE_CASE(CV_64F, float64_t, RET, SIZE, AB, OFFSET);             \
   default:                                                                     \
-    JS_THROW(env,                                                              \
+    JS_THROW(TypeError,                                                        \
              "Unsupported Mat type " + std::to_string(MAT.type()) +            \
                  " (converting to TypedArray)",                                \
              env.Undefined());                                                 \
@@ -302,7 +302,7 @@ Napi::Value convert(Napi::Env env, const Napi::Value &container,
 template <> cv::TermCriteria convert(const Napi::Value &value) {
   if (value.IsUndefined())
     return cv::TermCriteria(cv::TermCriteria::COUNT | cv::TermCriteria::EPS, 30,
-                            0.01);
+                            1e-8);
   if (!value.IsObject())
     throw JS::TypeError(value.Env(), "Argument must be an object");
   const auto &obj = value.As<Napi::Object>();

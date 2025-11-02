@@ -15,7 +15,6 @@
 #include "utils/error.h"
 #include <pointer.h>
 
-#include <iostream>
 #include <utils/map-set.h>
 
 namespace Dispatcher {
@@ -73,8 +72,7 @@ struct Context {
 
   void updateRef() {
     if (uv_is_closing(handle())) {
-      std::cerr << "[WARN] Dispatcher UV handle is closing, cannot updateRef()"
-                << std::endl;
+      WARN("Dispatcher UV handle is closing, cannot updateRef()");
       return;
     }
     bool shouldReference = future > 0 || !queue.empty();
@@ -106,8 +104,7 @@ struct Context {
 
   ~Context() {
     if (referenced) {
-      std::cerr << "[WARN] Dispatcher destroyed with active references"
-                << std::endl;
+      WARN("Dispatcher destroyed with active references");
       uv_unref(handle());
     }
     if (!uv_is_closing(handle())) {
@@ -151,23 +148,27 @@ static void async_cb(uv_async_t *handle) {
   const auto &env = static_cast<napi_env>(handle->data);
   auto dispatcher = get(env);
   if (!dispatcher) {
-    std::cerr << "[ERROR] Dispatcher async_cb called after cleanup"
-              << std::endl;
+    WARN("Dispatcher async_cb called after cleanup");
     return;
   }
   Napi::HandleScope hs(env);
+  size_t processed = 0;
   while (true) {
     auto task = dispatcher->ref()->getNextTask();
     if (!task)
       break;
     try {
       task(env);
+      processed++;
     } catch (const std::exception &e) {
-      std::cerr << "[ERROR] Unhandled exception in Dispatcher task: "
-                << e.what() << std::endl;
+      ERROR("Unhandled exception in Dispatcher task: %s", e.what());
     } catch (...) {
-      std::cerr << "[ERROR] Unknown exception in Dispatcher task" << std::endl;
+      ERROR("Unknown exception in Dispatcher task");
     }
+  }
+  // Update ref count once after processing all tasks
+  if (processed > 0) {
+    VERBOSE("Dispatcher processed %zu tasks in single async_cb", processed);
     dispatcher->ref()->updateRef();
   }
 }
@@ -215,8 +216,7 @@ Future::~Future() {
     dispatcher->ref()->decFuture();
   } else {
     // Dispatcher already cleaned up, this is fine during shutdown
-    std::cerr << "[WARN] Future destroyed after Dispatcher cleanup"
-              << std::endl;
+    WARN("Future destroyed after Dispatcher cleanup");
   }
 }
 
