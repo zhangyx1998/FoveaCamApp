@@ -24,8 +24,8 @@ static std::string objectKey(const Napi::Value &key) {
   return "\"" + escaped + "\"";
 }
 
-static std::string repr(const Napi::Object &obj, int depth, int max_depth,
-                        bool omit_empty = false) {
+static std::string repr(const Napi::Object &obj, int max_depth,
+                        int current_depth, bool omit_empty = false) {
   const auto is_array = obj.IsArray();
   const std::string brace_l = is_array ? "[" : "{",
                     brace_r = is_array ? "]" : "}";
@@ -33,7 +33,7 @@ static std::string repr(const Napi::Object &obj, int depth, int max_depth,
   uint32_t length = props.Length();
   if (length == 0)
     return omit_empty ? "" : brace_l + brace_r;
-  if (depth >= max_depth)
+  if (current_depth >= max_depth)
     return brace_l + " ... " + brace_r;
   std::ostringstream oss;
   oss << brace_l << " ";
@@ -42,16 +42,14 @@ static std::string repr(const Napi::Object &obj, int depth, int max_depth,
       oss << ", ";
     auto key = props.Get(i);
     auto value = obj.Get(key);
-    oss << " " << objectKey(key) << ": " << repr(value, depth + 1, max_depth);
+    oss << " " << objectKey(key) << ": "
+        << repr(value, max_depth, current_depth + 1);
   }
   oss << " " << brace_r;
   return oss.str();
 }
 
-std::string repr(const Napi::Value &value, int depth, int max_depth) {
-  const std::string indent(depth * 2, ' ');
-  const std::string nextIndent((depth + 1) * 2, ' ');
-
+std::string repr(const Napi::Value &value, int max_depth, int current_depth) {
   if (value.IsUndefined()) {
     return "undefined";
   } else if (value.IsNull()) {
@@ -103,7 +101,8 @@ std::string repr(const Napi::Value &value, int depth, int max_depth) {
     }
   };
   std::vector<std::string> segments;
-  auto content = repr(value.As<Napi::Object>(), depth, max_depth, !tag.empty());
+  auto content =
+      repr(value.As<Napi::Object>(), max_depth, current_depth, !tag.empty());
   if (!tag.empty())
     segments.push_back(tag);
   if (!content.empty())

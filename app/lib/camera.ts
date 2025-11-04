@@ -5,12 +5,12 @@
 // -------------------------------------------------------
 
 import { setAction } from "@src/components/Loading.vue";
-import { Camera, cleanup, Vision } from "core";
-import type { CameraCalibration, Point2d, Point3d } from "core";
+import { Camera, cleanup, Regression, Vision } from "core";
+import type { CameraCalibration, Point, Point2d, Point3d } from "core";
 import Store from "./store";
 import { Mutable } from "./types";
 import { computed, markRaw, toRaw } from "vue";
-import { Adam, Batch, Model, MSE } from "./regression";
+import { sha256 } from "./util/hash";
 
 window.addEventListener("beforeunload", cleanup);
 
@@ -99,6 +99,8 @@ export function describeCamera(camera: Camera | undefined | null) {
     return `${camera.vendor} ${camera.model} (${camera.serial})`;
 }
 
+export type CameraDescription = ReturnType<typeof describeCamera>;
+
 function normalizePathSegment(segment: string) {
     return segment.trim().replace(/\s+/g, "-");
 }
@@ -165,19 +167,18 @@ export async function useIntrinsicCalibration(camera: Camera) {
         "calibrate-intrinsic",
         getCameraKey(camera),
     ]);
-    const undistort = computed(() => {
-        try {
-            if (validateCalibration(calibration)) {
-                const cal = new Vision.Undistort(toRaw(calibration));
-                console.log(cal);
-                return cal;
+    return {
+        calibration,
+        get undistort() {
+            try {
+                if (validateCalibration(calibration))
+                    return new Vision.Undistort(toRaw(calibration));
+            } catch (e) {
+                console.warn("Failed to create undistort:", e);
+                console.log("Calibration:", toRaw(calibration));
             }
-        } catch (e) {
-            console.warn("Failed to create undistort:", e);
-            console.log("Calibration:", toRaw(calibration));
-        }
-    });
-    return { calibration, undistort };
+        },
+    };
 }
 
 export type IntrinsicCalibration = Awaited<
@@ -206,33 +207,6 @@ export async function useExtrinsicCalibration(camera: Camera) {
     ]);
 }
 
-class QuadraticRegression2D extends Model<Point2d> {
-    predict({ x, y }: Point2d) {
-        const [a, b, c, d, e, f] = this;
-        return a * x ** 2 + b * y ** 2 + c * x * y + d * x + e * y + f;
-    }
-    grad({ x, y }: Point2d) {
-        // Gradient of (a*x² + b*y² + c*xy + d*x + e*y + f) with respect to [a, b, c, d, e, f]
-        return [x ** 2, y ** 2, x * y, x, y, 1];
-    }
-}
-
-export type Regression = {
-    vx: QuadraticRegression2D;
-    vy: QuadraticRegression2D;
-    rx: QuadraticRegression2D;
-    ry: QuadraticRegression2D;
-};
-
-function train(batch: Batch<Point2d>) {
-    return new QuadraticRegression2D(
-        [0, 0, 0, 0, 0, 0],
-        MSE,
-        0.1,
-        new Adam()
-    ).train(batch, 1e4);
-}
-
 export async function useExtrinsicRegression(ds: Partial<ExtrinsicDataset>) {
     setAction("Performing extrinsic regression...");
     ds = toRaw(ds);
@@ -240,38 +214,114 @@ export async function useExtrinsicRegression(ds: Partial<ExtrinsicDataset>) {
         console.log(ds);
         throw new Error("No extrinsic data for regression");
     }
-    const D = ds.map((d) => ({
-        R: d!.angle,
-        V: d!.voltage,
-    }));
+    const keys: (keyof Point2d)[] = ["x", "y"];
+    const R: Point2d[] = [];
+    const V: Point2d[] = [];
+    for (const d of ds) {
+        R.push(d!.angle);
+        V.push(d!.voltage);
+    }
     return {
-        vx: await train(
-            D.map(({ R, V }) => ({
-                input: R,
-                output: V.x,
-            }))
-        ),
-        vy: await train(
-            D.map(({ R, V }) => ({
-                input: R,
-                output: V.y,
-            }))
-        ),
-        rx: await train(
-            D.map(({ R, V }) => ({
-                input: V,
-                output: R.x,
-            }))
-        ),
-        ry: await train(
-            D.map(({ R, V }) => ({
-                input: V,
-                output: R.y,
-            }))
-        ),
+        V2R: new Regression<Point2d, Point2d>(keys, keys).fit(V, R),
+        R2V: new Regression<Point2d, Point2d>(keys, keys).fit(R, V),
     };
 }
 
 export type ExtrinsicRegression = Awaited<
     ReturnType<typeof useExtrinsicRegression>
 >;
+
+async function hashTriple({ L, C, R }: Triple<Camera>) {
+    return await sha256(
+        JSON.stringify({
+            L: getCameraKey(L),
+            C: getCameraKey(C),
+            R: getCameraKey(R),
+        })
+    );
+}
+
+export type TripleConfig = Triple<CameraDescription> & {
+    zoom_factor: number;
+    baseline_mm: number;
+    drift_l: Point2d; // Angular drift in radians
+    drift_r: Point2d; // Angular drift in radians
+};
+
+export async function useTripleConfig(triple: Triple<Camera>) {
+    const key = await hashTriple(triple);
+    const config = await Store.open<TripleConfig>(["triples", key]);
+    config.L ??= describeCamera(triple.L);
+    config.C ??= describeCamera(triple.C);
+    config.R ??= describeCamera(triple.R);
+    return config;
+}
+
+export async function useCalibratedTriple() {
+    const { L, C, R, ...forward } = await useMatchedCameras(true);
+    const [CI, LE, RE, config] = await Promise.all([
+        useIntrinsicCalibration(C),
+        useExtrinsicCalibration(L).then(useExtrinsicRegression),
+        useExtrinsicCalibration(R).then(useExtrinsicRegression),
+        useTripleConfig({ L, C, R }),
+    ]);
+    function applyDrift({ x, y }: Point2d, drift?: Partial<Point2d>): Point2d {
+        return { x: x + (drift?.x ?? 0), y: y + (drift?.y ?? 0) };
+    }
+    function removeDrift({ x, y }: Point2d, drift?: Partial<Point2d>): Point2d {
+        return { x: x - (drift?.x ?? 0), y: y - (drift?.y ?? 0) };
+    }
+    return {
+        L,
+        C,
+        R,
+        CI,
+        LE,
+        RE,
+        config,
+        // Conversion from angle (rad) to voltage (V)
+        A2V: {
+            L(angle: Point2d) {
+                return LE.R2V.predict(removeDrift(angle, config.drift_l));
+            },
+            R(angle: Point2d) {
+                return RE.R2V.predict(removeDrift(angle, config.drift_r));
+            },
+        },
+        // Conversion from voltage (V) to angle (rad)
+        V2A: {
+            L(volt: Point2d) {
+                return applyDrift(LE.V2R.predict(volt), config.drift_l);
+            },
+            R(volt: Point2d) {
+                return applyDrift(RE.V2R.predict(volt), config.drift_r);
+            },
+        },
+        // Conversion from angle (rad) to pixel (px)
+        A2P: {
+            C(px: Point2d) {
+                if (!CI.undistort)
+                    throw new Error("Wide camera not calibrated");
+                return CI.undistort.position([px], true)[0];
+            },
+        },
+        // Conversion from pixel (px) to angle (rad)
+        P2A: {
+            C(px: Point2d) {
+                if (!CI.undistort)
+                    throw new Error("Wide camera not calibrated");
+                return CI.undistort.angular([px], false)[0];
+            },
+        },
+        ...forward,
+    };
+}
+
+export type CalibratedTriple = Awaited<ReturnType<typeof useCalibratedTriple>>;
+
+export async function getFrameSize(camera: Camera) {
+    const frame = await camera.grab();
+    const { width, height } = frame;
+    frame.release();
+    return { width, height };
+}

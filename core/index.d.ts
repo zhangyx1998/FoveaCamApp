@@ -338,6 +338,21 @@ declare module "core" {
         | "IPPE_SQUARE"
         | "SQPNP";
 
+    type InterpolationFlag =
+        | "NEAREST"
+        | "LINEAR"
+        | "CUBIC"
+        | "AREA"
+        | "LANCZOS4";
+
+    type TemplateMatchMode =
+        | "SQDIFF"
+        | "SQDIFF_NORMED"
+        | "CCORR"
+        | "CCORR_NORMED"
+        | "CCOEFF"
+        | "CCOEFF_NORMED";
+
     class Projector extends CoreObject<Projector> {
         /**
          * Finds an object pose from 3D-2D point correspondences.
@@ -353,7 +368,7 @@ declare module "core" {
             obj_points: Point3d[],
             calibration?: CameraCalibration | null,
             use_extrinsic_guess?: boolean,
-            method?: SolvePnPMethod
+            method?: SolvePnPMethod // default: "ITERATIVE"
         ): Promise<Projector>;
         get rvec(): Mat<Float64Array>;
         get tvec(): Mat<Float64Array>;
@@ -366,8 +381,30 @@ declare module "core" {
         ): Point3d[];
     }
 
+    export type Pixel = Point2d & { value: number };
+
     export class Vision {
         static slice<T extends TypedArray>(mat: Mat<T>, rect: Rect): Mat<T>;
+
+        static resize<T extends TypedArray>(
+            mat: Mat<T>,
+            size?: Partial<Size> | null,
+            mode?: InterpolationFlag // default: "LINEAR"
+        ): Awaitable<Mat<T>>;
+
+        static disparity(
+            a: Frame,
+            b: Frame,
+            norm?: boolean // default: false
+        ): Promise<Mat<Uint8Array>>;
+
+        static minMaxLoc(mat: Mat): [Pixel, Pixel] & { min: Pixel; max: Pixel };
+
+        static matchTemplate(
+            haystack: Mat,
+            needle: Mat,
+            method?: TemplateMatchMode // default: "SQDIFF_NORMED"
+        ): Promise<Mat<Float32Array>>;
 
         static findChessboardCorners(
             mat: Mat,
@@ -398,5 +435,33 @@ declare module "core" {
         static warn(...args: any[]): void;
         static info(...args: any[]): void;
         static verbose(...args: any[]): void;
+    }
+
+    // default: { ply: [2, 1, 0, -1, -2] }
+    // For input of {x, y}, will expand to:
+    // [x^2, y^2, xy, x, y, 1, 1/x, 1/y, 1/x^2, 1/y^2, 1/xy]
+    type RegressionConfig = {
+        ply: number[]; // polynomial degrees to expand
+        log: number[]; // logarithmic degrees to expand
+        exp: number[]; // exponential degrees to expand
+    };
+
+    export class Regression<
+        I extends Record<string, number>,
+        O extends Record<string, number>
+    > {
+        constructor(
+            features: (keyof I)[],
+            targets: (keyof O)[],
+            config?: RegressionConfig
+        );
+        fit(i: I[], o: O[]): this;
+        expand(i: I): number[];
+        predict(i: I): O;
+        get features(): (keyof I)[];
+        get targets(): (keyof O)[];
+        get expansions(): string[];
+        get parameters(): Record<keyof O, number[]>;
+        toString(): string;
     }
 }

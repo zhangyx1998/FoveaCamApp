@@ -193,60 +193,116 @@ Napi::Value convert(Napi::Env env, const Napi::Value &container,
   return convert(env, m);
 }
 
+// Attach the reference to Mat's allocator user data
+// OpenCV will manage the UMatData through the custom allocator
+// Create custom allocator that holds the Napi::Reference
+static struct TypedArrayMatAllocator : cv::MatAllocator {
+  using Value = const Napi::TypedArray;
+  using Ref = ThreadSafeReference<Value>;
+  cv::UMatData *allocate(int dims, const int *sizes, int type, void *data,
+                         size_t *step, cv::AccessFlag flags,
+                         cv::UMatUsageFlags usageFlags) const override {
+    return cv::Mat::getStdAllocator()->allocate(dims, sizes, type, data, step,
+                                                flags, usageFlags);
+  }
+  bool allocate(cv::UMatData *u, cv::AccessFlag accessFlags,
+                cv::UMatUsageFlags usageFlags) const override {
+    return cv::Mat::getStdAllocator()->allocate(u, accessFlags, usageFlags);
+  }
+  void deallocate(cv::UMatData *u) const override {
+    if (u && u->userdata) {
+      auto ref = static_cast<Ref *>(u->userdata);
+      delete ref; // Release the reference, allowing GC
+      VERBOSE("[cv::Mat] Released Napi::Reference to TypedArray");
+      u->userdata = nullptr;
+    }
+    cv::Mat::getStdAllocator()->deallocate(u);
+  }
+  static Ref *ref(Value &value) { return new Ref(value); }
+} typed_array_mat_allocator;
+
 template <> cv::Mat convert(const Napi::Value &value) {
+  const auto env = value.Env();
   if (!value.IsTypedArray())
-    throw JS::TypeError(value.Env(), "Argument must be a TypedArray");
+    throw JS::TypeError(env, "Argument must be a TypedArray");
   const auto &typed_array = value.As<Napi::TypedArray>();
   if (!typed_array.Has("shape"))
-    throw JS::TypeError(value.Env(), "Mat object must have 'shape' property");
+    throw JS::TypeError(env, "Mat object must have 'shape' property");
   if (!typed_array.Get("shape").IsArray())
-    throw JS::TypeError(value.Env(), "Mat.shape must be an array");
+    throw JS::TypeError(env, "Mat.shape must be an array");
   const auto shape = convert<std::vector<int>>(typed_array.Get("shape"));
   if (!typed_array.Has("channels"))
-    throw JS::TypeError(value.Env(),
-                        "Mat object must have 'channels' property");
+    throw JS::TypeError(env, "Mat object must have 'channels' property");
   const auto channels = convert<int>(typed_array.Get("channels"));
   if (channels <= 0)
-    throw JS::TypeError(value.Env(), "Mat.channels must be a positive integer");
+    throw JS::TypeError(env, "Mat.channels must be a positive integer");
   if (channels > CV_CN_MAX)
-    throw JS::TypeError(value.Env(), "Number of channels " +
-                                         std::to_string(channels) +
-                                         " exceeds OpenCV maximum of " +
-                                         std::to_string(CV_CN_MAX));
-  cv::Mat mat;
+    throw JS::TypeError(env, "Number of channels " + std::to_string(channels) +
+                                 " exceeds OpenCV maximum of " +
+                                 std::to_string(CV_CN_MAX));
+
+  int cv_type;
   switch (typed_array.TypedArrayType()) {
   case napi_uint8_array:
-    mat = cv::Mat(shape, CV_8UC(channels));
+    cv_type = CV_8UC(channels);
     break;
   case napi_int8_array:
-    mat = cv::Mat(shape, CV_8SC(channels));
+    cv_type = CV_8SC(channels);
     break;
   case napi_uint16_array:
-    mat = cv::Mat(shape, CV_16UC(channels));
+    cv_type = CV_16UC(channels);
     break;
   case napi_int16_array:
-    mat = cv::Mat(shape, CV_16SC(channels));
+    cv_type = CV_16SC(channels);
     break;
   case napi_int32_array:
-    mat = cv::Mat(shape, CV_32SC(channels));
+    cv_type = CV_32SC(channels);
     break;
   case napi_float32_array:
-    mat = cv::Mat(shape, CV_32FC(channels));
+    cv_type = CV_32FC(channels);
     break;
   case napi_float64_array:
-    mat = cv::Mat(shape, CV_64FC(channels));
+    cv_type = CV_64FC(channels);
     break;
   default:
-    throw JS::TypeError(value.Env(), "Unsupported TypedArray type for Mat");
+    throw JS::TypeError(env, "Unsupported TypedArray type for Mat");
   }
+  // Get pointer to the TypedArray's data
+  size_t offset = typed_array.ByteOffset();
+  void *data =
+      static_cast<uint8_t *>(typed_array.ArrayBuffer().Data()) + offset;
+  // Create Mat wrapping external buffer (no copy)
+#if defined(FEAT_MAT_REUSE_TYPED_ARRAY_DATA)
+  auto mat = cv::Mat(shape, cv_type, data);
+#else
+  auto mat = cv::Mat(shape, cv_type);
+#endif
   const auto byteLength = typed_array.ByteLength();
   const auto expectedSize = mat.size().area() * mat.elemSize();
   if (byteLength != expectedSize)
-    throw JS::TypeError(value.Env(), "TypedArray size " +
-                                         std::to_string(byteLength) +
-                                         " does not match expected Mat size " +
-                                         std::to_string(expectedSize));
-  std::memcpy(mat.data, typed_array.ArrayBuffer().Data(), byteLength);
+    throw JS::TypeError(env, "TypedArray size " + std::to_string(byteLength) +
+                                 " does not match expected Mat size " +
+                                 std::to_string(expectedSize));
+#if defined(FEAT_MAT_REUSE_TYPED_ARRAY_DATA)
+  // Set the custom allocator BEFORE allocating UMatData
+  mat.allocator = &typed_array_mat_allocator;
+  // Manually allocate UMatData if it doesn't exist (external data wrapping
+  // doesn't auto-create it)
+  if (!mat.u) {
+    mat.u =
+        mat.allocator->allocate(mat.dims, mat.size.p, mat.type(), mat.data,
+                                mat.step.p, cv::ACCESS_RW, cv::USAGE_DEFAULT);
+    if (mat.u)
+      mat.u->refcount = 1; // Initialize refcount
+    else
+      throw JS::Error(env,
+                      "Failed to allocate UMatData for TypedArray-backed Mat");
+  }
+  mat.u->userdata = TypedArrayMatAllocator::ref(typed_array);
+#else
+  // Copy data from TypedArray
+  std::memcpy(mat.data, data, expectedSize);
+#endif
   return mat;
 }
 
@@ -367,5 +423,94 @@ Napi::Value convert(Napi::Env env, const cv::SolvePnPMethod &value) noexcept {
 template <>
 Napi::Value convert(Napi::Env env, const Napi::Value &container,
                     const cv::SolvePnPMethod &value) noexcept {
+  return convert(env, value);
+}
+
+template <> std::string convert(const cv::TemplateMatchModes &value) {
+  CASE_ENUM_TO_STRING(value, SQDIFF, cv::TM_);
+  CASE_ENUM_TO_STRING(value, SQDIFF_NORMED, cv::TM_);
+  CASE_ENUM_TO_STRING(value, CCORR, cv::TM_);
+  CASE_ENUM_TO_STRING(value, CCORR_NORMED, cv::TM_);
+  CASE_ENUM_TO_STRING(value, CCOEFF, cv::TM_);
+  CASE_ENUM_TO_STRING(value, CCOEFF_NORMED, cv::TM_);
+  throw std::range_error("Unsupported TemplateMatchModes enum value: " +
+                         std::to_string(value));
+}
+
+template <> cv::TemplateMatchModes convert(const std::string &value) {
+  CASE_STRING_TO_ENUM(value, SQDIFF, cv::TM_);
+  CASE_STRING_TO_ENUM(value, SQDIFF_NORMED, cv::TM_);
+  CASE_STRING_TO_ENUM(value, CCORR, cv::TM_);
+  CASE_STRING_TO_ENUM(value, CCORR_NORMED, cv::TM_);
+  CASE_STRING_TO_ENUM(value, CCOEFF, cv::TM_);
+  CASE_STRING_TO_ENUM(value, CCOEFF_NORMED, cv::TM_);
+  throw std::range_error("Unsupported TemplateMatchModes enum string: " +
+                         value);
+}
+
+template <> cv::TemplateMatchModes convert(const Napi::Value &value) {
+  if (!value.IsString())
+    throw JS::TypeError(value.Env(), "TemplateMatchModes must be a string");
+  return convert<cv::TemplateMatchModes>(value.As<Napi::String>().Utf8Value());
+}
+
+template <>
+Napi::Value convert(Napi::Env env,
+                    const cv::TemplateMatchModes &value) noexcept {
+  try {
+    return convert(env, convert<std::string>(value));
+  }
+  JS_EXCEPT(env.Undefined())
+}
+
+template <>
+Napi::Value convert(Napi::Env env, const Napi::Value &container,
+                    const cv::TemplateMatchModes &value) noexcept {
+  return convert(env, value);
+}
+
+template <> std::string convert(const cv::InterpolationFlags &value) {
+  CASE_ENUM_TO_STRING(value, NEAREST, cv::INTER_);
+  CASE_ENUM_TO_STRING(value, LINEAR, cv::INTER_);
+  CASE_ENUM_TO_STRING(value, CUBIC, cv::INTER_);
+  CASE_ENUM_TO_STRING(value, AREA, cv::INTER_);
+  CASE_ENUM_TO_STRING(value, LANCZOS4, cv::INTER_);
+  CASE_ENUM_TO_STRING(value, LINEAR_EXACT, cv::INTER_);
+  CASE_ENUM_TO_STRING(value, NEAREST_EXACT, cv::INTER_);
+  CASE_ENUM_TO_STRING(value, MAX, cv::INTER_);
+  throw std::range_error("Unsupported InterpolationFlag enum value: " +
+                         std::to_string(value));
+}
+
+template <> cv::InterpolationFlags convert(const std::string &value) {
+  CASE_STRING_TO_ENUM(value, NEAREST, cv::INTER_);
+  CASE_STRING_TO_ENUM(value, LINEAR, cv::INTER_);
+  CASE_STRING_TO_ENUM(value, CUBIC, cv::INTER_);
+  CASE_STRING_TO_ENUM(value, AREA, cv::INTER_);
+  CASE_STRING_TO_ENUM(value, LANCZOS4, cv::INTER_);
+  CASE_STRING_TO_ENUM(value, LINEAR_EXACT, cv::INTER_);
+  CASE_STRING_TO_ENUM(value, NEAREST_EXACT, cv::INTER_);
+  CASE_STRING_TO_ENUM(value, MAX, cv::INTER_);
+  throw std::range_error("Unsupported InterpolationFlag enum string: " + value);
+}
+
+template <> cv::InterpolationFlags convert(const Napi::Value &value) {
+  if (!value.IsString())
+    throw JS::TypeError(value.Env(), "InterpolationFlag must be a string");
+  return convert<cv::InterpolationFlags>(value.As<Napi::String>().Utf8Value());
+}
+
+template <>
+Napi::Value convert(Napi::Env env,
+                    const cv::InterpolationFlags &value) noexcept {
+  try {
+    return convert(env, convert<std::string>(value));
+  }
+  JS_EXCEPT(env.Undefined())
+}
+
+template <>
+Napi::Value convert(Napi::Env env, const Napi::Value &container,
+                    const cv::InterpolationFlags &value) noexcept {
   return convert(env, value);
 }

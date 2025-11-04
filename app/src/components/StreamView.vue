@@ -1,12 +1,15 @@
 <script setup lang="ts">
 import { Log } from "core";
-import type { Mat, Frame, Stream, Size, Point, Rect, Camera } from "core";
+import { Frame } from "core";
+import type { Mat, Size, Point, Rect, Camera } from "core";
 import { computed, markRaw, onUnmounted, ref, watch } from "vue";
 
 import { FreqMeter, PerfTimer } from "@lib/util/perf";
 import abortable from "@lib/abortable";
 import FrameView from "./FrameView.vue";
 import { getCameraInfo } from "@lib/camera";
+
+type Stream = Iterable<Frame | Mat<Uint8Array> | null>;
 
 const emit = defineEmits<{
     (e: "mousedown", event: MouseEvent & Point & Size): void;
@@ -31,7 +34,7 @@ const props = defineProps({
         default: null,
     },
     stream: {
-        type: Object as () => Stream<Frame> | undefined,
+        type: Object as () => Stream | undefined,
         required: false,
         default: undefined,
     },
@@ -41,7 +44,7 @@ const props = defineProps({
         default: undefined,
     },
     overlay: {
-        type: Object as () => Boolean | Record<string, string>,
+        type: Object as () => Record<string, string>,
         required: false,
         default: {},
     },
@@ -77,20 +80,24 @@ const stream = computed(() => {
     return undefined;
 });
 
-function createTask(stream?: Stream<Frame>) {
+function createTask(stream?: Stream) {
     if (!stream) return null;
     return abortable(async (aborted) => {
         try {
             for (const frame of stream) {
                 if (aborted()) break;
                 if (frame) {
-                    mat.value = await perf.measure(async () => {
-                        Log.info(`Requested: ${frame}.view(${"BGRA8"})`);
-                        const m = await frame.view("BGRA8", mat.value);
-                        Log.info(` Resolved: ${frame}.view(${"BGRA8"})`);
-                        return m;
-                    });
-                    frame.release();
+                    if (frame instanceof Frame) {
+                        mat.value = await perf.measure(async () => {
+                            Log.verbose(`Requested: ${frame}.view(${"BGRA8"})`);
+                            const m = await frame.view("BGRA8", mat.value);
+                            Log.verbose(` Resolved: ${frame}.view(${"BGRA8"})`);
+                            return m;
+                        });
+                        frame.release();
+                    } else {
+                        mat.value = frame;
+                    }
                     fps.tick();
                 }
                 await new Promise(requestAnimationFrame);

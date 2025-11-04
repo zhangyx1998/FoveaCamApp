@@ -236,12 +236,3 @@ export default class Store {
         await writeFile(path, JSON.stringify(data, replacer, 2));
     }
 }
-
-type Settings = {
-    message: string;
-};
-
-export const settings = await Store.open<Settings>("settings");
-
-(window as any).settings = settings;
-(window as any).save = Store.save;

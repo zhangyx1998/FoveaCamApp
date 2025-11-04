@@ -30,6 +30,7 @@ export const {
     Protocol, //
     ArUcoDetector, //
     Vision, //
+    Regression, //
     Log,
     cleanup, //
     __origin__, //

@@ -54,7 +54,7 @@ export async function record(
 
 export type TrackerRecord = Awaited<ReturnType<typeof record>>;
 
-export default class Tracker {
+export default class Tracker extends EventTarget {
     public readonly fps = new FreqMeter();
     public readonly task: ReturnType<typeof abortable>;
     public readonly __target_id__ = ref<number>(0);
@@ -127,6 +127,7 @@ export default class Tracker {
         target_id: number = 0,
         scale: number = 1.0
     ) {
+        super();
         this.target_id = target_id;
         this.task = abortable(async (aborted) => {
             try {
@@ -137,13 +138,14 @@ export default class Tracker {
                 )) {
                     if (aborted()) break;
                     if (detections !== null) {
-                        Log.info(
+                        Log.verbose(
                             "Got",
                             detections.length,
                             "detections for",
                             detections.frame.toString()
                         );
                         this.fps.tick();
+                        this.dispatchEvent(new Event("detection"));
                         this.handleDetections(detections);
                     } else {
                         await new Promise((r) => setImmediate(r));
@@ -156,63 +158,61 @@ export default class Tracker {
     }
 }
 
-function backToCenter(p: number, kp: number, dt: number) {
-    return -clamp(Math.sign(p) * kp * dt, [Math.min(0, p), Math.max(0, p)]);
+function backToCenter(p: number, kp: number) {
+    return -clamp(Math.sign(p) * kp, [Math.min(0, p), Math.max(0, p)]);
 }
 
 export function actuate(
     controller: Controller,
     left: Tracker | undefined,
     right: Tracker | undefined,
-    kp = 1e3
+    config: { kp?: number; origin_left?: Point2d; origin_right?: Point2d } = {}
 ) {
     return abortable(async (aborted) => {
         if (!controller) return;
         const pending: { left?: Pos; right?: Pos } = {};
-        const handles = [
-            watch(
-                () => left?.center_relative,
-                (c) => {
-                    // const dt = 1 / Math.max(10, left?.fps?.value ?? 0);
-                    const dt = 0.02;
-                    const { x, y } = controller.pos.left;
-                    if (c) {
-                        const { x: dx, y: dy } = c;
-                        pending.left = {
-                            x: x + dx * kp * dt,
-                            y: y + dy * kp * dt,
-                        };
-                    } else {
-                        pending.left = {
-                            x: x + backToCenter(x, kp, dt),
-                            y: y + backToCenter(y, kp, dt),
-                        };
-                    }
-                }
-            ),
-            watch(
-                () => right?.center_relative,
-                (c) => {
-                    // const dt = 1 / Math.max(10, right?.fps?.value ?? 0);
-                    const dt = 0.02;
-                    const { x, y } = controller.pos.right;
-                    if (c) {
-                        const { x: dx, y: dy } = c;
-                        pending.right = {
-                            x: x + dx * kp * dt,
-                            y: y + dy * kp * dt,
-                        };
-                    } else {
-                        pending.right = {
-                            x: x + backToCenter(x, kp, dt),
-                            y: y + backToCenter(y, kp, dt),
-                        };
-                    }
-                }
-            ),
-        ];
+        left?.addEventListener("detection", () => {
+            const c = left.center_relative;
+            const { kp = 16.0 } = config;
+            const { x, y } = controller.pos.left;
+            if (c) {
+                const { x: dx, y: dy } = c;
+                pending.left = {
+                    x: x + dx * kp,
+                    y: y + dy * kp,
+                };
+            } else {
+                const origin = config.origin_left ?? { x: 0, y: 0 };
+                pending.left = {
+                    x: x + backToCenter(x - origin.x, kp),
+                    y: y + backToCenter(y - origin.y, kp),
+                };
+            }
+        });
+        right?.addEventListener("detection", () => {
+            const c = right.center_relative;
+            const { kp = 16.0 } = config;
+            const { x, y } = controller.pos.right;
+            if (c) {
+                const { x: dx, y: dy } = c;
+                pending.right = {
+                    x: x + dx * kp,
+                    y: y + dy * kp,
+                };
+            } else {
+                const origin = config.origin_right ?? { x: 0, y: 0 };
+                pending.right = {
+                    x: x + backToCenter(x - origin.x, kp),
+                    y: y + backToCenter(y - origin.y, kp),
+                };
+            }
+        });
         try {
             await controller.enable();
+            await controller.actuate({
+                left: config.origin_left ?? { x: 0, y: 0 },
+                right: config.origin_right ?? { x: 0, y: 0 },
+            });
             while (!aborted()) {
                 if (pending.left || pending.right) {
                     await controller.actuate(pending);
@@ -222,7 +222,6 @@ export function actuate(
             }
         } finally {
             await controller.disable();
-            for (const h of handles) h.stop();
         }
     });
 }

@@ -11,7 +11,7 @@ import Tracker, { actuate, record } from "./tracker";
 import FrameCursor from "@src/components/FrameCursor.vue";
 import { ExtrinsicRecord } from "./calibrate";
 import ConfigEntry from "@src/components/ConfigEntry.vue";
-import Plot from "@src/components/Plot.vue";
+import Line2D from "@src/components/Line2D.vue";
 
 const emit = defineEmits<{
     (e: "finalize"): void;
@@ -96,7 +96,6 @@ onUnmounted(async () => {
         tracker.R?.task.abort(),
         actuator.value?.abort(),
     ]);
-    console.log("Released: trackers and actuator.");
 });
 </script>
 
@@ -135,7 +134,7 @@ onUnmounted(async () => {
                 :color="THEME.L"
                 style="width: 100%"
             >
-                <Plot
+                <Line2D
                     :data="[
                         ...records.map((r) => r.L.voltage),
                         controller.pos.left,
@@ -224,7 +223,7 @@ onUnmounted(async () => {
                 :color="THEME.R"
                 style="width: 100%"
             >
-                <Plot
+                <Line2D
                     :data="[
                         ...records.map((r) => r.R.voltage),
                         controller.pos.right,

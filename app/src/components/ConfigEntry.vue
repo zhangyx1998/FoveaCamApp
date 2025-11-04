@@ -35,5 +35,20 @@
         font-size: inherit;
         font-family: inherit;
     }
+
+    :deep(select) {
+        display: inline-block;
+        font-family: inherit;
+        font-size: inherit;
+        outline: 1px solid #666;
+        border: none;
+        background: none;
+        border-radius: 4px;
+        padding: 0.2em 1ch;
+        color: inherit;
+        &:focus {
+            outline: 1px solid #08c;
+        }
+    }
 }
 </style>
