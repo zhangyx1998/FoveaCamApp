@@ -5,6 +5,7 @@
 // -------------------------------------------------------
 #pragma once
 
+#include "Dispatcher.h"
 #include <iostream>
 #include <napi.h>
 
@@ -165,6 +166,8 @@ template <typename T> void deleter(Napi::Env, void *, void *hint) {
   }
 }
 
+#include <convert.h>
+
 template <typename T>
 inline T optionalArgument(const Napi::Value &arg, T &&fallback) {
   if (arg.IsUndefined() || arg.IsNull())
@@ -197,7 +200,8 @@ inline Napi::Object IterNext(Napi::Env env) {
   return obj;
 }
 
-std::string repr(const Napi::Value &value, int depth = 0, int max_depth = 3);
+std::string repr(const Napi::Value &value, int max_depth = 3,
+                 int __internal__ = 0);
 
 #include <convert.h>
 
@@ -284,6 +288,26 @@ inline Buffer<T> bufferView(const Napi::Value &value) {
   }
   throw JS::TypeError(value.Env(), "Value is not buffer-like");
 }
+
+template <typename T> class ThreadSafeReference {
+private:
+  const Napi::Env env;
+  const Napi::Reference<T> *ref;
+
+public:
+  ThreadSafeReference(T &value)
+      : env(value.Env()),
+        ref(new Napi::Reference<T>(env, Napi::Persistent(value))) {
+    VERBOSE("[ThreadSafeReference] Created @ %p", ref);
+  }
+  ~ThreadSafeReference() {
+    if (ref)
+      Dispatcher::dispatch(env, [ref = ref](napi_env) {
+        VERBOSE("[ThreadSafeReference] Destroyed @ %p", ref);
+        delete ref;
+      });
+  }
+};
 
 // Conversion between JS value and native value
 

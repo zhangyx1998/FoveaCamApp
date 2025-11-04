@@ -1,13 +1,7 @@
 <script setup lang="ts">
-import { computed, markRaw, reactive, ref, shallowRef, watch } from "vue";
-import { Camera, Point2d, Rect, Size, Undistort } from "core";
-import {
-    getCameraInfo,
-    MatchedCameras,
-    Regression,
-    ROLE,
-    THEME,
-} from "@lib/camera";
+import { computed, reactive, ref, shallowRef, watch } from "vue";
+import type { Point2d, Rect, Undistort, Regression } from "core";
+import { ExtrinsicRegression, MatchedCameras, ROLE, THEME } from "@lib/camera";
 import StreamView from "@src/components/StreamView.vue";
 import PosView from "@src/components/PosView.vue";
 import { getController } from "@src/components/Controller.vue";
@@ -27,8 +21,8 @@ const emit = defineEmits<{
 const props = defineProps<{
     cameras: MatchedCameras<true>;
     undistort: Undistort;
-    L: Regression;
-    R: Regression;
+    L: ExtrinsicRegression;
+    R: ExtrinsicRegression;
     saved: boolean;
 }>();
 
@@ -40,14 +34,8 @@ watch(cursor, (c) => {
     if (!c || !(c.buttons & 1)) return;
     const { undistort, L, R } = props;
     const [target] = undistort.angular([c], true);
-    pos.L = {
-        x: L.vx.predict(target),
-        y: L.vy.predict(target),
-    };
-    pos.R = {
-        x: R.vx.predict(target),
-        y: R.vy.predict(target),
-    };
+    pos.L = L.V2R.predict(target);
+    pos.R = R.V2R.predict(target);
 });
 
 const pos = reactive({
@@ -55,11 +43,8 @@ const pos = reactive({
     R: { x: 0, y: 0 },
 });
 
-function projectBack(r: Regression, p: Point2d) {
-    const angle: Point2d = {
-        x: r.vx.predict(p),
-        y: r.vy.predict(p),
-    };
+function projectBack(r: ExtrinsicRegression, p: Point2d) {
+    const angle = r.R2V.predict(p);
     return props.undistort.position([angle], true)[0];
 }
 

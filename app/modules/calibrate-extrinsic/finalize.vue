@@ -110,8 +110,8 @@ function cursor(angle: Point2d) {
     }
     .divider {
         width: 100%;
-        height: 5px;
-        background-color: #f00;
+        height: 1px;
+        background-color: #333;
     }
 }
 </style>

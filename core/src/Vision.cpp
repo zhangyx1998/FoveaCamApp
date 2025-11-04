@@ -33,7 +33,7 @@ using Points3D = vector<Point3f>;
 
 static inline string tag(const cv::Mat &mat) {
   return to_string(mat.cols) + "x" + to_string(mat.rows) + "x" +
-         to_string(mat.channels()) + "@" + to_string(mat.elemSize1() * 8) +
+         to_string(mat.channels()) + ":" + to_string(mat.elemSize1() * 8) +
          "bit";
 }
 
@@ -55,6 +55,130 @@ static FN(slice) {
     cv::Point dst_br(dst_tl.x + src.cols, dst_tl.y + src.rows);
     src.copyTo(sliced(cv::Rect(dst_tl, dst_br)));
     return convert(env, sliced);
+  }
+  JS_EXCEPT(env.Undefined())
+}
+
+static inline cv::Size2i getSize(const Napi::Value &arg, int h, int w) {
+  if (!arg.IsObject())
+    return cv::Size2i(w, h);
+  auto obj = arg.As<Napi::Object>();
+  if (!obj.Has("width") && !obj.Has("height"))
+    return cv::Size2i(w, h);
+  // Both width and height are defined
+  if (obj.Has("width") && obj.Has("height"))
+    return {convert<int>(obj.Get("width")), convert<int>(obj.Get("height"))};
+  // Only one of width or height is defined, infer the other to maintain aspect
+  // ratio
+  if (obj.Has("width")) {
+    int width = convert<int>(obj.Get("width"));
+    int height = static_cast<int>(static_cast<double>(h) * width / w);
+    return {width, height};
+  } else {
+    int height = convert<int>(obj.Get("height"));
+    int width = static_cast<int>(static_cast<double>(w) * height / h);
+    return {width, height};
+  }
+}
+
+static FN(resize) {
+  const auto env = info.Env();
+  try {
+    auto mat = convert<cv::Mat>(info[0]);
+    const auto size = getSize(info[1], mat.rows, mat.cols);
+    const auto fx = optionalArgument<double>(info[2], 0.0);
+    const auto fy = optionalArgument<double>(info[3], 0.0);
+    if (fx == 0.0 && fy == 0.0 && size.width == mat.cols &&
+        size.height == mat.rows)
+      return info[0]; // No resizing needed
+    const auto mode = optionalArgument<InterpolationFlags>(
+        info[4], InterpolationFlags::INTER_LINEAR);
+    return AsyncTask<Mat>::run(env, [mat, size, fx, fy, mode]() {
+      cv::Mat resized;
+      cv::resize(mat, resized, size, fx, fy, mode);
+      return resized;
+    });
+  }
+  JS_EXCEPT(env.Undefined())
+}
+
+static FN(disparity) {
+  const auto env = info.Env();
+  try {
+    auto fa = convert<Arv::Frame::Ptr>(info[0]);
+    auto fb = convert<Arv::Frame::Ptr>(info[1]);
+    auto norm = optionalArgument(info[2], false);
+    if (fa->width() != fb->width() || fa->height() != fb->height())
+      throw JS::Error(env, "Frame size mismatch for disparity computation");
+    auto task = [fa, fb, norm] {
+      auto a = fa->view(Arv::Mono8);
+      auto b = fb->view(Arv::Mono8);
+      if (norm) {
+        cv::Ptr<cv::CLAHE> clahe = cv::createCLAHE(2.0, cv::Size(8, 8));
+        clahe->apply(a, a);
+        clahe->apply(b, b);
+      }
+      // Red v.s. Blue, green = min of both
+      // Use OpenCV's vectorized operations for efficiency
+      cv::Mat channels[4];
+      channels[0] = a;            // R = pa
+      cv::min(a, b, channels[1]); // G = min(pa, pb)
+      channels[2] = b;            // B = pb
+      channels[3] = cv::Mat(a.size(), CV_8UC1, cv::Scalar(255)); // A = 255
+      cv::Mat out;
+      cv::merge(channels, 4, out);
+      return out;
+    };
+    return AsyncTask<cv::Mat>::run(
+        env, task, "disparity(" + fa->tag + ", " + fb->tag + ")");
+  }
+  JS_EXCEPT(env.Undefined());
+};
+
+static FN(minMaxLoc) {
+  auto env = info.Env();
+  try {
+    auto mat = convert<cv::Mat>(info[0]);
+    double minVal, maxVal;
+    cv::Point minLoc, maxLoc;
+    cv::minMaxLoc(mat, &minVal, &maxVal, &minLoc, &maxLoc);
+    auto minPoint = Napi::Object::New(env);
+    minPoint.Set("x", Napi::Number::New(env, minLoc.x));
+    minPoint.Set("y", Napi::Number::New(env, minLoc.y));
+    minPoint.Set("value", Napi::Number::New(env, minVal));
+    auto maxPoint = Napi::Object::New(env);
+    maxPoint.Set("x", Napi::Number::New(env, maxLoc.x));
+    maxPoint.Set("y", Napi::Number::New(env, maxLoc.y));
+    maxPoint.Set("value", Napi::Number::New(env, maxVal));
+    auto result = Napi::Array::New(env);
+    result.Set("min", minPoint);
+    result.Set("max", maxPoint);
+    result.Set((size_t)0, minPoint);
+    result.Set((size_t)1, maxPoint);
+    return result;
+  }
+  JS_EXCEPT(env.Undefined())
+}
+
+static FN(matchTemplate) {
+  auto env = info.Env();
+  try {
+    auto haystack = convert<cv::Mat>(info[0]);
+    auto needle = convert<cv::Mat>(info[1]);
+    const auto method =
+        optionalArgument<TemplateMatchModes>(info[2], TM_SQDIFF_NORMED);
+    auto task = [haystack, needle, method] {
+      cv::Mat result;
+      cv::matchTemplate(haystack, needle, result, method);
+      return result;
+    };
+    const auto action = "matchTemplate(" + tag(haystack) + ", " + tag(needle) +
+                        ", " + convert<std::string>(method) + ")";
+    return AsyncTask<cv::Mat>::run(env, task,
+                                   "matchTemplate(" + tag(haystack) + ", " +
+                                       tag(needle) + ", " +
+                                       convert<std::string>(method) + ")");
+    return env.Undefined();
   }
   JS_EXCEPT(env.Undefined())
 }
@@ -463,6 +587,10 @@ CORE_OBJECT(Projector);
 void exportVisionNamespace(Napi::Env env, Napi::Object &exports) {
   Napi::Object vision = Napi::Object::New(env);
   EXPORT(vision, slice);
+  EXPORT(vision, resize);
+  EXPORT(vision, disparity);
+  EXPORT(vision, minMaxLoc);
+  EXPORT(vision, matchTemplate);
   EXPORT(vision, findChessboardCorners);
   EXPORT(vision, cornerSubPix);
   EXPORT(vision, calibrateCamera);

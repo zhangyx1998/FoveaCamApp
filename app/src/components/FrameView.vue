@@ -97,13 +97,35 @@ watch(canvas, (canvas) => {
     }
 });
 
+const mat = computed(() => {
+    if (!props.mat) return null;
+    if (props.slice) return Vision.slice(props.mat, props.slice);
+    return props.mat;
+});
+
 watch(
-    () => props.mat,
+    mat,
     (mat) => {
         if (!mat) return (image.value = null);
-        if (props.slice) mat = Vision.slice(mat, props.slice);
         const [height, width] = mat.shape;
         switch (mat.channels) {
+            case 4:
+                break;
+            case 3: {
+                // Convert RGB to RGBA
+                const rgba = new Uint8Array(width * height * 4);
+                for (let i = 0; i < width * height; i++) {
+                    rgba[i * 4] = mat[i * 3];
+                    rgba[i * 4 + 1] = mat[i * 3 + 1];
+                    rgba[i * 4 + 2] = mat[i * 3 + 2];
+                    rgba[i * 4 + 3] = 255;
+                }
+                mat = Object.assign(rgba, {
+                    channels: 4,
+                    shape: [height, width],
+                });
+                break;
+            }
             case 1: {
                 // Convert Gray to RGBA
                 const rgba = new Uint8Array(width * height * 4);
@@ -120,23 +142,6 @@ watch(
                 });
                 break;
             }
-            case 3: {
-                // Convert RGB to RGBA
-                const rgba = new Uint8Array(width * height * 4);
-                for (let i = 0; i < width * height; i++) {
-                    rgba[i * 4] = mat[i * 3];
-                    rgba[i * 4 + 1] = mat[i * 3 + 1];
-                    rgba[i * 4 + 2] = mat[i * 3 + 2];
-                    rgba[i * 4 + 3] = 255;
-                }
-                mat = Object.assign(rgba, {
-                    channels: 4,
-                    shape: [height, width],
-                });
-                break;
-            }
-            case 4:
-                break;
             default:
                 console.error(
                     `Unsupported number of channels: ${mat.channels}`
@@ -164,7 +169,7 @@ const overlayEntries = computed(() => {
 
 const style = computed<StyleValue>(() => {
     const ret: StyleValue = {
-        fontSize: size.width / 20 + "px",
+        fontSize: `min(1.2em, ${size.width / 20}px)`,
         "--theme": props.theme,
     };
     if (props.title !== null) ret.marginTop = "1.6em";

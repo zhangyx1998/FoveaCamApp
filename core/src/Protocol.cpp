@@ -3,7 +3,6 @@
 // This source code is licensed under the MIT license.
 // You may find the full license in project root directory.
 // -------------------------------------------------------
-#include "Protocol/Protocol.h"
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -26,6 +25,7 @@
 
 #include "Cleanup.h"
 #include "Dispatcher.h"
+#include "Protocol/Protocol.h"
 #include "Protocol/Version.h"
 #include "napi-helper.h"
 #include "utils/debug.h"
@@ -400,9 +400,6 @@ public:
   void destroy() noexcept {
     if (flag_term)
       return;
-    flag_term = true;
-    if (rx_thread.joinable())
-      rx_thread.join();
     if (fd >= 0) {
       // Write disable command
       Protocol::RawPacket packet(Method::SET, Property::SYS_ENABLE, 0);
@@ -410,9 +407,14 @@ public:
       packet.setData(&enable, sizeof(enable));
       tx.encode(packet.finalize());
       ::write(fd, tx.data(), tx.size());
-      // Close fd
-      ::close(fd);
+      // Wait a moment for the device to respond
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
+    flag_term = true;
+    if (rx_thread.joinable())
+      rx_thread.join();
+    if (fd >= 0)
+      ::close(fd);
   }
 
 private:
@@ -473,8 +475,8 @@ private:
       } else if (method == Method::SYN && property == Property::LOG) {
         // Unsolicited log packet
         std::string log_msg((char *)packet.data(), packet.dataSize());
-        __LOG__("%s", "LOG ", GREEN, "Protocol", log_msg.c_str());
-      } else {
+        __LOG__("%s", "PORT ", GREEN, "Device", log_msg.c_str());
+      } else if (sequence != 0) {
         WARN("Unmatched packet %s:%s (seq=%u) %s",
              convert<std::string>(method).c_str(),
              convert<std::string>(property).c_str(), sequence,

@@ -52,7 +52,7 @@ const path = computed(
             :stroke-width="Math.max(1, size * 0.02)"
         />
         <text
-            v-if="detection.id && !features"
+            v-if="detection.id !== undefined && !features"
             :x="center.x"
             :y="center.y"
             :font-size="size * 0.8"

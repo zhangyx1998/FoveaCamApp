@@ -15,6 +15,7 @@ import DisparityScope from "../modules/disparity-scope/index.vue";
 import ManageCameras from "../modules/manage-cameras/index.vue";
 import CalibrateIntrinsic from "../modules/calibrate-intrinsic/index.vue";
 import CalibrateExtrinsic from "../modules/calibrate-extrinsic/index.vue";
+import CalibrateDrift from "../modules/calibrate-drift/index.vue";
 import Playground from "../modules/playground/index.vue";
 import Loading from "./components/Loading.vue";
 
@@ -71,17 +72,20 @@ function backToHome() {
                     </button>
                     <button
                         @click="
-                            launch(CalibrateIntrinsic, 'Calibrate - Intrinsic')
+                            launch(CalibrateIntrinsic, 'Calibrate Intrinsic')
                         "
                     >
-                        Calibrate - Intrinsic
+                        Calibrate Intrinsic
                     </button>
                     <button
                         @click="
-                            launch(CalibrateExtrinsic, 'Calibrate - Extrinsic')
+                            launch(CalibrateExtrinsic, 'Calibrate Extrinsic')
                         "
                     >
-                        Calibrate - Extrinsic
+                        Calibrate Extrinsic
+                    </button>
+                    <button @click="launch(CalibrateDrift, 'Calibrate Drift')">
+                        Calibrate Drift
                     </button>
                     <button>Manage Calibrations</button>
                 </div>

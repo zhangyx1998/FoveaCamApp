@@ -8,25 +8,25 @@ import { Awaitable } from "../types";
 
 import { defer, Deferred } from ".";
 
-export class AsyncChain<T = any> {
+export class AsyncChain<T = any, P = undefined> {
     // Value is only valid when next is an AsyncChain node.
     readonly value?: T;
-    readonly next: Awaitable<AsyncChain<T> | null>;
-    protected resolve: (value: AsyncChain<T> | null) => void;
+    readonly next: Awaitable<AsyncChain<T, P> | null>;
+    protected resolve: (value: AsyncChain<T, P> | null) => void;
 
-    constructor() {
-        const { promise, resolve } = defer<AsyncChain<T> | null>();
+    constructor(public readonly task: P = undefined as unknown as P) {
+        const { promise, resolve } = defer<AsyncChain<T, P> | null>();
         this.next = promise;
         this.resolve = resolve;
         markRaw(this);
     }
 
-    static async *iter<T>(node: AsyncChain<T>) {
+    static async *iterAsync<T, P>(node: AsyncChain<T, P>) {
         while (true) {
             if (node.type === "PENDING") await node.next;
             if (node.type === "END") break;
             yield node.value!;
-            node = node.next as AsyncChain<T>;
+            node = node.next as AsyncChain<T, P>;
         }
     }
 
@@ -34,7 +34,29 @@ export class AsyncChain<T = any> {
         // AsyncChain relies on JavaScript GC Engine to reclaim resources.
         // However, class method holds reference to a node via `this`, the
         // extra closure is therefore used to avoid memory leak.
-        return AsyncChain.iter<T>(this);
+        return AsyncChain.iterAsync<T, P>(this);
+    }
+
+    static *iterSync<T, P>(node: AsyncChain<T, P>) {
+        while (true) {
+            switch (node.type) {
+                case "PENDING":
+                    yield null;
+                case "DATA":
+                    yield node.value!;
+                    node = node.next as AsyncChain<T, P>;
+                case "END":
+                default:
+                    return;
+            }
+        }
+    }
+
+    *[Symbol.iterator]() {
+        // AsyncChain relies on JavaScript GC Engine to reclaim resources.
+        // However, class method holds reference to a node via `this`, the
+        // extra closure is therefore used to avoid memory leak.
+        return AsyncChain.iterSync<T, P>(this);
     }
 
     get type() {
@@ -43,10 +65,10 @@ export class AsyncChain<T = any> {
     }
 
     *current_items() {
-        let node: AsyncChain<T> = this;
+        let node: AsyncChain<T, P> = this;
         while (node.type === "DATA") {
             yield node.value!;
-            node = node.next as AsyncChain<T>;
+            node = node.next as AsyncChain<T, P>;
         }
     }
 
@@ -57,9 +79,9 @@ export class AsyncChain<T = any> {
     }
 
     get back() {
-        let node: AsyncChain<T> = this;
+        let node: AsyncChain<T, P> = this;
         while (node.type === "DATA") {
-            node = node.next as AsyncChain<T>;
+            node = node.next as AsyncChain<T, P>;
         }
         return node;
     }
@@ -67,8 +89,8 @@ export class AsyncChain<T = any> {
     push(value: T) {
         const { back } = this;
         (back.value as T) = value;
-        const next = new AsyncChain<T>();
-        (back.next as AsyncChain<T>) = next;
+        const next = new AsyncChain<T, P>(this.task);
+        (back.next as AsyncChain<T, P>) = next;
         back.resolve(next);
         return next;
     }
@@ -132,4 +154,28 @@ export function combinations<T>(arr: T[], k: number = 2): T[][] {
     });
 }
 
-(window as any).combinations = combinations;
+export class Zip<T> {
+    private readonly items: Iterable<T>[];
+    constructor(...items: Iterable<T>[]) {
+        this.items = items;
+    }
+
+    *[Symbol.iterator]() {
+        const iterators = this.items.map((it) => it[Symbol.iterator]());
+        try {
+            while (true) {
+                const values = iterators.map((it) => it.next());
+                if (values.some((v) => v.done)) break;
+                yield values.map((v) => v.value) as T[];
+            }
+        } finally {
+            for (const it of iterators) {
+                try {
+                    it.return?.();
+                } catch (e) {
+                    console.error("Error during iterator return:", e);
+                }
+            }
+        }
+    }
+}

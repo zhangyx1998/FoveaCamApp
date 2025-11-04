@@ -15,14 +15,14 @@ import {
     useMatchedCameras,
     useIntrinsicCalibration,
     useExtrinsicCalibration,
-    Regression,
     useExtrinsicRegression,
+    ExtrinsicRegression,
 } from "@lib/camera";
 const cameras = await useMatchedCameras(true);
 const { undistort } = await useIntrinsicCalibration(cameras.C);
 const state = ref<"CAL" | "FIN" | "PRV">("CAL");
-const L = shallowRef<Regression | null>(null);
-const R = shallowRef<Regression | null>(null);
+const L = shallowRef<ExtrinsicRegression | null>(null);
+const R = shallowRef<ExtrinsicRegression | null>(null);
 
 const records: ExtrinsicRecord[] = shallowReactive([]);
 const saved = ref(false);

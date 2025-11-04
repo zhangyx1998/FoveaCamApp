@@ -8,6 +8,7 @@ const props = defineProps<{
     undistort?: Undistort;
     color?: string;
     box?: "rect" | "circle" | "dot";
+    size?: number;
 }>();
 
 const x = computed(() => props.cursor?.x ?? 0);
@@ -16,11 +17,11 @@ const w = computed(() => props.cursor?.width ?? 0);
 const h = computed(() => props.cursor?.height ?? 0);
 const r = computed(() => {
     const { width = 0, height = 0 } = props.cursor ?? {};
-    return Math.min(width, height) * 0.01;
+    return Math.min(width, height) * 0.01 * (props.size ?? 1);
 });
 const a = computed(() => {
     const { undistort: u } = props;
-    if (!props.cursor || !u) return { x: 0, y: 0 };
+    if (!props.cursor || !u) return null;
     const [angle] = u.angular(u.undistort([props.cursor]));
     return {
         x: deg(angle.x),
@@ -67,24 +68,26 @@ const a = computed(() => {
             :stroke="color ?? 'red'"
             :stroke-width="r * 0.2"
         />
-        <text
-            :x="x < w / 2 ? x + r * 2 : x - r * 2"
-            :y="r"
-            :fill="color ?? 'red'"
-            :font-size="r * 3"
-            :text-anchor="x < w / 2 ? 'start' : 'end'"
-            dominant-baseline="hanging"
-            >{{ a.x.toFixed(2) }} deg</text
-        >
-        <text
-            :x="r"
-            :y="y < h / 2 ? y + r * 2 : y - r * 2"
-            :fill="color ?? 'red'"
-            :font-size="r * 3"
-            text-anchor="start"
-            :dominant-baseline="y < h / 2 ? 'hanging' : 'bottom'"
-            >{{ a.y.toFixed(2) }} deg</text
-        >
+        <template v-if="a">
+            <text
+                :x="x < w / 2 ? x + r * 2 : x - r * 2"
+                :y="r"
+                :fill="color ?? 'red'"
+                :font-size="r * 3"
+                :text-anchor="x < w / 2 ? 'start' : 'end'"
+                dominant-baseline="hanging"
+                >{{ a.x.toFixed(2) }} deg</text
+            >
+            <text
+                :x="r"
+                :y="y < h / 2 ? y + r * 2 : y - r * 2"
+                :fill="color ?? 'red'"
+                :font-size="r * 3"
+                text-anchor="start"
+                :dominant-baseline="y < h / 2 ? 'hanging' : 'bottom'"
+                >{{ a.y.toFixed(2) }} deg</text
+            >
+        </template>
         <rect
             v-if="box === 'rect'"
             :x="x - r * 2"

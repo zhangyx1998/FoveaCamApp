@@ -29,6 +29,7 @@ static Object init(Env env, Object exports) {
     CORE_OBJECT_EXPORT(FrameObject, env, exports);
     CORE_OBJECT_EXPORT(ProtocolObject, env, exports);
     CORE_OBJECT_EXPORT(ArUcoDetectorObject, env, exports);
+    CORE_OBJECT_EXPORT(RegressionObject, env, exports);
     CORE_OBJECT_EXPORT(VisionNamespace, env, exports);
     CORE_OBJECT_EXPORT(LogNamespace, env, exports);
     exports.Set("cleanup", Function::New(env, cleanup));
