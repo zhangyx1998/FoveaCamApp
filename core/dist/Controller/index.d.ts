@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license.
 // You may find the full license in project root directory.
 // -------------------------------------------------------
-import type { Awaitable, BufferLike, TypedArray, CoreObject } from "../types";
+import type { BufferLike } from "../types";
 
 declare module "core/Controller" {
     /** Path to the resolved native module injected by JS loader */

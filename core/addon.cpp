@@ -43,10 +43,7 @@ static Object init(Env env, Object exports) {
     CORE_OBJECT_EXPORT(RegressionObject, env, exports);
     // Geometry Module
     auto Geometry = Object::New(env);
-    {
-      // TODO
-      // CORE_OBJECT_EXPORT(GeometryModule, env, Geometry);
-    }
+    CORE_OBJECT_EXPORT(GeometryModule, env, Geometry);
     exports.Set("Geometry", Geometry);
     // Log Module
     auto Log = Object::New(env);

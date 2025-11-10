@@ -1,5 +1,6 @@
 build: configure
 	@node scripts/make.cjs build
+	@node scripts/code-gen.cjs
 	@cd .. && npm run compiledb
 
 configure:
