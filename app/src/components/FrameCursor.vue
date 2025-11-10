@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import type { Point, Size, Undistort } from "core";
+import type { Point, Size } from "core/Geometry";
+import type { Undistort } from "core/Vision";
 import { deg } from "@lib/util/math";
 
 const props = defineProps<{
     cursor: (Point & Partial<Size>) | null;
-    undistort?: Undistort;
+    undistort?: Undistort | null;
     color?: string;
     box?: "rect" | "circle" | "dot";
     size?: number;

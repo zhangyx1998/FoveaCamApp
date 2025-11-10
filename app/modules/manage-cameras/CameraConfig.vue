@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { customRef, onUnmounted, computed } from "vue";
-import type { Camera } from "core";
+import type { Camera } from "core/Aravis";
 import StreamView from "@src/components/StreamView.vue";
 import { describeCamera, useCameraConfig, initCamera } from "@lib/camera";
 import Store from "@lib/store";

@@ -1,8 +1,7 @@
 <script setup lang="ts">
 import { onUnmounted, ref, shallowReactive, shallowRef } from "vue";
-import { Camera } from "core";
+import type { Camera } from "core/Aravis";
 import useCameras, {
-    describeCamera,
     useCameraConfig,
     useIntrinsicCalibration,
 } from "@lib/camera";
@@ -16,15 +15,17 @@ import Badge from "@src/components/Badge.vue";
 const cameras = await useCameras();
 
 async function getItem(camera: Camera) {
-    const [config, { calibration, undistort }] = await Promise.all([
+    const [config, intrinsic] = await Promise.all([
         useCameraConfig(camera),
         useIntrinsicCalibration(camera),
     ]);
     return {
         camera,
         config,
-        calibration: calibration!,
-        undistort,
+        calibration: intrinsic.calibration!,
+        get undistort() {
+            return intrinsic.undistort;
+        },
     };
 }
 type Item = Awaited<ReturnType<typeof getItem>>;
@@ -74,24 +75,17 @@ onUnmounted(async () => {
                             :role="item.config.role"
                         />
                     </div>
-                    <template v-if="item.undistort.value">
+                    <template v-if="item.undistort">
                         <ConfigEntry style="color: white">
                             Calibrated @
                             {{
                                 item.calibration.date?.toLocaleString() ?? "N/A"
                             }}
                         </ConfigEntry>
-                        <ConfigEntry
-                            style="color: white"
-                            v-if="item.undistort.value"
-                        >
+                        <ConfigEntry style="color: white" v-if="item.undistort">
                             FOV: X
-                            {{
-                                deg(item.undistort.value.fov.x).toFixed(2)
-                            }}&deg;, Y
-                            {{
-                                deg(item.undistort.value.fov.y).toFixed(2)
-                            }}&deg;
+                            {{ deg(item.undistort.fov.x).toFixed(2) }}&deg;, Y
+                            {{ deg(item.undistort.fov.y).toFixed(2) }}&deg;
                         </ConfigEntry>
                     </template>
                     <template v-else>
@@ -137,7 +131,7 @@ onUnmounted(async () => {
         :camera="calibrating.camera"
         :config="calibrating.config"
         :calibration="calibrating.calibration"
-        :undistort="calibrating.undistort.value"
+        :undistort="calibrating.undistort"
         @return="calibrating = null"
     />
     <CalibrateMarker
@@ -145,7 +139,7 @@ onUnmounted(async () => {
         :camera="calibrating.camera"
         :config="calibrating.config"
         :calibration="calibrating.calibration"
-        :undistort="calibrating.undistort.value"
+        :undistort="calibrating.undistort"
         @return="calibrating = null"
     />
 </template>

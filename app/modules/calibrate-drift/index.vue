@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onUnmounted, watch } from "vue";
-import { ArUcoDetector, type Point2d } from "core";
+import { MarkerDetector } from "core/Vision";
+import { Point2d } from "core/Geometry";
 import { ROLE, THEME, useCalibratedTriple } from "@lib/camera";
 import StreamView from "@src/components/StreamView.vue";
 import PosView from "@src/components/PosView.vue";
@@ -17,7 +18,7 @@ const undistort = CI.undistort!;
 if (!undistort)
     throw new Error("Intrinsic calibration not found for center camera.");
 
-const detector = new ArUcoDetector("4X4_50");
+const detector = new MarkerDetector("4X4_50");
 
 const tracker = {
     L: new Tracker(L, detector, 1, 0.25),
@@ -52,14 +53,14 @@ const derived = {
         return (
             tracker.L.target &&
             controller.value &&
-            deriveDrift(LE.V2R.predict(controller.value.pos.left))
+            deriveDrift(LE.V2A.predict(controller.value.pos.left))
         );
     },
     get R() {
         return (
             tracker.R.target &&
             controller.value &&
-            deriveDrift(RE.V2R.predict(controller.value.pos.right))
+            deriveDrift(RE.V2A.predict(controller.value.pos.right))
         );
     },
 };
@@ -72,13 +73,13 @@ const actuator = computed(
             get origin_left() {
                 const r = angular.value;
                 return r
-                    ? LE.R2V.predict(applyDrift(r, config.drift_l))
+                    ? LE.A2V.predict(applyDrift(r, config.drift_l))
                     : { x: 0, y: 0 };
             },
             get origin_right() {
                 const r = angular.value;
                 return r
-                    ? RE.R2V.predict(applyDrift(r, config.drift_r))
+                    ? RE.A2V.predict(applyDrift(r, config.drift_r))
                     : { x: 0, y: 0 };
             },
         })
@@ -103,7 +104,7 @@ onUnmounted(async () => {
             <StreamView
                 class="stream"
                 :title="ROLE.L"
-                :footnote="`ArUco Tracker @ ${tracker.L.fps ?? 'N/A'}`"
+                :footnote="`Marker Tracker @ ${tracker.L.fps ?? 'N/A'}`"
                 :camera="L"
                 :theme="THEME.L"
             >
@@ -118,7 +119,7 @@ onUnmounted(async () => {
             <ConfigEntry>
                 <span>
                     {{ tracker.L.target ? "✓" : "✗" }}
-                    ArUco ID to Track:
+                    Marker ID to Track:
                 </span>
                 <input v-model.number="tracker.L.target_id" />
             </ConfigEntry>
@@ -135,7 +136,7 @@ onUnmounted(async () => {
             <StreamView
                 class="stream"
                 :title="ROLE.C"
-                :footnote="`ArUco Tracker @ ${tracker.C.fps ?? 'N/A'}`"
+                :footnote="`Marker Tracker @ ${tracker.C.fps ?? 'N/A'}`"
                 :camera="C"
                 :theme="THEME.C"
             >
@@ -156,7 +157,7 @@ onUnmounted(async () => {
             <ConfigEntry>
                 <span>
                     {{ tracker.C.target ? "✓" : "✗" }}
-                    ArUco ID to Track:
+                    Marker ID to Track:
                 </span>
                 <input v-model.number="tracker.C.target_id" />
             </ConfigEntry>
@@ -190,7 +191,7 @@ onUnmounted(async () => {
             <StreamView
                 class="stream"
                 :title="ROLE.R"
-                :footnote="`ArUco Tracker @ ${tracker.R.fps ?? 'N/A'}`"
+                :footnote="`Marker Tracker @ ${tracker.R.fps ?? 'N/A'}`"
                 :camera="R"
                 :theme="THEME.R"
             >
@@ -205,7 +206,7 @@ onUnmounted(async () => {
             <ConfigEntry>
                 <span>
                     {{ tracker.R.target ? "✓" : "✗" }}
-                    ArUco ID to Track:
+                    Marker ID to Track:
                 </span>
                 <input
                     v-model.number="tracker.R.target_id"

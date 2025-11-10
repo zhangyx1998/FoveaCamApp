@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { Vision, type Mat, type Point, type Rect, type Size } from "core";
+import { slice, type Mat } from "core/Vision";
+import type { Point, Rect, Size } from "core/Geometry";
 import {
     computed,
     onUnmounted,
@@ -99,7 +100,7 @@ watch(canvas, (canvas) => {
 
 const mat = computed(() => {
     if (!props.mat) return null;
-    if (props.slice) return Vision.slice(props.mat, props.slice);
+    if (props.slice) return slice(props.mat, props.slice);
     return props.mat;
 });
 

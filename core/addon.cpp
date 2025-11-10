@@ -25,13 +25,34 @@ static Object init(Env env, Object exports) {
     VERBOSE("Initializing core module (ENV=%p, PID=%d)",
             static_cast<napi_env>(env), getpid());
     Dispatcher::init(env);
-    CORE_OBJECT_EXPORT(CameraObject, env, exports);
-    CORE_OBJECT_EXPORT(FrameObject, env, exports);
-    CORE_OBJECT_EXPORT(ProtocolObject, env, exports);
-    CORE_OBJECT_EXPORT(ArUcoDetectorObject, env, exports);
+    // Aravis Module
+    auto Aravis = Object::New(env);
+    CORE_OBJECT_EXPORT(CameraObject, env, Aravis);
+    CORE_OBJECT_EXPORT(FrameObject, env, Aravis);
+    exports.Set("Aravis", Aravis);
+    // Controller Module
+    auto Controller = Object::New(env);
+    CORE_OBJECT_EXPORT(ControllerModule, env, Controller);
+    exports.Set("Controller", Controller);
+    // Vision Module
+    auto Vision = Object::New(env);
+    CORE_OBJECT_EXPORT(MarkerDetectorObject, env, Vision);
+    CORE_OBJECT_EXPORT(VisionNamespace, env, Vision);
+    exports.Set("Vision", Vision);
+    // Regression Module
     CORE_OBJECT_EXPORT(RegressionObject, env, exports);
-    CORE_OBJECT_EXPORT(VisionNamespace, env, exports);
-    CORE_OBJECT_EXPORT(LogNamespace, env, exports);
+    // Geometry Module
+    auto Geometry = Object::New(env);
+    {
+      // TODO
+      // CORE_OBJECT_EXPORT(GeometryModule, env, Geometry);
+    }
+    exports.Set("Geometry", Geometry);
+    // Log Module
+    auto Log = Object::New(env);
+    CORE_OBJECT_EXPORT(LogModule, env, Log);
+    exports.Set("Log", Log);
+    // Finalize
     exports.Set("cleanup", Function::New(env, cleanup));
     VERBOSE("Core module initialized");
     if (std::getenv("WAIT_DEBUGGER")) {

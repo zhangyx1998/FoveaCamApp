@@ -53,7 +53,7 @@ template <> std::string convert(const DictType &type) {
     CASE(APRILTAG_36h11);
     CASE(ARUCO_MIP_36h12);
   default:
-    throw std::invalid_argument("Invalid ArUco dictionary type: " +
+    throw std::invalid_argument("Invalid marker dictionary type: " +
                                 std::to_string(type));
   }
 #undef CASE
@@ -85,7 +85,7 @@ template <> DictType convert(const std::string &type) {
   CASE(APRILTAG_36h10);
   CASE(APRILTAG_36h11);
   CASE(ARUCO_MIP_36h12);
-  throw std::invalid_argument("Invalid ArUco dictionary type: " + type);
+  throw std::invalid_argument("Invalid marker dictionary type: " + type);
 #undef CASE
 }
 
@@ -111,16 +111,16 @@ typedef struct Detection {
   std::vector<Point2f> corners;
 } Detection;
 
-typedef struct ArUcoDetectionResult : public Shared<ArUcoDetectionResult> {
+typedef struct MarkerDetectionResult : public Shared<MarkerDetectionResult> {
   const Arv::Frame::Ptr frame;
   std::vector<Detection> detections;
-  ArUcoDetectionResult(const Arv::Frame::Ptr &frame) : frame(frame) {};
-} ArUcoDetectionResult;
+  MarkerDetectionResult(const Arv::Frame::Ptr &frame) : frame(frame) {};
+} MarkerDetectionResult;
 
-using Result = ArUcoDetectionResult;
+using Result = MarkerDetectionResult;
 
 template <> Value convert(Napi::Env env, const Result::Ptr &results) noexcept {
-  VERBOSE("Converting ArUcoDetectionResult[%p] to JS object (%lu results)",
+  VERBOSE("Converting MarkerDetectionResult[%p] to JS object (%lu results)",
           results.get(), results->detections.size());
   auto arr = Array::New(env, results->detections.size());
   for (size_t i = 0; i < results->detections.size(); ++i) {
@@ -186,41 +186,41 @@ inline Result::Ptr detect(const Arv::Frame::Ptr &frame,
   return results;
 }
 
-class ArUcoStream : public TransformStream<Arv::Frame::Ptr, Result::Ptr>,
-                    public Shared<ArUcoStream> {
+class MarkerStream : public TransformStream<Arv::Frame::Ptr, Result::Ptr>,
+                     public Shared<MarkerStream> {
 public:
   const Arv::Stream::Ptr stream;
   const cv::Ptr<aruco::Dictionary> dict;
   const double scale;
-  ArUcoStream(const Arv::Stream::Ptr &upstream,
-              const cv::Ptr<aruco::Dictionary> &dict, double scale)
+  MarkerStream(const Arv::Stream::Ptr &upstream,
+               const cv::Ptr<aruco::Dictionary> &dict, double scale)
       : stream(upstream), dict(dict), scale(scale) {}
-  ~ArUcoStream() { shutdown(); }
+  ~MarkerStream() { shutdown(); }
   Stream<Arv::Frame::Ptr> *upstream() override { return stream.get(); }
   Result::Ptr transform(const Arv::Frame::Ptr &input) override {
     std::string name = "Frame[" + input->tag + "]";
-    VERBOSE("ArUcoStream::transform(%s) start", name.c_str());
+    VERBOSE("MarkerStream::transform(%s) start", name.c_str());
     auto result = detect(input, dict, scale);
-    VERBOSE("ArUcoStream::transform(%s) done", name.c_str());
+    VERBOSE("MarkerStream::transform(%s) done", name.c_str());
     return result;
   }
 };
 
-class ArUcoDetectorObject : public ObjectWrap<ArUcoDetectorObject> {
+class MarkerDetectorObject : public ObjectWrap<MarkerDetectorObject> {
 public:
   static Function Init(Napi::Env env) {
-    return DefineClass(env, "ArUcoDetector",
+    return DefineClass(env, "MarkerDetector",
                        {
-                           INSTANCE_GETTER(ArUcoDetectorObject, type),       //
-                           INSTANCE_GETTER(ArUcoDetectorObject, markerSize), //
-                           INSTANCE_METHOD(ArUcoDetectorObject, detect),     //
-                           INSTANCE_METHOD(ArUcoDetectorObject, stream),     //
-                           INSTANCE_METHOD(ArUcoDetectorObject, pattern),    //
+                           INSTANCE_GETTER(MarkerDetectorObject, type),       //
+                           INSTANCE_GETTER(MarkerDetectorObject, markerSize), //
+                           INSTANCE_METHOD(MarkerDetectorObject, detect),     //
+                           INSTANCE_METHOD(MarkerDetectorObject, stream),     //
+                           INSTANCE_METHOD(MarkerDetectorObject, pattern),    //
                        });
   }
 
-  ArUcoDetectorObject(const Napi::CallbackInfo &info)
-      : Napi::ObjectWrap<ArUcoDetectorObject>(info) {
+  MarkerDetectorObject(const Napi::CallbackInfo &info)
+      : Napi::ObjectWrap<MarkerDetectorObject>(info) {
     auto env = info.Env();
     try {
       const auto type = convert<DictType>(info[0]);
@@ -263,7 +263,7 @@ private:
         return result;
       };
       return AsyncTask<Result::Ptr>::run(
-          env, task, "ArUcoDetector.detect(" + frame->tag + ")");
+          env, task, "MarkerDetector.detect(" + frame->tag + ")");
     }
     JS_EXCEPT(env.Undefined())
   }
@@ -276,8 +276,8 @@ private:
       if (scale <= 0.0)
         throw std::invalid_argument("Scale must be positive");
       const auto upstream = convert<Arv::Stream::Ptr>(info[0]);
-      const auto downstream = ArUcoStream::create(upstream, dict, scale);
-      auto stream = StreamObject<ArUcoStream>::Create(env, downstream);
+      const auto downstream = MarkerStream::create(upstream, dict, scale);
+      auto stream = StreamObject<MarkerStream>::Create(env, downstream);
       if (stream.IsObject())
         stream.As<Napi::Object>().Set("upstream", info[0]);
       return stream;
@@ -315,6 +315,6 @@ private:
   }
 };
 
-void exportArUcoDetectorObject(Napi::Env env, Napi::Object &exports) {
-  exports.Set("ArUcoDetector", ArUcoDetectorObject::Init(env));
+void exportMarkerDetectorObject(Napi::Env env, Napi::Object &exports) {
+  exports.Set("MarkerDetector", MarkerDetectorObject::Init(env));
 }

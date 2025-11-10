@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { Log } from "core";
-import { Frame } from "core";
-import type { Mat, Size, Point, Rect, Camera } from "core";
+import { type Camera, Frame } from "core/Aravis";
+import type { Mat } from "core/Vision";
+import type { Size, Point, Rect } from "core/Geometry";
 import { computed, markRaw, onUnmounted, ref, watch } from "vue";
 
 import { FreqMeter, PerfTimer } from "@lib/util/perf";

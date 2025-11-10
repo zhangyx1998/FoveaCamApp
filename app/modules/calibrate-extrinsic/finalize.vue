@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import FrameView from "@src/components/FrameView.vue";
-import { ExtrinsicRecord } from "./calibrate";
+import { Point2d } from "core/Geometry";
+import type { Undistort } from "core/Vision";
 import { ROLE, THEME } from "@lib/camera";
-import Marker from "./Marker.vue";
+import FrameView from "@src/components/FrameView.vue";
 import FrameCursor from "@src/components/FrameCursor.vue";
-import type { Point2d, Undistort } from "core";
 import NavBack from "@src/components/NavBack.vue";
+import { ExtrinsicRecord } from "./calibrate";
+import Marker from "./Marker.vue";
 
 const props = defineProps<{
     undistort: Undistort;

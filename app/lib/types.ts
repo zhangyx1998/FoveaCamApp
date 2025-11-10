@@ -12,3 +12,5 @@ export type Sequence<T = any> = Iterable<T> & {
 export type Awaitable<T> = T | Promise<T>;
 
 export type Mutable<T> = { -readonly [P in keyof T]: T[P] };
+
+export type BufferLike = Buffer | ArrayBuffer | ArrayBufferView;

@@ -2,7 +2,7 @@
     "name": "fovea-cam",
     "private": true,
     "dependencies": {
-        "core": "file:core"
+        "core": "file:core/dist/"
     },
     "workspaces": [
         "app",

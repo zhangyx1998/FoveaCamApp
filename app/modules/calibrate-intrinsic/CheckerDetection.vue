@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import type { Point } from "core";
+import type { Point2d } from "core/Geometry";
 const props = defineProps<{
-    detection: Point[];
+    detection: Point2d[];
 }>();
 
 function rainbow(i: number, total: number) {
@@ -13,7 +13,7 @@ function rainbow(i: number, total: number) {
     };
 }
 
-function distance(a: Point, b: Point) {
+function distance(a: Point2d, b: Point2d) {
     return Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2);
 }
 

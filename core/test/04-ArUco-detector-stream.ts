@@ -13,21 +13,16 @@ const handler = () => {
 };
 process.on("SIGINT", handler);
 
-import {
-    Camera,
-    ArUcoDetector,
-    __origin__,
-    type Stream,
-    type Frame,
-} from "core";
-console.log("imported", { Camera, ArUcoDetector }, "from", __origin__);
+import { Camera, __origin__, type Stream, type Frame } from "core/Aravis";
+import { MarkerDetector } from "core/Vision";
+console.log("imported", { Camera, MarkerDetector }, "from", __origin__);
 
 const cameras = await Camera.list();
 
 console.log("Found", cameras.length, "cameras");
 console.log(...cameras);
 
-const detector = new ArUcoDetector("4X4_50");
+const detector = new MarkerDetector("4X4_50");
 console.log("Created detector:", detector);
 
 async function detect(name: string, stream: Stream<Frame>, scale: number = 1) {

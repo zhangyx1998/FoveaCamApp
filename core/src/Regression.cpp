@@ -98,10 +98,11 @@ inline void expandPlyRecursive(size_t i, bool neg, unsigned remainder,
           ret += " * ";
         ret += v;
         if (neg || p > 1) {
-          ret += "^";
+          ret += "^{";
           if (neg)
             ret += "-";
           ret += std::to_string(p);
+          ret += "}";
         }
       } else {
         ret *= ::pow(v, neg ? -(signed)(p) : (signed)(p));
@@ -157,8 +158,8 @@ public:
     try {
       features = convert<vector<string>>(info[0]);
       targets = convert<vector<string>>(info[1]);
-      config = optionalArgument<RegressionConfig>(info[2],
-                                                  {.ply = {3, 2, 1, 0}});
+      config =
+          optionalArgument<RegressionConfig>(info[2], {.ply = {3, 2, 1, 0}});
       // Expansions are used to determine number of weights
       for (const auto &p : config.ply)
         expandPly(p, features, expansions);
@@ -212,7 +213,7 @@ private:
       const auto &w = weights[t];
       ss << t << " = ";
       for (size_t i = 0; i < w.size(); i++) {
-        if (i != 0 && w[i] >= 0)
+        if (i != 0)
           ss << " + ";
         ss << w[i];
         const auto &exp = expansions[i];

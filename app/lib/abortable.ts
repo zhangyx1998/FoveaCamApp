@@ -1,4 +1,4 @@
-import { defer } from "./util";
+import { defer } from "./util/index.js";
 
 export type Abortable<T> = Promise<T> & { abort: () => Promise<T> };
 

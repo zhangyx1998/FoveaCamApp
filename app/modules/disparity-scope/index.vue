@@ -1,7 +1,24 @@
 <script setup lang="ts">
 import { computed, onUnmounted, reactive, ref, shallowRef, watch } from "vue";
-import { Mat, Vision, type Frame, type Point2d, type Rect } from "core";
-import { getFrameSize, ROLE, THEME, useCalibratedTriple } from "@lib/camera";
+import { Point2d, Rect, Size } from "core/Geometry";
+import {
+    gaussian,
+    heatmap,
+    Mat,
+    matchTemplate,
+    minMaxLoc,
+    resize,
+    slice,
+    disparity,
+} from "core/Vision";
+import { Frame } from "core/Aravis";
+import {
+    getFrameSize,
+    ROLE,
+    THEME,
+    useCalibratedTriple,
+    useCoordinateConversions,
+} from "@lib/camera";
 import StreamView from "@src/components/StreamView.vue";
 import PosView from "@src/components/PosView.vue";
 import { getController } from "@src/components/Controller.vue";
@@ -11,38 +28,48 @@ import abortable from "@lib/abortable";
 import { Latest, Zip } from "@lib/util/iter";
 import FrameView from "@src/components/FrameView.vue";
 import { deg } from "@lib/util/math";
+import { VEC, RECT } from "@lib/util/geometry";
+import { useAppConfig } from "@lib/config";
+import { clamp } from "@lib/util";
 
 const view = ref<"disparity" | "sliced">("sliced");
+const app_config = await useAppConfig();
+const kp = computed<number>({
+    get: () => app_config.divergence_kp ?? 0.5,
+    set: (v) => (app_config.divergence_kp = v),
+});
+const scale_ratio = computed<number>({
+    get: () => app_config.divergence_template_match_scale ?? 0.0,
+    set: (v) => (app_config.divergence_template_match_scale = v),
+});
 const controller = computed(getController);
-const { L, C, R, CI, LE, RE, config, A2V, V2A, P2A, A2P, release } =
-    await useCalibratedTriple();
+const triple = await useCalibratedTriple();
+const { L, C, R } = triple;
+const { A2V, V2A, P2A, A2P } = useCoordinateConversions(triple);
+
 const { width, height } = await getFrameSize(C);
-const undistort = CI.undistort!;
+const undistort = triple.CI.undistort;
 if (!undistort)
     throw new Error("Intrinsic calibration not found for center camera.");
 
 const cursor = shallowRef<(MouseEvent & Rect) | null>(null);
-const target = reactive<Rect>({ x: width / 2, y: height / 2, width, height });
-const target_l = reactive<Point2d>({ x: 0, y: 0 });
-const target_r = reactive<Point2d>({ x: 0, y: 0 });
-const rect = computed(() => {
-    const { x, y, width, height } = target;
-    const z = zoom.value;
-    const w = width / z;
-    const h = height / z;
-    Object.assign(target, { x, y, width, height });
-    return {
-        x: x - w / 2,
-        y: y - h / 2,
-        width: w,
-        height: h,
-    };
-});
+const target_loc = shallowRef<Point2d>({ x: width / 2, y: height / 2 });
+const target_size = computed(() => ({
+    width: width / zoom.value,
+    height: height / zoom.value,
+}));
+const target = computed(() =>
+    RECT.fromCenter(target_loc.value, target_size.value)
+);
 
 const zoom = computed<number>({
-    get: () => config.zoom_factor ?? 9.0,
-    set: (v) => (config.zoom_factor = v),
+    get: () => Math.max(1.0, triple.config.zoom_factor ?? 9.0),
+    set: (v) => (triple.config.zoom_factor = v),
 });
+
+const scale = computed(
+    () => 1 + (zoom.value - 1) * clamp(scale_ratio.value, [0, 1])
+);
 
 const is_drag = computed(
     () => cursor.value !== null && (cursor.value.buttons & 1) !== 0
@@ -50,8 +77,8 @@ const is_drag = computed(
 
 watch(cursor, (c) => {
     if (c && is_drag.value) {
-        const { x, y, width, height } = c;
-        Object.assign(target, { x, y, width, height });
+        const { x, y } = c;
+        target_loc.value = { x, y };
     }
 });
 
@@ -63,14 +90,12 @@ const volt = reactive({
 const L_PX = computed(() => A2P.C(V2A.L(volt.L)));
 const R_PX = computed(() => A2P.C(V2A.R(volt.R)));
 
-let delta_divergence: { l: number; r: number } | null = null;
-
 const actuate_task = abortable(async (_, onAbort) => {
     const c = controller.value;
     if (!c) return;
     const updated = new Latest<Point2d>();
     onAbort(() => updated.close());
-    const handle = watch(target, (t) => updated.push(t), {
+    const handle = watch(target_loc, (t) => updated.push(t), {
         deep: true,
         immediate: true,
     });
@@ -92,52 +117,15 @@ const actuate_task = abortable(async (_, onAbort) => {
 });
 
 const guide = ref<Mat<Uint8Array> | null>(null);
-const match_left = ref<Mat<Float32Array> | null>(null);
-const match_right = ref<Mat<Float32Array> | null>(null);
-function getLoc(m: Mat<Float32Array> | null) {
-    if (!m) return null;
-    const delta = (width - m.shape[1]) / 2;
-    const loc = Vision.minMaxLoc(m).max;
-    return loc.x + delta;
-}
-const loc_left = computed(() => getLoc(match_left.value));
-const loc_right = computed(() => getLoc(match_right.value));
 
-function getRectOfLoc(x: number, inset: number = 0) {
-    const w = width / zoom.value;
-    return {
-        x: x - w / 2 + inset,
-        y: inset,
-        width: w - inset * 2,
-        height: (guide.value?.shape[0] ?? 0) - inset * 2,
-    };
-}
+type MatchResult = {
+    mat: Mat<Uint8Array>;
+    rect: Rect;
+};
 
-function displayMatch(m: Mat<Float32Array> | null, v_stack = 10) {
-    if (!m) return null;
-    const l = Vision.minMaxLoc(m);
-    const min = l.min.value;
-    const max = l.max.value;
-    const pad = Math.round((width - m.shape[1]) / 2);
-    const u8 = new Uint8ClampedArray(width * 4);
-    for (let i = 0; i < m.length; i++) {
-        const v = Math.pow((m[i] - min) / (max - min), 3) * 255;
-        const j = (i + pad) * 4;
-        const R = v,
-            B = 255 - v,
-            G = Math.min(R, B);
-        u8[j + 0] = R; // R
-        u8[j + 1] = G; // G
-        u8[j + 2] = B; // B
-        u8[j + 3] = 255;
-    }
-    // V stack rows for better visibility.
-    const ret = new Uint8Array(u8.length * v_stack) as Mat<Uint8Array>;
-    for (let i = 0; i < v_stack; i++) ret.set(u8, i * u8.length);
-    ret.shape = [v_stack, width];
-    ret.channels = 4;
-    return ret;
-}
+const match_left = shallowRef<MatchResult | null>(null);
+const match_right = shallowRef<MatchResult | null>(null);
+const match_center = shallowRef<{ rect: Rect } | null>(null);
 
 const divergence = computed(() => V2A.L(volt.L).x - V2A.R(volt.R).x);
 const depth = computed(() => {
@@ -160,80 +148,103 @@ const divergence_task = abortable(async (aborted) => {
     let l: Frame | null = null,
         c: Frame | null = null,
         r: Frame | null = null;
-    async function getFoveaTile(f: Frame, h: number) {
-        const m = await f.view("Mono8");
-        // Make sure the tile size matches wide angle.
-        return await Vision.resize(m, { height: h });
+    async function getFoveaTile(f: Frame, size: Size) {
+        return await resize(await f.view("Mono8"), size);
     }
-    async function getMatchTile(f: Frame, h: number) {
-        const y = target.y - h / 2;
+    async function getMatchTile(f: Frame, H: number, top: number, s: number) {
         const m = await f.view("Mono8");
-        return await Vision.slice(m, {
+        const roi: Rect = {
             x: 0,
-            y,
-            width: target.width,
-            height: h,
+            y: top,
+            width,
+            height: H,
+        };
+        const sliced = slice(m, roi);
+        const scaled = await resize(sliced, {}, s, s);
+        return scaled;
+    }
+    async function processMatch(
+        match: Mat<Float32Array>,
+        needle: Mat,
+        s: number
+    ): Promise<MatchResult> {
+        const loc = minMaxLoc(match).max;
+        const [height = 0, width = 0] = needle.shape;
+        const rect = RECT.fromTopLeft(loc, { width, height });
+        const [h1 = 0, w1 = 0] = match.shape;
+        const [h2 = 0, w2 = 0] = needle.shape;
+        const sliced = slice(match, {
+            x: -w2 / 2,
+            y: 0,
+            width: w1 + w2 * 2,
+            height: h1,
         });
+        const resized = await resize(sliced, {}, s);
+        return {
+            mat: heatmap(resized),
+            rect: VEC.mul(rect, s),
+        };
     }
     async function update(l: Frame, c: Frame, r: Frame) {
-        const h = height / zoom.value;
+        const z = zoom.value; // Zoom ratio = FOV(wide) / FOV(fovea)
+        const s = scale.value; // Scale of fovea tiles (1.0 ~ zoom)
+        const h = (height * s) / z; // Height of fovea tile (scaled)
+        const w = (width * s) / z; // Width of fovea tile (scaled)
+        const H = (height / z) * 2;
+        const t = { ...target_loc.value }; // Center of target in pixels
+        const top = t.y - H / 2;
         const [tl, tc, tr] = await Promise.all([
-            getFoveaTile(l, h),
-            getMatchTile(c, h),
-            getFoveaTile(r, h),
+            getFoveaTile(l, { width: w, height: h }),
+            getMatchTile(c, H, top, s),
+            getFoveaTile(r, { width: w, height: h }),
         ]);
-        guide.value = tc;
-        [match_left.value, match_right.value] = await Promise.all([
-            Vision.matchTemplate(tc, tl, "CCOEFF_NORMED"),
-            Vision.matchTemplate(tc, tr, "CCOEFF_NORMED"),
-        ]);
+        guide.value = await resize(tc, {}, 1 / s);
+        const [ml, mr] = ([match_left.value, match_right.value] =
+            await Promise.all([
+                matchTemplate(tc, tl, "CCOEFF_NORMED").then((m) =>
+                    processMatch(gaussian(m, 9, 10), tl, 1 / s)
+                ),
+                matchTemplate(tc, tr, "CCOEFF_NORMED").then((m) =>
+                    processMatch(gaussian(m, 9, 10), tr, 1 / s)
+                ),
+            ]));
+        const mc = (match_center.value = {
+            rect: RECT.fromCenter(VEC.sub(t, { y: top }), {
+                width: w / s,
+                height: h / s,
+            }),
+        });
         // Update divergence
         if (is_drag.value) return;
         const ctrl = controller.value;
         if (!ctrl) return;
+        // Center pixel location on match guide strip
         const matched = {
-            L: loc_left.value ?? target.x,
-            C: target.x,
-            R: loc_right.value ?? target.x,
+            L: RECT.getCenter(ml.rect),
+            C: RECT.getCenter(mc.rect),
+            R: RECT.getCenter(mr.rect),
         };
+        // Delta pixel location relative to target center
         const delta = {
-            L: matched.C - matched.L,
-            R: matched.C - matched.R,
+            L: VEC.sub(matched.C, matched.L),
+            R: VEC.sub(matched.C, matched.R),
         };
-        console.log("Divergence delta (px):", delta);
-        const { y } = target;
+        // Current center pixel location of fovea cameras on wide angle frame
         const px_loc = {
-            L: A2P.C(V2A.L(volt.L)).x,
-            R: A2P.C(V2A.R(volt.R)).x,
+            L: A2P.C(V2A.L(volt.L)),
+            R: A2P.C(V2A.R(volt.R)),
         };
-        const kp = 0.5;
-        px_loc.L += delta.L * kp;
-        px_loc.R += delta.R * kp;
+        // Step towards reducing the divergence
+        px_loc.L = VEC.add(px_loc.L, VEC.mul(delta.L, kp.value));
+        px_loc.R = VEC.add(px_loc.R, VEC.mul(delta.R, kp.value));
+        // Request might be rejected when user is dragging.
         try {
-            function fmt({ L, R }: { L: Point2d; R: Point2d }) {
-                return {
-                    L: `X ${L.x.toFixed(2)}, Y ${L.y.toFixed(2)}`,
-                    R: `X ${R.x.toFixed(2)}, Y ${R.y.toFixed(2)}`,
-                };
-            }
-            // Request might be rejected when user is dragging.
-            const prev = fmt(volt);
-            const target = fmt({
-                L: A2V.L(P2A.C({ x: px_loc.L, y })),
-                R: A2V.R(P2A.C({ x: px_loc.R, y })),
-            });
             const { left, right } = await ctrl.actuate({
-                left: A2V.L(P2A.C({ x: px_loc.L, y })),
-                right: A2V.R(P2A.C({ x: px_loc.R, y })),
+                left: A2V.L(P2A.C(px_loc.L)),
+                right: A2V.R(P2A.C(px_loc.R)),
             });
             volt.L = { ...left };
             volt.R = { ...right };
-            console.table({
-                DELTA: delta,
-                Prev: prev,
-                Target: target,
-                Actuated: fmt(volt),
-            });
         } catch (e) {
             console.warn("Divergence adjustment failed:", e);
         }
@@ -296,7 +307,7 @@ const disparity_task = computed(() => {
                     b = _b;
                 }
                 if (a && b) {
-                    disparity_frame.value = await Vision.disparity(a, b, true);
+                    disparity_frame.value = await disparity(a, b, true);
                     a = null;
                     b = null;
                 } else {
@@ -312,6 +323,10 @@ const disparity_task = computed(() => {
     });
 });
 
+function circleCenter({ x, y }: Point2d) {
+    return { cx: x, cy: y };
+}
+
 watch(disparity_task, (_, prev) => prev?.abort());
 
 onUnmounted(async () => {
@@ -320,7 +335,7 @@ onUnmounted(async () => {
         divergence_task.abort(),
         disparity_task.value?.abort(),
     ]);
-    release();
+    triple.release();
 });
 </script>
 
@@ -348,7 +363,7 @@ onUnmounted(async () => {
                 :title="ROLE.C + ' (Sliced View)'"
                 :camera="C"
                 theme="white"
-                :slice="rect"
+                :slice="target"
             />
             <FrameView
                 v-else-if="view === 'disparity'"
@@ -427,21 +442,22 @@ onUnmounted(async () => {
         <FrameView width="100%" :title="divergenceReport" :mat="guide">
             <template v-if="guide">
                 <rect
-                    v-bind="getRectOfLoc(target.x)"
+                    v-if="match_center"
+                    v-bind="RECT(match_center.rect)"
                     :fill="THEME.C"
                     opacity="0.2"
                 />
                 <rect
-                    v-if="loc_left"
-                    v-bind="getRectOfLoc(loc_left, 2)"
+                    v-if="match_left"
+                    v-bind="RECT.offset(match_left.rect, -2)"
                     fill="none"
                     :stroke="THEME.L"
                     stroke-width="2"
                     opacity="0.4"
                 />
                 <rect
-                    v-if="loc_right"
-                    v-bind="getRectOfLoc(loc_right, 2)"
+                    v-if="match_right"
+                    v-bind="RECT.offset(match_right.rect, -2)"
                     fill="none"
                     :stroke="THEME.R"
                     stroke-width="2"
@@ -449,38 +465,65 @@ onUnmounted(async () => {
                 />
                 <circle
                     :fill="THEME.C"
-                    :cx="target.x"
+                    :cx="target_loc.x"
                     :cy="(guide.shape[0] ?? 0) / 2"
                     r="3"
                 />
                 <circle
-                    v-if="loc_left"
+                    v-if="match_left"
                     :fill="THEME.L"
-                    :cx="loc_left"
-                    :cy="(guide.shape[0] ?? 0) / 2"
+                    v-bind="circleCenter(RECT.getCenter(match_left.rect))"
                     r="3"
                 />
                 <circle
-                    v-if="loc_right"
+                    v-if="match_right"
                     :fill="THEME.R"
-                    :cx="loc_right"
-                    :cy="(guide.shape[0] ?? 0) / 2"
+                    v-bind="circleCenter(RECT.getCenter(match_right.rect))"
                     r="3"
                 />
             </template>
         </FrameView>
         <FrameView
             width="100%"
-            :title="`Left Match ${loc_left}px (Red = Match, Blue = Mismatch)`"
-            :mat="displayMatch(match_left)"
+            :title="`Left Match ${
+                (match_left && RECT.getCenter(match_left.rect).x) || '--'
+            }px (Red = Match, Blue = Mismatch)`"
+            :mat="match_left?.mat"
         >
         </FrameView>
         <FrameView
             width="100%"
-            :title="`Right Match ${loc_right}px (Red = Match, Blue = Mismatch)`"
-            :mat="displayMatch(match_right)"
-            >CCOEFF_NORMED
+            :title="`Right Match ${
+                (match_right && RECT.getCenter(match_right.rect).x) || '--'
+            }px (Red = Match, Blue = Mismatch)`"
+            :mat="match_right?.mat"
+        >
         </FrameView>
+        <fieldset>
+            <legend>Control Parameters</legend>
+            <label>
+                kp
+                <input
+                    type="range"
+                    min="0.1"
+                    max="1.0"
+                    step="0.01"
+                    v-model.number="kp"
+                />
+                {{ kp }}
+            </label>
+            <label>
+                scale
+                <input
+                    type="range"
+                    min="0.0"
+                    max="1.0"
+                    step="0.01"
+                    v-model.number="scale_ratio"
+                />
+                {{ scale.toFixed(2) }}
+            </label>
+        </fieldset>
     </div>
 </template>
 

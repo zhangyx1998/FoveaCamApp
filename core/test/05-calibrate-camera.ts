@@ -13,18 +13,15 @@ const handler = () => {
 };
 process.on("SIGINT", handler);
 
+import { Camera, __origin__, type Frame, type Stream } from "core/Aravis";
 import {
-    Camera,
-    Vision,
-    __origin__,
+    calibrateCamera,
+    cornerSubPix,
+    findChessboardCorners,
     type Mat,
-    type Size,
-    type Frame,
-    type Point,
-    type Stream,
-    type Point3d,
-} from "core";
-console.log("imported", { Camera, Vision }, "from", __origin__);
+} from "core/Vision";
+import type { Size, Point, Point3d } from "core/Geometry";
+console.log("imported", { Camera }, "from", __origin__);
 
 function objectPoints() {
     const ret: Point3d[] = [];
@@ -53,7 +50,7 @@ async function detect(stream: Stream<Frame>) {
         const { width, height } = frame;
         sensor_size = { width, height };
         const gray = await frame.view("Mono8");
-        const img_points = await Vision.findChessboardCorners(gray, {
+        const img_points = await findChessboardCorners(gray, {
             width: 6,
             height: 6,
         });
@@ -80,10 +77,10 @@ async function detect(stream: Stream<Frame>) {
     }
     console.log("Calibrating with", detections.length, "frames...");
     const img_pts = await Promise.all(
-        detections.map((d) => Vision.cornerSubPix(d.gray, d.img_points))
+        detections.map((d) => cornerSubPix(d.gray, d.img_points))
     );
     const obj_pts = detections.map((d) => obj_points);
-    const result = await Vision.calibrateCamera(sensor_size, img_pts, obj_pts);
+    const result = await calibrateCamera(sensor_size, img_pts, obj_pts);
     console.log("Calibration result:", result);
 }
 

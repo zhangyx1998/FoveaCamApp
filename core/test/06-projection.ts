@@ -4,9 +4,8 @@
 // This source code is licensed under the MIT license.
 // You may find the full license in project root directory.
 // -------------------------------------------------------
-
-import { Vision, __origin__ } from "core";
-console.log("imported", { Vision }, "from", __origin__);
+import { Projector, __origin__ } from "core/Vision";
+console.log("imported", { Projector }, "from", __origin__);
 
 const img_p = [
     { x: -10, y: -10 },
@@ -17,7 +16,7 @@ const img_p = [
 
 const obj_p = img_p.map((p) => ({ x: p.x / 10, y: p.y / 10, z: 1 }));
 
-const proj = await Vision.Projector.solve(img_p, obj_p);
+const proj = await Projector.solve(img_p, obj_p);
 
 console.log("Image Points", img_p);
 console.log("Object Points", obj_p);

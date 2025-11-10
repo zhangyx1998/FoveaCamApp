@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 
-import { clamp } from "./util";
+import { clamp } from "./util/index.js";
 
 class Swatch extends Array<string> {
     at(index: number) {

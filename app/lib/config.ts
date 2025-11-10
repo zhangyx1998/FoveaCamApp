@@ -3,10 +3,11 @@
 // This source code is licensed under the MIT license.
 // You may find the full license in project root directory.
 // -------------------------------------------------------
-import Store from "./store";
+import Store from "./store.js";
 
 export interface AppConfig {
-    zoom_factor: number;
+    divergence_kp: number;
+    divergence_template_match_scale: number;
 }
 
 export function useAppConfig() {

@@ -5,32 +5,28 @@
 // -------------------------------------------------------
 import { computed, markRaw, ref, shallowRef, watch } from "vue";
 import { Log, Vision } from "core";
-import type {
-    ArUcoDetectResult,
-    ArUcoDetectResults,
-    Camera,
-    Projector,
-    Mat,
-    Point2d,
-    Point3d,
-    Size,
-    Frame,
-} from "core";
-import { ArUcoDetector } from "core";
-import { clamp, delay } from "@lib/util";
+import type { Camera, Frame } from "core/Aravis";
+import {
+    MarkerDetector,
+    type Mat,
+    type MarkerDetectResult,
+    type MarkerDetectResults,
+} from "core/Vision";
+import { Point2d, Point3d, Size } from "core/Geometry";
 import type { Controller, Pos } from "@src/components/Controller.vue";
-import { avg } from "@lib/util/math";
-import abortable from "@lib/abortable";
-import { FreqMeter } from "@lib/util/perf";
+import { clamp, delay } from "@lib/util/index.js";
+import { avg } from "@lib/util/math.js";
+import abortable from "@lib/abortable.js";
+import { FreqMeter } from "@lib/util/perf.js";
 import {
     bilinearInterpolate,
     CORNER_OBJ_POINTS,
     getInternalObjectPoints,
-} from "@lib/marker";
+} from "@lib/marker.js";
 
 export async function record(
-    detector: ArUcoDetector,
-    result: ArUcoDetectResult,
+    detector: MarkerDetector,
+    result: MarkerDetectResult,
     frame?: Mat<Uint8Array>,
     internal: boolean = true
 ) {
@@ -65,7 +61,7 @@ export default class Tracker extends EventTarget {
         this.__target_id__.value = v;
     }
     private lost_count = 0;
-    private readonly __target__ = shallowRef<ArUcoDetectResult | null>(null);
+    private readonly __target__ = shallowRef<MarkerDetectResult | null>(null);
     get target() {
         return this.__target__.value;
     }
@@ -99,14 +95,14 @@ export default class Tracker extends EventTarget {
     get frame() {
         return this.__frame__.value;
     }
-    private readonly __other_targets__ = shallowRef<ArUcoDetectResult[]>([]);
+    private readonly __other_targets__ = shallowRef<MarkerDetectResult[]>([]);
     get other_targets() {
         return this.__other_targets__.value;
     }
-    private handleDetections(detections: ArUcoDetectResults) {
+    private handleDetections(detections: MarkerDetectResults) {
         const { target_id } = this;
-        let target: ArUcoDetectResult | null = null;
-        const others: ArUcoDetectResult[] = [];
+        let target: MarkerDetectResult | null = null;
+        const others: MarkerDetectResult[] = [];
         for (const d of detections) {
             if (target === null && d.id === target_id) target = d;
             else others.push(d);
@@ -123,7 +119,7 @@ export default class Tracker extends EventTarget {
     }
     constructor(
         public readonly camera: Camera,
-        public readonly detector: ArUcoDetector = new ArUcoDetector("4X4_50"),
+        public readonly detector: MarkerDetector = new MarkerDetector("4X4_50"),
         target_id: number = 0,
         scale: number = 1.0
     ) {

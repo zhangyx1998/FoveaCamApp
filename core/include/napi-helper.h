@@ -175,6 +175,13 @@ inline T optionalArgument(const Napi::Value &arg, T &&fallback) {
   return convert<std::remove_reference_t<T>>(arg);
 }
 
+template <typename T>
+inline T optionalArgument(const Napi::Value &arg, const T &fallback) {
+  if (arg.IsUndefined() || arg.IsNull())
+    return fallback;
+  return convert<std::remove_reference_t<T>>(arg);
+}
+
 inline Napi::Value optionalArgument(const Napi::Value &arg) {
   if (arg.IsUndefined() || arg.IsNull())
     return arg.Env().Undefined();

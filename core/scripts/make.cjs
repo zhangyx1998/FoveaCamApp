@@ -1,14 +1,19 @@
 const { execSync } = require("child_process");
 const { BuildSystem } = require("cmake-js");
-const { readFileSync, existsSync, writeFileSync, rmSync } = require("fs");
+const { existsSync, rmSync, mkdirSync, copyFileSync } = require("fs");
+const { resolve } = require("path");
 
 const cmd = process.argv[2];
 const arch = process.arch;
 
+const bin = resolve("dist", ".bin");
+if (["build", "rebuild", "install"].includes(cmd))
+    mkdirSync(bin, { recursive: true });
+
 async function make(runtime, version, arch, options = {}) {
     const prefix = [runtime, version, arch].join("-");
     const buildSystem = new BuildSystem({
-        out: `build/${prefix}`,
+        out: resolve("build", prefix),
         runtime: runtime,
         runtimeVersion: version,
         arch: arch,
@@ -21,10 +26,9 @@ async function make(runtime, version, arch, options = {}) {
         throw new Error(`Unknown command: ${cmd}`);
     console.log(`[${cmd.toUpperCase()}] ${prefix}`);
     await buildSystem[cmd]();
-    const src = `build/${prefix}/Release/core.node`;
-    const dst = `build/${prefix}.node`;
-    if (["build", "rebuild", "install"].includes(cmd))
-        execSync(`cp ${src} ${dst}`, { stdio: "inherit" });
+    const src = resolve("build", prefix, "Release", "core.node");
+    const dst = resolve(bin, `${prefix}.node`);
+    if (["build", "rebuild", "install"].includes(cmd)) copyFileSync(src, dst);
     if (cmd === "clean" && existsSync(dst)) rmSync(dst);
 }
 

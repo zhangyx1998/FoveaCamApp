@@ -9,6 +9,7 @@ configure:
 clean:
 	@node scripts/make.cjs clean
 	@rm -rf .cache
+	@rm -rf dist/.bin
 
 app: build
 	@cd .. && npx electron app

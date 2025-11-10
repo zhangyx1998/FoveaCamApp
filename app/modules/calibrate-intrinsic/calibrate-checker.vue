@@ -1,15 +1,15 @@
 <script setup lang="ts">
 import { markRaw, onUnmounted, shallowReactive, shallowRef, watch } from "vue";
+import { Camera } from "core/Aravis";
 import {
-    Vision,
-    type Mat,
-    type Size,
-    type Point,
-    type Point3d,
-    type Camera,
-    type Undistort,
-    type CameraCalibration,
-} from "core";
+    calibrateCamera,
+    CameraCalibration,
+    cornerSubPix,
+    findChessboardCorners,
+    Mat,
+    Undistort,
+} from "core/Vision";
+import { Point2d, Point3d, Size } from "core/Geometry";
 import StreamView from "@src/components/StreamView.vue";
 import abortable from "@lib/abortable";
 import { FreqMeter } from "@lib/util/perf";
@@ -27,7 +27,7 @@ const props = defineProps<{
     camera: Camera;
     config: CameraConfig;
     calibration: Partial<CameraCalibration>;
-    undistort?: Undistort;
+    undistort?: Undistort | null;
 }>();
 
 const emit = defineEmits<{
@@ -37,12 +37,12 @@ const emit = defineEmits<{
 const { camera, calibration } = props;
 const stream = markRaw(camera.stream);
 
-const cursor = shallowRef<(Point & Size) | null>(null);
+const cursor = shallowRef<(Point2d & Size) | null>(null);
 
 type Record = {
     rgba: Mat<Uint8Array>;
     gray: Mat<Uint8Array>;
-    img_points: Point[];
+    img_points: Point2d[];
     obj_points: Point3d[];
 };
 
@@ -90,10 +90,7 @@ const task = abortable(async (aborted) => {
         const [rgba, gray, corners] = await Promise.all([
             frame.view("BGRA8"),
             frame.view("Mono8"),
-            Vision.findChessboardCorners(
-                await frame.view("Mono8"),
-                pattern_size
-            ),
+            findChessboardCorners(await frame.view("Mono8"), pattern_size),
         ]);
         detection.value =
             corners.length > 0
@@ -117,14 +114,10 @@ function capture() {
 
 async function calibrate() {
     const img_points = await Promise.all(
-        records.map((r) => Vision.cornerSubPix(r.gray, r.img_points))
+        records.map((r) => cornerSubPix(r.gray, r.img_points))
     );
     const obj_points = records.map((r) => r.obj_points);
-    const result = await Vision.calibrateCamera(
-        sensor_size,
-        img_points,
-        obj_points
-    );
+    const result = await calibrateCamera(sensor_size, img_points, obj_points);
     Object.assign(calibration, result, { date: new Date() });
     console.log("Calibration Result:", result);
 }
@@ -137,7 +130,7 @@ onUnmounted(async () => {
 
 <template>
     <div class="view">
-        <div class="left" style="flex-grow: 1; padding-top: 3em;">
+        <div class="left" style="flex-grow: 1; padding-top: 3em">
             <NavBack @back="emit('return')">
                 <span>{{ describeCamera(camera) }}</span>
                 <CameraRole v-if="config.role" :role="config.role" />

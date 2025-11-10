@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { degrees } from "@lib/util";
 import ConfigEntry from "@src/components/ConfigEntry.vue";
-import type { Point2d } from "core";
+import type { Point2d } from "core/Geometry";
 defineProps<{ drift: Point2d | undefined | null }>();
 </script>
 
