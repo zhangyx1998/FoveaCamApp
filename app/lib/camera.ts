@@ -3,16 +3,15 @@
 // This source code is licensed under the MIT license.
 // You may find the full license in project root directory.
 // -------------------------------------------------------
-
+import { markRaw, shallowRef, toRaw, watch } from "vue";
 import { setAction } from "@src/components/Loading.vue";
-import { Camera, cleanup, Regression, Vision } from "core";
-import type { CameraCalibration, Point, Point2d, Point3d } from "core";
-import Store from "./store";
-import { Mutable } from "./types";
-import { computed, markRaw, toRaw } from "vue";
-import { sha256 } from "./util/hash";
-
-window.addEventListener("beforeunload", cleanup);
+import { Camera } from "core/Aravis";
+import { CameraCalibration, Undistort } from "core/Vision";
+import type { Point2d, Point3d } from "core/Geometry";
+import Regression from "core/Regression";
+import Store from "./store.js";
+import { Mutable } from "./types.js";
+import { sha256 } from "./util/hash.js";
 
 export const ROLE = {
     L: "Left Fovea",
@@ -163,20 +162,25 @@ function validateCalibration(
 
 export async function useIntrinsicCalibration(camera: Camera) {
     setAction("Loading intrinsic calibration data...");
-    const calibration = await Store.open<CameraCalibration & { date: Date }>([
+    const calibration = await Store.open<CameraCalibration>([
         "calibrate-intrinsic",
         getCameraKey(camera),
     ]);
+    let u = shallowRef<Undistort | null>(null);
+    function undistort() {
+        const cal = toRaw(calibration);
+        try {
+            if (validateCalibration(cal)) u.value = new Undistort(cal);
+        } catch (e) {
+            console.warn("Failed to create undistort:", e);
+            console.log("Calibration:", cal);
+        }
+    }
+    watch(calibration, undistort, { immediate: true });
     return {
         calibration,
         get undistort() {
-            try {
-                if (validateCalibration(calibration))
-                    return new Vision.Undistort(toRaw(calibration));
-            } catch (e) {
-                console.warn("Failed to create undistort:", e);
-                console.log("Calibration:", toRaw(calibration));
-            }
+            return u.value;
         },
     };
 }
@@ -215,15 +219,15 @@ export async function useExtrinsicRegression(ds: Partial<ExtrinsicDataset>) {
         throw new Error("No extrinsic data for regression");
     }
     const keys: (keyof Point2d)[] = ["x", "y"];
-    const R: Point2d[] = [];
+    const A: Point2d[] = [];
     const V: Point2d[] = [];
     for (const d of ds) {
-        R.push(d!.angle);
+        A.push(d!.angle);
         V.push(d!.voltage);
     }
     return {
-        V2R: new Regression<Point2d, Point2d>(keys, keys).fit(V, R),
-        R2V: new Regression<Point2d, Point2d>(keys, keys).fit(R, V),
+        V2A: new Regression<Point2d, Point2d>(keys, keys).fit(V, A),
+        A2V: new Regression<Point2d, Point2d>(keys, keys).fit(A, V),
     };
 }
 
@@ -265,39 +269,62 @@ export async function useCalibratedTriple() {
         useExtrinsicCalibration(R).then(useExtrinsicRegression),
         useTripleConfig({ L, C, R }),
     ]);
+    return {
+        /* Left Foveated Camera */
+        L,
+        /* Center Wide Camera */
+        C,
+        /* Right Foveated Camera */
+        R,
+        /** Center Fovea Intrinsic Calibration */
+        CI,
+        /** Left Fovea Extrinsic Regression */
+        LE,
+        /** Right Fovea Extrinsic Regression */
+        RE,
+        /* Triple Config */
+        config,
+        /* Forward Additional Properties */
+        ...forward,
+    };
+}
+
+export type CalibratedTriple = Awaited<ReturnType<typeof useCalibratedTriple>>;
+
+export function useCoordinateConversions({
+    LE,
+    CI,
+    RE,
+    config,
+}: CalibratedTriple) {
+    /** Apply calibrated drift to target angular position */
     function applyDrift({ x, y }: Point2d, drift?: Partial<Point2d>): Point2d {
         return { x: x + (drift?.x ?? 0), y: y + (drift?.y ?? 0) };
     }
+    /** Remove calibrated drift from angular position derived from voltage */
     function removeDrift({ x, y }: Point2d, drift?: Partial<Point2d>): Point2d {
         return { x: x - (drift?.x ?? 0), y: y - (drift?.y ?? 0) };
     }
     return {
-        L,
-        C,
-        R,
-        CI,
-        LE,
-        RE,
-        config,
-        // Conversion from angle (rad) to voltage (V)
+        /** Conversion from angle (rad) to voltage (V) */
         A2V: {
             L(angle: Point2d) {
-                return LE.R2V.predict(removeDrift(angle, config.drift_l));
+                return LE.A2V.predict(removeDrift(angle, config.drift_l));
             },
             R(angle: Point2d) {
-                return RE.R2V.predict(removeDrift(angle, config.drift_r));
+                return RE.A2V.predict(removeDrift(angle, config.drift_r));
             },
         },
-        // Conversion from voltage (V) to angle (rad)
+        /** Conversion from voltage (V) to angle (rad) */
         V2A: {
             L(volt: Point2d) {
-                return applyDrift(LE.V2R.predict(volt), config.drift_l);
+                return applyDrift(LE.V2A.predict(volt), config.drift_l);
             },
             R(volt: Point2d) {
-                return applyDrift(RE.V2R.predict(volt), config.drift_r);
+                return applyDrift(RE.V2A.predict(volt), config.drift_r);
             },
         },
-        // Conversion from angle (rad) to pixel (px)
+        /** Conversion from angle (rad) to pixel (px) */
         A2P: {
             C(px: Point2d) {
                 if (!CI.undistort)
@@ -305,7 +332,7 @@ export async function useCalibratedTriple() {
                 return CI.undistort.position([px], true)[0];
             },
         },
-        // Conversion from pixel (px) to angle (rad)
+        /** Conversion from pixel (px) to angle (rad) */
         P2A: {
             C(px: Point2d) {
                 if (!CI.undistort)
@@ -313,11 +340,10 @@ export async function useCalibratedTriple() {
                 return CI.undistort.angular([px], false)[0];
             },
         },
-        ...forward,
     };
 }
 
-export type CalibratedTriple = Awaited<ReturnType<typeof useCalibratedTriple>>;
+export type CoordinateConversions = ReturnType<typeof useCoordinateConversions>;
 
 export async function getFrameSize(camera: Camera) {
     const frame = await camera.grab();

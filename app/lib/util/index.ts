@@ -238,3 +238,26 @@ export function getCursorOffset(el: Node, offset: number) {
 export function deepCopy<T>(obj: T): T {
     return JSON.parse(JSON.stringify(obj));
 }
+
+export type FormatNumberOptions = {
+    unit?: string;
+    plusSign?: boolean;
+    decimals?: number;
+    digitsBeforePoint?: number;
+};
+
+export function formatNumber(x: number, options: FormatNumberOptions = {}) {
+    const {
+        unit = "",
+        plusSign = false,
+        decimals = 2,
+        digitsBeforePoint = 1,
+    } = options;
+    const sign = x >= 0 ? (plusSign ? "+" : "") : "-";
+    const factor = Math.pow(10, decimals);
+    const rounded = Math.round(Math.abs(x) * factor) / factor;
+    const [integer, fraction = ""] = rounded.toFixed(decimals).split(".");
+    return `${sign}${integer.padStart(digitsBeforePoint, "0")}${
+        decimals > 0 ? "." + fraction.padEnd(decimals, "0") : ""
+    }${unit}`;
+}

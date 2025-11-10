@@ -8,9 +8,6 @@
 
 #include <napi.h>
 
-#include <Aravis/Camera.h>
-#include <Aravis/Frame.h>
-#include <Aravis/Stream.h>
 #include <convert.h>
 #include <sstream>
 
@@ -65,11 +62,9 @@ FN(verbose) {
   JS_EXCEPT(info.Env().Undefined())
 }
 
-void exportLogNamespace(Napi::Env env, Napi::Object &exports) {
-  const auto obj = Napi::Object::New(env);
-  obj.Set("error", Napi::Function::New(env, error, "error"));
-  obj.Set("warn", Napi::Function::New(env, warn, "warn"));
-  obj.Set("info", Napi::Function::New(env, info, "info"));
-  obj.Set("verbose", Napi::Function::New(env, verbose, "verbose"));
-  exports.Set("Log", obj);
+void exportLogModule(Napi::Env env, Napi::Object &exports) {
+  exports.Set("error", Napi::Function::New(env, error, "error"));
+  exports.Set("warn", Napi::Function::New(env, warn, "warn"));
+  exports.Set("info", Napi::Function::New(env, info, "info"));
+  exports.Set("verbose", Napi::Function::New(env, verbose, "verbose"));
 }

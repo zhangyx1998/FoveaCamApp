@@ -18,6 +18,7 @@ import CalibrateExtrinsic from "../modules/calibrate-extrinsic/index.vue";
 import CalibrateDrift from "../modules/calibrate-drift/index.vue";
 import Playground from "../modules/playground/index.vue";
 import Loading from "./components/Loading.vue";
+import ErrorBoundary from "./components/ErrorBoundary.vue";
 
 function launch(module: any, name: string) {
     currentModule.value = module;
@@ -33,12 +34,14 @@ function backToHome() {
 <template>
     <div class="main" :style="{ top: titleBarHeight + 'px' }">
         <template v-if="currentModule">
-            <suspense>
-                <component v-if="currentModule" :is="currentModule" />
-                <template #fallback>
-                    <Loading />
-                </template>
-            </suspense>
+            <ErrorBoundary>
+                <suspense>
+                    <component v-if="currentModule" :is="currentModule" />
+                    <template #fallback>
+                        <Loading />
+                    </template>
+                </suspense>
+            </ErrorBoundary>
         </template>
         <div v-else class="main-menu">
             <div class="welcome">

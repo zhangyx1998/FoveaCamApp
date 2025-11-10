@@ -7,12 +7,13 @@
 import { Worker } from "worker_threads";
 import { Log, cleanup, __origin__ } from "core";
 Log.info("imported core from", __origin__);
-
+ 
 function isolated() {
     return new Promise<void>((resolve, reject) => {
         const worker = new Worker(
             `
-            import { Log, Camera, cleanup, __origin__ } from "core";
+            import { Log, cleanup } from "core";
+            import { Camera, __origin__ } from "core/Aravis";
             Log.info("imported", { Camera }, "from", __origin__);
             cleanup();
         `,

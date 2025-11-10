@@ -6,8 +6,9 @@
 // -------------------------------------------------------
 
 import { SerialPort } from "serialport";
-import { type MirrorPosition, Protocol } from "core";
-import type { PortInfo } from "@serialport/bindings-interface";
+import { type AnalogChannels, Device, Protocol } from "core/Controller";
+
+type PortInfo = Awaited<ReturnType<typeof SerialPort.list>>[number];
 
 async function getPort(match: Partial<PortInfo>) {
     for (const port of await SerialPort.list()) {
@@ -31,16 +32,16 @@ if (info === null) {
     console.log("Device found:", info);
 }
 
-const protocol = new Protocol(info.path);
-console.log("Connected:", protocol);
+const device = new Device(info.path);
+console.log("Connected:", device);
 
 const bias = 90;
-await protocol.set(Protocol.System.Enable, false);
-console.log(await protocol.get(Protocol.System.Info));
-console.log(await protocol.get(Protocol.System.Version));
-console.log(await protocol.set(Protocol.Config.Log, "INFO"));
-console.log(await protocol.set(Protocol.Config.Bias, 90));
-console.log(await protocol.set(Protocol.Config.LPF, 120));
+await device.set(Protocol.System.Enable, false);
+console.log(await device.get(Protocol.System.Info));
+console.log(await device.get(Protocol.System.Version));
+console.log(await device.set(Protocol.Config.Log, "INFO"));
+console.log(await device.set(Protocol.Config.Bias, 90));
+console.log(await device.set(Protocol.Config.LPF, 120));
 
 function clamp(val: number, [min, max]: [number, number]) {
     if (val < min) {
@@ -59,23 +60,23 @@ function dac2volt(ch: number) {
     return (200 * ch) / 65535;
 }
 
-async function actuate(v: number, settle_time = 100_000) {
+async function actuate(v: number, settle_time = 10_000) {
     const dv = v / 2;
     // Top left -> bottom right
-    const l: MirrorPosition = [
+    const l: AnalogChannels = [
         volt2dac(bias + dv),
         volt2dac(bias - dv),
         volt2dac(bias + dv),
         volt2dac(bias - dv),
     ];
     // Top right -> bottom left
-    const r: MirrorPosition = [
+    const r: AnalogChannels = [
         volt2dac(bias - dv),
         volt2dac(bias + dv),
         volt2dac(bias + dv),
         volt2dac(bias - dv),
     ];
-    const { left, right, complete_time } = await protocol.set(
+    const { left, right, complete_time } = await device.set(
         Protocol.Command.Actuate,
         {
             left: l,
@@ -91,7 +92,7 @@ async function actuate(v: number, settle_time = 100_000) {
 }
 
 try {
-    console.log(await protocol.set(Protocol.System.Enable, true));
+    console.log(await device.set(Protocol.System.Enable, true));
     let v = 0;
     for (; v <= 170; v += 10) console.log(await actuate(v));
     for (; v >= -170; v -= 10) console.log(await actuate(v));
@@ -100,4 +101,3 @@ try {
 } catch (error) {
     console.error("Error occurred:", error);
 }
-process.exit(0);

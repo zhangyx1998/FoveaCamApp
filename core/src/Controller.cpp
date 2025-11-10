@@ -371,28 +371,23 @@ public:
 
 extern int SerialOpen(const Napi::CallbackInfo &info) noexcept;
 
-class ProtocolObject : public ObjectWrap<ProtocolObject> {
+class DeviceObject : public ObjectWrap<DeviceObject> {
 public:
   static Function Init(Napi::Env env) {
-    bufferAccessor.get(env) =
-        Napi::Persistent(Napi::Symbol::New(env, "Buffer"));
-    propNameAccessor.get(env) =
-        Napi::Persistent(Napi::Symbol::New(env, "PropertyName"));
-    auto fn = DefineClass(env, "Protocol",
-                          {
-                              INSTANCE_GETTER(ProtocolObject, connected), //
-                              INSTANCE_METHOD(ProtocolObject, get),       //
-                              INSTANCE_METHOD(ProtocolObject, set),       //
-                              INSTANCE_METHOD(ProtocolObject, release),   //
-                          });
-    return fn;
+    return DefineClass(env, "Protocol",
+                       {
+                           INSTANCE_GETTER(DeviceObject, connected), //
+                           INSTANCE_METHOD(DeviceObject, get),       //
+                           INSTANCE_METHOD(DeviceObject, set),       //
+                           INSTANCE_METHOD(DeviceObject, release),   //
+                       });
   }
 
-  ProtocolObject(const CallbackInfo &info)
-      : ObjectWrap<ProtocolObject>(info), env(info.Env()), fd(SerialOpen(info)),
-        tx(), rx(), rx_thread(&ProtocolObject::rxLoop, this) {}
+  DeviceObject(const CallbackInfo &info)
+      : ObjectWrap<DeviceObject>(info), env(info.Env()), fd(SerialOpen(info)),
+        tx(), rx(), rx_thread(&DeviceObject::rxLoop, this) {}
 
-  ~ProtocolObject() {
+  ~DeviceObject() {
     Cleanup::remove(env, cleanup_hook);
     destroy();
   }
@@ -420,7 +415,7 @@ public:
 private:
   const Napi::Env env;
   Cleanup::UID cleanup_hook =
-      Cleanup::add(env, [this] { this->destroy(); }, "ProtocolObject");
+      Cleanup::add(env, [this] { this->destroy(); }, "DeviceObject");
   bool flag_term = false;
   const int fd;
   COBS::TX tx;
@@ -488,7 +483,7 @@ private:
   }
 
   void rxLoop() {
-    VERBOSE("Protocol::rxLoop started for fd %d", fd);
+    VERBOSE("Device::rxLoop started for fd %d", fd);
     char byte;
     ssize_t count;
     while (!flag_term) {
@@ -500,7 +495,7 @@ private:
         std::this_thread::yield();
         continue;
       }
-      VERBOSE("Protocol::recv() %u bytes + incoming 0x%s", rx.len(),
+      VERBOSE("Device::recv() %u bytes + incoming 0x%s", rx.len(),
               hexFormat(&byte, 1).c_str());
       if (rx.recv(byte))
         handleRawPacket(Protocol::RawPacket(rx.get()));
@@ -535,7 +530,7 @@ private:
   }
 
   FN(get) {
-    EXPECT_EXACTLY_ONE_ARGUMENT("Protocol::get");
+    EXPECT_EXACTLY_ONE_ARGUMENT("Device::get");
     const auto &factory = arg.As<Napi::Function>();
     const auto property = getProperty(factory);
     const auto sequence = this->sequence();
@@ -546,7 +541,7 @@ private:
   FN(set) {
     auto env = info.Env();
     if (info.Length() < 1)
-      JS_THROW(TypeError, "Protocol::set expects at least one argument",
+      JS_THROW(TypeError, "Device::set expects at least one argument",
                env.Undefined());
     const auto &factory = info[0].As<Napi::Function>();
     const auto property = getProperty(factory);
@@ -569,8 +564,12 @@ private:
   }
 };
 
-void exportProtocolObject(Napi::Env env, Napi::Object &exports) {
-  auto Protocol = ProtocolObject::Init(env);
+void exportControllerModule(Napi::Env env, Napi::Object &exports) {
+  bufferAccessor.get(env) = Napi::Persistent(Napi::Symbol::New(env, "Buffer"));
+  propNameAccessor.get(env) =
+      Napi::Persistent(Napi::Symbol::New(env, "PropertyName"));
+  exports.Set("Device", DeviceObject::Init(env));
+  auto Protocol = Napi::Object::New(env);
   Protocol.Set("Log", factory<Property::LOG, StringPacket>(env, "Log"));
   Protocol.Set("System", System::Init(env));
   Protocol.Set("Config", Config::Init(env));

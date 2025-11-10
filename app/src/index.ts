@@ -11,7 +11,5 @@ function preventZoom(e: WheelEvent) {
 
 document.addEventListener("wheel", preventZoom, { passive: false });
 
-import controller from "@src/components/Controller.vue";
-(window as any).controller = controller; // for debug
-
-import "@lib/store";
+import { cleanup } from "core";
+window.addEventListener("beforeunload", cleanup);

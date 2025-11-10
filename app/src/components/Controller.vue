@@ -4,13 +4,19 @@ This source code is licensed under the MIT license.
 You may find the full license in project root directory.
 --------------------------------------------------- -->
 <script lang="ts">
-import { Protocol, type LogLevel, type PacketFactory } from "core";
+import {
+    Protocol,
+    Device,
+    type LogLevel,
+    type PacketFactory,
+} from "core/Controller";
 import { SerialPort } from "serialport";
 import type { PortInfo } from "@serialport/bindings-interface";
 import { clamp } from "../../lib/util";
 import { computed, ref, shallowRef, useTemplateRef } from "vue";
 import { ElementSize } from "@lib/util/dom";
 import { setAction } from "./Loading.vue";
+import { BufferLike } from "@lib/types";
 
 export type Pos = { x: number; y: number };
 
@@ -63,7 +69,7 @@ export class Controller {
             return info;
         }
     }
-    private readonly protocol: Protocol;
+    private readonly device: Device;
     public readonly ready: Promise<void>;
     public readonly release: () => void;
     constructor(
@@ -73,8 +79,8 @@ export class Controller {
         lpf: number = 120,
         log_level: LogLevel = "INFO"
     ) {
-        this.protocol = new Protocol(info.path);
-        this.release = () => this.protocol.release();
+        this.device = new Device(info.path);
+        this.release = () => this.device.release();
         this.ready = (async () => {
             await this.disable();
             console.log("Controller connected:", info);
@@ -86,14 +92,12 @@ export class Controller {
         })();
     }
     private get<T>(prop: PacketFactory<T>) {
-        if (!this.protocol.connected)
-            throw new Error("Controller not connected");
-        return this.protocol.get(prop);
+        if (!this.device.connected) throw new Error("Controller not connected");
+        return this.device.get(prop);
     }
     private set<T>(prop: PacketFactory<T>, arg: T | BufferLike) {
-        if (!this.protocol.connected)
-            throw new Error("Controller not connected");
-        return this.protocol.set(prop, arg);
+        if (!this.device.connected) throw new Error("Controller not connected");
+        return this.device.set(prop, arg);
     }
     // Application-level API
     get info() {

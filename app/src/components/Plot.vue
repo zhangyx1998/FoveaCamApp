@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { Rect } from "core";
+import type { Rect } from "core/Geometry";
 defineProps<{ box: Rect }>();
 </script>
 

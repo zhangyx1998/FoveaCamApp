@@ -4,7 +4,8 @@
 // This source code is licensed under the MIT license.
 // You may find the full license in project root directory.
 // -------------------------------------------------------
-import { Camera, __origin__, type Mat } from "core";
+import { Camera, __origin__ } from "core/Aravis";
+import type { Mat } from "core/Vision";
 console.log("imported", { Camera }, "from", __origin__);
 
 function check(mat: Mat) {

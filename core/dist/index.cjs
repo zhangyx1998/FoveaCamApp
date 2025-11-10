@@ -23,14 +23,24 @@ const prefix = [runtime, version, arch].join("-");
 
 const { resolve } = require("node:path");
 const dir = resolve(__filename, "..");
-const path = resolve(dir, `./build/${prefix}`);
+const path = resolve(dir, `./.bin/${prefix}`);
 
-const core = require(path);
-Object.defineProperty(core, "__origin__", {
-    value: path + ".node",
-    writable: false,
-    enumerable: false,
-    configurable: false,
-});
+const addon = require(path);
+const origin = path + ".node";
 
-module.exports = core;
+function injectOrigin(obj) {
+    Object.defineProperty(obj, "__origin__", {
+        value: origin,
+        writable: false,
+        enumerable: false,
+        configurable: false,
+    });
+    return obj;
+}
+
+for (const el of Object.values(addon)) {
+    if (["object", "function"].includes(typeof el) && el !== null)
+        injectOrigin(el);
+}
+
+module.exports = injectOrigin(addon);

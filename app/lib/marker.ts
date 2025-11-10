@@ -5,13 +5,11 @@
 // -------------------------------------------------------
 
 import {
-    ArUcoDetectResult,
-    Point2d,
-    Point3d,
-    PreDefinedDictionary,
-    Size,
-    Vision,
-} from "core";
+    Projector,
+    type PreDefinedDictionary,
+    type MarkerDetectResult,
+} from "core/Vision";
+import type { Point2d, Point3d, Size } from "core/Geometry";
 import { FunctionalComponent, h } from "vue";
 
 export const CORNER_OBJ_POINTS: Point3d[] = [
@@ -33,8 +31,8 @@ function isCorner(a: number, b: number, c: number, d: number): boolean {
     ].some(([x, y]) => !!x === !!y);
 }
 
-export function getMarkerProjection(result: ArUcoDetectResult) {
-    return Vision.Projector.solve(result, CORNER_OBJ_POINTS);
+export function getMarkerProjection(result: MarkerDetectResult) {
+    return Projector.solve(result, CORNER_OBJ_POINTS);
 }
 
 export function bilinearInterpolate(

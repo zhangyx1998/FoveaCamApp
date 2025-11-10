@@ -5,7 +5,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 
-import { Regression, __origin__ } from "core";
+import Regression, { __origin__ } from "core/Regression";
 console.log("imported", { Regression }, "from", __origin__);
 
 const V = [

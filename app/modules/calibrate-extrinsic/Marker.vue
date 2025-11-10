@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import type { ArUcoDetectResult, Point2d } from "core";
+import { Point2d } from "core/Geometry";
 import { avg, distance2D } from "@lib/util/math";
 import { combinations } from "@lib/util/iter";
+
 const props = defineProps<{
     detection: Point2d[] & { id?: any };
     features?: Point2d[];

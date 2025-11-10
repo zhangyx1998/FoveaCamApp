@@ -47,10 +47,10 @@ static FN(slice) {
                                to_string(rect.height));
     // Allow slice out of bounds, fill with zeros
     cv::Mat sliced = cv::Mat::zeros(rect.height, rect.width, mat.type());
-    cv::Point tl(std::max(rect.x, 0), std::max(rect.y, 0));
-    cv::Point br(std::min(rect.x + rect.width, mat.cols),
-                 std::min(rect.y + rect.height, mat.rows));
-    auto src = mat(cv::Rect(tl, br));
+    cv::Point src_tl(std::max(rect.x, 0), std::max(rect.y, 0));
+    cv::Point src_br(std::min(rect.x + rect.width, mat.cols),
+                     std::min(rect.y + rect.height, mat.rows));
+    auto src = mat(cv::Rect(src_tl, src_br));
     cv::Point dst_tl(std::max(-rect.x, 0), std::max(-rect.y, 0));
     cv::Point dst_br(dst_tl.x + src.cols, dst_tl.y + src.rows);
     src.copyTo(sliced(cv::Rect(dst_tl, dst_br)));
@@ -61,10 +61,10 @@ static FN(slice) {
 
 static inline cv::Size2i getSize(const Napi::Value &arg, int h, int w) {
   if (!arg.IsObject())
-    return cv::Size2i(w, h);
+    return cv::Size2i();
   auto obj = arg.As<Napi::Object>();
   if (!obj.Has("width") && !obj.Has("height"))
-    return cv::Size2i(w, h);
+    return cv::Size2i();
   // Both width and height are defined
   if (obj.Has("width") && obj.Has("height"))
     return {convert<int>(obj.Get("width")), convert<int>(obj.Get("height"))};
@@ -87,7 +87,7 @@ static FN(resize) {
     auto mat = convert<cv::Mat>(info[0]);
     const auto size = getSize(info[1], mat.rows, mat.cols);
     const auto fx = optionalArgument<double>(info[2], 0.0);
-    const auto fy = optionalArgument<double>(info[3], 0.0);
+    const auto fy = optionalArgument<double>(info[3], fx);
     if (fx == 0.0 && fy == 0.0 && size.width == mat.cols &&
         size.height == mat.rows)
       return info[0]; // No resizing needed
@@ -98,6 +98,63 @@ static FN(resize) {
       cv::resize(mat, resized, size, fx, fy, mode);
       return resized;
     });
+  }
+  JS_EXCEPT(env.Undefined())
+}
+
+static FN(heatmap) {
+  const auto env = info.Env();
+  try {
+    auto mat = convert<cv::Mat>(info[0]);
+    auto norm = optionalArgument<bool>(info[1], false);
+    if (mat.channels() != 1)
+      throw JS::Error(env, "Heatmap input must be single channel matrix");
+    switch (mat.type()) {
+    case CV_8UC1:
+      if (norm)
+        cv::normalize(mat, mat, 0, 255, NORM_MINMAX);
+      break;
+    case CV_16FC1:
+    case CV_32FC1:
+    case CV_64FC1:
+      if (norm)
+        cv::normalize(mat, mat, 0, 1.0, NORM_MINMAX);
+      mat.convertTo(mat, CV_8UC1, 255.0);
+      break;
+    default:
+      throw JS::Error(env, "Unsupported matrix type " + to_string(mat.type()) +
+                               " for heatmap conversion");
+    }
+    cv::Mat channels[4];                             // RGBA8
+    channels[0] = mat;                               // R
+    channels[2] = 255 - mat;                         // B
+    channels[1] = cv::min(channels[0], channels[2]); // G = min(R, B)
+    channels[3] = cv::Mat(mat.size(), CV_8UC1, cv::Scalar(255)); // A
+    cv::Mat out;
+    cv::merge(channels, 4, out);
+    return convert(env, out);
+  }
+  JS_EXCEPT(env.Undefined())
+}
+
+inline Size2i toSize(const Napi::Value &value) {
+  if (value.IsNumber()) {
+    auto k = convert<int>(value);
+    return Size2i(k, k);
+  } else {
+    return convert<Size2i>(value);
+  }
+}
+
+static FN(gaussian) {
+  const auto env = info.Env();
+  try {
+    auto mat = convert<cv::Mat>(info[0]);
+    const auto ksize = toSize(info[1]); // Ensure odd size
+    const auto sigmaX = optionalArgument<double>(info[2], 2);
+    const auto sigmaY = optionalArgument<double>(info[3], sigmaX);
+    cv::GaussianBlur(mat, mat, ksize, sigmaX, sigmaY);
+    return convert(env, mat);
   }
   JS_EXCEPT(env.Undefined())
 }
@@ -246,7 +303,7 @@ static FN(calibrateCamera) {
 
 class Undistort : public Napi::ObjectWrap<Undistort> {
 public:
-  static void Init(Napi::Env env, Napi::Object exports) {
+  static void Export(Napi::Env env, Napi::Object exports) {
     Napi::Function func =
         DefineClass(env, "Undistort",
                     {
@@ -585,17 +642,17 @@ CORE_OBJECT(Projector);
 
 #define EXPORT(OBJ, F) OBJ.Set(#F, Function::New<F>(env, #F));
 void exportVisionNamespace(Napi::Env env, Napi::Object &exports) {
-  Napi::Object vision = Napi::Object::New(env);
-  EXPORT(vision, slice);
-  EXPORT(vision, resize);
-  EXPORT(vision, disparity);
-  EXPORT(vision, minMaxLoc);
-  EXPORT(vision, matchTemplate);
-  EXPORT(vision, findChessboardCorners);
-  EXPORT(vision, cornerSubPix);
-  EXPORT(vision, calibrateCamera);
-  Undistort::Init(env, vision);
-  exportProjector(env, vision);
-  exports.Set("Vision", vision);
+  EXPORT(exports, slice);
+  EXPORT(exports, resize);
+  EXPORT(exports, heatmap);
+  EXPORT(exports, gaussian);
+  EXPORT(exports, disparity);
+  EXPORT(exports, minMaxLoc);
+  EXPORT(exports, matchTemplate);
+  EXPORT(exports, findChessboardCorners);
+  EXPORT(exports, cornerSubPix);
+  EXPORT(exports, calibrateCamera);
+  Undistort::Export(env, exports);
+  Projector::Export(env, exports);
 }
 #undef EXPORT

@@ -25,10 +25,8 @@ const Module = require("./index.cjs");
 export default Module;
 // Re-expose named exports for nicer ESM ergonomics:
 export const {
-    Camera, //
-    Frame, //
-    Protocol, //
-    ArUcoDetector, //
+    Aravis, //
+    Controller, //
     Vision, //
     Regression, //
     Log,

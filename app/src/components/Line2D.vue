@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { Point2d } from "core";
+import type { Point2d } from "core/Geometry";
 import { computed, FunctionalComponent, h } from "vue";
 
 type MarkerType = "." | "x" | "+" | "o";

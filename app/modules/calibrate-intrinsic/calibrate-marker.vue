@@ -8,19 +8,18 @@ import {
     shallowRef,
     watch,
 } from "vue";
+import { Camera } from "core/Aravis";
 import {
-    Vision,
-    type Mat,
-    type Size,
-    type Point,
-    type Point3d,
-    type Camera,
-    type Undistort,
-    type CameraCalibration,
+    calibrateCamera,
+    CameraCalibration,
+    cornerSubPix,
+    MarkerDetector,
+    MarkerDetectResults,
+    Mat,
     PreDefinedDictionary,
-    ArUcoDetector,
-    ArUcoDetectResults,
-} from "core";
+    Undistort,
+} from "core/Vision";
+import { Point2d, Point3d, Size } from "core/Geometry";
 import StreamView from "@src/components/StreamView.vue";
 import abortable from "@lib/abortable";
 import { FreqMeter } from "@lib/util/perf";
@@ -44,7 +43,7 @@ const props = defineProps<{
     camera: Camera;
     config: CameraConfig;
     calibration: Partial<CameraCalibration>;
-    undistort?: Undistort;
+    undistort?: Undistort | null;
 }>();
 
 const emit = defineEmits<{
@@ -54,26 +53,26 @@ const emit = defineEmits<{
 const { camera, calibration } = props;
 const stream = markRaw(camera.stream);
 
-const cursor = shallowRef<(Point & Size) | null>(null);
+const cursor = shallowRef<(Point2d & Size) | null>(null);
 
 type Sample = {
-    img_points: Point[];
+    img_points: Point2d[];
     obj_points: Point3d[];
 };
 
 type Record = {
     rgba: Mat<Uint8Array>;
     gray: Mat<Uint8Array>;
-    results: ArUcoDetectResults;
+    results: MarkerDetectResults;
     samples: Sample[];
 };
 
 const freq = new FreqMeter();
 const scale = ref(4);
 const dictionary = ref<PreDefinedDictionary>("4X4_50");
-const detector = computed(() => new ArUcoDetector(dictionary.value));
+const detector = computed(() => new MarkerDetector(dictionary.value));
 const sensor_size = shallowReactive<Size>({ width: 0, height: 0 });
-const detection = shallowRef<ArUcoDetectResults | null>(null);
+const detection = shallowRef<MarkerDetectResults | null>(null);
 const records = shallowReactive<Array<Record>>([]);
 
 function clearRecords() {
@@ -152,14 +151,10 @@ async function calibrate() {
         )
         .flat(1);
     const img_points = await Promise.all(
-        samples.map((s) => Vision.cornerSubPix(s.gray, s.img_points))
+        samples.map((s) => cornerSubPix(s.gray, s.img_points))
     );
     const obj_points = samples.map((s) => s.obj_points);
-    const result = await Vision.calibrateCamera(
-        sensor_size,
-        img_points,
-        obj_points
-    );
+    const result = await calibrateCamera(sensor_size, img_points, obj_points);
     Object.assign(calibration, result, { date: new Date() });
     console.log("Calibration Result:", result);
 }

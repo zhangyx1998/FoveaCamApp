@@ -3,6 +3,7 @@
 // This source code is licensed under the MIT license.
 // You may find the full license in project root directory.
 // -------------------------------------------------------
+import { TypedArray } from "core/types";
 import { ipcRenderer } from "electron";
 import { existsSync } from "node:fs";
 import {

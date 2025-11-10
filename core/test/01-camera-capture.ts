@@ -13,7 +13,7 @@ const handler = () => {
 };
 process.on("SIGINT", handler);
 
-import { Camera, __origin__, type Frame, type Stream } from "core";
+import { Camera, __origin__, type Frame, type Stream } from "core/Aravis";
 console.log("imported", { Camera }, "from", __origin__);
 
 const cameras = await Camera.list();

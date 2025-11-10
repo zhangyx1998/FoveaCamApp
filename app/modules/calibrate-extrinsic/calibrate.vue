@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, markRaw, onUnmounted, watch } from "vue";
-import type { Camera, Undistort } from "core";
-import { ArUcoDetector, Vision } from "core";
+import type { Camera } from "core/Aravis";
+import { MarkerDetector, Projector, Undistort } from "core/Vision";
 import { MatchedCameras, ROLE, THEME } from "@lib/camera";
 import StreamView from "@src/components/StreamView.vue";
 import Marker from "./Marker.vue";
@@ -23,7 +23,7 @@ const props = defineProps<{
     records: ExtrinsicRecord[];
 }>();
 
-const detector = new ArUcoDetector("4X4_50");
+const detector = new MarkerDetector("4X4_50");
 
 const tracker = {
     L: props.cameras.L && new Tracker(props.cameras.L, detector, 1, 0.25),
@@ -61,7 +61,7 @@ async function capture() {
         record(detector, tracker.C!.target!, gc, false).then(async (r) => {
             const { img_points, obj_points } = r;
             const { undistort } = props;
-            const projection = await Vision.Projector.solve(
+            const projection = await Projector.solve(
                 img_points,
                 obj_points,
                 undistort.calibration
@@ -105,7 +105,7 @@ onUnmounted(async () => {
             <StreamView
                 class="stream"
                 :title="ROLE.L"
-                :footnote="`ArUco Tracker @ ${tracker.L?.fps ?? 'N/A'}`"
+                :footnote="`Marker Tracker @ ${tracker.L?.fps ?? 'N/A'}`"
                 :camera="cameras.L"
                 :theme="THEME.L"
             >
@@ -123,7 +123,7 @@ onUnmounted(async () => {
             <ConfigEntry v-if="tracker.L">
                 <span>
                     {{ tracker.L?.target ? "✓" : "✗" }}
-                    ArUco ID to Track:
+                    Marker ID to Track:
                 </span>
                 <input v-model.number="tracker.L.target_id" />
             </ConfigEntry>
@@ -147,7 +147,7 @@ onUnmounted(async () => {
             <StreamView
                 class="stream"
                 :title="ROLE.C"
-                :footnote="`ArUco Tracker @ ${tracker.C?.fps ?? 'N/A'}`"
+                :footnote="`Marker Tracker @ ${tracker.C?.fps ?? 'N/A'}`"
                 :camera="cameras.C"
                 :theme="THEME.C"
             >
@@ -171,7 +171,7 @@ onUnmounted(async () => {
             <ConfigEntry v-if="tracker.C">
                 <span>
                     {{ tracker.C?.target ? "✓" : "✗" }}
-                    ArUco ID to Track:
+                    Marker ID to Track:
                 </span>
                 <input v-model.number="tracker.C.target_id" />
             </ConfigEntry>
@@ -191,7 +191,7 @@ onUnmounted(async () => {
             <StreamView
                 class="stream"
                 :title="ROLE.R"
-                :footnote="`ArUco Tracker @ ${tracker.R?.fps ?? 'N/A'}`"
+                :footnote="`Marker Tracker @ ${tracker.R?.fps ?? 'N/A'}`"
                 :camera="cameras.R"
                 :theme="THEME.R"
             >
@@ -209,7 +209,7 @@ onUnmounted(async () => {
             <ConfigEntry v-if="tracker.R">
                 <span>
                     {{ tracker.R?.target ? "✓" : "✗" }}
-                    ArUco ID to Track:
+                    Marker ID to Track:
                 </span>
                 <input
                     v-model.number="tracker.R.target_id"

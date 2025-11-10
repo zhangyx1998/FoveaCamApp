@@ -95,7 +95,7 @@ export class AsyncChain<T = any, P = undefined> {
         return next;
     }
 
-    terminate() {
+    close() {
         const { back } = this;
         if (back.type === "PENDING") {
             back.resolve(null);
