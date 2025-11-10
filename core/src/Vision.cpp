@@ -301,6 +301,41 @@ static FN(calibrateCamera) {
   JS_EXCEPT(env.Undefined())
 }
 
+static FN(findHomography) {
+  const auto env = info.Env();
+  try {
+    auto src_points = convert<Points2D>(info[0]);
+    auto dst_points = convert<Points2D>(info[1]);
+    const auto method =
+        optionalArgument<EstimationMethod>(info[2], EstimationMethod::RANSAC);
+    const auto ransacReprojThreshold = optionalArgument<double>(info[3], 3.0);
+    const auto maxIters = optionalArgument<int>(info[4], 2000);
+    const auto confidence = optionalArgument<double>(info[5], 0.995);
+    cv::Mat homography = cv::findHomography(src_points, dst_points, method,
+                                            ransacReprojThreshold, noArray(),
+                                            maxIters, confidence);
+    return convert(env, homography);
+  }
+  JS_EXCEPT(env.Undefined());
+}
+
+static FN(wrapPerspective) {
+  const auto env = info.Env();
+  try {
+    auto src = convert<cv::Mat>(info[0]);
+    auto homography = convert<cv::Mat>(info[1]);
+    const auto flags =
+        optionalArgument<InterpolationFlags>(info[2], cv::INTER_LINEAR);
+    // RBGA image will have transparent borders, RGB/Mono will have black
+    // borders
+    cv::Mat dst = cv::Mat::zeros(src.size(), src.type());
+    cv::warpPerspective(src, dst, homography, src.size(), flags,
+                        BORDER_TRANSPARENT);
+    return convert(env, dst);
+  }
+  JS_EXCEPT(env.Undefined());
+}
+
 class Undistort : public Napi::ObjectWrap<Undistort> {
 public:
   static void Export(Napi::Env env, Napi::Object exports) {
@@ -652,6 +687,8 @@ void exportVisionNamespace(Napi::Env env, Napi::Object &exports) {
   EXPORT(exports, findChessboardCorners);
   EXPORT(exports, cornerSubPix);
   EXPORT(exports, calibrateCamera);
+  EXPORT(exports, findHomography);
+  EXPORT(exports, wrapPerspective);
   Undistort::Export(env, exports);
   Projector::Export(env, exports);
 }

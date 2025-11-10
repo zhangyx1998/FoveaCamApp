@@ -514,3 +514,52 @@ Napi::Value convert(Napi::Env env, const Napi::Value &container,
                     const cv::InterpolationFlags &value) noexcept {
   return convert(env, value);
 }
+
+template <> std::string convert(const EstimationMethod &value) {
+  CASE_ENUM_TO_STRING(value, LMEDS);
+  CASE_ENUM_TO_STRING(value, RANSAC);
+  CASE_ENUM_TO_STRING(value, RHO);
+  CASE_ENUM_TO_STRING(value, USAC_DEFAULT);
+  CASE_ENUM_TO_STRING(value, USAC_PARALLEL);
+  CASE_ENUM_TO_STRING(value, USAC_FM_8PTS);
+  CASE_ENUM_TO_STRING(value, USAC_FAST);
+  CASE_ENUM_TO_STRING(value, USAC_ACCURATE);
+  CASE_ENUM_TO_STRING(value, USAC_PROSAC);
+  CASE_ENUM_TO_STRING(value, USAC_MAGSAC);
+  throw std::range_error("Unsupported EstimationMethod enum value: " +
+                         std::to_string(value));
+}
+
+template <> EstimationMethod convert(const std::string &value) {
+  CASE_STRING_TO_ENUM(value, LMEDS);
+  CASE_STRING_TO_ENUM(value, RANSAC);
+  CASE_STRING_TO_ENUM(value, RHO);
+  CASE_STRING_TO_ENUM(value, USAC_DEFAULT);
+  CASE_STRING_TO_ENUM(value, USAC_PARALLEL);
+  CASE_STRING_TO_ENUM(value, USAC_FM_8PTS);
+  CASE_STRING_TO_ENUM(value, USAC_FAST);
+  CASE_STRING_TO_ENUM(value, USAC_ACCURATE);
+  CASE_STRING_TO_ENUM(value, USAC_PROSAC);
+  CASE_STRING_TO_ENUM(value, USAC_MAGSAC);
+  throw std::range_error("Unsupported EstimationMethod enum string: " + value);
+}
+
+template <> EstimationMethod convert(const Napi::Value &value) {
+  if (!value.IsString())
+    throw JS::TypeError(value.Env(), "EstimationMethod must be a string");
+  return convert<EstimationMethod>(value.As<Napi::String>().Utf8Value());
+}
+
+template <>
+Napi::Value convert(Napi::Env env, const EstimationMethod &value) noexcept {
+  try {
+    return convert(env, convert<std::string>(value));
+  }
+  JS_EXCEPT(env.Undefined())
+}
+
+template <>
+Napi::Value convert(Napi::Env env, const Napi::Value &container,
+                    const EstimationMethod &value) noexcept {
+  return convert(env, value);
+}
