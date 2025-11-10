@@ -13,10 +13,10 @@ import type { Point2d, Point3d, Size } from "core/Geometry";
 import { FunctionalComponent, h } from "vue";
 
 export const CORNER_OBJ_POINTS: Point3d[] = [
-    { x: -0.5, y: 0.5, z: 0 },
-    { x: 0.5, y: 0.5, z: 0 },
-    { x: 0.5, y: -0.5, z: 0 },
-    { x: -0.5, y: -0.5, z: 0 },
+    { x: -0.5, y: -0.5, z: 0 }, // top-left
+    { x: +0.5, y: -0.5, z: 0 }, // top-right
+    { x: +0.5, y: +0.5, z: 0 }, // bottom-right
+    { x: -0.5, y: +0.5, z: 0 }, // bottom-left
 ];
 
 function isCorner(a: number, b: number, c: number, d: number): boolean {
@@ -36,8 +36,8 @@ export function getMarkerProjection(result: MarkerDetectResult) {
 }
 
 export function bilinearInterpolate(
-    corners: Point2d[], // 4 corners in order: tl, tr, br, bl
-    obj_points: Point2d[] // [-0.5, 0.5]
+    corners: Iterable<Point2d>, // 4 corners in order: tl, tr, br, bl
+    obj_points: Iterable<Point2d> // [-0.5, 0.5]
 ): Point2d[] {
     const [tl, tr, br, bl] = corners;
     const ret: Point2d[] = [];

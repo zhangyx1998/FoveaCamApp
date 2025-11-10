@@ -20,8 +20,8 @@ export function createDataSet(
     key: "L" | "R"
 ): ExtrinsicDataset {
     return records.map((r) => ({
-        img_points: r[key].img_points,
-        obj_points: r[key].obj_points,
+        img_points: r[key].img_pts,
+        obj_points: r[key].obj_pts,
         voltage: r[key].voltage,
         angle: r.C.angle,
     }));

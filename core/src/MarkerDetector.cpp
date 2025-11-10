@@ -176,13 +176,8 @@ inline Result::Ptr detect(const Arv::Frame::Ptr &frame,
   // Save results
   auto results = Result::create(frame);
   results->detections.reserve(n);
-  for (size_t i = 0; i < n; ++i) {
-    cv::cornerSubPix(
-        gray, corners[i], cv::Size(9, 9), cv::Size(-1, -1),
-        cv::TermCriteria(cv::TermCriteria::EPS + cv::TermCriteria::MAX_ITER,
-                         100, 0.1));
+  for (size_t i = 0; i < n; ++i)
     results->detections.push_back(Detection{ids[i], corners[i]});
-  }
   return results;
 }
 

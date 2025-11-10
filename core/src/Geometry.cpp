@@ -23,8 +23,9 @@
 using namespace Napi;
 using namespace cv;
 using std::vector;
-using Points2D = vector<Point2d>;
-using Points3D = vector<Point3d>;
+using FP = float;
+using Points2D = vector<Point_<FP>>;
+using Points3D = vector<Point3_<FP>>;
 
 static FN(identity) {
   const auto env = info.Env();
@@ -158,21 +159,20 @@ static FN(transform) {
     if (transform.rows == 4) {
       // 4x4 transformation - apply perspective division
       for (size_t i = 0; i < n; ++i) {
-        double w = result.at<double>(3, i);
+        auto w = result.at<FP>(3, i);
         if (std::abs(w) < 1e-10) {
           throw std::runtime_error(
               "Division by zero in homogeneous coordinate");
         }
-        transformed_points.push_back({result.at<double>(0, i) / w,
-                                      result.at<double>(1, i) / w,
-                                      result.at<double>(2, i) / w});
+        transformed_points.push_back({result.at<FP>(0, i) / w,
+                                      result.at<FP>(1, i) / w,
+                                      result.at<FP>(2, i) / w});
       }
     } else {
       // 3x4 transformation - no perspective division needed
       for (size_t i = 0; i < n; ++i) {
-        transformed_points.push_back({result.at<double>(0, i),
-                                      result.at<double>(1, i),
-                                      result.at<double>(2, i)});
+        transformed_points.push_back(
+            {result.at<FP>(0, i), result.at<FP>(1, i), result.at<FP>(2, i)});
       }
     }
     return convert(env, transformed_points);

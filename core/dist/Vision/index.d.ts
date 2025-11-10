@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 import type { Awaitable, TypedArray, CoreObject } from "../types";
-import type { Size, Point, Point2d, Point3d, Rect } from "core/Geometry";
+import type { Size, Point2d, Point3d, Rect } from "core/Geometry";
 
 declare module "core/Vision" {
     /** Path to the resolved native module injected by JS loader */
@@ -103,15 +103,15 @@ declare module "core/Vision" {
     export function findChessboardCorners(
         mat: Mat,
         pattern_size: Size | number
-    ): Promise<Point[]>;
+    ): Promise<Point2d[]>;
 
     export function cornerSubPix(
         mat: Mat,
-        corners: Point[],
+        corners: Point2d[],
         win_size?: Size | number | null, // default 5
         zero_zone?: Size | number | null, // default -1
         term_criteria?: TermCriteria | null // default: refer to TermCriteria
-    ): Promise<Point[]>;
+    ): Promise<Point2d[]>;
 
     export function calibrateCamera(
         sensor_size: Size,
@@ -140,6 +140,17 @@ declare module "core/Vision" {
     ): Mat<Float64Array>;
 
     /**
+     * Performs the perspective transformation of 2D points using a homography matrix.
+     * @param homography 3x3 homography matrix
+     * @param points Array of 2D points to transform
+     * @returns Transformed 2D points
+     */
+    export function projectHomography(
+        homography: Mat<Float64Array>,
+        points: Point2d[]
+    ): Point2d[];
+
+    /**
      * Applies a perspective transformation to an image.
      * @param src Source image
      * @param homography 3x3 transformation matrix
@@ -165,7 +176,7 @@ declare module "core/Vision" {
         pattern(id: number): (0 | 1)[][] & Size;
     }
 
-    export type MarkerDetectResult = { id: number } & Size & Point[];
+    export type MarkerDetectResult = { id: number } & Size & Point2d[];
     export type MarkerDetectResults = MarkerDetectResult[] & { frame: Frame };
 
     type PreDefinedDictionary =

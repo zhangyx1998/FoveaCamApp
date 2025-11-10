@@ -60,7 +60,8 @@ const path = computed(
             text-anchor="middle"
             dominant-baseline="central"
             fill="var(--theme)"
-            >{{ detection.id }}</text
         >
+            {{ detection.id }}
+        </text>
     </g>
 </template>
