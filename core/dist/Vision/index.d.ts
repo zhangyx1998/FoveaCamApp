@@ -120,6 +120,38 @@ declare module "core/Vision" {
         term_criteria?: TermCriteria | null // default: refer to TermCriteria
     ): Promise<CameraCalibration>;
 
+    /**
+     * Finds a perspective transformation between two planes.
+     * @param src_points Coordinates of the points in the original plane
+     * @param dst_points Coordinates of the points in the target plane
+     * @param method Method used to compute homography (default: RANSAC)
+     * @param ransacReprojThreshold Maximum allowed reprojection error (default: 3.0)
+     * @param maxIters Maximum number of RANSAC iterations (default: 2000)
+     * @param confidence Confidence level (default: 0.995)
+     * @returns 3x3 homography matrix
+     */
+    export function findHomography(
+        src_points: Point2d[],
+        dst_points: Point2d[],
+        method?: HomographyMethod, // default: "RANSAC"
+        ransacReprojThreshold?: number, // default: 3.0
+        maxIters?: number, // default: 2000
+        confidence?: number // default: 0.995
+    ): Mat<Float64Array>;
+
+    /**
+     * Applies a perspective transformation to an image.
+     * @param src Source image
+     * @param homography 3x3 transformation matrix
+     * @param flags Interpolation method (default: LINEAR)
+     * @returns Transformed image with same size as source. Uses BORDER_TRANSPARENT mode.
+     */
+    export function wrapPerspective<T extends TypedArray>(
+        src: Mat<T>,
+        homography: Mat<Float64Array>,
+        flags?: InterpolationFlag // default: "LINEAR"
+    ): Mat<T>;
+
     export class MarkerDetector extends CoreObject<MarkerDetector> {
         constructor(type: PreDefinedDictionary);
         detect(
@@ -198,6 +230,12 @@ declare module "core/Vision" {
         | "IPPE"
         | "IPPE_SQUARE"
         | "SQPNP";
+
+    type HomographyMethod =
+        | "REGULAR" // All points used (0)
+        | "RANSAC" // RANSAC-based robust method
+        | "LMEDS" // Least-Median robust method
+        | "RHO"; // PROSAC-based robust method
 
     type InterpolationFlag =
         | "NEAREST"
