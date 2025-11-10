@@ -3,6 +3,7 @@
 .cache
 node_modules
 package-lock.json
+playground/
 
 # C++ Core
 build

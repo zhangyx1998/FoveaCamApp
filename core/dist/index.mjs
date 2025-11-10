@@ -25,11 +25,12 @@ const Module = require("./index.cjs");
 export default Module;
 // Re-expose named exports for nicer ESM ergonomics:
 export const {
-    Aravis, //
-    Controller, //
-    Vision, //
-    Regression, //
+    Aravis,
+    Vision,
+    Controller,
+    Regression,
+    Geometry,
     Log,
-    cleanup, //
-    __origin__, //
+    cleanup,
+    __origin__,
 } = Module;
