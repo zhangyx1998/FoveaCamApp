@@ -1,7 +1,14 @@
 <script setup lang="ts">
-import { computed, onUnmounted, watch } from "vue";
-import { MarkerDetector } from "core/Vision";
-import { Point2d } from "core/Geometry";
+import { computed, onUnmounted, shallowRef, watch } from "vue";
+import {
+    cornerSubPix,
+    findHomography,
+    MarkerDetector,
+    MarkerDetectResult,
+    Mat,
+    wrapPerspective,
+} from "core/Vision";
+import { area, Point2d } from "core/Geometry";
 import {
     ROLE,
     THEME,
@@ -11,12 +18,19 @@ import {
 import StreamView from "@src/components/StreamView.vue";
 import { getController } from "@src/components/Controller.vue";
 import FrameCursor from "@src/components/FrameCursor.vue";
-import Tracker from "@modules/calibrate-extrinsic/tracker";
+import Tracker, { TrackerTarget } from "@modules/calibrate-extrinsic/tracker";
 import ConfigEntry from "@src/components/ConfigEntry.vue";
 import Marker from "@modules/calibrate-extrinsic/Marker.vue";
 import abortable from "@lib/abortable";
 import { AsyncChain } from "@lib/util/iter";
-import { formatNumber, FormatNumberOptions } from "@lib/util";
+import { delay, formatNumber, FormatNumberOptions } from "@lib/util";
+import { Camera } from "core/Aravis";
+import {
+    bilinearInterpolate,
+    CORNER_OBJ_POINTS,
+    getInternalObjectPoints,
+} from "@lib/marker";
+import FrameView from "@src/components/FrameView.vue";
 
 const controller = computed(getController);
 const triple = await useCalibratedTriple();
@@ -24,9 +38,9 @@ const { L, C, R } = triple;
 const { A2V } = useCoordinateConversions(triple);
 const detector = new MarkerDetector("4X4_50");
 const tracker = {
-    L: new Tracker(L, detector, 1, 0.25),
+    L: new Tracker(L, detector, 1, 0.25, true),
     C: new Tracker(C, detector, 0, 1.0),
-    R: new Tracker(R, detector, 2, 0.25),
+    R: new Tracker(R, detector, 2, 0.25, true),
 };
 
 const u = triple.CI.undistort;
@@ -71,12 +85,81 @@ function formatPos(pos?: Point2d) {
     return `X ${formatNumber(x, options)}, Y ${formatNumber(y, options)}`;
 }
 
+function getDstPts(pts: Point2d[], center: Point2d, scale: number) {
+    return pts.map(({ x, y }) => ({
+        x: center.x + x * scale,
+        y: center.y + y * scale,
+    }));
+}
+
+type Projection = {
+    H: Mat<Float64Array>;
+    rgba: Mat<Uint8Array>;
+    target: TrackerTarget;
+};
+
+const prj_l = shallowRef<Projection | null>(null);
+const prj_r = shallowRef<Projection | null>(null);
+
+function createProjectionTask(
+    camera: Camera,
+    tracker: Tracker,
+    prj: typeof prj_l | typeof prj_r
+) {
+    return abortable(async (aborted) => {
+        for (const frame of camera.stream) {
+            if (aborted()) {
+                frame?.release();
+                break;
+            }
+            if (!frame || !tracker.target) {
+                frame?.release();
+                await delay(1);
+                continue;
+            }
+            const [gray, rgba] = await Promise.all([
+                frame.view("Mono8"),
+                frame.view("BGRA8"),
+            ]);
+            frame.release();
+            const { target } = tracker;
+            const s = Math.sqrt(area(target));
+            const c = tracker.center_absolute!;
+            const dst_corners = getDstPts(CORNER_OBJ_POINTS, c, s);
+            const dst_img_pts = bilinearInterpolate(
+                dst_corners,
+                target.obj_pts
+            );
+            const dst: TrackerTarget = Object.assign(dst_corners, {
+                id: target.id,
+                width: target.width,
+                height: target.height,
+                img_pts: dst_img_pts,
+                obj_pts: target.obj_pts,
+            });
+            const H = await findHomography(target.img_pts, dst_img_pts);
+            const P = await wrapPerspective(rgba, H);
+            prj.value = {
+                H,
+                rgba: P,
+                target: dst,
+            };
+            await new Promise(requestAnimationFrame);
+        }
+    });
+}
+
+const prj_task_l = createProjectionTask(L, tracker.L, prj_l);
+const prj_task_r = createProjectionTask(R, tracker.R, prj_r);
+
 onUnmounted(async () => {
     await Promise.all([
         task.abort(),
         tracker.L.task.abort(),
         tracker.C.task.abort(),
         tracker.R.task.abort(),
+        prj_task_l.abort(),
+        prj_task_r.abort(),
     ]);
     triple.release();
 });
@@ -92,7 +175,11 @@ onUnmounted(async () => {
                 :camera="L"
                 :theme="THEME.L"
             >
-                <Marker v-if="tracker.L.target" :detection="tracker.L.target" />
+                <Marker
+                    v-if="tracker.L.target"
+                    :detection="tracker.L.target"
+                    :features="tracker.L.target.img_pts"
+                />
                 <Marker
                     v-for="(d, i) in tracker.L.other_targets"
                     :key="i"
@@ -107,6 +194,18 @@ onUnmounted(async () => {
                 </span>
                 <input v-model.number="tracker.L.target_id" />
             </ConfigEntry>
+            <FrameView
+                class="stream"
+                title="Homography Projection"
+                :mat="prj_l?.rgba"
+                :theme="THEME.L"
+            >
+                <Marker
+                    v-if="prj_l?.target"
+                    :detection="prj_l.target"
+                    :features="prj_l.target.img_pts"
+                />
+            </FrameView>
         </div>
         <div class="view">
             <StreamView
@@ -146,7 +245,11 @@ onUnmounted(async () => {
                 :camera="R"
                 :theme="THEME.R"
             >
-                <Marker v-if="tracker.R.target" :detection="tracker.R.target" />
+                <Marker
+                    v-if="tracker.R.target"
+                    :detection="tracker.R.target"
+                    :features="tracker.R.target.img_pts"
+                />
                 <Marker
                     v-for="(d, i) in tracker.R.other_targets"
                     :key="i"
@@ -164,6 +267,18 @@ onUnmounted(async () => {
                     style="width: 2ch"
                 />
             </ConfigEntry>
+            <FrameView
+                class="stream"
+                title="Homography Projection"
+                :mat="prj_r?.rgba"
+                :theme="THEME.R"
+            >
+                <Marker
+                    v-if="prj_r?.target"
+                    :detection="prj_r.target"
+                    :features="prj_r.target.img_pts"
+                />
+            </FrameView>
         </div>
     </div>
 </template>

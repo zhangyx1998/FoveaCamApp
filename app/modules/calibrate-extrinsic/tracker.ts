@@ -11,10 +11,15 @@ import {
     type Mat,
     type MarkerDetectResult,
     type MarkerDetectResults,
+    cornerSubPix,
+    gaussian,
+    findHomography,
+    wrapPerspective,
+    projectHomography,
 } from "core/Vision";
-import { Point2d, Point3d, Size } from "core/Geometry";
+import { Point2d, Point3d } from "core/Geometry";
 import type { Controller, Pos } from "@src/components/Controller.vue";
-import { clamp, delay } from "@lib/util/index.js";
+import { clamp } from "@lib/util/index.js";
 import { avg } from "@lib/util/math.js";
 import abortable from "@lib/abortable.js";
 import { FreqMeter } from "@lib/util/perf.js";
@@ -24,31 +29,13 @@ import {
     getInternalObjectPoints,
 } from "@lib/marker.js";
 
-export async function record(
-    detector: MarkerDetector,
-    result: MarkerDetectResult,
-    frame?: Mat<Uint8Array>,
-    internal: boolean = true
-) {
-    const img_points = [...result];
-    const obj_points = [...CORNER_OBJ_POINTS];
-    if (frame && internal) {
-        const internal_obj_points = Array.from(
-            getInternalObjectPoints(detector.pattern(result.id))
-        );
-        obj_points.push(...internal_obj_points);
-        const internal_img_points = bilinearInterpolate(
-            result,
-            internal_obj_points
-        );
-        img_points.push(
-            ...(await Vision.cornerSubPix(frame, internal_img_points))
-        );
-    }
-    return { img_points, obj_points };
-}
+export type TrackerRecord = {
+    // The first 4 points are outer corners (tl, tr, br, bl)
+    img_pts: Point2d[];
+    obj_pts: Point3d[];
+};
 
-export type TrackerRecord = Awaited<ReturnType<typeof record>>;
+export type TrackerTarget = MarkerDetectResult & TrackerRecord;
 
 export default class Tracker extends EventTarget {
     public readonly fps = new FreqMeter();
@@ -61,7 +48,7 @@ export default class Tracker extends EventTarget {
         this.__target_id__.value = v;
     }
     private lost_count = 0;
-    private readonly __target__ = shallowRef<MarkerDetectResult | null>(null);
+    private readonly __target__ = shallowRef<TrackerTarget | null>(null);
     get target() {
         return this.__target__.value;
     }
@@ -99,12 +86,49 @@ export default class Tracker extends EventTarget {
     get other_targets() {
         return this.__other_targets__.value;
     }
-    private handleDetections(detections: MarkerDetectResults) {
+    private async fitSubPix(
+        frame: Frame,
+        result: MarkerDetectResult,
+        internal: boolean,
+        iterations = 3
+    ) {
+        const gray = await frame.view("Mono8");
+        const blurred = gaussian(gray, 11, 2.0);
+        const obj_pts = [...CORNER_OBJ_POINTS];
+        if (internal)
+            for (const { x, y } of getInternalObjectPoints(
+                this.detector.pattern(result.id)
+            ))
+                obj_pts.push({ x, y, z: 0.0 });
+        // Initial estimation
+        let img_pts = bilinearInterpolate(result, obj_pts);
+        if (internal)
+            // Iterative optimization
+            for (let i = 0; i < iterations; i++) {
+                const H = findHomography(obj_pts, img_pts);
+                const proj = projectHomography(H, obj_pts);
+                img_pts = await cornerSubPix(blurred, proj);
+            }
+        const refined = Object.assign(img_pts.slice(0, 4), {
+            id: result.id,
+            width: result.width,
+            height: result.height,
+            img_pts,
+            obj_pts,
+        });
+        return refined as TrackerTarget;
+    }
+
+    private async handleDetections(
+        detections: MarkerDetectResults,
+        internal: boolean
+    ) {
         const { target_id } = this;
-        let target: MarkerDetectResult | null = null;
+        let target: TrackerTarget | null = null;
         const others: MarkerDetectResult[] = [];
         for (const d of detections) {
-            if (target === null && d.id === target_id) target = d;
+            if (target === null && d.id === target_id)
+                target = await this.fitSubPix(detections.frame, d, internal);
             else others.push(d);
         }
         if (target !== null) {
@@ -121,7 +145,8 @@ export default class Tracker extends EventTarget {
         public readonly camera: Camera,
         public readonly detector: MarkerDetector = new MarkerDetector("4X4_50"),
         target_id: number = 0,
-        scale: number = 1.0
+        scale: number = 1.0,
+        internal: boolean = false
     ) {
         super();
         this.target_id = target_id;
@@ -141,8 +166,8 @@ export default class Tracker extends EventTarget {
                             detections.frame.toString()
                         );
                         this.fps.tick();
+                        await this.handleDetections(detections, internal);
                         this.dispatchEvent(new Event("detection"));
-                        this.handleDetections(detections);
                     } else {
                         await new Promise((r) => setImmediate(r));
                     }

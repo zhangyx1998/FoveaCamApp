@@ -1,13 +1,12 @@
 <script setup lang="ts">
-import { computed, markRaw, onUnmounted, watch } from "vue";
-import type { Camera } from "core/Aravis";
-import { MarkerDetector, Projector, Undistort } from "core/Vision";
+import { computed, onUnmounted, watch } from "vue";
+import { MarkerDetector, Undistort } from "core/Vision";
 import { MatchedCameras, ROLE, THEME } from "@lib/camera";
 import StreamView from "@src/components/StreamView.vue";
 import Marker from "./Marker.vue";
 import PosView from "@src/components/PosView.vue";
 import { getController } from "@src/components/Controller.vue";
-import Tracker, { actuate, record } from "./tracker";
+import Tracker, { actuate } from "./tracker";
 import FrameCursor from "@src/components/FrameCursor.vue";
 import { ExtrinsicRecord } from "./calibrate";
 import ConfigEntry from "@src/components/ConfigEntry.vue";
@@ -26,9 +25,9 @@ const props = defineProps<{
 const detector = new MarkerDetector("4X4_50");
 
 const tracker = {
-    L: props.cameras.L && new Tracker(props.cameras.L, detector, 1, 0.25),
+    L: props.cameras.L && new Tracker(props.cameras.L, detector, 1, 0.25, true),
     C: props.cameras.C && new Tracker(props.cameras.C, detector, 0, 1.0),
-    R: props.cameras.R && new Tracker(props.cameras.R, detector, 2, 0.25),
+    R: props.cameras.R && new Tracker(props.cameras.R, detector, 2, 0.25, true),
 };
 
 const controller = computed(getController);
@@ -52,41 +51,27 @@ async function capture() {
         tracker.C!.frame!.view("Mono8"),
         tracker.R!.frame!.view("Mono8"),
     ]);
-    const [L, C, R] = await Promise.all([
-        record(detector, tracker.L!.target!, gl, true).then((r) => ({
-            ...r,
+    const { undistort } = props;
+    props.records.push({
+        L: {
+            img_pts: tracker.L!.target!.img_pts,
+            obj_pts: tracker.L!.target!.obj_pts,
             frame: gl,
             voltage: pos.left,
-        })),
-        record(detector, tracker.C!.target!, gc, false).then(async (r) => {
-            const { img_points, obj_points } = r;
-            const { undistort } = props;
-            const projection = await Projector.solve(
-                img_points,
-                obj_points,
-                undistort.calibration
-            );
-            return {
-                ...r,
-                frame: gc,
-                angle: undistort.angular(
-                    projection.obj2img([
-                        {
-                            x: 0,
-                            y: 0,
-                            z: 0,
-                        },
-                    ])
-                )[0],
-            };
-        }),
-        record(detector, tracker.R!.target!, gr, true).then((r) => ({
-            ...r,
+        },
+        C: {
+            img_pts: tracker.C!.target!.img_pts,
+            obj_pts: tracker.C!.target!.obj_pts,
+            frame: gc,
+            angle: undistort.angular([tracker.C!.center_absolute!], true)[0],
+        },
+        R: {
+            img_pts: tracker.R!.target!.img_pts,
+            obj_pts: tracker.R!.target!.obj_pts,
             frame: gr,
             voltage: pos.right,
-        })),
-    ]);
-    props.records.push({ L, C, R });
+        },
+    });
 }
 
 onUnmounted(async () => {
@@ -112,6 +97,7 @@ onUnmounted(async () => {
                 <Marker
                     v-if="tracker.L?.target"
                     :detection="tracker.L.target"
+                    :features="tracker.L.target.img_pts"
                 />
                 <Marker
                     v-for="(d, i) in tracker.L?.other_targets"
@@ -198,6 +184,7 @@ onUnmounted(async () => {
                 <Marker
                     v-if="tracker.R?.target"
                     :detection="tracker.R.target"
+                    :features="tracker.R.target.img_pts"
                 />
                 <Marker
                     v-for="(d, i) in tracker.R?.other_targets"

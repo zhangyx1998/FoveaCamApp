@@ -263,12 +263,13 @@ static FN(cornerSubPix) {
   try {
     const auto mat = convert<cv::Mat>(info[0]);
     auto corners = convert<Points2D>(info[1]);
-    const auto win_size = optionalArgument(info[2], cv::Size2i(9, 9));
+    const auto win_size = optionalArgument(info[2], cv::Size2i(11, 11));
     const auto zero_zone = optionalArgument(info[3], cv::Size2i(-1, -1));
     const auto criteria = optionalArgument<cv::TermCriteria>(
         info[4],
-        {cv::TermCriteria::EPS + cv::TermCriteria::MAX_ITER, 30, 0.01});
+        {cv::TermCriteria::EPS + cv::TermCriteria::MAX_ITER, 100, 0.001});
     auto task = [mat, corners, win_size, zero_zone, criteria] {
+      cv::normalize(mat, mat, 0, 255, cv::NORM_MINMAX);
       cv::cornerSubPix(mat, corners, win_size, zero_zone, criteria);
       return corners;
     };
@@ -315,6 +316,18 @@ static FN(findHomography) {
                                             ransacReprojThreshold, noArray(),
                                             maxIters, confidence);
     return convert(env, homography);
+  }
+  JS_EXCEPT(env.Undefined());
+}
+
+static FN(projectHomography) {
+  const auto env = info.Env();
+  try {
+    auto homography = convert<cv::Mat>(info[0]);
+    auto points = convert<Points2D>(info[1]);
+    Points2D result;
+    cv::perspectiveTransform(points, result, homography);
+    return convert(env, result);
   }
   JS_EXCEPT(env.Undefined());
 }
@@ -688,6 +701,7 @@ void exportVisionNamespace(Napi::Env env, Napi::Object &exports) {
   EXPORT(exports, cornerSubPix);
   EXPORT(exports, calibrateCamera);
   EXPORT(exports, findHomography);
+  EXPORT(exports, projectHomography);
   EXPORT(exports, wrapPerspective);
   Undistort::Export(env, exports);
   Projector::Export(env, exports);
