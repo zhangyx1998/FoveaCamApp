@@ -342,36 +342,15 @@ onUnmounted(async () => {
 <template>
     <div class="cameras">
         <div class="view">
-            <StreamView
-                class="stream"
-                :title="ROLE.L"
-                :camera="L"
-                :theme="THEME.L"
-            >
+            <StreamView class="stream" :title="ROLE.L" :camera="L" :theme="THEME.L">
             </StreamView>
-            <PosView
-                :pos="volt.L"
-                :lim="controller?.dv ?? 200"
-                :color="THEME.L"
-                style="width: 100%"
-            />
+            <PosView :pos="volt.L" :lim="controller?.dv ?? 200" :color="THEME.L" style="width: 100%" />
         </div>
         <div class="view">
-            <StreamView
-                v-if="view === 'sliced'"
-                class="stream"
-                :title="ROLE.C + ' (Sliced View)'"
-                :camera="C"
-                theme="white"
-                :slice="target"
-            />
-            <FrameView
-                v-else-if="view === 'disparity'"
-                class="stream"
-                title="Left v.s. Right (Disparity)"
-                :mat="disparity_frame"
-                :theme="THEME.C"
-            />
+            <StreamView v-if="view === 'sliced'" class="stream" :title="ROLE.C + ' (Sliced View)'" :camera="C"
+                theme="white" :slice="target" />
+            <FrameView v-else-if="view === 'disparity'" class="stream" title="Left v.s. Right (Disparity)"
+                :mat="disparity_frame" :theme="THEME.C" />
             <ConfigEntry>
                 <label>
                     <span style="padding: 2ch">Zoom Ratio</span>
@@ -389,138 +368,51 @@ onUnmounted(async () => {
             <!-- <div class="actions">
                 <button :disabled="true">Button</button>
             </div> -->
-            <StreamView
-                class="stream"
-                :title="ROLE.C"
-                :camera="C"
-                :theme="THEME.C"
-                @mousedown="(e) => (cursor = e)"
-                @mouseup="(e) => (cursor = e)"
-                @mousemove="(e) => (cursor = e)"
-                @mouseleave="() => (cursor = null)"
-            >
-                <FrameCursor
-                    :cursor="target"
-                    :undistort="undistort"
-                    box="dot"
-                    :color="THEME.C"
-                />
-                <FrameCursor
-                    box="rect"
-                    :cursor="{ ...L_PX, width, height }"
-                    :color="THEME.L"
-                />
-                <FrameCursor
-                    box="rect"
-                    :cursor="{ ...R_PX, width, height }"
-                    :color="THEME.R"
-                />
-                <FrameCursor
-                    v-if="cursor && !is_drag"
-                    :cursor="cursor"
-                    color="gray"
-                />
+            <StreamView class="stream" :title="ROLE.C" :camera="C" :theme="THEME.C" @mousedown="(e) => (cursor = e)"
+                @mouseup="(e) => (cursor = e)" @mousemove="(e) => (cursor = e)" @mouseleave="() => (cursor = null)">
+                <FrameCursor :cursor="target" :undistort="undistort" box="dot" :color="THEME.C" />
+                <FrameCursor box="rect" :cursor="{ ...L_PX, width, height }" :color="THEME.L" />
+                <FrameCursor box="rect" :cursor="{ ...R_PX, width, height }" :color="THEME.R" />
+                <FrameCursor v-if="cursor && !is_drag" :cursor="cursor" color="gray" />
             </StreamView>
         </div>
         <div class="view">
-            <StreamView
-                class="stream"
-                :title="ROLE.R"
-                :camera="R"
-                :theme="THEME.R"
-            >
+            <StreamView class="stream" :title="ROLE.R" :camera="R" :theme="THEME.R">
             </StreamView>
-            <PosView
-                :pos="volt.R"
-                :lim="controller?.dv ?? 200"
-                :color="THEME.R"
-                style="width: 100%"
-            />
+            <PosView :pos="volt.R" :lim="controller?.dv ?? 200" :color="THEME.R" style="width: 100%" />
         </div>
     </div>
     <div class="divergence">
         <FrameView width="100%" :title="divergenceReport" :mat="guide">
             <template v-if="guide">
-                <rect
-                    v-if="match_center"
-                    v-bind="RECT(match_center.rect)"
-                    :fill="THEME.C"
-                    opacity="0.2"
-                />
-                <rect
-                    v-if="match_left"
-                    v-bind="RECT.offset(match_left.rect, -2)"
-                    fill="none"
-                    :stroke="THEME.L"
-                    stroke-width="2"
-                    opacity="0.4"
-                />
-                <rect
-                    v-if="match_right"
-                    v-bind="RECT.offset(match_right.rect, -2)"
-                    fill="none"
-                    :stroke="THEME.R"
-                    stroke-width="2"
-                    opacity="0.4"
-                />
-                <circle
-                    :fill="THEME.C"
-                    :cx="target_loc.x"
-                    :cy="(guide.shape[0] ?? 0) / 2"
-                    r="3"
-                />
-                <circle
-                    v-if="match_left"
-                    :fill="THEME.L"
-                    v-bind="circleCenter(RECT.getCenter(match_left.rect))"
-                    r="3"
-                />
-                <circle
-                    v-if="match_right"
-                    :fill="THEME.R"
-                    v-bind="circleCenter(RECT.getCenter(match_right.rect))"
-                    r="3"
-                />
+                <rect v-if="match_center" v-bind="RECT(match_center.rect)" :fill="THEME.C" opacity="0.2" />
+                <rect v-if="match_left" v-bind="RECT.offset(match_left.rect, -2)" fill="none" :stroke="THEME.L"
+                    stroke-width="2" opacity="0.4" />
+                <rect v-if="match_right" v-bind="RECT.offset(match_right.rect, -2)" fill="none" :stroke="THEME.R"
+                    stroke-width="2" opacity="0.4" />
+                <circle :fill="THEME.C" :cx="target_loc.x" :cy="(guide.shape[0] ?? 0) / 2" r="3" />
+                <circle v-if="match_left" :fill="THEME.L" v-bind="circleCenter(RECT.getCenter(match_left.rect))"
+                    r="3" />
+                <circle v-if="match_right" :fill="THEME.R" v-bind="circleCenter(RECT.getCenter(match_right.rect))"
+                    r="3" />
             </template>
         </FrameView>
-        <FrameView
-            width="100%"
-            :title="`Left Match ${
-                (match_left && RECT.getCenter(match_left.rect).x) || '--'
-            }px (Red = Match, Blue = Mismatch)`"
-            :mat="match_left?.mat"
-        >
+        <FrameView width="100%" :title="`Left Match ${(match_left && RECT.getCenter(match_left.rect).x) || '--'
+            }px (Red = Match, Blue = Mismatch)`" :mat="match_left?.mat">
         </FrameView>
-        <FrameView
-            width="100%"
-            :title="`Right Match ${
-                (match_right && RECT.getCenter(match_right.rect).x) || '--'
-            }px (Red = Match, Blue = Mismatch)`"
-            :mat="match_right?.mat"
-        >
+        <FrameView width="100%" :title="`Right Match ${(match_right && RECT.getCenter(match_right.rect).x) || '--'
+            }px (Red = Match, Blue = Mismatch)`" :mat="match_right?.mat">
         </FrameView>
         <fieldset>
             <legend>Control Parameters</legend>
             <label>
                 kp
-                <input
-                    type="range"
-                    min="0.1"
-                    max="1.0"
-                    step="0.01"
-                    v-model.number="kp"
-                />
+                <input type="range" min="0.1" max="1.0" step="0.01" v-model.number="kp" />
                 {{ kp }}
             </label>
             <label>
                 scale
-                <input
-                    type="range"
-                    min="0.0"
-                    max="1.0"
-                    step="0.01"
-                    v-model.number="scale_ratio"
-                />
+                <input type="range" min="0.0" max="1.0" step="0.01" v-model.number="scale_ratio" />
                 {{ scale.toFixed(2) }}
             </label>
         </fieldset>
@@ -539,7 +431,7 @@ onUnmounted(async () => {
     padding: 1em 0;
     margin: 0;
 
-    & > * {
+    &>* {
         width: 30vw;
         display: flex;
         flex-direction: column;
@@ -568,7 +460,8 @@ onUnmounted(async () => {
     align-items: center;
     gap: 1rem;
     width: 100%;
-    & > * {
+
+    &>* {
         display: block;
         width: 0;
         flex-grow: 1;

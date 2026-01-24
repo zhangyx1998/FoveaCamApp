@@ -34,46 +34,15 @@ function cursor(angle: Point2d) {
         <template v-for="({ L, C, R }, i) in records" :key="i">
             <div class="divider" v-if="i > 0"></div>
             <div class="record">
-                <FrameView
-                    width="30%"
-                    :title="ROLE.L"
-                    :mat="L.frame"
-                    :theme="THEME.L"
-                >
-                    <Marker
-                        :detection="L.img_points"
-                        :features="L.img_points"
-                        :color="THEME.L"
-                    />
+                <FrameView width="30%" :title="ROLE.L" :mat="L.frame" :theme="THEME.L">
+                    <Marker :detection="L.img_pts" :features="L.img_pts" :color="THEME.L" />
                 </FrameView>
-                <FrameView
-                    width="30%"
-                    :title="ROLE.C"
-                    :mat="C.frame"
-                    :theme="THEME.C"
-                >
-                    <Marker
-                        :detection="C.img_points"
-                        :features="C.img_points"
-                        :color="THEME.C"
-                    />
-                    <FrameCursor
-                        :cursor="cursor(C.angle)"
-                        :undistort="undistort"
-                        box="rect"
-                    />
+                <FrameView width="30%" :title="ROLE.C" :mat="C.frame" :theme="THEME.C">
+                    <Marker :detection="C.img_pts" :features="C.img_pts" :color="THEME.C" />
+                    <FrameCursor :cursor="cursor(C.angle)" :undistort="undistort" box="rect" />
                 </FrameView>
-                <FrameView
-                    width="30%"
-                    :title="ROLE.R"
-                    :mat="R.frame"
-                    :theme="THEME.R"
-                >
-                    <Marker
-                        :detection="R.img_points"
-                        :features="R.img_points"
-                        :color="THEME.R"
-                    />
+                <FrameView width="30%" :title="ROLE.R" :mat="R.frame" :theme="THEME.R">
+                    <Marker :detection="R.img_pts" :features="R.img_pts" :color="THEME.R" />
                 </FrameView>
             </div>
         </template>
@@ -83,7 +52,7 @@ function cursor(angle: Point2d) {
             <button :disabled="!finalized" @click="emit('preview')">
                 Preview Results
             </button>
-            <button :disabled="!finalized || saved" @click="emit('confirm')">
+            <button :disabled="false" @click="emit('confirm')">
                 Confirm and Save
             </button>
         </NavBack>
@@ -102,6 +71,7 @@ function cursor(angle: Point2d) {
     padding: 2em;
     gap: 2em;
     box-sizing: border-box;
+
     .record {
         display: flex;
         flex-direction: row;
@@ -109,6 +79,7 @@ function cursor(angle: Point2d) {
         justify-content: space-evenly;
         flex-grow: 1;
     }
+
     .divider {
         width: 100%;
         height: 1px;
