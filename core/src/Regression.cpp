@@ -61,7 +61,7 @@ template <> RegressionConfig convert(const Napi::Value &value) {
     throw JS::TypeError(value.Env(), "Argument must be an object");
   auto obj = value.As<Napi::Object>();
   return {
-      .ply = optionalArgument<vector<int>>(obj.Get("pow"), {}),
+      .ply = optionalArgument<vector<int>>(obj.Get("ply"), {}),
       .log = optionalArgument<vector<double>>(obj.Get("log"), {}),
       .exp = optionalArgument<vector<double>>(obj.Get("exp"), {}),
   };

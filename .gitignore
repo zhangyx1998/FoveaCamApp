@@ -9,6 +9,9 @@ playground/
 build
 test.[cm]js
 *.test.[cm]js
+.clangd
+.clang-format
+compile_commands.json
 
 # Firmware
 .pio

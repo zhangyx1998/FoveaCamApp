@@ -21,7 +21,7 @@ export class AsyncChain<T = any, P = undefined> {
         markRaw(this);
     }
 
-    static async *iterAsync<T, P>(node: AsyncChain<T, P>) {
+    private static async *iterAsync<T, P>(node: AsyncChain<T, P>) {
         while (true) {
             if (node.type === "PENDING") await node.next;
             if (node.type === "END") break;
@@ -37,7 +37,7 @@ export class AsyncChain<T = any, P = undefined> {
         return AsyncChain.iterAsync<T, P>(this);
     }
 
-    static *iterSync<T, P>(node: AsyncChain<T, P>) {
+    private static *iterSync<T, P>(node: AsyncChain<T, P>) {
         while (true) {
             switch (node.type) {
                 case "PENDING":
@@ -59,12 +59,16 @@ export class AsyncChain<T = any, P = undefined> {
         return AsyncChain.iterSync<T, P>(this);
     }
 
-    get type() {
+    private get type() {
         if (this.next instanceof Promise) return "PENDING";
         return this.next === null ? "END" : "DATA";
     }
 
-    *current_items() {
+
+    /**
+     * Iterate through values already pushed to the chain (from current node).
+     */
+    *current_values() {
         let node: AsyncChain<T, P> = this;
         while (node.type === "DATA") {
             yield node.value!;
@@ -72,20 +76,31 @@ export class AsyncChain<T = any, P = undefined> {
         }
     }
 
-    get current_length() {
+    /**
+     * Get length of values already pushed to the chain (from current node).
+     */
+    get current_length(): number {
         let count = 0;
-        for (const _ of this.current_items()) count++;
+        for (const _ of this.current_values()) count++;
         return count;
     }
 
-    get back() {
+    /**
+     * Get the end node ("back") of the current chain.
+     * Usage: `chain = chain.back`
+     */
+    get back(): AsyncChain<T, P> {
         let node: AsyncChain<T, P> = this;
-        while (node.type === "DATA") {
+        while (node.type === "DATA")
             node = node.next as AsyncChain<T, P>;
-        }
         return node;
     }
 
+    /**
+     * Push a new value to the end of the chain.
+     * @param value The value to push.
+     * @returns The new back node of the chain after pushing the value.
+     */
     push(value: T) {
         const { back } = this;
         (back.value as T) = value;
@@ -95,6 +110,9 @@ export class AsyncChain<T = any, P = undefined> {
         return next;
     }
 
+    /**
+     * Close the chain, block further pushes and deplete async loops.
+     */
     close() {
         const { back } = this;
         if (back.type === "PENDING") {

@@ -36,31 +36,11 @@ const path = computed(
 
 <template>
     <g :style="style">
-        <path
-            :d="path"
-            style="stroke: var(--theme)"
-            :stroke-width="Math.max(2, size * 0.04)"
-            fill="none"
-        />
-        <circle
-            v-for="(p, i) in features ?? []"
-            :key="i"
-            :cx="p.x"
-            :cy="p.y"
-            :r="Math.max(2, size * 0.04)"
-            fill="var(--theme)"
-            stroke="black"
-            :stroke-width="Math.max(1, size * 0.02)"
-        />
-        <text
-            v-if="detection.id !== undefined && !features"
-            :x="center.x"
-            :y="center.y"
-            :font-size="size * 0.8"
-            text-anchor="middle"
-            dominant-baseline="central"
-            fill="var(--theme)"
-        >
+        <path :d="path" style="stroke: var(--theme)" :stroke-width="Math.max(2, size * 0.04)" fill="none" />
+        <circle v-for="(p, i) in features ?? []" :key="i" :cx="p.x" :cy="p.y" :r="Math.max(2, size * 0.04)"
+            fill="var(--theme)" stroke="black" :stroke-width="Math.max(1, size * 0.02)" />
+        <text v-if="detection.id !== undefined && !features" :x="center.x" :y="center.y" :font-size="size * 0.8"
+            text-anchor="middle" dominant-baseline="central" fill="var(--theme)">
             {{ detection.id }}
         </text>
     </g>

@@ -61,31 +61,10 @@ onUnmounted(() => {
 
 <template>
     <div v-if="!undistort">Missing intrinsic calibration data.</div>
-    <Calibrate
-        v-else-if="state === 'CAL'"
-        :cameras="markRaw(cameras)"
-        :undistort="undistort"
-        :records="records"
-        @finalize="finalize"
-    />
-    <Finalize
-        v-else-if="state === 'FIN'"
-        :undistort="undistort"
-        :records="records"
-        :finalized="!!(L && R)"
-        :saved="saved"
-        @back="state = 'CAL'"
-        @preview="state = 'PRV'"
-        @confirm="confirm"
-    />
-    <Preview
-        v-else-if="state === 'PRV' && L && R"
-        :cameras="markRaw(cameras)"
-        :undistort="undistort"
-        :saved="saved"
-        :L="L"
-        :R="R"
-        @back="state = 'FIN'"
-        @confirm="confirm"
-    />
+    <Calibrate v-else-if="state === 'CAL'" :cameras="markRaw(cameras)" :undistort="undistort" :records="records"
+        @finalize="finalize" />
+    <Finalize v-else-if="state === 'FIN'" :undistort="undistort" :records="records" :finalized="!!(L && R)"
+        :saved="saved" @back="state = 'CAL'" @preview="state = 'PRV'" @confirm="confirm" />
+    <Preview v-else-if="state === 'PRV' && L && R" :cameras="markRaw(cameras)" :undistort="undistort" :saved="saved"
+        :L="L" :R="R" @back="state = 'FIN'" @confirm="confirm" />
 </template>
