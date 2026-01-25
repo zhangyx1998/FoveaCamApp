@@ -17,7 +17,10 @@ import {
 import { resolve, dirname } from "node:path";
 import { reactive, watch } from "vue";
 
-const STORE: string = resolve(await ipcRenderer.invoke("get-data-path"), ".");
+const STORE: string = resolve(
+    await ipcRenderer.invoke("get-data-path"),
+    "store",
+);
 
 process.stderr.write(`Store path: ${STORE}\n`);
 
@@ -169,7 +172,7 @@ export default class Store {
     }
     static async open<T extends Object>(
         segments: string | string[],
-        fallback: Partial<T> = {}
+        fallback: Partial<T> = {},
     ): Promise<Partial<T>> {
         if (typeof segments === "string") segments = [segments];
         const path = resolve(STORE, ...segments) + ".json";
@@ -224,7 +227,7 @@ export default class Store {
                 const fullPath = resolve(path, entry);
                 if (await isDirectory(fullPath)) return null;
                 return entry.replace(/\.json$/, "");
-            })
+            }),
         );
         return files.filter((f): f is string => f !== null);
     }
