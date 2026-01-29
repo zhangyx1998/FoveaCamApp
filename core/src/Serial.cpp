@@ -8,6 +8,7 @@
 
 #include <napi.h>
 #include <sys/fcntl.h>
+#include <sys/ioctl.h>
 #include <termios.h>
 #include <unistd.h>
 
@@ -34,6 +35,17 @@ int SerialOpen(const Napi::CallbackInfo &info) noexcept {
   int fd = ::open(path.c_str(), O_RDWR | O_NOCTTY | O_CLOEXEC | O_NONBLOCK);
   if (fd < 0)
     JS_THROW(Error, "Failed to open serial port: " + path, -1);
+
+  // Set exclusive access (macOS/BSD) to prevent interference from other
+  // processes
+#ifdef TIOCEXCL
+  if (ioctl(fd, TIOCEXCL) == -1) {
+    WARN("Failed to set exclusive access on serial port: %s",
+         std::strerror(errno));
+    // Not fatal - continue anyway
+  }
+#endif
+
   // Configure serial port
   struct termios tty;
   if (tcgetattr(fd, &tty) != 0) {

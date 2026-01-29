@@ -10,6 +10,7 @@
 #include <napi.h>
 #include <stdexcept>
 #include <sys/fcntl.h>
+#include <sys/ioctl.h>
 #include <termios.h>
 #include <unistd.h>
 
@@ -408,8 +409,13 @@ public:
     flag_term = true;
     if (rx_thread.joinable())
       rx_thread.join();
-    if (fd >= 0)
+    if (fd >= 0) {
+      // Release exclusive access before closing (macOS/BSD)
+#ifdef TIOCNXCL
+      ioctl(fd, TIOCNXCL);
+#endif
       ::close(fd);
+    }
   }
 
 private:
