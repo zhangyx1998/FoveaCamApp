@@ -198,6 +198,7 @@ export async function connect() {
             vendorId: vendorId.value,
             productId: productId.value,
         });
+        console.log("Matched Controller info:", info);
         const mems = info ? new Controller(info) : null;
         if (mems) await mems.ready;
         Controller.singleton = mems;
