@@ -17,7 +17,7 @@ import {
 import { resolve, dirname } from "node:path";
 import { reactive, watch } from "vue";
 
-const STORE: string = resolve(await ipcRenderer.invoke("get-data-path"), ".");
+const STORE: string = resolve(await ipcRenderer.invoke("get-data-path"), "store");
 
 process.stderr.write(`Store path: ${STORE}\n`);
 
