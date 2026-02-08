@@ -92,6 +92,7 @@ declare module "core/Aravis" {
             format: PixelFormat16,
             buffer?: BufferLike | null
         ): Promise<Mat<Uint16Array>>;
+        save(path: string): void;
     }
 
     export type { Stream } from "../types";

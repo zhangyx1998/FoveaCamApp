@@ -65,6 +65,15 @@ private:
     JS_EXCEPT(env.Undefined())
   }
 
+  FN(save) {
+    try {
+      const auto path = convert<std::string>(info[0]);
+      cv::imwrite(path, core()->raw);
+      return env.Undefined();
+    }
+    JS_EXCEPT(env.Undefined())
+  }
+
   GET(width) { return Number::New(env, core()->width()); }
 
   GET(height) { return Number::New(env, core()->height()); }
