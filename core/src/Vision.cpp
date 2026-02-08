@@ -37,6 +37,26 @@ static inline string tag(const cv::Mat &mat) {
          "bit";
 }
 
+static FN(load) {
+  auto env = info.Env();
+  try {
+    const auto path = convert<std::string>(info[0]);
+    return convert(env, cv::imread(path));
+  }
+  JS_EXCEPT(env.Undefined())
+}
+
+static FN(save) {
+  auto env = info.Env();
+  try {
+    const auto mat = convert<cv::Mat>(info[0]);
+    const auto path = convert<std::string>(info[1]);
+    cv::imwrite(path, mat);
+    return env.Undefined();
+  }
+  JS_EXCEPT(env.Undefined())
+}
+
 static FN(slice) {
   auto env = info.Env();
   try {
@@ -690,6 +710,8 @@ CORE_OBJECT(Projector);
 
 #define EXPORT(OBJ, F) OBJ.Set(#F, Function::New<F>(env, #F));
 void exportVisionNamespace(Napi::Env env, Napi::Object &exports) {
+  EXPORT(exports, load);
+  EXPORT(exports, save);
   EXPORT(exports, slice);
   EXPORT(exports, resize);
   EXPORT(exports, heatmap);
