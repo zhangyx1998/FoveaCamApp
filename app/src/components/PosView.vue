@@ -1,167 +1,226 @@
+<!-- ---------------------------------------------------------
+ * Copyright (c) 2026 Yuxuan Zhang, web-dev@z-yx.cc
+ * This source code is licensed under the MIT license.
+ * You may find the full license in project root directory.
+ --------------------------------------------------------- -->
+
 <script setup lang="ts">
-import { Pos } from "./Controller.vue";
-import { computed } from "vue";
+import { ref, computed, useTemplateRef } from "vue";
+
+export type Pos = { x: number; y: number };
+const emit = defineEmits<{ (e: "select", v: Pos | null): void }>();
+const canvas = useTemplateRef("canvas");
 
 const props = defineProps<{
-    pos: Pos;
-    lim?: number;
-    thickness?: number;
-    fontSize?: number;
-    color?: string;
-    unit?: string;
+  pos: Pos;
+  lim?: number;
+  thickness?: number;
+  fontSize?: number;
+  color?: string;
+  unit?: string;
 }>();
-const color = computed(() => props.color || "white");
+const hover = ref(false);
+const drag = ref(false);
+const active = computed(() => hover.value || drag.value);
+const color = computed(() => (active.value ? props.color || "white" : "gray"));
 const lim = computed(() => props.lim || 200);
-const thickness = computed(() => props.thickness || lim.value * 0.01);
-const fontSize = computed(() => props.fontSize || thickness.value * 8);
+const fontSize = computed(() => props.fontSize || lim.value * 0.05);
+const T = computed(() => props.thickness || fontSize.value * 0.1);
 const unit = computed(() => props.unit || "V");
-const R = computed(() => thickness.value * 4);
-function viewBox(l: number, t: number, f: number) {
-    const r = l + t + f * 2;
-    return [-r, -r, r * 2, r * 2].join(" ");
+// Radius of the entire SVG canvas
+const r = computed(() => lim.value + T.value + fontSize.value * 2);
+// Radius of the position marker
+const R = computed(() => T.value * 4);
+const viewBox = computed(() => {
+  const l = r.value;
+  return [-l, -l, l * 2, l * 2];
+});
+
+const variables = computed(() => ({
+  "--color": color.value,
+  "--F": fontSize.value.toString(),
+  "--T": T.value.toString(),
+  "--R": R.value.toString(),
+}));
+
+function crossHair() {
+  const lines: Array<{ x1: number; y1: number; x2: number; y2: number }> = [];
+  const l = lim.value;
+  const r = R.value * 2;
+  const { x, y } = props.pos;
+  const t = T.value;
+  const attrs = {
+    stroke: color.value,
+    "stroke-dasharray": `${t * 4} ${t * 4}`,
+    "stroke-width": T.value,
+  };
+  if (y - r > -l) lines.push({ x1: x, y1: y - r, x2: x, y2: -l, ...attrs });
+  if (y + r < l) lines.push({ x1: x, y1: y + r, x2: x, y2: +l, ...attrs });
+  // Horizontal line: left segment
+  if (x - r > -l) lines.push({ x1: x - r, y1: y, x2: -l, y2: y, ...attrs });
+  // Horizontal line: right segment
+  lines.push({ x1: x + r, y1: y, x2: +l, y2: y, ...attrs });
+  return lines;
 }
 
 function dots() {
-    const result: Pos[] = [];
-    const l = lim.value;
-    for (let i = -0.9; i <= 0.9; i += 0.1) {
-        for (let j = -0.9; j <= 0.9; j += 0.1) {
-            result.push({ x: i * l, y: j * l });
-        }
+  const result: Pos[] = [];
+  const l = lim.value;
+  for (let i = -0.9; i <= 0.9; i += 0.1) {
+    for (let j = -0.9; j <= 0.9; j += 0.1) {
+      result.push({ x: i * l, y: j * l });
     }
-    return result;
+  }
+  return result;
 }
 
 function format(v: number, unit: string, radix: number = 1) {
-    const s = Math.abs(v).toFixed(radix) + unit;
-    if (v > 0) return "+" + s;
-    if (v < 0) return "-" + s;
-    return " " + s;
+  const s = Math.abs(v).toFixed(radix) + unit;
+  if (v > 0) return "+" + s;
+  if (v < 0) return "-" + s;
+  return " " + s;
+}
+
+function trackUntilRelease(e: MouseEvent) {
+  if (!(e.buttons & 1)) {
+    emit("select", null);
+    drag.value = false;
+    window.removeEventListener("mousemove", trackUntilRelease);
+    return;
+  }
+  // Compute position
+  const el = canvas.value;
+  if (!el) return console.warn("No SVG element found");
+  const rect = el.getBoundingClientRect();
+  const w = rect.width / 2;
+  const h = rect.height / 2;
+  const dx = e.clientX - (rect.left + w);
+  const dy = e.clientY - (rect.top + h);
+  const d = r.value; // SVG Canvas half size
+  const l = lim.value; // Logical limit area half size
+  const kx = d / w;
+  const ky = d / h;
+  function clamp(v: number) {
+    if (v < -l) return -l;
+    else if (v > l) return l;
+    else return v;
+  }
+  const pos = { x: clamp(dx * kx), y: clamp(dy * ky) };
+  emit("select", pos);
+}
+
+function track(e: MouseEvent) {
+  drag.value = true;
+  window.addEventListener("mousemove", trackUntilRelease);
+  trackUntilRelease(e);
 }
 </script>
 
 <template>
-    <svg
-        :viewBox="viewBox(lim, thickness, fontSize)"
-        :style="{ '--color': color }"
-    >
-        <!-- Decorations -->
-        <rect
-            :x="-lim"
-            :y="-lim"
-            :width="lim * 2"
-            :height="lim * 2"
-            stroke="gray"
-            :stroke-width="thickness"
-        />
-        <circle
-            v-for="({ x, y }, i) in dots()"
-            :key="i"
-            :cx="x"
-            :cy="y"
-            :r="thickness / 2"
-            fill="gray"
-        />
-        <!-- Slots -->
-        <slot></slot>
-        <!-- Dashed lines -->
-        <line
-            v-if="pos.y - R * 2 > -lim"
-            :x1="pos.x"
-            :y1="-lim"
-            :x2="pos.x"
-            :y2="pos.y - R * 2"
-            stroke="var(--reactive-color)"
-            stroke-dasharray="4 4"
-        />
-        <line
-            v-if="pos.y + R * 2 < lim"
-            :x1="pos.x"
-            :y1="pos.y + R * 2"
-            :x2="pos.x"
-            :y2="lim"
-            stroke="var(--reactive-color)"
-            stroke-dasharray="4 4"
-        />
-        <line
-            v-if="pos.x - R * 2 > -lim"
-            :x1="-lim"
-            :y1="pos.y"
-            :x2="pos.x - R * 2"
-            :y2="pos.y"
-            stroke="var(--reactive-color)"
-            stroke-dasharray="4 4"
-        />
-        <line
-            v-if="pos.x + R * 2 < lim"
-            :x1="pos.x + R * 2"
-            :y1="pos.y"
-            :x2="lim"
-            :y2="pos.y"
-            stroke="var(--reactive-color)"
-            stroke-dasharray="4 4"
-        />
-        <!-- Position text -->
-        <text
-            :x="pos.x"
-            :y="-lim - fontSize"
-            :font-size="fontSize"
-            text-anchor="middle"
-            dominant-baseline="central"
-            fill="var(--reactive-color)"
-        >
-            {{ format(pos.x, unit) }}
-        </text>
-        <text
-            :x="pos.x"
-            :y="+lim + fontSize"
-            :font-size="fontSize"
-            text-anchor="middle"
-            dominant-baseline="central"
-            fill="var(--reactive-color)"
-        >
-            {{ format((100 * pos.x) / lim, "%") }}
-        </text>
-        <text
-            :x="-pos.y"
-            :y="-lim - fontSize"
-            :font-size="fontSize"
-            text-anchor="middle"
-            dominant-baseline="central"
-            fill="var(--reactive-color)"
-            transform="rotate(-90)"
-        >
-            {{ format(pos.y, unit) }}
-        </text>
-        <text
-            :x="+pos.y"
-            :y="-lim - fontSize"
-            :font-size="fontSize"
-            text-anchor="middle"
-            dominant-baseline="central"
-            fill="var(--reactive-color)"
-            transform="rotate(+90)"
-        >
-            {{ format((100 * pos.y) / lim, "%") }}
-        </text>
-        <!-- Marker -->
-        <circle
-            :cx="pos.x"
-            :cy="pos.y"
-            :r="R"
-            fill="var(--color)"
-            stroke-width="1"
-        />
-    </svg>
+  <svg
+    ref="canvas"
+    :viewBox="viewBox.join(' ')"
+    :style="variables"
+    @mouseenter="hover = true"
+    @mouseleave="hover = false"
+  >
+    <!-- Canvas Area -->
+    <rect
+      :x="-lim"
+      :y="-lim"
+      :width="lim * 2"
+      :height="lim * 2"
+      stroke="gray"
+      :stroke-width="T"
+      @mousedown="track"
+      style="pointer-events: all"
+    />
+    <!-- Decorations -->
+    <circle
+      v-for="({ x, y }, i) in dots()"
+      :key="i"
+      :cx="x"
+      :cy="y"
+      :r="T / 2"
+      fill="white"
+      opacity="0.4"
+    />
+    <!-- Slots -->
+    <slot></slot>
+    <!-- Dashed lines -->
+    <line v-for="(line, i) in crossHair()" :key="i" v-bind="line" />
+    <!-- Position text -->
+    <g style="pointer-events: all">
+      <text
+        :x="pos.x"
+        :y="-lim - fontSize"
+        :font-size="fontSize"
+        text-anchor="middle"
+        dominant-baseline="central"
+        fill="var(--color)"
+      >
+        {{ format(pos.x, unit) }}
+      </text>
+      <text
+        :x="pos.x"
+        :y="+lim + fontSize"
+        :font-size="fontSize"
+        text-anchor="middle"
+        dominant-baseline="central"
+        fill="var(--color)"
+      >
+        {{ format((100 * pos.x) / lim, "%") }}
+      </text>
+      <text
+        :x="-pos.y"
+        :y="-lim - fontSize"
+        :font-size="fontSize"
+        text-anchor="middle"
+        dominant-baseline="central"
+        fill="var(--color)"
+        transform="rotate(-90)"
+      >
+        {{ format(pos.y, unit) }}
+      </text>
+      <text
+        :x="+pos.y"
+        :y="-lim - fontSize"
+        :font-size="fontSize"
+        text-anchor="middle"
+        dominant-baseline="central"
+        fill="var(--color)"
+        transform="rotate(+90)"
+      >
+        {{ format((100 * pos.y) / lim, "%") }}
+      </text>
+    </g>
+    <!-- Marker -->
+    <circle
+      :cx="pos.x"
+      :cy="pos.y"
+      :r="R"
+      fill="var(--color)"
+      stroke-width="1"
+    />
+    <!-- Top slot -->
+    <slot name="top"></slot>
+  </svg>
 </template>
 
 <style scoped lang="scss">
 svg {
-    font-family: "Cascadia Code", "Courier New", Courier, monospace;
-    --reactive-color: gray;
-    &:hover,
-    &:active {
-        --reactive-color: var(--color);
-    }
+  font-family: "Cascadia Code", "Courier New", Courier, monospace;
+  --reactive-color: gray;
+
+  &:hover,
+  &:active {
+    --reactive-color: var(--color);
+  }
+
+  user-select: none;
+  pointer-events: none;
+  & > text {
+    pointer-events: all;
+  }
 }
 </style>

@@ -3,16 +3,14 @@
 // This source code is licensed under the MIT license.
 // You may find the full license in project root directory.
 // -------------------------------------------------------
-
-import type { Mat } from "core/Vision";
 import { Point2d } from "core/Geometry";
 import { TrackerRecord } from "./tracker.js";
 import { ExtrinsicDataset } from "@lib/camera.js";
 
 export type ExtrinsicRecord = {
-    L: TrackerRecord & { frame: Mat<Uint8Array>; voltage: Point2d };
-    C: TrackerRecord & { frame: Mat<Uint8Array>; angle: Point2d };
-    R: TrackerRecord & { frame: Mat<Uint8Array>; voltage: Point2d };
+    L: TrackerRecord & { voltage: Point2d };
+    C: TrackerRecord & { angle: Point2d };
+    R: TrackerRecord & { voltage: Point2d };
 };
 
 export function createDataSet(

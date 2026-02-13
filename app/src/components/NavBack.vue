@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ElementSize } from "@lib/util/dom";
+import ElementSize from "@lib/element-size";
 import { useTemplateRef } from "vue";
 
 const emit = defineEmits<{

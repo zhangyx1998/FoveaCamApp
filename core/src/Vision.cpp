@@ -3,6 +3,7 @@
 // This source code is licensed under the MIT license.
 // You may find the full license in project root directory.
 // -------------------------------------------------------
+#include <cmath>
 #include <cstddef>
 #include <cstring>
 
@@ -17,6 +18,7 @@
 #include <opencv2/core/mat.hpp>
 #include <opencv2/core/types.hpp>
 #include <pointer.h>
+#include <stdexcept>
 
 #include "AsyncTask.h"
 #include "CoreObject.h"
@@ -53,6 +55,18 @@ static FN(save) {
     const auto path = convert<std::string>(info[1]);
     cv::imwrite(path, mat);
     return env.Undefined();
+  }
+  JS_EXCEPT(env.Undefined())
+}
+
+static FN(cvtColor) {
+  auto env = info.Env();
+  try {
+    auto mat = convert<cv::Mat>(info[0]);
+    const auto code = convert<CvtColorCode>(info[1]);
+    cv::Mat converted;
+    cv::cvtColor(mat, converted, code);
+    return convert(env, converted);
   }
   JS_EXCEPT(env.Undefined())
 }
@@ -132,13 +146,23 @@ static FN(heatmap) {
     switch (mat.type()) {
     case CV_8UC1:
       if (norm)
-        cv::normalize(mat, mat, 0, 255, NORM_MINMAX);
+        cv::normalize(mat, mat, 0xff, 0, NORM_MINMAX);
+      break;
+    case CV_16UC1:
+      if (norm)
+        cv::normalize(mat, mat, 0xffff, 0, NORM_MINMAX);
+      mat.convertTo(mat, CV_8UC1, 255.0 / 65535.0);
+      break;
+    case CV_16SC1:
+      if (norm)
+        cv::normalize(mat, mat, static_cast<double>(INT32_MAX), 0, NORM_MINMAX);
+      mat.convertTo(mat, CV_8UC1, 255.0 / static_cast<double>(INT32_MAX));
       break;
     case CV_16FC1:
     case CV_32FC1:
     case CV_64FC1:
       if (norm)
-        cv::normalize(mat, mat, 0, 1.0, NORM_MINMAX);
+        cv::normalize(mat, mat, 1.0, 0, NORM_MINMAX);
       mat.convertTo(mat, CV_8UC1, 255.0);
       break;
     default:
@@ -179,35 +203,51 @@ static FN(gaussian) {
   JS_EXCEPT(env.Undefined())
 }
 
-static FN(disparity) {
+inline cv::Mat mono(const cv::Mat &mat) {
+  if (mat.channels() == 1)
+    return mat;
+  cv::Mat gray;
+  switch (mat.channels()) {
+  case 3:
+    cv::cvtColor(mat, gray, cv::COLOR_BGR2GRAY);
+    break;
+  case 4:
+    cv::cvtColor(mat, gray, cv::COLOR_BGRA2GRAY);
+    break;
+  default:
+    throw std::runtime_error(mat.empty() ? "Empty matrix"
+                                         : "Unsupported number of channels " +
+                                               to_string(mat.channels()));
+  }
+  return gray;
+}
+
+static FN(diff) {
   const auto env = info.Env();
   try {
-    auto fa = convert<Arv::Frame::Ptr>(info[0]);
-    auto fb = convert<Arv::Frame::Ptr>(info[1]);
+    auto a = convert<cv::Mat>(info[0]);
+    auto b = convert<cv::Mat>(info[1]);
     auto norm = optionalArgument(info[2], false);
-    if (fa->width() != fb->width() || fa->height() != fb->height())
-      throw JS::Error(env, "Frame size mismatch for disparity computation");
-    auto task = [fa, fb, norm] {
-      auto a = fa->view(Arv::Mono8);
-      auto b = fb->view(Arv::Mono8);
-      if (norm) {
-        cv::Ptr<cv::CLAHE> clahe = cv::createCLAHE(2.0, cv::Size(8, 8));
-        clahe->apply(a, a);
-        clahe->apply(b, b);
-      }
-      // Red v.s. Blue, green = min of both
-      // Use OpenCV's vectorized operations for efficiency
-      cv::Mat channels[4];
-      channels[0] = a;            // R = pa
-      cv::min(a, b, channels[1]); // G = min(pa, pb)
-      channels[2] = b;            // B = pb
-      channels[3] = cv::Mat(a.size(), CV_8UC1, cv::Scalar(255)); // A = 255
-      cv::Mat out;
-      cv::merge(channels, 4, out);
-      return out;
-    };
-    return AsyncTask<cv::Mat>::run(
-        env, task, "disparity(" + fa->tag + ", " + fb->tag + ")");
+    if (a.cols != b.cols || a.rows != b.rows)
+      throw JS::Error(env, "Frame size mismatch for image diff");
+    // Ensure a and b are grayscale
+    a = mono(a);
+    b = mono(b);
+    if (norm) {
+      cv::Ptr<cv::CLAHE> clahe = cv::createCLAHE(2.0, cv::Size(8, 8));
+      clahe->apply(a, a);
+      clahe->apply(b, b);
+    }
+    // Red v.s. Blue, green = min of both
+    // Use OpenCV's vectorized operations for efficiency
+    cv::Mat channels[4];
+    channels[0] = a;            // R = pa
+    cv::min(a, b, channels[1]); // G = min(pa, pb)
+    channels[2] = b;            // B = pb
+    channels[3] = cv::Mat(a.size(), CV_8UC1, cv::Scalar(255)); // A = 255
+    cv::Mat out;
+    cv::merge(channels, 4, out);
+    return convert(env, out);
   }
   JS_EXCEPT(env.Undefined());
 };
@@ -365,6 +405,82 @@ static FN(wrapPerspective) {
     cv::warpPerspective(src, dst, homography, src.size(), flags,
                         BORDER_TRANSPARENT);
     return convert(env, dst);
+  }
+  JS_EXCEPT(env.Undefined());
+}
+
+static FN(disparity) {
+  const auto env = info.Env();
+  try {
+    auto left = mono(convert<cv::Mat>(info[0]));
+    auto right = mono(convert<cv::Mat>(info[1]));
+    const auto numDisparities = optionalArgument<int>(info[2], 0);
+    const auto blockSize = optionalArgument<int>(info[3], 21);
+    cv::Mat disparity;
+    cv::Ptr<cv::StereoBM> stereo =
+        cv::StereoBM::create(numDisparities, blockSize);
+    stereo->compute(left, right, disparity);
+    return convert(env, disparity);
+  }
+  JS_EXCEPT(env.Undefined());
+}
+
+static FN(reprojectImageTo3D) {
+  const auto env = info.Env();
+  try {
+    auto disparity = convert<cv::Mat>(info[0]);
+    cv::Mat Q = convert<cv::Mat>(info[1]);
+    auto handleMissingValues = optionalArgument<bool>(info[2], false);
+    auto ddepth = optionalArgument<int>(info[3], -1);
+    cv::Mat out;
+    cv::reprojectImageTo3D(disparity, out, Q, handleMissingValues, ddepth);
+    return convert(env, out);
+  }
+  JS_EXCEPT(env.Undefined());
+}
+
+static FN(depthFromProjection) {
+  const auto env = info.Env();
+  try {
+    auto projected = convert<cv::Mat>(info[0]);
+    auto near = optionalArgument<double>(info[1], -INFINITY);
+    auto far = optionalArgument<double>(info[2], INFINITY);
+    // Check if projected has 3 channels
+    if (projected.channels() != 3)
+      throw JS::Error(env, "Input to depthFromProjection must have 3 channels");
+    // Extract Z channel
+    cv::Mat z = cv::Mat(projected.rows, projected.cols, CV_32FC1);
+    // Clamp Z values to [near, far]
+    double z_min = INFINITY, z_max = -INFINITY;
+    for (int y = 0; y < projected.rows; ++y) {
+      for (int x = 0; x < projected.cols; ++x) {
+        float z_val = projected.at<cv::Vec3f>(y, x)[2];
+        if (z_val < near) {
+          z.at<float>(y, x) = near;
+        } else if (z_val > far) {
+          z.at<float>(y, x) = far;
+        } else {
+          z.at<float>(y, x) = z_val;
+        }
+        z_min = std::min(z_min, static_cast<double>(z.at<float>(y, x)));
+        z_max = std::max(z_max, static_cast<double>(z.at<float>(y, x)));
+      }
+    }
+    for (int y = 0; y < z.rows; ++y) {
+      for (int x = 0; x < z.cols; ++x) {
+        float &z_val = z.at<float>(y, x);
+        if (std::isinf(z_val)) {
+          z_val = far;
+        } else if (std::isnan(z_val)) {
+          z_val = near;
+        } else {
+          z_val = 255.0 * (z_val - z_min) / (z_max - z_min);
+        }
+      }
+    }
+    cv::Mat u8;
+    z.convertTo(u8, CV_8UC1);
+    return convert(env, u8);
   }
   JS_EXCEPT(env.Undefined());
 }
@@ -712,11 +828,12 @@ CORE_OBJECT(Projector);
 void exportVisionNamespace(Napi::Env env, Napi::Object &exports) {
   EXPORT(exports, load);
   EXPORT(exports, save);
+  EXPORT(exports, cvtColor);
   EXPORT(exports, slice);
   EXPORT(exports, resize);
   EXPORT(exports, heatmap);
   EXPORT(exports, gaussian);
-  EXPORT(exports, disparity);
+  EXPORT(exports, diff);
   EXPORT(exports, minMaxLoc);
   EXPORT(exports, matchTemplate);
   EXPORT(exports, findChessboardCorners);
@@ -725,6 +842,9 @@ void exportVisionNamespace(Napi::Env env, Napi::Object &exports) {
   EXPORT(exports, findHomography);
   EXPORT(exports, projectHomography);
   EXPORT(exports, wrapPerspective);
+  EXPORT(exports, disparity);
+  EXPORT(exports, reprojectImageTo3D);
+  EXPORT(exports, depthFromProjection);
   Undistort::Export(env, exports);
   Projector::Export(env, exports);
 }

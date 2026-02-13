@@ -118,7 +118,7 @@ const task = abortable(async (aborted, onAbort) => {
             </StreamView>
             <ConfigEntry>
                 <span>Zoom Ratio</span>
-                <input v-model.number="zoom" />
+                <input type="number" v-model.number="zoom" />
             </ConfigEntry>
             <div class="actions">
                 <button :disabled="true">Button</button>
