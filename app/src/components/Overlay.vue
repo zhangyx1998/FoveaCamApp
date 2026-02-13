@@ -1,84 +1,76 @@
+<!-- ---------------------------------------------------------
+ * Copyright (c) 2026 Yuxuan Zhang, web-dev@z-yx.cc
+ * This source code is licensed under the MIT license.
+ * You may find the full license in project root directory.
+ --------------------------------------------------------- -->
+
+<script lang="ts">
+import { shallowRef, type Component } from "vue";
+interface OverlayItem {
+  overlay: Component;
+}
+export const overlay = shallowRef<OverlayItem | null>(null);
+export function dialog(item: OverlayItem) {
+  overlay.value = item;
+}
+</script>
+
 <script setup lang="ts">
-import { computed, useTemplateRef, type PropType } from 'vue';
-import { ElementSize } from '@lib/util/dom';
-const props = defineProps({
-    type: {
-        type: String as PropType<"persistent" | "hover-only">,
-        required: false,
-        default: "persistent"
-    },
-    display: {
-        type: String as PropType<"block" | "inline-block" | "inline" | "flex" | "inline-flex" | "grid" | "inline-grid">,
-        required: false,
-        default: "block"
-    },
-    // When `show` is provided (not null), overrides `type`
-    show: {
-        type: Boolean,
-        required: false,
-        default: null
-    },
-    fontSize: {
-        type: Number,
-        required: false,
-        default: null
-    },
-    pointerEvents: {
-        type: Boolean,
-        required: false,
-        default: true
-    },
-    userSelect: {
-        type: Boolean,
-        required: false,
-        default: false
-    },
-})
-const overlay = useTemplateRef<HTMLDivElement>("overlay");
-const size = new ElementSize(overlay);
-const style = computed(() => {
-    const style = {} as Record<string, string>;
-    if (props.fontSize !== null && size.width) {
-        style['fontSize'] = `${props.fontSize * size.width / 100}px`;
-    }
-    if (!props.pointerEvents) style['pointerEvents'] = 'none';
-    if (!props.userSelect) style['userSelect'] = 'none';
-    if (props.show === true) {
-        style['display'] = props.display;
-    } else if (props.show === false) {
-        style['display'] = 'none';
-    } else if (props.type === "persistent") {
-        style['display'] = props.display;
-    }
-    return style;
-})
-const classes = computed(() => {
-    return {
-        'hover-only': props.show === null && props.type === "hover-only"
-    };
+import { computed } from "vue";
+const props = defineProps<{ overlay: Component; disabled?: boolean }>();
+const active = computed(() => overlay.value === props);
+function toggle() {
+  if (active.value) {
+    overlay.value = null;
+  } else {
+    overlay.value = props;
+  }
+}
+const disabled = computed(() => {
+  if (overlay.value === props) return false;
+  return Boolean(props.disabled);
 });
 </script>
 
 <template>
-    <div class="overlay" :class="classes" ref="overlay" :style="style">
-        <slot></slot>
-    </div>
+  <button
+    class="overlay-toggle"
+    :class="{ active }"
+    @click="toggle"
+    :disabled="disabled"
+  >
+    <slot></slot>
+  </button>
 </template>
 
 <style scoped lang="scss">
-.overlay {
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    width: 100%;
-    height: 100%;
-    padding: 1em;
-    box-sizing: border-box;
+button {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  color: inherit;
+  border-radius: 4px;
+  transition: all 0.1s;
+  padding: 0.4em;
+  outline: 1px solid transparent;
 
-    :not(:hover)>&.hover-only {
-        opacity: 0;
-        pointer-events: none !important;
-    }
+  &.active {
+    outline: 2px solid #3af;
+  }
+
+  &:hover {
+    background: #fff1;
+  }
+
+  &:not(.active):not(:disabled):hover {
+    outline: 1px solid #666;
+  }
+
+  &:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
 }
 </style>

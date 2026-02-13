@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { Log } from "core";
+import { Awaitable } from "core/types";
 import { type Camera, Frame } from "core/Aravis";
 import type { Mat } from "core/Vision";
 import type { Size, Point, Rect } from "core/Geometry";
@@ -44,6 +45,13 @@ const props = defineProps({
         required: false,
         default: undefined,
     },
+    transform: {
+        type: Function as any as () =>
+        | ((mat: Mat<Uint8Array>) => Awaitable<Mat<Uint8Array>>)
+        | undefined,
+        required: false,
+        default: undefined,
+    },
     overlay: {
         type: Object as () => Record<string, string>,
         required: false,
@@ -66,6 +74,11 @@ const props = defineProps({
     },
     slice: {
         type: Object as () => Rect | null,
+        required: false,
+        default: null,
+    },
+    capture: {
+        type: String,
         required: false,
         default: null,
     },
@@ -128,6 +141,7 @@ const overlay = computed(() => ({
 <template>
     <FrameView
         :mat="mat"
+        :transform="transform"
         :overlay="overlay"
         :title="title"
         :footnote="footnote"
@@ -135,6 +149,7 @@ const overlay = computed(() => ({
         :width="width"
         :height="height"
         :slice="slice"
+        :capture="capture"
         @mousedown="(e) => emit('mousedown', e)"
         @mouseup="(e) => emit('mouseup', e)"
         @mousemove="(e) => emit('mousemove', e)"

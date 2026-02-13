@@ -60,7 +60,13 @@ declare module "core/Vision" {
   export type Pixel = Point2d & { value: number };
 
   export function load(path: string): Mat<Uint8Array>;
+
   export function save<T extends TypedArray>(mat: Mat<T>, path: string): void;
+
+  export function cvtColor<T extends TypedArray>(
+    mat: Mat<T>,
+    code: CvtColorCode,
+  ): Mat<T>;
 
   export function slice<T extends TypedArray>(mat: Mat<T>, rect: Rect): Mat<T>;
 
@@ -84,11 +90,11 @@ declare module "core/Vision" {
     sigmaY?: number, // default: sigmaX
   ): Mat<T>;
 
-  export function disparity(
-    a: Frame,
-    b: Frame,
+  export function diff<T extends TypedArray>(
+    a: Mat<T>,
+    b: Mat<T>,
     norm?: boolean, // default: false
-  ): Promise<Mat<Uint8Array>>;
+  ): Mat<Uint8Array>;
 
   export function minMaxLoc(
     mat: Mat,
@@ -163,6 +169,26 @@ declare module "core/Vision" {
     flags?: InterpolationFlag, // default: "LINEAR"
   ): Mat<T>;
 
+  export function disparity<T extends TypedArray>(
+    left: Mat<T>,
+    right: Mat<T>,
+    numDisparities?: number, // default: 0
+    blockSize?: number, // default: 21
+  ): Mat<TypedArray>;
+
+  export function reprojectImageTo3D<T extends TypedArray>(
+    disparity: Mat<T>,
+    Q: Mat<Float64Array>,
+    handleMissingValues?: boolean, // default: false
+    ddepth?: number, // default: -1 (same as disparity)
+  ): Mat<T>;
+
+  export function depthFromProjection<T extends TypedArray>(
+    depth: Mat<T>,
+    near?: number, // default: -Infinity
+    far?: number, // default: Infinity
+  ): Mat<Uint16Array>;
+
   export class MarkerDetector extends CoreObject<MarkerDetector> {
     constructor(type: PreDefinedDictionary);
     detect(
@@ -230,6 +256,29 @@ declare module "core/Vision" {
       z?: number, // default: 0
     ): Point3d[];
   }
+
+  type CvtColorCode =
+    | number
+    | "BGR2BGRA"
+    | "RGB2RGBA"
+    | "BGRA2BGR"
+    | "RGBA2RGB"
+    | "BGR2RGBA"
+    | "RGB2BGRA"
+    | "RGBA2BGR"
+    | "BGRA2RGB"
+    | "BGR2RGB"
+    | "RGB2BGR"
+    | "BGRA2RGBA"
+    | "RGBA2BGRA"
+    | "BGR2GRAY"
+    | "RGB2GRAY"
+    | "GRAY2BGR"
+    | "GRAY2RGB"
+    | "GRAY2BGRA"
+    | "GRAY2RGBA"
+    | "BGRA2GRAY"
+    | "RGBA2GRAY";
 
   type SolvePnPMethod =
     | "ITERATIVE"

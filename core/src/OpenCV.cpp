@@ -380,6 +380,37 @@ template <> cv::TermCriteria convert(const Napi::Value &value) {
 }
 
 // Enums
+template <> CvtColorCode convert(const std::string &value) {
+  CASE_STRING_TO_ENUM(value, BGR2BGRA);
+  CASE_STRING_TO_ENUM(value, RGB2RGBA);
+  CASE_STRING_TO_ENUM(value, BGRA2BGR);
+  CASE_STRING_TO_ENUM(value, RGBA2RGB);
+  CASE_STRING_TO_ENUM(value, BGR2RGBA);
+  CASE_STRING_TO_ENUM(value, RGB2BGRA);
+  CASE_STRING_TO_ENUM(value, RGBA2BGR);
+  CASE_STRING_TO_ENUM(value, BGRA2RGB);
+  CASE_STRING_TO_ENUM(value, BGR2RGB);
+  CASE_STRING_TO_ENUM(value, RGB2BGR);
+  CASE_STRING_TO_ENUM(value, BGRA2RGBA);
+  CASE_STRING_TO_ENUM(value, RGBA2BGRA);
+  CASE_STRING_TO_ENUM(value, BGR2GRAY);
+  CASE_STRING_TO_ENUM(value, RGB2GRAY);
+  CASE_STRING_TO_ENUM(value, GRAY2BGR);
+  CASE_STRING_TO_ENUM(value, GRAY2RGB);
+  CASE_STRING_TO_ENUM(value, GRAY2BGRA);
+  CASE_STRING_TO_ENUM(value, GRAY2RGBA);
+  CASE_STRING_TO_ENUM(value, BGRA2GRAY);
+  CASE_STRING_TO_ENUM(value, RGBA2GRAY);
+  throw std::range_error("Unsupported CvtColorCode enum string: " + value);
+}
+
+template <> CvtColorCode convert(const Napi::Value &value) {
+  if (value.IsNumber())
+    return static_cast<CvtColorCode>(convert<int>(value));
+  if (!value.IsString())
+    throw JS::TypeError(value.Env(), "CvtColorCode must be a string");
+  return convert<CvtColorCode>(value.As<Napi::String>().Utf8Value());
+}
 
 template <> std::string convert(const cv::SolvePnPMethod &value) {
   CASE_ENUM_TO_STRING(value, ITERATIVE, cv::SOLVEPNP_);

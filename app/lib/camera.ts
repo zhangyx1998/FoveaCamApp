@@ -6,12 +6,14 @@
 import { markRaw, shallowRef, toRaw, watch } from "vue";
 import { setAction } from "@src/components/Loading.vue";
 import { Camera } from "core/Aravis";
-import { CameraCalibration, Undistort } from "core/Vision";
+import { CameraCalibration, Mat, Undistort } from "core/Vision";
 import type { Point2d, Point3d } from "core/Geometry";
 import Regression, { RegressionConfig } from "core/Regression";
 import Store from "./store.js";
 import { Mutable } from "./types.js";
 import { sha256 } from "./util/hash.js";
+import { findPinholeProjection } from "./marker.js";
+import { createMat } from "./mat.js";
 
 export const ROLE = {
   L: "Left Fovea",
@@ -194,9 +196,9 @@ export type ExtrinsicData = {
   img_points: Point2d[];
   // 3D positions of corresponding img_pts
   obj_points: Point3d[];
-  // Absolute voltage reading (x, y)
+  // Absolute voltage reading (x, y) in volts
   voltage: Point2d;
-  // Angular position (x, y) from wide camera
+  // Angular position (x, y) from wide camera in radians
   angle: Point2d;
 };
 
@@ -210,7 +212,7 @@ export async function useExtrinsicCalibration(camera: Camera) {
   );
 }
 
-export async function useExtrinsicRegression(ds: Partial<ExtrinsicDataset>) {
+export async function useExtrinsicRegression(ds: ExtrinsicDataset) {
   setAction("Performing extrinsic regression...");
   ds = toRaw(ds);
   if (!Array.isArray(ds) || ds.length === 0) {
@@ -232,8 +234,10 @@ export async function useExtrinsicRegression(ds: Partial<ExtrinsicDataset>) {
   };
   const V2A = new Regression<Point2d, Point2d>(keys, keys, config);
   const A2V = new Regression<Point2d, Point2d>(keys, keys, config);
-  console.log("Extrinsic regression result:", { V2A, A2V });
-  return { V2A: V2A.fit(V, A), A2V: A2V.fit(A, V) };
+  // Compute Homography projection matrix H per angle
+  const A2H = await findPinholeProjection(ds);
+  console.log("Extrinsic regression result:", { V2A, A2V, A2H });
+  return { V2A: V2A.fit(V, A), A2V: A2V.fit(A, V), A2H };
 }
 
 export type ExtrinsicRegression = Awaited<
@@ -281,7 +285,7 @@ export async function useCalibratedTriple() {
     C,
     /* Right Foveated Camera */
     R,
-    /** Center Fovea Intrinsic Calibration */
+    /** Center Wide Intrinsic Calibration */
     CI,
     /** Left Fovea Extrinsic Regression */
     LE,
@@ -331,22 +335,35 @@ export function useCoordinateConversions({
     },
     /** Conversion from angle (rad) to pixel (px) */
     A2P: {
-      C(px: Point2d) {
+      C(px: Point2d, distort = true) {
         if (!CI.undistort) throw new Error("Wide camera not calibrated");
-        return CI.undistort.position([px], true)[0];
+        return CI.undistort.position([px], distort)[0];
       },
     },
     /** Conversion from pixel (px) to angle (rad) */
     P2A: {
-      C(px: Point2d) {
+      C(px: Point2d, undistort = true) {
         if (!CI.undistort) throw new Error("Wide camera not calibrated");
-        return CI.undistort.angular([px], false)[0];
+        return CI.undistort.angular([px], undistort)[0];
+      },
+    },
+    /** Conversion from angle (rad) to homography matrix */
+    A2H: {
+      L(angle: Point2d) {
+        const H = createMat(Float64Array, [3, 3]);
+        return Object.assign(H, LE.A2H.predict(angle));
+      },
+      R(angle: Point2d) {
+        const H = createMat(Float64Array, [3, 3]);
+        return Object.assign(H, RE.A2H.predict(angle));
       },
     },
   };
 }
 
 export type CoordinateConversions = ReturnType<typeof useCoordinateConversions>;
+
+export function useUndistort(camera: Camera) {}
 
 export async function getFrameSize(camera: Camera) {
   const frame = await camera.grab();

@@ -1,0 +1,128 @@
+<script setup lang="ts">
+import ElementSize from "@lib/element-size";
+import {
+  computed,
+  onMounted,
+  onUnmounted,
+  ref,
+  useTemplateRef,
+  watch,
+} from "vue";
+const props = defineProps({
+  division: {
+    type: Number,
+    default: 0.5,
+  },
+  minWidthLeft: {
+    type: Number,
+    optional: true,
+  },
+  minWidthRight: {
+    type: Number,
+    optional: true,
+  },
+});
+const division = ref<number>(props.division);
+watch(division, (val) => {
+  if (val < 0.0) division.value = 0.0;
+  if (val > 1.0) division.value = 1.0;
+});
+const container = useTemplateRef<HTMLDivElement>("container");
+const size = new ElementSize(container);
+
+const left = computed(() => size.width * division.value);
+const right = computed(() => size.width - left.value);
+
+const dragging = ref(false);
+function onMouseMove(e: MouseEvent) {
+  if (!(e.buttons & 1)) dragging.value = false;
+  if (!dragging.value) return;
+  division.value += e.movementX / size.width;
+  requestAnimationFrame(ElementSize.notify);
+}
+
+onMounted(() => {
+  window.addEventListener("mousemove", onMouseMove);
+});
+onUnmounted(() => {
+  size.destroy();
+  window.removeEventListener("mousemove", onMouseMove);
+});
+</script>
+
+<template>
+  <div class="horizontal-division" ref="container">
+    <div
+      class="container"
+      style="left: 0"
+      :style="{ width: left + 'px' }"
+      v-show="left > 0"
+    >
+      <slot name="left"></slot>
+    </div>
+    <div
+      class="divider"
+      :style="{ left: left + 'px' }"
+      @mousedown.left="dragging = true"
+    ></div>
+    <div
+      class="container"
+      style="right: 0"
+      :style="{ width: right + 'px' }"
+      v-show="right > 0"
+    >
+      <slot name="right"></slot>
+    </div>
+  </div>
+</template>
+
+<style scoped lang="scss">
+.horizontal-division {
+  position: relative;
+}
+
+.container,
+.divider {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+}
+
+.container {
+  z-index: 0;
+}
+
+.divider {
+  z-index: 1;
+  width: 8px;
+  cursor: col-resize;
+
+  &,
+  &:after {
+    transform: translateX(-50%);
+  }
+
+  &:hover:after {
+    opacity: 0.4;
+  }
+
+  &:after {
+    display: block;
+    position: absolute;
+    left: 50%;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    content: "";
+    opacity: 0.2;
+    transition: 0.1s;
+    background-color: white;
+  }
+}
+
+.container > * {
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+}
+</style>

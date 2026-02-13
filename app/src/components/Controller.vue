@@ -14,7 +14,7 @@ import { SerialPort } from "serialport";
 import type { PortInfo } from "@serialport/bindings-interface";
 import { clamp } from "../../lib/util";
 import { computed, ref, shallowRef, useTemplateRef } from "vue";
-import { ElementSize } from "@lib/util/dom";
+import ElementSize from "@lib/element-size";
 import { setAction } from "./Loading.vue";
 import { BufferLike } from "@lib/types";
 

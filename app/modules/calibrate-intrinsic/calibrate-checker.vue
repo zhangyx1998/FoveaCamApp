@@ -155,7 +155,7 @@ onUnmounted(async () => {
             </StreamView>
             <ConfigEntry>
                 Pattern Size: W
-                <input v-model.number="pattern_size.width" style="width: 2ch" />
+                <input type="number" v-model.number="pattern_size.width" style="width: 2ch" />
                 × H
                 <input
                     v-model.number="pattern_size.height"

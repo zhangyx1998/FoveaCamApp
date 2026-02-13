@@ -3,7 +3,6 @@ import { ref } from "vue";
 const action_singleton = ref<string | null>(null);
 
 export function setAction(name: string | null = null) {
-    console.log("Set loading action:", name);
     action_singleton.value = name;
 }
 </script>

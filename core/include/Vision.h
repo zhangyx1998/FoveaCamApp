@@ -9,6 +9,7 @@
 #include <opencv2/calib3d.hpp>
 #include <opencv2/core.hpp>
 #include <opencv2/core/mat.hpp>
+#include <opencv2/imgproc.hpp>
 #include <vector>
 
 //! type of the robust estimation algorithm
@@ -30,3 +31,33 @@ typedef struct CameraCalibration : public Shared<CameraCalibration> {
   cv::Mat camera_matrix, dist_coeffs;
   std::vector<cv::Mat> rvecs, tvecs;
 } CameraCalibration;
+
+
+typedef enum CvtColorCode {
+  BGR2BGRA = cv::COLOR_BGR2BGRA,
+  RGB2RGBA = cv::COLOR_RGB2RGBA,
+
+  BGRA2BGR = cv::COLOR_BGRA2BGR,
+  RGBA2RGB = cv::COLOR_RGBA2RGB,
+
+  BGR2RGBA = cv::COLOR_BGR2RGBA,
+  RGB2BGRA = cv::COLOR_RGB2BGRA,
+
+  RGBA2BGR = cv::COLOR_RGBA2BGR,
+  BGRA2RGB = cv::COLOR_BGRA2RGB,
+
+  BGR2RGB = cv::COLOR_BGR2RGB,
+  RGB2BGR = cv::COLOR_RGB2BGR,
+
+  BGRA2RGBA = cv::COLOR_BGRA2RGBA,
+  RGBA2BGRA = cv::COLOR_RGBA2BGRA,
+
+  BGR2GRAY = cv::COLOR_BGR2GRAY,
+  RGB2GRAY = cv::COLOR_RGB2GRAY,
+  GRAY2BGR = cv::COLOR_GRAY2BGR,
+  GRAY2RGB = cv::COLOR_GRAY2RGB,
+  GRAY2BGRA = cv::COLOR_GRAY2BGRA,
+  GRAY2RGBA = cv::COLOR_GRAY2RGBA,
+  BGRA2GRAY = cv::COLOR_BGRA2GRAY,
+  RGBA2GRAY = cv::COLOR_RGBA2GRAY,
+} CvtColorCode;

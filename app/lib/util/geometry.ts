@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 
-import type { Point2d, Size, Rect as Rect } from "core";
+import type { Point2d, Size, Rect as Rect } from "core/Geometry";
 
 type Vector = Record<string, number>;
 
