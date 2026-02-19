@@ -19,7 +19,6 @@ import {
   ExtrinsicRegression,
 } from "@lib/camera";
 import Store from "@lib/store";
-import ErrorBoundary from "@src/components/ErrorBoundary.vue";
 const cameras = await useMatchedCameras(true);
 const { undistort } = await useIntrinsicCalibration(cameras.C);
 const state = ref<"CAL" | "FIN" | "PRV">("CAL");
@@ -66,15 +65,15 @@ onUnmounted(() => {
 
 <template>
   <div v-if="!undistort">Missing intrinsic calibration data.</div>
-  <ErrorBoundary v-else-if="state === 'CAL'">
+  <template v-else-if="state === 'CAL'">
     <Calibrate
       :cameras="markRaw(cameras)"
       :undistort="undistort"
       :records="records"
       @finalize="finalize"
     />
-  </ErrorBoundary>
-  <ErrorBoundary v-else-if="state === 'FIN'">
+  </template>
+  <template v-else-if="state === 'FIN'">
     <Finalize
       :undistort="undistort"
       :records="records"
@@ -84,8 +83,8 @@ onUnmounted(() => {
       @preview="state = 'PRV'"
       @confirm="confirm"
     />
-  </ErrorBoundary>
-  <ErrorBoundary v-else-if="state === 'PRV' && L && R">
+  </template>
+  <template v-else-if="state === 'PRV' && L && R">
     <Preview
       :cameras="markRaw(cameras)"
       :undistort="undistort"
@@ -95,5 +94,5 @@ onUnmounted(() => {
       @back="state = 'FIN'"
       @confirm="confirm"
     />
-  </ErrorBoundary>
+  </template>
 </template>

@@ -10,8 +10,8 @@ const props = defineProps<{
     color?: string;
 }>();
 const center = computed(() => ({
-    x: avg(...props.detection.map((p) => p.x)),
-    y: avg(...props.detection.map((p) => p.y)),
+    x: avg(props.detection.map((p) => p.x)),
+    y: avg(props.detection.map((p) => p.y)),
 }));
 const style = computed(() => {
     const style: Record<string, string> = {};

@@ -34,7 +34,7 @@ const props = defineProps({
   },
   transform: {
     type: Function as any as () =>
-      | ((mat: Mat<Uint8Array>) => Awaitable<Mat<Uint8Array>>)
+      | ((mat: Mat<Uint8Array>) => Mat<Uint8Array>)
       | undefined,
     required: false,
     default: undefined,
@@ -56,11 +56,6 @@ const props = defineProps({
   },
   height: {
     type: String,
-    required: false,
-    default: null,
-  },
-  slice: {
-    type: Object as () => Rect | null,
     required: false,
     default: null,
   },
@@ -111,9 +106,15 @@ watch(canvas, (canvas) => {
 });
 
 const mat = computed(() => {
-  if (!props.mat) return null;
-  if (props.slice) return slice(props.mat, props.slice);
-  return props.mat;
+  let { mat, transform } = props;
+  if (!mat) return null;
+  try {
+    if (transform) mat = transform(mat);
+  } catch (e) {
+    console.error("Error applying transform to mat:", e);
+    return null;
+  }
+  return mat;
 });
 
 if (props.capture) {
@@ -126,30 +127,17 @@ watch(
     if (!mat) return (image.value = null);
     const [height, width] = mat.shape;
     switch (mat.channels) {
-      case 4:
-        break;
-      case 3: {
-        // Convert RGB to RGBA
-        mat = cvtColor(mat, "RGB2RGBA");
-        break;
-      }
-      case 1: {
-        // Convert Gray to RGBA
+      case 1:
         mat = cvtColor(mat, "GRAY2RGBA");
         break;
-      }
+      case 3:
+        mat = cvtColor(mat, "RGB2RGBA");
+        break;
+      case 4:
+        break;
       default:
         console.error(`Unsupported number of channels: ${mat.channels}`);
         return (image.value = null);
-    }
-    const { transform } = props;
-    if (transform) {
-      try {
-        mat = await transform(mat);
-      } catch (e) {
-        console.error("Error applying transform to FrameView:", e);
-        return (image.value = null);
-      }
     }
     const clamped = new Uint8ClampedArray(mat.buffer);
     image.value = new ImageData(

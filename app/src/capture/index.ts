@@ -5,9 +5,20 @@
 // -------------------------------------------------------
 import fs from "node:fs";
 import { resolve } from "node:path";
-import { type Mat } from "core/Vision";
+import { cvtColor, type Mat } from "core/Vision";
 import { shallowReactive } from "vue";
 import { Vision } from "core";
+
+function makeBGR(image: Mat<Uint8Array>) {
+  switch (image.channels) {
+    case 4:
+      return cvtColor(image, "RGBA2BGRA");
+    case 3:
+      return cvtColor(image, "RGB2BGR");
+    default:
+      return image;
+  }
+}
 
 type Provider<T> = () => T | null;
 type Meta = Record<string, any>;
@@ -131,12 +142,12 @@ export default class Capture {
           const sequence = index.toString().padStart(digits, "0");
           const imgPath = resolve(directory, `${sequence}.${img_format}`);
           console.log("Saving image to", imgPath);
-          Vision.save(image, imgPath);
+          Vision.save(makeBGR(image), imgPath);
         });
       } else {
         const imgPath = resolve(path, `${name}.${img_format}`);
         console.log("Saving image to", imgPath);
-        Vision.save(images, imgPath);
+        Vision.save(makeBGR(images), imgPath);
       }
     }
   }
