@@ -23,7 +23,6 @@ const outline = computed(() => props.outline ?? grid_size.value);
 
 const blocks = computed(() => {
   const p = pattern.value;
-  console.log("Marker pattern:", p);
   const s = size.value;
   const whites: { x: number; y: number; width: number; height: number }[] = [];
   const n = p.length;

@@ -57,8 +57,8 @@ export default class Tracker extends EventTarget {
     if (!value) return value;
     const { width, height } = value;
     return {
-      x: avg(...value.map((p) => p.x)) / width - 0.5,
-      y: avg(...value.map((p) => p.y)) / height - 0.5,
+      x: avg(value.map((p) => p.x)) / width - 0.5,
+      y: avg(value.map((p) => p.y)) / height - 0.5,
     };
   });
   get center_relative() {
@@ -69,8 +69,8 @@ export default class Tracker extends EventTarget {
     if (!value) return value;
     const { width, height } = value;
     return {
-      x: avg(...value.map((p) => p.x)),
-      y: avg(...value.map((p) => p.y)),
+      x: avg(value.map((p) => p.x)),
+      y: avg(value.map((p) => p.y)),
       width,
       height,
     };

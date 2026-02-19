@@ -18,6 +18,7 @@ import { useAppConfig } from "@lib/config";
 import { Point2d } from "core/Geometry";
 import { FontAwesomeIcon as Icon } from "@fortawesome/vue-fontawesome";
 import { faTrashCan } from "@fortawesome/free-regular-svg-icons";
+import { degrees } from "@lib/util";
 
 const emit = defineEmits<{
   (e: "finalize"): void;
@@ -114,7 +115,7 @@ onUnmounted(async () => {
 
 const hover_record = ref<number | null>(null);
 function printAngle({ x, y }: Point2d) {
-  return `X ${x.toFixed(2)}°, Y ${y.toFixed(2)}°`;
+  return `X ${degrees(x).toFixed(2)}°, Y ${degrees(y).toFixed(2)}°`;
 }
 </script>
 
@@ -216,13 +217,14 @@ function printAngle({ x, y }: Point2d) {
       </div>
       <div class="records monospace">
         <div
-          v-for="(r, i) in records"
+          v-for="[i, r] in Array.from(records.entries()).toReversed()"
           :key="i"
           @mouseenter="hover_record = i"
           @mouseleave="hover_record = null"
         >
           <div style="padding-left: 1ch">
-            [{{ i + 1 }}] {{ printAngle(r.C.angle) }}
+            [{{ i.toString().padStart(2, "0") }}]
+            {{ printAngle(r.C.angle) }}
           </div>
           <button @click="records.splice(i, 1)">
             <Icon :icon="faTrashCan" />
@@ -255,11 +257,7 @@ function printAngle({ x, y }: Point2d) {
           {{ tracker.R?.target ? "✓" : "✗" }}
           Marker ID to Track:
         </span>
-        <input
-          type="number"
-          v-model.number="tracker.R.target_id"
-          style="width: 2ch"
-        />
+        <input type="number" v-model.number="tracker.R.target_id" />
       </ConfigEntry>
       <PosView
         v-if="controller"
@@ -360,6 +358,7 @@ function printAngle({ x, y }: Point2d) {
   flex-grow: 1;
   overflow-y: scroll;
   margin: 0.5em 0;
+  max-height: 25vw;
   & > * {
     height: 3em;
     display: flex;

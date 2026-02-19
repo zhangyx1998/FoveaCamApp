@@ -193,6 +193,8 @@ h1 {
 
 .detail-section {
     margin-bottom: 1.5rem;
+    max-height: 40vh;
+    overflow: auto;
 
     h3 {
         color: #aaa;

@@ -75,16 +75,16 @@ export async function useMatchedCameras<Strict extends true | false = false>(
     },
   };
   for (const cam of cams.values()) {
-    const store = await useCameraConfig(cam);
-    switch (store.role) {
+    const config = await useCameraConfig(cam);
+    switch (config.role) {
       case "L":
-        matched.L ??= initCamera(cam, store);
+        matched.L ??= initCamera(cam, config);
         break;
       case "C":
-        matched.C ??= initCamera(cam, store);
+        matched.C ??= initCamera(cam, config);
         break;
       case "R":
-        matched.R ??= initCamera(cam, store);
+        matched.R ??= initCamera(cam, config);
         break;
     }
   }

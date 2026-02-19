@@ -36,6 +36,7 @@ import { createQMatrix, deriveFoveaIntrinsics } from "@lib/stereo";
 import { matToArray } from "@lib/mat";
 
 const view = ref<"sliced" | "diff" | "depth">("sliced");
+const remote_content = ref<string>("NONE");
 const app_config = await useAppConfig();
 const controller = computed(getController);
 const triple = await useCalibratedTriple();
@@ -87,11 +88,10 @@ const target_mems = computed(() => {
   };
   if (v > 0) {
     const b = baseline.value / 2;
-    const d = distance.value * Math.cos(A.y);
-    const x2d = d * Math.tan(A.x);
-    const y2d = d;
-    out.l.x = Math.atan2(x2d + b, y2d);
-    out.r.x = Math.atan2(x2d - b, y2d);
+    const z = distance.value;
+    const x = z * Math.tan(A.x);
+    out.l.x = Math.atan2(x + b, z);
+    out.r.x = Math.atan2(x - b, z);
   }
   if (s !== 0) {
     out.l.y += radians(s);
@@ -350,7 +350,7 @@ function plusSign(v: string) {
         <span>Verge Distance</span>
         <span>
           <template v-if="distance !== Infinity">
-            {{ (distance / 1000).toFixed(2) }} m
+            {{ (distance / 1000).toFixed(4) }}m
           </template>
           <template v-else> ∞ </template>
         </span>
@@ -364,7 +364,7 @@ function plusSign(v: string) {
         style="width: 40ch"
       >
         <span>Vertical Shift</span>
-        <span> {{ plusSign(shift.toFixed(2)) }} degree </span>
+        <span> {{ plusSign(shift.toFixed(4)) }}° </span>
       </RangeSlider>
       <RangeSlider
         v-model="depth_window_inv"
@@ -377,11 +377,20 @@ function plusSign(v: string) {
         <span>Depth Window</span>
         <span>
           <template v-if="depth_window !== Infinity">
-            {{ (depth_window / 1000).toFixed(2) }} m
+            {{ (depth_window / 1000).toFixed(4) }} m
           </template>
           <template v-else> ∞ </template>
         </span>
       </RangeSlider>
+      <ConfigEntry>
+        <label>
+          <span>Remote Display</span>
+          <select v-model="remote_content">
+            <option value="NONE">No Content</option>
+            <option value="L+R">L + R</option>
+          </select>
+        </label>
+      </ConfigEntry>
     </div>
     <div class="view">
       <StreamView
@@ -402,28 +411,30 @@ function plusSign(v: string) {
     </div>
   </div>
   <RemoteCanvasTeleport>
-    <rect
-      x="-150"
-      y="-50"
-      width="100"
-      height="100"
-      fill="none"
-      stroke="white"
-      stroke-width="4"
-    />
-    <rect
-      x="50"
-      y="-50"
-      width="100"
-      height="100"
-      fill="none"
-      stroke="white"
-      stroke-width="4"
-    />
-    <line x1="-20" x2="20" stroke="white" stroke-width="4"></line>
-    <line y1="-20" y2="20" stroke="white" stroke-width="4"></line>
-    <text x="-100" y="8" font-size="100">L</text>
-    <text x="100" y="8" font-size="100">R</text>
+    <template v-if="remote_content === 'L+R'">
+      <rect
+        x="-150"
+        y="-50"
+        width="100"
+        height="100"
+        fill="none"
+        stroke="white"
+        stroke-width="4"
+      />
+      <rect
+        x="50"
+        y="-50"
+        width="100"
+        height="100"
+        fill="none"
+        stroke="white"
+        stroke-width="4"
+      />
+      <line x1="-20" x2="20" stroke="white" stroke-width="4"></line>
+      <line y1="-20" y2="20" stroke="white" stroke-width="4"></line>
+      <text x="-100" y="8" font-size="100">L</text>
+      <text x="100" y="8" font-size="100">R</text>
+    </template>
   </RemoteCanvasTeleport>
 </template>
 

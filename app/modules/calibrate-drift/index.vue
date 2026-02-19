@@ -4,7 +4,7 @@ import { MarkerDetector } from "core/Vision";
 import { Point2d } from "core/Geometry";
 import { ROLE, THEME, useCalibratedTriple } from "@lib/camera";
 import StreamView from "@src/components/StreamView.vue";
-import PosView from "@src/components/PosView.vue";
+import PosView, { Pos } from "@src/components/PosView.vue";
 import { getController } from "@src/components/Controller.vue";
 import FrameCursor from "@src/components/FrameCursor.vue";
 import Tracker, { actuate } from "@modules/calibrate-extrinsic/tracker";
@@ -49,6 +49,11 @@ const tracker = {
   R: new Tracker(R, detector, 2, 0.25),
 };
 
+const override: { left: Pos | null; right: Pos | null } = {
+  left: null,
+  right: null,
+};
+
 const angular = computed(() => {
   if (!tracker.C.center_absolute) return null;
   return undistort.angular([tracker.C.center_absolute], true)[0];
@@ -91,21 +96,27 @@ const derived = {
 const actuator = computed(
   () =>
     controller.value &&
-    actuate(controller.value, tracker.L, tracker.R, {
-      kp: 10.0,
-      get origin_left() {
-        const r = angular.value;
-        return r
-          ? LE.A2V.predict(applyDrift(r, config.drift_l))
-          : { x: 0, y: 0 };
+    actuate(
+      controller.value,
+      tracker.L,
+      tracker.R,
+      {
+        kp: 10.0,
+        get origin_left() {
+          const r = angular.value;
+          return r
+            ? LE.A2V.predict(applyDrift(r, config.drift_l))
+            : { x: 0, y: 0 };
+        },
+        get origin_right() {
+          const r = angular.value;
+          return r
+            ? RE.A2V.predict(applyDrift(r, config.drift_r))
+            : { x: 0, y: 0 };
+        },
       },
-      get origin_right() {
-        const r = angular.value;
-        return r
-          ? RE.A2V.predict(applyDrift(r, config.drift_r))
-          : { x: 0, y: 0 };
-      },
-    }),
+      override,
+    ),
 );
 
 watch(actuator, (_, prev) => prev?.abort());
@@ -156,6 +167,8 @@ onUnmounted(async () => {
         :lim="controller.dv"
         :color="THEME.L"
         style="width: 100%"
+        :font-size="12"
+        @select="(p) => (override.left = p)"
       ></PosView>
     </div>
     <div class="view">
@@ -240,7 +253,11 @@ onUnmounted(async () => {
           {{ tracker.R.target ? "✓" : "✗" }}
           Marker ID to Track:
         </span>
-        <input type="number" v-model.number="tracker.R.target_id" style="width: 2ch" />
+        <input
+          type="number"
+          v-model.number="tracker.R.target_id"
+          style="width: 2ch"
+        />
       </ConfigEntry>
       <Drift :drift="derived.R">Derived Drift</Drift>
       <PosView
@@ -249,6 +266,8 @@ onUnmounted(async () => {
         :lim="controller.dv"
         :color="THEME.R"
         style="width: 100%"
+        :font-size="12"
+        @select="(p) => (override.right = p)"
       ></PosView>
     </div>
   </div>
