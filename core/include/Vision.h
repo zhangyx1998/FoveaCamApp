@@ -6,6 +6,7 @@
 #pragma once
 
 #include "pointer.h"
+#include <napi.h>
 #include <opencv2/calib3d.hpp>
 #include <opencv2/core.hpp>
 #include <opencv2/core/mat.hpp>
@@ -92,6 +93,21 @@ typedef enum CvtColorCode {
 } CvtColorCode;
 
 namespace cv {
+
+class MatView : public Mat {
+public:
+  Napi::Reference<Napi::Value> ref; // Hold reference to the original JS object
+  inline MatView() : ref() {}
+  inline MatView(const Napi::Value &value, cv::Mat &&mat)
+      : ref(Napi::Persistent(value)), Mat(mat) {}
+  inline MatView(const Napi::Value &value, std::vector<int> shape, int type,
+                 uchar *data)
+      : ref(Napi::Persistent(value)), Mat(shape, type, data) {}
+  // Creates a typed array backed MatView with the same shape and type as the
+  // given Mat. Data is uninitialized for better performance, caller should fill
+  // in the data before use.
+  static MatView like(const Napi::Env &env, const cv::Mat &mat);
+};
 
 typedef struct ValueRange {
   double min, max;
