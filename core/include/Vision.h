@@ -90,3 +90,32 @@ typedef enum CvtColorCode {
   BayerBGGR2GRAY = cv::COLOR_BayerBGGR2GRAY,
   BayerGBRG2GRAY = cv::COLOR_BayerGBRG2GRAY,
 } CvtColorCode;
+
+namespace cv {
+
+typedef struct ValueRange {
+  double min, max;
+} ValueRange;
+
+inline ValueRange rangeOf(int depth) {
+  switch (CV_MAT_DEPTH(depth)) {
+  case CV_8U:
+    return {0, UINT8_MAX};
+  case CV_8S:
+    return {INT8_MIN, INT8_MAX};
+  case CV_16U:
+    return {0, UINT16_MAX};
+  case CV_16S:
+    return {INT16_MIN, INT16_MAX};
+  case CV_32S:
+    return {INT32_MIN, INT32_MAX};
+  case CV_16F:
+  case CV_32F:
+  case CV_64F:
+    return {0.0, 1.0};
+  default:
+    throw std::runtime_error("Unsupported Mat depth: " + std::to_string(depth));
+  }
+}
+
+} // namespace cv

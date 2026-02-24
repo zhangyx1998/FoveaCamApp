@@ -84,6 +84,8 @@ static FN(convertType) {
   try {
     auto mat = convert<cv::Mat>(info[0]);
     const auto type_name = convert<string>(info[1]);
+    auto alpha = optionalArgument<double>(info[2], NAN);
+    auto beta = optionalArgument<double>(info[3], 0.0);
     int type;
     if (type_name == "8U")
       type = CV_8U;
@@ -103,8 +105,14 @@ static FN(convertType) {
       type = CV_32F;
     else
       throw JS::Error(env, "Unknown type name: " + type_name);
+    if (isnan(alpha)) {
+      const auto src = cv::rangeOf(CV_MAT_DEPTH(mat.type()));
+      const auto dst = cv::rangeOf(CV_MAT_DEPTH(type));
+      alpha = (dst.max - dst.min) / (src.max - src.min);
+      beta = dst.min - src.min * alpha;
+    }
     cv::Mat converted;
-    mat.convertTo(converted, CV_MAKETYPE(type, mat.channels()));
+    mat.convertTo(converted, CV_MAKETYPE(type, mat.channels()), alpha, beta);
     return convert(env, converted);
   }
   JS_EXCEPT(env.Undefined())
@@ -279,8 +287,8 @@ static FN(diff) {
     auto a = convert<cv::Mat>(info[0]);
     auto b = convert<cv::Mat>(info[1]);
     auto norm = optionalArgument(info[2], false);
-    if (a.cols != b.cols || a.rows != b.rows)
-      throw JS::Error(env, "Frame size mismatch for image diff");
+    if (a.cols != b.cols || a.rows != b.rows || a.type() != b.type())
+      throw JS::Error(env, "Frame size or type mismatch for image diff");
     // Ensure a and b are grayscale
     a = mono(a);
     b = mono(b);
@@ -295,7 +303,9 @@ static FN(diff) {
     channels[0] = a;            // R = pa
     cv::min(a, b, channels[1]); // G = min(pa, pb)
     channels[2] = b;            // B = pb
-    channels[3] = cv::Mat(a.size(), CV_8UC1, cv::Scalar(255)); // A = 255
+    channels[3] =
+        cv::Mat(a.size(), CV_MAKETYPE(a.type(), 1),
+                cv::Scalar(cv::rangeOf(a.depth()).max)); // A = max opacity
     cv::Mat out;
     cv::merge(channels, 4, out);
     return convert(env, out);

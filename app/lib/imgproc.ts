@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 import { Frame, Stream } from "core/Aravis";
-import { cvtColor, Mat } from "core/Vision";
+import { convertType, cvtColor, Mat } from "core/Vision";
 import { createMat } from "./mat";
 import abortable from "./abortable.next";
 
@@ -22,12 +22,12 @@ export function stack(stream: Stream<Frame>, count: number) {
       n += 1;
       const { raw, raw_format } = frame;
       frame.release();
-      console.log({ raw, raw_format });
+      const fp = convertType(raw, "32F"); // auto scale to [0, 1]
       if (out === null) {
         out = createMat(Float32Array, raw.shape, raw.channels);
         fmt = raw_format;
       }
-      for (let i = 0; i < raw.length; i++) out[i] += raw[i] as number;
+      for (let i = 0; i < raw.length; i++) out[i] += fp[i] as number;
       await new Promise((r) => setTimeout(r, 1));
     }
     if (out === null) throw new Error("No frames received");
@@ -36,7 +36,7 @@ export function stack(stream: Stream<Frame>, count: number) {
   });
 }
 
-export function makeBGR(mat: Mat, format: Frame["raw_format"]) {
+export function makeBGR<T extends Mat>(mat: T, format: Frame["raw_format"]) {
   switch (format) {
     case "BayerBG8":
     case "BayerBG16":
@@ -65,6 +65,6 @@ export function makeBGR(mat: Mat, format: Frame["raw_format"]) {
   }
 }
 
-export function makeBGRA(mat: Mat, format: Frame["raw_format"]) {
+export function makeBGRA<T extends Mat>(mat: T, format: Frame["raw_format"]) {
   return cvtColor(makeBGR(mat, format), "BGR2BGRA");
 }
