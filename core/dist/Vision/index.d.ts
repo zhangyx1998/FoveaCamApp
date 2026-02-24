@@ -61,80 +61,87 @@ declare module "core/Vision" {
 
   export function load(path: string): Promise<Mat<Uint8Array>>;
   export function loadSync(path: string): Mat<Uint8Array>;
-  export function save<T extends TypedArray>(
-    mat: Mat<T>,
-    path: string,
-  ): Promise<boolean>;
-  export function saveSync<T extends TypedArray>(
-    mat: Mat<T>,
-    path: string,
-  ): boolean;
+  export function save<T extends Mat>(mat: T, path: string): Promise<boolean>;
+  export function saveSync<T extends Mat>(mat: T, path: string): boolean;
 
-  export function convertType<T extends TypedArray>(
+  /**
+   * When alpha and beta are not provided, the function automatically derives
+   * them to scale the input values to the full range of the target type.
+   * For example, when converting from 16-bit unsigned to 8-bit unsigned,
+   * alpha would be set to 255/65535 and beta would be set to 0.
+   * Specially, for floating-point target types, value range follows the
+   * convention of [0.0, 1.0].
+   */
+  export function convertType(
     mat: Mat,
     type: "8U",
+    alpha?: number,
+    beta?: number,
   ): Mat<Uint8Array>;
-
-  export function convertType<T extends TypedArray>(
+  export function convertType(
     mat: Mat,
     type: "16U",
+    alpha?: number,
+    beta?: number,
   ): Mat<Uint16Array>;
-
-  export function convertType<T extends TypedArray>(
+  export function convertType(
     mat: Mat,
     type: "16S",
+    alpha?: number,
+    beta?: number,
   ): Mat<Int16Array>;
-
-  export function convertType<T extends TypedArray>(
+  export function convertType(
     mat: Mat,
     type: "32S",
+    alpha?: number,
+    beta?: number,
   ): Mat<Int32Array>;
-
-  export function convertType<T extends TypedArray>(
+  export function convertType(
     mat: Mat,
     type: "16F",
+    alpha?: number,
+    beta?: number,
   ): Mat<Float32Array>;
-
-  export function convertType<T extends TypedArray>(
+  export function convertType(
     mat: Mat,
     type: "32F",
+    alpha?: number,
+    beta?: number,
   ): Mat<Float32Array>;
-
-  export function convertType<T extends TypedArray>(
+  export function convertType(
     mat: Mat,
     type: "64F",
+    alpha?: number,
+    beta?: number,
   ): Mat<Float64Array>;
 
-  export function cvtColor<T extends TypedArray>(
-    mat: Mat<T>,
-    code: CvtColorCode,
-  ): Mat<T>;
+  export function cvtColor<T extends Mat>(mat: T, code: CvtColorCode): T;
 
-  export function slice<T extends TypedArray>(mat: Mat<T>, rect: Rect): Mat<T>;
+  export function slice<T extends Mat>(mat: T, rect: Rect): T;
 
-  export function resize<T extends TypedArray>(
-    mat: Mat<T>,
+  export function resize<T extends Mat>(
+    mat: T,
     size?: Partial<Size> | null,
     fx?: number | null,
     fy?: number | null,
     mode?: InterpolationFlag, // default: "LINEAR"
-  ): Awaitable<Mat<T>>;
+  ): Awaitable<T>;
 
   export function heatmap(
     mat: Mat,
     norm?: boolean, // default: false
   ): Mat<Uint8Array>; // RGBA8
 
-  export function gaussian<T extends TypedArray>(
-    mat: Mat<T>,
+  export function gaussian<T extends Mat>(
+    mat: T,
     ksize: Size | number,
     sigmaX?: number, // default: 2
     sigmaY?: number, // default: sigmaX
-  ): Mat<T>;
+  ): T;
 
-  export function diff<T extends TypedArray>(
-    a: Mat<T>,
-    b: Mat<T>,
+  export function diff<T extends Mat>(
+    a: T,
+    b: T,
     norm?: boolean, // default: false
   ): Mat<Uint8Array>;
 
@@ -205,28 +212,28 @@ declare module "core/Vision" {
    * @param flags Interpolation method (default: LINEAR)
    * @returns Transformed image with same size as source. Uses BORDER_TRANSPARENT mode.
    */
-  export function wrapPerspective<T extends TypedArray>(
-    src: Mat<T>,
+  export function wrapPerspective<T extends Mat>(
+    src: T,
     homography: Mat<Float64Array>,
     flags?: InterpolationFlag, // default: "LINEAR"
-  ): Mat<T>;
+  ): T;
 
-  export function disparity<T extends TypedArray>(
-    left: Mat<T>,
-    right: Mat<T>,
+  export function disparity<T extends Mat>(
+    left: T,
+    right: T,
     numDisparities?: number, // default: 0
     blockSize?: number, // default: 21
   ): Mat<TypedArray>;
 
-  export function reprojectImageTo3D<T extends TypedArray>(
-    disparity: Mat<T>,
+  export function reprojectImageTo3D<T extends Mat>(
+    disparity: T,
     Q: Mat<Float64Array>,
     handleMissingValues?: boolean, // default: false
     ddepth?: number, // default: -1 (same as disparity)
-  ): Mat<T>;
+  ): T;
 
-  export function depthFromProjection<T extends TypedArray>(
-    depth: Mat<T>,
+  export function depthFromProjection<T extends Mat>(
+    depth: T,
     near?: number, // default: -Infinity
     far?: number, // default: Infinity
   ): Mat<Uint16Array>;
