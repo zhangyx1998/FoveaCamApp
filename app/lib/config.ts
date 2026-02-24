@@ -6,15 +6,17 @@
 import Store from "./store.js";
 
 export interface AppConfig {
-    divergence_kp: number;
-    divergence_template_match_scale: number;
-    // TeleCanvas Server URL
-    tele_canvas_url: string;
-    // Camera Layout Configurations
-    baseline_distance_mm: number;
-    cal_marker_size_mm: number;
+  divergence_kp: number;
+  divergence_template_match_scale: number;
+  // TeleCanvas Server URL
+  tele_canvas_url: string;
+  // Camera Layout Configurations
+  baseline_distance_mm: number;
+  cal_marker_size_mm: number;
+  // Capture Configurations
+  cap_stack: number;
 }
 
 export function useAppConfig() {
-    return Store.open<AppConfig>("config");
+  return Store.open<AppConfig>("config");
 }

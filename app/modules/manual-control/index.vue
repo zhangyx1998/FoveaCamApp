@@ -15,9 +15,9 @@ import FrameCursor from "@src/components/FrameCursor.vue";
 import abortable from "@lib/abortable";
 import { Latest } from "@lib/util/iter";
 import FrameView from "@src/components/FrameView.vue";
-import { VEC, RECT } from "@lib/util/geometry";
+import { RECT } from "@lib/util/geometry";
 import { useAppConfig } from "@lib/config";
-import { clamp, radians } from "@lib/util";
+import { radians } from "@lib/util";
 import Capture from "@src/capture";
 import {
   diff,
@@ -29,15 +29,13 @@ import {
   slice,
   wrapPerspective,
   convertType,
-  cvtColor,
 } from "core/Vision";
 import ConfigEntry from "@src/components/ConfigEntry.vue";
 import RemoteCanvasTeleport from "@src/components/RemoteCanvasTeleport.vue";
 import RangeSlider from "@src/inputs/range-slider.vue";
 import { createQMatrix, deriveFoveaIntrinsics } from "@lib/stereo";
 import { matToArray } from "@lib/mat";
-import { makeBGR, makeBGRA, stack } from "@lib/imgproc";
-import { max } from "@lib/util/math";
+import { makeBGRA, stack } from "@lib/imgproc";
 
 const view = ref<"sliced" | "diff" | "depth">("sliced");
 const remote_content = ref<string>("NONE");
@@ -68,6 +66,11 @@ const target = computed(() =>
 const zoom = computed<number>({
   get: () => Math.max(1.0, triple.config.zoom_factor ?? 9.0),
   set: (v) => (triple.config.zoom_factor = v),
+});
+
+const cap_stack = computed<number>({
+  get: () => Math.max(1, Math.round(app_config.cap_stack ?? 30)),
+  set: (v) => (app_config.cap_stack = Math.round(v)),
 });
 
 const verge = ref(0.0);
@@ -240,7 +243,7 @@ const capture = new Capture("manual-control");
 
 type Stack = Awaited<ReturnType<typeof stack>>;
 function normalizeFovea({ image, format }: Stack, H: Mat<Float64Array>) {
-  const bgra = makeBGRA(convertType(image, "8U"), format);
+  const bgra = makeBGRA(convertType(image, "16U"), format);
   return wrapPerspective(bgra, H);
 }
 
@@ -261,24 +264,9 @@ capture.provide(async (provide) => {
     R: V2A.R(V.R),
   };
   const [l_stack, r_stack] = await Promise.all([
-    stack(L.stream, 64),
-    // .then(({ image, format }) => {
-    //   const bgra = makeBGRA(convertType(image, "8U"), format);
-    //   const H = A2H.L(A.L);
-    //   return wrapPerspective(bgra, H);
-    // }),
-    stack(R.stream, 64),
-    // .then(({ image, format }) => {
-    //   const bgra = makeBGRA(convertType(image, "8U"), format);
-    //   const H = A2H.R(A.R);
-    //   return wrapPerspective(bgra, H);
-    // }),
+    stack(L.stream, cap_stack.value),
+    stack(R.stream, cap_stack.value),
   ]);
-  const k = 255.0 / max([max(l_stack.image), max(r_stack.image)]);
-  for (let i = 0; i < l_stack.image.length; i++)
-    l_stack.image[i] = Math.round(l_stack.image[i] * k);
-  for (let i = 0; i < r_stack.image.length; i++)
-    r_stack.image[i] = Math.round(r_stack.image[i] * k);
   const l = normalizeFovea(l_stack, A2H.L(A.L));
   const r = normalizeFovea(r_stack, A2H.R(A.R));
   const intrinsics = fovea_intrinsics.value;
@@ -420,6 +408,17 @@ capture.provide(async (provide) => {
           </template>
           <template v-else> ∞ </template>
         </span>
+      </RangeSlider>
+      <RangeSlider
+        v-model="cap_stack"
+        :min="1"
+        :max="200"
+        :neutral="1"
+        :step="10"
+        style="width: 40ch"
+      >
+        <span>Capture Stack</span>
+        <span>{{ cap_stack }}</span>
       </RangeSlider>
       <ConfigEntry>
         <label>

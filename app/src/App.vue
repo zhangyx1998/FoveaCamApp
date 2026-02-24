@@ -22,7 +22,7 @@ import Playground from "../modules/playground/index.vue";
 import SingleCapture from "../modules/single-capture/index.vue";
 import Loading from "./components/Loading.vue";
 import ErrorBoundary from "./components/ErrorBoundary.vue";
-import Overlay from "./components/Overlay.vue";
+import Overlay, { overlay } from "./components/Overlay.vue";
 import RemoteCanvas from "./components/RemoteCanvas.vue";
 import { FontAwesomeIcon as Icon } from "@fortawesome/vue-fontawesome";
 import {
@@ -55,6 +55,15 @@ function backToHome() {
   currentModule.value = null;
   currentModuleName.value = null;
 }
+
+window.addEventListener("keydown", (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
+    e.preventDefault();
+    if (isCapAvailable.value && overlay.value === null) {
+      overlay.value = { overlay: CaptureOverlay };
+    }
+  }
+});
 </script>
 
 <template>

@@ -10,9 +10,10 @@ interface OverlayItem {
   overlay: Component;
 }
 export const overlay = shallowRef<OverlayItem | null>(null);
-export function dialog(item: OverlayItem) {
-  overlay.value = item;
-}
+
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && overlay.value !== null) overlay.value = null;
+});
 </script>
 
 <script setup lang="ts">

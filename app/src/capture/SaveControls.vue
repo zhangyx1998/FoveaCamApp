@@ -7,7 +7,7 @@ import {
   accessSync,
   constants as fs_flags,
 } from "node:fs";
-import { computed, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { FontAwesomeIcon as Icon } from "@fortawesome/vue-fontawesome";
 import { faSave, faTrash, faRefresh } from "@fortawesome/free-solid-svg-icons";
 import Capture from ".";
@@ -29,6 +29,9 @@ const emit = defineEmits<{
   save: [path: string, img_format: string];
   exit: [];
 }>();
+const sequence_element = ref<HTMLInputElement | null>(null);
+watch(sequence_element, (el) => el?.focus());
+
 const sequence_override = ref<string | null>(null);
 const sequence = computed({
   get() {
@@ -80,7 +83,11 @@ function save() {
 <template>
   <div class="save-controls">
     Save As
-    <div class="path-select" :class="{ invalid: !(path_valid && seq_valid) }">
+    <div
+      class="path-select"
+      :class="{ invalid: !(path_valid && seq_valid) }"
+      @keydown.enter="save"
+    >
       <div
         class="directory"
         :class="{ invalid: !path_valid }"
@@ -100,6 +107,7 @@ function save() {
         <input
           type="text"
           v-model="sequence"
+          ref="sequence_element"
           :disabled="save_state"
           :style="{
             width: sequence.length + 'ch',
@@ -127,7 +135,7 @@ function save() {
     >
       <Icon :icon="faSave" /> <span>Save</span>
     </button>
-    <button @click="emit('exit')" class="action red" :disabled="!save_state">
+    <button @click="emit('exit')" class="action red" :disabled="save_state">
       <Icon :icon="faTrash" /> <span>Discard</span>
     </button>
   </div>
@@ -188,8 +196,8 @@ function save() {
       color: #ff0;
       opacity: 1;
     }
-    &:not(.invalid):not(:focus):not(:hover) {
-      opacity: 0.5;
+    &:not(.invalid):not(:focus):not(:focus-within):not(:hover) {
+      opacity: 0.8;
     }
   }
   & > * > * {
