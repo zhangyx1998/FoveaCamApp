@@ -196,7 +196,7 @@ window.addEventListener("keydown", (e) => {
   display: flex;
   flex-direction: row;
   align-items: center;
-  overflow-y: scroll;
+  overflow: hidden;
   width: 100%;
   height: 100%;
   font-family:
