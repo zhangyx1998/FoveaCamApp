@@ -19,6 +19,7 @@
 #include <pointer.h>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 #include "Vision.h"
 #include "napi-helper.h"
@@ -109,10 +110,9 @@ CVT(cv::Rect_, double, 4, x, y, width, height)
     MATCH_MAT_TYPE_CASE(CV_32F, float32_t, RET, SIZE, AB, OFFSET);             \
     MATCH_MAT_TYPE_CASE(CV_64F, float64_t, RET, SIZE, AB, OFFSET);             \
   default:                                                                     \
-    JS_THROW(TypeError,                                                        \
-             "Unsupported Mat type " + std::to_string(MAT.type()) +            \
-                 " (converting to TypedArray)",                                \
-             env.Undefined());                                                 \
+    throw JS::TypeError(env, "Unsupported Mat type " +                         \
+                                 std::to_string(MAT.type()) +                  \
+                                 " (converting to TypedArray)");               \
   }
 
 template <> cv::MatSize convert(const Napi::Value &value) {
@@ -127,6 +127,66 @@ Napi::Value convert(Napi::Env env, const cv::MatSize &size) noexcept {
     shape[i] = size[i];
   return convert(env, shape);
 }
+
+typedef struct MatDescriptor {
+  const Napi::TypedArray &arr;
+  inline Napi::Env env() const { return arr.Env(); }
+  int depth() const {
+    const auto type = arr.TypedArrayType();
+    switch (type) {
+    case napi_uint8_array:
+      return CV_8U;
+    case napi_int8_array:
+      return CV_8S;
+    case napi_uint16_array:
+      return CV_16U;
+    case napi_int16_array:
+      return CV_16S;
+    case napi_int32_array:
+      return CV_32S;
+    case napi_float32_array:
+      return CV_32F;
+    case napi_float64_array:
+      return CV_64F;
+    default:
+      throw JS::TypeError(env(), "Unsupported TypedArray type " +
+                                     std::to_string(type));
+    }
+  }
+  std::vector<int32_t> shape() const {
+    if (!arr.Has("shape") or !arr.Get("shape").IsArray())
+      throw JS::TypeError(arr.Env(), "Mat.shape must be an array of integers");
+    return convert<std::vector<int>>(arr.Get("shape"));
+  }
+  int channels() const {
+    if (!arr.Has("channels"))
+      throw JS::TypeError(arr.Env(), "Mat.channels must be defined");
+    const auto channels = convert<int>(arr.Get("channels"));
+    if (channels <= 0)
+      throw JS::TypeError(arr.Env(), "Mat.channels must be a positive integer");
+    if (channels > CV_CN_MAX)
+      throw JS::TypeError(arr.Env(), "Number of channels " +
+                                         std::to_string(channels) +
+                                         " exceeds OpenCV maximum of " +
+                                         std::to_string(CV_CN_MAX));
+    return channels;
+  }
+  int type() const { return CV_MAKETYPE(depth(), channels()); }
+  uchar *const data() const {
+    return static_cast<uchar *>(arr.ArrayBuffer().Data()) + arr.ByteOffset();
+  }
+  inline void sizeCheck(size_t expected) const {
+    if (arr.ByteLength() != expected)
+      throw JS::TypeError(env(), "TypedArray byte length " +
+                                     std::to_string(arr.ByteLength()) +
+                                     " does not match expected size " +
+                                     std::to_string(expected));
+  }
+  inline void sizeCheck(const cv::Mat &mat) const {
+    sizeCheck(mat.size().area() * mat.elemSize());
+  }
+  MatDescriptor(const Napi::TypedArray &arr) : arr(arr) {}
+} MatDescriptor;
 
 template <>
 Napi::Value convert(Napi::Env env, const Napi::Value &container,
@@ -184,7 +244,10 @@ Napi::Value convert(Napi::Env env, const Napi::Value &container,
                  env.Null());
       }
       Napi::Object ret;
-      MATCH_MAT_TYPE(m, ret, size, array_buffer, byte_offset);
+      try {
+        MATCH_MAT_TYPE(m, ret, size, array_buffer, byte_offset);
+      }
+      JS_EXCEPT(env.Undefined())
       ret.As<Napi::Object>().Set("shape", convert(env, m.size));
       ret.As<Napi::Object>().Set("channels", convert(env, m.channels()));
       return ret;
@@ -193,120 +256,60 @@ Napi::Value convert(Napi::Env env, const Napi::Value &container,
   return convert(env, m);
 }
 
-// Attach the reference to Mat's allocator user data
-// OpenCV will manage the UMatData through the custom allocator
-// Create custom allocator that holds the Napi::Reference
-static struct TypedArrayMatAllocator : cv::MatAllocator {
-  using Value = const Napi::TypedArray;
-  using Ref = ThreadSafeReference<Value>;
-  cv::UMatData *allocate(int dims, const int *sizes, int type, void *data,
-                         size_t *step, cv::AccessFlag flags,
-                         cv::UMatUsageFlags usageFlags) const override {
-    return cv::Mat::getStdAllocator()->allocate(dims, sizes, type, data, step,
-                                                flags, usageFlags);
-  }
-  bool allocate(cv::UMatData *u, cv::AccessFlag accessFlags,
-                cv::UMatUsageFlags usageFlags) const override {
-    return cv::Mat::getStdAllocator()->allocate(u, accessFlags, usageFlags);
-  }
-  void deallocate(cv::UMatData *u) const override {
-    if (u && u->userdata) {
-      auto ref = static_cast<Ref *>(u->userdata);
-      delete ref; // Release the reference, allowing GC
-      VERBOSE("[cv::Mat] Released Napi::Reference to TypedArray");
-      u->userdata = nullptr;
-    }
-    cv::Mat::getStdAllocator()->deallocate(u);
-  }
-  static Ref *ref(Value &value) { return new Ref(value); }
-} typed_array_mat_allocator;
-
 template <> cv::Mat convert(const Napi::Value &value) {
   const auto env = value.Env();
   if (!value.IsTypedArray())
     throw JS::TypeError(env, "Argument must be a TypedArray");
   const auto &typed_array = value.As<Napi::TypedArray>();
-  if (!typed_array.Has("shape"))
-    throw JS::TypeError(env, "Mat object must have 'shape' property");
-  if (!typed_array.Get("shape").IsArray())
-    throw JS::TypeError(env, "Mat.shape must be an array");
-  const auto shape = convert<std::vector<int>>(typed_array.Get("shape"));
-  if (!typed_array.Has("channels"))
-    throw JS::TypeError(env, "Mat object must have 'channels' property");
-  const auto channels = convert<int>(typed_array.Get("channels"));
-  if (channels <= 0)
-    throw JS::TypeError(env, "Mat.channels must be a positive integer");
-  if (channels > CV_CN_MAX)
-    throw JS::TypeError(env, "Number of channels " + std::to_string(channels) +
-                                 " exceeds OpenCV maximum of " +
-                                 std::to_string(CV_CN_MAX));
-
-  int cv_type;
-  switch (typed_array.TypedArrayType()) {
-  case napi_uint8_array:
-    cv_type = CV_8UC(channels);
-    break;
-  case napi_int8_array:
-    cv_type = CV_8SC(channels);
-    break;
-  case napi_uint16_array:
-    cv_type = CV_16UC(channels);
-    break;
-  case napi_int16_array:
-    cv_type = CV_16SC(channels);
-    break;
-  case napi_int32_array:
-    cv_type = CV_32SC(channels);
-    break;
-  case napi_float32_array:
-    cv_type = CV_32FC(channels);
-    break;
-  case napi_float64_array:
-    cv_type = CV_64FC(channels);
-    break;
-  default:
-    throw JS::TypeError(env, "Unsupported TypedArray type for Mat");
-  }
-  // Get pointer to the TypedArray's data
-  size_t offset = typed_array.ByteOffset();
-  void *data =
-      static_cast<uint8_t *>(typed_array.ArrayBuffer().Data()) + offset;
-  // Create Mat wrapping external buffer (no copy)
-#if defined(FEAT_MAT_REUSE_TYPED_ARRAY_DATA)
-  auto mat = cv::Mat(shape, cv_type, data);
-#else
-  auto mat = cv::Mat(shape, cv_type);
-#endif
-  const auto byteLength = typed_array.ByteLength();
+  const MatDescriptor desc(typed_array);
+  auto mat = cv::Mat(desc.shape(), desc.type());
   const auto expectedSize = mat.size().area() * mat.elemSize();
-  if (byteLength != expectedSize)
-    throw JS::TypeError(env, "TypedArray size " + std::to_string(byteLength) +
-                                 " does not match expected Mat size " +
-                                 std::to_string(expectedSize));
-#if defined(FEAT_MAT_REUSE_TYPED_ARRAY_DATA)
-  // Set the custom allocator BEFORE allocating UMatData
-  mat.allocator = &typed_array_mat_allocator;
-  // Manually allocate UMatData if it doesn't exist (external data wrapping
-  // doesn't auto-create it)
-  if (!mat.u) {
-    mat.u =
-        mat.allocator->allocate(mat.dims, mat.size.p, mat.type(), mat.data,
-                                mat.step.p, cv::ACCESS_RW, cv::USAGE_DEFAULT);
-    if (mat.u)
-      mat.u->refcount = 1; // Initialize refcount
-    else
-      throw JS::Error(env,
-                      "Failed to allocate UMatData for TypedArray-backed Mat");
-  }
-  mat.u->userdata = TypedArrayMatAllocator::ref(typed_array);
-#else
-  // Copy data from TypedArray
-  std::memcpy(mat.data, data, expectedSize);
-#endif
+  desc.sizeCheck(mat);
+  std::memcpy(mat.data, desc.data(), expectedSize);
   return mat;
 }
 
 CONVERT_ARRAY_OF(cv::Mat);
+
+template <>
+Napi::Value convert(Napi::Env env, const cv::MatView &view) noexcept {
+  try {
+    if (!view.ref.IsEmpty())
+      return view.ref.Value();
+    else
+      return convert(env, static_cast<const cv::Mat &>(view));
+  }
+  JS_EXCEPT(env.Null())
+}
+
+template <>
+Napi::Value convert(Napi::Env env, const Napi::Value &container,
+                    const cv::MatView &view) noexcept {
+  if (isBufferLike(container))
+    return convert(env, container, static_cast<const cv::Mat &>(view));
+  return convert(env, view);
+}
+
+template <> cv::MatView convert(const Napi::Value &value) {
+  const auto env = value.Env();
+  if (!value.IsTypedArray())
+    throw JS::TypeError(env, "Argument must be a TypedArray");
+  const auto &typed_array = value.As<Napi::TypedArray>();
+  const MatDescriptor desc(typed_array);
+  cv::MatView view(value, desc.shape(), desc.type(), desc.data());
+  desc.sizeCheck(view);
+  return view;
+}
+
+cv::MatView cv::MatView::like(const Napi::Env &env, const cv::Mat &mat) {
+  const auto size = mat.size().area() * mat.elemSize();
+  auto array_buffer = Napi::ArrayBuffer::New(env, size);
+  Napi::Object ret;
+  MATCH_MAT_TYPE(mat, ret, size, array_buffer, 0);
+  ret.Set("shape", convert(env, mat.size));
+  ret.Set("channels", convert(env, mat.channels()));
+  return MatView(ret, cv::Mat(mat.size(), mat.type(), array_buffer.Data()));
+}
 
 template <> CameraCalibration convert(const Napi::Value &value) {
   if (!value.IsObject())
