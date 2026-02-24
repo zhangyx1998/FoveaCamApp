@@ -9,6 +9,11 @@ import {
   watch,
 } from "vue";
 const props = defineProps({
+  modelValue: {
+    type: Number,
+    default: null,
+  },
+  // Initial division ratio (0.0 - 1.0) if modelValue is not provided
   division: {
     type: Number,
     default: 0.5,
@@ -22,7 +27,23 @@ const props = defineProps({
     optional: true,
   },
 });
-const division = ref<number>(props.division);
+const emit = defineEmits(["update:modelValue"]);
+const local_value = ref<number>(props.modelValue ?? props.division);
+const division = computed({
+  get() {
+    return local_value.value;
+  },
+  set(val: number) {
+    local_value.value = val;
+    emit("update:modelValue", val);
+  },
+});
+watch(
+  () => props.modelValue,
+  (val) => {
+    if (val !== null) local_value.value = val;
+  },
+);
 watch(division, (val) => {
   if (val < 0.0) division.value = 0.0;
   if (val > 1.0) division.value = 1.0;

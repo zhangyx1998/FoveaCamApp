@@ -71,7 +71,11 @@ const image_entries = computed(() => {
       :data_ready="data_ready"
       :save_state="save_state !== null"
     />
-    <HorizontalDivision class="content" v-if="save_state === null">
+    <HorizontalDivision
+      :division="0.2"
+      class="content"
+      v-if="save_state === null"
+    >
       <template #left>
         <div class="meta-container">
           <PreviewMeta
