@@ -145,7 +145,7 @@ export function relativeToAbsolute(
 
 export function transformPoints(
   pts: Point2d[],
-  rotation: Partial<Point2d> | null | undefined, // radians
+  rotation: Partial<Point2d> | Empty, // radians
   distance: number = Infinity, // relative to pts units
 ) {
   if (!rotation) return pts;

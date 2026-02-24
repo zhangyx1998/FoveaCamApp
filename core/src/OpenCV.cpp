@@ -401,6 +401,30 @@ template <> CvtColorCode convert(const std::string &value) {
   CASE_STRING_TO_ENUM(value, GRAY2RGBA);
   CASE_STRING_TO_ENUM(value, BGRA2GRAY);
   CASE_STRING_TO_ENUM(value, RGBA2GRAY);
+  CASE_STRING_TO_ENUM(value, BayerBG2BGR);
+  CASE_STRING_TO_ENUM(value, BayerGB2BGR);
+  CASE_STRING_TO_ENUM(value, BayerRG2BGR);
+  CASE_STRING_TO_ENUM(value, BayerGR2BGR);
+  CASE_STRING_TO_ENUM(value, BayerRGGB2BGR);
+  CASE_STRING_TO_ENUM(value, BayerGRBG2BGR);
+  CASE_STRING_TO_ENUM(value, BayerBGGR2BGR);
+  CASE_STRING_TO_ENUM(value, BayerGBRG2BGR);
+  CASE_STRING_TO_ENUM(value, BayerRGGB2RGB);
+  CASE_STRING_TO_ENUM(value, BayerGRBG2RGB);
+  CASE_STRING_TO_ENUM(value, BayerBGGR2RGB);
+  CASE_STRING_TO_ENUM(value, BayerGBRG2RGB);
+  CASE_STRING_TO_ENUM(value, BayerBG2RGB);
+  CASE_STRING_TO_ENUM(value, BayerGB2RGB);
+  CASE_STRING_TO_ENUM(value, BayerRG2RGB);
+  CASE_STRING_TO_ENUM(value, BayerGR2RGB);
+  CASE_STRING_TO_ENUM(value, BayerBG2GRAY);
+  CASE_STRING_TO_ENUM(value, BayerGB2GRAY);
+  CASE_STRING_TO_ENUM(value, BayerRG2GRAY);
+  CASE_STRING_TO_ENUM(value, BayerGR2GRAY);
+  CASE_STRING_TO_ENUM(value, BayerRGGB2GRAY);
+  CASE_STRING_TO_ENUM(value, BayerGRBG2GRAY);
+  CASE_STRING_TO_ENUM(value, BayerBGGR2GRAY);
+  CASE_STRING_TO_ENUM(value, BayerGBRG2GRAY);
   throw std::range_error("Unsupported CvtColorCode enum string: " + value);
 }
 

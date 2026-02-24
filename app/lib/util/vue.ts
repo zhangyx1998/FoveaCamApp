@@ -4,13 +4,8 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 
-export type Sequence<T = any> = Iterable<T> & {
-    length: number;
-    [index: number]: T;
-};
+import { PropType } from "vue";
 
-export type Awaitable<T> = T | Promise<T>;
-
-export type Mutable<T> = { -readonly [P in keyof T]: T[P] };
-
-export type BufferLike = Buffer | ArrayBuffer | ArrayBufferView;
+export function NoCheck<T>() {
+  return null as unknown as PropType<T>;
+}

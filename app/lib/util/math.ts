@@ -4,7 +4,6 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 
-import { Sequence } from "@lib/types";
 
 interface Vector extends Sequence<number> {
   reduce<U>(

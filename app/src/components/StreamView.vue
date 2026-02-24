@@ -1,15 +1,16 @@
 <script setup lang="ts">
 import { Log } from "core";
-import { Awaitable } from "core/types";
 import { type Camera, Frame } from "core/Aravis";
 import type { Mat } from "core/Vision";
-import type { Size, Point, Rect } from "core/Geometry";
+import type { Size, Point } from "core/Geometry";
 import { computed, markRaw, onUnmounted, ref, watch } from "vue";
 
 import { FreqMeter, PerfTimer } from "@lib/util/perf";
 import abortable from "@lib/abortable";
-import FrameView from "./FrameView.vue";
+import FrameView, { TransformFunction } from "./FrameView.vue";
 import { getCameraInfo } from "@lib/camera";
+import { Delegation } from "@src/capture";
+import { NoCheck } from "@lib/util/vue";
 
 type Stream = Iterable<Frame | Mat<Uint8Array> | null>;
 
@@ -46,9 +47,7 @@ const props = defineProps({
     default: undefined,
   },
   transform: {
-    type: Function as any as () =>
-      | ((mat: Mat<Uint8Array>) => Mat<Uint8Array>)
-      | undefined,
+    type: NoCheck<TransformFunction | undefined>(),
     required: false,
     default: undefined,
   },
@@ -73,13 +72,14 @@ const props = defineProps({
     default: null,
   },
   capture: {
-    type: String,
+    // Delegation is a function, not an object; Vue runtime type check needs Function
+    type: NoCheck<Delegation | string | null>(),
     required: false,
     default: null,
   },
 });
 
-const mat = ref<Mat<Uint8Array> | null>(null);
+const mat = ref<Mat | null>(null);
 const fps = new FreqMeter();
 const perf = new PerfTimer();
 

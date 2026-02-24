@@ -41,12 +41,10 @@ import {
   faBookOpen,
   faCircleHalfStroke,
 } from "@fortawesome/free-solid-svg-icons";
-import Capture from "./capture";
-import CaptureOverlay from "./capture/Overlay.vue";
+import { current_capture } from "./capture";
+import CaptureOverlay from "./capture/index.vue";
 
-const isCapAvailable = computed(
-  () => Capture.imageProviders.size > 0 || Capture.metaProviders.size > 0,
-);
+const isCapAvailable = computed(() => current_capture.value !== null);
 
 function launch(module: any, name: string) {
   currentModule.value = module;

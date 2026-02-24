@@ -1,24 +1,43 @@
 {
-    "compilerOptions": {
-        "baseUrl": ".",
-        "paths": {
-            "@lib/*": ["lib/*"],
-            "@src/*": ["src/*"],
-            "@modules/*": ["modules/*"],
-        },
-        "target": "ESNext",
-        "useDefineForClassFields": true,
-        "module": "ESNext",
-        "moduleResolution": "bundler",
-        "strict": true,
-        "jsx": "preserve",
-        "resolveJsonModule": true,
-        "isolatedModules": true,
-        "esModuleInterop": true,
-        "lib": ["ESNext", "DOM"],
-        "skipLibCheck": true,
-        "noEmit": true
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@lib/*": [
+        "lib/*"
+      ],
+      "@src/*": [
+        "src/*"
+      ],
+      "@modules/*": [
+        "modules/*"
+      ],
     },
-    "include": ["src", "lib", "modules", "scripts"],
-    "references": [{ "path": "./tsconfig.node.json" }]
+    "target": "ESNext",
+    "useDefineForClassFields": true,
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "jsx": "preserve",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "esModuleInterop": true,
+    "lib": [
+      "ESNext",
+      "DOM"
+    ],
+    "skipLibCheck": true,
+    "noEmit": true
+  },
+  "include": [
+    "src",
+    "lib",
+    "modules",
+    "scripts",
+    "*.d.ts"
+  ],
+  "references": [
+    {
+      "path": "./tsconfig.node.json"
+    }
+  ]
 }

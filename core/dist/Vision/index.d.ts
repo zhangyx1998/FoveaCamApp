@@ -44,7 +44,7 @@ declare module "core/Vision" {
     get focal(): Point2d;
     get center(): Point2d;
     get fov(): Point2d; // X and Y field of view in radians
-    apply(mat: Mat): Mat;
+    apply<T extends Mat>(mat: T): T;
     undistort(points: Point2d[]): Point2d[];
     distort(points: Point2d[]): Point2d[];
     angular(
@@ -59,9 +59,51 @@ declare module "core/Vision" {
 
   export type Pixel = Point2d & { value: number };
 
-  export function load(path: string): Mat<Uint8Array>;
+  export function load(path: string): Promise<Mat<Uint8Array>>;
+  export function loadSync(path: string): Mat<Uint8Array>;
+  export function save<T extends TypedArray>(
+    mat: Mat<T>,
+    path: string,
+  ): Promise<boolean>;
+  export function saveSync<T extends TypedArray>(
+    mat: Mat<T>,
+    path: string,
+  ): boolean;
 
-  export function save<T extends TypedArray>(mat: Mat<T>, path: string): void;
+  export function convertType<T extends TypedArray>(
+    mat: Mat,
+    type: "8U",
+  ): Mat<Uint8Array>;
+
+  export function convertType<T extends TypedArray>(
+    mat: Mat,
+    type: "16U",
+  ): Mat<Uint16Array>;
+
+  export function convertType<T extends TypedArray>(
+    mat: Mat,
+    type: "16S",
+  ): Mat<Int16Array>;
+
+  export function convertType<T extends TypedArray>(
+    mat: Mat,
+    type: "32S",
+  ): Mat<Int32Array>;
+
+  export function convertType<T extends TypedArray>(
+    mat: Mat,
+    type: "16F",
+  ): Mat<Float32Array>;
+
+  export function convertType<T extends TypedArray>(
+    mat: Mat,
+    type: "32F",
+  ): Mat<Float32Array>;
+
+  export function convertType<T extends TypedArray>(
+    mat: Mat,
+    type: "64F",
+  ): Mat<Float64Array>;
 
   export function cvtColor<T extends TypedArray>(
     mat: Mat<T>,
@@ -278,7 +320,31 @@ declare module "core/Vision" {
     | "GRAY2BGRA"
     | "GRAY2RGBA"
     | "BGRA2GRAY"
-    | "RGBA2GRAY";
+    | "RGBA2GRAY"
+    | "BayerBG2BGR"
+    | "BayerGB2BGR"
+    | "BayerRG2BGR"
+    | "BayerGR2BGR"
+    | "BayerRGGB2BGR"
+    | "BayerGRBG2BGR"
+    | "BayerBGGR2BGR"
+    | "BayerGBRG2BGR"
+    | "BayerRGGB2RGB"
+    | "BayerGRBG2RGB"
+    | "BayerBGGR2RGB"
+    | "BayerGBRG2RGB"
+    | "BayerBG2RGB"
+    | "BayerGB2RGB"
+    | "BayerRG2RGB"
+    | "BayerGR2RGB"
+    | "BayerBG2GRAY"
+    | "BayerGB2GRAY"
+    | "BayerRG2GRAY"
+    | "BayerGR2GRAY"
+    | "BayerRGGB2GRAY"
+    | "BayerGRBG2GRAY"
+    | "BayerBGGR2GRAY"
+    | "BayerGBRG2GRAY";
 
   type SolvePnPMethod =
     | "ITERATIVE"

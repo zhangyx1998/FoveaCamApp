@@ -32,7 +32,6 @@ typedef struct CameraCalibration : public Shared<CameraCalibration> {
   std::vector<cv::Mat> rvecs, tvecs;
 } CameraCalibration;
 
-
 typedef enum CvtColorCode {
   BGR2BGRA = cv::COLOR_BGR2BGRA,
   RGB2RGBA = cv::COLOR_RGB2RGBA,
@@ -60,4 +59,34 @@ typedef enum CvtColorCode {
   GRAY2RGBA = cv::COLOR_GRAY2RGBA,
   BGRA2GRAY = cv::COLOR_BGRA2GRAY,
   RGBA2GRAY = cv::COLOR_RGBA2GRAY,
+
+  BayerBG2BGR = cv::COLOR_BayerBG2BGR,
+  BayerGB2BGR = cv::COLOR_BayerGB2BGR,
+  BayerRG2BGR = cv::COLOR_BayerRG2BGR,
+  BayerGR2BGR = cv::COLOR_BayerGR2BGR,
+
+  BayerRGGB2BGR = cv::COLOR_BayerRGGB2BGR,
+  BayerGRBG2BGR = cv::COLOR_BayerGRBG2BGR,
+  BayerBGGR2BGR = cv::COLOR_BayerBGGR2BGR,
+  BayerGBRG2BGR = cv::COLOR_BayerGBRG2BGR,
+
+  BayerRGGB2RGB = cv::COLOR_BayerRGGB2RGB,
+  BayerGRBG2RGB = cv::COLOR_BayerGRBG2RGB,
+  BayerBGGR2RGB = cv::COLOR_BayerBGGR2RGB,
+  BayerGBRG2RGB = cv::COLOR_BayerGBRG2RGB,
+
+  BayerBG2RGB = cv::COLOR_BayerBG2RGB,
+  BayerGB2RGB = cv::COLOR_BayerGB2RGB,
+  BayerRG2RGB = cv::COLOR_BayerRG2RGB,
+  BayerGR2RGB = cv::COLOR_BayerGR2RGB,
+
+  BayerBG2GRAY = cv::COLOR_BayerBG2GRAY,
+  BayerGB2GRAY = cv::COLOR_BayerGB2GRAY,
+  BayerRG2GRAY = cv::COLOR_BayerRG2GRAY,
+  BayerGR2GRAY = cv::COLOR_BayerGR2GRAY,
+
+  BayerRGGB2GRAY = cv::COLOR_BayerRGGB2GRAY,
+  BayerGRBG2GRAY = cv::COLOR_BayerGRBG2GRAY,
+  BayerBGGR2GRAY = cv::COLOR_BayerBGGR2GRAY,
+  BayerGBRG2GRAY = cv::COLOR_BayerGBRG2GRAY,
 } CvtColorCode;

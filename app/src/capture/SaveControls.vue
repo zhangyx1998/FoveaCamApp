@@ -1,12 +1,26 @@
 <script setup lang="ts">
 import { resolve } from "node:path";
 import { homedir } from "node:os";
-import { ref } from "vue";
+import {
+  existsSync,
+  statSync,
+  accessSync,
+  constants as fs_flags,
+} from "node:fs";
+import { computed, ref } from "vue";
 import { FontAwesomeIcon as Icon } from "@fortawesome/vue-fontawesome";
-import { faSave, faTrash } from "@fortawesome/free-solid-svg-icons";
-import { faFile } from "@fortawesome/free-regular-svg-icons";
-defineProps({
-  disabled: {
+import { faSave, faTrash, faRefresh } from "@fortawesome/free-solid-svg-icons";
+import Capture from ".";
+const props = defineProps({
+  capture: {
+    type: Capture,
+    required: true,
+  },
+  data_ready: {
+    type: Boolean,
+    default: false,
+  },
+  save_state: {
     type: Boolean,
     default: false,
   },
@@ -15,39 +29,89 @@ const emit = defineEmits<{
   save: [path: string, img_format: string];
   exit: [];
 }>();
-function getDefaultPath() {
-  const timestamp =
-    new Date().toISOString().replace(/[:.]/g, "-").split("T")[0] +
-    "_" +
-    new Date().toTimeString().split(" ")[0].replace(/:/g, "-");
-  return resolve(homedir(), "Downloads", timestamp);
-}
+const sequence_override = ref<string | null>(null);
+const sequence = computed({
+  get() {
+    return sequence_override.value ?? props.capture.sequence;
+  },
+  set(val) {
+    sequence_override.value = val;
+  },
+});
 const img_format = ref("png");
-const save_path = ref(getDefaultPath());
-function selectPath() {}
+const default_path = resolve(homedir(), "Downloads", props.capture.directory);
+const save_path = ref(default_path);
+
+function validatePath(path: string) {
+  if (path.trim() === "") return false;
+  try {
+    if (!existsSync(path)) {
+      const parent = resolve(path, "..");
+      if (parent === path) return false;
+      return validatePath(parent);
+    }
+    const stats = statSync(path);
+    // Path must be a directory
+    if (!stats.isDirectory()) return false;
+    // Check for ownership and write permission
+    // throws if the path is not accessible or writable
+    accessSync(path, fs_flags.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const path_valid = computed(() => validatePath(save_path.value));
+
+const seq_valid = computed(() => {
+  const path = resolve(save_path.value, sequence.value);
+  return !existsSync(path);
+});
+
+function save() {
+  const path = save_path.value || default_path;
+  emit("save", resolve(path, sequence.value), img_format.value);
+  if (sequence.value === props.capture.sequence)
+    props.capture.incrementSequence();
+}
 </script>
 
 <template>
   <div class="save-controls">
-    Directory:
-    <div class="path-select">
-      <input
-        type="text"
-        v-model="save_path"
-        placeholder="Select save directory..."
-        readonly
-        class="path-input"
-        :disabled="disabled"
-      />
-      <button @click="selectPath" class="browse-btn" :disabled="disabled">
-        <Icon :icon="faFile" />
-      </button>
+    Save As
+    <div class="path-select" :class="{ invalid: !(path_valid && seq_valid) }">
+      <div
+        class="directory"
+        :class="{ invalid: !path_valid }"
+        :style="{
+          maxWidth: save_path.length + 'ch',
+        }"
+      >
+        <input
+          type="text"
+          v-model="save_path"
+          placeholder="Select save directory..."
+          :disabled="save_state"
+        />
+      </div>
+      <div style="padding: 0.5ch">/</div>
+      <div class="sequence" :class="{ invalid: !seq_valid }">
+        <input
+          type="text"
+          v-model="sequence"
+          :disabled="save_state"
+          :style="{
+            width: sequence.length + 'ch',
+          }"
+        />
+      </div>
     </div>
     <div class="divider"></div>
     <div class="format-select">
       <label>
         Image Format:
-        <select v-model="img_format" :disabled="disabled">
+        <select v-model="img_format" :disabled="!save_state">
           <option value="png">PNG</option>
           <option value="jpg">JPG</option>
           <option value="bmp">BMP</option>
@@ -57,13 +121,13 @@ function selectPath() {}
     </div>
     <div class="divider"></div>
     <button
-      @click="emit('save', save_path, img_format)"
+      @click="save"
       class="action green"
-      :disabled="disabled"
+      :disabled="!data_ready || !path_valid || !seq_valid || save_state"
     >
       <Icon :icon="faSave" /> <span>Save</span>
     </button>
-    <button @click="emit('exit')" class="action red" :disabled="disabled">
+    <button @click="emit('exit')" class="action red" :disabled="!save_state">
       <Icon :icon="faTrash" /> <span>Discard</span>
     </button>
   </div>
@@ -101,21 +165,49 @@ function selectPath() {}
   border-radius: 4px;
   background-color: #fff1;
   flex-grow: 1;
+  padding: 0.2em 0.5em;
   &:focus-within {
     outline: 1px solid #0af;
   }
-}
-
-.path-input {
-  border: none;
-  background: none;
-  color: inherit;
-  padding: 0.5em;
-  font-family: monospace;
-  flex-grow: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  outline: none;
+  &.invalid {
+    outline: 1px solid red !important;
+  }
+  * {
+    font-family: monospace;
+  }
+  & > * {
+    padding: 0;
+    margin: 0;
+    font-size: 0.8em;
+    color: white;
+    &.directory {
+      flex-grow: 1;
+    }
+    &.invalid,
+    &.invalid * {
+      color: #ff0;
+      opacity: 1;
+    }
+    &:not(.invalid):not(:focus):not(:hover) {
+      opacity: 0.5;
+    }
+  }
+  & > * > * {
+    width: 100%;
+    padding: 0;
+    margin: 0;
+  }
+  input[type="text"] {
+    font-size: 1em;
+    border-radius: 0;
+    width: 100%;
+    border: none;
+    background: none;
+    color: inherit;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    outline: none;
+  }
 }
 
 .path-input::placeholder {

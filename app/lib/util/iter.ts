@@ -4,7 +4,6 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 import { markRaw } from "vue";
-import { Awaitable } from "../types";
 
 import { defer, Deferred } from ".";
 

@@ -16,7 +16,6 @@ import { clamp } from "../../lib/util";
 import { computed, ref, shallowRef, useTemplateRef } from "vue";
 import ElementSize from "@lib/element-size";
 import { setAction } from "./Loading.vue";
-import { BufferLike } from "@lib/types";
 
 export type Pos = { x: number; y: number };
 

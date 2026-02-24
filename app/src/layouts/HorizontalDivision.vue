@@ -41,13 +41,8 @@ function onMouseMove(e: MouseEvent) {
   requestAnimationFrame(ElementSize.notify);
 }
 
-onMounted(() => {
-  window.addEventListener("mousemove", onMouseMove);
-});
-onUnmounted(() => {
-  size.destroy();
-  window.removeEventListener("mousemove", onMouseMove);
-});
+onMounted(() => window.addEventListener("mousemove", onMouseMove));
+onUnmounted(() => window.removeEventListener("mousemove", onMouseMove));
 </script>
 
 <template>

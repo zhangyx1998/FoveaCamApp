@@ -1,19 +1,24 @@
 {
-    "name": "fovea-cam",
-    "private": true,
-    "dependencies": {
-        "core": "file:core/dist/"
-    },
-    "workspaces": [
-        "app",
-        "core"
-    ],
-    "scripts": {
-        "app": "cd app && npm run dev",
-        "compiledb": "node compiledb.cjs > compile_commands.json",
-        "postinstall": "cd core && make"
-    },
-    "devDependencies": {
-        "glob": "^11.0.3"
-    }
+  "name": "fovea-cam",
+  "private": true,
+  "dependencies": {
+    "core": "file:core/dist/"
+  },
+  "workspaces": [
+    "app",
+    "core"
+  ],
+  "scripts": {
+    "app": "cd app && npm run dev",
+    "compiledb": "node compiledb.cjs > compile_commands.json",
+    "postinstall": "cd core && make"
+  },
+  "devDependencies": {
+    "glob": "^11.0.3",
+    "lint-staged": "^16.2.7"
+  },
+  "lint-staged": {
+    "*.{ts,js,vue,json}": "prettier --write",
+    "*.{cpp,h,hpp}": "clang-format -i"
+  }
 }

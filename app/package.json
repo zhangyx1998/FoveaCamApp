@@ -10,13 +10,14 @@
         "@vitejs/plugin-vue": "^5.0.4",
         "electron": "^38.2.0",
         "electron-store": "^11.0.2",
+        "highlight.js": "^11.11.1",
         "sass": "^1.93.2",
         "typescript": "^5.4.2",
         "vite": "^7.1.7",
         "vite-plugin-electron": "^0.28.4",
         "vite-plugin-electron-renderer": "^0.14.5",
         "vue": "^3.4.21",
-        "vue-tsc": "^2.0.6"
+        "vue-tsc": "^3.2.4"
     },
     "dependencies": {
         "serialport": "^13.0.0",
