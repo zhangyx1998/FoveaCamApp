@@ -24,7 +24,8 @@ const save_state = shallowRef<SaveState | null>(null);
 function save(path: string, img_fmt: string) {
   if (save_state.value !== null) return;
   if (isEmpty(capture)) return;
-  save_state.value = capture.save(path, data, img_fmt);
+  const state = (save_state.value = capture.save(path, data, img_fmt));
+  Promise.allSettled([...state.values()].flat()).then(() => emit("exit"));
 }
 
 function* dataEntries() {
