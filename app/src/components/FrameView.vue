@@ -1,9 +1,12 @@
+<script lang="ts">
+export type TransformFunction = (mat: any) => any;
+</script>
+
 <script setup lang="ts">
-import { cvtColor, slice, type Mat } from "core/Vision";
-import type { Point, Rect, Size } from "core/Geometry";
+import { convertType, cvtColor, type Mat } from "core/Vision";
+import type { Point, Size } from "core/Geometry";
 import {
   computed,
-  onUnmounted,
   ref,
   shallowRef,
   StyleValue,
@@ -12,9 +15,9 @@ import {
 } from "vue";
 
 import ElementSize from "@lib/element-size";
+import { NoCheck } from "@lib/util/vue";
 import FrameOverlay from "./FrameOverlay.vue";
-import Capture from "../capture";
-import { Awaitable } from "core/types";
+import { current_capture, Delegation } from "../capture";
 
 const props = defineProps({
   title: {
@@ -28,19 +31,17 @@ const props = defineProps({
     default: null,
   },
   mat: {
-    type: Object as () => Mat<Uint8Array> | null,
+    type: NoCheck<Mat | null>(),
     required: false,
     default: null,
   },
   transform: {
-    type: Function as any as () =>
-      | ((mat: Mat<Uint8Array>) => Mat<Uint8Array>)
-      | undefined,
+    type: NoCheck<TransformFunction | undefined>(),
     required: false,
     default: undefined,
   },
   overlay: {
-    type: Object as () => Boolean | Record<string, string>,
+    type: NoCheck<Boolean | Record<string, string>>(),
     required: false,
     default: {},
   },
@@ -60,7 +61,7 @@ const props = defineProps({
     default: null,
   },
   capture: {
-    type: String,
+    type: NoCheck<Delegation | string | null>(),
     required: false,
     default: null,
   },
@@ -84,6 +85,14 @@ const canvasSize = new ElementSize(canvas);
 const overlayToggle = ref(false);
 
 const image = shallowRef<ImageData | null>(null);
+const { capture } = props;
+if (typeof capture === "function")
+  capture(() => (mat.value ? { image: mat.value } : null));
+else if (typeof capture === "string")
+  current_capture.value?.provide((provide) => {
+    const image = mat.value;
+    if (image) provide(capture, { image });
+  });
 
 const canvasStyle = computed(() => {
   if (!image.value) return {};
@@ -117,14 +126,11 @@ const mat = computed(() => {
   return mat;
 });
 
-if (props.capture) {
-  onUnmounted(Capture.image(props.capture, () => mat.value));
-}
-
 watch(
   mat,
   async (mat) => {
     if (!mat) return (image.value = null);
+    if (!(mat instanceof Uint8Array)) mat = convertType(mat, "8U");
     const [height, width] = mat.shape;
     switch (mat.channels) {
       case 1:

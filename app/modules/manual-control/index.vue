@@ -28,12 +28,16 @@ import {
   reprojectImageTo3D,
   slice,
   wrapPerspective,
+  convertType,
+  cvtColor,
 } from "core/Vision";
 import ConfigEntry from "@src/components/ConfigEntry.vue";
 import RemoteCanvasTeleport from "@src/components/RemoteCanvasTeleport.vue";
 import RangeSlider from "@src/inputs/range-slider.vue";
 import { createQMatrix, deriveFoveaIntrinsics } from "@lib/stereo";
 import { matToArray } from "@lib/mat";
+import { makeBGR, makeBGRA, stack } from "@lib/imgproc";
+import { max } from "@lib/util/math";
 
 const view = ref<"sliced" | "diff" | "depth">("sliced");
 const remote_content = ref<string>("NONE");
@@ -41,7 +45,7 @@ const app_config = await useAppConfig();
 const controller = computed(getController);
 const triple = await useCalibratedTriple();
 const { L, C, R } = triple;
-const { A2V, V2A, P2A, A2P, A2H } = useCoordinateConversions(triple);
+const { A2V, V2A, A2H } = useCoordinateConversions(triple);
 
 const { width, height } = await getFrameSize(C);
 const undistort = triple.CI.undistort;
@@ -50,6 +54,9 @@ if (!undistort)
 
 const cursor = shallowRef<(MouseEvent & Rect) | null>(null);
 const target_loc = shallowRef<Point2d>({ x: width / 2, y: height / 2 });
+const target_angle = computed(
+  () => undistort.angular([target_loc.value], false)[0],
+);
 const target_size = computed(() => ({
   width: width / zoom.value,
   height: height / zoom.value,
@@ -80,7 +87,7 @@ const depth_window = computed(() => {
 });
 
 const target_mems = computed(() => {
-  const [A] = undistort.angular([target_loc.value], true);
+  const A = target_angle.value;
   const [v, s] = [verge.value, shift.value];
   const out = {
     l: { ...A },
@@ -115,39 +122,6 @@ const volt = reactive({
   L: { x: 0, y: 0 },
   R: { x: 0, y: 0 },
 });
-
-const revokeCapture = Capture
-  //
-  .meta("wide", () => {
-    const { sensor_size, focal, center, fov } = undistort;
-    return { sensor_size, focal, center, fov };
-  })
-  //
-  .meta("fovea", () => {
-    return {
-      volt: {
-        L: volt.L,
-        R: volt.R,
-      },
-      "volt.unit": "volt",
-      angle: {
-        L: V2A.L(volt.L),
-        R: V2A.R(volt.R),
-      },
-      "angle.unit": "radian",
-      intrinsics: {
-        ...fovea_intrinsics.value,
-      },
-      Q: matToArray(Q.value),
-      baseline: baseline.value,
-      "baseline.unit": "millimeter",
-    };
-  })
-  //
-  .image("center.sliced", () => sliced_view.value)
-  //
-  .image("center.diff", () => diff_view.value);
-onUnmounted(revokeCapture);
 
 const actuate_task = abortable(async (_, onAbort) => {
   const c = controller.value;
@@ -222,12 +196,6 @@ const depth_view = computed(() => {
   const dist = distance.value;
   const dw = depth_window.value / 2;
   const z = depthFromProjection(proj, dist - dw, dist + dw);
-  // console.log("depth", {
-  //   avg: avg(z),
-  //   min: min(z),
-  //   max: max(z),
-  //   std: std(z),
-  // });
   return heatmap(z);
 });
 
@@ -252,7 +220,8 @@ function wrapLeft(mat: Mat<Uint8Array>) {
   return (mat_l.value = wrapPerspective(mat, H));
 }
 
-function passCenter(mat: Mat<Uint8Array>) {
+function transformCenter(mat: Mat<Uint8Array>) {
+  mat = undistort!.apply(mat);
   return (mat_c.value = mat);
 }
 
@@ -266,6 +235,77 @@ function wrapRight(mat: Mat<Uint8Array>) {
 function plusSign(v: string) {
   return v.startsWith("-") ? v : "+" + v;
 }
+
+const capture = new Capture("manual-control");
+
+type Stack = Awaited<ReturnType<typeof stack>>;
+function normalizeFovea({ image, format }: Stack, H: Mat<Float64Array>) {
+  const bgra = makeBGRA(convertType(image, "8U"), format);
+  return wrapPerspective(bgra, H);
+}
+
+capture.provide(async (provide) => {
+  const { sensor_size, focal, center, fov } = undistort;
+  provide("wide", { meta: { sensor_size, focal, center, fov } });
+  const fovea = {
+    Q: matToArray(Q.value),
+    baseline: baseline.value,
+    "baseline.unit": "millimeter",
+  };
+  provide("fovea", { meta: fovea });
+  provide("center", { image: sliced_view.value });
+  // Snapshot volts and angles
+  const V = { ...volt };
+  const A = {
+    L: V2A.L(V.L),
+    R: V2A.R(V.R),
+  };
+  const [l_stack, r_stack] = await Promise.all([
+    stack(L.stream, 64),
+    // .then(({ image, format }) => {
+    //   const bgra = makeBGRA(convertType(image, "8U"), format);
+    //   const H = A2H.L(A.L);
+    //   return wrapPerspective(bgra, H);
+    // }),
+    stack(R.stream, 64),
+    // .then(({ image, format }) => {
+    //   const bgra = makeBGRA(convertType(image, "8U"), format);
+    //   const H = A2H.R(A.R);
+    //   return wrapPerspective(bgra, H);
+    // }),
+  ]);
+  const k = 255.0 / max([max(l_stack.image), max(r_stack.image)]);
+  for (let i = 0; i < l_stack.image.length; i++)
+    l_stack.image[i] = Math.round(l_stack.image[i] * k);
+  for (let i = 0; i < r_stack.image.length; i++)
+    r_stack.image[i] = Math.round(r_stack.image[i] * k);
+  const l = normalizeFovea(l_stack, A2H.L(A.L));
+  const r = normalizeFovea(r_stack, A2H.R(A.R));
+  const intrinsics = fovea_intrinsics.value;
+  provide("left", {
+    image: l,
+    meta: {
+      sensor_size,
+      volt: V.L,
+      "volt.unit": "volt",
+      angle: A.L,
+      "angle.unit": "radian",
+      intrinsics: intrinsics.L,
+    },
+  });
+  provide("right", {
+    image: r,
+    meta: {
+      sensor_size,
+      volt: V.R,
+      "volt.unit": "volt",
+      angle: A.R,
+      "angle.unit": "radian",
+      intrinsics: intrinsics.R,
+    },
+  });
+  provide("diff", { image: diff(l, r, true) });
+});
 </script>
 
 <template>
@@ -277,7 +317,6 @@ function plusSign(v: string) {
         :camera="L"
         :transform="wrapLeft"
         :theme="THEME.L"
-        capture="left"
       >
       </StreamView>
       <PosView
@@ -298,9 +337,9 @@ function plusSign(v: string) {
         class="stream"
         :title="ROLE.C"
         :camera="C"
-        :transform="passCenter"
+        :transform="transformCenter"
         :theme="THEME.C"
-        capture="center"
+        capture="wide"
         @mousedown="(e) => (cursor = e)"
         @mouseup="(e) => (cursor = e)"
         @mousemove="(e) => (cursor = e)"
@@ -399,7 +438,6 @@ function plusSign(v: string) {
         :camera="R"
         :transform="wrapRight"
         :theme="THEME.R"
-        capture="right"
       >
       </StreamView>
       <PosView

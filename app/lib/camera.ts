@@ -9,11 +9,10 @@ import { Camera } from "core/Aravis";
 import { CameraCalibration, Mat, Undistort } from "core/Vision";
 import type { Point2d, Point3d } from "core/Geometry";
 import Regression, { RegressionConfig } from "core/Regression";
-import Store from "./store.js";
-import { Mutable } from "./types.js";
-import { sha256 } from "./util/hash.js";
-import { findPinholeProjection } from "./marker.js";
-import { createMat } from "./mat.js";
+import Store from "./store";
+import { sha256 } from "./util/hash";
+import { findPinholeProjection } from "./marker";
+import { createMat } from "./mat";
 
 export const ROLE = {
   L: "Left Fovea",
@@ -94,7 +93,7 @@ export async function useMatchedCameras<Strict extends true | false = false>(
   return markRaw(matched) as MatchedCameras<Strict>;
 }
 
-export function describeCamera(camera: Camera | undefined | null) {
+export function describeCamera(camera: Camera | Empty) {
   if (!camera) return "Camera Not Connected";
   return `${camera.vendor} ${camera.model} (${camera.serial})`;
 }

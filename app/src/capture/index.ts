@@ -3,13 +3,14 @@
 // This source code is licensed under the MIT license.
 // You may find the full license in project root directory.
 // -------------------------------------------------------
-import fs from "node:fs";
+import { mkdirSync } from "node:fs";
+import fs from "node:fs/promises";
 import { resolve } from "node:path";
 import { cvtColor, type Mat } from "core/Vision";
-import { shallowReactive } from "vue";
+import { onScopeDispose, shallowRef } from "vue";
 import { Vision } from "core";
 
-function makeBGR(image: Mat<Uint8Array>) {
+function RGB2BGR(image: Mat) {
   switch (image.channels) {
     case 4:
       return cvtColor(image, "RGBA2BGRA");
@@ -20,135 +21,155 @@ function makeBGR(image: Mat<Uint8Array>) {
   }
 }
 
-type Provider<T> = () => T | null;
-type Meta = Record<string, any>;
-type Revoke = (() => any) & {
-  meta: (name: string, data: () => Record<string, any> | null) => Revoke;
-  image: (name: string, data: () => Mat<Uint8Array> | null) => Revoke;
+export type MetaResource = Object;
+export type ImageResource = Mat;
+export type Resource = {
+  meta?: MetaResource | null;
+  image?: ImageResource | null;
 };
+type Provide = (name: string, data: Resource | Resource[]) => void;
+type Provider = (provide: Provide) => any;
+type Context = { namespace: string; providers: Provider[] };
+export type CaptureData = Map<string, Resource | Resource[]>;
+export type SaveState = Map<string, Promise<any> | Promise<any>[]>;
+const context = shallowRef<Context | null>(null);
 
-function getOrCreateSet<T>(
-  map: Map<string, Set<Provider<T>>>,
-  name: string,
-): Set<Provider<T>> {
-  if (!map.has(name)) {
-    map.set(name, new Set());
-  }
-  return map.get(name)!;
+export function register(namespace: string, ...providers: Provider[]) {
+  if (context.value)
+    throw new Error(
+      `Context already exists for namespace "${context.value.namespace}".`,
+    );
+  const ctx = { namespace, providers };
+  context.value = ctx;
+  const revoke = () => {
+    if (context.value === ctx) context.value = null;
+  };
+  onScopeDispose(revoke);
+  return revoke;
 }
 
-function registerProvider<T>(
-  map: Map<string, Set<Provider<T>>>,
-  name: string,
-  provider: Provider<T>,
-  revoke?: () => any,
-): () => any {
-  const set = getOrCreateSet(map, name);
-  set.add(provider);
-  return () => {
-    revoke?.();
-    set.delete(provider);
-    if (set.size === 0 && map.get(name) === set) map.delete(name);
-  };
+export const current_capture = shallowRef<Capture | null>(null);
+
+// YYYYMMDD-HHMMSS
+function getDateTimeString() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  const hours = String(now.getHours()).padStart(2, "0");
+  const minutes = String(now.getMinutes()).padStart(2, "0");
+  const seconds = String(now.getSeconds()).padStart(2, "0");
+  return `${year}${month}${day}-${hours}${minutes}${seconds}`;
 }
 
 export default class Capture {
-  static readonly metaProviders = shallowReactive(
-    new Map<string, Set<Provider<Meta>>>(),
-  );
-  static readonly imageProviders = shallowReactive(
-    new Map<string, Set<Provider<Mat<Uint8Array>>>>(),
-  );
-  static meta(
-    name: string,
-    data: () => Record<string, any> | null,
-    _revoke?: () => any,
-  ): Revoke {
-    const revoke = registerProvider(this.metaProviders, name, data, _revoke);
-    return Object.assign(revoke, {
-      meta(name: string, data: () => Record<string, any> | null) {
-        return Capture.meta(name, data, revoke);
-      },
-      image(name: string, data: () => Mat<Uint8Array> | null) {
-        return Capture.image(name, data, revoke);
-      },
-    });
+  private seq = 1;
+  get sequence() {
+    return this.seq.toString().padStart(4, "0");
   }
-  static image(
-    name: string,
-    data: () => Mat<Uint8Array> | null,
-    _revoke?: () => any,
-  ): Revoke {
-    const revoke = registerProvider(this.imageProviders, name, data, _revoke);
-    return Object.assign(revoke, {
-      meta(name: string, data: () => Record<string, any> | null) {
-        return Capture.meta(name, data, revoke);
-      },
-      image(name: string, data: () => Mat<Uint8Array> | null) {
-        return Capture.image(name, data, revoke);
-      },
-    });
+  incrementSequence() {
+    this.seq++;
+  }
+  readonly prefix = getDateTimeString();
+  get directory() {
+    return `${this.prefix}.${this.namespace}`;
+  }
+  private readonly providers = new Set<Provider>();
+  constructor(public readonly namespace: string) {
+    if (current_capture.value !== null)
+      throw new Error(
+        `A capture is already in progress for namespace "${current_capture.value.namespace}".`,
+      );
+    current_capture.value = this;
+    onScopeDispose(() => this.dispose());
   }
 
-  readonly meta = new Map<string, Record<string, any>>();
-  readonly image = new Map<string, Array<Mat<Uint8Array>> | Mat<Uint8Array>>();
-  constructor() {
-    for (const [name, providers] of Capture.metaProviders) {
-      const meta = {} as Record<string, any>;
-      for (const provider of providers) {
-        const data = provider();
-        if (data) {
-          Object.assign(meta, data);
-        }
-      }
-      this.meta.set(name, meta);
-    }
-    for (const [name, providers] of Capture.imageProviders) {
-      if (providers.size === 1) {
-        for (const provider of providers) {
-          const image = provider();
-          if (image) {
-            this.image.set(name, image);
-          }
-        }
-      } else {
-        const images: Array<Mat<Uint8Array>> = [];
-        for (const provider of providers) {
-          const image = provider();
-          if (image) {
-            images.push(image);
-          }
-          this.image.set(name, images);
-        }
-      }
-    }
+  dispose() {
+    this.providers.clear();
+    if (current_capture.value === this) current_capture.value = null;
   }
-  save(path: string, img_format: string = "png") {
+
+  provide(provider: Provider) {
+    this.providers.add(provider);
+    const revoke = () => this.providers.delete(provider);
+    onScopeDispose(revoke);
+    return revoke;
+  }
+
+  delegate(name: string) {
+    return (handler: () => Awaitable<Resource | Resource[] | null>) => {
+      return this.provide(async (provide) => {
+        const data = await handler();
+        if (data !== null) provide(name, data);
+      });
+    };
+  }
+
+  async capture(cap: CaptureData = new Map()) {
+    const provide = (name: string, data: Resource | Resource[]) => {
+      console.log("provide", { name, data });
+      if (!cap.has(name)) cap.set(name, data);
+      else {
+        const existing = cap.get(name)!;
+        if (Array.isArray(data) && Array.isArray(existing))
+          existing.push(...data);
+        else if (!Array.isArray(data) && !Array.isArray(existing))
+          Object.assign(existing, data);
+        else
+          throw new Error(
+            `Resource type mismatch for "${name}": ${{ existing, incoming: data }}`,
+          );
+      }
+    };
+    await Promise.all(
+      Array.from(this.providers).map((provider) => provider(provide)),
+    );
+    return cap;
+  }
+
+  save(path: string, data: CaptureData, img_format: string = "png") {
     // Create directory if not exists
-    fs.mkdirSync(path, { recursive: true });
-    // Save meta
-    for (const [name, data] of this.meta) {
-      const jsonPath = resolve(path, name + ".json");
-      console.log("Saving meta to", jsonPath);
-      fs.writeFileSync(jsonPath, JSON.stringify(data, null, 2), "utf-8");
-    }
-    // Save images
-    for (const [name, images] of this.image) {
-      if (Array.isArray(images)) {
+    mkdirSync(path, { recursive: true });
+    const tasks: SaveState = new Map();
+    for (const [name, items] of data.entries()) {
+      if (Array.isArray(items)) {
+        // Save in child folder
         const directory = resolve(path, name);
-        fs.mkdirSync(directory, { recursive: true });
-        const digits = Math.max(2, images.length.toString().length);
-        images.forEach((image, index) => {
-          const sequence = index.toString().padStart(digits, "0");
-          const imgPath = resolve(directory, `${sequence}.${img_format}`);
-          console.log("Saving image to", imgPath);
-          Vision.save(makeBGR(image), imgPath);
-        });
+        mkdirSync(directory, { recursive: true });
+        const pad = Math.max(2, items.length.toString().length);
+        const dir_tasks: Promise<any>[] = [];
+        for (const [i, { meta, image }] of items.entries()) {
+          const sequence = i.toString().padStart(pad, "0");
+          if (meta)
+            dir_tasks.push(
+              fs.writeFile(
+                resolve(directory, `${sequence}.json`),
+                JSON.stringify(meta, null, 2),
+              ),
+            );
+          if (image) {
+            const img_path = resolve(directory, `${sequence}.${img_format}`);
+            dir_tasks.push(Vision.save(RGB2BGR(image), img_path));
+          }
+        }
+        tasks.set(name, dir_tasks);
       } else {
-        const imgPath = resolve(path, `${name}.${img_format}`);
-        console.log("Saving image to", imgPath);
-        Vision.save(makeBGR(images), imgPath);
+        const { meta, image } = items;
+        if (meta) {
+          const json_path = resolve(path, `${name}.json`);
+          tasks.set(
+            json_path,
+            fs.writeFile(json_path, JSON.stringify(meta, null, 2)),
+          );
+        }
+        if (image) {
+          const img_path = resolve(path, `${name}.${img_format}`);
+          tasks.set(img_path, Vision.save(RGB2BGR(image), img_path));
+        }
       }
     }
+    return tasks;
   }
 }
+
+export type Delegation = ReturnType<Capture["delegate"]>;

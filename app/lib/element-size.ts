@@ -4,7 +4,7 @@
  * You may find the full license in project root directory.
  * --------------------------------------------------------- */
 
-import { ref, ShallowRef, watch } from "vue";
+import { onScopeDispose, ref, watch, type ShallowRef } from "vue";
 
 export default class ElementSize {
   #width = ref(0);
@@ -17,28 +17,38 @@ export default class ElementSize {
     return this.#height.value;
   }
 
-  private readonly listener: () => void;
-  constructor(private el: Readonly<ShallowRef<HTMLElement | null>>) {
-    this.listener = () => this.update();
-    window.addEventListener("update-size", this.listener);
+  constructor(private el: Readonly<ShallowRef<Element | null>>) {
     watch(el, () => this.update(), { immediate: true });
+    ElementSize.subscribe(this);
+    onScopeDispose(() => {
+      ElementSize.unsubscribe(this);
+    });
   }
 
   update() {
-    const el = this.el.value;
-    if (el === null) return;
-    this.#width.value = el.getBoundingClientRect().width;
-    this.#height.value = el.getBoundingClientRect().height;
+    if (this.el.value === null) return;
+    this.#width.value = this.el.value.getBoundingClientRect().width;
+    this.#height.value = this.el.value.getBoundingClientRect().height;
   }
 
-  destroy() {
-    window.removeEventListener("update-size", this.listener);
+  private static readonly instances = new Set<ElementSize>();
+
+  private static subscribe(instance: ElementSize) {
+    ElementSize.instances.add(instance);
+  }
+
+  private static unsubscribe(instance: ElementSize) {
+    ElementSize.instances.delete(instance);
   }
 
   static notify() {
-    window.dispatchEvent(new Event("update-size"));
+    for (const instance of ElementSize.instances) instance.update();
   }
 }
 
-window.addEventListener("resize", ElementSize.notify);
-window.setInterval(ElementSize.notify, 200);
+(async () => {
+  while (true) {
+    await new Promise((r) => requestAnimationFrame(r));
+    ElementSize.notify();
+  }
+})();

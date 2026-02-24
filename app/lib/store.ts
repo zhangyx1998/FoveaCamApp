@@ -15,7 +15,7 @@ import {
   rm,
 } from "node:fs/promises";
 import { resolve, dirname } from "node:path";
-import { reactive, watch, effectScope } from "vue";
+import { reactive, watch } from "vue";
 
 const STORE: string = resolve(
   await ipcRenderer.invoke("get-data-path"),

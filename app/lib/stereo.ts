@@ -27,8 +27,8 @@ export function deriveFoveaIntrinsics(
   const delta = VEC.mul(VEC.sub(vc, oc), zoom);
   // Center of current view in pixels (zoomed)
   const c: Point2d = {
-    x: sensor_size.width / 2 + delta.x,
-    y: sensor_size.height / 2 + delta.y,
+    x: sensor_size.width / 2 - delta.x,
+    y: sensor_size.height / 2 - delta.y,
   };
   // Return key parameters for Q matrix
   return { f, c };

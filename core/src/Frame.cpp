@@ -29,11 +29,14 @@ public:
   static Function Init(Napi::Env env) {
     return DefineClass(env, FrameObject::name.c_str(),
                        {
-                           CORE_OBJECT_REGISTER(FrameObject, env),  //
-                           INSTANCE_METHOD(FrameObject, view),      //
-                           INSTANCE_GETTER(FrameObject, width),     //
-                           INSTANCE_GETTER(FrameObject, height),    //
-                           INSTANCE_GETTER(FrameObject, timestamp), //
+                           CORE_OBJECT_REGISTER(FrameObject, env),   //
+                           INSTANCE_METHOD(FrameObject, view),       //
+                           INSTANCE_METHOD(FrameObject, save),       //
+                           INSTANCE_GETTER(FrameObject, width),      //
+                           INSTANCE_GETTER(FrameObject, height),     //
+                           INSTANCE_GETTER(FrameObject, timestamp),  //
+                           INSTANCE_GETTER(FrameObject, raw),        //
+                           INSTANCE_GETTER(FrameObject, raw_format), //
                        });
   }
 
@@ -79,6 +82,12 @@ private:
   GET(height) { return Number::New(env, core()->height()); }
 
   GET(timestamp) { return BigInt::New(env, core()->timestamp); }
+
+  GET(raw) { return convert(env, core()->raw); }
+
+  GET(raw_format) {
+    return convert(env, (convert<std::string>(core()->format)));
+  }
 };
 
 CORE_OBJECT(FrameObject);

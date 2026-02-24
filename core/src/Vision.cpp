@@ -43,6 +43,16 @@ static FN(load) {
   auto env = info.Env();
   try {
     const auto path = convert<std::string>(info[0]);
+    const auto task = [path] { return cv::imread(path); };
+    return AsyncTask<cv::Mat>::run(env, task, "load(" + path + ")");
+  }
+  JS_EXCEPT(env.Undefined())
+}
+
+static FN(loadSync) {
+  auto env = info.Env();
+  try {
+    const auto path = convert<std::string>(info[0]);
     return convert(env, cv::imread(path));
   }
   JS_EXCEPT(env.Undefined())
@@ -53,8 +63,49 @@ static FN(save) {
   try {
     const auto mat = convert<cv::Mat>(info[0]);
     const auto path = convert<std::string>(info[1]);
-    cv::imwrite(path, mat);
-    return env.Undefined();
+    auto task = [mat, path] { return cv::imwrite(path, mat); };
+    return AsyncTask<bool>::run(env, task, "save(" + path + ")");
+  }
+  JS_EXCEPT(env.Undefined())
+}
+
+static FN(saveSync) {
+  auto env = info.Env();
+  try {
+    const auto mat = convert<cv::Mat>(info[0]);
+    const auto path = convert<std::string>(info[1]);
+    return convert(env, cv::imwrite(path, mat));
+  }
+  JS_EXCEPT(env.Undefined())
+}
+
+static FN(convertType) {
+  auto env = info.Env();
+  try {
+    auto mat = convert<cv::Mat>(info[0]);
+    const auto type_name = convert<string>(info[1]);
+    int type;
+    if (type_name == "8U")
+      type = CV_8U;
+    else if (type_name == "16U")
+      type = CV_16U;
+    else if (type_name == "16S")
+      type = CV_16S;
+    else if (type_name == "32S")
+      type = CV_32S;
+    else if (type_name == "16F")
+      type = CV_16F;
+    else if (type_name == "32F")
+      type = CV_32F;
+    else if (type_name == "64F")
+      type = CV_64F;
+    else if (type_name == "32F")
+      type = CV_32F;
+    else
+      throw JS::Error(env, "Unknown type name: " + type_name);
+    cv::Mat converted;
+    mat.convertTo(converted, CV_MAKETYPE(type, mat.channels()));
+    return convert(env, converted);
   }
   JS_EXCEPT(env.Undefined())
 }
@@ -827,7 +878,10 @@ CORE_OBJECT(Projector);
 #define EXPORT(OBJ, F) OBJ.Set(#F, Function::New<F>(env, #F));
 void exportVisionNamespace(Napi::Env env, Napi::Object &exports) {
   EXPORT(exports, load);
+  EXPORT(exports, loadSync);
   EXPORT(exports, save);
+  EXPORT(exports, saveSync);
+  EXPORT(exports, convertType);
   EXPORT(exports, cvtColor);
   EXPORT(exports, slice);
   EXPORT(exports, resize);

@@ -327,7 +327,6 @@ const divergence_task = abortable(async (aborted) => {
       } else {
         await new Promise(requestAnimationFrame);
       }
-      if (aborted()) return;
     }
   } finally {
     l?.release();
