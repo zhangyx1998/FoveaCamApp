@@ -19,7 +19,7 @@ const image = computed(() => {
   if (isEmpty(image)) return image;
   if (Array.isArray(image)) {
     if (image.length === 0) return null;
-    return image[i.value]!;
+    return image[image.length - 1 - i.value]!;
   } else {
     return image;
   }

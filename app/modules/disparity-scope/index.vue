@@ -54,7 +54,7 @@ const undistort = triple.CI.undistort;
 if (!undistort)
   throw new Error("Intrinsic calibration not found for center camera.");
 
-const cursor = shallowRef<(MouseEvent & Rect) | null>(null);
+const cursor = shallowRef<(Rect & { buttons: number }) | null>(null);
 const target_loc = shallowRef<Point2d>({ x: width / 2, y: height / 2 });
 const target_size = computed(() => ({
   width: width / zoom.value,
@@ -402,10 +402,7 @@ onUnmounted(async () => {
         :camera="C"
         :theme="THEME.C"
         capture="center"
-        @mousedown="(e) => (cursor = e)"
-        @mouseup="(e) => (cursor = e)"
-        @mousemove="(e) => (cursor = e)"
-        @mouseleave="() => (cursor = null)"
+        @mouse="(e) => (cursor = e)"
       >
         <FrameCursor
           :cursor="target"

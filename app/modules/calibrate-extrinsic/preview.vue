@@ -27,11 +27,10 @@ const props = defineProps<{
   saved: boolean;
 }>();
 
-const cursor = shallowRef<(MouseEvent & Rect) | null>(null);
+const cursor = shallowRef<(Rect & { buttons: number }) | null>(null);
 const zoom = ref(6.0);
 
 watch(cursor, (c) => {
-  console.log("cursor", c, c?.button);
   if (!c || !(c.buttons & 1)) return;
   const { undistort, L, R } = props;
   const [target] = undistort.angular([c], true);
@@ -91,10 +90,7 @@ const task = abortable(async (aborted, onAbort) => {
         :title="ROLE.C"
         :camera="cameras.C"
         :theme="THEME.C"
-        @mousedown="(e) => (cursor = e)"
-        @mouseup="(e) => (cursor = e)"
-        @mousemove="(e) => (cursor = e)"
-        @mouseleave="() => (cursor = null)"
+        @mouse="(e) => (cursor = e)"
       >
         <FrameCursor
           v-if="cursor"

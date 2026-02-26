@@ -95,6 +95,8 @@ onUnmounted(() => window.removeEventListener("mousemove", onMouseMove));
 <style scoped lang="scss">
 .horizontal-division {
   position: relative;
+  width: 100%;
+  height: 100%;
 }
 
 .container,

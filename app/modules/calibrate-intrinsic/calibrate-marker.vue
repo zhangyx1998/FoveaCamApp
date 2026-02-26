@@ -174,8 +174,7 @@ onUnmounted(async () => {
         :footnote="`Marker Detector @ ${freq}`"
         :camera="camera"
         height="min(60vh, 80vw)"
-        @mousemove="(e) => (cursor = e)"
-        @mouseleave="() => (cursor = null)"
+        v-model="cursor"
       >
         <MarkerDetection
           v-for="(d, i) in detection ?? []"

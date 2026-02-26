@@ -18,6 +18,7 @@ import ElementSize from "@lib/element-size";
 import { NoCheck } from "@lib/util/vue";
 import FrameOverlay from "./FrameOverlay.vue";
 import { current_capture, Delegation } from "../capture";
+import { clamp } from "@lib/util";
 
 const props = defineProps({
   title: {
@@ -68,14 +69,11 @@ const props = defineProps({
 });
 
 const emit = defineEmits<{
-  (e: "mousedown", event: MouseEvent & Point & Size): void;
-  (e: "mouseup", event: MouseEvent & Point & Size): void;
-  (e: "mousemove", event: MouseEvent & Point & Size): void;
-  (e: "mouseleave", event: MouseEvent & Point & Size): void;
-  (e: "pointerdown", event: PointerEvent & Point & Size): void;
-  (e: "pointerup", event: PointerEvent & Point & Size): void;
-  (e: "pointermove", event: PointerEvent & Point & Size): void;
-  (e: "pointerleave", event: PointerEvent & Point & Size): void;
+  (
+    e: "update:modelValue",
+    event: (Point & Size & { buttons: number }) | null,
+  ): void;
+  (e: "mouse", event: (Point & Size & { buttons: number }) | null): void;
 }>();
 
 const container = useTemplateRef<HTMLDivElement>("container");
@@ -194,45 +192,53 @@ const viewBox = computed(() => {
   return `0 0 ${image.value.width} ${image.value.height}`;
 });
 
-function translatePos<T extends MouseEvent | PointerEvent>(
-  e: T,
-): Point & Size & T {
-  const { width = 0, height = 0 } = image.value ?? {};
+function translatePos(
+  e: MouseEvent | PointerEvent,
+): Point & Size & { buttons: number } {
+  const { buttons } = e;
+  const { width: iw = 0, height: ih = 0 } = image.value ?? {};
   if (!canvas.value)
-    return { ...e, x: 0, y: 0, width, height } as Point & Size & T;
+    return { x: iw / 2, y: ih / 2, width: iw, height: ih, buttons };
   const rect = canvas.value.getBoundingClientRect();
   const cx = e.clientX - rect.left;
   const cy = e.clientY - rect.top;
   const { width: cw, height: ch } = canvasSize;
-  const { width: iw, height: ih } = image.value!;
-  const x = (cx / cw) * iw;
-  const y = (cy / ch) * ih;
-  const {
-    button,
-    buttons,
-    clientX,
-    clientY,
-    ctrlKey,
-    shiftKey,
-    altKey,
-    metaKey,
-    target,
-  } = e;
+  const x = clamp((cx / cw) * iw, [0, iw]);
+  const y = clamp((cy / ch) * ih, [0, ih]);
   return {
-    button,
-    buttons,
-    clientX,
-    clientY,
-    ctrlKey,
-    shiftKey,
-    altKey,
-    metaKey,
-    target,
     x,
     y,
-    width,
-    height,
-  } as Point & Size & T;
+    width: iw,
+    height: ih,
+    buttons,
+  };
+}
+
+const drag = ref(false);
+function trackUntilRelease(e: MouseEvent) {
+  if (!(e.buttons & 1)) return untrack();
+  return emit("update:modelValue", translatePos(e));
+}
+
+function untrack() {
+  drag.value = false;
+  window.removeEventListener("mousemove", trackUntilRelease);
+  window.removeEventListener("mouseup", trackUntilRelease);
+  return emit("update:modelValue", null);
+}
+
+function track(e: MouseEvent) {
+  drag.value = true;
+  window.addEventListener("mousemove", trackUntilRelease);
+  window.addEventListener("mouseup", trackUntilRelease);
+  trackUntilRelease(e);
+}
+
+function mix<T, P>(t: T, p: P): T & P {
+  return {
+    ...t,
+    ...p,
+  };
 }
 </script>
 
@@ -250,6 +256,7 @@ function translatePos<T extends MouseEvent | PointerEvent>(
     <div class="footnote" v-if="footnote !== null">
       {{ footnote }}
     </div>
+    <slot name="suffix"></slot>
     <template v-if="image">
       <canvas
         ref="canvas"
@@ -258,14 +265,11 @@ function translatePos<T extends MouseEvent | PointerEvent>(
         :width="image?.width"
         :height="image?.height"
         :style="canvasStyle"
-        @mousedown="(e) => emit('mousedown', translatePos(e))"
-        @mouseup="(e) => emit('mouseup', translatePos(e))"
-        @mousemove="(e) => emit('mousemove', translatePos(e))"
-        @mouseleave="(e) => emit('mouseleave', translatePos(e))"
-        @pointerdown="(e) => emit('pointerdown', translatePos(e))"
-        @pointerup="(e) => emit('pointerup', translatePos(e))"
-        @pointermove="(e) => emit('pointermove', translatePos(e))"
-        @pointerleave="(e) => emit('pointerleave', translatePos(e))"
+        @mousedown="(e) => [track(e), emit('mouse', translatePos(e))]"
+        @mousemove="(e) => emit('mouse', translatePos(e))"
+        @mouseleave="() => emit('mouse', null)"
+        @mouseenter="(e) => emit('mouse', translatePos(e))"
+        @mouseup="(e) => emit('mouse', translatePos(e))"
       ></canvas>
       <FrameOverlay
         v-if="overlay && overlayToggle"

@@ -1,6 +1,4 @@
 <script setup lang="ts">
-import { FontAwesomeIcon as Icon } from "@fortawesome/vue-fontawesome";
-import { faArrowsRotate } from "@fortawesome/free-solid-svg-icons";
 import ConfigEntry from "@src/components/ConfigEntry.vue";
 import Marker from "@src/graphics/Marker.vue";
 import { computed, ref } from "vue";
@@ -13,7 +11,14 @@ import {
 import { MarkerDetector } from "core/Vision";
 import { Point2d } from "core/Geometry";
 import { radians } from "@lib/util";
+import Drawer from "@src/components/Drawer.vue";
+import HorizontalDivision from "@src/layouts/HorizontalDivision.vue";
 import RangeSlider from "@src/inputs/range-slider.vue";
+import SetPoints from "@src/set-points";
+import SetPointsEditor from "@src/set-points/Editor.vue";
+import SetPointsList from "@src/set-points/List.vue";
+import { Scale } from "@lib/util/math";
+
 const marker_id = ref(0);
 const rx = ref(0);
 const ry = ref(0);
@@ -27,11 +32,12 @@ function project(corners: Point2d[], internals: Point2d[]) {
   return [...corners, ...bilinearInterpolate(corners, internals)];
 }
 
-const sliderTest = ref(0);
+const drawer_height = ref(0);
+const points = new SetPoints();
 </script>
 
 <template>
-  <div class="content">
+  <div class="content" :style="{ paddingBottom: drawer_height + 'px' }">
     <div class="view">
       <svg viewBox="-1 -1 2 2">
         <Marker :id="marker_id" :cx="0" :cy="0" :size="1" opacity="0.2" />
@@ -73,91 +79,80 @@ const sliderTest = ref(0);
         />
       </svg>
     </div>
-    <ConfigEntry>
-      <span>Marker ID:</span>
-      <input
-        type="number"
-        v-model.number="marker_id"
-        step="1"
-        min="0"
-        style="width: 8ch"
-      />
-    </ConfigEntry>
-    <ConfigEntry>
-      <span>Angle X</span>
-      <input
-        type="range"
-        v-model.number="rx"
-        min="-45"
-        max="45"
-        style="width: 12ch"
-      />
-      <span style="min-width: 8ch; text-align: right"
-        >{{ rx.toFixed(2) }}°</span
-      >
-      <button @click="rx = 0">
-        <Icon :icon="faArrowsRotate" />
-      </button>
-    </ConfigEntry>
-    <ConfigEntry>
-      <span>Angle Y</span>
-      <input
-        type="range"
-        v-model.number="ry"
-        min="-45"
-        max="45"
-        style="width: 12ch"
-      />
-      <span style="min-width: 8ch; text-align: right">
-        {{ ry.toFixed(2) }}°
-      </span>
-      <button @click="ry = 0">
-        <Icon :icon="faArrowsRotate" />
-      </button>
-    </ConfigEntry>
-    <ConfigEntry>
-      <span>Distance</span>
-      <input
-        type="range"
-        v-model.number="d"
-        min="1"
-        max="100"
-        style="width: 12ch"
-      />
-      <span style="min-width: 8ch; text-align: right">
-        {{ d.toFixed(2) }}
-      </span>
-      <button @click="d = 1">
-        <Icon :icon="faArrowsRotate" />
-      </button>
-    </ConfigEntry>
-    <ConfigEntry>
-      <span>Distance</span>
-      <input
-        type="range"
-        v-model.number="d"
-        min="1"
-        max="100"
-        style="width: 12ch"
-      />
-      <span style="min-width: 8ch; text-align: right">
-        {{ d.toFixed(2) }}
-      </span>
-      <button @click="d = 1">
-        <Icon :icon="faArrowsRotate" />
-      </button>
-    </ConfigEntry>
-    <RangeSlider
-      v-model="sliderTest"
-      :min="-100"
-      :max="+100"
-      :neutral="0"
-      style="width: 40ch"
-    >
-      <span>Hello World</span>
-      <span>{{ sliderTest.toFixed(2) }}</span>
-    </RangeSlider>
   </div>
+  <Drawer v-model="drawer_height" :toggle="true">
+    <HorizontalDivision
+      :division="0.6"
+      class="fill"
+      :min-width-left="0.2"
+      :min-width-right="0.2"
+    >
+      <template #left>
+        <HorizontalDivision
+          :division="0.5"
+          class="fill"
+          :min-width-left="0.3"
+          :min-width-right="0.3"
+        >
+          <template #left>
+            <SetPointsEditor :points="points" />
+          </template>
+          <template #right>
+            <SetPointsList
+              :points="points"
+              :unit="['°', '°', Scale.millimeters]"
+            />
+          </template>
+        </HorizontalDivision>
+      </template>
+      <template #right>
+        <div class="fill pad">
+          <ConfigEntry>
+            <span>Marker ID:</span>
+            <input
+              type="number"
+              v-model.number="marker_id"
+              step="1"
+              min="0"
+              style="width: 8ch"
+            />
+          </ConfigEntry>
+          <RangeSlider
+            v-model.number="rx"
+            :min="-45"
+            :max="45"
+            :step="0.1"
+            :neutral="0"
+            style="max-width: 40ch"
+          >
+            <span>Angle X</span>
+            <span>{{ rx.toFixed(2) }}°</span>
+          </RangeSlider>
+          <RangeSlider
+            v-model.number="ry"
+            :min="-45"
+            :max="45"
+            :step="0.1"
+            :neutral="0"
+            style="max-width: 40ch"
+          >
+            <span>Angle Y</span>
+            <span>{{ ry.toFixed(2) }}°</span>
+          </RangeSlider>
+          <RangeSlider
+            v-model.number="d"
+            :min="1"
+            :max="100"
+            :step="0.1"
+            style="max-width: 40ch"
+          >
+            <span>Distance</span>
+            <span>{{ d.toFixed(2) }}</span>
+          </RangeSlider>
+        </div>
+      </template>
+    </HorizontalDivision>
+  </Drawer>
 </template>
 
 <style scoped lang="scss">
@@ -167,7 +162,7 @@ const sliderTest = ref(0);
   justify-content: center;
   align-items: center;
   width: 100%;
-  height: 100%;
+  min-height: 100%;
   --size: min(25vw, 50vh);
   .view {
     display: flex;
@@ -188,5 +183,15 @@ const sliderTest = ref(0);
       }
     }
   }
+}
+
+.fill {
+  width: 100%;
+  height: 100%;
+}
+
+.pad {
+  padding: 1rem;
+  box-sizing: border-box;
 }
 </style>

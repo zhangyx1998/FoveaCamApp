@@ -6,8 +6,9 @@
 import { mkdirSync } from "node:fs";
 import fs from "node:fs/promises";
 import { resolve } from "node:path";
+import { homedir } from "node:os";
 import { cvtColor, type Mat } from "core/Vision";
-import { onScopeDispose, shallowRef } from "vue";
+import { onScopeDispose, reactive, ref, shallowRef } from "vue";
 import { Vision } from "core";
 
 function RGB2BGR(image: Mat) {
@@ -62,18 +63,39 @@ function getDateTimeString() {
   return `${year}${month}${day}-${hours}${minutes}${seconds}`;
 }
 
+export class CaptureAborted extends Error {}
+
 export default class Capture {
   private seq = 1;
   get sequence() {
     return this.seq.toString().padStart(4, "0");
   }
-  incrementSequence() {
-    this.seq++;
+  updateSequence(s: string) {
+    if (!/\d+/.test(s)) return;
+    this.seq = parseInt(s) + 1;
   }
   readonly prefix = getDateTimeString();
   get directory() {
     return `${this.prefix}.${this.namespace}`;
   }
+
+  private __last_save_path = ref<string | null>(null);
+  get default_path() {
+    return resolve(homedir(), "Downloads", this.directory);
+  }
+  get current_path() {
+    return this.__last_save_path.value ?? this.default_path;
+  }
+  set current_path(path: string) {
+    path = path.trim();
+    if (path === "" || path === this.default_path)
+      this.__last_save_path.value = null;
+    else this.__last_save_path.value = path;
+  }
+  resetPath() {
+    this.__last_save_path.value = null;
+  }
+
   private readonly providers = new Set<Provider>();
   constructor(public readonly namespace: string) {
     if (current_capture.value !== null)
@@ -105,10 +127,12 @@ export default class Capture {
     };
   }
 
-  async capture(cap: CaptureData = new Map()) {
+  capture(cap: CaptureData = new Map()) {
+    let aborted = false;
     const provide = (name: string, data: Resource | Resource[]) => {
-      console.log("provide", { name, data });
-      if (!cap.has(name)) cap.set(name, data);
+      if (aborted) throw new CaptureAborted();
+      if (!cap.has(name))
+        cap.set(name, Array.isArray(data) ? reactive([...data]) : data);
       else {
         const existing = cap.get(name)!;
         if (Array.isArray(data) && Array.isArray(existing))
@@ -121,10 +145,23 @@ export default class Capture {
           );
       }
     };
-    await Promise.all(
-      Array.from(this.providers).map((provider) => provider(provide)),
+    return Object.assign(
+      Promise.all(
+        Array.from(this.providers).map(async (provider) => {
+          try {
+            return await provider(provide);
+          } catch (e) {
+            if (e instanceof CaptureAborted) return;
+            else throw e;
+          }
+        }),
+      ).then(() => cap),
+      {
+        abort() {
+          aborted = true;
+        },
+      },
     );
-    return cap;
   }
 
   save(path: string, data: CaptureData, img_format: string = "png") {

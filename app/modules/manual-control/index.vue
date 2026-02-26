@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onUnmounted, reactive, ref, shallowRef, watch } from "vue";
-import { Point2d, Rect } from "core/Geometry";
+import { Point2d, Rect, Size } from "core/Geometry";
 import {
   getFrameSize,
   ROLE,
@@ -17,7 +17,7 @@ import { Latest } from "@lib/util/iter";
 import FrameView from "@src/components/FrameView.vue";
 import { RECT } from "@lib/util/geometry";
 import { useAppConfig } from "@lib/config";
-import { radians } from "@lib/util";
+import { delay, isEmpty, radians } from "@lib/util";
 import Capture from "@src/capture";
 import {
   diff,
@@ -36,6 +36,14 @@ import RangeSlider from "@src/inputs/range-slider.vue";
 import { createQMatrix, deriveFoveaIntrinsics } from "@lib/stereo";
 import { matToArray } from "@lib/mat";
 import { makeBGRA, stack } from "@lib/imgproc";
+import Drawer from "@src/components/Drawer.vue";
+import HorizontalDivision from "@src/layouts/HorizontalDivision.vue";
+import SetPoints from "@src/set-points";
+import SetPointsEditor from "@src/set-points/Editor.vue";
+import SetPointsList from "@src/set-points/List.vue";
+import Line2D from "@src/components/Line2D.vue";
+import { Scale } from "@lib/util/math";
+import local from "@lib/local";
 
 const view = ref<"sliced" | "diff" | "depth">("sliced");
 const remote_content = ref<string>("NONE");
@@ -45,23 +53,28 @@ const triple = await useCalibratedTriple();
 const { L, C, R } = triple;
 const { A2V, V2A, A2H } = useCoordinateConversions(triple);
 
+const points = new SetPoints(local("manual-control.set-points", ""));
+const drawer_height = ref(0);
+
 const { width, height } = await getFrameSize(C);
 const undistort = triple.CI.undistort;
 if (!undistort)
   throw new Error("Intrinsic calibration not found for center camera.");
 
-const cursor = shallowRef<(MouseEvent & Rect) | null>(null);
+const cursor = shallowRef<(Rect & { buttons: number }) | null>(null);
 const target_loc = shallowRef<Point2d>({ x: width / 2, y: height / 2 });
-const target_angle = computed(
-  () => undistort.angular([target_loc.value], false)[0],
-);
+const target_angle = computed(() => {
+  if (setpoint_item.value) {
+    const { x = 0, y = 0 } = setpoint_item.value;
+    return { x: radians(x), y: radians(y) };
+  } else {
+    return undistort.angular([target_loc.value], false)[0];
+  }
+});
 const target_size = computed(() => ({
   width: width / zoom.value,
   height: height / zoom.value,
 }));
-const target = computed(() =>
-  RECT.fromCenter(target_loc.value, target_size.value),
-);
 
 const zoom = computed<number>({
   get: () => Math.max(1.0, triple.config.zoom_factor ?? 9.0),
@@ -77,11 +90,14 @@ const verge = ref(0.0);
 const shift = ref(0.0);
 const depth_window_inv = ref(0.0);
 
+const distance = computed(() =>
+  verge.value <= 0 ? Infinity : baseline.value / Math.pow(verge.value, 2),
+);
+
+watch(verge, () => interactOverride(!isEmpty(setpoint_item.value?.d)));
+watch(shift, () => interactOverride(!isEmpty(setpoint_item.value?.s)));
+
 const baseline = computed(() => app_config.baseline_distance_mm ?? 200.0);
-const distance = computed(() => {
-  if (verge.value <= 0) return Infinity;
-  return baseline.value / Math.pow(verge.value, 2);
-});
 
 const depth_window = computed(() => {
   const inv = depth_window_inv.value;
@@ -89,17 +105,15 @@ const depth_window = computed(() => {
   return 1 / Math.pow(inv, 2);
 });
 
-const target_mems = computed(() => {
-  const A = target_angle.value;
-  const [v, s] = [verge.value, shift.value];
+function inverseTriangulate(angle: Point2d, z = Infinity, s = 0) {
+  console.log("Get Target Volt:", { angle, z, s });
   const out = {
-    l: { ...A },
-    r: { ...A },
+    l: { ...angle },
+    r: { ...angle },
   };
-  if (v > 0) {
+  if (z < Infinity && z > 0) {
     const b = baseline.value / 2;
-    const z = distance.value;
-    const x = z * Math.tan(A.x);
+    const x = z * Math.tan(angle.x);
     out.l.x = Math.atan2(x + b, z);
     out.r.x = Math.atan2(x - b, z);
   }
@@ -108,16 +122,69 @@ const target_mems = computed(() => {
     out.r.y -= radians(s);
   }
   return out;
+}
+
+function anglesToVolts(A: { l: Point2d; r: Point2d }) {
+  return {
+    l: A2V.L(A.l),
+    r: A2V.R(A.r),
+  };
+}
+
+const target_volts = computed(() => {
+  const i = setpoint.value;
+  if (i !== null && i < setpoint_volts.value.length)
+    return setpoint_volts.value[i];
+  else
+    return anglesToVolts(
+      inverseTriangulate(target_angle.value, distance.value, shift.value),
+    );
 });
 
-const is_drag = computed(
-  () => cursor.value !== null && (cursor.value.buttons & 1) !== 0,
-);
+const setpoint_select = ref<number | null>(null);
+const setpoint_hover = ref<number | null>(null);
+const setpoint = computed(() => {
+  const { output } = points;
+  if (!Array.isArray(output)) return null;
+  return setpoint_select.value ?? setpoint_hover.value;
+});
+const setpoint_item = computed(() => {
+  const i = setpoint.value;
+  if (isEmpty(i)) return null;
+  const [x, y, d, s] = Array.isArray(points.output)
+    ? points.output[i]
+    : [undefined, undefined, undefined, undefined];
+  return { x, y, d, s };
+});
+const setpoint_pos = computed(() => {
+  const i = setpoint_item.value;
+  if (isEmpty(i)) return {};
+  const { x = 0, y = 0 } = i;
+  return undistort.position([{ x: radians(x), y: radians(y) }], false)[0];
+});
+const setpoint_volts = computed(() => {
+  const { output } = points;
+  if (!Array.isArray(output)) return [];
+  return output.map(([x, y, d = distance.value, s = shift.value]) => {
+    const A = inverseTriangulate({ x: radians(x), y: radians(y) }, d * 1000, s);
+    return {
+      l: A2V.L(A.l),
+      r: A2V.R(A.r),
+    };
+  });
+});
+
+function interactOverride(flag: boolean = true) {
+  if (flag) setpoint_select.value = null;
+}
+
+const is_drag = computed(() => cursor.value !== null);
 
 watch(cursor, (c) => {
-  if (c && is_drag.value) {
+  if (c) {
     const { x, y } = c;
     target_loc.value = { x, y };
+    interactOverride();
   }
 });
 
@@ -131,7 +198,7 @@ const actuate_task = abortable(async (_, onAbort) => {
   if (!c) return;
   const updated = new Latest<{ l: Point2d; r: Point2d }>();
   onAbort(() => updated.close());
-  const handle = watch(target_mems, (t) => updated.push(t), {
+  const handle = watch(target_volts, (t) => updated.push(t), {
     deep: true,
     immediate: true,
   });
@@ -139,8 +206,8 @@ const actuate_task = abortable(async (_, onAbort) => {
     await c.enable();
     for await (const { l, r } of updated) {
       const { left, right } = await c.actuate({
-        left: A2V.L(l),
-        right: A2V.R(r),
+        left: l,
+        right: r,
       });
       volt.L = left;
       volt.R = right;
@@ -163,7 +230,11 @@ const mat_r = shallowRef<Mat<Uint8Array> | null>(null);
 const sliced_view = computed(() => {
   const m = mat_c.value;
   if (!m) return null;
-  return slice(m, target.value);
+  const rect = RECT.fromCenter(
+    undistort.position([target_angle.value], false)[0],
+    target_size.value,
+  );
+  return slice(m, rect);
 });
 
 const diff_view = computed(() => {
@@ -247,16 +318,14 @@ function normalizeFovea({ image, format }: Stack, H: Mat<Float64Array>) {
   return wrapPerspective(bgra, H);
 }
 
-capture.provide(async (provide) => {
-  const { sensor_size, focal, center, fov } = undistort;
-  provide("wide", { meta: { sensor_size, focal, center, fov } });
+async function* captureFoveaPair(sensor_size: Size) {
   const fovea = {
     Q: matToArray(Q.value),
     baseline: baseline.value,
     "baseline.unit": "millimeter",
   };
-  provide("fovea", { meta: fovea });
-  provide("center", { image: sliced_view.value });
+  yield { name: "fovea", meta: fovea };
+  yield { name: "center", image: sliced_view.value };
   // Snapshot volts and angles
   const V = { ...volt };
   const A = {
@@ -270,7 +339,8 @@ capture.provide(async (provide) => {
   const l = normalizeFovea(l_stack, A2H.L(A.L));
   const r = normalizeFovea(r_stack, A2H.R(A.R));
   const intrinsics = fovea_intrinsics.value;
-  provide("left", {
+  yield {
+    name: "left",
     image: l,
     meta: {
       sensor_size,
@@ -280,8 +350,9 @@ capture.provide(async (provide) => {
       "angle.unit": "radian",
       intrinsics: intrinsics.L,
     },
-  });
-  provide("right", {
+  };
+  yield {
+    name: "right",
     image: r,
     meta: {
       sensor_size,
@@ -291,13 +362,40 @@ capture.provide(async (provide) => {
       "angle.unit": "radian",
       intrinsics: intrinsics.R,
     },
-  });
-  provide("diff", { image: diff(l, r, true) });
+  };
+  yield { name: "diff", image: diff(l, r, true) };
+}
+
+capture.provide(async (provide) => {
+  const { sensor_size, focal, center, fov } = undistort;
+  provide("wide", { meta: { sensor_size, focal, center, fov } });
+  const fovea = {
+    Q: matToArray(Q.value),
+    baseline: baseline.value,
+    "baseline.unit": "millimeter",
+  };
+  function numSetPoints() {
+    return Array.isArray(points.output) ? points.output.length : 0;
+  }
+  if (setpoint.value === null || numSetPoints() === 0) {
+    for await (const { name, ...content } of captureFoveaPair(sensor_size))
+      provide(name, content);
+  } else {
+    for (let i = 0; i < numSetPoints(); i++) {
+      setpoint_select.value = i;
+      await delay(100);
+      for await (const { name, ...content } of captureFoveaPair(sensor_size))
+        provide(name, [content]);
+    }
+  }
 });
 </script>
 
 <template>
-  <div class="cameras">
+  <div
+    class="cameras"
+    :style="{ '--p': (drawer_height ? drawer_height + 20 : 0) + 'px' }"
+  >
     <div class="view">
       <StreamView
         class="stream"
@@ -312,7 +410,14 @@ capture.provide(async (provide) => {
         :lim="controller?.dv ?? 200"
         :color="THEME.L"
         style="width: 100%"
-      />
+      >
+        <Line2D
+          style="opacity: 0.5"
+          :data="setpoint_volts.map((v) => v.l)"
+          :focus-color="THEME.L"
+          :focus="setpoint_select"
+        />
+      </PosView>
     </div>
     <div class="view">
       <FrameView
@@ -328,20 +433,17 @@ capture.provide(async (provide) => {
         :transform="transformCenter"
         :theme="THEME.C"
         capture="wide"
-        @mousedown="(e) => (cursor = e)"
-        @mouseup="(e) => (cursor = e)"
-        @mousemove="(e) => (cursor = e)"
-        @mouseleave="() => (cursor = null)"
+        v-model="cursor"
       >
         <FrameCursor
-          :cursor="{ ...target_loc, width, height }"
+          :cursor="{ ...target_loc, width, height, ...setpoint_pos }"
           :undistort="undistort"
           box="dot"
           :color="THEME.C"
         />
         <FrameCursor
           v-if="cursor && !is_drag"
-          :cursor="cursor"
+          :cursor="{ ...cursor, ...setpoint_pos }"
           :undistort="undistort"
           color="#fffa"
         />
@@ -349,7 +451,7 @@ capture.provide(async (provide) => {
       <ConfigEntry>
         <label>
           <span>Zoom</span>
-          <input type="number" v-model.number="zoom" style="width: 4ch" />
+          <input v-model.number="zoom" style="width: 4ch" />
         </label>
         <span>|</span>
         <label>
@@ -364,69 +466,6 @@ capture.provide(async (provide) => {
         <label>
           <span>Wrap</span>
           <input type="checkbox" v-model="wrap_enable" />
-        </label>
-      </ConfigEntry>
-      <RangeSlider
-        v-model="verge"
-        :min="1"
-        :max="0"
-        :neutral="0"
-        :step="0.01"
-        style="width: 40ch"
-      >
-        <span>Verge Distance</span>
-        <span>
-          <template v-if="distance !== Infinity">
-            {{ (distance / 1000).toFixed(4) }}m
-          </template>
-          <template v-else> ∞ </template>
-        </span>
-      </RangeSlider>
-      <RangeSlider
-        v-model="shift"
-        :min="-0.5"
-        :max="+0.5"
-        :neutral="0"
-        :step="0.1"
-        style="width: 40ch"
-      >
-        <span>Vertical Shift</span>
-        <span> {{ plusSign(shift.toFixed(4)) }}° </span>
-      </RangeSlider>
-      <RangeSlider
-        v-model="depth_window_inv"
-        :min="1"
-        :max="0"
-        :neutral="0"
-        :step="0.01"
-        style="width: 40ch"
-      >
-        <span>Depth Window</span>
-        <span>
-          <template v-if="depth_window !== Infinity">
-            {{ (depth_window / 1000).toFixed(4) }} m
-          </template>
-          <template v-else> ∞ </template>
-        </span>
-      </RangeSlider>
-      <RangeSlider
-        v-model="cap_stack"
-        :min="1"
-        :max="200"
-        :neutral="1"
-        :step="10"
-        style="width: 40ch"
-      >
-        <span>Capture Stack</span>
-        <span>{{ cap_stack }}</span>
-      </RangeSlider>
-      <ConfigEntry>
-        <label>
-          <span>Remote Display</span>
-          <select v-model="remote_content">
-            <option value="NONE">No Content</option>
-            <option value="L+R">L + R</option>
-          </select>
         </label>
       </ConfigEntry>
     </div>
@@ -444,9 +483,108 @@ capture.provide(async (provide) => {
         :lim="controller?.dv ?? 200"
         :color="THEME.R"
         style="width: 100%"
-      />
+      >
+        <Line2D
+          style="opacity: 0.5"
+          :data="setpoint_volts.map((v) => v.r)"
+          :focus-color="THEME.R"
+          :focus="setpoint_select"
+        />
+      </PosView>
     </div>
   </div>
+  <Drawer v-model="drawer_height">
+    <HorizontalDivision
+      :division="0.6"
+      class="fill"
+      :min-width-left="0.2"
+      :min-width-right="0.2"
+    >
+      <template #left>
+        <HorizontalDivision
+          :division="0.5"
+          class="fill"
+          :min-width-left="0.3"
+          :min-width-right="0.3"
+        >
+          <template #left>
+            <SetPointsEditor :points="points" />
+          </template>
+          <template #right>
+            <SetPointsList
+              :points="points"
+              :unit="['°', '°', Scale.millimeters]"
+              v-model:select="setpoint_select"
+              v-model:hover="setpoint_hover"
+            />
+          </template>
+        </HorizontalDivision>
+      </template>
+      <template #right>
+        <div class="options fill">
+          <RangeSlider
+            v-model="verge"
+            :min="1"
+            :max="0"
+            :neutral="0"
+            :step="0.01"
+          >
+            <span>Verge Distance</span>
+            <span>
+              <template v-if="distance !== Infinity">
+                {{ (distance / 1000).toFixed(4) }}m
+              </template>
+              <template v-else> ∞ </template>
+            </span>
+          </RangeSlider>
+          <RangeSlider
+            v-model="shift"
+            :min="-0.5"
+            :max="+0.5"
+            :neutral="0"
+            :step="0.1"
+          >
+            <span>Vertical Shift</span>
+            <span> {{ plusSign(shift.toFixed(4)) }}° </span>
+          </RangeSlider>
+          <RangeSlider
+            v-model="depth_window_inv"
+            :min="1"
+            :max="0"
+            :neutral="0"
+            :step="0.01"
+          >
+            <span>Depth Window</span>
+            <span>
+              <template v-if="depth_window !== Infinity">
+                {{ (depth_window / 1000).toFixed(4) }} m
+              </template>
+              <template v-else> ∞ </template>
+            </span>
+          </RangeSlider>
+          <RangeSlider
+            v-model="cap_stack"
+            :min="1"
+            :max="200"
+            :neutral="1"
+            :step="10"
+          >
+            <span>Capture Stack</span>
+            <span>{{ cap_stack }}</span>
+          </RangeSlider>
+          <ConfigEntry>
+            <label>
+              <span>Remote Display</span>
+              <select v-model="remote_content">
+                <option value="NONE">No Content</option>
+                <option value="L+R">L + R</option>
+              </select>
+            </label>
+          </ConfigEntry>
+        </div>
+      </template>
+    </HorizontalDivision>
+  </Drawer>
   <RemoteCanvasTeleport>
     <template v-if="remote_content === 'L+R'">
       <rect
@@ -484,7 +622,8 @@ capture.provide(async (provide) => {
   flex-wrap: wrap;
   flex-direction: row;
   width: 100%;
-  padding: 1em 0;
+  --p: 0;
+  padding: 1em 0 calc(1em + var(--p)) 0;
   margin: 0;
 
   & > * {
@@ -498,6 +637,20 @@ capture.provide(async (provide) => {
   .stream {
     width: 30vw;
     height: 22.5vw;
+  }
+}
+
+.fill {
+  width: 100%;
+  height: 100%;
+}
+
+.options {
+  padding: 1em;
+  overflow-x: hidden;
+  overflow-y: scroll;
+  & > * {
+    height: 2em;
   }
 }
 </style>

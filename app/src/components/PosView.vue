@@ -82,12 +82,7 @@ function format(v: number, unit: string, radix: number = 1) {
 }
 
 function trackUntilRelease(e: MouseEvent) {
-  if (!(e.buttons & 1)) {
-    emit("select", null);
-    drag.value = false;
-    window.removeEventListener("mousemove", trackUntilRelease);
-    return;
-  }
+  if (!(e.buttons & 1)) return untrack();
   // Compute position
   const el = canvas.value;
   if (!el) return console.warn("No SVG element found");
@@ -109,9 +104,16 @@ function trackUntilRelease(e: MouseEvent) {
   emit("select", pos);
 }
 
+function untrack() {
+  drag.value = false;
+  window.removeEventListener("mousemove", trackUntilRelease);
+  window.removeEventListener("mouseup", trackUntilRelease);
+}
+
 function track(e: MouseEvent) {
   drag.value = true;
   window.addEventListener("mousemove", trackUntilRelease);
+  window.addEventListener("mouseup", trackUntilRelease);
   trackUntilRelease(e);
 }
 </script>

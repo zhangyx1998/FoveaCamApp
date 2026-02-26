@@ -2,7 +2,14 @@
 import { CaptureData, current_capture, Resource, SaveState } from ".";
 import SaveControls from "./SaveControls.vue";
 import HorizontalDivision from "@src/layouts/HorizontalDivision.vue";
-import { computed, reactive, ref, shallowReactive, shallowRef } from "vue";
+import {
+  computed,
+  onUnmounted,
+  reactive,
+  ref,
+  shallowReactive,
+  shallowRef,
+} from "vue";
 import PreviewMeta from "./preview-meta/index.vue";
 import PreviewImage from "./preview-image/index.vue";
 import { isEmpty } from "@lib/util";
@@ -14,10 +21,9 @@ if (isEmpty(capture))
 
 const data = shallowReactive<CaptureData>(new Map());
 const data_ready = ref(false);
-capture.capture(data).then((d) => {
-  data_ready.value = true;
-  console.log("Capture data:", d === data, Object.fromEntries(data.entries()));
-});
+const capture_task = capture.capture(data);
+capture_task.then((d) => (data_ready.value = true));
+onUnmounted(() => capture_task.abort());
 
 const save_state = shallowRef<SaveState | null>(null);
 
@@ -57,7 +63,7 @@ const image_entries = computed(() => {
     }
   }
   console.log("image_entries", entries);
-  return entries;
+  return entries.toReversed();
 });
 </script>
 
