@@ -103,6 +103,11 @@ function increment(delta: number) {
   emit("update:modelValue", clamp(modelValue + delta));
 }
 
+function resetToNeutral(e: MouseEvent) {
+  e.preventDefault();
+  emit("update:modelValue", clamp(props.neutral));
+}
+
 function handleKeydown(e: KeyboardEvent) {
   const modifiers = [e.ctrlKey, e.metaKey, e.altKey, e.shiftKey];
   const scale = modifiers.reduce((a, b) => a * (b ? 0.1 : 1), 1);
@@ -122,12 +127,13 @@ function handleKeydown(e: KeyboardEvent) {
 </script>
 
 <template>
-  <label
+  <div
     ref="el"
     class="range-slider"
     :style="{ color }"
     :tabindex="disabled ? -1 : 0"
     @mousedown="track"
+    @contextmenu="resetToNeutral"
     @keydown="handleKeydown"
     :disabled="disabled"
   >
@@ -136,11 +142,11 @@ function handleKeydown(e: KeyboardEvent) {
       <div class="infill" :style="infillStyle"></div>
     </div>
     <div class="cursor" :style="cursorStyle"></div>
-  </label>
+  </div>
 </template>
 
 <style lang="scss" scoped>
-label.range-slider {
+.range-slider {
   position: relative;
   width: 100%;
   height: 2em;

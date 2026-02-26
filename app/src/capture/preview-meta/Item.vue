@@ -1,14 +1,19 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from "vue";
-import hljs from "highlight.js/lib/core";
-import json from "highlight.js/lib/languages/json";
-import "highlight.js/styles/github.css";
-
-hljs.registerLanguage("json", json);
 
 const props = defineProps({
   key: String,
   value: null,
+  indent: {
+    type: Number,
+    required: false,
+    default: 2,
+  },
+  expand: {
+    type: Boolean,
+    required: false,
+    default: true,
+  },
 });
 
 const preview = computed(() => {
@@ -19,32 +24,32 @@ const preview = computed(() => {
   }
 });
 
-const full = computed(() => JSON.stringify(props.value, null, 2));
-const expand = ref(false);
-const codeEl = ref<HTMLElement | null>(null);
+const expand = ref(props.expand);
+const is_object = computed(
+  () => typeof props.value === "object" && props.value !== null,
+);
 
-const highlight = async () => {
-  if (!expand.value) return;
-  await nextTick();
-  const el = codeEl.value;
-  if (!el) return;
-  el.textContent = full.value;
-  hljs.highlightElement(el);
-};
-
-watch([full, expand], highlight);
-onMounted(highlight);
+const entries = computed(() => {
+  if (!is_object.value) return [];
+  return Object.entries(props.value);
+});
 </script>
 
 <template>
   <div class="item" @click="expand = !expand">
     <div class="title">
       <span class="key">{{ key }}</span>
-      <code class="preview" v-if="!expand">{{ preview }}</code>
+      <code class="preview" v-if="is_object && !expand">{{ preview }}</code>
+      <code class="value" v-else>{{ value }}</code>
     </div>
-    <pre class="full" v-if="expand">
-      <code ref="codeEl" class="language-json"></code>
-    </pre>
+    <Item
+      v-if="is_object && expand"
+      v-for="[k, v] in entries"
+      :key="k"
+      :value="v"
+      :indent="props.indent + 2"
+      :expand="false"
+    ></Item>
   </div>
 </template>
 
@@ -53,23 +58,19 @@ onMounted(highlight);
   cursor: pointer;
   .title {
     display: flex;
-    align-items: center;
-    justify-content: space-between;
+    gap: 0.5em;
+    flex-wrap: nowrap;
+    white-space: nowrap;
+    overflow: hidden;
+    :not(.title) {
+      text-overflow: ellipsis;
+    }
     .key {
       font-weight: bold;
     }
     .preview {
-      margin-left: 0.5em;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
+      color: gray;
     }
-  }
-  .full {
-    margin-top: 0.5em;
-    padding: 0.5em;
-    border-radius: 4px;
-    overflow: auto;
   }
 }
 </style>

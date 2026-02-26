@@ -15,14 +15,11 @@ import { NoCheck } from "@lib/util/vue";
 type Stream = Iterable<Frame | Mat<Uint8Array> | null>;
 
 const emit = defineEmits<{
-  (e: "mousedown", event: MouseEvent & Point & Size): void;
-  (e: "mouseup", event: MouseEvent & Point & Size): void;
-  (e: "mousemove", event: MouseEvent & Point & Size): void;
-  (e: "mouseleave", event: MouseEvent & Point & Size): void;
-  (e: "pointerdown", event: PointerEvent & Point & Size): void;
-  (e: "pointerup", event: PointerEvent & Point & Size): void;
-  (e: "pointermove", event: PointerEvent & Point & Size): void;
-  (e: "pointerleave", event: PointerEvent & Point & Size): void;
+  (
+    e: "update:modelValue",
+    event: (Point & Size & { buttons: number }) | null,
+  ): void;
+  (e: "mouse", event: (Point & Size & { buttons: number }) | null): void;
 }>();
 
 const props = defineProps({
@@ -144,14 +141,8 @@ const overlay = computed(() => ({
     :width="width"
     :height="height"
     :capture="capture"
-    @mousedown="(e) => emit('mousedown', e)"
-    @mouseup="(e) => emit('mouseup', e)"
-    @mousemove="(e) => emit('mousemove', e)"
-    @mouseleave="(e) => emit('mouseleave', e)"
-    @pointerdown="(e) => emit('pointerdown', e)"
-    @pointerup="(e) => emit('pointerup', e)"
-    @pointermove="(e) => emit('pointermove', e)"
-    @pointerleave="(e) => emit('pointerleave', e)"
+    @update:modelValue="(e) => emit('update:modelValue', e)"
+    @mouse="(e) => emit('mouse', e)"
   >
     <slot></slot>
   </FrameView>

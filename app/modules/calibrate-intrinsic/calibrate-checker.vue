@@ -169,8 +169,7 @@ onUnmounted(async () => {
         :footnote="`Chess Board  Detector @ ${freq}`"
         :camera="camera"
         height="min(60vh, 80vw)"
-        @mousemove="(e) => (cursor = e)"
-        @mouseleave="() => (cursor = null)"
+        @mouse="(e) => (cursor = e)"
       >
         <CheckerDetection v-if="detection" :detection="detection.img_points" />
         <FrameCursor :cursor="cursor" :undistort="undistort" box="dot" />

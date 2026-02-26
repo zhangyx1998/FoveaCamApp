@@ -100,30 +100,32 @@ const Marker: FunctionalComponent<{
 </script>
 
 <template>
-  <path
-    v-if="lineColor !== null"
-    :d="path"
-    :stroke="lineColor ?? c"
-    :stroke-width="t"
-    fill="none"
-    opacity="0.5"
-  ></path>
-  <Marker
-    v-if="m !== null"
-    v-for="(p, i) in data"
-    :key="i"
-    :p="p"
-    :m="m"
-    :s="r"
-    :c="c"
-  />
-  <circle
-    v-if="typeof focus === 'number' && data[focus]"
-    :cx="data[focus].x"
-    :cy="data[focus].y"
-    :r="r + t * 2"
-    :stroke="focusColor ?? c"
-    :stroke-width="t"
-    fill="none"
-  />
+  <g>
+    <path
+      v-if="lineColor !== null"
+      :d="path"
+      :stroke="lineColor ?? c"
+      :stroke-width="t"
+      fill="none"
+      opacity="0.5"
+    ></path>
+    <Marker
+      v-if="m !== null"
+      v-for="(p, i) in data"
+      :key="i"
+      :p="p"
+      :m="m"
+      :s="r"
+      :c="c"
+    />
+    <circle
+      v-if="typeof focus === 'number' && data[focus]"
+      :cx="data[focus].x"
+      :cy="data[focus].y"
+      :r="r + t * 2"
+      :stroke="focusColor ?? c"
+      :stroke-width="t"
+      fill="none"
+    />
+  </g>
 </template>
