@@ -16,6 +16,7 @@ import {
 } from "node:fs/promises";
 import { resolve, dirname } from "node:path";
 import { reactive, watch } from "vue";
+import { deepCopy } from "./util";
 
 const STORE: string = resolve(
   await ipcRenderer.invoke("get-data-path"),
@@ -148,6 +149,7 @@ function reviver(key: string, value: any) {
 
 export default class Store {
   private static readonly registry = new Map<string, WeakRef<object>>();
+  private static readonly origins = new WeakMap<Object, string>();
   private static track<T extends object, R extends object = Partial<T>>(
     obj: Partial<T>,
     path: string,
@@ -164,13 +166,13 @@ export default class Store {
     };
     watch(() => tracked, queueWrite, { deep: true });
     this.registry.set(path, new WeakRef(tracked));
+    this.origins.set(tracked, path);
     return tracked as R;
   }
-  private static resolveStorePath(tracked: Object) {
-    for (const [path, ref] of this.registry) {
-      const obj = ref.deref();
-      if (obj === tracked) return path;
-    }
+  static resolve(tracked: Object) {
+    const path = this.origins.get(tracked);
+    if (path !== undefined) return path;
+    console.error("Object is not a store instance:", tracked);
     throw new Error("Object is not a store instance");
   }
   static async open<
@@ -184,7 +186,7 @@ export default class Store {
       if (entry !== undefined) return entry as R;
       else this.registry.delete(path);
     }
-    if (!existsSync(path)) return this.track<T, R>(fallback, path);
+    if (!existsSync(path)) return this.track<T, R>(deepCopy(fallback), path);
     if (await isDirectory(path))
       throw new Error(`Store ${path} is a directory`);
     // If read failed, error should propagate out.
@@ -193,7 +195,7 @@ export default class Store {
       return this.track<T, R>(JSON.parse(file.toString(), reviver), path);
     } catch (error) {
       process.stderr.write(`Error loading store data: ${error}\n`);
-      return this.track<T, R>(fallback, path);
+      return this.track<T, R>(deepCopy(fallback), path);
     }
   }
   static clear(store: object): Promise<void>;
@@ -201,7 +203,7 @@ export default class Store {
   static async clear(seg: string | object, ...segments: string[]) {
     const path =
       typeof seg === "object"
-        ? this.resolveStorePath(seg)
+        ? this.resolve(seg)
         : resolve(STORE, seg, ...segments);
     // clear object in registry, if exists
     if (this.registry.has(path)) {
@@ -235,7 +237,7 @@ export default class Store {
     return files.filter((f): f is string => f !== null);
   }
   static async save(data: any, path?: string) {
-    path ??= this.resolveStorePath(data);
+    path ??= this.resolve(data);
     const dir = dirname(path);
     if (!existsSync(dir)) {
       await mkdir(dir, { recursive: true });

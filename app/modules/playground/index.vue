@@ -18,6 +18,7 @@ import SetPoints from "@src/set-points";
 import SetPointsEditor from "@src/set-points/Editor.vue";
 import SetPointsList from "@src/set-points/List.vue";
 import { Scale } from "@lib/util/math";
+import RemoteCanvasTeleport from "@src/components/RemoteCanvasTeleport.vue";
 
 const marker_id = ref(0);
 const rx = ref(0);
@@ -153,6 +154,11 @@ const points = new SetPoints();
       </template>
     </HorizontalDivision>
   </Drawer>
+  <RemoteCanvasTeleport>
+    <Marker :id="1" :size="60" :cx="-100" />
+    <Marker :id="0" :size="60" />
+    <Marker :id="2" :size="60" :cx="+100" />
+  </RemoteCanvasTeleport>
 </template>
 
 <style scoped lang="scss">

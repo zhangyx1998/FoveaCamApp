@@ -44,9 +44,12 @@ import SetPointsList from "@src/set-points/List.vue";
 import Line2D from "@src/components/Line2D.vue";
 import { Scale } from "@lib/util/math";
 import local from "@lib/local";
+import Checker from "@src/graphics/Checker.vue";
 
 const view = ref<"sliced" | "diff" | "depth">("sliced");
 const remote_content = ref<string>("NONE");
+const checker_corners = ref(10);
+const checker_size_mm = ref(10);
 const app_config = await useAppConfig();
 const controller = computed(getController);
 const triple = await useCalibratedTriple();
@@ -106,7 +109,6 @@ const depth_window = computed(() => {
 });
 
 function inverseTriangulate(angle: Point2d, z = Infinity, s = 0) {
-  console.log("Get Target Volt:", { angle, z, s });
   const out = {
     l: { ...angle },
     r: { ...angle },
@@ -315,7 +317,8 @@ const capture = new Capture("manual-control");
 type Stack = Awaited<ReturnType<typeof stack>>;
 function normalizeFovea({ image, format }: Stack, H: Mat<Float64Array>) {
   const bgra = makeBGRA(convertType(image, "16U"), format);
-  return wrapPerspective(bgra, H);
+  if (wrap_enable.value) return wrapPerspective(bgra, H);
+  else return bgra;
 }
 
 async function* captureFoveaPair(sensor_size: Size) {
@@ -578,9 +581,32 @@ capture.provide(async (provide) => {
               <select v-model="remote_content">
                 <option value="NONE">No Content</option>
                 <option value="L+R">L + R</option>
+                <option value="checker">Checker</option>
               </select>
             </label>
           </ConfigEntry>
+          <template v-if="remote_content === 'checker'">
+            <RangeSlider
+              v-model="checker_corners"
+              :min="1"
+              :max="20"
+              :neutral="6"
+              :step="1"
+            >
+              <span>Checker</span>
+              <span>{{ checker_corners }} Corners</span>
+            </RangeSlider>
+            <RangeSlider
+              v-model="checker_size_mm"
+              :min="1"
+              :max="100"
+              :neutral="10"
+              :step="1"
+            >
+              <span>Checker Size</span>
+              <span>{{ checker_size_mm }} mm</span>
+            </RangeSlider>
+          </template>
         </div>
       </template>
     </HorizontalDivision>
@@ -610,6 +636,12 @@ capture.provide(async (provide) => {
       <text x="-100" y="8" font-size="100">L</text>
       <text x="100" y="8" font-size="100">R</text>
     </template>
+    <Checker
+      v-if="remote_content === 'checker'"
+      :M="checker_corners"
+      :invert="true"
+      :size="checker_size_mm"
+    />
   </RemoteCanvasTeleport>
 </template>
 
