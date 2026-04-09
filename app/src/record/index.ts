@@ -93,7 +93,7 @@ function waitForEvent<T>(
 }
 
 class StreamWriter {
-  // 180 frames ~= 1 second of buffering for 3 streams at 60 FPS each, which
+  // 180 frames ~= 3 seconds of buffering at 60 FPS for a single stream, which
   // keeps memory bounded while giving disk I/O short bursts to catch up.
   private static readonly MAX_QUEUE = 180;
   // Small polling interval used only during shutdown while waiting for queue drain.
