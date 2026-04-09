@@ -227,7 +227,7 @@ export async function useExtrinsicRegression(ds: ExtrinsicDataset) {
   }
   console.log({ V, A });
   const config: RegressionConfig = {
-    ply: [2, 1, 0],
+    ply: [3, 2, 1, 0],
     log: [],
     exp: [],
   };
@@ -235,8 +235,17 @@ export async function useExtrinsicRegression(ds: ExtrinsicDataset) {
   const A2V = new Regression<Point2d, Point2d>(keys, keys, config);
   // Compute Homography projection matrix H per angle
   const A2H = await findPinholeProjection(ds);
+  const ret = { V2A: V2A.fit(V, A), A2V: A2V.fit(A, V), A2H };
   console.log("Extrinsic regression result:", { V2A, A2V, A2H });
-  return { V2A: V2A.fit(V, A), A2V: A2V.fit(A, V), A2H };
+  console.log("V2A:", V2A.toString());
+  console.log("A2V:", A2V.toString());
+  console.log(`Predictions:`, {
+    V_MEA: V,
+    V_PRD: A.map((a) => A2V.predict(a)),
+    A_MEA: A,
+    A_PRD: V.map((v) => V2A.predict(v)),
+  });
+  return ret;
 }
 
 export type ExtrinsicRegression = Awaited<
