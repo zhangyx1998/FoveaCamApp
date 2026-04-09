@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license.
 // You may find the full license in project root directory.
 // -------------------------------------------------------
-import { app, BrowserWindow, shell, ipcMain } from "electron";
+import { app, BrowserWindow, dialog, shell, ipcMain } from "electron";
 // import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -105,6 +105,15 @@ function customizeApp() {
 
 // IPC handler to provide DATA path to renderer
 ipcMain.handle("get-data-path", () => DATA);
+ipcMain.handle("prompt-recording-path", async (_, defaultPath?: string) => {
+  const target = BrowserWindow.getFocusedWindow() ?? win ?? undefined;
+  const result = await dialog.showSaveDialog(target, {
+    title: "Select Recording Destination",
+    defaultPath: defaultPath || app.getPath("downloads"),
+    buttonLabel: "Start Recording",
+  });
+  return result.canceled ? null : result.filePath;
+});
 
 app.whenReady().then(customizeApp).then(createWindow);
 
