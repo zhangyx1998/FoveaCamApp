@@ -65,6 +65,10 @@ function normalizeTimestamp(
   return null;
 }
 
+function epochNowNs() {
+  return BigInt(Date.now()) * 1_000_000n;
+}
+
 function waitForEvent<T>(
   emitter: NodeJS.EventEmitter,
   event: string,
@@ -89,11 +93,15 @@ function waitForEvent<T>(
 }
 
 class StreamWriter {
+  // 180 frames ~= 1 second of buffering at 3 streams x 60 FPS total, which
+  // keeps memory bounded while giving disk I/O short bursts to catch up.
+  private static readonly MAX_QUEUE = 180;
+  // Small polling interval used only during shutdown while waiting for queue drain.
+  private static readonly CLOSE_WAIT_MS = 5;
   private readonly gzip: Gzip;
   private readonly output: WriteStream;
   private readonly index: WriteStream;
   private readonly queue: Packet[] = [];
-  private readonly maxQueue = 180;
   private draining = false;
   private closed = false;
   private frameCount = 0;
@@ -128,7 +136,7 @@ class StreamWriter {
 
   enqueue(packet: Packet) {
     if (this.closed) return;
-    if (this.queue.length >= this.maxQueue) {
+    if (this.queue.length >= StreamWriter.MAX_QUEUE) {
       this.dropped++;
       return;
     }
@@ -161,7 +169,7 @@ class StreamWriter {
     this.closed = true;
     while (this.draining || this.queue.length > 0) {
       if (!this.draining) void this.drain();
-      await new Promise((r) => setTimeout(r, 5));
+      await new Promise((r) => setTimeout(r, StreamWriter.CLOSE_WAIT_MS));
     }
     const outputDone = waitForEvent<void>(this.output, "finish");
     const indexDone = waitForEvent<void>(this.index, "finish");
@@ -224,12 +232,13 @@ export default class Recording {
     const image = data.image;
     if (!image) return null;
     const timestamp = normalizeTimestamp(data.timestamp);
+    const captured_at_ns = epochNowNs();
     const packet: Packet = {
       payload: bufferFromMat(image),
       summary: {
         frame: 0,
-        timestamp: timestamp ?? Date.now() * 1_000_000,
-        captured_at_ns: (BigInt(Date.now()) * 1_000_000n).toString(),
+        timestamp: timestamp ?? captured_at_ns.toString(),
+        captured_at_ns: captured_at_ns.toString(),
         byte_offset: 0,
         byte_length: 0,
         shape: [...image.shape],
