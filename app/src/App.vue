@@ -197,6 +197,7 @@ window.addEventListener("keydown", (e) => {
       :class="{ active: isRecording }"
       :disabled="!isRecAvailable || recordingBusy"
       @click="toggleRecording"
+      aria-label="Toggle recording"
       title="Start / Stop Recording"
     >
       <Icon :icon="faCircle" />
