@@ -19,6 +19,7 @@ import { RECT } from "@lib/util/geometry";
 import { useAppConfig } from "@lib/config";
 import { delay, isEmpty, radians } from "@lib/util";
 import Capture from "@src/capture";
+import Recording from "@src/record";
 import {
   diff,
   disparity,
@@ -222,6 +223,7 @@ const actuate_task = abortable(async (_, onAbort) => {
 
 onUnmounted(async () => {
   await Promise.all([actuate_task.abort()]);
+  await recording.stop();
   triple.release();
 });
 
@@ -313,6 +315,7 @@ function plusSign(v: string) {
 }
 
 const capture = new Capture("manual-control");
+const recording = new Recording("manual-control");
 
 type Stack = Awaited<ReturnType<typeof stack>>;
 function normalizeFovea({ image, format }: Stack, H: Mat<Float64Array>) {
@@ -405,6 +408,7 @@ capture.provide(async (provide) => {
         :title="ROLE.L"
         :camera="L"
         :transform="wrapLeft"
+        record="left-fovea"
         :theme="THEME.L"
       >
       </StreamView>
@@ -436,6 +440,7 @@ capture.provide(async (provide) => {
         :transform="transformCenter"
         :theme="THEME.C"
         capture="wide"
+        record="center-wide"
         v-model="cursor"
       >
         <FrameCursor
@@ -478,6 +483,7 @@ capture.provide(async (provide) => {
         :title="ROLE.R"
         :camera="R"
         :transform="wrapRight"
+        record="right-fovea"
         :theme="THEME.R"
       >
       </StreamView>
