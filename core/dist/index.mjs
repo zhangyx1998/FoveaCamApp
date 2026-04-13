@@ -27,6 +27,7 @@ export default Module;
 export const {
     Aravis,
     Vision,
+    Tracker,
     Controller,
     Regression,
     Geometry,
