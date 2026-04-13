@@ -6,10 +6,10 @@
 import { mkdirSync } from "node:fs";
 import fs from "node:fs/promises";
 import { resolve } from "node:path";
-import { homedir } from "node:os";
 import { cvtColor, type Mat } from "core/Vision";
-import { onScopeDispose, reactive, ref, shallowRef } from "vue";
+import { onScopeDispose, reactive, shallowRef } from "vue";
 import { Vision } from "core";
+import { SavePath } from "@lib/save-path";
 
 function RGB2BGR(image: Mat) {
   switch (image.channels) {
@@ -51,53 +51,12 @@ export function register(namespace: string, ...providers: Provider[]) {
 
 export const current_capture = shallowRef<Capture | null>(null);
 
-// YYYYMMDD-HHMMSS
-function getDateTimeString() {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, "0");
-  const day = String(now.getDate()).padStart(2, "0");
-  const hours = String(now.getHours()).padStart(2, "0");
-  const minutes = String(now.getMinutes()).padStart(2, "0");
-  const seconds = String(now.getSeconds()).padStart(2, "0");
-  return `${year}${month}${day}-${hours}${minutes}${seconds}`;
-}
-
 export class CaptureAborted extends Error {}
 
-export default class Capture {
-  private seq = 1;
-  get sequence() {
-    return this.seq.toString().padStart(4, "0");
-  }
-  updateSequence(s: string) {
-    if (!/\d+/.test(s)) return;
-    this.seq = parseInt(s) + 1;
-  }
-  readonly prefix = getDateTimeString();
-  get directory() {
-    return `${this.prefix}.${this.namespace}`;
-  }
-
-  private __last_save_path = ref<string | null>(null);
-  get default_path() {
-    return resolve(homedir(), "Downloads", this.directory);
-  }
-  get current_path() {
-    return this.__last_save_path.value ?? this.default_path;
-  }
-  set current_path(path: string) {
-    path = path.trim();
-    if (path === "" || path === this.default_path)
-      this.__last_save_path.value = null;
-    else this.__last_save_path.value = path;
-  }
-  resetPath() {
-    this.__last_save_path.value = null;
-  }
-
+export default class Capture extends SavePath {
   private readonly providers = new Set<Provider>();
-  constructor(public readonly namespace: string) {
+  constructor(namespace: string) {
+    super(namespace);
     if (current_capture.value !== null)
       throw new Error(
         `A capture is already in progress for namespace "${current_capture.value.namespace}".`,

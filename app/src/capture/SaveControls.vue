@@ -1,12 +1,8 @@
 <script setup lang="ts">
 import { resolve } from "node:path";
-import {
-  existsSync,
-  statSync,
-  accessSync,
-  constants as fs_flags,
-} from "node:fs";
+import { existsSync } from "node:fs";
 import { computed, ref, watch } from "vue";
+import { validateWritablePath } from "@lib/util/fs";
 import { FontAwesomeIcon as Icon } from "@fortawesome/vue-fontawesome";
 import { faSave, faTrash } from "@fortawesome/free-solid-svg-icons";
 import Capture from ".";
@@ -44,27 +40,7 @@ const img_format = ref("png");
 
 const save_path = ref(props.capture.current_path);
 
-function validatePath(path: string) {
-  if (path.trim() === "") return false;
-  try {
-    if (!existsSync(path)) {
-      const parent = resolve(path, "..");
-      if (parent === path) return false;
-      return validatePath(parent);
-    }
-    const stats = statSync(path);
-    // Path must be a directory
-    if (!stats.isDirectory()) return false;
-    // Check for ownership and write permission
-    // throws if the path is not accessible or writable
-    accessSync(path, fs_flags.W_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-const path_valid = computed(() => validatePath(save_path.value));
+const path_valid = computed(() => validateWritablePath(save_path.value));
 
 const seq_valid = computed(() => {
   const path = resolve(save_path.value, sequence.value);

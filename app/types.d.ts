@@ -16,3 +16,8 @@ type Mutable<T> = { -readonly [P in keyof T]: T[P] };
 type BufferLike = Buffer | ArrayBuffer | ArrayBufferView;
 
 type Empty = null | undefined;
+
+declare module "*.py?raw" {
+  const src: string;
+  export default src;
+}
