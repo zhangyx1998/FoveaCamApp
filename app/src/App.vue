@@ -12,6 +12,7 @@ const currentModuleName = ref<string | null>(null);
 const titleBarHeight = ref(0);
 // Sub task modules
 import ManualControl from "../modules/manual-control/index.vue";
+import TrackingSingle from "../modules/tracking-single/index.vue";
 import DisparityScope from "../modules/disparity-scope/index.vue";
 import ManageCameras from "../modules/manage-cameras/index.vue";
 import CalibrateIntrinsic from "../modules/calibrate-intrinsic/index.vue";
@@ -96,11 +97,14 @@ window.addEventListener("keydown", (e) => {
           >
             <Icon :icon="faCircleHalfStroke" /> Disparity Scope
           </button>
-          <button style="--color: #0af" disabled>
-            <Icon :icon="faObjectGroup" /> 3D Tracking (Single)
+          <button
+            style="--color: #0af"
+            @click="launch(TrackingSingle, 'Object Tracking (Single)')"
+          >
+            <Icon :icon="faObjectGroup" /> Object Tracking (Single)
           </button>
           <button style="--color: #0af" disabled>
-            <Icon :icon="faObjectGroup" /> 3D Tracking (Multi)
+            <Icon :icon="faObjectGroup" /> Object Tracking (Multi)
           </button>
           <button style="--color: #0af" disabled>
             <Icon :icon="faObjectGroup" /> 3D Reconstruction

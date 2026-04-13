@@ -83,6 +83,9 @@ export default defineConfig(({ command }) => {
                 };
             })(),
         clearScreen: false,
+        optimizeDeps: {
+            exclude: external,
+        },
         resolve: {
             alias: {
                 "@": resolve(PROJECT_ROOT, "src"),

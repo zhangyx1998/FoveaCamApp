@@ -39,6 +39,10 @@ static Object init(Env env, Object exports) {
     CORE_OBJECT_EXPORT(MarkerDetectorObject, env, Vision);
     CORE_OBJECT_EXPORT(VisionNamespace, env, Vision);
     exports.Set("Vision", Vision);
+    // Tracker Module
+    auto Tracker = Object::New(env);
+    CORE_OBJECT_EXPORT(TrackerNamespace, env, Tracker);
+    exports.Set("Tracker", Tracker);
     // Regression Module
     CORE_OBJECT_EXPORT(RegressionObject, env, exports);
     // Geometry Module

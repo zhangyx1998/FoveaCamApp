@@ -36,6 +36,11 @@
       "require": "./dist/Geometry/index.cjs",
       "types": "./dist/Geometry/index.d.ts"
     },
+    "./Tracker": {
+      "import": "./dist/Tracker/index.mjs",
+      "require": "./dist/Tracker/index.cjs",
+      "types": "./dist/Tracker/index.d.ts"
+    },
     "./Log": {
       "import": "./dist/Log/index.mjs",
       "require": "./dist/Log/index.cjs",
