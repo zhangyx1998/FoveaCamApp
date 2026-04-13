@@ -40,33 +40,12 @@ import {
   faRulerCombined,
   faBookOpen,
   faCircleHalfStroke,
-  faCircle,
 } from "@fortawesome/free-solid-svg-icons";
 import { current_capture } from "./capture";
-import { current_recording, promptRecordingPath } from "./record";
 import CaptureOverlay from "./capture/index.vue";
+import RecordButton from "./record/RecordButton.vue";
 
 const isCapAvailable = computed(() => current_capture.value !== null);
-const isRecAvailable = computed(() => current_recording.value !== null);
-const isRecording = computed(() => current_recording.value?.active.value ?? false);
-const recordingBusy = ref(false);
-
-async function toggleRecording() {
-  const recording = current_recording.value;
-  if (!recording || recordingBusy.value) return;
-  recordingBusy.value = true;
-  try {
-    if (recording.active.value) {
-      await recording.stop();
-      return;
-    }
-    const path = await promptRecordingPath(recording.current_path);
-    if (!path) return;
-    await recording.start(path);
-  } finally {
-    recordingBusy.value = false;
-  }
-}
 
 function launch(module: any, name: string) {
   currentModule.value = module;
@@ -192,16 +171,7 @@ window.addEventListener("keydown", (e) => {
     @height="(h) => (titleBarHeight = h)"
     @back-to-home="backToHome"
   >
-    <button
-      class="record-toggle"
-      :class="{ active: isRecording }"
-      :disabled="!isRecAvailable || recordingBusy"
-      @click="toggleRecording"
-      aria-label="Toggle recording"
-      title="Start / Stop Recording"
-    >
-      <Icon :icon="faCircle" />
-    </button>
+    <RecordButton />
     <Overlay :overlay="CaptureOverlay" :disabled="!isCapAvailable">
       <Icon :icon="faCamera" />
     </Overlay>
@@ -213,48 +183,6 @@ window.addEventListener("keydown", (e) => {
 </template>
 
 <style scoped lang="scss">
-.record-toggle {
-  background: none;
-  border: none;
-  padding: 0.4em;
-  margin: 0;
-  cursor: pointer;
-  color: inherit;
-  border-radius: 4px;
-  transition: all 0.1s;
-  outline: 1px solid transparent;
-
-  &:hover {
-    background: #fff1;
-  }
-
-  &:not(.active):not(:disabled):hover {
-    outline: 1px solid #666;
-  }
-
-  &.active {
-    color: #f33;
-    outline: 2px solid #f33;
-    animation: record-blink 1s steps(1, end) infinite;
-  }
-
-  &:disabled {
-    cursor: not-allowed;
-    opacity: 0.5;
-  }
-}
-
-@keyframes record-blink {
-  0%,
-  50% {
-    filter: saturate(1) brightness(1);
-  }
-  50.01%,
-  100% {
-    filter: saturate(0.5) brightness(0.5);
-  }
-}
-
 .main {
   position: fixed;
   left: 0;

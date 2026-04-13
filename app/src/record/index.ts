@@ -3,218 +3,76 @@
 // This source code is licensed under the MIT license.
 // You may find the full license in project root directory.
 // -------------------------------------------------------
-import { mkdirSync, createWriteStream, WriteStream } from "node:fs";
+import { mkdirSync, chmodSync } from "node:fs";
 import fs from "node:fs/promises";
-import { createGzip, Gzip } from "node:zlib";
 import { resolve } from "node:path";
-import { homedir } from "node:os";
-import { onScopeDispose, ref, shallowRef, type Ref } from "vue";
+import { onScopeDispose, reactive, ref, shallowRef, type Ref } from "vue";
 import type { Mat } from "core/Vision";
-import { ipcRenderer } from "electron";
+import type { PixelFormat } from "core/Aravis";
+import { SavePath } from "@lib/save-path";
+import StreamWriter from "./stream";
+import PythonScript from "./stream-decoder.py?raw";
 
-function getDateTimeString() {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, "0");
-  const day = String(now.getDate()).padStart(2, "0");
-  const hours = String(now.getHours()).padStart(2, "0");
-  const minutes = String(now.getMinutes()).padStart(2, "0");
-  const seconds = String(now.getSeconds()).padStart(2, "0");
-  return `${year}${month}${day}-${hours}${minutes}${seconds}`;
+export type { FrameMeta } from "./stream";
+
+export interface StreamSummary {
+  frames: number;
+  dropped: number;
+  bytes: number;
 }
 
-export type RecordResource = {
-  image?: Mat | null;
-  meta?: unknown;
-  timestamp?: bigint | number | string | null;
+export interface Manifest<X = {}> {
+  /** Format Identifier */
+  format: string;
+  /** Semantic Versioning */
+  version: string;
+  /** ISO 8601 */
+  timestamp: string | null;
+  /** Duation in Seconds */
+  duration: number | null;
+  /** Optional summary of each stream. */
+  streams?: Record<string, StreamSummary>;
+  /** Optional extension field for custom metadata. */
+  extension?: X;
+}
+
+export type RecordFrame = {
+  name: string;
+  frame: Mat;
+  format: PixelFormat;
+  /** Optional timestamp in seconds, default to performance.now() */
+  timestamp?: number;
+  meta?: Record<string, unknown>;
 };
 
-type FrameSummary = {
-  frame: number;
-  timestamp: string | number;
-  captured_at_ns: string;
-  byte_offset: number;
-  byte_length: number;
-  shape: number[];
-  channels: number;
-  dtype: string;
-  dropped_before: number;
-  meta?: unknown;
+export type StreamFactory = (
+  live: () => boolean,
+) => AsyncGenerator<RecordFrame>;
+
+export type StreamInfo = {
+  frames: number;
+  dropped: number;
+  fps: number;
+  bytes: number;
 };
-
-type Packet = {
-  payload: Buffer;
-  summary: FrameSummary;
-};
-
-function bufferFromMat(image: Mat) {
-  const bytes = new Uint8Array(image.buffer, image.byteOffset, image.byteLength);
-  return Buffer.from(bytes);
-}
-
-function matTypeName(image: Mat) {
-  return image.constructor?.name ?? "TypedArray";
-}
-
-function normalizeTimestamp(
-  ts: RecordResource["timestamp"],
-): string | number | null {
-  if (typeof ts === "bigint") return ts.toString();
-  if (typeof ts === "number" && Number.isFinite(ts)) return ts;
-  if (typeof ts === "string") return ts;
-  return null;
-}
-
-function epochNowNs() {
-  return BigInt(Date.now()) * 1_000_000n;
-}
-
-function waitForEvent<T>(
-  emitter: NodeJS.EventEmitter,
-  event: string,
-  error = "error",
-) {
-  return new Promise<T>((resolve, reject) => {
-    const onData = (value: T) => {
-      cleanup();
-      resolve(value);
-    };
-    const onError = (e: unknown) => {
-      cleanup();
-      reject(e);
-    };
-    const cleanup = () => {
-      emitter.off(event, onData);
-      emitter.off(error, onError);
-    };
-    emitter.once(event, onData);
-    emitter.once(error, onError);
-  });
-}
-
-class StreamWriter {
-  // 180 frames ~= 3 seconds of buffering at 60 FPS for a single stream, which
-  // keeps memory bounded while giving disk I/O short bursts to catch up.
-  private static readonly MAX_QUEUE = 180;
-  // Small polling interval used only during shutdown while waiting for queue drain.
-  private static readonly CLOSE_WAIT_MS = 5;
-  private readonly gzip: Gzip;
-  private readonly output: WriteStream;
-  private readonly index: WriteStream;
-  private readonly queue: Packet[] = [];
-  private draining = false;
-  private closed = false;
-  private frameCount = 0;
-  private dropped = 0;
-  private byteOffset = 0;
-  readonly framesFile: string;
-  readonly indexFile: string;
-
-  constructor(
-    private readonly path: string,
-    private readonly name: string,
-  ) {
-    this.framesFile = `${name}.frames.bin.gz`;
-    this.indexFile = `${name}.index.jsonl`;
-    this.gzip = createGzip({ level: 1 });
-    this.output = createWriteStream(resolve(path, this.framesFile));
-    this.index = createWriteStream(resolve(path, this.indexFile), {
-      encoding: "utf8",
-    });
-    this.gzip.pipe(this.output);
-  }
-
-  get summary() {
-    return {
-      frames: this.frameCount,
-      dropped: this.dropped,
-      bytes_uncompressed: this.byteOffset,
-      frames_file: this.framesFile,
-      index_file: this.indexFile,
-    };
-  }
-
-  enqueue(packet: Packet) {
-    if (this.closed) return;
-    if (this.queue.length >= StreamWriter.MAX_QUEUE) {
-      this.dropped++;
-      return;
-    }
-    this.queue.push(packet);
-    if (!this.draining) void this.drain();
-  }
-
-  private async drain() {
-    if (this.draining || this.closed) return;
-    this.draining = true;
-    try {
-      while (this.queue.length > 0) {
-        const packet = this.queue.shift()!;
-        packet.summary.dropped_before = this.dropped;
-        this.dropped = 0;
-        packet.summary.frame = this.frameCount++;
-        packet.summary.byte_offset = this.byteOffset;
-        packet.summary.byte_length = packet.payload.byteLength;
-        this.byteOffset += packet.payload.byteLength;
-        if (!this.index.write(JSON.stringify(packet.summary) + "\n"))
-          await waitForEvent(this.index, "drain");
-        if (!this.gzip.write(packet.payload)) await waitForEvent(this.gzip, "drain");
-      }
-    } finally {
-      this.draining = false;
-    }
-  }
-
-  async close() {
-    this.closed = true;
-    while (this.draining || this.queue.length > 0) {
-      if (!this.draining) void this.drain();
-      await new Promise((r) => setTimeout(r, StreamWriter.CLOSE_WAIT_MS));
-    }
-    const outputDone = waitForEvent<void>(this.output, "finish");
-    const indexDone = waitForEvent<void>(this.index, "finish");
-    this.index.end();
-    this.gzip.end();
-    await Promise.all([outputDone, indexDone]);
-  }
-}
 
 export const current_recording = shallowRef<Recording | null>(null);
 
-export async function promptRecordingPath(defaultPath: string) {
-  try {
-    const selected = await ipcRenderer.invoke("prompt-recording-path", defaultPath);
-    if (!selected || typeof selected !== "string") return null;
-    return selected.trim() || null;
-  } catch {
-    return null;
-  }
-}
-
-export default class Recording {
-  readonly run_id = getDateTimeString();
-  get directory() {
-    return `${this.run_id}-${this.namespace}`;
-  }
-
-  private readonly __last_save_path = ref<string | null>(null);
-  get default_path() {
-    return resolve(homedir(), "Downloads", this.directory);
-  }
-  get current_path() {
-    return this.__last_save_path.value ?? this.default_path;
-  }
-  set current_path(path: string) {
-    path = path.trim();
-    this.__last_save_path.value = path === "" || path === this.default_path ? null : path;
-  }
-
+export default class Recording extends SavePath {
   readonly active: Ref<boolean> = ref(false);
   readonly session_path: Ref<string | null> = ref(null);
-  private readonly started_at = ref<string | null>(null);
+  readonly streams = reactive(new Map<string, StreamInfo>());
+  private readonly timestamp = ref<string | null>(null);
+  private t0: number = 0;
   private writers = new Map<string, StreamWriter>();
+  private providers = new Set<StreamFactory>();
+  private tasks: Promise<void>[] = [];
 
-  constructor(public readonly namespace: string) {
+  constructor(
+    namespace: string,
+    private readonly manifestExtension?: Manifest["extension"],
+  ) {
+    super(namespace);
     if (current_recording.value !== null)
       throw new Error(
         `A recording context is already active for "${current_recording.value.namespace}".`,
@@ -224,45 +82,42 @@ export default class Recording {
   }
 
   dispose() {
-    void this.stop();
+    this.stop();
     if (current_recording.value === this) current_recording.value = null;
   }
 
-  private makePacket(data: RecordResource): Packet | null {
-    const image = data.image;
-    if (!image) return null;
-    const timestamp = normalizeTimestamp(data.timestamp);
-    const captured_at_ns = epochNowNs();
-    const packet: Packet = {
-      payload: bufferFromMat(image),
-      summary: {
-        frame: 0,
-        timestamp: timestamp ?? captured_at_ns.toString(),
-        captured_at_ns: captured_at_ns.toString(),
-        byte_offset: 0,
-        byte_length: 0,
-        shape: [...image.shape],
-        channels: image.channels,
-        dtype: matTypeName(image),
-        dropped_before: 0,
-      },
-    };
-    if (data.meta !== undefined) packet.summary.meta = data.meta;
-    return packet;
+  provide(factory: StreamFactory) {
+    this.providers.add(factory);
+    const revoke = () => this.providers.delete(factory);
+    onScopeDispose(revoke);
+    return revoke;
   }
 
-  private writeManifest(path: string, finished_at?: string) {
-    const streams = Object.fromEntries(
-      [...this.writers.entries()].map(([name, writer]) => [name, writer.summary]),
+  private getWriter(name: string): StreamWriter {
+    let writer = this.writers.get(name);
+    if (!writer) {
+      writer = new StreamWriter(this.session_path.value!, name);
+      this.writers.set(name, writer);
+      this.streams.set(name, { frames: 0, dropped: 0, fps: 0, bytes: 0 });
+      void this.writeManifest(this.session_path.value!);
+    }
+    return writer;
+  }
+
+  private writeManifest(path: string, duration?: number) {
+    const streams: Record<string, StreamSummary> = Object.fromEntries(
+      [...this.writers.entries()].map(([name, writer]) => [
+        name,
+        writer.summary,
+      ]),
     );
-    const manifest = {
-      version: 1,
-      format: "foveacam-recording-v1",
-      namespace: this.namespace,
-      run_id: this.run_id,
-      started_at: this.started_at.value,
-      finished_at: finished_at ?? null,
+    const manifest: Manifest = {
+      format: "FCRS", // FoveaCam Recording Stream
+      version: "0.0.0-alpha.0",
+      timestamp: this.timestamp.value,
+      duration: duration ?? null,
       streams,
+      extension: this.manifestExtension,
     };
     return fs.writeFile(
       resolve(path, "manifest.json"),
@@ -271,33 +126,46 @@ export default class Recording {
     );
   }
 
+  private async consumeProvider(factory: StreamFactory) {
+    const gen = factory(() => this.active.value);
+    try {
+      for await (const data of gen) {
+        if (!this.active.value) break;
+        const writer = this.getWriter(data.name);
+        writer.write(data.frame, data.format, data.timestamp, data.meta);
+        this.streams.set(data.name, {
+          frames: writer.frameCount,
+          dropped: writer.dropped,
+          fps: writer.fps.value,
+          bytes: writer.summary.bytes,
+        });
+      }
+    } catch (e) {
+      console.error(`Recording provider error:`, e);
+    }
+  }
+
   async start(path: string) {
     if (this.active.value) return false;
     path = path.trim();
     if (path === "") return false;
     mkdirSync(path, { recursive: true });
+    await fs.writeFile(resolve(path, "__init__.py"), PythonScript, "utf8");
+    const playScript =
+      '#!/bin/bash\ncd "$(dirname "$0")"\npython3 __init__.py "$@"\n';
+    await fs.writeFile(resolve(path, "play"), playScript, "utf8");
+    chmodSync(resolve(path, "play"), 0o755);
     this.current_path = path;
     this.session_path.value = path;
-    this.started_at.value = new Date().toISOString();
+    this.timestamp.value = new Date().toISOString();
+    this.t0 = performance.now();
     this.writers = new Map();
+    this.streams.clear();
     this.active.value = true;
     await this.writeManifest(path);
-    return true;
-  }
-
-  append(name: string, data: RecordResource) {
-    if (!this.active.value) return false;
-    const path = this.session_path.value;
-    if (!path) return false;
-    const packet = this.makePacket(data);
-    if (!packet) return false;
-    let writer = this.writers.get(name);
-    if (!writer) {
-      writer = new StreamWriter(path, name);
-      this.writers.set(name, writer);
-      void this.writeManifest(path);
-    }
-    writer.enqueue(packet);
+    this.tasks = [...this.providers].map((factory) =>
+      this.consumeProvider(factory),
+    );
     return true;
   }
 
@@ -305,10 +173,13 @@ export default class Recording {
     if (!this.active.value) return false;
     const path = this.session_path.value;
     this.active.value = false;
-    const writers = [...this.writers.values()];
-    await Promise.all(writers.map((w) => w.close()));
-    if (path) await this.writeManifest(path, new Date().toISOString());
+    await Promise.allSettled(this.tasks);
+    this.tasks = [];
+    await Promise.all([...this.writers.values()].map((w) => w.flush()));
+    const duration = (performance.now() - this.t0) / 1000;
+    if (path) await this.writeManifest(path, duration);
     this.writers = new Map();
+    this.streams.clear();
     this.session_path.value = null;
     return true;
   }
