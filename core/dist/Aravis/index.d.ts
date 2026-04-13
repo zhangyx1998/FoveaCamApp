@@ -117,5 +117,5 @@ declare module "core/Aravis" {
     | "BayerGB16"
     | "BayerBG16";
 
-  type PixelFormat = PixelFormat8 | PixelFormat16;
+  export type PixelFormat = PixelFormat8 | PixelFormat16;
 }

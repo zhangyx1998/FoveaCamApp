@@ -2,6 +2,7 @@
 import { computed, onUnmounted, reactive, ref, shallowRef, watch } from "vue";
 import { Point2d, Rect, Size } from "core/Geometry";
 import {
+  getCameraInfo,
   getFrameSize,
   ROLE,
   THEME,
@@ -19,7 +20,7 @@ import { RECT } from "@lib/util/geometry";
 import { useAppConfig } from "@lib/config";
 import { delay, isEmpty, radians } from "@lib/util";
 import Capture from "@src/capture";
-import Recording from "@src/record";
+import Recording, { RecordFrame } from "@src/record";
 import {
   diff,
   disparity,
@@ -46,6 +47,7 @@ import Line2D from "@src/components/Line2D.vue";
 import { Scale } from "@lib/util/math";
 import local from "@lib/local";
 import Checker from "@src/graphics/Checker.vue";
+import { Frame } from "core/Aravis";
 
 const view = ref<"sliced" | "diff" | "depth">("sliced");
 const remote_content = ref<string>("NONE");
@@ -315,7 +317,61 @@ function plusSign(v: string) {
 }
 
 const capture = new Capture("manual-control");
-const recording = new Recording("manual-control");
+const recording = new Recording("manual-control", {
+  C: getCameraInfo(triple.C),
+  L: getCameraInfo(triple.L),
+  R: getCameraInfo(triple.R),
+});
+
+function emitRecFrame(
+  name: string,
+  frame: Frame,
+  fovea?: {
+    V: Point2d;
+    A: Point2d;
+    H: Mat<Float64Array>;
+  },
+): RecordFrame {
+  const { raw, raw_format: format } = frame;
+  frame.release();
+  const meta: Record<string, any> = {};
+  if (fovea)
+    Object.assign(meta, {
+      volt: { ...fovea.V },
+      "volt.unit": "volt",
+      angle: { ...fovea.A },
+      "angle.unit": "radian",
+      affine: matToArray(fovea.H),
+    });
+  return { name, frame: raw, format, meta };
+}
+
+recording.provide(async function* (live) {
+  for await (const frame of L.stream) {
+    if (!live()) return;
+    const V = volt.L;
+    const A = V2A.L(V);
+    const H = A2H.L(A);
+    yield emitRecFrame("left-fovea", frame, { V, A, H });
+  }
+});
+
+recording.provide(async function* (live) {
+  for await (const frame of C.stream) {
+    if (!live()) return;
+    yield emitRecFrame("center", frame);
+  }
+});
+
+recording.provide(async function* (live) {
+  for await (const frame of R.stream) {
+    if (!live()) return;
+    const V = volt.R;
+    const A = V2A.R(V);
+    const H = A2H.R(A);
+    yield emitRecFrame("right-fovea", frame, { V, A, H });
+  }
+});
 
 type Stack = Awaited<ReturnType<typeof stack>>;
 function normalizeFovea({ image, format }: Stack, H: Mat<Float64Array>) {
@@ -408,7 +464,6 @@ capture.provide(async (provide) => {
         :title="ROLE.L"
         :camera="L"
         :transform="wrapLeft"
-        record="left-fovea"
         :theme="THEME.L"
       >
       </StreamView>
@@ -440,7 +495,6 @@ capture.provide(async (provide) => {
         :transform="transformCenter"
         :theme="THEME.C"
         capture="wide"
-        record="center-wide"
         v-model="cursor"
       >
         <FrameCursor
@@ -483,7 +537,6 @@ capture.provide(async (provide) => {
         :title="ROLE.R"
         :camera="R"
         :transform="wrapRight"
-        record="right-fovea"
         :theme="THEME.R"
       >
       </StreamView>

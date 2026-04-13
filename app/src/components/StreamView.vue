@@ -10,7 +10,6 @@ import abortable from "@lib/abortable";
 import FrameView, { TransformFunction } from "./FrameView.vue";
 import { getCameraInfo } from "@lib/camera";
 import { Delegation } from "@src/capture";
-import { current_recording, type RecordResource } from "@src/record";
 import { NoCheck } from "@lib/util/vue";
 
 type Stream = Iterable<Frame | Mat<Uint8Array> | null>;
@@ -75,18 +74,6 @@ const props = defineProps({
     required: false,
     default: null,
   },
-  record: {
-    type: NoCheck<
-      | string
-      | {
-          name: string;
-          meta?: Record<string, unknown> | (() => Record<string, unknown>);
-        }
-      | null
-    >(),
-    required: false,
-    default: null,
-  },
 });
 
 const mat = ref<Mat | null>(null);
@@ -118,26 +105,6 @@ function createTask(stream?: Stream) {
             mat.value = frame;
           }
           fps.tick();
-          const recording = current_recording.value;
-          const record = props.record;
-          if (recording?.active.value && record && mat.value) {
-            const cfg =
-              typeof record === "string"
-                ? { name: record, meta: undefined }
-                : record;
-            const dynamicMeta =
-              typeof cfg.meta === "function" ? cfg.meta() : cfg.meta;
-            const data: RecordResource = {
-              image: mat.value,
-              meta: {
-                ...(dynamicMeta ?? {}),
-                title: props.title,
-                ...(props.camera ? getCameraInfo(props.camera) : {}),
-              },
-              timestamp: frame instanceof Frame ? frame.timestamp : null,
-            };
-            recording.append(cfg.name, data);
-          }
         }
         await new Promise(requestAnimationFrame);
       }
