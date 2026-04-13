@@ -43,6 +43,7 @@ import {
 } from "@fortawesome/free-solid-svg-icons";
 import { current_capture } from "./capture";
 import CaptureOverlay from "./capture/index.vue";
+import RecordButton from "./record/RecordButton.vue";
 
 const isCapAvailable = computed(() => current_capture.value !== null);
 
@@ -170,6 +171,7 @@ window.addEventListener("keydown", (e) => {
     @height="(h) => (titleBarHeight = h)"
     @back-to-home="backToHome"
   >
+    <RecordButton />
     <Overlay :overlay="CaptureOverlay" :disabled="!isCapAvailable">
       <Icon :icon="faCamera" />
     </Overlay>
