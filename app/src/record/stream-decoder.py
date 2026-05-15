@@ -3,7 +3,7 @@
 # This source code is licensed under the MIT license.
 # You may find the full license in project root directory.
 # -------------------------------------------------------
-import argparse, sys, json, time
+import argparse, sys, json, time, subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
@@ -55,14 +55,14 @@ type PixelFormat = Literal[
 ]
 
 BAYER_CODE: dict[str, int] = {
-    "BayerGR8": cv2.COLOR_BayerGR2BGR,
-    "BayerRG8": cv2.COLOR_BayerRG2BGR,
-    "BayerGB8": cv2.COLOR_BayerGB2BGR,
-    "BayerBG8": cv2.COLOR_BayerBG2BGR,
-    "BayerGR16": cv2.COLOR_BayerGR2BGR,
-    "BayerRG16": cv2.COLOR_BayerRG2BGR,
-    "BayerGB16": cv2.COLOR_BayerGB2BGR,
-    "BayerBG16": cv2.COLOR_BayerBG2BGR,
+    "BayerGR8": cv2.COLOR_BayerGR2RGB,
+    "BayerRG8": cv2.COLOR_BayerRG2RGB,
+    "BayerGB8": cv2.COLOR_BayerGB2RGB,
+    "BayerBG8": cv2.COLOR_BayerBG2RGB,
+    "BayerGR16": cv2.COLOR_BayerGR2RGB,
+    "BayerRG16": cv2.COLOR_BayerRG2RGB,
+    "BayerGB16": cv2.COLOR_BayerGB2RGB,
+    "BayerBG16": cv2.COLOR_BayerBG2RGB,
 }
 
 
@@ -167,14 +167,34 @@ class Stream(list[Frame]):
         self.blob.close()
 
 
-def play(streams: list[Stream], speed: float = 1.0):
+def to_bgr(img: np.ndarray) -> np.ndarray:
+    """Normalize image to 3-channel 8-bit BGR for display/concatenation."""
+    if img.dtype != np.uint8:
+        # Scale 16-bit (or other) down to 8-bit for display
+        info = np.iinfo(img.dtype) if np.issubdtype(img.dtype, np.integer) else None
+        if info is not None and info.max > 255:
+            img = (img.astype(np.uint32) * 255 // info.max).astype(np.uint8)
+        else:
+            img = img.astype(np.uint8)
+    if img.ndim == 2:
+        return cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+    if img.shape[2] == 4:
+        return cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+    return img
+
+
+def play(streams: list[Stream], speed: float = 1.0, cat: bool = False):
     streams = [s for s in streams if len(s) > 0]
     if not streams:
         print("No frames to play.")
         return
 
-    for stream in streams:
-        cv2.namedWindow(stream.name, cv2.WINDOW_NORMAL)
+    CAT_WINDOW = "streams"
+    if cat:
+        cv2.namedWindow(CAT_WINDOW, cv2.WINDOW_NORMAL)
+    else:
+        for stream in streams:
+            cv2.namedWindow(stream.name, cv2.WINDOW_NORMAL)
 
     KEY_SPACE = ord(" ")
     KEY_BACKSPACE = 8
@@ -189,6 +209,8 @@ def play(streams: list[Stream], speed: float = 1.0):
 
     t0 = min(s[0].timestamp for s in streams)
     cursors = [0] * len(streams)
+    last_shown = [-1] * len(streams)
+    latest_images: list[np.ndarray | None] = [None] * len(streams)
     clock = time.monotonic()
     paused = False
     pause_at = 0.0
@@ -200,13 +222,36 @@ def play(streams: list[Stream], speed: float = 1.0):
             t = t0 + (time.monotonic() - clock) * speed
 
         done = True
+        updated = False
         for i, s in enumerate(streams):
             while cursors[i] + 1 < len(s) and s[cursors[i] + 1].timestamp <= t:
                 cursors[i] += 1
             if cursors[i] < len(s) and s[cursors[i]].timestamp <= t:
-                cv2.imshow(s.name, s[cursors[i]].image)
+                if last_shown[i] != cursors[i]:
+                    img = s[cursors[i]].image
+                    latest_images[i] = img
+                    last_shown[i] = cursors[i]
+                    updated = True
+                    if not cat:
+                        cv2.imshow(s.name, img)
             if cursors[i] < len(s) - 1:
                 done = False
+
+        if cat and updated:
+            imgs: list[np.ndarray] = [im for im in latest_images if im is not None]
+            if len(imgs) == len(streams):
+                bgr = [to_bgr(im) for im in imgs]
+                h_max = max(im.shape[0] for im in bgr)
+                resized: list[np.ndarray] = []
+                for im in bgr:
+                    h, w = im.shape[:2]
+                    if h != h_max:
+                        new_w = max(1, int(round(w * h_max / h)))
+                        im = cv2.resize(
+                            im, (new_w, h_max), interpolation=cv2.INTER_AREA
+                        )
+                    resized.append(im)
+                cv2.imshow(CAT_WINDOW, cv2.hconcat(resized))
 
         key = cv2.waitKey(1 if not (paused or done) else 0) & 0xFF
         if key in (KEY_Q, KEY_ESC):
@@ -228,6 +273,59 @@ def play(streams: list[Stream], speed: float = 1.0):
     cv2.destroyAllWindows()
     for s in streams:
         s.close()
+
+
+def export(streams: list[Stream], suffix: str = ".mov"):
+    try:
+        from tqdm import tqdm
+    except ImportError:
+        print("tqdm is required for export but not installed.")
+        sys.exit(1)
+
+    streams = [s for s in streams if len(s) > 0]
+    if not streams:
+        print("No frames to export.")
+        return
+
+    for stream in streams:
+        if len(stream) >= 2:
+            duration = stream[-1].timestamp - stream[0].timestamp
+            fps = (len(stream) - 1) / duration if duration > 0 else 30.0
+        else:
+            fps = 30.0
+
+        first = to_bgr(stream[0].image)
+        h, w = first.shape[:2]
+
+        out_path = Path(stream.blob.name).with_suffix(suffix)
+        cmd = [
+            "ffmpeg", "-y", "-loglevel", "error",
+            "-f", "rawvideo",
+            "-pix_fmt", "bgr24",
+            "-s", f"{w}x{h}",
+            "-r", f"{fps:.6f}",
+            "-i", "-",
+            "-c:v", "prores_ks",
+            "-profile:v", "3",
+            "-pix_fmt", "yuv422p10le",
+            str(out_path),
+        ]
+
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+        assert proc.stdin is not None
+        try:
+            bar = tqdm(stream, desc=f"{stream.name} @ {fps:.2f}fps", unit="f")
+            for frame in bar:
+                img = to_bgr(frame.image)
+                if img.shape[:2] != (h, w):
+                    img = cv2.resize(img, (w, h))
+                proc.stdin.write(img.tobytes())
+        finally:
+            proc.stdin.close()
+            rc = proc.wait()
+            stream.close()
+            if rc != 0:
+                print(f"ffmpeg exited with code {rc} for {stream.name}")
 
 
 def getAllStreams():
@@ -255,9 +353,27 @@ if __name__ == "__main__":
         default=1.0,
         help="Playback speed multiplier (default: 1.0).",
     )
+    parser.add_argument(
+        "-c",
+        "--cat",
+        action="store_true",
+        help="Render all streams in one window, resized to the largest height and concatenated horizontally.",
+    )
+    parser.add_argument(
+        "-e",
+        "--export",
+        nargs="?",
+        const=".mov",
+        default=None,
+        metavar="SUFFIX",
+        help="Export each stream to a ProRes video file (default suffix: .mov) via ffmpeg, no GUI.",
+    )
     args = parser.parse_args()
     streams: list[Stream] = args.streams
     speed = args.speed
     if len(streams) == 0:
         streams = list(getAllStreams().values())
-    play(streams, speed=speed)
+    if args.export is not None:
+        export(streams, suffix=args.export)
+    else:
+        play(streams, speed=speed, cat=args.cat)
