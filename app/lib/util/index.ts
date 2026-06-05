@@ -264,3 +264,22 @@ export function formatNumber(x: number, options: FormatNumberOptions = {}) {
 export function isEmpty(value: any): value is null | undefined {
   return value === undefined || value === null;
 }
+
+export function useDefaults<T extends Record<string, any>>(
+  obj: Partial<T>,
+  defaults: Readonly<T>,
+): T {
+  return new Proxy(obj as T, {
+    get(target, prop) {
+      if (prop in target) {
+        return (target as any)[prop];
+      } else {
+        return defaults[prop as keyof T];
+      }
+    },
+    set(target, prop, value) {
+      (target as any)[prop] = value;
+      return true;
+    },
+  });
+}

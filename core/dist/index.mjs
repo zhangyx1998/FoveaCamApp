@@ -29,6 +29,7 @@ export const {
     Vision,
     Tracker,
     Controller,
+    Compression,
     Regression,
     Geometry,
     Log,

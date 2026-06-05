@@ -10,11 +10,15 @@ import type { PixelFormat } from "core/Aravis";
 import { FreqMeter } from "@lib/util/perf";
 import { dtypeOf, type Dtype } from "@lib/util/dtype";
 
+export type CompressionFormat = "lz4" | "zstd";
+
 export interface FrameMeta<X extends Extensions = Extensions> {
   /** offset */
   o: number;
-  /** length in bytes */
+  /** length in bytes (maybe compressed) */
   n: number;
+  /** compresion type, raw if omitted */
+  c?: CompressionFormat;
   /** shape of the frame data */
   s: number[];
   /** dtype */

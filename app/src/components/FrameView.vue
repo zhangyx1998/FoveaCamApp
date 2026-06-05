@@ -13,6 +13,8 @@ import {
   useTemplateRef,
   watch,
 } from "vue";
+import { FontAwesomeIcon as Icon } from "@fortawesome/vue-fontawesome";
+import { faExpand } from "@fortawesome/free-solid-svg-icons";
 
 import ElementSize from "@lib/element-size";
 import { NoCheck } from "@lib/util/vue";
@@ -251,7 +253,14 @@ function mix<T, P>(t: T, p: P): T & P {
     @mousedown.right.prevent="overlayToggle = !overlayToggle"
   >
     <div class="title" v-if="title !== null">
-      {{ title }}
+      <span>{{ title }}</span>
+      <button
+        class="fullscreen"
+        title="Toggle Fullscreen"
+        @click="container?.requestFullscreen()"
+      >
+        <Icon :icon="faExpand" />
+      </button>
     </div>
     <div class="footnote" v-if="footnote !== null">
       {{ footnote }}
@@ -330,6 +339,21 @@ function mix<T, P>(t: T, p: P): T & P {
     text-align: left;
     color: gray;
     user-select: none;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+
+    .fullscreen {
+      background: none;
+      border: none;
+      color: inherit;
+      cursor: pointer;
+      padding: 0 0.5ch;
+      opacity: 0.5;
+      &:hover {
+        opacity: 1;
+      }
+    }
   }
 
   .footnote {

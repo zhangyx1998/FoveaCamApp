@@ -15,25 +15,10 @@ import RemoteCanvasTeleport from "@src/components/RemoteCanvasTeleport.vue";
 import Marker from "@src/graphics/Marker.vue";
 import CrossHair from "@src/graphics/CrossHair.vue";
 import { useAppConfig } from "@lib/config";
+import RangeSlider from "@src/inputs/range-slider.vue";
+import Drawer from "@src/components/Drawer.vue";
 
 const app_config = await useAppConfig();
-const baseline_distance_mm = computed({
-  get() {
-    return app_config.baseline_distance_mm ?? 200.0;
-  },
-  set(v: number) {
-    app_config.baseline_distance_mm = v;
-  },
-});
-
-const marker_size_mm = computed({
-  get() {
-    return app_config.cal_marker_size_mm ?? 60.0;
-  },
-  set(v: number) {
-    app_config.cal_marker_size_mm = v;
-  },
-});
 
 const controller = computed(getController);
 const { L, C, R, CI, LE, RE, config, release } = await useCalibratedTriple();
@@ -117,6 +102,12 @@ const actuator = computed(
       },
       override,
     ),
+);
+
+const marker_size = computed(() => app_config.cal_marker_size_mm);
+const marker_ratio = computed(() => app_config.cal_marker_ratio);
+const center_marker_size = computed(
+  () => marker_size.value * marker_ratio.value,
 );
 
 watch(actuator, (_, prev) => prev?.abort());
@@ -207,6 +198,7 @@ onUnmounted(async () => {
         <button
           :disabled="!derived.L"
           @click="config.drift_l = { ...derived.L! }"
+          @keydown.backspace.prevent="config.drift_l = undefined"
         >
           Update Drift (L)
         </button>
@@ -216,12 +208,17 @@ onUnmounted(async () => {
             config.drift_l = { ...derived.L! };
             config.drift_r = { ...derived.R! };
           "
+          @keydown.backspace.prevent="
+            config.drift_l = undefined;
+            config.drift_r = undefined;
+          "
         >
           Update Drift (All)
         </button>
         <button
           :disabled="!derived.R"
           @click="config.drift_r = { ...derived.R! }"
+          @keydown.backspace.prevent="config.drift_r = undefined"
         >
           Update Drift (R)
         </button>
@@ -271,23 +268,47 @@ onUnmounted(async () => {
       ></PosView>
     </div>
   </div>
+  <Drawer>
+    <div class="options fill">
+      <RangeSlider
+        v-model="app_config.cal_marker_size_mm"
+        :min="10"
+        :max="120"
+        :neutral="60"
+        :step="1"
+      >
+        <span>Marker Size</span>
+        <span>{{ app_config.cal_marker_size_mm.toFixed(1) }} mm</span>
+      </RangeSlider>
+      <RangeSlider
+        v-model="app_config.cal_marker_ratio"
+        :min="0.2"
+        :max="1.2"
+        :neutral="1.0"
+        :step="0.02"
+      >
+        <span>Center Marker</span>
+        <span>{{ (app_config.cal_marker_ratio * 100).toFixed(0) }}%</span>
+      </RangeSlider>
+    </div>
+  </Drawer>
   <RemoteCanvasTeleport>
     <CrossHair
-      :cx="baseline_distance_mm / 2 + marker_size_mm"
-      :cy="marker_size_mm"
+      :cx="app_config.baseline_distance_mm / 2 + marker_size"
+      :cy="center_marker_size"
       weight="2"
     />
     <Marker
       :id="tracker.L.target_id"
-      :size="marker_size_mm"
-      :cx="-baseline_distance_mm / 2"
+      :size="marker_size"
+      :cx="-app_config.baseline_distance_mm / 2"
     />
-    <Marker :id="tracker.C.target_id" :size="marker_size_mm" />
     <Marker
       :id="tracker.R.target_id"
-      :size="marker_size_mm"
-      :cx="baseline_distance_mm / 2"
+      :size="marker_size"
+      :cx="app_config.baseline_distance_mm / 2"
     />
+    <Marker :id="tracker.C.target_id" :size="center_marker_size" />
   </RemoteCanvasTeleport>
 </template>
 

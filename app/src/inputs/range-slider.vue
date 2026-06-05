@@ -195,6 +195,7 @@ function handleKeydown(e: KeyboardEvent) {
     background-color: currentColor;
   }
   .cursor {
+    width: 0.2ch;
     transform: translateX(-50%);
     // Triangles above and below the slider body (outside)
     &::before,

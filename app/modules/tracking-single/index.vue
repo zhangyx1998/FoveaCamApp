@@ -14,7 +14,6 @@ import PosView from "@src/components/PosView.vue";
 import { getController } from "@src/components/Controller.vue";
 import FrameCursor from "@src/components/FrameCursor.vue";
 import abortable from "@lib/abortable";
-import { Latest } from "@lib/util/iter";
 import FrameView from "@src/components/FrameView.vue";
 import { RECT } from "@lib/util/geometry";
 import { useAppConfig } from "@lib/config";
@@ -44,6 +43,9 @@ import Drawer from "@src/components/Drawer.vue";
 import Checker from "@src/graphics/Checker.vue";
 import { Frame } from "core/Aravis";
 import { KCF } from "core/Tracker";
+import { FontAwesomeIcon as Icon } from "@fortawesome/vue-fontawesome";
+import { faArrowRotateLeft } from "@fortawesome/free-solid-svg-icons";
+import { KinematicModel } from "./kinematic";
 
 const view = ref<"sliced" | "diff" | "depth">("sliced");
 const remote_content = ref<string>("NONE");
@@ -64,8 +66,8 @@ if (!undistort)
 
 const cursor = shallowRef<(Rect & { buttons: number }) | null>(null);
 const target_loc = shallowRef<Point2d>({ x: width / 2, y: height / 2 });
-const target_angle = computed(() =>
-  undistort.angular([target_loc.value], false)[0],
+const target_angle = computed(
+  () => undistort.angular([target_loc.value], false)[0],
 );
 const target_size = computed(() => ({
   width: width / zoom.value,
@@ -139,6 +141,70 @@ const lost_tolerance = ref(10);
 let tracker_instance: KCF | null = null;
 let tracker_abort: (() => void) | null = null;
 
+const tracker_size_override = shallowRef<Size | null>(null);
+const tracker_size = computed<Size>(() => {
+  if (tracker_size_override.value) return tracker_size_override.value;
+  const { width: w, height: h } = target_size.value;
+  const side = Math.round(0.5 * Math.max(w, h));
+  return { width: side, height: side };
+});
+const tracker_w = computed<number>({
+  get: () => tracker_size.value.width,
+  set: (v) => {
+    tracker_size_override.value = {
+      width: v,
+      height: tracker_size.value.height,
+    };
+  },
+});
+const tracker_h = computed<number>({
+  get: () => tracker_size.value.height,
+  set: (v) => {
+    tracker_size_override.value = {
+      width: tracker_size.value.width,
+      height: v,
+    };
+  },
+});
+function resetTrackerSize() {
+  tracker_size_override.value = null;
+}
+
+// Search window padding around the previous bbox (per side, in pixels).
+// Cropping the frame to a tight search window dramatically reduces KCF +
+// cvtColor cost compared to running them on the full sensor frame.
+const pad_x_override = ref<number | null>(null);
+const pad_y_override = ref<number | null>(null);
+const pad_x = computed<number>({
+  get: () => pad_x_override.value ?? Math.round(tracker_size.value.width),
+  set: (v) => {
+    pad_x_override.value = v;
+  },
+});
+const pad_y = computed<number>({
+  get: () => pad_y_override.value ?? Math.round(tracker_size.value.height),
+  set: (v) => {
+    pad_y_override.value = v;
+  },
+});
+function resetSearchPad() {
+  pad_x_override.value = null;
+  pad_y_override.value = null;
+}
+
+const pred_buffer_max = ref(10);
+const kinematic = new KinematicModel(() => pred_buffer_max.value);
+
+function getSearchWindow(bbox: Rect, scale = 1): Rect {
+  const px = Math.max(0, pad_x.value * scale);
+  const py = Math.max(0, pad_y.value * scale);
+  const x = Math.max(0, Math.round(bbox.x - px));
+  const y = Math.max(0, Math.round(bbox.y - py));
+  const right = Math.min(width, Math.round(bbox.x + bbox.width + px));
+  const bottom = Math.min(height, Math.round(bbox.y + bbox.height + py));
+  return { x, y, width: right - x, height: bottom - y };
+}
+
 function releaseTracker() {
   if (tracker_abort) {
     tracker_abort();
@@ -150,6 +216,7 @@ function releaseTracker() {
   }
   tracker_bbox.value = null;
   tracker_active.value = false;
+  kinematic.reset();
 }
 
 function startTracker(center: Point2d) {
@@ -158,8 +225,8 @@ function startTracker(center: Point2d) {
   const frame = mat_c.value;
   if (!frame) return;
 
-  // BBox centered at click location, sized to fovea FOV
-  const bboxSize = target_size.value;
+  // BBox centered at click location, sized to configured tracker size
+  const bboxSize = tracker_size.value;
   const roi: Rect = RECT.fromCenter(
     undistort!.position([undistort!.angular([center], false)[0]], false)[0],
     bboxSize,
@@ -174,18 +241,31 @@ function startTracker(center: Point2d) {
 
   const clampedRoi = { x, y, width: w, height: h };
 
-  // KCF needs BGR input
-  const bgr = cvtColor(frame, "BGRA2BGR");
+  // Crop a search window around the bbox so KCF/cvtColor run on a small
+  // patch instead of the full sensor frame.
+  const initSearch = getSearchWindow(clampedRoi);
+  const initPatch = cvtColor(slice(frame, initSearch), "BGRA2BGR");
+  const roiInPatch: Rect = {
+    x: clampedRoi.x - initSearch.x,
+    y: clampedRoi.y - initSearch.y,
+    width: clampedRoi.width,
+    height: clampedRoi.height,
+  };
   const tracker = new KCF();
-  tracker.init(bgr, clampedRoi);
+  tracker.init(initPatch, roiInPatch);
   tracker_instance = tracker;
   tracker_bbox.value = clampedRoi;
   tracker_active.value = true;
+
+  // Seed prediction buffer with the initial observation.
+  kinematic.reset();
+  kinematic.push(center.x, center.y, performance.now());
 
   // Run tracker loop
   let lost_count = 0;
   let last_good_center = center;
   let aborted = false;
+  let currentBbox: Rect = clampedRoi;
 
   tracker_abort = () => {
     aborted = true;
@@ -197,15 +277,28 @@ function startTracker(center: Point2d) {
       const currentFrame = mat_c.value;
       if (!currentFrame || aborted) break;
 
-      const bgr = cvtColor(currentFrame, "BGRA2BGR");
-      const result = tracker.update(bgr);
+      // Expand search window after each consecutive miss so a sudden
+      // jump that exits the tight crop can still be recovered.
+      const search = getSearchWindow(currentBbox, 1 + lost_count);
+      const patch = cvtColor(slice(currentFrame, search), "BGRA2BGR");
+      const result = tracker.update(patch);
 
       if (result) {
         lost_count = 0;
-        tracker_bbox.value = result;
-        const bboxCenter = RECT.getCenter(result);
+        // Translate bbox from patch-local coords back to full-frame coords.
+        const fullBbox: Rect = {
+          x: result.x + search.x,
+          y: result.y + search.y,
+          width: result.width,
+          height: result.height,
+        };
+        currentBbox = fullBbox;
+        tracker_bbox.value = fullBbox;
+        const bboxCenter = RECT.getCenter(fullBbox);
         last_good_center = bboxCenter;
-        target_loc.value = bboxCenter;
+        const now = performance.now();
+        kinematic.push(bboxCenter.x, bboxCenter.y, now);
+        target_loc.value = kinematic.predict(now) ?? bboxCenter;
       } else {
         lost_count++;
         if (lost_count >= lost_tolerance.value) {
@@ -253,25 +346,35 @@ const volt = reactive({
 const actuate_task = abortable(async (_, onAbort) => {
   const c = controller.value;
   if (!c) return;
-  const updated = new Latest<{ l: Point2d; r: Point2d }>();
-  onAbort(() => updated.close());
-  const handle = watch(target_volts, (t) => updated.push(t), {
-    deep: true,
-    immediate: true,
+  let aborted = false;
+  onAbort(() => {
+    aborted = true;
   });
+  const tasks = new Set<Promise<any>>();
   try {
     await c.enable();
-    for await (const { l, r } of updated) {
-      const { left, right } = await c.actuate({
-        left: l,
-        right: r,
+    while (!aborted) {
+      // Re-evaluate the kinematic model at "now" so the mirror keeps
+      // tracking smoothly between (slower) tracker updates — decouples
+      // actuation cadence from tracker fps.
+      const pred = kinematic.predict(performance.now());
+      if (pred) target_loc.value = pred;
+      const { l, r } = target_volts.value;
+      // const { left, right } = await c.actuate({ left: l, right: r });
+      // volt.L = left;
+      // volt.R = right;
+      const task = c.actuate({ left: l, right: r }).then(({ left, right }) => {
+        volt.L = left;
+        volt.R = right;
+        tasks.delete(task);
       });
-      volt.L = left;
-      volt.R = right;
+      tasks.add(task);
+      await new Promise((r) => setTimeout(r, 1)); // Actuation interval (ms)
+      console.log("Pending actuation:", tasks.size);
     }
   } finally {
+    await Promise.allSettled(tasks);
     await c.disable();
-    handle.stop();
   }
 });
 
@@ -599,13 +702,7 @@ capture.provide(async (provide) => {
   </div>
   <Drawer v-model="drawer_height">
     <div class="options fill">
-      <RangeSlider
-        v-model="verge"
-        :min="1"
-        :max="0"
-        :neutral="0"
-        :step="0.01"
-      >
+      <RangeSlider v-model="verge" :min="1" :max="0" :neutral="0" :step="0.01">
         <span>Verge Distance</span>
         <span>
           <template v-if="distance !== Infinity">
@@ -649,6 +746,46 @@ capture.provide(async (provide) => {
         <span>Lost Tolerance</span>
         <span>{{ lost_tolerance }} frames</span>
       </RangeSlider>
+      <RangeSlider
+        v-model="pred_buffer_max"
+        :min="4"
+        :max="50"
+        :neutral="10"
+        :step="1"
+      >
+        <span>Predict Samples</span>
+        <span>{{ pred_buffer_max }} samples</span>
+      </RangeSlider>
+      <ConfigEntry>
+        <label>
+          <span>Tracker Size</span>
+          <input v-model.number="tracker_w" style="width: 5ch" />
+          <span>&times;</span>
+          <input v-model.number="tracker_h" style="width: 5ch" />
+        </label>
+        <button
+          class="reset-btn"
+          title="Reset to default"
+          @click="resetTrackerSize"
+        >
+          <Icon :icon="faArrowRotateLeft" />
+        </button>
+      </ConfigEntry>
+      <ConfigEntry>
+        <label>
+          <span>Search Pad</span>
+          <input v-model.number="pad_x" style="width: 5ch" />
+          <span>&times;</span>
+          <input v-model.number="pad_y" style="width: 5ch" />
+        </label>
+        <button
+          class="reset-btn"
+          title="Reset to default"
+          @click="resetSearchPad"
+        >
+          <Icon :icon="faArrowRotateLeft" />
+        </button>
+      </ConfigEntry>
       <RangeSlider
         v-model="cap_stack"
         :min="1"
@@ -784,5 +921,19 @@ capture.provide(async (provide) => {
 .tracker-idle {
   color: #666;
   font-size: 0.85em;
+}
+
+.reset-btn {
+  background: none;
+  border: none;
+  color: #888;
+  padding: 0.1em 0.4em;
+  cursor: pointer;
+  font-size: 0.85em;
+  border-radius: 3px;
+  &:hover {
+    color: #ccc;
+    background: #8882;
+  }
 }
 </style>
