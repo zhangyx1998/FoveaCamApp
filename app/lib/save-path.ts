@@ -8,6 +8,7 @@ import { resolve } from "node:path";
 import { homedir } from "node:os";
 import { ref } from "vue";
 import { getDateTimeString } from "./util/string";
+import { existsSync } from "node:fs";
 
 export class SavePath {
   readonly prefix = getDateTimeString();
@@ -29,7 +30,9 @@ export class SavePath {
   private __last_save_path = ref<string | null>(null);
 
   get default_path() {
-    return resolve(homedir(), "Downloads", this.directory);
+    if (existsSync("/Volumes/Yuxuan Mobile/"))
+      return resolve("/Volumes/Yuxuan Mobile/", this.directory);
+    else return resolve(homedir(), "Downloads", this.directory);
   }
 
   get current_path() {

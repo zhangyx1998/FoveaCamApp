@@ -283,7 +283,7 @@ inline void assignMirrorPosition(Napi::Value const &val,
 
 static FN(ActuatePacket) {
   EXPECT_EXACTLY_ONE_ARGUMENT("Packet<Actuate>");
-  Packet::Command::Actuate command;
+  Packet::Command::Actuate command = {.settle_time = 0};
   if (isBufferLike(arg)) {
     bufferView(arg) >> command;
   } else if (arg.IsObject() && !arg.IsNull()) {

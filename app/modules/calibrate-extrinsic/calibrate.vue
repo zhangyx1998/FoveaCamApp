@@ -19,6 +19,8 @@ import { Point2d } from "core/Geometry";
 import { FontAwesomeIcon as Icon } from "@fortawesome/vue-fontawesome";
 import { faTrashCan } from "@fortawesome/free-regular-svg-icons";
 import { degrees } from "@lib/util";
+import RangeSlider from "@src/inputs/range-slider.vue";
+import Drawer from "@src/components/Drawer.vue";
 
 const emit = defineEmits<{
   (e: "finalize"): void;
@@ -40,14 +42,11 @@ const baseline_distance_mm = computed({
   },
 });
 
-const marker_size_mm = computed({
-  get() {
-    return config.cal_marker_size_mm ?? 60.0;
-  },
-  set(v: number) {
-    config.cal_marker_size_mm = v;
-  },
-});
+const marker_size = computed(() => config.cal_marker_size_mm);
+const marker_ratio = computed(() => config.cal_marker_ratio);
+const center_marker_size = computed(
+  () => marker_size.value * marker_ratio.value,
+);
 
 const detector = new MarkerDetector("4X4_50");
 
@@ -276,23 +275,47 @@ function printAngle({ x, y }: Point2d) {
       </PosView>
     </div>
   </div>
+  <Drawer>
+    <div class="options fill">
+      <RangeSlider
+        v-model="config.cal_marker_size_mm"
+        :min="10"
+        :max="120"
+        :neutral="60"
+        :step="1"
+      >
+        <span>Marker Size</span>
+        <span>{{ config.cal_marker_size_mm.toFixed(1) }} mm</span>
+      </RangeSlider>
+      <RangeSlider
+        v-model="config.cal_marker_ratio"
+        :min="0.2"
+        :max="1.2"
+        :neutral="1.0"
+        :step="0.02"
+      >
+        <span>Center Marker</span>
+        <span>{{ (config.cal_marker_ratio * 100).toFixed(0) }}%</span>
+      </RangeSlider>
+    </div>
+  </Drawer>
   <RemoteCanvasTeleport>
     <CrossHair
-      :cx="baseline_distance_mm / 2 + marker_size_mm"
-      :cy="marker_size_mm"
+      :cx="config.baseline_distance_mm / 2 + marker_size"
+      :cy="center_marker_size"
       weight="2"
     />
     <Marker
       :id="tracker.L.target_id"
-      :size="marker_size_mm"
-      :cx="-baseline_distance_mm / 2"
+      :size="marker_size"
+      :cx="-config.baseline_distance_mm / 2"
     />
-    <Marker :id="tracker.C.target_id" :size="marker_size_mm" />
     <Marker
       :id="tracker.R.target_id"
-      :size="marker_size_mm"
-      :cx="baseline_distance_mm / 2"
+      :size="marker_size"
+      :cx="config.baseline_distance_mm / 2"
     />
+    <Marker :id="tracker.C.target_id" :size="center_marker_size" />
   </RemoteCanvasTeleport>
 </template>
 

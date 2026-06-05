@@ -108,6 +108,7 @@ function untrack() {
   drag.value = false;
   window.removeEventListener("mousemove", trackUntilRelease);
   window.removeEventListener("mouseup", trackUntilRelease);
+  emit("select", null);
 }
 
 function track(e: MouseEvent) {

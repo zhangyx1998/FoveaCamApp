@@ -30,6 +30,7 @@ find_package(NodeApiHeaders REQUIRED)
 find_package(NodeAddonApi REQUIRED)
 find_package(LibUSB REQUIRED)
 find_package(Aravis REQUIRED)
+find_package(LZ4 REQUIRED)
 find_package(OpenCV REQUIRED COMPONENTS
   core        # cv::Mat and basic structures
   imgproc     # cv::cvtColor and image processing
@@ -48,6 +49,7 @@ include_directories(
   ${OpenCV_INCLUDE_DIRS}
   ${ARAVIS_INCLUDE_DIRS}
   ${LibUSB_INCLUDE_DIRS}
+  ${LZ4_INCLUDE_DIRS}
 )
 
 # Library linkables
@@ -55,6 +57,7 @@ link_directories(
   ${OpenCV_LIBRARY_DIRS}
   ${ARAVIS_LIBRARY_DIRS}
   ${LibUSB_LIBRARY_DIRS}
+  ${LZ4_LIBRARY_DIRS}
 )
 
 # Project Local Library
@@ -86,4 +89,5 @@ target_link_libraries(core PRIVATE
   ${OpenCV_LIBS}
   ${ARAVIS_LIBRARIES}
   ${LibUSB_LIBRARIES}
+  ${LZ4_LIBRARIES}
 )

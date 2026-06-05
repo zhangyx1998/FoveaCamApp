@@ -301,7 +301,7 @@ static FN(diff) {
     // Use OpenCV's vectorized operations for efficiency
     cv::Mat channels[4];
     channels[0] = a;            // R = pa
-    cv::min(a, b, channels[1]); // G = min(pa, pb)
+    channels[1] = cv::Mat::zeros(a.size(), a.type()); // G = black
     channels[2] = b;            // B = pb
     channels[3] =
         cv::Mat(a.size(), CV_MAKETYPE(a.type(), 1),
