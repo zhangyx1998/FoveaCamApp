@@ -53,14 +53,14 @@ const app_config = await useAppConfig();
 const gain = (dof: string, term: string, init: number) =>
   local(`disparity-scope.pid.${dof}.${term}`, init);
 
-const pan_kp = gain("pan", "kp", 0.05);
-const pan_ki = gain("pan", "ki", 0.05);
+const pan_kp = gain("pan", "kp", 0.02);
+const pan_ki = gain("pan", "ki", 0.02);
 const pan_kd = gain("pan", "kd", 0);
 const depth_kp = gain("depth", "kp", 1.0);
 const depth_ki = gain("depth", "ki", 0.2);
 const depth_kd = gain("depth", "kd", 0.5);
-const v_shift_kp = gain("v_shift", "kp", 0.1);
-const v_shift_ki = gain("v_shift", "ki", 0.1);
+const v_shift_kp = gain("v_shift", "kp", 0.02);
+const v_shift_ki = gain("v_shift", "ki", 0.02);
 const v_shift_kd = gain("v_shift", "kd", 0);
 
 // Template-match scale, confidence gate, and master responsiveness, persisted
@@ -686,18 +686,22 @@ onUnmounted(async () => {
         </RangeSlider>
         <RangeSlider
           v-model="expand_x"
-          :min="0"
-          :max="10"
+          :min="1.0"
+          :max="4.0"
           :neutral="neutrals.expand_x"
           :step="0.1"
-        ></RangeSlider>
+          ><span>X Expansion</span
+          ><span>{{ (expand_x * 100).toFixed(1) }}%</span></RangeSlider
+        >
         <RangeSlider
           v-model="expand_y"
-          :min="0"
-          :max="10"
+          :min="1.0"
+          :max="4.0"
           :neutral="neutrals.expand_y"
           :step="0.1"
-        ></RangeSlider>
+          ><span>Y Expansion</span
+          ><span>{{ (expand_y * 100).toFixed(1) }}%</span></RangeSlider
+        >
       </div>
       <!-- Column 2: Pan PID -->
       <div class="options">
@@ -748,7 +752,7 @@ onUnmounted(async () => {
           :min="0"
           :max="10"
           :neutral="neutrals.depth_kp"
-          :step="0.05"
+          :step="0.02"
         >
           <span>Kp</span><span>{{ depth_kp.toFixed(2) }}</span>
         </RangeSlider>
@@ -757,7 +761,7 @@ onUnmounted(async () => {
           :min="0"
           :max="10"
           :neutral="neutrals.depth_ki"
-          :step="0.05"
+          :step="0.02"
         >
           <span>Ki</span><span>{{ depth_ki.toFixed(2) }}</span>
         </RangeSlider>
@@ -766,7 +770,7 @@ onUnmounted(async () => {
           :min="0"
           :max="10"
           :neutral="neutrals.depth_kd"
-          :step="0.05"
+          :step="0.02"
         >
           <span>Kd</span><span>{{ depth_kd.toFixed(2) }}</span>
         </RangeSlider>
@@ -985,7 +989,7 @@ onUnmounted(async () => {
     opacity: 0.7;
     text-transform: uppercase;
     font-size: 0.8em;
-    letter-spacing: 0.05em;
+    letter-spacing: 0.02em;
 
     &:first-child {
       margin-top: 0;
