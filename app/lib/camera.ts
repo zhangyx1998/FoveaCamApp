@@ -133,6 +133,15 @@ export function useCameraConfig(camera: Camera) {
 export type CameraConfig = Awaited<ReturnType<typeof useCameraConfig>>;
 
 export function initCamera(camera: Camera, config: Partial<Camera>) {
+  // Pixel format must be applied before acquisition starts (it changes the
+  // stream payload size), so restore it first.
+  if (config.pixel_format !== undefined) {
+    try {
+      camera.pixel_format = config.pixel_format;
+    } catch (e) {
+      console.warn("Failed to restore pixel format:", config.pixel_format, e);
+    }
+  }
   if (config.frame_rate_enable !== undefined)
     camera.frame_rate_enable = config.frame_rate_enable;
   if (!camera.frame_rate_enable && config.frame_rate !== undefined)

@@ -28,6 +28,10 @@ declare module "core/Aravis" {
     readonly model: string;
     readonly serial: string;
 
+    // Pixel format control
+    pixel_format: PixelFormat;
+    readonly pixel_format_options: string[];
+
     // Acquisition control
     acquisition_mode: AcquisitionMode;
     frame_count: number;
@@ -117,5 +121,18 @@ declare module "core/Aravis" {
     | "BayerGB16"
     | "BayerBG16";
 
-  export type PixelFormat = PixelFormat8 | PixelFormat16;
+  /**
+   * GenICam 12-bit packed wire formats. These appear only as a Frame's
+   * `raw_format` (and as values selectable via `Camera.pixel_format`); the
+   * native readout unpacks them into a 16-bit single-channel Mat. They are not
+   * valid targets for `Frame.view()`.
+   */
+  type PixelFormat12p =
+    | "Mono12p"
+    | "BayerGR12p"
+    | "BayerRG12p"
+    | "BayerGB12p"
+    | "BayerBG12p";
+
+  export type PixelFormat = PixelFormat8 | PixelFormat16 | PixelFormat12p;
 }

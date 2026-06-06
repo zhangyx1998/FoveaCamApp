@@ -46,6 +46,12 @@ typedef enum Format : int {
 
 }
 
+// PFNC value for Mono12p — not defined as a macro in this Aravis release,
+// unlike the BayerXX12p variants. See GenICam PFNC spec.
+#ifndef ARV_PIXEL_FORMAT_MONO_12P
+#define ARV_PIXEL_FORMAT_MONO_12P ((ArvPixelFormat)0x010c0047)
+#endif
+
 namespace Arv {
 
 class UnknownPixelFormat : public std::runtime_error {
@@ -68,14 +74,55 @@ typedef enum PixelFormat : uint8_t {
   BayerGR16,
   BayerRG16,
   BayerGB16,
+  // GenICam 12-bit packed (12p): 2 pixels in 3 bytes, unpacked to CV_16UC1.
+  Mono12p,
+  BayerGR12p,
+  BayerRG12p,
+  BayerGB12p,
+  BayerBG12p,
 } Format;
 
 Format getPixelFormat(ArvBuffer *buffer);
 
 cv::ColorConversionCodes cvtColorCode(PixelFormat src, PixelFormat dst);
 
+// Significant bit depth of the pixel data. 12p data lives 0..4095 in a 16-bit
+// container, so display scaling must use 4095 (not the container's 65535).
+inline int significantBits(PixelFormat format) {
+  switch (format) {
+  case Mono12p:
+  case BayerGR12p:
+  case BayerRG12p:
+  case BayerGB12p:
+  case BayerBG12p:
+    return 12;
+  case Mono16:
+  case BayerGR16:
+  case BayerRG16:
+  case BayerGB16:
+    return 16;
+  default:
+    return 8;
+  }
+}
+
+// True for GenICam 12p packed formats, which need bit-unpacking (not memcpy).
+inline bool isPacked(PixelFormat format) {
+  switch (format) {
+  case Mono12p:
+  case BayerGR12p:
+  case BayerRG12p:
+  case BayerGB12p:
+  case BayerBG12p:
+    return true;
+  default:
+    return false;
+  }
+}
+
 } // namespace Arv
 
 template <> Arv::PixelFormat convert(const std::string &fmt);
 template <> std::string convert(const Arv::PixelFormat &fmt);
 template <> cv::Format convert(const Arv::PixelFormat &fmt);
+template <> ArvPixelFormat convert(const Arv::PixelFormat &fmt);

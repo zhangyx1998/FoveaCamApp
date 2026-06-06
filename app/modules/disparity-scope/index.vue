@@ -22,10 +22,10 @@ import StreamView from "@src/components/StreamView.vue";
 import PosView from "@src/components/PosView.vue";
 import { getController } from "@src/components/Controller.vue";
 import FrameCursor from "@src/components/FrameCursor.vue";
-import ConfigEntry from "@src/components/ConfigEntry.vue";
 import abortable from "@lib/abortable";
 import { Latest, Zip } from "@lib/util/iter";
 import FrameView from "@src/components/FrameView.vue";
+import InlineSelect from "@src/components/InlineSelect.vue";
 import Drawer from "@src/components/Drawer.vue";
 import RangeSlider from "@src/inputs/range-slider.vue";
 import HorizontalDivision from "@src/layouts/HorizontalDivision.vue";
@@ -302,18 +302,11 @@ const divergence = computed(() => V2A.L(volt.L).x - V2A.R(volt.R).x);
 const depth = computed(() => {
   const baseline = app_config.baseline_distance_mm / 1000; // meters
   const d = baseline / Math.sin(divergence.value);
-  return Math.abs(d) < 1e8 ? d.toFixed(4) : "Infinity";
+  // A negative depth means the gaze lines diverge (no convergence point in
+  // front of the cameras) — perceptually infinitely far. Same for absurdly
+  // large magnitudes as divergence approaches zero.
+  return d > 0 && d < 1e8 ? d.toFixed(4) : "∞";
 });
-const divergenceReport = computed(() =>
-  [
-    "Divergence:",
-    deg(divergence.value).toFixed(2),
-    "degrees",
-    "| Perceived Depth:",
-    depth.value,
-    "meters",
-  ].join(" "),
-);
 
 const wrap_enable = ref(true);
 const wrap = {
@@ -492,33 +485,17 @@ onUnmounted(async () => {
     <div class="view">
       <FrameView
         class="stream"
-        title="Left v.s. Right (Disparity)"
         :mat="center_view"
         :theme="THEME.C"
         capture="center.disparity"
-      />
-      <ConfigEntry>
-        <label>
-          <span style="padding: 2ch">Zoom Ratio</span>
-          <input type="number" v-model.number="zoom" style="width: 4ch" />
-        </label>
-        <span>|</span>
-        <label>
-          <span style="padding: 2ch">View</span>
-          <select v-model="view">
-            <option value="sliced">Sliced</option>
-            <option value="disparity">Disparity</option>
-          </select>
-        </label>
-        <span>|</span>
-        <label>
-          <span style="padding: 2ch">Wrap</span>
-          <input type="checkbox" v-model="wrap_enable" />
-        </label>
-      </ConfigEntry>
-      <!-- <div class="actions">
-                <button :disabled="true">Button</button>
-            </div> -->
+      >
+        <template #title>
+          <InlineSelect v-model="view">
+            <option value="sliced">Wide Angle Sliced</option>
+            <option value="disparity">Disparity (Left v.s. Right)</option>
+          </InlineSelect>
+        </template>
+      </FrameView>
       <StreamView
         class="stream"
         :title="ROLE.C"
@@ -545,6 +522,12 @@ onUnmounted(async () => {
         />
         <FrameCursor v-if="cursor && !is_drag" :cursor="cursor" color="gray" />
       </StreamView>
+      <div class="report">
+        Vergence
+        <span class="value">{{ deg(divergence).toFixed(2) }}</span
+        >° | Depth <span class="value">{{ depth }}</span
+        >m
+      </div>
     </div>
     <div class="view">
       <FrameView
@@ -567,7 +550,7 @@ onUnmounted(async () => {
     class="divergence"
     :style="{ paddingBottom: (drawer_height ? drawer_height + 20 : 0) + 'px' }"
   >
-    <FrameView width="100%" :title="divergenceReport" :mat="guide">
+    <FrameView width="100%" title="Template Match Guide Strip" :mat="guide">
       <template v-if="guide">
         <rect
           v-if="match_center"
@@ -702,6 +685,15 @@ onUnmounted(async () => {
           ><span>Y Expansion</span
           ><span>{{ (expand_y * 100).toFixed(1) }}%</span></RangeSlider
         >
+        <h4><span>Display</span></h4>
+        <label class="entry">
+          <span>Zoom Ratio</span>
+          <input type="number" v-model.number="zoom" />
+        </label>
+        <label class="entry">
+          <span>Wrap</span>
+          <input type="checkbox" v-model="wrap_enable" />
+        </label>
       </div>
       <!-- Column 2: Pan PID -->
       <div class="options">
@@ -953,6 +945,20 @@ onUnmounted(async () => {
   }
 }
 
+.report {
+  user-select: none;
+  font-family: monospace;
+  font-size: 1.4em;
+  font-weight: 500;
+  padding: 1em 0;
+  .value {
+    display: inline-block;
+    text-align: right;
+    font-weight: 600;
+    min-width: 6ch;
+  }
+}
+
 .drawer-columns {
   display: flex;
   flex-direction: row;
@@ -1015,6 +1021,29 @@ onUnmounted(async () => {
       &:active {
         background: #fff2;
       }
+    }
+  }
+
+  .entry {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1ch;
+    margin: 0.35em 0;
+    font-size: 0.9em;
+
+    input[type="number"] {
+      width: 5ch;
+      font: inherit;
+      color: inherit;
+      background: #fff1;
+      border: 1px solid #fff3;
+      border-radius: 4px;
+      padding: 0.1em 0.4em;
+    }
+
+    input[type="checkbox"] {
+      margin: 0;
     }
   }
 }

@@ -77,6 +77,8 @@ public:
             INSTANCE_GETTER(CameraObject, vendor),                     //
             INSTANCE_GETTER(CameraObject, model),                      //
             INSTANCE_GETTER(CameraObject, serial),                     //
+            INSTANCE_ACCESSOR(CameraObject, pixel_format),             //
+            INSTANCE_GETTER(CameraObject, pixel_format_options),       //
             INSTANCE_ACCESSOR(CameraObject, acquisition_mode),         //
             INSTANCE_ACCESSOR(CameraObject, frame_count),              //
             INSTANCE_GETTER(CameraObject, frame_count_range),          //
@@ -147,6 +149,22 @@ private:
   GET_PROP(vendor, String);
   GET_PROP(model, String);
   GET_PROP(serial, String);
+
+  GET(pixel_format) {
+    try {
+      auto fmt = convert<Arv::PixelFormat>(core()->get_pixel_format());
+      return String::New(env, convert<std::string>(fmt));
+    }
+    JS_EXCEPT(env.Undefined())
+  }
+  SET(pixel_format) {
+    try {
+      auto fmt = convert<Arv::PixelFormat>(val.As<String>().Utf8Value());
+      core()->set_pixel_format(convert<ArvPixelFormat>(fmt));
+    }
+    JS_EXCEPT()
+  }
+  OPTIONS(pixel_format);
 
   GET_PROP(acquisition_mode, String,
            (convert<std::string, ArvAcquisitionMode>));

@@ -104,6 +104,7 @@ public:
   ARV_CAMERA_GET(const char *, serial, device_serial_number);
   ARV_CAMERA_GET(ArvPixelFormat, pixel_format, pixel_format);
   ARV_CAMERA_SET(ArvPixelFormat, pixel_format, pixel_format);
+  ARV_CAMERA_DUP(pixel_format_options, pixel_formats_as_strings);
 
   /* Acquisition control */
 

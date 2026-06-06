@@ -28,6 +28,11 @@ PixelFormat convert(const ArvPixelFormat &fmt) {
     CASE(ARV_PIXEL_FORMAT_BAYER_GR_16, BayerGR16);
     CASE(ARV_PIXEL_FORMAT_BAYER_RG_16, BayerRG16);
     CASE(ARV_PIXEL_FORMAT_BAYER_GB_16, BayerGB16);
+    CASE(ARV_PIXEL_FORMAT_MONO_12P, Mono12p);
+    CASE(ARV_PIXEL_FORMAT_BAYER_GR_12P, BayerGR12p);
+    CASE(ARV_PIXEL_FORMAT_BAYER_RG_12P, BayerRG12p);
+    CASE(ARV_PIXEL_FORMAT_BAYER_GB_12P, BayerGB12p);
+    CASE(ARV_PIXEL_FORMAT_BAYER_BG_12P, BayerBG12p);
   default:
     auto name = arv_pixel_format_to_gst_caps_string(fmt);
     throw UnknownPixelFormat(name ? name : "(unknown)");
@@ -57,6 +62,11 @@ template <> PixelFormat convert(const std::string &fmt) {
   CASE(BayerGR16);
   CASE(BayerRG16);
   CASE(BayerGB16);
+  CASE(Mono12p);
+  CASE(BayerGR12p);
+  CASE(BayerRG12p);
+  CASE(BayerGB12p);
+  CASE(BayerBG12p);
   throw UnknownPixelFormat(fmt);
 }
 #undef CASE
@@ -79,6 +89,11 @@ template <> std::string convert(const PixelFormat &fmt) {
     CASE(BayerGR16);
     CASE(BayerRG16);
     CASE(BayerGB16);
+    CASE(Mono12p);
+    CASE(BayerGR12p);
+    CASE(BayerRG12p);
+    CASE(BayerGB12p);
+    CASE(BayerBG12p);
     throw UnknownPixelFormat(std::to_string(fmt));
   }
 }
@@ -96,6 +111,12 @@ template <> cv::Format convert(const PixelFormat &fmt) {
   case BayerGR16:
   case BayerRG16:
   case BayerGB16:
+  // 12p packed formats are unpacked into a 16-bit single-channel container.
+  case Mono12p:
+  case BayerGR12p:
+  case BayerRG12p:
+  case BayerGB12p:
+  case BayerBG12p:
     return cv::Format::U16C1;
   case RGB8:
   case BGR8:
@@ -103,6 +124,49 @@ template <> cv::Format convert(const PixelFormat &fmt) {
   case RGBA8:
   case BGRA8:
     return cv::Format::U8C4;
+  default:
+    throw UnknownPixelFormat(std::to_string(fmt));
+  }
+}
+
+template <> ArvPixelFormat convert(const PixelFormat &fmt) {
+  switch (fmt) {
+  case Mono8:
+    return ARV_PIXEL_FORMAT_MONO_8;
+  case Mono16:
+    return ARV_PIXEL_FORMAT_MONO_16;
+  case RGB8:
+    return ARV_PIXEL_FORMAT_RGB_8_PACKED;
+  case BGR8:
+    return ARV_PIXEL_FORMAT_BGR_8_PACKED;
+  case RGBA8:
+    return ARV_PIXEL_FORMAT_RGBA_8_PACKED;
+  case BGRA8:
+    return ARV_PIXEL_FORMAT_BGRA_8_PACKED;
+  case BayerGR8:
+    return ARV_PIXEL_FORMAT_BAYER_GR_8;
+  case BayerRG8:
+    return ARV_PIXEL_FORMAT_BAYER_RG_8;
+  case BayerGB8:
+    return ARV_PIXEL_FORMAT_BAYER_GB_8;
+  case BayerBG8:
+    return ARV_PIXEL_FORMAT_BAYER_BG_8;
+  case BayerGR16:
+    return ARV_PIXEL_FORMAT_BAYER_GR_16;
+  case BayerRG16:
+    return ARV_PIXEL_FORMAT_BAYER_RG_16;
+  case BayerGB16:
+    return ARV_PIXEL_FORMAT_BAYER_GB_16;
+  case Mono12p:
+    return ARV_PIXEL_FORMAT_MONO_12P;
+  case BayerGR12p:
+    return ARV_PIXEL_FORMAT_BAYER_GR_12P;
+  case BayerRG12p:
+    return ARV_PIXEL_FORMAT_BAYER_RG_12P;
+  case BayerGB12p:
+    return ARV_PIXEL_FORMAT_BAYER_GB_12P;
+  case BayerBG12p:
+    return ARV_PIXEL_FORMAT_BAYER_BG_12P;
   default:
     throw UnknownPixelFormat(std::to_string(fmt));
   }
@@ -120,6 +184,7 @@ cv::ColorConversionCodes Arv::cvtColorCode(PixelFormat src, PixelFormat dst) {
   switch (src) {
   case Mono8:
   case Mono16:
+  case Mono12p:
     switch (dst) {
       CASE(RGB8, GRAY2RGB);
       CASE(BGR8, GRAY2BGR);
@@ -200,6 +265,7 @@ cv::ColorConversionCodes Arv::cvtColorCode(PixelFormat src, PixelFormat dst) {
       DEFAULT;
     }
   case BayerGR16:
+  case BayerGR12p:
     switch (dst) {
       CASE(RGB8, BayerGR2RGB);
       CASE(BGR8, BayerGR2BGR);
@@ -210,6 +276,7 @@ cv::ColorConversionCodes Arv::cvtColorCode(PixelFormat src, PixelFormat dst) {
       DEFAULT;
     }
   case BayerRG16:
+  case BayerRG12p:
     switch (dst) {
       CASE(RGB8, BayerRG2RGB);
       CASE(BGR8, BayerRG2BGR);
@@ -220,6 +287,7 @@ cv::ColorConversionCodes Arv::cvtColorCode(PixelFormat src, PixelFormat dst) {
       DEFAULT;
     }
   case BayerGB16:
+  case BayerGB12p:
     switch (dst) {
       CASE(RGB8, BayerGB2RGB);
       CASE(BGR8, BayerGB2BGR);
@@ -227,6 +295,16 @@ cv::ColorConversionCodes Arv::cvtColorCode(PixelFormat src, PixelFormat dst) {
       CASE(BGRA8, BayerGB2BGRA);
       CASE(Mono8, BayerGB2GRAY);
       CASE(Mono16, BayerGB2GRAY);
+      DEFAULT;
+    }
+  case BayerBG12p:
+    switch (dst) {
+      CASE(RGB8, BayerBG2RGB);
+      CASE(BGR8, BayerBG2BGR);
+      CASE(RGBA8, BayerBG2RGBA);
+      CASE(BGRA8, BayerBG2BGRA);
+      CASE(Mono8, BayerBG2GRAY);
+      CASE(Mono16, BayerBG2GRAY);
       DEFAULT;
     }
     DEFAULT;
