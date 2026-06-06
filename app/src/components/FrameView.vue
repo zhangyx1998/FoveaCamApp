@@ -26,7 +26,7 @@ const props = defineProps({
   title: {
     type: String,
     required: false,
-    default: null,
+    default: "",
   },
   footnote: {
     type: String,
@@ -166,6 +166,7 @@ const overlayEntries = computed(() => {
 
 const style = computed<StyleValue>(() => {
   const ret: StyleValue = {
+    marginTop: "1.6em",
     fontSize: `min(1.2em, ${size.width / 20}px)`,
     "--theme": props.theme,
   };
@@ -254,6 +255,9 @@ function mix<T, P>(t: T, p: P): T & P {
   >
     <div class="title" v-if="title !== null">
       <span>{{ title }}</span>
+      <div class="title-slot">
+        <slot name="title"></slot>
+      </div>
       <button
         class="fullscreen"
         title="Toggle Fullscreen"
@@ -340,8 +344,16 @@ function mix<T, P>(t: T, p: P): T & P {
     color: gray;
     user-select: none;
     display: flex;
-    justify-content: space-between;
     align-items: center;
+
+    .title-slot {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      min-width: 0;
+      overflow: hidden;
+      justify-content: flex-start;
+    }
 
     .fullscreen {
       background: none;

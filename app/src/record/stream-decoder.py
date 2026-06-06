@@ -52,6 +52,11 @@ type PixelFormat = Literal[
     "BayerRG16",
     "BayerGB16",
     "BayerBG16",
+    "Mono12p",
+    "BayerGR12p",
+    "BayerRG12p",
+    "BayerGB12p",
+    "BayerBG12p",
 ]
 
 BAYER_CODE: dict[str, int] = {
@@ -63,7 +68,25 @@ BAYER_CODE: dict[str, int] = {
     "BayerRG16": cv2.COLOR_BayerRG2RGB,
     "BayerGB16": cv2.COLOR_BayerGB2RGB,
     "BayerBG16": cv2.COLOR_BayerBG2RGB,
+    # 12-bit packed are unpacked to 16-bit before demosaic; same Bayer codes.
+    "BayerGR12p": cv2.COLOR_BayerGR2RGB,
+    "BayerRG12p": cv2.COLOR_BayerRG2RGB,
+    "BayerGB12p": cv2.COLOR_BayerGB2RGB,
+    "BayerBG12p": cv2.COLOR_BayerBG2RGB,
 }
+
+
+def significant_bits(fmt: str, declared: int = 0) -> int:
+    """Effective bit depth of pixel data. Prefer the value carried in the meta
+    sidecar; otherwise derive from the format name (12p data lives 0..4095 in a
+    16-bit container, so it must be scaled by 4095, not 65535)."""
+    if declared:
+        return declared
+    if fmt.endswith("12p"):
+        return 12
+    if fmt.endswith("16"):
+        return 16
+    return 8
 
 
 @dataclass
@@ -77,6 +100,7 @@ class Frame:
     dtype: Dtype  # d: dtype
     timestamp: float  # t: timestamp in seconds
     format: PixelFormat  # f: pixel format
+    bits: int = 0  # b: significant bit depth (0 = derive from format)
     extra: dict = field(default_factory=dict)  # x: extra metadata
 
     @property
@@ -110,8 +134,15 @@ class Frame:
         elif fmt in ("RGBA8",):
             img = cv2.cvtColor(raw, cv2.COLOR_RGBA2BGR)
         else:
-            # Mono8, Mono16, BGR8, BGRA8 — display directly
+            # Mono8, Mono16, Mono12p, BGR8, BGRA8 — display directly
             img = raw
+        # Normalize >8-bit data to 8-bit using its true bit depth, so 12-bit
+        # data (0..4095 in a 16-bit container) is not rendered ~16x too dark.
+        if img.dtype != np.uint8:
+            max_val = (1 << significant_bits(fmt, self.bits)) - 1
+            img = (
+                (img.astype(np.uint32) * 255 // max_val).clip(0, 255).astype(np.uint8)
+            )
         H = self.affine
         if H is not None:
             h, w = img.shape[:2]
@@ -129,6 +160,7 @@ def parse_meta_line(line: str) -> dict:
         dtype=m["d"],
         timestamp=m["t"],
         format=m["f"],
+        bits=m.get("b", 0),
         extra=m.get("x", {}),
     )
 

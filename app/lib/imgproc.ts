@@ -7,6 +7,7 @@ import { Frame, Stream } from "core/Aravis";
 import { convertType, cvtColor, Mat } from "core/Vision";
 import { createMat } from "./mat";
 import abortable from "./abortable.next";
+import { significantBits } from "@src/record/stream";
 
 export function stack(stream: Stream<Frame>, count: number) {
   return abortable(async (abortable) => {
@@ -22,7 +23,11 @@ export function stack(stream: Stream<Frame>, count: number) {
       n += 1;
       const { raw, raw_format } = frame;
       frame.release();
-      const fp = convertType(raw, "32F"); // auto scale to [0, 1]
+      // Scale to [0, 1] by the format's true bit depth, not the container's.
+      // 12p data is 0..4095 in a 16-bit Mat, so dividing by 65535 would make
+      // the stacked average ~16x too dark.
+      const alpha = 1 / ((1 << significantBits(raw_format)) - 1);
+      const fp = convertType(raw, "32F", alpha, 0);
       if (out === null) {
         out = createMat(Float32Array, raw.shape, raw.channels);
         fmt = raw_format;
@@ -40,15 +45,19 @@ export function makeBGR<T extends Mat>(mat: T, format: Frame["raw_format"]) {
   switch (format) {
     case "BayerBG8":
     case "BayerBG16":
+    case "BayerBG12p":
       return cvtColor(mat, "BayerBG2BGR");
     case "BayerGB8":
     case "BayerGB16":
+    case "BayerGB12p":
       return cvtColor(mat, "BayerGB2BGR");
     case "BayerRG8":
     case "BayerRG16":
+    case "BayerRG12p":
       return cvtColor(mat, "BayerRG2BGR");
     case "BayerGR8":
     case "BayerGR16":
+    case "BayerGR12p":
       return cvtColor(mat, "BayerGR2BGR");
   }
   switch (mat.channels) {

@@ -27,8 +27,20 @@ export interface FrameMeta<X extends Extensions = Extensions> {
   t: number;
   /** pixel format */
   f: PixelFormat;
+  /** significant bit depth (e.g. 12 for 12p data stored in a 16-bit container) */
+  b: number;
   /** extra metadata */
   x?: X;
+}
+
+/**
+ * Effective bit depth of the pixel data. 12p formats carry 12 significant bits
+ * in a 16-bit container, so consumers must scale by 4095 rather than 65535.
+ */
+export function significantBits(format: PixelFormat): number {
+  if (format.endsWith("12p")) return 12;
+  if (format.endsWith("16")) return 16;
+  return 8;
 }
 
 interface AffineExtension {
@@ -77,6 +89,7 @@ export default class StreamWriter {
       s: [...frame.shape],
       t: timestamp,
       f: format,
+      b: significantBits(format),
       x: extra,
     };
     this.byteOffset += buf.byteLength;
