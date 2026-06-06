@@ -9,8 +9,9 @@ import {
   type Ref,
 } from "vue";
 import { Point2d, Rect } from "core/Geometry";
-import { Mat, slice, diff, wrapPerspective } from "core/Vision";
+import { Mat, slice, diff, wrapPerspective, cvtColor } from "core/Vision";
 import { Frame } from "core/Aravis";
+import { KCF } from "core/Tracker";
 import {
   getFrameSize,
   ROLE,
@@ -159,6 +160,9 @@ const is_drag = computed(
 // Evaluated per-frame inside the loop (not reactive — `performance.now()`).
 const window_start = ref(performance.now());
 function frozen() {
+  // While actively tracking, never freeze — the mirrors should keep following
+  // the tracked object.
+  if (tracker_active.value) return false;
   const t = timeout_ms.value;
   return t !== Infinity && performance.now() - window_start.value > t;
 }
@@ -252,9 +256,13 @@ const neutrals = {
 // On mouse release: restart the convergence window and reset every controller
 // so the foveas re-converge fresh on the new target (no stale integrator wind-up).
 watch(is_drag, (dragging, wasDragging) => {
+  // Pressing the mouse disengages any active tracker so the user can re-aim.
+  if (dragging && !wasDragging) releaseTracker();
   if (wasDragging && !dragging) {
     window_start.value = performance.now();
     for (const pid of Object.values(pids)) pid.reset();
+    // Releasing re-engages the tracker at the new target, if enabled.
+    if (tracker_enable.value) startTracker(target_loc.value);
   }
 });
 
@@ -278,6 +286,15 @@ const actuate_task = abortable(async (_, onAbort) => {
   try {
     await c.enable();
     for await (const pos of updated) {
+      // This loop does live, zero-vergence pointing whenever the target moves.
+      // While the tracker continuously drives the target, that fights the
+      // auto-vergence loop — which owns the mirror, pointing *and* verging
+      // about the same ray — making the mirror flicker between verged and
+      // zero-verge poses. So while the tracker is active (and the user isn't
+      // manually dragging), let the vergence loop own the mirror. The foveas
+      // are already coarse-pointed from the drag that armed the tracker, so
+      // acquisition is unaffected. The non-tracker path is unchanged.
+      if (tracker_active.value && !is_drag.value) continue;
       const [r] = undistort.angular([pos], true);
       const { left, right } = await c.actuate({
         left: A2V.L(r),
@@ -338,6 +355,136 @@ const center_view = computed(() => {
     if (!l || !r) return null;
     return diff(l, r, true);
   }
+});
+
+// =====================================================================
+// Optional KCF tracker on the wide-angle (center) view. Interaction is ported
+// from the single-object tracking demo: pressing the mouse disengages any
+// active tracker; releasing (re)starts one at the target — but only while the
+// tracker is enabled via the drawer toggle. The tracked bbox center drives
+// `target_loc`, so auto-vergence follows the tracked object.
+// =====================================================================
+const tracker_enable = ref(false);
+const tracker_active = ref(false);
+const tracker_bbox = shallowRef<Rect | null>(null);
+// Configurable KCF template (kernel) size, persisted in localStorage.
+const kernel_w = local("disparity-scope.tracker.kernel_w", 64);
+const kernel_h = local("disparity-scope.tracker.kernel_h", 64);
+const TRACKER_LOST_TOLERANCE = 10;
+let tracker_instance: KCF | null = null;
+let tracker_abort: (() => void) | null = null;
+
+// Crop a search window around the bbox so KCF/cvtColor run on a small patch
+// instead of the full sensor frame; padding grows after consecutive misses.
+function getSearchWindow(bbox: Rect, scale = 1): Rect {
+  const px = Math.max(0, kernel_w.value * scale);
+  const py = Math.max(0, kernel_h.value * scale);
+  const x = Math.max(0, Math.round(bbox.x - px));
+  const y = Math.max(0, Math.round(bbox.y - py));
+  const right = Math.min(width, Math.round(bbox.x + bbox.width + px));
+  const bottom = Math.min(height, Math.round(bbox.y + bbox.height + py));
+  return { x, y, width: right - x, height: bottom - y };
+}
+
+function releaseTracker() {
+  if (tracker_abort) {
+    tracker_abort();
+    tracker_abort = null;
+  }
+  if (tracker_instance) {
+    tracker_instance.release();
+    tracker_instance = null;
+  }
+  tracker_bbox.value = null;
+  tracker_active.value = false;
+}
+
+function startTracker(center: Point2d) {
+  releaseTracker();
+  const frame = mat_c.value;
+  if (!frame) return;
+
+  // BBox centered at the target, sized to the configured kernel; clamped to
+  // frame bounds.
+  const roi = RECT.fromCenter(center, {
+    width: kernel_w.value,
+    height: kernel_h.value,
+  });
+  const x = Math.max(0, Math.round(roi.x));
+  const y = Math.max(0, Math.round(roi.y));
+  const w = Math.min(width - x, Math.round(roi.width));
+  const h = Math.min(height - y, Math.round(roi.height));
+  if (w <= 0 || h <= 0) return;
+  const clampedRoi: Rect = { x, y, width: w, height: h };
+
+  const initSearch = getSearchWindow(clampedRoi);
+  const initPatch = cvtColor(slice(frame, initSearch), "BGRA2BGR");
+  const roiInPatch: Rect = {
+    x: clampedRoi.x - initSearch.x,
+    y: clampedRoi.y - initSearch.y,
+    width: clampedRoi.width,
+    height: clampedRoi.height,
+  };
+  const tracker = new KCF();
+  tracker.init(initPatch, roiInPatch);
+  tracker_instance = tracker;
+  tracker_bbox.value = clampedRoi;
+  tracker_active.value = true;
+
+  let lost_count = 0;
+  let last_good_center = center;
+  let aborted = false;
+  let currentBbox: Rect = clampedRoi;
+  tracker_abort = () => {
+    aborted = true;
+  };
+
+  const loop = async () => {
+    while (!aborted && tracker_active.value) {
+      await new Promise(requestAnimationFrame);
+      const currentFrame = mat_c.value;
+      if (!currentFrame || aborted) break;
+      // Expand the search window after each consecutive miss so a sudden jump
+      // out of the tight crop can still be recovered.
+      const search = getSearchWindow(currentBbox, 1 + lost_count);
+      const patch = cvtColor(slice(currentFrame, search), "BGRA2BGR");
+      const result = tracker.update(patch);
+      if (result) {
+        lost_count = 0;
+        const fullBbox: Rect = {
+          x: result.x + search.x,
+          y: result.y + search.y,
+          width: result.width,
+          height: result.height,
+        };
+        currentBbox = fullBbox;
+        tracker_bbox.value = fullBbox;
+        const c = RECT.getCenter(fullBbox);
+        last_good_center = c;
+        // Only move the target/guide center. This shifts the template-match
+        // window, so the matched fovea positions now lag the target — and the
+        // vergence PID drives the mirrors to re-align (follow). The PID owns
+        // the mirror; the tracker never commands it directly. `frozen()`
+        // already keeps the loop unfrozen while `tracker_active`.
+        target_loc.value = c;
+      } else {
+        lost_count++;
+        if (lost_count >= TRACKER_LOST_TOLERANCE) {
+          target_loc.value = last_good_center;
+          releaseTracker();
+          return;
+        }
+      }
+    }
+  };
+  loop().catch(console.error);
+}
+
+// Toggling off releases the tracker; toggling on engages immediately at the
+// current target (unless the user is mid-drag, in which case release handles it).
+watch(tracker_enable, (on) => {
+  if (!on) releaseTracker();
+  else if (!is_drag.value) startTracker(target_loc.value);
 });
 
 const divergence_task = abortable(async (aborted) => {
@@ -459,6 +606,7 @@ function circleCenter({ x, y }: Point2d) {
 }
 
 onUnmounted(async () => {
+  releaseTracker();
   await Promise.all([actuate_task.abort(), divergence_task.abort()]);
   triple.release();
 });
@@ -521,6 +669,17 @@ onUnmounted(async () => {
           :color="THEME.R"
         />
         <FrameCursor v-if="cursor && !is_drag" :cursor="cursor" color="gray" />
+        <!-- Tracker bounding box -->
+        <rect
+          v-if="tracker_bbox"
+          :x="tracker_bbox.x"
+          :y="tracker_bbox.y"
+          :width="tracker_bbox.width"
+          :height="tracker_bbox.height"
+          stroke="#0f0"
+          :stroke-width="Math.max(width, height) * 0.003"
+          fill="none"
+        />
       </StreamView>
       <div class="report">
         Vergence
@@ -891,6 +1050,34 @@ onUnmounted(async () => {
           </div>
         </fieldset>
       </div>
+      <!-- Column 6: Wide-angle Tracker -->
+      <div class="options">
+        <h4>
+          <span>Tracker</span>
+          <button
+            class="reset toggle"
+            :class="{ active: tracker_enable }"
+            :title="tracker_enable ? 'Disable tracker' : 'Enable tracker'"
+            @click="tracker_enable = !tracker_enable"
+          >
+            {{ tracker_enable ? "on" : "off" }}
+          </button>
+        </h4>
+        <label class="entry">
+          <span>Kernel</span>
+          <span class="kernel-size">
+            <input type="number" v-model.number="kernel_w" min="8" />
+            <span>×</span>
+            <input type="number" v-model.number="kernel_h" min="8" />
+          </span>
+        </label>
+        <div class="entry">
+          <span>Status</span>
+          <span>{{
+            tracker_active ? "tracking" : tracker_enable ? "armed" : "off"
+          }}</span>
+        </div>
+      </div>
     </div>
   </Drawer>
 </template>
@@ -1021,6 +1208,25 @@ onUnmounted(async () => {
       &:active {
         background: #fff2;
       }
+
+      // Enable toggle (Tracker column): green when on.
+      &.toggle {
+        min-width: 3ch;
+        text-align: center;
+        text-transform: uppercase;
+        font-size: 0.9em;
+
+        &.active {
+          border-color: #0f08;
+          background: #0f02;
+          color: #6f6;
+          opacity: 1;
+
+          &:hover {
+            background: #0f03;
+          }
+        }
+      }
     }
   }
 
@@ -1044,6 +1250,16 @@ onUnmounted(async () => {
 
     input[type="checkbox"] {
       margin: 0;
+    }
+
+    .kernel-size {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5ch;
+
+      input[type="number"] {
+        width: 6ch;
+      }
     }
   }
 }
