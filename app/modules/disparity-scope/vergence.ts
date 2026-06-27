@@ -95,6 +95,11 @@ export type VergenceControl = {
   minScore: number;
 };
 
+// Smoothing applied to each correlation map before peak-finding, so a single
+// noisy pixel can't win over a broader, more confident lobe.
+const GAUSS_KSIZE = 9;
+const GAUSS_SIGMA = 10;
+
 /** Grayscale, downsampled fovea tile at its wide-frame footprint size. */
 async function getFoveaTile(f: Mat<Uint8Array>, size: Size) {
   return await resize(cvtColor(f, "RGBA2GRAY"), size);
@@ -171,14 +176,16 @@ export async function analyzeVergence(
     getMatchTile(c, ox, oy, W, H, s),
     getFoveaTile(r, { width: w, height: h }),
   ]);
+  // Identical pipeline per eye: correlate the fovea tile into the wide strip,
+  // smooth, then un-scale the peak back to full-resolution strip coordinates.
+  const matchFovea = (tile: Mat<Uint8Array>) =>
+    matchTemplate(tc, tile, "CCOEFF_NORMED").then((m) =>
+      processMatch(gaussian(m, GAUSS_KSIZE, GAUSS_SIGMA), tile, 1 / s),
+    );
   const [guide, ml, mr] = await Promise.all([
     resize(tc, {}, 1 / s),
-    matchTemplate(tc, tl, "CCOEFF_NORMED").then((m) =>
-      processMatch(gaussian(m, 9, 10), tl, 1 / s),
-    ),
-    matchTemplate(tc, tr, "CCOEFF_NORMED").then((m) =>
-      processMatch(gaussian(m, 9, 10), tr, 1 / s),
-    ),
+    matchFovea(tl),
+    matchFovea(tr),
   ]);
   const center = {
     rect: RECT.fromCenter(VEC.sub(target, { x: ox, y: oy }), {
