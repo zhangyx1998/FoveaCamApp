@@ -76,6 +76,18 @@ export const RECT = Object.assign(
             };
         },
         /**
+         * Intersect a rect with the frame `[0, 0, width, height]`, rounding to
+         * integer pixels. The result may be empty (zero/negative width/height)
+         * when `rect` lies fully outside the frame — callers should check.
+         */
+        clampTo(rect: Rect, { width, height }: Size): Rect {
+            const x = Math.max(0, Math.round(rect.x));
+            const y = Math.max(0, Math.round(rect.y));
+            const right = Math.min(width, Math.round(rect.x + rect.width));
+            const bottom = Math.min(height, Math.round(rect.y + rect.height));
+            return { x, y, width: right - x, height: bottom - y };
+        },
+        /**
          * @param rect Rect input
          * @param offset Offset distance, positive = expand, negative = shrink
          * @returns

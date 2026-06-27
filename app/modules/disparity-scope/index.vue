@@ -1,13 +1,5 @@
 <script setup lang="ts">
-import {
-  computed,
-  onUnmounted,
-  reactive,
-  ref,
-  shallowRef,
-  watch,
-  type Ref,
-} from "vue";
+import { computed, onUnmounted, reactive, ref, shallowRef, watch } from "vue";
 import { Point2d, Rect } from "core/Geometry";
 import { Mat, slice, diff, wrapPerspective, cvtColor } from "core/Vision";
 import { Frame } from "core/Aravis";
@@ -24,20 +16,22 @@ import PosView from "@src/components/PosView.vue";
 import { getController } from "@src/components/Controller.vue";
 import FrameCursor from "@src/components/FrameCursor.vue";
 import abortable from "@lib/abortable";
-import { Latest, Zip } from "@lib/util/iter";
+import { Zip } from "@lib/util/iter";
 import FrameView from "@src/components/FrameView.vue";
 import InlineSelect from "@src/components/InlineSelect.vue";
 import Drawer from "@src/components/Drawer.vue";
 import RangeSlider from "@src/inputs/range-slider.vue";
-import HorizontalDivision from "@src/layouts/HorizontalDivision.vue";
-import { deg } from "@lib/util/math";
 import { RECT } from "@lib/util/geometry";
 import { useAppConfig } from "@lib/config";
-import local from "@lib/local";
+import local, { type Local } from "@lib/local";
 import { clamp, degrees, radians } from "@lib/util";
-import { distanceToVerge, vergeToDistance } from "@lib/stereo";
+import {
+  distanceToVerge,
+  vergeToDistance,
+  vergenceToDistance,
+} from "@lib/stereo";
 import { PID } from "@lib/pid";
-import { rad2deg } from "@lib/conversion";
+import { logScale } from "@lib/conversion";
 import {
   analyzeVergence,
   stepVergence,
@@ -54,16 +48,6 @@ const app_config = await useAppConfig();
 const gain = (dof: string, term: string, init: number) =>
   local(`disparity-scope.pid.${dof}.${term}`, init);
 
-const pan_kp = gain("pan", "kp", 0.02);
-const pan_ki = gain("pan", "ki", 0.02);
-const pan_kd = gain("pan", "kd", 0);
-const depth_kp = gain("depth", "kp", 1.0);
-const depth_ki = gain("depth", "ki", 0.2);
-const depth_kd = gain("depth", "kd", 0.5);
-const v_shift_kp = gain("v_shift", "kp", 0.02);
-const v_shift_ki = gain("v_shift", "ki", 0.02);
-const v_shift_kd = gain("v_shift", "kd", 0);
-
 // Template-match scale, confidence gate, and master responsiveness, persisted
 // in localStorage (like the PID gains) so tuning is independent of app config.
 const scale_ratio = local("disparity-scope.controls.scale", 0);
@@ -72,50 +56,24 @@ const min_score = local("disparity-scope.controls.min_score", 0.1);
 // nominal-fps × ms→s scaling). Larger = faster convergence, less damping.
 const sensitivity = local("disparity-scope.controls.sensitivity", 1.0);
 
-const SENSITIVITY_MIN = 0.1;
-const SENSITIVITY_MAX = 10.0;
-function sensitivityToRatio(val: number) {
-  return clamp(
-    Math.log(val / SENSITIVITY_MIN) /
-      Math.log(SENSITIVITY_MAX / SENSITIVITY_MIN),
-    [0, 1],
-  );
-}
-function ratioToSensitivity(r: number) {
-  return SENSITIVITY_MIN * Math.pow(SENSITIVITY_MAX / SENSITIVITY_MIN, r);
-}
+const sensitivityScale = logScale(0.1, 10.0);
 const sensitivity_ratio = computed<number>({
-  get: () => sensitivityToRatio(sensitivity.value),
-  set: (r) => (sensitivity.value = ratioToSensitivity(r)),
+  get: () => sensitivityScale.toRatio(sensitivity.value),
+  set: (r) => (sensitivity.value = sensitivityScale.fromRatio(r)),
 });
 
 // Guide expansion around target tile
 const expand_x = local("disparity-scope.controls.expand_x", 3.0);
 const expand_y = local("disparity-scope.controls.expand_y", 2.0);
 
-// Auto-vergence convergence timeout. The slider is exponential: the far-right
-// end (ratio === 1) maps to "no timeout" (iterate forever); everywhere else
-// interpolates [TIMEOUT_MIN_MS, TIMEOUT_MAX_MS] on a log scale.
-const TIMEOUT_MIN_MS = 100;
-const TIMEOUT_MAX_MS = 10000;
-function msToRatio(ms: number) {
-  if (!(ms > 0) || ms === Infinity) return 1;
-  return clamp(
-    Math.log(ms / TIMEOUT_MIN_MS) / Math.log(TIMEOUT_MAX_MS / TIMEOUT_MIN_MS),
-    [0, 1],
-  );
-}
-function ratioToMs(r: number) {
-  if (r >= 1) return 0; // 0 = no timeout (iterate forever)
-  return Math.round(
-    TIMEOUT_MIN_MS * Math.pow(TIMEOUT_MAX_MS / TIMEOUT_MIN_MS, r),
-  );
-}
-// timeout_ms_local persists the timeout in localStorage (default 2000ms).
+// Auto-vergence convergence timeout. The slider is exponential over
+// [100, 10000] ms, with the far-right end (ratio === 1) mapping to 0 = "no
+// timeout" (iterate forever). timeout_ms_local persists it (default 2000ms).
+const timeoutScale = logScale(100, 10000, { infinityAt: 0, round: true });
 const timeout_ms_local = local("disparity-scope.controls.timeout", 2000);
 const timeout_ratio = computed<number>({
-  get: () => msToRatio(timeout_ms_local.value),
-  set: (r) => (timeout_ms_local.value = ratioToMs(r)),
+  get: () => timeoutScale.toRatio(timeout_ms_local.value),
+  set: (r) => (timeout_ms_local.value = timeoutScale.fromRatio(r)),
 });
 const timeout_ms = computed(() => {
   const v = timeout_ms_local.value;
@@ -199,59 +157,61 @@ const pids: VergencePIDs = {
   }),
   v_shift: new PID({ limits: [-VSHIFT_LIMIT, VSHIFT_LIMIT] }),
 };
-// Sync slider gains onto the PID controllers (pan drives both shift axes).
-function bindGains(
-  kp: Ref<number>,
-  ki: Ref<number>,
-  kd: Ref<number>,
+// One UI column per gain group. Each builds its own {kp, ki, kd} local refs,
+// syncs them onto the listed PID controllers (pan drives both shift axes), and
+// the template renders the column + reset button by iterating this table —
+// adding a DOF is a single entry, not three scattered edits.
+type GainGroup = {
+  key: string;
+  title: string;
+  /** Slider range and step shared by all three terms. */
+  range: [number, number];
+  step: number;
+  /** kp / ki / kd, in order. */
+  terms: [Local<number>, Local<number>, Local<number>];
+};
+function gainGroup(
+  key: string,
+  title: string,
+  defaults: [number, number, number],
+  range: [number, number],
+  step: number,
   targets: PID[],
-) {
+): GainGroup {
+  const terms = (["kp", "ki", "kd"] as const).map((t, i) =>
+    gain(key, t, defaults[i]),
+  ) as GainGroup["terms"];
   watch(
-    [kp, ki, kd],
+    terms,
     ([p, i, d]) => targets.forEach((t) => ((t.kp = p), (t.ki = i), (t.kd = d))),
     { immediate: true },
   );
+  return { key, title, range, step, terms };
 }
-bindGains(pan_kp, pan_ki, pan_kd, [pids.panX, pids.panY]);
-bindGains(depth_kp, depth_ki, depth_kd, [pids.verge]);
-bindGains(v_shift_kp, v_shift_ki, v_shift_kd, [pids.v_shift]);
+const gainGroups: GainGroup[] = [
+  gainGroup("pan", "Pan PID", [0.02, 0.02, 0], [0, 1], 0.01, [
+    pids.panX,
+    pids.panY,
+  ]),
+  gainGroup("depth", "Depth PID", [1.0, 0.2, 0.5], [0, 10], 0.02, [pids.verge]),
+  gainGroup("v_shift", "Vertical PID", [0.02, 0.02, 0], [0, 1], 0.01, [
+    pids.v_shift,
+  ]),
+];
 
-// Per-group reset: clear the stored values and revert to defaults.
-const resetParams = () =>
-  [
-    sensitivity,
-    scale_ratio,
-    min_score,
-    timeout_ms_local,
-    expand_x,
-    expand_y,
-  ].forEach((r) => r.reset());
-const resetPan = () => [pan_kp, pan_ki, pan_kd].forEach((r) => r.reset());
-const resetDepth = () =>
-  [depth_kp, depth_ki, depth_kd].forEach((r) => r.reset());
-const resetVertical = () =>
-  [v_shift_kp, v_shift_ki, v_shift_kd].forEach((r) => r.reset());
-const resetVergence = () => Object.values(pids).forEach((p) => p.reset());
-
-// Neutral values for the sliders, extracted from the local refs' defaults
-// so the UI stays in sync with the source-of-truth default definitions.
-const neutrals = {
-  sensitivity: sensitivityToRatio(sensitivity.default),
-  scale_ratio: scale_ratio.default,
-  min_score: min_score.default,
-  expand_x: expand_x.default,
-  expand_y: expand_y.default,
-  pan_kp: pan_kp.default,
-  pan_ki: pan_ki.default,
-  pan_kd: pan_kd.default,
-  depth_kp: depth_kp.default,
-  depth_ki: depth_ki.default,
-  depth_kd: depth_kd.default,
-  v_shift_kp: v_shift_kp.default,
-  v_shift_ki: v_shift_ki.default,
-  v_shift_kd: v_shift_kd.default,
-  timeout: msToRatio(timeout_ms_local.default),
+// Parameter refs, grouped so the template can read each `.default` for its
+// slider neutral and the reset button can revert them all in one call.
+const params = {
+  sensitivity,
+  scale_ratio,
+  min_score,
+  timeout_ms_local,
+  expand_x,
+  expand_y,
 };
+const resetParams = () => Object.values(params).forEach((r) => r.reset());
+const resetGroup = (g: GainGroup) => g.terms.forEach((r) => r.reset());
+const resetVergence = () => Object.values(pids).forEach((p) => p.reset());
 
 // On mouse release: restart the convergence window and reset every controller
 // so the foveas re-converge fresh on the new target (no stale integrator wind-up).
@@ -267,47 +227,10 @@ watch(is_drag, (dragging, wasDragging) => {
 });
 
 const status = ref<string>("initializing");
-const distance = computed(() =>
+// Commanded convergence distance — what the verge PID is aiming for.
+const commandedDistance = computed(() =>
   vergeToDistance(pids.verge.value, app_config.baseline_distance_mm),
 );
-
-const L_PX = computed(() => A2P.C(V2A.L(volt.L)));
-const R_PX = computed(() => A2P.C(V2A.R(volt.R)));
-
-const actuate_task = abortable(async (_, onAbort) => {
-  const c = controller.value;
-  if (!c) return;
-  const updated = new Latest<Point2d>();
-  onAbort(() => updated.close());
-  const handle = watch(target_loc, (t) => updated.push(t), {
-    deep: true,
-    immediate: true,
-  });
-  try {
-    await c.enable();
-    for await (const pos of updated) {
-      // This loop does live, zero-vergence pointing whenever the target moves.
-      // While the tracker continuously drives the target, that fights the
-      // auto-vergence loop — which owns the mirror, pointing *and* verging
-      // about the same ray — making the mirror flicker between verged and
-      // zero-verge poses. So while the tracker is active (and the user isn't
-      // manually dragging), let the vergence loop own the mirror. The foveas
-      // are already coarse-pointed from the drag that armed the tracker, so
-      // acquisition is unaffected. The non-tracker path is unchanged.
-      if (tracker_active.value && !is_drag.value) continue;
-      const [r] = undistort.angular([pos], true);
-      const { left, right } = await c.actuate({
-        left: A2V.L(r),
-        right: A2V.R(r),
-      });
-      volt.L = left;
-      volt.R = right;
-    }
-  } finally {
-    await c.disable();
-    handle.stop();
-  }
-});
 
 const guide = ref<Mat<Uint8Array> | null>(null);
 
@@ -315,31 +238,26 @@ const match_left = shallowRef<MatchResult | null>(null);
 const match_right = shallowRef<MatchResult | null>(null);
 const match_center = shallowRef<{ rect: Rect } | null>(null);
 
-const divergence = computed(() => V2A.L(volt.L).x - V2A.R(volt.R).x);
-const depth = computed(() => {
-  const baseline = app_config.baseline_distance_mm / 1000; // meters
-  const d = baseline / Math.sin(divergence.value);
-  // A negative depth means the gaze lines diverge (no convergence point in
-  // front of the cameras) — perceptually infinitely far. Same for absurdly
-  // large magnitudes as divergence approaches zero.
-  return d > 0 && d < 1e8 ? d.toFixed(4) : "∞";
-});
+// Realized geometry, read back from the actual mirror voltages (feedback, not
+// command): the horizontal toe-in angle and the distance it triangulates to.
+const vergence = computed(() => V2A.L(volt.L).x - V2A.R(volt.R).x);
+const realizedDistance = computed(() =>
+  vergenceToDistance(vergence.value, app_config.baseline_distance_mm / 1000),
+);
+
+// Per-eye projection of the current mirror pose into wide-frame pixels.
+const PX = (role: "L" | "R") => A2P.C(V2A[role](volt[role]));
+const L_PX = computed(() => PX("L"));
+const R_PX = computed(() => PX("R"));
 
 const wrap_enable = ref(true);
-const wrap = {
-  L(mat: Mat<Uint8Array>) {
-    if (!wrap_enable.value) return mat;
-    const A = V2A.L(volt.L);
-    const H = A2H.L(A);
-    return wrapPerspective(mat, H);
-  },
-  R(mat: Mat<Uint8Array>) {
-    if (!wrap_enable.value) return mat;
-    const A = V2A.R(volt.R);
-    const H = A2H.R(A);
-    return wrapPerspective(mat, H);
-  },
-};
+// Perspective-rectify a fovea frame onto its current pointing pose. Identical
+// for both eyes apart from the role-indexed conversions.
+function wrap(role: "L" | "R", mat: Mat<Uint8Array>) {
+  if (!wrap_enable.value) return mat;
+  const A = V2A[role](volt[role]);
+  return wrapPerspective(mat, A2H[role](A));
+}
 
 const mat_l = ref<Mat<Uint8Array> | null>(null);
 const mat_c = ref<Mat<Uint8Array> | null>(null);
@@ -379,11 +297,7 @@ let tracker_abort: (() => void) | null = null;
 function getSearchWindow(bbox: Rect, scale = 1): Rect {
   const px = Math.max(0, kernel_w.value * scale);
   const py = Math.max(0, kernel_h.value * scale);
-  const x = Math.max(0, Math.round(bbox.x - px));
-  const y = Math.max(0, Math.round(bbox.y - py));
-  const right = Math.min(width, Math.round(bbox.x + bbox.width + px));
-  const bottom = Math.min(height, Math.round(bbox.y + bbox.height + py));
-  return { x, y, width: right - x, height: bottom - y };
+  return RECT.clampTo(RECT.offset(bbox, { x: px, y: py }), { width, height });
 }
 
 function releaseTracker() {
@@ -406,16 +320,11 @@ function startTracker(center: Point2d) {
 
   // BBox centered at the target, sized to the configured kernel; clamped to
   // frame bounds.
-  const roi = RECT.fromCenter(center, {
-    width: kernel_w.value,
-    height: kernel_h.value,
-  });
-  const x = Math.max(0, Math.round(roi.x));
-  const y = Math.max(0, Math.round(roi.y));
-  const w = Math.min(width - x, Math.round(roi.width));
-  const h = Math.min(height - y, Math.round(roi.height));
-  if (w <= 0 || h <= 0) return;
-  const clampedRoi: Rect = { x, y, width: w, height: h };
+  const clampedRoi = RECT.clampTo(
+    RECT.fromCenter(center, { width: kernel_w.value, height: kernel_h.value }),
+    { width, height },
+  );
+  if (clampedRoi.width <= 0 || clampedRoi.height <= 0) return;
 
   const initSearch = getSearchWindow(clampedRoi);
   const initPatch = cvtColor(slice(frame, initSearch), "BGRA2BGR");
@@ -487,14 +396,33 @@ watch(tracker_enable, (on) => {
   else if (!is_drag.value) startTracker(target_loc.value);
 });
 
-const divergence_task = abortable(async (aborted) => {
+// Single control loop: the sole owner of the controller's enable/disable
+// lifecycle and the only caller of `actuate`. Per frame it (1) analyzes the
+// triple for the live match overlay, then (2) drives the mirrors in exactly one
+// mode — manual pointing while the user drags, frozen after the timeout, or
+// constrained auto-vergence otherwise.
+const control_task = abortable(async (aborted) => {
   const zip = new Zip(L.stream, C.stream, R.stream);
   let l: Frame | null = null,
     c: Frame | null = null,
     r: Frame | null = null;
-  // Wall-clock reference for the previous control step (not the previous frame:
-  // skipped frames during drag/freeze must not accumulate into the integrator).
+  // Wall-clock reference for the previous *vergence* step. It advances only when
+  // a step actually runs, so any pause (drag, freeze, low score) makes the next
+  // step see a large — but DT_MAX_FRAMES-capped — dt instead of integrating the
+  // skipped frames or kicking the derivative.
   let last_step = performance.now();
+  // The controller currently held enabled by this loop (it can connect/swap at
+  // runtime); kept in sync so we enable on acquire and disable on teardown.
+  // An object holder (not a bare `let`) so TS keeps the union type across the
+  // closure that mutates it.
+  const held: { ctrl: ReturnType<typeof getController> } = { ctrl: null };
+  async function ensureEnabled(ctrl: ReturnType<typeof getController>) {
+    if (ctrl === held.ctrl) return;
+    if (held.ctrl) await held.ctrl.disable();
+    held.ctrl = ctrl;
+    if (ctrl) await ctrl.enable();
+  }
+
   async function update(
     l: Mat<Uint8Array>,
     c: Mat<Uint8Array>,
@@ -516,21 +444,41 @@ const divergence_task = abortable(async (aborted) => {
     match_left.value = analysis.ml;
     match_right.value = analysis.mr;
     match_center.value = analysis.center;
-    // Update divergence
+
     const ctrl = controller.value;
-    if (is_drag.value || !ctrl || frozen()) {
-      status.value = is_drag.value
-        ? "manual"
-        : !ctrl
-          ? "no controller"
-          : "frozen";
+    await ensureEnabled(ctrl);
+    if (!ctrl) {
+      status.value = "no controller";
+      return;
+    }
+    async function command(left: Point2d, right: Point2d) {
+      try {
+        const pos = await ctrl!.actuate({ left, right });
+        volt.L = { ...pos.left };
+        volt.R = { ...pos.right };
+      } catch (e) {
+        console.warn("Mirror actuation failed:", e);
+      }
+    }
+
+    // Manual: while the user drags, the foveas follow the pointer at zero verge.
+    // The is_drag watcher resets the PIDs on release, so auto-vergence resumes
+    // fresh with no accumulated error (and last_step is left stale → no kick).
+    if (is_drag.value) {
+      status.value = "manual";
+      const [ray] = undistort!.angular([target_loc.value], true);
+      await command(A2V.L(ray), A2V.R(ray));
+      return;
+    }
+    // Frozen after the convergence timeout: hold the current pose.
+    if (frozen()) {
+      status.value = "frozen";
       return;
     }
     // Rate-normalized control time step (sensitivity bakes in the ms→step
     // scaling), capped so a stall / un-freeze can't dump a huge catch-up step.
     const now = performance.now();
     const dt = Math.min((now - last_step) * sensitivity.value, DT_MAX_FRAMES);
-    last_step = now;
     const result = stepVergence(
       analysis,
       pids,
@@ -538,23 +486,16 @@ const divergence_task = abortable(async (aborted) => {
       { baseline: app_config.baseline_distance_mm, minScore: min_score.value },
       dt,
     );
-    // Hold position when the match is too weak to trust.
+    // Hold position when the match is too weak to trust. last_step is left
+    // unadvanced so the next trusted frame doesn't integrate this gap, and the
+    // integrators are preserved (no snap on a one-frame glitch).
     if (!result) {
-      status.value = "holding";
+      status.value = "low score";
       return;
     }
+    last_step = now;
     status.value = "tracking";
-    // Request might be rejected when user is dragging.
-    try {
-      const { left, right } = await ctrl.actuate({
-        left: result.left,
-        right: result.right,
-      });
-      volt.L = { ...left };
-      volt.R = { ...right };
-    } catch (e) {
-      console.warn("Divergence adjustment failed:", e);
-    }
+    await command(result.left, result.right);
   }
   try {
     for (const [_l, _c, _r] of zip) {
@@ -573,9 +514,9 @@ const divergence_task = abortable(async (aborted) => {
       }
       if (l && c && r) {
         const [lm, cm, rm] = await Promise.all([
-          l.view("BGRA8").then(wrap.L),
+          l.view("BGRA8").then((m) => wrap("L", m)),
           c.view("BGRA8"),
-          r.view("BGRA8").then(wrap.R),
+          r.view("BGRA8").then((m) => wrap("R", m)),
         ]);
         mat_l.value = lm;
         mat_c.value = cm;
@@ -595,6 +536,7 @@ const divergence_task = abortable(async (aborted) => {
     l?.release();
     c?.release();
     r?.release();
+    if (held.ctrl) await held.ctrl.disable();
     guide.value = null;
     match_left.value = null;
     match_right.value = null;
@@ -607,7 +549,7 @@ function circleCenter({ x, y }: Point2d) {
 
 onUnmounted(async () => {
   releaseTracker();
-  await Promise.all([actuate_task.abort(), divergence_task.abort()]);
+  await control_task.abort();
   triple.release();
 });
 </script>
@@ -683,8 +625,11 @@ onUnmounted(async () => {
       </StreamView>
       <div class="report">
         Vergence
-        <span class="value">{{ deg(divergence).toFixed(2) }}</span
-        >° | Depth <span class="value">{{ depth }}</span
+        <span class="value">{{ degrees(vergence).toFixed(2) }}</span
+        >° | Depth
+        <span class="value">{{
+          realizedDistance === Infinity ? "∞" : realizedDistance.toFixed(4)
+        }}</span
         >m
       </div>
     </div>
@@ -785,7 +730,7 @@ onUnmounted(async () => {
           v-model="sensitivity_ratio"
           :min="0"
           :max="1"
-          :neutral="neutrals.sensitivity"
+          :neutral="sensitivityScale.toRatio(params.sensitivity.default)"
           :step="0.001"
         >
           <span>Sensitivity</span>
@@ -795,7 +740,7 @@ onUnmounted(async () => {
           v-model="scale_ratio"
           :min="0"
           :max="1"
-          :neutral="neutrals.scale_ratio"
+          :neutral="params.scale_ratio.default"
           :step="0.01"
         >
           <span>Template Scale</span>
@@ -805,7 +750,7 @@ onUnmounted(async () => {
           v-model="min_score"
           :min="0"
           :max="1"
-          :neutral="neutrals.min_score"
+          :neutral="params.min_score.default"
           :step="0.01"
         >
           <span>Min Match Score</span>
@@ -815,7 +760,7 @@ onUnmounted(async () => {
           v-model="timeout_ratio"
           :min="0"
           :max="1"
-          :neutral="neutrals.timeout"
+          :neutral="timeoutScale.toRatio(params.timeout_ms_local.default)"
           :step="0.01"
         >
           <span>Timeout</span>
@@ -830,7 +775,7 @@ onUnmounted(async () => {
           v-model="expand_x"
           :min="1.0"
           :max="4.0"
-          :neutral="neutrals.expand_x"
+          :neutral="params.expand_x.default"
           :step="0.1"
           ><span>X Expansion</span
           ><span>{{ (expand_x * 100).toFixed(1) }}%</span></RangeSlider
@@ -839,7 +784,7 @@ onUnmounted(async () => {
           v-model="expand_y"
           :min="1.0"
           :max="4.0"
-          :neutral="neutrals.expand_y"
+          :neutral="params.expand_y.default"
           :step="0.1"
           ><span>Y Expansion</span
           ><span>{{ (expand_y * 100).toFixed(1) }}%</span></RangeSlider
@@ -854,116 +799,30 @@ onUnmounted(async () => {
           <input type="checkbox" v-model="wrap_enable" />
         </label>
       </div>
-      <!-- Column 2: Pan PID -->
-      <div class="options">
+      <!-- Columns 2-4: per-DOF gain PIDs (Pan / Depth / Vertical) -->
+      <div class="options" v-for="g in gainGroups" :key="g.key">
         <h4>
-          <span>Pan PID</span>
-          <button class="reset" title="Reset to defaults" @click="resetPan">
-            reset
-          </button>
-        </h4>
-        <RangeSlider
-          v-model="pan_kp"
-          :min="0"
-          :max="1"
-          :neutral="neutrals.pan_kp"
-          :step="0.01"
-        >
-          <span>Kp</span><span>{{ pan_kp.toFixed(2) }}</span>
-        </RangeSlider>
-        <RangeSlider
-          v-model="pan_ki"
-          :min="0"
-          :max="1"
-          :neutral="neutrals.pan_ki"
-          :step="0.01"
-        >
-          <span>Ki</span><span>{{ pan_ki.toFixed(2) }}</span>
-        </RangeSlider>
-        <RangeSlider
-          v-model="pan_kd"
-          :min="0"
-          :max="1"
-          :neutral="neutrals.pan_kd"
-          :step="0.01"
-        >
-          <span>Kd</span><span>{{ pan_kd.toFixed(2) }}</span>
-        </RangeSlider>
-      </div>
-      <!-- Column 3: Depth PID -->
-      <div class="options">
-        <h4>
-          <span>Depth PID</span>
-          <button class="reset" title="Reset to defaults" @click="resetDepth">
-            reset
-          </button>
-        </h4>
-        <RangeSlider
-          v-model="depth_kp"
-          :min="0"
-          :max="10"
-          :neutral="neutrals.depth_kp"
-          :step="0.02"
-        >
-          <span>Kp</span><span>{{ depth_kp.toFixed(2) }}</span>
-        </RangeSlider>
-        <RangeSlider
-          v-model="depth_ki"
-          :min="0"
-          :max="10"
-          :neutral="neutrals.depth_ki"
-          :step="0.02"
-        >
-          <span>Ki</span><span>{{ depth_ki.toFixed(2) }}</span>
-        </RangeSlider>
-        <RangeSlider
-          v-model="depth_kd"
-          :min="0"
-          :max="10"
-          :neutral="neutrals.depth_kd"
-          :step="0.02"
-        >
-          <span>Kd</span><span>{{ depth_kd.toFixed(2) }}</span>
-        </RangeSlider>
-      </div>
-      <!-- Column 4: Vertical PID -->
-      <div class="options">
-        <h4>
-          <span>Vertical PID</span>
+          <span>{{ g.title }}</span>
           <button
             class="reset"
             title="Reset to defaults"
-            @click="resetVertical"
+            @click="resetGroup(g)"
           >
             reset
           </button>
         </h4>
         <RangeSlider
-          v-model="v_shift_kp"
-          :min="0"
-          :max="1"
-          :neutral="neutrals.v_shift_kp"
-          :step="0.01"
+          v-for="(term, i) in g.terms"
+          :key="i"
+          :model-value="term.value"
+          @update:model-value="term.value = $event"
+          :min="g.range[0]"
+          :max="g.range[1]"
+          :neutral="term.default"
+          :step="g.step"
         >
-          <span>Kp</span><span>{{ v_shift_kp.toFixed(2) }}</span>
-        </RangeSlider>
-        <RangeSlider
-          v-model="v_shift_ki"
-          :min="0"
-          :max="1"
-          :neutral="neutrals.v_shift_ki"
-          :step="0.01"
-        >
-          <span>Ki</span><span>{{ v_shift_ki.toFixed(2) }}</span>
-        </RangeSlider>
-        <RangeSlider
-          v-model="v_shift_kd"
-          :min="0"
-          :max="1"
-          :neutral="neutrals.v_shift_kd"
-          :step="0.01"
-        >
-          <span>Kd</span><span>{{ v_shift_kd.toFixed(2) }}</span>
+          <span>{{ ["Kp", "Ki", "Kd"][i] }}</span
+          ><span>{{ term.value.toFixed(2) }}</span>
         </RangeSlider>
       </div>
       <!-- Column 5: Vergence Angles -->
@@ -1036,10 +895,10 @@ onUnmounted(async () => {
             ><span>{{ degrees(pids.verge.value).toFixed(4) }}</span>
           </div>
           <div>
-            <span>Distance</span>
+            <span>Distance (cmd)</span>
             <span>
-              <template v-if="distance !== Infinity">
-                {{ (distance / 1000).toFixed(3) }} m
+              <template v-if="commandedDistance !== Infinity">
+                {{ (commandedDistance / 1000).toFixed(3) }} m
               </template>
               <template v-else> ∞ </template>
             </span>

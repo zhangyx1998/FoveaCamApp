@@ -85,9 +85,28 @@ export function inverseTriangulate(
   return out;
 }
 
-/** Convert a verge (inverse-√depth) parameter to a metric distance. */
+/**
+ * Commanded convergence distance from the verge (inverse-√depth) control
+ * parameter. This is the distance the loop is *aiming* for.
+ */
 export function vergeToDistance(verge: number, baseline: number) {
   return verge > 0 ? baseline / (verge * verge) : Infinity;
+}
+
+/**
+ * Realized convergence distance from the two foveas' actual horizontal pointing
+ * angles (triangulation). This is the distance the mirrors are *currently* fixated
+ * at, derived from feedback rather than the command.
+ *
+ * Returns `Infinity` when the gaze rays are parallel or diverging (no convergence
+ * point in front of the cameras), and for absurd magnitudes as the angle → 0.
+ *
+ * @param vergence Horizontal toe-in angle `aL.x − aR.x` (rad).
+ * @param baseline Inter-fovea baseline (returned distance shares its units).
+ */
+export function vergenceToDistance(vergence: number, baseline: number) {
+  const d = baseline / Math.sin(vergence);
+  return d > 0 && d < 1e8 ? d : Infinity;
 }
 
 /** Inverse of {@link vergeToDistance}: metric distance → verge parameter. */
