@@ -35,6 +35,10 @@ public:
                            INSTANCE_GETTER(FrameObject, width),      //
                            INSTANCE_GETTER(FrameObject, height),     //
                            INSTANCE_GETTER(FrameObject, timestamp),  //
+                           INSTANCE_GETTER(FrameObject, device_timestamp), //
+                           INSTANCE_GETTER(FrameObject, system_timestamp), //
+                           INSTANCE_GETTER(FrameObject, deviceTimestamp), //
+                           INSTANCE_GETTER(FrameObject, systemTimestamp), //
                            INSTANCE_GETTER(FrameObject, raw),        //
                            INSTANCE_GETTER(FrameObject, raw_format), //
                        });
@@ -82,6 +86,22 @@ private:
   GET(height) { return Number::New(env, core()->height()); }
 
   GET(timestamp) { return BigInt::New(env, core()->timestamp); }
+
+  GET(device_timestamp) {
+    return BigInt::New(env, core()->device_timestamp);
+  }
+
+  GET(system_timestamp) {
+    return BigInt::New(env, core()->system_timestamp);
+  }
+
+  GET(deviceTimestamp) {
+    return BigInt::New(env, core()->device_timestamp);
+  }
+
+  GET(systemTimestamp) {
+    return BigInt::New(env, core()->system_timestamp);
+  }
 
   GET(raw) { return convert(env, core()->raw); }
 

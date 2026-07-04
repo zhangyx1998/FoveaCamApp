@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <optional>
 
 #include <napi.h>
 #include <stdexcept>
@@ -37,6 +38,12 @@ using SymbolRegistry = Isolated<Napi::Reference<Napi::Symbol>>;
 
 static SymbolRegistry bufferAccessor;
 static SymbolRegistry propNameAccessor;
+// Cached decoders for CMD_FRAME's asymmetric ACK/FIN payloads (FrameAccepted
+// / FrameResult), set once in Command::Init and used by DeviceObject::send
+// to override the request-encoder factory when decoding responses — see
+// docs/refactor/synced-capture.md §5/§9 (P3).
+static Isolated<Napi::Reference<Napi::Function>> frameAcceptedFactory;
+static Isolated<Napi::Reference<Napi::Function>> frameResultFactory;
 
 inline std::string hexFormat(const void *data, size_t size) {
   std::stringstream ss;
@@ -281,6 +288,55 @@ inline void assignMirrorPosition(Napi::Value const &val,
   }
 }
 
+inline Napi::Array mirrorPositionToArray(
+    Napi::Env env, const Packet::Command::MirrorPosition &pos) {
+  auto arr = Napi::Array::New(env, 4);
+  for (unsigned i = 0; i < 4; i++)
+    arr.Set(i, Number::New(env, pos.ch[i]));
+  return arr;
+}
+
+// CameraMask <-> JS: a number (raw bitmask) or an array of camera-name
+// strings ("C"/"L"/"R"); undefined/omitted means "firmware default"
+// (CAM_L | CAM_R — C is REJected until it has a strobe cable, see
+// docs/refactor/synced-capture.md §2/§8).
+inline uint8_t parseCameraMask(Napi::Value const &val) {
+  if (val.IsUndefined() || val.IsNull())
+    return 0;
+  if (val.IsNumber())
+    return convert<uint8_t>(val);
+  if (val.IsArray()) {
+    uint8_t mask = 0;
+    const auto &arr = val.As<Napi::Array>();
+    for (uint32_t i = 0; i < arr.Length(); i++) {
+      auto name = arr.Get(i).ToString().Utf8Value();
+      if (name == "C")
+        mask |= Packet::Command::CAM_C;
+      else if (name == "L")
+        mask |= Packet::Command::CAM_L;
+      else if (name == "R")
+        mask |= Packet::Command::CAM_R;
+      else
+        throw JS::TypeError(val.Env(), "Unknown camera name: " + name);
+    }
+    return mask;
+  }
+  throw JS::TypeError(val.Env(),
+                      "cameras must be a number or array of camera names");
+}
+
+inline Napi::Array cameraMaskToArray(Napi::Env env, uint8_t mask) {
+  auto arr = Napi::Array::New(env);
+  uint32_t i = 0;
+  if (mask & Packet::Command::CAM_C)
+    arr.Set(i++, String::New(env, "C"));
+  if (mask & Packet::Command::CAM_L)
+    arr.Set(i++, String::New(env, "L"));
+  if (mask & Packet::Command::CAM_R)
+    arr.Set(i++, String::New(env, "R"));
+  return arr;
+}
+
 static FN(ActuatePacket) {
   EXPECT_EXACTLY_ONE_ARGUMENT("Packet<Actuate>");
   Packet::Command::Actuate command = {.settle_time = 0};
@@ -304,17 +360,131 @@ static FN(ActuatePacket) {
              env.Undefined());
   }
   auto object = Napi::Object::New(env);
-  auto left = Napi::Array::New(env, 4);
-  auto right = Napi::Array::New(env, 4);
-  for (unsigned i = 0; i < 4; i++) {
-    left.Set(i, Number::New(env, command.left.ch[i]));
-    right.Set(i, Number::New(env, command.right.ch[i]));
-  }
-  object.Set("left", left);
-  object.Set("right", right);
+  object.Set("left", mirrorPositionToArray(env, command.left));
+  object.Set("right", mirrorPositionToArray(env, command.right));
   object.Set("settle_time", Number::New(env, command.settle_time));
   object.Set("complete_time", Number::New(env, command.complete_time));
   return inject(info, object, command);
+}
+
+// CMD_STREAM: create/update/terminate a named mirror-position target.
+// Single-phase (ACK echoes the same shape back, no FIN — see §3.2/§9).
+static FN(MirrorStreamPacket) {
+  EXPECT_EXACTLY_ONE_ARGUMENT("Packet<MirrorStream>");
+  Packet::Command::MirrorStream command{};
+  if (isBufferLike(arg)) {
+    bufferView(arg) >> command;
+  } else if (arg.IsObject() && !arg.IsNull()) {
+    const auto &obj = arg.As<Napi::Object>();
+    try {
+      std::string op_name;
+      propertyMap(obj, "op", op_name, false);
+      command.op = convert<Packet::Command::MirrorStream::Op>(op_name);
+      propertyMap(obj, "id", command.id, false);
+      if (obj.Has("left"))
+        assignMirrorPosition(obj.Get("left"), command.left);
+      if (obj.Has("right"))
+        assignMirrorPosition(obj.Get("right"), command.right);
+    }
+    JS_EXCEPT(env.Undefined())
+  } else {
+    JS_THROW(TypeError, "Argument must be an object or buffer like",
+             env.Undefined());
+  }
+  auto object = Napi::Object::New(env);
+  object.Set("op", String::New(env, convert<std::string>(command.op)));
+  object.Set("id", Number::New(env, command.id));
+  object.Set("left", mirrorPositionToArray(env, command.left));
+  object.Set("right", mirrorPositionToArray(env, command.right));
+  return inject(info, object, command);
+}
+
+// CMD_FRAME GET request payload (stream/cameras/pulse). Two-phase: ACK
+// carries FrameAccepted, FIN carries FrameResult (both decoded via their own
+// factories below, NOT this one — see DeviceObject::send).
+static FN(FramePacket) {
+  EXPECT_EXACTLY_ONE_ARGUMENT("Packet<Frame>");
+  Packet::Command::Frame command{};
+  if (isBufferLike(arg)) {
+    bufferView(arg) >> command;
+  } else if (arg.IsObject() && !arg.IsNull()) {
+    const auto &obj = arg.As<Napi::Object>();
+    try {
+      propertyMap(obj, "stream", command.stream, false);
+      command.cameras =
+          obj.Has("cameras") ? parseCameraMask(obj.Get("cameras")) : 0;
+      command.pulse =
+          obj.Has("pulse")
+              ? convert<Packet::Command::Microseconds>(obj.Get("pulse"))
+              : 0;
+    }
+    JS_EXCEPT(env.Undefined())
+  } else {
+    JS_THROW(TypeError, "Argument must be an object or buffer like",
+             env.Undefined());
+  }
+  auto object = Napi::Object::New(env);
+  object.Set("stream", Number::New(env, command.stream));
+  object.Set("cameras", cameraMaskToArray(env, command.cameras));
+  object.Set("pulse", Number::New(env, command.pulse));
+  return inject(info, object, command);
+}
+
+// CMD_FRAME ACK payload: queue position (0 = about to start now).
+static FN(FrameAcceptedPacket) {
+  EXPECT_EXACTLY_ONE_ARGUMENT("Packet<FrameAccepted>");
+  Packet::Command::FrameAccepted result{};
+  if (isBufferLike(arg)) {
+    bufferView(arg) >> result;
+  } else if (arg.IsObject() && !arg.IsNull()) {
+    const auto &obj = arg.As<Napi::Object>();
+    try {
+      propertyMap(obj, "queue_position", result.queue_position, false);
+    }
+    JS_EXCEPT(env.Undefined())
+  } else {
+    JS_THROW(TypeError, "Argument must be an object or buffer like",
+             env.Undefined());
+  }
+  auto object = Napi::Object::New(env);
+  object.Set("queue_position", Number::New(env, result.queue_position));
+  return inject(info, object, result);
+}
+
+// CMD_FRAME FIN payload: latched at exposure start. Timestamps are BigInt
+// (uint64 µs, matching Global::time on the firmware side — see §9 FW1).
+static FN(FrameResultPacket) {
+  EXPECT_EXACTLY_ONE_ARGUMENT("Packet<FrameResult>");
+  Packet::Command::FrameResult result{};
+  if (isBufferLike(arg)) {
+    bufferView(arg) >> result;
+  } else if (arg.IsObject() && !arg.IsNull()) {
+    const auto &obj = arg.As<Napi::Object>();
+    try {
+      propertyMap(obj, "stream", result.stream, false);
+      if (obj.Has("t_trigger"))
+        result.t_trigger =
+            convert<Packet::Command::Timestamp>(obj.Get("t_trigger"));
+      if (obj.Has("t_exposure"))
+        result.t_exposure =
+            convert<Packet::Command::Timestamp>(obj.Get("t_exposure"));
+      if (obj.Has("left"))
+        assignMirrorPosition(obj.Get("left"), result.left);
+      if (obj.Has("right"))
+        assignMirrorPosition(obj.Get("right"), result.right);
+    }
+    JS_EXCEPT(env.Undefined())
+  } else {
+    JS_THROW(TypeError, "Argument must be an object or buffer like",
+             env.Undefined());
+  }
+  auto object = Napi::Object::New(env);
+  object.Set("stream", Number::New(env, result.stream));
+  object.Set("t_trigger", convert(env, result.t_trigger));
+  object.Set("t_exposure", convert(env, result.t_exposure));
+  object.Set("left", mirrorPositionToArray(env, result.left));
+  object.Set("right", mirrorPositionToArray(env, result.right));
+  return inject(info, object, result);
 }
 
 static Napi::Object Init(Napi::Env env) {
@@ -323,51 +493,125 @@ static Napi::Object Init(Napi::Env env) {
                          env, "Command::Actuate"));
   obj.Set("Trigger", factory<Property::CMD_TRIGGER, Uint16Packet>(
                          env, "Command::Trigger"));
+  obj.Set("MirrorStream", factory<Property::CMD_STREAM, MirrorStreamPacket>(
+                              env, "Command::MirrorStream"));
+  auto frame =
+      factory<Property::CMD_FRAME, FramePacket>(env, "Command::Frame");
+  auto frameAccepted = factory<Property::CMD_FRAME, FrameAcceptedPacket>(
+      env, "Command::FrameAccepted");
+  auto frameResult = factory<Property::CMD_FRAME, FrameResultPacket>(
+      env, "Command::FrameResult");
+  obj.Set("Frame", frame);
+  obj.Set("FrameAccepted", frameAccepted);
+  obj.Set("FrameResult", frameResult);
+  // DeviceObject::send substitutes these for CMD_FRAME's ACK/FIN decode,
+  // since (unlike Actuate/Trigger/MirrorStream) its response shapes differ
+  // from the request shape.
+  frameAcceptedFactory.get(env) = Napi::Persistent(frameAccepted);
+  frameResultFactory.get(env) = Napi::Persistent(frameResult);
   obj.Freeze();
   return obj;
 };
-
 }; // namespace Command
+
+// Protocol v2 two-phase properties: ACK resolves `.accepted`, FIN resolves
+// the terminal value. Deliberately narrower than the plan text's "everything
+// but CMD_*" — CMD_STREAM is protocol-level single-phase (ACK/REJ only, no
+// FIN ever sent, see docs/refactor/synced-capture.md §3.2/§9); treating it as
+// two-phase here would leave every CMD_STREAM request's pending-map entry
+// stuck until the connection closes, since no FIN would ever arrive to erase
+// it. Gated additionally per-device by `DeviceObject::v2_capable` (P3.1a) —
+// this only says which properties *could* be two-phase on v2 firmware, not
+// whether *this* connection has confirmed it's talking to v2 firmware.
+static inline bool isTwoPhase(Property p) {
+  return p == Property::CMD_ACTUATE || p == Property::CMD_TRIGGER ||
+        p == Property::CMD_FRAME;
+}
 
 class PendingRequest : public Shared<PendingRequest> {
 public:
   const Napi::Env env;
 
 private:
-  bool resolved = false;
-  Dispatcher::Future future = {env};
+  bool accepted_settled = false;
+  bool completed_settled = false;
+  Dispatcher::Future completed_future = {env};
+  // Only constructed for two-phase requests (see isTwoPhase) — never
+  // resolving/rejecting an unused Future avoids both the extra uv uv_async
+  // ref-count churn and (more importantly) an unhandled-rejection warning
+  // for single-phase requests, which have no use for it.
+  std::optional<Dispatcher::Future> accepted_future;
 
 public:
-  Napi::Reference<Napi::Function> factory;
-  const struct {
-    Method method;
-    Property property;
-    inline bool match(Method m, Property p) const {
-      return method == m && property == p;
-    }
-  } expect;
-  PendingRequest(Napi::Env env, Method method, Property property)
-      : env(env), expect{method, property} {}
-  PendingRequest(Napi::Env env, Method method, Property property,
-                 Napi::Function fn)
-      : env(env), expect{method, property}, factory(Napi::Persistent(fn)) {}
+  const Property property;
+  const bool two_phase;
+  // Decodes the ACK payload; for everything except CMD_FRAME this is the
+  // same function as fin_factory (the request shape IS the response shape —
+  // see Command::ActuatePacket/MirrorStreamPacket). CMD_FRAME's ACK
+  // (FrameAccepted) and FIN (FrameResult) shapes differ, so DeviceObject::
+  // send supplies two distinct factories for it.
+  Napi::Reference<Napi::Function> ack_factory;
+  Napi::Reference<Napi::Function> fin_factory;
+
+  PendingRequest(Napi::Env env, Property property, bool two_phase,
+                 Napi::Function ackFn, Napi::Function finFn)
+      : env(env), property(property), two_phase(two_phase),
+        ack_factory(Napi::Persistent(ackFn)),
+        fin_factory(Napi::Persistent(finFn)) {
+    if (two_phase)
+      accepted_future.emplace(env);
+  }
+
   ~PendingRequest() {
-    if (!resolved)
-      try {
-        Reject(Napi::Error::New(env, "Request timeout").Value());
-      } catch (...) {
-        // Allow silently fail during module cleanup
+    try {
+      auto timeout = [&] { return Napi::Error::New(env, "Request timeout").Value(); };
+      if (two_phase && !accepted_settled) {
+        accepted_settled = true;
+        accepted_future->Reject(timeout());
       }
+      if (!completed_settled) {
+        completed_settled = true;
+        completed_future.Reject(timeout());
+      }
+    } catch (...) {
+      // Allow silently fail during module cleanup
+    }
   }
-  inline void Resolve(Napi::Value value) {
-    resolved = true;
-    future.Resolve(factory.IsEmpty() ? value : factory.Value().Call({value}));
+
+  // ACK: for single-phase properties this IS the terminal resolution
+  // (matches the pre-v2 behavior exactly); for two-phase properties it only
+  // resolves `.accepted` — the entry stays pending for FIN.
+  inline void ResolveAck(Napi::Value value) {
+    auto decoded =
+        ack_factory.IsEmpty() ? value : ack_factory.Value().Call({value});
+    if (two_phase) {
+      accepted_settled = true;
+      accepted_future->Resolve(decoded);
+    } else {
+      completed_settled = true;
+      completed_future.Resolve(decoded);
+    }
   }
+  // FIN: only ever sent for two-phase properties.
+  inline void ResolveFin(Napi::Value value) {
+    completed_settled = true;
+    completed_future.Resolve(fin_factory.IsEmpty() ? value
+                                                    : fin_factory.Value().Call({value}));
+  }
+  // Rejects whichever phase(s) are still outstanding (REJ is terminal at
+  // either phase — see docs/refactor/synced-capture.md §3.1).
   inline void Reject(Napi::Value reason) {
-    resolved = true;
-    future.Reject(reason);
+    if (two_phase && !accepted_settled) {
+      accepted_settled = true;
+      accepted_future->Reject(reason);
+    }
+    if (!completed_settled) {
+      completed_settled = true;
+      completed_future.Reject(reason);
+    }
   }
-  inline Napi::Promise Promise() { return future.Promise(); }
+  inline Napi::Promise CompletedPromise() { return completed_future.Promise(); }
+  inline Napi::Promise AcceptedPromise() { return accepted_future->Promise(); }
 };
 
 extern int SerialOpen(const Napi::CallbackInfo &info) noexcept;
@@ -377,10 +621,13 @@ public:
   static Function Init(Napi::Env env) {
     return DefineClass(env, "Protocol",
                        {
-                           INSTANCE_GETTER(DeviceObject, connected), //
-                           INSTANCE_METHOD(DeviceObject, get),       //
-                           INSTANCE_METHOD(DeviceObject, set),       //
-                           INSTANCE_METHOD(DeviceObject, release),   //
+                           INSTANCE_GETTER(DeviceObject, connected),     //
+                           INSTANCE_GETTER(DeviceObject, v2Capable),     //
+                           INSTANCE_METHOD(DeviceObject, get),           //
+                           INSTANCE_METHOD(DeviceObject, set),           //
+                           INSTANCE_METHOD(DeviceObject, fireAndForget), //
+                           INSTANCE_METHOD(DeviceObject, verifyVersion), //
+                           INSTANCE_METHOD(DeviceObject, release),       //
                        });
   }
 
@@ -436,7 +683,16 @@ private:
     return __sequence__++;
   }
 
+  // Safe-by-default (P3.1a, docs/refactor/synced-capture.md §9.3): stays
+  // false — meaning every property, including CMD_ACTUATE/TRIGGER/FRAME,
+  // resolves on ACK exactly like v1 firmware always behaved — until
+  // verifyVersion() confirms firmware major >= Protocol::Version::Major.
+  // Without this, a rebuilt (v2) host talking to old (v1) firmware would
+  // hang forever awaiting a FIN the firmware never sends.
+  bool v2_capable = false;
+
   GET(connected) { return Napi::Boolean::New(env, !flag_term); }
+  GET(v2Capable) { return Napi::Boolean::New(env, v2_capable); }
 
   inline void handleRawPacket(Protocol::RawPacket &&packet) noexcept {
     try {
@@ -452,13 +708,20 @@ private:
               packet.dataSize());
       auto p = pending.ref();
       if (p->has(sequence)) {
-        Dispatcher::dispatch(env, [pr = std::move(p->at(sequence)), method,
-                                   property,
+        auto pr = p->at(sequence);
+        // Two-phase requests keep their pending-map entry across the ACK —
+        // only FIN/REJ retire it (see PendingRequest::two_phase and
+        // docs/refactor/synced-capture.md §3.1/§5).
+        bool retire = !(pr->two_phase && method == Method::ACK &&
+                        property == pr->property);
+        Dispatcher::dispatch(env, [pr, method, property,
                                    packet = std::move(packet)](napi_env env) {
           auto payload = ArrayBuffer::New(env, packet.dataSize());
           std::memcpy(payload.Data(), packet.data(), packet.dataSize());
-          if (pr->expect.match(method, property)) {
-            pr->Resolve(payload);
+          if (method == Method::ACK && property == pr->property) {
+            pr->ResolveAck(payload);
+          } else if (method == Method::FIN && property == pr->property) {
+            pr->ResolveFin(payload);
           } else if (method == Method::REJ) {
             // REJ packets always have a string payload
             auto reason =
@@ -472,7 +735,8 @@ private:
                            .Value());
           }
         });
-        p->erase(sequence);
+        if (retire)
+          p->erase(sequence);
       } else if (method == Method::SYN && property == Property::LOG) {
         // Unsolicited log packet
         std::string log_msg((char *)packet.data(), packet.dataSize());
@@ -524,10 +788,37 @@ private:
                    env.Undefined());
         if (written != static_cast<ssize_t>(tx.size()))
           JS_THROW(Error, "Incomplete write to serial port", env.Undefined());
-        // Create promise
-        auto pr = PendingRequest::create(env, Method::ACK, property, factory);
+        // CMD_FRAME's ACK (FrameAccepted) and FIN (FrameResult) payloads
+        // differ in shape from each other and from the request `factory`
+        // (Command::Frame) — substitute the dedicated decoders cached by
+        // Command::Init. Every other property's ACK/FIN (if any) echoes the
+        // request shape, so `factory` decodes both.
+        auto ackFactory = factory;
+        auto finFactory = factory;
+        if (property == Property::CMD_FRAME) {
+          ackFactory = frameAcceptedFactory.get(env).Value();
+          finFactory = frameResultFactory.get(env).Value();
+        }
+        // v2_capable gate — see its declaration (P3.1a).
+        bool two_phase = isTwoPhase(property) && v2_capable;
+        auto pr = PendingRequest::create(env, property, two_phase, ackFactory,
+                                         finFactory);
         pending.ref()->set(sequence, pr);
-        return pr->Promise();
+        auto completed = pr->CompletedPromise();
+        if (pr->two_phase) {
+          auto accepted = pr->AcceptedPromise();
+          // Attach a no-op catch so an app that only awaits the returned
+          // (completed) promise — never touching `.accepted` — doesn't
+          // trigger an unhandled-rejection warning if the request REJects
+          // at the ACK phase (both promises reject in that case, see
+          // PendingRequest::Reject). The caller can still attach its own
+          // handler(s) to the same `.accepted` promise independently.
+          auto noop = Napi::Function::New(
+              env, [](const Napi::CallbackInfo &) { return; });
+          accepted.Get("catch").As<Napi::Function>().Call(accepted, {noop});
+          completed.Set("accepted", accepted);
+        }
+        return completed;
       } else {
         throw JS::Error(env, "Failed to encode packet");
       }
@@ -536,11 +827,25 @@ private:
   }
 
   FN(get) {
-    EXPECT_EXACTLY_ONE_ARGUMENT("Device::get");
-    const auto &factory = arg.As<Napi::Function>();
+    auto env = info.Env();
+    if (info.Length() < 1)
+      JS_THROW(TypeError, "Device::get expects at least one argument",
+               env.Undefined());
+    const auto &factory = info[0].As<Napi::Function>();
     const auto property = getProperty(factory);
     const auto sequence = this->sequence();
     Protocol::RawPacket packet(Method::GET, property, sequence);
+    if (info.Length() > 1) {
+      // Most GETs are payload-less reads; CMD_FRAME's GET is a request
+      // carrying {stream, cameras, pulse} — same optional-payload shape as
+      // set() below.
+      auto buffer = getBuffer(factory.Call({info[1]}));
+      if (!isBufferLike(buffer))
+        JS_THROW(TypeError,
+                 "Packet factory must return an array buffer like object",
+                 env.Undefined());
+      packet.setData(bufferView(buffer));
+    }
     return send(sequence, property, factory, packet);
   }
 
@@ -562,6 +867,87 @@ private:
       packet.setData(bufferView(buffer));
     }
     return send(sequence, property, factory, packet);
+  }
+
+  // Protocol::Sequence == 0 fire-and-forget (docs/refactor/synced-capture.md
+  // §3.1): the firmware performs the SET but sends no ACK/FIN/REJ at all —
+  // used for high-rate stream position updates (CMD_STREAM UPDATE, ~1kHz).
+  // No pending-map entry, no promise; a write failure throws synchronously.
+  FN(fireAndForget) {
+    auto env = info.Env();
+    if (info.Length() < 1)
+      JS_THROW(TypeError, "Device::fireAndForget expects at least one argument",
+               env.Undefined());
+    const auto &factory = info[0].As<Napi::Function>();
+    const auto property = getProperty(factory);
+    Protocol::RawPacket packet(Method::SET, property, 0);
+    if (info.Length() > 1) {
+      auto buffer = getBuffer(factory.Call({info[1]}));
+      if (!isBufferLike(buffer))
+        JS_THROW(TypeError,
+                 "Packet factory must return an array buffer like object",
+                 env.Undefined());
+      packet.setData(bufferView(buffer));
+    }
+    try {
+      if (!tx.encode(packet.finalize()))
+        throw JS::Error(env, "Failed to encode packet");
+      auto written = ::write(fd, tx.data(), tx.size());
+      if (written < 0)
+        JS_THROW(Error,
+                 "Failed to write to serial port: " +
+                     std::string(std::strerror(errno)),
+                 env.Undefined());
+      if (written != static_cast<ssize_t>(tx.size()))
+        JS_THROW(Error, "Incomplete write to serial port", env.Undefined());
+    }
+    JS_EXCEPT(env.Undefined())
+    return env.Undefined();
+  }
+
+  // P3.1a (docs/refactor/synced-capture.md §9.3): fetches SYS_VERSION and
+  // sets v2_capable = (firmware.major >= Protocol::Version::Major). Until
+  // this resolves (or if it's never called), v2_capable stays false and
+  // every property behaves single-phase — safe against v1 firmware, just
+  // not two-phase-accurate against v2 firmware. Returns the decoded version
+  // plus the `compatible` verdict; never rejects on a *version mismatch*
+  // (only on a transport/REJ failure), matching the plan's "recommended"
+  // fallback over an outright refusal.
+  FN(verifyVersion) {
+    auto env = info.Env();
+    const auto sequence = this->sequence();
+    Protocol::RawPacket packet(Method::GET, Property::SYS_VERSION, sequence);
+    // Identity decoder: read the raw ACK payload as Packet::System::Version
+    // directly below, no need to round-trip through the JS-facing
+    // Protocol.System.Version factory for an internal-only check.
+    auto identity = Napi::Function::New(
+        env, [](const Napi::CallbackInfo &info) -> Napi::Value {
+          return info[0];
+        });
+    auto value = send(sequence, Property::SYS_VERSION, identity, packet);
+    if (!value.IsPromise())
+      return value; // send() already threw/returned null on failure
+    auto self = this;
+    auto onFulfilled = Napi::Function::New(
+        env, [self](const Napi::CallbackInfo &info) -> Napi::Value {
+          auto env = info.Env();
+          auto buffer = info[0].As<Napi::ArrayBuffer>();
+          if (buffer.ByteLength() < sizeof(Packet::System::Version))
+            throw JS::Error(env, "Malformed System::Version response");
+          auto version = *reinterpret_cast<const Packet::System::Version *>(
+              buffer.Data());
+          bool compatible = version.major >= Protocol::Version::Major;
+          self->v2_capable = compatible;
+          auto result = Napi::Object::New(env);
+          result.Set("major", Napi::Number::New(env, version.major));
+          result.Set("minor", Napi::Number::New(env, version.minor));
+          result.Set("patch", Napi::Number::New(env, version.patch));
+          result.Set("compatible", Napi::Boolean::New(env, compatible));
+          return result;
+        });
+    auto promise = value.As<Napi::Promise>();
+    return promise.Get("then").As<Napi::Function>().Call(promise,
+                                                          {onFulfilled});
   }
 
   FN(release) {

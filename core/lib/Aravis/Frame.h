@@ -96,10 +96,17 @@ public:
   // Private constructor - only accessible via Shared::create()
   inline Frame(ArvBuffer *buffer)
       : raw(fromArvBuffer(buffer)), format(getPixelFormat(buffer)),
-        timestamp(arv_buffer_get_timestamp(buffer)) {};
+        device_timestamp(arv_buffer_get_timestamp(buffer)),
+        system_timestamp(arv_buffer_get_system_timestamp(buffer)),
+        timestamp(device_timestamp) {};
 
   const cv::Mat raw;
   const PixelFormat format;
+  // Aravis buffer timestamp in the camera/device clock domain.
+  const uint64_t device_timestamp;
+  // Aravis system timestamp in the host clock domain, nanoseconds.
+  const uint64_t system_timestamp;
+  // Back-compat alias for device_timestamp.
   const uint64_t timestamp;
   const std::string tag =
       std::to_string(width()) + "×" + std::to_string(height()) + " " +

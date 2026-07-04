@@ -36,6 +36,8 @@ const device = new Device(info.path);
 console.log("Connected:", device);
 
 const bias = 90;
+const motionDurationMs = 2_000;
+const amplitude = 170;
 await device.set(Protocol.System.Enable, false);
 console.log(await device.get(Protocol.System.Info));
 console.log(await device.get(Protocol.System.Version));
@@ -91,13 +93,85 @@ async function actuate(v: number, settle_time = 10_000) {
     };
 }
 
+function positionAt(dt: number) {
+    const t = clamp(dt / motionDurationMs, [0, 1]);
+    if (t <= 0.25) return amplitude * (t / 0.25);
+    if (t <= 0.75) return amplitude * (1 - ((t - 0.25) / 0.5) * 2);
+    return -amplitude * (1 - (t - 0.75) / 0.25);
+}
+
+function summarize(samples: number[]) {
+    if (!samples.length) return null;
+    const min = Math.min(...samples);
+    const max = Math.max(...samples);
+    const sum = samples.reduce((a, b) => a + b, 0);
+    const mean = sum / samples.length;
+    const variance =
+        samples.reduce((a, b) => a + (b - mean) ** 2, 0) / samples.length;
+    return { min, max, mean, stddev: Math.sqrt(variance) };
+}
+
+const stats = {
+    commandLatencyMs: [] as number[],
+    iterationGapMs: [] as number[],
+    commandCompleteTimeUs: [] as number[],
+    commandedPosition: [] as number[],
+};
+
+function reportStats(elapsedMs: number, updates: number) {
+    const rateHz = updates / (elapsedMs / 1_000);
+    console.log("Motion statistics:", {
+        duration_ms: elapsedMs,
+        updates,
+        update_rate_hz: rateHz,
+        command_latency_ms: summarize(stats.commandLatencyMs),
+        iteration_gap_ms: summarize(stats.iterationGapMs),
+        command_complete_time_us: summarize(stats.commandCompleteTimeUs),
+        commanded_position: summarize(stats.commandedPosition),
+    });
+}
+
 try {
     console.log(await device.set(Protocol.System.Enable, true));
-    let v = 0;
-    for (; v <= 170; v += 10) console.log(await actuate(v));
-    for (; v >= -170; v -= 10) console.log(await actuate(v));
-    for (; v <= 0; v += 10) console.log(await actuate(v));
+    let updates = 0;
+    let lastIterationStart: number | null = null;
+    const motionStart = performance.now();
+    let elapsedMs = 0;
+
+    while (elapsedMs < motionDurationMs) {
+        const iterationStart = performance.now();
+        elapsedMs = iterationStart - motionStart;
+        if (elapsedMs >= motionDurationMs) break;
+
+        if (lastIterationStart !== null) {
+            stats.iterationGapMs.push(iterationStart - lastIterationStart);
+        }
+        lastIterationStart = iterationStart;
+
+        const position = positionAt(elapsedMs);
+        stats.commandedPosition.push(position);
+
+        const commandStart = performance.now();
+        const response = await actuate(position, 0);
+        const commandEnd = performance.now();
+
+        stats.commandLatencyMs.push(commandEnd - commandStart);
+        if (response.complete_time !== undefined) {
+            stats.commandCompleteTimeUs.push(response.complete_time);
+        }
+        updates++;
+    }
+
+    const motionEnd = performance.now();
+    await actuate(0, 0);
+    reportStats(motionEnd - motionStart, updates);
     console.log("Loop finished");
 } catch (error) {
     console.error("Error occurred:", error);
+} finally {
+    try {
+        await device.set(Protocol.System.Enable, false);
+    } catch (error) {
+        console.error("Failed to disable device:", error);
+    }
 }

@@ -45,10 +45,22 @@ declare module "core/Aravis" {
 
     // Trigger control
     readonly trigger_options: string[];
+    /** Convenience: sets TriggerMode=On + TriggerSelector/TriggerSource in
+     *  one call (`arv_camera_set_trigger`). `mode` is one of
+     *  `trigger_options` (e.g. "FrameStart", or "Off" to disable). */
+    setTrigger(mode: string): void;
     clearTriggers(): void;
     softwareTrigger(): void;
     trigger_source: string;
     readonly trigger_source_options: string[];
+
+    // Generic GenICam feature access — for anything without a dedicated
+    // accessor above, e.g. configuring a strobe/line output as
+    // ExposureActive for synced capture (LineSelector + LineMode +
+    // LineSource) — see docs/refactor/synced-capture.md §6.
+    getFeature(name: string): string;
+    setFeature(name: string, value: string): void;
+    executeFeature(name: string): void;
 
     // Exposure control
     readonly exposure_time_available: boolean;
@@ -86,7 +98,16 @@ declare module "core/Aravis" {
   export class Frame extends CoreObject<Frame> {
     readonly width: number;
     readonly height: number;
+    /** Back-compat alias for `deviceTimestamp`. */
     readonly timestamp: bigint;
+    /** Camera/device-clock timestamp from `arv_buffer_get_timestamp`. */
+    readonly deviceTimestamp: bigint;
+    /** Host system timestamp from `arv_buffer_get_system_timestamp`. */
+    readonly systemTimestamp: bigint;
+    /** Native-style alias for `deviceTimestamp`. */
+    readonly device_timestamp: bigint;
+    /** Native-style alias for `systemTimestamp`. */
+    readonly system_timestamp: bigint;
     readonly raw: Mat;
     readonly raw_format: PixelFormat;
     view(): Promise<Mat>;
@@ -115,11 +136,7 @@ declare module "core/Aravis" {
     | "BayerBG8";
 
   type PixelFormat16 =
-    | "Mono16"
-    | "BayerGR16"
-    | "BayerRG16"
-    | "BayerGB16"
-    | "BayerBG16";
+    "Mono16" | "BayerGR16" | "BayerRG16" | "BayerGB16" | "BayerBG16";
 
   /**
    * GenICam 12-bit packed wire formats. These appear only as a Frame's
@@ -128,11 +145,7 @@ declare module "core/Aravis" {
    * valid targets for `Frame.view()`.
    */
   type PixelFormat12p =
-    | "Mono12p"
-    | "BayerGR12p"
-    | "BayerRG12p"
-    | "BayerGB12p"
-    | "BayerBG12p";
+    "Mono12p" | "BayerGR12p" | "BayerRG12p" | "BayerGB12p" | "BayerBG12p";
 
   export type PixelFormat = PixelFormat8 | PixelFormat16 | PixelFormat12p;
 }

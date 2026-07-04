@@ -92,6 +92,9 @@ public:
             INSTANCE_METHOD(CameraObject, softwareTrigger),            //
             INSTANCE_ACCESSOR(CameraObject, trigger_source),           //
             INSTANCE_GETTER(CameraObject, trigger_source_options),     //
+            INSTANCE_METHOD(CameraObject, getFeature),                 //
+            INSTANCE_METHOD(CameraObject, setFeature),                 //
+            INSTANCE_METHOD(CameraObject, executeFeature),             //
             INSTANCE_GETTER(CameraObject, exposure_time_available),    //
             INSTANCE_GETTER(CameraObject, exposure_auto_available),    //
             INSTANCE_ACCESSOR(CameraObject, exposure),                 //
@@ -213,6 +216,33 @@ private:
            (convert<const char *, std::string>));
   GET_PROP(trigger_source, String);
   OPTIONS(trigger_source)
+
+  // Generic GenICam feature access (LineSelector/LineMode/LineSource for
+  // strobe output config, etc.) — see Camera.h.
+  FN(getFeature) {
+    try {
+      auto name = info[0].As<String>().Utf8Value();
+      return String::New(env, core()->get_feature(name.c_str()));
+    }
+    JS_EXCEPT(env.Undefined())
+  }
+  FN(setFeature) {
+    try {
+      auto name = info[0].As<String>().Utf8Value();
+      auto value = info[1].As<String>().Utf8Value();
+      core()->set_feature(name.c_str(), value.c_str());
+      return env.Undefined();
+    }
+    JS_EXCEPT(env.Undefined())
+  }
+  FN(executeFeature) {
+    try {
+      auto name = info[0].As<String>().Utf8Value();
+      core()->execute_feature(name.c_str());
+      return env.Undefined();
+    }
+    JS_EXCEPT(env.Undefined())
+  }
 
   GET_PROP(exposure_time_available, Boolean);
   GET_PROP(exposure_auto_available, Boolean);

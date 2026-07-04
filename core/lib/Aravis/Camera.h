@@ -137,6 +137,24 @@ public:
   ARV_CAMERA_GET(const char *, trigger_source, trigger_source);
   ARV_CAMERA_DUP(trigger_source_options, trigger_sources);
 
+  /* Generic GenICam feature access — for features without a dedicated
+   * accessor above, e.g. configuring a strobe/line output as ExposureActive
+   * (LineSelector + LineMode + LineSource) for synced capture. See
+   * docs/refactor/synced-capture.md §6. */
+  inline std::string get_feature(const char *name) const {
+    auto ret = arv_camera_get_string(get(), name, &Error::error);
+    Error::check("arv_camera_get_string");
+    return ret ? std::string(ret) : std::string();
+  }
+  inline void set_feature(const char *name, const char *value) const {
+    arv_camera_set_string(get(), name, value, &Error::error);
+    Error::check("arv_camera_set_string");
+  }
+  inline void execute_feature(const char *name) const {
+    arv_camera_execute_command(get(), name, &Error::error);
+    Error::check("arv_camera_execute_command");
+  }
+
   ARV_CAMERA_IS(bool, exposure_time_available, exposure_time_available);
   ARV_CAMERA_IS(bool, exposure_auto_available, exposure_auto_available);
 
