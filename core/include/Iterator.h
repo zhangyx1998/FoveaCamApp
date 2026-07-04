@@ -11,6 +11,7 @@
 #include <Threading/Guard.h>
 #include <condition_variable>
 #include <pointer.h>
+#include <queue>
 #include <stdexcept>
 
 #include "CoreObject.h"
@@ -28,22 +29,30 @@ public:
   using Subscriber<T>::Subscriber;
   static inline const std::string NAME =
       "Subscriber<" + type_name<T>() + ">::Queue";
+  static constexpr size_t MAX_BUFFERED = 8;
 
 private:
   // Push-pull data model. Only one of data_queue or future_queue is
   // non-empty at any time.
-  typedef struct {
+  struct Data {
     // Holds incoming data
     std::queue<T> data_queue;
     // Holds pending futures
     std::queue<Future::Ptr> future_queue;
-  } Data;
+    size_t dropped = 0;
+  };
   // Guarded access ensures thread safety
   Threading::Guard<Data> data;
 
   void push(const T &value) override {
     auto ref = data.ref();
     if (ref->future_queue.empty()) {
+      if (ref->data_queue.size() >= MAX_BUFFERED) {
+        ref->data_queue.pop();
+        ref->dropped++;
+        WARN("%s dropped stale queued frame (%zu total)", NAME.c_str(),
+             ref->dropped);
+      }
       ref->data_queue.push(value);
       VERBOSE("%s::push(%p) -> data queue [%p]", NAME.c_str(), value.get(),
               &ref->data_queue.back());

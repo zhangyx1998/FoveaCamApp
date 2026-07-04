@@ -262,6 +262,9 @@ function wrap(role: "L" | "R", mat: Mat<Uint8Array>) {
 const mat_l = ref<Mat<Uint8Array> | null>(null);
 const mat_c = ref<Mat<Uint8Array> | null>(null);
 const mat_r = ref<Mat<Uint8Array> | null>(null);
+const raw_l = shallowRef<Mat<Uint8Array> | null>(null);
+const raw_c = shallowRef<Mat<Uint8Array> | null>(null);
+const raw_r = shallowRef<Mat<Uint8Array> | null>(null);
 
 const center_view = computed(() => {
   if (view.value === "sliced") {
@@ -514,9 +517,18 @@ const control_task = abortable(async (aborted) => {
       }
       if (l && c && r) {
         const [lm, cm, rm] = await Promise.all([
-          l.view("BGRA8").then((m) => wrap("L", m)),
-          c.view("BGRA8"),
-          r.view("BGRA8").then((m) => wrap("R", m)),
+          l.view("BGRA8", raw_l.value).then((m) => {
+            raw_l.value = m;
+            return wrap("L", m);
+          }),
+          c.view("BGRA8", raw_c.value).then((m) => {
+            raw_c.value = m;
+            return m;
+          }),
+          r.view("BGRA8", raw_r.value).then((m) => {
+            raw_r.value = m;
+            return wrap("R", m);
+          }),
         ]);
         mat_l.value = lm;
         mat_c.value = cm;

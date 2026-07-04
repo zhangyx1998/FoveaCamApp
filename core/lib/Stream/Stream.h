@@ -7,6 +7,7 @@
 
 #include "Threading/Guard.h"
 #include "utils/error.h"
+#include <atomic>
 #include <condition_variable>
 #include <exception>
 #include <iostream>
@@ -48,7 +49,7 @@ private:
   std::thread thread;
 
 protected:
-  Stream() : thread(&Stream::thread_main, this) {}
+  Stream() = default;
   ~Stream() { assert_shutdown_called(); };
 
   void assert_shutdown_called() {
@@ -82,6 +83,8 @@ protected:
     }
     std::scoped_lock lock(mutex);
     subscribers.insert(subscriber);
+    if (!thread.joinable())
+      thread = std::thread(&Stream::thread_main, this);
     unfreeze.notify_all();
     return this;
   };
@@ -114,6 +117,9 @@ protected:
       while (!flag_terminate) {
         auto item = iterate();
         if (item == nullptr) {
+          std::scoped_lock lock(mutex);
+          if (subscribers.empty())
+            break;
           std::this_thread::yield();
           continue;
         }

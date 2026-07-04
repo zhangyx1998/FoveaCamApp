@@ -10,6 +10,8 @@
 
 namespace Arv {
 
+static constexpr guint64 BUFFER_POP_TIMEOUT_US = 100000;
+
 static const Camera *index(const Camera::Ptr &key) { return key.get(); }
 
 // Global registry to ensure the same camera always maps to the same stream
@@ -56,7 +58,7 @@ void Stream::stop() {
 Frame::Ptr Stream::iterate() {
   if (!stream)
     throw Error("Stream not started");
-  auto buffer = arv_stream_pop_buffer(stream);
+  auto buffer = arv_stream_timeout_pop_buffer(stream, BUFFER_POP_TIMEOUT_US);
   if (!buffer)
     return nullptr;
   auto frame = Frame::create(buffer);

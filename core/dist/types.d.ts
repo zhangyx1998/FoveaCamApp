@@ -39,6 +39,7 @@ export class Stream<T> extends CoreObject<Stream<T>> {
     // Generates null if consumer is faster than producer.
     // Consumer MUST yield (await) upon null so producer can push data.
     [Symbol.iterator](): IterableIterator<T | null>;
-    // Queue all frames
+    // Queue frames for the consumer, with a bounded native backlog.
+    // If the consumer falls behind, stale queued frames may be dropped.
     [Symbol.asyncIterator](): AsyncIterableIterator<T>;
 }
