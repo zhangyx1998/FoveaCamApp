@@ -18,8 +18,12 @@ compile_commands.json
 
 # Electron APP
 .dist
+*.tsbuildinfo
 
 # Temporary files
 *.tmp
 *.txt
 .DS_Store
+
+# Symlink
+/store

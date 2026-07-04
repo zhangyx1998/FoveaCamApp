@@ -1,7 +1,7 @@
-const { execSync } = require("child_process");
 const { BuildSystem } = require("cmake-js");
 const { existsSync, rmSync, mkdirSync, copyFileSync } = require("fs");
 const { resolve } = require("path");
+const { findOpenCVOptions, getElectronVersion } = require("./env.cjs");
 
 const cmd = process.argv[2];
 const arch = process.arch;
@@ -19,6 +19,7 @@ async function make(runtime, version, arch, options = {}) {
         arch: arch,
         cMakeOptions: {
             CMAKE_COLOR_DIAGNOSTICS: process.stdout.isTTY ? "ON" : "OFF",
+            ...findOpenCVOptions(),
             ...options,
         },
     });
@@ -39,14 +40,10 @@ async function main() {
         const version = process.versions.node;
         await make(runtime, version, arch);
     }
-
     // Detect if electron is available
     try {
         const runtime = "electron";
-        const version = execSync("npx electron --version")
-            .toString()
-            .replace(/^v/, "")
-            .trim();
+        const version = getElectronVersion();
         const options = { CXX_FLAGS: "-DV8_MEMORY_CAGE" };
         await make(runtime, version, arch, options);
     } catch (e) {
