@@ -6,13 +6,11 @@
 
 import {
   Projector,
-  type PreDefinedDictionary,
   type MarkerDetectResult,
   findHomography,
   Mat,
 } from "core/Vision";
 import { area, type Point2d, type Point3d, type Size } from "core/Geometry";
-import { FunctionalComponent, h } from "vue";
 import { ExtrinsicDataset } from "./camera";
 import Regression, { RegressionConfig } from "core/Regression";
 
@@ -96,41 +94,6 @@ export function* getInternalObjectPoints(pattern: (0 | 1)[][] & Size) {
     }
   }
 }
-
-const options = [
-  "4X4_50",
-  "4X4_100",
-  "4X4_250",
-  "4X4_1000",
-  "5X5_50",
-  "5X5_100",
-  "5X5_250",
-  "5X5_1000",
-  "6X6_50",
-  "6X6_100",
-  "6X6_250",
-  "6X6_1000",
-  "7X7_50",
-  "7X7_100",
-  "7X7_250",
-  "7X7_1000",
-  "ARUCO_ORIGINAL",
-  "APRILTAG_16h5",
-  "APRILTAG_25h9",
-  "APRILTAG_36h10",
-  "APRILTAG_36h11",
-  "ARUCO_MIP_36h12",
-] as const;
-
-export const DictionaryTypeSelector: FunctionalComponent<{
-  modelValue: PreDefinedDictionary;
-}> = (props, ctx) => {
-  return h(
-    "select",
-    ctx.attrs,
-    options.map((k) => h("option", { value: k }, k)),
-  );
-};
 
 export function relativeToAbsolute(
   pts: Point2d[],

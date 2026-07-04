@@ -1,7 +1,6 @@
 <script lang="ts">
-import { computed, Ref, ref, shallowReactive, watch } from "vue";
+import { computed, Ref, shallowReactive } from "vue";
 
-import { useAppConfig } from "@lib/config";
 // @ts-ignore
 import SplashDataURL from "./RemoteCanvasSplash.svg";
 
@@ -34,16 +33,6 @@ function getInnerSVG(dataUrl: string): string {
 
 const splash = getInnerSVG(SplashDataURL);
 
-const appConfig = await useAppConfig();
-const server = computed({
-  get() {
-    return appConfig.tele_canvas_url ?? "";
-  },
-  set(v: string) {
-    appConfig.tele_canvas_url = v;
-  },
-});
-
 type Provider = Ref<string>;
 
 const registry = shallowReactive(new Set<Provider>());
@@ -63,7 +52,10 @@ const injectedStyle = `
 </style>
 `;
 
-const content = computed(() => {
+// Exported (module-scope, shared across every importer) so `<script setup>`
+// below can reference it directly — Vue merges a plain `<script>` and
+// `<script setup>` in the same SFC into one module scope, no import needed.
+export const content = computed(() => {
   if (registry.size === 0) return splash;
   return (
     injectedStyle +
@@ -71,6 +63,29 @@ const content = computed(() => {
       .map(({ value }) => value)
       .join("\n")
   );
+});
+</script>
+
+<script setup lang="ts">
+// `appConfig`/`server` live here, not the plain block above: nothing outside
+// this component needs them (unlike `register`/`content`), and `<script
+// setup>`'s top-level await is safely transformed by Vue's compiler
+// (`withAsyncContext`) instead of becoming a genuine ES-module top-level
+// await — which is what made this file the one remaining `vite build`
+// failure (esbuild's target environment doesn't support real top-level
+// await; every other module's `await useAppConfig()` already lives in a
+// `<script setup>` block for the same reason).
+import { watch } from "vue";
+import { useAppConfig } from "@lib/config";
+
+const appConfig = await useAppConfig();
+const server = computed({
+  get() {
+    return appConfig.tele_canvas_url ?? "";
+  },
+  set(v: string) {
+    appConfig.tele_canvas_url = v;
+  },
 });
 
 watch(
@@ -96,17 +111,6 @@ watch(
     immediate: true,
   },
 );
-
-function useRemoteCanvas() {
-  return {
-    server,
-    content,
-  };
-}
-</script>
-
-<script setup lang="ts">
-const { server, content } = useRemoteCanvas();
 </script>
 
 <template>

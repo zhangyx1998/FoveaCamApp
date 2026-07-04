@@ -12,6 +12,14 @@ const external = Object.keys({
     ...(workspace_package.dependencies ?? {}),
 }) as string[];
 
+// Externalize the native/runtime deps AND their subpaths (e.g. `core/Aravis`,
+// `core/Vision`). Exact-string `external` misses subpaths, so the bundler would
+// inline `core`'s loader — whose internal `require("./index.cjs")` then resolves
+// against the bundle's directory (`.dist/electron`) instead of `core/dist`,
+// crashing the orchestrator with MODULE_NOT_FOUND.
+const isExternal = (id: string) =>
+    external.some((e) => id === e || id.startsWith(`${e}/`));
+
 const target = resolve(
     fileURLToPath(import.meta.url),
     "..",
@@ -28,14 +36,31 @@ export default defineConfig(({ command }) => {
     const PROJECT_ROOT = resolve(fileURLToPath(import.meta.url), "..");
     console.log("External Modules:", external);
 
+    // Shared path aliases. Applied to both the renderer and the Node (main +
+    // orchestrator) build so orchestrator code can reuse the pure-compute libs
+    // under `@lib` (pid, stereo, geometry, vergence, ...) without relocating them.
+    const alias = {
+        "@": resolve(PROJECT_ROOT, "src"),
+        "@lib": resolve(PROJECT_ROOT, "lib"),
+        "@src": resolve(PROJECT_ROOT, "src"),
+        "@modules": resolve(PROJECT_ROOT, "modules"),
+        "@orchestrator": resolve(PROJECT_ROOT, "orchestrator"),
+    };
+
     return {
         plugins: [
             vue(),
             electron({
                 main: {
-                    // Shortcut of `build.lib.entry`
-                    entry: "electron/main.ts",
+                    // Shortcut of `build.lib.entry`. The orchestrator is a
+                    // second Node entry built alongside main; the main process
+                    // forks it as a utilityProcess (.dist/electron/orchestrator.js).
+                    entry: {
+                        main: "electron/main.ts",
+                        orchestrator: "orchestrator/index.ts",
+                    },
                     vite: {
+                        resolve: { alias },
                         build: {
                             sourcemap,
                             minify: isBuild,
@@ -44,7 +69,7 @@ export default defineConfig(({ command }) => {
                             // we can use `external` to exclude them to ensure they work correctly.
                             // Others need to put them in `dependencies` to ensure they are collected into `app.asar` after the app is built.
                             // Of course, this is not absolute, just this way is relatively simple. :)
-                            rollupOptions: { external },
+                            rollupOptions: { external: isExternal },
                         },
                     },
                 },
@@ -57,7 +82,7 @@ export default defineConfig(({ command }) => {
                             sourcemap: sourcemap ? "inline" : undefined, // #332
                             minify: isBuild,
                             outDir: target,
-                            rollupOptions: { external },
+                            rollupOptions: { external: isExternal },
                         },
                     },
                 },
@@ -86,14 +111,7 @@ export default defineConfig(({ command }) => {
         optimizeDeps: {
             exclude: external,
         },
-        resolve: {
-            alias: {
-                "@": resolve(PROJECT_ROOT, "src"),
-                "@lib": resolve(PROJECT_ROOT, "lib"),
-                "@src": resolve(PROJECT_ROOT, "src"),
-                "@modules": resolve(PROJECT_ROOT, "modules"),
-            },
-        },
+        resolve: { alias },
         build: {
             outDir: resolve(PROJECT_ROOT, ".dist", "renderer"),
         },

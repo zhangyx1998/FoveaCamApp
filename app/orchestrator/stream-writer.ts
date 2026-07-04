@@ -3,12 +3,21 @@
 // This source code is licensed under the MIT license.
 // You may find the full license in project root directory.
 // -------------------------------------------------------
+//
+// Relocated as-is from `src/record/stream.ts` (renderer) so recording can run
+// server-side (docs/refactor/orchestrator.md roadmap item 6) — the on-disk
+// format (`.stream`/`.meta` binary + JSONL sidecar) must not change, external
+// decoder tooling (`stream-decoder.py`) depends on it. Only change: `FreqMeter`
+// now comes from `@lib/util/rolling.ts` (Vue-free) instead of
+// `@lib/util/perf.ts` (imports `vue` — not safe from orchestrator-reachable
+// code).
+
 import { createWriteStream, type WriteStream } from "node:fs";
 import { resolve } from "node:path";
 import type { Mat } from "core/Vision";
 import type { PixelFormat } from "core/Aravis";
-import { FreqMeter } from "@lib/util/perf";
-import { dtypeOf, type Dtype } from "@lib/util/dtype";
+import { FreqMeter } from "@lib/util/rolling";
+import { dtypeOf, significantBits, type Dtype } from "@lib/util/dtype";
 
 export type CompressionFormat = "lz4" | "zstd";
 
@@ -31,16 +40,6 @@ export interface FrameMeta<X extends Extensions = Extensions> {
   b: number;
   /** extra metadata */
   x?: X;
-}
-
-/**
- * Effective bit depth of the pixel data. 12p formats carry 12 significant bits
- * in a 16-bit container, so consumers must scale by 4095 rather than 65535.
- */
-export function significantBits(format: PixelFormat): number {
-  if (format.endsWith("12p")) return 12;
-  if (format.endsWith("16")) return 16;
-  return 8;
 }
 
 interface AffineExtension {

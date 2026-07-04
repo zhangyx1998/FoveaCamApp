@@ -1,337 +1,260 @@
+<!-- -------------------------------------------------
+Copyright (c) 2025 Yuxuan Zhang, dev@z-yx.cc
+This source code is licensed under the MIT license.
+You may find the full license in project root directory.
+--------------------------------------------------- -->
+<!--
+  Thin per-camera config view. Reads the live property snapshot from the
+  manage-cameras session telemetry and routes every edit through a command; the
+  orchestrator owns the camera and persists changes. No `core` access here.
+-->
 <script setup lang="ts">
-import { customRef, onUnmounted, computed, ref, nextTick } from "vue";
-import type { Camera } from "core/Aravis";
+import { computed, ref } from "vue";
 import StreamView from "@src/components/StreamView.vue";
-import { describeCamera, useCameraConfig, initCamera } from "@lib/camera";
-import Store from "@lib/store";
+import RangeSlider from "@src/inputs/range-slider.vue";
+import type { Session } from "@lib/orchestrator/client";
+import type { CameraView, ManageCamerasContract } from "./contract";
 
-const { camera } = defineProps<{ camera: Camera }>();
-const store = await useCameraConfig(camera);
-initCamera(camera, store);
+const { serial, session } = defineProps<{
+  serial: string;
+  session: Session<ManageCamerasContract>;
+}>();
 
-let timeout_handle: ReturnType<typeof setInterval> | null = null;
+const view = computed<CameraView | undefined>(
+  () => session.telemetry.views[serial],
+);
 
-const config = customRef<Camera>((track, trigger) => {
-    const proxy = new Proxy(
-        {},
-        {
-            get(_, prop) {
-                track();
-                return (camera as any)[prop];
-            },
-            set(_, prop, value) {
-                const prev = (camera as any)[prop];
-                try {
-                    if (typeof value !== typeof prev) value = JSON.parse(value);
-                    if (typeof value !== typeof prev)
-                        throw new TypeError(
-                            `Type mismatch: expected ${typeof prev}, got ${typeof value}`
-                        );
-                    (camera as any)[prop] = value;
-                    (store as any)[prop] = value;
-                    return true;
-                } catch (e) {
-                    console.error(
-                        `Failed to set ${prop.toString()} to ${value}:`,
-                        e
-                    );
-                    return false;
-                } finally {
-                    trigger();
-                }
-            },
-        }
-    );
-    timeout_handle = setInterval(trigger, 1000);
-    return {
-        get() {
-            return proxy as Camera;
-        },
-        set(_) {
-            throw new Error("Setting readonly camera config.");
-        },
-    };
-});
+const framePayload = session.frame(serial);
 
-onUnmounted(() => {
-    if (timeout_handle !== null) clearInterval(timeout_handle);
-});
+// Writable binding for a camera property: reads the live snapshot, writes via a
+// `set` command (the orchestrator applies + persists it).
+function field<K extends keyof CameraView>(key: K) {
+  return computed<CameraView[K] | undefined>({
+    get: () => view.value?.[key],
+    set: (value) => void session.call("set", { serial, key, value }),
+  });
+}
+
+// Numeric variant for `RangeSlider` (modelValue is a required number).
+function numField(key: keyof CameraView) {
+  return computed<number>({
+    get: () => (view.value?.[key] as number) ?? 0,
+    set: (value) => void session.call("set", { serial, key, value }),
+  });
+}
+
+const role = field("role");
+const frame_rate_enable = field("frame_rate_enable");
+const frame_rate = numField("frame_rate");
+const exposure_auto = field("exposure_auto");
+const gain_auto = field("gain_auto");
+const gain = numField("gain");
+const black_level_auto = field("black_level_auto");
+const black_level = numField("black_level");
 
 const autoMode = ["Off", "Once", "Continuous"];
 const autoModeText: Record<string, string> = {
-    Off: "Manual",
-    Once: "Auto (once)",
-    Continuous: "Auto (cont.)",
+  Off: "Manual",
+  Once: "Auto (once)",
+  Continuous: "Auto (cont.)",
 };
 
 // log10(us)
 function logExp(us: number) {
-    return Math.log10(us);
+  return Math.log10(us);
 }
 logExp.inverse = (v: number) => Math.pow(10, v);
 
-const log_exposure = computed({
-    get() {
-        return logExp(config.value.exposure);
-    },
-    set(val: number) {
-        val = logExp.inverse(val);
-        config.value.exposure = Math.round(val / 100) * 100;
-    },
+const log_exposure = computed<number>({
+  get: () => logExp(view.value?.exposure ?? 1),
+  set: (val) => {
+    const us = Math.round(logExp.inverse(val) / 100) * 100;
+    void session.call("set", { serial, key: "exposure", value: us });
+  },
 });
 
-// Pixel format is locked by the camera while acquisition is active, so it
-// cannot be changed live. Unmounting the preview drops the only stream
-// subscriber, which makes the native stream thread stop acquisition; we then
-// set the format (retrying to absorb the cross-thread stop) and remount so the
-// preview resubscribes and restarts acquisition with the new payload size.
-const streamActive = ref(true);
 const pixelFormatBusy = ref(false);
-
-async function changePixelFormat(fmt: string) {
-    if (pixelFormatBusy.value || fmt === camera.pixel_format) return;
-    pixelFormatBusy.value = true;
-    streamActive.value = false;
-    try {
-        await nextTick();
-        let lastErr: unknown = null;
-        for (let i = 0; i < 30; i++) {
-            try {
-                camera.pixel_format = fmt as typeof camera.pixel_format;
-                (store as any).pixel_format = fmt;
-                lastErr = null;
-                break;
-            } catch (e) {
-                lastErr = e;
-                await new Promise((r) => setTimeout(r, 100));
-            }
-        }
-        if (lastErr) console.error("Failed to set pixel format:", lastErr);
-    } finally {
-        streamActive.value = true;
-        pixelFormatBusy.value = false;
-    }
+async function changePixelFormat(format: string) {
+  if (pixelFormatBusy.value || format === view.value?.pixel_format) return;
+  pixelFormatBusy.value = true;
+  try {
+    await session.call("setPixelFormat", { serial, format });
+  } finally {
+    pixelFormatBusy.value = false;
+  }
 }
 
 function reset() {
-    camera.frame_rate_enable = false;
-    camera.exposure_auto = "Once";
-    camera.gain_auto = "Once";
-    if (camera.black_level_auto_available) camera.black_level_auto = "Once";
-    Store.clear(store);
+  void session.call("reset", { serial });
 }
 </script>
 
 <template>
-    <div class="view">
-        <StreamView
-            v-if="streamActive"
-            class="stream"
-            :title="describeCamera(camera)"
-            :camera="camera"
-            width="100%"
-            theme="white"
-        />
-        <div v-else class="stream stream-paused">
-            Switching pixel format…
-        </div>
-        <fieldset>
-            <legend>Role Assignment</legend>
-            <select v-model="store.role">
-                <option :value="undefined">[ NONE ]</option>
-                <option value="L">Fovea Left</option>
-                <option value="C">Wide Angle</option>
-                <option value="R">Fovea Right</option>
-            </select>
-        </fieldset>
-        <fieldset v-if="config.pixel_format_options?.length">
-            <legend>Pixel Format</legend>
-            <select
-                :value="config.pixel_format"
-                :disabled="pixelFormatBusy"
-                @change="
-                    changePixelFormat(
-                        ($event.target as HTMLSelectElement).value
-                    )
-                "
-            >
-                <option
-                    v-for="fmt in config.pixel_format_options"
-                    :value="fmt"
-                    :selected="fmt === config.pixel_format"
-                >
-                    {{ fmt }}
-                </option>
-            </select>
-            <p class="hint">
-                Changing format briefly pauses the preview to reconfigure the
-                camera. 12-bit packed formats (e.g. BayerRG12p) read full sensor
-                depth to cut debayer quantization noise.
-            </p>
-        </fieldset>
-        <fieldset v-if="config.frame_rate_available">
-            <legend>
-                Frame Rate
-                <select v-model="config.frame_rate_enable">
-                    <option
-                        :value="true"
-                        :selected="config.frame_rate_enable === true"
-                    >
-                        Manual
-                    </option>
-                    <option
-                        :value="false"
-                        :selected="config.frame_rate_enable === false"
-                    >
-                        Auto
-                    </option>
-                </select>
-            </legend>
-            <label>
-                <input
-                    type="range"
-                    v-model="config.frame_rate"
-                    :min="config.frame_rate_range.min"
-                    :max="config.frame_rate_range.max"
-                    :disabled="!config.frame_rate_enable"
-                />
-                {{ config.frame_rate.toFixed(2) }} FPS
-            </label>
-        </fieldset>
-        <fieldset v-if="config.exposure_auto_available">
-            <legend>
-                Exposure
-                <select v-model="config.exposure_auto">
-                    <option
-                        v-for="mode in autoMode"
-                        :value="mode"
-                        :selected="mode === config.exposure_auto"
-                    >
-                        {{ autoModeText[mode] }}
-                    </option>
-                </select>
-            </legend>
-            <label>
-                <input
-                    type="range"
-                    v-model="log_exposure"
-                    :min="logExp(config.exposure_range.min)"
-                    :max="logExp(config.exposure_range.max)"
-                    step="0.001"
-                    :disabled="config.exposure_auto !== 'Off'"
-                />
-                {{ (config.exposure / 1000.0).toFixed(2) }} ms
-            </label>
-        </fieldset>
-        <fieldset v-if="config.gain_auto_available">
-            <legend>
-                Gain
-                <select v-model="config.gain_auto">
-                    <option
-                        v-for="mode in autoMode"
-                        :value="mode"
-                        :selected="mode === config.gain_auto"
-                    >
-                        {{ autoModeText[mode] }}
-                    </option>
-                </select>
-            </legend>
-            <label>
-                <input
-                    type="range"
-                    v-model="config.gain"
-                    :min="config.gain_range.min"
-                    :max="config.gain_range.max"
-                    step="0.001"
-                    :disabled="config.gain_auto !== 'Off'"
-                />
-                {{ config.gain.toFixed(2) }} dB
-            </label>
-        </fieldset>
-        <fieldset v-if="config.black_level_available">
-            <legend>
-                Black Level
-                <select v-model="config.black_level_auto">
-                    <option
-                        v-for="mode in autoMode"
-                        :value="mode"
-                        :selected="mode === config.black_level_auto"
-                    >
-                        {{ autoModeText[mode] }}
-                    </option>
-                </select>
-            </legend>
-            <label>
-                <input
-                    type="range"
-                    v-model="config.black_level"
-                    :min="config.black_level_range.min"
-                    :max="config.black_level_range.max"
-                    step="0.001"
-                    :disabled="config.black_level_auto !== 'Off'"
-                />
-                {{ config.black_level.toFixed(2) }} dB
-            </label>
-        </fieldset>
-        <div>
-            <button @click="reset">Reset Config</button>
-        </div>
-    </div>
+  <div class="view">
+    <StreamView
+      class="stream"
+      :title="view?.description"
+      :payload="framePayload"
+      width="100%"
+      theme="white"
+    />
+    <template v-if="view">
+      <fieldset>
+        <legend>Role Assignment</legend>
+        <select v-model="role">
+          <option :value="undefined">[ NONE ]</option>
+          <option value="L">Fovea Left</option>
+          <option value="C">Wide Angle</option>
+          <option value="R">Fovea Right</option>
+        </select>
+      </fieldset>
+      <fieldset v-if="view.pixel_format_options?.length">
+        <legend>Pixel Format</legend>
+        <select
+          :value="view.pixel_format"
+          :disabled="pixelFormatBusy"
+          @change="
+            changePixelFormat(($event.target as HTMLSelectElement).value)
+          "
+        >
+          <option
+            v-for="fmt in view.pixel_format_options"
+            :value="fmt"
+            :selected="fmt === view.pixel_format"
+          >
+            {{ fmt }}
+          </option>
+        </select>
+        <p class="hint">
+          Changing format briefly pauses the preview to reconfigure the camera.
+          12-bit packed formats (e.g. BayerRG12p) read full sensor depth to cut
+          debayer quantization noise.
+        </p>
+      </fieldset>
+      <fieldset v-if="view.frame_rate_available">
+        <legend>
+          Frame Rate
+          <select v-model="frame_rate_enable">
+            <option :value="true">Manual</option>
+            <option :value="false">Auto</option>
+          </select>
+        </legend>
+        <RangeSlider
+          v-model="frame_rate"
+          :min="view.frame_rate_range.min"
+          :max="view.frame_rate_range.max"
+          :disabled="!view.frame_rate_enable"
+        >
+          <span>Frame Rate</span>
+          <span>{{ view.frame_rate.toFixed(2) }} FPS</span>
+        </RangeSlider>
+      </fieldset>
+      <fieldset v-if="view.exposure_auto_available">
+        <legend>
+          Exposure
+          <select v-model="exposure_auto">
+            <option v-for="mode in autoMode" :value="mode">
+              {{ autoModeText[mode] }}
+            </option>
+          </select>
+        </legend>
+        <RangeSlider
+          v-model="log_exposure"
+          :min="logExp(view.exposure_range.min)"
+          :max="logExp(view.exposure_range.max)"
+          :step="0.001"
+          :disabled="view.exposure_auto !== 'Off'"
+        >
+          <span>Exposure</span>
+          <span>{{ (view.exposure / 1000.0).toFixed(2) }} ms</span>
+        </RangeSlider>
+      </fieldset>
+      <fieldset v-if="view.gain_auto_available">
+        <legend>
+          Gain
+          <select v-model="gain_auto">
+            <option v-for="mode in autoMode" :value="mode">
+              {{ autoModeText[mode] }}
+            </option>
+          </select>
+        </legend>
+        <RangeSlider
+          v-model="gain"
+          :min="view.gain_range.min"
+          :max="view.gain_range.max"
+          :step="0.001"
+          :disabled="view.gain_auto !== 'Off'"
+        >
+          <span>Gain</span>
+          <span>{{ view.gain.toFixed(2) }} dB</span>
+        </RangeSlider>
+      </fieldset>
+      <fieldset v-if="view.black_level_available">
+        <legend>
+          Black Level
+          <select v-model="black_level_auto">
+            <option v-for="mode in autoMode" :value="mode">
+              {{ autoModeText[mode] }}
+            </option>
+          </select>
+        </legend>
+        <RangeSlider
+          v-model="black_level"
+          :min="view.black_level_range.min"
+          :max="view.black_level_range.max"
+          :step="0.001"
+          :disabled="view.black_level_auto !== 'Off'"
+        >
+          <span>Black Level</span>
+          <span>{{ view.black_level.toFixed(2) }} dB</span>
+        </RangeSlider>
+      </fieldset>
+      <div>
+        <button @click="reset">Reset Config</button>
+      </div>
+    </template>
+  </div>
 </template>
 
 <style scoped lang="scss">
 .view {
-    display: flex;
-    flex-direction: column;
-    justify-content: flex-start;
-    gap: 1em;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  gap: 1em;
 }
 
 fieldset {
-    border-radius: 1em;
-    border-width: 1px;
-    border-color: #fff8;
-    &:focus,
-    &:focus-within {
-        border-color: #08c;
-    }
-    legend {
-        padding: 0 1ch;
-    }
-    padding: 0.6em 1ch;
-}
-
-input[type="range"] {
-    width: 100%;
+  border-radius: 1em;
+  border-width: 1px;
+  border-color: #fff8;
+  &:focus,
+  &:focus-within {
+    border-color: #08c;
+  }
+  legend {
+    padding: 0 1ch;
+  }
+  padding: 0.6em 1ch;
 }
 
 select {
-    font-family: inherit;
-    font-size: inherit;
-    outline: 1px solid #666;
-    border: none;
-    background: none;
-    border-radius: 4px;
-    padding: 0.2em 1ch;
-    color: inherit;
-    &:focus {
-        outline: 1px solid #08c;
-    }
+  font-family: inherit;
+  font-size: inherit;
+  outline: 1px solid #666;
+  border: none;
+  background: none;
+  border-radius: 4px;
+  padding: 0.2em 1ch;
+  color: inherit;
+  &:focus {
+    outline: 1px solid #08c;
+  }
 }
 
 .hint {
-    margin: 0.5em 0 0;
-    font-size: 0.8em;
-    opacity: 0.6;
-}
-
-.stream-paused {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    aspect-ratio: 16 / 9;
-    border-radius: 0.5em;
-    background: #0004;
-    opacity: 0.7;
+  margin: 0.5em 0 0;
+  font-size: 0.8em;
+  opacity: 0.6;
 }
 </style>

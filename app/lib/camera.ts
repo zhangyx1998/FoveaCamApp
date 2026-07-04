@@ -12,27 +12,28 @@ import Regression, { RegressionConfig } from "core/Regression";
 import Store from "./store";
 import { sha256 } from "./util/hash";
 import { findPinholeProjection } from "./marker";
-import { createMat } from "./mat";
+import { releaseOrchestratorCameras } from "./orchestrator/client";
+import {
+  ROLE,
+  describeCamera,
+  getCameraKey,
+  initCamera,
+  type Triple,
+  type CameraDescription,
+} from "./camera-config";
 
-export const ROLE = {
-  L: "Left Fovea",
-  C: "Center Wide",
-  R: "Right Fovea",
-};
-
-export const THEME = {
-  L: "cyan",
-  C: "orange",
-  R: "greenyellow",
-};
-
-export type Triple<TL = any, TC = TL, TR = TL> = {
-  L: TL;
-  C: TC;
-  R: TR;
-};
-
-export type Role = keyof Triple;
+// Re-export the pure camera helpers so existing `@lib/camera` imports keep
+// working; their definitions now live in `./camera-config` (shared with the
+// orchestrator).
+export {
+  ROLE,
+  THEME,
+  describeCamera,
+  getCameraInfo,
+  getCameraKey,
+  initCamera,
+} from "./camera-config";
+export type { Triple, Role, CameraDescription } from "./camera-config";
 
 export class Cameras extends Map<string, Camera> {
   private static instance: Cameras | null = null;
@@ -55,6 +56,10 @@ export class Cameras extends Map<string, Camera> {
 
 export default async function useCameras() {
   setAction("Scanning for cameras...");
+  // Cameras are exclusive per OS process: have the orchestrator hand back any it
+  // holds (e.g. after leaving a migrated module like tracking-single) before we
+  // open them directly here, otherwise `Camera.list()` finds nothing.
+  await releaseOrchestratorCameras();
   return new Cameras(await Camera.list());
 }
 
@@ -93,35 +98,6 @@ export async function useMatchedCameras<Strict extends true | false = false>(
   return markRaw(matched) as MatchedCameras<Strict>;
 }
 
-export function describeCamera(camera: Camera | Empty) {
-  if (!camera) return "Camera Not Connected";
-  return `${camera.vendor} ${camera.model} (${camera.serial})`;
-}
-
-export type CameraDescription = ReturnType<typeof describeCamera>;
-
-function normalizePathSegment(segment: string) {
-  return segment.trim().replace(/\s+/g, "-");
-}
-
-export function getCameraKey(camera: Camera) {
-  return [camera.vendor, camera.model, camera.serial]
-    .map(normalizePathSegment)
-    .join("_");
-}
-
-export function getCameraInfo(camera?: Camera) {
-  const { frame_rate = NaN, exposure = NaN, gain = NaN } = camera ?? {};
-  return {
-    Vendor: camera?.vendor ?? "Unknown",
-    Camera: camera?.model ?? "Unknown",
-    Serial: camera?.serial ?? "Unknown",
-    FrameRate: `${frame_rate?.toFixed(2) ?? 0} FPS`,
-    Exposure: `${(exposure / 1000)?.toFixed(2) ?? 0} ms`,
-    Gain: `${gain?.toFixed(2) ?? 0} dB`,
-  };
-}
-
 export function useCameraConfig(camera: Camera) {
   const key = getCameraKey(camera);
   return Store.open<Mutable<Camera> & { role?: keyof Triple }>([
@@ -131,30 +107,6 @@ export function useCameraConfig(camera: Camera) {
 }
 
 export type CameraConfig = Awaited<ReturnType<typeof useCameraConfig>>;
-
-export function initCamera(camera: Camera, config: Partial<Camera>) {
-  // Pixel format must be applied before acquisition starts (it changes the
-  // stream payload size), so restore it first.
-  if (config.pixel_format !== undefined) {
-    try {
-      camera.pixel_format = config.pixel_format;
-    } catch (e) {
-      console.warn("Failed to restore pixel format:", config.pixel_format, e);
-    }
-  }
-  if (config.frame_rate_enable !== undefined)
-    camera.frame_rate_enable = config.frame_rate_enable;
-  if (!camera.frame_rate_enable && config.frame_rate !== undefined)
-    camera.frame_rate = config.frame_rate;
-  if (config.exposure_auto !== undefined)
-    camera.exposure_auto = config.exposure_auto;
-  if (camera.exposure_auto === "Off" && config.exposure !== undefined)
-    camera.exposure = config.exposure;
-  if (config.gain_auto !== undefined) camera.gain_auto = config.gain_auto;
-  if (camera.gain_auto === "Off" && config.gain !== undefined)
-    camera.gain = config.gain;
-  return camera;
-}
 
 function validateCalibration(
   cal?: Partial<CameraCalibration>,
@@ -317,68 +269,12 @@ export async function useCalibratedTriple() {
 
 export type CalibratedTriple = Awaited<ReturnType<typeof useCalibratedTriple>>;
 
-export function useCoordinateConversions({
-  LE,
-  CI,
-  RE,
-  config,
-}: CalibratedTriple) {
-  /** Apply calibrated drift to target angular position */
-  function applyDrift({ x, y }: Point2d, drift?: Partial<Point2d>): Point2d {
-    return { x: x + (drift?.x ?? 0), y: y + (drift?.y ?? 0) };
-  }
-  /** Remove calibrated drift from angular position derived from voltage */
-  function removeDrift({ x, y }: Point2d, drift?: Partial<Point2d>): Point2d {
-    return { x: x - (drift?.x ?? 0), y: y - (drift?.y ?? 0) };
-  }
-  return {
-    /** Conversion from angle (rad) to voltage (V) */
-    A2V: {
-      L(angle: Point2d) {
-        return LE.A2V.predict(removeDrift(angle, config.drift_l));
-      },
-      R(angle: Point2d) {
-        return RE.A2V.predict(removeDrift(angle, config.drift_r));
-      },
-    },
-    /** Conversion from voltage (V) to angle (rad) */
-    V2A: {
-      L(volt: Point2d) {
-        return applyDrift(LE.V2A.predict(volt), config.drift_l);
-      },
-      R(volt: Point2d) {
-        return applyDrift(RE.V2A.predict(volt), config.drift_r);
-      },
-    },
-    /** Conversion from angle (rad) to pixel (px) */
-    A2P: {
-      C(px: Point2d, distort = true) {
-        if (!CI.undistort) throw new Error("Wide camera not calibrated");
-        return CI.undistort.position([px], distort)[0];
-      },
-    },
-    /** Conversion from pixel (px) to angle (rad) */
-    P2A: {
-      C(px: Point2d, undistort = true) {
-        if (!CI.undistort) throw new Error("Wide camera not calibrated");
-        return CI.undistort.angular([px], undistort)[0];
-      },
-    },
-    /** Conversion from angle (rad) to homography matrix */
-    A2H: {
-      L(angle: Point2d) {
-        const H = createMat(Float64Array, [3, 3]);
-        return Object.assign(H, LE.A2H.predict(angle));
-      },
-      R(angle: Point2d) {
-        const H = createMat(Float64Array, [3, 3]);
-        return Object.assign(H, RE.A2H.predict(angle));
-      },
-    },
-  };
-}
-
-export type CoordinateConversions = ReturnType<typeof useCoordinateConversions>;
+// Coordinate conversions live in `./coordinate-conversions` (shared with the
+// orchestrator); re-exported here so existing `@lib/camera` imports keep working.
+export {
+  useCoordinateConversions,
+  type CoordinateConversions,
+} from "./coordinate-conversions";
 
 export function useUndistort(camera: Camera) {}
 

@@ -34,9 +34,9 @@ import MarkerDetection from "@modules/calibrate-extrinsic/MarkerDetection.vue";
 import {
   bilinearInterpolate,
   CORNER_OBJ_POINTS,
-  DictionaryTypeSelector,
   getInternalObjectPoints,
 } from "@lib/marker";
+import { DictionaryTypeSelector } from "@modules/calibrate-intrinsic/dictionary-selector";
 import rainbow from "@lib/swatch";
 
 const props = defineProps<{

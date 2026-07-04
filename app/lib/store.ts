@@ -3,245 +3,111 @@
 // This source code is licensed under the MIT license.
 // You may find the full license in project root directory.
 // -------------------------------------------------------
-import { TypedArray } from "core/types";
-import { ipcRenderer } from "electron";
-import { existsSync } from "node:fs";
-import {
-  mkdir,
-  readdir,
-  readFile,
-  writeFile,
-  stat,
-  rm,
-} from "node:fs/promises";
-import { resolve, dirname } from "node:path";
+//
+// Renderer-side config store client. Same public shape as the old direct-fs
+// `Store` (`open`/`clear`/`list`) so every existing consumer (camera.ts,
+// config.ts, calibrate-extrinsic) keeps working unchanged, but every read and
+// write now goes through the orchestrator's `store-hub` instead of touching
+// disk from the renderer directly. This retires the renderer/orchestrator
+// config dual-ownership hotspot (docs/refactor/orchestrator.md §4,
+// docs/refactor/async-reactive.md) — there is exactly one process writing
+// these files now, whichever window last edited it, and it's not this one.
+//
+// `open()` still returns a plain Vue-reactive object a module mutates
+// directly (`config.role = "L"`); any deep mutation queues a whole-document
+// write to the orchestrator on the next tick (same debounce as before). A
+// write from another window (or an orchestrator-internal session, e.g.
+// manage-cameras persisting a slider drag) applies onto the same object
+// reference via the `applying` guard below, so anything already depending on
+// it (templates, computed values) updates for free without a new subscribe.
+//
+// Values cross the wire via `Channel`'s structured-clone transport, not JSON
+// — bigint/Date/TypedArray survive natively, so unlike the old on-disk
+// format (`store-codec.ts`, still used orchestrator-side for the JSON file
+// itself) no codec is needed here.
+
 import { reactive, watch } from "vue";
-import { deepCopy } from "./util";
+import { connect } from "./orchestrator/client.js";
 
-const STORE: string = resolve(
-  await ipcRenderer.invoke("get-data-path"),
-  "store",
-);
+const keyOf = (segments: string | string[]) =>
+  (typeof segments === "string" ? [segments] : segments).join("/");
 
-process.stderr.write(`Store path: ${STORE}\n`);
-
-async function isDirectory(path: string) {
-  try {
-    const stats = await stat(path);
-    return stats.isDirectory();
-  } catch {
-    return false;
+/** Reconcile `target`'s keys/values to match `value` without replacing the
+ *  object reference — callers hold onto `target` directly. */
+function replaceInPlace(target: any, value: any): void {
+  if (Array.isArray(target) && Array.isArray(value)) {
+    target.length = 0;
+    target.push(...value);
+    return;
   }
-}
-
-const TypedArrayConstructors = {
-  Uint8Array,
-  Uint8ClampedArray,
-  Int8Array,
-  Uint16Array,
-  Int16Array,
-  Uint32Array,
-  Int32Array,
-  Float32Array,
-  Float64Array,
-  BigInt64Array,
-  BigUint64Array,
-};
-
-function ownProperties(value: any) {
-  let flag = false;
-  const result: Record<string, any> = {};
-  for (const key of Object.getOwnPropertyNames(value)) {
-    // Skip numeric indices (array-like indexed properties)
-    if (/^\d+$/.test(key)) continue;
-    const descriptor = Object.getOwnPropertyDescriptor(value, key);
-    // Only include writable, enumerable properties that were assigned
-    if (descriptor && descriptor.writable && descriptor.enumerable) {
-      result[key] = (value as any)[key];
-      flag = true;
-    }
-  }
-  return flag ? result : undefined;
-}
-
-function toBase64(buffer: ArrayBufferLike): string {
-  const bytes = new Uint8Array(buffer);
-  let binary = "";
-  for (let i = 0; i < bytes.byteLength; i++) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-  return btoa(binary);
-}
-
-function fromBase64(str: string): ArrayBuffer {
-  const binary = atob(str);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes.buffer;
-}
-
-type Deflated<T = {}> = T & {
-  type: string;
-  props?: Record<string, any>;
-};
-
-function replacer(key: string, value: any) {
-  if (typeof value === "bigint") {
-    return {
-      type: "bigint",
-      value: value.toString(),
-    };
-  }
-  if (typeof value !== "object" || value === null) return value;
-  if (value instanceof Date) {
-    return {
-      type: "Date",
-      date: value.toISOString(),
-    };
-  }
-  if (value instanceof ArrayBuffer) {
-    return {
-      type: "ArrayBuffer",
-      buffer: toBase64(value),
-      props: ownProperties(value),
-    };
-  }
-  for (const [k, c] of Object.entries(TypedArrayConstructors)) {
-    if (value instanceof c) {
-      return {
-        type: k,
-        buffer: toBase64((value as TypedArray).buffer),
-        props: ownProperties(value),
-      };
-    }
-  }
-  return value;
-}
-
-function reviver(key: string, value: any) {
-  if (typeof value !== "object" || value === null) return value;
-  const { type, props = {} } = value as Deflated;
-  if (type === "bigint") {
-    const { value: val } = value as Deflated<{ value: string }>;
-    return BigInt(val);
-  }
-  if (type === "Date") {
-    const { date } = value as Deflated<{ date: string }>;
-    return new Date(date);
-  }
-  if (type === "ArrayBuffer") {
-    const { buffer } = value as Deflated<{ buffer: string }>;
-    const arr = fromBase64(buffer);
-    Object.assign(arr, props);
-    return arr;
-  }
-  if (type in TypedArrayConstructors) {
-    const ctor = (TypedArrayConstructors as any)[type];
-    const { buffer } = value as Deflated<{ buffer: string }>;
-    const arr = new ctor(fromBase64(buffer));
-    Object.assign(arr, props);
-    return arr;
-  }
-  return value;
+  for (const k of Object.keys(target)) if (!(k in value)) delete target[k];
+  Object.assign(target, value);
 }
 
 export default class Store {
   private static readonly registry = new Map<string, WeakRef<object>>();
-  private static readonly origins = new WeakMap<Object, string>();
-  private static track<T extends object, R extends object = Partial<T>>(
-    obj: Partial<T>,
-    path: string,
-  ) {
-    const tracked = reactive(obj);
-    let writePending = false;
-    const queueWrite = () => {
-      if (writePending) return;
-      writePending = true;
-      process.nextTick(() => {
-        writePending = false;
-        this.save(tracked, path);
-      });
-    };
-    watch(() => tracked, queueWrite, { deep: true });
-    this.registry.set(path, new WeakRef(tracked));
-    this.origins.set(tracked, path);
-    return tracked as R;
-  }
-  static resolve(tracked: Object) {
-    const path = this.origins.get(tracked);
-    if (path !== undefined) return path;
-    console.error("Object is not a store instance:", tracked);
-    throw new Error("Object is not a store instance");
-  }
+  private static readonly origins = new WeakMap<object, string[]>();
+
   static async open<
     T extends object,
     R extends object = T extends Array<infer _> ? T : Partial<T>,
   >(segments: string | string[], fallback: R = {} as R): Promise<R> {
-    if (typeof segments === "string") segments = [segments];
-    const path = resolve(STORE, ...segments) + ".json";
-    if (this.registry.has(path)) {
-      const entry = this.registry.get(path)!.deref();
-      if (entry !== undefined) return entry as R;
-      else this.registry.delete(path);
+    const path = typeof segments === "string" ? [segments] : segments;
+    const key = keyOf(path);
+    const entry = this.registry.get(key);
+    if (entry) {
+      const cached = entry.deref();
+      if (cached !== undefined) return cached as R;
+      this.registry.delete(key);
     }
-    if (!existsSync(path)) return this.track<T, R>(deepCopy(fallback), path);
-    if (await isDirectory(path))
-      throw new Error(`Store ${path} is a directory`);
-    // If read failed, error should propagate out.
-    const file = await readFile(path);
-    try {
-      return this.track<T, R>(JSON.parse(file.toString(), reviver), path);
-    } catch (error) {
-      process.stderr.write(`Error loading store data: ${error}\n`);
-      return this.track<T, R>(deepCopy(fallback), path);
-    }
+
+    const ch = await connect();
+    const initial = await ch.request<R>("store:read", { path, fallback });
+    const tracked = reactive(initial) as R;
+
+    // Guards the server-echo path below from re-triggering the write queue
+    // it's applying — an echo isn't a new local edit.
+    let applying = false;
+    let writePending = false;
+    const queueWrite = () => {
+      if (applying || writePending) return;
+      writePending = true;
+      process.nextTick(() => {
+        writePending = false;
+        void ch.request("store:write", { path, value: tracked });
+      });
+    };
+    watch(() => tracked, queueWrite, { deep: true });
+    ch.on(`store:${key}`, (value: R) => {
+      applying = true;
+      try {
+        replaceInPlace(tracked, value);
+      } finally {
+        applying = false;
+      }
+    });
+
+    this.registry.set(key, new WeakRef(tracked));
+    this.origins.set(tracked, path);
+    return tracked as R;
   }
+
   static clear(store: object): Promise<void>;
   static clear(...segments: string[]): Promise<void>;
-  static async clear(seg: string | object, ...segments: string[]) {
-    const path =
-      typeof seg === "object"
-        ? this.resolve(seg)
-        : resolve(STORE, seg, ...segments);
-    // clear object in registry, if exists
-    if (this.registry.has(path)) {
-      const entry = this.registry.get(path)!.deref();
-      if (entry !== undefined) {
-        for (const key of Object.keys(entry)) {
-          delete (entry as any)[key];
-        }
-      }
+  static async clear(seg: string | object, ...segments: string[]): Promise<void> {
+    const path = typeof seg === "object" ? this.origins.get(seg) : [seg, ...segments];
+    if (!path) {
+      console.error("Object is not a store instance:", seg);
+      throw new Error("Object is not a store instance");
     }
-    // remove file
-    try {
-      await rm(path, { force: true });
-    } catch (error) {
-      process.stderr.write(`Error removing store data: ${error}\n`);
-    }
+    const entry = this.registry.get(keyOf(path))?.deref();
+    if (entry) for (const k of Object.keys(entry)) delete (entry as any)[k];
+    const ch = await connect();
+    await ch.request("store:clear", { path });
   }
-  static async list(...segments: string[]) {
-    const path = resolve(STORE, ...segments);
-    if (!existsSync(path)) return [];
-    if (!(await isDirectory(path)))
-      throw new Error(`Store ${path} is not a directory`);
-    const entries = await readdir(path);
-    const files = await Promise.all(
-      entries.map(async (entry) => {
-        const fullPath = resolve(path, entry);
-        if (await isDirectory(fullPath)) return null;
-        return entry.replace(/\.json$/, "");
-      }),
-    );
-    return files.filter((f): f is string => f !== null);
-  }
-  static async save(data: any, path?: string) {
-    path ??= this.resolve(data);
-    const dir = dirname(path);
-    if (!existsSync(dir)) {
-      await mkdir(dir, { recursive: true });
-    }
-    await writeFile(path, JSON.stringify(data, replacer, 2));
+
+  static async list(...segments: string[]): Promise<string[]> {
+    const ch = await connect();
+    return ch.request<string[]>("store:list", { path: segments });
   }
 }

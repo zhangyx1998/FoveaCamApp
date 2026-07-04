@@ -1,21 +1,31 @@
+<!-- -------------------------------------------------
+Copyright (c) 2025 Yuxuan Zhang, dev@z-yx.cc
+This source code is licensed under the MIT license.
+You may find the full license in project root directory.
+--------------------------------------------------- -->
+<!--
+  manage-cameras, migrated to the orchestrator. The orchestrator owns the
+  cameras; this shell binds the `manage-cameras` session and renders a thin
+  CameraConfig per discovered camera. No `core`/hardware access in the renderer.
+-->
 <script setup lang="ts">
-import { markRaw, onUnmounted } from "vue";
-
-import useCameras from "@lib/camera";
+import { onMounted } from "vue";
+import { useSession } from "@lib/orchestrator/client";
+import { manageCameras } from "./contract";
 import CameraConfig from "./CameraConfig.vue";
 
-const cameras = await useCameras();
+const session = useSession(manageCameras, "manage-cameras");
 
-onUnmounted(() => {
-    cameras.release();
-});
+onMounted(() => session.call("refresh", undefined));
 </script>
 
 <template>
     <div class="cameras">
         <CameraConfig
-            v-for="camera in cameras.values()"
-            :camera="markRaw(camera)"
+            v-for="cam in session.telemetry.list"
+            :key="cam.serial"
+            :serial="cam.serial"
+            :session="session"
             style="width: 30vw"
         />
     </div>

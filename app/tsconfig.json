@@ -1,15 +1,17 @@
 {
   "compilerOptions": {
-    "baseUrl": ".",
     "paths": {
       "@lib/*": [
-        "lib/*"
+        "./lib/*"
       ],
       "@src/*": [
-        "src/*"
+        "./src/*"
       ],
       "@modules/*": [
-        "modules/*"
+        "./modules/*"
+      ],
+      "@orchestrator/*": [
+        "./orchestrator/*"
       ],
     },
     "target": "ESNext",
@@ -32,6 +34,7 @@
     "src",
     "lib",
     "modules",
+    "orchestrator",
     "scripts",
     "*.d.ts"
   ],

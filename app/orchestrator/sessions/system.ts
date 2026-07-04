@@ -1,0 +1,68 @@
+// ------------------------------------------------------
+// Copyright (c) 2025 Yuxuan Zhang, dev@z-yx.cc
+// This source code is licensed under the MIT license.
+// You may find the full license in project root directory.
+// -------------------------------------------------------
+//
+// The always-on system session. Process-wide concerns and the `core` smoke
+// test; also the cross-process camera handoff (`releaseCameras`, §12.1 C2) for
+// renderer modules that still open cameras directly.
+
+import { defineSession, type ServerSession } from "../runtime.js";
+import { system, type PerfSnapshot } from "@lib/orchestrator/contracts";
+import { listCameraInfo } from "../camera.js";
+import { releaseAll } from "../registry.js";
+import { writeCounts } from "../store-hub.js";
+import { startLoopLagProbe } from "@lib/util/rolling";
+
+const LOOP_LAG_PUBLISH_INTERVAL_MS = 1000; // ≤ 1 Hz per the perf-substrate constraint
+
+/**
+ * Sessions to force-idle before the registry hands cameras back (§12.3 R4).
+ * `frameStats` aggregates every connected channel's per-topic frame counters
+ * (`Hub.frameStatsSnapshot`) — kept as a callback rather than passing `Hub`
+ * itself so this session stays easy to unit-test against a stub.
+ */
+export function systemSession(
+  cameraOwning: () => Iterable<{ dispose(): void }>,
+  frameStats: () => Record<
+    string,
+    { offered: number; sent: number; coalesced: number; bytes: number }
+  >,
+): ServerSession<typeof system> {
+  return defineSession("system", system, (s) => {
+    // Never stopped: `system` is the always-on session (no `activate`/`idle`)
+    // — this probe lives for the process's whole lifetime, same as the
+    // process itself.
+    const loopLag = startLoopLagProbe();
+    setInterval(() => {
+      s.telemetry({ loopLag: { mean: loopLag.stats.mean, max: loopLag.stats.max } });
+      loopLag.stats.resetMax();
+    }, LOOP_LAG_PUBLISH_INTERVAL_MS);
+
+    return {
+      commands: {
+        listCameras: listCameraInfo,
+        async releaseCameras() {
+          // Session interest is the primary lifetime authority: idle every
+          // camera-owning session first (orderly lease release) so a renderer
+          // needing exclusive access isn't racing an async idle release.
+          // `registry.releaseAll()` is a backstop for any handle outside
+          // session control. See §12.1 C2 / §12.3 R4.
+          for (const c of cameraOwning()) c.dispose();
+          await releaseAll();
+        },
+        async perfSnapshot(): Promise<PerfSnapshot> {
+          return {
+            timestamp: new Date().toISOString(),
+            orchestrator: {
+              loopLag: { mean: loopLag.stats.mean, max: loopLag.stats.max },
+            },
+            frames: frameStats(),
+            storeHub: writeCounts(),
+          };
+        },
+      },
+    };
+  });
+}

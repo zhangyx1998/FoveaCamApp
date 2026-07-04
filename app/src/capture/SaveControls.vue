@@ -6,9 +6,14 @@ import { validateWritablePath } from "@lib/util/fs";
 import { FontAwesomeIcon as Icon } from "@fortawesome/vue-fontawesome";
 import { faSave, faTrash } from "@fortawesome/free-solid-svg-icons";
 import Capture from ".";
+import { NoCheck } from "@lib/util/vue";
 const props = defineProps({
   capture: {
-    type: Capture,
+    // `instanceof Capture` still holds (the facade is a real `Capture`
+    // instance), but its shape changed enough that a plain `type: Capture`
+    // validator adds no value here — same `NoCheck` convention `StreamView.vue`
+    // uses for non-primitive props.
+    type: NoCheck<Capture>(),
     required: true,
   },
   data_ready: {

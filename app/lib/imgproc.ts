@@ -7,7 +7,7 @@ import { Frame, Stream } from "core/Aravis";
 import { convertType, cvtColor, Mat } from "core/Vision";
 import { createMat } from "./mat";
 import abortable from "./abortable.next";
-import { significantBits } from "@src/record/stream";
+import { significantBits } from "./util/dtype";
 
 export function stack(stream: Stream<Frame>, count: number) {
   return abortable(async (abortable) => {

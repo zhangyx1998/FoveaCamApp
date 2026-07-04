@@ -1,70 +1,68 @@
 <script setup lang="ts">
-import { CaptureData, current_capture, Resource, SaveState } from ".";
+import { current_capture } from ".";
 import SaveControls from "./SaveControls.vue";
 import HorizontalDivision from "@src/layouts/HorizontalDivision.vue";
-import {
-  computed,
-  onUnmounted,
-  reactive,
-  ref,
-  shallowReactive,
-  shallowRef,
-} from "vue";
+import { computed, onMounted, ref } from "vue";
 import PreviewMeta from "./preview-meta/index.vue";
 import PreviewImage from "./preview-image/index.vue";
 import { isEmpty } from "@lib/util";
 import SaveReport from "./SaveReport.vue";
+
 const emit = defineEmits(["exit"]);
 const capture = current_capture.value;
 if (isEmpty(capture))
   throw new Error("Overlay must be used within a Capture context");
+// Re-bind to a fresh `const` so the non-null narrowing above survives into
+// the function declarations below (TS doesn't narrow `capture` itself across
+// a hoisted function boundary).
+const cap = capture;
 
-const data = shallowReactive<CaptureData>(new Map());
+// Resource names present in this capture pass, in whatever order the server
+// first reported them (`capture_meta` is a plain object, so this only needs
+// to react to key-set changes — Vue's reactivity on `Object.keys` already
+// does that for a reactive object).
+function* entries() {
+  const meta = cap.session.telemetry.capture_meta;
+  for (const name of Object.keys(meta)) {
+    const m = meta[name];
+    if (!isEmpty(m)) yield { name, meta: m as any };
+  }
+}
+
+const meta_entries = computed(() => [...entries()].map(({ name, meta }) => [name, meta] as const));
+
+const image_entries = computed(() =>
+  [...entries()]
+    .map(({ name, meta }) => {
+      // Frame channel(s) for this resource — indexed iff its meta is an
+      // array (a multi-set-point capture), matching the server's exact
+      // `capture:<name>` / `capture:<name>#<i>` naming (see `capture.ts`).
+      const image = Array.isArray(meta)
+        ? meta.map((_, i) => cap.session.frame(`capture:${name}#${i}`).value)
+        : cap.session.frame(`capture:${name}`).value;
+      return [name, image] as const;
+    })
+    .toReversed(),
+);
+
+// Note: the server-side capture isn't cancellable mid-flight (unlike the old
+// renderer-local `abortable` provider chain) — closing the overlay before
+// this resolves just stops watching; the pass still completes and its
+// result sits server-side until the next save/discard/run.
 const data_ready = ref(false);
-const capture_task = capture.capture(data);
-capture_task.then((d) => (data_ready.value = true));
-onUnmounted(() => capture_task.abort());
+onMounted(async () => {
+  await capture.run();
+  data_ready.value = true;
+});
 
-const save_state = shallowRef<SaveState | null>(null);
+const save_state = ref<Promise<void> | null>(null);
 
-function save(path: string, img_fmt: string) {
+function save(path: string, img_format: string) {
   if (save_state.value !== null) return;
-  if (isEmpty(capture)) return;
-  const state = (save_state.value = capture.save(path, data, img_fmt));
-  Promise.allSettled([...state.values()].flat()).then(() => emit("exit"));
+  const p = cap.save(path, img_format);
+  save_state.value = p;
+  p.then(() => emit("exit"));
 }
-
-function* dataEntries() {
-  for (const [name, res] of data.entries()) {
-    if (!isEmpty(res)) yield { name, res };
-  }
-}
-
-const meta_entries = computed(() => {
-  const entries: [string, any][] = [];
-  for (const { name, res } of dataEntries()) {
-    if (Array.isArray(res)) {
-      entries.push([name, res.map((r) => r.meta)]);
-    } else {
-      entries.push([name, res.meta]);
-    }
-  }
-  console.log("meta_entries", entries);
-  return entries;
-});
-
-const image_entries = computed(() => {
-  const entries: [string, any][] = [];
-  for (const { name, res } of dataEntries()) {
-    if (Array.isArray(res)) {
-      entries.push([name, res.map((r) => r.image)]);
-    } else {
-      entries.push([name, res.image]);
-    }
-  }
-  console.log("image_entries", entries);
-  return entries.toReversed();
-});
 </script>
 
 <template>

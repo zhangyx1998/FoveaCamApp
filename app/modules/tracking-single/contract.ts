@@ -1,0 +1,69 @@
+// ------------------------------------------------------
+// Copyright (c) 2025 Yuxuan Zhang, dev@z-yx.cc
+// This source code is licensed under the MIT license.
+// You may find the full license in project root directory.
+// -------------------------------------------------------
+//
+// Typed boundary for the single-target tracking session. The orchestrator owns
+// the calibrated L/C/R triple, runs the KCF tracker on the center stream and the
+// actuation loop (both frame/timer-driven off the renderer's UI loop), and
+// publishes L/C/R preview frames plus tracker/voltage telemetry. The renderer is
+// a thin client: it pushes the actuation/tracker parameters as state, steers or
+// engages the tracker via commands, and renders the frames + overlays.
+
+import { cmd, defineContract } from "@lib/orchestrator/protocol";
+import type { Point2d, Rect, Size } from "core/Geometry";
+import type { Pos } from "@lib/controller-codec";
+import type { Stat } from "@lib/orchestrator/contracts";
+
+export const tracking = defineContract({
+  state: {
+    // Actuation parameters (renderer resolves and pushes concrete values).
+    baseline: 200, // stereo baseline (mm)
+    verge: 0, // verge slider (0 → ∞ distance)
+    shift: 0, // vertical shift (deg)
+    // Display parameters.
+    zoom: 9, // fovea (sliced center) magnification
+    wrap_enable: true, // perspective-wrap L/R foveae into alignment
+    view: "sliced" as "sliced" | "diff" | "depth", // `center` frame content
+    depth_window_inv: 0, // depth-view near/far window (0 → ∞)
+    // Tracker parameters (renderer resolves defaults; concrete pixels here).
+    tracker_w: 64,
+    tracker_h: 64,
+    pad_x: 64,
+    pad_y: 64,
+    lost_tolerance: 10, // consecutive misses before giving up
+    pred_buffer_max: 10, // kinematic prediction sample window
+  },
+  telemetry: {
+    ready: false as boolean, // calibrated triple leased + conversions loaded
+    active: false as boolean, // KCF tracker engaged
+    size: { width: 0, height: 0 } as Size, // center frame size (renderer clamps)
+    bbox: null as Rect | null, // current tracker box (center-frame px)
+    target: { x: 0, y: 0 } as Point2d, // current (predicted) target (center px)
+    volt: { L: { x: 0, y: 0 }, R: { x: 0, y: 0 } } as { L: Pos; R: Pos },
+    // Control-path latency (perf substrate, docs/refactor/orchestrator.md
+    // §7.3 item 2), published at the same throttle as `volt`. `trackMs`:
+    // onView entry -> tracker update done. `actuateMs`: c.actuate() round
+    // trip. `frameAgeAtActuate`: time since the frame that produced the
+    // current target, measured when that target is actually written out.
+    perf: {
+      trackMs: { mean: 0, max: 0 } as Stat,
+      actuateMs: { mean: 0, max: 0 } as Stat,
+      frameAgeAtActuate: { mean: 0, max: 0 } as Stat,
+    },
+  },
+  // L/C/R are the processed previews (C undistorted, L/R perspective-wrapped);
+  // `center` is the magnified fovea crop around the target.
+  frames: ["L", "C", "R", "center"] as const,
+  commands: {
+    /** Engage the KCF tracker centered at a center-frame pixel. */
+    startTracker: cmd<Point2d>(),
+    /** Disengage the tracker (mirrors hold at the last target). */
+    releaseTracker: cmd(),
+    /** Steer the target directly (user drag); disengages the tracker. */
+    steer: cmd<Point2d>(),
+  },
+});
+
+export type TrackingContract = typeof tracking;

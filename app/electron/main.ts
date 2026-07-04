@@ -3,7 +3,15 @@
 // This source code is licensed under the MIT license.
 // You may find the full license in project root directory.
 // -------------------------------------------------------
-import { app, BrowserWindow, shell, ipcMain } from "electron";
+import {
+  app,
+  BrowserWindow,
+  shell,
+  ipcMain,
+  utilityProcess,
+  MessageChannelMain,
+  type UtilityProcess,
+} from "electron";
 // import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -106,7 +114,46 @@ function customizeApp() {
 // IPC handler to provide DATA path to renderer
 ipcMain.handle("get-data-path", () => DATA);
 
-app.whenReady().then(customizeApp).then(createWindow);
+// ---- Orchestrator process -------------------------------------------------
+// A utilityProcess that owns `core` (cameras, vision, control, hardware I/O).
+// Its event loop is independent of any renderer's render loop. Main only brokers
+// a direct MessagePort between each renderer and the orchestrator; frames and
+// commands then flow point-to-point without routing through here.
+let orchestrator: UtilityProcess | null = null;
+function startOrchestrator() {
+  const entry = path.join(DIR, "orchestrator.js");
+  orchestrator = utilityProcess.fork(entry, [], {
+    stdio: "inherit",
+    // The orchestrator reads/writes the same config store as the renderer.
+    env: { ...process.env, FOVEA_DATA_PATH: DATA },
+  });
+  orchestrator.on("exit", (code) => {
+    console.warn("Orchestrator exited:", code);
+    orchestrator = null;
+    // Every renderer's pending orchestrator requests would otherwise hang
+    // forever (the crashed process can't reply) — notify them to reject
+    // in-flight calls. See docs/refactor/orchestrator.md §12.1 C5.
+    for (const w of BrowserWindow.getAllWindows())
+      w.webContents.send("orchestrator:down");
+  });
+}
+
+// A renderer asks to connect; hand both ends of a fresh channel out.
+ipcMain.on("orchestrator:connect", (event) => {
+  if (!orchestrator) startOrchestrator();
+  const { port1, port2 } = new MessageChannelMain();
+  orchestrator!.postMessage(null, [port1]);
+  event.sender.postMessage("orchestrator:port", null, [port2]);
+});
+
+app.whenReady().then(customizeApp).then(startOrchestrator).then(createWindow);
+
+// Terminate the orchestrator on quit (SIGTERM → its shutdown releases cameras,
+// serial, and the native module). Without this it can outlive the app.
+app.on("before-quit", () => {
+  orchestrator?.kill();
+  orchestrator = null;
+});
 
 app.on("window-all-closed", () => {
   // On macOS it is common for applications and their menu bar

@@ -1,4 +1,5 @@
 import type { TypedArray } from "core/types";
+import type { PixelFormat } from "core/Aravis";
 
 export type Dtype =
   | "U8"
@@ -41,6 +42,20 @@ export function dtypeOf(mat: TypedArray): Dtype {
         `Unknown TypedArray type: ${(mat as any).constructor?.name}`,
       );
   }
+}
+
+/**
+ * Effective bit depth of the pixel data. 12p formats carry 12 significant bits
+ * in a 16-bit container, so consumers must scale by 4095 rather than 65535.
+ * Moved here (from `src/record/stream.ts`) so it — and anything that imports
+ * it, e.g. `lib/imgproc.ts`'s `stack()` — stays reachable from the
+ * orchestrator, which must not pull in Vue (`src/record/stream.ts` imports
+ * `FreqMeter` from `@lib/util/perf.ts`, a Vue-touching file).
+ */
+export function significantBits(format: PixelFormat): number {
+  if (format.endsWith("12p")) return 12;
+  if (format.endsWith("16")) return 16;
+  return 8;
 }
 
 /** TypedArray constructor keyed by short dtype name. */
