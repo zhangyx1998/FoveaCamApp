@@ -78,6 +78,9 @@ namespace Command {
 PACKED(MirrorPosition) { uint16_t ch[4]; };
 
 typedef uint32_t Microseconds;
+// Wide MCU-clock timestamp (µs); wraps only at the firmware's uint64 counter
+// limit, keeping wrap handling entirely firmware-side (see Global::time).
+typedef uint64_t Timestamp;
 
 FIXED_SIZE_PACKET(Actuate, CMD_ACTUATE) {
   MirrorPosition left;
@@ -96,6 +99,51 @@ FIXED_SIZE_PACKET(Trigger, CMD_TRIGGER) {
 };
 
 static_assert(sizeof(Trigger) == sizeof(Microseconds));
+
+// Bitmask for Frame::cameras. C (center) is reserved: the CAM0 port has no
+// GPIO cable today (camera-side size constraints) — firmware REJects a mask
+// containing CAM_C until one is connected.
+typedef enum CameraMask : uint8_t {
+  CAM_NONE = 0,
+  CAM_C = 1,
+  CAM_L = 2,
+  CAM_R = 4,
+} CameraMask;
+
+// SET request: create/update/terminate a named, continuously-updatable
+// mirror-position target. Single-phase (ACK/REJ only, no FIN). UPDATE is
+// normally sent with seq == 0 (fire-and-forget, ~1kHz). Named `MirrorStream`
+// rather than `Stream` to avoid colliding with Arduino's own `Stream` class
+// (firmware/src/*.cpp transitively include <Arduino.h>).
+FIXED_SIZE_PACKET(MirrorStream, CMD_STREAM) {
+  typedef enum Op : uint8_t { CREATE = 0, UPDATE = 1, TERMINATE = 2 } Op;
+  Op op;
+  uint8_t id;                   // stream id, host-chosen (0..N-1)
+  MirrorPosition left;          // target; ignored by TERMINATE
+  MirrorPosition right;
+};
+
+// GET request: triggered-capture. Two-phase — ACK (queue position, this
+// revision's FrameAccepted payload) then FIN (FrameResult) or REJ at either
+// phase (duplicate stream, unknown/out-of-range stream, queue full, strobe
+// timeout).
+FIXED_SIZE_PACKET(Frame, CMD_FRAME) {
+  uint8_t stream;        // stream the mirrors follow during this exposure
+  uint8_t cameras;        // CameraMask bitmask; default CAM_L | CAM_R
+  Microseconds pulse;    // trigger pulse width
+};
+
+// ACK payload for Frame: position in the per-stream FIFO queue (0 = next).
+PACKED(FrameAccepted) { uint8_t queue_position; };
+
+// FIN payload for Frame: latched at exposure start (strobe rising edge).
+PACKED(FrameResult) {
+  uint8_t stream;
+  Timestamp t_trigger;  // MCU us: trigger rise
+  Timestamp t_exposure; // MCU us: strobe rise (exposure start)
+  MirrorPosition left;  // latched at exposure start
+  MirrorPosition right;
+};
 
 } // namespace Command
 

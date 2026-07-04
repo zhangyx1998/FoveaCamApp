@@ -19,6 +19,8 @@ template <> std::string convert(const Protocol::Method &method) {
     return "ACK";
   case Protocol::Method::REJ:
     return "REJ";
+  case Protocol::Method::FIN:
+    return "FIN";
   case Protocol::Method::SYN:
     return "SYN";
   default:
@@ -42,6 +44,8 @@ template <> Protocol::Method convert(const std::string &method) {
     return Protocol::Method::ACK;
   if (method == "REJ")
     return Protocol::Method::REJ;
+  if (method == "FIN")
+    return Protocol::Method::FIN;
   if (method == "SYN")
     return Protocol::Method::SYN;
 #if defined(__EXCEPTIONS) || defined(__cpp_exceptions)
@@ -69,6 +73,10 @@ template <> std::string convert(const Protocol::Property &property) {
     return "CFG_LPF";
   case Protocol::Property::CFG_BIAS:
     return "CFG_BIAS";
+  case Protocol::Property::CMD_STREAM:
+    return "CMD_STREAM";
+  case Protocol::Property::CMD_FRAME:
+    return "CMD_FRAME";
   case Protocol::Property::CMD_ACTUATE:
     return "CMD_ACTUATE";
   case Protocol::Property::CMD_TRIGGER:
@@ -102,6 +110,10 @@ template <> Protocol::Property convert(const std::string &property) {
     return Protocol::Property::CFG_LPF;
   if (property == "CFG_BIAS")
     return Protocol::Property::CFG_BIAS;
+  if (property == "CMD_STREAM")
+    return Protocol::Property::CMD_STREAM;
+  if (property == "CMD_FRAME")
+    return Protocol::Property::CMD_FRAME;
   if (property == "CMD_ACTUATE")
     return Protocol::Property::CMD_ACTUATE;
   if (property == "CMD_TRIGGER")

@@ -10,14 +10,26 @@
 #include <core_pins.h>
 
 #include "Board.h"
+#include "Capture.h"
 #include "Global.h"
 #include "MEMS.h"
+#include "Streams.h"
 #include "convert.h"
 
-static void send(Protocol::RawPacket &packet) {
+void Protocol::send(Protocol::RawPacket &packet) {
+  // seq == 0 fire-and-forget: firmware performs the action but stays silent
+  // (see Protocol::Sequence doc comment). Only applies to responses sent
+  // through this helper — LOG SYN pushes bypass it entirely.
+  if (packet.header().sequence == 0)
+    return;
   if (COBS::tx.encode(packet.finalize()))
     Serial.write(COBS::tx.data(), COBS::tx.size());
 }
+
+// Unqualified `send(packet)` below resolves to Protocol::send via
+// argument-dependent lookup (packet's type, Protocol::RawPacket, lives in
+// namespace Protocol) — no local wrapper needed.
+using Protocol::send;
 
 void Protocol::reject(const Sequence &seq, Property p,
                       const std::string &reason) {
@@ -28,6 +40,13 @@ void Protocol::reject(const Sequence &seq, Property p,
 
 #define HANDLE_GET(PACKET)                                                     \
   template <> void Packet::PACKET::Prototype::GET(const Protocol::Sequence &seq)
+
+// Payload-carrying GET (CMD_FRAME is a request with an inflated argument,
+// unlike the read-only GETs above).
+#define HANDLE_GET_PAYLOAD(PACKET)                                             \
+  template <>                                                                 \
+  void Packet::PACKET::Prototype::GET(const Protocol::Sequence &seq,          \
+                                      Inflated payload)
 
 #define HANDLE_SET(PACKET)                                                     \
   template <>                                                                  \
@@ -43,6 +62,49 @@ void Protocol::reject(const Sequence &seq, Property p,
   template <>                                                                  \
   void Packet::PACKET::Prototype::SYN(const Protocol::Sequence &seq,           \
                                       Inflated payload)
+
+// --- Non-blocking Actuate/Trigger completion (Protocol v2 §3.3) ---
+// Both commands are now two-phase (ACK immediate, FIN after a timed delay)
+// instead of blocking in delayMicroseconds(). Only one of each may be
+// in-flight at a time — matches the pre-v2 blocking behavior, where a second
+// request simply couldn't arrive until the first's delay elapsed; here it is
+// REJected instead of silently queued (callers wanting overlap should move
+// to CMD_STREAM, which is exactly what this refactor is for).
+namespace {
+
+bool actuatePending = false;
+Protocol::Sequence actuateSeq = 0;
+Packet::Command::Actuate actuateResult{};
+Packet::Command::Timestamp actuateDue = 0;
+
+bool triggerPending = false;
+Protocol::Sequence triggerSeq = 0;
+Packet::Command::Trigger triggerResult{};
+Packet::Command::Timestamp triggerDue = 0;
+
+} // namespace
+
+static void cancelPendingActuate(const char *reason) {
+  if (!actuatePending)
+    return;
+  actuatePending = false;
+  Packet::Command::Actuate::reject(actuateSeq, reason);
+}
+
+static void cancelPendingTrigger(const char *reason) {
+  if (!triggerPending)
+    return;
+  triggerPending = false;
+  Packet::Command::Trigger::reject(triggerSeq, reason);
+}
+
+namespace Protocol {
+// Advances the non-blocking Actuate/Trigger completion timers; defined
+// below, forward-declared here (and again, separately, in Firmware.cpp)
+// since out-of-line `Protocol::tick()` requires a prior in-namespace
+// declaration in *this* translation unit.
+void tick();
+} // namespace Protocol
 
 HANDLE_GET(System::Info) {
   auto packet = Create::ACK(seq);
@@ -97,6 +159,16 @@ HANDLE_SET(System::Enable) {
   } else if (!payload.enable && Global::system_enabled) {
     // Disable system
     VERB("Disabling system");
+    // Open question (docs/refactor/synced-capture.md §8.3), resolved: streams
+    // do NOT survive disable. The MCU clock resets on the next enable (see
+    // above), invalidating any host-side clock-delta calibration anyway, so
+    // keeping stale stream targets around buys nothing; REJect in-flight and
+    // queued frame requests too, since their mirror targets are about to be
+    // wiped and MEMS is about to be powered down.
+    Capture::cancelAll("System disabled");
+    Streams::clear();
+    cancelPendingActuate("System disabled");
+    cancelPendingTrigger("System disabled");
     MEMS::disable();
     delay(1);
     Board::enable.write(Board::DISABLE);
@@ -156,26 +228,115 @@ HANDLE_SET(Command::Actuate) {
     reject(seq, "Cannot perform action: system is not enabled");
     return;
   }
-  auto res = payload;
+  if (actuatePending) {
+    reject(seq, "An actuate request is already pending");
+    return;
+  }
   MEMS::set(MEMS::Device::LEFT, payload.left);
   MEMS::set(MEMS::Device::RIGHT, payload.right);
   MEMS::apply();
-  delayMicroseconds(payload.settle_time);
-  res.complete_time = Global::time.now();
+  actuateResult = payload;
+  actuateSeq = seq;
+  actuateDue = Global::time.now() + payload.settle_time;
+  actuatePending = true;
   auto packet = Create::ACK(seq);
-  deflate(res, packet);
+  deflate(payload, packet);
   send(packet);
 }
 
 HANDLE_SET(Command::Trigger) {
-  auto res = payload;
+  if (triggerPending) {
+    reject(seq, "A trigger request is already pending");
+    return;
+  }
   for (auto &cam : Board::camera)
     cam.output.write(HIGH);
-  delayMicroseconds(payload.duration);
-  for (auto &cam : Board::camera)
-    cam.output.write(LOW);
-  res.timestamp = Global::time.now();
+  triggerResult = payload;
+  triggerSeq = seq;
+  triggerDue = Global::time.now() + payload.duration;
+  triggerPending = true;
   auto packet = Create::ACK(seq);
-  deflate(res, packet);
+  deflate(payload, packet);
   send(packet);
 }
+
+HANDLE_SET(Command::MirrorStream) {
+  if (!Global::system_enabled) {
+    reject(seq, "Cannot perform action: system is not enabled");
+    return;
+  }
+  bool ok;
+  const char *reason;
+  switch (payload.op) {
+  case Payload::CREATE:
+    ok = Streams::create(payload.id, payload.left, payload.right);
+    reason = "Stream id out of range, or already exists";
+    break;
+  case Payload::UPDATE:
+    ok = Streams::update(payload.id, payload.left, payload.right);
+    reason = "Unknown stream id";
+    break;
+  case Payload::TERMINATE:
+    ok = Streams::terminate(payload.id);
+    reason = "Unknown stream id, or a frame request is pending on it";
+    break;
+  default:
+    ok = false;
+    reason = "Unknown stream operation";
+    break;
+  }
+  if (!ok) {
+    reject(seq, reason);
+    return;
+  }
+  auto packet = Create::ACK(seq);
+  deflate(payload, packet);
+  send(packet);
+}
+
+HANDLE_GET_PAYLOAD(Command::Frame) {
+  if (!Global::system_enabled) {
+    reject(seq, "Cannot perform action: system is not enabled");
+    return;
+  }
+  // `::` forced: this specialization's "home" is Protocol::FixedSizePacket
+  // (Prototype's actual type), so unqualified `Packet` would otherwise
+  // resolve to the nested Protocol::Packet<Property> template — see the
+  // Protocol::tick() comment above for the general issue.
+  ::Packet::Command::FrameAccepted accepted;
+  const char *reason = nullptr;
+  if (!Capture::enqueue(seq, payload.stream, payload.cameras, payload.pulse,
+                       accepted, reason)) {
+    reject(seq, reason);
+    return;
+  }
+  auto packet = Create::ACK(seq);
+  packet.setData(&accepted, sizeof(accepted));
+  send(packet);
+}
+
+// Advances the non-blocking Actuate/Trigger completion timers; called from
+// loop() alongside Streams::tick() and Capture::tick(). Defined with the
+// `Protocol::` qualifier, so this function is itself a member of namespace
+// Protocol — unqualified `Packet` inside its body would therefore resolve to
+// the nested `Protocol::Packet<Property>` template, not the top-level
+// `::Packet` namespace from Packet.h. Force the intended one with `::`.
+void Protocol::tick() {
+  if (actuatePending && Global::time.now() >= actuateDue) {
+    actuatePending = false;
+    actuateResult.complete_time = Global::time.now();
+    auto packet = ::Packet::Command::Actuate::Create::FIN(actuateSeq);
+    ::Packet::Command::Actuate::deflate(actuateResult, packet);
+    send(packet);
+  }
+  if (triggerPending && Global::time.now() >= triggerDue) {
+    triggerPending = false;
+    for (auto &cam : Board::camera)
+      cam.output.write(LOW);
+    triggerResult.timestamp = Global::time.now();
+    auto packet = ::Packet::Command::Trigger::Create::FIN(triggerSeq);
+    ::Packet::Command::Trigger::deflate(triggerResult, packet);
+    send(packet);
+  }
+}
+

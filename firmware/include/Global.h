@@ -25,7 +25,7 @@ extern TX tx;
 
 namespace Global {
 
-extern Time<micros> time;
+extern Time<micros, uint64_t> time;
 
 extern bool system_enabled;
 extern Packet::Config::Log::Level log_level;

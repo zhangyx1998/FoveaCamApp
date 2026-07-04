@@ -17,7 +17,13 @@ TX tx;
 
 namespace Global {
 
-Time<micros> time;
+// Wide (uint64) counter, narrow (uint32, matching micros()'s own return
+// type) anchor — see docs/refactor/synced-capture.md §9 FW1. update()'s
+// elapsed-since-anchor subtraction stays a uint32 wraparound-correct delta;
+// only the accumulating counter is widened, so wrap handling stays entirely
+// here (never leaks into Protocol::Timestamp math on the host or firmware
+// side).
+Time<micros, uint64_t> time;
 
 bool system_enabled = false;
 

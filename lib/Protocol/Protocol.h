@@ -19,8 +19,12 @@ typedef enum Method : uint8_t {
   GET = 0x10,
   SET = 0x20,
   // Response
-  ACK = 0x30,
-  REJ = 0x40,
+  ACK = 0x30, // Request received, validated, and accepted (queued/applied)
+  REJ = 0x40, // Terminal failure, at either ACK or FIN phase
+  // Request completed ("finished"); same seq as the originating request.
+  // Only sent for two-phase properties (CMD_ACTUATE, CMD_TRIGGER,
+  // CMD_FRAME); single-phase properties resolve on ACK alone.
+  FIN = 0x50,
   // Push data (not by request)
   SYN = 0xF0,
 } Method;
@@ -36,6 +40,10 @@ typedef enum Property : uint8_t {
   CFG_LOG = 0x05,
   CFG_LPF = 0x06,
   CFG_BIAS = 0x07,
+  // Streams: per-stream lifecycle + continuous position updates
+  CMD_STREAM = 0x08,
+  // Triggered-frame request, following a stream's live mirror target
+  CMD_FRAME = 0x09,
   // Commands
   CMD_ACTUATE = 0x0A,
   CMD_TRIGGER = 0x0B,
@@ -67,6 +75,9 @@ template <typename Int> inline constexpr uint8_t u8(Int v, unsigned shift) {
   typedef struct NAME NAME;                                                    \
   struct __attribute__((__packed__)) NAME
 
+// Sequence == 0 marks a fire-and-forget request: the firmware performs the
+// action but sends no ACK/FIN/REJ (used for high-rate stream UPDATEs). SYN
+// pushes (e.g. LOG) are unrelated and always sent regardless of sequence.
 typedef uint16_t Sequence;
 
 PACKED(Header) {
@@ -173,6 +184,12 @@ public:
   }
 };
 
+// Finalizes and transmits a response/push packet, honoring the seq==0
+// fire-and-forget convention (no bytes go out for ACK/FIN/REJ with seq==0).
+// Implemented per-platform (firmware/src/Protocol.cpp on the MCU side);
+// unused (and unimplemented) on the host.
+void send(RawPacket &packet);
+
 template <Property P> class Packet {
 public:
   static inline constexpr Property PROPERTY = P;
@@ -189,6 +206,9 @@ public:
     }
     static inline RawPacket REJ(uint16_t seq) {
       return {Method::REJ, PROPERTY, seq};
+    }
+    static inline RawPacket FIN(uint16_t seq) {
+      return {Method::FIN, PROPERTY, seq};
     }
     static inline RawPacket SYN(uint16_t seq) {
       return {Method::SYN, PROPERTY, seq};
@@ -219,6 +239,9 @@ public:
   // Declaration of packet handler, may not be implemented if unused
   // Only used on MCU side
   static void GET(const Sequence &seq);
+  // Payload-carrying GET overload (e.g. CMD_FRAME, a request with an
+  // argument rather than a plain read).
+  static void GET(const Sequence &seq, Inflated);
   static void SET(const Sequence &seq, Inflated);
   static void ACK(const Sequence &seq, Inflated);
   static void SYN(const Sequence &seq, Inflated);

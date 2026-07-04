@@ -46,3 +46,35 @@ template <> Packet::Config::Log::Level convert(const std::string &level) {
   return Packet::Config::Log::Level::OFF;
 #endif
 }
+
+template <> std::string convert(const Packet::Command::MirrorStream::Op &op) {
+  switch (op) {
+  case Packet::Command::MirrorStream::Op::CREATE:
+    return "CREATE";
+  case Packet::Command::MirrorStream::Op::UPDATE:
+    return "UPDATE";
+  case Packet::Command::MirrorStream::Op::TERMINATE:
+    return "TERMINATE";
+  default:
+#if defined(__EXCEPTIONS) || defined(__cpp_exceptions)
+    throw std::invalid_argument("Unknown Packet::Command::MirrorStream::Op: " +
+                                std::to_string(static_cast<uint8_t>(op)));
+#else
+    return "CREATE";
+#endif
+  }
+}
+
+template <> Packet::Command::MirrorStream::Op convert(const std::string &op) {
+  if (op == "CREATE")
+    return Packet::Command::MirrorStream::Op::CREATE;
+  if (op == "UPDATE")
+    return Packet::Command::MirrorStream::Op::UPDATE;
+  if (op == "TERMINATE")
+    return Packet::Command::MirrorStream::Op::TERMINATE;
+#if defined(__EXCEPTIONS) || defined(__cpp_exceptions)
+  throw std::invalid_argument("Unknown Packet::Command::MirrorStream::Op: " + op);
+#else
+  return Packet::Command::MirrorStream::Op::CREATE;
+#endif
+}
