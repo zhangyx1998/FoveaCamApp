@@ -1,20 +1,21 @@
 <script setup lang="ts">
-import { Log } from "core";
-import { type Camera, Frame } from "core/Aravis";
 import type { Mat } from "core/Vision";
 import type { Size, Point } from "core/Geometry";
-import { computed, markRaw, onUnmounted, ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
 
-import { FreqMeter, inspectorMode, PerfTimer, RollingAverage } from "@lib/util/perf";
-import abortable from "@lib/abortable";
+import { FreqMeter, inspectorMode, RollingAverage } from "@lib/util/perf";
 import FrameView, { TransformFunction } from "./FrameView.vue";
-import { getCameraInfo } from "@lib/camera";
 import { payloadToMat, rendererLoopLag } from "@lib/orchestrator/client";
 import type { FramePayload } from "@lib/orchestrator/protocol";
 import { Delegation } from "@src/capture";
 import { NoCheck } from "@lib/util/vue";
 
-type Stream = Iterable<Frame | Mat<Uint8Array> | null>;
+// Payload-only (docs/refactor/orchestrator.md §7.1 S1c): every camera/stream
+// now lives orchestrator-side, so the renderer only ever displays a
+// `session.frame(...)` ref — the old direct-`Camera`/raw-`Frame` stream mode
+// this component also used to support has no remaining callers (grep-
+// verified across the whole tree before removal) and is deleted rather than
+// kept dead.
 
 const emit = defineEmits<{
   (
@@ -35,19 +36,7 @@ const props = defineProps({
     required: false,
     default: null,
   },
-  stream: {
-    type: Object as () => Stream | undefined,
-    required: false,
-    default: undefined,
-  },
-  camera: {
-    type: Object as () => Camera | undefined,
-    required: false,
-    default: undefined,
-  },
-  // Orchestrator frame source: bind a `session.frame(...)` ref. When provided
-  // (even with a null value), StreamView displays the payload + meters fps
-  // instead of pulling a local stream/camera.
+  // Orchestrator frame source: bind a `session.frame(...)` ref.
   payload: {
     type: NoCheck<FramePayload | null | undefined>(),
     required: false,
@@ -85,7 +74,7 @@ const props = defineProps({
     default: null,
   },
   // Force the transport-profiling OSD lines on for this instance regardless
-  // of the global toggle (Ctrl+Shift+I, `inspectorMode`). Payload mode only.
+  // of the global toggle (Ctrl+Shift+I, `inspectorMode`).
   inspector: {
     type: Boolean,
     required: false,
@@ -95,10 +84,9 @@ const props = defineProps({
 
 const mat = ref<Mat | null>(null);
 const fps = new FreqMeter();
-const perf = new PerfTimer();
 const inspectorOn = computed(() => props.inspector || inspectorMode.value);
 
-// Payload-mode profiling meters, fed from `FramePayload.meta` (docs/refactor/
+// Profiling meters, fed from `FramePayload.meta` (docs/refactor/
 // orchestrator.md roadmap item 3). `seq`/timestamps arrive only when the
 // producer/transport stamped them, so every reading here degrades gracefully
 // to "no data yet" rather than throwing.
@@ -109,14 +97,10 @@ const coalesce = new RollingAverage(0.9, 2, "x"); // avg seq delta between deliv
 const ipcLatency = new RollingAverage(0.7, 1, "ms"); // tReceive - tPublish
 const frameAge = new RollingAverage(0.7, 1, "ms"); // tDisplay - tCapture
 
-// Payload mode is active whenever `payload` is bound (null or a value);
-// `undefined` means it was not provided, so the stream/camera pipeline runs.
-const isPayloadMode = computed(() => props.payload !== undefined);
-
 watch(
   () => props.payload,
   (p) => {
-    if (!isPayloadMode.value || !p) return;
+    if (!p) return;
     mat.value = payloadToMat(p);
     fps.tick();
     const m = p.meta;
@@ -140,76 +124,28 @@ watch(
   { immediate: true },
 );
 
-const stream = computed(() => {
-  if (isPayloadMode.value) return undefined;
-  if (props.stream) return markRaw(props.stream);
-  if (props.camera) return markRaw(props.camera.stream);
-  return undefined;
-});
-
-function createTask(stream?: Stream) {
-  if (!stream) return null;
-  return abortable(async (aborted) => {
-    try {
-      for (const frame of stream) {
-        if (aborted()) break;
-        if (frame) {
-          if (frame instanceof Frame) {
-            mat.value = await perf.measure(async () => {
-              Log.verbose(`Requested: ${frame}.view(${"BGRA8"})`);
-              const m = await frame.view("BGRA8", mat.value);
-              Log.verbose(` Resolved: ${frame}.view(${"BGRA8"})`);
-              return m;
-            });
-            frame.release();
-          } else {
-            mat.value = frame;
-          }
-          fps.tick();
-        }
-        await new Promise(requestAnimationFrame);
-      }
-    } catch (e) {
-      console.error(e);
-    }
-  });
-}
-
-const task = computed(() => createTask(stream.value));
-watch(task, (_, prev) => prev?.abort());
-onUnmounted(() => task.value?.abort());
-
-const cameraInfo = computed(() =>
-  props.camera ? getCameraInfo(props.camera) : {},
-);
-
 const overlay = computed(() => {
   const result: Record<string, string> = { ...(props.overlay ?? {}) };
-  if (isPayloadMode.value) {
-    const p = props.payload;
-    if (p) {
-      result["Resolution"] = `${p.shape[1]} × ${p.shape[0]}`;
-      if (inspectorOn.value && p.meta) {
-        const m = p.meta;
-        result["Seq"] = m.seq !== undefined ? String(m.seq) : "-";
-        result["Source Rate"] = sourceFreq.toString();
-        result["Coalesce"] = `${coalesce.value.toFixed(2)}x`;
-        if (m.convertMs !== undefined)
-          result["Convert"] = `${m.convertMs.toFixed(2)} ms`;
-        result["IPC Latency"] = ipcLatency.toString();
-        result["Frame Age"] = frameAge.toString();
-        result["Throughput"] =
-          `${((fps.value * p.data.byteLength) / 1e6).toFixed(2)} MB/s`;
-        // Renderer-side event-loop lag (perf substrate, §7.3 item 1) — a
-        // module-level singleton (one probe, not one per StreamView), so
-        // every inspector overlay shows the same renderer-wide number.
-        result["Renderer Lag"] =
-          `${rendererLoopLag.stats.mean.toFixed(2)} ms (max ${rendererLoopLag.stats.max.toFixed(2)})`;
-      }
+  const p = props.payload;
+  if (p) {
+    result["Resolution"] = `${p.shape[1]} × ${p.shape[0]}`;
+    if (inspectorOn.value && p.meta) {
+      const m = p.meta;
+      result["Seq"] = m.seq !== undefined ? String(m.seq) : "-";
+      result["Source Rate"] = sourceFreq.toString();
+      result["Coalesce"] = `${coalesce.value.toFixed(2)}x`;
+      if (m.convertMs !== undefined)
+        result["Convert"] = `${m.convertMs.toFixed(2)} ms`;
+      result["IPC Latency"] = ipcLatency.toString();
+      result["Frame Age"] = frameAge.toString();
+      result["Throughput"] =
+        `${((fps.value * p.data.byteLength) / 1e6).toFixed(2)} MB/s`;
+      // Renderer-side event-loop lag (perf substrate, §7.3 item 1) — a
+      // module-level singleton (one probe, not one per StreamView), so
+      // every inspector overlay shows the same renderer-wide number.
+      result["Renderer Lag"] =
+        `${rendererLoopLag.stats.mean.toFixed(2)} ms (max ${rendererLoopLag.stats.max.toFixed(2)})`;
     }
-  } else {
-    Object.assign(result, cameraInfo.value);
-    result["CVT Time"] = perf.toString();
   }
   result["Frame Rate"] = fps.toString();
   return result;

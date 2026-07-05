@@ -1,0 +1,471 @@
+// ------------------------------------------------------
+// Copyright (c) 2025 Yuxuan Zhang, dev@z-yx.cc
+// This source code is licensed under the MIT license.
+// You may find the full license in project root directory.
+// -------------------------------------------------------
+//
+// Disparity-scope session — the §1 flagship migration (docs/refactor/
+// orchestrator.md §7.1 S1a): auto-vergence, ported off the renderer onto the
+// same substrate tracking-single/manual-control proved (`leaseCalibratedTriple`,
+// registry `onView` frame-driven vision, `startActuationLoop`). The renderer
+// becomes a thin client: it pushes tuning/target as state, drags/releases the
+// wide view via the `pointer` command, and renders L/C/R + combined-fovea +
+// template-match previews from telemetry/frames.
+//
+// Control-loop shape, adapted from the original (renderer-bound, raw-`Frame`
+// `Zip`-iterator) implementation onto per-camera `onView` taps that don't
+// arrive frame-synchronized:
+//  - Each fovea's `onView` tap wraps its own Mat (perspective-rectified onto
+//    its current pointing pose — always, independent of the `wrap_enable`
+//    *display* toggle, since matching/diff are more meaningful against a
+//    rectified tile; `wrap_enable` only picks what the L/R *preview* frames
+//    show) and derives a grayscale, downsampled match tile from it
+//    (`vergence.ts`'s `getFoveaTile` — safe to retain past the call, unlike
+//    the registry's reused-buffer Mat itself; see that function's doc).
+//  - The center tap drives the actual control step: once both tiles are
+//    available, `analyzeVergence`/`stepVergence` run against the latest
+//    cached tiles + the just-arrived center frame (one step per center tick,
+//    reentrancy-guarded so a slow analysis can't overlap the next tick).
+//  - Actuation itself is decoupled onto `startActuationLoop`'s fixed-rate
+//    timer (same substrate as tracking-single): the vergence step only
+//    updates a cached `commandedVolts`; `targetVolts()` just returns it
+//    synchronously every tick. This matches "frame-driven analysis, fixed-
+//    rate actuation" exactly as tracking-single already established.
+
+import { defineSession, type ServerSession } from "@orchestrator/runtime";
+import { leaseCalibratedTriple, type CalibratedTriple } from "@orchestrator/calibration";
+import { startActuationLoop, type ActuationLoop } from "@orchestrator/actuation";
+import { toFramePayload } from "@orchestrator/camera";
+import {
+  disparity,
+  DEFAULT_TUNING,
+  VERGE_MIN_DISTANCE_MM,
+  SHIFT_LIMIT_DEG,
+  VSHIFT_LIMIT_DEG,
+  type Tuning,
+  type PidReadout,
+} from "./contract";
+import {
+  analyzeVergence,
+  stepVergence,
+  getFoveaTile,
+  foveaTileSize,
+  type VergencePIDs,
+} from "./vergence";
+import { RECT } from "@lib/util/geometry";
+import { PID } from "@lib/pid";
+import { distanceToVerge, vergeToDistance, vergenceToDistance } from "@lib/stereo";
+import { RollingStats } from "@lib/util/rolling";
+import { cvtColor, diff, slice, wrapPerspective, type Mat } from "core/Vision";
+import { KCF } from "core/Tracker";
+import type { Point2d, Rect } from "core/Geometry";
+import type { Pos } from "@lib/controller-codec";
+
+const ORIGIN: Pos = { x: 0, y: 0 };
+const ZERO: Point2d = { x: 0, y: 0 };
+const now = () => performance.now();
+const radians = (deg: number) => (deg * Math.PI) / 180;
+
+// Physical saturation limits — ported unchanged from the original renderer
+// implementation (a bad estimate can at worst rest at a limit). Degree limits
+// live in contract.ts (shared with the renderer's slider ranges).
+const SHIFT_LIMIT = radians(SHIFT_LIMIT_DEG);
+const VSHIFT_LIMIT = radians(VSHIFT_LIMIT_DEG);
+const DT_MAX_FRAMES = 10;
+const TRACKER_LOST_TOLERANCE = 10;
+// Same throttle constant/reasoning as tracking-single/manual-control (§12.1 C6).
+const VOLT_TELEMETRY_INTERVAL_MS = 33;
+
+function cloneTuning(t: Tuning): Tuning {
+  return {
+    pan: [...t.pan],
+    depth: [...t.depth],
+    v_shift: [...t.v_shift],
+    sensitivity: t.sensitivity,
+    scale: t.scale,
+    min_score: t.min_score,
+    expand_x: t.expand_x,
+    expand_y: t.expand_y,
+    timeout: t.timeout,
+  };
+}
+
+export default function disparityScopeSession(): ServerSession<typeof disparity> {
+  return defineSession("disparity-scope", disparity, (s) => {
+    let triple: CalibratedTriple | null = null;
+    const disposers: Array<() => void> = [];
+    let loop: ActuationLoop | null = null;
+
+    let width = 0;
+    let height = 0;
+
+    // Latest per-eye match tiles (independent Mats — see `getFoveaTile`'s doc).
+    let tileL: Mat<Uint8Array> | null = null;
+    let tileR: Mat<Uint8Array> | null = null;
+    // Latest wrapped (always independent) full-res fovea Mats, for the
+    // "disparity" combined view — same pattern as tracking-single's `aligned`.
+    const aligned: { L: Mat<Uint8Array> | null; R: Mat<Uint8Array> | null } = {
+      L: null,
+      R: null,
+    };
+    let stepBusy = false; // reentrancy guard: one vergence step at a time
+
+    let dragging = false;
+    let windowStart = now();
+    let lastStep = now();
+    let lastVoltEmit = 0;
+    let status = "initializing";
+    // Commanded volts, updated by the (async, frame-driven) vergence step and
+    // read synchronously every actuation tick.
+    let commandedVolts: { l: Pos; r: Pos } = { l: ORIGIN, r: ORIGIN };
+    // Latest actuated volts, mirrored locally (needed for the wrap homography
+    // and the vergence/distance telemetry, same as tracking-single's `volts`).
+    const volts: { L: Pos; R: Pos } = { L: { ...ORIGIN }, R: { ...ORIGIN } };
+    const actuateMsStats = new RollingStats(0.9, 2, "ms");
+
+    // Optional wide-angle KCF tracker (auto-follow): tracked bbox center
+    // drives `state.target`, same as the original renderer implementation.
+    let tracker: KCF | null = null;
+    let search: Rect | null = null;
+    let lostCount = 0;
+    let lastGood: Point2d = ZERO;
+    // Deferred like tracking-single's `pendingInit`: the registry's `onView`
+    // Mat is only valid for the duration of its synchronous call, so a tracker
+    // (re)init requested from a command handler can't use a Mat handed to an
+    // *earlier* tick — it's applied on the *next* center tick instead.
+    let pendingTrackerInit: Point2d | null = null;
+
+    const pids: VergencePIDs = {
+      panX: new PID({ limits: [-SHIFT_LIMIT, SHIFT_LIMIT] }),
+      panY: new PID({ limits: [-SHIFT_LIMIT, SHIFT_LIMIT] }),
+      verge: new PID({
+        limits: [0, distanceToVerge(VERGE_MIN_DISTANCE_MM, s.state.baseline)],
+      }),
+      v_shift: new PID({ limits: [-VSHIFT_LIMIT, VSHIFT_LIMIT] }),
+    };
+
+    function syncGains(t: Tuning): void {
+      pids.panX.kp = pids.panY.kp = t.pan[0];
+      pids.panX.ki = pids.panY.ki = t.pan[1];
+      pids.panX.kd = pids.panY.kd = t.pan[2];
+      pids.verge.kp = t.depth[0];
+      pids.verge.ki = t.depth[1];
+      pids.verge.kd = t.depth[2];
+      pids.v_shift.kp = t.v_shift[0];
+      pids.v_shift.ki = t.v_shift[1];
+      pids.v_shift.kd = t.v_shift[2];
+    }
+    syncGains(s.state.tuning);
+
+    function effectiveScale(): number {
+      const zoom = Math.max(1, s.state.zoom);
+      const ratio = Math.max(0, Math.min(1, s.state.tuning.scale));
+      return 1 + (zoom - 1) * ratio;
+    }
+
+    function frozen(): boolean {
+      if (tracker) return false; // actively tracking: never freeze
+      const t = s.state.tuning.timeout;
+      const timeoutMs = t > 0 ? t : Infinity;
+      return timeoutMs !== Infinity && now() - windowStart > timeoutMs;
+    }
+
+    function clampRect(r: Rect): Rect {
+      const x = Math.max(0, Math.min(Math.round(r.x), width - 1));
+      const y = Math.max(0, Math.min(Math.round(r.y), height - 1));
+      const w = Math.max(1, Math.min(Math.round(r.width), width - x));
+      const h = Math.max(1, Math.min(Math.round(r.height), height - y));
+      return { x, y, width: w, height: h };
+    }
+
+    function searchWindow(box: Rect, scale = 1): Rect {
+      const px = Math.max(0, s.state.kernel.w * scale);
+      const py = Math.max(0, s.state.kernel.h * scale);
+      const x = Math.max(0, Math.round(box.x - px));
+      const y = Math.max(0, Math.round(box.y - py));
+      const right = Math.min(width, Math.round(box.x + box.width + px));
+      const bottom = Math.min(height, Math.round(box.y + box.height + py));
+      return clampRect({ x, y, width: right - x, height: bottom - y });
+    }
+
+    function releaseTracker(): void {
+      if (tracker) {
+        tracker.release();
+        tracker = null;
+      }
+      search = null;
+      lostCount = 0;
+      s.telemetry({ tracker_bbox: null });
+    }
+
+    function initTracker(view: Mat<Uint8Array>, center: Point2d): void {
+      const roi = clampRect(
+        RECT.fromCenter(center, { width: s.state.kernel.w, height: s.state.kernel.h }),
+      );
+      if (roi.width <= 0 || roi.height <= 0) return;
+      const win = searchWindow(roi);
+      const patch = cvtColor(slice(view, win), "BGRA2BGR");
+      const roiInPatch: Rect = {
+        x: roi.x - win.x,
+        y: roi.y - win.y,
+        width: roi.width,
+        height: roi.height,
+      };
+      releaseTracker();
+      const t = new KCF();
+      t.init(patch, roiInPatch);
+      tracker = t;
+      search = roi;
+      lostCount = 0;
+      lastGood = center;
+      s.setState("target", center);
+      s.telemetry({ tracker_bbox: roi });
+    }
+
+    function updateTracker(view: Mat<Uint8Array>): void {
+      if (!tracker || !search) return;
+      const win = searchWindow(search, 1 + lostCount);
+      const result = tracker.update(cvtColor(slice(view, win), "BGRA2BGR"));
+      if (result) {
+        lostCount = 0;
+        const full = clampRect({
+          x: result.x + win.x,
+          y: result.y + win.y,
+          width: result.width,
+          height: result.height,
+        });
+        search = full;
+        const center = RECT.getCenter(full);
+        lastGood = center;
+        s.setState("target", center);
+        s.telemetry({ tracker_bbox: full });
+      } else if (++lostCount >= TRACKER_LOST_TOLERANCE) {
+        s.setState("target", lastGood);
+        releaseTracker();
+      }
+    }
+
+    // --- per-eye taps: wrap + tile + (for "disparity") combined view -----
+
+    function onFoveaView(role: "L" | "R", raw: Mat<Uint8Array>): void {
+      if (!triple) return;
+      const A = triple.conv.V2A[role](volts[role]);
+      const wrapped = wrapPerspective(raw, triple.conv.A2H[role](A)); // independent Mat
+      const display = s.state.wrap_enable ? wrapped : raw;
+      s.frame(role, toFramePayload(display));
+      aligned[role] = wrapped;
+      if (width && height) {
+        const size = foveaTileSize({
+          width,
+          height,
+          zoom: Math.max(1, s.state.zoom),
+          scale: effectiveScale(),
+        });
+        void getFoveaTile(wrapped, size).then((tile) => {
+          if (role === "L") tileL = tile;
+          else tileR = tile;
+        });
+      }
+      if (role === "R" && s.state.view === "disparity" && aligned.L && aligned.R) {
+        s.frame("center.disparity", toFramePayload(diff(aligned.L, aligned.R, true)));
+      }
+    }
+
+    // --- center tap: drives the tracker + sliced view + the control step -
+
+    async function step(c: Mat<Uint8Array>): Promise<void> {
+      if (!triple || !tileL || !tileR) return;
+      const analysis = await analyzeVergence({ l: tileL, r: tileR }, c, {
+        width,
+        height,
+        zoom: Math.max(1, s.state.zoom),
+        scale: effectiveScale(),
+        target: s.state.target,
+        expand_x: s.state.tuning.expand_x,
+        expand_y: s.state.tuning.expand_y,
+      });
+      s.frame("guide", toFramePayload(analysis.guide));
+      s.frame("match_left", toFramePayload(analysis.ml.mat));
+      s.frame("match_right", toFramePayload(analysis.mr.mat));
+      s.telemetry({
+        match_left: { rect: analysis.ml.rect, score: analysis.ml.score },
+        match_right: { rect: analysis.mr.rect, score: analysis.mr.score },
+        match_center: analysis.center,
+      });
+
+      const undistort = triple.undistort;
+      if (!undistort) {
+        status = "no calibration";
+        return;
+      }
+      if (dragging) {
+        status = "manual";
+        const ray = undistort.angular([s.state.target], true)[0];
+        commandedVolts = { l: triple.conv.A2V.L(ray), r: triple.conv.A2V.R(ray) };
+        return;
+      }
+      if (frozen()) {
+        status = "frozen";
+        return;
+      }
+      const t = now();
+      const dt = Math.min((t - lastStep) * s.state.tuning.sensitivity, DT_MAX_FRAMES);
+      const result = stepVergence(
+        analysis,
+        pids,
+        { P2A: triple.conv.P2A, A2V: triple.conv.A2V },
+        { baseline: s.state.baseline, minScore: s.state.tuning.min_score },
+        dt,
+      );
+      if (!result) {
+        status = "low score";
+        return;
+      }
+      lastStep = t;
+      status = "tracking";
+      commandedVolts = { l: result.left, r: result.right };
+    }
+
+    function onCenterView(raw: Mat<Uint8Array>): void {
+      const [h, w] = raw.shape;
+      if (w !== width || h !== height) {
+        width = w;
+        height = h;
+        s.telemetry({ size: { width, height } });
+      }
+      if (pendingTrackerInit) {
+        const c = pendingTrackerInit;
+        pendingTrackerInit = null;
+        initTracker(raw, c);
+      } else if (tracker) {
+        updateTracker(raw);
+      }
+      s.frame("C", toFramePayload(raw));
+      if (s.state.view === "sliced" && width && height) {
+        const zoom = Math.max(1, s.state.zoom);
+        const size = { width: width / zoom, height: height / zoom };
+        const rect = clampRect(RECT.fromCenter(s.state.target, size));
+        s.frame("center.sliced", toFramePayload(slice(raw, rect)));
+      }
+      if (stepBusy) return;
+      stepBusy = true;
+      void step(raw).finally(() => {
+        stepBusy = false;
+      });
+    }
+
+    // --- actuation (fixed-rate, decoupled from analysis fps) -------------
+
+    function targetVolts(): { l: Pos; r: Pos } {
+      return commandedVolts;
+    }
+
+    function onVolts(v: { L: Pos; R: Pos }, actuateMs: number): void {
+      volts.L = v.L;
+      volts.R = v.R;
+      actuateMsStats.push(actuateMs);
+      const t = now();
+      if (t - lastVoltEmit < VOLT_TELEMETRY_INTERVAL_MS) return;
+      lastVoltEmit = t;
+      const vergence = triple ? triple.conv.V2A.L(v.L).x - triple.conv.V2A.R(v.R).x : 0;
+      const realized_distance = vergenceToDistance(vergence, s.state.baseline / 1000);
+      const commanded_distance = vergeToDistance(pids.verge.value, s.state.baseline);
+      const PX = (role: "L" | "R"): Point2d =>
+        triple ? triple.conv.A2P.C(triple.conv.V2A[role](v[role])) : ZERO;
+      const readout: PidReadout = {
+        verge: pids.verge.value,
+        panX: pids.panX.value,
+        panY: pids.panY.value,
+        v_shift: pids.v_shift.value,
+      };
+      s.telemetry({
+        volt: v,
+        vergence,
+        realized_distance,
+        commanded_distance,
+        L_PX: PX("L"),
+        R_PX: PX("R"),
+        status,
+        pids: readout,
+        perf: { actuateMs: { mean: actuateMsStats.mean, max: actuateMsStats.max } },
+      });
+      actuateMsStats.resetMax();
+    }
+
+    // --- lifecycle ---------------------------------------------------------
+
+    async function activateSession(): Promise<void> {
+      const t = await leaseCalibratedTriple();
+      if (!t) {
+        s.telemetry({ ready: false });
+        return;
+      }
+      triple = t;
+      disposers.push(t.leases.L.onView((v) => onFoveaView("L", v)));
+      disposers.push(t.leases.C.onView(onCenterView));
+      disposers.push(t.leases.R.onView((v) => onFoveaView("R", v)));
+      loop = startActuationLoop({ targetVolts, onVolts });
+      s.telemetry({ ready: true });
+    }
+
+    function idleSession(): void {
+      loop?.stop();
+      loop = null;
+      releaseTracker();
+      for (const d of disposers) d();
+      disposers.length = 0;
+      if (triple) for (const l of Object.values(triple.leases)) l.release();
+      triple = null;
+      width = height = 0;
+      tileL = tileR = null;
+      aligned.L = aligned.R = null;
+      status = "initializing";
+      commandedVolts = { l: ORIGIN, r: ORIGIN };
+      s.telemetry({ ready: false, status: "initializing", tracker_bbox: null });
+    }
+
+    return {
+      commands: {
+        async pointer({ p, buttons: _buttons, phase }) {
+          if (phase === "down") {
+            releaseTracker();
+            dragging = true;
+          }
+          if (phase !== "up") {
+            s.setState("target", p);
+          } else {
+            dragging = false;
+            windowStart = now();
+            for (const pid of Object.values(pids)) pid.reset();
+            if (s.state.tracker_enabled) pendingTrackerInit = s.state.target;
+          }
+        },
+        async reset_tuning() {
+          s.setState("tuning", cloneTuning(DEFAULT_TUNING));
+        },
+        async reset_vergence() {
+          for (const pid of Object.values(pids)) pid.reset();
+        },
+        async set_pid({ dof, value }) {
+          pids[dof].value = value;
+        },
+      },
+      watch: {
+        tuning(t) {
+          syncGains(t);
+        },
+        baseline(v) {
+          pids.verge.limits = [0, distanceToVerge(VERGE_MIN_DISTANCE_MM, v)];
+        },
+        tracker_enabled(on) {
+          if (!on) releaseTracker();
+          else if (!dragging) pendingTrackerInit = s.state.target;
+        },
+      },
+      activate() {
+        void activateSession();
+      },
+      idle: idleSession,
+    };
+  });
+}

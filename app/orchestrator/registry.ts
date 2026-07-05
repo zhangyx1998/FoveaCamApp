@@ -19,7 +19,7 @@ import type { Mat } from "core/Vision";
 import type { FramePayload } from "@lib/orchestrator/protocol";
 import type { Role } from "@lib/camera-config";
 import { applyStoredConfig, cameraConfigPath, listCameraInfo, toFramePayload } from "./camera.js";
-import { guarded } from "./diagnostics.js";
+import { guarded, timeSpan } from "./diagnostics.js";
 import { read } from "./store-hub.js";
 
 type FrameSink = (payload: FramePayload) => void;
@@ -184,7 +184,9 @@ export async function retryUntil<T>(
  *  entry (stored config applied). Shared by `acquire()`'s first-lease path
  *  and `acquireMany()`'s bulk-discovery path so both agree on setup. */
 async function registerShared(camera: Camera): Promise<Shared> {
-  await applyStoredConfig(camera);
+  await timeSpan("camera.applyStoredConfig", () => applyStoredConfig(camera), {
+    serial: camera.serial,
+  });
   const s: Shared = {
     serial: camera.serial,
     camera,
@@ -207,7 +209,7 @@ export async function acquire(serial: string): Promise<CameraLease | null> {
   let s = shared.get(serial);
   if (!s) {
     const { Camera } = await import("core/Aravis");
-    const cameras = await Camera.list();
+    const cameras = await timeSpan("camera.enumerate", () => Camera.list(), { serial });
     const camera = cameras.find((c) => c.serial === serial) ?? null;
     for (const c of cameras) if (c !== camera) c.release();
     if (!camera) return null;
@@ -276,7 +278,10 @@ export async function acquireMany(
   if (serials.some((serial) => !shared.has(serial))) {
     const wanted = new Set(serials);
     const { Camera } = await import("core/Aravis");
-    for (const camera of await Camera.list()) {
+    const cameras = await timeSpan("camera.enumerate", () => Camera.list(), {
+      wanted: serials.length,
+    });
+    for (const camera of cameras) {
       if (shared.has(camera.serial) || !wanted.has(camera.serial)) {
         camera.release();
         continue;

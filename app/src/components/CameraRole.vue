@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ROLE, THEME, type Role } from "@lib/camera";
+import { ROLE, THEME, type Role } from "@lib/camera-config";
 import Badge from "./Badge.vue";
 defineProps<{
     role?: Role;

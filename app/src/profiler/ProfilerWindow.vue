@@ -1,0 +1,378 @@
+<!-- ---------------------------------------------------------
+ * Copyright (c) 2026 Yuxuan Zhang, dev@z-yx.cc
+ * This source code is licensed under the MIT license.
+ * You may find the full license in project root directory.
+ --------------------------------------------------------- -->
+
+<!-- The profiler window (docs/refactor/orchestrator.md §7.1 S4) — a second
+     `BrowserWindow`, read-only over existing `system`/`controller`/
+     `tracking`/`manual-control` telemetry. No cameras needed to view it: it
+     subscribes like any other window (the interest-counting design already
+     tolerates a subscriber with no hardware present — `tracking`/
+     `manual-control`'s `activate()` just times out to `ready: false`), and
+     is a thin client like any module — no new wire concepts, just polling
+     the existing `perfSnapshot` command and the live `topic.span` feed
+     `client.ts` already collects into `orchestratorSpans`. -->
+
+<script setup lang="ts">
+import { computed, onMounted, onUnmounted, ref } from "vue";
+import { useSession, rendererLoopLag, orchestratorSpans, dumpPerfSnapshot } from "@lib/orchestrator/client";
+import { system, controller, type PerfSnapshot, type Span } from "@lib/orchestrator/contracts";
+import { tracking } from "@modules/tracking-single/contract";
+import { manualControl } from "@modules/manual-control/contract";
+import Sparkline from "../components/Sparkline.vue";
+import PosView from "@src/components/PosView.vue";
+
+const sys = useSession(system, "system");
+const ctrl = useSession(controller, "controller");
+const trk = useSession(tracking, "tracking");
+const mc = useSession(manualControl, "manual-control");
+
+// Live streams (docs/refactor/orchestrator.md §7.1 S4 added scope): render
+// live streams only, and beyond ~8 collapse to an aggregate + top-N-by-Hz —
+// don't build a wall of rows once stream capacity grows (ST-64, synced-
+// capture thread).
+const VISIBLE_STREAM_ROWS = 8;
+const sortedStreams = computed(() => [...ctrl.telemetry.streams].sort((a, b) => b.hz - a.hz));
+const visibleStreams = computed(() => sortedStreams.value.slice(0, VISIBLE_STREAM_ROWS));
+const hiddenStreams = computed(() => sortedStreams.value.slice(VISIBLE_STREAM_ROWS));
+const hiddenHzTotal = computed(() => hiddenStreams.value.reduce((a, s) => a + s.hz, 0));
+
+const HISTORY = 60; // ~60 samples at the 1s poll tick below = 1 min window
+
+function history(): number[] {
+  return [];
+}
+
+const orchLoopLag = ref<number[]>(history());
+const rendLoopLag = ref<number[]>(history());
+const trackMs = ref<number[]>(history());
+const actuateMs = ref<number[]>(history());
+const frameAge = ref<number[]>(history());
+const mcActuateMs = ref<number[]>(history());
+
+function push(hist: { value: number[] }, v: number): void {
+  hist.value = [...hist.value, v].slice(-HISTORY);
+}
+
+const snapshot = ref<PerfSnapshot | null>(null);
+const spans = ref<Span[]>([]);
+const prev = { snapshot: null as PerfSnapshot | null, t: 0 };
+
+type Rate = { topic: string; hz: number; coalescePct: number; bytesPerSec: number };
+const rates = ref<Rate[]>([]);
+
+function computeRates(cur: PerfSnapshot): Rate[] {
+  const now = Date.now();
+  const dtSec = prev.snapshot ? Math.max(0.001, (now - prev.t) / 1000) : 0;
+  const out: Rate[] = [];
+  for (const [t, s] of Object.entries(cur.frames)) {
+    const p = prev.snapshot?.frames[t];
+    const sentDelta = p ? s.sent - p.sent : 0;
+    const offeredDelta = p ? s.offered - p.offered : 0;
+    const coalescedDelta = p ? s.coalesced - p.coalesced : 0;
+    const bytesDelta = p ? s.bytes - p.bytes : 0;
+    out.push({
+      topic: t,
+      hz: p && dtSec > 0 ? sentDelta / dtSec : 0,
+      coalescePct: offeredDelta > 0 ? (100 * coalescedDelta) / offeredDelta : 0,
+      bytesPerSec: p && dtSec > 0 ? bytesDelta / dtSec : 0,
+    });
+  }
+  return out.sort((a, b) => a.topic.localeCompare(b.topic));
+}
+
+let timer: ReturnType<typeof setInterval> | null = null;
+
+async function tick(): Promise<void> {
+  push(orchLoopLag, sys.telemetry.loopLag.mean);
+  push(rendLoopLag, rendererLoopLag.stats.mean);
+  push(trackMs, trk.telemetry.perf.trackMs.mean);
+  push(actuateMs, trk.telemetry.perf.actuateMs.mean);
+  push(frameAge, trk.telemetry.perf.frameAgeAtActuate.mean);
+  push(mcActuateMs, mc.telemetry.perf.actuateMs.mean);
+  spans.value = [...orchestratorSpans].slice(-50).reverse();
+  try {
+    const s = await sys.call("perfSnapshot", undefined);
+    rates.value = computeRates(s);
+    prev.snapshot = s;
+    prev.t = Date.now();
+    snapshot.value = s;
+  } catch {
+    // Orchestrator not reachable yet (e.g. this window opened before the
+    // channel connected) — next tick retries.
+  }
+}
+
+onMounted(() => {
+  void tick();
+  timer = setInterval(() => void tick(), 1000);
+});
+onUnmounted(() => {
+  if (timer) clearInterval(timer);
+});
+
+const exportStatus = ref<"" | "saving" | "saved" | "error">("");
+async function exportSnapshot(): Promise<void> {
+  exportStatus.value = "saving";
+  try {
+    await dumpPerfSnapshot();
+    exportStatus.value = "saved";
+  } catch (e) {
+    console.error(e);
+    exportStatus.value = "error";
+  } finally {
+    setTimeout(() => (exportStatus.value = ""), 2000);
+  }
+}
+
+function fmt(v: number, digits = 1): string {
+  return Number.isFinite(v) ? v.toFixed(digits) : "-";
+}
+</script>
+
+<template>
+  <div class="profiler">
+    <header>
+      <h1>Orchestrator Profiler</h1>
+      <button @click="exportSnapshot">
+        {{ exportStatus === "saving" ? "Saving…" : exportStatus === "saved" ? "Saved" : exportStatus === "error" ? "Failed" : "Export snapshot" }}
+      </button>
+    </header>
+
+    <section>
+      <h2>Event-loop lag</h2>
+      <div class="row">
+        <div class="stat">
+          <label>Orchestrator (mean {{ fmt(sys.telemetry.loopLag.mean) }}ms / max {{ fmt(sys.telemetry.loopLag.max) }}ms)</label>
+          <Sparkline :values="orchLoopLag" color="#0af" />
+        </div>
+        <div class="stat">
+          <label>This window (mean {{ fmt(rendererLoopLag.stats.mean) }}ms / max {{ fmt(rendererLoopLag.stats.max) }}ms)</label>
+          <Sparkline :values="rendLoopLag" color="#fa0" />
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Control-path latency</h2>
+      <p class="hint" v-if="!trk.telemetry.ready && !mc.telemetry.ready">
+        Neither tracking nor manual-control is active in any window — these read zero until one is.
+      </p>
+      <div class="row">
+        <div class="stat">
+          <label>tracking.trackMs (mean {{ fmt(trk.telemetry.perf.trackMs.mean, 2) }}ms)</label>
+          <Sparkline :values="trackMs" color="#0af" />
+        </div>
+        <div class="stat">
+          <label>tracking.actuateMs (mean {{ fmt(trk.telemetry.perf.actuateMs.mean, 2) }}ms)</label>
+          <Sparkline :values="actuateMs" color="#0af" />
+        </div>
+        <div class="stat">
+          <label>tracking.frameAgeAtActuate (mean {{ fmt(trk.telemetry.perf.frameAgeAtActuate.mean) }}ms)</label>
+          <Sparkline :values="frameAge" color="#0af" />
+        </div>
+        <div class="stat">
+          <label>manual-control.actuateMs (mean {{ fmt(mc.telemetry.perf.actuateMs.mean, 2) }}ms)</label>
+          <Sparkline :values="mcActuateMs" color="#af0" />
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Volt telemetry</h2>
+      <div class="row">
+        <div class="stat">
+          <label>tracking.volt</label>
+          <div class="mono">
+            L ({{ fmt(trk.telemetry.volt.L.x) }}, {{ fmt(trk.telemetry.volt.L.y) }})
+            R ({{ fmt(trk.telemetry.volt.R.x) }}, {{ fmt(trk.telemetry.volt.R.y) }})
+          </div>
+        </div>
+        <div class="stat">
+          <label>manual-control.volt</label>
+          <div class="mono">
+            L ({{ fmt(mc.telemetry.volt.L.x) }}, {{ fmt(mc.telemetry.volt.L.y) }})
+            R ({{ fmt(mc.telemetry.volt.R.x) }}, {{ fmt(mc.telemetry.volt.R.y) }})
+          </div>
+        </div>
+        <div class="stat">
+          <label>controller</label>
+          <div class="mono">
+            {{ ctrl.telemetry.connected ? (ctrl.telemetry.enabled ? "enabled" : "connected") : "disconnected" }}
+            dv={{ fmt(ctrl.telemetry.dv) }}
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Serial data rate</h2>
+      <p class="hint" v-if="!ctrl.telemetry.connected">Controller not connected — rates read zero until it is.</p>
+      <div class="mono">
+        tx {{ Math.round(ctrl.telemetry.serial_rate.txBytesPerSec).toLocaleString() }} B/s
+        ({{ fmt(ctrl.telemetry.serial_rate.txPacketsPerSec) }} pkt/s) ·
+        rx {{ Math.round(ctrl.telemetry.serial_rate.rxBytesPerSec).toLocaleString() }} B/s
+        ({{ fmt(ctrl.telemetry.serial_rate.rxPacketsPerSec) }} pkt/s)
+      </div>
+    </section>
+
+    <section>
+      <h2>Live streams ({{ sortedStreams.length }})</h2>
+      <p class="hint" v-if="sortedStreams.length === 0">No CMD_STREAM targets active.</p>
+      <div class="row">
+        <div class="stat stream-row" v-for="stream in visibleStreams" :key="stream.id">
+          <label>stream #{{ stream.id }} — {{ fmt(stream.hz) }} Hz</label>
+          <div class="stream-pads">
+            <PosView :pos="stream.left" :lim="ctrl.telemetry.dv || 200" :font-size="10" color="cyan" style="width: 90px" />
+            <PosView :pos="stream.right" :lim="ctrl.telemetry.dv || 200" :font-size="10" color="greenyellow" style="width: 90px" />
+          </div>
+        </div>
+        <div class="stat" v-if="hiddenStreams.length > 0">
+          <label>+{{ hiddenStreams.length }} more</label>
+          <div class="mono">aggregate {{ fmt(hiddenHzTotal) }} Hz</div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Per-topic channel rates</h2>
+      <table>
+        <thead>
+          <tr><th>topic</th><th>sent (Hz)</th><th>coalesced (%)</th><th>bytes/s</th></tr>
+        </thead>
+        <tbody>
+          <tr v-for="r in rates" :key="r.topic">
+            <td class="mono">{{ r.topic }}</td>
+            <td>{{ fmt(r.hz) }}</td>
+            <td>{{ fmt(r.coalescePct) }}</td>
+            <td>{{ Math.round(r.bytesPerSec).toLocaleString() }}</td>
+          </tr>
+          <tr v-if="rates.length === 0"><td colspan="4" class="hint">No frame traffic observed yet.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Store-hub writes</h2>
+      <div class="mono" v-if="snapshot">
+        writes {{ snapshot.storeHub.writes }} · updates {{ snapshot.storeHub.updates }} · clears {{ snapshot.storeHub.clears }}
+      </div>
+    </section>
+
+    <section>
+      <h2>Boot / activation timeline</h2>
+      <table>
+        <thead>
+          <tr><th>t</th><th>span</th><th>ms</th><th>meta</th></tr>
+        </thead>
+        <tbody>
+          <tr v-for="(s, i) in spans" :key="i">
+            <td class="mono">{{ new Date(s.t).toLocaleTimeString() }}</td>
+            <td class="mono">{{ s.name }}</td>
+            <td>{{ fmt(s.ms, 2) }}</td>
+            <td class="mono">{{ s.meta ? JSON.stringify(s.meta) : "" }}</td>
+          </tr>
+          <tr v-if="spans.length === 0"><td colspan="4" class="hint">No spans recorded yet this session.</td></tr>
+        </tbody>
+      </table>
+    </section>
+  </div>
+</template>
+
+<style scoped lang="scss">
+.profiler {
+  position: fixed;
+  inset: 0;
+  overflow: auto;
+  background: #0b0b0d;
+  color: #ddd;
+  font-family: "Cascadia Code", "Courier New", Courier, monospace;
+  padding: 1rem 1.5rem 3rem;
+  box-sizing: border-box;
+
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 1rem;
+    h1 {
+      font-size: 1.1rem;
+      font-weight: 600;
+      margin: 0;
+    }
+    button {
+      background: #222;
+      color: #ddd;
+      border: 1px solid #333;
+      border-radius: 4px;
+      padding: 0.4rem 0.8rem;
+      cursor: pointer;
+      &:hover {
+        background: #2a2a2a;
+      }
+    }
+  }
+
+  section {
+    margin-bottom: 1.5rem;
+    h2 {
+      font-size: 0.85rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #999;
+      margin: 0 0 0.5rem;
+      border-bottom: 1px solid #222;
+      padding-bottom: 0.25rem;
+    }
+  }
+
+  .row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+  }
+
+  .stream-pads {
+    display: flex;
+    flex-direction: row;
+    gap: 0.5rem;
+  }
+
+  .stat {
+    label {
+      display: block;
+      font-size: 0.75rem;
+      color: #aaa;
+      margin-bottom: 0.25rem;
+    }
+  }
+
+  .mono {
+    font-family: inherit;
+    font-size: 0.85rem;
+  }
+
+  .hint {
+    color: #777;
+    font-style: italic;
+    font-size: 0.8rem;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.8rem;
+    th,
+    td {
+      text-align: left;
+      padding: 0.2rem 0.6rem 0.2rem 0;
+      border-bottom: 1px solid #1a1a1a;
+    }
+    th {
+      color: #999;
+      font-weight: 500;
+    }
+  }
+}
+</style>

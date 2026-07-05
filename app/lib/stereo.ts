@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license.
 // You may find the full license in project root directory.
 // -------------------------------------------------------
-import { Point2d } from "core/Geometry";
+import type { Point2d } from "core/Geometry";
 import { makeMat } from "./mat";
 import { type Undistort } from "core/Vision";
 import { VEC } from "./util/geometry";

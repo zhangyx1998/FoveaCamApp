@@ -4,16 +4,13 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Relocated as-is from `src/record/stream.ts` (renderer) so recording can run
-// server-side (docs/refactor/orchestrator.md roadmap item 6) — the on-disk
-// format (`.stream`/`.meta` binary + JSONL sidecar) must not change, external
-// decoder tooling (`stream-decoder.py`) depends on it. Only change: `FreqMeter`
-// now comes from `@lib/util/rolling.ts` (Vue-free) instead of
-// `@lib/util/perf.ts` (imports `vue` — not safe from orchestrator-reachable
-// code).
+// Server-side stream writer. The public API and on-disk format match the old
+// renderer writer (`.stream` binary + `.meta` JSONL sidecar), but disk I/O now
+// runs in a worker_threads worker so recording backpressure does not stall the
+// orchestrator event loop. The worker intentionally imports no `core` modules;
+// the orchestrator thread computes metadata and transfers plain ArrayBuffers.
 
-import { createWriteStream, type WriteStream } from "node:fs";
-import { resolve } from "node:path";
+import { Worker, type TransferListItem } from "node:worker_threads";
 import type { Mat } from "core/Vision";
 import type { PixelFormat } from "core/Aravis";
 import { FreqMeter } from "@lib/util/rolling";
@@ -49,25 +46,167 @@ interface AffineExtension {
 
 type Extensions = Partial<AffineExtension>;
 
+type WorkerIn =
+  | {
+      type: "init";
+      basePath: string;
+      name: string;
+      highWaterMark: number;
+    }
+  | { type: "frame"; data: ArrayBuffer; entry: FrameMeta }
+  | { type: "flush"; id: number };
+
+type WorkerOut =
+  | { type: "written" }
+  | { type: "flushed"; id: number }
+  | { type: "error"; message: string; stack?: string };
+
+const WORKER_SOURCE = String.raw`
+const { parentPort } = require("node:worker_threads");
+const { createWriteStream } = require("node:fs");
+const { resolve } = require("node:path");
+
+let stream = null;
+let meta = null;
+let chain = Promise.resolve();
+let closed = false;
+
+function writeChunk(ws, chunk) {
+  return new Promise((resolve, reject) => {
+    const onError = (error) => {
+      ws.off("drain", onDrain);
+      reject(error);
+    };
+    const onDrain = () => {
+      ws.off("error", onError);
+      resolve();
+    };
+    ws.once("error", onError);
+    if (ws.write(chunk)) onDrain();
+    else ws.once("drain", onDrain);
+  });
+}
+
+function endStream(ws) {
+  return new Promise((resolve, reject) => {
+    ws.once("error", reject);
+    ws.end(resolve);
+  });
+}
+
+async function writeFrame(message) {
+  if (!stream || !meta || closed) throw new Error("StreamWriter worker is not open");
+  const buf = Buffer.from(message.data);
+  await Promise.all([
+    writeChunk(stream, buf),
+    writeChunk(meta, JSON.stringify(message.entry) + "\n"),
+  ]);
+}
+
+async function flush() {
+  if (closed) return;
+  closed = true;
+  await Promise.all([endStream(meta), endStream(stream)]);
+}
+
+function report(error) {
+  parentPort.postMessage({
+    type: "error",
+    message: error instanceof Error ? error.message : String(error),
+    stack: error instanceof Error ? error.stack : undefined,
+  });
+}
+
+parentPort.on("message", (message) => {
+  if (message.type === "init") {
+    const metaPath = resolve(message.basePath, message.name + ".meta");
+    const streamPath = resolve(message.basePath, message.name + ".stream");
+    meta = createWriteStream(metaPath, { encoding: "utf8" });
+    stream = createWriteStream(streamPath, { highWaterMark: message.highWaterMark });
+    return;
+  }
+
+  if (message.type === "frame") {
+    chain = chain.then(() => writeFrame(message)).then(
+      () => parentPort.postMessage({ type: "written" }),
+      (error) => report(error),
+    );
+    return;
+  }
+
+  if (message.type === "flush") {
+    chain = chain.then(() => flush()).then(
+      () => parentPort.postMessage({ type: "flushed", id: message.id }),
+      (error) => report(error),
+    );
+  }
+});
+`;
+
 export default class StreamWriter {
   static readonly highWaterMark = 256 * 1024 * 1024;
-  private readonly stream: WriteStream;
-  private readonly meta: WriteStream;
+  static readonly maxQueuedFrames = 8;
+  private readonly worker: Worker;
+  private readonly maxQueuedFrames: number;
   readonly fps = new FreqMeter();
   frameCount = 0;
   dropped = 0;
   private byteOffset = 0;
-  private pending: Promise<void> | null = null;
+  private queued = 0;
+  private flushSeq = 0;
+  private flushing = false;
+  private failed: Error | null = null;
+  private readonly flushes = new Map<
+    number,
+    { resolve: () => void; reject: (error: Error) => void }
+  >();
 
   constructor(
     basePath: string,
     private readonly name: string,
+    options: { maxQueuedFrames?: number } = {},
   ) {
-    const metaPath = resolve(basePath, `${name}.meta`);
-    const streamPath = resolve(basePath, `${name}.stream`);
-    const { highWaterMark } = StreamWriter;
-    this.meta = createWriteStream(metaPath, { encoding: "utf8" });
-    this.stream = createWriteStream(streamPath, { highWaterMark });
+    this.maxQueuedFrames =
+      options.maxQueuedFrames ?? StreamWriter.maxQueuedFrames;
+    this.worker = new Worker(WORKER_SOURCE, { eval: true });
+    this.worker.on("message", (message: WorkerOut) =>
+      this.handleWorkerMessage(message),
+    );
+    this.worker.on("error", (error) => this.fail(error));
+    this.worker.on("exit", (code) => {
+      if (!this.flushing && code !== 0)
+        this.fail(new Error(`StreamWriter worker exited with code ${code}`));
+    });
+    this.post({
+      type: "init",
+      basePath,
+      name,
+      highWaterMark: StreamWriter.highWaterMark,
+    });
+  }
+
+  private fail(error: Error): void {
+    if (!this.failed) this.failed = error;
+    for (const { reject } of this.flushes.values()) reject(error);
+    this.flushes.clear();
+  }
+
+  private handleWorkerMessage(message: WorkerOut): void {
+    if (message.type === "written") {
+      this.queued = Math.max(0, this.queued - 1);
+      return;
+    }
+    if (message.type === "flushed") {
+      const flush = this.flushes.get(message.id);
+      this.flushes.delete(message.id);
+      flush?.resolve();
+      return;
+    }
+    this.fail(Object.assign(new Error(message.message), { stack: message.stack }));
+  }
+
+  private post(message: WorkerIn, transfer?: TransferListItem[]): void {
+    this.worker.postMessage(message, transfer ?? []);
   }
 
   write(
@@ -76,14 +215,17 @@ export default class StreamWriter {
     timestamp = performance.now() / 1000,
     extra?: Record<string, unknown>,
   ) {
-    if (this.pending) {
+    if (this.failed || this.queued >= this.maxQueuedFrames) {
       this.dropped++;
       return;
     }
-    const buf = Buffer.from(frame.buffer, frame.byteOffset, frame.byteLength);
+    const data = new ArrayBuffer(frame.byteLength);
+    new Uint8Array(data).set(
+      new Uint8Array(frame.buffer, frame.byteOffset, frame.byteLength),
+    );
     const entry: FrameMeta = {
       o: this.byteOffset,
-      n: buf.byteLength,
+      n: data.byteLength,
       d: dtypeOf(frame),
       s: [...frame.shape],
       t: timestamp,
@@ -91,36 +233,23 @@ export default class StreamWriter {
       b: significantBits(format),
       x: extra,
     };
-    this.byteOffset += buf.byteLength;
+    this.byteOffset += data.byteLength;
     this.frameCount++;
     this.fps.tick();
-
-    const streamOk = this.stream.write(buf);
-    this.meta.write(JSON.stringify(entry) + "\n");
-
-    if (!streamOk) {
-      console.warn(`[record] backpressure on stream "${this.name}"`);
-      this.pending = new Promise<void>((resolve) => {
-        this.stream.once("drain", () => {
-          this.pending = null;
-          resolve();
-        });
-      });
-    }
+    this.queued++;
+    this.post({ type: "frame", data, entry }, [data]);
   }
 
   flush(): Promise<void> {
-    const p = this.pending ?? Promise.resolve();
-    return p.then(
-      () =>
-        new Promise<void>((resolve, reject) => {
-          this.meta.end(() => {
-            this.stream.end(() => resolve());
-            this.stream.once("error", reject);
-          });
-          this.meta.once("error", reject);
-        }),
-    );
+    if (this.failed) return Promise.reject(this.failed);
+    const id = ++this.flushSeq;
+    return new Promise<void>((resolve, reject) => {
+      this.flushes.set(id, { resolve, reject });
+      this.post({ type: "flush", id });
+    }).then(async () => {
+      this.flushing = true;
+      await this.worker.terminate();
+    });
   }
 
   get summary() {

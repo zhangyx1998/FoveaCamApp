@@ -390,4 +390,8 @@ export const topic = {
   // camera-registry sink throw, have no single owning session). Payload is
   // `{ scope: string, message: string }`.
   error: "__err__",
+  // Structured timing measurement broadcast (§7.1 S5) — payload is a `Span`
+  // (`orchestrator/diagnostics.ts`), fired live as each one is recorded so a
+  // future profiler window can render a timeline without polling.
+  span: "__span__",
 };

@@ -9,6 +9,7 @@
 // *type* import) so it loads in any process — no Vue, Store, or DOM.
 
 import type { Camera } from "core/Aravis";
+import type { Point2d, Point3d } from "core/Geometry";
 
 export const ROLE = {
   L: "Left Fovea",
@@ -61,6 +62,24 @@ export function getCameraInfo(camera?: Camera) {
     Gain: `${gain?.toFixed(2) ?? 0} dB`,
   };
 }
+
+// Per-fovea extrinsic calibration sample (moved here from the now-retired
+// `lib/camera.ts` — docs/refactor/orchestrator.md §7.1 S1c — since both
+// `orchestrator/calibration.ts` and `modules/calibrate-extrinsic/session.ts`
+// need the type and this file is the dependency-free, both-processes home
+// for pure camera types).
+export type ExtrinsicData = {
+  /** Outer + internal marker corners. */
+  img_points: Point2d[];
+  /** 3D positions of corresponding `img_points`. */
+  obj_points: Point3d[];
+  /** Absolute voltage reading (x, y) in volts. */
+  voltage: Point2d;
+  /** Angular position (x, y) from the wide camera, in radians. */
+  angle: Point2d;
+};
+
+export type ExtrinsicDataset = ExtrinsicData[];
 
 export function initCamera(camera: Camera, config: Partial<Camera>) {
   // Pixel format must be applied before acquisition starts (it changes the

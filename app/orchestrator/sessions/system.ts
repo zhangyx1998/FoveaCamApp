@@ -13,6 +13,7 @@ import { system, type PerfSnapshot } from "@lib/orchestrator/contracts";
 import { listCameraInfo } from "../camera.js";
 import { releaseAll } from "../registry.js";
 import { writeCounts } from "../store-hub.js";
+import { spans } from "../diagnostics.js";
 import { startLoopLagProbe } from "@lib/util/rolling";
 
 const LOOP_LAG_PUBLISH_INTERVAL_MS = 1000; // ≤ 1 Hz per the perf-substrate constraint
@@ -60,6 +61,7 @@ export function systemSession(
             },
             frames: frameStats(),
             storeHub: writeCounts(),
+            spans: [...spans()],
           };
         },
       },

@@ -4,7 +4,14 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 
-import { clamp } from "./util";
+// `clamp` comes from `./util/math` (Vue-free, no imports at all) rather than
+// `./util` — that module pulls in `vue` (several of its other exports use
+// `ref`/`computed`), and this file must stay Vue-free: the orchestrator's
+// disparity-scope session (docs/refactor/orchestrator.md §7.1 S1a) was the
+// first orchestrator-side `@lib/pid` consumer, and pulling `vue` into the
+// orchestrator bundle from here broke the "Vue-free orchestrator" hard rule
+// (§3) — a ~1.3 MB bundle-size jump caught it.
+import { clamp } from "./util/math.js";
 
 export interface PIDOptions {
   /** Proportional gain. */

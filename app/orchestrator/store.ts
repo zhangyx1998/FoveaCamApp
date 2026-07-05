@@ -4,11 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Orchestrator-side config store. Reads/writes the same on-disk JSON files as
-// the renderer `Store` (same path layout + codec), but without Vue reactivity or
-// `ipcRenderer` — the orchestrator owns authoritative control state and
-// broadcasts changes through its sessions instead. The userData path is handed
-// down by the main process via `FOVEA_DATA_PATH`.
+// Internal filesystem primitives for `store-hub.ts`. Do not import this from
+// sessions or orchestrator helpers; route reads/writes through store-hub so the
+// in-memory cache, write counts, and renderer notifications stay authoritative.
+// Reads/writes the same on-disk JSON files as the renderer `Store` (same path
+// layout + codec), but without Vue reactivity or `ipcRenderer`. The userData
+// path is handed down by the main process via `FOVEA_DATA_PATH`.
 //
 // Writes are atomic (temp file + rename) and operations on the same file are
 // serialized, so rapid edits (e.g. dragging the exposure slider) can never tear

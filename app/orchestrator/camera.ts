@@ -13,7 +13,7 @@ import type { Mat } from "core/Vision";
 import { getCameraKey, initCamera } from "@lib/camera-config";
 import type { CameraInfo } from "@lib/orchestrator/contracts";
 import type { FrameMeta, FramePayload } from "@lib/orchestrator/protocol";
-import { read } from "./store.js";
+import { read } from "./store-hub.js";
 
 /** Store path for a camera's persisted config. Accepts a live `Camera` or
  *  just its identity fields (e.g. a `CameraInfo` from `listCameraInfo()`) —

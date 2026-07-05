@@ -21,7 +21,7 @@ import {
   type StateOf,
   type TelemetryOf,
 } from "../lib/orchestrator/protocol.js";
-import { report } from "./diagnostics.js";
+import { report, span, type Span } from "./diagnostics.js";
 import { attachStore } from "./store-hub.js";
 
 function mainEndpoint(port: MessagePortMain): Endpoint {
@@ -54,6 +54,11 @@ export class ServerSession<C extends Contract> {
   // Bounded by clearing on idle/dispose, not by topic count — dynamic
   // per-capture channel names would otherwise accumulate forever.
   private readonly frameCache = new Map<string, FramePayload>();
+  // S5 (docs/refactor/orchestrator.md §7.1): timestamp of the most recent
+  // activation (subscribers 0 -> 1), cleared once the first frame after it
+  // publishes — measures "activate -> first frame" ("time to live stream")
+  // generically for every session, without per-module instrumentation.
+  private activatedAt: number | null = null;
   private readonly commands = new Map<string, (arg: any) => any>();
   private readonly stateWatchers = new Set<(key: string, value: any) => void>();
   private activateFn?: () => void;
@@ -123,6 +128,10 @@ export class ServerSession<C extends Contract> {
   frame(name: FrameOf<C> | (string & {}), payload: FramePayload): void {
     const t = topic.frame(this.name, String(name));
     this.frameCache.set(t, payload); // V4: last-payload cache, replayed on late interest
+    if (this.activatedAt !== null) {
+      span(`session.${this.name}.timeToFirstFrame`, performance.now() - this.activatedAt);
+      this.activatedAt = null;
+    }
     for (const ch of this.subscribers) if (ch.hasFrameInterest(t)) ch.sendFrame(t, payload);
   }
 
@@ -170,7 +179,10 @@ export class ServerSession<C extends Contract> {
     for (const key of Object.keys(this.state))
       ch.emit(topic.state(this.name), { key, value: (this.state as any)[key] });
     ch.emit(topic.telemetry(this.name), this.telemetrySnapshot);
-    if (this.subscribers.size === 1) this.activateFn?.();
+    if (this.subscribers.size === 1) {
+      this.activatedAt = performance.now();
+      this.activateFn?.();
+    }
   }
 
   /** A renderer stopped viewing; release resources when nobody is left. */
@@ -282,6 +294,13 @@ export class Hub {
    *  the shared camera registry). See §12.1 C7. */
   reportError(scope: string, message: string): void {
     for (const ch of this.channels) ch.emit(topic.error, { scope, message });
+  }
+
+  /** Broadcast a `Span` (§7.1 S5) to every connected renderer, live, the same
+   *  way `reportError` broadcasts diagnostics — a future profiler window
+   *  consumes this for a real-time timeline. */
+  reportSpan(s: Span): void {
+    for (const ch of this.channels) ch.emit(topic.span, s);
   }
 
   /** Per-topic frame stats summed across every connected channel (perf

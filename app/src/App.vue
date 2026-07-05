@@ -4,7 +4,7 @@ This source code is licensed under the MIT license.
 You may find the full license in project root directory.
 --------------------------------------------------- -->
 <script setup lang="ts">
-import { computed, ref, shallowRef } from "vue";
+import { computed, defineAsyncComponent, ref, shallowRef } from "vue";
 import TitleBar from "./components/TitleBar.vue";
 import Controller from "./components/Controller.vue";
 const currentModule = shallowRef<any>(null);
@@ -19,8 +19,15 @@ import CalibrateIntrinsic from "../modules/calibrate-intrinsic/index.vue";
 import CalibrateExtrinsic from "../modules/calibrate-extrinsic/index.vue";
 import CalibrateDistortion from "../modules/calibrate-distortion/index.vue";
 import CalibrateDrift from "../modules/calibrate-drift/index.vue";
-import Playground from "../modules/playground/index.vue";
 import SingleCapture from "../modules/single-capture/index.vue";
+// Dev-only scratch module — the last renderer code still touching `core`
+// directly (docs/refactor/orchestrator.md §7.1 S1c). Quarantined rather than
+// migrated: gated on `import.meta.env.DEV` so a production build's dead-code
+// elimination drops the import (and its `core` dependency) entirely instead
+// of just lazy-loading it.
+const Playground = import.meta.env.DEV
+  ? defineAsyncComponent(() => import("../modules/playground/index.vue"))
+  : null;
 import Loading from "./components/Loading.vue";
 import ErrorBoundary from "./components/ErrorBoundary.vue";
 import Overlay, { overlay } from "./components/Overlay.vue";
@@ -41,7 +48,9 @@ import {
   faRulerCombined,
   faBookOpen,
   faCircleHalfStroke,
+  faChartLine,
 } from "@fortawesome/free-solid-svg-icons";
+import { ipcRenderer } from "electron";
 import { current_capture } from "./capture";
 import CaptureOverlay from "./capture/index.vue";
 import RecordButton from "./record/RecordButton.vue";
@@ -56,6 +65,12 @@ function launch(module: any, name: string) {
 function backToHome() {
   currentModule.value = null;
   currentModuleName.value = null;
+}
+
+// Open the profiler window (docs/refactor/orchestrator.md §7.1 S4) — a
+// second, plain-chrome window over the same orchestrator connection.
+function openProfiler() {
+  ipcRenderer.send("open-profiler-window");
 }
 
 window.addEventListener("keydown", (e) => {
@@ -116,6 +131,7 @@ window.addEventListener("keydown", (e) => {
             <Icon :icon="faCompass" /> Manual Control
           </button>
           <button
+            v-if="Playground"
             style="--color: #f6f"
             @click="launch(Playground, 'Playground')"
           >
@@ -182,6 +198,9 @@ window.addEventListener("keydown", (e) => {
     <Overlay :overlay="RemoteCanvas">
       <Icon :icon="faTelevision" />
     </Overlay>
+    <button class="icon-button" title="Open profiler window" @click="openProfiler">
+      <Icon :icon="faChartLine" />
+    </button>
     <Controller />
   </TitleBar>
 </template>
@@ -195,6 +214,25 @@ window.addEventListener("keydown", (e) => {
   overflow: auto;
   * {
     user-select: none;
+  }
+}
+
+// Mirrors `Overlay.vue`'s `.overlay-toggle` so plain (non-overlay) title-bar
+// icon buttons look consistent with the ones next to it.
+.icon-button {
+  background: none;
+  border: none;
+  padding: 0.4em;
+  margin: 0;
+  cursor: pointer;
+  color: inherit;
+  border-radius: 4px;
+  transition: all 0.1s;
+  outline: 1px solid transparent;
+
+  &:hover {
+    background: #fff1;
+    outline: 1px solid #666;
   }
 }
 

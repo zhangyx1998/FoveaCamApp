@@ -33,7 +33,7 @@ import {
 import { RECT, VEC } from "@lib/util/geometry";
 import { PID } from "@lib/pid";
 import { inverseTriangulate, vergeToDistance } from "@lib/stereo";
-import type { CoordinateConversions } from "@lib/camera";
+import type { CoordinateConversions } from "@lib/coordinate-conversions";
 
 export type MatchResult = {
   /** Heatmap visualization of the correlation map (red = match). */
@@ -71,6 +71,13 @@ export type VergenceOptions = {
   expand_y: number;
 };
 
+/** Fovea tile size at a given wide-frame footprint (matches `analyzeVergence`'s
+ *  own math) — callers precompute tiles at this size via `getFoveaTile`. */
+export function foveaTileSize(opts: Pick<VergenceOptions, "width" | "height" | "zoom" | "scale">): Size {
+  const { width, height, zoom: z, scale: s } = opts;
+  return { width: (width * s) / z, height: (height * s) / z };
+}
+
 /**
  * Per-DOF controllers. Rather than commanding the four fovea pixel DOF
  * (L.x, L.y, R.x, R.y) independently — which lets the foveas drift apart on
@@ -100,8 +107,17 @@ export type VergenceControl = {
 const GAUSS_KSIZE = 9;
 const GAUSS_SIGMA = 10;
 
-/** Grayscale, downsampled fovea tile at its wide-frame footprint size. */
-async function getFoveaTile(f: Mat<Uint8Array>, size: Size) {
+/**
+ * Grayscale, downsampled fovea tile at its wide-frame footprint size. Exported
+ * so callers driven by per-camera frame taps (the orchestrator registry's
+ * `onView`, whose Mat is only valid for the duration of that synchronous
+ * call) can compute a tile — safe to retain past the call, since `cvtColor`
+ * reads the source and allocates a fresh buffer before this function's first
+ * `await` — independently of the other eye's tick, then hand the pair to
+ * {@link analyzeVergence} once the center tick arrives. See
+ * docs/refactor/orchestrator.md §7.1 S1a.
+ */
+export async function getFoveaTile(f: Mat<Uint8Array>, size: Size) {
   return await resize(cvtColor(f, "RGBA2GRAY"), size);
 }
 
@@ -150,12 +166,20 @@ async function processMatch(
 /**
  * Stage 1: template-match each fovea tile into the wide-frame strip and report
  * where each fovea is currently looking, plus the target footprint.
+ *
+ * `tiles` are precomputed per-eye via {@link getFoveaTile} (see that
+ * function's doc for why — the registry's per-camera `onView` taps don't
+ * arrive synchronized, so each eye's tile is captured independently on its
+ * own tick and handed in here once the center tick drives a match); `c` is
+ * the wide center Mat, read synchronously within this call (safe even for a
+ * reused-buffer tap, same reasoning as `getFoveaTile`).
  */
 export async function analyzeVergence(
-  frames: { l: Mat<Uint8Array>; c: Mat<Uint8Array>; r: Mat<Uint8Array> },
+  tiles: { l: Mat<Uint8Array>; r: Mat<Uint8Array> },
+  c: Mat<Uint8Array>,
   opts: VergenceOptions,
 ): Promise<VergenceAnalysis> {
-  const { l, c, r } = frames;
+  const { l: tl, r: tr } = tiles;
   const {
     width,
     height,
@@ -165,23 +189,18 @@ export async function analyzeVergence(
     expand_x = 3.0,
     expand_y = 2.0,
   } = opts;
-  const h = (height * s) / z; // Height of fovea tile (scaled)
-  const w = (width * s) / z; // Width of fovea tile (scaled)
   const W = (width / z) * expand_x; // Strip width
   const H = (height / z) * expand_y; // Strip height
   const ox = target.x - W / 2;
   const oy = target.y - H / 2;
-  const [tl, tc, tr] = await Promise.all([
-    getFoveaTile(l, { width: w, height: h }),
-    getMatchTile(c, ox, oy, W, H, s),
-    getFoveaTile(r, { width: w, height: h }),
-  ]);
+  const tc = await getMatchTile(c, ox, oy, W, H, s);
   // Identical pipeline per eye: correlate the fovea tile into the wide strip,
   // smooth, then un-scale the peak back to full-resolution strip coordinates.
   const matchFovea = (tile: Mat<Uint8Array>) =>
     matchTemplate(tc, tile, "CCOEFF_NORMED").then((m) =>
       processMatch(gaussian(m, GAUSS_KSIZE, GAUSS_SIGMA), tile, 1 / s),
     );
+  const [h1 = 0, w1 = 0] = tl.shape; // fovea tile size (scaled) — for `center.rect`
   const [guide, ml, mr] = await Promise.all([
     resize(tc, {}, 1 / s),
     matchFovea(tl),
@@ -189,8 +208,8 @@ export async function analyzeVergence(
   ]);
   const center = {
     rect: RECT.fromCenter(VEC.sub(target, { x: ox, y: oy }), {
-      width: w / s,
-      height: h / s,
+      width: w1 / s,
+      height: h1 / s,
     }),
   };
   return { guide, ml, mr, center, ox, oy };

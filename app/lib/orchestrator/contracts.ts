@@ -23,6 +23,13 @@ export type CameraInfo = {
  *  (docs/refactor/orchestrator.md §7.3). */
 export type Stat = { mean: number; max: number };
 
+/** A structured timing measurement (§7.1 S5) — boot phases, per-activation
+ *  camera/calibration work, controller connect. Mirrors
+ *  `orchestrator/diagnostics.ts`'s `Span`; duplicated here (not imported)
+ *  since `contracts.ts` is the renderer-safe boundary and `diagnostics.ts`
+ *  is orchestrator-only. */
+export type Span = { name: string; ms: number; meta?: Record<string, unknown>; t: number };
+
 /** One `system.perfSnapshot` document — the artifact the zero-copy decision
  *  and round-over-round regression checks consume (§7.3 item 4). */
 export type PerfSnapshot = {
@@ -33,6 +40,8 @@ export type PerfSnapshot = {
   /** Per-topic frame counters, summed across every connected channel. */
   frames: Record<string, { offered: number; sent: number; coalesced: number; bytes: number }>;
   storeHub: { writes: number; updates: number; clears: number };
+  /** Ring-buffer snapshot of recent boot/activation/connect timings (§7.1 S5). */
+  spans: Span[];
 };
 
 /**
@@ -71,6 +80,10 @@ export type SystemContract = typeof system;
  * (the title-bar `Controller.vue`, a thin client over this session, connects on
  * mount).
  */
+/** One live CMD_STREAM's telemetry row — the profiler's per-stream table
+ *  (docs/refactor/orchestrator.md §7.1 S4 added scope). */
+export type StreamStat = { id: number; hz: number; left: Pos; right: Pos };
+
 export const controller = defineContract({
   state: { vendorId: "16c0", productId: "0483" },
   telemetry: {
@@ -82,6 +95,17 @@ export const controller = defineContract({
       left: Pos;
       right: Pos;
     },
+    // Serial + per-stream probes (§7.1 S4 added scope) — sampled ~2 Hz by
+    // the session while connected; rates derived from `Device.stats`'
+    // cumulative counters (native, landed with the synced-capture thread's
+    // P4.1) by diffing successive samples.
+    serial_rate: {
+      txBytesPerSec: 0,
+      rxBytesPerSec: 0,
+      txPacketsPerSec: 0,
+      rxPacketsPerSec: 0,
+    },
+    streams: [] as StreamStat[],
   },
   frames: [] as const,
   commands: {

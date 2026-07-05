@@ -22,7 +22,62 @@ import {
 type PortInfo = Awaited<ReturnType<typeof SerialPort.list>>[number];
 
 // Streams::CAPACITY, firmware/include/Streams.h — fixed-size table on the MCU.
-const STREAM_CAPACITY = 8;
+export const STREAM_CAPACITY = 64;
+export const STREAM_MIN_UPDATE_INTERVAL_MS = 1;
+
+function samePos(a: Pos, b: Pos): boolean {
+  return a.x === b.x && a.y === b.y;
+}
+
+function clonePos(pos: Pos): Pos {
+  return { x: pos.x, y: pos.y };
+}
+
+export class StreamIdPool {
+  private readonly inUse = new Set<number>();
+
+  constructor(readonly capacity = STREAM_CAPACITY) {}
+
+  allocate(): number {
+    for (let candidate = 0; candidate < this.capacity; candidate++) {
+      if (!this.inUse.has(candidate)) {
+        this.inUse.add(candidate);
+        return candidate;
+      }
+    }
+    throw new Error(`Stream capacity (${this.capacity}) exceeded`);
+  }
+
+  release(id: number): void {
+    this.inUse.delete(id);
+  }
+}
+
+export class StreamUpdateGate {
+  private lastLeft: Pos;
+  private lastRight: Pos;
+  private lastSentAt: number;
+
+  constructor(
+    initial: { left: Pos; right: Pos },
+    private readonly minIntervalMs = STREAM_MIN_UPDATE_INTERVAL_MS,
+    now = performance.now(),
+  ) {
+    this.lastLeft = clonePos(initial.left);
+    this.lastRight = clonePos(initial.right);
+    this.lastSentAt = now;
+  }
+
+  accept(next: { left: Pos; right: Pos }, now = performance.now()): boolean {
+    if (samePos(next.left, this.lastLeft) && samePos(next.right, this.lastRight))
+      return false;
+    if (now - this.lastSentAt < this.minIntervalMs) return false;
+    this.lastLeft = clonePos(next.left);
+    this.lastRight = clonePos(next.right);
+    this.lastSentAt = now;
+    return true;
+  }
+}
 
 /** A CMD_STREAM handle (docs/refactor/synced-capture.md §3.2/§6): a named,
  *  continuously-updatable mirror-position target. `update()` is fire-and-
@@ -60,7 +115,16 @@ export class Controller {
   private bias = 0;
   private _enabled = false;
   private _pos: { left: Pos; right: Pos } = origin;
-  private readonly streamIdsInUse = new Set<number>();
+  private readonly streamIds = new StreamIdPool();
+  // Live-stream telemetry (docs/refactor/orchestrator.md §7.1 S4 added
+  // scope): `count` accumulates between `streamSnapshot()` calls, which
+  // reset it — the caller's sampling interval turns the raw count into a
+  // rolling Hz. `left`/`right` are the last-sent target, for the
+  // profiler's per-stream XY position pad.
+  private readonly streamStats = new Map<
+    number,
+    { count: number; left: Pos; right: Pos }
+  >();
 
   constructor(
     info: PortInfo,
@@ -99,6 +163,26 @@ export class Controller {
    *  actuate/trigger's v1-compat fallback — so they hard-require this. */
   get v2Capable() {
     return this.device.v2Capable;
+  }
+  /** Cumulative serial byte/packet counters (docs/refactor/orchestrator.md
+   *  §7.1 S4 added scope) — the caller derives rates by diffing successive
+   *  samples, same pattern as `streamSnapshot()`'s Hz. */
+  get stats() {
+    return this.device.stats;
+  }
+
+  /** Live per-stream `{id, hz, left, right}` snapshot, resetting each
+   *  stream's call counter — call at a fixed interval (`intervalSec`) so
+   *  `hz` is meaningful. */
+  streamSnapshot(
+    intervalSec: number,
+  ): Array<{ id: number; hz: number; left: Pos; right: Pos }> {
+    const out: Array<{ id: number; hz: number; left: Pos; right: Pos }> = [];
+    for (const [id, s] of this.streamStats) {
+      out.push({ id, hz: s.count / intervalSec, left: s.left, right: s.right });
+      s.count = 0;
+    }
+    return out;
   }
 
   release() {
@@ -173,7 +257,7 @@ export class Controller {
   // leaves `Streams::snapshot()` reporting the stream's target rather than
   // the DAC's actual (Actuate-set) state (§9 FW5); callers should pick one.
 
-  /** Creates a CMD_STREAM (id auto-allocated, 0..7 — Streams::CAPACITY).
+  /** Creates a CMD_STREAM (id auto-allocated, 0..63 — Streams::CAPACITY).
    *  ACK-backed (protocol-level single-phase: ACK/REJ, no FIN — §3.2/§9). */
   async createStream(pos: { left: Pos; right: Pos }): Promise<StreamHandle> {
     if (!this.device.connected) throw new Error("Controller not connected");
@@ -181,16 +265,7 @@ export class Controller {
       throw new Error(
         "createStream requires v2-capable firmware (verifyVersion() has not confirmed compatibility)",
       );
-    let id = -1;
-    for (let candidate = 0; candidate < STREAM_CAPACITY; candidate++) {
-      if (!this.streamIdsInUse.has(candidate)) {
-        id = candidate;
-        break;
-      }
-    }
-    if (id < 0)
-      throw new Error(`Stream capacity (${STREAM_CAPACITY}) exceeded`);
-    this.streamIdsInUse.add(id);
+    const id = this.streamIds.allocate();
     try {
       await this.device.set(Protocol.Command.MirrorStream, {
         op: "CREATE",
@@ -199,20 +274,29 @@ export class Controller {
         right: channels(pos.right, this.bias, this.dv),
       });
     } catch (error) {
-      this.streamIdsInUse.delete(id);
+      this.streamIds.release(id);
       throw error;
     }
+    this.streamStats.set(id, { count: 0, left: pos.left, right: pos.right });
+    const gate = new StreamUpdateGate(pos);
     let closed = false;
     return {
       id,
       update: (next) => {
         if (closed) throw new Error(`Stream ${id} is closed`);
+        if (!gate.accept(next)) return;
         this.device.fireAndForget(Protocol.Command.MirrorStream, {
           op: "UPDATE",
           id,
           left: channels(next.left, this.bias, this.dv),
           right: channels(next.right, this.bias, this.dv),
         });
+        const stats = this.streamStats.get(id);
+        if (stats) {
+          stats.count++;
+          stats.left = next.left;
+          stats.right = next.right;
+        }
       },
       close: async () => {
         if (closed) return;
@@ -223,7 +307,8 @@ export class Controller {
             id,
           });
         } finally {
-          this.streamIdsInUse.delete(id);
+          this.streamIds.release(id);
+          this.streamStats.delete(id);
         }
       },
     };

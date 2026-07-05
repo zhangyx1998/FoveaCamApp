@@ -27,3 +27,6 @@ compile_commands.json
 
 # Symlink
 /store
+
+# Test logs
+*.log

@@ -15,9 +15,20 @@ import {
   activeController,
   setActiveController,
 } from "../controller.js";
+import { timeSpan } from "../diagnostics.js";
 import { controller } from "@lib/orchestrator/contracts";
 
 const NEUTRAL = { left: { x: 0, y: 0 }, right: { x: 0, y: 0 } };
+const ZERO_RATE = {
+  txBytesPerSec: 0,
+  rxBytesPerSec: 0,
+  txPacketsPerSec: 0,
+  rxPacketsPerSec: 0,
+};
+// Serial + per-stream probes (docs/refactor/orchestrator.md §7.1 S4 added
+// scope) — 2 Hz matches the doc's own throttle note ("wire cost is a few
+// numbers x <=8 streams").
+const PROBE_INTERVAL_MS = 500;
 
 export function controllerSession(): ServerSession<typeof controller> {
   return defineSession("controller", controller, (s) => {
@@ -35,22 +46,58 @@ export function controllerSession(): ServerSession<typeof controller> {
       });
     }
 
+    let probeTimer: ReturnType<typeof setInterval> | null = null;
+    let prevStats: { txBytes: number; rxBytes: number; txPackets: number; rxPackets: number } | null = null;
+
+    function stopProbe(): void {
+      if (probeTimer) clearInterval(probeTimer);
+      probeTimer = null;
+      prevStats = null;
+      s.telemetry({ serial_rate: ZERO_RATE, streams: [] });
+    }
+
+    function startProbe(): void {
+      stopProbe();
+      const dtSec = PROBE_INTERVAL_MS / 1000;
+      probeTimer = setInterval(() => {
+        const c = ctrl();
+        if (!c) {
+          stopProbe();
+          return;
+        }
+        const cur = c.stats;
+        const serial_rate = prevStats
+          ? {
+              txBytesPerSec: (cur.txBytes - prevStats.txBytes) / dtSec,
+              rxBytesPerSec: (cur.rxBytes - prevStats.rxBytes) / dtSec,
+              txPacketsPerSec: (cur.txPackets - prevStats.txPackets) / dtSec,
+              rxPacketsPerSec: (cur.rxPackets - prevStats.rxPackets) / dtSec,
+            }
+          : ZERO_RATE;
+        prevStats = cur;
+        s.telemetry({ serial_rate, streams: c.streamSnapshot(dtSec) });
+      }, PROBE_INTERVAL_MS);
+    }
+
     return {
       commands: {
         async connect() {
           if (ctrl()) return true;
           s.telemetry({ pending: true });
           try {
-            const info = await Controller.match({
-              vendorId: s.state.vendorId,
-              productId: s.state.productId,
+            return await timeSpan("controller.connect", async () => {
+              const info = await Controller.match({
+                vendorId: s.state.vendorId,
+                productId: s.state.productId,
+              });
+              if (!info) return false;
+              const c = new Controller(info);
+              await c.ready;
+              setActiveController(c);
+              publish();
+              startProbe();
+              return true;
             });
-            if (!info) return false;
-            const c = new Controller(info);
-            await c.ready;
-            setActiveController(c);
-            publish();
-            return true;
           } finally {
             s.telemetry({ pending: false });
           }
@@ -59,6 +106,7 @@ export function controllerSession(): ServerSession<typeof controller> {
           const c = ctrl();
           setActiveController(null);
           c?.release();
+          stopProbe();
           publish();
         },
         async enable() {

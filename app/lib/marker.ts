@@ -11,7 +11,7 @@ import {
   Mat,
 } from "core/Vision";
 import { area, type Point2d, type Point3d, type Size } from "core/Geometry";
-import { ExtrinsicDataset } from "./camera";
+import type { ExtrinsicDataset } from "./camera-config.js";
 import Regression, { RegressionConfig } from "core/Regression";
 
 export const CORNER_OBJ_POINTS: Point3d[] = [

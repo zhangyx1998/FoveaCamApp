@@ -124,8 +124,15 @@ function startOrchestrator() {
   const entry = path.join(DIR, "orchestrator.js");
   orchestrator = utilityProcess.fork(entry, [], {
     stdio: "inherit",
-    // The orchestrator reads/writes the same config store as the renderer.
-    env: { ...process.env, FOVEA_DATA_PATH: DATA },
+    env: {
+      ...process.env,
+      // The orchestrator reads/writes the same config store as the renderer.
+      FOVEA_DATA_PATH: DATA,
+      // Boot-span baseline (docs/refactor/orchestrator.md §7.1 S5) — stamped
+      // as close to `fork()` as possible so `index.ts` can measure fork ->
+      // first-useful-work timing.
+      FOVEA_FORK_TS: String(Date.now()),
+    },
   });
   orchestrator.on("exit", (code) => {
     console.warn("Orchestrator exited:", code);
@@ -138,13 +145,52 @@ function startOrchestrator() {
   });
 }
 
-// A renderer asks to connect; hand both ends of a fresh channel out.
+// A renderer asks to connect; hand both ends of a fresh channel out. Already
+// generic per-`event.sender` — a second (profiler) window connecting just
+// gets its own port pair, no changes needed for multi-window (§7.1 S4, the
+// first real exercise of the multi-window brokering objective, §2).
 ipcMain.on("orchestrator:connect", (event) => {
   if (!orchestrator) startOrchestrator();
   const { port1, port2 } = new MessageChannelMain();
   orchestrator!.postMessage(null, [port1]);
   event.sender.postMessage("orchestrator:port", null, [port2]);
 });
+
+// ---- Profiler window (§7.1 S4) --------------------------------------------
+// A second, plain-chrome `BrowserWindow` loading the same renderer bundle
+// with `?profiler=1` — `src/index.ts` branches on that to mount
+// `ProfilerWindow.vue` instead of the main `App.vue`. Read-only over
+// existing telemetry; needs no cameras, so it's usable during the mechanical
+// downtime. Singleton — reopening focuses the existing one.
+let profilerWin: BrowserWindow | null = null;
+function openProfilerWindow() {
+  if (profilerWin) {
+    profilerWin.focus();
+    return;
+  }
+  profilerWin = new BrowserWindow({
+    title: "FoveaCam Duo — Profiler",
+    icon: getIcon("icon.ico"),
+    height: 800,
+    width: 720,
+    backgroundColor: "black",
+    webPreferences: {
+      preload,
+      nodeIntegration: true,
+      contextIsolation: false,
+    },
+  });
+  if (VITE_DEV_SERVER_URL) {
+    profilerWin.loadURL(`${VITE_DEV_SERVER_URL}?profiler=1`);
+  } else {
+    profilerWin.loadFile(indexHtml, { search: "profiler=1" });
+  }
+  profilerWin.on("closed", () => {
+    profilerWin = null;
+  });
+}
+
+ipcMain.on("open-profiler-window", () => openProfilerWindow());
 
 app.whenReady().then(customizeApp).then(startOrchestrator).then(createWindow);
 

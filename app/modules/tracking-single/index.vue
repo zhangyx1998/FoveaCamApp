@@ -23,7 +23,7 @@ You may find the full license in project root directory.
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
 import type { Point2d, Size } from "core/Geometry";
-import { ROLE, THEME } from "@lib/camera";
+import { ROLE, THEME } from "@lib/camera-config";
 import { useAppConfig } from "@lib/config";
 import { useSession } from "@lib/orchestrator/client";
 import { tracking } from "./contract";

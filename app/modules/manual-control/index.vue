@@ -19,7 +19,7 @@ You may find the full license in project root directory.
 <script setup lang="ts">
 import { computed, ref, shallowRef, watch } from "vue";
 import type { Point2d, Rect } from "core/Geometry";
-import { ROLE, THEME } from "@lib/camera";
+import { ROLE, THEME } from "@lib/camera-config";
 import { useSession } from "@lib/orchestrator/client";
 import { getController } from "@src/components/Controller.vue";
 import { isEmpty, radians } from "@lib/util";

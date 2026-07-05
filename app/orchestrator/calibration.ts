@@ -24,9 +24,10 @@ import {
   type ConversionInputs,
   type CoordinateConversions,
 } from "@lib/coordinate-conversions";
-import type { ExtrinsicDataset } from "@lib/camera";
+import type { ExtrinsicDataset } from "@lib/camera-config";
 import { cameraConfigPath } from "./camera.js";
-import { read } from "./store.js";
+import { read } from "./store-hub.js";
+import { timeSpan } from "./diagnostics.js";
 import { matchTriple, retryUntil, type CameraLease } from "./registry.js";
 
 function validate(cal?: Partial<CameraCalibration>): cal is CameraCalibration {
@@ -40,30 +41,35 @@ function validate(cal?: Partial<CameraCalibration>): cal is CameraCalibration {
   );
 }
 
-async function loadIntrinsic(
-  camera: Camera,
-): Promise<{ undistort: Undistort | null }> {
+// Exported for calibrate-intrinsic's session (§7.1 S1b) — it needs the same
+// "read + validate + build Undistort" logic to show a camera's FOV/date in
+// its picker list, without duplicating the validation rules. Parameter
+// widened to the same `Pick` `cameraConfigPath`/`getCameraKey` already use —
+// the picker list only has plain `CameraInfo`s, not opened `Camera` handles.
+export async function loadIntrinsic(
+  camera: Pick<Camera, "vendor" | "model" | "serial">,
+): Promise<{ undistort: Undistort | null; date: Date | null }> {
   const cal = await read<Partial<CameraCalibration>>(
     ["calibrate-intrinsic", getCameraKey(camera)],
     {},
   );
+  const date = cal.date instanceof Date ? cal.date : null;
   try {
-    if (validate(cal)) return { undistort: new Undistort(cal) };
+    if (validate(cal)) return { undistort: new Undistort(cal), date };
   } catch (e) {
     console.warn("[calibration] failed to build undistort:", e);
   }
-  return { undistort: null };
+  return { undistort: null, date };
 }
 
-async function loadExtrinsic(
-  camera: Camera,
+// Exported for calibrate-extrinsic's session (§7.1 S1b) — its FIN wizard
+// step fits a live preview regression from the *in-progress* (not yet
+// persisted) dataset, same math as loading a saved one.
+export async function fitExtrinsicRegression(
+  ds: ExtrinsicDataset,
 ): Promise<ConversionInputs["LE"]> {
-  const ds = await read<ExtrinsicDataset>(
-    ["calibrate-extrinsic", getCameraKey(camera)],
-    [],
-  );
   if (!Array.isArray(ds) || ds.length === 0)
-    throw new Error(`No extrinsic data for ${getCameraKey(camera)}`);
+    throw new Error("No extrinsic data for regression");
   const keys: (keyof Point2d)[] = ["x", "y"];
   const A: Point2d[] = [];
   const V: Point2d[] = [];
@@ -78,11 +84,21 @@ async function loadExtrinsic(
   return { V2A: V2A.fit(V, A), A2V: A2V.fit(A, V), A2H };
 }
 
-async function loadConfig(
-  L: Camera,
-  C: Camera,
-  R: Camera,
-): Promise<ConversionInputs["config"]> {
+async function loadExtrinsic(
+  camera: Camera,
+): Promise<ConversionInputs["LE"]> {
+  const ds = await read<ExtrinsicDataset>(
+    ["calibrate-extrinsic", getCameraKey(camera)],
+    [],
+  );
+  return fitExtrinsicRegression(ds);
+}
+
+// Exported for calibrate-drift's session (§7.1 S1b) — it reads/writes
+// `drift_l`/`drift_r` on this same document directly (via store-hub, for the
+// caching/broadcast behavior), so it needs the path without re-deriving the
+// hash independently.
+export async function tripleConfigPath(L: Camera, C: Camera, R: Camera): Promise<string[]> {
   const key = await sha256(
     JSON.stringify({
       L: getCameraKey(L),
@@ -90,7 +106,15 @@ async function loadConfig(
       R: getCameraKey(R),
     }),
   );
-  return read<ConversionInputs["config"]>(["triples", key], {});
+  return ["triples", key];
+}
+
+async function loadConfig(
+  L: Camera,
+  C: Camera,
+  R: Camera,
+): Promise<ConversionInputs["config"]> {
+  return read<ConversionInputs["config"]>(await tripleConfigPath(L, C, R), {});
 }
 
 /**
@@ -103,12 +127,9 @@ export async function loadConversions(
   C: Camera,
   R: Camera,
 ): Promise<ConversionInputs> {
-  const [CI, LE, RE, config] = await Promise.all([
-    loadIntrinsic(C),
-    loadExtrinsic(L),
-    loadExtrinsic(R),
-    loadConfig(L, C, R),
-  ]);
+  const [CI, LE, RE, config] = await timeSpan("calibration.loadConversions", () =>
+    Promise.all([loadIntrinsic(C), loadExtrinsic(L), loadExtrinsic(R), loadConfig(L, C, R)]),
+  );
   return { CI, LE, RE, config };
 }
 
@@ -116,6 +137,10 @@ export type CalibratedTriple = {
   leases: Record<Role, CameraLease>;
   conv: CoordinateConversions;
   undistort: Undistort | null;
+  /** The triple config's store path (`["triples", <hash>]`) — for sessions
+   *  that read/write it directly beyond what `conv` bakes in (e.g.
+   *  calibrate-drift's `drift_l`/`drift_r`). */
+  configPath: string[];
 };
 
 /**
@@ -127,12 +152,14 @@ export type CalibratedTriple = {
  * retry window — caller is responsible for publishing `ready: false`.
  */
 export async function leaseCalibratedTriple(): Promise<CalibratedTriple | null> {
-  const leases = await retryUntil(matchTriple);
+  const leases = await timeSpan("calibration.matchTriple", () => retryUntil(matchTriple));
   if (!leases) return null;
   const inputs = await loadConversions(leases.L.camera, leases.C.camera, leases.R.camera);
+  const configPath = await tripleConfigPath(leases.L.camera, leases.C.camera, leases.R.camera);
   return {
     leases,
     conv: useCoordinateConversions(inputs),
     undistort: inputs.CI.undistort,
+    configPath,
   };
 }

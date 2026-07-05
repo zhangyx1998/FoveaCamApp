@@ -12,6 +12,7 @@
 
 import { cmd, defineContract } from "@lib/orchestrator/protocol";
 import type { Point2d, Rect } from "core/Geometry";
+import type { Stat } from "@lib/orchestrator/contracts";
 
 const ZERO: Point2d = { x: 0, y: 0 };
 
@@ -39,6 +40,14 @@ export type Tuning = {
   timeout: number;
 };
 
+// Physical saturation limits, shared by the session (PID construction) and
+// the renderer (slider ranges — the PID objects themselves are server-side
+// now, so the UI recomputes the same bounds instead of reading them off a
+// live object like the original single-process implementation did).
+export const VERGE_MIN_DISTANCE_MM = 150;
+export const SHIFT_LIMIT_DEG = 5;
+export const VSHIFT_LIMIT_DEG = 2;
+
 export const DEFAULT_TUNING: Tuning = {
   pan: [0.02, 0.02, 0],
   depth: [1.0, 0.2, 0.5],
@@ -51,23 +60,39 @@ export const DEFAULT_TUNING: Tuning = {
   timeout: 2000,
 };
 
+/** Current value of each constrained-DOF PID integrator — debug readout +
+ *  the payload shape for `set_pid`'s manual nudge. */
+export type PidReadout = { verge: number; panX: number; panY: number; v_shift: number };
+
 export const disparity = defineContract({
   state: {
     /** Target center within the wide frame (pixels). */
     target: ZERO,
+    // Physical stereo baseline (mm) — same field/default as tracking-single
+    // and manual-control (docs/refactor/orchestrator.md §7.1 S1a); the old
+    // renderer-only `useAppConfig().baseline_distance_mm` isn't reachable
+    // from the orchestrator, and those two modules already established the
+    // simpler per-module-state precedent instead of a shared app config.
+    baseline: 200,
     /** FOV(wide) / FOV(fovea). */
     zoom: 9.0,
     /** Which composite the renderer wants for the `center.*` channel. */
     view: "sliced" as "sliced" | "disparity",
     /** Perspective-rectify each fovea onto its pointing pose before display. */
-    wrap_enable: true,
+    wrap_enable: true as boolean,
     tuning: DEFAULT_TUNING,
-    tracker_enabled: false,
-    /** KCF template size (pixels). */
+    tracker_enabled: false as boolean,
+    /** KCF template size (pixels); also used as the search-window pad, same
+     *  as the original renderer implementation. */
     kernel: { w: 64, h: 64 },
   },
   telemetry: {
-    status: "initializing",
+    /** Calibrated triple leased + conversions loaded (§12.1-style pattern —
+     *  see tracking-single/manual-control's own `ready`). */
+    ready: false as boolean,
+    status: "initializing" as string,
+    /** Wide (center) frame size (renderer clamps overlays to it). */
+    size: { width: 0, height: 0 },
     /** Actuator voltages read back from the mirrors. */
     volt: { L: ZERO, R: ZERO } as { L: Point2d; R: Point2d },
     /** Horizontal toe-in angle (rad) from the realized poses. */
@@ -83,7 +108,20 @@ export const disparity = defineContract({
     match_right: null as MatchInfo | null,
     match_center: null as { rect: Rect } | null,
     tracker_bbox: null as Rect | null,
+    /** Live PID integrator values (debug readout, matches the original
+     *  renderer's "PID Debug" fieldset). */
+    pids: { verge: 0, panX: 0, panY: 0, v_shift: 0 } as PidReadout,
+    // Control-path latency (perf substrate, docs/refactor/orchestrator.md
+    // §7.3 item 2), same shape/throttle as tracking-single/manual-control.
+    perf: { actuateMs: { mean: 0, max: 0 } as Stat },
   },
+  // L/C/R are the processed previews (L/R perspective-wrapped iff wrap_enable,
+  // C raw — this module never undistorts the wide view); `center.*` is the
+  // magnified/combined fovea view; `guide`/`match_left`/`match_right` are the
+  // template-match debug visualizations (heatmap Mats — their `{rect,score}`
+  // rides telemetry as `MatchInfo`, per this file's header comment; the
+  // written-back contract had dropped these two frame topics — added back
+  // here, part of "revalidate before building on it").
   frames: [
     "L",
     "C",
@@ -91,6 +129,8 @@ export const disparity = defineContract({
     "center.sliced",
     "center.disparity",
     "guide",
+    "match_left",
+    "match_right",
   ] as const,
   commands: {
     /** Pointer interaction on the wide view, in wide-frame pixels. */
@@ -100,6 +140,9 @@ export const disparity = defineContract({
     reset_tuning: cmd(),
     /** Clear the PID integrators so the foveas re-converge fresh. */
     reset_vergence: cmd(),
+    /** Manually nudge one PID's integrator (debug slider) — same effect as
+     *  the original renderer's direct `pids.verge.value = x` mutation. */
+    set_pid: cmd<{ dof: keyof PidReadout; value: number }>(),
   },
 });
 

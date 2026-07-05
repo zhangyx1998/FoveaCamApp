@@ -4,8 +4,8 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 
-import { TypedArray } from "core/types";
-import { Mat } from "core/Vision";
+import type { TypedArray } from "core/types";
+import type { Mat } from "core/Vision";
 
 export function makeMat<T extends TypedArray>(
   arr: T,

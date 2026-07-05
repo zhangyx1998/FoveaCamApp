@@ -46,6 +46,7 @@ import {
   type StateOf,
   type TelemetryOf,
 } from "./protocol.js";
+import type { Span } from "./contracts.js";
 
 /** Rebuild the Mat shape (`FrameView`/vision ops expect) from a frame payload. */
 export function payloadToMat(p: FramePayload | null): Mat<Uint8Array> | null {
@@ -68,6 +69,12 @@ function domEndpoint(port: MessagePort): Endpoint {
 
 let channel: Promise<Channel> | null = null;
 
+// Live boot/activation/connect timing feed (§7.1 S5) — bounded ring, module-
+// scope singleton like `rendererLoopLag` below, so a future profiler window
+// (§7.1 S4) can render a timeline without polling `perfSnapshot`.
+const SPAN_RING_CAPACITY = 200;
+export const orchestratorSpans: Span[] = [];
+
 /** Connect to the orchestrator (idempotent). Main brokers a `MessagePort`
  *  pair; the renderer receives its port over a one-shot IPC message. */
 export function connect(): Promise<Channel> {
@@ -81,6 +88,10 @@ export function connect(): Promise<Channel> {
       ch.on(topic.error, ({ scope, message }: { scope: string; message: string }) =>
         console.error(`[orchestrator:${scope}]`, message),
       );
+      ch.on(topic.span, (s: Span) => {
+        orchestratorSpans.push(s);
+        if (orchestratorSpans.length > SPAN_RING_CAPACITY) orchestratorSpans.shift();
+      });
       resolve(ch);
     });
     ipcRenderer.send("orchestrator:connect");
@@ -97,19 +108,6 @@ export function connect(): Promise<Channel> {
 ipcRenderer.on("orchestrator:down", () => {
   channel?.then((ch) => ch.close());
 });
-
-/**
- * Ask the orchestrator to release every camera it holds, and await completion.
- * Cameras are exclusive per OS process, so a renderer module that still opens
- * them directly (non-migrated calibrate-* / manual-control) must call this first
- * — otherwise the orchestrator's still-claimed devices make `Camera.list()`
- * find nothing. A one-shot request (no subscription).
- */
-export function releaseOrchestratorCameras(): Promise<void> {
-  return connect().then((ch) =>
-    ch.request(topic.command("system", "releaseCameras"), undefined),
-  );
-}
 
 // Renderer-side event-loop lag probe (perf substrate, docs/refactor/
 // orchestrator.md §7.3 item 1) — started once at module load, module-scope
@@ -135,7 +133,10 @@ if (typeof window !== "undefined") {
   });
 }
 
-async function dumpPerfSnapshot(): Promise<void> {
+/** Fetch `system.perfSnapshot`, merge in this window's own render loop lag,
+ *  and write it under the app data dir. Exported so the profiler window's
+ *  export button (§7.1 S4) can trigger the same dump the keybind does. */
+export async function dumpPerfSnapshot(): Promise<void> {
   const ch = await connect();
   const snapshot = await ch.request<Record<string, unknown>>(
     topic.command("system", "perfSnapshot"),
