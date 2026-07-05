@@ -20,7 +20,7 @@ namespace Streams {
 
 using Packet::Command::MirrorPosition;
 
-constexpr uint8_t CAPACITY = 8;
+constexpr uint8_t CAPACITY = 64;
 constexpr uint8_t INVALID_ID = 0xFF;
 
 // True if `id` was CREATEd and not yet TERMINATEd.

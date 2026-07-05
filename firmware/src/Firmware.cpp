@@ -32,9 +32,11 @@ void loop() {
   Streams::tick();
   Capture::tick();
   Protocol::tick();
-  auto byte = Serial.read();
-  if (byte >= 0 && COBS::rx.recv(byte))
-    handle(COBS::rx.get());
+  for (int available = Serial.available(); available > 0; available--) {
+    auto byte = Serial.read();
+    if (byte >= 0 && COBS::rx.recv(byte))
+      handle(COBS::rx.get());
+  }
 }
 
 #define HEADER(M, P)                                                           \
