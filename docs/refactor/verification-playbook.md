@@ -10,7 +10,7 @@
 > **Context:** everything landed since the first app run —
 > tracking/manual-control migrations, store-hub, RT1 fixes, perf substrate,
 > protocol v2, Stage 2 items as they land — is code-verified only (gates +
-> 32-test harness). This playbook is where it meets reality.
+> the vitest session harness). This playbook is where it meets reality.
 
 ## Pre-flight (before opening any module)
 

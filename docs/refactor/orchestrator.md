@@ -346,23 +346,13 @@ fully green, vitest 44/44, orchestrator bundle 149.6 kB zero-Vue, renderer
   explicit Frame refcount bookkeeping (no Vue `watch` doing it
   invisibly).
 
-**Queue now — 🏁 FINAL ROUND before commit checkpoint #2 (planner
-directive, 2026-07-04).** Scope is FROZEN to the numbered items below —
-this round exists to make the checkpoint a *complete* Stage 2, not to
-grow it. Rules for both threads:
-- No new scope. Anything discovered along the way gets **logged as a
-  finding** in the appropriate doc section, not fixed inline (unless it
-  blocks your own item's gates).
-- Definition of done per item: gates green (`vue-tsc` 0, `vite build`
-  fully green + orchestrator bundle zero-Vue, `vitest` all passing —
-  add suites where the item spec says so), plus **one compact log entry**
-  (≤ 15 lines; the round-4 sagas were excellent but the planner now
-  compacts them — start compact).
-- When your items are done, **stop**. The planner runs one review pass,
-  then the user commits. Explicitly out of scope this round: the
-  `Marker.vue` dictionary extraction (deferred — out of proportion),
-  `contextIsolation`, anything hardware-gated.
-
+**Final round complete → commit checkpoint #2 landed 2026-07-04**
+(`a49ab0d…b1b2680`: core hardening / firmware ST-64 / stage 2 app / docs).
+**The hardware-free runway is drained.** Post-checkpoint audit
+(2026-07-05) fixed stale guidance: AGENTS.md's inverted NAPI-in-renderer
+pattern + migration status, the superseded planner memory, a stale
+tracking-single TODO header, and marked the hot-path gate resolved.
+Remaining items:
 
 1. **S4 added-scope probes (orchestrator thread). ✅ Landed (coder,
    2026-07-04).** `Controller` (`orchestrator/controller.ts`) gained
@@ -385,11 +375,9 @@ grow it. Rules for both threads:
 2. **S2 + S3 + ST-64a/b/c (synced-capture thread). ✅ Landed (coder,
    2026-07-04)** — compact log in synced-capture.md §9.8; bench/flash
    remain hardware-gated.
-3. **Commit checkpoint #2 (user decision)** — the entire Stage 2 landing
-   (~60+ paths incl. deletions/renames) is again uncommitted on top of
-   the last checkpoint; tests/vue-tsc/Vite/core/firmware gates are green,
-   while `npm run build` still exits at the final packaging step because
-   `electron-builder` is not installed in this workspace.
+3. **Commit checkpoint #2 ✅ done 2026-07-04** (4 commits, planner-
+   verified first; the `npm run build` packaging step still needs
+   `electron-builder` installed — environmental, not a code gate).
 4. **Marker.vue exception** (optional, unblocks `contextIsolation`):
    extract dictionaries as static data, or accept the exception and
    check its `contextIsolation` compatibility explicitly.
@@ -504,9 +492,11 @@ wire changes.
 disjoint by file (they: `core/*` + renderer `disparity-scope/index.vue`).
 They preserve the JS-facing stream API sessions depend on; their bounded
 async-backlog (`Sub::Queue`) is what makes the concurrent raw consumers in
-capture/recording safe. **Touch-point:** disparity migration (roadmap 4)
-supersedes the renderer loop they tune — sync before touching their
-`index.vue`.
+capture/recording safe. **Touch-point resolved (2026-07-05):** the disparity
+migration (S1a) superseded the renderer loop they tuned —
+`disparity-scope/index.vue` is now a thin client; their buffer-reuse
+discipline carried into the session per plan. Their doc's remaining value
+is the core Stream/Iterator semantics record.
 
 **Synced-capture / protocol v2 thread**
 ([`synced-capture.md`](./synced-capture.md)): hardware-triggered L/R capture,

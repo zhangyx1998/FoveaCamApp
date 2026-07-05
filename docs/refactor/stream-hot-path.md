@@ -6,10 +6,12 @@
 > builds clean on both runtimes (rebuilt repeatedly by the protocol-v2
 > thread). The listed changes read as complete and the JS-facing API
 > contract has held through two downstream migration rounds. Please
-> confirm whether this thread is done — it is the gate on the
-> disparity-scope migration (orchestrator.md §7), which is now the largest
-> remaining piece of the refactor's primary objective and otherwise ready
-> to proceed code-side.**
+> confirm whether this thread is done.** **[planner, 2026-07-05]: the
+> disparity-scope migration proceeded by user direction and landed (Stage 2
+> S1a) — `app/modules/disparity-scope/index.vue` is now a thin client; the
+> renderer buffer-reuse item below is superseded (its discipline carried
+> into the orchestrator session). This doc's remaining value is the core
+> Stream/Iterator semantics record; no open gate remains.**
 > **Branch:** `refactor/decouple-orchestrator`
 > **Last updated:** 2026-06-28 (annotation 2026-07-04)
 

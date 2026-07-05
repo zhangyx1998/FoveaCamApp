@@ -37,7 +37,10 @@ state only by "whatever was actuated recently" — no synchronization. Target:
    Refactor the host API around two-phase requests while keeping DX at
    least as smooth as today (`await` still means "completed").
 
-## 2. Current state (what the coder inherits)
+## 2. Pre-v2 state (historical — what the plan started from)
+
+> Everything below described the tree **before** P1/P2 landed; kept as the
+> plan's baseline reference. For as-built state see §3–§6 + §9.
 
 **Wire protocol** (`lib/Protocol/`, shared host+firmware; COBS-framed over USB
 CDC serial — `Serial.begin(115200)` is nominal, real throughput is USB-speed):

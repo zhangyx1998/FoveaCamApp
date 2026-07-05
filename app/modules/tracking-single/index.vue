@@ -15,10 +15,9 @@ You may find the full license in project root directory.
   Display vision (undistorted center, sliced/diff/depth fovea views, perspective
   wrap) now runs in the orchestrator session and arrives here as processed frames.
 
-  TODO(orchestrator-migration): capture/recording are not yet ported — they read
-  raw sensor frames (frame.raw / stack(stream)) which, under per-process Aravis
-  exclusivity, the orchestrator must serve over a new raw-frame transport. Tracked
-  as Step 13c (capture/recording) in docs/refactor/orchestrator.md.
+  This module has no capture/recording of its own; manual-control's are
+  orchestrator-side (modules/manual-control/{capture,recording}.ts) — reuse
+  that session-side pattern here if ever needed.
 -->
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";

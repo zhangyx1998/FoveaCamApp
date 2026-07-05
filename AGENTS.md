@@ -42,6 +42,11 @@ make clean           # clean (required after changing shared lib/ files)
 cd test && make build && ./build/cobs
 ```
 
+### App Tests (vitest session harness)
+```bash
+cd app && npm test      # plain-TS suites over Channel/Session/Hub + control math
+```
+
 ### Formatting
 - TS/JS/Vue/JSON: `prettier --write`
 - C++/H: `clang-format -i`
@@ -110,13 +115,15 @@ a thin I/O surface. Full plan + step log: [`docs/refactor/orchestrator.md`](./do
   code (anything a `session.ts` imports, including shared `@lib`) **Vue-free** —
   `vue` is a devDependency, so importing it there bundles all of Vue into the
   utility process.
-- **Migration status:** single-capture, manage-cameras, controller, and
-  tracking-single run through the orchestrator; manual-control, disparity-scope,
-  and calibrate-* are still renderer-bound. Cameras are exclusive per OS
-  process — see the camera-exclusivity note in the refactor doc before
-  migrating another module. Runtime verification is in progress: the frame
-  path executes end-to-end, but the module-switching camera handoff is broken
-  (RT1 in the refactor doc) and the tracking slice is not yet fully verified.
+- **Migration status (2026-07-05): complete.** Every feature module runs
+  through an orchestrator session; the renderer is `core`-free except one
+  disclosed exception (`src/graphics/Marker.vue` draws marker patterns via
+  `MarkerDetector` — see the refactor doc). `lib/camera.ts` and the old
+  renderer camera/handoff paths are deleted. Cameras remain exclusive per
+  OS process (registry leases inside the orchestrator are the only
+  camera access). Hardware/GUI verification is pending the rig — run
+  `docs/refactor/verification-playbook.md` stages in order when it
+  returns; until then treat all control paths as code-verified only.
 
 ### Core Addon Infrastructure
 
@@ -183,8 +190,14 @@ Addon.cpp registers a root `core` object with submodules: `core.Aravis`, `core.C
 - `core/dist/types.d.ts` defines shared types: `TypedArray`, `BufferLike`, `Awaitable<T>`, `CoreObject<T>`, `Stream<T>`
 
 ### App Patterns
-- Core native addon (NAPI) is imported directly in the renderer process, not routed through Electron context bridge or IPC. New features should follow this same pattern.
-- Persistent config via electron-store with IPC (`app/lib/store.ts`)
+- **New features are orchestrator sessions** — `modules/<m>/{contract.ts,
+  session.ts, index.vue}`: hardware/`core`/vision in `session.ts`
+  (Vue-free), thin Vue client over `useSession()` in `index.vue`. Do NOT
+  import `core` in renderer code — the old direct-NAPI-in-renderer pattern
+  is retired (one legacy exception: `src/graphics/Marker.vue`).
+- Persistent config via the orchestrator store-hub; renderer `app/lib/store.ts`
+  is a thin RPC client with the same `Store.open/clear/list` API (no
+  electron-store, no renderer file access).
 - Vite path aliases (mirrored in `app/tsconfig.json`): `@` and `@src` = `app/src/`, `@lib` = `app/lib/`, `@modules` = `app/modules/`, `@orchestrator` = `app/orchestrator/`
 
 ## Key Dependencies
