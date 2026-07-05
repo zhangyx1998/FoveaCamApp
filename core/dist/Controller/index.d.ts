@@ -125,6 +125,13 @@ declare module "core/Controller" {
     readonly connected: boolean;
     /** See verifyVersion() and TwoPhase above. Starts false. */
     readonly v2Capable: boolean;
+    /** Cumulative serial counters for the lifetime of this Device. */
+    readonly stats: {
+      txBytes: number;
+      rxBytes: number;
+      txPackets: number;
+      rxPackets: number;
+    };
 
     // Two-phase overloads — see TwoPhase above. Must precede the
     // generic fallback overloads below (TS resolves overloads in

@@ -6,6 +6,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <algorithm>
+#include <atomic>
 #include <optional>
 
 #include <napi.h>
@@ -54,6 +56,26 @@ inline std::string hexFormat(const void *data, size_t size) {
     ss << std::hex << std::uppercase << std::setfill('0') << std::setw(2)
        << static_cast<unsigned>(ptr[i]);
   }
+  return ss.str();
+}
+
+inline std::string hexPreview(const void *data, size_t size,
+                              size_t limit = 8) {
+  return hexFormat(data, std::min(size, limit));
+}
+
+template <typename PendingMap>
+inline std::string pendingSequences(const PendingMap &pending) {
+  std::stringstream ss;
+  ss << "[";
+  bool first = true;
+  for (const auto &[seq, _] : pending) {
+    if (!first)
+      ss << ",";
+    first = false;
+    ss << seq;
+  }
+  ss << "]";
   return ss.str();
 }
 
@@ -543,6 +565,7 @@ private:
   std::optional<Dispatcher::Future> accepted_future;
 
 public:
+  const uint16_t sequence;
   const Property property;
   const bool two_phase;
   // Decodes the ACK payload; for everything except CMD_FRAME this is the
@@ -553,9 +576,10 @@ public:
   Napi::Reference<Napi::Function> ack_factory;
   Napi::Reference<Napi::Function> fin_factory;
 
-  PendingRequest(Napi::Env env, Property property, bool two_phase,
+  PendingRequest(Napi::Env env, uint16_t sequence, Property property,
+                 bool two_phase,
                  Napi::Function ackFn, Napi::Function finFn)
-      : env(env), property(property), two_phase(two_phase),
+      : env(env), sequence(sequence), property(property), two_phase(two_phase),
         ack_factory(Napi::Persistent(ackFn)),
         fin_factory(Napi::Persistent(finFn)) {
     if (two_phase)
@@ -565,6 +589,18 @@ public:
   ~PendingRequest() {
     try {
       auto timeout = [&] { return Napi::Error::New(env, "Request timeout").Value(); };
+      if ((two_phase && !accepted_settled) || !completed_settled) {
+        std::string unsettled;
+        if (two_phase && !accepted_settled)
+          unsettled = "accepted";
+        if (!completed_settled) {
+          if (!unsettled.empty())
+            unsettled += "|";
+          unsettled += "completed";
+        }
+        VERBOSE("trace drop seq=%u unsettled=%s", sequence,
+                unsettled.c_str());
+      }
       if (two_phase && !accepted_settled) {
         accepted_settled = true;
         accepted_future->Reject(timeout());
@@ -582,21 +618,55 @@ public:
   // (matches the pre-v2 behavior exactly); for two-phase properties it only
   // resolves `.accepted` — the entry stays pending for FIN.
   inline void ResolveAck(Napi::Value value) {
-    auto decoded =
-        ack_factory.IsEmpty() ? value : ack_factory.Value().Call({value});
-    if (two_phase) {
-      accepted_settled = true;
-      accepted_future->Resolve(decoded);
-    } else {
-      completed_settled = true;
-      completed_future.Resolve(decoded);
+    const char *phase = two_phase ? "accepted" : "completed";
+    try {
+      auto decoded =
+          ack_factory.IsEmpty() ? value : ack_factory.Value().Call({value});
+      if (two_phase) {
+        accepted_future->Resolve(decoded);
+        accepted_settled = true;
+      } else {
+        completed_future.Resolve(decoded);
+        completed_settled = true;
+      }
+      VERBOSE("trace resolve seq=%u phase=%s ok", sequence, phase);
+    } catch (const Napi::Error &e) {
+      ERROR("trace resolve seq=%u phase=%s FAILED: %s", sequence, phase,
+            e.Message().c_str());
+      Reject(e.Value());
+    } catch (const std::exception &e) {
+      ERROR("trace resolve seq=%u phase=%s FAILED: %s", sequence, phase,
+            e.what());
+      Reject(Napi::Error::New(env, e.what()).Value());
+    } catch (...) {
+      ERROR("trace resolve seq=%u phase=%s FAILED: unknown error", sequence,
+            phase);
+      Reject(Napi::Error::New(env, "Unknown response decode/resolve error")
+                 .Value());
     }
   }
   // FIN: only ever sent for two-phase properties.
   inline void ResolveFin(Napi::Value value) {
-    completed_settled = true;
-    completed_future.Resolve(fin_factory.IsEmpty() ? value
-                                                    : fin_factory.Value().Call({value}));
+    try {
+      auto decoded =
+          fin_factory.IsEmpty() ? value : fin_factory.Value().Call({value});
+      completed_future.Resolve(decoded);
+      completed_settled = true;
+      VERBOSE("trace resolve seq=%u phase=completed ok", sequence);
+    } catch (const Napi::Error &e) {
+      ERROR("trace resolve seq=%u phase=completed FAILED: %s", sequence,
+            e.Message().c_str());
+      Reject(e.Value());
+    } catch (const std::exception &e) {
+      ERROR("trace resolve seq=%u phase=completed FAILED: %s", sequence,
+            e.what());
+      Reject(Napi::Error::New(env, e.what()).Value());
+    } catch (...) {
+      ERROR("trace resolve seq=%u phase=completed FAILED: unknown error",
+            sequence);
+      Reject(Napi::Error::New(env, "Unknown response decode/resolve error")
+                 .Value());
+    }
   }
   // Rejects whichever phase(s) are still outstanding (REJ is terminal at
   // either phase — see docs/refactor/synced-capture.md §3.1).
@@ -623,6 +693,7 @@ public:
                        {
                            INSTANCE_GETTER(DeviceObject, connected),     //
                            INSTANCE_GETTER(DeviceObject, v2Capable),     //
+                           INSTANCE_GETTER(DeviceObject, stats),         //
                            INSTANCE_METHOD(DeviceObject, get),           //
                            INSTANCE_METHOD(DeviceObject, set),           //
                            INSTANCE_METHOD(DeviceObject, fireAndForget), //
@@ -675,6 +746,12 @@ private:
   COBS::RX rx;
   Threading::Guard<Map<uint16_t, PendingRequest::Ptr>> pending;
   std::thread rx_thread;
+  struct {
+    std::atomic<uint64_t> txBytes = 0;
+    std::atomic<uint64_t> rxBytes = 0;
+    std::atomic<uint64_t> txPackets = 0;
+    std::atomic<uint64_t> rxPackets = 0;
+  } counters;
   // Napi::FunctionReference __tx__;
   uint16_t __sequence__ = 0;
   inline uint16_t sequence() {
@@ -693,12 +770,28 @@ private:
 
   GET(connected) { return Napi::Boolean::New(env, !flag_term); }
   GET(v2Capable) { return Napi::Boolean::New(env, v2_capable); }
+  GET(stats) {
+    auto obj = Napi::Object::New(env);
+    obj.Set("txBytes", Napi::Number::New(env, counters.txBytes.load()));
+    obj.Set("rxBytes", Napi::Number::New(env, counters.rxBytes.load()));
+    obj.Set("txPackets", Napi::Number::New(env, counters.txPackets.load()));
+    obj.Set("rxPackets", Napi::Number::New(env, counters.rxPackets.load()));
+    return obj;
+  }
+
+  void recordTx(ssize_t bytes) {
+    if (bytes <= 0)
+      return;
+    counters.txBytes.fetch_add(static_cast<uint64_t>(bytes));
+    counters.txPackets.fetch_add(1);
+  }
 
   inline void handleRawPacket(Protocol::RawPacket &&packet) noexcept {
     try {
       auto header = packet.validate();
       if (header == Protocol::INVALID)
         throw std::invalid_argument("Corrupted packet");
+      counters.rxPackets.fetch_add(1);
       const auto method = Protocol::method(header);
       const auto property = Protocol::property(header);
       const auto &sequence = packet.header().sequence;
@@ -714,24 +807,54 @@ private:
         // docs/refactor/synced-capture.md §3.1/§5).
         bool retire = !(pr->two_phase && method == Method::ACK &&
                         property == pr->property);
-        Dispatcher::dispatch(env, [pr, method, property,
+        VERBOSE("trace rx seq=%u %s:%s matched=1 retire=%d pending=%s",
+                sequence, convert<std::string>(method).c_str(),
+                convert<std::string>(property).c_str(), retire ? 1 : 0,
+                pendingSequences(*p).c_str());
+        Dispatcher::dispatch(env, [pr, method, property, sequence,
                                    packet = std::move(packet)](napi_env env) {
           auto payload = ArrayBuffer::New(env, packet.dataSize());
           std::memcpy(payload.Data(), packet.data(), packet.dataSize());
-          if (method == Method::ACK && property == pr->property) {
-            pr->ResolveAck(payload);
-          } else if (method == Method::FIN && property == pr->property) {
-            pr->ResolveFin(payload);
-          } else if (method == Method::REJ) {
-            // REJ packets always have a string payload
-            auto reason =
-                std::string((char *)payload.Data(), payload.ByteLength());
-            pr->Reject(Napi::Error::New(pr->env, reason).Value());
-          } else {
-            pr->Reject(Napi::Error::New(pr->env,
-                                        "Unexpected response " +
-                                            convert<std::string>(method) + ":" +
-                                            convert<std::string>(property))
+          const char *branch =
+              method == Method::ACK && property == pr->property
+                  ? "ack"
+                  : method == Method::FIN && property == pr->property
+                        ? "fin"
+                        : method == Method::REJ ? "rej" : "unexpected";
+          VERBOSE(
+              "trace task seq=%u branch=%s two_phase=%d payload=%zu first8=%s",
+              sequence, branch, pr->two_phase ? 1 : 0, packet.dataSize(),
+              hexPreview(packet.data(), packet.dataSize()).c_str());
+          try {
+            if (method == Method::ACK && property == pr->property) {
+              pr->ResolveAck(payload);
+            } else if (method == Method::FIN && property == pr->property) {
+              pr->ResolveFin(payload);
+            } else if (method == Method::REJ) {
+              // REJ packets always have a string payload
+              auto reason =
+                  std::string((char *)payload.Data(), payload.ByteLength());
+              pr->Reject(Napi::Error::New(pr->env, reason).Value());
+            } else {
+              pr->Reject(
+                  Napi::Error::New(pr->env,
+                                   "Unexpected response " +
+                                       convert<std::string>(method) + ":" +
+                                       convert<std::string>(property))
+                      .Value());
+            }
+          } catch (const Napi::Error &e) {
+            ERROR("trace task seq=%u branch=%s FAILED: %s", sequence, branch,
+                  e.Message().c_str());
+            pr->Reject(e.Value());
+          } catch (const std::exception &e) {
+            ERROR("trace task seq=%u branch=%s FAILED: %s", sequence, branch,
+                  e.what());
+            pr->Reject(Napi::Error::New(pr->env, e.what()).Value());
+          } catch (...) {
+            ERROR("trace task seq=%u branch=%s FAILED: unknown error",
+                  sequence, branch);
+            pr->Reject(Napi::Error::New(pr->env, "Unknown response error")
                            .Value());
           }
         });
@@ -742,6 +865,10 @@ private:
         std::string log_msg((char *)packet.data(), packet.dataSize());
         __LOG__("%s", "PORT ", GREEN, "Device", log_msg.c_str());
       } else if (sequence != 0) {
+        VERBOSE("trace rx seq=%u %s:%s matched=0 retire=0 pending=%s",
+                sequence, convert<std::string>(method).c_str(),
+                convert<std::string>(property).c_str(),
+                pendingSequences(*p).c_str());
         WARN("Unmatched packet %s:%s (seq=%u) %s",
              convert<std::string>(method).c_str(),
              convert<std::string>(property).c_str(), sequence,
@@ -765,6 +892,7 @@ private:
         std::this_thread::yield();
         continue;
       }
+      counters.rxBytes.fetch_add(static_cast<uint64_t>(count));
       VERBOSE("Device::recv() %u bytes + incoming 0x%s", rx.len(),
               hexFormat(&byte, 1).c_str());
       if (rx.recv(byte))
@@ -776,18 +904,6 @@ private:
                    const Napi::Function &factory, Protocol::RawPacket &packet) {
     try {
       if (tx.encode(packet.finalize())) {
-        VERBOSE("send %u bytes: %s", tx.size(),
-                hexFormat(tx.data(), tx.size()).c_str());
-        // Write buffer to serial fd
-        auto written = ::write(fd, tx.data(), tx.size());
-        VERBOSE("wrote %zd bytes to fd %d", written, fd);
-        if (written < 0)
-          JS_THROW(Error,
-                   "Failed to write to serial port: " +
-                       std::string(std::strerror(errno)),
-                   env.Undefined());
-        if (written != static_cast<ssize_t>(tx.size()))
-          JS_THROW(Error, "Incomplete write to serial port", env.Undefined());
         // CMD_FRAME's ACK (FrameAccepted) and FIN (FrameResult) payloads
         // differ in shape from each other and from the request `factory`
         // (Command::Frame) — substitute the dedicated decoders cached by
@@ -799,11 +915,12 @@ private:
           ackFactory = frameAcceptedFactory.get(env).Value();
           finFactory = frameResultFactory.get(env).Value();
         }
-        // v2_capable gate — see its declaration (P3.1a).
+        // Register the pending request before writing. V2 firmware can ACK+FIN
+        // a zero-settle ACTUATE quickly enough that a write-first order drops
+        // the response as "unmatched" on the rx thread.
         bool two_phase = isTwoPhase(property) && v2_capable;
-        auto pr = PendingRequest::create(env, property, two_phase, ackFactory,
-                                         finFactory);
-        pending.ref()->set(sequence, pr);
+        auto pr = PendingRequest::create(env, sequence, property, two_phase,
+                                         ackFactory, finFactory);
         auto completed = pr->CompletedPromise();
         if (pr->two_phase) {
           auto accepted = pr->AcceptedPromise();
@@ -818,6 +935,30 @@ private:
           accepted.Get("catch").As<Napi::Function>().Call(accepted, {noop});
           completed.Set("accepted", accepted);
         }
+        pending.ref()->set(sequence, pr);
+        VERBOSE("trace tx seq=%u %s:%s two_phase=%d v2_capable=%d bytes=%u",
+                sequence,
+                convert<std::string>(Protocol::method(packet.header().header))
+                    .c_str(),
+                convert<std::string>(property).c_str(), two_phase ? 1 : 0,
+                v2_capable ? 1 : 0, tx.size());
+        VERBOSE("send %u bytes: %s", tx.size(),
+                hexFormat(tx.data(), tx.size()).c_str());
+        // Write buffer to serial fd
+        auto written = ::write(fd, tx.data(), tx.size());
+        VERBOSE("wrote %zd bytes to fd %d", written, fd);
+        if (written < 0) {
+          pending.ref()->erase(sequence);
+          JS_THROW(Error,
+                   "Failed to write to serial port: " +
+                       std::string(std::strerror(errno)),
+                   env.Undefined());
+        }
+        if (written != static_cast<ssize_t>(tx.size())) {
+          pending.ref()->erase(sequence);
+          JS_THROW(Error, "Incomplete write to serial port", env.Undefined());
+        }
+        recordTx(written);
         return completed;
       } else {
         throw JS::Error(env, "Failed to encode packet");
@@ -892,6 +1033,9 @@ private:
     try {
       if (!tx.encode(packet.finalize()))
         throw JS::Error(env, "Failed to encode packet");
+      VERBOSE("trace tx seq=0 SET:%s two_phase=0 v2_capable=%d bytes=%u",
+              convert<std::string>(property).c_str(), v2_capable ? 1 : 0,
+              tx.size());
       auto written = ::write(fd, tx.data(), tx.size());
       if (written < 0)
         JS_THROW(Error,
@@ -900,6 +1044,7 @@ private:
                  env.Undefined());
       if (written != static_cast<ssize_t>(tx.size()))
         JS_THROW(Error, "Incomplete write to serial port", env.Undefined());
+      recordTx(written);
     }
     JS_EXCEPT(env.Undefined())
     return env.Undefined();

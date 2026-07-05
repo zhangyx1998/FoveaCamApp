@@ -24,19 +24,16 @@ using Threading::Guard;
 static void async_cb(uv_async_t *handle);
 
 struct Context {
+  napi_env env;
   uv_async_t async;
+  Napi::AsyncContext async_context;
   uv_handle_t *handle() { return reinterpret_cast<uv_handle_t *>(&async); }
 
   bool closed = false;
   unsigned future = 0;
 
-  // Get Context pointer from uv_handle_t pointer
-  // This is safe because uv_async_t is the first member of Context
   static Context *from_handle(uv_handle_t *handle) {
-    static_assert(offsetof(Context, async) == 0,
-                  "async must be the first member of Context");
-    auto *async = reinterpret_cast<uv_async_t *>(handle);
-    return reinterpret_cast<Context *>(async);
+    return static_cast<Context *>(handle->data);
   }
 
   inline void incFuture() {
@@ -68,6 +65,8 @@ struct Context {
     return task;
   }
 
+  size_t queueSize() const { return queue.size(); }
+
   bool referenced = true; // uv handle is referenced by default
 
   void updateRef() {
@@ -85,7 +84,8 @@ struct Context {
     }
   }
 
-  Context(napi_env env) : async({.data = env}) {
+  Context(napi_env env)
+      : env(env), async({.data = this}), async_context(env, "Dispatcher") {
     VERBOSE("Dispatcher created @ %p (async handle)", &async);
     uv_loop_t *loop;
     napi_status s = napi_get_uv_event_loop(env, &loop);
@@ -145,13 +145,17 @@ Dispatcher::Ptr get(Napi::Env env) {
 }
 
 static void async_cb(uv_async_t *handle) {
-  const auto &env = static_cast<napi_env>(handle->data);
+  auto *ctx = Context::from_handle(reinterpret_cast<uv_handle_t *>(handle));
+  const auto &env = ctx->env;
   auto dispatcher = get(env);
   if (!dispatcher) {
     WARN("Dispatcher async_cb called after cleanup");
     return;
   }
   Napi::HandleScope hs(env);
+  auto ref = dispatcher->ref();
+  Napi::CallbackScope cs(env, ref->async_context);
+  ref.release();
   size_t processed = 0;
   while (true) {
     auto task = dispatcher->ref()->getNextTask();
@@ -168,8 +172,10 @@ static void async_cb(uv_async_t *handle) {
   }
   // Update ref count once after processing all tasks
   if (processed > 0) {
-    VERBOSE("Dispatcher processed %zu tasks in single async_cb", processed);
-    dispatcher->ref()->updateRef();
+    auto ref = dispatcher->ref();
+    auto remaining = ref->queueSize();
+    VERBOSE("drain n=%zu remaining=%zu", processed, remaining);
+    ref->updateRef();
   }
 }
 
