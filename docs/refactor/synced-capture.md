@@ -1,14 +1,10 @@
 # Plan: Hardware-Synced Stereo Capture, Position Streams & Protocol v2
 
-> **Status:** P1 ✅, P2+P2.1 ✅, P3.1a+P3.1b+P3.1d+FW6 ✅,
-> **[coder] P4 code-side landed 2026-07-04** (§9.5), and P3.1d
-> Frame timestamp plumbing landed 2026-07-04 (§9.6). Bench pass, P4 hardware
-> wiring, and P5 all still gated on the mechanical rig (§9.4/§9.5/§9.6).
-> ✅ **Hang hazard (§9 FW4) now also *addressed at the call site*:**
-> `Controller`'s constructor calls `device.verifyVersion()` before anything
-> else in `ready`, so `v2Capable` is known before any two-phase-sensitive
-> call. Old host + new (v2) firmware mis-timing (the original FW4) is
-> unaffected by this (needs a rebuilt host, not a code fix).
+> **Status:** Final code round ✅ through **S2 + S3 + ST-64a–c** (§9.8).
+> All remaining work is hardware-gated: bench (Stage F) → flash → P4 wiring
+> → P5. The original FIN-timeout root cause remains **undetermined pending
+> the next bench run** (§9.7's trace makes it decisive). Stop here for the
+> planner review / commit checkpoint #2.
 > **Branch:** TBD (new branch off `refactor/decouple-orchestrator` or after it merges).
 > **Owner:** Yuxuan (plan) / separate coder (implementation).
 > **Last updated:** 2026-07-04
@@ -146,7 +142,28 @@ FIXED_SIZE_PACKET(Stream, CMD_STREAM) {
 - Stream model: **latest-target-wins**. A stream holds one current L+R
   target; the firmware MEMS tick continuously applies the *active* stream's
   target. The host's existing ~1 kHz actuation loop becomes a stream of
-  `UPDATE`s (`seq=0`, fire-and-forget). Trajectory playback (queued
+  `UPDATE`s (`seq=0`, fire-and-forget).
+  **Activation semantics (resolved 2026-07-04, planner — prompted by the
+  user's "does an enabled controller follow stream 0?" question, which
+  exposed a gap):** as first implemented, a stream only became *active*
+  when a CMD_FRAME request started (`Capture::startNext` was
+  `Streams::activate`'s sole caller), so an enabled controller with
+  streams created and UPDATEs flowing — but no frame request — moved
+  **nothing**; streams-as-actuation only worked mid-capture, defeating
+  the "UPDATE replaces the 1 kHz Actuate loop" goal for free-running
+  control. **Decision: CREATE auto-activates when no stream is currently
+  active** (`activeId == INVALID`). Single-stream apps get exactly the
+  intuitive behavior (create stream 0 → mirrors follow it immediately);
+  multi-stream apps get "first created" until the first frame request,
+  after which the followed stream is the most recent frame request's
+  (unchanged — that persistence *is* the §1 per-exposure semantics).
+  TERMINATE of the active stream freezes mirrors at the last applied
+  target (`activeId → INVALID`); an explicit `ACTIVATE` op is **deferred**
+  until a multi-fovea consumer needs host-controlled following outside
+  frame requests. Firmware change is one line in `Streams::create` +
+  a bench check (Stage F: after CREATE, UPDATEs move the DAC with no
+  frame request in flight) — assigned to this thread.
+  Trajectory playback (queued
   timestamped waypoints) is a future extension of `Op`, not v2 scope.
 - `CREATE`/`TERMINATE` are normal two-way requests (ACK/REJ; single-phase).
   REJ on: duplicate CREATE, unknown id, id out of range, or TERMINATE while
@@ -350,6 +367,24 @@ physical GPIO connection — nothing to verify there.)
    ambitions. **[coder] Implemented as proposed**
    (`QUEUE_CAPACITY`/`Streams::CAPACITY` both 8 in `firmware/src/Capture.cpp`
    / `firmware/include/Streams.h`).
+   **Scaling estimate to 64 streams (planner, 2026-07-04):** wire id is
+   already uint8 → no protocol change; RAM ~1.3 kB (noise); hot paths O(1).
+   Real costs, in order: (a) **serial intake** — worst case 64×1 kHz
+   UPDATEs ≈ 64 k pkt/s ≈ 1.5 MB/s, above the ~1 MB/s ceiling imposed by
+   `loop()`'s one-byte-per-iteration `Serial.read()` → chunk-drain
+   `Serial.available()` (small; bench-validate via `Device.stats`, Stage
+   F); (b) if worst case is real: a batched-UPDATE op (`BufferPacket`,
+   N tuples/packet) + host-side batching; frame-queue fairness policy
+   (≤ QUEUE_CAPACITY streams can hold pending frames — deepen or
+   round-robin); profiler aggregate view beyond ~8 rows. (c) Physics, not
+   code: one trigger engine + one L/R pair divide aggregate triggered fps
+   (~200 fps at 5 ms exposure) across all streams — 64 streams ≈ 3 fps
+   each. **Cheapest deflation: host updates-on-change with per-stream min
+   interval** — bandwidth then scales with control activity, not stream
+   count, and (b) likely never triggers.
+   **→ Approved (user, 2026-07-04): bump to 64.** Work items **ST-64a–c**
+   in the Stage 2 assignment list below (this thread); (b)-tier items stay
+   conditional on Stage F numbers.
 3. ~~**Disable semantics**~~ — **[coder] resolved 2026-07-03: streams do NOT
    survive `System::Enable(false)`.** `System::Enable` SET
    (firmware/src/Protocol.cpp) calls `Capture::cancelAll()` (REJects
@@ -617,6 +652,98 @@ store owner — reroute `orchestrator/{calibration,camera}.ts` off the raw
 `store.ts` primitives, then make `store.ts` private to the hub) and **S3**
 (recorder worker thread — `stream-writer.ts` into a `worker_threads`
 worker fed by transferred `ArrayBuffer`s; no `core` in the worker;
-measure the win via `loopLag` during recording). After those: hardware
-bench pass (§4) → flash v2 → live P4 verification with real GenICam
-trigger/strobe line names → P5 integration.
+measure the win via `loopLag` during recording), plus the **64-stream
+bump (user-approved 2026-07-04**; estimate under §8 open question 2).
+**Queue order changed 2026-07-04: P4.1 (§9.7.2 — FIN delivery fix +
+serial trace) goes FIRST** — it blocks every FIN-awaiting path; S2/S3/
+ST-64 follow. Items:
+- **ST-64a** — `Streams::CAPACITY` 8 → 64 (+ ~1.3 kB static RAM), host
+  allocator range 0..63 in `controller.ts`, harness tests for allocator
+  exhaustion + id reuse after `close()`. `QUEUE_CAPACITY` stays 8
+  (deepening/fairness is conditional Tier 2, pending Stage F data).
+- **ST-64b** — firmware serial intake chunk-drain: `loop()` drains
+  `Serial.available()` per iteration instead of one byte (removes the
+  ~1 MB/s intake ceiling; worst case 64 × 1 kHz ≈ 1.5 MB/s). **Must land
+  before Stage F** — the bench must baseline the real intake path;
+  retrofitting later invalidates the serial-throughput numbers.
+- **ST-64c** — host update policy in `StreamHandle.update()`:
+  update-on-change (skip identical targets) + per-stream minimum
+  interval (~1 ms default), so serial load scales with control activity,
+  not stream count. Harness-testable.
+Also one small core item added 2026-07-04: **`Device.stats` serial counters**
+(`{txBytes, rxBytes, txPackets, rxPackets}` cumulative, bumped in
+`send`/`rxLoop`, exposed as a getter + `.d.ts`) — feeds the S4 profiler's
+serial-data-rate probe (spec in orchestrator.md §7.1 S4 added-scope; the
+telemetry/UI half belongs to the profiler work, not this thread). After
+those: Stages F–H of
+[`verification-playbook.md`](./verification-playbook.md) (bench → flash →
+live P4 → P5), prepared in advance.
+
+### 9.7 P4.1 — FIN delivery on hardware: finding, hardening, trace (compacted; full forensic history in git)
+
+**Symptom (hardware smoke, 2026-07-04):** v2 firmware + rebuilt host —
+version handshake, enable, and CMD_STREAM smoke all pass; but two-phase
+`CMD_ACTUATE` times out at the JS FIN await even though the native rx loop
+logs both ACK and FIN arriving (~same instant, settle_time≈0) and the
+dispatcher drains its tasks without any error lines (log captured
+stdout+stderr).
+
+**Planner diagnosis eliminated, in order:** rx dispatch bugs (pr copied,
+entry kept across ACK, retired on FIN — read clean); swallowed task
+exceptions (no ERROR lines with aggregated output); promise-identity on
+the clean path (`napi_deferred` is persistent); microtask-checkpoint
+absence as *sole* cause (the test's own 102/500 ms timers force
+checkpoints). Two latent defects were found regardless and fixed; root
+cause remains **undetermined until the next bench run**, which the trace
+below is designed to make decisive.
+
+**P4.1 code-side pass — [coder] 2026-07-04, ✓ planner-verified (round 4):**
+- `ResolveAck`/`ResolveFin` exception-safe: decode+Resolve in try/catch,
+  settled flag **after** success, `Reject(decodeError)` on failure (the old
+  flag-before-throw disarmed the destructor's timeout fallback →
+  permanent silent pend; that class is dead now).
+- Dispatcher owns a `Napi::AsyncContext`; every drain wrapped in
+  `Napi::CallbackScope` (microtask checkpoint after resolves — also
+  un-skews all bench latency numbers).
+- **Full serial lifecycle trace landed** (17 trace points, all `seq=`-
+  greppable, behind log level): `tx` (with two_phase+v2_capable at
+  decision time), `rx … matched/retire/pending[…]` (closes the
+  recv-vs-matched gap), `task … branch/two_phase/payload/first8`,
+  `resolve … ok|FAILED`, `drop … unsettled=…` on destructor rejection,
+  `drain n/remaining`.
+- `Device.stats` `{txBytes,rxBytes,txPackets,rxPackets}` landed (+`.d.ts`)
+  — also unblocks the S4 profiler serial-rate probe.
+- Test hardened: `.accepted` now mandatory under v2 (fails fast if the
+  property is lost), race outcomes labeled by which promise actually
+  settled (winner identity, not timing inference), stuck-native timeout.
+- Verified: `core make build` clean both runtimes; test file passes tsc +
+  Node type-strip constraints.
+
+**Acceptance (next bench run):** one failing `CMD_ACTUATE seq=N` must show
+a complete lifeline `tx → rx×2(matched=1) → task×2 → resolve×2 ok` or an
+explicit broken link. If FIN still times out *after* `resolve … ok`:
+minimal N-API Deferred/async-context repro is the next step. Trace log =
+the finding's artifact (playbook Stage F clause).
+
+### 9.8 Final code round — [coder] 2026-07-04
+
+- **S2 store sole-owner:** `app/orchestrator/{camera,calibration}.ts` now
+  read through `store-hub`; `store.ts` is documented as hub-private. Boundary
+  check: only `store-hub.ts` imports raw `store.ts`.
+- **S3 recorder worker:** `stream-writer.ts` now writes in a
+  `worker_threads` worker fed by transferred `ArrayBuffer`s; worker imports
+  no `core`; `.stream`/`.meta` format preserved. Harness:
+  `stream-writer.test.ts` covers output + queue overflow.
+- **ST-64a:** firmware `Streams::CAPACITY` 8→64; host allocator range 0..63
+  via `StreamIdPool`. Harness: allocator exhaustion and id reuse.
+- **ST-64b:** firmware `loop()` drains `Serial.available()` each tick instead
+  of one byte, removing the planned serial intake ceiling before Stage F.
+- **ST-64c:** `StreamHandle.update()` now skips unchanged targets and enforces
+  a 1 ms per-stream minimum interval via `StreamUpdateGate`. Harness covers
+  identical-target skip and interval gating.
+- **Verification:** `app npm test -- --run` 49/49; `core make build` both
+  runtimes; `firmware make build` passed (rerun escalated for PlatformIO
+  `~/.platformio` lock/cache). `app npm run build` got through `vue-tsc` and
+  all Vite builds; final packaging failed because `electron-builder` is not
+  installed in this workspace. Orchestrator bundle scan found no Vue import
+  leakage.

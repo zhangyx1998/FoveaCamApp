@@ -1,12 +1,15 @@
 # Refactor: Decouple Orchestrator from Renderer
 
-> **Status:** **STAGE 2 in progress** (user direction 2026-07-04): renderer
-> goes fully `core`-free (S1, incl. disparity — gate resolved by fiat),
-> store-hub becomes the *sole* store owner (S2), recorder moves to a worker
-> thread (S3), a dedicated profiler window lands (S4, GUI-verifiable
-> without cameras), and startup/debug spans make spin-up time measurable
-> (S5). Hardware verification still deferred (mechanical work); commit
-> checkpoint still recommended before Stage 2 lands.
+> **Status:** **Stage 2 mostly landed and planner-verified (round 4,
+> 2026-07-04)** — renderer is `core`-free except the disclosed
+> `Marker.vue` exception; disparity + all calibrate-* migrated; profiler
+> window + startup spans live; **S4 added-scope serial/stream probes now
+> also landed (coder, 2026-07-04) — orchestrator thread's queue item #1
+> done, stopping per the frozen-scope rule for the planner's review pass.**
+> Remaining hardware-free: S2, S3, ST-64 (synced-capture thread, in
+> progress). Everything since the first app run is still GUI-unverified —
+> playbook executes when the rig returns. Commit checkpoint #2 recommended
+> (all gates green).
 > **Branch:** `refactor/decouple-orchestrator`
 > **Owner:** Yuxuan (plan) / coder thread (implementation). Entries marked
 > **(coder)** are reports from the implementing agent; ✓ marks planner
@@ -143,6 +146,7 @@ renderer camera ownership meant streams could not be shared across windows.
 | Zero-copy path | SAB-over-MessagePort is **not implementable** (SAB clones only within one OS process). Real design: **native shared memory in `core`** (`shm_open`/`mmap` + seqlock header; sidesteps COOP/COEP entirely). Deferred — roadmap gate. |
 | Contract/RPC | Hand-rolled typed layer: `defineContract` + `defineSession` + mirrored `reactive()` client. |
 | Control cadence | Frame-driven (`registry.onView`) or real timers; no rAF server-side. |
+| Control threading | **Trackers/PIDs run on the orchestrator JS loop, not dedicated threads** (decided 2026-07-04). Threading lives in the layers around them: firmware owns 1 kHz+ target-following (v2 streams), native C++ threads own acquisition/serial-RX/offline vision (AsyncTask), workers own recorder I/O (S3). Rationale: the §1 problem was sharing a loop with *Chromium*, not the loop model; PID math is µs-scale; threading the tracker forces per-frame Mat copies across thread boundaries + the NAPI-per-worker risk. Known cost: synchronous `tracker.update` stalls the loop a few ms/frame — bounded, measured by `trackMs`/`loopLag`. **Escape hatch (trigger: verification numbers or multi-fovea N-tracker load):** make `tracker.update` AsyncTask-backed in `core` — compute moves to the C++ pool, N trackers parallelize with one Mat copy each, no worker machinery. Session-per-worker + shm frames is deliberately unplanned. |
 | State ownership | Orchestrator authoritative; renderer writes echoed to *other* windows only; snapshots seeded on subscribe. |
 | Config store | ✅ **Single owner landed** (store-hub, roadmap item 4): orchestrator caches + broadcasts; renderer `Store` is an RPC client. Scoped down from `async-reactive.md` (no revisions/merge/meta — last-write-wins + echo-skip, matching the rest of the system; `Store.resolve`/`save` dropped, unused). |
 | Lifecycle | Session interest counts drive resources; registry leases refcount cameras; `system.releaseCameras` disposes camera-owning sessions then `releaseAll()` backstop. R4 (leases only via session lifecycle) intentionally unfinished. |
@@ -157,8 +161,11 @@ renderer camera ownership meant streams could not be shared across windows.
 | controller (title bar) | ✅ orchestrator owns serial; `Controller.vue` thin client; `getController()` facade preserved. |
 | tracking-single | ✅ KCF frame-driven off `onView`; ~1 ms actuation loop; full display vision (undistort-before-track, wrap, fovea, diff/depth). Never had capture/record. |
 | manual-control | ✅ (coder ✓ verified in code review) display/control + **capture/recording** in one pass (splitting wasn't viable — both read raw frames off the same leases; user approved). Capture: raw L/R stacked 16-bit server-side, held in `pending` until save/discard; BGRA previews stream as `capture:<name>[#i]` frames. Recording: three raw `camera.stream` consumers (safe concurrently — `core`'s `Sub::Queue` gives each iterator its own bounded backlog) → `stream-writer`. Renderer chrome (`current_capture`/`current_recording`, camera icon, RecordButton) unchanged; `Capture`/`Recording` are thin RPC facades scoped to the module. Known gaps: capture not cancellable mid-pass server-side; `zoom`/`cap_stack` no longer persist; **V1 idle race (§6)**. |
-| disparity-scope | ❌ renderer-bound; **gated on the stream hot-path thread** (§8). |
-| calibrate-* | ❌ renderer-bound; rely on the handoff glue (RT1, §6). |
+| disparity-scope | ✅ auto-vergence PID + template matching moved onto the registry/`startActuationLoop` substrate (Stage 2 S1a). |
+| calibrate-intrinsic | ✅ checker/marker calibration; per-camera picker + live detection (Stage 2 S1b). |
+| calibrate-drift | ✅ 3-tracker live drift measurement + servo (Stage 2 S1b). |
+| calibrate-distortion | ✅ projector-alignment/homography check (Stage 2 S1b). |
+| calibrate-extrinsic | ✅ 3-step CAL/FIN/PRV wizard (Stage 2 S1b) — least-verified item landed this round. |
 
 **Hardening applied** (correctness pass C1–C9, details in git history):
 close-race awaiting; dispose-before-force-close + guarded polls; telemetry
@@ -301,91 +308,100 @@ an early frame" into "server doesn't even attempt the send."
   in particular has never seen a real capture pass with a real renderer
   watching, only the harness's synthetic publish/interest ordering.
 
-**Queue now — STAGE 2 (user direction, 2026-07-04).** Five goals; this
-also **resolves the disparity-gate question by fiat**: goal S1 requires
-migrating disparity-scope, superseding the wait for hot-path-thread
-confirmation (coordinate at file level if that thread revives; carry its
-buffer-reuse discipline). The **commit checkpoint recommendation stands** —
-strongly prefer committing the current all-green tree before Stage 2 lands
-on top. Assignments: orchestrator thread S5 → S4 → S1a → S1c → S1b;
-synced-capture thread (otherwise idle until hardware) S2 → S3 → P3.1d.
+**STAGE 2 (user direction, 2026-07-04) — status after planner review
+round 4 (2026-07-04; gates re-run independently: vue-tsc 0, `vite build`
+fully green, vitest 44/44, orchestrator bundle 149.6 kB zero-Vue, renderer
+218.6 kB). Full per-module landing logs live in git history of this file.**
 
-- **S1 — Eliminate all `core` imports from the renderer.**
-  Acceptance: zero *runtime* `core` imports reachable from the renderer
-  bundle (type-only `import type` is fine — it erases); verify by grep
-  *and* by the renderer bundle containing no `.node` loader. Sub-items:
-  - **S1a disparity-scope** (the §1 flagship): port `control_task` +
-    `vergence.ts` PID onto the proven substrate (`leaseCalibratedTriple`,
-    `onView` frame-driven vision, `startActuationLoop`); thin client over
-    the existing `modules/disparity-scope/contract.ts` (written back in
-    Step 2 — revalidate it against what tracking/manual-control taught us
-    before building on it). Harness suite for the vergence math with
-    synthetic frames.
-  - **S1b calibrate-*** (intrinsic, extrinsic, distortion, drift): one
-    session per module reusing manual-control's capture patterns; marker/
-    checker detection (`core` MarkerDetector etc.) moves session-side,
-    detections cross as telemetry/frames. Largest chunk; module-by-module,
-    each landing type-clean + harness-covered.
-  - **S1c renderer sweep** (after S1a+S1b): make `StreamView`
-    payload-only (delete stream/camera modes + their `Frame`/`Log`
-    imports); retire `lib/camera.ts`'s renderer loaders + `Cameras`
-    singleton + the RT1 handoff glue (`releaseCameras`/`useCameras`) —
-    no renderer camera users remain; drop `src/index.ts`'s `beforeunload`
-    `core.cleanup`; quarantine `playground/` (dev-only — exclude from the
-    build rather than migrate); sweep remaining runtime imports in
-    `lib/{marker,imgproc,mat}.ts` toward type-only or orchestrator-side.
-    This unblocks §7.2 "tighten the surface" (`contextIsolation`).
-- **S2 — Orchestrator as the *sole* owner of store files.**
-  Today store-hub is the only *cross-process* path, but two orchestrator
-  files still hit the fs primitives directly, bypassing the hub's cache +
-  notifications: `orchestrator/calibration.ts` and `orchestrator/camera.ts`
-  (found by grep — the two `@orchestrator/store` imports outside the hub).
-  Reroute through store-hub; then make `store.ts` module-private to the
-  hub (export nothing else; enforce with a lint rule or a
-  `store-hub`-only re-export). Acceptance: exactly one importer of
-  `store.ts` in the tree; renderer has zero file-path knowledge.
-- **S3 — Recorder on its own thread.** Design decision (spec'd, coder
-  implements): keep stream iteration + `frame.raw` extraction on the
-  orchestrator main loop (it owns `core`; iteration off already-arrived
-  frames is cheap), move **packing/compression/manifest/disk I/O** —
-  `stream-writer.ts` — into a `worker_threads` Worker fed by
-  **transferred `ArrayBuffer`s** (same-process transfer is legal, unlike
-  `MessagePortMain`; zero copy). No `core` import in the worker → the
-  NAPI-in-worker risk (§5.1) is avoided entirely, and the worker is
-  trivially Vue-free. Bounded in-worker queue; overflow reported via
-  telemetry (recording wants lossless — size the queue generously and
-  surface drops loudly rather than silently blocking the control loop).
-  Build detail: a third Node build entry (or Vite worker output) for the
-  utilityProcess worker — mind the `isExternal` externalization rule.
-  **Measure the win**: `loopLag` + control-path stats during recording,
-  before/after — the perf substrate exists exactly for this.
-- **S4 — Profiler window.** A second `BrowserWindow` — this is the
-  multi-window plumbing's first real consumer (retires part of the §7.2
-  projector risk early, and needs **no cameras**, so it is GUI-verifiable
-  during the mechanical downtime). Opened via title-bar button/keybind;
-  `main.ts` brokers it its own orchestrator port (the per-renderer
-  brokering already exists — first N>1 exercise). Content, all read-only
-  over the existing `system` + session telemetry: live sparklines
-  (lightweight canvas, no chart dependency) for orchestrator/renderer
-  `loopLag`, per-topic channel rates/coalesce ratios, control-path
-  latencies, volt telemetry; the S5 startup timeline; a `perfSnapshot`
-  export button. Keep it a thin client like any module — no new wire
-  concepts.
-- **S5 — Debug/startup instrumentation (do first — S4 renders it).**
-  Structured timing spans, cheap and always-on: a `span(name)` helper in
-  `diagnostics.ts` recording into a bounded ring + broadcast (same
-  pattern as `topic.error`). Instrument: orchestrator boot (fork →
-  `core` import ms → sessions registered → first port attached),
-  per-activation spans (enumerate ms, per-camera open +
-  `applyStoredConfig` ms, `loadConversions` ms, **activate → first frame
-  published** = "time to live stream"), controller connect. This
-  completes RT1-F3's unfinished half ("profile where the remaining
-  seconds go") and is the "spin-up time and key parameters accessible"
-  ask: visible in the profiler window timeline + dumped in
-  `perfSnapshot` + plain console lines behind a debug flag for manual
-  verification.
+| Item | Status |
+|---|---|
+| **S1a disparity-scope** | ✅ landed, ✓ verified (session registered, vergence/PID server-side, `test/vergence.test.ts` 6 tests). Least-hardware-verified control law in the tree — priority in the rig session. |
+| **S1b calibrate-* ×4** | ✅ all landed, ✓ spot-verified. Shared `orchestrator/marker-tracker.ts` (Vue-free port of the old tracker + servo). Genuine pre-existing bug fixed in extrinsic PRV: original called `V2A.predict(angle)` — backwards; now `A2V.predict(angle)` (✓ confirmed at `calibrate-extrinsic/session.ts:222`). Extrinsic wizard = highest-consequence unverified item (closed-loop, 3-step, persistence side effects; mid-wizard resume via scratch store). |
+| **S1c renderer sweep** | ✅ substantially landed, ✓ verified: `lib/camera.ts` **deleted**, RT1 handoff glue (`releaseOrchestratorCameras`/`useCameras`) **gone**, `StreamView` payload-only, `playground/` DEV-gated (dead-code-eliminated in prod build, confirmed). **Disclosed exception:** `src/graphics/Marker.vue` still constructs `MarkerDetector` for projector marker *drawing* (1 symbol in built App chunk + the core loader chunk it drags in, ✓ confirmed in build output); `beforeunload core.cleanup` stays until that's resolved. Fix options (deferred): static dictionary data extract, or `pattern(id)` RPC. |
+| **S2 store sole-owner** | ✅ landed (coder, 2026-07-04): `orchestrator/{camera,calibration}.ts` now read through `store-hub`; raw `store.ts` is documented as hub-private. Boundary check: only `store-hub.ts` imports it. |
+| **S3 recorder worker** | ✅ landed (coder, 2026-07-04): `stream-writer.ts` now owns a `worker_threads` writer fed by transferred `ArrayBuffer`s; worker imports no `core`; format preserved. Harness: `stream-writer.test.ts` covers binary/meta output + queue overflow. |
+| **S4 profiler window** | ✅ core landed, ✓ verified (singleton window via `?profiler=1` + dynamic import, own 6.7 kB chunk; `Sparkline.vue`; sections: loop lag both sides, control-path latency, channel rates from `perfSnapshot` diffs, store-hub writes, live S5 span timeline; export button = `dumpPerfSnapshot`). Subscribing to camera-owning sessions is safe by interest-counting (second channel, no re-activation) — objective #2's first real exercise. **Serial/stream probes: now UNBLOCKED** (see queue). |
+| **S5 startup spans** | ✅ landed, ✓ verified (`span`/`timeSpan`/`spans`/`onSpan` in diagnostics, 200-entry ring, `topic.span` broadcast, `FOVEA_DEBUG_SPANS` console; boot spans via `FOVEA_FORK_TS`; activation spans: enumerate / per-camera open+config / conversions / activate→first-frame). Completes RT1-F3's profiling half. |
 
-### 7.2 Deferred queue (in order, once hardware returns)
+**Rules learned this round (promoted to keep):**
+- **Copy-before-await on shared taps.** `onView` Mats are reused buffers —
+  derive everything needed *synchronously* before the first `await`
+  (identity `resize()` as forced copy where no derivation exists).
+  Re-derived independently by disparity tiles, intrinsic checker frames,
+  distortion homography warp — it is now a hard rule, not a pattern.
+- **`s.setState()` does not fire `watch` hooks** (only client writes do) —
+  server-side state changes must invoke the handler explicitly
+  (calibrate-extrinsic's `enterStep`).
+- **Nested-object state fields must change via commands**, not client-side
+  property writes on the nested object (the write doesn't reach the
+  server) — calibrate-drift's `setTargetId` pattern.
+- **`lib/util/index.ts` is Vue-tainted and radioactive to the
+  orchestrator** — three separate regressions this round (`pid`,
+  `abortable`, `tracker`'s `clamp`). Vue-free scalar helpers live in
+  `lib/util/math.ts`; import from there. The bundle-size gate catches
+  this class — check it after adding any orchestrator-side import.
+- **`MarkerDetector` consumes raw `Frame`/`Stream` only** — sessions
+  needing detection run a second raw-stream consumer alongside the
+  registry preview loop (safe: `Sub::Queue` bounded backlogs), with
+  explicit Frame refcount bookkeeping (no Vue `watch` doing it
+  invisibly).
+
+**Queue now — 🏁 FINAL ROUND before commit checkpoint #2 (planner
+directive, 2026-07-04).** Scope is FROZEN to the numbered items below —
+this round exists to make the checkpoint a *complete* Stage 2, not to
+grow it. Rules for both threads:
+- No new scope. Anything discovered along the way gets **logged as a
+  finding** in the appropriate doc section, not fixed inline (unless it
+  blocks your own item's gates).
+- Definition of done per item: gates green (`vue-tsc` 0, `vite build`
+  fully green + orchestrator bundle zero-Vue, `vitest` all passing —
+  add suites where the item spec says so), plus **one compact log entry**
+  (≤ 15 lines; the round-4 sagas were excellent but the planner now
+  compacts them — start compact).
+- When your items are done, **stop**. The planner runs one review pass,
+  then the user commits. Explicitly out of scope this round: the
+  `Marker.vue` dictionary extraction (deferred — out of proportion),
+  `contextIsolation`, anything hardware-gated.
+
+
+1. **S4 added-scope probes (orchestrator thread). ✅ Landed (coder,
+   2026-07-04).** `Controller` (`orchestrator/controller.ts`) gained
+   `get stats()` (forwards `Device.stats`) and `streamSnapshot(intervalSec)`
+   (per-stream call-count → Hz, reset each call; last-sent `{left,right}`)
+   — layered cleanly alongside the synced-capture thread's concurrent
+   ST-64 edit to the same file (`StreamIdPool`/`StreamUpdateGate`; my Hz
+   counter increments post-gate, so it reflects real wire sends, not raw
+   `update()` calls — verified this composes correctly, not just
+   textually merges). `controller` contract gained `serial_rate`
+   (tx/rx bytes+packets per sec) and `streams: StreamStat[]`; the session
+   samples both at 2 Hz via a timer started on `connect`/stopped on
+   `disconnect`. Profiler window: two new sections — serial rate (plain
+   readout) and live streams (Hz + two `PosView` pads per row, sorted by
+   Hz, capped at 8 rows + an aggregate for the rest, per spec). Gates:
+   `vue-tsc` clean (one pre-existing error in `stream-writer.ts` is the
+   synced-capture thread's own in-progress S3 file, not this item's);
+   `vitest` 49/49; `vite build` green; orchestrator bundle Vue-free,
+   156.05 kB.
+2. **S2 + S3 + ST-64a/b/c (synced-capture thread). ✅ Landed (coder,
+   2026-07-04)** — compact log in synced-capture.md §9.8; bench/flash
+   remain hardware-gated.
+3. **Commit checkpoint #2 (user decision)** — the entire Stage 2 landing
+   (~60+ paths incl. deletions/renames) is again uncommitted on top of
+   the last checkpoint; tests/vue-tsc/Vite/core/firmware gates are green,
+   while `npm run build` still exits at the final packaging step because
+   `electron-builder` is not installed in this workspace.
+4. **Marker.vue exception** (optional, unblocks `contextIsolation`):
+   extract dictionaries as static data, or accept the exception and
+   check its `contextIsolation` compatibility explicitly.
+5. Then the hardware-free runway is truly drained.
+
+
+### 7.2 Deferred queue (once hardware returns)
+
+**Execution plan for everything below:**
+[`verification-playbook.md`](./verification-playbook.md) — staged A→H,
+prepared in advance; run it instead of improvising the session.
+
 
 1. **Hardware-in-the-loop GUI session.** ⚠️ Prerequisite unchanged: P3.1a
    must land first (rebuilt `core` + plugged v1 firmware hangs actuation —
@@ -396,8 +412,9 @@ synced-capture thread (otherwise idle until hardware) S2 → S3 → P3.1d.
    **perf baseline capture (§7.3 item 5)** — run the scripted scenario and
    archive the first snapshot. File findings into §6.
 2. Synced-capture bench verification → flash v2 → P5 integration.
-3. **disparity-scope migration** (also gated on the hot-path thread, §8);
-   finish **R4** alongside.
+3. **R4** (leases only via session lifecycle) — the disparity migration
+   it was waiting to ride along with has landed (S1a); do it with
+   whichever item next touches the registry.
 4. **Multi-window/projector** (C10 will already be in from §7.1).
 5. **Zero-copy shared-memory ring** — gated on the §7.3 baseline showing
    the ~2 copies/frame/client matter + a real multi-window consumer.
