@@ -354,35 +354,60 @@ pattern + migration status, the superseded planner memory, a stale
 tracking-single TODO header, and marked the hot-path gate resolved.
 Remaining items:
 
-1. **S4 added-scope probes (orchestrator thread). ✅ Landed (coder,
-   2026-07-04).** `Controller` (`orchestrator/controller.ts`) gained
-   `get stats()` (forwards `Device.stats`) and `streamSnapshot(intervalSec)`
-   (per-stream call-count → Hz, reset each call; last-sent `{left,right}`)
-   — layered cleanly alongside the synced-capture thread's concurrent
-   ST-64 edit to the same file (`StreamIdPool`/`StreamUpdateGate`; my Hz
-   counter increments post-gate, so it reflects real wire sends, not raw
-   `update()` calls — verified this composes correctly, not just
-   textually merges). `controller` contract gained `serial_rate`
-   (tx/rx bytes+packets per sec) and `streams: StreamStat[]`; the session
-   samples both at 2 Hz via a timer started on `connect`/stopped on
-   `disconnect`. Profiler window: two new sections — serial rate (plain
-   readout) and live streams (Hz + two `PosView` pads per row, sorted by
-   Hz, capped at 8 rows + an aggregate for the rest, per spec). Gates:
-   `vue-tsc` clean (one pre-existing error in `stream-writer.ts` is the
-   synced-capture thread's own in-progress S3 file, not this item's);
-   `vitest` 49/49; `vite build` green; orchestrator bundle Vue-free,
-   156.05 kB.
-2. **S2 + S3 + ST-64a/b/c (synced-capture thread). ✅ Landed (coder,
-   2026-07-04)** — compact log in synced-capture.md §9.8; bench/flash
-   remain hardware-gated.
-3. **Commit checkpoint #2 ✅ done 2026-07-04** (4 commits, planner-
-   verified first; the `npm run build` packaging step still needs
-   `electron-builder` installed — environmental, not a code gate).
-4. **Marker.vue exception** (optional, unblocks `contextIsolation`):
-   extract dictionaries as static data, or accept the exception and
-   check its `contextIsolation` compatibility explicitly.
-5. Then the hardware-free runway is truly drained.
+### STAGE 3 — Multi-fovea groundwork + final surface tightening (Round 1 dispatched 2026-07-05)
 
+**Why this stage:** multi-fovea is the declared purpose of the entire
+stream/protocol-v2 infrastructure; its *logic layer* is exactly as
+buildable and harness-testable as everything already landed, and it is
+the best possible dry run of that infrastructure before hardware returns.
+Plus the two small items that finish S1 to 100 %. Same rules as the last
+round: scope frozen to the T-items, discoveries logged not fixed, gates
+green per item, compact logs (≤ 15 lines). Bench/flash/playbook remain
+hardware-gated and are NOT part of this stage.
+
+**Round 1 — orchestrator thread:**
+- **T1 — Marker.vue dictionary extraction (finishes S1).** A dev-time Node
+  script (may use `core` freely — it runs in Node, not the renderer) dumps
+  the used dictionaries' `pattern(id)` bit-grids to a generated static
+  module (JSON/TS, committed); `Marker.vue` consumes the static data;
+  delete its `MarkerDetector` construction; then drop `src/index.ts`'s
+  `beforeunload core.cleanup`. **DoD: no core loader chunk emitted in the
+  renderer build at all** (today's `core-*.js` chunk disappears — check
+  the build output, not just grep).
+- **T2 — `contextIsolation` spike (log-only, no flip).** Enumerate
+  everything that breaks with `contextIsolation: true` + `nodeIntegration:
+  false`: `client.ts`'s `ipcRenderer` + `orchestrator:port` delivery,
+  the perf-snapshot `get-data-path`/fs writes, `RemoteCanvas`, anything
+  else. Output = a findings list in this doc (§7.2 feeds on it), zero
+  code changes.
+
+**Round 1 — synced-capture thread (multi-fovea logic layer — all
+fake-Device / harness-testable, no hardware):**
+- **T3 — round-robin frame scheduler** (`orchestrator/scheduler.ts` or
+  extend `sync.ts`): given M active streams and the firmware's
+  8-deep frame queue, keep ≤ K in flight, fair rotation, duplicate-REJ
+  tolerance, timeout→requeue policy, per-stream pacing floor. Pure logic
+  over the `Controller.frame()` API — harness suite with a fake
+  controller (REJ storms, slow FINs, starvation check: no stream waits
+  > M×frame-interval).
+- **T4 — `modules/multi-fovea/{contract,session,index.vue}` skeleton**
+  (planner spec): state = target list (M ≤ 8 to start; 64 available) +
+  per-target tracker params + global pulse; session = M KCF trackers
+  driven sequentially off the **center** free-run `onView` (watch
+  `trackMs`×M — this is the designed AsyncTask-escape-hatch trigger, §4
+  threading row), one stream per target (create/update from tracker
+  output through the conversions), T3 scheduler round-robins `frame()`
+  across active targets **behind a `v2Capable` gate** (real captures are
+  hardware; the path stubs cleanly until then); telemetry per-target
+  (angle, stream Hz, last-FIN age); frames `fovea:<i>` per target.
+  Renderer = center overview with M overlays + a fovea tile grid
+  (profiler row/XY-pad patterns reusable). Round-1 DoD: type-clean,
+  registered, harness covers M-tracker orchestration (mocked
+  Vision/tracker) + scheduler integration; live capture path explicitly
+  stubbed with a REJ-with-reason until Stage F clears.
+
+**Held items (not this round):** `contextIsolation` flip (T2 is the
+spike), shm ring (baseline-gated), anything in §7.2.
 
 ### 7.2 Deferred queue (once hardware returns)
 

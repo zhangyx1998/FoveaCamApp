@@ -4,7 +4,12 @@
 > All remaining work is hardware-gated: bench (Stage F) → flash → P4 wiring
 > → P5. The original FIN-timeout root cause remains **undetermined pending
 > the next bench run** (§9.7's trace makes it decisive). Stop here for the
-> planner review / commit checkpoint #2.
+> planner review / commit checkpoint #2 — ✅ done 2026-07-04.
+> **STAGE 3 Round 1 (2026-07-05):** this thread takes **T3** (round-robin
+> frame scheduler over `Controller.frame()`, fake-controller harness) and
+> **T4** (multi-fovea module skeleton, capture path v2Capable-gated) —
+> full specs in orchestrator.md §7.1 Stage 3. The multi-fovea module is
+> what §1 item 2's stream infrastructure exists for; this is its dry run.
 > **Branch:** TBD (new branch off `refactor/decouple-orchestrator` or after it merges).
 > **Owner:** Yuxuan (plan) / separate coder (implementation).
 > **Last updated:** 2026-07-04
