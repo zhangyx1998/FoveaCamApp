@@ -12,5 +12,6 @@ declare module "core/Tracker" {
     constructor();
     init(frame: Mat, roi: Rect): void;
     update(frame: Mat): Rect | null;
+    updateAsync(frame: Mat): Promise<Rect | null>;
   }
 }

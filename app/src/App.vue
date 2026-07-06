@@ -13,6 +13,7 @@ const titleBarHeight = ref(0);
 // Sub task modules
 import ManualControl from "../modules/manual-control/index.vue";
 import TrackingSingle from "../modules/tracking-single/index.vue";
+import MultiFovea from "../modules/multi-fovea/index.vue";
 import DisparityScope from "../modules/disparity-scope/index.vue";
 import ManageCameras from "../modules/manage-cameras/index.vue";
 import CalibrateIntrinsic from "../modules/calibrate-intrinsic/index.vue";
@@ -50,7 +51,6 @@ import {
   faCircleHalfStroke,
   faChartLine,
 } from "@fortawesome/free-solid-svg-icons";
-import { ipcRenderer } from "electron";
 import { current_capture } from "./capture";
 import CaptureOverlay from "./capture/index.vue";
 import RecordButton from "./record/RecordButton.vue";
@@ -70,7 +70,7 @@ function backToHome() {
 // Open the profiler window (docs/refactor/orchestrator.md §7.1 S4) — a
 // second, plain-chrome window over the same orchestrator connection.
 function openProfiler() {
-  ipcRenderer.send("open-profiler-window");
+  window.foveaBridge.openProfilerWindow();
 }
 
 window.addEventListener("keydown", (e) => {
@@ -118,7 +118,10 @@ window.addEventListener("keydown", (e) => {
           >
             <Icon :icon="faObjectGroup" /> Object Tracking (Single)
           </button>
-          <button style="--color: #0af" disabled>
+          <button
+            style="--color: #0af"
+            @click="launch(MultiFovea, 'Object Tracking (Multi)')"
+          >
             <Icon :icon="faObjectGroup" /> Object Tracking (Multi)
           </button>
           <button style="--color: #0af" disabled>

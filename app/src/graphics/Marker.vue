@@ -1,6 +1,12 @@
 <script setup lang="ts">
-import { MarkerDetector, PreDefinedDictionary } from "core/Vision";
 import { computed } from "vue";
+import { MARKER_PATTERNS } from "@lib/marker-patterns.generated";
+
+// Static bit-grid lookup (docs/refactor/orchestrator.md §7.1 Stage 3 T1) —
+// this was the last renderer-reachable `core` dependency: drawing a marker
+// only needs its dictionary's fixed pattern data, not a live
+// `core/Vision` `MarkerDetector`. Regenerate `MARKER_PATTERNS` (`app/
+// scripts/gen-marker-patterns.cjs`) to add a dictionary beyond "4X4_50".
 
 const props = defineProps<{
   id: number;
@@ -8,14 +14,20 @@ const props = defineProps<{
   cy?: number;
   size?: number;
   outline?: number;
-  dictionary?: PreDefinedDictionary;
+  dictionary?: string;
 }>();
 
-const detector = computed(
-  () => new MarkerDetector(props.dictionary ?? "4X4_50"),
-);
-
-const pattern = computed(() => detector.value.pattern(props.id));
+const pattern = computed(() => {
+  const dict = MARKER_PATTERNS[props.dictionary ?? "4X4_50"];
+  const p = dict?.[props.id];
+  if (!p) {
+    console.warn(
+      `[Marker] no static pattern for dictionary=${props.dictionary ?? "4X4_50"} id=${props.id} — regenerate marker-patterns.generated.ts if this dictionary is now in use`,
+    );
+    return [];
+  }
+  return p;
+});
 
 const size = computed(() => props.size ?? 60);
 const grid_size = computed(() => size.value / (pattern.value.length + 2));

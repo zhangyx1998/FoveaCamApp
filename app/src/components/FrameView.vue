@@ -3,7 +3,7 @@ export type TransformFunction = (mat: any) => any;
 </script>
 
 <script setup lang="ts">
-import { convertType, cvtColor, type Mat } from "core/Vision";
+import type { Mat } from "core/Vision";
 import type { Point, Size } from "core/Geometry";
 import {
   computed,
@@ -126,26 +126,57 @@ const mat = computed(() => {
   return mat;
 });
 
+// Expand a 1- or 3-channel Mat to 4-channel (RGBA, alpha=255) in plain JS —
+// every renderer-reachable Mat now arrives via `payloadToMat` (always
+// `Uint8Array`, always 4-channel BGRA/RGBA already, see the wire's
+// `toFramePayload`), so this is dead code on any *current* call path, but
+// kept as a real (not native-backed) implementation so the component stays
+// correct for a 1/3-channel Mat rather than silently regressing if one ever
+// shows up again. Replaces the old `core/Vision` `cvtColor` calls — the
+// last native runtime dependency in the renderer bundle (docs/refactor/
+// orchestrator.md §7.1 Stage 3 T1).
+function expandToRGBA(src: Uint8Array, channels: 1 | 3): Uint8Array {
+  const pixels = src.length / channels;
+  const out = new Uint8Array(pixels * 4);
+  if (channels === 1) {
+    for (let i = 0, j = 0; i < src.length; i++, j += 4) {
+      out[j] = out[j + 1] = out[j + 2] = src[i];
+      out[j + 3] = 255;
+    }
+  } else {
+    for (let i = 0, j = 0; i < src.length; i += 3, j += 4) {
+      out[j] = src[i];
+      out[j + 1] = src[i + 1];
+      out[j + 2] = src[i + 2];
+      out[j + 3] = 255;
+    }
+  }
+  return out;
+}
+
 watch(
   mat,
   async (mat) => {
     if (!mat) return (image.value = null);
-    if (!(mat instanceof Uint8Array)) mat = convertType(mat, "8U");
+    if (!(mat instanceof Uint8Array)) {
+      console.error("FrameView: expected a Uint8Array Mat, got", mat);
+      return (image.value = null);
+    }
     const [height, width] = mat.shape;
+    let data: Uint8Array;
     switch (mat.channels) {
       case 1:
-        mat = cvtColor(mat, "GRAY2RGBA");
-        break;
       case 3:
-        mat = cvtColor(mat, "RGB2RGBA");
+        data = expandToRGBA(mat, mat.channels);
         break;
       case 4:
+        data = mat;
         break;
       default:
         console.error(`Unsupported number of channels: ${mat.channels}`);
         return (image.value = null);
     }
-    const clamped = new Uint8ClampedArray(mat.buffer);
+    const clamped = new Uint8ClampedArray(data.buffer, data.byteOffset, data.byteLength);
     image.value = new ImageData(
       clamped as Uint8ClampedArray<ArrayBuffer>,
       width,

@@ -7,6 +7,7 @@
 #include <opencv2/core.hpp>
 #include <opencv2/tracking.hpp>
 
+#include "AsyncTask.h"
 #include "CoreObject.h"
 #include "napi-helper.h"
 
@@ -16,6 +17,25 @@ using namespace cv;
 // =====================================================================
 // TrackerKCF CoreObject
 // =====================================================================
+
+struct TrackerUpdateResult {
+  bool ok;
+  cv::Rect bbox;
+};
+
+template <>
+Napi::Value convert(Napi::Env env,
+                    const TrackerUpdateResult &result) noexcept {
+  if (!result.ok)
+    return env.Null();
+  return convert(env, result.bbox);
+}
+
+template <>
+Napi::Value convert(Napi::Env env, const Napi::Value &,
+                    const TrackerUpdateResult &result) noexcept {
+  return convert(env, result);
+}
 
 class TrackerKCFObject
     : public CoreObject<TrackerKCFObject, cv::Ptr<cv::TrackerKCF>> {
@@ -34,6 +54,7 @@ public:
                            CORE_OBJECT_REGISTER(TrackerKCFObject, env),
                            INSTANCE_METHOD(TrackerKCFObject, init),
                            INSTANCE_METHOD(TrackerKCFObject, update),
+                           INSTANCE_METHOD(TrackerKCFObject, updateAsync),
                        });
   }
 
@@ -61,6 +82,23 @@ public:
       if (!ok)
         return env.Null();
       return convert(env, bbox);
+    }
+    JS_EXCEPT(env.Undefined())
+  }
+
+  FN(updateAsync) {
+    auto env = info.Env();
+    try {
+      auto tracker = core();
+      auto frame = convert<cv::Mat>(info[0]);
+      return AsyncTask<TrackerUpdateResult>::run(
+          env,
+          [tracker, frame]() {
+            cv::Rect bbox;
+            bool ok = tracker->update(frame, bbox);
+            return TrackerUpdateResult{ok, bbox};
+          },
+          "KCF.updateAsync");
     }
     JS_EXCEPT(env.Undefined())
   }

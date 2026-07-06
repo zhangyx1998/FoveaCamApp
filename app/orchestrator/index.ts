@@ -23,6 +23,7 @@ import liveViewSession from "@modules/single-capture/session";
 import manageCamerasSession from "@modules/manage-cameras/session";
 import trackingSession from "@modules/tracking-single/session";
 import manualControlSession from "@modules/manual-control/session";
+import multiFoveaSession from "@modules/multi-fovea/session";
 import disparityScopeSession from "@modules/disparity-scope/session";
 import calibrateIntrinsicSession from "@modules/calibrate-intrinsic/session";
 import calibrateDriftSession from "@modules/calibrate-drift/session";
@@ -66,6 +67,9 @@ const tracking = hub.add(trackingSession());
 // --- manual-control: manual steering + capture + recording ----------------
 const manualControl = hub.add(manualControlSession());
 
+// --- multi-fovea: protocol-v2 multi-target logic skeleton ------------------
+const multiFovea = hub.add(multiFoveaSession());
+
 // --- disparity-scope: auto-vergence control loop (§7.1 S1a) ---------------
 const disparityScope = hub.add(disparityScopeSession());
 
@@ -89,6 +93,7 @@ hub.add(
       manageCameras,
       tracking,
       manualControl,
+      multiFovea,
       disparityScope,
       calibrateIntrinsic,
       calibrateDrift,

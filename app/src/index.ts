@@ -15,9 +15,10 @@ if (isProfiler) {
     import("./App.vue").then(({ default: App }) => {
         createApp(App).mount("#app");
     });
-    import("core").then(({ cleanup }) => {
-        window.addEventListener("beforeunload", cleanup);
-    });
+    // `core.cleanup()` on unload is gone (docs/refactor/orchestrator.md §7.1
+    // Stage 3 T1) — `Marker.vue` was the last renderer code constructing a
+    // real native `core` object, and it's now static-data-only. No
+    // remaining renderer-side native handle needs releasing on window close.
 }
 
 // Prevent global zooming on macOS
