@@ -53,37 +53,41 @@ planners: read [`planner.md`](./planner.md) first — the full handover
 - Do not edit: other roles' sections, the protocol/ownership sections,
   or any other `docs/refactor/*` file. When your items are done, stop.
 
-**Dispatch mechanics:** workers are Codex sessions launched headless by
-the planner via `scripts/dispatch-worker.sh <A|B|C> ["note"]`
-(`codex exec`, workspace-write sandbox — repo-confined writes, no
-network; transcripts under `.worker-logs/`, gitignored). **Sessions are
-persistent per role** (user preference — warmup is costly): the first
-run records the role's session id under `.worker-logs/session-<role>.id`
-and later runs `codex exec resume` it with a short re-entry prompt, so
-workers keep their context across iterations. Every run still begins by
-re-reading this file's role section (steering first) — the file remains
-the source of truth even with warm context. The planner retires a
-role's session (deletes the id file) at stage boundaries to cap context
-growth. The planner runs the script in a background shell and is
-re-invoked on worker exit to start the verification iteration. At most
-one session per role at a time; roles may run concurrently because the
-ownership table keeps their file domains disjoint.
+**Dispatch mechanics (updated 2026-07-06, workers switched to Claude
+Sonnet 5):** workers are **Claude Sonnet 5 subagent sessions** spawned by
+the planner through the harness Agent tool (`model: sonnet`), run in the
+background — the planner is notified on completion and starts the
+verification iteration. **Session persistence:** the planner continues a
+role's existing agent via SendMessage (warm context) instead of
+spawning fresh; a new spawn = a deliberate cold start at stage
+boundaries. Workers inherit the planner's environment — that means the
+repo working directory AND its quirks: use `node_modules/.bin/*`
+binaries directly and `/opt/homebrew/bin/node` (v26.4.0) for
+`core/test` scripts; the bare `node`/`npx` shell wrappers are broken in
+this zsh. At most one session per role; roles may run concurrently
+(ownership table keeps domains disjoint) but all log into this file —
+if a concurrent write clobbers a log, the planner restores it from the
+transcript. (Legacy: `scripts/dispatch-worker.sh` drove Codex sessions
+until 2026-07-06 — retired after quota exhaustion; keep the script for
+reference.)
 
 **Standing gates (every instruction, unless it narrows them):**
 `vue-tsc --noEmit -p tsconfig.json` → 0 errors; `vitest run` all green;
 `vite build` fully green; renderer bundle **zero-core**; orchestrator
 bundle **zero-Vue**; `core make build` both runtimes when native code is
 touched; reader addon `otool -L` shows system libraries only; built
-built preloads pass the **V11 triplet**:
+preloads pass the **V11 triplet**:
 relative-import grep (`(from |require\()"\./`) empty — sandboxed
 preloads can't load sibling chunks (V11); content is CJS, never
 `import`-style ESM (V11b); zero hits for
 `baseURI|import_meta|createRequire` — vite's `import.meta` shim
 resolves to the dev-server URL inside preloads (V11c). Tree stays
-uncommitted — the user commits at planner-declared checkpoints. `npx`
-and direct shell commands are permitted for type checking, builds, and
-test scripts (all run inside the workspace-write sandbox; network access
-— e.g. `npm install` — is not available).
+uncommitted — the user commits at planner-declared checkpoints. Shell
+guidance (Sonnet workers share the planner's environment): run gate
+binaries from `node_modules/.bin/*` and use `/opt/homebrew/bin/node`
+for `core/test` scripts — the bare `node`/`npx` wrappers are broken in
+this zsh. Do not run `npm install` or other dependency changes without
+a planner-logged handoff.
 
 ## File ownership
 
@@ -93,11 +97,17 @@ planner-logged handoff (ask via your log, don't just edit).
 | Path | Owner |
 |---|---|
 | `app/modules/**`, `app/src/**`, `app/lib/**` (except below) | A |
-| `app/orchestrator/**` (except `registry.ts` while Stage 4 active) | A |
+| `app/orchestrator/**` | A |
 | `app/electron/main.ts`, `preload.ts`, `bridge.ts` | A |
-| `app/test/**` (except SHM suites) | A |
-| `app/orchestrator/registry.ts` (Stage 4 duration only, then back to A) | C |
-| `app/electron/preload-renderer.ts`, `preload-profiler.ts`, `preload-bridge.ts` | C |
+| `app/test/**` — suites belong to their feature's owner (precedent: metering/workload-view/SHM suites are C's, the rest A's); the directory itself is shared | shared |
+| `app/orchestrator/registry.ts` (Stage 4 complete → back to A; C has metering-wiring write access for C-6 only) | A |
+| `app/orchestrator/metering.ts` (new), metering wiring diffs in `registry.ts`/`frame-worker.ts`/`stream-writer.ts` (C-6 duration) | C |
+| Window framework: `app/electron/**` (window manager, entries wiring), renderer entry HTMLs, `app/src/windows/**`, `vite.config.ts` renderer entries | A |
+| Recorder format bench: `playground/bench-recorder/**` | B |
+| Recorder writer: `app/orchestrator/recorder/**` (new) + surgical integration diffs in `stream-writer.ts` / `modules/manual-control/recording.ts` (B-5 duration) + the `@mcap/*` dependency promotion | B |
+| Profiler window UI: `app/src/profiler/**` (C-7 duration — C built the metering schema it renders) | C |
+| `app/electron/preload-bridge.ts` (bridge impl — MUST stay self-contained per V11; shm-free) | A |
+| `app/electron/preload-renderer.ts`, `preload-profiler.ts` | C |
 | SHM blocks in `lib/orchestrator/client.ts` + `protocol.ts` (`shm` payload variant), SHM OSD in `StreamView` | C (A owns the rest of those files) |
 | `core/include/ShmRing.h`, `core/src/ShmRing.cpp`, reader addon target, `core/test/08-shm-ring.ts` | C |
 | `core/**` (everything else), `firmware/**`, protocol v2 host+MCU | B |
@@ -115,31 +125,23 @@ hardware-dependent behavior verified without a real rig run.
 
 ### Active instructions
 
-- **A-4 — disparity-scope: async tracker (PB3; spec orchestrator.md §6
-  PB3).** Replace the synchronous per-frame `updateTracker(raw)` in
-  `onCenterView` with the T6 `tracker.updateAsync` pattern already used
-  by tracking-single/multi-fovea: busy-drop overlapping ticks, results
-  applied on completion with a staleness guard (session idle /
-  re-target — V5/V10 class), copy-before-await honored (the native arg
-  conversion copies synchronously). Harness: extend the existing
-  tracking-retry or a small disparity suite for the busy-drop + stale
-  completion. DoD: standing gates.
+- **A-12 — tracking-single async tracker (PB3 residual).** Migrate
+  tracking-single's synchronous KCF onto the `AsyncKcfTracker` pattern
+  you built in A-4 (`disparity-scope/tracker.ts` — extract to a shared
+  location if cleaner, e.g. `@orchestrator/async-kcf.ts`, updating
+  disparity's import): busy-drop, generation staleness guard, results
+  applied on completion. Preserve tracking-single's kinematic-predict
+  timing semantics (predict runs in `targetVolts()` — unchanged).
+  Harness: reuse/extend the async-tracker suite. DoD: standing gates.
   - Log:
-- **A-5 — latest-wins processing gate for session display vision (PB3).**
-  `onView` sinks in manual-control and disparity-scope currently run
-  full-frame vision inline (undistort.apply, wrapPerspective, slice/
-  diff/depth). Introduce one shared helper (e.g.
-  `orchestrator/frame-worker.ts`): sink copies the tap into a reusable
-  buffer and marks it latest; a busy-gated async processor consumes the
-  latest frame, runs the vision ops, publishes via `s.frame(...)` —
-  frames arriving while busy are coalesced (latest wins), mirroring
-  disparity's `step()` gate. Convert both modules' display-vision
-  paths onto it; actuation-relevant math stays where the module needs
-  it (disparity's control path is already decoupled via `step`).
-  Expected outcome, verify in log reasoning: registry serials return
-  to camera rate regardless of session load; processed topics publish
-  at their own capacity. DoD: standing gates; note per-module what
-  remains inline and why.
+- **A-13 — direct app-switch affordance (adopted default; user may
+  veto).** Native application menu gains an "Apps" submenu listing the
+  catalog (from `lib/windows.ts`); selecting one routes through the
+  existing `openApp` drain/switch flow — zero new UI surface, the
+  refusal prompt already exists. Welcome/profiler/projection windows
+  get the same menu (it's the app-level menu). Small; test via
+  window-manager harness if any logic is added, else log the manual
+  check. DoD: standing gates.
   - Log:
 
 ## Coder B — Native core, protocol & firmware
@@ -153,16 +155,26 @@ control is the planner's review loop.
 
 ### Active instructions
 
-- **B-standby.** No active instructions. B-1 (preview-safe pixel-format
-  filtering — 12-bit readout now code-complete end to end) and B-2
-  (serial-trace decoder + fixture) planner-accepted 2026-07-06,
-  archived to orchestrator.md + synced-capture.md. Known cleanup
-  candidate for a future round: pre-existing TS errors in `core/test`
-  (`03-ArUco`, `08-shm-ring` — the latter is C-owned). Hardware items
-  stay rig-gated.
+- **B-6 — Python sub-project `pyfovea` (Stage 5; spec:
+  recorder-container.md §5 + the §2b schema contract).** Top-level
+  `pyfovea/` (name is a planner placeholder — user may rename before
+  PyPI): `pyproject.toml`, typed reader API over `.fovea` (use the
+  `mcap` python package; decode `x-fovea-raw` from channel metadata —
+  port `stream-decoder.py`'s 12p unpack + significant-bits scaling),
+  PLUS the legacy `.stream`/`.meta` read path (absorb stream-decoder
+  logic; old dumps stay loadable), streaming/re-index fallback for
+  footerless files, CLI entry points (`inspect`, `export`, `convert`),
+  tests against small fixtures (generate a tiny synthetic `.fovea`
+  with the B-5 harness; check fixtures in). Environment: set up a
+  local venv under `pyfovea/.venv` (gitignored) with
+  `/opt/homebrew/bin/python3 -m venv`; pip grant limited to `mcap`,
+  `numpy`, and test tooling — log exact versions; document the exact
+  test command at the top of the package README (it becomes a standing
+  gate). PyPI publishing is USER-GATED — prepare packaging only.
+  DoD: package tests green via the documented command; app gates
+  untouched.
   - Log:
-- **(B-3 accepted & cleared 2026-07-06** — core/test typecheck now
-  fully green combined with C-4.)
+- **(B-5 accepted & archived 2026-07-06 → recorder-container.md §2b.)**
 
 ## Coder C — SHM frame path (end-to-end)
 
@@ -181,11 +193,50 @@ session.
 - **C-standby note.** C-1/C-2 were planner-accepted 2026-07-06 and
   archived (orchestrator.md §6 + §7.1 Stage 4).
 - **(C-4 accepted & cleared 2026-07-06.)**
-- **C-standby note.** C-5 (registry always-shm + topicKey)
-  planner-accepted 2026-07-06 — the V13 steering (ShmSlot.write/copyTo,
-  registry persistent tap buffer) was applied by the planner directly
-  (Codex quota exhausted until 22:09). Archived to orchestrator.md
-  §6/§7.1.
+- **C-standby.** C-7 (profiler UI on the metering schema)
+  planner-accepted 2026-07-06 — archived to workload-metering.md.
+  C-3/PB2 remains held (bench). Next C work: shm adoption items if the
+  recorder viewer wants a playback ring, or projector-adjacent reads.
+  - Log:
+
+- **(history) C-6 — workload metering core (accepted; spec:
+  docs/refactor/workload-metering.md — read it fully first).**
+  - `app/orchestrator/metering.ts`: the `Workload` meter per §2 —
+    `registerWorkload(name, {inputs, outputs})` returning
+    `{ingest, begin/end (or measure), emit, drop, dispose}`;
+    utilization = busy-fraction per wall-clock window; rates via
+    T10-style window bookkeeping (derived, never assumed); drops/
+    coalescing first-class. Vue-free (`rolling.ts` lineage).
+  - Adopt in the first citizens you own wiring access to (ownership
+    table): registry preview loop (per serial), `frame-worker` gates,
+    shm writers (per topic ring), `stream-writer` recorder worker.
+  - Export: `system.perfSnapshot` gains an additive `workloads` key;
+    live telemetry at the existing 1 Hz throttle. Document the exact
+    snapshot shape in your log (the profiler UI lands in a later
+    round — schema stability matters more than looks).
+  - Harness: fake-timer unit tests for utilization/rate/drop math +
+    one integration-style test through a fake workload.
+  - DoD: standing gates (incl. V11 triplet — you're not touching
+    preloads, but run it); zero behavior change to the metered paths
+    (meters observe, never gate).
+  - Log: NEW `app/orchestrator/metering.ts` — `registerWorkload(name,{inputs,outputs})`
+    → `{ingest,emit,drop,begin,end,measure,dispose}`; T10-style cumulative window
+    (mirrors `allFrameStats`). Snapshot: `{name, window:{startedAt,snapshotAt,uptimeMs},
+    utilization (busyMs/uptimeMs, ≤1), busyMs, inputs/outputs:{[n]:{count,ratePerSec}},
+    drops:{total,ratePerSec,byReason}}`; `allWorkloadSnapshots()`→`Record<name,_>`.
+    Full lifecycle wired in `registry.ts` (`registry:<serial>`, camera/shm/view,
+    begin/end around convert+publish) and `stream-writer.ts` (`recorder:<name>`,
+    frame/written, drop backpressure+failed). `frame-worker.ts` self-registers
+    per instance (auto id or `opts.name`) + additive `dispose()`, but session.ts
+    call sites (A-owned) aren't wired to name/dispose it yet — follow-up, not
+    fixed inline. **Handoff:** splicing `workloads: allWorkloadSnapshots()` into
+    `system.perfSnapshot` + `PerfSnapshot` type needs `sessions/system.ts` +
+    `lib/orchestrator/contracts.ts` edits (both A-owned) — not done this round.
+    Meters never throw (disposed handles inert; dup-name register warns+replaces).
+    Gates: vue-tsc 0 err; vitest 97/97 (14 new, fake-timer math + 1 integration
+    test); vite build green; V11 triplet clean; orchestrator bundle 0 Vue hits.
+- **(history)** C-5 planner-accepted 2026-07-06 — archived to
+  orchestrator.md §6/§7.1.
 - **C-3 (held).** PB2 live measurement (orchestrator.md §7.1 Stage 4
   Round C) — needs display + cameras and planner acceptance of C-1/C-2
   first. Do not start.

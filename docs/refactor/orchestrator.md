@@ -17,6 +17,24 @@
 > streams. **Held:** Stage 4 Round C / PB2 (needs display
 > + cameras), V7 UI, hardware playbook A–H (mechanical rig).
 > Control-plane stays on MessagePort (REST considered & rejected — §4).
+> **2026-07-06 later: workers switched to Claude Sonnet 5 subagents;
+> PB3 fixed (A-4/A-5 accepted — async disparity tracker + shared
+> latest-wins frame-worker; sub-app fps ceiling removed, GUI check
+> pending). STAGE 5 program planned per user direction — see §7.1
+> Stage 5 pointer: multi-window.md / workload-metering.md /
+> recorder-container.md. **Round 1 dispatched 2026-07-06 (all three
+> roles in parallel):** A-6 multi-window foundation + A-7 window
+> chrome/titlebar (A, warm session); B-4 MCAP format evaluation with a
+> committed bench + GO/NO-GO (B, fresh); C-6 workload-metering core +
+> first-citizen wiring (C, fresh). Adopted defaults from
+> multi-window.md §5 (welcome closes on app open; switch-with-drain;
+> projection windows round 2) — user may veto while in flight.
+> **Round 1 COMPLETE & planner-accepted same day (first fully-parallel
+> 3-role Sonnet round): C-6 metering core, B-4 MCAP conditional-GO
+> (format decided), A-6/7/8 multi-window foundation + fullscreen fix +
+> metering export. Sweep on the settled tree: 120/120, all gates green.
+> Pending user: GUI smoke of the multi-window boot (checklist in the
+> round report), full-res recording tier decision, commit.**
 > **Dispatch-loop iteration 2 (2026-07-06, post-checkpoint-#3):** A
 > landed V7 interactive target placement (+V10 fix); B landed 12-bit
 > preview-safe format filtering — **12-bit readout is now code-complete
@@ -633,9 +651,20 @@ remap) + fovea `wrapPerspective` per frame. The camera loop cannot pull
 the next frame until every sink returns, so one slow session throttles
 the *serial* — previews included — to 1/(inline work). Disparity's
 `step()` shows the correct pattern already (busy-gated, guide/match at
-13/s without dragging the rest). **Fix queued as A-4/A-5** (workers
-quota-locked until 22:09): async tracker + a general latest-wins
-processing gate so `onView` sinks only copy + hand off. **Promoted to
+13/s without dragging the rest). **✅ Fixed (coder A on Sonnet 5, 2026-07-06 —
+first round of the Claude-subagent worker fleet), ✓ planner-verified
+same day:** disparity's tracker extracted to `AsyncKcfTracker`
+(busy-drop + generation staleness guard, unit-tested); new shared
+`orchestrator/frame-worker.ts` latest-wins gate (synchronous
+copy-in-sink, `setImmediate` handoff, cancel-on-idle) adopted by
+manual-control (center + both foveae) and disparity-scope — with the
+V1 interplay handled correctly: workers cancel only AFTER the
+capture/recording drain, since a capture pass may be awaiting its next
+center tick. Gates 83/83. GUI check pending: sub-app fps should return
+to camera rate. **Residual (queued):** tracking-single still runs its
+KCF synchronously (T6 deferred it; the A-4 spec text wrongly said
+otherwise) — same ceiling applies to that module alone; migrate it
+onto `AsyncKcfTracker` in a future round. **Promoted to
 §3 hard rule:** `onView` sinks must return fast — copy the tap and
 schedule; anything ms-scale inline throttles the whole serial.
 Snapshot-taking note: renderer-side frame timing requires exporting
@@ -1021,6 +1050,28 @@ PB2 script.
 **Out of scope for Stage 4 (explicit):** raw/capture/12-bit frames,
 session-computed frame topics (adopt later per-topic if PB2 warrants),
 any change to the control-plane transport (§4: REST rejected).
+
+### STAGE 5 program (user direction 2026-07-06 — planning docs created, NOT yet dispatched)
+
+Four workstreams, each with its own planner doc; instructions flow to
+split-of-work.md per doc as specs firm up:
+
+1. **[multi-window.md](./multi-window.md)** — welcome/app/projection
+   window taxonomy, per-app entry HTML, app exclusivity, custom-titlebar
+   fullscreen fix. Foundation for 3's UI half and 4's viewer.
+2. **(same doc)** titlebar/window-chrome fix rides with 1.
+3. **[workload-metering.md](./workload-metering.md)** — common perf
+   reporting infra (ingest rate / busy % / output rate per workload) +
+   profiler reorganization on top. Mostly parallel-safe with 1.
+4. **[recorder-container.md](./recorder-container.md)** — single-file
+   container (MCAP eval first), realtime 3×60 fps write path, file
+   association + viewer windows, `stream-decoder.py` → top-level Python
+   sub-project on PyPI. Largest; lands after 1+3, format eval starts
+   early. PyPI publish is user-gated.
+
+Also queued (pre-Stage-5 leftovers): tracking-single sync-tracker
+migration onto `AsyncKcfTracker` (PB3 residual); PB2 measurement +
+V12 live check (user, bench); hardware playbook (rig).
 
 ### 7.2 Deferred queue (once hardware returns)
 

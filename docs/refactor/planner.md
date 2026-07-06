@@ -25,6 +25,11 @@ do everything except write the implementation:
   fixes; next phase only after current issues resolved. Accepted
   instruction+log pairs: archive the essentials into the planner docs,
   then DELETE them from split-of-work.md — that file stays short.
+- **Docs follow every steering decision (user directive 2026-07-06).**
+  Whenever the plan changes course — a user direction, a finding that
+  reorders work, a design decision — update the relevant planner doc in
+  the SAME iteration, not retroactively. The docs are the plan; if they
+  disagree with reality, that's a planner defect.
 - **Escalate.** You do not commit unless the user says to (they decide
   checkpoints; you may prepare/execute the commits when told). You do
   not run hardware. Contract-level tradeoffs (preview quality vs cost,
@@ -36,26 +41,19 @@ do everything except write the implementation:
 
 ## 2. The dispatch loop (how coders run)
 
-Workers are **Codex CLI sessions** (the user's account), launched
-headless by `scripts/dispatch-worker.sh <A|B|C> ["note"]`:
-
-- Run it via a **background shell** so you're re-invoked on exit.
-- Sessions are **persistent per role** (`.worker-logs/session-<X>.id`;
-  delete the file to force a cold start — do that at stage boundaries
-  to cap context growth). First run sends the full kickoff; resumes
-  send a short re-entry prompt (steering-first).
-- Transcripts land in `.worker-logs/` (gitignored). The worker's log
-  entries land in `split-of-work.md` under its instruction.
-- **Quota:** Codex hit its usage limit 2026-07-06 midday; resets
-  ~22:09 local. Until then dispatches fail with a usage-limit error in
-  the transcript.
-- Quirks learned: `codex exec resume` takes no `-C`/`-s` flags (cd
-  first; sandbox via `-c 'sandbox_mode="workspace-write"'` — already
-  handled inside the script). Workers may use npx freely. At most one
-  session per role; roles may run concurrently (ownership table keeps
-  domains disjoint) BUT they all write logs to split-of-work.md — a
-  concurrent-write clobber hasn't happened yet; if it does, restore
-  the lost log from the transcript and consider per-role log files.
+Workers are **Claude Sonnet 5 subagents** (switched from Codex
+2026-07-06 after quota exhaustion), spawned via the harness Agent tool
+with `model: "sonnet"`, `run_in_background: true` — you are re-invoked
+on completion. Continue a role's existing agent with SendMessage (warm
+context, the analog of the old codex-resume); spawn fresh only as a
+deliberate cold start. Their kickoff prompt lives in the dispatch call —
+keep it aligned with the split-of-work Protocol section (steering-first,
+ownership, log-back, gates, node_modules/.bin + /opt/homebrew/bin/node
+shell guidance — workers inherit this environment's broken zsh
+wrappers). Transcript = the agent's returned final message; logs land in
+split-of-work.md as before. (Legacy Codex path:
+`scripts/dispatch-worker.sh`, retired but kept for reference; its
+session-id files in `.worker-logs/` are stale.)
 
 **Roles** (full definitions + file-ownership table in
 `split-of-work.md` — that table is yours to maintain):
@@ -74,6 +72,9 @@ A = app/sessions/renderer/Electron shell (non-shm). B = core native
   P4.1 FIN-timeout root cause still undetermined, bench decides).
 - `verification-playbook.md` — the user's staged hardware checklist;
   Session PB2 at the top is runnable with display+cameras only.
+- `multi-window.md`, `workload-metering.md`, `recorder-container.md` —
+  the Stage 5 program (user direction 2026-07-06): requirements +
+  design notes per workstream; not yet dispatched.
 - `stream-hot-path.md`, `async-reactive.md` — historical reference.
 - `preload-error.md` — a resolved user-filed incident (V11c), keep.
 - Coders never read instructions from or write to any of these except
