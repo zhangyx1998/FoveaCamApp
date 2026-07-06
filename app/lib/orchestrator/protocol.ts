@@ -168,6 +168,13 @@ type Fack = { k: "fack"; t: string };
 type FrameInterest = { k: "finterest"; t: string };
 type Wire = Req | Res | Evt | Frame | Fack | FrameInterest;
 
+export type SessionSubscription = {
+  name: string;
+  passive?: boolean;
+};
+
+export type SessionSubscriptionPayload = string | SessionSubscription;
+
 /** Minimal duplex an `Endpoint` must provide; adapters wrap DOM and Electron
  *  ports onto this shape (see client.ts / orchestrator/runtime.ts). */
 export interface Endpoint {
@@ -459,8 +466,9 @@ export const topic = {
   frame: (session: string, name: string) => `fr:${session}:${name}`,
   command: (session: string, name: string) => `cmd:${session}:${name}`,
   setState: (session: string) => `set:${session}`,
-  // Per-session interest. Payload is the session name; the orchestrator counts
-  // subscribers and releases session-owned resources when the count hits zero.
+  // Per-session interest. Payload is either the legacy session name or
+  // `{ name, passive?: boolean }`; passive observers receive state/telemetry
+  // without counting toward session activation.
   subscribe: "__sub__",
   unsubscribe: "__unsub__",
   // Process-wide diagnostic broadcast (not per-session — some failures, like a

@@ -4,15 +4,11 @@
  * You may find the full license in project root directory.
  --------------------------------------------------------- -->
 
-<!-- The profiler window (docs/refactor/orchestrator.md §7.1 S4) — a second
-     `BrowserWindow`, read-only over existing `system`/`controller`/
-     `tracking`/`manual-control` telemetry. No cameras needed to view it: it
-     subscribes like any other window (the interest-counting design already
-     tolerates a subscriber with no hardware present — `tracking`/
-     `manual-control`'s `activate()` just times out to `ready: false`), and
-     is a thin client like any module — no new wire concepts, just polling
-     the existing `perfSnapshot` command and the live `topic.span` feed
-     `client.ts` already collects into `orchestratorSpans`. -->
+<!-- The profiler window (docs/refactor/orchestrator.md §7.1 S4/V12) — a
+     second `BrowserWindow`, read-only over existing telemetry. `system` is the
+     always-on session and stays active; controller/tracking/manual-control are
+     passive observers so opening the profiler never starts actuation loops or
+     camera taps. -->
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue";
@@ -24,9 +20,9 @@ import Sparkline from "../components/Sparkline.vue";
 import PosView from "@src/components/PosView.vue";
 
 const sys = useSession(system, "system");
-const ctrl = useSession(controller, "controller");
-const trk = useSession(tracking, "tracking");
-const mc = useSession(manualControl, "manual-control");
+const ctrl = useSession(controller, "controller", { passive: true });
+const trk = useSession(tracking, "tracking", { passive: true });
+const mc = useSession(manualControl, "manual-control", { passive: true });
 
 // Live streams (docs/refactor/orchestrator.md §7.1 S4 added scope): render
 // live streams only, and beyond ~8 collapse to an aggregate + top-N-by-Hz —

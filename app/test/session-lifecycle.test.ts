@@ -6,8 +6,8 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { defineSession } from "@orchestrator/runtime";
-import { Channel, cmd, defineContract } from "@lib/orchestrator/protocol";
-import { createEndpointPair } from "./fake-endpoint";
+import { Channel, cmd, defineContract, topic } from "@lib/orchestrator/protocol";
+import { createEndpointPair, flush } from "./fake-endpoint";
 
 const testContract = defineContract({
   state: {},
@@ -23,6 +23,14 @@ const testContract = defineContract({
 function fakeChannel(): Channel {
   const [ep] = createEndpointPair();
   return new Channel(ep);
+}
+
+function channelPair(): { client: Channel; server: Channel } {
+  const [epClient, epServer] = createEndpointPair();
+  return {
+    client: new Channel(epClient),
+    server: new Channel(epServer),
+  };
 }
 
 function testSession(hooks: { activate?: () => void; idle?: () => void }) {
@@ -90,5 +98,65 @@ describe("session lifecycle", () => {
     session.dispose();
     session.subscribe(fakeChannel());
     expect(activate).toHaveBeenCalledTimes(2);
+  });
+
+  it("passive subscribe seeds observation but does not activate", () => {
+    const activate = vi.fn();
+    const idle = vi.fn();
+    const session = testSession({ activate, idle });
+    const ch = fakeChannel();
+    session.subscribe(ch, { passive: true });
+    session.unsubscribe(ch, { passive: true });
+    expect(activate).not.toHaveBeenCalled();
+    expect(idle).not.toHaveBeenCalled();
+  });
+
+  it("active sessions broadcast telemetry to passive observers", async () => {
+    const activate = vi.fn();
+    const session = testSession({ activate });
+    const passive = channelPair();
+    const active = fakeChannel();
+    const seen: boolean[] = [];
+
+    passive.client.on(topic.telemetry("test"), (patch: { ready: boolean }) => {
+      seen.push(patch.ready);
+    });
+    session.subscribe(passive.server, { passive: true });
+    session.subscribe(active);
+    session.telemetry({ ready: true });
+    await flush();
+    await flush();
+
+    expect(activate).toHaveBeenCalledTimes(1);
+    expect(seen).toContain(true);
+  });
+
+  it("last active unsubscribe idles even with passive observers attached", () => {
+    const idle = vi.fn();
+    const session = testSession({ activate: vi.fn(), idle });
+    const passive = fakeChannel();
+    const active = fakeChannel();
+
+    session.subscribe(passive, { passive: true });
+    session.subscribe(active);
+    session.unsubscribe(active);
+    expect(idle).toHaveBeenCalledTimes(1);
+
+    session.unsubscribe(passive, { passive: true });
+    expect(idle).toHaveBeenCalledTimes(1);
+  });
+
+  it("passive observer can upgrade to active on the same channel", () => {
+    const activate = vi.fn();
+    const idle = vi.fn();
+    const session = testSession({ activate, idle });
+    const ch = fakeChannel();
+
+    session.subscribe(ch, { passive: true });
+    expect(activate).not.toHaveBeenCalled();
+    session.subscribe(ch);
+    expect(activate).toHaveBeenCalledTimes(1);
+    session.unsubscribe(ch);
+    expect(idle).toHaveBeenCalledTimes(1);
   });
 });

@@ -549,6 +549,42 @@ shm whenever a serial has transport sinks and no `onView` taps
 fallback is deleted — transfer-pool failures are hard errors; boot
 sweep unconditional.
 
+### V12 🔴 — opening the profiler activates control sessions (mirrors move, shm path lost)
+
+**Live find (user, 2026-07-06, PB2 attempt):** manage-cameras previews at
+~60 fps dropped to ~11 fps when the profiler window opened, and the
+mirror controllers energized and started moving. Root cause:
+`ProfilerWindow.vue` `useSession`s **tracking** and **manual-control** to
+display their control-path telemetry; subscription = interest count + 1 =
+`onActivate` on *idle* sessions → each leases the calibrated triple and
+starts its actuation loop (mirrors move), and their `onView` taps flip
+every serial off the shm path (the view-tap auto-clone guard) back into
+PB1 clone saturation (11 fps ≈ PB1's 3-camera clone ceiling under extra
+load). The old S4 note — "subscribing to camera-owning sessions is safe
+by interest-counting" — only held for already-active sessions.
+**✅ Fixed (coder A, 2026-07-06), ✓ planner-verified same day —
+passive subscriptions:** subscribe payload gains additive
+`passive?: boolean`; `ServerSession` keeps observers separate from
+active subscribers (state/telemetry/frame-interest flow to both, but
+passive never activates/idles resources; passive→active same-channel
+upgrade supported; detach-safe). `useSession(contract, name,
+{ passive: true })`; profiler observes controller/tracking/
+manual-control passively, keeps `system` active (always-on anyway).
+Harness: 4 lifecycle cases. **Snapshot evidence (user's two exports,
+15:33Z):** profiler-open timestamp = second `controller.connect` span =
+counter-window start; tracking + manual-control matchTriple/
+timeToFirstFrame with no module open; re-activation waves with
+matchTriple degrading 1.1 s → 6.2 s; `convertMs` mean 2.8 → 42 ms
+(producer ceiling ≈ 14 fps — the observed 11 fps); both actuation
+loops writing the one controller = mirrors fighting. Remaining GUI
+check (user): idle app → open profiler → previews hold 60 fps shm,
+mirrors parked, no activation in stderr. Side notes from the
+snapshots: export from the MAIN window for renderer-side frame timing
+(each window merges only its own renderer stats — profiler's is
+empty); cameras were at ~1.5 MB/frame vs PB1's 6.22 MB — restore the
+PB1 format for the comparison run or file PB2 as a new baseline
+environment.
+
 ## 7. Roadmap
 
 **Reordering (2026-07-03):** hardware-in-the-loop verification is **deferred

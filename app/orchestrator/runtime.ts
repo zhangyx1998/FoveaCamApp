@@ -19,6 +19,7 @@ import {
   type FramePayload,
   type FrameOf,
   type FrameTopicStats,
+  type SessionSubscriptionPayload,
   type StateOf,
   type TelemetryOf,
 } from "../lib/orchestrator/protocol.js";
@@ -46,7 +47,8 @@ export class ServerSession<C extends Contract> {
   // that may never come. See docs/refactor/orchestrator.md §12.1 C3.
   private readonly telemetrySnapshot: Record<string, any>;
   private readonly channels = new Set<Channel>(); // attached (command-capable)
-  private readonly subscribers = new Set<Channel>(); // interested (telemetry/frames)
+  private readonly subscribers = new Set<Channel>(); // observers (state/telemetry/frames)
+  private readonly activeSubscribers = new Set<Channel>(); // activation interest
   // V4 (docs/refactor/orchestrator.md §7.1): last payload per frame topic,
   // so a one-shot resource (e.g. a capture preview, published exactly once)
   // still reaches a channel that only opens its `frame(name)` ref *after*
@@ -170,44 +172,59 @@ export class ServerSession<C extends Contract> {
     this.unsubscribe(ch);
   }
 
-  /** A renderer began viewing this session: seed it + (re)start resources. */
-  subscribe(ch: Channel): void {
-    if (this.subscribers.has(ch)) return;
-    this.subscribers.add(ch);
-    // Seed the new subscriber with the current state + telemetry snapshot —
-    // without the telemetry seed, one-shot keys (`ready`, `list`, `connected`)
-    // published before this subscriber arrived would never reach it (C3).
-    for (const key of Object.keys(this.state))
-      ch.emit(topic.state(this.name), { key, value: (this.state as any)[key] });
-    ch.emit(topic.telemetry(this.name), this.telemetrySnapshot);
-    if (this.subscribers.size === 1) {
+  /** A renderer began observing this session: seed it and optionally activate. */
+  subscribe(ch: Channel, options: { passive?: boolean } = {}): void {
+    if (!this.subscribers.has(ch)) {
+      this.subscribers.add(ch);
+      // Seed the new subscriber with the current state + telemetry snapshot —
+      // without the telemetry seed, one-shot keys (`ready`, `list`, `connected`)
+      // published before this subscriber arrived would never reach it (C3).
+      for (const key of Object.keys(this.state))
+        ch.emit(topic.state(this.name), { key, value: (this.state as any)[key] });
+      ch.emit(topic.telemetry(this.name), this.telemetrySnapshot);
+    }
+    if (options.passive || this.activeSubscribers.has(ch)) return;
+    const wasIdle = this.activeSubscribers.size === 0;
+    this.activeSubscribers.add(ch);
+    if (wasIdle) {
       this.activatedAt = performance.now();
       this.activateFn?.();
     }
   }
 
-  /** A renderer stopped viewing; release resources when nobody is left. */
-  unsubscribe(ch: Channel): void {
-    if (!this.subscribers.delete(ch)) return;
-    if (this.subscribers.size === 0) {
+  /** A renderer stopped observing; release resources when active interest ends. */
+  unsubscribe(ch: Channel, options: { passive?: boolean } = {}): void {
+    if (options.passive && this.activeSubscribers.has(ch)) return;
+    const wasActive = this.activeSubscribers.delete(ch);
+    this.subscribers.delete(ch);
+    if (wasActive && this.activeSubscribers.size === 0) {
       this.idleFn?.();
       this.frameCache.clear(); // V4: bound memory — stale previews from this activation are gone anyway
     }
   }
 
   /**
-   * Force-release session resources regardless of current subscriber count —
+   * Force-release session resources regardless of current active count —
    * used both for orchestrator shutdown and for handing exclusive hardware
    * access back to a non-migrated renderer module (§12.3 R4). Clearing
-   * `subscribers` (not just calling `idleFn`) matters: without it, a later
+   * interest sets (not just calling `idleFn`) matters: without it, a later
    * genuine subscribe from a still-mounted client wouldn't re-fire
    * `activateFn` (the count would never have returned to zero).
    */
   dispose(): void {
+    const wasActive = this.activeSubscribers.size > 0;
     this.subscribers.clear();
-    this.idleFn?.();
+    this.activeSubscribers.clear();
+    if (wasActive) this.idleFn?.();
     this.frameCache.clear();
   }
+}
+
+function parseSubscriptionPayload(
+  payload: SessionSubscriptionPayload,
+): { name: string; passive?: boolean } {
+  if (typeof payload === "string") return { name: payload };
+  return { name: payload.name, passive: payload.passive };
 }
 
 /**
@@ -273,10 +290,14 @@ export class Hub {
     for (const s of this.sessions) s.attach(ch);
     const detachStore = attachStore(ch);
     // Per-session interest: route subscribe/unsubscribe to the named session.
-    ch.on(topic.subscribe, (name: string) => this.byName.get(name)?.subscribe(ch));
-    ch.on(topic.unsubscribe, (name: string) =>
-      this.byName.get(name)?.unsubscribe(ch),
-    );
+    ch.on(topic.subscribe, (payload: SessionSubscriptionPayload) => {
+      const { name, passive } = parseSubscriptionPayload(payload);
+      this.byName.get(name)?.subscribe(ch, { passive });
+    });
+    ch.on(topic.unsubscribe, (payload: SessionSubscriptionPayload) => {
+      const { name, passive } = parseSubscriptionPayload(payload);
+      this.byName.get(name)?.unsubscribe(ch, { passive });
+    });
     port.on("close", () => {
       for (const s of this.sessions) s.detach(ch);
       detachStore();

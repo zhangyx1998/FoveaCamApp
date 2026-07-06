@@ -311,26 +311,36 @@ export type Session<C extends Contract> = {
   ): Promise<CommandsOf<C>[K]["ret"]>;
 };
 
+export type UseSessionOptions = {
+  passive?: boolean;
+};
+
 /**
  * Bind a typed session — `state`/`telemetry` mirror the same shape the server
  * `ServerSession` exposes (§12.3 R3), so a module reads `session.state.verge`
- * directly instead of `session.state("verge").value`. Every subscription is
+ * directly instead of `session.state("verge").value`. Active subscriptions are
  * torn down with the current effect scope, decrementing the orchestrator's
- * interest in that stream.
+ * activation interest; passive subscriptions observe state/telemetry without
+ * starting session-owned resources.
  */
 export function useSession<C extends Contract>(
   contract: C,
   name: string,
+  options: UseSessionOptions = {},
 ): Session<C> {
   const frameRefs = new Map<string, Ref<FramePayload | null>>();
   const ready = connect();
   const disposers: Array<() => void> = [];
-  // Tell the orchestrator we're interested so it (re)starts session resources;
-  // unsubscribe on teardown so it can release them when no window is viewing.
-  ready.then((ch) => ch.emit(topic.subscribe, name));
+  const subscription = {
+    name,
+    passive: options.passive || undefined,
+  };
+  // Tell the orchestrator we're observing this session. Passive observers get
+  // state/telemetry but don't start session resources.
+  ready.then((ch) => ch.emit(topic.subscribe, subscription));
   onScopeDispose(() => {
     disposers.forEach((d) => d());
-    ready.then((ch) => ch.emit(topic.unsubscribe, name));
+    ready.then((ch) => ch.emit(topic.unsubscribe, subscription));
   });
   const track = (unsub: Promise<() => void>) =>
     unsub.then((d) => disposers.push(d));

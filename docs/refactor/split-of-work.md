@@ -113,10 +113,10 @@ hardware-dependent behavior verified without a real rig run.
 
 ### Active instructions
 
-- **A-standby.** No active instructions. A-1 (V7 target placement +
-  V10 steering fix) planner-accepted 2026-07-06, archived to
-  orchestrator.md §6. No queued A items — the planned 12-bit UI half
-  turned out to already exist (selector landed 2026-06-05).
+- **A-standby.** A-2 (V12 passive subscriptions) planner-accepted
+  2026-07-06 and archived to orchestrator.md §6; awaiting the user's
+  live GUI check (idle app → open profiler → 60 fps holds, mirrors
+  parked).
   - Log:
 
 ## Coder B — Native core, protocol & firmware

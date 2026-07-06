@@ -50,6 +50,12 @@
 - [ ] If S4 (profiler window) has landed: open it now, keep it on a second
       display for every stage. If S5 spans landed: note orchestrator boot
       timings on first launch — the first data of the day.
+      **V12 check (fix landed 2026-07-06, needs one live pass):** with
+      everything idle, open the profiler → previews stay 60 fps shm,
+      mirrors stay parked, no session activation in orchestrator
+      stderr. Export snapshots from the MAIN window (each window merges
+      only its own renderer-side frame timing — the profiler's is
+      empty).
 
 ## Session PB2 — shm transport measurement (display + cameras only — runnable BEFORE the rig returns, ~15 min)
 
