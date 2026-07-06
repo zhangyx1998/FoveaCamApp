@@ -76,13 +76,19 @@ export default defineConfig(({ command }) => {
                 preload: {
                     // Shortcut of `build.rollupOptions.input`.
                     // Preload scripts may contain Web assets, so use the `build.rollupOptions.input` instead `build.lib.entry`.
-                    input: "electron/preload.ts",
+                    input: {
+                        preload: "electron/preload.ts",
+                        "preload-shm": "electron/preload-shm.ts",
+                    },
                     vite: {
                         build: {
                             sourcemap: sourcemap ? "inline" : undefined, // #332
                             minify: isBuild,
                             outDir: target,
-                            rollupOptions: { external: isExternal },
+                            rollupOptions: {
+                                external: isExternal,
+                                output: { inlineDynamicImports: false },
+                            },
                         },
                     },
                 },

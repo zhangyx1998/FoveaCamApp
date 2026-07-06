@@ -29,11 +29,8 @@ import {
   shallowRef,
   type Ref,
 } from "vue";
-import { ipcRenderer } from "electron";
-import { mkdir, writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
 import type { Mat } from "core/Vision";
-import { startLoopLagProbe } from "@lib/util/rolling";
+import { RollingStats, startLoopLagProbe } from "@lib/util/rolling";
 import { inspectorMode } from "@lib/util/perf";
 import {
   Channel,
@@ -43,6 +40,7 @@ import {
   type Endpoint,
   type FramePayload,
   type FrameOf,
+  type FrameTimingStats,
   type StateOf,
   type TelemetryOf,
 } from "./protocol.js";
@@ -50,11 +48,132 @@ import type { Span } from "./contracts.js";
 
 /** Rebuild the Mat shape (`FrameView`/vision ops expect) from a frame payload. */
 export function payloadToMat(p: FramePayload | null): Mat<Uint8Array> | null {
-  if (!p) return null;
+  if (!p?.data) return null;
   return Object.assign(new Uint8Array(p.data), {
     shape: p.shape,
     channels: p.channels,
   }) as unknown as Mat<Uint8Array>;
+}
+
+const shmPools = new Map<number, ArrayBuffer[]>();
+const pendingShmReads = new Map<
+  number,
+  {
+    resolve(payload: FramePayload | null): void;
+    reject(error: Error): void;
+    timer: ReturnType<typeof setTimeout>;
+  }
+>();
+let shmReadSeq = 0;
+let loggedShmBridgeFallback = false;
+let shmFallbackReads = 0;
+let shmPort: MessagePort | null = null;
+let loggedShmPortUnavailable = false;
+
+function frameByteLength(payload: FramePayload): number {
+  return payload.shape.reduce((p, n) => p * n, payload.channels);
+}
+
+function releaseShmBuffer(buffer: ArrayBuffer): void {
+  const pool = shmPools.get(buffer.byteLength) ?? [];
+  if (pool.length < 3) pool.push(buffer);
+  shmPools.set(buffer.byteLength, pool);
+}
+
+function releaseShmPayload(payload: FramePayload | null): void {
+  if (payload?.shm && payload.data) releaseShmBuffer(payload.data);
+}
+
+function checkoutShmBuffer(payload: FramePayload): ArrayBuffer {
+  return (
+    shmPools.get(frameByteLength(payload))?.pop() ??
+    new ArrayBuffer(frameByteLength(payload))
+  );
+}
+
+function handleShmReadDone(data: unknown): void {
+  const msg = data as
+    | {
+        kind: "fovea:shm:read-done";
+        id: number;
+        payload: FramePayload | null;
+        buffer?: ArrayBuffer;
+        error?: string;
+      }
+    | undefined;
+  if (msg?.kind !== "fovea:shm:read-done") return;
+  const pending = pendingShmReads.get(msg.id);
+  if (!pending) {
+    if (msg.buffer) releaseShmBuffer(msg.buffer);
+    return;
+  }
+  clearTimeout(pending.timer);
+  pendingShmReads.delete(msg.id);
+  if (msg.error) {
+    if (msg.buffer) releaseShmBuffer(msg.buffer);
+    pending.reject(new Error(msg.error));
+  } else {
+    if (!msg.payload && msg.buffer) releaseShmBuffer(msg.buffer);
+    pending.resolve(msg.payload);
+  }
+}
+
+function ensureShmPort(): MessagePort | null {
+  if (shmPort) return shmPort;
+  if (typeof window === "undefined" || typeof MessageChannel === "undefined")
+    return null;
+  const channel = new MessageChannel();
+  channel.port1.onmessage = (event) => handleShmReadDone(event.data);
+  channel.port1.start();
+  window.postMessage({ kind: "fovea:shm:init" }, "*", [channel.port2]);
+  shmPort = channel.port1;
+  return shmPort;
+}
+
+function readShmFrameViaTransfer(payload: FramePayload): Promise<FramePayload | null> {
+  if (typeof window === "undefined") return Promise.resolve(null);
+  const port = ensureShmPort();
+  if (!port) {
+    if (!loggedShmPortUnavailable) {
+      loggedShmPortUnavailable = true;
+      console.warn("[shm] MessagePort transfer pool unavailable; falling back to bridge read");
+    }
+    return Promise.resolve(null);
+  }
+  const id = ++shmReadSeq;
+  const buffer = checkoutShmBuffer(payload);
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pendingShmReads.delete(id);
+      reject(new Error("SHM transfer read timed out"));
+    }, 250);
+    pendingShmReads.set(id, { resolve, reject, timer });
+    port.postMessage({ kind: "fovea:shm:read", id, payload, buffer }, [buffer]);
+  });
+}
+
+async function materializeFramePayload(
+  p: FramePayload,
+): Promise<FramePayload | null> {
+  if (p.data || !p.shm) return p;
+  try {
+    const transferred = await readShmFrameViaTransfer(p);
+    if (transferred) return transferred;
+  } catch (error) {
+    console.warn("[shm] transfer-pool read failed; falling back to bridge read", error);
+  }
+  const read = window.foveaBridge.readShmFrame;
+  if (!read) return null;
+  if (!loggedShmBridgeFallback) {
+    loggedShmBridgeFallback = true;
+    console.warn("[shm] using bridge-returned ArrayBuffer fallback");
+  }
+  const fallback = await read(p);
+  if (fallback?.shm) {
+    fallback.shm.transfer = "bridge";
+    fallback.shm.fallbackReads = ++shmFallbackReads;
+  }
+  return fallback;
 }
 
 function domEndpoint(port: MessagePort): Endpoint {
@@ -76,10 +195,15 @@ const SPAN_RING_CAPACITY = 200;
 export const orchestratorSpans: Span[] = [];
 
 /** Connect to the orchestrator (idempotent). Main brokers a `MessagePort`
- *  pair; the renderer receives its port over a one-shot IPC message. */
+ *  pair; `preload.ts` receives the renderer's port over IPC and hands it off
+ *  via `window.postMessage` (a bridge function call can't carry a live port —
+ *  structured-clone limits on the bridge itself), so this listens on the DOM
+ *  `message` event rather than `ipcRenderer` directly. */
 export function connect(): Promise<Channel> {
   return (channel ??= new Promise<Channel>((resolve) => {
-    ipcRenderer.once("orchestrator:port", (e) => {
+    function onPort(e: MessageEvent) {
+      if (e.data !== "orchestrator:port") return;
+      window.removeEventListener("message", onPort);
       const port = e.ports[0];
       port.start();
       const ch = new Channel(domEndpoint(port));
@@ -93,8 +217,9 @@ export function connect(): Promise<Channel> {
         if (orchestratorSpans.length > SPAN_RING_CAPACITY) orchestratorSpans.shift();
       });
       resolve(ch);
-    });
-    ipcRenderer.send("orchestrator:connect");
+    }
+    window.addEventListener("message", onPort);
+    window.foveaBridge.connectOrchestrator();
   }));
 }
 
@@ -105,7 +230,7 @@ export function connect(): Promise<Channel> {
 // MessagePort close semantics across a process crash. Full transparent
 // reconnect (respawn + re-subscribe already-mounted sessions) is out of scope
 // for this fix — see docs/refactor/orchestrator.md §12.1 C5 / §12.3 R3.
-ipcRenderer.on("orchestrator:down", () => {
+window.foveaBridge.onOrchestratorDown(() => {
   channel?.then((ch) => ch.close());
 });
 
@@ -117,6 +242,42 @@ ipcRenderer.on("orchestrator:down", () => {
 // rate off `props.payload` — no extra reactivity plumbing needed, and this
 // stays out of Vue on principle (`@lib/util/rolling.ts`, not `perf.ts`).
 export const rendererLoopLag = startLoopLagProbe();
+
+const rendererFrameTimings = new Map<
+  string,
+  { ipcLatencyMs: RollingStats; displayDelayMs: RollingStats }
+>();
+
+function timing(topic: string) {
+  let s = rendererFrameTimings.get(topic);
+  if (!s) {
+    s = {
+      ipcLatencyMs: new RollingStats(0.7, 1, "ms"),
+      displayDelayMs: new RollingStats(0.7, 1, "ms"),
+    };
+    rendererFrameTimings.set(topic, s);
+  }
+  return s;
+}
+
+function timingSnapshot(s: RollingStats | undefined): FrameTimingStats {
+  return s ? { count: s.count, mean: s.mean, max: s.max } : { count: 0, mean: 0, max: 0 };
+}
+
+export function rendererFrameTimingSnapshot(): Record<
+  string,
+  { ipcLatencyMs: FrameTimingStats; displayDelayMs: FrameTimingStats }
+> {
+  return Object.fromEntries(
+    [...rendererFrameTimings].map(([topic, s]) => [
+      topic,
+      {
+        ipcLatencyMs: timingSnapshot(s.ipcLatencyMs),
+        displayDelayMs: timingSnapshot(s.displayDelayMs),
+      },
+    ]),
+  );
+}
 
 // Perf snapshot dump (§7.3 item 4) — Ctrl+Shift+S while inspector mode is on
 // (see `inspectorMode` in `@lib/util/perf.ts`) fetches `system.perfSnapshot`,
@@ -146,13 +307,10 @@ export async function dumpPerfSnapshot(): Promise<void> {
     ...snapshot,
     renderer: {
       loopLag: { mean: rendererLoopLag.stats.mean, max: rendererLoopLag.stats.max },
+      frames: rendererFrameTimingSnapshot(),
     },
   };
-  const dataPath: string = await ipcRenderer.invoke("get-data-path");
-  const dir = resolve(dataPath, "perf-snapshots");
-  await mkdir(dir, { recursive: true });
-  const file = resolve(dir, `${new Date().toISOString().replace(/[:.]/g, "-")}.json`);
-  await writeFile(file, JSON.stringify(merged, null, 2));
+  const file = await window.foveaBridge.writePerfSnapshot(JSON.stringify(merged, null, 2));
   console.log(`[perf] snapshot written to ${file}`);
 }
 
@@ -254,18 +412,50 @@ export function useSession<C extends Contract>(
       // Coalesce bursts to one paint: keep only the latest until the next rAF.
       let latest: FramePayload | null = null;
       let scheduled = false;
+      let token = 0;
+      const frameTopic = topic.frame(name, k);
       const flush = () => {
         scheduled = false;
-        if (latest?.meta) latest.meta.tDisplay = Date.now();
-        r!.value = latest;
+        const pending = latest;
+        latest = null;
+        const myToken = ++token;
+        if (!pending) {
+          r!.value = null;
+          return;
+        }
+        void materializeFramePayload(pending).then((payload) => {
+          if (myToken !== token) {
+            releaseShmPayload(payload);
+            return;
+          }
+          if (payload?.meta) {
+            payload.meta.tDisplay = Date.now();
+            if (payload.meta.tReceive !== undefined)
+              timing(frameTopic).displayDelayMs.push(
+                payload.meta.tDisplay - payload.meta.tReceive,
+              );
+          }
+          releaseShmPayload(r!.value);
+          r!.value = payload;
+          if (latest && !scheduled) {
+            scheduled = true;
+            requestAnimationFrame(flush);
+          }
+        });
       };
       track(
         ready.then((ch) => {
           // C10: tell the orchestrator this topic is actually read, once, the
           // first time this ref is created — see `ServerSession.frame()`.
-          ch.declareFrameInterest(topic.frame(name, k));
-          return ch.onFrame(topic.frame(name, k), (payload) => {
-            if (payload.meta) payload.meta.tReceive = Date.now();
+          ch.declareFrameInterest(frameTopic);
+          return ch.onFrame(frameTopic, (payload) => {
+            if (payload.meta) {
+              payload.meta.tReceive = Date.now();
+              if (payload.meta.tPublish !== undefined)
+                timing(frameTopic).ipcLatencyMs.push(
+                  payload.meta.tReceive - payload.meta.tPublish,
+                );
+            }
             latest = payload;
             if (!scheduled) {
               scheduled = true;

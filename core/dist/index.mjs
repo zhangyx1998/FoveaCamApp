@@ -33,6 +33,7 @@ export const {
     Regression,
     Geometry,
     Log,
+    Shm,
     cleanup,
     __origin__,
 } = Module;

@@ -15,6 +15,7 @@
 // half of the multi-window/projector goal (§2 secondary).
 
 import type { Camera } from "core/Aravis";
+import type { Writer as ShmWriter } from "core/Shm";
 import type { Mat } from "core/Vision";
 import type { FramePayload } from "@lib/orchestrator/protocol";
 import type { Role } from "@lib/camera-config";
@@ -32,6 +33,7 @@ interface Shared {
   readonly sinks: Set<FrameSink>; // transport: get a copied payload
   readonly viewSinks: Set<ViewSink>; // in-process: get the BGRA Mat (no copy)
   view?: Mat<Uint8Array>; // reused conversion buffer for the preview loop
+  shmWriter?: ShmWriter;
   abort: boolean;
   loop: Promise<void> | null; // in-flight preview loop, awaited on stop
   closed: boolean; // native handle released (guards double-release)
@@ -56,6 +58,10 @@ export interface CameraLease {
 }
 
 const shared = new Map<string, Shared>();
+const shmStreamsEnabled = process.env.FOVEA_SHM_STREAMS === "1";
+const shmBootSweep = shmStreamsEnabled
+  ? import("core").then(({ Shm }) => Shm.sweep())
+  : Promise.resolve(0);
 // Close promises not yet settled, tracked outside `shared` (which `closeShared`
 // empties immediately) so `releaseAll` can await a close that started just
 // before it was called — otherwise it can return while a native handle is
@@ -79,6 +85,15 @@ function publish<T>(serial: string, sinks: Set<(v: T) => void>, value: T): void 
     guarded(`registry:${serial}`, () => sink(value));
 }
 
+async function shmWriter(s: Shared): Promise<ShmWriter> {
+  if (!s.shmWriter) {
+    await shmBootSweep;
+    const { Shm } = await import("core");
+    s.shmWriter = new Shm.Writer(s.serial);
+  }
+  return s.shmWriter;
+}
+
 function startLoop(s: Shared): void {
   if (s.loop || !hasConsumers(s)) return; // already running / nothing to feed
   s.abort = false;
@@ -98,7 +113,25 @@ function startLoop(s: Shared): void {
         const tCapture = Date.now();
         const deviceTimestamp = frame.deviceTimestamp;
         const systemTimestamp = frame.systemTimestamp;
+        const useShm =
+          shmStreamsEnabled && s.sinks.size > 0 && s.viewSinks.size === 0;
         const convertStart = performance.now();
+        if (useShm) {
+          const writer = await shmWriter(s);
+          const slot = writer.nextSlot([frame.height, frame.width], 4);
+          await frame.view("BGRA8", slot as unknown as BufferLike);
+          const convertMs = performance.now() - convertStart;
+          frame.release();
+          const payload = writer.publish({
+            tCapture,
+            convertMs,
+            deviceTimestamp,
+            systemTimestamp,
+          }) as FramePayload;
+          publish(s.serial, s.sinks, payload);
+          continue;
+        }
+
         s.view = await frame.view("BGRA8", s.view);
         const convertMs = performance.now() - convertStart;
         frame.release();
@@ -134,6 +167,8 @@ function closeShared(s: Shared): Promise<void> {
   shared.delete(s.serial);
   s.sinks.clear();
   s.viewSinks.clear();
+  s.shmWriter?.close();
+  s.shmWriter = undefined;
   const p = stopLoop(s).then(() => s.camera.release());
   // Track until settled: `s` is already out of `shared` by the time this
   // resolves, so a `releaseAll` call that lands *after* this starts but

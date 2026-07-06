@@ -138,8 +138,15 @@ const overlay = computed(() => {
         result["Convert"] = `${m.convertMs.toFixed(2)} ms`;
       result["IPC Latency"] = ipcLatency.toString();
       result["Frame Age"] = frameAge.toString();
+      if (p.shm) {
+        const transfer =
+          p.shm.transfer === "bridge"
+            ? ` / bridge ${p.shm.fallbackReads ?? 1}`
+            : "";
+        result["SHM"] = `gen ${p.shm.gen} / retries ${p.shm.retries ?? 0}${transfer}`;
+      }
       result["Throughput"] =
-        `${((fps.value * p.data.byteLength) / 1e6).toFixed(2)} MB/s`;
+        `${((fps.value * (p.data?.byteLength ?? 0)) / 1e6).toFixed(2)} MB/s`;
       // Renderer-side event-loop lag (perf substrate, §7.3 item 1) — a
       // module-level singleton (one probe, not one per StreamView), so
       // every inspector overlay shows the same renderer-wide number.

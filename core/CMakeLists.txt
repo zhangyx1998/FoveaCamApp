@@ -72,11 +72,24 @@ add_library(core SHARED
   ${SHARED_LIB_SRCS}
 )
 
+add_library(fovea_shm_reader SHARED
+  reader/ShmReaderAddon.cpp
+)
+
 
 set_target_properties(core PROPERTIES
   PREFIX ""
   SUFFIX ".node"
   # macOS: embed run paths so Electron can resolve ARAVIS/GenICam deps
+  MACOSX_RPATH ON
+  BUILD_RPATH "@loader_path;/usr/local/lib"
+  INSTALL_RPATH "@loader_path;/usr/local/lib"
+  INSTALL_NAME_DIR "@rpath"
+)
+
+set_target_properties(fovea_shm_reader PROPERTIES
+  PREFIX ""
+  SUFFIX ".node"
   MACOSX_RPATH ON
   BUILD_RPATH "@loader_path;/usr/local/lib"
   INSTALL_RPATH "@loader_path;/usr/local/lib"
@@ -90,4 +103,8 @@ target_link_libraries(core PRIVATE
   ${ARAVIS_LIBRARIES}
   ${LibUSB_LIBRARIES}
   ${LZ4_LIBRARIES}
+)
+
+target_link_libraries(fovea_shm_reader PRIVATE
+  ${CMAKE_JS_LIB}
 )

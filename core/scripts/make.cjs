@@ -29,8 +29,14 @@ async function make(runtime, version, arch, options = {}) {
     await buildSystem[cmd]();
     const src = resolve("build", prefix, "Release", "core.node");
     const dst = resolve(bin, `${prefix}.node`);
-    if (["build", "rebuild", "install"].includes(cmd)) copyFileSync(src, dst);
+    const readerSrc = resolve("build", prefix, "Release", "fovea_shm_reader.node");
+    const readerDst = resolve(bin, `${prefix}-shm-reader.node`);
+    if (["build", "rebuild", "install"].includes(cmd)) {
+        copyFileSync(src, dst);
+        copyFileSync(readerSrc, readerDst);
+    }
     if (cmd === "clean" && existsSync(dst)) rmSync(dst);
+    if (cmd === "clean" && existsSync(readerDst)) rmSync(readerDst);
 }
 
 async function main() {

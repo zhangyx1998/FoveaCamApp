@@ -51,6 +51,11 @@
       "require": "./dist/Log/index.cjs",
       "types": "./dist/Log/index.d.ts"
     },
+    "./Shm": {
+      "import": "./dist/Shm/index.mjs",
+      "require": "./dist/Shm/index.cjs",
+      "types": "./dist/Shm/index.d.ts"
+    },
     "./types": {
       "types": "./dist/types.d.ts"
     }

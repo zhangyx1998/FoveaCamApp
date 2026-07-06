@@ -10,6 +10,7 @@
 
 #include "CoreObject.h"
 #include "Dispatcher.h"
+#include "ShmRing.h"
 
 using namespace Napi;
 
@@ -57,6 +58,10 @@ static Object init(Env env, Object exports) {
     auto Log = Object::New(env);
     CORE_OBJECT_EXPORT(LogModule, env, Log);
     exports.Set("Log", Log);
+    // Shared-memory frame transport helpers
+    auto Shm = Object::New(env);
+    ShmRing::exportShmNamespace(env, Shm);
+    exports.Set("Shm", Shm);
     // Finalize
     exports.Set("cleanup", Function::New(env, cleanup));
     VERBOSE("Core module initialized");

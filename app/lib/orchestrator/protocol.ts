@@ -15,6 +15,8 @@
 //   - event               (state + telemetry)   — fire-and-forget, by topic
 //   - frame               (display payloads)     — by topic, carries a buffer
 
+import { RollingStats } from "../util/rolling.js";
+
 export type Serializable =
   | null
   | undefined
@@ -70,12 +72,52 @@ export type FrameMeta = {
   tDisplay?: number;
 };
 
+export type ShmFrameRef = {
+  seg: string;
+  gen: number;
+  seq: bigint;
+  retries?: number;
+  transfer?: "port" | "bridge";
+  fallbackReads?: number;
+};
+
 /** Raw frame payload as it crosses the process boundary. */
 export type FramePayload = {
-  data: ArrayBuffer;
+  data?: ArrayBuffer;
   shape: number[];
   channels: number;
   meta?: FrameMeta;
+  shm?: ShmFrameRef;
+};
+
+export type FrameCounterStats = {
+  offered: number;
+  sent: number;
+  coalesced: number;
+  bytes: number;
+};
+
+export type FrameTimingStats = {
+  count: number;
+  mean: number;
+  max: number;
+};
+
+export type FrameTopicStats = FrameCounterStats & {
+  window: {
+    startedAt: number;
+    snapshotAt: number;
+    uptimeMs: number;
+  };
+  rates: {
+    offeredPerSec: number;
+    sentPerSec: number;
+    coalescedPerSec: number;
+    bytesPerSec: number;
+  };
+  timing: {
+    convertMs: FrameTimingStats;
+  };
 };
 
 // --- Contract -----------------------------------------------------------
@@ -163,8 +205,10 @@ export class Channel {
   // drops from `seq` gaps, so the two cross-check each other.
   private readonly frameStats = new Map<
     string,
-    { offered: number; sent: number; coalesced: number; bytes: number }
+    FrameCounterStats
   >();
+  private readonly frameTiming = new Map<string, { convertMs: RollingStats }>();
+  private readonly statsStartedAt = Date.now();
   // C10: topics this channel's *peer* has declared interest in (frames sent
   // by this Channel are gated on it; frames received don't consult it).
   private readonly frameInterest = new Set<string>();
@@ -205,14 +249,32 @@ export class Channel {
    *  `sendFrame` call), sent (actually posted on the wire), coalesced (an
    *  earlier offer overwritten by a newer one before it could be sent), and
    *  bytes sent. */
-  stats(topic: string): { offered: number; sent: number; coalesced: number; bytes: number } {
+  stats(topic: string): FrameCounterStats {
     return this.frameStats.get(topic) ?? { offered: 0, sent: 0, coalesced: 0, bytes: 0 };
   }
 
   /** Every topic this channel has recorded stats for — `Hub.perfSnapshot`
    *  aggregates these across every connection. */
-  allFrameStats(): Record<string, { offered: number; sent: number; coalesced: number; bytes: number }> {
-    return Object.fromEntries(this.frameStats);
+  allFrameStats(now = Date.now()): Record<string, FrameTopicStats> {
+    const out: Record<string, FrameTopicStats> = {};
+    for (const [topic, counters] of this.frameStats) {
+      const uptimeMs = Math.max(1, now - this.statsStartedAt);
+      const sec = uptimeMs / 1000;
+      out[topic] = {
+        ...counters,
+        window: { startedAt: this.statsStartedAt, snapshotAt: now, uptimeMs },
+        rates: {
+          offeredPerSec: counters.offered / sec,
+          sentPerSec: counters.sent / sec,
+          coalescedPerSec: counters.coalesced / sec,
+          bytesPerSec: counters.bytes / sec,
+        },
+        timing: {
+          convertMs: this.timingSnapshot(topic, "convertMs"),
+        },
+      };
+    }
+    return out;
   }
 
   private touchStats(topic: string): {
@@ -224,6 +286,20 @@ export class Channel {
     let s = this.frameStats.get(topic);
     if (!s) this.frameStats.set(topic, (s = { offered: 0, sent: 0, coalesced: 0, bytes: 0 }));
     return s;
+  }
+
+  private timing(topic: string): { convertMs: RollingStats } {
+    let s = this.frameTiming.get(topic);
+    if (!s) this.frameTiming.set(topic, (s = { convertMs: new RollingStats(0.9, 2, "ms") }));
+    return s;
+  }
+
+  private timingSnapshot(
+    topic: string,
+    key: keyof ReturnType<Channel["timing"]>,
+  ): FrameTimingStats {
+    const s = this.frameTiming.get(topic)?.[key];
+    return s ? { count: s.count, mean: s.mean, max: s.max } : { count: 0, mean: 0, max: 0 };
   }
 
   /** Issue a request and await its response. */
@@ -269,6 +345,8 @@ export class Channel {
       ...payload,
       meta: { tCapture: Date.now(), ...payload.meta, seq },
     };
+    if (typeof stamped.meta?.convertMs === "number")
+      this.timing(topic).convertMs.push(stamped.meta.convertMs);
     // Never queue frames toward a slow receiver: hold one in flight per topic
     // and keep only the latest while we wait for its ack (lossy, latest-wins).
     if (this.frameInflight.has(topic)) {
@@ -288,8 +366,9 @@ export class Channel {
     payload.meta!.tPublish = Date.now();
     const stats = this.touchStats(topic);
     stats.sent++;
-    stats.bytes += payload.data.byteLength;
-    this.endpoint.post({ k: "frame", t: topic, f: payload }, [payload.data]);
+    stats.bytes += payload.data?.byteLength ?? 0;
+    const transfer = payload.data ? [payload.data] : [];
+    this.endpoint.post({ k: "frame", t: topic, f: payload }, transfer);
   }
 
   /** An ack arrived: flush the deferred latest frame, or clear the gate. */
