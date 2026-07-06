@@ -21,7 +21,6 @@
 import { defineSession, type ServerSession } from "@orchestrator/runtime";
 import { leaseCalibratedTriple, type CalibratedTriple } from "@orchestrator/calibration";
 import { startActuationLoop, type ActuationLoop } from "@orchestrator/actuation";
-import { toFramePayload } from "@orchestrator/camera";
 import { tracking } from "./contract";
 import { KinematicModel } from "./kinematic";
 import { RECT } from "@lib/util/geometry";
@@ -206,7 +205,7 @@ export default function trackingSession(): ServerSession<typeof tracking> {
         false,
       )[0];
       const sliced = slice(centerMat, clampRect(RECT.fromCenter(at, size)));
-      s.frame("center", toFramePayload(sliced));
+      s.frame("center", sliced);
     }
 
     function onCenterView(raw: Mat<Uint8Array>): void {
@@ -231,7 +230,7 @@ export default function trackingSession(): ServerSession<typeof tracking> {
         updateTracker(view);
         trackMsStats.push(now() - t0);
       }
-      s.frame("C", toFramePayload(view));
+      s.frame("C", view);
       if (s.state.view === "sliced") publishSlicedView(view);
     }
 
@@ -261,7 +260,7 @@ export default function trackingSession(): ServerSession<typeof tracking> {
         const z = depthFromProjection(proj, distance() - dw, distance() + dw);
         out = heatmap(z);
       }
-      s.frame("center", toFramePayload(out));
+      s.frame("center", out);
     }
 
     // Publish each fovea's preview (wrapped iff `wrap_enable`), and cache the
@@ -270,7 +269,7 @@ export default function trackingSession(): ServerSession<typeof tracking> {
       const H = triple ? triple.conv.A2H[role](triple.conv.V2A[role](volts[role])) : null;
       const wrapped = H ? wrapPerspective(view, H) : null;
       const display = s.state.wrap_enable && wrapped ? wrapped : view;
-      s.frame(role, toFramePayload(display));
+      s.frame(role, display);
       if (s.state.view === "sliced") {
         aligned.L = aligned.R = null; // not needed; let the Mats be collected
       } else {

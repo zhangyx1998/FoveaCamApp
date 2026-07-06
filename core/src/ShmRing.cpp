@@ -38,9 +38,29 @@ uint32_t fnv1a32(const std::string &s) {
 
 std::string segmentName(const std::string &key, uint32_t generation) {
   std::ostringstream ss;
-  ss << "/fv." << std::hex << std::setw(8) << std::setfill('0')
-     << fnv1a32(key) << "." << std::dec << generation;
-  return ss.str();
+  ss << "/fv." << key << ".g" << generation;
+  const auto name = ss.str();
+  if (name.size() > 31)
+    throw std::runtime_error("SHM segment name exceeds 31 characters: " +
+                             name);
+  return name;
+}
+
+std::string base36(uint32_t value) {
+  static constexpr char digits[] = "0123456789abcdefghijklmnopqrstuvwxyz";
+  if (value == 0)
+    return "0";
+  std::string out;
+  while (value > 0) {
+    out.push_back(digits[value % 36]);
+    value /= 36;
+  }
+  std::reverse(out.begin(), out.end());
+  return out;
+}
+
+std::string topicKeyFor(const std::string &topic) {
+  return base36(fnv1a32(topic));
 }
 
 std::string errnoMessage(const std::string &action, const std::string &name) {
@@ -266,6 +286,9 @@ public:
     auto fn = DefineClass(
         env, "ShmSlot",
         {
+            InstanceMethod<&ShmSlotObject::view>("view"),
+            InstanceMethod<&ShmSlotObject::write>("write"),
+            InstanceMethod<&ShmSlotObject::copyTo>("copyTo"),
             InstanceMethod<&ShmSlotObject::debugFillPattern>(
                 "debugFillPattern"),
         });
@@ -287,6 +310,71 @@ public:
   }
 
   const SlotNative &value() const { return native; }
+
+  Napi::Value view(const Napi::CallbackInfo &info) {
+    auto env = info.Env();
+    const size_t bytes = native.segment->header()->slotBytes;
+#ifdef V8_MEMORY_CAGE
+    auto arrayBuffer = Napi::ArrayBuffer::New(env, bytes);
+    std::memcpy(arrayBuffer.Data(), native.segment->slotData(native.slot),
+                bytes);
+#else
+    auto keepAlive = new std::shared_ptr<Segment>(native.segment);
+    auto arrayBuffer = Napi::ArrayBuffer::New(
+        env, native.segment->slotData(native.slot), bytes,
+        [](Napi::Env, void *, std::shared_ptr<Segment> *p) { delete p; },
+        keepAlive);
+#endif
+    auto array = Napi::Uint8Array::New(env, bytes, arrayBuffer, 0);
+    array.Set("shape", convert(env, native.shape));
+    array.Set("channels", native.channels);
+    return array;
+  }
+
+  // Native memcpy INTO the slot — the cage-safe write path (V13): wrapping
+  // external memory as a JS ArrayBuffer is banned under V8_MEMORY_CAGE, but
+  // writing shm from native is always fine. `view().set()` writes into the
+  // cage-local snapshot under Electron and never reaches the slot.
+  Napi::Value write(const Napi::CallbackInfo &info) {
+    auto env = info.Env();
+    try {
+      if (!info[0].IsTypedArray())
+        throw JS::TypeError(env, "ShmSlot.write expects a TypedArray");
+      const auto src = info[0].As<Napi::TypedArray>();
+      const size_t len = src.ByteLength();
+      const size_t bytes = native.segment->header()->slotBytes;
+      if (len != bytes)
+        throw JS::Error(env, "ShmSlot.write: source byte length " +
+                                 std::to_string(len) + " != slot bytes " +
+                                 std::to_string(bytes));
+      std::memcpy(native.segment->slotData(native.slot),
+                  static_cast<const std::byte *>(src.ArrayBuffer().Data()) +
+                      src.ByteOffset(),
+                  bytes);
+      return env.Undefined();
+    }
+    JS_EXCEPT(env.Undefined())
+  }
+
+  // Native memcpy OUT of the slot into a caller-owned (cage-local) buffer —
+  // lets the registry serve `onView` taps from one persistent per-serial
+  // buffer instead of allocating a fresh snapshot per frame (V13).
+  Napi::Value copyTo(const Napi::CallbackInfo &info) {
+    auto env = info.Env();
+    try {
+      if (!info[0].IsTypedArray())
+        throw JS::TypeError(env, "ShmSlot.copyTo expects a TypedArray");
+      auto dest = info[0].As<Napi::TypedArray>();
+      const size_t bytes = native.segment->header()->slotBytes;
+      if (dest.ByteLength() < bytes)
+        throw JS::Error(env, "ShmSlot.copyTo: destination too small");
+      std::memcpy(static_cast<std::byte *>(dest.ArrayBuffer().Data()) +
+                      dest.ByteOffset(),
+                  native.segment->slotData(native.slot), bytes);
+      return Napi::Number::New(env, static_cast<double>(bytes));
+    }
+    JS_EXCEPT(env.Undefined())
+  }
 
   Napi::Value debugFillPattern(const Napi::CallbackInfo &info) {
     const int seed = convert<int>(info[0]);
@@ -430,6 +518,14 @@ public:
 
 Napi::FunctionReference ShmWriterObject::constructor;
 
+Napi::Value topicKey(const Napi::CallbackInfo &info) {
+  auto env = info.Env();
+  try {
+    return Napi::String::New(env, topicKeyFor(convert<std::string>(info[0])));
+  }
+  JS_EXCEPT(env.Undefined())
+}
+
 Napi::Value sweep(const Napi::CallbackInfo &info) {
   const int count = sweepManifest() + sweepDirectory("/dev/shm") +
                     sweepDirectory("/run/shm") + sweepDirectory("/var/run/shm");
@@ -455,6 +551,7 @@ WriteTarget writeTarget(const Napi::Value &value) {
 void exportShmNamespace(Napi::Env env, Napi::Object &exports) {
   exports.Set("Writer", ShmWriterObject::Init(env));
   exports.Set("ShmSlot", ShmSlotObject::Init(env));
+  exports.Set("topicKey", Napi::Function::New(env, topicKey, "topicKey"));
   exports.Set("sweep", Napi::Function::New(env, sweep, "sweep"));
 }
 

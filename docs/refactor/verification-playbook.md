@@ -68,10 +68,14 @@ Round C). Cameras + a display are enough; no mirrors, no scope.
 - [ ] **Targets:** orchestrator `loopLag` mean **< 5 ms** in the snapshot
       (PB1 clone-path baseline: 47 ms); shm `retries` ≈ 0. T10's window
       fields make rates directly comparable to PB1.
-- [ ] **Mixed-path sanity:** open tracking-single (its serial has
-      `onView` taps → stays on the clone path by design); preview still
-      live; OSD shows non-shm for that stream while manage-cameras
-      previews (if open in a second window) stay shm.
+- [ ] **Round-D sanity (no clone path exists anymore):** open
+      tracking-single — its four processed views arrive as shm
+      descriptors too (per-topic rings), previews live everywhere, and
+      the OSD shows `SHM gen/…` on every stream including
+      manage-cameras previews while tracking is open on the same
+      serials (taps no longer force a fallback). A capture in
+      manual-control must still show its preview (one-shot descriptor
+      replay over a live segment — V4 path).
 - [ ] **Multi-fovea placement (V7):** open Object Tracking (Multi);
       select target 0 + enable; drag on the center overview — bbox
       follows the cursor (no snap-away mid-drag — V10); release —

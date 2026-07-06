@@ -585,6 +585,35 @@ empty); cameras were at ~1.5 MB/frame vs PB1's 6.22 MB — restore the
 PB1 format for the comparison run or file PB2 as a new baseline
 environment.
 
+### V13 🔴 — cage-copy write path would silently break session frames in production (Round D review, 2026-07-06)
+
+Caught at planner review of Round D, before any live run:
+`ShmSlot.view()` under `V8_MEMORY_CAGE` (all Electron builds) returns a
+memcpy'd **read snapshot** — A-3's transport wrote pixels via
+`slot.view().set(...)`, which lands in the throwaway copy: production
+Electron would publish stale/zero slots for every session frame while
+node-run tests (no cage in official Node builds) pass green. Textbook
+split-runtime hazard; C's own C-5 log disclosed the cage semantics,
+which is what surfaced it. Secondary: the registry's new tap path
+(`onView` served from `slot.view()`) allocates + copies a full frame
+per tap per frame under Electron. **Fix (steered to C, then A):**
+native `ShmSlot.write(src)` (memcpy in) + `ShmSlot.copyTo(dest)`
+(memcpy out into one persistent per-serial buffer for taps — zero
+steady-state alloc, identical both runtimes); the transport switches to
+`slot.write`; harness gains a round-trip assertion that write-into-copy
+would fail. **✅ Fixed (planner hotfix, 2026-07-06 — Codex worker
+quota exhausted until 22:09; fix was small and fully specced):**
+`ShmSlot.write(src)` + `ShmSlot.copyTo(dest)` landed native-side
+(size-checked, `JS_EXCEPT`-wrapped — a raw C++ throw from a plain
+`InstanceMethod` aborts the process, learned the hard way in test);
+transport writes via `slot.write`; registry serves taps from one
+persistent per-serial buffer via `copyTo`; `.d.ts` documents `view()`
+as a cage read-snapshot; `08-shm-ring.ts` covers write/copyTo
+round-trip + size guards. **Lesson:** any JS-visible buffer API over
+shm must state its cage semantics in the .d.ts, and `#ifdef
+V8_MEMORY_CAGE` runtime-split behavior is a standing review trigger —
+node-green ≠ electron-green.
+
 ## 7. Roadmap
 
 **Reordering (2026-07-03):** hardware-in-the-loop verification is **deferred
@@ -924,6 +953,43 @@ loop lag **< 5 ms mean** under 3-camera preview; tearing retries ≈ 0;
 open a second window on the same serials and confirm ≈ 0 marginal
 producer cost. Then decide the downscale lever (renderer-side only by
 then) and revisit §7.2 item 5's residuals.
+
+**Round D (user directive 2026-07-06): remove the IPC framebuffer path
+entirely — shm is the only frame-pixel transport.** What remains on the
+Channel is control-plane + descriptors only. Design:
+- **Registry (C):** the clone branch dies — every preview converts into
+  a slot unconditionally; `onView` taps receive the *slot* Mat
+  (read-only contract: a mutating tap would corrupt published pixels
+  undetected — audit existing taps, file mutators as findings);
+  `toFramePayload` leaves the registry path.
+- **Session frames (A):** `ServerSession.frame()` grows a per-topic
+  shm ring (lazy on first publish; shape change → generation bump) via
+  an injectable frame-transport (real = `core` Shm; harness = fake, so
+  session tests stay native-free). Sessions hand Mats/buffers; the
+  runtime writes slots + broadcasts descriptors; session-side payload
+  copies die. Segment lifetime is tied to the frameCache lifetime
+  (V4 one-shot replay: cached descriptor ⇒ segment stays mapped until
+  unsubscribe/dispose clears both).
+- **Naming (C):** dynamic topics (capture:<name>#i) need short unique
+  segment names — `Shm.topicKey(topic)`: stable short hash, total name
+  ≤ 31 chars (macOS PSHMNAMLEN) incl. `/fv.` + key + generation.
+- **Renderer:** unchanged — the client already materializes any
+  `shm`-variant payload through the reader pool, topic-agnostic.
+- Sequencing: A-3 and C-5 ran in parallel against the pinned API
+  contract `Shm.topicKey(topic: string): string`; files disjoint.
+
+**Round D ✅ complete & planner-accepted (2026-07-06, incl. the V13
+planner hotfix).** Zero pixel buffers cross the MessagePort: registry
+previews always-shm (taps served by native `copyTo` into one persistent
+per-serial buffer); every session frame (tracking's processed views,
+capture/recording previews, multi-fovea crops, calibrate-*) publishes
+through per-topic shm rings in `ServerSession` via the injectable
+frame-transport (harness runs a fake — session tests stay native-free);
+descriptor cache and segment lifetime clear together (V4 replay
+preserved); harness asserts `sendFrame` never carries `data`. Gates
+all green (72/72; vue-tsc 0; build + V11 triplet + bundles clean; core
+both runtimes; shm smoke incl. write/copyTo). GUI verification is the
+PB2 script.
 
 **Out of scope for Stage 4 (explicit):** raw/capture/12-bit frames,
 session-computed frame topics (adopt later per-topic if PB2 warrants),

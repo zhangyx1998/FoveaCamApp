@@ -18,7 +18,6 @@
 import { defineSession, type ServerSession } from "@orchestrator/runtime";
 import { leaseCalibratedTriple, type CalibratedTriple } from "@orchestrator/calibration";
 import { startActuationLoop, type ActuationLoop } from "@orchestrator/actuation";
-import { toFramePayload } from "@orchestrator/camera";
 import { MarkerDetector, findHomography, resize, wrapPerspective, type Mat } from "core/Vision";
 import { area, type Point2d } from "core/Geometry";
 import { MarkerTracker, type TrackerTarget } from "@orchestrator/marker-tracker";
@@ -69,14 +68,14 @@ export default function calibrateDistortionSession(): ServerSession<typeof calib
       const dst_img_pts = bilinearInterpolate(dst_corners, target.obj_pts);
       const H = await findHomography(target.img_pts, dst_img_pts);
       const warped = await wrapPerspective(rgba, H);
-      s.frame(`proj_${role}`, toFramePayload(warped));
+      s.frame(`proj_${role}`, warped);
       const view: ProjectionView = { H: Array.from(H as unknown as ArrayLike<number>), points: dst_img_pts };
       currentProjection = { ...currentProjection, [role]: view };
       s.telemetry({ projection: currentProjection });
     }
 
     function onFoveaView(role: "L" | "R", raw: Mat<Uint8Array>): void {
-      s.frame(role, toFramePayload(raw));
+      s.frame(role, raw);
       const target = trackers?.[role].target;
       if (!target || projBusy[role]) return;
       projBusy[role] = true;
@@ -116,7 +115,7 @@ export default function calibrateDistortionSession(): ServerSession<typeof calib
       disposers.push(trackers.C.onDetection(onCenterDetection));
       disposers.push(trackers.R.onDetection(publishDetections));
       disposers.push(t.leases.L.onView((v) => onFoveaView("L", v)));
-      disposers.push(t.leases.C.onView((v) => s.frame("C", toFramePayload(v))));
+      disposers.push(t.leases.C.onView((v) => s.frame("C", v)));
       disposers.push(t.leases.R.onView((v) => onFoveaView("R", v)));
 
       loop = startActuationLoop({

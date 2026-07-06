@@ -15,11 +15,11 @@
 // half of the multi-window/projector goal (§2 secondary).
 
 import type { Camera } from "core/Aravis";
-import type { Writer as ShmWriter } from "core/Shm";
+import type { ShmSlot, Writer as ShmWriter } from "core/Shm";
 import type { Mat } from "core/Vision";
 import type { FramePayload } from "@lib/orchestrator/protocol";
 import type { Role } from "@lib/camera-config";
-import { applyStoredConfig, cameraConfigPath, listCameraInfo, toFramePayload } from "./camera.js";
+import { applyStoredConfig, cameraConfigPath, listCameraInfo } from "./camera.js";
 import { guarded, timeSpan } from "./diagnostics.js";
 import { read } from "./store-hub.js";
 
@@ -30,10 +30,13 @@ interface Shared {
   readonly serial: string;
   camera: Camera;
   refs: number;
-  readonly sinks: Set<FrameSink>; // transport: get a copied payload
-  readonly viewSinks: Set<ViewSink>; // in-process: get the BGRA Mat (no copy)
-  view?: Mat<Uint8Array>; // reused conversion buffer for the preview loop
+  readonly sinks: Set<FrameSink>; // transport: get an SHM descriptor payload
+  readonly viewSinks: Set<ViewSink>; // in-process: get the BGRA Mat view
   shmWriter?: ShmWriter;
+  // Persistent tap buffer: `slot.view()` is a fresh cage-local snapshot per
+  // call under Electron (V13) — taps are served by native `copyTo` into this
+  // one reused buffer instead (one memcpy, zero steady-state allocation).
+  tapView?: Mat<Uint8Array>;
   abort: boolean;
   loop: Promise<void> | null; // in-flight preview loop, awaited on stop
   closed: boolean; // native handle released (guards double-release)
@@ -86,7 +89,7 @@ async function shmWriter(s: Shared): Promise<ShmWriter> {
   if (!s.shmWriter) {
     await shmBootSweep;
     const { Shm } = await import("core");
-    s.shmWriter = new Shm.Writer(s.serial);
+    s.shmWriter = new Shm.Writer(Shm.topicKey(`camera:${s.serial}`));
   }
   return s.shmWriter;
 }
@@ -110,39 +113,30 @@ function startLoop(s: Shared): void {
         const tCapture = Date.now();
         const deviceTimestamp = frame.deviceTimestamp;
         const systemTimestamp = frame.systemTimestamp;
-        const useShm = s.sinks.size > 0 && s.viewSinks.size === 0;
+        const height = frame.height;
+        const width = frame.width;
         const convertStart = performance.now();
-        if (useShm) {
-          const writer = await shmWriter(s);
-          const slot = writer.nextSlot([frame.height, frame.width], 4);
-          await frame.view("BGRA8", slot as unknown as BufferLike);
-          const convertMs = performance.now() - convertStart;
-          frame.release();
-          const payload = writer.publish({
-            tCapture,
-            convertMs,
-            deviceTimestamp,
-            systemTimestamp,
-          }) as FramePayload;
-          publish(s.serial, s.sinks, payload);
-          continue;
-        }
-
-        s.view = await frame.view("BGRA8", s.view);
+        const writer = await shmWriter(s);
+        const slot = writer.nextSlot([height, width], 4);
+        await frame.view("BGRA8", slot as unknown as BufferLike);
         const convertMs = performance.now() - convertStart;
         frame.release();
-        // In-process taps see the Mat directly (reused buffer, valid now).
-        publish(s.serial, s.viewSinks, s.view);
-        // Transport viewers get one shared copy, fanned out.
-        if (s.sinks.size > 0) {
-          const payload = toFramePayload(s.view, {
-            tCapture,
-            convertMs,
-            deviceTimestamp,
-            systemTimestamp,
-          });
-          publish(s.serial, s.sinks, payload);
+        const payload = writer.publish({
+          tCapture,
+          convertMs,
+          deviceTimestamp,
+          systemTimestamp,
+        }) as FramePayload;
+        if (s.viewSinks.size > 0) {
+          const bytes = height * width * 4;
+          if (!s.tapView || s.tapView.byteLength !== bytes)
+            s.tapView = new Uint8Array(bytes) as Mat<Uint8Array>;
+          (slot as ShmSlot).copyTo(s.tapView);
+          s.tapView.shape = [height, width];
+          s.tapView.channels = 4;
+          publish(s.serial, s.viewSinks, s.tapView);
         }
+        if (s.sinks.size > 0) publish(s.serial, s.sinks, payload);
       }
     } finally {
       s.loop = null;

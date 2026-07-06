@@ -13,7 +13,6 @@
 
 import { defineSession, type ServerSession } from "@orchestrator/runtime";
 import { leaseCalibratedTriple, type CalibratedTriple } from "@orchestrator/calibration";
-import { toFramePayload } from "@orchestrator/camera";
 import { read, write } from "@orchestrator/store-hub";
 import { activeController } from "@orchestrator/controller";
 import { MarkerDetector } from "core/Vision";
@@ -67,7 +66,7 @@ export default function calibrateDriftSession(): ServerSession<typeof calibrateD
     }
 
     function onView(role: Role, raw: Mat<Uint8Array>): void {
-      s.frame(role, toFramePayload(raw));
+      s.frame(role, raw);
     }
 
     async function activateSession(): Promise<void> {

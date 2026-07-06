@@ -16,6 +16,7 @@ import {
   type CommandsOf,
   type Contract,
   type Endpoint,
+  type FrameMeta,
   type FramePayload,
   type FrameOf,
   type FrameTopicStats,
@@ -24,6 +25,10 @@ import {
   type TelemetryOf,
 } from "../lib/orchestrator/protocol.js";
 import { report, span, type Span } from "./diagnostics.js";
+import type {
+  FrameTransport,
+  SessionFrameSource,
+} from "./frame-transport.js";
 import { attachStore } from "./store-hub.js";
 
 function mainEndpoint(port: MessagePortMain): Endpoint {
@@ -36,6 +41,16 @@ function mainEndpoint(port: MessagePortMain): Endpoint {
     onMessage: (cb) => port.on("message", (e) => cb(e.data)),
     close: () => port.close(),
   };
+}
+
+type FrameTransportFactory = () => FrameTransport;
+
+let frameTransportFactory: FrameTransportFactory = () => {
+  throw new Error("No frame transport configured");
+};
+
+export function setFrameTransportFactory(factory: FrameTransportFactory): void {
+  frameTransportFactory = factory;
 }
 
 export class ServerSession<C extends Contract> {
@@ -64,6 +79,7 @@ export class ServerSession<C extends Contract> {
   private activatedAt: number | null = null;
   private readonly commands = new Map<string, (arg: any) => any>();
   private readonly stateWatchers = new Set<(key: string, value: any) => void>();
+  private frameTransport: FrameTransport | null = null;
   private activateFn?: () => void;
   private idleFn?: () => void;
 
@@ -128,8 +144,13 @@ export class ServerSession<C extends Contract> {
   // subscribers that declared interest in *this* topic — a session
   // subscriber that never opened `frame(name)` for it shouldn't pay the
   // structured-clone + backpressure-gate cost for a topic it never reads.
-  frame(name: FrameOf<C> | (string & {}), payload: FramePayload): void {
+  frame(
+    name: FrameOf<C> | (string & {}),
+    source: SessionFrameSource,
+    meta?: FrameMeta,
+  ): void {
     const t = topic.frame(this.name, String(name));
+    const payload = this.getFrameTransport().write(t, source, meta);
     this.frameCache.set(t, payload); // V4: last-payload cache, replayed on late interest
     if (this.activatedAt !== null) {
       span(`session.${this.name}.timeToFirstFrame`, performance.now() - this.activatedAt);
@@ -199,8 +220,18 @@ export class ServerSession<C extends Contract> {
     this.subscribers.delete(ch);
     if (wasActive && this.activeSubscribers.size === 0) {
       this.idleFn?.();
-      this.frameCache.clear(); // V4: bound memory — stale previews from this activation are gone anyway
+      this.clearFrameCache(); // V4: bound memory — stale previews from this activation are gone anyway
     }
+  }
+
+  private clearFrameCache(): void {
+    this.frameCache.clear();
+    this.frameTransport?.close();
+    this.frameTransport = null;
+  }
+
+  private getFrameTransport(): FrameTransport {
+    return (this.frameTransport ??= frameTransportFactory());
   }
 
   /**
@@ -216,7 +247,7 @@ export class ServerSession<C extends Contract> {
     this.subscribers.clear();
     this.activeSubscribers.clear();
     if (wasActive) this.idleFn?.();
-    this.frameCache.clear();
+    this.clearFrameCache();
   }
 }
 

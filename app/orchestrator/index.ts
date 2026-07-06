@@ -14,8 +14,12 @@
 // list, plus the two cross-cutting sessions (`system`, `controller`) that have
 // no single owning UI module. See docs/refactor/orchestrator.md §12.3 R1.
 
-import { cleanup } from "core";
-import { Hub } from "./runtime.js";
+import { Shm, cleanup } from "core";
+import {
+  createShmFrameTransport,
+  type ShmApi,
+} from "./frame-transport.js";
+import { Hub, setFrameTransportFactory } from "./runtime.js";
 import { onReport, onSpan, span } from "./diagnostics.js";
 import { systemSession } from "./sessions/system.js";
 import { controllerSession } from "./sessions/controller.js";
@@ -43,6 +47,7 @@ const forkTs = Number(process.env.FOVEA_FORK_TS);
 if (Number.isFinite(forkTs)) span("boot.forkToLoad", Date.now() - forkTs);
 
 const hub = new Hub();
+setFrameTransportFactory(() => createShmFrameTransport(Shm as ShmApi));
 
 // Forward process-wide diagnostics (registry sink-throw isolation, etc.) to
 // every connected renderer, so failures are visible without watching the

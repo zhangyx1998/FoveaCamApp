@@ -63,7 +63,30 @@ function assertPattern(result: ReaderResultWithData): void {
 }
 
 {
-  const writer = new Shm.Writer("shm-roundtrip");
+  const topics = [
+    "camera:L:1234567890",
+    "camera:C:1234567891",
+    "camera:R:1234567892",
+    "tracking-single:center",
+    "tracking-single:center.diff",
+    "disparity-scope:center.disparity",
+    "manual-control:C",
+    "capture:calibration-session-with-a-long-name#0",
+    "capture:calibration-session-with-a-long-name#1",
+    "capture:calibration-session-with-a-long-name#2",
+    ...Array.from({ length: 64 }, (_, i) => `capture:run-${i}#${i % 3}`),
+  ];
+  const keys = topics.map((t) => Shm.topicKey(t));
+  assert.equal(Shm.topicKey(topics[0]), keys[0]);
+  assert.equal(new Set(keys).size, keys.length);
+  for (const key of keys) {
+    assert.match(key, /^[0-9a-z]+$/);
+    assert(`/fv.${key}.g4294967295`.length <= 31);
+  }
+}
+
+{
+  const writer = new Shm.Writer(Shm.topicKey("shm-roundtrip"));
   writer.nextSlot([2, 3], 4).debugFillPattern(10);
   const descriptor = writer.publish({ tCapture: 10, convertMs: 2 });
   const handle = reader.open(descriptor.shm.seg);
@@ -78,7 +101,29 @@ function assertPattern(result: ReaderResultWithData): void {
 }
 
 {
-  const writer = new Shm.Writer("shm-generation");
+  // V13: write() must reach shared memory (view().set() would not under the
+  // Electron cage), and copyTo() must read the slot back into a caller buffer.
+  const writer = new Shm.Writer(Shm.topicKey("shm-write-copyto"));
+  const src = new Uint8Array(2 * 3 * 4);
+  for (let i = 0; i < src.length; i++) src[i] = (i * 7 + 3) % 251;
+  const slot = writer.nextSlot([2, 3], 4);
+  slot.write(src);
+  const descriptor = writer.publish({ tCapture: 5 });
+  const handle = reader.open(descriptor.shm.seg);
+  const result = readOnce(handle, descriptor);
+  assert(result);
+  assert.deepEqual(Array.from(result.data.slice(0, src.length)), Array.from(src));
+  const out = new Uint8Array(src.length);
+  slot.copyTo(out);
+  assert.deepEqual(Array.from(out), Array.from(src));
+  assert.throws(() => slot.write(new Uint8Array(src.length - 1)), /byte length/);
+  assert.throws(() => slot.copyTo(new Uint8Array(src.length - 1)), /too small/);
+  reader.close(handle);
+  writer.close();
+}
+
+{
+  const writer = new Shm.Writer(Shm.topicKey("shm-generation"));
   writer.nextSlot([2, 2], 4).debugFillPattern(1);
   const first = writer.publish({ tCapture: 1 });
   const oldReader = reader.open(first.shm.seg);
@@ -100,7 +145,7 @@ function assertPattern(result: ReaderResultWithData): void {
 }
 
 {
-  const writer = new Shm.Writer("shm-sweep");
+  const writer = new Shm.Writer(Shm.topicKey("shm-sweep"));
   writer.nextSlot([2, 2], 4).debugFillPattern(3);
   const descriptor = writer.publish({ tCapture: 3 });
   const handle = reader.open(descriptor.shm.seg);
@@ -120,7 +165,7 @@ function assertPattern(result: ReaderResultWithData): void {
     `
       import { parentPort } from "node:worker_threads";
       import { Shm } from "core";
-      const writer = new Shm.Writer("shm-hammer");
+      const writer = new Shm.Writer(Shm.topicKey("shm-hammer"));
       let descriptor = null;
       writer.nextSlot([256, 256], 4).debugFillPattern(0);
       descriptor = writer.publish({ tCapture: 0, convertMs: 0 });

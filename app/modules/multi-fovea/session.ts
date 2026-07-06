@@ -6,7 +6,6 @@
 
 import { defineSession, type ServerSession } from "@orchestrator/runtime";
 import { leaseCalibratedTriple, type CalibratedTriple } from "@orchestrator/calibration";
-import { toFramePayload } from "@orchestrator/camera";
 import { activeController, type StreamHandle } from "@orchestrator/controller";
 import { RoundRobinFrameScheduler } from "@orchestrator/scheduler";
 import { multiFovea, defaultMultiFoveaTarget, MAX_MULTI_FOVEA_TARGETS } from "./contract";
@@ -123,7 +122,7 @@ export default function multiFoveaSession(): ServerSession<typeof multiFovea> {
 
     function onCenterView(raw: Mat<Uint8Array>): void {
       const view = triple?.undistort ? triple.undistort.apply(raw) : raw;
-      s.frame("C", toFramePayload(view));
+      s.frame("C", view);
       void (async () => {
         const elapsed = await runtime.onCenterFrame(view);
         if (!triple || elapsed <= 0) return;

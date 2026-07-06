@@ -17,7 +17,6 @@
 import { defineSession, type ServerSession } from "@orchestrator/runtime";
 import { leaseCalibratedTriple, type CalibratedTriple } from "@orchestrator/calibration";
 import { startActuationLoop, type ActuationLoop } from "@orchestrator/actuation";
-import { toFramePayload } from "@orchestrator/camera";
 import { manualControl } from "./contract";
 import { createCapture } from "./capture";
 import { createRecording } from "./recording";
@@ -134,7 +133,7 @@ export default function manualControlSession(): ServerSession<typeof manualContr
       const size = { width: width / zoom, height: height / zoom };
       const at = triple.undistort.position([targetAngle], false)[0];
       const sliced = slice(centerMat, clampRect(RECT.fromCenter(at, size)));
-      s.frame("center", toFramePayload(sliced));
+      s.frame("center", sliced);
     }
 
     function onCenterView(raw: Mat<Uint8Array>): void {
@@ -145,7 +144,7 @@ export default function manualControlSession(): ServerSession<typeof manualContr
         height = h;
         s.telemetry({ size: { width, height } });
       }
-      s.frame("C", toFramePayload(view));
+      s.frame("C", view);
       if (s.state.view === "sliced") publishSlicedView(view);
       capture.onCenterTick(view);
     }
@@ -173,14 +172,14 @@ export default function manualControlSession(): ServerSession<typeof manualContr
         const z = depthFromProjection(proj, distance() - dw, distance() + dw);
         out = heatmap(z);
       }
-      s.frame("center", toFramePayload(out));
+      s.frame("center", out);
     }
 
     function onFoveaView(role: "L" | "R", view: Mat<Uint8Array>): void {
       const H = triple ? triple.conv.A2H[role](triple.conv.V2A[role](volts[role])) : null;
       const wrapped = H ? wrapPerspective(view, H) : null;
       const display = s.state.wrap_enable && wrapped ? wrapped : view;
-      s.frame(role, toFramePayload(display));
+      s.frame(role, display);
       if (s.state.view === "sliced") {
         aligned.L = aligned.R = null;
       } else {

@@ -82,6 +82,8 @@ describe("ServerSession: activate -> first frame span", () => {
 
   it("records exactly one timeToFirstFrame span per activation, on the first frame() call", async () => {
     const { onSpan } = await import("@orchestrator/diagnostics");
+    const { installFakeFrameTransport } = await import("./fake-frame-transport");
+    installFakeFrameTransport();
     const { defineSession: define } = await import("@orchestrator/runtime");
     const recorded: string[] = [];
     onSpan((s) => recorded.push(s.name));
@@ -107,6 +109,8 @@ describe("ServerSession: activate -> first frame span", () => {
 
   it("records a fresh span on re-activation after going idle", async () => {
     const { onSpan } = await import("@orchestrator/diagnostics");
+    const { installFakeFrameTransport } = await import("./fake-frame-transport");
+    installFakeFrameTransport();
     const { defineSession: define } = await import("@orchestrator/runtime");
     const recorded: string[] = [];
     onSpan((s) => recorded.push(s.name));

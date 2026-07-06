@@ -35,7 +35,6 @@
 import { defineSession, type ServerSession } from "@orchestrator/runtime";
 import { leaseCalibratedTriple, type CalibratedTriple } from "@orchestrator/calibration";
 import { startActuationLoop, type ActuationLoop } from "@orchestrator/actuation";
-import { toFramePayload } from "@orchestrator/camera";
 import {
   disparity,
   DEFAULT_TUNING,
@@ -252,7 +251,7 @@ export default function disparityScopeSession(): ServerSession<typeof disparity>
       const A = triple.conv.V2A[role](volts[role]);
       const wrapped = wrapPerspective(raw, triple.conv.A2H[role](A)); // independent Mat
       const display = s.state.wrap_enable ? wrapped : raw;
-      s.frame(role, toFramePayload(display));
+      s.frame(role, display);
       aligned[role] = wrapped;
       if (width && height) {
         const size = foveaTileSize({
@@ -267,7 +266,7 @@ export default function disparityScopeSession(): ServerSession<typeof disparity>
         });
       }
       if (role === "R" && s.state.view === "disparity" && aligned.L && aligned.R) {
-        s.frame("center.disparity", toFramePayload(diff(aligned.L, aligned.R, true)));
+        s.frame("center.disparity", diff(aligned.L, aligned.R, true));
       }
     }
 
@@ -284,9 +283,9 @@ export default function disparityScopeSession(): ServerSession<typeof disparity>
         expand_x: s.state.tuning.expand_x,
         expand_y: s.state.tuning.expand_y,
       });
-      s.frame("guide", toFramePayload(analysis.guide));
-      s.frame("match_left", toFramePayload(analysis.ml.mat));
-      s.frame("match_right", toFramePayload(analysis.mr.mat));
+      s.frame("guide", analysis.guide);
+      s.frame("match_left", analysis.ml.mat);
+      s.frame("match_right", analysis.mr.mat);
       s.telemetry({
         match_left: { rect: analysis.ml.rect, score: analysis.ml.score },
         match_right: { rect: analysis.mr.rect, score: analysis.mr.score },
@@ -340,12 +339,12 @@ export default function disparityScopeSession(): ServerSession<typeof disparity>
       } else if (tracker) {
         updateTracker(raw);
       }
-      s.frame("C", toFramePayload(raw));
+      s.frame("C", raw);
       if (s.state.view === "sliced" && width && height) {
         const zoom = Math.max(1, s.state.zoom);
         const size = { width: width / zoom, height: height / zoom };
         const rect = clampRect(RECT.fromCenter(s.state.target, size));
-        s.frame("center.sliced", toFramePayload(slice(raw, rect)));
+        s.frame("center.sliced", slice(raw, rect));
       }
       if (stepBusy) return;
       stepBusy = true;

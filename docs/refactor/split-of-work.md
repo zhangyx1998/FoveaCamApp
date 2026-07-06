@@ -113,10 +113,10 @@ hardware-dependent behavior verified without a real rig run.
 
 ### Active instructions
 
-- **A-standby.** A-2 (V12 passive subscriptions) planner-accepted
-  2026-07-06 and archived to orchestrator.md §6; awaiting the user's
-  live GUI check (idle app → open profiler → 60 fps holds, mirrors
-  parked).
+- **A-standby.** A-3 (shm-only session frames) planner-accepted
+  2026-07-06 — the V13 steering item (switch to `slot.write`) was
+  applied by the planner directly (Codex quota exhausted until 22:09;
+  fix was small and fully specced). Archived to orchestrator.md §6/§7.1.
   - Log:
 
 ## Coder B — Native core, protocol & firmware
@@ -158,6 +158,11 @@ session.
 - **C-standby note.** C-1/C-2 were planner-accepted 2026-07-06 and
   archived (orchestrator.md §6 + §7.1 Stage 4).
 - **(C-4 accepted & cleared 2026-07-06.)**
+- **C-standby note.** C-5 (registry always-shm + topicKey)
+  planner-accepted 2026-07-06 — the V13 steering (ShmSlot.write/copyTo,
+  registry persistent tap buffer) was applied by the planner directly
+  (Codex quota exhausted until 22:09). Archived to orchestrator.md
+  §6/§7.1.
 - **C-3 (held).** PB2 live measurement (orchestrator.md §7.1 Stage 4
   Round C) — needs display + cameras and planner acceptance of C-1/C-2
   first. Do not start.

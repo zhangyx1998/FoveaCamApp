@@ -35,13 +35,13 @@ import {
 } from "core/Vision";
 import type { Point2d, Size } from "core/Geometry";
 import type { Pos } from "@lib/controller-codec";
-import type { FramePayload, Serializable } from "@lib/orchestrator/protocol";
-import { toFramePayload } from "@orchestrator/camera";
+import type { Serializable } from "@lib/orchestrator/protocol";
 import { stack, makeBGRA } from "@lib/imgproc";
 import { matToArray } from "@lib/mat";
 import { createQMatrix, deriveFoveaIntrinsics } from "@lib/stereo";
 import { RECT } from "@lib/util/geometry";
 import type { CalibratedTriple } from "@orchestrator/calibration";
+import type { SessionFrameSource } from "@orchestrator/frame-transport";
 import type { VoltPreviewQuery } from "./contract";
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -93,7 +93,7 @@ export interface CaptureDeps {
   wrapEnable(): boolean;
   /** Steer the target to an angle (used to visit each set-point in turn). */
   steerToAngle(angle: Point2d, distance_mm?: number, shift_deg?: number): void;
-  frame(name: string, payload: FramePayload): void;
+  frame(name: string, payload: SessionFrameSource): void;
   telemetry(patch: {
     capture_busy?: boolean;
     capture_meta?: Record<string, Serializable>;
@@ -142,11 +142,10 @@ export function createCapture(deps: CaptureDeps): CaptureController {
 
   function publishFrame(name: string, index: number | undefined, image: Mat): void {
     const channel = index === undefined ? `capture:${name}` : `capture:${name}#${index}`;
-    // 8-bit BGRA preview — the same downconversion `FrameView.vue` already
-    // does client-side for any non-Uint8Array Mat, relocated here since a
-    // `FramePayload` can only carry a `Mat<Uint8Array>` across the wire.
+    // 8-bit BGRA preview — runtime writes session frames into shm, so publish
+    // the Mat directly instead of first copying it into a wire payload.
     const preview = image instanceof Uint8Array ? image : convertType(image, "8U");
-    deps.frame(channel, toFramePayload(preview));
+    deps.frame(channel, preview);
   }
 
   /** Store a resource once ("wide") — never indexed, even mid a set-points

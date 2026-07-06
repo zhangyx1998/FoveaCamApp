@@ -26,7 +26,6 @@ import { matchTriple, retryUntil, type CameraLease } from "@orchestrator/registr
 import { loadIntrinsic, fitExtrinsicRegression } from "@orchestrator/calibration";
 import { startActuationLoop, type ActuationLoop } from "@orchestrator/actuation";
 import { MarkerTracker, startServo, type Servo } from "@orchestrator/marker-tracker";
-import { toFramePayload } from "@orchestrator/camera";
 import { read, write } from "@orchestrator/store-hub";
 import { activeController } from "@orchestrator/controller";
 import { getCameraKey } from "@lib/camera-config";
@@ -100,7 +99,7 @@ export default function calibrateExtrinsicSession(): ServerSession<typeof calibr
     }
 
     function onView(role: Role, raw: Mat<Uint8Array>): void {
-      s.frame(role, toFramePayload(raw));
+      s.frame(role, raw);
     }
 
     async function persistRecords(): Promise<void> {
