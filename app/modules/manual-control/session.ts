@@ -17,6 +17,7 @@
 import { defineSession, type ServerSession } from "@orchestrator/runtime";
 import { leaseCalibratedTriple, type CalibratedTriple } from "@orchestrator/calibration";
 import { startActuationLoop, type ActuationLoop } from "@orchestrator/actuation";
+import { createFrameWorker } from "@orchestrator/frame-worker";
 import { manualControl } from "./contract";
 import { createCapture } from "./capture";
 import { createRecording } from "./recording";
@@ -31,6 +32,7 @@ import {
   type Mat,
 } from "core/Vision";
 import { RECT } from "@lib/util/geometry";
+import { copyMat } from "@lib/mat";
 import {
   createQMatrix,
   deriveFoveaIntrinsics,
@@ -136,17 +138,42 @@ export default function manualControlSession(): ServerSession<typeof manualContr
       s.frame("center", sliced);
     }
 
+    // PB3 A-5: `undistort.apply` is a full-frame remap — ms-scale, previously
+    // run inline in the registry's synchronous `onView` dispatch, which
+    // throttled the whole camera serial (see `@orchestrator/frame-worker`'s
+    // header for the exact mechanism). The tap now only copies the buffer and
+    // hands off to a busy-gated, latest-wins `frameWorker`; `capture.
+    // onCenterTick` rides the same (now coalesced) processed-view cadence —
+    // it's a promise-resolve for a capture pass awaiting "the next center
+    // frame," not vision math, so riding a slightly slower cadence than raw
+    // camera rate is harmless (capture.ts has no per-frame deadline).
+    // Workload meter names (A-8): stable per-worker identities for
+    // `system.perfSnapshot.workloads`. The workers (and their meters) are
+    // process-lifetime — this session is a boot-time singleton and the
+    // workers persist across idle/activate cycles, so `worker.dispose()` has
+    // no call site here on purpose: `ServerSession.dispose()` is a REUSABLE
+    // force-idle (releaseCameras, window-switch drain), not a terminal
+    // teardown — disposing the meters there would inert them after the
+    // first app switch and drop the named rows the snapshot should keep.
+    const centerWorker = createFrameWorker<Mat<Uint8Array>, Mat<Uint8Array>>({
+      name: "manual-control:center",
+      copy: copyMat,
+      process(raw) {
+        const view = triple?.undistort ? triple.undistort.apply(raw) : raw;
+        const [h, w] = view.shape;
+        if (w !== width || h !== height) {
+          width = w;
+          height = h;
+          s.telemetry({ size: { width, height } });
+        }
+        s.frame("C", view);
+        if (s.state.view === "sliced") publishSlicedView(view);
+        capture.onCenterTick(view);
+      },
+    });
+
     function onCenterView(raw: Mat<Uint8Array>): void {
-      const view = triple?.undistort ? triple.undistort.apply(raw) : raw;
-      const [h, w] = view.shape;
-      if (w !== width || h !== height) {
-        width = w;
-        height = h;
-        s.telemetry({ size: { width, height } });
-      }
-      s.frame("C", view);
-      if (s.state.view === "sliced") publishSlicedView(view);
-      capture.onCenterTick(view);
+      centerWorker.submit(raw);
     }
 
     function depthWindow(): number {
@@ -175,7 +202,13 @@ export default function manualControlSession(): ServerSession<typeof manualContr
       s.frame("center", out);
     }
 
-    function onFoveaView(role: "L" | "R", view: Mat<Uint8Array>): void {
+    // PB3 A-5: `wrapPerspective` (full remap) + `publishCombinedView`'s
+    // diff/depth math (disparity, reprojectImageTo3D, heatmap) are the other
+    // inline-vision culprit named in PB3 — same fix, one worker per eye (L/R
+    // arrive on independent taps, so each gets its own busy-gate; the
+    // existing `aligned` cache already tolerates the two eyes being a tick or
+    // two apart, same as before).
+    function processFoveaView(role: "L" | "R", view: Mat<Uint8Array>): void {
       const H = triple ? triple.conv.A2H[role](triple.conv.V2A[role](volts[role])) : null;
       const wrapped = H ? wrapPerspective(view, H) : null;
       const display = s.state.wrap_enable && wrapped ? wrapped : view;
@@ -186,6 +219,23 @@ export default function manualControlSession(): ServerSession<typeof manualContr
         aligned[role] = wrapped;
         if (role === "R") publishCombinedView();
       }
+    }
+
+    const foveaWorkers = {
+      L: createFrameWorker<Mat<Uint8Array>, Mat<Uint8Array>>({
+        name: "manual-control:fovea:L",
+        copy: copyMat,
+        process: (v) => processFoveaView("L", v),
+      }),
+      R: createFrameWorker<Mat<Uint8Array>, Mat<Uint8Array>>({
+        name: "manual-control:fovea:R",
+        copy: copyMat,
+        process: (v) => processFoveaView("R", v),
+      }),
+    };
+
+    function onFoveaView(role: "L" | "R", view: Mat<Uint8Array>): void {
+      foveaWorkers[role].submit(view);
     }
 
     // --- capture (docs/refactor/orchestrator.md roadmap item 6) ----------
@@ -267,12 +317,25 @@ export default function manualControlSession(): ServerSession<typeof manualContr
       await Promise.all([recording.stop(), capture.waitIdle()]);
       for (const d of disposers) d();
       disposers.length = 0;
+      // PB3 A-5: the display-vision workers persist across idle/activate
+      // cycles (same object, not recreated); `cancel()` drops anything they
+      // still have scheduled so a frame copied just before this idle can't
+      // get processed later against a fresh reactivation's `triple` (the
+      // V5/V10/V13 stale-completion class) — safe to call only now, after
+      // the drain above, since the workers must stay live (still calling
+      // `capture.onCenterTick`) while a capture pass may be waiting on them.
+      centerWorker.cancel();
+      foveaWorkers.L.cancel();
+      foveaWorkers.R.cancel();
       if (releasing) for (const l of Object.values(releasing.leases)) l.release();
       width = height = 0;
     }
 
-    function idleSession(): void {
-      void idleSessionAsync();
+    // Returned (not fire-and-forgotten) so the runtime records the settlement
+    // promise — the multi-window drain path awaits it via `session.drained()`
+    // before the next app window may activate (multi-window.md §3).
+    function idleSession(): Promise<void> {
+      return idleSessionAsync();
     }
 
     return {
@@ -313,6 +376,14 @@ export default function manualControlSession(): ServerSession<typeof manualContr
         void activateSession();
       },
       idle: idleSession,
+      // Drain-refusal probe (multi-window.md §5 default 2): a window switch
+      // must not force-drain this session mid-capture/recording — the user
+      // gets a prompt instead of losing an in-flight pass.
+      busy() {
+        if (capture.busy) return "capture in progress";
+        if (recording.active) return "recording in progress";
+        return null;
+      },
     };
   });
 }

@@ -22,6 +22,7 @@ import type { Role } from "@lib/camera-config";
 import { applyStoredConfig, cameraConfigPath, listCameraInfo } from "./camera.js";
 import { guarded, timeSpan } from "./diagnostics.js";
 import { read } from "./store-hub.js";
+import { registerWorkload, type WorkloadHandle } from "./metering.js";
 
 type FrameSink = (payload: FramePayload) => void;
 type ViewSink = (view: Mat<Uint8Array>) => void;
@@ -40,6 +41,11 @@ interface Shared {
   abort: boolean;
   loop: Promise<void> | null; // in-flight preview loop, awaited on stop
   closed: boolean; // native handle released (guards double-release)
+  // Perf substrate (docs/refactor/workload-metering.md, "registry preview
+  // loop (per serial)" — first citizen): one meter per shared camera,
+  // registered alongside it and disposed alongside it, so re-acquiring the
+  // same serial after a full release starts a fresh window.
+  readonly workload: WorkloadHandle;
 }
 
 /** A lease on one shared camera. Drop it with `release()` when done. */
@@ -102,10 +108,13 @@ function startLoop(s: Shared): void {
       for (const frame of s.camera.stream) {
         if (s.abort || !hasConsumers(s)) break;
         if (!frame) {
-          // No frame ready — yield without spinning the CPU.
+          // No frame ready — yield without spinning the CPU. Not busy time:
+          // the loop is idle here, not blocked on real work.
           await new Promise((r) => setImmediate(r));
           continue;
         }
+        s.workload.ingest("camera");
+        s.workload.begin();
         // Host-clock capture stamp (native buffer timestamp is a separate
         // device clock domain — not comparable to renderer-side Date.now()
         // without the correlation the synced-capture plan does; this is the
@@ -135,8 +144,13 @@ function startLoop(s: Shared): void {
           s.tapView.shape = [height, width];
           s.tapView.channels = 4;
           publish(s.serial, s.viewSinks, s.tapView);
+          s.workload.emit("view");
         }
-        if (s.sinks.size > 0) publish(s.serial, s.sinks, payload);
+        if (s.sinks.size > 0) {
+          publish(s.serial, s.sinks, payload);
+          s.workload.emit("shm");
+        }
+        s.workload.end();
       }
     } finally {
       s.loop = null;
@@ -159,6 +173,7 @@ function closeShared(s: Shared): Promise<void> {
   s.viewSinks.clear();
   s.shmWriter?.close();
   s.shmWriter = undefined;
+  s.workload.dispose();
   const p = stopLoop(s).then(() => s.camera.release());
   // Track until settled: `s` is already out of `shared` by the time this
   // resolves, so a `releaseAll` call that lands *after* this starts but
@@ -221,6 +236,10 @@ async function registerShared(camera: Camera): Promise<Shared> {
     abort: false,
     loop: null,
     closed: false,
+    workload: registerWorkload(`registry:${camera.serial}`, {
+      inputs: ["camera"],
+      outputs: ["shm", "view"],
+    }),
   };
   shared.set(camera.serial, s);
   return s;

@@ -12,6 +12,7 @@ import { defineSession, type ServerSession } from "../runtime.js";
 import { system, type PerfSnapshot } from "@lib/orchestrator/contracts";
 import type { FrameTopicStats } from "@lib/orchestrator/protocol";
 import { listCameraInfo } from "../camera.js";
+import { allWorkloadSnapshots } from "../metering.js";
 import { releaseAll } from "../registry.js";
 import { writeCounts } from "../store-hub.js";
 import { spans } from "../diagnostics.js";
@@ -61,6 +62,9 @@ export function systemSession(
               loopLag: { mean: loopLag.stats.mean, max: loopLag.stats.max },
             },
             frames: frameStats(),
+            // Workload meters (docs/refactor/workload-metering.md §2) —
+            // additive key, per-name snapshots from `@orchestrator/metering`.
+            workloads: allWorkloadSnapshots(),
             storeHub: writeCounts(),
             spans: [...spans()],
           };

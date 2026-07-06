@@ -35,6 +35,7 @@
 import { defineSession, type ServerSession } from "@orchestrator/runtime";
 import { leaseCalibratedTriple, type CalibratedTriple } from "@orchestrator/calibration";
 import { startActuationLoop, type ActuationLoop } from "@orchestrator/actuation";
+import { createFrameWorker } from "@orchestrator/frame-worker";
 import {
   disparity,
   DEFAULT_TUNING,
@@ -51,7 +52,9 @@ import {
   foveaTileSize,
   type VergencePIDs,
 } from "./vergence";
+import { AsyncKcfTracker } from "./tracker";
 import { RECT } from "@lib/util/geometry";
+import { copyMat } from "@lib/mat";
 import { PID } from "@lib/pid";
 import { distanceToVerge, vergeToDistance, vergenceToDistance } from "@lib/stereo";
 import { RollingStats } from "@lib/util/rolling";
@@ -124,9 +127,15 @@ export default function disparityScopeSession(): ServerSession<typeof disparity>
 
     // Optional wide-angle KCF tracker (auto-follow): tracked bbox center
     // drives `state.target`, same as the original renderer implementation.
-    let tracker: KCF | null = null;
-    let search: Rect | null = null;
-    let lostCount = 0;
+    // PB3 A-4: async (`updateAsync`, busy-drop + staleness-guarded) — see
+    // `tracker.ts`; `session.ts` only supplies the geometry/dep glue below.
+    const kcf = new AsyncKcfTracker({
+      createTracker: () => new KCF(),
+      clampRect: (r) => clampRect(r),
+      searchWindow: (box, scale) => searchWindow(box, scale),
+      cropPatch: (view, win) => cvtColor(slice(view, win), "BGRA2BGR"),
+      lostTolerance: TRACKER_LOST_TOLERANCE,
+    });
     let lastGood: Point2d = ZERO;
     // Deferred like tracking-single's `pendingInit`: the registry's `onView`
     // Mat is only valid for the duration of its synchronous call, so a tracker
@@ -163,7 +172,7 @@ export default function disparityScopeSession(): ServerSession<typeof disparity>
     }
 
     function frozen(): boolean {
-      if (tracker) return false; // actively tracking: never freeze
+      if (kcf.active) return false; // actively tracking: never freeze
       const t = s.state.tuning.timeout;
       const timeoutMs = t > 0 ? t : Infinity;
       return timeoutMs !== Infinity && now() - windowStart > timeoutMs;
@@ -188,12 +197,7 @@ export default function disparityScopeSession(): ServerSession<typeof disparity>
     }
 
     function releaseTracker(): void {
-      if (tracker) {
-        tracker.release();
-        tracker = null;
-      }
-      search = null;
-      lostCount = 0;
+      kcf.release();
       s.telemetry({ tracker_bbox: null });
     }
 
@@ -202,51 +206,44 @@ export default function disparityScopeSession(): ServerSession<typeof disparity>
         RECT.fromCenter(center, { width: s.state.kernel.w, height: s.state.kernel.h }),
       );
       if (roi.width <= 0 || roi.height <= 0) return;
-      const win = searchWindow(roi);
-      const patch = cvtColor(slice(view, win), "BGRA2BGR");
-      const roiInPatch: Rect = {
-        x: roi.x - win.x,
-        y: roi.y - win.y,
-        width: roi.width,
-        height: roi.height,
-      };
-      releaseTracker();
-      const t = new KCF();
-      t.init(patch, roiInPatch);
-      tracker = t;
-      search = roi;
-      lostCount = 0;
+      kcf.init(view, roi); // internally releases any previous tracker first
       lastGood = center;
       s.setState("target", center);
       s.telemetry({ tracker_bbox: roi });
     }
 
+    // PB3 A-4: async + busy-drop (a tick arriving while the previous update is
+    // still resolving is skipped — `kcf.update` no-ops reentrantly) + staleness
+    // guard (a completion for a released/re-initialized tracker is discarded
+    // by `tracker.ts`, never applied here).
     function updateTracker(view: Mat<Uint8Array>): void {
-      if (!tracker || !search) return;
-      const win = searchWindow(search, 1 + lostCount);
-      const result = tracker.update(cvtColor(slice(view, win), "BGRA2BGR"));
-      if (result) {
-        lostCount = 0;
-        const full = clampRect({
-          x: result.x + win.x,
-          y: result.y + win.y,
-          width: result.width,
-          height: result.height,
-        });
-        search = full;
-        const center = RECT.getCenter(full);
-        lastGood = center;
-        s.setState("target", center);
-        s.telemetry({ tracker_bbox: full });
-      } else if (++lostCount >= TRACKER_LOST_TOLERANCE) {
-        s.setState("target", lastGood);
-        releaseTracker();
-      }
+      void kcf.update(view).then((result) => {
+        if (result.status === "tracking") {
+          lastGood = result.center;
+          s.setState("target", result.center);
+          s.telemetry({ tracker_bbox: result.bbox });
+        } else if (result.status === "lost") {
+          s.setState("target", lastGood);
+          s.telemetry({ tracker_bbox: null });
+        }
+        // "dropped" (busy/stale/sub-threshold miss): no observable change.
+      });
     }
 
     // --- per-eye taps: wrap + tile + (for "disparity") combined view -----
+    //
+    // PB3 A-5: `wrapPerspective` (a full-frame remap) + the "disparity"
+    // combined view's `diff` are ms-scale — previously run inline in the
+    // registry's synchronous `onView` dispatch (see `@orchestrator/
+    // frame-worker`'s header for why that throttles the whole camera serial).
+    // Each tap now only copies the tap buffer and hands off to a busy-gated,
+    // latest-wins `frameWorker`; `tileL`/`tileR` (feeding the *actuation*-
+    // relevant `step()`) update at whatever cadence that settles to — already
+    // tolerated, since `step()`/`analyzeVergence` are documented to run
+    // against per-eye taps that don't arrive frame-synchronized in the first
+    // place (see `vergence.ts`'s `getFoveaTile` doc).
 
-    function onFoveaView(role: "L" | "R", raw: Mat<Uint8Array>): void {
+    function processFoveaView(role: "L" | "R", raw: Mat<Uint8Array>): void {
       if (!triple) return;
       const A = triple.conv.V2A[role](volts[role]);
       const wrapped = wrapPerspective(raw, triple.conv.A2H[role](A)); // independent Mat
@@ -268,6 +265,29 @@ export default function disparityScopeSession(): ServerSession<typeof disparity>
       if (role === "R" && s.state.view === "disparity" && aligned.L && aligned.R) {
         s.frame("center.disparity", diff(aligned.L, aligned.R, true));
       }
+    }
+
+    // Workload meter names (A-8) — the workers (and their meters) are
+    // process-lifetime: this session is a boot-time singleton and the workers
+    // persist across idle/activate cycles, so `worker.dispose()` has no call
+    // site on purpose (`ServerSession.dispose()` is a reusable force-idle —
+    // releaseCameras, window-switch drain — not a terminal teardown;
+    // disposing the meters there would inert them after the first switch).
+    const foveaWorkers = {
+      L: createFrameWorker<Mat<Uint8Array>, Mat<Uint8Array>>({
+        name: "disparity-scope:fovea:L",
+        copy: copyMat,
+        process: (v) => processFoveaView("L", v),
+      }),
+      R: createFrameWorker<Mat<Uint8Array>, Mat<Uint8Array>>({
+        name: "disparity-scope:fovea:R",
+        copy: copyMat,
+        process: (v) => processFoveaView("R", v),
+      }),
+    };
+
+    function onFoveaView(role: "L" | "R", raw: Mat<Uint8Array>): void {
+      foveaWorkers[role].submit(raw);
     }
 
     // --- center tap: drives the tracker + sliced view + the control step -
@@ -336,7 +356,7 @@ export default function disparityScopeSession(): ServerSession<typeof disparity>
         const c = pendingTrackerInit;
         pendingTrackerInit = null;
         initTracker(raw, c);
-      } else if (tracker) {
+      } else if (kcf.active && !kcf.updating) {
         updateTracker(raw);
       }
       s.frame("C", raw);
@@ -413,6 +433,13 @@ export default function disparityScopeSession(): ServerSession<typeof disparity>
       releaseTracker();
       for (const d of disposers) d();
       disposers.length = 0;
+      // PB3 A-5: drop anything the fovea workers still have scheduled — they
+      // persist across idle/activate, so without this a frame copied just
+      // before idle could be processed later against a fresh reactivation's
+      // `triple` (same stale-completion class the A-4 tracker's `generation`
+      // guards against).
+      foveaWorkers.L.cancel();
+      foveaWorkers.R.cancel();
       if (triple) for (const l of Object.values(triple.leases)) l.release();
       triple = null;
       width = height = 0;

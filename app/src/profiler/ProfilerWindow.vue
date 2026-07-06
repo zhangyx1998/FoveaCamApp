@@ -16,8 +16,14 @@ import { useSession, rendererLoopLag, orchestratorSpans, dumpPerfSnapshot } from
 import { system, controller, type PerfSnapshot, type Span } from "@lib/orchestrator/contracts";
 import { tracking } from "@modules/tracking-single/contract";
 import { manualControl } from "@modules/manual-control/contract";
+import { workloadRows, utilizationLevel, type WorkloadRow } from "./workload-view";
 import Sparkline from "../components/Sparkline.vue";
 import PosView from "@src/components/PosView.vue";
+import TitleBar from "../components/TitleBar.vue";
+
+// Shared window chrome (A-7): the profiler BrowserWindow now uses the same
+// hidden-titlebar overlay as every other window class.
+const titleBarHeight = ref(0);
 
 const sys = useSession(system, "system");
 const ctrl = useSession(controller, "controller", { passive: true });
@@ -58,6 +64,12 @@ const prev = { snapshot: null as PerfSnapshot | null, t: 0 };
 type Rate = { topic: string; hz: number; coalescePct: number; bytesPerSec: number };
 const rates = ref<Rate[]>([]);
 
+// Uniform per-workload sections (workload-metering.md §4) — the transform is
+// pure (`./workload-view.ts`, unit-tested); this component only renders it.
+// Fed from the same 1 Hz `perfSnapshot` poll + `prev` diff the channel-rate
+// table already uses — no new wire messages.
+const workloads = ref<WorkloadRow[]>([]);
+
 function computeRates(cur: PerfSnapshot): Rate[] {
   const now = Date.now();
   const dtSec = prev.snapshot ? Math.max(0.001, (now - prev.t) / 1000) : 0;
@@ -91,6 +103,7 @@ async function tick(): Promise<void> {
   try {
     const s = await sys.call("perfSnapshot", undefined);
     rates.value = computeRates(s);
+    workloads.value = workloadRows(s.workloads ?? {}, prev.snapshot?.workloads ?? null);
     prev.snapshot = s;
     prev.t = Date.now();
     snapshot.value = s;
@@ -128,7 +141,8 @@ function fmt(v: number, digits = 1): string {
 </script>
 
 <template>
-  <div class="profiler">
+  <TitleBar title="FoveaCam Duo" subtitle="Profiler" @height="(h) => (titleBarHeight = h)" />
+  <div class="profiler" :style="{ top: titleBarHeight + 'px' }">
     <header>
       <h1>Orchestrator Profiler</h1>
       <button @click="exportSnapshot">
@@ -147,6 +161,59 @@ function fmt(v: number, digits = 1): string {
           <label>This window (mean {{ fmt(rendererLoopLag.stats.mean) }}ms / max {{ fmt(rendererLoopLag.stats.max) }}ms)</label>
           <Sparkline :values="rendLoopLag" color="#fa0" />
         </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Workloads ({{ workloads.length }})</h2>
+      <p class="hint" v-if="workloads.length === 0">
+        No workload meters registered yet — camera preview loops, processing gates, and recorders appear here while live.
+      </p>
+      <div class="workload" v-for="w in workloads" :key="w.name">
+        <div class="workload-head">
+          <span class="mono name">{{ w.name }}</span>
+          <div
+            class="util-track"
+            role="meter"
+            :aria-valuenow="Math.round(w.utilization * 100)"
+            aria-valuemin="0"
+            aria-valuemax="100"
+            :aria-label="w.name + ' utilization'"
+          >
+            <div
+              class="util-fill"
+              :class="utilizationLevel(w.utilization)"
+              :style="{ width: (w.utilization * 100).toFixed(1) + '%' }"
+            />
+          </div>
+          <span class="util-label">
+            {{ fmt(w.utilization * 100) }}% busy
+            <span class="dim">· {{ w.interval ? "last tick" : "since start" }}</span>
+          </span>
+        </div>
+        <table class="io-table">
+          <tbody>
+            <tr v-for="i in w.inputs" :key="'in:' + i.name">
+              <td class="dir">in</td>
+              <td class="mono">{{ i.name }}</td>
+              <td class="num">{{ i.count.toLocaleString() }}</td>
+              <td class="num">{{ fmt(i.ratePerSec) }}/s</td>
+            </tr>
+            <tr v-for="o in w.outputs" :key="'out:' + o.name">
+              <td class="dir">out</td>
+              <td class="mono">{{ o.name }}</td>
+              <td class="num">{{ o.count.toLocaleString() }}</td>
+              <td class="num">{{ fmt(o.ratePerSec) }}/s</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="drops mono" v-if="w.drops.total > 0">
+          drops {{ w.drops.total.toLocaleString() }} ({{ fmt(w.drops.ratePerSec) }}/s):
+          <span v-for="d in w.drops.byReason" :key="d.reason" class="drop-reason">
+            {{ d.reason }} × {{ d.count.toLocaleString() }}
+          </span>
+        </div>
+        <div class="drops mono dim" v-else>no drops</div>
       </div>
     </section>
 
@@ -279,7 +346,9 @@ function fmt(v: number, digits = 1): string {
 <style scoped lang="scss">
 .profiler {
   position: fixed;
-  inset: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
   overflow: auto;
   background: #0b0b0d;
   color: #ddd;
@@ -347,6 +416,91 @@ function fmt(v: number, digits = 1): string {
   .mono {
     font-family: inherit;
     font-size: 0.85rem;
+  }
+
+  .dim {
+    color: #777;
+  }
+
+  // Uniform workload sections (workload-metering.md §4). The utilization
+  // meter is a thin single-value bar; the % is always printed in text ink
+  // beside it, so the status tint (ok/warn/high) is redundant encoding,
+  // never color-alone.
+  .workload {
+    padding: 0.5rem 0;
+    border-bottom: 1px solid #161618;
+    &:last-child {
+      border-bottom: none;
+    }
+
+    .workload-head {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      margin-bottom: 0.3rem;
+
+      .name {
+        min-width: 16rem;
+        color: #ddd;
+      }
+
+      .util-track {
+        flex: 0 0 160px;
+        height: 8px;
+        border-radius: 4px;
+        background: #1a1a1a;
+        overflow: hidden;
+
+        .util-fill {
+          height: 100%;
+          border-radius: 4px;
+          background: #0af;
+          transition: width 0.3s ease;
+          &.warn {
+            background: #fa0;
+          }
+          &.high {
+            background: #f56;
+          }
+        }
+      }
+
+      .util-label {
+        font-size: 0.8rem;
+        color: #aaa;
+        white-space: nowrap;
+      }
+    }
+
+    .io-table {
+      width: auto;
+      margin-left: 1rem;
+      td {
+        border-bottom: none;
+        padding: 0.05rem 1rem 0.05rem 0;
+      }
+      .dir {
+        color: #777;
+        text-transform: uppercase;
+        font-size: 0.7rem;
+      }
+      .num {
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+      }
+    }
+
+    .drops {
+      margin: 0.15rem 0 0 1rem;
+      font-size: 0.8rem;
+      // Neutral ink on purpose: coalescing is *expected* for latest-wins
+      // gates — an alarm tint here would cry wolf. The utilization tint
+      // (warn/high) is the only status encoding in this section.
+      .drop-reason {
+        margin-left: 0.75rem;
+        color: #aaa;
+      }
+    }
   }
 
   .hint {
