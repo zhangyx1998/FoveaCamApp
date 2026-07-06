@@ -15,6 +15,7 @@ import type { Mat } from "core/Vision";
 import type { PixelFormat } from "core/Aravis";
 import { FreqMeter } from "@lib/util/rolling";
 import { dtypeOf, significantBits, type Dtype } from "@lib/util/dtype";
+import { registerWorkload, type WorkloadHandle } from "./metering.js";
 
 export type CompressionFormat = "lz4" | "zstd";
 
@@ -160,6 +161,11 @@ export default class StreamWriter {
     number,
     { resolve: () => void; reject: (error: Error) => void }
   >();
+  // Perf substrate (docs/refactor/workload-metering.md, "recorder worker" —
+  // flagship first citizen): meters the main-thread side of the handoff
+  // (frame prep + post, drops); the worker_threads worker itself is a
+  // separate thread with no metering hook of its own this round.
+  private readonly workload: WorkloadHandle;
 
   constructor(
     basePath: string,
@@ -168,6 +174,10 @@ export default class StreamWriter {
   ) {
     this.maxQueuedFrames =
       options.maxQueuedFrames ?? StreamWriter.maxQueuedFrames;
+    this.workload = registerWorkload(`recorder:${name}`, {
+      inputs: ["frame"],
+      outputs: ["written"],
+    });
     this.worker = new Worker(WORKER_SOURCE, { eval: true });
     this.worker.on("message", (message: WorkerOut) =>
       this.handleWorkerMessage(message),
@@ -189,11 +199,13 @@ export default class StreamWriter {
     if (!this.failed) this.failed = error;
     for (const { reject } of this.flushes.values()) reject(error);
     this.flushes.clear();
+    this.workload.dispose();
   }
 
   private handleWorkerMessage(message: WorkerOut): void {
     if (message.type === "written") {
       this.queued = Math.max(0, this.queued - 1);
+      this.workload.emit("written");
       return;
     }
     if (message.type === "flushed") {
@@ -217,8 +229,11 @@ export default class StreamWriter {
   ) {
     if (this.failed || this.queued >= this.maxQueuedFrames) {
       this.dropped++;
+      this.workload.drop(this.failed ? "failed" : "backpressure");
       return;
     }
+    this.workload.ingest("frame");
+    this.workload.begin();
     const data = new ArrayBuffer(frame.byteLength);
     new Uint8Array(data).set(
       new Uint8Array(frame.buffer, frame.byteOffset, frame.byteLength),
@@ -238,6 +253,7 @@ export default class StreamWriter {
     this.fps.tick();
     this.queued++;
     this.post({ type: "frame", data, entry }, [data]);
+    this.workload.end();
   }
 
   flush(): Promise<void> {
@@ -249,6 +265,7 @@ export default class StreamWriter {
     }).then(async () => {
       this.flushing = true;
       await this.worker.terminate();
+      this.workload.dispose();
     });
   }
 

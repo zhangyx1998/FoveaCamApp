@@ -9,37 +9,24 @@
 // stream consumers (docs/refactor/orchestrator.md roadmap item 6). Three
 // independent raw consumers of `leases.L/C/R.camera.stream` (safe alongside
 // the registry's own preview loop and a concurrent capture pass — see
-// `capture.ts`'s header) write directly to disk via the relocated
-// `StreamWriter`; L/R frames carry a volt/angle/homography metadata snapshot
-// taken at arrival, matching the original `emitRecFrame`. On-disk format
-// (`.stream`/`.meta`/`manifest.json`/`__init__.py`/`play`) is unchanged —
-// external decoder tooling depends on it.
+// `capture.ts`'s header) write to disk through the format-agnostic
+// `RecordingSink` facade (B-5, docs/refactor/recorder-container.md): the
+// `RECORDER_BACKEND` constant in `@orchestrator/recorder` selects the new
+// single-file `.fovea` (MCAP) container or the legacy `.stream`/`.meta`/
+// manifest dump (unchanged on disk — external decoder tooling depends on
+// it). L/R frames carry a volt/angle/homography metadata snapshot taken at
+// arrival, matching the original `emitRecFrame`, on either backend.
 
-import { chmodSync, mkdirSync } from "node:fs";
-import fs from "node:fs/promises";
-import { resolve } from "node:path";
+import { mkdirSync } from "node:fs";
 import type { Frame, PixelFormat } from "core/Aravis";
 import type { Point2d } from "core/Geometry";
 import type { Mat } from "core/Vision";
-import StreamWriter from "@orchestrator/stream-writer";
-import PythonScript from "@orchestrator/stream-decoder.py?raw";
+import { createRecordingSink, type RecordingSink } from "@orchestrator/recorder";
 import { matToArray } from "@lib/mat";
 import type { Pos } from "@lib/controller-codec";
 import type { CalibratedTriple } from "@orchestrator/calibration";
 
-export interface StreamSummary {
-  frames: number;
-  dropped: number;
-  bytes: number;
-}
-
-interface Manifest {
-  format: string;
-  version: string;
-  timestamp: string | null;
-  duration: number | null;
-  streams?: Record<string, StreamSummary>;
-}
+export type { StreamSummary } from "@orchestrator/recorder/legacy";
 
 export interface RecordingDeps {
   getTriple(): CalibratedTriple | null;
@@ -54,6 +41,9 @@ export interface RecordingDeps {
 }
 
 export interface RecordingController {
+  /** True while a recording is running (drain-refusal probe — the
+   *  multi-window switch path must not force-drain mid-recording). */
+  readonly active: boolean;
   start(path: string): Promise<boolean>;
   stop(): Promise<boolean>;
 }
@@ -67,47 +57,13 @@ type RecordFrame = {
 
 export function createRecording(deps: RecordingDeps): RecordingController {
   let active = false;
-  let sessionPath: string | null = null;
-  let timestamp: string | null = null;
+  let sink: RecordingSink | null = null;
   let t0 = 0;
-  let writers = new Map<string, StreamWriter>();
   let tasks: Promise<void>[] = [];
   let pollTimer: ReturnType<typeof setInterval> | null = null;
 
-  function getWriter(name: string): StreamWriter {
-    let writer = writers.get(name);
-    if (!writer) {
-      writer = new StreamWriter(sessionPath!, name);
-      writers.set(name, writer);
-      void writeManifest(sessionPath!);
-    }
-    return writer;
-  }
-
-  function writeManifest(path: string, duration?: number): Promise<void> {
-    const streams: Record<string, StreamSummary> = Object.fromEntries(
-      [...writers.entries()].map(([name, writer]) => [name, writer.summary]),
-    );
-    const manifest: Manifest = {
-      format: "FCRS", // FoveaCam Recording Stream
-      version: "0.0.0-alpha.0",
-      timestamp,
-      duration: duration ?? null,
-      streams,
-    };
-    return fs.writeFile(resolve(path, "manifest.json"), JSON.stringify(manifest, null, 2), "utf8");
-  }
-
   function publishStreams(): void {
-    const streams: Record<string, { frames: number; dropped: number; fps: number; bytes: number }> = {};
-    for (const [name, writer] of writers)
-      streams[name] = {
-        frames: writer.frameCount,
-        dropped: writer.dropped,
-        fps: writer.fps.value,
-        bytes: writer.summary.bytes,
-      };
-    deps.telemetry({ recording_streams: streams });
+    deps.telemetry({ recording_streams: sink?.stats() ?? {} });
   }
 
   function emitRecFrame(
@@ -134,7 +90,7 @@ export function createRecording(deps: RecordingDeps): RecordingController {
       for await (const frame of stream) {
         if (!active) return;
         const rec = emitRecFrame(name, frame, buildMeta?.());
-        getWriter(rec.name).write(rec.frame, rec.format, undefined, rec.meta);
+        sink?.write(rec.name, rec.frame, rec.format, undefined, rec.meta);
       }
     } catch (e) {
       console.error(`[manual-control] recording stream "${name}":`, e);
@@ -142,6 +98,10 @@ export function createRecording(deps: RecordingDeps): RecordingController {
   }
 
   return {
+    get active() {
+      return active;
+    },
+
     async start(path) {
       if (active) return false;
       path = path.trim();
@@ -149,16 +109,9 @@ export function createRecording(deps: RecordingDeps): RecordingController {
       const triple = deps.getTriple();
       if (!triple) return false;
       mkdirSync(path, { recursive: true });
-      await fs.writeFile(resolve(path, "__init__.py"), PythonScript, "utf8");
-      const playScript = '#!/bin/bash\ncd "$(dirname "$0")"\npython3 __init__.py "$@"\n';
-      await fs.writeFile(resolve(path, "play"), playScript, "utf8");
-      chmodSync(resolve(path, "play"), 0o755);
-      sessionPath = path;
-      timestamp = new Date().toISOString();
       t0 = performance.now();
-      writers = new Map();
+      sink = await createRecordingSink(path, new Date().toISOString());
       active = true;
-      await writeManifest(path);
       const { L, C, R } = triple.leases;
       const { conv } = triple;
       tasks = [
@@ -181,7 +134,6 @@ export function createRecording(deps: RecordingDeps): RecordingController {
 
     async stop() {
       if (!active) return false;
-      const path = sessionPath;
       active = false;
       if (pollTimer) {
         clearInterval(pollTimer);
@@ -189,11 +141,9 @@ export function createRecording(deps: RecordingDeps): RecordingController {
       }
       await Promise.allSettled(tasks);
       tasks = [];
-      await Promise.all([...writers.values()].map((w) => w.flush()));
       const duration = (performance.now() - t0) / 1000;
-      if (path) await writeManifest(path, duration);
-      writers = new Map();
-      sessionPath = null;
+      await sink?.finalize(duration);
+      sink = null;
       deps.telemetry({ recording_active: false, recording_streams: {} });
       return true;
     },

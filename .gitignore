@@ -3,7 +3,14 @@
 .cache
 node_modules
 package-lock.json
-playground/
+playground/*
+# except the recorder bench (B-4 deliverable — committed, re-runnable);
+# note: `playground/` (dir exclude) would make the negation impossible —
+# a file can't be re-included under an excluded parent dir.
+!playground/bench-recorder/
+playground/bench-recorder/node_modules/
+playground/bench-recorder/out/
+playground/bench-recorder/package-lock.json
 
 # C++ Core
 build

@@ -101,6 +101,9 @@ export interface CaptureDeps {
 }
 
 export interface CaptureController {
+  /** True while a capture pass is running (drain-refusal probe — the
+   *  multi-window switch path must not force-drain mid-capture). */
+  readonly busy: boolean;
   run(setpoints: VoltPreviewQuery[]): Promise<void>;
   save(path: string, format: string): Promise<void>;
   discard(): void;
@@ -280,6 +283,10 @@ export function createCapture(deps: CaptureDeps): CaptureController {
   }
 
   return {
+    get busy() {
+      return busy;
+    },
+
     run(setpoints) {
       if (busy) return active;
       active = runInner(setpoints);
