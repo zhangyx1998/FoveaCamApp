@@ -1,18 +1,21 @@
 # Plan: Hardware-Synced Stereo Capture, Position Streams & Protocol v2
 
-> **Status:** Final code round ✅ through **S2 + S3 + ST-64a–c** (§9.8).
-> All remaining work is hardware-gated: bench (Stage F) → flash → P4 wiring
+> **Status:** Stage 3 synced-capture work ✅ through Round 2 **T6** (§9.10).
+> Remaining live-capture work is hardware-gated: bench (Stage F) → flash → P4 wiring
 > → P5. The original FIN-timeout root cause remains **undetermined pending
 > the next bench run** (§9.7's trace makes it decisive). Stop here for the
 > planner review / commit checkpoint #2 — ✅ done 2026-07-04.
-> **STAGE 3 Round 1 (2026-07-05):** this thread takes **T3** (round-robin
-> frame scheduler over `Controller.frame()`, fake-controller harness) and
-> **T4** (multi-fovea module skeleton, capture path v2Capable-gated) —
-> full specs in orchestrator.md §7.1 Stage 3. The multi-fovea module is
-> what §1 item 2's stream infrastructure exists for; this is its dry run.
+> **STAGE 3 (2026-07-05):** Round 1 — **T3** (round-robin frame scheduler,
+> §9.9) + **T4** (multi-fovea skeleton, §9.9) ✅ planner-verified. Round 2 —
+> **T6** (core `Tracker.updateAsync()` via AsyncTask + concurrent
+> multi-fovea tracker updates, §9.10) ✅ landed, ✓ planner-verified against
+> code. **Round 3 T8 fixed the V5 late-async-completion leak in
+> `MultiFoveaRuntime.syncStreams()`: late `createStream` completions are
+> generation-guarded, stale handles close immediately, and target changes
+> during an in-flight sync dirty-rerun.**
 > **Branch:** TBD (new branch off `refactor/decouple-orchestrator` or after it merges).
 > **Owner:** Yuxuan (plan) / separate coder (implementation).
-> **Last updated:** 2026-07-04
+> **Last updated:** 2026-07-05
 > **Related:** [`orchestrator.md`](./orchestrator.md) (host-side architecture; the
 > controller session owns the serial device this plan extends),
 > [`stream-hot-path.md`](./stream-hot-path.md) (in-flight `core` Frame/Stream
@@ -755,3 +758,50 @@ the finding's artifact (playbook Stage F clause).
   all Vite builds; final packaging failed because `electron-builder` is not
   installed in this workspace. Orchestrator bundle scan found no Vue import
   leakage.
+
+### 9.9 Stage 3 Round 1 — T3/T4 multi-fovea dry run [coder] 2026-07-05
+
+- **T3 scheduler:** added `app/orchestrator/scheduler.ts`,
+  `RoundRobinFrameScheduler` over `Controller.frame()` with ≤8 in-flight
+  clamp, fair rotation, duplicate-REJ tolerance, FIN/ACK timeouts → requeue,
+  and per-stream pacing. Harness: `app/test/scheduler.test.ts`.
+- **T4 multi-fovea skeleton:** added `modules/multi-fovea/` contract,
+  runtime, session, and renderer. Session drives M center-frame trackers
+  sequentially, creates one v2 stream per enabled target when `v2Capable`,
+  feeds scheduler target ids, and publishes per-target telemetry.
+- **Capture gate:** `captureOnce` returns structured REJ reasons
+  (`controller-not-connected`, `controller-not-v2-capable`,
+  `stage-f-hardware-gated`); no fake live synced capture is exposed.
+- **Registration:** app menu now opens Object Tracking (Multi);
+  orchestrator registers the `multi-fovea` session.
+- **Verification:** focused scheduler/runtime harness 5/5; full app Vitest
+  54/54; `vue-tsc --noEmit` clean; `vite build` clean.
+
+### 9.10 Stage 3 Round 2 — T6 async tracker updates [coder] 2026-07-05
+
+- **Core API:** `core/Tracker.KCF` gained `updateAsync(frame)` via
+  `AsyncTask`; synchronous `update()` is unchanged. `.d.ts` updated.
+- **Safety:** `updateAsync` captures the `cv::Ptr<TrackerKCF>` and converts
+  the JS `Mat` synchronously before queueing; each call pays one full Mat
+  copy before the worker thread, then no worker touches JS wrappers.
+- **Multi-fovea:** runtime now launches enabled target updates with
+  `Promise.all` and drops overlapping center ticks while a batch is in
+  flight, avoiding reentrant KCF updates on the same native tracker.
+- **Lifecycle:** runtime generation tokens ignore late async completions
+  after target changes or `dispose()`; harness covers dispose while an
+  update is pending.
+- **Verification:** `core make build` clean for Node/Electron; app Vitest
+  55/55; `vue-tsc --noEmit` clean; `vite build` clean; renderer remains
+  zero-core and orchestrator remains zero-Vue by bundle grep.
+
+**Planner ✓ (2026-07-05), all gates re-run independently.** The two
+claims that had to be true both hold in code: `convert<cv::Mat>`
+(`core/src/OpenCV.cpp:259`) `memcpy`s into a fresh Mat before the worker
+is queued (worker never touches JS-owned/reused buffers), and the task
+lambda captures the refcounted `cv::Ptr<TrackerKCF>` by value (a JS-side
+`release()` mid-flight can't free the native tracker under the worker).
+One over-scope was caught in review: the original "generation tokens
+ignore late completions" claim covered `updateAsync` only. Round 3 T8
+extends the same lifecycle discipline to `syncStreams()` stream creation;
+harnesses now cover post-dispose completion and target changes during an
+in-flight sync.

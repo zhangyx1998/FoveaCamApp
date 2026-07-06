@@ -93,6 +93,13 @@ of the renderer (whose event loop is bound to the Vue/Chromium render loop) into
 dedicated Electron `utilityProcess` with its own libuv loop. The renderer becomes
 a thin I/O surface. Full plan + step log: [`docs/refactor/orchestrator.md`](./docs/refactor/orchestrator.md).
 
+**Refactor coders:** your dispatch/log interface is
+[`docs/refactor/split-of-work.md`](./docs/refactor/split-of-work.md) —
+find your role's active instructions there and log results under them.
+All other `docs/refactor/*.md` files are planner-only tracking: read
+them for design context when an instruction links to them, but do not
+edit them.
+
 - **`app/orchestrator/`** — the utility-process entry (`index.ts`, a
   registration list) + `Hub`/`ServerSession`/`defineSession` runtime, the
   camera `registry.ts` (refcounted `CameraLease`s, one shared `Camera`/stream

@@ -1,20 +1,35 @@
 # Refactor: Decouple Orchestrator from Renderer
 
-> **Status:** **Stage 2 mostly landed and planner-verified (round 4,
-> 2026-07-04)** — renderer is `core`-free except the disclosed
-> `Marker.vue` exception; disparity + all calibrate-* migrated; profiler
-> window + startup spans live; **S4 added-scope serial/stream probes now
-> also landed (coder, 2026-07-04) — orchestrator thread's queue item #1
-> done, stopping per the frozen-scope rule for the planner's review pass.**
-> Remaining hardware-free: S2, S3, ST-64 (synced-capture thread, in
-> progress). Everything since the first app run is still GUI-unverified —
-> playbook executes when the rig returns. Commit checkpoint #2 recommended
-> (all gates green).
+> **Status:** **Stage 2 committed (checkpoint #2, 2026-07-04). Stage 3
+> Rounds 1–3 (T1–T10) and Stage 4 Rounds A+B: all landed and
+> planner-verified (Round 3 + Stage 4 verified 2026-07-06).** V5/V6
+> fixed in Round 3; the Stage 4 review's V8/V9 seqlock findings were
+> fixed the same iteration — the first full dispatch-loop cycle through
+> split-of-work.md (dispatch → verify → steer → warm re-dispatch →
+> accept). All gates green on the whole tree (vitest 65/65; vue-tsc 0;
+> vite build clean; bundles clean; core both runtimes; otool
+> system-libs-only; shm native test pass). **The tree is commit-ready:
+> checkpoint #3 recommended** (everything since 2bd7b9d — Stage 3
+> R1–R3, Stage 4 A/B, contextIsolation flip, docs/workflow).
+> Backstory: PB1 (§6, first live session 2026-07-05) showed preview
+> transport saturating the orchestrator loop (47 ms mean lag); the user
+> greenlit the shm frame path (Stage 4), now landed behind
+> `FOVEA_SHM_STREAMS=1`. **Held:** Stage 4 Round C / PB2 (needs display
+> + cameras), V7 UI, hardware playbook A–H (mechanical rig).
+> Control-plane stays on MessagePort (REST considered & rejected — §4).
 > **Branch:** `refactor/decouple-orchestrator`
-> **Owner:** Yuxuan (plan) / coder thread (implementation). Entries marked
-> **(coder)** are reports from the implementing agent; ✓ marks planner
-> verification against code.
-> **Last updated:** 2026-07-04 (full step-by-step log in git history)
+> **Owner:** Yuxuan (plan) / coder threads (implementation). Entries
+> marked **(coder)** are reports from an implementing agent; ✓ marks
+> planner verification against code.
+> **Docs restructure (2026-07-05):** this file and every other
+> `docs/refactor/*.md` are now **planner-only tracking** — coders no
+> longer read instructions from or write logs into them. The sole
+> dispatch/log interface is [`split-of-work.md`](./split-of-work.md)
+> (roles, file ownership, active instructions with log-back slots,
+> clearing protocol). Instruction blocks below (Round 3, Stage 4)
+> remain as the planner's spec-of-record; live dispatch state lives
+> there.
+> **Last updated:** 2026-07-06 (full step-by-step log in git history)
 
 ---
 
@@ -143,10 +158,11 @@ renderer camera ownership meant streams could not be shared across windows.
 |---|---|
 | Host | Electron `utilityProcess`; ports brokered by main via `MessageChannelMain`. |
 | Transport v1 | One `MessagePort` per renderer; RPC + events + frames multiplexed; frames structured-clone, lossy latest-wins via per-topic in-flight gate. |
-| Zero-copy path | SAB-over-MessagePort is **not implementable** (SAB clones only within one OS process). Real design: **native shared memory in `core`** (`shm_open`/`mmap` + seqlock header; sidesteps COOP/COEP entirely). Deferred — roadmap gate. |
+| Zero-copy path | SAB-over-MessagePort is **not implementable** (SAB clones only within one OS process). Real design settled with user 2026-07-05 (post-PB1): **orchestrator-owned `shm_open`/`mmap` segment per stream, triple-buffered** (user picked triple over double+retry; ~19 MB total at 3 cameras), slot header carries seq/`tCapture`/device timestamps; registry's `frame.view("BGRA8", …)` converts *directly into* the active slot (conversion already off-thread → orchestrator JS loop does zero per-frame byte work). Renderer side: **dedicated minimal reader addon in the preload** (single .cpp, libc-only — NOT `core.node`; keeps Aravis/OpenCV out of the renderer process; layout shared via a versioned `ShmRing.h`), requires `sandbox: false`. **V8 memory cage (Electron ≥21) constraint, checked 2026-07-05:** external-ArrayBuffer wrap of mmap memory is banned (crash class, not a risk), and cage memory cannot be made OS-shareable — so true zero-copy into main-world JS is impossible in both directions; the floor is one native memcpy per displayed frame, seq-validated before/after with retry-on-tear. **Handoff correction (2026-07-05):** `contextBridge` *clones* TypedArray arguments, so a bridged `readInto(dest)` cannot fill a main-world buffer — the handoff is a **ping-pong transfer pool**: main world allocates 2–3 ArrayBuffers per view, transfers one to the preload over a dedicated `MessagePort` (the same `window.postMessage`-transfer pattern T5 proved), the addon fills it natively from shm, preload transfers it back. One copy per displayed frame, renderer-side, zero allocation churn, all cage-internal. Fallback if transfer friction appears: bridge-returned fresh ArrayBuffer per read (second renderer-side copy — acceptable, must be logged). Doorbell: rAF header-poll (self-coalescing); `Channel` keeps metadata. Still gated — see §7.2 item 5. |
 | Contract/RPC | Hand-rolled typed layer: `defineContract` + `defineSession` + mirrored `reactive()` client. |
 | Control cadence | Frame-driven (`registry.onView`) or real timers; no rAF server-side. |
 | Control threading | **Trackers/PIDs run on the orchestrator JS loop, not dedicated threads** (decided 2026-07-04). Threading lives in the layers around them: firmware owns 1 kHz+ target-following (v2 streams), native C++ threads own acquisition/serial-RX/offline vision (AsyncTask), workers own recorder I/O (S3). Rationale: the §1 problem was sharing a loop with *Chromium*, not the loop model; PID math is µs-scale; threading the tracker forces per-frame Mat copies across thread boundaries + the NAPI-per-worker risk. Known cost: synchronous `tracker.update` stalls the loop a few ms/frame — bounded, measured by `trackMs`/`loopLag`. **Escape hatch (trigger: verification numbers or multi-fovea N-tracker load):** make `tracker.update` AsyncTask-backed in `core` — compute moves to the C++ pool, N trackers parallelize with one Mat copy each, no worker machinery. Session-per-worker + shm frames is deliberately unplanned. |
+| Control-plane transport (post-shm) | **Considered REST-over-localhost for everything but frames (2026-07-05) — rejected.** Post-shm Channel traffic is push-dominated (state echo, telemetry, store broadcasts, spans, down-notice, shm doorbell) — REST covers only the RPC slice and forces an SSE/WS rebuild of the rest; a localhost TCP port converts the capability-secured MessagePort into a CSRF/drive-by surface on hardware actuation (webpages can reach localhost); structured clone / TypedArrays / typed contracts / the tested Channel semantics would all be lost or re-proven, for traffic that is kilobyte-scale once frames leave. If external tooling (scripts, curl, remote UI) ever becomes a real requirement, build an **additive dev-gated HTTP facade in front of the Hub** — do not migrate the renderer protocol. |
 | State ownership | Orchestrator authoritative; renderer writes echoed to *other* windows only; snapshots seeded on subscribe. |
 | Config store | ✅ **Single owner landed** (store-hub, roadmap item 4): orchestrator caches + broadcasts; renderer `Store` is an RPC client. Scoped down from `async-reactive.md` (no revisions/merge/meta — last-write-wins + echo-skip, matching the rest of the system; `Store.resolve`/`save` dropped, unused). |
 | Lifecycle | Session interest counts drive resources; registry leases refcount cameras; `system.releaseCameras` disposes camera-owning sessions then `releaseAll()` backstop. R4 (leases only via session lifecycle) intentionally unfinished. |
@@ -166,6 +182,7 @@ renderer camera ownership meant streams could not be shared across windows.
 | calibrate-drift | ✅ 3-tracker live drift measurement + servo (Stage 2 S1b). |
 | calibrate-distortion | ✅ projector-alignment/homography check (Stage 2 S1b). |
 | calibrate-extrinsic | ✅ 3-step CAL/FIN/PRV wizard (Stage 2 S1b) — least-verified item landed this round. |
+| multi-fovea | ✅ new module (Stage 3, not a migration): M concurrent KCF trackers off the center free-run + one v2 stream per target + round-robin frame scheduler; harness-tested, live capture Stage-F-gated. V5 stream-create leak fixed in Round 3; V7 🟡 no interactive target placement (§6) remains UI/hardware-gated. |
 
 **Hardening applied** (correctness pass C1–C9, details in git history):
 close-race awaiting; dispose-before-force-close + guarded polls; telemetry
@@ -174,13 +191,12 @@ on orchestrator death; volt-telemetry throttle; diagnostics to renderer
 consoles; echo-skip; controller enable ownership. **C10 deferred** (per-
 frame-topic interest; needs a wire addition — bundle with shm/observability).
 
-**Gates (re-verified by planner 2026-07-03):** `vue-tsc --noEmit -p
-tsconfig.json` → **0 errors** (the old 3-error `Frame|null` baseline cleared
-by the manual-control migration). Orchestrator bundle **93.5 kB, zero Vue
-symbols**. `vite build`'s only failure is `RemoteCanvas.vue`'s pre-existing
-top-level `await` (the `lib/store.ts` one is gone since store-hub). Type
-gates catch shape errors only — every item below still needs its named GUI
-check.
+**Gates (latest planner re-run 2026-07-05, post-Round-2):** vitest
+**55/55**; `vue-tsc --noEmit -p tsconfig.json` → **0 errors**; `vite
+build` fully green; renderer bundle **zero-core**; orchestrator bundle
+**169.4 kB, zero Vue symbols**; `core make build` clean, all runtimes.
+Type/harness gates catch shape and logic errors only — every item still
+needs its named GUI check (playbook).
 
 ## 6. Runtime verification & findings
 
@@ -242,6 +258,225 @@ findings:
   precedes `tPublish` when a frame sits gated, rather than claiming it
   equals `tPublish`. Code was already correct; only the comment was wrong.
 
+### Perf baseline: manage-cameras frame transport saturation (2026-07-05)
+
+Source snapshot:
+[`2026-07-05T19-34-52-251Z.json`](/Users/yuxuan/Library/Application%20Support/fovea-cam-app/perf-snapshots/2026-07-05T19-34-52-251Z.json).
+
+The first real perf snapshot shows the display-frame path, not the
+renderer, limiting the observed framerate. `manage-cameras` was streaming
+three dynamic preview topics:
+
+- `fr:manage-cameras:24044020` — offered 697, sent 495, coalesced 202,
+  bytes 3,079,296,000.
+- `fr:manage-cameras:24155467` — offered 698, sent 495, coalesced 203,
+  bytes 3,079,296,000.
+- `fr:manage-cameras:22071833` — offered 699, sent 493, coalesced 205,
+  bytes 3,066,854,400.
+
+Each sent frame is 6,220,800 bytes (`1920 x 810 x 4` BGRA). If the
+offered stream is ~60 fps, the sent rate is only ~42.5 fps per camera and
+~29% of offered frames are overwritten by the latest-wins backpressure
+gate. The renderer loop-lag meter is healthy (mean 0.25 ms, max 1.5 ms),
+while the orchestrator loop-lag meter is not (mean 47 ms, max 120 ms).
+That points at orchestrator-side preview work and frame transport, not the
+Vue/rAF display path.
+
+Current implicated path:
+
+- `registry.ts` converts each native frame to the shared BGRA preview Mat
+  (`frame.view("BGRA8", s.view)`) and then calls `toFramePayload`.
+- `camera.ts` `toFramePayload` copies that Mat into a fresh `ArrayBuffer`
+  with `view.buffer.slice(...)`.
+- `ServerSession.frame()` fans the payload to interested channels.
+- `Channel.sendFrame()` is behaving as designed: one frame in flight per
+  topic, newest pending frame retained, stale pending frame counted as
+  `coalesced`.
+- `runtime.ts`'s `MessagePortMain` endpoint cannot transfer
+  `ArrayBuffer`s, so the transfer list is intentionally dropped and frame
+  buffers cross to the renderer by structured clone.
+
+At three cameras, the attempted preview payload rate is roughly
+`3 * 60 * 6.22 MB ~= 1.12 GB/s` before clone overhead; the snapshot shows
+the current path sustaining about `3 * 42.5 * 6.22 MB ~= 0.79 GB/s` and
+coalescing the rest. This is exactly the cost the perf substrate was meant
+to expose and is direct evidence for the zero-copy/shared-memory roadmap
+gate (§7.2 item 5), with one nuance: the snapshot does not aggregate
+`convertMs`, IPC latency, or frame age, so it cannot yet split native BGRA
+conversion cost from JS copy/structured-clone cost. The next observability
+step should archive per-topic averages for `convertMs`, IPC latency
+(`tReceive - tPublish`), and display delay (`tDisplay - tReceive`) so the
+copy/IPC/conversion split is visible in exported snapshots, not only in the
+live OSD.
+
+Direction: preserve the full-quality preview contract while reducing
+unnecessary work. Short-term, propagate active frame interest down toward the
+registry/session boundary so the registry does not allocate and copy payloads
+for unused topics. Medium-term, pursue the native shared-memory ring design
+already locked in §4 once the multi-window/projector consumer arrives;
+`MessagePortMain` transfer lists cannot fix this path.
+
+**Planner ✓ (2026-07-05) — numbers verified against the snapshot JSON,
+diagnosis sharpened at the cited code.** Anchor: **PB1** (referenced from
+the status header and roadmap). Per-topic arithmetic is exact
+(`offered = sent + coalesced`; bytes ÷ 6,220,800 = sent for all three
+topics; 1920×810×4 confirmed). Corrections and additions to the analysis
+above:
+
+- **The native BGRA conversion is *awaited off-thread***
+  (`registry.ts:102` — `await frame.view(...)`), so `convertMs` is
+  pipeline latency, not JS-loop occupancy. The JS-loop costs per *sent*
+  frame are: the 6.22 MB `buffer.slice` copy (`camera.ts
+  toFramePayload`), the structured-clone **serialize inside
+  `postMessage`** (synchronous on the orchestrator thread), and the GC
+  churn of ~0.8 GB/s of short-lived 6.22 MB ArrayBuffers (~127
+  allocations/s at the measured send rate). That trio — not conversion —
+  is the prime suspect for the 47 ms mean / 120 ms max loop lag.
+- **Why this matters more than a display metric: every control loop
+  shares this event loop.** A 47 ms mean lag is direct actuation/tracker
+  jitter for any session running concurrently with heavy previews. The
+  refactor's own premise (§1: don't share a loop with the display
+  pipeline) is now being violated *orchestrator-side* by transport work.
+  This raises the mitigation priority beyond "preview smoothness".
+- **The fps figures are assumption-based, and can't currently be
+  computed:** frame counters are per-channel-lifetime with **no window
+  timestamp recorded** — and this channel evidently did not span the whole
+  session (the spans show tracking + manual-control ran, but no
+  `fr:tracking:*` topics appear in the counter map, i.e. the channel was
+  reborn at some point). Fix folded into **T10** below: snapshots must
+  record counter-window start/uptime so rates are derived, not assumed.
+- **Interest propagation would NOT have changed these numbers.** The
+  registry already skips payload creation when a camera has no transport
+  sinks (`registry.ts:108` `s.sinks.size > 0`), and the measured scenario
+  had three *live viewers*. Propagating per-topic `finterest` down to the
+  session's registry-sink registration is still right (kills
+  produce-without-viewer waste — profiler-only windows, background
+  sessions), but the levers that move the *measured* number are: (a)
+  smaller preview payloads — downscale-to-display-size and/or fps cap,
+  which trades against the stated full-quality contract and is therefore
+  a **user decision**, and (b) the shm ring. Nothing in between.
+- **Bonus data the section above didn't use — first real spin-up numbers
+  (the Stage-2 debug-logging goal, working as designed):**
+  `boot.forkToLoad` 348 ms, `boot.firstPortAttached` 1089 ms,
+  `camera.enumerate` 1010 ms, `applyStoredConfig` 37–49 ms/camera,
+  `session.*.timeToFirstFrame` 2.3–2.5 s, `calibration.matchTriple`
+  ~2.07 s — and **two matchTriple spans ran concurrently 40 ms apart**
+  (tracking + manual-control activating together), duplicating a 2 s
+  discovery pass. Worth an eye in the formal playbook session: module
+  switch latency is dominated by matchTriple, and concurrent activations
+  don't share it.
+- **Incidental but significant: this snapshot is the first live-boot
+  evidence for the T5 flip** — produced under `contextIsolation: true`
+  via `foveaBridge.writePerfSnapshot`, after a successful port handshake,
+  live frames, and a store update (`storeHub.updates: 1`). The formal
+  pre-flight click-through still stands, but the flip has survived a real
+  session.
+
+### Review of Stage 3 Round 2 worktree (filed 2026-07-05; planner ✓ confirmed against code same day)
+
+Review of the uncommitted tree after T5/T6. Planner re-ran every gate
+independently (2026-07-05): vitest **55/55**; `vue-tsc --noEmit` **0
+errors**; `vite build` fully green; renderer bundle grep clean of
+`core/*` / `MarkerDetector` / `cvtColor` / `convertType` / `Aravis` /
+`Regression`; orchestrator bundle (169.4 kB) zero Vue symbols;
+`core make build` clean for all Node + Electron runtimes. No GUI/hardware
+verification was run. All three findings below are **✓ confirmed real** at
+the cited code paths; V5/V6 fix specs were carried into Round 3 (§7.1).
+
+- **V5 🔴 ✓ confirmed in Round-2 review, fixed in Round 3 T8, ✓
+  planner-verified 2026-07-06** (generation token checked after every
+  awaited `createStream` with immediate close of stale handles; dirty-flag
+  do-while rerun replaces the swallowing boolean guard — every stale cause
+  coincides with the dirty flag, so coverage is complete; both specced
+  harness cases present in `multi-fovea-runtime.test.ts`). Original
+  finding: **multi-fovea late stream-create could leak firmware streams.**
+  `MultiFoveaRuntime.syncStreams()` (`runtime.ts:160-181`)
+  awaits `deps.createStream(...)` and assigns the returned handle with no
+  `generation` check — the T6 tokens only guard `updateAsync` completions
+  (`runtime.ts:143`). `dispose()` bumps the generation and releases slots
+  *while their `stream` is still null*, so a pending `createStream` that
+  resolves afterward attaches a live `StreamHandle` to an orphaned slot and
+  nothing ever closes it. With v2 firmware that's a `CMD_STREAM CREATE`
+  surviving module idle — a consumed stream id and an MCU following a stale
+  target. **Planner addition (✓ same review):** the `streamSyncing`
+  early-return also silently swallows a `setTargets()` arriving mid-sync —
+  newly enabled targets can sit streamless until some later `setTargets`.
+  **Fix (one change covers both):** capture a generation token at
+  `syncStreams()` entry; after each awaited `createStream`, if the token is
+  stale or the slot is no longer live/enabled, `close()` the handle
+  immediately and abort; replace the boolean guard with a re-run (dirty
+  flag) when a sync was requested while one was in flight. Harness: deferred
+  `createStream` resolving after `dispose()` asserts the handle got closed;
+  `setTargets` during in-flight sync ends with every enabled slot streamed.
+- **V6 🟠 ✓ confirmed, fixed in Round 3 T9, ✓ planner-verified
+  2026-07-06** (per-document `enqueue` op chain across read/write/update/
+  clear; `notify` carries the exact committed value; both specced harness
+  cases present in `store-hub.test.ts`, covering the first-load
+  patch-clobber variant too). Original finding: **store-hub cache/echo not
+  serialized with persistence.** `store-hub.write()` mutated `doc.value`
+  before awaiting
+  `fs.write()`, and `notify(doc)` reads `doc.value` at notification time —
+  two rapid writes can broadcast B's value on A's completion before B is
+  durable; if B's write then fails, clients hold state that never landed on
+  disk. The fs layer (`store.ts` `serialize()`) orders the *file* writes;
+  the hub's in-memory owner + broadcast are outside that boundary.
+  **Planner addition (✓ same review):** `update()` has a worse first-load
+  variant — two concurrent updates on an unloaded doc both `await
+  fs.read()`; the second read resolution overwrites `doc.value`, silently
+  dropping the first patch entirely. **Fix (covers both):** per-document
+  op serialization in the hub (chain like `store.ts`'s, keyed on the doc),
+  with `notify` capturing the exact committed value for that op. Still
+  last-write-wins — no need for `async-reactive.md`'s revision/merge
+  design. Harness: interleaved `write`s broadcast only committed values;
+  concurrent first-load `update`s lose neither patch.
+- **V7 🟡 ✓ confirmed — multi-fovea renderer is not yet an interactive
+  multi-target surface.** The UI toggles enabled targets and pulse width
+  only; there is no way to place per-target centers, so enabled targets
+  track from the default `{x: 0, y: 0}` unless state is written externally.
+  Fine as the harness skeleton it was specced as — just don't read "M
+  center-frame trackers" as a usable workflow yet. **Fix (deferred, not
+  Round 3):** center-view click/drag placement per target (tracking-single's
+  `onCursor` pattern) — schedule with the first multi-fovea UI round, it
+  will want hardware anyway.
+
+### Planner review of Round 3 + Stage 4 Round A/B (2026-07-06)
+
+Round 3 (T8/T9/T7/T10): **all four ✓ verified against code** — see the
+V5/V6 annotations above; T7's four suites assert exactly the specced
+semantics (throttle cadence, snapshot shape, max/reset); T10's
+`window {startedAt, snapshotAt, uptimeMs}` + producer `convertMs` +
+renderer `ipcLatencyMs`/`displayDelayMs` land the PB1 observability gap.
+
+Stage 4 Round A/B substrate: registry flag-off path is byte-identical
+(`FOVEA_SHM_STREAMS` unset short-circuits before any shm code), and the
+coder added a guard better than the spec asked for: shm engages only
+when a serial has **zero `onView` taps**, so Mat-tap sessions keep the
+clone path automatically. Reader addon `otool -L`: libc++/libSystem
+only ✓. Three new findings, all in the seqlock (steering → Coder C):
+
+- **V8 🔴 — seqlock is missing both fences; a torn frame can validate
+  cleanly on ARM64.** Writer (`ShmRing.cpp beginSlot`): the odd
+  write-begin marker is a plain `release` store — release orders *prior*
+  ops, so the subsequent pixel writes can become visible **before** the
+  odd marker; a reader can then copy mid-overwrite while `seq` still
+  reads as the old even value on both checks, accepting a torn frame
+  undetected. Reader (`ShmReaderAddon.cpp readInto`): the `after` load
+  is `acquire`, which orders *subsequent* ops — nothing orders the
+  memcpy's reads before the re-check, the mirror-image hole. **Fix:**
+  writer — `std::atomic_thread_fence(seq_cst)` between the odd store
+  and data writes (one per frame, negligible at 60 fps); reader —
+  `std::atomic_thread_fence(acquire)` between the memcpy and the
+  `after` load. This is exactly the class C-2's hammer test exists to
+  catch; with the fences in, hammer retries should be observed and
+  torn accepts zero.
+- **V9 🟡 — slot meta is read outside the validated window.**
+  `readInto` reads `tCapture`/`convertMs`/timestamps *after* the
+  `before == after` check passes — a writer beginning on that slot
+  between the check and the meta reads can tear the metadata (pixels
+  fine, timestamps from the next frame). **Fix:** copy meta into locals
+  between the memcpy and the `after` load; emit the locals only if
+  validation passes.
+
 ## 7. Roadmap
 
 **Reordering (2026-07-03):** hardware-in-the-loop verification is **deferred
@@ -254,59 +489,24 @@ promoted to the compensating control for the growing unverified pile.
 
 ### 7.1 Active queue (hardware-free)
 
-**Landed & planner-✓ verified (2026-07-04 review round 3 — gates re-run
-independently: vue-tsc 0 errors; `vite build` fully green, a first for this
-refactor; orchestrator bundle 102.7 kB, zero Vue symbols; vitest 28/28):**
-- **Perf substrate** (§7.3, all four code items) — loop-lag probes both
-  processes, control-path latency telemetry, Channel `stats()` counters,
-  `system.perfSnapshot` + renderer snapshot dump.
-- **Session unit-test harness** — vitest (new devDependency), `app/test/`,
-  5 suites/28 tests over real `Channel`/`ServerSession`/`Hub` via
-  `fake-endpoint.ts`: store-hub, lifecycle, backpressure gate + C10,
-  manual-control capture (incl. the V1 regression), tracking retry (incl.
-  the RT1 scenario). `npm test` runs it. Gap: no suites yet for the perf
-  substrate's own telemetry (needs fake timers).
-- **C10** — `finterest` wire message; sessions skip `sendFrame` for
-  uninterested channels (but see **V4** below).
-- **`RemoteCanvas.vue` TLA fix** — root cause was the *plain* `<script>`
-  block's top-level await (Vue transforms `<script setup>` awaits safely;
-  plain blocks it can't) — worth remembering as a hard rule.
-- **V1 fix ✓** — `idleSessionAsync`: `triple = null` first (new activity
-  sees not-ready), `await Promise.all([recording.stop(),
-  capture.waitIdle()])`, then dispose/release. Harness-covered.
-- **Tracking refactor-back ✓** — session now on shared
-  `leaseCalibratedTriple`/`startActuationLoop`; kinematic predict moved
-  into the `targetVolts()` callback (same effective timing).
-
-**V4 🔴 — one-shot frame topics never reach a late-opening ref. ✅ Fixed
-(coder, 2026-07-04).** Capture previews are published exactly once
-(`manual-control/capture.ts` `deps.frame(...)` at store time), but the
-renderer opens `session.frame("capture:<name>[#i]")` only after
-`capture_meta` telemetry renders the preview UI (`src/capture/index.vue`) —
-latent since the manual-control migration, never caught because capture had
-never run under the orchestrator; C10 turned it from "client silently drops
-an early frame" into "server doesn't even attempt the send."
-- **Fix, exactly as specced:** `ServerSession` gained a `frameCache:
-  Map<topic, FramePayload>`, written unconditionally on every `frame()` call
-  (before the interest check, so it captures even sends nobody currently
-  wants). `Channel` gained `onFrameInterest(fn)` — a plain listener set fired
-  from the `finterest` dispatch case alongside the existing
-  `frameInterest.add()`. `ServerSession.attach(ch)` registers one: on a new
-  interest declaration, look up the cache and `ch.sendFrame` it straight to
-  that channel if present (a targeted replay, not a re-broadcast to
-  everyone). Cache cleared in both `unsubscribe()` (last subscriber leaving)
-  and `dispose()` — bounded by activation lifetime, not topic count, since
-  capture's dynamic per-name/per-index channels could otherwise accumulate
-  across many capture passes.
-- **Harness suite landed** (`test/frame-replay.test.ts`, 4 tests, exactly
-  the spec's two cases plus two more): publish-then-interest replays the
-  cached frame; interest-then-publish still works normally (didn't break
-  the live path); idle clears the cache (a subsequent late interest gets
-  nothing); `dispose()` also clears it. `vue-tsc` 0 errors, orchestrator
-  bundle Vue-free (104.25 kB), vitest 32/32.
-- **Not yet GUI-verified** — same as everything else this round; this fix
-  in particular has never seen a real capture pass with a real renderer
-  watching, only the harness's synthetic publish/interest ordering.
+**Pre-Stage-2 wave, all landed & planner-✓ verified 2026-07-04 (full logs
+in git history of this file):** perf substrate (§7.3 items 1–4); the
+vitest session harness (`app/test/` over real `Channel`/`ServerSession`/
+`Hub` via `fake-endpoint.ts` — the compensating control for the unverified
+pile); C10 `finterest` interest gating; the V1 idle-race fix
+(`idleSessionAsync`: null `triple` first, drain capture/recording, then
+dispose/release — harness-covered); the tracking refactor-back onto
+`leaseCalibratedTriple`/`startActuationLoop`.
+- Rule kept from that wave: **top-level `await` is only safe in `<script
+  setup>`** — Vue can't transform it in a plain `<script>` block
+  (`RemoteCanvas.vue` regression).
+- **V4 🔴 ✅ fixed (coder, 2026-07-04):** one-shot frame topics (capture
+  previews) never reached a ref opened after publish — C10 made the server
+  skip the send entirely. Fix: `ServerSession.frameCache` (written on every
+  `frame()` before the interest check) + `Channel.onFrameInterest` targeted
+  replay to the newly-interested channel; cache cleared on idle/dispose.
+  Harness: `test/frame-replay.test.ts` (4 tests). Never GUI-verified with a
+  real capture pass — playbook item.
 
 **STAGE 2 (user direction, 2026-07-04) — status after planner review
 round 4 (2026-07-04; gates re-run independently: vue-tsc 0, `vite build`
@@ -366,48 +566,262 @@ green per item, compact logs (≤ 15 lines). Bench/flash/playbook remain
 hardware-gated and are NOT part of this stage.
 
 **Round 1 — orchestrator thread:**
-- **T1 — Marker.vue dictionary extraction (finishes S1).** A dev-time Node
-  script (may use `core` freely — it runs in Node, not the renderer) dumps
-  the used dictionaries' `pattern(id)` bit-grids to a generated static
-  module (JSON/TS, committed); `Marker.vue` consumes the static data;
-  delete its `MarkerDetector` construction; then drop `src/index.ts`'s
-  `beforeunload core.cleanup`. **DoD: no core loader chunk emitted in the
-  renderer build at all** (today's `core-*.js` chunk disappears — check
-  the build output, not just grep).
-- **T2 — `contextIsolation` spike (log-only, no flip).** Enumerate
-  everything that breaks with `contextIsolation: true` + `nodeIntegration:
-  false`: `client.ts`'s `ipcRenderer` + `orchestrator:port` delivery,
-  the perf-snapshot `get-data-path`/fs writes, `RemoteCanvas`, anything
-  else. Output = a findings list in this doc (§7.2 feeds on it), zero
-  code changes.
+- **T1 — Marker.vue dictionary extraction. ✅ Landed (coder, 2026-07-05),
+  ✓ verified — finishes S1: renderer 100 % core-free.**
+  `app/scripts/gen-marker-patterns.cjs` dumps "4X4_50" `pattern(id)`
+  bit-grids to committed `lib/marker-patterns.generated.ts`; `Marker.vue`
+  reads the static table (re-run the script to add a dictionary).
+  `src/index.ts`'s `beforeunload core.cleanup` dropped. Along the way the
+  CJS-interop re-drag forced replacing `FrameView.vue`'s dead
+  `cvtColor` branch with plain-JS `expandToRGBA` — that lesson is
+  promoted at the end of Round 1 below. Verified in build output: no
+  `core-*.js` chunk, zero `"core` literals or stray Vision symbols in
+  `.dist/renderer/assets/*.js`.
+- **T2 — `contextIsolation` spike. ✅ Landed (coder, 2026-07-05),
+  log-only.** Produced the exact worklist T5 then implemented (bridge
+  wrappers, `window.postMessage` port handoff, 5 fs files → IPC,
+  `process.nextTick` swap) — superseded by T5's landing record below;
+  spike details in git history. Still-unchecked from the spike:
+  `serialport`/native-module externals under a *sandboxed* preload
+  (sandbox stays off; revisit only if it's ever enabled).
 
 **Round 1 — synced-capture thread (multi-fovea logic layer — all
 fake-Device / harness-testable, no hardware):**
-- **T3 — round-robin frame scheduler** (`orchestrator/scheduler.ts` or
-  extend `sync.ts`): given M active streams and the firmware's
-  8-deep frame queue, keep ≤ K in flight, fair rotation, duplicate-REJ
-  tolerance, timeout→requeue policy, per-stream pacing floor. Pure logic
-  over the `Controller.frame()` API — harness suite with a fake
-  controller (REJ storms, slow FINs, starvation check: no stream waits
-  > M×frame-interval).
-- **T4 — `modules/multi-fovea/{contract,session,index.vue}` skeleton**
-  (planner spec): state = target list (M ≤ 8 to start; 64 available) +
-  per-target tracker params + global pulse; session = M KCF trackers
-  driven sequentially off the **center** free-run `onView` (watch
-  `trackMs`×M — this is the designed AsyncTask-escape-hatch trigger, §4
-  threading row), one stream per target (create/update from tracker
-  output through the conversions), T3 scheduler round-robins `frame()`
-  across active targets **behind a `v2Capable` gate** (real captures are
-  hardware; the path stubs cleanly until then); telemetry per-target
-  (angle, stream Hz, last-FIN age); frames `fovea:<i>` per target.
-  Renderer = center overview with M overlays + a fovea tile grid
-  (profiler row/XY-pad patterns reusable). Round-1 DoD: type-clean,
-  registered, harness covers M-tracker orchestration (mocked
-  Vision/tracker) + scheduler integration; live capture path explicitly
-  stubbed with a REJ-with-reason until Stage F clears.
+- **T3 — round-robin frame scheduler ✅ landed 2026-07-05** (`orchestrator/scheduler.ts`):
+  `RoundRobinFrameScheduler` now covers ≤8 in-flight clamping, fair rotation,
+  duplicate-REJ tolerance, ACK/FIN timeout→requeue, and per-stream pacing;
+  harness: `app/test/scheduler.test.ts`. This satisfies the original
+  fake-Device spec over `Controller.frame()` for REJ storms, slow FINs, and
+  starvation checks.
+- **T4 — `modules/multi-fovea/{contract,runtime,session,index.vue}`
+  skeleton ✅ landed 2026-07-05, ✓ verified:** registered session +
+  renderer; M center-frame trackers (M ≤ 8 to start, 64 available), one
+  v2 stream per enabled target when `v2Capable`, T3 scheduler
+  integration, per-target telemetry (angle/volt/stream id/last-FIN age),
+  structured capture REJ (`controller-not-connected` /
+  `controller-not-v2-capable` / `stage-f-hardware-gated`) until Stage F.
+  Harness: `app/test/multi-fovea-runtime.test.ts`. Known limitations:
+  V5 stream-create leak found in review and fixed in Round 3; **V7 🟡**
+  (no interactive target placement, §6) remains.
 
-**Held items (not this round):** `contextIsolation` flip (T2 is the
-spike), shm ring (baseline-gated), anything in §7.2.
+**Round 1 ✅ complete — planner-verified 2026-07-05** (54/54 incl. new
+scheduler/multi-fovea suites; tsc 0; build green; **renderer bundle now
+100 % core-free — no core chunk, zero `"core` literals — S1 acceptance
+fully met**; orchestrator 168.9 kB Vue-free). T1's bundle-vs-grep lesson
+promoted: *after removing a core import, rebuild and grep the built
+assets for unrelated symbols from the same module specifier — the CJS
+interop shim re-drags every export of a specifier if any one value
+import survives.*
+
+### Round 2 (dispatched 2026-07-05 — T5/T6 ✅ landed & planner-✓ verified same day; T7 rolled into Round 3)
+
+- **T5 — `contextIsolation` implementation. ✅ Landed (coder, 2026-07-05),
+  both phases; ✓ planner-verified against code.** `electron/bridge.ts`
+  defines `FoveaBridge` (deliberately narrow: path joins + existence/
+  writability checks, not a general fs passthrough); `preload.ts` exposes
+  it via `contextBridge` (identical under both modes — phase (a) landed
+  green with isolation still off, per the DoD). Port handoff exactly as
+  T2 specced: preload `ipcRenderer.on("orchestrator:port")` →
+  `window.postMessage(..., e.ports)`; `client.ts` listens on the DOM
+  `message` event. Phase (b): both `BrowserWindow`s flipped in `main.ts`,
+  nothing deleted — one-line revert, and the playbook pre-flight carries
+  the first-click-through list + revert clause.
+  - **Deeper than the spike flagged (same file set, so not deferred):**
+    `vite-plugin-electron-renderer`'s node-builtin polyfill needs a real
+    `require`, so even pure `node:path.resolve()` broke — path-join itself
+    moved behind the bridge (`resolvePath`), not just I/O.
+  - `SavePath.default_path`: sync `existsSync`/`homedir` getter → async
+    `ref` seeded from `foveaBridge.resolveDefaultSavePath()`;
+    `SaveControls`/`RecordControls` backfill only while untouched
+    (`save_path === ""`); `path_valid`/`seq_valid` → `useAsyncComputed`
+    (new `lib/util/vue.ts` helper, token-guarded against stale
+    resolutions). `lib/store.ts` `process.nextTick` → `queueMicrotask`.
+  - **Planner ✓ checks:** flip present on both windows; renderer-reachable
+    tree grep-clean of `node:fs`/`node:os`/`node:path`/`ipcRenderer`
+    (remaining hits are orchestrator-side session files, correct); the
+    retired `get-data-path` handler has zero remaining callers;
+    `useAsyncComputed` reads its reactive deps synchronously (tracking
+    works); `lib/util/fs.ts` is now main-process-only with exactly one
+    importer (`main.ts`). **Not GUI-verified** — the click-through is the
+    playbook pre-flight's job.
+- **T6 — AsyncTask-backed tracker updates (synced-capture thread, §4
+  escape hatch pulled forward). ✅ Landed 2026-07-05; ✓ planner-verified.**
+  `core/Tracker.KCF.updateAsync(frame)` via the existing `AsyncTask`
+  helper; sync `update()` untouched (tracking-single migrates only after
+  measurement). Multi-fovea updates M trackers concurrently
+  (`Promise.all`), drops overlapping center ticks (`updating` flag), and
+  generation tokens ignore late completions after `dispose()`. Harness
+  covers the dispose race. Per-update cost: one full synchronous
+  `cv::Mat` copy at argument conversion, before the worker starts.
+  - **Planner ✓ checks (the two claims that had to be true):**
+    `convert<cv::Mat>` (`core/src/OpenCV.cpp:259`) does a real
+    `memcpy` into a fresh Mat — the worker thread never touches
+    JS-owned/reused buffers, so copy-before-await holds natively; the
+    lambda captures the refcounted `cv::Ptr<TrackerKCF>` by value, so a
+    JS-side `release()` mid-flight can't free the native tracker under
+    the worker. Full record: synced-capture.md §9.10.
+  - **But the lifecycle-safety claim was over-scoped** — it covered
+    `updateAsync` only; `syncStreams()` had the same late-completion bug
+    for stream creation. **Fixed in Round 3 T8.**
+
+**Round 2 gates (planner re-run 2026-07-05):** vitest 55/55; `vue-tsc` 0;
+`vite build` fully green; renderer zero-core, orchestrator zero-Vue
+(169.4 kB); `core make build` clean, all runtimes.
+
+### Round 3 (landed 2026-07-05 — coder-verified; planner review pending)
+
+Same round rules as always (scope frozen, discoveries logged not fixed,
+gates green per item, logs ≤ 15 lines, tree stays uncommitted until the
+user commits). Rationale for a Round 3 before checkpoint #3: V5 is a
+known 🔴 in uncommitted code — fix it before it enters history.
+
+- **T8 — V5 fixed:** `MultiFoveaRuntime.syncStreams()` now uses a
+  generation guard, closes late/stale handles after awaited `createStream`,
+  and dirty-reruns if targets change mid-sync. Harness covers dispose
+  while `createStream` is pending and target mutation during in-flight sync.
+- **T9 — V6 fixed:** store-hub reads/writes/updates/clears are serialized
+  per document, and broadcasts carry the exact committed value from the
+  completed operation. Harness covers broadcast ordering and concurrent
+  first-load updates.
+- **T7 landed:** fake-timer suites cover `system` loop-lag telemetry,
+  `system.perfSnapshot` shape/reset behavior, and 2 Hz controller serial/
+  stream telemetry cadence.
+- **T10 landed:** frame stats now include counter windows/rates plus
+  producer `convertMs`; renderer snapshots add IPC latency and display-delay
+  rolling timing. Additive shape only.
+
+**PB1 mitigation decision (user, 2026-07-05): shm frame path pulled
+forward — see Stage 4 below.** The downscale/fps-cap lever is deferred,
+not rejected: post-shm it only affects the renderer-side display copy,
+so revisit after Stage 4's PB2 measurement. Per-topic interest
+propagation down to registry sinks remains uncontroversial-but-unmoving
+for the measured case; fold it in whenever a round next touches the
+registry sink path (natural fit: Stage 4 SHM3).
+
+**After Round 3 the remaining non-SHM tree is hardware-gated.** Held:
+V7 (needs a UI/hardware round), formal playbook, bench/flash.
+
+### STAGE 4 — shm frame path (user greenlit 2026-07-05; supersedes §7.2 item 5's gate)
+
+**Why now:** PB1 (§6) showed preview transport saturating the
+orchestrator loop (47 ms mean lag — direct control-loop jitter) with a
+single window; the design is fully settled (§4 zero-copy row: triple
+buffer, minimal reader addon, ping-pong pool); the user waived the
+remaining gate. T10 (Round 3) still lands first/parallel so before/after
+is measurable, not eyeballed. Same round discipline as every stage:
+scope frozen to the SHM-items, discoveries logged not fixed, gates green
+per item, compact logs ≤ 15 lines, tree uncommitted until the user
+commits.
+
+**Round A (implementation spec — landed 2026-07-05):**
+
+- **SHM-1 — `core` ShmRing writer + layout.** `core/include/ShmRing.h`
+  is the single layout authority: segment header {magic, layout version,
+  generation, shape (w/h/channels), slot count = 3, slot stride} +
+  per-slot {seq (seqlock: odd = writing), meta: tCapture, convertMs,
+  deviceTimestamp, systemTimestamp}. Writer API in `core.node`:
+  create/regenerate (name `/fv.<serial>.<gen>`, ≤ 31 chars — macOS
+  PSHMNAMLEN; slots 16 KB-page-aligned; created lazily on first shape,
+  no `ftruncate` resize ever), `writeSlot()` → Mat over the next
+  non-published slot so `frame.view("BGRA8", slotMat)` converts
+  *directly into shared memory*, `publish(meta)` (seq bump + header
+  store), `unlinkAll()` + a `/fv.*` sweep helper. Reader API (same
+  header, used by SHM-2 and by tests): open `O_RDONLY`, pick latest
+  stable slot, `readInto(ptr)` with seq check before/after + bounded
+  retry, stale-generation detection. DoD: `core make build` both
+  runtimes; harness (same-process, two mmaps): roundtrip, tearing under
+  a hammering writer thread (retries observed, no corrupt reads),
+  generation swap while a reader holds the old mapping (stale-but-safe,
+  then reopen), sweep removes orphans.
+- **SHM-2 — reader addon (separate target, NOT `core.node`).** One .cpp
+  + `ShmRing.h`, NAPI surface: `open(name)`, `latestSeq(h)`,
+  `readInto(h, buf, lastSeq)` → `{seq, gen, meta} | null` (null = no
+  newer frame), `close(h)`. Built for the Electron runtime via
+  `make.cjs` as a second target. **DoD includes `otool -L`: system
+  libraries only — no OpenCV/Aravis/GLib** (this is what keeps the
+  renderer process core-free at the *process* level, not just the
+  bundle level). Harness: core writer + this reader in one Node
+  process.
+
+**Round B (implementation spec — landed 2026-07-05 behind
+`FOVEA_SHM_STREAMS=1`):**
+
+- **SHM-3 — registry integration behind a per-serial flag (default
+  OFF = byte-identical to today).** Flag on: `s.view` is the Mat over
+  the active write slot; publish = slot meta store + a **descriptor**
+  fanned through the existing path — `FramePayload` gains an `shm`
+  variant `{seg, gen, seq, shape, channels, meta}` with no `data`
+  field, so `finterest`, per-topic seq, stats, and the whole tested
+  Channel machinery carry over with the bytes out-of-band. Reconfigure
+  → generation bump announced via the descriptor itself + session
+  state; boot-time `/fv.*` sweep wired into orchestrator startup. Fold
+  in the PB1 interest-propagation nicety while touching the sink path.
+- **SHM-4 — preload/bridge reader.** `sandbox: false` on the main
+  window only — same two-phase discipline as T5: one-line flip,
+  playbook-documented revert; profiler window stays sandboxed. Addon
+  loads in preload; handoff is the **ping-pong transfer pool** (§4 —
+  contextBridge clones TypedArray args, so the pool transfers over a
+  dedicated MessagePort using the T5-proven `window.postMessage`
+  pattern; fallback bridge-clone must be logged if transfer misbehaves).
+- **SHM-5 — client/StreamView integration.** `client.ts` `frame()`
+  resolves `shm`-variant payloads through the pool on its existing rAF
+  tick (latest descriptor wins — coalescing comes free); non-shm
+  payloads unchanged (session-computed frames — tracking's fovea/
+  processed views — stay on the clone path this stage). OSD gains shm
+  columns: read retries, stale-gen reads, generation. Renderer bundle
+  stays zero-core (descriptor types are type-only).
+
+**Coder progress 2026-07-05 (iteration 1):** SHM-1/2 native substrate
+landed: `core.Shm.Writer`, versioned triple-buffer layout
+(`core/include/ShmRing.h`), `Frame.view("BGRA8", ShmSlot)` direct async
+write path, and standalone `fovea_shm_reader.node`; `core make build`
+passes for Node + Electron, and `otool -L` on the reader shows only
+libc++/libSystem (no OpenCV/Aravis/GLib). SHM-3/4/5 first integration
+also landed behind default-off `FOVEA_SHM_STREAMS=1`: registry uses SHM
+only for transport-only camera previews (no `onView` taps), `FramePayload`
+can carry an out-of-band descriptor, the main window selects a SHM preload
+with `sandbox: false`, and `client.ts` materializes descriptors on its rAF
+path. **Deviation logged:** the preload uses the approved bridge-returned
+ArrayBuffer fallback and logs it once; the ping-pong transfer pool landed
+in iteration 2 below. Gates run: app `vue-tsc`, vitest 56/56, `vite build`,
+native SHM smoke test (outside sandbox because `shm_open` is blocked
+inside it).
+
+**Coder progress 2026-07-05 (iteration 2):** ping-pong transfer pool
+landed in `client.ts`/`preload-shm.ts`: the main world posts a reusable
+ArrayBuffer to the SHM preload, receives it back transferred, and falls
+back to the bridge-returned ArrayBuffer path with a one-time log if needed.
+The native smoke script now covers roundtrip, generation swap, and a
+worker hammer (`core/test/08-shm-ring.ts`); it passes outside the sandbox.
+Reader `otool -L` still shows only libc++/libSystem. Renderer/main/preload
+bundle grep remains zero-core; orchestrator bundle grep remains zero-Vue.
+Final coder gates: app `vue-tsc --noEmit`, app Vitest **65/65**, app
+`vite build`, `core make build`, and `core/test/08-shm-ring.ts` all pass.
+
+**Stage 4 design notes after iteration 2:** `/fv.*` orphan sweeping is
+not portable on macOS because POSIX shm names are not enumerable; the
+writer therefore uses deterministic short names and unlinks its own known
+segments on generation/close. Registry inspection found no current session
+that needs a separate SHM preview path while also consuming `onView`:
+preview-only modules use `onFrame`, processing modules use `onView` and
+publish derived frames on the clone path, and calibrate-intrinsic switches
+between modes rather than needing both simultaneously.
+
+**Stage 4 remaining after iteration 2:** run Round C PB2 with display +
+cameras; planner review; hardware/playbook verification. Downscale/fps-cap
+decision remains deferred until PB2.
+
+**Round C (verification — needs display + cameras, NOT the mirror
+rig):** re-run the PB1 scenario with the flag on, capture an
+idle/preview T10 snapshot pair, file as **PB2**. Targets: orchestrator
+loop lag **< 5 ms mean** under 3-camera preview; tearing retries ≈ 0;
+open a second window on the same serials and confirm ≈ 0 marginal
+producer cost. Then decide the downscale lever (renderer-side only by
+then) and revisit §7.2 item 5's residuals.
+
+**Out of scope for Stage 4 (explicit):** raw/capture/12-bit frames,
+session-computed frame topics (adopt later per-topic if PB2 warrants),
+any change to the control-plane transport (§4: REST rejected).
 
 ### 7.2 Deferred queue (once hardware returns)
 
@@ -429,12 +843,27 @@ prepared in advance; run it instead of improvising the session.
    it was waiting to ride along with has landed (S1a); do it with
    whichever item next touches the registry.
 4. **Multi-window/projector** (C10 will already be in from §7.1).
-5. **Zero-copy shared-memory ring** — gated on the §7.3 baseline showing
-   the ~2 copies/frame/client matter + a real multi-window consumer.
-6. **Tighten the surface** — `contextIsolation` + security hardening;
-   unblocked once Stage 2 S1 lands (calibrate-*/disparity migrations are
-   now S1a/S1b in the active queue; multi-window brokering gets its first
-   exercise early via the S4 profiler window).
+5. **Shared-memory frame path — ✅ promoted to STAGE 4 (§7.1), user
+   decision 2026-07-05; no longer hardware-gated** (Rounds A/B are
+   hardware-free; Round C needs display + cameras only, not the mirror
+   rig). Gate history: was baseline-gated; PB1 met the traffic half
+   (~0.79 GB/s clone, 47 ms loop lag, single window) and the user waived
+   the remainder. Design fully settled in the §4 zero-copy row —
+   triple-buffered orchestrator-owned segment per serial, exact-size +
+   generation on shape change, single-writer/multi-reader anonymous
+   `O_RDONLY` mappings (zero marginal producer cost per window — what
+   makes objective #2's projector pair affordable), minimal preload
+   reader addon behind `sandbox: false` on frame-reading windows only,
+   ping-pong transfer pool handoff.
+6. **Tighten the surface** — ✅ `contextIsolation` landed (T5, 2026-07-05;
+   flip verified in the playbook pre-flight when the rig returns).
+   Note: with `nodeIntegration: false` and no explicit `sandbox` key,
+   Electron ≥ 20 sandboxes the preload *by default* — today's preload
+   (ipcRenderer/contextBridge only) is fine with that, but the shm
+   reader addon (item 5) will require an explicit `sandbox: false` on
+   the windows that read frames. That is a deliberate, documented step
+   back from the default, decided with the shm design (§4 zero-copy
+   row).
 
 ### 7.3 Perf substrate spec (prep for verification)
 
@@ -506,10 +935,12 @@ wire changes.
    resolve its own path. Pick a different chord if Ctrl+Shift+S collides on
    your platform (same caveat as V2's Ctrl+Shift+I note) — not verified
    against any real OS/browser-chrome shortcut table.
-5. **Baseline scenario (doc, not code) — still open.** Not written yet;
-   do this alongside item 1 of §7.2's checklist when that GUI session
-   actually happens (needs real hardware to produce a real baseline, not
-   hardware-free work).
+5. **Baseline scenario (doc, not code) — partially superseded by PB1
+   (§6).** An informal 2026-07-05 session produced the first archived
+   snapshot and its analysis; the *scripted, repeatable* scenario is
+   still unwritten — write it for the formal playbook run so
+   round-over-round numbers compare like-for-like (same modules, same
+   dwell times, idle-vs-preview pair per T10's window bookkeeping).
 
 ## 8. Coordination with parallel threads
 

@@ -30,3 +30,4 @@ compile_commands.json
 
 # Test logs
 *.log
+.worker-logs/

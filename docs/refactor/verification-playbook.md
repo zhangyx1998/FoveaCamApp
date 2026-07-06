@@ -25,6 +25,28 @@
       → resolve-on-ACK). v2 flashing happens only at Stage F.
 - [ ] Launch `npm run app` with a terminal visible (orchestrator stderr) and
       DevTools open (diagnostics forward to renderer console).
+- [ ] **T5 (`contextIsolation`) has flipped (coder, 2026-07-05) — first
+      click-through must cover the paths the isolation rework touched,
+      before anything else:** boot to the main menu (preload didn't throw),
+      orchestrator port handshake (a module actually shows frames, not just
+      "connecting"), profiler window open (`openProfilerWindow` IPC), a
+      store read/write (calibrate-* or manage-cameras persisting a value),
+      and opening `SaveControls`/`RecordControls` once (the save-path
+      default now resolves async over IPC — confirm the directory field
+      isn't stuck empty). If any fail, revert the one-line flip in
+      `electron/main.ts` (`nodeIntegration: true, contextIsolation: false`
+      on both `BrowserWindow`s) and continue the playbook under the old
+      mode, filing the finding in `orchestrator.md` §6.
+      **Partial evidence already in hand (informal session, 2026-07-05,
+      PB1):** boot, port handshake, live frames, a store write, and
+      snapshot export all worked post-flip — still run the full list
+      (profiler window and SaveControls/RecordControls save-path field
+      remain unexercised).
+      **Also during this pre-flight:** take an idle-then-preview
+      `perfSnapshot` pair early — PB1 (orchestrator.md §6) found 47 ms
+      mean orchestrator loop lag under 3-camera preview load with one
+      window; watch control-loop jitter in every later stage with
+      previews open.
 - [ ] If S4 (profiler window) has landed: open it now, keep it on a second
       display for every stage. If S5 spans landed: note orchestrator boot
       timings on first launch — the first data of the day.
