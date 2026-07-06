@@ -1,0 +1,270 @@
+// ------------------------------------------------------
+// Copyright (c) 2026 Yuxuan Zhang, dev@z-yx.cc
+// This source code is licensed under the MIT license.
+// You may find the full license in project root directory.
+// -------------------------------------------------------
+//
+// Main-process window state machine (docs/refactor/multi-window.md §3):
+// registry of open windows by class, the welcome rule, app exclusivity with
+// drain-aware switching, and manifest collection for the dev restart flow.
+// Subsumes the old ad-hoc `openProfilerWindow` handler.
+//
+// Deliberately Electron-free: every platform effect goes through injected
+// deps (`spawn` creates the real BrowserWindow in main.ts; `drainSessions`
+// asks the orchestrator to idle every camera-owning session and waits for
+// settlement; `notifyRefusal` surfaces a busy refusal). This keeps the
+// state machine unit-testable with fakes (`test/window-manager.test.ts`).
+//
+// Adopted defaults (multi-window.md §5, user-vetoable):
+//   1. Welcome CLOSES on app open (respawns when the last app window closes).
+//   2. Opening app B while A is open = SWITCH: drain A's session first, then
+//      spawn B — "closed" means session-idle-drained, not window-destroyed.
+//      Refuse (keeping A) only if A is mid-capture/recording.
+//
+// Drain ordering note: the drain happens BEFORE the old windows close — the
+// busy check must be able to refuse while A is still intact, and a drained
+// session makes the subsequent window close's own unsubscribe a no-op. The
+// welcome window is camera-holding (live previews, §4), so welcome→app rides
+// the exact same path as app→app.
+
+import { entryFor, type ProjectionParams, type WindowClass } from "@lib/windows";
+import type { ManifestWindow, WindowBounds, WindowManifest } from "./window-manifest.js";
+
+export interface WindowDescriptor {
+  class: WindowClass;
+  appId?: string;
+  /** Entry path relative to the renderer root (dev URL / dist file). */
+  entry: string;
+  /** URL query string (starts with "?") carrying state-in-URL params
+   *  (multi-window.md req. 7) — appended to the dev-server URL or passed as
+   *  `loadFile`'s `search` in a packaged build. */
+  search?: string;
+  /** Restore geometry (from a manifest); spawn uses defaults when absent. */
+  bounds?: WindowBounds;
+  /** Full landing URL to restore (overrides `entry` when given — carries the
+   *  state params, multi-window.md req. 7). */
+  url?: string;
+}
+
+/** The window handle surface the manager needs — main.ts adapts a real
+ *  BrowserWindow onto this; tests use fakes. */
+export interface ManagedWindow {
+  readonly class: WindowClass;
+  readonly appId?: string;
+  focus(): void;
+  close(): void;
+  isDestroyed(): boolean;
+  getURL(): string;
+  getBounds(): WindowBounds;
+}
+
+export interface DrainResult {
+  ok: boolean;
+  reason?: string;
+}
+
+export interface WindowManagerDeps {
+  spawn(desc: WindowDescriptor): ManagedWindow;
+  /** Idle every camera-owning session orchestrator-side and resolve once the
+   *  releases settle; `{ok: false}` = refused (a session is mid-capture/
+   *  recording) and NOTHING was drained. */
+  drainSessions(): Promise<DrainResult>;
+  /** Surface a switch refusal to the user (dialog in main.ts). */
+  notifyRefusal(reason: string): void;
+}
+
+export class WindowManager {
+  private readonly windows = new Set<ManagedWindow>();
+  // Serializes switches: a second openApp while one is mid-drain queues
+  // behind it instead of racing the drain/spawn sequence.
+  private switching: Promise<void> = Promise.resolve();
+  private inSwitch = false;
+  private quitting = false;
+
+  constructor(private readonly deps: WindowManagerDeps) {}
+
+  /** All open (non-destroyed) windows, pruning any that died silently. */
+  open(): ManagedWindow[] {
+    for (const w of [...this.windows])
+      if (w.isDestroyed()) this.windows.delete(w);
+    return [...this.windows];
+  }
+
+  private byClass(cls: WindowClass): ManagedWindow[] {
+    return this.open().filter((w) => w.class === cls);
+  }
+
+  appWindow(): ManagedWindow | null {
+    return this.byClass("app")[0] ?? null;
+  }
+
+  /** Main.ts must call this from the BrowserWindow "closed" event. */
+  onWindowClosed(win: ManagedWindow): void {
+    this.windows.delete(win);
+    // Welcome rule: whenever zero app windows are open, the welcome window
+    // comes back — but only when an APP window closing got us there (closing
+    // welcome itself must not respawn it under the user's cursor), and not
+    // mid-switch (the gap between "A closed" and "B spawned" is not "no app
+    // open") or during quit.
+    if (win.class !== "app") return;
+    if (this.quitting || this.inSwitch) return;
+    if (this.appWindow() === null) this.ensureWelcome();
+  }
+
+  /** App is quitting — stop enforcing the welcome rule. */
+  markQuitting(): void {
+    this.quitting = true;
+  }
+
+  private track(win: ManagedWindow): ManagedWindow {
+    this.windows.add(win);
+    return win;
+  }
+
+  ensureWelcome(opts: { bounds?: WindowBounds; url?: string } = {}): ManagedWindow {
+    const existing = this.byClass("welcome")[0];
+    if (existing) {
+      existing.focus();
+      return existing;
+    }
+    return this.track(
+      this.deps.spawn({ class: "welcome", entry: entryFor("welcome"), ...opts }),
+    );
+  }
+
+  openProfiler(opts: { bounds?: WindowBounds; url?: string } = {}): ManagedWindow {
+    const existing = this.byClass("profiler")[0];
+    if (existing) {
+      existing.focus();
+      return existing;
+    }
+    return this.track(
+      this.deps.spawn({ class: "profiler", entry: entryFor("profiler"), ...opts }),
+    );
+  }
+
+  /**
+   * Open a projection window for one stream (multi-window.md req. 4).
+   * 0..N instances — never a singleton, never exclusive, never counted for
+   * the welcome rule, never drained (passive subscriber), and deliberately
+   * left open when its source app closes (§5.3 adopted default: frozen last
+   * frame; the stream resumes if the topic comes back).
+   */
+  openProjection(
+    params: ProjectionParams,
+    opts: { bounds?: WindowBounds; url?: string } = {},
+  ): ManagedWindow {
+    const search =
+      "?" +
+      new URLSearchParams({ session: params.session, frame: params.frame }).toString();
+    return this.track(
+      this.deps.spawn({
+        class: "projection",
+        entry: entryFor("projection"),
+        search,
+        ...opts,
+      }),
+    );
+  }
+
+  /**
+   * Open (or switch to) an app window — the exclusivity + drain path.
+   * Resolves once the switch completed (or was refused/skipped).
+   */
+  openApp(appId: string, opts: { bounds?: WindowBounds; url?: string } = {}): Promise<void> {
+    const run = this.switching.then(() => this.openAppInner(appId, opts));
+    // Keep the chain alive past failures so one bad switch doesn't wedge all
+    // future ones.
+    this.switching = run.catch(() => {});
+    return run;
+  }
+
+  private async openAppInner(
+    appId: string,
+    opts: { bounds?: WindowBounds; url?: string },
+  ): Promise<void> {
+    const current = this.appWindow();
+    if (current?.appId === appId) {
+      current.focus();
+      return;
+    }
+    this.inSwitch = true;
+    try {
+      const holders = [...this.byClass("app"), ...this.byClass("welcome")];
+      if (holders.length > 0) {
+        // Drain first — the busy check must be able to refuse while the old
+        // app is still intact ("closed" = drained, not window-destroyed).
+        const drained = await this.deps.drainSessions();
+        if (!drained.ok) {
+          this.deps.notifyRefusal(drained.reason ?? "session busy");
+          current?.focus();
+          return;
+        }
+        for (const w of holders) if (!w.isDestroyed()) w.close();
+      }
+      this.track(
+        this.deps.spawn({
+          class: "app",
+          appId,
+          entry: entryFor("app", appId),
+          bounds: opts.bounds,
+          url: opts.url,
+        }),
+      );
+    } finally {
+      this.inSwitch = false;
+    }
+  }
+
+  /** Snapshot every open window for the dev restart manifest. */
+  collectManifest(): WindowManifest {
+    return {
+      version: 1,
+      windows: this.open().map((w) => ({
+        class: w.class,
+        appId: w.appId,
+        url: w.getURL(),
+        bounds: w.getBounds(),
+      })),
+    };
+  }
+
+  /** Spawn a restore plan (already validated by `planFromManifest`). */
+  async restore(plan: ManifestWindow[]): Promise<void> {
+    for (const w of plan) {
+      const opts = { bounds: w.bounds, url: w.url };
+      switch (w.class) {
+        case "welcome":
+          this.ensureWelcome(opts);
+          break;
+        case "profiler":
+          this.openProfiler(opts);
+          break;
+        case "app":
+          if (w.appId) await this.openApp(w.appId, opts);
+          break;
+        case "projection": {
+          // The stream address rides the persisted URL's query string —
+          // re-derive `search` so the spawn works even where the full URL
+          // isn't honored (entryURL only trusts same-origin dev URLs).
+          let search: string | undefined;
+          try {
+            search = w.url ? new URL(w.url).search || undefined : undefined;
+          } catch {
+            search = undefined;
+          }
+          this.track(
+            this.deps.spawn({
+              class: "projection",
+              entry: entryFor("projection"),
+              search,
+              bounds: w.bounds,
+              url: w.url,
+            }),
+          );
+          break;
+        }
+      }
+    }
+  }
+}

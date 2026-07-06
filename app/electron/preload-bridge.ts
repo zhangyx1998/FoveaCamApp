@@ -30,6 +30,17 @@ export function installBridge(extra: Partial<FoveaBridge> = {}) {
       ipcRenderer.on("orchestrator:down", () => cb());
     },
     openProfilerWindow: () => ipcRenderer.send("open-profiler-window"),
+    openAppWindow: (appId) => ipcRenderer.send("window:open-app", appId),
+    openProjectionWindow: (session, frame) =>
+      ipcRenderer.send("window:open-projection", session, frame),
+    onFullscreenChange: (cb) => {
+      ipcRenderer.on("window:fullscreen", (_e, fullscreen: boolean) =>
+        cb(fullscreen),
+      );
+    },
+    onRecorderTrigger: (cb) => {
+      ipcRenderer.on("recorder:trigger", () => cb());
+    },
     resolvePath: (...segments) => ipcRenderer.invoke("save-path:resolve", segments),
     resolveDefaultSavePath: (directory) =>
       ipcRenderer.invoke("save-path:resolve-default", directory),

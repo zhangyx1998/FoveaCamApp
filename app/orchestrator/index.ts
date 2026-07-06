@@ -19,7 +19,8 @@ import {
   createShmFrameTransport,
   type ShmApi,
 } from "./frame-transport.js";
-import { Hub, setFrameTransportFactory } from "./runtime.js";
+import { Hub, setFrameTransportFactory, type ServerSession } from "./runtime.js";
+import { releaseAll } from "./registry.js";
 import { onReport, onSpan, span } from "./diagnostics.js";
 import { systemSession } from "./sessions/system.js";
 import { controllerSession } from "./sessions/controller.js";
@@ -90,31 +91,63 @@ const calibrateDistortion = hub.add(calibrateDistortionSession());
 // --- calibrate-extrinsic: extrinsic calibration wizard (§7.1 S1b) --------
 const calibrateExtrinsic = hub.add(calibrateExtrinsicSession());
 
+// Camera-owning sessions — the force-idle set shared by `system.releaseCameras`
+// (§12.3 R4) and the multi-window drain path below.
+const cameraOwning: ServerSession<any>[] = [
+  liveview,
+  manageCameras,
+  tracking,
+  manualControl,
+  multiFovea,
+  disparityScope,
+  calibrateIntrinsic,
+  calibrateDrift,
+  calibrateDistortion,
+  calibrateExtrinsic,
+];
+
 // --- system: process-wide concerns + camera handoff for non-migrated modules
 hub.add(
   systemSession(
-    () => [
-      liveview,
-      manageCameras,
-      tracking,
-      manualControl,
-      multiFovea,
-      disparityScope,
-      calibrateIntrinsic,
-      calibrateDrift,
-      calibrateDistortion,
-      calibrateExtrinsic,
-    ],
+    () => cameraOwning,
     () => hub.frameStatsSnapshot(),
   ),
 );
 
 if (Number.isFinite(forkTs)) span("boot.sessionsRegistered", Date.now() - forkTs);
 
+// --- multi-window drain (docs/refactor/multi-window.md §3) -----------------
+// Main asks us to idle every camera-owning session before spawning the next
+// app window ("closed" = session-idle-drained, not window-destroyed). Refuse
+// — draining NOTHING — if any session reports busy (mid-capture/recording);
+// otherwise dispose all, await their async idles (V1-class drains), and let
+// `releaseAll()` backstop any handle outside session control (same order as
+// `system.releaseCameras`).
+async function drainForWindowSwitch(): Promise<{ ok: boolean; reason?: string }> {
+  for (const s of cameraOwning) {
+    const reason = s.busyReason();
+    if (reason) return { ok: false, reason: `${s.name}: ${reason}` };
+  }
+  for (const s of cameraOwning) s.dispose();
+  await Promise.all(cameraOwning.map((s) => s.drained()));
+  await releaseAll();
+  return { ok: true };
+}
+
 // --- accept renderer connections brokered by the main process ------------
 let firstPort = true;
 process.parentPort.on("message", (e) => {
-  if (firstPort) {
+  const data = e.data as { type?: string; id?: number } | null;
+  if (data?.type === "window:drain") {
+    const id = data.id ?? 0;
+    void drainForWindowSwitch()
+      .catch((err) => ({ ok: false, reason: String(err) }))
+      .then((result) =>
+        process.parentPort.postMessage({ type: "window:drain-result", id, ...result }),
+      );
+    return;
+  }
+  if (firstPort && e.ports.length > 0) {
     firstPort = false;
     if (Number.isFinite(forkTs)) span("boot.firstPortAttached", Date.now() - forkTs);
   }

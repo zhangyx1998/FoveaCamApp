@@ -6,19 +6,31 @@
 import {
   app,
   BrowserWindow,
+  dialog,
+  Menu,
   shell,
   ipcMain,
   utilityProcess,
   MessageChannelMain,
   type UtilityProcess,
 } from "electron";
-// import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { getIcon } from "./util";
 import { resolveDefaultSavePath, validateWritablePath } from "@lib/util/fs";
+import {
+  WindowManager,
+  type ManagedWindow,
+  type WindowDescriptor,
+} from "./window-manager";
+import {
+  consumeManifest,
+  planFromManifest,
+  saveManifest,
+} from "./window-manifest";
+import { appById } from "@lib/windows";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const DATA = app.getPath("userData");
@@ -26,12 +38,10 @@ const DATA = app.getPath("userData");
 // The built directory structure
 //
 // ├─┬ .dist/electron
-// │ ├─┬ main
-// │ │ └── index.js    > Electron-Main
-// │ └─┬ preload
-// │   └── index.mjs   > Preload-Scripts
+// │ ├── main.js / orchestrator.js / preload-*.cjs
 // ├─┬ .dist/renderer
-// │ └── index.html    > Electron-Renderer
+// │ └── windows/*.html      (multi-window entries, docs/refactor/multi-window.md;
+// │                          the legacy index.html was removed in round 2)
 //
 const DIST = path.join(DIR, "..");
 process.env.APP_ROOT = path.join(DIR, "../..");
@@ -39,6 +49,7 @@ process.env.APP_ROOT = path.join(DIR, "../..");
 export const MAIN_DIST = path.join(DIST, "electron");
 export const RENDERER_DIST = path.join(DIST, "renderer");
 export const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL;
+const IS_DEV = !!VITE_DEV_SERVER_URL;
 
 process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL
   ? path.join(process.env.APP_ROOT, "public")
@@ -52,80 +63,39 @@ if (!app.requestSingleInstanceLock()) {
   process.exit(0);
 }
 
-let win: BrowserWindow | null = null;
 const preload = {
   renderer: path.join(DIR, "preload-renderer.cjs"),
   profiler: path.join(DIR, "preload-profiler.cjs"),
 };
-const indexHtml = path.join(RENDERER_DIST, "index.html");
-
-async function createWindow() {
-  win = new BrowserWindow({
-    title: "FoveaCam Duo",
-    // icon: getIcon("icon.ico"),
-    // Don't show until ready
-    // show: false,
-    // Window customization
-    // frame: false,
-    titleBarStyle: "hidden",
-    titleBarOverlay: {
-      color: "#2f3241",
-      symbolColor: "#74b1be",
-      height: 40,
-    },
-    minHeight: 600,
-    minWidth: 800,
-    height: 900,
-    width: 1200,
-    backgroundColor: "black",
-    webPreferences: {
-      preload: preload.renderer,
-      // Flipped (docs/refactor/orchestrator.md §7.1 T5 phase b) — every
-      // renderer-side Node/Electron API access was moved behind
-      // `window.foveaBridge` (electron/preload.ts) first, so this is a
-      // one-line revert if something surfaces that phase (a) missed.
-      nodeIntegration: false,
-      contextIsolation: true,
-      // The canonical preview path uses a minimal SHM reader addon in preload.
-      sandbox: false,
-    },
-  });
-
-  // Show window when ready to avoid white/black flash
-  // win.once("ready-to-show", () => win.show());
-
-  win.maximize();
-
-  if (VITE_DEV_SERVER_URL) {
-    win.loadURL(VITE_DEV_SERVER_URL);
-    // Open devTool if the app is not packaged
-    // win.webContents.openDevTools();
-  } else {
-    win.loadFile(indexHtml);
-  }
-
-  // Make all links open with the browser, not with the application
-  win.webContents.setWindowOpenHandler(({ url }) => {
-    if (url.startsWith("https:")) shell.openExternal(url);
-    return { action: "deny" };
-  });
-  // win.webContents.on('will-navigate', (event, url) => { }) #344
-}
 
 function customizeApp() {
-  // if (process.platform === "darwin") {
-  //   const icon = getIcon("1024x1024.png");
-  //   app.dock.setIcon(icon);
-  // }
   app.setName("FoveaCam Duo");
+  // Application menu WITHOUT the reload role: plain Ctrl/Cmd-R is reserved
+  // for the recorder trigger in every mode (multi-window.md req. 6) — the
+  // default menu's View→Reload/Force-Reload accelerators would bypass the
+  // per-window `before-input-event` interception below.
+  const template: Electron.MenuItemConstructorOptions[] = [
+    ...(process.platform === "darwin"
+      ? [{ role: "appMenu" as const }]
+      : []),
+    { role: "editMenu" },
+    {
+      label: "View",
+      submenu: [
+        ...(IS_DEV ? [{ role: "toggleDevTools" as const }] : []),
+        { role: "togglefullscreen" as const },
+      ],
+    },
+    { role: "windowMenu" },
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
 // ---- Renderer bridge handlers (docs/refactor/orchestrator.md §7.1 T5) -----
 // The renderer's `SavePath`/`SaveControls`/`RecordControls` used to call
-// `node:path`/`node:fs`/`node:os` directly — reachable only under today's
-// `nodeIntegration: true` (the renderer polyfill for those needs a real
-// `require`). These mirror that logic here so `foveaBridge` (preload.ts) can
-// forward to it over IPC instead.
+// `node:path`/`node:fs`/`node:os` directly — reachable only under the old
+// `nodeIntegration: true`. These mirror that logic here so `foveaBridge`
+// (preload-bridge.ts) can forward to it over IPC instead.
 ipcMain.handle("save-path:resolve", (_e, segments: string[]) =>
   path.resolve(...segments),
 );
@@ -151,8 +121,15 @@ ipcMain.handle("perf-snapshot:write", async (_e, content: string) => {
 // A utilityProcess that owns `core` (cameras, vision, control, hardware I/O).
 // Its event loop is independent of any renderer's render loop. Main only brokers
 // a direct MessagePort between each renderer and the orchestrator; frames and
-// commands then flow point-to-point without routing through here.
+// commands then flow point-to-point without routing through here. The only
+// main↔orchestrator control traffic is the window-switch drain handshake below.
 let orchestrator: UtilityProcess | null = null;
+let drainSeq = 0;
+const pendingDrains = new Map<
+  number,
+  (result: { ok: boolean; reason?: string }) => void
+>();
+
 function startOrchestrator() {
   const entry = path.join(DIR, "orchestrator.js");
   orchestrator = utilityProcess.fork(entry, [], {
@@ -167,9 +144,21 @@ function startOrchestrator() {
       FOVEA_FORK_TS: String(Date.now()),
     },
   });
+  orchestrator.on("message", (data: unknown) => {
+    const msg = data as { type?: string; id?: number; ok?: boolean; reason?: string };
+    if (msg?.type !== "window:drain-result" || msg.id === undefined) return;
+    pendingDrains.get(msg.id)?.({ ok: !!msg.ok, reason: msg.reason });
+    pendingDrains.delete(msg.id);
+  });
   orchestrator.on("exit", (code) => {
     console.warn("Orchestrator exited:", code);
     orchestrator = null;
+    // A dead orchestrator has nothing left to drain — unblock any switch
+    // waiting on it rather than letting it time out.
+    for (const [id, resolve] of pendingDrains) {
+      resolve({ ok: true });
+      pendingDrains.delete(id);
+    }
     // Every renderer's pending orchestrator requests would otherwise hang
     // forever (the crashed process can't reply) — notify them to reject
     // in-flight calls. See docs/refactor/orchestrator.md §12.1 C5.
@@ -178,10 +167,30 @@ function startOrchestrator() {
   });
 }
 
+/** Ask the orchestrator to idle every camera-owning session and wait for the
+ *  releases to settle (multi-window.md §3 — "closed" = session-idle-drained).
+ *  `{ok: false}` = refused: a session is mid-capture/recording. */
+function drainSessions(): Promise<{ ok: boolean; reason?: string }> {
+  if (!orchestrator) return Promise.resolve({ ok: true }); // nothing to drain
+  const id = ++drainSeq;
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      // A wedged drain must not silently hand cameras to the next app —
+      // surface it as a refusal so the user can retry (or restart).
+      pendingDrains.delete(id);
+      resolve({ ok: false, reason: "session drain timed out (10s)" });
+    }, 10_000);
+    pendingDrains.set(id, (result) => {
+      clearTimeout(timer);
+      resolve(result);
+    });
+    orchestrator!.postMessage({ type: "window:drain", id });
+  });
+}
+
 // A renderer asks to connect; hand both ends of a fresh channel out. Already
-// generic per-`event.sender` — a second (profiler) window connecting just
-// gets its own port pair, no changes needed for multi-window (§7.1 S4, the
-// first real exercise of the multi-window brokering objective, §2).
+// generic per-`event.sender` — every window class connecting just gets its
+// own port pair (§7.1 S4 / multi-window per-window handshake).
 ipcMain.on("orchestrator:connect", (event) => {
   if (!orchestrator) startOrchestrator();
   const { port1, port2 } = new MessageChannelMain();
@@ -189,48 +198,227 @@ ipcMain.on("orchestrator:connect", (event) => {
   event.sender.postMessage("orchestrator:port", null, [port2]);
 });
 
-// ---- Profiler window (§7.1 S4) --------------------------------------------
-// A second, plain-chrome `BrowserWindow` loading the same renderer bundle
-// with `?profiler=1` — `src/index.ts` branches on that to mount
-// `ProfilerWindow.vue` instead of the main `App.vue`. Read-only over
-// existing telemetry; needs no cameras, so it's usable during the mechanical
-// downtime. Singleton — reopening focuses the existing one.
-let profilerWin: BrowserWindow | null = null;
-function openProfilerWindow() {
-  if (profilerWin) {
-    profilerWin.focus();
-    return;
-  }
-  profilerWin = new BrowserWindow({
-    title: "FoveaCam Duo — Profiler",
-    icon: getIcon("icon.ico"),
-    height: 800,
-    width: 720,
-    backgroundColor: "black",
-    webPreferences: {
-      preload: preload.profiler,
-      nodeIntegration: false,
-      contextIsolation: true,
-      sandbox: true,
-    },
-  });
-  if (VITE_DEV_SERVER_URL) {
-    profilerWin.loadURL(`${VITE_DEV_SERVER_URL}?profiler=1`);
-  } else {
-    profilerWin.loadFile(indexHtml, { search: "profiler=1" });
-  }
-  profilerWin.on("closed", () => {
-    profilerWin = null;
-  });
+// ---- Window manager (docs/refactor/multi-window.md §3) --------------------
+
+function entryURL(desc: WindowDescriptor): { url?: string; file?: string; search?: string } {
+  // A manifest-restored window lands on its persisted URL (carries the state
+  // params, req. 7) — but only in dev, where the dev-server origin matches.
+  if (desc.url && IS_DEV && desc.url.startsWith(VITE_DEV_SERVER_URL!))
+    return { url: desc.url };
+  // State-in-URL params (req. 7, e.g. a projection's `?session=…&frame=…`)
+  // ride the query string in both modes: appended to the dev URL, passed as
+  // `loadFile`'s `search` in a packaged build.
+  if (IS_DEV)
+    return { url: new URL(desc.entry + (desc.search ?? ""), VITE_DEV_SERVER_URL).href };
+  return { file: path.join(RENDERER_DIST, desc.entry), search: desc.search };
 }
 
-ipcMain.on("open-profiler-window", () => openProfilerWindow());
+function windowOptions(desc: WindowDescriptor): Electron.BrowserWindowConstructorOptions {
+  // Shared chrome (A-7 / multi-window.md §3): every window class uses the
+  // hidden titlebar + overlay so the one TitleBar component renders the
+  // chrome consistently, profiler included (it previously had native chrome).
+  const chrome: Electron.BrowserWindowConstructorOptions = {
+    titleBarStyle: "hidden",
+    titleBarOverlay: { color: "#2f3241", symbolColor: "#74b1be", height: 40 },
+    backgroundColor: "black",
+    icon: getIcon("icon.ico"),
+  };
+  switch (desc.class) {
+    case "welcome":
+      return {
+        ...chrome,
+        title: "FoveaCam Duo",
+        width: 1100,
+        height: 720,
+        minWidth: 800,
+        minHeight: 560,
+        webPreferences: {
+          // Welcome shows live annotated previews → needs the shm reader
+          // (multi-window.md §2), same preload as app windows.
+          preload: preload.renderer,
+          nodeIntegration: false,
+          contextIsolation: true,
+          sandbox: false,
+        },
+      };
+    case "app":
+      return {
+        ...chrome,
+        title: `FoveaCam Duo — ${appById(desc.appId!)?.title ?? desc.appId}`,
+        minHeight: 600,
+        minWidth: 800,
+        height: 900,
+        width: 1200,
+        webPreferences: {
+          preload: preload.renderer,
+          nodeIntegration: false,
+          contextIsolation: true,
+          // The canonical preview path uses a minimal SHM reader addon in
+          // the preload.
+          sandbox: false,
+        },
+      };
+    case "profiler":
+      return {
+        ...chrome,
+        title: "FoveaCam Duo — Profiler",
+        height: 800,
+        width: 720,
+        webPreferences: {
+          preload: preload.profiler,
+          nodeIntegration: false,
+          contextIsolation: true,
+          sandbox: true,
+        },
+      };
+    case "projection":
+      // Single-stream viewer (multi-window.md req. 4): windowed by default,
+      // resizable to fullscreen via the shared chrome. Needs the shm reader
+      // (canonical preview transport) → renderer preload, sandbox off.
+      return {
+        ...chrome,
+        title: "FoveaCam Duo — Projection",
+        width: 960,
+        height: 640,
+        minWidth: 320,
+        minHeight: 240,
+        webPreferences: {
+          preload: preload.renderer,
+          nodeIntegration: false,
+          contextIsolation: true,
+          sandbox: false,
+        },
+      };
+  }
+}
 
-app.whenReady().then(customizeApp).then(startOrchestrator).then(createWindow);
+function spawnWindow(desc: WindowDescriptor): ManagedWindow {
+  const win = new BrowserWindow({
+    ...windowOptions(desc),
+    ...(desc.bounds ?? {}),
+  });
+  // App windows maximize by default (legacy behavior) unless restoring bounds.
+  if (desc.class === "app" && !desc.bounds) win.maximize();
+
+  const target = entryURL(desc);
+  if (target.url) void win.loadURL(target.url);
+  else void win.loadFile(target.file!, target.search ? { search: target.search } : undefined);
+
+  // Make all links open with the browser, not with the application.
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (url.startsWith("https:")) shell.openExternal(url);
+    return { action: "deny" };
+  });
+  // Renderer-initiated reloads/navigation blocked in production (req. 6) —
+  // the packaged windows never navigate legitimately. Dev keeps navigation
+  // for the vite dev-server flows.
+  if (!IS_DEV)
+    win.webContents.on("will-navigate", (e) => e.preventDefault());
+
+  // A-7: forward fullscreen transitions so the shared chrome can adjust
+  // traffic-light inset + drag regions on BOTH edges (the old one-way bug).
+  win.on("enter-full-screen", () =>
+    win.webContents.send("window:fullscreen", true),
+  );
+  win.on("leave-full-screen", () =>
+    win.webContents.send("window:fullscreen", false),
+  );
+
+  // Reload accelerator policy (req. 6), enforced per-window:
+  //   plain Ctrl/Cmd-R  → recorder trigger stub, NEVER reload (all modes)
+  //   Ctrl/Cmd-Shift-R  → dev only: full restart (main + orchestrator) with
+  //                       window-layout restore; blocked in production.
+  win.webContents.on("before-input-event", (event, input) => {
+    if (input.type !== "keyDown") return;
+    const mod = process.platform === "darwin" ? input.meta : input.control;
+    if (!mod || input.key.toLowerCase() !== "r") return;
+    event.preventDefault();
+    if (input.shift) {
+      if (IS_DEV) void devRestart();
+    } else {
+      // No-op stub — real semantics land with the recorder stage
+      // (docs/refactor/recorder-container.md).
+      win.webContents.send("recorder:trigger");
+    }
+  });
+
+  const managed: ManagedWindow = {
+    class: desc.class,
+    appId: desc.appId,
+    focus: () => {
+      if (win.isMinimized()) win.restore();
+      win.focus();
+    },
+    close: () => win.close(),
+    isDestroyed: () => win.isDestroyed(),
+    getURL: () => win.webContents.getURL(),
+    getBounds: () => win.getBounds(),
+  };
+  win.on("closed", () => manager.onWindowClosed(managed));
+  return managed;
+}
+
+const manager = new WindowManager({
+  spawn: spawnWindow,
+  drainSessions,
+  notifyRefusal: (reason) => {
+    void dialog.showMessageBox({
+      type: "warning",
+      title: "Cannot switch apps",
+      message: "The current app is busy.",
+      detail: `${reason}. Finish or stop it, then try again.`,
+    });
+  },
+});
+
+ipcMain.on("window:open-app", (_e, appId: string) => {
+  if (typeof appId === "string" && appById(appId)) void manager.openApp(appId);
+});
+ipcMain.on("open-profiler-window", () => manager.openProfiler());
+ipcMain.on("window:open-projection", (_e, session: string, frame: string) => {
+  if (typeof session === "string" && session && typeof frame === "string" && frame)
+    manager.openProjection({ session, frame });
+});
+
+// ---- Dev restart (Ctrl/Cmd-Shift-R, multi-window.md req. 6 / §4) ----------
+// Persist the window manifest → relaunch the whole app (orchestrator dies
+// with main and boots fresh) → startup consumes the manifest below.
+let restarting = false;
+async function devRestart(): Promise<void> {
+  if (restarting) return;
+  restarting = true;
+  manager.markQuitting();
+  try {
+    await saveManifest(DATA, manager.collectManifest());
+  } catch (error) {
+    console.error("Failed to persist window manifest:", error);
+  }
+  app.relaunch();
+  // `app.exit()` skips `before-quit`, so release the orchestrator explicitly.
+  orchestrator?.kill();
+  orchestrator = null;
+  app.exit(0);
+}
+
+// ---- Startup ---------------------------------------------------------------
+
+async function createInitialWindows(): Promise<void> {
+  // Dev restart restore: consume (one-shot) the persisted manifest and
+  // restore that exact layout; anything else boots the default welcome.
+  const manifest = IS_DEV ? await consumeManifest(DATA) : null;
+  await manager.restore(planFromManifest(manifest));
+}
+
+app
+  .whenReady()
+  .then(customizeApp)
+  .then(startOrchestrator)
+  .then(createInitialWindows);
 
 // Terminate the orchestrator on quit (SIGTERM → its shutdown releases cameras,
 // serial, and the native module). Without this it can outlive the app.
 app.on("before-quit", () => {
+  manager.markQuitting();
   orchestrator?.kill();
   orchestrator = null;
 });
@@ -242,20 +430,14 @@ app.on("window-all-closed", () => {
 });
 
 app.on("second-instance", () => {
-  if (win) {
-    // Focus on the main window if the user tried to open another
-    if (win.isMinimized()) win.restore();
-    win.focus();
-  } else {
-    createWindow();
-  }
+  // Focus an existing window, or bring the welcome window back.
+  const open = manager.open();
+  if (open.length > 0) open[0].focus();
+  else manager.ensureWelcome();
 });
 
 app.on("activate", () => {
-  const allWindows = BrowserWindow.getAllWindows();
-  if (allWindows.length) {
-    allWindows[0].focus();
-  } else {
-    createWindow();
-  }
+  const open = manager.open();
+  if (open.length > 0) open[0].focus();
+  else manager.ensureWelcome();
 });

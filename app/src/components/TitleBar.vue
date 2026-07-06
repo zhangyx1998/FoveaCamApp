@@ -1,4 +1,9 @@
 <script setup lang="ts">
+// The shared window chrome (multi-window.md req. 9 / §3): used by every
+// window class (welcome / app / profiler). Fullscreen handling lives here —
+// main forwards each window's `enter/leave-full-screen` via
+// `foveaBridge.onFullscreenChange`, and the chrome adjusts the
+// traffic-light inset + drag regions on BOTH transitions.
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { overlay } from "./Overlay.vue";
 
@@ -29,6 +34,7 @@ function getRect(): Partial<DOMRect> {
 }
 
 const rect = ref<Partial<DOMRect>>(getRect());
+const fullscreen = ref(false);
 
 const height = computed(
   () => (rect.value?.height ?? 40) + (rect.value?.top ?? 0),
@@ -36,8 +42,16 @@ const height = computed(
 
 watch(height, (h) => emit("height", h), { immediate: true });
 
+// Traffic-light inset: zero while fullscreen (macOS hides the controls), the
+// overlay rect's left edge otherwise. Derived from `fullscreen` explicitly —
+// not just from the rect — so entering fullscreen can't leave a stale inset
+// even if the overlay geometry callback lags the transition.
+const leftInset = computed(() =>
+  fullscreen.value ? 0 : (rect.value.left ?? 0),
+);
+
 function style(): Record<string, string> {
-  const { height = 40, top = 0, left = 0 } = rect.value;
+  const { height = 40, top = 0 } = rect.value;
   return {
     height: height + top + "px",
     paddingTop: top + "px",
@@ -49,13 +63,43 @@ function onResize() {
   rect.value = getRect();
 }
 
-onMounted(() => window.addEventListener("resize", onResize));
-onUnmounted(() => window.removeEventListener("resize", onResize));
+// The old one-way bug: the rect was recomputed only on window `resize`, which
+// fires DURING the fullscreen transition — `getTitlebarAreaRect()` still
+// reports the transitional geometry at that point, and nothing recomputes
+// after it settles, so the chrome stayed broken after returning to windowed
+// mode. Fix: recompute on the overlay's own `geometrychange` event (the
+// authoritative signal) AND on both forwarded fullscreen transitions, with
+// settle-delayed retries for the macOS transition animation.
+function refreshSoon() {
+  onResize();
+  requestAnimationFrame(onResize);
+  setTimeout(onResize, 150);
+  setTimeout(onResize, 500); // macOS fullscreen animation settles late
+}
+
+onMounted(() => {
+  window.addEventListener("resize", onResize);
+  (navigator as any).windowControlsOverlay?.addEventListener?.(
+    "geometrychange",
+    onResize,
+  );
+  window.foveaBridge?.onFullscreenChange?.((fs: boolean) => {
+    fullscreen.value = fs;
+    refreshSoon();
+  });
+});
+onUnmounted(() => {
+  window.removeEventListener("resize", onResize);
+  (navigator as any).windowControlsOverlay?.removeEventListener?.(
+    "geometrychange",
+    onResize,
+  );
+});
 </script>
 
 <template>
   <div class="title-bar" :style="style()">
-    <div class="draggable" :style="{ width: rect.left + 'px' }"></div>
+    <div class="draggable" :style="{ width: leftInset + 'px' }"></div>
     <div class="title" @click="emit('back-to-home')">{{ title }}</div>
     <template v-if="subtitle" class="subtitle draggable">
       <div class="connector">-</div>

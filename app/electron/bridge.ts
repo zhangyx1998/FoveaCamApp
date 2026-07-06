@@ -21,6 +21,22 @@ export interface FoveaBridge {
   connectOrchestrator(): void;
   onOrchestratorDown(cb: () => void): void;
   openProfilerWindow(): void;
+  /** Open (or switch to) an app window by catalog id (`@lib/windows`) — the
+   *  main-process window manager enforces exclusivity + drain
+   *  (docs/refactor/multi-window.md §3). */
+  openAppWindow(appId: string): void;
+  /** Open a projection window (single-stream viewer, multi-window.md req. 4)
+   *  for one session's frame channel. 0..N instances; passive subscriber —
+   *  never activates the source session, never counted for the welcome
+   *  rule, survives its source app's close. */
+  openProjectionWindow(session: string, frame: string): void;
+  /** Fullscreen transitions for THIS window, forwarded by main from the
+   *  BrowserWindow enter/leave-full-screen events — the shared window chrome
+   *  adjusts traffic-light inset + drag regions on both edges (A-7). */
+  onFullscreenChange(cb: (fullscreen: boolean) => void): void;
+  /** Recorder trigger (plain Ctrl/Cmd-R, rebound from reload — multi-window.md
+   *  req. 6). Stub for now; real semantics land with the recorder stage. */
+  onRecorderTrigger(cb: () => void): void;
   /** Join path segments (replaces `node:path`'s `resolve`, which isn't
    *  reachable from an isolated renderer — the polyfill plugin needs a real
    *  `require`, which only exists under `nodeIntegration: true`). */

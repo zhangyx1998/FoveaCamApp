@@ -1,0 +1,25 @@
+// ------------------------------------------------------
+// Copyright (c) 2026 Yuxuan Zhang, dev@z-yx.cc
+// This source code is licensed under the MIT license.
+// You may find the full license in project root directory.
+// -------------------------------------------------------
+//
+// Icon re-exports shared by the window shells (welcome launcher + app
+// window chrome) — one import site instead of per-shell fontawesome lists.
+
+export {
+  faCamera,
+  faCompass,
+  faObjectGroup,
+  faObjectUngroup,
+} from "@fortawesome/free-regular-svg-icons";
+export {
+  faTelevision,
+  faGears,
+  faFlagCheckered,
+  faCameraRotate,
+  faCameraAlt,
+  faRulerCombined,
+  faCircleHalfStroke,
+  faChartLine,
+} from "@fortawesome/free-solid-svg-icons";

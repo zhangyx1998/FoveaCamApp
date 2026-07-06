@@ -80,6 +80,16 @@ const props = defineProps({
     required: false,
     default: false,
   },
+  // Multi-window.md req. 4: the expand button opens a projection window for
+  // this stream. The address (session + frame channel) is auto-derived from
+  // the payload's client-side `meta.source` stamp — no prop threading. Set
+  // false to keep the legacy element-fullscreen behavior (used by the
+  // projection window itself, so it doesn't offer projecting a projection).
+  projectable: {
+    type: Boolean,
+    required: false,
+    default: true,
+  },
 });
 
 const mat = ref<Mat | null>(null);
@@ -153,6 +163,12 @@ const overlay = computed(() => {
   result["Frame Rate"] = fps.toString();
   return result;
 });
+
+// Stream address for the projection button — from the client-side
+// `meta.source` stamp (`useSession().frame()` sets it on every delivery).
+const projection = computed(() =>
+  props.projectable ? (props.payload?.meta?.source ?? null) : null,
+);
 </script>
 
 <template>
@@ -166,6 +182,7 @@ const overlay = computed(() => {
     :width="width"
     :height="height"
     :capture="capture"
+    :projection="projection"
     @update:modelValue="(e) => emit('update:modelValue', e)"
     @mouse="(e) => emit('mouse', e)"
   >

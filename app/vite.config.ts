@@ -7,6 +7,7 @@ import electron from "vite-plugin-electron/simple";
 import electronPreload from "vite-plugin-electron";
 import root_package from "../package.json";
 import workspace_package from "./package.json";
+import { allEntries } from "./lib/windows";
 
 const external = Object.keys({
     ...(root_package.dependencies ?? {}),
@@ -27,6 +28,53 @@ const target = resolve(
     ".dist",
     "electron"
 );
+
+// HMR boundary (docs/refactor/multi-window.md req. 8 / §4). The danger class
+// is stateful singletons and shared wire code: `lib/orchestrator/**` (Channel,
+// the module-level `connect()` channel promise, shm read pool, protocol types
+// compiled into BOTH renderer and orchestrator bundles), `lib/store.ts`, and
+// module `contract.ts` files. Hot-swapping any of these in a renderer while
+// the orchestrator keeps running old code = wire mismatch, duplicated
+// subscriptions, leaked ports/pools. Vue HMR would happily re-execute them as
+// a dep of a self-accepting SFC — so any hot update whose invalidation chain
+// REACHES one of these modules (walked via the module graph's importers)
+// escalates to a full page reload instead. Plain SFC/UI edits keep
+// hot-reloading as before. (Protocol edits additionally rebuild the
+// orchestrator via vite-plugin-electron's watch → Electron restarts → the
+// reload converges with the dev restart+restore flow.)
+const isProtocolLayer = (file: string): boolean =>
+    /\/lib\/orchestrator\//.test(file) ||
+    /\/lib\/store\.ts$/.test(file) ||
+    /\/contract\.ts$/.test(file);
+
+const hmrBoundary = (): Plugin => ({
+    name: "fovea:hmr-boundary",
+    apply: "serve",
+    handleHotUpdate(ctx) {
+        // Walk the changed modules' importer closure: a protocol-layer module
+        // anywhere in the propagation path (including the changed file
+        // itself) means this update cannot be safely hot-applied.
+        const seen = new Set<unknown>();
+        const stack = [...ctx.modules];
+        let hit = isProtocolLayer(ctx.file) ? ctx.file : null;
+        while (!hit && stack.length > 0) {
+            const mod = stack.pop()!;
+            if (seen.has(mod)) continue;
+            seen.add(mod);
+            if (mod.file && isProtocolLayer(mod.file)) {
+                hit = mod.file;
+                break;
+            }
+            stack.push(...mod.importers);
+        }
+        if (!hit) return; // normal HMR
+        ctx.server.config.logger.info(
+            `[hmr-boundary] full reload — protocol-layer module in update path: ${hit}`
+        );
+        ctx.server.ws.send({ type: "full-reload" });
+        return []; // stop HMR propagation for this update
+    },
+});
 
 // https://vitejs.dev/config/
 export default defineConfig(({ command }) => {
@@ -50,6 +98,7 @@ export default defineConfig(({ command }) => {
 
     return {
         plugins: [
+            hmrBoundary(),
             vue(),
             electron({
                 main: {
@@ -134,6 +183,21 @@ export default defineConfig(({ command }) => {
         resolve: { alias },
         build: {
             outDir: resolve(PROJECT_ROOT, ".dist", "renderer"),
+            // Multi-entry renderer (docs/refactor/multi-window.md req. 2):
+            // one entry HTML per window class/app from the `@lib/windows`
+            // catalog. The legacy single-window index.html was removed in
+            // Stage 5 round 2 (A-10c) — every window is a windows/* entry.
+            // Renderer entries MAY share chunks — they're http/file-served
+            // pages; the V11 one-build-per-entry rule applies to preloads
+            // only.
+            rollupOptions: {
+                input: Object.fromEntries(
+                    Object.entries(allEntries()).map(([name, entry]) => [
+                        name,
+                        resolve(PROJECT_ROOT, entry),
+                    ])
+                ),
+            },
         },
     };
 });

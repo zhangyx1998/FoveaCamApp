@@ -447,6 +447,10 @@ export function useSession<C extends Contract>(
                   payload.meta.tReceive - payload.meta.tPublish,
                 );
             }
+            // Stamp the stream's address (session + frame channel) so display
+            // components can act on "this stream" (projection windows,
+            // multi-window.md req. 4) without prop-threading the names.
+            (payload.meta ??= {}).source = { session: name, frame: k };
             latest = payload;
             if (!scheduled) {
               scheduled = true;

@@ -70,6 +70,12 @@ export type FrameMeta = {
   /** ms when the rAF-coalesced ref actually updated (the frame that lost the
    *  coalescing race never gets this stamp). */
   tDisplay?: number;
+  /** Client-side stamp (set by `useSession().frame()` on receive): which
+   *  session + frame channel delivered this payload. Lets display components
+   *  address the stream — e.g. StreamView's "open projection window" button
+   *  (multi-window.md req. 4) — without prop-threading names through every
+   *  call site. Never crosses the wire. */
+  source?: { session: string; frame: string };
 };
 
 export type ShmFrameRef = {

@@ -14,11 +14,12 @@ You may find the full license in project root directory.
   the original.
 -->
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, ref, watchEffect } from "vue";
 import { ROLE, THEME } from "@lib/camera-config";
 import { useAppConfig } from "@lib/config";
 import { useSession } from "@lib/orchestrator/client";
 import { controller as controllerContract } from "@lib/orchestrator/contracts";
+import { readUrlParam, writeUrlState } from "@lib/url-state";
 import { degrees } from "@lib/util";
 import type { Point2d } from "core/Geometry";
 import { calibrateExtrinsic } from "./contract";
@@ -39,6 +40,18 @@ const app_config = await useAppConfig();
 const session = useSession(calibrateExtrinsic, "calibrate-extrinsic");
 const ctrl = useSession(controllerContract, "controller");
 const { state, telemetry } = session;
+
+// State-in-URL (multi-window.md req. 7): the wizard step is addressable —
+// `?step=FIN` seeds the session once on load (the session/scratch store
+// stays authoritative; the URL is just the address of that state), then the
+// URL tracks every step change via history.replaceState, so a dev restart /
+// manifest restore lands back on the same screen.
+{
+  const seed = readUrlParam("step");
+  if (seed === "CAL" || seed === "FIN" || seed === "PRV")
+    void session.call("setStep", { step: seed });
+}
+watchEffect(() => writeUrlState({ step: state.step }));
 
 const frameL = session.frame("L");
 const frameC = session.frame("C");

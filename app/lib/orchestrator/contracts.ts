@@ -31,6 +31,25 @@ export type Stat = { mean: number; max: number };
  *  is orchestrator-only. */
 export type Span = { name: string; ms: number; meta?: Record<string, unknown>; t: number };
 
+/** One workload counter reading (docs/refactor/workload-metering.md §2).
+ *  Mirrors `orchestrator/metering.ts`'s snapshot shapes; duplicated here (not
+ *  imported) for the same reason as `Span` — `contracts.ts` is the
+ *  renderer-safe boundary and `metering.ts` is orchestrator-only. */
+export type WorkloadCounterSnapshot = { count: number; ratePerSec: number };
+
+/** One workload meter's aggregated document — `system.perfSnapshot`'s
+ *  `workloads` values, keyed by workload name. */
+export type WorkloadSnapshot = {
+  name: string;
+  window: { startedAt: number; snapshotAt: number; uptimeMs: number };
+  /** Busy-time fraction of `window.uptimeMs`, clamped to [0, 1]. */
+  utilization: number;
+  busyMs: number;
+  inputs: Record<string, WorkloadCounterSnapshot>;
+  outputs: Record<string, WorkloadCounterSnapshot>;
+  drops: { total: number; ratePerSec: number; byReason: Record<string, number> };
+};
+
 /** One `system.perfSnapshot` document — the artifact the zero-copy decision
  *  and round-over-round regression checks consume (§7.3 item 4). */
 export type PerfSnapshot = {
@@ -40,6 +59,9 @@ export type PerfSnapshot = {
   };
   /** Per-topic frame counters/timing, summed across every connected channel. */
   frames: Record<string, FrameTopicStats>;
+  /** Per-name workload meters (registry loop, frame-worker gates, recorder
+   *  workers — docs/refactor/workload-metering.md). */
+  workloads: Record<string, WorkloadSnapshot>;
   storeHub: { writes: number; updates: number; clears: number };
   /** Ring-buffer snapshot of recent boot/activation/connect timings (§7.1 S5). */
   spans: Span[];

@@ -81,7 +81,13 @@ export class ServerSession<C extends Contract> {
   private readonly stateWatchers = new Set<(key: string, value: any) => void>();
   private frameTransport: FrameTransport | null = null;
   private activateFn?: () => void;
-  private idleFn?: () => void;
+  private idleFn?: () => void | Promise<void>;
+  private busyFn?: () => string | null;
+  // Latest idle settlement (multi-window drain, docs/refactor/
+  // multi-window.md §3): an async `idle` (e.g. manual-control's
+  // capture/recording drain) returns a promise; `drained()` awaits it so
+  // "closed" can mean session-idle-drained, not merely window-destroyed.
+  private lastIdle: Promise<void> = Promise.resolve();
 
   constructor(
     readonly name: string,
@@ -112,10 +118,36 @@ export class ServerSession<C extends Contract> {
     return this;
   }
 
-  /** Called when the last renderer unsubscribes (release session resources). */
-  onIdle(fn: () => void): this {
+  /** Called when the last renderer unsubscribes (release session resources).
+   *  May return a promise — `drained()` awaits the latest one. */
+  onIdle(fn: () => void | Promise<void>): this {
     this.idleFn = fn;
     return this;
+  }
+
+  /** Register the busy probe (drain refusal) — see `busyReason()`. */
+  onBusyCheck(fn: () => string | null): this {
+    this.busyFn = fn;
+    return this;
+  }
+
+  /** Non-null = this session must not be force-drained right now (e.g.
+   *  mid-capture/recording); the string is the user-facing reason. */
+  busyReason(): string | null {
+    return this.busyFn?.() ?? null;
+  }
+
+  /** Resolves once the most recent idle (if any) has fully settled — camera
+   *  leases released, capture/recording drained. Resolved when never idled. */
+  drained(): Promise<void> {
+    return this.lastIdle;
+  }
+
+  private runIdle(): void {
+    const r = this.idleFn?.();
+    // Swallow (but log) idle failures — a rejected drain must not wedge
+    // `drained()` awaiters or the switch path.
+    if (r) this.lastIdle = Promise.resolve(r).catch((e) => report(this.name, `idle: ${e}`));
   }
 
   setState<K extends keyof StateOf<C>>(key: K, value: StateOf<C>[K]): void {
@@ -219,7 +251,7 @@ export class ServerSession<C extends Contract> {
     const wasActive = this.activeSubscribers.delete(ch);
     this.subscribers.delete(ch);
     if (wasActive && this.activeSubscribers.size === 0) {
-      this.idleFn?.();
+      this.runIdle();
       this.clearFrameCache(); // V4: bound memory — stale previews from this activation are gone anyway
     }
   }
@@ -246,7 +278,7 @@ export class ServerSession<C extends Contract> {
     const wasActive = this.activeSubscribers.size > 0;
     this.subscribers.clear();
     this.activeSubscribers.clear();
-    if (wasActive) this.idleFn?.();
+    if (wasActive) this.runIdle();
     this.clearFrameCache();
   }
 }
@@ -271,8 +303,13 @@ function parseSubscriptionPayload(
 export interface SessionDefinition<C extends Contract> {
   /** First renderer subscribed — (re)start session-owned resources. */
   activate?(): void;
-  /** Last renderer unsubscribed — release session-owned resources. */
-  idle?(): void;
+  /** Last renderer unsubscribed — release session-owned resources. Return a
+   *  promise when the release is async (capture/recording drain) so the
+   *  multi-window drain path can await settlement via `drained()`. */
+  idle?(): void | Promise<void>;
+  /** Optional busy probe for the drain path: return a user-facing reason
+   *  (e.g. "capture in progress") to refuse a force-drain, or null. */
+  busy?(): string | null;
   commands: {
     [K in keyof CommandsOf<C>]: (
       arg: CommandsOf<C>[K]["arg"],
@@ -299,6 +336,7 @@ export function defineSession<C extends Contract>(
   }
   if (def.activate) session.onActivate(def.activate);
   if (def.idle) session.onIdle(def.idle);
+  if (def.busy) session.onBusyCheck(def.busy);
   return session;
 }
 

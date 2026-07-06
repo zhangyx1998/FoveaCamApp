@@ -68,6 +68,15 @@ const props = defineProps({
     required: false,
     default: null,
   },
+  // Stream address for the expand button (multi-window.md req. 4): when set,
+  // the button opens a projection window for this session+frame channel
+  // instead of element-fullscreening the container (the pre-Stage-5
+  // behavior, kept as the fallback for local/unaddressed frames).
+  projection: {
+    type: NoCheck<{ session: string; frame: string } | null>(),
+    required: false,
+    default: null,
+  },
 });
 
 const emit = defineEmits<{
@@ -80,6 +89,17 @@ const emit = defineEmits<{
 
 const container = useTemplateRef<HTMLDivElement>("container");
 const canvas = useTemplateRef<HTMLCanvasElement>("canvas");
+
+// Expand button: projection window when the stream is addressable (session +
+// frame channel known), legacy element-fullscreen otherwise.
+function expand(): void {
+  if (props.projection)
+    window.foveaBridge.openProjectionWindow(
+      props.projection.session,
+      props.projection.frame,
+    );
+  else container.value?.requestFullscreen();
+}
 const size = new ElementSize(container);
 const canvasSize = new ElementSize(canvas);
 const overlayToggle = ref(false);
@@ -291,8 +311,8 @@ function mix<T, P>(t: T, p: P): T & P {
       </div>
       <button
         class="fullscreen"
-        title="Toggle Fullscreen"
-        @click="container?.requestFullscreen()"
+        :title="projection ? 'Open projection window' : 'Toggle Fullscreen'"
+        @click="expand"
       >
         <Icon :icon="faExpand" />
       </button>
