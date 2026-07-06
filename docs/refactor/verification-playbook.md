@@ -62,7 +62,6 @@ Round C). Cameras + a display are enough; no mirrors, no scope.
 - [ ] **Targets:** orchestrator `loopLag` mean **< 5 ms** in the snapshot
       (PB1 clone-path baseline: 47 ms); shm `retries` ≈ 0. T10's window
       fields make rates directly comparable to PB1.
-      T10's window fields make rates directly comparable.
 - [ ] **Mixed-path sanity:** open tracking-single (its serial has
       `onView` taps → stays on the clone path by design); preview still
       live; OSD shows non-shm for that stream while manage-cameras

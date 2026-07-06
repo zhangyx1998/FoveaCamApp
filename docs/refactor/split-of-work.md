@@ -72,11 +72,12 @@ ownership table keeps their file domains disjoint.
 `vite build` fully green; renderer bundle **zero-core**; orchestrator
 bundle **zero-Vue**; `core make build` both runtimes when native code is
 touched; reader addon `otool -L` shows system libraries only; built
-`preload*.cjs` contain **no relative imports** (`grep -E
-'(from |require\()"\./' .dist/electron/preload*.cjs` must be empty —
-sandboxed preloads cannot load sibling chunks, V11) and preloads stay
-`.cjs`/CJS (unsandboxed windows load `.mjs` as real ESM where bare
-`require` throws, V11b). Tree stays
+built preloads pass the **V11 triplet**:
+relative-import grep (`(from |require\()"\./`) empty — sandboxed
+preloads can't load sibling chunks (V11); content is CJS, never
+`import`-style ESM (V11b); zero hits for
+`baseURI|import_meta|createRequire` — vite's `import.meta` shim
+resolves to the dev-server URL inside preloads (V11c). Tree stays
 uncommitted — the user commits at planner-declared checkpoints. `npx`
 and direct shell commands are permitted for type checking, builds, and
 test scripts (all run inside the workspace-write sandbox; network access
@@ -94,7 +95,7 @@ planner-logged handoff (ask via your log, don't just edit).
 | `app/electron/main.ts`, `preload.ts`, `bridge.ts` | A |
 | `app/test/**` (except SHM suites) | A |
 | `app/orchestrator/registry.ts` (Stage 4 duration only, then back to A) | C |
-| `app/electron/preload-shm.ts`, `preload-common.ts` | C |
+| `app/electron/preload-renderer.ts`, `preload-profiler.ts`, `preload-bridge.ts` | C |
 | SHM blocks in `lib/orchestrator/client.ts` + `protocol.ts` (`shm` payload variant), SHM OSD in `StreamView` | C (A owns the rest of those files) |
 | `core/include/ShmRing.h`, `core/src/ShmRing.cpp`, reader addon target, `core/test/08-shm-ring.ts` | C |
 | `core/**` (everything else), `firmware/**`, protocol v2 host+MCU | B |
