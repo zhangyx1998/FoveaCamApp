@@ -1,8 +1,6 @@
 <script setup lang="ts">
-import { resolve } from "node:path";
-import { existsSync } from "node:fs";
 import { computed, ref, watch } from "vue";
-import { validateWritablePath } from "@lib/util/fs";
+import { useAsyncComputed } from "@lib/util/vue";
 import { FontAwesomeIcon as Icon } from "@fortawesome/vue-fontawesome";
 import { faSave, faTrash } from "@fortawesome/free-solid-svg-icons";
 import Capture from ".";
@@ -44,17 +42,36 @@ const sequence = computed({
 const img_format = ref("png");
 
 const save_path = ref(props.capture.current_path);
+// Backfill once the default resolves, but only if the user hasn't already
+// typed something over the placeholder (`SavePath.default_path` starts
+// empty and fills in asynchronously — see `lib/save-path.ts`).
+watch(
+  () => props.capture.current_path,
+  (p) => {
+    if (save_path.value === "") save_path.value = p;
+  },
+);
 
-const path_valid = computed(() => validateWritablePath(save_path.value));
+const path_valid = useAsyncComputed(
+  () => window.foveaBridge.validateWritablePath(save_path.value),
+  false,
+);
 
-const seq_valid = computed(() => {
-  const path = resolve(save_path.value, sequence.value);
-  return !existsSync(path);
-});
+const resolved_seq_path = useAsyncComputed(
+  () => window.foveaBridge.resolvePath(save_path.value, sequence.value),
+  "",
+);
+const seq_valid = useAsyncComputed(
+  async () =>
+    resolved_seq_path.value !== "" &&
+    !(await window.foveaBridge.pathExists(resolved_seq_path.value)),
+  true,
+);
 
-function save() {
+async function save() {
   const path = save_path.value || props.capture.current_path;
-  emit("save", resolve(path, sequence.value), img_format.value);
+  const full = await window.foveaBridge.resolvePath(path, sequence.value);
+  emit("save", full, img_format.value);
   props.capture.updateSequence(sequence.value);
   props.capture.current_path = path;
 }

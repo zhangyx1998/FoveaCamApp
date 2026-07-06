@@ -4,11 +4,8 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 
-import { resolve } from "node:path";
-import { homedir } from "node:os";
 import { ref } from "vue";
 import { getDateTimeString } from "./util/string";
-import { existsSync } from "node:fs";
 
 export class SavePath {
   readonly prefix = getDateTimeString();
@@ -28,11 +25,15 @@ export class SavePath {
   }
 
   private __last_save_path = ref<string | null>(null);
+  // `existsSync`/`homedir` aren't reachable from the renderer once
+  // contextIsolation is on, so the default resolves asynchronously via
+  // `foveaBridge` (docs/refactor/orchestrator.md §7.1 T5) — starts empty,
+  // filled in shortly after construction (usually well under the time it
+  // takes a user to open the save dialog).
+  private __default_path = ref<string>("");
 
   get default_path() {
-    if (existsSync("/Volumes/Yuxuan Mobile/"))
-      return resolve("/Volumes/Yuxuan Mobile/", this.directory);
-    else return resolve(homedir(), "Downloads", this.directory);
+    return this.__default_path.value;
   }
 
   get current_path() {
@@ -50,5 +51,9 @@ export class SavePath {
     this.__last_save_path.value = null;
   }
 
-  constructor(public readonly namespace: string) {}
+  constructor(public readonly namespace: string) {
+    void window.foveaBridge
+      .resolveDefaultSavePath(this.directory)
+      .then((p: string) => (this.__default_path.value = p));
+  }
 }

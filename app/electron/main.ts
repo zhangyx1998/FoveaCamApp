@@ -15,7 +15,10 @@ import {
 // import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { existsSync } from "node:fs";
+import { mkdir, writeFile } from "node:fs/promises";
 import { getIcon } from "./util";
+import { resolveDefaultSavePath, validateWritablePath } from "@lib/util/fs";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const DATA = app.getPath("userData");
@@ -50,7 +53,9 @@ if (!app.requestSingleInstanceLock()) {
 }
 
 let win: BrowserWindow | null = null;
-const preload = path.join(DIR, "preload.mjs");
+const shmStreamsEnabled = process.env.FOVEA_SHM_STREAMS === "1";
+const preload = path.join(DIR, shmStreamsEnabled ? "preload-shm.mjs" : "preload.mjs");
+const profilerPreload = path.join(DIR, "preload.mjs");
 const indexHtml = path.join(RENDERER_DIST, "index.html");
 
 async function createWindow() {
@@ -74,11 +79,13 @@ async function createWindow() {
     backgroundColor: "black",
     webPreferences: {
       preload,
-      // Warning: Enable nodeIntegration and disable contextIsolation is not secure in production
-      nodeIntegration: true,
-      // Consider using contextBridge.exposeInMainWorld
-      // Read more on https://www.electronjs.org/docs/latest/tutorial/context-isolation
-      contextIsolation: false,
+      // Flipped (docs/refactor/orchestrator.md §7.1 T5 phase b) — every
+      // renderer-side Node/Electron API access was moved behind
+      // `window.foveaBridge` (electron/preload.ts) first, so this is a
+      // one-line revert if something surfaces that phase (a) missed.
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: !shmStreamsEnabled,
     },
   });
 
@@ -111,8 +118,27 @@ function customizeApp() {
   app.setName("FoveaCam Duo");
 }
 
-// IPC handler to provide DATA path to renderer
-ipcMain.handle("get-data-path", () => DATA);
+// ---- Renderer bridge handlers (docs/refactor/orchestrator.md §7.1 T5) -----
+// The renderer's `SavePath`/`SaveControls`/`RecordControls` used to call
+// `node:path`/`node:fs`/`node:os` directly — reachable only under today's
+// `nodeIntegration: true` (the renderer polyfill for those needs a real
+// `require`). These mirror that logic here so `foveaBridge` (preload.ts) can
+// forward to it over IPC instead.
+ipcMain.handle("save-path:resolve", (_e, segments: string[]) =>
+  path.resolve(...segments),
+);
+ipcMain.handle("save-path:resolve-default", (_e, directory: string) =>
+  resolveDefaultSavePath(directory),
+);
+ipcMain.handle("fs:exists", (_e, p: string) => existsSync(p));
+ipcMain.handle("fs:validate-writable", (_e, p: string) => validateWritablePath(p));
+ipcMain.handle("perf-snapshot:write", async (_e, content: string) => {
+  const dir = path.join(DATA, "perf-snapshots");
+  await mkdir(dir, { recursive: true });
+  const file = path.join(dir, `${new Date().toISOString().replace(/[:.]/g, "-")}.json`);
+  await writeFile(file, content);
+  return file;
+});
 
 // ---- Orchestrator process -------------------------------------------------
 // A utilityProcess that owns `core` (cameras, vision, control, hardware I/O).
@@ -175,9 +201,10 @@ function openProfilerWindow() {
     width: 720,
     backgroundColor: "black",
     webPreferences: {
-      preload,
-      nodeIntegration: true,
-      contextIsolation: false,
+      preload: profilerPreload,
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
     },
   });
   if (VITE_DEV_SERVER_URL) {

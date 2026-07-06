@@ -1,8 +1,6 @@
 <script setup lang="ts">
-import { resolve } from "node:path";
-import { existsSync } from "node:fs";
 import { computed, ref, watch } from "vue";
-import { validateWritablePath } from "@lib/util/fs";
+import { useAsyncComputed } from "@lib/util/vue";
 import { FontAwesomeIcon as Icon } from "@fortawesome/vue-fontawesome";
 import { faCircle, faXmark } from "@fortawesome/free-solid-svg-icons";
 import { current_recording } from ".";
@@ -28,17 +26,32 @@ const sequence = computed({
 });
 
 const save_path = ref(recording.current_path);
+watch(
+  () => recording.current_path,
+  (p) => {
+    if (save_path.value === "") save_path.value = p;
+  },
+);
 
-const path_valid = computed(() => validateWritablePath(save_path.value));
+const path_valid = useAsyncComputed(
+  () => window.foveaBridge.validateWritablePath(save_path.value),
+  false,
+);
 
-const seq_valid = computed(() => {
-  const path = resolve(save_path.value, sequence.value);
-  return !existsSync(path);
-});
+const resolved_seq_path = useAsyncComputed(
+  () => window.foveaBridge.resolvePath(save_path.value, sequence.value),
+  "",
+);
+const seq_valid = useAsyncComputed(
+  async () =>
+    resolved_seq_path.value !== "" &&
+    !(await window.foveaBridge.pathExists(resolved_seq_path.value)),
+  true,
+);
 
 async function start() {
   const path = save_path.value || recording.current_path;
-  const full = resolve(path, sequence.value);
+  const full = await window.foveaBridge.resolvePath(path, sequence.value);
   await recording.start(full);
   recording.updateSequence(sequence.value);
   recording.current_path = path;

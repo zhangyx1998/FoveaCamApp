@@ -72,7 +72,11 @@ export default class Store {
     const queueWrite = () => {
       if (applying || writePending) return;
       writePending = true;
-      process.nextTick(() => {
+      // `queueMicrotask`, not `process.nextTick` — bare `process` isn't
+      // defined in an isolated renderer without `nodeIntegration`
+      // (docs/refactor/orchestrator.md §7.1 T5); microtask timing is
+      // equivalent for this debounce (both drain before the next macrotask).
+      queueMicrotask(() => {
         writePending = false;
         void ch.request("store:write", { path, value: tracked });
       });
