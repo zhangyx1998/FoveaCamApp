@@ -5,8 +5,37 @@
 // -------------------------------------------------------
 import { createRequire } from "node:module";
 import path from "node:path";
-import { installBridge } from "./preload-common";
+import { contextBridge, ipcRenderer } from "electron";
+import type { FoveaBridge } from "./bridge";
 import type { FramePayload } from "@lib/orchestrator/protocol";
+
+// ⚠ KEEP SELF-CONTAINED (V11): sandboxed preloads cannot require sibling
+// chunks, so this entry must share zero runtime modules with `preload.ts` —
+// otherwise rollup splits the shared module into a chunk and the *sandboxed*
+// windows (profiler; main with FOVEA_SHM_STREAMS off) fail to load their
+// preload at all. The bridge below is a hand-synced copy of `preload.ts`'s.
+function installBridge(extra: Partial<FoveaBridge> = {}) {
+  ipcRenderer.on("orchestrator:port", (e) => {
+    window.postMessage("orchestrator:port", "*", e.ports);
+  });
+
+  const bridge: FoveaBridge = {
+    connectOrchestrator: () => ipcRenderer.send("orchestrator:connect"),
+    onOrchestratorDown: (cb) => {
+      ipcRenderer.on("orchestrator:down", () => cb());
+    },
+    openProfilerWindow: () => ipcRenderer.send("open-profiler-window"),
+    resolvePath: (...segments) => ipcRenderer.invoke("save-path:resolve", segments),
+    resolveDefaultSavePath: (directory) =>
+      ipcRenderer.invoke("save-path:resolve-default", directory),
+    pathExists: (path) => ipcRenderer.invoke("fs:exists", path),
+    validateWritablePath: (path) => ipcRenderer.invoke("fs:validate-writable", path),
+    writePerfSnapshot: (content) => ipcRenderer.invoke("perf-snapshot:write", content),
+    ...extra,
+  };
+
+  contextBridge.exposeInMainWorld("foveaBridge", bridge);
+}
 
 type ReaderHandle = object;
 type ReaderAddon = {

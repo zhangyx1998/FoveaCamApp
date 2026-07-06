@@ -499,6 +499,28 @@ only ✓. Three new findings, all in the seqlock (steering → Coder C):
   between the memcpy and the `after` load; emit the locals only if
   validation passes.
 
+### V11 🔴 ✅ — sandboxed preload broke on the shm preload split (planner hotfix, 2026-07-06)
+
+**First user boot after checkpoint #4 failed** (flag-off dev run):
+`Unable to load preload script … module not found: ./preload-common.mjs`
+→ `foveaBridge` never installed → renderer dead at `client.ts`
+`onOrchestratorDown`. Root cause chain: (1) Stage 4 split the preload
+into two entries sharing `preload-common.ts`; (2) one rollup pass over
+multiple entries always extracts shared modules into a sibling chunk;
+(3) **sandboxed preloads cannot require sibling chunks** (Electron
+sandbox `preloadRequire` allows only built-ins) — and the flag-off main
+window + the profiler window run `sandbox: true` by design. So every
+sandboxed window lost its preload in all modes. **Fix (planner, direct
+— user was blocked live):** eliminated the shared module; each preload
+entry now inlines its own hand-synced bridge copy with a KEEP
+SELF-CONTAINED banner; `preload-common.ts` deleted. **Process lessons:**
+(a) `vite build` green cannot catch this class — new standing gate:
+built `preload*.mjs` must contain no relative imports (mechanical
+grep, added to split-of-work); (b) my review verified the shm-on path
+and never re-checked the *flag-off* boot path after the preload
+restructure — flag-off is a first-class path, not "unchanged by
+definition", once shared files move.
+
 ## 7. Roadmap
 
 **Reordering (2026-07-03):** hardware-in-the-loop verification is **deferred
