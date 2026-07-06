@@ -33,6 +33,7 @@ type Path = string | string[];
 interface Doc {
   value: unknown;
   loaded: boolean;
+  op: Promise<void>;
   readonly listeners: Set<Listener>;
 }
 
@@ -51,22 +52,42 @@ export function writeCounts(): Readonly<typeof counts> {
 function docFor(segments: Path): Doc {
   const key = keyOf(segments);
   let doc = docs.get(key);
-  if (!doc) docs.set(key, (doc = { value: undefined, loaded: false, listeners: new Set() }));
+  if (!doc)
+    docs.set(
+      key,
+      (doc = {
+        value: undefined,
+        loaded: false,
+        op: Promise.resolve(),
+        listeners: new Set(),
+      }),
+    );
   return doc;
 }
 
-function notify(doc: Doc, except?: Listener): void {
-  for (const fn of doc.listeners) if (fn !== except) fn(doc.value);
+function notify(doc: Doc, value: unknown, except?: Listener): void {
+  for (const fn of doc.listeners) if (fn !== except) fn(value);
+}
+
+function enqueue<T>(doc: Doc, op: () => Promise<T>): Promise<T> {
+  const run = doc.op.then(op, op);
+  doc.op = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
 }
 
 /** Read a document, populating the cache from disk on first access. */
 export async function read<T>(segments: Path, fallback: T): Promise<T> {
   const doc = docFor(segments);
-  if (!doc.loaded) {
-    doc.value = await fs.read(segments, fallback);
-    doc.loaded = true;
-  }
-  return doc.value as T;
+  return enqueue(doc, async () => {
+    if (!doc.loaded) {
+      doc.value = await fs.read(segments, fallback);
+      doc.loaded = true;
+    }
+    return doc.value as T;
+  });
 }
 
 /** Replace a document, persist, and notify every listener but `except`. */
@@ -76,11 +97,13 @@ export async function write(
   except?: Listener,
 ): Promise<void> {
   const doc = docFor(segments);
-  doc.value = value;
-  doc.loaded = true;
-  await fs.write(segments, value);
-  counts.writes++;
-  notify(doc, except);
+  await enqueue(doc, async () => {
+    doc.value = value;
+    doc.loaded = true;
+    await fs.write(segments, value);
+    counts.writes++;
+    notify(doc, value, except);
+  });
 }
 
 /** Merge a patch as a read-modify-write, persist, and notify (same
@@ -91,23 +114,28 @@ export async function update(
   except?: Listener,
 ): Promise<void> {
   const doc = docFor(segments);
-  if (!doc.loaded) {
-    doc.value = await fs.read(segments, {});
-    doc.loaded = true;
-  }
-  doc.value = { ...(doc.value as Record<string, unknown>), ...patch };
-  await fs.write(segments, doc.value);
-  counts.updates++;
-  notify(doc, except);
+  await enqueue(doc, async () => {
+    if (!doc.loaded) {
+      doc.value = await fs.read(segments, {});
+      doc.loaded = true;
+    }
+    const value = { ...(doc.value as Record<string, unknown>), ...patch };
+    doc.value = value;
+    await fs.write(segments, value);
+    counts.updates++;
+    notify(doc, value, except);
+  });
 }
 
 export async function clear(segments: Path): Promise<void> {
   const doc = docFor(segments);
-  doc.value = undefined;
-  doc.loaded = false;
-  await fs.clear(segments);
-  counts.clears++;
-  notify(doc);
+  await enqueue(doc, async () => {
+    doc.value = undefined;
+    doc.loaded = false;
+    await fs.clear(segments);
+    counts.clears++;
+    notify(doc, undefined);
+  });
 }
 
 export function list(...segments: string[]): Promise<string[]> {

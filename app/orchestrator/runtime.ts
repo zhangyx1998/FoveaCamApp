@@ -18,6 +18,7 @@ import {
   type Endpoint,
   type FramePayload,
   type FrameOf,
+  type FrameTopicStats,
   type StateOf,
   type TelemetryOf,
 } from "../lib/orchestrator/protocol.js";
@@ -307,20 +308,46 @@ export class Hub {
    *  substrate, §7.3 item 4 — `system.perfSnapshot` aggregates this). */
   frameStatsSnapshot(): Record<
     string,
-    { offered: number; sent: number; coalesced: number; bytes: number }
+    FrameTopicStats
   > {
-    const merged: Record<
-      string,
-      { offered: number; sent: number; coalesced: number; bytes: number }
-    > = {};
+    const merged: Record<string, FrameTopicStats> = {};
+    const timing = (count = 0, mean = 0, max = 0) => ({ count, mean, max });
     for (const ch of this.channels) {
       for (const [t, s] of Object.entries(ch.allFrameStats())) {
-        const m = (merged[t] ??= { offered: 0, sent: 0, coalesced: 0, bytes: 0 });
+        const m = (merged[t] ??= {
+          offered: 0,
+          sent: 0,
+          coalesced: 0,
+          bytes: 0,
+          window: { startedAt: s.window.startedAt, snapshotAt: s.window.snapshotAt, uptimeMs: s.window.uptimeMs },
+          rates: { offeredPerSec: 0, sentPerSec: 0, coalescedPerSec: 0, bytesPerSec: 0 },
+          timing: { convertMs: timing() },
+        });
         m.offered += s.offered;
         m.sent += s.sent;
         m.coalesced += s.coalesced;
         m.bytes += s.bytes;
+        m.window.startedAt = Math.min(m.window.startedAt, s.window.startedAt);
+        m.window.snapshotAt = Math.max(m.window.snapshotAt, s.window.snapshotAt);
+        m.window.uptimeMs = Math.max(m.window.uptimeMs, s.window.uptimeMs);
+        const tc = s.timing.convertMs;
+        const mc = m.timing.convertMs;
+        if (tc.count > 0) {
+          const total = mc.count + tc.count;
+          mc.mean = total === 0 ? 0 : (mc.mean * mc.count + tc.mean * tc.count) / total;
+          mc.count = total;
+          mc.max = Math.max(mc.max, tc.max);
+        }
       }
+    }
+    for (const m of Object.values(merged)) {
+      const sec = Math.max(0.001, m.window.uptimeMs / 1000);
+      m.rates = {
+        offeredPerSec: m.offered / sec,
+        sentPerSec: m.sent / sec,
+        coalescedPerSec: m.coalesced / sec,
+        bytesPerSec: m.bytes / sec,
+      };
     }
     return merged;
   }

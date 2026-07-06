@@ -10,6 +10,7 @@
 // module and re-export) so both ends stay in lock-step.
 
 import { cmd, defineContract } from "./protocol.js";
+import type { FrameTopicStats } from "./protocol.js";
 import type { Pos } from "../controller-codec.js";
 
 /** Minimal camera descriptor — plain data, safe to cross the boundary. */
@@ -37,8 +38,8 @@ export type PerfSnapshot = {
   orchestrator: {
     loopLag: Stat;
   };
-  /** Per-topic frame counters, summed across every connected channel. */
-  frames: Record<string, { offered: number; sent: number; coalesced: number; bytes: number }>;
+  /** Per-topic frame counters/timing, summed across every connected channel. */
+  frames: Record<string, FrameTopicStats>;
   storeHub: { writes: number; updates: number; clears: number };
   /** Ring-buffer snapshot of recent boot/activation/connect timings (§7.1 S5). */
   spans: Span[];

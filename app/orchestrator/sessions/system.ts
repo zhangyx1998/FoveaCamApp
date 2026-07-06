@@ -10,6 +10,7 @@
 
 import { defineSession, type ServerSession } from "../runtime.js";
 import { system, type PerfSnapshot } from "@lib/orchestrator/contracts";
+import type { FrameTopicStats } from "@lib/orchestrator/protocol";
 import { listCameraInfo } from "../camera.js";
 import { releaseAll } from "../registry.js";
 import { writeCounts } from "../store-hub.js";
@@ -28,7 +29,7 @@ export function systemSession(
   cameraOwning: () => Iterable<{ dispose(): void }>,
   frameStats: () => Record<
     string,
-    { offered: number; sent: number; coalesced: number; bytes: number }
+    FrameTopicStats
   >,
 ): ServerSession<typeof system> {
   return defineSession("system", system, (s) => {

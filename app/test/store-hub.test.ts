@@ -26,6 +26,17 @@ vi.mock("@orchestrator/store", () => ({
 import { Channel } from "@lib/orchestrator/protocol";
 import { createEndpointPair, flush } from "./fake-endpoint";
 
+class Deferred<T> {
+  promise: Promise<T>;
+  resolve!: (value: T) => void;
+
+  constructor() {
+    this.promise = new Promise<T>((resolve) => {
+      this.resolve = resolve;
+    });
+  }
+}
+
 describe("store-hub", () => {
   beforeEach(() => {
     disk.clear();
@@ -103,5 +114,58 @@ describe("store-hub", () => {
     await chClient.request("store:clear", { path });
     const after = await chClient.request("store:read", { path, fallback: { cleared: true } });
     expect(after).toEqual({ cleared: true });
+  });
+
+  it("serializes writes so broadcasts reflect committed values only", async () => {
+    const fsStore = await import("@orchestrator/store");
+    const firstWrite = new Deferred<void>();
+    vi.mocked(fsStore.write).mockImplementationOnce(
+      async (segments: string | string[], data: unknown) => {
+        await firstWrite.promise;
+        disk.set(keyOf(segments), data);
+      },
+    );
+
+    const { attachStore } = await import("@orchestrator/store-hub");
+    const [epA, epB] = createEndpointPair();
+    const chA = new Channel(epA);
+    const chB = new Channel(epB);
+    attachStore(chA);
+    attachStore(chB);
+
+    const path = ["a", "serialized-write"];
+    const seenByA: unknown[] = [];
+    const seenByB: unknown[] = [];
+    chA.on(`store:${path.join("/")}`, (v) => seenByA.push(v));
+    chB.on(`store:${path.join("/")}`, (v) => seenByB.push(v));
+    await chA.request("store:read", { path, fallback: {} });
+    await chB.request("store:read", { path, fallback: {} });
+
+    const a = chA.request("store:write", { path, value: { a: 1 } });
+    const b = chB.request("store:write", { path, value: { b: 2 } });
+    await flush();
+    expect(seenByA).toEqual([]);
+    expect(seenByB).toEqual([]);
+
+    firstWrite.resolve();
+    await Promise.all([a, b]);
+    await flush();
+
+    expect(seenByB).toEqual([{ a: 1 }]);
+    expect(seenByA).toEqual([{ b: 2 }]);
+    expect(disk.get(path.join("/"))).toEqual({ b: 2 });
+  });
+
+  it("serializes first-load updates so concurrent patches are not lost", async () => {
+    const { read, update } = await import("@orchestrator/store-hub");
+    const path = ["a", "serialized-update"];
+
+    await Promise.all([
+      update(path, { a: 1 }),
+      update(path, { b: 2 }),
+    ]);
+
+    expect(await read(path, {})).toEqual({ a: 1, b: 2 });
+    expect(disk.get(path.join("/"))).toEqual({ a: 1, b: 2 });
   });
 });

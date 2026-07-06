@@ -47,6 +47,47 @@ describe("Channel backpressure gate", () => {
     expect(stats).toEqual({ offered: 3, sent: 2, coalesced: 1, bytes: 0 });
   });
 
+  it("can carry a shm descriptor frame without an in-band ArrayBuffer", async () => {
+    const [ep1, ep2] = createEndpointPair();
+    const server = new Channel(ep1);
+    const client = new Channel(ep2);
+    const received: FramePayload[] = [];
+    client.onFrame("t", (p) => received.push(p));
+
+    server.sendFrame("t", {
+      shape: [2, 3],
+      channels: 4,
+      shm: { seg: "/fv.test.1", gen: 1, seq: 7n },
+    });
+    await flush();
+
+    expect(received).toHaveLength(1);
+    expect(received[0].shm?.seg).toBe("/fv.test.1");
+    expect(server.stats("t").bytes).toBe(0);
+  });
+
+  it("allFrameStats includes counter windows, rates, and producer convert timing", () => {
+    const [ep] = createEndpointPair();
+    const server = new Channel(ep);
+    server.sendFrame("t", {
+      data: new ArrayBuffer(4),
+      shape: [1, 1],
+      channels: 4,
+      meta: { convertMs: 2 },
+    });
+
+    const snapshot = server.allFrameStats()["t"];
+    expect(snapshot).toMatchObject({
+      offered: 1,
+      sent: 1,
+      coalesced: 0,
+      bytes: 4,
+      timing: { convertMs: { count: 1, mean: 2, max: 2 } },
+    });
+    expect(snapshot.window.uptimeMs).toBeGreaterThan(0);
+    expect(snapshot.rates.sentPerSec).toBeGreaterThan(0);
+  });
+
   it("after an ack, the gate reopens: a fresh send after the in-flight one settles is posted immediately", async () => {
     const [ep1, ep2] = createEndpointPair();
     const server = new Channel(ep1);
