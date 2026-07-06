@@ -33,7 +33,4 @@ export interface FoveaBridge {
   /** Writes a perf snapshot JSON blob under `<app data dir>/perf-snapshots/`
    *  and returns the file path written. */
   writePerfSnapshot(content: string): Promise<string>;
-  /** Present only in the SHM preload (`FOVEA_SHM_STREAMS=1`). Fallback path
-   *  if the dedicated postMessage transfer-pool SHM reader fails. */
-  readShmFrame?(payload: import("@lib/orchestrator/protocol").FramePayload): Promise<import("@lib/orchestrator/protocol").FramePayload | null>;
 }

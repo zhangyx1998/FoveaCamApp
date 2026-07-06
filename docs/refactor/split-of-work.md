@@ -143,11 +143,11 @@ control is the planner's review loop.
 ## Coder C — SHM frame path (end-to-end)
 
 Sole owner of Stage 4: ShmRing substrate, reader addon, registry
-producer path (flag-gated), preload/client SHM transport, SHM OSD, and
+producer path, preload/client SHM transport, SHM OSD, and
 their tests. Absorbs the SHM follow-ups previously listed under Coder B
-— including the ping-pong pool. Hard rules: `FOVEA_SHM_STREAMS` unset ⇒
-byte-identical clone path; descriptors ride the existing Channel
-machinery; reader addon never links OpenCV/Aravis/GLib/libusb; scope is
+— including the ping-pong pool. Hard rules: SHM is the canonical preview
+transport where eligible; descriptors ride the existing Channel machinery;
+reader addon never links OpenCV/Aravis/GLib/libusb; scope is
 transport-only preview frames (no processed/capture/raw frames without
 planner dispatch); no PB2/perf claims without a live display+cameras
 session.

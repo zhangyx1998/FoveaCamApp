@@ -56,16 +56,12 @@
 Closes PB1's loop with numbers (orchestrator.md §6 PB1 / §7.1 Stage 4
 Round C). Cameras + a display are enough; no mirrors, no scope.
 
-- [ ] **Baseline (flag off):** `npm run app`; manage-cameras with all 3
-      previews; inspector on (Ctrl+Shift+I); 60 s dwell; Ctrl+Shift+S →
-      snapshot 1.
-- [ ] **Shm run:** quit; `FOVEA_SHM_STREAMS=1 npm run app`; same
-      scenario. OSD must show `SHM gen/retries` on each preview and NO
-      `bridge N` counter (if `bridge` appears, the transfer pool fell
-      back — check the console warning and file it). 60 s; Ctrl+Shift+S
-      → snapshot 2.
-- [ ] **Targets:** orchestrator `loopLag` mean **< 5 ms** in snapshot 2
-      (PB1 baseline: 47 ms); shm `retries` ≈ 0; `fallbackReads` absent.
+- [ ] **Shm run:** `npm run app`; manage-cameras with all 3 previews;
+      inspector on (Ctrl+Shift+I). OSD must show `SHM gen/retries` on
+      each preview. 60 s dwell; Ctrl+Shift+S → snapshot.
+- [ ] **Targets:** orchestrator `loopLag` mean **< 5 ms** in the snapshot
+      (PB1 clone-path baseline: 47 ms); shm `retries` ≈ 0. T10's window
+      fields make rates directly comparable to PB1.
       T10's window fields make rates directly comparable.
 - [ ] **Mixed-path sanity:** open tracking-single (its serial has
       `onView` taps → stays on the clone path by design); preview still
@@ -83,11 +79,11 @@ Round C). Cameras + a display are enough; no mirrors, no scope.
       a 12p format — preview stays live and correctly bright (not ~16×
       dark); switch back. (The debayer-noise A/B comparison is a
       separate, longer session — this is just the plumbing check.)
-- [ ] Archive both snapshots under `docs/refactor/baselines/<date>/`
+- [ ] Archive the snapshot under `docs/refactor/baselines/<date>/`
       and note the environment; hand to the planner → PB2 gets filed
       and the downscale-lever decision closes.
-- On failure: orchestrator.md §6 as **PB2-#**; `FOVEA_SHM_STREAMS`
-  unset is the instant, byte-identical revert.
+- On failure: orchestrator.md §6 as **PB2-#**; use git revert for the
+  SHM canonicalization if an instant clone-path rollback is needed.
 
 ## Stage A — store-hub smoke (widest blast radius, zero cameras needed)
 
@@ -163,10 +159,8 @@ First-ever live run of orchestrator-side capture/record.
       1. tracking locked on target, 60 s, windows idle → `perfSnapshot`;
       2. same + continuous main-window resize/devtools → snapshot
          (orchestrator `loopLag` must stay flat — the §1 claim);
-      3. two windows on one camera → snapshot, once with
-         `FOVEA_SHM_STREAMS=1` and once without (the multi-window
-         marginal-producer-cost datum: shm should be ≈ 0, clone
-         linear-per-window).
+      3. two windows on one camera → snapshot (the multi-window
+         marginal-producer-cost datum: shm should be ≈ 0).
       Store snapshots under `docs/refactor/baselines/<date>/` and commit.
 - On failure: orchestrator.md §6, **RT-W#**.
 

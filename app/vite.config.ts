@@ -4,6 +4,7 @@ import fs from "node:fs";
 import { defineConfig, Plugin } from "vite";
 import vue from "@vitejs/plugin-vue";
 import electron from "vite-plugin-electron/simple";
+import electronPreload from "vite-plugin-electron";
 import root_package from "../package.json";
 import workspace_package from "./package.json";
 
@@ -73,35 +74,6 @@ export default defineConfig(({ command }) => {
                         },
                     },
                 },
-                preload: {
-                    // Shortcut of `build.rollupOptions.input`.
-                    // Preload scripts may contain Web assets, so use the `build.rollupOptions.input` instead `build.lib.entry`.
-                    input: {
-                        preload: "electron/preload.ts",
-                        "preload-shm": "electron/preload-shm.ts",
-                    },
-                    vite: {
-                        build: {
-                            sourcemap: sourcemap ? "inline" : undefined, // #332
-                            minify: isBuild,
-                            outDir: target,
-                            rollupOptions: {
-                                external: isExternal,
-                                // The plugin builds preloads as CJS but names
-                                // them .mjs under `"type": "module"` — fine
-                                // sandboxed (require is injected), fatal for
-                                // the unsandboxed shm window where Electron
-                                // loads .mjs as real ESM and bare `require`
-                                // throws (V11b). Name them what they are.
-                                output: {
-                                    inlineDynamicImports: false,
-                                    format: "cjs",
-                                    entryFileNames: "[name].cjs",
-                                },
-                            },
-                        },
-                    },
-                },
                 // Ployfill the Electron and Node.js API for Renderer process.
                 // If you want use Node.js in Renderer process, the `nodeIntegration` needs to be enabled in the Main process.
                 // See 👉 https://github.com/electron-vite/vite-plugin-electron-renderer
@@ -113,6 +85,38 @@ export default defineConfig(({ command }) => {
                     },
                 },
             }),
+            // Preload entries build via the low-level plugin: ONE BUILD PER
+            // ENTRY, so modules shared between preloads (preload-bridge.ts)
+            // are inlined into each output instead of split into a sibling
+            // chunk — sandboxed preloads cannot require sibling chunks (V11).
+            // Output is CJS named .cjs: unsandboxed preloads load .mjs as
+            // real ESM where bare `require` throws (V11b).
+            electronPreload(
+                ["preload-renderer", "preload-profiler"].map((name) => ({
+                    // Preload change → reload pages; never args.startup()
+                    // here (the simple() plugin above owns the Electron
+                    // process — a second startup would double-launch).
+                    onstart: (args) => args.reload(),
+                    vite: {
+                        resolve: { alias },
+                        build: {
+                            sourcemap: sourcemap ? "inline" : undefined, // #332
+                            minify: isBuild,
+                            outDir: target,
+                            // Explicit lib config: the plugin otherwise
+                            // derives formats from package `type` (module →
+                            // "es"), emitting ESM into a .cjs file — V11b
+                            // all over again, one layer down.
+                            lib: {
+                                entry: { [name]: `electron/${name}.ts` },
+                                formats: ["cjs"],
+                                fileName: () => `${name}.cjs`,
+                            },
+                            rollupOptions: { external: isExternal },
+                        },
+                    },
+                }))
+            ),
         ],
         server:
             process.env.VSCODE_DEBUG &&

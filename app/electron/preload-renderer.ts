@@ -3,39 +3,15 @@
 // This source code is licensed under the MIT license.
 // You may find the full license in project root directory.
 // -------------------------------------------------------
-import { createRequire } from "node:module";
+//
+// Main-window preload: the shared bridge + the shm frame reader. The shm
+// path is canonical for transport previews, so this window always runs
+// `sandbox: false` (required to load the native reader addon; the profiler
+// window stays sandboxed with `preload-profiler.ts`). Bundled self-contained
+// by its own build pass (see preload-bridge.ts header / V11).
 import path from "node:path";
-import { contextBridge, ipcRenderer } from "electron";
-import type { FoveaBridge } from "./bridge";
+import { installBridge } from "./preload-bridge";
 import type { FramePayload } from "@lib/orchestrator/protocol";
-
-// ⚠ KEEP SELF-CONTAINED (V11): sandboxed preloads cannot require sibling
-// chunks, so this entry must share zero runtime modules with `preload.ts` —
-// otherwise rollup splits the shared module into a chunk and the *sandboxed*
-// windows (profiler; main with FOVEA_SHM_STREAMS off) fail to load their
-// preload at all. The bridge below is a hand-synced copy of `preload.ts`'s.
-function installBridge(extra: Partial<FoveaBridge> = {}) {
-  ipcRenderer.on("orchestrator:port", (e) => {
-    window.postMessage("orchestrator:port", "*", e.ports);
-  });
-
-  const bridge: FoveaBridge = {
-    connectOrchestrator: () => ipcRenderer.send("orchestrator:connect"),
-    onOrchestratorDown: (cb) => {
-      ipcRenderer.on("orchestrator:down", () => cb());
-    },
-    openProfilerWindow: () => ipcRenderer.send("open-profiler-window"),
-    resolvePath: (...segments) => ipcRenderer.invoke("save-path:resolve", segments),
-    resolveDefaultSavePath: (directory) =>
-      ipcRenderer.invoke("save-path:resolve-default", directory),
-    pathExists: (path) => ipcRenderer.invoke("fs:exists", path),
-    validateWritablePath: (path) => ipcRenderer.invoke("fs:validate-writable", path),
-    writePerfSnapshot: (content) => ipcRenderer.invoke("perf-snapshot:write", content),
-    ...extra,
-  };
-
-  contextBridge.exposeInMainWorld("foveaBridge", bridge);
-}
 
 type ReaderHandle = object;
 type ReaderAddon = {
@@ -48,7 +24,15 @@ type ReaderAddon = {
   close(handle: ReaderHandle): void;
 };
 
-const require = createRequire(import.meta.url);
+// This bundle is emitted as CommonJS (unsandboxed preloads load `.mjs` as
+// real ESM where bare `require` throws — V11b), so the module wrapper's own
+// `require` is available at runtime. Do NOT use
+// `createRequire(import.meta.url)`: vite's CJS shim for `import.meta.url`
+// resolves via `document.baseURI` in a preload (a preload has a `document`),
+// which yields the dev server's http URL and `createRequire` rejects it
+// (V11c — the "Received 'http://localhost:5173/…'" boot failure).
+declare const require: NodeRequire;
+
 const coreEntry = require.resolve("core");
 const runtime = process.versions.electron ? "electron" : "node";
 const version = process.versions[runtime]!;
@@ -60,10 +44,6 @@ const readerPath = path.join(
 const reader = require(readerPath) as ReaderAddon;
 const handles = new Map<string, { gen: number; handle: ReaderHandle }>();
 
-function byteLength(payload: FramePayload): number {
-  return payload.shape.reduce((p, n) => p * n, payload.channels);
-}
-
 function handleFor(seg: string, gen: number): ReaderHandle {
   const cached = handles.get(seg);
   if (cached?.gen === gen) return cached.handle;
@@ -72,12 +52,6 @@ function handleFor(seg: string, gen: number): ReaderHandle {
   handles.set(seg, { gen, handle });
   return handle;
 }
-
-installBridge({
-  async readShmFrame(payload) {
-    return readShmFrame(payload, new ArrayBuffer(byteLength(payload)));
-  },
-});
 
 function readShmFrame(payload: FramePayload, dest: ArrayBuffer): FramePayload | null {
   if (!payload.shm) return null;
@@ -95,7 +69,6 @@ function readShmFrame(payload: FramePayload, dest: ArrayBuffer): FramePayload | 
       gen: result.gen,
       seq: result.seq,
       retries: result.retries,
-      transfer: "port",
     },
   };
 }
@@ -139,3 +112,5 @@ window.addEventListener("message", (event) => {
   port.onmessage = (message) => handleReadMessage(port, message.data);
   port.start();
 });
+
+installBridge();

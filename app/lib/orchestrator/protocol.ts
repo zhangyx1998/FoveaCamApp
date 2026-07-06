@@ -77,8 +77,6 @@ export type ShmFrameRef = {
   gen: number;
   seq: bigint;
   retries?: number;
-  transfer?: "port" | "bridge";
-  fallbackReads?: number;
 };
 
 /** Raw frame payload as it crosses the process boundary. */

@@ -53,15 +53,16 @@ if (!app.requestSingleInstanceLock()) {
 }
 
 let win: BrowserWindow | null = null;
-const shmStreamsEnabled = process.env.FOVEA_SHM_STREAMS === "1";
-const preload = path.join(DIR, shmStreamsEnabled ? "preload-shm.cjs" : "preload.cjs");
-const profilerPreload = path.join(DIR, "preload.cjs");
+const preload = {
+  renderer: path.join(DIR, "preload-renderer.cjs"),
+  profiler: path.join(DIR, "preload-profiler.cjs"),
+};
 const indexHtml = path.join(RENDERER_DIST, "index.html");
 
 async function createWindow() {
   win = new BrowserWindow({
     title: "FoveaCam Duo",
-    icon: getIcon("icon.ico"),
+    // icon: getIcon("icon.ico"),
     // Don't show until ready
     // show: false,
     // Window customization
@@ -78,14 +79,15 @@ async function createWindow() {
     width: 1200,
     backgroundColor: "black",
     webPreferences: {
-      preload,
+      preload: preload.renderer,
       // Flipped (docs/refactor/orchestrator.md §7.1 T5 phase b) — every
       // renderer-side Node/Electron API access was moved behind
       // `window.foveaBridge` (electron/preload.ts) first, so this is a
       // one-line revert if something surfaces that phase (a) missed.
       nodeIntegration: false,
       contextIsolation: true,
-      sandbox: !shmStreamsEnabled,
+      // The canonical preview path uses a minimal SHM reader addon in preload.
+      sandbox: false,
     },
   });
 
@@ -111,10 +113,10 @@ async function createWindow() {
 }
 
 function customizeApp() {
-  if (process.platform === "darwin") {
-    const icon = getIcon("1024x1024.png");
-    app.dock.setIcon(icon);
-  }
+  // if (process.platform === "darwin") {
+  //   const icon = getIcon("1024x1024.png");
+  //   app.dock.setIcon(icon);
+  // }
   app.setName("FoveaCam Duo");
 }
 
@@ -131,11 +133,16 @@ ipcMain.handle("save-path:resolve-default", (_e, directory: string) =>
   resolveDefaultSavePath(directory),
 );
 ipcMain.handle("fs:exists", (_e, p: string) => existsSync(p));
-ipcMain.handle("fs:validate-writable", (_e, p: string) => validateWritablePath(p));
+ipcMain.handle("fs:validate-writable", (_e, p: string) =>
+  validateWritablePath(p),
+);
 ipcMain.handle("perf-snapshot:write", async (_e, content: string) => {
   const dir = path.join(DATA, "perf-snapshots");
   await mkdir(dir, { recursive: true });
-  const file = path.join(dir, `${new Date().toISOString().replace(/[:.]/g, "-")}.json`);
+  const file = path.join(
+    dir,
+    `${new Date().toISOString().replace(/[:.]/g, "-")}.json`,
+  );
   await writeFile(file, content);
   return file;
 });
@@ -201,7 +208,7 @@ function openProfilerWindow() {
     width: 720,
     backgroundColor: "black",
     webPreferences: {
-      preload: profilerPreload,
+      preload: preload.profiler,
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: true,

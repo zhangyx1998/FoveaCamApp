@@ -139,11 +139,7 @@ const overlay = computed(() => {
       result["IPC Latency"] = ipcLatency.toString();
       result["Frame Age"] = frameAge.toString();
       if (p.shm) {
-        const transfer =
-          p.shm.transfer === "bridge"
-            ? ` / bridge ${p.shm.fallbackReads ?? 1}`
-            : "";
-        result["SHM"] = `gen ${p.shm.gen} / retries ${p.shm.retries ?? 0}${transfer}`;
+        result["SHM"] = `gen ${p.shm.gen} / retries ${p.shm.retries ?? 0}`;
       }
       result["Throughput"] =
         `${((fps.value * (p.data?.byteLength ?? 0)) / 1e6).toFixed(2)} MB/s`;

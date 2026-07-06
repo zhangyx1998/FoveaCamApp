@@ -13,8 +13,8 @@
 > R1–R3, Stage 4 A/B, contextIsolation flip, docs/workflow).
 > Backstory: PB1 (§6, first live session 2026-07-05) showed preview
 > transport saturating the orchestrator loop (47 ms mean lag); the user
-> greenlit the shm frame path (Stage 4), now landed behind
-> `FOVEA_SHM_STREAMS=1`. **Held:** Stage 4 Round C / PB2 (needs display
+> greenlit the shm frame path (Stage 4), now canonical for eligible preview
+> streams. **Held:** Stage 4 Round C / PB2 (needs display
 > + cameras), V7 UI, hardware playbook A–H (mechanical rig).
 > Control-plane stays on MessagePort (REST considered & rejected — §4).
 > **Dispatch-loop iteration 2 (2026-07-06, post-checkpoint-#3):** A
@@ -166,7 +166,7 @@ renderer camera ownership meant streams could not be shared across windows.
 |---|---|
 | Host | Electron `utilityProcess`; ports brokered by main via `MessageChannelMain`. |
 | Transport v1 | One `MessagePort` per renderer; RPC + events + frames multiplexed; frames structured-clone, lossy latest-wins via per-topic in-flight gate. |
-| Zero-copy path | SAB-over-MessagePort is **not implementable** (SAB clones only within one OS process). Real design settled with user 2026-07-05 (post-PB1): **orchestrator-owned `shm_open`/`mmap` segment per stream, triple-buffered** (user picked triple over double+retry; ~19 MB total at 3 cameras), slot header carries seq/`tCapture`/device timestamps; registry's `frame.view("BGRA8", …)` converts *directly into* the active slot (conversion already off-thread → orchestrator JS loop does zero per-frame byte work). Renderer side: **dedicated minimal reader addon in the preload** (single .cpp, libc-only — NOT `core.node`; keeps Aravis/OpenCV out of the renderer process; layout shared via a versioned `ShmRing.h`), requires `sandbox: false`. **V8 memory cage (Electron ≥21) constraint, checked 2026-07-05:** external-ArrayBuffer wrap of mmap memory is banned (crash class, not a risk), and cage memory cannot be made OS-shareable — so true zero-copy into main-world JS is impossible in both directions; the floor is one native memcpy per displayed frame, seq-validated before/after with retry-on-tear. **Handoff correction (2026-07-05):** `contextBridge` *clones* TypedArray arguments, so a bridged `readInto(dest)` cannot fill a main-world buffer — the handoff is a **ping-pong transfer pool**: main world allocates 2–3 ArrayBuffers per view, transfers one to the preload over a dedicated `MessagePort` (the same `window.postMessage`-transfer pattern T5 proved), the addon fills it natively from shm, preload transfers it back. One copy per displayed frame, renderer-side, zero allocation churn, all cage-internal. Fallback if transfer friction appears: bridge-returned fresh ArrayBuffer per read (second renderer-side copy — acceptable, must be logged). Doorbell: rAF header-poll (self-coalescing); `Channel` keeps metadata. Still gated — see §7.2 item 5. |
+| Zero-copy path | SAB-over-MessagePort is **not implementable** (SAB clones only within one OS process). Real design settled with user 2026-07-05 (post-PB1): **orchestrator-owned `shm_open`/`mmap` segment per stream, triple-buffered** (user picked triple over double+retry; ~19 MB total at 3 cameras), slot header carries seq/`tCapture`/device timestamps; registry's `frame.view("BGRA8", …)` converts *directly into* the active slot (conversion already off-thread → orchestrator JS loop does zero per-frame byte work). Renderer side: **dedicated minimal reader addon in the preload** (single .cpp, libc-only — NOT `core.node`; keeps Aravis/OpenCV out of the renderer process; layout shared via a versioned `ShmRing.h`), requires `sandbox: false`. **V8 memory cage (Electron ≥21) constraint, checked 2026-07-05:** external-ArrayBuffer wrap of mmap memory is banned (crash class, not a risk), and cage memory cannot be made OS-shareable — so true zero-copy into main-world JS is impossible in both directions; the floor is one native memcpy per displayed frame, seq-validated before/after with retry-on-tear. **Handoff correction (2026-07-05):** `contextBridge` *clones* TypedArray arguments, so a bridged `readInto(dest)` cannot fill a main-world buffer — the handoff is a **ping-pong transfer pool**: main world allocates 2–3 ArrayBuffers per view, transfers one to the preload over a dedicated `MessagePort` (the same `window.postMessage`-transfer pattern T5 proved), the addon fills it natively from shm, preload transfers it back. One copy per displayed frame, renderer-side, zero allocation churn, all cage-internal. Doorbell: rAF header-poll (self-coalescing); `Channel` keeps metadata. |
 | Contract/RPC | Hand-rolled typed layer: `defineContract` + `defineSession` + mirrored `reactive()` client. |
 | Control cadence | Frame-driven (`registry.onView`) or real timers; no rAF server-side. |
 | Control threading | **Trackers/PIDs run on the orchestrator JS loop, not dedicated threads** (decided 2026-07-04). Threading lives in the layers around them: firmware owns 1 kHz+ target-following (v2 streams), native C++ threads own acquisition/serial-RX/offline vision (AsyncTask), workers own recorder I/O (S3). Rationale: the §1 problem was sharing a loop with *Chromium*, not the loop model; PID math is µs-scale; threading the tracker forces per-frame Mat copies across thread boundaries + the NAPI-per-worker risk. Known cost: synchronous `tracker.update` stalls the loop a few ms/frame — bounded, measured by `trackMs`/`loopLag`. **Escape hatch (trigger: verification numbers or multi-fovea N-tracker load):** make `tracker.update` AsyncTask-backed in `core` — compute moves to the C++ pool, N trackers parallelize with one Mat copy each, no worker machinery. Session-per-worker + shm frames is deliberately unplanned. |
@@ -469,9 +469,10 @@ semantics (throttle cadence, snapshot shape, max/reset); T10's
 `window {startedAt, snapshotAt, uptimeMs}` + producer `convertMs` +
 renderer `ipcLatencyMs`/`displayDelayMs` land the PB1 observability gap.
 
-Stage 4 Round A/B substrate: registry flag-off path is byte-identical
-(`FOVEA_SHM_STREAMS` unset short-circuits before any shm code), and the
-coder added a guard better than the spec asked for: shm engages only
+Stage 4 Round A/B substrate originally landed behind a byte-identical
+switch; that switch was removed 2026-07-06 and shm is now canonical for
+eligible preview streams. The coder added a guard better than the spec
+asked for: shm engages only
 when a serial has **zero `onView` taps**, so Mat-tap sessions keep the
 clone path automatically. Reader addon `otool -L`: libc++/libSystem
 only ✓. Three new findings, all in the seqlock (steering → Coder C):
@@ -501,20 +502,20 @@ only ✓. Three new findings, all in the seqlock (steering → Coder C):
 
 ### V11 🔴 ✅ — sandboxed preload broke on the shm preload split (planner hotfix, 2026-07-06)
 
-**First user boot after checkpoint #4 failed** (flag-off dev run):
+**First user boot after checkpoint #4 failed** (sandboxed-preload dev run):
 `Unable to load preload script … module not found: ./preload-common.mjs`
 → `foveaBridge` never installed → renderer dead at `client.ts`
 `onOrchestratorDown`. Root cause chain: (1) Stage 4 split the preload
 into two entries sharing `preload-common.ts`; (2) one rollup pass over
 multiple entries always extracts shared modules into a sibling chunk;
 (3) **sandboxed preloads cannot require sibling chunks** (Electron
-sandbox `preloadRequire` allows only built-ins) — and the flag-off main
-window + the profiler window run `sandbox: true` by design. So every
-sandboxed window lost its preload in all modes. **Fix (planner, direct
+sandbox `preloadRequire` allows only built-ins) — and the sandboxed
+profiler window runs `sandbox: true` by design. So every
+sandboxed window lost its preload. **Fix (planner, direct
 — user was blocked live):** eliminated the shared module; each preload
 entry now inlines its own hand-synced bridge copy with a KEEP
 SELF-CONTAINED banner; `preload-common.ts` deleted. **V11b (same session):** the very next boot
-(flag-on) hit the twin failure — the plugin builds preloads as **CJS
+(SHM main-window preload) hit the twin failure — the plugin builds preloads as **CJS
 content named `.mjs`** (under `"type": "module"`), which sandboxed
 loaders tolerate (require is injected) but the unsandboxed shm window
 loads as real ESM → `require is not defined in ES module scope`. Fix:
@@ -523,11 +524,30 @@ paths updated. **Process lessons:**
 (a) `vite build` green cannot catch either failure — new standing
 gate: built `preload*.cjs` must contain no relative imports
 (mechanical grep, added to split-of-work); (b) my review verified the
-shm-on path *statically* and the flag-off path not at all after the
-preload restructure — a preload change is boot-path-critical in every
-sandbox mode × flag combination, and only a boot exercises it. The
-PB2 pre-check now effectively covers all three combinations (flag-off
-main, flag-on main, profiler).
+SHM path *statically* and the sandboxed profiler path not at all after
+the preload restructure — a preload change is boot-path-critical in every
+sandbox mode, and only a boot exercises it. The PB2 pre-check now covers
+the canonical main window and the sandboxed profiler.
+
+**V11c (user-diagnosed boot, same day):** with .cjs in place the
+unsandboxed window still failed — `createRequire(import.meta.url)`
+compiles to vite's CJS shim, which resolves via `document.baseURI` in a
+preload (preloads have a `document`) → the dev-server http URL →
+`createRequire` rejects it. Fix: ambient `require` (the CJS module
+wrapper's own), zero `import.meta` in preload sources.
+**Final preload architecture (user directive: no hand-synced
+duplication):** shared `electron/preload-bridge.ts`, and one low-level
+vite-plugin-electron build **per entry** (`preload-renderer.cjs` —
+unsandboxed, bridge + shm reader; `preload-profiler.cjs` — sandboxed,
+bridge only), each pinning `lib.formats: ["cjs"]` (the plugin otherwise
+derives ESM from package `type` and emits it into a .cjs file) and
+without a plugin-level `entry` next to `build.lib` (double-builds every
+output). **User decision (2026-07-06): `FOVEA_SHM_STREAMS` retired —
+shm is canonical.** Main window always `sandbox: false`; registry uses
+shm whenever a serial has transport sinks and no `onView` taps
+(view-tap serials auto-fall-back to clone); the bridge-clone read
+fallback is deleted — transfer-pool failures are hard errors; boot
+sweep unconditional.
 
 ## 7. Roadmap
 
@@ -795,11 +815,10 @@ commits.
   bundle level). Harness: core writer + this reader in one Node
   process.
 
-**Round B (implementation spec — landed 2026-07-05 behind
-`FOVEA_SHM_STREAMS=1`):**
+**Round B (implementation spec — landed 2026-07-05 behind a flag,
+promoted to canonical preview transport 2026-07-06):**
 
-- **SHM-3 — registry integration behind a per-serial flag (default
-  OFF = byte-identical to today).** Flag on: `s.view` is the Mat over
+- **SHM-3 — registry integration.** When eligible, `s.view` is the Mat over
   the active write slot; publish = slot meta store + a **descriptor**
   fanned through the existing path — `FramePayload` gains an `shm`
   variant `{seg, gen, seq, shape, channels, meta}` with no `data`
@@ -814,7 +833,7 @@ commits.
   loads in preload; handoff is the **ping-pong transfer pool** (§4 —
   contextBridge clones TypedArray args, so the pool transfers over a
   dedicated MessagePort using the T5-proven `window.postMessage`
-  pattern; fallback bridge-clone must be logged if transfer misbehaves).
+  pattern).
 - **SHM-5 — client/StreamView integration.** `client.ts` `frame()`
   resolves `shm`-variant payloads through the pool on its existing rAF
   tick (latest descriptor wins — coalescing comes free); non-shm
@@ -829,20 +848,19 @@ landed: `core.Shm.Writer`, versioned triple-buffer layout
 write path, and standalone `fovea_shm_reader.node`; `core make build`
 passes for Node + Electron, and `otool -L` on the reader shows only
 libc++/libSystem (no OpenCV/Aravis/GLib). SHM-3/4/5 first integration
-also landed behind default-off `FOVEA_SHM_STREAMS=1`: registry uses SHM
-only for transport-only camera previews (no `onView` taps), `FramePayload`
-can carry an out-of-band descriptor, the main window selects a SHM preload
+also landed first behind a default-off flag, later removed when SHM became
+canonical: registry uses SHM only for transport-only camera previews
+(no `onView` taps), `FramePayload` can carry an out-of-band descriptor,
+the main window selects a SHM preload
 with `sandbox: false`, and `client.ts` materializes descriptors on its rAF
-path. **Deviation logged:** the preload uses the approved bridge-returned
-ArrayBuffer fallback and logs it once; the ping-pong transfer pool landed
-in iteration 2 below. Gates run: app `vue-tsc`, vitest 56/56, `vite build`,
+path. The ping-pong transfer pool landed in iteration 2 below. Gates run:
+app `vue-tsc`, vitest 56/56, `vite build`,
 native SHM smoke test (outside sandbox because `shm_open` is blocked
 inside it).
 
 **Coder progress 2026-07-05 (iteration 2):** ping-pong transfer pool
 landed in `client.ts`/`preload-shm.ts`: the main world posts a reusable
-ArrayBuffer to the SHM preload, receives it back transferred, and falls
-back to the bridge-returned ArrayBuffer path with a one-time log if needed.
+ArrayBuffer to the SHM preload and receives it back transferred.
 The native smoke script now covers roundtrip, generation swap, and a
 worker hammer (`core/test/08-shm-ring.ts`); it passes outside the sandbox.
 Reader `otool -L` still shows only libc++/libSystem. Renderer/main/preload
@@ -864,7 +882,7 @@ cameras; planner review; hardware/playbook verification. Downscale/fps-cap
 decision remains deferred until PB2.
 
 **Round C (verification — needs display + cameras, NOT the mirror
-rig):** re-run the PB1 scenario with the flag on, capture an
+rig):** re-run the PB1 scenario with canonical SHM, capture an
 idle/preview T10 snapshot pair, file as **PB2**. Targets: orchestrator
 loop lag **< 5 ms mean** under 3-camera preview; tearing retries ≈ 0;
 open a second window on the same serials and confirm ≈ 0 marginal

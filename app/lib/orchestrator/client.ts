@@ -65,10 +65,7 @@ const pendingShmReads = new Map<
   }
 >();
 let shmReadSeq = 0;
-let loggedShmBridgeFallback = false;
-let shmFallbackReads = 0;
 let shmPort: MessagePort | null = null;
-let loggedShmPortUnavailable = false;
 
 function frameByteLength(payload: FramePayload): number {
   return payload.shape.reduce((p, n) => p * n, payload.channels);
@@ -134,11 +131,7 @@ function readShmFrameViaTransfer(payload: FramePayload): Promise<FramePayload | 
   if (typeof window === "undefined") return Promise.resolve(null);
   const port = ensureShmPort();
   if (!port) {
-    if (!loggedShmPortUnavailable) {
-      loggedShmPortUnavailable = true;
-      console.warn("[shm] MessagePort transfer pool unavailable; falling back to bridge read");
-    }
-    return Promise.resolve(null);
+    return Promise.reject(new Error("SHM MessagePort transfer pool unavailable"));
   }
   const id = ++shmReadSeq;
   const buffer = checkoutShmBuffer(payload);
@@ -157,23 +150,11 @@ async function materializeFramePayload(
 ): Promise<FramePayload | null> {
   if (p.data || !p.shm) return p;
   try {
-    const transferred = await readShmFrameViaTransfer(p);
-    if (transferred) return transferred;
+    return await readShmFrameViaTransfer(p);
   } catch (error) {
-    console.warn("[shm] transfer-pool read failed; falling back to bridge read", error);
+    console.error("[shm] transfer-pool read failed", error);
+    return null;
   }
-  const read = window.foveaBridge.readShmFrame;
-  if (!read) return null;
-  if (!loggedShmBridgeFallback) {
-    loggedShmBridgeFallback = true;
-    console.warn("[shm] using bridge-returned ArrayBuffer fallback");
-  }
-  const fallback = await read(p);
-  if (fallback?.shm) {
-    fallback.shm.transfer = "bridge";
-    fallback.shm.fallbackReads = ++shmFallbackReads;
-  }
-  return fallback;
 }
 
 function domEndpoint(port: MessagePort): Endpoint {

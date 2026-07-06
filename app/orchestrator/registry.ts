@@ -58,10 +58,7 @@ export interface CameraLease {
 }
 
 const shared = new Map<string, Shared>();
-const shmStreamsEnabled = process.env.FOVEA_SHM_STREAMS === "1";
-const shmBootSweep = shmStreamsEnabled
-  ? import("core").then(({ Shm }) => Shm.sweep())
-  : Promise.resolve(0);
+const shmBootSweep = import("core").then(({ Shm }) => Shm.sweep());
 // Close promises not yet settled, tracked outside `shared` (which `closeShared`
 // empties immediately) so `releaseAll` can await a close that started just
 // before it was called — otherwise it can return while a native handle is
@@ -113,8 +110,7 @@ function startLoop(s: Shared): void {
         const tCapture = Date.now();
         const deviceTimestamp = frame.deviceTimestamp;
         const systemTimestamp = frame.systemTimestamp;
-        const useShm =
-          shmStreamsEnabled && s.sinks.size > 0 && s.viewSinks.size === 0;
+        const useShm = s.sinks.size > 0 && s.viewSinks.size === 0;
         const convertStart = performance.now();
         if (useShm) {
           const writer = await shmWriter(s);
