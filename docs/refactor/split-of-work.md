@@ -107,11 +107,10 @@ hardware-dependent behavior verified without a real rig run.
 
 ### Active instructions
 
-- **A-standby.** No active instructions. Round 3 (T8/T9/T7/T10) was
-  planner-verified clean and archived (orchestrator.md §6/§7.1,
-  2026-07-06). Queued candidates for the next release: V7 interactive
-  multi-fovea target placement; 12-bit format-selection UI (pairs with
-  a B item).
+- **A-standby.** No active instructions. A-1 (V7 target placement +
+  V10 steering fix) planner-accepted 2026-07-06, archived to
+  orchestrator.md §6. No queued A items — the planned 12-bit UI half
+  turned out to already exist (selector landed 2026-06-05).
   - Log:
 
 ## Coder B — Native core, protocol & firmware
@@ -125,10 +124,12 @@ control is the planner's review loop.
 
 ### Active instructions
 
-- **B-standby.** No active instructions. Prior wave planner-verified
-  clean (2026-07-06). Queued candidates for the next release:
-  bench-prep tooling (serial-trace decode helpers); 12-bit
-  packed-readout core plumbing (pairs with A's UI half); hardware items
+- **B-standby.** No active instructions. B-1 (preview-safe pixel-format
+  filtering — 12-bit readout now code-complete end to end) and B-2
+  (serial-trace decoder + fixture) planner-accepted 2026-07-06,
+  archived to orchestrator.md + synced-capture.md. Known cleanup
+  candidate for a future round: pre-existing TS errors in `core/test`
+  (`03-ArUco`, `08-shm-ring` — the latter is C-owned). Hardware items
   stay rig-gated.
   - Log:
 

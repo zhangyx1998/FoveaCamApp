@@ -17,6 +17,14 @@
 > `FOVEA_SHM_STREAMS=1`. **Held:** Stage 4 Round C / PB2 (needs display
 > + cameras), V7 UI, hardware playbook A–H (mechanical rig).
 > Control-plane stays on MessagePort (REST considered & rejected — §4).
+> **Dispatch-loop iteration 2 (2026-07-06, post-checkpoint-#3):** A
+> landed V7 interactive target placement (+V10 fix); B landed 12-bit
+> preview-safe format filtering — **12-bit readout is now code-complete
+> end to end** (UI half existed since 06-05; only rig A/B verification
+> remains) — and the serial-trace decoder for the P4.1 bench
+> (`core/scripts/decode-serial-trace.cjs`). All planner-verified; gates
+> 67/67 green. This work is **uncommitted** — fold into the next
+> checkpoint.
 > **Branch:** `refactor/decouple-orchestrator`
 > **Owner:** Yuxuan (plan) / coder threads (implementation). Entries
 > marked **(coder)** are reports from an implementing agent; ✓ marks
@@ -429,8 +437,17 @@ the cited code paths; V5/V6 fix specs were carried into Round 3 (§7.1).
   last-write-wins — no need for `async-reactive.md`'s revision/merge
   design. Harness: interleaved `write`s broadcast only committed values;
   concurrent first-load `update`s lose neither patch.
-- **V7 🟡 ✓ confirmed — multi-fovea renderer is not yet an interactive
-  multi-target surface.** The UI toggles enabled targets and pulse width
+- **V7 🟡 ✅ fixed (coder A, 2026-07-06), ✓ planner-verified same day** —
+  target select + enable, drag-steers-release-commits on the center
+  view (commands only: `setTargetEnabled`/`steerTarget`/`placeTarget`;
+  nested-state rule honored via `setState` + explicit `applyTargets`),
+  per-target colored bbox/index overlays; placement re-inits via the
+  `setTargets` release path. Follow-on finding **V10 🟡 ✅ fixed same
+  iteration**: stale `updateAsync` completion could override an
+  in-progress drag for one frame (same stale-async class as V5/T6) —
+  post-await bail now also checks `slot.steering`; harness case added.
+  GUI verification rig-gated as usual. Original finding: **multi-fovea
+  renderer was not an interactive multi-target surface.** The UI toggles enabled targets and pulse width
   only; there is no way to place per-target centers, so enabled targets
   track from the default `{x: 0, y: 0}` unless state is written externally.
   Fine as the harness skeleton it was specced as — just don't read "M

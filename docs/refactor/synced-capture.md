@@ -13,6 +13,10 @@
 > `MultiFoveaRuntime.syncStreams()`: late `createStream` completions are
 > generation-guarded, stale handles close immediately, and target changes
 > during an in-flight sync dirty-rerun.**
+> **Bench prep (2026-07-06):** `core/scripts/decode-serial-trace.cjs`
+> (+ fixture) decodes the §9.7 17-point `seq=` trace into per-seq
+> timelines/deltas/missing-phase flags — run it on the bench session's
+> stderr capture to make the P4.1 FIN-timeout diagnosis mechanical.
 > **Branch:** TBD (new branch off `refactor/decouple-orchestrator` or after it merges).
 > **Owner:** Yuxuan (plan) / separate coder (implementation).
 > **Last updated:** 2026-07-05
