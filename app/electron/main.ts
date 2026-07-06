@@ -54,8 +54,8 @@ if (!app.requestSingleInstanceLock()) {
 
 let win: BrowserWindow | null = null;
 const shmStreamsEnabled = process.env.FOVEA_SHM_STREAMS === "1";
-const preload = path.join(DIR, shmStreamsEnabled ? "preload-shm.mjs" : "preload.mjs");
-const profilerPreload = path.join(DIR, "preload.mjs");
+const preload = path.join(DIR, shmStreamsEnabled ? "preload-shm.cjs" : "preload.cjs");
+const profilerPreload = path.join(DIR, "preload.cjs");
 const indexHtml = path.join(RENDERER_DIST, "index.html");
 
 async function createWindow() {

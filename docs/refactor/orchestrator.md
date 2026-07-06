@@ -513,13 +513,21 @@ window + the profiler window run `sandbox: true` by design. So every
 sandboxed window lost its preload in all modes. **Fix (planner, direct
 — user was blocked live):** eliminated the shared module; each preload
 entry now inlines its own hand-synced bridge copy with a KEEP
-SELF-CONTAINED banner; `preload-common.ts` deleted. **Process lessons:**
-(a) `vite build` green cannot catch this class — new standing gate:
-built `preload*.mjs` must contain no relative imports (mechanical
-grep, added to split-of-work); (b) my review verified the shm-on path
-and never re-checked the *flag-off* boot path after the preload
-restructure — flag-off is a first-class path, not "unchanged by
-definition", once shared files move.
+SELF-CONTAINED banner; `preload-common.ts` deleted. **V11b (same session):** the very next boot
+(flag-on) hit the twin failure — the plugin builds preloads as **CJS
+content named `.mjs`** (under `"type": "module"`), which sandboxed
+loaders tolerate (require is injected) but the unsandboxed shm window
+loads as real ESM → `require is not defined in ES module scope`. Fix:
+preload build now emits `format: "cjs"` + `[name].cjs`; `main.ts`
+paths updated. **Process lessons:**
+(a) `vite build` green cannot catch either failure — new standing
+gate: built `preload*.cjs` must contain no relative imports
+(mechanical grep, added to split-of-work); (b) my review verified the
+shm-on path *statically* and the flag-off path not at all after the
+preload restructure — a preload change is boot-path-critical in every
+sandbox mode × flag combination, and only a boot exercises it. The
+PB2 pre-check now effectively covers all three combinations (flag-off
+main, flag-on main, profiler).
 
 ## 7. Roadmap
 

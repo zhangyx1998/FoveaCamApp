@@ -87,7 +87,17 @@ export default defineConfig(({ command }) => {
                             outDir: target,
                             rollupOptions: {
                                 external: isExternal,
-                                output: { inlineDynamicImports: false },
+                                // The plugin builds preloads as CJS but names
+                                // them .mjs under `"type": "module"` — fine
+                                // sandboxed (require is injected), fatal for
+                                // the unsandboxed shm window where Electron
+                                // loads .mjs as real ESM and bare `require`
+                                // throws (V11b). Name them what they are.
+                                output: {
+                                    inlineDynamicImports: false,
+                                    format: "cjs",
+                                    entryFileNames: "[name].cjs",
+                                },
                             },
                         },
                     },

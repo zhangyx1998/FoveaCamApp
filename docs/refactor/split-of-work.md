@@ -72,9 +72,11 @@ ownership table keeps their file domains disjoint.
 `vite build` fully green; renderer bundle **zero-core**; orchestrator
 bundle **zero-Vue**; `core make build` both runtimes when native code is
 touched; reader addon `otool -L` shows system libraries only; built
-`preload*.mjs` contain **no relative imports** (`grep -E
-'(from |require\()"\./' .dist/electron/preload*.mjs` must be empty —
-sandboxed preloads cannot load sibling chunks, V11). Tree stays
+`preload*.cjs` contain **no relative imports** (`grep -E
+'(from |require\()"\./' .dist/electron/preload*.cjs` must be empty —
+sandboxed preloads cannot load sibling chunks, V11) and preloads stay
+`.cjs`/CJS (unsandboxed windows load `.mjs` as real ESM where bare
+`require` throws, V11b). Tree stays
 uncommitted — the user commits at planner-declared checkpoints. `npx`
 and direct shell commands are permitted for type checking, builds, and
 test scripts (all run inside the workspace-write sandbox; network access
