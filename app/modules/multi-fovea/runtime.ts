@@ -37,6 +37,7 @@ type Slot = {
   stream: StreamHandle | null;
   active: boolean;
   bbox: Rect | null;
+  steering: Point2d | null;
   angle: Point2d;
   volt: MultiFoveaTargetTelemetry["volt"];
   lostCount: number;
@@ -63,8 +64,13 @@ export class MultiFoveaRuntime {
     const next = configs.map((config, index) => {
       const existing = this.slots[index];
       if (existing) {
+        const changed = !sameTargetConfig(existing.config, config);
         existing.config = config;
-        if (!config.enabled) this.releaseSlot(existing);
+        if (!config.enabled || changed) this.releaseSlot(existing);
+        existing.steering = null;
+        const pose = this.deps.targetPose(index, config.center);
+        existing.angle = pose.angle;
+        existing.volt = pose.volt;
         return existing;
       }
       const pose = this.deps.targetPose(index, config.center);
@@ -74,6 +80,7 @@ export class MultiFoveaRuntime {
         stream: null,
         active: false,
         bbox: null,
+        steering: null,
         angle: pose.angle,
         volt: pose.volt,
         lostCount: 0,
@@ -83,6 +90,26 @@ export class MultiFoveaRuntime {
     for (const slot of this.slots.slice(configs.length)) this.releaseSlot(slot);
     this.slots = next;
     this.requestStreamSync();
+    this.publish();
+  }
+
+  steerTarget(index: number, center: Point2d): void {
+    const slot = this.slots[index];
+    if (!slot?.config.enabled) return;
+    slot.tracker?.release();
+    slot.tracker = null;
+    slot.active = false;
+    slot.steering = center;
+    slot.bbox = this.clampRect(
+      RECT.fromCenter(center, {
+        width: slot.config.tracker.width,
+        height: slot.config.tracker.height,
+      }),
+    );
+    const pose = this.deps.targetPose(index, center);
+    slot.angle = pose.angle;
+    slot.volt = pose.volt;
+    slot.stream?.update({ left: pose.volt.L, right: pose.volt.R });
     this.publish();
   }
 
@@ -127,6 +154,13 @@ export class MultiFoveaRuntime {
     generation: number,
   ): Promise<void> {
     if (!slot.config.enabled) return;
+    if (slot.steering) {
+      const pose = this.deps.targetPose(index, slot.steering);
+      slot.angle = pose.angle;
+      slot.volt = pose.volt;
+      slot.stream?.update({ left: pose.volt.L, right: pose.volt.R });
+      return;
+    }
     if (!slot.tracker) {
       const roi = this.clampRect(
         RECT.fromCenter(slot.config.center, {
@@ -141,7 +175,7 @@ export class MultiFoveaRuntime {
       slot.lostCount = 0;
     } else {
       const bbox = await slot.tracker.updateAsync(frame);
-      if (generation !== this.generation) return;
+      if (generation !== this.generation || slot.steering) return;
       if (bbox) {
         slot.bbox = this.clampRect(bbox);
         slot.lostCount = 0;
@@ -214,6 +248,7 @@ export class MultiFoveaRuntime {
     slot.stream = null;
     slot.active = false;
     slot.bbox = null;
+    slot.steering = null;
   }
 
   private clampRect(r: Rect): Rect {
@@ -240,4 +275,20 @@ export class MultiFoveaRuntime {
       })),
     );
   }
+}
+
+function sameTargetConfig(
+  a: MultiFoveaTargetConfig,
+  b: MultiFoveaTargetConfig,
+): boolean {
+  return (
+    a.enabled === b.enabled &&
+    a.center.x === b.center.x &&
+    a.center.y === b.center.y &&
+    a.tracker.width === b.tracker.width &&
+    a.tracker.height === b.tracker.height &&
+    a.tracker.padX === b.tracker.padX &&
+    a.tracker.padY === b.tracker.padY &&
+    a.tracker.lostTolerance === b.tracker.lostTolerance
+  );
 }

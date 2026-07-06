@@ -4,24 +4,89 @@ This source code is licensed under the MIT license.
 You may find the full license in project root directory.
 --------------------------------------------------- -->
 <script setup lang="ts">
+import { computed, ref } from "vue";
 import { useSession } from "@lib/orchestrator/client";
 import { multiFovea } from "./contract";
 import StreamView from "@src/components/StreamView.vue";
 import PosView from "@src/components/PosView.vue";
 import RangeSlider from "@src/inputs/range-slider.vue";
+import type { Point2d, Rect, Size } from "core/Geometry";
 
 const session = useSession(multiFovea, "multi-fovea");
 const { state, telemetry } = session;
 const center = session.frame("C");
+const selectedTarget = ref(0);
+const draftCenter = ref<Point2d | null>(null);
+const stroke = computed(
+  () => Math.max(telemetry.size.width, telemetry.size.height, 1) * 0.003,
+);
+
+const TARGET_COLORS = [
+  "#00aaff",
+  "#ffb000",
+  "#36d16f",
+  "#ff5b8a",
+  "#b983ff",
+  "#00d5c7",
+  "#ff7a35",
+  "#d6e04f",
+];
+
+let dragging = false;
+let lastSteer: Point2d = { x: 0, y: 0 };
 
 function setTargetEnabled(index: number, enabled: boolean): void {
-  const next = state.targets.slice();
-  next[index] = { ...next[index], enabled };
-  state.targets = next;
+  selectedTarget.value = index;
+  session.call("setTargetEnabled", { index, enabled });
 }
 
 function onTargetEnabled(index: number, event: Event): void {
   setTargetEnabled(index, (event.target as HTMLInputElement).checked);
+}
+
+function onSelectedTarget(index: number): void {
+  selectedTarget.value = index;
+}
+
+function targetColor(index: number): string {
+  return TARGET_COLORS[index % TARGET_COLORS.length];
+}
+
+function targetCenter(index: number, bbox: Rect | null | undefined): Point2d {
+  if (bbox)
+    return {
+      x: bbox.x + bbox.width / 2,
+      y: bbox.y + bbox.height / 2,
+    };
+  return state.targets[index]?.center ?? { x: 0, y: 0 };
+}
+
+function onCursor(c: (Point2d & Size & { buttons: number }) | null): void {
+  if (c) {
+    lastSteer = { x: c.x, y: c.y };
+    if (c.buttons & 1) {
+      dragging = true;
+      draftCenter.value = lastSteer;
+      session.call("steerTarget", {
+        index: selectedTarget.value,
+        center: lastSteer,
+      });
+    } else if (dragging) {
+      dragging = false;
+      session.call("placeTarget", {
+        index: selectedTarget.value,
+        center: lastSteer,
+      });
+      draftCenter.value = null;
+    }
+  } else if (dragging) {
+    dragging = false;
+    session.call("placeTarget", {
+      index: selectedTarget.value,
+      center: lastSteer,
+    });
+    draftCenter.value = null;
+  }
 }
 
 function targetFrame(index: number) {
@@ -43,7 +108,54 @@ async function captureOnce(): Promise<void> {
         :payload="center"
         theme="#0af"
         inspector
-      />
+        @mouse="onCursor"
+      >
+        <g
+          v-for="target in telemetry.targets"
+          :key="target.index"
+          :class="{ selected: target.index === selectedTarget }"
+        >
+          <template v-if="target.enabled">
+            <rect
+              v-if="target.bbox"
+              :x="target.bbox.x"
+              :y="target.bbox.y"
+              :width="target.bbox.width"
+              :height="target.bbox.height"
+              :stroke="targetColor(target.index)"
+              :stroke-width="target.index === selectedTarget ? stroke * 1.8 : stroke"
+              fill="none"
+            />
+            <circle
+              :cx="targetCenter(target.index, target.bbox).x"
+              :cy="targetCenter(target.index, target.bbox).y"
+              :r="stroke * 3"
+              :fill="targetColor(target.index)"
+            />
+            <text
+              :x="targetCenter(target.index, target.bbox).x + stroke * 5"
+              :y="targetCenter(target.index, target.bbox).y - stroke * 5"
+              :fill="targetColor(target.index)"
+              :font-size="stroke * 9"
+              font-weight="700"
+              paint-order="stroke"
+              stroke="#000"
+              :stroke-width="stroke * 2"
+            >
+              {{ target.index + 1 }}
+            </text>
+          </template>
+        </g>
+        <circle
+          v-if="draftCenter"
+          :cx="draftCenter.x"
+          :cy="draftCenter.y"
+          :r="stroke * 5"
+          :stroke="targetColor(selectedTarget)"
+          :stroke-width="stroke"
+          fill="none"
+        />
+      </StreamView>
       <div class="controls">
         <div class="status">
           <span :class="{ live: telemetry.ready }">ready</span>
@@ -63,6 +175,12 @@ async function captureOnce(): Promise<void> {
       <article v-for="(target, index) in state.targets" :key="index" class="target">
         <header>
           <label>
+            <input
+              type="radio"
+              name="multi-fovea-target"
+              :checked="selectedTarget === index"
+              @change="onSelectedTarget(index)"
+            />
             <input
               type="checkbox"
               :checked="target.enabled"

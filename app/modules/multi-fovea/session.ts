@@ -140,6 +140,25 @@ export default function multiFoveaSession(): ServerSession<typeof multiFovea> {
       runtime.setTargets(s.state.targets.slice(0, MAX_MULTI_FOVEA_TARGETS));
     }
 
+    function updateTarget(
+      index: number,
+      update: (
+        target: (typeof s.state.targets)[number],
+      ) => (typeof s.state.targets)[number],
+    ): void {
+      if (
+        !Number.isInteger(index) ||
+        index < 0 ||
+        index >= MAX_MULTI_FOVEA_TARGETS
+      )
+        return;
+      const next = s.state.targets.slice(0, MAX_MULTI_FOVEA_TARGETS);
+      const current = next[index] ?? defaultMultiFoveaTarget(index);
+      next[index] = update(current);
+      s.setState("targets", next);
+      applyTargets();
+    }
+
     async function activateSession(): Promise<void> {
       const t = await leaseCalibratedTriple();
       if (!t) {
@@ -168,6 +187,15 @@ export default function multiFoveaSession(): ServerSession<typeof multiFovea> {
 
     return {
       commands: {
+        async setTargetEnabled({ index, enabled }) {
+          updateTarget(index, (target) => ({ ...target, enabled }));
+        },
+        async steerTarget({ index, center }) {
+          runtime.steerTarget(index, center);
+        },
+        async placeTarget({ index, center }) {
+          updateTarget(index, (target) => ({ ...target, center }));
+        },
         async resetTargets() {
           s.setState(
             "targets",

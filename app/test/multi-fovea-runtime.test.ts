@@ -2,7 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import type { Mat } from "core/Vision";
 import type { Rect } from "core/Geometry";
 import { MultiFoveaRuntime, type TrackerLike } from "@modules/multi-fovea/runtime";
-import { defaultMultiFoveaTarget } from "@modules/multi-fovea/contract";
+import {
+  defaultMultiFoveaTarget,
+  type MultiFoveaTargetTelemetry,
+} from "@modules/multi-fovea/contract";
 
 function frame(): Mat<Uint8Array> {
   return Object.assign(new Uint8Array(100 * 100 * 4), {
@@ -60,7 +63,10 @@ describe("MultiFoveaRuntime", () => {
         targetPose(_index, center) {
           return {
             angle: center,
-            volt: { L: { x: center.x, y: center.y }, R: { x: -center.x, y: -center.y } },
+            volt: {
+              L: { x: center.x, y: center.y },
+              R: { x: -center.x, y: -center.y },
+            },
           };
         },
         updateScheduler(targets) {
@@ -86,6 +92,159 @@ describe("MultiFoveaRuntime", () => {
     await runtime.onCenterFrame(frame());
     expect(trackers[0].updateAsync).toHaveBeenCalledTimes(1);
     expect(trackers[1].updateAsync).toHaveBeenCalledTimes(1);
+  });
+
+  it("reinitializes tracker and stream when target center changes", async () => {
+    const trackers: FakeTracker[] = [];
+    const streams = [
+      { id: 30, update: vi.fn(), close: vi.fn(async () => {}) },
+      { id: 31, update: vi.fn(), close: vi.fn(async () => {}) },
+    ];
+    const streamCenters: Array<{ x: number; y: number }> = [];
+    let streamIndex = 0;
+    const runtime = new MultiFoveaRuntime(
+      { activeRequestCount: 0 },
+      {
+        createTracker() {
+          const tracker = new FakeTracker();
+          trackers.push(tracker);
+          return tracker;
+        },
+        async createStream(_index, center) {
+          streamCenters.push(center);
+          return streams[streamIndex++] ?? null;
+        },
+        targetPose(_index, center) {
+          return {
+            angle: center,
+            volt: {
+              L: { x: center.x, y: center.y },
+              R: { x: -center.x, y: -center.y },
+            },
+          };
+        },
+        updateScheduler: vi.fn(),
+        publish: vi.fn(),
+      },
+    );
+
+    const first = {
+      ...defaultMultiFoveaTarget(0),
+      center: { x: 50, y: 50 },
+      tracker: {
+        ...defaultMultiFoveaTarget(0).tracker,
+        width: 10,
+        height: 10,
+      },
+    };
+    runtime.setTargets([first]);
+    await flush();
+    const firstFrame = frame();
+    await runtime.onCenterFrame(firstFrame);
+
+    expect(trackers[0].init).toHaveBeenCalledWith(firstFrame, {
+      x: 45,
+      y: 45,
+      width: 10,
+      height: 10,
+    });
+    expect(streamCenters).toEqual([{ x: 50, y: 50 }]);
+
+    const moved = { ...first, center: { x: 30, y: 40 } };
+    runtime.setTargets([moved]);
+    await flush();
+
+    expect(trackers[0].release).toHaveBeenCalledTimes(1);
+    expect(streams[0].close).toHaveBeenCalledTimes(1);
+    expect(streamCenters).toEqual([
+      { x: 50, y: 50 },
+      { x: 30, y: 40 },
+    ]);
+
+    const movedFrame = frame();
+    await runtime.onCenterFrame(movedFrame);
+    expect(trackers).toHaveLength(2);
+    expect(trackers[1].init).toHaveBeenCalledWith(movedFrame, {
+      x: 25,
+      y: 35,
+      width: 10,
+      height: 10,
+    });
+    expect(streams[1].update).toHaveBeenLastCalledWith({
+      left: { x: 30, y: 40 },
+      right: { x: -30, y: -40 },
+    });
+  });
+
+  it("ignores tracker completion that resolves after drag steering", async () => {
+    let resolveUpdate!: (rect: Rect | null) => void;
+    class SlowTracker implements TrackerLike {
+      init = vi.fn();
+      updateAsync = vi.fn(
+        () =>
+          new Promise<Rect | null>((resolve) => {
+            resolveUpdate = resolve;
+          }),
+      );
+      release = vi.fn();
+    }
+    const tracker = new SlowTracker();
+    const stream = { id: 41, update: vi.fn(), close: vi.fn(async () => {}) };
+    const published: MultiFoveaTargetTelemetry[][] = [];
+    const runtime = new MultiFoveaRuntime(
+      { activeRequestCount: 0 },
+      {
+        createTracker: () => tracker,
+        async createStream() {
+          return stream;
+        },
+        targetPose(_index, center) {
+          return {
+            angle: center,
+            volt: {
+              L: { x: center.x, y: center.y },
+              R: { x: -center.x, y: -center.y },
+            },
+          };
+        },
+        updateScheduler: vi.fn(),
+        publish(targets) {
+          published.push(targets);
+        },
+      },
+    );
+
+    const target = {
+      ...defaultMultiFoveaTarget(0),
+      center: { x: 30, y: 30 },
+      tracker: {
+        ...defaultMultiFoveaTarget(0).tracker,
+        width: 10,
+        height: 10,
+      },
+    };
+    runtime.setTargets([target]);
+    await flush();
+    await runtime.onCenterFrame(frame());
+
+    const pending = runtime.onCenterFrame(frame());
+    await flush();
+    expect(tracker.updateAsync).toHaveBeenCalledTimes(1);
+
+    runtime.steerTarget(0, { x: 50, y: 50 });
+    resolveUpdate({ x: 10, y: 20, width: 8, height: 6 });
+    await pending;
+
+    const last = published.at(-1)?.[0];
+    expect(last?.bbox).toEqual({ x: 45, y: 45, width: 10, height: 10 });
+    expect(last?.volt).toEqual({
+      L: { x: 50, y: 50 },
+      R: { x: -50, y: -50 },
+    });
+    expect(stream.update).toHaveBeenLastCalledWith({
+      left: { x: 50, y: 50 },
+      right: { x: -50, y: -50 },
+    });
   });
 
   it("ignores async tracker completions after dispose", async () => {

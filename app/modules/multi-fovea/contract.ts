@@ -78,6 +78,9 @@ export const multiFovea = defineContract({
   },
   frames: ["C"] as const,
   commands: {
+    setTargetEnabled: cmd<{ index: number; enabled: boolean }>(),
+    steerTarget: cmd<{ index: number; center: Point2d }>(),
+    placeTarget: cmd<{ index: number; center: Point2d }>(),
     resetTargets: cmd(),
     captureOnce: cmd<void, MultiFoveaCaptureResult>(),
   },
