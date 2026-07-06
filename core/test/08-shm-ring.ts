@@ -10,22 +10,53 @@ import { basename, dirname, join } from "node:path";
 import { createRequire } from "node:module";
 import { Worker } from "node:worker_threads";
 import { Shm, __origin__, cleanup } from "core";
+import type { ShmDescriptor } from "core/Shm";
+
+type ReaderHandle = object;
+type ReaderResult = {
+  seq: bigint;
+  gen: number;
+  retries: number;
+  meta: {
+    tCapture: number;
+    convertMs: number;
+    deviceTimestamp?: bigint;
+    systemTimestamp?: bigint;
+  };
+};
+type ReaderResultWithData = ReaderResult & { data: Uint8Array };
+type ReaderAddon = {
+  open(seg: string): ReaderHandle;
+  readInto(
+    handle: ReaderHandle,
+    dest: ArrayBuffer,
+    lastSeq: bigint,
+  ): ReaderResult | null;
+  close(handle: ReaderHandle): void;
+};
+type HammerMessage = { kind: "ready" | "done"; descriptor: ShmDescriptor };
 
 const require = createRequire(import.meta.url);
 const prefix = basename(__origin__, ".node");
-const reader = require(join(dirname(__origin__), `${prefix}-shm-reader.node`));
+const reader = require(
+  join(dirname(__origin__), `${prefix}-shm-reader.node`),
+) as ReaderAddon;
 
-function bytes(shape, channels) {
+function bytes(shape: number[], channels: number): number {
   return shape.reduce((p, n) => p * n, channels);
 }
 
-function readOnce(handle, descriptor, lastSeq = 0n) {
+function readOnce(
+  handle: ReaderHandle,
+  descriptor: ShmDescriptor,
+  lastSeq = 0n,
+): ReaderResultWithData | null {
   const out = new ArrayBuffer(bytes(descriptor.shape, descriptor.channels));
   const result = reader.readInto(handle, out, lastSeq);
   return result ? { ...result, data: new Uint8Array(out) } : null;
 }
 
-function assertPattern(result) {
+function assertPattern(result: ReaderResultWithData): void {
   const expected = Number(result.meta.tCapture) % 251;
   for (const byte of result.data)
     assert.equal(byte, expected, `torn SHM read at seq ${result.seq}`);
@@ -55,11 +86,13 @@ function assertPattern(result) {
   const second = writer.publish({ tCapture: 2 });
   assert.notEqual(first.shm.seg, second.shm.seg);
   const oldRead = readOnce(oldReader, first);
-  assert.equal(oldRead?.gen, 1);
+  assert(oldRead);
+  assert.equal(oldRead.gen, 1);
   assertPattern(oldRead);
   const newReader = reader.open(second.shm.seg);
   const newRead = readOnce(newReader, second);
-  assert.equal(newRead?.gen, 2);
+  assert(newRead);
+  assert.equal(newRead.gen, 2);
   assertPattern(newRead);
   reader.close(oldReader);
   reader.close(newReader);
@@ -102,8 +135,8 @@ function assertPattern(result) {
     `,
     { eval: true },
   );
-  const ready = await new Promise((resolve, reject) => {
-    worker.on("message", (message) => {
+  const ready = await new Promise<ShmDescriptor>((resolve, reject) => {
+    worker.on("message", (message: HammerMessage) => {
       if (message.kind === "ready") resolve(message.descriptor);
     });
     worker.on("error", reject);
@@ -113,9 +146,9 @@ function assertPattern(result) {
   let lastSeq = 0n;
   let reads = 0;
   let retries = 0;
-  let poll = null;
-  const done = await new Promise((resolve, reject) => {
-    worker.on("message", (message) => {
+  let poll: ReturnType<typeof setInterval> | null = null;
+  const done = await new Promise<ShmDescriptor>((resolve, reject) => {
+    worker.on("message", (message: HammerMessage) => {
       if (message.kind === "done") {
         if (poll) clearInterval(poll);
         poll = null;

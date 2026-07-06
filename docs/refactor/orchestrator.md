@@ -228,9 +228,14 @@ to create camera object"), and un-retried activations stayed dead
   widened `cameraConfigPath`; cold triple = 2 discovery passes (was 4), warm
   = 1. Not yet profiled against `applyStoredConfig`/`loadConversions` (needs
   GUI session).
-- **F2 (symmetric handoff) — open, deprioritized:** F1 closes the
-  correctness gap; F2 would only make the fast path deterministic. Dies with
-  the last renderer-bound camera module anyway.
+- **F2 (symmetric handoff) — ✅ obsolete (2026-07-06), closed without
+  code.** It was predicted to "die with the last renderer-bound camera
+  module" — that happened: since Stage 2 S1 every camera consumer is
+  orchestrator-side, so the cross-process acquire-before-release race
+  F2 targeted can no longer occur (same-process re-opens are deduped by
+  core's refcount registry; module switches move leases, not device
+  ownership). F1's `retryUntil` remains as belt-and-suspenders for
+  external contention (e.g. a stray process holding a camera).
 
 ### Planner review of the coder pass (2026-07-03)
 

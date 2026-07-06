@@ -132,6 +132,8 @@ control is the planner's review loop.
   (`03-ArUco`, `08-shm-ring` — the latter is C-owned). Hardware items
   stay rig-gated.
   - Log:
+- **(B-3 accepted & cleared 2026-07-06** — core/test typecheck now
+  fully green combined with C-4.)
 
 ## Coder C — SHM frame path (end-to-end)
 
@@ -147,10 +149,9 @@ session.
 
 ### Active instructions
 
-- **C-standby.** No active instructions. C-1 (ping-pong pool) and C-2
-  (native hardening + sweep, incl. V8/V9 seqlock steering) were
-  planner-accepted 2026-07-06 and archived to orchestrator.md §6 +
-  §7.1 Stage 4. Next C work is C-3 when the planner releases it.
+- **C-standby note.** C-1/C-2 were planner-accepted 2026-07-06 and
+  archived (orchestrator.md §6 + §7.1 Stage 4).
+- **(C-4 accepted & cleared 2026-07-06.)**
 - **C-3 (held).** PB2 live measurement (orchestrator.md §7.1 Stage 4
   Round C) — needs display + cameras and planner acceptance of C-1/C-2
   first. Do not start.

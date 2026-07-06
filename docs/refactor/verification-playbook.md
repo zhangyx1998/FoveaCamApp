@@ -51,6 +51,44 @@
       display for every stage. If S5 spans landed: note orchestrator boot
       timings on first launch — the first data of the day.
 
+## Session PB2 — shm transport measurement (display + cameras only — runnable BEFORE the rig returns, ~15 min)
+
+Closes PB1's loop with numbers (orchestrator.md §6 PB1 / §7.1 Stage 4
+Round C). Cameras + a display are enough; no mirrors, no scope.
+
+- [ ] **Baseline (flag off):** `npm run app`; manage-cameras with all 3
+      previews; inspector on (Ctrl+Shift+I); 60 s dwell; Ctrl+Shift+S →
+      snapshot 1.
+- [ ] **Shm run:** quit; `FOVEA_SHM_STREAMS=1 npm run app`; same
+      scenario. OSD must show `SHM gen/retries` on each preview and NO
+      `bridge N` counter (if `bridge` appears, the transfer pool fell
+      back — check the console warning and file it). 60 s; Ctrl+Shift+S
+      → snapshot 2.
+- [ ] **Targets:** orchestrator `loopLag` mean **< 5 ms** in snapshot 2
+      (PB1 baseline: 47 ms); shm `retries` ≈ 0; `fallbackReads` absent.
+      T10's window fields make rates directly comparable.
+- [ ] **Mixed-path sanity:** open tracking-single (its serial has
+      `onView` taps → stays on the clone path by design); preview still
+      live; OSD shows non-shm for that stream while manage-cameras
+      previews (if open in a second window) stay shm.
+- [ ] **Multi-fovea placement (V7):** open Object Tracking (Multi);
+      select target 0 + enable; drag on the center overview — bbox
+      follows the cursor (no snap-away mid-drag — V10); release —
+      re-init at the drop point. Enable target 1 elsewhere: independent
+      overlay/tracking. Disable removes its overlay. `captureOnce`
+      without v2 firmware must show the structured REJ reason, not an
+      error state.
+- [ ] **12-bit (code-complete, first live check):** manage-cameras →
+      pixel format selector lists only preview-safe formats; switch to
+      a 12p format — preview stays live and correctly bright (not ~16×
+      dark); switch back. (The debayer-noise A/B comparison is a
+      separate, longer session — this is just the plumbing check.)
+- [ ] Archive both snapshots under `docs/refactor/baselines/<date>/`
+      and note the environment; hand to the planner → PB2 gets filed
+      and the downscale-lever decision closes.
+- On failure: orchestrator.md §6 as **PB2-#**; `FOVEA_SHM_STREAMS`
+  unset is the instant, byte-identical revert.
+
 ## Stage A — store-hub smoke (widest blast radius, zero cameras needed)
 
 Touches every `Store.open` consumer including renderer-bound calibrate-*.
@@ -125,8 +163,10 @@ First-ever live run of orchestrator-side capture/record.
       1. tracking locked on target, 60 s, windows idle → `perfSnapshot`;
       2. same + continuous main-window resize/devtools → snapshot
          (orchestrator `loopLag` must stay flat — the §1 claim);
-      3. two windows on one camera → snapshot (copy-cost datum for the
-         shm-ring gate).
+      3. two windows on one camera → snapshot, once with
+         `FOVEA_SHM_STREAMS=1` and once without (the multi-window
+         marginal-producer-cost datum: shm should be ≈ 0, clone
+         linear-per-window).
       Store snapshots under `docs/refactor/baselines/<date>/` and commit.
 - On failure: orchestrator.md §6, **RT-W#**.
 
