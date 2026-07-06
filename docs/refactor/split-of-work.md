@@ -9,7 +9,9 @@
 ## Planner
 
 The planner (Claude session directed by Yuxuan) owns everything about
-this effort except writing the implementation itself:
+this effort except writing the implementation itself. **Incoming
+planners: read [`planner.md`](./planner.md) first — the full handover
+(state, dispatch mechanics, environment gotchas, next actions).**
 
 - **Sequencing & scope.** Decides what work exists, splits it into
   stages/rounds/instructions, orders it against dependencies and
@@ -113,10 +115,31 @@ hardware-dependent behavior verified without a real rig run.
 
 ### Active instructions
 
-- **A-standby.** A-3 (shm-only session frames) planner-accepted
-  2026-07-06 — the V13 steering item (switch to `slot.write`) was
-  applied by the planner directly (Codex quota exhausted until 22:09;
-  fix was small and fully specced). Archived to orchestrator.md §6/§7.1.
+- **A-4 — disparity-scope: async tracker (PB3; spec orchestrator.md §6
+  PB3).** Replace the synchronous per-frame `updateTracker(raw)` in
+  `onCenterView` with the T6 `tracker.updateAsync` pattern already used
+  by tracking-single/multi-fovea: busy-drop overlapping ticks, results
+  applied on completion with a staleness guard (session idle /
+  re-target — V5/V10 class), copy-before-await honored (the native arg
+  conversion copies synchronously). Harness: extend the existing
+  tracking-retry or a small disparity suite for the busy-drop + stale
+  completion. DoD: standing gates.
+  - Log:
+- **A-5 — latest-wins processing gate for session display vision (PB3).**
+  `onView` sinks in manual-control and disparity-scope currently run
+  full-frame vision inline (undistort.apply, wrapPerspective, slice/
+  diff/depth). Introduce one shared helper (e.g.
+  `orchestrator/frame-worker.ts`): sink copies the tap into a reusable
+  buffer and marks it latest; a busy-gated async processor consumes the
+  latest frame, runs the vision ops, publishes via `s.frame(...)` —
+  frames arriving while busy are coalesced (latest wins), mirroring
+  disparity's `step()` gate. Convert both modules' display-vision
+  paths onto it; actuation-relevant math stays where the module needs
+  it (disparity's control path is already decoupled via `step`).
+  Expected outcome, verify in log reasoning: registry serials return
+  to camera rate regardless of session load; processed topics publish
+  at their own capacity. DoD: standing gates; note per-module what
+  remains inline and why.
   - Log:
 
 ## Coder B — Native core, protocol & firmware

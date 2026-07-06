@@ -159,6 +159,11 @@ renderer camera ownership meant streams could not be shared across windows.
   subpaths* (`isExternal(id)` in `vite.config.ts`).
 - **Numeric inputs:** use `RangeSlider` (emits numbers); raw range inputs
   emit strings and native setters throw.
+- **`onView` sinks must return fast (PB3).** Sinks run synchronously
+  inside the registry camera loop — ms-scale inline work (sync KCF,
+  undistort, wraps) throttles the entire serial, previews included.
+  Copy what you need and hand off to a busy-gated, latest-wins
+  processor; publish results from there.
 
 ## 4. Design decisions (locked)
 
@@ -613,6 +618,28 @@ round-trip + size guards. **Lesson:** any JS-visible buffer API over
 shm must state its cage semantics in the .d.ts, and `#ifdef
 V8_MEMORY_CAGE` runtime-split behavior is a standing review trigger —
 node-green ≠ electron-green.
+
+### PB3 — sub-app fps bound by synchronous session work inside the camera loop (2026-07-06, user snapshots 16:09/16:11Z)
+
+Disparity-scope session topics publish at ~38/s solo, ~17/s when two
+modules' counter windows overlap (tracking ~20/s) — vs manage-cameras'
+60. Descriptors confirm the transport is not the limiter (bytes/frame
+= 0 on the wire). **Cause: `onView` sinks are called synchronously
+inside the registry preview loop, and sub-app sessions do heavyweight
+work inline before returning** — disparity runs a *synchronous* KCF
+`updateTracker` every frame (never migrated to T6's `updateAsync`;
+only tracking-single was), manual-control runs `undistort.apply` (full
+remap) + fovea `wrapPerspective` per frame. The camera loop cannot pull
+the next frame until every sink returns, so one slow session throttles
+the *serial* — previews included — to 1/(inline work). Disparity's
+`step()` shows the correct pattern already (busy-gated, guide/match at
+13/s without dragging the rest). **Fix queued as A-4/A-5** (workers
+quota-locked until 22:09): async tracker + a general latest-wins
+processing gate so `onView` sinks only copy + hand off. **Promoted to
+§3 hard rule:** `onView` sinks must return fast — copy the tap and
+schedule; anything ms-scale inline throttles the whole serial.
+Snapshot-taking note: renderer-side frame timing requires exporting
+via Ctrl+Shift+S **with inspector mode on, in the main window**.
 
 ## 7. Roadmap
 
