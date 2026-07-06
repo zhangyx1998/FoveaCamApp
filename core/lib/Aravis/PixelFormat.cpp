@@ -28,6 +28,7 @@ PixelFormat convert(const ArvPixelFormat &fmt) {
     CASE(ARV_PIXEL_FORMAT_BAYER_GR_16, BayerGR16);
     CASE(ARV_PIXEL_FORMAT_BAYER_RG_16, BayerRG16);
     CASE(ARV_PIXEL_FORMAT_BAYER_GB_16, BayerGB16);
+    CASE(ARV_PIXEL_FORMAT_BAYER_BG_16, BayerBG16);
     CASE(ARV_PIXEL_FORMAT_MONO_12P, Mono12p);
     CASE(ARV_PIXEL_FORMAT_BAYER_GR_12P, BayerGR12p);
     CASE(ARV_PIXEL_FORMAT_BAYER_RG_12P, BayerRG12p);
@@ -62,6 +63,7 @@ template <> PixelFormat convert(const std::string &fmt) {
   CASE(BayerGR16);
   CASE(BayerRG16);
   CASE(BayerGB16);
+  CASE(BayerBG16);
   CASE(Mono12p);
   CASE(BayerGR12p);
   CASE(BayerRG12p);
@@ -89,6 +91,7 @@ template <> std::string convert(const PixelFormat &fmt) {
     CASE(BayerGR16);
     CASE(BayerRG16);
     CASE(BayerGB16);
+    CASE(BayerBG16);
     CASE(Mono12p);
     CASE(BayerGR12p);
     CASE(BayerRG12p);
@@ -111,6 +114,8 @@ template <> cv::Format convert(const PixelFormat &fmt) {
   case BayerGR16:
   case BayerRG16:
   case BayerGB16:
+  case BayerBG16:
+    return cv::Format::U16C1;
   // 12p packed formats are unpacked into a 16-bit single-channel container.
   case Mono12p:
   case BayerGR12p:
@@ -157,6 +162,8 @@ template <> ArvPixelFormat convert(const PixelFormat &fmt) {
     return ARV_PIXEL_FORMAT_BAYER_RG_16;
   case BayerGB16:
     return ARV_PIXEL_FORMAT_BAYER_GB_16;
+  case BayerBG16:
+    return ARV_PIXEL_FORMAT_BAYER_BG_16;
   case Mono12p:
     return ARV_PIXEL_FORMAT_MONO_12P;
   case BayerGR12p:
@@ -297,6 +304,7 @@ cv::ColorConversionCodes Arv::cvtColorCode(PixelFormat src, PixelFormat dst) {
       CASE(Mono16, BayerGB2GRAY);
       DEFAULT;
     }
+  case BayerBG16:
   case BayerBG12p:
     switch (dst) {
       CASE(RGB8, BayerBG2RGB);

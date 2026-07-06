@@ -28,9 +28,10 @@ declare module "core/Aravis" {
     readonly model: string;
     readonly serial: string;
 
-    // Pixel format control
+    // Pixel format control. Options are filtered to native-supported camera
+    // readout formats that Frame.view("BGRA8") can preview.
     pixel_format: PixelFormat;
-    readonly pixel_format_options: string[];
+    readonly pixel_format_options: PixelFormat[];
 
     // Acquisition control
     acquisition_mode: AcquisitionMode;

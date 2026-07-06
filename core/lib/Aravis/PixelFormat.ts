@@ -12,6 +12,7 @@ export type PixelFormat =
     | "BayerGR16"
     | "BayerRG16"
     | "BayerGB16"
+    | "BayerBG16"
     | "Mono12p"
     | "BayerGR12p"
     | "BayerRG12p"

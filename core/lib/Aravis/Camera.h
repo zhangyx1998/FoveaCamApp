@@ -104,7 +104,28 @@ public:
   ARV_CAMERA_GET(const char *, serial, device_serial_number);
   ARV_CAMERA_GET(ArvPixelFormat, pixel_format, pixel_format);
   ARV_CAMERA_SET(ArvPixelFormat, pixel_format, pixel_format);
-  ARV_CAMERA_DUP(pixel_format_options, pixel_formats_as_strings);
+  inline std::vector<std::string> get_pixel_format_options() const {
+    unsigned int count;
+    const char **list =
+        arv_camera_dup_available_pixel_formats_as_strings(get(), &count,
+                                                          &Error::error);
+    Error::check("arv_camera_dup_available_pixel_formats_as_strings");
+    std::vector<std::string> ret;
+    if (list) {
+      ret.reserve(count);
+      for (size_t i = 0; i < count; ++i) {
+        try {
+          const auto format = convert<PixelFormat>(std::string(list[i]));
+          if (canViewAs(format, BGRA8))
+            ret.emplace_back(convert<std::string>(format));
+        } catch (const UnknownPixelFormat &) {
+          // Keep selection limited to formats the Frame preview path supports.
+        }
+      }
+      g_free(list);
+    }
+    return ret;
+  }
 
   /* Acquisition control */
 

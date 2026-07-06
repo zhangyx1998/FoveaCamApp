@@ -74,6 +74,7 @@ typedef enum PixelFormat : uint8_t {
   BayerGR16,
   BayerRG16,
   BayerGB16,
+  BayerBG16,
   // GenICam 12-bit packed (12p): 2 pixels in 3 bytes, unpacked to CV_16UC1.
   Mono12p,
   BayerGR12p,
@@ -85,6 +86,17 @@ typedef enum PixelFormat : uint8_t {
 Format getPixelFormat(ArvBuffer *buffer);
 
 cv::ColorConversionCodes cvtColorCode(PixelFormat src, PixelFormat dst);
+
+inline bool canViewAs(PixelFormat src, PixelFormat dst) {
+  if (src == dst)
+    return true;
+  try {
+    (void)cvtColorCode(src, dst);
+    return true;
+  } catch (const UnknownPixelFormat &) {
+    return false;
+  }
+}
 
 // Significant bit depth of the pixel data. 12p data lives 0..4095 in a 16-bit
 // container, so display scaling must use 4095 (not the container's 65535).
@@ -100,6 +112,7 @@ inline int significantBits(PixelFormat format) {
   case BayerGR16:
   case BayerRG16:
   case BayerGB16:
+  case BayerBG16:
     return 16;
   default:
     return 8;
