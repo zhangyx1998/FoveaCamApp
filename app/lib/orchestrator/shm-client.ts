@@ -32,31 +32,25 @@
 
 import { frameByteLength } from "./frame-payload.js";
 import type { FramePayload } from "./protocol.js";
+import {
+  SHM_INIT,
+  SHM_READ,
+  SHM_READ_DONE,
+  type ShmReadDone,
+  type ShmReadRequest,
+} from "./shm-messages.js";
+import {
+  counterRate,
+  ratePerSec,
+  snapshotWindow,
+  type CounterRate,
+  type SampleStats,
+  type SnapshotWindow,
+  type WorkloadSnapshot,
+} from "./stats.js";
 
-/** Message the pool sends the preload to request a transferred read. */
-type ReadRequest = {
-  kind: "fovea:shm:read";
-  id: number;
-  payload: FramePayload;
-  buffer: ArrayBuffer;
-};
-
-/** Reply from the preload; `buffer` is transferred back so it can be pooled. */
-type ReadDone = {
-  kind: "fovea:shm:read-done";
-  id: number;
-  payload: FramePayload | null;
-  buffer?: ArrayBuffer;
-  error?: string;
-};
-
-/** Round-trip latency summary (ms) — same `{count, mean, max}` shape as the
- *  Channel frame-timing stats, so the OSD/profiler render it uniformly. */
-export type ShmLatencyStats = {
-  count: number;
-  mean: number;
-  max: number;
-};
+/** Round-trip latency summary (ms). */
+export type ShmLatencyStats = SampleStats;
 
 /** Observe-only counters for the transfer pool (C-P9 surfaces these as a
  *  workload/OSD block). Never gate reads on any of these. */
@@ -75,6 +69,19 @@ export type ShmReadStats = {
   poolHits: number;
   /** Reads currently awaiting a reply from the preload. */
   inFlight: number;
+  /** Cumulative stats window for all rates below. */
+  window: SnapshotWindow;
+  /** Rate view of the raw counters above. */
+  rates: {
+    reads: CounterRate;
+    nulls: CounterRate;
+    timeouts: CounterRate;
+    errors: CounterRate;
+    allocations: CounterRate;
+    poolHits: CounterRate;
+  };
+  /** Profiler-friendly workload-shaped view of the same observe-only counts. */
+  workload: WorkloadSnapshot;
   /** Round-trip latency of completed reads (reply received, not timed out). */
   latencyMs: ShmLatencyStats;
 };
@@ -113,13 +120,14 @@ function defaultPortOpener(): MessagePort | null {
     return null;
   const channel = new MessageChannel();
   channel.port1.start();
-  window.postMessage({ kind: "fovea:shm:init" }, "*", [channel.port2]);
+  window.postMessage({ kind: SHM_INIT }, "*", [channel.port2]);
   return channel.port1;
 }
 
 export function createShmClient(
   openPort: ShmPortOpener = defaultPortOpener,
 ): ShmClient {
+  const createdAt = Date.now();
   // Free-list of recyclable buffers, bucketed by byte length. Bounded per size
   // so a burst of odd sizes can't grow it without limit.
   const pools = new Map<number, ArrayBuffer[]>();
@@ -173,8 +181,8 @@ export function createShmClient(
   }
 
   function onDone(data: unknown): void {
-    const msg = data as ReadDone | undefined;
-    if (msg?.kind !== "fovea:shm:read-done") return;
+    const msg = data as ShmReadDone | undefined;
+    if (msg?.kind !== SHM_READ_DONE) return;
     const entry = pending.get(msg.id);
     // No matching pending entry: this is a STALE/late reply (the read already
     // timed out, or we were disposed). Reclaim the transferred buffer so it
@@ -234,7 +242,7 @@ export function createShmClient(
       }, READ_TIMEOUT_MS);
       pending.set(id, { resolve, reject, timer, startedAt });
       counts.inFlight = pending.size;
-      const req: ReadRequest = { kind: "fovea:shm:read", id, payload, buffer };
+      const req: ShmReadRequest = { kind: SHM_READ, id, payload, buffer };
       p.postMessage(req, [buffer]);
     });
   }
@@ -267,8 +275,45 @@ export function createShmClient(
       port = null;
     },
     stats() {
+      const window = snapshotWindow(createdAt);
+      const drops = counts.timeouts + counts.errors;
       return {
         ...counts,
+        window,
+        rates: {
+          reads: counterRate(counts.reads, window),
+          nulls: counterRate(counts.nulls, window),
+          timeouts: counterRate(counts.timeouts, window),
+          errors: counterRate(counts.errors, window),
+          allocations: counterRate(counts.allocations, window),
+          poolHits: counterRate(counts.poolHits, window),
+        },
+        workload: {
+          name: "renderer:shmReads",
+          window,
+          utilization: 0,
+          busyMs: 0,
+          inputs: {
+            requests: counterRate(
+              counts.reads + counts.nulls + counts.timeouts + counts.errors,
+              window,
+            ),
+          },
+          outputs: {
+            reads: counterRate(counts.reads, window),
+            nulls: counterRate(counts.nulls, window),
+            allocations: counterRate(counts.allocations, window),
+            poolHits: counterRate(counts.poolHits, window),
+          },
+          drops: {
+            total: drops,
+            ratePerSec: ratePerSec(drops, window),
+            byReason: {
+              timeout: counts.timeouts,
+              error: counts.errors,
+            },
+          },
+        },
         latencyMs: {
           count: latCount,
           mean: latCount ? latSum / latCount : 0,

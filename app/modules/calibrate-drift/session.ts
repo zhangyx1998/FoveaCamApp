@@ -12,10 +12,11 @@
 // implementation, just moved off it.
 
 import { defineSession, type ServerSession } from "@orchestrator/runtime";
-import { leaseCalibratedTriple, type CalibratedTriple } from "@orchestrator/calibration";
+import { acquireTriple, type CalibratedTriple } from "@orchestrator/calibration";
 import { read, write } from "@orchestrator/store-hub";
 import { activeController } from "@orchestrator/controller";
 import { startServo, type MarkerTracker, type Servo } from "@orchestrator/marker-tracker";
+import { bindViews, DisposerBag, releaseLeases } from "@orchestrator/session-resources";
 import {
   bindDetections,
   createTrackerTriple,
@@ -24,7 +25,6 @@ import {
   stopTriple,
 } from "@orchestrator/marker-calibration";
 import type { Point2d } from "core/Geometry";
-import type { Mat } from "core/Vision";
 import { calibrateDrift } from "./contract";
 
 // Mirror position is owned by the shared controller holder, not this
@@ -40,7 +40,7 @@ type DriftPair = { L: Point2d | null; R: Point2d | null };
 export default function calibrateDriftSession(): ServerSession<typeof calibrateDrift> {
   return defineSession("calibrate-drift", calibrateDrift, (s) => {
     let triple: CalibratedTriple | null = null;
-    const disposers: Array<() => void> = [];
+    const disposers = new DisposerBag();
     let trackers: Record<Role, MarkerTracker> | null = null;
     let servo: Servo | null = null;
     let saved: DriftPair = { L: null, R: null };
@@ -69,16 +69,9 @@ export default function calibrateDriftSession(): ServerSession<typeof calibrateD
       });
     }
 
-    function onView(role: Role, raw: Mat<Uint8Array>): void {
-      s.frame(role, raw);
-    }
-
     async function activateSession(): Promise<void> {
-      const t = await leaseCalibratedTriple();
-      if (!t) {
-        s.telemetry({ ready: false });
-        return;
-      }
+      const t = await acquireTriple(s);
+      if (!t) return;
       triple = t;
       const doc = await read<{ drift_l?: Point2d; drift_r?: Point2d }>(t.configPath, {});
       saved = { L: doc.drift_l ?? null, R: doc.drift_r ?? null };
@@ -88,9 +81,7 @@ export default function calibrateDriftSession(): ServerSession<typeof calibrateD
         s.state.target_id,
       );
       bindDetections(trackers, disposers, publishDetections);
-      disposers.push(t.leases.L.onView((v) => onView("L", v)));
-      disposers.push(t.leases.C.onView((v) => onView("C", v)));
-      disposers.push(t.leases.R.onView((v) => onView("R", v)));
+      bindViews(t.leases, disposers, s);
 
       servo = startServo(trackers.L, trackers.R, {
         kp: 10.0,
@@ -127,16 +118,10 @@ export default function calibrateDriftSession(): ServerSession<typeof calibrateD
       servo?.stop();
       servo = null;
       trackers = stopTriple(trackers);
-      for (const d of disposers) d();
-      disposers.length = 0;
-      if (triple) for (const l of Object.values(triple.leases)) l.release();
+      disposers.dispose();
+      releaseLeases(triple);
       triple = null;
-      s.telemetry({
-        ready: false,
-        detection: { L: null, C: null, R: null },
-        center_angle: null,
-        derived: { L: null, R: null },
-      });
+      s.resetTelemetry(["ready", "detection", "center_angle", "derived"]);
     }
 
     return {

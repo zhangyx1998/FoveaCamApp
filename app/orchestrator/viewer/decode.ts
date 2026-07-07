@@ -38,13 +38,35 @@ export function parseDecodeProps(metadata: Record<string, string>): DecodeProps 
   const shape = JSON.parse(metadata.shape ?? "[]") as number[];
   if (!dtype || !Array.isArray(shape) || shape.length < 2)
     throw new Error("channel metadata is missing x-fovea-raw decode props");
-  return {
+  const props = {
     dtype,
     shape,
     channels: Number(metadata.channels ?? "1"),
     pixelFormat: metadata.pixelFormat ?? "Mono8",
     significantBits: Number(metadata.significantBits ?? "8"),
   };
+  warnOnSchemaDrift(props);
+  return props;
+}
+
+function warnOnSchemaDrift(props: DecodeProps): void {
+  const spec = pixelFormatSpec(props.pixelFormat);
+  if (!spec) return;
+  const mismatches = [
+    ["dtype", props.dtype, spec.dtype],
+    ["channels", props.channels, spec.channels],
+    ["significantBits", props.significantBits, spec.significantBits],
+  ].filter(([, recorded, expected]) => recorded !== expected);
+  if (mismatches.length === 0) return;
+  console.warn("[viewer] recording metadata differs from pixel-format schema", {
+    pixelFormat: props.pixelFormat,
+    mismatches: Object.fromEntries(
+      mismatches.map(([field, recorded, expected]) => [
+        field,
+        { recorded, expected },
+      ]),
+    ),
+  });
 }
 
 type BayerCode = `Bayer${"GR" | "RG" | "GB" | "BG"}2RGB`;
@@ -57,6 +79,20 @@ export const bayerCode = (pixelFormat: string): BayerCode | null => {
   const bayer = pixelFormatSpec(pixelFormat)?.bayer;
   return bayer ? (`${bayer}2RGB` as BayerCode) : null;
 };
+
+function frameBuffer(bytes: Uint8Array, dtype: Dtype): ArrayBuffer {
+  const needsAligned16 = dtype === "U16";
+  if (
+    bytes.byteOffset === 0 &&
+    bytes.byteLength === bytes.buffer.byteLength &&
+    (!needsAligned16 || bytes.byteOffset % 2 === 0)
+  )
+    return bytes.buffer as ArrayBuffer;
+  // The decoded Mat can outlive this call, so a reusable scratch buffer would
+  // make later frames mutate earlier ones. Copy only when alignment/slicing
+  // forces it.
+  return bytes.slice().buffer;
+}
 
 /**
  * Build the synchronous per-frame decoder for one channel. Throws for dtypes
@@ -77,9 +113,7 @@ export async function createFrameDecoder(
   const vision = needsVision ? await import("core/Vision") : null;
 
   return (bytes: Uint8Array): Mat<Uint8Array> => {
-    // Copy out of the shared chunk/scan buffer (and realign — message bytes
-    // sit at arbitrary offsets, Uint16Array views need 2-byte alignment).
-    const buffer = bytes.slice().buffer;
+    const buffer = frameBuffer(bytes, dtype);
     let mat: Mat<Uint8Array>;
     if (dtype === "U16") {
       const raw = Object.assign(new Uint16Array(buffer), {

@@ -29,6 +29,7 @@ import {
   readonly,
   shallowRef,
   type Ref,
+  type WritableComputedRef,
 } from "vue";
 import type { Mat } from "core/Vision";
 import { RollingStats, startLoopLagProbe } from "@lib/util/rolling";
@@ -48,6 +49,8 @@ import {
 } from "./protocol.js";
 import { withFrameMeta } from "./frame-payload.js";
 import { createShmClient } from "./shm-client.js";
+import { formatCounterRate, formatSampleStats } from "./stats.js";
+import { controller } from "./contracts.js";
 import type { Span } from "./contracts.js";
 
 /** Rebuild the Mat shape (`FrameView`/vision ops expect) from a frame payload. */
@@ -178,6 +181,18 @@ export function rendererFrameTimingSnapshot(): Record<
   );
 }
 
+function shmReadSummary(stats = shmReadStats()): Record<string, string> {
+  return {
+    reads: formatCounterRate(stats.rates.reads),
+    nulls: formatCounterRate(stats.rates.nulls),
+    timeouts: formatCounterRate(stats.rates.timeouts),
+    errors: formatCounterRate(stats.rates.errors),
+    allocations: formatCounterRate(stats.rates.allocations),
+    poolHits: formatCounterRate(stats.rates.poolHits),
+    latencyMs: formatSampleStats(stats.latencyMs),
+  };
+}
+
 // Perf snapshot dump (§7.3 item 4) — Ctrl+Shift+S while inspector mode is on
 // (see `inspectorMode` in `@lib/util/perf.ts`) fetches `system.perfSnapshot`,
 // merges in this renderer's own loop lag, and writes it under the app data
@@ -202,12 +217,14 @@ export async function dumpPerfSnapshot(): Promise<void> {
     topic.command("system", "perfSnapshot"),
     undefined,
   );
+  const shmReads = shmReadStats();
   const merged = {
     ...snapshot,
     renderer: {
       loopLag: { mean: rendererLoopLag.stats.mean, max: rendererLoopLag.stats.max },
       frames: rendererFrameTimingSnapshot(),
-      shmReads: shmReadStats(),
+      shmReads,
+      shmReadSummary: shmReadSummary(shmReads),
     },
   };
   const file = await window.foveaBridge.writePerfSnapshot(JSON.stringify(merged, null, 2));
@@ -251,6 +268,56 @@ export function useDynamicFrame<C extends Contract>(
   return computed(() => {
     const key = read();
     return key ? session.frame(key).value : null;
+  });
+}
+
+function readSource<T>(source: Ref<T> | (() => T)): T {
+  return typeof source === "function" ? source() : source.value;
+}
+
+export function bindField<
+  C extends Contract,
+  T extends Record<string, any>,
+  K extends keyof T,
+  Cmd extends keyof CommandsOf<C>,
+>(
+  session: Session<C>,
+  source: Ref<T | undefined> | (() => T | undefined),
+  key: K,
+  cmd: Cmd,
+  arg: (key: K, value: T[K]) => CommandsOf<C>[Cmd]["arg"],
+  fallback: T[K],
+): WritableComputedRef<T[K]>;
+export function bindField<
+  C extends Contract,
+  T extends Record<string, any>,
+  K extends keyof T,
+  Cmd extends keyof CommandsOf<C>,
+>(
+  session: Session<C>,
+  source: Ref<T | undefined> | (() => T | undefined),
+  key: K,
+  cmd: Cmd,
+  arg: (key: K, value: T[K]) => CommandsOf<C>[Cmd]["arg"],
+): WritableComputedRef<T[K] | undefined>;
+export function bindField<
+  C extends Contract,
+  T extends Record<string, any>,
+  K extends keyof T,
+  Cmd extends keyof CommandsOf<C>,
+>(
+  session: Session<C>,
+  source: Ref<T | undefined> | (() => T | undefined),
+  key: K,
+  cmd: Cmd,
+  arg: (key: K, value: T[K]) => CommandsOf<C>[Cmd]["arg"],
+  fallback?: T[K],
+): WritableComputedRef<T[K] | undefined> {
+  return computed<T[K] | undefined>({
+    get: () => readSource(source)?.[key] ?? fallback,
+    set: (value) => {
+      void session.call(cmd, arg(key, value as T[K]));
+    },
   });
 }
 
@@ -428,4 +495,8 @@ export function useSession<C extends Contract>(
       );
     },
   };
+}
+
+export function useController(options: UseSessionOptions = {}): Session<typeof controller> {
+  return useSession(controller, "controller", options);
 }

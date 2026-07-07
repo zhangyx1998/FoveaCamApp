@@ -6,6 +6,7 @@ import { computed, ref, watch } from "vue";
 import { FreqMeter, inspectorMode, RollingAverage } from "@lib/util/perf";
 import FrameView, { TransformFunction } from "./FrameView.vue";
 import { payloadToMat, rendererLoopLag, shmReadStats } from "@lib/orchestrator/client";
+import { formatCounterRate, formatSampleStats } from "@lib/orchestrator/stats";
 import type { FramePayload } from "@lib/orchestrator/protocol";
 import { Delegation } from "@src/capture";
 import { NoCheck } from "@lib/util/vue";
@@ -154,10 +155,12 @@ const overlay = computed(() => {
         // every SHM inspector overlay shows the same pool counters.
         const s = shmReadStats();
         result["SHM Reads"] =
-          `${s.reads} ok / ${s.nulls} null / ${s.timeouts} to / ${s.errors} err`;
-        result["SHM Pool"] = `${s.poolHits} reuse / ${s.allocations} alloc / ${s.inFlight} inflight`;
-        result["SHM Read Lat"] =
-          `${s.latencyMs.mean.toFixed(2)} ms (max ${s.latencyMs.max.toFixed(2)})`;
+          `${formatCounterRate(s.rates.reads)} ok / ${formatCounterRate(s.rates.nulls)} null / ` +
+          `${formatCounterRate(s.rates.timeouts)} to / ${formatCounterRate(s.rates.errors)} err`;
+        result["SHM Pool"] =
+          `${formatCounterRate(s.rates.poolHits)} reuse / ${formatCounterRate(s.rates.allocations)} alloc / ` +
+          `${s.inFlight} inflight`;
+        result["SHM Read Lat"] = formatSampleStats(s.latencyMs);
       }
       result["Throughput"] =
         `${((fps.value * (p.data?.byteLength ?? 0)) / 1e6).toFixed(2)} MB/s`;

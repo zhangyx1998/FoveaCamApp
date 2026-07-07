@@ -16,11 +16,12 @@
 // own frame through it as a visual alignment check.
 
 import { defineSession, type ServerSession } from "@orchestrator/runtime";
-import { leaseCalibratedTriple, type CalibratedTriple } from "@orchestrator/calibration";
+import { acquireTriple, type CalibratedTriple } from "@orchestrator/calibration";
 import { startActuationLoop, type ActuationLoop } from "@orchestrator/actuation";
 import { findHomography, resize, wrapPerspective, type Mat } from "core/Vision";
 import { area, type Point2d } from "core/Geometry";
 import { type MarkerTracker, type TrackerTarget } from "@orchestrator/marker-tracker";
+import { bindViews, DisposerBag, releaseLeases } from "@orchestrator/session-resources";
 import {
   bindDetections,
   createTrackerTriple,
@@ -43,7 +44,7 @@ const ORIGIN: Pos = { x: 0, y: 0 };
 export default function calibrateDistortionSession(): ServerSession<typeof calibrateDistortion> {
   return defineSession("calibrate-distortion", calibrateDistortion, (s) => {
     let triple: CalibratedTriple | null = null;
-    const disposers: Array<() => void> = [];
+    const disposers = new DisposerBag();
     let trackers: Record<Role, MarkerTracker> | null = null;
     let loop: ActuationLoop | null = null;
     let centerAngle: Point2d | null = null;
@@ -105,11 +106,8 @@ export default function calibrateDistortionSession(): ServerSession<typeof calib
     }
 
     async function activateSession(): Promise<void> {
-      const t = await leaseCalibratedTriple();
-      if (!t) {
-        s.telemetry({ ready: false });
-        return;
-      }
+      const t = await acquireTriple(s);
+      if (!t) return;
       triple = t;
       trackers = createTrackerTriple(
         { L: t.leases.L.camera, C: t.leases.C.camera, R: t.leases.R.camera },
@@ -117,9 +115,10 @@ export default function calibrateDistortionSession(): ServerSession<typeof calib
         { internal: true },
       );
       bindDetections(trackers, disposers, publishDetections, onCenterDetection);
-      disposers.push(t.leases.L.onView((v) => onFoveaView("L", v)));
-      disposers.push(t.leases.C.onView((v) => s.frame("C", v)));
-      disposers.push(t.leases.R.onView((v) => onFoveaView("R", v)));
+      bindViews(t.leases, disposers, s, (role, v) => {
+        if (role === "C") s.frame("C", v);
+        else onFoveaView(role, v);
+      });
 
       loop = startActuationLoop({
         targetVolts: () => {
@@ -137,17 +136,12 @@ export default function calibrateDistortionSession(): ServerSession<typeof calib
       loop?.stop();
       loop = null;
       trackers = stopTriple(trackers);
-      for (const d of disposers) d();
-      disposers.length = 0;
-      if (triple) for (const l of Object.values(triple.leases)) l.release();
+      disposers.dispose();
+      releaseLeases(triple);
       triple = null;
       centerAngle = null;
       projection = { L: null, R: null };
-      s.telemetry({
-        ready: false,
-        detection: { L: null, C: null, R: null },
-        projection: { L: null, R: null },
-      });
+      s.resetTelemetry(["ready", "detection", "projection"]);
     }
 
     return {

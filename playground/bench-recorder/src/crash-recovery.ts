@@ -18,7 +18,6 @@
 // Run through the resolution shim (see ts-hooks.mjs), from playground/bench-recorder/:
 //   /opt/homebrew/bin/node --import ../ts-hooks.mjs src/crash-recovery.ts --size=1.5 --compression=none
 
-import { createRequire } from "node:module";
 import { mkdir, stat, rm, open } from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import { McapIndexedReader, McapStreamReader } from "@mcap/core";
@@ -31,52 +30,25 @@ import {
   RAW_FRAME_SCHEMA_NAME,
 } from "../../../docs/schema/fovea.ts";
 import { McapWriterWorker } from "../../../app/orchestrator/recorder/writer.ts";
-import type { CompressionInjection } from "../../../app/orchestrator/recorder/types.ts";
 import { buildFramePool, buildProcessedPool } from "./synth.ts";
+import {
+  benchChannels,
+  compressionInjection,
+  parseArgs,
+  type BenchChannel,
+  type Compression,
+} from "./harness.ts";
 
-type Compression = "none" | "lz4" | "zstd";
-
-function parseArgs() {
-  const map = new Map<string, string>();
-  for (const arg of process.argv.slice(2)) {
-    const m = /^--([^=]+)=(.*)$/.exec(arg);
-    if (m) map.set(m[1]!, m[2]!);
-  }
-  return {
-    size: Number(map.get("size") ?? "1.5"),
-    compression: (map.get("compression") ?? "none") as Compression,
-    zstdLevel: Number(map.get("zstdLevel") ?? "1"),
-    runMs: Number(map.get("runMs") ?? "4000"),
-    out: map.get("out") ?? "./out",
-  };
-}
-
-function compressionInjection(
-  compression: Compression,
-  zstdLevel: number,
-): CompressionInjection | undefined {
-  if (compression === "none") return undefined;
-  const require = createRequire(import.meta.url);
-  if (compression === "lz4") {
-    return { name: "lz4", moduleEntry: require.resolve("lz4-napi"), exportName: "compressSync" };
-  }
-  return {
-    name: "zstd",
-    moduleEntry: require.resolve("zstd-napi"),
-    exportName: "compress",
-    level: zstdLevel,
-  };
-}
-
-interface Channel {
-  topic: string;
-  fps: number;
-  metadata: Record<string, string>;
-  pool: readonly Uint8Array[];
-}
+type Channel = BenchChannel;
 
 async function main(): Promise<void> {
-  const args = parseArgs();
+  const args = parseArgs({
+    size: 1.5,
+    compression: "none" as Compression,
+    zstdLevel: 1,
+    runMs: 4000,
+    out: "./out",
+  });
   await mkdir(args.out, { recursive: true });
   const filePath = `${args.out}/crash-${args.size}MiB-${args.compression}.fovea`;
   await rm(filePath, { force: true });
@@ -85,37 +57,12 @@ async function main(): Promise<void> {
   const rawPool = buildFramePool(rawTargetBytes);
   const procPool = buildProcessedPool(Math.max(65536, Math.round(rawTargetBytes / 8)));
 
-  const channels: Channel[] = [
-    ...["cam0", "cam1", "cam2"].map((name) => ({
-      topic: `raw/${name}`,
-      fps: 60,
-      metadata: {
-        dtype: "U8",
-        shape: JSON.stringify([rawPool.height, rawPool.width]),
-        channels: "1",
-        pixelFormat: "BayerRG12p",
-        significantBits: "12",
-      },
-      pool: rawPool.frames,
-    })),
-    {
-      topic: "processed/disparity",
-      fps: 30,
-      metadata: {
-        dtype: "U8",
-        shape: JSON.stringify([procPool.height, procPool.width]),
-        channels: "1",
-        pixelFormat: "Mono8",
-        significantBits: "8",
-      },
-      pool: procPool.frames,
-    },
-  ];
+  const channels: Channel[] = benchChannels(rawPool, procPool);
 
   const writer = new McapWriterWorker(filePath, "crash", {
     chunkBytes: Math.round(rawTargetBytes * 1.05),
     session: { startedAt: new Date().toISOString(), bench: "crash-recovery" },
-    compression: compressionInjection(args.compression, args.zstdLevel),
+    compression: compressionInjection(args),
   });
   for (const ch of channels) {
     writer.registerChannel(ch.topic, {

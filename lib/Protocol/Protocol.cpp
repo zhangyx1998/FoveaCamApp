@@ -9,20 +9,11 @@
 
 template <> std::string convert(const Protocol::Method &method) {
   switch (method) {
-  case Protocol::Method::NOP:
-    return "NOP";
-  case Protocol::Method::GET:
-    return "GET";
-  case Protocol::Method::SET:
-    return "SET";
-  case Protocol::Method::ACK:
-    return "ACK";
-  case Protocol::Method::REJ:
-    return "REJ";
-  case Protocol::Method::FIN:
-    return "FIN";
-  case Protocol::Method::SYN:
-    return "SYN";
+#define FOVEA_PROTOCOL_METHOD_TO_STRING(Name, Value)                           \
+  case Protocol::Method::Name:                                                 \
+    return #Name;
+    FOVEA_PROTOCOL_METHODS(FOVEA_PROTOCOL_METHOD_TO_STRING)
+#undef FOVEA_PROTOCOL_METHOD_TO_STRING
   default:
 #if defined(__EXCEPTIONS) || defined(__cpp_exceptions)
     throw std::invalid_argument("Unknown Protocol::Method: " +
@@ -34,20 +25,11 @@ template <> std::string convert(const Protocol::Method &method) {
 }
 
 template <> Protocol::Method convert(const std::string &method) {
-  if (method == "NOP")
-    return Protocol::Method::NOP;
-  if (method == "GET")
-    return Protocol::Method::GET;
-  if (method == "SET")
-    return Protocol::Method::SET;
-  if (method == "ACK")
-    return Protocol::Method::ACK;
-  if (method == "REJ")
-    return Protocol::Method::REJ;
-  if (method == "FIN")
-    return Protocol::Method::FIN;
-  if (method == "SYN")
-    return Protocol::Method::SYN;
+#define FOVEA_PROTOCOL_METHOD_FROM_STRING(Name, Value)                         \
+  if (method == #Name)                                                         \
+    return Protocol::Method::Name;
+  FOVEA_PROTOCOL_METHODS(FOVEA_PROTOCOL_METHOD_FROM_STRING)
+#undef FOVEA_PROTOCOL_METHOD_FROM_STRING
 #if defined(__EXCEPTIONS) || defined(__cpp_exceptions)
   throw std::invalid_argument("Unknown Protocol::Method: " + method);
 #else
@@ -57,32 +39,11 @@ template <> Protocol::Method convert(const std::string &method) {
 
 template <> std::string convert(const Protocol::Property &property) {
   switch (property) {
-  case Protocol::Property::NONE:
-    return "NONE";
-  case Protocol::Property::SYS_INFO:
-    return "SYS_INFO";
-  case Protocol::Property::SYS_VERSION:
-    return "SYS_VERSION";
-  case Protocol::Property::SYS_RESET:
-    return "SYS_RESET";
-  case Protocol::Property::SYS_ENABLE:
-    return "SYS_ENABLE";
-  case Protocol::Property::CFG_LOG:
-    return "CFG_LOG";
-  case Protocol::Property::CFG_LPF:
-    return "CFG_LPF";
-  case Protocol::Property::CFG_BIAS:
-    return "CFG_BIAS";
-  case Protocol::Property::CMD_STREAM:
-    return "CMD_STREAM";
-  case Protocol::Property::CMD_FRAME:
-    return "CMD_FRAME";
-  case Protocol::Property::CMD_ACTUATE:
-    return "CMD_ACTUATE";
-  case Protocol::Property::CMD_TRIGGER:
-    return "CMD_TRIGGER";
-  case Protocol::Property::LOG:
-    return "LOG";
+#define FOVEA_PROTOCOL_PROPERTY_TO_STRING(Name, Value)                         \
+  case Protocol::Property::Name:                                               \
+    return #Name;
+    FOVEA_PROTOCOL_PROPERTIES(FOVEA_PROTOCOL_PROPERTY_TO_STRING)
+#undef FOVEA_PROTOCOL_PROPERTY_TO_STRING
   default:
 #if defined(__EXCEPTIONS) || defined(__cpp_exceptions)
     throw std::invalid_argument("Unknown Protocol::Property: " +
@@ -94,32 +55,11 @@ template <> std::string convert(const Protocol::Property &property) {
 }
 
 template <> Protocol::Property convert(const std::string &property) {
-  if (property == "NONE")
-    return Protocol::Property::NONE;
-  if (property == "SYS_INFO")
-    return Protocol::Property::SYS_INFO;
-  if (property == "SYS_VERSION")
-    return Protocol::Property::SYS_VERSION;
-  if (property == "SYS_RESET")
-    return Protocol::Property::SYS_RESET;
-  if (property == "SYS_ENABLE")
-    return Protocol::Property::SYS_ENABLE;
-  if (property == "CFG_LOG")
-    return Protocol::Property::CFG_LOG;
-  if (property == "CFG_LPF")
-    return Protocol::Property::CFG_LPF;
-  if (property == "CFG_BIAS")
-    return Protocol::Property::CFG_BIAS;
-  if (property == "CMD_STREAM")
-    return Protocol::Property::CMD_STREAM;
-  if (property == "CMD_FRAME")
-    return Protocol::Property::CMD_FRAME;
-  if (property == "CMD_ACTUATE")
-    return Protocol::Property::CMD_ACTUATE;
-  if (property == "CMD_TRIGGER")
-    return Protocol::Property::CMD_TRIGGER;
-  if (property == "LOG")
-    return Protocol::Property::LOG;
+#define FOVEA_PROTOCOL_PROPERTY_FROM_STRING(Name, Value)                       \
+  if (property == #Name)                                                       \
+    return Protocol::Property::Name;
+  FOVEA_PROTOCOL_PROPERTIES(FOVEA_PROTOCOL_PROPERTY_FROM_STRING)
+#undef FOVEA_PROTOCOL_PROPERTY_FROM_STRING
 #if defined(__EXCEPTIONS) || defined(__cpp_exceptions)
   throw std::invalid_argument("Unknown Protocol::Property: " + property);
 #else

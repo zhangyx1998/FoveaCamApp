@@ -16,7 +16,7 @@
 //   - frame               (display payloads)     — by topic, carries a buffer
 
 import { RollingStats } from "../util/rolling.js";
-import { ratePerSec, snapshotWindow } from "./stats.js";
+import { ratePerSec, snapshotWindow, type SampleStats } from "./stats.js";
 import { withFrameMeta } from "./frame-payload.js";
 
 export type Serializable =
@@ -103,11 +103,7 @@ export type FrameCounterStats = {
   bytes: number;
 };
 
-export type FrameTimingStats = {
-  count: number;
-  mean: number;
-  max: number;
-};
+export type FrameTimingStats = SampleStats;
 
 export type FrameTopicStats = FrameCounterStats & {
   window: {

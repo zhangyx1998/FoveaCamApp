@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { APPS, allEntries, appById } from "@lib/windows";
-import { appComponents } from "@src/windows/app-registry";
+import { appComponents, appRegistry, launchableApps } from "@src/windows/app-registry";
 
 const sorted = (values: Iterable<string>) => [...values].sort();
 
@@ -11,7 +11,13 @@ describe("app registry", () => {
     );
 
     expect(sorted(Object.keys(appComponents))).toEqual(sorted(launchableIds));
+    expect(sorted(Object.keys(appRegistry))).toEqual(sorted(launchableIds));
+    expect(sorted(launchableApps.map((a) => a.id))).toEqual(sorted(launchableIds));
     for (const id of Object.keys(appComponents)) expect(appById(id)).toBeTruthy();
+    for (const [id, app] of Object.entries(appRegistry)) {
+      expect(app.id).toBe(id);
+      expect(app.loader).toBe(appComponents[id]);
+    }
   });
 
   it("emits one renderer entry per catalog app", () => {

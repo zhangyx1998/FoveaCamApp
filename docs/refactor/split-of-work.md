@@ -53,46 +53,33 @@ planners: read [`planner.md`](./planner.md) first — the full handover
 - Do not edit: other roles' sections, the protocol/ownership sections,
   or any other `docs/refactor/*` file. When your items are done, stop.
 
-**Dispatch mechanics (switched to Opus 4.8 subagents 2026-07-07, per
-user):** workers are **Claude Opus 4.8 subagents** spawned by the
-planner via the in-harness Agent tool (`subagent_type: "claude"`,
-`model: "opus"`), one persistent agent per role. They share the
-planner's filesystem and environment; the planner is notified on each
-agent's completion and runs the verification iteration, then continues
-the same agent with `SendMessage` (context intact) for the next wave —
-a fresh `Agent` call would start cold, so ALWAYS resume via SendMessage
-within a round. Each agent is **warmed up before its first task**: a
-spawn prompt that onboards from the docs (AGENTS.md + this file + its
-role's planner docs) and returns a takeover note the planner checks;
-only then does the planner SendMessage the actual instructions. Per
-design the docs (this file + the planner docs) are the complete memory,
-so a lost agent is re-spawnable from a warm-up. The 2026-07-07 Codex
-`gpt-5.5` fleet (and the earlier Sonnet 5 / Codex fleets) are retired;
-`scripts/dispatch-worker.sh` is kept only as a fallback host. At most
-one agent per role; roles run concurrently (ownership table keeps
-domains disjoint). Sandbox: agents write only within the repo; no
-network / `npm install` without a planner-logged grant in the
-instruction.
-
-**Standing gates (every instruction, unless it narrows them):**
-`vue-tsc --noEmit -p tsconfig.json` → 0 errors; `vitest run` all green;
-`vite build` fully green; renderer bundle **zero-core**; orchestrator
-bundle **zero-Vue**; `core make build` both runtimes when native code is
-touched; reader addon `otool -L` shows system libraries only;
-`pyfovea/.venv/bin/python -m pytest pyfovea/tests` all green when
-pyfovea or the recorder schema is touched; built
-preloads pass the **V11 triplet**:
-relative-import grep (`(from |require\()"\./`) empty — sandboxed
-preloads can't load sibling chunks (V11); content is CJS, never
-`import`-style ESM (V11b); zero hits for
-`baseURI|import_meta|createRequire` — vite's `import.meta` shim
-resolves to the dev-server URL inside preloads (V11c). Tree stays
-uncommitted — the user commits at planner-declared checkpoints. Shell
-guidance (Sonnet workers share the planner's environment): run gate
-binaries from `node_modules/.bin/*` and use `/opt/homebrew/bin/node`
-for `core/test` scripts — the bare `node`/`npx` wrappers are broken in
-this zsh. Do not run `npm install` or other dependency changes without
-a planner-logged handoff.
+**Dispatch mechanics — DUAL FLEET (gpt-5.5 active for implementation +
+Opus 4.8 warm reserve; 2026-07-07, per user).** Two worker fleets are
+kept warm so the planner can switch a role between them wave-to-wave:
+- **gpt-5.5 (Codex) — the ACTIVE implementation fleet.** Dispatched via
+  `scripts/dispatch-worker.sh <A|B|C> ["note"]` in a background Bash
+  (the planner is re-invoked on exit); first run per role warms up from
+  a fresh session (kickoff onboards from AGENTS.md + this file), later
+  runs `codex exec resume` the same session id (`.worker-logs/
+  session-<role>.id`) with a steering-first re-entry. gpt-5.5 at high
+  reasoning effort, model + effort pinned in the script. Sandbox:
+  workspace-write, no network.
+- **Claude Opus 4.8 subagents — the WARM RESERVE.** One persistent
+  in-harness Agent per role (`subagent_type: "claude"`, `model:
+  "opus"`), resumed via `SendMessage` (context intact — a fresh `Agent`
+  call starts cold). Parked/resumable between waves; the planner can
+  hand a role's next wave to Opus instead of gpt-5.5 when it wants the
+  switch. Parked agent ids: A `ac10aaf887cee3837`, B `a12135ab7a5a9139e`,
+  C `a902c02a702cffe03`.
+Both fleets share the planner's filesystem/environment; the docs (this
+file + planner docs) are the complete memory, so either fleet is
+re-warmable from current docs and a role can move between them without
+context loss. Each worker is **warmed up before its first task** (an
+onboarding read-through + takeover note the planner checks) then fed its
+active instructions. At most one active worker per role at a time; roles
+run concurrently (ownership table keeps domains disjoint). Sandbox:
+workers write only within the repo; no network / `npm install` without a
+planner-logged grant in the instruction.
 
 ## File ownership
 
@@ -155,24 +142,7 @@ hardware-dependent behavior verified without a real rig run.
 
 ### Active instructions
 
-- **A-17 — optimization survey ROUND 2 (docs-only; NO code).** Waves 1
-  and 2 reshaped your surface (frame workers, `fovea-pipeline`,
-  `useFrames`, `marker-calibration.ts`, the `WINDOWS` table, the typed
-  bridge registry, `CAMERA_CONTROLS`, session `status`/`fail`). Re-survey
-  your OWNED surface for what those changes exposed or left behind: (1)
-  repetitive logic the new helpers DIDN'T absorb (e.g. session
-  lease/drain/telemetry boilerplate not yet on a shared primitive;
-  remaining `useSession` wiring duplication); (2) long/wordy names that
-  survived; (3) better-fit solutions the new structure now makes cheap.
-  Write ranked proposals (max ~12) to `docs/refactor/proposals/A-r2.md`,
-  ids `A-R2-P<n>`, each with location(s), current→proposed sketch,
-  **category: non-breaking | breaking**, rationale tied to a real cost,
-  effort (S/M/L), risk. **Do NOT re-propose** the still-open approved
-  breaking waves (A-P1 lifecycle unification, A-P7 camelCase, A-P12
-  explicit frame address) or deferred A-P6 (post-smoke) — reference them
-  if adjacent, don't duplicate. Note any cross-role seam. Log a 3-line
-  pointer under your Log: when done.
-  - Log:
+- **(A-18 wave-3 accepted & archived 2026-07-07 → proposals/TRIAGE.md.)**
 
 ## Coder B — Native core, protocol & firmware
 
@@ -185,23 +155,7 @@ control is the planner's review loop.
 
 ### Active instructions
 
-- **B-10 — optimization survey ROUND 2 (docs-only; NO code).** Wave-2
-  landed the `PIXEL_FORMATS` single source, the production-writer bench,
-  and streaming pyfovea. Re-survey `core/**` (minus C's ShmRing/reader),
-  `firmware/**`, `pyfovea/**`, `app/orchestrator/recorder/**`,
-  `playground/bench-recorder/**` + `docs/schema/**` for: (1) remaining
-  duplication (e.g. does the `Controller.cpp` factory/packet boilerplate
-  still want the B-P5-class treatment now that P1 proved the
-  single-source pattern? does convert/PixelFormat have residual hand-kept
-  lists the registry didn't reach?); (2) wordy internal names; (3)
-  better-fit solutions. Write ranked proposals (max ~12) to
-  `docs/refactor/proposals/B-r2.md`, ids `B-R2-P<n>`, same fields as
-  round 1 (category non-breaking|breaking, rationale, effort, risk).
-  **Do NOT re-propose** the deferred/declined set: B-P5 (declined), B-P6
-  (post-bench), B-P11 (live load), B-P12 (shelved), B-P13 (Stage F),
-  B-P14 (post-bench) — reference if adjacent. Note cross-role seams with
-  C (codec/schema). Log a 3-line pointer under your Log: when done.
-  - Log:
+- **(B-11 wave-3 accepted & archived 2026-07-07 → proposals/TRIAGE.md.)**
 
 - **(B-5 accepted & archived 2026-07-06 → recorder-container.md §2b.)**
 
@@ -222,22 +176,7 @@ session.
 - **C-standby note.** C-1/C-2 were planner-accepted 2026-07-06 and
   archived (orchestrator.md §6 + §7.1 Stage 4).
 - **(C-4 accepted & cleared 2026-07-06.)**
-- **C-12 — optimization survey ROUND 2 (docs-only; NO code).** Wave-2
-  landed `shm-client.ts` (pool extraction), the shared `ShmRead` native
-  TU, streaming truncated playback, `shmReads` telemetry, viewer dedupe,
-  and the decode-conformance suite. Re-survey the C-owned surface (shm
-  path end-to-end, `metering.ts`, `orchestrator/viewer/**` +
-  `sessions/viewer.ts`, shm blocks in client/protocol/StreamView) for:
-  (1) duplication the extractions didn't reach (e.g. does StreamView's
-  SHM OSD + the new telemetry share a formatter? is there overlap between
-  `stats.ts`, `metering.ts`, and the new `shmReads` block?); (2) wordy
-  names; (3) better-fit solutions the new module boundaries enable. Write
-  ranked proposals (max ~12) to `docs/refactor/proposals/C-r2.md`, ids
-  `C-R2-P<n>`, same fields as round 1. **Do NOT re-propose** C-P12
-  (gated on future raw/16-bit shm) — reference if adjacent. Flag any
-  cross-role codec/schema seam with B. Log a 3-line pointer under your
-  Log: when done.
-  - Log:
+- **(C-13 wave-3 accepted & archived 2026-07-07 → proposals/TRIAGE.md.)**
 
 - **(history) C-6 — workload metering core (accepted; spec:
   docs/refactor/workload-metering.md — read it fully first).**

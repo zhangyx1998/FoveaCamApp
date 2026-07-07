@@ -15,9 +15,10 @@
 // `recording.ts` — but their commands are declared on the contract now.
 
 import { defineSession, type ServerSession } from "@orchestrator/runtime";
-import { leaseCalibratedTriple, type CalibratedTriple } from "@orchestrator/calibration";
+import { acquireTriple, type CalibratedTriple } from "@orchestrator/calibration";
 import { startActuationLoop, type ActuationLoop } from "@orchestrator/actuation";
 import { createFrameWorker } from "@orchestrator/frame-worker";
+import { DisposerBag, releaseLeases } from "@orchestrator/session-resources";
 import {
   clampRectToSize,
   depthFromInverse,
@@ -53,7 +54,7 @@ import { RollingStats } from "@lib/util/rolling";
 export default function manualControlSession(): ServerSession<typeof manualControl> {
   return defineSession("manual-control", manualControl, (s) => {
     let triple: CalibratedTriple | null = null;
-    const disposers: Array<() => void> = [];
+    const disposers = new DisposerBag();
     let loop: ActuationLoop | null = null;
 
     // Center-frame geometry, learned from the first frame.
@@ -269,11 +270,8 @@ export default function manualControlSession(): ServerSession<typeof manualContr
     // --- lifecycle -------------------------------------------------------
 
     async function activateSession(): Promise<void> {
-      const t = await leaseCalibratedTriple();
-      if (!t) {
-        s.telemetry({ ready: false });
-        return;
-      }
+      const t = await acquireTriple(s);
+      if (!t) return;
       triple = t;
       disposers.push(t.leases.L.onView((v) => onFoveaView("L", v)));
       disposers.push(t.leases.C.onView(onCenterView));
@@ -313,8 +311,7 @@ export default function manualControlSession(): ServerSession<typeof manualContr
       triple = null; // new activity sees "not ready" instead of racing the drain
       s.telemetry({ ready: false });
       await Promise.all([recording.stop(), capture.waitIdle()]);
-      for (const d of disposers) d();
-      disposers.length = 0;
+      disposers.dispose();
       // PB3 A-5: the display-vision workers persist across idle/activate
       // cycles (same object, not recreated); `cancel()` drops anything they
       // still have scheduled so a frame copied just before this idle can't
@@ -325,7 +322,7 @@ export default function manualControlSession(): ServerSession<typeof manualContr
       centerWorker.cancel();
       foveaWorkers.L.cancel();
       foveaWorkers.R.cancel();
-      if (releasing) for (const l of Object.values(releasing.leases)) l.release();
+      releaseLeases(releasing);
       width = height = 0;
     }
 

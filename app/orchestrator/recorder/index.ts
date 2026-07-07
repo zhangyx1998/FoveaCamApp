@@ -33,7 +33,12 @@ import { resolve } from "node:path";
 import type { PixelFormat } from "core/Aravis";
 import type { Mat } from "core/Vision";
 import { FreqMeter } from "@lib/util/rolling";
-import { dtypeOf, significantBits } from "@lib/util/dtype";
+import {
+  dtypeOf,
+  pixelFormatChannels,
+  pixelFormatDtype,
+  significantBits,
+} from "@lib/util/dtype";
 import { McapWriterWorker, type McapWriterWorkerOptions } from "./writer.js";
 import { createLegacySink } from "./legacy.js";
 import {
@@ -187,9 +192,9 @@ export async function createFoveaSink(
         schemaData: RAW_FRAME_SCHEMA_DATA,
         messageEncoding: RAW_FRAME_MESSAGE_ENCODING,
         metadata: {
-          dtype: dtypeOf(frame),
+          dtype: pixelFormatDtype(format, dtypeOf(frame)),
           shape: JSON.stringify([...frame.shape]),
-          channels: String(frame.channels),
+          channels: String(pixelFormatChannels(format, frame.channels)),
           pixelFormat: format,
           significantBits: String(significantBits(format)),
         },

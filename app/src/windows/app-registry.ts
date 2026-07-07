@@ -13,10 +13,11 @@
 // production bundle — the renderer stays zero-core.
 
 import type { Component } from "vue";
+import { APPS, type AppId, type AppMeta } from "@lib/windows";
 
 type Loader = () => Promise<{ default: Component }>;
 
-export const appComponents: Record<string, Loader> = {
+const appLoaders: Partial<Record<AppId, Loader>> = {
   "disparity-scope": () => import("@modules/disparity-scope/index.vue"),
   "tracking-single": () => import("@modules/tracking-single/index.vue"),
   "multi-fovea": () => import("@modules/multi-fovea/index.vue"),
@@ -31,3 +32,21 @@ export const appComponents: Record<string, Loader> = {
     ? { playground: () => import("@modules/playground/index.vue") }
     : {}),
 };
+
+export type AppRegistryEntry = AppMeta & { loader: Loader };
+
+function entryFor(app: AppMeta): AppRegistryEntry {
+  const loader = appLoaders[app.id as AppId];
+  if (!loader) throw new Error(`Missing app component loader: ${app.id}`);
+  return { ...app, loader };
+}
+
+export const appRegistry: Record<string, AppRegistryEntry> = Object.fromEntries(
+  APPS.filter((a) => !a.dev || import.meta.env.DEV).map((a) => [a.id, entryFor(a)]),
+);
+
+export const launchableApps = Object.values(appRegistry);
+
+export const appComponents: Record<string, Loader> = Object.fromEntries(
+  Object.entries(appRegistry).map(([id, app]) => [id, app.loader]),
+);

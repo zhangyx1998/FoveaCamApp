@@ -17,12 +17,11 @@ You may find the full license in project root directory.
 import { computed } from "vue";
 import { ROLE, THEME } from "@lib/camera-config";
 import { useAppConfig } from "@lib/config";
-import { useSession } from "@lib/orchestrator/client";
-import { controller as controllerContract } from "@lib/orchestrator/contracts";
+import { useController, useSession } from "@lib/orchestrator/client";
 import { calibrateDrift } from "./contract";
 import StreamView from "@src/components/StreamView.vue";
 import PosView, { type Pos } from "@src/components/PosView.vue";
-import ConfigEntry from "@src/components/ConfigEntry.vue";
+import MarkerTargetInputs from "@src/components/MarkerTargetInputs.vue";
 import Drift from "./Drift.vue";
 import RemoteCanvasTeleport from "@src/components/RemoteCanvasTeleport.vue";
 import Marker from "@src/graphics/Marker.vue";
@@ -32,7 +31,7 @@ import Drawer from "@src/components/Drawer.vue";
 
 const app_config = await useAppConfig();
 const session = useSession(calibrateDrift, "calibrate-drift");
-const ctrl = useSession(controllerContract, "controller");
+const ctrl = useController();
 const { state, telemetry } = session;
 
 const frameL = session.frame("L");
@@ -65,15 +64,7 @@ function setOverride(role: "left" | "right", p: Pos | null) {
           :fill="THEME.L"
         />
       </StreamView>
-      <ConfigEntry>
-        <span>{{ telemetry.detection.L ? "✓" : "✗" }} Marker ID to Track:</span>
-        <input
-          type="number"
-          step="1"
-          :value="state.target_id.L"
-          @change="(e) => session.call('setTargetId', { role: 'L', id: Number((e.target as HTMLInputElement).value) })"
-        />
-      </ConfigEntry>
+      <MarkerTargetInputs :session="session" role="L" :detected="!!telemetry.detection.L" />
       <Drift :drift="telemetry.derived.L">Derived Drift</Drift>
       <PosView
         v-if="ctrl.telemetry.connected"
@@ -96,15 +87,7 @@ function setOverride(role: "left" | "right", p: Pos | null) {
           :fill="THEME.C"
         />
       </StreamView>
-      <ConfigEntry>
-        <span>{{ telemetry.detection.C ? "✓" : "✗" }} Marker ID to Track:</span>
-        <input
-          type="number"
-          step="1"
-          :value="state.target_id.C"
-          @change="(e) => session.call('setTargetId', { role: 'C', id: Number((e.target as HTMLInputElement).value) })"
-        />
-      </ConfigEntry>
+      <MarkerTargetInputs :session="session" role="C" :detected="!!telemetry.detection.C" />
       <div class="actions">
         <button :disabled="!telemetry.derived.L" @click="session.call('updateDrift', { role: 'L' })">
           Update Drift (L)
@@ -133,15 +116,7 @@ function setOverride(role: "left" | "right", p: Pos | null) {
           :fill="THEME.R"
         />
       </StreamView>
-      <ConfigEntry>
-        <span>{{ telemetry.detection.R ? "✓" : "✗" }} Marker ID to Track:</span>
-        <input
-          type="number"
-          step="1"
-          :value="state.target_id.R"
-          @change="(e) => session.call('setTargetId', { role: 'R', id: Number((e.target as HTMLInputElement).value) })"
-        />
-      </ConfigEntry>
+      <MarkerTargetInputs :session="session" role="R" :detected="!!telemetry.detection.R" />
       <Drift :drift="telemetry.derived.R">Derived Drift</Drift>
       <PosView
         v-if="ctrl.telemetry.connected"

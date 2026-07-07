@@ -50,6 +50,16 @@ let frameTransportFactory: FrameTransportFactory = () => {
   throw new Error("No frame transport configured");
 };
 
+function cloneDefault<T>(value: T): T {
+  if (typeof structuredClone === "function") return structuredClone(value);
+  if (Array.isArray(value)) return value.map((v) => cloneDefault(v)) as T;
+  if (value && typeof value === "object")
+    return Object.fromEntries(
+      Object.entries(value).map(([k, v]) => [k, cloneDefault(v)]),
+    ) as T;
+  return value;
+}
+
 export function setFrameTransportFactory(factory: FrameTransportFactory): void {
   frameTransportFactory = factory;
 }
@@ -57,6 +67,7 @@ export function setFrameTransportFactory(factory: FrameTransportFactory): void {
 export class ServerSession<C extends Contract> {
   /** Authoritative state, seeded from the contract defaults. */
   readonly state: StateOf<C>;
+  private readonly telemetryDefaults: Record<string, any>;
   // Merged telemetry snapshot (patches applied on top of contract defaults) —
   // needed so a subscriber arriving after a one-shot publish (e.g. `ready`,
   // `list`, `connected`) still sees it, instead of waiting for the next patch
@@ -99,7 +110,8 @@ export class ServerSession<C extends Contract> {
     contract: C,
   ) {
     this.state = { ...contract.state } as StateOf<C>;
-    this.telemetrySnapshot = { ...contract.telemetry };
+    this.telemetryDefaults = cloneDefault(contract.telemetry);
+    this.telemetrySnapshot = cloneDefault(this.telemetryDefaults);
   }
 
   /** Register a command handler (called when a client invokes it). */
@@ -165,6 +177,16 @@ export class ServerSession<C extends Contract> {
     Object.assign(this.telemetrySnapshot, patch);
     for (const ch of this.subscribers)
       ch.emit(topic.telemetry(this.name), patch);
+  }
+
+  /** Republish telemetry defaults declared on the contract. With `keys`, only
+   *  those fields reset; without it, the whole contract telemetry shape resets.
+   *  Values come from the contract defaults, not hand-written session mirrors. */
+  resetTelemetry<K extends keyof TelemetryOf<C>>(keys?: readonly K[]): void {
+    const patch: Partial<TelemetryOf<C>> = {};
+    const names = keys?.map(String) ?? Object.keys(this.telemetryDefaults);
+    for (const key of names) (patch as any)[key] = cloneDefault(this.telemetryDefaults[key]);
+    this.telemetry(patch);
   }
 
   /** Report a user-visible session failure (e.g. a failed activation / camera

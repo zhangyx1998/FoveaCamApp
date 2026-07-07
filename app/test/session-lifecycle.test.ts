@@ -131,6 +131,24 @@ describe("session lifecycle", () => {
     expect(seen).toContain(true);
   });
 
+  it("resetTelemetry() republishes the contract defaults", async () => {
+    const session = testSession({});
+    const p = channelPair();
+    const seen: boolean[] = [];
+
+    p.client.on(topic.telemetry("test"), (patch: { ready?: boolean }) => {
+      if ("ready" in patch) seen.push(patch.ready!);
+    });
+    session.subscribe(p.server);
+    await flush();
+    session.telemetry({ ready: true });
+    await flush();
+    session.resetTelemetry();
+    await flush();
+
+    expect(seen).toEqual([testContract.telemetry.ready, true, testContract.telemetry.ready]);
+  });
+
   it("last active unsubscribe idles even with passive observers attached", () => {
     const idle = vi.fn();
     const session = testSession({ activate: vi.fn(), idle });

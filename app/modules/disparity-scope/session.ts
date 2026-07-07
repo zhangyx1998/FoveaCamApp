@@ -33,9 +33,10 @@
 //    rate actuation" exactly as tracking-single already established.
 
 import { defineSession, type ServerSession } from "@orchestrator/runtime";
-import { leaseCalibratedTriple, type CalibratedTriple } from "@orchestrator/calibration";
+import { acquireTriple, type CalibratedTriple } from "@orchestrator/calibration";
 import { startActuationLoop, type ActuationLoop } from "@orchestrator/actuation";
 import { createFrameWorker } from "@orchestrator/frame-worker";
+import { DisposerBag, releaseLeases } from "@orchestrator/session-resources";
 import {
   clampRectToSize,
   ORIGIN_POS,
@@ -96,7 +97,7 @@ function cloneTuning(t: Tuning): Tuning {
 export default function disparityScopeSession(): ServerSession<typeof disparity> {
   return defineSession("disparity-scope", disparity, (s) => {
     let triple: CalibratedTriple | null = null;
-    const disposers: Array<() => void> = [];
+    const disposers = new DisposerBag();
     let loop: ActuationLoop | null = null;
 
     let width = 0;
@@ -412,11 +413,8 @@ export default function disparityScopeSession(): ServerSession<typeof disparity>
     // --- lifecycle ---------------------------------------------------------
 
     async function activateSession(): Promise<void> {
-      const t = await leaseCalibratedTriple();
-      if (!t) {
-        s.telemetry({ ready: false });
-        return;
-      }
+      const t = await acquireTriple(s);
+      if (!t) return;
       triple = t;
       disposers.push(t.leases.L.onView((v) => onFoveaView("L", v)));
       disposers.push(t.leases.C.onView(onCenterView));
@@ -429,8 +427,7 @@ export default function disparityScopeSession(): ServerSession<typeof disparity>
       loop?.stop();
       loop = null;
       releaseTracker();
-      for (const d of disposers) d();
-      disposers.length = 0;
+      disposers.dispose();
       // PB3 A-5: drop anything the fovea workers still have scheduled — they
       // persist across idle/activate, so without this a frame copied just
       // before idle could be processed later against a fresh reactivation's
@@ -438,14 +435,14 @@ export default function disparityScopeSession(): ServerSession<typeof disparity>
       // guards against).
       foveaWorkers.L.cancel();
       foveaWorkers.R.cancel();
-      if (triple) for (const l of Object.values(triple.leases)) l.release();
+      releaseLeases(triple);
       triple = null;
       width = height = 0;
       tileL = tileR = null;
       aligned.L = aligned.R = null;
       status = "initializing";
       commandedVolts = { l: ORIGIN_POS, r: ORIGIN_POS };
-      s.telemetry({ ready: false, status: "initializing", tracker_bbox: null });
+      s.resetTelemetry(["ready", "status", "tracker_bbox"]);
     }
 
     return {

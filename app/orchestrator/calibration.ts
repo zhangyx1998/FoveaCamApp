@@ -29,6 +29,8 @@ import { cameraConfigPath } from "./camera.js";
 import { read } from "./store-hub.js";
 import { timeSpan } from "./diagnostics.js";
 import { matchTriple, retryUntil, type CameraLease } from "./registry.js";
+import type { ServerSession } from "./runtime.js";
+import type { Contract } from "@lib/orchestrator/protocol";
 
 function validate(cal?: Partial<CameraCalibration>): cal is CameraCalibration {
   return Boolean(
@@ -162,4 +164,17 @@ export async function leaseCalibratedTriple(): Promise<CalibratedTriple | null> 
     undistort: inputs.CI.undistort,
     configPath,
   };
+}
+
+const TRIPLE_UNAVAILABLE =
+  "Cameras unavailable — held by another app or not connected";
+
+export async function acquireTriple<C extends Contract>(
+  s: ServerSession<C>,
+): Promise<CalibratedTriple | null> {
+  const triple = await leaseCalibratedTriple();
+  if (triple) return triple;
+  s.telemetry({ ready: false } as any);
+  s.fail(TRIPLE_UNAVAILABLE);
+  return null;
 }

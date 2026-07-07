@@ -13,42 +13,48 @@
 
 namespace Protocol {
 
+// Methods occupy the header's upper nibble. GET/SET are requests; ACK/REJ/FIN
+// are responses. FIN completes the originating request sequence only for
+// two-phase properties (CMD_ACTUATE, CMD_TRIGGER, CMD_FRAME); single-phase
+// properties resolve on ACK alone. SYN is push data, not a request response.
+#define FOVEA_PROTOCOL_METHODS(X)                                             \
+  X(NOP, 0x00)                                                                \
+  X(GET, 0x10)                                                                \
+  X(SET, 0x20)                                                                \
+  X(ACK, 0x30)                                                                \
+  X(REJ, 0x40)                                                                \
+  X(FIN, 0x50)                                                                \
+  X(SYN, 0xF0)
+
 typedef enum Method : uint8_t {
-  NOP = 0x00,
-  // Request
-  GET = 0x10,
-  SET = 0x20,
-  // Response
-  ACK = 0x30, // Request received, validated, and accepted (queued/applied)
-  REJ = 0x40, // Terminal failure, at either ACK or FIN phase
-  // Request completed ("finished"); same seq as the originating request.
-  // Only sent for two-phase properties (CMD_ACTUATE, CMD_TRIGGER,
-  // CMD_FRAME); single-phase properties resolve on ACK alone.
-  FIN = 0x50,
-  // Push data (not by request)
-  SYN = 0xF0,
+#define FOVEA_PROTOCOL_METHOD_ENUM(Name, Value) Name = Value,
+  FOVEA_PROTOCOL_METHODS(FOVEA_PROTOCOL_METHOD_ENUM)
+#undef FOVEA_PROTOCOL_METHOD_ENUM
 } Method;
 
+// Properties occupy the header's lower nibble. SYS_* are System properties;
+// CFG_* are Configuration properties; CMD_STREAM/CMD_FRAME cover stream
+// lifecycle, continuous position updates, and triggered frames; CMD_ACTUATE
+// and CMD_TRIGGER are Commands. LOG is pushed from the MCU to the host.
+#define FOVEA_PROTOCOL_PROPERTIES(X)                                          \
+  X(NONE, 0x00)                                                               \
+  X(SYS_INFO, 0x01)                                                           \
+  X(SYS_VERSION, 0x02)                                                        \
+  X(SYS_RESET, 0x03)                                                          \
+  X(SYS_ENABLE, 0x04)                                                         \
+  X(CFG_LOG, 0x05)                                                            \
+  X(CFG_LPF, 0x06)                                                            \
+  X(CFG_BIAS, 0x07)                                                           \
+  X(CMD_STREAM, 0x08)                                                         \
+  X(CMD_FRAME, 0x09)                                                          \
+  X(CMD_ACTUATE, 0x0A)                                                        \
+  X(CMD_TRIGGER, 0x0B)                                                        \
+  X(LOG, 0x0F)
+
 typedef enum Property : uint8_t {
-  NONE = 0x00,
-  // System
-  SYS_INFO = 0x01,
-  SYS_VERSION = 0x02,
-  SYS_RESET = 0x03,
-  SYS_ENABLE = 0x04,
-  // Configuration
-  CFG_LOG = 0x05,
-  CFG_LPF = 0x06,
-  CFG_BIAS = 0x07,
-  // Streams: per-stream lifecycle + continuous position updates
-  CMD_STREAM = 0x08,
-  // Triggered-frame request, following a stream's live mirror target
-  CMD_FRAME = 0x09,
-  // Commands
-  CMD_ACTUATE = 0x0A,
-  CMD_TRIGGER = 0x0B,
-  // Push LOG to host
-  LOG = 0x0F,
+#define FOVEA_PROTOCOL_PROPERTY_ENUM(Name, Value) Name = Value,
+  FOVEA_PROTOCOL_PROPERTIES(FOVEA_PROTOCOL_PROPERTY_ENUM)
+#undef FOVEA_PROTOCOL_PROPERTY_ENUM
 } Property;
 
 using Vector = std::vector<uint8_t>;

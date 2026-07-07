@@ -64,6 +64,9 @@ def test_significant_bits_derivation():
     assert significant_bits("Mono16") == 16
     assert significant_bits("Mono8") == 8
     assert significant_bits("Mono16", declared=12) == 12  # sidecar wins
+    assert significant_bits("LegacyMono16") == 16
+    assert significant_bits("LegacyBayerRG12p") == 12
+    assert significant_bits("LegacyMono") == 8
 
 
 def test_to_display_scales_by_true_bit_depth():

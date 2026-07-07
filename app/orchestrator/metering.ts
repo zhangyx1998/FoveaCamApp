@@ -22,7 +22,9 @@ import {
   counterRate,
   ratePerSec,
   snapshotWindow,
+  type CounterRate,
   type SnapshotWindow,
+  type WorkloadSnapshot,
 } from "@lib/orchestrator/stats";
 
 /** Declared input/output names for one workload — pre-seeds the snapshot's
@@ -60,40 +62,14 @@ export interface WorkloadHandle {
   measure<T>(fn: () => T): T;
   /** Release this workload — folds any open span into busy time, then
    *  removes it from the process-wide registry (it stops appearing in
-   *  `allWorkloadSnapshots()`). Idempotent. */
+   *  `workloadsSnapshot()`). Idempotent. */
   dispose(): void;
-}
-
-export interface WorkloadCounterSnapshot {
-  count: number;
-  ratePerSec: number;
 }
 
 export interface WorkloadDropSnapshot {
   total: number;
   ratePerSec: number;
   byReason: Record<string, number>;
-}
-
-/** One workload's aggregated document — the shape `system.perfSnapshot`'s
- *  `workloads` key exports per-name (docs/refactor/workload-metering.md §2).
- *  Window bookkeeping matches `FrameTopicStats` exactly (T10-style,
- *  cumulative-since-registration, never assumed): `uptimeMs` divides every
- *  rate, so a freshly-registered workload with one sample doesn't report an
- *  absurd instantaneous rate. */
-export interface WorkloadSnapshot {
-  name: string;
-  window: SnapshotWindow;
-  /** Busy-time fraction of `window.uptimeMs`, clamped to [0, 1]. Cumulative
-   *  since registration, same lineage as the rates below — not a "since last
-   *  snapshot" reading (no `resetMax`-style call needed to read it). */
-  utilization: number;
-  /** Cumulative busy milliseconds (including time in a currently-open span,
-   *  so a mid-iteration read isn't stuck at the last `end()`). */
-  busyMs: number;
-  inputs: Record<string, WorkloadCounterSnapshot>;
-  outputs: Record<string, WorkloadCounterSnapshot>;
-  drops: WorkloadDropSnapshot;
 }
 
 interface WorkloadState {
@@ -195,8 +171,8 @@ export function registerWorkload(name: string, spec: WorkloadSpec): WorkloadHand
 function counterSnapshot(
   map: Map<string, number>,
   window: SnapshotWindow,
-): Record<string, WorkloadCounterSnapshot> {
-  const out: Record<string, WorkloadCounterSnapshot> = {};
+): Record<string, CounterRate> {
+  const out: Record<string, CounterRate> = {};
   for (const [k, v] of map) out[k] = counterRate(v, window);
   return out;
 }
@@ -240,6 +216,3 @@ export function workloadsSnapshot(now = Date.now()): Record<string, WorkloadSnap
   for (const state of workloads.values()) out[state.name] = snapshotOf(state, now);
   return out;
 }
-
-/** @deprecated use `workloadsSnapshot()`; kept as an alias during C-P10. */
-export const allWorkloadSnapshots = workloadsSnapshot;

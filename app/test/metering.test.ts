@@ -7,7 +7,6 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  allWorkloadSnapshots,
   registerWorkload,
   workloadsSnapshot,
   workloadSnapshot,
@@ -169,11 +168,7 @@ describe("registerWorkload — measure()", () => {
 });
 
 describe("registerWorkload — dispose and re-registration", () => {
-  it("keeps the old allWorkloadSnapshots export as an alias during C-P10", () => {
-    expect(allWorkloadSnapshots).toBe(workloadsSnapshot);
-  });
-
-  it("dispose() removes the workload from allWorkloadSnapshots() and is idempotent", () => {
+  it("dispose() removes the workload from workloadsSnapshot() and is idempotent", () => {
     const w = registerWorkload("test:dispose-1", { inputs: [], outputs: [] });
     expect(workloadsSnapshot()["test:dispose-1"]).toBeDefined();
     w.dispose();

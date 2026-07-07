@@ -20,9 +20,6 @@ onMounted(() => session.call("refresh", undefined));
 </script>
 
 <template>
-    <p v-if="session.status.error" class="camera-error" role="alert">
-        {{ session.status.error }}
-    </p>
     <div class="cameras">
         <CameraConfig
             v-for="cam in session.telemetry.list"
@@ -35,18 +32,6 @@ onMounted(() => session.call("refresh", undefined));
 </template>
 
 <style scoped lang="scss">
-.camera-error {
-    margin: 0.5em auto;
-    max-width: 60ch;
-    padding: 0.5em 1ch;
-    border-radius: 0.5em;
-    background: #c0392b22;
-    border: 1px solid #c0392b;
-    color: #ff9b8f;
-    text-align: center;
-    font-size: 0.9em;
-}
-
 .cameras {
     display: flex;
     justify-content: center;

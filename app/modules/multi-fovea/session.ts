@@ -5,9 +5,10 @@
 // -------------------------------------------------------
 
 import { defineSession, type ServerSession } from "@orchestrator/runtime";
-import { leaseCalibratedTriple, type CalibratedTriple } from "@orchestrator/calibration";
+import { acquireTriple, type CalibratedTriple } from "@orchestrator/calibration";
 import { activeController, type StreamHandle } from "@orchestrator/controller";
 import { RoundRobinFrameScheduler } from "@orchestrator/scheduler";
+import { DisposerBag, releaseLeases } from "@orchestrator/session-resources";
 import { multiFovea, defaultMultiFoveaTarget, MAX_MULTI_FOVEA_TARGETS } from "./contract";
 import { MultiFoveaRuntime } from "./runtime";
 import { KCF } from "core/Tracker";
@@ -26,7 +27,7 @@ function radians(deg: number): number {
 export default function multiFoveaSession(): ServerSession<typeof multiFovea> {
   return defineSession("multi-fovea", multiFovea, (s) => {
     let triple: CalibratedTriple | null = null;
-    const disposers: Array<() => void> = [];
+    const disposers = new DisposerBag();
     const trackMs = new RollingStats(0.9, 2, "ms");
     let schedulerFrames = 0;
     let schedulerRejects = 0;
@@ -159,11 +160,8 @@ export default function multiFoveaSession(): ServerSession<typeof multiFovea> {
     }
 
     async function activateSession(): Promise<void> {
-      const t = await leaseCalibratedTriple();
-      if (!t) {
-        s.telemetry({ ready: false });
-        return;
-      }
+      const t = await acquireTriple(s);
+      if (!t) return;
       triple = t;
       disposers.push(t.leases.C.onView(onCenterView));
       applyTargets();
@@ -177,11 +175,10 @@ export default function multiFoveaSession(): ServerSession<typeof multiFovea> {
     function idleSession(): void {
       scheduler.stop();
       runtime.dispose();
-      for (const d of disposers) d();
-      disposers.length = 0;
-      if (triple) for (const l of Object.values(triple.leases)) l.release();
+      disposers.dispose();
+      releaseLeases(triple);
       triple = null;
-      s.telemetry({ ready: false, v2Capable: false });
+      s.resetTelemetry(["ready", "v2Capable"]);
     }
 
     return {

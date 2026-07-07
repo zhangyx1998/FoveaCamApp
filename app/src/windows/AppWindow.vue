@@ -17,6 +17,7 @@ import TitleBar from "../components/TitleBar.vue";
 import Controller from "../components/Controller.vue";
 import Loading from "../components/Loading.vue";
 import ErrorBoundary from "../components/ErrorBoundary.vue";
+import SessionStatus from "../components/SessionStatus.vue";
 import Overlay, { overlay } from "../components/Overlay.vue";
 import RemoteCanvas from "../components/RemoteCanvas.vue";
 import { FontAwesomeIcon as Icon } from "@fortawesome/vue-fontawesome";
@@ -24,14 +25,12 @@ import { faCamera, faTelevision, faChartLine } from "./icons";
 import { current_capture } from "../capture";
 import CaptureOverlay from "../capture/index.vue";
 import RecordButton from "../record/RecordButton.vue";
-import { appComponents } from "./app-registry";
-import { appById } from "@lib/windows";
+import { appRegistry } from "./app-registry";
 
 const props = defineProps<{ appId: string }>();
 
-const meta = appById(props.appId);
-const loader = appComponents[props.appId];
-const moduleComponent = loader ? defineAsyncComponent(loader) : null;
+const meta = appRegistry[props.appId];
+const moduleComponent = meta ? defineAsyncComponent(meta.loader) : null;
 
 const titleBarHeight = ref(0);
 const isCapAvailable = computed(() => current_capture.value !== null);
@@ -58,6 +57,7 @@ window.addEventListener("keydown", (e) => {
 
 <template>
   <div class="main" :style="{ top: titleBarHeight + 'px' }">
+    <SessionStatus :name="meta?.session" />
     <ErrorBoundary v-if="moduleComponent">
       <suspense>
         <component :is="moduleComponent" />

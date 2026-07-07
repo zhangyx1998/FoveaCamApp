@@ -26,6 +26,7 @@ import { matchTriple, retryUntil, type CameraLease } from "@orchestrator/registr
 import { loadIntrinsic, fitExtrinsicRegression } from "@orchestrator/calibration";
 import { startActuationLoop, type ActuationLoop } from "@orchestrator/actuation";
 import { startServo, type MarkerTracker, type Servo } from "@orchestrator/marker-tracker";
+import { bindViews, DisposerBag, releaseLeases } from "@orchestrator/session-resources";
 import {
   bindDetections,
   createTrackerTriple,
@@ -36,7 +37,7 @@ import {
 import { read, write } from "@orchestrator/store-hub";
 import { activeController } from "@orchestrator/controller";
 import { getCameraKey } from "@lib/camera-config";
-import { type Mat, type Undistort } from "core/Vision";
+import { type Undistort } from "core/Vision";
 import type { Point2d } from "core/Geometry";
 import type { Pos } from "@lib/controller-codec";
 import type { ExtrinsicDataset } from "@lib/camera-config";
@@ -62,11 +63,11 @@ export default function calibrateExtrinsicSession(): ServerSession<typeof calibr
   return defineSession("calibrate-extrinsic", calibrateExtrinsic, (s) => {
     let leases: Record<Role, CameraLease> | null = null;
     let undistort: Undistort | null = null;
-    const disposers: Array<() => void> = [];
+    const disposers = new DisposerBag();
     let trackers: Record<Role, MarkerTracker> | null = null;
     let servo: Servo | null = null;
-    let previewLoop: ActuationLoop | null = null;
-    let previewVolts: { l: Pos; r: Pos } = { l: ORIGIN, r: ORIGIN };
+    let preview: ActuationLoop | null = null;
+    let previewVolt: { l: Pos; r: Pos } = { l: ORIGIN, r: ORIGIN };
     let records: ExtrinsicRecord[] = [];
     let fittedL: ExtrinsicConversions | null = null;
     let fittedR: ExtrinsicConversions | null = null;
@@ -80,9 +81,9 @@ export default function calibrateExtrinsicSession(): ServerSession<typeof calibr
       servo?.stop();
       servo = null;
     }
-    function stopPreviewLoop(): void {
-      previewLoop?.stop();
-      previewLoop = null;
+    function stopPreview(): void {
+      preview?.stop();
+      preview = null;
     }
 
     /** Switch the active actuation mode to match the wizard step. Called
@@ -92,7 +93,7 @@ export default function calibrateExtrinsicSession(): ServerSession<typeof calibr
      *  that change `step` call this directly too. */
     function enterStep(step: "CAL" | "FIN" | "PRV"): void {
       stopServo();
-      stopPreviewLoop();
+      stopPreview();
       if (!trackers) return;
       if (step === "CAL") {
         servo = startServo(trackers.L, trackers.R, {
@@ -100,12 +101,8 @@ export default function calibrateExtrinsicSession(): ServerSession<typeof calibr
           overrideRight: () => s.state.override_right,
         });
       } else if (step === "PRV") {
-        previewLoop = startActuationLoop({ targetVolts: () => previewVolts, onVolts() {} });
+        preview = startActuationLoop({ targetVolts: () => previewVolt, onVolts() {} });
       }
-    }
-
-    function onView(role: Role, raw: Mat<Uint8Array>): void {
-      s.frame(role, raw);
     }
 
     async function persistRecords(): Promise<void> {
@@ -117,12 +114,14 @@ export default function calibrateExtrinsicSession(): ServerSession<typeof calibr
       const matched = await retryUntil(matchTriple);
       if (!matched) {
         s.telemetry({ ready: false });
+        s.fail("Cameras unavailable — held by another app or not connected");
         return;
       }
       const { undistort: u } = await loadIntrinsic(matched.C.camera);
       if (!u) {
-        for (const l of Object.values(matched)) l.release();
+        releaseLeases(matched);
         s.telemetry({ ready: false });
+        s.fail("Center camera intrinsic calibration unavailable");
         return;
       }
       leases = matched;
@@ -136,9 +135,7 @@ export default function calibrateExtrinsicSession(): ServerSession<typeof calibr
         { internal: true },
       );
       bindDetections(trackers, disposers, publishDetections);
-      disposers.push(leases.L.onView((v) => onView("L", v)));
-      disposers.push(leases.C.onView((v) => onView("C", v)));
-      disposers.push(leases.R.onView((v) => onView("R", v)));
+      bindViews(leases, disposers, s);
 
       enterStep(s.state.step);
       s.telemetry({ ready: true });
@@ -146,19 +143,14 @@ export default function calibrateExtrinsicSession(): ServerSession<typeof calibr
 
     function idleSession(): void {
       stopServo();
-      stopPreviewLoop();
+      stopPreview();
       trackers = stopTriple(trackers);
-      for (const d of disposers) d();
-      disposers.length = 0;
-      if (leases) for (const l of Object.values(leases)) l.release();
+      disposers.dispose();
+      releaseLeases(leases);
       leases = null;
       undistort = null;
       fittedL = fittedR = null;
-      s.telemetry({
-        ready: false,
-        detection: { L: null, C: null, R: null },
-        finalized: false,
-      });
+      s.resetTelemetry(["ready", "detection", "finalized"]);
     }
 
     return {
@@ -222,7 +214,7 @@ export default function calibrateExtrinsicSession(): ServerSession<typeof calibr
           // orchestrator.md §7.1 S1b for the full note.
           const l = fittedL.A2V.predict(angle);
           const r = fittedR.A2V.predict(angle);
-          previewVolts = { l, r };
+          previewVolt = { l, r };
           // Round-trip each predicted volt back through V2A -> angle -> pixel,
           // for the "does this look right on the wide view" overlay.
           const cursor_l = undistort.position([fittedL.V2A.predict(l)], true)[0];

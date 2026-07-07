@@ -1,5 +1,134 @@
 # Planner triage (2026-07-07)
 
+## SURVEY ROUND 2 TRIAGE (2026-07-07; Opus 4.8 fleet — post wave-2)
+Source files: `proposals/{A,B,C}-r2.md`. Ranked re-survey of what waves 1+2
+EXPOSED. Classified below; non-breaking green-lit by planner authority (wave-3
+backlog), breaking → user.
+
+### GREEN-LIT non-breaking (wave-3 backlog, planner authority)
+- **A:** A-R2-P1 (`session-resources.ts` DisposerBag + releaseLeases — 6×
+  verbatim teardown; A-P1 building block), P2 (`acquireTriple(s)` + adopt A-P13
+  `fail()` on the 5–6× silent triple-guard), P3 (`useController()` composable),
+  P4 (`<MarkerTargetInputs>` — renderer twin of A-P4), P5 (`<SessionStatus>`
+  banner, fleet-wide A-P13 payoff), P6 (`s.resetTelemetry()` republish contract
+  defaults — pin a test), P7 (`bindField()` writable telemetry↔command
+  composable), P8 (fold `APPS` metadata into one registry; keep A-P9 explicit
+  loader map for vite), P9 (`bindViews` passthrough — closes A-P4 out-of-scope),
+  P10 (curated short-name pass on wave-2 survivors, piggyback only).
+- **B:** B-R2-P1 (Protocol Method/Property → B-P1 X-macro; host+MCU in one edit;
+  byte-identical strings), P2 (generate `pyfovea/schema.py` from `fovea.ts` via
+  the B-P1 emitter — byte-compare before commit), P5 (bench harness helpers —
+  B-P4 self-duplication), P6 (pyfovea `significant_bits` reads the generated
+  table, keep suffix fallback), P7 (trim `cv::Format` enum — LOW value,
+  opportunistic only).
+- **C:** C-R2-P1 (unify `shmReads` onto `stats.ts` window/rate lineage + shared
+  `SampleStats`; PB2 wants reads/sec), P3 (`shm-messages.ts` shared wire types —
+  re-run V11 on the emitted preload), P4 (shared perf-OSD formatter — OSD/dump
+  label parity), P6 (retire DEAD `publishTelemetry` PlayerHooks alias — no
+  caller), P10 (hoist per-message `TextDecoder`; audit decode scratch copy),
+  P8 (align `shmReads` to `WorkloadSnapshot` shape — M; do AFTER P1).
+
+### GREEN-LIT cross-role non-breaking (coordinated ownership)
+- **C-R2-P5** split-brain `allWorkloadSnapshots`: the C-P10 "@deprecated" alias
+  silently became the live `perfSnapshot.workloads` path (A wired it under the
+  old name in `system.ts`). Fix: A migrates the `system.ts` call site (+ tests)
+  to `workloadsSnapshot`, C deletes the alias. C-owned metering, A-owned call
+  site — sequence A-then-C in one wave slot.
+- **Codec/dtype seam** — B-R2-P4 (recorder `significantBits`/`channels` resolve
+  through `pixelFormatSpec`) + B-R2-P8 (derive the `.d.ts` PixelFormat8/16/12p
+  unions from the registry) + C-R2-P7 (decode cross-checks recorded metadata vs
+  schema): all consume B's `PIXEL_FORMATS` on C-owned files (`dtype.ts`,
+  `.d.ts`, `decode.ts`) — assign to **C** as extensions of C-P6; B confirms the
+  format facts and the "metadata may lawfully lag schema" policy. C-R2-P7 stays
+  OBSERVE-ONLY (warn/telemetry, NOT a silent drop) until B ratifies the policy.
+
+### DEFERRED (trigger noted)
+- **B-R2-P3** packet field-descriptor table (reframed, lower-risk successor to
+  the DECLINED B-P5): DEFER to the rig/bench era — `Controller.cpp` is the
+  hardware-gated FIN-trace surface; B itself gates on `02-serial-protocol.ts` +
+  a rig round. Revisit post-bench with hardware.
+- **B-R2-P9** `Controller.cpp` internal renames (`EXPECT_EXACTLY_ONE_ARGUMENT`,
+  `VersionPacketStaticProps`, `propertyMap`→`readField`): DEFER — fold into the
+  B-P14 post-bench rename pass (B's own recommendation; keep FIN-trace blame
+  legible).
+
+### USER DECISIONS (breaking — planner recommendation attached)
+1. **C-R2-P9** lift viewer `positionNs`/`playing` out of the whole-map
+   `state.files` push (per-frame-rate mutation currently re-serializes static
+   inventory at ~4 Hz × N files): touches the PINNED `viewer-contract.ts` state
+   shape → breaking. RECOMMEND YES, **bundled into the approved A-P7/A-P12
+   contract wave** (same viewer-contract surface + call-site sweep; don't do
+   piecemeal).
+2. **C-R2-P11** remove the deprecated native `ShmSlot.view()` alias (C-P5's
+   "breaking later" half; C's repo sweep finds zero `.view(` shm callers):
+   removes a public native method + d.ts union member → breaking. RECOMMEND YES
+   — cheap, low-risk, closes the V13 `view().set(...)` cage-misuse trap for the
+   next coder; gate = re-confirm zero callers + native rebuild + reader
+   `otool -L`.
+
+## WAVE-3 LANDED + PLANNER-VERIFIED (2026-07-07, accepted; gpt-5.5 fleet)
+Fleet switched back to gpt-5.5 (Codex) for implementation per user; Opus 4.8
+kept warm as the switch-back reserve. Green-lit non-breaking round-2 backlog:
+- **A (A-18):** A-R2-P1 (`session-resources.ts`: DisposerBag / releaseLeases /
+  bindViews), P6 (`resetTelemetry` from cloned contract defaults + test), P2
+  (`acquireTriple` adopting the A-P13 `fail()` on the silent camera-unavailable
+  path across drift/distortion/manual/disparity/multi/tracking; extrinsic now
+  fails visibly on both paths), P3 (`useController`), P4 (`MarkerTargetInputs`),
+  P5 (app-shell `SessionStatus` banner; manage-cameras bespoke banner removed),
+  P7 (`bindField`), P8 (`APP_REGISTRY` metadata + co-located explicit Vue
+  loaders, A-P9 test green), P10 (extrinsic previewLoop/previewVolts →
+  preview/previewVolt). CROSS-ROLE C-R2-P5: `system.ts` perfSnapshot.workloads →
+  `workloadsSnapshot`; `recorder.test.ts` migrated off the alias (steering).
+- **B (B-11):** B-R2-P1 (Protocol Method/Property enum + strings expand from the
+  `FOVEA_PROTOCOL_METHODS`/`_PROPERTIES` X-macro — planner re-diffed EVERY value
+  byte-identical NOP=0x00..SYN=0xF0 / NONE=0x00..LOG=0x0F, `#Name` strings
+  identical; enum semantic comments restored as a block on steering), B-R2-P2
+  (`schema.py` generated from `fovea.ts`; md5-idempotent, byte-compare clean),
+  B-R2-P6 (pyfovea `significant_bits` reads the table, suffix fallback kept),
+  B-R2-P5 (bench shared `harness.ts`). B-R2-P7 SKIPPED (never entered
+  PixelFormat.h). Answered C's codec policy: older-recording metadata may
+  lawfully lag schema → warn/telemetry, never drop.
+- **C (C-13):** C-R2-P1+P8 (shmReads unified onto the `stats.ts` window/rate
+  lineage + workload-shaped block + shared `SampleStats`/`WorkloadSnapshot` in
+  renderer-safe `stats.ts`), P3 (shared `shm-messages.ts` wire contract), P4
+  (shared OSD/dump formatters), P6 (dead `publishTelemetry` hook removed), P10
+  (`TextDecoder` hoisted; decode scratch left un-pooled — Mats outlive decode,
+  sound deviation). Codec seam (B-R2-P4/P8 + C-R2-P7): recorder metadata via
+  registry helpers, `parseDecodeProps` warns observe-only on schema drift,
+  `.d.ts` union partition guard. CROSS-ROLE C-R2-P5 tail: `allWorkloadSnapshots`
+  alias DELETED, 0 refs repo-wide.
+- **Planner final sweep (authoritative, unsandboxed):** vue-tsc 0, vitest
+  **218/218** (−1: obsolete C-P10 alias-pin test removed), vite build clean,
+  renderer zero-core / orchestrator zero-Vue, V11 triplet 0/0/0 both preloads,
+  `core make build` both runtimes (0 errors), `08-shm-ring.ts` PASS, reader
+  `otool -L` self+libc++/libSystem only, pyfovea **33/33**. B-R2-P1 byte-values
+  re-diffed, B-R2-P2 generator md5-idempotent, alias grep 0. Committed as the
+  wave-3 checkpoint. **Green-lit non-breaking round-2 backlog EXHAUSTED** —
+  remaining = DEFERRED B-R2-P3 (rig/bench) + B-R2-P9 (post-bench, fold into
+  B-P14), and the WAVE-4 breaking contract batch below.
+
+### WAVE-4 PREP — A-P7/A-P12 contract wave (persisted-key audit, planner)
+Wave-4 = the approved breaking contract wave (A-P7 camelCase normalization +
+A-P12 explicit frame address) with **C-R2-P9** (lift viewer `positionNs`/
+`playing` off the whole-map `state.files` push) and **C-R2-P11** (remove native
+`view()` alias) folded in — all reviewed as one contract/API batch (user
+2026-07-07). A-P7's gate is a persisted-key audit; done 2026-07-07 — the
+surfaces whose ON-DISK/persisted keys could break under a wire-key rename, each
+needing a migration or back-compat read shim in the A-P7 instruction:
+- `app/orchestrator/store.ts` — atomic JSON config written to `<userData>/
+  store/*` (the persisted config store; keys are the live risk).
+- `app/orchestrator/camera.ts` — persisted per-camera config (pixel format,
+  frame rate, exposure, …) restored on enumerate.
+- `app/orchestrator/store-hub.ts` — the single write/broadcast path for every
+  persisted config doc (`store:<path>`), incl. renderer `Store` writes.
+- `app/electron/window-manifest.ts` — persisted window manifest ({class,
+  landing URL, state}) rides the same store file layout.
+- Renderer localStorage: `app/lib/local.ts`, `app/lib/util/index.ts`
+  (JSON-serialized under caller-supplied keys).
+DoD for the A-P7 instruction: any renamed key that is READ BACK from one of the
+above must either migrate old docs on load or accept both spellings for one
+release. Not started (wave-3 non-breaking backlog runs first).
+
 ## WAVE-2 LANDED + PLANNER-VERIFIED (2026-07-07, accepted; Opus 4.8 fleet)
 - **A (A-16):** A-P4 (`marker-calibration.ts` Vue-free primitives, adopted
   extrinsic/drift/distortion), A-P8 (`WINDOWS` taxonomy table feeding

@@ -19,10 +19,11 @@ import math
 
 import numpy as np
 
-# Bayer mosaic prefixes come from the generated pixel-format registry mirror
+# Pixel-format facts come from the generated registry mirror
 # (docs/schema/pixel-formats.ts → pixel_formats.py) so the list can't drift from
-# the C++/TS tables. Re-exported here for backward-compatible imports.
-from .pixel_formats import BAYER_PATTERNS
+# the C++/TS tables. BAYER_PATTERNS is re-exported here for backward-compatible
+# imports.
+from .pixel_formats import BAYER_PATTERNS, pixel_format_spec
 
 #: Short dtype name -> numpy dtype. Must match ``Dtype`` in
 #: ``app/lib/util/dtype.ts``.
@@ -42,9 +43,13 @@ NUMPY_DTYPE: dict[str, np.dtype] = {
 
 def significant_bits(fmt: str, declared: int = 0) -> int:
     """Effective bit depth of pixel data. Prefer the declared value (channel
-    metadata / meta sidecar); otherwise derive from the format name."""
+    metadata / meta sidecar); otherwise use the registry for known formats and
+    keep suffix derivation for unknown legacy names."""
     if declared:
         return declared
+    spec = pixel_format_spec(fmt)
+    if spec is not None:
+        return spec.significant_bits
     if fmt.endswith("12p"):
         return 12
     if fmt.endswith("16"):

@@ -16,6 +16,12 @@ import {
   withShmReadResult,
   type ShmReadResult,
 } from "@lib/orchestrator/frame-payload";
+import {
+  SHM_INIT,
+  SHM_READ,
+  SHM_READ_DONE,
+  type ShmReadRequest,
+} from "@lib/orchestrator/shm-messages";
 
 type ReaderHandle = object;
 type ReaderAddon = {
@@ -71,15 +77,13 @@ function readShmFrame(payload: FramePayload, dest: ArrayBuffer): FramePayload | 
 }
 
 function handleReadMessage(port: MessagePort, data: unknown): void {
-  const msg = data as
-    | { kind: "fovea:shm:read"; id: number; payload: FramePayload; buffer: ArrayBuffer }
-    | undefined;
-  if (msg?.kind !== "fovea:shm:read") return;
+  const msg = data as ShmReadRequest | undefined;
+  if (msg?.kind !== SHM_READ) return;
   try {
     const payload = readShmFrame(msg.payload, msg.buffer);
     port.postMessage(
       {
-        kind: "fovea:shm:read-done",
+        kind: SHM_READ_DONE,
         id: msg.id,
         payload,
         buffer: payload?.data ?? msg.buffer,
@@ -89,7 +93,7 @@ function handleReadMessage(port: MessagePort, data: unknown): void {
   } catch (error) {
     port.postMessage(
       {
-        kind: "fovea:shm:read-done",
+        kind: SHM_READ_DONE,
         id: msg.id,
         payload: null,
         buffer: msg.buffer,
@@ -103,7 +107,7 @@ function handleReadMessage(port: MessagePort, data: unknown): void {
 window.addEventListener("message", (event) => {
   if (event.source !== window) return;
   const msg = event.data as { kind?: string } | undefined;
-  if (msg?.kind !== "fovea:shm:init") return;
+  if (msg?.kind !== SHM_INIT) return;
   const port = event.ports[0];
   if (!port) return;
   port.onmessage = (message) => handleReadMessage(port, message.data);

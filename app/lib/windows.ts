@@ -41,24 +41,37 @@ export interface AppMeta {
   dev?: true;
 }
 
-export const APPS: readonly AppMeta[] = [
+type AppSpec = Omit<AppMeta, "id">;
+
+export const APP_REGISTRY = {
   // --- applications ---------------------------------------------------
-  { id: "disparity-scope", title: "Disparity Scope", session: "disparity-scope", group: "application" },
-  { id: "tracking-single", title: "Object Tracking (Single)", session: "tracking", group: "application" },
-  { id: "multi-fovea", title: "Object Tracking (Multi)", session: "multi-fovea", group: "application" },
-  { id: "manual-control", title: "Manual Control", session: "manual-control", group: "application" },
-  { id: "single-capture", title: "Single Capture", session: "liveview", group: "application" },
-  { id: "playground", title: "Playground", session: null, group: "application", dev: true },
-  // --- utilities --------------------------------------------------------
-  { id: "manage-cameras", title: "Manage Cameras", session: "manage-cameras", group: "utility" },
-  { id: "calibrate-intrinsic", title: "Calibrate Intrinsic", session: "calibrate-intrinsic", group: "utility" },
-  { id: "calibrate-extrinsic", title: "Calibrate Extrinsic", session: "calibrate-extrinsic", group: "utility" },
-  { id: "calibrate-distortion", title: "Calibrate Distortion", session: "calibrate-distortion", group: "utility" },
-  { id: "calibrate-drift", title: "Calibrate Drift", session: "calibrate-drift", group: "utility" },
-] as const;
+  "disparity-scope": { title: "Disparity Scope", session: "disparity-scope", group: "application" },
+  "tracking-single": { title: "Object Tracking (Single)", session: "tracking", group: "application" },
+  "multi-fovea": { title: "Object Tracking (Multi)", session: "multi-fovea", group: "application" },
+  "manual-control": { title: "Manual Control", session: "manual-control", group: "application" },
+  "single-capture": { title: "Single Capture", session: "liveview", group: "application" },
+  playground: { title: "Playground", session: null, group: "application", dev: true },
+  // --- utilities ------------------------------------------------------
+  "manage-cameras": { title: "Manage Cameras", session: "manage-cameras", group: "utility" },
+  "calibrate-intrinsic": { title: "Calibrate Intrinsic", session: "calibrate-intrinsic", group: "utility" },
+  "calibrate-extrinsic": { title: "Calibrate Extrinsic", session: "calibrate-extrinsic", group: "utility" },
+  "calibrate-distortion": { title: "Calibrate Distortion", session: "calibrate-distortion", group: "utility" },
+  "calibrate-drift": { title: "Calibrate Drift", session: "calibrate-drift", group: "utility" },
+} as const satisfies Record<string, AppSpec>;
+
+export type AppId = keyof typeof APP_REGISTRY;
+
+function appFromEntry(id: string, spec: AppSpec): AppMeta {
+  return { id, ...spec };
+}
+
+export const APPS: readonly AppMeta[] = Object.entries(APP_REGISTRY).map(
+  ([id, spec]) => appFromEntry(id, spec),
+);
 
 export function appById(id: string): AppMeta | undefined {
-  return APPS.find((a) => a.id === id);
+  const spec = APP_REGISTRY[id as AppId];
+  return spec ? appFromEntry(id, spec) : undefined;
 }
 
 /** Preload bundle a window class loads — a pure key mapped to a concrete file
@@ -182,7 +195,7 @@ export function entryFor(cls: WindowClass, appId?: string): string {
 export function allEntries(): Record<string, string> {
   const entries: Record<string, string> = {};
   for (const [cls, spec] of Object.entries(WINDOWS)) if (spec.entry) entries[cls] = spec.entry;
-  for (const app of APPS) entries[app.id] = `windows/${app.id}.html`;
+  for (const id of Object.keys(APP_REGISTRY)) entries[id] = `windows/${id}.html`;
   return entries;
 }
 

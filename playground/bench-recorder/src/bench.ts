@@ -29,7 +29,6 @@
 // single-line JSON summary for scripted collection across the compression x
 // size matrix.
 
-import { createRequire } from "node:module";
 import { mkdir, stat, rm } from "node:fs/promises";
 import { cpus } from "node:os";
 import {
@@ -38,10 +37,14 @@ import {
   RAW_FRAME_SCHEMA_NAME,
 } from "../../../docs/schema/fovea.ts";
 import { McapWriterWorker } from "../../../app/orchestrator/recorder/writer.ts";
-import type { CompressionInjection } from "../../../app/orchestrator/recorder/types.ts";
 import { buildFramePool, buildProcessedPool } from "./synth.ts";
-
-type Compression = "none" | "lz4" | "zstd";
+import {
+  benchChannels,
+  compressionInjection,
+  parseArgs,
+  type BenchChannel,
+  type Compression,
+} from "./harness.ts";
 
 interface Args {
   size: number; // MiB target for raw streams
@@ -54,48 +57,7 @@ interface Args {
   keep: boolean;
 }
 
-function parseArgs(): Args {
-  const map = new Map<string, string>();
-  for (const arg of process.argv.slice(2)) {
-    const m = /^--([^=]+)=(.*)$/.exec(arg);
-    if (m) map.set(m[1]!, m[2]!);
-  }
-  const size = Number(map.get("size") ?? "1.5");
-  return {
-    size,
-    compression: (map.get("compression") ?? "none") as Compression,
-    zstdLevel: Number(map.get("zstdLevel") ?? "1"),
-    duration: Number(map.get("duration") ?? "30"),
-    maxQueued: Number(map.get("maxQueued") ?? "8"),
-    chunkSizeMiB: Number(map.get("chunkSizeMiB") ?? String(size * 1.05)),
-    out: map.get("out") ?? "./out",
-    keep: map.get("keep") === "1",
-  };
-}
-
-/** Resolve the bench-only compression injection from CLI args (never used in
- *  production — see CompressionInjection). Modules are resolved from the
- *  bench's own node_modules. */
-function compressionInjection(args: Args): CompressionInjection | undefined {
-  if (args.compression === "none") return undefined;
-  const require = createRequire(import.meta.url);
-  if (args.compression === "lz4") {
-    return { name: "lz4", moduleEntry: require.resolve("lz4-napi"), exportName: "compressSync" };
-  }
-  return {
-    name: "zstd",
-    moduleEntry: require.resolve("zstd-napi"),
-    exportName: "compress",
-    level: args.zstdLevel,
-  };
-}
-
-interface Channel {
-  topic: string;
-  fps: number;
-  pixelFormat: string;
-  metadata: Record<string, string>;
-  pool: readonly Uint8Array[];
+interface Channel extends BenchChannel {
   poolIdx: number;
   seq: number;
   tick: number;
@@ -104,7 +66,20 @@ interface Channel {
 }
 
 async function main(): Promise<void> {
-  const args = parseArgs();
+  const args = parseArgs<Args>(
+    {
+      size: 1.5,
+      compression: "none",
+      zstdLevel: 1,
+      duration: 30,
+      maxQueued: 8,
+      chunkSizeMiB: Number.NaN,
+      out: "./out",
+      keep: false,
+    },
+    ["keep"],
+  );
+  if (Number.isNaN(args.chunkSizeMiB)) args.chunkSizeMiB = args.size * 1.05;
   await mkdir(args.out, { recursive: true });
   const filePath = `${args.out}/bench-${args.size}MiB-${args.compression}.fovea`;
   await rm(filePath, { force: true });
@@ -121,44 +96,16 @@ async function main(): Promise<void> {
       `writer=production McapWriterWorker`,
   );
 
-  const channels: Channel[] = [
-    ...["cam0", "cam1", "cam2"].map((name) => ({
-      topic: `raw/${name}`,
-      fps: 60,
-      pixelFormat: "BayerRG12p",
-      metadata: {
-        dtype: "U8",
-        shape: JSON.stringify([rawPool.height, rawPool.width]),
-        channels: "1",
-        pixelFormat: "BayerRG12p",
-        significantBits: "12",
-      },
-      pool: rawPool.frames,
+  const channels: Channel[] = benchChannels(rawPool, procPool).map(
+    (channel) => ({
+      ...channel,
       poolIdx: 0,
       seq: 0,
       tick: 0,
       produced: 0,
       dropped: 0,
-    })),
-    {
-      topic: "processed/disparity",
-      fps: 30,
-      pixelFormat: "Mono8",
-      metadata: {
-        dtype: "U8",
-        shape: JSON.stringify([procPool.height, procPool.width]),
-        channels: "1",
-        pixelFormat: "Mono8",
-        significantBits: "8",
-      },
-      pool: procPool.frames,
-      poolIdx: 0,
-      seq: 0,
-      tick: 0,
-      produced: 0,
-      dropped: 0,
-    },
-  ];
+    }),
+  );
 
   const writer = new McapWriterWorker(filePath, "bench", {
     chunkBytes: Math.round(args.chunkSizeMiB * 1024 * 1024),

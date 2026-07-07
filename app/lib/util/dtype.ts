@@ -66,6 +66,21 @@ export function significantBits(format: PixelFormat): number {
   return 8;
 }
 
+/** Registry-backed dtype for a pixel format, with the recorded Mat dtype as
+ *  fallback for unknown/legacy names outside the table. */
+export function pixelFormatDtype(
+  format: PixelFormat,
+  fallback: Dtype = "U8",
+): Dtype {
+  return pixelFormatSpec(format)?.dtype ?? fallback;
+}
+
+/** Registry-backed channel count for a pixel format, with the Mat's actual
+ *  channel count as fallback for unknown/legacy names outside the table. */
+export function pixelFormatChannels(format: PixelFormat, fallback = 1): number {
+  return pixelFormatSpec(format)?.channels ?? fallback;
+}
+
 /** TypedArray constructor keyed by short dtype name. */
 export function typedArrayFrom(dtype: Dtype) {
   switch (dtype) {

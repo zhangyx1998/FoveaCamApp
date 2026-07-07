@@ -19,10 +19,11 @@
 // use of them had landed (docs/refactor/orchestrator.md roadmap items 5/6).
 
 import { defineSession, type ServerSession } from "@orchestrator/runtime";
-import { leaseCalibratedTriple, type CalibratedTriple } from "@orchestrator/calibration";
+import { acquireTriple, type CalibratedTriple } from "@orchestrator/calibration";
 import { startActuationLoop, type ActuationLoop } from "@orchestrator/actuation";
 import { AsyncKcfTracker } from "@orchestrator/async-kcf";
 import { createFrameWorker } from "@orchestrator/frame-worker";
+import { DisposerBag, releaseLeases } from "@orchestrator/session-resources";
 import {
   clampRectToSize,
   depthFromInverse,
@@ -57,7 +58,7 @@ export default function trackingSession(): ServerSession<typeof tracking> {
   return defineSession("tracking", tracking, (s) => {
     // Leased triple + loaded conversions (held while a renderer is subscribed).
     let triple: CalibratedTriple | null = null;
-    const disposers: Array<() => void> = []; // frame/view tap unsubscribes
+    const disposers = new DisposerBag(); // frame/view tap unsubscribes
     let loop: ActuationLoop | null = null;
 
     // Center-frame geometry, learned from the first frame.
@@ -353,11 +354,8 @@ export default function trackingSession(): ServerSession<typeof tracking> {
     // name for self-reference, so reusing "activate"/"idle" here would read
     // as (harmless but confusing) recursion.
     async function activateSession(): Promise<void> {
-      const t = await leaseCalibratedTriple();
-      if (!t) {
-        s.telemetry({ ready: false });
-        return;
-      }
+      const t = await acquireTriple(s);
+      if (!t) return;
       triple = t;
       // Tap each stream's Mat in-process: the center is undistorted (+
       // tracked), the foveae are perspective-wrapped, before publishing
@@ -395,16 +393,15 @@ export default function trackingSession(): ServerSession<typeof tracking> {
       loop?.stop();
       loop = null;
       disengage(false);
-      for (const d of disposers) d();
-      disposers.length = 0;
+      disposers.dispose();
       centerWorker.cancel();
       foveaWorkers.L.cancel();
       foveaWorkers.R.cancel();
-      if (triple) for (const l of Object.values(triple.leases)) l.release();
+      releaseLeases(triple);
       triple = null;
       width = height = 0;
       lastFrameTime = null; // don't carry a stale frame age into the next activation
-      s.telemetry({ ready: false, active: false, bbox: null });
+      s.resetTelemetry(["ready", "active", "bbox"]);
     }
 
     return {

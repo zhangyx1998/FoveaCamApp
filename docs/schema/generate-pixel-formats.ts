@@ -17,6 +17,24 @@ import { writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PIXEL_FORMATS, BAYER_PATTERNS } from "./pixel-formats.ts";
+import {
+  DEFAULT_CHUNK_BYTES,
+  DEFAULT_MAX_QUEUED_FRAMES,
+  FINALIZE_METADATA_NAME,
+  FOVEA_EXTENSION,
+  FOVEA_LIBRARY,
+  FOVEA_PROFILE,
+  FRAME_METADATA_KEYS,
+  JSON_SCHEMA_ENCODING,
+  RAW_FRAME_MESSAGE_ENCODING,
+  RAW_FRAME_SCHEMA_DATA,
+  RAW_FRAME_SCHEMA_NAME,
+  SESSION_METADATA_NAME,
+  TELEMETRY_MESSAGE_ENCODING,
+  TELEMETRY_SCHEMA_DATA,
+  TELEMETRY_SCHEMA_NAME,
+  TELEMETRY_TOPIC,
+} from "./fovea.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, "..", "..");
@@ -108,6 +126,86 @@ const py = [
 ].join("\n");
 writeFileSync(resolve(repo, "pyfovea/src/pyfovea/pixel_formats.py"), py);
 
+// ---- Python .fovea schema mirror ----------------------------------------
+function pyString(value: string): string {
+  return JSON.stringify(value);
+}
+
+function pyTuple(values: readonly string[]): string[] {
+  return values.map((value) => `    ${pyString(value)},`);
+}
+
+const rawFrameDescription = JSON.parse(RAW_FRAME_SCHEMA_DATA).description;
+const telemetryDescription = JSON.parse(TELEMETRY_SCHEMA_DATA).description;
+const rawFrameChunks = [
+  "Raw frame bytes exactly as captured (12p formats stay ",
+  "packed). Decode props are in the channel metadata.",
+];
+const telemetryChunks = [
+  "Per-frame JSON metadata document: {stream, seq, t, ",
+  "...extras} — extras are the legacy .meta sidecar's `x` payload ",
+  "(volt/angle/affine). Correlate with the frame by stream+seq (or ",
+  "logTime).",
+];
+if (rawFrameChunks.join("") !== rawFrameDescription) {
+  throw new Error("RAW_FRAME_SCHEMA_DATA description wrapping is stale");
+}
+if (telemetryChunks.join("") !== telemetryDescription) {
+  throw new Error("TELEMETRY_SCHEMA_DATA description wrapping is stale");
+}
+const schemaPy = [
+  "# ------------------------------------------------------",
+  "# Copyright (c) 2026 Yuxuan Zhang, dev@z-yx.cc",
+  "# This source code is licensed under the MIT license.",
+  "# You may find the full license in project root directory.",
+  "# -------------------------------------------------------",
+  '"""Mirrored constants for the recorder-container.md §2b ``.fovea`` schema."""',
+  "",
+  "from __future__ import annotations",
+  "",
+  "import json",
+  "",
+  `FOVEA_EXTENSION = ${pyString(FOVEA_EXTENSION)}`,
+  `FOVEA_PROFILE = ${pyString(FOVEA_PROFILE)}`,
+  `FOVEA_LIBRARY = ${pyString(FOVEA_LIBRARY)}`,
+  "",
+  `TELEMETRY_TOPIC = ${pyString(TELEMETRY_TOPIC)}`,
+  `RAW_FRAME_SCHEMA_NAME = ${pyString(RAW_FRAME_SCHEMA_NAME)}`,
+  `TELEMETRY_SCHEMA_NAME = ${pyString(TELEMETRY_SCHEMA_NAME)}`,
+  `JSON_SCHEMA_ENCODING = ${pyString(JSON_SCHEMA_ENCODING)}`,
+  `RAW_FRAME_MESSAGE_ENCODING = ${pyString(RAW_FRAME_MESSAGE_ENCODING)}`,
+  `TELEMETRY_MESSAGE_ENCODING = ${pyString(TELEMETRY_MESSAGE_ENCODING)}`,
+  "",
+  `SESSION_METADATA_NAME = ${pyString(SESSION_METADATA_NAME)}`,
+  `FINALIZE_METADATA_NAME = ${pyString(FINALIZE_METADATA_NAME)}`,
+  "",
+  `DEFAULT_CHUNK_BYTES = ${DEFAULT_CHUNK_BYTES / 1024} * 1024`,
+  `DEFAULT_MAX_QUEUED_FRAMES = ${DEFAULT_MAX_QUEUED_FRAMES}`,
+  "",
+  "RAW_FRAME_SCHEMA_DATA = json.dumps(",
+  "    {",
+  `        "description": ${pyString(rawFrameChunks[0])}`,
+  `        ${pyString(rawFrameChunks[1])}`,
+  "    }",
+  ").encode()",
+  "",
+  "TELEMETRY_SCHEMA_DATA = json.dumps(",
+  "    {",
+  `        "description": ${pyString(telemetryChunks[0])}`,
+  `        ${pyString(telemetryChunks[1])}`,
+  `        ${pyString(telemetryChunks[2])}`,
+  `        ${pyString(telemetryChunks[3])}`,
+  "    }",
+  ").encode()",
+  "",
+  "FRAME_METADATA_KEYS = (",
+  ...pyTuple(FRAME_METADATA_KEYS),
+  ")",
+  "",
+  "",
+].join("\n");
+writeFileSync(resolve(repo, "pyfovea/src/pyfovea/schema.py"), schemaPy);
+
 console.log(
-  `wrote core/lib/Aravis/PixelFormat.gen.h and pyfovea/src/pyfovea/pixel_formats.py (${PIXEL_FORMATS.length} formats)`,
+  `wrote core/lib/Aravis/PixelFormat.gen.h, pyfovea/src/pyfovea/pixel_formats.py, and pyfovea/src/pyfovea/schema.py (${PIXEL_FORMATS.length} formats)`,
 );

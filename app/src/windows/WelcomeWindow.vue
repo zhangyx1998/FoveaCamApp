@@ -25,7 +25,7 @@ You may find the full license in project root directory.
 import { computed, onMounted, ref } from "vue";
 import { useDynamicFrame, useSession } from "@lib/orchestrator/client";
 import { manageCameras } from "@modules/manage-cameras/contract";
-import { APPS } from "@lib/windows";
+import { launchableApps } from "./app-registry";
 import TitleBar from "../components/TitleBar.vue";
 import StreamView from "../components/StreamView.vue";
 import AnnotationCanvas from "./AnnotationCanvas.vue";
@@ -87,9 +87,8 @@ const exposure = computed(() => `${fmt(view.value?.exposure, 0)} µs`);
 const gain = computed(() => `${fmt(view.value?.gain)} dB`);
 
 // Launcher entries — dev-only apps hidden in production builds.
-const launchable = APPS.filter((a) => !a.dev || import.meta.env.DEV);
-const applications = launchable.filter((a) => a.group === "application");
-const utilities = launchable.filter((a) => a.group === "utility");
+const applications = launchableApps.filter((a) => a.group === "application");
+const utilities = launchableApps.filter((a) => a.group === "utility");
 
 const iconOf: Record<string, object> = {
   "disparity-scope": faCircleHalfStroke,

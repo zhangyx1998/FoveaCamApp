@@ -21,6 +21,7 @@
 import { MarkerDetector } from "core/Vision";
 import type { Camera } from "core/Aravis";
 import type { Point2d } from "core/Geometry";
+import type { Disposer } from "./session-resources.js";
 import { MarkerTracker } from "./marker-tracker.js";
 
 export type Role = "L" | "C" | "R";
@@ -83,7 +84,7 @@ export function detectionViews(trackers: Roles<Tracker>): Roles<DetectionView> {
  *  routes it through its own angle recompute. */
 export function bindDetections(
   trackers: Roles<Tracker>,
-  disposers: Array<() => void>,
+  disposers: { push(...disposers: Disposer[]): unknown },
   onDetection: () => void,
   onCenter: () => void = onDetection,
 ): void {

@@ -9,20 +9,31 @@
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   PIXEL_FORMATS,
   PIXEL_FORMAT_NAMES,
   pixelFormatSpec,
 } from "../../docs/schema/pixel-formats.js";
-import { significantBits } from "@lib/util/dtype";
-import { bayerCode } from "@orchestrator/viewer/decode";
+import {
+  pixelFormatChannels,
+  pixelFormatDtype,
+  significantBits,
+} from "@lib/util/dtype";
+import { bayerCode, parseDecodeProps } from "@orchestrator/viewer/decode";
 
 describe("decode conformance vs docs/schema/pixel-formats (C-P6)", () => {
   it("dtype.significantBits matches the schema for every format", () => {
     for (const name of PIXEL_FORMAT_NAMES) {
       const spec = pixelFormatSpec(name)!;
       expect(significantBits(name as never)).toBe(spec.significantBits);
+    }
+  });
+
+  it("dtype pixel-format helpers match the schema for every known format", () => {
+    for (const spec of PIXEL_FORMATS) {
+      expect(pixelFormatDtype(spec.name as never, "U8")).toBe(spec.dtype);
+      expect(pixelFormatChannels(spec.name as never, -1)).toBe(spec.channels);
     }
   });
 
@@ -53,5 +64,48 @@ describe("decode conformance vs docs/schema/pixel-formats (C-P6)", () => {
     );
     const unionNames = new Set([...block.matchAll(/"([^"]+)"/g)].map((m) => m[1]));
     expect(unionNames).toEqual(new Set(PIXEL_FORMAT_NAMES));
+  });
+
+  it("core/Aravis PixelFormat d.ts sub-unions match schema partitions", () => {
+    const dts = readFileSync(
+      fileURLToPath(new URL("../../core/dist/Aravis/index.d.ts", import.meta.url)),
+      "utf8",
+    );
+    const union = (name: string) => {
+      const match = dts.match(new RegExp(`type ${name} =([\\s\\S]*?);`));
+      expect(match).toBeTruthy();
+      return [...match![1].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+    };
+    expect(union("PixelFormat8")).toEqual(
+      PIXEL_FORMATS.filter((f) => f.significantBits === 8).map((f) => f.name),
+    );
+    expect(union("PixelFormat16")).toEqual(
+      PIXEL_FORMATS.filter((f) => f.significantBits === 16).map((f) => f.name),
+    );
+    expect(union("PixelFormat12p")).toEqual(
+      PIXEL_FORMATS.filter((f) => f.isPacked).map((f) => f.name),
+    );
+  });
+
+  it("parseDecodeProps warns, but does not reject, recorded metadata that drifts from schema", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const props = parseDecodeProps({
+      dtype: "U16",
+      shape: "[2,2]",
+      channels: "1",
+      pixelFormat: "Mono8",
+      significantBits: "16",
+    });
+    expect(props).toMatchObject({
+      dtype: "U16",
+      channels: 1,
+      pixelFormat: "Mono8",
+      significantBits: 16,
+    });
+    expect(warn).toHaveBeenCalledWith(
+      "[viewer] recording metadata differs from pixel-format schema",
+      expect.objectContaining({ pixelFormat: "Mono8" }),
+    );
+    warn.mockRestore();
   });
 });

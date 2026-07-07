@@ -17,15 +17,14 @@ You may find the full license in project root directory.
 import { computed, ref, watchEffect } from "vue";
 import { ROLE, THEME } from "@lib/camera-config";
 import { useAppConfig } from "@lib/config";
-import { useSession } from "@lib/orchestrator/client";
-import { controller as controllerContract } from "@lib/orchestrator/contracts";
+import { useController, useSession } from "@lib/orchestrator/client";
 import { readUrlParam, writeUrlState } from "@lib/url-state";
 import { degrees } from "@lib/util";
 import type { Point2d } from "core/Geometry";
 import { calibrateExtrinsic } from "./contract";
 import StreamView from "@src/components/StreamView.vue";
 import PosView, { type Pos } from "@src/components/PosView.vue";
-import ConfigEntry from "@src/components/ConfigEntry.vue";
+import MarkerTargetInputs from "@src/components/MarkerTargetInputs.vue";
 import Line2D from "@src/components/Line2D.vue";
 import NavBack from "@src/components/NavBack.vue";
 import RemoteCanvasTeleport from "@src/components/RemoteCanvasTeleport.vue";
@@ -38,7 +37,7 @@ import { faTrashCan } from "@fortawesome/free-regular-svg-icons";
 
 const app_config = await useAppConfig();
 const session = useSession(calibrateExtrinsic, "calibrate-extrinsic");
-const ctrl = useSession(controllerContract, "controller");
+const ctrl = useController();
 const { state, telemetry } = session;
 
 // State-in-URL (multi-window.md req. 7): the wizard step is addressable —
@@ -66,9 +65,6 @@ const canRecord = computed(
 );
 const hover_record = ref<number | null>(null);
 
-function setTargetId(role: "L" | "C" | "R", e: Event) {
-  session.call("setTargetId", { role, id: Number((e.target as HTMLInputElement).value) });
-}
 function setOverride(role: "left" | "right", p: Pos | null) {
   session.call("setOverride", { role, pos: p });
 }
@@ -112,10 +108,7 @@ function bbox(points: Point2d[]): string {
             :fill="THEME.L"
           />
         </StreamView>
-        <ConfigEntry>
-          <span>{{ telemetry.detection.L ? "✓" : "✗" }} Marker ID to Track:</span>
-          <input type="number" step="1" :value="state.target_id.L" @change="(e) => setTargetId('L', e)" />
-        </ConfigEntry>
+        <MarkerTargetInputs :session="session" role="L" :detected="!!telemetry.detection.L" />
         <PosView
           v-if="ctrl.telemetry.connected"
           :pos="ctrl.telemetry.pos.left"
@@ -143,10 +136,7 @@ function bbox(points: Point2d[]): string {
             :fill="THEME.C"
           />
         </StreamView>
-        <ConfigEntry>
-          <span>{{ telemetry.detection.C ? "✓" : "✗" }} Marker ID to Track:</span>
-          <input type="number" step="1" :value="state.target_id.C" @change="(e) => setTargetId('C', e)" />
-        </ConfigEntry>
+        <MarkerTargetInputs :session="session" role="C" :detected="!!telemetry.detection.C" />
         <div class="actions">
           <button style="--color: #080" :disabled="!canRecord" @click="session.call('capture', undefined)">
             Capture
@@ -191,10 +181,7 @@ function bbox(points: Point2d[]): string {
             :fill="THEME.R"
           />
         </StreamView>
-        <ConfigEntry>
-          <span>{{ telemetry.detection.R ? "✓" : "✗" }} Marker ID to Track:</span>
-          <input type="number" step="1" :value="state.target_id.R" @change="(e) => setTargetId('R', e)" />
-        </ConfigEntry>
+        <MarkerTargetInputs :session="session" role="R" :detected="!!telemetry.detection.R" />
         <PosView
           v-if="ctrl.telemetry.connected"
           :pos="ctrl.telemetry.pos.right"

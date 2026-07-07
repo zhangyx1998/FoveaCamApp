@@ -13,8 +13,10 @@ import { computed, ref } from "vue";
 import StreamView from "@src/components/StreamView.vue";
 import RangeSlider from "@src/inputs/range-slider.vue";
 import { CAMERA_CONTROLS } from "@lib/camera-config";
-import type { Session } from "@lib/orchestrator/client";
+import { bindField, type Session } from "@lib/orchestrator/client";
 import type { CameraView, ManageCamerasContract } from "./contract";
+
+type NumericCameraKey = "frame_rate" | "gain" | "black_level";
 
 // Readout formatters from the shared control schema (A-P11) — same source the
 // orchestrator snapshot uses, so the displayed value can't drift from the wire.
@@ -33,22 +35,18 @@ const view = computed<CameraView | undefined>(
 
 const framePayload = session.frame(serial);
 
-// Writable binding for a camera property: reads the live snapshot, writes via a
-// `set` command (the orchestrator applies + persists it).
-function field<K extends keyof CameraView>(key: K) {
-  return computed<CameraView[K] | undefined>({
-    get: () => view.value?.[key],
-    set: (value) => void session.call("set", { serial, key, value }),
-  });
-}
+const field = <K extends keyof CameraView>(key: K) =>
+  bindField(session, view, key, "set", (key, value) => ({ serial, key, value }));
 
-// Numeric variant for `RangeSlider` (modelValue is a required number).
-function numField(key: keyof CameraView) {
-  return computed<number>({
-    get: () => (view.value?.[key] as number) ?? 0,
-    set: (value) => void session.call("set", { serial, key, value }),
-  });
-}
+const numField = <K extends NumericCameraKey>(key: K) =>
+  bindField<ManageCamerasContract, CameraView, K, "set">(
+    session,
+    view,
+    key,
+    "set",
+    (key, value) => ({ serial, key, value }),
+    0 as CameraView[K],
+  );
 
 const role = field("role");
 const frame_rate_enable = field("frame_rate_enable");

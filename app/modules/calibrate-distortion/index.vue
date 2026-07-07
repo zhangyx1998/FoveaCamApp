@@ -15,21 +15,21 @@ You may find the full license in project root directory.
 import { computed, ref } from "vue";
 import { ROLE, THEME } from "@lib/camera-config";
 import { useAppConfig } from "@lib/config";
-import { useFrames, useSession } from "@lib/orchestrator/client";
-import { controller as controllerContract } from "@lib/orchestrator/contracts";
+import { useController, useFrames, useSession } from "@lib/orchestrator/client";
 import { formatNumber, type FormatNumberOptions } from "@lib/util";
 import { createMat } from "@lib/mat";
 import type { Point2d } from "core/Geometry";
 import { calibrateDistortion } from "./contract";
 import StreamView from "@src/components/StreamView.vue";
 import ConfigEntry from "@src/components/ConfigEntry.vue";
+import MarkerTargetInputs from "@src/components/MarkerTargetInputs.vue";
 import Matrix from "@src/components/Matrix.vue";
 import RemoteCanvasTeleport from "@src/components/RemoteCanvasTeleport.vue";
 import Marker from "@src/graphics/Marker.vue";
 
 const app_config = await useAppConfig();
 const session = useSession(calibrateDistortion, "calibrate-distortion");
-const ctrl = useSession(controllerContract, "controller");
+const ctrl = useController();
 const { state, telemetry } = session;
 
 const {
@@ -54,9 +54,6 @@ function toMat(H: number[]) {
   return m;
 }
 
-function setTargetId(role: "L" | "C" | "R", e: Event) {
-  session.call("setTargetId", { role, id: Number((e.target as HTMLInputElement).value) });
-}
 </script>
 
 <template>
@@ -77,10 +74,7 @@ function setTargetId(role: "L" | "C" | "R", e: Event) {
           :fill="THEME.L"
         />
       </StreamView>
-      <ConfigEntry>
-        <span>{{ telemetry.detection.L ? "✓" : "✗" }} Marker ID to Track:</span>
-        <input type="number" step="1" style="width: 8ch" :value="state.target_id.L" @change="(e) => setTargetId('L', e)" />
-      </ConfigEntry>
+      <MarkerTargetInputs :session="session" role="L" :detected="!!telemetry.detection.L" width="8ch" />
       <StreamView class="stream" title="Homography Projection" :payload="frameProjL" :theme="THEME.L">
         <circle
           v-for="(p, i) in telemetry.projection.L?.points ?? []"
@@ -104,10 +98,7 @@ function setTargetId(role: "L" | "C" | "R", e: Event) {
           :fill="THEME.C"
         />
       </StreamView>
-      <ConfigEntry>
-        <span>{{ telemetry.detection.C ? "✓" : "✗" }} Marker ID to Track:</span>
-        <input type="number" step="1" style="width: 8ch" :value="state.target_id.C" @change="(e) => setTargetId('C', e)" />
-      </ConfigEntry>
+      <MarkerTargetInputs :session="session" role="C" :detected="!!telemetry.detection.C" width="8ch" />
       <ConfigEntry>
         <span>Marker Size (mm):</span>
         <input type="number" step="1" style="width: 8ch" v-model.number="app_config.cal_marker_size_mm" />
@@ -133,10 +124,7 @@ function setTargetId(role: "L" | "C" | "R", e: Event) {
           :fill="THEME.R"
         />
       </StreamView>
-      <ConfigEntry>
-        <span>{{ telemetry.detection.R ? "✓" : "✗" }} Marker ID to Track:</span>
-        <input type="number" step="1" style="width: 8ch" :value="state.target_id.R" @change="(e) => setTargetId('R', e)" />
-      </ConfigEntry>
+      <MarkerTargetInputs :session="session" role="R" :detected="!!telemetry.detection.R" width="8ch" />
       <StreamView class="stream" title="Homography Projection" :payload="frameProjR" :theme="THEME.R">
         <circle
           v-for="(p, i) in telemetry.projection.R?.points ?? []"

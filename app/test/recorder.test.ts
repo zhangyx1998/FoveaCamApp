@@ -18,7 +18,7 @@ import {
   type RecorderTopology,
 } from "@orchestrator/recorder";
 import { createLegacySink } from "@orchestrator/recorder/legacy";
-import { allWorkloadSnapshots } from "@orchestrator/metering";
+import { workloadsSnapshot } from "@orchestrator/metering";
 
 const tmpRoots: string[] = [];
 
@@ -26,6 +26,13 @@ function fakeFrame(values = [1, 2, 3, 4]) {
   return Object.assign(new Uint16Array(values), {
     shape: [2, 2],
     channels: 1,
+  }) as any;
+}
+
+function fakeU8Frame(values = [1, 2, 3, 4], channels = 1) {
+  return Object.assign(new Uint8Array(values), {
+    shape: [2, 2],
+    channels,
   }) as any;
 }
 
@@ -153,14 +160,14 @@ describe("MCAP recorder (fovea sink)", () => {
       overflow: { frames: 1, dropped: 2, bytes: 8 },
     });
     // metered from day one: drops are visible in the workload snapshot
-    const meter = allWorkloadSnapshots()["recorder:recording.fovea"];
+    const meter = workloadsSnapshot()["recorder:recording.fovea"];
     expect(meter).toBeDefined();
     expect(meter.drops.byReason).toMatchObject({ backpressure: 2 });
     expect(meter.inputs["overflow"].count).toBe(1);
 
     await sink.finalize(1.0);
     // meter released with the writer
-    expect(allWorkloadSnapshots()["recorder:recording.fovea"]).toBeUndefined();
+    expect(workloadsSnapshot()["recorder:recording.fovea"]).toBeUndefined();
 
     // only the accepted frame is in the container
     const { reader, messages, topics } = await readContainer(join(dir, "recording.fovea"));
@@ -196,6 +203,24 @@ describe("MCAP recorder (fovea sink)", () => {
       expect(topics.get(name)!.metadata.get("pixelFormat")).toBe(format);
       expect(messages[0].channelId).toBe(topics.get(name)!.id);
     }
+  });
+
+  it("uses pixel-format registry facts for static channel decode metadata", async () => {
+    const dir = await tempRoot();
+    const sink = await createFoveaSink(dir, "2026-07-06T00:00:00.000Z");
+
+    // The Mat's fallback channel count is deliberately stale; known formats
+    // should publish the schema's channel/dtype facts instead.
+    sink.write("rgb", fakeU8Frame([1, 2, 3, 4], 1), "RGB8", 1.0);
+    await sink.finalize(1.0);
+
+    const { topics } = await readContainer(join(dir, "recording.fovea"));
+    expect(Object.fromEntries(topics.get("rgb")!.metadata)).toMatchObject({
+      dtype: "U8",
+      channels: "3",
+      pixelFormat: "RGB8",
+      significantBits: "8",
+    });
   });
 
   it("keeps the legacy .stream/.meta/manifest backend intact behind the constant", async () => {

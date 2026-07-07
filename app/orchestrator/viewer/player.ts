@@ -46,14 +46,13 @@ const LATE_SKIP_MS = 200;
 /** Playback position/`playing` are pushed through `onUpdate` at most this
  *  often mid-playback (plus immediately on play/pause/seek/end). */
 const POSITION_UPDATE_MS = 250;
+const telemetryDecoder = new TextDecoder();
 
 export interface PlayerHooks {
   /** Publish one decoded display frame for a channel topic. */
   publishFrame(topic: string, mat: Mat<Uint8Array>, convertMs: number): void;
   /** Latest replayed telemetry-channel document (parsed JSON). */
   emitTelemetry?: (doc: PlaybackDoc) => void;
-  /** @deprecated use `emitTelemetry`; kept as an alias during C-P10. */
-  publishTelemetry?: (doc: PlaybackDoc) => void;
   /** Position/playing changed (throttled during playback). */
   onUpdate(positionNs: number, playing: boolean): void;
 }
@@ -122,9 +121,9 @@ export function createPlayer(
     workload.ingest(channel.topic);
     if (channel.messageEncoding === "json") {
       try {
-        const emitTelemetry = hooks.emitTelemetry ?? hooks.publishTelemetry;
+        const emitTelemetry = hooks.emitTelemetry;
         if (!emitTelemetry) throw new Error("viewer player missing telemetry hook");
-        emitTelemetry(JSON.parse(new TextDecoder().decode(msg.data)));
+        emitTelemetry(JSON.parse(telemetryDecoder.decode(msg.data)));
         workload.emit("telemetry");
       } catch {
         workload.drop("undecodable");

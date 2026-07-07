@@ -81,6 +81,9 @@ describe("shm-client transfer pool", () => {
     reply(port, { id: req.id, payload: out });
     expect(await p).toBe(out);
     expect(client.stats()).toMatchObject({ reads: 1, allocations: 1, poolHits: 0, inFlight: 0 });
+    expect(client.stats().rates.reads.count).toBe(1);
+    expect(client.stats().workload.outputs.reads.count).toBe(1);
+    expect(client.stats().workload.inputs.requests.count).toBe(1);
 
     // Buffer is only reclaimed once the frame is displaced.
     client.release(out);
