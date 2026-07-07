@@ -73,6 +73,8 @@ if [[ -s "$sessfile" ]]; then
   # `resume` has no -C/-s flags: cwd comes from the shell, sandbox via -c.
   (cd "$repo" && codex exec resume "$sid" \
     -c 'sandbox_mode="workspace-write"' \
+    -c 'model="gpt-5.5"' \
+    -c 'model_reasoning_effort="high"' \
     -o "$last" \
     "$reentry") >"$log" 2>&1 || status=$?
   if [[ $status -ne 0 ]] && grep -qiE "no session|not found|no rollout" "$log"; then
@@ -84,6 +86,8 @@ else
   codex exec \
     -C "$repo" \
     -s workspace-write \
+    -c 'model="gpt-5.5"' \
+    -c 'model_reasoning_effort="high"' \
     -o "$last" \
     "$kickoff" >"$log" 2>&1 || status=$?
   sid="$(grep -m1 -E '^session id: ' "$log" | sed 's/^session id: //')"

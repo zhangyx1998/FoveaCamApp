@@ -53,23 +53,22 @@ planners: read [`planner.md`](./planner.md) first — the full handover
 - Do not edit: other roles' sections, the protocol/ownership sections,
   or any other `docs/refactor/*` file. When your items are done, stop.
 
-**Dispatch mechanics (updated 2026-07-06, workers switched to Claude
-Sonnet 5):** workers are **Claude Sonnet 5 subagent sessions** spawned by
-the planner through the harness Agent tool (`model: sonnet`), run in the
-background — the planner is notified on completion and starts the
-verification iteration. **Session persistence:** the planner continues a
-role's existing agent via SendMessage (warm context) instead of
-spawning fresh; a new spawn = a deliberate cold start at stage
-boundaries. Workers inherit the planner's environment — that means the
-repo working directory AND its quirks: use `node_modules/.bin/*`
-binaries directly and `/opt/homebrew/bin/node` (v26.4.0) for
-`core/test` scripts; the bare `node`/`npx` shell wrappers are broken in
-this zsh. At most one session per role; roles may run concurrently
-(ownership table keeps domains disjoint) but all log into this file —
-if a concurrent write clobbers a log, the planner restores it from the
-transcript. (Legacy: `scripts/dispatch-worker.sh` drove Codex sessions
-until 2026-07-06 — retired after quota exhaustion; keep the script for
-reference.)
+**Dispatch mechanics (switched BACK to Codex 2026-07-07, per user):**
+workers are **Codex `gpt-5.5` sessions at high reasoning effort**
+(pinned via `-c` in the script), launched headless by the planner via
+`scripts/dispatch-worker.sh <A|B|C> ["note"]` in a background shell —
+the planner is re-invoked on exit and runs the verification iteration.
+Sessions are persistent per role (`.worker-logs/session-<role>.id`;
+delete to force a cold start at stage boundaries); resumes send a
+short steering-first re-entry prompt. Sandbox: workspace-write (repo-
+confined writes, no network — dependency changes need an explicit
+planner grant in the instruction). The 2026-07-06 Claude Sonnet 5
+subagent fleet is retired; its in-harness sessions are not
+transferable — per design, the docs (this file + the planner docs) are
+the complete memory, and each Codex session was warmed up 2026-07-07
+with an onboarding read-through + takeover note. At most one session
+per role; roles may run concurrently (ownership table keeps domains
+disjoint); concurrent-log clobbers get restored from transcripts.
 
 **Standing gates (every instruction, unless it narrows them):**
 `vue-tsc --noEmit -p tsconfig.json` → 0 errors; `vitest run` all green;
@@ -119,6 +118,25 @@ planner-logged handoff (ask via your log, don't just edit).
 | `core/**` (everything else), `firmware/**`, protocol v2 host+MCU | B |
 | `docs/refactor/*` (all files but this one), this file's non-Log text | planner |
 
+**OPTIMIZATION SURVEY — shared instruction text for A-14/B-7/C-9 (user
+directive 2026-07-07):** survey YOUR OWNED SURFACE (ownership table)
+for: (1) **repetitive logic patterns** — near-duplicate code that wants
+a shared helper or abstraction; (2) **long, wordy variable/function
+names** — propose concise alternatives that fit this project's voice
+(sample the best existing names as the target register; a rename map is
+a fine proposal format); (3) **better-fit solutions** — places where a
+different structure/API/algorithm would serve the project's actual use
+case better, INCLUDING large breaking changes if they steer the
+codebase to a better overall state. Write proposals to
+`docs/refactor/proposals/<ROLE>.md` (yours for this round), ranked by
+value, max ~15, each with: id (`<ROLE>-P<n>`), location(s),
+current → proposed (sketch, not implementation), **category:
+non-breaking | breaking**, rationale tied to a real cost (duplication
+count, call-site count, past bugs in that area), effort (S/M/L), risk.
+NO CODE CHANGES in this phase. Triage rule (planner-executed):
+non-breaking gets green-lit directly; breaking goes to the user.
+Log a 3-line pointer under your Log: slot when done.
+
 ## Coder A — App & sessions (renderer, orchestrator JS, Electron shell)
 
 Owns all non-SHM application code: feature modules
@@ -131,15 +149,14 @@ hardware-dependent behavior verified without a real rig run.
 
 ### Active instructions
 
-- **A-standby.** A-11/A-12/A-13 planner-accepted 2026-07-06 (viewer
-  window + .fovea association, shared AsyncKcfTracker incl.
-  tracking-single, Apps menu). **Ratified:** the single contract file
-  `lib/orchestrator/viewer-contract.ts` (C-authored, A-adopted — see
-  ownership); scalar args + relative-ns times; viewer windows
-  subscribe ACTIVE (correct — the viewer session holds no cameras and
-  needs a real activate/idle lifecycle to close file readers; the V12
-  passive rule targets camera/actuation sessions). electron-builder
-  appId placeholder + packaging verification are wall items.
+- **A-14 — optimization survey (see the shared OPTIMIZATION SURVEY
+  spec above).** Your surface: `app/modules/**`, `app/src/**`,
+  `app/lib/**` (minus C's shm blocks), `app/electron/**`,
+  `app/orchestrator/**` (minus C's shm/viewer/metering files),
+  `app/windows/**`. Extra attention: the window framework and modules
+  grew fast across Stage 5 — session.ts files likely share
+  lease/drain/telemetry boilerplate; StreamView/FrameView props have
+  accreted; check for repeated `useSession` wiring patterns.
   - Log:
 
 ## Coder B — Native core, protocol & firmware
@@ -153,10 +170,14 @@ control is the planner's review loop.
 
 ### Active instructions
 
-- **B-standby.** B-6 (`pyfovea` package) planner-accepted 2026-07-06 —
-  archived to recorder-container.md §5. Its gate is now standing (see
-  Standing gates). B's hardware-free queue is EMPTY: remaining B work
-  (bench, v2 flash, P4/P5, sharding) is rig- or user-decision-gated.
+- **B-7 — optimization survey (see the shared OPTIMIZATION SURVEY
+  spec above).** Your surface: `core/**` (minus C's ShmRing/reader),
+  `firmware/**`, `pyfovea/**`, `app/orchestrator/recorder/**`,
+  `playground/bench-recorder/**`. Extra attention: core's
+  convert/PixelFormat tables accreted cases across 12-bit work; the
+  recorder worker + bench share synthetic-frame and protocol logic;
+  firmware Streams/Capture grew under v2 — flag duplication between
+  host and MCU packet handling if any.
   - Log:
 - **(B-5 accepted & archived 2026-07-06 → recorder-container.md §2b.)**
 
@@ -177,11 +198,16 @@ session.
 - **C-standby note.** C-1/C-2 were planner-accepted 2026-07-06 and
   archived (orchestrator.md §6 + §7.1 Stage 4).
 - **(C-4 accepted & cleared 2026-07-06.)**
-- **C-standby.** C-8 planner-accepted 2026-07-06 (viewer session:
-  indexed + footerless-fallback .fovea replay through the standard shm
-  transport; B's ordering pitfall pinned by a named test). Telemetry
-  `playback[fileId]` latest-wins call ratified. C's hardware-free
-  queue is EMPTY (C-3/PB2 is bench-gated).
+- **C-9 — optimization survey (see the shared OPTIMIZATION SURVEY
+  spec above).** Your surface: shm path end-to-end (`ShmRing.*`,
+  reader addon, `frame-transport.ts`, preload-renderer shm side,
+  client pool), `metering.ts`, `orchestrator/viewer/**` +
+  `sessions/viewer.ts`, `viewer-contract.ts`, shm blocks in
+  client/protocol/StreamView. Extra attention: the frame path now has
+  THREE meta-merge sites (writer publish, preload readInto, client
+  materialize) — check for unifiable descriptor handling; decode.ts
+  vs pyfovea dtypes.py vs stream-decoder lineage duplication is
+  cross-role — propose, note the seam.
   - Log:
 
 - **(history) C-6 — workload metering core (accepted; spec:

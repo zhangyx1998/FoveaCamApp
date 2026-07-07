@@ -41,19 +41,20 @@ do everything except write the implementation:
 
 ## 2. The dispatch loop (how coders run)
 
-Workers are **Claude Sonnet 5 subagents** (switched from Codex
-2026-07-06 after quota exhaustion), spawned via the harness Agent tool
-with `model: "sonnet"`, `run_in_background: true` — you are re-invoked
-on completion. Continue a role's existing agent with SendMessage (warm
-context, the analog of the old codex-resume); spawn fresh only as a
-deliberate cold start. Their kickoff prompt lives in the dispatch call —
-keep it aligned with the split-of-work Protocol section (steering-first,
-ownership, log-back, gates, node_modules/.bin + /opt/homebrew/bin/node
-shell guidance — workers inherit this environment's broken zsh
-wrappers). Transcript = the agent's returned final message; logs land in
-split-of-work.md as before. (Legacy Codex path:
-`scripts/dispatch-worker.sh`, retired but kept for reference; its
-session-id files in `.worker-logs/` are stale.)
+Workers are **Codex `gpt-5.5` sessions at high reasoning effort**
+(switched back 2026-07-07, per user; the Sonnet subagent fleet is
+retired — its sessions die with the old planner session, which is fine:
+the docs are the memory, and each Codex session was warmed up with an
+onboarding read-through + takeover note). Dispatch via
+`scripts/dispatch-worker.sh <A|B|C> ["note"]` in a background Bash —
+you are re-invoked on exit. Fresh runs get the full kickoff and record
+a session id; later runs `codex exec resume` with a steering-first
+re-entry prompt. Model + effort are pinned inside the script. Sandbox:
+workspace-write, no network — dependency changes require an explicit
+grant line in the instruction. Watch for provider quota exhaustion
+(both Codex and Claude hit caps on 2026-07-06 — workers fail fast with
+a usage-limit error in the transcript; hold and re-dispatch after the
+reset).
 
 **Roles** (full definitions + file-ownership table in
 `split-of-work.md` — that table is yours to maintain):
