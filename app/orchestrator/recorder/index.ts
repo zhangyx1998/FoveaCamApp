@@ -41,16 +41,33 @@ import {
   type RecorderTopology,
   type StreamStats,
 } from "./types.js";
+import {
+  FOVEA_EXTENSION,
+  FINALIZE_METADATA_NAME,
+  RAW_FRAME_MESSAGE_ENCODING,
+  RAW_FRAME_SCHEMA_DATA,
+  RAW_FRAME_SCHEMA_NAME,
+  SESSION_METADATA_NAME,
+  TELEMETRY_TOPIC,
+} from "./schema.js";
 
 export { McapWriterWorker } from "./writer.js";
 export {
-  singleFileTopology,
-  TELEMETRY_TOPIC,
-  FOVEA_EXTENSION,
   type RecorderTopology,
   type StreamStats,
   type FinalizeStats,
 } from "./types.js";
+export {
+  FOVEA_EXTENSION,
+  TELEMETRY_TOPIC,
+  DEFAULT_CHUNK_BYTES,
+  DEFAULT_MAX_QUEUED_FRAMES,
+  RAW_FRAME_MESSAGE_ENCODING,
+  RAW_FRAME_SCHEMA_NAME,
+  TELEMETRY_MESSAGE_ENCODING,
+  TELEMETRY_SCHEMA_NAME,
+} from "./schema.js";
+export { singleFileTopology } from "./types.js";
 
 export type RecorderBackend = "fovea" | "legacy";
 
@@ -113,7 +130,7 @@ Layout: one channel per camera stream (message bytes are the raw frame as
 captured — 12-bit-packed formats stay packed; the channel metadata carries
 dtype / shape / pixelFormat / significantBits), plus a \`telemetry\` channel
 of per-frame JSON documents ({stream, seq, t, volt/angle/affine…}) for the
-frames that carry metadata. The \`fovea:session\` / \`fovea:finalize\`
+frames that carry metadata. The \`${SESSION_METADATA_NAME}\` / \`${FINALIZE_METADATA_NAME}\`
 metadata records hold the wall-clock timestamp and duration.
 `;
 
@@ -166,13 +183,9 @@ export async function createFoveaSink(
       // not expected mid-recording (resolution/format are fixed while
       // streaming); per-frame extras ride the telemetry channel.
       writer.registerChannel(name, {
-        schema: "fovea.raw_frame/v1",
-        schemaData: JSON.stringify({
-          description:
-            "Raw frame bytes exactly as captured (12p formats stay packed). " +
-            "Decode props are in the channel metadata.",
-        }),
-        messageEncoding: "x-fovea-raw",
+        schema: RAW_FRAME_SCHEMA_NAME,
+        schemaData: RAW_FRAME_SCHEMA_DATA,
+        messageEncoding: RAW_FRAME_MESSAGE_ENCODING,
         metadata: {
           dtype: dtypeOf(frame),
           shape: JSON.stringify([...frame.shape]),

@@ -22,10 +22,19 @@ import { defineSession, type ServerSession } from "@orchestrator/runtime";
 import { leaseCalibratedTriple, type CalibratedTriple } from "@orchestrator/calibration";
 import { startActuationLoop, type ActuationLoop } from "@orchestrator/actuation";
 import { AsyncKcfTracker } from "@orchestrator/async-kcf";
+import { createFrameWorker } from "@orchestrator/frame-worker";
+import {
+  clampRectToSize,
+  depthFromInverse,
+  ORIGIN_POS,
+  radians,
+  VOLT_TELEMETRY_INTERVAL_MS,
+} from "@orchestrator/fovea-pipeline";
 import { tracking } from "./contract";
 import { KinematicModel } from "./kinematic";
 import { RECT } from "@lib/util/geometry";
 import { createQMatrix, deriveFoveaIntrinsics } from "@lib/stereo";
+import { copyMat } from "@lib/mat";
 import {
   cvtColor,
   depthFromProjection,
@@ -42,9 +51,7 @@ import type { Point2d, Rect } from "core/Geometry";
 import type { Pos } from "@lib/controller-codec";
 import { RollingStats } from "@lib/util/rolling";
 
-const ORIGIN: Pos = { x: 0, y: 0 };
 const now = () => performance.now();
-const radians = (deg: number) => (deg * Math.PI) / 180;
 
 export default function trackingSession(): ServerSession<typeof tracking> {
   return defineSession("tracking", tracking, (s) => {
@@ -75,7 +82,7 @@ export default function trackingSession(): ServerSession<typeof tracking> {
     let lastGood: Point2d = { x: 0, y: 0 };
     // Latest commanded voltages, mirrored locally so the L/R fovea wrap can use
     // them off the frame path (telemetry-published copy lives in `volt`).
-    const volts: { L: Pos; R: Pos } = { L: { ...ORIGIN }, R: { ...ORIGIN } };
+    const volts: { L: Pos; R: Pos } = { L: { ...ORIGIN_POS }, R: { ...ORIGIN_POS } };
     // Aligned (always-wrapped) foveae cached for the diff/depth combined view —
     // independent Mats from `wrapPerspective`, so they survive to the R handler.
     const aligned: { L: Mat<Uint8Array> | null; R: Mat<Uint8Array> | null } = {
@@ -100,11 +107,7 @@ export default function trackingSession(): ServerSession<typeof tracking> {
     // `searchWindow`'s unclamped `right - x` can go negative once `box.x`
     // exceeds `width` — see §12.1 C4.
     function clampRect(r: Rect): Rect {
-      const x = Math.max(0, Math.min(Math.round(r.x), width - 1));
-      const y = Math.max(0, Math.min(Math.round(r.y), height - 1));
-      const w = Math.max(1, Math.min(Math.round(r.width), width - x));
-      const h = Math.max(1, Math.min(Math.round(r.height), height - y));
-      return { x, y, width: w, height: h };
+      return clampRectToSize(r, { width, height });
     }
 
     function searchWindow(box: Rect, scale = 1): Rect {
@@ -196,7 +199,7 @@ export default function trackingSession(): ServerSession<typeof tracking> {
       s.frame("center", sliced);
     }
 
-    function onCenterView(raw: Mat<Uint8Array>): void {
+    function processCenterView(raw: Mat<Uint8Array>): void {
       // Undistort up front: the tracker, the actuation math, and the
       // displayed center all operate in the same undistorted pixel space.
       const undistort = triple?.undistort;
@@ -222,9 +225,18 @@ export default function trackingSession(): ServerSession<typeof tracking> {
       if (s.state.view === "sliced") publishSlicedView(view);
     }
 
+    const centerWorker = createFrameWorker<Mat<Uint8Array>, Mat<Uint8Array>>({
+      name: "tracking:center",
+      copy: copyMat,
+      process: processCenterView,
+    });
+
+    function onCenterView(raw: Mat<Uint8Array>): void {
+      centerWorker.submit(raw);
+    }
+
     function depthWindow(): number {
-      const inv = s.state.depth_window_inv;
-      return inv <= 0 ? Infinity : 1 / (inv * inv);
+      return depthFromInverse(s.state.depth_window_inv);
     }
 
     // Combined fovea view (diff or depth) from the aligned L/R pair. Called on
@@ -253,7 +265,7 @@ export default function trackingSession(): ServerSession<typeof tracking> {
 
     // Publish each fovea's preview (wrapped iff `wrap_enable`), and cache the
     // always-aligned fovea so the combined diff/depth view can use it.
-    function onFoveaView(role: "L" | "R", view: Mat<Uint8Array>): void {
+    function processFoveaView(role: "L" | "R", view: Mat<Uint8Array>): void {
       const H = triple ? triple.conv.A2H[role](triple.conv.V2A[role](volts[role])) : null;
       const wrapped = H ? wrapPerspective(view, H) : null;
       const display = s.state.wrap_enable && wrapped ? wrapped : view;
@@ -264,6 +276,23 @@ export default function trackingSession(): ServerSession<typeof tracking> {
         aligned[role] = wrapped;
         if (role === "R") publishCombinedView();
       }
+    }
+
+    const foveaWorkers = {
+      L: createFrameWorker<Mat<Uint8Array>, Mat<Uint8Array>>({
+        name: "tracking:fovea:L",
+        copy: copyMat,
+        process: (v) => processFoveaView("L", v),
+      }),
+      R: createFrameWorker<Mat<Uint8Array>, Mat<Uint8Array>>({
+        name: "tracking:fovea:R",
+        copy: copyMat,
+        process: (v) => processFoveaView("R", v),
+      }),
+    };
+
+    function onFoveaView(role: "L" | "R", view: Mat<Uint8Array>): void {
+      foveaWorkers[role].submit(view);
     }
 
     // --- actuation (timer-driven, decoupled from tracker fps) ------------
@@ -294,7 +323,7 @@ export default function trackingSession(): ServerSession<typeof tracking> {
 
     function targetVolts(): { l: Pos; r: Pos } {
       const undistort = triple?.undistort;
-      if (!undistort || !triple) return { l: ORIGIN, r: ORIGIN };
+      if (!undistort || !triple) return { l: ORIGIN_POS, r: ORIGIN_POS };
       // Re-evaluate the prediction at "now" so the mirror keeps tracking
       // smoothly between (slower) tracker updates — moved here (was inline in
       // the old actuation loop) so it still runs every actuation tick under
@@ -315,7 +344,6 @@ export default function trackingSession(): ServerSession<typeof tracking> {
     // every tick is a structured-clone message at ~1 kHz × every subscribed
     // window, which is both wasted work and enough to visibly load a renderer.
     // See §12.1 C6.
-    const VOLT_TELEMETRY_INTERVAL_MS = 33; // ~30 Hz — plenty for a UI readout
     let lastVoltEmit = 0;
 
     // --- lifecycle -------------------------------------------------------
@@ -369,6 +397,9 @@ export default function trackingSession(): ServerSession<typeof tracking> {
       disengage(false);
       for (const d of disposers) d();
       disposers.length = 0;
+      centerWorker.cancel();
+      foveaWorkers.L.cancel();
+      foveaWorkers.R.cancel();
       if (triple) for (const l of Object.values(triple.leases)) l.release();
       triple = null;
       width = height = 0;

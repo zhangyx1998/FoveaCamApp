@@ -37,6 +37,12 @@ import { leaseCalibratedTriple, type CalibratedTriple } from "@orchestrator/cali
 import { startActuationLoop, type ActuationLoop } from "@orchestrator/actuation";
 import { createFrameWorker } from "@orchestrator/frame-worker";
 import {
+  clampRectToSize,
+  ORIGIN_POS,
+  radians,
+  VOLT_TELEMETRY_INTERVAL_MS,
+} from "@orchestrator/fovea-pipeline";
+import {
   disparity,
   DEFAULT_TUNING,
   VERGE_MIN_DISTANCE_MM,
@@ -63,10 +69,8 @@ import { KCF } from "core/Tracker";
 import type { Point2d, Rect } from "core/Geometry";
 import type { Pos } from "@lib/controller-codec";
 
-const ORIGIN: Pos = { x: 0, y: 0 };
 const ZERO: Point2d = { x: 0, y: 0 };
 const now = () => performance.now();
-const radians = (deg: number) => (deg * Math.PI) / 180;
 
 // Physical saturation limits — ported unchanged from the original renderer
 // implementation (a bad estimate can at worst rest at a limit). Degree limits
@@ -75,9 +79,6 @@ const SHIFT_LIMIT = radians(SHIFT_LIMIT_DEG);
 const VSHIFT_LIMIT = radians(VSHIFT_LIMIT_DEG);
 const DT_MAX_FRAMES = 10;
 const TRACKER_LOST_TOLERANCE = 10;
-// Same throttle constant/reasoning as tracking-single/manual-control (§12.1 C6).
-const VOLT_TELEMETRY_INTERVAL_MS = 33;
-
 function cloneTuning(t: Tuning): Tuning {
   return {
     pan: [...t.pan],
@@ -119,10 +120,10 @@ export default function disparityScopeSession(): ServerSession<typeof disparity>
     let status = "initializing";
     // Commanded volts, updated by the (async, frame-driven) vergence step and
     // read synchronously every actuation tick.
-    let commandedVolts: { l: Pos; r: Pos } = { l: ORIGIN, r: ORIGIN };
+    let commandedVolts: { l: Pos; r: Pos } = { l: ORIGIN_POS, r: ORIGIN_POS };
     // Latest actuated volts, mirrored locally (needed for the wrap homography
     // and the vergence/distance telemetry, same as tracking-single's `volts`).
-    const volts: { L: Pos; R: Pos } = { L: { ...ORIGIN }, R: { ...ORIGIN } };
+    const volts: { L: Pos; R: Pos } = { L: { ...ORIGIN_POS }, R: { ...ORIGIN_POS } };
     const actuateMsStats = new RollingStats(0.9, 2, "ms");
 
     // Optional wide-angle KCF tracker (auto-follow): tracked bbox center
@@ -180,11 +181,7 @@ export default function disparityScopeSession(): ServerSession<typeof disparity>
     }
 
     function clampRect(r: Rect): Rect {
-      const x = Math.max(0, Math.min(Math.round(r.x), width - 1));
-      const y = Math.max(0, Math.min(Math.round(r.y), height - 1));
-      const w = Math.max(1, Math.min(Math.round(r.width), width - x));
-      const h = Math.max(1, Math.min(Math.round(r.height), height - y));
-      return { x, y, width: w, height: h };
+      return clampRectToSize(r, { width, height });
     }
 
     function searchWindow(box: Rect, scale = 1): Rect {
@@ -447,7 +444,7 @@ export default function disparityScopeSession(): ServerSession<typeof disparity>
       tileL = tileR = null;
       aligned.L = aligned.R = null;
       status = "initializing";
-      commandedVolts = { l: ORIGIN, r: ORIGIN };
+      commandedVolts = { l: ORIGIN_POS, r: ORIGIN_POS };
       s.telemetry({ ready: false, status: "initializing", tracker_bbox: null });
     }
 

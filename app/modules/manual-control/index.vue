@@ -20,7 +20,7 @@ You may find the full license in project root directory.
 import { computed, ref, shallowRef, watch } from "vue";
 import type { Point2d, Rect } from "core/Geometry";
 import { ROLE, THEME } from "@lib/camera-config";
-import { useSession } from "@lib/orchestrator/client";
+import { useFrames, useSession } from "@lib/orchestrator/client";
 import { getController } from "@src/components/Controller.vue";
 import { isEmpty, radians } from "@lib/util";
 import Capture from "@src/capture";
@@ -47,10 +47,12 @@ const session = useSession(manualControl, "manual-control");
 const { state, telemetry } = session;
 const controller = computed(getController);
 
-const frameL = session.frame("L");
-const frameC = session.frame("C");
-const frameR = session.frame("R");
-const frameCenter = session.frame("center");
+const { L: frameL, C: frameC, R: frameR, center: frameCenter } = useFrames(session, [
+  "L",
+  "C",
+  "R",
+  "center",
+]);
 
 const points = new SetPoints(local("manual-control.set-points", ""));
 const drawer_height = ref(0);

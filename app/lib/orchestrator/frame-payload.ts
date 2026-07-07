@@ -1,0 +1,58 @@
+// ------------------------------------------------------
+// Copyright (c) 2026 Yuxuan Zhang, dev@z-yx.cc
+// This source code is licensed under the MIT license.
+// You may find the full license in project root directory.
+// -------------------------------------------------------
+
+import type { FrameMeta, FramePayload, ShmFrameRef } from "./protocol.js";
+
+export type ShmReadResult = {
+  seq: bigint;
+  gen: number;
+  retries: number;
+  meta?: FrameMeta;
+};
+
+export function mergeFrameMeta(
+  ...items: Array<FrameMeta | null | undefined>
+): FrameMeta | undefined {
+  let merged: FrameMeta | undefined;
+  for (const item of items) {
+    if (!item) continue;
+    merged = { ...merged, ...item };
+  }
+  return merged;
+}
+
+export function withFrameMeta(
+  payload: FramePayload,
+  ...items: Array<FrameMeta | null | undefined>
+): FramePayload {
+  const meta = mergeFrameMeta(payload.meta, ...items);
+  return meta ? { ...payload, meta } : { ...payload };
+}
+
+export function frameByteLength(
+  payload: Pick<FramePayload, "shape" | "channels">,
+): number {
+  return payload.shape.reduce((p, n) => p * n, payload.channels);
+}
+
+export function withShmReadResult(
+  payload: FramePayload & { shm: ShmFrameRef },
+  data: ArrayBuffer,
+  result: ShmReadResult,
+): FramePayload {
+  return {
+    data,
+    shape: payload.shape,
+    channels: payload.channels,
+    meta: mergeFrameMeta(payload.meta, result.meta),
+    shm: {
+      ...payload.shm,
+      gen: result.gen,
+      seq: result.seq,
+      retries: result.retries,
+    },
+  };
+}

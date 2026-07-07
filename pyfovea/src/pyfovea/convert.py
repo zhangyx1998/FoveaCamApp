@@ -22,26 +22,20 @@ from pathlib import Path
 from mcap.writer import CompressionType, Writer
 
 from .dtypes import significant_bits
-from .fovea import TELEMETRY_TOPIC
 from .legacy import LegacyRecording
-
-CHUNK_BYTES = 256 * 1024
-
-_RAW_SCHEMA = json.dumps(
-    {
-        "description": "Raw frame bytes exactly as captured (12p formats stay "
-        "packed). Decode props are in the channel metadata."
-    }
-).encode()
-
-_META_SCHEMA = json.dumps(
-    {
-        "description": "Per-frame JSON metadata document: {stream, seq, t, "
-        "...extras} — extras are the legacy .meta sidecar's `x` payload "
-        "(volt/angle/affine). Correlate with the frame by stream+seq (or "
-        "logTime)."
-    }
-).encode()
+from .schema import (
+    DEFAULT_CHUNK_BYTES,
+    FINALIZE_METADATA_NAME,
+    FOVEA_PROFILE,
+    RAW_FRAME_MESSAGE_ENCODING,
+    RAW_FRAME_SCHEMA_DATA,
+    RAW_FRAME_SCHEMA_NAME,
+    SESSION_METADATA_NAME,
+    TELEMETRY_MESSAGE_ENCODING,
+    TELEMETRY_SCHEMA_DATA,
+    TELEMETRY_SCHEMA_NAME,
+    TELEMETRY_TOPIC,
+)
 
 
 def convert_legacy(src: str | Path, dst: str | Path) -> dict[str, int]:
@@ -50,24 +44,24 @@ def convert_legacy(src: str | Path, dst: str | Path) -> dict[str, int]:
     counts: dict[str, int] = {}
     with LegacyRecording(src) as rec:
         with open(dst, "wb") as out:
-            writer = Writer(out, chunk_size=CHUNK_BYTES, compression=CompressionType.NONE)
-            writer.start(profile="fovea", library="pyfovea (convert)")
+            writer = Writer(out, chunk_size=DEFAULT_CHUNK_BYTES, compression=CompressionType.NONE)
+            writer.start(profile=FOVEA_PROFILE, library="pyfovea (convert)")
             session: dict[str, str] = {"app": "pyfovea convert"}
             if rec.manifest.get("timestamp"):
                 session["timestamp"] = str(rec.manifest["timestamp"])
-            writer.add_metadata("fovea:session", session)
+            writer.add_metadata(SESSION_METADATA_NAME, session)
 
             meta_schema = writer.register_schema(
-                name="fovea.frame_meta/v1", encoding="jsonschema", data=_META_SCHEMA
+                name=TELEMETRY_SCHEMA_NAME, encoding="jsonschema", data=TELEMETRY_SCHEMA_DATA
             )
             telemetry_id = writer.register_channel(
                 topic=TELEMETRY_TOPIC,
-                message_encoding="json",
+                message_encoding=TELEMETRY_MESSAGE_ENCODING,
                 schema_id=meta_schema,
                 metadata={},
             )
             raw_schema = writer.register_schema(
-                name="fovea.raw_frame/v1", encoding="jsonschema", data=_RAW_SCHEMA
+                name=RAW_FRAME_SCHEMA_NAME, encoding="jsonschema", data=RAW_FRAME_SCHEMA_DATA
             )
 
             for name, stream in rec.streams.items():
@@ -76,7 +70,7 @@ def convert_legacy(src: str | Path, dst: str | Path) -> dict[str, int]:
                 first = stream[0]
                 channel_id = writer.register_channel(
                     topic=name,
-                    message_encoding="x-fovea-raw",
+                    message_encoding=RAW_FRAME_MESSAGE_ENCODING,
                     schema_id=raw_schema,
                     metadata={
                         "dtype": first.dtype,
@@ -111,6 +105,6 @@ def convert_legacy(src: str | Path, dst: str | Path) -> dict[str, int]:
             if duration is not None and not (
                 isinstance(duration, float) and math.isnan(duration)
             ):
-                writer.add_metadata("fovea:finalize", {"durationSec": str(duration)})
+                writer.add_metadata(FINALIZE_METADATA_NAME, {"durationSec": str(duration)})
             writer.finish()
     return counts

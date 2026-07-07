@@ -16,6 +16,8 @@
 //   - frame               (display payloads)     — by topic, carries a buffer
 
 import { RollingStats } from "../util/rolling.js";
+import { ratePerSec, snapshotWindow } from "./stats.js";
+import { withFrameMeta } from "./frame-payload.js";
 
 export type Serializable =
   | null
@@ -269,16 +271,15 @@ export class Channel {
   allFrameStats(now = Date.now()): Record<string, FrameTopicStats> {
     const out: Record<string, FrameTopicStats> = {};
     for (const [topic, counters] of this.frameStats) {
-      const uptimeMs = Math.max(1, now - this.statsStartedAt);
-      const sec = uptimeMs / 1000;
+      const window = snapshotWindow(this.statsStartedAt, now);
       out[topic] = {
         ...counters,
-        window: { startedAt: this.statsStartedAt, snapshotAt: now, uptimeMs },
+        window,
         rates: {
-          offeredPerSec: counters.offered / sec,
-          sentPerSec: counters.sent / sec,
-          coalescedPerSec: counters.coalesced / sec,
-          bytesPerSec: counters.bytes / sec,
+          offeredPerSec: ratePerSec(counters.offered, window),
+          sentPerSec: ratePerSec(counters.sent, window),
+          coalescedPerSec: ratePerSec(counters.coalesced, window),
+          bytesPerSec: ratePerSec(counters.bytes, window),
         },
         timing: {
           convertMs: this.timingSnapshot(topic, "convertMs"),
@@ -352,10 +353,9 @@ export class Channel {
     stats.offered++;
     const seq = (this.frameSeq.get(topic) ?? 0) + 1;
     this.frameSeq.set(topic, seq);
-    const stamped: FramePayload = {
-      ...payload,
-      meta: { tCapture: Date.now(), ...payload.meta, seq },
-    };
+    const stamped = withFrameMeta(payload, { tCapture: Date.now() }, payload.meta, {
+      seq,
+    });
     if (typeof stamped.meta?.convertMs === "number")
       this.timing(topic).convertMs.push(stamped.meta.convertMs);
     // Never queue frames toward a slow receiver: hold one in flight per topic

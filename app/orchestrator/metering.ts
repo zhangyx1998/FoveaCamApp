@@ -18,6 +18,13 @@
 // handle after teardown must never throw into, or change the outcome of,
 // the metered path.
 
+import {
+  counterRate,
+  ratePerSec,
+  snapshotWindow,
+  type SnapshotWindow,
+} from "@lib/orchestrator/stats";
+
 /** Declared input/output names for one workload — pre-seeds the snapshot's
  *  counters at 0 so the shape is stable even before any activity (mirrors
  *  `controller`'s zeroed telemetry defaults). */
@@ -76,7 +83,7 @@ export interface WorkloadDropSnapshot {
  *  absurd instantaneous rate. */
 export interface WorkloadSnapshot {
   name: string;
-  window: { startedAt: number; snapshotAt: number; uptimeMs: number };
+  window: SnapshotWindow;
   /** Busy-time fraction of `window.uptimeMs`, clamped to [0, 1]. Cumulative
    *  since registration, same lineage as the rates below — not a "since last
    *  snapshot" reading (no `resetMax`-style call needed to read it). */
@@ -185,15 +192,17 @@ export function registerWorkload(name: string, spec: WorkloadSpec): WorkloadHand
   return { ingest, emit, drop, begin, end, measure, dispose };
 }
 
-function counterSnapshot(map: Map<string, number>, sec: number): Record<string, WorkloadCounterSnapshot> {
+function counterSnapshot(
+  map: Map<string, number>,
+  window: SnapshotWindow,
+): Record<string, WorkloadCounterSnapshot> {
   const out: Record<string, WorkloadCounterSnapshot> = {};
-  for (const [k, v] of map) out[k] = { count: v, ratePerSec: v / sec };
+  for (const [k, v] of map) out[k] = counterRate(v, window);
   return out;
 }
 
 function snapshotOf(state: WorkloadState, now: number): WorkloadSnapshot {
-  const uptimeMs = Math.max(1, now - state.createdAtMs);
-  const sec = uptimeMs / 1000;
+  const window = snapshotWindow(state.createdAtMs, now);
   const liveBusyMs =
     state.busyMs + (state.openSpanAt !== null ? Math.max(0, now - state.openSpanAt) : 0);
 
@@ -206,12 +215,12 @@ function snapshotOf(state: WorkloadState, now: number): WorkloadSnapshot {
 
   return {
     name: state.name,
-    window: { startedAt: state.createdAtMs, snapshotAt: now, uptimeMs },
-    utilization: Math.min(1, liveBusyMs / uptimeMs),
+    window,
+    utilization: Math.min(1, liveBusyMs / window.uptimeMs),
     busyMs: liveBusyMs,
-    inputs: counterSnapshot(state.inputs, sec),
-    outputs: counterSnapshot(state.outputs, sec),
-    drops: { total: dropTotal, ratePerSec: dropTotal / sec, byReason },
+    inputs: counterSnapshot(state.inputs, window),
+    outputs: counterSnapshot(state.outputs, window),
+    drops: { total: dropTotal, ratePerSec: ratePerSec(dropTotal, window), byReason },
   };
 }
 
@@ -226,8 +235,11 @@ export function workloadSnapshot(name: string, now = Date.now()): WorkloadSnapsh
  *  `system.perfSnapshot` should splice in under its additive `workloads`
  *  key (see the C-6 log for the handoff needed in `system.ts`/`contracts.ts`,
  *  which this round doesn't touch — out of C's file ownership). */
-export function allWorkloadSnapshots(now = Date.now()): Record<string, WorkloadSnapshot> {
+export function workloadsSnapshot(now = Date.now()): Record<string, WorkloadSnapshot> {
   const out: Record<string, WorkloadSnapshot> = {};
   for (const state of workloads.values()) out[state.name] = snapshotOf(state, now);
   return out;
 }
+
+/** @deprecated use `workloadsSnapshot()`; kept as an alias during C-P10. */
+export const allWorkloadSnapshots = workloadsSnapshot;

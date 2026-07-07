@@ -23,7 +23,7 @@ You may find the full license in project root directory.
 -->
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { useSession } from "@lib/orchestrator/client";
+import { useDynamicFrame, useSession } from "@lib/orchestrator/client";
 import { manageCameras } from "@modules/manage-cameras/contract";
 import { APPS } from "@lib/windows";
 import TitleBar from "../components/TitleBar.vue";
@@ -50,18 +50,18 @@ const session = useSession(manageCameras, "manage-cameras");
 onMounted(() => session.call("refresh", undefined));
 
 // Orchestrator connection status: down-notice from main + list presence.
-const orchestratorDown = ref(false);
-window.foveaBridge.onOrchestratorDown(() => (orchestratorDown.value = true));
+const orchDown = ref(false);
+window.foveaBridge.onOrchestratorDown(() => (orchDown.value = true));
 const status = computed(() => {
-  if (orchestratorDown.value) return "orchestrator down";
+  if (orchDown.value) return "orchestrator down";
   const n = session.telemetry.list.length;
   return n > 0 ? `connected — ${n} camera${n > 1 ? "s" : ""}` : "no cameras";
 });
 
 // Previewed camera: prefer the center (role C) camera, else the first one.
-const selectedSerial = ref<string | null>(null);
+const serialPick = ref<string | null>(null);
 const serial = computed(() => {
-  if (selectedSerial.value) return selectedSerial.value;
+  if (serialPick.value) return serialPick.value;
   const views = session.telemetry.views;
   for (const [s, v] of Object.entries(views)) if (v.role === "C") return s;
   return session.telemetry.list[0]?.serial ?? null;
@@ -69,9 +69,7 @@ const serial = computed(() => {
 const view = computed(() =>
   serial.value ? session.telemetry.views[serial.value] : undefined,
 );
-const payload = computed(() =>
-  serial.value ? session.frame(serial.value).value : null,
-);
+const payload = useDynamicFrame(session, serial);
 
 // Annotation values (all orchestrator-synced; resolution from the live frame).
 const fmt = (v: number | undefined, digits = 1) =>
@@ -136,9 +134,9 @@ function openProfiler() {
         </AnnotationCanvas>
       </div>
       <div class="status-row">
-        <span class="dot" :class="{ ok: !orchestratorDown && session.telemetry.list.length > 0 }"></span>
+        <span class="dot" :class="{ ok: !orchDown && session.telemetry.list.length > 0 }"></span>
         <span>{{ status }}</span>
-        <select v-if="session.telemetry.list.length > 1" v-model="selectedSerial">
+        <select v-if="session.telemetry.list.length > 1" v-model="serialPick">
           <option :value="null">auto (center)</option>
           <option v-for="c in session.telemetry.list" :key="c.serial" :value="c.serial">
             {{ c.serial }}

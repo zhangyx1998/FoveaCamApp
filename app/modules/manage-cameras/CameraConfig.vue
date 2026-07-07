@@ -73,14 +73,14 @@ const log_exposure = computed<number>({
   },
 });
 
-const pixelFormatBusy = ref(false);
+const formatBusy = ref(false);
 async function changePixelFormat(format: string) {
-  if (pixelFormatBusy.value || format === view.value?.pixel_format) return;
-  pixelFormatBusy.value = true;
+  if (formatBusy.value || format === view.value?.pixel_format) return;
+  formatBusy.value = true;
   try {
     await session.call("setPixelFormat", { serial, format });
   } finally {
-    pixelFormatBusy.value = false;
+    formatBusy.value = false;
   }
 }
 
@@ -112,7 +112,7 @@ function reset() {
         <legend>Pixel Format</legend>
         <select
           :value="view.pixel_format"
-          :disabled="pixelFormatBusy"
+          :disabled="formatBusy"
           @change="
             changePixelFormat(($event.target as HTMLSelectElement).value)
           "

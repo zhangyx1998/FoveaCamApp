@@ -51,7 +51,7 @@ export default function calibrateDistortionSession(): ServerSession<typeof calib
     // Mirrors calibrate-intrinsic's `views` pattern — `s.telemetry()` is
     // publish-only, so a local mirror is needed to merge one role's update
     // without clobbering the other's.
-    let currentProjection: Record<"L" | "R", ProjectionView> = { L: null, R: null };
+    let projection: Record<"L" | "R", ProjectionView> = { L: null, R: null };
 
     function onCenterDetection(): void {
       if (!triple?.undistort || !trackers) return;
@@ -70,8 +70,8 @@ export default function calibrateDistortionSession(): ServerSession<typeof calib
       const warped = await wrapPerspective(rgba, H);
       s.frame(`proj_${role}`, warped);
       const view: ProjectionView = { H: Array.from(H as unknown as ArrayLike<number>), points: dst_img_pts };
-      currentProjection = { ...currentProjection, [role]: view };
-      s.telemetry({ projection: currentProjection });
+      projection = { ...projection, [role]: view };
+      s.telemetry({ projection });
     }
 
     function onFoveaView(role: "L" | "R", raw: Mat<Uint8Array>): void {
@@ -140,7 +140,7 @@ export default function calibrateDistortionSession(): ServerSession<typeof calib
       if (triple) for (const l of Object.values(triple.leases)) l.release();
       triple = null;
       centerAngle = null;
-      currentProjection = { L: null, R: null };
+      projection = { L: null, R: null };
       s.telemetry({
         ready: false,
         detection: { L: null, C: null, R: null },

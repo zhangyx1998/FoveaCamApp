@@ -41,8 +41,7 @@ from mcap.reader import NonSeekingReader, SeekingReader
 from mcap.records import Channel, Message
 
 from .dtypes import decode_payload, significant_bits, to_display
-
-TELEMETRY_TOPIC = "telemetry"
+from .schema import TELEMETRY_TOPIC
 
 
 @dataclass(frozen=True)

@@ -40,9 +40,34 @@ struct Request {
   Microseconds pulse;
 };
 
-static Request queue[QUEUE_CAPACITY];
-static uint8_t queueHead = 0;
-static uint8_t queueCount = 0;
+template <typename T, uint8_t N> struct Ring {
+  T items[N];
+  uint8_t head = 0;
+  uint8_t count = 0;
+
+  bool full() const { return count >= N; }
+  bool empty() const { return count == 0; }
+  uint8_t size() const { return count; }
+
+  T &at(uint8_t index) { return items[(head + index) % N]; }
+
+  bool push(const T &value) {
+    if (full())
+      return false;
+    items[(head + count) % N] = value;
+    count++;
+    return true;
+  }
+
+  T pop() {
+    T value = items[head];
+    head = (head + 1) % N;
+    count--;
+    return value;
+  }
+};
+
+static Ring<Request, QUEUE_CAPACITY> queue;
 
 static bool busy = false;
 static Request active;
@@ -77,11 +102,11 @@ static volatile uint8_t risenMask = 0;
 // Requested camera bits this request is still waiting to see fall.
 static volatile uint8_t awaitingFallMask = 0;
 
-static inline bool queueFull() { return queueCount >= QUEUE_CAPACITY; }
+static inline bool queueFull() { return queue.full(); }
 
 static inline bool duplicateStream(uint8_t stream) {
-  for (uint8_t i = 0; i < queueCount; i++)
-    if (queue[(queueHead + i) % QUEUE_CAPACITY].stream == stream)
+  for (uint8_t i = 0; i < queue.size(); i++)
+    if (queue.at(i).stream == stream)
       return true;
   return busy && active.stream == stream;
 }
@@ -143,11 +168,9 @@ static void finishActive(const char *rejectReason) {
 }
 
 static void startNext() {
-  if (busy || queueCount == 0)
+  if (busy || queue.empty())
     return;
-  active = queue[queueHead];
-  queueHead = (queueHead + 1) % QUEUE_CAPACITY;
-  queueCount--;
+  active = queue.pop();
   busy = true;
   triggerDropped = false;
   exposureLatched = false;
@@ -193,10 +216,8 @@ bool enqueue(Protocol::Sequence seq, uint8_t stream, uint8_t cameras,
     reason = "Frame queue is full";
     return false;
   }
-  accepted.queue_position = queueCount;
-  queue[(queueHead + queueCount) % QUEUE_CAPACITY] =
-      Request{seq, stream, cameras, pulse};
-  queueCount++;
+  accepted.queue_position = queue.size();
+  queue.push(Request{seq, stream, cameras, pulse});
   Streams::setPendingFrame(stream, true);
   return true;
 }
@@ -246,10 +267,8 @@ void cancelAll(const char *reason) {
     writeTrigger(active.cameras, LOW);
     finishActive(reason);
   }
-  while (queueCount > 0) {
-    auto &req = queue[queueHead];
-    queueHead = (queueHead + 1) % QUEUE_CAPACITY;
-    queueCount--;
+  while (!queue.empty()) {
+    auto req = queue.pop();
     Streams::setPendingFrame(req.stream, false);
     Frame::reject(req.seq, reason);
   }

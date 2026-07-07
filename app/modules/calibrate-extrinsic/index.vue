@@ -61,7 +61,7 @@ const marker_size = computed(() => app_config.cal_marker_size_mm);
 const marker_ratio = computed(() => app_config.cal_marker_ratio);
 const center_marker_size = computed(() => marker_size.value * marker_ratio.value);
 
-const recordable = computed(
+const canRecord = computed(
   () => ctrl.telemetry.connected && telemetry.detection.L && telemetry.detection.C && telemetry.detection.R,
 );
 const hover_record = ref<number | null>(null);
@@ -148,7 +148,7 @@ function bbox(points: Point2d[]): string {
           <input type="number" step="1" :value="state.target_id.C" @change="(e) => setTargetId('C', e)" />
         </ConfigEntry>
         <div class="actions">
-          <button style="--color: #080" :disabled="!recordable" @click="session.call('capture', undefined)">
+          <button style="--color: #080" :disabled="!canRecord" @click="session.call('capture', undefined)">
             Capture
           </button>
           <button

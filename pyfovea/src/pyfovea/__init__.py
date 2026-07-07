@@ -28,8 +28,9 @@ from .dtypes import (
     to_display,
     unpack_12p,
 )
-from .fovea import TELEMETRY_TOPIC, FoveaFrame, FoveaReader, StreamInfo
+from .fovea import FoveaFrame, FoveaReader, StreamInfo
 from .legacy import LegacyFrame, LegacyRecording, LegacyStream
+from .schema import TELEMETRY_TOPIC
 
 __version__ = "0.1.0"
 

@@ -18,6 +18,13 @@ import { defineSession, type ServerSession } from "@orchestrator/runtime";
 import { leaseCalibratedTriple, type CalibratedTriple } from "@orchestrator/calibration";
 import { startActuationLoop, type ActuationLoop } from "@orchestrator/actuation";
 import { createFrameWorker } from "@orchestrator/frame-worker";
+import {
+  clampRectToSize,
+  depthFromInverse,
+  ORIGIN_POS,
+  radians,
+  VOLT_TELEMETRY_INTERVAL_MS,
+} from "@orchestrator/fovea-pipeline";
 import { manualControl } from "./contract";
 import { createCapture } from "./capture";
 import { createRecording } from "./recording";
@@ -43,9 +50,6 @@ import type { Point2d, Rect } from "core/Geometry";
 import type { Pos } from "@lib/controller-codec";
 import { RollingStats } from "@lib/util/rolling";
 
-const ORIGIN: Pos = { x: 0, y: 0 };
-const radians = (deg: number) => (deg * Math.PI) / 180;
-
 export default function manualControlSession(): ServerSession<typeof manualControl> {
   return defineSession("manual-control", manualControl, (s) => {
     let triple: CalibratedTriple | null = null;
@@ -67,7 +71,7 @@ export default function manualControlSession(): ServerSession<typeof manualContr
 
     // Latest commanded voltages, mirrored locally so the L/R fovea wrap can use
     // them off the frame path (telemetry-published copy lives in `volt`).
-    const volts: { L: Pos; R: Pos } = { L: { ...ORIGIN }, R: { ...ORIGIN } };
+    const volts: { L: Pos; R: Pos } = { L: { ...ORIGIN_POS }, R: { ...ORIGIN_POS } };
     // Aligned (always-wrapped) foveae cached for the diff/depth combined view.
     const aligned: { L: Mat<Uint8Array> | null; R: Mat<Uint8Array> | null } = {
       L: null,
@@ -75,11 +79,7 @@ export default function manualControlSession(): ServerSession<typeof manualContr
     };
 
     function clampRect(r: Rect): Rect {
-      const x = Math.max(0, Math.min(Math.round(r.x), width - 1));
-      const y = Math.max(0, Math.min(Math.round(r.y), height - 1));
-      const w = Math.max(1, Math.min(Math.round(r.width), width - x));
-      const h = Math.max(1, Math.min(Math.round(r.height), height - y));
-      return { x, y, width: w, height: h };
+      return clampRectToSize(r, { width, height });
     }
 
     // --- targeting ---------------------------------------------------------
@@ -92,7 +92,7 @@ export default function manualControlSession(): ServerSession<typeof manualContr
     const shiftDeg = (): number => shiftOverride ?? baseShiftDeg();
 
     function targetVolts(): { l: Pos; r: Pos } {
-      if (!triple) return { l: ORIGIN, r: ORIGIN };
+      if (!triple) return { l: ORIGIN_POS, r: ORIGIN_POS };
       const A = inverseTriangulate(
         targetAngle,
         s.state.baseline,
@@ -177,8 +177,7 @@ export default function manualControlSession(): ServerSession<typeof manualContr
     }
 
     function depthWindow(): number {
-      const inv = s.state.depth_window_inv;
-      return inv <= 0 ? Infinity : 1 / (inv * inv);
+      return depthFromInverse(s.state.depth_window_inv);
     }
 
     function publishCombinedView(): void {
@@ -264,7 +263,6 @@ export default function manualControlSession(): ServerSession<typeof manualContr
 
     // --- actuation -----------------------------------------------------
 
-    const VOLT_TELEMETRY_INTERVAL_MS = 33; // ~30 Hz — plenty for a UI readout
     let lastVoltEmit = 0;
     const actuateMsStats = new RollingStats(0.9, 2, "ms");
 
@@ -345,7 +343,7 @@ export default function manualControlSession(): ServerSession<typeof manualContr
           else setTargetFromAngle(t.value, t.distance_mm, t.shift_deg);
         },
         async previewVolts(queries) {
-          if (!triple) return queries.map(() => ({ l: ORIGIN, r: ORIGIN }));
+          if (!triple) return queries.map(() => ({ l: ORIGIN_POS, r: ORIGIN_POS }));
           return queries.map(({ value, distance_mm, shift_deg }) => {
             const A = inverseTriangulate(
               value,

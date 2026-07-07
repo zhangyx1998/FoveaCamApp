@@ -123,7 +123,7 @@ export function viewerSession(deps: ViewerSessionDeps = {}): ServerSession<typeo
                   tCapture: Date.now(),
                   convertMs,
                 }),
-              publishTelemetry: (doc) => {
+              emitTelemetry: (doc) => {
                 playbackDocs[fileId] = doc;
                 s.telemetry({ playback: { ...playbackDocs } });
               },

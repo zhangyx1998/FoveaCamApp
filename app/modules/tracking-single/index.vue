@@ -24,7 +24,7 @@ import { computed, onMounted, ref, watch } from "vue";
 import type { Point2d, Size } from "core/Geometry";
 import { ROLE, THEME } from "@lib/camera-config";
 import { useAppConfig } from "@lib/config";
-import { useSession } from "@lib/orchestrator/client";
+import { useFrames, useSession } from "@lib/orchestrator/client";
 import { tracking } from "./contract";
 import StreamView from "@src/components/StreamView.vue";
 import PosView from "@src/components/PosView.vue";
@@ -40,10 +40,12 @@ const { state, telemetry } = session;
 
 // Processed preview frames fanned from the orchestrator: C undistorted, L/R
 // perspective-wrapped, `center` the magnified fovea crop around the target.
-const frameL = session.frame("L");
-const frameC = session.frame("C");
-const frameR = session.frame("R");
-const frameCenter = session.frame("center");
+const { L: frameL, C: frameC, R: frameR, center: frameCenter } = useFrames(session, [
+  "L",
+  "C",
+  "R",
+  "center",
+]);
 
 const drawer_height = ref(0);
 

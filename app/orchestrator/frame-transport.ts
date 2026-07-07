@@ -6,6 +6,7 @@
 
 import type { Mat } from "core/Vision";
 import type { FrameMeta, FramePayload } from "@lib/orchestrator/protocol";
+import { mergeFrameMeta, withFrameMeta } from "@lib/orchestrator/frame-payload";
 
 export type SessionFrameSource = FramePayload | Mat<Uint8Array>;
 
@@ -27,6 +28,8 @@ type NormalizedFrame = {
 
 type ShmSlot = {
   /** Read snapshot under the Electron V8 cage — never write through it. */
+  readSnapshot(): Mat<Uint8Array>;
+  /** @deprecated use `readSnapshot()`. */
   view(): Mat<Uint8Array>;
   /** Native memcpy into the slot — the only correct write path (V13). */
   write(src: ArrayBufferView): void;
@@ -53,14 +56,14 @@ function normalizeFrame(
 ): FramePayload | NormalizedFrame {
   if (isFramePayload(source)) {
     if (source.shm && !source.data) {
-      return meta ? { ...source, meta: { ...source.meta, ...meta } } : source;
+      return meta ? withFrameMeta(source, meta) : source;
     }
     if (!source.data) throw new Error("Frame payload has neither data nor shm");
     return {
       bytes: new Uint8Array(source.data),
       shape: source.shape,
       channels: source.channels,
-      meta: { ...source.meta, ...meta },
+      meta: mergeFrameMeta(source.meta, meta),
     };
   }
   return {
@@ -90,9 +93,9 @@ export function createShmFrameTransport(Shm: ShmApi): FrameTransport {
 
       const w = writer(topic);
       const slot = w.nextSlot(frame.shape, frame.channels);
-      // Native memcpy into the slot — never `slot.view().set(...)`: under
-      // Electron's V8 memory cage `view()` is a read snapshot and the write
-      // would land in the throwaway copy (V13).
+      // Native memcpy into the slot — never `slot.readSnapshot().set(...)`:
+      // under Electron's V8 memory cage snapshots are cage-local copies and
+      // writes would land in the throwaway copy (V13).
       slot.write(frame.bytes);
       return w.publish(frame.meta);
     },

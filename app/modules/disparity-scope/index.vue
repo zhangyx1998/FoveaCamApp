@@ -17,7 +17,7 @@ import { computed, onMounted, ref } from "vue";
 import type { Point2d, Size } from "core/Geometry";
 import { ROLE, THEME } from "@lib/camera-config";
 import { useAppConfig } from "@lib/config";
-import { useSession } from "@lib/orchestrator/client";
+import { useFrames, useSession } from "@lib/orchestrator/client";
 import { degrees, clamp } from "@lib/util";
 import { logScale } from "@lib/conversion";
 import { distanceToVerge } from "@lib/stereo";
@@ -45,16 +45,27 @@ onMounted(() => {
 });
 
 // Processed preview frames fanned from the orchestrator.
-const frameL = session.frame("L");
-const frameC = session.frame("C");
-const frameR = session.frame("R");
-const frameCenterSliced = session.frame("center.sliced");
-const frameCenterDisparity = session.frame("center.disparity");
-const frameGuide = session.frame("guide");
-const frameMatchLeft = session.frame("match_left");
-const frameMatchRight = session.frame("match_right");
+const {
+  L: frameL,
+  C: frameC,
+  R: frameR,
+  "center.sliced": slicedFrame,
+  "center.disparity": disparityFrame,
+  guide: frameGuide,
+  match_left: frameMatchLeft,
+  match_right: frameMatchRight,
+} = useFrames(session, [
+  "L",
+  "C",
+  "R",
+  "center.sliced",
+  "center.disparity",
+  "guide",
+  "match_left",
+  "match_right",
+]);
 const frameCenter = computed(() =>
-  state.view === "sliced" ? frameCenterSliced.value : frameCenterDisparity.value,
+  state.view === "sliced" ? slicedFrame.value : disparityFrame.value,
 );
 
 const drawer_height = ref(0);

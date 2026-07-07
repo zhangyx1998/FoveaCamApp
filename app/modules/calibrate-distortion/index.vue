@@ -15,7 +15,7 @@ You may find the full license in project root directory.
 import { computed, ref } from "vue";
 import { ROLE, THEME } from "@lib/camera-config";
 import { useAppConfig } from "@lib/config";
-import { useSession } from "@lib/orchestrator/client";
+import { useFrames, useSession } from "@lib/orchestrator/client";
 import { controller as controllerContract } from "@lib/orchestrator/contracts";
 import { formatNumber, type FormatNumberOptions } from "@lib/util";
 import { createMat } from "@lib/mat";
@@ -32,11 +32,13 @@ const session = useSession(calibrateDistortion, "calibrate-distortion");
 const ctrl = useSession(controllerContract, "controller");
 const { state, telemetry } = session;
 
-const frameL = session.frame("L");
-const frameC = session.frame("C");
-const frameR = session.frame("R");
-const frameProjL = session.frame("proj_L");
-const frameProjR = session.frame("proj_R");
+const {
+  L: frameL,
+  C: frameC,
+  R: frameR,
+  proj_L: frameProjL,
+  proj_R: frameProjR,
+} = useFrames(session, ["L", "C", "R", "proj_L", "proj_R"]);
 
 const marker_zoom = ref(1.0);
 

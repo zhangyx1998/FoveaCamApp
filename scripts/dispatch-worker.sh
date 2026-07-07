@@ -11,6 +11,9 @@
 # fresh start (e.g. at a stage boundary, to cap context growth), delete
 # .worker-logs/session-<role>.id.
 #
+# stdin MUST be /dev/null: codex exec appends piped stdin to the prompt
+# and blocks until EOF — a background shell's never-closing stdin pipe
+# hangs it forever on "Reading additional input from stdin...".
 # Sandbox: workspace-write — repo-confined writes, no network. All gate
 # tooling (npx / vue-tsc / vitest / vite build / core make build) runs
 # inside the sandbox; `npm install` is intentionally impossible.
@@ -76,7 +79,7 @@ if [[ -s "$sessfile" ]]; then
     -c 'model="gpt-5.5"' \
     -c 'model_reasoning_effort="high"' \
     -o "$last" \
-    "$reentry") >"$log" 2>&1 || status=$?
+    "$reentry") <"/dev/null" >"$log" 2>&1 || status=$?
   if [[ $status -ne 0 ]] && grep -qiE "no session|not found|no rollout" "$log"; then
     echo "[dispatch] session $sid unresumable — clearing $sessfile; re-run for a fresh start"
     rm -f "$sessfile"
@@ -89,7 +92,7 @@ else
     -c 'model="gpt-5.5"' \
     -c 'model_reasoning_effort="high"' \
     -o "$last" \
-    "$kickoff" >"$log" 2>&1 || status=$?
+    "$kickoff" <"/dev/null" >"$log" 2>&1 || status=$?
   sid="$(grep -m1 -E '^session id: ' "$log" | sed 's/^session id: //')"
   if [[ -n "$sid" ]]; then
     printf '%s' "$sid" >"$sessfile"

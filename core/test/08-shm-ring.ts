@@ -83,6 +83,10 @@ function assertPattern(result: ReaderResultWithData): void {
     assert.match(key, /^[0-9a-z]+$/);
     assert(`/fv.${key}.g4294967295`.length <= 31);
   }
+  // Known FNV-1a 32-bit collision. The first topic claims the process-local
+  // key; the second must fail loudly instead of cross-wiring live rings.
+  assert.equal(Shm.topicKey("costarring"), "q5yxel");
+  assert.throws(() => Shm.topicKey("liquid"), /topic key collision/);
 }
 
 {
@@ -108,6 +112,8 @@ function assertPattern(result: ReaderResultWithData): void {
   for (let i = 0; i < src.length; i++) src[i] = (i * 7 + 3) % 251;
   const slot = writer.nextSlot([2, 3], 4);
   slot.write(src);
+  const snapshot = slot.readSnapshot();
+  assert.deepEqual(Array.from(snapshot), Array.from(src));
   const descriptor = writer.publish({ tCapture: 5 });
   const handle = reader.open(descriptor.shm.seg);
   const result = readOnce(handle, descriptor);

@@ -53,22 +53,26 @@ planners: read [`planner.md`](./planner.md) first — the full handover
 - Do not edit: other roles' sections, the protocol/ownership sections,
   or any other `docs/refactor/*` file. When your items are done, stop.
 
-**Dispatch mechanics (switched BACK to Codex 2026-07-07, per user):**
-workers are **Codex `gpt-5.5` sessions at high reasoning effort**
-(pinned via `-c` in the script), launched headless by the planner via
-`scripts/dispatch-worker.sh <A|B|C> ["note"]` in a background shell —
-the planner is re-invoked on exit and runs the verification iteration.
-Sessions are persistent per role (`.worker-logs/session-<role>.id`;
-delete to force a cold start at stage boundaries); resumes send a
-short steering-first re-entry prompt. Sandbox: workspace-write (repo-
-confined writes, no network — dependency changes need an explicit
-planner grant in the instruction). The 2026-07-06 Claude Sonnet 5
-subagent fleet is retired; its in-harness sessions are not
-transferable — per design, the docs (this file + the planner docs) are
-the complete memory, and each Codex session was warmed up 2026-07-07
-with an onboarding read-through + takeover note. At most one session
-per role; roles may run concurrently (ownership table keeps domains
-disjoint); concurrent-log clobbers get restored from transcripts.
+**Dispatch mechanics (switched to Opus 4.8 subagents 2026-07-07, per
+user):** workers are **Claude Opus 4.8 subagents** spawned by the
+planner via the in-harness Agent tool (`subagent_type: "claude"`,
+`model: "opus"`), one persistent agent per role. They share the
+planner's filesystem and environment; the planner is notified on each
+agent's completion and runs the verification iteration, then continues
+the same agent with `SendMessage` (context intact) for the next wave —
+a fresh `Agent` call would start cold, so ALWAYS resume via SendMessage
+within a round. Each agent is **warmed up before its first task**: a
+spawn prompt that onboards from the docs (AGENTS.md + this file + its
+role's planner docs) and returns a takeover note the planner checks;
+only then does the planner SendMessage the actual instructions. Per
+design the docs (this file + the planner docs) are the complete memory,
+so a lost agent is re-spawnable from a warm-up. The 2026-07-07 Codex
+`gpt-5.5` fleet (and the earlier Sonnet 5 / Codex fleets) are retired;
+`scripts/dispatch-worker.sh` is kept only as a fallback host. At most
+one agent per role; roles run concurrently (ownership table keeps
+domains disjoint). Sandbox: agents write only within the repo; no
+network / `npm install` without a planner-logged grant in the
+instruction.
 
 **Standing gates (every instruction, unless it narrows them):**
 `vue-tsc --noEmit -p tsconfig.json` → 0 errors; `vitest run` all green;
@@ -149,54 +153,57 @@ hardware-dependent behavior verified without a real rig run.
 
 ### Active instructions
 
-- **A-15 — optimization wave 1 (green-lit set; triage:
-  docs/refactor/proposals/TRIAGE.md — read it, your proposals were
-  accepted with noted edits).** Implement, in order: **A-P2**
-  (tracking-single display vision onto frame-workers — named meters,
-  idle cancellation, drain ordering exactly like manual-control),
-  **A-P3** (shared fovea/triple pipeline primitives — SMALL primitives,
-  not a framework, per your own risk note), **A-P5** (`useFrames` /
-  `useDynamicFrame` helpers, adopt in at least 3 call sites), **A-P9**
-  (app-registry consistency test; KEEP the explicit loader map),
-  **A-P14** (rename map MINUS `activeSubscribers` and
-  `telemetrySnapshot` — vetoed). Wave 2 (P4, P8, P10, P11, P13) comes
-  after this lands. DoD: standing gates; every behavior-carrying
-  refactor keeps or extends its tests; logs per item.
-  - Log: A-P2: tracking-single center/L/R display vision now uses named
-    frame workers (`tracking:center`, `tracking:fovea:{L,R}`) with idle cancel.
-    A-P3: added small Vue-free `fovea-pipeline` primitives; adopted in
-    tracking/manual/disparity; new primitive tests.
-    A-P5: added `useFrames`/`useDynamicFrame`; adopted in manual,
-    tracking, disparity, calibrate-distortion, welcome.
-    A-P9: added app-registry consistency test; explicit loader map retained.
-    A-P14: approved local renames landed; vetoed runtime names untouched.
-    Gates: vue-tsc 0; vite build green; renderer native-core/orch Vue/V11 clean;
-    focused A tests 17/17. Full vitest 173/174: out-of-scope
-    `test/codec-fixtures.test.ts` 12p nibbles mismatch (`bc3a12569478`
-    vs expected `bc3a12364778`) from concurrent codec work.
-- **A-14 — optimization survey (see the shared OPTIMIZATION SURVEY
-  spec above).** Your surface: `app/modules/**`, `app/src/**`,
-  `app/lib/**` (minus C's shm blocks), `app/electron/**`,
-  `app/orchestrator/**` (minus C's shm/viewer/metering files),
-  `app/windows/**`. Extra attention: the window framework and modules
-  grew fast across Stage 5 — session.ts files likely share
-  lease/drain/telemetry boilerplate; StreamView/FrameView props have
-  accreted; check for repeated `useSession` wiring patterns.
-  - Log: Warm-up takeover note (A-standby slot absent; A-14 not started).
-    Read AGENTS.md, full split-of-work, multi-window.md,
-    workload-metering.md, and skimmed orchestrator.md §§3/4/6.
-    Current state: migration complete; shm canonical for eligible previews;
-    passive subscriptions fixed V12; GUI/hardware smoke remains pending.
-    Stage 5 landed: window manager/welcome/projection/state-in-URL/HMR
-    boundary/preload V11 fixes, workload export/call-site naming, profiler UI.
-    A-14 read: survey only, no code; focus app/session boilerplate,
-    window-framework growth, StreamView/FrameView prop accretion, useSession
-    wiring, and better-fit breaking options; proposals go to
-    docs/refactor/proposals/A.md when dispatched.
-    A-14 survey landed in docs/refactor/proposals/A.md: 14 ranked proposals
-    across sessions, frame/view UI, windows, bridge IPC, contracts, and naming.
-    Gates: vue-tsc 0 errors; vitest 163/163; vite build green; renderer
-    native-core grep clean; orchestrator Vue grep clean; V11 triplet clean.
+- **A-16 — optimization wave 2 (green-lit non-breaking set; triage:
+  docs/refactor/proposals/TRIAGE.md; full sketches in
+  docs/refactor/proposals/A.md).** Implement, in order:
+  1. **A-P9-consistency-followup is DONE (wave 1)** — skip; start at P4.
+  2. **A-P4** (marker-calibration session helper) — extract shared
+     primitives for the L/C/R `MarkerTracker` triple, `DetectionView`
+     publishing, and `setTargetId` updates used by `calibrate-extrinsic`,
+     `calibrate-drift`, `calibrate-distortion`. SMALL primitives, not a
+     framework (same discipline as A-P3): each session keeps its own
+     intrinsic/extrinsic ownership and actuation mode; the helper only
+     removes the tracker-triple + detection-publish + target-id
+     boilerplate. Keep/extend each calibration session's tests.
+  3. **A-P8** (window class table) — add a single `WINDOWS` metadata
+     table (class, entry, singleton/dedupe key, counts-for-welcome,
+     exclusivity, preload, sandbox, default bounds, restore params) that
+     `windows.ts`/`main.ts`/`window-manager.ts`/`window-manifest.ts`
+     derive from. Electron-only `BrowserWindow` options stay main-side
+     behind a pure-metadata→options adapter. Do NOT regress the welcome
+     rule, singleton/dedupe, or manifest restore — the window-manager +
+     window-manifest suites must stay green and gain a table-coverage
+     test.
+  4. **A-P10** (typed bridge IPC registry) — one typed registry of
+     channel name → arg tuple → return type; preload wrappers and main
+     handlers derive/validate from it. **HARD CONSTRAINT: V11 triplet.**
+     The registry must be a plain shared TS type/const module that the
+     self-contained CJS preload bundle can inline — no `import.meta`, no
+     sibling-chunk imports, no `createRequire`. Re-run the triplet grep
+     on the emitted `preload-*.cjs` yourself and paste results.
+  5. **A-P11** (manage-cameras property schema) — a schema of camera
+     controls (getter/setter key, availability key, range key, auto-mode
+     key, units, formatter, persistence) that the contract type, native
+     read guards, `CameraConfig.vue`, and reset logic consume. MUST
+     preserve the existing `safe()` behavior (native getters may throw /
+     be unavailable). Bonus if welcome-window annotations can reuse the
+     schema's labels/formatters, but don't block on it.
+  6. **A-P13** (activation errors as session telemetry) — a standard
+     additive `error`/`status` telemetry convention (or runtime `fail(reason)`
+     helper) seeded to new subscribers, so failed `activateSession()` is
+     user-visible instead of stderr-only. Additive to contracts; UI
+     adoption can be per-module (wire at least one module, e.g.
+     manage-cameras or tracking-single, as the reference consumer).
+  - Scope guard: all five are tagged **non-breaking** — none may change
+    a wire contract shape (that's A-P7/A-P12, a later breaking wave).
+    A-P4/P8/P11 are behavior-preserving refactors: keep or extend the
+    tests that cover them. Any breaking temptation → stop and log, don't
+    do it inline.
+  - DoD: standing gates (vue-tsc 0; full vitest green; vite build +
+    V11 triplet on emitted preloads; renderer zero-core; orchestrator
+    zero-Vue). Per-item log ≤ 15 lines: what landed, gates with numbers,
+    deviations, out-of-scope notes.
+  - Log:
 
 ## Coder B — Native core, protocol & firmware
 
@@ -209,55 +216,45 @@ control is the planner's review loop.
 
 ### Active instructions
 
-- **B-8 — optimization wave 1 (green-lit set; triage:
-  docs/refactor/proposals/TRIAGE.md).** Implement, in order: **B-P2**
-  (cross-language 12p test vectors — fixture set consumed by C++/TS/
-  Python suites; coordinate file location with C's conformance side:
-  put fixtures under `docs/schema/` or `pyfovea/tests/fixtures/codec/`
-  — your call, log it), **B-P3** (schema-as-code constants, TS +
-  generated-or-mirrored Python, bench renamed onto the real names),
-  **B-P7** (chunked host serial RX; byte-level trace preserved behind
-  a verbosity flag; per-packet summaries default). Check whether a
-  local firmware compile works (`pio run` or the repo's documented
-  path): if YES, also do **B-P8** + **B-P9** (compile gate = your
-  DoD); if NO, log that and skip — they defer to the bench era. Wave 2
-  (B-P1 registry, B-P4 bench-on-production-writer, B-P10 streaming
-  reader) after this lands. DoD: standing gates incl. pyfovea suite.
-  - Log: B-P2 landed: shared 12p vectors in `docs/schema/codec/`, C++
-    `Codec/Packed12.h`, native Frame uses it, C++/TS/pyfovea fixture tests.
-    B-P3 landed: schema constants in `docs/schema/fovea.ts`, recorder re-export,
-    mirrored `pyfovea.schema`, production writer + converter + bench use real
-    `.fovea` schema names/encodings/metadata; bench smoke OK.
-    B-P7 landed: host serial rx reads 256-byte chunks, still feeds COBS per byte;
-    byte trace remains `VERBOSE`, packet summaries unchanged.
-    B-P8/B-P9 landed after pre-edit firmware compile proved local toolchain:
-    firmware PendingAction helper + fixed Ring queue, behavior unchanged.
-    Gates: vue-tsc 0; vitest 174/174; pyfovea 28/28; vite build green;
-    core clean build Node+Electron green; test build + packed12/cobs green;
-    renderer core grep/orch Vue grep/V11 triplet clean; reader otool system-libs only.
-    Deviation: final post-edit firmware compile blocked — sandbox denied
-    `~/.platformio`, escalated rerun rejected by usage limit; no hardware/GUI run.
-- **B-7 — optimization survey (see the shared OPTIMIZATION SURVEY
-  spec above).** Your surface: `core/**` (minus C's ShmRing/reader),
-  `firmware/**`, `pyfovea/**`, `app/orchestrator/recorder/**`,
-  `playground/bench-recorder/**`. Extra attention: core's
-  convert/PixelFormat tables accreted cases across 12-bit work; the
-  recorder worker + bench share synthetic-frame and protocol logic;
-  firmware Streams/Capture grew under v2 — flag duplication between
-  host and MCU packet handling if any.
-  - Log: Warm-up takeover only; B-7 survey not started, no code/gates.
-    Read AGENTS.md, full split-of-work, recorder-container.md end to end,
-    synced-capture status + §9, and orchestrator.md §§3/6.
-    Current B state: synced-capture accepted through T6/T8; rig-gated queue is
-    bench→flash→P4 wiring→P5, with FIN root cause waiting for trace bench.
-    Schema owned: `.fovea` MCAP; `x-fovea-raw` stream channels keep raw packed
-    bytes + `dtype/shape/pixelFormat/significantBits/channels`; JSON telemetry.
-    Timestamps are monotonic ns with wall-clock anchor; footerless streaming recovery is required for viewer + pyfovea.
-    B-7 read: proposals to `docs/refactor/proposals/B.md`; focus convert/PixelFormat,
-    recorder/bench frame logic, pyfovea decode lineage, and host↔MCU protocol duplication.
-    B-7 survey landed in docs/refactor/proposals/B.md: 14 ranked proposals
-    across PixelFormat/dtypes, 12p, recorder schema/bench, protocol/firmware, pyfovea, and naming.
-    Gates: vue-tsc 0; vitest 163/163; pyfovea 28/28; vite build green; renderer core grep clean; orchestrator Vue grep clean; V11 triplet clean; native/otool skipped (docs-only).
+- **B-9 — optimization wave 2 (green-lit non-breaking set; triage:
+  docs/refactor/proposals/TRIAGE.md; sketches in
+  docs/refactor/proposals/B.md).** Implement, in order:
+  1. **B-P1** (single PixelFormat/Dtype registry) — collapse the
+     hand-maintained C++ enum/switches, TS unions, Python dtype maps,
+     Bayer lists, `significantBits`, and `isPacked` into ONE declarative
+     source table that generates (or is the checked-in single source
+     for) the C++ tables, TS types, and Python maps. Reuse B-P2/B-P3's
+     `docs/schema/` lineage — the codec fixtures + `fovea.ts` are already
+     the schema-as-code home; extend that, don't start a parallel one.
+     **Generator stays trivial and its output is checked in** (triage
+     rule): no build-time codegen step wired into `core make build` or
+     vite. Preserve every export name + the 12p-unpack comments (B-P1
+     risk note). Kill the stale `CAPACITY = 8` d.ts comment while here.
+  2. **B-P4** (bench drives the production writer) — refactor
+     `playground/bench-recorder/` into a thin harness around the
+     PRODUCTION recorder writer/worker (`app/orchestrator/recorder/`),
+     with compression knobs injected behind a bench-only interface.
+     Compression must NOT become a production default. Re-run the bench
+     smoke and paste the headline numbers (they should still show the
+     single-writer bottleneck; if they move materially, that's a finding).
+  3. **B-P10** (streaming pyfovea telemetry join) — add
+     `iter_frames_streaming()` as an ADDITIVE API that yields file-order
+     frames with bounded telemetry state (and works on crash-truncated
+     files without whole-file materialization). Do NOT change the
+     default `iter_frames()` order or its joined-extras guarantee —
+     triage pinned this as additive-only. New tests: large-ish synthetic
+     file + the existing crash fixture, asserting bounded memory
+     behavior (e.g. it yields before consuming the whole file).
+  - Scope guard: all three tagged non-breaking. B-P1 must keep emitted
+    API/enums byte-compatible; B-P10 must stay additive. Firmware is
+    NOT in this wave (B-P8/P9 already landed; B-P6/P11/P13 are
+    deferred/user-gated).
+  - DoD: standing gates incl. `core make build` both runtimes (B-P1
+    touches native), `otool -L` system-libs-only on the reader if
+    rebuilt, **pyfovea pytest** (B-P10), and the cross-language codec
+    fixtures still pass in C++/TS/Python (B-P1 must not drift them).
+    Per-item log ≤ 15 lines with gate numbers.
+  - Log:
 - **(B-5 accepted & archived 2026-07-06 → recorder-container.md §2b.)**
 
 ## Coder C — SHM frame path (end-to-end)
@@ -277,55 +274,64 @@ session.
 - **C-standby note.** C-1/C-2 were planner-accepted 2026-07-06 and
   archived (orchestrator.md §6 + §7.1 Stage 4).
 - **(C-4 accepted & cleared 2026-07-06.)**
-- **C-10 — optimization wave 1 (green-lit set; triage:
-  docs/refactor/proposals/TRIAGE.md — accepted with noted edits).**
-  Implement, in order: **C-P3** (shared window/rate bookkeeping —
-  output shapes unchanged), **C-P5** (`readSnapshot()` + deprecated
-  `view()` alias, call sites steered), **C-P8** (process-local
-  topic-key collision registry that THROWS on live collision; test
-  it), **C-P10** (rename map MINUS `latestBefore` and
-  `workloadSnapshot` — vetoed; alias-stage the exported ones), **C-P1**
-  (the frame descriptor/meta normalizer — one merge policy, adopted at
-  all 5 sites; this is the V9/V13-class guard, test meta precedence
-  explicitly). Wave 2 (C-P2 pool extraction, C-P4 shared native read
-  TU, C-P7 streaming recovery, C-P9 shm telemetry, C-P11 dedupe
-  semantics, C-P6 conformance with B) after this lands. DoD: standing
-  gates; buffer/meta tests as noted per item.
+- **C-11 — optimization wave 2 (green-lit non-breaking set; triage:
+  docs/refactor/proposals/TRIAGE.md; sketches in
+  docs/refactor/proposals/C.md).** Implement, in order:
+  1. **C-P2** (extract the renderer SHM transfer pool out of
+     `client.ts`) — move the ~100 lines of ping-pong pool state + message
+     types into `app/lib/orchestrator/shm-client.ts` with a small API
+     (`read(payload)`, `release(payload)`, `dispose()`, stats).
+     **MessagePort transfer ownership is the regression risk** — pin
+     tests for buffer return on: success, null result, timeout, and
+     stale/late response. Behavior-identical to today.
+  2. **C-P4** (shared native read TU) — factor the reader addon's
+     mapping / header validation / slot addressing / seqlock read logic
+     into ONE libc-safe `ReadMapping`/`readLatestInto` compiled into both
+     the core target and the reader addon. **HARD: the shared TU must
+     stay system-library-only** — no N-API, OpenCV, Aravis, GLib, libusb.
+     Re-run `otool -L` on the rebuilt reader and paste it (self +
+     libc++/libSystem only). Keep the V8/V9 fences + meta-copy-timing +
+     retry cap intact — the whole point is one home for that logic.
+  3. **C-P7** (stream truncated viewer playback) — replace
+     `TruncatedSource.messages()`'s scan-then-store-array with an async
+     iterator that yields records as the scan progresses (or a one-time
+     recovered-offset index). Bounded memory on large crash artifacts.
+     Keep the footerless-recovery contract + `truncated` badge behavior;
+     the viewer test must still pass and gain a bounded-memory assertion.
+  4. **C-P9** (explicit SHM read/pool telemetry) — expose a small
+     `shmReads` workload/stat block (timeout/null/allocation counts,
+     read latency) + OSD fields, built on the C-P2 pool module and the
+     metering schema. **Meters observe only, never gate reads** (PB3/
+     metering hard rule). Additive to `perfSnapshot`.
+  5. **C-P11** (viewer file-open dedupe in the session layer) —
+     `open(path)` returns the existing fileId for the same canonical
+     path instead of allocating a new source/player/topics. Triage
+     ratified this as documented dedupe semantics (matches the
+     one-window-per-file product rule). **This touches the pinned
+     `viewer-contract.ts` — the contract note is planner-arbitrated:
+     propose the exact wording in your log and DO NOT change close/
+     restore semantics without it.** Coordinate with A's viewer window
+     (dedupe already exists at the shell layer; you're adding it at the
+     session layer — they must agree on fileId reuse).
+  6. **C-P6** (single decode schema, conformance side — CROSS-ROLE with
+     B-P1). B owns the format facts + the single source table (B-P1
+     extends `docs/schema/`); YOU own the **TS decode conformance**:
+     `viewer/decode.ts` + `app/lib/util/dtype.ts` consume the shared
+     table (or a conformance test asserts they match it), so viewer
+     display and pyfovea training decode can't drift. **Do this AFTER
+     B-P1 lands its table** (sequence with B — log a note if B isn't
+     ready and I'll re-order). No metadata-name changes (that would be
+     breaking); tests/helpers only.
+  - Scope guard: all six tagged non-breaking (C-P2/P10-style aliasing
+    already done in wave 1; here keep exported shapes stable). C-P11's
+    contract wording and C-P6's cross-role sequencing are the two
+    planner-touch points — surface them in your log, don't decide them
+    solo.
+  - DoD: standing gates; `core make build` both runtimes + `otool -L`
+    on the reader (C-P4); full vitest incl. the viewer + shm suites;
+    `08-shm-ring.ts` still passes; V11 triplet if any preload byte
+    changes. Per-item log ≤ 15 lines with gate numbers.
   - Log:
-    C-P3: added `@lib/orchestrator/stats`; Channel + Workload rates share it,
-    with unchanged output shapes.
-    C-P5/C-P8: `ShmSlot.readSnapshot()` + deprecated `view()` alias; `topicKey()`
-    throws on process-local hash collisions; known-collision/native tests added.
-    C-P10: C-owned call sites moved to new names; vetoed names untouched; aliases
-    kept for existing A/B imports.
-    C-P1: new `frame-payload` helper adopted in protocol/frame-transport/
-    preload/client/fake transport; meta precedence test added.
-    Gates: vue-tsc 0; C-focused vitest 31/31; vite build green; core make build
-    Node+Electron green; core/test tsconfig 0; bundle/V11/otool checks clean.
-    Full vitest 173/174 blocked by out-of-scope untracked codec test mismatch
-    (`bc3a12569478` vs `bc3a12364778`); SHM smoke blocked by sandbox and
-    escalation rejected by usage limit, so not completed.
-- **C-9 — optimization survey (see the shared OPTIMIZATION SURVEY
-  spec above).** Your surface: shm path end-to-end (`ShmRing.*`,
-  reader addon, `frame-transport.ts`, preload-renderer shm side,
-  client pool), `metering.ts`, `orchestrator/viewer/**` +
-  `sessions/viewer.ts`, `viewer-contract.ts`, shm blocks in
-  client/protocol/StreamView. Extra attention: the frame path now has
-  THREE meta-merge sites (writer publish, preload readInto, client
-  materialize) — check for unifiable descriptor handling; decode.ts
-  vs pyfovea dtypes.py vs stream-decoder lineage duplication is
-  cross-role — propose, note the seam.
-  - Log:
-    Warm-up takeover only (2026-07-07); C-9 survey NOT started and no gates run per planner note.
-    SHM state: canonical pixel transport for eligible previews and session frames; Channel carries descriptors only, reader addon remains minimal/system-lib-only, renderer materializes via ping-pong buffers.
-    Cage/seqlock lessons to preserve: V8 fences around writer data and reader copy; V9 meta copied inside validated window; V13 JS `view()` is a cage read snapshot, writes must use native `write()`/`copyTo()`.
-    Metering state: `Workload` abstraction landed/exported in `perfSnapshot.workloads`; registry, frame-worker, shm writer/recorder paths observe ingest/emit/drop/busy without gating behavior.
-    Viewer data layer: accepted `viewer` session replays `.fovea` through `fr:viewer:<fileId>:<channel>` SHM topics under the pinned `viewer-contract.ts`, with indexed read plus footerless fallback.
-    Recorder context: MCAP `.fovea` schema pinned in recorder-container §2b; viewer/Python readers must preserve raw bytes, metadata decode props, telemetry, monotonic ns timestamps, and streaming recovery.
-    Held queue: C-3 PB2 live measurement still waits on display+cameras; C-9 optimization survey awaits separate dispatch.
-    C-9 survey landed in `docs/refactor/proposals/C.md`: 12 ranked proposals across descriptor/meta normalization, SHM pool/native reader, metering, viewer fallback, codec schema, topic keys, and naming.
-    Gates: vue-tsc 0; vitest 163/163; vite build green; renderer core grep clean; orchestrator Vue grep clean; V11 triplet clean; reader addon otool clean (self + libc++/libSystem only).
-    Skipped core make build + pyfovea pytest because this was docs-only: no native, pyfovea, or recorder-schema files touched; no GUI/hardware claims.
 
 - **(history) C-6 — workload metering core (accepted; spec:
   docs/refactor/workload-metering.md — read it fully first).**

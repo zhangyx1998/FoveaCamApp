@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstring>
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <optional>
 
@@ -881,10 +882,9 @@ private:
 
   void rxLoop() {
     VERBOSE("Device::rxLoop started for fd %d", fd);
-    char byte;
-    ssize_t count;
+    std::array<char, 256> bytes;
     while (!flag_term) {
-      auto count = ::read(fd, &byte, 1);
+      auto count = ::read(fd, bytes.data(), bytes.size());
       if (count < 0) {
         ERROR("Failed to read from serial port: %s", std::strerror(errno));
         continue;
@@ -893,10 +893,15 @@ private:
         continue;
       }
       counters.rxBytes.fetch_add(static_cast<uint64_t>(count));
-      VERBOSE("Device::recv() %u bytes + incoming 0x%s", rx.len(),
-              hexFormat(&byte, 1).c_str());
-      if (rx.recv(byte))
-        handleRawPacket(Protocol::RawPacket(rx.get()));
+      VERBOSE("Device::recv() %u buffered bytes + chunk %zd bytes", rx.len(),
+              count);
+      for (ssize_t i = 0; i < count; i++) {
+        const auto byte = bytes[static_cast<size_t>(i)];
+        VERBOSE("Device::recv() %u bytes + incoming 0x%s", rx.len(),
+                hexFormat(&byte, 1).c_str());
+        if (rx.recv(byte))
+          handleRawPacket(Protocol::RawPacket(rx.get()));
+      }
     }
   }
 

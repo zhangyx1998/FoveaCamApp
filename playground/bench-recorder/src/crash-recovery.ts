@@ -24,6 +24,10 @@ import { McapIndexedReader, McapStreamReader } from "@mcap/core";
 import { FileHandleReadable } from "@mcap/nodejs";
 import { uncompressSync as lz4Uncompress } from "lz4-napi";
 import { decompress as zstdDecompress } from "zstd-napi";
+import {
+  RAW_FRAME_MESSAGE_ENCODING,
+  RAW_FRAME_SCHEMA_NAME,
+} from "../../../docs/schema/fovea.ts";
 import { buildFramePool, buildProcessedPool } from "./synth.ts";
 import type { WorkerIn, WorkerOut, Compression, ChannelSpec } from "./protocol.ts";
 
@@ -55,8 +59,15 @@ async function main(): Promise<void> {
     ...["cam0", "cam1", "cam2"].map((name) => ({
       spec: {
         topic: `raw/${name}`,
-        schemaName: "fovea.raw12p",
-        metadata: { width: String(rawPool.width), height: String(rawPool.height) },
+        schemaName: RAW_FRAME_SCHEMA_NAME,
+        messageEncoding: RAW_FRAME_MESSAGE_ENCODING,
+        metadata: {
+          dtype: "U8",
+          shape: JSON.stringify([rawPool.height, rawPool.width]),
+          channels: "1",
+          pixelFormat: "BayerRG12p",
+          significantBits: "12",
+        },
       },
       fps: 60,
       pool: rawPool.frames,
@@ -64,8 +75,15 @@ async function main(): Promise<void> {
     {
       spec: {
         topic: "processed/disparity",
-        schemaName: "fovea.processed8",
-        metadata: { width: String(procPool.width), height: String(procPool.height) },
+        schemaName: RAW_FRAME_SCHEMA_NAME,
+        messageEncoding: RAW_FRAME_MESSAGE_ENCODING,
+        metadata: {
+          dtype: "U8",
+          shape: JSON.stringify([procPool.height, procPool.width]),
+          channels: "1",
+          pixelFormat: "Mono8",
+          significantBits: "8",
+        },
       },
       fps: 30,
       pool: procPool.frames,

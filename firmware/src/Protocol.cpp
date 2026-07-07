@@ -72,30 +72,47 @@ void Protocol::reject(const Sequence &seq, Property p,
 // to CMD_STREAM, which is exactly what this refactor is for).
 namespace {
 
-bool actuatePending = false;
-Protocol::Sequence actuateSeq = 0;
-Packet::Command::Actuate actuateResult{};
-Packet::Command::Timestamp actuateDue = 0;
+template <typename Payload> struct PendingAction {
+  bool pending = false;
+  Protocol::Sequence seq = 0;
+  Payload result{};
+  Packet::Command::Timestamp due = 0;
 
-bool triggerPending = false;
-Protocol::Sequence triggerSeq = 0;
-Packet::Command::Trigger triggerResult{};
-Packet::Command::Timestamp triggerDue = 0;
+  bool start(Protocol::Sequence nextSeq, const Payload &payload,
+             Packet::Command::Timestamp nextDue) {
+    if (pending)
+      return false;
+    seq = nextSeq;
+    result = payload;
+    due = nextDue;
+    pending = true;
+    return true;
+  }
+
+  bool ready(Packet::Command::Timestamp now) const {
+    return pending && now >= due;
+  }
+
+  void clear() { pending = false; }
+};
+
+PendingAction<Packet::Command::Actuate> actuate;
+PendingAction<Packet::Command::Trigger> trigger;
 
 } // namespace
 
 static void cancelPendingActuate(const char *reason) {
-  if (!actuatePending)
+  if (!actuate.pending)
     return;
-  actuatePending = false;
-  Packet::Command::Actuate::reject(actuateSeq, reason);
+  actuate.clear();
+  Packet::Command::Actuate::reject(actuate.seq, reason);
 }
 
 static void cancelPendingTrigger(const char *reason) {
-  if (!triggerPending)
+  if (!trigger.pending)
     return;
-  triggerPending = false;
-  Packet::Command::Trigger::reject(triggerSeq, reason);
+  trigger.clear();
+  Packet::Command::Trigger::reject(trigger.seq, reason);
 }
 
 namespace Protocol {
@@ -228,33 +245,27 @@ HANDLE_SET(Command::Actuate) {
     reject(seq, "Cannot perform action: system is not enabled");
     return;
   }
-  if (actuatePending) {
+  if (actuate.pending) {
     reject(seq, "An actuate request is already pending");
     return;
   }
   MEMS::set(MEMS::Device::LEFT, payload.left);
   MEMS::set(MEMS::Device::RIGHT, payload.right);
   MEMS::apply();
-  actuateResult = payload;
-  actuateSeq = seq;
-  actuateDue = Global::time.now() + payload.settle_time;
-  actuatePending = true;
+  actuate.start(seq, payload, Global::time.now() + payload.settle_time);
   auto packet = Create::ACK(seq);
   deflate(payload, packet);
   send(packet);
 }
 
 HANDLE_SET(Command::Trigger) {
-  if (triggerPending) {
+  if (trigger.pending) {
     reject(seq, "A trigger request is already pending");
     return;
   }
   for (auto &cam : Board::camera)
     cam.output.write(HIGH);
-  triggerResult = payload;
-  triggerSeq = seq;
-  triggerDue = Global::time.now() + payload.duration;
-  triggerPending = true;
+  trigger.start(seq, payload, Global::time.now() + payload.duration);
   auto packet = Create::ACK(seq);
   deflate(payload, packet);
   send(packet);
@@ -322,21 +333,22 @@ HANDLE_GET_PAYLOAD(Command::Frame) {
 // the nested `Protocol::Packet<Property>` template, not the top-level
 // `::Packet` namespace from Packet.h. Force the intended one with `::`.
 void Protocol::tick() {
-  if (actuatePending && Global::time.now() >= actuateDue) {
-    actuatePending = false;
-    actuateResult.complete_time = Global::time.now();
-    auto packet = ::Packet::Command::Actuate::Create::FIN(actuateSeq);
-    ::Packet::Command::Actuate::deflate(actuateResult, packet);
+  auto now = Global::time.now();
+  if (actuate.ready(now)) {
+    actuate.clear();
+    actuate.result.complete_time = now;
+    auto packet = ::Packet::Command::Actuate::Create::FIN(actuate.seq);
+    ::Packet::Command::Actuate::deflate(actuate.result, packet);
     send(packet);
   }
-  if (triggerPending && Global::time.now() >= triggerDue) {
-    triggerPending = false;
+  now = Global::time.now();
+  if (trigger.ready(now)) {
+    trigger.clear();
     for (auto &cam : Board::camera)
       cam.output.write(LOW);
-    triggerResult.timestamp = Global::time.now();
-    auto packet = ::Packet::Command::Trigger::Create::FIN(triggerSeq);
-    ::Packet::Command::Trigger::deflate(triggerResult, packet);
+    trigger.result.timestamp = now;
+    auto packet = ::Packet::Command::Trigger::Create::FIN(trigger.seq);
+    ::Packet::Command::Trigger::deflate(trigger.result, packet);
     send(packet);
   }
 }
-

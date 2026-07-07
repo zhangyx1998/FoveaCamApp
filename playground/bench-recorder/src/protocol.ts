@@ -15,6 +15,7 @@ export type Compression = "none" | "lz4" | "zstd";
 export interface ChannelSpec {
   topic: string;
   schemaName: string;
+  messageEncoding: string;
   metadata: Record<string, string>;
 }
 

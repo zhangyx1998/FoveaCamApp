@@ -20,6 +20,7 @@
 #include <stdexcept>
 #include <string>
 #include <sys/mman.h>
+#include <unordered_map>
 #include <unistd.h>
 
 #include "napi-helper.h"
@@ -60,7 +61,16 @@ std::string base36(uint32_t value) {
 }
 
 std::string topicKeyFor(const std::string &topic) {
-  return base36(fnv1a32(topic));
+  static std::mutex mutex;
+  static std::unordered_map<std::string, std::string> topicByKey;
+  const auto key = base36(fnv1a32(topic));
+  std::lock_guard<std::mutex> lock(mutex);
+  const auto [it, inserted] = topicByKey.emplace(key, topic);
+  if (!inserted && it->second != topic)
+    throw std::runtime_error("SHM topic key collision: \"" + topic +
+                             "\" and \"" + it->second + "\" both map to " +
+                             key);
+  return key;
 }
 
 std::string errnoMessage(const std::string &action, const std::string &name) {
@@ -287,6 +297,7 @@ public:
         env, "ShmSlot",
         {
             InstanceMethod<&ShmSlotObject::view>("view"),
+            InstanceMethod<&ShmSlotObject::view>("readSnapshot"),
             InstanceMethod<&ShmSlotObject::write>("write"),
             InstanceMethod<&ShmSlotObject::copyTo>("copyTo"),
             InstanceMethod<&ShmSlotObject::debugFillPattern>(

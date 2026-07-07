@@ -22,10 +22,19 @@
 //
 // Protocol: see `types.ts` (RecorderWorkerIn / RecorderWorkerOut).
 
+import {
+  FINALIZE_METADATA_NAME,
+  FOVEA_PROFILE,
+  SESSION_METADATA_NAME,
+} from "./schema.js";
+
 export const WORKER_SOURCE = String.raw`
 const { parentPort, workerData } = require("node:worker_threads");
 const { open } = require("node:fs/promises");
 const { McapWriter } = require(workerData.mcapEntry);
+const FOVEA_PROFILE = ${JSON.stringify(FOVEA_PROFILE)};
+const SESSION_METADATA_NAME = ${JSON.stringify(SESSION_METADATA_NAME)};
+const FINALIZE_METADATA_NAME = ${JSON.stringify(FINALIZE_METADATA_NAME)};
 
 let handle = null;
 let writer = null;
@@ -71,10 +80,10 @@ parentPort.on("message", (message) => {
     enqueue(async () => {
       handle = await open(message.filePath, "w");
       writer = new McapWriter({ writable, chunkSize: message.chunkBytes });
-      await writer.start({ profile: "fovea", library: message.library });
+      await writer.start({ profile: FOVEA_PROFILE, library: message.library });
       if (message.session) {
         await writer.addMetadata({
-          name: "fovea:session",
+          name: SESSION_METADATA_NAME,
           metadata: new Map(Object.entries(message.session)),
         });
       }
@@ -132,7 +141,7 @@ parentPort.on("message", (message) => {
         finalized = true;
         if (message.session) {
           await writer.addMetadata({
-            name: "fovea:finalize",
+            name: FINALIZE_METADATA_NAME,
             metadata: new Map(Object.entries(message.session)),
           });
         }

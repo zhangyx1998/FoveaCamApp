@@ -14,7 +14,7 @@ import { Channel, topic } from "@lib/orchestrator/protocol";
 import type { ViewerFile } from "@lib/orchestrator/viewer-contract";
 import { createFoveaSink } from "@orchestrator/recorder";
 import { viewerSession } from "@orchestrator/sessions/viewer";
-import { allWorkloadSnapshots } from "@orchestrator/metering";
+import { workloadsSnapshot } from "@orchestrator/metering";
 import type { PlayerClock } from "@orchestrator/viewer/player";
 import { openFovea } from "@orchestrator/viewer/source";
 import { createEndpointPair, flush } from "./fake-endpoint";
@@ -158,7 +158,7 @@ describe("viewer session (C-8)", () => {
       "json",
     );
     // meter registered per file
-    expect(allWorkloadSnapshots()[`viewer:${fileId}`]).toBeDefined();
+    expect(workloadsSnapshot()[`viewer:${fileId}`]).toBeDefined();
     await h.dispose();
   });
 
@@ -196,7 +196,7 @@ describe("viewer session (C-8)", () => {
     expect(h.files()[fileId].positionNs).toBe(0.5 * NS);
 
     // meter counted ingest + emits
-    const meter = allWorkloadSnapshots()[`viewer:${fileId}`];
+    const meter = workloadsSnapshot()[`viewer:${fileId}`];
     expect(meter.inputs["cam"].count).toBe(6);
     expect(meter.outputs["frames"].count).toBe(7);
     expect(meter.outputs["telemetry"].count).toBe(2);
@@ -247,8 +247,8 @@ describe("viewer session (C-8)", () => {
     await flush();
     expect(a.fileId).not.toBe(b.fileId);
     expect(Object.keys(h.files()).sort()).toEqual([a.fileId, b.fileId].sort());
-    expect(allWorkloadSnapshots()[`viewer:${a.fileId}`]).toBeDefined();
-    expect(allWorkloadSnapshots()[`viewer:${b.fileId}`]).toBeDefined();
+    expect(workloadsSnapshot()[`viewer:${a.fileId}`]).toBeDefined();
+    expect(workloadsSnapshot()[`viewer:${b.fileId}`]).toBeDefined();
     await h.dispose();
   });
 
@@ -295,11 +295,11 @@ describe("viewer session (C-8)", () => {
     const h = harness();
     const file = await writeFixture(await tempRoot());
     const { fileId } = await h.call<{ fileId: string }>("open", file);
-    expect(allWorkloadSnapshots()[`viewer:${fileId}`]).toBeDefined();
+    expect(workloadsSnapshot()[`viewer:${fileId}`]).toBeDefined();
     await h.call("close", fileId);
     await flush();
     expect(h.files()[fileId]).toBeUndefined();
-    expect(allWorkloadSnapshots()[`viewer:${fileId}`]).toBeUndefined();
+    expect(workloadsSnapshot()[`viewer:${fileId}`]).toBeUndefined();
     await h.dispose();
   });
 
@@ -317,11 +317,11 @@ describe("viewer session (C-8)", () => {
       topic.command("viewer", "open"),
       file,
     );
-    expect(allWorkloadSnapshots()[`viewer:${fileId}`]).toBeDefined();
+    expect(workloadsSnapshot()[`viewer:${fileId}`]).toBeDefined();
 
     session.dispose(); // force-idle: unsubscribes everyone, runs idle()
     await session.drained();
-    expect(allWorkloadSnapshots()[`viewer:${fileId}`]).toBeUndefined();
+    expect(workloadsSnapshot()[`viewer:${fileId}`]).toBeUndefined();
   });
 
   it("commands on an unknown fileId reject instead of crashing the session", async () => {

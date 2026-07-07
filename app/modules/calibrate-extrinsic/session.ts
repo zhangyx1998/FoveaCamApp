@@ -59,7 +59,7 @@ export default function calibrateExtrinsicSession(): ServerSession<typeof calibr
     let trackers: Record<Role, MarkerTracker> | null = null;
     let servo: Servo | null = null;
     let previewLoop: ActuationLoop | null = null;
-    let previewTarget: { l: Pos; r: Pos } = { l: ORIGIN, r: ORIGIN };
+    let previewVolts: { l: Pos; r: Pos } = { l: ORIGIN, r: ORIGIN };
     let records: ExtrinsicRecord[] = [];
     let fittedL: ExtrinsicConversions | null = null;
     let fittedR: ExtrinsicConversions | null = null;
@@ -94,7 +94,7 @@ export default function calibrateExtrinsicSession(): ServerSession<typeof calibr
           overrideRight: () => s.state.override_right,
         });
       } else if (step === "PRV") {
-        previewLoop = startActuationLoop({ targetVolts: () => previewTarget, onVolts() {} });
+        previewLoop = startActuationLoop({ targetVolts: () => previewVolts, onVolts() {} });
       }
     }
 
@@ -220,7 +220,7 @@ export default function calibrateExtrinsicSession(): ServerSession<typeof calibr
           // orchestrator.md §7.1 S1b for the full note.
           const l = fittedL.A2V.predict(angle);
           const r = fittedR.A2V.predict(angle);
-          previewTarget = { l, r };
+          previewVolts = { l, r };
           // Round-trip each predicted volt back through V2A -> angle -> pixel,
           // for the "does this look right on the wide view" overlay.
           const cursor_l = undistort.position([fittedL.V2A.predict(l)], true)[0];

@@ -11,16 +11,9 @@
 // handling stays in `index.ts` (the sink layer), so the worker host code
 // stays a pure bytes-in/bytes-out pipeline like `stream-writer.ts`'s worker.
 
-/** Topic name of the single telemetry/metadata channel every recording
- *  carries — per-frame JSON documents (volt/angle/homography extras, plus
- *  seq/t/stream for correlation), the stuff the legacy `.meta` sidecar
- *  carried per line. */
-export const TELEMETRY_TOPIC = "telemetry";
+import { FOVEA_EXTENSION } from "./schema.js";
 
-/** On-disk extension for the new single-file container. The content is
- *  standard MCAP — the extension is a planner proposal (user may veto);
- *  generic `mcap` CLI / Python tooling reads these files as-is. */
-export const FOVEA_EXTENSION = ".fovea";
+export { FOVEA_EXTENSION, TELEMETRY_TOPIC } from "./schema.js";
 
 /**
  * Channel→writer mapping seam (recorder-container.md §2 follow-up 1).

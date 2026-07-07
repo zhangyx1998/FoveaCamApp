@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   allWorkloadSnapshots,
   registerWorkload,
+  workloadsSnapshot,
   workloadSnapshot,
 } from "@orchestrator/metering";
 
@@ -168,11 +169,15 @@ describe("registerWorkload — measure()", () => {
 });
 
 describe("registerWorkload — dispose and re-registration", () => {
+  it("keeps the old allWorkloadSnapshots export as an alias during C-P10", () => {
+    expect(allWorkloadSnapshots).toBe(workloadsSnapshot);
+  });
+
   it("dispose() removes the workload from allWorkloadSnapshots() and is idempotent", () => {
     const w = registerWorkload("test:dispose-1", { inputs: [], outputs: [] });
-    expect(allWorkloadSnapshots()["test:dispose-1"]).toBeDefined();
+    expect(workloadsSnapshot()["test:dispose-1"]).toBeDefined();
     w.dispose();
-    expect(allWorkloadSnapshots()["test:dispose-1"]).toBeUndefined();
+    expect(workloadsSnapshot()["test:dispose-1"]).toBeUndefined();
     expect(() => w.dispose()).not.toThrow();
   });
 

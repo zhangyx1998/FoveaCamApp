@@ -6,6 +6,7 @@ import type {
   SessionFrameSource,
 } from "@orchestrator/frame-transport";
 import type { FrameMeta, FramePayload } from "@lib/orchestrator/protocol";
+import { mergeFrameMeta } from "@lib/orchestrator/frame-payload";
 
 export type FakeWrite = {
   topic: string;
@@ -36,7 +37,7 @@ export class FakeFrameTransport implements FrameTransport {
     const payload: FramePayload = {
       shape,
       channels,
-      meta: { ...("meta" in source ? source.meta : undefined), ...meta },
+      meta: mergeFrameMeta("meta" in source ? source.meta : undefined, meta),
       shm: { seg: `/fake.${topic}`, gen: generation, seq: ++this.seq },
     };
     this.writes.push({ topic, bytes, payload });

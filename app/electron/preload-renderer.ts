@@ -12,6 +12,10 @@
 import path from "node:path";
 import { installBridge } from "./preload-bridge";
 import type { FramePayload } from "@lib/orchestrator/protocol";
+import {
+  withShmReadResult,
+  type ShmReadResult,
+} from "@lib/orchestrator/frame-payload";
 
 type ReaderHandle = object;
 type ReaderAddon = {
@@ -20,7 +24,7 @@ type ReaderAddon = {
     handle: ReaderHandle,
     dest: ArrayBuffer,
     lastSeq: bigint,
-  ): { seq: bigint; gen: number; retries: number; meta?: FramePayload["meta"] } | null;
+  ): ShmReadResult | null;
   close(handle: ReaderHandle): void;
 };
 
@@ -59,18 +63,11 @@ function readShmFrame(payload: FramePayload, dest: ArrayBuffer): FramePayload | 
   const lastSeq = payload.shm.seq > 0n ? payload.shm.seq - 1n : 0n;
   const result = reader.readInto(handle, dest, lastSeq);
   if (!result) return null;
-  return {
-    data: dest,
-    shape: payload.shape,
-    channels: payload.channels,
-    meta: { ...payload.meta, ...result.meta },
-    shm: {
-      ...payload.shm,
-      gen: result.gen,
-      seq: result.seq,
-      retries: result.retries,
-    },
-  };
+  return withShmReadResult(
+    payload as FramePayload & { shm: NonNullable<FramePayload["shm"]> },
+    dest,
+    result,
+  );
 }
 
 function handleReadMessage(port: MessagePort, data: unknown): void {

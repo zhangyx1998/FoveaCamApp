@@ -22,6 +22,7 @@
 // no per-key lazy registration to forget.
 
 import {
+  computed,
   customRef,
   onScopeDispose,
   reactive,
@@ -44,6 +45,7 @@ import {
   type StateOf,
   type TelemetryOf,
 } from "./protocol.js";
+import { frameByteLength, withFrameMeta } from "./frame-payload.js";
 import type { Span } from "./contracts.js";
 
 /** Rebuild the Mat shape (`FrameView`/vision ops expect) from a frame payload. */
@@ -67,17 +69,13 @@ const pendingShmReads = new Map<
 let shmReadSeq = 0;
 let shmPort: MessagePort | null = null;
 
-function frameByteLength(payload: FramePayload): number {
-  return payload.shape.reduce((p, n) => p * n, payload.channels);
-}
-
 function releaseShmBuffer(buffer: ArrayBuffer): void {
   const pool = shmPools.get(buffer.byteLength) ?? [];
   if (pool.length < 3) pool.push(buffer);
   shmPools.set(buffer.byteLength, pool);
 }
 
-function releaseShmPayload(payload: FramePayload | null): void {
+function releaseFrameBuffer(payload: FramePayload | null): void {
   if (payload?.shm && payload.data) releaseShmBuffer(payload.data);
 }
 
@@ -127,7 +125,7 @@ function ensureShmPort(): MessagePort | null {
   return shmPort;
 }
 
-function readShmFrameViaTransfer(payload: FramePayload): Promise<FramePayload | null> {
+function readShm(payload: FramePayload): Promise<FramePayload | null> {
   if (typeof window === "undefined") return Promise.resolve(null);
   const port = ensureShmPort();
   if (!port) {
@@ -145,12 +143,10 @@ function readShmFrameViaTransfer(payload: FramePayload): Promise<FramePayload | 
   });
 }
 
-async function materializeFramePayload(
-  p: FramePayload,
-): Promise<FramePayload | null> {
+async function materializeFrame(p: FramePayload): Promise<FramePayload | null> {
   if (p.data || !p.shm) return p;
   try {
-    return await readShmFrameViaTransfer(p);
+    return await readShm(p);
   } catch (error) {
     console.error("[shm] transfer-pool read failed", error);
     return null;
@@ -311,6 +307,26 @@ export type Session<C extends Contract> = {
   ): Promise<CommandsOf<C>[K]["ret"]>;
 };
 
+export function useFrames<C extends Contract, K extends string>(
+  session: Session<C>,
+  names: readonly K[],
+): Record<K, Readonly<Ref<FramePayload | null>>> {
+  const frames = {} as Record<K, Readonly<Ref<FramePayload | null>>>;
+  for (const name of names) frames[name] = session.frame(name);
+  return frames;
+}
+
+export function useDynamicFrame<C extends Contract>(
+  session: Session<C>,
+  name: Ref<string | null | undefined> | (() => string | null | undefined),
+): Readonly<Ref<FramePayload | null>> {
+  const read = typeof name === "function" ? name : () => name.value;
+  return computed(() => {
+    const key = read();
+    return key ? session.frame(key).value : null;
+  });
+}
+
 export type UseSessionOptions = {
   passive?: boolean;
 };
@@ -414,9 +430,9 @@ export function useSession<C extends Contract>(
           r!.value = null;
           return;
         }
-        void materializeFramePayload(pending).then((payload) => {
+        void materializeFrame(pending).then((payload) => {
           if (myToken !== token) {
-            releaseShmPayload(payload);
+            releaseFrameBuffer(payload);
             return;
           }
           if (payload?.meta) {
@@ -426,7 +442,7 @@ export function useSession<C extends Contract>(
                 payload.meta.tDisplay - payload.meta.tReceive,
               );
           }
-          releaseShmPayload(r!.value);
+          releaseFrameBuffer(r!.value);
           r!.value = payload;
           if (latest && !scheduled) {
             scheduled = true;
@@ -450,8 +466,7 @@ export function useSession<C extends Contract>(
             // Stamp the stream's address (session + frame channel) so display
             // components can act on "this stream" (projection windows,
             // multi-window.md req. 4) without prop-threading the names.
-            (payload.meta ??= {}).source = { session: name, frame: k };
-            latest = payload;
+            latest = withFrameMeta(payload, { source: { session: name, frame: k } });
             if (!scheduled) {
               scheduled = true;
               requestAnimationFrame(flush);

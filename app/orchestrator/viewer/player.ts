@@ -19,7 +19,7 @@
 // stale-async-completion class).
 //
 // The player knows nothing about sessions or transports — it gets
-// `publishFrame` / `publishTelemetry` / `onUpdate` hooks and a `WorkloadHandle`
+// `publishFrame` / `emitTelemetry` / `onUpdate` hooks and a `WorkloadHandle`
 // (`viewer:<fileId>`), keeping it unit-testable in isolation.
 
 import type { Mat } from "core/Vision";
@@ -51,7 +51,9 @@ export interface PlayerHooks {
   /** Publish one decoded display frame for a channel topic. */
   publishFrame(topic: string, mat: Mat<Uint8Array>, convertMs: number): void;
   /** Latest replayed telemetry-channel document (parsed JSON). */
-  publishTelemetry(doc: PlaybackDoc): void;
+  emitTelemetry?: (doc: PlaybackDoc) => void;
+  /** @deprecated use `emitTelemetry`; kept as an alias during C-P10. */
+  publishTelemetry?: (doc: PlaybackDoc) => void;
   /** Position/playing changed (throttled during playback). */
   onUpdate(positionNs: number, playing: boolean): void;
 }
@@ -120,7 +122,9 @@ export function createPlayer(
     workload.ingest(channel.topic);
     if (channel.messageEncoding === "json") {
       try {
-        hooks.publishTelemetry(JSON.parse(new TextDecoder().decode(msg.data)));
+        const emitTelemetry = hooks.emitTelemetry ?? hooks.publishTelemetry;
+        if (!emitTelemetry) throw new Error("viewer player missing telemetry hook");
+        emitTelemetry(JSON.parse(new TextDecoder().decode(msg.data)));
         workload.emit("telemetry");
       } catch {
         workload.drop("undecodable");

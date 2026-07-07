@@ -79,7 +79,7 @@ async function init(msg: Extract<WorkerIn, { type: "init" }>): Promise<void> {
     const channelId = await writer.registerChannel({
       schemaId,
       topic: ch.topic,
-      messageEncoding: "raw",
+      messageEncoding: ch.messageEncoding,
       metadata: new Map(Object.entries(ch.metadata)),
     });
     channelIds.set(ch.topic, channelId);

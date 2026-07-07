@@ -1,5 +1,34 @@
 # Planner triage (2026-07-07)
 
+## WAVE-1 LANDED + PLANNER-VERIFIED (2026-07-07, accepted)
+- **A (A-15):** A-P2 (tracking-single display vision → named frame
+  workers `tracking:center`/`tracking:fovea:{L,R}` with idle cancel),
+  A-P3 (Vue-free `fovea-pipeline` primitives, adopted tracking/manual/
+  disparity), A-P5 (`useFrames`/`useDynamicFrame`, 5 call sites), A-P9
+  (app-registry consistency test, explicit loader map kept), A-P14
+  (approved renames only; vetoes untouched).
+- **B (B-8):** B-P2 (12p vectors in `docs/schema/codec/` + `Codec/
+  Packed12.h`, consumed C++/TS/pyfovea), B-P3 (schema-as-code
+  `docs/schema/fovea.ts` + mirrored `pyfovea.schema`, writer/converter/
+  bench on real names), B-P7 (chunked host serial RX, byte trace behind
+  VERBOSE), **B-P8+B-P9 (firmware PendingAction helper + fixed Ring
+  queue — post-edit `pio run` SUCCESS, planner-verified: FLASH 89 420 B,
+  the compile gate B set as its DoD).**
+- **C (C-10):** C-P3 (shared `@lib/orchestrator/stats` window/rate
+  bookkeeping), C-P5 (`readSnapshot()` + deprecated `view()` alias),
+  C-P8 (process-local topic-key collision registry that THROWS +
+  costarring/liquid test), C-P10 (approved renames + aliases; vetoes
+  kept), C-P1 (`frame-payload` normalizer adopted at all 5 meta-merge
+  sites + precedence test).
+- **Planner sweep (authoritative, unsandboxed):** vitest **174/174**
+  (the 173/174 both A and C reported was mid-flight concurrent-codec
+  timing — `codec-fixtures.test.ts` passes clean now), vue-tsc 0,
+  `08-shm-ring.ts` shm smoke PASS (C's sandbox couldn't run it), pyfovea
+  28/28, `core make build` both runtimes, firmware `pio run` SUCCESS,
+  vite build + V11 triplet (0/0/0 on both preloads). Committed as the
+  wave-1 checkpoint.
+
+
 ## GREEN-LIT (non-breaking; planner authority) — dispatched in waves
 - A: P2, P3, P4, P5, P8, P9, P10, P11, P13, P14 (P14 minus two vetoed
   renames: keep `activeSubscribers`, keep `telemetrySnapshot` — load-

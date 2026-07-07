@@ -28,7 +28,14 @@ import { createRequire } from "node:module";
 import { registerWorkload, type WorkloadHandle } from "../metering.js";
 import { WORKER_SOURCE } from "./worker-source.js";
 import {
+  DEFAULT_CHUNK_BYTES,
+  DEFAULT_MAX_QUEUED_FRAMES,
+  TELEMETRY_MESSAGE_ENCODING,
+  TELEMETRY_SCHEMA_DATA,
+  TELEMETRY_SCHEMA_NAME,
   TELEMETRY_TOPIC,
+} from "./schema.js";
+import {
   type FinalizeStats,
   type RecorderWorkerIn,
   type RecorderWorkerOut,
@@ -54,8 +61,8 @@ export class McapWriterWorker {
    *  camera frame (≥ ~1.5 MiB) gets chunk ≈ 1 frame, the B-4 crash-loss
    *  default, while tiny telemetry messages coalesce into the next frame's
    *  chunk instead of bloating the chunk index. */
-  static readonly chunkBytes = 256 * 1024;
-  static readonly maxQueuedFrames = 8;
+  static readonly chunkBytes = DEFAULT_CHUNK_BYTES;
+  static readonly maxQueuedFrames = DEFAULT_MAX_QUEUED_FRAMES;
 
   private readonly worker: Worker;
   private readonly maxQueuedFrames: number;
@@ -98,14 +105,9 @@ export class McapWriterWorker {
     // The telemetry/metadata channel exists on every container — registered
     // up front so per-frame extras can ride along from the first frame.
     this.registerChannel(TELEMETRY_TOPIC, {
-      schema: "fovea.frame_meta/v1",
-      schemaData: JSON.stringify({
-        description:
-          "Per-frame JSON metadata document: {stream, seq, t, ...extras} — " +
-          "extras are the legacy .meta sidecar's `x` payload (volt/angle/affine). " +
-          "Correlate with the frame by stream+seq (or logTime).",
-      }),
-      messageEncoding: "json",
+      schema: TELEMETRY_SCHEMA_NAME,
+      schemaData: TELEMETRY_SCHEMA_DATA,
+      messageEncoding: TELEMETRY_MESSAGE_ENCODING,
       metadata: {},
     });
   }
