@@ -485,6 +485,7 @@ static FN(FrameResultPacket) {
     const auto &obj = arg.As<Napi::Object>();
     try {
       propertyMap(obj, "stream", result.stream, false);
+      propertyMap(obj, "frame_id", result.frame_id);
       if (obj.Has("t_trigger"))
         result.t_trigger =
             convert<Packet::Command::Timestamp>(obj.Get("t_trigger"));
@@ -503,6 +504,7 @@ static FN(FrameResultPacket) {
   }
   auto object = Napi::Object::New(env);
   object.Set("stream", Number::New(env, result.stream));
+  object.Set("frame_id", Number::New(env, result.frame_id));
   object.Set("t_trigger", convert(env, result.t_trigger));
   object.Set("t_exposure", convert(env, result.t_exposure));
   object.Set("left", mirrorPositionToArray(env, result.left));

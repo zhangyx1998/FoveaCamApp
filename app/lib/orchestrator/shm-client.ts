@@ -109,7 +109,6 @@ export interface ShmClient {
  *  tests can supply a fake preload loop. */
 export type ShmPortOpener = () => MessagePort | null;
 
-const MAX_POOLED_PER_SIZE = 3;
 const READ_TIMEOUT_MS = 250;
 
 const now = (): number =>
@@ -128,9 +127,43 @@ export function createShmClient(
   openPort: ShmPortOpener = defaultPortOpener,
 ): ShmClient {
   const createdAt = Date.now();
-  // Free-list of recyclable buffers, bucketed by byte length. Bounded per size
-  // so a burst of odd sizes can't grow it without limit.
-  const pools = new Map<number, ArrayBuffer[]>();
+  // Free-list of recyclable buffers, bucketed by byte length (C-15). Instead of
+  // a fixed cap, each size's free-list is bounded by that size's own high-water
+  // mark of concurrently-OUTSTANDING buffers (checked out, not yet recycled) —
+  // i.e. the live working set. N same-resolution previews hold ~2N same-size
+  // buffers (1 transferred to the preload mid-read + 1 displayed), so the pool
+  // auto-grows to retain exactly that and steady state never re-allocates. The
+  // old fixed `MAX_POOLED_PER_SIZE = 3` overflowed at N≥2 → a fresh multi-MB
+  // ArrayBuffer per frame → major GC → the manage-cameras ~1–2 s freeze.
+  interface SizeBucket {
+    free: ArrayBuffer[];
+    /** Buffers of this size currently checked out (not yet recycled). */
+    outstanding: number;
+    /** Peak `outstanding` ever seen — the free-list retention cap. */
+    hwm: number;
+  }
+  const pools = new Map<number, SizeBucket>();
+
+  function bucketFor(bytes: number): SizeBucket {
+    let b = pools.get(bytes);
+    if (!b) {
+      b = { free: [], outstanding: 0, hwm: 0 };
+      pools.set(bytes, b);
+    }
+    return b;
+  }
+
+  /** Drop the free-list of any size that is fully idle (no outstanding, no
+   *  in-flight) once a DIFFERENT size becomes active — a resolution/format
+   *  switch stops using the old size, so its retained buffers must not linger.
+   *  Done at checkout (not recycle): a same-size release→reacquire keeps
+   *  `outstanding` transiently 0 but must still reuse (the C-P2 pinned tests),
+   *  so idle same-size buckets are preserved; only a switch to another size
+   *  evicts the old one. */
+  function evictIdleSizesExcept(keep: number): void {
+    for (const [size, b] of pools)
+      if (size !== keep && b.outstanding === 0) pools.delete(size);
+  }
   const pending = new Map<
     number,
     {
@@ -165,13 +198,21 @@ export function createShmClient(
   let disposed = false;
 
   function recycle(buffer: ArrayBuffer): void {
-    const pool = pools.get(buffer.byteLength) ?? [];
-    if (pool.length < MAX_POOLED_PER_SIZE) pool.push(buffer);
-    pools.set(buffer.byteLength, pool);
+    const b = bucketFor(buffer.byteLength);
+    b.outstanding = Math.max(0, b.outstanding - 1);
+    // Retain up to the working-set high-water mark. `free.length < hwm` holds
+    // whenever `outstanding > 0` (total buffers of a size never exceed its hwm,
+    // since we only allocate on a miss = an empty free-list = all outstanding),
+    // so this never drops a buffer the steady state will need again.
+    if (b.free.length < b.hwm) b.free.push(buffer);
   }
 
   function checkout(bytes: number): ArrayBuffer {
-    const pooled = pools.get(bytes)?.pop();
+    evictIdleSizesExcept(bytes);
+    const b = bucketFor(bytes);
+    b.outstanding++;
+    if (b.outstanding > b.hwm) b.hwm = b.outstanding;
+    const pooled = b.free.pop();
     if (pooled) {
       counts.poolHits++;
       return pooled;

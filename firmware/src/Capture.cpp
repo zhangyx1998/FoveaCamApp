@@ -38,7 +38,24 @@ struct Request {
   uint8_t stream;
   uint8_t cameras;
   Microseconds pulse;
+  uint32_t frame_id; // stable capture identity (see frameCounter)
 };
+
+// Monotonic capture counter: one id assigned per accepted CMD_FRAME request,
+// reported in its FIN. 1-based (0 = none), wraps only at uint32 — the host's
+// stable frame-association key, independent of the uint16 protocol seq.
+static uint32_t frameCounter = 0;
+
+// Per-channel round-half-up mean of two mirror positions — the 2-point
+// exposure average (start latch + finish latch) reported in FIN.
+static MirrorPosition averagePosition(const MirrorPosition &a,
+                                      const MirrorPosition &b) {
+  MirrorPosition out;
+  for (uint8_t i = 0; i < 4; i++)
+    out.ch[i] = static_cast<uint16_t>(
+        (static_cast<uint32_t>(a.ch[i]) + b.ch[i] + 1) / 2);
+  return out;
+}
 
 template <typename T, uint8_t N> struct Ring {
   T items[N];
@@ -91,6 +108,14 @@ static Timestamp exposureLatchTime = 0;      // main-loop-only, once translated
 // guard, avoiding the deprecated volatile-struct-copy pattern.
 static MirrorPosition exposureLeft;
 static MirrorPosition exposureRight;
+// Finish endpoint of the 2-point exposure average: the DAC target latched at
+// each requested camera's strobe FALL (symmetric with the rise latch above),
+// last fall wins. Same ISR-write / main-loop-read discipline as
+// exposureLeft/Right — the volatile strobeHighMask store is the release
+// barrier. exposureFinishValid guards the average against a path with no fall.
+static MirrorPosition exposureFinishLeft;
+static MirrorPosition exposureFinishRight;
+static bool exposureFinishValid = false;
 // Bit set while the corresponding camera's strobe input is currently high.
 static volatile uint8_t strobeHighMask = 0;
 // Bit set once the corresponding camera has strobe-risen at least once this
@@ -138,6 +163,16 @@ static inline void onStrobeEdge(uint8_t bit, unsigned pin) {
       exposureLatched = true;
     }
   } else {
+    // Symmetric finish latch: snapshot the DAC target at each requested
+    // camera's strobe FALL. Written BEFORE clearing the level bit so the
+    // volatile strobeHighMask store below is the release barrier — once the
+    // main loop observes exposure-over, this finish position is already
+    // written. Each requested fall overwrites, so the last one (exposure fully
+    // over) wins; this is the 2-point average's finish endpoint.
+    if (exposureLatched && (awaitingFallMask & bit)) {
+      Streams::snapshot(exposureFinishLeft, exposureFinishRight);
+      exposureFinishValid = true;
+    }
     strobeHighMask &= ~bit;
   }
 }
@@ -151,8 +186,17 @@ static void onStrobeRight() {
 }
 
 static void sendResult(const Request &req) {
-  FrameResult result{req.stream, triggerStart, exposureLatchTime,
-                     exposureLeft, exposureRight};
+  // 2-point exposure average (start latch + finish latch). If no finish was
+  // latched (should not happen on the success path — exposure-over requires
+  // every requested camera to have fallen), fall back to the start value.
+  MirrorPosition left =
+      exposureFinishValid ? averagePosition(exposureLeft, exposureFinishLeft)
+                          : exposureLeft;
+  MirrorPosition right =
+      exposureFinishValid ? averagePosition(exposureRight, exposureFinishRight)
+                          : exposureRight;
+  FrameResult result{req.stream,       req.frame_id, triggerStart,
+                     exposureLatchTime, left,         right};
   auto packet = Frame::Create::FIN(req.seq);
   packet.setData(&result, sizeof(result));
   Protocol::send(packet);
@@ -175,6 +219,7 @@ static void startNext() {
   triggerDropped = false;
   exposureLatched = false;
   exposureLatchTranslated = false;
+  exposureFinishValid = false;
   // Compound read-modify-write on ISR-shared volatiles: without disabling
   // interrupts, an onStrobeEdge() firing between the load and the store
   // could have its own update overwritten by this one (§9 FW3b).
@@ -217,7 +262,7 @@ bool enqueue(Protocol::Sequence seq, uint8_t stream, uint8_t cameras,
     return false;
   }
   accepted.queue_position = queue.size();
-  queue.push(Request{seq, stream, cameras, pulse});
+  queue.push(Request{seq, stream, cameras, pulse, ++frameCounter});
   Streams::setPendingFrame(stream, true);
   return true;
 }

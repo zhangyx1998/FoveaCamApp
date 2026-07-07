@@ -94,6 +94,34 @@ ratified first.
 **WAVE 3+**: capture/CV producer threads (1d), interleaved v2 backlog, live HIL
 verification.
 
+### WAVE 1 — LANDED + planner-verified (2026-07-07; Opus fleet)
+- **A-20** (WS3 3a + WS2 2a): TitleBar full-screen fix — `BASE_HEIGHT`, both the
+  `height` and `style()` computeds guarded (`|| BASE_HEIGHT` catches the
+  full-screen overlay `height:0`; fixed base + `leftInset 0` + full width in
+  full screen). **User visual check of both transitions still pending.** Window-
+  ownership substrate: `owner`/`key` on descriptor+managed handle, `childrenOf`,
+  `onOwnerClose: cascade|survive` (all existing classes `survive`), recursive
+  cascade in `onWindowClosed`, keyed `toggle` primitive — plumbing + tests only
+  (2b is the first `owner`-setter). +6 tests.
+- **B-12** (WS4 4a): FIN now carries `uint32 frame_id` (monotonic, 1-based) +
+  exposure-AVERAGED mirror voltage — symmetric ISR strobe-fall latch
+  (snapshot before the `strobeHighMask` release-barrier store), per-channel
+  round-half-up mean, start-only fallback; threaded host-side (Controller.cpp +
+  `.d.ts`). FIN payload spec ratified into `synced-capture.md`. `frame_id`→
+  recorder/UI deferred to 4b. Compile-verified only (Stage F for live scope).
+- **C-15** (WS1 1a): `shm-client.ts` pool auto-sizes per byte-size to the live
+  working-set high-water mark (kills the per-frame multi-MB alloc = the
+  manage-cameras freeze); old-size buckets evicted at the next different-size
+  checkout (ratified deviation — the literal `outstanding==0` trigger broke the
+  pinned single-stream reuse tests). 9 pinned + 2 new tests. Renderer-only.
+- **Planner sweep (authoritative):** vue-tsc 0, vitest **226/226**, vite build,
+  renderer zero-core / orchestrator zero-Vue, V11 0/0/0, `08-shm-ring` PASS;
+  native (B) re-verified: `pio run` SUCCESS (FLASH 89676 B), `core make build`
+  both runtimes, `02-serial-protocol` green. Diffs verified against logs.
+  Committed as the WAVE 1 checkpoint. **Pending:** user title-bar visual check;
+  WAVE 2 (WS1 1b C++ pipe architecture — needs the design decisions ratified;
+  C standing by), WS2 2b debug sub-window, WS4 4b frame↔voltage downstream.
+
 ## WS1 design — open decisions to ratify before WAVE 2
 - Publisher-thread **granularity**: per-pipe vs one publisher fanning a
   producer's output to N consumers.

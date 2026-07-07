@@ -4,7 +4,8 @@
 // drain-aware switching, busy refusal, the profiler singleton, and manifest
 // collection.
 
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { WINDOWS } from "@lib/windows";
 import {
   WindowManager,
   type DrainResult,
@@ -25,6 +26,12 @@ class FakeWindow implements ManagedWindow {
   }
   get fileKey() {
     return this.desc.fileKey;
+  }
+  get owner() {
+    return this.desc.owner;
+  }
+  get key() {
+    return this.desc.key;
   }
   focus() {
     this.focused++;
@@ -330,4 +337,80 @@ describe("WindowManager", () => {
     expect(fresh.spawned.filter((w) => w.class === "viewer").length).toBe(1);
     expect(fresh.spawned[0].desc.fileKey).toBe("/tmp/a.fovea");
   });
+
+  // --- window-ownership foundation (WS2 2a) -------------------------------
+  // No owner-setter ships until 2b, so these drive owned sub-windows through
+  // the `toggle` opener (which accepts an `owner` in its descriptor).
+
+  const child = (
+    manager: WindowManager,
+    key: string,
+    owner: ManagedWindow,
+  ): FakeWindow =>
+    manager.toggle(key, {
+      class: "projection",
+      entry: "windows/projection.html",
+      owner,
+    }) as FakeWindow;
+
+  it("childrenOf walks the windows owned by a parent", async () => {
+    const { manager } = harness();
+    await manager.openApp("tracking-single");
+    const app = manager.appWindow()!;
+    const a = child(manager, "dbg:a", app);
+    const b = child(manager, "dbg:b", app);
+    const kids = manager.childrenOf(app);
+    expect(kids).toHaveLength(2);
+    expect(kids).toContain(a);
+    expect(kids).toContain(b);
+    expect(manager.childrenOf(a)).toEqual([]); // no grandchildren
+  });
+
+  it("survive-policy children stay open when their owner closes (default)", async () => {
+    const { manager } = harness();
+    await manager.openApp("tracking-single");
+    const app = manager.appWindow()! as FakeWindow;
+    const c = child(manager, "proj", app); // projection = survive
+    app.close();
+    expect(c.destroyed).toBe(false);
+  });
+
+  it("cascade-policy children close with their owner (and grandchildren too)", async () => {
+    // Temporarily make `projection` a cascade class (2b's debug drawer will be
+    // the real cascade class); restored in afterEach below.
+    WINDOWS.projection.onOwnerClose = "cascade";
+    const { manager } = harness();
+    await manager.openApp("tracking-single");
+    const app = manager.appWindow()! as FakeWindow;
+    const c = child(manager, "dbg", app);
+    const grandchild = child(manager, "dbg2", c); // owned by the child
+    expect(c.destroyed).toBe(false);
+    app.close();
+    expect(c.destroyed).toBe(true); // cascaded with the app
+    expect(grandchild.destroyed).toBe(true); // and the grandchild with it
+  });
+
+  it("toggle opens on first call and closes on the second (same key)", () => {
+    const { manager, spawned } = harness();
+    const w = manager.toggle("k", { class: "projection", entry: "e" }) as FakeWindow;
+    expect(w).not.toBeNull();
+    expect(spawned.length).toBe(1);
+    expect(manager.toggle("k", { class: "projection", entry: "e" })).toBeNull();
+    expect(w.destroyed).toBe(true);
+  });
+
+  it("toggle re-opens a fresh window after being toggled closed", () => {
+    const { manager, spawned } = harness();
+    manager.toggle("k", { class: "projection", entry: "e" });
+    manager.toggle("k", { class: "projection", entry: "e" }); // close
+    const again = manager.toggle("k", { class: "projection", entry: "e" });
+    expect(again).not.toBeNull();
+    expect(spawned.length).toBe(2); // dedupe held while open; two distinct spawns
+  });
+});
+
+// Restore any per-test WINDOWS policy mutation (the cascade test flips
+// `projection` to cascade) so class metadata stays pristine for other suites.
+afterEach(() => {
+  WINDOWS.projection.onOwnerClose = "survive";
 });

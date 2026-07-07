@@ -36,8 +36,19 @@ function getRect(): Partial<DOMRect> {
 const rect = ref<Partial<DOMRect>>(getRect());
 const fullscreen = ref(false);
 
-const height = computed(
-  () => (rect.value?.height ?? 40) + (rect.value?.top ?? 0),
+// Base bar height when the Window Controls Overlay reports nothing usable.
+const BASE_HEIGHT = 40;
+
+// UI-1 (hil-findings.md): keep the bar VISIBLE in full screen (VSCode-style).
+// On macOS full screen `getTitlebarAreaRect()` reports `height: 0`, and the old
+// `0 ?? 40` only caught null/undefined — so the bar collapsed to 0px and the
+// content pane covered it. Full screen → fixed base height, full-width (no
+// traffic-light reserve). Windowed → overlay height (`|| BASE_HEIGHT` so a
+// transient 0 during the transition falls back) plus its top offset.
+const height = computed(() =>
+  fullscreen.value
+    ? BASE_HEIGHT
+    : (rect.value?.height || BASE_HEIGHT) + (rect.value?.top ?? 0),
 );
 
 watch(height, (h) => emit("height", h), { immediate: true });
@@ -51,11 +62,22 @@ const leftInset = computed(() =>
 );
 
 function style(): Record<string, string> {
-  const { height = 40, top = 0 } = rect.value;
+  // Full screen: fixed base height, full-width, no top reserve (same guard as
+  // the `height` computed — UI-1). Windowed: overlay geometry, with `|| BASE`
+  // so a transient 0 during the transition doesn't collapse the bar.
+  if (fullscreen.value) {
+    return {
+      height: BASE_HEIGHT + "px",
+      paddingTop: "0px",
+      fontSize: BASE_HEIGHT * 0.4 + "px",
+    };
+  }
+  const { height: h = BASE_HEIGHT, top = 0 } = rect.value;
+  const base = h || BASE_HEIGHT;
   return {
-    height: height + top + "px",
+    height: base + top + "px",
     paddingTop: top + "px",
-    fontSize: height * 0.4 + "px",
+    fontSize: base * 0.4 + "px",
   };
 }
 

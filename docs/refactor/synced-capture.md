@@ -200,10 +200,16 @@ FIXED_SIZE_PACKET(Frame, CMD_FRAME) {          // GET payload
 
 PACKED(FrameResult) {                          // FIN payload
   uint8_t stream;
+  uint32_t frame_id;     // firmware-monotonic capture id (1-based; 0=none):
+                         // stable frame identity, bound to the camera frame
+                         // via t_exposure; distinct from the uint16 seq (B-12)
   uint64_t t_trigger;    // MCU µs: trigger rise
   uint64_t t_exposure;   // MCU µs: strobe rise (exposure start)
-  Command::MirrorPosition left;   // latched at exposure start
-  Command::MirrorPosition right;
+  Command::MirrorPosition left;   // exposure-AVERAGED: per-channel round-half-up
+  Command::MirrorPosition right;  // mean of the DAC target latched at strobe
+                                  // rise and strobe fall (symmetric ISR latch),
+                                  // replacing the former start-only value; falls
+                                  // back to start if no fall latched (B-12)
 };
 ```
 

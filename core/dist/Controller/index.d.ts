@@ -69,8 +69,15 @@ declare module "core/Controller" {
    *  docs/refactor/synced-capture.md §9 FW1). */
   export type FrameResult = {
     stream: number;
+    /** Firmware-monotonic capture id (1-based; 0 = none). Stable frame
+     *  identity bound to the camera frame via t_exposure/timestamp; distinct
+     *  from the request `seq`. Consumed downstream by the recorder/UI. */
+    frame_id: number;
     t_trigger: bigint;
     t_exposure: bigint;
+    /** Exposure-AVERAGED mirror position (per-channel round-half-up mean of the
+     *  strobe-rise and strobe-fall DAC targets) — replaces the former
+     *  start-only latched value. */
     left: AnalogChannels;
     right: AnalogChannels;
   };

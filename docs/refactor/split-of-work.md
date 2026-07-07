@@ -148,31 +148,7 @@ hardware-dependent behavior verified without a real rig run.
 
 - **(A-19 wave-4 accepted & archived 2026-07-07 → proposals/TRIAGE.md.)**
 
-- **A-20 — refactor WAVE 1: title-bar full-screen fix + window-ownership
-  foundation.** Plan: `refactor-plan.md` WS3/WS2. Two independent A-owned pieces.
-  **(1) UI-1 title bar in full screen (`app/src/components/TitleBar.vue`).**
-  Symptom + root cause in `hil-findings.md` UI-1: bar height = `(rect.height ??
-  40) + (rect.top ?? 0)`; macOS full screen makes `getTitlebarAreaRect().height`
-  = 0 and `0 ?? 40` stays 0 → bar collapses. Fix VSCode-style: keep the bar
-  VISIBLE in full screen with a stable base height; reserve traffic-light space
-  only when windowed. Windowed: `height = (rect.height || 40) + rect.top`,
-  `leftInset = rect.left` (already correct). Full screen: fixed base height,
-  `leftInset = 0`, full-width bar. Verify BOTH transitions (needs user UI check —
-  note that in the log).
-  **(2) WS2 2a window-ownership foundation** (`app/electron/window-manager.ts`,
-  `app/lib/windows.ts`). Per `project-multi-subwindow-per-app`: keep the flat
-  `WINDOWS` table; add (a) an `owner?: ManagedWindow` parent-pointer on
-  `ManagedWindow` + a `childrenOf(win)` walk in the manager; (b) an
-  `onOwnerClose: "cascade" | "survive"` policy field on `WindowSpec` (existing
-  classes: projection/viewer = `survive`, welcome/app/profiler = n/a or
-  `survive`; the new debug class in 2b = `cascade`); wire `onWindowClosed` to
-  cascade-close children whose class is `cascade`; (c) a keyed **toggle** helper
-  modeled on `openViewer`'s `fileKey` dedupe (open-or-focus, plus a close path) —
-  a reusable primitive for 2b's drawer toggle. NO new window class or debug
-  window yet (that's 2b) — just the substrate + unit tests (window-manager suite).
-  Standing gates (vue-tsc 0, vitest, vite build, bundle scans, V11). Never
-  commit. Log ≤15 lines.
-  - Log:
+- **(A-20 refactor wave-1 accepted & archived 2026-07-07 → refactor-plan.md.)**
 
 ## Coder B — Native core, protocol & firmware
 
@@ -187,30 +163,7 @@ control is the planner's review loop.
 
 - **(B-11 wave-3 accepted & archived 2026-07-07 → proposals/TRIAGE.md.)**
 
-- **B-12 — refactor WAVE 1: FIN exposure-averaged MEMS voltage + frame-
-  association key.** Plan: `refactor-plan.md` WS4 4a; spec
-  `project-fin-exposure-voltage` + `docs/refactor/synced-capture.md`. Firmware +
-  protocol, HARDWARE-GATED for live verify (Stage F) — this wave is
-  compile-verified only.
-  **(1) Exposure-averaged voltage.** In the firmware Capture engine
-  (`firmware/include/Capture.h` / its .cpp — the CMD_FRAME/CMD_TRIGGER
-  trigger/strobe state machine that emits FIN): sample the MEMS voltage(s) at
-  exposure START and at exposure FINISH and report their **2-point average** in
-  the FIN completion, replacing the current initial-voltage value. (Read the MEMS
-  set/DAC state at both edges; average per mirror.) Preserve the existing FIN
-  Teensy-timestamp fields.
-  **(2) Frame-association key.** Extend the FIN payload so the reported voltages
-  are tightly bound to THIS request's frame — carry the per-request `seq`
-  (already present) PLUS whatever token the host needs to bind voltage→exact
-  frame downstream (the recorder/UI will consume it in 4b). Add the protocol
-  payload field(s) in `lib/Protocol` (host+MCU shared lib) — additive, keep
-  `02-serial-protocol.ts` green. Document the new FIN payload shape in
-  `synced-capture.md` (planner will ratify wording — propose it in your log).
-  DoD: `pio run` SUCCESS (report FLASH size), `core make build` both runtimes,
-  `02-serial-protocol.ts` green (host-side, no device). Live scope/rig
-  verification is Stage F (do NOT claim hardware-verified). Never commit. Log
-  ≤15 lines; note the FIN payload shape you chose for planner ratification.
-  - Log:
+- **(B-12 refactor wave-1 accepted & archived 2026-07-07 → refactor-plan.md.)**
 
 - **(B-5 accepted & archived 2026-07-06 → recorder-container.md §2b.)**
 
@@ -235,30 +188,7 @@ session.
 
 - **(C-14 wave-4 accepted & archived 2026-07-07 → proposals/TRIAGE.md.)**
 
-- **C-15 — refactor WAVE 1: SHM consumer reuses pre-allocated buffers (kill the
-  per-frame allocation).** Plan: `refactor-plan.md` WS1 1a; spec
-  `project-shm-consumer-reuse-buffer` + `hil-findings.md` (manage-cameras freeze).
-  Root cause: `app/lib/orchestrator/shm-client.ts` recycles via a shared pool
-  capped at `MAX_POOLED_PER_SIZE = 3` per byte-size, but N same-resolution
-  previews hold ~2N same-size buffers concurrently (1 transferred to the preload
-  mid-read + 1 displayed), so `checkout()` allocates a fresh multi-MB
-  `ArrayBuffer` every cycle → periodic major GC → the ~1–2 s preview freeze.
-  Fix: make the consumer REUSE pre-allocated buffers so steady state never
-  allocates. Honor the transfer constraint (the buffer is detached to the preload
-  during a read) — so per stream needs ≥2 buffers (ping-pong). Either
-  **per-consumer double-buffers** (each frame subscription owns 2 buffers sized to
-  its frame, reallocating only on a resolution change) OR **auto-size the shared
-  pool** to the live in-flight+displayed count (not a fixed 3). Preload side is
-  already correct (`readShmFrame` → `reader.readInto(handle, dest)` reuses the
-  passed buffer) — do NOT change it. Keep the `shmReads` allocations/poolHits
-  telemetry so the fix is measurable (steady-state `allocations` → ~0 after warm
-  up). This is the first WS1 step; the C++ publisher-thread architecture (1b/1c)
-  is a LATER wave — do NOT start it here.
-  DoD: standing gates + `08-shm-ring.ts` PASS (planner re-runs unsandboxed —
-  note if your sandbox blocks `shm_open`), the buffer-ownership tests still pin
-  success/null/timeout/stale, + a test proving no steady-state allocation for
-  N≥3 same-size streams. Never commit. Log ≤15 lines.
-  - Log:
+- **(C-15 refactor wave-1 accepted & archived 2026-07-07 → refactor-plan.md.)**
 
 - **(history) C-6 — workload metering core (accepted; spec:
   docs/refactor/workload-metering.md — read it fully first).**

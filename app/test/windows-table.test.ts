@@ -37,6 +37,15 @@ describe("WINDOWS taxonomy table", () => {
       expect(WINDOWS[cls].dedupe).toBe(cls === "viewer" ? "fileKey" : undefined);
   });
 
+  it("declares a valid onOwnerClose policy for every class (all survive pre-2b)", () => {
+    // WS2 2a substrate: existing classes survive their owner's close; the
+    // cascade policy arrives with 2b's debug sub-window class.
+    for (const cls of CLASSES) {
+      expect(["cascade", "survive"]).toContain(WINDOWS[cls].onOwnerClose);
+      expect(WINDOWS[cls].onOwnerClose).toBe("survive");
+    }
+  });
+
   it("pairs the sandboxed preload with the profiler and the reader preload elsewhere", () => {
     for (const cls of CLASSES) {
       const spec = WINDOWS[cls];

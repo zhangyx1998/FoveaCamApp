@@ -136,12 +136,22 @@ FIXED_SIZE_PACKET(Frame, CMD_FRAME) {
 // ACK payload for Frame: position in the per-stream FIFO queue (0 = next).
 PACKED(FrameAccepted) { uint8_t queue_position; };
 
-// FIN payload for Frame: latched at exposure start (strobe rising edge).
+// FIN payload for Frame. Timestamps are latched at their physical edges;
+// left/right are the mirror position AVERAGED over the exposure (see below).
 PACKED(FrameResult) {
   uint8_t stream;
+  // Firmware-monotonic capture counter (1-based; 0 = none). Stable frame
+  // identity: flows FIN -> host -> recorder per-frame metadata -> UI, bound to
+  // the camera frame via the t_exposure/timestamp pairing. Distinct from the
+  // uint16 protocol `seq` (which is per-request and wraps at 65536).
+  uint32_t frame_id;
   Timestamp t_trigger;  // MCU us: trigger rise
   Timestamp t_exposure; // MCU us: strobe rise (exposure start)
-  MirrorPosition left;  // latched at exposure start
+  // Exposure-AVERAGED mirror position: per-channel round-half-up mean of the
+  // DAC target latched at strobe rise (exposure start) and at strobe fall
+  // (exposure finish) — a better estimate of where the mirror was during the
+  // frame than the start-only value this replaces.
+  MirrorPosition left;
   MirrorPosition right;
 };
 

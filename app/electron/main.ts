@@ -364,6 +364,8 @@ function spawnWindow(desc: WindowDescriptor): ManagedWindow {
     class: desc.class,
     appId: desc.appId,
     fileKey: desc.fileKey,
+    owner: desc.owner, // WS2 2a: parent pointer (set by 2b's sub-window opener)
+    key: desc.key, // WS2 2a: toggle dedupe key
     focus: () => {
       if (win.isMinimized()) win.restore();
       win.focus();

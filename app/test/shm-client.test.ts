@@ -193,4 +193,70 @@ describe("shm-client transfer pool", () => {
     expect(await p2).toBeNull();
     expect(client.stats().latencyMs.count).toBe(1);
   });
+
+  it("C-15: N=3 same-size streams — pool auto-sizes, ZERO steady-state allocation", async () => {
+    const port = fakePort();
+    const client = createShmClient(() => port as unknown as MessagePort);
+    const N = 3;
+    const WORKING_SET = 2 * N; // per stream: 1 in-flight (transferred) + 1 displayed
+
+    // One cycle = check out `count` same-size buffers CONCURRENTLY (the real
+    // peak is N in-flight + N displayed), reply success to each, and return the
+    // materialized payloads (buffers now "displayed", still outstanding).
+    async function acquire(count: number): Promise<FramePayload[]> {
+      const base = port.posted.length;
+      const reads = Array.from({ length: count }, () => client.read(shmPayload()));
+      for (let i = base; i < base + count; i++) {
+        const req = port.posted[i];
+        reply(port, { id: req.id, payload: { ...shmPayload(), data: req.buffer } });
+      }
+      return Promise.all(reads) as Promise<FramePayload[]>;
+    }
+
+    // Warm up: acquire the full 2N working set at once, then release it. The
+    // pool auto-grows its cap to the high-water mark (2N) — one alloc per
+    // working-set buffer, nothing more.
+    const warm = await acquire(WORKING_SET);
+    const warmupAllocs = client.stats().allocations;
+    expect(warmupAllocs).toBe(WORKING_SET);
+    warm.forEach((p) => client.release(p));
+
+    // Steady state: reacquire + release the same working set repeatedly. Every
+    // checkout must hit the retained pool — allocations must NOT climb. (Under
+    // the old fixed cap-3 this reallocates 2N-3 buffers each round.)
+    const ROUNDS = 5;
+    for (let r = 0; r < ROUNDS; r++) {
+      const bufs = await acquire(WORKING_SET);
+      bufs.forEach((p) => client.release(p));
+    }
+    expect(client.stats().allocations).toBe(warmupAllocs); // delta 0
+    expect(client.stats().poolHits).toBe(WORKING_SET * ROUNDS); // all reused
+  });
+
+  it("C-15: a resolution/format switch releases the old size's retained buffers", async () => {
+    const port = fakePort();
+    const client = createShmClient(() => port as unknown as MessagePort);
+    const sizeA = (): FramePayload => ({ shape: [2, 2], channels: 1, shm: { seg: "a", gen: 1, seq: 5n } });
+    const sizeB = (): FramePayload => ({ shape: [4, 4], channels: 1, shm: { seg: "b", gen: 1, seq: 5n } });
+
+    // Read one frame of `mk`'s size and return the materialized payload.
+    const readOne = async (mk: () => FramePayload): Promise<FramePayload> => {
+      const p = client.read(mk());
+      const req = port.posted[port.posted.length - 1];
+      reply(port, { id: req.id, payload: { ...mk(), data: req.buffer } });
+      return (await p) as FramePayload;
+    };
+
+    // Warm size A and release it → A's buffer sits in A's free-list.
+    client.release(await readOne(sizeA));
+    const allocsAfterA = client.stats().allocations;
+
+    // Switch to size B (different byte length): the B checkout evicts idle A.
+    client.release(await readOne(sizeB));
+
+    // Back to A: its buffer was freed on the switch, so A must RE-allocate
+    // (a poolHit here would mean the old size lingered indefinitely).
+    await readOne(sizeA);
+    expect(client.stats().allocations).toBe(allocsAfterA + 2); // +1 for B, +1 re-alloc A
+  });
 });

@@ -47,6 +47,13 @@ export interface WindowDescriptor {
   /** Viewer windows: the opened `.fovea` path — the one-window-per-file
    *  dedupe key (recorder-container.md §4). */
   fileKey?: string;
+  /** WS2 2a: the parent window this one belongs to (a sub-window of an app).
+   *  When the owner closes, this window's class `onOwnerClose` policy decides
+   *  whether it cascades closed or survives. Undefined for top-level windows. */
+  owner?: ManagedWindow;
+  /** WS2 2a: dedupe key for the `toggle` primitive (2b's debug drawer) — the
+   *  generalized form of `fileKey`'s open-or-focus dedupe, plus a close path. */
+  key?: string;
 }
 
 /** The window handle surface the manager needs — main.ts adapts a real
@@ -56,6 +63,10 @@ export interface ManagedWindow {
   readonly appId?: string;
   /** Mirror of `WindowDescriptor.fileKey` (viewer windows only). */
   readonly fileKey?: string;
+  /** Mirror of `WindowDescriptor.owner` (sub-windows only) — WS2 2a. */
+  readonly owner?: ManagedWindow;
+  /** Mirror of `WindowDescriptor.key` (toggle-managed windows) — WS2 2a. */
+  readonly key?: string;
   focus(): void;
   close(): void;
   isDestroyed(): boolean;
@@ -113,9 +124,21 @@ export class WindowManager {
     return this.byClass("app")[0] ?? null;
   }
 
+  /** Open sub-windows owned by `win` (WS2 2a). */
+  childrenOf(win: ManagedWindow): ManagedWindow[] {
+    return this.open().filter((w) => w.owner === win);
+  }
+
   /** Main.ts must call this from the BrowserWindow "closed" event. */
   onWindowClosed(win: ManagedWindow): void {
     this.windows.delete(win);
+    // WS2 2a: cascade-close owned children whose CLASS opts into it. A
+    // `survive` child (projection/viewer default) stays open with its frozen
+    // last frame; a `cascade` child (2b's debug drawer) closes with its owner.
+    // Closing a child re-enters here for it, so grandchildren cascade too.
+    for (const child of this.childrenOf(win))
+      if (WINDOWS[child.class].onOwnerClose === "cascade" && !child.isDestroyed())
+        child.close();
     // Welcome rule: whenever zero app windows are open, the welcome window
     // comes back — but only when an APP window closing got us there (closing
     // welcome itself must not respawn it under the user's cursor), and not
@@ -183,6 +206,23 @@ export class WindowManager {
         ...opts,
       }),
     );
+  }
+
+  /**
+   * Keyed toggle primitive (WS2 2a) — the reusable substrate for 2b's debug
+   * drawer. The generalized form of `openViewer`'s dedupe, plus a close path:
+   * if a window with `key` is already open, close it (toggle off) and return
+   * null; otherwise spawn it (toggle on) and return the new window. The caller
+   * supplies the full descriptor (class, entry, `owner`, …); `key` is stamped
+   * on for the dedupe and cascade lifecycle.
+   */
+  toggle(key: string, desc: Omit<WindowDescriptor, "key">): ManagedWindow | null {
+    const existing = this.open().find((w) => w.key === key);
+    if (existing) {
+      existing.close();
+      return null;
+    }
+    return this.track(this.deps.spawn({ ...desc, key }));
   }
 
   /**

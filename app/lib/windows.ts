@@ -110,6 +110,11 @@ export interface WindowSpec {
   /** `WindowDescriptor` field that dedupes instances (viewer → one per file);
    *  omitted for 0..N classes with no dedupe. */
   dedupe?: "fileKey";
+  /** What happens to a window of this class when its `owner` window closes
+   *  (WS2 2a, project-multi-subwindow-per-app): `cascade` = close with the
+   *  owner (2b's debug drawer); `survive` = stay open (projection/viewer keep
+   *  their frozen last frame, §5.3). Ownerless windows ignore this. */
+  onOwnerClose: "cascade" | "survive";
   /** Static entry HTML (relative to the renderer root). App windows derive a
    *  per-id entry instead — see `entryFor`. */
   entry?: string;
@@ -125,6 +130,7 @@ export const WINDOWS: Record<WindowClass, WindowSpec> = {
     singleton: true,
     exclusive: false,
     countsForWelcome: false,
+    onOwnerClose: "survive",
     entry: "windows/welcome.html",
     // Live annotated previews need the shm reader (multi-window.md §2).
     preload: "renderer",
@@ -137,6 +143,7 @@ export const WINDOWS: Record<WindowClass, WindowSpec> = {
     singleton: false,
     exclusive: true,
     countsForWelcome: true,
+    onOwnerClose: "survive",
     preload: "renderer",
     sandbox: false,
     title: "FoveaCam Duo",
@@ -146,6 +153,7 @@ export const WINDOWS: Record<WindowClass, WindowSpec> = {
     singleton: true,
     exclusive: false,
     countsForWelcome: false,
+    onOwnerClose: "survive",
     entry: "windows/profiler.html",
     // Sandboxed, bridge-only — no shm reader (stats over the bridge).
     preload: "profiler",
@@ -157,6 +165,7 @@ export const WINDOWS: Record<WindowClass, WindowSpec> = {
     singleton: false,
     exclusive: false,
     countsForWelcome: false,
+    onOwnerClose: "survive",
     entry: "windows/projection.html",
     preload: "renderer",
     sandbox: false,
@@ -167,6 +176,7 @@ export const WINDOWS: Record<WindowClass, WindowSpec> = {
     singleton: false,
     exclusive: false,
     countsForWelcome: false,
+    onOwnerClose: "survive",
     dedupe: "fileKey",
     entry: "windows/viewer.html",
     preload: "renderer",
