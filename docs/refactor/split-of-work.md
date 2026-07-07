@@ -162,7 +162,18 @@ hardware-dependent behavior verified without a real rig run.
   `telemetrySnapshot` — vetoed). Wave 2 (P4, P8, P10, P11, P13) comes
   after this lands. DoD: standing gates; every behavior-carrying
   refactor keeps or extends its tests; logs per item.
-  - Log:
+  - Log: A-P2: tracking-single center/L/R display vision now uses named
+    frame workers (`tracking:center`, `tracking:fovea:{L,R}`) with idle cancel.
+    A-P3: added small Vue-free `fovea-pipeline` primitives; adopted in
+    tracking/manual/disparity; new primitive tests.
+    A-P5: added `useFrames`/`useDynamicFrame`; adopted in manual,
+    tracking, disparity, calibrate-distortion, welcome.
+    A-P9: added app-registry consistency test; explicit loader map retained.
+    A-P14: approved local renames landed; vetoed runtime names untouched.
+    Gates: vue-tsc 0; vite build green; renderer native-core/orch Vue/V11 clean;
+    focused A tests 17/17. Full vitest 173/174: out-of-scope
+    `test/codec-fixtures.test.ts` 12p nibbles mismatch (`bc3a12569478`
+    vs expected `bc3a12364778`) from concurrent codec work.
 - **A-14 — optimization survey (see the shared OPTIMIZATION SURVEY
   spec above).** Your surface: `app/modules/**`, `app/src/**`,
   `app/lib/**` (minus C's shm blocks), `app/electron/**`,
@@ -212,7 +223,20 @@ control is the planner's review loop.
   DoD); if NO, log that and skip — they defer to the bench era. Wave 2
   (B-P1 registry, B-P4 bench-on-production-writer, B-P10 streaming
   reader) after this lands. DoD: standing gates incl. pyfovea suite.
-  - Log:
+  - Log: B-P2 landed: shared 12p vectors in `docs/schema/codec/`, C++
+    `Codec/Packed12.h`, native Frame uses it, C++/TS/pyfovea fixture tests.
+    B-P3 landed: schema constants in `docs/schema/fovea.ts`, recorder re-export,
+    mirrored `pyfovea.schema`, production writer + converter + bench use real
+    `.fovea` schema names/encodings/metadata; bench smoke OK.
+    B-P7 landed: host serial rx reads 256-byte chunks, still feeds COBS per byte;
+    byte trace remains `VERBOSE`, packet summaries unchanged.
+    B-P8/B-P9 landed after pre-edit firmware compile proved local toolchain:
+    firmware PendingAction helper + fixed Ring queue, behavior unchanged.
+    Gates: vue-tsc 0; vitest 174/174; pyfovea 28/28; vite build green;
+    core clean build Node+Electron green; test build + packed12/cobs green;
+    renderer core grep/orch Vue grep/V11 triplet clean; reader otool system-libs only.
+    Deviation: final post-edit firmware compile blocked — sandbox denied
+    `~/.platformio`, escalated rerun rejected by usage limit; no hardware/GUI run.
 - **B-7 — optimization survey (see the shared OPTIMIZATION SURVEY
   spec above).** Your surface: `core/**` (minus C's ShmRing/reader),
   `firmware/**`, `pyfovea/**`, `app/orchestrator/recorder/**`,
@@ -268,6 +292,19 @@ session.
   semantics, C-P6 conformance with B) after this lands. DoD: standing
   gates; buffer/meta tests as noted per item.
   - Log:
+    C-P3: added `@lib/orchestrator/stats`; Channel + Workload rates share it,
+    with unchanged output shapes.
+    C-P5/C-P8: `ShmSlot.readSnapshot()` + deprecated `view()` alias; `topicKey()`
+    throws on process-local hash collisions; known-collision/native tests added.
+    C-P10: C-owned call sites moved to new names; vetoed names untouched; aliases
+    kept for existing A/B imports.
+    C-P1: new `frame-payload` helper adopted in protocol/frame-transport/
+    preload/client/fake transport; meta precedence test added.
+    Gates: vue-tsc 0; C-focused vitest 31/31; vite build green; core make build
+    Node+Electron green; core/test tsconfig 0; bundle/V11/otool checks clean.
+    Full vitest 173/174 blocked by out-of-scope untracked codec test mismatch
+    (`bc3a12569478` vs `bc3a12364778`); SHM smoke blocked by sandbox and
+    escalation rejected by usage limit, so not completed.
 - **C-9 — optimization survey (see the shared OPTIMIZATION SURVEY
   spec above).** Your surface: shm path end-to-end (`ShmRing.*`,
   reader addon, `frame-transport.ts`, preload-renderer shm side,

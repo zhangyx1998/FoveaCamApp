@@ -48,3 +48,15 @@
 5. B-P13 capability negotiation (vs major-version math) — RECOMMEND
    YES bundled with the v2 flash at Stage F (needs firmware
    coordination anyway).
+
+## USER DECISIONS TAKEN (2026-07-07 — "all recommendations accepted")
+1. A-P1 lifecycle unification: APPROVED — scheduled AFTER the Stage 5
+   GUI smoke (wall item gates it).
+2. A-P7 camelCase normalization: APPROVED — next optimization wave
+   after wave 2, preceded by a persisted-key audit.
+3. A-P12 explicit frame address: APPROVED — bundled with A-P7.
+4. B-P12 sharding: per recommendation, SHELVED — current 1.5 MiB tier
+   suffices; sharding revives if/when full-res raw recording becomes a
+   requirement (the topology seam keeps it additive).
+5. B-P13 capability negotiation: APPROVED — bundled with the v2 flash
+   at Stage F.

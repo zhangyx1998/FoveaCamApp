@@ -191,3 +191,6 @@ the window framework) and metering (recorder ships metered). The
 informs the writer, viewer, and Python reader alike. Split sketch:
 format eval + writer = B or C (native/perf-adjacent); viewer window =
 A; Python sub-project = any role, isolated surface.
+
+> **Tier decision (user, 2026-07-07):** current 1.5 MiB tier suffices —
+> sharding (B-P12) shelved until full-res raw recording is required.
