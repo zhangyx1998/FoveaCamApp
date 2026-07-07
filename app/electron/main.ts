@@ -30,7 +30,7 @@ import {
   planFromManifest,
   saveManifest,
 } from "./window-manifest";
-import { appById } from "@lib/windows";
+import { APPS, appById, type AppMeta } from "@lib/windows";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const DATA = app.getPath("userData");
@@ -74,10 +74,40 @@ function customizeApp() {
   // for the recorder trigger in every mode (multi-window.md req. 6) — the
   // default menu's View→Reload/Force-Reload accelerators would bypass the
   // per-window `before-input-event` interception below.
+  // Direct app-switch affordance (A-13, adopted default): an "Apps" submenu
+  // over the `lib/windows.ts` catalog. Selecting an app routes through the
+  // window manager's existing openApp drain/switch flow — exclusivity, the
+  // busy-refusal prompt, and welcome-close all apply unchanged. Being the
+  // application-level menu, every window class (welcome/app/profiler/
+  // projection) gets it for free.
+  const appItem = (a: AppMeta): Electron.MenuItemConstructorOptions => ({
+    label: a.title,
+    click: () => void manager.openApp(a.id),
+  });
+  const launchable = APPS.filter((a) => !a.dev || IS_DEV);
+  const appsMenu: Electron.MenuItemConstructorOptions = {
+    label: "Apps",
+    submenu: [
+      ...launchable.filter((a) => a.group === "application").map(appItem),
+      { type: "separator" },
+      ...launchable.filter((a) => a.group === "utility").map(appItem),
+    ],
+  };
   const template: Electron.MenuItemConstructorOptions[] = [
     ...(process.platform === "darwin"
       ? [{ role: "appMenu" as const }]
       : []),
+    {
+      label: "File",
+      submenu: [
+        // A-11: open a `.fovea` recording in a viewer window (one per file).
+        {
+          label: "Open Recording…",
+          accelerator: "CmdOrCtrl+O",
+          click: () => void openRecordingDialog(),
+        },
+      ],
+    },
     { role: "editMenu" },
     {
       label: "View",
@@ -86,9 +116,22 @@ function customizeApp() {
         { role: "togglefullscreen" as const },
       ],
     },
+    appsMenu,
     { role: "windowMenu" },
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
+/** File→Open Recording… (A-11): `.fovea` filter, one viewer window per file
+ *  (a re-open of an already-viewed file focuses its window). */
+async function openRecordingDialog(): Promise<void> {
+  const result = await dialog.showOpenDialog({
+    title: "Open Recording",
+    filters: [{ name: "FoveaCam Recording", extensions: ["fovea"] }],
+    properties: ["openFile", "multiSelections"],
+  });
+  if (result.canceled) return;
+  for (const p of result.filePaths) manager.openViewer(p);
 }
 
 // ---- Renderer bridge handlers (docs/refactor/orchestrator.md §7.1 T5) -----
@@ -289,6 +332,24 @@ function windowOptions(desc: WindowDescriptor): Electron.BrowserWindowConstructo
           sandbox: false,
         },
       };
+    case "viewer":
+      // Recorder playback window (A-11, recorder-container.md §4). Playback
+      // frames arrive through the standard frame transport (shm canonical) →
+      // same renderer preload as live streams.
+      return {
+        ...chrome,
+        title: "FoveaCam Duo — Viewer",
+        width: 1100,
+        height: 760,
+        minWidth: 640,
+        minHeight: 420,
+        webPreferences: {
+          preload: preload.renderer,
+          nodeIntegration: false,
+          contextIsolation: true,
+          sandbox: false,
+        },
+      };
   }
 }
 
@@ -345,6 +406,7 @@ function spawnWindow(desc: WindowDescriptor): ManagedWindow {
   const managed: ManagedWindow = {
     class: desc.class,
     appId: desc.appId,
+    fileKey: desc.fileKey,
     focus: () => {
       if (win.isMinimized()) win.restore();
       win.focus();
@@ -400,6 +462,21 @@ async function devRestart(): Promise<void> {
   app.exit(0);
 }
 
+// ---- File association (A-11, recorder-container.md §4) --------------------
+// macOS delivers double-clicked/dragged `.fovea` files via `open-file` —
+// which can fire BEFORE `whenReady` when the app is launched by the file
+// itself, so pre-ready paths queue until the window manager can spawn.
+// (Windows/Linux deliver file paths via argv → the `second-instance` handler
+// below for a running instance; a fresh launch's argv is not wired yet —
+// packaging-verified with the electron-builder `fileAssociations` later.)
+const pendingOpenFiles: string[] = [];
+let windowsReady = false;
+app.on("open-file", (event, filePath) => {
+  event.preventDefault();
+  if (windowsReady) manager.openViewer(filePath);
+  else pendingOpenFiles.push(filePath);
+});
+
 // ---- Startup ---------------------------------------------------------------
 
 async function createInitialWindows(): Promise<void> {
@@ -407,6 +484,11 @@ async function createInitialWindows(): Promise<void> {
   // restore that exact layout; anything else boots the default welcome.
   const manifest = IS_DEV ? await consumeManifest(DATA) : null;
   await manager.restore(planFromManifest(manifest));
+  // Files double-clicked before/at launch (macOS open-file) open now, next
+  // to the default layout (a viewer never suppresses welcome — it doesn't
+  // count toward the welcome rule).
+  windowsReady = true;
+  for (const f of pendingOpenFiles.splice(0)) manager.openViewer(f);
 }
 
 app
@@ -429,8 +511,15 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
 
-app.on("second-instance", () => {
-  // Focus an existing window, or bring the welcome window back.
+app.on("second-instance", (_e, commandLine = []) => {
+  // Windows/Linux file association: a second launch with `.fovea` args
+  // lands here (single-instance lock) — open viewers instead of focusing.
+  const files = commandLine.filter((arg) => arg.toLowerCase().endsWith(".fovea"));
+  if (files.length > 0) {
+    for (const f of files) manager.openViewer(f);
+    return;
+  }
+  // Otherwise: focus an existing window, or bring the welcome window back.
   const open = manager.open();
   if (open.length > 0) open[0].focus();
   else manager.ensureWelcome();

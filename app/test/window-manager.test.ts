@@ -23,6 +23,9 @@ class FakeWindow implements ManagedWindow {
   get appId() {
     return this.desc.appId;
   }
+  get fileKey() {
+    return this.desc.fileKey;
+  }
   focus() {
     this.focused++;
   }
@@ -268,5 +271,63 @@ describe("WindowManager", () => {
     const w = spawned.find((s) => s.class === "projection")!;
     expect(w.desc.search).toBe("?session=tracking&frame=C");
     expect(w.desc.bounds).toEqual({ x: 9, y: 9, width: 640, height: 480 });
+  });
+
+  // --- recorder viewer windows (A-11, recorder-container.md §4) -----------
+
+  it("viewer windows: 0..N across files but exactly one per file", () => {
+    const { manager, spawned } = harness();
+    const first = manager.openViewer("/tmp/a.fovea") as FakeWindow;
+    const again = manager.openViewer("/tmp/a.fovea") as FakeWindow; // same file → focus
+    const other = manager.openViewer("/tmp/b.fovea") as FakeWindow;
+    expect(spawned.filter((w) => w.class === "viewer").length).toBe(2);
+    expect(again).toBe(first);
+    expect(first.focused).toBe(1);
+    expect(other).not.toBe(first);
+    expect(first.desc.search).toBe("?path=%2Ftmp%2Fa.fovea");
+    expect(first.desc.fileKey).toBe("/tmp/a.fovea");
+  });
+
+  it("closing a viewed file's window allows re-opening it fresh", () => {
+    const { manager, spawned } = harness();
+    const first = manager.openViewer("/tmp/a.fovea") as FakeWindow;
+    first.close();
+    const second = manager.openViewer("/tmp/a.fovea") as FakeWindow;
+    expect(second).not.toBe(first);
+    expect(spawned.length).toBe(2);
+  });
+
+  it("viewers don't count for the welcome rule and survive app switching", async () => {
+    const { manager, spawned, drain } = harness();
+    await manager.openApp("tracking-single");
+    const v = manager.openViewer("/tmp/a.fovea") as FakeWindow;
+    await manager.openApp("disparity-scope"); // drain + switch
+    expect(drain).toHaveBeenCalledTimes(1);
+    expect(v.destroyed).toBe(false); // untouched by exclusivity
+    manager.appWindow()!.close();
+    expect(manager.open().map((w) => w.class).sort()).toEqual(["viewer", "welcome"]);
+    // Closing the viewer itself conjures nothing.
+    const before = spawned.length;
+    v.close();
+    expect(spawned.length).toBe(before);
+  });
+
+  it("manifest round-trips viewers; restore routes through the per-file dedupe", async () => {
+    const { manager } = harness();
+    manager.openViewer("/tmp/a.fovea");
+    const manifest = manager.collectManifest();
+    expect(manifest.windows[0]).toMatchObject({
+      class: "viewer",
+      url: "test://windows/viewer.html?path=%2Ftmp%2Fa.fovea",
+    });
+    // Restore a plan that (pathologically) lists the same file twice — the
+    // dedupe holds because restore routes through openViewer.
+    const fresh = harness();
+    await fresh.manager.restore([
+      { class: "viewer", url: "test://windows/viewer.html?path=%2Ftmp%2Fa.fovea" },
+      { class: "viewer", url: "test://windows/viewer.html?path=%2Ftmp%2Fa.fovea" },
+    ]);
+    expect(fresh.spawned.filter((w) => w.class === "viewer").length).toBe(1);
+    expect(fresh.spawned[0].desc.fileKey).toBe("/tmp/a.fovea");
   });
 });

@@ -75,7 +75,9 @@ reference.)
 `vue-tsc --noEmit -p tsconfig.json` → 0 errors; `vitest run` all green;
 `vite build` fully green; renderer bundle **zero-core**; orchestrator
 bundle **zero-Vue**; `core make build` both runtimes when native code is
-touched; reader addon `otool -L` shows system libraries only; built
+touched; reader addon `otool -L` shows system libraries only;
+`pyfovea/.venv/bin/python -m pytest pyfovea/tests` all green when
+pyfovea or the recorder schema is touched; built
 preloads pass the **V11 triplet**:
 relative-import grep (`(from |require\()"\./`) empty — sandboxed
 preloads can't load sibling chunks (V11); content is CJS, never
@@ -110,6 +112,10 @@ planner-logged handoff (ask via your log, don't just edit).
 | `app/electron/preload-renderer.ts`, `preload-profiler.ts` | C |
 | SHM blocks in `lib/orchestrator/client.ts` + `protocol.ts` (`shm` payload variant), SHM OSD in `StreamView` | C (A owns the rest of those files) |
 | `core/include/ShmRing.h`, `core/src/ShmRing.cpp`, reader addon target, `core/test/08-shm-ring.ts` | C |
+| `lib/orchestrator/viewer-contract.ts` — THE pinned A↔C contract; planner arbitrates changes | shared (planner) |
+| `app/orchestrator/viewer/**`, `sessions/viewer.ts` | C |
+| `app/src/windows/ViewerWindow.vue`, `app/electron-builder.yml` | A |
+| `pyfovea/**` | B |
 | `core/**` (everything else), `firmware/**`, protocol v2 host+MCU | B |
 | `docs/refactor/*` (all files but this one), this file's non-Log text | planner |
 
@@ -125,23 +131,15 @@ hardware-dependent behavior verified without a real rig run.
 
 ### Active instructions
 
-- **A-12 — tracking-single async tracker (PB3 residual).** Migrate
-  tracking-single's synchronous KCF onto the `AsyncKcfTracker` pattern
-  you built in A-4 (`disparity-scope/tracker.ts` — extract to a shared
-  location if cleaner, e.g. `@orchestrator/async-kcf.ts`, updating
-  disparity's import): busy-drop, generation staleness guard, results
-  applied on completion. Preserve tracking-single's kinematic-predict
-  timing semantics (predict runs in `targetVolts()` — unchanged).
-  Harness: reuse/extend the async-tracker suite. DoD: standing gates.
-  - Log:
-- **A-13 — direct app-switch affordance (adopted default; user may
-  veto).** Native application menu gains an "Apps" submenu listing the
-  catalog (from `lib/windows.ts`); selecting one routes through the
-  existing `openApp` drain/switch flow — zero new UI surface, the
-  refusal prompt already exists. Welcome/profiler/projection windows
-  get the same menu (it's the app-level menu). Small; test via
-  window-manager harness if any logic is added, else log the manual
-  check. DoD: standing gates.
+- **A-standby.** A-11/A-12/A-13 planner-accepted 2026-07-06 (viewer
+  window + .fovea association, shared AsyncKcfTracker incl.
+  tracking-single, Apps menu). **Ratified:** the single contract file
+  `lib/orchestrator/viewer-contract.ts` (C-authored, A-adopted — see
+  ownership); scalar args + relative-ns times; viewer windows
+  subscribe ACTIVE (correct — the viewer session holds no cameras and
+  needs a real activate/idle lifecycle to close file readers; the V12
+  passive rule targets camera/actuation sessions). electron-builder
+  appId placeholder + packaging verification are wall items.
   - Log:
 
 ## Coder B — Native core, protocol & firmware
@@ -155,24 +153,10 @@ control is the planner's review loop.
 
 ### Active instructions
 
-- **B-6 — Python sub-project `pyfovea` (Stage 5; spec:
-  recorder-container.md §5 + the §2b schema contract).** Top-level
-  `pyfovea/` (name is a planner placeholder — user may rename before
-  PyPI): `pyproject.toml`, typed reader API over `.fovea` (use the
-  `mcap` python package; decode `x-fovea-raw` from channel metadata —
-  port `stream-decoder.py`'s 12p unpack + significant-bits scaling),
-  PLUS the legacy `.stream`/`.meta` read path (absorb stream-decoder
-  logic; old dumps stay loadable), streaming/re-index fallback for
-  footerless files, CLI entry points (`inspect`, `export`, `convert`),
-  tests against small fixtures (generate a tiny synthetic `.fovea`
-  with the B-5 harness; check fixtures in). Environment: set up a
-  local venv under `pyfovea/.venv` (gitignored) with
-  `/opt/homebrew/bin/python3 -m venv`; pip grant limited to `mcap`,
-  `numpy`, and test tooling — log exact versions; document the exact
-  test command at the top of the package README (it becomes a standing
-  gate). PyPI publishing is USER-GATED — prepare packaging only.
-  DoD: package tests green via the documented command; app gates
-  untouched.
+- **B-standby.** B-6 (`pyfovea` package) planner-accepted 2026-07-06 —
+  archived to recorder-container.md §5. Its gate is now standing (see
+  Standing gates). B's hardware-free queue is EMPTY: remaining B work
+  (bench, v2 flash, P4/P5, sharding) is rig- or user-decision-gated.
   - Log:
 - **(B-5 accepted & archived 2026-07-06 → recorder-container.md §2b.)**
 
@@ -193,10 +177,11 @@ session.
 - **C-standby note.** C-1/C-2 were planner-accepted 2026-07-06 and
   archived (orchestrator.md §6 + §7.1 Stage 4).
 - **(C-4 accepted & cleared 2026-07-06.)**
-- **C-standby.** C-7 (profiler UI on the metering schema)
-  planner-accepted 2026-07-06 — archived to workload-metering.md.
-  C-3/PB2 remains held (bench). Next C work: shm adoption items if the
-  recorder viewer wants a playback ring, or projector-adjacent reads.
+- **C-standby.** C-8 planner-accepted 2026-07-06 (viewer session:
+  indexed + footerless-fallback .fovea replay through the standard shm
+  transport; B's ordering pitfall pinned by a named test). Telemetry
+  `playback[fileId]` latest-wins call ratified. C's hardware-free
+  queue is EMPTY (C-3/PB2 is bench-gated).
   - Log:
 
 - **(history) C-6 — workload metering core (accepted; spec:

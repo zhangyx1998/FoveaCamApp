@@ -44,6 +44,9 @@ export interface WindowDescriptor {
   /** Full landing URL to restore (overrides `entry` when given — carries the
    *  state params, multi-window.md req. 7). */
   url?: string;
+  /** Viewer windows: the opened `.fovea` path — the one-window-per-file
+   *  dedupe key (recorder-container.md §4). */
+  fileKey?: string;
 }
 
 /** The window handle surface the manager needs — main.ts adapts a real
@@ -51,6 +54,8 @@ export interface WindowDescriptor {
 export interface ManagedWindow {
   readonly class: WindowClass;
   readonly appId?: string;
+  /** Mirror of `WindowDescriptor.fileKey` (viewer windows only). */
+  readonly fileKey?: string;
   focus(): void;
   close(): void;
   isDestroyed(): boolean;
@@ -61,6 +66,16 @@ export interface ManagedWindow {
 export interface DrainResult {
   ok: boolean;
   reason?: string;
+}
+
+/** Query string of a (possibly invalid/absent) URL, or undefined. */
+function searchOf(url: string | undefined): string | undefined {
+  if (!url) return undefined;
+  try {
+    return new URL(url).search || undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export interface WindowManagerDeps {
@@ -140,6 +155,33 @@ export class WindowManager {
     }
     return this.track(
       this.deps.spawn({ class: "profiler", entry: entryFor("profiler"), ...opts }),
+    );
+  }
+
+  /**
+   * Open a recorder viewer window for one `.fovea` file
+   * (recorder-container.md §4). 0..N across files but ONE PER FILE — a
+   * second open of the same path focuses the existing window. Never counted
+   * for the welcome rule, never exclusive, never drained.
+   */
+  openViewer(
+    path: string,
+    opts: { bounds?: WindowBounds; url?: string } = {},
+  ): ManagedWindow {
+    const existing = this.byClass("viewer").find((w) => w.fileKey === path);
+    if (existing) {
+      existing.focus();
+      return existing;
+    }
+    const search = "?" + new URLSearchParams({ path }).toString();
+    return this.track(
+      this.deps.spawn({
+        class: "viewer",
+        entry: entryFor("viewer"),
+        search,
+        fileKey: path,
+        ...opts,
+      }),
     );
   }
 
@@ -247,21 +289,26 @@ export class WindowManager {
           // The stream address rides the persisted URL's query string —
           // re-derive `search` so the spawn works even where the full URL
           // isn't honored (entryURL only trusts same-origin dev URLs).
-          let search: string | undefined;
-          try {
-            search = w.url ? new URL(w.url).search || undefined : undefined;
-          } catch {
-            search = undefined;
-          }
           this.track(
             this.deps.spawn({
               class: "projection",
               entry: entryFor("projection"),
-              search,
+              search: searchOf(w.url),
               bounds: w.bounds,
               url: w.url,
             }),
           );
+          break;
+        }
+        case "viewer": {
+          // Same re-derivation; the `path` param doubles as the per-file
+          // dedupe key, routed through openViewer so restore can't produce
+          // two windows for one file.
+          const search = searchOf(w.url);
+          const path = search
+            ? new URLSearchParams(search.slice(1)).get("path")
+            : null;
+          if (path) this.openViewer(path, { bounds: w.bounds, url: w.url });
           break;
         }
       }

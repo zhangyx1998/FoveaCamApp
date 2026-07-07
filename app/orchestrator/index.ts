@@ -24,6 +24,7 @@ import { releaseAll } from "./registry.js";
 import { onReport, onSpan, span } from "./diagnostics.js";
 import { systemSession } from "./sessions/system.js";
 import { controllerSession } from "./sessions/controller.js";
+import { viewerSession } from "./sessions/viewer.js";
 import liveViewSession from "@modules/single-capture/session";
 import manageCamerasSession from "@modules/manage-cameras/session";
 import trackingSession from "@modules/tracking-single/session";
@@ -90,6 +91,10 @@ const calibrateDistortion = hub.add(calibrateDistortionSession());
 
 // --- calibrate-extrinsic: extrinsic calibration wizard (§7.1 S1b) --------
 const calibrateExtrinsic = hub.add(calibrateExtrinsicSession());
+
+// --- viewer: .fovea container playback (C-8) — no camera/serial, so NOT in
+// the camera-owning drain set below (viewer windows survive app switches).
+hub.add(viewerSession());
 
 // Camera-owning sessions — the force-idle set shared by `system.releaseCameras`
 // (§12.3 R4) and the multi-window drain path below.

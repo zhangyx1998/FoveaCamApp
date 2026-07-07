@@ -16,10 +16,12 @@
 // exclusive over camera leases + the controller), `profiler` (singleton
 // utility; does not count toward the welcome rule), `projection` (0..N
 // single-stream viewers — passive subscribers, never exclusive, never
-// counted for the welcome rule, survive their source app's close). The
-// recorder viewer class comes in a later round.
+// counted for the welcome rule, survive their source app's close),
+// `viewer` (0..N recorder playback windows, ONE PER `.fovea` file —
+// non-exclusive, never counted for the welcome rule;
+// docs/refactor/recorder-container.md §4).
 
-export type WindowClass = "welcome" | "app" | "profiler" | "projection";
+export type WindowClass = "welcome" | "app" | "profiler" | "projection" | "viewer";
 
 /** URL state params addressing a projection window's stream (multi-window.md
  *  req. 4 — the first state-in-URL consumer): the orchestrator session name
@@ -72,6 +74,8 @@ export function entryFor(cls: WindowClass, appId?: string): string {
       return "windows/profiler.html";
     case "projection":
       return "windows/projection.html";
+    case "viewer":
+      return "windows/viewer.html";
     case "app": {
       const app = appId && appById(appId);
       if (!app) throw new Error(`Unknown app id: ${appId}`);
@@ -86,6 +90,7 @@ export function allEntries(): Record<string, string> {
     welcome: "windows/welcome.html",
     profiler: "windows/profiler.html",
     projection: "windows/projection.html",
+    viewer: "windows/viewer.html",
   };
   for (const app of APPS) entries[app.id] = `windows/${app.id}.html`;
   return entries;
@@ -98,6 +103,7 @@ export function appIdFromPathname(pathname: string): string | null {
   const m = /(?:^|\/)windows\/([\w-]+)\.html$/.exec(pathname);
   if (!m) return null;
   const id = m[1];
-  if (id === "welcome" || id === "profiler" || id === "projection") return null;
+  if (id === "welcome" || id === "profiler" || id === "projection" || id === "viewer")
+    return null;
   return appById(id)?.id ?? null;
 }

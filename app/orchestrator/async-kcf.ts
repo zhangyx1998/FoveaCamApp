@@ -4,18 +4,22 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Disparity-scope's wide-angle auto-follow tracker (PB3 A-4, docs/refactor/
-// orchestrator.md §6): extracted out of `session.ts` so the busy-drop +
-// staleness-guard logic can be unit-tested without spinning up the full
-// session harness — same shape as `multi-fovea/runtime.ts`'s per-slot
-// tracker handling (T6's `KCF.updateAsync`), collapsed to a single tracker.
+// Shared async single-target KCF tracker (PB3 A-4/A-12, docs/refactor/
+// orchestrator.md §6): the busy-drop + staleness-guard pattern used by
+// disparity-scope's auto-follow AND tracking-single's main tracker — same
+// shape as `multi-fovea/runtime.ts`'s per-slot tracker handling (T6's
+// `KCF.updateAsync`), collapsed to a single tracker. Born in
+// `disparity-scope/tracker.ts` (A-4), promoted here (A-12) when
+// tracking-single migrated onto it. Extracted from the sessions so the
+// busy-drop + staleness logic is unit-testable without the session harness
+// (`test/async-kcf-tracker.test.ts`).
 //
-// Previously `session.ts` ran a *synchronous* `tracker.update(frame)` inline
-// inside `onCenterView` — one of the two PB3 root causes (the registry's
-// camera loop can't pull the next frame until every `onView` sink returns,
-// so a slow synchronous KCF update throttled the whole serial). `update()`
-// here instead awaits the AsyncTask-backed `updateAsync` (native thread
-// pool), and:
+// The sessions previously ran a *synchronous* `tracker.update(frame)` inline
+// inside their center-view sinks — one of the two PB3 root causes (the
+// registry's camera loop can't pull the next frame until every `onView` sink
+// returns, so a slow synchronous KCF update throttled the whole serial).
+// `update()` here instead awaits the AsyncTask-backed `updateAsync` (native
+// thread pool), and:
 //  - busy-drops: a tick that arrives while a previous update is still
 //    resolving is skipped outright (checked by the caller via `updating`
 //    before calling `update()` again — `update()` itself also no-ops if
@@ -50,7 +54,10 @@ export interface AsyncKcfTrackerDeps {
   /** Synchronous crop + convert (`slice` + `cvtColor`) into an independent
    *  Mat — see the copy-before-await note above. */
   cropPatch(view: Mat<Uint8Array>, win: Rect): Mat<Uint8Array>;
-  lostTolerance: number;
+  /** Consecutive-miss budget before the tracker self-releases ("lost"). A
+   *  getter, not a number: tracking-single's tolerance is live session state
+   *  (`s.state.lost_tolerance`), re-read on every miss. */
+  lostTolerance(): number;
 }
 
 export type TrackerUpdateResult =
@@ -132,7 +139,7 @@ export class AsyncKcfTracker {
         this.search = full;
         return { status: "tracking", bbox: full, center: RECT.getCenter(full) };
       }
-      if (++this.lostCount >= this.deps.lostTolerance) {
+      if (++this.lostCount >= this.deps.lostTolerance()) {
         this.release();
         return { status: "lost" };
       }

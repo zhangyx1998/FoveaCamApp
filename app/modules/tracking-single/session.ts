@@ -21,6 +21,7 @@
 import { defineSession, type ServerSession } from "@orchestrator/runtime";
 import { leaseCalibratedTriple, type CalibratedTriple } from "@orchestrator/calibration";
 import { startActuationLoop, type ActuationLoop } from "@orchestrator/actuation";
+import { AsyncKcfTracker } from "@orchestrator/async-kcf";
 import { tracking } from "./contract";
 import { KinematicModel } from "./kinematic";
 import { RECT } from "@lib/util/geometry";
@@ -60,10 +61,17 @@ export default function trackingSession(): ServerSession<typeof tracking> {
     // (the tracker runs on the undistorted center, matching the actuation math).
     let target: Point2d = { x: 0, y: 0 };
     const kinematic = new KinematicModel(() => s.state.pred_buffer_max);
-    let tracker: KCF | null = null;
-    let search: Rect | null = null; // last bbox in full-frame coords
+    // PB3 A-12: async (`updateAsync`, busy-drop + generation staleness guard)
+    // via the shared `@orchestrator/async-kcf` — the last synchronous KCF in
+    // an `onView` sink. Search-window/lost-count state lives inside `kcf`.
+    const kcf = new AsyncKcfTracker({
+      createTracker: () => new KCF(),
+      clampRect: (r) => clampRect(r),
+      searchWindow: (box, scale) => searchWindow(box, scale),
+      cropPatch: (view, win) => cvtColor(slice(view, win), "BGRA2BGR"),
+      lostTolerance: () => s.state.lost_tolerance, // live session state
+    });
     let pendingInit: Point2d | null = null;
-    let lostCount = 0;
     let lastGood: Point2d = { x: 0, y: 0 };
     // Latest commanded voltages, mirrored locally so the L/R fovea wrap can use
     // them off the frame path (telemetry-published copy lives in `volt`).
@@ -110,11 +118,7 @@ export default function trackingSession(): ServerSession<typeof tracking> {
     }
 
     function disengage(publish = true): void {
-      if (tracker) {
-        tracker.release();
-        tracker = null;
-      }
-      search = null;
+      kcf.release(); // also invalidates any in-flight async update (staleness)
       kinematic.reset();
       if (publish) s.telemetry({ active: false, bbox: null });
     }
@@ -138,59 +142,43 @@ export default function trackingSession(): ServerSession<typeof tracking> {
       const h = Math.min(height - y, Math.round(roi.height));
       if (w <= 0 || h <= 0) return;
       const box: Rect = { x, y, width: w, height: h };
-      const win = searchWindow(box);
-      // Crop to a tight search window so KCF/cvtColor run on a small patch.
-      const patch = cvtColor(slice(view, win), "BGRA2BGR");
-      const roiInPatch: Rect = {
-        x: box.x - win.x,
-        y: box.y - win.y,
-        width: box.width,
-        height: box.height,
-      };
+      // Reset the kinematic model with the tracker (disengage), then init —
+      // `kcf.init` crops to a tight search window internally (small patch for
+      // KCF/cvtColor) and releases any previous tracker/in-flight update.
       disengage(false);
-      const t = new KCF();
-      t.init(patch, roiInPatch);
-      tracker = t;
-      search = box;
-      lostCount = 0;
+      kcf.init(view, box);
       lastGood = center;
       target = center;
-      kinematic.reset();
       lastFrameTime = now();
       kinematic.push(center.x, center.y, lastFrameTime);
       s.telemetry({ active: true, bbox: box, target });
     }
 
-    function updateTracker(view: Mat<Uint8Array>): void {
-      if (!tracker || !search) return;
-      // Expand the window after each consecutive miss so a sudden jump that
-      // exits the tight crop can still be recovered.
-      const win = searchWindow(search, 1 + lostCount);
-      const result = tracker.update(cvtColor(slice(view, win), "BGRA2BGR"));
-      if (result) {
-        lostCount = 0;
-        // Clamp: KCF can return a box that drifts past the frame edge as the
-        // target exits view (§12.1 C4) — an unclamped `full` would propagate
-        // into next tick's `searchWindow` and eventually degenerate.
-        const full = clampRect({
-          x: result.x + win.x,
-          y: result.y + win.y,
-          width: result.width,
-          height: result.height,
-        });
-        search = full;
-        const center = RECT.getCenter(full);
-        lastGood = center;
-        const t = now();
-        lastFrameTime = t;
-        kinematic.push(center.x, center.y, t);
-        target = kinematic.predict(t) ?? center;
-        s.telemetry({ bbox: full, target });
-      } else if (++lostCount >= s.state.lost_tolerance) {
-        target = lastGood;
-        s.telemetry({ target });
-        disengage(true);
-      }
+    // A-12: results are applied on async completion. Timing semantics
+    // preserved from the synchronous version: `lastFrameTime`/`kinematic`
+    // are stamped when a real detection RESULT exists (now the completion
+    // time — the moment the detection actually becomes available), and the
+    // kinematic re-predict still runs every actuation tick in `targetVolts()`
+    // (unchanged). Staleness (release/re-init/idle while in flight) resolves
+    // to "dropped" inside `kcf.update` — never applied here (V5/V10 class).
+    function updateTracker(view: Mat<Uint8Array>, t0: number): void {
+      void kcf.update(view).then((result) => {
+        if (result.status === "tracking") {
+          trackMsStats.push(now() - t0); // async detection latency (see log)
+          const center = result.center;
+          lastGood = center;
+          const t = now();
+          lastFrameTime = t;
+          kinematic.push(center.x, center.y, t);
+          target = kinematic.predict(t) ?? center;
+          s.telemetry({ bbox: result.bbox, target });
+        } else if (result.status === "lost") {
+          target = lastGood;
+          s.telemetry({ target });
+          disengage(true);
+        }
+        // "dropped": busy/stale/sub-threshold miss — no observable change.
+      });
     }
 
     // The magnified fovea: a `1/zoom` crop of the undistorted center about the
@@ -223,12 +211,12 @@ export default function trackingSession(): ServerSession<typeof tracking> {
         const center = pendingInit;
         pendingInit = null;
         const t0 = now();
-        initTracker(view, center);
+        initTracker(view, center); // KCF.init is synchronous — measured inline
         trackMsStats.push(now() - t0);
-      } else if (tracker) {
-        const t0 = now();
-        updateTracker(view);
-        trackMsStats.push(now() - t0);
+      } else if (kcf.active && !kcf.updating) {
+        // Busy-drop: skip this tick if the previous async update is still in
+        // flight; the completion callback pushes trackMs (detection latency).
+        updateTracker(view, now());
       }
       s.frame("C", view);
       if (s.state.view === "sliced") publishSlicedView(view);
@@ -310,8 +298,10 @@ export default function trackingSession(): ServerSession<typeof tracking> {
       // Re-evaluate the prediction at "now" so the mirror keeps tracking
       // smoothly between (slower) tracker updates — moved here (was inline in
       // the old actuation loop) so it still runs every actuation tick under
-      // the shared `startActuationLoop`.
-      if (tracker) {
+      // the shared `startActuationLoop`. A-12 keeps this exactly here: the
+      // predict cadence is the actuation tick, independent of (and unchanged
+      // by) the tracker's new async completion timing.
+      if (kcf.active) {
         const p = kinematic.predict(now());
         if (p) target = p;
       }

@@ -86,6 +86,11 @@ export function planFromManifest(
         // (multi-window.md req. 4); their stream address rides `url`.
         plan.push(w);
         break;
+      case "viewer":
+        // 0..N across files; the per-FILE dedupe lives in
+        // `WindowManager.openViewer` (restore routes through it), not here.
+        plan.push(w);
+        break;
       default:
         continue; // unknown class (future taxonomy) — drop
     }

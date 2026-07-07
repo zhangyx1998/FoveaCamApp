@@ -77,7 +77,7 @@ describe("planFromManifest", () => {
     const plan = planFromManifest({
       version: 1,
       windows: [
-        { class: "viewer" as never }, // future taxonomy — not spawnable yet
+        { class: "hologram" as never }, // future taxonomy — not spawnable yet
         { class: "app", appId: "not-a-real-app" },
         { class: "profiler" },
       ],
@@ -101,6 +101,16 @@ describe("planFromManifest", () => {
       windows: [p1, { class: "app", appId: "tracking-single" }, p2],
     });
     expect(plan).toEqual([p1, { class: "app", appId: "tracking-single" }, p2]);
+  });
+
+  it("keeps 0..N viewers (per-file dedupe is openViewer's job, not the plan's)", () => {
+    const v1 = { class: "viewer" as const, url: "test://windows/viewer.html?path=%2Fa.fovea" };
+    const v2 = { class: "viewer" as const, url: "test://windows/viewer.html?path=%2Fb.fovea" };
+    const plan = planFromManifest({
+      version: 1,
+      windows: [v1, { class: "app", appId: "tracking-single" }, v2],
+    });
+    expect(plan).toEqual([v1, { class: "app", appId: "tracking-single" }, v2]);
   });
 
   it("projections alone still get a welcome (they don't count for the rule)", () => {

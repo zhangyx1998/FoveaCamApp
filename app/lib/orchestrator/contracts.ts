@@ -147,3 +147,8 @@ export const controller = defineContract({
 });
 
 export type ControllerContract = typeof controller;
+
+// The `viewer` session contract (Stage 5 A-11/C-8 pinned contract) lives in
+// `./viewer-contract.ts` — its own file so the two concurrent threads (C-8
+// session, A-11 window) never edit the same file; both import that single
+// definition, so the compiler enforces the pin.

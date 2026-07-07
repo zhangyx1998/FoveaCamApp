@@ -52,7 +52,7 @@ import {
   foveaTileSize,
   type VergencePIDs,
 } from "./vergence";
-import { AsyncKcfTracker } from "./tracker";
+import { AsyncKcfTracker } from "@orchestrator/async-kcf";
 import { RECT } from "@lib/util/geometry";
 import { copyMat } from "@lib/mat";
 import { PID } from "@lib/pid";
@@ -128,13 +128,14 @@ export default function disparityScopeSession(): ServerSession<typeof disparity>
     // Optional wide-angle KCF tracker (auto-follow): tracked bbox center
     // drives `state.target`, same as the original renderer implementation.
     // PB3 A-4: async (`updateAsync`, busy-drop + staleness-guarded) — see
-    // `tracker.ts`; `session.ts` only supplies the geometry/dep glue below.
+    // `@orchestrator/async-kcf` (shared with tracking-single since A-12);
+    // `session.ts` only supplies the geometry/dep glue below.
     const kcf = new AsyncKcfTracker({
       createTracker: () => new KCF(),
       clampRect: (r) => clampRect(r),
       searchWindow: (box, scale) => searchWindow(box, scale),
       cropPatch: (view, win) => cvtColor(slice(view, win), "BGRA2BGR"),
-      lostTolerance: TRACKER_LOST_TOLERANCE,
+      lostTolerance: () => TRACKER_LOST_TOLERANCE,
     });
     let lastGood: Point2d = ZERO;
     // Deferred like tracking-single's `pendingInit`: the registry's `onView`

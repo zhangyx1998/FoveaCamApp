@@ -1,13 +1,14 @@
-// `disparity-scope/tracker.ts`'s `AsyncKcfTracker` — PB3 A-4 (docs/refactor/
-// orchestrator.md §6). Replaces a synchronous per-frame `tracker.update()`
-// (one of the two PB3 root causes) with the T6 `updateAsync` pattern:
-// busy-drop overlapping ticks, apply results on completion with a staleness
-// guard so a completion for a released/re-initialized tracker never lands.
+// `@orchestrator/async-kcf`'s `AsyncKcfTracker` — PB3 A-4 (disparity-scope),
+// shared with tracking-single since A-12 (docs/refactor/orchestrator.md §6).
+// Replaces a synchronous per-frame `tracker.update()` (one of the two PB3
+// root causes) with the T6 `updateAsync` pattern: busy-drop overlapping
+// ticks, apply results on completion with a staleness guard so a completion
+// for a released/re-initialized tracker never lands.
 
 import { describe, expect, it } from "vitest";
 import type { Mat } from "core/Vision";
 import type { Rect } from "core/Geometry";
-import { AsyncKcfTracker, type TrackerLike } from "@modules/disparity-scope/tracker";
+import { AsyncKcfTracker, type TrackerLike } from "@orchestrator/async-kcf";
 
 function deferred<T>() {
   let resolve!: (v: T) => void;
@@ -17,13 +18,13 @@ function deferred<T>() {
 
 const FRAME = {} as Mat<Uint8Array>;
 
-function makeDeps(createTracker: () => TrackerLike) {
+function makeDeps(createTracker: () => TrackerLike, lostTolerance: () => number = () => 3) {
   return {
     createTracker,
     clampRect: (r: Rect) => r,
     searchWindow: (box: Rect) => box,
     cropPatch: (_view: Mat<Uint8Array>, _win: Rect) => FRAME,
-    lostTolerance: 3,
+    lostTolerance,
   };
 }
 
@@ -133,6 +134,23 @@ describe("AsyncKcfTracker", () => {
     expect((await kcf.update(FRAME)).status).toBe("dropped"); // miss 2
     const third = await kcf.update(FRAME); // miss 3 === lostTolerance
     expect(third.status).toBe("lost");
+    expect(kcf.active).toBe(false);
+  });
+
+  it("lostTolerance is a live getter — re-read on every miss (A-12: tracking-single's session state)", async () => {
+    const tracker: TrackerLike = {
+      init: () => {},
+      updateAsync: async () => null, // every tick misses
+      release: () => {},
+    };
+    let tolerance = 5;
+    const kcf = new AsyncKcfTracker(makeDeps(() => tracker, () => tolerance));
+    kcf.init(FRAME, { x: 0, y: 0, width: 20, height: 20 });
+
+    expect((await kcf.update(FRAME)).status).toBe("dropped"); // miss 1 of 5
+    tolerance = 2; // user tightens `lost_tolerance` mid-track
+    const second = await kcf.update(FRAME); // miss 2 >= new tolerance
+    expect(second.status).toBe("lost");
     expect(kcf.active).toBe(false);
   });
 });
