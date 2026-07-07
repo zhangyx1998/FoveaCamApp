@@ -25,13 +25,7 @@
 
 namespace ShmRing {
 
-/** Per-frame metadata copied out of a slot alongside the pixels. */
-struct FrameMeta {
-  double tCapture = 0;
-  double convertMs = 0;
-  uint64_t deviceTimestamp = 0;
-  uint64_t systemTimestamp = 0;
-};
+// `FrameMeta` lives in ShmLayout.h (shared with the write TU).
 
 /** Result of a successful `readLatestInto` (the seqlock-stable frame). */
 struct ReadResult {
@@ -44,9 +38,11 @@ struct ReadResult {
 /** Outcome of `readLatestInto`. Only `Ok` fills the `ReadResult` / copies. */
 enum class ReadStatus {
   Ok,          // fresh frame copied, `out` populated
-  NoNewFrame,  // latestSeq <= lastSeq — nothing newer to read
+  NoNewFrame,  // latestSeq <= lastSeq — nothing newer to read (pipe still OPEN)
   DestTooSmall, // destination smaller than the slot's frame bytes
   TornRead,    // MAX_READ_RETRIES seqlock attempts all raced the writer
+  Closed,      // no new frame AND the publisher set state=CLOSED (C-16) — the
+               // final frame was already delivered; consumer should unmap
 };
 
 /** RAII read-only mapping over a published Fovea SHM segment. Opens the named

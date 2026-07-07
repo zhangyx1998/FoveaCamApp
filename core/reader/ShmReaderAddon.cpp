@@ -118,6 +118,13 @@ Value readInto(const CallbackInfo &info) {
       return env.Null();
     case ShmRing::ReadStatus::DestTooSmall:
       throw std::runtime_error("Destination buffer is smaller than SHM frame");
+    case ShmRing::ReadStatus::Closed: {
+      // Explicit pipe-closed signal (C-16) — distinct from `null` (no new
+      // frame). The consumer unmaps on this rather than polling a stale ring.
+      auto closed = Object::New(env);
+      closed.Set("closed", Boolean::New(env, true));
+      return closed;
+    }
     case ShmRing::ReadStatus::Ok:
       break;
     }

@@ -463,6 +463,13 @@ function mix<T, P>(t: T, p: P): T & P {
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%);
+    // UI-2 / 3b (first-pass guard): bound the centered frame content to the
+    // container box so it can't ride up and spill over a stacked neighbor when
+    // the container height resolves late. `.container` stays `overflow: visible`
+    // for the title/footnote that sit outside it. NEEDS LIVE-UI ITERATION — the
+    // stacked `.view` height behavior can only be tuned against a running app.
+    max-width: 100%;
+    max-height: 100%;
   }
 
   .annotations {

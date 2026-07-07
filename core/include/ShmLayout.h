@@ -20,11 +20,32 @@
 namespace ShmRing {
 
 static constexpr char MAGIC[8] = {'F', 'V', 'S', 'H', 'M', 'R', 'G', '\0'};
-static constexpr uint32_t LAYOUT_VERSION = 1;
+// v2 (C-16): SegmentHeader gains the `state` word (OPEN|CLOSED) for symmetric
+// pipe close. Single process — writer + reader share this header, rebuilt
+// together, so there is no cross-version skew to negotiate.
+static constexpr uint32_t LAYOUT_VERSION = 2;
+// Default ring depth of the live preview writer (unchanged). Pipes carry their
+// own `ringDepth` in the segment header's `slotCount`; the reader validates it
+// against [1, MAX_SLOT_COUNT] rather than a fixed value.
 static constexpr uint32_t SLOT_COUNT = 3;
+static constexpr uint32_t MAX_SLOT_COUNT = 64;
 static constexpr size_t PAGE_ALIGN = 16 * 1024;
 static constexpr size_t DATA_ALIGN = 64;
 static constexpr uint32_t MAX_READ_RETRIES = 8;
+
+/** Pipe lifecycle state stored in the segment header (C-16, WS1). A consumer
+ *  reads it only on the cold "no new frame" path, so the final frame is always
+ *  delivered before CLOSED is observed — an explicit signal, not a frozen last
+ *  frame. Written by the publisher with a release store, read with acquire. */
+enum class PipeState : uint32_t { OPEN = 0, CLOSED = 1 };
+
+/** Per-frame metadata carried in each slot (shared by the read and write TUs). */
+struct FrameMeta {
+  double tCapture = 0;
+  double convertMs = 0;
+  uint64_t deviceTimestamp = 0;
+  uint64_t systemTimestamp = 0;
+};
 
 // Boot sweep policy: FoveaCam runs a single orchestrator process. On startup,
 // it may unlink every Fovea-owned `/fv.*` segment before creating new writers;
@@ -49,6 +70,11 @@ struct alignas(64) SegmentHeader {
   uint64_t dataOffset;
   std::atomic<uint64_t> latestSeq;
   std::atomic<uint32_t> latestSlot;
+  // v2 (C-16): appended so existing field offsets are unchanged. 0 = OPEN
+  // (memset default), 1 = CLOSED. Only pipe publishers ever store CLOSED; the
+  // live preview writer leaves it OPEN, so its readers never take the closed
+  // path — zero behavior change to the live path.
+  std::atomic<uint32_t> state;
 };
 
 struct alignas(64) SlotHeader {

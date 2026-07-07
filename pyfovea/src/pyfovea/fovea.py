@@ -33,7 +33,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import IO, Any, Iterator
+from typing import IO, Any, Iterator, NamedTuple
 
 import numpy as np
 from mcap.exceptions import McapError
@@ -54,6 +54,14 @@ class StreamInfo:
     channels: int
     pixel_format: str
     significant_bits: int
+
+
+class XY(NamedTuple):
+    """A 2-axis reading ``{x, y}`` — a mirror voltage or angle from the
+    per-frame telemetry extras."""
+
+    x: float
+    y: float
 
 
 @dataclass
@@ -88,6 +96,50 @@ class FoveaFrame:
         """3x3 homography from the telemetry extras, or None."""
         a = self.extra.get("affine")
         return None if a is None else np.array(a, dtype=np.float64).reshape(3, 3)
+
+    # ---- WS4 4b frame↔voltage binding ------------------------------------
+    # Typed accessors over the recorder's `RecordedFrameExtras` schema
+    # (app/orchestrator/recorder/metadata.ts — the fixed contract). All
+    # optional: frames from older files / free-running capture have no such
+    # extras, so every accessor returns None then (backward-compatible).
+    # Note the LITERAL dotted JSON keys "volt.unit"/"volt.source" — flat keys,
+    # not nested objects — mirrored exactly from the TS schema.
+
+    def _xy(self, key: str) -> XY | None:
+        d = self.extra.get(key)
+        if not isinstance(d, dict) or "x" not in d or "y" not in d:
+            return None
+        return XY(float(d["x"]), float(d["y"]))
+
+    @property
+    def frame_id(self) -> int | None:
+        """Firmware-monotonic FIN capture id (``RecordedFrameExtras.frame_id``)
+        bound to the CMD_FRAME that produced this frame, or None if absent."""
+        v = self.extra.get("frame_id")
+        return None if v is None else int(v)
+
+    @property
+    def volt(self) -> XY | None:
+        """This stream's mirror voltage ``{x, y}`` — the exposure-AVERAGED value
+        when :attr:`volt_source` is ``"fin-averaged"`` (B-12). None if absent."""
+        return self._xy("volt")
+
+    @property
+    def volt_unit(self) -> str | None:
+        """Unit of :attr:`volt` (``"volt"``), or None. Reads the literal
+        ``"volt.unit"`` key."""
+        return self.extra.get("volt.unit")
+
+    @property
+    def volt_source(self) -> str | None:
+        """Provenance of :attr:`volt`: ``"fin-averaged"`` (B-12 exposure-average)
+        or ``"live-snapshot"``, or None. Reads the literal ``"volt.source"`` key."""
+        return self.extra.get("volt.source")
+
+    @property
+    def angle(self) -> XY | None:
+        """Mirror angle ``{x, y}`` from the telemetry extras, or None."""
+        return self._xy("angle")
 
 
 def _stream_info(channel: Channel) -> StreamInfo:

@@ -400,6 +400,12 @@ onRenderer("window:open-projection", (session, frame) => {
   if (typeof session === "string" && session && typeof frame === "string" && frame)
     manager.openProjection({ session, frame });
 });
+// WS2 2b: toggle a module's debug sub-window. Owner = the current app window
+// (apps are exclusive, so it's the opener); cascade tears it down on switch.
+onRenderer("window:toggle-debug", (session, frame) => {
+  if (typeof session === "string" && session && typeof frame === "string" && frame)
+    manager.toggleDebug({ session, frame }, manager.appWindow());
+});
 
 // ---- Dev restart (Ctrl/Cmd-Shift-R, multi-window.md req. 6 / §4) ----------
 // Persist the window manifest → relaunch the whole app (orchestrator dies

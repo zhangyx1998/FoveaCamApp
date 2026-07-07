@@ -21,16 +21,35 @@ import { mkdirSync } from "node:fs";
 import type { Frame, PixelFormat } from "core/Aravis";
 import type { Point2d } from "core/Geometry";
 import type { Mat } from "core/Vision";
-import { createRecordingSink, type RecordingSink } from "@orchestrator/recorder";
+import {
+  createRecordingSink,
+  frameVoltageExtras,
+  type RecordingSink,
+} from "@orchestrator/recorder";
 import { matToArray } from "@lib/mat";
 import type { Pos } from "@lib/controller-codec";
 import type { CalibratedTriple } from "@orchestrator/calibration";
 
 export type { StreamSummary } from "@orchestrator/recorder/legacy";
 
+/** A recorded fovea frame's voltage provenance (WS4 4b):
+ *  - `fin`  — bind the FIN's exposure-AVERAGED voltage (B-12) for the exact
+ *    capture that produced this frame (`volt.source: "fin-averaged"`);
+ *  - `live` — a controller reading at frame arrival (`"live-snapshot"`), the
+ *    pre-4b free-run behavior. */
+export type FoveaBinding = { A: Point2d; H: Mat<Float64Array> } & (
+  | { source: "fin"; frameId: number; volt: Pos }
+  | { source: "live"; volt: Pos }
+);
+
 export interface RecordingDeps {
   getTriple(): CalibratedTriple | null;
   volts(): { L: Pos; R: Pos };
+  /** Optional (WS4 4b): the FIN outcome matched to the frame currently being
+   *  recorded on this fovea mirror (by `frame_id`/`t_exposure`), or null when
+   *  no triggered capture is bound → the free-run live snapshot is used. Left
+   *  unimplemented until the live FIN↔frame pairing lands (Stage F). */
+  foveaBinding?(mirror: "L" | "R"): { frameId: number; volt: Pos } | null;
   telemetry(patch: {
     recording_active?: boolean;
     recordingStreams?: Record<
@@ -38,6 +57,27 @@ export interface RecordingDeps {
       { frames: number; dropped: number; fps: number; bytes: number }
     >;
   }): void;
+}
+
+/** Build a recorded fovea frame's per-frame metadata from its voltage binding.
+ *  FIN-bound frames carry the exposure-averaged voltage + `frame_id` via B's
+ *  `frameVoltageExtras` (`volt.source: "fin-averaged"`); free-run frames carry
+ *  a live snapshot (`"live-snapshot"`). Both add the mirror angle + homography. */
+export function buildFoveaMeta(b: FoveaBinding): Record<string, unknown> {
+  const volt =
+    b.source === "fin"
+      ? frameVoltageExtras(b.frameId, b.volt)
+      : {
+          volt: { x: b.volt.x, y: b.volt.y },
+          "volt.unit": "volt",
+          "volt.source": "live-snapshot" as const,
+        };
+  return {
+    ...volt,
+    angle: { x: b.A.x, y: b.A.y },
+    "angle.unit": "radian",
+    affine: matToArray(b.H),
+  };
 }
 
 export interface RecordingController {
@@ -66,35 +106,41 @@ export function createRecording(deps: RecordingDeps): RecordingController {
     deps.telemetry({ recordingStreams: sink?.stats() ?? {} });
   }
 
-  function emitRecFrame(
-    name: string,
-    frame: Frame,
-    fovea?: { V: Pos; A: Point2d; H: Mat<Float64Array> },
-  ): RecordFrame {
+  function emitRecFrame(name: string, frame: Frame, fovea?: FoveaBinding): RecordFrame {
     const { raw, raw_format: format } = frame;
     frame.release();
-    const meta: Record<string, unknown> = {};
-    if (fovea)
-      Object.assign(meta, {
-        volt: { ...fovea.V },
-        "volt.unit": "volt",
-        angle: { ...fovea.A },
-        "angle.unit": "radian",
-        affine: matToArray(fovea.H),
-      });
+    const meta: Record<string, unknown> = fovea ? buildFoveaMeta(fovea) : {};
     return { name, frame: raw, format, meta };
   }
 
-  async function consume(name: string, stream: AsyncIterable<Frame>, buildMeta?: () => { V: Pos; A: Point2d; H: Mat<Float64Array> }): Promise<void> {
+  async function consume(
+    name: string,
+    stream: AsyncIterable<Frame>,
+    bind?: () => FoveaBinding,
+  ): Promise<void> {
     try {
       for await (const frame of stream) {
         if (!active) return;
-        const rec = emitRecFrame(name, frame, buildMeta?.());
+        const rec = emitRecFrame(name, frame, bind?.());
         sink?.write(rec.name, rec.frame, rec.format, undefined, rec.meta);
       }
     } catch (e) {
       console.error(`[manual-control] recording stream "${name}":`, e);
     }
+  }
+
+  /** Build the fovea frame binding: the FIN's exposure-averaged voltage when a
+   *  triggered capture is matched to this frame (WS4 4b), else the live snapshot.
+   *  `conv` is captured from the recording's triple at `start()` (stays valid
+   *  even if the triple is released mid-recording). */
+  function foveaBinding(mirror: "L" | "R", conv: CalibratedTriple["conv"]): FoveaBinding {
+    const fin = deps.foveaBinding?.(mirror) ?? null;
+    const V = fin ? fin.volt : deps.volts()[mirror];
+    const A = mirror === "L" ? conv.V2A.L(V) : conv.V2A.R(V);
+    const H = mirror === "L" ? conv.A2H.L(A) : conv.A2H.R(A);
+    return fin
+      ? { source: "fin", frameId: fin.frameId, volt: V, A, H }
+      : { source: "live", volt: V, A, H };
   }
 
   return {
@@ -115,17 +161,9 @@ export function createRecording(deps: RecordingDeps): RecordingController {
       const { L, C, R } = triple.leases;
       const { conv } = triple;
       tasks = [
-        consume("left-fovea", L.camera.stream, () => {
-          const V = deps.volts().L;
-          const A = conv.V2A.L(V);
-          return { V, A, H: conv.A2H.L(A) };
-        }),
+        consume("left-fovea", L.camera.stream, () => foveaBinding("L", conv)),
         consume("center", C.camera.stream),
-        consume("right-fovea", R.camera.stream, () => {
-          const V = deps.volts().R;
-          const A = conv.V2A.R(V);
-          return { V, A, H: conv.A2H.R(A) };
-        }),
+        consume("right-fovea", R.camera.stream, () => foveaBinding("R", conv)),
       ];
       deps.telemetry({ recording_active: true, recordingStreams: {} });
       pollTimer = setInterval(publishStreams, 250);

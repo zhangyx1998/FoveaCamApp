@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { basename, dirname, join } from "node:path";
 import { createRequire } from "node:module";
 import { Worker } from "node:worker_threads";
-import { Shm, __origin__, cleanup } from "core";
+import { Shm, Pipe, __origin__, cleanup } from "core";
 import type { ShmDescriptor } from "core/Shm";
 
 type ReaderHandle = object;
@@ -25,16 +25,21 @@ type ReaderResult = {
   };
 };
 type ReaderResultWithData = ReaderResult & { data: Uint8Array };
+type ClosedResult = { closed: true };
 type ReaderAddon = {
   open(seg: string): ReaderHandle;
   readInto(
     handle: ReaderHandle,
     dest: ArrayBuffer,
     lastSeq: bigint,
-  ): ReaderResult | null;
+  ): ReaderResult | ClosedResult | null;
   close(handle: ReaderHandle): void;
 };
 type HammerMessage = { kind: "ready" | "done"; descriptor: ShmDescriptor };
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const isClosed = (r: unknown): r is ClosedResult =>
+  typeof r === "object" && r !== null && (r as ClosedResult).closed === true;
 
 const require = createRequire(import.meta.url);
 const prefix = basename(__origin__, ".node");
@@ -234,6 +239,110 @@ function assertPattern(result: ReaderResultWithData): void {
   assert(reads > 0);
   assert(retries >= 0);
   reader.close(handle);
+}
+
+{
+  // WS1 pipe scaffold (C-16): the publisher thread + synthetic producer thread
+  // + reader-addon consumer, all off the JS loop. Exercises per-segment
+  // ringDepth, the v2 CLOSED state signal, and consumer refcounting.
+  const P = Pipe as any;
+  const pipeId = "pipe-smoke";
+  const width = 4;
+  const height = 4;
+  const channels = 1;
+  const ringDepth = 4; // != SLOT_COUNT — proves per-segment depth + reader relax
+  const bytesPerFrame = width * height * channels; // Mono8 = 16 bytes
+
+  P.advertise({
+    id: pipeId,
+    pixelFormat: "Mono8",
+    dtype: "U8",
+    width,
+    height,
+    channels,
+    stride: width * channels,
+    bytesPerFrame,
+    ringDepth,
+  });
+  P.attachSynthetic(pipeId, 200, 100); // ~5 ms/frame; byte = (100 + i) & 0xff
+
+  const handle = P.connect(pipeId);
+  assert.equal(handle.ringDepth, ringDepth);
+  assert.equal(handle.headerLayout.layoutVersion, 2);
+  assert.equal(P.consumers(pipeId), 1);
+
+  const rh = reader.open(handle.shmName);
+  const dest = new ArrayBuffer(bytesPerFrame);
+
+  const nextFrame = async (
+    lastSeq: bigint,
+    timeoutMs = 2000,
+  ): Promise<ReaderResult | null> => {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const r = reader.readInto(rh, dest, lastSeq);
+      if (r && !isClosed(r)) return r as ReaderResult;
+      if (Date.now() > deadline) return null;
+      await sleep(2);
+    }
+  };
+
+  const f1 = await nextFrame(0n);
+  assert(f1, "pipe: expected a synthetic frame");
+  const byte1 = new Uint8Array(dest)[0];
+  // Uniform fill = (seed + tCapture) & 0xff — proves the producer frame reached
+  // the consumer intact through the publisher thread's seqlock write.
+  assert.equal(byte1, (100 + Number(f1!.meta.tCapture)) & 0xff);
+  for (const b of new Uint8Array(dest)) assert.equal(b, byte1);
+
+  const f2 = await nextFrame(f1!.seq);
+  assert(f2 && f2.seq > f1!.seq, "pipe: seq advances as frames flow");
+
+  // Refcount: a second consumer, then drop back to one — still producing.
+  P.connect(pipeId);
+  assert.equal(P.consumers(pipeId), 2);
+  assert.equal(P.disconnect(pipeId), 1);
+  assert(await nextFrame(f2!.seq), "pipe: still producing at one consumer");
+
+  // Drop to zero → production pauses (thread stops); pipe stays advertised.
+  assert.equal(P.disconnect(pipeId), 0);
+  await sleep(50);
+  let pausedSeq = 0n;
+  {
+    const r = reader.readInto(rh, dest, 0n);
+    if (r && !isClosed(r)) pausedSeq = (r as ReaderResult).seq;
+  }
+  await sleep(80);
+  {
+    const r = reader.readInto(rh, dest, pausedSeq);
+    assert(r === null || isClosed(r), "pipe: no new frames at zero consumers");
+  }
+
+  // Reconnect → production resumes on the same advertised pipe.
+  P.connect(pipeId);
+  assert.equal(P.consumers(pipeId), 1);
+  const f4 = await nextFrame(pausedSeq);
+  assert(f4 && f4.seq > pausedSeq, "pipe: resumes after reconnect");
+
+  // Symmetric close: publisher sets CLOSED after its final frame; the consumer
+  // drains remaining frames, then observes the explicit CLOSED signal.
+  P.close(pipeId);
+  let sawClosed = false;
+  let last = f4!.seq;
+  const closeDeadline = Date.now() + 2000;
+  while (Date.now() < closeDeadline) {
+    const r = reader.readInto(rh, dest, last);
+    if (isClosed(r)) {
+      sawClosed = true;
+      break;
+    }
+    if (r) last = (r as ReaderResult).seq;
+    await sleep(2);
+  }
+  assert(sawClosed, "pipe: consumer must observe explicit CLOSED after close()");
+
+  reader.close(rh);
+  P.drop(pipeId);
 }
 
 cleanup();

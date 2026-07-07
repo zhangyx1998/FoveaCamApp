@@ -122,16 +122,89 @@ verification.
   WAVE 2 (WS1 1b C++ pipe architecture — needs the design decisions ratified;
   C standing by), WS2 2b debug sub-window, WS4 4b frame↔voltage downstream.
 
-## WS1 design — open decisions to ratify before WAVE 2
-- Publisher-thread **granularity**: per-pipe vs one publisher fanning a
-  producer's output to N consumers.
-- **Broker mechanism**: how a JS lifecycle request wires the renderer's shm
-  handle to the C++ publisher (likely the existing MessagePort/reader-addon path,
-  set up ONCE out-of-loop).
-- **Contract pipe spec** shape (pixelFormat/resolution/dtype/channels) — the
-  typed-pipe schema the renderer selects from; reuse `docs/schema/pixel-formats`.
-- **Symmetric close** protocol (producer-side vs consumer-side teardown, and what
-  the other end observes — frozen last frame vs explicit closed state).
+### WAVE 2 + WS4-4b vertical — LANDED + planner-verified (2026-07-07; Opus fleet)
+- **A-21** (WS2 2b + 3b + A-P6): FIRST `owner`-setter — new `debug` WindowClass
+  (the only `onOwnerClose: cascade` class) + `windows/debug.html`/`src/windows/
+  debug.ts`/`DebugWindow.vue`/`debug-registry.ts`; `WindowManager.toggleDebug(
+  {session,frame}, owner)` (keyed `debug:<session>`, owner=app window) built on
+  A-20's `toggle`; bridge chain `toggleDebugWindow`→preload-bridge→main
+  `onRenderer`; `planFromManifest` drops cascade classes on restore (owner not
+  persisted). A-P6: extracted tracking-single's C-view SVG into reusable
+  telemetry-driven `TrackingAnnotations.vue` (main view + debug window share it).
+  UI-2/3b: bounded `.centered` in FrameView (first-pass spill guard). **UX call +
+  4 UI surfaces flagged for user visual check** (overlay-in-both, debug drawer,
+  cascade-close, `.centered`; + A-20 title-bar still pending).
+- **C-16** (WS1 1b — THE pipe-architecture scaffold): per-ratified-design. NEW
+  `core.Pipe` (`Pipe.h`/`Pipe.cpp`): `Publisher` (one thread/pipe, multi-consumer)
+  + `FrameProducer` seam + scaffold `SyntheticProducer` (own thread) — per-frame
+  memcpy+seqlock-write off the JS loop; broker `advertise/connect/disconnect/
+  close`, `connect→PipeHandle`, refcounted consumers (disconnect→0 pauses, stays
+  advertised, reconnect resumes). Segment writer EXTRACTED to `ShmWrite.h`/`.cpp`
+  (mirrors the ShmRead split) — live `WriterCore` + `Publisher` share ONE writer,
+  live path byte-identical (all live 08-shm-ring cases pass). `ShmLayout.h` v2:
+  APPENDED `state` word (existing offsets unchanged, memset default OPEN → zero
+  live-path change), `PipeState`, shared `FrameMeta`, `MAX_SLOT_COUNT`, per-segment
+  `ringDepth`. Close signal read only on the cold no-new-frame path (final frame
+  delivered, then `Closed`). NEW `app/lib/orchestrator/pipe-contract.ts`:
+  `PipeSpec` (pixelFormat/dtype read-only from B's schema; explicit `bytesPerFrame`
+  = C-P12 typing), `PipeHandle`, `pipes` contract (`connectPipe`/`disconnectPipe`,
+  `frames:[]`). **Deferred to 1c** (correct scaffold boundary): the JS session
+  handler (`connectPipe`→`core.Pipe.connect`), `core/Pipe` d.ts, renderer display
+  consumer — broker proven natively, live wiring is 1c/1d.
+- **B-13 + A-22 + B-14** (WS4 4b frame↔voltage vertical, complete end-to-end):
+  - **B-13**: NEW `recorder/metadata.ts` — decoder-facing `RecordedFrameExtras`
+    (`frame_id`, `volt{x,y}`, `"volt.unit"`, `"volt.source":"fin-averaged"|
+    "live-snapshot"`, `angle`, `affine`) + `frameVoltageExtras(frameId,volt)`
+    builder; re-exported from `recorder/index.ts`. Writer/worker unchanged
+    (`telemetry` doc's `extra` carries it — additive).
+  - **A-22** (applied B-13's two handoffs): `controller.ts` `FrameOutcome` carries
+    `frameId` (+ doc fixed to exposure-averaged); `recording.ts` builds per-frame
+    voltage meta via read-only `frameVoltageExtras` — triggered→`fin-averaged`+
+    `frame_id`, free-run→`live-snapshot`; added optional `deps.foveaBinding?(mirror)`
+    hook. **Live FIN↔frame pairing is the Stage-F session wiring** (hook present,
+    unwired → production stays behavior-preserving `live-snapshot` today).
+  - **B-14**: pyfovea reads it back — typed accessors `frame_id`/`volt→XY`/
+    `volt_unit`/`volt_source`/`angle` mirroring the literal dotted TS keys;
+    additive/optional (older files decode, absent→None). TS contract untouched.
+- **Planner sweep (authoritative, over the settled tree):** vue-tsc 0, vitest
+  **236/236**, vite build, orchestrator zero-Vue / renderer zero-core, V11
+  triplet 0/1/0 (both `.cjs`; preload-bridge inlined into both), `core make build`
+  both runtimes (node 23/25/26 + electron 38/41), reader `otool -L` self+libc++/
+  libSystem only, `08-shm-ring` unsandboxed PASS (incl. pipe state/close/refcount),
+  pyfovea **37/37**. Firmware untouched (no `pio run`). Committed as the WAVE 2
+  checkpoint. **Pending:** user visual checks (title-bar + the 4 A-21 surfaces);
+  Stage-F live FIN↔frame wiring; WS1 1c (ring-write move + B-P11, C+B) next.
+
+## WS1 design — RATIFIED (planner, 2026-07-07; user "advance aggressively")
+1. **Publisher-thread granularity — one publisher thread PER PIPE, multi-
+   consumer.** A pipe = one typed producer output. Its publisher owns that pipe's
+   `ShmRing` and serves N consumers via the seqlock (one writer, many readers).
+   Producer→publisher is 1:1 (producer hands frames to its publisher's latest-
+   frame slot). No fan-out thread juggling heterogeneous consumers — each
+   publisher's job stays trivial (take latest producer frame, seqlock-write).
+2. **Broker mechanism — orchestrator brokers a ONE-TIME handshake; per-frame path
+   is pure C++/shm.** On connect: renderer calls JS `connectPipe(pipeId, opts)`;
+   orchestrator validates against the contract, tells the C++ publisher to
+   ensure/refcount the pipe, returns `PipeHandle = {shmName, spec, ringDepth,
+   headerLayout}`. Renderer maps via the existing reader-addon (`reader.readInto(
+   handle, dest)` — already reuses `dest`, C-15). JS touches nothing per-frame;
+   the publisher owns the segment the JS registry loop used to write.
+3. **Contract pipe spec — `PipeSpec = {id, pixelFormat, width, height, dtype,
+   channels, stride, bytesPerFrame, ringDepth}`**, dtype/pixelFormat sourced from
+   `docs/schema/pixel-formats.ts` (B-owned). Contract advertises `pipes:
+   PipeSpec[]`; renderer selects by id. This IS **C-P12** explicit byteLength/
+   dtype — the spec is the explicit typing. Lands in a NEW C-owned
+   `lib/orchestrator/pipe-contract.ts` (keeps the pinned `viewer-contract.ts`
+   untouched; planner arbitrates any later merge).
+4. **Symmetric close — explicit CLOSED state in the shm header, refcounted
+   consumers.** Seqlock header gains a `state` word (OPEN|CLOSED). Producer-side
+   close: publisher sets `state=CLOSED` (release barrier), stops writing;
+   consumers observe CLOSED on next read and unmap — an explicit state, NOT a
+   frozen last frame. Consumer-side close: `disconnectPipe(handle)` decrements the
+   publisher refcount; at zero the publisher may pause production but the pipe
+   stays advertised (reconnectable). Full teardown (drop from contract) is an
+   orchestrator lifecycle op. Both ends can close; the peer always sees an
+   explicit signal.
 
 ## Verification
 The 2026-07-07 HIL pass surfaced its findings; the refactor rewrites those

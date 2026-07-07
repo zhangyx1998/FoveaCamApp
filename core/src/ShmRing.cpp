@@ -4,6 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 #include "ShmRing.h"
+#include "ShmWrite.h" // shared segment writer (extracted; C-16)
 
 #include <algorithm>
 #include <cerrno>
@@ -139,12 +140,9 @@ std::vector<int> shapeFromValue(const Napi::Value &value) {
   return shape;
 }
 
-struct Meta {
-  double tCapture = 0;
-  double convertMs = 0;
-  uint64_t deviceTimestamp = 0;
-  uint64_t systemTimestamp = 0;
-};
+// Frame metadata now lives in ShmLayout.h (shared with the read/write TUs);
+// keep the `Meta` name locally so the NAPI conversion helpers below are untouched.
+using Meta = FrameMeta;
 
 uint64_t optionalBigInt(const Napi::Object &obj, const char *key) {
   if (!obj.Has(key) || obj.Get(key).IsNull() || obj.Get(key).IsUndefined())
@@ -171,114 +169,8 @@ Meta metaFromValue(const Napi::Value &value) {
   };
 }
 
-class Segment {
-  int fd = -1;
-  void *mapping = nullptr;
-  size_t mappingSize = 0;
-
-public:
-  const std::string name;
-  const uint32_t generation;
-
-  Segment(std::string name, uint32_t generation, int height, int width,
-          int channels)
-      : name(std::move(name)), generation(generation) {
-    if (channels <= 0)
-      throw std::runtime_error("SHM channels must be positive");
-    const size_t slotBytes =
-        static_cast<size_t>(height) * static_cast<size_t>(width) *
-        static_cast<size_t>(channels);
-    const size_t dataOffset = alignUp(sizeof(SlotHeader), DATA_ALIGN);
-    const size_t slotStride = alignUp(dataOffset + slotBytes, PAGE_ALIGN);
-    mappingSize = alignUp(sizeof(SegmentHeader), PAGE_ALIGN) +
-                  slotStride * SLOT_COUNT;
-
-    shm_unlink(this->name.c_str());
-    fd = shm_open(this->name.c_str(), O_CREAT | O_EXCL | O_RDWR, 0600);
-    if (fd < 0)
-      throw std::runtime_error(errnoMessage("shm_open", this->name));
-    recordSegmentName(this->name);
-    if (ftruncate(fd, static_cast<off_t>(mappingSize)) != 0) {
-      const auto message = errnoMessage("ftruncate", this->name);
-      close(fd);
-      fd = -1;
-      shm_unlink(this->name.c_str());
-      throw std::runtime_error(message);
-    }
-    mapping =
-        mmap(nullptr, mappingSize, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-    if (mapping == MAP_FAILED) {
-      const auto message = errnoMessage("mmap", this->name);
-      mapping = nullptr;
-      close(fd);
-      fd = -1;
-      shm_unlink(this->name.c_str());
-      throw std::runtime_error(message);
-    }
-
-    auto *h = header();
-    std::memset(h, 0, sizeof(*h));
-    std::memcpy(h->magic, MAGIC, sizeof(MAGIC));
-    h->layoutVersion = LAYOUT_VERSION;
-    h->generation = generation;
-    h->width = static_cast<uint32_t>(width);
-    h->height = static_cast<uint32_t>(height);
-    h->channels = static_cast<uint32_t>(channels);
-    h->slotCount = SLOT_COUNT;
-    h->slotBytes = slotBytes;
-    h->slotStride = slotStride;
-    h->dataOffset = dataOffset;
-    h->latestSeq.store(0, std::memory_order_release);
-    h->latestSlot.store(0, std::memory_order_release);
-    for (uint32_t i = 0; i < SLOT_COUNT; ++i)
-      slotHeader(i)->seq.store(0, std::memory_order_release);
-  }
-
-  ~Segment() {
-    if (mapping)
-      munmap(mapping, mappingSize);
-    if (fd >= 0)
-      close(fd);
-    shm_unlink(name.c_str());
-  }
-
-  SegmentHeader *header() const {
-    return reinterpret_cast<SegmentHeader *>(mapping);
-  }
-
-  SlotHeader *slotHeader(uint32_t slot) const {
-    auto *base = static_cast<std::byte *>(mapping) +
-                 alignUp(sizeof(SegmentHeader), PAGE_ALIGN) +
-                 header()->slotStride * slot;
-    return reinterpret_cast<SlotHeader *>(base);
-  }
-
-  void *slotData(uint32_t slot) const {
-    return reinterpret_cast<std::byte *>(slotHeader(slot)) + header()->dataOffset;
-  }
-
-  uint32_t beginSlot() {
-    const uint32_t prev = header()->latestSlot.load(std::memory_order_acquire);
-    const uint32_t slot = (prev + 1) % SLOT_COUNT;
-    const uint64_t latest = header()->latestSeq.load(std::memory_order_acquire);
-    slotHeader(slot)->seq.store(latest * 2 + 1, std::memory_order_release);
-    std::atomic_thread_fence(std::memory_order_seq_cst);
-    return slot;
-  }
-
-  uint64_t publish(uint32_t slot, const Meta &meta) {
-    const uint64_t seq = header()->latestSeq.load(std::memory_order_acquire) + 1;
-    auto *s = slotHeader(slot);
-    s->tCapture = meta.tCapture;
-    s->convertMs = meta.convertMs;
-    s->deviceTimestamp = meta.deviceTimestamp;
-    s->systemTimestamp = meta.systemTimestamp;
-    s->seq.store(seq * 2, std::memory_order_release);
-    header()->latestSlot.store(slot, std::memory_order_release);
-    header()->latestSeq.store(seq, std::memory_order_release);
-    return seq;
-  }
-};
+// The `Segment` writer is now the shared `ShmRing::Segment` (ShmWrite.h),
+// reused by both this live preview writer and the C-16 pipe `Publisher`.
 
 struct SlotNative {
   std::shared_ptr<Segment> segment;
@@ -428,7 +320,7 @@ public:
       generation++;
       segment = std::make_shared<Segment>(
           segmentName(key, generation), generation, shape[0], shape[1],
-          channels);
+          channels, SLOT_COUNT, recordSegmentName);
       activeShape = shape;
       activeChannels = channels;
     }

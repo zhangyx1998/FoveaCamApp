@@ -34,6 +34,7 @@ export const {
     Geometry,
     Log,
     Shm,
+    Pipe,
     cleanup,
     __origin__,
 } = Module;

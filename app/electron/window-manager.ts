@@ -226,6 +226,27 @@ export class WindowManager {
   }
 
   /**
+   * Toggle a module's debug sub-window (WS2 2b) — the FIRST `owner`-setting
+   * caller of `toggle`, proving the 2a substrate end to end. Owner-bound
+   * (`debug` is the sole `onOwnerClose: cascade` class): it tears down when the
+   * opener app window closes or is switched away. Its overlay/frame address
+   * rides the URL like a projection. One per session (keyed `debug:<session>`).
+   */
+  toggleDebug(
+    params: ProjectionParams,
+    owner: ManagedWindow | null,
+  ): ManagedWindow | null {
+    const search =
+      "?" + new URLSearchParams({ session: params.session, frame: params.frame }).toString();
+    return this.toggle(`debug:${params.session}`, {
+      class: "debug",
+      entry: entryFor("debug"),
+      search,
+      owner: owner ?? undefined,
+    });
+  }
+
+  /**
    * Open a projection window for one stream (multi-window.md req. 4).
    * 0..N instances — never a singleton, never exclusive, never counted for
    * the welcome rule, never drained (passive subscriber), and deliberately

@@ -14,6 +14,7 @@ import { McapIndexedReader, type IReadable, type McapTypes } from "@mcap/core";
 import {
   createFoveaSink,
   createRecordingSink,
+  frameVoltageExtras,
   RECORDER_BACKEND,
   type RecorderTopology,
 } from "@orchestrator/recorder";
@@ -142,6 +143,34 @@ describe("MCAP recorder (fovea sink)", () => {
     const finalize = metadata.find((m) => m.name === "fovea:finalize")!;
     expect(finalize.metadata.get("durationSec")).toBe("3.5");
     expect(await readFile(join(dir, "README.md"), "utf8")).toContain("MCAP");
+  });
+
+  it("carries the WS4 4b frame↔voltage binding in per-frame telemetry", async () => {
+    const dir = await tempRoot();
+    const sink = await createFoveaSink(dir, "2026-07-06T00:00:00.000Z");
+
+    // A recorded frame produced by CMD_FRAME capture 7 with its exposure-
+    // averaged L-mirror voltage (built via the recorder's own schema helper).
+    sink.write("left-fovea", fakeFrame([1, 2, 3, 4]), "Mono12p", 1.0, {
+      ...frameVoltageExtras(7, { x: 1.25, y: -0.5 }),
+      angle: { x: 0.01, y: -0.02 },
+    });
+    await sink.finalize(1.0);
+
+    const { messages, topics } = await readContainer(join(dir, "recording.fovea"));
+    const telemetryId = topics.get("telemetry")!.id;
+    const doc = messages
+      .filter((m) => m.channelId === telemetryId)
+      .map((m) => JSON.parse(new TextDecoder().decode(m.data)))[0];
+    expect(doc).toMatchObject({
+      stream: "left-fovea",
+      seq: 0,
+      frame_id: 7, // stable capture identity from the FIN (B-12)
+      volt: { x: 1.25, y: -0.5 }, // exposure-averaged voltage that produced it
+      "volt.unit": "volt",
+      "volt.source": "fin-averaged",
+      angle: { x: 0.01, y: -0.02 },
+    });
   });
 
   it("drops when the bounded queue is full and accounts them (stats + meter)", async () => {

@@ -21,7 +21,13 @@
 // non-exclusive, never counted for the welcome rule;
 // docs/refactor/recorder-container.md §4).
 
-export type WindowClass = "welcome" | "app" | "profiler" | "projection" | "viewer";
+export type WindowClass =
+  | "welcome"
+  | "app"
+  | "profiler"
+  | "projection"
+  | "viewer"
+  | "debug";
 
 /** URL state params addressing a projection window's stream (multi-window.md
  *  req. 4 — the first state-in-URL consumer): the orchestrator session name
@@ -183,6 +189,20 @@ export const WINDOWS: Record<WindowClass, WindowSpec> = {
     sandbox: false,
     title: "FoveaCam Duo — Viewer",
     bounds: { width: 1100, height: 760, minWidth: 640, minHeight: 420 },
+  },
+  debug: {
+    // WS2 2b: a module's annotation-overlay sub-window. Owner-bound — the
+    // FIRST class to opt into cascade (closes with its opener app; A-20/2a).
+    // Projection-style: renderer preload (shm reader), passive subscriber.
+    singleton: false,
+    exclusive: false,
+    countsForWelcome: false,
+    onOwnerClose: "cascade",
+    entry: "windows/debug.html",
+    preload: "renderer",
+    sandbox: false,
+    title: "FoveaCam Duo — Debug",
+    bounds: { width: 720, height: 560, minWidth: 320, minHeight: 240 },
   },
 };
 

@@ -12,7 +12,14 @@ import {
   type WindowClass,
 } from "@lib/windows";
 
-const CLASSES: WindowClass[] = ["welcome", "app", "profiler", "projection", "viewer"];
+const CLASSES: WindowClass[] = [
+  "welcome",
+  "app",
+  "profiler",
+  "projection",
+  "viewer",
+  "debug",
+];
 
 describe("WINDOWS taxonomy table", () => {
   it("has exactly one row per window class", () => {
@@ -37,12 +44,12 @@ describe("WINDOWS taxonomy table", () => {
       expect(WINDOWS[cls].dedupe).toBe(cls === "viewer" ? "fileKey" : undefined);
   });
 
-  it("declares a valid onOwnerClose policy for every class (all survive pre-2b)", () => {
-    // WS2 2a substrate: existing classes survive their owner's close; the
-    // cascade policy arrives with 2b's debug sub-window class.
+  it("only the debug class cascades on owner close; the rest survive", () => {
+    // WS2 2b: `debug` is the first (and only) cascade class — it closes with the
+    // app that owns it. Every other class survives its owner's close.
     for (const cls of CLASSES) {
       expect(["cascade", "survive"]).toContain(WINDOWS[cls].onOwnerClose);
-      expect(WINDOWS[cls].onOwnerClose).toBe("survive");
+      expect(WINDOWS[cls].onOwnerClose).toBe(cls === "debug" ? "cascade" : "survive");
     }
   });
 
@@ -89,6 +96,6 @@ describe("WINDOWS taxonomy table", () => {
     }
     for (const app of APPS) expect(entries[app.id]).toBe(`windows/${app.id}.html`);
     // 4 static class entries (all but app) + one per app, no extras.
-    expect(Object.keys(entries).length).toBe(4 + APPS.length);
+    expect(Object.keys(entries).length).toBe(5 + APPS.length);
   });
 });

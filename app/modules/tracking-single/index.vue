@@ -31,6 +31,7 @@ import PosView from "@src/components/PosView.vue";
 import ConfigEntry from "@src/components/ConfigEntry.vue";
 import RangeSlider from "@src/inputs/range-slider.vue";
 import Drawer from "@src/components/Drawer.vue";
+import TrackingAnnotations from "./TrackingAnnotations.vue";
 
 const app_config = await useAppConfig();
 const session = useSession(tracking, "tracking");
@@ -58,10 +59,10 @@ const depth_window = computed(() =>
     : 1 / Math.pow(state.depthWindowInv, 2),
 );
 const plusSign = (v: string) => (v.startsWith("-") ? v : "+" + v);
-// Overlay stroke scales with frame size so it reads at any resolution.
-const stroke = computed(
-  () => Math.max(telemetry.size.width, telemetry.size.height, 1) * 0.003,
-);
+
+// WS2 2b: open/close the tracking debug sub-window (annotation overlay on the
+// C stream), owned by this app window (cascade-closes on app close/switch).
+const toggleDebug = () => window.foveaBridge.toggleDebugWindow("tracking", "C");
 
 onMounted(() => {
   // Seed the stereo baseline from app config (single source for the geometry).
@@ -114,24 +115,9 @@ const releaseTracker = () => session.call("releaseTracker", undefined);
         :theme="THEME.C"
         @mouse="onCursor"
       >
-        <!-- Target (predicted) location. -->
-        <circle
-          :cx="telemetry.target.x"
-          :cy="telemetry.target.y"
-          :r="stroke * 3"
-          :fill="THEME.C"
-        />
-        <!-- Tracker bounding box. -->
-        <rect
-          v-if="telemetry.bbox"
-          :x="telemetry.bbox.x"
-          :y="telemetry.bbox.y"
-          :width="telemetry.bbox.width"
-          :height="telemetry.bbox.height"
-          stroke="#0f0"
-          :stroke-width="stroke"
-          fill="none"
-        />
+        <!-- Annotation overlay (A-21 / A-P6): extracted to a shared component,
+             also rendered in the debug sub-window (WS2 2b). -->
+        <TrackingAnnotations :session="session" />
       </StreamView>
       <ConfigEntry>
         <label>
@@ -152,6 +138,10 @@ const releaseTracker = () => session.call("releaseTracker", undefined);
           <span>Wrap</span>
           <input type="checkbox" v-model="state.wrap" />
         </label>
+        <span>|</span>
+        <button class="debug-btn" title="Toggle the annotation overlay in its own window" @click="toggleDebug">
+          Debug ▸
+        </button>
         <span>|</span>
         <button v-if="telemetry.active" class="release-btn" @click="releaseTracker">
           Release Tracker
@@ -292,6 +282,19 @@ const releaseTracker = () => session.call("releaseTracker", undefined);
   border-radius: 3px;
   &:hover {
     background: #0f02;
+  }
+}
+
+.debug-btn {
+  background: none;
+  border: 1px solid #58a;
+  color: #8cf;
+  padding: 0.1em 0.6em;
+  cursor: pointer;
+  font-size: 0.85em;
+  border-radius: 3px;
+  &:hover {
+    background: #58a2;
   }
 }
 

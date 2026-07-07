@@ -28,7 +28,7 @@ from .dtypes import (
     to_display,
     unpack_12p,
 )
-from .fovea import FoveaFrame, FoveaReader, StreamInfo
+from .fovea import FoveaFrame, FoveaReader, StreamInfo, XY
 from .legacy import LegacyFrame, LegacyRecording, LegacyStream
 from .schema import TELEMETRY_TOPIC
 
@@ -38,6 +38,7 @@ __all__ = [
     "FoveaReader",
     "FoveaFrame",
     "StreamInfo",
+    "XY",
     "TELEMETRY_TOPIC",
     "LegacyRecording",
     "LegacyStream",

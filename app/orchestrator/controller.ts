@@ -93,9 +93,16 @@ export interface StreamHandle {
  *  matching `actuate()`'s existing convention. Distinct from core's raw
  *  `FrameResult` (`core/Controller`), which is in wire units. */
 export interface FrameOutcome {
+  /** Stable per-capture frame identity (FIN `frame_id`, B-12) — binds this
+   *  outcome to the exact camera frame it produced, for downstream recorder
+   *  metadata (WS4 4b). */
+  frameId: number;
   stream: number;
   tTrigger: bigint;
   tExposure: bigint;
+  /** Exposure-AVERAGED mirror voltage for this frame (B-12: MEMS voltage
+   *  sampled at exposure start AND finish, then averaged), converted DAC→volts
+   *  like `actuate()`. */
   left: Pos;
   right: Pos;
 }
@@ -320,9 +327,10 @@ export class Controller {
   /** Issues a CMD_FRAME triggered-capture request on `stream` (§3.2/§5).
    *  Two-phase: `.accepted` resolves on ACK (queue position; rejects on
    *  REJ) independently of the returned promise, which resolves on FIN with
-   *  the mirror positions latched at exposure start (converted to volts,
-   *  like `actuate()`) plus the MCU trigger/exposure timestamps — feed
-   *  these to `sync.ts`'s `calibrate`/`matchPair` for L/R pairing. */
+   *  the exposure-AVERAGED mirror voltage (B-12; converted to volts like
+   *  `actuate()`) plus the FIN `frameId` and the MCU trigger/exposure
+   *  timestamps — feed these to `sync.ts`'s `calibrate`/`matchPair` for L/R
+   *  pairing, and `frameId` binds the voltage to the recorded frame (4b). */
   frame(opts: {
     stream: number;
     cameras?: CameraName[] | number;
@@ -338,6 +346,7 @@ export class Controller {
     const completed = (async (): Promise<FrameOutcome> => {
       const result = await req;
       return {
+        frameId: result.frame_id,
         stream: result.stream,
         tTrigger: result.t_trigger,
         tExposure: result.t_exposure,

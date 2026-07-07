@@ -68,6 +68,10 @@ export function planFromManifest(
     // Unknown class (future taxonomy, hand-edit) has no `WINDOWS` row — drop.
     const spec = (WINDOWS as Record<string, WindowSpec | undefined>)[w.class];
     if (!spec) continue;
+    // Owner-bound (cascade) windows can't restore without their owner — the
+    // owner pointer isn't persisted, and re-parenting is meaningless across a
+    // restart. Drop them (WS2 2b `debug`); the app re-opens its drawer on demand.
+    if (spec.onOwnerClose === "cascade") continue;
     if (spec.exclusive) {
       // Exclusivity: at most one, first valid one wins (app needs a real id).
       if (haveExclusive) continue;

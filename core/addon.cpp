@@ -10,6 +10,7 @@
 
 #include "CoreObject.h"
 #include "Dispatcher.h"
+#include "Pipe.h"
 #include "ShmRing.h"
 
 using namespace Napi;
@@ -62,6 +63,10 @@ static Object init(Env env, Object exports) {
     auto Shm = Object::New(env);
     ShmRing::exportShmNamespace(env, Shm);
     exports.Set("Shm", Shm);
+    // WS1 producer/publisher pipe broker (C-16)
+    auto PipeNs = Object::New(env);
+    Pipe::exportPipeNamespace(env, PipeNs);
+    exports.Set("Pipe", PipeNs);
     // Finalize
     exports.Set("cleanup", Function::New(env, cleanup));
     VERBOSE("Core module initialized");

@@ -407,6 +407,48 @@ describe("WindowManager", () => {
     expect(again).not.toBeNull();
     expect(spawned.length).toBe(2); // dedupe held while open; two distinct spawns
   });
+
+  // --- debug sub-window (WS2 2b, the FIRST real owner-setter) --------------
+
+  it("toggleDebug opens a cascade-owned debug window keyed by session", async () => {
+    const { manager } = harness();
+    await manager.openApp("tracking-single");
+    const app = manager.appWindow()! as FakeWindow;
+    const dbg = manager.toggleDebug({ session: "tracking", frame: "C" }, app) as FakeWindow;
+    expect(dbg).not.toBeNull();
+    expect(dbg.class).toBe("debug");
+    expect(dbg.owner).toBe(app);
+    expect(dbg.key).toBe("debug:tracking");
+    expect(manager.childrenOf(app)).toContain(dbg);
+  });
+
+  it("toggleDebug is a real toggle (second call on the same session closes it)", async () => {
+    const { manager } = harness();
+    await manager.openApp("tracking-single");
+    const app = manager.appWindow()!;
+    const dbg = manager.toggleDebug({ session: "tracking", frame: "C" }, app) as FakeWindow;
+    expect(manager.toggleDebug({ session: "tracking", frame: "C" }, app)).toBeNull();
+    expect(dbg.destroyed).toBe(true);
+  });
+
+  it("the debug window cascade-closes when its owner app closes", async () => {
+    const { manager } = harness();
+    await manager.openApp("tracking-single");
+    const app = manager.appWindow()! as FakeWindow;
+    const dbg = manager.toggleDebug({ session: "tracking", frame: "C" }, app) as FakeWindow;
+    app.close();
+    expect(dbg.destroyed).toBe(true); // debug is the cascade class
+  });
+
+  it("the debug window cascade-closes when its owner app is switched away", async () => {
+    const { manager } = harness();
+    await manager.openApp("tracking-single");
+    const app = manager.appWindow()! as FakeWindow;
+    const dbg = manager.toggleDebug({ session: "tracking", frame: "C" }, app) as FakeWindow;
+    await manager.openApp("disparity-scope"); // drains + closes tracking app
+    expect(dbg.destroyed).toBe(true);
+    expect(manager.appWindow()?.appId).toBe("disparity-scope");
+  });
 });
 
 // Restore any per-test WINDOWS policy mutation (the cascade test flips

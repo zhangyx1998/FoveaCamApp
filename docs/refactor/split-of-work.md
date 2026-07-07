@@ -103,7 +103,7 @@ planner-logged handoff (ask via your log, don't just edit).
 | `app/electron/preload-bridge.ts` (bridge impl — MUST stay self-contained per V11; shm-free) | A |
 | `app/electron/preload-renderer.ts`, `preload-profiler.ts` | C |
 | SHM blocks in `lib/orchestrator/client.ts` + `protocol.ts` (`shm` payload variant), SHM OSD in `StreamView` | C (A owns the rest of those files) |
-| `core/include/ShmRing.h`, `core/src/ShmRing.cpp`, reader addon target, `core/test/08-shm-ring.ts` | C |
+| `core/include/ShmRing.h`, `core/include/ShmLayout.h`, `core/src/ShmRing.cpp`, reader addon target, `core/test/08-shm-ring.ts` + the WS1 pipe substrate `core/include/Pipe.h`, `core/src/Pipe.cpp` and its `core.Pipe` NAPI target (C-16 grant 2026-07-07 — SHM frame path is C's domain end-to-end) | C |
 | `lib/orchestrator/viewer-contract.ts` — THE pinned A↔C contract; planner arbitrates changes | shared (planner) |
 | `app/orchestrator/viewer/**`, `sessions/viewer.ts` | C |
 | `app/src/windows/ViewerWindow.vue`, `app/electron-builder.yml` | A |
@@ -150,6 +150,10 @@ hardware-dependent behavior verified without a real rig run.
 
 - **(A-20 refactor wave-1 accepted & archived 2026-07-07 → refactor-plan.md.)**
 
+- **(A-21 refactor wave-2 accepted & archived 2026-07-07 → refactor-plan.md.)**
+
+- **(A-22 WS4-4b write-path accepted & archived 2026-07-07 → refactor-plan.md.)**
+
 ## Coder B — Native core, protocol & firmware
 
 Owns `core` native code (except the SHM substrate), `firmware/**`, and
@@ -164,6 +168,10 @@ control is the planner's review loop.
 - **(B-11 wave-3 accepted & archived 2026-07-07 → proposals/TRIAGE.md.)**
 
 - **(B-12 refactor wave-1 accepted & archived 2026-07-07 → refactor-plan.md.)**
+
+- **(B-13 refactor wave-2 accepted & archived 2026-07-07 → refactor-plan.md.)**
+
+- **(B-14 WS4-4b decoder accepted & archived 2026-07-07 → refactor-plan.md.)**
 
 - **(B-5 accepted & archived 2026-07-06 → recorder-container.md §2b.)**
 
@@ -189,6 +197,8 @@ session.
 - **(C-14 wave-4 accepted & archived 2026-07-07 → proposals/TRIAGE.md.)**
 
 - **(C-15 refactor wave-1 accepted & archived 2026-07-07 → refactor-plan.md.)**
+
+- **(C-16 refactor wave-2 accepted & archived 2026-07-07 → refactor-plan.md.)**
 
 - **(history) C-6 — workload metering core (accepted; spec:
   docs/refactor/workload-metering.md — read it fully first).**

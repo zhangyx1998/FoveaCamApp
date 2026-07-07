@@ -40,8 +40,11 @@ ReadMapping::ReadMapping(const std::string &name) {
     throw std::runtime_error(errnoMessage("mmap header", name));
   }
   auto *h = reinterpret_cast<SegmentHeader *>(firstPage);
+  // slotCount is per-segment (pipes carry their own ringDepth); validate a sane
+  // range rather than a fixed value.
   if (std::memcmp(h->magic, MAGIC, sizeof(MAGIC)) != 0 ||
-      h->layoutVersion != LAYOUT_VERSION || h->slotCount != SLOT_COUNT) {
+      h->layoutVersion != LAYOUT_VERSION || h->slotCount < 1 ||
+      h->slotCount > MAX_SLOT_COUNT) {
     munmap(firstPage, PAGE_ALIGN);
     ::close(fd_);
     fd_ = -1;
@@ -94,8 +97,15 @@ ReadStatus readLatestInto(const ReadMapping &m, void *dst, size_t dstBytes,
                           uint64_t lastSeq, ReadResult &out) {
   const SegmentHeader *h = m.header();
   const uint64_t latest = h->latestSeq.load(std::memory_order_acquire);
-  if (latest <= lastSeq)
+  if (latest <= lastSeq) {
+    // Cold path only: no newer frame. If the publisher has closed the pipe, the
+    // final frame was already delivered (its latestSeq is visible before the
+    // release-stored CLOSED), so report Closed here — not a frozen last frame.
+    if (h->state.load(std::memory_order_acquire) ==
+        static_cast<uint32_t>(PipeState::CLOSED))
+      return ReadStatus::Closed;
     return ReadStatus::NoNewFrame;
+  }
   if (dstBytes < h->slotBytes)
     return ReadStatus::DestTooSmall;
 

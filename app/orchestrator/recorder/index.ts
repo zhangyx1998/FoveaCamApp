@@ -73,6 +73,12 @@ export {
   TELEMETRY_SCHEMA_NAME,
 } from "./schema.js";
 export { singleFileTopology } from "./types.js";
+export {
+  frameVoltageExtras,
+  type RecordedFrameExtras,
+  type VoltSource,
+  type Volt,
+} from "./metadata.js";
 
 export type RecorderBackend = "fovea" | "legacy";
 
@@ -88,7 +94,12 @@ export interface RecordingSink {
   readonly kind: RecorderBackend;
   /** Write one frame on a named stream (lazily registers the stream on
    *  first use). Synchronous, never blocks the orchestrator loop — frames
-   *  that cannot ship are dropped and accounted (never silently). */
+   *  that cannot ship are dropped and accounted (never silently).
+   *  `extra` becomes the frame's `telemetry` JSON doc (`{stream, seq, t,
+   *  ...extra}`); stays generic, but the decoder-facing keys are the
+   *  `RecordedFrameExtras` schema (`./metadata.ts`) — including the WS4 4b
+   *  frame↔voltage binding (`frame_id` + exposure-averaged `volt`, built via
+   *  `frameVoltageExtras`). */
   write(
     stream: string,
     frame: Mat,
