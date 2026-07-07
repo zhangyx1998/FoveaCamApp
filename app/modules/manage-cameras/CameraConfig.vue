@@ -99,7 +99,7 @@ function reset() {
     <StreamView
       class="stream"
       :title="view?.description"
-      :payload="framePayload"
+      :payload="framePayload.payload.value" :source="framePayload.source"
       width="100%"
       theme="white"
     />

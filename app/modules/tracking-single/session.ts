@@ -237,7 +237,7 @@ export default function trackingSession(): ServerSession<typeof tracking> {
     }
 
     function depthWindow(): number {
-      return depthFromInverse(s.state.depth_window_inv);
+      return depthFromInverse(s.state.depthWindowInv);
     }
 
     // Combined fovea view (diff or depth) from the aligned L/R pair. Called on
@@ -264,12 +264,12 @@ export default function trackingSession(): ServerSession<typeof tracking> {
       s.frame("center", out);
     }
 
-    // Publish each fovea's preview (wrapped iff `wrap_enable`), and cache the
+    // Publish each fovea's preview (wrapped iff `wrap`), and cache the
     // always-aligned fovea so the combined diff/depth view can use it.
     function processFoveaView(role: "L" | "R", view: Mat<Uint8Array>): void {
       const H = triple ? triple.conv.A2H[role](triple.conv.V2A[role](volts[role])) : null;
       const wrapped = H ? wrapPerspective(view, H) : null;
-      const display = s.state.wrap_enable && wrapped ? wrapped : view;
+      const display = s.state.wrap && wrapped ? wrapped : view;
       s.frame(role, display);
       if (s.state.view === "sliced") {
         aligned.L = aligned.R = null; // not needed; let the Mats be collected

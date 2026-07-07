@@ -25,6 +25,7 @@ import {
   viewer,
   type PlaybackDoc,
   type ViewerFile,
+  type ViewerPosition,
 } from "@lib/orchestrator/viewer-contract";
 import { registerWorkload } from "../metering.js";
 import { createFrameDecoder, type FrameDecoder } from "../viewer/decode.js";
@@ -49,9 +50,7 @@ interface OpenFile {
   /** Canonical (symlink-resolved) path — the dedupe key for `open()`. */
   canonical: string;
   /** The static half of the `ViewerFile` state row. */
-  info: Omit<ViewerFile, "positionNs" | "playing">;
-  positionNs: number;
-  playing: boolean;
+  info: ViewerFile;
 }
 
 /** Canonicalize for dedupe: resolve symlinks so two spellings of the same
@@ -73,13 +72,18 @@ export function viewerSession(deps: ViewerSessionDeps = {}): ServerSession<typeo
   return defineSession("viewer", viewer, (s) => {
     const files = new Map<string, OpenFile>();
     const playbackDocs: Record<string, PlaybackDoc | null> = {};
+    const positions: Record<string, ViewerPosition | null> = {};
     let nextId = 1;
 
     function pushFiles(): void {
       const snapshot: Record<string, ViewerFile> = {};
-      for (const [id, f] of files)
-        snapshot[id] = { ...f.info, positionNs: f.positionNs, playing: f.playing };
+      for (const [id, f] of files) snapshot[id] = f.info;
       s.setState("files", snapshot);
+    }
+
+    function pushPosition(fileId: string, position: ViewerPosition | null): void {
+      positions[fileId] = position;
+      s.telemetry({ position: { ...positions } });
     }
 
     function required(fileId: string): OpenFile {
@@ -95,6 +99,7 @@ export function viewerSession(deps: ViewerSessionDeps = {}): ServerSession<typeo
       delete playbackDocs[fileId];
       await f.player.close(); // also disposes the file's workload meter
       pushFiles();
+      pushPosition(fileId, null);
       s.telemetry({ playback: { ...playbackDocs } });
     }
 
@@ -124,8 +129,6 @@ export function viewerSession(deps: ViewerSessionDeps = {}): ServerSession<typeo
           });
           const entry: OpenFile = {
             canonical,
-            positionNs: 0,
-            playing: false,
             info: {
               path,
               channels: source.channels.map((c) => ({
@@ -152,16 +155,14 @@ export function viewerSession(deps: ViewerSessionDeps = {}): ServerSession<typeo
                 playbackDocs[fileId] = doc;
                 s.telemetry({ playback: { ...playbackDocs } });
               },
-              onUpdate: (positionNs, playing) => {
-                entry.positionNs = positionNs;
-                entry.playing = playing;
-                pushFiles();
-              },
+              emitPosition: (positionNs, playing) =>
+                pushPosition(fileId, { positionNs, playing }),
             },
             deps.clock,
           );
           files.set(fileId, entry);
           pushFiles();
+          pushPosition(fileId, { positionNs: 0, playing: false });
           return { fileId };
         },
 

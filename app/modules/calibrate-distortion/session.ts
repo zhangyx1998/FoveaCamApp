@@ -111,7 +111,7 @@ export default function calibrateDistortionSession(): ServerSession<typeof calib
       triple = t;
       trackers = createTrackerTriple(
         { L: t.leases.L.camera, C: t.leases.C.camera, R: t.leases.R.camera },
-        s.state.target_id,
+        s.state.targetId,
         { internal: true },
       );
       bindDetections(trackers, disposers, publishDetections, onCenterDetection);
@@ -147,7 +147,7 @@ export default function calibrateDistortionSession(): ServerSession<typeof calib
     return {
       commands: {
         async setTargetId({ role, id }) {
-          s.setState("target_id", { ...s.state.target_id, [role]: id });
+          s.setState("targetId", { ...s.state.targetId, [role]: id });
           retarget(trackers, role, id);
         },
       },

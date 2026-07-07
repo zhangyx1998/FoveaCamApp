@@ -34,9 +34,9 @@ interface Shared {
   readonly sinks: Set<FrameSink>; // transport: get an SHM descriptor payload
   readonly viewSinks: Set<ViewSink>; // in-process: get the BGRA Mat view
   shmWriter?: ShmWriter;
-  // Persistent tap buffer: `slot.view()` is a fresh cage-local snapshot per
-  // call under Electron (V13) — taps are served by native `copyTo` into this
-  // one reused buffer instead (one memcpy, zero steady-state allocation).
+  // Persistent tap buffer: `slot.readSnapshot()` is a fresh cage-local snapshot
+  // per call under Electron (V13) — taps are served by native `copyTo` into
+  // this one reused buffer instead (one memcpy, zero steady-state allocation).
   tapView?: Mat<Uint8Array>;
   abort: boolean;
   loop: Promise<void> | null; // in-flight preview loop, awaited on stop

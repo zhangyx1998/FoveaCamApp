@@ -91,7 +91,7 @@ export default function calibrateIntrinsicSession(): ServerSession<typeof calibr
 
     function clearRecords(): void {
       records = [];
-      s.telemetry({ record_count: 0 });
+      s.telemetry({ recordCount: 0 });
     }
 
     async function buildView(info: CameraInfo, role: string | undefined): Promise<CalibrationView> {
@@ -221,7 +221,7 @@ export default function calibrateIntrinsicSession(): ServerSession<typeof calibr
       activeLease = lease;
       activeInfo = known.get(serial) ?? null;
       previewDisposer = lease.onFrame((payload) => s.frame("preview", payload));
-      s.setState("active_serial", serial);
+      s.setState("activeSerial", serial);
       restartDetection();
     }
 
@@ -237,7 +237,7 @@ export default function calibrateIntrinsicSession(): ServerSession<typeof calibr
       activeLease = null;
       activeInfo = null;
       width = height = 0;
-      s.setState("active_serial", null);
+      s.setState("activeSerial", null);
       s.telemetry({ detection: null, size: { width: 0, height: 0 } });
     }
 
@@ -276,12 +276,12 @@ export default function calibrateIntrinsicSession(): ServerSession<typeof calibr
         }
         records.push({ gray, samples });
       }
-      s.telemetry({ record_count: records.length });
+      s.telemetry({ recordCount: records.length });
     }
 
     function removeRecord({ index }: { index: number }): void {
       records.splice(index, 1);
-      s.telemetry({ record_count: records.length });
+      s.telemetry({ recordCount: records.length });
     }
 
     async function calibrateNow(): Promise<void> {

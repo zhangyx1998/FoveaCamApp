@@ -61,7 +61,7 @@ export const DEFAULT_TUNING: Tuning = {
 };
 
 /** Current value of each constrained-DOF PID integrator — debug readout +
- *  the payload shape for `set_pid`'s manual nudge. */
+ *  the payload shape for `setPid`'s manual nudge. */
 export type PidReadout = { verge: number; panX: number; panY: number; v_shift: number };
 
 export const disparity = defineContract({
@@ -79,7 +79,7 @@ export const disparity = defineContract({
     /** Which composite the renderer wants for the `center.*` channel. */
     view: "sliced" as "sliced" | "disparity",
     /** Perspective-rectify each fovea onto its pointing pose before display. */
-    wrap_enable: true as boolean,
+    wrap: true as boolean,
     tuning: DEFAULT_TUNING,
     tracker_enabled: false as boolean,
     /** KCF template size (pixels); also used as the search-window pad, same
@@ -115,7 +115,7 @@ export const disparity = defineContract({
     // §7.3 item 2), same shape/throttle as tracking-single/manual-control.
     perf: { actuateMs: { mean: 0, max: 0 } as Stat },
   },
-  // L/C/R are the processed previews (L/R perspective-wrapped iff wrap_enable,
+  // L/C/R are the processed previews (L/R perspective-wrapped iff wrap,
   // C raw — this module never undistorts the wide view); `center.*` is the
   // magnified/combined fovea view; `guide`/`match_left`/`match_right` are the
   // template-match debug visualizations (heatmap Mats — their `{rect,score}`
@@ -137,12 +137,12 @@ export const disparity = defineContract({
     pointer:
       cmd<{ p: Point2d; buttons: number; phase: "down" | "move" | "up" }>(),
     /** Restore all tuning params to {@link DEFAULT_TUNING}. */
-    reset_tuning: cmd(),
+    resetTuning: cmd(),
     /** Clear the PID integrators so the foveas re-converge fresh. */
     reset_vergence: cmd(),
     /** Manually nudge one PID's integrator (debug slider) — same effect as
      *  the original renderer's direct `pids.verge.value = x` mutation. */
-    set_pid: cmd<{ dof: keyof PidReadout; value: number }>(),
+    setPid: cmd<{ dof: keyof PidReadout; value: number }>(),
   },
 });
 

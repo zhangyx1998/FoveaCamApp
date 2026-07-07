@@ -51,7 +51,7 @@ const valid = computed(() => !!props.session && !!props.frame);
 const source = valid.value
   ? useSession(projectionContract, props.session, { passive: true })
   : null;
-const payload = computed(() => source?.frame(props.frame).value ?? null);
+const payload = computed(() => source?.frame(props.frame).payload.value ?? null);
 const idle = computed(() => !!source && source.telemetry.ready === false);
 </script>
 

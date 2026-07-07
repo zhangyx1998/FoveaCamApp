@@ -38,8 +38,8 @@ const image_entries = computed(() =>
       // array (a multi-set-point capture), matching the server's exact
       // `capture:<name>` / `capture:<name>#<i>` naming (see `capture.ts`).
       const image = Array.isArray(meta)
-        ? meta.map((_, i) => cap.session.frame(`capture:${name}#${i}`).value)
-        : cap.session.frame(`capture:${name}`).value;
+        ? meta.map((_, i) => cap.session.frame(`capture:${name}#${i}`).payload.value)
+        : cap.session.frame(`capture:${name}`).payload.value;
       return [name, image] as const;
     })
     .toReversed(),

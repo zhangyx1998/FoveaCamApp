@@ -227,13 +227,16 @@ export class Controller {
     return this.bias;
   }
 
-  async actuate(pos: { left?: Pos; right?: Pos }, settle_time = 0) {
+  async actuate(pos: { left?: Pos; right?: Pos }, settleTime = 0) {
+    // `settle_time`/`complete_time` are the NATIVE core `Device.set` protocol
+    // field names (B-owned) — they stay snake_case at this boundary; only the
+    // wire-facing param/return are camelCased (A-P7).
     const { left, right, complete_time } = await this.device.set(
       Protocol.Command.Actuate,
       {
         left: channels(pos.left ?? this._pos.left, this.bias, this.dv),
         right: channels(pos.right ?? this._pos.right, this.bias, this.dv),
-        settle_time,
+        settle_time: settleTime,
       },
     );
     const new_pos = {
@@ -244,7 +247,7 @@ export class Controller {
       },
     };
     this._pos = new_pos;
-    return { ...new_pos, complete_time: complete_time ?? 0 };
+    return { ...new_pos, completeTime: complete_time ?? 0 };
   }
 
   trigger(duration_ns: number) {

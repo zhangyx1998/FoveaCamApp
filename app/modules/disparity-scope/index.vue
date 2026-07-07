@@ -65,7 +65,11 @@ const {
   "match_right",
 ]);
 const frameCenter = computed(() =>
-  state.view === "sliced" ? slicedFrame.value : disparityFrame.value,
+  state.view === "sliced" ? slicedFrame.payload.value : disparityFrame.payload.value,
+);
+// The toggled center view's projection address follows the active channel.
+const centerSource = computed(() =>
+  state.view === "sliced" ? slicedFrame.source : disparityFrame.source,
 );
 
 const drawer_height = ref(0);
@@ -160,7 +164,7 @@ const vergeLimits = computed<[number, number]>(() => [
 function pidRef(dof: Dof) {
   return computed<number>({
     get: () => telemetry.pids[dof],
-    set: (v) => session.call("set_pid", { dof, value: v }),
+    set: (v) => session.call("setPid", { dof, value: v }),
   });
 }
 const pidVerge = pidRef("verge");
@@ -201,11 +205,11 @@ function onCursor(c: (Point2d & Size & { buttons: number }) | null): void {
 <template>
   <div class="cameras">
     <div class="view">
-      <StreamView class="stream" :title="ROLE.L" :payload="frameL" :theme="THEME.L" />
+      <StreamView class="stream" :title="ROLE.L" :payload="frameL.payload.value" :source="frameL.source" :theme="THEME.L" />
       <PosView :pos="telemetry.volt.L" :color="THEME.L" style="width: 100%" />
     </div>
     <div class="view">
-      <StreamView class="stream" :payload="frameCenter" :theme="THEME.C">
+      <StreamView class="stream" :payload="frameCenter" :source="centerSource" :theme="THEME.C">
         <template #title>
           <InlineSelect v-model="state.view">
             <option value="sliced">Wide Angle Sliced</option>
@@ -213,7 +217,7 @@ function onCursor(c: (Point2d & Size & { buttons: number }) | null): void {
           </InlineSelect>
         </template>
       </StreamView>
-      <StreamView class="stream" :title="ROLE.C" :payload="frameC" :theme="THEME.C" @mouse="onCursor">
+      <StreamView class="stream" :title="ROLE.C" :payload="frameC.payload.value" :source="frameC.source" :theme="THEME.C" @mouse="onCursor">
         <!-- Target center. -->
         <circle :cx="state.target.x" :cy="state.target.y" :r="stroke * 3" :fill="THEME.C" />
         <!-- Per-eye projected pose. -->
@@ -257,7 +261,7 @@ function onCursor(c: (Point2d & Size & { buttons: number }) | null): void {
       </div>
     </div>
     <div class="view">
-      <StreamView class="stream" :title="ROLE.R" :payload="frameR" :theme="THEME.R" />
+      <StreamView class="stream" :title="ROLE.R" :payload="frameR.payload.value" :source="frameR.source" :theme="THEME.R" />
       <PosView :pos="telemetry.volt.R" :color="THEME.R" style="width: 100%" />
     </div>
   </div>
@@ -266,7 +270,7 @@ function onCursor(c: (Point2d & Size & { buttons: number }) | null): void {
     class="divergence"
     :style="{ paddingBottom: (drawer_height ? drawer_height + 20 : 0) + 'px' }"
   >
-    <StreamView class="wide" title="Template Match Guide Strip" :payload="frameGuide">
+    <StreamView class="wide" title="Template Match Guide Strip" :payload="frameGuide.payload.value" :source="frameGuide.source">
       <template v-if="frameGuide">
         <rect
           v-if="telemetry.match_center"
@@ -295,12 +299,12 @@ function onCursor(c: (Point2d & Size & { buttons: number }) | null): void {
     <StreamView
       class="wide"
       :title="`Left Match (Red = Match, Blue = Mismatch)`"
-      :payload="frameMatchLeft"
+      :payload="frameMatchLeft.payload.value" :source="frameMatchLeft.source"
     />
     <StreamView
       class="wide"
       :title="`Right Match (Red = Match, Blue = Mismatch)`"
-      :payload="frameMatchRight"
+      :payload="frameMatchRight.payload.value" :source="frameMatchRight.source"
     />
   </div>
 
@@ -364,7 +368,7 @@ function onCursor(c: (Point2d & Size & { buttons: number }) | null): void {
         </label>
         <label class="entry">
           <span>Wrap</span>
-          <input type="checkbox" v-model="state.wrap_enable" />
+          <input type="checkbox" v-model="state.wrap" />
         </label>
       </div>
       <!-- Columns 2-4: per-DOF gain PIDs (Pan / Depth / Vertical) -->

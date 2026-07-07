@@ -296,8 +296,7 @@ public:
     auto fn = DefineClass(
         env, "ShmSlot",
         {
-            InstanceMethod<&ShmSlotObject::view>("view"),
-            InstanceMethod<&ShmSlotObject::view>("readSnapshot"),
+            InstanceMethod<&ShmSlotObject::readSnapshot>("readSnapshot"),
             InstanceMethod<&ShmSlotObject::write>("write"),
             InstanceMethod<&ShmSlotObject::copyTo>("copyTo"),
             InstanceMethod<&ShmSlotObject::debugFillPattern>(
@@ -322,7 +321,7 @@ public:
 
   const SlotNative &value() const { return native; }
 
-  Napi::Value view(const Napi::CallbackInfo &info) {
+  Napi::Value readSnapshot(const Napi::CallbackInfo &info) {
     auto env = info.Env();
     const size_t bytes = native.segment->header()->slotBytes;
 #ifdef V8_MEMORY_CAGE
@@ -344,8 +343,8 @@ public:
 
   // Native memcpy INTO the slot — the cage-safe write path (V13): wrapping
   // external memory as a JS ArrayBuffer is banned under V8_MEMORY_CAGE, but
-  // writing shm from native is always fine. `view().set()` writes into the
-  // cage-local snapshot under Electron and never reaches the slot.
+  // writing shm from native is always fine. `readSnapshot().set()` writes into
+  // the cage-local snapshot under Electron and never reaches the slot.
   Napi::Value write(const Napi::CallbackInfo &info) {
     auto env = info.Env();
     try {

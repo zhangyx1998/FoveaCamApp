@@ -19,8 +19,8 @@
 // stale-async-completion class).
 //
 // The player knows nothing about sessions or transports — it gets
-// `publishFrame` / `emitTelemetry` / `onUpdate` hooks and a `WorkloadHandle`
-// (`viewer:<fileId>`), keeping it unit-testable in isolation.
+// `publishFrame` / `emitTelemetry` / `emitPosition` hooks and a
+// `WorkloadHandle` (`viewer:<fileId>`), keeping it unit-testable in isolation.
 
 import type { Mat } from "core/Vision";
 import type { PlaybackDoc } from "@lib/orchestrator/viewer-contract";
@@ -43,7 +43,7 @@ const defaultClock: PlayerClock = {
  *  not published — the pacing contract degrades by dropping. */
 const LATE_SKIP_MS = 200;
 
-/** Playback position/`playing` are pushed through `onUpdate` at most this
+/** Playback position/`playing` are pushed through `emitPosition` at most this
  *  often mid-playback (plus immediately on play/pause/seek/end). */
 const POSITION_UPDATE_MS = 250;
 const telemetryDecoder = new TextDecoder();
@@ -54,7 +54,7 @@ export interface PlayerHooks {
   /** Latest replayed telemetry-channel document (parsed JSON). */
   emitTelemetry?: (doc: PlaybackDoc) => void;
   /** Position/playing changed (throttled during playback). */
-  onUpdate(positionNs: number, playing: boolean): void;
+  emitPosition(positionNs: number, playing: boolean): void;
 }
 
 export interface Player {
@@ -112,7 +112,7 @@ export function createPlayer(
     const t = clock.now();
     if (!force && t - lastUpdateAt < POSITION_UPDATE_MS) return;
     lastUpdateAt = t;
-    hooks.onUpdate(positionNs, playing);
+    hooks.emitPosition(positionNs, playing);
   }
 
   async function handleMessage(msg: FoveaMessage, lateMs: number): Promise<void> {

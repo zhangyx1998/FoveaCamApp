@@ -66,6 +66,46 @@ backlog), breaking → user.
    next coder; gate = re-confirm zero callers + native rebuild + reader
    `otool -L`.
 
+## WAVE-4 LANDED + PLANNER-VERIFIED (2026-07-07, accepted; Opus 4.8 fleet)
+The approved BREAKING contract batch (A-P7 + A-P12 + C-R2-P9 + C-R2-P11), split
+fleet: Opus A for A-19; gpt-5.5 C landed C-14 before codex went OUT OF USAGE
+mid-wave (→ Opus became the sole active fleet).
+- **A (A-19):** A-P7 — 12 wire keys snake→camelCase (`target_id`→`targetId`,
+  `wrap_enable`→`wrap`, `depth_window_inv`→`depthWindowInv`,
+  `recording_streams`→`recordingStreams`, `record_count`→`recordCount`,
+  `active_serial`→`activeSerial`, `capture_busy`→`captureBusy`,
+  `set_pid`→`setPid`, `reset_tuning`→`resetTuning`, controller `serial_rate`/
+  `settle_time`/`complete_time`) across contracts.ts + all consumers; the
+  native controller.ts↔`device.set` boundary correctly KEPT snake (B-owned
+  protocol field names). MIGRATION AUDIT (dual-read DoD): all 12 keys checked
+  against all 5 persisted surfaces — NONE persisted (only localStorage key is
+  `manual-control.set-points`, only URL param is `step`, config docs persist
+  role/pixel_format/records/drift) → **ZERO dual-read shims needed**. A-P12 —
+  client-only `source` removed from wire `FrameMeta`; `useSession().frame()`
+  returns `FrameRef {payload, source}` (source static per session/channel), ~35
+  consumers migrated, StreamView reads `FrameRef.source`. Seam close:
+  `ViewerWindow.vue` migrated to C-14's `telemetry.position` shape.
+- **C (C-14):** C-R2-P9 — `ViewerFile` in `state.files` now STATIC-only; mutable
+  `{positionNs,playing}` rides a new `telemetry.position` channel (nulled on
+  close) so playback ticks stop re-serializing the whole file map;
+  sessions/viewer.ts + player.ts + tests migrated to the planner-ratified
+  shape. C-R2-P11 — deprecated native `ShmSlot::view()` DELETED (+ d.ts entry +
+  the mirror `view()` in frame-transport.ts's local type); kept
+  readSnapshot/write/copyTo; Aravis `Frame.view()` untouched; zero callers
+  confirmed.
+- **Planner final sweep (authoritative, unsandboxed):** vue-tsc **0** (the
+  A-P7 rename-completeness proof — a missed key would type-error), vitest
+  **218/218**, vite build clean, renderer zero-core / orchestrator zero-Vue,
+  V11 triplet 0/0/0, `core make build` both runtimes (0 errors), `08-shm-ring`
+  PASS (run unsandboxed — the codex sandbox blocks `shm_open`), reader
+  `otool -L` self+libc++/libSystem only, pyfovea 33/33. `FrameMeta.source`
+  removal + `FrameRef` re-verified from code; migration audit spot-checked (no
+  renamed key in any persisted-write path). Committed as the wave-4 checkpoint.
+- **OPTIMIZATION PROGRAM COMPLETE.** Waves 1–4 done; green-lit +
+  user-approved-breaking backlog EXHAUSTED. Remaining optimization items are all
+  trigger-gated (B-R2-P3 rig/bench, B-R2-P9 post-bench B-P14, the deferred set).
+  NEXT: HIL baseline (Pre-flight + PB2) at this seam, then refactor work.
+
 ## WAVE-3 LANDED + PLANNER-VERIFIED (2026-07-07, accepted; gpt-5.5 fleet)
 Fleet switched back to gpt-5.5 (Codex) for implementation per user; Opus 4.8
 kept warm as the switch-back reserve. Green-lit non-breaking round-2 backlog:

@@ -95,7 +95,7 @@ export interface CaptureDeps {
   steerToAngle(angle: Point2d, distance_mm?: number, shift_deg?: number): void;
   frame(name: string, payload: SessionFrameSource): void;
   telemetry(patch: {
-    capture_busy?: boolean;
+    captureBusy?: boolean;
     capture_meta?: Record<string, Serializable>;
   }): void;
 }
@@ -261,7 +261,7 @@ export function createCapture(deps: CaptureDeps): CaptureController {
   async function runInner(setpoints: VoltPreviewQuery[]): Promise<void> {
     busy = true;
     pending.clear();
-    deps.telemetry({ capture_busy: true, capture_meta: {} });
+    deps.telemetry({ captureBusy: true, capture_meta: {} });
     try {
       const triple = deps.getTriple();
       if (!triple?.undistort) throw new Error("Calibrated triple not ready");
@@ -278,7 +278,7 @@ export function createCapture(deps: CaptureDeps): CaptureController {
       }
     } finally {
       busy = false;
-      deps.telemetry({ capture_busy: false });
+      deps.telemetry({ captureBusy: false });
     }
   }
 

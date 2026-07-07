@@ -18,11 +18,11 @@
 // .frame(`${fileId}:${channel}`)`: passive-capable subscribe, per-topic
 // finterest, shm descriptors, OSD — nothing viewer-specific).
 //
-// Times: `durationNs` / `positionNs` / `seek.tNs` are nanoseconds RELATIVE
-// to the file's first message (0 .. durationNs) — the natural scrub-bar
-// domain; the absolute wall-clock anchor lives in the file's `fovea:session`
-// metadata record if a UI ever wants it. Plain numbers, not bigints (2^53 ns
-// ≈ 104 days — far beyond any recording).
+// Times: `durationNs` / telemetry `position.positionNs` / `seek.tNs` are
+// nanoseconds RELATIVE to the file's first message (0 .. durationNs) — the
+// natural scrub-bar domain; the absolute wall-clock anchor lives in the file's
+// `fovea:session` metadata record if a UI ever wants it. Plain numbers, not
+// bigints (2^53 ns ≈ 104 days — far beyond any recording).
 
 import { cmd, defineContract, type Serializable } from "./protocol.js";
 
@@ -43,8 +43,6 @@ export type ViewerFile = {
   path: string;
   channels: ViewerChannel[];
   durationNs: number;
-  positionNs: number;
-  playing: boolean;
   /** True when the container had no MCAP footer (crash-truncated recording)
    *  and was opened through the streaming/re-index fallback — seeking works
    *  but is slower (sequential rescan), and `durationNs` reflects what was
@@ -52,9 +50,16 @@ export type ViewerFile = {
   truncated: boolean;
 };
 
+export type ViewerPosition = {
+  positionNs: number;
+  playing: boolean;
+};
+
 export const viewer = defineContract({
   state: {
-    /** Every open container, keyed by fileId (server-assigned, opaque). */
+    /** Static inventory for every open container, keyed by fileId
+     *  (server-assigned, opaque). Mutable playback position/playing lives in
+     *  telemetry.position so playback ticks do not re-emit this whole map. */
     files: {} as Record<string, ViewerFile>,
   },
   telemetry: {
@@ -64,6 +69,10 @@ export const viewer = defineContract({
      *  carries the static file inventory; the per-frame doc stream rides
      *  telemetry, mirroring how live sessions publish volt telemetry. */
     playback: {} as Record<string, PlaybackDoc | null>,
+    /** Mutable playback position per open file. Updated at playback cadence
+     *  and cleared to null on close, separate from `state.files` so static
+     *  channel metadata is not serialized on every position tick. */
+    position: {} as Record<string, ViewerPosition | null>,
   },
   frames: [] as const, // all frame topics are dynamic: `<fileId>:<channel>`
   commands: {

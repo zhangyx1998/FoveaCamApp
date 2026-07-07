@@ -56,7 +56,9 @@ planners: read [`planner.md`](./planner.md) first — the full handover
 **Dispatch mechanics — DUAL FLEET (gpt-5.5 active for implementation +
 Opus 4.8 warm reserve; 2026-07-07, per user).** Two worker fleets are
 kept warm so the planner can switch a role between them wave-to-wave:
-- **gpt-5.5 (Codex) — the ACTIVE implementation fleet.** Dispatched via
+- **gpt-5.5 (Codex) — OUT OF USAGE as of 2026-07-07 (per user); Opus 4.8 is
+  now the SOLE active fleet, all three roles.** When quota returns it resumes
+  as an available fleet. Dispatched via
   `scripts/dispatch-worker.sh <A|B|C> ["note"]` in a background Bash
   (the planner is re-invoked on exit); first run per role warms up from
   a fresh session (kickoff onboards from AGENTS.md + this file), later
@@ -144,6 +146,8 @@ hardware-dependent behavior verified without a real rig run.
 
 - **(A-18 wave-3 accepted & archived 2026-07-07 → proposals/TRIAGE.md.)**
 
+- **(A-19 wave-4 accepted & archived 2026-07-07 → proposals/TRIAGE.md.)**
+
 ## Coder B — Native core, protocol & firmware
 
 Owns `core` native code (except the SHM substrate), `firmware/**`, and
@@ -177,6 +181,8 @@ session.
   archived (orchestrator.md §6 + §7.1 Stage 4).
 - **(C-4 accepted & cleared 2026-07-06.)**
 - **(C-13 wave-3 accepted & archived 2026-07-07 → proposals/TRIAGE.md.)**
+
+- **(C-14 wave-4 accepted & archived 2026-07-07 → proposals/TRIAGE.md.)**
 
 - **(history) C-6 — workload metering core (accepted; spec:
   docs/refactor/workload-metering.md — read it fully first).**

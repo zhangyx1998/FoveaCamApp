@@ -53,9 +53,9 @@ const distance = computed(() =>
   state.verge <= 0 ? Infinity : state.baseline / Math.pow(state.verge, 2),
 );
 const depth_window = computed(() =>
-  state.depth_window_inv <= 0
+  state.depthWindowInv <= 0
     ? Infinity
-    : 1 / Math.pow(state.depth_window_inv, 2),
+    : 1 / Math.pow(state.depthWindowInv, 2),
 );
 const plusSign = (v: string) => (v.startsWith("-") ? v : "+" + v);
 // Overlay stroke scales with frame size so it reads at any resolution.
@@ -95,7 +95,7 @@ const releaseTracker = () => session.call("releaseTracker", undefined);
       <StreamView
         class="stream"
         :title="ROLE.L"
-        :payload="frameL"
+        :payload="frameL.payload.value" :source="frameL.source"
         :theme="THEME.L"
       />
       <PosView :pos="telemetry.volt.L" :color="THEME.L" style="width: 100%" />
@@ -104,13 +104,13 @@ const releaseTracker = () => session.call("releaseTracker", undefined);
       <StreamView
         class="stream"
         :title="'Fovea (' + state.view + ')'"
-        :payload="frameCenter"
+        :payload="frameCenter.payload.value" :source="frameCenter.source"
         :theme="THEME.C"
       />
       <StreamView
         class="stream"
         :title="ROLE.C"
-        :payload="frameC"
+        :payload="frameC.payload.value" :source="frameC.source"
         :theme="THEME.C"
         @mouse="onCursor"
       >
@@ -150,7 +150,7 @@ const releaseTracker = () => session.call("releaseTracker", undefined);
         <span>|</span>
         <label>
           <span>Wrap</span>
-          <input type="checkbox" v-model="state.wrap_enable" />
+          <input type="checkbox" v-model="state.wrap" />
         </label>
         <span>|</span>
         <button v-if="telemetry.active" class="release-btn" @click="releaseTracker">
@@ -165,7 +165,7 @@ const releaseTracker = () => session.call("releaseTracker", undefined);
       <StreamView
         class="stream"
         :title="ROLE.R"
-        :payload="frameR"
+        :payload="frameR.payload.value" :source="frameR.source"
         :theme="THEME.R"
       />
       <PosView :pos="telemetry.volt.R" :color="THEME.R" style="width: 100%" />
@@ -187,7 +187,7 @@ const releaseTracker = () => session.call("releaseTracker", undefined);
         <span> {{ plusSign(state.shift.toFixed(4)) }}&deg; </span>
       </RangeSlider>
       <RangeSlider
-        v-model="state.depth_window_inv"
+        v-model="state.depthWindowInv"
         :min="1"
         :max="0"
         :neutral="0"

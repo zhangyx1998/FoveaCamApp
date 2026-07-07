@@ -105,8 +105,9 @@ function assertPattern(result: ReaderResultWithData): void {
 }
 
 {
-  // V13: write() must reach shared memory (view().set() would not under the
-  // Electron cage), and copyTo() must read the slot back into a caller buffer.
+  // V13: write() must reach shared memory (readSnapshot().set() would not
+  // under the Electron cage), and copyTo() must read the slot back into a
+  // caller buffer.
   const writer = new Shm.Writer(Shm.topicKey("shm-write-copyto"));
   const src = new Uint8Array(2 * 3 * 4);
   for (let i = 0; i < src.length; i++) src[i] = (i * 7 + 3) % 251;

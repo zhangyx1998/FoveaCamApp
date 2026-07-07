@@ -135,7 +135,7 @@ describe("perf substrate timers and snapshots", () => {
     await flush();
     expect(telemetry.length).toBe(beforeProbe + 1);
     expect(telemetry.at(-1)).toMatchObject({
-      serial_rate: {
+      serialRate: {
         txBytesPerSec: expect.any(Number),
         rxBytesPerSec: expect.any(Number),
       },

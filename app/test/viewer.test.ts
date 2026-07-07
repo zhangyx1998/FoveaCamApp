@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Mat } from "core/Vision";
 import { Channel, topic } from "@lib/orchestrator/protocol";
-import type { ViewerFile } from "@lib/orchestrator/viewer-contract";
+import type { ViewerFile, ViewerPosition } from "@lib/orchestrator/viewer-contract";
 import { createFoveaSink } from "@orchestrator/recorder";
 import { viewerSession } from "@orchestrator/sessions/viewer";
 import { workloadsSnapshot } from "@orchestrator/metering";
@@ -71,6 +71,7 @@ interface Harness {
   call<T = unknown>(command: string, arg?: unknown): Promise<T>;
   files(): Record<string, ViewerFile>;
   playbackDocs(): Record<string, Record<string, unknown> | null>;
+  positions(): Record<string, ViewerPosition | null>;
   transports: FakeFrameTransport[];
   clock: ReturnType<typeof virtualClock>;
   /** Force-idle the session and await the file-close drain — keeps meters
@@ -90,17 +91,26 @@ function harness(): Harness {
 
   let files: Record<string, ViewerFile> = {};
   let docs: Record<string, Record<string, unknown> | null> = {};
+  let positions: Record<string, ViewerPosition | null> = {};
   client.on(topic.state("viewer"), (patch: { key: string; value: never }) => {
     if (patch.key === "files") files = patch.value;
   });
-  client.on(topic.telemetry("viewer"), (patch: { playback?: never }) => {
-    if (patch.playback) docs = patch.playback;
-  });
+  client.on(
+    topic.telemetry("viewer"),
+    (patch: {
+      playback?: Record<string, Record<string, unknown> | null>;
+      position?: Record<string, ViewerPosition | null>;
+    }) => {
+      if (patch.playback) docs = patch.playback;
+      if (patch.position) positions = patch.position;
+    },
+  );
 
   return {
     call: (command, arg) => client.request(topic.command("viewer", command), arg),
     files: () => files,
     playbackDocs: () => docs,
+    positions: () => positions,
     transports,
     clock,
     dispose: () => {
@@ -140,8 +150,9 @@ describe("viewer session (C-8)", () => {
     const f = h.files()[fileId];
     expect(f).toBeDefined();
     expect(f.path).toBe(file);
-    expect(f.playing).toBe(false);
-    expect(f.positionNs).toBe(0);
+    expect(f).not.toHaveProperty("playing");
+    expect(f).not.toHaveProperty("positionNs");
+    expect(h.positions()[fileId]).toEqual({ positionNs: 0, playing: false });
     expect(f.truncated).toBe(false);
     // t = 0.1..0.6 s → 0.5 s span
     expect(f.durationNs).toBe(0.5 * NS);
@@ -168,7 +179,11 @@ describe("viewer session (C-8)", () => {
     const { fileId } = await h.call<{ fileId: string }>("open", file);
 
     await h.call("play", { fileId, rate: 1 });
-    await until(() => h.files()[fileId]?.playing === false);
+    await until(
+      () =>
+        h.positions()[fileId]?.playing === false &&
+        h.positions()[fileId]?.positionNs === 0.5 * NS,
+    );
 
     // Every cam frame published on the session's dynamic topic; aux too.
     const writes = h.transports.flatMap((t) => t.writes);
@@ -193,7 +208,7 @@ describe("viewer session (C-8)", () => {
     expect(h.playbackDocs()[fileId]).toMatchObject({ stream: "cam", seq: 1 });
 
     // ended: position landed on the duration, playing false
-    expect(h.files()[fileId].positionNs).toBe(0.5 * NS);
+    expect(h.positions()[fileId]).toEqual({ positionNs: 0.5 * NS, playing: false });
 
     // meter counted ingest + emits
     const meter = workloadsSnapshot()[`viewer:${fileId}`];
@@ -208,7 +223,11 @@ describe("viewer session (C-8)", () => {
     const file = await writeFixture(await tempRoot());
     const { fileId } = await h.call<{ fileId: string }>("open", file);
     await h.call("play", { fileId, rate: 2 });
-    await until(() => h.files()[fileId]?.playing === false);
+    await until(
+      () =>
+        h.positions()[fileId]?.playing === false &&
+        h.positions()[fileId]?.positionNs === 0.5 * NS,
+    );
     const slept = h.clock.sleeps.reduce((a, b) => a + b, 0);
     // 500 ms of media at 2× ≈ 250 ms wall
     expect(slept).toBeGreaterThan(220);
@@ -233,8 +252,7 @@ describe("viewer session (C-8)", () => {
       2, 3, 4, 5,
     ]);
     expect(writes.some((w) => w.topic === `fr:viewer:${fileId}:aux`)).toBe(true);
-    expect(h.files()[fileId].positionNs).toBe(0.25 * NS);
-    expect(h.files()[fileId].playing).toBe(false);
+    expect(h.positions()[fileId]).toEqual({ positionNs: 0.25 * NS, playing: false });
     await h.dispose();
   });
 
@@ -282,7 +300,11 @@ describe("viewer session (C-8)", () => {
     expect(f.durationNs).toBeGreaterThan(0);
 
     await h.call("play", { fileId, rate: 1 });
-    await until(() => h.files()[fileId]?.playing === false);
+    await until(
+      () =>
+        h.positions()[fileId]?.playing === false &&
+        (h.positions()[fileId]?.positionNs ?? 0) >= f.durationNs,
+    );
     const camWrites = h.transports
       .flatMap((t) => t.writes)
       .filter((w) => w.topic === `fr:viewer:${fileId}:cam`);
@@ -305,6 +327,7 @@ describe("viewer session (C-8)", () => {
     await h.call("close", a.fileId);
     await flush();
     expect(h.files()[a.fileId]).toBeUndefined();
+    expect(h.positions()[a.fileId]).toBeNull();
     expect(workloadsSnapshot()[`viewer:${a.fileId}`]).toBeUndefined();
     await h.dispose();
   });
@@ -317,6 +340,7 @@ describe("viewer session (C-8)", () => {
     await h.call("close", fileId);
     await flush();
     expect(h.files()[fileId]).toBeUndefined();
+    expect(h.positions()[fileId]).toBeNull();
     expect(workloadsSnapshot()[`viewer:${fileId}`]).toBeUndefined();
     await h.dispose();
   });

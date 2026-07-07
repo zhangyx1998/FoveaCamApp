@@ -78,7 +78,7 @@ export default function calibrateDriftSession(): ServerSession<typeof calibrateD
       s.telemetry({ saved });
       trackers = createTrackerTriple(
         { L: t.leases.L.camera, C: t.leases.C.camera, R: t.leases.R.camera },
-        s.state.target_id,
+        s.state.targetId,
       );
       bindDetections(trackers, disposers, publishDetections);
       bindViews(t.leases, disposers, s);
@@ -127,7 +127,7 @@ export default function calibrateDriftSession(): ServerSession<typeof calibrateD
     return {
       commands: {
         async setTargetId({ role, id }) {
-          s.setState("target_id", { ...s.state.target_id, [role]: id });
+          s.setState("targetId", { ...s.state.targetId, [role]: id });
           retarget(trackers, role, id);
         },
         async setOverride({ role, pos }) {

@@ -131,7 +131,7 @@ export default function calibrateExtrinsicSession(): ServerSession<typeof calibr
 
       trackers = createTrackerTriple(
         { L: leases.L.camera, C: leases.C.camera, R: leases.R.camera },
-        s.state.target_id,
+        s.state.targetId,
         { internal: true },
       );
       bindDetections(trackers, disposers, publishDetections);
@@ -156,7 +156,7 @@ export default function calibrateExtrinsicSession(): ServerSession<typeof calibr
     return {
       commands: {
         async setTargetId({ role, id }) {
-          s.setState("target_id", { ...s.state.target_id, [role]: id });
+          s.setState("targetId", { ...s.state.targetId, [role]: id });
           retarget(trackers, role, id);
         },
         async setOverride({ role, pos }) {

@@ -25,8 +25,8 @@ export type ControllerFacade = {
   actuate(p: {
     left?: Pos;
     right?: Pos;
-    settle_time?: number;
-  }): Promise<{ left: Pos; right: Pos; complete_time: number }>;
+    settleTime?: number;
+  }): Promise<{ left: Pos; right: Pos; completeTime: number }>;
   trigger(duration_ns: number): Promise<void>;
 };
 

@@ -47,7 +47,6 @@ import {
   type StateOf,
   type TelemetryOf,
 } from "./protocol.js";
-import { withFrameMeta } from "./frame-payload.js";
 import { createShmClient } from "./shm-client.js";
 import { formatCounterRate, formatSampleStats } from "./stats.js";
 import { controller } from "./contracts.js";
@@ -231,6 +230,18 @@ export async function dumpPerfSnapshot(): Promise<void> {
   console.log(`[perf] snapshot written to ${file}`);
 }
 
+/** A frame channel's stream address (session + frame-channel name). Static per
+ *  `frame(name)` — the client half of what A-P12 lifted out of wire `FrameMeta`. */
+export type FrameSource = { session: string; frame: string };
+
+/** What `useSession().frame(name)` returns (A-P12): the reactive `payload` ref
+ *  plus the stream `source`, carried out-of-band instead of folded into the
+ *  wire payload's `meta`. `source` is constant for the channel. */
+export type FrameRef = {
+  payload: Readonly<Ref<FramePayload | null>>;
+  source: FrameSource;
+};
+
 export type Session<C extends Contract> = {
   /** Reactive, mutable — read/write as plain properties (`state.foo`). Writing
    *  commands the orchestrator (setState); the value updates optimistically
@@ -244,7 +255,7 @@ export type Session<C extends Contract> = {
   status: Readonly<SessionStatus>;
   // `string & {}` keeps autocomplete for the contract's static frame names while
   // still allowing dynamic channels (e.g. one per camera serial).
-  frame(name: FrameOf<C> | (string & {})): Readonly<Ref<FramePayload | null>>;
+  frame(name: FrameOf<C> | (string & {})): FrameRef;
   call<K extends keyof CommandsOf<C>>(
     name: K,
     arg: CommandsOf<C>[K]["arg"],
@@ -254,8 +265,8 @@ export type Session<C extends Contract> = {
 export function useFrames<C extends Contract, K extends string>(
   session: Session<C>,
   names: readonly K[],
-): Record<K, Readonly<Ref<FramePayload | null>>> {
-  const frames = {} as Record<K, Readonly<Ref<FramePayload | null>>>;
+): Record<K, FrameRef> {
+  const frames = {} as Record<K, FrameRef>;
   for (const name of names) frames[name] = session.frame(name);
   return frames;
 }
@@ -267,7 +278,7 @@ export function useDynamicFrame<C extends Contract>(
   const read = typeof name === "function" ? name : () => name.value;
   return computed(() => {
     const key = read();
-    return key ? session.frame(key).value : null;
+    return key ? session.frame(key).payload.value : null;
   });
 }
 
@@ -338,7 +349,7 @@ export function useSession<C extends Contract>(
   name: string,
   options: UseSessionOptions = {},
 ): Session<C> {
-  const frameRefs = new Map<string, Ref<FramePayload | null>>();
+  const frameRefs = new Map<string, FrameRef>();
   const ready = connect();
   const disposers: Array<() => void> = [];
   const subscription = {
@@ -416,12 +427,17 @@ export function useSession<C extends Contract>(
   );
   const status = readonly(statusState) as Readonly<SessionStatus>;
 
-  function frame(fname: string): Readonly<Ref<FramePayload | null>> {
+  function frame(fname: string): FrameRef {
     const k = String(fname);
-    let r = frameRefs.get(k);
-    if (!r) {
-      r = shallowRef<FramePayload | null>(null);
-      frameRefs.set(k, r);
+    const cached = frameRefs.get(k);
+    if (cached) return cached;
+    {
+      const r = shallowRef<FramePayload | null>(null);
+      const fref: FrameRef = {
+        payload: readonly(r) as Readonly<Ref<FramePayload | null>>,
+        source: { session: name, frame: k },
+      };
+      frameRefs.set(k, fref);
       // Coalesce bursts to one paint: keep only the latest until the next rAF.
       let latest: FramePayload | null = null;
       let scheduled = false;
@@ -433,7 +449,7 @@ export function useSession<C extends Contract>(
         latest = null;
         const myToken = ++token;
         if (!pending) {
-          r!.value = null;
+          r.value = null;
           return;
         }
         void shm.read(pending).then((payload) => {
@@ -448,8 +464,8 @@ export function useSession<C extends Contract>(
                 payload.meta.tDisplay - payload.meta.tReceive,
               );
           }
-          shm.release(r!.value);
-          r!.value = payload;
+          shm.release(r.value);
+          r.value = payload;
           if (latest && !scheduled) {
             scheduled = true;
             requestAnimationFrame(flush);
@@ -469,10 +485,9 @@ export function useSession<C extends Contract>(
                   payload.meta.tReceive - payload.meta.tPublish,
                 );
             }
-            // Stamp the stream's address (session + frame channel) so display
-            // components can act on "this stream" (projection windows,
-            // multi-window.md req. 4) without prop-threading the names.
-            latest = withFrameMeta(payload, { source: { session: name, frame: k } });
+            // A-P12: the stream address is carried by the returned `FrameRef`
+            // (static `source`), not stamped onto each payload's meta anymore.
+            latest = payload;
             if (!scheduled) {
               scheduled = true;
               requestAnimationFrame(flush);
@@ -480,8 +495,8 @@ export function useSession<C extends Contract>(
           });
         }),
       );
+      return fref;
     }
-    return readonly(r) as any;
   }
 
   return {

@@ -5,7 +5,7 @@ import { computed, ref, watch } from "vue";
 
 import { FreqMeter, inspectorMode, RollingAverage } from "@lib/util/perf";
 import FrameView, { TransformFunction } from "./FrameView.vue";
-import { payloadToMat, rendererLoopLag, shmReadStats } from "@lib/orchestrator/client";
+import { payloadToMat, rendererLoopLag, shmReadStats, type FrameSource } from "@lib/orchestrator/client";
 import { formatCounterRate, formatSampleStats } from "@lib/orchestrator/stats";
 import type { FramePayload } from "@lib/orchestrator/protocol";
 import { Delegation } from "@src/capture";
@@ -37,9 +37,16 @@ const props = defineProps({
     required: false,
     default: null,
   },
-  // Orchestrator frame source: bind a `session.frame(...)` ref.
+  // Orchestrator frame payload: bind a `FrameRef`'s `.payload` ref.
   payload: {
     type: NoCheck<FramePayload | null | undefined>(),
+    required: false,
+    default: undefined,
+  },
+  // Stream address for the projection button (A-P12): bind the `FrameRef`'s
+  // `.source`. Carried out-of-band now that it no longer rides `meta.source`.
+  source: {
+    type: NoCheck<FrameSource | null | undefined>(),
     required: false,
     default: undefined,
   },
@@ -175,10 +182,10 @@ const overlay = computed(() => {
   return result;
 });
 
-// Stream address for the projection button — from the client-side
-// `meta.source` stamp (`useSession().frame()` sets it on every delivery).
+// Stream address for the projection button — from the `FrameRef.source` passed
+// alongside the payload (A-P12; no longer folded into the wire `meta.source`).
 const projection = computed(() =>
-  props.projectable ? (props.payload?.meta?.source ?? null) : null,
+  props.projectable ? (props.source ?? null) : null,
 );
 </script>
 

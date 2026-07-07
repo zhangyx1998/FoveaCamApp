@@ -29,8 +29,6 @@ type NormalizedFrame = {
 type ShmSlot = {
   /** Read snapshot under the Electron V8 cage — never write through it. */
   readSnapshot(): Mat<Uint8Array>;
-  /** @deprecated use `readSnapshot()`. */
-  view(): Mat<Uint8Array>;
   /** Native memcpy into the slot — the only correct write path (V13). */
   write(src: ArrayBufferView): void;
 };

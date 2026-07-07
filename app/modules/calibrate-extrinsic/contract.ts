@@ -31,7 +31,7 @@ export type DetectionView = { points: Point2d[] } | null;
 export const calibrateExtrinsic = defineContract({
   state: {
     step: "CAL" as "CAL" | "FIN" | "PRV",
-    target_id: { L: 1, C: 0, R: 2 },
+    targetId: { L: 1, C: 0, R: 2 },
     override_left: null as Pos | null,
     override_right: null as Pos | null,
   },

@@ -273,10 +273,10 @@ function fmt(v: number, digits = 1): string {
       <h2>Serial data rate</h2>
       <p class="hint" v-if="!ctrl.telemetry.connected">Controller not connected — rates read zero until it is.</p>
       <div class="mono">
-        tx {{ Math.round(ctrl.telemetry.serial_rate.txBytesPerSec).toLocaleString() }} B/s
-        ({{ fmt(ctrl.telemetry.serial_rate.txPacketsPerSec) }} pkt/s) ·
-        rx {{ Math.round(ctrl.telemetry.serial_rate.rxBytesPerSec).toLocaleString() }} B/s
-        ({{ fmt(ctrl.telemetry.serial_rate.rxPacketsPerSec) }} pkt/s)
+        tx {{ Math.round(ctrl.telemetry.serialRate.txBytesPerSec).toLocaleString() }} B/s
+        ({{ fmt(ctrl.telemetry.serialRate.txPacketsPerSec) }} pkt/s) ·
+        rx {{ Math.round(ctrl.telemetry.serialRate.rxBytesPerSec).toLocaleString() }} B/s
+        ({{ fmt(ctrl.telemetry.serialRate.rxPacketsPerSec) }} pkt/s)
       </div>
     </section>
 

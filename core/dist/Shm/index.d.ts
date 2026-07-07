@@ -25,8 +25,6 @@ declare module "core/Shm" {
      *  reusable buffer. Only non-cage (plain Node) builds return a live
      *  view over the slot. */
     readSnapshot(): import("core/Vision").Mat<Uint8Array>;
-    /** @deprecated use `readSnapshot()`; retained as a C-P5 alias. */
-    view(): import("core/Vision").Mat<Uint8Array>;
     /** Native size-checked memcpy INTO the slot (cage-safe on every
      *  runtime). Source byte length must equal the slot's byte size. */
     write(src: ArrayBufferView): void;

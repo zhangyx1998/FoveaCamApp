@@ -178,7 +178,7 @@ export default function manualControlSession(): ServerSession<typeof manualContr
     }
 
     function depthWindow(): number {
-      return depthFromInverse(s.state.depth_window_inv);
+      return depthFromInverse(s.state.depthWindowInv);
     }
 
     function publishCombinedView(): void {
@@ -211,7 +211,7 @@ export default function manualControlSession(): ServerSession<typeof manualContr
     function processFoveaView(role: "L" | "R", view: Mat<Uint8Array>): void {
       const H = triple ? triple.conv.A2H[role](triple.conv.V2A[role](volts[role])) : null;
       const wrapped = H ? wrapPerspective(view, H) : null;
-      const display = s.state.wrap_enable && wrapped ? wrapped : view;
+      const display = s.state.wrap && wrapped ? wrapped : view;
       s.frame(role, display);
       if (s.state.view === "sliced") {
         aligned.L = aligned.R = null;
@@ -248,7 +248,7 @@ export default function manualControlSession(): ServerSession<typeof manualContr
       zoom: () => s.state.zoom,
       capStack: () => s.state.cap_stack,
       baseline: () => s.state.baseline,
-      wrapEnable: () => s.state.wrap_enable,
+      wrapEnable: () => s.state.wrap,
       steerToAngle: setTargetFromAngle,
       frame: (name, payload) => s.frame(name, payload),
       telemetry: (patch) => s.telemetry(patch),

@@ -122,7 +122,7 @@ export const controller = defineContract({
     // the session while connected; rates derived from `Device.stats`'
     // cumulative counters (native, landed with the synced-capture thread's
     // P4.1) by diffing successive samples.
-    serial_rate: {
+    serialRate: {
       txBytesPerSec: 0,
       rxBytesPerSec: 0,
       txPacketsPerSec: 0,
@@ -137,8 +137,8 @@ export const controller = defineContract({
     enable: cmd(),
     disable: cmd(),
     actuate: cmd<
-      { left?: Pos; right?: Pos; settle_time?: number },
-      { left: Pos; right: Pos; complete_time: number }
+      { left?: Pos; right?: Pos; settleTime?: number },
+      { left: Pos; right: Pos; completeTime: number }
     >(),
     trigger: cmd<number>(),
     setBias: cmd<number, number>(),

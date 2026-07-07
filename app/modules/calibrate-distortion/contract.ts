@@ -24,7 +24,7 @@ export type ProjectionView = { H: number[]; points: Point2d[] } | null;
 
 export const calibrateDistortion = defineContract({
   state: {
-    target_id: { L: 1, C: 0, R: 2 },
+    targetId: { L: 1, C: 0, R: 2 },
   },
   telemetry: {
     ready: false as boolean,

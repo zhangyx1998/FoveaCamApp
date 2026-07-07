@@ -52,9 +52,9 @@ export const manualControl = defineContract({
     shift: 0, // vertical shift (deg)
     // Display parameters.
     zoom: 9, // fovea (sliced center) magnification
-    wrap_enable: true, // perspective-wrap L/R foveae into alignment
+    wrap: true, // perspective-wrap L/R foveae into alignment
     view: "sliced" as "sliced" | "diff" | "depth", // `center` frame content
-    depth_window_inv: 0, // depth-view near/far window (0 → ∞)
+    depthWindowInv: 0, // depth-view near/far window (0 → ∞)
     // Capture parameters.
     cap_stack: 5, // frames averaged per capture
     // Remote (projector) display parameters — renderer-only concerns, but
@@ -77,11 +77,11 @@ export const manualControl = defineContract({
     // for an indexed/multi-set-point capture), populated progressively as
     // each resource resolves. Image data arrives separately as frames on
     // dynamic `capture:<name>` (or `capture:<name>#<i>`) channels.
-    capture_busy: false as boolean,
+    captureBusy: false as boolean,
     capture_meta: {} as Record<string, Serializable>,
     // Recording.
     recording_active: false as boolean,
-    recording_streams: {} as Record<
+    recordingStreams: {} as Record<
       string,
       { frames: number; dropped: number; fps: number; bytes: number }
     >,

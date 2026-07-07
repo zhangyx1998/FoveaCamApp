@@ -17,7 +17,7 @@ import FrameView from "@src/components/FrameView.vue";
 const session = useSession(liveview, "liveview");
 const { state, telemetry } = session;
 const frame = session.frame("frame");
-const mat = computed(() => payloadToMat(frame.value));
+const mat = computed(() => payloadToMat(frame.payload.value));
 
 onMounted(() => session.call("refresh", undefined));
 </script>

@@ -8,7 +8,7 @@
 // (docs/refactor/orchestrator.md roadmap item 6) — the orchestrator now owns
 // the raw stream writers (see `orchestrator/stream-writer.ts`,
 // `modules/manual-control/recording.ts`); this class just forwards
-// `start`/`stop` and mirrors `recording_active`/`recording_streams` telemetry
+// `start`/`stop` and mirrors `recording_active`/`recordingStreams` telemetry
 // into the same `active`/`streams` shape `RecordButton.vue`/`RecordControls.vue`
 // already read, plus keeps the save-path UI state (`SavePath`), a pure
 // renderer concern independent of where the frames are written.
@@ -45,7 +45,7 @@ export default class Recording extends SavePath {
     current_recording.value = this;
     this.active = toRef(this.session.telemetry, "recording_active");
     watch(
-      () => this.session.telemetry.recording_streams,
+      () => this.session.telemetry.recordingStreams,
       (obj) => {
         this.streams.clear();
         for (const [name, info] of Object.entries(obj)) this.streams.set(name, info);

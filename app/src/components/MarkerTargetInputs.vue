@@ -32,7 +32,7 @@ function setTargetId(e: Event): void {
       type="number"
       step="1"
       :style="width ? { width } : undefined"
-      :value="session.state.target_id[role]"
+      :value="session.state.targetId[role]"
       @change="setTargetId"
     />
   </ConfigEntry>

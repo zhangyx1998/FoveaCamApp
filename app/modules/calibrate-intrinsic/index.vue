@@ -30,12 +30,12 @@ const preview = session.frame("preview");
 
 const views = computed(() => Object.values(telemetry.views));
 const activeView = computed(() =>
-  state.active_serial ? telemetry.views[state.active_serial] : null,
+  state.activeSerial ? telemetry.views[state.activeSerial] : null,
 );
 
 onMounted(() => session.call("refresh", undefined));
 onUnmounted(() => {
-  if (state.active_serial) session.call("deselect", undefined);
+  if (state.activeSerial) session.call("deselect", undefined);
 });
 
 function degrees(rad: number): string {
@@ -60,7 +60,7 @@ const pattern_h = computed<number>({
 </script>
 
 <template>
-  <div v-if="!state.active_serial" class="items">
+  <div v-if="!state.activeSerial" class="items">
     <h1 style="margin: 0; padding: 0">Select a camera to calibrate</h1>
     <template v-for="v in views" :key="v.info.serial">
       <div class="divider"></div>
@@ -117,7 +117,7 @@ const pattern_h = computed<number>({
         <span>{{ activeView?.info.vendor }} {{ activeView?.info.model }}</span>
         <CameraRole v-if="activeView?.role" :role="(activeView.role as any)" />
       </NavBack>
-      <StreamView class="stream" :payload="preview" height="min(60vh, 80vw)">
+      <StreamView class="stream" :payload="preview.payload.value" :source="preview.source" height="min(60vh, 80vw)">
         <circle
           v-for="(p, i) in telemetry.detection?.points ?? []"
           :key="i"
@@ -153,15 +153,15 @@ const pattern_h = computed<number>({
       </ConfigEntry>
     </div>
     <div class="right">
-      <h2>Captured Records ({{ telemetry.record_count }})</h2>
+      <h2>Captured Records ({{ telemetry.recordCount }})</h2>
       <div class="records">
-        <div v-for="i in telemetry.record_count" :key="i" class="record-chip" @click="session.call('removeRecord', { index: i - 1 })">
+        <div v-for="i in telemetry.recordCount" :key="i" class="record-chip" @click="session.call('removeRecord', { index: i - 1 })">
           #{{ i }}
         </div>
       </div>
       <div class="buttons">
         <button @click="session.call('capture', undefined)" :disabled="!telemetry.detection">Capture</button>
-        <button @click="session.call('calibrateNow', undefined)" :disabled="!telemetry.record_count || telemetry.busy">
+        <button @click="session.call('calibrateNow', undefined)" :disabled="!telemetry.recordCount || telemetry.busy">
           {{ telemetry.busy ? "Calibrating…" : "Calibrate" }}
         </button>
       </div>

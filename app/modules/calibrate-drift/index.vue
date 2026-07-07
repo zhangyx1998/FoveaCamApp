@@ -54,7 +54,7 @@ function setOverride(role: "left" | "right", p: Pos | null) {
 <template>
   <div class="cameras">
     <div class="view">
-      <StreamView class="stream" :title="ROLE.L" :payload="frameL" :theme="THEME.L">
+      <StreamView class="stream" :title="ROLE.L" :payload="frameL.payload.value" :source="frameL.source" :theme="THEME.L">
         <circle
           v-for="(p, i) in telemetry.detection.L?.points ?? []"
           :key="i"
@@ -77,7 +77,7 @@ function setOverride(role: "left" | "right", p: Pos | null) {
       />
     </div>
     <div class="view">
-      <StreamView class="stream" :title="ROLE.C" :payload="frameC" :theme="THEME.C">
+      <StreamView class="stream" :title="ROLE.C" :payload="frameC.payload.value" :source="frameC.source" :theme="THEME.C">
         <circle
           v-for="(p, i) in telemetry.detection.C?.points ?? []"
           :key="i"
@@ -106,7 +106,7 @@ function setOverride(role: "left" | "right", p: Pos | null) {
       <Drift :drift="telemetry.saved.R">Saved Drift (R)</Drift>
     </div>
     <div class="view">
-      <StreamView class="stream" :title="ROLE.R" :payload="frameR" :theme="THEME.R">
+      <StreamView class="stream" :title="ROLE.R" :payload="frameR.payload.value" :source="frameR.source" :theme="THEME.R">
         <circle
           v-for="(p, i) in telemetry.detection.R?.points ?? []"
           :key="i"
@@ -147,9 +147,9 @@ function setOverride(role: "left" | "right", p: Pos | null) {
       :cy="center_marker_size"
       weight="2"
     />
-    <Marker :id="state.target_id.L" :size="marker_size" :cx="-app_config.baseline_distance_mm / 2" />
-    <Marker :id="state.target_id.R" :size="marker_size" :cx="app_config.baseline_distance_mm / 2" />
-    <Marker :id="state.target_id.C" :size="center_marker_size" />
+    <Marker :id="state.targetId.L" :size="marker_size" :cx="-app_config.baseline_distance_mm / 2" />
+    <Marker :id="state.targetId.R" :size="marker_size" :cx="app_config.baseline_distance_mm / 2" />
+    <Marker :id="state.targetId.C" :size="center_marker_size" />
   </RemoteCanvasTeleport>
 </template>
 

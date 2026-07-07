@@ -48,7 +48,7 @@ const WIDE_SCALE = 1.0;
 /** Build the standard L/C/R marker-tracker triple: one shared 4X4_50 detector,
  *  fovea L/R at quarter scale, wide C at full scale. `internal` toggles the
  *  fovea trackers' subpixel refinement (extrinsic/distortion want it; drift
- *  doesn't). Target ids come from the session's `target_id` state. */
+ *  doesn't). Target ids come from the session's `targetId` state. */
 export function createTrackerTriple(
   cameras: Roles<Camera>,
   targetIds: TargetIds,
@@ -101,7 +101,7 @@ export function stopTriple(trackers: Roles<Tracker> | null): null {
 }
 
 /** Retarget one live tracker to a new marker id (the tracker-side half of a
- *  `setTargetId` command; the session still owns its typed `target_id` state). */
+ *  `setTargetId` command; the session still owns its typed `targetId` state). */
 export function retarget(trackers: Roles<Tracker> | null, role: Role, id: number): void {
   if (trackers) trackers[role].targetId = id;
 }

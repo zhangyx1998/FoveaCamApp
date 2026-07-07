@@ -147,7 +147,7 @@ const distance = computed(() =>
   state.verge <= 0 ? Infinity : state.baseline / Math.pow(state.verge, 2),
 );
 const depth_window = computed(() =>
-  state.depth_window_inv <= 0 ? Infinity : 1 / Math.pow(state.depth_window_inv, 2),
+  state.depthWindowInv <= 0 ? Infinity : 1 / Math.pow(state.depthWindowInv, 2),
 );
 const plusSign = (v: string) => (v.startsWith("-") ? v : "+" + v);
 const stroke = computed(
@@ -179,7 +179,7 @@ const recording = new Recording(session, "manual-control");
       <StreamView
         class="stream"
         :title="ROLE.L"
-        :payload="frameL"
+        :payload="frameL.payload.value" :source="frameL.source"
         :theme="THEME.L"
       />
       <PosView
@@ -200,13 +200,13 @@ const recording = new Recording(session, "manual-control");
       <StreamView
         class="stream"
         :title="ROLE.C + ' (' + state.view + ')'"
-        :payload="frameCenter"
+        :payload="frameCenter.payload.value" :source="frameCenter.source"
         :theme="THEME.C"
       />
       <StreamView
         class="stream"
         :title="ROLE.C"
-        :payload="frameC"
+        :payload="frameC.payload.value" :source="frameC.source"
         :theme="THEME.C"
         v-model="cursor"
       >
@@ -240,7 +240,7 @@ const recording = new Recording(session, "manual-control");
         <span>|</span>
         <label>
           <span>Wrap</span>
-          <input type="checkbox" v-model="state.wrap_enable" />
+          <input type="checkbox" v-model="state.wrap" />
         </label>
       </ConfigEntry>
     </div>
@@ -248,7 +248,7 @@ const recording = new Recording(session, "manual-control");
       <StreamView
         class="stream"
         :title="ROLE.R"
-        :payload="frameR"
+        :payload="frameR.payload.value" :source="frameR.source"
         :theme="THEME.R"
       />
       <PosView
@@ -321,7 +321,7 @@ const recording = new Recording(session, "manual-control");
             <span> {{ plusSign(state.shift.toFixed(4)) }}&deg; </span>
           </RangeSlider>
           <RangeSlider
-            v-model="state.depth_window_inv"
+            v-model="state.depthWindowInv"
             :min="1"
             :max="0"
             :neutral="0"

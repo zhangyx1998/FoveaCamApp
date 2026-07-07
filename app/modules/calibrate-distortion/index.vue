@@ -62,7 +62,7 @@ function toMat(H: number[]) {
       <StreamView
         class="stream"
         :title="[ROLE.L, formatPos(ctrl.telemetry.pos.left)].join(' | ')"
-        :payload="frameL"
+        :payload="frameL.payload.value" :source="frameL.source"
         :theme="THEME.L"
       >
         <circle
@@ -75,7 +75,7 @@ function toMat(H: number[]) {
         />
       </StreamView>
       <MarkerTargetInputs :session="session" role="L" :detected="!!telemetry.detection.L" width="8ch" />
-      <StreamView class="stream" title="Homography Projection" :payload="frameProjL" :theme="THEME.L">
+      <StreamView class="stream" title="Homography Projection" :payload="frameProjL.payload.value" :source="frameProjL.source" :theme="THEME.L">
         <circle
           v-for="(p, i) in telemetry.projection.L?.points ?? []"
           :key="i"
@@ -88,7 +88,7 @@ function toMat(H: number[]) {
       <Matrix v-if="telemetry.projection.L" :mat="toMat(telemetry.projection.L.H)" :round="2" />
     </div>
     <div class="view">
-      <StreamView class="stream" :title="ROLE.C" :payload="frameC" :theme="THEME.C">
+      <StreamView class="stream" :title="ROLE.C" :payload="frameC.payload.value" :source="frameC.source" :theme="THEME.C">
         <circle
           v-for="(p, i) in telemetry.detection.C?.points ?? []"
           :key="i"
@@ -112,7 +112,7 @@ function toMat(H: number[]) {
       <StreamView
         class="stream"
         :title="[ROLE.R, formatPos(ctrl.telemetry.pos.right)].join(' | ')"
-        :payload="frameR"
+        :payload="frameR.payload.value" :source="frameR.source"
         :theme="THEME.R"
       >
         <circle
@@ -125,7 +125,7 @@ function toMat(H: number[]) {
         />
       </StreamView>
       <MarkerTargetInputs :session="session" role="R" :detected="!!telemetry.detection.R" width="8ch" />
-      <StreamView class="stream" title="Homography Projection" :payload="frameProjR" :theme="THEME.R">
+      <StreamView class="stream" title="Homography Projection" :payload="frameProjR.payload.value" :source="frameProjR.source" :theme="THEME.R">
         <circle
           v-for="(p, i) in telemetry.projection.R?.points ?? []"
           :key="i"
@@ -139,9 +139,9 @@ function toMat(H: number[]) {
     </div>
   </div>
   <RemoteCanvasTeleport>
-    <Marker :id="state.target_id.L" :size="app_config.cal_marker_size_mm * marker_zoom" :cx="-app_config.baseline_distance_mm / 2" />
-    <Marker :id="state.target_id.R" :size="app_config.cal_marker_size_mm * marker_zoom" :cx="app_config.baseline_distance_mm / 2" />
-    <Marker :id="state.target_id.C" :size="app_config.cal_marker_size_mm / marker_zoom" />
+    <Marker :id="state.targetId.L" :size="app_config.cal_marker_size_mm * marker_zoom" :cx="-app_config.baseline_distance_mm / 2" />
+    <Marker :id="state.targetId.R" :size="app_config.cal_marker_size_mm * marker_zoom" :cx="app_config.baseline_distance_mm / 2" />
+    <Marker :id="state.targetId.C" :size="app_config.cal_marker_size_mm / marker_zoom" />
   </RemoteCanvasTeleport>
 </template>
 

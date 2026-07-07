@@ -24,9 +24,9 @@ export const tracking = defineContract({
     shift: 0, // vertical shift (deg)
     // Display parameters.
     zoom: 9, // fovea (sliced center) magnification
-    wrap_enable: true, // perspective-wrap L/R foveae into alignment
+    wrap: true, // perspective-wrap L/R foveae into alignment
     view: "sliced" as "sliced" | "diff" | "depth", // `center` frame content
-    depth_window_inv: 0, // depth-view near/far window (0 → ∞)
+    depthWindowInv: 0, // depth-view near/far window (0 → ∞)
     // Tracker parameters (renderer resolves defaults; concrete pixels here).
     tracker_w: 64,
     tracker_h: 64,

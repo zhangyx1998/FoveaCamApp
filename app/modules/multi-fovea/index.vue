@@ -105,7 +105,7 @@ async function captureOnce(): Promise<void> {
       <StreamView
         class="center"
         title="Center Overview"
-        :payload="center"
+        :payload="center.payload.value" :source="center.source"
         theme="#0af"
         inspector
         @mouse="onCursor"
@@ -193,7 +193,8 @@ async function captureOnce(): Promise<void> {
         <div class="target-body">
           <StreamView
             title="Fovea"
-            :payload="targetFrame(index).value"
+            :payload="targetFrame(index).payload.value"
+            :source="targetFrame(index).source"
             theme="#fa0"
             height="14rem"
           />

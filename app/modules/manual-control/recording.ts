@@ -33,7 +33,7 @@ export interface RecordingDeps {
   volts(): { L: Pos; R: Pos };
   telemetry(patch: {
     recording_active?: boolean;
-    recording_streams?: Record<
+    recordingStreams?: Record<
       string,
       { frames: number; dropped: number; fps: number; bytes: number }
     >;
@@ -63,7 +63,7 @@ export function createRecording(deps: RecordingDeps): RecordingController {
   let pollTimer: ReturnType<typeof setInterval> | null = null;
 
   function publishStreams(): void {
-    deps.telemetry({ recording_streams: sink?.stats() ?? {} });
+    deps.telemetry({ recordingStreams: sink?.stats() ?? {} });
   }
 
   function emitRecFrame(
@@ -127,7 +127,7 @@ export function createRecording(deps: RecordingDeps): RecordingController {
           return { V, A, H: conv.A2H.R(A) };
         }),
       ];
-      deps.telemetry({ recording_active: true, recording_streams: {} });
+      deps.telemetry({ recording_active: true, recordingStreams: {} });
       pollTimer = setInterval(publishStreams, 250);
       return true;
     },
@@ -144,7 +144,7 @@ export function createRecording(deps: RecordingDeps): RecordingController {
       const duration = (performance.now() - t0) / 1000;
       await sink?.finalize(duration);
       sink = null;
-      deps.telemetry({ recording_active: false, recording_streams: {} });
+      deps.telemetry({ recording_active: false, recordingStreams: {} });
       return true;
     },
   };

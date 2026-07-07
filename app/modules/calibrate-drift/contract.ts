@@ -25,7 +25,7 @@ export type DetectionView = { points: Point2d[] } | null;
 
 export const calibrateDrift = defineContract({
   state: {
-    target_id: { L: 1, C: 0, R: 2 },
+    targetId: { L: 1, C: 0, R: 2 },
     /** Manual mirror-position override (drag on `PosView`), takes priority
      *  over the tracker-driven servo command — same as the original. */
     override_left: null as Pos | null,

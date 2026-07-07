@@ -36,7 +36,7 @@ export type DetectionView = { points: Point2d[] };
 export const calibrateIntrinsic = defineContract({
   state: {
     /** Camera currently open for live detection; null = picker list. */
-    active_serial: null as string | null,
+    activeSerial: null as string | null,
     method: "CHECKER" as "CHECKER" | "MARKER",
     pattern_size: { width: 6, height: 6 } as PatternSize,
     dictionary: "4X4_50",
@@ -50,7 +50,7 @@ export const calibrateIntrinsic = defineContract({
      *  same as the original per-sub-view renderer implementation). */
     size: { width: 0, height: 0 },
     detection: null as DetectionView | null,
-    record_count: 0,
+    recordCount: 0,
     busy: false as boolean,
   },
   frames: ["preview"] as const,

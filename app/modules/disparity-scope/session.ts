@@ -16,9 +16,9 @@
 // `Zip`-iterator) implementation onto per-camera `onView` taps that don't
 // arrive frame-synchronized:
 //  - Each fovea's `onView` tap wraps its own Mat (perspective-rectified onto
-//    its current pointing pose — always, independent of the `wrap_enable`
+//    its current pointing pose — always, independent of the `wrap`
 //    *display* toggle, since matching/diff are more meaningful against a
-//    rectified tile; `wrap_enable` only picks what the L/R *preview* frames
+//    rectified tile; `wrap` only picks what the L/R *preview* frames
 //    show) and derives a grayscale, downsampled match tile from it
 //    (`vergence.ts`'s `getFoveaTile` — safe to retain past the call, unlike
 //    the registry's reused-buffer Mat itself; see that function's doc).
@@ -246,7 +246,7 @@ export default function disparityScopeSession(): ServerSession<typeof disparity>
       if (!triple) return;
       const A = triple.conv.V2A[role](volts[role]);
       const wrapped = wrapPerspective(raw, triple.conv.A2H[role](A)); // independent Mat
-      const display = s.state.wrap_enable ? wrapped : raw;
+      const display = s.state.wrap ? wrapped : raw;
       s.frame(role, display);
       aligned[role] = wrapped;
       if (width && height) {
@@ -461,13 +461,13 @@ export default function disparityScopeSession(): ServerSession<typeof disparity>
             if (s.state.tracker_enabled) pendingTrackerInit = s.state.target;
           }
         },
-        async reset_tuning() {
+        async resetTuning() {
           s.setState("tuning", cloneTuning(DEFAULT_TUNING));
         },
         async reset_vergence() {
           for (const pid of Object.values(pids)) pid.reset();
         },
-        async set_pid({ dof, value }) {
+        async setPid({ dof, value }) {
           pids[dof].value = value;
         },
       },

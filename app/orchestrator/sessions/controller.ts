@@ -53,7 +53,7 @@ export function controllerSession(): ServerSession<typeof controller> {
       if (probeTimer) clearInterval(probeTimer);
       probeTimer = null;
       prevStats = null;
-      s.telemetry({ serial_rate: ZERO_RATE, streams: [] });
+      s.telemetry({ serialRate: ZERO_RATE, streams: [] });
     }
 
     function startProbe(): void {
@@ -66,7 +66,7 @@ export function controllerSession(): ServerSession<typeof controller> {
           return;
         }
         const cur = c.stats;
-        const serial_rate = prevStats
+        const serialRate = prevStats
           ? {
               txBytesPerSec: (cur.txBytes - prevStats.txBytes) / dtSec,
               rxBytesPerSec: (cur.rxBytes - prevStats.rxBytes) / dtSec,
@@ -75,7 +75,7 @@ export function controllerSession(): ServerSession<typeof controller> {
             }
           : ZERO_RATE;
         prevStats = cur;
-        s.telemetry({ serial_rate, streams: c.streamSnapshot(dtSec) });
+        s.telemetry({ serialRate, streams: c.streamSnapshot(dtSec) });
       }, PROBE_INTERVAL_MS);
     }
 
@@ -120,7 +120,7 @@ export function controllerSession(): ServerSession<typeof controller> {
         async actuate(arg) {
           const c = ctrl();
           if (!c) throw new Error("Controller not connected");
-          const res = await c.actuate(arg, arg.settle_time);
+          const res = await c.actuate(arg, arg.settleTime);
           s.telemetry({ pos: { left: res.left, right: res.right } });
           return res;
         },

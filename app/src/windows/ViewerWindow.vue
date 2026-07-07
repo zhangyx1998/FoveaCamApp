@@ -53,6 +53,13 @@ window.addEventListener("pagehide", () => {
 const file = computed(() =>
   fileId.value ? (session.state.files[fileId.value] ?? null) : null,
 );
+// Mutable playback state rides telemetry (C-14 reshape): the static `file`
+// entry no longer carries `positionNs`/`playing`. Null = closed / not yet
+// pushed → treat as not playing, position 0.
+const playback = computed(() =>
+  fileId.value ? (session.telemetry.position[fileId.value] ?? null) : null,
+);
+const playing = computed(() => playback.value?.playing ?? false);
 const basename = computed(() => props.path.split("/").pop() ?? props.path);
 
 // --- tracks ---------------------------------------------------------------
@@ -70,7 +77,7 @@ const selectedChannel = computed(() => {
 
 const payload = computed(() =>
   fileId.value && selectedChannel.value
-    ? session.frame(`${fileId.value}:${selectedChannel.value}`).value
+    ? session.frame(`${fileId.value}:${selectedChannel.value}`).payload.value
     : null,
 );
 
@@ -80,16 +87,15 @@ const RATES = [0.25, 0.5, 1, 2, 4];
 const rate = ref(1);
 
 function togglePlay(): void {
-  const f = file.value;
-  if (!fileId.value || !f) return;
-  if (f.playing) void session.call("pause", fileId.value);
+  if (!fileId.value || !file.value) return;
+  if (playing.value) void session.call("pause", fileId.value);
   else void session.call("play", { fileId: fileId.value, rate: rate.value });
 }
 
 function setRate(event: Event): void {
   rate.value = Number((event.target as HTMLSelectElement).value);
   // Re-issue play at the new rate if currently playing.
-  if (fileId.value && file.value?.playing)
+  if (fileId.value && playing.value)
     void session.call("play", { fileId: fileId.value, rate: rate.value });
 }
 
@@ -99,7 +105,7 @@ function setRate(event: Event): void {
 const scrubbing = ref(false);
 const scrubNs = ref(0);
 const positionNs = computed(() =>
-  scrubbing.value ? scrubNs.value : (file.value?.positionNs ?? 0),
+  scrubbing.value ? scrubNs.value : (playback.value?.positionNs ?? 0),
 );
 
 function onScrub(event: Event): void {
@@ -154,7 +160,7 @@ function fmtNs(ns: number): string {
         </div>
         <div class="transport">
           <button class="play" @click="togglePlay">
-            {{ file.playing ? "⏸" : "▶" }}
+            {{ playing ? "⏸" : "▶" }}
           </button>
           <select :value="rate" @change="setRate" title="Playback rate">
             <option v-for="r in RATES" :key="r" :value="r">{{ r }}×</option>
