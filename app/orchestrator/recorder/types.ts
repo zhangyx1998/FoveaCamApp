@@ -66,6 +66,25 @@ export interface FinalizeStats {
 
 // ---- main-thread → worker protocol -------------------------------------
 
+/**
+ * Bench-only (B-P4) MCAP chunk-compression injection. Production NEVER sets
+ * this — the recorder default is uncompressed, because B-4 measured that
+ * compressing on the single (non-reentrant) writer chain makes the throughput
+ * bottleneck worse. The worker lazy-`require()`s `moduleEntry` ONLY when this
+ * field is present, so a production build ships no compressor dependency.
+ */
+export interface CompressionInjection {
+  /** MCAP chunk `compression` field written into the file (e.g. "lz4", "zstd"). */
+  name: string;
+  /** Absolute module path exporting the sync compressor (the bench resolves it
+   *  from its own node_modules — never bundled into production). */
+  moduleEntry: string;
+  /** Named export to call as `(Buffer, level?) => Uint8Array`. */
+  exportName: string;
+  /** Optional second argument (e.g. zstd level); omitted for lz4. */
+  level?: number;
+}
+
 export type RecorderWorkerIn =
   | {
       type: "init";
@@ -78,6 +97,9 @@ export type RecorderWorkerIn =
       library: string;
       /** Session-level metadata record (ISO timestamp etc.). */
       session?: Record<string, string>;
+      /** Bench-only chunk compression (see `CompressionInjection`). Undefined
+       *  in production → uncompressed, today's behavior. */
+      compression?: CompressionInjection;
     }
   | {
       type: "channel";

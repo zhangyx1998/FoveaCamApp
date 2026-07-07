@@ -12,8 +12,15 @@ You may find the full license in project root directory.
 import { computed, ref } from "vue";
 import StreamView from "@src/components/StreamView.vue";
 import RangeSlider from "@src/inputs/range-slider.vue";
+import { CAMERA_CONTROLS } from "@lib/camera-config";
 import type { Session } from "@lib/orchestrator/client";
 import type { CameraView, ManageCamerasContract } from "./contract";
+
+// Readout formatters from the shared control schema (A-P11) — same source the
+// orchestrator snapshot uses, so the displayed value can't drift from the wire.
+const controlFmt: Record<string, (v: number) => string> = Object.fromEntries(
+  CAMERA_CONTROLS.map((c) => [c.key, c.format]),
+);
 
 const { serial, session } = defineProps<{
   serial: string;
@@ -146,7 +153,7 @@ function reset() {
           :disabled="!view.frame_rate_enable"
         >
           <span>Frame Rate</span>
-          <span>{{ view.frame_rate.toFixed(2) }} FPS</span>
+          <span>{{ controlFmt.frame_rate(view.frame_rate) }}</span>
         </RangeSlider>
       </fieldset>
       <fieldset v-if="view.exposure_auto_available">
@@ -166,7 +173,7 @@ function reset() {
           :disabled="view.exposure_auto !== 'Off'"
         >
           <span>Exposure</span>
-          <span>{{ (view.exposure / 1000.0).toFixed(2) }} ms</span>
+          <span>{{ controlFmt.exposure(view.exposure) }}</span>
         </RangeSlider>
       </fieldset>
       <fieldset v-if="view.gain_auto_available">
@@ -186,7 +193,7 @@ function reset() {
           :disabled="view.gain_auto !== 'Off'"
         >
           <span>Gain</span>
-          <span>{{ view.gain.toFixed(2) }} dB</span>
+          <span>{{ controlFmt.gain(view.gain) }}</span>
         </RangeSlider>
       </fieldset>
       <fieldset v-if="view.black_level_available">
@@ -206,7 +213,7 @@ function reset() {
           :disabled="view.black_level_auto !== 'Off'"
         >
           <span>Black Level</span>
-          <span>{{ view.black_level.toFixed(2) }} dB</span>
+          <span>{{ controlFmt.black_level(view.black_level) }}</span>
         </RangeSlider>
       </fieldset>
       <div>

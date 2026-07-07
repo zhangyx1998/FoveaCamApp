@@ -36,6 +36,7 @@ import {
   TELEMETRY_TOPIC,
 } from "./schema.js";
 import {
+  type CompressionInjection,
   type FinalizeStats,
   type RecorderWorkerIn,
   type RecorderWorkerOut,
@@ -54,6 +55,9 @@ export interface McapWriterWorkerOptions {
   maxQueuedFrames?: number;
   /** Session-level metadata record written at start. */
   session?: Record<string, string>;
+  /** Bench-only (B-P4): inject MCAP chunk compression. NEVER set by production
+   *  callers — the recorder default is uncompressed (B-4 finding). */
+  compression?: CompressionInjection;
 }
 
 export class McapWriterWorker {
@@ -101,6 +105,7 @@ export class McapWriterWorker {
       chunkBytes: options.chunkBytes ?? McapWriterWorker.chunkBytes,
       library: "FoveaCamApp",
       session: options.session,
+      compression: options.compression,
     });
     // The telemetry/metadata channel exists on every container — registered
     // up front so per-frame extras can ride along from the first frame.
@@ -194,6 +199,18 @@ export class McapWriterWorker {
   /** Depth of a channel's in-flight window (mostly for tests/metrics). */
   queueDepth(channel: string): number {
     return this.queued.get(channel) ?? 0;
+  }
+
+  /** Stop recording WITHOUT finalizing: terminate the worker immediately, so
+   *  the chunk still buffered in the writer is lost and the file has no
+   *  footer/summary — a crash-shaped container that only the streaming/
+   *  re-index reader path recovers (B-4). Used to cancel a recording and by
+   *  the recorder bench's crash test. Idempotent. */
+  async abort(): Promise<void> {
+    this.finalizing = true; // suppress the exit→fail path on abrupt terminate
+    this.pendingFinalize = null;
+    await this.worker.terminate();
+    this.workload.dispose();
   }
 
   /** Drain the write chain, write the MCAP summary/index sections, close the

@@ -18,6 +18,8 @@
 // Each open file registers a `viewer:<fileId>` workload meter (per-channel
 // ingest, frames/telemetry out, late/undecodable drops) — disposed on close.
 
+import { realpath } from "node:fs/promises";
+import { resolve } from "node:path";
 import { defineSession, type ServerSession } from "../runtime.js";
 import {
   viewer,
@@ -44,10 +46,23 @@ export interface ViewerSessionDeps {
 
 interface OpenFile {
   player: Player;
+  /** Canonical (symlink-resolved) path — the dedupe key for `open()`. */
+  canonical: string;
   /** The static half of the `ViewerFile` state row. */
   info: Omit<ViewerFile, "positionNs" | "playing">;
   positionNs: number;
   playing: boolean;
+}
+
+/** Canonicalize for dedupe: resolve symlinks so two spellings of the same
+ *  file share one fileId. Falls back to path-resolution if the file can't be
+ *  realpath'd (missing/odd path — `openFovea` then surfaces the real error). */
+async function canonicalPath(p: string): Promise<string> {
+  try {
+    return await realpath(p);
+  } catch {
+    return resolve(p);
+  }
 }
 
 export function viewerSession(deps: ViewerSessionDeps = {}): ServerSession<typeof viewer> {
@@ -92,6 +107,15 @@ export function viewerSession(deps: ViewerSessionDeps = {}): ServerSession<typeo
 
       commands: {
         async open(path: string): Promise<{ fileId: string }> {
+          // Dedupe by canonical path (C-P11): a path already open returns its
+          // existing fileId instead of a second reader/player/meter/topics —
+          // matches the one-window-per-file product rule (A's viewer shell
+          // dedupes the window; this dedupes the session resources so both
+          // agree on fileId reuse). Close stays by fileId.
+          const canonical = await canonicalPath(path);
+          for (const [id, f] of files)
+            if (f.canonical === canonical) return { fileId: id };
+
           const source = await openSource(path);
           const fileId = `f${nextId++}`;
           const workload = registerWorkload(`viewer:${fileId}`, {
@@ -99,6 +123,7 @@ export function viewerSession(deps: ViewerSessionDeps = {}): ServerSession<typeo
             outputs: ["frames", "telemetry"],
           });
           const entry: OpenFile = {
+            canonical,
             positionNs: 0,
             playing: false,
             info: {

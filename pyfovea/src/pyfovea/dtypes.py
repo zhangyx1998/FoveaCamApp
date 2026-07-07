@@ -19,6 +19,11 @@ import math
 
 import numpy as np
 
+# Bayer mosaic prefixes come from the generated pixel-format registry mirror
+# (docs/schema/pixel-formats.ts → pixel_formats.py) so the list can't drift from
+# the C++/TS tables. Re-exported here for backward-compatible imports.
+from .pixel_formats import BAYER_PATTERNS
+
 #: Short dtype name -> numpy dtype. Must match ``Dtype`` in
 #: ``app/lib/util/dtype.ts``.
 NUMPY_DTYPE: dict[str, np.dtype] = {
@@ -33,11 +38,6 @@ NUMPY_DTYPE: dict[str, np.dtype] = {
     "U64": np.dtype("uint64"),
     "I64": np.dtype("int64"),
 }
-
-#: PixelFormat -> OpenCV Bayer demosaic code name (resolved lazily so the
-#: core reader has no cv2 dependency). 12p formats are unpacked to 16-bit
-#: before demosaic, so they share the 16-bit codes.
-BAYER_PATTERNS = ("BayerGR", "BayerRG", "BayerGB", "BayerBG")
 
 
 def significant_bits(fmt: str, declared: int = 0) -> int:

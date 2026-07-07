@@ -20,6 +20,7 @@
 
 import type { Mat } from "core/Vision";
 import { typedArrayFrom, type Dtype } from "@lib/util/dtype";
+import { pixelFormatSpec } from "../../../docs/schema/pixel-formats.js";
 
 export type FrameDecoder = (bytes: Uint8Array) => Mat<Uint8Array>;
 
@@ -48,9 +49,13 @@ export function parseDecodeProps(metadata: Record<string, string>): DecodeProps 
 
 type BayerCode = `Bayer${"GR" | "RG" | "GB" | "BG"}2RGB`;
 
-const bayerCode = (pixelFormat: string): BayerCode | null => {
-  const m = /^Bayer(GR|RG|GB|BG)/.exec(pixelFormat);
-  return m ? (`Bayer${m[1]}2RGB` as BayerCode) : null;
+/** OpenCV demosaic code for a pixel format, or null if it's not Bayer — driven
+ *  by the shared registry's `bayer` field (docs/schema, B-P1), NOT a private
+ *  regex, so viewer demosaic can't drift from the format facts. Exported for
+ *  the C-P6 conformance test. */
+export const bayerCode = (pixelFormat: string): BayerCode | null => {
+  const bayer = pixelFormatSpec(pixelFormat)?.bayer;
+  return bayer ? (`${bayer}2RGB` as BayerCode) : null;
 };
 
 /**

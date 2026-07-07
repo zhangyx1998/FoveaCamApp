@@ -2,11 +2,11 @@
   "name": "bench-recorder",
   "private": true,
   "type": "module",
-  "description": "Stage 5 / B-4: MCAP container format evaluation bench for the recorder rewrite. Not part of the npm workspace build — run directly with /opt/homebrew/bin/node.",
+  "description": "Stage 5 / B-4 + B-P4: MCAP recorder bench — a thin harness that drives the PRODUCTION recorder writer (app/orchestrator/recorder). Not part of the npm workspace build — run directly with /opt/homebrew/bin/node. The --import shim (ts-hooks.mjs) lets the bench load the production ESM (path aliases + .js→.ts) under raw node.",
   "scripts": {
-    "bench": "node src/bench.ts",
+    "bench": "node --import ./ts-hooks.mjs src/bench.ts",
     "verify-seek": "node src/verify-seek.ts",
-    "crash-recovery": "node src/crash-recovery.ts"
+    "crash-recovery": "node --import ./ts-hooks.mjs src/crash-recovery.ts"
   },
   "devDependencies": {
     "@mcap/core": "2.2.1",

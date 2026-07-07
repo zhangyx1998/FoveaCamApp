@@ -19,12 +19,10 @@ import {
 } from "@orchestrator/registry";
 import { read, update, write } from "@orchestrator/store-hub";
 import { report } from "@orchestrator/diagnostics";
-import { describeCamera } from "@lib/camera-config";
-import { manageCameras, type CameraView, type Range } from "./contract";
+import { CAMERA_CONTROLS, describeCamera, readControlFields } from "@lib/camera-config";
+import { manageCameras, type CameraView } from "./contract";
 import type { CameraInfo } from "@lib/orchestrator/contracts";
 import type { Camera } from "core/Aravis";
-
-const ZERO_RANGE: Range = { min: 0, max: 0 };
 
 /** Read a possibly-unavailable camera getter without throwing. */
 function safe<T>(fn: () => T, fallback: T): T {
@@ -54,31 +52,13 @@ export default function manageCamerasSession(): ServerSession<typeof manageCamer
         // force-released (§12.1 C2, `system.releaseCameras`) while this 1 Hz
         // poll is scheduled; an unguarded read on a released `CoreObject`
         // throws and, uncaught inside `setInterval`, would crash the
-        // orchestrator process.
+        // orchestrator process. The tunable-control fields are read the same
+        // guarded way via the shared `CAMERA_CONTROLS` schema (A-P11).
         description: safe(() => describeCamera(c), "Camera Not Connected"),
         role: e.role as CameraView["role"],
         pixel_format: safe(() => c.pixel_format, ""),
         pixel_format_options: safe(() => c.pixel_format_options, []),
-        frame_rate_available: safe(() => c.frame_rate_available, false),
-        frame_rate_enable: safe(() => c.frame_rate_enable, false),
-        frame_rate: safe(() => c.frame_rate, 0),
-        frame_rate_range: safe(() => c.frame_rate_range, ZERO_RANGE),
-        exposure_auto_available: safe(() => c.exposure_auto_available, false),
-        exposure_auto: safe(() => c.exposure_auto, "Off"),
-        exposure: safe(() => c.exposure, 0),
-        exposure_range: safe(() => c.exposure_range, ZERO_RANGE),
-        gain_auto_available: safe(() => c.gain_auto_available, false),
-        gain_auto: safe(() => c.gain_auto, "Off"),
-        gain: safe(() => c.gain, 0),
-        gain_range: safe(() => c.gain_range, ZERO_RANGE),
-        black_level_available: safe(() => c.black_level_available, false),
-        black_level_auto_available: safe(
-          () => c.black_level_auto_available,
-          false,
-        ),
-        black_level_auto: safe(() => c.black_level_auto, "Off"),
-        black_level: safe(() => c.black_level, 0),
-        black_level_range: safe(() => c.black_level_range, ZERO_RANGE),
+        ...readControlFields(c as unknown as Record<string, any>, safe),
       };
     }
 
@@ -116,6 +96,9 @@ export default function manageCamerasSession(): ServerSession<typeof manageCamer
       // absent camera.
       const lease = await retryUntil(() => acquire(serial));
       if (lease) await registerEntry(serial, lease);
+      // A camera we just listed but can't lease is held by another process
+      // (exclusivity, §12.3) — surface it instead of leaving stderr-only (A-P13).
+      else s.fail(`Camera ${serial} is in use by another process.`);
     }
 
     function closeEntry(serial: string): void {
@@ -129,6 +112,9 @@ export default function manageCamerasSession(): ServerSession<typeof manageCamer
       update(cameraConfigPath(camera), patch);
 
     async function refresh(): Promise<CameraInfo[]> {
+      // Fresh scan: clear any prior contention error; a still-contended camera
+      // re-raises it via `openCamera` below (A-P13 retry-clear).
+      s.clearError();
       const found = await listCameraInfo();
       const present = new Set(found.map((c) => c.serial));
       const toOpen = found.map((c) => c.serial).filter((s) => !entries.has(s));
@@ -201,11 +187,19 @@ export default function manageCamerasSession(): ServerSession<typeof manageCamer
           const e = entries.get(serial);
           if (!e) return;
           const c = e.lease.camera;
+          const cam = c as unknown as Record<string, any>;
           try {
-            c.frame_rate_enable = false;
-            c.exposure_auto = "Once";
-            c.gain_auto = "Once";
-            if (c.black_level_auto_available) c.black_level_auto = "Once";
+            // Schema-driven reset (A-P11): frame rate back to auto (enable
+            // off), each auto control to a one-shot "Once", black level only
+            // when its availability probe says so — same effect + order as the
+            // hand-written version this replaces.
+            for (const ctrl of CAMERA_CONTROLS) {
+              if (ctrl.enableKey) cam[ctrl.enableKey] = false;
+              if (ctrl.autoKey) {
+                if (ctrl.autoAvailableKey && !cam[ctrl.autoAvailableKey]) continue;
+                cam[ctrl.autoKey] = "Once";
+              }
+            }
           } catch (err) {
             console.error("[manage-cameras] reset:", err);
           }

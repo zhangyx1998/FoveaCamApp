@@ -1,5 +1,44 @@
 # Planner triage (2026-07-07)
 
+## WAVE-2 LANDED + PLANNER-VERIFIED (2026-07-07, accepted; Opus 4.8 fleet)
+- **A (A-16):** A-P4 (`marker-calibration.ts` Vue-free primitives, adopted
+  extrinsic/drift/distortion), A-P8 (`WINDOWS` taxonomy table feeding
+  windows/manager/manifest/main + coverage test), A-P10 (types-only bridge
+  channel registry — `import type` erases, V11 intact), A-P11
+  (`CAMERA_CONTROLS` schema, `safe()` preserved, compile-time drift guard;
+  only helper aliases `Range`/`AutoMode` relocated — no field renames),
+  A-P13 (per-session `status`/`SessionStatus` channel + `fail()`/`clearError`,
+  manage-cameras reference consumer; fixed a latent bug — `error()`'s
+  doc-promised renderer forwarding never existed).
+- **B (B-9):** B-P1 (single `PIXEL_FORMATS` registry at
+  `docs/schema/pixel-formats.ts`; trivial hand-run emitter writes checked-in
+  `PixelFormat.gen.h` X-macro + `pyfovea/pixel_formats.py`, NOT build-wired;
+  enum names/order + 12p comments preserved; orphan `PixelFormat.ts` deleted;
+  stale `CAPACITY=8` comment killed), B-P4 (bench drives the PRODUCTION
+  `McapWriterWorker`, compression a bench-only lazy-required seam — 0
+  compressor hits in `orchestrator.js`; single-writer bottleneck reproduces
+  unchanged), B-P10 (additive `iter_frames_streaming()`, bounded memory on
+  truncated files; default `iter_frames()` untouched).
+- **C (C-11):** C-P2 (SHM transfer pool → `shm-client.ts`, behavior-identical,
+  ownership tests), C-P4 (shared libc-only `ShmLayout.h`/`ShmRead.{h,cpp}` in
+  both core + reader; fences/retry-cap byte-preserved; readers otool-clean),
+  C-P7 (streaming truncated playback, bounded-memory test), C-P9 (additive
+  `renderer.shmReads` telemetry + OSD, observe-only), C-P11 (session-layer
+  viewer-open dedupe; contract wording planner-ratified into
+  `viewer-contract.ts`), C-P6 (`dtype.ts` + `viewer/decode.ts` consume B-P1's
+  table + 4-test conformance suite; dtype.ts reverts A→ after wave).
+- **Planner sweep (authoritative, unsandboxed):** vitest **214/214**,
+  vue-tsc 0, `core make build` both runtimes (incl. deterministic re-gen of
+  `PixelFormat.gen.h`), readers `otool -L` self+libc++/libSystem only,
+  `08-shm-ring.ts` PASS, pyfovea **33/33** (incl. B-P10 streaming), vite
+  build + V11 triplet 0/0/0, renderer zero-core / orchestrator zero-Vue, C++
+  `packed12`+`cobs` fresh-rebuilt PASS (B-P1 no native drift). Non-breaking
+  verified against diffs: A-P13 additive (no protocol deletions), A-P11 no
+  field renames, B-P1 generator deterministic. Committed as the wave-2
+  checkpoint. **Green-lit non-breaking backlog now EXHAUSTED** — remaining
+  items are the user-approved breaking waves (A-P7+A-P12, A-P1) and the
+  trigger-deferred set below.
+
 ## WAVE-1 LANDED + PLANNER-VERIFIED (2026-07-07, accepted)
 - **A (A-15):** A-P2 (tracking-single display vision → named frame
   workers `tracking:center`/`tracking:fovea:{L,R}` with idle cancel),

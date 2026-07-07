@@ -466,9 +466,18 @@ export class Channel {
 
 // --- Topic helpers (shared so both ends agree on the wire strings) -------
 
+/** Per-session status snapshot (A-P13). `error` is the current user-visible
+ *  failure (e.g. a failed activation / camera contention), or null when healthy. */
+export type SessionStatus = { error: string | null };
+
 export const topic = {
   state: (session: string) => `st:${session}`,
   telemetry: (session: string) => `tel:${session}`,
+  // Per-session status (A-P13): the current user-visible failure, if any.
+  // Seeded to every new subscriber like state/telemetry, so an activation
+  // failure that happened before a window opened is still shown. Payload is a
+  // `SessionStatus`.
+  status: (session: string) => `sts:${session}`,
   frame: (session: string, name: string) => `fr:${session}:${name}`,
   command: (session: string, name: string) => `cmd:${session}:${name}`,
   setState: (session: string) => `set:${session}`,

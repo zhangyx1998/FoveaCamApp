@@ -5,7 +5,7 @@
 // per house convention); the clock is virtual, so pacing math is asserted
 // deterministically instead of racing real timers.
 
-import { mkdtemp, readFile, rm, stat, writeFile, truncate } from "node:fs/promises";
+import { mkdtemp, open, readFile, rm, stat, writeFile, truncate } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -291,6 +291,24 @@ describe("viewer session (C-8)", () => {
     await h.dispose();
   });
 
+  it("open() dedupes by canonical path: same file → same fileId, one reader/meter (C-P11)", async () => {
+    const h = harness();
+    const file = await writeFixture(await tempRoot());
+    const a = await h.call<{ fileId: string }>("open", file);
+    const b = await h.call<{ fileId: string }>("open", file);
+    await flush();
+    // Second open returns the existing fileId — no second file row/meter.
+    expect(b.fileId).toBe(a.fileId);
+    expect(Object.keys(h.files())).toEqual([a.fileId]);
+    expect(workloadsSnapshot()[`viewer:${a.fileId}`]).toBeDefined();
+    // A single close (by fileId) fully releases it — close semantics unchanged.
+    await h.call("close", a.fileId);
+    await flush();
+    expect(h.files()[a.fileId]).toBeUndefined();
+    expect(workloadsSnapshot()[`viewer:${a.fileId}`]).toBeUndefined();
+    await h.dispose();
+  });
+
   it("close() removes the file from state and disposes its workload meter", async () => {
     const h = harness();
     const file = await writeFixture(await tempRoot());
@@ -391,6 +409,58 @@ describe("openFovea source layer", () => {
     expect(recovered.length).toBeLessThan(6); // …up to (not past) the cut
     // and in file order = log-time order for a single-channel writer
     expect([...recovered].sort((a, b) => Number(a - b))).toEqual(recovered);
+    await source.close();
+  });
+
+  it("streaming fallback yields progressively — first message needs far fewer reads than a full scan (C-P7 bounded memory)", async () => {
+    const dir = await tempRoot();
+    const sink = await createFoveaSink(dir, "2026-07-06T00:00:00.000Z", {
+      writer: { chunkBytes: 1 },
+    });
+    // ~2.4 MB of frame bytes so the recovered body spans several 512 KB read
+    // chunks — then "first message" provably reads less of the file than "all".
+    const FRAMES = 60;
+    for (let i = 0; i < FRAMES; i++) {
+      const big = Object.assign(new Uint16Array(20000).fill(i), {
+        shape: [200, 100],
+        channels: 1,
+      }) as never;
+      sink.write("cam", big, "Mono16", 0.01 * (i + 1), {});
+    }
+    await sink.finalize(1.0);
+    const file = join(dir, "recording.fovea");
+    // Trim just the tail → streaming fallback, but keep most of the body.
+    await truncate(file, Math.floor((await stat(file)).size * 0.9));
+
+    const source = await openFovea(file);
+    expect(source.truncated).toBe(true);
+
+    // Count FileHandle.read calls via the shared prototype (spyOn calls
+    // through, so reads still work).
+    const probe = await open(file, "r");
+    const proto = Object.getPrototypeOf(probe) as { read: (...a: never[]) => unknown };
+    await probe.close();
+    const spy = vi.spyOn(proto, "read");
+
+    // Full drain reads the whole recovered body — multiple 512 KB chunks.
+    spy.mockClear();
+    let total = 0;
+    for await (const _m of source.messages({ topics: ["cam"] })) total++;
+    const fullReads = spy.mock.calls.length;
+    expect(total).toBeGreaterThan(1);
+    expect(fullReads).toBeGreaterThan(1);
+
+    // Pulling ONLY the first message must not read the whole file — the old
+    // collect-then-yield needed a full scan even for one message.
+    spy.mockClear();
+    const iter = source.messages({ topics: ["cam"] });
+    const first = await iter.next();
+    const firstReads = spy.mock.calls.length;
+    await iter.return?.(); // stop early, unwind the scan
+    expect(first.done).toBe(false);
+    expect(firstReads).toBeLessThan(fullReads);
+
+    spy.mockRestore();
     await source.close();
   });
 

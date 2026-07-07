@@ -79,7 +79,22 @@ parentPort.on("message", (message) => {
   if (message.type === "init") {
     enqueue(async () => {
       handle = await open(message.filePath, "w");
-      writer = new McapWriter({ writable, chunkSize: message.chunkBytes });
+      // Bench-only (B-P4): compression is injected via message.compression and
+      // lazy-required here, so production (which never sets it) ships no
+      // compressor dependency and stays uncompressed — the B-4 default.
+      let compressChunk;
+      if (message.compression) {
+        const c = message.compression;
+        const fn = require(c.moduleEntry)[c.exportName];
+        compressChunk = (chunkData) => ({
+          compression: c.name,
+          compressedData: fn(
+            Buffer.from(chunkData.buffer, chunkData.byteOffset, chunkData.byteLength),
+            c.level,
+          ),
+        });
+      }
+      writer = new McapWriter({ writable, chunkSize: message.chunkBytes, compressChunk });
       await writer.start({ profile: FOVEA_PROFILE, library: message.library });
       if (message.session) {
         await writer.addMetadata({

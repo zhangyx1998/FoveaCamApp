@@ -18,9 +18,16 @@
 import { defineSession, type ServerSession } from "@orchestrator/runtime";
 import { leaseCalibratedTriple, type CalibratedTriple } from "@orchestrator/calibration";
 import { startActuationLoop, type ActuationLoop } from "@orchestrator/actuation";
-import { MarkerDetector, findHomography, resize, wrapPerspective, type Mat } from "core/Vision";
+import { findHomography, resize, wrapPerspective, type Mat } from "core/Vision";
 import { area, type Point2d } from "core/Geometry";
-import { MarkerTracker, type TrackerTarget } from "@orchestrator/marker-tracker";
+import { type MarkerTracker, type TrackerTarget } from "@orchestrator/marker-tracker";
+import {
+  bindDetections,
+  createTrackerTriple,
+  detectionViews,
+  retarget,
+  stopTriple,
+} from "@orchestrator/marker-calibration";
 import {
   bilinearInterpolate,
   CORNER_OBJ_POINTS,
@@ -28,7 +35,7 @@ import {
   transformPoints,
 } from "@lib/marker";
 import type { Pos } from "@lib/controller-codec";
-import { calibrateDistortion, type DetectionView, type ProjectionView } from "./contract";
+import { calibrateDistortion, type ProjectionView } from "./contract";
 
 type Role = "L" | "C" | "R";
 const ORIGIN: Pos = { x: 0, y: 0 };
@@ -44,8 +51,7 @@ export default function calibrateDistortionSession(): ServerSession<typeof calib
 
     function publishDetections(): void {
       if (!trackers) return;
-      const view = (t: MarkerTracker): DetectionView => (t.target ? { points: t.target.img_pts } : null);
-      s.telemetry({ detection: { L: view(trackers.L), C: view(trackers.C), R: view(trackers.R) } });
+      s.telemetry({ detection: detectionViews(trackers) });
     }
 
     // Mirrors calibrate-intrinsic's `views` pattern — `s.telemetry()` is
@@ -105,15 +111,12 @@ export default function calibrateDistortionSession(): ServerSession<typeof calib
         return;
       }
       triple = t;
-      const detector = new MarkerDetector("4X4_50");
-      trackers = {
-        L: new MarkerTracker(t.leases.L.camera, detector, s.state.target_id.L, 0.25, true),
-        C: new MarkerTracker(t.leases.C.camera, detector, s.state.target_id.C, 1.0),
-        R: new MarkerTracker(t.leases.R.camera, detector, s.state.target_id.R, 0.25, true),
-      };
-      disposers.push(trackers.L.onDetection(publishDetections));
-      disposers.push(trackers.C.onDetection(onCenterDetection));
-      disposers.push(trackers.R.onDetection(publishDetections));
+      trackers = createTrackerTriple(
+        { L: t.leases.L.camera, C: t.leases.C.camera, R: t.leases.R.camera },
+        s.state.target_id,
+        { internal: true },
+      );
+      bindDetections(trackers, disposers, publishDetections, onCenterDetection);
       disposers.push(t.leases.L.onView((v) => onFoveaView("L", v)));
       disposers.push(t.leases.C.onView((v) => s.frame("C", v)));
       disposers.push(t.leases.R.onView((v) => onFoveaView("R", v)));
@@ -133,8 +136,7 @@ export default function calibrateDistortionSession(): ServerSession<typeof calib
     function idleSession(): void {
       loop?.stop();
       loop = null;
-      if (trackers) for (const t of Object.values(trackers)) t.stop();
-      trackers = null;
+      trackers = stopTriple(trackers);
       for (const d of disposers) d();
       disposers.length = 0;
       if (triple) for (const l of Object.values(triple.leases)) l.release();
@@ -152,7 +154,7 @@ export default function calibrateDistortionSession(): ServerSession<typeof calib
       commands: {
         async setTargetId({ role, id }) {
           s.setState("target_id", { ...s.state.target_id, [role]: id });
-          if (trackers) trackers[role].targetId = id;
+          retarget(trackers, role, id);
         },
       },
       activate() {

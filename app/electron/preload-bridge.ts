@@ -17,7 +17,32 @@
 // each output. A single multi-entry rollup pass would split this file into a
 // sibling chunk, and sandboxed preloads cannot require sibling chunks (V11).
 import { contextBridge, ipcRenderer } from "electron";
-import type { FoveaBridge } from "./bridge";
+import type {
+  FoveaBridge,
+  InvokeChannels,
+  PushChannels,
+  SendChannels,
+} from "./bridge";
+
+// Typed wrappers over the raw `ipcRenderer` surface, constrained by the shared
+// channel registry (bridge.ts) — a bad channel name or arg tuple is a compile
+// error here. All types-only imports (erased at build), so the emitted preload
+// stays self-contained CJS with no sibling-chunk import (V11).
+function invoke<K extends keyof InvokeChannels>(
+  channel: K,
+  ...args: InvokeChannels[K]["args"]
+): Promise<InvokeChannels[K]["ret"]> {
+  return ipcRenderer.invoke(channel, ...args);
+}
+function send<K extends keyof SendChannels>(channel: K, ...args: SendChannels[K]): void {
+  ipcRenderer.send(channel, ...args);
+}
+function listen<K extends keyof PushChannels>(
+  channel: K,
+  cb: (...args: PushChannels[K]) => void,
+): void {
+  ipcRenderer.on(channel, (_e, ...args) => cb(...(args as PushChannels[K])));
+}
 
 export function installBridge(extra: Partial<FoveaBridge> = {}) {
   ipcRenderer.on("orchestrator:port", (e) => {
@@ -25,28 +50,18 @@ export function installBridge(extra: Partial<FoveaBridge> = {}) {
   });
 
   const bridge: FoveaBridge = {
-    connectOrchestrator: () => ipcRenderer.send("orchestrator:connect"),
-    onOrchestratorDown: (cb) => {
-      ipcRenderer.on("orchestrator:down", () => cb());
-    },
-    openProfilerWindow: () => ipcRenderer.send("open-profiler-window"),
-    openAppWindow: (appId) => ipcRenderer.send("window:open-app", appId),
-    openProjectionWindow: (session, frame) =>
-      ipcRenderer.send("window:open-projection", session, frame),
-    onFullscreenChange: (cb) => {
-      ipcRenderer.on("window:fullscreen", (_e, fullscreen: boolean) =>
-        cb(fullscreen),
-      );
-    },
-    onRecorderTrigger: (cb) => {
-      ipcRenderer.on("recorder:trigger", () => cb());
-    },
-    resolvePath: (...segments) => ipcRenderer.invoke("save-path:resolve", segments),
-    resolveDefaultSavePath: (directory) =>
-      ipcRenderer.invoke("save-path:resolve-default", directory),
-    pathExists: (path) => ipcRenderer.invoke("fs:exists", path),
-    validateWritablePath: (path) => ipcRenderer.invoke("fs:validate-writable", path),
-    writePerfSnapshot: (content) => ipcRenderer.invoke("perf-snapshot:write", content),
+    connectOrchestrator: () => send("orchestrator:connect"),
+    onOrchestratorDown: (cb) => listen("orchestrator:down", () => cb()),
+    openProfilerWindow: () => send("open-profiler-window"),
+    openAppWindow: (appId) => send("window:open-app", appId),
+    openProjectionWindow: (session, frame) => send("window:open-projection", session, frame),
+    onFullscreenChange: (cb) => listen("window:fullscreen", (fullscreen) => cb(fullscreen)),
+    onRecorderTrigger: (cb) => listen("recorder:trigger", () => cb()),
+    resolvePath: (...segments) => invoke("save-path:resolve", segments),
+    resolveDefaultSavePath: (directory) => invoke("save-path:resolve-default", directory),
+    pathExists: (path) => invoke("fs:exists", path),
+    validateWritablePath: (path) => invoke("fs:validate-writable", path),
+    writePerfSnapshot: (content) => invoke("perf-snapshot:write", content),
     ...extra,
   };
 

@@ -15,11 +15,17 @@ import { defineSession, type ServerSession } from "@orchestrator/runtime";
 import { leaseCalibratedTriple, type CalibratedTriple } from "@orchestrator/calibration";
 import { read, write } from "@orchestrator/store-hub";
 import { activeController } from "@orchestrator/controller";
-import { MarkerDetector } from "core/Vision";
-import { MarkerTracker, startServo, type Servo } from "@orchestrator/marker-tracker";
+import { startServo, type MarkerTracker, type Servo } from "@orchestrator/marker-tracker";
+import {
+  bindDetections,
+  createTrackerTriple,
+  detectionViews,
+  retarget,
+  stopTriple,
+} from "@orchestrator/marker-calibration";
 import type { Point2d } from "core/Geometry";
 import type { Mat } from "core/Vision";
-import { calibrateDrift, type DetectionView } from "./contract";
+import { calibrateDrift } from "./contract";
 
 // Mirror position is owned by the shared controller holder, not this
 // session — read it the same way `orchestrator/actuation.ts` does.
@@ -57,10 +63,8 @@ export default function calibrateDriftSession(): ServerSession<typeof calibrateD
 
     function publishDetections(): void {
       if (!trackers) return;
-      const view = (t: MarkerTracker): DetectionView =>
-        t.target ? { points: t.target.img_pts } : null;
       s.telemetry({
-        detection: { L: view(trackers.L), C: view(trackers.C), R: view(trackers.R) },
+        detection: detectionViews(trackers),
         center_angle: angularFromCenter(),
       });
     }
@@ -79,15 +83,11 @@ export default function calibrateDriftSession(): ServerSession<typeof calibrateD
       const doc = await read<{ drift_l?: Point2d; drift_r?: Point2d }>(t.configPath, {});
       saved = { L: doc.drift_l ?? null, R: doc.drift_r ?? null };
       s.telemetry({ saved });
-      const detector = new MarkerDetector("4X4_50");
-      trackers = {
-        L: new MarkerTracker(t.leases.L.camera, detector, s.state.target_id.L, 0.25),
-        C: new MarkerTracker(t.leases.C.camera, detector, s.state.target_id.C, 1.0),
-        R: new MarkerTracker(t.leases.R.camera, detector, s.state.target_id.R, 0.25),
-      };
-      disposers.push(trackers.L.onDetection(publishDetections));
-      disposers.push(trackers.C.onDetection(publishDetections));
-      disposers.push(trackers.R.onDetection(publishDetections));
+      trackers = createTrackerTriple(
+        { L: t.leases.L.camera, C: t.leases.C.camera, R: t.leases.R.camera },
+        s.state.target_id,
+      );
+      bindDetections(trackers, disposers, publishDetections);
       disposers.push(t.leases.L.onView((v) => onView("L", v)));
       disposers.push(t.leases.C.onView((v) => onView("C", v)));
       disposers.push(t.leases.R.onView((v) => onView("R", v)));
@@ -126,8 +126,7 @@ export default function calibrateDriftSession(): ServerSession<typeof calibrateD
     function idleSession(): void {
       servo?.stop();
       servo = null;
-      if (trackers) for (const t of Object.values(trackers)) t.stop();
-      trackers = null;
+      trackers = stopTriple(trackers);
       for (const d of disposers) d();
       disposers.length = 0;
       if (triple) for (const l of Object.values(triple.leases)) l.release();
@@ -144,7 +143,7 @@ export default function calibrateDriftSession(): ServerSession<typeof calibrateD
       commands: {
         async setTargetId({ role, id }) {
           s.setState("target_id", { ...s.state.target_id, [role]: id });
-          if (trackers) trackers[role].targetId = id;
+          retarget(trackers, role, id);
         },
         async setOverride({ role, pos }) {
           s.setState(role === "left" ? "override_left" : "override_right", pos);

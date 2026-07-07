@@ -69,7 +69,16 @@ export const viewer = defineContract({
   commands: {
     /** Open a `.fovea` container. Resolves once channels/duration are known
      *  (indexed read, or the streaming re-index fallback for footerless
-     *  files). Does not start playback. */
+     *  files). Does not start playback.
+     *
+     *  Idempotent per canonical (symlink-resolved) path: opening a path
+     *  already open returns the existing `fileId` — no second reader,
+     *  player, workload meter, or `<fileId>:<channel>` frame topics — per
+     *  the one-window-per-file rule (the shell dedupes the window; the
+     *  session dedupes resources, and a deduped open yields the same
+     *  frame topics so a shared window sees one stream). `close(fileId)`
+     *  releases it; there is no open refcount, so one `close` fully
+     *  closes a deduped file. */
     open: cmd<string, { fileId: string }>(),
     /** Close one container: stops playback, releases the reader and the
      *  file's workload meter, removes it from `files`. */

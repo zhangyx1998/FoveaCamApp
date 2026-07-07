@@ -61,37 +61,127 @@ export function appById(id: string): AppMeta | undefined {
   return APPS.find((a) => a.id === id);
 }
 
+/** Preload bundle a window class loads — a pure key mapped to a concrete file
+ *  main-side (main.ts's options adapter), so this module stays Node-free.
+ *  `renderer` = bridge + shm reader (`sandbox: false`); `profiler` = sandboxed
+ *  bridge only. */
+export type PreloadKind = "renderer" | "profiler";
+
+/** Constructor size + minimums for a window class — Electron-agnostic; main.ts
+ *  merges these into `BrowserWindowConstructorOptions`. */
+export interface WindowSizeSpec {
+  width: number;
+  height: number;
+  minWidth?: number;
+  minHeight?: number;
+}
+
+/**
+ * One row of the window taxonomy (multi-window.md §2) — the single source of
+ * truth every window consumer derives from: the renderer launcher, the main
+ * window manager + its metadata→BrowserWindowOptions adapter, the manifest
+ * restore planner, and the vite multi-entry build. Centralizing it means a new
+ * window class can't silently miss an invariant (singleton status, exclusivity,
+ * preload/sandbox mode, welcome-rule participation) across those files.
+ */
+export interface WindowSpec {
+  /** Only ever one instance; a second open focuses the existing one (welcome,
+   *  profiler). Distinct from `exclusive` — app is ≤ 1 via drain/switch. */
+  singleton: boolean;
+  /** Mutually exclusive over camera leases + the controller: at most one open,
+   *  opening another drains then switches (app only). */
+  exclusive: boolean;
+  /** Participates in the welcome rule — welcome shows whenever zero of these
+   *  are open (app only; utilities/projections/viewers don't count). */
+  countsForWelcome: boolean;
+  /** `WindowDescriptor` field that dedupes instances (viewer → one per file);
+   *  omitted for 0..N classes with no dedupe. */
+  dedupe?: "fileKey";
+  /** Static entry HTML (relative to the renderer root). App windows derive a
+   *  per-id entry instead — see `entryFor`. */
+  entry?: string;
+  preload: PreloadKind;
+  sandbox: boolean;
+  /** Base window title; app windows append the app's own title. */
+  title: string;
+  bounds: WindowSizeSpec;
+}
+
+export const WINDOWS: Record<WindowClass, WindowSpec> = {
+  welcome: {
+    singleton: true,
+    exclusive: false,
+    countsForWelcome: false,
+    entry: "windows/welcome.html",
+    // Live annotated previews need the shm reader (multi-window.md §2).
+    preload: "renderer",
+    sandbox: false,
+    title: "FoveaCam Duo",
+    bounds: { width: 1100, height: 720, minWidth: 800, minHeight: 560 },
+  },
+  app: {
+    // ≤ 1 at a time via `exclusive` (drain/switch), not the singleton-focus path.
+    singleton: false,
+    exclusive: true,
+    countsForWelcome: true,
+    preload: "renderer",
+    sandbox: false,
+    title: "FoveaCam Duo",
+    bounds: { width: 1200, height: 900, minWidth: 800, minHeight: 600 },
+  },
+  profiler: {
+    singleton: true,
+    exclusive: false,
+    countsForWelcome: false,
+    entry: "windows/profiler.html",
+    // Sandboxed, bridge-only — no shm reader (stats over the bridge).
+    preload: "profiler",
+    sandbox: true,
+    title: "FoveaCam Duo — Profiler",
+    bounds: { width: 720, height: 800 },
+  },
+  projection: {
+    singleton: false,
+    exclusive: false,
+    countsForWelcome: false,
+    entry: "windows/projection.html",
+    preload: "renderer",
+    sandbox: false,
+    title: "FoveaCam Duo — Projection",
+    bounds: { width: 960, height: 640, minWidth: 320, minHeight: 240 },
+  },
+  viewer: {
+    singleton: false,
+    exclusive: false,
+    countsForWelcome: false,
+    dedupe: "fileKey",
+    entry: "windows/viewer.html",
+    preload: "renderer",
+    sandbox: false,
+    title: "FoveaCam Duo — Viewer",
+    bounds: { width: 1100, height: 760, minWidth: 640, minHeight: 420 },
+  },
+};
+
 /**
  * Entry HTML path (relative to the vite root / renderer dist root) for a
  * window class. Every app gets its own entry URL + HTML (multi-window.md
- * req. 2); welcome and profiler are singleton entries.
+ * req. 2); the singleton/utility classes carry a static entry in `WINDOWS`.
  */
 export function entryFor(cls: WindowClass, appId?: string): string {
-  switch (cls) {
-    case "welcome":
-      return "windows/welcome.html";
-    case "profiler":
-      return "windows/profiler.html";
-    case "projection":
-      return "windows/projection.html";
-    case "viewer":
-      return "windows/viewer.html";
-    case "app": {
-      const app = appId && appById(appId);
-      if (!app) throw new Error(`Unknown app id: ${appId}`);
-      return `windows/${app.id}.html`;
-    }
+  if (cls === "app") {
+    const app = appId && appById(appId);
+    if (!app) throw new Error(`Unknown app id: ${appId}`);
+    return `windows/${app.id}.html`;
   }
+  return WINDOWS[cls].entry!;
 }
 
-/** Every entry HTML the renderer build must emit (vite multi-entry input). */
+/** Every entry HTML the renderer build must emit (vite multi-entry input): the
+ *  static class entries from `WINDOWS` plus one per app. */
 export function allEntries(): Record<string, string> {
-  const entries: Record<string, string> = {
-    welcome: "windows/welcome.html",
-    profiler: "windows/profiler.html",
-    projection: "windows/projection.html",
-    viewer: "windows/viewer.html",
-  };
+  const entries: Record<string, string> = {};
+  for (const [cls, spec] of Object.entries(WINDOWS)) if (spec.entry) entries[cls] = spec.entry;
   for (const app of APPS) entries[app.id] = `windows/${app.id}.html`;
   return entries;
 }

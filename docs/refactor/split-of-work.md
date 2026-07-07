@@ -121,6 +121,8 @@ planner-logged handoff (ask via your log, don't just edit).
 | `pyfovea/**` | B |
 | `core/**` (everything else), `firmware/**`, protocol v2 host+MCU | B |
 | `docs/refactor/*` (all files but this one), this file's non-Log text | planner |
+| `docs/schema/**` (schema-as-code single source, incl. `pixel-formats.ts`) | B |
+| `app/lib/util/dtype.ts` (C-P6 handoff CLOSED 2026-07-07 — reverted to A; now consumes `docs/schema/pixel-formats.ts`) | A |
 
 **OPTIMIZATION SURVEY — shared instruction text for A-14/B-7/C-9 (user
 directive 2026-07-07):** survey YOUR OWNED SURFACE (ownership table)
@@ -153,56 +155,23 @@ hardware-dependent behavior verified without a real rig run.
 
 ### Active instructions
 
-- **A-16 — optimization wave 2 (green-lit non-breaking set; triage:
-  docs/refactor/proposals/TRIAGE.md; full sketches in
-  docs/refactor/proposals/A.md).** Implement, in order:
-  1. **A-P9-consistency-followup is DONE (wave 1)** — skip; start at P4.
-  2. **A-P4** (marker-calibration session helper) — extract shared
-     primitives for the L/C/R `MarkerTracker` triple, `DetectionView`
-     publishing, and `setTargetId` updates used by `calibrate-extrinsic`,
-     `calibrate-drift`, `calibrate-distortion`. SMALL primitives, not a
-     framework (same discipline as A-P3): each session keeps its own
-     intrinsic/extrinsic ownership and actuation mode; the helper only
-     removes the tracker-triple + detection-publish + target-id
-     boilerplate. Keep/extend each calibration session's tests.
-  3. **A-P8** (window class table) — add a single `WINDOWS` metadata
-     table (class, entry, singleton/dedupe key, counts-for-welcome,
-     exclusivity, preload, sandbox, default bounds, restore params) that
-     `windows.ts`/`main.ts`/`window-manager.ts`/`window-manifest.ts`
-     derive from. Electron-only `BrowserWindow` options stay main-side
-     behind a pure-metadata→options adapter. Do NOT regress the welcome
-     rule, singleton/dedupe, or manifest restore — the window-manager +
-     window-manifest suites must stay green and gain a table-coverage
-     test.
-  4. **A-P10** (typed bridge IPC registry) — one typed registry of
-     channel name → arg tuple → return type; preload wrappers and main
-     handlers derive/validate from it. **HARD CONSTRAINT: V11 triplet.**
-     The registry must be a plain shared TS type/const module that the
-     self-contained CJS preload bundle can inline — no `import.meta`, no
-     sibling-chunk imports, no `createRequire`. Re-run the triplet grep
-     on the emitted `preload-*.cjs` yourself and paste results.
-  5. **A-P11** (manage-cameras property schema) — a schema of camera
-     controls (getter/setter key, availability key, range key, auto-mode
-     key, units, formatter, persistence) that the contract type, native
-     read guards, `CameraConfig.vue`, and reset logic consume. MUST
-     preserve the existing `safe()` behavior (native getters may throw /
-     be unavailable). Bonus if welcome-window annotations can reuse the
-     schema's labels/formatters, but don't block on it.
-  6. **A-P13** (activation errors as session telemetry) — a standard
-     additive `error`/`status` telemetry convention (or runtime `fail(reason)`
-     helper) seeded to new subscribers, so failed `activateSession()` is
-     user-visible instead of stderr-only. Additive to contracts; UI
-     adoption can be per-module (wire at least one module, e.g.
-     manage-cameras or tracking-single, as the reference consumer).
-  - Scope guard: all five are tagged **non-breaking** — none may change
-    a wire contract shape (that's A-P7/A-P12, a later breaking wave).
-    A-P4/P8/P11 are behavior-preserving refactors: keep or extend the
-    tests that cover them. Any breaking temptation → stop and log, don't
-    do it inline.
-  - DoD: standing gates (vue-tsc 0; full vitest green; vite build +
-    V11 triplet on emitted preloads; renderer zero-core; orchestrator
-    zero-Vue). Per-item log ≤ 15 lines: what landed, gates with numbers,
-    deviations, out-of-scope notes.
+- **A-17 — optimization survey ROUND 2 (docs-only; NO code).** Waves 1
+  and 2 reshaped your surface (frame workers, `fovea-pipeline`,
+  `useFrames`, `marker-calibration.ts`, the `WINDOWS` table, the typed
+  bridge registry, `CAMERA_CONTROLS`, session `status`/`fail`). Re-survey
+  your OWNED surface for what those changes exposed or left behind: (1)
+  repetitive logic the new helpers DIDN'T absorb (e.g. session
+  lease/drain/telemetry boilerplate not yet on a shared primitive;
+  remaining `useSession` wiring duplication); (2) long/wordy names that
+  survived; (3) better-fit solutions the new structure now makes cheap.
+  Write ranked proposals (max ~12) to `docs/refactor/proposals/A-r2.md`,
+  ids `A-R2-P<n>`, each with location(s), current→proposed sketch,
+  **category: non-breaking | breaking**, rationale tied to a real cost,
+  effort (S/M/L), risk. **Do NOT re-propose** the still-open approved
+  breaking waves (A-P1 lifecycle unification, A-P7 camelCase, A-P12
+  explicit frame address) or deferred A-P6 (post-smoke) — reference them
+  if adjacent, don't duplicate. Note any cross-role seam. Log a 3-line
+  pointer under your Log: when done.
   - Log:
 
 ## Coder B — Native core, protocol & firmware
@@ -216,45 +185,24 @@ control is the planner's review loop.
 
 ### Active instructions
 
-- **B-9 — optimization wave 2 (green-lit non-breaking set; triage:
-  docs/refactor/proposals/TRIAGE.md; sketches in
-  docs/refactor/proposals/B.md).** Implement, in order:
-  1. **B-P1** (single PixelFormat/Dtype registry) — collapse the
-     hand-maintained C++ enum/switches, TS unions, Python dtype maps,
-     Bayer lists, `significantBits`, and `isPacked` into ONE declarative
-     source table that generates (or is the checked-in single source
-     for) the C++ tables, TS types, and Python maps. Reuse B-P2/B-P3's
-     `docs/schema/` lineage — the codec fixtures + `fovea.ts` are already
-     the schema-as-code home; extend that, don't start a parallel one.
-     **Generator stays trivial and its output is checked in** (triage
-     rule): no build-time codegen step wired into `core make build` or
-     vite. Preserve every export name + the 12p-unpack comments (B-P1
-     risk note). Kill the stale `CAPACITY = 8` d.ts comment while here.
-  2. **B-P4** (bench drives the production writer) — refactor
-     `playground/bench-recorder/` into a thin harness around the
-     PRODUCTION recorder writer/worker (`app/orchestrator/recorder/`),
-     with compression knobs injected behind a bench-only interface.
-     Compression must NOT become a production default. Re-run the bench
-     smoke and paste the headline numbers (they should still show the
-     single-writer bottleneck; if they move materially, that's a finding).
-  3. **B-P10** (streaming pyfovea telemetry join) — add
-     `iter_frames_streaming()` as an ADDITIVE API that yields file-order
-     frames with bounded telemetry state (and works on crash-truncated
-     files without whole-file materialization). Do NOT change the
-     default `iter_frames()` order or its joined-extras guarantee —
-     triage pinned this as additive-only. New tests: large-ish synthetic
-     file + the existing crash fixture, asserting bounded memory
-     behavior (e.g. it yields before consuming the whole file).
-  - Scope guard: all three tagged non-breaking. B-P1 must keep emitted
-    API/enums byte-compatible; B-P10 must stay additive. Firmware is
-    NOT in this wave (B-P8/P9 already landed; B-P6/P11/P13 are
-    deferred/user-gated).
-  - DoD: standing gates incl. `core make build` both runtimes (B-P1
-    touches native), `otool -L` system-libs-only on the reader if
-    rebuilt, **pyfovea pytest** (B-P10), and the cross-language codec
-    fixtures still pass in C++/TS/Python (B-P1 must not drift them).
-    Per-item log ≤ 15 lines with gate numbers.
+- **B-10 — optimization survey ROUND 2 (docs-only; NO code).** Wave-2
+  landed the `PIXEL_FORMATS` single source, the production-writer bench,
+  and streaming pyfovea. Re-survey `core/**` (minus C's ShmRing/reader),
+  `firmware/**`, `pyfovea/**`, `app/orchestrator/recorder/**`,
+  `playground/bench-recorder/**` + `docs/schema/**` for: (1) remaining
+  duplication (e.g. does the `Controller.cpp` factory/packet boilerplate
+  still want the B-P5-class treatment now that P1 proved the
+  single-source pattern? does convert/PixelFormat have residual hand-kept
+  lists the registry didn't reach?); (2) wordy internal names; (3)
+  better-fit solutions. Write ranked proposals (max ~12) to
+  `docs/refactor/proposals/B-r2.md`, ids `B-R2-P<n>`, same fields as
+  round 1 (category non-breaking|breaking, rationale, effort, risk).
+  **Do NOT re-propose** the deferred/declined set: B-P5 (declined), B-P6
+  (post-bench), B-P11 (live load), B-P12 (shelved), B-P13 (Stage F),
+  B-P14 (post-bench) — reference if adjacent. Note cross-role seams with
+  C (codec/schema). Log a 3-line pointer under your Log: when done.
   - Log:
+
 - **(B-5 accepted & archived 2026-07-06 → recorder-container.md §2b.)**
 
 ## Coder C — SHM frame path (end-to-end)
@@ -274,63 +222,21 @@ session.
 - **C-standby note.** C-1/C-2 were planner-accepted 2026-07-06 and
   archived (orchestrator.md §6 + §7.1 Stage 4).
 - **(C-4 accepted & cleared 2026-07-06.)**
-- **C-11 — optimization wave 2 (green-lit non-breaking set; triage:
-  docs/refactor/proposals/TRIAGE.md; sketches in
-  docs/refactor/proposals/C.md).** Implement, in order:
-  1. **C-P2** (extract the renderer SHM transfer pool out of
-     `client.ts`) — move the ~100 lines of ping-pong pool state + message
-     types into `app/lib/orchestrator/shm-client.ts` with a small API
-     (`read(payload)`, `release(payload)`, `dispose()`, stats).
-     **MessagePort transfer ownership is the regression risk** — pin
-     tests for buffer return on: success, null result, timeout, and
-     stale/late response. Behavior-identical to today.
-  2. **C-P4** (shared native read TU) — factor the reader addon's
-     mapping / header validation / slot addressing / seqlock read logic
-     into ONE libc-safe `ReadMapping`/`readLatestInto` compiled into both
-     the core target and the reader addon. **HARD: the shared TU must
-     stay system-library-only** — no N-API, OpenCV, Aravis, GLib, libusb.
-     Re-run `otool -L` on the rebuilt reader and paste it (self +
-     libc++/libSystem only). Keep the V8/V9 fences + meta-copy-timing +
-     retry cap intact — the whole point is one home for that logic.
-  3. **C-P7** (stream truncated viewer playback) — replace
-     `TruncatedSource.messages()`'s scan-then-store-array with an async
-     iterator that yields records as the scan progresses (or a one-time
-     recovered-offset index). Bounded memory on large crash artifacts.
-     Keep the footerless-recovery contract + `truncated` badge behavior;
-     the viewer test must still pass and gain a bounded-memory assertion.
-  4. **C-P9** (explicit SHM read/pool telemetry) — expose a small
-     `shmReads` workload/stat block (timeout/null/allocation counts,
-     read latency) + OSD fields, built on the C-P2 pool module and the
-     metering schema. **Meters observe only, never gate reads** (PB3/
-     metering hard rule). Additive to `perfSnapshot`.
-  5. **C-P11** (viewer file-open dedupe in the session layer) —
-     `open(path)` returns the existing fileId for the same canonical
-     path instead of allocating a new source/player/topics. Triage
-     ratified this as documented dedupe semantics (matches the
-     one-window-per-file product rule). **This touches the pinned
-     `viewer-contract.ts` — the contract note is planner-arbitrated:
-     propose the exact wording in your log and DO NOT change close/
-     restore semantics without it.** Coordinate with A's viewer window
-     (dedupe already exists at the shell layer; you're adding it at the
-     session layer — they must agree on fileId reuse).
-  6. **C-P6** (single decode schema, conformance side — CROSS-ROLE with
-     B-P1). B owns the format facts + the single source table (B-P1
-     extends `docs/schema/`); YOU own the **TS decode conformance**:
-     `viewer/decode.ts` + `app/lib/util/dtype.ts` consume the shared
-     table (or a conformance test asserts they match it), so viewer
-     display and pyfovea training decode can't drift. **Do this AFTER
-     B-P1 lands its table** (sequence with B — log a note if B isn't
-     ready and I'll re-order). No metadata-name changes (that would be
-     breaking); tests/helpers only.
-  - Scope guard: all six tagged non-breaking (C-P2/P10-style aliasing
-    already done in wave 1; here keep exported shapes stable). C-P11's
-    contract wording and C-P6's cross-role sequencing are the two
-    planner-touch points — surface them in your log, don't decide them
-    solo.
-  - DoD: standing gates; `core make build` both runtimes + `otool -L`
-    on the reader (C-P4); full vitest incl. the viewer + shm suites;
-    `08-shm-ring.ts` still passes; V11 triplet if any preload byte
-    changes. Per-item log ≤ 15 lines with gate numbers.
+- **C-12 — optimization survey ROUND 2 (docs-only; NO code).** Wave-2
+  landed `shm-client.ts` (pool extraction), the shared `ShmRead` native
+  TU, streaming truncated playback, `shmReads` telemetry, viewer dedupe,
+  and the decode-conformance suite. Re-survey the C-owned surface (shm
+  path end-to-end, `metering.ts`, `orchestrator/viewer/**` +
+  `sessions/viewer.ts`, shm blocks in client/protocol/StreamView) for:
+  (1) duplication the extractions didn't reach (e.g. does StreamView's
+  SHM OSD + the new telemetry share a formatter? is there overlap between
+  `stats.ts`, `metering.ts`, and the new `shmReads` block?); (2) wordy
+  names; (3) better-fit solutions the new module boundaries enable. Write
+  ranked proposals (max ~12) to `docs/refactor/proposals/C-r2.md`, ids
+  `C-R2-P<n>`, same fields as round 1. **Do NOT re-propose** C-P12
+  (gated on future raw/16-bit shm) — reference if adjacent. Flag any
+  cross-role codec/schema seam with B. Log a 3-line pointer under your
+  Log: when done.
   - Log:
 
 - **(history) C-6 — workload metering core (accepted; spec:

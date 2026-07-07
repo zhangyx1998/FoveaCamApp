@@ -36,7 +36,7 @@ declare module "core/Controller" {
   export type MirrorStreamOp = "CREATE" | "UPDATE" | "TERMINATE";
   export type MirrorStreamArg = {
     op: MirrorStreamOp;
-    id: number; // host-chosen stream id, 0..N-1 (CAPACITY = 8)
+    id: number; // host-chosen stream id, 0..N-1 (CAPACITY = 64)
     left?: AnalogChannels; // ignored by TERMINATE
     right?: AnalogChannels;
   };

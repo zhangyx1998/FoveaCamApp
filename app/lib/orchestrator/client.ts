@@ -42,10 +42,12 @@ import {
   type FramePayload,
   type FrameOf,
   type FrameTimingStats,
+  type SessionStatus,
   type StateOf,
   type TelemetryOf,
 } from "./protocol.js";
-import { frameByteLength, withFrameMeta } from "./frame-payload.js";
+import { withFrameMeta } from "./frame-payload.js";
+import { createShmClient } from "./shm-client.js";
 import type { Span } from "./contracts.js";
 
 /** Rebuild the Mat shape (`FrameView`/vision ops expect) from a frame payload. */
@@ -57,100 +59,20 @@ export function payloadToMat(p: FramePayload | null): Mat<Uint8Array> | null {
   }) as unknown as Mat<Uint8Array>;
 }
 
-const shmPools = new Map<number, ArrayBuffer[]>();
-const pendingShmReads = new Map<
-  number,
-  {
-    resolve(payload: FramePayload | null): void;
-    reject(error: Error): void;
-    timer: ReturnType<typeof setTimeout>;
-  }
->();
-let shmReadSeq = 0;
-let shmPort: MessagePort | null = null;
+// Renderer SHM transfer pool (C-P2) — the ping-pong buffer pool, port
+// handshake, timeout, and message protocol with the preload live in their own
+// module now. Module-scope singleton, matching the previous inline state: one
+// pool per renderer window (the display path calls `shm.read()` in the frame
+// flush and `shm.release()` when a materialized frame is displaced).
+const shm = createShmClient();
 
-function releaseShmBuffer(buffer: ArrayBuffer): void {
-  const pool = shmPools.get(buffer.byteLength) ?? [];
-  if (pool.length < 3) pool.push(buffer);
-  shmPools.set(buffer.byteLength, pool);
-}
-
-function releaseFrameBuffer(payload: FramePayload | null): void {
-  if (payload?.shm && payload.data) releaseShmBuffer(payload.data);
-}
-
-function checkoutShmBuffer(payload: FramePayload): ArrayBuffer {
-  return (
-    shmPools.get(frameByteLength(payload))?.pop() ??
-    new ArrayBuffer(frameByteLength(payload))
-  );
-}
-
-function handleShmReadDone(data: unknown): void {
-  const msg = data as
-    | {
-        kind: "fovea:shm:read-done";
-        id: number;
-        payload: FramePayload | null;
-        buffer?: ArrayBuffer;
-        error?: string;
-      }
-    | undefined;
-  if (msg?.kind !== "fovea:shm:read-done") return;
-  const pending = pendingShmReads.get(msg.id);
-  if (!pending) {
-    if (msg.buffer) releaseShmBuffer(msg.buffer);
-    return;
-  }
-  clearTimeout(pending.timer);
-  pendingShmReads.delete(msg.id);
-  if (msg.error) {
-    if (msg.buffer) releaseShmBuffer(msg.buffer);
-    pending.reject(new Error(msg.error));
-  } else {
-    if (!msg.payload && msg.buffer) releaseShmBuffer(msg.buffer);
-    pending.resolve(msg.payload);
-  }
-}
-
-function ensureShmPort(): MessagePort | null {
-  if (shmPort) return shmPort;
-  if (typeof window === "undefined" || typeof MessageChannel === "undefined")
-    return null;
-  const channel = new MessageChannel();
-  channel.port1.onmessage = (event) => handleShmReadDone(event.data);
-  channel.port1.start();
-  window.postMessage({ kind: "fovea:shm:init" }, "*", [channel.port2]);
-  shmPort = channel.port1;
-  return shmPort;
-}
-
-function readShm(payload: FramePayload): Promise<FramePayload | null> {
-  if (typeof window === "undefined") return Promise.resolve(null);
-  const port = ensureShmPort();
-  if (!port) {
-    return Promise.reject(new Error("SHM MessagePort transfer pool unavailable"));
-  }
-  const id = ++shmReadSeq;
-  const buffer = checkoutShmBuffer(payload);
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      pendingShmReads.delete(id);
-      reject(new Error("SHM transfer read timed out"));
-    }, 250);
-    pendingShmReads.set(id, { resolve, reject, timer });
-    port.postMessage({ kind: "fovea:shm:read", id, payload, buffer }, [buffer]);
-  });
-}
-
-async function materializeFrame(p: FramePayload): Promise<FramePayload | null> {
-  if (p.data || !p.shm) return p;
-  try {
-    return await readShm(p);
-  } catch (error) {
-    console.error("[shm] transfer-pool read failed", error);
-    return null;
-  }
+/** Observe-only snapshot of the renderer SHM transfer pool (C-P9): read
+ *  outcomes (ok/null/timeout/error), buffer pool alloc/reuse, in-flight
+ *  count, and round-trip latency. Read by the StreamView SHM OSD and folded
+ *  into `dumpPerfSnapshot` under `renderer.shmReads`. Meters observe only —
+ *  reading this never affects the read path. */
+export function shmReadStats(): ReturnType<ReturnType<typeof createShmClient>["stats"]> {
+  return shm.stats();
 }
 
 function domEndpoint(port: MessagePort): Endpoint {
@@ -285,6 +207,7 @@ export async function dumpPerfSnapshot(): Promise<void> {
     renderer: {
       loopLag: { mean: rendererLoopLag.stats.mean, max: rendererLoopLag.stats.max },
       frames: rendererFrameTimingSnapshot(),
+      shmReads: shmReadStats(),
     },
   };
   const file = await window.foveaBridge.writePerfSnapshot(JSON.stringify(merged, null, 2));
@@ -298,6 +221,10 @@ export type Session<C extends Contract> = {
   state: StateOf<C>;
   /** Reactive, readonly — read as plain properties (`telemetry.foo`). */
   telemetry: Readonly<TelemetryOf<C>>;
+  /** Reactive, readonly — the current user-visible session failure
+   *  (`status.error`), or null. Seeded on subscribe and updated live (A-P13);
+   *  additive, so modules opt in to showing it. */
+  status: Readonly<SessionStatus>;
   // `string & {}` keeps autocomplete for the contract's static frame names while
   // still allowing dynamic channels (e.g. one per camera serial).
   frame(name: FrameOf<C> | (string & {})): Readonly<Ref<FramePayload | null>>;
@@ -410,6 +337,18 @@ export function useSession<C extends Contract>(
   }
   const telemetry = readonly(reactive(telemetryRefs)) as Readonly<TelemetryOf<C>>;
 
+  // Status (A-P13): one reactive object carrying the current failure, seeded on
+  // subscribe and updated live via the status topic.
+  const statusState = reactive<SessionStatus>({ error: null });
+  track(
+    ready.then((ch) =>
+      ch.on(topic.status(name), (s: SessionStatus) => {
+        statusState.error = s.error;
+      }),
+    ),
+  );
+  const status = readonly(statusState) as Readonly<SessionStatus>;
+
   function frame(fname: string): Readonly<Ref<FramePayload | null>> {
     const k = String(fname);
     let r = frameRefs.get(k);
@@ -430,9 +369,9 @@ export function useSession<C extends Contract>(
           r!.value = null;
           return;
         }
-        void materializeFrame(pending).then((payload) => {
+        void shm.read(pending).then((payload) => {
           if (myToken !== token) {
-            releaseFrameBuffer(payload);
+            shm.release(payload);
             return;
           }
           if (payload?.meta) {
@@ -442,7 +381,7 @@ export function useSession<C extends Contract>(
                 payload.meta.tDisplay - payload.meta.tReceive,
               );
           }
-          releaseFrameBuffer(r!.value);
+          shm.release(r!.value);
           r!.value = payload;
           if (latest && !scheduled) {
             scheduled = true;
@@ -481,6 +420,7 @@ export function useSession<C extends Contract>(
   return {
     state,
     telemetry,
+    status,
     frame,
     call(cname, arg) {
       return ready.then((ch) =>

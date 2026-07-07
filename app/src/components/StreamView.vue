@@ -5,7 +5,7 @@ import { computed, ref, watch } from "vue";
 
 import { FreqMeter, inspectorMode, RollingAverage } from "@lib/util/perf";
 import FrameView, { TransformFunction } from "./FrameView.vue";
-import { payloadToMat, rendererLoopLag } from "@lib/orchestrator/client";
+import { payloadToMat, rendererLoopLag, shmReadStats } from "@lib/orchestrator/client";
 import type { FramePayload } from "@lib/orchestrator/protocol";
 import { Delegation } from "@src/capture";
 import { NoCheck } from "@lib/util/vue";
@@ -150,6 +150,14 @@ const overlay = computed(() => {
       result["Frame Age"] = frameAge.toString();
       if (p.shm) {
         result["SHM"] = `gen ${p.shm.gen} / retries ${p.shm.retries ?? 0}`;
+        // Renderer transfer-pool health (C-P9) — module-wide singleton, so
+        // every SHM inspector overlay shows the same pool counters.
+        const s = shmReadStats();
+        result["SHM Reads"] =
+          `${s.reads} ok / ${s.nulls} null / ${s.timeouts} to / ${s.errors} err`;
+        result["SHM Pool"] = `${s.poolHits} reuse / ${s.allocations} alloc / ${s.inFlight} inflight`;
+        result["SHM Read Lat"] =
+          `${s.latencyMs.mean.toFixed(2)} ms (max ${s.latencyMs.max.toFixed(2)})`;
       }
       result["Throughput"] =
         `${((fps.value * (p.data?.byteLength ?? 0)) / 1e6).toFixed(2)} MB/s`;

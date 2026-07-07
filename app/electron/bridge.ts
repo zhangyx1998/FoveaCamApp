@@ -50,3 +50,43 @@ export interface FoveaBridge {
    *  and returns the file path written. */
   writePerfSnapshot(content: string): Promise<string>;
 }
+
+// ---- Typed IPC channel registry -------------------------------------------
+// The single typed source for every `foveaBridge` IPC channel: name → arg
+// tuple → return type. Both sides derive thin wrappers from it (preload-
+// bridge.ts's `invoke`/`send`/`listen`; main.ts's `handle`/`onRenderer`/
+// `pushTo`), so a channel-name typo or an arg/return-shape mismatch on either
+// side is a COMPILE error, not a boot-time surprise (the V11 preload work
+// showed how costly a silent bridge break is).
+//
+// V11: this module is TYPES-ONLY (interfaces, no runtime values). `import
+// type` from it erases entirely, so nothing here can land in the self-
+// contained CJS preload bundle — no sibling-chunk import, no `import.meta`,
+// no `createRequire`. Keep it that way (do not add runtime consts here).
+
+/** Request→response channels (`ipcRenderer.invoke` ↔ `ipcMain.handle`). */
+export interface InvokeChannels {
+  "save-path:resolve": { args: [segments: string[]]; ret: string };
+  "save-path:resolve-default": { args: [directory: string]; ret: string };
+  "fs:exists": { args: [path: string]; ret: boolean };
+  "fs:validate-writable": { args: [path: string]; ret: boolean };
+  "perf-snapshot:write": { args: [content: string]; ret: string };
+}
+
+/** Fire-and-forget renderer→main signals (`ipcRenderer.send` ↔ `ipcMain.on`).
+ *  Value is the arg tuple. */
+export interface SendChannels {
+  "orchestrator:connect": [];
+  "open-profiler-window": [];
+  "window:open-app": [appId: string];
+  "window:open-projection": [session: string, frame: string];
+}
+
+/** Main→renderer pushes (`webContents.send` ↔ `ipcRenderer.on`). Value is the
+ *  arg tuple. `orchestrator:port` is deliberately absent — it transfers a
+ *  MessagePort via `postMessage`'s transfer list, outside this typed table. */
+export interface PushChannels {
+  "orchestrator:down": [];
+  "window:fullscreen": [fullscreen: boolean];
+  "recorder:trigger": [];
+}

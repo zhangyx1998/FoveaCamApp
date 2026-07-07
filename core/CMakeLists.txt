@@ -74,6 +74,7 @@ add_library(core SHARED
 
 add_library(fovea_shm_reader SHARED
   reader/ShmReaderAddon.cpp
+  ${SRC_DIR}/ShmRead.cpp   # shared libc-only read TU (also compiled into core)
 )
 
 

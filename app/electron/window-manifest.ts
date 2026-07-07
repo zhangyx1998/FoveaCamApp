@@ -26,7 +26,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { replacer, reviver } from "@lib/store-codec";
-import { appById, type WindowClass } from "@lib/windows";
+import { appById, WINDOWS, type WindowClass, type WindowSpec } from "@lib/windows";
 
 export interface WindowBounds {
   x: number;
@@ -59,46 +59,35 @@ export function planFromManifest(
   manifest: WindowManifest | null | undefined,
 ): ManifestWindow[] {
   const plan: ManifestWindow[] = [];
-  let haveApp = false;
+  const seenSingleton = new Set<WindowClass>();
+  let haveExclusive = false; // an exclusive (app) window already placed
   let haveWelcome = false;
-  let haveProfiler = false;
+  let suppressWelcome = false;
   for (const w of manifest?.windows ?? []) {
     if (!w || typeof w !== "object") continue;
-    switch (w.class) {
-      case "app":
-        // Exclusivity: at most one app window, first valid one wins.
-        if (haveApp || !w.appId || !appById(w.appId)) continue;
-        haveApp = true;
-        plan.push(w);
-        break;
-      case "welcome":
-        if (haveWelcome) continue;
-        haveWelcome = true;
-        plan.push(w);
-        break;
-      case "profiler":
-        if (haveProfiler) continue;
-        haveProfiler = true;
-        plan.push(w);
-        break;
-      case "projection":
-        // 0..N — projections are never singletons and never exclusive
-        // (multi-window.md req. 4); their stream address rides `url`.
-        plan.push(w);
-        break;
-      case "viewer":
-        // 0..N across files; the per-FILE dedupe lives in
-        // `WindowManager.openViewer` (restore routes through it), not here.
-        plan.push(w);
-        break;
-      default:
-        continue; // unknown class (future taxonomy) — drop
+    // Unknown class (future taxonomy, hand-edit) has no `WINDOWS` row — drop.
+    const spec = (WINDOWS as Record<string, WindowSpec | undefined>)[w.class];
+    if (!spec) continue;
+    if (spec.exclusive) {
+      // Exclusivity: at most one, first valid one wins (app needs a real id).
+      if (haveExclusive) continue;
+      if (w.class === "app" && (!w.appId || !appById(w.appId))) continue;
+      haveExclusive = true;
+    } else if (spec.singleton) {
+      if (seenSingleton.has(w.class)) continue; // welcome/profiler dedupe
+      seenSingleton.add(w.class);
     }
+    // 0..N classes (projection/viewer) fall through with no gate; per-FILE
+    // viewer dedupe lives in `WindowManager.openViewer` (restore routes
+    // through it), and projection/viewer stream addresses ride `url`.
+    if (spec.countsForWelcome) suppressWelcome = true;
+    if (w.class === "welcome") haveWelcome = true;
+    plan.push(w);
   }
-  // Welcome rule at restore time: an app window suppresses welcome; nothing
-  // needing a fallback (no app AND no welcome — projections/profiler are
-  // utility windows and don't count) boots the default welcome.
-  if (haveApp) return plan.filter((w) => w.class !== "welcome");
+  // Welcome rule at restore time: a welcome-counting (app) window suppresses
+  // welcome; a layout with none and no welcome persisted (projections/profiler
+  // don't count) boots the default welcome.
+  if (suppressWelcome) return plan.filter((w) => w.class !== "welcome");
   if (!haveWelcome) plan.unshift({ class: "welcome" });
   return plan;
 }

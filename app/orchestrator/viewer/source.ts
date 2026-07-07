@@ -188,14 +188,17 @@ class IndexedSource implements FoveaSource {
 
 // ---- streaming fallback (footerless) --------------------------------------
 
-/** Pump one sequential pass of the file through a fresh McapStreamReader,
- *  invoking `visit` per record until it returns false (early stop) or the
- *  recovered data ends. A parse error on the truncated tail ends the pass
- *  (everything before it was recovered) — that is the B-4 recovery story. */
-async function scan(
+/** Stream one sequential pass of the file through a fresh McapStreamReader,
+ *  yielding each record as it parses (C-P7). Because it is an async generator,
+ *  the caller pulls records one at a time — the `yield` applies natural
+ *  backpressure, so a full-file playback of a large crash artifact never
+ *  materializes the recovered messages into an array. A parse error on the
+ *  truncated tail ends the pass (everything before it was recovered) — the B-4
+ *  recovery story. Stops at DataEnd/Footer for a well-formed file. Early
+ *  consumer break (`return()`) unwinds here without tripping the catch. */
+async function* scanRecords(
   handle: FileHandle,
-  visit: (record: McapTypes.TypedMcapRecord) => boolean,
-): Promise<void> {
+): AsyncGenerator<McapTypes.TypedMcapRecord, void, void> {
   const reader = new McapStreamReader({ validateCrcs: false });
   const buf = new Uint8Array(READ_CHUNK);
   let offset = 0;
@@ -208,11 +211,11 @@ async function scan(
       let record: McapTypes.TypedMcapRecord | undefined;
       while ((record = reader.nextRecord())) {
         if (record.type === "DataEnd" || record.type === "Footer") return;
-        if (!visit(record)) return;
+        yield record;
       }
     }
   } catch {
-    // Truncated/corrupt tail: every complete record already visited is the
+    // Truncated/corrupt tail: every complete record already yielded is the
     // recovered content — stop cleanly.
     return;
   }
@@ -232,15 +235,16 @@ class TruncatedSource implements FoveaSource {
     const channels: FoveaChannel[] = [];
     let startNs: bigint | null = null;
     let endNs: bigint | null = null;
-    await scan(handle, (record) => {
+    // The initial index pass must see the whole recovered stream (it needs
+    // full time bounds), but retains only channels + min/max — not messages.
+    for await (const record of scanRecords(handle)) {
       if (record.type === "Channel") {
         if (!channels.some((c) => c.id === record.id)) channels.push(toChannel(record));
       } else if (record.type === "Message") {
         if (startNs === null || record.logTime < startNs) startNs = record.logTime;
         if (endNs === null || record.logTime > endNs) endNs = record.logTime;
       }
-      return true;
-    });
+    }
     return new TruncatedSource(handle, channels, startNs ?? 0n, endNs ?? 0n);
   }
 
@@ -250,24 +254,20 @@ class TruncatedSource implements FoveaSource {
     topics?: readonly string[];
   } = {}): AsyncGenerator<FoveaMessage, void, void> {
     const ids = this.topicIds(opts.topics);
-    // Collect-then-yield keeps the scan callback synchronous (the stream
-    // reader pump is not generator-friendly); memory is bounded by what the
-    // range selects — for full-file playback of a crash artifact that is the
-    // recovered content itself, which the initial scan already sized.
-    const selected: FoveaMessage[] = [];
-    await scan(this.handle, (record) => {
-      if (record.type !== "Message") return true;
-      if (opts.startNs !== undefined && record.logTime < opts.startNs) return true;
-      if (opts.endNs !== undefined && record.logTime > opts.endNs) return true;
-      if (ids && !ids.has(record.channelId)) return true;
-      selected.push({
+    // Stream records straight through the async scan (C-P7): one record in
+    // flight at a time, so playing back a large crash artifact never buffers
+    // the recovered messages into an array.
+    for await (const record of scanRecords(this.handle)) {
+      if (record.type !== "Message") continue;
+      if (opts.startNs !== undefined && record.logTime < opts.startNs) continue;
+      if (opts.endNs !== undefined && record.logTime > opts.endNs) continue;
+      if (ids && !ids.has(record.channelId)) continue;
+      yield {
         channelId: record.channelId,
         logTime: record.logTime,
         data: record.data,
-      });
-      return true;
-    });
-    yield* selected;
+      };
+    }
   }
 
   async latestBefore(
@@ -279,18 +279,17 @@ class TruncatedSource implements FoveaSource {
       this.channels.filter((c) => ids.has(c.id)).map((c) => [c.id, c.topic]),
     );
     const out = new Map<string, FoveaMessage>();
-    await scan(this.handle, (record) => {
+    for await (const record of scanRecords(this.handle)) {
       if (record.type !== "Message" || record.logTime > tNs || !ids.has(record.channelId))
-        return true;
+        continue;
       // Sequential pass, keep-last: the final survivor per topic is the
-      // latest ≤ tNs.
+      // latest ≤ tNs (bounded by topic count, not message count).
       out.set(topicById.get(record.channelId)!, {
         channelId: record.channelId,
         logTime: record.logTime,
         data: record.data,
       });
-      return true;
-    });
+    }
     return out;
   }
 

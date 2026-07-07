@@ -30,7 +30,8 @@ import {
   planFromManifest,
   saveManifest,
 } from "./window-manifest";
-import { APPS, appById, type AppMeta } from "@lib/windows";
+import { APPS, appById, WINDOWS, type AppMeta } from "@lib/windows";
+import type { InvokeChannels, PushChannels, SendChannels } from "./bridge";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const DATA = app.getPath("userData");
@@ -134,22 +135,42 @@ async function openRecordingDialog(): Promise<void> {
   for (const p of result.filePaths) manager.openViewer(p);
 }
 
+// Typed `ipcMain` wrappers over the shared channel registry (bridge.ts) — the
+// main-side counterpart to preload-bridge.ts's `invoke`/`send`/`listen`. A bad
+// channel name or handler arg/return shape is a compile error, so the two ends
+// of every bridge channel can't drift.
+function handle<K extends keyof InvokeChannels>(
+  channel: K,
+  fn: (
+    ...args: InvokeChannels[K]["args"]
+  ) => InvokeChannels[K]["ret"] | Promise<InvokeChannels[K]["ret"]>,
+): void {
+  ipcMain.handle(channel, (_e, ...args) => fn(...(args as InvokeChannels[K]["args"])));
+}
+function onRenderer<K extends keyof SendChannels>(
+  channel: K,
+  fn: (...args: SendChannels[K]) => void,
+): void {
+  ipcMain.on(channel, (_e, ...args) => fn(...(args as SendChannels[K])));
+}
+function pushTo<K extends keyof PushChannels>(
+  wc: Electron.WebContents,
+  channel: K,
+  ...args: PushChannels[K]
+): void {
+  wc.send(channel, ...args);
+}
+
 // ---- Renderer bridge handlers (docs/refactor/orchestrator.md §7.1 T5) -----
 // The renderer's `SavePath`/`SaveControls`/`RecordControls` used to call
 // `node:path`/`node:fs`/`node:os` directly — reachable only under the old
 // `nodeIntegration: true`. These mirror that logic here so `foveaBridge`
 // (preload-bridge.ts) can forward to it over IPC instead.
-ipcMain.handle("save-path:resolve", (_e, segments: string[]) =>
-  path.resolve(...segments),
-);
-ipcMain.handle("save-path:resolve-default", (_e, directory: string) =>
-  resolveDefaultSavePath(directory),
-);
-ipcMain.handle("fs:exists", (_e, p: string) => existsSync(p));
-ipcMain.handle("fs:validate-writable", (_e, p: string) =>
-  validateWritablePath(p),
-);
-ipcMain.handle("perf-snapshot:write", async (_e, content: string) => {
+handle("save-path:resolve", (segments) => path.resolve(...segments));
+handle("save-path:resolve-default", (directory) => resolveDefaultSavePath(directory));
+handle("fs:exists", (p) => existsSync(p));
+handle("fs:validate-writable", (p) => validateWritablePath(p));
+handle("perf-snapshot:write", async (content) => {
   const dir = path.join(DATA, "perf-snapshots");
   await mkdir(dir, { recursive: true });
   const file = path.join(
@@ -206,7 +227,7 @@ function startOrchestrator() {
     // forever (the crashed process can't reply) — notify them to reject
     // in-flight calls. See docs/refactor/orchestrator.md §12.1 C5.
     for (const w of BrowserWindow.getAllWindows())
-      w.webContents.send("orchestrator:down");
+      pushTo(w.webContents, "orchestrator:down");
   });
 }
 
@@ -234,7 +255,7 @@ function drainSessions(): Promise<{ ok: boolean; reason?: string }> {
 // A renderer asks to connect; hand both ends of a fresh channel out. Already
 // generic per-`event.sender` — every window class connecting just gets its
 // own port pair (§7.1 S4 / multi-window per-window handshake).
-ipcMain.on("orchestrator:connect", (event) => {
+ipcMain.on("orchestrator:connect" satisfies keyof SendChannels, (event) => {
   if (!orchestrator) startOrchestrator();
   const { port1, port2 } = new MessageChannelMain();
   orchestrator!.postMessage(null, [port1]);
@@ -256,6 +277,10 @@ function entryURL(desc: WindowDescriptor): { url?: string; file?: string; search
   return { file: path.join(RENDERER_DIST, desc.entry), search: desc.search };
 }
 
+// Pure metadata → BrowserWindow options adapter. The taxonomy facts (preload,
+// sandbox, bounds, base title) live in the `WINDOWS` table (@lib/windows) so
+// every window consumer derives from one source; only the Electron-specific
+// chrome (hidden titlebar + overlay, icon, background) stays here.
 function windowOptions(desc: WindowDescriptor): Electron.BrowserWindowConstructorOptions {
   // Shared chrome (A-7 / multi-window.md §3): every window class uses the
   // hidden titlebar + overlay so the one TitleBar component renders the
@@ -266,91 +291,27 @@ function windowOptions(desc: WindowDescriptor): Electron.BrowserWindowConstructo
     backgroundColor: "black",
     icon: getIcon("icon.ico"),
   };
-  switch (desc.class) {
-    case "welcome":
-      return {
-        ...chrome,
-        title: "FoveaCam Duo",
-        width: 1100,
-        height: 720,
-        minWidth: 800,
-        minHeight: 560,
-        webPreferences: {
-          // Welcome shows live annotated previews → needs the shm reader
-          // (multi-window.md §2), same preload as app windows.
-          preload: preload.renderer,
-          nodeIntegration: false,
-          contextIsolation: true,
-          sandbox: false,
-        },
-      };
-    case "app":
-      return {
-        ...chrome,
-        title: `FoveaCam Duo — ${appById(desc.appId!)?.title ?? desc.appId}`,
-        minHeight: 600,
-        minWidth: 800,
-        height: 900,
-        width: 1200,
-        webPreferences: {
-          preload: preload.renderer,
-          nodeIntegration: false,
-          contextIsolation: true,
-          // The canonical preview path uses a minimal SHM reader addon in
-          // the preload.
-          sandbox: false,
-        },
-      };
-    case "profiler":
-      return {
-        ...chrome,
-        title: "FoveaCam Duo — Profiler",
-        height: 800,
-        width: 720,
-        webPreferences: {
-          preload: preload.profiler,
-          nodeIntegration: false,
-          contextIsolation: true,
-          sandbox: true,
-        },
-      };
-    case "projection":
-      // Single-stream viewer (multi-window.md req. 4): windowed by default,
-      // resizable to fullscreen via the shared chrome. Needs the shm reader
-      // (canonical preview transport) → renderer preload, sandbox off.
-      return {
-        ...chrome,
-        title: "FoveaCam Duo — Projection",
-        width: 960,
-        height: 640,
-        minWidth: 320,
-        minHeight: 240,
-        webPreferences: {
-          preload: preload.renderer,
-          nodeIntegration: false,
-          contextIsolation: true,
-          sandbox: false,
-        },
-      };
-    case "viewer":
-      // Recorder playback window (A-11, recorder-container.md §4). Playback
-      // frames arrive through the standard frame transport (shm canonical) →
-      // same renderer preload as live streams.
-      return {
-        ...chrome,
-        title: "FoveaCam Duo — Viewer",
-        width: 1100,
-        height: 760,
-        minWidth: 640,
-        minHeight: 420,
-        webPreferences: {
-          preload: preload.renderer,
-          nodeIntegration: false,
-          contextIsolation: true,
-          sandbox: false,
-        },
-      };
-  }
+  const spec = WINDOWS[desc.class];
+  const { width, height, minWidth, minHeight } = spec.bounds;
+  // App windows carry the app's own title; every other class uses the base.
+  const title =
+    desc.class === "app"
+      ? `FoveaCam Duo — ${appById(desc.appId!)?.title ?? desc.appId}`
+      : spec.title;
+  return {
+    ...chrome,
+    title,
+    width,
+    height,
+    ...(minWidth !== undefined ? { minWidth } : {}),
+    ...(minHeight !== undefined ? { minHeight } : {}),
+    webPreferences: {
+      preload: preload[spec.preload],
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: spec.sandbox,
+    },
+  };
 }
 
 function spawnWindow(desc: WindowDescriptor): ManagedWindow {
@@ -378,12 +339,8 @@ function spawnWindow(desc: WindowDescriptor): ManagedWindow {
 
   // A-7: forward fullscreen transitions so the shared chrome can adjust
   // traffic-light inset + drag regions on BOTH edges (the old one-way bug).
-  win.on("enter-full-screen", () =>
-    win.webContents.send("window:fullscreen", true),
-  );
-  win.on("leave-full-screen", () =>
-    win.webContents.send("window:fullscreen", false),
-  );
+  win.on("enter-full-screen", () => pushTo(win.webContents, "window:fullscreen", true));
+  win.on("leave-full-screen", () => pushTo(win.webContents, "window:fullscreen", false));
 
   // Reload accelerator policy (req. 6), enforced per-window:
   //   plain Ctrl/Cmd-R  → recorder trigger stub, NEVER reload (all modes)
@@ -399,7 +356,7 @@ function spawnWindow(desc: WindowDescriptor): ManagedWindow {
     } else {
       // No-op stub — real semantics land with the recorder stage
       // (docs/refactor/recorder-container.md).
-      win.webContents.send("recorder:trigger");
+      pushTo(win.webContents, "recorder:trigger");
     }
   });
 
@@ -433,11 +390,11 @@ const manager = new WindowManager({
   },
 });
 
-ipcMain.on("window:open-app", (_e, appId: string) => {
+onRenderer("window:open-app", (appId) => {
   if (typeof appId === "string" && appById(appId)) void manager.openApp(appId);
 });
-ipcMain.on("open-profiler-window", () => manager.openProfiler());
-ipcMain.on("window:open-projection", (_e, session: string, frame: string) => {
+onRenderer("open-profiler-window", () => manager.openProfiler());
+onRenderer("window:open-projection", (session, frame) => {
   if (typeof session === "string" && session && typeof frame === "string" && frame)
     manager.openProjection({ session, frame });
 });

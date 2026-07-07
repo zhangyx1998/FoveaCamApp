@@ -31,6 +31,133 @@ export type Triple<TL = any, TC = TL, TR = TL> = {
 
 export type Role = keyof Triple;
 
+export type Range = { min: number; max: number };
+export type AutoMode = "Off" | "Once" | "Continuous";
+
+// ---- Tunable camera controls (A-P11) --------------------------------------
+// One declarative schema for the frame-rate / exposure / gain / black-level
+// family, which otherwise repeats across the manage-cameras wire type
+// (`CameraView`), the 1 Hz read snapshot, the reset defaults, and the UI.
+// Every consumer derives its per-control fields from here so the family can't
+// drift (a bug class: a new sub-field wired into three of four places).
+//
+// Field-key names ARE the native `Camera` getter/setter keys AND the
+// `CameraView` field names — one identifier, no mapping table. Fields absent
+// on a control (frame rate has an enable toggle, not an auto mode; only black
+// level has both an availability probe and an auto probe) are simply omitted.
+
+export interface CameraControl {
+  /** Value getter/setter key (also the `CameraView` value field). */
+  key: string;
+  label: string;
+  units: string;
+  /** Field gating whether the control is exposed (its fieldset `v-if`). */
+  availableKey: string;
+  /** `{min,max}` range field. */
+  rangeKey: string;
+  /** Auto-mode field (exposure/gain/black level); omitted for frame rate. */
+  autoKey?: string;
+  /** Extra gate for the auto mode (black level only). */
+  autoAvailableKey?: string;
+  /** Manual-enable toggle (frame rate only — it has no auto mode). */
+  enableKey?: string;
+  /** Formats the raw value for the readout — schema-owned so every consumer
+   *  renders it identically. */
+  format: (v: number) => string;
+}
+
+export const CAMERA_CONTROLS: readonly CameraControl[] = [
+  {
+    key: "frame_rate",
+    label: "Frame Rate",
+    units: "FPS",
+    availableKey: "frame_rate_available",
+    rangeKey: "frame_rate_range",
+    enableKey: "frame_rate_enable",
+    format: (v) => `${v.toFixed(2)} FPS`,
+  },
+  {
+    key: "exposure",
+    label: "Exposure",
+    units: "ms",
+    availableKey: "exposure_auto_available",
+    rangeKey: "exposure_range",
+    autoKey: "exposure_auto",
+    format: (v) => `${(v / 1000).toFixed(2)} ms`,
+  },
+  {
+    key: "gain",
+    label: "Gain",
+    units: "dB",
+    availableKey: "gain_auto_available",
+    rangeKey: "gain_range",
+    autoKey: "gain_auto",
+    format: (v) => `${v.toFixed(2)} dB`,
+  },
+  {
+    key: "black_level",
+    label: "Black Level",
+    units: "dB",
+    availableKey: "black_level_available",
+    rangeKey: "black_level_range",
+    autoKey: "black_level_auto",
+    autoAvailableKey: "black_level_auto_available",
+    format: (v) => `${v.toFixed(2)} dB`,
+  },
+];
+
+/** The control-family half of `CameraView` — kept here (the pure, both-process
+ *  home) so `readControlFields` produces exactly it; the manage-cameras contract
+ *  keeps its own flat `CameraView` (a `type` literal, for `Serializable`) with a
+ *  compile-time drift guard against this. A `type` (not `interface`) so it gets
+ *  an implicit index signature where callers need one. */
+export type CameraControlsView = {
+  frame_rate_available: boolean;
+  frame_rate_enable: boolean;
+  frame_rate: number;
+  frame_rate_range: Range;
+  exposure_auto_available: boolean;
+  exposure_auto: AutoMode;
+  exposure: number;
+  exposure_range: Range;
+  gain_auto_available: boolean;
+  gain_auto: AutoMode;
+  gain: number;
+  gain_range: Range;
+  black_level_available: boolean;
+  black_level_auto_available: boolean;
+  black_level_auto: AutoMode;
+  black_level: number;
+  black_level_range: Range;
+}
+
+const ZERO_RANGE: Range = { min: 0, max: 0 };
+
+/**
+ * Read every control's snapshot fields off a live camera through the caller's
+ * throw-guard (`safe`), preserving the exact per-field fallbacks the 1 Hz poll
+ * relies on: a camera can be force-released mid-poll (§12.1 C2), and an
+ * unguarded read on a released `CoreObject` throws — uncaught in `setInterval`
+ * it would crash the orchestrator. The reader is injected so this stays pure
+ * (no `core` import) and unit-testable with a fake camera.
+ */
+export function readControlFields(
+  camera: Record<string, any>,
+  safe: <T>(get: () => T, fallback: T) => T,
+): CameraControlsView {
+  const out: Record<string, unknown> = {};
+  for (const ctrl of CAMERA_CONTROLS) {
+    out[ctrl.key] = safe(() => camera[ctrl.key] as number, 0);
+    out[ctrl.rangeKey] = safe(() => camera[ctrl.rangeKey] as Range, ZERO_RANGE);
+    out[ctrl.availableKey] = safe(() => camera[ctrl.availableKey] as boolean, false);
+    if (ctrl.autoKey) out[ctrl.autoKey] = safe(() => camera[ctrl.autoKey!] as AutoMode, "Off");
+    if (ctrl.autoAvailableKey)
+      out[ctrl.autoAvailableKey] = safe(() => camera[ctrl.autoAvailableKey!] as boolean, false);
+    if (ctrl.enableKey) out[ctrl.enableKey] = safe(() => camera[ctrl.enableKey!] as boolean, false);
+  }
+  return out as unknown as CameraControlsView;
+}
+
 export function describeCamera(camera: Camera | Empty) {
   if (!camera) return "Camera Not Connected";
   return `${camera.vendor} ${camera.model} (${camera.serial})`;

@@ -20,6 +20,7 @@ import {
   type FramePayload,
   type FrameOf,
   type FrameTopicStats,
+  type SessionStatus,
   type SessionSubscriptionPayload,
   type StateOf,
   type TelemetryOf,
@@ -61,6 +62,10 @@ export class ServerSession<C extends Contract> {
   // `list`, `connected`) still sees it, instead of waiting for the next patch
   // that may never come. See docs/refactor/orchestrator.md §12.1 C3.
   private readonly telemetrySnapshot: Record<string, any>;
+  // A-P13: current user-visible failure (e.g. a failed activation), seeded to
+  // new subscribers like the telemetry snapshot so a failure that happened
+  // before a window opened is still shown, not lost to stderr.
+  private readonly statusSnapshot: SessionStatus = { error: null };
   private readonly channels = new Set<Channel>(); // attached (command-capable)
   private readonly subscribers = new Set<Channel>(); // observers (state/telemetry/frames)
   private readonly activeSubscribers = new Set<Channel>(); // activation interest
@@ -162,11 +167,35 @@ export class ServerSession<C extends Contract> {
       ch.emit(topic.telemetry(this.name), patch);
   }
 
-  /** Report a session-scoped failure — logged locally and forwarded to every
-   *  renderer connected to this session, so it's visible without watching the
-   *  orchestrator console. See §12.1 C7. */
+  /** Report a user-visible session failure (e.g. a failed activation / camera
+   *  contention) — logged locally AND pushed to every subscriber on the status
+   *  channel, and seeded to future subscribers, so it's visible without
+   *  watching the orchestrator console. See §12.1 C7 / A-P13. */
+  fail(reason: string): void {
+    this.statusSnapshot.error = reason;
+    report(this.name, reason);
+    this.broadcastStatus();
+  }
+
+  /** Clear the current session error (a retry succeeded, or the UI dismissed
+   *  it). No-op when already clear. */
+  clearError(): void {
+    if (this.statusSnapshot.error === null) return;
+    this.statusSnapshot.error = null;
+    this.broadcastStatus();
+  }
+
+  // Emit a COPY of the status snapshot — never the mutable snapshot itself, so
+  // a later `fail`/`clearError` can't retro-alter an already-queued message.
+  private broadcastStatus(): void {
+    for (const ch of this.subscribers)
+      ch.emit(topic.status(this.name), { ...this.statusSnapshot });
+  }
+
+  /** @deprecated Alias of `fail()` — kept for callers that read as "report an
+   *  error". Both log + surface to the renderer (the old body only logged). */
   error(message: string): void {
-    report(this.name, message);
+    this.fail(message);
   }
 
   // `string & {}` allows dynamic channels (e.g. one per camera serial) while
@@ -235,12 +264,16 @@ export class ServerSession<C extends Contract> {
       for (const key of Object.keys(this.state))
         ch.emit(topic.state(this.name), { key, value: (this.state as any)[key] });
       ch.emit(topic.telemetry(this.name), this.telemetrySnapshot);
+      ch.emit(topic.status(this.name), { ...this.statusSnapshot }); // A-P13: seed error state
     }
     if (options.passive || this.activeSubscribers.has(ch)) return;
     const wasIdle = this.activeSubscribers.size === 0;
     this.activeSubscribers.add(ch);
     if (wasIdle) {
       this.activatedAt = performance.now();
+      // Fresh activation attempt clears any stale failure; a failing
+      // `activate()` re-sets it via `fail()`. Gives retry-on-reactivate.
+      this.clearError();
       this.activateFn?.();
     }
   }

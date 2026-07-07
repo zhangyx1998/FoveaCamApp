@@ -1,34 +1,47 @@
 // ------------------------------------------------------
-// Copyright (c) 2025 Yuxuan Zhang, zhangyuxuan@ufl.edu
+// Copyright (c) 2026 Yuxuan Zhang, dev@z-yx.cc
 // This source code is licensed under the MIT license.
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Recorder container format bench (B-4, docs/refactor/recorder-container.md
-// §2). Drives one MCAP file through a single writer-worker (mirroring
-// stream-writer.ts's worker_threads architecture) at the target recorder
-// workload: 3 raw streams @ 60fps + 1 processed stream @ 30fps, for a
-// sustained duration, with a bounded per-channel handoff queue (drops are
-// counted, not silently absorbed - see workload-metering.md's philosophy).
+// Recorder container-format bench (B-4, docs/refactor/recorder-container.md
+// §2). B-P4: this is now a THIN HARNESS around the PRODUCTION recorder writer
+// (app/orchestrator/recorder/writer.ts → McapWriterWorker + its eval'd worker
+// source), not a sibling MCAP writer. So the throughput/drop numbers below are
+// measured against the exact code path users record through. The only bench-
+// only addition is chunk compression, injected through the production writer's
+// `compression` seam (lazy-required in the worker; production ships no
+// compressor and stays uncompressed — B-4 showed compression on the single
+// writer chain worsens the bottleneck).
 //
-// Usage (must use /opt/homebrew/bin/node - bare node/npx are broken in this
-// shell):
-//   /opt/homebrew/bin/node src/bench.ts --size=1.5 --compression=none --duration=30
-//   /opt/homebrew/bin/node src/bench.ts --size=6.2 --compression=zstd --duration=30 --zstdLevel=1
+// Workload: 3 raw streams @ 60fps + 1 processed stream @ 30fps, sustained for
+// `--duration`s, with the production writer's bounded per-channel in-flight
+// window refusing (dropping) frames under backpressure — drops are counted,
+// not silently absorbed (workload-metering.md philosophy).
 //
-// Prints a human-readable live status line every 2s and a final line
-// prefixed `RESULT:` with a single-line JSON summary for scripted collection
-// across the compression x size matrix.
+// Must run through the resolution shim so the production ESM loads under raw
+// node (bare node/npx are broken in this shell):
+//   /opt/homebrew/bin/node --import ../ts-hooks.mjs src/bench.ts --size=1.5 --compression=none --duration=30
+//   /opt/homebrew/bin/node --import ../ts-hooks.mjs src/bench.ts --size=6.2 --compression=zstd --zstdLevel=1
+// (run from playground/bench-recorder/; --import path is relative to cwd.)
+//
+// Prints a live status line every 2s and a final `RESULT:` line with a
+// single-line JSON summary for scripted collection across the compression x
+// size matrix.
 
-import { Worker } from "node:worker_threads";
+import { createRequire } from "node:module";
 import { mkdir, stat, rm } from "node:fs/promises";
 import { cpus } from "node:os";
 import {
   RAW_FRAME_MESSAGE_ENCODING,
+  RAW_FRAME_SCHEMA_DATA,
   RAW_FRAME_SCHEMA_NAME,
 } from "../../../docs/schema/fovea.ts";
+import { McapWriterWorker } from "../../../app/orchestrator/recorder/writer.ts";
+import type { CompressionInjection } from "../../../app/orchestrator/recorder/types.ts";
 import { buildFramePool, buildProcessedPool } from "./synth.ts";
-import type { WorkerIn, WorkerOut, Compression, ChannelSpec } from "./protocol.ts";
+
+type Compression = "none" | "lz4" | "zstd";
 
 interface Args {
   size: number; // MiB target for raw streams
@@ -48,10 +61,9 @@ function parseArgs(): Args {
     if (m) map.set(m[1]!, m[2]!);
   }
   const size = Number(map.get("size") ?? "1.5");
-  const compression = (map.get("compression") ?? "none") as Compression;
   return {
     size,
-    compression,
+    compression: (map.get("compression") ?? "none") as Compression,
     zstdLevel: Number(map.get("zstdLevel") ?? "1"),
     duration: Number(map.get("duration") ?? "30"),
     maxQueued: Number(map.get("maxQueued") ?? "8"),
@@ -61,23 +73,40 @@ function parseArgs(): Args {
   };
 }
 
-interface ChannelRuntime {
-  spec: ChannelSpec;
+/** Resolve the bench-only compression injection from CLI args (never used in
+ *  production — see CompressionInjection). Modules are resolved from the
+ *  bench's own node_modules. */
+function compressionInjection(args: Args): CompressionInjection | undefined {
+  if (args.compression === "none") return undefined;
+  const require = createRequire(import.meta.url);
+  if (args.compression === "lz4") {
+    return { name: "lz4", moduleEntry: require.resolve("lz4-napi"), exportName: "compressSync" };
+  }
+  return {
+    name: "zstd",
+    moduleEntry: require.resolve("zstd-napi"),
+    exportName: "compress",
+    level: args.zstdLevel,
+  };
+}
+
+interface Channel {
+  topic: string;
   fps: number;
+  pixelFormat: string;
+  metadata: Record<string, string>;
   pool: readonly Uint8Array[];
   poolIdx: number;
   seq: number;
   tick: number;
-  queued: number;
   produced: number;
   dropped: number;
-  acked: number;
 }
 
 async function main(): Promise<void> {
   const args = parseArgs();
   await mkdir(args.out, { recursive: true });
-  const filePath = `${args.out}/bench-${args.size}MiB-${args.compression}.mcap`;
+  const filePath = `${args.out}/bench-${args.size}MiB-${args.compression}.fovea`;
   await rm(filePath, { force: true });
 
   const rawTargetBytes = Math.round(args.size * 1024 * 1024);
@@ -88,159 +117,104 @@ async function main(): Promise<void> {
   console.log(
     `[bench] raw frame ${rawPool.byteLength} bytes (${rawPool.width}x${rawPool.height} 12p) | ` +
       `processed frame ${procPool.byteLength} bytes (${procPool.width}x${procPool.height} 8-bit) | ` +
-      `compression=${args.compression} duration=${args.duration}s chunkSize=${(args.chunkSizeMiB).toFixed(2)}MiB`,
+      `compression=${args.compression} duration=${args.duration}s chunkSize=${args.chunkSizeMiB.toFixed(2)}MiB | ` +
+      `writer=production McapWriterWorker`,
   );
 
-  const channels: ChannelRuntime[] = [
+  const channels: Channel[] = [
     ...["cam0", "cam1", "cam2"].map((name) => ({
-      spec: {
-        topic: `raw/${name}`,
-        schemaName: RAW_FRAME_SCHEMA_NAME,
-        messageEncoding: RAW_FRAME_MESSAGE_ENCODING,
-        metadata: {
-          dtype: "U8",
-          shape: JSON.stringify([rawPool.height, rawPool.width]),
-          channels: "1",
-          pixelFormat: "BayerRG12p",
-          significantBits: "12",
-        },
-      },
+      topic: `raw/${name}`,
       fps: 60,
+      pixelFormat: "BayerRG12p",
+      metadata: {
+        dtype: "U8",
+        shape: JSON.stringify([rawPool.height, rawPool.width]),
+        channels: "1",
+        pixelFormat: "BayerRG12p",
+        significantBits: "12",
+      },
       pool: rawPool.frames,
       poolIdx: 0,
       seq: 0,
       tick: 0,
-      queued: 0,
       produced: 0,
       dropped: 0,
-      acked: 0,
     })),
     {
-      spec: {
-        topic: "processed/disparity",
-        schemaName: RAW_FRAME_SCHEMA_NAME,
-        messageEncoding: RAW_FRAME_MESSAGE_ENCODING,
-        metadata: {
-          dtype: "U8",
-          shape: JSON.stringify([procPool.height, procPool.width]),
-          channels: "1",
-          pixelFormat: "Mono8",
-          significantBits: "8",
-        },
-      },
+      topic: "processed/disparity",
       fps: 30,
+      pixelFormat: "Mono8",
+      metadata: {
+        dtype: "U8",
+        shape: JSON.stringify([procPool.height, procPool.width]),
+        channels: "1",
+        pixelFormat: "Mono8",
+        significantBits: "8",
+      },
       pool: procPool.frames,
       poolIdx: 0,
       seq: 0,
       tick: 0,
-      queued: 0,
       produced: 0,
       dropped: 0,
-      acked: 0,
     },
   ];
-  const channelsByTopic = new Map(channels.map((c) => [c.spec.topic, c]));
 
-  const workerUrl = new URL("./writer-worker.ts", import.meta.url);
-  const worker = new Worker(workerUrl);
-
-  let ready = false;
-  let stopped: Extract<WorkerOut, { type: "stopped" }> | undefined;
-  let lastError: string | undefined;
-  const rssSamples: number[] = [];
-
-  let workerReadyAt = 0;
-  let workerStoppedAt = 0;
-  worker.on("message", (msg: WorkerOut) => {
-    if (msg.type === "ready") {
-      ready = true;
-      workerReadyAt = performance.now();
-      return;
-    }
-    if (msg.type === "ack") {
-      const ch = channelsByTopic.get(msg.topic);
-      if (ch) {
-        ch.queued = Math.max(0, ch.queued - 1);
-        ch.acked++;
-      }
-      return;
-    }
-    if (msg.type === "metrics") {
-      // Live RSS trend only - CPU% is computed authoritatively from the
-      // "stopped" message's start/end diff (see below), since these
-      // periodic samples can have gaps if the worker's event loop is
-      // saturated with writes and delays handling metrics-request.
-      rssSamples.push(msg.rss);
-      return;
-    }
-    if (msg.type === "stopped") {
-      stopped = msg;
-      workerStoppedAt = performance.now();
-      return;
-    }
-    if (msg.type === "error") {
-      lastError = msg.message;
-      console.error("[bench] worker error:", msg.message, msg.stack);
-    }
+  const writer = new McapWriterWorker(filePath, "bench", {
+    chunkBytes: Math.round(args.chunkSizeMiB * 1024 * 1024),
+    maxQueuedFrames: args.maxQueued,
+    session: { startedAt: new Date().toISOString(), bench: "recorder-throughput" },
+    compression: compressionInjection(args),
   });
+  for (const ch of channels) {
+    writer.registerChannel(ch.topic, {
+      schema: RAW_FRAME_SCHEMA_NAME,
+      schemaData: RAW_FRAME_SCHEMA_DATA,
+      messageEncoding: RAW_FRAME_MESSAGE_ENCODING,
+      metadata: ch.metadata,
+    });
+  }
 
-  const init: WorkerIn = {
-    type: "init",
-    filePath,
-    chunkSize: Math.round(args.chunkSizeMiB * 1024 * 1024),
-    compression: args.compression,
-    zstdLevel: args.zstdLevel,
-    channels: channels.map((c) => c.spec),
-  };
-  worker.postMessage(init);
-  while (!ready && !lastError) await sleep(5);
-  if (lastError) throw new Error(`init failed: ${lastError}`);
-
-  const mainCpuStart = process.cpuUsage();
+  const rssSamples: number[] = [];
+  const cpuStart = process.cpuUsage();
   const wallStart = performance.now();
   let stop = false;
 
-  function produce(ch: ChannelRuntime): void {
-    if (stop) return;
-    if (ch.queued >= args.maxQueued) {
-      ch.dropped++;
-    } else {
-      const template = ch.pool[ch.poolIdx % ch.pool.length]!;
-      ch.poolIdx++;
-      // Real copy-then-transfer, matching stream-writer.ts's write() path
-      // (frames must be copied out of the shared camera/shm buffer before
-      // handoff to the worker).
+  function produce(ch: Channel): void {
+    if (stop || writer.error) return;
+    const template = ch.pool[ch.poolIdx % ch.pool.length]!;
+    ch.poolIdx++;
+    const logTimeNs = BigInt(Math.round(performance.now() * 1e6));
+    // The production writer REFUSES (returns false, without invoking the copy
+    // thunk) when the channel's in-flight window is full — that refusal is the
+    // single-writer-chain bottleneck surfacing as a drop.
+    const accepted = writer.writeFrame(ch.topic, ch.seq++, logTimeNs, () => {
+      // Real copy-then-transfer: frames must be copied out of the shared
+      // camera/shm buffer before handoff (the writer transfers the ArrayBuffer).
       const data = new ArrayBuffer(template.byteLength);
       new Uint8Array(data).set(template);
-      const logTimeNs = BigInt(Math.round(performance.now() * 1e6));
-      ch.queued++;
-      ch.produced++;
-      const seq = ch.seq++;
-      worker.postMessage(
-        { type: "frame", topic: ch.spec.topic, seq, logTimeNs, data } satisfies WorkerIn,
-        [data],
-      );
-    }
-    // Scheduling anchor is the source's true arrival clock (ch.tick), NOT
-    // the count of frames actually accepted - a real camera keeps ticking
-    // at its hardware fps regardless of whether the recorder queue is full,
-    // so drops must not slow down the next-frame schedule.
+      return data;
+    });
+    if (accepted) ch.produced++;
+    else ch.dropped++;
+    // Scheduling anchor is the source's true arrival clock (ch.tick), NOT the
+    // count accepted — a real camera keeps ticking at its hardware fps whether
+    // or not the recorder queue is full, so drops must not slow the schedule.
     ch.tick++;
     const period = 1000 / ch.fps;
     const nextDue = wallStart + ch.tick * period;
-    const delay = Math.max(0, nextDue - performance.now());
-    setTimeout(() => produce(ch), delay);
+    setTimeout(() => produce(ch), Math.max(0, nextDue - performance.now()));
   }
   for (const ch of channels) produce(ch);
 
   const statusTimer = setInterval(() => {
-    worker.postMessage({ type: "metrics-request" } satisfies WorkerIn);
+    rssSamples.push(process.memoryUsage().rss);
     const elapsed = (performance.now() - wallStart) / 1000;
     const parts = channels
       .map(
         (c) =>
-          `${c.spec.topic}=src${(c.tick / elapsed).toFixed(1)}/wr${(c.produced / elapsed).toFixed(1)}fps ` +
-          `drop${c.dropped}(${((100 * c.dropped) / Math.max(1, c.tick)).toFixed(0)}%) q${c.queued}`,
+          `${c.topic}=src${(c.tick / elapsed).toFixed(1)}/wr${(c.produced / elapsed).toFixed(1)}fps ` +
+          `drop${c.dropped}(${((100 * c.dropped) / Math.max(1, c.tick)).toFixed(0)}%) q${writer.queueDepth(c.topic)}`,
       )
       .join(" ");
     console.log(`[t=${elapsed.toFixed(1)}s] ${parts}`);
@@ -249,29 +223,41 @@ async function main(): Promise<void> {
   await sleep(args.duration * 1000);
   stop = true;
   clearInterval(statusTimer);
-  const wallElapsed = (performance.now() - wallStart) / 1000;
-  const mainCpuEnd = process.cpuUsage(mainCpuStart);
 
-  // drain: wait for queues to empty (bounded, so this should be quick)
+  // Drain: wait for the production writer's in-flight windows to empty (bounded,
+  // so quick) before finalizing.
   const drainStart = performance.now();
-  while (channels.some((c) => c.queued > 0) && performance.now() - drainStart < 10000) {
+  while (
+    channels.some((c) => writer.queueDepth(c.topic) > 0) &&
+    !writer.error &&
+    performance.now() - drainStart < 10000
+  ) {
     await sleep(20);
   }
 
-  worker.postMessage({ type: "stop" } satisfies WorkerIn);
-  const stopStart = performance.now();
-  while (!stopped && !lastError && performance.now() - stopStart < 30000) await sleep(20);
-  await worker.terminate();
+  let finalizeError: string | undefined;
+  const stats = await writer
+    .finalize({ durationSec: String(((performance.now() - wallStart) / 1000).toFixed(2)) })
+    .catch((error: unknown) => {
+      finalizeError = error instanceof Error ? error.message : String(error);
+      return undefined;
+    });
 
-  const fileStat = await stat(filePath).catch(() => undefined);
-  const fileBytes = fileStat?.size ?? 0;
-  // args.keep is a hint for callers that want to inspect the file afterward
-  // (verify-seek.ts/crash-recovery.ts manage their own files independently);
-  // the bench itself never deletes its own output.
-  void args.keep;
-
-  const ncpus = cpus().length;
-  const bytesWrittenActual = stopped?.bytesWritten ?? 0;
+  const wallElapsed = (performance.now() - wallStart) / 1000;
+  const cpu = process.cpuUsage(cpuStart);
+  const fileBytes = (await stat(filePath).catch(() => undefined))?.size ?? 0;
+  const bytesOnDisk = stats?.bytes ?? 0;
+  // Logical (uncompressed) payload the source actually got written — the
+  // production worker only reports on-disk position, so the bench derives this
+  // from accepted-frame counts to report raw ingest throughput + a real
+  // compression ratio.
+  const frameBytesFor = (topic: string) =>
+    topic.startsWith("raw/") ? rawPool.byteLength : procPool.byteLength;
+  const bytesLogical = channels.reduce(
+    (sum, c) => sum + c.produced * frameBytesFor(c.topic),
+    0,
+  );
+  void args.keep; // the bench never deletes its own output
 
   const summary = {
     size: args.size,
@@ -280,44 +266,37 @@ async function main(): Promise<void> {
     durationTargetSec: args.duration,
     wallElapsedSec: Number(wallElapsed.toFixed(2)),
     chunkSizeMiB: args.chunkSizeMiB,
+    writer: "production:McapWriterWorker",
     channels: channels.map((c) => ({
-      topic: c.spec.topic,
+      topic: c.topic,
       targetFps: c.fps,
       sourceFps: Number((c.tick / wallElapsed).toFixed(2)),
       writtenFps: Number((c.produced / wallElapsed).toFixed(2)),
       produced: c.produced,
       dropped: c.dropped,
       dropPct: Number(((100 * c.dropped) / Math.max(1, c.tick)).toFixed(1)),
-      acked: c.acked,
     })),
     rawFrameBytes: rawPool.byteLength,
     processedFrameBytes: procPool.byteLength,
-    bytesWrittenLogical: bytesWrittenActual,
+    bytesLogical,
+    bytesOnDisk,
     fileBytesOnDisk: fileBytes,
-    compressionRatio: fileBytes > 0 ? Number((bytesWrittenActual / fileBytes).toFixed(3)) : null,
-    sustainedMBps: Number((bytesWrittenActual / wallElapsed / (1024 * 1024)).toFixed(2)),
+    compressionRatio: fileBytes > 0 ? Number((bytesLogical / fileBytes).toFixed(3)) : null,
+    // Raw ingest throughput (logical payload accepted per wall-second) — the
+    // B-4 headline metric.
+    sustainedMBps: Number((bytesLogical / wallElapsed / (1024 * 1024)).toFixed(2)),
     sustainedMBpsOnDisk: Number((fileBytes / wallElapsed / (1024 * 1024)).toFixed(2)),
-    mainThreadCpuPctOfOneCore: Number(
-      (((mainCpuEnd.user + mainCpuEnd.system) / 1000 / (wallElapsed * 1000)) * 100).toFixed(1),
+    // Whole-process CPU (main thread + the writer worker thread share one OS
+    // process, so process.cpuUsage() covers both) as a fraction of one core.
+    processCpuPctOfOneCore: Number(
+      (((cpu.user + cpu.system) / 1000 / (wallElapsed * 1000)) * 100).toFixed(1),
     ),
-    // Normalized against the worker's own observed lifetime (ready -> stopped),
-    // which runs a bit longer than wallElapsed because of end-of-run drain.
-    workerCpuPctOfOneCore: stopped
-      ? Number(
-          (
-            ((stopped.cpuUserUs + stopped.cpuSystemUs) /
-              1000 /
-              Math.max(1, workerStoppedAt - workerReadyAt)) *
-            100
-          ).toFixed(1),
-        )
-      : null,
-    machineCores: ncpus,
+    machineCores: cpus().length,
     rssMinMB: rssSamples.length ? Number((Math.min(...rssSamples) / 1024 / 1024).toFixed(1)) : null,
     rssMaxMB: rssSamples.length ? Number((Math.max(...rssSamples) / 1024 / 1024).toFixed(1)) : null,
-    chunkCount: stopped?.chunkCount ?? null,
-    messageCount: stopped?.messageCount ?? null,
-    error: lastError ?? null,
+    chunkCount: stats?.chunkCount ?? null,
+    messageCount: stats?.messageCount ?? null,
+    error: finalizeError ?? writer.error?.message ?? null,
     filePath,
   };
 

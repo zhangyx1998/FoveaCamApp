@@ -201,16 +201,28 @@ class FoveaReader:
 
     # ---- telemetry join -----------------------------------------------------
 
-    def _note_telemetry(self, payload: bytes) -> None:
+    @staticmethod
+    def _parse_telemetry(
+        payload: bytes,
+    ) -> tuple[tuple[str, int], dict[str, Any]] | None:
+        """Parse one telemetry JSON document into ``((stream, seq), extras)`` —
+        or None if it is torn / missing its join key. Shared by the indexed map
+        and the streaming join so they can't diverge."""
         try:
             doc = json.loads(payload)
         except json.JSONDecodeError:
-            return
+            return None
         stream, seq = doc.get("stream"), doc.get("seq")
         if stream is None or seq is None:
-            return
+            return None
         extras = {k: v for k, v in doc.items() if k not in ("stream", "seq", "t")}
-        self._telemetry[(stream, int(seq))] = extras
+        return (stream, int(seq)), extras
+
+    def _note_telemetry(self, payload: bytes) -> None:
+        parsed = self._parse_telemetry(payload)
+        if parsed is not None:
+            key, extras = parsed
+            self._telemetry[key] = extras
 
     def _load_telemetry(self) -> None:
         if self.truncated or self._telemetry:
@@ -239,6 +251,80 @@ class FoveaReader:
 
     def frames(self, stream: str | None = None) -> list[FoveaFrame]:
         return list(self.iter_frames(stream))
+
+    def _stream_source(self) -> IO[bytes]:
+        """Fresh binary stream for a forward scan (its own handle, so it never
+        disturbs the indexed reader's position). Overridable in tests to
+        observe read progress."""
+        return self.path.open("rb")
+
+    def iter_frames_streaming(
+        self, stream: str | None = None, *, max_pending_telemetry: int = 4096
+    ) -> Iterator[FoveaFrame]:
+        """Yield frames in FILE order, joining telemetry with BOUNDED state, in
+        a single forward pass — no whole-file materialization. Additive to (not
+        a replacement for) :meth:`iter_frames`; use this for large recordings
+        and streaming/ML pipelines where the log-time sort and full telemetry
+        map of ``iter_frames`` would turn the reader into an accidental
+        whole-file materializer.
+
+        Differences from ``iter_frames`` (documented tradeoffs, per B-P10):
+
+        - **Order is file order, not log-time order.** The B-5 writer emits a
+          frame's telemetry document immediately before the frame on one write
+          chain, so a single forward pass sees a frame's extras before the
+          frame — no index or second pass needed — but interleaved streams come
+          out in write order, not globally sorted by timestamp.
+        - **Memory is bounded.** Only telemetry not yet matched to a frame is
+          held (normally ~one entry per in-flight stream); orphaned telemetry is
+          capped at ``max_pending_telemetry`` (oldest evicted) so a pathological
+          file can't grow it without bound.
+
+        Works uniformly on intact AND crash-truncated files: the forward scan
+        stops cleanly at the truncation boundary, keeping every complete frame
+        before it (same recovery guarantee as the ``truncated`` path, without
+        buffering the whole recording first)."""
+        pending: dict[tuple[str, int], dict[str, Any]] = {}
+        with self._stream_source() as io:
+            # log_time_order=False is load-bearing: the default (True) sorts,
+            # which drains the whole stream up front (defeating streaming and
+            # firing a truncation error before the first yield on torn files).
+            iterator = NonSeekingReader(io).iter_messages(log_time_order=False)
+            while True:
+                try:
+                    item = next(iterator)
+                except StopIteration:
+                    break
+                except Exception:  # noqa: BLE001 — stop at the truncation
+                    # boundary (McapError/EOFError/struct.error on a torn record)
+                    # and keep everything complete before it.
+                    break
+                _schema, channel, message = item
+                if channel.topic == TELEMETRY_TOPIC:
+                    parsed = self._parse_telemetry(message.data)
+                    if parsed is not None:
+                        key, extras = parsed
+                        pending[key] = extras
+                        if len(pending) > max_pending_telemetry:
+                            # Orphaned telemetry (no matching frame written):
+                            # evict oldest to stay bounded (dict is insertion-
+                            # ordered).
+                            pending.pop(next(iter(pending)))
+                    continue
+                info = self.streams.get(channel.topic)
+                if info is None:
+                    info = _stream_info(channel)
+                    self.streams.setdefault(channel.topic, info)
+                if stream is not None and channel.topic != stream:
+                    continue
+                extras = pending.pop((channel.topic, message.sequence), {})
+                yield FoveaFrame(
+                    stream=info,
+                    seq=message.sequence,
+                    log_time=message.log_time,
+                    data=message.data,
+                    extra=extras,
+                )
 
     def _frame(self, topic: str, message: Message) -> FoveaFrame:
         info = self.streams[topic]

@@ -3,101 +3,25 @@
 // This source code is licensed under the MIT license.
 // You may find the full license in project root directory.
 // -------------------------------------------------------
-#include "../include/ShmRing.h"
+// N-API glue over the shared, libc-only read TU (`ShmRead.{h,cpp}`). All the
+// mapping / header validation / slot addressing / seqlock logic lives there and
+// is compiled into the core target too; this file only marshals a `ReadResult`
+// into a JS object. Intentionally does NOT include `ShmRing.h` (which pulls in
+// the full N-API writer surface) — `ShmRead.h` + `ShmLayout.h` are enough.
+#include "../include/ShmRead.h"
 
-#include <algorithm>
-#include <cerrno>
-#include <cstring>
-#include <fcntl.h>
+#include <memory>
 #include <napi.h>
 #include <stdexcept>
 #include <string>
-#include <sys/mman.h>
-#include <unistd.h>
 
 using namespace Napi;
 
 namespace {
 
-std::string errnoMessage(const std::string &action, const std::string &name) {
-  return action + " " + name + ": " + std::strerror(errno);
-}
-
-class Reader {
-  int fd = -1;
-  void *mapping = nullptr;
-  size_t mappingSize = 0;
-
-public:
-  explicit Reader(const std::string &name) {
-    fd = shm_open(name.c_str(), O_RDONLY, 0);
-    if (fd < 0)
-      throw std::runtime_error(errnoMessage("shm_open", name));
-    auto *firstPage =
-        mmap(nullptr, ShmRing::PAGE_ALIGN, PROT_READ, MAP_SHARED, fd, 0);
-    if (firstPage == MAP_FAILED) {
-      close(fd);
-      fd = -1;
-      throw std::runtime_error(errnoMessage("mmap header", name));
-    }
-    auto *h = reinterpret_cast<ShmRing::SegmentHeader *>(firstPage);
-    if (std::memcmp(h->magic, ShmRing::MAGIC, sizeof(ShmRing::MAGIC)) != 0 ||
-        h->layoutVersion != ShmRing::LAYOUT_VERSION ||
-        h->slotCount != ShmRing::SLOT_COUNT) {
-      munmap(firstPage, ShmRing::PAGE_ALIGN);
-      close(fd);
-      fd = -1;
-      throw std::runtime_error("Invalid Fovea SHM segment header");
-    }
-    mappingSize = ShmRing::alignUp(sizeof(ShmRing::SegmentHeader),
-                                   ShmRing::PAGE_ALIGN) +
-                  h->slotStride * h->slotCount;
-    munmap(firstPage, ShmRing::PAGE_ALIGN);
-    mapping = mmap(nullptr, mappingSize, PROT_READ, MAP_SHARED, fd, 0);
-    if (mapping == MAP_FAILED) {
-      mapping = nullptr;
-      close(fd);
-      fd = -1;
-      throw std::runtime_error(errnoMessage("mmap", name));
-    }
-  }
-
-  ~Reader() { closeHandle(); }
-
-  void closeHandle() {
-    if (mapping) {
-      munmap(mapping, mappingSize);
-      mapping = nullptr;
-    }
-    if (fd >= 0) {
-      close(fd);
-      fd = -1;
-    }
-  }
-
-  ShmRing::SegmentHeader *header() const {
-    if (!mapping)
-      throw std::runtime_error("SHM reader is closed");
-    return reinterpret_cast<ShmRing::SegmentHeader *>(mapping);
-  }
-
-  ShmRing::SlotHeader *slotHeader(uint32_t slot) const {
-    auto *base = static_cast<std::byte *>(mapping) +
-                 ShmRing::alignUp(sizeof(ShmRing::SegmentHeader),
-                                  ShmRing::PAGE_ALIGN) +
-                 header()->slotStride * slot;
-    return reinterpret_cast<ShmRing::SlotHeader *>(base);
-  }
-
-  const void *slotData(uint32_t slot) const {
-    return reinterpret_cast<const std::byte *>(slotHeader(slot)) +
-           header()->dataOffset;
-  }
-};
-
 class ReaderObject : public ObjectWrap<ReaderObject> {
   static FunctionReference constructor;
-  std::unique_ptr<Reader> reader;
+  std::unique_ptr<ShmRing::ReadMapping> mapping;
 
 public:
   static Function Init(Napi::Env env) {
@@ -113,19 +37,20 @@ public:
 
   ReaderObject(const CallbackInfo &info) : ObjectWrap<ReaderObject>(info) {
     try {
-      reader = std::make_unique<Reader>(info[0].As<String>().Utf8Value());
+      mapping =
+          std::make_unique<ShmRing::ReadMapping>(info[0].As<String>().Utf8Value());
     } catch (const std::exception &e) {
       Error::New(info.Env(), e.what()).ThrowAsJavaScriptException();
     }
   }
 
-  Reader &core() {
-    if (!reader)
+  ShmRing::ReadMapping &core() {
+    if (!mapping)
       throw std::runtime_error("SHM reader is closed");
-    return *reader;
+    return *mapping;
   }
 
-  void close() { reader.reset(); }
+  void close() { mapping.reset(); }
 };
 
 FunctionReference ReaderObject::constructor;
@@ -167,8 +92,8 @@ Value open(const CallbackInfo &info) {
 Value latestSeq(const CallbackInfo &info) {
   try {
     auto &reader = unwrapReader(info[0])->core();
-    return BigInt::New(info.Env(),
-                       reader.header()->latestSeq.load(std::memory_order_acquire));
+    return BigInt::New(info.Env(), reader.header()->latestSeq.load(
+                                       std::memory_order_acquire));
   } catch (const std::exception &e) {
     Error::New(info.Env(), e.what()).ThrowAsJavaScriptException();
     return info.Env().Undefined();
@@ -185,46 +110,31 @@ Value readInto(const CallbackInfo &info) {
     const uint64_t lastSeq = info[2].IsUndefined() || info[2].IsNull()
                                  ? 0
                                  : info[2].As<BigInt>().Uint64Value(&lossless);
-    auto *h = reader.header();
-    const uint64_t latest = h->latestSeq.load(std::memory_order_acquire);
-    if (latest <= lastSeq)
+
+    ShmRing::ReadResult r;
+    switch (ShmRing::readLatestInto(reader, dst, dstBytes, lastSeq, r)) {
+    case ShmRing::ReadStatus::NoNewFrame:
+    case ShmRing::ReadStatus::TornRead:
       return env.Null();
-    if (dstBytes < h->slotBytes)
+    case ShmRing::ReadStatus::DestTooSmall:
       throw std::runtime_error("Destination buffer is smaller than SHM frame");
-
-    uint32_t retries = 0;
-    for (; retries < ShmRing::MAX_READ_RETRIES; ++retries) {
-      const uint32_t slot = h->latestSlot.load(std::memory_order_acquire);
-      auto *slotHeader = reader.slotHeader(slot);
-      const uint64_t before = slotHeader->seq.load(std::memory_order_acquire);
-      if ((before & 1) != 0 || before == 0)
-        continue;
-      std::memcpy(dst, reader.slotData(slot), h->slotBytes);
-      const double tCapture = slotHeader->tCapture;
-      const double convertMs = slotHeader->convertMs;
-      const uint64_t deviceTimestamp = slotHeader->deviceTimestamp;
-      const uint64_t systemTimestamp = slotHeader->systemTimestamp;
-      std::atomic_thread_fence(std::memory_order_acquire);
-      const uint64_t after = slotHeader->seq.load(std::memory_order_acquire);
-      if (before != after || (after & 1) != 0)
-        continue;
-
-      auto result = Object::New(env);
-      const uint64_t seq = after / 2;
-      result.Set("seq", BigInt::New(env, seq));
-      result.Set("gen", h->generation);
-      result.Set("retries", retries);
-      auto meta = Object::New(env);
-      meta.Set("tCapture", tCapture);
-      meta.Set("convertMs", convertMs);
-      if (deviceTimestamp)
-        meta.Set("deviceTimestamp", BigInt::New(env, deviceTimestamp));
-      if (systemTimestamp)
-        meta.Set("systemTimestamp", BigInt::New(env, systemTimestamp));
-      result.Set("meta", meta);
-      return result;
+    case ShmRing::ReadStatus::Ok:
+      break;
     }
-    return env.Null();
+
+    auto result = Object::New(env);
+    result.Set("seq", BigInt::New(env, r.seq));
+    result.Set("gen", r.gen);
+    result.Set("retries", r.retries);
+    auto meta = Object::New(env);
+    meta.Set("tCapture", r.meta.tCapture);
+    meta.Set("convertMs", r.meta.convertMs);
+    if (r.meta.deviceTimestamp)
+      meta.Set("deviceTimestamp", BigInt::New(env, r.meta.deviceTimestamp));
+    if (r.meta.systemTimestamp)
+      meta.Set("systemTimestamp", BigInt::New(env, r.meta.systemTimestamp));
+    result.Set("meta", meta);
+    return result;
   } catch (const std::exception &e) {
     Error::New(info.Env(), e.what()).ThrowAsJavaScriptException();
     return info.Env().Undefined();

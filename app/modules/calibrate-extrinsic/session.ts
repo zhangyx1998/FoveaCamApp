@@ -25,16 +25,23 @@ import { defineSession, type ServerSession } from "@orchestrator/runtime";
 import { matchTriple, retryUntil, type CameraLease } from "@orchestrator/registry";
 import { loadIntrinsic, fitExtrinsicRegression } from "@orchestrator/calibration";
 import { startActuationLoop, type ActuationLoop } from "@orchestrator/actuation";
-import { MarkerTracker, startServo, type Servo } from "@orchestrator/marker-tracker";
+import { startServo, type MarkerTracker, type Servo } from "@orchestrator/marker-tracker";
+import {
+  bindDetections,
+  createTrackerTriple,
+  detectionViews,
+  retarget,
+  stopTriple,
+} from "@orchestrator/marker-calibration";
 import { read, write } from "@orchestrator/store-hub";
 import { activeController } from "@orchestrator/controller";
 import { getCameraKey } from "@lib/camera-config";
-import { MarkerDetector, type Mat, type Undistort } from "core/Vision";
+import { type Mat, type Undistort } from "core/Vision";
 import type { Point2d } from "core/Geometry";
 import type { Pos } from "@lib/controller-codec";
 import type { ExtrinsicDataset } from "@lib/camera-config";
 import type { ExtrinsicConversions } from "@lib/coordinate-conversions";
-import { calibrateExtrinsic, type DetectionView, type ExtrinsicRecord } from "./contract";
+import { calibrateExtrinsic, type ExtrinsicRecord } from "./contract";
 
 type Role = "L" | "C" | "R";
 const ORIGIN: Pos = { x: 0, y: 0 };
@@ -66,8 +73,7 @@ export default function calibrateExtrinsicSession(): ServerSession<typeof calibr
 
     function publishDetections(): void {
       if (!trackers) return;
-      const view = (t: MarkerTracker): DetectionView => (t.target ? { points: t.target.img_pts } : null);
-      s.telemetry({ detection: { L: view(trackers.L), C: view(trackers.C), R: view(trackers.R) } });
+      s.telemetry({ detection: detectionViews(trackers) });
     }
 
     function stopServo(): void {
@@ -124,15 +130,12 @@ export default function calibrateExtrinsicSession(): ServerSession<typeof calibr
       records = await read<ExtrinsicRecord[]>(SCRATCH_PATH, []);
       s.telemetry({ records, saved: false });
 
-      const detector = new MarkerDetector("4X4_50");
-      trackers = {
-        L: new MarkerTracker(leases.L.camera, detector, s.state.target_id.L, 0.25, true),
-        C: new MarkerTracker(leases.C.camera, detector, s.state.target_id.C, 1.0),
-        R: new MarkerTracker(leases.R.camera, detector, s.state.target_id.R, 0.25, true),
-      };
-      disposers.push(trackers.L.onDetection(publishDetections));
-      disposers.push(trackers.C.onDetection(publishDetections));
-      disposers.push(trackers.R.onDetection(publishDetections));
+      trackers = createTrackerTriple(
+        { L: leases.L.camera, C: leases.C.camera, R: leases.R.camera },
+        s.state.target_id,
+        { internal: true },
+      );
+      bindDetections(trackers, disposers, publishDetections);
       disposers.push(leases.L.onView((v) => onView("L", v)));
       disposers.push(leases.C.onView((v) => onView("C", v)));
       disposers.push(leases.R.onView((v) => onView("R", v)));
@@ -144,8 +147,7 @@ export default function calibrateExtrinsicSession(): ServerSession<typeof calibr
     function idleSession(): void {
       stopServo();
       stopPreviewLoop();
-      if (trackers) for (const t of Object.values(trackers)) t.stop();
-      trackers = null;
+      trackers = stopTriple(trackers);
       for (const d of disposers) d();
       disposers.length = 0;
       if (leases) for (const l of Object.values(leases)) l.release();
@@ -163,7 +165,7 @@ export default function calibrateExtrinsicSession(): ServerSession<typeof calibr
       commands: {
         async setTargetId({ role, id }) {
           s.setState("target_id", { ...s.state.target_id, [role]: id });
-          if (trackers) trackers[role].targetId = id;
+          retarget(trackers, role, id);
         },
         async setOverride({ role, pos }) {
           s.setState(role === "left" ? "override_left" : "override_right", pos);

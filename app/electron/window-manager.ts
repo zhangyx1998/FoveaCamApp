@@ -27,7 +27,7 @@
 // welcome window is camera-holding (live previews, §4), so welcome→app rides
 // the exact same path as app→app.
 
-import { entryFor, type ProjectionParams, type WindowClass } from "@lib/windows";
+import { entryFor, WINDOWS, type ProjectionParams, type WindowClass } from "@lib/windows";
 import type { ManifestWindow, WindowBounds, WindowManifest } from "./window-manifest.js";
 
 export interface WindowDescriptor {
@@ -121,7 +121,7 @@ export class WindowManager {
     // welcome itself must not respawn it under the user's cursor), and not
     // mid-switch (the gap between "A closed" and "B spawned" is not "no app
     // open") or during quit.
-    if (win.class !== "app") return;
+    if (!WINDOWS[win.class].countsForWelcome) return;
     if (this.quitting || this.inSwitch) return;
     if (this.appWindow() === null) this.ensureWelcome();
   }
