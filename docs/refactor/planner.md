@@ -99,38 +99,36 @@ that absolute node path — see §6 shell bug; needs unsandboxed shm_open)
 libSystem only · `node_modules/.bin/tsc --noEmit -p
 core/test/tsconfig.json` (0).
 
-## 5. State at handover
+## 5. State at the hardware wall (2026-07-06, supersedes the handover state)
 
-**Committed (all planner-verified):** Stage 3 complete (multi-fovea,
-scheduler, async KCF, V7 placement); contextIsolation flipped; Round 3
-fixes; **Stage 4 complete through Round D** — shm is the ONLY frame
-transport (registry + all session frames publish descriptors over
-per-topic rings; `FOVEA_SHM_STREAMS` flag retired; bridge/clone
-fallbacks deleted); V12 passive subscriptions; V13 cage write path;
-12-bit readout code-complete; serial-trace decoder tooling.
+**Everything hardware-free is DONE and committed through `eca38d8`.**
+All three coder roles are on standby with empty queues. Remaining work
+by what it needs:
 
-**Queued, NOT yet dispatched (quota):** `A-4` (disparity async
-tracker) + `A-5` (latest-wins onView processing gate) — the PB3 fix
-round, fully specced in split-of-work.md. Dispatch A when quota
-resets; verify per §1; expected outcome is registry serials back at
-camera rate with session-processed topics at own capacity.
+**A. User at the machine, display + cameras (no rig):**
+1. GUI smoke of Stage 5 (rounds 1–3): boot→welcome (annotations ready
+   for the user's SVG positioning pass), app open/switch/drain +
+   refusal-while-recording, Apps menu, projection windows off the
+   expand button (+ fullscreen titlebar in all four transitions),
+   Cmd-Shift-R restore (incl. `?step=` state), plain Cmd-R inert,
+   HMR: Vue edit hot-patches / protocol edit full-reloads.
+2. Record → open the `.fovea` in the viewer (scrub/play/rate/
+   truncated badge) → `pyfovea inspect/export` the same file. That
+   chain end-to-end is the recorder stage's acceptance.
+3. PB2 (playbook top section): shm loop-lag target < 5 ms vs PB1's
+   47 ms; V12 check (profiler opens → mirrors parked, fps holds);
+   profiler workload rows sanity; 12-bit format-switch plumbing check.
+**B. User decisions:** full-res recording tier (gates writer
+sharding); `.fovea` extension + `pyfovea` name (planner placeholders);
+PyPI publish (deferred; after manual verification on real recordings);
+electron-builder appId placeholder + first packaging run (also
+verifies the file association).
+**C. Rig-gated (playbook stages B–H):** firmware bench (P4.1
+FIN-timeout diagnosis — decoder tooling ready), v2 flash, P4 wiring,
+P5 integration, ST-64 flood, 12-bit debayer-noise A/B, multi-fovea
+live tracking.
 
-**Held:** `C-3`/PB2 measurement (user at bench, display+cameras);
-projector window (user product decision pending); shm adoption beyond
-previews (capture/raw/12-bit stay on existing paths); everything
-hardware-rig-gated (playbook stages B–H, bench, v2 flash, P4/P5).
-
-**Waiting on the user:** V12 live check (idle app → open profiler →
-60 fps holds, mirrors parked); PB2 script run (snapshot via
-Ctrl+Shift+S **in the main window with inspector mode on** — the
-profiler window's export has an empty renderer-frames table); camera
-format currently ~1.5 MB/frame vs PB1's 6.22 MB (decide: restore
-format for strict comparison, or file PB2 as new baseline).
-
-**Open findings:** PB3 (fix queued A-4/A-5). Everything V1–V13 is
-fixed & verified; PB1 superseded by Stage 4; PB2 pending measurement.
-
-## 6. Environment gotchas (each cost real time — respect them)
+## 6. Environment gotchas## 6. Environment gotchas (each cost real time — respect them)
 
 - **This shell's zsh is broken** (FUNCNEST/`__work` wrapper): bare
   `node`/`npx` invocations may explode. Use `node_modules/.bin/*`

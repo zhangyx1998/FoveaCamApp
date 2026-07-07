@@ -1,48 +1,20 @@
 # Refactor: Decouple Orchestrator from Renderer
 
-> **Status:** **Stage 2 committed (checkpoint #2, 2026-07-04). Stage 3
-> Rounds 1–3 (T1–T10) and Stage 4 Rounds A+B: all landed and
-> planner-verified (Round 3 + Stage 4 verified 2026-07-06).** V5/V6
-> fixed in Round 3; the Stage 4 review's V8/V9 seqlock findings were
-> fixed the same iteration — the first full dispatch-loop cycle through
-> split-of-work.md (dispatch → verify → steer → warm re-dispatch →
-> accept). All gates green on the whole tree (vitest 65/65; vue-tsc 0;
-> vite build clean; bundles clean; core both runtimes; otool
-> system-libs-only; shm native test pass). **The tree is commit-ready:
-> checkpoint #3 recommended** (everything since 2bd7b9d — Stage 3
-> R1–R3, Stage 4 A/B, contextIsolation flip, docs/workflow).
-> Backstory: PB1 (§6, first live session 2026-07-05) showed preview
-> transport saturating the orchestrator loop (47 ms mean lag); the user
-> greenlit the shm frame path (Stage 4), now canonical for eligible preview
-> streams. **Held:** Stage 4 Round C / PB2 (needs display
-> + cameras), V7 UI, hardware playbook A–H (mechanical rig).
-> Control-plane stays on MessagePort (REST considered & rejected — §4).
-> **2026-07-06 later: workers switched to Claude Sonnet 5 subagents;
-> PB3 fixed (A-4/A-5 accepted — async disparity tracker + shared
-> latest-wins frame-worker; sub-app fps ceiling removed, GUI check
-> pending). STAGE 5 program planned per user direction — see §7.1
-> Stage 5 pointer: multi-window.md / workload-metering.md /
-> recorder-container.md. **Round 1 dispatched 2026-07-06 (all three
-> roles in parallel):** A-6 multi-window foundation + A-7 window
-> chrome/titlebar (A, warm session); B-4 MCAP format evaluation with a
-> committed bench + GO/NO-GO (B, fresh); C-6 workload-metering core +
-> first-citizen wiring (C, fresh). Adopted defaults from
-> multi-window.md §5 (welcome closes on app open; switch-with-drain;
-> projection windows round 2) — user may veto while in flight.
-> **Round 1 COMPLETE & planner-accepted same day (first fully-parallel
-> 3-role Sonnet round): C-6 metering core, B-4 MCAP conditional-GO
-> (format decided), A-6/7/8 multi-window foundation + fullscreen fix +
-> metering export. Sweep on the settled tree: 120/120, all gates green.
-> Pending user: GUI smoke of the multi-window boot (checklist in the
-> round report), full-res recording tier decision, commit.**
-> **Dispatch-loop iteration 2 (2026-07-06, post-checkpoint-#3):** A
-> landed V7 interactive target placement (+V10 fix); B landed 12-bit
-> preview-safe format filtering — **12-bit readout is now code-complete
-> end to end** (UI half existed since 06-05; only rig A/B verification
-> remains) — and the serial-trace decoder for the P4.1 bench
-> (`core/scripts/decode-serial-trace.cjs`). All planner-verified; gates
-> 67/67 green. This work is **uncommitted** — fold into the next
-> checkpoint.
+> **Status:** **HARDWARE WALL REACHED (2026-07-06).** Every
+> hardware-free item is landed, planner-verified, and committed through
+> `eca38d8`. Autonomous run summary: Stages 2–4 complete (orchestrator
+> decoupling, shm-only frame transport, protocol v2 host side); Stage 5
+> complete code-side across 3 rounds of the 3-role Sonnet dispatch loop
+> — multi-window architecture (welcome/app/projection/viewer/profiler
+> window classes, drain-aware exclusivity, manifest restart-restore,
+> HMR boundaries, state-in-URL, titlebar fix), workload metering +
+> profiler reorganization, single-file `.fovea` (MCAP) recorder with
+> committed format bench, viewer (window + replay session over the shm
+> transport), `pyfovea` Python package, shared async KCF everywhere.
+> Findings V1–V13 + PB1/PB3 all fixed & verified; PB2 pending
+> measurement. **Everything that remains needs the user (GUI smoke,
+> bench decisions) or hardware (display+cameras or the rig) — see the
+> wall checklist in the session log / planner.md §5.**
 > **Branch:** `refactor/decouple-orchestrator`
 > **Owner:** Yuxuan (plan) / coder threads (implementation). Entries
 > marked **(coder)** are reports from an implementing agent; ✓ marks
