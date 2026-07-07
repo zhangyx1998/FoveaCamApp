@@ -1,7 +1,19 @@
 # Hardware Verification Playbook
 
-> **Status:** Prepared in advance (2026-07-04) — execute when the mechanical
-> rig work completes. **Run stages in order; do not skip ahead** — each
+> **⏸ PAUSED — todos cleared 2026-07-07 (refactor supersedes these surfaces).**
+> The 2026-07-07 HIL pass ran Pre-flight + PB2 and surfaced its findings
+> (`hil-findings.md`): tracking-single JS-loop saturation, the manage-cameras
+> per-frame-allocation freeze, two UI defects. Those findings drive the refactor
+> (`refactor-plan.md`), which rewrites the frame path, windowing, and firmware —
+> so the Stage A–E todos below are **cleared** (re-running them against
+> soon-to-change surfaces has low value). A **fresh HIL pass runs post-WS1**
+> against the new architecture. **Stage F/G (firmware v2 bench + live) remain the
+> live reference for WS4** — not cleared, just not yet reached (v2 flash gates
+> them). Original checklist preserved below for that reference and the
+> post-refactor re-run.
+>
+> **Status (original):** Prepared in advance (2026-07-04) — execute when the
+> mechanical rig work completes. **Run stages in order; do not skip ahead** — each
 > stage's pass is the next stage's precondition, and a failure anywhere is
 > attributable only if the stages before it passed.
 > **Owner:** Yuxuan runs the rig; findings filed per stage (see "on failure"
