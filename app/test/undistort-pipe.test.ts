@@ -4,13 +4,18 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// `undistort-pipe` (C-23, real-1g): the session-scoped `camera/<serial>/undistort`
-// advertise/retire helper, unit-tested over an injected fake seam (never loads
-// native core / the pipe session). Encoding is RULED: id `camera/<serial>/undistort`,
-// format in `spec.pixelFormat` (BGRA8), same dims as the camera.
+// `undistort-pipe` (C-23, real-1g; §5 re-chain): the session-scoped
+// `camera/<serial>/undistort` advertise/retire helper, unit-tested over an
+// injected fake seam (never loads native core / the pipe session). Encoding is
+// RULED: id `camera/<serial>/undistort`, format in `spec.pixelFormat` (BGRA8),
+// same dims as the camera. Since unified-time-and-topology §5 the brick CHAINS
+// ON THE SHARED CONVERTER — attach's source is `camera/<serial>/convert`, not
+// the Camera object — in one of two variants: intrinsic `{cal}` (center) or
+// `{homography: true}` (mirror-steered L/R).
 
 import { describe, expect, it, vi } from "vitest";
 import {
+  advertiseHomographyUndistortPipe,
   advertiseUndistortPipe,
   retireUndistortPipe,
   undistortPipeId,
@@ -36,8 +41,8 @@ const fakeCamera = () =>
     getFeatureInt: (name: string) => (name === "Width" ? 640 : 480),
   }) as never;
 
-describe("undistort-pipe (C-23)", () => {
-  it("advertises the ruled id + BGRA8 spec at camera dims, then attaches", () => {
+describe("undistort-pipe (C-23, §5 re-chain)", () => {
+  it("advertises the ruled id + BGRA8 spec at camera dims, then attaches CHAINED on the convert pipe", () => {
     const { seam, calls } = fakeSeam();
     const id = advertiseUndistortPipe(seam, fakeCamera(), CAL);
     expect(id).toBe("camera/SN42/undistort");
@@ -55,9 +60,42 @@ describe("undistort-pipe (C-23)", () => {
     });
     // Advertise BEFORE attach: the producer must find its pipe.
     expect(calls).toEqual(["advertise", "attach"]);
-    const attach = seam.attach as ReturnType<typeof vi.fn>;
-    expect(attach.mock.calls[0]![1]).toBe("camera/SN42/undistort");
-    expect(attach.mock.calls[0]![2]).toBe(CAL); // plain cal record, untouched
+    // §5: source = the SHARED converter's pipe id (legacy Camera arg retired);
+    // intrinsic variant carries the plain cal record, untouched.
+    expect(seam.attach).toHaveBeenCalledWith(
+      "camera/SN42/convert",
+      "camera/SN42/undistort",
+      { cal: CAL },
+    );
+  });
+
+  it("homography variant: same pipe spec, `{homography: true}` attach on the convert pipe", () => {
+    const { seam, calls } = fakeSeam();
+    const id = advertiseHomographyUndistortPipe(seam, fakeCamera());
+    expect(id).toBe("camera/SN42/undistort");
+    expect(calls).toEqual(["advertise", "attach"]);
+    const advertise = seam.advertise as ReturnType<typeof vi.fn>;
+    expect(advertise.mock.calls[0]![0]).toMatchObject({
+      id: "camera/SN42/undistort",
+      pixelFormat: "BGRA8",
+      width: 640,
+      height: 480,
+    });
+    expect(seam.attach).toHaveBeenCalledWith(
+      "camera/SN42/convert",
+      "camera/SN42/undistort",
+      { homography: true },
+    );
+  });
+
+  it("homography variant forwards an explicit ringCapacity", () => {
+    const { seam } = fakeSeam();
+    advertiseHomographyUndistortPipe(seam, fakeCamera(), 64);
+    expect(seam.attach).toHaveBeenCalledWith(
+      "camera/SN42/convert",
+      "camera/SN42/undistort",
+      { homography: true, ringCapacity: 64 },
+    );
   });
 
   it("retire detaches the producer BEFORE un-advertising", () => {

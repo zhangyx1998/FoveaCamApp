@@ -20,9 +20,8 @@ import {
   type ShmApi,
 } from "./frame-transport.js";
 import { Hub, setFrameTransportFactory, type ServerSession } from "./runtime.js";
-import { releaseAll, leasedCamera, setRegistryPipeSeam } from "./registry.js";
-import { loadIntrinsicCal } from "./calibration.js";
-import { pipeSession, asBroker } from "./pipe-session.js";
+import { releaseAll, setRegistryPipeSeam } from "./registry.js";
+import { pipeSession, asBroker, createFoveaMaterializer } from "./pipe-session.js";
 import { buildTopology } from "./graph-topology.js";
 import { registerNativeProbe, registerNodeReports, nodeReports } from "./native-probes.js";
 import type { WorkloadSnapshot } from "@lib/orchestrator/stats.js";
@@ -79,9 +78,9 @@ onSpan((s) => hub.reportSpan(s));
 // lazily (materialize runs long after module init — no TDZ).
 const aravisFovea = Aravis as unknown as {
   attachFoveaPipe(
-    camera: unknown,
+    sourcePipeId: string,
     pipeId: string,
-    opts: { rect: { x: number; y: number; width: number; height: number }; cal?: unknown },
+    opts: { rect: { x: number; y: number; width: number; height: number } },
   ): void;
   setFoveaRect(
     pipeId: string,
@@ -89,43 +88,17 @@ const aravisFovea = Aravis as unknown as {
   ): boolean;
   detachFoveaPipe(pipeId: string): void;
 };
-const foveaMaterializer: import("./pipe-session.js").NodeMaterializer = {
-  async materialize(req) {
-    const serial = req.id.split("/")[1] ?? "";
-    const camera = leasedCamera(serial);
-    if (!camera) throw new Error(`fovea: camera ${serial} is not leased`);
-    const p = (req.params ?? {}) as {
-      rect?: { x: number; y: number; width: number; height: number };
-      maxWidth?: number;
-      maxHeight?: number;
-    };
-    const rect = p.rect ?? { x: 0, y: 0, width: 256, height: 256 };
-    const maxWidth = p.maxWidth ?? 512;
-    const maxHeight = p.maxHeight ?? 512;
-    const channels = 4;
-    pipeBroker.advertise({
-      id: req.id,
-      pixelFormat: "BGRA8",
-      dtype: "U8",
-      width: rect.width,
-      height: rect.height,
-      channels,
-      stride: rect.width * channels,
-      bytesPerFrame: rect.width * rect.height * channels,
-      ringDepth: 4,
-      maxWidth,
-      maxHeight,
-      maxBytes: maxWidth * maxHeight * channels,
-    });
-    const cal = await loadIntrinsicCal(camera);
-    aravisFovea.attachFoveaPipe(camera, req.id, { rect, cal: cal ?? undefined });
-    return { kind: "fovea", output: { kind: "frame", pixelFormat: "BGRA8", dtype: "U8" } };
+// Unified-topology §5: fovea slots CHAIN on the camera's shared undistort
+// brick (else the shared converter — uncalibrated degrade). No per-fovea cal
+// loading: undistortion happens ONCE upstream; the fused map-ROI path and
+// the legacy Camera-source private chains have no production callers left.
+const foveaMaterializer = createFoveaMaterializer({
+  pipes: () => pipeBroker, // lazy — materialize runs long after init
+  brick: {
+    attach: (src, id, opts) => aravisFovea.attachFoveaPipe(src, id, opts),
+    detach: (id) => aravisFovea.detachFoveaPipe(id),
   },
-  teardown(id) {
-    aravisFovea.detachFoveaPipe(id);
-    pipeBroker.unadvertise(id);
-  },
-};
+});
 
 const pipeBroker = pipeSession({
   broker: asBroker(Pipe),

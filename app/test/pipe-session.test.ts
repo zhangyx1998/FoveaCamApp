@@ -4,7 +4,12 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { Channel, topic } from "@lib/orchestrator/protocol";
-import { pipeSession, type PipeBroker } from "@orchestrator/pipe-session";
+import {
+  createFoveaMaterializer,
+  pipeSession,
+  type FoveaBrickSeam,
+  type PipeBroker,
+} from "@orchestrator/pipe-session";
 import type { PipeSpec, PipeHandle } from "@lib/orchestrator/pipe-contract";
 import { createEndpointPair, flush } from "./fake-endpoint";
 
@@ -59,7 +64,7 @@ function fakeBroker() {
 
 function harness(specs: PipeSpec[]) {
   const { broker, consumers, advertised, epochs } = fakeBroker();
-  const { session, advertise, unadvertise } = pipeSession({ specs, broker });
+  const { session, advertise, unadvertise, isAdvertised } = pipeSession({ specs, broker });
   const [serverEp, clientEp] = createEndpointPair();
   const server = new Channel(serverEp);
   const client = new Channel(clientEp);
@@ -80,6 +85,7 @@ function harness(specs: PipeSpec[]) {
     epochs,
     advertise,
     unadvertise,
+    isAdvertised,
   };
 }
 
@@ -133,5 +139,108 @@ describe("pipe session (C-17/C-20)", () => {
     await expect(h.call("connectPipe", { pipeId: "nope" })).rejects.toThrow(
       /unknown pipeId/,
     );
+  });
+
+  it("isAdvertised tracks the live advertise/unadvertise lifecycle", async () => {
+    const h = harness([spec("camera/1/convert")]);
+    await flush();
+    expect(h.isAdvertised("camera/1/convert")).toBe(true);
+    expect(h.isAdvertised("camera/1/undistort")).toBe(false);
+    h.advertise(spec("camera/1/undistort"));
+    expect(h.isAdvertised("camera/1/undistort")).toBe(true);
+    h.unadvertise("camera/1/undistort");
+    expect(h.isAdvertised("camera/1/undistort")).toBe(false);
+  });
+});
+
+// --- fovea materializer (§5 re-chain: chained pipe-id source) --------------
+
+function materializerHarness(advertisedIds: string[]) {
+  const advertised = new Set(advertisedIds);
+  const specs: PipeSpec[] = [];
+  const calls: string[] = [];
+  const pipes = {
+    advertise: vi.fn((s: PipeSpec) => {
+      calls.push(`advertise:${s.id}`);
+      specs.push(s);
+      advertised.add(s.id);
+      return 1;
+    }),
+    unadvertise: vi.fn((id: string) => {
+      calls.push(`unadvertise:${id}`);
+      advertised.delete(id);
+    }),
+    isAdvertised: (id: string) => advertised.has(id),
+  };
+  const brick: FoveaBrickSeam = {
+    attach: vi.fn(() => calls.push("attach")),
+    detach: vi.fn((id: string) => calls.push(`detach:${id}`)),
+  };
+  const materializer = createFoveaMaterializer({ pipes: () => pipes, brick });
+  return { materializer, pipes, brick, specs, calls };
+}
+
+describe("createFoveaMaterializer (§5 chained fovea brick)", () => {
+  const ID = "camera/SN1/undistort/fovea/2";
+  const req = (params?: Record<string, unknown>) =>
+    ({ id: ID, kind: "fovea", inputs: {}, params }) as never;
+
+  it("chains on the camera's UNDISTORT pipe when its brick is live", async () => {
+    const h = materializerHarness(["camera/SN1/convert", "camera/SN1/undistort"]);
+    const advert = await h.materializer.materialize(req());
+    expect(advert).toEqual({
+      kind: "fovea",
+      output: { kind: "frame", pixelFormat: "BGRA8", dtype: "U8" },
+    });
+    expect(h.brick.attach).toHaveBeenCalledWith("camera/SN1/undistort", ID, {
+      rect: { x: 0, y: 0, width: 256, height: 256 },
+    });
+  });
+
+  it("falls back to the CONVERT pipe when no undistort brick is live (uncalibrated rig)", async () => {
+    const h = materializerHarness(["camera/SN1/convert"]);
+    await h.materializer.materialize(req());
+    expect(h.brick.attach).toHaveBeenCalledWith("camera/SN1/convert", ID, {
+      rect: { x: 0, y: 0, width: 256, height: 256 },
+    });
+  });
+
+  it("fails loudly when the camera has no live pipes (not leased)", async () => {
+    const h = materializerHarness([]);
+    await expect(async () => h.materializer.materialize(req())).rejects.toThrow(
+      /no live convert\/undistort pipe/,
+    );
+    expect(h.pipes.advertise).not.toHaveBeenCalled();
+    expect(h.brick.attach).not.toHaveBeenCalled();
+  });
+
+  it("advertises the C-20 max-footprint spec (advertise BEFORE attach)", async () => {
+    const h = materializerHarness(["camera/SN1/convert"]);
+    const rect = { x: 8, y: 8, width: 128, height: 64 };
+    await h.materializer.materialize(req({ rect, maxWidth: 512, maxHeight: 256 }));
+    expect(h.specs[0]).toEqual({
+      id: ID,
+      pixelFormat: "BGRA8",
+      dtype: "U8",
+      width: 128,
+      height: 64,
+      channels: 4,
+      stride: 128 * 4,
+      bytesPerFrame: 128 * 64 * 4,
+      ringDepth: 4,
+      maxWidth: 512,
+      maxHeight: 256,
+      maxBytes: 512 * 256 * 4,
+    });
+    expect(h.calls).toEqual([`advertise:${ID}`, "attach"]);
+    expect(h.brick.attach).toHaveBeenCalledWith("camera/SN1/convert", ID, { rect });
+  });
+
+  it("teardown detaches the brick BEFORE dropping the pipe", async () => {
+    const h = materializerHarness(["camera/SN1/convert"]);
+    await h.materializer.materialize(req());
+    h.calls.length = 0;
+    h.materializer.teardown(ID);
+    expect(h.calls).toEqual([`detach:${ID}`, `unadvertise:${ID}`]);
   });
 });

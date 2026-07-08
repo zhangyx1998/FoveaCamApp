@@ -36,6 +36,8 @@ import {
   type NodeAdvert,
   type ComposeRequest,
 } from "@lib/orchestrator/pipe-contract.js";
+import { nodeId } from "@lib/orchestrator/graph-contract.js";
+import type { Rect } from "core/Geometry";
 
 /** The publisher-broker surface the session drives — exactly the `core.Pipe`
  *  shape needed here (a subset of its exports). `advertise` returns the epoch. */
@@ -90,6 +92,9 @@ export interface PipeSessionHandle {
   session: ServerSession<typeof pipes>;
   advertise(spec: PipeSpec): number; // returns the epoch
   unadvertise(pipeId: string): void;
+  /** Live-advertised check — the fovea materializer resolves its CHAIN source
+   *  with it (undistort brick live for the camera? else convert). */
+  isAdvertised(pipeId: string): boolean;
 }
 
 const ANON = ""; // ledger key for calls without an authoritative windowId
@@ -251,5 +256,93 @@ export function pipeSession(deps: PipeSessionDeps): PipeSessionHandle {
     };
   });
 
-  return { session, advertise, unadvertise };
+  return {
+    session,
+    advertise,
+    unadvertise,
+    isAdvertised: (pipeId: string) => pipeId in advertised,
+  };
+}
+
+// --- fovea crop brick materializer (C-24 step 4, re-chained per
+// docs/proposals/unified-time-and-topology.md §5) --------------------------
+
+/** The native fovea brick half the materializer drives —
+ *  `Aravis.attachFoveaPipe`/`detachFoveaPipe` with a PIPE-ID source (the
+ *  chained form: fovea crops the undistort/convert brick's frames; the legacy
+ *  Camera-object source and its fused map-ROI `cal` are retired). Injected so
+ *  the materializer and its vitest never load native core. */
+export interface FoveaBrickSeam {
+  attach(sourcePipeId: string, pipeId: string, options: { rect: Rect }): void;
+  detach(pipeId: string): void;
+}
+
+export interface FoveaMaterializerDeps {
+  /** The pipe session handle's dynamic-lifecycle controls — LAZY (the handle
+   *  exists only after `pipeSession(...)` returns, but the materializer must
+   *  be passed INTO it; materialize runs long after build, no TDZ). */
+  pipes(): Pick<PipeSessionHandle, "advertise" | "unadvertise" | "isAdvertised">;
+  brick: FoveaBrickSeam;
+}
+
+/**
+ * Build the `fovea` NodeMaterializer: advertise the C-20 max-footprint pipe
+ * and attach the native crop brick CHAINED on the camera's shared undistort
+ * brick when one is live (a triple session advertised
+ * `camera/<serial>/undistort`), else on the shared converter — uncalibrated
+ * rigs degrade to converted-raw crops exactly like the old raw fallback. No
+ * calibration loading: undistortion happens ONCE upstream in the chain (the
+ * fused map-ROI path is retired natively). Teardown detaches the brick then
+ * drops the pipe. C-20 churn semantics (max footprint, epoch bump on id
+ * reuse, slot reuse) are carried by advertise/compose exactly as before.
+ */
+export function createFoveaMaterializer(deps: FoveaMaterializerDeps): NodeMaterializer {
+  return {
+    materialize(req: ComposeRequest): Pick<NodeAdvert, "kind" | "output"> {
+      const serial = req.id.split("/")[1] ?? "";
+      const pipes = deps.pipes();
+      const undistortId = nodeId.undistort(serial);
+      const convertId = nodeId.convert(serial);
+      const source = pipes.isAdvertised(undistortId)
+        ? undistortId
+        : pipes.isAdvertised(convertId)
+          ? convertId
+          : null;
+      // A fovea is composable only while its camera is live — the shared
+      // converter pipe exists exactly while the camera is leased (registry).
+      if (!source)
+        throw new Error(
+          `fovea: no live convert/undistort pipe for camera ${serial} (not leased?)`,
+        );
+      const p = (req.params ?? {}) as {
+        rect?: Rect;
+        maxWidth?: number;
+        maxHeight?: number;
+      };
+      const rect = p.rect ?? { x: 0, y: 0, width: 256, height: 256 };
+      const maxWidth = p.maxWidth ?? 512;
+      const maxHeight = p.maxHeight ?? 512;
+      const channels = 4;
+      pipes.advertise({
+        id: req.id,
+        pixelFormat: "BGRA8",
+        dtype: "U8",
+        width: rect.width,
+        height: rect.height,
+        channels,
+        stride: rect.width * channels,
+        bytesPerFrame: rect.width * rect.height * channels,
+        ringDepth: 4,
+        maxWidth,
+        maxHeight,
+        maxBytes: maxWidth * maxHeight * channels,
+      });
+      deps.brick.attach(source, req.id, { rect });
+      return { kind: "fovea", output: { kind: "frame", pixelFormat: "BGRA8", dtype: "U8" } };
+    },
+    teardown(id: string): void {
+      deps.brick.detach(id);
+      deps.pipes().unadvertise(id);
+    },
+  };
 }

@@ -35,10 +35,16 @@ import {
 import { createVisionWorker, type VisionWorkerHandle } from "@orchestrator/vision-worker-host";
 import type { DisplayParams, DisplayValues } from "@orchestrator/display-transport";
 import {
+  advertiseHomographyUndistortPipe,
   advertiseUndistortPipe,
   retireUndistortPipe,
   type UndistortPipeSeam,
 } from "@orchestrator/undistort-pipe";
+import {
+  conversionComputeH,
+  startHomographyFeeder,
+} from "@orchestrator/homography-feeder";
+import { pushHomography } from "core/Aravis";
 import { nodeId } from "@lib/orchestrator/graph-contract";
 import { registerGraphWiring } from "@orchestrator/graph-topology";
 import type { PipeBroker } from "@orchestrator/pipe-session";
@@ -327,6 +333,30 @@ export default function trackingSession(
         scope.defer(() => {
           retireUndistortPipe(undistortSeam, undistortC!);
           s.setState("undistortPipe", null);
+        });
+      }
+
+      // Unified-topology §5: the mirror-steered L/R cameras get HOMOGRAPHY
+      // undistort bricks chained on their shared converters, each fed
+      // H(mirrorAt(t)) at ~200 Hz from the actuation loop's mirror history
+      // (v1 derivation: the display path's A2H∘V2A — see homography-feeder).
+      // Consumer-gated like every pipe (parked until someone reads); an empty
+      // ring passes frames through untouched.
+      const computeH = conversionComputeH(t.conv);
+      for (const side of ["L", "R"] as const) {
+        const pipeId = advertiseHomographyUndistortPipe(
+          undistortSeam,
+          t.leases[side].camera,
+        );
+        const stopFeeder = startHomographyFeeder({
+          pipeId,
+          side,
+          computeH,
+          push: pushHomography,
+        });
+        scope.defer(() => {
+          stopFeeder(); // stop pushing BEFORE the brick detaches
+          retireUndistortPipe(undistortSeam, pipeId);
         });
       }
 

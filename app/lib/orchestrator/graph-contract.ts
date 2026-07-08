@@ -188,10 +188,12 @@ export const nodeId = {
   kcfMulti: (serial: string): string => `camera/${serial}/kcf-multi`,
   /** Marker detector stream (non-pipe transport). */
   detect: (serial: string): string => `camera/${serial}/detect`,
-  /** Dynamic fovea crop pipe (B-24 brick; slot reuse is epoch-guarded). NOTE:
-   *  the id nests under /undistort/ (it IS a crop of the undistorted space) but
-   *  the PHYSICAL edge is camera→fovea (B's fused map-ROI remap taps the raw
-   *  stream) — the topology renders the physical edge. */
+  /** Dynamic fovea crop pipe (B-24 brick; slot reuse is epoch-guarded). The id
+   *  nests under /undistort/ (it IS a crop of the undistorted space); since the
+   *  §5 re-chain the PHYSICAL dataflow matches — the brick chains on the
+   *  camera's shared undistort (or convert, uncalibrated fallback) brick, and
+   *  chained bricks self-report that edge via Topology.report(). The legacy
+   *  pipe-row derivation still renders camera→fovea for unreported rows. */
   fovea: (serial: string, slot: number): string =>
     `camera/${serial}/undistort/fovea/${slot}`,
   /** Window-composed node (kernels, private compositions). */

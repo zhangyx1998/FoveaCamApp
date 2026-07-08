@@ -23,10 +23,16 @@ import { activeController, type StreamHandle } from "@orchestrator/controller";
 import { RoundRobinFrameScheduler } from "@orchestrator/scheduler";
 import { publishSerials, releaseLeases } from "@orchestrator/session-resources";
 import {
+  advertiseHomographyUndistortPipe,
   advertiseUndistortPipe,
   retireUndistortPipe,
   type UndistortPipeSeam,
 } from "@orchestrator/undistort-pipe";
+import {
+  conversionComputeH,
+  startHomographyFeeder,
+} from "@orchestrator/homography-feeder";
+import { pushHomography } from "core/Aravis";
 import { registerNativeProbe } from "@orchestrator/native-probes";
 import { nodeId } from "@lib/orchestrator/graph-contract";
 import type { PipeBroker } from "@orchestrator/pipe-session";
@@ -249,6 +255,31 @@ export default function multiFoveaSession(
         scope.defer(() => {
           retireUndistortPipe(undistortSeam, undistortC!);
           s.setState("undistortPipe", null);
+        });
+      }
+
+      // Unified-topology §5: L/R mirror-steered HOMOGRAPHY undistort bricks,
+      // chained on the shared converters + fed H(mirrorAt(t)) at ~200 Hz
+      // (same wiring as tracking-single — see homography-feeder for the v1
+      // A2H∘V2A derivation + its open direction question). The renderer-
+      // composed fovea crop slots chain on the CENTER camera's intrinsic
+      // undistort (advertised above) when calibrated, else its converter —
+      // `createFoveaMaterializer` resolves that per camera.
+      const computeH = conversionComputeH(t.conv);
+      for (const side of ["L", "R"] as const) {
+        const pipeId = advertiseHomographyUndistortPipe(
+          undistortSeam,
+          t.leases[side].camera,
+        );
+        const stopFeeder = startHomographyFeeder({
+          pipeId,
+          side,
+          computeH,
+          push: pushHomography,
+        });
+        scope.defer(() => {
+          stopFeeder(); // stop pushing BEFORE the brick detaches
+          retireUndistortPipe(undistortSeam, pipeId);
         });
       }
       // B-25: the multi-target KCF thread, bound to the shared center stream,
