@@ -180,6 +180,13 @@ onUnmounted(() => {
     padding: 0.2ch 0.8ch;
     border-radius: 0.4ch;
 
+    // Non-home-button titles join the draggable chrome, but stay
+    // content-sized — .draggable's height:100% is for the strip spacers and
+    // would pin the label to the top of the bar.
+    &.draggable {
+      height: auto;
+    }
+
     // Back-to-home affordance only when opted in (app windows). No hover
     // tooltip in any case; non-home-button titles are draggable chrome.
     &.home-button:hover {
