@@ -18,6 +18,7 @@ import {
   volt2dac,
   type Pos,
 } from "@lib/controller-codec";
+import { registerWorkload, type WorkloadHandle } from "./metering.js";
 
 type PortInfo = Awaited<ReturnType<typeof SerialPort.list>>[number];
 
@@ -132,6 +133,16 @@ export class Controller {
     number,
     { count: number; left: Pos; right: Pos }
   >();
+  /** Observe-only serial WRITE meter (A-29). One `packets` output is emitted on
+   *  every packet pushed to the wire — the awaited `set`/`actuate`/stream
+   *  create+terminate + `frame` paths AND the fire-and-forget stream `update`
+   *  hot path — so the serial send rate becomes a first-class
+   *  `perfSnapshot.workloads` row (`controller:<port>`) the A-26 profiler sorts
+   *  and flags. It was previously invisible (only `loopLag` hinted at the
+   *  ~40 Hz cap). The `actuate()` round-trip is also timed as busy. NEVER gates:
+   *  `emit`/`measure` are safe no-ops post-dispose and always run the wrapped
+   *  send unchanged (the metering "observe, never gate" contract). */
+  private readonly serialMeter: WorkloadHandle;
 
   constructor(
     info: PortInfo,
@@ -140,6 +151,10 @@ export class Controller {
     lpf: number = 120,
     log_level: LogLevel = "INFO",
   ) {
+    this.serialMeter = registerWorkload(`controller:${info.path}`, {
+      inputs: [],
+      outputs: ["packets"],
+    });
     this.device = new Device(info.path);
     const device = this.device;
     this.ready = (async () => {
@@ -193,6 +208,7 @@ export class Controller {
   }
 
   release() {
+    this.serialMeter.dispose();
     this.device.release();
   }
 
@@ -202,6 +218,9 @@ export class Controller {
   }
   private set<T>(prop: any, arg: T) {
     if (!this.device.connected) throw new Error("Controller not connected");
+    // Covers enable/disable/setBias/setLPF/setLogLevel/trigger — every config
+    // + command write routed through here is one serial packet.
+    this.serialMeter.emit("packets");
     return this.device.set(prop, arg as any);
   }
 
@@ -238,13 +257,15 @@ export class Controller {
     // `settle_time`/`complete_time` are the NATIVE core `Device.set` protocol
     // field names (B-owned) — they stay snake_case at this boundary; only the
     // wire-facing param/return are camelCased (A-P7).
-    const { left, right, complete_time } = await this.device.set(
-      Protocol.Command.Actuate,
-      {
+    this.serialMeter.emit("packets");
+    // `measure` times the actuate round-trip as busy while running the send
+    // unchanged (span stays open until the awaited set settles).
+    const { left, right, complete_time } = await this.serialMeter.measure(() =>
+      this.device.set(Protocol.Command.Actuate, {
         left: channels(pos.left ?? this._pos.left, this.bias, this.dv),
         right: channels(pos.right ?? this._pos.right, this.bias, this.dv),
         settle_time: settleTime,
-      },
+      }),
     );
     const new_pos = {
       left: { x: dac2volt(left[0] - left[1]), y: dac2volt(left[2] - left[3]) },
@@ -277,6 +298,7 @@ export class Controller {
       );
     const id = this.streamIds.allocate();
     try {
+      this.serialMeter.emit("packets");
       await this.device.set(Protocol.Command.MirrorStream, {
         op: "CREATE",
         id,
@@ -301,6 +323,9 @@ export class Controller {
           left: channels(next.left, this.bias, this.dv),
           right: channels(next.right, this.bias, this.dv),
         });
+        // The ~kHz-capable stream hot path — `emit` is an O(1) counter bump,
+        // never a gate on the fire-and-forget write.
+        this.serialMeter.emit("packets");
         const stats = this.streamStats.get(id);
         if (stats) {
           stats.count++;
@@ -312,6 +337,7 @@ export class Controller {
         if (closed) return;
         closed = true;
         try {
+          this.serialMeter.emit("packets");
           await this.device.set(Protocol.Command.MirrorStream, {
             op: "TERMINATE",
             id,
@@ -341,6 +367,7 @@ export class Controller {
       throw new Error(
         "frame requires v2-capable firmware (verifyVersion() has not confirmed compatibility)",
       );
+    this.serialMeter.emit("packets");
     const req = this.device.get(Protocol.Command.Frame, opts as FrameArg);
     const accepted = req.accepted;
     const completed = (async (): Promise<FrameOutcome> => {
