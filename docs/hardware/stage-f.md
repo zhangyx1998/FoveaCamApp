@@ -72,6 +72,23 @@ names the mechanism it gates.
 - [ ] **Disconnect disables** — title-bar controller disconnect while
   enabled: device echoes `MEMS Disable` before the port is released.
 
+## Round-2 fixes (2026-07-08, commit 6bd5794) — ⚠ FLASH FIRMWARE FIRST (`cd firmware && make upload`)
+
+- [ ] **Mirror follows streamed targets** — manual-control drag: the physical
+  mirrors track the commanded position (firmware fix: CREATE auto-activates
+  the DAC-driving stream; previously only CMD_FRAME captures activated one —
+  mirrors stayed at origin).
+- [ ] **Pipeline graph renders** — every app shows its node graph; snapshot
+  export saves and the folder button reveals the file (perfSnapshot no longer
+  rejects on live converter/tracker probe rows).
+- [ ] **Stream update rate at input rate** — dragging in manual-control shows
+  `controller:<port>` packets and the per-stream Hz well above 60 (device
+  polling rate via pointerrawupdate; wire path is kHz-capable).
+- [ ] **fps ceiling** — with the graph live, read the CAMERA node's output
+  rate: if it's already 30, the cap is stored config (manage-cameras
+  frame_rate / exposure > ~16 ms), not the pipeline; 4-buffer stream slack
+  landed either way.
+
 ## Blocked (hardware change required)
 
 - [ ] **Center-camera hardware trigger** — needs the slimmer CAM0 cable
