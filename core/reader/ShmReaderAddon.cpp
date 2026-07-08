@@ -19,20 +19,31 @@ using namespace Napi;
 
 namespace {
 
+// Per-ENV addon state. The `Reader` class constructor reference MUST be
+// per-environment, not a process-global static: this addon is loaded into a
+// fresh V8 env in every worker_thread (the vision-worker bridge, WS1 real-1f),
+// and a global static would be overwritten by the last env to load + left
+// dangling when that env (e.g. a terminated worker) is torn down — the main
+// thread's next `open()` then dereferences a dead Isolate and segfaults
+// (B-19a repro). Stored via `SetInstanceData` → freed on env teardown while
+// N-API is still valid, so the reference destructs cleanly.
+struct AddonData {
+  FunctionReference constructor;
+};
+
 class ReaderObject : public ObjectWrap<ReaderObject> {
-  static FunctionReference constructor;
   std::unique_ptr<ShmRing::ReadMapping> mapping;
 
 public:
   static Function Init(Napi::Env env) {
     auto fn = DefineClass(env, "Reader", {});
-    constructor = Persistent(fn);
-    constructor.SuppressDestruct();
+    env.GetInstanceData<AddonData>()->constructor = Persistent(fn);
     return fn;
   }
 
   static Object Create(Napi::Env env, const std::string &name) {
-    return constructor.New({String::New(env, name)});
+    return env.GetInstanceData<AddonData>()->constructor.New(
+        {String::New(env, name)});
   }
 
   ReaderObject(const CallbackInfo &info) : ObjectWrap<ReaderObject>(info) {
@@ -52,8 +63,6 @@ public:
 
   void close() { mapping.reset(); }
 };
-
-FunctionReference ReaderObject::constructor;
 
 ReaderObject *unwrapReader(const Value &value) {
   if (!value.IsObject())
@@ -160,6 +169,9 @@ Value closeReader(const CallbackInfo &info) {
 }
 
 Object init(Env env, Object exports) {
+  // Per-env state (see AddonData) — set BEFORE Init so it can store the
+  // constructor. Freed by N-API on env teardown.
+  env.SetInstanceData(new AddonData());
   ReaderObject::Init(env);
   exports.Set("open", Function::New(env, open, "open"));
   exports.Set("latestSeq", Function::New(env, latestSeq, "latestSeq"));
