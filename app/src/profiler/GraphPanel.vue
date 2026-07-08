@@ -26,6 +26,7 @@ import cytoscape from "cytoscape";
 import dagre from "cytoscape-dagre";
 import { FontAwesomeIcon as Icon } from "@fortawesome/vue-fontawesome";
 import {
+  faArrowsToDot,
   faCompress,
   faExpand,
   faRotateLeft,
@@ -194,7 +195,19 @@ function apply(t: GraphTopology): void {
 // --- Vertical resize (persisted) ---------------------------------------------
 
 const height = ref(parseGraphHeight(localStorage.getItem(GRAPH_HEIGHT_KEY)));
-watch(height, () => requestAnimationFrame(() => cy?.resize()));
+
+// Center-anchored resize: `cy.resize()` alone keeps the top-left model point
+// fixed, so growing/shrinking the canvas visually shoves the graph around
+// its corner. Pan by half the size delta so the canvas CENTER stays put.
+function resizeAnchored(): void {
+  if (!cy) return;
+  const w0 = cy.width();
+  const h0 = cy.height();
+  cy.resize();
+  cy.panBy({ x: (cy.width() - w0) / 2, y: (cy.height() - h0) / 2 });
+}
+
+watch(height, () => requestAnimationFrame(resizeAnchored));
 
 function persistHeight(): void {
   localStorage.setItem(GRAPH_HEIGHT_KEY, String(height.value));
@@ -247,10 +260,14 @@ function toggleFullscreen(): void {
 }
 function onFullscreenChange(): void {
   isFullscreen.value = document.fullscreenElement === panelRoot.value;
-  requestAnimationFrame(() => cy?.resize());
+  requestAnimationFrame(resizeAnchored);
 }
 
-// --- Reset ----------------------------------------------------------------------
+// --- Fit / reset -------------------------------------------------------------
+
+function fitView(): void {
+  cy?.fit(undefined, 12);
+}
 
 function resetLayout(): void {
   dragged.clear();
@@ -268,14 +285,19 @@ function resetLayout(): void {
 
 const hover = ref<{ text: string; x: number; y: number } | null>(null);
 
-// Cursor semantics over the canvas: whitespace + nodes are grab-draggable
-// (pan / node drag) → "grab", "grabbing" while a button is down; edges carry
-// the hover tooltip → "pointer". The graph is a <canvas>, so the cursor is
-// driven from cytoscape events instead of CSS selectors.
+// Cursor semantics over the canvas — each interaction gets its own cursor:
+// whitespace pans → "grab" ("grabbing" while a button is down), nodes drag →
+// "move" (4-way arrows, distinct from panning), edges carry the hover
+// tooltip → "pointer". The graph is a <canvas>, so the cursor is driven from
+// cytoscape events instead of CSS selectors.
 const cursor = ref("grab");
 let overEdge = false;
+let overNode = false;
 function settleCursor(): void {
-  cursor.value = overEdge ? "pointer" : "grab";
+  cursor.value = overEdge ? "pointer" : overNode ? "move" : "grab";
+}
+function onPointerDown(): void {
+  cursor.value = overNode ? "move" : "grabbing";
 }
 function onPointerUp(): void {
   settleCursor();
@@ -296,8 +318,16 @@ onMounted(() => {
   });
   // Hover feedback: the .hover overlay halo (see STYLE) on both element
   // kinds; edges additionally show the flow-detail tooltip + pointer cursor.
-  cy.on("mouseover", "node", (evt) => evt.target.addClass("hover"));
-  cy.on("mouseout", "node", (evt) => evt.target.removeClass("hover"));
+  cy.on("mouseover", "node", (evt) => {
+    evt.target.addClass("hover");
+    overNode = true;
+    settleCursor();
+  });
+  cy.on("mouseout", "node", (evt) => {
+    evt.target.removeClass("hover");
+    overNode = false;
+    settleCursor();
+  });
   cy.on("mouseover", "edge", (evt) => {
     evt.target.addClass("hover");
     overEdge = true;
@@ -314,7 +344,7 @@ onMounted(() => {
     hover.value = null;
   });
   container.value?.addEventListener("wheel", onWheel, { passive: false });
-  container.value?.addEventListener("pointerdown", () => (cursor.value = "grabbing"));
+  container.value?.addEventListener("pointerdown", onPointerDown);
   window.addEventListener("pointerup", onPointerUp);
   document.addEventListener("fullscreenchange", onFullscreenChange);
   if (props.topology) apply(props.topology);
@@ -347,19 +377,27 @@ onBeforeUnmount(() => {
     <div class="chips">
       <button
         type="button"
-        @click="toggleFullscreen"
-        :title="isFullscreen ? 'Exit full screen' : 'Show the graph full screen'"
-        :aria-label="isFullscreen ? 'Exit full screen' : 'Full screen'"
-      >
-        <Icon :icon="isFullscreen ? faCompress : faExpand" />
-      </button>
-      <button
-        type="button"
         @click="resetLayout"
         title="Forget dragged positions, re-run auto layout, reset zoom/pan and panel height"
         aria-label="Reset layout"
       >
         <Icon :icon="faRotateLeft" />
+      </button>
+      <button
+        type="button"
+        @click="fitView"
+        title="Fit the whole graph into view"
+        aria-label="Fit into view"
+      >
+        <Icon :icon="faArrowsToDot" />
+      </button>
+      <button
+        type="button"
+        @click="toggleFullscreen"
+        :title="isFullscreen ? 'Exit full screen' : 'Show the graph full screen'"
+        :aria-label="isFullscreen ? 'Exit full screen' : 'Full screen'"
+      >
+        <Icon :icon="isFullscreen ? faCompress : faExpand" />
       </button>
     </div>
     <div
@@ -406,7 +444,7 @@ onBeforeUnmount(() => {
   .chips {
     position: absolute;
     top: 8px;
-    left: 8px;
+    right: 8px;
     display: flex;
     gap: 6px;
     z-index: 2;
