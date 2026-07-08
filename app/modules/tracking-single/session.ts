@@ -116,10 +116,16 @@ export default function trackingSession(
       const undistort = triple?.undistort;
       if (!undistort || !tk) return;
       const size = { width: s.state.tracker_w, height: s.state.tracker_h };
-      const roi = RECT.fromCenter(
-        undistort.position([undistort.angular([center], false)[0]], false)[0],
-        size,
-      );
+      // The native full-frame KCF reads the RAW center stream, so arm it in RAW
+      // sensor pixels: undistorted click → angle → distorted (raw) pixel. This
+      // is the exact inverse of `undistortedCenter` (which maps the native raw
+      // bbox back to undistorted display space). The old code passed
+      // `distort = false` to `position`, which returns the ideal/undistorted
+      // pixel — i.e. it armed the tracker in the wrong space (an identity round
+      // trip), grabbing the KCF template off-target by the local distortion.
+      const angle = undistort.angular([center], false)[0];
+      const rawCenter = undistort.position([angle], true)[0];
+      const roi = RECT.fromCenter(rawCenter, size);
       const x = Math.max(0, Math.round(roi.x));
       const y = Math.max(0, Math.round(roi.y));
       const w = Math.min(width - x, Math.round(roi.width));
@@ -132,7 +138,10 @@ export default function trackingSession(
       target = center;
       lastFrameTime = now();
       kinematic.push(center.x, center.y, lastFrameTime);
-      s.telemetry({ active: true, bbox: { x, y, width: w, height: h }, target });
+      // The overlay box lives in UNDISTORTED display space (its backdrop is the
+      // undistorted wide view, and the target dot is undistorted) — publish it
+      // centered on the click, not the raw ROI armed above.
+      s.telemetry({ active: true, bbox: RECT.fromCenter(center, size), target });
     }
 
     /** Map a native (RAW center-pixel) bbox to the UNDISTORTED target space. */
@@ -154,7 +163,15 @@ export default function trackingSession(
           lastFrameTime = now_;
           kinematic.push(center.x, center.y, now_);
           target = kinematic.predict(now_) ?? center;
-          s.telemetry({ bbox, target });
+          // `bbox` is RAW center-sensor pixels; the overlay draws over the
+          // UNDISTORTED wide view. Publish the box in undistorted space,
+          // centered on the undistorted measurement (so it stays aligned with
+          // the frame and the predicted-target dot) — the pre-fix code shipped
+          // the raw box straight through, offset by the local distortion.
+          s.telemetry({
+            bbox: RECT.fromCenter(center, { width: bbox.width, height: bbox.height }),
+            target,
+          });
         },
         onLost: () => {
           target = lastGood;

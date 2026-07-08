@@ -26,6 +26,7 @@ vi.mock("core/Vision", () => ({
 
 import { PID } from "@lib/pid";
 import {
+  foveaTileSize,
   stepVergence,
   type VergenceAnalysis,
   type VergencePIDs,
@@ -64,6 +65,58 @@ function analysisFor(target: Point2d, matchedL: Point2d, matchedR: Point2d, scor
     oy: 0,
   };
 }
+
+// The fovea↔wide template match is only meaningful when the fovea tile and the
+// wide guide strip render the SAME angular content at the SAME pixel scale. The
+// fovea frame spans the wide FOV divided by the magnification `zoom`, so in
+// wide-frame pixels it covers `width / zoom`; the guide strip is downsampled by
+// `scale`, so that same footprint is `(width / zoom) * scale` strip pixels. The
+// fovea tile MUST be resized to exactly that many pixels — i.e. `foveaTileSize`
+// must apply the magnification identically to both sides. These pin that
+// invariant so a regression that dropped `zoom` from one side (matching a
+// full-resolution fovea against an un-demagnified strip — the "same pixel scale"
+// class of bug) can't pass silently.
+//
+// NOTE (audit 2026-07): the magnification used here is the session's nominal
+// `zoom` STATE (default 9.0), not the calibration-measured fovea/wide ratio
+// (`findPinholeProjection` measures it as `scale` but discards it). The math is
+// self-consistent for any `zoom`; correctness of the *absolute* scale still
+// hinges on `zoom` matching the real optics — see docs/applications/
+// disparity-scope.md.
+describe("foveaTileSize (fovea↔wide match scale-consistency)", () => {
+  const stripFootprintPx = (width: number, zoom: number, scale: number) =>
+    (width / zoom) * scale;
+
+  it("resizes the fovea tile to the strip footprint of one fovea frame", () => {
+    for (const zoom of [1, 4, 9, 12.5]) {
+      for (const scale of [1, 3, 9]) {
+        const { width, height } = foveaTileSize({
+          width: 1440,
+          height: 1080,
+          zoom,
+          scale,
+        });
+        expect(width).toBeCloseTo(stripFootprintPx(1440, zoom, scale));
+        expect(height).toBeCloseTo(stripFootprintPx(1080, zoom, scale));
+      }
+    }
+  });
+
+  it("keeps tile:strip pixel ratio at 1:1 regardless of zoom (both demagnify by zoom)", () => {
+    // A fixed physical patch spanning `wPx` wide-frame pixels lands on the strip
+    // as `wPx * scale` px and on the fovea tile as `wPx * scale` px too — the
+    // `zoom` factor cancels between the two sides. If it didn't cancel, CCOEFF
+    // template matching (not scale-invariant) would fail.
+    const scale = 3;
+    const wPx = 20; // a patch 20 wide-pixels across
+    for (const zoom of [1, 6, 9, 15]) {
+      const tile = foveaTileSize({ width: 1440, height: 1080, zoom, scale });
+      const tilePxPerWidePx = tile.width / (1440 / zoom); // fovea-frame → tile
+      const stripPxPerWidePx = scale; // wide strip downsample factor
+      expect(tilePxPerWidePx * wPx).toBeCloseTo(stripPxPerWidePx * wPx);
+    }
+  });
+});
 
 describe("stepVergence", () => {
   it("holds (returns null) and leaves the PIDs untouched when either match score is below minScore", () => {

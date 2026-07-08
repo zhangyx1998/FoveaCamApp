@@ -79,18 +79,27 @@ onMounted(() => {
     state.baseline = app_config.baseline_distance_mm;
 });
 
-// Mouse: drag steers the target directly; releasing engages the tracker there.
-const dragging = ref(false);
+// Mouse: while the primary button is held, dragging steers the target directly;
+// releasing it engages the tracker at that point.
+//
+// StreamView's `@mouse` stream fires on EVERY pointer move over the canvas —
+// including button-less hover — and only emits `null` on mouse-LEAVE, not on
+// button-up. The pre-fix code treated any non-null event as a drag and only
+// armed on `null`, so a normal press-drag-release inside the view never fired
+// `startTracker` (the box only appeared if the cursor happened to leave the
+// frame). Synthesize press/drag/release from the `buttons` bitmask instead —
+// the same pattern disparity-scope's pointer handler uses.
+let wasDown = false;
 let lastSteer: Point2d = { x: 0, y: 0 };
 function onCursor(c: (Point2d & Size & { buttons: number }) | null) {
-  if (c) {
-    dragging.value = true;
-    lastSteer = { x: c.x, y: c.y };
+  const down = c !== null && (c.buttons & 1) !== 0;
+  if (c) lastSteer = { x: c.x, y: c.y };
+  if (down) {
     session.call("steer", lastSteer);
-  } else if (dragging.value) {
-    dragging.value = false;
+  } else if (wasDown) {
     session.call("startTracker", lastSteer);
   }
+  wasDown = down;
 }
 
 const releaseTracker = () => session.call("releaseTracker", undefined);
