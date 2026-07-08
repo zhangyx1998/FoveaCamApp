@@ -40,7 +40,7 @@ export interface ResourceScope {
    *  already draining/cancelled, the cleanup runs immediately so a
    *  late-registered resource can't leak. */
   defer(cleanup: () => void | Promise<void>): void;
-  /** DisposerBag-compatible sync alias — lets `bindViews`/`bindDetections`
+  /** DisposerBag-compatible sync alias — lets helpers like `bindDetections`
    *  register their unsubscribers straight onto the scope. */
   add(disposer: Disposer): Disposer;
   push(...disposers: Disposer[]): void;

@@ -66,7 +66,7 @@ export type PerfSnapshot = {
   };
   /** Per-topic frame counters/timing, summed across every connected channel. */
   frames: Record<string, FrameTopicStats>;
-  /** Per-name workload meters (registry loop, frame-worker gates, recorder
+  /** Per-name workload meters (native tracker/pipe thread probes, recorder
    *  workers — docs/refactor/workload-metering.md). */
   workloads: Record<string, WorkloadSnapshot>;
   storeHub: { writes: number; updates: number; clears: number };

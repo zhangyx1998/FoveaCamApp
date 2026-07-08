@@ -10,11 +10,15 @@ import { acquireTriple, type CalibratedTriple } from "@orchestrator/calibration"
 import { activeController, type StreamHandle } from "@orchestrator/controller";
 import { RoundRobinFrameScheduler } from "@orchestrator/scheduler";
 import { publishSerials, releaseLeases } from "@orchestrator/session-resources";
+import { createVisionWorker, type VisionWorkerHandle } from "@orchestrator/vision-worker-host";
+import { serializeCalibration, type DisplayValues } from "@orchestrator/display-transport";
+import type { PipeBroker } from "@orchestrator/pipe-session";
+import type { PipeInput, VisionResult } from "@orchestrator/vision-worker-protocol";
 import { multiFovea, defaultMultiFoveaTarget, MAX_MULTI_FOVEA_TARGETS } from "./contract";
 import { MultiFoveaRuntime } from "./runtime";
 import { KCF } from "core/Tracker";
+import { makeMat } from "@lib/mat";
 import type { Point2d } from "core/Geometry";
-import type { Mat } from "core/Vision";
 import type { Pos } from "@lib/controller-codec";
 import { inverseTriangulate } from "@lib/stereo";
 import { RollingStats } from "@lib/util/rolling";
@@ -25,9 +29,10 @@ function radians(deg: number): number {
   return (deg * Math.PI) / 180;
 }
 
-export default function multiFoveaSession(): ServerSession<typeof multiFovea> {
+export default function multiFoveaSession(broker: PipeBroker): ServerSession<typeof multiFovea> {
   return defineResourceSession("multi-fovea", multiFovea, (s) => {
     let triple: CalibratedTriple | null = null;
+    let worker: VisionWorkerHandle | null = null;
     const trackMs = new RollingStats(0.9, 2, "ms");
     let schedulerFrames = 0;
     let schedulerRejects = 0;
@@ -121,19 +126,28 @@ export default function multiFoveaSession(): ServerSession<typeof multiFovea> {
       };
     }
 
-    function onCenterView(raw: Mat<Uint8Array>): void {
-      const view = triple?.undistort ? triple.undistort.apply(raw) : raw;
-      s.frame("C", view);
-      void (async () => {
-        const elapsed = await runtime.onCenterFrame(view);
-        if (!triple || elapsed <= 0) return;
-        trackMs.push(elapsed);
-        s.telemetry({
-          size: { width: view.shape[1], height: view.shape[0] },
-          perf: { trackMs: { mean: trackMs.mean, max: trackMs.max } },
-        });
-        trackMs.resetMax();
-      })();
+    // C-22b step 3: the center undistort moved to the `display` vision worker
+    // (off the JS event loop) — the worker posts the undistorted "C" frame, and
+    // this consumes it exactly as the old `onCenterView` did. The multi-target
+    // KCF (`runtime.onCenterFrame`) still runs on the main loop for now; moving
+    // it to a dedicated C++ thread is the separate async-kcf refactor.
+    function onResult(r: VisionResult): void {
+      void (r.values as DisplayValues);
+      for (const f of r.frames) {
+        if (f.name !== "C") continue;
+        const view = makeMat(new Uint8Array(f.buffer), [f.height, f.width], f.channels);
+        s.frame("C", view);
+        void (async () => {
+          const elapsed = await runtime.onCenterFrame(view);
+          if (!triple || elapsed <= 0) return;
+          trackMs.push(elapsed);
+          s.telemetry({
+            size: { width: view.shape[1], height: view.shape[0] },
+            perf: { trackMs: { mean: trackMs.mean, max: trackMs.max } },
+          });
+          trackMs.resetMax();
+        })();
+      }
     }
 
     function applyTargets(): void {
@@ -172,10 +186,37 @@ export default function multiFoveaSession(): ServerSession<typeof multiFovea> {
       });
       scope.defer(() => runtime.dispose());
       scope.defer(() => scheduler.stop());
-      // Tap registered LAST → drains FIRST, so no center-view frame reaches a
-      // disposed runtime during teardown.
-      scope.add(t.leases.C.onView(onCenterView));
+      // Connect the center pipe (C-21 gate) + spawn the display worker (center
+      // undistort only). Its teardown is registered LAST → drains FIRST: the
+      // worker terminates (stopping frames) before the runtime disposes, exactly
+      // as the old center-view tap did.
+      const cId = `camera:${t.leases.C.camera.serial}`;
+      const handle = broker.connect(cId);
+      const cPipe: PipeInput = {
+        role: "C",
+        shmName: handle.shmName,
+        width: handle.spec.width,
+        height: handle.spec.height,
+        channels: handle.spec.channels,
+        bytesPerFrame: handle.spec.maxBytes ?? handle.spec.bytesPerFrame,
+      };
+      worker = createVisionWorker(
+        {
+          pipes: [cPipe],
+          params: {
+            kind: "display",
+            view: "diff", // non-"sliced" → the worker posts only the undistorted "C"
+            cal: t.undistort ? serializeCalibration(t.undistort.calibration) : null,
+          },
+        },
+        onResult,
+      );
       publishSerials(t.leases, scope, s);
+      scope.defer(() => {
+        worker?.terminate();
+        worker = null;
+        broker.disconnect(cId);
+      });
       applyTargets();
       s.telemetry({
         ready: true,

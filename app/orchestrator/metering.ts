@@ -6,9 +6,9 @@
 //
 // Workload metering core (Stage 5, docs/refactor/workload-metering.md).
 // A common perf-reporting abstraction any loop-like unit in the orchestrator
-// registers once, so `frame-worker`'s busy-drop counting, the registry's
-// per-serial preview loop, and the recorder worker all become instances of
-// the same schema instead of hand-grown counters. Vue-free — `rolling.ts`
+// registers once, so the native tracker/pipe threads' probes and the recorder
+// worker all become instances of the same schema instead of hand-grown
+// counters. Vue-free — `rolling.ts`
 // lineage (`RollingStats`/`allFrameStats`'s T10-style window bookkeeping),
 // never `perf.ts` (Vue-tainted, renderer-only).
 //

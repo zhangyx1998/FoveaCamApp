@@ -26,8 +26,8 @@
 // calibration reconstruction. This replaces the old registry `onView` taps +
 // `@orchestrator/async-kcf` (deleted here — disparity was its last consumer):
 // the single-threaded worker loop makes KCF synchronous again (no busy-drop
-// dance). `@orchestrator/frame-worker` survives for now — manual-control /
-// tracking-single still tap `onView` (C-22b step 2/3 migrate + retire it).
+// dance). C-22b step 3 finished the job — every session's vision now runs in a
+// worker thread, and the registry view-tap loop + `frame-worker` are retired.
 
 import { defineSession, type ServerSession } from "@orchestrator/runtime";
 import { acquireTriple, type CalibratedTriple } from "@orchestrator/calibration";

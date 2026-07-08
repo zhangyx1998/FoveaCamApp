@@ -2,8 +2,8 @@
 // workload-metering.md §2). Covers the math (utilization, rates, drops) with
 // fake timers so results are exact, plus one integration-style pass through
 // a fake loop-like workload exercising the full ingest/begin/end/emit/drop
-// cycle the way a real citizen (registry preview loop, frame-worker gate,
-// recorder worker) would.
+// cycle the way a real citizen (native tracker/pipe thread probe, recorder
+// worker) would.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {

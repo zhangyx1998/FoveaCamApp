@@ -7,10 +7,10 @@
 import type { TypedArray } from "core/types";
 import type { Mat } from "core/Vision";
 
-/** Independent copy of an 8-bit Mat — safe to read past an `await`, unlike a
- *  registry `onView` tap Mat (reused buffer, valid only for the duration of
- *  the synchronous sink call — see docs/refactor/orchestrator.md §3
- *  "copy-before-await"). Used by `@orchestrator/frame-worker` consumers. */
+/** Independent copy of an 8-bit Mat — safe to retain past an `await` or across
+ *  vision-worker ticks, unlike a reused SHM read buffer (overwritten on the next
+ *  frame — see docs/refactor/orchestrator.md §3 "copy-before-await"). Used by the
+ *  vision worker kernels when a derived Mat must outlive the frame it came from. */
 export function copyMat<T extends Mat<Uint8Array>>(m: T): T {
   const data = new Uint8Array(m.buffer.slice(m.byteOffset, m.byteOffset + m.byteLength));
   return Object.assign(data, { shape: m.shape, channels: m.channels }) as unknown as T;

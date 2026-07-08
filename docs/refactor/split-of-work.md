@@ -1140,7 +1140,139 @@ per frame) while the native converter threads sit parked. Full migration brief:
     skip it. Timeboxed + deferred per your ruling.
     **Gates:** `core make build` both runtimes ✓; native sweep **08–15 all
     PASS**; reader `otool -L` 0 non-system deps. `ShmRing.cpp`/registry.ts
-    untouched. **C's worker build is unblocked** (reader is now context-safe).
+    untouched. (13/15 later dropped by planner — 15 segfaults on the deferred
+    teardown bug; fan-out fact stands.)
+  - Log (B-19c — sibling sweep, committed reader fix 6e1fe32): **DONE, green.**
+    **Full sweep of `core/` for `static FunctionReference constructor`:** only
+    two live sites — `core/src/ShmRing.cpp` `ShmSlotObject` + `ShmWriterObject`
+    (the ones I flagged). The `CoreObject` base is ALREADY per-env safe
+    (per-`napi_env` `Local` map + `Cleanup`), so Camera/Frame/Tracker/KCF/Pipe
+    objects were never affected — no base fix needed. `core.node` used NO
+    `SetInstanceData` → its single instance-data slot was free.
+    **Fix:** both constructors moved into ONE per-env `ShmAddonData`
+    (`{slotCtor, writerCtor}`) stored via `env.SetInstanceData` in
+    `exportShmNamespace` (before the class Inits); `Init`/`Create`/`Is` now read
+    it via `GetInstanceData<ShmAddonData>()`; dropped both global statics +
+    their `SuppressDestruct` (per-env refs free cleanly on env teardown). The
+    active site was `ShmSlotObject::Create` (via `Writer.nextSlot`); the writer
+    ctor was store-only but fixed for correctness.
+    **Regression** `core/test/16-shm-writer-context-safety.ts` (mirrors 14):
+    main `Writer.nextSlot` → worker loads `core.node` + uses a writer →
+    terminate → main `Writer.nextSlot` STILL works (was the segfault) — PASS,
+    **clean exit 0** (no `process.exit`, no teardown crash — the SHM path has no
+    camera/converter threads).
+    **Gates:** `core make build` both runtimes ✓; native sweep **08–12, 14, 16
+    all exit 0** (08 heavily exercises the fixed ShmSlot/Writer path); reader
+    `otool -L` 0 non-system deps (core links opencv/aravis/glib as expected — no
+    new deps). Only `ShmRing.cpp` (M) + `test/16` (new) touched; `registry.ts`
+    untouched. **This was the last native blocker — C's vision worker can now
+    load `core.node` safely (Vision + reader both context-safe across worker
+    teardown).**
+
+- **B-20 — teardown crash/hang root-cause + fix (B-19a finding #2).**
+  - Log: **Root-caused + fixed via the ORDERLY teardown; clean fan-out test
+    re-added (exit 0). No C++ change needed on the milestone path.**
+    **Root cause (sampled the stuck process + read the RefCount/Dispatcher):**
+    (1) **HANG** = `Dispatcher::~Context` (`core/src/Dispatcher.cpp:118`) spins
+    `while(!closed) uv_run(async.loop, UV_RUN_NOWAIT)` to close its `uv_async`
+    handle; when `cleanup()` runs from within the uv loop (module top-level
+    await), the nested `uv_run` never fires the close callback → infinite spin.
+    (2) **SEGFAULT** ("RootReference of Arv::Stream/Camera destroyed with
+    non-zero reference N") = at process exit the STATIC `RefCount::Map` registries
+    (`ref-count.h`) destruct while `Reference`s are still held — because the
+    consumers (converter/tracker/detStream/camera) were never released →
+    dangling-ref UAF. **Both were triggered by the dropped tests calling
+    `cleanup()`/`process.exit` WITHOUT an orderly release.**
+    **The fix (verified):** the vision-session-close path — stop the loops →
+    `detachCameraPipe` (converter) → `tracker.release()` / `detStream.release()`
+    / `camera.release()` — drops EVERY Arv reference + joins EVERY thread, so
+    the event loop empties and Node **exits naturally, clean (exit 0)** — no
+    `cleanup()`, no hang, ZERO "non-zero reference" warns. This IS the
+    multi-window-switch drain path; the teardown code was already correct — the
+    tests tore down wrong. (Note: `MarkerDetector` has no `release()`; the
+    Arv-ref holder is its `detStream` `Stream<MarkerDetectResults>`, which does.)
+    **Re-added** `core/test/15-fanout.ts` (the dropped 15, done right):
+    converter + `detector.stream` + KCF fan concurrently off one fake
+    `camera.stream` (≈39/39/37 frames), then the orderly teardown → **exit 0**,
+    proving fan-out AND clean multi-subscriber teardown.
+    **DEFERRED (deeper, separate — reported per your "report before a big
+    refactor" rule):** the `Dispatcher::~Context` recursive-`uv_run` hang is a
+    real bug but only bites at explicit `cleanup()` (orchestrator PROCESS-exit),
+    NOT on the vision-session/worker lifecycle (which uses orderly release). A
+    fix is delicate uv-handle-lifecycle surgery in shared infra (a bounded spin
+    is a hacky safety net); recommend a scoped follow-up. 11/12 call `cleanup()`
+    and happen to exit clean (path/timing), so it's not universal.
+    **Gates:** `core make build` both runtimes (no C++ change — diagnosis +
+    test only); native sweep **08–12, 14, 15, 16 all exit 0**; reader `otool -L`
+    0 non-system deps (node+electron). Only `core/test/15-fanout.ts` (new).
+
+- **B-21 — Dispatcher `cleanup()` hang fix (scoped follow-up to B-20 #1;
+  coordinator ruled option (a)).** Log: **DONE, green.**
+  **Fix (a) — heap holder that outlives Context** (`core/src/Dispatcher.cpp`):
+  the `uv_async_t` now lives in a heap `struct AsyncHandle { uv_async_t async; }`
+  (`Context::h`) instead of being an inline member. `~Context` calls
+  `uv_close(&h->async, close_cb)` and **RETURNS immediately** — no more
+  `while(!closed) uv_run(NOWAIT)` spin; `close_cb` `delete`s the holder on the
+  owning loop after the close drains, so the handle memory outlives Context
+  safely. The ~6 `async`/`handle()` sites (ctor `uv_async_init`, `dispatch`'s
+  `uv_async_send`, `updateRef`, VERBOSE) redirect through `&h->async`; ctor
+  `delete h` on each throw path. `dispatch`/Future/`async_cb`/registry surface
+  unchanged (`async_cb` still recovers Context via `handle->data`).
+  **+ a SECOND, pre-existing deadlock the (a) fix UNMASKED** (was hidden behind
+  the uv spin): the `Cleanup` hook held the `registry` lock across `erase()` →
+  `~Dispatcher`→`~Context`→ its pending-task queue →`~Future`→`decFuture`→
+  `get(env)` re-locks the SAME registry mutex → deadlock **whenever a future is
+  pending at cleanup()** (an open `for await`). Fixed by extracting the last
+  `Dispatcher::Ptr` under the lock and **dropping it OUTSIDE** the lock (so the
+  re-entrant `get(env)` finds the entry already erased → the benign "Future
+  destroyed after Dispatcher cleanup" warn, no re-lock). Both fixes are in my
+  `Dispatcher.cpp` only.
+  **Test** `core/test/17-dispatcher-cleanup.ts` (new): fake camera → converter
+  thread (`attachCameraPipe`) → read 3 frames → **+ bonus** a KCF `for await`
+  left OPEN (Dispatcher with a pending next() Future) → detach converter →
+  `cleanup()` → print a MARKER **after** cleanup returns → `exit(0)`. Pre-fix:
+  hangs (uv spin, then — with the queue reached — the registry deadlock), no
+  marker. Post-fix: marker prints, **exit 0**, 0 crashes; the expected
+  "destroyed with active references" + "Future destroyed after cleanup" warns
+  confirm the pending-future path was exercised. Wired 17 into the sweep.
+  **Gates:** `core make build` both runtimes ✓; native sweep **08–17 all exit
+  0** (11 tests incl. 17) ✓; `17` green ✓; **`otool -L` clean** — reader =
+  self+`libc++.1`+`libSystem.B` ONLY, core = its normal opencv/aravis/glib deps
+  (unchanged) ✓; 14's 6 worker-teardown `mutex lock failed` warns are
+  PRE-EXISTING (identical on committed Dispatcher.cpp — verified by stash+rebuild;
+  uniform across Camera/Frame/Projector/KcfTracker/KCF/Dispatcher, not my change).
+  Pathspec-scoped to `core/src/Dispatcher.cpp` + `core/test/17-dispatcher-cleanup.ts`.
+  **[committed 8f0d3e9 by coordinator.]**
+
+- **B-22 — real-1f FOUNDATION regression test (reclaims the dropped B-19a
+  spike-13 slot, redone RIGHT post-B-20).** Log: **DONE, green.**
+  New `core/test/13-worker-pipe.ts` (test-only — NO C++ change): proves the
+  milestone-critical native spawn architecture end-to-end, as a LASTING guard
+  DECOUPLED from C's app kernels (so it won't churn as C iterates). Main:
+  `enableFakeCamera` → advertise a `camera:<serial>` pipe (`camera:${camera.serial}`)
+  → `attachCameraPipe` (real-1e converter thread runs) → `Pipe.connect` (main
+  brokers the consumer gate → converter produces). A `worker_thread` (own V8
+  env) then loads BOTH native addons — the SHM reader AND `core.node` itself
+  (`require(__origin__)` — the addon Init runs in a 2nd env + must survive
+  `terminate`, the B-19b/c core-in-worker guard; the worker does NOT touch the
+  camera since Aravis is per-process exclusive) — `reader.open(shmName)` +
+  `readInto` **5 live frames**, asserts each is byte-correct BGRA (GRAY→BGRA ⇒
+  B==G==R, alpha 255, sparse), runs a TRIVIAL transform (first-row B-channel
+  luma sum — deliberately NOT C's disparity kernel), posts results. Main asserts
+  it got N=5 results + `coreLoaded`, then the B-20 ORDERLY teardown (the test-15
+  converter subset: `worker.terminate` → `disconnect` → `detachCameraPipe` →
+  `close`/`drop` → `camera.release`) → **exits naturally, exit 0**, zero
+  non-zero-ref/leak warns. One test now guards: worker spawn + core.node-in-worker
+  (B-19b/c) + reader-from-worker (B-19a fact A) + live-pipe SHM read +
+  gate-fires-on-in-process-connect (B-19a fact B) + clean orderly teardown (B-20).
+  Inline `eval` worker (like test 14) so the file is self-contained + pathspec-
+  clean to exactly `core/test/13-worker-pipe.ts`.
+  **Gates:** `core make build` both runtimes ✓ (test-only → `ninja: no work` —
+  binaries identical to B-21's otool-clean state); native sweep **08–17 (+ new
+  13) all exit 0** (12 tests) ✓; `13` = worker read 5 live BGRA frames + clean
+  exit 0, 0 warns ✓; **`otool -L` clean** — reader = self+`libc++.1`+`libSystem.B`
+  ONLY, core = 24 normal opencv/aravis/glib deps (unchanged) ✓; 14's 6
+  worker-teardown warns remain PRE-EXISTING (unrelated). Pathspec: `core/test/13`.
 
 - **C-22 — migration orchestrator/renderer + dead-code removal (PLAN-FIRST;
   coordinate w/ B-19).** Delete `registry.startLoop/stopLoop/onView/viewSinks/

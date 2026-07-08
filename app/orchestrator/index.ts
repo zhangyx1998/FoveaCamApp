@@ -108,19 +108,19 @@ const tracking = hub.add(trackingSession(asBroker(Pipe)));
 const manualControl = hub.add(manualControlSession(asBroker(Pipe)));
 
 // --- multi-fovea: protocol-v2 multi-target logic skeleton ------------------
-const multiFovea = hub.add(multiFoveaSession());
+const multiFovea = hub.add(multiFoveaSession(asBroker(Pipe)));
 
 // --- disparity-scope: auto-vergence control loop (§7.1 S1a) ---------------
 const disparityScope = hub.add(disparityScopeSession(asBroker(Pipe)));
 
 // --- calibrate-intrinsic: per-camera checkerboard/marker calibration (§7.1 S1b)
-const calibrateIntrinsic = hub.add(calibrateIntrinsicSession());
+const calibrateIntrinsic = hub.add(calibrateIntrinsicSession(asBroker(Pipe)));
 
 // --- calibrate-drift: per-fovea drift measurement (§7.1 S1b) --------------
 const calibrateDrift = hub.add(calibrateDriftSession());
 
 // --- calibrate-distortion: projector-alignment/homography check (§7.1 S1b)
-const calibrateDistortion = hub.add(calibrateDistortionSession());
+const calibrateDistortion = hub.add(calibrateDistortionSession(asBroker(Pipe)));
 
 // --- calibrate-extrinsic: extrinsic calibration wizard (§7.1 S1b) --------
 const calibrateExtrinsic = hub.add(calibrateExtrinsicSession());

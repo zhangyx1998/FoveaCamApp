@@ -5,48 +5,49 @@
 // -------------------------------------------------------
 //
 // calibrate-distortion session (docs/refactor/orchestrator.md §7.1 S1b):
-// projector-alignment/homography validation. Three `MarkerTracker`s (L/R
-// with subpixel `internal` refinement, matching the original); the center
-// tracker's observed angle continuously points both mirrors there (via
-// `startActuationLoop`, fixed-rate — the original was event-driven off a
-// single `for await` chain, but re-sending the same target at a high fixed
-// rate is harmless and consistent with every other control-loop session
-// here); each fovea's `onView` tap derives a live homography between what
-// it actually sees and where the marker "should" project, then warps its
-// own frame through it as a visual alignment check.
+// projector-alignment/homography validation. Three `MarkerTracker`s (L/R with
+// subpixel `internal` refinement); the center tracker's observed angle
+// continuously points both mirrors there (via `startActuationLoop`).
+//
+// C-22b step 3: the per-fovea projection warp moved OFF the JS event loop. The
+// marker trackers run on their own native streams; on each fovea detection main
+// computes the projection homography (a cheap 4-point `findHomography`) and
+// ships it to the `distortion` vision worker, which reads the fovea pipe and
+// does the heavy `wrapPerspective`, posting the raw preview + warped overlay.
+// The registry `onView` tap is gone.
 
 import { type ServerSession } from "@orchestrator/runtime";
 import { defineResourceSession, type ResourceScope } from "@orchestrator/resource-session";
 import { acquireTriple, type CalibratedTriple } from "@orchestrator/calibration";
 import { startActuationLoop, type ActuationLoop } from "@orchestrator/actuation";
-import { findHomography, resize, wrapPerspective, type Mat } from "core/Vision";
+import { findHomography } from "core/Vision";
 import { area, type Point2d } from "core/Geometry";
-import { type MarkerTracker, type TrackerTarget } from "@orchestrator/marker-tracker";
+import { type MarkerTracker } from "@orchestrator/marker-tracker";
 import { publishSerials, DisposerBag, releaseLeases } from "@orchestrator/session-resources";
-import {
-  bindDetections,
-  createTrackerTriple,
-  detectionViews,
-  retarget,
-  stopTriple,
-} from "@orchestrator/marker-calibration";
+import { detectionViews, retarget } from "@orchestrator/marker-calibration";
+import { createVisionWorker, type VisionWorkerHandle } from "@orchestrator/vision-worker-host";
+import type { PipeBroker } from "@orchestrator/pipe-session";
+import type { PipeInput, VisionResult } from "@orchestrator/vision-worker-protocol";
 import {
   bilinearInterpolate,
   CORNER_OBJ_POINTS,
   relativeToAbsolute,
   transformPoints,
 } from "@lib/marker";
+import { makeMat } from "@lib/mat";
+import { createTrackerTriple, stopTriple } from "@orchestrator/marker-calibration";
 import type { Pos } from "@lib/controller-codec";
 import { calibrateDistortion, type ProjectionView } from "./contract";
 
 type Role = "L" | "C" | "R";
 const ORIGIN: Pos = { x: 0, y: 0 };
 
-export default function calibrateDistortionSession(): ServerSession<typeof calibrateDistortion> {
+export default function calibrateDistortionSession(broker: PipeBroker): ServerSession<typeof calibrateDistortion> {
   return defineResourceSession("calibrate-distortion", calibrateDistortion, (s) => {
     let triple: CalibratedTriple | null = null;
     let trackers: Record<Role, MarkerTracker> | null = null;
     let loop: ActuationLoop | null = null;
+    let worker: VisionWorkerHandle | null = null;
     let centerAngle: Point2d | null = null;
     const projBusy: Record<"L" | "R", boolean> = { L: false, R: false };
 
@@ -55,9 +56,8 @@ export default function calibrateDistortionSession(): ServerSession<typeof calib
       s.telemetry({ detection: detectionViews(trackers) });
     }
 
-    // Mirrors calibrate-intrinsic's `views` pattern — `s.telemetry()` is
-    // publish-only, so a local mirror is needed to merge one role's update
-    // without clobbering the other's.
+    // Local mirror (telemetry is publish-only) so one role's update doesn't
+    // clobber the other's.
     let projection: Record<"L" | "R", ProjectionView> = { L: null, R: null };
 
     function onCenterDetection(): void {
@@ -67,46 +67,54 @@ export default function calibrateDistortionSession(): ServerSession<typeof calib
       publishDetections();
     }
 
-    async function computeProjection(role: "L" | "R", target: TrackerTarget, rgba: Mat<Uint8Array>): Promise<void> {
-      const c = trackers![role].centerAbsolute;
-      if (!c || !centerAngle) return;
-      const scale = Math.sqrt(area(target));
-      const dst_corners = relativeToAbsolute(transformPoints(CORNER_OBJ_POINTS, centerAngle, 1000), c, scale);
-      const dst_img_pts = bilinearInterpolate(dst_corners, target.obj_pts);
-      const H = await findHomography(target.img_pts, dst_img_pts);
-      const warped = await wrapPerspective(rgba, H);
-      s.frame(`proj_${role}`, warped);
-      const view: ProjectionView = { H: Array.from(H as unknown as ArrayLike<number>), points: dst_img_pts };
-      projection = { ...projection, [role]: view };
-      s.telemetry({ projection });
+    // Compute the projection homography for one fovea (main, off the camera
+    // loop — driven by the tracker's own detection tick) and ship it to the
+    // worker, which warps the fovea frame through it. `wrapPerspective` (the
+    // heavy full-frame remap) now lives in the worker, not here.
+    async function computeProjection(role: "L" | "R"): Promise<void> {
+      if (!trackers || projBusy[role]) return;
+      const target = trackers[role].target;
+      const c = trackers[role].centerAbsolute;
+      if (!target || !c || !centerAngle) return;
+      projBusy[role] = true;
+      try {
+        const scale = Math.sqrt(area(target));
+        const dst_corners = relativeToAbsolute(
+          transformPoints(CORNER_OBJ_POINTS, centerAngle, 1000),
+          c,
+          scale,
+        );
+        const dst_img_pts = bilinearInterpolate(dst_corners, target.obj_pts);
+        const H = await findHomography(target.img_pts, dst_img_pts);
+        const Hnums = Array.from(H as unknown as ArrayLike<number>);
+        worker?.sendParams({ [`homography${role}`]: Hnums });
+        projection = { ...projection, [role]: { H: Hnums, points: dst_img_pts } };
+        s.telemetry({ projection });
+      } catch (e) {
+        console.error(`[calibrate-distortion] projection ${role}:`, e);
+      } finally {
+        projBusy[role] = false;
+      }
     }
 
-    function onFoveaView(role: "L" | "R", raw: Mat<Uint8Array>): void {
-      s.frame(role, raw);
-      const target = trackers?.[role].target;
-      if (!target || projBusy[role]) return;
-      projBusy[role] = true;
-      const [h, w] = raw.shape;
-      // `resize()` is called synchronously, right here, before any `await`
-      // — its synchronous prefix reads `raw` (the registry's reused preview
-      // buffer, valid only for this call) immediately, same reasoning as
-      // every other session's `onView` tap deriving something retainable
-      // from a shared-buffer Mat.
-      const copy = resize(raw, { width: w, height: h });
-      void (async () => {
-        try {
-          const rgba = await copy;
-          await computeProjection(role, target, rgba);
-        } catch (e) {
-          console.error(`[calibrate-distortion] projection ${role}:`, e);
-        } finally {
-          projBusy[role] = false;
-        }
-      })();
+    // The worker posts the raw fovea preview ("L"/"R") + the warped overlay
+    // ("proj_L"/"proj_R"); publish each to the renderer.
+    function onResult(r: VisionResult): void {
+      for (const f of r.frames) {
+        s.frame(f.name, makeMat(new Uint8Array(f.buffer), [f.height, f.width], f.channels));
+      }
+    }
+
+    function connectPipe(role: "L" | "R", serial: string, ids: string[]): PipeInput {
+      const pipeId = `camera:${serial}`;
+      const handle = broker.connect(pipeId);
+      ids.push(pipeId);
+      const { width, height, channels, bytesPerFrame, maxBytes } = handle.spec;
+      return { role, shmName: handle.shmName, width, height, channels, bytesPerFrame: maxBytes ?? bytesPerFrame };
     }
 
     // Resource-scoped activation (A-P1): cleanups drain LIFO on idle; leases go
-    // through `scope.use` so they release LAST, after the loop/trackers/taps.
+    // through `scope.use` so they release LAST.
     async function activateSession(scope: ResourceScope): Promise<void> {
       const t = await scope.use(() => acquireTriple(s), releaseLeases);
       if (!t) return;
@@ -122,15 +130,41 @@ export default function calibrateDistortionSession(): ServerSession<typeof calib
       scope.defer(() => {
         trackers = stopTriple(trackers);
       });
+
+      const pipeIds: string[] = [];
+      const pipes: PipeInput[] = [
+        connectPipe("L", t.leases.L.camera.serial, pipeIds),
+        connectPipe("R", t.leases.R.camera.serial, pipeIds),
+      ];
+      worker = createVisionWorker({ pipes, params: { kind: "distortion" } }, onResult);
+      scope.defer(() => {
+        worker?.terminate();
+        worker = null;
+        for (const id of pipeIds) broker.disconnect(id);
+      });
+
+      // Detection subscriptions — each fovea recomputes+ships its projection on
+      // its own detection; the center recomputes both (it moves `centerAngle`).
       const taps = new DisposerBag();
-      bindDetections(trackers, taps, publishDetections, onCenterDetection);
-      // C's raw preview now rides the native `camera:<serial>` pipe (usePipeFrame
-      // in index.vue, discovered via publishSerials) — C no longer taps `onView`
-      // (A-31, real-1f step 3). Only L/R keep the `onView` tap: `onFoveaView`
-      // reads the raw buffer synchronously on-loop to derive the distortion
-      // projection homography (processed, not a bare preview — it stays).
-      taps.add(t.leases.L.onView((v) => onFoveaView("L", v)));
-      taps.add(t.leases.R.onView((v) => onFoveaView("R", v)));
+      taps.push(
+        trackers.L.onDetection(() => {
+          publishDetections();
+          void computeProjection("L");
+        }),
+      );
+      taps.push(
+        trackers.C.onDetection(() => {
+          onCenterDetection();
+          void computeProjection("L");
+          void computeProjection("R");
+        }),
+      );
+      taps.push(
+        trackers.R.onDetection(() => {
+          publishDetections();
+          void computeProjection("R");
+        }),
+      );
       publishSerials(t.leases, taps, s);
       scope.defer(() => taps.dispose());
 

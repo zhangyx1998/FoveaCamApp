@@ -30,12 +30,17 @@ import type {
 } from "./vision-worker-protocol.js";
 import { createDisparityKernel } from "@modules/disparity-scope/vision";
 import { createDisplayKernel } from "./display-kernel.js";
+import { createDistortionKernel } from "@modules/calibrate-distortion/vision";
+import { createCheckerKernel } from "@modules/calibrate-intrinsic/vision";
 
-/** Kernel registry — keyed by `params.kind`. `display` serves both
- *  tracking-single + manual-control (C-22b step 2). */
+/** Kernel registry — keyed by `params.kind`. `display` serves tracking-single +
+ *  manual-control + multi-fovea (center only); `distortion`/`checker` serve the
+ *  calibrate apps (C-22b step 2/3). */
 const KERNELS: Record<string, KernelFactory> = {
   disparity: createDisparityKernel,
   display: createDisplayKernel,
+  distortion: createDistortionKernel,
+  checker: createCheckerKernel,
 };
 
 /** Idle backoff when no pipe produced a new frame (yield-loop, ~1-3ms). */

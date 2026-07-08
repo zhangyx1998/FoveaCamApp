@@ -38,14 +38,17 @@ import abortableNext from "@lib/abortable.next";
 import {
   calibrateCamera,
   cornerSubPix,
-  cvtColor,
-  findChessboardCorners,
   MarkerDetector,
   type CameraCalibration,
   type Mat,
   type MarkerDetectResults,
   type PreDefinedDictionary,
 } from "core/Vision";
+import { createVisionWorker, type VisionWorkerHandle } from "@orchestrator/vision-worker-host";
+import type { PipeBroker } from "@orchestrator/pipe-session";
+import type { PipeInput, VisionResult } from "@orchestrator/vision-worker-protocol";
+import type { CheckerValues } from "./vision";
+import { makeMat } from "@lib/mat";
 import type { CameraInfo } from "@lib/orchestrator/contracts";
 import type { Point2d, Point3d } from "core/Geometry";
 import { calibrateIntrinsic, type CalibrationView } from "./contract";
@@ -65,7 +68,7 @@ function checkerObjPoints(pattern: { width: number; height: number }): Point3d[]
   return out;
 }
 
-export default function calibrateIntrinsicSession(): ServerSession<typeof calibrateIntrinsic> {
+export default function calibrateIntrinsicSession(broker: PipeBroker): ServerSession<typeof calibrateIntrinsic> {
   return defineSession("calibrate-intrinsic", calibrateIntrinsic, (s) => {
     const known = new Map<string, CameraInfo>();
     // `ServerSession.telemetry()` is publish-only (no getter) — keep our own
@@ -75,13 +78,15 @@ export default function calibrateIntrinsicSession(): ServerSession<typeof calibr
     let activeInfo: CameraInfo | null = null;
     let activeLease: CameraLease | null = null;
     let previewDisposer: (() => void) | null = null;
-    let viewDisposer: (() => void) | null = null;
     let width = 0;
     let height = 0;
     let records: Record_[] = [];
 
-    // CHECKER mode.
-    let checkerBusy = false;
+    // CHECKER mode — detection runs in the `checker` vision worker (C-22b step 3,
+    // off the JS event loop). It posts the corner points + the gray frame; main
+    // retains the gray for `cornerSubPix`/`calibrateCamera` at capture time.
+    let checkerWorker: VisionWorkerHandle | null = null;
+    let checkerPipeId: string | null = null;
     let latestChecker: { gray: Mat<Uint8Array>; img_points: Point2d[] } | null = null;
 
     // MARKER mode.
@@ -117,32 +122,64 @@ export default function calibrateIntrinsicSession(): ServerSession<typeof calibr
       s.telemetry({ views });
     }
 
-    // --- CHECKER mode ------------------------------------------------------
+    // --- CHECKER mode (vision worker) -------------------------------------
 
-    function onCheckerView(raw: Mat<Uint8Array>): void {
-      const [h, w] = raw.shape;
-      if (w !== width || h !== height) {
-        width = w;
-        height = h;
+    function stopCheckerWorker(): void {
+      checkerWorker?.terminate();
+      checkerWorker = null;
+      if (checkerPipeId) {
+        broker.disconnect(checkerPipeId);
+        checkerPipeId = null;
+      }
+    }
+
+    function startCheckerWorker(lease: CameraLease): void {
+      const pipeId = `camera:${lease.camera.serial}`;
+      const handle = broker.connect(pipeId);
+      checkerPipeId = pipeId;
+      const { width: w, height: h, channels, bytesPerFrame, maxBytes } = handle.spec;
+      const pipe: PipeInput = {
+        role: "C",
+        shmName: handle.shmName,
+        width: w,
+        height: h,
+        channels,
+        bytesPerFrame: maxBytes ?? bytesPerFrame,
+      };
+      checkerWorker = createVisionWorker(
+        {
+          pipes: [pipe],
+          params: {
+            kind: "checker",
+            patternWidth: s.state.pattern_size.width,
+            patternHeight: s.state.pattern_size.height,
+          },
+        },
+        onCheckerResult,
+      );
+    }
+
+    function onCheckerResult(r: VisionResult): void {
+      const v = r.values as CheckerValues;
+      if (v.size) {
+        width = v.size.width;
+        height = v.size.height;
         s.telemetry({ size: { width, height } });
         clearRecords();
       }
-      if (checkerBusy) return;
-      checkerBusy = true;
-      const gray = cvtColor(raw, "BGRA2GRAY");
-      void findChessboardCorners(gray, s.state.pattern_size)
-        .then((corners) => {
-          if (corners.length > 0) {
-            latestChecker = { gray, img_points: corners };
-            s.telemetry({ detection: { points: corners } });
-          } else {
-            latestChecker = null;
-            s.telemetry({ detection: null });
-          }
-        })
-        .finally(() => {
-          checkerBusy = false;
-        });
+      if (v.points && v.points.length > 0) {
+        const grayFrame = r.frames.find((f) => f.name === "gray");
+        if (grayFrame) {
+          latestChecker = {
+            gray: makeMat(new Uint8Array(grayFrame.buffer), [grayFrame.height, grayFrame.width], grayFrame.channels),
+            img_points: v.points,
+          };
+          s.telemetry({ detection: { points: v.points } });
+        }
+      } else if (v.points === null) {
+        latestChecker = null;
+        s.telemetry({ detection: null });
+      }
     }
 
     // --- MARKER mode ---------------------------------------------------
@@ -202,13 +239,12 @@ export default function calibrateIntrinsicSession(): ServerSession<typeof calibr
 
     function restartDetection(): void {
       if (!activeLease) return;
-      viewDisposer?.();
-      viewDisposer = null;
+      stopCheckerWorker();
       stopMarkerTask();
       clearRecords();
       s.telemetry({ detection: null });
       if (s.state.method === "CHECKER") {
-        viewDisposer = activeLease.onView(onCheckerView);
+        startCheckerWorker(activeLease);
       } else {
         startMarkerTask(activeLease);
       }
@@ -230,8 +266,7 @@ export default function calibrateIntrinsicSession(): ServerSession<typeof calibr
     async function deselect(): Promise<void> {
       previewDisposer?.();
       previewDisposer = null;
-      viewDisposer?.();
-      viewDisposer = null;
+      stopCheckerWorker();
       stopMarkerTask();
       latestChecker = null;
       clearRecords();

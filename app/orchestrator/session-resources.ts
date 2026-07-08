@@ -9,7 +9,6 @@
 // share the repetitive disposer / camera-lease loops.
 
 import type { Role } from "@lib/camera-config";
-import type { Mat } from "core/Vision";
 import type { CalibratedTriple } from "./calibration.js";
 import type { CameraLease } from "./registry.js";
 import type { ServerSession } from "./runtime.js";
@@ -41,19 +40,6 @@ export function releaseLeases(target: CalibratedTriple | LeaseSet | null | undef
   if (!target) return;
   const leases = "leases" in target ? target.leases : target;
   for (const lease of Object.values(leases)) lease.release();
-}
-
-export function bindViews<C extends Contract>(
-  leases: LeaseSet,
-  disposers: DisposerBag,
-  session: ServerSession<C>,
-  onView: (role: Role, raw: Mat<Uint8Array>) => void = (role, raw) => {
-    session.frame(role, raw);
-  },
-): void {
-  disposers.add(leases.L.onView((v) => onView("L", v)));
-  disposers.add(leases.C.onView((v) => onView("C", v)));
-  disposers.add(leases.R.onView((v) => onView("R", v)));
 }
 
 /** Publish the leased triple's camera serials into `state.serials` (C-22) so the

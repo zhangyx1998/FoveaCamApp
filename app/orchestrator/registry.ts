@@ -9,21 +9,19 @@
 // (future) control loops lease the same handle through `acquire(serial)`, so they
 // never open the same camera twice or fight over its pixel format/config.
 //
-// Each shared camera runs at most one BGRA preview loop, fanning a single
-// converted payload out to every subscribed sink — so N windows viewing one
-// camera cost one acquisition and one conversion, delivering the shared-stream
-// half of the multi-window/projector goal (§2 secondary).
+// Each shared camera advertises one native `camera:<serial>` SHM pipe (B's
+// CaptureSink producer, C's pipe broker) — so N windows viewing one camera cost
+// one acquisition and one native producer, delivering the shared-stream half of
+// the multi-window/projector goal (§2 secondary). No camera frames touch the JS
+// event loop: C-22b step 3 retired the in-process view-tap loop (`onView` +
+// `registry:<serial>` meter) entirely — all vision runs in worker threads now.
 
 import type { Camera } from "core/Aravis";
-import type { Mat } from "core/Vision";
 import type { Role } from "@lib/camera-config";
 import type { PipeSpec } from "@lib/orchestrator/pipe-contract.js";
 import { applyStoredConfig, cameraConfigPath, listCameraInfo } from "./camera.js";
-import { guarded, timeSpan } from "./diagnostics.js";
+import { timeSpan } from "./diagnostics.js";
 import { read } from "./store-hub.js";
-import { registerWorkload, type WorkloadHandle } from "./metering.js";
-
-type ViewSink = (view: Mat<Uint8Array>) => void;
 
 // WS1 real-1c: the SHM PREVIEW write moved OFF this JS loop onto B's native
 // `Arv::CaptureSink` thread (via `Aravis.attachCameraPipe`), published through
@@ -80,22 +78,9 @@ interface Shared {
   readonly serial: string;
   camera: Camera;
   refs: number;
-  readonly viewSinks: Set<ViewSink>; // in-process vision taps: the BGRA Mat view
   /** The advertised `camera:<serial>` pipe id (real-1c), while leased. */
   pipeId?: string;
-  // Persistent tap buffer for the in-process vision view — the JS loop converts
-  // `frame.view("BGRA8", tapView)` into this one reused buffer (one memcpy, zero
-  // steady-state allocation) when a vision session is subscribed. Preview-only
-  // cameras (no `viewSinks`) never run the loop at all — fully off the JS loop.
-  tapView?: Mat<Uint8Array>;
-  abort: boolean;
-  loop: Promise<void> | null; // in-flight preview loop, awaited on stop
   closed: boolean; // native handle released (guards double-release)
-  // Perf substrate (docs/refactor/workload-metering.md, "registry preview
-  // loop (per serial)" — first citizen): one meter per shared camera,
-  // registered alongside it and disposed alongside it, so re-acquiring the
-  // same serial after a full release starts a fresh window.
-  readonly workload: WorkloadHandle;
 }
 
 /** A lease on one shared camera. Drop it with `release()` when done. */
@@ -103,18 +88,12 @@ export interface CameraLease {
   /** The shared native handle (property reads/writes act on the real camera). */
   readonly camera: Camera;
   /**
-   * Tap the shared stream's BGRA `Mat` in-process (no copy) — for orchestrator
-   * vision (e.g. tracking). The Mat is the reused buffer: it is valid only for
-   * the duration of the synchronous call; copy out (slice/cvtColor) to retain.
-   *
-   * (real-1c: the RAW PREVIEW path — formerly `onFrame` → SHM descriptor — moved
-   * to the native `camera:<serial>` pipe; the renderer reads it via
-   * `usePipeFrame`, not `session.frame()`. Only in-process vision taps remain
-   * on this JS loop; fully retiring it for the JS-side vision consumers
-   * (calibration/disparity) is a later refactor.)
+   * Run `mutate` (e.g. a pixel-format change) against the shared handle. Camera
+   * frames flow through B's native `camera:<serial>` producer, not the JS loop
+   * (C-22b step 3 retired the in-process view-tap loop), so this is now just a
+   * hook to mutate the shared camera safely; renderers/vision workers read the
+   * pipe and tolerate the transient.
    */
-  onView(sink: ViewSink): () => void;
-  /** Stop the preview loop, run `mutate` (e.g. pixel-format change), restart. */
   reconfigure(mutate: () => void | Promise<void>): Promise<void>;
   /** Release this lease; the camera is closed when the last lease drops. */
   release(): void;
@@ -131,77 +110,21 @@ const closing = new Set<Promise<void>>();
 /** Serials with a live lease (preview running or not). */
 export const leasedSerials = (): string[] => [...shared.keys()];
 
-// Only in-process vision view-taps drive the JS loop now (real-1c): the SHM
-// preview write is native. A preview-only camera (no vision session) has no
-// view-taps → the loop never runs → the camera is fully off the JS event loop.
-const hasConsumers = (s: Shared): boolean => s.viewSinks.size > 0;
-
-/**
- * Publish to every sink, isolating one throwing sink from the others and from
- * the loop itself — an uncaught throw here would otherwise reject the shared
- * loop promise and silently stop frames for every viewer of this camera.
- */
-function publish<T>(serial: string, sinks: Set<(v: T) => void>, value: T): void {
-  for (const sink of sinks)
-    guarded(`registry:${serial}`, () => sink(value));
-}
-
-function startLoop(s: Shared): void {
-  if (s.loop || !hasConsumers(s)) return; // already running / nothing to feed
-  s.abort = false;
-  s.loop = (async () => {
-    try {
-      for (const frame of s.camera.stream) {
-        if (s.abort || !hasConsumers(s)) break;
-        if (!frame) {
-          // No frame ready — yield without spinning the CPU. Not busy time:
-          // the loop is idle here, not blocked on real work.
-          await new Promise((r) => setImmediate(r));
-          continue;
-        }
-        s.workload.ingest("camera");
-        s.workload.begin();
-        // real-1c: convert BGRA directly into the reused view-tap buffer (no
-        // SHM slot — that write is native now). Extract before `release()`.
-        const height = frame.height;
-        const width = frame.width;
-        const bytes = height * width * 4;
-        if (!s.tapView || s.tapView.byteLength !== bytes)
-          s.tapView = new Uint8Array(bytes) as Mat<Uint8Array>;
-        await frame.view("BGRA8", s.tapView as unknown as ArrayBufferView);
-        s.tapView.shape = [height, width];
-        s.tapView.channels = 4;
-        frame.release();
-        publish(s.serial, s.viewSinks, s.tapView);
-        s.workload.emit("view");
-        s.workload.end();
-      }
-    } finally {
-      s.loop = null;
-    }
-  })();
-}
-
-async function stopLoop(s: Shared): Promise<void> {
-  s.abort = true;
-  await s.loop; // native stream stop is cross-thread; wait for real exit
-}
-
-// Stop the loop and free the native camera handle (releasing the per-process
-// device claim). Idempotent — safe if a lingering lease also releases later.
+// Free the native camera handle (releasing the per-process device claim).
+// Idempotent — safe if a lingering lease also releases later. No JS preview loop
+// to stop anymore (C-22b step 3): camera frames flow through B's native
+// producer, torn down here via `retireCameraPipe`.
 function closeShared(s: Shared): Promise<void> {
   if (s.closed) return Promise.resolve();
   s.closed = true;
   shared.delete(s.serial);
-  s.viewSinks.clear();
   // real-1c: detach B's native producer + un-advertise the pipe (renderer
   // consumers see CLOSED and disconnect).
   if (s.pipeId && pipeSeam) {
     retireCameraPipe(pipeSeam, s.pipeId);
     s.pipeId = undefined;
   }
-  s.workload.dispose();
-  const p = stopLoop(s).then(() => s.camera.release());
+  const p = Promise.resolve(s.camera.release());
   // Track until settled: `s` is already out of `shared` by the time this
   // resolves, so a `releaseAll` call that lands *after* this starts but
   // *before* it finishes would otherwise miss it entirely (see C1).
@@ -258,14 +181,7 @@ async function registerShared(camera: Camera): Promise<Shared> {
     serial: camera.serial,
     camera,
     refs: 0,
-    viewSinks: new Set(),
-    abort: false,
-    loop: null,
     closed: false,
-    workload: registerWorkload(`registry:${camera.serial}`, {
-      inputs: ["camera"],
-      outputs: ["view"],
-    }),
   };
   shared.set(camera.serial, s);
   // real-1c: advertise the `camera:<serial>` BGRA8 pipe + attach B's native
@@ -292,33 +208,18 @@ export async function acquire(serial: string): Promise<CameraLease | null> {
   s.refs++;
 
   let released = false;
-  const viewSinks = new Set<ViewSink>();
   const lease: CameraLease = {
     get camera() {
       return s!.camera;
     },
-    onView(sink) {
-      viewSinks.add(sink);
-      s!.viewSinks.add(sink);
-      startLoop(s!);
-      return () => {
-        viewSinks.delete(sink);
-        s!.viewSinks.delete(sink);
-      };
-    },
     async reconfigure(mutate) {
-      await stopLoop(s!);
-      try {
-        await mutate();
-      } finally {
-        startLoop(s!); // no-op if nothing to feed; fresh buffer otherwise
-      }
+      // No JS preview loop to pause anymore (C-22b step 3) — mutate the shared
+      // handle directly; B's native producer + pipe consumers ride the change.
+      await mutate();
     },
     release() {
       if (released) return;
       released = true;
-      for (const sink of viewSinks) s!.viewSinks.delete(sink);
-      viewSinks.clear();
       if (--s!.refs > 0) return;
       void closeShared(s!);
     },
