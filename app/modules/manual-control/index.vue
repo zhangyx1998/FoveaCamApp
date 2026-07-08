@@ -48,14 +48,19 @@ const session = useSession(manualControl, "manual-control");
 const { state, telemetry } = session;
 const controller = computed(getController);
 
-// real-1g (C-23): the wide view binds the first-class UNDISTORTED pipe when the
-// session advertises it (the target overlay is in undistorted pixel space —
-// this is its correct backdrop); falls back to raw on uncalibrated rigs. L/R
-// (wrapped foveae) + the processed center stay on session.frame (vision worker).
-const { L: frameL, R: frameR, center: frameCenter } = useFrames(session, ["L", "R", "center"]);
+// real-2b: every main view sources its undistort pipe DIRECTLY (at pipe rate,
+// independent of the kernel). The wide view binds the first-class INTRINSIC
+// undistort pipe when advertised (target overlay is in undistorted pixel space —
+// its correct backdrop), falling back to raw on uncalibrated rigs. The L/R
+// foveae bind their HOMOGRAPHY undistort pipes (mirror-pose-tracked warp — what
+// the retired `wrap` toggle used to do in the kernel). Only the derived center
+// composite (sliced/diff/depth) still rides session.frame.
+const { center: frameCenter } = useFrames(session, ["center"]);
 const frameC = usePipeFrame(() =>
   state.undistortPipe ?? (state.serials?.C ? nodeId.convert(state.serials.C) : null),
 );
+const frameL = usePipeFrame(() => (state.serials?.L ? nodeId.undistort(state.serials.L) : null));
+const frameR = usePipeFrame(() => (state.serials?.R ? nodeId.undistort(state.serials.R) : null));
 
 const points = new SetPoints(local("manual-control.set-points", ""));
 const drawer_height = ref(0);
@@ -182,7 +187,7 @@ const recording = new Recording(session, "manual-control");
       <StreamView
         class="stream"
         :title="ROLE.L"
-        :payload="frameL.payload.value" :source="frameL.source"
+        :payload="frameL"
         :theme="THEME.L"
       />
       <PosView
@@ -240,18 +245,13 @@ const recording = new Recording(session, "manual-control");
             <option value="depth">Depth</option>
           </select>
         </label>
-        <span>|</span>
-        <label>
-          <span>Wrap</span>
-          <input type="checkbox" v-model="state.wrap" />
-        </label>
       </ConfigEntry>
     </div>
     <div class="view">
       <StreamView
         class="stream"
         :title="ROLE.R"
-        :payload="frameR.payload.value" :source="frameR.source"
+        :payload="frameR"
         :theme="THEME.R"
       />
       <PosView

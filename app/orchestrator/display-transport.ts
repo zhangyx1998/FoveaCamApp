@@ -32,6 +32,12 @@ export type DisplayParams = {
   view?: string;
   /** Show the perspective-wrapped fovea (vs the raw fovea) as the L/R preview. */
   wrap?: boolean;
+  /** Emit the L/R fovea preview frames (default true — tracking-single /
+   *  multi-fovea). manual-control sets this false: its L/R views bind the
+   *  `camera/<serial>/undistort` homography pipes directly (real-2b), so the
+   *  kernel emits only the derived center composite (the L/R convert inputs are
+   *  still consumed for the diff/depth `aligned` foveae). */
+  foveaViews?: boolean;
   /** Depth heatmap clamp range (mm) for the "depth" combined view. */
   depthNear?: number;
   depthFar?: number;

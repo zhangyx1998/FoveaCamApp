@@ -81,7 +81,6 @@ export interface CaptureDeps {
   zoom(): number;
   capStack(): number;
   baseline(): number;
-  wrapEnable(): boolean;
   /** Steer the target to an angle (used to visit each set-point in turn). */
   steerToAngle(angle: Point2d, distance_mm?: number, shift_deg?: number): void;
   /** One-shot read of the NEXT undistorted center frame (C-23 ruled Q2: an
@@ -207,9 +206,8 @@ export function createCapture(deps: CaptureDeps): CaptureController {
       stack(leases.L.camera.stream, deps.capStack()),
       stack(leases.R.camera.stream, deps.capStack()),
     ]);
-    const wrap = deps.wrapEnable();
-    const l = normalizeFovea(lStack, conv.A2H.L(A.L), wrap);
-    const r = normalizeFovea(rStack, conv.A2H.R(A.R), wrap);
+    const l = normalizeFovea(lStack, conv.A2H.L(A.L));
+    const r = normalizeFovea(rStack, conv.A2H.R(A.R));
     const sensor_size = undistort.sensor_size;
     provideIndexed(
       "left",
@@ -244,13 +242,15 @@ export function createCapture(deps: CaptureDeps): CaptureController {
     provideIndexed("diff", { image: diff(l, r, true) }, indexed);
   }
 
+  // The saved L/R foveae are ALWAYS perspective-wrapped into alignment now — the
+  // `wrap` toggle was retired with the view re-plumb (real-2b): the L/R views are
+  // always the homography-undistorted pipes, so the capture matches what's shown.
   function normalizeFovea(
     { image, format }: { image: Mat<Float32Array>; format: any },
     H: Mat<Float64Array>,
-    wrap: boolean,
   ): Mat<Uint16Array> {
     const bgra = makeBGRA(convertType(image, "16U"), format);
-    return wrap ? wrapPerspective(bgra, H) : bgra;
+    return wrapPerspective(bgra, H);
   }
 
   async function runInner(setpoints: VoltPreviewQuery[]): Promise<void> {

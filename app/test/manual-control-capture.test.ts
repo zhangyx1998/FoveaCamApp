@@ -64,7 +64,6 @@ function stubDeps(overrides: Partial<CaptureDeps> = {}): CaptureDeps {
     zoom: () => 1,
     capStack: () => 1,
     baseline: () => 200,
-    wrapEnable: () => false,
     steerToAngle: () => {},
     // C-23: the one-shot undistort-pipe read (was the onCenterTick feed).
     readCenter: async () => fakeMat([4, 4], 4) as any,

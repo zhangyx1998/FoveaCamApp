@@ -36,10 +36,13 @@ import {
 import { createVisionWorker, type VisionWorkerHandle } from "@orchestrator/vision-worker-host";
 import type { DisplayParams, DisplayValues } from "@orchestrator/display-transport";
 import {
+  advertiseHomographyUndistortPipe,
   advertiseUndistortPipe,
   retireUndistortPipe,
   type UndistortPipeSeam,
 } from "@orchestrator/undistort-pipe";
+import { conversionComputeH, startHomographyFeeder } from "@orchestrator/homography-feeder";
+import { pushHomography } from "core/Aravis";
 import { readNextPipeFrame } from "@orchestrator/pipe-read-once";
 import { nodeId } from "@lib/orchestrator/graph-contract";
 import type { PipeBroker } from "@orchestrator/pipe-session";
@@ -184,7 +187,6 @@ export default function manualControlSession(
       zoom: () => s.state.zoom,
       capStack: () => s.state.cap_stack,
       baseline: () => s.state.baseline,
-      wrapEnable: () => s.state.wrap,
       steerToAngle: setTargetFromAngle,
       // C-23 ruled Q2: the NEXT undistorted center via a one-shot SHM read of
       // the already-connected pipe (on-demand, user-initiated — not per-frame).
@@ -217,7 +219,10 @@ export default function manualControlSession(
         kind: "display",
         zoom: Math.max(1, s.state.zoom),
         view: s.state.view,
-        wrap: s.state.wrap,
+        // real-2b: L/R fovea previews moved to the homography undistort pipes;
+        // the kernel emits only the derived center composite (it still consumes
+        // the L/R convert inputs for the diff/depth `aligned` foveae).
+        foveaViews: false,
         ...voltParams(),
         ...sliceAtParam(),
         ...depthParams(),
@@ -257,6 +262,30 @@ export default function manualControlSession(
         scope.defer(() => {
           retireUndistortPipe(undistortSeam, undistortC!);
           s.setState("undistortPipe", null);
+        });
+      }
+
+      // Unified-topology §5 (real-2b): the mirror-steered L/R cameras get
+      // HOMOGRAPHY undistort bricks chained on their shared converters, each fed
+      // H(mirrorAt(t)) at ~200 Hz from the actuation loop's mirror history
+      // (v1 derivation: the display path's A2H∘V2A — see homography-feeder). The
+      // RENDERER binds these for the L/R main views (always undistorted — the
+      // retired `wrap` toggle's warp, now native + pose-tracked). Consumer-gated
+      // like every pipe; an empty ring passes frames through untouched. The
+      // kernel keeps consuming the raw CONVERT L/R inputs (below) — its
+      // diff/depth `aligned` composite still wraps them via the pushed H.
+      const computeH = conversionComputeH(t.conv);
+      for (const side of ["L", "R"] as const) {
+        const pipeId = advertiseHomographyUndistortPipe(undistortSeam, t.leases[side].camera);
+        const stopFeeder = startHomographyFeeder({
+          pipeId,
+          side,
+          computeH,
+          push: pushHomography,
+        });
+        scope.defer(() => {
+          stopFeeder(); // stop pushing BEFORE the brick detaches
+          retireUndistortPipe(undistortSeam, pipeId);
         });
       }
 
@@ -350,9 +379,6 @@ export default function manualControlSession(
         },
         view(view) {
           pushParams({ view });
-        },
-        wrap(wrap) {
-          pushParams({ wrap });
         },
         baseline() {
           pushParams({ ...voltParams(), ...depthParams() });

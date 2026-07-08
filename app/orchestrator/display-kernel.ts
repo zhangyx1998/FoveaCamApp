@@ -52,6 +52,7 @@ export function createDisplayKernel(initial: Record<string, unknown>): VisionKer
     zoom: number;
     view: string;
     wrap: boolean;
+    foveaViews: boolean;
     depthNear: number;
     depthFar: number;
   } = {
@@ -62,6 +63,7 @@ export function createDisplayKernel(initial: Record<string, unknown>): VisionKer
     zoom: 1,
     view: "sliced",
     wrap: false,
+    foveaViews: true,
     depthNear: -Infinity,
     depthFar: Infinity,
   };
@@ -82,13 +84,17 @@ export function createDisplayKernel(initial: Record<string, unknown>): VisionKer
   }
 
   function fovea(role: "L" | "R", raw: Mat<Uint8Array>, out: KernelFrameOut[]): void {
+    const combining = p.view !== "sliced";
+    // Wrap is needed only for an emitted fovea preview or the combined
+    // (diff/depth) `aligned` input — skip the warp entirely when neither applies
+    // (manual-control's sliced view with `foveaViews` off is the hot path).
     const H = role === "L" ? p.homographyL : p.homographyR;
-    const wrapped = H ? wrapPerspective(raw, H) : null;
-    out.push({ name: role, mat: p.wrap && wrapped ? wrapped : raw });
-    if (p.view === "sliced") {
-      aligned.L = aligned.R = null;
-    } else {
+    const wrapped = (p.foveaViews || combining) && H ? wrapPerspective(raw, H) : null;
+    if (p.foveaViews) out.push({ name: role, mat: p.wrap && wrapped ? wrapped : raw });
+    if (combining) {
       aligned[role] = wrapped; // fresh Mat or null; combined view guards on both
+    } else {
+      aligned.L = aligned.R = null;
     }
   }
 
@@ -114,6 +120,7 @@ export function createDisplayKernel(initial: Record<string, unknown>): VisionKer
       if (d.zoom !== undefined) p.zoom = d.zoom;
       if (d.view !== undefined) p.view = d.view;
       if (d.wrap !== undefined) p.wrap = d.wrap;
+      if (d.foveaViews !== undefined) p.foveaViews = d.foveaViews;
       if (d.depthNear !== undefined) p.depthNear = d.depthNear;
       if (d.depthFar !== undefined) p.depthFar = d.depthFar;
     },

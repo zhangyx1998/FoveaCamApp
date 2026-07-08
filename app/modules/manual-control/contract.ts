@@ -59,7 +59,6 @@ export const manualControl = defineContract({
     shift: 0, // vertical shift (deg)
     // Display parameters.
     zoom: 9, // fovea (sliced center) magnification
-    wrap: true, // perspective-wrap L/R foveae into alignment
     view: "sliced" as "sliced" | "diff" | "depth", // `center` frame content
     depthWindowInv: 0, // depth-view near/far window (0 → ∞)
     // Capture parameters.
@@ -93,10 +92,12 @@ export const manualControl = defineContract({
       { frames: number; dropped: number; fps: number; bytes: number }
     >,
   },
-  // L/C/R are the processed previews (C undistorted, L/R perspective-wrapped);
-  // `center` is the magnified fovea crop around the target (sliced/diff/depth).
-  // `capture:<name>` channels are dynamic, opened per capture resource.
-  frames: ["L", "C", "R", "center"] as const,
+  // `center` is the magnified fovea crop around the target (sliced/diff/depth) —
+  // the only session-frame view now (real-2b). The L/C/R main views bind their
+  // `camera/<serial>/undistort` pipes directly (C intrinsic, L/R homography), so
+  // they no longer ride session.frame. `capture:<name>` channels are dynamic,
+  // opened per capture resource.
+  frames: ["center"] as const,
   commands: {
     /** Steer the target (pixel drag or a selected set-point's angle). */
     steer: cmd<SteerTarget>(),
