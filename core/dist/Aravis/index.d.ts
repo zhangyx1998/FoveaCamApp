@@ -4,7 +4,8 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 import type { CoreObject, Stream } from "../types";
-import type { Mat } from "core/Vision";
+import type { CameraCalibration, Mat } from "core/Vision";
+import type { Rect } from "core/Geometry";
 import type { ProbeSnapshot } from "core/Pipe";
 
 declare module "core/Aravis" {
@@ -170,4 +171,73 @@ declare module "core/Aravis" {
    * absent — no stale rows.
    */
   export function undistortProbeAll(): Record<string, ProbeSnapshot>;
+
+  /**
+   * Attach a camera→pipe UNDISTORT producer thread (real-1g, B-23): convert to
+   * the pipe's advertised `spec.pixelFormat` then full-frame `cv::remap` with
+   * maps built NATIVELY at attach from the plain persisted calibration JSON
+   * (never pass the `Vision.Undistort` instance). Gated by the pipe's own
+   * consumer refcount (parks when no consumer). The pipe must be advertised
+   * first; `pipeId` is the graph node id (see `graph-contract` builders).
+   */
+  export function attachUndistortPipe(
+    camera: Camera,
+    pipeId: string,
+    calibration: CameraCalibration,
+  ): boolean;
+
+  /** Detach + join the undistort producer. Idempotent (false if unknown). */
+  export function detachUndistortPipe(pipeId: string): boolean;
+
+  /** Options for `attachFoveaPipe` (real-2, B-24). */
+  export interface FoveaPipeOptions {
+    /** Initial crop rect, in source (sensor / undistorted-frame) pixels. */
+    rect: Rect;
+    /** Plain persisted calibration JSON ⇒ the fovea is an UNDISTORTED crop
+     *  (fused map-ROI remap). Omit for a raw crop of the converted frame. */
+    cal?: CameraCalibration | null;
+  }
+
+  /**
+   * Attach a spawn/cancel-able FOVEA CROP producer thread (real-2, B-24): a
+   * DYNAMIC pipe with C-20 semantics — advertise with `maxWidth`/`maxHeight`/
+   * `maxBytes` (the ring footprint); every frame carries its ACTIVE w/h and
+   * FRAME-BOUND crop origin in the v4 slot header (surfaced by the reader as
+   * `width`/`height`/`originX`/`originY`). Steer live via `setFoveaRect`.
+   * Spawn = advertise + attach + connect; cancel = disconnect + detach +
+   * close + drop (broker epochs make reused ids safe).
+   */
+  export function attachFoveaPipe(
+    camera: Camera,
+    pipeId: string,
+    options: FoveaPipeOptions,
+  ): boolean;
+
+  /**
+   * Live-steer a fovea crop (applied on the NEXT frame; clamped to the frame
+   * domain + the ring's max footprint). No re-attach, no gate churn. Returns
+   * false for an unknown pipe id.
+   */
+  export function setFoveaRect(pipeId: string, rect: Rect): boolean;
+
+  /** Detach + join the fovea producer. Idempotent (false if unknown). */
+  export function detachFoveaPipe(pipeId: string): boolean;
+
+  /** `foveaProbeAll` snapshot: the shared meter shape + the last produced
+   *  frame's FRAME-BOUND rect (byte-rate math for variable-size pipes). */
+  export interface FoveaProbeSnapshot extends ProbeSnapshot {
+    activeWidth: number;
+    activeHeight: number;
+    originX: number;
+    originY: number;
+    /** True when the fovea crops the UNDISTORTED image (cal was given). */
+    undistorted: boolean;
+  }
+
+  /**
+   * Out-of-loop probe of every ACTIVE fovea thread (real-2, B-24) →
+   * `{ [pipeId]: FoveaProbeSnapshot }` — keys AND meter names are the node
+   * ids. Folds into `perfSnapshot.workloads`/`graphTopology()` identically.
+   */
+  export function foveaProbeAll(): Record<string, FoveaProbeSnapshot>;
 }
