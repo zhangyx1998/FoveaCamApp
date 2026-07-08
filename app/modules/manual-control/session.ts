@@ -219,10 +219,6 @@ export default function manualControlSession(
         kind: "display",
         zoom: Math.max(1, s.state.zoom),
         view: s.state.view,
-        // real-2b: L/R fovea previews moved to the homography undistort pipes;
-        // the kernel emits only the derived center composite (it still consumes
-        // the L/R convert inputs for the diff/depth `aligned` foveae).
-        foveaViews: false,
         ...voltParams(),
         ...sliceAtParam(),
         ...depthParams(),

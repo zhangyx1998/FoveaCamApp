@@ -51,8 +51,6 @@ export function createDisplayKernel(initial: Record<string, unknown>): VisionKer
     sliceAt: { x: number; y: number } | null;
     zoom: number;
     view: string;
-    wrap: boolean;
-    foveaViews: boolean;
     depthNear: number;
     depthFar: number;
   } = {
@@ -62,8 +60,6 @@ export function createDisplayKernel(initial: Record<string, unknown>): VisionKer
     sliceAt: null,
     zoom: 1,
     view: "sliced",
-    wrap: false,
-    foveaViews: true,
     depthNear: -Infinity,
     depthFar: Infinity,
   };
@@ -83,16 +79,15 @@ export function createDisplayKernel(initial: Record<string, unknown>): VisionKer
     };
   }
 
-  function fovea(role: "L" | "R", raw: Mat<Uint8Array>, out: KernelFrameOut[]): void {
+  function fovea(role: "L" | "R", raw: Mat<Uint8Array>): void {
+    // The kernel emits NO L/R preview frames anymore (real-2b sweep close:
+    // every consumer's L/R view binds a `camera/<serial>/undistort` pipe
+    // directly). The warp survives solely as the combined (diff/depth)
+    // `aligned` input — sliced view skips it entirely (the hot path).
     const combining = p.view !== "sliced";
-    // Wrap is needed only for an emitted fovea preview or the combined
-    // (diff/depth) `aligned` input — skip the warp entirely when neither applies
-    // (manual-control's sliced view with `foveaViews` off is the hot path).
-    const H = role === "L" ? p.homographyL : p.homographyR;
-    const wrapped = (p.foveaViews || combining) && H ? wrapPerspective(raw, H) : null;
-    if (p.foveaViews) out.push({ name: role, mat: p.wrap && wrapped ? wrapped : raw });
     if (combining) {
-      aligned[role] = wrapped; // fresh Mat or null; combined view guards on both
+      const H = role === "L" ? p.homographyL : p.homographyR;
+      aligned[role] = H ? wrapPerspective(raw, H) : null; // combined view guards on both
     } else {
       aligned.L = aligned.R = null;
     }
@@ -119,8 +114,6 @@ export function createDisplayKernel(initial: Record<string, unknown>): VisionKer
       if (d.sliceAt !== undefined) p.sliceAt = d.sliceAt;
       if (d.zoom !== undefined) p.zoom = d.zoom;
       if (d.view !== undefined) p.view = d.view;
-      if (d.wrap !== undefined) p.wrap = d.wrap;
-      if (d.foveaViews !== undefined) p.foveaViews = d.foveaViews;
       if (d.depthNear !== undefined) p.depthNear = d.depthNear;
       if (d.depthFar !== undefined) p.depthFar = d.depthFar;
     },
@@ -146,9 +139,9 @@ export function createDisplayKernel(initial: Record<string, unknown>): VisionKer
           out.push({ name: "center", mat: slice(view, clampRect(RECT.fromCenter(at, size))) });
         }
       }
-      if (frames.L) fovea("L", frames.L.mat, out);
+      if (frames.L) fovea("L", frames.L.mat);
       if (frames.R) {
-        fovea("R", frames.R.mat, out);
+        fovea("R", frames.R.mat);
         if (p.view !== "sliced") combined(out);
       }
       if (out.length === 0 && values.size === undefined) return null;
