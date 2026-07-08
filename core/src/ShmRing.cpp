@@ -179,8 +179,20 @@ struct SlotNative {
   int channels = 0;
 };
 
+// Per-ENV addon state for core.node's SHM writer classes. The class constructor
+// references MUST be per-environment, not process-global statics: when a
+// worker_thread loads core.node (the vision worker, for core/Vision) and
+// terminates, a global static would be overwritten by the worker's env and left
+// dangling → the main thread's next ShmSlot/Writer `Create` dereferences a dead
+// Isolate and segfaults — the identical bug fixed for the reader addon in
+// B-19b. Stored in core.node's single instance-data slot (nothing else uses
+// it); freed by N-API on env teardown while the env is still valid.
+struct ShmAddonData {
+  Napi::FunctionReference slotCtor;
+  Napi::FunctionReference writerCtor;
+};
+
 class ShmSlotObject : public Napi::ObjectWrap<ShmSlotObject> {
-  static Napi::FunctionReference constructor;
   SlotNative native;
 
 public:
@@ -194,14 +206,14 @@ public:
             InstanceMethod<&ShmSlotObject::debugFillPattern>(
                 "debugFillPattern"),
         });
-    constructor = Napi::Persistent(fn);
-    constructor.SuppressDestruct();
+    env.GetInstanceData<ShmAddonData>()->slotCtor = Napi::Persistent(fn);
     return fn;
   }
 
   static Napi::Object Create(Napi::Env env, SlotNative native) {
     auto *heap = new SlotNative(std::move(native));
-    return constructor.New({Napi::External<SlotNative>::New(env, heap)});
+    return env.GetInstanceData<ShmAddonData>()->slotCtor.New(
+        {Napi::External<SlotNative>::New(env, heap)});
   }
 
   ShmSlotObject(const Napi::CallbackInfo &info)
@@ -288,7 +300,8 @@ public:
 
   static bool Is(const Napi::Value &value) {
     return value.IsObject() &&
-           value.As<Napi::Object>().InstanceOf(constructor.Value());
+           value.As<Napi::Object>().InstanceOf(
+               value.Env().GetInstanceData<ShmAddonData>()->slotCtor.Value());
   }
 
   static const SlotNative &UnwrapValue(const Napi::Value &value) {
@@ -299,7 +312,6 @@ public:
   }
 };
 
-Napi::FunctionReference ShmSlotObject::constructor;
 
 class WriterCore {
   std::mutex mutex;
@@ -372,7 +384,6 @@ public:
 };
 
 class ShmWriterObject : public Napi::ObjectWrap<ShmWriterObject> {
-  static Napi::FunctionReference constructor;
   std::shared_ptr<WriterCore> core;
 
 public:
@@ -384,8 +395,7 @@ public:
             InstanceMethod<&ShmWriterObject::publish>("publish"),
             InstanceMethod<&ShmWriterObject::close>("close"),
         });
-    constructor = Napi::Persistent(fn);
-    constructor.SuppressDestruct();
+    env.GetInstanceData<ShmAddonData>()->writerCtor = Napi::Persistent(fn);
     return fn;
   }
 
@@ -418,7 +428,6 @@ public:
   }
 };
 
-Napi::FunctionReference ShmWriterObject::constructor;
 
 Napi::Value topicKey(const Napi::CallbackInfo &info) {
   auto env = info.Env();
@@ -451,6 +460,9 @@ WriteTarget writeTarget(const Napi::Value &value) {
 }
 
 void exportShmNamespace(Napi::Env env, Napi::Object &exports) {
+  // Per-env state (see ShmAddonData) — set BEFORE the class Inits store their
+  // constructors. core.node has one instance-data slot; nothing else uses it.
+  env.SetInstanceData(new ShmAddonData());
   exports.Set("Writer", ShmWriterObject::Init(env));
   exports.Set("ShmSlot", ShmSlotObject::Init(env));
   exports.Set("topicKey", Napi::Function::New(env, topicKey, "topicKey"));
