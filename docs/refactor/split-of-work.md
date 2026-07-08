@@ -1363,3 +1363,47 @@ per frame) while the native converter threads sit parked. Full migration brief:
       renders from the pipe (same pixels) — visual parity is the user's Stage-F
       check; no util claim (the loop still runs for (b) until the coupled half).
       Not committed.
+
+---
+
+## real-2 — typed stream node graph + profiler viz + APPLICATION AUDIT (2026-07-08)
+
+User objectives (away for hours; PUSH HARD, milestones may be crossed with
+verification deferred): (1) node-graph visualization in the profiler w/ per-node
++ per-edge perf stats — EXTERNAL VIZ LIBRARY GRANTED; (2) runtime-extensible
+graph, renderer-composed per window, path-like node ids = stream ids, strict
+I/O typing harness, multi named inputs / single output; (3) application-logic
+audit by FRESH opus workers seeded from docs/applications/ + obvious fixes
+(ambiguous → user). Full brief: docs/refactor/proposals/node-graph.md.
+
+**GRANT (planner-logged): A may `npm install` ONE visualization library (+ its
+types) in app/ for the profiler graph panel (cytoscape/vis-network/elkjs-class;
+A picks; must run fully local, no runtime CDN).**
+
+- **A-33 — profiler graph panel (build; design the panel, mock-first).** Owns
+  ProfilerWindow.vue + new graph components + the lib. Render the node graph
+  (nodes: camera/convert/undistort/kcf/detector/kernels/consumers; badges:
+  util/rate/maxInterval/drops, SATURATED styling reused; edges: fps/MB/s/
+  consumer count). Stage 1 derives topology from existing pipes+probes; rebase
+  onto C's graphTopology() contract when published. Layout stable under 1 Hz
+  updates + node churn.
+- **B-24 — native bricks for the graph (PLAN-FIRST).** The fovea crop brick
+  (crop+resize from camera/undistort stream → DYNAMIC pipe, C-20 semantics:
+  max-footprint ring, active w/h, epoch ids, spawn/cancel mid-flight); typed/
+  metered node identity for non-pipe outputs (KCF/detector); whatever the
+  topology snapshot needs natively. Sketch + questions → ruling → build.
+- **C-24 — graph model + composition protocol (PLAN-FIRST; publish the topology
+  contract EARLY for A).** Path-like id scheme (+ migration of camera:/
+  undistort: ids), StreamType/NodeSpec typing harness, graphTopology() snapshot
+  (nodes+edges+stats), window-scoped compose/decompose protocol (runtime
+  add/remove; orchestrator = brick provider; sessions keep control loops only),
+  multi-fovea as the flagship dynamic case. Sketch + questions → ruling → build.
+
+- **AUDIT (fresh opus workers, user-mandated):** seeds in docs/applications/
+  (planner-authored understanding; imperfect by design). Each auditor: read
+  seed → read the app code deeply → CORRECT/refine the doc → fix OBVIOUS logic/
+  UI bugs (small, gate-verified) → record ambiguous issues under "Open
+  questions (for the user)". Known user-reported bugs: disparity-scope ignores
+  the fovea↔wide SCALE RATIO in template matching; tracking-single never draws
+  the box on the wide view after drag-end. Lanes: app dirs only; shared-file
+  changes must be flagged to the planner first. Planner verifies + commits.
