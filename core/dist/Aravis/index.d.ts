@@ -174,51 +174,113 @@ declare module "core/Aravis" {
    */
   export function converterProbeAll(): Record<string, ProbeSnapshot>;
 
-  /**
-   * Out-of-loop probe of every ACTIVE per-camera undistort thread (real-1g,
-   * B-23) → `{ [pipeId]: ProbeSnapshot }` — same shape as `converterProbeAll`,
-   * folds into `perfSnapshot.workloads` identically. Parked/detached pipes are
-   * absent — no stale rows.
-   */
-  export function undistortProbeAll(): Record<string, ProbeSnapshot>;
+  /** `undistortProbeAll` snapshot: the shared meter shape + the v2 variant
+   *  surface (unified-time-and-topology §5). */
+  export interface UndistortProbeSnapshot extends ProbeSnapshot {
+    variant: "intrinsic" | "homography";
+    /** True once `setClockOffset` calibrated this brick's device→host map.
+     *  False = homography lookups run at `hostNs = deviceTimestamp` (offset
+     *  0, uncalibrated). Always false-and-irrelevant for `intrinsic`. */
+    calibratedClock: boolean;
+    /** Frames passed through UNTOUCHED (homography variant with an empty
+     *  mirror-history ring) — nonzero means H samples aren't flowing yet. */
+    passthrough: number;
+  }
 
   /**
-   * Attach a camera→pipe UNDISTORT producer thread (real-1g, B-23): convert to
-   * the pipe's advertised `spec.pixelFormat` then full-frame `cv::remap` with
-   * maps built NATIVELY at attach from the plain persisted calibration JSON
-   * (never pass the `Vision.Undistort` instance). Gated by the pipe's own
-   * consumer refcount (parks when no consumer). The pipe must be advertised
-   * first; `pipeId` is the graph node id (see `graph-contract` builders).
+   * Out-of-loop probe of every ACTIVE undistort brick → `{ [pipeId]:
+   * UndistortProbeSnapshot }` — the shared meter shape folds into
+   * `perfSnapshot.workloads` identically. Parked/detached pipes are absent —
+   * no stale rows.
+   */
+  export function undistortProbeAll(): Record<string, UndistortProbeSnapshot>;
+
+  /** Variant selector for `attachUndistortPipe` (unified-time-and-topology
+   *  §5): INTRINSIC (center camera — cached `initUndistortRectifyMap` maps
+   *  from the plain persisted calibration JSON) or HOMOGRAPHY (L/R
+   *  mirror-steered — per-frame `warpPerspective` with H looked up from the
+   *  native mirror-history ring by the frame's host-ns time). */
+  export type UndistortPipeOptions =
+    | CameraCalibration // legacy positional form ⇒ intrinsic
+    | { cal: CameraCalibration }
+    | { homography: true; ringCapacity?: number };
+
+  /**
+   * Attach an UNDISTORT brick v2 (unified-time-and-topology §5): consumes the
+   * CONVERTER's in-process owned-frame tap — BGRA/converted input only, never
+   * the raw Bayer stream. `source` is the convert brick's pipeId (preferred —
+   * shares the live converter; demand propagates: this brick running keeps
+   * the converter awake even with zero convert-pipe SHM consumers) or a
+   * Camera (legacy — a private `<pipeId>#convert` converter is created).
+   * Gated by the pipe's own consumer refcount (parks when no demand). The
+   * pipe must be advertised first; `pipeId` is the graph node id.
    */
   export function attachUndistortPipe(
-    camera: Camera,
+    source: Camera | string,
     pipeId: string,
-    calibration: CameraCalibration,
+    options: UndistortPipeOptions,
   ): boolean;
 
   /** Detach + join the undistort producer. Idempotent (false if unknown). */
   export function detachUndistortPipe(pipeId: string): boolean;
 
-  /** Options for `attachFoveaPipe` (real-2, B-24). */
+  /**
+   * Push one mirror/H sample into a HOMOGRAPHY undistort brick's native
+   * history ring (unified-time-and-topology §3/§5): `h` is the 3×3 matrix,
+   * row-major, 9 doubles; `hostNs` its host-clock timestamp. Designed for the
+   * ~1 kHz actuation loop (mutex-guarded native ring; no per-frame JS). The
+   * undistort thread warps each frame with the entry nearest ≤ (linearly
+   * interpolated) its `deviceTimestamp + clockOffset`. Returns false for an
+   * unknown pipe or a non-homography variant.
+   */
+  export function pushHomography(
+    pipeId: string,
+    hostNs: bigint,
+    h: Float64Array,
+  ): boolean;
+
+  /**
+   * Set a homography brick's camera-device→host clock offset (ns):
+   * `hostNs = frame.deviceTimestamp + offsetNs`. Exact pipeId match first,
+   * else every homography brick whose pipeId CONTAINS the key (so a bare
+   * serial reaches `camera/<serial>/undistort`). Returns the number of bricks
+   * updated (0 = nothing matched). Until called, the brick runs offset 0 and
+   * probes `calibratedClock: false`.
+   */
+  export function setClockOffset(
+    pipeIdOrSerial: string,
+    offsetNs: bigint,
+  ): number;
+
+  /** Options for `attachFoveaPipe` (re-based on the undistort brick,
+   *  unified-time-and-topology §5). */
   export interface FoveaPipeOptions {
-    /** Initial crop rect, in source (sensor / undistorted-frame) pixels. */
+    /** Initial crop rect, in SOURCE-frame pixels (the undistorted frame when
+     *  chained on an undistort brick; the converted frame otherwise). */
     rect: Rect;
-    /** Plain persisted calibration JSON ⇒ the fovea is an UNDISTORTED crop
-     *  (fused map-ROI remap). Omit for a raw crop of the converted frame. */
+    /** LEGACY (Camera source only): plain persisted calibration JSON ⇒ a
+     *  private `<pipeId>#convert` + `<pipeId>#undistort` intrinsic chain is
+     *  built for this fovea. REJECTED with a string source — chain on an
+     *  undistort pipe instead (the fused map-ROI path is retired). */
     cal?: CameraCalibration | null;
   }
 
   /**
-   * Attach a spawn/cancel-able FOVEA CROP producer thread (real-2, B-24): a
-   * DYNAMIC pipe with C-20 semantics — advertise with `maxWidth`/`maxHeight`/
-   * `maxBytes` (the ring footprint); every frame carries its ACTIVE w/h and
-   * FRAME-BOUND crop origin in the v4 slot header (surfaced by the reader as
+   * Attach a spawn/cancel-able FOVEA CROP brick: a PLAIN ROI copy of the
+   * source brick's frames (chain convert → undistort → fovea — undistortion
+   * happens once upstream; N foveas share it). `source` is an undistort pipeId
+   * (preferred), a convert pipeId (raw crop), or a Camera (legacy — a private
+   * chain is created, see `FoveaPipeOptions.cal`). Demand propagates: this
+   * brick running keeps the whole upstream chain awake. The pipe is DYNAMIC
+   * with C-20 semantics — advertise with `maxWidth`/`maxHeight`/`maxBytes`
+   * (the ring footprint); every frame carries its ACTIVE w/h and FRAME-BOUND
+   * crop origin in the v4 slot header (surfaced by the reader as
    * `width`/`height`/`originX`/`originY`). Steer live via `setFoveaRect`.
    * Spawn = advertise + attach + connect; cancel = disconnect + detach +
    * close + drop (broker epochs make reused ids safe).
    */
   export function attachFoveaPipe(
-    camera: Camera,
+    source: Camera | string,
     pipeId: string,
     options: FoveaPipeOptions,
   ): boolean;
@@ -240,7 +302,8 @@ declare module "core/Aravis" {
     activeHeight: number;
     originX: number;
     originY: number;
-    /** True when the fovea crops the UNDISTORTED image (cal was given). */
+    /** True when the fovea crops UNDISTORTED space (its source brick is an
+     *  undistort node — shared or legacy-private). */
     undistorted: boolean;
   }
 

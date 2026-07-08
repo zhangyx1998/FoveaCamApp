@@ -4,21 +4,25 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// WS1 real-1g (B-23): undistorted streams as their OWN pipes, produced by a
-// native convert+remap thread (UndistortStream), maps built at attach from the
-// plain persisted CameraCalibration JSON. NO hardware (fake camera). Proves:
+// Undistort brick v2 (unified-time-and-topology §5): undistorted streams as
+// their OWN pipes, produced by a native INTRINSIC remap thread CHAINED on the
+// converter's in-process owned-frame tap (BGRA in — never the raw stream),
+// maps built at attach from the plain persisted CameraCalibration JSON. NO
+// hardware (fake camera). Proves:
 //   1. ZERO-DISTORTION PASSTHROUGH — with dist_coeffs = 0 the maps are the
 //      identity, so the undistort pipe's bytes MATCH the raw converter pipe's
-//      for the SAME camera frame (matched on FrameMeta.deviceTimestamp).
+//      for the SAME camera frame (matched on FrameMeta.deviceTimestamp) —
+//      chained through the tap (attach by CONVERT PIPEID, the v2 form).
 //   2. NONZERO DISPLACEMENT — with a strong barrel k1, matched frames DIFFER
 //      substantially from raw (pixels displaced per the maps), while staying
 //      structurally valid BGRA (B==G==R; remap interpolates channels alike).
-//      Also demonstrates the `undistort:<serial>@<format-ish>` multi-pipe-per-
-//      camera convention (two undistort pipes, one camera, distinct cals).
+//      Attached with the LEGACY Camera argument (private #convert chain) —
+//      back-compat proof.
 //   3. GATE PARK + RESUME — disconnecting the last consumer parks the thread
 //      (pipe's own connectPipe refcount via setConsumerGate); reconnecting
 //      resumes production (fresh frames flow).
-//   4. undistortProbeAll() exposes per-pipe ThreadMeter snapshots.
+//   4. undistortProbeAll() exposes per-pipe ThreadMeter snapshots + the v2
+//      {variant, calibratedClock} surface.
 //   5. ORDERLY teardown (B-20 pattern) → natural exit 0, zero leak warns.
 // Run UNSANDBOXED: /opt/homebrew/bin/node core/test/18-undistort-pipe.ts
 
@@ -73,8 +77,10 @@ const dstId = `undistort:${serial}@barrel`; // strong barrel k1 (the @-suffix co
 advertise(rawId); advertise(idnId); advertise(dstId);
 
 assert.equal(A.attachCameraPipe(camera, rawId), true, "raw converter attaches");
-assert.equal(A.attachUndistortPipe(camera, idnId, calibration(0)), true, "identity undistort attaches");
-assert.equal(A.attachUndistortPipe(camera, dstId, calibration(-0.4)), true, "barrel undistort attaches");
+// v2 form: chained on the CONVERT brick by pipeId ({cal} = intrinsic variant).
+assert.equal(A.attachUndistortPipe(rawId, idnId, { cal: calibration(0) }), true, "identity undistort attaches (chained on convert pipe)");
+// Legacy form: Camera + positional calibration (private #convert chain).
+assert.equal(A.attachUndistortPipe(camera, dstId, calibration(-0.4)), true, "barrel undistort attaches (legacy camera arg)");
 
 // Connect all three (main brokers; connect drives each pipe's consumer gate).
 const open = (id: string) => ({ rh: reader.open(P.connect(id).shmName), dest: new ArrayBuffer(bytes), lastSeq: 0n });
@@ -131,12 +137,14 @@ assert.equal(idnCmp.equal, idnCmp.checked, `identity maps pass bytes through (${
 // 2. strong barrel = substantial displacement on every matched frame.
 assert.equal(dstCmp.different, dstCmp.checked, `barrel maps displace pixels (${dstCmp.different}/${dstCmp.checked})`);
 
-// 4. per-pipe ThreadMeter snapshots via undistortProbeAll.
+// 4. per-pipe ThreadMeter snapshots via undistortProbeAll (+ v2 variant surface).
 const probes = A.undistortProbeAll();
 for (const id of [idnId, dstId]) {
   assert(probes[id], `probe has ${id}`);
   assert(probes[id].outputs.undistorted.count >= 3, `${id} metered ${probes[id].outputs.undistorted.count} outputs`);
   assert(probes[id].name.startsWith("undistort:"), "meter name");
+  assert.equal(probes[id].variant, "intrinsic", `${id} intrinsic variant`);
+  assert.equal(probes[id].calibratedClock, false, `${id} clock not calibrated`);
 }
 console.log(`18-undistort-pipe: identity=${idnCmp.equal}/${idnCmp.checked} passthrough, barrel=${dstCmp.different}/${dstCmp.checked} displaced, probes OK.`);
 

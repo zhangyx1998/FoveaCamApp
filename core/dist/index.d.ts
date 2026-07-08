@@ -17,4 +17,5 @@ declare module "core" {
     export * as Log from "core/Log";
     export * as Shm from "core/Shm";
     export * as Pipe from "core/Pipe";
+    export * as Topology from "core/Topology";
 }

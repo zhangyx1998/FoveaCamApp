@@ -22,15 +22,24 @@ Napi::Value attachCameraPipe(const Napi::CallbackInfo &info);
 Napi::Value detachCameraPipe(const Napi::CallbackInfo &info);
 Napi::Value enableFakeCamera(const Napi::CallbackInfo &info);
 Napi::Value converterProbeAll(const Napi::CallbackInfo &info);
-// B-23 (real-1g), defined in core/lib/Aravis/UndistortStream.cpp.
+// B-23 (real-1g) + unified-time-and-topology §5 (undistort brick v2), defined
+// in core/lib/Aravis/UndistortStream.cpp.
 Napi::Value attachUndistortPipe(const Napi::CallbackInfo &info);
 Napi::Value detachUndistortPipe(const Napi::CallbackInfo &info);
 Napi::Value undistortProbeAll(const Napi::CallbackInfo &info);
+Napi::Value pushHomography(const Napi::CallbackInfo &info);
+Napi::Value setClockOffset(const Napi::CallbackInfo &info);
+Napi::Value __paramRingSelfTest(const Napi::CallbackInfo &info);
 // B-24 (real-2), defined in core/lib/Aravis/FoveaStream.cpp.
 Napi::Value attachFoveaPipe(const Napi::CallbackInfo &info);
 Napi::Value setFoveaRect(const Napi::CallbackInfo &info);
 Napi::Value detachFoveaPipe(const Napi::CallbackInfo &info);
 Napi::Value foveaProbeAll(const Napi::CallbackInfo &info);
+}
+// unified-time-and-topology §6: consolidated NodeReport rows for every live
+// native brick + pipe. Defined in core/src/Topology.cpp.
+namespace Topology {
+Napi::Value report(const Napi::CallbackInfo &info);
 }
 
 using namespace Napi;
@@ -75,6 +84,16 @@ static Object init(Env env, Object exports) {
                Function::New<Arv::detachUndistortPipe>(env, "detachUndistortPipe"));
     Aravis.Set("undistortProbeAll",
                Function::New<Arv::undistortProbeAll>(env, "undistortProbeAll"));
+    // unified-time-and-topology §5: the homography-variant control surface —
+    // mirror/H history writes (≤ ~1 kHz) + the device→host clock offset.
+    Aravis.Set("pushHomography",
+               Function::New<Arv::pushHomography>(env, "pushHomography"));
+    Aravis.Set("setClockOffset",
+               Function::New<Arv::setClockOffset>(env, "setClockOffset"));
+    // Hardware-free native self-test of the ParamRing lookup semantics
+    // (core/test/22). Not part of the public d.ts surface.
+    Aravis.Set("__paramRingSelfTest", Function::New<Arv::__paramRingSelfTest>(
+                                          env, "__paramRingSelfTest"));
     // B-24 (real-2): spawn/cancel-able fovea crop pipes — fused map-ROI
     // convert+remap+crop per (camera × pipe), live-steerable rect, C-20
     // max-footprint dynamic geometry. Probe keys + meter names = pipeId.
@@ -122,6 +141,11 @@ static Object init(Env env, Object exports) {
     auto PipeNs = Object::New(env);
     Pipe::exportPipeNamespace(env, PipeNs);
     exports.Set("Pipe", PipeNs);
+    // Consolidated node-topology reporting (unified-time-and-topology §6):
+    // one NodeReport[] for every live native brick + advertised pipe.
+    auto TopologyNs = Object::New(env);
+    TopologyNs.Set("report", Function::New<Topology::report>(env, "report"));
+    exports.Set("Topology", TopologyNs);
     // Finalize
     exports.Set("cleanup", Function::New(env, cleanup));
     VERBOSE("Core module initialized");

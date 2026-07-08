@@ -16,6 +16,7 @@
 #include <memory>
 #include <mutex>
 
+#include <Topology.h>
 #include <napi-helper.h>
 
 #include "ConverterStream.h"
@@ -35,6 +36,16 @@ struct PipeBinding {
 
 static std::mutex g_mutex;
 static std::map<std::string, PipeBinding> g_pipes;
+
+// Cross-brick lookup: chained bricks (undistort/fovea v2) resolve their tap
+// source by convert pipeId. They then hold the converter by shared_ptr, so a
+// later detachCameraPipe never dangles the chain (the brick outlives its
+// binding until the last downstream releases it).
+ConverterStream::Ptr findConverter(const std::string &pipeId) {
+  std::scoped_lock lock(g_mutex);
+  auto it = g_pipes.find(pipeId);
+  return it != g_pipes.end() ? it->second.converter : nullptr;
+}
 
 // ---- Meter::Snapshot -> JS (per-pipe converter probe, for perfSnapshot) ---
 static Napi::Object statsToJs(Napi::Env env,
@@ -201,6 +212,42 @@ FN(enableFakeCamera) {
   auto env = info.Env();
   arv_enable_interface("Fake");
   return env.Undefined();
+}
+
+// ---- Topology.report() rows (unified-time-and-topology §6) ------------------
+// One convert-brick row: id, kind "convert", ACTUAL input edge camera/<serial>
+// (raw wire format), converted output type, full meter stats; transport/epoch/
+// pipe extras stamped when the id is a live advertised pipe.
+void appendConvertNodeRow(Napi::Env env, Napi::Array &rows,
+                          const std::string &id,
+                          const std::shared_ptr<ConverterStream> &c) {
+  if (!c)
+    return;
+  auto row = Topology::node(env, id, "convert", "native");
+  std::string srcDtype = "U8";
+  try {
+    srcDtype = dtypeOf(convert<PixelFormat>(c->sourceFormat()));
+  } catch (...) {
+  }
+  Topology::addInput(env, row, c->sourceId(), "frame",
+                     Topology::frameType(env, c->sourceFormat(), srcDtype));
+  if (!Topology::decoratePipe(env, row, id))
+    row.Set("output",
+            Topology::frameType(env, convert<std::string>(c->target()),
+                                dtypeOf(c->target())));
+  row.Set("stats", meterSnapshotToJs(env, c->probe()));
+  rows.Set(rows.Length(), row);
+}
+
+void appendConverterReports(Napi::Env env, Napi::Array &rows,
+                            std::set<std::string> &seen) {
+  std::scoped_lock lock(g_mutex);
+  for (const auto &[pipeId, b] : g_pipes) {
+    if (!b.converter)
+      continue;
+    appendConvertNodeRow(env, rows, pipeId, b.converter);
+    seen.insert(pipeId);
+  }
 }
 
 } // namespace Arv

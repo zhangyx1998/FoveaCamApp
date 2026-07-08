@@ -4,20 +4,23 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// real-2 (B-24): the FOVEA CROP brick — spawn/cancel-able per-fovea producer
-// threads feeding DYNAMIC pipes (C-20: max-footprint ring, per-frame active
-// w/h in the slot header, epoch reuse-safe ids). NO hardware (fake camera).
-// Proves:
-//   1. RAW-CROP IDENTITY — an uncalibrated fovea pipe's bytes equal the same
-//      rect sliced from the raw converter pipe's frame (matched on
+// Fovea brick v2 (unified-time-and-topology §5): spawn/cancel-able per-fovea
+// producer threads RE-BASED on the upstream brick's in-process owned-frame
+// tap (chain convert → undistort → fovea; the crop is a PLAIN ROI copy — the
+// fused map-ROI path is retired), feeding DYNAMIC pipes (C-20: max-footprint
+// ring, per-frame active w/h in the slot header, epoch reuse-safe ids). NO
+// hardware (fake camera). Proves:
+//   1. RAW-CROP IDENTITY — a fovea chained on the CONVERT brick equals the
+//      same rect sliced from the raw converter pipe's frame (matched on
 //      FrameMeta.deviceTimestamp — the test-18 technique).
-//   2. UNDISTORTED MAP-ROI IDENTITY — a calibrated fovea's bytes equal the
-//      same rect sliced from the full `undistort` pipe frame (dest-ROI map
-//      submats ⇒ the exact crop of the full undistorted image).
+//   2. UNDISTORTED-CROP IDENTITY — a fovea chained on the UNDISTORT brick
+//      equals the same rect sliced from the full `undistort` pipe frame
+//      (crop of the undistorted output — the chain finally matches the id).
 //   3. MID-FLIGHT setFoveaRect — steering the crop live changes the per-frame
 //      ACTIVE w/h the reader surfaces (v3 slot header), no re-attach.
 //   4. SPAWN/CANCEL CHURN — advertise+attach+connect / disconnect+detach+
-//      close+drop ×6 on the SAME id: every generation flows frames, epochs
+//      close+drop ×6 on the SAME id (LEGACY Camera-source form — private
+//      #convert chain, back-compat): every generation flows frames, epochs
 //      bump (fresh shm segment names), nothing leaks.
 //   5. foveaProbeAll — keyed by pipeId (= C-24 node id), meter name == key,
 //      frame-bound activeWidth/Height/originX/originY fields; converter +
@@ -81,9 +84,12 @@ const fovUndId = `camera/${serial}/undistort/fovea/0`;
 advertiseFull(rawId); advertiseFull(undId);
 advertiseFovea(fovRawId); advertiseFovea(fovUndId);
 assert.equal(A.attachCameraPipe(camera, rawId), true, "raw converter attaches");
-assert.equal(A.attachUndistortPipe(camera, undId, cal), true, "undistort attaches");
-assert.equal(A.attachFoveaPipe(camera, fovRawId, { rect: R0 }), true, "raw fovea attaches");
-assert.equal(A.attachFoveaPipe(camera, fovUndId, { rect: R0, cal }), true, "undistorted fovea attaches");
+// v2 chain: undistort taps the convert brick; foveas tap convert/undistort.
+assert.equal(A.attachUndistortPipe(rawId, undId, { cal }), true, "undistort attaches (chained on convert)");
+assert.equal(A.attachFoveaPipe(rawId, fovRawId, { rect: R0 }), true, "raw fovea attaches (chained on convert)");
+assert.equal(A.attachFoveaPipe(undId, fovUndId, { rect: R0 }), true, "undistorted fovea attaches (chained on undistort)");
+// The fused map-ROI form is retired: cal + a source pipeId must be rejected.
+assert.throws(() => A.attachFoveaPipe(undId, fovUndId, { rect: R0, cal }), /cal/, "cal with a source pipeId throws");
 
 type Src = { rh: object; dest: ArrayBuffer; lastSeq: bigint };
 const open = (id: string, bytes: number): Src => ({ rh: reader.open(P.connect(id).shmName), dest: new ArrayBuffer(bytes), lastSeq: 0n });
@@ -139,15 +145,15 @@ const fovRaw = open(fovRawId, maxBytes), fovUnd = open(fovUndId, maxBytes);
       if (ref) {
         const got = new Uint8Array(r.width * r.height * CH);
         got.set(new Uint8Array(fovUnd.dest, 0, got.length));
-        assert(bytesEqual(got, slice(ref, R0)), "undistorted fovea == undistort-frame subrect (map-ROI identity)");
+        assert(bytesEqual(got, slice(ref, R0)), "undistorted fovea == undistort-frame subrect (chained-crop identity)");
         undOk++;
       }
     }
     if (idle) await sleep(3);
   }
   assert(rawOk >= 3, `raw-crop identity matched frames (${rawOk})`);
-  assert(undOk >= 3, `map-ROI identity matched frames (${undOk})`);
-  console.log(`20-fovea-pipe: raw-crop identity ${rawOk}/3, undistorted map-ROI identity ${undOk}/3.`);
+  assert(undOk >= 3, `undistorted-crop identity matched frames (${undOk})`);
+  console.log(`20-fovea-pipe: raw-crop identity ${rawOk}/3, undistorted-crop identity ${undOk}/3.`);
 }
 
 // --- 3: mid-flight setFoveaRect → per-frame ACTIVE w/h changes ---------------
