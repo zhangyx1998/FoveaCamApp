@@ -47,7 +47,35 @@ export async function listCameraInfo(): Promise<CameraInfo[]> {
  * size and is locked once streaming.
  */
 export async function applyStoredConfig(camera: Camera): Promise<void> {
-  initCamera(camera, await read<Partial<Camera>>(cameraConfigPath(camera), {}));
+  const config = await read<Partial<Camera>>(cameraConfigPath(camera), {});
+  // A just-released handle for this same device may still be streaming for a
+  // beat (the acquisition stop runs on the OLD stream's native thread) — and
+  // while the device holds TLParamsLocked, every config write bounces with
+  // USB3Vision access-denied. Retry the apply across that window rather than
+  // continuing on a half-configured camera (rig 2026-07-08: manual-control
+  // exit left the next app's L/R on a stale pixel format).
+  const deadline = Date.now() + 3000;
+  for (;;) {
+    let applied = false;
+    try {
+      initCamera(camera, config); // swallows pixel-format failures (warns)
+      applied =
+        config.pixel_format === undefined ||
+        camera.pixel_format === config.pixel_format;
+    } catch {
+      // Another setter hit the locked device — retry below.
+    }
+    if (applied) return;
+    if (Date.now() >= deadline) {
+      console.error(
+        `[registry] stored config could not be fully applied for ${camera.serial}` +
+          ` (device still locked? wanted pixel_format=${config.pixel_format},` +
+          ` have ${camera.pixel_format})`,
+      );
+      return; // keep the legacy warn-and-continue behavior on final failure
+    }
+    await new Promise((r) => setTimeout(r, 250));
+  }
 }
 
 /**

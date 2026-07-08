@@ -105,6 +105,14 @@ export function controllerSession(): ServerSession<typeof controller> {
         async disconnect() {
           const c = ctrl();
           setActiveController(null);
+          try {
+            // Never hand back an energized mirror driver: releasing the port
+            // leaves the firmware's Enable state untouched (hardware-safety
+            // invariant, docs/hardware/stage-f.md).
+            if (c?.connected && c.enabled) await c.disable();
+          } catch (e) {
+            console.warn("[controller] disable-on-disconnect failed:", e);
+          }
           c?.release();
           stopProbe();
           publish();

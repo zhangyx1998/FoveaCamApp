@@ -154,6 +154,13 @@ public:
   ARV_CAMERA_FN_VOID(clear_triggers, clear_triggers);
   ARV_CAMERA_FN_VOID(software_trigger, software_trigger);
 
+  /* Hardware-quiescence failsafe: AcquisitionStop + TLParamsLocked=0 in
+   * Aravis's canonical order. Safe on an idle camera. The main-process
+   * janitor uses this to stop a camera left streaming by a crashed
+   * orchestrator (a locked camera rejects every config write with
+   * USB3Vision access-denied until unlocked). */
+  ARV_CAMERA_FN_VOID(stop_acquisition, stop_acquisition);
+
   ARV_CAMERA_SET(const char *, trigger_source, trigger_source);
   ARV_CAMERA_GET(const char *, trigger_source, trigger_source);
   ARV_CAMERA_DUP(trigger_source_options, trigger_sources);

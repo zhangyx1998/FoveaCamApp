@@ -172,6 +172,10 @@ export default defineConfig(({ command }) => {
                         main: "electron/main.ts",
                         orchestrator: "orchestrator/index.ts",
                         "vision-worker": "orchestrator/vision-worker.ts",
+                        // Hardware-safety failsafe: forked by main whenever
+                        // the orchestrator dies without confirming quiescence
+                        // (MEMS disable + camera acquisition stop).
+                        janitor: "orchestrator/janitor.ts",
                     },
                     vite: {
                         resolve: { alias },

@@ -205,8 +205,45 @@ const pendingDrains = new Map<
   (result: { ok: boolean; reason?: string }) => void
 >();
 
+// ---- Hardware janitor (safety invariant, docs/hardware/stage-f.md) --------
+// The orchestrator confirms `quiesced` (MEMS disabled + cameras released)
+// before a graceful exit. If it EVER exits without that confirmation —
+// SIGABRT from native code, SIGSEGV, OOM kill — the armed hardware outlives
+// it, so main forks this one-shot cleanup process (orchestrator/janitor.ts):
+// fresh process, fresh device claims, disables the MEMS controller over
+// serial and stops every camera's acquisition (which also clears
+// TLParamsLocked, unblocking the next boot's config restore).
+let orchestratorQuiesced = false;
+// One janitor run covers everything armed by the dead orchestrator — dedupe
+// concurrent triggers (unexpected-exit handler racing the quit path).
+let janitorRun: Promise<void> | null = null;
+function ensureJanitor(reason: string): Promise<void> {
+  janitorRun ??= runJanitor(reason).finally(() => {
+    janitorRun = null;
+  });
+  return janitorRun;
+}
+function runJanitor(reason: string): Promise<void> {
+  console.warn(`[janitor] launching (${reason})`);
+  return new Promise((resolve) => {
+    const proc = utilityProcess.fork(path.join(DIR, "janitor.js"), [], {
+      stdio: "inherit",
+      env: { ...process.env, FOVEA_DATA_PATH: DATA },
+    });
+    const timer = setTimeout(() => {
+      console.error("[janitor] timed out — killing");
+      proc.kill();
+    }, 10_000);
+    proc.on("exit", () => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
+}
+
 function startOrchestrator() {
   const entry = path.join(DIR, "orchestrator.js");
+  orchestratorQuiesced = false;
   orchestrator = utilityProcess.fork(entry, [], {
     stdio: "inherit",
     env: {
@@ -221,6 +258,10 @@ function startOrchestrator() {
   });
   orchestrator.on("message", (data: unknown) => {
     const msg = data as { type?: string; id?: number; ok?: boolean; reason?: string };
+    if (msg?.type === "quiesced") {
+      orchestratorQuiesced = true;
+      return;
+    }
     if (msg?.type !== "window:drain-result" || msg.id === undefined) return;
     pendingDrains.get(msg.id)?.({ ok: !!msg.ok, reason: msg.reason });
     pendingDrains.delete(msg.id);
@@ -228,6 +269,10 @@ function startOrchestrator() {
   orchestrator.on("exit", (code) => {
     console.warn("Orchestrator exited:", code);
     orchestrator = null;
+    // Safety invariant: an exit without the `quiesced` handshake means the
+    // MEMS controller and cameras may still be armed — clean up out-of-process.
+    if (!orchestratorQuiesced)
+      void ensureJanitor(`orchestrator exited (code ${code}) without quiescing`);
     // A dead orchestrator has nothing left to drain — unblock any switch
     // waiting on it rather than letting it time out.
     for (const [id, resolve] of pendingDrains) {
@@ -454,9 +499,19 @@ async function devRestart(): Promise<void> {
     console.error("Failed to persist window manifest:", error);
   }
   app.relaunch();
-  // `app.exit()` skips `before-quit`, so release the orchestrator explicitly.
-  orchestrator?.kill();
+  // `app.exit()` skips `before-quit`, so run the quiesce handshake here:
+  // give the orchestrator a beat to disable the MEMS controller + release
+  // cameras (async serial write — a bare kill() can't complete it) before
+  // the hard exit. Short deadline keeps dev restarts snappy; the relaunched
+  // controller connect re-disables as a backstop.
+  const proc = orchestrator;
   orchestrator = null;
+  if (proc) {
+    const exited = new Promise<void>((r) => proc.once("exit", () => r()));
+    proc.postMessage({ type: "shutdown" });
+    await Promise.race([exited, new Promise((r) => setTimeout(r, 2000))]);
+    proc.kill();
+  }
   app.exit(0);
 }
 
@@ -495,12 +550,40 @@ app
   .then(startOrchestrator)
   .then(createInitialWindows);
 
-// Terminate the orchestrator on quit (SIGTERM → its shutdown releases cameras,
-// serial, and the native module). Without this it can outlive the app.
-app.on("before-quit", () => {
+// Quit = graceful hardware quiescence first (safety invariant): ask the
+// orchestrator to shut down (it drains sessions, DISABLES the MEMS controller
+// over serial — an async write a bare SIGTERM can't complete — releases the
+// cameras, and confirms `quiesced`), then quit for real. If it wedges or dies
+// without confirming, the janitor cleans up out-of-process before we let
+// Electron reap everything.
+let quitting = false;
+app.on("before-quit", (event) => {
   manager.markQuitting();
-  orchestrator?.kill();
-  orchestrator = null;
+  if (quitting) return; // second pass: proceed with the real quit
+  quitting = true;
+  event.preventDefault();
+  const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+  void (async () => {
+    try {
+      const proc = orchestrator;
+      if (proc) {
+        const exited = new Promise<void>((r) => proc.once("exit", () => r()));
+        proc.postMessage({ type: "shutdown" });
+        const graceful = await Promise.race([
+          exited.then(() => true),
+          delay(5000).then(() => false),
+        ]);
+        if (!graceful) {
+          proc.kill();
+          await Promise.race([exited, delay(2000)]);
+        }
+      }
+      if (!orchestratorQuiesced) await ensureJanitor("app quit");
+    } finally {
+      orchestrator = null;
+      app.quit();
+    }
+  })();
 });
 
 app.on("window-all-closed", () => {

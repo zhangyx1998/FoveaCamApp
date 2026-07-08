@@ -90,6 +90,7 @@ public:
             INSTANCE_GETTER(CameraObject, trigger_options),            //
             INSTANCE_METHOD(CameraObject, clearTriggers),              //
             INSTANCE_METHOD(CameraObject, softwareTrigger),            //
+            INSTANCE_METHOD(CameraObject, stopAcquisition),            //
             INSTANCE_ACCESSOR(CameraObject, trigger_source),           //
             INSTANCE_GETTER(CameraObject, trigger_source_options),     //
             INSTANCE_METHOD(CameraObject, getFeature),                 //
@@ -208,6 +209,15 @@ private:
   FN(softwareTrigger) {
     try {
       core()->software_trigger();
+      return env.Undefined();
+    }
+    JS_EXCEPT(env.Undefined())
+  }
+
+  // Quiescence failsafe (see Camera.h): AcquisitionStop + TLParamsLocked=0.
+  FN(stopAcquisition) {
+    try {
+      core()->stop_acquisition();
       return env.Undefined();
     }
     JS_EXCEPT(env.Undefined())

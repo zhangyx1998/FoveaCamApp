@@ -29,6 +29,7 @@ import type { WorkloadSnapshot } from "@lib/orchestrator/stats.js";
 import { onReport, onSpan, span } from "./diagnostics.js";
 import { systemSession } from "./sessions/system.js";
 import { controllerSession } from "./sessions/controller.js";
+import { activeController, setActiveController } from "./controller.js";
 import { viewerSession } from "./sessions/viewer.js";
 import liveViewSession from "@modules/single-capture/session";
 import manageCamerasSession from "@modules/manage-cameras/session";
@@ -270,12 +271,81 @@ async function drainForWindowSwitch(): Promise<{ ok: boolean; reason?: string }>
   return { ok: true };
 }
 
+// --- hardware quiescence (docs/hardware/stage-f.md safety invariant) -------
+// The MEMS controller must never stay energized and no camera may stay
+// streaming past this process's life, no matter how it ends. This is the
+// GRACEFUL half: an awaited disable + release, run on main's `shutdown`
+// message (app quit) and on uncaught errors. The crash half (SIGABRT/SIGSEGV,
+// where nothing here runs) is main's janitor process — it fires whenever we
+// exit without posting `quiesced` below.
+async function quiesceHardware(): Promise<void> {
+  try {
+    const c = activeController();
+    setActiveController(null);
+    if (c?.connected) {
+      await c.disable(); // energized mirrors first, cameras after
+      c.release();
+    }
+  } catch (e) {
+    console.error("[shutdown] MEMS disable failed:", e);
+  }
+  try {
+    await releaseAll();
+  } catch (e) {
+    console.error("[shutdown] camera release failed:", e);
+  }
+}
+
+let quiescing = false;
+/** Graceful exit: drain sessions best-effort, quiesce hardware, confirm to
+ *  main (suppresses its janitor), then exit. */
+function quiesceAndExit(code: number): void {
+  if (quiescing) return;
+  quiescing = true;
+  const deadline = new Promise<void>((r) => setTimeout(r, 4000));
+  void (async () => {
+    try {
+      for (const s of cameraOwning) s.dispose();
+      await Promise.race([
+        Promise.all(cameraOwning.map((s) => s.drained())),
+        new Promise((r) => setTimeout(r, 2000)),
+      ]);
+    } catch {
+      /* drain is best-effort on the way out */
+    }
+    await Promise.race([quiesceHardware(), deadline]);
+    try {
+      process.parentPort.postMessage({ type: "quiesced" });
+    } catch {
+      /* parent may already be gone */
+    }
+    shutdown();
+    process.exit(code);
+  })();
+}
+
+// A JS-level crash must still leave the hardware safe — quiesce, then die
+// nonzero (main's janitor stays as the backstop for native aborts, which
+// never reach these handlers).
+process.on("uncaughtException", (err) => {
+  console.error("[orchestrator] uncaughtException:", err);
+  quiesceAndExit(1);
+});
+process.on("unhandledRejection", (reason) => {
+  console.error("[orchestrator] unhandledRejection:", reason);
+  quiesceAndExit(1);
+});
+
 // --- accept renderer connections brokered by the main process ------------
 let firstPort = true;
 process.parentPort.on("message", (e) => {
   const data = e.data as
     | { type?: string; id?: number; windowId?: string | null }
     | null;
+  if (data?.type === "shutdown") {
+    quiesceAndExit(0);
+    return;
+  }
   if (data?.type === "window:drain") {
     const id = data.id ?? 0;
     void drainForWindowSwitch()
@@ -312,7 +382,10 @@ function shutdown(): void {
   cleanup?.();
 }
 process.on("SIGTERM", () => {
-  shutdown();
-  process.exit(0);
+  // Best-effort async quiesce (MEMS disable is a serial write and cannot run
+  // inside the sync `exit` handler). Main waits for our `quiesced`
+  // confirmation before letting the app die; if we're reaped first, its
+  // janitor covers the rest.
+  quiesceAndExit(0);
 });
 process.on("exit", shutdown);

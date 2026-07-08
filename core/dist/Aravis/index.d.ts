@@ -54,6 +54,12 @@ declare module "core/Aravis" {
     setTrigger(mode: string): void;
     clearTriggers(): void;
     softwareTrigger(): void;
+    /** Hardware-quiescence failsafe: `arv_camera_stop_acquisition`
+     *  (AcquisitionStop + TLParamsLocked=0 in Aravis's canonical order).
+     *  Safe on an idle camera. The main-process janitor uses this to stop a
+     *  camera left streaming by a crashed orchestrator — a locked camera
+     *  rejects every config write with USB3Vision access-denied. */
+    stopAcquisition(): void;
     trigger_source: string;
     readonly trigger_source_options: string[];
 

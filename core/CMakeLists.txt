@@ -24,6 +24,12 @@ file(GLOB SRCS ${SRC_DIR}/*.cpp ${SRC_DIR}/**/*.cpp)
 set(CMAKE_CXX_FLAGS_DEBUG "-g -DDEBUG")
 set(CMAKE_CXX_FLAGS_RELEASE "-O3")
 add_definitions(${CXX_FLAGS})
+# When a Napi::Error can't be rethrown into JS (env terminating, or an
+# exception already pending), node-addon-api otherwise throws AGAIN inside a
+# noexcept frame -> libc++ "terminating due to uncaught exception of type
+# Napi::Error" -> SIGABRT (took the whole orchestrator down on the rig,
+# 2026-07-08). This define turns exactly those unthrowable states into no-ops.
+add_definitions(-DNODE_API_SWALLOW_UNTHROWABLE_EXCEPTIONS)
 
 # Dependencies
 find_package(NodeApiHeaders REQUIRED)

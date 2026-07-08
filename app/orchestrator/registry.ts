@@ -108,6 +108,19 @@ const shared = new Map<string, Shared>();
 // still mid-release, and a renderer racing to open the same camera finds it
 // still claimed. See docs/history/refactor/orchestrator.md §12.1 C1.
 const closing = new Set<Promise<void>>();
+// Same pending closes keyed by serial: an activation that wants a serial whose
+// old handle is still mid-release must wait for that release to settle before
+// opening a NEW in-process handle — otherwise the fresh handle races the old
+// one's acquisition stop and every config write bounces off TLParamsLocked
+// with USB3Vision access-denied (rig 2026-07-08: manual-control exit →
+// next app's pixel-format restore failed on L/R).
+const closingBySerial = new Map<string, Promise<void>>();
+
+/** Await any in-flight close of `serial`'s previous handle. */
+async function awaitPendingClose(serial: string): Promise<void> {
+  const pending = closingBySerial.get(serial);
+  if (pending) await pending;
+}
 
 /** Serials with a live lease (preview running or not). */
 export const leasedSerials = (): string[] => [...shared.keys()];
@@ -140,7 +153,11 @@ function closeShared(s: Shared): Promise<void> {
   // resolves, so a `releaseAll` call that lands *after* this starts but
   // *before* it finishes would otherwise miss it entirely (see C1).
   closing.add(p);
-  p.finally(() => closing.delete(p));
+  closingBySerial.set(s.serial, p);
+  p.finally(() => {
+    closing.delete(p);
+    if (closingBySerial.get(s.serial) === p) closingBySerial.delete(s.serial);
+  });
   return p;
 }
 
@@ -209,6 +226,7 @@ async function registerShared(camera: Camera): Promise<Shared> {
 export async function acquire(serial: string): Promise<CameraLease | null> {
   let s = shared.get(serial);
   if (!s) {
+    await awaitPendingClose(serial);
     const { Camera } = await import("core/Aravis");
     const cameras = await timeSpan("camera.enumerate", () => Camera.list(), { serial });
     const camera = cameras.find((c) => c.serial === serial) ?? null;
@@ -250,6 +268,10 @@ export async function acquireMany(
   serials: string[],
 ): Promise<Map<string, CameraLease>> {
   if (serials.some((serial) => !shared.has(serial))) {
+    // Let any mid-release previous handles settle before reopening (see
+    // `closingBySerial`) — an in-process reopen doesn't fail like a
+    // cross-process one, it "succeeds" onto a still-locked device.
+    await Promise.all(serials.map(awaitPendingClose));
     const wanted = new Set(serials);
     const { Camera } = await import("core/Aravis");
     const cameras = await timeSpan("camera.enumerate", () => Camera.list(), {

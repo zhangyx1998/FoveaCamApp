@@ -53,6 +53,25 @@ names the mechanism it gates.
 - [ ] **HIL re-baseline** — export a fresh profiler snapshot set (pre-flight
   + PB2) against the post-refactor architecture for the record.
 
+## Hardware quiescence (safety invariant, fixes of 2026-07-08 rig finds)
+
+- [ ] **App-switch reopen race gone** — exit manual-control → enter another
+  triple app repeatedly: no `Failed to restore pixel format … access-denied`
+  in the orchestrator log (registry awaits the pending close + retries the
+  config apply across the acquisition-stop window).
+- [ ] **No more exit-6 aborts** — the same switch marathon never ends in
+  `libc++abi: terminating due to uncaught exception of type Napi::Error`
+  (core now builds with `NODE_API_SWALLOW_UNTHROWABLE_EXCEPTIONS`).
+- [ ] **Graceful-quit quiesce** — quit the app with MEMS enabled + streams
+  live: orchestrator log shows the drain, the device echoes `MEMS Disable`,
+  and the next boot's config restore succeeds first try.
+- [ ] **Crash janitor** — `kill -ABRT` (or -9) the orchestrator mid-tracking:
+  main logs `[janitor] launching…`, the device echoes `MEMS Disable`,
+  `[janitor] camera <serial>: acquisition stopped` for each streaming camera,
+  and relaunching finds no locked camera (config writes succeed).
+- [ ] **Disconnect disables** — title-bar controller disconnect while
+  enabled: device echoes `MEMS Disable` before the port is released.
+
 ## Blocked (hardware change required)
 
 - [ ] **Center-camera hardware trigger** — needs the slimmer CAM0 cable
