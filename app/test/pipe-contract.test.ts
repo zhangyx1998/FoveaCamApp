@@ -6,8 +6,8 @@ import { describe, expect, it } from "vitest";
 import { pipes, type PipeSpec, type PipeHandle } from "@lib/orchestrator/pipe-contract";
 
 describe("pipe contract (C-16)", () => {
-  it("advertises pipes in state and exposes the connect/disconnect broker", () => {
-    expect(pipes.state.pipes).toEqual([]);
+  it("advertises pipes as a keyed discovery Record + connect/disconnect broker", () => {
+    expect(pipes.state.pipes).toEqual({}); // C-20: keyed Record, seeded + diffed
     expect(Object.keys(pipes.commands).sort()).toEqual([
       "connectPipe",
       "disconnectPipe",
@@ -40,9 +40,10 @@ describe("pipe contract (C-16)", () => {
       shmName: "/fv.pabc.g1",
       spec,
       ringDepth: spec.ringDepth,
-      headerLayout: { layoutVersion: 2, magic: "FVSHMRG" },
+      epoch: 1,
+      headerLayout: { layoutVersion: 3, magic: "FVSHMRG" },
     };
     expect(handle.spec).toBe(spec);
-    expect(handle.headerLayout.layoutVersion).toBe(2);
+    expect(handle.headerLayout.layoutVersion).toBe(3);
   });
 });

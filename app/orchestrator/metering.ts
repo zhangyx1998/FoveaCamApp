@@ -72,6 +72,72 @@ export interface WorkloadDropSnapshot {
   byReason: Record<string, number>;
 }
 
+/** Per-stream counter with the C-18 diagnostic: `maxIntervalMs` = the largest
+ *  interval (ms) between consecutive events over the trailing 10 s. `CounterRate`
+ *  plus one field; assignable to `CounterRate`, so it rides the existing
+ *  `WorkloadSnapshot.inputs`/`outputs` shape at runtime even before the A-owned
+ *  snapshot TYPES pick the field up (handoff logged). */
+export type WorkloadStreamStat = CounterRate & { maxIntervalMs: number };
+
+// C-18 max inter-arrival tracker: 10 × 1 s bins in a ring. Each bin holds the
+// max consecutive-event interval seen during that second; the rolling 10 s max
+// is the max over the bins. The ring rotates by wall-clock (lazily, at event
+// and snapshot time), so a stall ages fully out 10 s after it stops, and an
+// in-progress stall is reported live as `now - lastEventTs`.
+const BIN_MS = 1000;
+const BIN_COUNT = 10;
+
+/** Transport-agnostic descriptor of the max-interval window. This block, the
+ *  per-stream `WorkloadStreamStat`, and the whole `WorkloadSnapshot` are PLAIN
+ *  DATA by design: when the SHM producer / KCF tracker move into free-running
+ *  C++ threads (real-1c / 1d), their native meters populate the exact same
+ *  shapes and the orchestrator probes them out-of-loop — the snapshot + profiler
+ *  UI stay stable across the JS→C++ move. See the C-18 log for the full schema. */
+export const INTERVAL_WINDOW = { bins: BIN_COUNT, binMs: BIN_MS } as const;
+
+interface IntervalRing {
+  bins: number[]; // length BIN_COUNT; max interval per 1 s bin
+  binStart: number; // wall-clock start of the current bin (bins[cursor])
+  cursor: number;
+  lastEventTs: number | null;
+}
+
+function newRing(now: number): IntervalRing {
+  return { bins: new Array(BIN_COUNT).fill(0), binStart: now, cursor: 0, lastEventTs: null };
+}
+
+/** Advance the ring to `now`, clearing each newly-entered bin (at most all 10
+ *  on a long idle) and keeping `binStart` grid-aligned. O(1) amortized. */
+function rotate(ring: IntervalRing, now: number): void {
+  const steps = Math.floor((now - ring.binStart) / BIN_MS);
+  if (steps <= 0) return;
+  const clears = Math.min(steps, BIN_COUNT);
+  for (let i = 0; i < clears; i++) {
+    ring.cursor = (ring.cursor + 1) % BIN_COUNT;
+    ring.bins[ring.cursor] = 0;
+  }
+  ring.binStart += steps * BIN_MS;
+}
+
+function recordEvent(ring: IntervalRing, now: number): void {
+  rotate(ring, now);
+  if (ring.lastEventTs !== null) {
+    const interval = now - ring.lastEventTs;
+    if (interval > ring.bins[ring.cursor]) ring.bins[ring.cursor] = interval;
+  }
+  ring.lastEventTs = now;
+}
+
+/** Trailing-10 s max interval: max over the bins, OR the in-progress gap
+ *  (`now - lastEventTs`) if a stall is currently open — whichever is larger. */
+function ringMax(ring: IntervalRing, now: number): number {
+  rotate(ring, now);
+  let m = 0;
+  for (const b of ring.bins) if (b > m) m = b;
+  const inProgress = ring.lastEventTs !== null ? now - ring.lastEventTs : 0;
+  return Math.max(m, inProgress);
+}
+
 interface WorkloadState {
   name: string;
   createdAtMs: number;
@@ -79,6 +145,8 @@ interface WorkloadState {
   openSpanAt: number | null;
   inputs: Map<string, number>;
   outputs: Map<string, number>;
+  inputIntervals: Map<string, IntervalRing>;
+  outputIntervals: Map<string, IntervalRing>;
   drops: Map<string, number>;
   disposed: boolean;
 }
@@ -105,26 +173,43 @@ export function registerWorkload(name: string, spec: WorkloadSpec): WorkloadHand
     );
   }
 
+  const createdAtMs = Date.now();
   const state: WorkloadState = {
     name,
-    createdAtMs: Date.now(),
+    createdAtMs,
     busyMs: 0,
     openSpanAt: null,
     inputs: new Map(spec.inputs.map((k) => [k, 0])),
     outputs: new Map(spec.outputs.map((k) => [k, 0])),
+    inputIntervals: new Map(spec.inputs.map((k) => [k, newRing(createdAtMs)])),
+    outputIntervals: new Map(spec.outputs.map((k) => [k, newRing(createdAtMs)])),
     drops: new Map(),
     disposed: false,
   };
   workloads.set(name, state);
 
+  /** Record an event arrival on a stream's interval ring (lazily creating it
+   *  for undeclared names, matching how counters track undeclared names). */
+  function tick(rings: Map<string, IntervalRing>, key: string): void {
+    const now = Date.now();
+    let ring = rings.get(key);
+    if (!ring) {
+      ring = newRing(now);
+      rings.set(key, ring);
+    }
+    recordEvent(ring, now);
+  }
+
   function ingest(input: string, n = 1): void {
     if (state.disposed) return;
     state.inputs.set(input, (state.inputs.get(input) ?? 0) + n);
+    tick(state.inputIntervals, input); // one arrival = one event, regardless of n
   }
 
   function emit(output: string, n = 1): void {
     if (state.disposed) return;
     state.outputs.set(output, (state.outputs.get(output) ?? 0) + n);
+    tick(state.outputIntervals, output);
   }
 
   function drop(reason = "unspecified", n = 1): void {
@@ -170,10 +255,18 @@ export function registerWorkload(name: string, spec: WorkloadSpec): WorkloadHand
 
 function counterSnapshot(
   map: Map<string, number>,
+  intervals: Map<string, IntervalRing>,
   window: SnapshotWindow,
-): Record<string, CounterRate> {
-  const out: Record<string, CounterRate> = {};
-  for (const [k, v] of map) out[k] = counterRate(v, window);
+  now: number,
+): Record<string, WorkloadStreamStat> {
+  const out: Record<string, WorkloadStreamStat> = {};
+  for (const [k, v] of map) {
+    const ring = intervals.get(k);
+    out[k] = {
+      ...counterRate(v, window),
+      maxIntervalMs: ring ? ringMax(ring, now) : 0,
+    };
+  }
   return out;
 }
 
@@ -194,8 +287,8 @@ function snapshotOf(state: WorkloadState, now: number): WorkloadSnapshot {
     window,
     utilization: Math.min(1, liveBusyMs / window.uptimeMs),
     busyMs: liveBusyMs,
-    inputs: counterSnapshot(state.inputs, window),
-    outputs: counterSnapshot(state.outputs, window),
+    inputs: counterSnapshot(state.inputs, state.inputIntervals, window, now),
+    outputs: counterSnapshot(state.outputs, state.outputIntervals, window, now),
     drops: { total: dropTotal, ratePerSec: ratePerSec(dropTotal, window), byReason },
   };
 }

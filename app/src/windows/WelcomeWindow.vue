@@ -116,28 +116,75 @@ function openProfiler() {
   <div class="main" :style="{ top: titleBarHeight + 'px' }">
     <div class="preview-pane">
       <div class="preview">
-        <StreamView v-if="payload" :payload="payload" />
-        <div v-else class="no-preview">
-          <img src="/FoveaCam Duo Mini.png" style="max-width: 50%" />
-          <h1>FoveaCam Duo Mini</h1>
+        <div class="no-preview">
+          <img src="/FoveaCam Duo Mini.png" style="max-width: 75%" />
         </div>
         <!-- One annotation per element; stable ids; x/y are percent of the
              preview area. USER-POSITIONED — edit x/y/dx/dy by hand here. -->
         <AnnotationCanvas v-if="payload">
-          <Annotation id="ann-status" :x="4" :y="6" :dx="10" label="status" :value="status" />
-          <Annotation id="ann-camera" :x="4" :y="14" :dx="10" label="camera" :value="view?.description ?? serial ?? '—'" />
-          <Annotation id="ann-resolution" :x="4" :y="22" :dx="10" label="resolution" :value="resolution" />
-          <Annotation id="ann-frame-rate" :x="4" :y="30" :dx="10" label="frame rate" :value="frameRate" />
-          <Annotation id="ann-exposure" :x="4" :y="38" :dx="10" label="exposure" :value="exposure" />
-          <Annotation id="ann-gain" :x="4" :y="46" :dx="10" label="gain" :value="gain" />
+          <Annotation
+            id="ann-status"
+            :x="4"
+            :y="6"
+            :dx="10"
+            label="status"
+            :value="status"
+          />
+          <Annotation
+            id="ann-camera"
+            :x="4"
+            :y="14"
+            :dx="10"
+            label="camera"
+            :value="view?.description ?? serial ?? '—'"
+          />
+          <Annotation
+            id="ann-resolution"
+            :x="4"
+            :y="22"
+            :dx="10"
+            label="resolution"
+            :value="resolution"
+          />
+          <Annotation
+            id="ann-frame-rate"
+            :x="4"
+            :y="30"
+            :dx="10"
+            label="frame rate"
+            :value="frameRate"
+          />
+          <Annotation
+            id="ann-exposure"
+            :x="4"
+            :y="38"
+            :dx="10"
+            label="exposure"
+            :value="exposure"
+          />
+          <Annotation
+            id="ann-gain"
+            :x="4"
+            :y="46"
+            :dx="10"
+            label="gain"
+            :value="gain"
+          />
         </AnnotationCanvas>
       </div>
       <div class="status-row">
-        <span class="dot" :class="{ ok: !orchDown && session.telemetry.list.length > 0 }"></span>
+        <span
+          class="dot"
+          :class="{ ok: !orchDown && session.telemetry.list.length > 0 }"
+        ></span>
         <span>{{ status }}</span>
         <select v-if="session.telemetry.list.length > 1" v-model="serialPick">
           <option :value="null">auto (center)</option>
-          <option v-for="c in session.telemetry.list" :key="c.serial" :value="c.serial">
+          <option
+            v-for="c in session.telemetry.list"
+            :key="c.serial"
+            :value="c.serial"
+          >
             {{ c.serial }}
           </option>
         </select>

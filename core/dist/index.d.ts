@@ -16,4 +16,5 @@ declare module "core" {
     export * as Regression from "core/Regression";
     export * as Log from "core/Log";
     export * as Shm from "core/Shm";
+    export * as Pipe from "core/Pipe";
 }

@@ -13,6 +13,16 @@
 #include "Pipe.h"
 #include "ShmRing.h"
 
+// Forward-declared (not #included) so the Aravis headers' global `Object`
+// template doesn't collide with `Napi::Object` under this file's `using
+// namespace Napi`. Defined in core/lib/Aravis/CaptureSink.cpp.
+namespace Arv {
+Napi::Value feedTestFrame(const Napi::CallbackInfo &info);
+Napi::Value attachCameraPipe(const Napi::CallbackInfo &info);
+Napi::Value detachCameraPipe(const Napi::CallbackInfo &info);
+Napi::Value enableFakeCamera(const Napi::CallbackInfo &info);
+}
+
 using namespace Napi;
 
 bool DEBUGGER_CONNECTED = false;
@@ -31,6 +41,17 @@ static Object init(Env env, Object exports) {
     auto Aravis = Object::New(env);
     CORE_OBJECT_EXPORT(CameraObject, env, Aravis);
     CORE_OBJECT_EXPORT(FrameObject, env, Aravis);
+    // B-16 no-hardware loopback hook: convert+offer a synthetic frame through
+    // the real Pipe ring (see core/test/11-capture-pipe.ts). Test-only.
+    Aravis.Set("feedTestFrame",
+               Function::New<Arv::feedTestFrame>(env, "feedTestFrame"));
+    // B-17 cut-over seam: A's registry attaches/detaches a camera→pipe producer.
+    Aravis.Set("attachCameraPipe",
+               Function::New<Arv::attachCameraPipe>(env, "attachCameraPipe"));
+    Aravis.Set("detachCameraPipe",
+               Function::New<Arv::detachCameraPipe>(env, "detachCameraPipe"));
+    Aravis.Set("enableFakeCamera",
+               Function::New<Arv::enableFakeCamera>(env, "enableFakeCamera"));
     exports.Set("Aravis", Aravis);
     // Controller Module
     auto Controller = Object::New(env);

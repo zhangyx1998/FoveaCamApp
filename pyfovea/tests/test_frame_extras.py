@@ -140,3 +140,70 @@ def test_partial_extras_absent_fields_are_none(tmp_path: Path):
     assert frame.volt is None
     assert frame.volt_source is None
     assert frame.angle is None
+
+
+def _write_with_telemetry(path: Path, tele_bytes: bytes) -> None:
+    """One raw frame + one telemetry message carrying arbitrary `tele_bytes`
+    (may be malformed JSON — exercises the reader's tolerant parse)."""
+    from mcap.writer import CompressionType, Writer
+
+    with path.open("wb") as f:
+        w = Writer(f, compression=CompressionType.NONE)
+        w.start(profile="fovea", library="test")
+        ts = w.register_schema("fovea.frame_meta/v1", "jsonschema", b"{}")
+        tc = w.register_channel("telemetry", "json", ts)
+        rs = w.register_schema("fovea.raw_frame/v1", "jsonschema", b"{}")
+        rc = w.register_channel("cam", "x-fovea-raw", rs, metadata=RAW_META)
+        w.add_message(tc, 1_000_000_000, tele_bytes, 1_000_000_000, 0)
+        w.add_message(rc, 1_000_000_000, bytes([1, 2, 3, 4]), 1_000_000_000, 0)
+        w.finish()
+
+
+def _frame_with_doc(tmp_path: Path, doc: dict) -> "FoveaReader":
+    path = tmp_path / "doc.fovea"
+    _write_with_telemetry(path, json.dumps(doc).encode())
+    return FoveaReader(path)
+
+
+@pytest.mark.parametrize(
+    "volt_value",
+    [42, "1.25", [1.25, -0.5], {"x": 1.0}, {"y": 1.0}, {}, None],
+    ids=["number", "string", "list", "only-x", "only-y", "empty", "null"],
+)
+def test_malformed_volt_decodes_to_none(tmp_path: Path, volt_value):
+    # `.volt` requires a dict with both x and y (the RecordedFrameExtras {x,y}
+    # contract); anything else → None (never raises), and the raw value is still
+    # reachable via `.extra`.
+    with _frame_with_doc(tmp_path, {"stream": "cam", "seq": 0, "t": 1.0, "volt": volt_value}) as r:
+        frame = r.frames("cam")[0]
+    assert frame.volt is None
+    assert frame.extra.get("volt") == volt_value
+
+
+def test_legacy_pt_volt_shape_is_none_but_raw_preserved(tmp_path: Path):
+    # The legacy B-5 `{p, t}` volt shape is NOT the {x,y} RecordedFrameExtras
+    # contract, so `.volt` returns None — but `.extra["volt"]` still exposes the
+    # legacy payload (documented in B-14; not a schema conflict).
+    with _frame_with_doc(tmp_path, {"stream": "cam", "seq": 0, "t": 1.0, "volt": {"p": 0.5, "t": -0.25}}) as r:
+        frame = r.frames("cam")[0]
+    assert frame.volt is None
+    assert frame.extra["volt"] == {"p": 0.5, "t": -0.25}
+
+
+def test_malformed_telemetry_doc_is_skipped_not_fatal(tmp_path: Path):
+    # A torn / non-JSON telemetry doc must be dropped tolerantly — the frame
+    # still decodes with empty extras (no join, no crash).
+    path = tmp_path / "torn.fovea"
+    _write_with_telemetry(path, b"{not valid json")
+    with FoveaReader(path) as r:
+        frame = r.frames("cam")[0]
+    assert frame.extra == {}
+    assert frame.frame_id is None and frame.volt is None
+    assert frame.raw.tolist() == [[1, 2], [3, 4]]
+
+
+def test_frame_id_coerced_to_int(tmp_path: Path):
+    # frame_id arrives as JSON number; a stringified value still coerces to int.
+    with _frame_with_doc(tmp_path, {"stream": "cam", "seq": 0, "t": 1.0, "frame_id": "99"}) as r:
+        frame = r.frames("cam")[0]
+    assert frame.frame_id == 99 and isinstance(frame.frame_id, int)

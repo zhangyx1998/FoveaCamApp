@@ -28,3 +28,36 @@ export type ShmReadDone = {
   buffer?: ArrayBuffer;
   error?: string;
 };
+
+// WS1 pipe transport (C-17). A connected pipe consumer reads by segment NAME
+// with a consumer-tracked `lastSeq` (there is no per-frame descriptor, unlike
+// the SHM_READ path). One-time connect handshake, then these ride the same
+// preload MessagePort + C-15 buffer pool.
+export const PIPE_READ = "fovea:pipe:read";
+export const PIPE_READ_DONE = "fovea:pipe:read-done";
+
+export type PipeReadRequest = {
+  kind: typeof PIPE_READ;
+  id: number;
+  shmName: string;
+  lastSeq: bigint;
+  buffer: ArrayBuffer;
+};
+
+export type PipeReadDone = {
+  kind: typeof PIPE_READ_DONE;
+  id: number;
+  /** Always transferred back so the pool can recycle it. On a fresh frame it
+   *  now backs the pixels; otherwise it came back unused. */
+  buffer: ArrayBuffer;
+  /** Present on a fresh frame (stable seq). Absent = no new frame this poll. */
+  seq?: bigint;
+  tCapture?: number;
+  /** Active frame size for this read (C-20 dynamic resize) — the frame occupies
+   *  `width*height*channels` bytes at the head of the (max-sized) buffer. */
+  width?: number;
+  height?: number;
+  /** True when the publisher has set state=CLOSED — the consumer should unmap. */
+  closed?: boolean;
+  error?: string;
+};

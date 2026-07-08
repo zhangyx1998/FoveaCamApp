@@ -33,9 +33,13 @@
 import { frameByteLength } from "./frame-payload.js";
 import type { FramePayload } from "./protocol.js";
 import {
+  PIPE_READ,
+  PIPE_READ_DONE,
   SHM_INIT,
   SHM_READ,
   SHM_READ_DONE,
+  type PipeReadDone,
+  type PipeReadRequest,
   type ShmReadDone,
   type ShmReadRequest,
 } from "./shm-messages.js";
@@ -86,6 +90,18 @@ export type ShmReadStats = {
   latencyMs: ShmLatencyStats;
 };
 
+/** One frame read from a connected pipe (C-17). `data` is the pool buffer that
+ *  now backs the pixels — return it via `releaseBuffer()` once displaced. */
+export type PipeReadFrame = {
+  data: ArrayBuffer;
+  seq: bigint;
+  tCapture?: number;
+  /** Active frame size (C-20 dynamic resize) — the frame occupies
+   *  `width*height*channels` bytes at the head of `data`. */
+  width?: number;
+  height?: number;
+};
+
 /** The transfer-pool surface `client.ts` consumes. */
 export interface ShmClient {
   /** Materialize a frame payload: pass through if it already carries `data` or
@@ -96,6 +112,17 @@ export interface ShmClient {
   /** Return a materialized shm frame's buffer to the pool. No-op for non-shm
    *  payloads (their buffers aren't pooled) and for null. */
   release(payload: FramePayload | null): void;
+  /** Read the latest frame of a connected pipe by segment name, tracking
+   *  `lastSeq` consumer-side (C-17). Resolves the frame (`data` = a pool
+   *  buffer), `"closed"` when the publisher has closed, or `null` when no newer
+   *  frame exists. Rejects on transport error/timeout (the consumer retries). */
+  readPipe(
+    shmName: string,
+    lastSeq: bigint,
+    bytes: number,
+  ): Promise<PipeReadFrame | "closed" | null>;
+  /** Return a pipe frame's `data` buffer to the pool. */
+  releaseBuffer(buffer: ArrayBuffer | null | undefined): void;
   /** Tear down: close the port, clear pending reads and the pool. Pending reads
    *  reject. Idempotent. */
   dispose(): void;
@@ -173,6 +200,16 @@ export function createShmClient(
       startedAt: number;
     }
   >();
+  // Pipe reads (C-17) share the port + pool but track their own pending set
+  // (a different resolve shape than the SHM_READ path).
+  const pipePending = new Map<
+    number,
+    {
+      resolve(r: PipeReadFrame | "closed" | null): void;
+      reject(error: Error): void;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  >();
   const counts = {
     reads: 0,
     nulls: 0,
@@ -221,8 +258,44 @@ export function createShmClient(
     return new ArrayBuffer(bytes);
   }
 
+  function onPipeDone(msg: PipeReadDone): void {
+    const entry = pipePending.get(msg.id);
+    if (!entry) {
+      recycle(msg.buffer); // stale/late reply — reclaim the transferred buffer
+      return;
+    }
+    clearTimeout(entry.timer);
+    pipePending.delete(msg.id);
+    if (msg.error) {
+      counts.errors++;
+      recycle(msg.buffer);
+      entry.reject(new Error(msg.error));
+      return;
+    }
+    if (msg.closed) {
+      recycle(msg.buffer);
+      entry.resolve("closed");
+      return;
+    }
+    if (msg.seq === undefined) {
+      counts.nulls++;
+      recycle(msg.buffer); // no new frame — buffer came back unused
+      entry.resolve(null);
+      return;
+    }
+    counts.reads++;
+    entry.resolve({
+      data: msg.buffer,
+      seq: msg.seq,
+      tCapture: msg.tCapture,
+      width: msg.width,
+      height: msg.height,
+    });
+  }
+
   function onDone(data: unknown): void {
-    const msg = data as ShmReadDone | undefined;
+    const msg = data as (ShmReadDone | PipeReadDone) | undefined;
+    if (msg?.kind === PIPE_READ_DONE) return onPipeDone(msg);
     if (msg?.kind !== SHM_READ_DONE) return;
     const entry = pending.get(msg.id);
     // No matching pending entry: this is a STALE/late reply (the read already
@@ -302,6 +375,34 @@ export function createShmClient(
     release(payload) {
       if (payload?.shm && payload.data) recycle(payload.data);
     },
+    readPipe(shmName, lastSeq, bytes) {
+      const p = ensurePort();
+      if (!p)
+        return Promise.reject(
+          new Error("SHM MessagePort transfer pool unavailable"),
+        );
+      const id = ++seq;
+      const buffer = checkout(bytes);
+      return new Promise<PipeReadFrame | "closed" | null>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          pipePending.delete(id);
+          counts.timeouts++;
+          reject(new Error("pipe read timed out"));
+        }, READ_TIMEOUT_MS);
+        pipePending.set(id, { resolve, reject, timer });
+        const req: PipeReadRequest = {
+          kind: PIPE_READ,
+          id,
+          shmName,
+          lastSeq,
+          buffer,
+        };
+        p.postMessage(req, [buffer]);
+      });
+    },
+    releaseBuffer(buffer) {
+      if (buffer) recycle(buffer);
+    },
     dispose() {
       if (disposed) return;
       disposed = true;
@@ -310,6 +411,11 @@ export function createShmClient(
         entry.reject(new Error("SHM transfer pool disposed"));
       }
       pending.clear();
+      for (const entry of pipePending.values()) {
+        clearTimeout(entry.timer);
+        entry.reject(new Error("SHM transfer pool disposed"));
+      }
+      pipePending.clear();
       counts.inFlight = 0;
       pools.clear();
       port?.close();

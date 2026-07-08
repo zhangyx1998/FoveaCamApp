@@ -138,10 +138,27 @@ public:
 private:
   Threading::Guard<T> data = {nullptr};
   std::condition_variable signal;
+  // Frames overwritten before they were consumed — a latest-wins "drop". The
+  // count is the load-bearing "the consumer can't keep up" signal (e.g. the
+  // 1d KCF thread falling behind the camera fps); metered off it. Written on
+  // the producing stream's thread, read (delta) by the consumer's thread.
+  std::atomic<uint64_t> dropped_{0};
   void push(const T &value) override {
-    *data.ref() = value;
+    {
+      auto ref = data.ref();
+      if (*ref != nullptr) // overwriting an unconsumed frame == a drop
+        dropped_.fetch_add(1, std::memory_order_relaxed);
+      *ref = value;
+    }
     signal.notify_all();
   };
+
+public:
+  uint64_t droppedCount() const {
+    return dropped_.load(std::memory_order_relaxed);
+  }
+
+private:
   void close(bool unsubscribe = true, TracedError::Ptr err = nullptr) override {
     Subscriber<T>::close(unsubscribe, err);
     signal.notify_all();
@@ -284,6 +301,11 @@ private:
 protected:
   virtual Stream<I> *upstream() = 0;
   virtual O transform(const I &input) = 0;
+
+  // Cumulative upstream frames dropped by the latest-wins handoff (frames that
+  // arrived while `transform` was busy). A subclass reads the delta each
+  // `transform` to meter "producer outran the transform". Valid once started.
+  uint64_t upstreamDrops() const { return sub ? sub->droppedCount() : 0; }
 };
 
 template <typename S, SmartPtrLike P = S::Ptr>

@@ -133,6 +133,8 @@ Value readInto(const CallbackInfo &info) {
     result.Set("seq", BigInt::New(env, r.seq));
     result.Set("gen", r.gen);
     result.Set("retries", r.retries);
+    result.Set("width", r.width);   // v3: active frame size within a max ring
+    result.Set("height", r.height);
     auto meta = Object::New(env);
     meta.Set("tCapture", r.meta.tCapture);
     meta.Set("convertMs", r.meta.convertMs);

@@ -11,7 +11,8 @@
 // No wizard steps — continuous live tracking, same as the original renderer
 // implementation, just moved off it.
 
-import { defineSession, type ServerSession } from "@orchestrator/runtime";
+import { type ServerSession } from "@orchestrator/runtime";
+import { defineResourceSession, type ResourceScope } from "@orchestrator/resource-session";
 import { acquireTriple, type CalibratedTriple } from "@orchestrator/calibration";
 import { read, write } from "@orchestrator/store-hub";
 import { activeController } from "@orchestrator/controller";
@@ -38,9 +39,8 @@ type Role = "L" | "C" | "R";
 type DriftPair = { L: Point2d | null; R: Point2d | null };
 
 export default function calibrateDriftSession(): ServerSession<typeof calibrateDrift> {
-  return defineSession("calibrate-drift", calibrateDrift, (s) => {
+  return defineResourceSession("calibrate-drift", calibrateDrift, (s) => {
     let triple: CalibratedTriple | null = null;
-    const disposers = new DisposerBag();
     let trackers: Record<Role, MarkerTracker> | null = null;
     let servo: Servo | null = null;
     let saved: DriftPair = { L: null, R: null };
@@ -69,19 +69,32 @@ export default function calibrateDriftSession(): ServerSession<typeof calibrateD
       });
     }
 
-    async function activateSession(): Promise<void> {
-      const t = await acquireTriple(s);
-      if (!t) return;
+    // Resource-scoped activation (A-P1): every resource registers a cleanup on
+    // `scope`, drained LIFO on idle (and immediately if a slow activation is
+    // superseded). Leases go through `scope.use` so they release LAST, after
+    // the servo/trackers/taps that read them have stopped.
+    async function activateSession(scope: ResourceScope): Promise<void> {
+      const t = await scope.use(() => acquireTriple(s), releaseLeases);
+      if (!t) return; // no cameras (acquireTriple published fail) or superseded
       triple = t;
+      scope.defer(() => {
+        triple = null;
+      });
       const doc = await read<{ drift_l?: Point2d; drift_r?: Point2d }>(t.configPath, {});
+      if (scope.cancelled) return;
       saved = { L: doc.drift_l ?? null, R: doc.drift_r ?? null };
       s.telemetry({ saved });
       trackers = createTrackerTriple(
         { L: t.leases.L.camera, C: t.leases.C.camera, R: t.leases.R.camera },
         s.state.targetId,
       );
-      bindDetections(trackers, disposers, publishDetections);
-      bindViews(t.leases, disposers, s);
+      scope.defer(() => {
+        trackers = stopTriple(trackers);
+      });
+      const taps = new DisposerBag();
+      bindDetections(trackers, taps, publishDetections);
+      bindViews(t.leases, taps, s);
+      scope.defer(() => taps.dispose());
 
       servo = startServo(trackers.L, trackers.R, {
         kp: 10.0,
@@ -95,6 +108,10 @@ export default function calibrateDriftSession(): ServerSession<typeof calibrateD
         },
         overrideLeft: () => s.state.override_left,
         overrideRight: () => s.state.override_right,
+      });
+      scope.defer(() => {
+        servo?.stop();
+        servo = null;
       });
       s.telemetry({ ready: true });
 
@@ -111,20 +128,14 @@ export default function calibrateDriftSession(): ServerSession<typeof calibrateD
           },
         });
       }, 200);
-      disposers.push(() => clearInterval(timer));
-    }
-
-    function idleSession(): void {
-      servo?.stop();
-      servo = null;
-      trackers = stopTriple(trackers);
-      disposers.dispose();
-      releaseLeases(triple);
-      triple = null;
-      s.resetTelemetry(["ready", "detection", "center_angle", "derived"]);
+      scope.defer(() => clearInterval(timer));
     }
 
     return {
+      activate: (scope) => activateSession(scope),
+      idle() {
+        s.resetTelemetry(["ready", "detection", "center_angle", "derived"]);
+      },
       commands: {
         async setTargetId({ role, id }) {
           s.setState("targetId", { ...s.state.targetId, [role]: id });
@@ -161,10 +172,6 @@ export default function calibrateDriftSession(): ServerSession<typeof calibrateD
           s.telemetry({ saved });
         },
       },
-      activate() {
-        void activateSession();
-      },
-      idle: idleSession,
     };
   });
 }

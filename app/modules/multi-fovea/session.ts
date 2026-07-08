@@ -4,11 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 
-import { defineSession, type ServerSession } from "@orchestrator/runtime";
+import { type ServerSession } from "@orchestrator/runtime";
+import { defineResourceSession, type ResourceScope } from "@orchestrator/resource-session";
 import { acquireTriple, type CalibratedTriple } from "@orchestrator/calibration";
 import { activeController, type StreamHandle } from "@orchestrator/controller";
 import { RoundRobinFrameScheduler } from "@orchestrator/scheduler";
-import { DisposerBag, releaseLeases } from "@orchestrator/session-resources";
+import { releaseLeases } from "@orchestrator/session-resources";
 import { multiFovea, defaultMultiFoveaTarget, MAX_MULTI_FOVEA_TARGETS } from "./contract";
 import { MultiFoveaRuntime } from "./runtime";
 import { KCF } from "core/Tracker";
@@ -25,9 +26,8 @@ function radians(deg: number): number {
 }
 
 export default function multiFoveaSession(): ServerSession<typeof multiFovea> {
-  return defineSession("multi-fovea", multiFovea, (s) => {
+  return defineResourceSession("multi-fovea", multiFovea, (s) => {
     let triple: CalibratedTriple | null = null;
-    const disposers = new DisposerBag();
     const trackMs = new RollingStats(0.9, 2, "ms");
     let schedulerFrames = 0;
     let schedulerRejects = 0;
@@ -159,11 +159,22 @@ export default function multiFoveaSession(): ServerSession<typeof multiFovea> {
       applyTargets();
     }
 
-    async function activateSession(): Promise<void> {
-      const t = await acquireTriple(s);
+    // Resource-scoped activation (A-P1). `scheduler`/`runtime` are session-level
+    // singletons; per activation we lease the triple + tap the center view, and
+    // the drain stops the scheduler + disposes the runtime (re-populated by
+    // `applyTargets` on the next activate, as before). Lease releases LAST.
+    async function activateSession(scope: ResourceScope): Promise<void> {
+      const t = await scope.use(() => acquireTriple(s), releaseLeases);
       if (!t) return;
       triple = t;
-      disposers.push(t.leases.C.onView(onCenterView));
+      scope.defer(() => {
+        triple = null;
+      });
+      scope.defer(() => runtime.dispose());
+      scope.defer(() => scheduler.stop());
+      // Tap registered LAST → drains FIRST, so no center-view frame reaches a
+      // disposed runtime during teardown.
+      scope.add(t.leases.C.onView(onCenterView));
       applyTargets();
       s.telemetry({
         ready: true,
@@ -172,16 +183,11 @@ export default function multiFoveaSession(): ServerSession<typeof multiFovea> {
       });
     }
 
-    function idleSession(): void {
-      scheduler.stop();
-      runtime.dispose();
-      disposers.dispose();
-      releaseLeases(triple);
-      triple = null;
-      s.resetTelemetry(["ready", "v2Capable"]);
-    }
-
     return {
+      activate: (scope) => activateSession(scope),
+      idle() {
+        s.resetTelemetry(["ready", "v2Capable"]);
+      },
       commands: {
         async setTargetEnabled({ index, enabled }) {
           updateTarget(index, (target) => ({ ...target, enabled }));
@@ -212,10 +218,6 @@ export default function multiFoveaSession(): ServerSession<typeof multiFovea> {
         targets: () => applyTargets(),
         pulse_ns: () => applyTargets(),
       },
-      activate() {
-        void activateSession();
-      },
-      idle: idleSession,
     };
   });
 }

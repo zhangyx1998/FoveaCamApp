@@ -40,10 +40,5 @@
     "orchestrator",
     "scripts",
     "*.d.ts"
-  ],
-  "references": [
-    {
-      "path": "./tsconfig.node.json"
-    }
   ]
 }

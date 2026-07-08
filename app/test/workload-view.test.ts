@@ -40,8 +40,12 @@ describe("workloadRows — fallback (first tick, no previous snapshot)", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0].interval).toBe(false);
     expect(rows[0].utilization).toBe(0.25);
-    expect(rows[0].inputs).toEqual([{ name: "camera", count: 30, ratePerSec: 30 }]);
-    expect(rows[0].outputs).toEqual([{ name: "shm", count: 29, ratePerSec: 29 }]);
+    expect(rows[0].inputs).toEqual([
+      { name: "camera", count: 30, ratePerSec: 30, maxIntervalMs: 0, stalled: false },
+    ]);
+    expect(rows[0].outputs).toEqual([
+      { name: "shm", count: 29, ratePerSec: 29, maxIntervalMs: 0, stalled: false },
+    ]);
   });
 
   it("clamps a defensive out-of-range cumulative utilization into [0, 1]", () => {
@@ -76,8 +80,12 @@ describe("workloadRows — interval diff against the previous tick", () => {
     const [row] = workloadRows(cur, prev);
     expect(row.interval).toBe(true);
     expect(row.utilization).toBeCloseTo(0.1, 5); // 200ms / 2000ms, not 76% cumulative
-    expect(row.inputs).toEqual([{ name: "camera", count: 160, ratePerSec: 30 }]); // 60 / 2s
-    expect(row.outputs).toEqual([{ name: "shm", count: 148, ratePerSec: 29 }]); // 58 / 2s
+    expect(row.inputs).toEqual([
+      { name: "camera", count: 160, ratePerSec: 30, maxIntervalMs: 0, stalled: false }, // 60 / 2s
+    ]);
+    expect(row.outputs).toEqual([
+      { name: "shm", count: 148, ratePerSec: 29, maxIntervalMs: 0, stalled: false }, // 58 / 2s
+    ]);
     expect(row.drops.ratePerSec).toBeCloseTo(1, 5); // 2 drops / 2s
     expect(row.drops.total).toBe(12);
   });
@@ -102,6 +110,8 @@ describe("workloadRows — interval diff against the previous tick", () => {
       name: "late",
       count: 4,
       ratePerSec: 2, // 4 / 2s — its whole count landed within the window
+      maxIntervalMs: 0,
+      stalled: false,
     });
   });
 });
@@ -156,5 +166,36 @@ describe("utilizationLevel — the meter's status tint thresholds", () => {
     expect(utilizationLevel(UTILIZATION_HIGH - 0.001)).toBe("warn");
     expect(utilizationLevel(UTILIZATION_HIGH)).toBe("high");
     expect(utilizationLevel(1)).toBe("high");
+  });
+});
+
+describe("workloadRows — C-18 maxIntervalMs + stall highlight", () => {
+  // maxIntervalMs rides the snapshot at runtime; the A-owned counter type does
+  // not carry it yet (handoff logged), so cast the mock counters here.
+  const withInterval = (
+    v: Record<string, { count: number; ratePerSec: number; maxIntervalMs: number }>,
+  ) => v as unknown as WorkloadSnapshot["inputs"];
+
+  it("passes maxIntervalMs through and flags a stall (gap > 2× nominal period)", () => {
+    const [row] = workloadRows(
+      {
+        w: snap({
+          // 50/s → 20 ms period → 2× = 40 ms. 60 ms gap stalls; 25 ms is healthy.
+          inputs: withInterval({ cam: { count: 100, ratePerSec: 50, maxIntervalMs: 60 } }),
+          outputs: withInterval({ shm: { count: 100, ratePerSec: 50, maxIntervalMs: 25 } }),
+        }),
+      },
+      null,
+    );
+    expect(row.inputs[0]).toMatchObject({ maxIntervalMs: 60, stalled: true });
+    expect(row.outputs[0]).toMatchObject({ maxIntervalMs: 25, stalled: false });
+  });
+
+  it("never flags a zero-rate stream (undefined nominal period) as stalled", () => {
+    const [row] = workloadRows(
+      { w: snap({ inputs: withInterval({ idle: { count: 0, ratePerSec: 0, maxIntervalMs: 5000 } }) }) },
+      null,
+    );
+    expect(row.inputs[0].stalled).toBe(false);
   });
 });

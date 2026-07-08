@@ -21,7 +21,8 @@
 // direct `startActuationLoop` against a drag-computed target (testing the
 // just-fitted regressions); FIN has no actuation (static review).
 
-import { defineSession, type ServerSession } from "@orchestrator/runtime";
+import { type ServerSession } from "@orchestrator/runtime";
+import { defineResourceSession, type ResourceScope } from "@orchestrator/resource-session";
 import { matchTriple, retryUntil, type CameraLease } from "@orchestrator/registry";
 import { loadIntrinsic, fitExtrinsicRegression } from "@orchestrator/calibration";
 import { startActuationLoop, type ActuationLoop } from "@orchestrator/actuation";
@@ -60,10 +61,9 @@ function createDataSet(records: ExtrinsicRecord[], key: "L" | "R"): ExtrinsicDat
 }
 
 export default function calibrateExtrinsicSession(): ServerSession<typeof calibrateExtrinsic> {
-  return defineSession("calibrate-extrinsic", calibrateExtrinsic, (s) => {
+  return defineResourceSession("calibrate-extrinsic", calibrateExtrinsic, (s) => {
     let leases: Record<Role, CameraLease> | null = null;
     let undistort: Undistort | null = null;
-    const disposers = new DisposerBag();
     let trackers: Record<Role, MarkerTracker> | null = null;
     let servo: Servo | null = null;
     let preview: ActuationLoop | null = null;
@@ -110,23 +110,40 @@ export default function calibrateExtrinsicSession(): ServerSession<typeof calibr
       s.telemetry({ records, saved: false });
     }
 
-    async function activateSession(): Promise<void> {
+    // Resource-scoped activation (A-P1). Two-stage acquire (matchTriple then
+    // center-intrinsic load) releases IMMEDIATELY on either failure — the lease
+    // only becomes scope-owned (deferred release) once both succeed. servo/
+    // preview toggle per wizard step via `enterStep`; the scope's drain stops
+    // whichever is active. Lease releases LAST.
+    async function activateSession(scope: ResourceScope): Promise<void> {
       const matched = await retryUntil(matchTriple);
+      if (scope.cancelled) {
+        if (matched) releaseLeases(matched);
+        return;
+      }
       if (!matched) {
         s.telemetry({ ready: false });
         s.fail("Cameras unavailable — held by another app or not connected");
         return;
       }
       const { undistort: u } = await loadIntrinsic(matched.C.camera);
-      if (!u) {
+      if (scope.cancelled || !u) {
         releaseLeases(matched);
-        s.telemetry({ ready: false });
-        s.fail("Center camera intrinsic calibration unavailable");
+        if (!u) {
+          s.telemetry({ ready: false });
+          s.fail("Center camera intrinsic calibration unavailable");
+        }
         return;
       }
       leases = matched;
       undistort = u;
+      scope.defer(() => {
+        releaseLeases(leases);
+        leases = null;
+        undistort = null;
+      });
       records = await read<ExtrinsicRecord[]>(SCRATCH_PATH, []);
+      if (scope.cancelled) return;
       s.telemetry({ records, saved: false });
 
       trackers = createTrackerTriple(
@@ -134,26 +151,29 @@ export default function calibrateExtrinsicSession(): ServerSession<typeof calibr
         s.state.targetId,
         { internal: true },
       );
-      bindDetections(trackers, disposers, publishDetections);
-      bindViews(leases, disposers, s);
+      scope.defer(() => {
+        trackers = stopTriple(trackers);
+      });
+      const taps = new DisposerBag();
+      bindDetections(trackers, taps, publishDetections);
+      bindViews(leases, taps, s);
+      scope.defer(() => taps.dispose());
+      // Drains FIRST: stop whichever actuation `enterStep` currently has active.
+      scope.defer(() => {
+        stopServo();
+        stopPreview();
+      });
 
       enterStep(s.state.step);
       s.telemetry({ ready: true });
     }
 
-    function idleSession(): void {
-      stopServo();
-      stopPreview();
-      trackers = stopTriple(trackers);
-      disposers.dispose();
-      releaseLeases(leases);
-      leases = null;
-      undistort = null;
-      fittedL = fittedR = null;
-      s.resetTelemetry(["ready", "detection", "finalized"]);
-    }
-
     return {
+      activate: (scope) => activateSession(scope),
+      idle() {
+        fittedL = fittedR = null;
+        s.resetTelemetry(["ready", "detection", "finalized"]);
+      },
       commands: {
         async setTargetId({ role, id }) {
           s.setState("targetId", { ...s.state.targetId, [role]: id });
@@ -233,10 +253,6 @@ export default function calibrateExtrinsicSession(): ServerSession<typeof calibr
           enterStep(step);
         },
       },
-      activate() {
-        void activateSession();
-      },
-      idle: idleSession,
     };
   });
 }

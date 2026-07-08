@@ -449,6 +449,29 @@ describe("WindowManager", () => {
     expect(dbg.destroyed).toBe(true);
     expect(manager.appWindow()?.appId).toBe("disparity-scope");
   });
+
+  it("supports one debug window per session; all cascade with the owner app", async () => {
+    const { manager } = harness();
+    await manager.openApp("tracking-single");
+    const app = manager.appWindow()! as FakeWindow;
+    const d1 = manager.toggleDebug({ session: "tracking", frame: "C" }, app) as FakeWindow;
+    const d2 = manager.toggleDebug({ session: "manual-control", frame: "L" }, app) as FakeWindow;
+    expect(d1).not.toBe(d2); // distinct keys ⇒ two windows
+    expect(d1.key).toBe("debug:tracking");
+    expect(d2.key).toBe("debug:manual-control");
+    expect(manager.childrenOf(app)).toHaveLength(2);
+    app.close();
+    expect(d1.destroyed).toBe(true);
+    expect(d2.destroyed).toBe(true);
+  });
+
+  it("toggleDebug with no app window spawns an ownerless (non-cascading) debug window", () => {
+    // Defensive: no owner ⇒ nothing cascades it (it just lives until closed).
+    const { manager } = harness();
+    const dbg = manager.toggleDebug({ session: "tracking", frame: "C" }, null) as FakeWindow;
+    expect(dbg).not.toBeNull();
+    expect(dbg.owner).toBeUndefined();
+  });
 });
 
 // Restore any per-test WINDOWS policy mutation (the cascade test flips

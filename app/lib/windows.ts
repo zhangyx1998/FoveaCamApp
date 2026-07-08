@@ -51,18 +51,63 @@ type AppSpec = Omit<AppMeta, "id">;
 
 export const APP_REGISTRY = {
   // --- applications ---------------------------------------------------
-  "disparity-scope": { title: "Disparity Scope", session: "disparity-scope", group: "application" },
-  "tracking-single": { title: "Object Tracking (Single)", session: "tracking", group: "application" },
-  "multi-fovea": { title: "Object Tracking (Multi)", session: "multi-fovea", group: "application" },
-  "manual-control": { title: "Manual Control", session: "manual-control", group: "application" },
-  "single-capture": { title: "Single Capture", session: "liveview", group: "application" },
-  playground: { title: "Playground", session: null, group: "application", dev: true },
+  "disparity-scope": {
+    title: "Disparity Scope",
+    session: "disparity-scope",
+    group: "application",
+  },
+  "tracking-single": {
+    title: "Tracking - Single",
+    session: "tracking",
+    group: "application",
+  },
+  "multi-fovea": {
+    title: "Tracking - Multi",
+    session: "multi-fovea",
+    group: "application",
+  },
+  "manual-control": {
+    title: "Manual Control",
+    session: "manual-control",
+    group: "application",
+  },
+  "single-capture": {
+    title: "Single Capture",
+    session: "liveview",
+    group: "application",
+  },
+  playground: {
+    title: "Playground",
+    session: null,
+    group: "application",
+    dev: true,
+  },
   // --- utilities ------------------------------------------------------
-  "manage-cameras": { title: "Manage Cameras", session: "manage-cameras", group: "utility" },
-  "calibrate-intrinsic": { title: "Calibrate Intrinsic", session: "calibrate-intrinsic", group: "utility" },
-  "calibrate-extrinsic": { title: "Calibrate Extrinsic", session: "calibrate-extrinsic", group: "utility" },
-  "calibrate-distortion": { title: "Calibrate Distortion", session: "calibrate-distortion", group: "utility" },
-  "calibrate-drift": { title: "Calibrate Drift", session: "calibrate-drift", group: "utility" },
+  "manage-cameras": {
+    title: "Manage Cameras",
+    session: "manage-cameras",
+    group: "utility",
+  },
+  "calibrate-intrinsic": {
+    title: "Calibrate Intrinsic",
+    session: "calibrate-intrinsic",
+    group: "utility",
+  },
+  "calibrate-extrinsic": {
+    title: "Calibrate Extrinsic",
+    session: "calibrate-extrinsic",
+    group: "utility",
+  },
+  "calibrate-distortion": {
+    title: "Calibrate Distortion",
+    session: "calibrate-distortion",
+    group: "utility",
+  },
+  "calibrate-drift": {
+    title: "Calibrate Drift",
+    session: "calibrate-drift",
+    group: "utility",
+  },
 } as const satisfies Record<string, AppSpec>;
 
 export type AppId = keyof typeof APP_REGISTRY;
@@ -224,8 +269,10 @@ export function entryFor(cls: WindowClass, appId?: string): string {
  *  static class entries from `WINDOWS` plus one per app. */
 export function allEntries(): Record<string, string> {
   const entries: Record<string, string> = {};
-  for (const [cls, spec] of Object.entries(WINDOWS)) if (spec.entry) entries[cls] = spec.entry;
-  for (const id of Object.keys(APP_REGISTRY)) entries[id] = `windows/${id}.html`;
+  for (const [cls, spec] of Object.entries(WINDOWS))
+    if (spec.entry) entries[cls] = spec.entry;
+  for (const id of Object.keys(APP_REGISTRY))
+    entries[id] = `windows/${id}.html`;
   return entries;
 }
 
@@ -236,7 +283,12 @@ export function appIdFromPathname(pathname: string): string | null {
   const m = /(?:^|\/)windows\/([\w-]+)\.html$/.exec(pathname);
   if (!m) return null;
   const id = m[1];
-  if (id === "welcome" || id === "profiler" || id === "projection" || id === "viewer")
+  if (
+    id === "welcome" ||
+    id === "profiler" ||
+    id === "projection" ||
+    id === "viewer"
+  )
     return null;
   return appById(id)?.id ?? null;
 }

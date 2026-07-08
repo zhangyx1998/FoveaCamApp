@@ -5,6 +5,8 @@
 // -------------------------------------------------------
 #pragma once
 
+#include <cstddef> // offsetof (wire-layout static_asserts below)
+
 #include "Protocol.h"
 
 namespace Packet {
@@ -154,6 +156,21 @@ PACKED(FrameResult) {
   MirrorPosition left;
   MirrorPosition right;
 };
+
+// Compile-time locks on the CMD_FRAME two-phase wire layout (B-12 / WS4 §5),
+// enforced on BOTH host and MCU since they share this header — so a field
+// reorder, a lost `__packed__`, or padding creep can never silently desync the
+// FIN payload. Runtime counterpart: core/test/10-frame-result.ts.
+static_assert(sizeof(FrameAccepted) == 1, "Frame ACK payload is one byte");
+static_assert(sizeof(FrameResult) == 37,
+              "FIN payload = stream(1)+frame_id(4)+t_trigger(8)+t_exposure(8)"
+              "+left(8)+right(8)");
+static_assert(offsetof(FrameResult, stream) == 0);
+static_assert(offsetof(FrameResult, frame_id) == 1); // right after stream (B-12)
+static_assert(offsetof(FrameResult, t_trigger) == 5);
+static_assert(offsetof(FrameResult, t_exposure) == 13);
+static_assert(offsetof(FrameResult, left) == 21);
+static_assert(offsetof(FrameResult, right) == 29);
 
 } // namespace Command
 

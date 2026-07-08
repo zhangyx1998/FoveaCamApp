@@ -18,7 +18,8 @@
 // both inline; refactored onto the shared helpers once manual-control's own
 // use of them had landed (docs/refactor/orchestrator.md roadmap items 5/6).
 
-import { defineSession, type ServerSession } from "@orchestrator/runtime";
+import { type ServerSession } from "@orchestrator/runtime";
+import { defineResourceSession, type ResourceScope } from "@orchestrator/resource-session";
 import { acquireTriple, type CalibratedTriple } from "@orchestrator/calibration";
 import { startActuationLoop, type ActuationLoop } from "@orchestrator/actuation";
 import { AsyncKcfTracker } from "@orchestrator/async-kcf";
@@ -55,10 +56,9 @@ import { RollingStats } from "@lib/util/rolling";
 const now = () => performance.now();
 
 export default function trackingSession(): ServerSession<typeof tracking> {
-  return defineSession("tracking", tracking, (s) => {
+  return defineResourceSession("tracking", tracking, (s) => {
     // Leased triple + loaded conversions (held while a renderer is subscribed).
     let triple: CalibratedTriple | null = null;
-    const disposers = new DisposerBag(); // frame/view tap unsubscribes
     let loop: ActuationLoop | null = null;
 
     // Center-frame geometry, learned from the first frame.
@@ -349,20 +349,35 @@ export default function trackingSession(): ServerSession<typeof tracking> {
 
     // --- lifecycle -------------------------------------------------------
 
-    // Named distinctly from the `SessionDefinition.activate`/`idle` hooks
-    // below (which call these) — object method shorthand doesn't bind its own
-    // name for self-reference, so reusing "activate"/"idle" here would read
-    // as (harmless but confusing) recursion.
-    async function activateSession(): Promise<void> {
-      const t = await acquireTriple(s);
+    // Resource-scoped activation (A-P1). The tracker/kinematic/frame-workers
+    // are session-level singletons; per activation we lease the triple, tap the
+    // three streams, and start the actuation loop. The scope's drain (LIFO)
+    // stops the loop, disengages the tracker, unsubscribes the taps, cancels the
+    // frame workers, and releases the leases LAST. `scope` isn't stored — no
+    // command needs it — so this stays a thin swap of the old activate/idle.
+    async function activateSession(scope: ResourceScope): Promise<void> {
+      const t = await scope.use(() => acquireTriple(s), releaseLeases);
       if (!t) return;
       triple = t;
+      scope.defer(() => {
+        triple = null;
+        width = height = 0;
+        lastFrameTime = null; // don't carry a stale frame age into the next activation
+      });
+      scope.defer(() => {
+        centerWorker.cancel();
+        foveaWorkers.L.cancel();
+        foveaWorkers.R.cancel();
+      });
       // Tap each stream's Mat in-process: the center is undistorted (+
       // tracked), the foveae are perspective-wrapped, before publishing
-      // processed frames.
-      disposers.push(t.leases.L.onView((v) => onFoveaView("L", v)));
-      disposers.push(t.leases.C.onView(onCenterView));
-      disposers.push(t.leases.R.onView((v) => onFoveaView("R", v)));
+      // processed frames. Local bag → one deferred `dispose()`.
+      const taps = new DisposerBag();
+      taps.push(t.leases.L.onView((v) => onFoveaView("L", v)));
+      taps.push(t.leases.C.onView(onCenterView));
+      taps.push(t.leases.R.onView((v) => onFoveaView("R", v)));
+      scope.defer(() => taps.dispose());
+      scope.defer(() => disengage(false));
       loop = startActuationLoop({
         targetVolts,
         onVolts(v, actuateMs) {
@@ -386,25 +401,20 @@ export default function trackingSession(): ServerSession<typeof tracking> {
           }
         },
       });
+      // Registered LAST → drains FIRST: stop the actuation loop before anything
+      // it reads (tracker/triple) is torn down.
+      scope.defer(() => {
+        loop?.stop();
+        loop = null;
+      });
       s.telemetry({ ready: true });
     }
 
-    function idleSession(): void {
-      loop?.stop();
-      loop = null;
-      disengage(false);
-      disposers.dispose();
-      centerWorker.cancel();
-      foveaWorkers.L.cancel();
-      foveaWorkers.R.cancel();
-      releaseLeases(triple);
-      triple = null;
-      width = height = 0;
-      lastFrameTime = null; // don't carry a stale frame age into the next activation
-      s.resetTelemetry(["ready", "active", "bbox"]);
-    }
-
     return {
+      activate: (scope) => activateSession(scope),
+      idle() {
+        s.resetTelemetry(["ready", "active", "bbox"]);
+      },
       commands: {
         async startTracker(center) {
           pendingInit = center; // the next center frame performs the KCF init
@@ -418,10 +428,6 @@ export default function trackingSession(): ServerSession<typeof tracking> {
           s.telemetry({ target });
         },
       },
-      activate() {
-        void activateSession();
-      },
-      idle: idleSession,
     };
   });
 }

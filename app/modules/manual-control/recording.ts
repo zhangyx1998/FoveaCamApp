@@ -59,6 +59,24 @@ export interface RecordingDeps {
   }): void;
 }
 
+/** Resolve a fovea frame's voltage binding (WS4 4b): the FIN's exposure-averaged
+ *  voltage when a triggered capture is matched to this frame, else the live
+ *  snapshot. `conv` is captured from the recording's triple at `start()` (stays
+ *  valid even if the triple is released mid-recording). Pure over `deps`/`conv`. */
+export function resolveFoveaBinding(
+  deps: RecordingDeps,
+  conv: CalibratedTriple["conv"],
+  mirror: "L" | "R",
+): FoveaBinding {
+  const fin = deps.foveaBinding?.(mirror) ?? null;
+  const V = fin ? fin.volt : deps.volts()[mirror];
+  const A = mirror === "L" ? conv.V2A.L(V) : conv.V2A.R(V);
+  const H = mirror === "L" ? conv.A2H.L(A) : conv.A2H.R(A);
+  return fin
+    ? { source: "fin", frameId: fin.frameId, volt: V, A, H }
+    : { source: "live", volt: V, A, H };
+}
+
 /** Build a recorded fovea frame's per-frame metadata from its voltage binding.
  *  FIN-bound frames carry the exposure-averaged voltage + `frame_id` via B's
  *  `frameVoltageExtras` (`volt.source: "fin-averaged"`); free-run frames carry
@@ -129,20 +147,6 @@ export function createRecording(deps: RecordingDeps): RecordingController {
     }
   }
 
-  /** Build the fovea frame binding: the FIN's exposure-averaged voltage when a
-   *  triggered capture is matched to this frame (WS4 4b), else the live snapshot.
-   *  `conv` is captured from the recording's triple at `start()` (stays valid
-   *  even if the triple is released mid-recording). */
-  function foveaBinding(mirror: "L" | "R", conv: CalibratedTriple["conv"]): FoveaBinding {
-    const fin = deps.foveaBinding?.(mirror) ?? null;
-    const V = fin ? fin.volt : deps.volts()[mirror];
-    const A = mirror === "L" ? conv.V2A.L(V) : conv.V2A.R(V);
-    const H = mirror === "L" ? conv.A2H.L(A) : conv.A2H.R(A);
-    return fin
-      ? { source: "fin", frameId: fin.frameId, volt: V, A, H }
-      : { source: "live", volt: V, A, H };
-  }
-
   return {
     get active() {
       return active;
@@ -161,9 +165,9 @@ export function createRecording(deps: RecordingDeps): RecordingController {
       const { L, C, R } = triple.leases;
       const { conv } = triple;
       tasks = [
-        consume("left-fovea", L.camera.stream, () => foveaBinding("L", conv)),
+        consume("left-fovea", L.camera.stream, () => resolveFoveaBinding(deps, conv, "L")),
         consume("center", C.camera.stream),
-        consume("right-fovea", R.camera.stream, () => foveaBinding("R", conv)),
+        consume("right-fovea", R.camera.stream, () => resolveFoveaBinding(deps, conv, "R")),
       ];
       deps.telemetry({ recording_active: true, recordingStreams: {} });
       pollTimer = setInterval(publishStreams, 250);

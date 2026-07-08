@@ -32,6 +32,8 @@ struct ReadResult {
   uint64_t seq = 0;   // stable frame sequence (header value / 2)
   uint32_t gen = 0;   // segment generation
   uint32_t retries = 0; // seqlock retries this read took
+  uint32_t width = 0;   // v3: active frame width (≤ segment max)
+  uint32_t height = 0;  // v3: active frame height
   FrameMeta meta;
 };
 

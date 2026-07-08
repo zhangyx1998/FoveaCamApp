@@ -31,7 +31,18 @@ export type WorkloadCounterRow = {
   /** Interval rate when a comparable previous snapshot exists, else the
    *  meter's cumulative rate. */
   ratePerSec: number;
+  /** C-18 diagnostic: largest inter-arrival interval (ms) over the trailing
+   *  10 s. Flat ≈ period → this producer stream is healthy; a spike is a stall. */
+  maxIntervalMs: number;
+  /** True when `maxIntervalMs` exceeds `STALL_FACTOR` × the stream's nominal
+   *  period (from its cumulative rate) — the "obvious bad value" highlight. */
+  stalled: boolean;
 };
+
+/** A stream whose worst 10 s gap exceeds this multiple of its nominal period is
+ *  flagged stalled. ~2× per the C-18 request (a periodic tens-of-ms freeze on a
+ *  ~18 ms/55 fps producer trips it). Exported for the unit test to pin. */
+export const STALL_FACTOR = 2;
 
 export type WorkloadDropRow = { reason: string; count: number };
 
@@ -83,9 +94,14 @@ function diffable(cur: WorkloadSnapshot, prev: WorkloadSnapshot | undefined): pr
   );
 }
 
+// `maxIntervalMs` rides the snapshot at runtime (metering emits it) but the
+// A-owned counter TYPE doesn't carry it yet (handoff logged) — read it
+// defensively as optional until that lands.
+type CounterIn = { count: number; ratePerSec: number; maxIntervalMs?: number };
+
 function counterRows(
-  cur: Record<string, { count: number; ratePerSec: number }>,
-  prev: Record<string, { count: number; ratePerSec: number }> | null,
+  cur: Record<string, CounterIn>,
+  prev: Record<string, CounterIn> | null,
   dtSec: number | null,
 ): WorkloadCounterRow[] {
   return Object.keys(cur)
@@ -98,7 +114,12 @@ function counterRows(
       // so diffing against an implicit 0 is the honest interval reading.
       const ratePerSec =
         dtSec !== null ? Math.max(0, (c.count - (p?.count ?? 0)) / dtSec) : c.ratePerSec;
-      return { name, count: c.count, ratePerSec };
+      const maxIntervalMs = c.maxIntervalMs ?? 0;
+      // Nominal period from the stable CUMULATIVE rate (not the momentary diff,
+      // which the stall itself would deflate and hide the highlight).
+      const nominalPeriodMs = c.ratePerSec > 0 ? 1000 / c.ratePerSec : Infinity;
+      const stalled = maxIntervalMs > STALL_FACTOR * nominalPeriodMs;
+      return { name, count: c.count, ratePerSec, maxIntervalMs, stalled };
     });
 }
 

@@ -21,9 +21,11 @@ namespace ShmRing {
 
 static constexpr char MAGIC[8] = {'F', 'V', 'S', 'H', 'M', 'R', 'G', '\0'};
 // v2 (C-16): SegmentHeader gains the `state` word (OPEN|CLOSED) for symmetric
-// pipe close. Single process — writer + reader share this header, rebuilt
-// together, so there is no cross-version skew to negotiate.
-static constexpr uint32_t LAYOUT_VERSION = 2;
+// pipe close. v3 (C-20): SlotHeader gains per-frame active `width/height` so a
+// dynamic fovea pipe can carry a varying active size inside a MAX-sized ring
+// (the consumer reads the active size per frame). Single process — writer +
+// reader share this header, rebuilt together, so there is no version skew.
+static constexpr uint32_t LAYOUT_VERSION = 3;
 // Default ring depth of the live preview writer (unchanged). Pipes carry their
 // own `ringDepth` in the segment header's `slotCount`; the reader validates it
 // against [1, MAX_SLOT_COUNT] rather than a fixed value.
@@ -85,6 +87,11 @@ struct alignas(64) SlotHeader {
   double convertMs;
   uint64_t deviceTimestamp;
   uint64_t systemTimestamp;
+  // v3 (C-20): active frame size for this slot (≤ the segment's max dims), so a
+  // dynamic fovea pipe carries a varying size inside a MAX-sized ring. The live
+  // writer leaves them = the segment's fixed dims (publish's defaulted args).
+  uint32_t width;
+  uint32_t height;
 };
 
 } // namespace ShmRing

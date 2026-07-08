@@ -138,4 +138,29 @@ describe("planFromManifest", () => {
       { class: "app", appId: "tracking-single" },
     ]);
   });
+
+  // --- owner-bound (cascade) windows don't restore (WS2 2b) ---------------
+
+  it("drops cascade (owner-bound) windows on restore beside their app", () => {
+    // A `debug` sub-window can't reattach to an owner across a restart (the
+    // owner pointer isn't persisted) — planFromManifest drops it.
+    const plan = planFromManifest({
+      version: 1,
+      windows: [
+        { class: "app", appId: "tracking-single" },
+        { class: "debug", url: "test://windows/debug.html?session=tracking&frame=C" },
+      ],
+    });
+    expect(plan.map((w) => w.class)).toEqual(["app"]);
+  });
+
+  it("a debug-only manifest restores to just welcome (debug dropped, doesn't count)", () => {
+    const plan = planFromManifest({
+      version: 1,
+      windows: [
+        { class: "debug", url: "test://windows/debug.html?session=tracking&frame=C" },
+      ],
+    });
+    expect(plan).toEqual([{ class: "welcome" }]);
+  });
 });

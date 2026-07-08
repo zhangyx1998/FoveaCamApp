@@ -15,6 +15,13 @@ export type CounterRate = {
   ratePerSec: number;
 };
 
+/** A workload input/output stream counter with the C-18 diagnostic:
+ *  `maxIntervalMs` = the largest gap (ms) between consecutive events over the
+ *  trailing window (0 = no data / no gap yet). Mirrors `metering.ts`'s
+ *  `WorkloadStreamStat`; kept OPTIONAL here so the profiler reads it typed
+ *  (not `as any`) while pre-C-18 snapshots/fixtures that omit it still fit. */
+export type WorkloadStreamStat = CounterRate & { maxIntervalMs?: number };
+
 export type SampleStats = {
   count: number;
   mean: number;
@@ -32,8 +39,8 @@ export type WorkloadSnapshot = {
   window: SnapshotWindow;
   utilization: number;
   busyMs: number;
-  inputs: Record<string, CounterRate>;
-  outputs: Record<string, CounterRate>;
+  inputs: Record<string, WorkloadStreamStat>;
+  outputs: Record<string, WorkloadStreamStat>;
   drops: DropSnapshot;
 };
 

@@ -123,13 +123,16 @@ uint32_t Segment::beginSlot() {
   return slot;
 }
 
-uint64_t Segment::publish(uint32_t slot, const FrameMeta &meta) {
+uint64_t Segment::publish(uint32_t slot, const FrameMeta &meta,
+                          uint32_t activeWidth, uint32_t activeHeight) {
   const uint64_t seq = header()->latestSeq.load(std::memory_order_acquire) + 1;
   auto *s = slotHeader(slot);
   s->tCapture = meta.tCapture;
   s->convertMs = meta.convertMs;
   s->deviceTimestamp = meta.deviceTimestamp;
   s->systemTimestamp = meta.systemTimestamp;
+  s->width = activeWidth ? activeWidth : header()->width;
+  s->height = activeHeight ? activeHeight : header()->height;
   s->seq.store(seq * 2, std::memory_order_release);
   header()->latestSlot.store(slot, std::memory_order_release);
   header()->latestSeq.store(seq, std::memory_order_release);

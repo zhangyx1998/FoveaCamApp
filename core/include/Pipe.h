@@ -15,8 +15,8 @@
 // nothing per-frame crosses JS.
 
 #include <atomic>
-#include <condition_variable>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -26,6 +26,7 @@
 #include <napi.h>
 
 #include "ShmWrite.h"
+#include "ThreadMeter.h"
 
 namespace Pipe {
 
@@ -34,82 +35,101 @@ struct PipeSpec {
   std::string id;
   std::string pixelFormat;
   std::string dtype; // echoed in the handle; JS decode uses it (native ignores)
-  uint32_t width = 0;
+  uint32_t width = 0;  // nominal/initial active size
   uint32_t height = 0;
   uint32_t channels = 1;
   uint32_t stride = 0;
   uint64_t bytesPerFrame = 0;
   uint32_t ringDepth = ShmRing::SLOT_COUNT;
+  // C-20: the ring is sized to a tunable per-FOVEA max (NOT the camera
+  // resolution — a fovea is a small hi-res crop, so N max rings stay bounded);
+  // each frame carries its own active w/h ≤ max. Camera pipes: max == fixed.
+  uint32_t maxWidth = 0;  // ring capacity (defaults to width if 0)
+  uint32_t maxHeight = 0; // ring capacity (defaults to height if 0)
+  uint64_t maxBytes = 0;  // slot size (defaults to bytesPerFrame if 0)
 };
 
-/** Read-only view of one producer frame handed to its publisher (1:1). */
-struct FrameView {
-  const void *data = nullptr;
+/** Geometry of one already-converted frame (in the pipe's advertised format).
+ *  `stride` = bytes per row of `data` (`cv::Mat::step`); may exceed
+ *  `width*channels` (the publisher copies row-by-row into the tight slot). */
+struct FrameInfo {
+  uint32_t width = 0;
+  uint32_t height = 0;
+  uint32_t channels = 0;
+  uint32_t stride = 0;
   size_t bytes = 0;
-  ShmRing::FrameMeta meta;
 };
 
-class Publisher;
+/** THE producer→publisher seam (C-19). Every producer plugs in here: B's Aravis
+ *  capture hook, the option-(b) JS handoff, and the Phase-2 test driver. The
+ *  producer delivers frames ALREADY CONVERTED to the pipe's advertised format
+ *  (e.g. BGRA8); the publisher stays raw-memcpy+seqlock, convert-agnostic. A
+ *  C++ producer obtains its sink via `PipeHub::instance().sink(pipeId)`. */
+class FrameSink {
+public:
+  virtual ~FrameSink() = default;
+  /** Latest-wins, non-blocking, thread-safe (producer thread → publisher
+   *  thread). `info.bytes` must equal the pipe's `bytesPerFrame`, else the
+   *  frame is dropped (a bookkeeping drop, never a throw). */
+  virtual void offer(const void *data, const FrameInfo &info,
+                     const ShmRing::FrameMeta &meta) = 0;
+};
 
-/** Source of frames feeding exactly one `Publisher`. Scaffold: `SyntheticProducer`.
- *  1c/1d: capture/CV producer threads — same `offer()` seam. */
+/** Source of frames feeding exactly one publisher (via its `FrameSink`).
+ *  Scaffold/test: `SyntheticProducer`. 1c/1d: capture/CV producer threads. */
 class FrameProducer {
 public:
   virtual ~FrameProducer() = default;
-  virtual void start(Publisher &sink) = 0;
+  virtual void start(FrameSink &sink) = 0;
   virtual void stop() = 0;
 };
 
-/** ONE publisher thread per pipe, multi-consumer. Owns the pipe's ring
- *  (`ShmRing::Segment`) + a single-slot latest-wins handoff from its producer;
- *  the thread runs while at least one consumer is connected. */
-class Publisher {
+/** One publisher per pipe, multi-consumer. Owns the pipe's ring
+ *  (`ShmRing::Segment`). COLLAPSED (C-19): there is NO separate publisher
+ *  thread — `offer()` seqlock-writes the frame directly ON THE PRODUCER'S
+ *  thread (B's per-camera capture subscriber, or the test driver), which is
+ *  already off the JS loop. Single writer to the ring (1:1 producer↔pipe). */
+class Publisher : public FrameSink {
 public:
-  explicit Publisher(PipeSpec spec);
-  ~Publisher();
+  /** `epoch` = the segment generation (bumped on re-advertise of an id). */
+  Publisher(PipeSpec spec, uint32_t epoch);
+  ~Publisher() override = default;
   Publisher(const Publisher &) = delete;
   Publisher &operator=(const Publisher &) = delete;
 
-  /** Producer→publisher latest-wins handoff (producer thread; non-blocking,
-   *  overwrites an unconsumed frame). `frame.bytes` must equal
-   *  `spec.bytesPerFrame` — otherwise the frame is dropped. */
-  void offer(const FrameView &frame);
+  /** FrameSink: seqlock-write the frame into the next ring slot (row-by-row,
+   *  honoring `info.stride`), on the producer's thread. Records the native
+   *  meter (the producer thread is the meter's sole writer). Writes only while
+   *  ≥1 consumer is connected and the pipe is open; a size mismatch is dropped. */
+  void offer(const void *data, const FrameInfo &info,
+             const ShmRing::FrameMeta &meta) override;
 
-  /** Consumer refcount (broker). `connect()` starts the publisher thread on the
-   *  first consumer and returns the count; `disconnect()` at zero pauses the
-   *  thread but keeps the segment mapped/advertised (reconnectable). */
-  uint32_t connect();
+  /** Consumer refcount (broker). At zero the ring write pauses (segment stays
+   *  mapped/advertised — reconnectable); the producer keeps arriving (metered). */
+  uint32_t connect() { return refcount_.fetch_add(1, std::memory_order_acq_rel) + 1; }
   uint32_t disconnect();
   uint32_t consumers() const { return refcount_.load(std::memory_order_acquire); }
 
-  /** Producer-side close: stop the thread, then set `state=CLOSED` (release) so
-   *  consumers observe the explicit close signal after the final frame. */
+  /** Producer-side close: set `state=CLOSED` (release) so consumers observe the
+   *  explicit signal after the final frame; further offers are dropped. */
   void close();
-  bool running() const { return running_.load(std::memory_order_acquire); }
 
   const PipeSpec &spec() const { return spec_; }
   const std::string &shmName() const { return shmName_; }
+  /** Segment generation = the pipe's epoch (C-20 reuse-safe identity). */
+  uint32_t epoch() const { return segment_ ? segment_->generation : 0; }
+
+  /** Out-of-loop probe of the native producer meter (orchestrator thread). */
+  Meter::Snapshot probe() const;
 
 private:
-  void run();          // publisher thread loop
-  void startThread();
-  void stopThread();
-
   PipeSpec spec_;
   std::string shmName_;
   std::unique_ptr<ShmRing::Segment> segment_;
-
-  std::thread thread_;
-  mutable std::mutex mutex_;
-  std::condition_variable cv_;
-  std::vector<uint8_t> pending_;
-  ShmRing::FrameMeta pendingMeta_{};
-  bool hasPending_ = false;
-  bool closed_ = false;
+  Meter::ThreadMeter meter_; // written only by the producer thread (offer)
 
   std::atomic<uint32_t> refcount_{0};
-  std::atomic<bool> stop_{false};
-  std::atomic<bool> running_{false};
+  std::atomic<bool> closed_{false};
 };
 
 /** Scaffold producer: emits synthetic frames at ~`fps` (byte = seed + frame#)
@@ -119,8 +139,11 @@ class SyntheticProducer : public FrameProducer {
 public:
   SyntheticProducer(PipeSpec spec, double fps, uint8_t seed);
   ~SyntheticProducer() override;
-  void start(Publisher &sink) override;
+  void start(FrameSink &sink) override;
   void stop() override;
+  /** Test hook: pause offering for ~`ms` on the producer thread, simulating a
+   *  producer/capture stall — the probed `maxIntervalMs` then spikes. */
+  void injectStall(double ms) { stallMs_.store(ms, std::memory_order_release); }
 
 private:
   PipeSpec spec_;
@@ -128,10 +151,43 @@ private:
   uint8_t seed_;
   std::thread thread_;
   std::atomic<bool> stop_{false};
+  std::atomic<double> stallMs_{0};
 };
 
-/** Register the `core.Pipe` broker surface (advertise/connect/disconnect/close
- *  + the scaffold `attachSynthetic`) onto `exports`. */
+struct PipeEntry {
+  PipeSpec spec;
+  std::unique_ptr<Publisher> publisher;
+  std::unique_ptr<SyntheticProducer> producer;
+};
+
+/** Process-wide pipe registry/broker. A C++ producer (B's Aravis capture
+ *  subscriber) obtains its `FrameSink` via `PipeHub::instance().sink(id)`; the
+ *  orchestrator drives advertise/connect/probe/drop through the NAPI surface. */
+class PipeHub {
+public:
+  static PipeHub &instance();
+  /** Advertise (idempotent for a LIVE id → returns its current epoch). A first
+   *  advertise, or one after `drop`, bumps a per-id epoch → a NEW segment name
+   *  (`/fv.p<hash>.g<epoch>`), so a stale consumer on the old segment sees
+   *  CLOSED and never binds the reused id. Returns the epoch. */
+  uint32_t advertise(const PipeSpec &spec);
+  Publisher &publisher(const std::string &id);   // throws if unknown
+  FrameSink *sink(const std::string &id);        // nullptr if unknown
+  void attachSynthetic(const std::string &id, double fps, uint8_t seed);
+  void injectStall(const std::string &id, double ms);
+  void drop(const std::string &id);
+  /** Probe EVERY live pipe's meter → keyed snapshots. Dropped pipes are gone
+   *  from the result (no stale workload rows under churn). */
+  std::vector<std::pair<std::string, Meter::Snapshot>> probeAll();
+
+private:
+  std::mutex m_;
+  std::map<std::string, PipeEntry> pipes_;
+  std::map<std::string, uint32_t> epochs_; // per-id, PERSISTS across drop
+};
+
+/** Register the `core.Pipe` broker surface (advertise/connect/disconnect/close/
+ *  probe + the test `attachSynthetic`/`injectStall`) onto `exports`. */
 void exportPipeNamespace(Napi::Env env, Napi::Object &exports);
 
 } // namespace Pipe

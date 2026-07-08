@@ -10,6 +10,10 @@ export type ShmReadResult = {
   seq: bigint;
   gen: number;
   retries: number;
+  /** Active frame size (C-20 dynamic pipe resize); absent on the fixed-size
+   *  live SHM path (the reader still returns them = the segment dims). */
+  width?: number;
+  height?: number;
   meta?: FrameMeta;
 };
 

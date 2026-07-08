@@ -17,22 +17,31 @@ import {
   type ShmReadResult,
 } from "@lib/orchestrator/frame-payload";
 import {
+  PIPE_READ,
+  PIPE_READ_DONE,
   SHM_INIT,
   SHM_READ,
   SHM_READ_DONE,
+  type PipeReadRequest,
   type ShmReadRequest,
 } from "@lib/orchestrator/shm-messages";
 
 type ReaderHandle = object;
+/** A closed pipe read (C-17): explicit signal, distinct from `null` (no new
+ *  frame) — the reader addon returns this once the publisher sets state=CLOSED. */
+type ReaderClosed = { closed: true };
 type ReaderAddon = {
   open(seg: string): ReaderHandle;
   readInto(
     handle: ReaderHandle,
     dest: ArrayBuffer,
     lastSeq: bigint,
-  ): ShmReadResult | null;
+  ): ShmReadResult | ReaderClosed | null;
   close(handle: ReaderHandle): void;
 };
+
+const isClosed = (r: unknown): r is ReaderClosed =>
+  typeof r === "object" && r !== null && (r as ReaderClosed).closed === true;
 
 // This bundle is emitted as CommonJS (unsandboxed preloads load `.mjs` as
 // real ESM where bare `require` throws — V11b), so the module wrapper's own
@@ -68,7 +77,7 @@ function readShmFrame(payload: FramePayload, dest: ArrayBuffer): FramePayload | 
   const handle = handleFor(payload.shm.seg, payload.shm.gen);
   const lastSeq = payload.shm.seq > 0n ? payload.shm.seq - 1n : 0n;
   const result = reader.readInto(handle, dest, lastSeq);
-  if (!result) return null;
+  if (!result || isClosed(result)) return null;
   return withShmReadResult(
     payload as FramePayload & { shm: NonNullable<FramePayload["shm"]> },
     dest,
@@ -76,8 +85,61 @@ function readShmFrame(payload: FramePayload, dest: ArrayBuffer): FramePayload | 
   );
 }
 
+// Pipe consumer reads (C-17): keyed by segment NAME with a consumer-tracked
+// lastSeq (no per-frame descriptor). Handles cached by name; the reader addon
+// reuses the transferred `buffer` as its dest (C-15).
+const pipeHandles = new Map<string, ReaderHandle>();
+
+function pipeHandleFor(shmName: string): ReaderHandle {
+  let handle = pipeHandles.get(shmName);
+  if (!handle) {
+    handle = reader.open(shmName);
+    pipeHandles.set(shmName, handle);
+  }
+  return handle;
+}
+
+function handlePipeRead(port: MessagePort, msg: PipeReadRequest): void {
+  try {
+    const handle = pipeHandleFor(msg.shmName);
+    const result = reader.readInto(handle, msg.buffer, msg.lastSeq);
+    if (isClosed(result)) {
+      // Drop the cached handle so a re-advertised pipe re-opens fresh.
+      reader.close(handle);
+      pipeHandles.delete(msg.shmName);
+      port.postMessage({ kind: PIPE_READ_DONE, id: msg.id, buffer: msg.buffer, closed: true }, [
+        msg.buffer,
+      ]);
+      return;
+    }
+    port.postMessage(
+      {
+        kind: PIPE_READ_DONE,
+        id: msg.id,
+        buffer: msg.buffer,
+        seq: result ? result.seq : undefined,
+        tCapture: result ? result.meta?.tCapture : undefined,
+        width: result ? result.width : undefined,
+        height: result ? result.height : undefined,
+      },
+      [msg.buffer],
+    );
+  } catch (error) {
+    port.postMessage(
+      {
+        kind: PIPE_READ_DONE,
+        id: msg.id,
+        buffer: msg.buffer,
+        error: error instanceof Error ? error.message : String(error),
+      },
+      [msg.buffer],
+    );
+  }
+}
+
 function handleReadMessage(port: MessagePort, data: unknown): void {
-  const msg = data as ShmReadRequest | undefined;
+  const msg = data as ShmReadRequest | PipeReadRequest | undefined;
+  if (msg?.kind === PIPE_READ) return handlePipeRead(port, msg);
   if (msg?.kind !== SHM_READ) return;
   try {
     const payload = readShmFrame(msg.payload, msg.buffer);

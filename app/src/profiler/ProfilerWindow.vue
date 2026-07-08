@@ -198,12 +198,26 @@ function fmt(v: number, digits = 1): string {
               <td class="mono">{{ i.name }}</td>
               <td class="num">{{ i.count.toLocaleString() }}</td>
               <td class="num">{{ fmt(i.ratePerSec) }}/s</td>
+              <td
+                class="num interval"
+                :class="{ stall: i.stalled }"
+                title="max inter-arrival interval over the trailing 10 s"
+              >
+                {{ fmt(i.maxIntervalMs) }} ms
+              </td>
             </tr>
             <tr v-for="o in w.outputs" :key="'out:' + o.name">
               <td class="dir">out</td>
               <td class="mono">{{ o.name }}</td>
               <td class="num">{{ o.count.toLocaleString() }}</td>
               <td class="num">{{ fmt(o.ratePerSec) }}/s</td>
+              <td
+                class="num interval"
+                :class="{ stall: o.stalled }"
+                title="max inter-arrival interval over the trailing 10 s"
+              >
+                {{ fmt(o.maxIntervalMs) }} ms
+              </td>
             </tr>
           </tbody>
         </table>
@@ -487,6 +501,16 @@ function fmt(v: number, digits = 1): string {
       .num {
         text-align: right;
         font-variant-numeric: tabular-nums;
+      }
+      // C-18: max inter-arrival (10 s). Dim by default; a stalled stream (gap
+      // > 2× nominal period) turns amber + bold so it reads at a glance — the
+      // number is always printed, so the tint is redundant, never color-alone.
+      .interval {
+        color: #888;
+      }
+      .interval.stall {
+        color: #e0a030;
+        font-weight: 600;
       }
     }
 

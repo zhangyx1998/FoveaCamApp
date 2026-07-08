@@ -35,7 +35,14 @@ export type Span = { name: string; ms: number; meta?: Record<string, unknown>; t
  *  Mirrors `orchestrator/metering.ts`'s snapshot shapes; duplicated here (not
  *  imported) for the same reason as `Span` — `contracts.ts` is the
  *  renderer-safe boundary and `metering.ts` is orchestrator-only. */
-export type WorkloadCounterSnapshot = { count: number; ratePerSec: number };
+// C-18: `maxIntervalMs` = largest gap (ms) between consecutive events over the
+// trailing window (mirrors `stats.WorkloadStreamStat`/`metering.ts`). Optional
+// so pre-C-18 snapshots still fit; the profiler reads it typed, not `as any`.
+export type WorkloadCounterSnapshot = {
+  count: number;
+  ratePerSec: number;
+  maxIntervalMs?: number;
+};
 
 /** One workload meter's aggregated document — `system.perfSnapshot`'s
  *  `workloads` values, keyed by workload name. */

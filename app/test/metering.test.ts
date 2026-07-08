@@ -28,10 +28,12 @@ describe("registerWorkload — counters and rates", () => {
       outputs: ["shm", "view"],
     });
     const seeded = workloadSnapshot("test:counters-1")!;
-    expect(seeded.inputs).toEqual({ camera: { count: 0, ratePerSec: 0 } });
+    expect(seeded.inputs).toEqual({
+      camera: { count: 0, ratePerSec: 0, maxIntervalMs: 0 },
+    });
     expect(seeded.outputs).toEqual({
-      shm: { count: 0, ratePerSec: 0 },
-      view: { count: 0, ratePerSec: 0 },
+      shm: { count: 0, ratePerSec: 0, maxIntervalMs: 0 },
+      view: { count: 0, ratePerSec: 0, maxIntervalMs: 0 },
     });
     expect(seeded.drops).toEqual({ total: 0, ratePerSec: 0, byReason: {} });
 
@@ -42,9 +44,9 @@ describe("registerWorkload — counters and rates", () => {
 
     const snap = workloadSnapshot("test:counters-1")!;
     expect(snap.window).toEqual({ startedAt: 0, snapshotAt: 2000, uptimeMs: 2000 });
-    expect(snap.inputs.camera).toEqual({ count: 4, ratePerSec: 2 });
-    expect(snap.outputs.shm).toEqual({ count: 2, ratePerSec: 1 });
-    expect(snap.outputs.view).toEqual({ count: 1, ratePerSec: 0.5 });
+    expect(snap.inputs.camera).toEqual({ count: 4, ratePerSec: 2, maxIntervalMs: 0 });
+    expect(snap.outputs.shm).toEqual({ count: 2, ratePerSec: 1, maxIntervalMs: 0 });
+    expect(snap.outputs.view).toEqual({ count: 1, ratePerSec: 0.5, maxIntervalMs: 0 });
 
     w.dispose();
   });
@@ -257,5 +259,85 @@ describe("integration: a fake loop-like workload", () => {
     expect(snap.utilization).toBeCloseTo(15 / 1000, 5);
 
     workload.dispose();
+  });
+});
+
+describe("C-18 — maxIntervalMs (trailing-10s max inter-arrival, 10×1s bin ring)", () => {
+  // Read the additive field the A-owned snapshot types don't carry yet.
+  const mi = (snap: { inputs: Record<string, unknown> }, stream: string): number =>
+    (snap.inputs[stream] as { maxIntervalMs: number }).maxIntervalMs;
+
+  it("steady stream → maxIntervalMs ≈ the arrival period", () => {
+    const w = registerWorkload("c18:steady", { inputs: ["cam"], outputs: [] });
+    // 20 arrivals, 50 ms apart (a 20 fps producer).
+    for (let i = 1; i <= 20; i++) {
+      vi.setSystemTime(i * 50);
+      w.ingest("cam");
+    }
+    // Snapshot right on the last event → the largest closed gap is one period.
+    expect(mi(workloadSnapshot("c18:steady")!, "cam")).toBe(50);
+    w.dispose();
+  });
+
+  it("one stall spikes maxIntervalMs to the stall length", () => {
+    const w = registerWorkload("c18:stall", { inputs: ["cam"], outputs: [] });
+    let t = 0;
+    for (let i = 0; i < 5; i++) {
+      t += 50;
+      vi.setSystemTime(t);
+      w.ingest("cam");
+    }
+    // An 80 ms stall, then the closing event.
+    t += 80;
+    vi.setSystemTime(t);
+    w.ingest("cam");
+    expect(mi(workloadSnapshot("c18:stall")!, "cam")).toBe(80);
+    w.dispose();
+  });
+
+  it("a stall ages fully out ~10s after it stops → back to the period", () => {
+    const w = registerWorkload("c18:ageout", { inputs: ["cam"], outputs: [] });
+    let t = 1000;
+    vi.setSystemTime(t);
+    w.ingest("cam");
+    t += 80; // an 80 ms stall closed by the next event
+    vi.setSystemTime(t);
+    w.ingest("cam");
+    expect(mi(workloadSnapshot("c18:ageout")!, "cam")).toBe(80);
+    // Keep a steady 50 ms stream running for >10 s so the stall's bin rotates out.
+    for (let i = 0; i < 240; i++) {
+      t += 50;
+      vi.setSystemTime(t);
+      w.ingest("cam");
+    }
+    expect(mi(workloadSnapshot("c18:ageout")!, "cam")).toBe(50);
+    w.dispose();
+  });
+
+  it("an ONGOING stall is reported live (advance time, no event)", () => {
+    const w = registerWorkload("c18:ongoing", { inputs: ["cam"], outputs: [] });
+    vi.setSystemTime(1000);
+    w.ingest("cam");
+    vi.setSystemTime(1050);
+    w.ingest("cam"); // steady so far → max closed gap 50
+    // Now 80 ms pass with NO event — the freeze is in progress.
+    vi.setSystemTime(1130);
+    expect(mi(workloadSnapshot("c18:ongoing")!, "cam")).toBe(80); // live, not 50
+    // And it keeps growing until an event closes it.
+    vi.setSystemTime(1170);
+    expect(mi(workloadSnapshot("c18:ongoing")!, "cam")).toBe(120);
+    w.dispose();
+  });
+
+  it("outputs (emit) are tracked the same as inputs", () => {
+    const w = registerWorkload("c18:emit", { inputs: [], outputs: ["shm"] });
+    vi.setSystemTime(0);
+    w.emit("shm");
+    vi.setSystemTime(30);
+    w.emit("shm");
+    vi.setSystemTime(200); // 170 ms stall in progress
+    const snap = workloadSnapshot("c18:emit")!;
+    expect((snap.outputs.shm as { maxIntervalMs: number }).maxIntervalMs).toBe(170);
+    w.dispose();
   });
 });

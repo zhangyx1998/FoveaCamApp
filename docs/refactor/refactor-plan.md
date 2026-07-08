@@ -175,6 +175,141 @@ verification.
   checkpoint. **Pending:** user visual checks (title-bar + the 4 A-21 surfaces);
   Stage-F live FIN↔frame wiring; WS1 1c (ring-write move + B-P11, C+B) next.
 
+### WAVE 3 — LANDED/in-progress (2026-07-07; Opus fleet; posture: converge at milestone)
+- **C-18** (ACCEPTED, planner-verified): per-stream `maxIntervalMs` = trailing-10 s
+  max inter-arrival, as **10×1 s bins in a ring** (rotate by wall-clock; live
+  in-progress stall via `max(bins, now−lastEventTs)`), observe-only O(1)/event, in
+  `metering.ts` + profiler (amber >2× nominal). Transport-agnostic schema
+  (`WorkloadStreamStat`/`INTERVAL_WINDOW`) for the future native thread meter to
+  reuse. Diagnostic to rule producer-lag in/out. Planner re-ran: metering 19/19,
+  and the bin math is correct. Handoff to A: add `maxIntervalMs` to the workload
+  stream-stat type in `stats.ts`/`contracts.ts` (runtime already flows it).
+- **C-17** (ACCEPTED, planner-verified): full SYNTHETIC pipe consumer stack —
+  `core/Pipe` d.ts+glue, C-owned `pipe-session.ts` broker (`asBroker(Pipe)`),
+  renderer/preload consumer (`shm-client.readPipe` reusing the C-15 pool,
+  `pipe-consumer.ts`), `core/test/09-pipe.ts`. **Zero live-path change proven**
+  (`registry.ts` untouched — confirmed by absence). Planner re-ran: 09-pipe PASS,
+  08-shm-ring PASS (live regression-free). Deferred to real-1c (C-19): live
+  registry cut-over + orchestrator-index wiring + StreamView binding.
+- **B-15** (4 non-breaking batches, accept pending the milestone sweep): pyfovea
+  accessor edge cases + pixel-formats tests (pytest 53/53); TS↔C++↔py codegen
+  conformance test; host-side `FrameResult` round-trip + 37-byte wire-layout test;
+  compile-time host+MCU wire-layout `static_assert`s (core both runtimes + `pio`
+  SUCCESS FLASH 89676). Frame↔voltage substrate now covered write+read+schema+wire.
+  Loop PAUSED (no-churn rule) — remaining B candidates are bench-gated/low-value.
+- **A-P1** (IN PROGRESS, A-23 loop): resource-scoped session lifecycle (breaking,
+  own-surface, green-lit) + window-substrate test coverage. Not yet reported
+  complete. Tree UNCOMMITTED (posture: commit at milestone convergence, not
+  per-wave).
+
+### WAVE 4 — LANDED + planner-verified (2026-07-07; Opus fleet) — the free-running-thread milestone (BUILD side)
+Both milestone threads are built off the JS loop + instrumented; live cut-over + rig
+pass remain. Session-limit interruption (reset 7:40pm ET) hit mid-wave; all resumed.
+- **C (pipe/producer/instrumentation stack):** C-17 synthetic pipe consumer stack;
+  C-18 `maxIntervalMs` diagnostic (10×1s-bin ring, live in-progress stall) +
+  transport-agnostic metric schema; C-19 **SHM producer C++ thread** (publisher
+  collapsed onto producer per B's single-consumer-pop finding — 1 copy, no extra
+  thread) + standalone `ThreadMeter` (probed out-of-loop into `perfSnapshot.
+  workloads`); C-20 **dynamic pipe lifecycle** (keyed discovery Record, layout-v3
+  per-frame active w/h in a max-fovea-sized ring = resize w/o recreation, epoch
+  reuse-safe ids, churn-consistent `probeAll`). `viewer-contract.ts` untouched.
+- **B (Aravis capture + tracker thread):** B-15 test-coverage batches; B-16
+  `Arv::CaptureSink` (subscriber on the existing per-camera stream thread →
+  convert→`offer()` to C's ring; frame-release hazard structural); B-17p1
+  `attachCameraPipe` NAPI + fake-camera for camera-free tests; **B-17 1d — KCF
+  tracker C++ thread** (`KcfTrackerStream : TransformStream`, `Sub::Latest` on the
+  center camera, full-frame KCF off-loop, async-generator results, reuses C's
+  `ThreadMeter` + a new latest-wins drop counter; test proves 5 off-loop results +
+  drops 0→12 under induced stall). v1 crop-in-JS→C++ port deferred.
+- **A (A-23/A-P1, IN PROGRESS):** `resource-session.ts` (`defineResourceSession`/
+  `ResourceScope`, unit-tested async-drain/staleness) + **5/6 triple sessions
+  migrated** (drift/distortion/multi-fovea/extrinsic/tracking-single;
+  manual-control remaining) + window/frame↔voltage test coverage + the C-18
+  `maxIntervalMs` type handoff (landed optional to not break C's fixtures).
+- **Parallel tooling (during the quota downtime; `typescript.md`):** Electron
+  `*.ts` type-checking fixed via `moduleResolution:"bundler"` + tsconfig
+  restructure + `electron-env.d.ts` cleanup. Folded into this commit; vue-tsc
+  green against it.
+- **Planner sweep (authoritative):** vue-tsc 0, vitest **277/277**, vite build,
+  orch zero-Vue / renderer zero-core, V11 0/1/0, `core make build` both runtimes,
+  native `08–12` all PASS unsandboxed, reader `otool -L` clean, pyfovea **53/53**.
+  **Pending:** the A-side live cut-over (real-1c + 1d: retire registry JS SHM write
+  + `AsyncKcfTracker`; advertise `camera:<serial>`; StreamView→pipe; `probeAll`
+  splice) + A-P1 manual-control; then the USER's rig pass.
+
+## NEXT MILESTONE — per-frame work on its own free-running threads, instrumented (user-set 2026-07-07)
+The next solid milestone the **user verifies at the rig**: the per-frame pixel/CV
+work is moved OFF the orchestrator JS event loop into dedicated **free-running C++
+threads**, AND each such thread exposes an **instrumentation API used for
+profiling**. Two named threads for this milestone:
+1. **SHM producer thread** (WS1 real-1c) — per-frame SHM production (memcpy +
+   seqlock write) runs in the C++ publisher thread; the JS loop no longer touches
+   the camera→SHM preview path.
+2. **KCF tracker thread** (WS1 1d / `project-async-kcf-cpp-thread`) — the
+   center-camera KCF runs in its own C++ thread consuming the latest frame,
+   results back via async generator; off the JS loop.
+
+**Instrumentation API (load-bearing, not optional).** Because these threads run
+free of the JS loop, the orchestrator can no longer time them from JS. Each
+free-running thread must record its OWN metrics — the **C-18 max-interval (10 s /
+1 s-bin) + rate + utilization + drops** block — in a lock-free structure the
+orchestrator **probes out-of-loop** (reads the metric block, never per-frame) and
+forwards to the profiler. The metric block SCHEMA must be shared between the JS
+`Workload` meter (C-18) and the native thread meter, so the snapshot + profiler
+shape is stable across the JS→C++ move. This is the `project-shm-pipe-
+architecture` "orchestrator only probes profiling data" principle made concrete.
+- **C path:** C-18 (JS max-interval diagnostic — profiles the CURRENT JS producer,
+  and DEFINES the shared metric-block schema) → C-17 (1c-prep synthetic stack) →
+  **real-1c** (SHM producer C++ thread + its native meter) → **1d** (KCF C++
+  thread + its native meter).
+- **Cross-role seam (flag for real-1c dispatch):** the live SHM write currently
+  lives in `registry.ts` (A-owned); real-1c removes it there and wires the camera
+  frame to the C++ publisher — A↔C coordinated, planner-arbitrated.
+- **Verification is the user's rig pass** (freeze gone / tracking ~60 fps /
+  orchestrator `loopLag`<5 ms / each thread's `maxInterval` flat in the profiler).
+
+## REFACTOR POSTURE (user 2026-07-07): break freely, CONVERGE at the milestone
+Intermediate breakage is FINE — the tree may be red between waves; a wave need not
+leave every gate green before the next dependent step is dispatched. The only hard
+constraint is that the pieces **converge on the milestone** (green + rig-verified
+there). So:
+- **real-1c is GREEN-LIT to break the live SHM preview path** — no pre-hardware
+  hold, no waiting on the C-18 verdict. C proceeds C-18 → C-17 → real-1c → 1d and
+  we converge; C-18 stays on the path only because it DEFINES the shared metric
+  schema (a milestone deliverable) and cheaply gives the producer-lag verdict.
+- **Coders may break things WITHIN their own surface** (restructure, break internal
+  APIs, leave their own area red across batches) when it's higher-value and
+  converges by the milestone.
+- **The planner still SEQUENCES cross-role / contract / persisted-surface breaks**
+  — that is convergence management, not timidity: two roles breaking a shared
+  boundary without sequencing is the one thing that fails to converge. Those get a
+  planner-arbitrated handoff; everything else, just do it.
+- The planner still verifies at convergence/commit points and the user commits at
+  checkpoints; we simply stop gating forward motion on per-wave greenness.
+
+## WS1 pipe protocol — DYNAMIC LIFECYCLE constraint (user 2026-07-07)
+The pipe set is NOT mostly-static. In the **multi-fovea tracking** app, fovea
+streams are **created and destroyed on the fly** (user interaction + scene
+change), and each fovea's crop **resizes continuously** as it tracks. The
+protocol must be designed for churn from the start, not retrofitted:
+- **Consumer discovery / reactive pipe-list:** the renderer must learn of pipes
+  appearing/disappearing at runtime — a subscribable advertise/un-advertise
+  stream, NOT a one-time contract read. (Main gap in the C-16/17/19 protocol,
+  which advertises but has no live discovery channel.)
+- **Cheap, leak-free churn:** create/destroy many pipes rapidly with no leaked
+  shm segments/threads. The C-19 collapse (no thread-per-pipe) already helps;
+  verify `shm_unlink` on drop + bounded resource use.
+- **Frequent resize:** a tracking fovea resizes every few frames — "drop +
+  re-advertise" (C-19's size-change policy) recreates the segment each time =
+  too churny. Need a better policy: ring sized to a MAX fovea footprint with a
+  varying active w/h inside it, or in-place resize up to a cap.
+- **Reuse-safe identity:** unique ids across churn (`fovea:<session>:<id>` with a
+  generation/epoch) so a consumer on a stale id sees CLOSED, never silently
+  binds to a reused id.
+Source: [[project_multi_fovea_dynamic_pipes]]. The immediate manage-cameras
+milestone uses static `camera:<serial>` pipes, but the protocol is designed for
+the dynamic case NOW (C-20) so the cut-over's advertise/notify wiring is right.
+
 ## WS1 design — RATIFIED (planner, 2026-07-07; user "advance aggressively")
 1. **Publisher-thread granularity — one publisher thread PER PIPE, multi-
    consumer.** A pipe = one typed producer output. Its publisher owns that pipe's

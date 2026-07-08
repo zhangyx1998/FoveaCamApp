@@ -40,30 +40,47 @@ export type PipeSpec = {
   channels: number;
   /** Bytes per row of the decoded frame. */
   stride: number;
-  /** Authoritative frame byte size — NOT inferred from shape (12p/U16 differ). */
+  /** Authoritative frame byte size (NOMINAL/initial) — NOT inferred from shape. */
   bytesPerFrame: number;
   /** Ring slot count for this pipe's segment (the seqlock depth). */
   ringDepth: number;
+  /** C-20 dynamic resize: the ring is sized to this MAX per-FOVEA footprint (a
+   *  small hi-res crop, NOT the camera resolution — keeps N concurrent max rings
+   *  bounded); each frame carries its own active w/h ≤ max. Omitted (== nominal)
+   *  for fixed pipes like `camera:<serial>`. */
+  maxWidth?: number;
+  maxHeight?: number;
+  maxBytes?: number;
 };
 
 /** What `connectPipe` resolves to — everything a consumer needs to map + read
  *  the segment via the reader addon. `headerLayout` lets the consumer sanity-
  *  check the binary layout it's about to read (the addon also validates it
- *  natively on `open`). */
+ *  natively on `open`). `epoch` is the segment generation (C-20 reuse-safe id). */
 export type PipeHandle = {
   pipeId: string;
   /** POSIX segment name for `reader.open(shmName)`. */
   shmName: string;
   spec: PipeSpec;
   ringDepth: number;
+  epoch: number;
   headerLayout: { layoutVersion: number; magic: string };
+};
+
+/** One advertised pipe in the discovery Record (C-20). `epoch` bumps each
+ *  re-advertise of an id — the renderer detects a reused id and reconnects. */
+export type PipeAdvert = {
+  spec: PipeSpec;
+  epoch: number;
 };
 
 export const pipes = defineContract({
   state: {
-    /** Every advertised pipe, in advertisement order. The renderer selects one
-     *  by `id` and `connectPipe`s it. */
-    pipes: [] as PipeSpec[],
+    /** Every advertised pipe, keyed by pipeId (C-20 dynamic discovery). Seeded
+     *  to every subscriber (current set) + snapshot-replaced on each advertise/
+     *  un-advertise (delta) — the renderer reacts to pipes appearing/vanishing
+     *  at runtime by diffing this Record, like viewer's `files`. */
+    pipes: {} as Record<string, PipeAdvert>,
   },
   telemetry: {},
   // No per-frame frame topics: once connected, pixels flow purely through the

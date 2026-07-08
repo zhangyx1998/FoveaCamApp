@@ -15,7 +15,8 @@
 // it actually sees and where the marker "should" project, then warps its
 // own frame through it as a visual alignment check.
 
-import { defineSession, type ServerSession } from "@orchestrator/runtime";
+import { type ServerSession } from "@orchestrator/runtime";
+import { defineResourceSession, type ResourceScope } from "@orchestrator/resource-session";
 import { acquireTriple, type CalibratedTriple } from "@orchestrator/calibration";
 import { startActuationLoop, type ActuationLoop } from "@orchestrator/actuation";
 import { findHomography, resize, wrapPerspective, type Mat } from "core/Vision";
@@ -42,9 +43,8 @@ type Role = "L" | "C" | "R";
 const ORIGIN: Pos = { x: 0, y: 0 };
 
 export default function calibrateDistortionSession(): ServerSession<typeof calibrateDistortion> {
-  return defineSession("calibrate-distortion", calibrateDistortion, (s) => {
+  return defineResourceSession("calibrate-distortion", calibrateDistortion, (s) => {
     let triple: CalibratedTriple | null = null;
-    const disposers = new DisposerBag();
     let trackers: Record<Role, MarkerTracker> | null = null;
     let loop: ActuationLoop | null = null;
     let centerAngle: Point2d | null = null;
@@ -105,20 +105,30 @@ export default function calibrateDistortionSession(): ServerSession<typeof calib
       })();
     }
 
-    async function activateSession(): Promise<void> {
-      const t = await acquireTriple(s);
+    // Resource-scoped activation (A-P1): cleanups drain LIFO on idle; leases go
+    // through `scope.use` so they release LAST, after the loop/trackers/taps.
+    async function activateSession(scope: ResourceScope): Promise<void> {
+      const t = await scope.use(() => acquireTriple(s), releaseLeases);
       if (!t) return;
       triple = t;
+      scope.defer(() => {
+        triple = null;
+      });
       trackers = createTrackerTriple(
         { L: t.leases.L.camera, C: t.leases.C.camera, R: t.leases.R.camera },
         s.state.targetId,
         { internal: true },
       );
-      bindDetections(trackers, disposers, publishDetections, onCenterDetection);
-      bindViews(t.leases, disposers, s, (role, v) => {
+      scope.defer(() => {
+        trackers = stopTriple(trackers);
+      });
+      const taps = new DisposerBag();
+      bindDetections(trackers, taps, publishDetections, onCenterDetection);
+      bindViews(t.leases, taps, s, (role, v) => {
         if (role === "C") s.frame("C", v);
         else onFoveaView(role, v);
       });
+      scope.defer(() => taps.dispose());
 
       loop = startActuationLoop({
         targetVolts: () => {
@@ -129,32 +139,26 @@ export default function calibrateDistortionSession(): ServerSession<typeof calib
           /* no telemetry needed beyond what the trackers already publish */
         },
       });
+      scope.defer(() => {
+        loop?.stop();
+        loop = null;
+      });
       s.telemetry({ ready: true });
     }
 
-    function idleSession(): void {
-      loop?.stop();
-      loop = null;
-      trackers = stopTriple(trackers);
-      disposers.dispose();
-      releaseLeases(triple);
-      triple = null;
-      centerAngle = null;
-      projection = { L: null, R: null };
-      s.resetTelemetry(["ready", "detection", "projection"]);
-    }
-
     return {
+      activate: (scope) => activateSession(scope),
+      idle() {
+        centerAngle = null;
+        projection = { L: null, R: null };
+        s.resetTelemetry(["ready", "detection", "projection"]);
+      },
       commands: {
         async setTargetId({ role, id }) {
           s.setState("targetId", { ...s.state.targetId, [role]: id });
           retarget(trackers, role, id);
         },
       },
-      activate() {
-        void activateSession();
-      },
-      idle: idleSession,
     };
   });
 }

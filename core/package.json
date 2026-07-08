@@ -56,6 +56,11 @@
       "require": "./dist/Shm/index.cjs",
       "types": "./dist/Shm/index.d.ts"
     },
+    "./Pipe": {
+      "import": "./dist/Pipe/index.mjs",
+      "require": "./dist/Pipe/index.cjs",
+      "types": "./dist/Pipe/index.d.ts"
+    },
     "./types": {
       "types": "./dist/types.d.ts"
     }
