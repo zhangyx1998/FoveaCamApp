@@ -34,6 +34,15 @@ function clonePos(pos: Pos): Pos {
   return { x: pos.x, y: pos.y };
 }
 
+/** Decode a 4-channel DAC vector — either an `actuate()` ACK readback or a
+ *  locally-computed `channels()` array — into an {x,y} volt pair (the
+ *  differential pairs 0-1 / 2-3 via `dac2volt`). Shared by `actuate()`'s
+ *  readback decode and `predictVolts()` so the streamed local prediction is
+ *  byte-for-byte the same math as the awaited readback (A-30). */
+function decodeChannels(chan: readonly number[]): Pos {
+  return { x: dac2volt(chan[0] - chan[1]), y: dac2volt(chan[2] - chan[3]) };
+}
+
 export class StreamIdPool {
   private readonly inUse = new Set<number>();
 
@@ -267,15 +276,26 @@ export class Controller {
         settle_time: settleTime,
       }),
     );
-    const new_pos = {
-      left: { x: dac2volt(left[0] - left[1]), y: dac2volt(left[2] - left[3]) },
-      right: {
-        x: dac2volt(right[0] - right[1]),
-        y: dac2volt(right[2] - right[3]),
-      },
-    };
+    const new_pos = { left: decodeChannels(left), right: decodeChannels(right) };
     this._pos = new_pos;
     return { ...new_pos, completeTime: complete_time ?? 0 };
+  }
+
+  /**
+   * Locally predict the actuated volts for `pos` WITHOUT a serial round-trip:
+   * the exact `channels()`→`dac2volt` math `actuate()` applies to the ACK
+   * readback, assuming the firmware echoes the commanded channels (A-30 ruling
+   * Q1; RIG-VERIFY predicted vs a sampled real readback). This lets the fire-
+   * and-forget streaming actuation path (`actuation.ts`) publish telemetry /
+   * fovea-wrap volts without paying the awaited readback the streaming protocol
+   * has no response for anyway. Pure: reads only `pos`, `_pos` (fallback for an
+   * unspecified axis), `bias`, and `dv` — no serial I/O, no mutation.
+   */
+  predictVolts(pos: { left?: Pos; right?: Pos }): { left: Pos; right: Pos } {
+    return {
+      left: decodeChannels(channels(pos.left ?? this._pos.left, this.bias, this.dv)),
+      right: decodeChannels(channels(pos.right ?? this._pos.right, this.bias, this.dv)),
+    };
   }
 
   trigger(duration_ns: number) {
