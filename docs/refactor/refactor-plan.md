@@ -346,3 +346,38 @@ The 2026-07-07 HIL pass surfaced its findings; the refactor rewrites those
 surfaces, so `verification-playbook.md` is **paused** — a fresh HIL pass runs
 against the new architecture post-WS1. Firmware Stage F/G detail there stays the
 reference for WS4's bench/flash.
+
+## real-1e + real-1f — LANDED + planner-verified (2026-07-08; the loop-elimination milestone)
+
+Root cause (user snapshots): `registry:<serial>` JS view-tap loop at 0.94–0.997
+util (`frame.view("BGRA8")` per frame, per camera) capped the vision apps at
+~20fps and starved the serial (~40Hz, loopLag 12–19ms).
+
+- **real-1e (2822fc3, 74f6dd9):** modular per-stream converter threads —
+  `convertFrame` single source of truth (killed the 12p-stripe duplication),
+  `ConverterStream` per (camera × target) selected by `PipeSpec.pixelFormat`,
+  consumer-gate (pipe refcount → subscribe/park; idle when no pipe open),
+  `converterProbeAll` in the profiler.
+- **Context-safety + teardown hardening (6e1fe32, da349da, 95519b9, 8f0d3e9):**
+  reader + ShmSlot/Writer per-env instance data (worker_thread-safe core.node);
+  orderly-teardown fan-out proof; Dispatcher cleanup() hang + pending-future
+  registry-lock deadlock fixed. Native sweep 08–17 all clean exit 0.
+- **real-1f (0b981c1, 6511f13, 51aab8d, 67ae273, f555169):** ALL vision off the
+  JS event loop. Vision worker_thread architecture (main brokers connectPipe →
+  gate; worker SHM-reads read-only, runs kernels: disparity / display /
+  distortion / checker), serials exposed to the renderer, raw previews →
+  `usePipeFrame`, and the registry view-tap loop + `registry:<serial>` meter +
+  frame-worker + bindViews DELETED. Registry = pure lease broker + pipe
+  advertise/attach. `grep 'registry:' orchestrator.js` = 0.
+- **Profiler + serial (4492a1e, a61c7fc, 6bb0f70, 4b2ba4e, 69ff824):** saturation
+  flag + util-sorted workloads; pipe frames carry convertMs/gen/retries (full
+  StreamView metrics everywhere); snapshot path logged + open-folder button;
+  `controller:<port>` packet-rate meter; hot actuation → fire-and-forget
+  CMD_STREAM (`predictVolts` local telemetry, v1 fallback) unlocking kHz past
+  the awaited-RTT cap; window entry HTML generated from the registry.
+
+**Known follow-up:** multi-fovea's multi-target KCF (`runtime.onCenterFrame`)
+still runs on the main loop — the async-kcf → dedicated-C++-thread refactor.
+**RIG-GATED:** worker vision parity (6 migrated apps), fps recovery, serial rate
+(controller:<port> meter), predictVolts echo accuracy, no Streams::snapshot
+corruption, converter preview parity (12-bit), 16 generated windows load.
