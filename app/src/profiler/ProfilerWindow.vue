@@ -29,6 +29,15 @@ import GraphPanel from "./GraphPanel.vue";
 import Sparkline from "../components/Sparkline.vue";
 import PosView from "@src/components/PosView.vue";
 import TitleBar from "../components/TitleBar.vue";
+import { overlay } from "../components/Overlay.vue";
+import SnapshotOverlay, { snapshotResult } from "./SnapshotOverlay.vue";
+import { FontAwesomeIcon as Icon } from "@fortawesome/vue-fontawesome";
+import {
+  faFileExport,
+  faFolderOpen,
+  faSpinner,
+  faThumbtack,
+} from "@fortawesome/free-solid-svg-icons";
 
 // Shared window chrome (A-7): the profiler BrowserWindow now uses the same
 // hidden-titlebar overlay as every other window class.
@@ -183,18 +192,21 @@ onUnmounted(() => {
   if (timer) clearInterval(timer);
 });
 
-const exportStatus = ref<"" | "saving" | "saved" | "error">("");
-const savedPath = ref<string>(""); // last written snapshot file (shown in the UI)
+// Export → result popup: the written path (or the failure) shows in a
+// title-bar overlay (SnapshotOverlay, same mechanism as the recorder's
+// RecordControls) instead of transient button-label states.
+const exporting = ref(false);
 async function exportSnapshot(): Promise<void> {
-  exportStatus.value = "saving";
+  if (exporting.value) return;
+  exporting.value = true;
   try {
-    savedPath.value = await dumpPerfSnapshot();
-    exportStatus.value = "saved";
+    snapshotResult.value = { path: await dumpPerfSnapshot() };
   } catch (e) {
     console.error(e);
-    exportStatus.value = "error";
+    snapshotResult.value = { error: String(e) };
   } finally {
-    setTimeout(() => (exportStatus.value = ""), 2000);
+    exporting.value = false;
+    overlay.value = { overlay: SnapshotOverlay };
   }
 }
 
@@ -228,13 +240,11 @@ const clockRows = computed(() => {
 <template>
   <TitleBar title="FoveaCam Duo" subtitle="Profiler" @height="(h) => (titleBarHeight = h)">
     <!-- Snapshot controls live on the title bar (the old header's h1 was
-         redundant with the bar's subtitle). Compact styling for the ~40px
-         bar; the last saved path shows as a truncated span (full path in
-         its tooltip). -->
+         redundant with the bar's subtitle). Icon-only buttons (FontAwesome,
+         matching the recorder's title-bar chrome) sized for the ~40px bar;
+         the export result (written path / failure) shows in the
+         SnapshotOverlay popup, not inline. -->
     <div class="bar-actions">
-      <span v-if="savedPath" class="saved-path" :title="'Last snapshot: ' + savedPath">
-        {{ savedPath }}
-      </span>
       <select
         v-model.number="reportIntervalMs"
         class="report-rate"
@@ -246,18 +256,30 @@ const clockRows = computed(() => {
         </option>
       </select>
       <button
-        class="pin"
+        class="icon-btn pin"
         :class="{ active: pinned }"
         @click="togglePinned"
         :title="pinned ? 'Unpin — stop keeping this window on top' : 'Pin — keep this window on top'"
+        :aria-label="pinned ? 'Unpin window' : 'Pin window on top'"
       >
-        {{ pinned ? "📌 Pinned" : "📌 Pin" }}
+        <Icon :icon="faThumbtack" />
       </button>
-      <button @click="exportSnapshot" title="Write a perf snapshot JSON to disk">
-        {{ exportStatus === "saving" ? "Saving…" : exportStatus === "saved" ? "Saved" : exportStatus === "error" ? "Failed" : "Export snapshot" }}
+      <button
+        class="icon-btn"
+        @click="exportSnapshot"
+        :disabled="exporting"
+        title="Write a perf snapshot JSON to disk"
+        aria-label="Export snapshot"
+      >
+        <Icon :icon="exporting ? faSpinner : faFileExport" :spin="exporting" />
       </button>
-      <button @click="openSnapshotFolder" title="Reveal the perf-snapshots folder in Finder">
-        Open folder
+      <button
+        class="icon-btn"
+        @click="openSnapshotFolder"
+        title="Reveal the perf-snapshots folder in Finder"
+        aria-label="Open snapshots folder"
+      >
+        <Icon :icon="faFolderOpen" />
       </button>
     </div>
   </TitleBar>
@@ -529,6 +551,23 @@ const clockRows = computed(() => {
     }
   }
 
+  // Icon-only bar buttons (FontAwesome — no emoji-as-icon): square hit
+  // target, meaning carried by the tooltip + aria-label.
+  .icon-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.7rem;
+    height: 1.5rem;
+    padding: 0;
+    font-size: 0.78rem;
+
+    &:disabled {
+      cursor: default;
+      opacity: 0.6;
+    }
+  }
+
   .pin.active {
     background: #74b1be;
     color: #10161a;
@@ -536,17 +575,6 @@ const clockRows = computed(() => {
     &:hover {
       background: #86bfca;
     }
-  }
-
-  .saved-path {
-    color: #888;
-    font-size: 0.68rem;
-    max-width: 18rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    direction: rtl; // keep the filename visible when truncating
-    text-align: left;
   }
 }
 

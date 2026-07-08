@@ -56,6 +56,9 @@ export interface FoveaBridge {
   /** Reveals the `<app data dir>/perf-snapshots/` folder in the OS file
    *  browser (creating it if needed) and returns its path. */
   openPerfSnapshotFolder(): Promise<string>;
+  /** Reveals ONE written snapshot file (selected in Finder/Explorer). Only
+   *  paths inside the perf-snapshots dir are accepted — narrow surface. */
+  revealPerfSnapshot(file: string): Promise<void>;
   /** Pin THIS window above all others (`setAlwaysOnTop`) — the profiler's
    *  nav-bar pin toggle; the renderer persists the choice in localStorage
    *  and re-applies it on mount. */
@@ -83,6 +86,7 @@ export interface InvokeChannels {
   "fs:validate-writable": { args: [path: string]; ret: boolean };
   "perf-snapshot:write": { args: [content: string]; ret: string };
   "perf-snapshot:open-folder": { args: []; ret: string };
+  "perf-snapshot:reveal": { args: [file: string]; ret: void };
 }
 
 /** Fire-and-forget renderer→main signals (`ipcRenderer.send` ↔ `ipcMain.on`).

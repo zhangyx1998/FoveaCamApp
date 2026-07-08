@@ -71,6 +71,7 @@ window.addEventListener("keydown", (e) => {
   <TitleBar
     title="FoveaCam Duo"
     :subtitle="meta?.title ?? appId"
+    home-button
     @height="(h) => (titleBarHeight = h)"
     @back-to-home="backToHome"
   >

@@ -24,6 +24,12 @@
 import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 import cytoscape from "cytoscape";
 import dagre from "cytoscape-dagre";
+import { FontAwesomeIcon as Icon } from "@fortawesome/vue-fontawesome";
+import {
+  faCompress,
+  faExpand,
+  faRotateLeft,
+} from "@fortawesome/free-solid-svg-icons";
 import type { GraphTopology } from "@lib/orchestrator/graph-contract";
 import { membershipKey, toElements } from "./graph-view";
 import {
@@ -121,6 +127,17 @@ const STYLE: cytoscape.StylesheetJson = [
       "line-color": "#a8323e",
       "target-arrow-color": "#a8323e",
       color: "#ff8896",
+    },
+  },
+  {
+    // Hover feedback (nodes + edges): a soft overlay halo instead of color
+    // overrides, so semantic tints (kind fills, saturated red, dropping red)
+    // stay untouched under the highlight.
+    selector: ".hover",
+    style: {
+      "overlay-color": "#ffffff",
+      "overlay-opacity": 0.12,
+      "overlay-padding": 4,
     },
   },
 ];
@@ -247,9 +264,22 @@ function resetLayout(): void {
   });
 }
 
-// --- Edge hover detail -----------------------------------------------------------
+// --- Edge hover detail + cursor feedback -------------------------------------
 
 const hover = ref<{ text: string; x: number; y: number } | null>(null);
+
+// Cursor semantics over the canvas: whitespace + nodes are grab-draggable
+// (pan / node drag) → "grab", "grabbing" while a button is down; edges carry
+// the hover tooltip → "pointer". The graph is a <canvas>, so the cursor is
+// driven from cytoscape events instead of CSS selectors.
+const cursor = ref("grab");
+let overEdge = false;
+function settleCursor(): void {
+  cursor.value = overEdge ? "pointer" : "grab";
+}
+function onPointerUp(): void {
+  settleCursor();
+}
 
 onMounted(() => {
   cy = cytoscape({
@@ -264,14 +294,28 @@ onMounted(() => {
   cy.on("dragfree", "node", (evt) => {
     dragged.set(evt.target.id(), { ...evt.target.position() });
   });
+  // Hover feedback: the .hover overlay halo (see STYLE) on both element
+  // kinds; edges additionally show the flow-detail tooltip + pointer cursor.
+  cy.on("mouseover", "node", (evt) => evt.target.addClass("hover"));
+  cy.on("mouseout", "node", (evt) => evt.target.removeClass("hover"));
   cy.on("mouseover", "edge", (evt) => {
+    evt.target.addClass("hover");
+    overEdge = true;
+    settleCursor();
     const detail = evt.target.data("detail") as string | undefined;
     if (!detail) return;
     const p = evt.target.renderedMidpoint();
     hover.value = { text: detail, x: p.x, y: p.y };
   });
-  cy.on("mouseout", "edge", () => (hover.value = null));
+  cy.on("mouseout", "edge", (evt) => {
+    evt.target.removeClass("hover");
+    overEdge = false;
+    settleCursor();
+    hover.value = null;
+  });
   container.value?.addEventListener("wheel", onWheel, { passive: false });
+  container.value?.addEventListener("pointerdown", () => (cursor.value = "grabbing"));
+  window.addEventListener("pointerup", onPointerUp);
   document.addEventListener("fullscreenchange", onFullscreenChange);
   if (props.topology) apply(props.topology);
 });
@@ -285,6 +329,7 @@ watch(
 
 onBeforeUnmount(() => {
   container.value?.removeEventListener("wheel", onWheel);
+  window.removeEventListener("pointerup", onPointerUp);
   document.removeEventListener("fullscreenchange", onFullscreenChange);
   cy?.destroy();
   cy = null;
@@ -298,21 +343,23 @@ onBeforeUnmount(() => {
     :class="{ fullscreen: isFullscreen }"
     :style="{ height: isFullscreen ? '100%' : height + 'px' }"
   >
-    <div ref="container" class="canvas" />
+    <div ref="container" class="canvas" :style="{ cursor }" />
     <div class="chips">
       <button
         type="button"
         @click="toggleFullscreen"
         :title="isFullscreen ? 'Exit full screen' : 'Show the graph full screen'"
+        :aria-label="isFullscreen ? 'Exit full screen' : 'Full screen'"
       >
-        {{ isFullscreen ? "⤡ Exit full screen" : "⤢ Full screen" }}
+        <Icon :icon="isFullscreen ? faCompress : faExpand" />
       </button>
       <button
         type="button"
         @click="resetLayout"
         title="Forget dragged positions, re-run auto layout, reset zoom/pan and panel height"
+        aria-label="Reset layout"
       >
-        ↺ Reset layout
+        <Icon :icon="faRotateLeft" />
       </button>
     </div>
     <div
@@ -364,12 +411,20 @@ onBeforeUnmount(() => {
     gap: 6px;
     z-index: 2;
 
+    // Icon-only chips (FontAwesome — no glyph-as-icon): square hit target,
+    // meaning carried by the tooltip + aria-label. Boundary (border + fill)
+    // shows on hover only, so the chips don't distract from the graph.
     button {
-      background: #16181bcc;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 24px;
+      height: 22px;
+      background: transparent;
       color: #9aa3ad;
-      border: 1px solid #2a2f36;
+      border: 1px solid transparent;
       border-radius: 4px;
-      padding: 2px 8px;
+      padding: 0;
       font-size: 0.7rem;
       font-family: inherit;
       cursor: pointer;
@@ -377,6 +432,7 @@ onBeforeUnmount(() => {
 
       &:hover {
         background: #1e2126;
+        border-color: #2a2f36;
         color: #d8dde3;
       }
       &:focus-visible {

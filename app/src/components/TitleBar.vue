@@ -10,6 +10,10 @@ import { overlay } from "./Overlay.vue";
 const props = defineProps<{
   title: string;
   subtitle?: string | null;
+  /** Opt-in: the title acts as a "back to home" button (app windows only).
+   *  Default OFF — the title is then part of the draggable chrome, so the
+   *  bar stays usable for OS window management. */
+  homeButton?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -122,7 +126,13 @@ onUnmounted(() => {
 <template>
   <div class="title-bar" :style="style()">
     <div class="draggable" :style="{ width: leftInset + 'px' }"></div>
-    <div class="title" @click="emit('back-to-home')">{{ title }}</div>
+    <div
+      class="title"
+      :class="props.homeButton ? 'home-button' : 'draggable'"
+      @click="props.homeButton && emit('back-to-home')"
+    >
+      {{ title }}
+    </div>
     <template v-if="subtitle" class="subtitle draggable">
       <div class="connector">-</div>
       <div class="subtitle">{{ subtitle }}</div>
@@ -170,34 +180,15 @@ onUnmounted(() => {
     padding: 0.2ch 0.8ch;
     border-radius: 0.4ch;
 
-    &:hover {
+    // Back-to-home affordance only when opted in (app windows). No hover
+    // tooltip in any case; non-home-button titles are draggable chrome.
+    &.home-button:hover {
       cursor: pointer;
       background-color: #333;
-
-      &:after {
-        display: block;
-      }
     }
 
-    &:active {
+    &.home-button:active {
       outline: 2px solid #08c;
-    }
-
-    &:after {
-      display: none;
-      pointer-events: none;
-      position: absolute;
-      top: calc(100% + 0.2em);
-      left: 0;
-      content: "Back to Home";
-      width: 14ch;
-      text-align: center;
-      background-color: #111;
-      border: 1px solid #333;
-      font-style: italic;
-      border-radius: 0.2em;
-      color: gray;
-      padding: 0.2em 0;
     }
   }
 

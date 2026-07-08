@@ -192,6 +192,14 @@ handle("perf-snapshot:open-folder", async () => {
   return dir;
 });
 
+// Reveal ONE written snapshot file (selects it in Finder/Explorer). Accepts
+// only paths inside the perf-snapshots dir — keep the bridge surface narrow.
+handle("perf-snapshot:reveal", (file) => {
+  const dir = path.join(DATA, "perf-snapshots");
+  if (!path.resolve(file).startsWith(dir + path.sep)) return;
+  shell.showItemInFolder(file);
+});
+
 // ---- Orchestrator process -------------------------------------------------
 // A utilityProcess that owns `core` (cameras, vision, control, hardware I/O).
 // Its event loop is independent of any renderer's render loop. Main only brokers
