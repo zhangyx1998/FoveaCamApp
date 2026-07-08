@@ -45,29 +45,37 @@ onMounted(() => {
   if (app_config.baseline_distance_mm) state.baseline = app_config.baseline_distance_mm;
 });
 
-// Processed preview frames fanned from the orchestrator.
+// DIAGNOSTIC frames fanned from the orchestrator — the scope kernel's product
+// (the combined/sliced fovea view + the template-match debug strips). The L/C/R
+// MAIN views are NOT here anymore: the kernel no longer emits them.
 const {
-  L: frameL,
-  R: frameR,
   "center.sliced": slicedFrame,
   "center.disparity": disparityFrame,
   guide: frameGuide,
   match_left: frameMatchLeft,
   match_right: frameMatchRight,
 } = useFrames(session, [
-  "L",
-  "R",
   "center.sliced",
   "center.disparity",
   "guide",
   "match_left",
   "match_right",
 ]);
-// C-22: raw center ("C") preview rides the native `camera:<serial>` pipe (off
-// the JS view-tap loop); L/R (perspective-rectified foveae) + the disparity/
-// match views stay on `session.frame` (worker-migrated in the coupled half).
+// View re-plumb (pid-nodes-and-view-replumb.md §Renderer): the L/C/R main views
+// source their per-camera `undistort` pipes DIRECTLY via `usePipeFrame` (off the
+// JS view-tap loop AND independent of the scope kernel), so a busy kernel can no
+// longer cap their fps. Serials come from the same published lease state the
+// raw-C view already read. C binds `undistort` too (was `convert`): the overlays
+// on that view (target dot, per-eye pose rects, tracker bbox, match rects) are
+// now in UNDISTORTED wide pixels, so the frame must share that space to align.
+const frameL = usePipeFrame(() =>
+  state.serials?.L ? nodeId.undistort(state.serials.L) : null,
+);
 const frameC = usePipeFrame(() =>
-  state.serials?.C ? nodeId.convert(state.serials.C) : null,
+  state.serials?.C ? nodeId.undistort(state.serials.C) : null,
+);
+const frameR = usePipeFrame(() =>
+  state.serials?.R ? nodeId.undistort(state.serials.R) : null,
 );
 const frameCenter = computed(() =>
   state.view === "sliced" ? slicedFrame.payload.value : disparityFrame.payload.value,
@@ -218,7 +226,7 @@ function onCursor(c: (Point2d & Size & { buttons: number }) | null): void {
 <template>
   <div class="cameras">
     <div class="view">
-      <StreamView class="stream" :title="ROLE.L" :payload="frameL.payload.value" :source="frameL.source" :theme="THEME.L" />
+      <StreamView class="stream" :title="ROLE.L" :payload="frameL" :theme="THEME.L" />
       <PosView :pos="telemetry.volt.L" :color="THEME.L" style="width: 100%" />
     </div>
     <div class="view">
@@ -271,10 +279,16 @@ function onCursor(c: (Point2d & Size & { buttons: number }) | null): void {
           telemetry.realized_distance === Infinity ? "&#x221E;" : telemetry.realized_distance.toFixed(4)
         }}</span>m
         | <span class="value">{{ telemetry.status }}</span>
+        <span
+          v-if="state.pidOverride.engaged"
+          class="value override"
+          title="Vergence PID output pinned by pointer drag (control law held reset)"
+          >override</span
+        >
       </div>
     </div>
     <div class="view">
-      <StreamView class="stream" :title="ROLE.R" :payload="frameR.payload.value" :source="frameR.source" :theme="THEME.R" />
+      <StreamView class="stream" :title="ROLE.R" :payload="frameR" :theme="THEME.R" />
       <PosView :pos="telemetry.volt.R" :color="THEME.R" style="width: 100%" />
     </div>
   </div>
@@ -386,10 +400,6 @@ function onCursor(c: (Point2d & Size & { buttons: number }) | null): void {
         >
           <span>Zoom Ratio</span>
           <input type="number" v-model.number="state.zoom" />
-        </label>
-        <label class="entry">
-          <span>Wrap</span>
-          <input type="checkbox" v-model="state.wrap" />
         </label>
       </div>
       <!-- Columns 2-4: per-DOF gain PIDs (Pan / Depth / Vertical) -->
@@ -535,6 +545,16 @@ function onCursor(c: (Point2d & Size & { buttons: number }) | null): void {
     text-align: right;
     font-weight: 600;
     min-width: 6ch;
+  }
+  .override {
+    min-width: 0;
+    padding: 0 0.5ch;
+    border-radius: 4px;
+    background: #fd05;
+    color: #fff;
+    font-size: 0.8em;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
   }
 }
 
