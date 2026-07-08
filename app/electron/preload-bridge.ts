@@ -63,6 +63,7 @@ export function installBridge(extra: Partial<FoveaBridge> = {}) {
     pathExists: (path) => invoke("fs:exists", path),
     validateWritablePath: (path) => invoke("fs:validate-writable", path),
     writePerfSnapshot: (content) => invoke("perf-snapshot:write", content),
+    openPerfSnapshotFolder: () => invoke("perf-snapshot:open-folder"),
     ...extra,
   };
 

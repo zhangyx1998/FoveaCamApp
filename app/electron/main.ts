@@ -178,7 +178,18 @@ handle("perf-snapshot:write", async (content) => {
     `${new Date().toISOString().replace(/[:.]/g, "-")}.json`,
   );
   await writeFile(file, content);
+  console.log(`[perf] snapshot written: ${file}`);
   return file;
+});
+
+// Reveal the perf-snapshots folder in the OS file browser (Finder/Explorer).
+handle("perf-snapshot:open-folder", async () => {
+  const dir = path.join(DATA, "perf-snapshots");
+  await mkdir(dir, { recursive: true });
+  const err = await shell.openPath(dir);
+  if (err) console.error(`[perf] openPath failed for ${dir}: ${err}`);
+  else console.log(`[perf] revealed snapshot folder: ${dir}`);
+  return dir;
 });
 
 // ---- Orchestrator process -------------------------------------------------

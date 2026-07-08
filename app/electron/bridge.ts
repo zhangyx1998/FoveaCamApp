@@ -53,6 +53,9 @@ export interface FoveaBridge {
   /** Writes a perf snapshot JSON blob under `<app data dir>/perf-snapshots/`
    *  and returns the file path written. */
   writePerfSnapshot(content: string): Promise<string>;
+  /** Reveals the `<app data dir>/perf-snapshots/` folder in the OS file
+   *  browser (creating it if needed) and returns its path. */
+  openPerfSnapshotFolder(): Promise<string>;
 }
 
 // ---- Typed IPC channel registry -------------------------------------------
@@ -75,6 +78,7 @@ export interface InvokeChannels {
   "fs:exists": { args: [path: string]; ret: boolean };
   "fs:validate-writable": { args: [path: string]; ret: boolean };
   "perf-snapshot:write": { args: [content: string]; ret: string };
+  "perf-snapshot:open-folder": { args: []; ret: string };
 }
 
 /** Fire-and-forget renderer→main signals (`ipcRenderer.send` ↔ `ipcMain.on`).

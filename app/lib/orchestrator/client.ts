@@ -219,7 +219,7 @@ if (typeof window !== "undefined") {
 /** Fetch `system.perfSnapshot`, merge in this window's own render loop lag,
  *  and write it under the app data dir. Exported so the profiler window's
  *  export button (§7.1 S4) can trigger the same dump the keybind does. */
-export async function dumpPerfSnapshot(): Promise<void> {
+export async function dumpPerfSnapshot(): Promise<string> {
   const ch = await connect();
   const snapshot = await ch.request<Record<string, unknown>>(
     topic.command("system", "perfSnapshot"),
@@ -237,6 +237,7 @@ export async function dumpPerfSnapshot(): Promise<void> {
   };
   const file = await window.foveaBridge.writePerfSnapshot(JSON.stringify(merged, null, 2));
   console.log(`[perf] snapshot written to ${file}`);
+  return file;
 }
 
 /** A frame channel's stream address (session + frame-channel name). Static per

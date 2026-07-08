@@ -122,16 +122,25 @@ onUnmounted(() => {
 });
 
 const exportStatus = ref<"" | "saving" | "saved" | "error">("");
+const savedPath = ref<string>(""); // last written snapshot file (shown in the UI)
 async function exportSnapshot(): Promise<void> {
   exportStatus.value = "saving";
   try {
-    await dumpPerfSnapshot();
+    savedPath.value = await dumpPerfSnapshot();
     exportStatus.value = "saved";
   } catch (e) {
     console.error(e);
     exportStatus.value = "error";
   } finally {
     setTimeout(() => (exportStatus.value = ""), 2000);
+  }
+}
+
+async function openSnapshotFolder(): Promise<void> {
+  try {
+    await window.foveaBridge.openPerfSnapshotFolder();
+  } catch (e) {
+    console.error(e);
   }
 }
 
@@ -145,9 +154,15 @@ function fmt(v: number, digits = 1): string {
   <div class="profiler" :style="{ top: titleBarHeight + 'px' }">
     <header>
       <h1>Orchestrator Profiler</h1>
-      <button @click="exportSnapshot">
-        {{ exportStatus === "saving" ? "Saving…" : exportStatus === "saved" ? "Saved" : exportStatus === "error" ? "Failed" : "Export snapshot" }}
-      </button>
+      <div class="snapshot-controls">
+        <button @click="exportSnapshot">
+          {{ exportStatus === "saving" ? "Saving…" : exportStatus === "saved" ? "Saved" : exportStatus === "error" ? "Failed" : "Export snapshot" }}
+        </button>
+        <button @click="openSnapshotFolder" title="Reveal the perf-snapshots folder in Finder">
+          Open snapshot folder
+        </button>
+        <span v-if="savedPath" class="saved-path mono" :title="savedPath">{{ savedPath }}</span>
+      </div>
     </header>
 
     <section>
@@ -389,6 +404,22 @@ function fmt(v: number, digits = 1): string {
       cursor: pointer;
       &:hover {
         background: #2a2a2a;
+      }
+    }
+    .snapshot-controls {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      min-width: 0; // let the path truncate instead of overflowing the header
+      .saved-path {
+        color: #888;
+        font-size: 0.72rem;
+        max-width: 22rem;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        direction: rtl; // keep the filename visible when truncating
+        text-align: left;
       }
     }
   }
