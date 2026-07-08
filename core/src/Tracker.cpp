@@ -255,28 +255,16 @@ private:
   uint64_t lastDrops_ = 0; // transform-thread only
 };
 
-static Napi::Object statsToJs(Napi::Env env,
-                              const std::vector<std::pair<std::string, Meter::StreamStat>> &v) {
-  auto m = Napi::Object::New(env);
-  for (const auto &[k, st] : v) {
-    auto so = Napi::Object::New(env);
-    so.Set("count", Napi::Number::New(env, static_cast<double>(st.count)));
-    so.Set("ratePerSec", Napi::Number::New(env, st.ratePerSec));
-    so.Set("maxIntervalMs", Napi::Number::New(env, st.maxIntervalMs));
-    m.Set(k, so);
-  }
-  return m;
+// Shared full-schema serializer (window + drops + flat back-compat fields) —
+// defined in core/lib/Aravis/ConverterStream.cpp; forward-declared like
+// MarkerDetector.cpp does to avoid pulling the pipe headers into this TU.
+// Tracker probes previously used a local flat copy WITHOUT `drops`, which
+// crashed `perfSnapshot`'s graph fold the moment a tracker went live.
+namespace Arv {
+Napi::Value meterSnapshotToJs(Napi::Env env, const Meter::Snapshot &s);
 }
 static Napi::Value snapshotToJs(Napi::Env env, const Meter::Snapshot &s) {
-  auto o = Napi::Object::New(env);
-  o.Set("name", Napi::String::New(env, s.name));
-  o.Set("uptimeMs", Napi::Number::New(env, static_cast<double>(s.uptimeMs)));
-  o.Set("utilization", Napi::Number::New(env, s.utilization));
-  o.Set("busyMs", Napi::Number::New(env, s.busyMs));
-  o.Set("dropTotal", Napi::Number::New(env, static_cast<double>(s.dropTotal)));
-  o.Set("inputs", statsToJs(env, s.inputs));
-  o.Set("outputs", statsToJs(env, s.outputs));
-  return o;
+  return Arv::meterSnapshotToJs(env, s);
 }
 
 // CoreObject over a KcfTrackerStream: `arm(roi)`, `[Symbol.asyncIterator]`

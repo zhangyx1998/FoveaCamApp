@@ -52,9 +52,28 @@ static Napi::Object statsToJs(Napi::Env env,
 Napi::Value meterSnapshotToJs(Napi::Env env, const Meter::Snapshot &s) {
   auto o = Napi::Object::New(env);
   o.Set("name", Napi::String::New(env, s.name));
+  // FULL `WorkloadSnapshot` schema (window + drops), matching Pipe.cpp's
+  // `snapshotToObject` — the graph/profiler consume these rows through the
+  // same typed path as pipe meters, and a missing `drops` object crashed
+  // `perfSnapshot` the moment a converter went live (rig 2026-07-08). The
+  // flat `uptimeMs`/`dropTotal` stay for the published tracker-probe d.ts.
+  auto window = Napi::Object::New(env);
+  window.Set("startedAt", Napi::Number::New(env, static_cast<double>(s.startedAtMs)));
+  window.Set("snapshotAt", Napi::Number::New(env, static_cast<double>(s.snapshotAtMs)));
+  window.Set("uptimeMs", Napi::Number::New(env, static_cast<double>(s.uptimeMs)));
+  o.Set("window", window);
   o.Set("uptimeMs", Napi::Number::New(env, static_cast<double>(s.uptimeMs)));
   o.Set("utilization", Napi::Number::New(env, s.utilization));
   o.Set("busyMs", Napi::Number::New(env, s.busyMs));
+  auto drops = Napi::Object::New(env);
+  const double uptimeSec = static_cast<double>(s.uptimeMs) / 1000.0;
+  drops.Set("total", Napi::Number::New(env, static_cast<double>(s.dropTotal)));
+  drops.Set("ratePerSec",
+            Napi::Number::New(env, uptimeSec > 0
+                                       ? static_cast<double>(s.dropTotal) / uptimeSec
+                                       : 0.0));
+  drops.Set("byReason", Napi::Object::New(env));
+  o.Set("drops", drops);
   o.Set("dropTotal", Napi::Number::New(env, static_cast<double>(s.dropTotal)));
   o.Set("inputs", statsToJs(env, s.inputs));
   o.Set("outputs", statsToJs(env, s.outputs));

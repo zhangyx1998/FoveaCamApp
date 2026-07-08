@@ -41,6 +41,17 @@ bool create(uint8_t id, const MirrorPosition &left,
   if (id >= CAPACITY || table[id].active)
     return false;
   table[id] = Entry{true, false, left, right};
+  // A stream drives the DAC only while ACTIVE, but activation previously came
+  // ONLY from a CMD_FRAME capture targeting it (Capture.cpp) — the host's
+  // streamed-actuation path (CREATE + fire-and-forget UPDATEs, A-30) never
+  // moved the mirror at all (rig 2026-07-08: locked at origin). A freshly
+  // CREATEd stream now takes the DAC when nothing else holds it; captures
+  // still re-activate their own stream per request (FW5: hosts run one
+  // exclusive stream, so this never steals from a live one).
+  if (activeId == INVALID_ID) {
+    activeId = id;
+    dirty = true;
+  }
   return true;
 }
 

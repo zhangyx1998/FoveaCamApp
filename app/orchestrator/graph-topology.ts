@@ -80,17 +80,21 @@ function statsFrom(w: WorkloadSnapshot | undefined): NodeStats | undefined {
   if (!w) return undefined;
   let ratePerSec = 0;
   let maxIntervalMs = 0;
-  for (const s of Object.values(w.outputs)) {
-    ratePerSec = Math.max(ratePerSec, s.ratePerSec);
+  // Defensive reads throughout: one malformed probe row must degrade to a
+  // partial badge, never crash `perfSnapshot` (rig 2026-07-08: tracker/
+  // converter rows without `drops` blanked the graph + broke export
+  // everywhere). `nativeProbes()` normalizes, but wirings inject rows too.
+  for (const s of Object.values(w.outputs ?? {})) {
+    ratePerSec = Math.max(ratePerSec, s.ratePerSec ?? 0);
     maxIntervalMs = Math.max(maxIntervalMs, s.maxIntervalMs ?? 0);
   }
   return {
-    utilization: w.utilization,
+    utilization: w.utilization ?? 0,
     ratePerSec,
     maxIntervalMs,
-    dropsPerSec: w.drops.ratePerSec,
-    dropsTotal: w.drops.total,
-    saturated: w.utilization >= SATURATED_UTILIZATION,
+    dropsPerSec: w.drops?.ratePerSec ?? 0,
+    dropsTotal: w.drops?.total ?? 0,
+    saturated: (w.utilization ?? 0) >= SATURATED_UTILIZATION,
   };
 }
 
@@ -194,7 +198,8 @@ export function buildTopology(deps: TopologyDeps): GraphTopology {
 function inputRate(w: WorkloadSnapshot | undefined): number | undefined {
   if (!w) return undefined;
   let rate = 0;
-  for (const s of Object.values(w.inputs)) rate = Math.max(rate, s.ratePerSec);
+  for (const s of Object.values(w.inputs ?? {}))
+    rate = Math.max(rate, s.ratePerSec ?? 0);
   return rate;
 }
 

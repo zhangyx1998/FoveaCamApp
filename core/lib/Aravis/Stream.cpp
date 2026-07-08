@@ -38,7 +38,12 @@ void Stream::start() {
   }
   size_t payload = arv_camera_get_payload(camera->get(), &Error::error);
   Error::check("arv_camera_get_payload");
-  for (int i = 0; i < 2; i++)
+  // 4 buffers, not 2: with only two, the camera has ZERO slack while the
+  // consumer copies the popped buffer — any >1-frame-interval hiccup on the
+  // stream thread underruns and drops at 60 fps. Buffers return to the pool
+  // immediately after the `Frame::create` copy (iterate()), so four is
+  // plenty; cost is 2 extra payloads (~8 MB each at 12-bit full-res).
+  for (int i = 0; i < 4; i++)
     arv_stream_push_buffer(stream, arv_buffer_new_allocate(payload));
   arv_camera_set_acquisition_mode(
       camera->get(), ARV_ACQUISITION_MODE_CONTINUOUS, &Error::error);

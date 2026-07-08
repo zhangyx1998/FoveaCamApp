@@ -269,6 +269,12 @@ function translatePos(
 }
 
 const drag = ref(false);
+// Chromium coalesces `mousemove` to the display refresh (~60 Hz) — which
+// capped the manual-control MEMS stream at 60 packets/s (rig 2026-07-08).
+// `pointerrawupdate` delivers input at the device's polling rate (125 Hz–1
+// kHz), which the fire-and-forget CMD_STREAM path is built to carry;
+// `mousemove` stays as the fallback where the raw event isn't supported.
+const MOVE_EVENT = "onpointerrawupdate" in window ? "pointerrawupdate" : "mousemove";
 function trackUntilRelease(e: MouseEvent) {
   if (!(e.buttons & 1)) return untrack();
   return emit("update:modelValue", translatePos(e));
@@ -276,14 +282,14 @@ function trackUntilRelease(e: MouseEvent) {
 
 function untrack() {
   drag.value = false;
-  window.removeEventListener("mousemove", trackUntilRelease);
+  window.removeEventListener(MOVE_EVENT, trackUntilRelease as EventListener);
   window.removeEventListener("mouseup", trackUntilRelease);
   return emit("update:modelValue", null);
 }
 
 function track(e: MouseEvent) {
   drag.value = true;
-  window.addEventListener("mousemove", trackUntilRelease);
+  window.addEventListener(MOVE_EVENT, trackUntilRelease as EventListener);
   window.addEventListener("mouseup", trackUntilRelease);
   trackUntilRelease(e);
 }

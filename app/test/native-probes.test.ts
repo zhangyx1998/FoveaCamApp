@@ -49,6 +49,33 @@ describe("native-probes registry", () => {
       bad();
     }
   });
+
+  // Rig regression (2026-07-08): the converter/tracker serializers emitted a
+  // FLAT shape (uptimeMs + dropTotal, no window/drops); one such row crashed
+  // perfSnapshot's graph fold (`.ratePerSec` of undefined) → empty pipeline
+  // graph + failed snapshot export in every app. The merge must coerce flat
+  // rows to the full schema, extra fields passing through.
+  it("normalizes a legacy flat probe row (no window/drops) to full schema", () => {
+    const flat = {
+      name: "converter:camera/SN1/convert",
+      uptimeMs: 2000,
+      utilization: 0.5,
+      busyMs: 1000,
+      dropTotal: 4,
+      inputs: { frame: { count: 60, ratePerSec: 30, maxIntervalMs: 40 } },
+      outputs: { bgra: { count: 60, ratePerSec: 30, maxIntervalMs: 40 } },
+      targets: [{ id: "t1" }], // multi-KCF-style extra field must survive
+    } as unknown as WorkloadSnapshot;
+    const dispose = registerNativeProbe(() => ({ [flat.name]: flat }));
+    try {
+      const row = nativeProbes()[flat.name]!;
+      expect(row.drops).toEqual({ total: 4, ratePerSec: 2, byReason: {} });
+      expect(row.window.uptimeMs).toBe(2000);
+      expect((row as unknown as { targets: unknown[] }).targets).toHaveLength(1);
+    } finally {
+      dispose();
+    }
+  });
 });
 
 describe("system.perfSnapshot folds native probes into workloads", () => {

@@ -70,6 +70,16 @@ export function systemSession(
           // this builder stays `core`-free. Same `WorkloadSnapshot` shape →
           // the profiler renders native streams identically to JS ones.
           const workloads = { ...workloadsSnapshot(), ...nativeProbes() };
+          // The graph fold must never reject the whole snapshot: a single
+          // malformed workload row once blanked the profiler AND failed
+          // every export in every app (rig 2026-07-08). Degrade to a
+          // graph-less snapshot and surface the error instead.
+          let topology: GraphTopology | undefined;
+          try {
+            topology = graph?.(workloads);
+          } catch (e) {
+            console.error("[system] graph topology fold failed:", e);
+          }
           return {
             timestamp: new Date().toISOString(),
             orchestrator: {
@@ -81,7 +91,7 @@ export function systemSession(
             spans: [...spans()],
             // C-24: the live node graph, riding the same 1 Hz poll (ruled Q2) —
             // stats keyed onto nodes from the SAME workloads map above.
-            ...(graph ? { graph: graph(workloads) } : {}),
+            ...(topology ? { graph: topology } : {}),
           };
         },
       },
