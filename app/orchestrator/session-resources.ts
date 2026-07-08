@@ -54,7 +54,12 @@ export function publishSerials<C extends Contract>(
   disposers: { add(disposer: () => void): void },
   session: ServerSession<C>,
 ): void {
-  const set = session.setState as unknown as (key: string, value: unknown) => void;
+  // Keep the call ON the session — `setState` is a class method that reads
+  // `this.state`; detaching it (`const set = session.setState`) loses `this`
+  // and throws "Cannot read properties of undefined (reading 'state')" at
+  // activation (rig-found; invisible to vue-tsc through the type cast).
+  const set = (key: string, value: unknown): void =>
+    (session as { setState(key: string, value: unknown): void }).setState(key, value);
   set("serials", {
     L: leases.L.camera.serial,
     C: leases.C.camera.serial,

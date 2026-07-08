@@ -7,6 +7,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   DisposerBag,
+  publishSerials,
   releaseLeases,
   type LeaseSet,
 } from "@orchestrator/session-resources";
@@ -59,5 +60,32 @@ describe("releaseLeases", () => {
     releaseLeases({ leases: set } as any);
     for (const role of ["L", "C", "R"] as const)
       expect((set[role] as any).release).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("publishSerials", () => {
+  // The mock's setState is a REAL class method reading `this.state` — a plain
+  // arrow-fn mock would not have caught the rig-found detached-`this` bug
+  // ("Cannot read properties of undefined (reading 'state')" at activation).
+  class FakeSession {
+    state: Record<string, unknown> = {};
+    setState(key: string, value: unknown): void {
+      this.state[key] = value; // throws if `this` was lost
+    }
+  }
+  const leasesWithSerials = (): LeaseSet =>
+    ({
+      L: { camera: { serial: "SN-L" } },
+      C: { camera: { serial: "SN-C" } },
+      R: { camera: { serial: "SN-R" } },
+    }) as unknown as LeaseSet;
+
+  it("publishes the triple's serials via a `this`-bound setState, clears on dispose", () => {
+    const s = new FakeSession();
+    const bag = new DisposerBag();
+    publishSerials(leasesWithSerials(), bag, s as any);
+    expect(s.state.serials).toEqual({ L: "SN-L", C: "SN-C", R: "SN-R" });
+    bag.dispose();
+    expect(s.state.serials).toEqual({});
   });
 });
