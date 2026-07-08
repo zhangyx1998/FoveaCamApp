@@ -63,3 +63,25 @@ export function formatCounterRate(counter: CounterRate): string {
 export function formatSampleStats(sample: SampleStats, unit = "ms"): string {
   return `${sample.mean.toFixed(2)} ${unit} (max ${sample.max.toFixed(2)}, n=${sample.count})`;
 }
+
+/** Humanize a byte throughput for display (JSON keeps raw numbers): 1023 →
+ *  "1023 B/s", 1.5e6 → "1.50 MB/s". Binary-1000 steps (network convention). */
+export function humanBytesPerSec(bytesPerSec: number): string {
+  if (!Number.isFinite(bytesPerSec)) return "—";
+  const units = ["B/s", "kB/s", "MB/s", "GB/s"];
+  let v = bytesPerSec;
+  let u = 0;
+  while (v >= 1000 && u < units.length - 1) {
+    v /= 1000;
+    u++;
+  }
+  return `${u === 0 ? Math.round(v) : v.toFixed(2)} ${units[u]}`;
+}
+
+/** Humanize an event frequency for display: 0.5 → "0.50 Hz", 1500 →
+ *  "1.50 kHz". */
+export function humanHz(hz: number): string {
+  if (!Number.isFinite(hz)) return "—";
+  if (hz >= 1000) return `${(hz / 1000).toFixed(2)} kHz`;
+  return `${hz.toFixed(2)} Hz`;
+}

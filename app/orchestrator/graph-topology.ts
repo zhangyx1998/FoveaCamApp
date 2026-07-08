@@ -256,8 +256,25 @@ export function buildTopologyFromReports(
   const nodes = new Map<string, GraphNode>();
   const edges: GraphEdge[] = [];
 
-  for (const r of Array.isArray(reports) ? reports : []) {
-    if (!r || typeof r.id !== "string" || r.id === "") continue; // degrade
+  const list = (Array.isArray(reports) ? reports : []).filter(
+    (r): r is NodeReport => !!r && typeof r.id === "string" && r.id !== "",
+  );
+
+  // Pass 1: index producers + compute each pipe's exact bytes-delta ONCE
+  // (bytesRate is stateful — the same call also keeps the delta window warm
+  // for consumer-less pipes).
+  const byId = new Map<string, NodeReport>();
+  const pipeBytesPerSec = new Map<string, number | undefined>();
+  for (const r of list) {
+    byId.set(r.id, r);
+    const pipe = r.transport === "pipe" ? r.pipe : undefined;
+    if (pipe && typeof pipe.bytesTotal === "number")
+      pipeBytesPerSec.set(r.id, bytesRate(r.id, r.epoch ?? 0, pipe.bytesTotal, at));
+  }
+  const snapOf = (id: string): WorkloadSnapshot | undefined =>
+    byId.get(id)?.stats ?? workloads[id];
+
+  for (const r of list) {
     const snap = r.stats ?? workloads[r.id];
     nodes.set(r.id, {
       id: r.id,
@@ -271,42 +288,123 @@ export function buildTopologyFromReports(
 
     for (const input of Array.isArray(r.inputs) ? r.inputs : []) {
       if (!input || typeof input.from !== "string") continue; // degrade
+      const port = typeof input.port === "string" ? input.port : "in";
+      // TX = producer side (its output meter + pipe byte accumulator);
+      // RX = this consumer's per-port input meter (exact port key when the
+      // meter names ports the same way; falls back to the max input rate).
+      const producer = byId.get(input.from);
+      const producerSnap = snapOf(input.from);
+      const txHz = outputRate(producerSnap);
+      const txBytes = pipeBytesPerSec.get(input.from);
+      const txGap = outputMaxIntervalMs(producerSnap);
+      const rxStat = snap?.inputs?.[port];
+      const rxHz = rxStat?.ratePerSec ?? inputRate(snap);
+      const rxGap = rxStat?.maxIntervalMs ?? inputMaxIntervalMs(snap);
+      // Lossy: declared by the consumer (Leaky/SHM subscriptions), defaulted
+      // for SHM-pipe producers (seqlock reads are latest-wins by design).
+      const lossy = input.lossy ?? producer?.transport === "pipe";
+      const dropPerSec = !lossy
+        ? undefined
+        : txHz !== undefined && rxHz !== undefined
+          ? Math.max(0, txHz - rxHz)
+          : snap?.drops?.ratePerSec;
       edges.push({
         from: input.from,
         to: r.id,
-        port: typeof input.port === "string" ? input.port : "in",
+        port,
         type: input.type,
-        ratePerSec: inputRate(snap),
+        ...(txHz !== undefined || txBytes !== undefined || txGap !== undefined
+          ? {
+              tx: {
+                ...(txHz !== undefined ? { hz: txHz } : {}),
+                ...(txBytes !== undefined ? { bytesPerSec: txBytes } : {}),
+                ...(txGap !== undefined ? { maxIntervalMs: txGap } : {}),
+              },
+            }
+          : {}),
+        ...(rxHz !== undefined || rxGap !== undefined
+          ? {
+              rx: {
+                ...(rxHz !== undefined ? { hz: rxHz } : {}),
+                ...(rxGap !== undefined ? { maxIntervalMs: rxGap } : {}),
+              },
+            }
+          : {}),
+        ...(lossy ? { lossy: true } : {}),
+        ...(dropPerSec !== undefined ? { dropPerSec } : {}),
+        // Legacy mirror (deprecated): pre-tx/rx readers saw the consumer's
+        // input rate here — unchanged during the migration.
+        ratePerSec: rxHz,
       });
     }
 
-    // Aggregate consumer sink + exact bytes-delta rate for pipe reports.
+    // Aggregate consumer sink for pipe reports with live consumers. RX is
+    // unknowable until the compose protocol brings consumer identity
+    // (anonymous broker reads) — TX carries the meterable half.
     const pipe = r.transport === "pipe" ? r.pipe : undefined;
-    if (pipe && typeof pipe.bytesTotal === "number") {
-      const bytesPerSec = bytesRate(r.id, r.epoch ?? 0, pipe.bytesTotal, at);
-      if ((pipe.consumers ?? 0) > 0) {
-        const sinkId = `${r.id}/consumers`;
-        nodes.set(sinkId, {
-          id: sinkId,
-          kind: "view",
-          output: null,
-          transport: "sink",
-        });
-        edges.push({
-          from: r.id,
-          to: sinkId,
-          port: "in",
-          type: r.output ?? { kind: "analysis", schema: "unknown" },
-          consumers: pipe.consumers,
-          ratePerSec: statsFrom(snap)?.ratePerSec,
-          bytesPerSec,
-        });
-      }
-      // consumers === 0: bytesRate() above already kept the window warm.
+    if (pipe && (pipe.consumers ?? 0) > 0) {
+      const bytesPerSec = pipeBytesPerSec.get(r.id);
+      const txHz = statsFrom(snap)?.ratePerSec;
+      const txGap = outputMaxIntervalMs(snap);
+      const sinkId = `${r.id}/consumers`;
+      nodes.set(sinkId, {
+        id: sinkId,
+        kind: "view",
+        output: null,
+        transport: "sink",
+      });
+      edges.push({
+        from: r.id,
+        to: sinkId,
+        port: "in",
+        type: r.output ?? { kind: "analysis", schema: "unknown" },
+        consumers: pipe.consumers,
+        ...(txHz !== undefined || bytesPerSec !== undefined || txGap !== undefined
+          ? {
+              tx: {
+                ...(txHz !== undefined ? { hz: txHz } : {}),
+                ...(bytesPerSec !== undefined ? { bytesPerSec } : {}),
+                ...(txGap !== undefined ? { maxIntervalMs: txGap } : {}),
+              },
+            }
+          : {}),
+        lossy: true, // SHM seqlock: consumers read latest-wins by design
+        // Legacy mirrors (deprecated).
+        ratePerSec: txHz,
+        bytesPerSec,
+      });
     }
   }
 
   return { seq: ++seq, at, nodes: [...nodes.values()], edges };
+}
+
+/** Max output-stream rate of a snapshot (the producer-side Hz for TX). */
+function outputRate(w: WorkloadSnapshot | undefined): number | undefined {
+  if (!w) return undefined;
+  let rate: number | undefined;
+  for (const s of Object.values(w.outputs ?? {}))
+    rate = Math.max(rate ?? 0, s.ratePerSec ?? 0);
+  return rate;
+}
+
+/** Worst output gap over the capture window (producer-side maxInterval). */
+function outputMaxIntervalMs(w: WorkloadSnapshot | undefined): number | undefined {
+  if (!w) return undefined;
+  let gap: number | undefined;
+  for (const s of Object.values(w.outputs ?? {}))
+    if (s.maxIntervalMs !== undefined) gap = Math.max(gap ?? 0, s.maxIntervalMs);
+  return gap;
+}
+
+/** Worst input gap over the capture window (consumer-side fallback when the
+ *  meter doesn't key its inputs by the edge's port name). */
+function inputMaxIntervalMs(w: WorkloadSnapshot | undefined): number | undefined {
+  if (!w) return undefined;
+  let gap: number | undefined;
+  for (const s of Object.values(w.inputs ?? {}))
+    if (s.maxIntervalMs !== undefined) gap = Math.max(gap ?? 0, s.maxIntervalMs);
+  return gap;
 }
 
 /** Merge report layers by id. WITHIN a layer the FIRST report of an id wins

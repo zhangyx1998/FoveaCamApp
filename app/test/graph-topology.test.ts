@@ -169,6 +169,76 @@ describe("buildTopology", () => {
     const deps = { listPipes: () => [], workloads: () => ({}) };
     expect(buildTopology(deps).seq).toBeLessThan(buildTopology(deps).seq);
   });
+
+  // Edge-flow spec (user 2026-07-08): every edge reports TX (producer output
+  // Hz + bytes/s + maxInterval), RX (consumer per-port input Hz +
+  // maxInterval), and a drop rate ONLY on lossy links (tx−rx when both
+  // metered). Raw numbers in JSON — the profiler humanizes.
+  describe("edge tx/rx/drop flows", () => {
+    it("reports TX from the producer meter and RX from the consumer's port meter", () => {
+      const reports: NodeReport[] = [
+        {
+          id: "camera/1/convert",
+          kind: "convert",
+          transport: "pipe",
+          inputs: [],
+          output: { kind: "frame", pixelFormat: "BGRA8", dtype: "U8" },
+          pipe: { consumers: 0, bytesTotal: 0 },
+          stats: load("camera/1/convert", 0.3, 60), // outputs 60Hz, maxInterval 50
+        },
+        {
+          id: "win/x/kernel",
+          kind: "kernel",
+          transport: "worker",
+          inputs: [
+            {
+              from: "camera/1/convert",
+              port: "frame", // matches the consumer meter's input key
+              type: { kind: "frame", pixelFormat: "BGRA8", dtype: "U8" },
+              lossy: true,
+            },
+          ],
+          output: null,
+          stats: load("win/x/kernel", 0.9, 35), // inputs: frame 40Hz, maxInterval 30
+        },
+      ];
+      const t = buildTopologyFromReports(reports, { workloads: {} });
+      const edge = t.edges.find((e) => e.to === "win/x/kernel")!;
+      expect(edge.tx).toMatchObject({ hz: 60, maxIntervalMs: 50 });
+      expect(edge.rx).toMatchObject({ hz: 40, maxIntervalMs: 30 });
+      expect(edge.lossy).toBe(true);
+      expect(edge.dropPerSec).toBe(20); // tx 60 − rx 40
+    });
+
+    it("omits drop info on lossless links; sink edges carry TX + bytes delta", () => {
+      const mk = (bytesTotal: number) => [
+        {
+          id: "camera/1/convert",
+          kind: "convert",
+          transport: "pipe" as const,
+          inputs: [
+            {
+              from: "camera/1",
+              port: "in",
+              type: { kind: "frame", pixelFormat: "sensor", dtype: "U8" } as const,
+              lossy: false, // explicit lossless link
+            },
+          ],
+          output: { kind: "frame", pixelFormat: "BGRA8", dtype: "U8" } as const,
+          pipe: { consumers: 1, bytesTotal },
+          stats: load("camera/1/convert", 0.3, 60),
+        },
+      ];
+      buildTopologyFromReports(mk(1000), { workloads: {}, at: 1000 });
+      const t = buildTopologyFromReports(mk(3000), { workloads: {}, at: 2000 });
+      const inputEdge = t.edges.find((e) => e.to === "camera/1/convert")!;
+      expect(inputEdge.lossy).toBeUndefined();
+      expect(inputEdge.dropPerSec).toBeUndefined();
+      const sink = t.edges.find((e) => e.to.endsWith("/consumers"))!;
+      expect(sink.tx).toMatchObject({ hz: 60, bytesPerSec: 2000 });
+      expect(sink.lossy).toBe(true); // SHM seqlock is latest-wins by design
+    });
+  });
 });
 
 // --- Universal node reporting (unified-time-and-topology §6) -----------------

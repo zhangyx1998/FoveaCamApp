@@ -66,8 +66,10 @@ export type NodeReport = {
   /** Brick kind: convert | undistort | fovea | kcf | kernel names | … */
   kind: string;
   transport: NodeTransport;
-  /** ACTUAL live input connections — the graph's only edge source. */
-  inputs: { from: string; port: string; type: StreamType }[];
+  /** ACTUAL live input connections — the graph's only edge source. `lossy`
+   *  marks latest-wins subscriptions (SHM seqlock reads, Leaky channels) so
+   *  the derived edge reports a drop rate; FIFO/lossless links omit it. */
+  inputs: { from: string; port: string; type: StreamType; lossy?: boolean }[];
   output: StreamType | null;
   /** Full meter snapshot (one schema, already converged). Absent = the
    *  topology builder folds stats BY ID from the perfSnapshot workloads map. */
@@ -114,6 +116,20 @@ export type GraphNode = {
   stats?: NodeStats;
 };
 
+/** One direction of an edge's measured flow. Raw numbers in JSON (snapshot
+ *  exports stay machine-readable); the profiler humanizes for display
+ *  (`humanHz`/`humanBytesPerSec` in stats.ts). Absent field = unmetered. */
+export type EdgeFlow = {
+  /** Event frequency (frames/results per second). */
+  hz?: number;
+  /** Payload throughput. */
+  bytesPerSec?: number;
+  /** Worst gap between consecutive events over the meter's capture window
+   *  (C-18 semantics; the profiler's report rate — default 1 Hz — is
+   *  configurable and bounds how often this is sampled, not the window). */
+  maxIntervalMs?: number;
+};
+
 /** One wiring: producer node → a NAMED input port of a consumer node. Wiring
  *  lives ONLY here (nodes don't duplicate their input lists). */
 export type GraphEdge = {
@@ -123,7 +139,22 @@ export type GraphEdge = {
   type: StreamType;
   /** Pipe-backed edges: live consumer refcount on the producer's pipe. */
   consumers?: number;
-  /** Measured flow (from the pipe/producer meter), when known. */
+  /** TX: what the PRODUCER put on the wire (its output meter + pipe byte
+   *  accumulator). */
+  tx?: EdgeFlow;
+  /** RX: what the CONSUMER actually took (its per-port input meter). On a
+   *  lossless link rx ≈ tx; on a lossy one the gap is the drop rate. */
+  rx?: EdgeFlow;
+  /** Drop rate (events/sec) — ONLY meaningful on lossy transports (SHM
+   *  seqlock pipes, Leaky latest-wins channels); absent on lossless FIFO
+   *  links. Sourced from the consumer's skip counter when metered, else
+   *  max(0, tx.hz − rx.hz). */
+  dropPerSec?: number;
+  /** True when this link's transport is lossy (latest-wins semantics) —
+   *  the display shows drop info only for these. */
+  lossy?: boolean;
+  /** @deprecated legacy single-direction fields — mirrors `tx` during the
+   *  migration; readers move to tx/rx. */
   ratePerSec?: number;
   bytesPerSec?: number;
 };
