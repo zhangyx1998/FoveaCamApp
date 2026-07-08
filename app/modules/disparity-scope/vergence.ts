@@ -107,22 +107,72 @@ export function matchMagnification(
     : Math.max(1, nominalZoom);
 }
 
+/** The minimal 2D controller shape {@link stepVergence} drives for the `pan`
+ *  DOF — worker A's `PID2D` (@lib/pid) satisfies it structurally. Declared here
+ *  (rather than importing `PID2D`) so the vergence math + its unit test stay
+ *  independent of the 2D class: a `Point2d` error in, the saturated `Point2d`
+ *  command out, plus the integrator value for telemetry/seed. */
+export interface Vec2Controller {
+  step(error: Point2d, dt?: number): Point2d;
+  readonly value: Point2d;
+}
+
 /**
- * Per-DOF controllers. Rather than commanding the four fovea pixel DOF
- * (L.x, L.y, R.x, R.y) independently — which lets the foveas drift apart on
- * noisy frames — the loop integrates these physically-meaningful DOF
- * (each a {@link PID} whose clamped integrator is the command) and reconstructs
- * both fovea poses symmetrically about the gaze ray.
+ * The named DOF controllers the vergence step integrates. Rather than
+ * commanding the four fovea pixel DOF (L.x, L.y, R.x, R.y) independently —
+ * which lets the foveas drift apart on noisy frames — the loop integrates
+ * these physically-meaningful DOF and reconstructs both fovea poses
+ * symmetrically about the gaze ray. Post-replumb these live inside the
+ * disparity-scope PID node (`createPidNode`): `pan` is a `PID2D`, `verge` and
+ * `v_shift` are scalar {@link PID}s (all with the same {@link PID} guarantees:
+ * velocity-form integrator = command, anti-windup clamp, dt-scaling).
  */
-export type VergencePIDs = {
+export type VergenceControllers = {
+  /** Common-mode ray correction, x/y (rad) — a 2D controller. */
+  pan: Vec2Controller;
   /** Inverse-√depth verge parameter (0 ⇒ ∞, larger ⇒ nearer). */
   verge: PID;
   /** Vertical half-shift between the foveas (rad). */
   v_shift: PID;
-  /** Common-mode ray correction, x/y (rad). */
-  panX: PID;
-  panY: PID;
 };
+
+/**
+ * The scope's control OUTPUT (docs/proposals/pid-nodes-and-view-replumb.md
+ * §"Disparity re-plumb"): the matched fovea centers + the target, projected
+ * onto the UNDISTORTED wide frame in full-resolution wide pixels (the strip
+ * offsets `ox`/`oy` are already folded in), plus the per-eye match confidence.
+ * This is the only thing the control path (the PID node) consumes — the views
+ * source independently from their undistort pipes, so the scope kernel no
+ * longer bottlenecks view fps.
+ */
+export type ScopeProjection = {
+  l: Point2d;
+  r: Point2d;
+  target: Point2d;
+  scores: { l: number; r: number };
+};
+
+/**
+ * Lift the analysis' strip-local match rects into the scope {@link
+ * ScopeProjection}: each rect centre + the strip origin `(ox, oy)` is that
+ * match's full-resolution wide-frame position — EXACTLY the point the
+ * pre-replumb `stepVergence.toAngle` fed to `P2A` (`{x: cx + ox, y: cy + oy}`),
+ * extracted here as the pure emission math so it is unit-testable without any
+ * native Vision op. The kernel emits this alongside the diagnostic frames; the
+ * control step consumes it.
+ */
+export function scopeProjection(a: VergenceStepInput): ScopeProjection {
+  const lift = (rect: Rect): Point2d => {
+    const c = RECT.getCenter(rect);
+    return { x: c.x + a.ox, y: c.y + a.oy };
+  };
+  return {
+    l: lift(a.ml.rect),
+    r: lift(a.mr.rect),
+    target: lift(a.center.rect),
+    scores: { l: a.ml.score, r: a.mr.score },
+  };
+}
 
 export type VergenceControl = {
   /** Inter-fovea baseline (mm). */
@@ -269,44 +319,47 @@ export async function analyzeVergence(
  * the call rate; `dt` (a rate-normalized step supplied by the caller) keeps
  * convergence wall-clock consistent across the variable pipeline throughput.
  *
- * Returns `null` (hold) when either match is too weak to trust — the PIDs are
- * left untouched so a low-confidence frame neither integrates nor winds down.
+ * Returns `null` (hold) when either match is too weak to trust — the
+ * controllers are left untouched so a low-confidence frame neither integrates
+ * nor winds down.
+ *
+ * INPUT SPACE (post-replumb): the projected centres arrive as UNDISTORTED
+ * wide-frame pixels (the scope reads the center camera's undistort pipe), so
+ * they lift to angles via `P2A.C(px, false)` — treated as already-undistorted,
+ * the linear pinhole map, not the raw-pixel default the pre-replumb kernel
+ * used (`undistort=true`). The math
+ * is otherwise byte-for-byte the old control law; it is packaged inside the PID
+ * node's control fn (the caller runs it via `node.step`).
  */
 export function stepVergence(
-  analysis: VergenceStepInput,
-  pids: VergencePIDs,
+  projection: ScopeProjection,
+  ctl: VergenceControllers,
   conv: Pick<CoordinateConversions, "P2A" | "A2V">,
   ctrl: VergenceControl,
   dt: number,
 ): { left: Point2d; right: Point2d } | null {
-  const { ml, mr, center: mc, ox, oy } = analysis;
   if (
-    !(ml.score >= ctrl.minScore) ||
-    !(mr.score >= ctrl.minScore) // also rejects NaN scores from flat patches
+    !(projection.scores.l >= ctrl.minScore) ||
+    !(projection.scores.r >= ctrl.minScore) // also rejects NaN scores
   )
     return null;
-  // Lift matched centers (strip coords) into center-camera angles.
-  const toAngle = (rect: Rect) => {
-    const p = RECT.getCenter(rect);
-    return conv.P2A.C({ x: p.x + ox, y: p.y + oy });
-  };
-  const aL = toAngle(ml.rect);
-  const aR = toAngle(mr.rect);
-  const aT = toAngle(mc.rect); // == target ray
+  // Undistorted wide pixel → center-camera angle (already strip-offset-folded).
+  const toAngle = (p: Point2d) => conv.P2A.C(p, false);
+  const aL = toAngle(projection.l);
+  const aR = toAngle(projection.r);
+  const aT = toAngle(projection.target); // == target ray
   // Constrained errors (see header).
   const dL = VEC.sub(aT, aL);
   const dR = VEC.sub(aT, aR);
   const ePan = VEC.mul(VEC.add(dL, dR), 0.5);
   const eVerge = aR.x - aL.x;
   const eVshift = (aR.y - aL.y) / 2;
-  // Each PID integrates its error, dt-scales it, and saturates to a physical
-  // range so a bad estimate can at worst rest at a limit — never fling a fovea.
-  const shift = {
-    x: pids.panX.step(ePan.x, dt),
-    y: pids.panY.step(ePan.y, dt),
-  };
-  const verge = pids.verge.step(eVerge, dt);
-  const v_shift = pids.v_shift.step(eVshift, dt);
+  // Each controller integrates its error, dt-scales it, and saturates to a
+  // physical range so a bad estimate can at worst rest at a limit — never fling
+  // a fovea. `pan` is a 2D controller (separate x/y integrators).
+  const shift = ctl.pan.step(ePan, dt);
+  const verge = ctl.verge.step(eVerge, dt);
+  const v_shift = ctl.v_shift.step(eVshift, dt);
   // Reconstruct both poses symmetrically about the (shift-corrected) ray.
   const ray = VEC.add(aT, shift);
   const distance = vergeToDistance(verge, ctrl.baseline);

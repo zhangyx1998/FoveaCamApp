@@ -8,28 +8,37 @@
 // auto-vergence loop, moved off the orchestrator JS event loop into the vision
 // worker thread (`@orchestrator/vision-worker`). It runs INSIDE that worker:
 // it SHM-reads L/C/R (the worker frames it), and per tick does
-//   - per fovea: `wrapPerspective` onto its current pose (homography sent by
-//     main as 9 numbers — worker needs no calibration reconstruction), a
-//     grayscale downsampled match tile (`getFoveaTile`), and the "disparity"
-//     combined `diff` view;
-//   - center: synchronous `KCF` auto-follow (single-threaded loop, so the
-//     async-kcf busy-drop/staleness dance dissolves — see the deleted
-//     `@orchestrator/async-kcf`), the "sliced" view, and `analyzeVergence`
-//     (template-match each fovea into the wide strip).
-// It posts SCALAR results (match rects/scores, tracker bbox) + derived display
-// frames; MAIN keeps calibration + `stepVergence`/PID → voltages (session.ts).
+//   - per fovea: the fovea arrives PRE-WARPED off its own `camera/<serial>/
+//     undistort` (homography) pipe — the kernel no longer does `wrapPerspective`
+//     and needs no homography params — so it just retains the aligned frame
+//     (for the "disparity" diff) and cuts a grayscale downsampled match tile
+//     (`getFoveaTile`);
+//   - center: the wide input is now the center camera's `undistort` pipe, so
+//     `analyzeVergence`'s template match + the projected positions live on the
+//     UNDISTORTED view (P2A on it is linear). It runs synchronous `KCF`
+//     auto-follow (single-threaded loop, so the async-kcf busy-drop/staleness
+//     dance dissolves — see the deleted `@orchestrator/async-kcf`), cuts the
+//     "sliced" view, and matches each fovea into the wide strip.
+// It posts SCALAR results (match rects/scores, tracker bbox) + the scope
+// `projection` (matched centres + target, wide pixels) + derived DIAGNOSTIC
+// frames (`center.sliced`/`center.disparity`/`guide`/`match_*`); MAIN keeps
+// calibration + the PID node's `stepVergence` → voltages (session.ts). The
+// kernel no longer emits L/C/R view frames — the views source directly from the
+// undistort pipes so a busy kernel can't cap their fps.
 
-import { copyMat, makeMat } from "@lib/mat";
+import { copyMat } from "@lib/mat";
 import { RECT } from "@lib/util/geometry";
 import type { Point2d, Rect, Size } from "core/Geometry";
-import { cvtColor, diff, slice, wrapPerspective, type Mat } from "core/Vision";
+import { cvtColor, diff, slice, type Mat } from "core/Vision";
 import { KCF } from "core/Tracker";
 import {
   analyzeVergence,
   getFoveaTile,
   foveaTileSize,
   matchMagnification,
+  scopeProjection,
   type MatchResult,
+  type ScopeProjection,
 } from "./vergence";
 import type {
   FrameSet,
@@ -38,13 +47,10 @@ import type {
   VisionKernel,
 } from "@orchestrator/vision-kernel";
 
-/** Params main pushes to the kernel (init + live updates, merged). Homographies
- *  are the flat 9-element row-major matrices `conv.A2H[role](V2A[role](volts))`,
- *  recomputed by main on each throttled volt update. */
+/** Params main pushes to the kernel (init + live updates, merged). Post-replumb
+ *  there are NO homographies: the foveas arrive pre-warped off their undistort
+ *  pipes, so the kernel only needs tuning/zoom/view/target knobs. */
 export type DisparityParams = {
-  /** 9-element row-major homography for each fovea's current pose (or null). */
-  homographyL?: number[] | null;
-  homographyR?: number[] | null;
   kernelW?: number;
   kernelH?: number;
   /** Nominal UI zoom — drives ONLY the sliced-view crop size. */
@@ -60,7 +66,6 @@ export type DisparityParams = {
   expand_x?: number;
   expand_y?: number;
   view?: string;
-  wrap?: boolean;
   lostTolerance?: number;
   /** Main requests a (re)init at this center on the next center tick. */
   trackerInit?: Point2d | null;
@@ -73,6 +78,8 @@ export type WireMatch = { rect: Rect; score: number };
 
 /** Worker→main scalar results for one vergence tick. */
 export type DisparityValues = {
+  /** Strip-local match rects + scores — DIAGNOSTIC only (drives the guide-strip
+   *  overlays); the control path reads {@link ScopeProjection} instead. */
   analysis?: {
     ml: WireMatch;
     mr: WireMatch;
@@ -80,6 +87,10 @@ export type DisparityValues = {
     ox: number;
     oy: number;
   };
+  /** The scope's control OUTPUT — matched fovea centres + target on the
+   *  undistorted wide frame (full-res wide pixels) + per-eye scores. Consumed
+   *  by the PID node's `stepVergence`; emitted whenever `analysis` is. */
+  projection?: ScopeProjection;
   tracker?:
     | { status: "tracking"; center: Point2d; bbox: Rect }
     | { status: "lost" };
@@ -88,24 +99,12 @@ export type DisparityValues = {
 
 const wire = (m: MatchResult): WireMatch => ({ rect: m.rect, score: m.score });
 
-function toHomography(nums: number[] | null | undefined): Mat<Float64Array> | null {
-  if (!nums || nums.length < 9) return null;
-  return makeMat(new Float64Array(nums.slice(0, 9)), [3, 3], 1);
-}
-
 export function createDisparityKernel(initial: Record<string, unknown>): VisionKernel {
   const p: Required<
-    Omit<
-      DisparityParams,
-      "homographyL" | "homographyR" | "trackerInit" | "trackerRelease" | "matchZoom"
-    >
+    Omit<DisparityParams, "trackerInit" | "trackerRelease" | "matchZoom">
   > & {
-    homographyL: Mat<Float64Array> | null;
-    homographyR: Mat<Float64Array> | null;
     matchZoom: number | null;
   } = {
-    homographyL: null,
-    homographyR: null,
     kernelW: 64,
     kernelH: 64,
     zoom: 1,
@@ -115,7 +114,6 @@ export function createDisparityKernel(initial: Record<string, unknown>): VisionK
     expand_x: 3,
     expand_y: 2,
     view: "sliced",
-    wrap: false,
     lostTolerance: 10,
   };
 
@@ -208,18 +206,18 @@ export function createDisparityKernel(initial: Record<string, unknown>): VisionK
 
   async function processFovea(
     role: "L" | "R",
-    raw: Mat<Uint8Array>,
+    frame: Mat<Uint8Array>,
     out: KernelFrameOut[],
   ): Promise<void> {
-    const H = role === "L" ? p.homographyL : p.homographyR;
-    // `wrapPerspective` allocates a fresh Mat; without a homography yet, copy —
-    // `raw` is the worker's reused read buffer, overwritten next tick, but
-    // `aligned[role]` is retained across ticks for the "disparity" diff.
-    const wrapped = H ? wrapPerspective(raw, H) : copyMat(raw);
-    out.push({ name: role, mat: p.wrap && H ? wrapped : raw });
-    aligned[role] = wrapped;
+    // The fovea arrives PRE-WARPED off `camera/<serial>/undistort` (homography
+    // variant) — the kernel no longer warps. `frame` is the worker's reused
+    // read buffer (overwritten next tick), but `aligned[role]` is retained
+    // across ticks for the "disparity" diff, so retain a copy. No L/R view
+    // frame is emitted (the views source directly from the undistort pipes).
+    const a = copyMat(frame);
+    aligned[role] = a;
     if (width && height) {
-      const tile = await getFoveaTile(wrapped, tileSize());
+      const tile = await getFoveaTile(a, tileSize());
       if (role === "L") tileL = tile;
       else tileR = tile;
     }
@@ -248,7 +246,10 @@ export function createDisparityKernel(initial: Record<string, unknown>): VisionK
       const r = updateTracker(c);
       if (r) values.tracker = r;
     }
-    out.push({ name: "C", mat: c });
+    // No "C" view frame — the center view sources directly from the undistort
+    // pipe. `c` is the UNDISTORTED wide frame (the kernel's C input is now the
+    // center camera's undistort pipe), so the sliced crop + the match + the
+    // projection all live in undistorted wide pixels.
     if (p.view === "sliced" && width && height) {
       const zoom = Math.max(1, p.zoom);
       const rect = clampRect(
@@ -269,13 +270,17 @@ export function createDisparityKernel(initial: Record<string, unknown>): VisionK
       out.push({ name: "guide", mat: analysis.guide });
       out.push({ name: "match_left", mat: analysis.ml.mat });
       out.push({ name: "match_right", mat: analysis.mr.mat });
-      values.analysis = {
+      const wireAnalysis = {
         ml: wire(analysis.ml),
         mr: wire(analysis.mr),
         center: analysis.center,
         ox: analysis.ox,
         oy: analysis.oy,
       };
+      values.analysis = wireAnalysis;
+      // The control OUTPUT: matched centres + target lifted to full-res wide
+      // pixels (strip offsets folded in) — the only thing the PID node reads.
+      values.projection = scopeProjection(wireAnalysis);
     }
     void seq;
   }
@@ -283,8 +288,6 @@ export function createDisparityKernel(initial: Record<string, unknown>): VisionK
   const kernel: VisionKernel = {
     setParams(params: Record<string, unknown>): void {
       const d = params as DisparityParams;
-      if ("homographyL" in d) p.homographyL = toHomography(d.homographyL);
-      if ("homographyR" in d) p.homographyR = toHomography(d.homographyR);
       if (d.kernelW !== undefined) p.kernelW = d.kernelW;
       if (d.kernelH !== undefined) p.kernelH = d.kernelH;
       if (d.zoom !== undefined) p.zoom = d.zoom;
@@ -294,7 +297,6 @@ export function createDisparityKernel(initial: Record<string, unknown>): VisionK
       if (d.expand_x !== undefined) p.expand_x = d.expand_x;
       if (d.expand_y !== undefined) p.expand_y = d.expand_y;
       if (d.view !== undefined) p.view = d.view;
-      if (d.wrap !== undefined) p.wrap = d.wrap;
       if (d.lostTolerance !== undefined) p.lostTolerance = d.lostTolerance;
       if (d.trackerRelease) releaseTracker();
       if ("trackerInit" in d) pendingInit = d.trackerInit ?? null;

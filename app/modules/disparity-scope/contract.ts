@@ -13,6 +13,14 @@
 import { cmd, defineContract } from "@lib/orchestrator/protocol";
 import type { Point2d, Rect } from "core/Geometry";
 import type { Stat } from "@lib/orchestrator/contracts";
+import {
+  pidOverrideCmd,
+  pidOverrideState,
+} from "@lib/orchestrator/pid-override-contract";
+
+/** The disparity-scope PID node's value type — per-eye mirror volts (the
+ *  actuation loop's `{ l, r }` command). The override slot pins THIS. */
+export type VergenceVolts = { l: Point2d; r: Point2d };
 
 const ZERO: Point2d = { x: 0, y: 0 };
 
@@ -85,13 +93,17 @@ export const disparity = defineContract({
     zoom: 9.0,
     /** Which composite the renderer wants for the `center.*` channel. */
     view: "sliced" as "sliced" | "disparity",
-    /** Perspective-rectify each fovea onto its pointing pose before display. */
-    wrap: true as boolean,
     tuning: DEFAULT_TUNING,
     tracker_enabled: false as boolean,
     /** KCF template size (pixels); also used as the search-window pad, same
      *  as the original renderer implementation. */
     kernel: { w: 64, h: 64 },
+    /** PID-node OVERRIDE slot (reusable fragment,
+     *  `@lib/orchestrator/pid-override-contract`): server-authoritative
+     *  `{ engaged, value }`. A pointer drag pins the vergence output at the
+     *  dragged ray's volts (control law held reset); the renderer reads it back
+     *  via `usePidOverride`. Mirrored by the session on every engage/release. */
+    pidOverride: pidOverrideState<VergenceVolts>(),
   },
   telemetry: {
     /** Calibrated triple leased + conversions loaded (§12.1-style pattern —
@@ -128,17 +140,14 @@ export const disparity = defineContract({
     // §7.3 item 2), same shape/throttle as tracking-single/manual-control.
     perf: { actuateMs: { mean: 0, max: 0 } as Stat },
   },
-  // L/C/R are the processed previews (L/R perspective-wrapped iff wrap,
-  // C raw — this module never undistorts the wide view); `center.*` is the
-  // magnified/combined fovea view; `guide`/`match_left`/`match_right` are the
-  // template-match debug visualizations (heatmap Mats — their `{rect,score}`
-  // rides telemetry as `MatchInfo`, per this file's header comment; the
-  // written-back contract had dropped these two frame topics — added back
-  // here, part of "revalidate before building on it").
+  // The kernel emits DIAGNOSTIC frames only (view re-plumb, §2): `center.*` is
+  // the magnified/combined fovea view; `guide`/`match_left`/`match_right` are
+  // the template-match debug visualizations (heatmap Mats — their `{rect,score}`
+  // rides telemetry as `MatchInfo`, per this file's header comment). The L/C/R
+  // views are GONE from here — they source directly from the per-camera
+  // `camera/<serial>/undistort` pipes (renderer binds them via `usePipeFrame`),
+  // so a busy kernel can't cap their fps.
   frames: [
-    "L",
-    "C",
-    "R",
     "center.sliced",
     "center.disparity",
     "guide",
@@ -154,8 +163,16 @@ export const disparity = defineContract({
     /** Clear the PID integrators so the foveas re-converge fresh. */
     reset_vergence: cmd(),
     /** Manually nudge one PID's integrator (debug slider) — same effect as
-     *  the original renderer's direct `pids.verge.value = x` mutation. */
+     *  the original renderer's direct `pids.verge.value = x` mutation. Now
+     *  routed to the PID node's controllers (`pan`/`verge`/`v_shift`). */
     setPid: cmd<{ dof: keyof PidReadout; value: number }>(),
+    /** Engage/update/release the vergence PID node's output override (reusable
+     *  fragment). `{ value }` pins the output at those volts (engage/update);
+     *  `{ release: true }` resumes control (the node's `seed` keeps it
+     *  continuous). The disparity DRAG path drives the slot server-side via
+     *  `pointer` (it converts the pixel → ray volts the renderer can't compute);
+     *  this command is the module-agnostic proxy path (`usePidOverride`). */
+    pidOverride: pidOverrideCmd<VergenceVolts>(),
   },
 });
 

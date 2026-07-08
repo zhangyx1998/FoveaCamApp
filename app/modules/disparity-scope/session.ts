@@ -4,30 +4,39 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Disparity-scope session — auto-vergence. C-22b (WS1 real-1f): the per-frame
-// VISION is now off the orchestrator JS event loop, in a per-session vision
-// WORKER thread (`@orchestrator/vision-worker`, disparity kernel in `./vision`).
-// This module is the thin main-thread coordinator it always should have been:
+// Disparity-scope session — auto-vergence, re-plumbed per
+// docs/proposals/pid-nodes-and-view-replumb.md §"Disparity re-plumb (worker B)".
+// This module is the thin main-thread coordinator: it wires up the graph and
+// forwards final results, it does not micro-manage frames.
 //
-//  - on acquire: `acquireTriple` (calibration), `broker.connect` the three
-//    `camera:<serial>` pipes (refcount++ → C-21 gate → converter runs), spawn
-//    the worker with the pipe `shmName`s + initial params, start the fixed-rate
-//    `startActuationLoop`;
-//  - the worker SHM-reads L/C/R, runs KCF + `wrapPerspective` + tiles + `diff` +
-//    `analyzeVergence`, and posts scalar RESULTS + derived display frames;
-//  - main consumes each result: publishes frames via `session.frame`, mirrors
-//    the tracker bbox/target into state/telemetry, and runs `stepVergence`/PID
-//    → `commandedVolts` (calibration + control stay here, never in the worker);
-//  - `startActuationLoop` reads `commandedVolts` synchronously every tick.
+//  - on activate: `acquireTriple` (calibration); advertise the THREE undistort
+//    pipes the views + the scope kernel source from — C = INTRINSIC undistort
+//    (cal from the triple), L/R = HOMOGRAPHY undistort fed `A2H∘V2A(volts)` from
+//    the actuation loop's mirror history by a `startHomographyFeeder` (the same
+//    seam tracking-single uses); `broker.connect` those pipe ids as the kernel
+//    inputs (refcount++ → demand propagation keeps the undistort bricks + their
+//    converters awake); spawn the vision worker; create the PID controller NODE
+//    (`createPidNode`) and start the fixed-rate `startActuationLoop`.
+//  - the worker SHM-reads L/C/R (foveas arrive PRE-WARPED off the homography
+//    pipes; C is the undistorted wide view), runs KCF + the tile match, and
+//    posts the scope PROJECTION (matched fovea centres + target, undistorted
+//    wide pixels) + diagnostic frames. The kernel no longer emits L/C/R view
+//    frames — the views source directly from the undistort pipes, so a busy
+//    kernel can't cap their fps.
+//  - main runs the vergence control law INSIDE the PID node's control fn
+//    (`node.step(fn)`): `stepVergence` reads the projection and produces the
+//    `{ l, r }` command volts. `startActuationLoop` reads `commandedVolts`
+//    synchronously every tick (unchanged cadence).
 //
-// Homographies: the worker's `wrapPerspective` needs each fovea's current pose
-// as a matrix. Main computes `conv.A2H[role](V2A[role](volts))` and pushes the
-// 9 numbers as params (throttled with the volt telemetry) — the worker needs no
-// calibration reconstruction. This replaces the old registry `onView` taps +
-// `@orchestrator/async-kcf` (deleted here — disparity was its last consumer):
-// the single-threaded worker loop makes KCF synchronous again (no busy-drop
-// dance). C-22b step 3 finished the job — every session's vision now runs in a
-// worker thread, and the registry view-tap loop + `frame-worker` are retired.
+// Pointer drag → the PID node's OVERRIDE slot: engage on down, update on move,
+// release on up. The renderer only has a pixel, so the SESSION converts it
+// (undistorted wide pixel → ray → both-eye volts) and pins the slot server-side
+// (the generic `pidOverride` command exists too, for a caller that already has
+// volts). On release the node's `seed` hook reseeds the controllers from the
+// LAST override value (velocity-form integrator ⇒ output continuity, no jump) —
+// see `seedFromOverride` for the reconstruction inverse. This replaces the old
+// kernel `wrapPerspective` + homography-param push (the foveas are pre-warped
+// upstream now) and the inline `pids`/`dragging` control path.
 
 import { defineSession, type ServerSession } from "@orchestrator/runtime";
 import { acquireTriple, type CalibratedTriple } from "@orchestrator/calibration";
@@ -35,8 +44,25 @@ import { startActuationLoop, type ActuationLoop } from "@orchestrator/actuation"
 import { DisposerBag, publishSerials, releaseLeases } from "@orchestrator/session-resources";
 import { ORIGIN_POS, radians, VOLT_TELEMETRY_INTERVAL_MS } from "@orchestrator/fovea-pipeline";
 import { createVisionWorker, type VisionWorkerHandle } from "@orchestrator/vision-worker-host";
+import {
+  advertiseHomographyUndistortPipe,
+  advertiseUndistortPipe,
+  retireUndistortPipe,
+  type UndistortPipeSeam,
+} from "@orchestrator/undistort-pipe";
+import {
+  conversionComputeH,
+  startHomographyFeeder,
+} from "@orchestrator/homography-feeder";
+import { pushHomography } from "core/Aravis";
 import { nodeId } from "@lib/orchestrator/graph-contract";
 import { registerGraphWiring } from "@orchestrator/graph-topology";
+import {
+  applyPidOverride,
+  createPidNode,
+  outputOf,
+  type PidNodeHandle,
+} from "@orchestrator/pid-node";
 import type { PipeBroker } from "@orchestrator/pipe-session";
 import type { PipeInput, VisionResult } from "@orchestrator/vision-worker-protocol";
 import {
@@ -47,14 +73,19 @@ import {
   VSHIFT_LIMIT_DEG,
   type Tuning,
   type PidReadout,
+  type VergenceVolts,
 } from "./contract";
-import { matchMagnification, stepVergence, type VergencePIDs } from "./vergence";
+import {
+  matchMagnification,
+  stepVergence,
+  type ScopeProjection,
+  type VergenceControllers,
+} from "./vergence";
 import type { DisparityParams, DisparityValues } from "./vision";
 import { makeMat } from "@lib/mat";
-import { PID } from "@lib/pid";
+import { PID, PID2D, type PidParams } from "@lib/pid";
 import { distanceToVerge, vergeToDistance, vergenceToDistance } from "@lib/stereo";
 import { RollingStats } from "@lib/util/rolling";
-import type { Mat } from "core/Vision";
 import type { Point2d } from "core/Geometry";
 import type { Pos } from "@lib/controller-codec";
 
@@ -65,6 +96,14 @@ const SHIFT_LIMIT = radians(SHIFT_LIMIT_DEG);
 const VSHIFT_LIMIT = radians(VSHIFT_LIMIT_DEG);
 const DT_MAX_FRAMES = 10;
 const TRACKER_LOST_TOLERANCE = 10;
+// Two matched rays are treated as parallel (verge 0, z → ∞) below this
+// tan-difference — guards the seed inverse against a divide-by-~0 on the pure
+// drag case (both eyes on the same ray).
+const SEED_PARALLEL_EPS = 1e-9;
+// Topology-only downstream node id for the pid → controller edge. The actuation
+// loop abstracts the MEMS controller (no per-port id reaches the session), so
+// this is a stable placeholder the wiring shim renders as a `controller` node.
+const CONTROLLER_NODE_ID = "controller";
 
 function cloneTuning(t: Tuning): Tuning {
   return {
@@ -82,60 +121,62 @@ function cloneTuning(t: Tuning): Tuning {
 
 export default function disparityScopeSession(
   broker: PipeBroker,
+  undistortSeam: UndistortPipeSeam,
 ): ServerSession<typeof disparity> {
   return defineSession("disparity-scope", disparity, (s) => {
     let triple: CalibratedTriple | null = null;
     const disposers = new DisposerBag();
     let loop: ActuationLoop | null = null;
     let worker: VisionWorkerHandle | null = null;
+    // The graph-visible PID controller node (created on activate). Holds the
+    // vergence controllers + the renderer-driven override slot.
+    let pidNode: PidNodeHandle<VergenceVolts> | null = null;
 
-    let dragging = false;
     let windowStart = now();
     let lastStep = now();
     let lastVoltEmit = 0;
-    let lastHomographyPush = 0;
     let status = "initializing";
     // Mirror of the worker's tracker liveness (drives `frozen()` + freeze reset).
     let trackerActive = false;
     let lastGood: Point2d = ZERO;
 
-    // Commanded volts, updated by the (worker-driven) vergence step and read
-    // synchronously every actuation tick.
-    let commandedVolts: { l: Pos; r: Pos } = { l: ORIGIN_POS, r: ORIGIN_POS };
-    // Latest actuated volts, mirrored locally (needed for the wrap homography
-    // and the vergence/distance telemetry).
-    const volts: { L: Pos; R: Pos } = { L: { ...ORIGIN_POS }, R: { ...ORIGIN_POS } };
+    // Commanded volts — the PID node's output (control result or pinned
+    // override), read synchronously every actuation tick.
+    let commandedVolts: VergenceVolts = { l: ORIGIN_POS, r: ORIGIN_POS };
     const actuateMsStats = new RollingStats(0.9, 2, "ms");
 
-    const pids: VergencePIDs = {
-      panX: new PID({ limits: [-SHIFT_LIMIT, SHIFT_LIMIT] }),
-      panY: new PID({ limits: [-SHIFT_LIMIT, SHIFT_LIMIT] }),
-      verge: new PID({
-        limits: [0, distanceToVerge(VERGE_MIN_DISTANCE_MM, s.state.baseline)],
-      }),
-      v_shift: new PID({ limits: [-VSHIFT_LIMIT, VSHIFT_LIMIT] }),
-    };
+    // The named DOF controllers (owned by the PID node once created). `pan` is a
+    // PID2D (separate x/y integrators); `verge`/`v_shift` are scalar PIDs.
+    const pan = new PID2D();
+    const verge = new PID({
+      limits: [0, distanceToVerge(VERGE_MIN_DISTANCE_MM, s.state.baseline)],
+    });
+    const v_shift = new PID({ limits: [-VSHIFT_LIMIT, VSHIFT_LIMIT] });
+    const controllers: VergenceControllers = { pan, verge, v_shift };
 
+    const shiftLim: [number, number] = [-SHIFT_LIMIT, SHIFT_LIMIT];
+    function panParams(t: Tuning): PidParams {
+      return { kp: t.pan[0], ki: t.pan[1], kd: t.pan[2], limits: shiftLim };
+    }
+    /** Retune the controllers from tuning (uniform {@link PidParams}) without
+     *  disturbing the running integrators — `verge`'s baseline-derived limits
+     *  are left intact (setParams only touches limits when passed). */
     function syncGains(t: Tuning): void {
-      pids.panX.kp = pids.panY.kp = t.pan[0];
-      pids.panX.ki = pids.panY.ki = t.pan[1];
-      pids.panX.kd = pids.panY.kd = t.pan[2];
-      pids.verge.kp = t.depth[0];
-      pids.verge.ki = t.depth[1];
-      pids.verge.kd = t.depth[2];
-      pids.v_shift.kp = t.v_shift[0];
-      pids.v_shift.ki = t.v_shift[1];
-      pids.v_shift.kd = t.v_shift[2];
+      pan.setParams({ x: panParams(t), y: panParams(t) });
+      verge.setParams({ kp: t.depth[0], ki: t.depth[1], kd: t.depth[2] });
+      v_shift.setParams({
+        kp: t.v_shift[0],
+        ki: t.v_shift[1],
+        kd: t.v_shift[2],
+        limits: [-VSHIFT_LIMIT, VSHIFT_LIMIT],
+      });
     }
     syncGains(s.state.tuning);
 
     /** Calibration-MEASURED fovea↔wide magnification for the match (mean of
      *  the per-eye values when both are measured; a single eye's value when
      *  only one is; null when neither is — the kernel then falls back to the
-     *  nominal `state.zoom`, the exact pre-measurement behavior). The match
-     *  needs ONE scale for both tiles + the shared guide strip, so a per-eye
-     *  split would need per-eye tile/strip sizing — not worth it while the
-     *  two foveas share optics (values should agree; the mean absorbs noise). */
+     *  nominal `state.zoom`, the exact pre-measurement behavior). */
     function measuredMatchZoom(): number | null {
       if (!triple) return null;
       const { L, R } = triple.magnification;
@@ -164,17 +205,6 @@ export default function disparityScopeSession(
 
     // --- worker params ----------------------------------------------------
 
-    /** Flat 9-number homographies for both foveas at the current pose. */
-    function homographyParams(): Partial<DisparityParams> {
-      if (!triple) return {};
-      const HL = triple.conv.A2H.L(triple.conv.V2A.L(volts.L));
-      const HR = triple.conv.A2H.R(triple.conv.V2A.R(volts.R));
-      return {
-        homographyL: Array.from(HL as unknown as Float64Array),
-        homographyR: Array.from(HR as unknown as Float64Array),
-      };
-    }
-
     function sendParams(params: Partial<DisparityParams>): void {
       worker?.sendParams(params as Record<string, unknown>);
     }
@@ -191,11 +221,83 @@ export default function disparityScopeSession(
         expand_x: s.state.tuning.expand_x,
         expand_y: s.state.tuning.expand_y,
         view: s.state.view,
-        wrap: s.state.wrap,
         lostTolerance: TRACKER_LOST_TOLERANCE,
         trackerInit: s.state.tracker_enabled ? s.state.target : null,
-        ...homographyParams(),
       };
+    }
+
+    // --- override slot (renderer drag → pinned output) --------------------
+
+    /** Mirror the server-authoritative override slot into contract state so the
+     *  renderer's `usePidOverride` proxy reads `engaged`/`value` back. */
+    function publishOverride(): void {
+      s.setState(
+        "pidOverride",
+        pidNode
+          ? { engaged: pidNode.override.engaged, value: pidNode.override.value }
+          : { engaged: false, value: null },
+      );
+    }
+
+    /** Pin the override at the volts that aim BOTH foveas along the ray through
+     *  the (undistorted wide) pixel `p` — the manual "look here". Same intent as
+     *  the pre-replumb drag path, but `p` is now undistorted (the C view reads
+     *  the undistort pipe), so lift with distort=false. */
+    function engageOverrideAt(p: Point2d): void {
+      if (!pidNode || !triple || !triple.undistort) return;
+      const ray = triple.conv.P2A.C(p, false);
+      const v: VergenceVolts = {
+        l: triple.conv.A2V.L(ray),
+        r: triple.conv.A2V.R(ray),
+      };
+      pidNode.override.engage(v);
+      commandedVolts = v; // actuation reads this synchronously between results
+      status = "manual";
+      publishOverride();
+    }
+
+    /**
+     * Reseed the controllers from the LAST override value so control resumes
+     * CONTINUOUSLY (velocity-form integrator ⇒ `value(lastOutput)` = no jump).
+     * Invoked by `override.release()`.
+     *
+     * Invert `stepVergence`'s reconstruction (@lib/stereo `inverseTriangulate`):
+     *   ray = aT + pan;  z = vergeToDistance(verge);  b = baseline/2
+     *   out.l.x = atan2(z·tan(ray.x) + b, z),  out.r.x = atan2(z·tan(ray.x) − b, z)
+     *   out.l.y = ray.y + v_shift,             out.r.y = ray.y − v_shift
+     * Given the override's per-eye angles gL/gR (= V2A of the pinned volts) and
+     * the CURRENT target ray aT (= P2A of the target), solve the three DOF:
+     *   v_shift = (gL.y − gR.y)/2,   ray.y = (gL.y + gR.y)/2
+     *   z = baseline / (tan gL.x − tan gR.x)  (∞ ⇒ verge 0 when parallel)
+     *   ray.x = atan((tan gL.x + tan gR.x)/2)
+     *   pan = ray − aT
+     * For the pure drag case both eyes share the ray (gL == gR): this collapses
+     * to `pan = ray − aT`, `verge = 0`, `v_shift = 0` — i.e. "resume from the
+     * dragged ray" (the pre-replumb release intent) but WITHOUT the old
+     * reset-to-zero jump.
+     */
+    function seedFromOverride(v: VergenceVolts): void {
+      if (!triple || !triple.undistort) return;
+      const conv = triple.conv;
+      const gL = conv.V2A.L(v.l);
+      const gR = conv.V2A.R(v.r);
+      const aT = conv.P2A.C(s.state.target, false);
+      const vShift = (gL.y - gR.y) / 2;
+      const rayY = (gL.y + gR.y) / 2;
+      const tanDiff = Math.tan(gL.x) - Math.tan(gR.x);
+      let rayX: number;
+      let vergeSeed: number;
+      if (Math.abs(tanDiff) < SEED_PARALLEL_EPS) {
+        rayX = (gL.x + gR.x) / 2;
+        vergeSeed = 0;
+      } else {
+        const z = s.state.baseline / tanDiff;
+        rayX = Math.atan2((z * (Math.tan(gL.x) + Math.tan(gR.x))) / 2, z);
+        vergeSeed = distanceToVerge(z, s.state.baseline);
+      }
+      pan.value = { x: rayX - aT.x, y: rayY - aT.y };
+      verge.value = vergeSeed; // PID setter clamps to its limits
+      v_shift.value = vShift; // PID setter clamps to its limits
     }
 
     // --- worker results ---------------------------------------------------
@@ -224,43 +326,45 @@ export default function disparityScopeSession(
           match_right: v.analysis.mr,
           match_center: v.analysis.center,
         });
-        runStep(v.analysis);
       }
+      if (v.projection) runControl(v.projection);
     }
 
-    function runStep(analysis: NonNullable<DisparityValues["analysis"]>): void {
-      if (!triple) return;
-      const undistort = triple.undistort;
-      if (!undistort) {
+    /** The vergence control law, run INSIDE the PID node's control fn — invoked
+     *  by `node.step` only when the override is NOT engaged (the node resets the
+     *  controllers itself while overridden). Returns the held/last volts on any
+     *  hold condition so the actuation output freezes rather than winds down. */
+    function controlStep(projection: ScopeProjection): VergenceVolts {
+      if (!triple || !triple.undistort) {
         status = "no calibration";
-        return;
-      }
-      if (dragging) {
-        status = "manual";
-        const ray = undistort.angular([s.state.target], true)[0];
-        commandedVolts = { l: triple.conv.A2V.L(ray), r: triple.conv.A2V.R(ray) };
-        return;
+        return commandedVolts;
       }
       if (frozen()) {
         status = "frozen";
-        return;
+        return commandedVolts;
       }
       const t = now();
       const dt = Math.min((t - lastStep) * s.state.tuning.sensitivity, DT_MAX_FRAMES);
       const result = stepVergence(
-        analysis,
-        pids,
+        projection,
+        controllers,
         { P2A: triple.conv.P2A, A2V: triple.conv.A2V },
         { baseline: s.state.baseline, minScore: s.state.tuning.min_score },
         dt,
       );
       if (!result) {
         status = "low score";
-        return;
+        return commandedVolts;
       }
       lastStep = t;
       status = "tracking";
-      commandedVolts = { l: result.left, r: result.right };
+      return { l: result.left, r: result.right };
+    }
+
+    function runControl(projection: ScopeProjection): void {
+      if (!pidNode) return;
+      commandedVolts = outputOf(pidNode.step(() => controlStep(projection)));
+      if (pidNode.override.engaged) status = "manual";
     }
 
     // --- actuation (fixed-rate, decoupled from vision fps) ----------------
@@ -270,29 +374,23 @@ export default function disparityScopeSession(
     }
 
     function onVolts(vv: { L: Pos; R: Pos }, actuateMs: number): void {
-      volts.L = vv.L;
-      volts.R = vv.R;
       actuateMsStats.push(actuateMs);
       const t = now();
-      // Push updated wrap homographies at the volt-telemetry cadence (cheap: 18
-      // numbers) — a slightly stale wrap is fine, the loop feeds back on the
-      // image match, not the calibration prediction.
-      if (t - lastHomographyPush >= VOLT_TELEMETRY_INTERVAL_MS) {
-        lastHomographyPush = t;
-        sendParams(homographyParams());
-      }
       if (t - lastVoltEmit < VOLT_TELEMETRY_INTERVAL_MS) return;
       lastVoltEmit = t;
       const vergence = triple ? triple.conv.V2A.L(vv.L).x - triple.conv.V2A.R(vv.R).x : 0;
       const realized_distance = vergenceToDistance(vergence, s.state.baseline / 1000);
-      const commanded_distance = vergeToDistance(pids.verge.value, s.state.baseline);
+      const commanded_distance = vergeToDistance(verge.value, s.state.baseline);
+      // The per-eye pose overlay draws over the UNDISTORTED wide view now, so
+      // project to undistorted pixels (distort=false), matching every other
+      // overlay's space (target/tracker/match all undistorted).
       const PX = (role: "L" | "R"): Point2d =>
-        triple ? triple.conv.A2P.C(triple.conv.V2A[role](vv[role])) : ZERO;
+        triple ? triple.conv.A2P.C(triple.conv.V2A[role](vv[role]), false) : ZERO;
       const readout: PidReadout = {
-        verge: pids.verge.value,
-        panX: pids.panX.value,
-        panY: pids.panY.value,
-        v_shift: pids.v_shift.value,
+        verge: verge.value,
+        panX: pan.value.x,
+        panY: pan.value.y,
+        v_shift: v_shift.value,
       };
       s.telemetry({
         volt: vv,
@@ -314,10 +412,9 @@ export default function disparityScopeSession(
     // sources (C-24 stage-1 shim, same pattern as tracking-single).
     let pipeIds: string[] = [];
 
-    /** Connect a `camera:<serial>` pipe (refcount++ → C-21 gate) and return its
-     *  worker `PipeInput`; registers the matching `disconnect` on `disposers`. */
-    function connectCameraPipe(role: "L" | "C" | "R", serial: string): PipeInput {
-      const pipeId = nodeId.convert(serial);
+    /** Connect a pipe by id (refcount++ → C-21 gate) and return its worker
+     *  `PipeInput`; registers the matching `disconnect` on `disposers`. */
+    function connectCameraPipe(role: "L" | "C" | "R", pipeId: string): PipeInput {
       const handle = broker.connect(pipeId);
       pipeIds.push(pipeId);
       disposers.add(() => broker.disconnect(pipeId));
@@ -337,18 +434,68 @@ export default function disparityScopeSession(
       if (!t) return;
       triple = t;
       publishSerials(t.leases, disposers, s);
+
+      // §5 view re-plumb: advertise the three undistort pipes the views + the
+      // scope kernel source from. C = INTRINSIC undistort (cal = the SAME
+      // record the triple's `undistort` was built from — `triple.undistort`
+      // was constructed from it). L/R (mirror-steered) = HOMOGRAPHY undistort,
+      // each fed `A2H∘V2A(volts)` from the mirror history by a feeder (an empty
+      // ring passes frames through). The PRODUCER teardown is deferred AFTER
+      // the consumer `disconnect`s (DisposerBag is FIFO) — retirers are added
+      // once the kernel inputs are connected.
+      const undistortIds: Record<"L" | "C" | "R", string | null> = {
+        L: null,
+        C: null,
+        R: null,
+      };
+      const retirers: (() => void)[] = [];
+      if (t.undistort) {
+        const idC = advertiseUndistortPipe(
+          undistortSeam,
+          t.leases.C.camera,
+          t.undistort.calibration,
+        );
+        undistortIds.C = idC;
+        retirers.push(() => retireUndistortPipe(undistortSeam, idC));
+      }
+      const computeH = conversionComputeH(t.conv);
+      for (const side of ["L", "R"] as const) {
+        const pipeId = advertiseHomographyUndistortPipe(
+          undistortSeam,
+          t.leases[side].camera,
+        );
+        undistortIds[side] = pipeId;
+        const stopFeeder = startHomographyFeeder({
+          pipeId,
+          side,
+          computeH,
+          push: pushHomography,
+        });
+        retirers.push(() => {
+          stopFeeder(); // stop pushing BEFORE the brick detaches
+          retireUndistortPipe(undistortSeam, pipeId);
+        });
+      }
+
+      // Kernel inputs = the UNDISTORT pipe ids (demand propagation keeps the
+      // undistort bricks + converters awake). C falls back to the raw convert
+      // pipe on an uncalibrated wide camera (control then holds "no
+      // calibration", the same degradation as before).
       pipeIds = [];
       const pipeInputs: PipeInput[] = [
-        connectCameraPipe("L", t.leases.L.camera.serial),
-        connectCameraPipe("C", t.leases.C.camera.serial),
-        connectCameraPipe("R", t.leases.R.camera.serial),
+        connectCameraPipe("L", undistortIds.L ?? nodeId.convert(t.leases.L.camera.serial)),
+        connectCameraPipe("C", undistortIds.C ?? nodeId.convert(t.leases.C.camera.serial)),
+        connectCameraPipe("R", undistortIds.R ?? nodeId.convert(t.leases.R.camera.serial)),
       ];
-      // C-24 stage-1 shim: show the disparity kernel in the topology (rig
-      // 2026-07-08: the graph drew camera→convert→consumers with NOTHING in
-      // between while the kernel was the 35-vs-60fps limiter). `meterName` =
-      // the node id, so the worker's self-meter folds onto this node's badge.
+      // Now defer the producer teardown (runs AFTER the consumer disconnects).
+      for (const retire of retirers) disposers.add(retire);
+
       const kernelId = nodeId.win("disparity-scope", "disparity");
+      const pidId = nodeId.win("disparity-scope", "pid");
       const bgra = { kind: "frame", pixelFormat: "BGRA8", dtype: "U8" } as const;
+      // meterName = the kernel node id, so the worker's self-meter folds onto
+      // this node's badge (rig 2026-07-08: the kernel was the 35-vs-60fps
+      // limiter, invisible until it showed as a node).
       worker = createVisionWorker(
         { pipes: pipeInputs, params: initParams(), meterName: kernelId },
         onResult,
@@ -372,6 +519,24 @@ export default function disparityScopeSession(
           })),
         }),
       );
+
+      // The PID controller node: scope → pid (input edge) + pid → controller
+      // (output edge, filed on the controller node by the wiring shim).
+      // `createPidNode` owns its own graph registration; dispose retires it.
+      pidNode = createPidNode<VergenceVolts>({
+        id: pidId,
+        kind: "pid",
+        owner: "win/disparity-scope",
+        inputs: [{ from: kernelId, port: "projection" }],
+        outputs: [{ to: CONTROLLER_NODE_ID, port: "volt" }],
+        controllers: { pan, verge, v_shift },
+        seed: seedFromOverride,
+      });
+      disposers.add(() => {
+        pidNode?.dispose();
+        pidNode = null;
+      });
+
       loop = startActuationLoop({ targetVolts, onVolts });
       // Surface the measured magnification (null = nominal-zoom fallback) so
       // the UI can display the actual match scale instead of guessing from
@@ -385,7 +550,8 @@ export default function disparityScopeSession(
       worker?.terminate(); // terminate before disconnect: no reads after the gate drops
       worker = null;
       trackerActive = false;
-      disposers.dispose(); // disconnects the pipes (gate → converter unsubscribe)
+      disposers.dispose(); // disconnect pipes, stop feeders, retire undistort, dispose pid node
+      publishOverride(); // pidNode is now null → released state
       releaseLeases(triple);
       triple = null;
       status = "initializing";
@@ -400,15 +566,15 @@ export default function disparityScopeSession(
             trackerActive = false;
             sendParams({ trackerRelease: true, target: p });
             s.telemetry({ tracker_bbox: null });
-            dragging = true;
           }
           if (phase !== "up") {
             s.setState("target", p);
             sendParams({ target: p });
+            engageOverrideAt(p); // pin the override at the dragged ray (engage/update)
           } else {
-            dragging = false;
+            pidNode?.override.release(); // seeds the controllers → continuity
+            publishOverride();
             windowStart = now();
-            for (const pid of Object.values(pids)) pid.reset();
             if (s.state.tracker_enabled) sendParams({ trackerInit: s.state.target });
           }
         },
@@ -416,10 +582,36 @@ export default function disparityScopeSession(
           s.setState("tuning", cloneTuning(DEFAULT_TUNING));
         },
         async reset_vergence() {
-          for (const pid of Object.values(pids)) pid.reset();
+          pan.reset();
+          verge.reset();
+          v_shift.reset();
         },
         async setPid({ dof, value }) {
-          pids[dof].value = value;
+          switch (dof) {
+            case "verge":
+              verge.value = value;
+              break;
+            case "v_shift":
+              v_shift.value = value;
+              break;
+            case "panX":
+              pan.x.value = value;
+              break;
+            case "panY":
+              pan.y.value = value;
+              break;
+          }
+        },
+        async pidOverride(command) {
+          if (!pidNode) return;
+          const state = applyPidOverride(pidNode.override, command);
+          if (state.engaged && state.value) {
+            commandedVolts = state.value;
+            status = "manual";
+          } else if (!state.engaged) {
+            windowStart = now(); // released via the generic path → restart freeze window
+          }
+          s.setState("pidOverride", state);
         },
       },
       watch: {
@@ -432,16 +624,13 @@ export default function disparityScopeSession(
           });
         },
         baseline(v) {
-          pids.verge.limits = [0, distanceToVerge(VERGE_MIN_DISTANCE_MM, v)];
+          verge.limits = [0, distanceToVerge(VERGE_MIN_DISTANCE_MM, v)];
         },
         zoom() {
           sendParams({ zoom: Math.max(1, s.state.zoom), scale: effectiveScale() });
         },
         view(view) {
           sendParams({ view });
-        },
-        wrap(wrap) {
-          sendParams({ wrap });
         },
         kernel(k) {
           sendParams({ kernelW: k.w, kernelH: k.h });
@@ -451,7 +640,7 @@ export default function disparityScopeSession(
             trackerActive = false;
             sendParams({ trackerRelease: true });
             s.telemetry({ tracker_bbox: null });
-          } else if (!dragging) {
+          } else if (!pidNode?.override.engaged) {
             sendParams({ trackerInit: s.state.target });
           }
         },
