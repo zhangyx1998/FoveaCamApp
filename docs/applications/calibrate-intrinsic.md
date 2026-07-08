@@ -1,34 +1,76 @@
 # Intrinsic Calibration
 
-**Seed confidence: MEDIUM-HIGH.**
+**Seed confidence: MEDIUM-HIGH. Auditor: confirmed accurate; seq-match
+suspicion resolved as CORRECT.**
 
 ## Purpose
 Per-camera intrinsic calibration (camera matrix + distortion coefficients) →
-persisted CameraCalibration JSON keyed by serial — the input every undistort/
-triangulation path consumes.
+persisted `CameraCalibration` JSON keyed by camera key (`getCameraKey`, i.e.
+vendor/model/serial) under the `calibrate-intrinsic` store path — the input
+every undistort/triangulation path consumes (`loadIntrinsic`).
 
-## Pipeline (post-real-1f)
-Single-camera session (`activeSerial`), raw preview via `camera:<serial>` pipe.
-Two detection modes: CHECKER — the `checker` vision-worker kernel runs
-cvtColor + findChessboardCorners off-loop, posting corners + the gray frame;
-at user capture, main runs cornerSubPix + calibrateCamera on the retained
-frames. MARKER — aruco via the native `detector.stream` (already off-loop).
-Worker lifecycle: spawn on CHECKER select, terminate on deselect/mode switch.
+## Pipeline (post-real-1c)
+Single-camera session (`activeSerial`) that, like manage-cameras, enumerates all
+connected cameras (`refresh` → `listCameraInfo`) and leases only the one
+selected. Raw preview rides the `camera:<serial>` pipe (`usePipeFrame`).
+
+Two detection modes (`state.method`):
+- **CHECKER** — the `checker` vision-worker kernel (`vision.ts`) runs off the JS
+  event loop: reads the pipe frame, `cvtColor(BGRA2GRAY)`, `findChessboardCorners`.
+  When corners are found it returns them AND the gray Mat **atomically in one
+  `KernelOutput`** (`{ values.points, frames:[{name:"gray",mat}] }`). The session
+  (`onCheckerResult`) stores the matched pair in `latestChecker = { gray, img_points }`.
+  Worker lifecycle: spawned in `startCheckerWorker` on CHECKER select, terminated
+  (`stopCheckerWorker`) on deselect/mode/param switch via `restartDetection`.
+- **MARKER** — aruco/AprilTag via the native `detector.stream` on the lease's raw
+  stream (already off-loop), scaled by `1/scale`. `latestMarker` holds the current
+  detection result; the loop releases the previous frame as new ones arrive.
+
+At `capture()`: CHECKER pushes `{ gray: latestChecker.gray, samples:[{img_points,
+obj_points=checkerObjPoints(pattern)}] }`. MARKER refs the current detection's
+frame, extracts an owned `Mono8` gray via `frame.view()` (a COPY — safe to retain
+after release), builds per-marker samples (corner + interpolated internal points),
+releases both the temporary and the loop's implicit ref, and pushes the record.
+
+At `calibrateNow()`: flattens all records' samples, runs `cornerSubPix` per sample
+on the retained gray, then `calibrateCamera(size, img_points, obj_points)`, and
+persists `{ ...result, date }`. `resetCalibration` clears a camera's stored cal.
 
 ## UI & controls
-Mode select (checker/marker), board geometry params, capture-frame button +
-captured-set management, calibrate + save, reprojection-error display, preview
-w/ corner/marker overlay.
+`index.vue`: picker list of connected cameras with vendor/model/serial, role
+badge, calibrated-at + FOV (degrees) readout, and Calibrate(Checker)/
+Calibrate(Marker)/Reset buttons per camera. In the active view: raw preview with
+green-dot corner/marker overlay (drawn from `telemetry.detection.points`), pattern
+W×H inputs (checker) or dictionary selector (marker), captured-records chip list
+(click a chip to remove it), Capture (disabled until a detection exists), and
+Calibrate (disabled until ≥1 record; shows "Calibrating…" while `busy`).
 
 ## Expected behavior
-Corners overlay live at usable rate; captures accumulate; calibrate yields a
-plausible rms; save persists; downstream apps pick the new cal on next acquire.
+Corners/markers overlay live at usable rate; captures accumulate as chips;
+calibrate yields a plausible rms and populates FOV; save persists; downstream
+apps pick the new cal on next acquire. Overlay dots align with the RAW preview
+(corners are detected in raw grayscale derived from the same BGRA8 pipe frame; no
+undistort is applied to this preview — confirmed).
 
-## Known/suspected issues
-- Verify the overlay corners align with the RAW preview (corners are detected
-  in raw space — correct; but confirm no undistort crept into this preview).
-- Captured-frame retention: the checker kernel posts the gray frame main keeps
-  — verify capture uses the SAME frame the corners came from (seq match).
+## Known/suspected issues (auditor findings)
+- **Seq-match (RESOLVED — correct):** the seed asked whether capture uses the
+  SAME frame the corners came from. It does. The checker kernel derives `corners`
+  and `gray` from the same `process(frame)` call and returns them together in one
+  `KernelOutput`; the session stores them together in `latestChecker` and capture
+  reads the pair. There is no code path that can pair a `gray` frame with corners
+  from a different sequence. MARKER mode is even tighter — corners and gray both
+  come from the one held detection's frame.
+- **Overlay space (RESOLVED — correct):** the overlay rides raw-space detection
+  points over the raw `camera:<serial>` pipe preview; no undistort crept in.
+- **MARKER capture frame lifetime (RESOLVED — safe):** `frame.view("Mono8")`
+  returns a JS-owned TypedArray copy (via `convert<cv::Mat>`), so retaining
+  `gray` after the immediate `frame.release()` is safe (not a use-after-release,
+  despite the general frame-release-timing rule — `view` snapshots the data).
 
 ## Open questions (for the user)
-(auditor fills)
+- CHECKER `onCheckerResult`: if a result ever arrived with `v.points` set but no
+  `"gray"` frame in `r.frames`, the old `latestChecker` would be kept and could
+  be captured as a slightly stale pair. The kernel never does this today (gray is
+  always bundled when points are non-empty), so it's only a latent invariant —
+  worth a defensive guard if the kernel contract loosens. Not fixed (no current
+  trigger).
