@@ -128,6 +128,10 @@ onUnmounted(() => {
       <div class="subtitle">{{ subtitle }}</div>
     </template>
     <div class="draggable" style="width: 0; flex-grow: 1"></div>
+    <!-- Actions slot: right-aligned window-level controls (record/capture in
+         app windows, snapshot controls in the profiler). Explicitly no-drag
+         so slotted buttons stay clickable while the bar remains draggable
+         via the .draggable strips; empty slot = today's look. -->
     <div class="slot">
       <slot></slot>
     </div>
@@ -212,6 +216,8 @@ onUnmounted(() => {
     flex-direction: row;
     align-items: center;
     gap: 1ch;
+    height: 100%;
+    -webkit-app-region: no-drag;
   }
 
   .overlay {

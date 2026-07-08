@@ -3,6 +3,7 @@ import { fileURLToPath } from "url";
 import fs from "node:fs";
 import { defineConfig, Plugin } from "vite";
 import vue from "@vitejs/plugin-vue";
+import svgLoader from "@zhangyx1998/svg-loader";
 import electron from "vite-plugin-electron/simple";
 import electronPreload from "vite-plugin-electron";
 import root_package from "../package.json";
@@ -156,6 +157,15 @@ export default defineConfig(({ command }) => {
         plugins: [
             foveaWindowEntries(PROJECT_ROOT),
             hmrBoundary(),
+            // Renderer-only (top-level plugins do NOT propagate into the
+            // electron main/preload sub-builds below — each carries its own
+            // `vite` config): compiles `import X from "./x.svg"` into an
+            // inline, style-scoped Vue component (enforce: "pre"). NOTE: the
+            // plugin's default `escapeIds` suffixes every element id with the
+            // file's scope hash — runtime consumers must match by prefix
+            // (`[id^="..."]`), see WelcomeWindow.vue. Bare `.svg` imports that
+            // want Vite's default URL handling opt out via `?url`.
+            svgLoader(),
             vue(),
             electron({
                 main: {

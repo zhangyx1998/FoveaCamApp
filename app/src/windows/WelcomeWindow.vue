@@ -18,19 +18,21 @@ You may find the full license in project root directory.
   window — the welcome→app transition rides the same drain path as
   app→app switching (the window manager drains sessions before spawning).
 
-  Annotation positions are meant to be HAND-EDITED here (one <Annotation>
-  element per datum, stable ids, x/y in percent) — do not add layout logic.
+  Annotation geometry + labels live in `welcome-canvas.svg` (plain SVG, meant
+  to be HAND-EDITED / rearranged in an SVG editor — see the contract comment
+  at its top). This component only injects live values: elements with
+  `id="ann-*-value"` get their textContent set from the computeds below —
+  do not add layout logic on either side.
 -->
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watchEffect } from "vue";
 import { usePipeFrame, useSession } from "@lib/orchestrator/client";
 import { nodeId } from "@lib/orchestrator/graph-contract";
 import { manageCameras } from "@modules/manage-cameras/contract";
 import { launchableApps } from "./app-registry";
 import TitleBar from "../components/TitleBar.vue";
 import StreamView from "../components/StreamView.vue";
-import AnnotationCanvas from "./AnnotationCanvas.vue";
-import Annotation from "./Annotation.vue";
+import WelcomeCanvas from "./welcome-canvas.svg";
 import { FontAwesomeIcon as Icon } from "@fortawesome/vue-fontawesome";
 import {
   faCameraAlt,
@@ -88,6 +90,32 @@ const frameRate = computed(() =>
 const exposure = computed(() => `${fmt(view.value?.exposure, 0)} µs`);
 const gain = computed(() => `${fmt(view.value?.gain)} dB`);
 
+// Live-value injection into the externalized SVG canvas (welcome-canvas.svg):
+// one entry per annotation group; the target element is `<text id="ann-*
+// -value">`. The svg-loader build step suffixes ids with a scope hash, so we
+// match by PREFIX — the ids spelled in the .svg file stay the contract.
+const annotationLayer = ref<HTMLElement | null>(null);
+const annotationValues = computed<Record<string, string>>(() => ({
+  "ann-status": status.value,
+  "ann-camera": view.value?.description ?? serial.value ?? "—",
+  "ann-resolution": resolution.value,
+  "ann-frame-rate": frameRate.value,
+  "ann-exposure": exposure.value,
+  "ann-gain": gain.value,
+}));
+watchEffect(
+  () => {
+    const layer = annotationLayer.value;
+    if (!layer) return; // v-if="payload" not mounted yet
+    for (const [id, text] of Object.entries(annotationValues.value)) {
+      const el = layer.querySelector(`[id^="${id}-value"]`);
+      if (el) el.textContent = text;
+    }
+  },
+  // flush post: run after the v-if mounts/replaces the SVG subtree.
+  { flush: "post" },
+);
+
 // Launcher entries — dev-only apps hidden in production builds.
 const applications = launchableApps.filter((a) => a.group === "application");
 const utilities = launchableApps.filter((a) => a.group === "utility");
@@ -121,58 +149,12 @@ function openProfiler() {
         <div class="no-preview">
           <img src="/FoveaCam Duo Mini.png" style="max-width: 75%" />
         </div>
-        <!-- One annotation per element; stable ids; x/y are percent of the
-             preview area. USER-POSITIONED — edit x/y/dx/dy by hand here. -->
-        <AnnotationCanvas v-if="payload">
-          <Annotation
-            id="ann-status"
-            :x="4"
-            :y="6"
-            :dx="10"
-            label="status"
-            :value="status"
-          />
-          <Annotation
-            id="ann-camera"
-            :x="4"
-            :y="14"
-            :dx="10"
-            label="camera"
-            :value="view?.description ?? serial ?? '—'"
-          />
-          <Annotation
-            id="ann-resolution"
-            :x="4"
-            :y="22"
-            :dx="10"
-            label="resolution"
-            :value="resolution"
-          />
-          <Annotation
-            id="ann-frame-rate"
-            :x="4"
-            :y="30"
-            :dx="10"
-            label="frame rate"
-            :value="frameRate"
-          />
-          <Annotation
-            id="ann-exposure"
-            :x="4"
-            :y="38"
-            :dx="10"
-            label="exposure"
-            :value="exposure"
-          />
-          <Annotation
-            id="ann-gain"
-            :x="4"
-            :y="46"
-            :dx="10"
-            label="gain"
-            :value="gain"
-          />
-        </AnnotationCanvas>
+        <!-- Externalized annotation canvas: geometry/labels are hand-edited
+             in welcome-canvas.svg; live values are injected by id (see the
+             watchEffect above). -->
+        <div v-if="payload" ref="annotationLayer" class="annotation-layer">
+          <WelcomeCanvas class="annotation-canvas" />
+        </div>
       </div>
       <div class="status-row">
         <span
@@ -252,6 +234,21 @@ function openProfiler() {
     align-items: center;
     justify-content: center;
     overflow: hidden;
+  }
+
+  .annotation-layer {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    overflow: visible;
+
+    .annotation-canvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      overflow: visible;
+    }
   }
 
   .no-preview {

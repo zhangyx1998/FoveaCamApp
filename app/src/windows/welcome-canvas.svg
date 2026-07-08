@@ -1,0 +1,95 @@
+<!-- -------------------------------------------------
+Copyright (c) 2026 Yuxuan Zhang, dev@z-yx.cc
+This source code is licensed under the MIT license.
+You may find the full license in project root directory.
+--------------------------------------------------- -->
+<!--
+  Welcome-window annotation canvas — THE CONTRACT:
+
+  * Geometry and label text live HERE. Open this file in any SVG editor and
+    rearrange freely: anchors, label wording, colors, and the <style> block
+    are all yours. WelcomeWindow.vue never positions anything.
+  * Coordinates are percent of the preview area: viewBox is 0..100 on both
+    axes with preserveAspectRatio="none", so x/y map 1:1 to % of width/height
+    (shapes and glyphs stretch with the preview's aspect ratio — same
+    tradeoff as the previous annotation canvas).
+  * Runtime injection: every element whose id ends in "-value"
+    (ann-status-value, ann-camera-value, ann-resolution-value,
+    ann-frame-rate-value, ann-exposure-value, ann-gain-value) gets its
+    textContent replaced with the live datum. KEEP THESE IDS STABLE — the
+    group ids (ann-status, ann-camera, ...) are hand-editing landmarks and
+    must stay stable too. Placeholder text ("—") is what shows until the
+    first datum arrives.
+  * Adding a datum = add a group here AND wire its id in WelcomeWindow.vue's
+    annotationValues map. Removing one = delete the group (a missing id is
+    silently skipped at runtime).
+  * Note: the svg-loader build step suffixes ids with a scope hash
+    (ann-status-value-<hash>); WelcomeWindow matches by prefix, so the ids
+    written here are the source of truth.
+
+  This comment sits OUTSIDE the <svg> root, so it is stripped from the
+  compiled component — edit away, it costs nothing at runtime.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" preserveAspectRatio="none">
+  <style>
+    .anchor {
+      fill: #0af;
+      stroke: white;
+      stroke-width: 0.15;
+    }
+    text {
+      /* Sized in viewBox units (percent of preview height). The dark halo
+         (paint-order stroke) stands in for the old label pill so text stays
+         readable over live video. */
+      font-size: 2.2px;
+      dominant-baseline: middle;
+      paint-order: stroke;
+      stroke: rgba(0, 0, 0, 0.65);
+      stroke-width: 0.6px;
+      stroke-linejoin: round;
+      white-space: pre;
+    }
+    .key {
+      fill: #9cf;
+    }
+    .value {
+      fill: #eee;
+    }
+  </style>
+
+  <g id="ann-status">
+    <circle class="anchor" cx="4" cy="6" r="0.6" />
+    <text class="key" x="14" y="6">status</text>
+    <text class="value" id="ann-status-value" x="26" y="6">—</text>
+  </g>
+
+  <g id="ann-camera">
+    <circle class="anchor" cx="4" cy="14" r="0.6" />
+    <text class="key" x="14" y="14">camera</text>
+    <text class="value" id="ann-camera-value" x="26" y="14">—</text>
+  </g>
+
+  <g id="ann-resolution">
+    <circle class="anchor" cx="4" cy="22" r="0.6" />
+    <text class="key" x="14" y="22">resolution</text>
+    <text class="value" id="ann-resolution-value" x="26" y="22">—</text>
+  </g>
+
+  <g id="ann-frame-rate">
+    <circle class="anchor" cx="4" cy="30" r="0.6" />
+    <text class="key" x="14" y="30">frame rate</text>
+    <text class="value" id="ann-frame-rate-value" x="26" y="30">—</text>
+  </g>
+
+  <g id="ann-exposure">
+    <circle class="anchor" cx="4" cy="38" r="0.6" />
+    <text class="key" x="14" y="38">exposure</text>
+    <text class="value" id="ann-exposure-value" x="26" y="38">—</text>
+  </g>
+
+  <g id="ann-gain">
+    <circle class="anchor" cx="4" cy="46" r="0.6" />
+    <text class="key" x="14" y="46">gain</text>
+    <text class="value" id="ann-gain-value" x="26" y="46">—</text>
+  </g>
+</svg>

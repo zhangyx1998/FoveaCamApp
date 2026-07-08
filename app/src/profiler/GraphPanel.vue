@@ -10,7 +10,15 @@
      INCREMENTAL: elements are diffed by id — a stats-only refresh mutates
      `data()` in place (labels/classes update, positions untouched); dagre
      re-layout runs ONLY when the (id, epoch)/edge membership actually
-     changes, so the 1 Hz poll never re-scrambles the layout. -->
+     changes, so the periodic poll never re-scrambles the layout.
+
+     Interactions (D-item-3): nodes are user-draggable and re-layouts NEVER
+     stomp a dragged node (dragfree positions are captured and re-applied —
+     pure logic in graph-interactions.ts); zoom is ctrl+wheel ONLY (macOS
+     pinch = ctrl+wheel; plain scroll keeps scrolling the page); whitespace
+     drag pans; the canvas is vertically resizable (persisted) and can go
+     fullscreen; hovering an edge shows its full flow detail (tx/rx/worst
+     gap). -->
 
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref, watch } from "vue";
@@ -18,10 +26,21 @@ import cytoscape from "cytoscape";
 import dagre from "cytoscape-dagre";
 import type { GraphTopology } from "@lib/orchestrator/graph-contract";
 import { membershipKey, toElements } from "./graph-view";
+import {
+  GRAPH_HEIGHT_KEY,
+  DEFAULT_GRAPH_HEIGHT,
+  clampGraphHeight,
+  parseGraphHeight,
+  isZoomGesture,
+  nextZoomLevel,
+  reconcileDraggedPositions,
+  type NodePosition,
+} from "./graph-interactions";
 
 cytoscape.use(dagre); // idempotent — cytoscape ignores re-registration
 
 const props = defineProps<{ topology: GraphTopology | null }>();
+const panelRoot = ref<HTMLDivElement | null>(null);
 const container = ref<HTMLDivElement | null>(null);
 let cy: cytoscape.Core | null = null;
 let lastKey = "";
@@ -85,12 +104,23 @@ const STYLE: cytoscape.StylesheetJson = [
       "curve-style": "bezier",
       "arrow-scale": 0.8,
       label: "data(label)",
+      "text-wrap": "wrap",
       "font-size": "8px",
       "font-family": "monospace",
       color: "#9aa3ad",
       "text-background-color": "#16181b",
       "text-background-opacity": 0.85,
       "text-background-padding": "2px",
+    },
+  },
+  {
+    // Lossy link actively dropping — warning-red accent on line + caption
+    // (the label carries the "− N/s" drop marker, see edgeLabel()).
+    selector: "edge.dropping",
+    style: {
+      "line-color": "#a8323e",
+      "target-arrow-color": "#a8323e",
+      color: "#ff8896",
     },
   },
 ];
@@ -104,6 +134,12 @@ const LAYOUT = {
   animate: false,
   fit: true,
 } as unknown as cytoscape.LayoutOptions;
+
+// User-dragged node positions (id → position, captured on cytoscape
+// "dragfree"). Re-applied after every membership re-layout so the periodic
+// topology refresh never stomps a node the user placed; auto-layout keeps
+// owning every untouched node. Pruned when nodes leave the graph.
+let dragged = new Map<string, NodePosition>();
 
 function apply(t: GraphTopology): void {
   if (!cy) return;
@@ -119,24 +155,124 @@ function apply(t: GraphTopology): void {
       const existing = cy!.getElementById(el.data.id);
       if (existing.nonempty()) {
         existing.data(el.data);
-        if (el.group === "nodes") existing.classes(el.classes ?? "");
+        existing.classes(el.classes ?? "");
       } else {
         cy!.add({ group: el.group, data: el.data, classes: el.classes });
       }
     }
   });
-  if (changed) cy.layout(LAYOUT).run();
+  if (changed) {
+    dragged = reconcileDraggedPositions(
+      dragged,
+      els.filter((e) => e.group === "nodes").map((e) => e.data.id),
+    );
+    cy.layout(LAYOUT).run(); // dagre, animate:false — synchronous
+    for (const [id, pos] of dragged) {
+      const node = cy.getElementById(id);
+      if (node.nonempty()) node.position({ ...pos });
+    }
+  }
 }
+
+// --- Vertical resize (persisted) ---------------------------------------------
+
+const height = ref(parseGraphHeight(localStorage.getItem(GRAPH_HEIGHT_KEY)));
+watch(height, () => requestAnimationFrame(() => cy?.resize()));
+
+function persistHeight(): void {
+  localStorage.setItem(GRAPH_HEIGHT_KEY, String(height.value));
+}
+
+function startResize(down: PointerEvent): void {
+  const handle = down.currentTarget as HTMLElement;
+  const startY = down.clientY;
+  const startH = height.value;
+  const move = (ev: PointerEvent): void => {
+    height.value = clampGraphHeight(startH + (ev.clientY - startY));
+  };
+  const up = (): void => {
+    handle.removeEventListener("pointermove", move);
+    handle.removeEventListener("pointerup", up);
+    persistHeight();
+  };
+  handle.setPointerCapture(down.pointerId);
+  handle.addEventListener("pointermove", move);
+  handle.addEventListener("pointerup", up);
+}
+
+function keyResize(ev: KeyboardEvent): void {
+  const step = ev.key === "ArrowUp" ? -16 : ev.key === "ArrowDown" ? 16 : 0;
+  if (step === 0) return;
+  ev.preventDefault();
+  height.value = clampGraphHeight(height.value + step);
+  persistHeight();
+}
+
+// --- Zoom gating: ctrl+wheel only ---------------------------------------------
+
+function onWheel(ev: WheelEvent): void {
+  if (!cy || !container.value) return;
+  if (!isZoomGesture(ev)) return; // plain scroll → let the page scroll
+  ev.preventDefault();
+  const rect = container.value.getBoundingClientRect();
+  cy.zoom({
+    level: nextZoomLevel(cy.zoom(), ev.deltaY),
+    renderedPosition: { x: ev.clientX - rect.left, y: ev.clientY - rect.top },
+  });
+}
+
+// --- Fullscreen ----------------------------------------------------------------
+
+const isFullscreen = ref(false);
+function toggleFullscreen(): void {
+  if (document.fullscreenElement === panelRoot.value) void document.exitFullscreen();
+  else void panelRoot.value?.requestFullscreen();
+}
+function onFullscreenChange(): void {
+  isFullscreen.value = document.fullscreenElement === panelRoot.value;
+  requestAnimationFrame(() => cy?.resize());
+}
+
+// --- Reset ----------------------------------------------------------------------
+
+function resetLayout(): void {
+  dragged.clear();
+  height.value = DEFAULT_GRAPH_HEIGHT;
+  localStorage.removeItem(GRAPH_HEIGHT_KEY);
+  requestAnimationFrame(() => {
+    if (!cy) return;
+    cy.resize();
+    cy.layout(LAYOUT).run();
+    cy.fit(undefined, 12); // reset zoom/pan
+  });
+}
+
+// --- Edge hover detail -----------------------------------------------------------
+
+const hover = ref<{ text: string; x: number; y: number } | null>(null);
 
 onMounted(() => {
   cy = cytoscape({
     container: container.value,
     style: STYLE,
-    wheelSensitivity: 0.2,
-    // Read-only viz: nodes aren't draggable (layout owns positions), but
-    // pan/zoom stay on for inspecting a crowded graph.
-    autoungrabify: true,
+    // Interactions: nodes ARE draggable (no autoungrabify/autolock); zoom is
+    // handled manually via the ctrl-gated wheel listener below; whitespace
+    // drag pans (cytoscape default panning).
+    userZoomingEnabled: false,
+    userPanningEnabled: true,
   });
+  cy.on("dragfree", "node", (evt) => {
+    dragged.set(evt.target.id(), { ...evt.target.position() });
+  });
+  cy.on("mouseover", "edge", (evt) => {
+    const detail = evt.target.data("detail") as string | undefined;
+    if (!detail) return;
+    const p = evt.target.renderedMidpoint();
+    hover.value = { text: detail, x: p.x, y: p.y };
+  });
+  cy.on("mouseout", "edge", () => (hover.value = null));
+  container.value?.addEventListener("wheel", onWheel, { passive: false });
+  document.addEventListener("fullscreenchange", onFullscreenChange);
   if (props.topology) apply(props.topology);
 });
 
@@ -148,32 +284,120 @@ watch(
 );
 
 onBeforeUnmount(() => {
+  container.value?.removeEventListener("wheel", onWheel);
+  document.removeEventListener("fullscreenchange", onFullscreenChange);
   cy?.destroy();
   cy = null;
 });
 </script>
 
 <template>
-  <div class="graph-panel">
+  <div
+    ref="panelRoot"
+    class="graph-panel"
+    :class="{ fullscreen: isFullscreen }"
+    :style="{ height: isFullscreen ? '100%' : height + 'px' }"
+  >
     <div ref="container" class="canvas" />
+    <div class="chips">
+      <button
+        type="button"
+        @click="toggleFullscreen"
+        :title="isFullscreen ? 'Exit full screen' : 'Show the graph full screen'"
+      >
+        {{ isFullscreen ? "⤡ Exit full screen" : "⤢ Full screen" }}
+      </button>
+      <button
+        type="button"
+        @click="resetLayout"
+        title="Forget dragged positions, re-run auto layout, reset zoom/pan and panel height"
+      >
+        ↺ Reset layout
+      </button>
+    </div>
+    <div
+      v-if="hover"
+      class="edge-tooltip"
+      :style="{ left: hover.x + 'px', top: hover.y + 'px' }"
+    >
+      {{ hover.text }}
+    </div>
     <div v-if="!topology || topology.nodes.length === 0" class="empty">
       No pipeline nodes yet — camera pipes and workload meters appear here while live.
     </div>
+    <div
+      class="resize-handle"
+      role="separator"
+      aria-orientation="horizontal"
+      aria-label="Resize graph canvas (drag, or arrow up/down)"
+      tabindex="0"
+      title="Drag to resize the graph canvas"
+      @pointerdown="startResize"
+      @keydown="keyResize"
+    />
   </div>
 </template>
 
 <style scoped lang="scss">
 .graph-panel {
   position: relative;
-  height: 380px;
   border: 1px solid #23262b;
   border-radius: 6px;
   background: #101215;
   overflow: hidden;
 
+  &.fullscreen {
+    border: none;
+    border-radius: 0;
+  }
+
   .canvas {
     width: 100%;
     height: 100%;
+  }
+
+  .chips {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    display: flex;
+    gap: 6px;
+    z-index: 2;
+
+    button {
+      background: #16181bcc;
+      color: #9aa3ad;
+      border: 1px solid #2a2f36;
+      border-radius: 4px;
+      padding: 2px 8px;
+      font-size: 0.7rem;
+      font-family: inherit;
+      cursor: pointer;
+      white-space: nowrap;
+
+      &:hover {
+        background: #1e2126;
+        color: #d8dde3;
+      }
+      &:focus-visible {
+        outline: 1px solid #74b1be;
+      }
+    }
+  }
+
+  .edge-tooltip {
+    position: absolute;
+    transform: translate(-50%, calc(-100% - 8px));
+    z-index: 3;
+    pointer-events: none;
+    background: #16181b;
+    border: 1px solid #2a2f36;
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 0.68rem;
+    color: #c3cad2;
+    white-space: pre-line;
+    max-width: 32rem;
   }
 
   .empty {
@@ -185,6 +409,36 @@ onBeforeUnmount(() => {
     color: #667;
     font-size: 0.85rem;
     pointer-events: none;
+  }
+
+  .resize-handle {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 10px;
+    cursor: ns-resize;
+    touch-action: none;
+    z-index: 2;
+
+    &::after {
+      content: "";
+      position: absolute;
+      left: 50%;
+      bottom: 3px;
+      transform: translateX(-50%);
+      width: 48px;
+      height: 3px;
+      border-radius: 2px;
+      background: #2a2f36;
+    }
+    &:hover::after,
+    &:focus-visible::after {
+      background: #74b1be;
+    }
+    &:focus-visible {
+      outline: none;
+    }
   }
 }
 </style>

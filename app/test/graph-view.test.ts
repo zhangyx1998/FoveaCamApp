@@ -4,7 +4,17 @@
 // This IS the panel's mock-data story: the same mocks drive the component.
 
 import { describe, expect, it } from "vitest";
-import { deriveTopology, membershipKey, nodeLabel, selectTopology, toElements } from "@src/profiler/graph-view";
+import {
+  deriveTopology,
+  edgeDetail,
+  edgeLabel,
+  isDropping,
+  membershipKey,
+  nodeLabel,
+  selectTopology,
+  toElements,
+} from "@src/profiler/graph-view";
+import type { GraphEdge } from "@lib/orchestrator/graph-contract";
 import type { WorkloadRow } from "@src/profiler/workload-view";
 import type { PipeAdvert } from "@lib/orchestrator/pipe-contract";
 
@@ -224,12 +234,84 @@ describe("Stage-2 source selection + served-shape rendering (A-36)", () => {
     const kcf = els.find((e) => e.data.id === "win/tracking-single-1/kcf")!;
     expect(kcf.classes).toBe("saturated");
     expect(kcf.data.label).toContain("95%");
-    // The consumer edge shows fps, EXACT MB/s from bytesTotal deltas, and ×N.
+    // The consumer edge humanizes the (legacy-mirrored) tx flow and shows ×N.
     const edge = els.find(
       (e) => e.data.id === "edge:camera/123/convert->camera/123/convert/consumers#in",
     )!;
-    expect(edge.data.label).toBe("55.0 fps 55.0 MB/s ×2");
+    expect(edge.data.label).toBe("↑ 55.00 Hz · 55.00 MB/s\n×2");
     // Membership key includes the pipe's epoch (re-advertise = re-layout).
     expect(membershipKey(served())).toContain("camera/123/convert#2");
+  });
+});
+
+describe("edge flow labels (tx/rx/drop — 4732f64 contract)", () => {
+  const base: GraphEdge = {
+    from: "camera/123/convert",
+    to: "win/t-1/kcf",
+    port: "in",
+    type: { kind: "frame", pixelFormat: "BGRA8", dtype: "U8" },
+  };
+
+  it("renders humanized tx/rx lines from the NEW directional fields", () => {
+    const e: GraphEdge = {
+      ...base,
+      tx: { hz: 59.9, bytesPerSec: 377_000_000, maxIntervalMs: 25 },
+      rx: { hz: 35.2 },
+    };
+    expect(edgeLabel(e)).toBe("↑ 59.90 Hz · 377.00 MB/s\n↓ 35.20 Hz");
+  });
+
+  it("shows the drop marker ONLY when lossy AND actually dropping", () => {
+    const dropping: GraphEdge = {
+      ...base,
+      tx: { hz: 60 },
+      rx: { hz: 35.3 },
+      dropPerSec: 24.7,
+      lossy: true,
+    };
+    expect(isDropping(dropping)).toBe(true);
+    expect(edgeLabel(dropping)).toBe("↑ 60.00 Hz\n↓ 35.30 Hz\n− 24.7/s");
+
+    // Lossless link with a rate gap: no marker (drop semantics don't apply).
+    const lossless: GraphEdge = { ...base, tx: { hz: 60 }, rx: { hz: 35 }, dropPerSec: 25 };
+    expect(isDropping(lossless)).toBe(false);
+    expect(edgeLabel(lossless)).not.toContain("−");
+
+    // Lossy but idle: quiet.
+    const idle: GraphEdge = { ...base, tx: { hz: 60 }, lossy: true, dropPerSec: 0 };
+    expect(isDropping(idle)).toBe(false);
+  });
+
+  it("falls back to the deprecated ratePerSec/bytesPerSec mirrors as tx-only", () => {
+    const legacy: GraphEdge = { ...base, ratePerSec: 55, bytesPerSec: 55_000_000, consumers: 2 };
+    expect(edgeLabel(legacy)).toBe("↑ 55.00 Hz · 55.00 MB/s\n×2");
+    const preferred: GraphEdge = { ...legacy, tx: { hz: 60 } };
+    expect(edgeLabel(preferred)).toBe("↑ 60.00 Hz\n×2"); // tx wins over mirrors
+  });
+
+  it("keeps maxIntervalMs out of the label but in the hover detail", () => {
+    const e: GraphEdge = {
+      ...base,
+      tx: { hz: 59.9, bytesPerSec: 377_000_000, maxIntervalMs: 25 },
+      rx: { hz: 35.2, maxIntervalMs: 112 },
+      dropPerSec: 24.7,
+      lossy: true,
+    };
+    expect(edgeLabel(e)).not.toContain("ms");
+    const detail = edgeDetail(e);
+    expect(detail).toContain("camera/123/convert → win/t-1/kcf [in]");
+    expect(detail).toContain("tx 59.90 Hz · 377.00 MB/s · worst gap 25 ms");
+    expect(detail).toContain("rx 35.20 Hz · worst gap 112 ms");
+    expect(detail).toContain("drops 24.7/s (lossy latest-wins)");
+  });
+
+  it("toElements marks dropping edges with the warning class + detail data", () => {
+    const t = deriveTopology([], PIPES, 1, 0);
+    t.edges[0] = { ...t.edges[0], tx: { hz: 60 }, rx: { hz: 30 }, dropPerSec: 30, lossy: true };
+    const els = toElements(t);
+    const edges = els.filter((e) => e.group === "edges");
+    expect(edges[0].classes).toBe("dropping");
+    expect(edges[0].data.detail).toContain("drops 30.0/s");
+    expect(edges[1].classes).toBe(""); // unmetered edge stays quiet
   });
 });

@@ -23,6 +23,7 @@
 //     changes — stats-only refreshes at 1 Hz must never move nodes.
 
 import type {
+  EdgeFlow,
   GraphEdge,
   GraphNode,
   GraphTopology,
@@ -30,6 +31,7 @@ import type {
   StreamType,
 } from "@lib/orchestrator/graph-contract";
 import { nodeId } from "@lib/orchestrator/graph-contract";
+import { humanBytesPerSec, humanHz } from "@lib/orchestrator/stats";
 import type { PipeAdvert } from "@lib/orchestrator/pipe-contract";
 import type { Dtype } from "../../../docs/schema/pixel-formats.js";
 import { utilizationLevel, type WorkloadRow, type WorkloadCounterRow } from "./workload-view";
@@ -236,12 +238,64 @@ function edgeId(e: GraphEdge): string {
   return `edge:${e.from}->${e.to}#${e.port}`;
 }
 
-function edgeLabel(e: GraphEdge): string {
+/** Directional flow fields, preferring the new tx/rx shape; the deprecated
+ *  single-direction `ratePerSec`/`bytesPerSec` mirrors map to a tx-only view
+ *  (older orchestrator snapshots). */
+function txOf(e: GraphEdge): EdgeFlow | undefined {
+  if (e.tx) return e.tx;
+  if (e.ratePerSec !== undefined || e.bytesPerSec !== undefined)
+    return { hz: e.ratePerSec, bytesPerSec: e.bytesPerSec };
+  return undefined;
+}
+
+/** Drop marker shows ONLY on lossy (latest-wins) links actually dropping —
+ *  a FIFO link never shows one, an idle lossy link stays quiet. */
+export function isDropping(e: GraphEdge): boolean {
+  return !!e.lossy && (e.dropPerSec ?? 0) > 0;
+}
+
+function flowLine(arrow: string, f: EdgeFlow | undefined): string | null {
+  if (!f) return null;
   const parts: string[] = [];
-  if (e.ratePerSec !== undefined) parts.push(`${fmtRate(e.ratePerSec)} fps`);
-  if (e.bytesPerSec !== undefined) parts.push(`${(e.bytesPerSec / 1e6).toFixed(1)} MB/s`);
-  if (e.consumers !== undefined) parts.push(`×${e.consumers}`);
-  return parts.join(" ");
+  if (f.hz !== undefined) parts.push(humanHz(f.hz));
+  if (f.bytesPerSec !== undefined) parts.push(humanBytesPerSec(f.bytesPerSec));
+  return parts.length > 0 ? `${arrow} ${parts.join(" · ")}` : null;
+}
+
+/** Always-on edge caption — kept compact: one line per metered direction
+ *  (humanized via stats.ts — raw numbers stay in the JSON snapshot), plus a
+ *  warning-red drop marker (see `edge.dropping` styling in the panel) and the
+ *  consumer refcount. `maxIntervalMs` lives in the hover detail instead. */
+export function edgeLabel(e: GraphEdge): string {
+  const lines = [flowLine("↑", txOf(e)), flowLine("↓", e.rx)].filter(
+    (l): l is string => l !== null,
+  );
+  const extras: string[] = [];
+  if (isDropping(e)) extras.push(`− ${fmtRate(e.dropPerSec!)}/s`);
+  if (e.consumers !== undefined) extras.push(`×${e.consumers}`);
+  if (extras.length > 0) lines.push(extras.join(" "));
+  return lines.join("\n");
+}
+
+/** Hover detail (rendered as a tooltip by the panel): full directional
+ *  breakdown including the worst inter-arrival gap, which is too long for the
+ *  always-on label. */
+export function edgeDetail(e: GraphEdge): string {
+  const lines = [`${e.from} → ${e.to} [${e.port}]`];
+  const dir = (name: string, f: EdgeFlow | undefined): void => {
+    if (!f) return;
+    const parts: string[] = [];
+    if (f.hz !== undefined) parts.push(humanHz(f.hz));
+    if (f.bytesPerSec !== undefined) parts.push(humanBytesPerSec(f.bytesPerSec));
+    if (f.maxIntervalMs !== undefined && f.maxIntervalMs > 0)
+      parts.push(`worst gap ${f.maxIntervalMs.toFixed(0)} ms`);
+    if (parts.length > 0) lines.push(`${name} ${parts.join(" · ")}`);
+  };
+  dir("tx", txOf(e));
+  dir("rx", e.rx);
+  if (isDropping(e)) lines.push(`drops ${fmtRate(e.dropPerSec!)}/s (lossy latest-wins)`);
+  if (e.consumers !== undefined) lines.push(`consumers ×${e.consumers}`);
+  return lines.join("\n");
 }
 
 /** Reduce a topology to cytoscape element definitions. Pure data — the panel
@@ -260,7 +314,14 @@ export function toElements(t: GraphTopology): GraphElement[] {
     if (!known.has(e.from) || !known.has(e.to)) continue;
     els.push({
       group: "edges",
-      data: { id: edgeId(e), source: e.from, target: e.to, label: edgeLabel(e) },
+      data: {
+        id: edgeId(e),
+        source: e.from,
+        target: e.to,
+        label: edgeLabel(e),
+        detail: edgeDetail(e),
+      },
+      classes: isDropping(e) ? "dropping" : "",
     });
   }
   return els;

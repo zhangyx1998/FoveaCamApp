@@ -1,8 +1,10 @@
 <script lang="ts">
 import { computed, Ref, shallowReactive } from "vue";
 
-// @ts-ignore
-import SplashDataURL from "./RemoteCanvasSplash.svg";
+// Explicit `?url` keeps Vite's default asset handling for this import (the
+// svg-loader plugin would otherwise compile a bare `.svg` import into a Vue
+// component); typed as string by @zhangyx1998/svg-loader/client.
+import SplashDataURL from "./RemoteCanvasSplash.svg?url";
 
 // Parse data url (data:image/svg+xml;base64,...) to get SVG content
 function parseDataUrl(dataUrl: string): string {

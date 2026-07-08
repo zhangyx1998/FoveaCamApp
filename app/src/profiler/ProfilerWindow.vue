@@ -11,7 +11,7 @@
      camera taps. -->
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useSession, rendererLoopLag, orchestratorSpans, dumpPerfSnapshot } from "@lib/orchestrator/client";
 import { system, controller, type PerfSnapshot, type Span } from "@lib/orchestrator/contracts";
 import { tracking } from "@modules/tracking-single/contract";
@@ -20,6 +20,11 @@ import { workloadRows, utilizationLevel, UTILIZATION_HIGH, type WorkloadRow } fr
 import { pipes } from "@lib/orchestrator/pipe-contract";
 import type { GraphTopology } from "@lib/orchestrator/graph-contract";
 import { deriveTopology, selectTopology } from "./graph-view";
+import {
+  REPORT_INTERVAL_KEY,
+  REPORT_INTERVAL_OPTIONS,
+  parseReportInterval,
+} from "./graph-interactions";
 import GraphPanel from "./GraphPanel.vue";
 import Sparkline from "../components/Sparkline.vue";
 import PosView from "@src/components/PosView.vue";
@@ -153,9 +158,25 @@ function togglePinned(): void {
   window.foveaBridge.setWindowPinned(pinned.value);
 }
 
+// Configurable report rate: how often the profiler polls `perfSnapshot`.
+// This bounds how often edge stats (incl. max packet interval) are SAMPLED —
+// the meters' capture windows are unaffected. Persisted so the choice
+// survives reopen/reload.
+const reportIntervalMs = ref(
+  parseReportInterval(localStorage.getItem(REPORT_INTERVAL_KEY)),
+);
+function restartTimer(): void {
+  if (timer) clearInterval(timer);
+  timer = setInterval(() => void tick(), reportIntervalMs.value);
+}
+watch(reportIntervalMs, (ms) => {
+  localStorage.setItem(REPORT_INTERVAL_KEY, String(ms));
+  restartTimer();
+});
+
 onMounted(() => {
   void tick();
-  timer = setInterval(() => void tick(), 1000);
+  restartTimer();
   if (pinned.value) window.foveaBridge.setWindowPinned(true);
 });
 onUnmounted(() => {
@@ -205,29 +226,42 @@ const clockRows = computed(() => {
 </script>
 
 <template>
-  <TitleBar title="FoveaCam Duo" subtitle="Profiler" @height="(h) => (titleBarHeight = h)" />
+  <TitleBar title="FoveaCam Duo" subtitle="Profiler" @height="(h) => (titleBarHeight = h)">
+    <!-- Snapshot controls live on the title bar (the old header's h1 was
+         redundant with the bar's subtitle). Compact styling for the ~40px
+         bar; the last saved path shows as a truncated span (full path in
+         its tooltip). -->
+    <div class="bar-actions">
+      <span v-if="savedPath" class="saved-path" :title="'Last snapshot: ' + savedPath">
+        {{ savedPath }}
+      </span>
+      <select
+        v-model.number="reportIntervalMs"
+        class="report-rate"
+        aria-label="Report rate"
+        title="Report rate — how often perfSnapshot is polled; bounds how often edge stats (incl. max packet interval) are sampled"
+      >
+        <option v-for="o in REPORT_INTERVAL_OPTIONS" :key="o.ms" :value="o.ms">
+          {{ o.label }}
+        </option>
+      </select>
+      <button
+        class="pin"
+        :class="{ active: pinned }"
+        @click="togglePinned"
+        :title="pinned ? 'Unpin — stop keeping this window on top' : 'Pin — keep this window on top'"
+      >
+        {{ pinned ? "📌 Pinned" : "📌 Pin" }}
+      </button>
+      <button @click="exportSnapshot" title="Write a perf snapshot JSON to disk">
+        {{ exportStatus === "saving" ? "Saving…" : exportStatus === "saved" ? "Saved" : exportStatus === "error" ? "Failed" : "Export snapshot" }}
+      </button>
+      <button @click="openSnapshotFolder" title="Reveal the perf-snapshots folder in Finder">
+        Open folder
+      </button>
+    </div>
+  </TitleBar>
   <div class="profiler" :style="{ top: titleBarHeight + 'px' }">
-    <header>
-      <h1>Orchestrator Profiler</h1>
-      <div class="snapshot-controls">
-        <button
-          class="pin"
-          :class="{ active: pinned }"
-          @click="togglePinned"
-          :title="pinned ? 'Unpin — stop keeping this window on top' : 'Pin — keep this window on top'"
-        >
-          {{ pinned ? "📌 Pinned" : "📌 Pin" }}
-        </button>
-        <button @click="exportSnapshot">
-          {{ exportStatus === "saving" ? "Saving…" : exportStatus === "saved" ? "Saved" : exportStatus === "error" ? "Failed" : "Export snapshot" }}
-        </button>
-        <button @click="openSnapshotFolder" title="Reveal the perf-snapshots folder in Finder">
-          Open snapshot folder
-        </button>
-        <span v-if="savedPath" class="saved-path mono" :title="savedPath">{{ savedPath }}</span>
-      </div>
-    </header>
-
     <section>
       <h2>Event-loop lag</h2>
       <div class="row">
@@ -469,6 +503,53 @@ const clockRows = computed(() => {
 </template>
 
 <style scoped lang="scss">
+// Snapshot controls in the title bar's actions slot (slot content compiles in
+// this component's scope, so these stay scoped styles). Sized for the ~40px
+// bar: compact padding, small monospace type matching the profiler body.
+.bar-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0; // let the path truncate instead of pushing the bar wider
+  font-family: "Cascadia Code", "Courier New", Courier, monospace;
+
+  button,
+  select {
+    background: #222;
+    color: #ddd;
+    border: 1px solid #333;
+    border-radius: 4px;
+    padding: 0.15rem 0.5rem;
+    font-size: 0.72rem;
+    font-family: inherit;
+    cursor: pointer;
+    white-space: nowrap;
+    &:hover {
+      background: #2a2a2a;
+    }
+  }
+
+  .pin.active {
+    background: #74b1be;
+    color: #10161a;
+    border-color: #74b1be;
+    &:hover {
+      background: #86bfca;
+    }
+  }
+
+  .saved-path {
+    color: #888;
+    font-size: 0.68rem;
+    max-width: 18rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    direction: rtl; // keep the filename visible when truncating
+    text-align: left;
+  }
+}
+
 .profiler {
   position: fixed;
   left: 0;
@@ -480,53 +561,6 @@ const clockRows = computed(() => {
   font-family: "Cascadia Code", "Courier New", Courier, monospace;
   padding: 1rem 1.5rem 3rem;
   box-sizing: border-box;
-
-  header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 1rem;
-    h1 {
-      font-size: 1.1rem;
-      font-weight: 600;
-      margin: 0;
-    }
-    button {
-      background: #222;
-      color: #ddd;
-      border: 1px solid #333;
-      border-radius: 4px;
-      padding: 0.4rem 0.8rem;
-      cursor: pointer;
-      &:hover {
-        background: #2a2a2a;
-      }
-    }
-    .snapshot-controls {
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-      min-width: 0; // let the path truncate instead of overflowing the header
-      .pin.active {
-        background: #74b1be;
-        color: #10161a;
-        border-color: #74b1be;
-        &:hover {
-          background: #86bfca;
-        }
-      }
-      .saved-path {
-        color: #888;
-        font-size: 0.72rem;
-        max-width: 22rem;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-        direction: rtl; // keep the filename visible when truncating
-        text-align: left;
-      }
-    }
-  }
 
   section {
     margin-bottom: 1.5rem;
