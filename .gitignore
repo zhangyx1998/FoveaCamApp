@@ -26,6 +26,9 @@ compile_commands.json
 # Electron APP
 .dist
 *.tsbuildinfo
+# Window entry HTML — GENERATED from the @lib/windows registry by the
+# foveaWindowEntries vite plugin (A-27); never hand-edited, never committed.
+app/windows/*.html
 
 # Temporary files
 *.tmp

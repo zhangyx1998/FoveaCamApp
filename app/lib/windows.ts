@@ -276,9 +276,23 @@ export function allEntries(): Record<string, string> {
   return entries;
 }
 
+/** Document (pre-mount OS) title for a generated entry HTML, keyed by the
+ *  `allEntries()` key (window-class name for the static classes, app id for
+ *  app windows). Consumed by the `foveaWindowEntries` vite plugin (A-27) so the
+ *  registry is the single source for titles too. The live TitleBar /
+ *  BrowserWindow title governs once the Vue app mounts — this is only what the
+ *  OS shows before boot. App titles derive from `APP_REGISTRY` uniformly. */
+export function entryTitle(key: string): string {
+  const cls = WINDOWS[key as WindowClass];
+  if (cls?.entry) return cls.title;
+  const app = appById(key);
+  if (app) return `FoveaCam Duo — ${app.title}`;
+  throw new Error(`Unknown window entry key: ${key}`);
+}
+
 /** Derive the app id back out of an app-window entry URL/pathname (the app
- *  entries all share one script — `src/windows/app-window.ts` reads its own
- *  identity from the page URL). */
+ *  entries all share one generated boot script — `src/windows/boot-entry.ts`
+ *  dispatches on the entry key). */
 export function appIdFromPathname(pathname: string): string | null {
   const m = /(?:^|\/)windows\/([\w-]+)\.html$/.exec(pathname);
   if (!m) return null;
