@@ -102,6 +102,16 @@ void (async () => {
     }, DEADLINE_MS);
   });
   await Promise.race([run(), deadline]);
+  // Release the native module's per-env contexts NOW, while statics are
+  // alive — leaving it to process.exit teardown runs the same hooks after
+  // static mutex destruction and spams "[Cleanup] … mutex lock failed:
+  // Invalid argument" (harmless but reads like a crash; rig 2026-07-08).
+  try {
+    const { cleanup } = await import("core");
+    cleanup();
+  } catch {
+    // core may not have loaded at all (nothing to clean).
+  }
   log("done");
   process.exit(0);
 })();

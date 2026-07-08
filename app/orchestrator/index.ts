@@ -319,21 +319,30 @@ function quiesceAndExit(code: number): void {
     } catch {
       /* parent may already be gone */
     }
+    // Give the parentPort pipe a beat to FLUSH the confirmation — exiting
+    // right after postMessage can drop it, and a lost `quiesced` makes main
+    // run the janitor after a perfectly clean shutdown.
+    await new Promise((r) => setTimeout(r, 100));
     shutdown();
     process.exit(code);
   })();
 }
 
-// A JS-level crash must still leave the hardware safe — quiesce, then die
+// A JS-level CRASH must still leave the hardware safe — quiesce, then die
 // nonzero (main's janitor stays as the backstop for native aborts, which
 // never reach these handlers).
 process.on("uncaughtException", (err) => {
   console.error("[orchestrator] uncaughtException:", err);
   quiesceAndExit(1);
 });
+// A rejection is NOT a crash: teardown paths (worker termination, dropped
+// pipes on app exit) reject benignly, and Electron's utilityProcess default
+// was warn-and-continue. Exiting here turned every sub-app exit into an
+// orchestrator death + janitor sweep (rig 2026-07-08) — log loudly, surface
+// to renderers, keep running.
 process.on("unhandledRejection", (reason) => {
   console.error("[orchestrator] unhandledRejection:", reason);
-  quiesceAndExit(1);
+  hub.reportError("unhandledRejection", String(reason));
 });
 
 // --- accept renderer connections brokered by the main process ------------

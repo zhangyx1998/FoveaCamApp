@@ -271,7 +271,9 @@ function startOrchestrator() {
     orchestrator = null;
     // Safety invariant: an exit without the `quiesced` handshake means the
     // MEMS controller and cameras may still be armed — clean up out-of-process.
-    if (!orchestratorQuiesced)
+    // Exit code 0 only comes from quiesceAndExit(0) (graceful paths), so treat
+    // it as clean even if the confirmation message lost the flush race.
+    if (!orchestratorQuiesced && code !== 0)
       void ensureJanitor(`orchestrator exited (code ${code}) without quiescing`);
     // A dead orchestrator has nothing left to drain — unblock any switch
     // waiting on it rather than letting it time out.
