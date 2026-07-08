@@ -19,6 +19,13 @@
 // slice-center as params (recomputed on each throttled volt/target update). The
 // worker posts back the processed frames + learned size. The native KCF thread
 // is UNCHANGED — it reads the raw center stream directly, not the pipe.
+//
+// 2a re-plumb: the L/C/R main VIEWS no longer ride the kernel — the renderer
+// binds their undistort pipes directly (camera rate, off the kernel's fps
+// path). The kernel now serves only the DERIVED `center` composite (magnified
+// slice, or diff/depth). The fovea homographies still feed the kernel because
+// the diff/depth composite warps the raw L/R into alignment internally; they
+// are no longer a view-relay input.
 
 import { type ServerSession } from "@orchestrator/runtime";
 import { defineResourceSession, type ResourceScope } from "@orchestrator/resource-session";
@@ -192,7 +199,12 @@ export default function trackingSession(
     // --- worker params (main computes calibration-derived matrices) -------
 
     /** Fovea homographies + depth Q-matrix at the current pose — pushed on each
-     *  throttled volt update (cheap; the worker uses the latest). */
+     *  throttled volt update (cheap; the worker uses the latest).
+     *  2a: the fovea homographies now feed ONLY the kernel's diff/depth
+     *  composite (it warps the raw L/R into alignment before diff/disparity).
+     *  The L/R main VIEWS no longer come from the kernel — they bind the
+     *  homography undistort pipes directly (index.vue) — so H is no longer a
+     *  view-relay input; the push survives purely for the diff/depth product. */
     function voltParams(): DisplayParams {
       if (!triple) return {};
       const HL = triple.conv.A2H.L(triple.conv.V2A.L(volts.L));
@@ -243,6 +255,13 @@ export default function trackingSession(
         s.telemetry({ size: v.size });
       }
       for (const f of r.frames) {
+        // 2a: the L/R views are pipe-sourced now, so the session no longer
+        // republishes the kernel's L/R passthrough relays — only the derived
+        // `center` composite. (The SHARED display kernel still computes L/R
+        // internally for the diff/depth warp and emits them here; suppressing
+        // that emission at the source is a kernel-side change deferred to the
+        // planner, since the kernel is shared with manual-control.)
+        if (f.name !== "center") continue;
         s.frame(f.name, makeMat(new Uint8Array(f.buffer), [f.height, f.width], f.channels));
       }
     }
@@ -292,7 +311,6 @@ export default function trackingSession(
         kind: "display",
         zoom: Math.max(1, s.state.zoom),
         view: s.state.view,
-        wrap: s.state.wrap,
         ...voltParams(),
         ...sliceAtParam(),
         ...depthParams(),
@@ -486,9 +504,6 @@ export default function trackingSession(
         },
         view(view) {
           pushParams({ view });
-        },
-        wrap(wrap) {
-          pushParams({ wrap });
         },
         baseline() {
           pushParams({ ...voltParams(), ...depthParams() });

@@ -31,7 +31,6 @@ export const tracking = defineContract({
     shift: 0, // vertical shift (deg)
     // Display parameters.
     zoom: 9, // fovea (sliced center) magnification
-    wrap: true, // perspective-wrap L/R foveae into alignment
     view: "sliced" as "sliced" | "diff" | "depth", // `center` frame content
     depthWindowInv: 0, // depth-view near/far window (0 → ∞)
     // Tracker parameters (renderer resolves defaults; concrete pixels here).
@@ -60,9 +59,11 @@ export const tracking = defineContract({
       frameAgeAtActuate: { mean: 0, max: 0 } as Stat,
     },
   },
-  // L/C/R are the processed previews (C undistorted, L/R perspective-wrapped);
-  // `center` is the magnified fovea crop around the target.
-  frames: ["L", "C", "R", "center"] as const,
+  // 2a re-plumb: the L/C/R views now source their undistort pipes DIRECTLY
+  // (usePipeFrame), so they are no longer session frames. `center` — the
+  // magnified fovea crop, or the diff/depth composite — is the only genuinely
+  // kernel-DERIVED frame the session still publishes.
+  frames: ["center"] as const,
   commands: {
     /** Engage the KCF tracker centered at a center-frame pixel. */
     startTracker: cmd<Point2d>(),

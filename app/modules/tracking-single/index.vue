@@ -12,8 +12,9 @@ You may find the full license in project root directory.
   overlays telemetry, and drives parameters/commands — no `core`, camera, or
   calibration access.
 
-  Display vision (undistorted center, sliced/diff/depth fovea views, perspective
-  wrap) now runs in the orchestrator session and arrives here as processed frames.
+  Views (2a): the L/C/R main views source their undistort pipes DIRECTLY (camera
+  rate, off the kernel's fps path); only the `center` fovea view (sliced /
+  diff / depth composite) arrives as a kernel-derived `session.frame`.
 
   This module has no capture/recording of its own; manual-control's are
   orchestrator-side (modules/manual-control/{capture,recording}.ts) — reuse
@@ -40,13 +41,28 @@ const session = useSession(tracking, "tracking");
 // (§12.3 R3) — read/write them as plain reactive properties below, no `.value`.
 const { state, telemetry } = session;
 
-// Processed preview frames fanned from the orchestrator: L/R perspective-
-// wrapped, `center` the magnified fovea crop around the target (vision worker).
-// real-1g (C-23): the wide view binds the first-class UNDISTORTED pipe when the
-// session advertises it — the bbox/target overlays are computed in undistorted
-// pixel space, so this is their correct backdrop (the raw pipe was slightly
-// misaligned under distortion). Falls back to raw on uncalibrated rigs.
-const { L: frameL, R: frameR, center: frameCenter } = useFrames(session, ["L", "R", "center"]);
+// View sourcing (2a re-plumb): the L/R main views bind the first-class
+// HOMOGRAPHY undistort pipes (`camera/<serial>/undistort`) DIRECTLY, exactly
+// like the C wide view below. These carry the same perspective-wrapped fovea
+// content the display kernel used to relay as `L`/`R` session frames, but at
+// camera rate — the kernel-relayed views were fps-gated by the kernel's
+// throughput (proposal §2, the view-fps bottleneck). The homography pipe is
+// always advertised (it passes frames through until the feeder's H samples
+// flow), so no raw-convert fallback is needed here.
+//
+// Only `center` — the magnified fovea slice, or the diff/depth composite — is a
+// genuinely kernel-DERIVED frame and stays on `session.frame`.
+const frameL = usePipeFrame(() =>
+  state.serials?.L ? nodeId.undistort(state.serials.L) : null,
+);
+const frameR = usePipeFrame(() =>
+  state.serials?.R ? nodeId.undistort(state.serials.R) : null,
+);
+const { center: frameCenter } = useFrames(session, ["center"]);
+// real-1g (C-23): the wide view binds the first-class UNDISTORTED center pipe
+// when the session advertises it — the bbox/target overlays are computed in
+// undistorted pixel space, so this is their correct backdrop (the raw pipe was
+// slightly misaligned under distortion). Falls back to raw on uncalibrated rigs.
 const frameC = usePipeFrame(() =>
   state.undistortPipe ?? (state.serials?.C ? nodeId.convert(state.serials.C) : null),
 );
@@ -115,7 +131,7 @@ const releaseTracker = () => session.call("releaseTracker", undefined);
       <StreamView
         class="stream"
         :title="ROLE.L"
-        :payload="frameL.payload.value" :source="frameL.source"
+        :payload="frameL"
         :theme="THEME.L"
       />
       <PosView :pos="telemetry.volt.L" :color="THEME.L" style="width: 100%" />
@@ -153,11 +169,6 @@ const releaseTracker = () => session.call("releaseTracker", undefined);
           </select>
         </label>
         <span>|</span>
-        <label>
-          <span>Wrap</span>
-          <input type="checkbox" v-model="state.wrap" />
-        </label>
-        <span>|</span>
         <button class="debug-btn" title="Toggle the annotation overlay in its own window" @click="toggleDebug">
           Debug ▸
         </button>
@@ -174,7 +185,7 @@ const releaseTracker = () => session.call("releaseTracker", undefined);
       <StreamView
         class="stream"
         :title="ROLE.R"
-        :payload="frameR.payload.value" :source="frameR.source"
+        :payload="frameR"
         :theme="THEME.R"
       />
       <PosView :pos="telemetry.volt.R" :color="THEME.R" style="width: 100%" />
