@@ -60,6 +60,9 @@ declare module "core/Aravis" {
     // ExposureActive for synced capture (LineSelector + LineMode +
     // LineSource) — see docs/refactor/synced-capture.md §6.
     getFeature(name: string): string;
+    /** Read an integer GenICam node (e.g. `Width`/`Height`) — `getFeature` uses
+     *  `arv_camera_get_string` and throws on integer nodes. */
+    getFeatureInt(name: string): number;
     setFeature(name: string, value: string): void;
     executeFeature(name: string): void;
 

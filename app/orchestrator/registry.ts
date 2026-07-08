@@ -47,11 +47,13 @@ export function setRegistryPipeSeam(seam: RegistryPipeSeam | null): void {
  *  acquire chain. Camera resolution comes from GenICam (no `Camera` accessor). */
 export function advertiseCameraPipe(
   seam: RegistryPipeSeam,
-  camera: Pick<Camera, "serial" | "getFeature">,
+  camera: Pick<Camera, "serial" | "getFeatureInt">,
 ): string {
   const pipeId = `camera:${camera.serial}`;
-  const width = Number(camera.getFeature("Width"));
-  const height = Number(camera.getFeature("Height"));
+  // Width/Height are integer GenICam nodes — `getFeature` (arv_camera_get_string)
+  // throws "Not a ArvGcString" on them; use the integer accessor.
+  const width = camera.getFeatureInt("Width");
+  const height = camera.getFeatureInt("Height");
   const channels = 4;
   seam.advertise({
     id: pipeId,

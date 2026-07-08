@@ -29,9 +29,8 @@ function fakeSeam(): RegistryPipeSeam & {
 const fakeCamera = (serial: string, w: number, h: number) =>
   ({
     serial,
-    getFeature: (k: string) =>
-      k === "Width" ? String(w) : k === "Height" ? String(h) : "",
-  }) as unknown as Pick<Camera, "serial" | "getFeature">;
+    getFeatureInt: (k: string) => (k === "Width" ? w : k === "Height" ? h : 0),
+  }) as unknown as Pick<Camera, "serial" | "getFeatureInt">;
 
 describe("registry camera-pipe seam (real-1c)", () => {
   it("advertises a BGRA8 camera:<serial> pipe with the camera's geometry + attaches", () => {

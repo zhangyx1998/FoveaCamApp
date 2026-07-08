@@ -93,6 +93,7 @@ public:
             INSTANCE_ACCESSOR(CameraObject, trigger_source),           //
             INSTANCE_GETTER(CameraObject, trigger_source_options),     //
             INSTANCE_METHOD(CameraObject, getFeature),                 //
+            INSTANCE_METHOD(CameraObject, getFeatureInt),              //
             INSTANCE_METHOD(CameraObject, setFeature),                 //
             INSTANCE_METHOD(CameraObject, executeFeature),             //
             INSTANCE_GETTER(CameraObject, exposure_time_available),    //
@@ -223,6 +224,15 @@ private:
     try {
       auto name = info[0].As<String>().Utf8Value();
       return String::New(env, core()->get_feature(name.c_str()));
+    }
+    JS_EXCEPT(env.Undefined())
+  }
+  // Integer GenICam node access (Width/Height/etc.) — `getFeature` uses
+  // `arv_camera_get_string` and throws on integer nodes ("Not a ArvGcString").
+  FN(getFeatureInt) {
+    try {
+      auto name = info[0].As<String>().Utf8Value();
+      return Number::New(env, static_cast<double>(core()->get_feature_int(name.c_str())));
     }
     JS_EXCEPT(env.Undefined())
   }

@@ -167,6 +167,13 @@ public:
     Error::check("arv_camera_get_string");
     return ret ? std::string(ret) : std::string();
   }
+  /* Integer GenICam node access (e.g. Width/Height, which are ArvGcIntegerNode
+   * and would fail `arv_camera_get_string`). */
+  inline int64_t get_feature_int(const char *name) const {
+    auto ret = arv_camera_get_integer(get(), name, &Error::error);
+    Error::check("arv_camera_get_integer");
+    return ret;
+  }
   inline void set_feature(const char *name, const char *value) const {
     arv_camera_set_string(get(), name, value, &Error::error);
     Error::check("arv_camera_set_string");
