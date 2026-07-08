@@ -38,6 +38,14 @@ import { bilinearInterpolate, CORNER_OBJ_POINTS, getInternalObjectPoints } from 
 import abortableNext from "@lib/abortable.next";
 import { report } from "./diagnostics.js";
 import { activeController } from "./controller.js";
+import { PID2D, type PidParams } from "@lib/pid";
+import { nodeId } from "@lib/orchestrator/graph-contract";
+import {
+  createPidNode,
+  outputOf,
+  type OverrideSlot,
+  type PidNodeHandle,
+} from "./pid-node.js";
 
 export type TrackerRecord = { img_pts: Point2d[]; obj_pts: Point3d[] };
 export type TrackerTarget = MarkerDetectResult & TrackerRecord;
@@ -58,6 +66,12 @@ export class MarkerTracker {
   private task: ReturnType<typeof abortableNext> | null = null;
   private readonly listeners = new Set<() => void>();
 
+  /** The serial of the camera this tracker consumes — the graph-node key for
+   *  its marker-detection source (`nodeId.detect(serial)`), used by `startServo`
+   *  to wire the servo's PID node input edge. */
+  get serial(): string {
+    return this.camera.serial;
+  }
   get target(): TrackerTarget | null {
     return this._target;
   }
@@ -174,31 +188,84 @@ export class MarkerTracker {
   }
 }
 
+/** Overshoot-guarded return-to-origin step: moves `p` (the signed error from
+ *  origin) toward zero by up to `kp`, never past it — a SATURATING step, not a
+ *  linear gain (unchanged from the original hand-rolled servo). */
 function backToCenter(p: number, kp: number): number {
   return -clamp(Math.sign(p) * kp, [Math.min(0, p), Math.max(0, p)]);
 }
+
+/** Topology-only downstream node id for each eye's pid → controller edge. The
+ *  servo actuates the shared `activeController()` (no per-port MEMS id reaches
+ *  here), so this is a stable placeholder the wiring shim renders as a
+ *  `controller` node — same convention as disparity-scope's CONTROLLER_NODE_ID. */
+const CONTROLLER_NODE_ID = "controller";
 
 export interface ServoOptions {
   kp?: number;
   originLeft?: () => Point2d;
   originRight?: () => Point2d;
   /** Manual override, checked every tick — takes priority over the
-   *  tracker-driven command (matches the original's drag-to-override). */
+   *  tracker-driven command (matches the original's drag-to-override). Bridged
+   *  into the per-eye PID node's ruled override slot (see {@link startServo}). */
   overrideLeft?: () => Pos | null;
   overrideRight?: () => Pos | null;
+  /** Composing window/session id for the servo's graph nodes (`win/<owner>/...`).
+   *  Callers that don't pass one get a generic default — a follow-up threads the
+   *  real session id through here once the call sites migrate. */
+  owner?: string;
 }
 
 export interface Servo {
   stop(): void;
+  /** The per-eye graph-visible PID controller nodes (null for an eye with no
+   *  tracker). Exposed so a follow-up can drive each node's override slot from
+   *  the reusable `pidOverride` contract command instead of the legacy
+   *  `overrideLeft`/`overrideRight` thunks. */
+  readonly nodes: {
+    left: PidNodeHandle<Pos> | null;
+    right: PidNodeHandle<Pos> | null;
+  };
+  /** Shortcut to each node's override slot (null for an absent eye). */
+  readonly override: {
+    left: OverrideSlot<Pos> | null;
+    right: OverrideSlot<Pos> | null;
+  };
 }
 
 /**
  * Visual-servo the controller toward `left`/`right` trackers' targets (or
- * back toward `origin*` when no target is visible) — port of the original
- * `actuate()`. Runs against the orchestrator's shared `activeController()`
- * (same holder tracking-single/manual-control's `startActuationLoop` reads),
- * not a passed-in facade — the caller doesn't own enable/disable bracketing
- * beyond calling `stop()`.
+ * back toward `origin*` when no target is visible) — the original `actuate()`
+ * control loop, rebuilt as a pair of graph-visible PID controller NODES
+ * (docs/proposals/pid-nodes-and-view-replumb.md). Runs against the
+ * orchestrator's shared `activeController()` (same holder tracking-single/
+ * manual-control's `startActuationLoop` reads), not a passed-in facade — the
+ * caller doesn't own enable/disable bracketing beyond calling `stop()`.
+ *
+ * CONTROL CORE. The original hand-rolled `pos += rel*kp` is a VELOCITY-FORM
+ * update: the running command is `previous + gain·error`. Mapped onto the
+ * uniform {@link PidParams} that is `ki = kp` with `kp = kd = 0` — the parallel
+ * PID output then collapses to its (unbounded, as the original never clamped)
+ * integrator, so `PID2D.step(rel)` returns `base + kp·rel` exactly (see
+ * @lib/pid). Each eye owns a `PID2D` (independent x/y integrators, exactly the
+ * original's component-wise `{x,y}` update); dt is 1 per detection tick. The
+ * integrator is RE-BASED on the live controller position (`c.pos.left/right`)
+ * every tick — the SAME base the original read — so the command sequence
+ * (including its DAC-quantized feedback) is bit-identical. The default `kp`
+ * (16.0) and the per-caller value (calibrate-drift passes 10.0) carry through
+ * unchanged as `ki`.
+ *
+ * OVERRIDE. The legacy per-eye `overrideLeft`/`overrideRight` thunks are bridged
+ * into each node's RULED override slot: a returned pose engages/updates it, a
+ * null RELEASES it. While engaged, `node.step` skips the control law and resets
+ * that eye's integrator each tick (no windup builds behind the drag); the output
+ * is the pinned pose. On release the node's `seed` reseeds the integrator from
+ * the LAST override so control resumes FROM the released pose — velocity-form
+ * continuity, no snap-back (the behavioral guarantee the ruled slot adds; the
+ * re-base already resumes from the dragged `c.pos`, and the seed keeps that true
+ * even if a future migration makes the integrator authoritative). The per-eye
+ * grain is preserved because each eye is a separate node: dragging ONE eye pins
+ * it while the other keeps servoing — a single all-or-nothing slot could not.
  */
 export function startServo(
   left: MarkerTracker | undefined,
@@ -206,37 +273,100 @@ export function startServo(
   opts: ServoOptions = {},
 ): Servo {
   const { kp = 16.0 } = opts;
+  const owner = opts.owner ?? "marker-servo";
   const pending: { left?: Pos; right?: Pos } = {};
   const disposers: Array<() => void> = [];
   let running = true;
   let enabledByUs = false;
 
-  function onLeftDetection(): void {
+  // Velocity-form params (see the doc comment): ki = kp, kp = kd = 0, unbounded.
+  const axis = (): PidParams => ({ kp: 0, ki: kp, kd: 0 });
+  const makePid = (): PID2D => new PID2D({ x: axis(), y: axis() });
+
+  /** Create the graph-visible PID node for one eye. Input edge = the eye's
+   *  marker-detection source (the tracker runs its own off-loop
+   *  `detector.stream`; there is no separately-registered detect brick, so
+   *  `camera/<serial>/detect` renders as a placeholder the wiring shim files
+   *  under this node — same treatment as the controller placeholder). Output
+   *  edge = the shared MEMS controller node. `seed` reseeds the integrator from
+   *  the last override for release continuity. */
+  const makeNode = (
+    side: "left" | "right",
+    tracker: MarkerTracker,
+    pid: PID2D,
+  ): PidNodeHandle<Pos> =>
+    createPidNode<Pos>({
+      id: nodeId.win(owner, "pid", side),
+      kind: "pid",
+      owner: nodeId.win(owner),
+      inputs: [{ from: nodeId.detect(tracker.serial), port: "marker", type: { kind: "detect" } }],
+      outputs: [{ to: CONTROLLER_NODE_ID, port: side }],
+      controllers: { pos: pid },
+      seed: (v) => {
+        pid.value = v;
+      },
+    });
+
+  const pidLeft = left ? makePid() : null;
+  const pidRight = right ? makePid() : null;
+  const nodeLeft = left && pidLeft ? makeNode("left", left, pidLeft) : null;
+  const nodeRight = right && pidRight ? makeNode("right", right, pidRight) : null;
+
+  /** The original per-eye control law, now the PID node's control fn (run by
+   *  `node.step` only when the override is NOT engaged). Re-bases the integrator
+   *  on the live `base` (= `c.pos.<eye>`), then either steps `pos += rel*kp`
+   *  (marker visible) or walks back toward `origin` via `backToCenter` (a
+   *  saturating step, seeded directly into the integrator — not a linear ki·e
+   *  term). */
+  function control(base: Pos, rel: Point2d | null, origin: Point2d, pid: PID2D): Pos {
+    pid.value = base;
+    if (rel) return pid.step(rel);
+    const cmd: Pos = {
+      x: base.x + backToCenter(base.x - origin.x, kp),
+      y: base.y + backToCenter(base.y - origin.y, kp),
+    };
+    pid.value = cmd;
+    return cmd;
+  }
+
+  function onDetection(
+    side: "left" | "right",
+    tracker: MarkerTracker,
+    pid: PID2D,
+    node: PidNodeHandle<Pos>,
+    overrideThunk: (() => Pos | null) | undefined,
+    originThunk: (() => Point2d) | undefined,
+  ): void {
     const c = activeController();
     if (!c) return;
-    const rel = left!.centerRelative;
-    const { x, y } = c.pos.left;
-    if (rel) {
-      pending.left = { x: x + rel.x * kp, y: y + rel.y * kp };
-    } else {
-      const origin = opts.originLeft?.() ?? { x: 0, y: 0 };
-      pending.left = { x: x + backToCenter(x - origin.x, kp), y: y + backToCenter(y - origin.y, kp) };
-    }
+    // Bridge the legacy per-eye override thunk into the node's ruled slot: a pose
+    // engages/updates it (idempotent), a null RELEASES it (release is a no-op
+    // when not engaged, so polling every tick is safe). [Follow-up: the call
+    // sites move to the `pidOverride` contract driving `node.override` directly,
+    // and this thunk bridge retires.]
+    const o = overrideThunk?.() ?? null;
+    if (o) node.override.engage(o);
+    else node.override.release();
+    const base = side === "left" ? c.pos.left : c.pos.right;
+    const origin = originThunk?.() ?? { x: 0, y: 0 };
+    // `node.step` runs `control` UNLESS overridden — then it resets `pid` and
+    // returns the pinned pose, so `pending` carries the override-or-servo command
+    // resolved for this tick (the old actuation-loop `override ?? pending` poll).
+    pending[side] = outputOf(node.step(() => control(base, tracker.centerRelative, origin, pid)));
   }
-  function onRightDetection(): void {
-    const c = activeController();
-    if (!c) return;
-    const rel = right!.centerRelative;
-    const { x, y } = c.pos.right;
-    if (rel) {
-      pending.right = { x: x + rel.x * kp, y: y + rel.y * kp };
-    } else {
-      const origin = opts.originRight?.() ?? { x: 0, y: 0 };
-      pending.right = { x: x + backToCenter(x - origin.x, kp), y: y + backToCenter(y - origin.y, kp) };
-    }
-  }
-  if (left) disposers.push(left.onDetection(onLeftDetection));
-  if (right) disposers.push(right.onDetection(onRightDetection));
+
+  if (left && pidLeft && nodeLeft)
+    disposers.push(
+      left.onDetection(() =>
+        onDetection("left", left, pidLeft, nodeLeft, opts.overrideLeft, opts.originLeft),
+      ),
+    );
+  if (right && pidRight && nodeRight)
+    disposers.push(
+      right.onDetection(() =>
+        onDetection("right", right, pidRight, nodeRight, opts.overrideRight, opts.originRight),
+      ),
+    );
 
   void (async () => {
     while (running) {
@@ -256,9 +386,10 @@ export function startServo(
           });
         }
         if (pending.left || pending.right) {
-          const left_ = opts.overrideLeft?.() ?? pending.left;
-          const right_ = opts.overrideRight?.() ?? pending.right;
-          await c.actuate({ left: left_, right: right_ });
+          // `pending` already carries the override-or-servo command (resolved in
+          // `onDetection` through each eye's PID node), so the loop just flushes
+          // it — the old `overrideLeft?.() ?? pending` poll now lives at the node.
+          await c.actuate({ left: pending.left, right: pending.right });
           delete pending.left;
           delete pending.right;
         } else {
@@ -271,9 +402,16 @@ export function startServo(
   })();
 
   return {
+    nodes: { left: nodeLeft, right: nodeRight },
+    override: {
+      left: nodeLeft?.override ?? null,
+      right: nodeRight?.override ?? null,
+    },
     stop() {
       running = false;
       for (const d of disposers) d();
+      nodeLeft?.dispose();
+      nodeRight?.dispose();
       if (enabledByUs) {
         activeController()?.disable();
         enabledByUs = false;
