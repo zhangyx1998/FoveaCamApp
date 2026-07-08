@@ -93,7 +93,10 @@ export class ServerSession<C extends Contract> {
   // publishes — measures "activate -> first frame" ("time to live stream")
   // generically for every session, without per-module instrumentation.
   private activatedAt: number | null = null;
-  private readonly commands = new Map<string, (arg: any) => any>();
+  private readonly commands = new Map<
+    string,
+    (arg: any, ctx?: { channel: Channel }) => any
+  >();
   private readonly stateWatchers = new Set<(key: string, value: any) => void>();
   private frameTransport: FrameTransport | null = null;
   private activateFn?: () => void;
@@ -114,10 +117,16 @@ export class ServerSession<C extends Contract> {
     this.telemetrySnapshot = cloneDefault(this.telemetryDefaults);
   }
 
-  /** Register a command handler (called when a client invokes it). */
+  /** Register a command handler (called when a client invokes it). The
+   *  optional second arg carries the CALLING channel (C-24: compose validates
+   *  the caller's authoritative windowId via `hub.windowIdOf(ctx.channel)`);
+   *  existing single-param handlers are unaffected. */
   command<K extends keyof CommandsOf<C>>(
     name: K,
-    handler: (arg: CommandsOf<C>[K]["arg"]) => CommandsOf<C>[K]["ret"] | Promise<CommandsOf<C>[K]["ret"]>,
+    handler: (
+      arg: CommandsOf<C>[K]["arg"],
+      ctx?: { channel: Channel },
+    ) => CommandsOf<C>[K]["ret"] | Promise<CommandsOf<C>[K]["ret"]>,
   ): this {
     this.commands.set(String(name), handler);
     return this;
@@ -246,7 +255,9 @@ export class ServerSession<C extends Contract> {
   attach(ch: Channel): void {
     this.channels.add(ch);
     for (const [cname, fn] of this.commands)
-      ch.handle(topic.command(this.name, cname), fn);
+      ch.handle(topic.command(this.name, cname), (arg: unknown) =>
+        fn(arg, { channel: ch }),
+      );
     // V4: replay a cached last-payload to a channel that declares interest
     // in a frame topic *after* it was already published — see `frame()`.
     // Every session attached to `ch` gets this callback; a lookup miss for a

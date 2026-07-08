@@ -23,6 +23,8 @@
 // planner arbitrates any later merge.
 
 import { cmd, defineContract } from "./protocol.js";
+import type { Serializable } from "./protocol.js";
+import type { StreamType } from "./graph-contract.js";
 import type { Dtype } from "../../../docs/schema/pixel-formats.js";
 
 /** Static typing of one advertised pipe. Mirrors the C++ `Pipe::PipeSpec`.
@@ -74,6 +76,29 @@ export type PipeAdvert = {
   epoch: number;
 };
 
+/** One composed node in the discovery Record (C-24 step 3). `owner` is set for
+ *  window-owned (`win/<windowId>/...`) nodes; camera-rooted composed bricks are
+ *  shared (refcounted across windows) and carry no owner. */
+export type NodeAdvert = {
+  kind: string;
+  output: StreamType | null;
+  epoch: number;
+  owner?: string;
+};
+
+/** Compose one node (C-24 two-mode, ruled): `id` must be EITHER under the
+ *  calling window's `win/<windowId>/` namespace (exclusive, window-owned,
+ *  torn down with the window) OR a legal camera-rooted brick path (shared,
+ *  refcount semantics — idempotent across windows; refs→0 parks or tears
+ *  down by brick kind). `inputs` maps the brick's named ports to upstream
+ *  node ids. */
+export type ComposeRequest = {
+  id: string;
+  kind: string;
+  inputs: Record<string, string>;
+  params?: Serializable;
+};
+
 export const pipes = defineContract({
   state: {
     /** Every advertised pipe, keyed by pipeId (C-20 dynamic discovery). Seeded
@@ -81,6 +106,9 @@ export const pipes = defineContract({
      *  un-advertise (delta) — the renderer reacts to pipes appearing/vanishing
      *  at runtime by diffing this Record, like viewer's `files`. */
     pipes: {} as Record<string, PipeAdvert>,
+    /** Every COMPOSED node, keyed by node id (C-24 step 3) — the same
+     *  epoch-diff discovery discipline as `pipes`. */
+    nodes: {} as Record<string, NodeAdvert>,
   },
   telemetry: {},
   // No per-frame frame topics: once connected, pixels flow purely through the
@@ -93,6 +121,11 @@ export const pipes = defineContract({
     /** Release a consumer (refcount--). At zero the publisher pauses
      *  production, but the pipe stays advertised and is reconnectable. */
     disconnectPipe: cmd<{ pipeId: string }, void>(),
+    /** Materialize a node (C-24 two-mode — see ComposeRequest). Idempotent per
+     *  (window, id): a re-compose refs the existing node. */
+    compose: cmd<ComposeRequest, NodeAdvert>(),
+    /** Unref (camera-rooted) / tear down (win-rooted) a composed node. */
+    decompose: cmd<{ id: string }, void>(),
   },
 });
 

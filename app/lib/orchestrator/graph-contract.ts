@@ -115,6 +115,10 @@ export const nodeId = {
   undistort: (serial: string): string => `camera/${serial}/undistort`,
   /** Native KCF tracker stream (track results; non-pipe transport). */
   kcf: (serial: string): string => `camera/${serial}/kcf`,
+  /** Native MULTI-target KCF stream (B-25: one thread, batched per-frame
+   *  targets). One STABLE id regardless of cal mode — fused undistort is a
+   *  brick PARAM, not identity. */
+  kcfMulti: (serial: string): string => `camera/${serial}/kcf-multi`,
   /** Marker detector stream (non-pipe transport). */
   detect: (serial: string): string => `camera/${serial}/detect`,
   /** Dynamic fovea crop pipe (B-24 brick; slot reuse is epoch-guarded). NOTE:

@@ -1387,11 +1387,61 @@ A picks; must run fully local, no runtime CDN).**
   consumer count). Stage 1 derives topology from existing pipes+probes; rebase
   onto C's graphTopology() contract when published. Layout stable under 1 Hz
   updates + node churn.
-- **B-24 — native bricks for the graph (PLAN-FIRST).** The fovea crop brick
-  (crop+resize from camera/undistort stream → DYNAMIC pipe, C-20 semantics:
-  max-footprint ring, active w/h, epoch ids, spawn/cancel mid-flight); typed/
-  metered node identity for non-pipe outputs (KCF/detector); whatever the
-  topology snapshot needs natively. Sketch + questions → ruling → build.
+- **B-24 — native bricks for the graph (PLAN-FIRST; rulings Q1–Q5 2026-07-08).**
+  The fovea crop brick (crop+resize from camera/undistort stream → DYNAMIC
+  pipe, C-20 semantics: max-footprint ring, active w/h, epoch ids, spawn/cancel
+  mid-flight); typed/metered node identity for non-pipe outputs (KCF/detector);
+  whatever the topology snapshot needs natively. Sketch + questions → ruling →
+  build.
+  - Log: **DONE, green.**
+    **FoveaStream** (new `core/lib/Aravis/FoveaStream.{h,cpp}`) — the ruled
+    FUSED map-ROI design (Q1): one thread per fovea subscribes the RAW camera
+    stream, `convertFrame` (full-frame v1, Q5) → `cv::remap` through the
+    DEST-ROI SUBMATS of attach-time full maps = the EXACT `rect` crop of the
+    full undistorted image at fovea-sized remap cost (test-verified BYTE-EXACT
+    vs the undistort pipe's subrect). No chaining (B-23 contract), no lifetime
+    coupling — the physical edge is camera → fovea; copy-seam republisher
+    documented as the revisit-at-large-N alternative. `cal` optional (plain
+    persisted CameraCalibration JSON, B-23 rulings) ⇒ omitted = raw crop mode
+    (byte-exact vs the raw pipe's subrect). LIVE steering via the KCF arm()
+    pattern: `setRect` pending + atomic, applied next frame, clamped to the max
+    footprint + frame/map domain per-frame. In-node resize DEFERRED (Q2).
+    **Frame-bound origin (Q3):** `ConvertedFrame` gains `originX/originY`; the
+    shared `PipeOfferSubscriber` publishes them through `FrameInfo` into C's
+    v4 slot header (C's substrate landed mid-task; wired + asserted end-to-end:
+    the reader surfaces per-frame origin with the active w/h — no racy echo).
+    **NAPI seam** (`core/Addon.cpp` append): `Aravis.attachFoveaPipe(camera,
+    pipeId, {rect, cal?})` (spec.pixelFormat = modifier; maxWidth/maxHeight =
+    the C-20 footprint), `setFoveaRect(pipeId, rect)`, `detachFoveaPipe`
+    (gate-first, destruct outside the lock), `foveaProbeAll()` — keyed by
+    pipeId (= C-24 node id), snapshot + FRAME-BOUND `activeWidth/activeHeight/
+    originX/originY` + `undistorted` (edge byte-rates for variable-size pipes).
+    The gated subscriber runs in new MAX-BOUND mode (`PipeOfferSubscriber`
+    maxBound flag: active w/h ≤ max instead of == advertised).
+    **Node identity (Q4 + C-24 seam):** meter names == pipeId now for
+    converter + undistort (ctor `name` param; probeAll keys already pipeId);
+    KCF `createTracker(camera, name?)` optional node-id name (default
+    `tracker:center` kept); **detector metered** — `MarkerStream` gains a
+    ThreadMeter ({frame}→{detect}, latest-wins drop metering) + `probe()` on
+    the returned stream object via a WEAK-capture closure (cannot extend the
+    stream past release(), B-20) + optional node-id name arg on
+    `detector.stream(upstream, scale, name?)`.
+    **Test** `core/test/20-fovea-pipe.ts` (fake camera): raw-crop identity 3/3
+    byte-exact; undistorted map-ROI identity 3/3 byte-exact (deviceTimestamp-
+    matched, test-18 technique); mid-flight `setFoveaRect` (steered active w/h
+    + PER-FRAME origin from the v4 slot header asserted); spawn/cancel churn
+    ×6 on ONE reused id (every generation flows, 6/6 FRESH epoch segments,
+    registry empty after); probes keyed+named by node id (incl. the converter/
+    undistort renames); B-20 orderly teardown → natural exit 0, zero warns.
+    **Gates:** `core make build` both runtimes ✓ (compiled against C's v4
+    substrate in-tree); native sweep **08–18, 20 all exit 0** (14 tests; 14's
+    6 warns pre-existing) ✓; otool clean (reader minimal; core 24 non-system
+    deps unchanged) ✓. Files: `core/lib/Aravis/FoveaStream.{h,cpp}` +
+    `core/test/20-fovea-pipe.ts` (new); `core/lib/Aravis/ConverterStream.{h,cpp}`
+    (name param, maxBound, origin publish), `core/lib/Aravis/UndistortStream.{h,cpp}`
+    (name param), `core/src/Tracker.cpp` (name arg), `core/src/MarkerDetector.cpp`
+    (meter+probe+name), `core/Addon.cpp` (append-only). C-24 seam honored:
+    probe keys + meter names = node ids; test uses the path-like spelling.
 - **C-24 — graph model + composition protocol (PLAN-FIRST; publish the topology
   contract EARLY for A).** Path-like id scheme (+ migration of camera:/
   undistort: ids), StreamType/NodeSpec typing harness, graphTopology() snapshot

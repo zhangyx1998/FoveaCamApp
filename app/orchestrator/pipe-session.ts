@@ -4,22 +4,37 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// WS1 pipe broker session (C-17). Advertises typed SHM pipes and brokers the
-// one-time `connectPipe`/`disconnectPipe` handshake to the native `core.Pipe`
-// publisher (refcount consumers). Nothing per-frame passes through here — once
-// connected, the renderer reads pixels straight from the segment via the reader
-// addon (`pipe-consumer.ts`).
+// WS1 pipe broker session (C-17) + the COMPOSITION protocol (C-24 step 3).
+// Advertises typed SHM pipes, brokers the one-time `connectPipe`/
+// `disconnectPipe` handshake to the native `core.Pipe` publisher (refcount
+// consumers), and materializes/tears down COMPOSED nodes on renderer demand.
+// Nothing per-frame passes through here.
 //
-// The broker is INJECTED (production passes `asBroker(Pipe)`), so vitest drives
-// it with a fake and never loads native core — the session module carries only
-// a type-level reference to `core/Pipe`. New C-owned module (C-16/C-17 grant).
+// Compose is TWO-MODE (ruled):
+//  - `camera/`-rooted ids: REFCOUNT semantics — compose = ensure-materialized
+//    + ref (idempotent across windows; two windows composing the same fovea
+//    share one brick); decompose = unref; refs→0 = teardown via the brick's
+//    materializer (fovea: detach+drop; convert/undistort have no materializer
+//    — pre-advertised, refs are bookkeeping and the C-21 consumer gate parks
+//    them naturally).
+//  - `win/<windowId>/`-rooted ids: window-OWNED, exclusive — the id must sit
+//    under the CALLER's authoritative windowId (`hub.windowIdOf(channel)`,
+//    A-34; a renderer cannot spoof it) and is torn down with the window.
+// Window close (`hub.onWindowClosed` — fires on DESTROY, not reload) auto-
+// UNREFS everything that window composed and tears down its win/ nodes.
+//
+// The broker + materializers + window hooks are INJECTED, so vitest drives the
+// whole protocol with fakes and never loads native core.
 
 import { defineSession, type ServerSession } from "./runtime.js";
+import type { Channel } from "@lib/orchestrator/protocol.js";
 import {
   pipes,
   type PipeSpec,
   type PipeHandle,
   type PipeAdvert,
+  type NodeAdvert,
+  type ComposeRequest,
 } from "@lib/orchestrator/pipe-contract.js";
 
 /** The publisher-broker surface the session drives — exactly the `core.Pipe`
@@ -38,29 +53,65 @@ export interface PipeBroker {
 export const asBroker = (p: typeof import("core/Pipe")): PipeBroker =>
   p as unknown as PipeBroker;
 
+/** One brick kind's lifecycle (C-24): `materialize` creates the node's
+ *  producer/resources (e.g. fovea: advertise pipe + `attachFoveaPipe`) and
+ *  returns its advert shape; `teardown` releases them (refs→0 / owner window
+ *  closed). Registered per kind via `PipeSessionDeps.materializers`. */
+export interface NodeMaterializer {
+  materialize(req: ComposeRequest): Pick<NodeAdvert, "kind" | "output">;
+  teardown(id: string): void;
+}
+
 export interface PipeSessionDeps {
-  /** Pipes to advertise on build (e.g. static `camera:<serial>`). Dynamic
-   *  fovea pipes are added later via the returned `advertise`/`unadvertise`. */
+  /** Pipes to advertise on build (e.g. static `camera/<serial>/convert`).
+   *  Dynamic pipes are added later via the returned `advertise`/`unadvertise`. */
   specs?: PipeSpec[];
   /** The publisher broker — `asBroker(Pipe)` in production, a fake in tests. */
   broker: PipeBroker;
+  /** Brick materializers by kind (C-24). Absent kind + camera-rooted id that is
+   *  already advertised = ref-only compose (convert/undistort). */
+  materializers?: Record<string, NodeMaterializer>;
+  /** Authoritative caller identity (A-34: `hub.windowIdOf`). Absent (tests /
+   *  legacy) → win/-rooted composes are rejected; camera-rooted refs pool
+   *  under an anonymous ledger. */
+  windowIdOf?(ch: Channel): string | undefined;
+  /** Window-destroy signal (A-34: `hub.onWindowClosed`) — drives the auto
+   *  unref/teardown. Returns a disposer. */
+  onWindowClosed?(fn: (windowId: string) => void): () => void;
 }
 
-/** The pipe session + its dynamic-lifecycle controls (C-20). A's tracking
- *  session (or a test) drives `advertise`/`unadvertise` as foveas come and go;
- *  each mutates the seeded `state.pipes` Record so subscribed renderers react. */
+/** The pipe session + its dynamic-lifecycle controls (C-20). Sessions/tests
+ *  drive `advertise`/`unadvertise` as pipes come and go; each mutates the
+ *  seeded `state.pipes` Record so subscribed renderers react. */
 export interface PipeSessionHandle {
   session: ServerSession<typeof pipes>;
   advertise(spec: PipeSpec): number; // returns the epoch
   unadvertise(pipeId: string): void;
 }
 
+const ANON = ""; // ledger key for calls without an authoritative windowId
+
+type ComposedNode = {
+  advert: NodeAdvert;
+  /** Per-window ref counts (camera-rooted sharing; win-rooted always 1 key). */
+  refs: Map<string, number>;
+  /** True when a materializer created resources that need teardown at 0. */
+  materialized: boolean;
+};
+
 export function pipeSession(deps: PipeSessionDeps): PipeSessionHandle {
-  const { broker, specs = [] } = deps;
+  const { broker, specs = [], materializers = {} } = deps;
   const advertised: Record<string, PipeAdvert> = {};
+  const composed = new Map<string, ComposedNode>();
+  const nodeEpochs = new Map<string, number>(); // persists across teardown
   let srv: ServerSession<typeof pipes>;
 
   const push = () => srv.setState("pipes", { ...advertised });
+  const pushNodes = () =>
+    srv.setState(
+      "nodes",
+      Object.fromEntries([...composed].map(([id, n]) => [id, n.advert])),
+    );
 
   const advertise = (spec: PipeSpec): number => {
     const epoch = broker.advertise(spec);
@@ -74,12 +125,46 @@ export function pipeSession(deps: PipeSessionDeps): PipeSessionHandle {
     push();
   };
 
+  const totalRefs = (n: ComposedNode): number =>
+    [...n.refs.values()].reduce((a, b) => a + b, 0);
+
+  function teardown(id: string, n: ComposedNode): void {
+    if (n.materialized) materializers[n.advert.kind]?.teardown(id);
+    composed.delete(id);
+  }
+
+  function unref(id: string, windowKey: string): void {
+    const n = composed.get(id);
+    if (!n) return;
+    const have = n.refs.get(windowKey) ?? 0;
+    if (have <= 1) n.refs.delete(windowKey);
+    else n.refs.set(windowKey, have - 1);
+    if (totalRefs(n) === 0) teardown(id, n);
+  }
+
+  function onWindowClosed(windowId: string): void {
+    let dirty = false;
+    for (const [id, n] of [...composed]) {
+      if (n.advert.owner === `win/${windowId}`) {
+        teardown(id, n); // window-owned: dies with the window
+        dirty = true;
+      } else if (n.refs.has(windowId)) {
+        n.refs.delete(windowId); // shared brick: drop ALL of this window's refs
+        if (totalRefs(n) === 0) teardown(id, n);
+        dirty = true;
+      }
+    }
+    if (dirty) pushNodes();
+  }
+  deps.onWindowClosed?.(onWindowClosed);
+
   const session = defineSession("pipes", pipes, (s) => {
     srv = s;
     for (const spec of specs) {
       advertised[spec.id] = { spec, epoch: broker.advertise(spec) };
     }
     s.setState("pipes", { ...advertised });
+    s.setState("nodes", {});
     return {
       commands: {
         async connectPipe({ pipeId }: { pipeId: string }): Promise<PipeHandle> {
@@ -89,6 +174,75 @@ export function pipeSession(deps: PipeSessionDeps): PipeSessionHandle {
         },
         async disconnectPipe({ pipeId }: { pipeId: string }): Promise<void> {
           broker.disconnect(pipeId);
+        },
+
+        async compose(req: ComposeRequest, ctx?: { channel: Channel }): Promise<NodeAdvert> {
+          const windowId = ctx ? deps.windowIdOf?.(ctx.channel) : undefined;
+          const windowKey = windowId ?? ANON;
+          const winRooted = req.id.startsWith("win/");
+          if (winRooted) {
+            // Exclusive, window-owned: the id must sit under the CALLER's
+            // authoritative identity (no spoofing — A-34 tags the channel).
+            if (!windowId)
+              throw new Error(`compose: no window identity for "${req.id}"`);
+            if (!req.id.startsWith(`win/${windowId}/`))
+              throw new Error(
+                `compose: "${req.id}" is outside the caller's namespace (win/${windowId}/)`,
+              );
+          } else if (!req.id.startsWith("camera/")) {
+            throw new Error(
+              `compose: "${req.id}" must be win/<caller>/-rooted or a camera/-rooted brick path`,
+            );
+          }
+
+          const existing = composed.get(req.id);
+          if (existing) {
+            if (winRooted && existing.advert.owner !== `win/${windowId}`)
+              throw new Error(`compose: "${req.id}" is owned by another window`);
+            existing.refs.set(windowKey, (existing.refs.get(windowKey) ?? 0) + 1);
+            return existing.advert;
+          }
+
+          // Materialize: by kind, or ref-only for a camera-rooted id that is
+          // already an advertised pipe (convert/undistort — the C-21 gate parks
+          // them; compose refs are pure bookkeeping).
+          const materializer = materializers[req.kind];
+          let shape: Pick<NodeAdvert, "kind" | "output">;
+          let materialized = false;
+          if (materializer) {
+            shape = materializer.materialize(req);
+            materialized = true;
+          } else if (!winRooted && advertised[req.id]) {
+            const spec = advertised[req.id]!.spec;
+            shape = {
+              kind: req.kind,
+              output: { kind: "frame", pixelFormat: spec.pixelFormat, dtype: spec.dtype },
+            };
+          } else {
+            throw new Error(`compose: no materializer for kind "${req.kind}"`);
+          }
+
+          const epoch = (nodeEpochs.get(req.id) ?? 0) + 1;
+          nodeEpochs.set(req.id, epoch);
+          const advert: NodeAdvert = {
+            ...shape,
+            epoch,
+            ...(winRooted ? { owner: `win/${windowId}` } : {}),
+          };
+          composed.set(req.id, {
+            advert,
+            refs: new Map([[windowKey, 1]]),
+            materialized,
+          });
+          pushNodes();
+          return advert;
+        },
+
+        async decompose({ id }: { id: string }, ctx?: { channel: Channel }): Promise<void> {
+          const windowKey = (ctx ? deps.windowIdOf?.(ctx.channel) : undefined) ?? ANON;
+          const before = composed.has(id);
+          unref(id, windowKey);
+          if (before) pushNodes();
         },
       },
     };

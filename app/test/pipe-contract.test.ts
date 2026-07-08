@@ -8,8 +8,11 @@ import { pipes, type PipeSpec, type PipeHandle } from "@lib/orchestrator/pipe-co
 describe("pipe contract (C-16)", () => {
   it("advertises pipes as a keyed discovery Record + connect/disconnect broker", () => {
     expect(pipes.state.pipes).toEqual({}); // C-20: keyed Record, seeded + diffed
+    expect(pipes.state.nodes).toEqual({}); // C-24: composed-node discovery
     expect(Object.keys(pipes.commands).sort()).toEqual([
+      "compose", // C-24 step 3
       "connectPipe",
+      "decompose",
       "disconnectPipe",
     ]);
   });

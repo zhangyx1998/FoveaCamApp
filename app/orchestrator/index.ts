@@ -68,7 +68,14 @@ onSpan((s) => hub.reportSpan(s));
 // camera and attaches B's native `CaptureSink` (the SHM preview write is now
 // native, off the JS loop). Both native seams are cast here (Aravis pipe NAPIs
 // aren't in the d.ts yet — B-owned) so registry.ts stays type-clean + testable.
-const pipeBroker = pipeSession({ broker: asBroker(Pipe) });
+const pipeBroker = pipeSession({
+  broker: asBroker(Pipe),
+  // C-24 step 3 (compose protocol): authoritative caller identity + destroy
+  // signal from A-34 window tagging. Materializers land per brick kind (the
+  // fovea brick wires here with the multi-fovea port, step 4).
+  windowIdOf: (ch) => hub.windowIdOf(ch),
+  onWindowClosed: (fn) => hub.onWindowClosed(fn),
+});
 hub.add(pipeBroker.session);
 const aravisPipe = Aravis as unknown as {
   attachCameraPipe(camera: unknown, pipeId: string): void;
