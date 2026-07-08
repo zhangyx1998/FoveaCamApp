@@ -110,6 +110,10 @@ FN(attachFoveaPipe) {
         auto cal = convert<CameraCalibration::Ptr>(opts.Get("cal"));
         privateUndistort = UndistortStream::create(
             source, sourceId, cal, pipeId + "#undistort");
+        try {
+          privateUndistort->setCameraSerial(camera->get_serial());
+        } catch (...) {
+        }
         source = privateUndistort;
         sourceId = pipeId + "#undistort";
         undistorted = true;

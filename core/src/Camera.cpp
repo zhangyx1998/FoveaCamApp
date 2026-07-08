@@ -3,12 +3,14 @@
 // This source code is licensed under the MIT license.
 // You may find the full license in project root directory.
 // -------------------------------------------------------
+#include <algorithm>
 #include <cstddef>
 #include <cstring>
 
 #include <napi.h>
 
 #include <Aravis/Camera.h>
+#include <Aravis/ClockCalibration.h>
 #include <Aravis/Frame.h>
 #include <Aravis/Stream.h>
 #include <convert.h>
@@ -98,6 +100,8 @@ public:
             INSTANCE_METHOD(CameraObject, getFeatureInt),              //
             INSTANCE_METHOD(CameraObject, setFeature),                 //
             INSTANCE_METHOD(CameraObject, executeFeature),             //
+            INSTANCE_METHOD(CameraObject, calibrateClock),             //
+            INSTANCE_GETTER(CameraObject, clockCalibration),           //
             INSTANCE_GETTER(CameraObject, exposure_time_available),    //
             INSTANCE_GETTER(CameraObject, exposure_auto_available),    //
             INSTANCE_ACCESSOR(CameraObject, exposure),                 //
@@ -292,6 +296,45 @@ private:
       auto name = info[0].As<String>().Utf8Value();
       core()->execute_feature(name.c_str());
       return env.Undefined();
+    }
+    JS_EXCEPT(env.Undefined())
+  }
+
+  // ---- clock calibration (unified-time, structural revision 2026-07-08) -----
+  // MANUAL RECALIBRATE trigger: the owner thread (ClockCalibrator, spawned at
+  // device init) is the calibration LIFECYCLE — this NAPI is a thin
+  // synchronous nudge onto the same guarded routine (per-DEVICE mutex; it
+  // serializes against this camera's own drift pass, not bus-wide). ~n GenICam
+  // control roundtrips, blocking the calling thread. On success the offset is
+  // atomically owner-applied to all subsequent frames, appended to the
+  // stability ring, and pushed to `onClockMetrics` when armed; throws when
+  // the camera lacks TimestampLatch (the on-demand retry for models whose
+  // init pass failed).
+  FN(calibrateClock) {
+    try {
+      int n = 10;
+      if (info.Length() > 0 && info[0].IsNumber())
+        n = std::max(1, info[0].As<Number>().Int32Value());
+      const auto cal = Arv::calibrateCameraClock(*core(), n);
+      auto o = Napi::Object::New(env);
+      o.Set("offsetNs", BigInt::New(env, cal.offsetNs));
+      o.Set("jitterNs", BigInt::New(env, cal.jitterNs));
+      o.Set("samples", Number::New(env, static_cast<double>(cal.samples)));
+      o.Set("atNs", BigInt::New(env, cal.atNs));
+      return o;
+    }
+    JS_EXCEPT(env.Undefined())
+  }
+
+  // The stored calibration + stability row (ageNs at read time; driftPpm
+  // between the two most recent runs, null with fewer than 2). Null until an
+  // explicit calibrateClock succeeds. All values in the steadyNowNs domain.
+  GET(clockCalibration) {
+    try {
+      const auto s = Arv::clockStability(core()->get_serial());
+      if (!s)
+        return env.Null();
+      return Arv::stabilityToJs(env, *s);
     }
     JS_EXCEPT(env.Undefined())
   }

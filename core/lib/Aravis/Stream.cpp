@@ -66,7 +66,10 @@ Frame::Ptr Stream::iterate() {
   auto buffer = arv_stream_timeout_pop_buffer(stream, BUFFER_POP_TIMEOUT_US);
   if (!buffer)
     return nullptr;
-  auto frame = Frame::create(buffer);
+  // Owner-applied dt (unified-time): every frame is stamped with the camera's
+  // calibrated clock offset at THIS choke point — atomic read per frame, so a
+  // mid-task recalibration swaps cleanly between frames (never torn).
+  auto frame = Frame::create(buffer, camera->get_clock_offset_ns());
   arv_stream_push_buffer(stream, buffer);
   return frame;
 }

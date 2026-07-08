@@ -103,6 +103,31 @@ declare module "core/Aravis" {
     // Frame acquisition
     grab(timeout?: number): Promise<Frame>;
 
+    /**
+     * MANUAL clock-recalibration trigger (unified-time, 2026-07-08). The
+     * calibration LIFECYCLE is native: the camera's OWNER THREAD runs the
+     * initial TimestampLatch pass at device initialization and a drift
+     * re-run every 30 s — this method is a thin synchronous nudge onto the
+     * same guarded routine (per-DEVICE mutex: serializes against this
+     * camera's own drift pass; initial passes additionally serialize
+     * bus-wide on a global mutex). BLOCKS the calling thread for ~n GenICam
+     * control roundtrips. On success the offset is atomically OWNER-APPLIED:
+     * every subsequent frame's `deviceTimestamp` (JS frames, SHM slot
+     * headers, native taps, KCF results) is already in the `steadyNowNs`
+     * host domain. Throws when the camera lacks the latch features (the
+     * on-demand retry for models whose init pass failed — they stay at
+     * offset 0, raw device counter).
+     */
+    calibrateClock(n?: number): CameraClockCalibration;
+
+    /**
+     * The stored clock calibration + stability row for this camera, or null
+     * until a calibration (owner-thread init/drift or manual) succeeds.
+     * `ageNs` is computed at read time; `driftPpm` needs >= 2 runs in the
+     * native ring (last 8 kept). All values in the `steadyNowNs` domain.
+     */
+    readonly clockCalibration: CameraClockStability | null;
+
     // Stream control
     /** Shared frame stream view — created LAZILY on first read (and cached):
      *  merely listing/opening cameras creates no native stream, and
@@ -174,13 +199,57 @@ declare module "core/Aravis" {
    */
   export function converterProbeAll(): Record<string, ProbeSnapshot>;
 
+  /** One clock-calibration result (unified-time): `hostNs = rawDeviceNs +
+   *  offsetNs`, everything in the `steadyNowNs` domain. `jitterNs` =
+   *  p90 − min over the candidate offsets (the min-filter's confidence). */
+  export interface CameraClockCalibration {
+    offsetNs: bigint;
+    jitterNs: bigint;
+    samples: number;
+    atNs: bigint;
+  }
+
+  /** The stability row: the most recent calibration + `ageNs` (steadyNowNs −
+   *  atNs, at read time) and `driftPpm` ((Δoffset/Δat)×1e6 between the two
+   *  most recent runs; null with fewer than 2). */
+  export interface CameraClockStability extends CameraClockCalibration {
+    ageNs: bigint;
+    driftPpm: number | null;
+  }
+
+  /**
+   * Bulk clock-stability read for the 1 Hz clocks poll: every camera with at
+   * least one successful calibration → `{ [serial]: CameraClockStability }`.
+   * Uncalibrated cameras (latch-unsupported, or init pass not run yet) are
+   * absent. Cheap: one native map scan, no device I/O.
+   */
+  export function clockStabilityAll(): Record<string, CameraClockStability>;
+
+  /** The clock-metrics PUSH row (`onClockMetrics`): the stability row plus
+   *  the camera it belongs to. */
+  export interface ClockMetricsRow extends CameraClockStability {
+    serial: string;
+  }
+
+  /**
+   * Arm (callback) / disarm (null) the clock-metrics PUSH channel: after
+   * EVERY successful calibration — owner-thread init/drift or a manual
+   * `calibrateClock` — the row is delivered to `cb` on the orchestrator
+   * main thread via the native dispatcher. While disarmed the owner threads
+   * skip the dispatch entirely (one lock-free atomic check — zero
+   * cross-thread cost unobserved). Main-thread only; the slot disarms itself
+   * at env teardown. ONE callback per process (last set wins).
+   */
+  export function onClockMetrics(cb: ((row: ClockMetricsRow) => void) | null): void;
+
   /** `undistortProbeAll` snapshot: the shared meter shape + the v2 variant
    *  surface (unified-time-and-topology §5). */
   export interface UndistortProbeSnapshot extends ProbeSnapshot {
     variant: "intrinsic" | "homography";
-    /** True once `setClockOffset` calibrated this brick's device→host map.
-     *  False = homography lookups run at `hostNs = deviceTimestamp` (offset
-     *  0, uncalibrated). Always false-and-irrelevant for `intrinsic`. */
+    /** The owning CAMERA's clock-calibration state (owner-applied dt,
+     *  unified-time): true once `calibrateClock` succeeded for the serial
+     *  resolved at attach. False = frames carry the raw device counter and
+     *  the H lookup runs uncalibrated. Irrelevant for `intrinsic`. */
     calibratedClock: boolean;
     /** Frames passed through UNTOUCHED (homography variant with an empty
      *  mirror-history ring) — nonzero means H samples aren't flowing yet. */
@@ -230,8 +299,10 @@ declare module "core/Aravis" {
    * row-major, 9 doubles; `hostNs` its host-clock timestamp. Designed for the
    * ~1 kHz actuation loop (mutex-guarded native ring; no per-frame JS). The
    * undistort thread warps each frame with the entry nearest ≤ (linearly
-   * interpolated) its `deviceTimestamp + clockOffset`. Returns false for an
-   * unknown pipe or a non-homography variant.
+   * interpolated) its `deviceTimestamp` — which is already OWNER-APPLIED
+   * host time on a calibrated camera (unified-time: the camera stamps its dt
+   * at Frame creation). Returns false for an unknown pipe or a
+   * non-homography variant.
    */
   export function pushHomography(
     pipeId: string,
@@ -240,12 +311,11 @@ declare module "core/Aravis" {
   ): boolean;
 
   /**
-   * Set a homography brick's camera-device→host clock offset (ns):
-   * `hostNs = frame.deviceTimestamp + offsetNs`. Exact pipeId match first,
-   * else every homography brick whose pipeId CONTAINS the key (so a bare
-   * serial reaches `camera/<serial>/undistort`). Returns the number of bricks
-   * updated (0 = nothing matched). Until called, the brick runs offset 0 and
-   * probes `calibratedClock: false`.
+   * @deprecated NO-OP, always returns 0 (unified-time ruling 2026-07-08:
+   * timestamps are OWNER-APPLIED — the camera stamps its calibrated dt at
+   * Frame creation, so per-brick offsets no longer exist). Kept only until
+   * the last JS caller migrates to `camera.calibrateClock` /
+   * the owner-thread lifecycle; then this export is deleted.
    */
   export function setClockOffset(
     pipeIdOrSerial: string,

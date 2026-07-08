@@ -30,6 +30,13 @@ Napi::Value undistortProbeAll(const Napi::CallbackInfo &info);
 Napi::Value pushHomography(const Napi::CallbackInfo &info);
 Napi::Value setClockOffset(const Napi::CallbackInfo &info);
 Napi::Value __paramRingSelfTest(const Napi::CallbackInfo &info);
+// unified-time (2026-07-08): native camera clock calibration read surface +
+// THE host time authority. Defined in core/lib/Aravis/ClockCalibration.cpp.
+Napi::Value steadyNowNsJs(const Napi::CallbackInfo &info);
+Napi::Value clockStabilityAll(const Napi::CallbackInfo &info);
+Napi::Value onClockMetrics(const Napi::CallbackInfo &info);
+Napi::Value __clockCalSelfTest(const Napi::CallbackInfo &info);
+Napi::Value __fireClockMetricsTest(const Napi::CallbackInfo &info);
 // B-24 (real-2), defined in core/lib/Aravis/FoveaStream.cpp.
 Napi::Value attachFoveaPipe(const Napi::CallbackInfo &info);
 Napi::Value setFoveaRect(const Napi::CallbackInfo &info);
@@ -94,6 +101,20 @@ static Object init(Env env, Object exports) {
     // (core/test/22). Not part of the public d.ts surface.
     Aravis.Set("__paramRingSelfTest", Function::New<Arv::__paramRingSelfTest>(
                                           env, "__paramRingSelfTest"));
+    // unified-time: bulk camera clock-stability rows for the 1 Hz clocks
+    // poll ({ [serial]: {offsetNs, jitterNs, samples, atNs, ageNs,
+    // driftPpm|null} }) + the hardware-free min-filter self-test (test 24).
+    Aravis.Set("clockStabilityAll", Function::New<Arv::clockStabilityAll>(
+                                        env, "clockStabilityAll"));
+    // The clock-metrics PUSH channel (CallbackSlot): arm with a callback,
+    // disarm with null. Zero cross-thread cost while disarmed.
+    Aravis.Set("onClockMetrics",
+               Function::New<Arv::onClockMetrics>(env, "onClockMetrics"));
+    Aravis.Set("__clockCalSelfTest", Function::New<Arv::__clockCalSelfTest>(
+                                         env, "__clockCalSelfTest"));
+    Aravis.Set("__fireClockMetricsTest",
+               Function::New<Arv::__fireClockMetricsTest>(
+                   env, "__fireClockMetricsTest"));
     // B-24 (real-2): spawn/cancel-able fovea crop pipes — fused map-ROI
     // convert+remap+crop per (camera × pipe), live-steerable rect, C-20
     // max-footprint dynamic geometry. Probe keys + meter names = pipeId.
@@ -147,6 +168,12 @@ static Object init(Env env, Object exports) {
     TopologyNs.Set("report", Function::New<Topology::report>(env, "report"));
     exports.Set("Topology", TopologyNs);
     // Finalize
+    // THE native host time authority (unified-time §1): libc++ steady_clock
+    // integer ns. Every clock-calibration offset is in THIS domain; JS
+    // hostNowNs delegates here (hrtime is not guaranteed the same Darwin
+    // clock domain — one authority only).
+    exports.Set("steadyNowNs",
+                Function::New<Arv::steadyNowNsJs>(env, "steadyNowNs"));
     exports.Set("cleanup", Function::New(env, cleanup));
     VERBOSE("Core module initialized");
     if (std::getenv("WAIT_DEBUGGER")) {

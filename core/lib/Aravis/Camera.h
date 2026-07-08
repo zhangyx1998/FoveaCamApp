@@ -1,6 +1,9 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
+#include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -19,6 +22,8 @@ template <typename T> struct Range {
   T max;
 };
 
+class ClockCalibrator; // owner-thread clock calibration (ClockCalibration.h)
+
 class Camera : public Object<ArvCamera, Camera> {
 public:
   typedef RefCount::Reference<Camera> Ptr;
@@ -26,8 +31,13 @@ public:
 
 public:
   const std::string id;
-  // Construct from device ID
+  // Construct from device ID. Spawns the camera's OWNER-THREAD clock
+  // calibrator (initial latch pass + periodic drift re-runs — see
+  // ClockCalibration.h); a latch-unsupported model stays uncalibrated (dt 0).
   Camera(std::string id);
+  // Out-of-line: joins the calibrator thread (ClockCalibrator is incomplete
+  // here — defined in ClockCalibration.h, included by Camera.cpp).
+  ~Camera();
   // Disallow copy/move
   Camera(const Camera &other) = delete;
   Camera(Camera &&other) = delete;
@@ -231,6 +241,38 @@ public:
   ARV_CAMERA_BOUNDS(double, black_level, black_level);
   ARV_CAMERA_GET(ArvAuto, black_level_auto, black_level_auto);
   ARV_CAMERA_SET(ArvAuto, black_level_auto, black_level_auto);
+
+  /* unified-time (user ruling 2026-07-08): OWNER-APPLIED clock offset. The
+   * device→host dt (ns, steadyNowNs domain — see ClockCalibration.h) lives on
+   * the camera and is applied at Frame creation, the single choke point where
+   * device timestamps enter the system — so JS Frame.deviceTimestamp, every
+   * SHM SlotHeader, the OwnedFrame taps and KCF results all surface
+   * pre-calibrated time automatically. Defaults to 0 (uncalibrated) until an
+   * explicit `calibrateClock` succeeds. ATOMIC swap by design: mid-task
+   * recalibration never quiesces the stream — in-flight frames keep the
+   * offset they were stamped with; a small step at the swap is accepted,
+   * never torn. Const + mutable: calibration runs against Ptr-const access.
+   * The RAW counter stays available to the calibrator itself via the
+   * TimestampLatch features (never offset by us — we never touch the device
+   * clock). */
+  inline int64_t get_clock_offset_ns() const {
+    return clock_offset_ns_.load(std::memory_order_acquire);
+  }
+  inline void set_clock_offset_ns(int64_t offsetNs) const {
+    clock_offset_ns_.store(offsetNs, std::memory_order_release);
+  }
+  /* Per-DEVICE calibration guard (two-tier locking, ClockCalibration.h):
+   * serializes this camera's owner-thread drift passes against a manual
+   * `calibrateClock` nudge. The GLOBAL mutex (initial passes only) lives in
+   * ClockCalibration.cpp. */
+  inline std::mutex &clock_cal_mutex() const { return clock_cal_mutex_; }
+
+private:
+  mutable std::atomic<int64_t> clock_offset_ns_{0};
+  mutable std::mutex clock_cal_mutex_;
+  // Declared LAST: constructed after the device is fully open, destroyed
+  // FIRST (stop+join before anything the thread touches goes away).
+  std::unique_ptr<ClockCalibrator> calibrator_;
 };
 
 } // namespace Arv

@@ -13,9 +13,12 @@
 //     persisted CameraCalibration JSON (`cv::initUndistortRectifyMap`) —
 //     cached-maps behavior unchanged from v1 (center camera).
 //   - HOMOGRAPHY: per-frame `cv::warpPerspective` with H looked up from the
-//     native ParamRing by the frame's host time
-//     (`hostNs = deviceTimestamp + clockOffsetNs`; offset settable via the
-//     `setClockOffset` NAPI, default 0 = uncalibrated — marked in the probe).
+//     native ParamRing by the frame's host time. Timestamps are OWNER-APPLIED
+//     (unified-time ruling 2026-07-08): the camera stamps every frame with its
+//     calibrated dt at Frame creation, so the lookup uses
+//     `hostNs = frame.deviceTimestamp` DIRECTLY — no per-brick offset. The
+//     probe's `calibratedClock` reflects the CAMERA's calibration state
+//     (ClockCalibration registry, keyed by the serial resolved at attach).
 //     An empty ring passes frames through untouched (startup-safe).
 // Demand propagation is the ChainedStream contract: this brick runs iff its
 // SHM pipe has consumers OR a downstream tap (fovea) subscribes; while it
@@ -33,7 +36,8 @@
 
 #include <Vision.h> // CameraCalibration
 
-#include "ConverterStream.h" // ChainedStream, ConvertedFrame, OwnedFrame, ...
+#include "ClockCalibration.h" // isClockCalibrated (camera clock state)
+#include "ConverterStream.h"  // ChainedStream, ConvertedFrame, OwnedFrame, ...
 #include "ParamRing.h"
 
 namespace Arv {
@@ -87,11 +91,11 @@ public:
   void pushHomography(int64_t hostNs, const double *h9) {
     ring_.push(hostNs, h9);
   }
-  // Camera-device → host clock offset (ns): hostNs = deviceTimestamp + offset.
-  void setClockOffset(int64_t offsetNs) {
-    clockOffsetNs_.store(offsetNs, std::memory_order_release);
-    clockCalibrated_.store(true, std::memory_order_release);
-  }
+  // The owning camera's serial (resolved at attach — from the legacy Camera
+  // argument or the source converter's camera edge). Read by the probe's
+  // `calibratedClock`; NAPI-thread only (set before the binding registers).
+  void setCameraSerial(std::string serial) { serial_ = std::move(serial); }
+  const std::string &cameraSerial() const { return serial_; }
 
   // --- probes ---------------------------------------------------------------
   Meter::Snapshot probe() const { return meter_.probe(converterNowMs()); }
@@ -99,9 +103,10 @@ public:
   const char *variantName() const {
     return variant_ == Variant::Intrinsic ? "intrinsic" : "homography";
   }
-  bool calibratedClock() const {
-    return clockCalibrated_.load(std::memory_order_acquire);
-  }
+  // The CAMERA's calibration state (owner-applied dt — explicit
+  // `calibrateClock` succeeded for this serial). False until then: frames
+  // carry the raw counter and the ring lookup runs uncalibrated.
+  bool calibratedClock() const { return isClockCalibrated(serial_); }
   // Frames passed through untouched (homography variant with an empty ring).
   uint64_t passthroughCount() const {
     return passthrough_.load(std::memory_order_relaxed);
@@ -128,9 +133,9 @@ protected:
       }
       cv::remap(in->mat, buf_, map1_, map2_, cv::INTER_LINEAR);
     } else {
-      const int64_t hostNs =
-          static_cast<int64_t>(in->deviceTimestamp) +
-          clockOffsetNs_.load(std::memory_order_acquire);
+      // OWNER-APPLIED timestamps: deviceTimestamp is already calibrated at
+      // Frame creation (Camera dt, unified-time ruling) — use it DIRECTLY.
+      const int64_t hostNs = static_cast<int64_t>(in->deviceTimestamp);
       ParamRing::Params h;
       if (ring_.lookup(hostNs, h)) {
         const cv::Mat H(3, 3, CV_64F, h.data());
@@ -162,8 +167,7 @@ private:
   const std::string sourceId_; // the converter brick's node id (topology edge)
   cv::Mat map1_, map2_;        // intrinsic maps (attach-time; thread-read-only)
   ParamRing ring_;             // homography history (JS writer / this reader)
-  std::atomic<int64_t> clockOffsetNs_{0};
-  std::atomic<bool> clockCalibrated_{false};
+  std::string serial_;         // owning camera (probe: calibratedClock)
   std::atomic<uint64_t> passthrough_{0};
   Meter::ThreadMeter meter_; // single writer = this brick's thread
   cv::Mat buf_;              // reused output buffer (this thread only)

@@ -23,9 +23,10 @@
 //      stops growing (the ring now answers).
 //   4. TRANSLATION H — pushing H=[[1,0,tx],[0,1,0],[0,0,1]] (newest entry ≤
 //      every frame's hostNs) displaces pixels exactly: dst(x,y)=src(x−tx,y).
-//   5. setClockOffset — exact-id and serial-substring forms update the brick
-//      (probe flips calibratedClock:true); pushHomography rejects unknown
-//      pipes and non-homography variants.
+//   5. CONTROL-SURFACE GUARDS — pushHomography rejects unknown pipes;
+//      setClockOffset is the documented deprecated NO-OP (owner-applied
+//      timestamps: the camera stamps its dt at Frame creation, so
+//      calibratedClock reflects the CAMERA's — here uncalibrated — state).
 //   6. CHAIN DEPTH 3 — a fovea chained on the undistort brick crops the
 //      WARPED frames byte-exact (OwnedFrame handoff twice removed from the
 //      camera).
@@ -98,7 +99,7 @@ const wrp = open(wrpId);
   assert(cp && cp.outputs.converted.count >= 3, `converter ran on tap demand alone (${cp?.outputs?.converted?.count})`);
   const up = A.undistortProbeAll()[wrpId];
   assert.equal(up.variant, "homography", "probe variant");
-  assert.equal(up.calibratedClock, false, "probe calibratedClock false before setClockOffset");
+  assert.equal(up.calibratedClock, false, "probe calibratedClock false (fake camera is uncalibrated)");
   assert(up.passthrough >= 3, `empty ring passes through (${up.passthrough})`);
   console.log(`22-brick-chain: demand propagation OK (undistort ${got} frames, converter ${cp.outputs.converted.count} converts, ${up.passthrough} passthroughs).`);
 }
@@ -160,13 +161,11 @@ await verifyMatched(3, (got, ref) => {
 }, "translation-H");
 console.log(`22-brick-chain: translation-H displaces exactly ${TX}px OK.`);
 
-// --- 5: setClockOffset + control-surface guards -------------------------------
-assert.equal(A.setClockOffset(wrpId, 0n), 1, "setClockOffset exact id");
-assert.equal(A.undistortProbeAll()[wrpId].calibratedClock, true, "probe calibratedClock true");
-assert.equal(A.setClockOffset(serial, 0n), 1, "setClockOffset serial substring");
-assert.equal(A.setClockOffset("camera/none", 0n), 0, "unknown key updates nothing");
+// --- 5: control-surface guards (owner-applied timestamps) ---------------------
+assert.equal(A.setClockOffset(wrpId, 0n), 0, "setClockOffset is a deprecated no-op (returns 0)");
+assert.equal(A.undistortProbeAll()[wrpId].calibratedClock, false, "calibratedClock mirrors the CAMERA state (uncalibrated fake)");
 assert.equal(A.pushHomography("camera/none/undistort", 0n, I3), false, "pushHomography unknown pipe -> false");
-console.log("22-brick-chain: clock-offset + control-surface guards OK.");
+console.log("22-brick-chain: control-surface guards OK (owner-applied dt).");
 
 // --- 6: chain depth 3 — fovea crops the WARPED output byte-exact --------------
 const fovId = `camera/${serial}/undistort/fovea/0`;

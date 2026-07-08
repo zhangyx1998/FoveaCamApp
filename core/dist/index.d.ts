@@ -10,6 +10,16 @@ declare module "core" {
     // Explicitly cleanup all resources (cameras, streams, frames, etc.)
     export function cleanup(): void;
 
+    /**
+     * THE native host time authority (unified-time §1): libc++
+     * `std::chrono::steady_clock` as integer nanoseconds (bigint). Every
+     * clock-calibration offset the native layer computes/stores — and every
+     * OWNER-APPLIED frame timestamp on a calibrated camera — is in THIS
+     * domain. JS time code must delegate here instead of `hrtime.bigint()`
+     * (not guaranteed the same Darwin clock domain): one authority only.
+     */
+    export function steadyNowNs(): bigint;
+
     export * as Aravis from "core/Aravis";
     export * as Controller from "core/Controller";
     export * as Vision from "core/Vision";

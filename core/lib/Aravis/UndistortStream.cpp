@@ -65,9 +65,12 @@ FN(attachUndistortPipe) {
     const auto &spec = hub.publisher(pipeId).spec();
 
     // Resolve the tap SOURCE: a live convert brick (by pipeId), or a private
-    // converter created here for the legacy Camera argument.
+    // converter created here for the legacy Camera argument. The camera
+    // SERIAL rides along — the probe's `calibratedClock` reads that camera's
+    // explicit clock-calibration state (owner-applied dt, unified-time).
     ChainedStream::Source source;
     std::string sourceId;
+    std::string serial;
     ConverterStream::Ptr privateSource;
     if (info[0].IsString()) {
       const auto srcId = info[0].As<Napi::String>().Utf8Value();
@@ -77,6 +80,9 @@ FN(attachUndistortPipe) {
                 env.Undefined());
       source = conv;
       sourceId = srcId;
+      // The converter's camera edge is "camera/<serial>" — strip the prefix.
+      const auto &camEdge = conv->sourceId();
+      serial = camEdge.rfind("camera/", 0) == 0 ? camEdge.substr(7) : camEdge;
     } else {
       auto camera = convert<Arv::Camera::Ptr>(info[0]);
       // spec.pixelFormat IS the access modifier, exactly like raw pipes.
@@ -85,6 +91,11 @@ FN(attachUndistortPipe) {
                                               pipeId + "#convert");
       source = privateSource;
       sourceId = pipeId + "#convert";
+      try {
+        serial = camera->get_serial();
+      } catch (...) {
+        serial = "?";
+      }
     }
 
     // Variant selection: {homography} | {cal} | legacy positional calibration.
@@ -108,6 +119,7 @@ FN(attachUndistortPipe) {
       stream = UndistortStream::create(std::move(source), std::move(sourceId),
                                        cal, pipeId);
     }
+    stream->setCameraSerial(std::move(serial));
 
     {
       std::scoped_lock lock(g_mutex);
@@ -192,35 +204,16 @@ FN(pushHomography) {
   JS_EXCEPT(env.Undefined())
 }
 
-// setClockOffset(pipeIdOrSerial, offsetNs: bigint) — the camera-device→host
-// mapping (`hostNs = deviceTimestamp + offsetNs`) for homography lookups.
-// Exact pipeId match first; otherwise every homography brick whose pipeId
-// CONTAINS the argument (so a bare serial reaches `camera/<serial>/undistort`
-// without B learning A/C's id grammar). Returns the number of bricks updated.
+// DEPRECATED NO-OP (unified-time ruling 2026-07-08: owner-applied
+// timestamps). The camera itself now stamps every frame with its calibrated
+// dt at Frame creation (`camera.calibrateClock`), so the per-brick offset
+// store is gone — the ParamRing lookup uses `frame.deviceTimestamp` directly.
+// Kept as a 0-returning stub only until the one JS caller
+// (app/orchestrator/clock-calibration.ts, coordinator-owned) drops it; then
+// delete this export + its d.ts row.
 FN(setClockOffset) {
   auto env = info.Env();
-  try {
-    const auto key = info[0].As<Napi::String>().Utf8Value();
-    const int64_t offsetNs = convert<int64_t>(info[1]);
-    uint32_t updated = 0;
-    std::scoped_lock lock(g_mutex);
-    auto it = g_pipes.find(key);
-    if (it != g_pipes.end() && it->second.stream &&
-        it->second.stream->variant() == UndistortStream::Variant::Homography) {
-      it->second.stream->setClockOffset(offsetNs);
-      updated = 1;
-    } else {
-      for (auto &[pipeId, b] : g_pipes)
-        if (b.stream &&
-            b.stream->variant() == UndistortStream::Variant::Homography &&
-            pipeId.find(key) != std::string::npos) {
-          b.stream->setClockOffset(offsetNs);
-          ++updated;
-        }
-    }
-    return Number::New(env, updated);
-  }
-  JS_EXCEPT(env.Undefined())
+  return Number::New(env, 0);
 }
 
 // ---- per-pipeId undistort meter snapshots (perfSnapshot.workloads sibling) --

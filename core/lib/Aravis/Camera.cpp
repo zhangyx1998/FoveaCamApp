@@ -4,6 +4,7 @@
 #include <utils/ref-count.h>
 
 #include "Camera.h"
+#include "ClockCalibration.h" // ClockCalibrator (owner-thread calibration)
 #include "Error.h"
 #include "utils/debug.h"
 
@@ -53,7 +54,16 @@ static inline std::string getTag(Camera *camera) {
 }
 
 Camera::Camera(std::string id)
-    : Object(initCamera(id)), id(id), tag(getTag(this)) {}
+    : Object(initCamera(id)), id(id), tag(getTag(this)),
+      // Device initialization complete → spawn the owner-thread clock
+      // calibrator (initial latch pass + 30 s drift loop; unsupported models
+      // fail the first pass once and the thread exits — dt stays 0).
+      calibrator_(std::make_unique<ClockCalibrator>(*this)) {}
+
+// Out-of-line: ~unique_ptr<ClockCalibrator> needs the complete type. The
+// calibrator (declared last) is destroyed FIRST — stop + join before the
+// device handle goes away.
+Camera::~Camera() = default;
 
 Frame::Ptr Camera::grab(uint64_t timeout) const {
   auto buffer = arv_camera_acquisition(get(), timeout, &Error::error);
@@ -62,7 +72,9 @@ Frame::Ptr Camera::grab(uint64_t timeout) const {
     g_clear_object(&buffer);
     throw Error("Failed to acquire buffer");
   }
-  auto frame = Frame::create(buffer);
+  // Owner-applied dt (unified-time): stamp with the camera's calibrated
+  // clock offset — see Frame.h / ClockCalibration.h.
+  auto frame = Frame::create(buffer, get_clock_offset_ns());
   /* Destroy the buffer */
   g_clear_object(&buffer);
   return frame;

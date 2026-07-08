@@ -75,16 +75,25 @@ class Frame : public Shared<Frame> {
   }
 
 public:
-  // Private constructor - only accessible via Shared::create()
-  inline Frame(ArvBuffer *buffer)
+  // Private constructor - only accessible via Shared::create().
+  // `clockOffsetNs` = the OWNER-APPLIED device→host dt (Camera.h,
+  // unified-time ruling 2026-07-08): Frame creation is the single choke point
+  // where device timestamps enter the system, so every outward consumer (JS
+  // Frame.deviceTimestamp, SHM slot headers, OwnedFrame taps, KCF results)
+  // sees pre-calibrated time. 0 = uncalibrated passthrough (raw counter).
+  inline Frame(ArvBuffer *buffer, int64_t clockOffsetNs = 0)
       : raw(fromArvBuffer(buffer)), format(getPixelFormat(buffer)),
-        device_timestamp(arv_buffer_get_timestamp(buffer)),
+        device_timestamp(static_cast<uint64_t>(
+            static_cast<int64_t>(arv_buffer_get_timestamp(buffer)) +
+            clockOffsetNs)),
         system_timestamp(arv_buffer_get_system_timestamp(buffer)),
         timestamp(device_timestamp) {};
 
   const cv::Mat raw;
   const PixelFormat format;
-  // Aravis buffer timestamp in the camera/device clock domain.
+  // Device timestamp with the owning camera's calibrated clock offset ALREADY
+  // applied (steadyNowNs host domain once calibrated; the raw device counter
+  // while the offset is 0 — uncalibrated).
   const uint64_t device_timestamp;
   // Aravis system timestamp in the host clock domain, nanoseconds.
   const uint64_t system_timestamp;

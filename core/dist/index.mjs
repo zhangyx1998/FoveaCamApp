@@ -36,6 +36,7 @@ export const {
     Shm,
     Pipe,
     Topology,
+    steadyNowNs,
     cleanup,
     __origin__,
 } = Module;
