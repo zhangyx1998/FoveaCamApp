@@ -106,4 +106,47 @@ describe("createVisionWorker (C-22b host)", () => {
     h.sendParams({ zoom: 2 });
     expect(fake.posted).toHaveLength(postCount);
   });
+
+  // Rig 2026-07-08: a kernel-bound app (disparity at ~35fps vs 60fps cameras)
+  // was INVISIBLE in the profiler — nothing metered the worker. With
+  // `meterName`, the worker's posted stats rows are served as a native-probe
+  // source (staleness-gated, disposed with the worker).
+  it("serves posted stats rows as a probe while alive (meterName)", async () => {
+    const { nativeProbes } = await import("@orchestrator/native-probes");
+    const fake = new FakeWorker();
+    const h = createVisionWorker(
+      { ...init, meterName: "win/disparity-scope/disparity" },
+      () => {},
+      { spawn: () => fake, readerPath: "/x" },
+    );
+    expect(nativeProbes()["win/disparity-scope/disparity"]).toBeUndefined();
+    const workload = {
+      name: "win/disparity-scope/disparity",
+      window: { startedAt: 0, snapshotAt: 1000, uptimeMs: 1000 },
+      utilization: 0.9,
+      busyMs: 900,
+      inputs: { L: { count: 35, ratePerSec: 35 } },
+      outputs: { result: { count: 35, ratePerSec: 35, maxIntervalMs: 40 } },
+      drops: { total: 25, ratePerSec: 25, byReason: {} },
+    };
+    fake.emit("message", { kind: "stats", workload } as never);
+    expect(nativeProbes()["win/disparity-scope/disparity"]).toMatchObject({
+      utilization: 0.9,
+      drops: { total: 25 },
+    });
+    h.terminate(); // probe disposed with the worker — no ghost rows
+    expect(nativeProbes()["win/disparity-scope/disparity"]).toBeUndefined();
+  });
+
+  it("registers no probe without meterName", async () => {
+    const { nativeProbes } = await import("@orchestrator/native-probes");
+    const fake = new FakeWorker();
+    const before = Object.keys(nativeProbes()).length;
+    createVisionWorker(init, () => {}, { spawn: () => fake, readerPath: "/x" });
+    fake.emit("message", {
+      kind: "stats",
+      workload: { name: "ghost" },
+    } as never);
+    expect(Object.keys(nativeProbes()).length).toBe(before);
+  });
 });

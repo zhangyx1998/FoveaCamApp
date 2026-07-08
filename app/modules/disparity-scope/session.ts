@@ -36,6 +36,7 @@ import { DisposerBag, publishSerials, releaseLeases } from "@orchestrator/sessio
 import { ORIGIN_POS, radians, VOLT_TELEMETRY_INTERVAL_MS } from "@orchestrator/fovea-pipeline";
 import { createVisionWorker, type VisionWorkerHandle } from "@orchestrator/vision-worker-host";
 import { nodeId } from "@lib/orchestrator/graph-contract";
+import { registerGraphWiring } from "@orchestrator/graph-topology";
 import type { PipeBroker } from "@orchestrator/pipe-session";
 import type { PipeInput, VisionResult } from "@orchestrator/vision-worker-protocol";
 import {
@@ -309,11 +310,16 @@ export default function disparityScopeSession(
 
     // --- lifecycle --------------------------------------------------------
 
+    // Connected pipe ids, in `pipeInputs` order — the graph wiring's edge
+    // sources (C-24 stage-1 shim, same pattern as tracking-single).
+    let pipeIds: string[] = [];
+
     /** Connect a `camera:<serial>` pipe (refcount++ → C-21 gate) and return its
      *  worker `PipeInput`; registers the matching `disconnect` on `disposers`. */
     function connectCameraPipe(role: "L" | "C" | "R", serial: string): PipeInput {
       const pipeId = nodeId.convert(serial);
       const handle = broker.connect(pipeId);
+      pipeIds.push(pipeId);
       disposers.add(() => broker.disconnect(pipeId));
       const { width, height, channels, bytesPerFrame, maxBytes } = handle.spec;
       return {
@@ -331,12 +337,41 @@ export default function disparityScopeSession(
       if (!t) return;
       triple = t;
       publishSerials(t.leases, disposers, s);
+      pipeIds = [];
       const pipeInputs: PipeInput[] = [
         connectCameraPipe("L", t.leases.L.camera.serial),
         connectCameraPipe("C", t.leases.C.camera.serial),
         connectCameraPipe("R", t.leases.R.camera.serial),
       ];
-      worker = createVisionWorker({ pipes: pipeInputs, params: initParams() }, onResult);
+      // C-24 stage-1 shim: show the disparity kernel in the topology (rig
+      // 2026-07-08: the graph drew camera→convert→consumers with NOTHING in
+      // between while the kernel was the 35-vs-60fps limiter). `meterName` =
+      // the node id, so the worker's self-meter folds onto this node's badge.
+      const kernelId = nodeId.win("disparity-scope", "disparity");
+      const bgra = { kind: "frame", pixelFormat: "BGRA8", dtype: "U8" } as const;
+      worker = createVisionWorker(
+        { pipes: pipeInputs, params: initParams(), meterName: kernelId },
+        onResult,
+      );
+      disposers.add(
+        registerGraphWiring({
+          nodes: [
+            {
+              id: kernelId,
+              kind: "disparity",
+              owner: "win/disparity-scope",
+              output: bgra,
+              transport: "port",
+            },
+          ],
+          edges: pipeInputs.map((p, i) => ({
+            from: pipeIds[i]!,
+            to: kernelId,
+            port: p.role,
+            type: bgra,
+          })),
+        }),
+      );
       loop = startActuationLoop({ targetVolts, onVolts });
       // Surface the measured magnification (null = nominal-zoom fallback) so
       // the UI can display the actual match scale instead of guessing from

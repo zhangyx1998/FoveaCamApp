@@ -340,13 +340,17 @@ export default function trackingSession(
       ];
       const taps = new DisposerBag();
       publishSerials(t.leases, taps, s);
-      worker = createVisionWorker({ pipes, params: initParams() }, onResult);
       // C-24 step 2 (stage-1 shim): register this session's fixed composition
       // so the topology shows the non-pipe nodes (kcf thread, display kernel)
       // + their wiring. `win/tracking` is a stand-in owner until this app
       // migrates onto the compose protocol (real window ids, step 3/4).
       const kcfId = nodeId.kcf(t.leases.C.camera.serial);
       const kernelId = nodeId.win("tracking", "display");
+      // meterName = the kernel node id: the worker self-meters onto its badge.
+      worker = createVisionWorker(
+        { pipes, params: initParams(), meterName: kernelId },
+        onResult,
+      );
       const bgra = { kind: "frame", pixelFormat: "BGRA8", dtype: "U8" } as const;
       scope.defer(
         registerGraphWiring({

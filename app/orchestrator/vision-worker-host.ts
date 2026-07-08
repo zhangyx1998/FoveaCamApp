@@ -20,6 +20,8 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { report } from "./diagnostics.js";
+import { registerNativeProbe } from "./native-probes.js";
+import type { WorkloadSnapshot } from "@lib/orchestrator/stats.js";
 import type {
   VisionInit,
   VisionResult,
@@ -94,13 +96,32 @@ export function createVisionWorker(
   const readerPath = opts.readerPath ?? readerAddonPath();
   let alive = true;
 
+  // Worker self-meter splice (VisionInit.meterName): the latest posted stats
+  // row is served as a native-probe source — the kernel appears in
+  // `perfSnapshot.workloads` (and on its graph node) exactly like a native
+  // thread. Staleness-gated so a wedged worker's frozen row drops out; the
+  // probe is disposed with the worker (no ghost rows).
+  let latestStats: WorkloadSnapshot | null = null;
+  let statsAt = 0;
+  const disposeProbe = init.meterName
+    ? registerNativeProbe(() =>
+        latestStats && Date.now() - statsAt < 3000
+          ? { [latestStats.name]: latestStats }
+          : {},
+      )
+    : null;
+
   worker.on("message", (msg: VisionWorkerOut) => {
     if (msg.kind === "result") onResult(msg);
-    else if (msg.kind === "error") report("vision-worker", msg.message);
+    else if (msg.kind === "stats") {
+      latestStats = msg.workload;
+      statsAt = Date.now();
+    } else if (msg.kind === "error") report("vision-worker", msg.message);
   });
   worker.on("error", (err) => report("vision-worker", err.message));
   worker.on("exit", () => {
     alive = false;
+    disposeProbe?.();
   });
 
   const post = (msg: VisionWorkerIn) => {
@@ -117,6 +138,7 @@ export function createVisionWorker(
       if (!alive) return;
       post({ kind: "stop" }); // post BEFORE clearing `alive` (post is gated on it)
       alive = false;
+      disposeProbe?.();
       void worker.terminate();
     },
   };

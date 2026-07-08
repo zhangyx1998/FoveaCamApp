@@ -155,6 +155,8 @@ export default function calibrateIntrinsicSession(broker: PipeBroker): ServerSes
             patternWidth: s.state.pattern_size.width,
             patternHeight: s.state.pattern_size.height,
           },
+          // meterName: kernel visible in perfSnapshot.workloads (self-meter).
+          meterName: nodeId.win("calibrate-intrinsic", "checker"),
         },
         onCheckerResult,
       );

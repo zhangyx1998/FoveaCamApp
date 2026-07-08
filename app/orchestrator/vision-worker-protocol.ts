@@ -14,6 +14,8 @@
 // Numbers only + transferred `ArrayBuffer`s — nothing here imports core or the
 // frame transport, so it compiles into both the main bundle and the worker.
 
+import type { WorkloadSnapshot } from "@lib/orchestrator/stats.js";
+
 export type Role = "L" | "C" | "R";
 
 /** One camera pipe the worker reads (SHM), keyed by role. */
@@ -36,6 +38,14 @@ export type VisionInit = {
   readerPath: string;
   /** Session-specific vision params (tuning/zoom/view/target/homographies…). */
   params: Record<string, unknown>;
+  /** Workload meter name (= the session's kernel GRAPH NODE id, so the stats
+   *  fold onto the node badge). When set, the worker self-meters (kernel busy
+   *  time, per-role input rates, latest-wins skips as drops, result rate) and
+   *  posts a `stats` row ~1/s; the host splices it into
+   *  `perfSnapshot.workloads`. The rig gap this closes: a kernel-bound app
+   *  (disparity at ~35fps vs 60fps cameras) was INVISIBLE — converters showed
+   *  60fps and nothing metered the loss point. */
+  meterName?: string;
 };
 
 /** Live param update (volts→homography matrices, tuning, zoom, view, target). */
@@ -75,4 +85,8 @@ export type VisionResult = {
 /** Non-fatal worker diagnostic (surfaced to `diagnostics.report` on main). */
 export type VisionError = { kind: "error"; message: string };
 
-export type VisionWorkerOut = VisionResult | VisionError;
+/** Periodic self-meter row (see `VisionInit.meterName`) — a ready
+ *  `WorkloadSnapshot` the host serves via a native-probe source. */
+export type VisionStats = { kind: "stats"; workload: WorkloadSnapshot };
+
+export type VisionWorkerOut = VisionResult | VisionError | VisionStats;

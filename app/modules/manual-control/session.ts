@@ -281,7 +281,12 @@ export default function manualControlSession(
       ];
       const taps = new DisposerBag();
       publishSerials(t.leases, taps, s);
-      worker = createVisionWorker({ pipes, params: initParams() }, onResult);
+      worker = createVisionWorker(
+        // meterName: the display kernel shows up in perfSnapshot.workloads
+        // (worker self-meter) even before this app gets full graph wiring.
+        { pipes, params: initParams(), meterName: nodeId.win("manual-control", "display") },
+        onResult,
+      );
 
       loop = startActuationLoop({
         targetVolts,

@@ -137,7 +137,15 @@ export default function calibrateDistortionSession(broker: PipeBroker): ServerSe
         connectPipe("L", t.leases.L.camera.serial, pipeIds),
         connectPipe("R", t.leases.R.camera.serial, pipeIds),
       ];
-      worker = createVisionWorker({ pipes, params: { kind: "distortion" } }, onResult);
+      worker = createVisionWorker(
+        // meterName: kernel visible in perfSnapshot.workloads (worker self-meter).
+        {
+          pipes,
+          params: { kind: "distortion" },
+          meterName: nodeId.win("calibrate-distortion", "distortion"),
+        },
+        onResult,
+      );
       scope.defer(() => {
         worker?.terminate();
         worker = null;

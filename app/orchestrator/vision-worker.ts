@@ -86,6 +86,68 @@ let kernel: VisionKernel | null = null;
 let addon: ReaderAddon | null = null;
 let pipes: OpenPipe[] = [];
 
+// --- self-meter (VisionInit.meterName) -------------------------------------
+// Kernel busy time, per-role input counts, latest-wins SKIPS as drops (ring
+// seq gaps = frames the kernel never saw), result rate + max result gap.
+// Cumulative counts; rates/utilization are per-report-interval deltas.
+const STATS_INTERVAL_MS = 1000;
+let meterName: string | null = null;
+const meter = {
+  startedAt: 0,
+  busyMs: 0,
+  inputs: new Map<string, number>(),
+  dropsTotal: 0,
+  results: 0,
+  // per-interval baselines
+  lastReportAt: 0,
+  lastBusyMs: 0,
+  lastInputs: new Map<string, number>(),
+  lastDrops: 0,
+  lastResults: 0,
+  lastResultAt: 0,
+  maxResultGapMs: 0,
+};
+
+function reportStats(now: number): void {
+  if (!meterName || now - meter.lastReportAt < STATS_INTERVAL_MS) return;
+  const dt = (now - meter.lastReportAt) / 1000;
+  const inputs: Record<string, { count: number; ratePerSec: number }> = {};
+  for (const [role, count] of meter.inputs) {
+    inputs[role] = {
+      count,
+      ratePerSec: (count - (meter.lastInputs.get(role) ?? 0)) / dt,
+    };
+    meter.lastInputs.set(role, count);
+  }
+  port!.postMessage({
+    kind: "stats",
+    workload: {
+      name: meterName,
+      window: { startedAt: meter.startedAt, snapshotAt: now, uptimeMs: now - meter.startedAt },
+      utilization: Math.min(1, (meter.busyMs - meter.lastBusyMs) / (now - meter.lastReportAt)),
+      busyMs: meter.busyMs,
+      inputs,
+      outputs: {
+        result: {
+          count: meter.results,
+          ratePerSec: (meter.results - meter.lastResults) / dt,
+          maxIntervalMs: meter.maxResultGapMs,
+        },
+      },
+      drops: {
+        total: meter.dropsTotal,
+        ratePerSec: (meter.dropsTotal - meter.lastDrops) / dt,
+        byReason: {},
+      },
+    },
+  });
+  meter.lastReportAt = now;
+  meter.lastBusyMs = meter.busyMs;
+  meter.lastDrops = meter.dropsTotal;
+  meter.lastResults = meter.results;
+  meter.maxResultGapMs = 0;
+}
+
 function fail(message: string): void {
   port!.postMessage({ kind: "error", message });
 }
@@ -110,6 +172,8 @@ function start(init: VisionInit): void {
     buffer: new Uint8Array(input.bytesPerFrame),
     lastSeq: 0n,
   }));
+  meterName = init.meterName ?? null;
+  meter.startedAt = meter.lastReportAt = Date.now();
   running = true;
   void pump();
 }
@@ -121,6 +185,12 @@ function readFrames(): FrameSet | "closed" {
     const r = addon!.readInto(pipe.handle, pipe.buffer, pipe.lastSeq);
     if (r === null) continue;
     if ("closed" in r) return "closed";
+    // Meter: consumed one frame; seq gaps = frames latest-wins skipped while
+    // the kernel was busy (the throughput-loss signal for a kernel-bound app).
+    const role = pipe.input.role;
+    meter.inputs.set(role, (meter.inputs.get(role) ?? 0) + 1);
+    if (pipe.lastSeq > 0n && r.seq > pipe.lastSeq + 1n)
+      meter.dropsTotal += Number(r.seq - pipe.lastSeq - 1n);
     pipe.lastSeq = r.seq;
     const len = r.width * r.height * pipe.input.channels;
     const view = new Uint8Array(pipe.buffer.buffer, pipe.buffer.byteOffset, len);
@@ -172,12 +242,22 @@ async function pump(): Promise<void> {
     const hasFrame = Object.keys(read).length > 0;
     if (hasFrame && kernel) {
       try {
+        const t0 = performance.now();
         const out = await kernel.process(read);
-        if (out) postResult(out.values, out.frames);
+        meter.busyMs += performance.now() - t0;
+        if (out) {
+          postResult(out.values, out.frames);
+          const now = Date.now();
+          if (meter.lastResultAt > 0)
+            meter.maxResultGapMs = Math.max(meter.maxResultGapMs, now - meter.lastResultAt);
+          meter.lastResultAt = now;
+          meter.results++;
+        }
       } catch (e) {
         fail(`vision step failed: ${(e as Error).message}`);
       }
     }
+    reportStats(Date.now());
     await delay(hasFrame ? 0 : BACKOFF_MS);
   }
   cleanup();
