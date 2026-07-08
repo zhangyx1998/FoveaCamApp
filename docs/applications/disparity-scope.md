@@ -1,9 +1,10 @@
 # Disparity Scope
 
-**Seed confidence: HIGH → CORRECTED by audit (2026-07-08).** The pipeline
-description held up; the USER-REPORTED "scale ratio ignored" claim did **not**
-survive code inspection and is restated below. No in-module code fix was made
-for bug (a) — the correct fix is cross-file and is FLAGGED for the planner.
+**Seed confidence: HIGH → CORRECTED by audit (2026-07-08), then FIXED same
+day.** The pipeline description held up; the USER-REPORTED "scale ratio
+ignored" claim did **not** survive code inspection and is restated below. The
+underlying real defect (nominal-zoom-driven match scale) is now FIXED — the
+cross-file plumbing was granted and implemented; see "Decision taken".
 
 ## Purpose
 Stereo vergence tuning/inspection: lock onto a target in the center (wide)
@@ -45,72 +46,89 @@ The magnification ratio *is* applied, identically to both sides of the match:
   region and downsamples it by `scale` — also `scale` strip-px per wide-px.
 
 So both the fovea tile and the strip land at the same pixels-per-angle, and the
-`zoom` factor cancels between them (see the two invariants in
-`app/test/vergence.test.ts` → `foveaTileSize (fovea↔wide match scale-
-consistency)`, added by this audit). `wrapPerspective(fovea, A2H)` does **not**
-rescale the fovea to wide pixels — `findPinholeProjection` builds A2H to a
-fovea-native (calibration `scale` px/mm) rectified frame, so the ÷`zoom` step is
-required and correct.
+`zoom` factor cancels between them (invariants pinned in
+`app/test/vergence.test.ts`). `wrapPerspective(fovea, A2H)` does **not** rescale
+the fovea to wide pixels — `findPinholeProjection` builds A2H to a fovea-native
+rectified frame, so the ÷`zoom` step is required and correct.
 
-**The real defect** is the *source* of `zoom`. It is a plain session-state
-constant (`state.zoom`, default **9.0**), edited by the "Zoom Ratio" number
-input — a *nominal* magnification, not the calibrated one. The template match is
-self-consistent for any `zoom`, but CCOEFF template matching is **not** scale
-invariant, so when the real fovea/wide optical magnification differs from the
-hand-set 9.0 the fovea tile and the wide strip sit at different pixel scales and
-match quality degrades (worst near the frame edges / with a mis-set zoom).
+**The real defect** was the *source* of `zoom`: a nominal session-state constant
+(default 9.0, the "Zoom Ratio" input), not the calibrated magnification. CCOEFF
+template matching is not scale invariant, so a mis-set nominal zoom put the tile
+and strip at different pixel scales and degraded matching.
 
-The calibration **already measures** the true magnification and then throws it
-away: `findPinholeProjection` (`app/lib/marker.ts`) computes
-`scale = √(area(img_pts)/area(relative))` per pose (mean + `scale_std`), which is
-the fovea's px-per-mm-at-1000mm; combined with the wide focal `U.focal` the
-fovea/wide ratio is `scale·1000/U.focal`. This is only `console.log`ged today.
+## Decision taken (2026-07-08, coordinator-granted)
 
-### Recommended fix — CROSS-FILE, FLAGGED (not done in this lane)
-Plumb the measured magnification out so the match uses it instead of the nominal
-`state.zoom`:
-1. `app/lib/marker.ts` `findPinholeProjection` — return the measured `scale`
-   (and/or the derived fovea/wide ratio) alongside the A2H regression.
-2. `app/lib/coordinate-conversions.ts` / `app/orchestrator/calibration.ts` —
-   carry it onto `CalibratedTriple` (e.g. `conv.magnification.L/R` or a scalar).
-3. `app/modules/disparity-scope/session.ts` `initParams()`/watchers — pass the
-   calibrated magnification to the kernel as the tile/strip `zoom` (keep
-   `state.zoom` for the *sliced-view crop + KCF search-window* sizing, which is
-   a UI convenience, distinct from the optical match scale).
+The calibration-MEASURED fovea↔wide magnification now drives the match:
 
-All three files are outside this auditor's lane (`app/lib/*`,
-`app/orchestrator/*`), so this is reported rather than applied. The alternative
-ratio sources considered are in Open questions.
+1. **`app/lib/marker.ts` `findPinholeProjection`** returns
+   `{ A2H, scale, scale_std }` instead of discarding the measured scale
+   (fovea px per object-unit at the protocol's nominal 1000-unit marker
+   distance; previously `console.log`-only).
+2. **`app/lib/coordinate-conversions.ts`** — `ExtrinsicConversions` carries
+   optional `scale`/`scale_std`; new pure `foveaWideMagnification(scale, focal)
+   = scale·1000/mean(focal)`, null on missing/degenerate inputs. The derivation
+   is unit-independent but assumes extrinsic captures near the protocol's
+   nominal 1000-unit distance — the same assumption `findPinholeProjection`'s
+   hardcoded projection plane already bakes into A2H. RIG-GATED: check the
+   reported value lands near the known optics (~9x) on real calibration data.
+3. **`app/orchestrator/calibration.ts`** — `CalibratedTriple.magnification:
+   { L, R }` (per-eye measured ratio or null), built in
+   `leaseCalibratedTriple`.
+4. **`app/modules/disparity-scope/session.ts`** — ships `matchZoom` (mean of
+   the per-eye values; single eye's value if only one measured; null if none)
+   to the kernel; `effectiveScale()` folds `tuning.scale` against the measured
+   magnification. A single scalar is used because the match shares one guide
+   strip + one tile size for both eyes; the two foveas share optics so L/R
+   should agree (the mean absorbs measurement noise).
+5. **`app/modules/disparity-scope/vision.ts`** — new `matchZoom` param; the
+   tile size and `analyzeVergence` use `matchMagnification(matchZoom, zoom)`
+   (vergence.ts): measured when valid, else `max(1, zoom)`.
+6. **Telemetry `match_magnification`** (contract.ts) surfaces the active
+   measured value (null = fallback); the UI's "Template Scale" readout and the
+   Zoom-Ratio tooltip use it.
+
+**FALLBACK (zero regression on old data):** when no measured value exists —
+legacy extrinsic fits without `scale`, uncalibrated wide camera, degenerate
+values — `matchMagnification` falls back to `max(1, state.zoom)`, byte-for-byte
+the previous behavior.
+
+**Knob semantics now (PROMINENT — user may veto, see Open questions):**
+`state.zoom` ("Zoom Ratio") drives ONLY the sliced-view crop size (and remains
+the match fallback on unmeasured rigs). On calibrated rigs the knob **no longer
+influences template matching at all** — the measured value wins unconditionally.
+
+Selection + derivation are unit-tested (`app/test/vergence.test.ts`:
+`foveaWideMagnification`, `matchMagnification`, plus the tile/strip
+scale-consistency invariants).
 
 ## Known/suspected issues
-- **RESOLVED (restated) — bug (a):** the magnification ratio is NOT ignored; it
-  is applied via `state.zoom` on both sides of the match (verified + pinned by
-  unit test). The genuine problem is that `zoom` is a nominal constant, not the
-  calibration-measured magnification (see the section above). Fix is cross-file
-  and FLAGGED.
+- **RESOLVED — bug (a):** match scale now comes from the calibration-measured
+  magnification (nominal-zoom fallback). RIG-GATED: verify match_left/right
+  quality improves (or at minimum, `match_magnification` telemetry reads a
+  plausible ~9x) on the calibrated rig.
 - Secondary (RIG-GATED): if the fovea camera's native resolution differs from
   the center camera's, `foveaTileSize` uses the CENTER `width/height` to size the
   fovea tile, adding an uncorrected `foveaRes/centerRes` factor. Harmless when
   all three cameras are the same model/resolution (expected for FoveaCam Duo);
   worth confirming on the rig.
 - `analyzeVergence` inputs verified scale-consistent: the guide strip, the tile
-  grid, and `center.rect` (the target footprint, `w1/s = width/zoom`) all resolve
-  in the same wide-frame-pixel space that `stepVergence` lifts to angles via
-  `P2A.C`. No additional ratio needed there.
+  grid, and `center.rect` all resolve in the same wide-frame-pixel space that
+  `stepVergence` lifts to angles via `P2A.C`. No additional ratio needed there.
 
 ## Open questions (for the user)
-1. **Which magnification source should drive the match?** Options:
-   (a) the calibration-measured per-pose `scale` from `findPinholeProjection`
-   (most defensible — it's an independent optical measurement; needs the
-   cross-file plumbing above);
-   (b) keep the user-set `state.zoom` but seed its default from that measured
-   value at acquire instead of the hard-coded 9.0;
-   (c) leave `state.zoom` as a manual knob and just document that it must be set
-   to the true optical magnification for matching to work.
-   Recommendation: (a), falling back to (b) if a single scalar per eye is
-   preferred over per-pose. Please confirm before the cross-file change is made.
-2. **Should the "Zoom Ratio" input keep controlling the match scale at all?**
-   Today one control conflates two roles: the optical match magnification and the
-   sliced-view crop / KCF search-window size. If the match uses the calibrated
-   magnification (option a/b), should the UI `zoom` keep only the crop/search
-   role, or be removed entirely?
+1. **Veto point — should the Zoom-Ratio knob influence matching at all?** The
+   implemented choice: NO on calibrated rigs (measured value wins; knob is
+   crop-only + fallback). Alternatives if vetoed: (a) knob acts as a manual
+   multiplier/trim on the measured value; (b) knob default is *seeded* from the
+   measured value but stays user-editable and authoritative. The tooltip on the
+   knob and the `match_magnification` telemetry make the active behavior
+   visible either way.
+2. **Per-eye magnification.** L and R are measured independently and averaged
+   for the single match scale. If the two fovea paths ever diverge optically,
+   the match/tile pipeline would need per-eye tile+strip sizing — worth it?
+   (Current hardware: shared optics, expected to agree.)
+3. **Distance assumption.** `foveaWideMagnification` inherits the extrinsic
+   protocol's nominal-1000-unit capture-distance assumption (already baked into
+   A2H). If future calibration captures at varying distances, the measured
+   `scale` (and A2H) would both need a per-pose distance term — flag for the
+   calibration owner rather than this module.

@@ -77,7 +77,11 @@ export const disparity = defineContract({
     // from the orchestrator, and those two modules already established the
     // simpler per-module-state precedent instead of a shared app config.
     baseline: 200,
-    /** FOV(wide) / FOV(fovea). */
+    /** Nominal FOV(wide) / FOV(fovea). Drives the sliced-view crop size, and
+     *  is the template-match magnification FALLBACK only — when the extrinsic
+     *  calibration carries a measured magnification, the match uses that
+     *  instead (telemetry `match_magnification`); this knob then no longer
+     *  influences matching. See docs/applications/disparity-scope.md. */
     zoom: 9.0,
     /** Which composite the renderer wants for the `center.*` channel. */
     view: "sliced" as "sliced" | "disparity",
@@ -110,6 +114,12 @@ export const disparity = defineContract({
     match_left: null as MatchInfo | null,
     match_right: null as MatchInfo | null,
     match_center: null as { rect: Rect } | null,
+    /** Calibration-MEASURED fovea↔wide magnification driving the template
+     *  match (mean of the per-eye `foveaWideMagnification` values), or null
+     *  when unmeasured — the match then falls back to the nominal
+     *  `state.zoom` and the UI presents the zoom knob as the active match
+     *  scale. Set on activate; constant per activation. */
+    match_magnification: null as number | null,
     tracker_bbox: null as Rect | null,
     /** Live PID integrator values (debug readout, matches the original
      *  renderer's "PID Debug" fieldset). */

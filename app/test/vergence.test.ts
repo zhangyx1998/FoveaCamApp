@@ -27,12 +27,16 @@ vi.mock("core/Vision", () => ({
 import { PID } from "@lib/pid";
 import {
   foveaTileSize,
+  matchMagnification,
   stepVergence,
   type VergenceAnalysis,
   type VergencePIDs,
 } from "@modules/disparity-scope/vergence";
 import type { Point2d, Rect } from "core/Geometry";
-import type { CoordinateConversions } from "@lib/coordinate-conversions";
+import {
+  foveaWideMagnification,
+  type CoordinateConversions,
+} from "@lib/coordinate-conversions";
 
 // Identity conversions: pixel == angle, angle == volt. Isolates the test from
 // the (separately-defined, already-used-elsewhere) stereo/regression math, so
@@ -114,6 +118,76 @@ describe("foveaTileSize (fovea↔wide match scale-consistency)", () => {
       const tilePxPerWidePx = tile.width / (1440 / zoom); // fovea-frame → tile
       const stripPxPerWidePx = scale; // wide strip downsample factor
       expect(tilePxPerWidePx * wPx).toBeCloseTo(stripPxPerWidePx * wPx);
+    }
+  });
+});
+
+// The measured-magnification plumbing (user-reported bug (a), decision taken
+// 2026-07-08): `foveaWideMagnification` derives the true fovea↔wide ratio from
+// the extrinsic fit's measured `scale` (fovea px per object-unit at the
+// protocol's nominal 1000-unit distance) and the wide focal length;
+// `matchMagnification` then selects measured-over-nominal with a legacy-exact
+// fallback. Session and kernel both route through `matchMagnification`, so
+// these pin the entire selection behavior.
+describe("foveaWideMagnification (measured ratio derivation)", () => {
+  it("derives scale·1000/mean(focal)", () => {
+    // scale = 9 fovea px per unit at 1000 units; wide focal 1000 px sees that
+    // unit as 1 px → magnification 9.
+    expect(foveaWideMagnification(9, { x: 1000, y: 1000 })).toBeCloseTo(9);
+    // Anisotropic focal uses the mean: (800+1200)/2 = 1000.
+    expect(foveaWideMagnification(9, { x: 800, y: 1200 })).toBeCloseTo(9);
+    expect(foveaWideMagnification(4.5, { x: 500, y: 500 })).toBeCloseTo(9);
+  });
+
+  it("returns null for missing/degenerate inputs (legacy fits, uncalibrated wide)", () => {
+    expect(foveaWideMagnification(undefined, { x: 1000, y: 1000 })).toBeNull();
+    expect(foveaWideMagnification(0, { x: 1000, y: 1000 })).toBeNull();
+    expect(foveaWideMagnification(-3, { x: 1000, y: 1000 })).toBeNull();
+    expect(foveaWideMagnification(NaN, { x: 1000, y: 1000 })).toBeNull();
+    expect(foveaWideMagnification(9, null)).toBeNull();
+    expect(foveaWideMagnification(9, undefined)).toBeNull();
+    expect(foveaWideMagnification(9, { x: 0, y: 0 })).toBeNull();
+    expect(foveaWideMagnification(9, { x: NaN, y: NaN })).toBeNull();
+  });
+});
+
+describe("matchMagnification (measured-vs-fallback selection)", () => {
+  it("prefers the measured magnification when present", () => {
+    expect(matchMagnification(8.7, 9)).toBe(8.7);
+    // Even when the nominal knob disagrees wildly — the knob must no longer
+    // influence the match on calibrated rigs.
+    expect(matchMagnification(8.7, 1)).toBe(8.7);
+    expect(matchMagnification(8.7, 42)).toBe(8.7);
+  });
+
+  it("falls back to the nominal zoom when unmeasured (legacy-exact)", () => {
+    expect(matchMagnification(null, 9)).toBe(9);
+    expect(matchMagnification(undefined, 9)).toBe(9);
+    // Degenerate measured values also fall back rather than poisoning the match.
+    expect(matchMagnification(0, 9)).toBe(9);
+    expect(matchMagnification(-1, 9)).toBe(9);
+    expect(matchMagnification(NaN, 9)).toBe(9);
+    expect(matchMagnification(Infinity, 9)).toBe(9);
+  });
+
+  it("clamps the nominal fallback to >= 1, matching the session/kernel's old Math.max(1, zoom)", () => {
+    expect(matchMagnification(null, 0.5)).toBe(1);
+    expect(matchMagnification(null, 0)).toBe(1);
+    expect(matchMagnification(null, -2)).toBe(1);
+  });
+
+  it("feeds foveaTileSize consistently in both modes (tile:strip stays 1:1)", () => {
+    // Same invariant as the scale-consistency suite above, exercised through
+    // the selection: whichever magnification wins, BOTH the tile and the strip
+    // divide by it, so the pixel-scale agreement is preserved.
+    for (const [measured, nominal] of [
+      [8.62, 9], // measured drives
+      [null, 9], // fallback drives
+    ] as const) {
+      const zoom = matchMagnification(measured, nominal);
+      const tile = foveaTileSize({ width: 1440, height: 1080, zoom, scale: 3 });
+      expect(tile.width).toBeCloseTo((1440 / zoom) * 3);
+      expect(tile.height).toBeCloseTo((1080 / zoom) * 3);
     }
   });
 });

@@ -103,6 +103,14 @@ const scale_ratio = computed<number>({
   get: () => state.tuning.scale,
   set: (v) => setTuning("scale", v),
 });
+// The magnification actually driving the template match: the calibration-
+// measured fovea↔wide ratio when the session reports one, else the nominal
+// zoom knob (the session/kernel apply the exact same fallback) — keeps the
+// "Template Scale" readout honest now that the knob no longer influences the
+// match on calibrated rigs.
+const match_zoom = computed(
+  () => telemetry.match_magnification ?? Math.max(1, state.zoom),
+);
 const min_score = computed<number>({
   get: () => state.tuning.min_score,
   set: (v) => setTuning("min_score", v),
@@ -339,7 +347,7 @@ function onCursor(c: (Point2d & Size & { buttons: number }) | null): void {
           :step="0.01"
         >
           <span>Template Scale</span>
-          <span>{{ (1 + (state.zoom - 1) * clamp(scale_ratio, [0, 1])).toFixed(2) }}</span>
+          <span>{{ (1 + (match_zoom - 1) * clamp(scale_ratio, [0, 1])).toFixed(2) }}</span>
         </RangeSlider>
         <RangeSlider v-model="min_score" :min="0" :max="1" :neutral="DEFAULT_TUNING.min_score" :step="0.01">
           <span>Min Match Score</span>
@@ -367,7 +375,15 @@ function onCursor(c: (Point2d & Size & { buttons: number }) | null): void {
           <span>{{ (expand_y * 100).toFixed(1) }}%</span>
         </RangeSlider>
         <h4><span>Display</span></h4>
-        <label class="entry">
+        <label
+          class="entry"
+          :title="
+            telemetry.match_magnification !== null
+              ? `Sliced-view crop only — template match uses the calibrated ` +
+                `magnification (${telemetry.match_magnification.toFixed(2)}x)`
+              : 'Sliced-view crop + template-match magnification (no calibrated value)'
+          "
+        >
           <span>Zoom Ratio</span>
           <input type="number" v-model.number="state.zoom" />
         </label>
