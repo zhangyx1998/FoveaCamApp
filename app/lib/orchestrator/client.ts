@@ -60,6 +60,11 @@ import {
 import { formatCounterRate, formatSampleStats } from "./stats.js";
 import { controller } from "./contracts.js";
 import type { Span } from "./contracts.js";
+import {
+  PID_OVERRIDE_KEYS,
+  type PidOverrideCommand,
+  type PidOverrideState,
+} from "./pid-override-contract.js";
 
 /** Rebuild the Mat shape (`FrameView`/vision ops expect) from a frame payload. */
 export function payloadToMat(p: FramePayload | null): Mat<Uint8Array> | null {
@@ -604,4 +609,67 @@ export function useSession<C extends Contract>(
 
 export function useController(options: UseSessionOptions = {}): Session<typeof controller> {
   return useSession(controller, "controller", options);
+}
+
+/** The reactive PID-override proxy `usePidOverride` returns (deliverable 3):
+ *  property access, not `.value.value`. Assigning `.value` engages/updates the
+ *  server slot; `.release()` (or `.value = null`) releases; `.engaged`/reading
+ *  `.value` mirror the server-authoritative state. */
+export type PidOverrideProxy<V> = {
+  /** Get: the current server override value (null while released). Set: engage
+   *  (or update) the override at `v`; setting `null` releases. */
+  value: V | null;
+  /** Server-authoritative: is the override currently engaged? */
+  readonly engaged: boolean;
+  /** Release the override (control resumes; the node's `seed` keeps it
+   *  continuous). */
+  release(): void;
+};
+
+/**
+ * Bind a REACTIVE override proxy over a module's PID-override contract fragment
+ * (`@lib/orchestrator/pid-override-contract`). The renderer drag code writes
+ * `proxy.value = v` (or `proxy.release()`) and reads `proxy.engaged`; nothing
+ * else touches the slot. Reactive because every accessor reads the reactive
+ * `session.state`, so templates/`watch` track it for free — the same principle
+ * as the rest of this client (all authoritative state lives server-side, the
+ * renderer holds echoes).
+ *
+ * Reusable by ANY module (not disparity-specific): a module with one PID node
+ * uses the default `pidOverride` state key + command; a multi-node module
+ * passes distinct `stateKey`/`command` names matching its contract.
+ *
+ * `V` is the module's node value type (e.g. `{ l, r }` volts) — supply it
+ * explicitly, it can't be inferred from the untyped state key.
+ */
+export function usePidOverride<C extends Contract, V>(
+  session: Session<C>,
+  options: { stateKey?: string; command?: string } = {},
+): PidOverrideProxy<V> {
+  const stateKey = options.stateKey ?? PID_OVERRIDE_KEYS.state;
+  const command = options.command ?? PID_OVERRIDE_KEYS.command;
+  const read = (): PidOverrideState<V> =>
+    ((session.state as Record<string, unknown>)[stateKey] as
+      | PidOverrideState<V>
+      | undefined) ?? { engaged: false, value: null };
+  const send = (payload: PidOverrideCommand<V>): void => {
+    // The command is contract-declared on the module, not statically known
+    // here (this helper is module-generic) — dispatch by name.
+    void session.call(command as keyof CommandsOf<C>, payload as never);
+  };
+  return reactive({
+    get value(): V | null {
+      return read().value;
+    },
+    set value(v: V | null) {
+      if (v === null) send({ release: true });
+      else send({ value: v });
+    },
+    get engaged(): boolean {
+      return read().engaged;
+    },
+    release(): void {
+      send({ release: true });
+    },
+  }) as PidOverrideProxy<V>;
 }

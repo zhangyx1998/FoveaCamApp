@@ -12,6 +12,32 @@
 // orchestrator bundle from here broke the "Vue-free orchestrator" hard rule
 // (§3) — a ~1.3 MB bundle-size jump caught it.
 import { clamp } from "./util/math.js";
+// Type-only (erased at compile) — keeps this module Vue-free AND core-runtime-
+// free (see the header note): `Point2d` is just `{ x, y }`, no addon pulled in.
+import type { Point2d } from "core/Geometry";
+
+/**
+ * The ONE reusable, serializable PID parameter record (unified per the PID-node
+ * directive, docs/proposals/pid-nodes-and-view-replumb.md §"PID node design").
+ * Every controller — scalar {@link PID} and {@link PID2D} per-axis — is
+ * parameterized by this shape, so a module declares gains/limits once and feeds
+ * the same object to construction, {@link PID.setParams}, and any UI binding.
+ *
+ * A superset of the runtime knobs in {@link PIDOptions} minus `initial` (params
+ * describe the CONTROLLER, not its live integrator seed): `kp`/`ki`/`kd` are
+ * required (the caller states intent — no silent zero), the two limit pairs are
+ * optional (default unbounded / = `limits`). Structurally assignable to
+ * {@link PIDOptions}, so `new PID(params)` just works.
+ */
+export interface PidParams {
+  kp: number;
+  ki: number;
+  kd: number;
+  /** Output saturation `[min, max]` (default unbounded). */
+  limits?: [number, number];
+  /** Integrator clamp for anti-windup (default = `limits`). */
+  integralLimits?: [number, number];
+}
 
 export interface PIDOptions {
   /** Proportional gain. */
@@ -77,6 +103,26 @@ export class PID {
   }
 
   /**
+   * Re-parameterize a LIVE controller from the uniform {@link PidParams} shape
+   * (gain retune, e.g. a tuning-slider write) WITHOUT disturbing the integrator
+   * or derivative memory — the loop keeps running through the change. Mirrors
+   * the constructor's limit defaulting: passing `limits` without
+   * `integralLimits` re-derives the integral clamp from it (so a tightened
+   * output bound also tightens anti-windup); omitting a limit leaves it as-is.
+   * The live integrator is re-clamped to the (possibly narrowed) bound
+   * immediately, so a shrunk range can't leave a stale, out-of-range command.
+   */
+  setParams(p: PidParams): void {
+    this.kp = p.kp;
+    this.ki = p.ki;
+    this.kd = p.kd;
+    if (p.limits) this.limits = p.limits;
+    if (p.integralLimits) this.integralLimits = p.integralLimits;
+    else if (p.limits) this.integralLimits = p.limits;
+    this.integral = clamp(this.integral, this.integralLimits);
+  }
+
+  /**
    * Advance one control step.
    * @param error setpoint − measurement
    * @param dt normalized time step (default 1)
@@ -95,5 +141,63 @@ export class PID {
       this.kp * error + this.integral + this.kd * derivative,
       this.limits,
     );
+  }
+}
+
+/** Per-axis params for a {@link PID2D} — the x and y channels are independent
+ *  scalar controllers, so each carries its own full {@link PidParams} (the
+ *  vergence pan DOF, e.g., shares gains across axes but different physical
+ *  limits are common — verge vs. v_shift live on separate `PID`s already). */
+export interface Pid2dParams {
+  x: PidParams;
+  y: PidParams;
+}
+
+/**
+ * Two independent scalar {@link PID}s driven as one `{ x, y }` controller — the
+ * PID-2D variant the directive calls for (a `Point2d` error in, a `Point2d`
+ * command out). It is deliberately NOT a coupled 2-vector controller: each axis
+ * integrates/saturates on its own {@link PidParams}, which is exactly what the
+ * vergence `pan` DOF wants (common-mode ray correction whose x and y are
+ * physically separate). Everything the scalar `PID` guarantees (velocity-form
+ * integrator = command, anti-windup clamp, dt-scaling) holds per axis.
+ */
+export class PID2D {
+  readonly x: PID;
+  readonly y: PID;
+
+  constructor(p?: Partial<Pid2dParams>) {
+    this.x = new PID(p?.x);
+    this.y = new PID(p?.y);
+  }
+
+  /** Retune either/both axes live (see {@link PID.setParams}); an omitted axis
+   *  is left untouched. */
+  setParams(p: Partial<Pid2dParams>): void {
+    if (p.x) this.x.setParams(p.x);
+    if (p.y) this.y.setParams(p.y);
+  }
+
+  /** Advance both axes one step. `dt` is shared (both channels are driven at
+   *  the same call rate). */
+  step(error: Point2d, dt = 1): Point2d {
+    return { x: this.x.step(error.x, dt), y: this.y.step(error.y, dt) };
+  }
+
+  /** Current per-axis integrator values as a point (the 2D command). */
+  get value(): Point2d {
+    return { x: this.x.value, y: this.y.value };
+  }
+  set value(v: Point2d) {
+    this.x.value = v.x;
+    this.y.value = v.y;
+  }
+
+  /** Reset both integrators (default {0,0}) and derivative memory. Passing a
+   *  point seeds each axis — used by the PID-node override `seed` hook to make
+   *  the resumed 2D command continuous with the released override. */
+  reset(value?: Point2d): void {
+    this.x.reset(value?.x);
+    this.y.reset(value?.y);
   }
 }
