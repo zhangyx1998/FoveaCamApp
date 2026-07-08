@@ -41,9 +41,9 @@ describe("pipe contract (C-16)", () => {
       spec,
       ringDepth: spec.ringDepth,
       epoch: 1,
-      headerLayout: { layoutVersion: 3, magic: "FVSHMRG" },
+      headerLayout: { layoutVersion: 4, magic: "FVSHMRG" },
     };
     expect(handle.spec).toBe(spec);
-    expect(handle.headerLayout.layoutVersion).toBe(3);
+    expect(handle.headerLayout.layoutVersion).toBe(4);
   });
 });

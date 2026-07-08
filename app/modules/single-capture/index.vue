@@ -11,13 +11,14 @@ You may find the full license in project root directory.
 <script setup lang="ts">
 import { computed, onMounted } from "vue";
 import { useSession, usePipeFrame, payloadToMat } from "@lib/orchestrator/client";
+import { nodeId } from "@lib/orchestrator/graph-contract";
 import { liveview } from "./contract";
 import FrameView from "@src/components/FrameView.vue";
 
 const session = useSession(liveview, "liveview");
 const { state, telemetry } = session;
 // real-1c: live view off the selected camera's native pipe (not `session.frame`).
-const frame = usePipeFrame(() => (state.serial ? `camera:${state.serial}` : null));
+const frame = usePipeFrame(() => (state.serial ? nodeId.convert(state.serial) : null));
 const mat = computed(() => payloadToMat(frame.value));
 
 onMounted(() => session.call("refresh", undefined));

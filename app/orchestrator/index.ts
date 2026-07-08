@@ -195,7 +195,9 @@ async function drainForWindowSwitch(): Promise<{ ok: boolean; reason?: string }>
 // --- accept renderer connections brokered by the main process ------------
 let firstPort = true;
 process.parentPort.on("message", (e) => {
-  const data = e.data as { type?: string; id?: number } | null;
+  const data = e.data as
+    | { type?: string; id?: number; windowId?: string | null }
+    | null;
   if (data?.type === "window:drain") {
     const id = data.id ?? 0;
     void drainForWindowSwitch()
@@ -205,11 +207,19 @@ process.parentPort.on("message", (e) => {
       );
     return;
   }
+  // A-34: main reports a BrowserWindow destroyed — the authoritative teardown
+  // signal for per-window state (`win/<windowId>/...`, C-24 composition).
+  if (data?.type === "window:closed") {
+    if (typeof data.windowId === "string") hub.windowClosed(data.windowId);
+    return;
+  }
   if (firstPort && e.ports.length > 0) {
     firstPort = false;
     if (Number.isFinite(forkTs)) span("boot.firstPortAttached", Date.now() - forkTs);
   }
-  for (const port of e.ports) hub.attach(port);
+  // A-34: the connect handoff carries the sender window's stable id — the Hub
+  // tags each channel so sessions can key per-window behavior on it.
+  for (const port of e.ports) hub.attach(port, { windowId: data?.windowId });
 });
 
 // Orderly shutdown: release session resources (cameras, serial, intervals) then

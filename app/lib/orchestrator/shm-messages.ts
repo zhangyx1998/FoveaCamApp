@@ -65,6 +65,9 @@ export type PipeReadDone = {
    *  `width*height*channels` bytes at the head of the (max-sized) buffer. */
   width?: number;
   height?: number;
+  /** Frame-bound crop origin in the parent stream (v4, fovea pipes). */
+  originX?: number;
+  originY?: number;
   /** True when the publisher has set state=CLOSED — the consumer should unmap. */
   closed?: boolean;
   error?: string;

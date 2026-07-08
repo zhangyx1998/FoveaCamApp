@@ -122,6 +122,8 @@ ReadStatus readLatestInto(const ReadMapping &m, void *dst, size_t dstBytes,
     const uint64_t systemTimestamp = slotHeader->systemTimestamp;
     const uint32_t width = slotHeader->width;
     const uint32_t height = slotHeader->height;
+    const uint32_t originX = slotHeader->originX; // v4 (read inside the seqlock
+    const uint32_t originY = slotHeader->originY; // window, like width/height)
     std::atomic_thread_fence(std::memory_order_acquire);
     const uint64_t after = slotHeader->seq.load(std::memory_order_acquire);
     if (before != after || (after & 1) != 0)
@@ -132,6 +134,8 @@ ReadStatus readLatestInto(const ReadMapping &m, void *dst, size_t dstBytes,
     out.retries = retries;
     out.width = width;
     out.height = height;
+    out.originX = originX;
+    out.originY = originY;
     out.meta = {tCapture, convertMs, deviceTimestamp, systemTimestamp};
     return ReadStatus::Ok;
   }

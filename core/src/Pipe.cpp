@@ -119,8 +119,12 @@ void Publisher::offer(const void *data, const FrameInfo &info,
   for (uint32_t y = 0; y < info.height; ++y)
     std::memcpy(dst + static_cast<size_t>(y) * rowBytes,
                 src + static_cast<size_t>(y) * stride, rowBytes);
-  segment_->publish(slot, meta, info.width, info.height);
+  segment_->publish(slot, meta, info.width, info.height, info.originX,
+                    info.originY); // v4: frame-bound crop origin
   meter_.emit("shm", now);
+  // C-24 item 3: exact per-edge byte flow (variable-size fovea frames make
+  // rate × nominal-bytes wrong; count what was actually ring-written).
+  bytesTotal_.fetch_add(activeBytes, std::memory_order_relaxed);
   // Attribute the actual write (memcpy) time to busy — the pipe's own cost.
   meter_.addBusy(std::chrono::duration<double, std::milli>(
                      std::chrono::steady_clock::now() - writeStart)
@@ -223,6 +227,18 @@ std::vector<std::pair<std::string, Meter::Snapshot>> PipeHub::probeAll() {
   std::vector<std::pair<std::string, Meter::Snapshot>> out;
   for (auto &kv : pipes_)
     out.push_back({kv.first, kv.second.publisher->probe()});
+  return out;
+}
+
+std::vector<PipeHub::ListEntry> PipeHub::list() {
+  std::lock_guard<std::mutex> lock(m_);
+  std::vector<ListEntry> out;
+  out.reserve(pipes_.size());
+  for (auto &kv : pipes_) {
+    auto &p = *kv.second.publisher;
+    out.push_back({kv.first, p.spec(), p.epoch(), p.consumers(), p.isClosed(),
+                   p.bytesTotal()});
+  }
   return out;
 }
 
@@ -560,6 +576,32 @@ Value testGateLog(const CallbackInfo &info) {
   return arr;
 }
 
+// Enumerate every ADVERTISED pipe without connecting (C-24 item 2): identity +
+// spec + epoch + consumer refcount + closed + exact bytesTotal — the graph
+// topology's discovery + per-edge byte-flow source.
+Value list(const CallbackInfo &info) {
+  auto env = info.Env();
+  try {
+    auto entries = PipeHub::instance().list();
+    auto arr = Array::New(env, entries.size());
+    uint32_t i = 0;
+    for (const auto &e : entries) {
+      auto o = Object::New(env);
+      o.Set("id", String::New(env, e.id));
+      o.Set("spec", specToObject(env, e.spec));
+      o.Set("epoch", Number::New(env, e.epoch));
+      o.Set("consumers", Number::New(env, e.consumers));
+      o.Set("closed", Boolean::New(env, e.closed));
+      o.Set("bytesTotal", Number::New(env, static_cast<double>(e.bytesTotal)));
+      arr.Set(i++, o);
+    }
+    return arr;
+  } catch (const std::exception &e) {
+    Error::New(env, e.what()).ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+}
+
 // Probe EVERY live pipe → {[pipeId]: WorkloadSnapshot}. Dropped pipes are
 // absent (no stale workload rows under churn) — the orchestrator folds this
 // straight into `perfSnapshot.workloads`.
@@ -589,6 +631,7 @@ void exportPipeNamespace(Napi::Env env, Napi::Object &exports) {
   exports.Set("injectStall", Function::New(env, injectStall, "injectStall"));
   exports.Set("probe", Function::New(env, probe, "probe"));
   exports.Set("probeAll", Function::New(env, probeAll, "probeAll"));
+  exports.Set("list", Function::New(env, list, "list"));
   exports.Set("offerFrame", Function::New(env, offerFrame, "offerFrame"));
   exports.Set("installTestGate",
               Function::New(env, installTestGate, "installTestGate"));

@@ -27,7 +27,7 @@ function handle(): PipeHandle {
     },
     ringDepth: 3,
     epoch: 1,
-    headerLayout: { layoutVersion: 3, magic: "FVSHMRG" },
+    headerLayout: { layoutVersion: 4, magic: "FVSHMRG" },
   };
 }
 

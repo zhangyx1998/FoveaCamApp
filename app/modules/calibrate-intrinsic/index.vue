@@ -15,6 +15,7 @@ You may find the full license in project root directory.
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted } from "vue";
 import { useSession, usePipeFrame } from "@lib/orchestrator/client";
+import { nodeId } from "@lib/orchestrator/graph-contract";
 import { calibrateIntrinsic } from "./contract";
 import StreamView from "@src/components/StreamView.vue";
 import NavBack from "@src/components/NavBack.vue";
@@ -29,7 +30,7 @@ const { state, telemetry } = session;
 // real-1c: raw preview off the active camera's native pipe (marker-detection
 // overlay still rides telemetry).
 const preview = usePipeFrame(() =>
-  state.activeSerial ? `camera:${state.activeSerial}` : null,
+  state.activeSerial ? nodeId.convert(state.activeSerial) : null,
 );
 
 const views = computed(() => Object.values(telemetry.views));

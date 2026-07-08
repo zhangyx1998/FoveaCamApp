@@ -45,6 +45,7 @@ import {
   type PreDefinedDictionary,
 } from "core/Vision";
 import { createVisionWorker, type VisionWorkerHandle } from "@orchestrator/vision-worker-host";
+import { nodeId } from "@lib/orchestrator/graph-contract";
 import type { PipeBroker } from "@orchestrator/pipe-session";
 import type { PipeInput, VisionResult } from "@orchestrator/vision-worker-protocol";
 import type { CheckerValues } from "./vision";
@@ -134,7 +135,7 @@ export default function calibrateIntrinsicSession(broker: PipeBroker): ServerSes
     }
 
     function startCheckerWorker(lease: CameraLease): void {
-      const pipeId = `camera:${lease.camera.serial}`;
+      const pipeId = nodeId.convert(lease.camera.serial);
       const handle = broker.connect(pipeId);
       checkerPipeId = pipeId;
       const { width: w, height: h, channels, bytesPerFrame, maxBytes } = handle.spec;

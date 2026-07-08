@@ -39,6 +39,7 @@ import {
   retireUndistortPipe,
   type UndistortPipeSeam,
 } from "@orchestrator/undistort-pipe";
+import { nodeId } from "@lib/orchestrator/graph-contract";
 import type { PipeBroker } from "@orchestrator/pipe-session";
 import type { PipeInput, VisionResult } from "@orchestrator/vision-worker-protocol";
 import { tracking } from "./contract";
@@ -330,11 +331,11 @@ export default function trackingSession(
 
       const pipeIds: string[] = [];
       const pipes: PipeInput[] = [
-        connectPipe("L", `camera:${t.leases.L.camera.serial}`, pipeIds),
+        connectPipe("L", nodeId.convert(t.leases.L.camera.serial), pipeIds),
         // The worker's C input is the UNDISTORTED stream (slice runs on it);
         // uncalibrated rigs fall back to raw — same degradation as before.
-        connectPipe("C", undistortC ?? `camera:${t.leases.C.camera.serial}`, pipeIds),
-        connectPipe("R", `camera:${t.leases.R.camera.serial}`, pipeIds),
+        connectPipe("C", undistortC ?? nodeId.convert(t.leases.C.camera.serial), pipeIds),
+        connectPipe("R", nodeId.convert(t.leases.R.camera.serial), pipeIds),
       ];
       const taps = new DisposerBag();
       publishSerials(t.leases, taps, s);

@@ -18,6 +18,7 @@ import { computed, ref, watchEffect } from "vue";
 import { ROLE, THEME } from "@lib/camera-config";
 import { useAppConfig } from "@lib/config";
 import { useController, useSession, usePipeFrame } from "@lib/orchestrator/client";
+import { nodeId } from "@lib/orchestrator/graph-contract";
 import { readUrlParam, writeUrlState } from "@lib/url-state";
 import { degrees } from "@lib/util";
 import type { Point2d } from "core/Geometry";
@@ -55,7 +56,7 @@ watchEffect(() => writeUrlState({ step: state.step }));
 // C-22: raw L/C/R previews ride the native camera:<serial> pipe (off the JS
 // view-tap loop); marker overlays draw client-side from telemetry.detection.
 const pipe = (role: "L" | "C" | "R") =>
-  usePipeFrame(() => (state.serials?.[role] ? `camera:${state.serials[role]}` : null));
+  usePipeFrame(() => (state.serials?.[role] ? nodeId.convert(state.serials[role]) : null));
 const frameL = pipe("L");
 const frameC = pipe("C");
 const frameR = pipe("R");

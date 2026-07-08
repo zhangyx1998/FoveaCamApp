@@ -4,9 +4,9 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// `undistort-pipe` (C-23, real-1g): the session-scoped `undistort:<serial>`
+// `undistort-pipe` (C-23, real-1g): the session-scoped `camera/<serial>/undistort`
 // advertise/retire helper, unit-tested over an injected fake seam (never loads
-// native core / the pipe session). Encoding is RULED: id `undistort:<serial>`,
+// native core / the pipe session). Encoding is RULED: id `camera/<serial>/undistort`,
 // format in `spec.pixelFormat` (BGRA8), same dims as the camera.
 
 import { describe, expect, it, vi } from "vitest";
@@ -40,10 +40,10 @@ describe("undistort-pipe (C-23)", () => {
   it("advertises the ruled id + BGRA8 spec at camera dims, then attaches", () => {
     const { seam, calls } = fakeSeam();
     const id = advertiseUndistortPipe(seam, fakeCamera(), CAL);
-    expect(id).toBe("undistort:SN42");
+    expect(id).toBe("camera/SN42/undistort");
     expect(undistortPipeId("SN42")).toBe(id);
     expect(seam.advertise).toHaveBeenCalledWith({
-      id: "undistort:SN42",
+      id: "camera/SN42/undistort",
       pixelFormat: "BGRA8",
       dtype: "U8",
       width: 640,
@@ -56,15 +56,15 @@ describe("undistort-pipe (C-23)", () => {
     // Advertise BEFORE attach: the producer must find its pipe.
     expect(calls).toEqual(["advertise", "attach"]);
     const attach = seam.attach as ReturnType<typeof vi.fn>;
-    expect(attach.mock.calls[0]![1]).toBe("undistort:SN42");
+    expect(attach.mock.calls[0]![1]).toBe("camera/SN42/undistort");
     expect(attach.mock.calls[0]![2]).toBe(CAL); // plain cal record, untouched
   });
 
   it("retire detaches the producer BEFORE un-advertising", () => {
     const { seam, calls } = fakeSeam();
-    retireUndistortPipe(seam, "undistort:SN42");
+    retireUndistortPipe(seam, "camera/SN42/undistort");
     expect(calls).toEqual(["detach", "unadvertise"]);
-    expect(seam.detach).toHaveBeenCalledWith("undistort:SN42");
-    expect(seam.unadvertise).toHaveBeenCalledWith("undistort:SN42");
+    expect(seam.detach).toHaveBeenCalledWith("camera/SN42/undistort");
+    expect(seam.unadvertise).toHaveBeenCalledWith("camera/SN42/undistort");
   });
 });

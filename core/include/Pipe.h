@@ -52,13 +52,18 @@ struct PipeSpec {
 
 /** Geometry of one already-converted frame (in the pipe's advertised format).
  *  `stride` = bytes per row of `data` (`cv::Mat::step`); may exceed
- *  `width*channels` (the publisher copies row-by-row into the tight slot). */
+ *  `width*channels` (the publisher copies row-by-row into the tight slot).
+ *  `originX/originY` (v4, C-24/B-24): a crop's FRAME-BOUND position within its
+ *  parent stream (fovea nodes) — published into the slot header alongside the
+ *  active size; uncropped producers leave the defaults (0/0). */
 struct FrameInfo {
   uint32_t width = 0;
   uint32_t height = 0;
   uint32_t channels = 0;
   uint32_t stride = 0;
   size_t bytes = 0;
+  uint32_t originX = 0;
+  uint32_t originY = 0;
 };
 
 /** THE producer→publisher seam (C-19). Every producer plugs in here: B's Aravis
@@ -70,7 +75,8 @@ class FrameSink {
 public:
   virtual ~FrameSink() = default;
   /** Latest-wins, non-blocking, thread-safe (producer thread → publisher
-   *  thread). `info.bytes` must equal the pipe's `bytesPerFrame`, else the
+   *  thread). The frame's ACTIVE size must fit the ring (`info.bytes` ≤ the
+   *  pipe's max slot bytes, active w/h ≤ the C-20 max footprint), else the
    *  frame is dropped (a bookkeeping drop, never a throw). */
   virtual void offer(const void *data, const FrameInfo &info,
                      const ShmRing::FrameMeta &meta) = 0;
@@ -136,6 +142,15 @@ public:
   /** Out-of-loop probe of the native producer meter (orchestrator thread). */
   Meter::Snapshot probe() const;
 
+  /** Total ACTIVE bytes ring-written since advertise (C-24 item 3) — one add
+   *  per successful offer, so the topology's per-edge MB/s is exact even for
+   *  variable-size fovea frames (rate × nominal would lie). Monotonic; the
+   *  reader diffs snapshots. Relaxed atomic: single writer (producer thread),
+   *  any-thread reads. */
+  uint64_t bytesTotal() const { return bytesTotal_.load(std::memory_order_relaxed); }
+
+  bool isClosed() const { return closed_.load(std::memory_order_acquire); }
+
 private:
   PipeSpec spec_;
   std::string shmName_;
@@ -144,6 +159,7 @@ private:
 
   std::atomic<uint32_t> refcount_{0};
   std::atomic<bool> closed_{false};
+  std::atomic<uint64_t> bytesTotal_{0}; // producer-thread writer, relaxed reads
   ConsumerGate gate_; // NAPI-thread only (connect/disconnect/setConsumerGate)
 };
 
@@ -197,6 +213,19 @@ public:
   /** Probe EVERY live pipe's meter → keyed snapshots. Dropped pipes are gone
    *  from the result (no stale workload rows under churn). */
   std::vector<std::pair<std::string, Meter::Snapshot>> probeAll();
+
+  /** One advertised pipe's identity/liveness row (C-24 item 2 — topology
+   *  discovery WITHOUT connecting). */
+  struct ListEntry {
+    std::string id;
+    PipeSpec spec;
+    uint32_t epoch = 0;
+    uint32_t consumers = 0;
+    bool closed = false;
+    uint64_t bytesTotal = 0; // see Publisher::bytesTotal
+  };
+  /** Enumerate every advertised pipe (dropped pipes absent). */
+  std::vector<ListEntry> list();
 
 private:
   std::mutex m_;

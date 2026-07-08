@@ -17,6 +17,7 @@ import {
   retireUndistortPipe,
   type UndistortPipeSeam,
 } from "@orchestrator/undistort-pipe";
+import { nodeId } from "@lib/orchestrator/graph-contract";
 import type { PipeBroker } from "@orchestrator/pipe-session";
 import type { PipeInput, VisionResult } from "@orchestrator/vision-worker-protocol";
 import { multiFovea, defaultMultiFoveaTarget, MAX_MULTI_FOVEA_TARGETS } from "./contract";
@@ -217,7 +218,7 @@ export default function multiFoveaSession(
       // teardown is registered LAST → drains FIRST: the worker terminates
       // (stopping frames) before the runtime disposes, exactly as the old
       // center-view tap did. Uncalibrated rigs fall back to the raw pipe.
-      const cId = undistortC ?? `camera:${t.leases.C.camera.serial}`;
+      const cId = undistortC ?? nodeId.convert(t.leases.C.camera.serial);
       const handle = broker.connect(cId);
       const cPipe: PipeInput = {
         role: "C",

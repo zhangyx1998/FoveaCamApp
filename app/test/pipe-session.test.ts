@@ -42,7 +42,7 @@ function fakeBroker() {
         spec: spec(id),
         ringDepth: 3,
         epoch: epochs.get(id) ?? 1,
-        headerLayout: { layoutVersion: 3, magic: "FVSHMRG" },
+        headerLayout: { layoutVersion: 4, magic: "FVSHMRG" },
       };
     }),
     disconnect: vi.fn((id: string) => {
@@ -114,7 +114,7 @@ describe("pipe session (C-17/C-20)", () => {
     const h = harness([spec("preview:L")]);
     const handle = await h.call<PipeHandle>("connectPipe", { pipeId: "preview:L" });
     expect(handle.shmName).toBe("/fv.p.preview:L.g1");
-    expect(handle.headerLayout.layoutVersion).toBe(3);
+    expect(handle.headerLayout.layoutVersion).toBe(4);
     expect(handle.epoch).toBe(1);
     expect(h.consumers.get("preview:L")).toBe(1);
   });

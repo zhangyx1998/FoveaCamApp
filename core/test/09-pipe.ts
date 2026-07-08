@@ -87,7 +87,7 @@ const P = Pipe as unknown as {
   assert(handle.shmName.startsWith("/fv.p"), "pipe segment name");
   assert.equal(handle.ringDepth, ringDepth);
   assert.equal(handle.spec.bytesPerFrame, bytesPerFrame);
-  assert.equal(handle.headerLayout.layoutVersion, 3);
+  assert.equal(handle.headerLayout.layoutVersion, 4);
   assert.equal(P.consumers(id), 1);
 
   // Consumer read path (the reader addon — same the preload uses).

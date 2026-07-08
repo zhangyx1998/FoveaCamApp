@@ -18,6 +18,7 @@ import type { Point2d, Size } from "core/Geometry";
 import { ROLE, THEME } from "@lib/camera-config";
 import { useAppConfig } from "@lib/config";
 import { useFrames, useSession, usePipeFrame } from "@lib/orchestrator/client";
+import { nodeId } from "@lib/orchestrator/graph-contract";
 import { degrees, clamp } from "@lib/util";
 import { logScale } from "@lib/conversion";
 import { distanceToVerge } from "@lib/stereo";
@@ -66,7 +67,7 @@ const {
 // the JS view-tap loop); L/R (perspective-rectified foveae) + the disparity/
 // match views stay on `session.frame` (worker-migrated in the coupled half).
 const frameC = usePipeFrame(() =>
-  state.serials?.C ? `camera:${state.serials.C}` : null,
+  state.serials?.C ? nodeId.convert(state.serials.C) : null,
 );
 const frameCenter = computed(() =>
   state.view === "sliced" ? slicedFrame.payload.value : disparityFrame.payload.value,

@@ -101,3 +101,29 @@ export type GraphTopology = {
   nodes: GraphNode[];
   edges: GraphEdge[];
 };
+
+/** THE single source of node-id spelling (C-24 step 1: the former
+ *  `camera:<serial>` / `undistort:<serial>` pipe ids are now these paths).
+ *  Renderer and orchestrator both build ids through here — never inline the
+ *  strings. Pure, dependency-free (renderer-safe). */
+export const nodeId = {
+  /** Raw camera source (native Arv stream — not an SHM pipe). */
+  camera: (serial: string): string => `camera/${serial}`,
+  /** BGRA8 converted preview pipe (formerly `camera:<serial>`). */
+  convert: (serial: string): string => `camera/${serial}/convert`,
+  /** Undistorted stream pipe (formerly `undistort:<serial>`). */
+  undistort: (serial: string): string => `camera/${serial}/undistort`,
+  /** Native KCF tracker stream (track results; non-pipe transport). */
+  kcf: (serial: string): string => `camera/${serial}/kcf`,
+  /** Marker detector stream (non-pipe transport). */
+  detect: (serial: string): string => `camera/${serial}/detect`,
+  /** Dynamic fovea crop pipe (B-24 brick; slot reuse is epoch-guarded). NOTE:
+   *  the id nests under /undistort/ (it IS a crop of the undistorted space) but
+   *  the PHYSICAL edge is camera→fovea (B's fused map-ROI remap taps the raw
+   *  stream) — the topology renders the physical edge. */
+  fovea: (serial: string, slot: number): string =>
+    `camera/${serial}/undistort/fovea/${slot}`,
+  /** Window-composed node (kernels, private compositions). */
+  win: (windowId: string, ...segments: string[]): string =>
+    ["win", windowId, ...segments].join("/"),
+} as const;

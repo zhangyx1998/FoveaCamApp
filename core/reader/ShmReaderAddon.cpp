@@ -144,6 +144,8 @@ Value readInto(const CallbackInfo &info) {
     result.Set("retries", r.retries);
     result.Set("width", r.width);   // v3: active frame size within a max ring
     result.Set("height", r.height);
+    result.Set("originX", r.originX); // v4: frame-bound crop origin
+    result.Set("originY", r.originY); // (0/0 = uncropped stream)
     auto meta = Object::New(env);
     meta.Set("tCapture", r.meta.tCapture);
     meta.Set("convertMs", r.meta.convertMs);

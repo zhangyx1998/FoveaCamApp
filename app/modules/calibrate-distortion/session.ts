@@ -26,6 +26,7 @@ import { type MarkerTracker } from "@orchestrator/marker-tracker";
 import { publishSerials, DisposerBag, releaseLeases } from "@orchestrator/session-resources";
 import { detectionViews, retarget } from "@orchestrator/marker-calibration";
 import { createVisionWorker, type VisionWorkerHandle } from "@orchestrator/vision-worker-host";
+import { nodeId } from "@lib/orchestrator/graph-contract";
 import type { PipeBroker } from "@orchestrator/pipe-session";
 import type { PipeInput, VisionResult } from "@orchestrator/vision-worker-protocol";
 import {
@@ -106,7 +107,7 @@ export default function calibrateDistortionSession(broker: PipeBroker): ServerSe
     }
 
     function connectPipe(role: "L" | "R", serial: string, ids: string[]): PipeInput {
-      const pipeId = `camera:${serial}`;
+      const pipeId = nodeId.convert(serial);
       const handle = broker.connect(pipeId);
       ids.push(pipeId);
       const { width, height, channels, bytesPerFrame, maxBytes } = handle.spec;

@@ -34,6 +34,8 @@ struct ReadResult {
   uint32_t retries = 0; // seqlock retries this read took
   uint32_t width = 0;   // v3: active frame width (≤ segment max)
   uint32_t height = 0;  // v3: active frame height
+  uint32_t originX = 0; // v4: frame-bound crop origin in the parent stream
+  uint32_t originY = 0; // (0/0 for uncropped streams)
   FrameMeta meta;
 };
 

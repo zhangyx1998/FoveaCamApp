@@ -6,6 +6,7 @@ You may find the full license in project root directory.
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { useSession, usePipeFrame } from "@lib/orchestrator/client";
+import { nodeId } from "@lib/orchestrator/graph-contract";
 import { multiFovea } from "./contract";
 import StreamView from "@src/components/StreamView.vue";
 import PosView from "@src/components/PosView.vue";
@@ -19,7 +20,7 @@ const { state, telemetry } = session;
 // back to raw on uncalibrated rigs. Per-fovea processed crops stay on
 // session.frame.
 const center = usePipeFrame(() =>
-  state.undistortPipe ?? (state.serials?.C ? `camera:${state.serials.C}` : null),
+  state.undistortPipe ?? (state.serials?.C ? nodeId.convert(state.serials.C) : null),
 );
 const selectedTarget = ref(0);
 const draftCenter = ref<Point2d | null>(null);

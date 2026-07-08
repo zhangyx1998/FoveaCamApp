@@ -106,6 +106,10 @@ export type PipeReadFrame = {
    *  `width*height*channels` bytes at the head of `data`. */
   width?: number;
   height?: number;
+  /** Frame-bound crop origin in the parent stream (v4, fovea pipes) — absent /
+   *  0 for uncropped streams. */
+  originX?: number;
+  originY?: number;
 };
 
 /** The transfer-pool surface `client.ts` consumes. */
@@ -299,6 +303,8 @@ export function createShmClient(
       retries: msg.retries,
       width: msg.width,
       height: msg.height,
+      originX: msg.originX,
+      originY: msg.originY,
     });
   }
 

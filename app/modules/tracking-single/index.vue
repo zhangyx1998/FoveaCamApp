@@ -25,6 +25,7 @@ import type { Point2d, Size } from "core/Geometry";
 import { ROLE, THEME } from "@lib/camera-config";
 import { useAppConfig } from "@lib/config";
 import { useFrames, useSession, usePipeFrame } from "@lib/orchestrator/client";
+import { nodeId } from "@lib/orchestrator/graph-contract";
 import { tracking } from "./contract";
 import StreamView from "@src/components/StreamView.vue";
 import PosView from "@src/components/PosView.vue";
@@ -47,7 +48,7 @@ const { state, telemetry } = session;
 // misaligned under distortion). Falls back to raw on uncalibrated rigs.
 const { L: frameL, R: frameR, center: frameCenter } = useFrames(session, ["L", "R", "center"]);
 const frameC = usePipeFrame(() =>
-  state.undistortPipe ?? (state.serials?.C ? `camera:${state.serials.C}` : null),
+  state.undistortPipe ?? (state.serials?.C ? nodeId.convert(state.serials.C) : null),
 );
 
 const drawer_height = ref(0);
@@ -69,7 +70,7 @@ const plusSign = (v: string) => (v.startsWith("-") ? v : "+" + v);
 // view above (undistort pipe, raw-camera fallback), captured at toggle time.
 const toggleDebug = () => {
   const pipe =
-    state.undistortPipe ?? (state.serials?.C ? `camera:${state.serials.C}` : null);
+    state.undistortPipe ?? (state.serials?.C ? nodeId.convert(state.serials.C) : null);
   window.foveaBridge.toggleDebugWindow("tracking", pipe ? `pipe:${pipe}` : "C");
 };
 

@@ -14,6 +14,9 @@ export type ShmReadResult = {
    *  live SHM path (the reader still returns them = the segment dims). */
   width?: number;
   height?: number;
+  /** Frame-bound crop origin in the parent stream (v4, fovea pipes). */
+  originX?: number;
+  originY?: number;
   meta?: FrameMeta;
 };
 

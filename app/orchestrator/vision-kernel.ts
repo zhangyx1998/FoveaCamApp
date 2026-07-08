@@ -22,6 +22,10 @@ import type { Role } from "./vision-worker-protocol.js";
 export type KernelFrame = {
   mat: Mat<Uint8Array>;
   seq: number;
+  /** Frame-bound crop origin in the parent stream (v4, fovea pipes — where
+   *  this crop sits in the full frame); 0/0 for uncropped inputs. */
+  originX?: number;
+  originY?: number;
   deviceTimestamp?: number;
 };
 

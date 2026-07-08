@@ -16,6 +16,7 @@ import { computed, ref } from "vue";
 import { ROLE, THEME } from "@lib/camera-config";
 import { useAppConfig } from "@lib/config";
 import { useController, useFrames, useSession, usePipeFrame } from "@lib/orchestrator/client";
+import { nodeId } from "@lib/orchestrator/graph-contract";
 import { formatNumber, type FormatNumberOptions } from "@lib/util";
 import { createMat } from "@lib/mat";
 import type { Point2d } from "core/Geometry";
@@ -41,7 +42,7 @@ const {
   proj_R: frameProjR,
 } = useFrames(session, ["L", "R", "proj_L", "proj_R"]);
 const frameC = usePipeFrame(() =>
-  state.serials?.C ? `camera:${state.serials.C}` : null,
+  state.serials?.C ? nodeId.convert(state.serials.C) : null,
 );
 
 const marker_zoom = ref(1.0);

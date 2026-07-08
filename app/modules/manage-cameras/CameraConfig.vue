@@ -14,6 +14,7 @@ import StreamView from "@src/components/StreamView.vue";
 import RangeSlider from "@src/inputs/range-slider.vue";
 import { CAMERA_CONTROLS } from "@lib/camera-config";
 import { bindField, usePipeFrame, type Session } from "@lib/orchestrator/client";
+import { nodeId } from "@lib/orchestrator/graph-contract";
 import type { CameraView, ManageCamerasContract } from "./contract";
 
 type NumericCameraKey = "frame_rate" | "gain" | "black_level";
@@ -34,7 +35,7 @@ const view = computed<CameraView | undefined>(
 );
 
 // real-1c: raw preview off the native `camera:<serial>` pipe (not `session.frame`).
-const framePayload = usePipeFrame(`camera:${serial}`);
+const framePayload = usePipeFrame(nodeId.convert(serial));
 
 const field = <K extends keyof CameraView>(key: K) =>
   bindField(session, view, key, "set", (key, value) => ({ serial, key, value }));

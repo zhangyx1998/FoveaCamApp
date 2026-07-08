@@ -65,6 +65,20 @@ declare module "core/Pipe" {
   /** Probe EVERY live pipe → `{[pipeId]: ProbeSnapshot}` (C-20). Dropped pipes
    *  are absent — no stale workload rows under churn. */
   export function probeAll(): Record<string, ProbeSnapshot>;
+  /** One advertised pipe's identity/liveness row (C-24 item 2). `bytesTotal`
+   *  counts ACTIVE ring-written bytes since advertise (exact under
+   *  variable-size fovea frames) — diff snapshots for per-edge MB/s. */
+  export interface PipeListEntry {
+    id: string;
+    spec: PipeSpec;
+    epoch: number;
+    consumers: number;
+    closed: boolean;
+    bytesTotal: number;
+  }
+  /** Enumerate every ADVERTISED pipe WITHOUT connecting — the graph topology's
+   *  discovery source (C-24). Dropped pipes are absent. */
+  export function list(): PipeListEntry[];
   /** Test hook (C-19): pause the synthetic producer for ~`ms` so the probed
    *  `maxIntervalMs` spikes — proving a producer stall is visible out-of-loop. */
   export function injectStall(id: string, ms: number): void;

@@ -23,9 +23,12 @@ static constexpr char MAGIC[8] = {'F', 'V', 'S', 'H', 'M', 'R', 'G', '\0'};
 // v2 (C-16): SegmentHeader gains the `state` word (OPEN|CLOSED) for symmetric
 // pipe close. v3 (C-20): SlotHeader gains per-frame active `width/height` so a
 // dynamic fovea pipe can carry a varying active size inside a MAX-sized ring
-// (the consumer reads the active size per frame). Single process — writer +
-// reader share this header, rebuilt together, so there is no version skew.
-static constexpr uint32_t LAYOUT_VERSION = 3;
+// (the consumer reads the active size per frame). v4 (C-24/B-24): SlotHeader
+// gains per-frame crop `originX/originY` — a fovea crop's position in its
+// parent stream, FRAME-BOUND like the active size (a JS-side rect echo races
+// frame timing; FIN-voltage precedent). Single process — writer + reader share
+// this header, rebuilt together, so there is no version skew.
+static constexpr uint32_t LAYOUT_VERSION = 4;
 // Default ring depth of the live preview writer (unchanged). Pipes carry their
 // own `ringDepth` in the segment header's `slotCount`; the reader validates it
 // against [1, MAX_SLOT_COUNT] rather than a fixed value.
@@ -92,6 +95,10 @@ struct alignas(64) SlotHeader {
   // writer leaves them = the segment's fixed dims (publish's defaulted args).
   uint32_t width;
   uint32_t height;
+  // v4 (C-24/B-24): this frame's crop origin within its PARENT stream (fovea
+  // crop nodes). 0/0 for uncropped streams (publish's defaulted args).
+  uint32_t originX;
+  uint32_t originY;
 };
 
 } // namespace ShmRing

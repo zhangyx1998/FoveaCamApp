@@ -21,6 +21,7 @@
 import type { Camera } from "core/Aravis";
 import type { CameraCalibration } from "core/Vision";
 import type { PipeSpec } from "@lib/orchestrator/pipe-contract.js";
+import { nodeId } from "@lib/orchestrator/graph-contract.js";
 
 /** The seam this helper drives — `advertise`/`unadvertise` MUST be the pipe
  *  session handle's (discovery-mutating: renderers find the pipe via
@@ -37,7 +38,9 @@ export interface UndistortPipeSeam {
   detach(pipeId: string): void;
 }
 
-export const undistortPipeId = (serial: string): string => `undistort:${serial}`;
+// C-24 step 1: path-like node id (formerly `undistort:<serial>`) — the single
+// spelling lives in `nodeId` (graph-contract); this alias keeps call-site naming.
+export const undistortPipeId = nodeId.undistort;
 
 /** Advertise the `undistort:<serial>` pipe + attach B's native remap producer.
  *  Same dims as the camera (the remap is 1:1). Returns the pipe id. */

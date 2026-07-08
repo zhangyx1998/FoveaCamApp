@@ -36,11 +36,11 @@ describe("registry camera-pipe seam (real-1c)", () => {
   it("advertises a BGRA8 camera:<serial> pipe with the camera's geometry + attaches", () => {
     const seam = fakeSeam();
     const pipeId = advertiseCameraPipe(seam, fakeCamera("SN1", 640, 480));
-    expect(pipeId).toBe("camera:SN1");
+    expect(pipeId).toBe("camera/SN1/convert");
     expect(seam.advertise).toHaveBeenCalledTimes(1);
     expect(seam.advertise).toHaveBeenCalledWith(
       expect.objectContaining({
-        id: "camera:SN1",
+        id: "camera/SN1/convert",
         pixelFormat: "BGRA8",
         dtype: "U8",
         width: 640,
@@ -52,7 +52,7 @@ describe("registry camera-pipe seam (real-1c)", () => {
       }),
     );
     // attach happens AFTER advertise (B reads the advertised geometry).
-    expect(seam.attach).toHaveBeenCalledWith(expect.anything(), "camera:SN1");
+    expect(seam.attach).toHaveBeenCalledWith(expect.anything(), "camera/SN1/convert");
     expect(seam.advertise.mock.invocationCallOrder[0]).toBeLessThan(
       seam.attach.mock.invocationCallOrder[0],
     );
@@ -60,9 +60,9 @@ describe("registry camera-pipe seam (real-1c)", () => {
 
   it("retires the pipe as detach → unadvertise", () => {
     const seam = fakeSeam();
-    retireCameraPipe(seam, "camera:SN1");
-    expect(seam.detach).toHaveBeenCalledWith("camera:SN1");
-    expect(seam.unadvertise).toHaveBeenCalledWith("camera:SN1");
+    retireCameraPipe(seam, "camera/SN1/convert");
+    expect(seam.detach).toHaveBeenCalledWith("camera/SN1/convert");
+    expect(seam.unadvertise).toHaveBeenCalledWith("camera/SN1/convert");
     expect(seam.detach.mock.invocationCallOrder[0]).toBeLessThan(
       seam.unadvertise.mock.invocationCallOrder[0],
     );

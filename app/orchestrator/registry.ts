@@ -19,6 +19,7 @@
 import type { Camera } from "core/Aravis";
 import type { Role } from "@lib/camera-config";
 import type { PipeSpec } from "@lib/orchestrator/pipe-contract.js";
+import { nodeId } from "@lib/orchestrator/graph-contract.js";
 import { applyStoredConfig, cameraConfigPath, listCameraInfo } from "./camera.js";
 import { timeSpan } from "./diagnostics.js";
 import { read } from "./store-hub.js";
@@ -47,7 +48,8 @@ export function advertiseCameraPipe(
   seam: RegistryPipeSeam,
   camera: Pick<Camera, "serial" | "getFeatureInt">,
 ): string {
-  const pipeId = `camera:${camera.serial}`;
+  // C-24 step 1: path-like node id (formerly `camera:<serial>`).
+  const pipeId = nodeId.convert(camera.serial);
   // Width/Height are integer GenICam nodes — `getFeature` (arv_camera_get_string)
   // throws "Not a ArvGcString" on them; use the integer accessor.
   const width = camera.getFeatureInt("Width");

@@ -126,6 +126,9 @@ function handlePipeRead(port: MessagePort, msg: PipeReadRequest): void {
         retries: result ? result.retries : undefined,
         width: result ? result.width : undefined,
         height: result ? result.height : undefined,
+        // v4: frame-bound crop origin (fovea pipes; 0/0 elsewhere).
+        originX: result ? result.originX : undefined,
+        originY: result ? result.originY : undefined,
       },
       [msg.buffer],
     );

@@ -18,6 +18,7 @@ import { computed } from "vue";
 import { ROLE, THEME } from "@lib/camera-config";
 import { useAppConfig } from "@lib/config";
 import { useController, useSession, usePipeFrame } from "@lib/orchestrator/client";
+import { nodeId } from "@lib/orchestrator/graph-contract";
 import { calibrateDrift } from "./contract";
 import StreamView from "@src/components/StreamView.vue";
 import PosView, { type Pos } from "@src/components/PosView.vue";
@@ -38,7 +39,7 @@ const { state, telemetry } = session;
 // JS view-tap loop) via `usePipeFrame`; the marker-detection overlays are drawn
 // client-side from `telemetry.detection`, unchanged.
 const pipe = (role: "L" | "C" | "R") =>
-  usePipeFrame(() => (state.serials?.[role] ? `camera:${state.serials[role]}` : null));
+  usePipeFrame(() => (state.serials?.[role] ? nodeId.convert(state.serials[role]) : null));
 const frameL = pipe("L");
 const frameC = pipe("C");
 const frameR = pipe("R");

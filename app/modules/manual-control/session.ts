@@ -41,6 +41,7 @@ import {
   type UndistortPipeSeam,
 } from "@orchestrator/undistort-pipe";
 import { readNextPipeFrame } from "@orchestrator/pipe-read-once";
+import { nodeId } from "@lib/orchestrator/graph-contract";
 import type { PipeBroker } from "@orchestrator/pipe-session";
 import type { PipeInput, VisionResult } from "@orchestrator/vision-worker-protocol";
 import { manualControl } from "./contract";
@@ -262,7 +263,7 @@ export default function manualControlSession(
       const pipeIds: string[] = [];
       const centerInput = connectPipe(
         "C",
-        undistortC ?? `camera:${t.leases.C.camera.serial}`,
+        undistortC ?? nodeId.convert(t.leases.C.camera.serial),
         pipeIds,
       );
       centerPipe = {
@@ -274,9 +275,9 @@ export default function manualControlSession(
         centerPipe = null;
       });
       const pipes: PipeInput[] = [
-        connectPipe("L", `camera:${t.leases.L.camera.serial}`, pipeIds),
+        connectPipe("L", nodeId.convert(t.leases.L.camera.serial), pipeIds),
         centerInput,
-        connectPipe("R", `camera:${t.leases.R.camera.serial}`, pipeIds),
+        connectPipe("R", nodeId.convert(t.leases.R.camera.serial), pipeIds),
       ];
       const taps = new DisposerBag();
       publishSerials(t.leases, taps, s);

@@ -64,6 +64,8 @@ interface ReaderAddon {
         gen: number;
         width: number;
         height: number;
+        originX: number; // v4: frame-bound crop origin (0/0 = uncropped)
+        originY: number;
         meta: { deviceTimestamp?: bigint; systemTimestamp?: bigint };
       };
   close(handle: unknown): void;
@@ -125,6 +127,8 @@ function readFrames(): FrameSet | "closed" {
     frames[pipe.input.role] = {
       mat: makeMat(view, [r.height, r.width], pipe.input.channels),
       seq: Number(r.seq),
+      originX: r.originX,
+      originY: r.originY,
       deviceTimestamp: r.meta.deviceTimestamp !== undefined ? Number(r.meta.deviceTimestamp) : undefined,
     };
   }

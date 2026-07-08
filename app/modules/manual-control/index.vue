@@ -21,6 +21,7 @@ import { computed, ref, shallowRef, watch } from "vue";
 import type { Point2d, Rect } from "core/Geometry";
 import { ROLE, THEME } from "@lib/camera-config";
 import { useFrames, useSession, usePipeFrame } from "@lib/orchestrator/client";
+import { nodeId } from "@lib/orchestrator/graph-contract";
 import { getController } from "@src/components/Controller.vue";
 import { isEmpty, radians } from "@lib/util";
 import Capture from "@src/capture";
@@ -53,7 +54,7 @@ const controller = computed(getController);
 // (wrapped foveae) + the processed center stay on session.frame (vision worker).
 const { L: frameL, R: frameR, center: frameCenter } = useFrames(session, ["L", "R", "center"]);
 const frameC = usePipeFrame(() =>
-  state.undistortPipe ?? (state.serials?.C ? `camera:${state.serials.C}` : null),
+  state.undistortPipe ?? (state.serials?.C ? nodeId.convert(state.serials.C) : null),
 );
 
 const points = new SetPoints(local("manual-control.set-points", ""));
