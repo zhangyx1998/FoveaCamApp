@@ -36,10 +36,20 @@ bool feedPipe(Pipe::FrameSink &sink, const cv::Mat &raw, PixelFormat format,
   // Convert to BGRA8 into the reusable `dst` (cvtColor reuses dst's allocation
   // when the size/type already match -> no per-frame alloc in steady state).
   const auto t0 = std::chrono::steady_clock::now();
-  if (format == BGRA8)
+  if (format == BGRA8) {
     raw.copyTo(dst); // already BGRA8; still land in the reusable buffer
-  else
+  } else {
     cv::cvtColor(raw, dst, cvtColorCode(format, BGRA8));
+    // A >8-bit source (Mono16/Bayer16/12p — `raw` is CV_16UC1) yields a 16-bit
+    // BGRA Mat here, but the pipe ring is 8-bit BGRA8. Scale down to true 8-bit
+    // by the source's significant bit depth — the SAME step `Frame::view` does.
+    // Without it, `info.bytes`/`stride` assume 8-bit while `dst` is 16-bit, so
+    // the publisher copies half of each 16-bit row and the preview shows as
+    // colored (purple/green) stripes.
+    if (dst.depth() != CV_8U)
+      dst.convertTo(dst, CV_MAKETYPE(CV_8U, dst.channels()),
+                    255.0 / ((1 << significantBits(format)) - 1));
+  }
   const double convertMs =
       std::chrono::duration<double, std::milli>(
           std::chrono::steady_clock::now() - t0)

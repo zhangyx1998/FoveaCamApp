@@ -113,6 +113,63 @@ const A = Aravis as unknown as {
   P.drop(id);
 }
 
+// >8-bit source regression: a 12-bit/16-bit camera format (`raw` is CV_16UC1)
+// must be SCALED DOWN to true 8-bit BGRA8, not just cvtColor'd (which keeps
+// 16-bit depth). Without the down-scale the 16-bit `dst` is copied as if 8-bit
+// → half of each row lands per row → the preview shows colored stripes.
+{
+  const id = "capture:mono12p";
+  const width = 8;
+  const height = 6;
+  const channels = 4; // BGRA8 output (the pipe is always 8-bit BGRA8)
+  const bytesPerFrame = width * height * channels; // 192, 8-bit
+
+  P.advertise({
+    id,
+    pixelFormat: "BGRA8",
+    dtype: "U8",
+    width,
+    height,
+    channels,
+    stride: width * channels,
+    bytesPerFrame,
+    ringDepth: 4,
+  });
+  const handle = P.connect(id);
+  const rh = reader.open(handle.shmName);
+  const dest = new ArrayBuffer(bytesPerFrame);
+
+  let lastSeq = 0n;
+  const SIGNIFICANT_MAX = (1 << 12) - 1; // Mono12p: 12 significant bits
+  for (const fill of [40, 137, 255]) {
+    // Mono12p `raw` is CV_16UC1 (unpacked domain 0..4095) filled with `fill`.
+    const offered = A.feedTestFrame(id, "Mono12p", fill);
+    assert.equal(offered, true, `Mono12p offered (fill=${fill})`);
+
+    const r = reader.readInto(rh, dest, lastSeq);
+    assert(r && !isClosed(r), `read a Mono12p frame for fill=${fill}`);
+    lastSeq = r.seq;
+
+    // GRAY→BGRA then scaled 12-bit→8-bit: every byte is the scaled value
+    // (alpha 255). A stripe bug would leave raw 16-bit low/high bytes here
+    // (e.g. `fill` and 0 interleaved), far outside this ±1 band.
+    const expected = Math.round((fill * 255) / SIGNIFICANT_MAX);
+    const bytes = new Uint8Array(dest);
+    for (let px = 0; px < width * height; px++) {
+      for (const c of [0, 1, 2])
+        assert(
+          Math.abs(bytes[px * 4 + c] - expected) <= 1,
+          `ch${c} px${px} fill=${fill}: got ${bytes[px * 4 + c]}, want ~${expected}`,
+        );
+      assert.equal(bytes[px * 4 + 3], 255, "A");
+    }
+  }
+
+  P.close(id);
+  reader.close(rh);
+  P.drop(id);
+}
+
 // ---- B-17 Part 1: attach→frames→detach through the REAL capture path -----
 // Uses Aravis's built-in fake camera (no hardware): attachCameraPipe subscribes
 // a CaptureSink to the fake camera's Arv::Stream, whose Mono8 frames are
