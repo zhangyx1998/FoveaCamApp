@@ -19,7 +19,7 @@ import { manualControl } from "@modules/manual-control/contract";
 import { workloadRows, utilizationLevel, UTILIZATION_HIGH, type WorkloadRow } from "./workload-view";
 import { pipes } from "@lib/orchestrator/pipe-contract";
 import type { GraphTopology } from "@lib/orchestrator/graph-contract";
-import { deriveTopology } from "./graph-view";
+import { deriveTopology, selectTopology } from "./graph-view";
 import GraphPanel from "./GraphPanel.vue";
 import Sparkline from "../components/Sparkline.vue";
 import PosView from "@src/components/PosView.vue";
@@ -85,12 +85,13 @@ const sortedWorkloads = computed(() =>
 );
 const isSaturated = (utilization: number): boolean => utilization >= UTILIZATION_HIGH;
 
-// Pipeline graph (A-33, real-2 objective 1). STAGE 1: the topology is DERIVED
-// renderer-side (`deriveTopology`, pure + unit-tested) from the same 1 Hz
-// workload rows plus the pipes session's advertised set — no new wire
-// messages. When C-24's real `graphTopology()` snapshot ships, this derivation
-// is replaced by the served snapshot (same `GraphTopology` type, panel
-// unchanged). Passive subscription: discovery state only, no pipe connects.
+// Pipeline graph (A-33/A-36, real-2 objective 1). STAGE 2: the orchestrator
+// SERVES the topology (C-24's `graphTopology()`, riding `PerfSnapshot.graph` —
+// exact byte rates from bytesTotal deltas, consumer sinks, session wirings);
+// the Stage-1 renderer-side derivation (`deriveTopology`, pure + unit-tested,
+// same 1 Hz workload rows + advertised pipes) remains the FALLBACK for an
+// older orchestrator / graph builder not injected. Passive subscription:
+// discovery state only, no pipe connects (fallback input).
 const pipesSession = useSession(pipes, "pipes", { passive: true });
 const graphSeq = ref(0);
 const graphTopology = ref<GraphTopology | null>(null);
@@ -129,11 +130,8 @@ async function tick(): Promise<void> {
     const s = await sys.call("perfSnapshot", undefined);
     rates.value = computeRates(s);
     workloads.value = workloadRows(s.workloads ?? {}, prev.snapshot?.workloads ?? null);
-    graphTopology.value = deriveTopology(
-      workloads.value,
-      pipesSession.state.pipes,
-      ++graphSeq.value,
-      Date.now(),
+    graphTopology.value = selectTopology(s.graph, () =>
+      deriveTopology(workloads.value, pipesSession.state.pipes, ++graphSeq.value, Date.now()),
     );
     prev.snapshot = s;
     prev.t = Date.now();

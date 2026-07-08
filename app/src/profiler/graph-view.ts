@@ -74,11 +74,26 @@ function badge(row: WorkloadRow): NodeStats {
 }
 
 /**
- * STAGE 1: derive the graph from today's observable surfaces. Every workload
- * row lands on the graph (matched rows attach stats to a structural node;
- * unmatched rows become standalone nodes keyed by their path-ified name — a
- * meter must never be invisible just because its name pattern is new).
- * `seq`/`at` are supplied by the poller (monotonic tick counter + wall time).
+ * STAGE-2 source selection (A-36): prefer the orchestrator-SERVED topology —
+ * C-24's `graphTopology()` riding `PerfSnapshot.graph` (exact byte rates,
+ * consumer sinks, session wirings) — and fall back to the Stage-1 derivation
+ * below when absent (older orchestrator / graph builder not injected). The
+ * fallback thunk is only evaluated on the fallback path.
+ */
+export function selectTopology(
+  served: GraphTopology | undefined,
+  fallback: () => GraphTopology,
+): GraphTopology {
+  return served ?? fallback();
+}
+
+/**
+ * STAGE 1 (now the FALLBACK + the mock story): derive the graph from today's
+ * observable surfaces. Every workload row lands on the graph (matched rows
+ * attach stats to a structural node; unmatched rows become standalone nodes
+ * keyed by their path-ified name — a meter must never be invisible just
+ * because its name pattern is new). `seq`/`at` are supplied by the poller
+ * (monotonic tick counter + wall time).
  */
 export function deriveTopology(
   workloads: WorkloadRow[],

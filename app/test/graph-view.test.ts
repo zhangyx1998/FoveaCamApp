@@ -4,7 +4,7 @@
 // This IS the panel's mock-data story: the same mocks drive the component.
 
 import { describe, expect, it } from "vitest";
-import { deriveTopology, membershipKey, nodeLabel, toElements } from "@src/profiler/graph-view";
+import { deriveTopology, membershipKey, nodeLabel, selectTopology, toElements } from "@src/profiler/graph-view";
 import type { WorkloadRow } from "@src/profiler/workload-view";
 import type { PipeAdvert } from "@lib/orchestrator/pipe-contract";
 
@@ -143,5 +143,93 @@ describe("membershipKey / toElements — layout stability", () => {
     const t = deriveTopology([], PIPES, 1, 0);
     const camera = t.nodes.find((n) => n.id === "camera/123")!;
     expect(nodeLabel(camera)).toBe("camera/123");
+  });
+});
+
+describe("Stage-2 source selection + served-shape rendering (A-36)", () => {
+  // Mirrors C-24's graphTopology() emission (orchestrator/graph-topology.ts):
+  // camera root, pipe brick with epoch+stats, aggregate consumer sink with the
+  // exact byte-rate edge, and a stage-1 session wiring under win/<windowId>.
+  const served = (): import("@lib/orchestrator/graph-contract").GraphTopology => ({
+    seq: 42,
+    at: 1000,
+    nodes: [
+      {
+        id: "camera/123",
+        kind: "camera",
+        output: { kind: "frame", pixelFormat: "sensor", dtype: "U8" },
+        transport: "native",
+      },
+      {
+        id: "camera/123/convert",
+        kind: "convert",
+        output: { kind: "frame", pixelFormat: "BGRA8", dtype: "U8" },
+        transport: "pipe",
+        epoch: 2,
+        stats: { utilization: 0.35, ratePerSec: 55, saturated: false },
+      },
+      { id: "camera/123/convert/consumers", kind: "view", output: null, transport: "sink" },
+      {
+        id: "win/tracking-single-1/kcf",
+        kind: "kcf",
+        output: { kind: "track" },
+        transport: "native",
+        owner: "win/tracking-single-1",
+        stats: { utilization: 0.95, ratePerSec: 54, saturated: true },
+      },
+    ],
+    edges: [
+      {
+        from: "camera/123",
+        to: "camera/123/convert",
+        port: "in",
+        type: { kind: "frame", pixelFormat: "sensor", dtype: "U8" },
+        ratePerSec: 55,
+      },
+      {
+        from: "camera/123/convert",
+        to: "camera/123/convert/consumers",
+        port: "in",
+        type: { kind: "frame", pixelFormat: "BGRA8", dtype: "U8" },
+        consumers: 2,
+        ratePerSec: 55,
+        bytesPerSec: 55_000_000,
+      },
+    ],
+  });
+
+  it("prefers the served topology and never evaluates the fallback", () => {
+    const t = served();
+    let fallbackCalls = 0;
+    const picked = selectTopology(t, () => {
+      fallbackCalls++;
+      return deriveTopology([], {}, 1, 0);
+    });
+    expect(picked).toBe(t);
+    expect(fallbackCalls).toBe(0);
+  });
+
+  it("falls back to the derivation when the snapshot has no graph", () => {
+    const picked = selectTopology(undefined, () => deriveTopology([], PIPES, 7, 500));
+    expect(picked.seq).toBe(7);
+    expect(picked.nodes.some((n) => n.id === "camera/123/convert")).toBe(true);
+  });
+
+  it("renders the served shape: consumer sinks, win/ nodes, exact byte-rate edges", () => {
+    const els = toElements(served());
+    // Consumer sink node renders with a compact 2-segment label.
+    const sink = els.find((e) => e.data.id === "camera/123/convert/consumers")!;
+    expect(sink.data.label).toBe("convert/consumers");
+    // The wired kcf node under win/ carries its saturation class + badges.
+    const kcf = els.find((e) => e.data.id === "win/tracking-single-1/kcf")!;
+    expect(kcf.classes).toBe("saturated");
+    expect(kcf.data.label).toContain("95%");
+    // The consumer edge shows fps, EXACT MB/s from bytesTotal deltas, and ×N.
+    const edge = els.find(
+      (e) => e.data.id === "edge:camera/123/convert->camera/123/convert/consumers#in",
+    )!;
+    expect(edge.data.label).toBe("55.0 fps 55.0 MB/s ×2");
+    // Membership key includes the pipe's epoch (re-advertise = re-layout).
+    expect(membershipKey(served())).toContain("camera/123/convert#2");
   });
 });
