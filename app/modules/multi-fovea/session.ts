@@ -244,6 +244,12 @@ export default function multiFoveaSession(
         worker = null;
         broker.disconnect(cId);
       });
+      // Run the round-robin frame scheduler for this activation (paired with the
+      // `scheduler.stop()` drain above). Without this the scheduler's `running`
+      // flag never flips and `pump()` early-returns, so no CMD_FRAME is ever
+      // issued once v2 hardware lands. Inert on the current rig: `createStream`
+      // returns null when !v2Capable → empty targets → pump has nothing to issue.
+      scheduler.start();
       applyTargets();
       s.telemetry({
         ready: true,
