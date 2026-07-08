@@ -14,7 +14,8 @@
 // orchestrator.md roadmap item 6) are wired in separately — see `capture.ts`/
 // `recording.ts` — but their commands are declared on the contract now.
 
-import { defineSession, type ServerSession } from "@orchestrator/runtime";
+import { type ServerSession } from "@orchestrator/runtime";
+import { defineResourceSession, type ResourceScope } from "@orchestrator/resource-session";
 import { acquireTriple, type CalibratedTriple } from "@orchestrator/calibration";
 import { startActuationLoop, type ActuationLoop } from "@orchestrator/actuation";
 import { createFrameWorker } from "@orchestrator/frame-worker";
@@ -52,9 +53,8 @@ import type { Pos } from "@lib/controller-codec";
 import { RollingStats } from "@lib/util/rolling";
 
 export default function manualControlSession(): ServerSession<typeof manualControl> {
-  return defineSession("manual-control", manualControl, (s) => {
+  return defineResourceSession("manual-control", manualControl, (s) => {
     let triple: CalibratedTriple | null = null;
-    const disposers = new DisposerBag();
     let loop: ActuationLoop | null = null;
 
     // Center-frame geometry, learned from the first frame.
@@ -269,13 +269,22 @@ export default function manualControlSession(): ServerSession<typeof manualContr
 
     // --- lifecycle -------------------------------------------------------
 
-    async function activateSession(): Promise<void> {
-      const t = await acquireTriple(s);
+    // Resource-scoped activation (A-P1). The trickiest teardown in the fleet: a
+    // capture/recording pass may still be reading `lease.camera.stream` (or
+    // awaiting the next center-view tick via `capture.onCenterTick`) when the
+    // last subscriber leaves — it MUST fully drain BEFORE the view-taps are
+    // disposed and the leases released (V1/§6). The scope's LIFO drain + AWAITED
+    // async cleanups reproduce that exact order, and `drained()` awaits it (so
+    // the multi-window switch waits for the real settle). Registration order
+    // below is reverse of the drain sequence.
+    async function activateSession(scope: ResourceScope): Promise<void> {
+      const t = await scope.use(() => acquireTriple(s), releaseLeases); // drains LAST
       if (!t) return;
       triple = t;
-      disposers.push(t.leases.L.onView((v) => onFoveaView("L", v)));
-      disposers.push(t.leases.C.onView(onCenterView));
-      disposers.push(t.leases.R.onView((v) => onFoveaView("R", v)));
+      const taps = new DisposerBag();
+      taps.push(t.leases.L.onView((v) => onFoveaView("L", v)));
+      taps.push(t.leases.C.onView(onCenterView));
+      taps.push(t.leases.R.onView((v) => onFoveaView("R", v)));
       loop = startActuationLoop({
         targetVolts,
         onVolts(v, actuateMs) {
@@ -293,47 +302,43 @@ export default function manualControlSession(): ServerSession<typeof manualContr
           }
         },
       });
+
+      // --- teardown (registered reverse of drain; LIFO) -----------------
+      // Drains just before the leases: the display-vision workers persist
+      // across idle/activate (process-lifetime meters) — `cancel()` only drops
+      // scheduled work so a frame copied pre-idle can't process against a fresh
+      // `triple` (V5/V10/V13). Ran AFTER the drain, since a waiting capture pass
+      // needs them live.
+      scope.defer(() => {
+        centerWorker.cancel();
+        foveaWorkers.L.cancel();
+        foveaWorkers.R.cancel();
+      });
+      scope.defer(() => taps.dispose()); // AFTER the drain — taps stay live during it
+      // The awaited async drain: a capture can be waiting on the next center
+      // tick, so this MUST run while the taps are still live and before the
+      // leases release. `drained()` awaits it (multi-window.md §3).
+      scope.defer(async () => {
+        await Promise.all([recording.stop(), capture.waitIdle()]);
+      });
+      // Before the drain: new activity sees "not ready" instead of racing it.
+      scope.defer(() => {
+        triple = null;
+        s.telemetry({ ready: false });
+      });
+      scope.defer(() => {
+        loop?.stop(); // drains FIRST — stop actuating immediately
+        loop = null;
+      });
+
       s.telemetry({ ready: true });
     }
 
-    // V1 (docs/refactor/orchestrator.md §6): a capture or recording pass can
-    // still be actively reading `lease.camera.stream` directly when the last
-    // subscriber leaves — releasing leases out from under it is the same bug
-    // class as C2 (force-close under an active consumer). Both must fully
-    // drain *before* leases are released. The `onView` taps must stay live
-    // during that drain: a capture can be waiting on the *next* center-view
-    // tick (`capture.onCenterTick`) to resolve, so disposing them first would
-    // deadlock `capture.waitIdle()` forever.
-    async function idleSessionAsync(): Promise<void> {
-      loop?.stop();
-      loop = null;
-      const releasing = triple;
-      triple = null; // new activity sees "not ready" instead of racing the drain
-      s.telemetry({ ready: false });
-      await Promise.all([recording.stop(), capture.waitIdle()]);
-      disposers.dispose();
-      // PB3 A-5: the display-vision workers persist across idle/activate
-      // cycles (same object, not recreated); `cancel()` drops anything they
-      // still have scheduled so a frame copied just before this idle can't
-      // get processed later against a fresh reactivation's `triple` (the
-      // V5/V10/V13 stale-completion class) — safe to call only now, after
-      // the drain above, since the workers must stay live (still calling
-      // `capture.onCenterTick`) while a capture pass may be waiting on them.
-      centerWorker.cancel();
-      foveaWorkers.L.cancel();
-      foveaWorkers.R.cancel();
-      releaseLeases(releasing);
-      width = height = 0;
-    }
-
-    // Returned (not fire-and-forgotten) so the runtime records the settlement
-    // promise — the multi-window drain path awaits it via `session.drained()`
-    // before the next app window may activate (multi-window.md §3).
-    function idleSession(): Promise<void> {
-      return idleSessionAsync();
-    }
-
     return {
+      activate: (scope) => activateSession(scope),
+      idle() {
+        width = height = 0; // after the full drain (leases already released)
+      },
       commands: {
         async steer(t) {
           if (t.mode === "pixel") setTargetFromPixel(t.value);
@@ -367,10 +372,6 @@ export default function manualControlSession(): ServerSession<typeof manualContr
           await recording.stop();
         },
       },
-      activate() {
-        void activateSession();
-      },
-      idle: idleSession,
       // Drain-refusal probe (multi-window.md §5 default 2): a window switch
       // must not force-drain this session mid-capture/recording — the user
       // gets a prompt instead of losing an in-flight pass.

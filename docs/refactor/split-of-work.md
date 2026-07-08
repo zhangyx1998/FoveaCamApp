@@ -303,6 +303,23 @@ hardware-dependent behavior verified without a real rig run.
       zero-Vue/zero-core. Triple sessions: +tracking-single (5/6). **Remaining:
       manual-control only (the async-capture/recording-drain one) — paused here
       per planner request for the WAVE-4 checkpoint commit.**
+    - **2026-07-07 batch 11 (A-P1 migration — manual-control; A-P1 COMPLETE
+      6/6).** The trickiest: its idle is an ORDERED ASYNC drain — a capture/
+      recording pass may still be reading the stream or awaiting the next
+      center-view tick when the last subscriber leaves, so it must fully drain
+      BEFORE the view-taps dispose + leases release (V1/§6). Mapped exactly onto
+      the scope's LIFO drain + AWAITED async cleanups: registration reverse of
+      the drain sequence → drain runs loop.stop → triple=null+ready:false →
+      `await Promise.all([recording.stop(), capture.waitIdle()])` (taps still
+      live) → taps.dispose → workers.cancel → releaseLeases; idle hook resets
+      width/height after. `drained()` now awaits the real settle (multi-window
+      switch waits for it). `busy()` probe unchanged (capture/recording refusal).
+      session-drain.test stays green (exercises the async idle). Gates: vue-tsc
+      0; vitest 284/284; vite build OK; orch zero-Vue 0; renderer zero-core 0.
+      Behavior-preserving; **hardware-facing — code-verified only.** **A-P1 DONE:
+      all 6 triple sessions (drift, distortion, multi-fovea, calibrate-extrinsic,
+      tracking-single, manual-control) on `defineResourceSession`.** Ready for
+      verify + commit — closes A-P1.
 
 - **A-24 — WS1 LIVE CUT-OVER (real-1c + 1d): flip the live preview + tracking onto
   the free-running threads. THE milestone integration. PLAN-FIRST (high blast
