@@ -400,6 +400,10 @@ export class Hub {
   private readonly sessions: ServerSession<any>[] = [];
   private readonly byName = new Map<string, ServerSession<any>>();
   private readonly channels = new Set<Channel>();
+  // A-34: channel → stable windowId (from the main-process connect handshake).
+  // C-24's composition validation keys `win/<windowId>/...` requests on it.
+  private readonly channelWindows = new Map<Channel, string>();
+  private readonly windowClosedHooks = new Set<(windowId: string) => void>();
 
   add<C extends Contract>(session: ServerSession<C>): ServerSession<C> {
     this.sessions.push(session);
@@ -407,10 +411,32 @@ export class Hub {
     return session;
   }
 
-  attach(port: MessagePortMain): void {
+  /** The stable windowId a channel's window carries (A-34), if the connect
+   *  handshake supplied one. Undefined for untagged/legacy connections. */
+  windowIdOf(ch: Channel): string | undefined {
+    return this.channelWindows.get(ch);
+  }
+
+  /** Register a window-close hook (A-34): fires with the closed window's
+   *  stable id when the MAIN process reports the BrowserWindow destroyed —
+   *  the authoritative teardown signal for per-window state (a mere channel
+   *  close also happens on RELOAD, where the windowId lives on). Returns an
+   *  unregister disposer. */
+  onWindowClosed(fn: (windowId: string) => void): () => void {
+    this.windowClosedHooks.add(fn);
+    return () => this.windowClosedHooks.delete(fn);
+  }
+
+  /** Main reported a window destroyed — dispatch the teardown hooks. */
+  windowClosed(windowId: string): void {
+    for (const fn of this.windowClosedHooks) fn(windowId);
+  }
+
+  attach(port: MessagePortMain, meta?: { windowId?: string | null }): void {
     port.start();
     const ch = new Channel(mainEndpoint(port));
     this.channels.add(ch);
+    if (meta?.windowId) this.channelWindows.set(ch, meta.windowId);
     for (const s of this.sessions) s.attach(ch);
     const detachStore = attachStore(ch);
     // Per-session interest: route subscribe/unsubscribe to the named session.
@@ -426,6 +452,7 @@ export class Hub {
       for (const s of this.sessions) s.detach(ch);
       detachStore();
       this.channels.delete(ch);
+      this.channelWindows.delete(ch);
       ch.close(); // rejects any pending outbound requests, clears frame gate state
     });
   }

@@ -27,7 +27,13 @@
 // welcome window is camera-holding (live previews, §4), so welcome→app rides
 // the exact same path as app→app.
 
-import { entryFor, WINDOWS, type ProjectionParams, type WindowClass } from "@lib/windows";
+import {
+  entryFor,
+  WINDOW_ID_PARAM,
+  WINDOWS,
+  type ProjectionParams,
+  type WindowClass,
+} from "@lib/windows";
 import type { ManifestWindow, WindowBounds, WindowManifest } from "./window-manifest.js";
 
 export interface WindowDescriptor {
@@ -54,6 +60,13 @@ export interface WindowDescriptor {
   /** WS2 2a: dedupe key for the `toggle` primitive (2b's debug drawer) — the
    *  generalized form of `fileKey`'s open-or-focus dedupe, plus a close path. */
   key?: string;
+  /** Stable per-instance id (A-34): minted by the manager at spawn
+   *  (`<appId|class>-<n>`, unique among LIVE windows) and threaded into the
+   *  window URL as `?win=` so the renderer knows its own identity and it
+   *  survives reloads + manifest restores. Callers never set this — the
+   *  manager's `spawn()` wrapper fills it (or recovers it from a restored
+   *  URL). */
+  windowId?: string;
 }
 
 /** The window handle surface the manager needs — main.ts adapts a real
@@ -67,6 +80,9 @@ export interface ManagedWindow {
   readonly owner?: ManagedWindow;
   /** Mirror of `WindowDescriptor.key` (toggle-managed windows) — WS2 2a. */
   readonly key?: string;
+  /** Mirror of `WindowDescriptor.windowId` (A-34) — every spawned window has
+   *  one (optional only for pre-A-34 fakes/tests). */
+  readonly windowId?: string;
   focus(): void;
   close(): void;
   isDestroyed(): boolean;
@@ -87,6 +103,15 @@ function searchOf(url: string | undefined): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+/** The `?win=` id carried by a (possibly absent) URL or search string — how a
+ *  manifest-restored window keeps its pre-restart identity (A-34). */
+export function windowIdOf(urlOrSearch: string | undefined): string | undefined {
+  if (!urlOrSearch) return undefined;
+  const search = urlOrSearch.startsWith("?") ? urlOrSearch : searchOf(urlOrSearch);
+  if (!search) return undefined;
+  return new URLSearchParams(search).get(WINDOW_ID_PARAM) ?? undefined;
 }
 
 export interface WindowManagerDeps {
@@ -159,15 +184,43 @@ export class WindowManager {
     return win;
   }
 
+  // A-34: stable per-instance window identity. Monotonic mint counter —
+  // uniqueness matters among LIVE windows (+ stability across reloads/manifest
+  // restores, which recover the id from the persisted URL); collisions after
+  // a restore are dodged by probing the live set.
+  private idCounter = 0;
+
+  /** Single spawn chokepoint: resolves the window's stable id (recovered from
+   *  a restored URL, else minted `<appId|class>-<n>`), threads it into the
+   *  spawn URL as `?win=` (state-in-URL — the renderer reads its own identity,
+   *  and it survives reload/restore for free), and tracks the window. */
+  private spawn(desc: WindowDescriptor): ManagedWindow {
+    let windowId = desc.windowId ?? windowIdOf(desc.url) ?? windowIdOf(desc.search);
+    if (!windowId) {
+      const base = desc.appId ?? desc.class;
+      const live = new Set(this.open().map((w) => w.windowId));
+      do {
+        windowId = `${base}-${++this.idCounter}`;
+      } while (live.has(windowId));
+    }
+    // ALWAYS stamp the id into `search`: the packaged-build entry path loads
+    // `entry + search` (a restored `url` is only honored on the dev origin —
+    // see main.ts `entryURL`), so `search` is the one slot that carries the id
+    // in every mode. Idempotent when the restored URL already carried it.
+    const params = new URLSearchParams(desc.search ?? "");
+    params.set(WINDOW_ID_PARAM, windowId);
+    return this.track(
+      this.deps.spawn({ ...desc, search: "?" + params.toString(), windowId }),
+    );
+  }
+
   ensureWelcome(opts: { bounds?: WindowBounds; url?: string } = {}): ManagedWindow {
     const existing = this.byClass("welcome")[0];
     if (existing) {
       existing.focus();
       return existing;
     }
-    return this.track(
-      this.deps.spawn({ class: "welcome", entry: entryFor("welcome"), ...opts }),
-    );
+    return this.spawn({ class: "welcome", entry: entryFor("welcome"), ...opts });
   }
 
   openProfiler(opts: { bounds?: WindowBounds; url?: string } = {}): ManagedWindow {
@@ -176,9 +229,7 @@ export class WindowManager {
       existing.focus();
       return existing;
     }
-    return this.track(
-      this.deps.spawn({ class: "profiler", entry: entryFor("profiler"), ...opts }),
-    );
+    return this.spawn({ class: "profiler", entry: entryFor("profiler"), ...opts });
   }
 
   /**
@@ -197,15 +248,13 @@ export class WindowManager {
       return existing;
     }
     const search = "?" + new URLSearchParams({ path }).toString();
-    return this.track(
-      this.deps.spawn({
-        class: "viewer",
-        entry: entryFor("viewer"),
-        search,
-        fileKey: path,
-        ...opts,
-      }),
-    );
+    return this.spawn({
+      class: "viewer",
+      entry: entryFor("viewer"),
+      search,
+      fileKey: path,
+      ...opts,
+    });
   }
 
   /**
@@ -222,7 +271,7 @@ export class WindowManager {
       existing.close();
       return null;
     }
-    return this.track(this.deps.spawn({ ...desc, key }));
+    return this.spawn({ ...desc, key });
   }
 
   /**
@@ -260,14 +309,12 @@ export class WindowManager {
     const search =
       "?" +
       new URLSearchParams({ session: params.session, frame: params.frame }).toString();
-    return this.track(
-      this.deps.spawn({
-        class: "projection",
-        entry: entryFor("projection"),
-        search,
-        ...opts,
-      }),
-    );
+    return this.spawn({
+      class: "projection",
+      entry: entryFor("projection"),
+      search,
+      ...opts,
+    });
   }
 
   /**
@@ -305,15 +352,13 @@ export class WindowManager {
         }
         for (const w of holders) if (!w.isDestroyed()) w.close();
       }
-      this.track(
-        this.deps.spawn({
-          class: "app",
-          appId,
-          entry: entryFor("app", appId),
-          bounds: opts.bounds,
-          url: opts.url,
-        }),
-      );
+      this.spawn({
+        class: "app",
+        appId,
+        entry: entryFor("app", appId),
+        bounds: opts.bounds,
+        url: opts.url,
+      });
     } finally {
       this.inSwitch = false;
     }
@@ -350,15 +395,13 @@ export class WindowManager {
           // The stream address rides the persisted URL's query string —
           // re-derive `search` so the spawn works even where the full URL
           // isn't honored (entryURL only trusts same-origin dev URLs).
-          this.track(
-            this.deps.spawn({
-              class: "projection",
-              entry: entryFor("projection"),
-              search: searchOf(w.url),
-              bounds: w.bounds,
-              url: w.url,
-            }),
-          );
+          this.spawn({
+            class: "projection",
+            entry: entryFor("projection"),
+            search: searchOf(w.url),
+            bounds: w.bounds,
+            url: w.url,
+          });
           break;
         }
         case "viewer": {

@@ -33,6 +33,9 @@ class FakeWindow implements ManagedWindow {
   get key() {
     return this.desc.key;
   }
+  get windowId() {
+    return this.desc.windowId;
+  }
   focus() {
     this.focused++;
   }
@@ -195,9 +198,10 @@ describe("WindowManager", () => {
     const appEntry = manifest.windows.find((w) => w.class === "app");
     expect(appEntry).toMatchObject({
       appId: "manage-cameras",
-      url: "test://windows/manage-cameras.html",
       bounds: { x: 1, y: 2, width: 300, height: 200 },
     });
+    // A-34: the landing URL carries the minted stable id.
+    expect(appEntry!.url).toMatch(/^test:\/\/windows\/manage-cameras\.html\?win=manage-cameras-\d+$/);
   });
 
   it("restores a plan: app + profiler, bounds/url forwarded to spawn", async () => {
@@ -225,8 +229,8 @@ describe("WindowManager", () => {
     manager.openProjection({ session: "tracking", frame: "C" }); // same stream twice is fine
     manager.openProjection({ session: "manual-control", frame: "L" });
     expect(spawned.filter((w) => w.class === "projection").length).toBe(3);
-    expect(spawned[0].desc.search).toBe("?session=tracking&frame=C");
-    expect(spawned[2].desc.search).toBe("?session=manual-control&frame=L");
+    expect(spawned[0].desc.search).toBe("?session=tracking&frame=C&win=projection-1");
+    expect(spawned[2].desc.search).toBe("?session=manual-control&frame=L&win=projection-3");
   });
 
   it("projections don't count for the welcome rule and survive app close", async () => {
@@ -261,8 +265,8 @@ describe("WindowManager", () => {
     const manifest = manager.collectManifest();
     const projections = manifest.windows.filter((w) => w.class === "projection");
     expect(projections.map((w) => w.url)).toEqual([
-      "test://windows/projection.html?session=tracking&frame=C",
-      "test://windows/projection.html?session=manual-control&frame=center",
+      "test://windows/projection.html?session=tracking&frame=C&win=projection-1",
+      "test://windows/projection.html?session=manual-control&frame=center&win=projection-2",
     ]);
   });
 
@@ -276,7 +280,7 @@ describe("WindowManager", () => {
       },
     ]);
     const w = spawned.find((s) => s.class === "projection")!;
-    expect(w.desc.search).toBe("?session=tracking&frame=C");
+    expect(w.desc.search).toBe("?session=tracking&frame=C&win=projection-1");
     expect(w.desc.bounds).toEqual({ x: 9, y: 9, width: 640, height: 480 });
   });
 
@@ -291,7 +295,7 @@ describe("WindowManager", () => {
     expect(again).toBe(first);
     expect(first.focused).toBe(1);
     expect(other).not.toBe(first);
-    expect(first.desc.search).toBe("?path=%2Ftmp%2Fa.fovea");
+    expect(first.desc.search).toBe("?path=%2Ftmp%2Fa.fovea&win=viewer-1");
     expect(first.desc.fileKey).toBe("/tmp/a.fovea");
   });
 
@@ -325,7 +329,7 @@ describe("WindowManager", () => {
     const manifest = manager.collectManifest();
     expect(manifest.windows[0]).toMatchObject({
       class: "viewer",
-      url: "test://windows/viewer.html?path=%2Ftmp%2Fa.fovea",
+      url: "test://windows/viewer.html?path=%2Ftmp%2Fa.fovea&win=viewer-1",
     });
     // Restore a plan that (pathologically) lists the same file twice — the
     // dedupe holds because restore routes through openViewer.
@@ -478,4 +482,50 @@ describe("WindowManager", () => {
 // `projection` to cascade) so class metadata stays pristine for other suites.
 afterEach(() => {
   WINDOWS.projection.onOwnerClose = "survive";
+});
+
+describe("stable window identity (A-34)", () => {
+  it("mints unique <appId|class>-<n> ids and stamps ?win= into the spawn search", async () => {
+    const { manager, spawned } = harness();
+    manager.ensureWelcome();
+    await manager.openApp("manage-cameras");
+    const [welcome, app] = spawned;
+    expect(welcome.windowId).toBe("welcome-1");
+    expect(app.windowId).toBe("manage-cameras-2");
+    // The id rides the landing URL so the renderer can read its own identity.
+    expect(new URLSearchParams(welcome.desc.search).get("win")).toBe("welcome-1");
+    expect(new URLSearchParams(app.desc.search).get("win")).toBe("manage-cameras-2");
+  });
+
+  it("keeps existing state-in-URL params when stamping the id", () => {
+    const { manager, spawned } = harness();
+    manager.openProjection({ session: "tracking", frame: "C" });
+    const params = new URLSearchParams(spawned[0].desc.search);
+    expect(params.get("session")).toBe("tracking");
+    expect(params.get("frame")).toBe("C");
+    expect(params.get("win")).toBe("projection-1");
+  });
+
+  it("recovers a restored URL's id instead of re-minting, and dodges live collisions", () => {
+    const { manager, spawned } = harness();
+    // Manifest restore: the persisted URL carries the pre-restart id.
+    manager.openProjection(
+      { session: "tracking", frame: "C" },
+      { url: "test://windows/projection.html?session=tracking&frame=C&win=projection-7" },
+    );
+    expect(spawned[0].windowId).toBe("projection-7");
+    // Restored windows keep their ids; fresh mints must not collide with them.
+    const fresh = manager.openProjection({ session: "t2", frame: "L" });
+    expect(fresh.windowId).not.toBe("projection-7");
+    expect(new Set(manager.open().map((w) => w.windowId)).size).toBe(2);
+  });
+
+  it("distinct live windows never share an id", () => {
+    const { manager } = harness();
+    manager.openProjection({ session: "a", frame: "C" });
+    manager.openProjection({ session: "b", frame: "C" });
+    manager.openViewer("/tmp/x.fovea");
+    const ids = manager.open().map((w) => w.windowId);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
 });

@@ -40,8 +40,8 @@ function advert(pipeId: string, epoch = 1): PipeAdvert {
 }
 
 const PIPES = {
-  "camera:123": advert("camera:123"),
-  "undistort:123": advert("undistort:123"),
+  "camera/123/convert": advert("camera/123/convert"),
+  "camera/123/undistort": advert("camera/123/undistort"),
 };
 
 describe("deriveTopology — Stage 1", () => {
@@ -61,7 +61,7 @@ describe("deriveTopology — Stage 1", () => {
 
   it("attaches pipe-meter stats to the owning brick and flags saturation", () => {
     const t = deriveTopology(
-      [row("camera:123", { utilization: 0.97 }), row("undistort:123", { utilization: 0.5 })],
+      [row("camera/123/convert", { utilization: 0.97 }), row("camera/123/undistort", { utilization: 0.5 })],
       PIPES,
       1,
       0,
@@ -70,6 +70,19 @@ describe("deriveTopology — Stage 1", () => {
     expect(convert.stats).toMatchObject({ utilization: 0.97, ratePerSec: 55, saturated: true });
     const und = t.nodes.find((n) => n.id === "camera/123/undistort")!;
     expect(und.stats).toMatchObject({ utilization: 0.5, saturated: false });
+  });
+
+  it("renders dynamic fovea pipes with the PHYSICAL camera edge (nodeId.fovea note)", () => {
+    const foveaId = "camera/123/undistort/fovea/2";
+    const t = deriveTopology([], { ...PIPES, [foveaId]: advert(foveaId, 3) }, 1, 0);
+    const fovea = t.nodes.find((n) => n.id === foveaId)!;
+    expect(fovea.kind).toBe("fovea"); // last non-numeric segment
+    expect(fovea.epoch).toBe(3);
+    // Physical edge camera→fovea (B's fused remap taps the raw stream), not
+    // undistort→fovea despite the nested id.
+    expect(t.edges).toContainEqual(
+      expect.objectContaining({ from: "camera/123", to: foveaId }),
+    );
   });
 
   it("maps known standalone meters (kcf/controller) and keeps unknown ones visible", () => {
@@ -102,19 +115,19 @@ describe("deriveTopology — Stage 1", () => {
 
 describe("membershipKey / toElements — layout stability", () => {
   it("is stable across stats-only refreshes, changes on membership/epoch churn", () => {
-    const a = deriveTopology([row("camera:123", { utilization: 0.2 })], PIPES, 1, 0);
-    const b = deriveTopology([row("camera:123", { utilization: 0.95 })], PIPES, 2, 1000);
+    const a = deriveTopology([row("camera/123/convert", { utilization: 0.2 })], PIPES, 1, 0);
+    const b = deriveTopology([row("camera/123/convert", { utilization: 0.95 })], PIPES, 2, 1000);
     expect(membershipKey(a)).toBe(membershipKey(b)); // stats change ≠ re-layout
 
-    const withKcf = deriveTopology([row("camera:123"), row("tracking:kcf")], PIPES, 3, 2000);
+    const withKcf = deriveTopology([row("camera/123/convert"), row("tracking:kcf")], PIPES, 3, 2000);
     expect(membershipKey(withKcf)).not.toBe(membershipKey(a)); // node appeared
 
-    const bumped = deriveTopology([], { "camera:123": advert("camera:123", 2), "undistort:123": advert("undistort:123") }, 4, 3000);
+    const bumped = deriveTopology([], { "camera/123/convert": advert("camera/123/convert", 2), "camera/123/undistort": advert("camera/123/undistort") }, 4, 3000);
     expect(membershipKey(bumped)).not.toBe(membershipKey(deriveTopology([], PIPES, 5, 4000))); // epoch bump
   });
 
   it("reduces to cytoscape elements with badge labels and skips dangling edges", () => {
-    const t = deriveTopology([row("camera:123", { utilization: 0.97 })], PIPES, 1, 0);
+    const t = deriveTopology([row("camera/123/convert", { utilization: 0.97 })], PIPES, 1, 0);
     t.edges.push({ from: "camera/123", to: "ghost/node", port: "in", type: { kind: "track" } });
     const els = toElements(t);
     expect(els.filter((e) => e.group === "nodes")).toHaveLength(3);

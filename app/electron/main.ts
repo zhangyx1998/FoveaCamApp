@@ -263,13 +263,22 @@ function drainSessions(): Promise<{ ok: boolean; reason?: string }> {
   });
 }
 
+// A-34: sender (webContents id) → stable windowId, maintained by spawnWindow.
+// Lets the connect handshake below tag each channel with the window it
+// belongs to — the orchestrator side keys per-window state (C-24 compose
+// namespaces `win/<windowId>/...`) on it.
+const windowIdBySender = new Map<number, string>();
+
 // A renderer asks to connect; hand both ends of a fresh channel out. Already
 // generic per-`event.sender` — every window class connecting just gets its
-// own port pair (§7.1 S4 / multi-window per-window handshake).
+// own port pair (§7.1 S4 / multi-window per-window handshake). The handoff
+// message carries the sender's stable windowId (A-34) so the Hub can tag the
+// channel; null for a sender the manager doesn't know (shouldn't happen).
 ipcMain.on("orchestrator:connect" satisfies keyof SendChannels, (event) => {
   if (!orchestrator) startOrchestrator();
   const { port1, port2 } = new MessageChannelMain();
-  orchestrator!.postMessage(null, [port1]);
+  const windowId = windowIdBySender.get(event.sender.id) ?? null;
+  orchestrator!.postMessage({ type: "channel:connect", windowId }, [port1]);
   event.sender.postMessage("orchestrator:port", null, [port2]);
 });
 
@@ -377,6 +386,7 @@ function spawnWindow(desc: WindowDescriptor): ManagedWindow {
     fileKey: desc.fileKey,
     owner: desc.owner, // WS2 2a: parent pointer (set by 2b's sub-window opener)
     key: desc.key, // WS2 2a: toggle dedupe key
+    windowId: desc.windowId, // A-34: manager-minted stable instance id
     focus: () => {
       if (win.isMinimized()) win.restore();
       win.focus();
@@ -386,6 +396,18 @@ function spawnWindow(desc: WindowDescriptor): ManagedWindow {
     getURL: () => win.webContents.getURL(),
     getBounds: () => win.getBounds(),
   };
+  // A-34: sender→windowId lookup for the orchestrator channel handshake (the
+  // connect IPC only knows `event.sender`), + the close-teardown signal C-24's
+  // composition keys `win/<windowId>/...` namespaces on.
+  if (desc.windowId) {
+    const windowId = desc.windowId;
+    const senderId = win.webContents.id; // captured now — webContents is gone by "closed"
+    windowIdBySender.set(senderId, windowId);
+    win.on("closed", () => {
+      windowIdBySender.delete(senderId);
+      orchestrator?.postMessage({ type: "window:closed", windowId });
+    });
+  }
   win.on("closed", () => manager.onWindowClosed(managed));
   return managed;
 }

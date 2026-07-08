@@ -34,6 +34,14 @@ export type WindowClass =
  *  and the frame-channel name within it (e.g. session=tracking, frame=C). */
 export type ProjectionParams = { session: string; frame: string };
 
+/** Query-string key carrying a window's stable instance id (A-34, real-2):
+ *  minted by the window manager at spawn (`<appId|class>-<n>`, unique among
+ *  live windows), read renderer-side via `@lib/url-state`'s `windowId()`.
+ *  Riding the URL makes it stable across reloads and manifest restores (the
+ *  manifest persists the full landing URL). C-24's composition protocol keys
+ *  `win/<windowId>/...` node namespaces + close-teardown on it. */
+export const WINDOW_ID_PARAM = "win";
+
 export interface AppMeta {
   /** Stable id — module directory name; also the entry HTML basename. */
   id: string;

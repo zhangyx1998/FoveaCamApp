@@ -29,6 +29,7 @@ import type {
   NodeStats,
   StreamType,
 } from "@lib/orchestrator/graph-contract";
+import { nodeId } from "@lib/orchestrator/graph-contract";
 import type { PipeAdvert } from "@lib/orchestrator/pipe-contract";
 import type { Dtype } from "../../../docs/schema/pixel-formats.js";
 import { utilizationLevel, type WorkloadRow, type WorkloadCounterRow } from "./workload-view";
@@ -41,10 +42,20 @@ const FRAME = (pixelFormat: string, dtype: Dtype): StreamType => ({
   dtype,
 });
 
-/** Path-like id sanitizer for names that embed separators (serial ports,
- *  file paths): `controller:/dev/tty.usb` → `controller/dev/tty.usb`. */
+/** Path-like id sanitizer for LEGACY `:`-family names that embed separators
+ *  (serial ports, file paths): `controller:/dev/tty.usb` → `controller/dev/tty.usb`. */
 const pathify = (name: string): string =>
   name.replace(/:/g, "/").replace(/\/+/g, "/").replace(/^\//, "");
+
+/** Brick kind from a path-like node id (C-24 scheme): the last non-numeric
+ *  segment — `camera/123/convert` → "convert",
+ *  `camera/123/undistort/fovea/2` → "fovea". */
+function kindOf(id: string): string {
+  const segments = id.split("/");
+  for (let i = segments.length - 1; i >= 0; i--)
+    if (!/^\d+$/.test(segments[i])) return segments[i];
+  return segments[0] ?? "node";
+}
 
 function badge(row: WorkloadRow): NodeStats {
   const sum = (rows: WorkloadCounterRow[]): number =>
@@ -85,7 +96,7 @@ export function deriveTopology(
   };
   const cameraNode = (serial: string): GraphNode =>
     ensure({
-      id: `camera/${serial}`,
+      id: nodeId.camera(serial),
       kind: "camera",
       // The sensor-native format is not observable from the advert (the spec
       // types the CONVERTED output) — Stage 2's topology carries it natively.
@@ -93,62 +104,51 @@ export function deriveTopology(
       transport: "native",
     });
 
-  // Structural pass: advertised pipes → camera / convert / undistort bricks.
+  // Structural pass: advertised pipes → bricks. Pipe ids ARE path-like node
+  // ids now (C-24 step 1, built via `nodeId`): `camera/<serial>/convert`,
+  // `camera/<serial>/undistort`, `camera/<serial>/undistort/fovea/<slot>`.
+  // Every `camera/<serial>/...` pipe gets its camera source node + the
+  // PHYSICAL camera→brick edge (per the nodeId.fovea note: a fovea id nests
+  // under /undistort/ but its physical input is the raw camera stream).
   for (const [pipeId, advert] of Object.entries(pipes)) {
     const spec = advert.spec;
     const stream = FRAME(spec.pixelFormat, spec.dtype);
-    const m = /^(camera|undistort):(.+)$/.exec(pipeId);
-    if (m) {
-      const [, root, serial] = m;
-      const cam = cameraNode(serial);
-      const brick = ensure({
-        id: root === "camera" ? `camera/${serial}/convert` : `camera/${serial}/undistort`,
-        kind: root === "camera" ? "convert" : "undistort",
-        output: stream,
-        transport: "pipe",
-        epoch: advert.epoch,
-      });
-      edges.push({ from: cam.id, to: brick.id, port: "in", type: cam.output! });
-    } else {
-      // Future pipe families (fovea crops, …) — visible immediately, refined
-      // when the real topology lands.
-      ensure({
-        id: pathify(pipeId),
-        kind: pipeId.split(":")[0] || "pipe",
-        output: stream,
-        transport: "pipe",
-        epoch: advert.epoch,
-      });
+    const brick = ensure({
+      id: pipeId,
+      kind: kindOf(pipeId),
+      output: stream,
+      transport: "pipe",
+      epoch: advert.epoch,
+    });
+    const cam = /^camera\/([^/]+)\/./.exec(pipeId);
+    if (cam) {
+      const source = cameraNode(cam[1]);
+      edges.push({ from: source.id, to: brick.id, port: "in", type: source.output! });
     }
   }
 
-  // Stats pass: fold every workload row onto the graph.
+  // Stats pass: fold every workload row onto the graph. C-24 step 1: meter
+  // names CONTAINING "/" are path-like node ids (B's pipe-backed meters use
+  // the pipe id verbatim) — attach directly, or surface a standalone node when
+  // no advert built one (e.g. a parked pipe's meter). Names with ":" are
+  // legacy families (tracking:kcf, controller:*, …) until their nodes migrate.
   for (const row of workloads) {
     const stats = badge(row);
-    const attach = (id: string): boolean => {
-      const node = nodes.get(id);
-      if (node) node.stats = stats;
-      return !!node;
-    };
 
-    // Pipe publisher meters share the pipe's id (`camera:<s>` / `undistort:<s>`).
-    const pipeMeter = /^(camera|undistort):(.+)$/.exec(row.name);
-    if (
-      pipeMeter &&
-      attach(
-        pipeMeter[1] === "camera"
-          ? `camera/${pipeMeter[2]}/convert`
-          : `camera/${pipeMeter[2]}/undistort`,
-      )
-    )
+    if (row.name.includes("/") && !row.name.includes(":")) {
+      const node = ensure({
+        id: row.name,
+        kind: kindOf(row.name),
+        output: null,
+        transport: "native",
+      });
+      node.stats = stats;
+      const cam = /^camera\/([^/]+)\/./.exec(row.name);
+      if (cam && !edges.some((e) => e.to === node.id)) {
+        const source = cameraNode(cam[1]);
+        edges.push({ from: source.id, to: node.id, port: "in", type: source.output! });
+      }
       continue;
-
-    // Sibling native meters (`converter:<x>` / `undistort:<x>` where <x> may be
-    // a serial or a format tag): attach when the serial matches a known brick.
-    const sibling = /^(converter|undistort):(.+)$/.exec(row.name);
-    if (sibling) {
-      const brick = sibling[1] === "converter" ? "convert" : "undistort";
-      if (attach(`camera/${sibling[2]}/${brick}`)) continue;
     }
 
     // Legacy JS view-tap loop (dies with C's step-3) — parent it to its camera.
