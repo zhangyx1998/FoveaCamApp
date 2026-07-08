@@ -88,7 +88,10 @@ const T = (await import("core")).Tracker as unknown as {
   assert(snap.inputs.frame && snap.inputs.frame.count > 0, "frames ingested");
   assert(snap.outputs.track && snap.outputs.track.count > 0, "tracks emitted");
   assert(snap.inputs.frame.maxIntervalMs > 0, "frame interval metered");
-  assert(snap.busyMs > 0, "KCF busy time metered");
+  // busyMs >= 0 (not > 0): on a fast machine 5 tiny-frame KCF updates can each
+  // round to 0 at the meter's ms resolution — a 1-in-N flake. The STALLED phase
+  // below asserts busyMs grows deterministically (injected 50ms stalls).
+  assert(snap.busyMs >= 0, "KCF busy time metered");
   // Steady state: KCF (~ms) keeps up with the fake camera fps → no drops.
   assert.equal(snap.dropTotal, 0, "no drops while the tracker keeps up");
   console.log(
@@ -110,6 +113,9 @@ const T = (await import("core")).Tracker as unknown as {
   }
   const after = tracker.probe();
   assert(after.dropTotal > before, `drops climb under stall (${before} → ${after.dropTotal})`);
+  // Deterministic busy coverage (the steady-phase busy assert is >= 0): the
+  // injected 120ms stall runs INSIDE meter begin/end, so busy MUST be > 0 here.
+  assert(after.busyMs > 0, "KCF busy time metered under stall");
   console.log(
     `12-kcf-tracker: stalled drops ${before} → ${after.dropTotal} ` +
       `(busyMs=${after.busyMs.toFixed(1)})`,
