@@ -16,6 +16,10 @@
 // SVG overlays from the recorded points).
 
 import { cmd, defineContract } from "@lib/orchestrator/protocol";
+import {
+  pidOverrideCmd,
+  pidOverrideState,
+} from "@lib/orchestrator/pid-override-contract";
 import type { Point2d, Point3d } from "core/Geometry";
 import type { Pos } from "@lib/controller-codec";
 
@@ -32,8 +36,13 @@ export const calibrateExtrinsic = defineContract({
   state: {
     step: "CAL" as "CAL" | "FIN" | "PRV",
     targetId: { L: 1, C: 0, R: 2 },
-    override_left: null as Pos | null,
-    override_right: null as Pos | null,
+    /** Per-eye PID-node OVERRIDE slots (reusable fragment,
+     *  `@lib/orchestrator/pid-override-contract`): a CAL-step drag on `PosView`
+     *  pins that eye's servo output at the dragged pose (control law held reset);
+     *  the renderer reads it back via `usePidOverride`. Two named instances
+     *  because each eye is a separate PID node — `applyPidOverride` stays generic. */
+    pidOverrideL: pidOverrideState<Pos>(),
+    pidOverrideR: pidOverrideState<Pos>(),
     /** Leased camera serials per role (C-22) — raw previews bind to the
      *  `camera:<serial>` pipe via `usePipeFrame`. Set on acquire. */
     serials: {} as Partial<Record<"L" | "C" | "R", string>>,
@@ -56,7 +65,12 @@ export const calibrateExtrinsic = defineContract({
   frames: ["L", "C", "R"] as const,
   commands: {
     setTargetId: cmd<{ role: "L" | "C" | "R"; id: number }>(),
-    setOverride: cmd<{ role: "left" | "right"; pos: Pos | null }>(),
+    /** Per-eye override slot drivers (reusable `pidOverride` fragment): `{ value }`
+     *  pins that eye's output (engage/update), `{ release: true }` resumes control
+     *  (the servo node's `seed` keeps it continuous). Driven by `usePidOverride`;
+     *  only meaningful in the CAL step (the only step running `startServo`). */
+    pidOverrideL: pidOverrideCmd<Pos>(),
+    pidOverrideR: pidOverrideCmd<Pos>(),
     /** Record the currently-tracked L/C/R detections as one data point
      *  (requires all three trackers to have a target). */
     capture: cmd(),

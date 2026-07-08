@@ -16,6 +16,10 @@
 // contract only owns the tracking/drift-specific state.
 
 import { cmd, defineContract } from "@lib/orchestrator/protocol";
+import {
+  pidOverrideCmd,
+  pidOverrideState,
+} from "@lib/orchestrator/pid-override-contract";
 import type { Point2d } from "core/Geometry";
 import type { Pos } from "@lib/controller-codec";
 
@@ -26,10 +30,13 @@ export type DetectionView = { points: Point2d[] } | null;
 export const calibrateDrift = defineContract({
   state: {
     targetId: { L: 1, C: 0, R: 2 },
-    /** Manual mirror-position override (drag on `PosView`), takes priority
-     *  over the tracker-driven servo command — same as the original. */
-    override_left: null as Pos | null,
-    override_right: null as Pos | null,
+    /** Per-eye PID-node OVERRIDE slots (reusable fragment,
+     *  `@lib/orchestrator/pid-override-contract`): a drag on `PosView` pins that
+     *  eye's servo output at the dragged pose (control law held reset); the
+     *  renderer reads it back via `usePidOverride`. Two named instances because
+     *  each eye is a separate PID node — `applyPidOverride` stays generic. */
+    pidOverrideL: pidOverrideState<Pos>(),
+    pidOverrideR: pidOverrideState<Pos>(),
     /** Leased camera serials per role (C-22) — the renderer binds raw previews
      *  to the `camera:<serial>` pipe via `usePipeFrame`. Set on acquire. */
     serials: {} as Partial<Record<"L" | "C" | "R", string>>,
@@ -48,7 +55,11 @@ export const calibrateDrift = defineContract({
   frames: ["L", "C", "R"] as const,
   commands: {
     setTargetId: cmd<{ role: "L" | "C" | "R"; id: number }>(),
-    setOverride: cmd<{ role: "left" | "right"; pos: Pos | null }>(),
+    /** Per-eye override slot drivers (reusable `pidOverride` fragment): `{ value }`
+     *  pins that eye's output (engage/update), `{ release: true }` resumes control
+     *  (the servo node's `seed` keeps it continuous). Driven by `usePidOverride`. */
+    pidOverrideL: pidOverrideCmd<Pos>(),
+    pidOverrideR: pidOverrideCmd<Pos>(),
     /** Commit the live-derived drift to the triple's persisted config. */
     updateDrift: cmd<{ role: "L" | "R" | "ALL" }>(),
     /** Clear a fovea's saved drift. */

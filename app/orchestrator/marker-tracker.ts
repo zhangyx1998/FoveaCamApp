@@ -205,23 +205,17 @@ export interface ServoOptions {
   kp?: number;
   originLeft?: () => Point2d;
   originRight?: () => Point2d;
-  /** Manual override, checked every tick — takes priority over the
-   *  tracker-driven command (matches the original's drag-to-override). Bridged
-   *  into the per-eye PID node's ruled override slot (see {@link startServo}). */
-  overrideLeft?: () => Pos | null;
-  overrideRight?: () => Pos | null;
   /** Composing window/session id for the servo's graph nodes (`win/<owner>/...`).
-   *  Callers that don't pass one get a generic default — a follow-up threads the
-   *  real session id through here once the call sites migrate. */
+   *  Callers pass their session id (e.g. `calibrate-drift`); those that don't get
+   *  a generic default. */
   owner?: string;
 }
 
 export interface Servo {
   stop(): void;
   /** The per-eye graph-visible PID controller nodes (null for an eye with no
-   *  tracker). Exposed so a follow-up can drive each node's override slot from
-   *  the reusable `pidOverride` contract command instead of the legacy
-   *  `overrideLeft`/`overrideRight` thunks. */
+   *  tracker). Each node's override slot is driven by the module's `pidOverride`
+   *  contract command (`applyPidOverride(servo.override.<eye>, cmd)`). */
   readonly nodes: {
     left: PidNodeHandle<Pos> | null;
     right: PidNodeHandle<Pos> | null;
@@ -255,17 +249,19 @@ export interface Servo {
  * (16.0) and the per-caller value (calibrate-drift passes 10.0) carry through
  * unchanged as `ki`.
  *
- * OVERRIDE. The legacy per-eye `overrideLeft`/`overrideRight` thunks are bridged
- * into each node's RULED override slot: a returned pose engages/updates it, a
- * null RELEASES it. While engaged, `node.step` skips the control law and resets
- * that eye's integrator each tick (no windup builds behind the drag); the output
- * is the pinned pose. On release the node's `seed` reseeds the integrator from
- * the LAST override so control resumes FROM the released pose — velocity-form
- * continuity, no snap-back (the behavioral guarantee the ruled slot adds; the
- * re-base already resumes from the dragged `c.pos`, and the seed keeps that true
- * even if a future migration makes the integrator authoritative). The per-eye
- * grain is preserved because each eye is a separate node: dragging ONE eye pins
- * it while the other keeps servoing — a single all-or-nothing slot could not.
+ * OVERRIDE. Each eye's PID node exposes a RULED override slot
+ * (`servo.override.left`/`right`); the owning module drives it from its
+ * `pidOverride` contract command via `applyPidOverride` (a pose engages/updates,
+ * a release resumes). While engaged, `node.step` skips the control law and
+ * resets that eye's integrator each tick (no windup builds behind the drag); the
+ * output is the pinned pose. On release the node's `seed` reseeds the integrator
+ * from the LAST override so control resumes FROM the released pose — velocity-
+ * form continuity, no snap-back (the behavioral guarantee the ruled slot adds;
+ * the re-base already resumes from the dragged `c.pos`, and the seed keeps that
+ * true even if a future migration makes the integrator authoritative). The per-
+ * eye grain is preserved because each eye is a separate node: dragging ONE eye
+ * pins it while the other keeps servoing — a single all-or-nothing slot could
+ * not.
  */
 export function startServo(
   left: MarkerTracker | undefined,
@@ -334,38 +330,27 @@ export function startServo(
     tracker: MarkerTracker,
     pid: PID2D,
     node: PidNodeHandle<Pos>,
-    overrideThunk: (() => Pos | null) | undefined,
     originThunk: (() => Point2d) | undefined,
   ): void {
     const c = activeController();
     if (!c) return;
-    // Bridge the legacy per-eye override thunk into the node's ruled slot: a pose
-    // engages/updates it (idempotent), a null RELEASES it (release is a no-op
-    // when not engaged, so polling every tick is safe). [Follow-up: the call
-    // sites move to the `pidOverride` contract driving `node.override` directly,
-    // and this thunk bridge retires.]
-    const o = overrideThunk?.() ?? null;
-    if (o) node.override.engage(o);
-    else node.override.release();
     const base = side === "left" ? c.pos.left : c.pos.right;
     const origin = originThunk?.() ?? { x: 0, y: 0 };
-    // `node.step` runs `control` UNLESS overridden — then it resets `pid` and
-    // returns the pinned pose, so `pending` carries the override-or-servo command
-    // resolved for this tick (the old actuation-loop `override ?? pending` poll).
+    // The node's override slot is driven externally (the module's `pidOverride`
+    // command → `applyPidOverride(node.override, …)`). `node.step` runs `control`
+    // UNLESS the slot is engaged — then it resets `pid` and returns the pinned
+    // pose, so `pending` carries the override-or-servo command resolved for this
+    // tick (the old actuation-loop `override ?? pending` poll, now at the node).
     pending[side] = outputOf(node.step(() => control(base, tracker.centerRelative, origin, pid)));
   }
 
   if (left && pidLeft && nodeLeft)
     disposers.push(
-      left.onDetection(() =>
-        onDetection("left", left, pidLeft, nodeLeft, opts.overrideLeft, opts.originLeft),
-      ),
+      left.onDetection(() => onDetection("left", left, pidLeft, nodeLeft, opts.originLeft)),
     );
   if (right && pidRight && nodeRight)
     disposers.push(
-      right.onDetection(() =>
-        onDetection("right", right, pidRight, nodeRight, opts.overrideRight, opts.originRight),
-      ),
+      right.onDetection(() => onDetection("right", right, pidRight, nodeRight, opts.originRight)),
     );
 
   void (async () => {

@@ -17,7 +17,7 @@ You may find the full license in project root directory.
 import { computed, ref, watchEffect } from "vue";
 import { ROLE, THEME } from "@lib/camera-config";
 import { useAppConfig } from "@lib/config";
-import { useController, useSession, usePipeFrame } from "@lib/orchestrator/client";
+import { useController, useSession, usePipeFrame, usePidOverride } from "@lib/orchestrator/client";
 import { nodeId } from "@lib/orchestrator/graph-contract";
 import { readUrlParam, writeUrlState } from "@lib/url-state";
 import { degrees } from "@lib/util";
@@ -70,9 +70,18 @@ const canRecord = computed(
 );
 const hover_record = ref<number | null>(null);
 
-function setOverride(role: "left" | "right", p: Pos | null) {
-  session.call("setOverride", { role, pos: p });
-}
+// Per-eye PID-node override proxies (reusable `pidOverride` fragment), active in
+// the CAL step's visual servo. Dragging a `PosView` sets that eye's `value`
+// (engage/pin the servo output); releasing the drag emits null → the proxy
+// releases (control resumes from the released pose via the servo node's `seed`).
+const overrideL = usePidOverride<typeof calibrateExtrinsic, Pos>(session, {
+  stateKey: "pidOverrideL",
+  command: "pidOverrideL",
+});
+const overrideR = usePidOverride<typeof calibrateExtrinsic, Pos>(session, {
+  stateKey: "pidOverrideR",
+  command: "pidOverrideR",
+});
 function printAngle(a: Point2d): string {
   return `X ${degrees(a.x).toFixed(2)}°, Y ${degrees(a.y).toFixed(2)}°`;
 }
@@ -121,7 +130,7 @@ function bbox(points: Point2d[]): string {
           :color="THEME.L"
           style="width: 100%"
           :font-size="12"
-          @select="(p) => setOverride('left', p)"
+          @select="(p) => (overrideL.value = p)"
         >
           <Line2D
             :data="[...telemetry.records.map((r) => r.L.voltage), ctrl.telemetry.pos.left]"
@@ -194,7 +203,7 @@ function bbox(points: Point2d[]): string {
           :color="THEME.R"
           style="width: 100%"
           :font-size="12"
-          @select="(p) => setOverride('right', p)"
+          @select="(p) => (overrideR.value = p)"
         >
           <Line2D
             :data="[...telemetry.records.map((r) => r.R.voltage), ctrl.telemetry.pos.right]"

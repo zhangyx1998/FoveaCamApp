@@ -17,6 +17,7 @@ import { acquireTriple, type CalibratedTriple } from "@orchestrator/calibration"
 import { read, write } from "@orchestrator/store-hub";
 import { activeController } from "@orchestrator/controller";
 import { startServo, type MarkerTracker, type Servo } from "@orchestrator/marker-tracker";
+import { applyPidOverride } from "@orchestrator/pid-node";
 import { publishSerials, DisposerBag, releaseLeases } from "@orchestrator/session-resources";
 import {
   bindDetections,
@@ -102,6 +103,7 @@ export default function calibrateDriftSession(): ServerSession<typeof calibrateD
 
       servo = startServo(trackers.L, trackers.R, {
         kp: 10.0,
+        owner: "calibrate-drift",
         originLeft: () => {
           const r = angularFromCenter();
           return r ? triple!.conv.A2V.L(applyDrift(r, saved.L)) : { x: 0, y: 0 };
@@ -110,9 +112,11 @@ export default function calibrateDriftSession(): ServerSession<typeof calibrateD
           const r = angularFromCenter();
           return r ? triple!.conv.A2V.R(applyDrift(r, saved.R)) : { x: 0, y: 0 };
         },
-        overrideLeft: () => s.state.override_left,
-        overrideRight: () => s.state.override_right,
       });
+      // A fresh servo's per-eye override slots start released — mirror that into
+      // contract state so a stale engaged echo can't survive a reactivation.
+      s.setState("pidOverrideL", { engaged: false, value: null });
+      s.setState("pidOverrideR", { engaged: false, value: null });
       scope.defer(() => {
         servo?.stop();
         servo = null;
@@ -145,8 +149,13 @@ export default function calibrateDriftSession(): ServerSession<typeof calibrateD
           s.setState("targetId", { ...s.state.targetId, [role]: id });
           retarget(trackers, role, id);
         },
-        async setOverride({ role, pos }) {
-          s.setState(role === "left" ? "override_left" : "override_right", pos);
+        async pidOverrideL(command) {
+          if (!servo?.override.left) return;
+          s.setState("pidOverrideL", applyPidOverride(servo.override.left, command));
+        },
+        async pidOverrideR(command) {
+          if (!servo?.override.right) return;
+          s.setState("pidOverrideR", applyPidOverride(servo.override.right, command));
         },
         async updateDrift({ role }) {
           if (!triple) return;

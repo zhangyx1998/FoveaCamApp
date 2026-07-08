@@ -170,14 +170,14 @@ describe("marker servo — ruled override slot (held pins output, release resume
     const c = holder.c!;
     c.pos.left = { x: 0, y: 0 };
     const L = fakeTracker("SER-L");
-    let ov: Pos | null = null;
     const servo = startServo(asTracker(L), undefined, {
-      overrideLeft: () => ov,
       originLeft: () => ({ x: 0, y: 0 }),
     });
 
-    // Engage: the marker is visible but must be IGNORED while overridden.
-    ov = { x: 7, y: 8 };
+    // Engage the ruled slot directly (the path the module's `pidOverride`
+    // command drives via `applyPidOverride`): the marker is visible but must be
+    // IGNORED while overridden.
+    servo.override.left!.engage({ x: 7, y: 8 });
     L.rel = { x: 0.1, y: 0.1 };
     L.fire();
     await settle();
@@ -191,7 +191,7 @@ describe("marker servo — ruled override slot (held pins output, release resume
     expect(c.last()!.left).toEqual({ x: 7, y: 8 });
 
     // Release: resume from the released pose {7,8}, NOT a snap toward origin.
-    ov = null;
+    servo.override.left!.release();
     L.rel = { x: 0.1, y: 0.1 };
     L.fire();
     await settle();
@@ -209,12 +209,9 @@ describe("marker servo — ruled override slot (held pins output, release resume
     c.pos.right = { x: 0, y: 0 };
     const L = fakeTracker("SER-L");
     const R = fakeTracker("SER-R");
-    let ovL: Pos | null = null;
-    const servo = startServo(asTracker(L), asTracker(R), {
-      overrideLeft: () => ovL,
-    });
+    const servo = startServo(asTracker(L), asTracker(R), {});
 
-    ovL = { x: 3, y: 3 }; // left pinned
+    servo.override.left!.engage({ x: 3, y: 3 }); // left pinned
     L.rel = { x: 0.9, y: 0.9 };
     R.rel = { x: 0.2, y: 0.2 };
     L.fire();

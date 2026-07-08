@@ -27,6 +27,7 @@ import { matchTriple, retryUntil, type CameraLease } from "@orchestrator/registr
 import { loadIntrinsic, fitExtrinsicRegression } from "@orchestrator/calibration";
 import { startActuationLoop, type ActuationLoop } from "@orchestrator/actuation";
 import { startServo, type MarkerTracker, type Servo } from "@orchestrator/marker-tracker";
+import { applyPidOverride } from "@orchestrator/pid-node";
 import { publishSerials, DisposerBag, releaseLeases } from "@orchestrator/session-resources";
 import {
   bindDetections,
@@ -96,10 +97,12 @@ export default function calibrateExtrinsicSession(): ServerSession<typeof calibr
       stopPreview();
       if (!trackers) return;
       if (step === "CAL") {
-        servo = startServo(trackers.L, trackers.R, {
-          overrideLeft: () => s.state.override_left,
-          overrideRight: () => s.state.override_right,
-        });
+        servo = startServo(trackers.L, trackers.R, { owner: "calibrate-extrinsic" });
+        // A fresh servo's per-eye override slots start released — mirror that
+        // into contract state so a stale engaged echo can't survive a step
+        // round-trip (CAL → FIN/PRV → CAL recreates the servo).
+        s.setState("pidOverrideL", { engaged: false, value: null });
+        s.setState("pidOverrideR", { engaged: false, value: null });
       } else if (step === "PRV") {
         preview = startActuationLoop({ targetVolts: () => previewVolt, onVolts() {} });
       }
@@ -183,8 +186,13 @@ export default function calibrateExtrinsicSession(): ServerSession<typeof calibr
           s.setState("targetId", { ...s.state.targetId, [role]: id });
           retarget(trackers, role, id);
         },
-        async setOverride({ role, pos }) {
-          s.setState(role === "left" ? "override_left" : "override_right", pos);
+        async pidOverrideL(command) {
+          if (!servo?.override.left) return;
+          s.setState("pidOverrideL", applyPidOverride(servo.override.left, command));
+        },
+        async pidOverrideR(command) {
+          if (!servo?.override.right) return;
+          s.setState("pidOverrideR", applyPidOverride(servo.override.right, command));
         },
         async capture() {
           if (!trackers || !undistort) return;

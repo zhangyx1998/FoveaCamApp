@@ -17,7 +17,7 @@ You may find the full license in project root directory.
 import { computed } from "vue";
 import { ROLE, THEME } from "@lib/camera-config";
 import { useAppConfig } from "@lib/config";
-import { useController, useSession, usePipeFrame } from "@lib/orchestrator/client";
+import { useController, useSession, usePipeFrame, usePidOverride } from "@lib/orchestrator/client";
 import { nodeId } from "@lib/orchestrator/graph-contract";
 import { calibrateDrift } from "./contract";
 import StreamView from "@src/components/StreamView.vue";
@@ -52,9 +52,18 @@ const marker_size = computed(() => app_config.cal_marker_size_mm);
 const marker_ratio = computed(() => app_config.cal_marker_ratio);
 const center_marker_size = computed(() => marker_size.value * marker_ratio.value);
 
-function setOverride(role: "left" | "right", p: Pos | null) {
-  session.call("setOverride", { role, pos: p });
-}
+// Per-eye PID-node override proxies (reusable `pidOverride` fragment). Dragging
+// a `PosView` sets that eye's `value` (engage/pin the servo output); releasing
+// the drag emits null → the proxy releases (control resumes from the released
+// pose via the servo node's `seed`).
+const overrideL = usePidOverride<typeof calibrateDrift, Pos>(session, {
+  stateKey: "pidOverrideL",
+  command: "pidOverrideL",
+});
+const overrideR = usePidOverride<typeof calibrateDrift, Pos>(session, {
+  stateKey: "pidOverrideR",
+  command: "pidOverrideR",
+});
 </script>
 
 <template>
@@ -79,7 +88,7 @@ function setOverride(role: "left" | "right", p: Pos | null) {
         :color="THEME.L"
         style="width: 100%"
         :font-size="12"
-        @select="(p) => setOverride('left', p)"
+        @select="(p) => (overrideL.value = p)"
       />
     </div>
     <div class="view">
@@ -131,7 +140,7 @@ function setOverride(role: "left" | "right", p: Pos | null) {
         :color="THEME.R"
         style="width: 100%"
         :font-size="12"
-        @select="(p) => setOverride('right', p)"
+        @select="(p) => (overrideR.value = p)"
       />
     </div>
   </div>
