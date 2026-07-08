@@ -8,8 +8,10 @@
 // moved off the JS event loop. Main runs the `MarkerTracker`s (native streams)
 // and, on each fovea detection, computes the projection homography (a cheap
 // 4-point `findHomography`) and ships it as a param; this kernel does the heavy
-// `wrapPerspective` on the fovea frame it reads from the pipe, posting the raw
-// preview + the warped alignment-check overlay.
+// `wrapPerspective` on the fovea frame it reads from the pipe, posting only the
+// warped alignment-check overlay. (C-2c: the raw fovea preview is no longer
+// relayed here — the renderer reads the native `camera:<serial>` convert pipe
+// directly, so this kernel no longer passthrough-gates the L/R view fps.)
 
 import { makeMat } from "@lib/mat";
 import { wrapPerspective, type Mat } from "core/Vision";
@@ -36,7 +38,8 @@ export function createDistortionKernel(initial: Record<string, unknown>): Vision
   };
 
   function foveaOut(role: "L" | "R", raw: Mat<Uint8Array>, out: KernelFrameOut[]): void {
-    out.push({ name: role, mat: raw }); // raw preview (renderer binds session.frame(role))
+    // Only the worker-derived warped overlay is posted (renderer binds
+    // session.frame(`proj_${role}`)); the raw preview rides the convert pipe.
     const H = role === "L" ? p.homographyL : p.homographyR;
     if (H) out.push({ name: `proj_${role}`, mat: wrapPerspective(raw, H) });
   }

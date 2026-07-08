@@ -13,8 +13,9 @@
 // marker trackers run on their own native streams; on each fovea detection main
 // computes the projection homography (a cheap 4-point `findHomography`) and
 // ships it to the `distortion` vision worker, which reads the fovea pipe and
-// does the heavy `wrapPerspective`, posting the raw preview + warped overlay.
-// The registry `onView` tap is gone.
+// does the heavy `wrapPerspective`, posting the warped overlay. The registry
+// `onView` tap is gone; the raw L/R previews ride the native `camera:<serial>`
+// convert pipe (C-2c) — no worker passthrough relay gating view fps.
 
 import { type ServerSession } from "@orchestrator/runtime";
 import { defineResourceSession, type ResourceScope } from "@orchestrator/resource-session";
@@ -98,8 +99,8 @@ export default function calibrateDistortionSession(broker: PipeBroker): ServerSe
       }
     }
 
-    // The worker posts the raw fovea preview ("L"/"R") + the warped overlay
-    // ("proj_L"/"proj_R"); publish each to the renderer.
+    // The worker posts only the warped overlays ("proj_L"/"proj_R"); publish
+    // each to the renderer. (Raw L/R previews ride the convert pipe now — C-2c.)
     function onResult(r: VisionResult): void {
       for (const f of r.frames) {
         s.frame(f.name, makeMat(new Uint8Array(f.buffer), [f.height, f.width], f.channels));

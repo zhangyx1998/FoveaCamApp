@@ -34,7 +34,10 @@ export const calibrateDistortion = defineContract({
     detection: { L: null, C: null, R: null } as Record<"L" | "C" | "R", DetectionView>,
     projection: { L: null, R: null } as Record<"L" | "R", ProjectionView>,
   },
-  frames: ["L", "C", "R", "proj_L", "proj_R"] as const,
+  // C-2c: raw fovea previews (L/C/R) ride the native `camera:<serial>` convert
+  // pipe via `usePipeFrame`; only the worker-derived homography overlays remain
+  // as session frames.
+  frames: ["proj_L", "proj_R"] as const,
   commands: {
     setTargetId: cmd<{ role: "L" | "C" | "R"; id: number }>(),
   },

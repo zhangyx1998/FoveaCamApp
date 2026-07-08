@@ -33,16 +33,18 @@ const session = useSession(calibrateDistortion, "calibrate-distortion");
 const ctrl = useController();
 const { state, telemetry } = session;
 
-// C-22: raw center ("C") preview rides the native camera:<serial> pipe (off the
-// JS view-tap loop); L/R (homography) + proj views stay on session.frame.
-const {
-  L: frameL,
-  R: frameR,
-  proj_L: frameProjL,
-  proj_R: frameProjR,
-} = useFrames(session, ["L", "R", "proj_L", "proj_R"]);
+// C-2c: raw fovea previews (L/C/R) all ride their native camera:<serial>
+// convert pipe directly (off the JS view-tap relay loop); only the
+// worker-derived homography overlays (proj_*) stay on session.frame.
+const { proj_L: frameProjL, proj_R: frameProjR } = useFrames(session, ["proj_L", "proj_R"]);
+const frameL = usePipeFrame(() =>
+  state.serials?.L ? nodeId.convert(state.serials.L) : null,
+);
 const frameC = usePipeFrame(() =>
   state.serials?.C ? nodeId.convert(state.serials.C) : null,
+);
+const frameR = usePipeFrame(() =>
+  state.serials?.R ? nodeId.convert(state.serials.R) : null,
 );
 
 const marker_zoom = ref(1.0);
@@ -67,7 +69,7 @@ function toMat(H: number[]) {
       <StreamView
         class="stream"
         :title="[ROLE.L, formatPos(ctrl.telemetry.pos.left)].join(' | ')"
-        :payload="frameL.payload.value" :source="frameL.source"
+        :payload="frameL"
         :theme="THEME.L"
       >
         <circle
@@ -117,7 +119,7 @@ function toMat(H: number[]) {
       <StreamView
         class="stream"
         :title="[ROLE.R, formatPos(ctrl.telemetry.pos.right)].join(' | ')"
-        :payload="frameR.payload.value" :source="frameR.source"
+        :payload="frameR"
         :theme="THEME.R"
       >
         <circle
