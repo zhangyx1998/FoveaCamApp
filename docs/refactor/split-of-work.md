@@ -1072,3 +1072,36 @@ do not hand-roll lifecycle. Model on `KcfTrackerStream` (the existing
     vite build OK; orch zero-Vue 0; renderer zero-core 0 (orchestrator-only — no
     native/renderer rebuild; core already built). Ready for verify + commit —
     closes real-1e.
+
+---
+
+## WS1 real-1f — eliminate the JS view-tap loop + profiler insight (2026-07-08)
+
+User: dedicate 1 worker to the profiler, 2 to the migration; eliminate the old
+path COMPLETELY + remove dead code. Root cause CONFIRMED from the user's
+snapshots: `registry:<serial>` JS view-tap loop at 0.94–0.997 util (frame.view
+per frame) while the native converter threads sit parked. Full migration brief:
+`docs/refactor/proposals/kill-jsview-loop.md`.
+
+- **A-26 — profiler insight + StreamView metrics (build; light design).** Owns
+  `ProfilerWindow.vue`, `StreamView.vue`, `pipe-consumer.ts`, `protocol.ts`
+  (`FramePayload.meta`), `metering.ts`. (1) Flag the bottleneck: sort workloads
+  by utilization and visually mark any ≥~0.9 as saturated (the data's already
+  there — `registry:*` at 0.99 must jump out). (2) Fix (D): the pipe-path
+  `FramePayload.meta` carries only `tCapture`+`seq` — enrich it with `convertMs`
+  (rides `FrameMeta`), `shm` gen/retries (reader returns them), so EVERY
+  StreamView inspector shows full metrics, not just tracking-multi's wide view.
+  Does NOT touch registry/sessions (C-22's lane).
+
+- **B-19 — migration core seam (PLAN-FIRST; coordinate w/ C-22).** The in-
+  process-vision-off-loop seam (brief §"In-process vision"). Sketch the approach
+  (native vision threads vs converter-subscriber→latest-wins-worker; note which
+  vision is already native), raise questions, STOP for my ruling. DoD:
+  `registry:<serial>` util → ~0.
+
+- **C-22 — migration orchestrator/renderer + dead-code removal (PLAN-FIRST;
+  coordinate w/ B-19).** Delete `registry.startLoop/stopLoop/onView/viewSinks/
+  tapView`; migrate disparity-scope / tracking-single / manual-control sessions
+  + `index.vue` previews to `usePipeFrame` + B's vision seam; delete
+  `async-kcf.ts` + its test, `frame-worker.ts` if freed, the dead
+  "registry:<serial>" meter. Grep-clean (no dangling imports).
