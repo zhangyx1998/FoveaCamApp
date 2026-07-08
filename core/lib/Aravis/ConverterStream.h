@@ -105,16 +105,17 @@ private:
   uint64_t lastDrops_ = 0;  // transform-thread only
 };
 
-// The B-owned pipe producer: a DIRECT synchronous-consume Subscriber on a
-// ConverterStream. `push` runs on the converter thread, in the base loop's
-// synchronous dispatch BEFORE the next transform — so `offer()` (which copies
-// into the ring) consumes the reused buffer safely. MUST NOT be a Sub::Latest/
-// Queue (those retain the Ptr past the buffer's validity).
+// The B-owned pipe producer: a DIRECT synchronous-consume Subscriber on any
+// ConvertedFrame producer (ConverterStream, real-1g UndistortStream). `push`
+// runs on the producer thread, in the base loop's synchronous dispatch BEFORE
+// the next transform — so `offer()` (which copies into the ring) consumes the
+// reused buffer safely. MUST NOT be a Sub::Latest/Queue (those retain the Ptr
+// past the buffer's validity).
 class PipeOfferSubscriber : public Subscriber<ConvertedFrame::Ptr> {
 public:
-  PipeOfferSubscriber(ConverterStream *converter, Pipe::FrameSink *sink,
-                      uint32_t width, uint32_t height)
-      : Subscriber<ConvertedFrame::Ptr>(converter), sink_(sink), width_(width),
+  PipeOfferSubscriber(::Stream<ConvertedFrame::Ptr> *producer,
+                      Pipe::FrameSink *sink, uint32_t width, uint32_t height)
+      : Subscriber<ConvertedFrame::Ptr>(producer), sink_(sink), width_(width),
         height_(height) {}
   ~PipeOfferSubscriber() { close(); } // unsubscribe before converter releases
 
@@ -147,5 +148,9 @@ private:
   const uint32_t width_;
   const uint32_t height_;
 };
+
+// Meter::Snapshot → JS object (defined in ConverterStream.cpp; shared by
+// converterProbeAll + the real-1g undistortProbeAll).
+Napi::Value meterSnapshotToJs(Napi::Env env, const Meter::Snapshot &s);
 
 } // namespace Arv

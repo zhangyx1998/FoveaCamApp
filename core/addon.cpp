@@ -22,6 +22,10 @@ Napi::Value attachCameraPipe(const Napi::CallbackInfo &info);
 Napi::Value detachCameraPipe(const Napi::CallbackInfo &info);
 Napi::Value enableFakeCamera(const Napi::CallbackInfo &info);
 Napi::Value converterProbeAll(const Napi::CallbackInfo &info);
+// B-23 (real-1g), defined in core/lib/Aravis/UndistortStream.cpp.
+Napi::Value attachUndistortPipe(const Napi::CallbackInfo &info);
+Napi::Value detachUndistortPipe(const Napi::CallbackInfo &info);
+Napi::Value undistortProbeAll(const Napi::CallbackInfo &info);
 }
 
 using namespace Napi;
@@ -57,6 +61,15 @@ static Object init(Env env, Object exports) {
     // perfSnapshot.workloads alongside Pipe.probeAll()).
     Aravis.Set("converterProbeAll",
                Function::New<Arv::converterProbeAll>(env, "converterProbeAll"));
+    // B-23 (real-1g): undistort pipes — a native convert+remap thread per
+    // (camera × spec.pixelFormat), maps built at attach from the persisted
+    // CameraCalibration JSON; gated by the pipe's own consumer refcount.
+    Aravis.Set("attachUndistortPipe",
+               Function::New<Arv::attachUndistortPipe>(env, "attachUndistortPipe"));
+    Aravis.Set("detachUndistortPipe",
+               Function::New<Arv::detachUndistortPipe>(env, "detachUndistortPipe"));
+    Aravis.Set("undistortProbeAll",
+               Function::New<Arv::undistortProbeAll>(env, "undistortProbeAll"));
     exports.Set("Aravis", Aravis);
     // Controller Module
     auto Controller = Object::New(env);

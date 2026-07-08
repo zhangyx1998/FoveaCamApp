@@ -49,7 +49,7 @@ static Napi::Object statsToJs(Napi::Env env,
   }
   return m;
 }
-static Napi::Value snapshotToJs(Napi::Env env, const Meter::Snapshot &s) {
+Napi::Value meterSnapshotToJs(Napi::Env env, const Meter::Snapshot &s) {
   auto o = Napi::Object::New(env);
   o.Set("name", Napi::String::New(env, s.name));
   o.Set("uptimeMs", Napi::Number::New(env, static_cast<double>(s.uptimeMs)));
@@ -135,7 +135,7 @@ FN(converterProbeAll) {
   std::scoped_lock lock(g_mutex);
   for (const auto &[pipeId, b] : g_pipes)
     if (b.converter)
-      out.Set(pipeId, snapshotToJs(env, b.converter->probe()));
+      out.Set(pipeId, meterSnapshotToJs(env, b.converter->probe()));
   return out;
 }
 
