@@ -25,6 +25,9 @@ export type ProjectionView = { H: number[]; points: Point2d[] } | null;
 export const calibrateDistortion = defineContract({
   state: {
     targetId: { L: 1, C: 0, R: 2 },
+    /** Leased camera serials per role (C-22) — raw center preview binds to the
+     *  `camera:<serial>` pipe via `usePipeFrame`. Set on acquire. */
+    serials: {} as Partial<Record<"L" | "C" | "R", string>>,
   },
   telemetry: {
     ready: false as boolean,

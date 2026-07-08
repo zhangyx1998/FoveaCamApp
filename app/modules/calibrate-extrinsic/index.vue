@@ -17,7 +17,7 @@ You may find the full license in project root directory.
 import { computed, ref, watchEffect } from "vue";
 import { ROLE, THEME } from "@lib/camera-config";
 import { useAppConfig } from "@lib/config";
-import { useController, useSession } from "@lib/orchestrator/client";
+import { useController, useSession, usePipeFrame } from "@lib/orchestrator/client";
 import { readUrlParam, writeUrlState } from "@lib/url-state";
 import { degrees } from "@lib/util";
 import type { Point2d } from "core/Geometry";
@@ -52,9 +52,13 @@ const { state, telemetry } = session;
 }
 watchEffect(() => writeUrlState({ step: state.step }));
 
-const frameL = session.frame("L");
-const frameC = session.frame("C");
-const frameR = session.frame("R");
+// C-22: raw L/C/R previews ride the native camera:<serial> pipe (off the JS
+// view-tap loop); marker overlays draw client-side from telemetry.detection.
+const pipe = (role: "L" | "C" | "R") =>
+  usePipeFrame(() => (state.serials?.[role] ? `camera:${state.serials[role]}` : null));
+const frameL = pipe("L");
+const frameC = pipe("C");
+const frameR = pipe("R");
 
 const marker_size = computed(() => app_config.cal_marker_size_mm);
 const marker_ratio = computed(() => app_config.cal_marker_ratio);
@@ -98,7 +102,7 @@ function bbox(points: Point2d[]): string {
   <template v-if="state.step === 'CAL'">
     <div class="cameras">
       <div class="view">
-        <StreamView class="stream" :title="ROLE.L" :payload="frameL.payload.value" :source="frameL.source" :theme="THEME.L">
+        <StreamView class="stream" :title="ROLE.L" :payload="frameL" :theme="THEME.L">
           <circle
             v-for="(p, i) in telemetry.detection.L?.points ?? []"
             :key="i"
@@ -126,7 +130,7 @@ function bbox(points: Point2d[]): string {
         </PosView>
       </div>
       <div class="view">
-        <StreamView class="stream" :title="ROLE.C" :payload="frameC.payload.value" :source="frameC.source" :theme="THEME.C">
+        <StreamView class="stream" :title="ROLE.C" :payload="frameC" :theme="THEME.C">
           <circle
             v-for="(p, i) in telemetry.detection.C?.points ?? []"
             :key="i"
@@ -171,7 +175,7 @@ function bbox(points: Point2d[]): string {
         </div>
       </div>
       <div class="view">
-        <StreamView class="stream" :title="ROLE.R" :payload="frameR.payload.value" :source="frameR.source" :theme="THEME.R">
+        <StreamView class="stream" :title="ROLE.R" :payload="frameR" :theme="THEME.R">
           <circle
             v-for="(p, i) in telemetry.detection.R?.points ?? []"
             :key="i"
@@ -276,11 +280,11 @@ function bbox(points: Point2d[]): string {
 
   <div v-else-if="state.step === 'PRV'" class="cameras">
     <div class="view">
-      <StreamView class="stream" :title="ROLE.L" :payload="frameL.payload.value" :source="frameL.source" :theme="THEME.L" />
+      <StreamView class="stream" :title="ROLE.L" :payload="frameL" :theme="THEME.L" />
       <PosView :pos="telemetry.preview.pos.L" :lim="ctrl.telemetry.dv" :color="THEME.L" style="width: 100%" />
     </div>
     <div class="view">
-      <StreamView class="stream" :title="ROLE.C" :payload="frameC.payload.value" :source="frameC.source" :theme="THEME.C" @mouse="onPrvCursor">
+      <StreamView class="stream" :title="ROLE.C" :payload="frameC" :theme="THEME.C" @mouse="onPrvCursor">
         <circle
           v-if="telemetry.preview.cursor_l"
           :cx="telemetry.preview.cursor_l.x"
@@ -298,7 +302,7 @@ function bbox(points: Point2d[]): string {
       </StreamView>
     </div>
     <div class="view">
-      <StreamView class="stream" :title="ROLE.R" :payload="frameR.payload.value" :source="frameR.source" :theme="THEME.R" />
+      <StreamView class="stream" :title="ROLE.R" :payload="frameR" :theme="THEME.R" />
       <PosView :pos="telemetry.preview.pos.R" :lim="ctrl.telemetry.dv" :color="THEME.R" style="width: 100%" />
     </div>
     <NavBack @back="session.call('setStep', { step: 'FIN' })">

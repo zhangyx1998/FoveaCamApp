@@ -5,7 +5,7 @@ You may find the full license in project root directory.
 --------------------------------------------------- -->
 <script setup lang="ts">
 import { computed, ref } from "vue";
-import { useSession } from "@lib/orchestrator/client";
+import { useSession, usePipeFrame } from "@lib/orchestrator/client";
 import { multiFovea } from "./contract";
 import StreamView from "@src/components/StreamView.vue";
 import PosView from "@src/components/PosView.vue";
@@ -14,7 +14,11 @@ import type { Point2d, Rect, Size } from "core/Geometry";
 
 const session = useSession(multiFovea, "multi-fovea");
 const { state, telemetry } = session;
-const center = session.frame("C");
+// C-22: raw center ("C") preview rides the native camera:<serial> pipe (off the
+// JS view-tap loop); per-fovea processed crops stay on session.frame.
+const center = usePipeFrame(() =>
+  state.serials?.C ? `camera:${state.serials.C}` : null,
+);
 const selectedTarget = ref(0);
 const draftCenter = ref<Point2d | null>(null);
 const stroke = computed(
@@ -105,7 +109,7 @@ async function captureOnce(): Promise<void> {
       <StreamView
         class="center"
         title="Center Overview"
-        :payload="center.payload.value" :source="center.source"
+        :payload="center"
         theme="#0af"
         inspector
         @mouse="onCursor"

@@ -24,7 +24,7 @@ import { computed, onMounted, ref, watch } from "vue";
 import type { Point2d, Size } from "core/Geometry";
 import { ROLE, THEME } from "@lib/camera-config";
 import { useAppConfig } from "@lib/config";
-import { useFrames, useSession } from "@lib/orchestrator/client";
+import { useFrames, useSession, usePipeFrame } from "@lib/orchestrator/client";
 import { tracking } from "./contract";
 import StreamView from "@src/components/StreamView.vue";
 import PosView from "@src/components/PosView.vue";
@@ -41,12 +41,14 @@ const { state, telemetry } = session;
 
 // Processed preview frames fanned from the orchestrator: C undistorted, L/R
 // perspective-wrapped, `center` the magnified fovea crop around the target.
-const { L: frameL, C: frameC, R: frameR, center: frameCenter } = useFrames(session, [
-  "L",
-  "C",
-  "R",
-  "center",
-]);
+// C-22: the raw center ("C") preview rides the native `camera:<serial>` pipe
+// (off the JS view-tap loop); L/R (perspective-wrapped when `wrap`) and the
+// processed `center` view stay on `session.frame` (their producer moves to the
+// vision worker in the coupled half).
+const { L: frameL, R: frameR, center: frameCenter } = useFrames(session, ["L", "R", "center"]);
+const frameC = usePipeFrame(() =>
+  state.serials?.C ? `camera:${state.serials.C}` : null,
+);
 
 const drawer_height = ref(0);
 
@@ -111,7 +113,7 @@ const releaseTracker = () => session.call("releaseTracker", undefined);
       <StreamView
         class="stream"
         :title="ROLE.C"
-        :payload="frameC.payload.value" :source="frameC.source"
+        :payload="frameC"
         :theme="THEME.C"
         @mouse="onCursor"
       >

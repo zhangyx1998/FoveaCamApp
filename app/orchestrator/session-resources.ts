@@ -55,3 +55,24 @@ export function bindViews<C extends Contract>(
   disposers.add(leases.C.onView((v) => onView("C", v)));
   disposers.add(leases.R.onView((v) => onView("R", v)));
 }
+
+/** Publish the leased triple's camera serials into `state.serials` (C-22) so the
+ *  renderer can bind raw previews to the native `camera:<serial>` pipe via
+ *  `usePipeFrame` — replacing the JS `onView` view-tap for the raw feeds. Every
+ *  triple contract declares `serials: {} as Partial<Record<"L"|"C"|"R", string>>`.
+ *  Cleared to `{}` on release (a disposer). */
+export function publishSerials<C extends Contract>(
+  leases: LeaseSet,
+  // Any disposer collector — `DisposerBag` OR a `ResourceScope` (both expose
+  // `.add`), so triple sessions can pass whichever they already hold.
+  disposers: { add(disposer: () => void): void },
+  session: ServerSession<C>,
+): void {
+  const set = session.setState as unknown as (key: string, value: unknown) => void;
+  set("serials", {
+    L: leases.L.camera.serial,
+    C: leases.C.camera.serial,
+    R: leases.R.camera.serial,
+  });
+  disposers.add(() => set("serials", {}));
+}

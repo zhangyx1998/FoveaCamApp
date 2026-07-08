@@ -34,6 +34,9 @@ export const calibrateExtrinsic = defineContract({
     targetId: { L: 1, C: 0, R: 2 },
     override_left: null as Pos | null,
     override_right: null as Pos | null,
+    /** Leased camera serials per role (C-22) — raw previews bind to the
+     *  `camera:<serial>` pipe via `usePipeFrame`. Set on acquire. */
+    serials: {} as Partial<Record<"L" | "C" | "R", string>>,
   },
   telemetry: {
     ready: false as boolean,

@@ -18,6 +18,9 @@ import type { Stat } from "@lib/orchestrator/contracts";
 
 export const tracking = defineContract({
   state: {
+    /** Leased camera serials per role (C-22) — the raw center preview binds to
+     *  the `camera:<serial>` pipe via `usePipeFrame`. Set on acquire. */
+    serials: {} as Partial<Record<"L" | "C" | "R", string>>,
     // Actuation parameters (renderer resolves and pushes concrete values).
     baseline: 200, // stereo baseline (mm)
     verge: 0, // verge slider (0 → ∞ distance)

@@ -22,7 +22,7 @@ import { startActuationLoop, type ActuationLoop } from "@orchestrator/actuation"
 import { findHomography, resize, wrapPerspective, type Mat } from "core/Vision";
 import { area, type Point2d } from "core/Geometry";
 import { type MarkerTracker, type TrackerTarget } from "@orchestrator/marker-tracker";
-import { bindViews, DisposerBag, releaseLeases } from "@orchestrator/session-resources";
+import { bindViews, publishSerials, DisposerBag, releaseLeases } from "@orchestrator/session-resources";
 import {
   bindDetections,
   createTrackerTriple,
@@ -128,6 +128,7 @@ export default function calibrateDistortionSession(): ServerSession<typeof calib
         if (role === "C") s.frame("C", v);
         else onFoveaView(role, v);
       });
+      publishSerials(t.leases, taps, s);
       scope.defer(() => taps.dispose());
 
       loop = startActuationLoop({

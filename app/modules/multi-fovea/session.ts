@@ -9,7 +9,7 @@ import { defineResourceSession, type ResourceScope } from "@orchestrator/resourc
 import { acquireTriple, type CalibratedTriple } from "@orchestrator/calibration";
 import { activeController, type StreamHandle } from "@orchestrator/controller";
 import { RoundRobinFrameScheduler } from "@orchestrator/scheduler";
-import { releaseLeases } from "@orchestrator/session-resources";
+import { publishSerials, releaseLeases } from "@orchestrator/session-resources";
 import { multiFovea, defaultMultiFoveaTarget, MAX_MULTI_FOVEA_TARGETS } from "./contract";
 import { MultiFoveaRuntime } from "./runtime";
 import { KCF } from "core/Tracker";
@@ -175,6 +175,7 @@ export default function multiFoveaSession(): ServerSession<typeof multiFovea> {
       // Tap registered LAST → drains FIRST, so no center-view frame reaches a
       // disposed runtime during teardown.
       scope.add(t.leases.C.onView(onCenterView));
+      publishSerials(t.leases, scope, s);
       applyTargets();
       s.telemetry({
         ready: true,

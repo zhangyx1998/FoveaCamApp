@@ -17,7 +17,7 @@ import { computed, onMounted, ref } from "vue";
 import type { Point2d, Size } from "core/Geometry";
 import { ROLE, THEME } from "@lib/camera-config";
 import { useAppConfig } from "@lib/config";
-import { useFrames, useSession } from "@lib/orchestrator/client";
+import { useFrames, useSession, usePipeFrame } from "@lib/orchestrator/client";
 import { degrees, clamp } from "@lib/util";
 import { logScale } from "@lib/conversion";
 import { distanceToVerge } from "@lib/stereo";
@@ -47,7 +47,6 @@ onMounted(() => {
 // Processed preview frames fanned from the orchestrator.
 const {
   L: frameL,
-  C: frameC,
   R: frameR,
   "center.sliced": slicedFrame,
   "center.disparity": disparityFrame,
@@ -56,7 +55,6 @@ const {
   match_right: frameMatchRight,
 } = useFrames(session, [
   "L",
-  "C",
   "R",
   "center.sliced",
   "center.disparity",
@@ -64,6 +62,12 @@ const {
   "match_left",
   "match_right",
 ]);
+// C-22: raw center ("C") preview rides the native `camera:<serial>` pipe (off
+// the JS view-tap loop); L/R (perspective-rectified foveae) + the disparity/
+// match views stay on `session.frame` (worker-migrated in the coupled half).
+const frameC = usePipeFrame(() =>
+  state.serials?.C ? `camera:${state.serials.C}` : null,
+);
 const frameCenter = computed(() =>
   state.view === "sliced" ? slicedFrame.payload.value : disparityFrame.payload.value,
 );
@@ -217,7 +221,7 @@ function onCursor(c: (Point2d & Size & { buttons: number }) | null): void {
           </InlineSelect>
         </template>
       </StreamView>
-      <StreamView class="stream" :title="ROLE.C" :payload="frameC.payload.value" :source="frameC.source" :theme="THEME.C" @mouse="onCursor">
+      <StreamView class="stream" :title="ROLE.C" :payload="frameC" :theme="THEME.C" @mouse="onCursor">
         <!-- Target center. -->
         <circle :cx="state.target.x" :cy="state.target.y" :r="stroke * 3" :fill="THEME.C" />
         <!-- Per-eye projected pose. -->

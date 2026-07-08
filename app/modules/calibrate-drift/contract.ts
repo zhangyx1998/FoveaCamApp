@@ -30,6 +30,9 @@ export const calibrateDrift = defineContract({
      *  over the tracker-driven servo command — same as the original. */
     override_left: null as Pos | null,
     override_right: null as Pos | null,
+    /** Leased camera serials per role (C-22) — the renderer binds raw previews
+     *  to the `camera:<serial>` pipe via `usePipeFrame`. Set on acquire. */
+    serials: {} as Partial<Record<"L" | "C" | "R", string>>,
   },
   telemetry: {
     ready: false as boolean,

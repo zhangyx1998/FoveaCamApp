@@ -66,6 +66,9 @@ export type PidReadout = { verge: number; panX: number; panY: number; v_shift: n
 
 export const disparity = defineContract({
   state: {
+    /** Leased camera serials per role (C-22) — raw center preview binds to the
+     *  `camera:<serial>` pipe via `usePipeFrame`. Set on acquire. */
+    serials: {} as Partial<Record<"L" | "C" | "R", string>>,
     /** Target center within the wide frame (pixels). */
     target: ZERO,
     // Physical stereo baseline (mm) — same field/default as tracking-single

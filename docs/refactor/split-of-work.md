@@ -1098,6 +1098,49 @@ per frame) while the native converter threads sit parked. Full migration brief:
   (native vision threads vs converter-subscriber→latest-wins-worker; note which
   vision is already native), raise questions, STOP for my ruling. DoD:
   `registry:<serial>` util → ~0.
+  - Log: **Sketch approved (worker bridge; DisparityStream deferred to R2).
+    B-19a de-risk spike + B-19b hardening DONE — green.**
+    **B-19a spike** (`core/test/13-worker-pipe-spike.ts`): **FACT A PASS** —
+    reader addon loads + open/readInto from a worker_thread (byte-correct).
+    **FACT B PASS** — an in-process broker `connect()` (no renderer) fires C's
+    real-1e gate (0→1 edge AND setConsumerGate reconcile) → converter runs;
+    read 3 frames. Architecture VALIDATED.
+    **B-19b priority-1 — reader context-safety FIX (I did it, granted):**
+    `ShmReaderAddon.cpp` `static FunctionReference constructor` was a process-
+    GLOBAL holding a per-env ref → a worker loading the addon overwrote it,
+    worker teardown left it dangling → main `open()` segfaulted (V8
+    EscapableHandleScope, dead Isolate). Moved to **per-env instance data**
+    (`SetInstanceData`/`GetInstanceData<AddonData>`). Regression
+    `core/test/14-reader-context-safety.ts`: main read → worker load+read →
+    terminate → main `open()` STILL works (was the segfault) — PASS.
+    **SIBLINGS FLAGGED (C-owned, `core/src/ShmRing.cpp:182,375`):**
+    `ShmSlotObject` + `ShmWriterObject` have the IDENTICAL global-static-
+    constructor pattern → same bug once a worker loads `core.node` (which the
+    vision worker does, for Vision). LATENT for the vision flow (main thread
+    doesn't construct Slot/Writer there — only the old Shm JS API /
+    08-shm-ring). Same trivial fix (per-env storage), but they share
+    `core.node`'s single instance-data slot → **C should fix with their
+    per-env mechanism** (CoreObject already uses per-env `Local`; these two
+    predate it). Flagging, not touching C's file.
+    **Q6 fan-out** (`core/test/15-fanout.ts`): `camera.stream` fans to
+    ConverterStream + `detector.stream` + `KcfTrackerStream` as concurrent
+    `Stream`-base subscribers (fake camera, registry loop gone) — 51/52/50
+    frames each in 2s. PASS.
+    **Q2 architecture (your ruling, hard constraint for C):** vision worker is
+    READ-ONLY SHM (`reader.open`/`readInto` on a `shmName` handed in); MAIN
+    thread brokers `connect`/`disconnect` (gate refcount) and the worker NEVER
+    touches the broker/gate → C-21's non-atomic main-thread-only `gate_` stays
+    race-free.
+    **Deferred finding (B-19a #2):** `cleanup()` hangs in the fake-camera+
+    converter teardown path — localized to the Arv::Stream-park →
+    fake-camera-stop → core `cleanup()` sequence AFTER `disconnect` parks the
+    stream (11-capture-pipe, which detaches while running, does NOT hang).
+    Teardown/process-exit only; does NOT block the bridge (real sessions hold
+    the consumer for their lifetime). Spike/fan-out tests `process.exit(0)` to
+    skip it. Timeboxed + deferred per your ruling.
+    **Gates:** `core make build` both runtimes ✓; native sweep **08–15 all
+    PASS**; reader `otool -L` 0 non-system deps. `ShmRing.cpp`/registry.ts
+    untouched. **C's worker build is unblocked** (reader is now context-safe).
 
 - **C-22 — migration orchestrator/renderer + dead-code removal (PLAN-FIRST;
   coordinate w/ B-19).** Delete `registry.startLoop/stopLoop/onView/viewSinks/
@@ -1105,3 +1148,38 @@ per frame) while the native converter threads sit parked. Full migration brief:
   + `index.vue` previews to `usePipeFrame` + B's vision seam; delete
   `async-kcf.ts` + its test, `frame-worker.ts` if freed, the dead
   "registry:<serial>" meter. Grep-clean (no dangling imports).
+  - Log: **Sketch topology accepted; rulings given. MECHANICAL HALF DONE
+    (uncoupled, green); coupled half held for the B-19a worker spike.**
+    - **Two findings you ruled on:** (Q-A) triple apps didn't expose L/C/R
+      serials to the renderer → added additive `serials: {} as
+      Partial<Record<"L"|"C"|"R",string>>` to each triple contract's state +
+      NEW shared `publishSerials(leases, disposers, session)` in
+      `session-resources.ts` (sets `state.serials` from `lease.camera.serial`
+      on acquire, clears on release). (Q-B) frames mix raw/processed → classified
+      EACH binding conservatively.
+    - **(a) raw→pipe NOW (this half):** every RAW camera preview repointed from
+      `session.frame`/`useFrames` → `usePipeFrame("camera:<serial>")` (binding
+      `:payload="frameX"`, projection `:source` dropped — matches
+      calibrate-intrinsic). **calibrate-drift + calibrate-extrinsic:** all L/C/R
+      (default `bindViews` = raw). **tracking-single / disparity-scope /
+      manual-control / calibrate-distortion / multi-fovea:** the raw center
+      **"C" only**. Their previews now ride the native camera pipe off the JS
+      view-tap loop; detection overlays (client-side `telemetry.detection`)
+      unchanged.
+    - **(b) processed→session.frame (HELD for worker):** tracking-single "L"/"R"
+      (wrap-conditional) + "center"; disparity/manual/distortion "L"/"R"
+      (wrapped/homography foveae) + combined/disparity/match/proj views;
+      multi-fovea per-fovea crops — LEFT on `session.frame`; their `onView`
+      producer migrates to the worker in the coupled half.
+    - **HELD for B-19a worker ruling (NOT touched):** the `onView`→
+      `subscribeConverted` swap, the `registry` loop DELETION (can't delete until
+      every (a)+(b) consumer is off `onView`), and ALL dead-code removal
+      (`async-kcf`, `frame-worker`, the `registry:<serial>` meter).
+    - **Aside:** reverted the stray uncommitted `app/lib/windows.ts` title
+      renames (not mine, unrelated to the pipe migration).
+    - **Gates:** vue-tsc **0**; vitest **284/284** (43 files, no new suites —
+      behavior-preserving); `vite build` GREEN; renderer 0-core / orchestrator
+      0-Vue; no preload touched → V11 N/A. **RIG-GATED:** the raw preview now
+      renders from the pipe (same pixels) — visual parity is the user's Stage-F
+      check; no util claim (the loop still runs for (b) until the coupled half).
+      Not committed.

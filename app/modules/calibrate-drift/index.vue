@@ -17,7 +17,7 @@ You may find the full license in project root directory.
 import { computed } from "vue";
 import { ROLE, THEME } from "@lib/camera-config";
 import { useAppConfig } from "@lib/config";
-import { useController, useSession } from "@lib/orchestrator/client";
+import { useController, useSession, usePipeFrame } from "@lib/orchestrator/client";
 import { calibrateDrift } from "./contract";
 import StreamView from "@src/components/StreamView.vue";
 import PosView, { type Pos } from "@src/components/PosView.vue";
@@ -34,9 +34,14 @@ const session = useSession(calibrateDrift, "calibrate-drift");
 const ctrl = useController();
 const { state, telemetry } = session;
 
-const frameL = session.frame("L");
-const frameC = session.frame("C");
-const frameR = session.frame("R");
+// C-22: raw L/C/R previews now ride the native `camera:<serial>` pipe (off the
+// JS view-tap loop) via `usePipeFrame`; the marker-detection overlays are drawn
+// client-side from `telemetry.detection`, unchanged.
+const pipe = (role: "L" | "C" | "R") =>
+  usePipeFrame(() => (state.serials?.[role] ? `camera:${state.serials[role]}` : null));
+const frameL = pipe("L");
+const frameC = pipe("C");
+const frameR = pipe("R");
 
 function stroke(): number {
   return 3;
@@ -54,7 +59,7 @@ function setOverride(role: "left" | "right", p: Pos | null) {
 <template>
   <div class="cameras">
     <div class="view">
-      <StreamView class="stream" :title="ROLE.L" :payload="frameL.payload.value" :source="frameL.source" :theme="THEME.L">
+      <StreamView class="stream" :title="ROLE.L" :payload="frameL" :theme="THEME.L">
         <circle
           v-for="(p, i) in telemetry.detection.L?.points ?? []"
           :key="i"
@@ -77,7 +82,7 @@ function setOverride(role: "left" | "right", p: Pos | null) {
       />
     </div>
     <div class="view">
-      <StreamView class="stream" :title="ROLE.C" :payload="frameC.payload.value" :source="frameC.source" :theme="THEME.C">
+      <StreamView class="stream" :title="ROLE.C" :payload="frameC" :theme="THEME.C">
         <circle
           v-for="(p, i) in telemetry.detection.C?.points ?? []"
           :key="i"
@@ -106,7 +111,7 @@ function setOverride(role: "left" | "right", p: Pos | null) {
       <Drift :drift="telemetry.saved.R">Saved Drift (R)</Drift>
     </div>
     <div class="view">
-      <StreamView class="stream" :title="ROLE.R" :payload="frameR.payload.value" :source="frameR.source" :theme="THEME.R">
+      <StreamView class="stream" :title="ROLE.R" :payload="frameR" :theme="THEME.R">
         <circle
           v-for="(p, i) in telemetry.detection.R?.points ?? []"
           :key="i"

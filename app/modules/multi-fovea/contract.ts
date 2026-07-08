@@ -64,6 +64,9 @@ export function defaultMultiFoveaTarget(index: number): MultiFoveaTargetConfig {
 
 export const multiFovea = defineContract({
   state: {
+    /** Leased camera serials per role (C-22) — raw center preview binds to the
+     *  `camera:<serial>` pipe via `usePipeFrame`. Set on acquire. */
+    serials: {} as Partial<Record<"L" | "C" | "R", string>>,
     targets: [0, 1, 2, 3].map(defaultMultiFoveaTarget) as MultiFoveaTargetConfig[],
     pulse_ns: 1000000,
   },

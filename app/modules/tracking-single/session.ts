@@ -23,7 +23,7 @@ import { defineResourceSession, type ResourceScope } from "@orchestrator/resourc
 import { acquireTriple, type CalibratedTriple } from "@orchestrator/calibration";
 import { startActuationLoop, type ActuationLoop } from "@orchestrator/actuation";
 import { createFrameWorker } from "@orchestrator/frame-worker";
-import { DisposerBag, releaseLeases } from "@orchestrator/session-resources";
+import { DisposerBag, publishSerials, releaseLeases } from "@orchestrator/session-resources";
 import {
   clampRectToSize,
   depthFromInverse,
@@ -372,6 +372,7 @@ export default function trackingSession(): ServerSession<typeof tracking> {
       taps.push(t.leases.L.onView((v) => onFoveaView("L", v)));
       taps.push(t.leases.C.onView(onCenterView));
       taps.push(t.leases.R.onView((v) => onFoveaView("R", v)));
+      publishSerials(t.leases, taps, s);
       scope.defer(() => taps.dispose());
       scope.defer(() => disengage(false));
       // WS1 1d: the KCF tracker thread, bound to the shared center stream. It

@@ -15,7 +15,7 @@ You may find the full license in project root directory.
 import { computed, ref } from "vue";
 import { ROLE, THEME } from "@lib/camera-config";
 import { useAppConfig } from "@lib/config";
-import { useController, useFrames, useSession } from "@lib/orchestrator/client";
+import { useController, useFrames, useSession, usePipeFrame } from "@lib/orchestrator/client";
 import { formatNumber, type FormatNumberOptions } from "@lib/util";
 import { createMat } from "@lib/mat";
 import type { Point2d } from "core/Geometry";
@@ -32,13 +32,17 @@ const session = useSession(calibrateDistortion, "calibrate-distortion");
 const ctrl = useController();
 const { state, telemetry } = session;
 
+// C-22: raw center ("C") preview rides the native camera:<serial> pipe (off the
+// JS view-tap loop); L/R (homography) + proj views stay on session.frame.
 const {
   L: frameL,
-  C: frameC,
   R: frameR,
   proj_L: frameProjL,
   proj_R: frameProjR,
-} = useFrames(session, ["L", "C", "R", "proj_L", "proj_R"]);
+} = useFrames(session, ["L", "R", "proj_L", "proj_R"]);
+const frameC = usePipeFrame(() =>
+  state.serials?.C ? `camera:${state.serials.C}` : null,
+);
 
 const marker_zoom = ref(1.0);
 
@@ -88,7 +92,7 @@ function toMat(H: number[]) {
       <Matrix v-if="telemetry.projection.L" :mat="toMat(telemetry.projection.L.H)" :round="2" />
     </div>
     <div class="view">
-      <StreamView class="stream" :title="ROLE.C" :payload="frameC.payload.value" :source="frameC.source" :theme="THEME.C">
+      <StreamView class="stream" :title="ROLE.C" :payload="frameC" :theme="THEME.C">
         <circle
           v-for="(p, i) in telemetry.detection.C?.points ?? []"
           :key="i"

@@ -36,7 +36,7 @@ import { defineSession, type ServerSession } from "@orchestrator/runtime";
 import { acquireTriple, type CalibratedTriple } from "@orchestrator/calibration";
 import { startActuationLoop, type ActuationLoop } from "@orchestrator/actuation";
 import { createFrameWorker } from "@orchestrator/frame-worker";
-import { DisposerBag, releaseLeases } from "@orchestrator/session-resources";
+import { DisposerBag, publishSerials, releaseLeases } from "@orchestrator/session-resources";
 import {
   clampRectToSize,
   ORIGIN_POS,
@@ -418,6 +418,7 @@ export default function disparityScopeSession(): ServerSession<typeof disparity>
       triple = t;
       disposers.push(t.leases.L.onView((v) => onFoveaView("L", v)));
       disposers.push(t.leases.C.onView(onCenterView));
+      publishSerials(t.leases, disposers, s);
       disposers.push(t.leases.R.onView((v) => onFoveaView("R", v)));
       loop = startActuationLoop({ targetVolts, onVolts });
       s.telemetry({ ready: true });
