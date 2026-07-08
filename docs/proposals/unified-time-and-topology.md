@@ -1,8 +1,12 @@
 # Unified time + uniform node topology (proposal)
 
-Status: RULED (user, 2026-07-08) — decisions locked below; implementation
-phased per §7. Captures the directive verbatim, then the recommended design
-with alternatives where the recommendation deviates.
+Status: RULED (user, 2026-07-08); **P1–P3 LANDED same day** (f678ce2 time
+core; eba04d8 System.Timestamp v1.1; 1534585 NodeReport contract; 6dbcd50
+chained bricks + Topology.report(); d973ab4 integration; 4732f64 edge
+tx/rx/drop/max-interval flows). Remaining: §7 P4 (triggered-path calibration,
+drift model, FIN-voltage preference) + the marked native TODOs (KCF rows in
+Topology.report(), legacy private chains retire when sessions re-chain).
+Everything hardware-touching is RIG-GATED via docs/hardware/stage-f.md.
 
 ## Rulings (user, 2026-07-08)
 
