@@ -104,6 +104,27 @@ names the mechanism it gates.
 - [ ] **Mirror history** — during streamed actuation, `mirrorAt` age stays
   ~1 tick (no gaps) — observable once the fovea homography consumes it.
 
+## Unified-time FINAL + brick chain (2026-07-08 close, through 77d4afb) — ⚠ FLASH v1.1 FIRST
+
+- [ ] **Owner-thread calibration live** — profiler Clocks section fills
+  within seconds of camera open (method latch, jitter ~50–150 µs matches the
+  bench smoke) and driftPpm appears after the first 30 s drift re-run;
+  re-calibration updates rows mid-task. TimestampLatchValue ns assumption
+  per model (RIG-CHECK in ClockCalibration.cpp).
+- [ ] **Trusted-time end-to-end** — recorded/paired timestamps (camera
+  frames vs FIN tTrigger/tExposure, now both host-ns) agree to ~ms; sync.ts
+  deltas collapse to trigger-path latency.
+- [ ] **Chained bricks visual parity** — center undistort (now chained on
+  the shared converter) matches the old fused output; fovea crops on the
+  undistort chain; graph shows camera → convert → undistort → fovea with
+  real edges + tx/rx/drop labels.
+- [ ] **L/R homography orientation** — the OPEN QUESTION in
+  homography-feeder.ts: conv.A2H H vs its inverse/wide-frame composition;
+  wrong guess = harmless warp, passthrough meter names it. Verify + fix the
+  seam in one place.
+- [ ] **Enable no longer resets MCU clock** — calibration survives
+  enable/disable cycles (v1.1 behavior change).
+
 ## Blocked (hardware change required)
 
 - [ ] **Center-camera hardware trigger** — needs the slimmer CAM0 cable
