@@ -17,6 +17,8 @@
 
 import { Worker } from "node:worker_threads";
 import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import { report } from "./diagnostics.js";
 import type {
   VisionInit,
@@ -39,9 +41,15 @@ function readerAddonPath(): string {
 }
 
 /** The bundled worker entry, next to this orchestrator bundle in
- *  `.dist/electron/`. If path resolution needs a build tweak it's an A-28
- *  (vite.config) concern — flagged, not patched here. */
-const WORKER_URL = new URL("./vision-worker.js", import.meta.url);
+ *  `.dist/electron/`. Resolved via path.join — NOT `new URL("./vision-worker.js",
+ *  import.meta.url)`: Vite statically rewrites that pattern as an ASSET import,
+ *  resolving `./vision-worker.js` to the SOURCE `vision-worker.ts` and inlining
+ *  the raw TS as a `data:video/mp2t;base64` URL (MIME guessed from `.ts`), which
+ *  Node's Worker rejects ("Unknown module format"). Rig-found. path.join over a
+ *  runtime `import.meta.url` is opaque to the bundler and resolves to the
+ *  sibling built file in both dev and build. */
+const workerPath = (): string =>
+  join(dirname(fileURLToPath(import.meta.url)), "vision-worker.js");
 
 export interface VisionWorkerHandle {
   /** Push a live param update (homography matrices, tuning, zoom, view, …). */
@@ -80,7 +88,7 @@ export function createVisionWorker(
   onResult: (r: VisionResult) => void,
   opts: VisionWorkerOpts = {},
 ): VisionWorkerHandle {
-  const worker = (opts.spawn ?? (() => new Worker(WORKER_URL) as unknown as WorkerLike))();
+  const worker = (opts.spawn ?? (() => new Worker(workerPath()) as unknown as WorkerLike))();
   const readerPath = opts.readerPath ?? readerAddonPath();
   let alive = true;
 
