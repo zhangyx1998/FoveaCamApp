@@ -17,6 +17,10 @@ import { system, controller, type PerfSnapshot, type Span } from "@lib/orchestra
 import { tracking } from "@modules/tracking-single/contract";
 import { manualControl } from "@modules/manual-control/contract";
 import { workloadRows, utilizationLevel, UTILIZATION_HIGH, type WorkloadRow } from "./workload-view";
+import { pipes } from "@lib/orchestrator/pipe-contract";
+import type { GraphTopology } from "@lib/orchestrator/graph-contract";
+import { deriveTopology } from "./graph-view";
+import GraphPanel from "./GraphPanel.vue";
 import Sparkline from "../components/Sparkline.vue";
 import PosView from "@src/components/PosView.vue";
 import TitleBar from "../components/TitleBar.vue";
@@ -81,6 +85,16 @@ const sortedWorkloads = computed(() =>
 );
 const isSaturated = (utilization: number): boolean => utilization >= UTILIZATION_HIGH;
 
+// Pipeline graph (A-33, real-2 objective 1). STAGE 1: the topology is DERIVED
+// renderer-side (`deriveTopology`, pure + unit-tested) from the same 1 Hz
+// workload rows plus the pipes session's advertised set — no new wire
+// messages. When C-24's real `graphTopology()` snapshot ships, this derivation
+// is replaced by the served snapshot (same `GraphTopology` type, panel
+// unchanged). Passive subscription: discovery state only, no pipe connects.
+const pipesSession = useSession(pipes, "pipes", { passive: true });
+const graphSeq = ref(0);
+const graphTopology = ref<GraphTopology | null>(null);
+
 function computeRates(cur: PerfSnapshot): Rate[] {
   const now = Date.now();
   const dtSec = prev.snapshot ? Math.max(0.001, (now - prev.t) / 1000) : 0;
@@ -115,6 +129,12 @@ async function tick(): Promise<void> {
     const s = await sys.call("perfSnapshot", undefined);
     rates.value = computeRates(s);
     workloads.value = workloadRows(s.workloads ?? {}, prev.snapshot?.workloads ?? null);
+    graphTopology.value = deriveTopology(
+      workloads.value,
+      pipesSession.state.pipes,
+      ++graphSeq.value,
+      Date.now(),
+    );
     prev.snapshot = s;
     prev.t = Date.now();
     snapshot.value = s;
@@ -261,6 +281,15 @@ function fmt(v: number, digits = 1): string {
         </div>
         <div class="drops mono dim" v-else>no drops</div>
       </div>
+    </section>
+
+    <section>
+      <h2>Pipeline graph</h2>
+      <p class="hint">
+        Live stream topology — node badges show util% · rate · worst gap (drops when nonzero);
+        saturated (≥90%) nodes are flagged red. Stage-1 view derived from meters + advertised pipes.
+      </p>
+      <GraphPanel :topology="graphTopology" />
     </section>
 
     <section>
