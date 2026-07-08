@@ -107,6 +107,11 @@ function customizeApp() {
           accelerator: "CmdOrCtrl+O",
           click: () => void openRecordingDialog(),
         },
+        { type: "separator" },
+        // OS-standard close-window shortcut — the custom menu previously had
+        // no Close item, so Cmd/Ctrl-W was dead. Routes through win.close()
+        // like the traffic light (welcome respawn / owner-close unchanged).
+        { role: "close", accelerator: "CmdOrCtrl+W" },
       ],
     },
     { role: "editMenu" },

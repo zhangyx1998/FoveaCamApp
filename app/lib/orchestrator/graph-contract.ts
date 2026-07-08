@@ -153,6 +153,11 @@ export type GraphEdge = {
   /** True when this link's transport is lossy (latest-wins semantics) —
    *  the display shows drop info only for these. */
   lossy?: boolean;
+  /** FIFO (lossless) links: consumer-side queue stats — `highWater` = max
+   *  queued depth over the trailing 10s window. Shown IN PLACE OF the drop
+   *  rate (controller-node-and-fifo-edges §2); mutually exclusive with
+   *  `dropPerSec` in practice. */
+  queue?: { highWater: number; capacity: number; depth?: number };
   /** @deprecated legacy single-direction fields — mirrors `tx` during the
    *  migration; readers move to tx/rx. */
   ratePerSec?: number;
@@ -196,6 +201,10 @@ export const nodeId = {
    *  pipe-row derivation still renders camera→fovea for unreported rows. */
   fovea: (serial: string, slot: number): string =>
     `camera/${serial}/undistort/fovea/${slot}`,
+  /** The MEMS controller node (controller-node-and-fifo-edges §3): a SINGLETON
+   *  logical id — the serial port is a stat, not identity, so PID-node edges
+   *  registered before the device connects stay stable. */
+  controller: (): string => "controller",
   /** Window-composed node (kernels, private compositions). */
   win: (windowId: string, ...segments: string[]): string =>
     ["win", windowId, ...segments].join("/"),

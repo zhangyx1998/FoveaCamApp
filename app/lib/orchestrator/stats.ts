@@ -34,6 +34,16 @@ export type DropSnapshot = {
   byReason: Record<string, number>;
 };
 
+/** FIFO input-queue stats (controller-node-and-fifo-edges §1/§2): present only
+ *  on workloads whose input is a bounded FIFO (e.g. the undistort brick).
+ *  `highWater` = max queued depth over the trailing 10s window; `depth` = the
+ *  last-sampled depth. Replaces the drop rate on FIFO (lossless) edges. */
+export type QueueStat = {
+  depth: number;
+  highWater: number;
+  capacity: number;
+};
+
 export type WorkloadSnapshot = {
   name: string;
   window: SnapshotWindow;
@@ -42,6 +52,7 @@ export type WorkloadSnapshot = {
   inputs: Record<string, WorkloadStreamStat>;
   outputs: Record<string, WorkloadStreamStat>;
   drops: DropSnapshot;
+  queue?: QueueStat;
 };
 
 export function snapshotWindow(startedAt: number, now = Date.now()): SnapshotWindow {
