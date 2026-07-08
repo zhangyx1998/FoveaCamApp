@@ -18,6 +18,8 @@
 // fight a caller that needs the immediate value too.
 
 import { activeController, type Controller, type StreamHandle } from "./controller.js";
+import { mirrorHistory } from "./mirror-history.js";
+import { hostNowNs } from "./time-align.js";
 import type { Pos } from "@lib/controller-codec";
 
 export interface ActuationLoopOptions {
@@ -107,11 +109,16 @@ export function startActuationLoop(opts: ActuationLoopOptions): ActuationLoop {
           // Local prediction stands in for the readback the stream protocol has
           // no response for; ~0 RTT (the A-29 packets/sec meter is the rate).
           const p = c.predictVolts({ left: l, right: r });
+          // Mirror history (unified-time proposal §4): every commanded
+          // position, host-ns stamped — the fovea homography reads
+          // `mirrorAt(frameHostNs)` off this trajectory.
+          mirrorHistory.record(hostNowNs(), p.left, p.right);
           opts.onVolts({ L: p.left, R: p.right }, 0);
         } else {
           // v1 firmware: no CMD_STREAM — keep the awaited actuate() round-trip.
           const t0 = performance.now();
           const { left, right } = await c.actuate({ left: l, right: r });
+          mirrorHistory.record(hostNowNs(), left, right);
           opts.onVolts({ L: left, R: right }, performance.now() - t0);
         }
       } catch {

@@ -21,6 +21,7 @@ import type { Role } from "@lib/camera-config";
 import type { PipeSpec } from "@lib/orchestrator/pipe-contract.js";
 import { nodeId } from "@lib/orchestrator/graph-contract.js";
 import { applyStoredConfig, cameraConfigPath, listCameraInfo } from "./camera.js";
+import { calibrateCameraClock } from "./clock-calibration.js";
 import { timeSpan } from "./diagnostics.js";
 import { read } from "./store-hub.js";
 
@@ -205,6 +206,11 @@ async function registerShared(camera: Camera): Promise<Shared> {
   await timeSpan("camera.applyStoredConfig", () => applyStoredConfig(camera), {
     serial: camera.serial,
   });
+  // Unified time (proposal §3): clock calibration hides inside acquisition —
+  // fire-and-forget (never blocks activation); consumers use toHostNs().
+  // Runs BEFORE any pipe gates on, so the pull fallback (if enabled) has the
+  // camera to itself.
+  void calibrateCameraClock(camera);
   const s: Shared = {
     serial: camera.serial,
     camera,

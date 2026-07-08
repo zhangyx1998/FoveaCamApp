@@ -76,6 +76,13 @@ export type PerfSnapshot = {
   /** The live stream node graph (C-24, ruled Q2: folded into this 1 Hz poll).
    *  Optional so pre-graph snapshot documents stay valid. */
   graph?: GraphTopology;
+  /** Clock-calibration health (unified-time proposal §3): per subject clock,
+   *  offset/jitter (ns, stringified bigint) + sample count + method. Optional
+   *  so pre-clock snapshots stay valid. */
+  clocks?: Record<
+    string,
+    { offsetNs: string; jitterNs: string; samples: number; method: string }
+  >;
 };
 
 /**

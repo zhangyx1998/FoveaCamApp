@@ -18,6 +18,7 @@ import { workloadsSnapshot } from "../metering.js";
 import { nativeProbes } from "../native-probes.js";
 import { releaseAll } from "../registry.js";
 import { writeCounts } from "../store-hub.js";
+import { calibrationsSnapshot } from "../time-align.js";
 import { spans } from "../diagnostics.js";
 import { startLoopLagProbe } from "@lib/util/rolling";
 
@@ -89,6 +90,9 @@ export function systemSession(
             workloads,
             storeHub: writeCounts(),
             spans: [...spans()],
+            // Unified time (proposal §3): clock-calibration health rides the
+            // same 1 Hz poll — the profiler shows which clocks are aligned.
+            clocks: calibrationsSnapshot(),
             // C-24: the live node graph, riding the same 1 Hz poll (ruled Q2) —
             // stats keyed onto nodes from the SAME workloads map above.
             ...(topology ? { graph: topology } : {}),
