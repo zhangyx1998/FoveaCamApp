@@ -91,6 +91,23 @@ export function foveaTileSize(opts: Pick<VergenceOptions, "width" | "height" | "
 }
 
 /**
+ * The magnification that drives the fovea↔wide template match: the
+ * calibration-MEASURED fovea/wide ratio when one is available (see
+ * `foveaWideMagnification`, @lib/coordinate-conversions — CCOEFF template
+ * matching is not scale invariant, so the true optical ratio matters), else
+ * the nominal UI zoom clamped to ≥ 1 — exactly the pre-measurement behavior,
+ * so legacy/uncalibrated rigs regress nowhere.
+ */
+export function matchMagnification(
+  measured: number | null | undefined,
+  nominalZoom: number,
+): number {
+  return measured != null && Number.isFinite(measured) && measured > 0
+    ? measured
+    : Math.max(1, nominalZoom);
+}
+
+/**
  * Per-DOF controllers. Rather than commanding the four fovea pixel DOF
  * (L.x, L.y, R.x, R.y) independently — which lets the foveas drift apart on
  * noisy frames — the loop integrates these physically-meaningful DOF

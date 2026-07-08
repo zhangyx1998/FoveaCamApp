@@ -20,6 +20,7 @@ import { getCameraKey, type Role } from "@lib/camera-config";
 import { findPinholeProjection } from "@lib/marker";
 import { sha256 } from "@lib/util/hash";
 import {
+  foveaWideMagnification,
   useCoordinateConversions,
   type ConversionInputs,
   type CoordinateConversions,
@@ -82,8 +83,11 @@ export async function fitExtrinsicRegression(
   const config: RegressionConfig = { ply: [3, 2, 1, 0], log: [], exp: [] };
   const V2A = new Regression<Point2d, Point2d>(keys, keys, config);
   const A2V = new Regression<Point2d, Point2d>(keys, keys, config);
-  const A2H = await findPinholeProjection(ds);
-  return { V2A: V2A.fit(V, A), A2V: A2V.fit(A, V), A2H };
+  // `scale`/`scale_std` = the measured fovea image scale (px per object-unit at
+  // the nominal 1000-unit distance) — carried through so triple consumers can
+  // derive the true fovea↔wide magnification (`foveaWideMagnification`).
+  const { A2H, scale, scale_std } = await findPinholeProjection(ds);
+  return { V2A: V2A.fit(V, A), A2V: A2V.fit(A, V), A2H, scale, scale_std };
 }
 
 async function loadExtrinsic(
@@ -139,6 +143,13 @@ export type CalibratedTriple = {
   leases: Record<Role, CameraLease>;
   conv: CoordinateConversions;
   undistort: Undistort | null;
+  /** Calibration-MEASURED fovea↔wide magnification per eye
+   *  (`foveaWideMagnification`: extrinsic `scale` × 1000 / wide focal), or
+   *  null when the intrinsic/extrinsic data doesn't support the measurement
+   *  (legacy fit, uncalibrated wide camera). Consumers needing a single
+   *  optical zoom (e.g. disparity-scope's template match) use this and fall
+   *  back to their nominal UI zoom on null. */
+  magnification: { L: number | null; R: number | null };
   /** The triple config's store path (`["triples", <hash>]`) — for sessions
    *  that read/write it directly beyond what `conv` bakes in (e.g.
    *  calibrate-drift's `drift_l`/`drift_r`). */
@@ -158,10 +169,15 @@ export async function leaseCalibratedTriple(): Promise<CalibratedTriple | null> 
   if (!leases) return null;
   const inputs = await loadConversions(leases.L.camera, leases.C.camera, leases.R.camera);
   const configPath = await tripleConfigPath(leases.L.camera, leases.C.camera, leases.R.camera);
+  const focal = inputs.CI.undistort?.focal ?? null;
   return {
     leases,
     conv: useCoordinateConversions(inputs),
     undistort: inputs.CI.undistort,
+    magnification: {
+      L: foveaWideMagnification(inputs.LE.scale, focal),
+      R: foveaWideMagnification(inputs.RE.scale, focal),
+    },
     configPath,
   };
 }

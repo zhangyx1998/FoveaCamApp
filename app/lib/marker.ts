@@ -162,6 +162,18 @@ export function transformPoints(
   return pts;
 }
 
+/**
+ * Fit the angle→homography regression for one fovea from its extrinsic dataset.
+ *
+ * Also returns the MEASURED fovea image scale (`scale`, with per-pose spread
+ * `scale_std`): fovea pixels per object-unit at the protocol's nominal
+ * 1000-object-unit marker distance (the hardcoded `transformPoints(..., 1000)`
+ * projection plane below). Combined with the wide camera's focal length this
+ * yields the true fovea↔wide magnification — `scale · 1000 / focal` — which
+ * `useCoordinateConversions`' consumers need for scale-consistent template
+ * matching (see `foveaWideMagnification` in @lib/coordinate-conversions).
+ * Previously this value was computed and discarded (console.log only).
+ */
 export async function findPinholeProjection(ds: ExtrinsicDataset) {
   const relative = ds.map(({ obj_points, angle }) =>
     transformPoints(obj_points, angle, 1000),
@@ -203,5 +215,5 @@ export async function findPinholeProjection(ds: ExtrinsicDataset) {
     config,
   );
   const A = ds.map(({ angle }) => angle);
-  return A2H.fit(A, H);
+  return { A2H: A2H.fit(A, H), scale, scale_std };
 }

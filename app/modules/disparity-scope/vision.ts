@@ -28,6 +28,7 @@ import {
   analyzeVergence,
   getFoveaTile,
   foveaTileSize,
+  matchMagnification,
   type MatchResult,
 } from "./vergence";
 import type {
@@ -46,8 +47,14 @@ export type DisparityParams = {
   homographyR?: number[] | null;
   kernelW?: number;
   kernelH?: number;
+  /** Nominal UI zoom — drives ONLY the sliced-view crop size. */
   zoom?: number;
-  /** Effective fovea-tile scale (main folds zoom + tuning.scale). */
+  /** Calibration-MEASURED fovea↔wide magnification (main derives it from the
+   *  triple via `foveaWideMagnification`) — drives the tile/strip match scale.
+   *  Null/absent (uncalibrated/legacy rigs) falls back to `zoom`, the exact
+   *  pre-measurement behavior (`matchMagnification`). */
+  matchZoom?: number | null;
+  /** Effective fovea-tile scale (main folds the match zoom + tuning.scale). */
   scale?: number;
   target?: Point2d;
   expand_x?: number;
@@ -88,16 +95,21 @@ function toHomography(nums: number[] | null | undefined): Mat<Float64Array> | nu
 
 export function createDisparityKernel(initial: Record<string, unknown>): VisionKernel {
   const p: Required<
-    Omit<DisparityParams, "homographyL" | "homographyR" | "trackerInit" | "trackerRelease">
+    Omit<
+      DisparityParams,
+      "homographyL" | "homographyR" | "trackerInit" | "trackerRelease" | "matchZoom"
+    >
   > & {
     homographyL: Mat<Float64Array> | null;
     homographyR: Mat<Float64Array> | null;
+    matchZoom: number | null;
   } = {
     homographyL: null,
     homographyR: null,
     kernelW: 64,
     kernelH: 64,
     zoom: 1,
+    matchZoom: null,
     scale: 1,
     target: { x: 0, y: 0 },
     expand_x: 3,
@@ -185,8 +197,13 @@ export function createDisparityKernel(initial: Record<string, unknown>): VisionK
     return undefined; // dropped: sub-threshold miss, no observable change
   }
 
+  /** Magnification for the fovea↔wide match: measured, else nominal zoom. */
+  function matchZoom(): number {
+    return matchMagnification(p.matchZoom, p.zoom);
+  }
+
   function tileSize(): Size {
-    return foveaTileSize({ width, height, zoom: Math.max(1, p.zoom), scale: p.scale });
+    return foveaTileSize({ width, height, zoom: matchZoom(), scale: p.scale });
   }
 
   async function processFovea(
@@ -243,7 +260,7 @@ export function createDisparityKernel(initial: Record<string, unknown>): VisionK
       const analysis = await analyzeVergence({ l: tileL, r: tileR }, c, {
         width,
         height,
-        zoom: Math.max(1, p.zoom),
+        zoom: matchZoom(), // measured magnification (nominal-zoom fallback)
         scale: p.scale,
         target: p.target,
         expand_x: p.expand_x,
@@ -271,6 +288,7 @@ export function createDisparityKernel(initial: Record<string, unknown>): VisionK
       if (d.kernelW !== undefined) p.kernelW = d.kernelW;
       if (d.kernelH !== undefined) p.kernelH = d.kernelH;
       if (d.zoom !== undefined) p.zoom = d.zoom;
+      if (d.matchZoom !== undefined) p.matchZoom = d.matchZoom;
       if (d.scale !== undefined) p.scale = d.scale;
       if (d.target !== undefined) p.target = d.target;
       if (d.expand_x !== undefined) p.expand_x = d.expand_x;

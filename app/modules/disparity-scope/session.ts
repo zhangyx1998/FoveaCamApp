@@ -35,6 +35,7 @@ import { startActuationLoop, type ActuationLoop } from "@orchestrator/actuation"
 import { DisposerBag, publishSerials, releaseLeases } from "@orchestrator/session-resources";
 import { ORIGIN_POS, radians, VOLT_TELEMETRY_INTERVAL_MS } from "@orchestrator/fovea-pipeline";
 import { createVisionWorker, type VisionWorkerHandle } from "@orchestrator/vision-worker-host";
+import { nodeId } from "@lib/orchestrator/graph-contract";
 import type { PipeBroker } from "@orchestrator/pipe-session";
 import type { PipeInput, VisionResult } from "@orchestrator/vision-worker-protocol";
 import {
@@ -46,7 +47,7 @@ import {
   type Tuning,
   type PidReadout,
 } from "./contract";
-import { stepVergence, type VergencePIDs } from "./vergence";
+import { matchMagnification, stepVergence, type VergencePIDs } from "./vergence";
 import type { DisparityParams, DisparityValues } from "./vision";
 import { makeMat } from "@lib/mat";
 import { PID } from "@lib/pid";
@@ -127,10 +128,30 @@ export default function disparityScopeSession(
     }
     syncGains(s.state.tuning);
 
+    /** Calibration-MEASURED fovea↔wide magnification for the match (mean of
+     *  the per-eye values when both are measured; a single eye's value when
+     *  only one is; null when neither is — the kernel then falls back to the
+     *  nominal `state.zoom`, the exact pre-measurement behavior). The match
+     *  needs ONE scale for both tiles + the shared guide strip, so a per-eye
+     *  split would need per-eye tile/strip sizing — not worth it while the
+     *  two foveas share optics (values should agree; the mean absorbs noise). */
+    function measuredMatchZoom(): number | null {
+      if (!triple) return null;
+      const { L, R } = triple.magnification;
+      if (L !== null && R !== null) return (L + R) / 2;
+      return L ?? R;
+    }
+
+    /** Magnification driving the tile/strip match scale (measured, else the
+     *  nominal UI zoom). `state.zoom` itself now drives ONLY the sliced-view
+     *  crop + KCF search sizing — see docs/applications/disparity-scope.md. */
+    function matchZoom(): number {
+      return matchMagnification(measuredMatchZoom(), s.state.zoom);
+    }
+
     function effectiveScale(): number {
-      const zoom = Math.max(1, s.state.zoom);
       const ratio = Math.max(0, Math.min(1, s.state.tuning.scale));
-      return 1 + (zoom - 1) * ratio;
+      return 1 + (matchZoom() - 1) * ratio;
     }
 
     function frozen(): boolean {
@@ -163,6 +184,7 @@ export default function disparityScopeSession(
         kernelW: s.state.kernel.w,
         kernelH: s.state.kernel.h,
         zoom: Math.max(1, s.state.zoom),
+        matchZoom: measuredMatchZoom(),
         scale: effectiveScale(),
         target: s.state.target,
         expand_x: s.state.tuning.expand_x,
@@ -290,7 +312,7 @@ export default function disparityScopeSession(
     /** Connect a `camera:<serial>` pipe (refcount++ → C-21 gate) and return its
      *  worker `PipeInput`; registers the matching `disconnect` on `disposers`. */
     function connectCameraPipe(role: "L" | "C" | "R", serial: string): PipeInput {
-      const pipeId = `camera:${serial}`;
+      const pipeId = nodeId.convert(serial);
       const handle = broker.connect(pipeId);
       disposers.add(() => broker.disconnect(pipeId));
       const { width, height, channels, bytesPerFrame, maxBytes } = handle.spec;
@@ -316,7 +338,10 @@ export default function disparityScopeSession(
       ];
       worker = createVisionWorker({ pipes: pipeInputs, params: initParams() }, onResult);
       loop = startActuationLoop({ targetVolts, onVolts });
-      s.telemetry({ ready: true });
+      // Surface the measured magnification (null = nominal-zoom fallback) so
+      // the UI can display the actual match scale instead of guessing from
+      // the (now crop-only) zoom knob.
+      s.telemetry({ ready: true, match_magnification: measuredMatchZoom() });
     }
 
     function idleSession(): void {
@@ -330,7 +355,7 @@ export default function disparityScopeSession(
       triple = null;
       status = "initializing";
       commandedVolts = { l: ORIGIN_POS, r: ORIGIN_POS };
-      s.resetTelemetry(["ready", "status", "tracker_bbox"]);
+      s.resetTelemetry(["ready", "status", "tracker_bbox", "match_magnification"]);
     }
 
     return {

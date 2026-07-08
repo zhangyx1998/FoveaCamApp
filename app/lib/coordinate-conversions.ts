@@ -26,7 +26,42 @@ export type ExtrinsicConversions = {
   A2V: Predict<Point2d>;
   V2A: Predict<Point2d>;
   A2H: Predict<Mat<Float64Array>>;
+  /** Calibration-MEASURED fovea image scale: fovea px per object-unit at the
+   *  extrinsic protocol's nominal 1000-object-unit marker distance (from
+   *  `findPinholeProjection`, @lib/marker). Optional — absent on fits made
+   *  before this field existed; consumers must fall back gracefully. */
+  scale?: number;
+  /** Per-pose spread of `scale` (same units) — a calibration-quality signal. */
+  scale_std?: number;
 };
+
+/**
+ * The measured fovea↔wide optical magnification for one eye.
+ *
+ * Derivation: `scale` (from `findPinholeProjection`) is fovea px per
+ * object-unit at the extrinsic protocol's nominal 1000-object-unit marker
+ * distance. The wide camera sees one object-unit at that same distance as
+ * `focal / 1000` px (small-angle: it subtends `1/1000` rad). The ratio —
+ * `scale · 1000 / focal` — is unit-independent (the object-unit cancels) but
+ * DOES assume the extrinsic captures were made near the protocol's nominal
+ * distance, the same assumption `findPinholeProjection`'s hardcoded
+ * `transformPoints(..., 1000)` projection plane already bakes into A2H.
+ * RIG-GATED: verify the returned value against the known optics (~9x) on
+ * real calibration data.
+ *
+ * Returns `null` when the measurement isn't available (legacy extrinsic fit,
+ * uncalibrated wide camera, degenerate values) — callers fall back to their
+ * nominal zoom.
+ */
+export function foveaWideMagnification(
+  scale: number | undefined,
+  focal: Point2d | null | undefined,
+): number | null {
+  if (!scale || !Number.isFinite(scale) || scale <= 0 || !focal) return null;
+  const f = (focal.x + focal.y) / 2;
+  if (!Number.isFinite(f) || f <= 0) return null;
+  return (scale * 1000) / f;
+}
 
 /** Everything the conversions read from a calibrated triple. */
 export interface ConversionInputs {
