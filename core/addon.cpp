@@ -21,6 +21,7 @@ Napi::Value feedTestFrame(const Napi::CallbackInfo &info);
 Napi::Value attachCameraPipe(const Napi::CallbackInfo &info);
 Napi::Value detachCameraPipe(const Napi::CallbackInfo &info);
 Napi::Value enableFakeCamera(const Napi::CallbackInfo &info);
+Napi::Value converterProbeAll(const Napi::CallbackInfo &info);
 }
 
 using namespace Napi;
@@ -52,6 +53,10 @@ static Object init(Env env, Object exports) {
                Function::New<Arv::detachCameraPipe>(env, "detachCameraPipe"));
     Aravis.Set("enableFakeCamera",
                Function::New<Arv::enableFakeCamera>(env, "enableFakeCamera"));
+    // B-18: per-pipeId converter-thread meter snapshots (A splices into
+    // perfSnapshot.workloads alongside Pipe.probeAll()).
+    Aravis.Set("converterProbeAll",
+               Function::New<Arv::converterProbeAll>(env, "converterProbeAll"));
     exports.Set("Aravis", Aravis);
     // Controller Module
     auto Controller = Object::New(env);

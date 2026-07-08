@@ -87,10 +87,10 @@ Publisher::Publisher(PipeSpec spec, uint32_t epoch)
 void Publisher::offer(const void *data, const FrameInfo &info,
                       const ShmRing::FrameMeta &meta) {
   const int64_t now = nowMs();
-  // The producer thread is the meter's SOLE writer: record the arrival + its
-  // convert cost regardless of consumers (producer health is what we measure).
+  // The producer thread is the meter's SOLE writer: record the arrival. (Convert
+  // cost lives in B's converter meter now — C-21; attributing it here too would
+  // double-count. This meter's busy = the SHM WRITE below.)
   meter_.ingest("frame", now);
-  meter_.addBusy(meta.convertMs);
 
   const size_t activeBytes =
       static_cast<size_t>(info.width) * info.height * info.channels;
@@ -101,6 +101,8 @@ void Publisher::offer(const void *data, const FrameInfo &info,
     return;
   }
   // Paused (no consumers) or closed → no ring write, but arrivals stay metered.
+  // (Defensive net, Q6: the consumer gate detaches the producer at refcount 0,
+  // so in practice offer() isn't even called then.)
   if (closed_.load(std::memory_order_acquire) ||
       refcount_.load(std::memory_order_acquire) == 0)
     return;
@@ -108,6 +110,7 @@ void Publisher::offer(const void *data, const FrameInfo &info,
   // Seqlock-write the ACTIVE frame tight-packed into the head of the max slot,
   // row-by-row (honor stride), ON the producer's thread. The consumer reads the
   // active w/h from the slot header and consumes only `activeBytes`.
+  const auto writeStart = std::chrono::steady_clock::now();
   const uint32_t slot = segment_->beginSlot();
   auto *dst = static_cast<uint8_t *>(segment_->slotData(slot));
   const auto *src = static_cast<const uint8_t *>(data);
@@ -118,13 +121,34 @@ void Publisher::offer(const void *data, const FrameInfo &info,
                 src + static_cast<size_t>(y) * stride, rowBytes);
   segment_->publish(slot, meta, info.width, info.height);
   meter_.emit("shm", now);
+  // Attribute the actual write (memcpy) time to busy — the pipe's own cost.
+  meter_.addBusy(std::chrono::duration<double, std::milli>(
+                     std::chrono::steady_clock::now() - writeStart)
+                     .count());
+}
+
+uint32_t Publisher::connect() {
+  const uint32_t n = refcount_.fetch_add(1, std::memory_order_acq_rel) + 1;
+  if (n == 1 && gate_)
+    gate_(true); // 0→1 edge: wake the converter
+  return n;
 }
 
 uint32_t Publisher::disconnect() {
   uint32_t cur = refcount_.load(std::memory_order_acquire);
   if (cur == 0)
     return 0;
-  return refcount_.fetch_sub(1, std::memory_order_acq_rel) - 1;
+  const uint32_t next = refcount_.fetch_sub(1, std::memory_order_acq_rel) - 1;
+  if (next == 0 && gate_)
+    gate_(false); // →0 edge: park the converter
+  return next;
+}
+
+void Publisher::setConsumerGate(ConsumerGate gate) {
+  gate_ = std::move(gate);
+  // Reconcile: a consumer may have connected before the gate was registered.
+  if (gate_)
+    gate_(refcount_.load(std::memory_order_acquire) > 0);
 }
 
 void Publisher::close() {
@@ -214,6 +238,20 @@ FrameSink *PipeHub::sink(const std::string &id) {
   std::lock_guard<std::mutex> lock(m_);
   auto it = pipes_.find(id);
   return it == pipes_.end() ? nullptr : it->second.publisher.get();
+}
+
+void PipeHub::setConsumerGate(const std::string &id, ConsumerGate gate) {
+  Publisher *pub = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(m_);
+    auto it = pipes_.find(id);
+    if (it == pipes_.end())
+      throw std::runtime_error("unknown pipe id: " + id);
+    pub = it->second.publisher.get();
+  }
+  // Fire OUTSIDE the hub lock — the gate calls into B's Stream (subscribe); the
+  // hub lock must never be held across it. Safe: hub mutation is NAPI-thread.
+  pub->setConsumerGate(std::move(gate));
 }
 
 void PipeHub::attachSynthetic(const std::string &id, double fps, uint8_t seed) {
@@ -493,6 +531,35 @@ Value offerFrame(const CallbackInfo &info) {
   return env.Undefined();
 }
 
+// Test hooks (C-21): install a consumer gate that records each fire, and read
+// the recorded log — proves the gate fires immediately-on-register (current
+// state) + on 0↔1 edges only. B installs the REAL gate in attachCameraPipe.
+std::map<std::string, std::vector<bool>> g_testGateLog;
+
+Value installTestGate(const CallbackInfo &info) {
+  auto env = info.Env();
+  try {
+    const auto id = info[0].As<String>().Utf8Value();
+    g_testGateLog[id].clear();
+    PipeHub::instance().setConsumerGate(id, [id](bool active) {
+      g_testGateLog[id].push_back(active);
+    });
+  } catch (const std::exception &e) {
+    Error::New(env, e.what()).ThrowAsJavaScriptException();
+  }
+  return env.Undefined();
+}
+
+Value testGateLog(const CallbackInfo &info) {
+  auto env = info.Env();
+  const auto id = info[0].As<String>().Utf8Value();
+  const auto &log = g_testGateLog[id];
+  auto arr = Array::New(env, log.size());
+  for (size_t i = 0; i < log.size(); ++i)
+    arr.Set(static_cast<uint32_t>(i), Boolean::New(env, log[i]));
+  return arr;
+}
+
 // Probe EVERY live pipe → {[pipeId]: WorkloadSnapshot}. Dropped pipes are
 // absent (no stale workload rows under churn) — the orchestrator folds this
 // straight into `perfSnapshot.workloads`.
@@ -523,6 +590,9 @@ void exportPipeNamespace(Napi::Env env, Napi::Object &exports) {
   exports.Set("probe", Function::New(env, probe, "probe"));
   exports.Set("probeAll", Function::New(env, probeAll, "probeAll"));
   exports.Set("offerFrame", Function::New(env, offerFrame, "offerFrame"));
+  exports.Set("installTestGate",
+              Function::New(env, installTestGate, "installTestGate"));
+  exports.Set("testGateLog", Function::New(env, testGateLog, "testGateLog"));
   exports.Set("drop", Function::New(env, drop, "drop"));
 }
 

@@ -111,4 +111,14 @@ public:
   }
 };
 
+// Single source of truth for the raw→display conversion (B-18). `cvtColor(raw,
+// out, cvtColorCode(src,dst))` then, when `dst` is 8-bit but the cvtColor
+// result kept a >8-bit container (Mono16 / Bayer16 / 12p → raw is CV_16UC1),
+// scale to true 8-bit by the source's significant bit depth — the step whose
+// omission in the old inline `feedPipe` caused the 12p "purple stripes" bug.
+// `Frame::view` and the pipe converter thread both call this (no duplication).
+// Writes into the caller's reusable `out` (src==dst is a plain copy).
+void convertFrame(const cv::Mat &raw, PixelFormat src, PixelFormat dst,
+                  cv::Mat &out);
+
 } // namespace Arv

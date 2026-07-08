@@ -35,7 +35,10 @@ const isClosed = (r: unknown): r is { closed: true } =>
 const P = Pipe as unknown as {
   advertise(spec: Record<string, unknown>): number;
   connect(id: string): { shmName: string; epoch: number; spec: { maxBytes: number } };
+  disconnect(id: string): number;
   offerFrame(id: string, w: number, h: number, byte: number): void;
+  installTestGate(id: string): void;
+  testGateLog(id: string): boolean[];
   close(id: string): void;
   drop(id: string): void;
 };
@@ -133,6 +136,27 @@ const baseSpec = (id: string, extra: Record<string, unknown> = {}) => ({
   assert(isClosed(reader.readInto(rh, dest, lastSeq)), "stale stays CLOSED");
 
   reader.close(rh);
+  P.close(id);
+  P.drop(id);
+}
+
+// ---- C-21 consumer gate: immediate-on-register + 0↔1 edges only -----------
+{
+  const id = "gate:x";
+  P.advertise(baseSpec(id));
+  P.installTestGate(id); // refcount 0 → immediate fire(false)
+  assert.deepEqual(P.testGateLog(id), [false], "immediate fire on register");
+  P.connect(id); // 0→1 → true
+  P.connect(id); // 1→2 → no edge
+  assert.deepEqual(P.testGateLog(id), [false, true], "0→1 wakes; 1→2 no fire");
+  P.disconnect(id); // 2→1 → no edge
+  P.disconnect(id); // 1→0 → false
+  assert.deepEqual(P.testGateLog(id), [false, true, false], "→0 parks");
+  // Re-register while a consumer is present reconciles to the CURRENT state.
+  P.connect(id);
+  P.installTestGate(id); // refcount 1 → immediate fire(true)
+  assert.deepEqual(P.testGateLog(id), [true], "re-register reconciles to current");
+  P.disconnect(id);
   P.close(id);
   P.drop(id);
 }

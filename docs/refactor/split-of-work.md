@@ -976,6 +976,41 @@ do not hand-roll lifecycle. Model on `KcfTrackerStream` (the existing
   DoD in the proposal. **Questions to raise:** `ConvertedFrame` shape (own type
   vs reuse `Frame`); whether the Pipe subscriber lives in B (Aravis) or is C's
   adapter; buffer-reuse ownership across the subscriber boundary.
+  - Log: **Sketch approved; BUILT — native sweep green (both runtimes).**
+    **(1) `convertFrame` single source** (Frame.h/.cpp): the exact `Frame::view`
+    body — `cvtColor(raw,out,cvtColorCode(src,dst))` + the >8-bit→8-bit
+    significant-bits down-scale (the step `feedPipe` dropped → 12p stripes).
+    `Frame::view` retrofitted to call it (dup killed); `src==dst` = plain copy.
+    **(2) `ConverterStream : TransformStream<Frame::Ptr, ConvertedFrame::Ptr>`**
+    (ConverterStream.h): dedicated thread per (camera × target format), target
+    `PixelFormat` in ctor = selector; `transform` = meter ingest/drop-delta +
+    `begin`/`convertFrame`(into reused `buf_`)/`end` + emit; `ConvertedFrame`
+    (own slim `Shared` type — `mat`(reused-buffer header)/device+system ts/
+    convertMs) with the onView "valid only during sync dispatch, copy to retain"
+    contract documented. **(3) `PipeOfferSubscriber`** (B, the CaptureSink slot):
+    a DIRECT sync-consume `Subscriber<ConvertedFrame::Ptr>` whose `push` computes
+    `FrameInfo` and calls C's `FrameSink::offer` inline (copies before `buf_`
+    reuse — safe). **(4) Gate-driven lifetime:** `attachCameraPipe` builds the
+    ConverterStream + registers C's `setConsumerGate(pipeId, gate)`; `gate(true)`
+    → construct the subscriber (wakes converter), `gate(false)` → `.reset()`
+    (converter drains → base `Stream` auto-parks → drops its `Sub::Latest` →
+    camera parks). Converter PERSISTS across toggles; NO lifecycle code — leans
+    on `Stream::loop`'s park-on-empty. `detachCameraPipe`: `setConsumerGate(…,
+    nullptr)` FIRST, then erase (binding destructs subscriber→converter outside
+    the lock). Registry keyed by pipeId, NAPI-thread. **Retired** `CaptureSink`
+    (h+cpp deleted) + `feedPipe`'s inline convert; `feedTestFrame` now drives
+    `convertFrame` directly (keeps 11's Mono12p regression green). **Meter:**
+    `converterProbeAll()` NAPI → `{pipeId → snapshot}` (sibling to
+    `Pipe.probeAll`; A-25 splices into `perfSnapshot.workloads`) — NOT merged
+    into C's probeAll; `convertMs` rides `FrameMeta`. **Gates:** `core make
+    build` both runtimes ✓; **08/09/10/11/12 all PASS** (11 incl. Mono12p
+    regression + the fake-camera attach→gate→convert→offer→read path); reader
+    `otool -L` 0 non-system deps. Zero C-code change (calls `PipeHub::sink|
+    publisher|spec|setConsumerGate` across the interface); `registry.ts`
+    untouched. **A-25 handoff:** `advertiseCameraPipe` already sets
+    `pixelFormat` (the selector); splice `Aravis.converterProbeAll()` into
+    `system.perfSnapshot.workloads` at the 1 Hz throttle. Idle-when-no-pipe (no
+    CPU) is structural — rig-observable at Stage F.
 
 - **C-21 — pipe seam for the converter (PLAN-FIRST; coordinate the seam with
   B-18).** Owns (`core/src/Pipe.cpp`, `core/include/Pipe.h`): the Pipe-side
@@ -985,6 +1020,39 @@ do not hand-roll lifecycle. Model on `KcfTrackerStream` (the existing
   `probeAll()` (or a sibling probe) so the profiler shows converter
   rate/util/maxInterval/drops. Keep pipe idle-gating (refcount) coherent with
   the converter auto-park (no double-gating surprises).
+  - Log: **Sketch approved (Q1–Q6 ruled) + BUILD DONE (native-only).**
+    - **Consumer gate (the item-4 coherence seam, B depends on it):** NEW
+      `Pipe::ConsumerGate = std::function<void(bool active)>`;
+      `Publisher::setConsumerGate` + `PipeHub::setConsumerGate(id, gate)`.
+      `connect()` (now out-of-line) fires `gate(true)` on the 0→1 edge,
+      `disconnect()` fires `gate(false)` on →0; `setConsumerGate` fires
+      IMMEDIATELY with the current state `refcount>0` (reconciles a consumer
+      that connected before B registered — per your add), `nullptr` unregisters
+      (no fire). So the pipe refcount is the SINGLE gate; B's `attachCameraPipe`
+      registers it to subscribe/unsubscribe its converter → the ConverterStream
+      auto-parks when the pipe-subscriber detaches. No double-gating (offer's
+      refcount-0 skip kept as the Q6 defensive net). `PipeHub::setConsumerGate`
+      fires OUTSIDE the hub lock (the gate calls B's `Stream::subscribe` under
+      its own mutex; per-frame `offer` never takes the hub lock → no lock-order
+      inversion).
+    - **Q1** confirmed: B owns the `Subscriber` (calls `sink(id)->offer`), C
+      owns the gate — not built twice. **Q3** confirmed: converter meter is B's
+      SIBLING probe (A splices via `native-probes`); C's `probeAll()` unchanged
+      (stays the SHM-write vantage). **Q4:** `offer()` `addBusy` now attributes
+      the actual WRITE (memcpy) time via `steady_clock`, NOT `meta.convertMs`
+      (convert lives in B's meter; would double-count) — `meta.convertMs` still
+      flows into `publish` for the recorder/UI. **Q5:** B reads the target from
+      `publisher(id).spec().pixelFormat` (no PipeSpec change).
+    - **Test:** NAPI test hooks `installTestGate`/`testGateLog` + a gate block
+      in `11-pipe-lifecycle.ts` proving immediate-on-register(false), 0→1(true),
+      no fire on 1→2/2→1, →0(false), and re-register-reconciles-to-current(true).
+    - **Gates:** `core make build` both runtimes CLEAN; native sweep
+      **08/09/10-frame-result/10-pipe-thread-meter/11-capture-pipe/
+      11-pipe-lifecycle/12-kcf-tracker all PASS** unsandboxed (B's capture-pipe
+      + kcf unaffected — my changes are additive); reader `otool -L`
+      self+libc++.1+libSystem.B only. JS/TS UNTOUCHED → vue-tsc/vitest/vite
+      build unchanged (last green 277/277, 0). d.ts + glue updated. Not
+      committed (you verify + commit the real-1e set with B-18/A-25).
 
 - **A-25 — orchestrator wiring (small; after B-18/C-21 seam is ruled).** Thread
   the target-format modifier through `advertiseCameraPipe` (already sets

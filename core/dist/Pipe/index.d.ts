@@ -71,6 +71,11 @@ declare module "core/Pipe" {
   /** Test hook (C-20): offer one synthetic frame of active size `w×h` (filled
    *  with `byte`) into a live pipe — drives the resize/reuse tests. */
   export function offerFrame(id: string, w: number, h: number, byte: number): void;
+  /** Test hooks (C-21): install a consumer gate that records each fire, and
+   *  read the log — verifies the gate's immediate-on-register + 0↔1 edge firing.
+   *  (The REAL gate is a C++ `setConsumerGate`, registered by B's Aravis side.) */
+  export function installTestGate(id: string): void;
+  export function testGateLog(id: string): boolean[];
 
   /** Tear down a pipe entirely (stop producer, close publisher, unlink segment). */
   export function drop(id: string): void;

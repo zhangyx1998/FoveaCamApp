@@ -16,6 +16,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -75,6 +76,12 @@ public:
                      const ShmRing::FrameMeta &meta) = 0;
 };
 
+/** Fired when a pipe's consumer presence crosses the 0↔1 boundary (C-21). B's
+ *  `attachCameraPipe` registers one to subscribe/unsubscribe its converter to
+ *  the ConverterStream — so the refcount is the SINGLE gate driving "idle when
+ *  no pipe open" (the converter auto-parks once its subscriber detaches). */
+using ConsumerGate = std::function<void(bool active)>;
+
 /** Source of frames feeding exactly one publisher (via its `FrameSink`).
  *  Scaffold/test: `SyntheticProducer`. 1c/1d: capture/CV producer threads. */
 class FrameProducer {
@@ -105,10 +112,17 @@ public:
              const ShmRing::FrameMeta &meta) override;
 
   /** Consumer refcount (broker). At zero the ring write pauses (segment stays
-   *  mapped/advertised — reconnectable); the producer keeps arriving (metered). */
-  uint32_t connect() { return refcount_.fetch_add(1, std::memory_order_acq_rel) + 1; }
+   *  mapped/advertised — reconnectable). The 0→1 / →0 edges fire the consumer
+   *  gate (C-21), which drives the converter subscribe/unsubscribe. */
+  uint32_t connect();
   uint32_t disconnect();
   uint32_t consumers() const { return refcount_.load(std::memory_order_acquire); }
+
+  /** Register the consumer-presence gate (C-21). Fires `gate(refcount>0)`
+   *  IMMEDIATELY on registration (reconciles a consumer that connected before
+   *  the gate was set), then on each 0→1 / →0 edge. `nullptr` unregisters (no
+   *  fire). NAPI-thread only (single-threaded with connect/disconnect). */
+  void setConsumerGate(ConsumerGate gate);
 
   /** Producer-side close: set `state=CLOSED` (release) so consumers observe the
    *  explicit signal after the final frame; further offers are dropped. */
@@ -130,6 +144,7 @@ private:
 
   std::atomic<uint32_t> refcount_{0};
   std::atomic<bool> closed_{false};
+  ConsumerGate gate_; // NAPI-thread only (connect/disconnect/setConsumerGate)
 };
 
 /** Scaffold producer: emits synthetic frames at ~`fps` (byte = seed + frame#)
@@ -173,6 +188,9 @@ public:
   uint32_t advertise(const PipeSpec &spec);
   Publisher &publisher(const std::string &id);   // throws if unknown
   FrameSink *sink(const std::string &id);        // nullptr if unknown
+  /** Register a pipe's consumer-presence gate (C-21) — B's `attachCameraPipe`
+   *  drives its converter subscribe/unsubscribe from it. Throws if unknown. */
+  void setConsumerGate(const std::string &id, ConsumerGate gate);
   void attachSynthetic(const std::string &id, double fps, uint8_t seed);
   void injectStall(const std::string &id, double ms);
   void drop(const std::string &id);
