@@ -40,6 +40,7 @@ import {
   type UndistortPipeSeam,
 } from "@orchestrator/undistort-pipe";
 import { nodeId } from "@lib/orchestrator/graph-contract";
+import { registerGraphWiring } from "@orchestrator/graph-topology";
 import type { PipeBroker } from "@orchestrator/pipe-session";
 import type { PipeInput, VisionResult } from "@orchestrator/vision-worker-protocol";
 import { tracking } from "./contract";
@@ -340,6 +341,49 @@ export default function trackingSession(
       const taps = new DisposerBag();
       publishSerials(t.leases, taps, s);
       worker = createVisionWorker({ pipes, params: initParams() }, onResult);
+      // C-24 step 2 (stage-1 shim): register this session's fixed composition
+      // so the topology shows the non-pipe nodes (kcf thread, display kernel)
+      // + their wiring. `win/tracking` is a stand-in owner until this app
+      // migrates onto the compose protocol (real window ids, step 3/4).
+      const kcfId = nodeId.kcf(t.leases.C.camera.serial);
+      const kernelId = nodeId.win("tracking", "display");
+      const bgra = { kind: "frame", pixelFormat: "BGRA8", dtype: "U8" } as const;
+      scope.defer(
+        registerGraphWiring({
+          nodes: [
+            {
+              id: kcfId,
+              kind: "kcf",
+              output: { kind: "track" },
+              transport: "native",
+              statsKey: "tracking:kcf", // legacy meter name → node stats
+            },
+            {
+              id: kernelId,
+              kind: "display",
+              owner: "win/tracking",
+              output: bgra,
+              transport: "port",
+            },
+          ],
+          edges: [
+            {
+              from: nodeId.camera(t.leases.C.camera.serial),
+              to: kcfId,
+              port: "in",
+              type: { kind: "track" },
+            },
+            // Worker inputs: the connected pipe ids, by role port (L/C/R zip —
+            // `pipes` and `pipeIds` are built in the same order above).
+            ...pipes.map((p, i) => ({
+              from: pipeIds[i]!,
+              to: kernelId,
+              port: p.role,
+              type: bgra,
+            })),
+          ],
+        }),
+      );
       // Terminate the worker (stop SHM reads) BEFORE dropping the pipe gate, and
       // both after the tracker/loop stop but before the leases release.
       scope.defer(() => {

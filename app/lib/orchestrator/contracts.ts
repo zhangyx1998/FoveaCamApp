@@ -11,6 +11,7 @@
 
 import { cmd, defineContract } from "./protocol.js";
 import type { FrameTopicStats } from "./protocol.js";
+import type { GraphTopology } from "./graph-contract.js";
 import type { Pos } from "../controller-codec.js";
 
 /** Minimal camera descriptor — plain data, safe to cross the boundary. */
@@ -72,6 +73,9 @@ export type PerfSnapshot = {
   storeHub: { writes: number; updates: number; clears: number };
   /** Ring-buffer snapshot of recent boot/activation/connect timings (§7.1 S5). */
   spans: Span[];
+  /** The live stream node graph (C-24, ruled Q2: folded into this 1 Hz poll).
+   *  Optional so pre-graph snapshot documents stay valid. */
+  graph?: GraphTopology;
 };
 
 /**

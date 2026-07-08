@@ -22,6 +22,7 @@ import {
 import { Hub, setFrameTransportFactory, type ServerSession } from "./runtime.js";
 import { releaseAll, setRegistryPipeSeam } from "./registry.js";
 import { pipeSession, asBroker } from "./pipe-session.js";
+import { buildTopology } from "./graph-topology.js";
 import { registerNativeProbe } from "./native-probes.js";
 import type { WorkloadSnapshot } from "@lib/orchestrator/stats.js";
 import { onReport, onSpan, span } from "./diagnostics.js";
@@ -169,6 +170,14 @@ hub.add(
   systemSession(
     () => cameraOwning,
     () => hub.frameStatsSnapshot(),
+    // C-24: the live node graph rides perfSnapshot (ruled Q2) — pipes from the
+    // native enumerator (item 2, exact bytesTotal for MB/s), stats from the
+    // same probed workloads map, session wiring via registerGraphWiring.
+    (workloads) =>
+      buildTopology({
+        listPipes: () => Pipe.list(),
+        workloads: () => workloads,
+      }),
   ),
 );
 

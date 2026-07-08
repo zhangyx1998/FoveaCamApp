@@ -10,6 +10,8 @@
 
 import { defineSession, type ServerSession } from "../runtime.js";
 import { system, type PerfSnapshot } from "@lib/orchestrator/contracts";
+import type { GraphTopology } from "@lib/orchestrator/graph-contract";
+import type { WorkloadSnapshot } from "@lib/orchestrator/stats";
 import type { FrameTopicStats } from "@lib/orchestrator/protocol";
 import { listCameraInfo } from "../camera.js";
 import { workloadsSnapshot } from "../metering.js";
@@ -33,6 +35,10 @@ export function systemSession(
     string,
     FrameTopicStats
   >,
+  /** The live node-graph builder (C-24, ruled Q2: folded into the 1 Hz
+   *  perfSnapshot). Optional so existing tests/callers stay valid; index.ts
+   *  injects `buildTopology` over `Pipe.list()` + the workloads map. */
+  graph?: (workloads: Record<string, WorkloadSnapshot>) => GraphTopology,
 ): ServerSession<typeof system> {
   return defineSession("system", system, (s) => {
     // Never stopped: `system` is the always-on session (no `activate`/`idle`)
@@ -57,21 +63,25 @@ export function systemSession(
           await releaseAll();
         },
         async perfSnapshot(): Promise<PerfSnapshot> {
+          // Workload meters (docs/refactor/workload-metering.md §2) — the JS
+          // meters from `@orchestrator/metering`, PLUS the native free-running
+          // threads probed out-of-loop (WS1 real-1c/1d, A-24 Stage 3): C's SHM
+          // pipe producers + B's KCF tracker, injected via `native-probes` so
+          // this builder stays `core`-free. Same `WorkloadSnapshot` shape →
+          // the profiler renders native streams identically to JS ones.
+          const workloads = { ...workloadsSnapshot(), ...nativeProbes() };
           return {
             timestamp: new Date().toISOString(),
             orchestrator: {
               loopLag: { mean: loopLag.stats.mean, max: loopLag.stats.max },
             },
             frames: frameStats(),
-            // Workload meters (docs/refactor/workload-metering.md §2) — the JS
-            // meters from `@orchestrator/metering`, PLUS the native free-running
-            // threads probed out-of-loop (WS1 real-1c/1d, A-24 Stage 3): C's SHM
-            // pipe producers + B's KCF tracker, injected via `native-probes` so
-            // this builder stays `core`-free. Same `WorkloadSnapshot` shape →
-            // the profiler renders native streams identically to JS ones.
-            workloads: { ...workloadsSnapshot(), ...nativeProbes() },
+            workloads,
             storeHub: writeCounts(),
             spans: [...spans()],
+            // C-24: the live node graph, riding the same 1 Hz poll (ruled Q2) —
+            // stats keyed onto nodes from the SAME workloads map above.
+            ...(graph ? { graph: graph(workloads) } : {}),
           };
         },
       },
