@@ -36,6 +36,8 @@ typedef enum Method : uint8_t {
 // CFG_* are Configuration properties; CMD_STREAM/CMD_FRAME cover stream
 // lifecycle, continuous position updates, and triggered frames; CMD_ACTUATE
 // and CMD_TRIGGER are Commands. LOG is pushed from the MCU to the host.
+// SYS_TIMESTAMP (clock calibration, v1.1) sits out of group order because the
+// existing nibble values are frozen on the wire.
 #define FOVEA_PROTOCOL_PROPERTIES(X)                                          \
   X(NONE, 0x00)                                                               \
   X(SYS_INFO, 0x01)                                                           \
@@ -49,6 +51,7 @@ typedef enum Method : uint8_t {
   X(CMD_FRAME, 0x09)                                                          \
   X(CMD_ACTUATE, 0x0A)                                                        \
   X(CMD_TRIGGER, 0x0B)                                                        \
+  X(SYS_TIMESTAMP, 0x0C)                                                      \
   X(LOG, 0x0F)
 
 typedef enum Property : uint8_t {

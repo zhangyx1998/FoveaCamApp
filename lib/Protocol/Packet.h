@@ -48,6 +48,18 @@ FIXED_SIZE_PACKET(Reset, SYS_RESET) {
 
 FIXED_SIZE_PACKET(Enable, SYS_ENABLE) { uint8_t enable; };
 
+// Clock-calibration surface (docs/proposals/unified-time-and-topology.md,
+// Rulings item 4 / §2 "Controller↔host"). GET replies the MCU's
+// wraparound-corrected uint64 microsecond clock (Global::time), stamped AT
+// PACKET PARSE/HANDLE TIME — not at reply serialization — so a host
+// calibration ping's jitter stays at the serial-latency floor. SET resets the
+// counter to the payload value (normally 0) and echoes the fresh clock back.
+// Single-phase (ACK/REJ, no FIN). Same clock domain and units as
+// Command::Timestamp (FrameResult t_trigger/t_exposure).
+FIXED_SIZE_PACKET(Timestamp, SYS_TIMESTAMP) { uint64_t microseconds; };
+
+static_assert(sizeof(Timestamp) == 8, "Timestamp payload is uint64 µs");
+
 } // namespace System
 
 namespace Config {

@@ -221,8 +221,15 @@ export class Controller {
     this.device.release();
   }
 
-  private get<T>(prop: Parameters<Device["get"]>[0]) {
+  // `prop: any` like set() below: the d.ts `PacketFactory` type is not
+  // exported, and `Parameters<Device["get"]>[0]` collapses the generic to
+  // PacketFactory<unknown>, which no concrete factory is assignable to
+  // (contravariant input). Callers pin the decode type via <T>.
+  private get<T>(prop: any) {
     if (!this.device.connected) throw new Error("Controller not connected");
+    // A GET is one serial write too — same observe-only accounting as set()
+    // below (A-29; covers readTimestamp's calibration pings).
+    this.serialMeter.emit("packets");
     return this.device.get(prop) as Promise<T>;
   }
   private set<T>(prop: any, arg: T) {
@@ -248,6 +255,24 @@ export class Controller {
     this._pos = origin;
     await this.set(Protocol.System.Enable, false);
     this._enabled = false;
+  }
+
+  /** Clock-calibration ping (unified-time proposal §2, Rulings 4): the MCU's
+   *  current clock in MICROSECONDS as a uint64 `bigint`, stamped
+   *  firmware-side at packet parse time so the reading's jitter stays at the
+   *  serial-latency floor. Bracket N calls with host `hrtime.bigint()` and
+   *  min-filter by RTT to estimate the controller↔host offset. Same clock
+   *  domain/units as `frame()`'s tTrigger/tExposure. Requires firmware
+   *  >= v1.1 (older firmware REJects the unknown property). */
+  async readTimestamp(): Promise<bigint> {
+    const ts = await this.get<BigInt>(Protocol.System.Timestamp);
+    return ts.valueOf();
+  }
+  /** Resets the MCU clock counter to 0 (SET System.Timestamp). Invalidates
+   *  any prior offset calibration — as does enable(), which also resets the
+   *  clock firmware-side. */
+  async resetTimestamp(): Promise<void> {
+    await this.set(Protocol.System.Timestamp, 0n);
   }
 
   setLogLevel(level: LogLevel) {

@@ -108,6 +108,13 @@ declare module "core/Controller" {
         Readonly<FirmwareVersion>;
       readonly Reset: PacketFactory<ResetType>;
       readonly Enable: PacketFactory<Boolean>;
+      /** Clock calibration (unified-time proposal, Rulings 4). GET → the
+       *  MCU's uint64 MICROSECOND clock as `bigint`, stamped firmware-side
+       *  at packet parse time (same Global::time clock/units as
+       *  `FrameResult.t_trigger`/`t_exposure`). SET (arg = new counter
+       *  value, normally `0n`) resets the counter; the ACK echoes the fresh
+       *  clock. Single-phase (ACK/REJ, no FIN). Requires firmware >= v1.1. */
+      readonly Timestamp: PacketFactory<BigInt>;
     };
     readonly Config: {
       readonly Log: PacketFactory<LogLevel>;

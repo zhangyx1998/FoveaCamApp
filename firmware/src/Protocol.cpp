@@ -197,6 +197,28 @@ HANDLE_SET(System::Enable) {
   GET(seq);
 }
 
+HANDLE_GET(System::Timestamp) {
+  // Calibration ping (unified-time proposal, Rulings 4): stamp the clock
+  // FIRST, at packet parse/handle time — handle() dispatches here
+  // synchronously as the request leaves the COBS decoder — never at
+  // reply-serialization time, so the reading's jitter stays at the
+  // serial-latency floor. Same Global::time (wraparound-corrected uint64 µs)
+  // that stamps FrameResult t_trigger/t_exposure.
+  const auto now = Global::time.now();
+  auto packet = Create::ACK(seq);
+  deflate({.microseconds = now}, packet);
+  send(packet);
+}
+
+HANDLE_SET(System::Timestamp) {
+  // Reset the MCU clock counter to the payload value (normally 0). Note
+  // System::Enable also resets the clock on enable — either way, any
+  // host-side offset calibration is invalidated and must be re-run.
+  Global::time.reset(payload.microseconds);
+  VERB("Clock counter reset");
+  GET(seq);
+}
+
 HANDLE_GET(Config::Log) {
   auto packet = Create::ACK(seq);
   deflate({.level = Global::log_level}, packet);

@@ -221,6 +221,24 @@ static FN(Uint16Packet) {
   return inject(info, Number::New(env, value), value);
 }
 
+// uint64 payloads decode/encode as JS BigInt (a Number or BigInt is accepted
+// on input — convert<uint64_t> handles both). Used by System::Timestamp: the
+// MCU's µs clock is a wire uint64 that must round-trip losslessly, like
+// FrameResult's t_trigger/t_exposure.
+static FN(Uint64Packet) {
+  EXPECT_EXACTLY_ONE_ARGUMENT("Packet<Uint64>");
+  uint64_t value;
+  if (isBufferLike(arg)) {
+    bufferView(arg) >> value;
+  } else {
+    try {
+      value = convert<uint64_t>(arg);
+    }
+    JS_EXCEPT(env.Undefined())
+  }
+  return inject(info, convert(env, value), value);
+}
+
 template <typename T>
 inline void propertyMap(Napi::Object const &obj, std::string key, T &val,
                         bool optional = true) {
@@ -273,6 +291,13 @@ static Napi::Object Init(Napi::Env env) {
               env, "System::Reset"));
   obj.Set("Enable",
           factory<Property::SYS_ENABLE, BooleanPacket>(env, "System::Enable"));
+  // Clock-calibration property (unified-time proposal, Rulings 4): GET reads
+  // the MCU's parse-time-stamped uint64 µs clock as a BigInt; SET resets the
+  // counter (payload = new counter value, normally 0n) and the ACK echoes the
+  // fresh clock. Single-phase — request shape == response shape, so this one
+  // factory decodes both directions.
+  obj.Set("Timestamp", factory<Property::SYS_TIMESTAMP, Uint64Packet>(
+                           env, "System::Timestamp"));
   obj.Freeze();
   return obj;
 };

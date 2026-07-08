@@ -20,16 +20,28 @@ vi.mock("core/Controller", () => {
     verifyVersion = vi.fn(async () => {});
     release = vi.fn();
     fireAndForget = vi.fn();
-    get = vi.fn();
+    get = vi.fn(async (prop: string) => {
+      // System.Timestamp decodes to a frozen BigInt wrapper object (the
+      // native PacketInstance shape) — readTimestamp() unwraps it via
+      // .valueOf() into the primitive µs bigint.
+      if (prop === "Timestamp") return Object(123_456_789n);
+      return undefined;
+    });
     set = vi.fn(async (prop: string) => {
       if (prop === "Actuate")
         return { left: [0, 0, 0, 0], right: [0, 0, 0, 0], complete_time: 0 };
       if (prop === "Bias") return 200; // setBias reads a numeric DAC value back
+      if (prop === "Timestamp") return Object(0n); // reset echoes the fresh clock
       return true;
     });
   }
   const Protocol = {
-    System: { Enable: "Enable", Info: "Info", Version: "Version" },
+    System: {
+      Enable: "Enable",
+      Info: "Info",
+      Version: "Version",
+      Timestamp: "Timestamp",
+    },
     Config: { Log: "Log", LPF: "LPF", Bias: "Bias" },
     Command: {
       Actuate: "Actuate",
@@ -92,6 +104,17 @@ describe("Controller serial WRITE meter (A-29)", () => {
     await new Promise((r) => setTimeout(r, 2));
     stream.update({ left: { x: 3, y: 3 }, right: { x: 4, y: 4 } });
     expect(packets()).toBe(before + 1);
+  });
+
+  it("meters and decodes the System.Timestamp calibration ping + reset", async () => {
+    ctrl = new Controller({ path: PORT } as never);
+    await ctrl.ready;
+    const before = packets();
+    // readTimestamp resolves the MCU clock as a PRIMITIVE µs bigint.
+    await expect(ctrl.readTimestamp()).resolves.toBe(123_456_789n);
+    await ctrl.resetTimestamp();
+    // One GET packet (the ping) + one SET packet (the reset).
+    expect(packets()).toBe(before + 2);
   });
 
   it("disposes the meter on release (the row disappears)", () => {

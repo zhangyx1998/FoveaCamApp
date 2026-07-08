@@ -76,6 +76,8 @@ void handle(const Protocol::RawPacket &&packet) {
     CASE_SET(System::Reset);
     CASE_GET(System::Enable);
     CASE_SET(System::Enable);
+    CASE_GET(System::Timestamp);
+    CASE_SET(System::Timestamp);
     CASE_GET(Config::Log);
     CASE_SET(Config::Log);
     CASE_GET(Config::LPF);
