@@ -89,6 +89,21 @@ names the mechanism it gates.
   frame_rate / exposure > ~16 ms), not the pipeline; 4-buffer stream slack
   landed either way.
 
+## Unified time (proposal P1/P2, 2026-07-08) — ⚠ FLASH v1.1 FIRMWARE FIRST
+
+- [ ] **TimestampLatch support** — check each camera model accepts
+  `TimestampLatch`/`TimestampLatchValue` (profiler Clocks panel shows
+  `method: latch` per `camera:<serial>`; a missing row + "TimestampLatch
+  unavailable" diagnostic = fall back decision needed). Confirm the latched
+  value's UNIT (assumed ns).
+- [ ] **Controller ping** — with v1.1 flashed: Clocks panel shows
+  `controller` row, jitter well under 500 µs; `readTimestamp` on OLD
+  firmware times out gracefully (3 s) instead of wedging connect.
+- [ ] **Offset sanity** — camera and controller offsets stable across
+  reconnects (± jitter); re-calibration after sleep/wake.
+- [ ] **Mirror history** — during streamed actuation, `mirrorAt` age stays
+  ~1 tick (no gaps) — observable once the fovea homography consumes it.
+
 ## Blocked (hardware change required)
 
 - [ ] **Center-camera hardware trigger** — needs the slimmer CAM0 cable
