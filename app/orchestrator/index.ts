@@ -22,6 +22,8 @@ import {
 import { Hub, setFrameTransportFactory, type ServerSession } from "./runtime.js";
 import { releaseAll, setRegistryPipeSeam } from "./registry.js";
 import { pipeSession, asBroker } from "./pipe-session.js";
+import { registerNativeProbe } from "./native-probes.js";
+import type { WorkloadSnapshot } from "@lib/orchestrator/stats.js";
 import { onReport, onSpan, span } from "./diagnostics.js";
 import { systemSession } from "./sessions/system.js";
 import { controllerSession } from "./sessions/controller.js";
@@ -77,6 +79,13 @@ setRegistryPipeSeam({
   attach: (camera, pipeId) => aravisPipe.attachCameraPipe(camera, pipeId),
   detach: (pipeId) => aravisPipe.detachCameraPipe(pipeId),
 });
+// A-24 Stage 3: fold every live SHM pipe producer's native meter into
+// `perfSnapshot.workloads` (probed out-of-loop; `ProbeSnapshot` === the JS
+// `WorkloadSnapshot` shape). The 1d KCF tracker registers its own probe from
+// the tracking session.
+registerNativeProbe(
+  () => Pipe.probeAll() as unknown as Record<string, WorkloadSnapshot>,
+);
 
 // --- live camera view: frame-path validation slice -----------------------
 const liveview = hub.add(liveViewSession());

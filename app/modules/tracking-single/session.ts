@@ -46,13 +46,31 @@ import {
   wrapPerspective,
   type Mat,
 } from "core/Vision";
-import { createTracker, type Tracker } from "core/Tracker";
+import { createTracker, type Tracker, type TrackerMeter } from "core/Tracker";
 import { consumeTrackerResults } from "./tracker-consume";
+import { registerNativeProbe } from "@orchestrator/native-probes";
+import type { WorkloadSnapshot } from "@lib/orchestrator/stats";
 import type { Point2d, Rect } from "core/Geometry";
 import type { Pos } from "@lib/controller-codec";
 import { RollingStats } from "@lib/util/rolling";
 
 const now = () => performance.now();
+
+// A-24 Stage 3: adapt B's native tracker meter (`uptimeMs`/`dropTotal`) to the
+// `WorkloadSnapshot` shape `perfSnapshot.workloads` uses, so the profiler
+// renders the KCF thread next to the JS meters + the pipe producers.
+function trackerWorkload(m: TrackerMeter): WorkloadSnapshot {
+  const t = Date.now();
+  return {
+    name: "tracking:kcf",
+    window: { startedAt: t - m.uptimeMs, snapshotAt: t, uptimeMs: m.uptimeMs },
+    utilization: m.utilization,
+    busyMs: m.busyMs,
+    inputs: m.inputs,
+    outputs: m.outputs,
+    drops: { total: m.dropTotal, ratePerSec: 0, byReason: {} },
+  };
+}
 
 export default function trackingSession(): ServerSession<typeof tracking> {
   return defineResourceSession("tracking", tracking, (s) => {
@@ -365,6 +383,14 @@ export default function trackingSession(): ServerSession<typeof tracking> {
         tk = null;
         armed = false;
       });
+      // A-24 Stage 3: expose the KCF thread's native meter to `perfSnapshot.
+      // workloads` (probed out-of-loop; absent when idle). Disposed on drain.
+      scope.defer(
+        registerNativeProbe(
+          (): Record<string, WorkloadSnapshot> =>
+            tk ? { "tracking:kcf": trackerWorkload(tk.probe()) } : {},
+        ),
+      );
       void consumeTracker(tk);
       loop = startActuationLoop({
         targetVolts,

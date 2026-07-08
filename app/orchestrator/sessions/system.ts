@@ -13,6 +13,7 @@ import { system, type PerfSnapshot } from "@lib/orchestrator/contracts";
 import type { FrameTopicStats } from "@lib/orchestrator/protocol";
 import { listCameraInfo } from "../camera.js";
 import { workloadsSnapshot } from "../metering.js";
+import { nativeProbes } from "../native-probes.js";
 import { releaseAll } from "../registry.js";
 import { writeCounts } from "../store-hub.js";
 import { spans } from "../diagnostics.js";
@@ -62,9 +63,13 @@ export function systemSession(
               loopLag: { mean: loopLag.stats.mean, max: loopLag.stats.max },
             },
             frames: frameStats(),
-            // Workload meters (docs/refactor/workload-metering.md §2) —
-            // additive key, per-name snapshots from `@orchestrator/metering`.
-            workloads: workloadsSnapshot(),
+            // Workload meters (docs/refactor/workload-metering.md §2) — the JS
+            // meters from `@orchestrator/metering`, PLUS the native free-running
+            // threads probed out-of-loop (WS1 real-1c/1d, A-24 Stage 3): C's SHM
+            // pipe producers + B's KCF tracker, injected via `native-probes` so
+            // this builder stays `core`-free. Same `WorkloadSnapshot` shape →
+            // the profiler renders native streams identically to JS ones.
+            workloads: { ...workloadsSnapshot(), ...nativeProbes() },
             storeHub: writeCounts(),
             spans: [...spans()],
           };

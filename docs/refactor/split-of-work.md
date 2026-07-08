@@ -491,6 +491,26 @@ hardware-dependent behavior verified without a real rig run.
       `@orchestrator/async-kcf` + its unit test — unused by production now; safe
       to remove in a follow-up. **Stage 2 ready for verify + commit; then Stage 3
       (probe splice — `Pipe.probeAll()` + `tk.probe()` into `perfSnapshot.workloads`).**
+    - **PHASE 2 — STAGE 3 LANDED (probe splice; 2026-07-07). A-24 LIVE CUT-OVER
+      COMPLETE (Stages 1+2+3, software-green).** NEW A-owned `native-probes.ts`
+      (`registerNativeProbe(source)→dispose` / `nativeProbes()` — merges native
+      `WorkloadSnapshot` batches, throwing probe skipped) so `system.ts` stays
+      `core`-free + vitest-testable. `system.ts` perfSnapshot: `workloads: {
+      ...workloadsSnapshot(), ...nativeProbes() }`. Index injects C's
+      `Pipe.probeAll()` (`ProbeSnapshot` === `WorkloadSnapshot` structurally →
+      direct). Tracking session registers its KCF probe via a `TrackerMeter`→
+      `WorkloadSnapshot` adapter (`uptimeMs`→`window`, `dropTotal`→`drops`;
+      `WorkloadStat` inputs fit the A-23 optional-`maxIntervalMs`
+      `WorkloadStreamStat`), scope-registered → disposed on drain (absent when
+      idle — no stale rows). NEW `test/native-probes.test.ts` (3): registry
+      merge+dispose+throw-skip, AND the end-to-end splice through the REAL system
+      session (fake probe → `perfSnapshot.workloads` includes the native stream).
+      Gates: vue-tsc 0; vitest 284/284 (+3); vite build OK; orch zero-Vue 0;
+      renderer zero-core 0. **RIG-GATED (user Stage-F):** the live
+      `maxInterval`-flat / drops-sane / utilization numbers are the user's rig
+      read — the SPLICE mechanism is proven, the perf numbers are not claimed.
+      **A-24 done: raw preview + KCF on free-running native threads, both probed
+      into the profiler. Ready for verify + commit of Stage 3.**
 
 ## Coder B — Native core, protocol & firmware
 
