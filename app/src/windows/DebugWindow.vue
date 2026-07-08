@@ -14,7 +14,7 @@ You may find the full license in project root directory.
 -->
 <script setup lang="ts">
 import { computed, ref } from "vue";
-import { useSession } from "@lib/orchestrator/client";
+import { useSession, usePipeFrame } from "@lib/orchestrator/client";
 import TitleBar from "../components/TitleBar.vue";
 import StreamView from "../components/StreamView.vue";
 import { debugOverlayFor } from "./debug-registry";
@@ -25,16 +25,30 @@ const titleBarHeight = ref(0);
 const overlay = debugOverlayFor(props.session);
 const valid = computed(() => !!props.session && !!props.frame && !!overlay);
 
+// A-32: a `pipe:<pipeId>` frame address binds the pixels to a native SHM pipe
+// (e.g. tracking's `pipe:undistort:<serial>` — with the worker no longer
+// posting a "C" session frame, the pipe IS the debug view's frame source).
+// Any other address stays on the session frame channel, untouched.
+const PIPE_PREFIX = "pipe:";
+const pipeId = props.frame.startsWith(PIPE_PREFIX)
+  ? props.frame.slice(PIPE_PREFIX.length)
+  : null;
+const pipeFrame = pipeId ? usePipeFrame(pipeId) : null;
+
 // Passive subscription to the module contract — never activates the session
-// (the app owns it); the overlay component reads its typed telemetry. Static
-// per window (session/frame/contract don't change), like ProjectionWindow.
+// (the app owns it); the overlay component reads its typed telemetry (needed
+// on the pipe path too — only the PIXELS ride the pipe). Static per window
+// (session/frame/contract don't change), like ProjectionWindow.
 const source =
   overlay && props.session && props.frame
     ? useSession(overlay.contract, props.session, { passive: true })
     : null;
-const payload = computed(() => source?.frame(props.frame).payload.value ?? null);
+const payload = computed(() =>
+  pipeFrame ? pipeFrame.value : (source?.frame(props.frame).payload.value ?? null),
+);
+// Session-frame addressing only — a pipe payload has no {session, frame} home.
 const address = computed(() =>
-  source ? { session: props.session, frame: props.frame } : null,
+  source && !pipeId ? { session: props.session, frame: props.frame } : null,
 );
 </script>
 

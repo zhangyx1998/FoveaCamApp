@@ -64,7 +64,14 @@ const plusSign = (v: string) => (v.startsWith("-") ? v : "+" + v);
 
 // WS2 2b: open/close the tracking debug sub-window (annotation overlay on the
 // C stream), owned by this app window (cascade-closes on app close/switch).
-const toggleDebug = () => window.foveaBridge.toggleDebugWindow("tracking", "C");
+// A-32: the C pixels ride a native pipe now (the worker no longer posts a "C"
+// session frame), so the address is `pipe:<pipeId>` — same binding as the wide
+// view above (undistort pipe, raw-camera fallback), captured at toggle time.
+const toggleDebug = () => {
+  const pipe =
+    state.undistortPipe ?? (state.serials?.C ? `camera:${state.serials.C}` : null);
+  window.foveaBridge.toggleDebugWindow("tracking", pipe ? `pipe:${pipe}` : "C");
+};
 
 onMounted(() => {
   // Seed the stereo baseline from app config (single source for the geometry).
