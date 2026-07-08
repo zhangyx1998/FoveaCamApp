@@ -951,3 +951,41 @@ session.
   Round C) — needs display + cameras and planner acceptance of C-1/C-2
   first. Do not start.
   - Log:
+
+---
+
+## WS1 real-1e — modular per-stream converter threads (DESIGN-FIRST)
+
+Full design: `docs/refactor/proposals/converter-threads.md` (read it fully).
+User directive (2026-07-07): the format converter must be a modular reusable
+component; run on a dedicated thread attached to each stream's output; selected
+by a modifier on the stream/pipe request; producer threads idle when no pipe is
+open. Idle-when-no-pipe is FREE via the `Stream` base auto-park (confirmed) —
+do not hand-roll lifecycle. Model on `KcfTrackerStream` (the existing
+`TransformStream` free-running-thread template).
+
+- **B-18 — converter core (PLAN-FIRST; post a design sketch + questions before
+  building).** Owns: `convertFrame` extraction (single source of truth; retrofit
+  `Frame::view` to call it — this removes the `feedPipe`/`view` duplication that
+  caused the 12p stripe bug); `ConverterStream : TransformStream<Frame::Ptr,
+  ConvertedFrame::Ptr>` (target `PixelFormat` in ctor = the selector; reused
+  buffer; `ThreadMeter`); rework `attachCameraPipe`/`detachCameraPipe` to
+  create/hold a ConverterStream + a thin `Subscriber` that offers to the pipe's
+  `FrameSink`, keyed by pipeId; retire the inline-convert `CaptureSink`. Keep
+  `feedTestFrame` + `11-capture-pipe` (incl. the Mono12p regression) green.
+  DoD in the proposal. **Questions to raise:** `ConvertedFrame` shape (own type
+  vs reuse `Frame`); whether the Pipe subscriber lives in B (Aravis) or is C's
+  adapter; buffer-reuse ownership across the subscriber boundary.
+
+- **C-21 — pipe seam for the converter (PLAN-FIRST; coordinate the seam with
+  B-18).** Owns (`core/src/Pipe.cpp`, `core/include/Pipe.h`): the Pipe-side
+  subscriber adapter surface (ConverterStream output → `FrameSink::offer`);
+  confirm the request-modifier (`spec.pixelFormat` → target `PixelFormat`)
+  surfaces cleanly through advertise/connect; converter `ThreadMeter` fold-in to
+  `probeAll()` (or a sibling probe) so the profiler shows converter
+  rate/util/maxInterval/drops. Keep pipe idle-gating (refcount) coherent with
+  the converter auto-park (no double-gating surprises).
+
+- **A-25 — orchestrator wiring (small; after B-18/C-21 seam is ruled).** Thread
+  the target-format modifier through `advertiseCameraPipe` (already sets
+  `pixelFormat`); register the converter probe into `perfSnapshot.workloads`.
