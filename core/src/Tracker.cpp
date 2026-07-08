@@ -263,7 +263,12 @@ static Napi::Value snapshotToJs(Napi::Env env, const Meter::Snapshot &s) {
 class KcfTrackerObject
     : public CoreObject<KcfTrackerObject, KcfTrackerStream::Ptr> {
 public:
-  static inline const std::string name = "Tracker";
+  // Exported as `KcfTracker` (not `Tracker`): the module is already named
+  // `Tracker`, so a member named `Tracker` collides with the module name — the
+  // generated `dist/Tracker/index.mjs` would `import { Tracker }` AND
+  // `const { Tracker }`, a duplicate-declaration SyntaxError. `KcfTracker` also
+  // mirrors this class and reads distinctly from the low-level `KCF` primitive.
+  static inline const std::string name = "KcfTracker";
   static std::string describe(const KcfTrackerObject *) { return "KcfTracker"; }
 
   static Napi::Function Init(Napi::Env env) {

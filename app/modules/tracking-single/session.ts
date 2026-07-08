@@ -46,7 +46,7 @@ import {
   wrapPerspective,
   type Mat,
 } from "core/Vision";
-import { createTracker, type Tracker, type TrackerMeter } from "core/Tracker";
+import { createTracker, type KcfTracker, type TrackerMeter } from "core/Tracker";
 import { consumeTrackerResults } from "./tracker-consume";
 import { registerNativeProbe } from "@orchestrator/native-probes";
 import type { WorkloadSnapshot } from "@lib/orchestrator/stats";
@@ -90,7 +90,7 @@ export default function trackingSession(): ServerSession<typeof tracking> {
     // drop-stale) OFF the JS loop — the busy-drop / generation-staleness guard
     // is intrinsic to that thread. `tk` is created per activation; `armed` gates
     // JS-side publishing (there's no native disarm — release kills the thread).
-    let tk: Tracker | null = null;
+    let tk: KcfTracker | null = null;
     let armed = false;
     let lastGood: Point2d = { x: 0, y: 0 };
     // Latest commanded voltages, mirrored locally so the L/R fovea wrap can use
@@ -171,7 +171,7 @@ export default function trackingSession(): ServerSession<typeof tracking> {
     /** Consume the native tracker's result stream (its own C++ thread) into the
      *  session's target/kinematic/telemetry state. Ends when `tk.release()`
      *  closes the iterator; staleness/busy-drop is handled natively. */
-    function consumeTracker(t: Tracker): Promise<void> {
+    function consumeTracker(t: KcfTracker): Promise<void> {
       return consumeTrackerResults(t, {
         armed: () => armed,
         onFound: (bbox) => {

@@ -50,7 +50,7 @@ declare module "core/Tracker" {
    *  consumes the LATEST frame off the camera's shared `Arv::Stream`
    *  (latest-wins, drop-stale) and runs full-frame KCF off the JS loop; results
    *  arrive via async iteration. `arm(roi)` (re-)inits KCF on the next frame. */
-  export interface Tracker extends CoreObject<Tracker>, AsyncIterable<TrackResult> {
+  export interface KcfTracker extends CoreObject<KcfTracker>, AsyncIterable<TrackResult> {
     arm(roi: Rect): void;
     /** Snapshot the native meter (safe from the orchestrator thread). */
     probe(): TrackerMeter;
@@ -59,5 +59,5 @@ declare module "core/Tracker" {
   }
 
   /** Create a KCF tracker thread bound to `camera`'s shared stream (WS1 1d). */
-  export function createTracker(camera: Camera): Tracker;
+  export function createTracker(camera: Camera): KcfTracker;
 }

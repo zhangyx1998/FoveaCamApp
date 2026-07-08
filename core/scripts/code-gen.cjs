@@ -11,12 +11,16 @@ function mjs(k, m) {
         "// This source code is licensed under the MIT license.",
         "// You may find the full license in project root directory.",
         "// -------------------------------------------------------",
-        `import { ${k} } from "../index.mjs";`,
-        `export default ${k};`,
+        // Alias the namespace to a reserved local so a member whose name equals
+        // the module name (e.g. `Tracker.Tracker`) doesn't collide with the
+        // import binding below — `import { X }` + `const { X }` is a duplicate
+        // declaration and the module fails to load.
+        `import { ${k} as __ns } from "../index.mjs";`,
+        "export default __ns;",
         "export const {",
         ...named_exports,
         "    __origin__,",
-        `} = ${k};`,
+        "} = __ns;",
     ].join("\n");
 }
 
