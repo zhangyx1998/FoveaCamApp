@@ -21,7 +21,6 @@ import type { Role } from "@lib/camera-config";
 import type { PipeSpec } from "@lib/orchestrator/pipe-contract.js";
 import { nodeId } from "@lib/orchestrator/graph-contract.js";
 import { applyStoredConfig, cameraConfigPath, listCameraInfo } from "./camera.js";
-import { calibrateCameraClock } from "./clock-calibration.js";
 import { timeSpan } from "./diagnostics.js";
 import { read } from "./store-hub.js";
 
@@ -206,11 +205,12 @@ async function registerShared(camera: Camera): Promise<Shared> {
   await timeSpan("camera.applyStoredConfig", () => applyStoredConfig(camera), {
     serial: camera.serial,
   });
-  // Unified time (proposal §3): clock calibration hides inside acquisition —
-  // fire-and-forget (never blocks activation); consumers use toHostNs().
-  // Runs BEFORE any pipe gates on, so the pull fallback (if enabled) has the
-  // camera to itself.
-  void calibrateCameraClock(camera);
+  // Unified time (FINAL ruling 0): clock calibration is owned by the native
+  // hardware-owner THREAD (initial at device init + incremental drift) — the
+  // former JS latch auto-run here is GONE: two latch drivers interleaving
+  // corrupt each other's TimestampLatchValue reads, and the native mutex
+  // cannot see a JS-driven executeFeature sequence. The JS registry fills
+  // from the owner's pushed metrics (onClockMetrics callback slot).
   const s: Shared = {
     serial: camera.serial,
     camera,

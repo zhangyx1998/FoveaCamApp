@@ -10,16 +10,22 @@ Everything hardware-touching is RIG-GATED via docs/hardware/stage-f.md.
 
 ## Rulings (user, 2026-07-08)
 
-0. **(supersedes the boot-hidden design in §3) Calibration is C++-owned,
-   blocking, and explicit-into-main-thread; dt defaults to 0.** The
-   calibration primitive is a BLOCKING main-thread NAPI
-   (`camera.calibrateClock(n)`), mutually EXCLUSIVE with every other
-   calibration call (global mutex). It runs AUTOMATICALLY at device-node
-   initialization — as an explicit call from the JS device-owner init path
-   (registerShared), never hidden inside a native constructor — and the SAME
-   call is the mid-task drift-correction API; each run appends to the
-   stability ring (ageNs/driftPpm, owner-reported in the profiler's clocks
-   section) and atomically swaps the owner's dt. **Owner-applied dt:** every
+0. **(final form, structural revision 2026-07-08) The HARDWARE OWNER THREAD
+   owns calibration; metrics push through gated main-thread callbacks; dt
+   defaults to 0.** Initial time calibration runs on the device owner's own
+   thread at device initialization; INCREMENTAL drift calibration re-runs
+   periodically on that same thread. Calibration runs are mutually EXCLUSIVE
+   (global mutex); each appends to the stability ring (ageNs/driftPpm) and
+   atomically swaps the owner's dt mid-task (in-flight frames keep their
+   stamp; never torn). **Metric reporting:** the owner thread reports by
+   invoking an OPTIONAL JS callback dispatched to the orchestrator main
+   thread; the callback slot has a C++ setter that flips a LOCK-FREE atomic
+   armed-flag so the thread OMITS the uv dispatch entirely when nothing is
+   registered — the same CallbackSlot primitive is the pattern for every
+   other native metric channel. Callback references are maintained by (set/
+   cleared from) the orchestrator main thread only, disarmed before env
+   teardown. A thin manual `calibrateClock()` may remain as an on-demand
+   nudge, but the owner thread is the lifecycle. **Owner-applied dt:** every
    timestamp a device owner surfaces outward already carries its calibrated
    offset (camera: applied at Frame creation → propagates to JS frames, SHM
    SlotHeaders, brick taps, KCF results; controller: applied at the FIN
