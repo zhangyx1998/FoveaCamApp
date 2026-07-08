@@ -14,6 +14,7 @@
 // the snapshot builder native-free (so its vitest keeps running) and lets the
 // profiler render a native producer/tracker stream identically to a JS one.
 
+import type { NodeReport } from "@lib/orchestrator/graph-contract.js";
 import type { WorkloadSnapshot } from "@lib/orchestrator/stats.js";
 
 /** A native probe batch — a set of workload snapshots keyed by name, read at
@@ -53,6 +54,53 @@ export function normalizeProbeRow(row: WorkloadSnapshot): WorkloadSnapshot {
       byReason: {},
     },
   };
+}
+
+// --- Universal node reports (unified-time-and-topology §6) -------------------
+//
+// Same seam, one level up: alongside the per-name workload probes, a source
+// can report whole `NodeReport` batches — id + kind + transport + ACTUAL input
+// connections + optional stats in the converged `WorkloadSnapshot` schema.
+// `buildTopology` merges these AFTER its compat adapters (a real report wins
+// by id over an adapter-synthesized node); the native `Topology.report()`
+// NAPI (proposal §7 P3) will register here, as will JS workers/sessions as
+// they migrate off `registerGraphWiring`.
+
+/** A node-report batch — the universal reporting shape, read at snapshot
+ *  time. Returns `[]` when nothing is live (no stale rows). */
+export type NodeReportSource = () => NodeReport[];
+
+const reportSources = new Set<NodeReportSource>();
+
+/** Register a node-report batch; returns a disposer (call on teardown). */
+export function registerNodeReports(source: NodeReportSource): () => void {
+  reportSources.add(source);
+  return () => reportSources.delete(source);
+}
+
+/** Concatenate every registered node-report batch — fed to `buildTopology`'s
+ *  `reports` dep. Same isolation contract as `nativeProbes()`: a throwing or
+ *  malformed source is skipped, never breaking the snapshot; stats rows are
+ *  coerced to the full `WorkloadSnapshot` schema on the way through. */
+export function nodeReports(): NodeReport[] {
+  const out: NodeReport[] = [];
+  for (const source of reportSources) {
+    try {
+      const batch = source();
+      if (!Array.isArray(batch)) continue;
+      for (const report of batch) {
+        if (!report || typeof report.id !== "string") continue;
+        out.push(
+          report.stats
+            ? { ...report, stats: normalizeProbeRow(report.stats) }
+            : report,
+        );
+      }
+    } catch {
+      // a reporting node must never break the perf snapshot
+    }
+  }
+  return out;
 }
 
 /** Merge every registered native probe batch — spliced into

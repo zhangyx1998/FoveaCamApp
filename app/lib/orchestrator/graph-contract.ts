@@ -27,6 +27,7 @@
 // carried forward); the default format is unsuffixed and lives in the type.
 
 import type { Dtype } from "../../../docs/schema/pixel-formats.js";
+import type { WorkloadSnapshot } from "./stats.js";
 
 /** What a stream carries — the typing harness's runtime tags. Frame streams
  *  are fully typed (format + container dtype); non-frame streams are tagged by
@@ -43,9 +44,44 @@ export type StreamType =
 export type StreamTransport =
   | "native" // C++ thread → C++ thread, in-process
   | "pipe" // SHM seqlock ring (readable cross-process)
+  | "worker" // JS worker_thread compute node (vision kernels)
   | "port" // worker_thread MessagePort
   | "channel" // orchestrator↔renderer session channel (frames/telemetry)
   | "sink"; // consumes only (renderer view, recorder file)
+
+/** The transport vocabulary of the universal reporting shape (unified-time-and-
+ *  topology §6) — a subset of `StreamTransport` ("channel" streams are not
+ *  self-reporting nodes; they surface as sinks). */
+export type NodeTransport = "pipe" | "native" | "worker" | "port" | "sink";
+
+/** UNIVERSAL node self-report (unified-time-and-topology §6) — ONE shape for
+ *  every node type: native bricks (`Topology.report()` NAPI, P3), JS workers
+ *  (the meterName machinery generalizes to this), session compositions.
+ *  This is the REPORTING shape; `GraphTopology` (nodes+edges) stays the SERVED
+ *  shape — `buildTopologyFromReports` derives edges MECHANICALLY from `inputs`
+ *  (each input = one edge INTO this node; wiring is owned by the consumer). */
+export type NodeReport = {
+  /** Path-like unique id (built via `nodeId`). */
+  id: string;
+  /** Brick kind: convert | undistort | fovea | kcf | kernel names | … */
+  kind: string;
+  transport: NodeTransport;
+  /** ACTUAL live input connections — the graph's only edge source. */
+  inputs: { from: string; port: string; type: StreamType }[];
+  output: StreamType | null;
+  /** Full meter snapshot (one schema, already converged). Absent = the
+   *  topology builder folds stats BY ID from the perfSnapshot workloads map. */
+  stats?: WorkloadSnapshot;
+  /** Composing owner (`win/<windowId>`) — ABSENT for shared resource bricks. */
+  owner?: string;
+  /** Reuse-safe identity generation (C-20). */
+  epoch?: number;
+  /** Pipe-transport extras: the live consumer refcount (aggregate consumer
+   *  sinks render until the compose protocol brings consumer identity) and the
+   *  EXACT `bytesTotal` accumulator (diffed across snapshots for MB/s). Only
+   *  meaningful when `transport === "pipe"`. */
+  pipe?: { consumers: number; bytesTotal: number };
+};
 
 /** Per-node meter badge — the SAME numbers the profiler's workload table shows
  *  (WorkloadSnapshot / native ThreadMeter probe), reduced to badge form.

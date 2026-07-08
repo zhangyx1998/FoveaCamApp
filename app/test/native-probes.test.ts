@@ -8,7 +8,13 @@
 import { describe, expect, it } from "vitest";
 import { Channel, topic, type FrameTopicStats } from "@lib/orchestrator/protocol";
 import { createEndpointPair } from "./fake-endpoint";
-import { registerNativeProbe, nativeProbes } from "@orchestrator/native-probes";
+import {
+  registerNativeProbe,
+  nativeProbes,
+  registerNodeReports,
+  nodeReports,
+} from "@orchestrator/native-probes";
+import type { NodeReport } from "@lib/orchestrator/graph-contract";
 import type { WorkloadSnapshot } from "@lib/orchestrator/stats";
 
 function probeSnap(name: string): WorkloadSnapshot {
@@ -72,6 +78,74 @@ describe("native-probes registry", () => {
       expect(row.drops).toEqual({ total: 4, ratePerSec: 2, byReason: {} });
       expect(row.window.uptimeMs).toBe(2000);
       expect((row as unknown as { targets: unknown[] }).targets).toHaveLength(1);
+    } finally {
+      dispose();
+    }
+  });
+});
+
+// Universal node reporting (unified-time-and-topology §6): the same seam one
+// level up — sources report whole `NodeReport` batches for `buildTopology`'s
+// `reports` dep, with the identical disposer + throw-isolation contract.
+describe("node-reports registry", () => {
+  const report = (id: string): NodeReport => ({
+    id,
+    kind: "kcf",
+    transport: "native",
+    inputs: [{ from: "camera/1", port: "in", type: { kind: "track" } }],
+    output: { kind: "track" },
+  });
+
+  it("concatenates registered batches and drops them on dispose", () => {
+    const a = registerNodeReports(() => [report("camera/1/kcf")]);
+    const b = registerNodeReports(() => [report("camera/2/kcf")]);
+    try {
+      expect(nodeReports().map((r) => r.id).sort()).toEqual([
+        "camera/1/kcf",
+        "camera/2/kcf",
+      ]);
+    } finally {
+      a();
+    }
+    expect(nodeReports().map((r) => r.id)).toEqual(["camera/2/kcf"]);
+    b();
+    expect(nodeReports()).toEqual([]);
+  });
+
+  it("isolates a throwing source and skips malformed rows/batches", () => {
+    const good = registerNodeReports(() => [report("ok")]);
+    const bad = registerNodeReports(() => {
+      throw new Error("report source blew up");
+    });
+    const junk = registerNodeReports(
+      () => [null, { kind: "no-id" }] as unknown as NodeReport[],
+    );
+    const notArray = registerNodeReports(() => ({}) as unknown as NodeReport[]);
+    try {
+      expect(nodeReports().map((r) => r.id)).toEqual(["ok"]);
+    } finally {
+      good();
+      bad();
+      junk();
+      notArray();
+    }
+  });
+
+  it("normalizes a legacy flat stats row riding a report (no window/drops)", () => {
+    const flat = {
+      name: "camera/1/kcf",
+      uptimeMs: 2000,
+      utilization: 0.5,
+      busyMs: 1000,
+      dropTotal: 4,
+      inputs: {},
+      outputs: { track: { count: 60, ratePerSec: 30 } },
+    } as unknown as WorkloadSnapshot;
+    const dispose = registerNodeReports(() => [{ ...report("camera/1/kcf"), stats: flat }]);
+    try {
+      const stats = nodeReports()[0]!.stats!;
+      expect(stats.drops).toEqual({ total: 4, ratePerSec: 2, byReason: {} });
+      expect(stats.window.uptimeMs).toBe(2000);
     } finally {
       dispose();
     }

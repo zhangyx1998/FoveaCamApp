@@ -11,11 +11,14 @@
 import { describe, expect, it, beforeEach } from "vitest";
 import {
   buildTopology,
+  buildTopologyFromReports,
   kindOfPipeId,
+  pipeListToReports,
   registerGraphWiring,
   resetTopologyStateForTest,
   type PipeListRow,
 } from "@orchestrator/graph-topology";
+import type { NodeReport } from "@lib/orchestrator/graph-contract";
 import type { WorkloadSnapshot } from "@lib/orchestrator/stats";
 
 const row = (
@@ -165,5 +168,169 @@ describe("buildTopology", () => {
   it("seq is monotonic across snapshots", () => {
     const deps = { listPipes: () => [], workloads: () => ({}) };
     expect(buildTopology(deps).seq).toBeLessThan(buildTopology(deps).seq);
+  });
+});
+
+// --- Universal node reporting (unified-time-and-topology §6) -----------------
+
+describe("buildTopologyFromReports", () => {
+  beforeEach(resetTopologyStateForTest);
+
+  it("reports-first: inputs become edges, stats fold by id when absent", () => {
+    const reports: NodeReport[] = [
+      {
+        id: "camera/9/kcf",
+        kind: "kcf",
+        transport: "native",
+        inputs: [{ from: "camera/9", port: "in", type: { kind: "track" } }],
+        output: { kind: "track" },
+      },
+      {
+        id: "win/scope/disparity",
+        kind: "disparity",
+        transport: "worker",
+        owner: "win/scope",
+        inputs: [
+          { from: "camera/9/kcf", port: "L", type: { kind: "track" } },
+          { from: "camera/9/kcf", port: "R", type: { kind: "track" } },
+        ],
+        output: { kind: "analysis", schema: "vergence" },
+      },
+    ];
+    const t = buildTopologyFromReports(reports, {
+      workloads: { "camera/9/kcf": load("camera/9/kcf", 0.3, 25) },
+      at: 1000,
+    });
+    // Nodes ARE the reports; the absent-stats report folded its badge by id.
+    expect(t.nodes.map((n) => n.id).sort()).toEqual(["camera/9/kcf", "win/scope/disparity"]);
+    expect(t.nodes.find((n) => n.id === "camera/9/kcf")!.stats?.ratePerSec).toBe(25);
+    expect(t.nodes.find((n) => n.kind === "disparity")!.owner).toBe("win/scope");
+    // Edges are the flattened inputs — one edge per (from, port), verbatim.
+    expect(
+      t.edges.map((e) => `${e.from}->${e.to}#${e.port}`).sort(),
+    ).toEqual([
+      "camera/9->camera/9/kcf#in",
+      "camera/9/kcf->win/scope/disparity#L",
+      "camera/9/kcf->win/scope/disparity#R",
+    ]);
+    expect(t.edges[0]!.type).toEqual({ kind: "track" });
+  });
+
+  it("matches the adapter path exactly: pipeListToReports reproduces buildTopology", () => {
+    const rows = [row("camera/123/convert"), row("camera/123/undistort/fovea/0", { epoch: 3 })];
+    const workloads = { "camera/123/convert": load("camera/123/convert", 0.95) };
+    const viaAdapter = buildTopology({ listPipes: () => rows, workloads: () => workloads });
+    resetTopologyStateForTest();
+    const viaReports = buildTopologyFromReports(pipeListToReports(rows), {
+      workloads,
+      at: viaAdapter.at,
+    });
+    expect(viaReports.nodes).toEqual(viaAdapter.nodes);
+    expect(viaReports.edges).toEqual(viaAdapter.edges);
+  });
+
+  it("pipe reports with consumers grow the aggregate sink + bytes-delta rate", () => {
+    const report = (bytesTotal: number): NodeReport => ({
+      id: "camera/1/convert",
+      kind: "convert",
+      transport: "pipe",
+      inputs: [],
+      output: { kind: "frame", pixelFormat: "BGRA8", dtype: "U8" },
+      epoch: 1,
+      pipe: { consumers: 2, bytesTotal },
+    });
+    buildTopologyFromReports([report(1000)], { workloads: {}, at: 1000 });
+    const t = buildTopologyFromReports([report(3000)], { workloads: {}, at: 2000 });
+    const sink = t.nodes.find((n) => n.kind === "view")!;
+    expect(sink.id).toBe("camera/1/convert/consumers");
+    const edge = t.edges.find((e) => e.to === sink.id)!;
+    expect(edge.consumers).toBe(2);
+    expect(edge.bytesPerSec).toBe(2000);
+  });
+
+  it("degrades on malformed reports (missing fields, bad inputs) — never throws", () => {
+    const garbage = [
+      null,
+      { id: 42 },
+      { id: "bare" }, // no kind/transport/inputs/output/stats
+      {
+        id: "camera/7/kcf",
+        kind: "kcf",
+        transport: "native",
+        output: null,
+        inputs: [null, { port: "x" }, { from: "camera/7", port: "in", type: { kind: "track" } }],
+      },
+    ] as unknown as NodeReport[];
+    const t = buildTopologyFromReports(garbage, { workloads: {}, at: 1000 });
+    const bare = t.nodes.find((n) => n.id === "bare")!;
+    expect(bare.output).toBeNull(); // defaulted, not thrown
+    expect(bare.transport).toBe("native");
+    // Only the well-formed input survived as an edge.
+    expect(t.edges).toHaveLength(1);
+    expect(t.edges[0]).toMatchObject({ from: "camera/7", to: "camera/7/kcf", port: "in" });
+  });
+});
+
+describe("buildTopology with real reports (deps.reports)", () => {
+  beforeEach(resetTopologyStateForTest);
+
+  it("a real report REPLACES the adapter-synthesized node of the same id", () => {
+    const t = buildTopology({
+      listPipes: () => [row("camera/1/convert")],
+      workloads: () => ({}),
+      reports: () => [
+        {
+          id: "camera/1/convert",
+          kind: "convert",
+          transport: "native", // post-P3: the brick reports itself
+          inputs: [{ from: "camera/1", port: "raw", type: { kind: "frame", pixelFormat: "BayerRG12p", dtype: "U16" } }],
+          output: { kind: "frame", pixelFormat: "BGRA8", dtype: "U8" },
+          epoch: 7,
+        },
+      ],
+    });
+    const convert = t.nodes.find((n) => n.id === "camera/1/convert")!;
+    expect(convert.transport).toBe("native"); // real report's fields won
+    expect(convert.epoch).toBe(7);
+    // The adapter's synthesized camera→convert edge is REPLACED by the
+    // report's actual input (port "raw"), not duplicated next to it.
+    const edges = t.edges.filter((e) => e.to === "camera/1/convert");
+    expect(edges).toHaveLength(1);
+    expect(edges[0]!.port).toBe("raw");
+    // The adapter-synthesized camera root itself still renders.
+    expect(t.nodes.some((n) => n.id === "camera/1")).toBe(true);
+  });
+
+  it("a throwing reports() dep degrades to the adapter-only graph", () => {
+    const t = buildTopology({
+      listPipes: () => [row("camera/1/convert")],
+      workloads: () => ({}),
+      reports: () => {
+        throw new Error("native Topology.report() blew up");
+      },
+    });
+    expect(t.nodes.some((n) => n.id === "camera/1/convert")).toBe(true);
+  });
+
+  it("wiring edges into pipe-derived nodes union in (same-layer merge)", () => {
+    const dispose = registerGraphWiring({
+      nodes: [],
+      edges: [
+        { from: "win/x/injector", to: "camera/1/convert", port: "aux", type: { kind: "track" } },
+      ],
+    });
+    try {
+      const t = buildTopology({
+        listPipes: () => [row("camera/1/convert")],
+        workloads: () => ({}),
+      });
+      // The pipe-derived node keeps its identity AND gains the wiring edge.
+      const convert = t.nodes.find((n) => n.id === "camera/1/convert")!;
+      expect(convert.transport).toBe("pipe");
+      const ports = t.edges.filter((e) => e.to === convert.id).map((e) => e.port).sort();
+      expect(ports).toEqual(["aux", "in"]);
+    } finally {
+      dispose();
+    }
   });
 });
