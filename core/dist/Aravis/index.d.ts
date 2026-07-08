@@ -104,6 +104,10 @@ declare module "core/Aravis" {
     grab(timeout?: number): Promise<Frame>;
 
     // Stream control
+    /** Shared frame stream view — created LAZILY on first read (and cached):
+     *  merely listing/opening cameras creates no native stream, and
+     *  `release()` cascades to it (the stream held the device claim past
+     *  release until GC — janitor rig find 2026-07-08). */
     readonly stream: Stream<Frame>;
   }
 

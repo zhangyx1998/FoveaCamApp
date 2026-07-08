@@ -72,6 +72,7 @@ public:
         {
             CORE_OBJECT_REGISTER(CameraObject, env),                   //
             INSTANCE_METHOD(CameraObject, grab),                       //
+            INSTANCE_GETTER(CameraObject, stream),                     //
             INSTANCE_GETTER(CameraObject, physical_id),                //
             INSTANCE_GETTER(CameraObject, device_id),                  //
             INSTANCE_GETTER(CameraObject, vendor),                     //
@@ -126,16 +127,47 @@ public:
     return obj->core()->tag;
   }
 
-  static void construct(const Napi::CallbackInfo &info, CameraObject *obj) {
-    auto stream = Arv::Stream::get(obj->core());
-    auto object = StreamObject<Arv::Stream>::Create(info.Env(), stream);
-    info.This().As<Napi::Object>().Set("stream", object);
+  // Cascade: releasing the camera also releases its lazily created stream
+  // view. The StreamObject holds a Stream::Ptr and the Stream holds the
+  // Camera::Ptr — without this, `camera.release()` kept the DEVICE claimed
+  // until GC collected the JS stream object (janitor rig find 2026-07-08:
+  // "RootReference of Arv::Stream destroyed with non-zero reference").
+  // Native-only (releaseNative), safe from finalizer/cleanup context.
+  static void destruct(CameraObject *obj) {
+    if (obj->stream_ref.IsEmpty())
+      return;
+    try {
+      auto *stream = StreamObject<Arv::Stream>::Unwrap(obj->stream_ref.Value());
+      if (stream)
+        stream->releaseNative();
+    } catch (...) {
+      // Best-effort — the stream object's own cleanup hook backstops teardown.
+    }
+    obj->stream_ref.Reset();
   }
 
 private:
   using Cameras = std::vector<Arv::Camera::Ptr>;
   static FN(list) {
     return AsyncTask<Cameras>::run(info.Env(), Arv::Camera::list);
+  }
+
+  // LAZY stream view (was eagerly attached in `construct`): merely listing
+  // cameras must not create an Arv::Stream per device — discovery-pass
+  // rejects, matchTriple extras, and the hardware janitor never touch
+  // `.stream`, and the eager object leaked past `camera.release()` (see
+  // `destruct` above). Cached so repeated reads return the same object.
+  Napi::Reference<Napi::Object> stream_ref;
+  GET(stream) {
+    try {
+      if (stream_ref.IsEmpty()) {
+        auto stream = Arv::Stream::get(core());
+        auto object = StreamObject<Arv::Stream>::Create(env, stream);
+        stream_ref = Napi::Persistent(object.As<Napi::Object>());
+      }
+      return stream_ref.Value();
+    }
+    JS_EXCEPT(env.Undefined())
   }
 
   FN(grab) {

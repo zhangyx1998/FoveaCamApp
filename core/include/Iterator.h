@@ -321,6 +321,11 @@ public:
   using Payload = typename S::Payload;
   using CoreObject<StreamObject<S, P>, P>::CoreObject;
   static inline const std::string name = "Stream<" + type_name<Payload>() + ">";
+
+  /** Native cascade seam: drop the wrapped core (what JS `release()` does),
+   *  callable from another CoreObject's `destruct` — including finalizer
+   *  context, where calling back into JS is forbidden. Idempotent. */
+  void releaseNative() { this->releaseCoreObject(); }
   static inline Napi::Function Init(Napi::Env env) {
     auto iterator = Napi::Symbol::WellKnown(env, "iterator");
     auto asyncIterator = Napi::Symbol::WellKnown(env, "asyncIterator");
