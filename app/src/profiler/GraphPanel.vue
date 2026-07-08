@@ -32,7 +32,7 @@ import {
   faRotateLeft,
 } from "@fortawesome/free-solid-svg-icons";
 import type { GraphTopology } from "@lib/orchestrator/graph-contract";
-import { membershipKey, toElements } from "./graph-view";
+import { membershipKey, toElements, type HoverDetail } from "./graph-view";
 import {
   GRAPH_HEIGHT_KEY,
   DEFAULT_GRAPH_HEIGHT,
@@ -281,9 +281,12 @@ function resetLayout(): void {
   });
 }
 
-// --- Edge hover detail + cursor feedback -------------------------------------
+// --- Hover detail card + cursor feedback --------------------------------------
 
-const hover = ref<{ text: string; x: number; y: number } | null>(null);
+// Labels stay minimal (node name / effective edge rate); the full metrics
+// render in this card on hover — structured title + label/value rows
+// (graph-view's HoverDetail), anchored above the hovered element.
+const hover = ref<{ detail: HoverDetail; x: number; y: number } | null>(null);
 
 // Cursor semantics over the canvas — each interaction gets its own cursor:
 // whitespace pans → "grab" ("grabbing" while a button is down), nodes drag →
@@ -317,25 +320,30 @@ onMounted(() => {
     dragged.set(evt.target.id(), { ...evt.target.position() });
   });
   // Hover feedback: the .hover overlay halo (see STYLE) on both element
-  // kinds; edges additionally show the flow-detail tooltip + pointer cursor.
+  // kinds + the detail card (node metrics / edge flow breakdown).
   cy.on("mouseover", "node", (evt) => {
     evt.target.addClass("hover");
     overNode = true;
     settleCursor();
+    const detail = evt.target.data("detail") as HoverDetail | undefined;
+    if (!detail) return;
+    const bb = evt.target.renderedBoundingBox();
+    hover.value = { detail, x: (bb.x1 + bb.x2) / 2, y: bb.y1 };
   });
   cy.on("mouseout", "node", (evt) => {
     evt.target.removeClass("hover");
     overNode = false;
     settleCursor();
+    hover.value = null;
   });
   cy.on("mouseover", "edge", (evt) => {
     evt.target.addClass("hover");
     overEdge = true;
     settleCursor();
-    const detail = evt.target.data("detail") as string | undefined;
+    const detail = evt.target.data("detail") as HoverDetail | undefined;
     if (!detail) return;
     const p = evt.target.renderedMidpoint();
-    hover.value = { text: detail, x: p.x, y: p.y };
+    hover.value = { detail, x: p.x, y: p.y };
   });
   cy.on("mouseout", "edge", (evt) => {
     evt.target.removeClass("hover");
@@ -343,6 +351,9 @@ onMounted(() => {
     settleCursor();
     hover.value = null;
   });
+  // The card's anchor goes stale the moment the scene moves under it.
+  cy.on("viewport", () => (hover.value = null));
+  cy.on("grab", "node", () => (hover.value = null));
   container.value?.addEventListener("wheel", onWheel, { passive: false });
   container.value?.addEventListener("pointerdown", onPointerDown);
   window.addEventListener("pointerup", onPointerUp);
@@ -402,10 +413,18 @@ onBeforeUnmount(() => {
     </div>
     <div
       v-if="hover"
-      class="edge-tooltip"
+      class="hover-card"
       :style="{ left: hover.x + 'px', top: hover.y + 'px' }"
     >
-      {{ hover.text }}
+      <div class="hover-title">{{ hover.detail.title }}</div>
+      <table>
+        <tbody>
+          <tr v-for="[k, v] in hover.detail.rows" :key="k">
+            <td class="k">{{ k }}</td>
+            <td class="v">{{ v }}</td>
+          </tr>
+        </tbody>
+      </table>
     </div>
     <div v-if="!topology || topology.nodes.length === 0" class="empty">
       No pipeline nodes yet — camera pipes and workload meters appear here while live.
@@ -479,19 +498,45 @@ onBeforeUnmount(() => {
     }
   }
 
-  .edge-tooltip {
+  .hover-card {
     position: absolute;
     transform: translate(-50%, calc(-100% - 8px));
     z-index: 3;
     pointer-events: none;
-    background: #16181b;
+    background: #16181bf2;
     border: 1px solid #2a2f36;
-    border-radius: 4px;
-    padding: 4px 8px;
+    border-radius: 5px;
+    padding: 6px 9px;
     font-size: 0.68rem;
     color: #c3cad2;
-    white-space: pre-line;
     max-width: 32rem;
+
+    .hover-title {
+      font-family: monospace;
+      color: #d8dde3;
+      white-space: nowrap;
+      margin-bottom: 3px;
+      padding-bottom: 3px;
+      border-bottom: 1px solid #23262b;
+    }
+
+    table {
+      border-collapse: collapse;
+      td {
+        padding: 1px 0;
+        vertical-align: baseline;
+        white-space: nowrap;
+      }
+      .k {
+        color: #7d8590;
+        padding-right: 1.2ch;
+        text-align: right;
+      }
+      .v {
+        font-family: monospace;
+        color: #c3cad2;
+      }
+    }
   }
 
   .empty {

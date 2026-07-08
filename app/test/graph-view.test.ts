@@ -10,9 +10,11 @@ import {
   edgeLabel,
   isDropping,
   membershipKey,
+  nodeDetail,
   nodeLabel,
   selectTopology,
   toElements,
+  type HoverDetail,
 } from "@src/profiler/graph-view";
 import type { GraphEdge } from "@lib/orchestrator/graph-contract";
 import type { WorkloadRow } from "@src/profiler/workload-view";
@@ -136,7 +138,7 @@ describe("membershipKey / toElements — layout stability", () => {
     expect(membershipKey(bumped)).not.toBe(membershipKey(deriveTopology([], PIPES, 5, 4000))); // epoch bump
   });
 
-  it("reduces to cytoscape elements with badge labels and skips dangling edges", () => {
+  it("reduces to cytoscape elements (name-only labels, metrics in the hover detail) and skips dangling edges", () => {
     const t = deriveTopology([row("camera/123/convert", { utilization: 0.97 })], PIPES, 1, 0);
     t.edges.push({ from: "camera/123", to: "ghost/node", port: "in", type: { kind: "track" } });
     const els = toElements(t);
@@ -145,14 +147,21 @@ describe("membershipKey / toElements — layout stability", () => {
     expect(els.filter((e) => e.group === "edges")).toHaveLength(2);
     const convert = els.find((e) => e.data.id === "camera/123/convert")!;
     expect(convert.classes).toBe("saturated");
-    expect(convert.data.label).toContain("97%");
-    expect(convert.data.label).toContain("55");
+    // Always-on label = name only; util/rate live in the hover card rows.
+    expect(convert.data.label).toBe("123/convert");
+    const detail = convert.data.detail as HoverDetail;
+    expect(detail.title).toBe("camera/123/convert");
+    expect(detail.rows).toContainEqual(["utilization", "97% — SATURATED"]);
+    expect(detail.rows).toContainEqual(["rate", "55.00 Hz"]);
   });
 
-  it("labels nodes name-first, stats only when metered", () => {
+  it("labels nodes name-only; unmetered hover detail still carries id + kind", () => {
     const t = deriveTopology([], PIPES, 1, 0);
     const camera = t.nodes.find((n) => n.id === "camera/123")!;
     expect(nodeLabel(camera)).toBe("camera/123");
+    const detail = nodeDetail(camera);
+    expect(detail.title).toBe("camera/123");
+    expect(detail.rows).toEqual([["kind", "camera"]]);
   });
 });
 
@@ -230,15 +239,24 @@ describe("Stage-2 source selection + served-shape rendering (A-36)", () => {
     // Consumer sink node renders with a compact 2-segment label.
     const sink = els.find((e) => e.data.id === "camera/123/convert/consumers")!;
     expect(sink.data.label).toBe("convert/consumers");
-    // The wired kcf node under win/ carries its saturation class + badges.
+    // The wired kcf node under win/ carries its saturation class; the
+    // metrics moved into the hover card.
     const kcf = els.find((e) => e.data.id === "win/tracking-single-1/kcf")!;
     expect(kcf.classes).toBe("saturated");
-    expect(kcf.data.label).toContain("95%");
-    // The consumer edge humanizes the (legacy-mirrored) tx flow and shows ×N.
+    expect(kcf.data.label).toBe("tracking-single-1/kcf");
+    expect((kcf.data.detail as HoverDetail).rows).toContainEqual([
+      "utilization",
+      "95% — SATURATED",
+    ]);
+    // The consumer edge label shows the effective rate only; the byte rate
+    // and consumer refcount live in the hover card.
     const edge = els.find(
       (e) => e.data.id === "edge:camera/123/convert->camera/123/convert/consumers#in",
     )!;
-    expect(edge.data.label).toBe("↑ 55.00 Hz · 55.00 MB/s\n×2");
+    expect(edge.data.label).toBe("55.00 Hz");
+    const detail = edge.data.detail as HoverDetail;
+    expect(detail.rows).toContainEqual(["tx", "55.00 Hz · 55.00 MB/s"]);
+    expect(detail.rows).toContainEqual(["consumers", "×2"]);
     // Membership key includes the pipe's epoch (re-advertise = re-layout).
     expect(membershipKey(served())).toContain("camera/123/convert#2");
   });
@@ -252,16 +270,22 @@ describe("edge flow labels (tx/rx/drop — 4732f64 contract)", () => {
     type: { kind: "frame", pixelFormat: "BGRA8", dtype: "U8" },
   };
 
-  it("renders humanized tx/rx lines from the NEW directional fields", () => {
-    const e: GraphEdge = {
+  it("labels the EFFECTIVE rate only: min(tx, rx), single direction when one is metered", () => {
+    const both: GraphEdge = {
       ...base,
       tx: { hz: 59.9, bytesPerSec: 377_000_000, maxIntervalMs: 25 },
       rx: { hz: 35.2 },
     };
-    expect(edgeLabel(e)).toBe("↑ 59.90 Hz · 377.00 MB/s\n↓ 35.20 Hz");
+    expect(edgeLabel(both)).toBe("35.20 Hz"); // min wins
+    const txOnly: GraphEdge = { ...base, tx: { hz: 60 } };
+    expect(edgeLabel(txOnly)).toBe("60.00 Hz");
+    const rxOnly: GraphEdge = { ...base, rx: { hz: 35.3 } };
+    expect(edgeLabel(rxOnly)).toBe("35.30 Hz");
+    const unmetered: GraphEdge = { ...base };
+    expect(edgeLabel(unmetered)).toBe("");
   });
 
-  it("shows the drop marker ONLY when lossy AND actually dropping", () => {
+  it("keeps drop semantics: isDropping only when lossy AND actually dropping; label stays min-rate", () => {
     const dropping: GraphEdge = {
       ...base,
       tx: { hz: 60 },
@@ -270,12 +294,11 @@ describe("edge flow labels (tx/rx/drop — 4732f64 contract)", () => {
       lossy: true,
     };
     expect(isDropping(dropping)).toBe(true);
-    expect(edgeLabel(dropping)).toBe("↑ 60.00 Hz\n↓ 35.30 Hz\n− 24.7/s");
+    expect(edgeLabel(dropping)).toBe("35.30 Hz"); // marker moved to class + hover
 
-    // Lossless link with a rate gap: no marker (drop semantics don't apply).
+    // Lossless link with a rate gap: drop semantics don't apply.
     const lossless: GraphEdge = { ...base, tx: { hz: 60 }, rx: { hz: 35 }, dropPerSec: 25 };
     expect(isDropping(lossless)).toBe(false);
-    expect(edgeLabel(lossless)).not.toContain("−");
 
     // Lossy but idle: quiet.
     const idle: GraphEdge = { ...base, tx: { hz: 60 }, lossy: true, dropPerSec: 0 };
@@ -284,25 +307,31 @@ describe("edge flow labels (tx/rx/drop — 4732f64 contract)", () => {
 
   it("falls back to the deprecated ratePerSec/bytesPerSec mirrors as tx-only", () => {
     const legacy: GraphEdge = { ...base, ratePerSec: 55, bytesPerSec: 55_000_000, consumers: 2 };
-    expect(edgeLabel(legacy)).toBe("↑ 55.00 Hz · 55.00 MB/s\n×2");
+    expect(edgeLabel(legacy)).toBe("55.00 Hz");
     const preferred: GraphEdge = { ...legacy, tx: { hz: 60 } };
-    expect(edgeLabel(preferred)).toBe("↑ 60.00 Hz\n×2"); // tx wins over mirrors
+    expect(edgeLabel(preferred)).toBe("60.00 Hz"); // tx wins over mirrors
   });
 
-  it("keeps maxIntervalMs out of the label but in the hover detail", () => {
+  it("structures the hover detail: directional rows, worst gaps, drops, consumers", () => {
     const e: GraphEdge = {
       ...base,
       tx: { hz: 59.9, bytesPerSec: 377_000_000, maxIntervalMs: 25 },
       rx: { hz: 35.2, maxIntervalMs: 112 },
       dropPerSec: 24.7,
       lossy: true,
+      consumers: 2,
     };
     expect(edgeLabel(e)).not.toContain("ms");
     const detail = edgeDetail(e);
-    expect(detail).toContain("camera/123/convert → win/t-1/kcf [in]");
-    expect(detail).toContain("tx 59.90 Hz · 377.00 MB/s · worst gap 25 ms");
-    expect(detail).toContain("rx 35.20 Hz · worst gap 112 ms");
-    expect(detail).toContain("drops 24.7/s (lossy latest-wins)");
+    expect(detail.title).toBe("camera/123/convert → win/t-1/kcf");
+    expect(detail.rows).toEqual([
+      ["port", "in"],
+      ["tx", "59.90 Hz · 377.00 MB/s"],
+      ["rx", "35.20 Hz"],
+      ["worst gap", "↑ 25 ms · ↓ 112 ms"],
+      ["drops", "24.7/s (lossy latest-wins)"],
+      ["consumers", "×2"],
+    ]);
   });
 
   it("toElements marks dropping edges with the warning class + detail data", () => {
@@ -311,7 +340,10 @@ describe("edge flow labels (tx/rx/drop — 4732f64 contract)", () => {
     const els = toElements(t);
     const edges = els.filter((e) => e.group === "edges");
     expect(edges[0].classes).toBe("dropping");
-    expect(edges[0].data.detail).toContain("drops 30.0/s");
+    expect((edges[0].data.detail as HoverDetail).rows).toContainEqual([
+      "drops",
+      "30.0/s (lossy latest-wins)",
+    ]);
     expect(edges[1].classes).toBe(""); // unmetered edge stays quiet
   });
 });

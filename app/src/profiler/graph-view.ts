@@ -217,21 +217,38 @@ export type GraphElement = {
 const fmtRate = (v: number): string =>
   v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(2);
 
-/** Node caption: name + badge lines (util% · rate, drops when nonzero) — the
- *  same numbers the workload table shows, reduced to label form. */
+/** Node caption — the short name ONLY (2 tail segments). Metrics moved to
+ *  the hover card (`nodeDetail`); the saturated red styling stays always-on
+ *  so the bottleneck still screams without hovering. */
 export function nodeLabel(node: GraphNode): string {
-  const name = node.id.split("/").slice(-2).join("/");
+  return node.id.split("/").slice(-2).join("/");
+}
+
+/** Structured hover card (title + label/value rows) — rendered as a small
+ *  table by the panel instead of a pre-line text blob. */
+export interface HoverDetail {
+  title: string;
+  rows: [label: string, value: string][];
+}
+
+/** Node hover card: full id (the label truncates to 2 segments) + the
+ *  workload numbers that used to crowd the always-on label. */
+export function nodeDetail(node: GraphNode): HoverDetail {
+  const rows: HoverDetail["rows"] = [["kind", node.kind]];
   const s = node.stats;
-  if (!s) return name;
-  const lines = [name];
-  const parts: string[] = [];
-  if (s.utilization !== undefined) parts.push(`${(s.utilization * 100).toFixed(0)}%`);
-  if (s.ratePerSec !== undefined) parts.push(`${fmtRate(s.ratePerSec)}/s`);
-  if (s.maxIntervalMs !== undefined && s.maxIntervalMs > 0)
-    parts.push(`≤${s.maxIntervalMs.toFixed(0)}ms`);
-  if (parts.length > 0) lines.push(parts.join(" · "));
-  if (s.dropsTotal) lines.push(`drops ${s.dropsTotal}`);
-  return lines.join("\n");
+  if (s) {
+    if (s.utilization !== undefined)
+      rows.push([
+        "utilization",
+        `${(s.utilization * 100).toFixed(0)}%${s.saturated ? " — SATURATED" : ""}`,
+      ]);
+    if (s.ratePerSec !== undefined) rows.push(["rate", humanHz(s.ratePerSec)]);
+    if (s.maxIntervalMs !== undefined && s.maxIntervalMs > 0)
+      rows.push(["worst gap", `${s.maxIntervalMs.toFixed(0)} ms`]);
+    if (s.dropsTotal)
+      rows.push(["drops", `${fmtRate(s.dropsPerSec ?? 0)}/s · ${s.dropsTotal} total`]);
+  }
+  return { title: node.id, rows };
 }
 
 function edgeId(e: GraphEdge): string {
@@ -254,48 +271,43 @@ export function isDropping(e: GraphEdge): boolean {
   return !!e.lossy && (e.dropPerSec ?? 0) > 0;
 }
 
-function flowLine(arrow: string, f: EdgeFlow | undefined): string | null {
-  if (!f) return null;
+/** Always-on edge caption — the EFFECTIVE rate only: min(tx, rx) when both
+ *  directions are metered (the slower side is what downstream actually
+ *  receives), the single metered direction otherwise. Everything else
+ *  (bytes/s, worst gap, drops, consumers) lives in the hover card; the
+ *  warning-red `edge.dropping` styling stays always-on. */
+export function edgeLabel(e: GraphEdge): string {
+  const tx = txOf(e)?.hz;
+  const rx = e.rx?.hz;
+  const rate = tx !== undefined && rx !== undefined ? Math.min(tx, rx) : (rx ?? tx);
+  return rate !== undefined ? humanHz(rate) : "";
+}
+
+function flowValue(f: EdgeFlow): string | null {
   const parts: string[] = [];
   if (f.hz !== undefined) parts.push(humanHz(f.hz));
   if (f.bytesPerSec !== undefined) parts.push(humanBytesPerSec(f.bytesPerSec));
-  return parts.length > 0 ? `${arrow} ${parts.join(" · ")}` : null;
+  return parts.length > 0 ? parts.join(" · ") : null;
 }
 
-/** Always-on edge caption — kept compact: one line per metered direction
- *  (humanized via stats.ts — raw numbers stay in the JSON snapshot), plus a
- *  warning-red drop marker (see `edge.dropping` styling in the panel) and the
- *  consumer refcount. `maxIntervalMs` lives in the hover detail instead. */
-export function edgeLabel(e: GraphEdge): string {
-  const lines = [flowLine("↑", txOf(e)), flowLine("↓", e.rx)].filter(
-    (l): l is string => l !== null,
-  );
-  const extras: string[] = [];
-  if (isDropping(e)) extras.push(`− ${fmtRate(e.dropPerSec!)}/s`);
-  if (e.consumers !== undefined) extras.push(`×${e.consumers}`);
-  if (extras.length > 0) lines.push(extras.join(" "));
-  return lines.join("\n");
-}
-
-/** Hover detail (rendered as a tooltip by the panel): full directional
- *  breakdown including the worst inter-arrival gap, which is too long for the
- *  always-on label. */
-export function edgeDetail(e: GraphEdge): string {
-  const lines = [`${e.from} → ${e.to} [${e.port}]`];
-  const dir = (name: string, f: EdgeFlow | undefined): void => {
-    if (!f) return;
-    const parts: string[] = [];
-    if (f.hz !== undefined) parts.push(humanHz(f.hz));
-    if (f.bytesPerSec !== undefined) parts.push(humanBytesPerSec(f.bytesPerSec));
-    if (f.maxIntervalMs !== undefined && f.maxIntervalMs > 0)
-      parts.push(`worst gap ${f.maxIntervalMs.toFixed(0)} ms`);
-    if (parts.length > 0) lines.push(`${name} ${parts.join(" · ")}`);
-  };
-  dir("tx", txOf(e));
-  dir("rx", e.rx);
-  if (isDropping(e)) lines.push(`drops ${fmtRate(e.dropPerSec!)}/s (lossy latest-wins)`);
-  if (e.consumers !== undefined) lines.push(`consumers ×${e.consumers}`);
-  return lines.join("\n");
+/** Edge hover card: full directional breakdown (rates + byte rates + worst
+ *  inter-arrival gaps), drop rate, consumer refcount. */
+export function edgeDetail(e: GraphEdge): HoverDetail {
+  const rows: HoverDetail["rows"] = [["port", e.port]];
+  const tx = txOf(e);
+  const rx = e.rx;
+  const txValue = tx && flowValue(tx);
+  if (txValue) rows.push(["tx", txValue]);
+  const rxValue = rx && flowValue(rx);
+  if (rxValue) rows.push(["rx", rxValue]);
+  const gaps: string[] = [];
+  if (tx?.maxIntervalMs) gaps.push(`↑ ${tx.maxIntervalMs.toFixed(0)} ms`);
+  if (rx?.maxIntervalMs) gaps.push(`↓ ${rx.maxIntervalMs.toFixed(0)} ms`);
+  if (gaps.length > 0) rows.push(["worst gap", gaps.join(" · ")]);
+  if (isDropping(e))
+    rows.push(["drops", `${fmtRate(e.dropPerSec!)}/s (lossy latest-wins)`]);
+  if (e.consumers !== undefined) rows.push(["consumers", `×${e.consumers}`]);
+  return { title: `${e.from} → ${e.to}`, rows };
 }
 
 /** Reduce a topology to cytoscape element definitions. Pure data — the panel
@@ -303,7 +315,7 @@ export function edgeDetail(e: GraphEdge): string {
 export function toElements(t: GraphTopology): GraphElement[] {
   const els: GraphElement[] = t.nodes.map((n) => ({
     group: "nodes",
-    data: { id: n.id, kind: n.kind, label: nodeLabel(n) },
+    data: { id: n.id, kind: n.kind, label: nodeLabel(n), detail: nodeDetail(n) },
     classes: n.stats?.saturated ? "saturated" : "",
   }));
   const known = new Set(t.nodes.map((n) => n.id));
