@@ -165,12 +165,105 @@ keeps every decision recoverable without polluting the developer surface.
 9. One commit per step (2/3/4+5 separable), planner verifies per step; the
    whole sequence is a no-op for runtime behavior.
 
-## Open questions (for the planner)
+## Open questions — RULED (planner, 2026-07-08)
 
-- `dev/` vs `contributing/` naming — `dev/` proposed (shorter; "contributing"
-  suggests external-contributor process we don't have).
-- Should `split-of-work.md` be archived as one file or split per-round? One
-  file proposed (it is cross-referenced by date+task id; splitting breaks
-  citations).
-- The stage-f.md item list needs a planner/user pass to confirm which
-  RIG-GATED items are still open at execution time.
+- `dev/` vs `contributing/` → **`dev/`** (research-rig repo, not an OSS flow).
+- `split-of-work.md` → **archived WHOLE** (append-log; per-round splitting
+  destroys the interleaved cross-lane narrative). Whole file + provenance
+  README.
+- Stage-F list → **confirmation sweep at execution**: grep RIG-GATED +
+  RIG-VERIFY across docs + recent commit messages when authoring
+  `hardware/stage-f.md`; that doc is what the user takes to the rig.
+
+## 5. Architecture-doc outlines (pre-drafted; authored at execution)
+
+Skeletons for the five A-relevant docs — section headers + content notes +
+source-of-truth blocks, so execution is mostly transcription. (B/C author
+`serial-protocol.md`, `recorder.md` internals, and the compose half of
+`stream-graph.md` per the §4.3 ownership split.)
+
+### architecture/processes.md
+> Source of truth: `app/electron/main.ts`, `app/orchestrator/index.ts`,
+> `app/electron/preload-*.ts`, `app/vite.config.ts`, `core/Addon.cpp`.
+1. **Process map** — Electron main · orchestrator `utilityProcess` (owns
+   `core`/hardware; the ONLY Aravis process — per-process camera exclusivity) ·
+   N renderer windows (core-free) · worker_threads (vision, recorder) ·
+   free-running native threads (capture sinks, converters, undistort, KCF).
+   One diagram.
+2. **Boundaries (the two greps)** — orchestrator-reachable code is Vue-free;
+   renderer is core-free (type-only imports allowed). Why: bundle discipline +
+   process ownership.
+3. **Ports & handshakes** — `orchestrator:connect` → `MessageChannelMain` pair;
+   channel tagging with `windowId`; `window:drain` / `window:closed` control
+   messages; store-hub attach.
+4. **Preload rules (V11 triplet)** — one-build-per-entry (no sibling chunks in
+   sandboxed preloads), CJS-as-`.cjs` (V11b), no `createRequire(import.meta)`
+   in preloads (V11c). Invariant ids retained — code comments cite them.
+5. **Build entries** — window HTML generated from the `@lib/windows` registry
+   (`foveaWindowEntries`); electron entries: main / orchestrator /
+   vision-worker; the externalization rule (`isExternal`, deps vs devDeps).
+
+### architecture/stream-graph.md
+> Source of truth: `app/lib/orchestrator/graph-contract.ts`,
+> `app/orchestrator/graph-topology.ts`, `app/lib/orchestrator/pipe-contract.ts`,
+> `core` Pipe/ConverterStream/UndistortStream, `app/orchestrator/vision-worker*`.
+1. **Model** — nodes with path-like ids = output stream ids (`nodeId` is the
+   single spelling authority); multi named inputs / one output; the StreamType
+   typing harness; `win/<windowId>/...` composed namespaces vs shared bricks.
+2. **Transports** — native / SHM pipe (seqlock ring, epoch reuse-safe ids,
+   dynamic resize) / worker MessagePort / session channel / sink.
+3. **Bricks** — camera source, converter (BGRA8 pipe), undistort (native remap
+   built at attach), fovea crop (dynamic), KCF, detector, vision kernels.
+   Physical-vs-id-nesting edge rule (fovea).
+4. **Consumption** — `usePipeFrame` (renderer), one-shot reads, worker
+   PipeInputs; consumer-gated production (park on zero refcount).
+5. **Observability** — `graphTopology()` riding `PerfSnapshot.graph`; meters
+   keyed by node id; the profiler graph panel (layout keyed on (id, epoch)
+   membership; stats-only refreshes never re-layout).
+6. **Composition protocol** (C authors) — compose/decompose, validation,
+   close-teardown via `hub.onWindowClosed`.
+
+### architecture/windows.md
+> Source of truth: `app/lib/windows.ts`, `app/electron/window-manager.ts`,
+> `app/electron/window-manifest.ts`, `app/src/windows/boot-entry.ts`.
+1. **Taxonomy** — the `WINDOWS` table: welcome/app/profiler/projection/viewer/
+   debug; singleton vs exclusive vs 0..N; the welcome rule; owner +
+   onOwnerClose cascade|survive; preload kind + sandbox per class.
+2. **Manager** — the spawn chokepoint, drain-aware app switching ("closed" =
+   session-idle-drained), the toggle primitive, viewer per-file dedupe.
+3. **Identity** — the `?win=` stable instance id: minting, URL threading,
+   reload/restore survival, channel tagging, the close-teardown signal.
+4. **State-in-URL** — `url-state.ts` conventions; what belongs in the URL.
+5. **Manifest restore** — dev-restart flow, `planFromManifest` invariants.
+6. **Entry generation** — registry-driven HTML + the `bootEntry` map
+   (gitignored `app/windows/*.html`).
+
+### architecture/metering.md
+> Source of truth: `app/orchestrator/metering.ts`, `@lib/orchestrator/stats.ts`,
+> `app/orchestrator/native-probes.ts`, `app/src/profiler/*`.
+1. **Contract** — meters observe, never gate (every handle method a safe no-op
+   post-dispose); registerWorkload / ingest / emit / drop / begin / end /
+   measure.
+2. **Snapshot schema** — `WorkloadSnapshot`, interval vs cumulative windows,
+   the max-interval ring (10×1 s bins), drop-reason buckets.
+3. **Native probes** — ThreadMeter → the same plain-data shape; the probe
+   registry (`registerNativeProbe`); out-of-loop probing.
+4. **Named meters** — `controller:<port>` serial packets, recorder/viewer,
+   pipe-id-keyed native meters (naming = node id where pipe-backed).
+5. **Profiler** — workload table (SATURATED ≥0.9 semantics), the graph panel,
+   snapshot export; how to read a bottleneck (the registry:* saturation case
+   study, one paragraph).
+
+### architecture/recorder.md (A drafts the shell; B owns format internals)
+> Source of truth: `app/orchestrator/recorder/*`,
+> `app/orchestrator/stream-writer.ts`, the viewer session +
+> `ViewerWindow.vue`, the Python sub-project.
+1. **Container** — `.fovea` = MCAP; channel/schema layout (the pinned
+   contract); frame + voltage + metadata binding
+   (`volt.source: fin-averaged | live`).
+2. **Write path** — worker thread, backpressure/drop accounting (metered).
+3. **Viewer** — one window per file, replay session, seek/decode.
+4. **Python** — reading `.fovea` offline; the schema-stability promise.
+
+Execution note: these five plus B/C's docs land in §4 step 3; each PR-sized,
+planner-reviewed per doc.
