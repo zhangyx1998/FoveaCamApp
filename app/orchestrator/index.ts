@@ -14,7 +14,10 @@
 // list, plus the two cross-cutting sessions (`system`, `controller`) that have
 // no single owning UI module. See docs/history/refactor/orchestrator.md §12.3 R1.
 
-import { Shm, Pipe, Aravis, Topology, cleanup } from "core";
+import { Shm, Pipe, Aravis, Topology, steadyNowNs, cleanup } from "core";
+import { onClockMetrics } from "core/Aravis";
+import { setHostClock } from "./time-align.js";
+import { wireClockMetrics } from "./clock-calibration.js";
 import {
   createShmFrameTransport,
   type ShmApi,
@@ -55,6 +58,15 @@ if (Number.isFinite(forkTs)) span("boot.forkToLoad", Date.now() - forkTs);
 
 const hub = new Hub();
 setFrameTransportFactory(() => createShmFrameTransport(Shm as ShmApi));
+
+// Unified time (FINAL ruling 0): the NATIVE steady clock is the single time
+// authority — every JS hostNowNs reading (mirror history, calibration
+// registry ages, homography feeder stamps) joins the owner-applied frame
+// domain. Then arm the clock-metrics push channel: the camera owner threads
+// calibrate autonomously (init + 30s drift) and their rows land in the JS
+// registry through this one gated callback.
+setHostClock(steadyNowNs);
+wireClockMetrics(onClockMetrics);
 
 // Forward process-wide diagnostics (registry sink-throw isolation, etc.) to
 // every connected renderer, so failures are visible without watching the

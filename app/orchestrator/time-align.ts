@@ -43,14 +43,29 @@ export interface ClockCalibration {
   driftPpm?: number;
 }
 
-export const hostNowNs = (): bigint => process.hrtime.bigint();
+// THE host clock. Default = hrtime (tests, pre-boot); the orchestrator boot
+// swaps in core's `steadyNowNs` (FINAL ruling 0: the NATIVE steady clock is
+// the single time authority — hrtime and libc++ steady_clock are not
+// guaranteed the same Darwin clock domain, and every owner-applied timestamp
+// lives in the native domain).
+let hostClock: () => bigint = () => process.hrtime.bigint();
+export const hostNowNs = (): bigint => hostClock();
+/** Boot-time delegation to the native authority (index.ts). Re-anchors the
+ *  wall-label pair — the old anchor's steady half would otherwise be in a
+ *  different clock domain than every later `hostNowNs()` reading. */
+export function setHostClock(clock: () => bigint): void {
+  hostClock = clock;
+  bootAnchor.hrtimeNs = clock();
+  bootAnchor.epochMs = Date.now();
+}
 
 /** Boot anchor pairing the steady origin with wall time — for LABELING only
- *  (exports, logs); never for measurement. */
-export const bootAnchor = Object.freeze({
+ *  (exports, logs); never for measurement. Re-anchored by `setHostClock`
+ *  when the native authority takes over. */
+export const bootAnchor = {
   hrtimeNs: hostNowNs(),
   epochMs: Date.now(),
-});
+};
 
 /** Wall-clock label for a host-ns instant (export/README timestamps). */
 export function hostNsToEpochMs(hostNs: bigint): number {
