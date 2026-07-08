@@ -4,7 +4,7 @@ This source code is licensed under the MIT license.
 You may find the full license in project root directory.
 --------------------------------------------------- -->
 <!--
-  SVG annotation canvas (docs/refactor/multi-window.md req. 5 / §4): a plain
+  SVG annotation canvas (docs/history/refactor/multi-window.md req. 5 / §4): a plain
   SVG layer stretched over the live preview. Annotations are slotted-in
   `<Annotation>` elements — one annotation per element, stable ids, x/y in
   percent of the preview area — so the USER can hand-position them by editing

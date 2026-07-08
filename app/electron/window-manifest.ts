@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Window manifest for the dev-mode full-restart refresh (docs/refactor/
+// Window manifest for the dev-mode full-restart refresh (docs/history/refactor/
 // multi-window.md req. 6 / §4): Ctrl/Cmd-Shift-R persists {class, landing
 // URL, bounds} for every open window, relaunches the whole app (main +
 // orchestrator), and startup consumes the manifest to restore the exact

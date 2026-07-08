@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// calibrate-drift session (docs/refactor/orchestrator.md §7.1 S1b): three
+// calibrate-drift session (docs/history/refactor/orchestrator.md §7.1 S1b): three
 // simultaneous `MarkerTracker`s (one per fovea + the wide camera) plus a
 // background visual-servo (`@orchestrator/marker-tracker`'s `startServo`)
 // that keeps the mirrors pointed at the tracked markers, drift-corrected.

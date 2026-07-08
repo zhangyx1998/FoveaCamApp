@@ -1,24 +1,19 @@
 # Hardware Verification Playbook
 
-> **⏸ PAUSED — todos cleared 2026-07-07 (refactor supersedes these surfaces).**
-> The 2026-07-07 HIL pass ran Pre-flight + PB2 and surfaced its findings
-> (`hil-findings.md`): tracking-single JS-loop saturation, the manage-cameras
-> per-frame-allocation freeze, two UI defects. Those findings drive the refactor
-> (`refactor-plan.md`), which rewrites the frame path, windowing, and firmware —
-> so the Stage A–E todos below are **cleared** (re-running them against
-> soon-to-change surfaces has low value). A **fresh HIL pass runs post-WS1**
-> against the new architecture. **Stage F/G (firmware v2 bench + live) remain the
-> live reference for WS4** — not cleared, just not yet reached (v2 flash gates
-> them). Original checklist preserved below for that reference and the
-> post-refactor re-run.
+> **The HIL pass template.** The refactor is complete (2026-07-08); the
+> per-stage TODO sets below predate it and are due a **regeneration against
+> the new architecture** at the next rig session — the stage STRUCTURE
+> (pre-flight → per-module passes → firmware bench → live) is the durable
+> part. The current itemized rig checklist lives in
+> [`../hardware/stage-f.md`](../hardware/stage-f.md); take both to the rig.
+> Historical findings from the 2026-07-07 pass:
+> `docs/history/refactor/hil-findings.md`.
 >
-> **Status (original):** Prepared in advance (2026-07-04) — execute when the
-> mechanical rig work completes. **Run stages in order; do not skip ahead** — each
-> stage's pass is the next stage's precondition, and a failure anywhere is
-> attributable only if the stages before it passed.
-> **Owner:** Yuxuan runs the rig; findings filed per stage (see "on failure"
-> lines) into [`orchestrator.md`](./orchestrator.md) §6 or
-> [`synced-capture.md`](./synced-capture.md) §9.
+> **Run stages in order; do not skip ahead** — each stage's pass is the next
+> stage's precondition, and a failure anywhere is attributable only if the
+> stages before it passed.
+> **Owner:** Yuxuan runs the rig; file findings per stage (see "on failure"
+> lines).
 > **Context:** everything landed since the first app run —
 > tracking/manual-control migrations, store-hub, RT1 fixes, perf substrate,
 > protocol v2, Stage 2 items as they land — is code-verified only (gates +
@@ -100,7 +95,7 @@ Round C). Cameras + a display are enough; no mirrors, no scope.
       a 12p format — preview stays live and correctly bright (not ~16×
       dark); switch back. (The debayer-noise A/B comparison is a
       separate, longer session — this is just the plumbing check.)
-- [ ] Archive the snapshot under `docs/refactor/baselines/<date>/`
+- [ ] Archive the snapshot under `docs/hardware/baselines/<date>/`
       and note the environment; hand to the planner → PB2 gets filed
       and the downscale-lever decision closes.
 - On failure: orchestrator.md §6 as **PB2-#**; use git revert for the
@@ -182,7 +177,7 @@ First-ever live run of orchestrator-side capture/record.
          (orchestrator `loopLag` must stay flat — the §1 claim);
       3. two windows on one camera → snapshot (the multi-window
          marginal-producer-cost datum: shm should be ≈ 0).
-      Store snapshots under `docs/refactor/baselines/<date>/` and commit.
+      Store snapshots under `docs/hardware/baselines/<date>/` and commit.
 - On failure: orchestrator.md §6, **RT-W#**.
 
 ## Stage F — firmware bench (synced-capture §4; needs scope/logic analyzer)

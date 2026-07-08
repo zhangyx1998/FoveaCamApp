@@ -5,7 +5,7 @@
 // -------------------------------------------------------
 //
 // Server-side capture, ported from `src/capture/index.ts`'s `Capture` class +
-// manual-control's `captureFoveaPair`/`normalizeFovea` (docs/refactor/
+// manual-control's `captureFoveaPair`/`normalizeFovea` (docs/history/refactor/
 // orchestrator.md roadmap item 6 — raw sensor frames never cross the process
 // boundary). Stacks/wraps/diffs raw L/R frames and slices the current
 // undistorted center view at full (16-bit BGRA) quality, held in-memory
@@ -106,7 +106,7 @@ export interface CaptureController {
   /** Resolves once any in-flight `run()` completes (immediately if idle).
    *  The session must await this before releasing camera leases — a capture
    *  in progress is still actively reading `lease.camera.stream` directly
-   *  (V1: docs/refactor/orchestrator.md §6, same bug class as C2's
+   *  (V1: docs/history/refactor/orchestrator.md §6, same bug class as C2's
    *  force-close-under-an-active-consumer). */
   waitIdle(): Promise<void>;
 }
@@ -202,7 +202,7 @@ export function createCapture(deps: CaptureDeps): CaptureController {
 
     // "left"/"right": fresh raw stack (independent consumers of the shared
     // camera stream — safe alongside the registry's own preview loop and any
-    // concurrent recording, see docs/refactor/orchestrator.md roadmap item 6).
+    // concurrent recording, see docs/history/refactor/orchestrator.md roadmap item 6).
     const [lStack, rStack] = await Promise.all([
       stack(leases.L.camera.stream, deps.capStack()),
       stack(leases.R.camera.stream, deps.capStack()),

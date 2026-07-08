@@ -6,11 +6,11 @@
 //
 // Server-side recording, ported from `src/record/index.ts`'s `Recording`
 // class + manual-control's `emitRecFrame`/three `recording.provide` raw
-// stream consumers (docs/refactor/orchestrator.md roadmap item 6). Three
+// stream consumers (docs/history/refactor/orchestrator.md roadmap item 6). Three
 // independent raw consumers of `leases.L/C/R.camera.stream` (safe alongside
 // the registry's own preview loop and a concurrent capture pass — see
 // `capture.ts`'s header) write to disk through the format-agnostic
-// `RecordingSink` facade (B-5, docs/refactor/recorder-container.md): the
+// `RecordingSink` facade (B-5, docs/history/refactor/recorder-container.md): the
 // `RECORDER_BACKEND` constant in `@orchestrator/recorder` selects the new
 // single-file `.fovea` (MCAP) container or the legacy `.stream`/`.meta`/
 // manifest dump (unchanged on disk — external decoder tooling depends on

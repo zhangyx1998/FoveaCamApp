@@ -29,7 +29,7 @@ const target = resolve(
     "electron"
 );
 
-// HMR boundary (docs/refactor/multi-window.md req. 8 / §4). The danger class
+// HMR boundary (docs/history/refactor/multi-window.md req. 8 / §4). The danger class
 // is stateful singletons and shared wire code: `lib/orchestrator/**` (Channel,
 // the module-level `connect()` channel promise, shm read pool, protocol types
 // compiled into BOTH renderer and orchestrator bundles), `lib/store.ts`, and
@@ -247,7 +247,7 @@ export default defineConfig(({ command }) => {
         resolve: { alias },
         build: {
             outDir: resolve(PROJECT_ROOT, ".dist", "renderer"),
-            // Multi-entry renderer (docs/refactor/multi-window.md req. 2):
+            // Multi-entry renderer (docs/history/refactor/multi-window.md req. 2):
             // one entry HTML per window class/app from the `@lib/windows`
             // catalog. The legacy single-window index.html was removed in
             // Stage 5 round 2 (A-10c) — every window is a windows/* entry.

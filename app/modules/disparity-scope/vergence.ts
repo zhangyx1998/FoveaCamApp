@@ -144,7 +144,7 @@ const GAUSS_SIGMA = 10;
  * reads the source and allocates a fresh buffer before this function's first
  * `await` — independently of the other eye's tick, then hand the pair to
  * {@link analyzeVergence} once the center tick arrives. See
- * docs/refactor/orchestrator.md §7.1 S1a.
+ * docs/history/refactor/orchestrator.md §7.1 S1a.
  */
 export async function getFoveaTile(f: Mat<Uint8Array>, size: Size) {
   return await resize(cvtColor(f, "RGBA2GRAY"), size);

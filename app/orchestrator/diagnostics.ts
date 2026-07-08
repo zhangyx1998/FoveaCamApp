@@ -9,7 +9,7 @@
 // otherwise fail silently into the utility process's stdio. `report()` always
 // logs locally; `onReport()` lets `index.ts` forward reports to every
 // connected renderer once, at boot, so failures are visible without watching
-// the orchestrator console. See docs/refactor/orchestrator.md §12.1 C7.
+// the orchestrator console. See docs/history/refactor/orchestrator.md §12.1 C7.
 //
 // `span()` is the S5 sibling: structured timing measurements (boot phases,
 // per-activation camera/calibration work, controller connect) instead of
@@ -40,7 +40,7 @@ export function guarded(scope: string, fn: () => void): void {
   }
 }
 
-/** A single structured timing measurement (docs/refactor/orchestrator.md §7.1 S5). */
+/** A single structured timing measurement (docs/history/refactor/orchestrator.md §7.1 S5). */
 export type Span = {
   name: string;
   ms: number;

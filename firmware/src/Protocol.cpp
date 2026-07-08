@@ -176,7 +176,7 @@ HANDLE_SET(System::Enable) {
   } else if (!payload.enable && Global::system_enabled) {
     // Disable system
     VERB("Disabling system");
-    // Open question (docs/refactor/synced-capture.md §8.3), resolved: streams
+    // Open question (docs/history/refactor/synced-capture.md §8.3), resolved: streams
     // do NOT survive disable. The MCU clock resets on the next enable (see
     // above), invalidating any host-side clock-delta calibration anyway, so
     // keeping stale stream targets around buys nothing; REJect in-flight and

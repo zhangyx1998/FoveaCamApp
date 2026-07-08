@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// State-in-URL helper (docs/refactor/multi-window.md req. 7 / §4): stateful
+// State-in-URL helper (docs/history/refactor/multi-window.md req. 7 / §4): stateful
 // windows expose internal state in their URL so a dev restart / manifest
 // restore lands back in the same internal state, not just the same window.
 // The orchestrator session stays authoritative — the URL is the *address* of

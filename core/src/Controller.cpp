@@ -44,7 +44,7 @@ static SymbolRegistry propNameAccessor;
 // Cached decoders for CMD_FRAME's asymmetric ACK/FIN payloads (FrameAccepted
 // / FrameResult), set once in Command::Init and used by DeviceObject::send
 // to override the request-encoder factory when decoding responses — see
-// docs/refactor/synced-capture.md §5/§9 (P3).
+// docs/history/refactor/synced-capture.md §5/§9 (P3).
 static Isolated<Napi::Reference<Napi::Function>> frameAcceptedFactory;
 static Isolated<Napi::Reference<Napi::Function>> frameResultFactory;
 
@@ -322,7 +322,7 @@ inline Napi::Array mirrorPositionToArray(
 // CameraMask <-> JS: a number (raw bitmask) or an array of camera-name
 // strings ("C"/"L"/"R"); undefined/omitted means "firmware default"
 // (CAM_L | CAM_R — C is REJected until it has a strobe cable, see
-// docs/refactor/synced-capture.md §2/§8).
+// docs/history/refactor/synced-capture.md §2/§8).
 inline uint8_t parseCameraMask(Napi::Value const &val) {
   if (val.IsUndefined() || val.IsNull())
     return 0;
@@ -542,7 +542,7 @@ static Napi::Object Init(Napi::Env env) {
 // Protocol v2 two-phase properties: ACK resolves `.accepted`, FIN resolves
 // the terminal value. Deliberately narrower than the plan text's "everything
 // but CMD_*" — CMD_STREAM is protocol-level single-phase (ACK/REJ only, no
-// FIN ever sent, see docs/refactor/synced-capture.md §3.2/§9); treating it as
+// FIN ever sent, see docs/history/refactor/synced-capture.md §3.2/§9); treating it as
 // two-phase here would leave every CMD_STREAM request's pending-map entry
 // stuck until the connection closes, since no FIN would ever arrive to erase
 // it. Gated additionally per-device by `DeviceObject::v2_capable` (P3.1a) —
@@ -672,7 +672,7 @@ public:
     }
   }
   // Rejects whichever phase(s) are still outstanding (REJ is terminal at
-  // either phase — see docs/refactor/synced-capture.md §3.1).
+  // either phase — see docs/history/refactor/synced-capture.md §3.1).
   inline void Reject(Napi::Value reason) {
     if (two_phase && !accepted_settled) {
       accepted_settled = true;
@@ -763,7 +763,7 @@ private:
     return __sequence__++;
   }
 
-  // Safe-by-default (P3.1a, docs/refactor/synced-capture.md §9.3): stays
+  // Safe-by-default (P3.1a, docs/history/refactor/synced-capture.md §9.3): stays
   // false — meaning every property, including CMD_ACTUATE/TRIGGER/FRAME,
   // resolves on ACK exactly like v1 firmware always behaved — until
   // verifyVersion() confirms firmware major >= Protocol::Version::Major.
@@ -807,7 +807,7 @@ private:
         auto pr = p->at(sequence);
         // Two-phase requests keep their pending-map entry across the ACK —
         // only FIN/REJ retire it (see PendingRequest::two_phase and
-        // docs/refactor/synced-capture.md §3.1/§5).
+        // docs/history/refactor/synced-capture.md §3.1/§5).
         bool retire = !(pr->two_phase && method == Method::ACK &&
                         property == pr->property);
         VERBOSE("trace rx seq=%u %s:%s matched=1 retire=%d pending=%s",
@@ -1017,7 +1017,7 @@ private:
     return send(sequence, property, factory, packet);
   }
 
-  // Protocol::Sequence == 0 fire-and-forget (docs/refactor/synced-capture.md
+  // Protocol::Sequence == 0 fire-and-forget (docs/history/refactor/synced-capture.md
   // §3.1): the firmware performs the SET but sends no ACK/FIN/REJ at all —
   // used for high-rate stream position updates (CMD_STREAM UPDATE, ~1kHz).
   // No pending-map entry, no promise; a write failure throws synchronously.
@@ -1057,7 +1057,7 @@ private:
     return env.Undefined();
   }
 
-  // P3.1a (docs/refactor/synced-capture.md §9.3): fetches SYS_VERSION and
+  // P3.1a (docs/history/refactor/synced-capture.md §9.3): fetches SYS_VERSION and
   // sets v2_capable = (firmware.major >= Protocol::Version::Major). Until
   // this resolves (or if it's never called), v2_capable stays false and
   // every property behaves single-phase — safe against v1 firmware, just

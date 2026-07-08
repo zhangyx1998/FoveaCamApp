@@ -74,7 +74,7 @@ export class FreqMeter extends RollingAverage {
 
 /**
  * Mean (EMA, same math as `RollingAverage`) + max, for perf-substrate
- * telemetry (docs/refactor/orchestrator.md §7.3) — e.g. event-loop lag,
+ * telemetry (docs/history/refactor/orchestrator.md §7.3) — e.g. event-loop lag,
  * control-path latency. `max` is a plain running max, not a decayed one:
  * decaying a max isn't mathematically coherent (it would just chase whatever
  * value arrives most recently under a multiplicative decay). Callers publish
@@ -122,7 +122,7 @@ export class RollingStats {
 }
 
 /**
- * Event-loop lag probe (docs/refactor/orchestrator.md §7.3 item 1) — the
+ * Event-loop lag probe (docs/history/refactor/orchestrator.md §7.3 item 1) — the
  * "own libuv loop" metric: a `setInterval(intervalMs)` that measures how much
  * *later* than expected each tick actually fires. Under load on the same
  * event loop (heavy sync work, GC pauses, a busy renderer's layout/paint),

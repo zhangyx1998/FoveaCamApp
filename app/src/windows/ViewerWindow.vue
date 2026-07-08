@@ -4,7 +4,7 @@ This source code is licensed under the MIT license.
 You may find the full license in project root directory.
 --------------------------------------------------- -->
 <!--
-  Recorder viewer window (A-11, docs/refactor/recorder-container.md §4):
+  Recorder viewer window (A-11, docs/history/refactor/recorder-container.md §4):
   playback UI for one `.fovea` file. Everything data-side comes from the
   PINNED `viewer` contract (`@lib/orchestrator/contracts` — C-8 implements
   the session): `open(path)` on mount, authoritative playback state in

@@ -4,7 +4,7 @@ This source code is licensed under the MIT license.
 You may find the full license in project root directory.
 --------------------------------------------------- -->
 <!--
-  Auto-vergence, migrated to the orchestrator (docs/refactor/orchestrator.md
+  Auto-vergence, migrated to the orchestrator (docs/history/refactor/orchestrator.md
   §7.1 S1a — the §1 flagship). This module is now a thin client over the
   `disparity-scope` session: the orchestrator leases the calibrated L/C/R
   triple, runs the template-match vergence PID and the actuation loop, and
@@ -83,7 +83,7 @@ const stroke = computed(() => Math.max(telemetry.size.width, telemetry.size.heig
 // --- tuning: every write replaces the whole `state.tuning` object (a nested
 // mutation like `state.tuning.x = v` would neither reach the server nor
 // re-render locally — `state.tuning` is a single customRef, not a deep-
-// reactive proxy). See docs/refactor/orchestrator.md §7.1 S1a.
+// reactive proxy). See docs/history/refactor/orchestrator.md §7.1 S1a.
 function setTuning<K extends keyof Tuning>(key: K, value: Tuning[K]): void {
   state.tuning = { ...state.tuning, [key]: value };
 }

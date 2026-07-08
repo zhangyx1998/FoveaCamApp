@@ -49,7 +49,7 @@ export const tracking = defineContract({
     bbox: null as Rect | null, // current tracker box (center-frame px)
     target: { x: 0, y: 0 } as Point2d, // current (predicted) target (center px)
     volt: { L: { x: 0, y: 0 }, R: { x: 0, y: 0 } } as { L: Pos; R: Pos },
-    // Control-path latency (perf substrate, docs/refactor/orchestrator.md
+    // Control-path latency (perf substrate, docs/history/refactor/orchestrator.md
     // §7.3 item 2), published at the same throttle as `volt`. `trackMs`:
     // onView entry -> tracker update done. `actuateMs`: c.actuate() round
     // trip. `frameAgeAtActuate`: time since the frame that produced the

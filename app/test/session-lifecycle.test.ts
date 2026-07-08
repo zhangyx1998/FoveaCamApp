@@ -1,5 +1,5 @@
 // Session lifecycle: subscribe -> activate, last-unsubscribe -> idle,
-// dispose() (docs/refactor/orchestrator.md §7.1 item 2, second target).
+// dispose() (docs/history/refactor/orchestrator.md §7.1 item 2, second target).
 // Exercises `ServerSession`/`defineSession` directly — no `Hub` needed,
 // since interest counting lives entirely on `ServerSession` itself; `Hub`
 // only routes the wire-level subscribe/unsubscribe topics to it.

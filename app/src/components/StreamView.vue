@@ -11,7 +11,7 @@ import type { FramePayload } from "@lib/orchestrator/protocol";
 import { Delegation } from "@src/capture";
 import { NoCheck } from "@lib/util/vue";
 
-// Payload-only (docs/refactor/orchestrator.md §7.1 S1c): every camera/stream
+// Payload-only (docs/history/refactor/orchestrator.md §7.1 S1c): every camera/stream
 // now lives orchestrator-side, so the renderer only ever displays a
 // `session.frame(...)` ref — the old direct-`Camera`/raw-`Frame` stream mode
 // this component also used to support has no remaining callers (grep-
@@ -104,7 +104,7 @@ const mat = ref<Mat | null>(null);
 const fps = new FreqMeter();
 const inspectorOn = computed(() => props.inspector || inspectorMode.value);
 
-// Profiling meters, fed from `FramePayload.meta` (docs/refactor/
+// Profiling meters, fed from `FramePayload.meta` (docs/history/refactor/
 // orchestrator.md roadmap item 3). `seq`/timestamps arrive only when the
 // producer/transport stamped them, so every reading here degrades gracefully
 // to "no data yet" rather than throwing.

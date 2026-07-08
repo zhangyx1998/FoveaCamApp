@@ -153,7 +153,7 @@ const mat = computed(() => {
 // kept as a real (not native-backed) implementation so the component stays
 // correct for a 1/3-channel Mat rather than silently regressing if one ever
 // shows up again. Replaces the old `core/Vision` `cvtColor` calls — the
-// last native runtime dependency in the renderer bundle (docs/refactor/
+// last native runtime dependency in the renderer bundle (docs/history/refactor/
 // orchestrator.md §7.1 Stage 3 T1).
 function expandToRGBA(src: Uint8Array, channels: 1 | 3): Uint8Array {
   const pixels = src.length / channels;

@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Session unit-test harness (docs/refactor/orchestrator.md §7.1 item 2) —
+// Session unit-test harness (docs/history/refactor/orchestrator.md §7.1 item 2) —
 // plain-TS tests, no Electron: real `Channel`/`ServerSession`/`Hub`
 // instances driven by a fake in-memory `Endpoint` pair (`test/
 // fake-endpoint.ts`), session `build()` functions exercised against

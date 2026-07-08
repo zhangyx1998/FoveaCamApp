@@ -5,7 +5,7 @@
 // -------------------------------------------------------
 //
 // Thin renderer facade over the manual-control session's recording commands
-// (docs/refactor/orchestrator.md roadmap item 6) — the orchestrator now owns
+// (docs/history/refactor/orchestrator.md roadmap item 6) — the orchestrator now owns
 // the raw stream writers (see `orchestrator/stream-writer.ts`,
 // `modules/manual-control/recording.ts`); this class just forwards
 // `start`/`stop` and mirrors `recording_active`/`recordingStreams` telemetry

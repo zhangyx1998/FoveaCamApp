@@ -27,7 +27,7 @@ export class SavePath {
   private __last_save_path = ref<string | null>(null);
   // `existsSync`/`homedir` aren't reachable from the renderer once
   // contextIsolation is on, so the default resolves asynchronously via
-  // `foveaBridge` (docs/refactor/orchestrator.md §7.1 T5) — starts empty,
+  // `foveaBridge` (docs/history/refactor/orchestrator.md §7.1 T5) — starts empty,
   // filled in shortly after construction (usually well under the time it
   // takes a user to open the save dialog).
   private __default_path = ref<string>("");

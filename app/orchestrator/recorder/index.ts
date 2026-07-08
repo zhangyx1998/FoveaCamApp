@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Production recorder facade (B-5; docs/refactor/recorder-container.md §2
+// Production recorder facade (B-5; docs/history/refactor/recorder-container.md §2
 // decision + §3). Recording sessions write a single `.fovea` container —
 // standard MCAP inside — through one worker_threads writer per topology key
 // (`singleFileTopology` today: exactly one worker, one file). The legacy

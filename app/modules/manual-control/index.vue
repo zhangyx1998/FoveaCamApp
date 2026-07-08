@@ -8,7 +8,7 @@ You may find the full license in project root directory.
   `manual-control` session: the orchestrator leases the calibrated L/C/R
   triple, runs the actuation loop against the shared controller, does the
   capture (stack/wrap/diff at full bit depth, held server-side until saved)
-  and recording (raw L/C/R streams to disk) — see `docs/refactor/
+  and recording (raw L/C/R streams to disk) — see `docs/history/refactor/
   orchestrator.md` roadmap items 5/6. The renderer only renders frames,
   overlays telemetry, drives parameters via state, and steers via commands —
   no `core`, camera, or calibration access.

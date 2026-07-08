@@ -191,7 +191,7 @@ export function getCameraInfo(camera?: Camera) {
 }
 
 // Per-fovea extrinsic calibration sample (moved here from the now-retired
-// `lib/camera.ts` — docs/refactor/orchestrator.md §7.1 S1c — since both
+// `lib/camera.ts` — docs/history/refactor/orchestrator.md §7.1 S1c — since both
 // `orchestrator/calibration.ts` and `modules/calibrate-extrinsic/session.ts`
 // need the type and this file is the dependency-free, both-processes home
 // for pure camera types).

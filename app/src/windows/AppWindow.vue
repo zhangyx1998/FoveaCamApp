@@ -4,7 +4,7 @@ This source code is licensed under the MIT license.
 You may find the full license in project root directory.
 --------------------------------------------------- -->
 <!--
-  Per-app window shell (docs/refactor/multi-window.md req. 2): one app per
+  Per-app window shell (docs/history/refactor/multi-window.md req. 2): one app per
   window, identity derived from the entry URL by app-window.ts and passed in
   as a prop. Replaces the old single-window App.vue module switcher — the
   title-bar chrome (RecordButton / capture overlay / RemoteCanvas / profiler

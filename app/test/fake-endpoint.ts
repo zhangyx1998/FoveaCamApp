@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// A fake in-memory `Endpoint` pair (docs/refactor/orchestrator.md §7.1 item
+// A fake in-memory `Endpoint` pair (docs/history/refactor/orchestrator.md §7.1 item
 // 2) — two `Endpoint`s wired to each other's `onMessage`, so a real
 // `Channel` on each side drives the other end-to-end with zero Electron/DOM/
 // native involvement. This is the exact mock point `protocol.ts` already

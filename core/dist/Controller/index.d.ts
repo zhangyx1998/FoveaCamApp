@@ -52,7 +52,7 @@ declare module "core/Controller" {
     // Bitmask (CameraName[] or a raw number); omitted/undefined means
     // the firmware default (CAM_L | CAM_R). "C" is REJected until the
     // center camera has a strobe cable — see
-    // docs/refactor/synced-capture.md §2/§8.
+    // docs/history/refactor/synced-capture.md §2/§8.
     cameras?: CameraName[] | number;
     pulse?: number; // trigger pulse width, in microseconds
   };
@@ -66,7 +66,7 @@ declare module "core/Controller" {
   /** CMD_FRAME FIN payload, latched at exposure start (strobe rising
    *  edge). Timestamps are MCU microseconds, as `bigint` (uint64,
    *  matching firmware's Global::time — see
-   *  docs/refactor/synced-capture.md §9 FW1). */
+   *  docs/history/refactor/synced-capture.md §9 FW1). */
   export type FrameResult = {
     stream: number;
     /** Firmware-monotonic capture id (1-based; 0 = none). Stable frame
@@ -83,7 +83,7 @@ declare module "core/Controller" {
   };
 
   /**
-   * Protocol v2 two-phase request (docs/refactor/synced-capture.md §3.1/§5):
+   * Protocol v2 two-phase request (docs/history/refactor/synced-capture.md §3.1/§5):
    * `accepted` resolves on ACK (queued/applied; rejects on REJ) independently
    * of the returned promise itself, which only resolves on FIN (or rejects on
    * a REJ at either phase).
@@ -165,7 +165,7 @@ declare module "core/Controller" {
     ): Promise<PacketInstance<T>>;
 
     /**
-     * Sequence == 0 fire-and-forget (docs/refactor/synced-capture.md
+     * Sequence == 0 fire-and-forget (docs/history/refactor/synced-capture.md
      * §3.1): the firmware performs the SET but sends no ACK/FIN/REJ at
      * all — no promise, no pending-map entry. Intended for high-rate
      * stream position updates (CMD_STREAM UPDATE, ~1kHz); throws
@@ -179,7 +179,7 @@ declare module "core/Controller" {
      * version *mismatch* — only on a transport/REJ failure — so old
      * firmware simply keeps v2Capable false (v1-compat: every property
      * resolves on ACK, matching pre-v2 behavior) rather than refusing
-     * to operate. See docs/refactor/synced-capture.md §9.3 (P3.1a).
+     * to operate. See docs/history/refactor/synced-capture.md §9.3 (P3.1a).
      */
     verifyVersion(): Promise<FirmwareVersion & { compatible: boolean }>;
     release(): void;

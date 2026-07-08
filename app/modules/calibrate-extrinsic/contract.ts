@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Typed boundary for the calibrate-extrinsic session (docs/refactor/
+// Typed boundary for the calibrate-extrinsic session (docs/history/refactor/
 // orchestrator.md §7.1 S1b) — the largest/highest-risk migration in the
 // roadmap: a 3-step wizard (CAL capture → FIN review/regression-fit → PRV
 // interactive test) building the per-fovea extrinsic dataset (marker

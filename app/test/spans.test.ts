@@ -1,4 +1,4 @@
-// Structured timing spans (docs/refactor/orchestrator.md §7.1 S5): the
+// Structured timing spans (docs/history/refactor/orchestrator.md §7.1 S5): the
 // `span()`/`spans()` ring in `orchestrator/diagnostics.ts`, `Hub.reportSpan`'s
 // live broadcast (same pattern as `reportError`), and `ServerSession`'s
 // generic "activate -> first frame" measurement.

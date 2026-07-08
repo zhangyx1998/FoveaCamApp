@@ -1,4 +1,4 @@
-// MCAP recorder writer (B-5, docs/refactor/recorder-container.md §2 + §3):
+// MCAP recorder writer (B-5, docs/history/refactor/recorder-container.md §2 + §3):
 // the fovea sink writes a single-file `.fovea` container (standard MCAP)
 // through a worker_threads worker — validated here by writing synthetic
 // frames and reading the file back with the real @mcap/core indexed reader

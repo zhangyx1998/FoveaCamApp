@@ -1,4 +1,4 @@
-// `@orchestrator/metering` — the Workload meter core (docs/refactor/
+// `@orchestrator/metering` — the Workload meter core (docs/history/refactor/
 // workload-metering.md §2). Covers the math (utilization, rates, drops) with
 // fake timers so results are exact, plus one integration-style pass through
 // a fake loop-like workload exercising the full ingest/begin/end/emit/drop

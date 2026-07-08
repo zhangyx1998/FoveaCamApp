@@ -1513,6 +1513,33 @@ A picks; must run fully local, no runtime CDN).**
     lane): multi-fovea's relay worker becomes deletable — the session
     consumes createMultiTracker's generator; steering/pose/lostTolerance
     stay JS; C's compose protocol can materialize `kcf-multi` refcounted.
+    **[committed c0ec45b by coordinator; verified with ×2 soak.]**
+
+- **B-26 — d.ts for the cast-consumed NAPIs (C's flag; lane close-out).**
+  - Log: **DONE, green.** Typed the B-23/B-24/B-25 surfaces in the two dist
+    declaration files (pathspec-exact, NO app-side edits — A mid
+    docs-restructure; cast removal is the coordinator's follow-up):
+    `core/dist/Aravis/index.d.ts` — `attachUndistortPipe(camera, pipeId,
+    calibration: CameraCalibration)` (plain persisted JSON, matching the
+    existing `Vision.Undistort` ctor typing), `detachUndistortPipe`,
+    `FoveaPipeOptions {rect, cal?}`, `attachFoveaPipe`, `setFoveaRect`,
+    `detachFoveaPipe`, `FoveaProbeSnapshot extends ProbeSnapshot
+    {activeWidth, activeHeight, originX, originY, undistorted}` +
+    `foveaProbeAll(): Record<string, FoveaProbeSnapshot>` — style + reuse
+    matched to the already-typed `undistortProbeAll`/`ProbeSnapshot`.
+    `core/dist/Tracker/index.d.ts` — `createTracker(camera, name?)` (the
+    B-24 node-id arg), `MultiTrackTarget`, `MultiTrackResult`,
+    `MultiTrackerTargetProbe`, `MultiTrackerMeter extends TrackerMeter
+    {targets, undistorted}`, `MultiKcfTracker extends CoreObject +
+    AsyncIterable<MultiTrackResult>` (arm(id, roi)/disarm(id)/probe/stall),
+    `CreateMultiTrackerOptions {cal?, name?}`,
+    `createMultiTracker(camera, options?)`. Doc comments carry the semantic
+    contracts (ok=false = lost, policy is the app's; bbox coordinate space by
+    cal mode; batch-every-frame; frame-bound origin fields).
+    **Gates:** `vue-tsc --noEmit` exit 0 (no conflict with the remaining app
+    casts) ✓; pathspec = the two d.ts files only ✓. Logged in the file's NEW
+    location (A's docs-restructure moved split-of-work.md to
+    docs/history/refactor/). Lane closed for the round.
 
 - **C-24 — graph model + composition protocol (PLAN-FIRST; publish the topology
   contract EARLY for A).** Path-like id scheme (+ migration of camera:/

@@ -4,7 +4,7 @@ This source code is licensed under the MIT license.
 You may find the full license in project root directory.
 --------------------------------------------------- -->
 <!--
-  Per-fovea drift measurement, migrated to the orchestrator (docs/refactor/
+  Per-fovea drift measurement, migrated to the orchestrator (docs/history/refactor/
   orchestrator.md §7.1 S1b). Thin client over the `calibrate-drift` session:
   the orchestrator runs three simultaneous marker trackers and a background
   visual servo; this view renders the three streams + derived/saved drift

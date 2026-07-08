@@ -1,4 +1,4 @@
-// StreamWriter worker handoff (docs/refactor/orchestrator.md §7.1 S3):
+// StreamWriter worker handoff (docs/history/refactor/orchestrator.md §7.1 S3):
 // writes keep the existing .stream/.meta format while disk I/O runs in a
 // worker_threads worker fed by transferred ArrayBuffers.
 

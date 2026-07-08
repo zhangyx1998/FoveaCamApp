@@ -1,4 +1,4 @@
-// Session drain support for the multi-window switch path (A-6, docs/refactor/
+// Session drain support for the multi-window switch path (A-6, docs/history/refactor/
 // multi-window.md §3): async `idle` settlement via `drained()` and the
 // `busy()` refusal probe — what the orchestrator's `window:drain` handler
 // composes into "closed = session-idle-drained, refused when mid-capture".

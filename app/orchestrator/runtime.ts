@@ -71,7 +71,7 @@ export class ServerSession<C extends Contract> {
   // Merged telemetry snapshot (patches applied on top of contract defaults) —
   // needed so a subscriber arriving after a one-shot publish (e.g. `ready`,
   // `list`, `connected`) still sees it, instead of waiting for the next patch
-  // that may never come. See docs/refactor/orchestrator.md §12.1 C3.
+  // that may never come. See docs/history/refactor/orchestrator.md §12.1 C3.
   private readonly telemetrySnapshot: Record<string, any>;
   // A-P13: current user-visible failure (e.g. a failed activation), seeded to
   // new subscribers like the telemetry snapshot so a failure that happened
@@ -80,7 +80,7 @@ export class ServerSession<C extends Contract> {
   private readonly channels = new Set<Channel>(); // attached (command-capable)
   private readonly subscribers = new Set<Channel>(); // observers (state/telemetry/frames)
   private readonly activeSubscribers = new Set<Channel>(); // activation interest
-  // V4 (docs/refactor/orchestrator.md §7.1): last payload per frame topic,
+  // V4 (docs/history/refactor/orchestrator.md §7.1): last payload per frame topic,
   // so a one-shot resource (e.g. a capture preview, published exactly once)
   // still reaches a channel that only opens its `frame(name)` ref *after*
   // the publish — otherwise it's silently dropped (no listener yet
@@ -88,7 +88,7 @@ export class ServerSession<C extends Contract> {
   // Bounded by clearing on idle/dispose, not by topic count — dynamic
   // per-capture channel names would otherwise accumulate forever.
   private readonly frameCache = new Map<string, FramePayload>();
-  // S5 (docs/refactor/orchestrator.md §7.1): timestamp of the most recent
+  // S5 (docs/history/refactor/orchestrator.md §7.1): timestamp of the most recent
   // activation (subscribers 0 -> 1), cleared once the first frame after it
   // publishes — measures "activate -> first frame" ("time to live stream")
   // generically for every session, without per-module instrumentation.
@@ -102,7 +102,7 @@ export class ServerSession<C extends Contract> {
   private activateFn?: () => void;
   private idleFn?: () => void | Promise<void>;
   private busyFn?: () => string | null;
-  // Latest idle settlement (multi-window drain, docs/refactor/
+  // Latest idle settlement (multi-window drain, docs/history/refactor/
   // multi-window.md §3): an async `idle` (e.g. manual-control's
   // capture/recording drain) returns a promise; `drained()` awaits it so
   // "closed" can mean session-idle-drained, not merely window-destroyed.
@@ -232,7 +232,7 @@ export class ServerSession<C extends Contract> {
   // `string & {}` allows dynamic channels (e.g. one per camera serial) while
   // keeping autocomplete for the contract's static frame names.
   //
-  // C10 (docs/refactor/orchestrator.md §7.1 item 3): only send to
+  // C10 (docs/history/refactor/orchestrator.md §7.1 item 3): only send to
   // subscribers that declared interest in *this* topic — a session
   // subscriber that never opened `frame(name)` for it shouldn't pay the
   // structured-clone + backpressure-gate cost for a topic it never reads.
@@ -364,7 +364,7 @@ function parseSubscriptionPayload(
  * `(key, value)` callback. `build` receives the already-constructed
  * `ServerSession` so handlers can close over `s.state`/`s.telemetry`/`s.frame`/
  * `s.error` — the same object `defineSession` returns. See
- * docs/refactor/orchestrator.md §12.3 R2.
+ * docs/history/refactor/orchestrator.md §12.3 R2.
  */
 export interface SessionDefinition<C extends Contract> {
   /** First renderer subscribed — (re)start session-owned resources. */

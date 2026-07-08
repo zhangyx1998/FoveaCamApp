@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Typed boundary for the calibrate-drift session (docs/refactor/
+// Typed boundary for the calibrate-drift session (docs/history/refactor/
 // orchestrator.md §7.1 S1b): measures and persists the small angular offset
 // between "where the extrinsic regression predicts the wide camera should
 // see the marker" and "where it actually appears," per fovea. Continuous

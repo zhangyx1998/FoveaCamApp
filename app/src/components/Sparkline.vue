@@ -4,7 +4,7 @@
  * You may find the full license in project root directory.
  --------------------------------------------------------- -->
 
-<!-- Minimal canvas line chart — no chart dependency, per docs/refactor/
+<!-- Minimal canvas line chart — no chart dependency, per docs/history/refactor/
      orchestrator.md §7.1 S4. `values` is oldest -> newest; `max` fixes the
      scale (auto-scales to the data's own max otherwise). -->
 

@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Typed boundary for the calibrate-distortion session (docs/refactor/
+// Typed boundary for the calibrate-distortion session (docs/history/refactor/
 // orchestrator.md §7.1 S1b) — despite the module name this is a projector-
 // alignment/homography validation tool, not lens-distortion calibration: it
 // visually verifies that a marker projected on a remote canvas re-projects

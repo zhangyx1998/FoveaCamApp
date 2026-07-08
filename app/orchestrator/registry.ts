@@ -106,7 +106,7 @@ const shared = new Map<string, Shared>();
 // empties immediately) so `releaseAll` can await a close that started just
 // before it was called — otherwise it can return while a native handle is
 // still mid-release, and a renderer racing to open the same camera finds it
-// still claimed. See docs/refactor/orchestrator.md §12.1 C1.
+// still claimed. See docs/history/refactor/orchestrator.md §12.1 C1.
 const closing = new Set<Promise<void>>();
 
 /** Serials with a live lease (preview running or not). */
@@ -160,7 +160,7 @@ export async function releaseAll(): Promise<void> {
 /**
  * Retry `attempt` with backoff until it returns a truthy result or the bounded
  * window elapses. Absorbs the renderer→orchestrator camera handoff race
- * (docs/refactor/orchestrator.md RT1): a camera mid-release by the *other*
+ * (docs/history/refactor/orchestrator.md RT1): a camera mid-release by the *other*
  * process briefly fails `arv_camera_new` even though it becomes available
  * again within a few seconds (Aravis/Camera exclusivity is per OS process —
  * see the hard rules in the refactor doc). At session activation, "not

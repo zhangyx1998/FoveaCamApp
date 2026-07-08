@@ -1,4 +1,4 @@
-// manual-control's capture queue + the V1 regression (docs/refactor/
+// manual-control's capture queue + the V1 regression (docs/history/refactor/
 // orchestrator.md §6/§7.1 item 2, fourth target): idle-during-a-busy-capture
 // must defer camera-lease release until the capture actually drains, not
 // release them out from under an in-flight `stack()` read of the raw

@@ -5,7 +5,7 @@ You may find the full license in project root directory.
 --------------------------------------------------- -->
 <!--
   Projector-alignment/homography validation, migrated to the orchestrator
-  (docs/refactor/orchestrator.md §7.1 S1b). Thin client over the
+  (docs/history/refactor/orchestrator.md §7.1 S1b). Thin client over the
   `calibrate-distortion` session: three marker trackers, a continuous
   "point mirrors at the tracked wide-angle marker" actuation loop, and a
   live per-fovea homography preview. `controller` session read directly for

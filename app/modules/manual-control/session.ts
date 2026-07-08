@@ -8,7 +8,7 @@
 // L/C/R triple + timer-paced actuation) minus the KCF tracker: the target is
 // always whatever `steer` last set, either a mouse-drag pixel (converted
 // server-side via `undistort.angular`) or a locally-held set-point's angle.
-// Capture and recording (docs/refactor/orchestrator.md roadmap item 6) are
+// Capture and recording (docs/history/refactor/orchestrator.md roadmap item 6) are
 // wired in separately — see `capture.ts`/`recording.ts`.
 //
 // C-22b step 2: the PROCESSED DISPLAY views (magnified slice, perspective-
@@ -169,7 +169,7 @@ export default function manualControlSession(
       }
     }
 
-    // --- capture (docs/refactor/orchestrator.md roadmap item 6) ----------
+    // --- capture (docs/history/refactor/orchestrator.md roadmap item 6) ----------
 
     // The center pipe the vision worker consumes (undistort:<serial>, or the
     // raw fallback) — capture's one-shot read rides this segment; it stays

@@ -4,7 +4,7 @@ This source code is licensed under the MIT license.
 You may find the full license in project root directory.
 --------------------------------------------------- -->
 <!--
-  Extrinsic calibration wizard, migrated to the orchestrator (docs/refactor/
+  Extrinsic calibration wizard, migrated to the orchestrator (docs/history/refactor/
   orchestrator.md §7.1 S1b — the largest migration in the roadmap). Thin
   client over the `calibrate-extrinsic` session: three marker trackers, a
   step-dependent actuation mode (CAL visual-servo / FIN static / PRV

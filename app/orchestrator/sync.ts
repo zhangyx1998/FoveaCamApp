@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Synced-capture host service (docs/refactor/synced-capture.md §6). Owns:
+// Synced-capture host service (docs/history/refactor/synced-capture.md §6). Owns:
 //  - camera trigger-mode config (L/R hardware-triggered, C stays free-run)
 //  - clock calibration (per-camera device-clock <-> MCU Global::time delta)
 //  - L/R pair matching by (calibrated) device timestamp
@@ -33,7 +33,7 @@ export interface ClockCalibration {
 }
 
 /**
- * One-shot clock calibration (docs/refactor/synced-capture.md §6): triggers
+ * One-shot clock calibration (docs/history/refactor/synced-capture.md §6): triggers
  * a single CMD_FRAME on `calibrationStream` and pairs its `tExposure` (MCU
  * time) against the L/R frames' own device timestamps (supplied by the
  * caller — see `DeviceTimestamped`) to compute each camera's delta.
@@ -83,7 +83,7 @@ export function matchesExposure(
 /**
  * Pairs the L and R frames (from each camera's own free-running arrival
  * queue/buffer) whose calibrated device timestamps fall within
- * `toleranceTicks` of `frame.tExposure` (docs/refactor/synced-capture.md §6
+ * `toleranceTicks` of `frame.tExposure` (docs/history/refactor/synced-capture.md §6
  * "Matching"). Returns null if either side has no candidate within
  * tolerance — the caller decides whether to keep waiting or drop the
  * trigger (e.g. once its own queue window has passed).
@@ -107,7 +107,7 @@ export function matchPair<T extends DeviceTimestamped>(
 
 /** GenICam names for a lease's trigger input + strobe output — camera-model
  *  specific. The defaults below are UNVERIFIED placeholders (bench work is
- *  hardware-gated, docs/refactor/synced-capture.md §4/§9); confirm against
+ *  hardware-gated, docs/history/refactor/synced-capture.md §4/§9); confirm against
  *  `lease.camera.trigger_source_options` before relying on them, and prefer
  *  passing explicit values once the real FLIR L/R wiring is known. */
 export interface TriggerLines {
@@ -121,7 +121,7 @@ export interface TriggerLines {
  * `lineSelector` as an ExposureActive output (strobe) via the generic
  * feature accessors (`core/lib/Aravis/Camera.h`'s `get/set/executeFeature`,
  * added for this). Runs through `lease.reconfigure()` so the shared preview
- * loop restarts cleanly (docs/refactor/synced-capture.md §6) — every
+ * loop restarts cleanly (docs/history/refactor/synced-capture.md §6) — every
  * subscriber (live view included) briefly pauses, matching the existing
  * pixel-format-change reconfigure pattern.
  */

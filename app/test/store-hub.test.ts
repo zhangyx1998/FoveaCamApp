@@ -1,4 +1,4 @@
-// Store-hub read/write/broadcast/echo-skip semantics (docs/refactor/
+// Store-hub read/write/broadcast/echo-skip semantics (docs/history/refactor/
 // orchestrator.md §7.1 item 2, first target in the risk-coverage order).
 // `./store.js` (the fs primitives) is mocked so these tests never touch
 // disk — an in-memory `Map` stands in for the filesystem.

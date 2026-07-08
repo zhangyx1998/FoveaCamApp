@@ -9,8 +9,8 @@
 // config.ts, calibrate-extrinsic) keeps working unchanged, but every read and
 // write now goes through the orchestrator's `store-hub` instead of touching
 // disk from the renderer directly. This retires the renderer/orchestrator
-// config dual-ownership hotspot (docs/refactor/orchestrator.md §4,
-// docs/refactor/async-reactive.md) — there is exactly one process writing
+// config dual-ownership hotspot (docs/history/refactor/orchestrator.md §4,
+// docs/history/refactor/async-reactive.md) — there is exactly one process writing
 // these files now, whichever window last edited it, and it's not this one.
 //
 // `open()` still returns a plain Vue-reactive object a module mutates
@@ -74,7 +74,7 @@ export default class Store {
       writePending = true;
       // `queueMicrotask`, not `process.nextTick` — bare `process` isn't
       // defined in an isolated renderer without `nodeIntegration`
-      // (docs/refactor/orchestrator.md §7.1 T5); microtask timing is
+      // (docs/history/refactor/orchestrator.md §7.1 T5); microtask timing is
       // equivalent for this debounce (both drain before the next macrotask).
       queueMicrotask(() => {
         writePending = false;

@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// calibrate-distortion session (docs/refactor/orchestrator.md §7.1 S1b):
+// calibrate-distortion session (docs/history/refactor/orchestrator.md §7.1 S1b):
 // projector-alignment/homography validation. Three `MarkerTracker`s (L/R with
 // subpixel `internal` refinement); the center tracker's observed angle
 // continuously points both mirrors there (via `startActuationLoop`).

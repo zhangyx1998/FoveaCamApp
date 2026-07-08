@@ -1,4 +1,4 @@
-// Main-process window state machine (A-6, docs/refactor/multi-window.md §3)
+// Main-process window state machine (A-6, docs/history/refactor/multi-window.md §3)
 // exercised with fakes: a fake `spawn` (no BrowserWindow) and a fake
 // session-drain hook. Covers the welcome rule, app exclusivity with
 // drain-aware switching, busy refusal, the profiler singleton, and manifest

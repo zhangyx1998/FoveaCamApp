@@ -1,4 +1,4 @@
-// disparity-scope's `stepVergence` control law (docs/refactor/orchestrator.md
+// disparity-scope's `stepVergence` control law (docs/history/refactor/orchestrator.md
 // §7.1 S1a — the §1 flagship migration). `analyzeVergence`/`getFoveaTile` are
 // native-Vision-backed (real template matching against real frames) and not
 // practically unit-testable here; `stepVergence` is the actual new risk

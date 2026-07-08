@@ -4,7 +4,7 @@ This source code is licensed under the MIT license.
 You may find the full license in project root directory.
 --------------------------------------------------- -->
 <!--
-  Welcome window (docs/refactor/multi-window.md req. 1 + 5): the launcher
+  Welcome window (docs/history/refactor/multi-window.md req. 1 + 5): the launcher
   shown whenever no app window is open. One button per app (each opens its
   own window via the main-process window manager), orchestrator connection
   status, and a live camera preview annotated with basic camera params

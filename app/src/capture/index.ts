@@ -5,7 +5,7 @@
 // -------------------------------------------------------
 //
 // Thin renderer facade over the manual-control session's capture commands
-// (docs/refactor/orchestrator.md roadmap item 6) — the orchestrator now does
+// (docs/history/refactor/orchestrator.md roadmap item 6) — the orchestrator now does
 // all the camera/vision work (stack/wrap/diff at full bit depth, held
 // server-side until save), this class just forwards `run`/`save`/`discard`
 // and keeps the save-path UI state (`SavePath`: sequence/current_path),

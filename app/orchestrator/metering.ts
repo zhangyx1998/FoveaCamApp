@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Workload metering core (Stage 5, docs/refactor/workload-metering.md).
+// Workload metering core (Stage 5, docs/history/refactor/workload-metering.md).
 // A common perf-reporting abstraction any loop-like unit in the orchestrator
 // registers once, so the native tracker/pipe threads' probes and the recorder
 // worker all become instances of the same schema instead of hand-grown

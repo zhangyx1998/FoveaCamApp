@@ -1,5 +1,5 @@
 // Channel backpressure gate: latest-wins coalescing, fack accounting, and
-// C10 per-frame-topic interest gating (docs/refactor/orchestrator.md §7.1
+// C10 per-frame-topic interest gating (docs/history/refactor/orchestrator.md §7.1
 // item 2, third target). Drives two real `Channel`s over a fake `Endpoint`
 // pair — no session/Hub involved, this is pure transport-layer behavior.
 

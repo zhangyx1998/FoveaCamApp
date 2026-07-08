@@ -6,7 +6,7 @@
 //
 // The `viewer` session contract — the PINNED CONTRACT shared by C-8 (the
 // data layer, `@orchestrator/sessions/viewer`) and A-11 (the viewer window
-// UI), spelled out verbatim in docs/refactor/split-of-work.md; the planner
+// UI), spelled out verbatim in docs/history/refactor/split-of-work.md; the planner
 // arbitrates any change. Kept in its own file (not `contracts.ts`) so the
 // two concurrent threads never edit the same file. Renderer-safe and
 // Vue-free, like every contract.

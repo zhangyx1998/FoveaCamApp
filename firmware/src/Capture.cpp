@@ -25,11 +25,11 @@ using Packet::Command::Timestamp;
 
 static constexpr uint8_t QUEUE_CAPACITY = 8;
 // Both trigger outputs Frame requests can drive today (C has no strobe
-// cable — camera-side size constraints, see docs/refactor/synced-capture.md
+// cable — camera-side size constraints, see docs/history/refactor/synced-capture.md
 // §2/§8).
 static constexpr uint8_t SUPPORTED_CAMERAS = CAM_L | CAM_R;
 // Fixed margin added to `pulse` before a strobe REJ-timeout fires. Not yet
-// bench-verified (docs/refactor/synced-capture.md §4) — revisit once a
+// bench-verified (docs/history/refactor/synced-capture.md §4) — revisit once a
 // logic analyzer trace of real strobe timing is available.
 static constexpr Timestamp STROBE_MARGIN_US = 5000;
 

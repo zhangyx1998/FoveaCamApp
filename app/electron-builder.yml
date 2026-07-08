@@ -1,7 +1,7 @@
 # electron-builder configuration (first landed with A-11 — there was no
 # packaging config before; `npm run build` ran electron-builder on pure
 # defaults). Kept minimal: the load-bearing part this round is
-# `fileAssociations` for `.fovea` (docs/refactor/recorder-container.md §4);
+# `fileAssociations` for `.fovea` (docs/history/refactor/recorder-container.md §4);
 # a packaged-build verification pass is deferred (runtime handling — macOS
 # `open-file`, second-instance argv, File→Open Recording… — landed with it).
 #

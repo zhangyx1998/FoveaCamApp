@@ -7,11 +7,11 @@
 // Store hub: the single write/broadcast path for every persisted config
 // document, whether the write originates from an orchestrator-internal
 // session (manage-cameras persisting a slider drag) or a renderer `Store`
-// client (docs/refactor/async-reactive.md). Wraps the fs primitives in
+// client (docs/history/refactor/async-reactive.md). Wraps the fs primitives in
 // `./store.ts` with a per-path in-memory cache and change notification, so
 // every reader — regardless of process or origin — sees the same value and
 // the same write order. This retires the config dual-ownership hotspot noted
-// in docs/refactor/orchestrator.md §4 (same bug class as the camera
+// in docs/history/refactor/orchestrator.md §4 (same bug class as the camera
 // registry: two independent writers racing the same on-disk file).
 //
 // `attachStore(ch)` wires one renderer `Channel` to this cache: `store:read`
@@ -41,7 +41,7 @@ const docs = new Map<string, Doc>();
 const keyOf = (segments: Path) =>
   (typeof segments === "string" ? [segments] : segments).join("/");
 
-// Perf substrate (docs/refactor/orchestrator.md §7.3 item 4) — cumulative
+// Perf substrate (docs/history/refactor/orchestrator.md §7.3 item 4) — cumulative
 // counts for `system.perfSnapshot`, regardless of whether the write came
 // from a renderer's `Store` client or an internal session.
 const counts = { writes: 0, updates: 0, clears: 0 };

@@ -32,7 +32,7 @@ export type Serializable =
   | ArrayBufferView;
 
 /**
- * Per-frame profiling metadata (transport-observability goal, docs/refactor/
+ * Per-frame profiling metadata (transport-observability goal, docs/history/refactor/
  * orchestrator.md roadmap item 3). Producer-set fields (`tCapture`,
  * `convertMs`) are optional — filled in by whichever session measured them
  * (currently the registry's shared preview loop only); `seq`/`tPublish` are
@@ -161,7 +161,7 @@ type Frame = { k: "frame"; t: string; f: FramePayload };
 // Frame acknowledgement — the receiver returns one per delivered frame so the
 // sender can keep at most one frame in flight per topic (latest-wins drop).
 type Fack = { k: "fack"; t: string };
-// C10 (docs/refactor/orchestrator.md §7.1 item 3): a client declares interest
+// C10 (docs/history/refactor/orchestrator.md §7.1 item 3): a client declares interest
 // in a frame topic once, when it first opens that topic's ref — the sender
 // only calls `sendFrame` for channels that declared interest, instead of
 // broadcasting every frame topic to every session subscriber regardless of
@@ -219,7 +219,7 @@ export class Channel {
   // C10: topics this channel's *peer* has declared interest in (frames sent
   // by this Channel are gated on it; frames received don't consult it).
   private readonly frameInterest = new Set<string>();
-  // V4 (docs/refactor/orchestrator.md §7.1): fired whenever a peer declares
+  // V4 (docs/history/refactor/orchestrator.md §7.1): fired whenever a peer declares
   // interest in a topic — `ServerSession.attach()` uses this to replay a
   // cached last-payload for one-shot frame resources (e.g. a capture
   // preview) to a channel that opens its ref *after* the frame was already
@@ -393,7 +393,7 @@ export class Channel {
     // Reject in-flight requests instead of leaving callers hanging forever —
     // without this, a dead orchestrator (crash/restart) strands every pending
     // `call()` (e.g. one awaited inside a suspense-mounted module). See
-    // docs/refactor/orchestrator.md §12.1 C5.
+    // docs/history/refactor/orchestrator.md §12.1 C5.
     for (const p of this.pending.values())
       p.reject(new Error("Channel closed"));
     this.pending.clear();

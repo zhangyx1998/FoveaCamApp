@@ -22,7 +22,7 @@ export type CameraInfo = {
 };
 
 /** Rolling mean/max pair, the shape every perf-substrate stat publishes as
- *  (docs/refactor/orchestrator.md §7.3). */
+ *  (docs/history/refactor/orchestrator.md §7.3). */
 export type Stat = { mean: number; max: number };
 
 /** A structured timing measurement (§7.1 S5) — boot phases, per-activation
@@ -32,7 +32,7 @@ export type Stat = { mean: number; max: number };
  *  is orchestrator-only. */
 export type Span = { name: string; ms: number; meta?: Record<string, unknown>; t: number };
 
-/** One workload counter reading (docs/refactor/workload-metering.md §2).
+/** One workload counter reading (docs/history/refactor/workload-metering.md §2).
  *  Mirrors `orchestrator/metering.ts`'s snapshot shapes; duplicated here (not
  *  imported) for the same reason as `Span` — `contracts.ts` is the
  *  renderer-safe boundary and `metering.ts` is orchestrator-only. */
@@ -68,7 +68,7 @@ export type PerfSnapshot = {
   /** Per-topic frame counters/timing, summed across every connected channel. */
   frames: Record<string, FrameTopicStats>;
   /** Per-name workload meters (native tracker/pipe thread probes, recorder
-   *  workers — docs/refactor/workload-metering.md). */
+   *  workers — docs/history/refactor/workload-metering.md). */
   workloads: Record<string, WorkloadSnapshot>;
   storeHub: { writes: number; updates: number; clears: number };
   /** Ring-buffer snapshot of recent boot/activation/connect timings (§7.1 S5). */
@@ -115,7 +115,7 @@ export type SystemContract = typeof system;
  * mount).
  */
 /** One live CMD_STREAM's telemetry row — the profiler's per-stream table
- *  (docs/refactor/orchestrator.md §7.1 S4 added scope). */
+ *  (docs/history/refactor/orchestrator.md §7.1 S4 added scope). */
 export type StreamStat = { id: number; hz: number; left: Pos; right: Pos };
 
 export const controller = defineContract({

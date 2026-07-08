@@ -89,7 +89,7 @@ export class StreamUpdateGate {
   }
 }
 
-/** A CMD_STREAM handle (docs/refactor/synced-capture.md §3.2/§6): a named,
+/** A CMD_STREAM handle (docs/history/refactor/synced-capture.md §3.2/§6): a named,
  *  continuously-updatable mirror-position target. `update()` is fire-and-
  *  forget (seq=0, ~1kHz-safe) — it never resolves/rejects, matching the
  *  protocol's design (the firmware sends no response for it at all). */
@@ -133,7 +133,7 @@ export class Controller {
   private _enabled = false;
   private _pos: { left: Pos; right: Pos } = origin;
   private readonly streamIds = new StreamIdPool();
-  // Live-stream telemetry (docs/refactor/orchestrator.md §7.1 S4 added
+  // Live-stream telemetry (docs/history/refactor/orchestrator.md §7.1 S4 added
   // scope): `count` accumulates between `streamSnapshot()` calls, which
   // reset it — the caller's sampling interval turns the raw count into a
   // rolling Hz. `left`/`right` are the last-sent target, for the
@@ -169,7 +169,7 @@ export class Controller {
     this.ready = (async () => {
       // Must run before anything two-phase-sensitive (createStream/frame,
       // and actuate/trigger's `.accepted`) — see P3.1a,
-      // docs/refactor/synced-capture.md §9.3. Never throws on a version
+      // docs/history/refactor/synced-capture.md §9.3. Never throws on a version
       // *mismatch* (only on a transport failure): old firmware just keeps
       // device.v2Capable false (v1-compat).
       await device.verifyVersion();
@@ -195,7 +195,7 @@ export class Controller {
   get v2Capable() {
     return this.device.v2Capable;
   }
-  /** Cumulative serial byte/packet counters (docs/refactor/orchestrator.md
+  /** Cumulative serial byte/packet counters (docs/history/refactor/orchestrator.md
    *  §7.1 S4 added scope) — the caller derives rates by diffing successive
    *  samples, same pattern as `streamSnapshot()`'s Hz. */
   get stats() {
@@ -303,7 +303,7 @@ export class Controller {
   }
 
   // --- Protocol v2: streams + synced-frame requests -----------------------
-  // docs/refactor/synced-capture.md §3.2/§6. Deliberately independent of
+  // docs/history/refactor/synced-capture.md §3.2/§6. Deliberately independent of
   // `this._pos`/`actuate()` — mixing Actuate writes with an active stream
   // leaves `Streams::snapshot()` reporting the stream's target rather than
   // the DAC's actual (Actuate-set) state (§9 FW5); callers should pick one.

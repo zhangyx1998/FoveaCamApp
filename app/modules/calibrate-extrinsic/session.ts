@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// calibrate-extrinsic session (docs/refactor/orchestrator.md §7.1 S1b) —
+// calibrate-extrinsic session (docs/history/refactor/orchestrator.md §7.1 S1b) —
 // the largest/highest-risk migration in the roadmap: a 3-step wizard
 // (CAL capture -> FIN review/regression-fit -> PRV interactive test)
 // building the per-fovea extrinsic dataset that `orchestrator/
@@ -234,7 +234,7 @@ export default function calibrateExtrinsicSession(): ServerSession<typeof calibr
           const [angle] = undistort.angular([p], true);
           // Angle -> volt (A2V), not the reverse — the original renderer's
           // preview.vue had this call backwards (`V2A.predict` on an angle
-          // input); found while porting, fixed here. See docs/refactor/
+          // input); found while porting, fixed here. See docs/history/refactor/
           // orchestrator.md §7.1 S1b for the full note.
           const l = fittedL.A2V.predict(angle);
           const r = fittedR.A2V.predict(angle);

@@ -25,7 +25,7 @@ const ZERO_RATE = {
   txPacketsPerSec: 0,
   rxPacketsPerSec: 0,
 };
-// Serial + per-stream probes (docs/refactor/orchestrator.md §7.1 S4 added
+// Serial + per-stream probes (docs/history/refactor/orchestrator.md §7.1 S4 added
 // scope) — 2 Hz matches the doc's own throttle note ("wire cost is a few
 // numbers x <=8 streams").
 const PROBE_INTERVAL_MS = 500;

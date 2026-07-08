@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Shared types for the MCAP recorder (docs/refactor/recorder-container.md
+// Shared types for the MCAP recorder (docs/history/refactor/recorder-container.md
 // §2 decision + §3): the orchestrator-side writer facade, the channel→writer
 // topology seam, and the main↔worker message protocol. Vue-free and
 // core-free — `writer.ts`/the worker never touch `core`; all Mat/PixelFormat

@@ -1,5 +1,5 @@
 // `retryUntil` (pure) + `matchTriple` (against a stubbed `core/Aravis` +
-// store) — docs/refactor/orchestrator.md §7.1 item 2, fifth/last target.
+// store) — docs/history/refactor/orchestrator.md §7.1 item 2, fifth/last target.
 // This is what closes RT1 (the renderer<->orchestrator camera handoff race):
 // a camera still mid-release by the other process is simply absent from
 // enumeration for a beat, and `retryUntil` is what turns that transient gap

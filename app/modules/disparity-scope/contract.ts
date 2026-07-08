@@ -72,7 +72,7 @@ export const disparity = defineContract({
     /** Target center within the wide frame (pixels). */
     target: ZERO,
     // Physical stereo baseline (mm) — same field/default as tracking-single
-    // and manual-control (docs/refactor/orchestrator.md §7.1 S1a); the old
+    // and manual-control (docs/history/refactor/orchestrator.md §7.1 S1a); the old
     // renderer-only `useAppConfig().baseline_distance_mm` isn't reachable
     // from the orchestrator, and those two modules already established the
     // simpler per-module-state precedent instead of a shared app config.
@@ -124,7 +124,7 @@ export const disparity = defineContract({
     /** Live PID integrator values (debug readout, matches the original
      *  renderer's "PID Debug" fieldset). */
     pids: { verge: 0, panX: 0, panY: 0, v_shift: 0 } as PidReadout,
-    // Control-path latency (perf substrate, docs/refactor/orchestrator.md
+    // Control-path latency (perf substrate, docs/history/refactor/orchestrator.md
     // §7.3 item 2), same shape/throttle as tracking-single/manual-control.
     perf: { actuateMs: { mean: 0, max: 0 } as Stat },
   },

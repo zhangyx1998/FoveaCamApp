@@ -63,7 +63,7 @@ export function systemSession(
           await releaseAll();
         },
         async perfSnapshot(): Promise<PerfSnapshot> {
-          // Workload meters (docs/refactor/workload-metering.md §2) — the JS
+          // Workload meters (docs/history/refactor/workload-metering.md §2) — the JS
           // meters from `@orchestrator/metering`, PLUS the native free-running
           // threads probed out-of-loop (WS1 real-1c/1d, A-24 Stage 3): C's SHM
           // pipe producers + B's KCF tracker, injected via `native-probes` so

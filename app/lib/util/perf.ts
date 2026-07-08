@@ -64,7 +64,7 @@ export class FreqMeter extends RollingAverage {
     }
 }
 
-// Global inspector toggle for the frame-transport OSD (docs/refactor/
+// Global inspector toggle for the frame-transport OSD (docs/history/refactor/
 // orchestrator.md roadmap item 3). Ctrl+Shift+I flips it in any renderer
 // window; `StreamView` shows the extra profiling lines when it (or its own
 // `inspector` prop) is on. Kept here rather than a new file since it's the

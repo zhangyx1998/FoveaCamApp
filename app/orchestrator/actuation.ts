@@ -9,7 +9,7 @@
 // controller-lifecycle bookkeeping: only take enable/disable responsibility
 // if *this* loop turned the controller on (so stopping it doesn't disable a
 // controller the user enabled manually via the title bar — see
-// docs/refactor/orchestrator.md §12.1 C9), and idle-wait rather than spin at
+// docs/history/refactor/orchestrator.md §12.1 C9), and idle-wait rather than spin at
 // the actuation interval when no controller is attached. Volt-telemetry
 // throttling is intentionally left to the caller (`onVolts` fires on every
 // successful actuate, unthrottled) — it's UI-specific and each session
@@ -27,7 +27,7 @@ export interface ActuationLoopOptions {
   targetVolts(): { l: Pos; r: Pos };
   /** Actuated volts, called on every successful tick (unthrottled).
    *  `actuateMs` is this tick's `c.actuate()` round-trip (perf substrate,
-   *  docs/refactor/orchestrator.md §7.3 item 2) — under the single-phase
+   *  docs/history/refactor/orchestrator.md §7.3 item 2) — under the single-phase
    *  controller semantics this is the whole wire-RTT-plus-completion time.
    *  On the A-30 fire-and-forget streaming path (v2 firmware) there is no
    *  round-trip, so `actuateMs` is ~0 (the `controller:<port>` A-29 packets/sec

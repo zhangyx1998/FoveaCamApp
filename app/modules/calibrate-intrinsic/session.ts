@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// calibrate-intrinsic session (docs/refactor/orchestrator.md §7.1 S1b): per-
+// calibrate-intrinsic session (docs/history/refactor/orchestrator.md §7.1 S1b): per-
 // camera intrinsic calibration, moved off the renderer. Unlike the fixed-
 // triple control-loop sessions, this one manages an arbitrary set of
 // connected cameras (like manage-cameras) and leases only the one currently

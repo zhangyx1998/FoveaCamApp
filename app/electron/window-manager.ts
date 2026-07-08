@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Main-process window state machine (docs/refactor/multi-window.md §3):
+// Main-process window state machine (docs/history/refactor/multi-window.md §3):
 // registry of open windows by class, the welcome rule, app exclusivity with
 // drain-aware switching, and manifest collection for the dev restart flow.
 // Subsumes the old ad-hoc `openProfilerWindow` handler.

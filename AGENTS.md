@@ -87,18 +87,13 @@ After making a code change, always state two things before moving on:
 
 ### Orchestrator (renderer ↔ utility process)
 
-An in-progress refactor (branch `refactor/decouple-orchestrator`) moves `core`
-ownership — camera acquisition, vision, control loops, hardware I/O, config — out
-of the renderer (whose event loop is bound to the Vue/Chromium render loop) into a
-dedicated Electron `utilityProcess` with its own libuv loop. The renderer becomes
-a thin I/O surface. Full plan + step log: [`docs/refactor/orchestrator.md`](./docs/refactor/orchestrator.md).
-
-**Refactor coders:** your dispatch/log interface is
-[`docs/refactor/split-of-work.md`](./docs/refactor/split-of-work.md) —
-find your role's active instructions there and log results under them.
-All other `docs/refactor/*.md` files are planner-only tracking: read
-them for design context when an instruction links to them, but do not
-edit them.
+`core` ownership — camera acquisition, vision, control loops, hardware I/O,
+config — lives in a dedicated Electron `utilityProcess` (its own libuv loop);
+the renderer is a thin I/O surface bound to the Vue/Chromium render loop.
+Architecture docs: [`docs/architecture/`](./docs/architecture/README.md)
+(processes, sessions, stream graph, windows, metering, recorder, serial
+protocol). The refactor that produced this architecture is archived under
+[`docs/history/refactor/`](./docs/history/refactor/README.md).
 
 - **`app/orchestrator/`** — the utility-process entry (`index.ts`, a
   registration list) + `Hub`/`ServerSession`/`defineSession` runtime, the
@@ -122,15 +117,13 @@ edit them.
   code (anything a `session.ts` imports, including shared `@lib`) **Vue-free** —
   `vue` is a devDependency, so importing it there bundles all of Vue into the
   utility process.
-- **Migration status (2026-07-05): complete.** Every feature module runs
-  through an orchestrator session; the renderer is `core`-free except one
-  disclosed exception (`src/graphics/Marker.vue` draws marker patterns via
-  `MarkerDetector` — see the refactor doc). `lib/camera.ts` and the old
-  renderer camera/handoff paths are deleted. Cameras remain exclusive per
-  OS process (registry leases inside the orchestrator are the only
-  camera access). Hardware/GUI verification is pending the rig — run
-  `docs/refactor/verification-playbook.md` stages in order when it
-  returns; until then treat all control paths as code-verified only.
+- Every feature module runs through an orchestrator session; the renderer is
+  `core`-free (type-only imports allowed). Cameras are exclusive per OS
+  process — registry leases inside the orchestrator are the only camera
+  access. Items awaiting hardware verification are tracked in
+  `docs/hardware/stage-f.md`; the HIL procedure is
+  `docs/dev/verification-playbook.md`. The developer gate suite is
+  `docs/dev/gates.md`.
 
 ### Core Addon Infrastructure
 

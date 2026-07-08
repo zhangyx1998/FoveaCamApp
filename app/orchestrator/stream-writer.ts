@@ -161,7 +161,7 @@ export default class StreamWriter {
     number,
     { resolve: () => void; reject: (error: Error) => void }
   >();
-  // Perf substrate (docs/refactor/workload-metering.md, "recorder worker" —
+  // Perf substrate (docs/history/refactor/workload-metering.md, "recorder worker" —
   // flagship first citizen): meters the main-thread side of the handoff
   // (frame prep + post, drops); the worker_threads worker itself is a
   // separate thread with no metering hook of its own this round.

@@ -1,4 +1,4 @@
-// V4 (docs/refactor/orchestrator.md §7.1/§6): one-shot frame topics (e.g. a
+// V4 (docs/history/refactor/orchestrator.md §7.1/§6): one-shot frame topics (e.g. a
 // capture preview, published exactly once) must still reach a channel that
 // opens its `frame(name)` ref *after* the publish — otherwise the payload is
 // silently dropped (no listener existed yet client-side, and under C10 the

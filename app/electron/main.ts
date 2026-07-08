@@ -41,7 +41,7 @@ const DATA = app.getPath("userData");
 // ├─┬ .dist/electron
 // │ ├── main.js / orchestrator.js / preload-*.cjs
 // ├─┬ .dist/renderer
-// │ └── windows/*.html      (multi-window entries, docs/refactor/multi-window.md;
+// │ └── windows/*.html      (multi-window entries, docs/history/refactor/multi-window.md;
 // │                          the legacy index.html was removed in round 2)
 //
 const DIST = path.join(DIR, "..");
@@ -161,7 +161,7 @@ function pushTo<K extends keyof PushChannels>(
   wc.send(channel, ...args);
 }
 
-// ---- Renderer bridge handlers (docs/refactor/orchestrator.md §7.1 T5) -----
+// ---- Renderer bridge handlers (docs/history/refactor/orchestrator.md §7.1 T5) -----
 // The renderer's `SavePath`/`SaveControls`/`RecordControls` used to call
 // `node:path`/`node:fs`/`node:os` directly — reachable only under the old
 // `nodeIntegration: true`. These mirror that logic here so `foveaBridge`
@@ -213,7 +213,7 @@ function startOrchestrator() {
       ...process.env,
       // The orchestrator reads/writes the same config store as the renderer.
       FOVEA_DATA_PATH: DATA,
-      // Boot-span baseline (docs/refactor/orchestrator.md §7.1 S5) — stamped
+      // Boot-span baseline (docs/history/refactor/orchestrator.md §7.1 S5) — stamped
       // as close to `fork()` as possible so `index.ts` can measure fork ->
       // first-useful-work timing.
       FOVEA_FORK_TS: String(Date.now()),
@@ -236,7 +236,7 @@ function startOrchestrator() {
     }
     // Every renderer's pending orchestrator requests would otherwise hang
     // forever (the crashed process can't reply) — notify them to reject
-    // in-flight calls. See docs/refactor/orchestrator.md §12.1 C5.
+    // in-flight calls. See docs/history/refactor/orchestrator.md §12.1 C5.
     for (const w of BrowserWindow.getAllWindows())
       pushTo(w.webContents, "orchestrator:down");
   });
@@ -282,7 +282,7 @@ ipcMain.on("orchestrator:connect" satisfies keyof SendChannels, (event) => {
   event.sender.postMessage("orchestrator:port", null, [port2]);
 });
 
-// ---- Window manager (docs/refactor/multi-window.md §3) --------------------
+// ---- Window manager (docs/history/refactor/multi-window.md §3) --------------------
 
 function entryURL(desc: WindowDescriptor): { url?: string; file?: string; search?: string } {
   // A manifest-restored window lands on its persisted URL (carries the state
@@ -375,7 +375,7 @@ function spawnWindow(desc: WindowDescriptor): ManagedWindow {
       if (IS_DEV) void devRestart();
     } else {
       // No-op stub — real semantics land with the recorder stage
-      // (docs/refactor/recorder-container.md).
+      // (docs/history/refactor/recorder-container.md).
       pushTo(win.webContents, "recorder:trigger");
     }
   });

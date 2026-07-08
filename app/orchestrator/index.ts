@@ -12,7 +12,7 @@
 // Each feature session is co-located with its module (`modules/X/session.ts` +
 // `contract.ts`, next to `index.vue`) — this file is just the registration
 // list, plus the two cross-cutting sessions (`system`, `controller`) that have
-// no single owning UI module. See docs/refactor/orchestrator.md §12.3 R1.
+// no single owning UI module. See docs/history/refactor/orchestrator.md §12.3 R1.
 
 import { Shm, Pipe, Aravis, cleanup } from "core";
 import {
@@ -41,7 +41,7 @@ import calibrateDriftSession from "@modules/calibrate-drift/session";
 import calibrateDistortionSession from "@modules/calibrate-distortion/session";
 import calibrateExtrinsicSession from "@modules/calibrate-extrinsic/session";
 
-// S5 (docs/refactor/orchestrator.md §7.1): boot phase timing. `FOVEA_FORK_TS`
+// S5 (docs/history/refactor/orchestrator.md §7.1): boot phase timing. `FOVEA_FORK_TS`
 // is stamped by `main.ts` right before `utilityProcess.fork()`; by the time
 // this line runs, every statically-imported module (including `core`'s
 // native addon, imported transitively above) has already been resolved —
@@ -58,7 +58,7 @@ setFrameTransportFactory(() => createShmFrameTransport(Shm as ShmApi));
 
 // Forward process-wide diagnostics (registry sink-throw isolation, etc.) to
 // every connected renderer, so failures are visible without watching the
-// orchestrator console. See docs/refactor/orchestrator.md §12.1 C7.
+// orchestrator console. See docs/history/refactor/orchestrator.md §12.1 C7.
 onReport((scope, message) => hub.reportError(scope, message));
 // Same pattern for structured timing spans (§7.1 S5) — live broadcast so a
 // future profiler window can render a timeline without polling.
@@ -252,7 +252,7 @@ hub.add(
 
 if (Number.isFinite(forkTs)) span("boot.sessionsRegistered", Date.now() - forkTs);
 
-// --- multi-window drain (docs/refactor/multi-window.md §3) -----------------
+// --- multi-window drain (docs/history/refactor/multi-window.md §3) -----------------
 // Main asks us to idle every camera-owning session before spawning the next
 // app window ("closed" = session-idle-drained, not window-destroyed). Refuse
 // — draining NOTHING — if any session reports busy (mid-capture/recording);

@@ -139,12 +139,12 @@ export function connect(): Promise<Channel> {
 // detects the exit reliably, so it broadcasts here instead of relying on
 // MessagePort close semantics across a process crash. Full transparent
 // reconnect (respawn + re-subscribe already-mounted sessions) is out of scope
-// for this fix — see docs/refactor/orchestrator.md §12.1 C5 / §12.3 R3.
+// for this fix — see docs/history/refactor/orchestrator.md §12.1 C5 / §12.3 R3.
 window.foveaBridge.onOrchestratorDown(() => {
   channel?.then((ch) => ch.close());
 });
 
-// Renderer-side event-loop lag probe (perf substrate, docs/refactor/
+// Renderer-side event-loop lag probe (perf substrate, docs/history/refactor/
 // orchestrator.md §7.3 item 1) — started once at module load, module-scope
 // singleton so every `StreamView` inspector overlay reads the same numbers
 // instead of each starting its own timer. Read directly (not via a Vue ref)

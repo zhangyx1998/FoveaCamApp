@@ -60,7 +60,7 @@ declare module "core/Aravis" {
     // Generic GenICam feature access — for anything without a dedicated
     // accessor above, e.g. configuring a strobe/line output as
     // ExposureActive for synced capture (LineSelector + LineMode +
-    // LineSource) — see docs/refactor/synced-capture.md §6.
+    // LineSource) — see docs/history/refactor/synced-capture.md §6.
     getFeature(name: string): string;
     /** Read an integer GenICam node (e.g. `Width`/`Height`) — `getFeature` uses
      *  `arv_camera_get_string` and throws on integer nodes. */

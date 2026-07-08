@@ -4,7 +4,7 @@
  * You may find the full license in project root directory.
  --------------------------------------------------------- -->
 
-<!-- The profiler window (docs/refactor/orchestrator.md §7.1 S4/V12) — a
+<!-- The profiler window (docs/history/refactor/orchestrator.md §7.1 S4/V12) — a
      second `BrowserWindow`, read-only over existing telemetry. `system` is the
      always-on session and stays active; controller/tracking/manual-control are
      passive observers so opening the profiler never starts actuation loops or
@@ -34,7 +34,7 @@ const ctrl = useSession(controller, "controller", { passive: true });
 const trk = useSession(tracking, "tracking", { passive: true });
 const mc = useSession(manualControl, "manual-control", { passive: true });
 
-// Live streams (docs/refactor/orchestrator.md §7.1 S4 added scope): render
+// Live streams (docs/history/refactor/orchestrator.md §7.1 S4 added scope): render
 // live streams only, and beyond ~8 collapse to an aggregate + top-N-by-Hz —
 // don't build a wall of rows once stream capacity grows (ST-64, synced-
 // capture thread).

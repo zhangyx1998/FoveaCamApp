@@ -5,7 +5,7 @@
 // -------------------------------------------------------
 //
 // The renderer's entire main-process surface once `contextIsolation: true` /
-// `nodeIntegration: false` land (docs/refactor/orchestrator.md §7.1 T5 —
+// `nodeIntegration: false` land (docs/history/refactor/orchestrator.md §7.1 T5 —
 // T2's spike). Every method here is a thin `ipcRenderer` wrapper exposed via
 // `contextBridge.exposeInMainWorld("foveaBridge", ...)` in `preload.ts`; the
 // orchestrator `MessagePort` itself can't cross a bridge function call
@@ -23,7 +23,7 @@ export interface FoveaBridge {
   openProfilerWindow(): void;
   /** Open (or switch to) an app window by catalog id (`@lib/windows`) — the
    *  main-process window manager enforces exclusivity + drain
-   *  (docs/refactor/multi-window.md §3). */
+   *  (docs/history/refactor/multi-window.md §3). */
   openAppWindow(appId: string): void;
   /** Open a projection window (single-stream viewer, multi-window.md req. 4)
    *  for one session's frame channel. 0..N instances; passive subscriber —

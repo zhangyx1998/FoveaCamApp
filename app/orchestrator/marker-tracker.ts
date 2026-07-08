@@ -6,7 +6,7 @@
 //
 // Orchestrator-side port of the renderer's `calibrate-extrinsic/tracker.ts`
 // (`Tracker` class + `actuate()`), shared by calibrate-extrinsic,
-// calibrate-distortion, and calibrate-drift (docs/refactor/orchestrator.md
+// calibrate-distortion, and calibrate-drift (docs/history/refactor/orchestrator.md
 // §7.1 S1b) — the original was cross-module-imported by all three, so it
 // lives here as orchestrator infra (like `actuation.ts`/`calibration.ts`)
 // rather than co-located in one of the three consumer modules.

@@ -161,7 +161,7 @@ public:
   /* Generic GenICam feature access — for features without a dedicated
    * accessor above, e.g. configuring a strobe/line output as ExposureActive
    * (LineSelector + LineMode + LineSource) for synced capture. See
-   * docs/refactor/synced-capture.md §6. */
+   * docs/history/refactor/synced-capture.md §6. */
   inline std::string get_feature(const char *name) const {
     auto ret = arv_camera_get_string(get(), name, &Error::error);
     Error::check("arv_camera_get_string");

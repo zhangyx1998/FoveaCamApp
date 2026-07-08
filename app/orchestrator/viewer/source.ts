@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// `.fovea` read layer for the viewer session (C-8; docs/refactor/
+// `.fovea` read layer for the viewer session (C-8; docs/history/refactor/
 // recorder-container.md §2b). One interface, two implementations:
 //
 // - **Indexed** (the normal path): `McapIndexedReader` over chunked async

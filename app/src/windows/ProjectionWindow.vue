@@ -4,7 +4,7 @@ This source code is licensed under the MIT license.
 You may find the full license in project root directory.
 --------------------------------------------------- -->
 <!--
-  Projection window (docs/refactor/multi-window.md req. 4 / §3): a dedicated
+  Projection window (docs/history/refactor/multi-window.md req. 4 / §3): a dedicated
   single-stream viewer, spawned from StreamView's expand button. Windowed by
   default, resizable to fullscreen via the shared chrome (the A-7 titlebar
   fix's stress test).

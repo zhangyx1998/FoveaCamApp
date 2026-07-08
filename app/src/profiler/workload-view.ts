@@ -5,7 +5,7 @@
 // -------------------------------------------------------
 //
 // Pure snapshot→view-model transform for the profiler's uniform workload
-// sections (docs/refactor/workload-metering.md §4). Takes the current and
+// sections (docs/history/refactor/workload-metering.md §4). Takes the current and
 // previous `perfSnapshot.workloads` records (the profiler already polls
 // `system.perfSnapshot` at 1 Hz and keeps the previous one for its channel
 // rate table — same inputs, no new wire messages) and derives *interval*

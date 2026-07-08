@@ -8,7 +8,7 @@
 // file). Mirrors `stream-writer.ts`'s architecture — worker_threads worker
 // fed by transferred ArrayBuffers, bounded queue, fail-fast on worker error
 // — but multiplexes N channels into a single file and is metered from day
-// one (docs/refactor/workload-metering.md; the `recorder:<name>` family
+// one (docs/history/refactor/workload-metering.md; the `recorder:<name>` family
 // `stream-writer.ts` started, extended here to one workload per container
 // file with per-channel ingest counters).
 //

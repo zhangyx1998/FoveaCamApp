@@ -13,7 +13,7 @@
 // (stack/wrap/diff raw frames server-side, preview to the renderer, save on
 // confirm) and recording (write raw L/C/R streams to disk), since neither can
 // run without the raw camera access this session already holds — see
-// docs/refactor/orchestrator.md roadmap items 5/6.
+// docs/history/refactor/orchestrator.md roadmap items 5/6.
 
 import { cmd, defineContract, type Serializable } from "@lib/orchestrator/protocol";
 import type { Point2d, Size } from "core/Geometry";
@@ -76,7 +76,7 @@ export const manualControl = defineContract({
     target: { x: 0, y: 0 } as Point2d, // current steered target (center px)
     target_angle: { x: 0, y: 0 } as Point2d, // ...and in radians (angular)
     volt: { L: { x: 0, y: 0 }, R: { x: 0, y: 0 } } as { L: Pos; R: Pos },
-    // Control-path latency (perf substrate, docs/refactor/orchestrator.md
+    // Control-path latency (perf substrate, docs/history/refactor/orchestrator.md
     // §7.3 item 2) — `c.actuate()` round-trip, published at the same
     // throttle as `volt`.
     perf: { actuateMs: { mean: 0, max: 0 } as Stat },

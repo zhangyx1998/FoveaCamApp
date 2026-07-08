@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Typed boundary for the calibrate-intrinsic session (docs/refactor/
+// Typed boundary for the calibrate-intrinsic session (docs/history/refactor/
 // orchestrator.md §7.1 S1b): per-camera intrinsic calibration (checkerboard
 // or ArUco/AprilTag marker), moved off the renderer. Unlike tracking-single/
 // manual-control/disparity-scope, this session manages an arbitrary set of

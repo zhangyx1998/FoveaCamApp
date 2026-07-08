@@ -5,7 +5,7 @@
 // -------------------------------------------------------
 //
 // Window/app catalog — the single source of truth for the multi-window
-// foundation (Stage 5, docs/refactor/multi-window.md). Imported by the
+// foundation (Stage 5, docs/history/refactor/multi-window.md). Imported by the
 // renderer (welcome launcher, per-app window shell), the Electron main
 // process (window manager entry wiring), vite.config.ts (multi-entry
 // renderer build), and the window-manager unit tests. Must stay Vue-free
@@ -19,7 +19,7 @@
 // counted for the welcome rule, survive their source app's close),
 // `viewer` (0..N recorder playback windows, ONE PER `.fovea` file —
 // non-exclusive, never counted for the welcome rule;
-// docs/refactor/recorder-container.md §4).
+// docs/history/refactor/recorder-container.md §4).
 
 export type WindowClass =
   | "welcome"
