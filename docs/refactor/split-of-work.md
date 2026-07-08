@@ -1442,6 +1442,78 @@ A picks; must run fully local, no runtime CDN).**
     (name param), `core/src/Tracker.cpp` (name arg), `core/src/MarkerDetector.cpp`
     (meter+probe+name), `core/Addon.cpp` (append-only). C-24 seam honored:
     probe keys + meter names = node ids; test uses the path-like spelling.
+
+- **B-25 — multi-target KCF → its own C++ thread (PLAN-FIRST; all 6 rulings
+  confirmed 2026-07-08).** The LAST on-loop vision (multi-fovea's
+  `runtime.onCenterFrame` JS KCF) as a native graph brick.
+  - Log: **DONE, green.**
+    **MultiKcfStream** (in `core/src/Tracker.cpp`) — ruled shape (c): ONE
+    thread, ONE node, ONE batched output stream. Up to MAX_TARGETS=8
+    independent `cv::TrackerKCF` instances updated sequentially per frame;
+    result = `{seq, deviceTimestamp, targets:[{id, ok, bbox|null, updateMs}]}`
+    (per-frame coherent; a batch EVERY frame while ≥1 armed — ruling 4).
+    Coordinate space (ii): with the plain persisted calibration JSON the
+    thread FUSES the undistort (convertFrame→Mono8 → one full-frame remap
+    shared by all N; attach-time maps) ⇒ bboxes in UNDISTORTED coordinates;
+    `cal` omitted = RAW mode (KcfTrackerStream parity; its migration path).
+    Per-target map-ROI window remap documented as KCF-INCOMPATIBLE (opaque
+    learned state pins the init coordinate frame); union-patch = guarded
+    optimization only. arm(id, roi)/disarm(id) via a Guarded pending-ops
+    queue (applied next frame; re-arm re-inits = recenter; the 9th NEW id is
+    dropped — JS owns the cap); lost policy stays JS (ok:false only, ruling
+    3). ONE aggregate ThreadMeter (name = the C-24 node id via `opts.name` —
+    `nodeId.kcfMulti(serial)` = `camera/<serial>/kcf-multi`, ONE stable id
+    regardless of cal mode per C's ruling; NEVER hardcoded natively; default
+    "tracker:multi") + per-target `{id, ok, bbox, updateMs, ageMs}` block in
+    probe() (ruling 5). NAPI: `Tracker.createMultiTracker(camera, {cal?,
+    name?})` → MultiKcfTracker CoreObject (arm/disarm/probe/stall/
+    asyncIterator), exported inside `exportTrackerNamespace` (no Addon.cpp
+    change needed).
+    **TWO REAL BUGS the test flushed out (both fixed):**
+    (1) `cv::TrackerKCF::init/update` THROW OpenCV errors on degenerate
+    patches (a bbox drifted to the frame edge — the fake ramp moves
+    1px/frame, so ANY long-running tracker eventually hits it, incl. on the
+    rig). Uncaught ⇒ the whole stream loop crashes. Fixed in BOTH trackers:
+    frame-bound clamp at init + try/catch → ok/found=false (the correct
+    "lost" signal). `KcfTrackerStream` had the same latent bug — 12's short
+    runs never drifted out.
+    (2) PRE-EXISTING `Sub::Queue` seam races (`core/include/Iterator.h`):
+    `close()` released the Guard ref inside its drain loop then re-evaluated
+    `ref->future_queue.empty()` in the while condition — Guard
+    use-after-RELEASE, thrown (std::terminate on the transform thread) the
+    moment ANY queue closed with a pending future (e.g. a stream crash while
+    the consumer awaits — exactly bug 1's fallout); and `push()` held
+    `auto &future = ...front()` DANGLING across `pop()`. Fixed: close()
+    drains all futures under ONE guard hold into a local queue, releases,
+    then dispatches; push() copies the Ptr before pop(). Every
+    async-iterator consumer (KCF/multi-KCF/detector/StreamObject) rides this
+    seam — the fix hardens all of them.
+    **Test** `core/test/21-multi-kcf.ts` (fake camera): batched 3-target
+    results (all ids per batch, one seq/deviceTimestamp, monotonic);
+    arm/disarm churn (re-arm recenters — init frame reports the armed roi;
+    disarm shrinks; MAX-8 cap enforced; disarm-all idles the stream — probe
+    targets empty + output count parks; re-arm resumes); probe identity
+    (name == `camera/<serial>/kcf-multi`, per-target block, undistorted
+    flag, default name when opts omitted); deterministic drop metering
+    (post-d2bffce pattern: 120ms stall inside begin/end ⇒ drops climb,
+    busyMs > 0); raw-mode parity vs 12's single tracker (joined on
+    deviceTimestamp: ≥10 matched frames, ≥80% verdict agreement, bboxes ≤5px
+    when both ok — note the fake ramp yields found on only a few frames for
+    BOTH implementations; 12 never required found either); orderly teardown
+    → natural exit 0 (3/3 repeat runs), zero warns.
+    **Gates:** `core make build` both runtimes ✓; native sweep **08–21 all
+    exit 0** (15 tests) ✓; 12 ×3 + 15 ×2 repeat runs green (Iterator.h is
+    shared — extra soak) ✓; otool clean ✓. NOTE: 14's pre-existing
+    worker-teardown warn count is now 7 (was 6) — mechanically, the artifact
+    iterates one more registry because the new `Context[MultiKcfTracker]`
+    class exists; same benign artifact. Files: `core/src/Tracker.cpp`
+    (MultiKcfStream + MultiKcfObject + createMultiTracker + the KCF-throw
+    guards), `core/include/Iterator.h` (Sub::Queue close/push race fixes),
+    `core/test/21-multi-kcf.ts` (new). Downstream seam (NOT built, C/audit
+    lane): multi-fovea's relay worker becomes deletable — the session
+    consumes createMultiTracker's generator; steering/pose/lostTolerance
+    stay JS; C's compose protocol can materialize `kcf-multi` refcounted.
+
 - **C-24 — graph model + composition protocol (PLAN-FIRST; publish the topology
   contract EARLY for A).** Path-like id scheme (+ migration of camera:/
   undistort: ids), StreamType/NodeSpec typing harness, graphTopology() snapshot

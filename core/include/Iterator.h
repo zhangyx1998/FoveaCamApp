@@ -57,7 +57,9 @@ private:
       VERBOSE("%s::push(%p) -> data queue [%p]", NAME.c_str(), value.get(),
               &ref->data_queue.back());
     } else {
-      auto &future = ref->future_queue.front();
+      // COPY the Ptr out before pop() — a reference into the queue would
+      // dangle once popped (B-25: crashed under a closing consumer).
+      auto future = ref->future_queue.front();
       VERBOSE("%s::push(%p) -> Future[%p]", NAME.c_str(), value.get(),
               future.get());
       auto task = [future, value](Napi::Env env) {
@@ -73,25 +75,28 @@ private:
   void close(bool unsubscribe, TracedError::Ptr err) override {
     VERBOSE("%s::close()", NAME.c_str());
     Subscriber<T>::close(unsubscribe, err);
-    auto ref = data.ref();
-    if (err) {
-      while (!ref->future_queue.empty()) {
-        auto &future = ref->future_queue.front();
+    // Drain ALL pending futures under ONE guard hold, then dispatch after
+    // release. The old loop released the guard inside its body and then
+    // re-evaluated `ref->future_queue.empty()` in the while condition —
+    // Guard use-after-release, thrown the moment a queue closed with a
+    // pending future (e.g. a stream crash while the consumer awaits; B-25).
+    std::queue<Future::Ptr> drained;
+    {
+      auto ref = data.ref();
+      drained.swap(ref->future_queue);
+    }
+    while (!drained.empty()) {
+      auto future = drained.front();
+      drained.pop();
+      if (err) {
         auto task = [future, err](Napi::Env env) {
           auto error = Napi::Error::New(env, err->what());
           injectNativeStack(error, err->stack);
           future->Reject(error.Value());
         };
-        ref->future_queue.pop();
-        ref.release();
         dispatch(future->Env(), task);
-      }
-    } else {
-      while (!ref->future_queue.empty()) {
-        auto &future = ref->future_queue.front();
+      } else {
         auto task = [future](Napi::Env env) { future->Resolve(IterNext(env)); };
-        ref->future_queue.pop();
-        ref.release();
         dispatch(future->Env(), task);
       }
     }
