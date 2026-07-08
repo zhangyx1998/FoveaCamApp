@@ -20,16 +20,24 @@ const cap = capture;
 // Resource names present in this capture pass, in whatever order the server
 // first reported them (`capture_meta` is a plain object, so this only needs
 // to react to key-set changes — Vue's reactivity on `Object.keys` already
-// does that for a reactive object).
+// does that for a reactive object). Image-only resources (center/diff) are
+// published with a NULL meta — the name is still the resource's presence
+// signal, so no `isEmpty` filter here (A-35: that stale predicate hid their
+// previews entirely); the meta PANEL filters below instead.
 function* entries() {
   const meta = cap.session.telemetry.capture_meta;
-  for (const name of Object.keys(meta)) {
-    const m = meta[name];
-    if (!isEmpty(m)) yield { name, meta: m as any };
-  }
+  for (const name of Object.keys(meta)) yield { name, meta: meta[name] as any };
 }
 
-const meta_entries = computed(() => [...entries()].map(({ name, meta }) => [name, meta] as const));
+// Meta panel: only resources that actually carry metadata (a multi-set-point
+// image-only resource reports an ARRAY of nulls — equally meta-less).
+const hasMeta = (m: unknown): boolean =>
+  Array.isArray(m) ? m.some((x) => !isEmpty(x)) : !isEmpty(m);
+const meta_entries = computed(() =>
+  [...entries()]
+    .filter(({ meta }) => hasMeta(meta))
+    .map(({ name, meta }) => [name, meta] as const),
+);
 
 const image_entries = computed(() =>
   [...entries()]
@@ -49,11 +57,23 @@ const image_entries = computed(() =>
 // renderer-local `abortable` provider chain) — closing the overlay before
 // this resolves just stops watching; the pass still completes and its
 // result sits server-side until the next save/discard/run.
+//
+// A-35: a rejected run (e.g. the 2s one-shot pipe-read timeout throws
+// server-side) must not strand the overlay on "loading" — surface the error
+// with a retry, keep `data_ready` false so save stays disabled. Teardown is
+// unaffected (the session's drain already tolerates a rejected pass).
 const data_ready = ref(false);
-onMounted(async () => {
-  await capture.run();
-  data_ready.value = true;
-});
+const run_error = ref<string | null>(null);
+async function runCapture(): Promise<void> {
+  run_error.value = null;
+  try {
+    await cap.run();
+    data_ready.value = true;
+  } catch (e) {
+    run_error.value = e instanceof Error ? e.message : String(e);
+  }
+}
+onMounted(() => void runCapture());
 
 const save_state = ref<Promise<void> | null>(null);
 
@@ -75,10 +95,17 @@ function save(path: string, img_format: string) {
       :data_ready="data_ready"
       :save_state="save_state !== null"
     />
+    <div v-if="run_error !== null" class="content run-error">
+      <p class="message">Capture failed: {{ run_error }}</p>
+      <div class="actions">
+        <button @click="runCapture">Retry</button>
+        <button @click="emit('exit')">Close</button>
+      </div>
+    </div>
     <HorizontalDivision
       :division="0.2"
       class="content"
-      v-if="save_state === null"
+      v-else-if="save_state === null"
     >
       <template #left>
         <div class="meta-container">
@@ -125,6 +152,29 @@ function save(path: string, img_format: string) {
     justify-content: center;
     font-size: 2rem;
     font-weight: bold;
+  }
+  // A-35: failed capture pass — message + retry, in place of the previews.
+  .run-error {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1.5rem;
+    .message {
+      color: #f56;
+      font-size: 1.2rem;
+      max-width: 60ch;
+      text-align: center;
+    }
+    .actions {
+      display: flex;
+      gap: 1rem;
+      button {
+        padding: 0.4rem 1.6rem;
+        font-size: 1rem;
+        cursor: pointer;
+      }
+    }
   }
 }
 
