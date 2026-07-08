@@ -15,7 +15,8 @@ import {
   activeController,
   setActiveController,
 } from "../controller.js";
-import { timeSpan } from "../diagnostics.js";
+import { report, timeSpan } from "../diagnostics.js";
+import { pingControllerOffset, setCalibration } from "../time-align.js";
 import { controller } from "@lib/orchestrator/contracts";
 
 const NEUTRAL = { left: { x: 0, y: 0 }, right: { x: 0, y: 0 } };
@@ -96,6 +97,27 @@ export function controllerSession(): ServerSession<typeof controller> {
               setActiveController(c);
               publish();
               startProbe();
+              // Unified time (proposal §3): MCU↔host clock calibration via
+              // the v1.1 System.Timestamp ping — fire-and-forget, RACED
+              // against a deadline because pre-v1.1 firmware REJects the
+              // unknown property with seq 0 (dropped) and the read would
+              // hang to Device teardown instead of rejecting.
+              void (async () => {
+                try {
+                  const cal = await Promise.race([
+                    pingControllerOffset(() => c.readTimestamp()),
+                    new Promise<null>((r) => setTimeout(() => r(null), 3000)),
+                  ]);
+                  if (cal) setCalibration("controller", cal);
+                  else
+                    report(
+                      "time-align",
+                      "controller: timestamp ping timed out (pre-v1.1 firmware?) — clock UNCALIBRATED",
+                    );
+                } catch (e) {
+                  report("time-align", `controller: clock calibration failed: ${(e as Error).message}`);
+                }
+              })();
               return true;
             });
           } finally {

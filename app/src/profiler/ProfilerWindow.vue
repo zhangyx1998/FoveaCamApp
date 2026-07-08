@@ -188,6 +188,20 @@ async function openSnapshotFolder(): Promise<void> {
 function fmt(v: number, digits = 1): string {
   return Number.isFinite(v) ? v.toFixed(digits) : "-";
 }
+
+// Clock-calibration health (unified-time proposal §3) — offsets are raw ns
+// bigints stringified over the wire; render ms with µs jitter (>500µs jitter
+// flags the row: the estimator's confidence is poor).
+const clockRows = computed(() => {
+  const clocks = snapshot.value?.clocks ?? {};
+  return Object.entries(clocks).map(([id, c]) => ({
+    id,
+    method: c.method,
+    offsetMs: (Number(BigInt(c.offsetNs) / 1000n) / 1000).toFixed(3),
+    jitterUs: Math.round(Number(BigInt(c.jitterNs)) / 1000),
+    samples: c.samples,
+  }));
+});
 </script>
 
 <template>
@@ -226,6 +240,24 @@ function fmt(v: number, digits = 1): string {
           <Sparkline :values="rendLoopLag" color="#fa0" />
         </div>
       </div>
+    </section>
+
+    <section v-if="clockRows.length > 0">
+      <h2>Clocks</h2>
+      <table>
+        <thead>
+          <tr><th>clock</th><th>method</th><th>offset</th><th>jitter</th><th>n</th></tr>
+        </thead>
+        <tbody>
+          <tr v-for="c in clockRows" :key="c.id">
+            <td class="mono">{{ c.id }}</td>
+            <td>{{ c.method }}</td>
+            <td class="mono">{{ c.offsetMs }} ms</td>
+            <td class="mono" :class="{ saturated: c.jitterUs > 500 }">{{ c.jitterUs }} µs</td>
+            <td>{{ c.samples }}</td>
+          </tr>
+        </tbody>
+      </table>
     </section>
 
     <section>
