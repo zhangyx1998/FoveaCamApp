@@ -466,6 +466,31 @@ hardware-dependent behavior verified without a real rig run.
       element-fullscreen (not a projection window) — pipe-based projection is a
       later add if wanted. **Stage 1 ready for your verify + commit (1a+1b as the
       pair); then Stage 2 (KCF), 3 (probe).**
+    - **PHASE 2 — STAGE 2 LANDED (KCF cut-over; 2026-07-07).** Retired the JS
+      `AsyncKcfTracker` in the tracking session → B's native `Tracker`:
+      `tk = createTracker(t.leases.C.camera)` in activate (folded into the A-P1
+      scope — `scope.defer(() => tk.release())` so `drained()` awaits it);
+      `armAt(center)` → `tk.arm(roi)` on target select (raw-sensor box via the
+      undistort round-trip); a fire-and-forget `consumeTracker` loop
+      (`for await`) fans results to found/lost. Removed the JS KCF machinery
+      (`kcf.init/update`, `searchWindow`, `pendingInit`, busy-drop, generation
+      guard — now intrinsic to the native latest-wins thread) + the `cvtColor`/
+      `AsyncKcfTracker` imports. The center frame-worker keeps DISPLAY only
+      (undistort + publish "C"/"center"); `disengage`/`kcf.active` → an `armed`
+      JS gate (no native disarm — thread runs last roi until release; v1). NEW
+      testable `tracker-consume.ts` (`consumeTrackerResults`) + `test/
+      tracker-consume.test.ts` (2, fake Tracker async-iterable): found/lost fan
+      + ends-on-release + armed-gate. Gates: vue-tsc 0; vitest 281/281 (+2); vite
+      build OK; orch zero-Vue 0; renderer zero-core 0. **RIG-GATED (user
+      Stage-F), flag:** (1) **coordinate mapping** — native KCF runs on the RAW
+      center frame, so `undistortedCenter(bbox)` maps its box to the undistorted
+      actuation/slice space; the undistort flags + `armAt` round-trip need rig
+      verification (accuracy). (2) tracking accuracy + ~60fps — no live claim.
+      (3) `perf.trackMs` telemetry now reports 0 (KCF latency is native-only →
+      shows up via the Stage-3 probe). **Left intact (not deleted):**
+      `@orchestrator/async-kcf` + its unit test — unused by production now; safe
+      to remove in a follow-up. **Stage 2 ready for verify + commit; then Stage 3
+      (probe splice — `Pipe.probeAll()` + `tk.probe()` into `perfSnapshot.workloads`).**
 
 ## Coder B — Native core, protocol & firmware
 

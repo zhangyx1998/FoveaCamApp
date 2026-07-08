@@ -22,7 +22,6 @@ import { type ServerSession } from "@orchestrator/runtime";
 import { defineResourceSession, type ResourceScope } from "@orchestrator/resource-session";
 import { acquireTriple, type CalibratedTriple } from "@orchestrator/calibration";
 import { startActuationLoop, type ActuationLoop } from "@orchestrator/actuation";
-import { AsyncKcfTracker } from "@orchestrator/async-kcf";
 import { createFrameWorker } from "@orchestrator/frame-worker";
 import { DisposerBag, releaseLeases } from "@orchestrator/session-resources";
 import {
@@ -38,7 +37,6 @@ import { RECT } from "@lib/util/geometry";
 import { createQMatrix, deriveFoveaIntrinsics } from "@lib/stereo";
 import { copyMat } from "@lib/mat";
 import {
-  cvtColor,
   depthFromProjection,
   diff,
   disparity,
@@ -48,7 +46,8 @@ import {
   wrapPerspective,
   type Mat,
 } from "core/Vision";
-import { KCF } from "core/Tracker";
+import { createTracker, type Tracker } from "core/Tracker";
+import { consumeTrackerResults } from "./tracker-consume";
 import type { Point2d, Rect } from "core/Geometry";
 import type { Pos } from "@lib/controller-codec";
 import { RollingStats } from "@lib/util/rolling";
@@ -65,21 +64,16 @@ export default function trackingSession(): ServerSession<typeof tracking> {
     let width = 0;
     let height = 0;
 
-    // Tracker + target state. `target` is in *undistorted* center-frame pixels
-    // (the tracker runs on the undistorted center, matching the actuation math).
+    // Target state (undistorted center-frame pixels, the actuation math's space).
     let target: Point2d = { x: 0, y: 0 };
     const kinematic = new KinematicModel(() => s.state.pred_buffer_max);
-    // PB3 A-12: async (`updateAsync`, busy-drop + generation staleness guard)
-    // via the shared `@orchestrator/async-kcf` — the last synchronous KCF in
-    // an `onView` sink. Search-window/lost-count state lives inside `kcf`.
-    const kcf = new AsyncKcfTracker({
-      createTracker: () => new KCF(),
-      clampRect: (r) => clampRect(r),
-      searchWindow: (box, scale) => searchWindow(box, scale),
-      cropPatch: (view, win) => cvtColor(slice(view, win), "BGRA2BGR"),
-      lostTolerance: () => s.state.lost_tolerance, // live session state
-    });
-    let pendingInit: Point2d | null = null;
+    // WS1 1d: the KCF now runs on its OWN free-running C++ thread (B's
+    // `createTracker`) consuming the LATEST center-camera frame (latest-wins,
+    // drop-stale) OFF the JS loop — the busy-drop / generation-staleness guard
+    // is intrinsic to that thread. `tk` is created per activation; `armed` gates
+    // JS-side publishing (there's no native disarm — release kills the thread).
+    let tk: Tracker | null = null;
+    let armed = false;
     let lastGood: Point2d = { x: 0, y: 0 };
     // Latest commanded voltages, mirrored locally so the L/R fovea wrap can use
     // them off the frame path (telemetry-published copy lives in `volt`).
@@ -111,31 +105,21 @@ export default function trackingSession(): ServerSession<typeof tracking> {
       return clampRectToSize(r, { width, height });
     }
 
-    function searchWindow(box: Rect, scale = 1): Rect {
-      const px = Math.max(0, s.state.pad_x * scale);
-      const py = Math.max(0, s.state.pad_y * scale);
-      const x = Math.max(0, Math.round(box.x - px));
-      const y = Math.max(0, Math.round(box.y - py));
-      const right = Math.min(width, Math.round(box.x + box.width + px));
-      const bottom = Math.min(height, Math.round(box.y + box.height + py));
-      return clampRect({ x, y, width: right - x, height: bottom - y });
-    }
-
     function disengage(publish = true): void {
-      kcf.release(); // also invalidates any in-flight async update (staleness)
+      // No native disarm — stop JS-side publishing/actuation; the thread keeps
+      // running (last roi) until `release()` at teardown. Cheap; v1, rig-gated.
+      armed = false;
       kinematic.reset();
       if (publish) s.telemetry({ active: false, bbox: null });
     }
 
-    function initTracker(view: Mat<Uint8Array>, center: Point2d): void {
+    /** Arm the native tracker at a clicked center (undistorted display pixels).
+     *  Round-trips the click to a RAW sensor box (what the native full-frame KCF
+     *  wants — it reads the raw center stream). */
+    function armAt(center: Point2d): void {
       const undistort = triple?.undistort;
-      if (!undistort) return;
-      const size = {
-        width: s.state.tracker_w,
-        height: s.state.tracker_h,
-      };
-      // Round-trip the click through the undistort model so the box lands on
-      // the distorted sensor pixel the user aimed at.
+      if (!undistort || !tk) return;
+      const size = { width: s.state.tracker_w, height: s.state.tracker_h };
       const roi = RECT.fromCenter(
         undistort.position([undistort.angular([center], false)[0]], false)[0],
         size,
@@ -145,43 +129,47 @@ export default function trackingSession(): ServerSession<typeof tracking> {
       const w = Math.min(width - x, Math.round(roi.width));
       const h = Math.min(height - y, Math.round(roi.height));
       if (w <= 0 || h <= 0) return;
-      const box: Rect = { x, y, width: w, height: h };
-      // Reset the kinematic model with the tracker (disengage), then init —
-      // `kcf.init` crops to a tight search window internally (small patch for
-      // KCF/cvtColor) and releases any previous tracker/in-flight update.
-      disengage(false);
-      kcf.init(view, box);
+      tk.arm({ x, y, width: w, height: h });
+      armed = true;
+      kinematic.reset();
       lastGood = center;
       target = center;
       lastFrameTime = now();
       kinematic.push(center.x, center.y, lastFrameTime);
-      s.telemetry({ active: true, bbox: box, target });
+      s.telemetry({ active: true, bbox: { x, y, width: w, height: h }, target });
     }
 
-    // A-12: results are applied on async completion. Timing semantics
-    // preserved from the synchronous version: `lastFrameTime`/`kinematic`
-    // are stamped when a real detection RESULT exists (now the completion
-    // time — the moment the detection actually becomes available), and the
-    // kinematic re-predict still runs every actuation tick in `targetVolts()`
-    // (unchanged). Staleness (release/re-init/idle while in flight) resolves
-    // to "dropped" inside `kcf.update` — never applied here (V5/V10 class).
-    function updateTracker(view: Mat<Uint8Array>, t0: number): void {
-      void kcf.update(view).then((result) => {
-        if (result.status === "tracking") {
-          trackMsStats.push(now() - t0); // async detection latency (see log)
-          const center = result.center;
+    /** Map a native (RAW center-pixel) bbox to the UNDISTORTED target space the
+     *  actuation/slice math uses. COORDINATE MAPPING IS RIG-GATED — verify the
+     *  undistort flags against real optics at Stage F. */
+    function undistortedCenter(bbox: Rect): Point2d {
+      const raw = { x: bbox.x + bbox.width / 2, y: bbox.y + bbox.height / 2 };
+      const undistort = triple?.undistort;
+      return undistort
+        ? undistort.position([undistort.angular([raw], true)[0]], false)[0]
+        : raw;
+    }
+
+    /** Consume the native tracker's result stream (its own C++ thread) into the
+     *  session's target/kinematic/telemetry state. Ends when `tk.release()`
+     *  closes the iterator; staleness/busy-drop is handled natively. */
+    function consumeTracker(t: Tracker): Promise<void> {
+      return consumeTrackerResults(t, {
+        armed: () => armed,
+        onFound: (bbox) => {
+          const center = undistortedCenter(bbox);
           lastGood = center;
-          const t = now();
-          lastFrameTime = t;
-          kinematic.push(center.x, center.y, t);
-          target = kinematic.predict(t) ?? center;
-          s.telemetry({ bbox: result.bbox, target });
-        } else if (result.status === "lost") {
+          const now_ = now();
+          lastFrameTime = now_;
+          kinematic.push(center.x, center.y, now_);
+          target = kinematic.predict(now_) ?? center;
+          s.telemetry({ bbox, target });
+        },
+        onLost: () => {
           target = lastGood;
           s.telemetry({ target });
           disengage(true);
-        }
-        // "dropped": busy/stale/sub-threshold miss — no observable change.
+        },
       });
     }
 
@@ -200,9 +188,10 @@ export default function trackingSession(): ServerSession<typeof tracking> {
       s.frame("center", sliced);
     }
 
+    // DISPLAY only now (WS1 1d): the KCF moved to its own native thread reading
+    // the raw center stream — this JS view-tap just undistorts + publishes the
+    // center for the UI (and the sliced fovea). Learns the frame geometry.
     function processCenterView(raw: Mat<Uint8Array>): void {
-      // Undistort up front: the tracker, the actuation math, and the
-      // displayed center all operate in the same undistorted pixel space.
       const undistort = triple?.undistort;
       const view = undistort ? undistort.apply(raw) : raw;
       const [h, w] = view.shape;
@@ -210,17 +199,6 @@ export default function trackingSession(): ServerSession<typeof tracking> {
         width = w;
         height = h;
         s.telemetry({ size: { width, height } });
-      }
-      if (pendingInit) {
-        const center = pendingInit;
-        pendingInit = null;
-        const t0 = now();
-        initTracker(view, center); // KCF.init is synchronous — measured inline
-        trackMsStats.push(now() - t0);
-      } else if (kcf.active && !kcf.updating) {
-        // Busy-drop: skip this tick if the previous async update is still in
-        // flight; the completion callback pushes trackMs (detection latency).
-        updateTracker(view, now());
       }
       s.frame("C", view);
       if (s.state.view === "sliced") publishSlicedView(view);
@@ -331,7 +309,7 @@ export default function trackingSession(): ServerSession<typeof tracking> {
       // the shared `startActuationLoop`. A-12 keeps this exactly here: the
       // predict cadence is the actuation tick, independent of (and unchanged
       // by) the tracker's new async completion timing.
-      if (kcf.active) {
+      if (armed) {
         const p = kinematic.predict(now());
         if (p) target = p;
       }
@@ -378,6 +356,16 @@ export default function trackingSession(): ServerSession<typeof tracking> {
       taps.push(t.leases.R.onView((v) => onFoveaView("R", v)));
       scope.defer(() => taps.dispose());
       scope.defer(() => disengage(false));
+      // WS1 1d: the KCF tracker thread, bound to the shared center stream. It
+      // runs off the JS loop; results stream in via `consumeTracker`. `release()`
+      // (scope.defer → drained on idle) closes the iterator + kills the thread.
+      tk = createTracker(t.leases.C.camera);
+      scope.defer(() => {
+        tk?.release();
+        tk = null;
+        armed = false;
+      });
+      void consumeTracker(tk);
       loop = startActuationLoop({
         targetVolts,
         onVolts(v, actuateMs) {
@@ -417,7 +405,7 @@ export default function trackingSession(): ServerSession<typeof tracking> {
       },
       commands: {
         async startTracker(center) {
-          pendingInit = center; // the next center frame performs the KCF init
+          armAt(center); // (re-)arm the native KCF thread at the clicked target
         },
         async releaseTracker() {
           disengage(true);
