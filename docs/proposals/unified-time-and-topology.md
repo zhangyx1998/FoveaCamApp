@@ -14,8 +14,12 @@ Everything hardware-touching is RIG-GATED via docs/hardware/stage-f.md.
    owns calibration; metrics push through gated main-thread callbacks; dt
    defaults to 0.** Initial time calibration runs on the device owner's own
    thread at device initialization; INCREMENTAL drift calibration re-runs
-   periodically on that same thread. Calibration runs are mutually EXCLUSIVE
-   (global mutex); each appends to the stability ring (ageNs/driftPpm) and
+   periodically on that same thread. Two-tier locking: the GLOBAL
+   clock-calibration mutex serializes INITIAL calibrations only (the boot
+   burst); incremental drift runs take no global lock and may overlap (with
+   each other and with another device's initial run) — per-device
+   serialization is structural (one owner thread per device). Each run
+   appends to the stability ring (ageNs/driftPpm) and
    atomically swaps the owner's dt mid-task (in-flight frames keep their
    stamp; never torn). **Metric reporting:** the owner thread reports by
    invoking an OPTIONAL JS callback dispatched to the orchestrator main
