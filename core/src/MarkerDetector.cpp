@@ -19,7 +19,14 @@
 
 #include "AsyncTask.h"
 #include "Iterator.h"
+#include "ThreadMeter.h" // B-24: detector node meter (graph stats)
 #include "napi-helper.h"
+
+// Defined in core/lib/Aravis/ConverterStream.cpp (shared snapshot serializer;
+// forward-declared to avoid pulling the pipe headers into this TU).
+namespace Arv {
+Napi::Value meterSnapshotToJs(Napi::Env env, const Meter::Snapshot &s);
+}
 
 using namespace Napi;
 using namespace cv;
@@ -181,24 +188,48 @@ inline Result::Ptr detect(const Arv::Frame::Ptr &frame,
   return results;
 }
 
+static int64_t nowMs() {
+  using namespace std::chrono;
+  return duration_cast<milliseconds>(steady_clock::now().time_since_epoch())
+      .count();
+}
+
 class MarkerStream : public TransformStream<Arv::Frame::Ptr, Result::Ptr>,
                      public Shared<MarkerStream> {
 public:
   const Arv::Stream::Ptr stream;
   const cv::Ptr<aruco::Dictionary> dict;
   const double scale;
+  // Optional `name` = the graph node id (B-24: meter names ARE node ids).
   MarkerStream(const Arv::Stream::Ptr &upstream,
-               const cv::Ptr<aruco::Dictionary> &dict, double scale)
-      : stream(upstream), dict(dict), scale(scale) {}
+               const cv::Ptr<aruco::Dictionary> &dict, double scale,
+               std::string name = "detector")
+      : stream(upstream), dict(dict), scale(scale),
+        meter_(std::move(name), {"frame"}, {"detect"}, nowMs()) {}
   ~MarkerStream() { shutdown(); }
+  Meter::Snapshot probe() const { return meter_.probe(nowMs()); }
   Stream<Arv::Frame::Ptr> *upstream() override { return stream.get(); }
   Result::Ptr transform(const Arv::Frame::Ptr &input) override {
+    const int64_t t = nowMs();
+    const uint64_t d = upstreamDrops();
+    if (d > lastDrops_) { // camera outran detection (latest-wins overwrote)
+      meter_.drop(d - lastDrops_);
+      lastDrops_ = d;
+    }
+    meter_.ingest("frame", t);
     std::string name = "Frame[" + input->tag + "]";
     VERBOSE("MarkerStream::transform(%s) start", name.c_str());
+    meter_.begin(t);
     auto result = detect(input, dict, scale);
+    meter_.end(nowMs());
     VERBOSE("MarkerStream::transform(%s) done", name.c_str());
+    meter_.emit("detect", nowMs());
     return result;
   }
+
+private:
+  Meter::ThreadMeter meter_; // single writer = the transform thread
+  uint64_t lastDrops_ = 0;   // transform-thread only
 };
 
 class MarkerDetectorObject : public ObjectWrap<MarkerDetectorObject> {
@@ -271,10 +302,32 @@ private:
       if (scale <= 0.0)
         throw std::invalid_argument("Scale must be positive");
       const auto upstream = convert<Arv::Stream::Ptr>(info[0]);
-      const auto downstream = MarkerStream::create(upstream, dict, scale);
+      // Optional info[2]: the graph node id → meter/probe name (B-24).
+      const auto downstream =
+          info.Length() >= 3 && info[2].IsString()
+              ? MarkerStream::create(upstream, dict, scale,
+                                     info[2].As<Napi::String>().Utf8Value())
+              : MarkerStream::create(upstream, dict, scale);
       auto stream = StreamObject<MarkerStream>::Create(env, downstream);
-      if (stream.IsObject())
-        stream.As<Napi::Object>().Set("upstream", info[0]);
+      if (stream.IsObject()) {
+        auto obj = stream.As<Napi::Object>();
+        obj.Set("upstream", info[0]);
+        // B-24: out-of-loop meter probe. WEAK capture — the closure must not
+        // extend the MarkerStream's lifetime past its release() (B-20: the
+        // stream object is the Arv-ref holder; a strong capture would leak
+        // the camera stream reference).
+        std::weak_ptr<MarkerStream> weak = downstream;
+        obj.Set("probe",
+                Napi::Function::New(
+                    env,
+                    [weak](const Napi::CallbackInfo &cb) -> Napi::Value {
+                      auto env = cb.Env();
+                      if (auto s = weak.lock())
+                        return Arv::meterSnapshotToJs(env, s->probe());
+                      return env.Null(); // released
+                    },
+                    "probe"));
+      }
       return stream;
     }
     JS_EXCEPT(env.Undefined())

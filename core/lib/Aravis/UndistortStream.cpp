@@ -56,7 +56,7 @@ FN(attachUndistortPipe) {
     // spec.pixelFormat IS the access modifier, exactly like raw pipes.
     const PixelFormat target = convert<PixelFormat>(spec.pixelFormat);
     auto stream =
-        UndistortStream::create(Arv::Stream::get(camera), target, cal);
+        UndistortStream::create(Arv::Stream::get(camera), target, cal, pipeId);
     {
       std::scoped_lock lock(g_mutex);
       auto &b = g_pipes[pipeId];

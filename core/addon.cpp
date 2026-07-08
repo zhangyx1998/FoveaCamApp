@@ -26,6 +26,11 @@ Napi::Value converterProbeAll(const Napi::CallbackInfo &info);
 Napi::Value attachUndistortPipe(const Napi::CallbackInfo &info);
 Napi::Value detachUndistortPipe(const Napi::CallbackInfo &info);
 Napi::Value undistortProbeAll(const Napi::CallbackInfo &info);
+// B-24 (real-2), defined in core/lib/Aravis/FoveaStream.cpp.
+Napi::Value attachFoveaPipe(const Napi::CallbackInfo &info);
+Napi::Value setFoveaRect(const Napi::CallbackInfo &info);
+Napi::Value detachFoveaPipe(const Napi::CallbackInfo &info);
+Napi::Value foveaProbeAll(const Napi::CallbackInfo &info);
 }
 
 using namespace Napi;
@@ -70,6 +75,17 @@ static Object init(Env env, Object exports) {
                Function::New<Arv::detachUndistortPipe>(env, "detachUndistortPipe"));
     Aravis.Set("undistortProbeAll",
                Function::New<Arv::undistortProbeAll>(env, "undistortProbeAll"));
+    // B-24 (real-2): spawn/cancel-able fovea crop pipes — fused map-ROI
+    // convert+remap+crop per (camera × pipe), live-steerable rect, C-20
+    // max-footprint dynamic geometry. Probe keys + meter names = pipeId.
+    Aravis.Set("attachFoveaPipe",
+               Function::New<Arv::attachFoveaPipe>(env, "attachFoveaPipe"));
+    Aravis.Set("setFoveaRect",
+               Function::New<Arv::setFoveaRect>(env, "setFoveaRect"));
+    Aravis.Set("detachFoveaPipe",
+               Function::New<Arv::detachFoveaPipe>(env, "detachFoveaPipe"));
+    Aravis.Set("foveaProbeAll",
+               Function::New<Arv::foveaProbeAll>(env, "foveaProbeAll"));
     exports.Set("Aravis", Aravis);
     // Controller Module
     auto Controller = Object::New(env);

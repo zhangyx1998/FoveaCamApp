@@ -35,18 +35,20 @@ class UndistortStream
     : public TransformStream<Frame::Ptr, ConvertedFrame::Ptr> {
 public:
   using Ptr = std::shared_ptr<UndistortStream>;
+  // `name` = the pipe/node id (B-24: meter names ARE node ids).
   static Ptr create(Arv::Stream::Ptr upstream, PixelFormat target,
-                    const CameraCalibration::Ptr &cal) {
-    return std::make_shared<UndistortStream>(std::move(upstream), target, cal);
+                    const CameraCalibration::Ptr &cal, std::string name) {
+    return std::make_shared<UndistortStream>(std::move(upstream), target, cal,
+                                             std::move(name));
   }
   // Maps are built SYNCHRONOUSLY here (i.e. at attach, on the NAPI thread —
   // tens of ms once per session-open, B-23 ruling #4) and owned by the stream
   // (2× CV_32FC1 sensor-size Mats), freed on detach with the stream.
   UndistortStream(Arv::Stream::Ptr upstream, PixelFormat target,
-                  const CameraCalibration::Ptr &cal)
+                  const CameraCalibration::Ptr &cal, std::string name)
       : upstream_(std::move(upstream)), target_(target),
-        meter_("undistort:" + convert<std::string>(target), {"frame"},
-               {"undistorted"}, converterNowMs()) {
+        meter_(std::move(name), {"frame"}, {"undistorted"},
+               converterNowMs()) {
     const auto &mtx = cal->camera_matrix;
     const auto &dist = cal->dist_coeffs;
     cv::initUndistortRectifyMap(mtx, dist, {}, mtx, cal->sensor_size,

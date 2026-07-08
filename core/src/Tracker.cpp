@@ -162,12 +162,17 @@ class KcfTrackerStream
     : public TransformStream<Arv::Frame::Ptr, TrackResult::Ptr> {
 public:
   using Ptr = std::shared_ptr<KcfTrackerStream>;
-  static Ptr create(Arv::Stream::Ptr upstream) {
-    return std::make_shared<KcfTrackerStream>(std::move(upstream));
+  // Optional `name` = the graph node id (B-24: meter names ARE node ids);
+  // default keeps the legacy name (C-24 shims it).
+  static Ptr create(Arv::Stream::Ptr upstream,
+                    std::string name = "tracker:center") {
+    return std::make_shared<KcfTrackerStream>(std::move(upstream),
+                                              std::move(name));
   }
-  explicit KcfTrackerStream(Arv::Stream::Ptr upstream)
+  explicit KcfTrackerStream(Arv::Stream::Ptr upstream,
+                            std::string name = "tracker:center")
       : upstream_(std::move(upstream)), tracker_(cv::TrackerKCF::create()),
-        meter_("tracker:center", {"frame"}, {"track"}, nowMs()) {}
+        meter_(std::move(name), {"frame"}, {"track"}, nowMs()) {}
   // Stream requires shutdown() before the base is destroyed (joins the thread
   // before the derived vtable/tracker_ go away).
   ~KcfTrackerStream() override { shutdown(); }
@@ -336,7 +341,13 @@ static FN(createTracker) {
   auto env = info.Env();
   try {
     auto camera = convert<Arv::Camera::Ptr>(info[0]);
-    auto stream = KcfTrackerStream::create(Arv::Stream::get(camera));
+    // Optional info[1]: the graph node id — becomes the meter/probe name
+    // (B-24; defaults to the legacy "tracker:center").
+    auto stream = info.Length() >= 2 && info[1].IsString()
+                      ? KcfTrackerStream::create(
+                            Arv::Stream::get(camera),
+                            info[1].As<Napi::String>().Utf8Value())
+                      : KcfTrackerStream::create(Arv::Stream::get(camera));
     return KcfTrackerObject::Create(env, stream);
   }
   JS_EXCEPT(env.Undefined())

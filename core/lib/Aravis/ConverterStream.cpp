@@ -75,7 +75,8 @@ FN(attachCameraPipe) {
     // The advertised pixelFormat IS the converter selector (src = frame->format
     // at convert time). Aravis exclusivity honored via the shared Stream::get.
     const PixelFormat target = convert<PixelFormat>(spec.pixelFormat);
-    auto converter = ConverterStream::create(Arv::Stream::get(camera), target);
+    auto converter =
+        ConverterStream::create(Arv::Stream::get(camera), target, pipeId);
     {
       std::scoped_lock lock(g_mutex);
       auto &b = g_pipes[pipeId];

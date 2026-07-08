@@ -45,6 +45,12 @@ struct ConvertedFrame : Shared<ConvertedFrame> {
   uint64_t deviceTimestamp = 0;
   uint64_t systemTimestamp = 0;
   double convertMs = 0;
+  // B-24 fovea crops: the crop origin in SOURCE coordinates, FRAME-BOUND to
+  // this product (a JS rect echo races). 0/0 for full-frame producers. Flows
+  // through FrameInfo into the v4 slot header (C-24 substrate) — the reader
+  // surfaces it per-frame alongside the C-20 active w/h.
+  uint32_t originX = 0;
+  uint32_t originY = 0;
 };
 
 // A converter thread bound to one camera stream + one target PixelFormat (the
@@ -55,13 +61,17 @@ class ConverterStream
     : public TransformStream<Frame::Ptr, ConvertedFrame::Ptr> {
 public:
   using Ptr = std::shared_ptr<ConverterStream>;
-  static Ptr create(Arv::Stream::Ptr upstream, PixelFormat target) {
-    return std::make_shared<ConverterStream>(std::move(upstream), target);
+  // `name` = the pipe/node id (B-24: meter names ARE node ids, so the topology
+  // snapshot folds stats onto nodes by id with no shim).
+  static Ptr create(Arv::Stream::Ptr upstream, PixelFormat target,
+                    std::string name) {
+    return std::make_shared<ConverterStream>(std::move(upstream), target,
+                                             std::move(name));
   }
-  ConverterStream(Arv::Stream::Ptr upstream, PixelFormat target)
+  ConverterStream(Arv::Stream::Ptr upstream, PixelFormat target,
+                  std::string name)
       : upstream_(std::move(upstream)), target_(target),
-        meter_("converter:" + convert<std::string>(target), {"frame"},
-               {"converted"}, converterNowMs()) {}
+        meter_(std::move(name), {"frame"}, {"converted"}, converterNowMs()) {}
   ~ConverterStream() override { shutdown(); }
 
   Meter::Snapshot probe() const { return meter_.probe(converterNowMs()); }
@@ -113,10 +123,15 @@ private:
 // past the buffer's validity).
 class PipeOfferSubscriber : public Subscriber<ConvertedFrame::Ptr> {
 public:
+  // `maxBound=false`: fixed-geometry pipes (converter/undistort) — a frame must
+  // match the advertised w/h EXACTLY. `maxBound=true` (B-24 fovea): w/h are the
+  // ring's MAX footprint — any active frame ≤ max is offered, its per-frame
+  // w/h riding the C-20 slot header (Publisher::offer re-validates ≤ max).
   PipeOfferSubscriber(::Stream<ConvertedFrame::Ptr> *producer,
-                      Pipe::FrameSink *sink, uint32_t width, uint32_t height)
+                      Pipe::FrameSink *sink, uint32_t width, uint32_t height,
+                      bool maxBound = false)
       : Subscriber<ConvertedFrame::Ptr>(producer), sink_(sink), width_(width),
-        height_(height) {}
+        height_(height), maxBound_(maxBound) {}
   ~PipeOfferSubscriber() { close(); } // unsubscribe before converter releases
 
 protected:
@@ -124,10 +139,12 @@ protected:
     if (!cf || !sink_)
       return;
     const cv::Mat &m = cf->mat;
-    // Geometry guard: never offer a frame whose converted size mismatches the
-    // pipe's advertised w/h (a size/format change ⇒ A re-advertises).
-    if (static_cast<uint32_t>(m.cols) != width_ ||
-        static_cast<uint32_t>(m.rows) != height_)
+    // Geometry guard: exact-match for fixed pipes (a size/format change ⇒ A
+    // re-advertises); within-max for dynamic fovea pipes (C-20 active w/h).
+    const auto w = static_cast<uint32_t>(m.cols);
+    const auto h = static_cast<uint32_t>(m.rows);
+    if (maxBound_ ? (w > width_ || h > height_ || w == 0 || h == 0)
+                  : (w != width_ || h != height_))
       return;
     Pipe::FrameInfo info;
     info.width = static_cast<uint32_t>(m.cols);
@@ -135,6 +152,10 @@ protected:
     info.channels = static_cast<uint32_t>(m.channels());
     info.stride = static_cast<uint32_t>(m.step);
     info.bytes = static_cast<size_t>(m.cols) * m.rows * m.channels();
+    // v4 (B-24/C-24): FRAME-BOUND crop origin rides the slot header with the
+    // active size (fovea producers set it; full-frame producers leave 0/0).
+    info.originX = cf->originX;
+    info.originY = cf->originY;
     ShmRing::FrameMeta meta;
     meta.tCapture = static_cast<double>(converterNowMs());
     meta.convertMs = cf->convertMs;
@@ -147,6 +168,7 @@ private:
   Pipe::FrameSink *const sink_;
   const uint32_t width_;
   const uint32_t height_;
+  const bool maxBound_;
 };
 
 // Meter::Snapshot → JS object (defined in ConverterStream.cpp; shared by
