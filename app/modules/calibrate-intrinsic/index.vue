@@ -14,7 +14,7 @@ You may find the full license in project root directory.
 -->
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted } from "vue";
-import { useSession } from "@lib/orchestrator/client";
+import { useSession, usePipeFrame } from "@lib/orchestrator/client";
 import { calibrateIntrinsic } from "./contract";
 import StreamView from "@src/components/StreamView.vue";
 import NavBack from "@src/components/NavBack.vue";
@@ -26,7 +26,11 @@ import type { PreDefinedDictionary } from "core/Vision";
 
 const session = useSession(calibrateIntrinsic, "calibrate-intrinsic");
 const { state, telemetry } = session;
-const preview = session.frame("preview");
+// real-1c: raw preview off the active camera's native pipe (marker-detection
+// overlay still rides telemetry).
+const preview = usePipeFrame(() =>
+  state.activeSerial ? `camera:${state.activeSerial}` : null,
+);
 
 const views = computed(() => Object.values(telemetry.views));
 const activeView = computed(() =>
@@ -117,7 +121,7 @@ const pattern_h = computed<number>({
         <span>{{ activeView?.info.vendor }} {{ activeView?.info.model }}</span>
         <CameraRole v-if="activeView?.role" :role="(activeView.role as any)" />
       </NavBack>
-      <StreamView class="stream" :payload="preview.payload.value" :source="preview.source" height="min(60vh, 80vw)">
+      <StreamView class="stream" :payload="preview" height="min(60vh, 80vw)">
         <circle
           v-for="(p, i) in telemetry.detection?.points ?? []"
           :key="i"

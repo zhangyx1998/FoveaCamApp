@@ -13,7 +13,7 @@ import { computed, ref } from "vue";
 import StreamView from "@src/components/StreamView.vue";
 import RangeSlider from "@src/inputs/range-slider.vue";
 import { CAMERA_CONTROLS } from "@lib/camera-config";
-import { bindField, type Session } from "@lib/orchestrator/client";
+import { bindField, usePipeFrame, type Session } from "@lib/orchestrator/client";
 import type { CameraView, ManageCamerasContract } from "./contract";
 
 type NumericCameraKey = "frame_rate" | "gain" | "black_level";
@@ -33,7 +33,8 @@ const view = computed<CameraView | undefined>(
   () => session.telemetry.views[serial],
 );
 
-const framePayload = session.frame(serial);
+// real-1c: raw preview off the native `camera:<serial>` pipe (not `session.frame`).
+const framePayload = usePipeFrame(`camera:${serial}`);
 
 const field = <K extends keyof CameraView>(key: K) =>
   bindField(session, view, key, "set", (key, value) => ({ serial, key, value }));
@@ -99,7 +100,7 @@ function reset() {
     <StreamView
       class="stream"
       :title="view?.description"
-      :payload="framePayload.payload.value" :source="framePayload.source"
+      :payload="framePayload"
       width="100%"
       theme="white"
     />

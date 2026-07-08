@@ -220,7 +220,9 @@ export default function calibrateIntrinsicSession(): ServerSession<typeof calibr
       if (!lease) return;
       activeLease = lease;
       activeInfo = known.get(serial) ?? null;
-      previewDisposer = lease.onFrame((payload) => s.frame("preview", payload));
+      // real-1c: the raw preview now rides the `camera:<serial>` native pipe;
+      // the renderer reads it via `usePipeFrame`, not `s.frame("preview")`.
+      // (The marker-detection view-tap below stays on the JS loop.)
       s.setState("activeSerial", serial);
       restartDetection();
     }

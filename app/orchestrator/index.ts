@@ -14,13 +14,14 @@
 // list, plus the two cross-cutting sessions (`system`, `controller`) that have
 // no single owning UI module. See docs/refactor/orchestrator.md §12.3 R1.
 
-import { Shm, cleanup } from "core";
+import { Shm, Pipe, Aravis, cleanup } from "core";
 import {
   createShmFrameTransport,
   type ShmApi,
 } from "./frame-transport.js";
 import { Hub, setFrameTransportFactory, type ServerSession } from "./runtime.js";
-import { releaseAll } from "./registry.js";
+import { releaseAll, setRegistryPipeSeam } from "./registry.js";
+import { pipeSession, asBroker } from "./pipe-session.js";
 import { onReport, onSpan, span } from "./diagnostics.js";
 import { systemSession } from "./sessions/system.js";
 import { controllerSession } from "./sessions/controller.js";
@@ -58,6 +59,24 @@ onReport((scope, message) => hub.reportError(scope, message));
 // Same pattern for structured timing spans (§7.1 S5) — live broadcast so a
 // future profiler window can render a timeline without polling.
 onSpan((s) => hub.reportSpan(s));
+
+// --- WS1 pipe broker: advertises `camera:<serial>` SHM pipes (real-1c) -----
+// C's pipe session + broker; the registry (un)advertises a pipe per shared
+// camera and attaches B's native `CaptureSink` (the SHM preview write is now
+// native, off the JS loop). Both native seams are cast here (Aravis pipe NAPIs
+// aren't in the d.ts yet — B-owned) so registry.ts stays type-clean + testable.
+const pipeBroker = pipeSession({ broker: asBroker(Pipe) });
+hub.add(pipeBroker.session);
+const aravisPipe = Aravis as unknown as {
+  attachCameraPipe(camera: unknown, pipeId: string): void;
+  detachCameraPipe(pipeId: string): void;
+};
+setRegistryPipeSeam({
+  advertise: pipeBroker.advertise,
+  unadvertise: pipeBroker.unadvertise,
+  attach: (camera, pipeId) => aravisPipe.attachCameraPipe(camera, pipeId),
+  detach: (pipeId) => aravisPipe.detachCameraPipe(pipeId),
+});
 
 // --- live camera view: frame-path validation slice -----------------------
 const liveview = hub.add(liveViewSession());

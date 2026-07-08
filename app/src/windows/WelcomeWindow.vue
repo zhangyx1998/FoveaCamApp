@@ -23,7 +23,7 @@ You may find the full license in project root directory.
 -->
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { useDynamicFrame, useSession } from "@lib/orchestrator/client";
+import { usePipeFrame, useSession } from "@lib/orchestrator/client";
 import { manageCameras } from "@modules/manage-cameras/contract";
 import { launchableApps } from "./app-registry";
 import TitleBar from "../components/TitleBar.vue";
@@ -69,7 +69,8 @@ const serial = computed(() => {
 const view = computed(() =>
   serial.value ? session.telemetry.views[serial.value] : undefined,
 );
-const payload = useDynamicFrame(session, serial);
+// real-1c: annotated preview off the selected camera's native pipe.
+const payload = usePipeFrame(() => (serial.value ? `camera:${serial.value}` : null));
 
 // Annotation values (all orchestrator-synced; resolution from the live frame).
 const fmt = (v: number | undefined, digits = 1) =>

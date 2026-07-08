@@ -304,6 +304,169 @@ hardware-dependent behavior verified without a real rig run.
       manual-control only (the async-capture/recording-drain one) — paused here
       per planner request for the WAVE-4 checkpoint commit.**
 
+- **A-24 — WS1 LIVE CUT-OVER (real-1c + 1d): flip the live preview + tracking onto
+  the free-running threads. THE milestone integration. PLAN-FIRST (high blast
+  radius — it breaks the live path; green-lit per the converge-at-milestone
+  posture). Priority over A-P1 manual-control.**
+  - **Phase 1 — staging plan (reply in your log / SendMessage-to-main-equivalent;
+    NO execution).** Read B's + C's cut-over handoffs (their logs) + the current
+    `registry.ts` producer loop, `StreamView`, the tracking session
+    (`AsyncKcfTracker`), and `system.ts` perfSnapshot. Propose: the STAGING (I
+    expect ~3 stages — SHM producer cut-over, KCF cut-over, probe splice), exactly
+    what breaks at each stage, what's verifiable without hardware (synthetic pipe /
+    unit tests) vs RIG-GATED, and the rollback story. Stop for my review.
+  - **Phase 2 — execute (after my go):**
+    1. **SHM producer:** in `registry.ts`, replace the JS per-frame SHM write
+       (nextSlot/convert/publish/copyTo/release) with: on shared-camera acquire →
+       advertise a `camera:<serial>` pipe (BGRA8 `PipeSpec`) via C's
+       `pipeSession().advertise` + `Aravis.attachCameraPipe(lease.camera, pipeId)`;
+       on release → `detachCameraPipe` + `unadvertise`. Renderer `StreamView`
+       connects to the pipe via C's `pipe-consumer` (react to `state.pipes`)
+       instead of `useSession().frame()`. Preserve the in-process vision view-taps
+       (co-subscribers — unaffected).
+    2. **KCF:** retire the JS `AsyncKcfTracker` → `const tk = Tracker.createTracker(
+       centerLease.camera); tk.arm(roi); for await (const r of tk) publish(r.bbox);
+       tk.release()` on teardown.
+    3. **Instrumentation:** splice C's `Pipe.probeAll()` + `tk.probe()` into
+       `perfSnapshot.workloads` (`system.ts` — the C-6 handoff site).
+  - **Ownership.** `registry.ts`, `StreamView.vue`, the tracking session,
+    `system.ts` — all A. Call C's `pipe-session`/`PipeHub` + B's `attachCameraPipe`/
+    `createTracker` across their interfaces (don't modify them).
+  - **DoD (Phase 2).** vue-tsc 0, `vitest run`, `vite build`, orchestrator
+    zero-Vue, renderer zero-core, V11 if a preload is touched. The freeze-gone /
+    ~60fps / `loopLag`<5ms / `maxInterval`-flat proof is the **USER's rig pass**
+    (Stage F) — flag every rig-gated surface; do not claim live perf.
+  - Log:
+    - **PHASE 1 — STAGING PLAN (2026-07-07; no execution, for planner review).**
+      Read B-16/B-17 (attachCameraPipe seam + `Tracker.createTracker`/1d KCF
+      thread — both camera-free-verified) and C-19/C-20 (collapsed publisher →
+      `Publisher::offer` seqlock-writes SHM on B's producer thread; dynamic pipe
+      lifecycle: `pipeSession()` → `{advertise(spec)→epoch, unadvertise(id)}`,
+      reactive `state.pipes: Record<id,PipeAdvert{spec,epoch}>`, `connectPipe→
+      PipeHandle`, `createPipeConsumer(handle,io,sink)`, `Pipe.probeAll()`).
+      Current A surfaces confirmed: registry JS loop does BOTH the SHM preview
+      write (`shmWriter/nextSlot/frame.view→slot/publish`→`s.sinks`/onFrame) AND
+      the in-process BGRA view-taps (`s.viewSinks`/onView, copied from the slot);
+      raw-preview `onFrame` consumers = manage-cameras, calibrate-intrinsic,
+      single-capture (+welcome); processed vision frames ride `onView`→
+      `s.frame()` (untouched). tracking session = `AsyncKcfTracker` in the center
+      frame-worker. `system.ts` splices `workloads: workloadsSnapshot()`.
+
+      **STAGE 1 — SHM producer cut-over (real-1c), two coordinated halves.**
+      *1a orchestrator (registry.ts + orchestrator index):* on shared-camera
+      acquire → `advertise({id:"camera:<serial>", BGRA8 geom})` +
+      `Aravis.attachCameraPipe(lease.camera, pipeId)`; on last release →
+      `detachCameraPipe` + `unadvertise`; DELETE the JS SHM write (shmWriter/
+      nextSlot/view→slot/publish + the `s.sinks`/`emit("shm")` path); KEEP the JS
+      loop for view-taps but convert `frame.view("BGRA8", tapView)` DIRECTLY (no
+      slot) and start it only when `viewSinks` non-empty; live-wire `pipeSession`
+      into the orchestrator hub. *1b renderer (StreamView + the raw-preview
+      modules):* swap `session.frame(serial)` for a pipe consumer — discover
+      `camera:<serial>` from reactive `state.pipes`, `connectPipe`,
+      `createPipeConsumer(handle, io=preload readPipe, sink→FramePayload ref)`,
+      feed StreamView; reconnect on epoch bump, clear on CLOSED.
+      **Breaks:** raw camera preview ONLY, and only in the window between 1a and
+      1b — land them together (or a one-flag guard). Processed vision frames,
+      recorder (consumes `camera.stream` directly), and calibration overlays are
+      UNAFFECTED. **Verifiable no-HW:** advertise/attach/detach orchestration
+      (fake broker + fake `attachCameraPipe`) → acquire=advertise+attach,
+      release=detach+unadvertise, epoch; renderer bind (fake `PipeReaderIO` +
+      C's deterministic `poll()`); B/C loopback tests already green
+      (11-capture-pipe fake-cam attach→BGRA readback, pipe-consumer resize).
+      **RIG-GATED:** freeze-gone/~60fps/loopLag<5ms/maxInterval-flat = user
+      Stage-F. **Rollback:** the JS write + onFrame path is a self-contained
+      block; revert = restore it + repoint StreamView to `session.frame()`
+      (uncommitted → `git restore` registry.ts + the raw-preview modules).
+
+      **STAGE 2 — KCF cut-over (1d), tracking session only.** Replace
+      `AsyncKcfTracker` with `const tk = Tracker.createTracker(centerLease.camera)`;
+      `tk.arm(roi)` on startTracker/steer; a scope-registered `for await (const r
+      of tk) publish(r.bbox/target)` loop; `tk.release()` on teardown (scope.defer
+      — ties into the A-P1 scope I just landed on this session). The center
+      frame-worker keeps undistort/slice/publish for DISPLAY; only the JS
+      `kcf.update` call is removed (KCF now on B's Sub::Latest native thread).
+      **Breaks:** tracking-single's tracker only. **Verifiable no-HW:** A-side
+      wiring with a fake Tracker stub (async-iterable + arm/release spies) →
+      arm-on-select, publish-on-yield, release-on-idle, no-leak-on-reactivate
+      (A-P1 scope); B's 12-kcf-tracker (fake-cam, drops-on-stall) already proves
+      the thread. **RIG-GATED:** tracking accuracy/latency/60fps = user rig.
+      **Rollback:** localized to tracking session.ts; `AsyncKcfTracker` retired
+      only after proven — revert restores it.
+
+      **STAGE 3 — probe splice (system.ts).** `workloads: { ...workloadsSnapshot(),
+      ...Pipe.probeAll(), ...(tk-live ? { "tracking:kcf": tk.probe() } : {}) }` —
+      both native probes already in the `WorkloadSnapshot` shape (C/B built them
+      so; my optional `maxIntervalMs` from A-23 batch 6 accommodates them).
+      **Breaks:** nothing (additive). **Verifiable no-HW:** unit-test the merge
+      with fake probe outputs. **RIG-GATED:** the live maxInterval numbers.
+      **Rollback:** remove the spread (one line).
+
+      **Sequencing:** Stages 1 and 2 are independent; recommend 1 (flagship
+      freeze fix) → 2 → 3 (or fold each probe into its stage). **OPEN QUESTIONS
+      for review (before Phase 2):** (Q1) confirm the JS registry loop stays a
+      co-subscriber for `onView` taps (direct `frame.view` convert), native
+      CaptureSink owns the SHM write — or do view-taps also move? (Q2)
+      `attachCameraPipe` timing — on acquire (advertise+attach together) vs first
+      `connectPipe` (B's "subscribe lazily starts stream"); how it composes with
+      C's connectPipe refcount + unadvertise. (Q3) want a reusable renderer
+      `usePipeFrame(pipeId)` composable (state.pipes→connectPipe→consumer→ref) so
+      raw-preview call sites swap uniformly, or per-module? (Q4) confirm the
+      StreamView→pipe swap is raw-camera surfaces ONLY (processed L/C/R stay on
+      `session.frame`). (Q5) milestone scope — static `camera:<serial>` + KCF
+      only, or also cut multi-fovea onto dynamic `fovea:<...>` pipes now?
+      Stopping for your review — no code changed.
+    - **PHASE 2 — STAGE 1a LANDED (orchestrator SHM producer cut-over; 2026-07-07).**
+      Split Stage 1 into two software-green sub-checkpoints (the 1a+1b "pair" is a
+      RIG constraint — software gates don't render live frames — so 1a alone is
+      green; **flagging: both must land before the user's rig pass or raw previews
+      are dark**). *1a = orchestrator.* `registry.ts`: injected `RegistryPipeSeam`
+      (`advertise/unadvertise/attach/detach` — set from the index; keeps registry
+      native-free + testable); on shared-camera acquire → `advertiseCameraPipe`
+      (BGRA8 `camera:<serial>` spec from GenICam `getFeature("Width"/"Height")`) +
+      `attach`; on last release → `retireCameraPipe` (detach→unadvertise); DELETED
+      the JS SHM write (shmWriter/nextSlot/slot-publish/`onFrame`/`s.sinks`/
+      `emit("shm")`); the JS loop is now VIEW-TAP ONLY (`frame.view("BGRA8",
+      tapView)` direct) and `hasConsumers`=viewSinks — a preview-only camera
+      (manage-cameras) runs NO JS loop → fully off-loop (the freeze fix,
+      rig-gated). `index.ts`: wired C's `pipeSession(asBroker(Pipe))` into the hub
+      + `setRegistryPipeSeam` (Aravis pipe NAPIs cast — not in d.ts yet, B-owned).
+      Dropped the raw-preview `onFrame` publishes in manage-cameras/
+      calibrate-intrinsic/single-capture sessions (vision `onView` taps
+      untouched). NEW `test/registry-pipe.test.ts` (2, fake seam+camera): advertise
+      = correct BGRA8 geometry + attach-after-advertise; retire = detach→
+      unadvertise. Gates: vue-tsc 0; vitest 279/279 (+2); vite build OK; orch
+      zero-Vue 0; renderer zero-core 0. **RIG-GATED (user Stage-F):** freeze-gone/
+      fps/loopLag — no live claim. Retired JS SHM write is in the prior commit
+      (rollback = git restore). **NEXT: Stage 1b** (renderer `usePipeFrame`
+      composable + repoint manage-cameras/calibrate-intrinsic/single-capture/
+      welcome StreamViews from `session.frame` to `camera:<serial>` pipes) — the
+      other half of the pair; then Stage 2 (KCF), 3 (probe).
+    - **PHASE 2 — STAGE 1b LANDED (renderer pipe binding; 2026-07-07). STAGE 1
+      COMPLETE (1a+1b pair).** NEW `usePipeFrame(pipeId)` in `client.ts`
+      (A-owned): `useSession(pipes, "pipes")` → watches a primitive `id#epoch`
+      key off reactive `state.pipes` → `connectPipe` → C's `createPipeConsumer(
+      handle, pipeReaderIO, sink→ref)` (pixels ride the shared segment via the
+      shm client's `readPipe`/`releaseBuffer` C-15 pool) → reconnects on epoch
+      bump (C-20 reuse-safe id), tears down (stop + `disconnectPipe` + clear) on
+      un-advertise / switch / scope-dispose; supports static or ref/getter
+      pipeId. Repointed the 4 raw-preview surfaces from `session.frame()`:
+      manage-cameras `CameraConfig.vue` (`camera:${serial}`), calibrate-intrinsic
+      (`camera:${activeSerial}`), single-capture (`camera:${serial}`),
+      WelcomeWindow (dynamic). Processed L/C/R stay on `session.frame` (Q4).
+      Gates: vue-tsc 0; vitest 279/279; vite build OK; renderer zero-core 0; orch
+      zero-Vue 0; V11 preload-renderer 0/0 (preload untouched). **Verification:**
+      the composable is thin wiring over ALREADY-tested primitives —
+      `createPipeConsumer` (C's `pipe-consumer.test`, fake `PipeReaderIO`+`poll`),
+      `useSession`/`state.pipes`/`connectPipe` (C's `pipe-session.test`); no
+      dedicated composable test since `usePipeFrame` calls `useSession`
+      same-module (unmockable), and vue-tsc pins the wiring types. **RIG-GATED
+      (user Stage-F):** actual live rendering off the pipes (real cameras + B's
+      native producer) — no live claim. **Minor UX flag:** raw-preview
+      StreamViews now pass no `:source`, so their expand button falls back to
+      element-fullscreen (not a projection window) — pipe-based projection is a
+      later add if wanted. **Stage 1 ready for your verify + commit (1a+1b as the
+      pair); then Stage 2 (KCF), 3 (probe).**
+
 ## Coder B — Native core, protocol & firmware
 
 Owns `core` native code (except the SHM substrate), `firmware/**`, and

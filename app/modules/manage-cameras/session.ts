@@ -86,7 +86,8 @@ export default function manageCamerasSession(): ServerSession<typeof manageCamer
         {},
       );
       entries.set(serial, { lease, serial, role: config.role });
-      lease.onFrame((payload) => s.frame(serial, payload));
+      // real-1c: the raw preview now rides the `camera:<serial>` native pipe;
+      // the renderer reads it via `usePipeFrame`, not `s.frame(serial)`.
     }
 
     async function openCamera(serial: string): Promise<void> {

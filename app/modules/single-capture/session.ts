@@ -35,7 +35,8 @@ export default function liveViewSession(): ServerSession<typeof liveview> {
         return;
       }
       lease = held;
-      held.onFrame((payload) => s.frame("frame", payload));
+      // real-1c: the live view now rides the `camera:<serial>` native pipe;
+      // the renderer reads it via `usePipeFrame`, not `s.frame("frame")`.
     }
 
     return {

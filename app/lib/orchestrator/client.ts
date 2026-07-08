@@ -28,6 +28,9 @@ import {
   reactive,
   readonly,
   shallowRef,
+  toValue,
+  watch,
+  type MaybeRefOrGetter,
   type Ref,
   type WritableComputedRef,
 } from "vue";
@@ -48,6 +51,12 @@ import {
   type TelemetryOf,
 } from "./protocol.js";
 import { createShmClient } from "./shm-client.js";
+import { pipes, type PipeHandle } from "./pipe-contract.js";
+import {
+  createPipeConsumer,
+  type PipeConsumer,
+  type PipeReaderIO,
+} from "./pipe-consumer.js";
 import { formatCounterRate, formatSampleStats } from "./stats.js";
 import { controller } from "./contracts.js";
 import type { Span } from "./contracts.js";
@@ -280,6 +289,86 @@ export function useDynamicFrame<C extends Contract>(
     const key = read();
     return key ? session.frame(key).payload.value : null;
   });
+}
+
+// The renderer's pipe reader IO, backed by the shared shm client's C-15 pool
+// (`readPipe`/`releaseBuffer`) — the transport `createPipeConsumer` polls.
+const pipeReaderIO: PipeReaderIO = {
+  readPipe: (shmName, lastSeq, bytes) => shm.readPipe(shmName, lastSeq, bytes),
+  releaseBuffer: (buffer) => shm.releaseBuffer(buffer),
+};
+
+/**
+ * Bind a reactive `FramePayload` ref to an advertised SHM pipe (WS1 real-1c) —
+ * the renderer's replacement for `session.frame()` on the raw-camera preview
+ * surfaces. Discovers the pipe from the `pipes` session's reactive `state.pipes`,
+ * `connectPipe`s once for a `PipeHandle`, streams frames via C's
+ * `createPipeConsumer` (pixels ride the shared segment, never the Channel),
+ * RECONNECTS on an epoch bump (C-20 reuse-safe id), and CLEARS on
+ * un-advertise / CLOSED. `pipeId` may be static or a ref/getter (e.g. the
+ * currently-selected `camera:<serial>`); pass null to bind nothing. Returns a
+ * readonly ref for `StreamView :payload`.
+ */
+export function usePipeFrame(
+  pipeId: MaybeRefOrGetter<string | null | undefined>,
+): Readonly<Ref<FramePayload | null>> {
+  const session = useSession(pipes, "pipes");
+  const frame = shallowRef<FramePayload | null>(null);
+  let consumer: PipeConsumer | null = null;
+  let boundId: string | null = null;
+  let boundEpoch: number | null = null;
+
+  function teardown(): void {
+    consumer?.stop();
+    consumer = null;
+    if (boundId) void session.call("disconnectPipe", { pipeId: boundId }).catch(() => {});
+    boundId = null;
+    boundEpoch = null;
+    frame.value = null;
+  }
+
+  async function bind(id: string, epoch: number): Promise<void> {
+    boundId = id;
+    boundEpoch = epoch;
+    let handle: PipeHandle;
+    try {
+      handle = await session.call("connectPipe", { pipeId: id });
+    } catch {
+      return; // pipe vanished between discovery and connect — the watch retries
+    }
+    // A newer bind superseded us while connecting — abort this one.
+    if (boundId !== id || boundEpoch !== epoch) return;
+    consumer = createPipeConsumer(handle, pipeReaderIO, (p) => {
+      frame.value = p; // p === null on CLOSED → clears the display
+    });
+    consumer.start();
+  }
+
+  // Watch a primitive `id#epoch` key so the effect fires only on a real change
+  // (a new pipe, a switched selection, or an epoch bump), not every state push.
+  watch(
+    () => {
+      const id = toValue(pipeId);
+      const advert = id ? session.state.pipes[id] : undefined;
+      return id && advert ? `${id}#${advert.epoch}` : null;
+    },
+    (key) => {
+      if (!key) {
+        if (boundId) teardown();
+        return;
+      }
+      const hash = key.lastIndexOf("#");
+      const id = key.slice(0, hash);
+      const epoch = Number(key.slice(hash + 1));
+      if (boundId === id && boundEpoch === epoch) return; // already bound
+      if (boundId) teardown();
+      void bind(id, epoch);
+    },
+    { immediate: true },
+  );
+
+  onScopeDispose(teardown);
+  return readonly(frame) as Readonly<Ref<FramePayload | null>>;
 }
 
 function readSource<T>(source: Ref<T> | (() => T)): T {
