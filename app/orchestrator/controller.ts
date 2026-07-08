@@ -108,6 +108,10 @@ export interface FrameOutcome {
    *  metadata (WS4 4b). */
   frameId: number;
   stream: number;
+  /** OWNER-APPLIED TRUSTED TIME (unified-time ruling 0): host-steady-domain
+   *  NANOSECONDS — the raw MCU µs ×1000 plus the controller's calibrated dt
+   *  (0 until `setClockOffsetNs`, i.e. raw µs-resolution ns). Downstream
+   *  nodes NEVER re-correct these. */
   tTrigger: bigint;
   tExposure: bigint;
   /** Exposure-AVERAGED mirror voltage for this frame (B-12: MEMS voltage
@@ -130,6 +134,16 @@ export class Controller {
   private readonly device: Device;
   readonly ready: Promise<void>;
   private bias = 0;
+  // Owner-applied dt (unified-time ruling 0): host-steady-ns offset mapping
+  // the MCU µs clock into the trusted domain. 0 until calibration (the ping
+  // on connect); atomically swapped on mid-task re-calibration — outcomes
+  // decoded after the swap carry the new offset.
+  private clockOffsetNs = 0n;
+  /** Install the calibrated MCU→host offset (from `pingControllerOffset`).
+   *  Every FIN timestamp surfaced after this call is trusted host-ns. */
+  setClockOffsetNs(offsetNs: bigint): void {
+    this.clockOffsetNs = offsetNs;
+  }
   private _enabled = false;
   private _pos: { left: Pos; right: Pos } = origin;
   private readonly streamIds = new StreamIdPool();
@@ -260,17 +274,17 @@ export class Controller {
   /** Clock-calibration ping (unified-time proposal §2, Rulings 4): the MCU's
    *  current clock in MICROSECONDS as a uint64 `bigint`, stamped
    *  firmware-side at packet parse time so the reading's jitter stays at the
-   *  serial-latency floor. Bracket N calls with host `hrtime.bigint()` and
-   *  min-filter by RTT to estimate the controller↔host offset. Same clock
-   *  domain/units as `frame()`'s tTrigger/tExposure. Requires firmware
-   *  >= v1.1 (older firmware REJects the unknown property). */
+   *  serial-latency floor. RAW BY CONTRACT — this is the calibration
+   *  primitive itself; owner-applied dt (setClockOffsetNs) deliberately does
+   *  NOT apply here, unlike every other surfaced timestamp. Requires
+   *  firmware >= v1.1 (older firmware REJects the unknown property). */
   async readTimestamp(): Promise<bigint> {
     const ts = await this.get<BigInt>(Protocol.System.Timestamp);
     return ts.valueOf();
   }
-  /** Resets the MCU clock counter to 0 (SET System.Timestamp). Invalidates
-   *  any prior offset calibration — as does enable(), which also resets the
-   *  clock firmware-side. */
+  /** Resets the MCU clock counter to 0 (SET System.Timestamp) — the ONLY
+   *  clock reset since v1.1 (enable() no longer resets time). Invalidates
+   *  any prior offset calibration: re-ping after using this. */
   async resetTimestamp(): Promise<void> {
     await this.set(Protocol.System.Timestamp, 0n);
   }
@@ -420,8 +434,10 @@ export class Controller {
       return {
         frameId: result.frame_id,
         stream: result.stream,
-        tTrigger: result.t_trigger,
-        tExposure: result.t_exposure,
+        // Owner-applied trusted time (unified-time ruling 0): raw MCU µs →
+        // host-steady ns at THE decode boundary. No downstream correction.
+        tTrigger: result.t_trigger * 1000n + this.clockOffsetNs,
+        tExposure: result.t_exposure * 1000n + this.clockOffsetNs,
         left: {
           x: dac2volt(result.left[0] - result.left[1]),
           y: dac2volt(result.left[2] - result.left[3]),

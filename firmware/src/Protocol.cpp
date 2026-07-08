@@ -172,7 +172,11 @@ HANDLE_SET(System::Enable) {
     MEMS::enable();
     Board::low_pass_filter.tone();
     Global::system_enabled = true;
-    Global::time.reset(0);
+    // v1.1: Enable NO LONGER resets Global::time. The unified-time ruling
+    // makes every clock mutation EXPLICIT (System::Timestamp SET is the
+    // reset) — an implicit reset here silently invalidated the host's
+    // controller clock calibration on every enable, breaking the
+    // "timestamps between nodes are always trusted" invariant.
   } else if (!payload.enable && Global::system_enabled) {
     // Disable system
     VERB("Disabling system");

@@ -108,8 +108,12 @@ export function controllerSession(): ServerSession<typeof controller> {
                     pingControllerOffset(() => c.readTimestamp()),
                     new Promise<null>((r) => setTimeout(() => r(null), 3000)),
                   ]);
-                  if (cal) setCalibration("controller", cal);
-                  else
+                  if (cal) {
+                    setCalibration("controller", cal);
+                    // Owner-applied dt (ruling 0): every FIN timestamp the
+                    // controller surfaces from here on is trusted host-ns.
+                    c.setClockOffsetNs(cal.offsetNs);
+                  } else
                     report(
                       "time-align",
                       "controller: timestamp ping timed out (pre-v1.1 firmware?) — clock UNCALIBRATED",

@@ -37,6 +37,10 @@ export interface ClockCalibration {
   method: "latch" | "pull" | "ping" | "manual";
   /** Host-ns when this calibration was taken. */
   atNs: bigint;
+  /** Stability: offset drift vs the PREVIOUS calibration of the same clock,
+   *  in parts-per-million (set by `setCalibration`; absent on the first
+   *  run). Updated on every mid-task re-calibration. */
+  driftPpm?: number;
 }
 
 export const hostNowNs = (): bigint => process.hrtime.bigint();
@@ -91,6 +95,15 @@ export function estimateOffsetOneSidedNs(samples: OffsetSample[]): {
 const calibrations = new Map<ClockId, ClockCalibration>();
 
 export function setCalibration(clock: ClockId, cal: ClockCalibration): void {
+  // Stability metric (user 2026-07-08): drift vs the previous calibration of
+  // the same clock — refreshed on every mid-task re-calibration.
+  const prev = calibrations.get(clock);
+  if (prev && cal.atNs > prev.atNs && cal.driftPpm === undefined) {
+    const dOffset = Number(cal.offsetNs - prev.offsetNs);
+    const dTime = Number(cal.atNs - prev.atNs);
+    calibrations.set(clock, { ...cal, driftPpm: (dOffset / dTime) * 1e6 });
+    return;
+  }
   calibrations.set(clock, cal);
 }
 export function calibration(clock: ClockId): ClockCalibration | null {
@@ -99,18 +112,29 @@ export function calibration(clock: ClockId): ClockCalibration | null {
 export function clearCalibrations(): void {
   calibrations.clear();
 }
-/** Snapshot for telemetry/profiler (clock-health panel). */
+/** Snapshot for telemetry/profiler (clock-health panel), incl. the
+ *  owner-reported stability metrics (ageNs since calibration, driftPpm). */
 export function calibrationsSnapshot(): Record<
   string,
-  { offsetNs: string; jitterNs: string; samples: number; method: string }
+  {
+    offsetNs: string;
+    jitterNs: string;
+    samples: number;
+    method: string;
+    ageNs: string;
+    driftPpm?: number;
+  }
 > {
-  const out: Record<string, { offsetNs: string; jitterNs: string; samples: number; method: string }> = {};
+  const now = hostNowNs();
+  const out: ReturnType<typeof calibrationsSnapshot> = {};
   for (const [id, c] of calibrations)
     out[id] = {
       offsetNs: c.offsetNs.toString(),
       jitterNs: c.jitterNs.toString(),
       samples: c.samples,
       method: c.method,
+      ageNs: (now - c.atNs).toString(),
+      ...(c.driftPpm !== undefined ? { driftPpm: c.driftPpm } : {}),
     };
   return out;
 }

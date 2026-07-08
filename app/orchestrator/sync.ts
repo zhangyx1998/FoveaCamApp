@@ -16,17 +16,19 @@
 import type { CameraLease } from "./registry.js";
 import type { Controller, FrameOutcome } from "./controller.js";
 
-/** Anything with a device-clock capture timestamp. Native `core/Aravis`
- *  Frames satisfy this via `Frame.deviceTimestamp`. Units are whatever the
- *  device clock counts in (the real Aravis buffer timestamp is nanoseconds) —
- *  `calibrate`/`matchPair` don't care, as long as one camera's frames and
- *  its own calibration delta are in the same units consistently. */
+/** Anything with a capture timestamp. Native `core/Aravis` Frames satisfy
+ *  this via `Frame.deviceTimestamp` — which, under the unified-time ruling,
+ *  is OWNER-APPLIED host-steady ns (trusted between nodes). The arithmetic
+ *  below still works with any consistent unit; with calibrated owners both
+ *  sides are host-ns and the deltas collapse to trigger-PATH latency. */
 export interface DeviceTimestamped {
   readonly deviceTimestamp: bigint;
 }
 
-/** Per-camera (L/R) offset from its own device clock into the MCU's
- *  `Global::time` domain: `mcuTime ≈ deviceTimestamp + delta`. */
+/** Per-camera (L/R) residual delta between the FIN exposure time and the
+ *  camera's frame timestamp. With calibrated clocks (owner-applied dt on
+ *  both sides) this is the physical trigger-path latency (cable + FrameStart
+ *  latch + exposure-start), in host-ns — no longer a cross-clock offset. */
 export interface ClockCalibration {
   readonly left: bigint;
   readonly right: bigint;
@@ -38,9 +40,11 @@ export interface ClockCalibration {
  * time) against the L/R frames' own device timestamps (supplied by the
  * caller — see `DeviceTimestamped`) to compute each camera's delta.
  *
- * Must be re-run after every `Controller.enable()` — the MCU clock resets
- * then (firmware/src/Protocol.cpp `System::Enable` SET), invalidating any
- * previous calibration. `captureLeft`/`captureRight` should resolve with the
+ * Since firmware v1.1 `Controller.enable()` NO LONGER resets the MCU clock
+ * (the unified-time ruling made clock mutation explicit — only the
+ * `resetTimestamp()` command resets, and re-pinging after it is the caller's
+ * job), so this measurement survives enable/disable cycles.
+ * `captureLeft`/`captureRight` should resolve with the
  * frame captured *for this trigger* (typically: race the trigger against
  * each camera's next-frame promise, or take the temporally-nearest arrival —
  * how to actually correlate a device-clock-only frame to a specific trigger

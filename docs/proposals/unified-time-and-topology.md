@@ -10,6 +10,26 @@ Everything hardware-touching is RIG-GATED via docs/hardware/stage-f.md.
 
 ## Rulings (user, 2026-07-08)
 
+0. **(supersedes the boot-hidden design in §3) Calibration is C++-owned,
+   blocking, and explicit-into-main-thread; dt defaults to 0.** The
+   calibration primitive is a BLOCKING main-thread NAPI
+   (`camera.calibrateClock(n)`), mutually EXCLUSIVE with every other
+   calibration call (global mutex). It runs AUTOMATICALLY at device-node
+   initialization — as an explicit call from the JS device-owner init path
+   (registerShared), never hidden inside a native constructor — and the SAME
+   call is the mid-task drift-correction API; each run appends to the
+   stability ring (ageNs/driftPpm, owner-reported in the profiler's clocks
+   section) and atomically swaps the owner's dt. **Owner-applied dt:** every
+   timestamp a device owner surfaces outward already carries its calibrated
+   offset (camera: applied at Frame creation → propagates to JS frames, SHM
+   SlotHeaders, brick taps, KCF results; controller: applied at the FIN
+   decode) — **timestamps flowing between nodes are ALWAYS TRUSTED**; no
+   downstream node re-corrects. `toHostNs` remains only as telemetry/identity
+   glue; the per-brick `setClockOffset` is retired (bricks read trusted frame
+   time directly). Native `steadyNowNs()` is the single time authority (JS
+   `hostNowNs` delegates — hrtime and libc++ steady_clock are not guaranteed
+   the same Darwin clock domain).
+
 1. **Estimator: min-filter** (PTP-style min over N by RTT/dt; p90−min as
    jitter).
 2. **Camera↔host: TimestampLatch first**; the 1 ms-exposure frame-pull
