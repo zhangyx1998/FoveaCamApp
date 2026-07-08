@@ -14,7 +14,7 @@
 // list, plus the two cross-cutting sessions (`system`, `controller`) that have
 // no single owning UI module. See docs/history/refactor/orchestrator.md §12.3 R1.
 
-import { Shm, Pipe, Aravis, cleanup } from "core";
+import { Shm, Pipe, Aravis, Topology, cleanup } from "core";
 import {
   createShmFrameTransport,
   type ShmApi,
@@ -24,7 +24,7 @@ import { releaseAll, leasedCamera, setRegistryPipeSeam } from "./registry.js";
 import { loadIntrinsicCal } from "./calibration.js";
 import { pipeSession, asBroker } from "./pipe-session.js";
 import { buildTopology } from "./graph-topology.js";
-import { registerNativeProbe } from "./native-probes.js";
+import { registerNativeProbe, registerNodeReports, nodeReports } from "./native-probes.js";
 import type { WorkloadSnapshot } from "@lib/orchestrator/stats.js";
 import { onReport, onSpan, span } from "./diagnostics.js";
 import { systemSession } from "./sessions/system.js";
@@ -178,6 +178,13 @@ registerNativeProbe(
 registerNativeProbe(
   () => Aravis.undistortProbeAll() as unknown as Record<string, WorkloadSnapshot>,
 );
+// Unified-topology §6 REAL-REPORT layer: every live native brick self-reports
+// its NodeReport (convert ← camera, undistort ← convert, fovea ← undistort —
+// ACTUAL chain inputs). These rows REPLACE the fold's adapter synthesis by id,
+// so the graph shows real wiring wherever a brick reports.
+registerNodeReports(
+  () => Topology.report() as unknown as import("@lib/orchestrator/graph-contract.js").NodeReport[],
+);
 
 // --- live camera view: frame-path validation slice -----------------------
 const liveview = hub.add(liveViewSession());
@@ -242,11 +249,14 @@ hub.add(
     () => hub.frameStatsSnapshot(),
     // C-24: the live node graph rides perfSnapshot (ruled Q2) — pipes from the
     // native enumerator (item 2, exact bytesTotal for MB/s), stats from the
-    // same probed workloads map, session wiring via registerGraphWiring.
+    // same probed workloads map, session wiring via registerGraphWiring, and
+    // the REAL-REPORT layer (Topology.report() + any registered JS sources)
+    // replacing adapter synthesis by id (unified-topology §6).
     (workloads) =>
       buildTopology({
         listPipes: () => Pipe.list(),
         workloads: () => workloads,
+        reports: nodeReports,
       }),
   ),
 );

@@ -37,7 +37,9 @@ const PULL_GRAB_TIMEOUT_MS = 2000;
 export async function calibrateCameraClock(camera: Camera): Promise<void> {
   const clock: ClockId = `camera:${camera.serial}`;
   try {
-    setCalibration(clock, latchCameraOffset(camera));
+    const cal = latchCameraOffset(camera);
+    setCalibration(clock, cal);
+    pushOffsetToBricks(camera.serial, cal.offsetNs);
     return;
   } catch (e) {
     // Latch features unsupported on this model (or transient failure).
@@ -81,8 +83,27 @@ async function pullCalibrate(camera: Camera, clock: ClockId): Promise<void> {
       method: "pull",
       atNs: hostNowNs(),
     });
+    pushOffsetToBricks(camera.serial, offsetNs);
   } finally {
     camera.exposure_auto = prev.auto;
     if (prev.auto === "Off") camera.exposure = prev.exposure;
   }
+}
+
+/** Feed the calibrated device→host offset to this camera's native homography
+ *  bricks (unified-time §5: the L/R undistort looks mirror positions up by
+ *  frame HOST time — until this lands, bricks run offset 0 and probe
+ *  `calibratedClock: false`). Serial substring-matches every brick of the
+ *  camera; a zero match just means no homography brick is live yet (bricks
+ *  attach with whatever offset is current at attach... they don't — the ring
+ *  lookup reads the offset live, so late pushes still land). Best-effort. */
+function pushOffsetToBricks(serial: string, offsetNs: bigint): void {
+  void (async () => {
+    try {
+      const { setClockOffset } = await import("core/Aravis");
+      setClockOffset(serial, offsetNs);
+    } catch (e) {
+      report("time-align", `setClockOffset(${serial}) failed: ${(e as Error).message}`);
+    }
+  })();
 }
