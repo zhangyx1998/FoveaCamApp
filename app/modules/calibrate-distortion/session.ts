@@ -22,7 +22,7 @@ import { startActuationLoop, type ActuationLoop } from "@orchestrator/actuation"
 import { findHomography, resize, wrapPerspective, type Mat } from "core/Vision";
 import { area, type Point2d } from "core/Geometry";
 import { type MarkerTracker, type TrackerTarget } from "@orchestrator/marker-tracker";
-import { bindViews, publishSerials, DisposerBag, releaseLeases } from "@orchestrator/session-resources";
+import { publishSerials, DisposerBag, releaseLeases } from "@orchestrator/session-resources";
 import {
   bindDetections,
   createTrackerTriple,
@@ -124,10 +124,13 @@ export default function calibrateDistortionSession(): ServerSession<typeof calib
       });
       const taps = new DisposerBag();
       bindDetections(trackers, taps, publishDetections, onCenterDetection);
-      bindViews(t.leases, taps, s, (role, v) => {
-        if (role === "C") s.frame("C", v);
-        else onFoveaView(role, v);
-      });
+      // C's raw preview now rides the native `camera:<serial>` pipe (usePipeFrame
+      // in index.vue, discovered via publishSerials) — C no longer taps `onView`
+      // (A-31, real-1f step 3). Only L/R keep the `onView` tap: `onFoveaView`
+      // reads the raw buffer synchronously on-loop to derive the distortion
+      // projection homography (processed, not a bare preview — it stays).
+      taps.add(t.leases.L.onView((v) => onFoveaView("L", v)));
+      taps.add(t.leases.R.onView((v) => onFoveaView("R", v)));
       publishSerials(t.leases, taps, s);
       scope.defer(() => taps.dispose());
 

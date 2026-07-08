@@ -27,7 +27,7 @@ import { matchTriple, retryUntil, type CameraLease } from "@orchestrator/registr
 import { loadIntrinsic, fitExtrinsicRegression } from "@orchestrator/calibration";
 import { startActuationLoop, type ActuationLoop } from "@orchestrator/actuation";
 import { startServo, type MarkerTracker, type Servo } from "@orchestrator/marker-tracker";
-import { bindViews, publishSerials, DisposerBag, releaseLeases } from "@orchestrator/session-resources";
+import { publishSerials, DisposerBag, releaseLeases } from "@orchestrator/session-resources";
 import {
   bindDetections,
   createTrackerTriple,
@@ -156,7 +156,10 @@ export default function calibrateExtrinsicSession(): ServerSession<typeof calibr
       });
       const taps = new DisposerBag();
       bindDetections(trackers, taps, publishDetections);
-      bindViews(leases, taps, s);
+      // Raw L/C/R previews ride the native `camera:<serial>` pipe (usePipeFrame
+      // in index.vue, discovered via publishSerials) — no JS `onView` view-tap
+      // (A-31, real-1f step 3). Marker detection stays off-loop on
+      // `detector.stream`, so this session no longer taps `onView` at all.
       publishSerials(leases, taps, s);
       scope.defer(() => taps.dispose());
       // Drains FIRST: stop whichever actuation `enterStep` currently has active.

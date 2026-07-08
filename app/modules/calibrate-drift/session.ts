@@ -17,7 +17,7 @@ import { acquireTriple, type CalibratedTriple } from "@orchestrator/calibration"
 import { read, write } from "@orchestrator/store-hub";
 import { activeController } from "@orchestrator/controller";
 import { startServo, type MarkerTracker, type Servo } from "@orchestrator/marker-tracker";
-import { bindViews, publishSerials, DisposerBag, releaseLeases } from "@orchestrator/session-resources";
+import { publishSerials, DisposerBag, releaseLeases } from "@orchestrator/session-resources";
 import {
   bindDetections,
   createTrackerTriple,
@@ -93,7 +93,10 @@ export default function calibrateDriftSession(): ServerSession<typeof calibrateD
       });
       const taps = new DisposerBag();
       bindDetections(trackers, taps, publishDetections);
-      bindViews(t.leases, taps, s);
+      // Raw L/C/R previews ride the native `camera:<serial>` pipe (usePipeFrame
+      // in index.vue, discovered via publishSerials) — no JS `onView` view-tap
+      // (A-31, real-1f step 3). Marker detection stays off-loop on
+      // `detector.stream`, so this session no longer taps `onView` at all.
       publishSerials(t.leases, taps, s);
       scope.defer(() => taps.dispose());
 
