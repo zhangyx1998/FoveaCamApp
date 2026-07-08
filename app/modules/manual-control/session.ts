@@ -5,83 +5,73 @@
 // -------------------------------------------------------
 //
 // Manual-control session — same substrate as tracking-single (calibrated
-// L/C/R triple + frame-driven display + timer-paced actuation loop) minus
-// the KCF tracker: the target is always whatever `steer` last set, either a
-// mouse-drag pixel (converted server-side via `undistort.angular`, since the
-// renderer no longer holds calibration) or a locally-held set-point's angle
-// (pure client-side data, passed straight through with optional per-point
-// distance/shift overrides). Capture and recording (docs/refactor/
-// orchestrator.md roadmap item 6) are wired in separately — see `capture.ts`/
-// `recording.ts` — but their commands are declared on the contract now.
+// L/C/R triple + timer-paced actuation) minus the KCF tracker: the target is
+// always whatever `steer` last set, either a mouse-drag pixel (converted
+// server-side via `undistort.angular`) or a locally-held set-point's angle.
+// Capture and recording (docs/refactor/orchestrator.md roadmap item 6) are
+// wired in separately — see `capture.ts`/`recording.ts`.
+//
+// C-22b step 2: the PROCESSED DISPLAY views (undistorted center + magnified
+// slice, perspective-wrapped foveae, combined diff/depth) moved OFF the JS event
+// loop into the shared `display` vision worker kernel — the registry `onView`
+// taps + per-view `frame-worker`s are gone. Main connects the three
+// `camera:<serial>` SHM pipes (C-21 gate), spawns the worker with the serialized
+// calibration + display params (fovea homographies / depth Q-matrix / slice-
+// center, recomputed on each throttled volt/target update), and re-sources
+// `capture.onCenterTick` from the worker-posted processed center frame.
+// Recording is UNCHANGED — it reads `leases.L/C/R.camera.stream` directly.
 
 import { type ServerSession } from "@orchestrator/runtime";
 import { defineResourceSession, type ResourceScope } from "@orchestrator/resource-session";
 import { acquireTriple, type CalibratedTriple } from "@orchestrator/calibration";
 import { startActuationLoop, type ActuationLoop } from "@orchestrator/actuation";
-import { createFrameWorker } from "@orchestrator/frame-worker";
 import { DisposerBag, publishSerials, releaseLeases } from "@orchestrator/session-resources";
 import {
-  clampRectToSize,
   depthFromInverse,
   ORIGIN_POS,
   radians,
   VOLT_TELEMETRY_INTERVAL_MS,
 } from "@orchestrator/fovea-pipeline";
+import { createVisionWorker, type VisionWorkerHandle } from "@orchestrator/vision-worker-host";
+import {
+  serializeCalibration,
+  type DisplayParams,
+  type DisplayValues,
+} from "@orchestrator/display-transport";
+import type { PipeBroker } from "@orchestrator/pipe-session";
+import type { PipeInput, VisionResult } from "@orchestrator/vision-worker-protocol";
 import { manualControl } from "./contract";
 import { createCapture } from "./capture";
 import { createRecording } from "./recording";
-import {
-  depthFromProjection,
-  diff,
-  disparity,
-  heatmap,
-  reprojectImageTo3D,
-  slice,
-  wrapPerspective,
-  type Mat,
-} from "core/Vision";
-import { RECT } from "@lib/util/geometry";
-import { copyMat } from "@lib/mat";
+import { makeMat } from "@lib/mat";
 import {
   createQMatrix,
   deriveFoveaIntrinsics,
   inverseTriangulate,
   vergeToDistance,
 } from "@lib/stereo";
-import type { Point2d, Rect } from "core/Geometry";
+import type { Point2d } from "core/Geometry";
 import type { Pos } from "@lib/controller-codec";
 import { RollingStats } from "@lib/util/rolling";
 
-export default function manualControlSession(): ServerSession<typeof manualControl> {
+export default function manualControlSession(broker: PipeBroker): ServerSession<typeof manualControl> {
   return defineResourceSession("manual-control", manualControl, (s) => {
     let triple: CalibratedTriple | null = null;
     let loop: ActuationLoop | null = null;
+    let worker: VisionWorkerHandle | null = null;
 
-    // Center-frame geometry, learned from the first frame.
+    // Center-frame geometry, learned from the worker's processed center.
     let width = 0;
     let height = 0;
 
     // Target state — always whatever `steer` last set (no tracker/prediction).
     let target: Point2d = { x: 0, y: 0 };
     let targetAngle: Point2d = { x: 0, y: 0 };
-    // Per-set-point overrides (angle mode only); null means "use the base
-    // verge/shift state," matching the renderer's original `?? distance.value`
-    // / `?? shift.value` fallback for a set-point's unset d/s fields.
     let distanceOverride: number | null = null;
     let shiftOverride: number | null = null;
 
-    // Latest commanded voltages, mirrored locally so the L/R fovea wrap can use
-    // them off the frame path (telemetry-published copy lives in `volt`).
+    // Latest commanded voltages, mirrored locally for the fovea-wrap homography.
     const volts: { L: Pos; R: Pos } = { L: { ...ORIGIN_POS }, R: { ...ORIGIN_POS } };
-    // Aligned (always-wrapped) foveae cached for the diff/depth combined view.
-    const aligned: { L: Mat<Uint8Array> | null; R: Mat<Uint8Array> | null } = {
-      L: null,
-      R: null,
-    };
-
-    function clampRect(r: Rect): Rect {
-      return clampRectToSize(r, { width, height });
-    }
 
     // --- targeting ---------------------------------------------------------
 
@@ -94,12 +84,7 @@ export default function manualControlSession(): ServerSession<typeof manualContr
 
     function targetVolts(): { l: Pos; r: Pos } {
       if (!triple) return { l: ORIGIN_POS, r: ORIGIN_POS };
-      const A = inverseTriangulate(
-        targetAngle,
-        s.state.baseline,
-        distance(),
-        radians(shiftDeg()),
-      );
+      const A = inverseTriangulate(targetAngle, s.state.baseline, distance(), radians(shiftDeg()));
       return { l: triple.conv.A2V.L(A.l), r: triple.conv.A2V.R(A.r) };
     }
 
@@ -107,135 +92,78 @@ export default function manualControlSession(): ServerSession<typeof manualContr
       target = px;
       distanceOverride = null;
       shiftOverride = null;
-      targetAngle = triple?.undistort
-        ? triple.undistort.angular([px], false)[0]
-        : { x: 0, y: 0 };
+      targetAngle = triple?.undistort ? triple.undistort.angular([px], false)[0] : { x: 0, y: 0 };
       s.telemetry({ target, target_angle: targetAngle });
+      pushParams(sliceAtParam());
     }
 
-    function setTargetFromAngle(
-      angle: Point2d,
-      distance_mm?: number,
-      shift_deg?: number,
-    ): void {
+    function setTargetFromAngle(angle: Point2d, distance_mm?: number, shift_deg?: number): void {
       targetAngle = angle;
       distanceOverride = distance_mm ?? null;
       shiftOverride = shift_deg ?? null;
-      target = triple?.undistort
-        ? triple.undistort.position([angle], false)[0]
-        : { x: 0, y: 0 };
+      target = triple?.undistort ? triple.undistort.position([angle], false)[0] : { x: 0, y: 0 };
       s.telemetry({ target, target_angle: targetAngle });
+      pushParams({ ...sliceAtParam(), ...depthParams() });
     }
 
-    // --- display (mirrors tracking-single's onCenterView/onFoveaView, no
-    // tracker: no pendingInit/search/lostCount, target is external state) ---
+    // --- worker params (main computes calibration-derived matrices) -------
 
-    function publishSlicedView(centerMat: Mat<Uint8Array>): void {
-      if (!triple?.undistort) return;
-      const zoom = Math.max(1, s.state.zoom);
-      const size = { width: width / zoom, height: height / zoom };
-      const at = triple.undistort.position([targetAngle], false)[0];
-      const sliced = slice(centerMat, clampRect(RECT.fromCenter(at, size)));
-      s.frame("center", sliced);
-    }
-
-    // PB3 A-5: `undistort.apply` is a full-frame remap — ms-scale, previously
-    // run inline in the registry's synchronous `onView` dispatch, which
-    // throttled the whole camera serial (see `@orchestrator/frame-worker`'s
-    // header for the exact mechanism). The tap now only copies the buffer and
-    // hands off to a busy-gated, latest-wins `frameWorker`; `capture.
-    // onCenterTick` rides the same (now coalesced) processed-view cadence —
-    // it's a promise-resolve for a capture pass awaiting "the next center
-    // frame," not vision math, so riding a slightly slower cadence than raw
-    // camera rate is harmless (capture.ts has no per-frame deadline).
-    // Workload meter names (A-8): stable per-worker identities for
-    // `system.perfSnapshot.workloads`. The workers (and their meters) are
-    // process-lifetime — this session is a boot-time singleton and the
-    // workers persist across idle/activate cycles, so `worker.dispose()` has
-    // no call site here on purpose: `ServerSession.dispose()` is a REUSABLE
-    // force-idle (releaseCameras, window-switch drain), not a terminal
-    // teardown — disposing the meters there would inert them after the
-    // first app switch and drop the named rows the snapshot should keep.
-    const centerWorker = createFrameWorker<Mat<Uint8Array>, Mat<Uint8Array>>({
-      name: "manual-control:center",
-      copy: copyMat,
-      process(raw) {
-        const view = triple?.undistort ? triple.undistort.apply(raw) : raw;
-        const [h, w] = view.shape;
-        if (w !== width || h !== height) {
-          width = w;
-          height = h;
-          s.telemetry({ size: { width, height } });
-        }
-        s.frame("C", view);
-        if (s.state.view === "sliced") publishSlicedView(view);
-        capture.onCenterTick(view);
-      },
-    });
-
-    function onCenterView(raw: Mat<Uint8Array>): void {
-      centerWorker.submit(raw);
-    }
-
-    function depthWindow(): number {
-      return depthFromInverse(s.state.depthWindowInv);
-    }
-
-    function publishCombinedView(): void {
-      const { L, R } = aligned;
-      if (!L || !R || !triple?.undistort) return;
-      let out: Mat<Uint8Array>;
-      if (s.state.view === "diff") {
-        out = diff(L, R, true);
-      } else {
+    /** Fovea homographies + depth Q-matrix at the current pose — pushed on each
+     *  throttled volt update (cheap; the worker uses the latest). */
+    function voltParams(): DisplayParams {
+      if (!triple) return {};
+      const HL = triple.conv.A2H.L(triple.conv.V2A.L(volts.L));
+      const HR = triple.conv.A2H.R(triple.conv.V2A.R(volts.R));
+      const params: DisplayParams = {
+        homographyL: Array.from(HL as unknown as Float64Array),
+        homographyR: Array.from(HR as unknown as Float64Array),
+      };
+      if (triple.undistort) {
         const zoom = Math.max(1, s.state.zoom);
         const Q = createQMatrix(
           deriveFoveaIntrinsics(triple.undistort, triple.conv.V2A.L(volts.L), zoom),
           deriveFoveaIntrinsics(triple.undistort, triple.conv.V2A.R(volts.R), zoom),
           s.state.baseline,
         );
-        const proj = reprojectImageTo3D(disparity(L, R), Q);
-        const dw = depthWindow() / 2;
-        const z = depthFromProjection(proj, distance() - dw, distance() + dw);
-        out = heatmap(z);
+        params.qMatrix = Array.from(Q as unknown as Float64Array);
       }
-      s.frame("center", out);
+      return params;
     }
 
-    // PB3 A-5: `wrapPerspective` (full remap) + `publishCombinedView`'s
-    // diff/depth math (disparity, reprojectImageTo3D, heatmap) are the other
-    // inline-vision culprit named in PB3 — same fix, one worker per eye (L/R
-    // arrive on independent taps, so each gets its own busy-gate; the
-    // existing `aligned` cache already tolerates the two eyes being a tick or
-    // two apart, same as before).
-    function processFoveaView(role: "L" | "R", view: Mat<Uint8Array>): void {
-      const H = triple ? triple.conv.A2H[role](triple.conv.V2A[role](volts[role])) : null;
-      const wrapped = H ? wrapPerspective(view, H) : null;
-      const display = s.state.wrap && wrapped ? wrapped : view;
-      s.frame(role, display);
-      if (s.state.view === "sliced") {
-        aligned.L = aligned.R = null;
-      } else {
-        aligned[role] = wrapped;
-        if (role === "R") publishCombinedView();
-      }
+    /** The undistorted center pixel the magnified "sliced" view crops around. */
+    function sliceAtParam(): DisplayParams {
+      const undistort = triple?.undistort;
+      const at = undistort ? undistort.position([targetAngle], false)[0] : target;
+      return { sliceAt: at };
     }
 
-    const foveaWorkers = {
-      L: createFrameWorker<Mat<Uint8Array>, Mat<Uint8Array>>({
-        name: "manual-control:fovea:L",
-        copy: copyMat,
-        process: (v) => processFoveaView("L", v),
-      }),
-      R: createFrameWorker<Mat<Uint8Array>, Mat<Uint8Array>>({
-        name: "manual-control:fovea:R",
-        copy: copyMat,
-        process: (v) => processFoveaView("R", v),
-      }),
-    };
+    /** Depth-heatmap clamp range for the "depth" combined view. */
+    function depthParams(): DisplayParams {
+      const dw = depthFromInverse(s.state.depthWindowInv) / 2;
+      const d = distance();
+      return { depthNear: d - dw, depthFar: d + dw };
+    }
 
-    function onFoveaView(role: "L" | "R", view: Mat<Uint8Array>): void {
-      foveaWorkers[role].submit(view);
+    function pushParams(params: DisplayParams): void {
+      worker?.sendParams(params as Record<string, unknown>);
+    }
+
+    // --- worker results (publish frames + re-source capture + learn geo) --
+
+    function onResult(r: VisionResult): void {
+      const v = r.values as DisplayValues;
+      if (v.size) {
+        width = v.size.width;
+        height = v.size.height;
+        s.telemetry({ size: v.size });
+      }
+      for (const f of r.frames) {
+        const mat = makeMat(new Uint8Array(f.buffer), [f.height, f.width], f.channels);
+        // Feed capture BEFORE publishing — `onCenterTick` copies synchronously
+        // when a pass is waiting; `s.frame` may transfer/neuter the buffer.
+        if (f.name === "C") capture.onCenterTick(mat);
+        s.frame(f.name, mat);
+      }
     }
 
     // --- capture (docs/refactor/orchestrator.md roadmap item 6) ----------
@@ -254,7 +182,7 @@ export default function manualControlSession(): ServerSession<typeof manualContr
       telemetry: (patch) => s.telemetry(patch),
     });
 
-    // --- recording (docs/refactor/orchestrator.md roadmap item 6) --------
+    // --- recording (reads leases.L/C/R.camera.stream directly; unchanged) --
 
     const recording = createRecording({
       getTriple: () => triple,
@@ -265,27 +193,53 @@ export default function manualControlSession(): ServerSession<typeof manualContr
     // --- actuation -----------------------------------------------------
 
     let lastVoltEmit = 0;
+    let lastParamPush = 0;
     const actuateMsStats = new RollingStats(0.9, 2, "ms");
 
     // --- lifecycle -------------------------------------------------------
 
-    // Resource-scoped activation (A-P1). The trickiest teardown in the fleet: a
-    // capture/recording pass may still be reading `lease.camera.stream` (or
-    // awaiting the next center-view tick via `capture.onCenterTick`) when the
-    // last subscriber leaves — it MUST fully drain BEFORE the view-taps are
-    // disposed and the leases released (V1/§6). The scope's LIFO drain + AWAITED
-    // async cleanups reproduce that exact order, and `drained()` awaits it (so
-    // the multi-window switch waits for the real settle). Registration order
-    // below is reverse of the drain sequence.
+    function initParams(): Record<string, unknown> {
+      return {
+        kind: "display",
+        cal: triple?.undistort ? serializeCalibration(triple.undistort.calibration) : null,
+        zoom: Math.max(1, s.state.zoom),
+        view: s.state.view,
+        wrap: s.state.wrap,
+        ...voltParams(),
+        ...sliceAtParam(),
+        ...depthParams(),
+      };
+    }
+
+    /** Connect a `camera:<serial>` pipe (refcount++ → C-21 gate) → worker input. */
+    function connectPipe(role: "L" | "C" | "R", serial: string, ids: string[]): PipeInput {
+      const pipeId = `camera:${serial}`;
+      const handle = broker.connect(pipeId);
+      ids.push(pipeId);
+      const { width: w, height: h, channels, bytesPerFrame, maxBytes } = handle.spec;
+      return { role, shmName: handle.shmName, width: w, height: h, channels, bytesPerFrame: maxBytes ?? bytesPerFrame };
+    }
+
+    // Resource-scoped activation (A-P1). Trickiest teardown in the fleet: a
+    // capture/recording pass may still be reading a stream (or awaiting the next
+    // center tick via `capture.onCenterTick`) when the last subscriber leaves —
+    // it MUST fully drain BEFORE the worker terminates + the pipes disconnect +
+    // the leases release. Registration order below is reverse of the drain.
     async function activateSession(scope: ResourceScope): Promise<void> {
       const t = await scope.use(() => acquireTriple(s), releaseLeases); // drains LAST
       if (!t) return;
       triple = t;
+
+      const pipeIds: string[] = [];
+      const pipes: PipeInput[] = [
+        connectPipe("L", t.leases.L.camera.serial, pipeIds),
+        connectPipe("C", t.leases.C.camera.serial, pipeIds),
+        connectPipe("R", t.leases.R.camera.serial, pipeIds),
+      ];
       const taps = new DisposerBag();
-      taps.push(t.leases.L.onView((v) => onFoveaView("L", v)));
-      taps.push(t.leases.C.onView(onCenterView));
-      taps.push(t.leases.R.onView((v) => onFoveaView("R", v)));
       publishSerials(t.leases, taps, s);
+      worker = createVisionWorker({ pipes, params: initParams() }, onResult);
+
       loop = startActuationLoop({
         targetVolts,
         onVolts(v, actuateMs) {
@@ -293,6 +247,10 @@ export default function manualControlSession(): ServerSession<typeof manualContr
           volts.R = v.R;
           actuateMsStats.push(actuateMs);
           const now = performance.now();
+          if (now - lastParamPush >= VOLT_TELEMETRY_INTERVAL_MS) {
+            lastParamPush = now;
+            pushParams(voltParams());
+          }
           if (now - lastVoltEmit >= VOLT_TELEMETRY_INTERVAL_MS) {
             lastVoltEmit = now;
             s.telemetry({
@@ -305,20 +263,18 @@ export default function manualControlSession(): ServerSession<typeof manualContr
       });
 
       // --- teardown (registered reverse of drain; LIFO) -----------------
-      // Drains just before the leases: the display-vision workers persist
-      // across idle/activate (process-lifetime meters) — `cancel()` only drops
-      // scheduled work so a frame copied pre-idle can't process against a fresh
-      // `triple` (V5/V10/V13). Ran AFTER the drain, since a waiting capture pass
-      // needs them live.
+      // The worker + pipes drain AFTER the awaited capture/recording drain, so a
+      // capture waiting on the next processed-center tick still receives it (the
+      // worker keeps posting — it holds its own Undistort, independent of main's
+      // `triple`). Terminate worker BEFORE dropping the gate.
       scope.defer(() => {
-        centerWorker.cancel();
-        foveaWorkers.L.cancel();
-        foveaWorkers.R.cancel();
+        worker?.terminate();
+        worker = null;
+        for (const id of pipeIds) broker.disconnect(id);
+        taps.dispose();
       });
-      scope.defer(() => taps.dispose()); // AFTER the drain — taps stay live during it
       // The awaited async drain: a capture can be waiting on the next center
-      // tick, so this MUST run while the taps are still live and before the
-      // leases release. `drained()` awaits it (multi-window.md §3).
+      // tick, so this MUST run while the worker is still live.
       scope.defer(async () => {
         await Promise.all([recording.stop(), capture.waitIdle()]);
       });
@@ -339,6 +295,26 @@ export default function manualControlSession(): ServerSession<typeof manualContr
       activate: (scope) => activateSession(scope),
       idle() {
         width = height = 0; // after the full drain (leases already released)
+      },
+      watch: {
+        zoom() {
+          pushParams({ zoom: Math.max(1, s.state.zoom), ...voltParams(), ...sliceAtParam() });
+        },
+        view(view) {
+          pushParams({ view });
+        },
+        wrap(wrap) {
+          pushParams({ wrap });
+        },
+        baseline() {
+          pushParams({ ...voltParams(), ...depthParams() });
+        },
+        verge() {
+          pushParams(depthParams());
+        },
+        depthWindowInv() {
+          pushParams(depthParams());
+        },
       },
       commands: {
         async steer(t) {
@@ -373,9 +349,6 @@ export default function manualControlSession(): ServerSession<typeof manualContr
           await recording.stop();
         },
       },
-      // Drain-refusal probe (multi-window.md §5 default 2): a window switch
-      // must not force-drain this session mid-capture/recording — the user
-      // gets a prompt instead of losing an in-flight pass.
       busy() {
         if (capture.busy) return "capture in progress";
         if (recording.active) return "recording in progress";

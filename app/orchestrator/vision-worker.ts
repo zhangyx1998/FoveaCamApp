@@ -29,11 +29,13 @@ import type {
   VisionWorkerIn,
 } from "./vision-worker-protocol.js";
 import { createDisparityKernel } from "@modules/disparity-scope/vision";
+import { createDisplayKernel } from "./display-kernel.js";
 
-/** Kernel registry — keyed by `params.kind`. Manual-control / tracking-single
- *  land here in C-22b step 2. */
+/** Kernel registry — keyed by `params.kind`. `display` serves both
+ *  tracking-single + manual-control (C-22b step 2). */
 const KERNELS: Record<string, KernelFactory> = {
   disparity: createDisparityKernel,
+  display: createDisplayKernel,
 };
 
 /** Idle backoff when no pipe produced a new frame (yield-loop, ~1-3ms). */

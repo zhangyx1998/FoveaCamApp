@@ -102,10 +102,10 @@ const manageCameras = hub.add(manageCamerasSession());
 hub.add(controllerSession());
 
 // --- tracking: first frame-driven control loop (KCF + actuation) ----------
-const tracking = hub.add(trackingSession());
+const tracking = hub.add(trackingSession(asBroker(Pipe)));
 
 // --- manual-control: manual steering + capture + recording ----------------
-const manualControl = hub.add(manualControlSession());
+const manualControl = hub.add(manualControlSession(asBroker(Pipe)));
 
 // --- multi-fovea: protocol-v2 multi-target logic skeleton ------------------
 const multiFovea = hub.add(multiFoveaSession());
