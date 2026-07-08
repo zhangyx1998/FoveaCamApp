@@ -125,6 +125,32 @@ names the mechanism it gates.
 - [ ] **Enable no longer resets MCU clock** — calibration survives
   enable/disable cycles (v1.1 behavior change).
 
+## PID nodes + view re-plumb (2026-07-08 wave, through 9217523)
+
+- [ ] **View fps decoupled** — disparity-scope / tracking-single /
+  manual-control / calibrate-distortion: L/R (and disparity's C) main views
+  render at CAMERA rate while the kernel meters lower (the 36–40 vs 60 fps
+  gap closes); profiler graph shows the undistort nodes in every chain.
+- [ ] **Disparity chain renders** — camera→convert→undistort→scope→pid→
+  controller in the graph; scope node meters only analysis work (no view
+  relay traffic on its edges).
+- [ ] **Undistorted-view alignment** — disparity's overlays (target dot,
+  pose rects, tracker bbox, match rects) align on the undistorted C view;
+  L/R undistorted views track mirror pose via the feeder (no wrap toggle
+  anywhere anymore). RIG-CHECK (pre-existing): feeder H vs inverse — one
+  seam in homography-feeder.ts.
+- [ ] **Override semantics live** — disparity drag: mirrors follow, release
+  resumes vergence control from the released pose with NO jump (seeded
+  reconstruction inverse). calibrate-drift / calibrate-extrinsic per-eye
+  drags: dragged eye pins (controllers held reset), other eye keeps
+  servoing; release resumes from the released pose (old behavior snapped).
+- [ ] **Servo numeric parity** — calibrate-drift/extrinsic marker servoing
+  converges exactly as before (PID2D velocity form is bit-identical on the
+  bench; confirm no felt difference on hardware).
+- [ ] **Capture wrap default** — manual-control captures always save
+  WRAPPED foveae now (the retired toggle's default); confirm downstream
+  consumers of recorded captures expect this.
+
 ## Blocked (hardware change required)
 
 - [ ] **Center-camera hardware trigger** — needs the slimmer CAM0 cable
