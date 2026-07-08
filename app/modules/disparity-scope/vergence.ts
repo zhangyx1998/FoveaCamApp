@@ -56,6 +56,18 @@ export type VergenceAnalysis = {
   oy: number;
 };
 
+/** The scalar subset of {@link VergenceAnalysis} that {@link stepVergence}
+ *  actually reads (no Mats). C-22b: the vision worker computes the analysis and
+ *  posts only these fields back over the MessagePort; the main-thread control
+ *  step consumes them. A full `VergenceAnalysis` is structurally assignable. */
+export type VergenceStepInput = {
+  ml: Pick<MatchResult, "rect" | "score">;
+  mr: Pick<MatchResult, "rect" | "score">;
+  center: { rect: Rect };
+  ox: number;
+  oy: number;
+};
+
 export type VergenceOptions = {
   /** Wide center frame dimensions (pixels). */
   width: number;
@@ -244,7 +256,7 @@ export async function analyzeVergence(
  * left untouched so a low-confidence frame neither integrates nor winds down.
  */
 export function stepVergence(
-  analysis: VergenceAnalysis,
+  analysis: VergenceStepInput,
   pids: VergencePIDs,
   conv: Pick<CoordinateConversions, "P2A" | "A2V">,
   ctrl: VergenceControl,

@@ -162,9 +162,16 @@ export default defineConfig(({ command }) => {
                     // Shortcut of `build.lib.entry`. The orchestrator is a
                     // second Node entry built alongside main; the main process
                     // forks it as a utilityProcess (.dist/electron/orchestrator.js).
+                    // `vision-worker` (A-28) is C's per-session vision worker_thread,
+                    // bundled the SAME way as the orchestrator — the shared
+                    // `rollupOptions.external: isExternal` below externalizes `core`
+                    // + native `.node` for it identically (the worker does
+                    // `require("core")` / core/Vision + core/Tracker at runtime and
+                    // loads the shm-reader addon via a parent-passed absolute path).
                     entry: {
                         main: "electron/main.ts",
                         orchestrator: "orchestrator/index.ts",
+                        "vision-worker": "orchestrator/vision-worker.ts",
                     },
                     vite: {
                         resolve: { alias },

@@ -111,7 +111,7 @@ const manualControl = hub.add(manualControlSession());
 const multiFovea = hub.add(multiFoveaSession());
 
 // --- disparity-scope: auto-vergence control loop (§7.1 S1a) ---------------
-const disparityScope = hub.add(disparityScopeSession());
+const disparityScope = hub.add(disparityScopeSession(asBroker(Pipe)));
 
 // --- calibrate-intrinsic: per-camera checkerboard/marker calibration (§7.1 S1b)
 const calibrateIntrinsic = hub.add(calibrateIntrinsicSession());
