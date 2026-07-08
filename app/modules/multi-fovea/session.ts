@@ -3,6 +3,18 @@
 // This source code is licensed under the MIT license.
 // You may find the full license in project root directory.
 // -------------------------------------------------------
+//
+// Multi-fovea session (C-24 step 4 — the composition-round flagship).
+// Tracking runs on B-25's native multi-KCF thread (`createMultiTracker`: one
+// free-running thread, batched per-frame results, fused undistort — results in
+// UNDISTORTED coordinates when calibrated). The session consumes the batch
+// iterator into the runtime's policy half (arm/disarm churn, lost tolerance,
+// steering, controller streams) and drives each slot's composed fovea crop
+// node (`setFoveaRect` per tick — frame-bound origin rides the pipe, v4).
+// The renderer COMPOSES the per-target fovea nodes itself (camera-rooted,
+// refcounted, auto-unref on window close) and binds them via `usePipeFrame`.
+// The C-22b relay worker is GONE — nothing multi-fovea does touches the JS
+// event loop per frame anymore.
 
 import { type ServerSession } from "@orchestrator/runtime";
 import { defineResourceSession, type ResourceScope } from "@orchestrator/resource-session";
@@ -10,21 +22,19 @@ import { acquireTriple, type CalibratedTriple } from "@orchestrator/calibration"
 import { activeController, type StreamHandle } from "@orchestrator/controller";
 import { RoundRobinFrameScheduler } from "@orchestrator/scheduler";
 import { publishSerials, releaseLeases } from "@orchestrator/session-resources";
-import { createVisionWorker, type VisionWorkerHandle } from "@orchestrator/vision-worker-host";
-import type { DisplayValues } from "@orchestrator/display-transport";
 import {
   advertiseUndistortPipe,
   retireUndistortPipe,
   type UndistortPipeSeam,
 } from "@orchestrator/undistort-pipe";
+import { registerNativeProbe } from "@orchestrator/native-probes";
 import { nodeId } from "@lib/orchestrator/graph-contract";
 import type { PipeBroker } from "@orchestrator/pipe-session";
-import type { PipeInput, VisionResult } from "@orchestrator/vision-worker-protocol";
+import type { WorkloadSnapshot } from "@lib/orchestrator/stats";
 import { multiFovea, defaultMultiFoveaTarget, MAX_MULTI_FOVEA_TARGETS } from "./contract";
-import { MultiFoveaRuntime } from "./runtime";
-import { KCF } from "core/Tracker";
-import { makeMat } from "@lib/mat";
-import type { Point2d } from "core/Geometry";
+import { MultiFoveaRuntime, type MultiTrackBatch } from "./runtime";
+import * as Tracker from "core/Tracker";
+import type { Point2d, Rect } from "core/Geometry";
 import type { Pos } from "@lib/controller-codec";
 import { inverseTriangulate } from "@lib/stereo";
 import { RollingStats } from "@lib/util/rolling";
@@ -35,14 +45,39 @@ function radians(deg: number): number {
   return (deg * Math.PI) / 180;
 }
 
+/** B-25's multi-KCF surface (d.ts pending — B-owned; cast like the Aravis pipe
+ *  NAPIs). `arm` on a live id RE-INITS that target (ruled steer-while-armed). */
+interface MultiKcfTracker extends AsyncIterable<MultiTrackBatch> {
+  arm(id: string, roi: Rect): void;
+  disarm(id: string): void;
+  probe(): Tracker.TrackerMeter;
+  release(): void;
+}
+const createMultiTracker = (
+  Tracker as unknown as {
+    createMultiTracker(
+      camera: unknown,
+      opts: { cal?: unknown; name?: string },
+    ): MultiKcfTracker;
+  }
+).createMultiTracker;
+
+/** The live-rect half of the fovea brick (index.ts wires `Aravis.setFoveaRect`;
+ *  injected so this session stays core-free in vitest). Returns false when the
+ *  pipe isn't composed/attached — callers steer blindly, that's fine. */
+export type FoveaRectSeam = (pipeId: string, rect: Rect) => boolean;
+
 export default function multiFoveaSession(
   broker: PipeBroker,
   undistortSeam: UndistortPipeSeam,
+  setFoveaRect: FoveaRectSeam,
 ): ServerSession<typeof multiFovea> {
   return defineResourceSession("multi-fovea", multiFovea, (s) => {
     let triple: CalibratedTriple | null = null;
-    let worker: VisionWorkerHandle | null = null;
+    let tk: MultiKcfTracker | null = null;
+    let serialC: string | null = null;
     const trackMs = new RollingStats(0.9, 2, "ms");
+    let lastTrackEmit = 0;
     let schedulerFrames = 0;
     let schedulerRejects = 0;
     let schedulerTimeouts = 0;
@@ -81,7 +116,10 @@ export default function multiFoveaSession(
     });
 
     const runtime = new MultiFoveaRuntime(scheduler, {
-      createTracker: () => new KCF(),
+      // Route to the CURRENT activation's tracker (the runtime is a session-
+      // level singleton; `tk` swaps per activation).
+      arm: (id, roi) => tk?.arm(id, roi),
+      disarm: (id) => tk?.disarm(id),
       async createStream(_index: number, center: Point2d): Promise<StreamHandle | null> {
         const controller = activeController();
         s.telemetry({ v2Capable: controller?.v2Capable ?? false });
@@ -110,6 +148,11 @@ export default function multiFoveaSession(
           })),
         });
       },
+      // Steer the slot's composed crop node — blind (false when the renderer
+      // hasn't composed that fovea; the node follows as soon as it exists).
+      updateFoveaRect(index, rect) {
+        if (serialC) setFoveaRect(nodeId.fovea(serialC, index), rect);
+      },
     });
 
     function publishScheduler(): void {
@@ -135,27 +178,23 @@ export default function multiFoveaSession(
       };
     }
 
-    // C-22b step 3: the center undistort moved to the `display` vision worker
-    // (off the JS event loop) — the worker posts the undistorted "C" frame, and
-    // this consumes it exactly as the old `onCenterView` did. The multi-target
-    // KCF (`runtime.onCenterFrame`) still runs on the main loop for now; moving
-    // it to a dedicated C++ thread is the separate async-kcf refactor.
-    function onResult(r: VisionResult): void {
-      void (r.values as DisplayValues);
-      for (const f of r.frames) {
-        if (f.name !== "C") continue;
-        const view = makeMat(new Uint8Array(f.buffer), [f.height, f.width], f.channels);
-        s.frame("C", view);
-        void (async () => {
-          const elapsed = await runtime.onCenterFrame(view);
-          if (!triple || elapsed <= 0) return;
+    /** Consume the native batch stream (its own C++ thread) into the runtime's
+     *  policy half. Ends when `tk.release()` closes the iterator on drain. */
+    async function consumeTracker(t: MultiKcfTracker): Promise<void> {
+      try {
+        for await (const batch of t) {
+          const elapsed = runtime.onTrackResults(batch);
+          if (elapsed <= 0) continue;
           trackMs.push(elapsed);
-          s.telemetry({
-            size: { width: view.shape[1], height: view.shape[0] },
-            perf: { trackMs: { mean: trackMs.mean, max: trackMs.max } },
-          });
-          trackMs.resetMax();
-        })();
+          const now = performance.now();
+          if (now - lastTrackEmit >= 1000) {
+            lastTrackEmit = now;
+            s.telemetry({ perf: { trackMs: { mean: trackMs.mean, max: trackMs.max } } });
+            trackMs.resetMax();
+          }
+        }
+      } catch {
+        /* iterator closed by release() on drain — expected */
       }
     }
 
@@ -183,24 +222,22 @@ export default function multiFoveaSession(
     }
 
     // Resource-scoped activation (A-P1). `scheduler`/`runtime` are session-level
-    // singletons; per activation we lease the triple + tap the center view, and
-    // the drain stops the scheduler + disposes the runtime (re-populated by
-    // `applyTargets` on the next activate, as before). Lease releases LAST.
+    // singletons; per activation we lease the triple + spin the multi-KCF
+    // thread, and the drain releases the tracker (closing its iterator) +
+    // stops the scheduler + disposes the runtime. Lease releases LAST.
     async function activateSession(scope: ResourceScope): Promise<void> {
       const t = await scope.use(() => acquireTriple(s), releaseLeases);
       if (!t) return;
       triple = t;
+      serialC = t.leases.C.camera.serial;
       scope.defer(() => {
         triple = null;
+        serialC = null;
       });
       scope.defer(() => runtime.dispose());
       scope.defer(() => scheduler.stop());
       // real-1g (C-23): advertise the first-class `undistort:<serial>` center
-      // pipe. The renderer binds it directly for the wide view; the worker here
-      // is the ruled Q1(a) MINIMAL RELAY — it reads the same pipe and posts
-      // frames solely for the on-main KCF (`runtime.onCenterFrame`), dying
-      // naturally when async-kcf→C++ lands. Retire defer registered BEFORE the
-      // worker's → runs after the consumers disconnect (LIFO).
+      // pipe — the renderer binds it directly for the wide view.
       let undistortC: string | null = null;
       if (t.undistort) {
         undistortC = advertiseUndistortPipe(
@@ -214,37 +251,33 @@ export default function multiFoveaSession(
           s.setState("undistortPipe", null);
         });
       }
-      // Connect the center pipe (C-21 gate) + spawn the relay worker. Its
-      // teardown is registered LAST → drains FIRST: the worker terminates
-      // (stopping frames) before the runtime disposes, exactly as the old
-      // center-view tap did. Uncalibrated rigs fall back to the raw pipe.
-      const cId = undistortC ?? nodeId.convert(t.leases.C.camera.serial);
-      const handle = broker.connect(cId);
-      const cPipe: PipeInput = {
-        role: "C",
-        shmName: handle.shmName,
-        width: handle.spec.width,
-        height: handle.spec.height,
-        channels: handle.spec.channels,
-        bytesPerFrame: handle.spec.maxBytes ?? handle.spec.bytesPerFrame,
-      };
-      worker = createVisionWorker(
-        {
-          pipes: [cPipe],
-          params: {
-            kind: "display",
-            view: "diff", // non-"sliced" → no slice output; relayCenter is the point
-            relayCenter: true, // Q1(a): post "C" for the on-main multi-target KCF
-          },
-        },
-        onResult,
-      );
-      publishSerials(t.leases, scope, s);
-      scope.defer(() => {
-        worker?.terminate();
-        worker = null;
-        broker.disconnect(cId);
+      // B-25: the multi-target KCF thread, bound to the shared center stream,
+      // batched results OFF the JS loop; fused undistort when calibrated (so
+      // bboxes land in the same undistorted space targetPose expects). Probe
+      // key = node id (B-24 convention) → folds into the topology for free.
+      tk = createMultiTracker(t.leases.C.camera, {
+        cal: t.undistort?.calibration,
+        name: nodeId.kcfMulti(serialC),
       });
+      scope.defer(() => {
+        tk?.release(); // closes the iterator; consumeTracker returns
+        tk = null;
+      });
+      scope.defer(
+        registerNativeProbe(
+          (): Record<string, WorkloadSnapshot> =>
+            tk && serialC
+              ? { [nodeId.kcfMulti(serialC)]: multiWorkload(tk.probe()) }
+              : {},
+        ),
+      );
+      void consumeTracker(tk);
+      // Arm-rect clamp source (ruled): camera dims from the lease at activate.
+      runtime.setFrameSize({
+        width: t.leases.C.camera.getFeatureInt("Width"),
+        height: t.leases.C.camera.getFeatureInt("Height"),
+      });
+      publishSerials(t.leases, scope, s);
       // Run the round-robin frame scheduler for this activation (paired with the
       // `scheduler.stop()` drain above). Without this the scheduler's `running`
       // flag never flips and `pump()` early-returns, so no CMD_FRAME is ever
@@ -296,4 +329,19 @@ export default function multiFoveaSession(
       },
     };
   });
+}
+
+/** Adapt the native meter to the `WorkloadSnapshot` shape (same as
+ *  tracking-single's `trackerWorkload`, one thread for N targets). */
+function multiWorkload(m: Tracker.TrackerMeter): WorkloadSnapshot {
+  const t = Date.now();
+  return {
+    name: m.name,
+    window: { startedAt: t - m.uptimeMs, snapshotAt: t, uptimeMs: m.uptimeMs },
+    utilization: m.utilization,
+    busyMs: m.busyMs,
+    inputs: m.inputs,
+    outputs: m.outputs,
+    drops: { total: m.dropTotal, ratePerSec: 0, byReason: {} },
+  };
 }

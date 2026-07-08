@@ -3,9 +3,17 @@
 // This source code is licensed under the MIT license.
 // You may find the full license in project root directory.
 // -------------------------------------------------------
+//
+// Multi-fovea target runtime (C-24 step 4). Tracking runs on B-25's native
+// multi-KCF thread (`createMultiTracker` — one thread, batched per-frame
+// results, fused undistort); this runtime is the SESSION-SIDE POLICY half:
+// slot bookkeeping, arm/disarm churn (slot index = tracker target id),
+// lost-tolerance (the thread emits `ok:false` liberally — tolerance absorbs
+// it, per the B-25 ruling), steering, pose math via deps, controller-stream
+// sync, and telemetry. The old per-slot JS KCF (busy-drop + generation
+// staleness guards) is GONE — staleness is intrinsic to the native thread.
 
 import type { Point2d, Rect, Size } from "core/Geometry";
-import type { Mat } from "core/Vision";
 import type { StreamHandle } from "@orchestrator/controller";
 import type { RoundRobinFrameScheduler } from "@orchestrator/scheduler";
 import { RECT } from "@lib/util/geometry";
@@ -14,14 +22,18 @@ import type {
   MultiFoveaTargetTelemetry,
 } from "./contract";
 
-export interface TrackerLike {
-  init(frame: Mat<Uint8Array>, roi: Rect): void;
-  updateAsync(frame: Mat<Uint8Array>): Promise<Rect | null>;
-  release(): void;
-}
+/** One per-frame batch from the native multi-KCF thread (B-25 ruled shape). */
+export type MultiTrackBatch = {
+  seq: number;
+  deviceTimestamp?: bigint;
+  targets: Array<{ id: string; ok: boolean; bbox: Rect | null; updateMs: number }>;
+};
 
 export interface MultiFoveaRuntimeDeps {
-  createTracker(): TrackerLike;
+  /** (Re-)arm the native tracker target — `arm()` on a LIVE id RE-INITS it
+   *  (the ruled steer-while-armed path; the learned filter resets, inherent). */
+  arm(id: string, roi: Rect): void;
+  disarm(id: string): void;
   createStream(index: number, center: Point2d): Promise<StreamHandle | null>;
   targetPose(index: number, center: Point2d): {
     angle: Point2d;
@@ -29,11 +41,15 @@ export interface MultiFoveaRuntimeDeps {
   };
   updateScheduler(targets: Array<{ stream: number }>): void;
   publish(targets: MultiFoveaTargetTelemetry[]): void;
+  /** Steer the slot's composed fovea crop node (C-24: `setFoveaRect` on the
+   *  `camera/<serial>/undistort/fovea/<index>` pipe — a no-op when the window
+   *  hasn't composed that node). */
+  updateFoveaRect(index: number, rect: Rect): void;
 }
 
 type Slot = {
   config: MultiFoveaTargetConfig;
-  tracker: TrackerLike | null;
+  armed: boolean;
   stream: StreamHandle | null;
   active: boolean;
   bbox: Rect | null;
@@ -44,20 +60,23 @@ type Slot = {
   lastFinAt: number | null;
 };
 
-const ORIGIN = { x: 0, y: 0 };
-
 export class MultiFoveaRuntime {
   private slots: Slot[] = [];
   private size: Size = { width: 0, height: 0 };
   private streamSyncing = false;
   private streamSyncDirty = false;
   private generation = 0;
-  private updating = false;
 
   constructor(
     private readonly scheduler: Pick<RoundRobinFrameScheduler, "activeRequestCount">,
     private readonly deps: MultiFoveaRuntimeDeps,
   ) {}
+
+  /** Camera frame dims (the arm-rect clamp source — ruled: from the lease at
+   *  activate, not learned per frame). Call BEFORE the first `setTargets`. */
+  setFrameSize(size: Size): void {
+    this.size = size;
+  }
 
   setTargets(configs: MultiFoveaTargetConfig[]): void {
     this.generation++;
@@ -66,17 +85,18 @@ export class MultiFoveaRuntime {
       if (existing) {
         const changed = !sameTargetConfig(existing.config, config);
         existing.config = config;
-        if (!config.enabled || changed) this.releaseSlot(existing);
         existing.steering = null;
+        if (!config.enabled) this.releaseSlot(existing, index);
+        else if (changed || !existing.armed) this.armSlot(existing, index);
         const pose = this.deps.targetPose(index, config.center);
         existing.angle = pose.angle;
         existing.volt = pose.volt;
         return existing;
       }
       const pose = this.deps.targetPose(index, config.center);
-      return {
+      const slot: Slot = {
         config,
-        tracker: null,
+        armed: false,
         stream: null,
         active: false,
         bbox: null,
@@ -86,18 +106,23 @@ export class MultiFoveaRuntime {
         lostCount: 0,
         lastFinAt: null,
       };
+      if (config.enabled) this.armSlot(slot, index);
+      return slot;
     });
-    for (const slot of this.slots.slice(configs.length)) this.releaseSlot(slot);
+    for (const [i, slot] of this.slots.slice(configs.length).entries())
+      this.releaseSlot(slot, configs.length + i);
     this.slots = next;
     this.requestStreamSync();
     this.publish();
   }
 
+  /** Manual hold: disarm tracking and follow the steered point (until the
+   *  target is re-placed — `placeTarget` → `setTargets` → re-arm). */
   steerTarget(index: number, center: Point2d): void {
     const slot = this.slots[index];
     if (!slot?.config.enabled) return;
-    slot.tracker?.release();
-    slot.tracker = null;
+    if (slot.armed) this.deps.disarm(String(index));
+    slot.armed = false;
     slot.active = false;
     slot.steering = center;
     slot.bbox = this.clampRect(
@@ -106,6 +131,7 @@ export class MultiFoveaRuntime {
         height: slot.config.tracker.height,
       }),
     );
+    this.deps.updateFoveaRect(index, slot.bbox);
     const pose = this.deps.targetPose(index, center);
     slot.angle = pose.angle;
     slot.volt = pose.volt;
@@ -115,7 +141,7 @@ export class MultiFoveaRuntime {
 
   dispose(): void {
     this.generation++;
-    for (const slot of this.slots) this.releaseSlot(slot);
+    for (const [index, slot] of this.slots.entries()) this.releaseSlot(slot, index);
     this.slots = [];
     this.deps.updateScheduler([]);
   }
@@ -127,69 +153,51 @@ export class MultiFoveaRuntime {
     this.publish(now);
   }
 
-  async onCenterFrame(frame: Mat<Uint8Array>): Promise<number> {
-    if (this.updating) return 0;
-    this.updating = true;
-    const generation = this.generation;
-    const [height, width] = frame.shape;
-    this.size = { width, height };
-    const t0 = performance.now();
-    try {
-      await Promise.all(
-        this.slots.map((slot, index) =>
-          this.updateSlot(index, slot, frame, generation),
-        ),
-      );
-      if (generation === this.generation) this.publish();
-      return performance.now() - t0;
-    } finally {
-      this.updating = false;
-    }
-  }
-
-  private async updateSlot(
-    index: number,
-    slot: Slot,
-    frame: Mat<Uint8Array>,
-    generation: number,
-  ): Promise<void> {
-    if (!slot.config.enabled) return;
-    if (slot.steering) {
-      const pose = this.deps.targetPose(index, slot.steering);
+  /** Consume one native batch (B-25). Returns the thread's summed per-target
+   *  update cost (ms) for the session's trackMs telemetry. */
+  onTrackResults(batch: MultiTrackBatch): number {
+    let trackMs = 0;
+    let dirty = false;
+    for (const t of batch.targets) {
+      trackMs += t.updateMs;
+      const index = Number(t.id);
+      const slot = this.slots[index];
+      if (!slot || !slot.armed || slot.steering) continue; // stale/disarmed id
+      dirty = true;
+      if (t.ok && t.bbox) {
+        slot.bbox = this.clampRect(t.bbox);
+        slot.active = true;
+        slot.lostCount = 0;
+      } else if (++slot.lostCount >= slot.config.tracker.lostTolerance) {
+        this.releaseSlot(slot, index);
+        continue;
+      }
+      const center = slot.bbox ? RECT.getCenter(slot.bbox) : slot.config.center;
+      const pose = this.deps.targetPose(index, center);
       slot.angle = pose.angle;
       slot.volt = pose.volt;
       slot.stream?.update({ left: pose.volt.L, right: pose.volt.R });
-      return;
+      if (slot.bbox) this.deps.updateFoveaRect(index, slot.bbox);
     }
-    if (!slot.tracker) {
-      const roi = this.clampRect(
-        RECT.fromCenter(slot.config.center, {
-          width: slot.config.tracker.width,
-          height: slot.config.tracker.height,
-        }),
-      );
-      slot.tracker = this.deps.createTracker();
-      slot.tracker.init(frame, roi);
-      slot.bbox = roi;
-      slot.active = true;
-      slot.lostCount = 0;
-    } else {
-      const bbox = await slot.tracker.updateAsync(frame);
-      if (generation !== this.generation || slot.steering) return;
-      if (bbox) {
-        slot.bbox = this.clampRect(bbox);
-        slot.lostCount = 0;
-      } else if (++slot.lostCount >= slot.config.tracker.lostTolerance) {
-        this.releaseSlot(slot);
-        return;
-      }
-    }
+    if (dirty) this.publish();
+    return trackMs;
+  }
 
-    const center = slot.bbox ? RECT.getCenter(slot.bbox) : slot.config.center;
-    const pose = this.deps.targetPose(index, center);
-    slot.angle = pose.angle;
-    slot.volt = pose.volt;
-    slot.stream?.update({ left: pose.volt.L, right: pose.volt.R });
+  /** (Re-)arm the native target at the slot's configured center — arm on a
+   *  live id re-inits natively (ruled steer-while-armed path). */
+  private armSlot(slot: Slot, index: number): void {
+    const roi = this.clampRect(
+      RECT.fromCenter(slot.config.center, {
+        width: slot.config.tracker.width,
+        height: slot.config.tracker.height,
+      }),
+    );
+    this.deps.arm(String(index), roi);
+    slot.armed = true;
+    slot.active = true;
+    slot.bbox = roi;
+    slot.lostCount = 0;
+    this.deps.updateFoveaRect(index, roi);
   }
 
   private requestStreamSync(): void {
@@ -210,7 +218,7 @@ export class MultiFoveaRuntime {
         for (let index = 0; index < this.slots.length; index++) {
           const slot = this.slots[index];
           if (!slot.config.enabled) {
-            this.releaseSlot(slot);
+            this.releaseSlot(slot, index);
             continue;
           }
           if (slot.stream) continue;
@@ -241,9 +249,9 @@ export class MultiFoveaRuntime {
     }
   }
 
-  private releaseSlot(slot: Slot): void {
-    slot.tracker?.release();
-    slot.tracker = null;
+  private releaseSlot(slot: Slot, index: number): void {
+    if (slot.armed) this.deps.disarm(String(index));
+    slot.armed = false;
     void slot.stream?.close();
     slot.stream = null;
     slot.active = false;

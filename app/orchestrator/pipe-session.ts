@@ -58,7 +58,10 @@ export const asBroker = (p: typeof import("core/Pipe")): PipeBroker =>
  *  returns its advert shape; `teardown` releases them (refs→0 / owner window
  *  closed). Registered per kind via `PipeSessionDeps.materializers`. */
 export interface NodeMaterializer {
-  materialize(req: ComposeRequest): Pick<NodeAdvert, "kind" | "output">;
+  /** May be async (e.g. the fovea brick reads the persisted calibration). */
+  materialize(
+    req: ComposeRequest,
+  ): Pick<NodeAdvert, "kind" | "output"> | Promise<Pick<NodeAdvert, "kind" | "output">>;
   teardown(id: string): void;
 }
 
@@ -210,7 +213,7 @@ export function pipeSession(deps: PipeSessionDeps): PipeSessionHandle {
           let shape: Pick<NodeAdvert, "kind" | "output">;
           let materialized = false;
           if (materializer) {
-            shape = materializer.materialize(req);
+            shape = await materializer.materialize(req);
             materialized = true;
           } else if (!winRooted && advertised[req.id]) {
             const spec = advertised[req.id]!.spec;

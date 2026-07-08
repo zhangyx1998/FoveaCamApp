@@ -35,9 +35,6 @@ export type DisplayParams = {
   /** Depth heatmap clamp range (mm) for the "depth" combined view. */
   depthNear?: number;
   depthFar?: number;
-  /** Q1(a): post the plain center frame back to main (multi-fovea's on-main
-   *  KCF relay ONLY — display apps bind the pipe directly in the renderer). */
-  relayCenter?: boolean;
 };
 
 /** Worker→main results: just the learned frame geometry (main needs it for the

@@ -65,6 +65,20 @@ export async function loadIntrinsic(
   return { undistort: null, date };
 }
 
+// Exported for the fovea materializer (C-24 step 4): the fused crop brick
+// takes the PLAIN persisted CameraCalibration record (B-23 ruling — never the
+// built Undistort). Returns null when the camera has no valid calibration
+// (the brick then crops the RAW stream).
+export async function loadIntrinsicCal(
+  camera: Pick<Camera, "vendor" | "model" | "serial">,
+): Promise<CameraCalibration | null> {
+  const cal = await read<Partial<CameraCalibration>>(
+    ["calibrate-intrinsic", getCameraKey(camera)],
+    {},
+  );
+  return validate(cal) ? cal : null;
+}
+
 // Exported for calibrate-extrinsic's session (§7.1 S1b) — its FIN wizard
 // step fits a live preview regression from the *in-progress* (not yet
 // persisted) dataset, same math as loading a saved one.

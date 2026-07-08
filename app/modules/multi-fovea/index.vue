@@ -4,10 +4,11 @@ This source code is licensed under the MIT license.
 You may find the full license in project root directory.
 --------------------------------------------------- -->
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, onUnmounted, ref, watch } from "vue";
 import { useSession, usePipeFrame } from "@lib/orchestrator/client";
 import { nodeId } from "@lib/orchestrator/graph-contract";
-import { multiFovea } from "./contract";
+import { pipes } from "@lib/orchestrator/pipe-contract";
+import { multiFovea, MAX_MULTI_FOVEA_TARGETS } from "./contract";
 import StreamView from "@src/components/StreamView.vue";
 import PosView from "@src/components/PosView.vue";
 import RangeSlider from "@src/inputs/range-slider.vue";
@@ -15,6 +16,7 @@ import type { Point2d, Rect, Size } from "core/Geometry";
 
 const session = useSession(multiFovea, "multi-fovea");
 const { state, telemetry } = session;
+const pipesSession = useSession(pipes, "pipes");
 // real-1g (C-23): the wide view binds the first-class UNDISTORTED pipe when the
 // session advertises it (target overlays are in undistorted pixel space); falls
 // back to raw on uncalibrated rigs. Per-fovea processed crops stay on
@@ -96,9 +98,79 @@ function onCursor(c: (Point2d & Size & { buttons: number }) | null): void {
   }
 }
 
-function targetFrame(index: number) {
-  return session.frame(`fovea:${index}`);
+// C-24 step 4: THE RENDERER COMPOSES the per-target fovea crop nodes (the
+// composition directive's flagship). Each enabled target demands its
+// camera-rooted `camera/<serial>/undistort/fovea/<slot>` brick via `compose`
+// (refcounted — another window composing the same slot shares one brick;
+// window close auto-unrefs server-side); disabling decomposes. The preview
+// binds the node's pipe via `usePipeFrame` — these tiles get REAL pixels for
+// the first time (the old `session.frame("fovea:<i>")` had no producer). The
+// SESSION steers the crop rect per tracker tick; v4 frame-bound origin keeps
+// overlays exact.
+const composed = new Set<string>();
+
+function foveaParams(index: number) {
+  const t = state.targets[index];
+  const size = {
+    width: t?.tracker.width ?? 128,
+    height: t?.tracker.height ?? 128,
+  };
+  const center = t?.center ?? { x: 0, y: 0 };
+  return {
+    rect: {
+      x: Math.max(0, Math.round(center.x - size.width / 2)),
+      y: Math.max(0, Math.round(center.y - size.height / 2)),
+      width: size.width,
+      height: size.height,
+    },
+    maxWidth: 512,
+    maxHeight: 512,
+  };
 }
+
+function syncComposition(): void {
+  const serial = state.serials?.C;
+  const want = new Set<string>();
+  if (serial)
+    for (let i = 0; i < MAX_MULTI_FOVEA_TARGETS; i++)
+      if (state.targets[i]?.enabled) want.add(nodeId.fovea(serial, i));
+  for (const id of composed)
+    if (!want.has(id)) {
+      composed.delete(id);
+      void pipesSession.call("decompose", { id }).catch(() => {});
+    }
+  for (const id of want)
+    if (!composed.has(id)) {
+      composed.add(id);
+      const index = Number(id.split("/").pop());
+      void pipesSession
+        .call("compose", { id, kind: "fovea", inputs: {}, params: foveaParams(index) })
+        .catch((e) => {
+          composed.delete(id); // e.g. camera not leased yet — the watch retries
+          console.warn(`[multi-fovea] compose ${id}:`, e);
+        });
+    }
+}
+
+watch(
+  () => [state.serials?.C, ...state.targets.map((t) => t.enabled)],
+  syncComposition,
+  { immediate: true },
+);
+onUnmounted(() => {
+  for (const id of composed) void pipesSession.call("decompose", { id }).catch(() => {});
+  composed.clear();
+});
+
+// One static hook per slot (composables can't be created in loops at runtime);
+// binds as soon as the composed node's pipe is advertised.
+const foveaFrames = Array.from({ length: MAX_MULTI_FOVEA_TARGETS }, (_, i) =>
+  usePipeFrame(() =>
+    state.serials?.C && state.targets[i]?.enabled
+      ? nodeId.fovea(state.serials.C, i)
+      : null,
+  ),
+);
 
 async function captureOnce(): Promise<void> {
   const result = await session.call("captureOnce", undefined);
@@ -200,8 +272,7 @@ async function captureOnce(): Promise<void> {
         <div class="target-body">
           <StreamView
             title="Fovea"
-            :payload="targetFrame(index).payload.value"
-            :source="targetFrame(index).source"
+            :payload="foveaFrames[index]?.value ?? null"
             theme="#fa0"
             height="14rem"
           />

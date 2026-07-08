@@ -20,6 +20,7 @@ import {
 } from "@orchestrator/pipe-session";
 import type { NodeAdvert, PipeSpec } from "@lib/orchestrator/pipe-contract";
 import { createEndpointPair, flush } from "./fake-endpoint";
+import { buildTopology } from "@orchestrator/graph-topology";
 
 function spec(id: string): PipeSpec {
   return {
@@ -161,5 +162,51 @@ describe("compose protocol (C-24 step 3)", () => {
     const h = harness();
     const w = h.client("w-1");
     await expect(w.compose("bogus/thing", "x")).rejects.toThrow(/rooted/);
+  });
+
+  // THE user-objective-2 acceptance proof (C-24 step 4): target-toggle-driven
+  // fovea churn — nodes spawn/cancel mid-flight on renderer demand, reused ids
+  // bump epochs, and BOTH discovery surfaces track it: `state.nodes` and the
+  // served `graphTopology()` (what the profiler graph renders).
+  it("fovea toggle churn: epoch bumps visible in state.nodes AND the served topology", async () => {
+    const { materializer } = foveaMaterializer();
+    const h = harness({ materializers: { fovea: materializer } });
+    const w = h.client("multi-1");
+    const id = "camera/1/undistort/fovea/3";
+    const pipeRow = (epoch: number) => ({
+      id,
+      spec: { pixelFormat: "BGRA8", dtype: "U8" },
+      epoch,
+      consumers: 1,
+      closed: false,
+      bytesTotal: 0,
+    });
+
+    // Toggle ON: composed → discovered.
+    const first = await w.compose(id, "fovea");
+    await flush();
+    expect(h.nodes()[id]?.epoch).toBe(first.epoch);
+    let topo = buildTopology({ listPipes: () => [pipeRow(first.epoch)], workloads: () => ({}) });
+    const node1 = topo.nodes.find((n) => n.id === id)!;
+    expect(node1.kind).toBe("fovea");
+    expect(node1.epoch).toBe(first.epoch);
+    // The PHYSICAL producer edge (camera → fovea, B's fused remap).
+    expect(topo.edges.some((e) => e.from === "camera/1" && e.to === id)).toBe(true);
+
+    // Toggle OFF: decomposed → gone from discovery + topology.
+    await w.decompose(id);
+    await flush();
+    expect(h.nodes()[id]).toBeUndefined();
+    topo = buildTopology({ listPipes: () => [], workloads: () => ({}) });
+    expect(topo.nodes.some((n) => n.id === id)).toBe(false);
+
+    // Toggle ON again: the reused slot id comes back with a BUMPED epoch — the
+    // (id, epoch) layout key the profiler diffs on.
+    const second = await w.compose(id, "fovea");
+    await flush();
+    expect(second.epoch).toBe(first.epoch + 1);
+    expect(h.nodes()[id]?.epoch).toBe(second.epoch);
+    topo = buildTopology({ listPipes: () => [pipeRow(second.epoch)], workloads: () => ({}) });
+    expect(topo.nodes.find((n) => n.id === id)?.epoch).toBe(second.epoch);
   });
 });

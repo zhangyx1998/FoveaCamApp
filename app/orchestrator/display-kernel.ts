@@ -54,7 +54,6 @@ export function createDisplayKernel(initial: Record<string, unknown>): VisionKer
     wrap: boolean;
     depthNear: number;
     depthFar: number;
-    relayCenter: boolean;
   } = {
     homographyL: null,
     homographyR: null,
@@ -65,7 +64,6 @@ export function createDisplayKernel(initial: Record<string, unknown>): VisionKer
     wrap: false,
     depthNear: -Infinity,
     depthFar: Infinity,
-    relayCenter: false,
   };
 
   let width = 0;
@@ -118,7 +116,6 @@ export function createDisplayKernel(initial: Record<string, unknown>): VisionKer
       if (d.wrap !== undefined) p.wrap = d.wrap;
       if (d.depthNear !== undefined) p.depthNear = d.depthNear;
       if (d.depthFar !== undefined) p.depthFar = d.depthFar;
-      if (d.relayCenter !== undefined) p.relayCenter = d.relayCenter;
     },
 
     process(frames: FrameSet): KernelOutput {
@@ -135,9 +132,6 @@ export function createDisplayKernel(initial: Record<string, unknown>): VisionKer
           height = h;
           values.size = { width: w, height: h };
         }
-        // Q1(a): plain-center relay for multi-fovea's on-main KCF only — the
-        // display apps' wide view binds the pipe directly in the renderer now.
-        if (p.relayCenter) out.push({ name: "C", mat: view });
         if (p.view === "sliced" && width && height) {
           const zoom = Math.max(1, p.zoom);
           const size = { width: width / zoom, height: height / zoom };

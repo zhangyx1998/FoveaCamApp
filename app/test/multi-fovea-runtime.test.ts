@@ -1,29 +1,13 @@
+// MultiFoveaRuntime (C-24 step 4) — the SESSION-SIDE POLICY half over B-25's
+// native multi-KCF thread: arm/disarm churn (slot index = target id, re-arm
+// re-inits), lost tolerance over the batched `ok:false` results, steering as
+// manual hold, controller-stream sync races (unchanged from the pre-port
+// tests), and the composed-fovea rect steering. All deps faked — no core.
+
 import { describe, expect, it, vi } from "vitest";
-import type { Mat } from "core/Vision";
 import type { Rect } from "core/Geometry";
-import { MultiFoveaRuntime, type TrackerLike } from "@modules/multi-fovea/runtime";
-import {
-  defaultMultiFoveaTarget,
-  type MultiFoveaTargetTelemetry,
-} from "@modules/multi-fovea/contract";
-
-function frame(): Mat<Uint8Array> {
-  return Object.assign(new Uint8Array(100 * 100 * 4), {
-    shape: [100, 100] as [number, number],
-    channels: 4,
-  }) as unknown as Mat<Uint8Array>;
-}
-
-class FakeTracker implements TrackerLike {
-  init = vi.fn();
-  updateAsync = vi.fn<[], Promise<Rect | null>>(async () => ({
-    x: 10,
-    y: 20,
-    width: 8,
-    height: 6,
-  }));
-  release = vi.fn();
-}
+import { MultiFoveaRuntime, type MultiFoveaRuntimeDeps } from "@modules/multi-fovea/runtime";
+import { defaultMultiFoveaTarget } from "@modules/multi-fovea/contract";
 
 async function flush(): Promise<void> {
   await Promise.resolve();
@@ -33,7 +17,6 @@ async function flush(): Promise<void> {
 class Deferred<T> {
   promise: Promise<T>;
   resolve!: (value: T) => void;
-
   constructor() {
     this.promise = new Promise<T>((resolve) => {
       this.resolve = resolve;
@@ -41,322 +24,180 @@ class Deferred<T> {
   }
 }
 
-describe("MultiFoveaRuntime", () => {
-  it("drives enabled trackers sequentially and updates one stream per target", async () => {
-    const trackers: FakeTracker[] = [];
-    const streams = [
-      { id: 10, update: vi.fn(), close: vi.fn(async () => {}) },
-      { id: 11, update: vi.fn(), close: vi.fn(async () => {}) },
-    ];
-    const schedulerTargets: Array<Array<{ stream: number }>> = [];
-    const runtime = new MultiFoveaRuntime(
-      { activeRequestCount: 0 },
-      {
-        createTracker() {
-          const tracker = new FakeTracker();
-          trackers.push(tracker);
-          return tracker;
-        },
-        async createStream(index) {
-          return streams[index] ?? null;
-        },
-        targetPose(_index, center) {
-          return {
-            angle: center,
-            volt: {
-              L: { x: center.x, y: center.y },
-              R: { x: -center.x, y: -center.y },
-            },
-          };
-        },
-        updateScheduler(targets) {
-          schedulerTargets.push(targets);
-        },
-        publish: vi.fn(),
-      },
-    );
+const batch = (
+  targets: Array<{ id: string; ok: boolean; bbox: Rect | null; updateMs?: number }>,
+) => ({
+  seq: 1,
+  targets: targets.map((t) => ({ updateMs: 1, ...t })),
+});
 
-    const targets = [defaultMultiFoveaTarget(0), defaultMultiFoveaTarget(1)];
-    targets[1] = { ...targets[1], enabled: true };
-    runtime.setTargets(targets);
-    await flush();
+function makeDeps(streams: Array<{ id: number; update: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn> }>) {
+  const armed: Array<[string, Rect]> = [];
+  const disarmed: string[] = [];
+  const rects: Array<[number, Rect]> = [];
+  const schedulerTargets: Array<Array<{ stream: number }>> = [];
+  let streamIndex = 0;
+  const deps: MultiFoveaRuntimeDeps = {
+    arm: vi.fn((id, roi) => armed.push([id, roi])),
+    disarm: vi.fn((id) => disarmed.push(id)),
+    async createStream() {
+      return streams[streamIndex++] ?? null;
+    },
+    targetPose(_index, center) {
+      return {
+        angle: center,
+        volt: { L: { x: center.x, y: center.y }, R: { x: -center.x, y: -center.y } },
+      };
+    },
+    updateScheduler(targets) {
+      schedulerTargets.push(targets);
+    },
+    publish: vi.fn(),
+    updateFoveaRect: vi.fn((index, rect) => rects.push([index, rect])),
+  };
+  return { deps, armed, disarmed, rects, schedulerTargets };
+}
 
-    await runtime.onCenterFrame(frame());
-    expect(trackers).toHaveLength(2);
-    expect(trackers[0].init).toHaveBeenCalledTimes(1);
-    expect(trackers[1].init).toHaveBeenCalledTimes(1);
-    expect(streams[0].update).toHaveBeenCalledTimes(1);
-    expect(streams[1].update).toHaveBeenCalledTimes(1);
-    expect(schedulerTargets.at(-1)).toEqual([{ stream: 10 }, { stream: 11 }]);
+const stream = (id: number) => ({ id, update: vi.fn(), close: vi.fn(async () => {}) });
 
-    await runtime.onCenterFrame(frame());
-    expect(trackers[0].updateAsync).toHaveBeenCalledTimes(1);
-    expect(trackers[1].updateAsync).toHaveBeenCalledTimes(1);
-  });
+function target(index: number, over: Partial<ReturnType<typeof defaultMultiFoveaTarget>> = {}) {
+  const t = defaultMultiFoveaTarget(index);
+  return { ...t, enabled: true, center: { x: 50, y: 50 }, ...over };
+}
 
-  it("reinitializes tracker and stream when target center changes", async () => {
-    const trackers: FakeTracker[] = [];
-    const streams = [
-      { id: 30, update: vi.fn(), close: vi.fn(async () => {}) },
-      { id: 31, update: vi.fn(), close: vi.fn(async () => {}) },
-    ];
-    const streamCenters: Array<{ x: number; y: number }> = [];
-    let streamIndex = 0;
-    const runtime = new MultiFoveaRuntime(
-      { activeRequestCount: 0 },
-      {
-        createTracker() {
-          const tracker = new FakeTracker();
-          trackers.push(tracker);
-          return tracker;
-        },
-        async createStream(_index, center) {
-          streamCenters.push(center);
-          return streams[streamIndex++] ?? null;
-        },
-        targetPose(_index, center) {
-          return {
-            angle: center,
-            volt: {
-              L: { x: center.x, y: center.y },
-              R: { x: -center.x, y: -center.y },
-            },
-          };
-        },
-        updateScheduler: vi.fn(),
-        publish: vi.fn(),
-      },
-    );
+describe("MultiFoveaRuntime (batched multi-KCF)", () => {
+  it("arms enabled slots at setTargets (clamped roi) and syncs one stream each", async () => {
+    const streams = [stream(10), stream(11)];
+    const { deps, armed, schedulerTargets, rects } = makeDeps(streams);
+    const runtime = new MultiFoveaRuntime({ activeRequestCount: 0 }, deps);
+    runtime.setFrameSize({ width: 100, height: 100 });
 
-    const first = {
-      ...defaultMultiFoveaTarget(0),
-      center: { x: 50, y: 50 },
-      tracker: {
-        ...defaultMultiFoveaTarget(0).tracker,
-        width: 10,
-        height: 10,
-      },
-    };
-    runtime.setTargets([first]);
-    await flush();
-    const firstFrame = frame();
-    await runtime.onCenterFrame(firstFrame);
-
-    expect(trackers[0].init).toHaveBeenCalledWith(firstFrame, {
-      x: 45,
-      y: 45,
-      width: 10,
-      height: 10,
-    });
-    expect(streamCenters).toEqual([{ x: 50, y: 50 }]);
-
-    const moved = { ...first, center: { x: 30, y: 40 } };
-    runtime.setTargets([moved]);
-    await flush();
-
-    expect(trackers[0].release).toHaveBeenCalledTimes(1);
-    expect(streams[0].close).toHaveBeenCalledTimes(1);
-    expect(streamCenters).toEqual([
-      { x: 50, y: 50 },
-      { x: 30, y: 40 },
+    runtime.setTargets([
+      target(0, { tracker: { ...defaultMultiFoveaTarget(0).tracker, width: 10, height: 10 } }),
+      target(1),
     ]);
+    await flush();
 
-    const movedFrame = frame();
-    await runtime.onCenterFrame(movedFrame);
-    expect(trackers).toHaveLength(2);
-    expect(trackers[1].init).toHaveBeenCalledWith(movedFrame, {
-      x: 25,
-      y: 35,
-      width: 10,
-      height: 10,
-    });
-    expect(streams[1].update).toHaveBeenLastCalledWith({
-      left: { x: 30, y: 40 },
-      right: { x: -30, y: -40 },
-    });
+    expect(armed.map(([id]) => id)).toEqual(["0", "1"]);
+    expect(armed[0]![1]).toEqual({ x: 45, y: 45, width: 10, height: 10 });
+    expect(schedulerTargets.at(-1)).toEqual([{ stream: 10 }, { stream: 11 }]);
+    // The composed fovea crop follows the arm rect immediately.
+    expect(rects[0]).toEqual([0, { x: 45, y: 45, width: 10, height: 10 }]);
   });
 
-  it("ignores tracker completion that resolves after drag steering", async () => {
-    let resolveUpdate!: (rect: Rect | null) => void;
-    class SlowTracker implements TrackerLike {
-      init = vi.fn();
-      updateAsync = vi.fn(
-        () =>
-          new Promise<Rect | null>((resolve) => {
-            resolveUpdate = resolve;
-          }),
-      );
-      release = vi.fn();
-    }
-    const tracker = new SlowTracker();
-    const stream = { id: 41, update: vi.fn(), close: vi.fn(async () => {}) };
-    const published: MultiFoveaTargetTelemetry[][] = [];
-    const runtime = new MultiFoveaRuntime(
-      { activeRequestCount: 0 },
-      {
-        createTracker: () => tracker,
-        async createStream() {
-          return stream;
-        },
-        targetPose(_index, center) {
-          return {
-            angle: center,
-            volt: {
-              L: { x: center.x, y: center.y },
-              R: { x: -center.x, y: -center.y },
-            },
-          };
-        },
-        updateScheduler: vi.fn(),
-        publish(targets) {
-          published.push(targets);
-        },
-      },
-    );
-
-    const target = {
-      ...defaultMultiFoveaTarget(0),
-      center: { x: 30, y: 30 },
-      tracker: {
-        ...defaultMultiFoveaTarget(0).tracker,
-        width: 10,
-        height: 10,
-      },
-    };
-    runtime.setTargets([target]);
+  it("re-arms (not disarm+arm) when a target's center changes — ruled re-init path", async () => {
+    const { deps, armed, disarmed } = makeDeps([stream(30), stream(31)]);
+    const runtime = new MultiFoveaRuntime({ activeRequestCount: 0 }, deps);
+    runtime.setFrameSize({ width: 100, height: 100 });
+    const t0 = target(0, { tracker: { ...defaultMultiFoveaTarget(0).tracker, width: 10, height: 10 } });
+    runtime.setTargets([t0]);
     await flush();
-    await runtime.onCenterFrame(frame());
-
-    const pending = runtime.onCenterFrame(frame());
+    runtime.setTargets([{ ...t0, center: { x: 30, y: 40 } }]);
     await flush();
-    expect(tracker.updateAsync).toHaveBeenCalledTimes(1);
 
-    runtime.steerTarget(0, { x: 50, y: 50 });
-    resolveUpdate({ x: 10, y: 20, width: 8, height: 6 });
-    await pending;
-
-    const last = published.at(-1)?.[0];
-    expect(last?.bbox).toEqual({ x: 45, y: 45, width: 10, height: 10 });
-    expect(last?.volt).toEqual({
-      L: { x: 50, y: 50 },
-      R: { x: -50, y: -50 },
-    });
-    expect(stream.update).toHaveBeenLastCalledWith({
-      left: { x: 50, y: 50 },
-      right: { x: -50, y: -50 },
-    });
+    expect(disarmed).toEqual([]); // arm on a live id re-inits natively
+    expect(armed).toHaveLength(2);
+    expect(armed[1]![1]).toEqual({ x: 25, y: 35, width: 10, height: 10 });
   });
 
-  it("ignores async tracker completions after dispose", async () => {
-    let resolveUpdate!: (rect: Rect | null) => void;
-    class SlowTracker implements TrackerLike {
-      init = vi.fn();
-      updateAsync = vi.fn(
-        () =>
-          new Promise<Rect | null>((resolve) => {
-            resolveUpdate = resolve;
-          }),
-      );
-      release = vi.fn();
-    }
-    const tracker = new SlowTracker();
-    const stream = { id: 3, update: vi.fn(), close: vi.fn(async () => {}) };
-    const publish = vi.fn();
-    const runtime = new MultiFoveaRuntime(
-      { activeRequestCount: 0 },
-      {
-        createTracker: () => tracker,
-        async createStream() {
-          return stream;
-        },
-        targetPose(_index, center) {
-          return {
-            angle: center,
-            volt: { L: { x: center.x, y: center.y }, R: { x: center.x, y: center.y } },
-          };
-        },
-        updateScheduler: vi.fn(),
-        publish,
-      },
-    );
-
-    runtime.setTargets([defaultMultiFoveaTarget(0)]);
+  it("consumes a batch: bbox → pose → stream.update → fovea rect; publish", async () => {
+    const s0 = stream(41);
+    const { deps, rects } = makeDeps([s0]);
+    const runtime = new MultiFoveaRuntime({ activeRequestCount: 0 }, deps);
+    runtime.setFrameSize({ width: 100, height: 100 });
+    runtime.setTargets([target(0)]);
     await flush();
-    await runtime.onCenterFrame(frame());
-    const pending = runtime.onCenterFrame(frame());
-    runtime.dispose();
-    resolveUpdate({ x: 30, y: 40, width: 6, height: 6 });
-    await pending;
 
-    expect(tracker.release).toHaveBeenCalled();
-    expect(stream.update).toHaveBeenCalledTimes(1);
+    const ms = runtime.onTrackResults(
+      batch([{ id: "0", ok: true, bbox: { x: 10, y: 20, width: 8, height: 6 }, updateMs: 3 }]),
+    );
+    expect(ms).toBe(3);
+    expect(s0.update).toHaveBeenLastCalledWith({
+      left: { x: 14, y: 23 }, // bbox center
+      right: { x: -14, y: -23 },
+    });
+    expect(rects.at(-1)).toEqual([0, { x: 10, y: 20, width: 8, height: 6 }]);
+  });
+
+  it("lost tolerance: ok:false accumulates; at tolerance the slot disarms + releases", async () => {
+    const s0 = stream(42);
+    const { deps, disarmed } = makeDeps([s0]);
+    const runtime = new MultiFoveaRuntime({ activeRequestCount: 0 }, deps);
+    runtime.setFrameSize({ width: 100, height: 100 });
+    const tolerance = 3;
+    runtime.setTargets([
+      target(0, {
+        tracker: { ...defaultMultiFoveaTarget(0).tracker, lostTolerance: tolerance },
+      }),
+    ]);
+    await flush();
+
+    for (let i = 0; i < tolerance - 1; i++)
+      runtime.onTrackResults(batch([{ id: "0", ok: false, bbox: null }]));
+    expect(disarmed).toEqual([]); // the thread emits ok:false liberally — absorbed
+    runtime.onTrackResults(batch([{ id: "0", ok: false, bbox: null }]));
+    expect(disarmed).toEqual(["0"]);
+    expect(s0.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("steering disarms into manual hold; later batches for that slot are ignored", async () => {
+    const s0 = stream(43);
+    const { deps, disarmed } = makeDeps([s0]);
+    const publish = deps.publish as ReturnType<typeof vi.fn>;
+    const runtime = new MultiFoveaRuntime({ activeRequestCount: 0 }, deps);
+    runtime.setFrameSize({ width: 100, height: 100 });
+    runtime.setTargets([
+      target(0, { tracker: { ...defaultMultiFoveaTarget(0).tracker, width: 10, height: 10 } }),
+    ]);
+    await flush();
+
+    runtime.steerTarget(0, { x: 60, y: 60 });
+    expect(disarmed).toEqual(["0"]);
+    expect(s0.update).toHaveBeenLastCalledWith({
+      left: { x: 60, y: 60 },
+      right: { x: -60, y: -60 },
+    });
+
+    // A late batch for the steered slot must not move it (manual hold).
+    runtime.onTrackResults(
+      batch([{ id: "0", ok: true, bbox: { x: 1, y: 2, width: 8, height: 6 } }]),
+    );
+    const last = publish.mock.calls.at(-1)?.[0]?.[0];
+    expect(last.bbox).toEqual({ x: 55, y: 55, width: 10, height: 10 }); // steer rect, not the batch's
   });
 
   it("closes a stream handle that resolves after dispose", async () => {
-    const pending = new Deferred<{ id: number; update: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn> }>();
-    const updateScheduler = vi.fn();
-    const runtime = new MultiFoveaRuntime(
-      { activeRequestCount: 0 },
-      {
-        createTracker: () => new FakeTracker(),
-        createStream: () => pending.promise,
-        targetPose(_index, center) {
-          return {
-            angle: center,
-            volt: { L: { x: center.x, y: center.y }, R: { x: center.x, y: center.y } },
-          };
-        },
-        updateScheduler,
-        publish: vi.fn(),
-      },
-    );
-
-    runtime.setTargets([defaultMultiFoveaTarget(0)]);
+    const pending = new Deferred<ReturnType<typeof stream>>();
+    const { deps, schedulerTargets } = makeDeps([]);
+    deps.createStream = () => pending.promise;
+    const runtime = new MultiFoveaRuntime({ activeRequestCount: 0 }, deps);
+    runtime.setFrameSize({ width: 100, height: 100 });
+    runtime.setTargets([target(0)]);
     await flush();
     runtime.dispose();
-    const stale = { id: 8, update: vi.fn(), close: vi.fn(async () => {}) };
+    const stale = stream(8);
     pending.resolve(stale);
     await flush();
 
     expect(stale.close).toHaveBeenCalledTimes(1);
-    expect(updateScheduler).toHaveBeenLastCalledWith([]);
+    expect(schedulerTargets.at(-1)).toEqual([]);
   });
 
   it("reruns stream sync when targets change during an in-flight create", async () => {
-    const first = new Deferred<{ id: number; update: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn> }>();
-    const created: Array<{ id: number; update: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn> }> = [];
-    const schedulerTargets: Array<Array<{ stream: number }>> = [];
+    const first = new Deferred<ReturnType<typeof stream>>();
     let calls = 0;
-    const runtime = new MultiFoveaRuntime(
-      { activeRequestCount: 0 },
-      {
-        createTracker: () => new FakeTracker(),
-        createStream() {
-          calls++;
-          if (calls === 1) return first.promise;
-          const stream = { id: 20 + calls, update: vi.fn(), close: vi.fn(async () => {}) };
-          created.push(stream);
-          return Promise.resolve(stream);
-        },
-        targetPose(_index, center) {
-          return {
-            angle: center,
-            volt: { L: { x: center.x, y: center.y }, R: { x: center.x, y: center.y } },
-          };
-        },
-        updateScheduler(targets) {
-          schedulerTargets.push(targets);
-        },
-        publish: vi.fn(),
-      },
-    );
-
-    const targets = [defaultMultiFoveaTarget(0), defaultMultiFoveaTarget(1)];
-    runtime.setTargets([targets[0]]);
+    const { deps, schedulerTargets } = makeDeps([]);
+    deps.createStream = () => {
+      calls++;
+      if (calls === 1) return first.promise;
+      return Promise.resolve(stream(20 + calls));
+    };
+    const runtime = new MultiFoveaRuntime({ activeRequestCount: 0 }, deps);
+    runtime.setFrameSize({ width: 100, height: 100 });
+    runtime.setTargets([target(0)]);
     await flush();
-    targets[1] = { ...targets[1], enabled: true };
-    runtime.setTargets(targets);
-    const stale = { id: 7, update: vi.fn(), close: vi.fn(async () => {}) };
+    runtime.setTargets([target(0), target(1)]);
+    const stale = stream(7);
     first.resolve(stale);
     for (let i = 0; i < 5; i++) await flush();
 

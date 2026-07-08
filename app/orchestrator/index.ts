@@ -20,7 +20,8 @@ import {
   type ShmApi,
 } from "./frame-transport.js";
 import { Hub, setFrameTransportFactory, type ServerSession } from "./runtime.js";
-import { releaseAll, setRegistryPipeSeam } from "./registry.js";
+import { releaseAll, leasedCamera, setRegistryPipeSeam } from "./registry.js";
+import { loadIntrinsicCal } from "./calibration.js";
 import { pipeSession, asBroker } from "./pipe-session.js";
 import { buildTopology } from "./graph-topology.js";
 import { registerNativeProbe } from "./native-probes.js";
@@ -68,13 +69,70 @@ onSpan((s) => hub.reportSpan(s));
 // camera and attaches B's native `CaptureSink` (the SHM preview write is now
 // native, off the JS loop). Both native seams are cast here (Aravis pipe NAPIs
 // aren't in the d.ts yet — B-owned) so registry.ts stays type-clean + testable.
+// C-24 step 4: the fovea crop brick (B-24 fused map-ROI FoveaStream). The
+// materializer advertises the C-20 max-footprint pipe, loads the PLAIN
+// persisted calibration (undistorted-coordinate crops when calibrated), and
+// attaches B's native producer; teardown detaches + drops. Camera source =
+// the LEASED handle only (a fovea is composable only while its camera lives —
+// unleased compose fails loudly, never acquires). `pipeBroker` is referenced
+// lazily (materialize runs long after module init — no TDZ).
+const aravisFovea = Aravis as unknown as {
+  attachFoveaPipe(
+    camera: unknown,
+    pipeId: string,
+    opts: { rect: { x: number; y: number; width: number; height: number }; cal?: unknown },
+  ): void;
+  setFoveaRect(
+    pipeId: string,
+    rect: { x: number; y: number; width: number; height: number },
+  ): boolean;
+  detachFoveaPipe(pipeId: string): void;
+};
+const foveaMaterializer: import("./pipe-session.js").NodeMaterializer = {
+  async materialize(req) {
+    const serial = req.id.split("/")[1] ?? "";
+    const camera = leasedCamera(serial);
+    if (!camera) throw new Error(`fovea: camera ${serial} is not leased`);
+    const p = (req.params ?? {}) as {
+      rect?: { x: number; y: number; width: number; height: number };
+      maxWidth?: number;
+      maxHeight?: number;
+    };
+    const rect = p.rect ?? { x: 0, y: 0, width: 256, height: 256 };
+    const maxWidth = p.maxWidth ?? 512;
+    const maxHeight = p.maxHeight ?? 512;
+    const channels = 4;
+    pipeBroker.advertise({
+      id: req.id,
+      pixelFormat: "BGRA8",
+      dtype: "U8",
+      width: rect.width,
+      height: rect.height,
+      channels,
+      stride: rect.width * channels,
+      bytesPerFrame: rect.width * rect.height * channels,
+      ringDepth: 4,
+      maxWidth,
+      maxHeight,
+      maxBytes: maxWidth * maxHeight * channels,
+    });
+    const cal = await loadIntrinsicCal(camera);
+    aravisFovea.attachFoveaPipe(camera, req.id, { rect, cal: cal ?? undefined });
+    return { kind: "fovea", output: { kind: "frame", pixelFormat: "BGRA8", dtype: "U8" } };
+  },
+  teardown(id) {
+    aravisFovea.detachFoveaPipe(id);
+    pipeBroker.unadvertise(id);
+  },
+};
+
 const pipeBroker = pipeSession({
   broker: asBroker(Pipe),
   // C-24 step 3 (compose protocol): authoritative caller identity + destroy
-  // signal from A-34 window tagging. Materializers land per brick kind (the
-  // fovea brick wires here with the multi-fovea port, step 4).
+  // signal from A-34 window tagging.
   windowIdOf: (ch) => hub.windowIdOf(ch),
   onWindowClosed: (fn) => hub.onWindowClosed(fn),
+  materializers: { fovea: foveaMaterializer },
 });
 hub.add(pipeBroker.session);
 const aravisPipe = Aravis as unknown as {
@@ -136,7 +194,11 @@ const tracking = hub.add(trackingSession(asBroker(Pipe), undistortSeam));
 const manualControl = hub.add(manualControlSession(asBroker(Pipe), undistortSeam));
 
 // --- multi-fovea: protocol-v2 multi-target logic skeleton ------------------
-const multiFovea = hub.add(multiFoveaSession(asBroker(Pipe), undistortSeam));
+const multiFovea = hub.add(
+  multiFoveaSession(asBroker(Pipe), undistortSeam, (pipeId, rect) =>
+    aravisFovea.setFoveaRect(pipeId, rect),
+  ),
+);
 
 // --- disparity-scope: auto-vergence control loop (§7.1 S1a) ---------------
 const disparityScope = hub.add(disparityScopeSession(asBroker(Pipe)));
