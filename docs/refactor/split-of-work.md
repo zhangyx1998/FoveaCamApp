@@ -1057,3 +1057,18 @@ do not hand-roll lifecycle. Model on `KcfTrackerStream` (the existing
 - **A-25 — orchestrator wiring (small; after B-18/C-21 seam is ruled).** Thread
   the target-format modifier through `advertiseCameraPipe` (already sets
   `pixelFormat`); register the converter probe into `perfSnapshot.workloads`.
+  - Log: **LANDED (2026-07-07).** Spliced B-18's per-camera converter meter into
+    the profiler: `index.ts` adds a second `registerNativeProbe(() =>
+    Aravis.converterProbeAll() as unknown as Record<string, WorkloadSnapshot>)`
+    beside the `Pipe.probeAll()` one — so `perfSnapshot.workloads` now carries a
+    `converter:<target>` row per active converter (absent when parked/detached),
+    rendered identically to the pipe/JS meters via the same `native-probes`
+    registry (already covered by `native-probes.test`). Typed
+    `converterProbeAll(): Record<string, ProbeSnapshot>` into
+    `core/dist/Aravis/index.d.ts` (imported the Pipe `ProbeSnapshot` — identical
+    shape, no duplication; runtime already exported it in `index.mjs`). No
+    behavior change; `advertiseCameraPipe`'s `pixelFormat` already carries the
+    target-format modifier (no change needed). Gates: vue-tsc 0; vitest 284/284;
+    vite build OK; orch zero-Vue 0; renderer zero-core 0 (orchestrator-only — no
+    native/renderer rebuild; core already built). Ready for verify + commit —
+    closes real-1e.

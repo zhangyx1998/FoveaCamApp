@@ -5,6 +5,7 @@
 // -------------------------------------------------------
 import type { CoreObject, Stream } from "../types";
 import type { Mat } from "core/Vision";
+import type { ProbeSnapshot } from "core/Pipe";
 
 declare module "core/Aravis" {
   /** Path to the resolved native module injected by JS loader */
@@ -152,4 +153,13 @@ declare module "core/Aravis" {
     "Mono12p" | "BayerGR12p" | "BayerRG12p" | "BayerGB12p" | "BayerBG12p";
 
   export type PixelFormat = PixelFormat8 | PixelFormat16 | PixelFormat12p;
+
+  /**
+   * Out-of-loop probe of every ACTIVE per-camera BGRA converter thread
+   * (WS1 real-1e, B-18) → `{ [pipeId]: ProbeSnapshot }` — the same snapshot
+   * shape as `Pipe.probeAll()` and the tracker meter, so it folds straight into
+   * `perfSnapshot.workloads` and renders identically in the profiler. A parked
+   * (refcount-0) or detached converter is absent from the map — no stale rows.
+   */
+  export function converterProbeAll(): Record<string, ProbeSnapshot>;
 }

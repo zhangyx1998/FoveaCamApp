@@ -86,6 +86,11 @@ setRegistryPipeSeam({
 registerNativeProbe(
   () => Pipe.probeAll() as unknown as Record<string, WorkloadSnapshot>,
 );
+// real-1e (B-18): the per-camera BGRA converter threads — a sibling probe, one
+// `converter:<target>` row per active converter (absent when parked/detached).
+registerNativeProbe(
+  () => Aravis.converterProbeAll() as unknown as Record<string, WorkloadSnapshot>,
+);
 
 // --- live camera view: frame-path validation slice -----------------------
 const liveview = hub.add(liveViewSession());
