@@ -56,6 +56,10 @@ export interface FoveaBridge {
   /** Reveals the `<app data dir>/perf-snapshots/` folder in the OS file
    *  browser (creating it if needed) and returns its path. */
   openPerfSnapshotFolder(): Promise<string>;
+  /** Pin THIS window above all others (`setAlwaysOnTop`) — the profiler's
+   *  nav-bar pin toggle; the renderer persists the choice in localStorage
+   *  and re-applies it on mount. */
+  setWindowPinned(pinned: boolean): void;
 }
 
 // ---- Typed IPC channel registry -------------------------------------------
@@ -89,6 +93,8 @@ export interface SendChannels {
   "window:open-app": [appId: string];
   "window:open-projection": [session: string, frame: string];
   "window:toggle-debug": [session: string, frame: string];
+  /** Sender-scoped: main resolves the window from `event.sender`. */
+  "window:set-pinned": [pinned: boolean];
 }
 
 /** Main→renderer pushes (`webContents.send` ↔ `ipcRenderer.on`). Value is the

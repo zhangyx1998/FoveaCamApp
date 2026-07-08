@@ -55,6 +55,15 @@ class FakeWindow implements ManagedWindow {
   getBounds() {
     return { x: 1, y: 2, width: 300, height: 200 };
   }
+  // Switch-inheritance display state (mutable so tests can stage it).
+  fullscreen = false;
+  maximized = false;
+  isFullScreen() {
+    return this.fullscreen;
+  }
+  isMaximized() {
+    return this.maximized;
+  }
 }
 
 function harness(drainResult: DrainResult | (() => Promise<DrainResult>) = { ok: true }) {
@@ -147,6 +156,31 @@ describe("WindowManager", () => {
     (spawned[0] as FakeWindow).close(); // user closes the app window
     const welcome = manager.open().find((w) => w.class === "welcome");
     expect(welcome).toBeDefined();
+  });
+
+  // Switch inheritance (UX, 2026-07-08): the replacement window lands on the
+  // same bounds + full-screen/maximized state as the window it replaces — in
+  // BOTH directions (welcome→app at switch; app→welcome via the welcome rule,
+  // answered from the adapter's last-known snapshot post-destroy).
+  it("welcome→app switch inherits bounds + fullscreen from the welcome window", async () => {
+    const { manager, spawned } = harness();
+    const welcome = manager.ensureWelcome() as FakeWindow;
+    welcome.fullscreen = true;
+    await manager.openApp("manage-cameras");
+    const app = spawned.find((w) => w.class === "app")!;
+    expect(app.desc.bounds).toEqual(welcome.getBounds());
+    expect(app.desc.fullscreen).toBe(true);
+  });
+
+  it("app→welcome respawn inherits the closed app window's display state", async () => {
+    const { manager, spawned } = harness();
+    await manager.openApp("manage-cameras");
+    const app = spawned[0] as FakeWindow;
+    app.maximized = true;
+    app.close();
+    const welcome = spawned.find((w) => w.class === "welcome")!;
+    expect(welcome.desc.bounds).toEqual(app.getBounds());
+    expect(welcome.desc.maximized).toBe(true);
   });
 
   it("closing the welcome window itself does not respawn it", () => {

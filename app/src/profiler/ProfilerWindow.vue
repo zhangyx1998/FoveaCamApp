@@ -142,9 +142,21 @@ async function tick(): Promise<void> {
   }
 }
 
+// Nav-bar pin toggle: keep the profiler above every other window
+// (setAlwaysOnTop via the bridge). Persisted in localStorage so the choice
+// survives reopen/reload; re-applied on mount (main only knows what we say).
+const PIN_KEY = "profiler:pinned";
+const pinned = ref(localStorage.getItem(PIN_KEY) === "1");
+function togglePinned(): void {
+  pinned.value = !pinned.value;
+  localStorage.setItem(PIN_KEY, pinned.value ? "1" : "0");
+  window.foveaBridge.setWindowPinned(pinned.value);
+}
+
 onMounted(() => {
   void tick();
   timer = setInterval(() => void tick(), 1000);
+  if (pinned.value) window.foveaBridge.setWindowPinned(true);
 });
 onUnmounted(() => {
   if (timer) clearInterval(timer);
@@ -184,6 +196,14 @@ function fmt(v: number, digits = 1): string {
     <header>
       <h1>Orchestrator Profiler</h1>
       <div class="snapshot-controls">
+        <button
+          class="pin"
+          :class="{ active: pinned }"
+          @click="togglePinned"
+          :title="pinned ? 'Unpin — stop keeping this window on top' : 'Pin — keep this window on top'"
+        >
+          {{ pinned ? "📌 Pinned" : "📌 Pin" }}
+        </button>
         <button @click="exportSnapshot">
           {{ exportStatus === "saving" ? "Saving…" : exportStatus === "saved" ? "Saved" : exportStatus === "error" ? "Failed" : "Export snapshot" }}
         </button>
@@ -455,6 +475,14 @@ function fmt(v: number, digits = 1): string {
       align-items: center;
       gap: 0.5rem;
       min-width: 0; // let the path truncate instead of overflowing the header
+      .pin.active {
+        background: #74b1be;
+        color: #10161a;
+        border-color: #74b1be;
+        &:hover {
+          background: #86bfca;
+        }
+      }
       .saved-path {
         color: #888;
         font-size: 0.72rem;

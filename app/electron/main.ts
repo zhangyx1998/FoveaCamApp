@@ -327,6 +327,12 @@ ipcMain.on("orchestrator:connect" satisfies keyof SendChannels, (event) => {
   event.sender.postMessage("orchestrator:port", null, [port2]);
 });
 
+// Sender-scoped pin toggle (the profiler nav bar): keep THIS window above all
+// others. The renderer owns persistence (localStorage) and re-applies on mount.
+ipcMain.on("window:set-pinned" satisfies keyof SendChannels, (event, pinned) => {
+  BrowserWindow.fromWebContents(event.sender)?.setAlwaysOnTop(!!pinned);
+});
+
 // ---- Window manager (docs/history/refactor/multi-window.md §3) --------------------
 
 function entryURL(desc: WindowDescriptor): { url?: string; file?: string; search?: string } {
@@ -383,9 +389,14 @@ function spawnWindow(desc: WindowDescriptor): ManagedWindow {
   const win = new BrowserWindow({
     ...windowOptions(desc),
     ...(desc.bounds ?? {}),
+    // Switch inheritance: land in the same display state as the window this
+    // one replaces (welcome↔app switches thread these through the manager).
+    ...(desc.fullscreen ? { fullscreen: true } : {}),
   });
-  // App windows maximize by default (legacy behavior) unless restoring bounds.
-  if (desc.class === "app" && !desc.bounds) win.maximize();
+  if (desc.maximized && !desc.fullscreen) win.maximize();
+  // App windows maximize by default (legacy behavior) unless restoring or
+  // inheriting a specific display state.
+  else if (desc.class === "app" && !desc.bounds && !desc.fullscreen) win.maximize();
 
   const target = entryURL(desc);
   if (target.url) void win.loadURL(target.url);
@@ -425,6 +436,22 @@ function spawnWindow(desc: WindowDescriptor): ManagedWindow {
     }
   });
 
+  // Last-known display state, refreshed at "close" (before destruction) — the
+  // welcome rule respawns AFTER "closed", when the BrowserWindow can no longer
+  // answer; this is what lets app→welcome inherit bounds + fullscreen.
+  let lastDisplayState = {
+    bounds: win.getBounds(),
+    fullscreen: win.isFullScreen(),
+    maximized: win.isMaximized(),
+  };
+  win.on("close", () => {
+    lastDisplayState = {
+      bounds: win.getBounds(),
+      fullscreen: win.isFullScreen(),
+      maximized: win.isMaximized(),
+    };
+  });
+
   const managed: ManagedWindow = {
     class: desc.class,
     appId: desc.appId,
@@ -439,7 +466,11 @@ function spawnWindow(desc: WindowDescriptor): ManagedWindow {
     close: () => win.close(),
     isDestroyed: () => win.isDestroyed(),
     getURL: () => win.webContents.getURL(),
-    getBounds: () => win.getBounds(),
+    getBounds: () => (win.isDestroyed() ? lastDisplayState.bounds : win.getBounds()),
+    isFullScreen: () =>
+      win.isDestroyed() ? lastDisplayState.fullscreen : win.isFullScreen(),
+    isMaximized: () =>
+      win.isDestroyed() ? lastDisplayState.maximized : win.isMaximized(),
   };
   // A-34: sender→windowId lookup for the orchestrator channel handshake (the
   // connect IPC only knows `event.sender`), + the close-teardown signal C-24's

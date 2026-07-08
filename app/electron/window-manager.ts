@@ -47,6 +47,11 @@ export interface WindowDescriptor {
   search?: string;
   /** Restore geometry (from a manifest); spawn uses defaults when absent. */
   bounds?: WindowBounds;
+  /** Spawn full-screen / maximized — inherited from the switched-from window
+   *  on welcome↔app switches so the new window lands exactly where (and how)
+   *  the old one was. */
+  fullscreen?: boolean;
+  maximized?: boolean;
   /** Full landing URL to restore (overrides `entry` when given — carries the
    *  state params, multi-window.md req. 7). */
   url?: string;
@@ -88,6 +93,24 @@ export interface ManagedWindow {
   isDestroyed(): boolean;
   getURL(): string;
   getBounds(): WindowBounds;
+  /** Display state for switch inheritance. Optional (pre-existing fakes);
+   *  main.ts's adapter answers from a last-known snapshot once the
+   *  BrowserWindow is destroyed (the welcome rule fires AFTER close). */
+  isFullScreen?(): boolean;
+  isMaximized?(): boolean;
+}
+
+/** The switch-inheritance snapshot of a window's display state. */
+function displayStateOf(w: ManagedWindow): {
+  bounds: WindowBounds;
+  fullscreen: boolean;
+  maximized: boolean;
+} {
+  return {
+    bounds: w.getBounds(),
+    fullscreen: w.isFullScreen?.() ?? false,
+    maximized: w.isMaximized?.() ?? false,
+  };
 }
 
 export interface DrainResult {
@@ -171,7 +194,10 @@ export class WindowManager {
     // open") or during quit.
     if (!WINDOWS[win.class].countsForWelcome) return;
     if (this.quitting || this.inSwitch) return;
-    if (this.appWindow() === null) this.ensureWelcome();
+    // Switch inheritance (app→welcome direction): the respawned welcome lands
+    // where the closed app window was. The BrowserWindow is destroyed by now —
+    // main.ts's adapter answers these from its last-known snapshot.
+    if (this.appWindow() === null) this.ensureWelcome(displayStateOf(win));
   }
 
   /** App is quitting — stop enforcing the welcome rule. */
@@ -214,7 +240,14 @@ export class WindowManager {
     );
   }
 
-  ensureWelcome(opts: { bounds?: WindowBounds; url?: string } = {}): ManagedWindow {
+  ensureWelcome(
+    opts: {
+      bounds?: WindowBounds;
+      fullscreen?: boolean;
+      maximized?: boolean;
+      url?: string;
+    } = {},
+  ): ManagedWindow {
     const existing = this.byClass("welcome")[0];
     if (existing) {
       existing.focus();
@@ -341,6 +374,12 @@ export class WindowManager {
     this.inSwitch = true;
     try {
       const holders = [...this.byClass("app"), ...this.byClass("welcome")];
+      // Switch inheritance: the new window lands on the same bounds and
+      // full-screen/maximized state as the window it replaces (welcome→app
+      // and app→app alike). Captured BEFORE close; explicit opts (manifest
+      // restore) still win.
+      const from = holders.find((w) => !w.isDestroyed());
+      const inherit = from ? displayStateOf(from) : undefined;
       if (holders.length > 0) {
         // Drain first — the busy check must be able to refuse while the old
         // app is still intact ("closed" = drained, not window-destroyed).
@@ -356,7 +395,9 @@ export class WindowManager {
         class: "app",
         appId,
         entry: entryFor("app", appId),
-        bounds: opts.bounds,
+        bounds: opts.bounds ?? inherit?.bounds,
+        fullscreen: inherit?.fullscreen,
+        maximized: inherit?.maximized,
         url: opts.url,
       });
     } finally {
