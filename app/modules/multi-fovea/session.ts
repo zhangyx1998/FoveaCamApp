@@ -11,7 +11,12 @@ import { activeController, type StreamHandle } from "@orchestrator/controller";
 import { RoundRobinFrameScheduler } from "@orchestrator/scheduler";
 import { publishSerials, releaseLeases } from "@orchestrator/session-resources";
 import { createVisionWorker, type VisionWorkerHandle } from "@orchestrator/vision-worker-host";
-import { serializeCalibration, type DisplayValues } from "@orchestrator/display-transport";
+import type { DisplayValues } from "@orchestrator/display-transport";
+import {
+  advertiseUndistortPipe,
+  retireUndistortPipe,
+  type UndistortPipeSeam,
+} from "@orchestrator/undistort-pipe";
 import type { PipeBroker } from "@orchestrator/pipe-session";
 import type { PipeInput, VisionResult } from "@orchestrator/vision-worker-protocol";
 import { multiFovea, defaultMultiFoveaTarget, MAX_MULTI_FOVEA_TARGETS } from "./contract";
@@ -29,7 +34,10 @@ function radians(deg: number): number {
   return (deg * Math.PI) / 180;
 }
 
-export default function multiFoveaSession(broker: PipeBroker): ServerSession<typeof multiFovea> {
+export default function multiFoveaSession(
+  broker: PipeBroker,
+  undistortSeam: UndistortPipeSeam,
+): ServerSession<typeof multiFovea> {
   return defineResourceSession("multi-fovea", multiFovea, (s) => {
     let triple: CalibratedTriple | null = null;
     let worker: VisionWorkerHandle | null = null;
@@ -186,11 +194,30 @@ export default function multiFoveaSession(broker: PipeBroker): ServerSession<typ
       });
       scope.defer(() => runtime.dispose());
       scope.defer(() => scheduler.stop());
-      // Connect the center pipe (C-21 gate) + spawn the display worker (center
-      // undistort only). Its teardown is registered LAST → drains FIRST: the
-      // worker terminates (stopping frames) before the runtime disposes, exactly
-      // as the old center-view tap did.
-      const cId = `camera:${t.leases.C.camera.serial}`;
+      // real-1g (C-23): advertise the first-class `undistort:<serial>` center
+      // pipe. The renderer binds it directly for the wide view; the worker here
+      // is the ruled Q1(a) MINIMAL RELAY — it reads the same pipe and posts
+      // frames solely for the on-main KCF (`runtime.onCenterFrame`), dying
+      // naturally when async-kcf→C++ lands. Retire defer registered BEFORE the
+      // worker's → runs after the consumers disconnect (LIFO).
+      let undistortC: string | null = null;
+      if (t.undistort) {
+        undistortC = advertiseUndistortPipe(
+          undistortSeam,
+          t.leases.C.camera,
+          t.undistort.calibration,
+        );
+        s.setState("undistortPipe", undistortC);
+        scope.defer(() => {
+          retireUndistortPipe(undistortSeam, undistortC!);
+          s.setState("undistortPipe", null);
+        });
+      }
+      // Connect the center pipe (C-21 gate) + spawn the relay worker. Its
+      // teardown is registered LAST → drains FIRST: the worker terminates
+      // (stopping frames) before the runtime disposes, exactly as the old
+      // center-view tap did. Uncalibrated rigs fall back to the raw pipe.
+      const cId = undistortC ?? `camera:${t.leases.C.camera.serial}`;
       const handle = broker.connect(cId);
       const cPipe: PipeInput = {
         role: "C",
@@ -205,8 +232,8 @@ export default function multiFoveaSession(broker: PipeBroker): ServerSession<typ
           pipes: [cPipe],
           params: {
             kind: "display",
-            view: "diff", // non-"sliced" → the worker posts only the undistorted "C"
-            cal: t.undistort ? serializeCalibration(t.undistort.calibration) : null,
+            view: "diff", // non-"sliced" → no slice output; relayCenter is the point
+            relayCenter: true, // Q1(a): post "C" for the on-main multi-target KCF
           },
         },
         onResult,

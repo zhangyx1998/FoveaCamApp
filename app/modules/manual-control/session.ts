@@ -11,14 +11,15 @@
 // Capture and recording (docs/refactor/orchestrator.md roadmap item 6) are
 // wired in separately — see `capture.ts`/`recording.ts`.
 //
-// C-22b step 2: the PROCESSED DISPLAY views (undistorted center + magnified
-// slice, perspective-wrapped foveae, combined diff/depth) moved OFF the JS event
-// loop into the shared `display` vision worker kernel — the registry `onView`
-// taps + per-view `frame-worker`s are gone. Main connects the three
-// `camera:<serial>` SHM pipes (C-21 gate), spawns the worker with the serialized
-// calibration + display params (fovea homographies / depth Q-matrix / slice-
-// center, recomputed on each throttled volt/target update), and re-sources
-// `capture.onCenterTick` from the worker-posted processed center frame.
+// C-22b step 2: the PROCESSED DISPLAY views (magnified slice, perspective-
+// wrapped foveae, combined diff/depth) run OFF the JS event loop in the shared
+// `display` vision worker kernel — the registry `onView` taps + per-view
+// `frame-worker`s are gone. real-1g (C-23): the session advertises the
+// first-class `undistort:<serial>` center pipe (B's native remap producer);
+// the renderer binds it for the wide view, the worker consumes it as its C
+// input (calibration-free — main ships fovea homographies / depth Q-matrix /
+// slice-center, recomputed on each throttled volt/target update), and
+// capture's center reads it as a one-shot on-demand SHM read (ruled Q2).
 // Recording is UNCHANGED — it reads `leases.L/C/R.camera.stream` directly.
 
 import { type ServerSession } from "@orchestrator/runtime";
@@ -33,11 +34,13 @@ import {
   VOLT_TELEMETRY_INTERVAL_MS,
 } from "@orchestrator/fovea-pipeline";
 import { createVisionWorker, type VisionWorkerHandle } from "@orchestrator/vision-worker-host";
+import type { DisplayParams, DisplayValues } from "@orchestrator/display-transport";
 import {
-  serializeCalibration,
-  type DisplayParams,
-  type DisplayValues,
-} from "@orchestrator/display-transport";
+  advertiseUndistortPipe,
+  retireUndistortPipe,
+  type UndistortPipeSeam,
+} from "@orchestrator/undistort-pipe";
+import { readNextPipeFrame } from "@orchestrator/pipe-read-once";
 import type { PipeBroker } from "@orchestrator/pipe-session";
 import type { PipeInput, VisionResult } from "@orchestrator/vision-worker-protocol";
 import { manualControl } from "./contract";
@@ -54,7 +57,10 @@ import type { Point2d } from "core/Geometry";
 import type { Pos } from "@lib/controller-codec";
 import { RollingStats } from "@lib/util/rolling";
 
-export default function manualControlSession(broker: PipeBroker): ServerSession<typeof manualControl> {
+export default function manualControlSession(
+  broker: PipeBroker,
+  undistortSeam: UndistortPipeSeam,
+): ServerSession<typeof manualControl> {
   return defineResourceSession("manual-control", manualControl, (s) => {
     let triple: CalibratedTriple | null = null;
     let loop: ActuationLoop | null = null;
@@ -158,15 +164,16 @@ export default function manualControlSession(broker: PipeBroker): ServerSession<
         s.telemetry({ size: v.size });
       }
       for (const f of r.frames) {
-        const mat = makeMat(new Uint8Array(f.buffer), [f.height, f.width], f.channels);
-        // Feed capture BEFORE publishing — `onCenterTick` copies synchronously
-        // when a pass is waiting; `s.frame` may transfer/neuter the buffer.
-        if (f.name === "C") capture.onCenterTick(mat);
-        s.frame(f.name, mat);
+        s.frame(f.name, makeMat(new Uint8Array(f.buffer), [f.height, f.width], f.channels));
       }
     }
 
     // --- capture (docs/refactor/orchestrator.md roadmap item 6) ----------
+
+    // The center pipe the vision worker consumes (undistort:<serial>, or the
+    // raw fallback) — capture's one-shot read rides this segment; it stays
+    // connected for the session's whole active span, so the producer is live.
+    let centerPipe: { shmName: string; maxBytes: number; channels: number } | null = null;
 
     const capture = createCapture({
       getTriple: () => triple,
@@ -178,6 +185,12 @@ export default function manualControlSession(broker: PipeBroker): ServerSession<
       baseline: () => s.state.baseline,
       wrapEnable: () => s.state.wrap,
       steerToAngle: setTargetFromAngle,
+      // C-23 ruled Q2: the NEXT undistorted center via a one-shot SHM read of
+      // the already-connected pipe (on-demand, user-initiated — not per-frame).
+      readCenter: () =>
+        centerPipe
+          ? readNextPipeFrame(centerPipe.shmName, centerPipe.maxBytes, centerPipe.channels)
+          : Promise.resolve(null),
       frame: (name, payload) => s.frame(name, payload),
       telemetry: (patch) => s.telemetry(patch),
     });
@@ -201,7 +214,6 @@ export default function manualControlSession(broker: PipeBroker): ServerSession<
     function initParams(): Record<string, unknown> {
       return {
         kind: "display",
-        cal: triple?.undistort ? serializeCalibration(triple.undistort.calibration) : null,
         zoom: Math.max(1, s.state.zoom),
         view: s.state.view,
         wrap: s.state.wrap,
@@ -211,9 +223,8 @@ export default function manualControlSession(broker: PipeBroker): ServerSession<
       };
     }
 
-    /** Connect a `camera:<serial>` pipe (refcount++ → C-21 gate) → worker input. */
-    function connectPipe(role: "L" | "C" | "R", serial: string, ids: string[]): PipeInput {
-      const pipeId = `camera:${serial}`;
+    /** Connect a pipe by id (refcount++ → C-21 gate) → worker input. */
+    function connectPipe(role: "L" | "C" | "R", pipeId: string, ids: string[]): PipeInput {
       const handle = broker.connect(pipeId);
       ids.push(pipeId);
       const { width: w, height: h, channels, bytesPerFrame, maxBytes } = handle.spec;
@@ -221,20 +232,51 @@ export default function manualControlSession(broker: PipeBroker): ServerSession<
     }
 
     // Resource-scoped activation (A-P1). Trickiest teardown in the fleet: a
-    // capture/recording pass may still be reading a stream (or awaiting the next
-    // center tick via `capture.onCenterTick`) when the last subscriber leaves —
-    // it MUST fully drain BEFORE the worker terminates + the pipes disconnect +
-    // the leases release. Registration order below is reverse of the drain.
+    // capture/recording pass may still be reading a stream (or awaiting a
+    // one-shot center-pipe read) when the last subscriber leaves — it MUST
+    // fully drain BEFORE the worker terminates + the pipes disconnect + the
+    // leases release. Registration order below is reverse of the drain.
     async function activateSession(scope: ResourceScope): Promise<void> {
       const t = await scope.use(() => acquireTriple(s), releaseLeases); // drains LAST
       if (!t) return;
       triple = t;
 
+      // real-1g (C-23): advertise the first-class `undistort:<serial>` center
+      // pipe; the renderer binds it for the wide view, the worker consumes it
+      // for slice, and capture's one-shot read rides it. Registered before the
+      // worker's defer → retires AFTER consumers disconnect (LIFO).
+      let undistortC: string | null = null;
+      if (t.undistort) {
+        undistortC = advertiseUndistortPipe(
+          undistortSeam,
+          t.leases.C.camera,
+          t.undistort.calibration,
+        );
+        s.setState("undistortPipe", undistortC);
+        scope.defer(() => {
+          retireUndistortPipe(undistortSeam, undistortC!);
+          s.setState("undistortPipe", null);
+        });
+      }
+
       const pipeIds: string[] = [];
+      const centerInput = connectPipe(
+        "C",
+        undistortC ?? `camera:${t.leases.C.camera.serial}`,
+        pipeIds,
+      );
+      centerPipe = {
+        shmName: centerInput.shmName,
+        maxBytes: centerInput.bytesPerFrame,
+        channels: centerInput.channels,
+      };
+      scope.defer(() => {
+        centerPipe = null;
+      });
       const pipes: PipeInput[] = [
-        connectPipe("L", t.leases.L.camera.serial, pipeIds),
-        connectPipe("C", t.leases.C.camera.serial, pipeIds),
-        connectPipe("R", t.leases.R.camera.serial, pipeIds),
+        connectPipe("L", `camera:${t.leases.L.camera.serial}`, pipeIds),
+        centerInput,
+        connectPipe("R", `camera:${t.leases.R.camera.serial}`, pipeIds),
       ];
       const taps = new DisposerBag();
       publishSerials(t.leases, taps, s);

@@ -79,6 +79,21 @@ setRegistryPipeSeam({
   attach: (camera, pipeId) => aravisPipe.attachCameraPipe(camera, pipeId),
   detach: (pipeId) => aravisPipe.detachCameraPipe(pipeId),
 });
+// real-1g (C-23/B-23): the SESSION-advertised `undistort:<serial>` pipes —
+// B's native remap producer (camera → convert → precomputed-map remap →
+// FrameSink), attached with the plain persisted calibration record; B rebuilds
+// the maps natively. Same cast rationale as `aravisPipe` above.
+const aravisUndistort = Aravis as unknown as {
+  attachUndistortPipe(camera: unknown, pipeId: string, cal: unknown): void;
+  detachUndistortPipe(pipeId: string): void;
+};
+const undistortSeam = {
+  advertise: pipeBroker.advertise,
+  unadvertise: pipeBroker.unadvertise,
+  attach: (camera: unknown, pipeId: string, cal: unknown) =>
+    aravisUndistort.attachUndistortPipe(camera, pipeId, cal),
+  detach: (pipeId: string) => aravisUndistort.detachUndistortPipe(pipeId),
+} as import("./undistort-pipe.js").UndistortPipeSeam;
 // A-24 Stage 3: fold every live SHM pipe producer's native meter into
 // `perfSnapshot.workloads` (probed out-of-loop; `ProbeSnapshot` === the JS
 // `WorkloadSnapshot` shape). The 1d KCF tracker registers its own probe from
@@ -91,6 +106,11 @@ registerNativeProbe(
 registerNativeProbe(
   () => Aravis.converterProbeAll() as unknown as Record<string, WorkloadSnapshot>,
 );
+// real-1g (B-23): the per-camera undistort threads — same sibling-probe shape,
+// one `undistort:<format>` row per active undistort pipe (absent when parked).
+registerNativeProbe(
+  () => Aravis.undistortProbeAll() as unknown as Record<string, WorkloadSnapshot>,
+);
 
 // --- live camera view: frame-path validation slice -----------------------
 const liveview = hub.add(liveViewSession());
@@ -102,13 +122,13 @@ const manageCameras = hub.add(manageCamerasSession());
 hub.add(controllerSession());
 
 // --- tracking: first frame-driven control loop (KCF + actuation) ----------
-const tracking = hub.add(trackingSession(asBroker(Pipe)));
+const tracking = hub.add(trackingSession(asBroker(Pipe), undistortSeam));
 
 // --- manual-control: manual steering + capture + recording ----------------
-const manualControl = hub.add(manualControlSession(asBroker(Pipe)));
+const manualControl = hub.add(manualControlSession(asBroker(Pipe), undistortSeam));
 
 // --- multi-fovea: protocol-v2 multi-target logic skeleton ------------------
-const multiFovea = hub.add(multiFoveaSession(asBroker(Pipe)));
+const multiFovea = hub.add(multiFoveaSession(asBroker(Pipe), undistortSeam));
 
 // --- disparity-scope: auto-vergence control loop (§7.1 S1a) ---------------
 const disparityScope = hub.add(disparityScopeSession(asBroker(Pipe)));

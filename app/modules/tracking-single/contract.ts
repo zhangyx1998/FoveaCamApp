@@ -21,6 +21,10 @@ export const tracking = defineContract({
     /** Leased camera serials per role (C-22) — the raw center preview binds to
      *  the `camera:<serial>` pipe via `usePipeFrame`. Set on acquire. */
     serials: {} as Partial<Record<"L" | "C" | "R", string>>,
+    /** The advertised `undistort:<serial>` pipe id while active (C-23, real-1g) —
+     *  null when unadvertised (no calibration); renderer falls back to the raw
+     *  `camera:<serial>` pipe. */
+    undistortPipe: null as string | null,
     // Actuation parameters (renderer resolves and pushes concrete values).
     baseline: 200, // stereo baseline (mm)
     verge: 0, // verge slider (0 → ∞ distance)

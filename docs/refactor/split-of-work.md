@@ -1274,6 +1274,54 @@ per frame) while the native converter threads sit parked. Full migration brief:
   ONLY, core = 24 normal opencv/aravis/glib deps (unchanged) ✓; 14's 6
   worker-teardown warns remain PRE-EXISTING (unrelated). Pathspec: `core/test/13`.
 
+- **B-23 — real-1g undistort pipes: native UndistortStream producer (PLAN-FIRST
+  approved; rulings 1–5 confirmed 2026-07-08).** Log: **DONE, green.**
+  **Producer** — new `core/lib/Aravis/UndistortStream.{h,cpp}`:
+  `UndistortStream : TransformStream<Frame::Ptr, ConvertedFrame::Ptr>` mirrors
+  the real-1e ConverterStream — ONE thread does convert→remap (ruling 2;
+  chaining off ConverterStream is contract-UNSAFE: the downstream Sub::Latest
+  retains the ConvertedFrame Ptr past its reused-buffer validity). Maps built
+  SYNCHRONOUSLY in the ctor (= at attach, on the NAPI thread, ruling 4) via
+  `cv::initUndistortRectifyMap` from the PLAIN persisted CameraCalibration JSON
+  (ruling 1 — `convert<CameraCalibration::Ptr>`, the reusable OpenCV.cpp:336
+  specialization; the env-bound Vision.cpp `Undistort` never crosses to the
+  thread). transform: `convertFrame` (shared, incl. >8-bit down-scale) →
+  geometry guard (frame ≠ sensor_size ⇒ null-drop; ROI/binning change ⇒
+  re-advertise+re-attach) → `cv::remap(INTER_LINEAR)` into a second reused
+  buffer. ThreadMeter `undistort:<format>` ({frame}→{undistorted}, busy =
+  convert+remap; FrameMeta.convertMs = total processing ms, C's struct
+  untouched). Latest-wins drop metering as real-1e.
+  **NAPI seam** (appended to `core/Addon.cpp`, ruling 5 names):
+  `Aravis.attachUndistortPipe(camera, pipeId, calJSON)` /
+  `detachUndistortPipe(pipeId)` / `undistortProbeAll()` — sibling registry
+  `g_undistortPipes`, gate = the pipe's OWN connectPipe refcount via
+  `setConsumerGate` (park/resume, no second gate), detach clears the gate
+  FIRST + destructs outside the lock (B-18 pattern); attach resets the gated
+  subscriber BEFORE swapping the stream on re-attach. B stays id-agnostic
+  (`undistort:<serial>[@…]` naming is A/C's contract; format read from
+  `spec.pixelFormat`).
+  **Shared-code touches (mine, ruling 3):** `ConverterStream.h`
+  `PipeOfferSubscriber` ctor widened `ConverterStream*` →
+  `::Stream<ConvertedFrame::Ptr>*` (byte-compatible; `::`-qualified — inside
+  `namespace Arv` the unqualified name resolves to Arv::Stream);
+  `snapshotToJs` un-static'd as `meterSnapshotToJs` shared by both probes.
+  **Test** `core/test/18-undistort-pipe.ts` (fake camera): three pipes off one
+  camera (`camera:<s>` raw + `undistort:<s>` zero-dist + `undistort:<s>@barrel`
+  k1=-0.4), frames MATCHED across pipes on FrameMeta.deviceTimestamp —
+  (1) zero-distortion = byte-level passthrough of the raw pipe (3/3 identical);
+  (2) barrel = substantial displacement (3/3, >1% pixels moved) + BGRA
+  structure held; (3) gate park+resume (disconnect → reconnect → frames flow);
+  (4) `undistortProbeAll` snapshots (counts, name); (5) B-20 orderly teardown →
+  natural exit 0, zero leak warns. Wired into the sweep.
+  **Gates:** `core make build` both runtimes ✓; native sweep **08–18 all exit
+  0** (13 tests) ✓; **otool clean** — reader = self+`libc++.1`+`libSystem.B`
+  ONLY, core = 24 non-system deps (unchanged) ✓. Files:
+  `core/lib/Aravis/UndistortStream.{h,cpp}` (new), `core/test/18-undistort-pipe.ts`
+  (new), `core/lib/Aravis/ConverterStream.{h,cpp}` (widen + share), `core/Addon.cpp`
+  (append-only). C-23 seam ready: sessions advertise `undistort:<serial>` +
+  attach with the loaded cal JSON; the vision worker consumes the pipe and
+  drops its in-worker `Undistort.apply`.
+
 - **C-22 — migration orchestrator/renderer + dead-code removal (PLAN-FIRST;
   coordinate w/ B-19).** Delete `registry.startLoop/stopLoop/onView/viewSinks/
   tapView`; migrate disparity-scope / tracking-single / manual-control sessions

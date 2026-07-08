@@ -33,11 +33,12 @@ import {
   VOLT_TELEMETRY_INTERVAL_MS,
 } from "@orchestrator/fovea-pipeline";
 import { createVisionWorker, type VisionWorkerHandle } from "@orchestrator/vision-worker-host";
+import type { DisplayParams, DisplayValues } from "@orchestrator/display-transport";
 import {
-  serializeCalibration,
-  type DisplayParams,
-  type DisplayValues,
-} from "@orchestrator/display-transport";
+  advertiseUndistortPipe,
+  retireUndistortPipe,
+  type UndistortPipeSeam,
+} from "@orchestrator/undistort-pipe";
 import type { PipeBroker } from "@orchestrator/pipe-session";
 import type { PipeInput, VisionResult } from "@orchestrator/vision-worker-protocol";
 import { tracking } from "./contract";
@@ -70,7 +71,10 @@ function trackerWorkload(m: TrackerMeter): WorkloadSnapshot {
   };
 }
 
-export default function trackingSession(broker: PipeBroker): ServerSession<typeof tracking> {
+export default function trackingSession(
+  broker: PipeBroker,
+  undistortSeam: UndistortPipeSeam,
+): ServerSession<typeof tracking> {
   return defineResourceSession("tracking", tracking, (s) => {
     let triple: CalibratedTriple | null = null;
     let loop: ActuationLoop | null = null;
@@ -261,7 +265,6 @@ export default function trackingSession(broker: PipeBroker): ServerSession<typeo
     function initParams(): Record<string, unknown> {
       return {
         kind: "display",
-        cal: triple?.undistort ? serializeCalibration(triple.undistort.calibration) : null,
         zoom: Math.max(1, s.state.zoom),
         view: s.state.view,
         wrap: s.state.wrap,
@@ -271,9 +274,8 @@ export default function trackingSession(broker: PipeBroker): ServerSession<typeo
       };
     }
 
-    /** Connect a `camera:<serial>` pipe (refcount++ → C-21 gate) → worker input. */
-    function connectPipe(role: "L" | "C" | "R", serial: string, ids: string[]): PipeInput {
-      const pipeId = `camera:${serial}`;
+    /** Connect a pipe by id (refcount++ → C-21 gate) → worker input. */
+    function connectPipe(role: "L" | "C" | "R", pipeId: string, ids: string[]): PipeInput {
       const handle = broker.connect(pipeId);
       ids.push(pipeId);
       const { width: w, height: h, channels, bytesPerFrame, maxBytes } = handle.spec;
@@ -290,11 +292,32 @@ export default function trackingSession(broker: PipeBroker): ServerSession<typeo
         lastFrameTime = null;
       });
 
+      // real-1g (C-23): advertise the first-class `undistort:<serial>` center
+      // pipe (B's native remap producer, consumer-gated). Publish its id so the
+      // renderer binds the undistorted wide view — overlays (bbox/target) are in
+      // undistorted space, so this is their correct backdrop. Registered before
+      // the worker's defer → retires AFTER consumers disconnect (LIFO).
+      let undistortC: string | null = null;
+      if (t.undistort) {
+        undistortC = advertiseUndistortPipe(
+          undistortSeam,
+          t.leases.C.camera,
+          t.undistort.calibration,
+        );
+        s.setState("undistortPipe", undistortC);
+        scope.defer(() => {
+          retireUndistortPipe(undistortSeam, undistortC!);
+          s.setState("undistortPipe", null);
+        });
+      }
+
       const pipeIds: string[] = [];
       const pipes: PipeInput[] = [
-        connectPipe("L", t.leases.L.camera.serial, pipeIds),
-        connectPipe("C", t.leases.C.camera.serial, pipeIds),
-        connectPipe("R", t.leases.R.camera.serial, pipeIds),
+        connectPipe("L", `camera:${t.leases.L.camera.serial}`, pipeIds),
+        // The worker's C input is the UNDISTORTED stream (slice runs on it);
+        // uncalibrated rigs fall back to raw — same degradation as before.
+        connectPipe("C", undistortC ?? `camera:${t.leases.C.camera.serial}`, pipeIds),
+        connectPipe("R", `camera:${t.leases.R.camera.serial}`, pipeIds),
       ];
       const taps = new DisposerBag();
       publishSerials(t.leases, taps, s);

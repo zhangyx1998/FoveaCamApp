@@ -162,4 +162,12 @@ declare module "core/Aravis" {
    * (refcount-0) or detached converter is absent from the map — no stale rows.
    */
   export function converterProbeAll(): Record<string, ProbeSnapshot>;
+
+  /**
+   * Out-of-loop probe of every ACTIVE per-camera undistort thread (real-1g,
+   * B-23) → `{ [pipeId]: ProbeSnapshot }` — same shape as `converterProbeAll`,
+   * folds into `perfSnapshot.workloads` identically. Parked/detached pipes are
+   * absent — no stale rows.
+   */
+  export function undistortProbeAll(): Record<string, ProbeSnapshot>;
 }

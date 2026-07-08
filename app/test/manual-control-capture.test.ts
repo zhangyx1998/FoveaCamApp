@@ -66,10 +66,24 @@ function stubDeps(overrides: Partial<CaptureDeps> = {}): CaptureDeps {
     baseline: () => 200,
     wrapEnable: () => false,
     steerToAngle: () => {},
+    // C-23: the one-shot undistort-pipe read (was the onCenterTick feed).
+    readCenter: async () => fakeMat([4, 4], 4) as any,
     frame: () => {},
     telemetry: () => {},
     ...overrides,
   };
+}
+
+/** A `readCenter` the test unblocks manually — stands in for "the next center
+ *  frame arrives on the pipe" (was `capture.onCenterTick(...)`). */
+function deferredCenter() {
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  const readCenter = async () => {
+    await gate;
+    return fakeMat([4, 4], 4) as any;
+  };
+  return { readCenter, release: () => release() };
 }
 
 describe("manual-control capture — V1 regression", () => {
@@ -78,8 +92,9 @@ describe("manual-control capture — V1 regression", () => {
     await expect(capture.waitIdle()).resolves.toBeUndefined();
   });
 
-  it("waitIdle() stays pending while a capture is blocked waiting on the next center-view tick", async () => {
-    const capture = createCapture(stubDeps());
+  it("waitIdle() stays pending while a capture is blocked on the next center frame", async () => {
+    const center = deferredCenter();
+    const capture = createCapture(stubDeps({ readCenter: center.readCenter }));
 
     const runPromise = capture.run([]); // no setpoints -> single pass
     await flush();
@@ -90,16 +105,15 @@ describe("manual-control capture — V1 regression", () => {
     });
     await flush();
     await flush();
-    // The capture hasn't received its center-view tick yet — it's still
-    // inside `captureOnce`'s `await requestCenterView()`. Resolving idle now
-    // (i.e. the old, buggy `idleSession` that released leases unconditionally)
-    // would be exactly V1: the camera gets released while `stack()` below is
-    // about to read from it.
+    // The capture hasn't received its center frame yet — it's still inside
+    // `captureOnce`'s `await requestCenterView()` (C-23: a one-shot pipe read).
+    // Resolving idle now (i.e. the old, buggy `idleSession` that released
+    // leases unconditionally) would be exactly V1: the camera gets released
+    // while `stack()` below is about to read from it.
     expect(idleResolved).toBe(false);
 
-    // Unblock the capture — this is the session's `onCenterView` handler
-    // forwarding a tick in production.
-    capture.onCenterTick(fakeMat([4, 4], 4));
+    // Unblock the capture — the next center frame lands on the pipe.
+    center.release();
 
     await runPromise;
     await idlePromise;
@@ -107,11 +121,12 @@ describe("manual-control capture — V1 regression", () => {
   });
 
   it("a second run() call while one is in flight is a no-op that returns the same in-flight promise", async () => {
-    const capture = createCapture(stubDeps());
+    const center = deferredCenter();
+    const capture = createCapture(stubDeps({ readCenter: center.readCenter }));
     const first = capture.run([]);
     const second = capture.run([]); // should not start a second pass
     expect(second).toBe(first);
-    capture.onCenterTick(fakeMat([4, 4], 4));
+    center.release();
     await first;
   });
 

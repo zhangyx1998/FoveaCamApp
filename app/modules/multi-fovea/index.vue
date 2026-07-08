@@ -14,10 +14,12 @@ import type { Point2d, Rect, Size } from "core/Geometry";
 
 const session = useSession(multiFovea, "multi-fovea");
 const { state, telemetry } = session;
-// C-22: raw center ("C") preview rides the native camera:<serial> pipe (off the
-// JS view-tap loop); per-fovea processed crops stay on session.frame.
+// real-1g (C-23): the wide view binds the first-class UNDISTORTED pipe when the
+// session advertises it (target overlays are in undistorted pixel space); falls
+// back to raw on uncalibrated rigs. Per-fovea processed crops stay on
+// session.frame.
 const center = usePipeFrame(() =>
-  state.serials?.C ? `camera:${state.serials.C}` : null,
+  state.undistortPipe ?? (state.serials?.C ? `camera:${state.serials.C}` : null),
 );
 const selectedTarget = ref(0);
 const draftCenter = ref<Point2d | null>(null);

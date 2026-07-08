@@ -4,21 +4,21 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Shared DISPLAY vision kernel (C-22b step 2) — runs INSIDE the vision worker,
-// producing tracking-single + manual-control's processed views off the JS event
-// loop. Both apps had byte-identical view math (undistorted center + magnified
-// slice, perspective-wrapped foveae, combined diff/depth), so one kernel serves
-// both; each session computes its own matrices/scalars on the main thread and
+// Shared DISPLAY vision kernel (C-22b step 2; calibration-free since C-23) —
+// runs INSIDE the vision worker, producing tracking-single + manual-control's
+// processed views (magnified slice, perspective-wrapped foveae, combined
+// diff/depth) plus multi-fovea's center relay, off the JS event loop. Each
+// session computes its calibration-derived matrices on the main thread and
 // ships them as params (fovea homographies, depth Q-matrix, slice center).
 //
-// The only calibration reconstructed here is `new Undistort(cal)` for the
-// center remap (`apply`) — there's no serializable-matrix shortcut for a full
-// distortion remap. All display ops are synchronous, so `process` is sync.
+// real-1g: the C input is the `undistort:<serial>` pipe — frames arrive ALREADY
+// undistorted from B's native remap producer, so the in-worker `new
+// Undistort(cal)` + `apply` (and the whole cal transport) are gone. All display
+// ops are synchronous, so `process` is sync.
 
 import { RECT } from "@lib/util/geometry";
 import { makeMat } from "@lib/mat";
 import {
-  Undistort,
   diff,
   disparity,
   depthFromProjection,
@@ -29,12 +29,7 @@ import {
   type Mat,
 } from "core/Vision";
 import type { Rect } from "core/Geometry";
-import {
-  deserializeCalibration,
-  type DisplayInit,
-  type DisplayParams,
-  type DisplayValues,
-} from "./display-transport.js";
+import type { DisplayParams, DisplayValues } from "./display-transport.js";
 import type {
   FrameSet,
   KernelFrameOut,
@@ -49,16 +44,6 @@ function toMat(nums: number[] | null | undefined, shape: number[]): Mat<Float64A
 }
 
 export function createDisplayKernel(initial: Record<string, unknown>): VisionKernel {
-  let undistort: Undistort | null = null;
-  const cal = (initial as DisplayInit).cal;
-  if (cal) {
-    try {
-      undistort = new Undistort(deserializeCalibration(cal));
-    } catch {
-      undistort = null; // fall back to raw center (matches the sessions' guard)
-    }
-  }
-
   const p: {
     homographyL: Mat<Float64Array> | null;
     homographyR: Mat<Float64Array> | null;
@@ -69,6 +54,7 @@ export function createDisplayKernel(initial: Record<string, unknown>): VisionKer
     wrap: boolean;
     depthNear: number;
     depthFar: number;
+    relayCenter: boolean;
   } = {
     homographyL: null,
     homographyR: null,
@@ -79,6 +65,7 @@ export function createDisplayKernel(initial: Record<string, unknown>): VisionKer
     wrap: false,
     depthNear: -Infinity,
     depthFar: Infinity,
+    relayCenter: false,
   };
 
   let width = 0;
@@ -131,21 +118,26 @@ export function createDisplayKernel(initial: Record<string, unknown>): VisionKer
       if (d.wrap !== undefined) p.wrap = d.wrap;
       if (d.depthNear !== undefined) p.depthNear = d.depthNear;
       if (d.depthFar !== undefined) p.depthFar = d.depthFar;
+      if (d.relayCenter !== undefined) p.relayCenter = d.relayCenter;
     },
 
     process(frames: FrameSet): KernelOutput {
       const out: KernelFrameOut[] = [];
       const values: DisplayValues = {};
       if (frames.C) {
-        const raw = frames.C.mat;
-        const view = undistort ? undistort.apply(raw) : raw;
+        // Already undistorted (the `undistort:<serial>` pipe input, real-1g) —
+        // or raw on an uncalibrated rig (session fell back to `camera:<serial>`,
+        // matching the old `undistort ? apply : raw` degradation).
+        const view = frames.C.mat;
         const [h = 0, w = 0] = view.shape;
         if (w !== width || h !== height) {
           width = w;
           height = h;
           values.size = { width: w, height: h };
         }
-        out.push({ name: "C", mat: view });
+        // Q1(a): plain-center relay for multi-fovea's on-main KCF only — the
+        // display apps' wide view binds the pipe directly in the renderer now.
+        if (p.relayCenter) out.push({ name: "C", mat: view });
         if (p.view === "sliced" && width && height) {
           const zoom = Math.max(1, p.zoom);
           const size = { width: width / zoom, height: height / zoom };
@@ -163,7 +155,6 @@ export function createDisplayKernel(initial: Record<string, unknown>): VisionKer
     },
 
     dispose(): void {
-      undistort = null;
       aligned.L = aligned.R = null;
     },
   };

@@ -59,15 +59,6 @@ function RGB2BGR(image: Mat) {
   }
 }
 
-/** Independent copy — the source Mat (from a registry `onView` tap) is only
- *  valid for the duration of that synchronous call. */
-function copyMat<T extends Mat<Uint8Array>>(m: T): T {
-  const data = new Uint8Array(
-    m.buffer.slice(m.byteOffset, m.byteOffset + m.byteLength),
-  );
-  return Object.assign(data, { shape: m.shape, channels: m.channels }) as unknown as T;
-}
-
 function clampRect(r: { x: number; y: number; width: number; height: number }, width: number, height: number) {
   const x = Math.max(0, Math.min(Math.round(r.x), width - 1));
   const y = Math.max(0, Math.min(Math.round(r.y), height - 1));
@@ -93,6 +84,11 @@ export interface CaptureDeps {
   wrapEnable(): boolean;
   /** Steer the target to an angle (used to visit each set-point in turn). */
   steerToAngle(angle: Point2d, distance_mm?: number, shift_deg?: number): void;
+  /** One-shot read of the NEXT undistorted center frame (C-23 ruled Q2: an
+   *  on-demand SHM read of the `undistort:<serial>` pipe — the session keeps
+   *  that pipe connected while active, so the producer is running). Returns an
+   *  independent Mat, or null on timeout / session not active. */
+  readCenter(): Promise<Mat<Uint8Array> | null>;
   frame(name: string, payload: SessionFrameSource): void;
   telemetry(patch: {
     captureBusy?: boolean;
@@ -107,9 +103,6 @@ export interface CaptureController {
   run(setpoints: VoltPreviewQuery[]): Promise<void>;
   save(path: string, format: string): Promise<void>;
   discard(): void;
-  /** Called by the session's center-view tap on every tick — a no-op unless
-   *  a capture is currently waiting on the next center frame. */
-  onCenterTick(view: Mat<Uint8Array>): void;
   /** Resolves once any in-flight `run()` completes (immediately if idle).
    *  The session must await this before releasing camera leases — a capture
    *  in progress is still actively reading `lease.camera.stream` directly
@@ -122,12 +115,14 @@ export function createCapture(deps: CaptureDeps): CaptureController {
   const pending = new Map<string, Entry | Entry[]>();
   let busy = false;
   let active: Promise<void> = Promise.resolve();
-  let waitingForCenter: ((view: Mat<Uint8Array>) => void) | null = null;
 
-  function requestCenterView(): Promise<Mat<Uint8Array>> {
-    return new Promise((resolve) => {
-      waitingForCenter = (view) => resolve(copyMat(view));
-    });
+  /** The next undistorted center frame (C-23: one-shot pipe read via deps —
+   *  already an independent Mat). Throws on timeout so the pass fails loudly
+   *  instead of capturing a stale/absent center. */
+  async function requestCenterView(): Promise<Mat<Uint8Array>> {
+    const view = await deps.readCenter();
+    if (!view) throw new Error("capture: no center frame (undistort pipe timeout)");
+    return view;
   }
 
   // `s.telemetry()` merges shallowly — a patch containing `capture_meta`
@@ -196,8 +191,8 @@ export function createCapture(deps: CaptureDeps): CaptureController {
       indexed,
     );
 
-    // "center": the current undistorted+sliced view around the target — via
-    // the registry tap, so it must be copied before use (see `onCenterTick`).
+    // "center": the current undistorted+sliced view around the target — a
+    // one-shot `undistort:<serial>` pipe read (already an independent Mat).
     const centerRaw = await requestCenterView();
     const { width, height } = deps.centerFrameSize();
     const size = { width: width / zoom, height: height / zoom };
@@ -325,13 +320,6 @@ export function createCapture(deps: CaptureDeps): CaptureController {
     discard() {
       pending.clear();
       deps.telemetry({ capture_meta: {} });
-    },
-
-    onCenterTick(view) {
-      if (!waitingForCenter) return;
-      const resolve = waitingForCenter;
-      waitingForCenter = null;
-      resolve(view);
     },
 
     waitIdle() {

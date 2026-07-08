@@ -39,15 +39,15 @@ const session = useSession(tracking, "tracking");
 // (§12.3 R3) — read/write them as plain reactive properties below, no `.value`.
 const { state, telemetry } = session;
 
-// Processed preview frames fanned from the orchestrator: C undistorted, L/R
-// perspective-wrapped, `center` the magnified fovea crop around the target.
-// C-22: the raw center ("C") preview rides the native `camera:<serial>` pipe
-// (off the JS view-tap loop); L/R (perspective-wrapped when `wrap`) and the
-// processed `center` view stay on `session.frame` (their producer moves to the
-// vision worker in the coupled half).
+// Processed preview frames fanned from the orchestrator: L/R perspective-
+// wrapped, `center` the magnified fovea crop around the target (vision worker).
+// real-1g (C-23): the wide view binds the first-class UNDISTORTED pipe when the
+// session advertises it — the bbox/target overlays are computed in undistorted
+// pixel space, so this is their correct backdrop (the raw pipe was slightly
+// misaligned under distortion). Falls back to raw on uncalibrated rigs.
 const { L: frameL, R: frameR, center: frameCenter } = useFrames(session, ["L", "R", "center"]);
 const frameC = usePipeFrame(() =>
-  state.serials?.C ? `camera:${state.serials.C}` : null,
+  state.undistortPipe ?? (state.serials?.C ? `camera:${state.serials.C}` : null),
 );
 
 const drawer_height = ref(0);

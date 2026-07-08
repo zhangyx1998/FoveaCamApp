@@ -47,11 +47,13 @@ const session = useSession(manualControl, "manual-control");
 const { state, telemetry } = session;
 const controller = computed(getController);
 
-// C-22: raw center ("C") preview rides the native camera:<serial> pipe (off the
-// JS view-tap loop); L/R (wrapped foveae) + processed center stay on session.frame.
+// real-1g (C-23): the wide view binds the first-class UNDISTORTED pipe when the
+// session advertises it (the target overlay is in undistorted pixel space —
+// this is its correct backdrop); falls back to raw on uncalibrated rigs. L/R
+// (wrapped foveae) + the processed center stay on session.frame (vision worker).
 const { L: frameL, R: frameR, center: frameCenter } = useFrames(session, ["L", "R", "center"]);
 const frameC = usePipeFrame(() =>
-  state.serials?.C ? `camera:${state.serials.C}` : null,
+  state.undistortPipe ?? (state.serials?.C ? `camera:${state.serials.C}` : null),
 );
 
 const points = new SetPoints(local("manual-control.set-points", ""));

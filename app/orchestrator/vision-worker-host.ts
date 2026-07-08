@@ -31,8 +31,10 @@ const requireHere = createRequire(import.meta.url);
 
 /** Resolve the shm-reader addon path the parent hands the worker (bare
  *  `require` in a worker resolves against cwd, not the app dir — same reason
- *  the recorder worker gets its `@mcap/core` path from the parent). */
-function readerAddonPath(): string {
+ *  the recorder worker gets its `@mcap/core` path from the parent). Exported
+ *  for `pipe-read-once.ts` (C-23 one-shot capture read — same addon, loaded on
+ *  the orchestrator thread for a single on-demand frame). */
+export function readerAddonPath(): string {
   const coreEntry = requireHere.resolve("core");
   const dir = coreEntry.slice(0, coreEntry.lastIndexOf("/"));
   const runtime = process.versions.electron ? "electron" : "node";
