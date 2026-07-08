@@ -96,6 +96,12 @@ export type PipeReadFrame = {
   data: ArrayBuffer;
   seq: bigint;
   tCapture?: number;
+  /** Producer convert cost (ms) + seqlock health for this read (A-26 Fix D) —
+   *  carried through so the consumer can populate `FramePayload.meta`/`.shm`
+   *  and the StreamView inspector shows the same metrics on pipe streams. */
+  convertMs?: number;
+  gen?: number;
+  retries?: number;
   /** Active frame size (C-20 dynamic resize) — the frame occupies
    *  `width*height*channels` bytes at the head of `data`. */
   width?: number;
@@ -288,6 +294,9 @@ export function createShmClient(
       data: msg.buffer,
       seq: msg.seq,
       tCapture: msg.tCapture,
+      convertMs: msg.convertMs,
+      gen: msg.gen,
+      retries: msg.retries,
       width: msg.width,
       height: msg.height,
     });

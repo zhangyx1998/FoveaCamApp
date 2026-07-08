@@ -119,6 +119,11 @@ function handlePipeRead(port: MessagePort, msg: PipeReadRequest): void {
         buffer: msg.buffer,
         seq: result ? result.seq : undefined,
         tCapture: result ? result.meta?.tCapture : undefined,
+        // A-26 Fix D: forward the convert cost + seqlock health the reader
+        // already computed so the StreamView inspector lights up on pipes.
+        convertMs: result ? result.meta?.convertMs : undefined,
+        gen: result ? result.gen : undefined,
+        retries: result ? result.retries : undefined,
         width: result ? result.width : undefined,
         height: result ? result.height : undefined,
       },

@@ -14,7 +14,7 @@
 // Vue-free (the display ref/binding lives in `client.ts`); `io` is injected so
 // tests drive it with a scripted reader.
 
-import type { FramePayload } from "./protocol.js";
+import type { FrameMeta, FramePayload } from "./protocol.js";
 import type { PipeHandle } from "./pipe-contract.js";
 import type { PipeReadFrame } from "./shm-client.js";
 
@@ -80,12 +80,23 @@ export function createPipeConsumer(
     // w/h inside a max ring; fall back to the spec nominal for fixed pipes.
     const width = r.width ?? spec.width;
     const height = r.height ?? spec.height;
+    // A-26 Fix D: carry the producer convert cost + seqlock health the reader
+    // computed so the StreamView inspector shows the same metrics on pipe
+    // streams (previously only tracking-multi's wide SHM view had them).
+    const meta: FrameMeta = { tCapture: r.tCapture, seq: Number(r.seq) };
+    if (r.convertMs !== undefined) meta.convertMs = r.convertMs;
     const payload: FramePayload = {
       data: r.data,
       shape: [height, width],
       channels: spec.channels,
-      meta: { tCapture: r.tCapture, seq: Number(r.seq) },
+      meta,
     };
+    // `.shm` lights the inspector's SHM health line (gen/retries) + the shared
+    // transfer-pool counters, which the pipe path feeds too. `seg` is the pipe
+    // segment name; only set once the transport actually reports a generation.
+    if (r.gen !== undefined) {
+      payload.shm = { seg: shmName, gen: r.gen, seq: r.seq, retries: r.retries };
+    }
     // The displaced frame's buffer returns to the pool (steady state: zero
     // allocation — the C-15 win, now on the pipe path).
     if (displayed) io.releaseBuffer(displayed);

@@ -16,7 +16,7 @@ import { useSession, rendererLoopLag, orchestratorSpans, dumpPerfSnapshot } from
 import { system, controller, type PerfSnapshot, type Span } from "@lib/orchestrator/contracts";
 import { tracking } from "@modules/tracking-single/contract";
 import { manualControl } from "@modules/manual-control/contract";
-import { workloadRows, utilizationLevel, type WorkloadRow } from "./workload-view";
+import { workloadRows, utilizationLevel, UTILIZATION_HIGH, type WorkloadRow } from "./workload-view";
 import Sparkline from "../components/Sparkline.vue";
 import PosView from "@src/components/PosView.vue";
 import TitleBar from "../components/TitleBar.vue";
@@ -69,6 +69,17 @@ const rates = ref<Rate[]>([]);
 // Fed from the same 1 Hz `perfSnapshot` poll + `prev` diff the channel-rate
 // table already uses — no new wire messages.
 const workloads = ref<WorkloadRow[]>([]);
+
+// Bottleneck-first ordering (A-26): the busiest workload is almost always the
+// fps cap, so sort by utilization descending and flag anything at/above the
+// HIGH threshold as SATURATED — the saturated loop should be the first row and
+// scream off the page (the user's snapshots put `registry:*` at ~0.99 while the
+// native converters sit idle). Pure view concern; the transform stays name-
+// sorted for stable section identity, we only reorder for display.
+const sortedWorkloads = computed(() =>
+  [...workloads.value].sort((a, b) => b.utilization - a.utilization),
+);
+const isSaturated = (utilization: number): boolean => utilization >= UTILIZATION_HIGH;
 
 function computeRates(cur: PerfSnapshot): Rate[] {
   const now = Date.now();
@@ -184,9 +195,15 @@ function fmt(v: number, digits = 1): string {
       <p class="hint" v-if="workloads.length === 0">
         No workload meters registered yet — camera preview loops, processing gates, and recorders appear here while live.
       </p>
-      <div class="workload" v-for="w in workloads" :key="w.name">
+      <div
+        class="workload"
+        :class="{ saturated: isSaturated(w.utilization) }"
+        v-for="w in sortedWorkloads"
+        :key="w.name"
+      >
         <div class="workload-head">
           <span class="mono name">{{ w.name }}</span>
+          <span v-if="isSaturated(w.utilization)" class="saturated-badge">SATURATED</span>
           <div
             class="util-track"
             role="meter"
@@ -478,6 +495,15 @@ function fmt(v: number, digits = 1): string {
       border-bottom: none;
     }
 
+    // Saturated workload = the bottleneck (A-26). A red left rail + tinted
+    // backdrop pulls the eye straight to it above the sorted-descending list.
+    &.saturated {
+      border-left: 3px solid #f56;
+      padding-left: 0.6rem;
+      margin-left: -0.75rem;
+      background: linear-gradient(90deg, rgba(255, 85, 102, 0.08), transparent 60%);
+    }
+
     .workload-head {
       display: flex;
       align-items: center;
@@ -487,6 +513,18 @@ function fmt(v: number, digits = 1): string {
       .name {
         min-width: 16rem;
         color: #ddd;
+      }
+
+      .saturated-badge {
+        flex: 0 0 auto;
+        margin-left: -0.5rem;
+        padding: 0.05rem 0.4rem;
+        border-radius: 3px;
+        background: #f56;
+        color: #1a0004;
+        font-size: 0.65rem;
+        font-weight: 700;
+        letter-spacing: 0.04em;
       }
 
       .util-track {

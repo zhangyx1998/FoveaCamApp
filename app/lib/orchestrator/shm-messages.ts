@@ -53,6 +53,14 @@ export type PipeReadDone = {
   /** Present on a fresh frame (stable seq). Absent = no new frame this poll. */
   seq?: bigint;
   tCapture?: number;
+  /** Producer-side convert cost (ms) for this frame, from the reader's
+   *  `FrameMeta` (A-26 Fix D) — lets the StreamView inspector show `convertMs`
+   *  on pipe streams, not just the tracking-multi wide view. */
+  convertMs?: number;
+  /** Seqlock generation + retry count from the reader's `readInto` result
+   *  (A-26 Fix D) — surfaces the SHM health line in the inspector for pipes. */
+  gen?: number;
+  retries?: number;
   /** Active frame size for this read (C-20 dynamic resize) — the frame occupies
    *  `width*height*channels` bytes at the head of the (max-sized) buffer. */
   width?: number;
