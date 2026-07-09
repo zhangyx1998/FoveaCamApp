@@ -302,36 +302,40 @@ describe("stepVergence on an overridden projection (flag is not a control input)
 });
 
 // The drag path (direct-follow ruling 2026-07-08): while `overridden`, the
-// session commands `followTarget` — both eyes pan 1:1 to the cursor ray at the
-// HELD vergence, with no PID stepping and no match-score gate. The old
-// match-gated drag deadlocked (strip recenters on the dragged target → scores
-// drop → hold → foveas never move); these pin the follow map + the release
-// continuity that replaces the seed on this path.
-describe("followTarget (drag: direct follow, vergence held)", () => {
-  const zeroHeld = { pan: { x: 0, y: 0 }, verge: 0, v_shift: 0 };
+// session commands `followTarget` with verge = v_shift = 0 — BOTH eyes
+// parallel on the cursor ray, vergence at INFINITY (only the pan calibration
+// correction rides along), no PID stepping, no match-score gate — and zeroes
+// the verge/v_shift controllers to match. The old match-gated drag deadlocked
+// (strip recenters on the dragged target → scores drop → hold → foveas never
+// move); these pin the follow map + the release continuity that replaces the
+// seed on this path.
+describe("followTarget (drag: parallel follow, vergence at infinity)", () => {
+  // The DRAG's held state: verge/v_shift zeroed (parallel), pan rides along.
+  const dragHeld = (pan = { x: 0, y: 0 }) => ({ pan, verge: 0, v_shift: 0 });
 
-  it("tracks the target 1:1 with zero held state (parallel eyes, both on the cursor ray)", () => {
+  it("drag state (verge = v_shift = 0): both eyes exactly ON the cursor ray, parallel", () => {
     for (const target of [
       { x: 0, y: 0 },
       { x: 12, y: -4 },
       { x: -7, y: 9 },
     ]) {
-      const out = followTarget(target, zeroHeld, identityConv, 200);
-      expect(out.left).toEqual(target);
+      const out = followTarget(target, dragHeld(), identityConv, 200);
+      expect(out.left).toEqual(target); // parallel: L == R == ray
       expect(out.right).toEqual(target);
     }
   });
 
-  it("applies the held pan as the same ray offset the control law would", () => {
-    const held = { ...zeroHeld, pan: { x: 1.5, y: -0.5 } };
-    const out = followTarget({ x: 10, y: 4 }, held, identityConv, 200);
+  it("the pan calibration correction rides along as the same ray offset the control law uses", () => {
+    const out = followTarget({ x: 10, y: 4 }, dragHeld({ x: 1.5, y: -0.5 }), identityConv, 200);
     expect(out.left).toEqual({ x: 11.5, y: 3.5 });
     expect(out.right).toEqual({ x: 11.5, y: 3.5 });
   });
 
-  it("holds the vergence: verge/v_shift pass through inverseTriangulate untouched", () => {
-    // Small angles so tan/atan2 stay in range; verge > 0 ⇒ finite distance ⇒
-    // the eyes toe in symmetrically about the ray; v_shift splits vertically.
+  it("is the generic forward map: a non-zero held verge/v_shift reconstructs a converged pose", () => {
+    // NOT the drag state (the session zeroes these) — pins that the function
+    // is stepVergence's reconstruction for ANY controller state. Small angles
+    // so tan/atan2 stay in range; verge > 0 ⇒ finite distance ⇒ the eyes toe
+    // in symmetrically about the ray; v_shift splits vertically.
     const held = { pan: { x: 0, y: 0 }, verge: 0.5, v_shift: 0.02 };
     const baseline = 200;
     const target = { x: 0.1, y: 0.05 };
@@ -346,30 +350,37 @@ describe("followTarget (drag: direct follow, vergence held)", () => {
     expect(out2.left.x).toBeGreaterThan(out2.right.x);
   });
 
-  it("release continuity: a zero-error stepVergence from the same held values reproduces the follow output", () => {
-    // On pointer-up the target stays at the drag end and the controllers kept
-    // their values through the follow. Once the foveas arrive (matched centres
-    // == target ⇒ zero error), the first PID step's reconstruction is the SAME
+  it("release continuity: a zero-error stepVergence from the same controller values reproduces the follow output", () => {
+    // On pointer-up the target stays at the drag end and the controllers
+    // carry exactly what the follow commanded (the session zeroed verge/
+    // v_shift; pan was held). Once the foveas arrive (matched centres ==
+    // target ⇒ zero error), the first PID step's reconstruction is the SAME
     // forward map followTarget used ⇒ identical volts, no release jump.
-    const held = { pan: { x: 0.02, y: -0.01 }, verge: 0.4, v_shift: 0.015 };
-    const target = { x: 0.08, y: -0.03 };
-    const follow = followTarget(target, held, identityConv, 200);
-    const ctl = freshControllers();
-    ctl.pan.value = held.pan;
-    ctl.verge.value = held.verge;
-    ctl.v_shift.value = held.v_shift;
-    const resumed = stepVergence(
-      projectionFor(target, target, target, 1),
-      ctl,
-      identityConv,
-      { baseline: 200, minScore: 0.1 },
-      10,
-    );
-    expect(resumed).not.toBeNull();
-    expect(resumed!.left.x).toBeCloseTo(follow.left.x);
-    expect(resumed!.left.y).toBeCloseTo(follow.left.y);
-    expect(resumed!.right.x).toBeCloseTo(follow.right.x);
-    expect(resumed!.right.y).toBeCloseTo(follow.right.y);
+    // Exercised for the actual drag state AND a generic held state (the
+    // identity is a property of the map, not of the zeroing).
+    for (const held of [
+      { pan: { x: 0.02, y: -0.01 }, verge: 0, v_shift: 0 }, // the drag state
+      { pan: { x: 0.02, y: -0.01 }, verge: 0.4, v_shift: 0.015 }, // generic
+    ]) {
+      const target = { x: 0.08, y: -0.03 };
+      const follow = followTarget(target, held, identityConv, 200);
+      const ctl = freshControllers();
+      ctl.pan.value = held.pan;
+      ctl.verge.value = held.verge;
+      ctl.v_shift.value = held.v_shift;
+      const resumed = stepVergence(
+        projectionFor(target, target, target, 1),
+        ctl,
+        identityConv,
+        { baseline: 200, minScore: 0.1 },
+        10,
+      );
+      expect(resumed).not.toBeNull();
+      expect(resumed!.left.x).toBeCloseTo(follow.left.x);
+      expect(resumed!.left.y).toBeCloseTo(follow.left.y);
+      expect(resumed!.right.x).toBeCloseTo(follow.right.x);
+      expect(resumed!.right.y).toBeCloseTo(follow.right.y);
+    }
   });
 });
 

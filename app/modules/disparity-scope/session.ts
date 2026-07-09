@@ -41,18 +41,20 @@
 // `{overridden: true, center: p}` results every frame, the flag rides the
 // kernel target push → `projection.overridden` → the control step, which
 // switches to DIRECT FOLLOW (user ruling 2026-07-08, supersedes the earlier
-// "PID keeps stepping" drag semantics): the foveas track the cursor ray 1:1
-// at the held vergence — no PID stepping, NO match-score gate (the pure
+// "PID keeps stepping" drag semantics): BOTH eyes parallel on the cursor ray
+// with vergence at INFINITY (verge = v_shift = 0; the held `pan` calibration
+// correction rides along) — no PID stepping, NO match-score gate (the pure
 // `followTarget`; the match-gated loop could never follow a drag onto
 // unmatched content — it held on "low score" and the foveas never moved).
 // The pointer handler also pushes the follow volts synchronously so the drag
-// doesn't lag a kernel tick. On release the tracker RE-ARMS at the drag end
-// and the PID resumes from the HELD controller values + that target — the
-// first resumed output equals the last follow output (velocity-form
-// integrator = command), so no seed reconstruction on this path. The PID
-// node's own override slot stays for the generic `pidOverride` command (a
-// programmatic caller that already has volts); its seeded release
-// (`seedFromOverride`) now serves only that path.
+// doesn't lag a kernel tick. The verge/v_shift controllers are zeroed as the
+// command state, so on release the tracker RE-ARMS at the drag end and the
+// PID resumes continuously from the parallel pose (first resumed output ==
+// last follow output, velocity-form integrator = command — no seed on this
+// path), then re-converges depth from infinity. The PID node's own override
+// slot stays for the generic `pidOverride` command (a programmatic caller
+// that already has volts); its seeded release (`seedFromOverride`) now
+// serves only that path.
 
 import { defineSession, type ServerSession } from "@orchestrator/runtime";
 import { acquireTriple, type CalibratedTriple } from "@orchestrator/calibration";
@@ -402,15 +404,23 @@ export default function disparityScopeSession(
       if (v.projection) runControl(v.projection);
     }
 
-    /** Direct-follow volts for `target` from the HELD controller values (the
-     *  drag path — see {@link followTarget} for the semantics + why the match
-     *  gate must not apply). Null without a calibrated triple (nothing can
+    /** Direct-follow volts for `target` (the drag path — see
+     *  {@link followTarget} for why the match gate must not apply): BOTH eyes
+     *  parallel on the cursor ray, vergence at INFINITY (user ruling
+     *  2026-07-08 — verge = v_shift = 0; only the held `pan` calibration
+     *  correction rides along so the foveas land on the dragged content).
+     *  The verge/v_shift controllers are ZEROED as the command state
+     *  (velocity-form: value == command), so releasing the drag resumes the
+     *  PID continuously from the parallel pose instead of snapping back to
+     *  the pre-drag vergence. Null without a calibrated triple (nothing can
      *  lift pixels to angles — same degradation as the control law). */
     function followVolts(target: Point2d): VergenceVolts | null {
       if (!triple || !triple.undistort) return null;
+      verge.value = 0; // vergence at infinity is the COMMAND — keep the
+      v_shift.value = 0; // controllers == command for release continuity
       const r = followTarget(
         target,
-        { pan: pan.value, verge: verge.value, v_shift: v_shift.value },
+        { pan: pan.value, verge: 0, v_shift: 0 },
         { P2A: triple.conv.P2A, A2V: triple.conv.A2V },
         s.state.baseline,
       );
@@ -425,14 +435,14 @@ export default function disparityScopeSession(
      *
      *  §3.5 "act correspondingly" on `projection.overridden` (a tracker-override
      *  drag riding the projection): DIRECT FOLLOW (user ruling 2026-07-08) —
-     *  the foveas track the dragged target 1:1 at the held vergence via
-     *  {@link followTarget}; the PID does NOT step and the match-score gate
-     *  does NOT apply (a drag onto unmatched content must still move the
+     *  both eyes track the dragged target parallel on the cursor ray, vergence
+     *  at INFINITY (`followVolts`); the PID does NOT step and the match-score
+     *  gate does NOT apply (a drag onto unmatched content must still move the
      *  foveas). The freeze window is held open (a drag is user activity; a
      *  long drag must not hit the convergence timeout mid-gesture) and status
-     *  reads "manual" so the UI shows the drag. The controllers hold their
-     *  values throughout, so the release resumes the PID continuously (no
-     *  seed — see the header). */
+     *  reads "manual" so the UI shows the drag. verge/v_shift are zeroed as
+     *  the command state, so the release resumes the PID continuously from
+     *  the parallel pose (no seed — see the header). */
     function controlStep(projection: ScopeProjection): VergenceVolts {
       if (!triple || !triple.undistort) {
         status = "no calibration";

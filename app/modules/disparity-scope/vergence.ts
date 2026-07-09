@@ -178,10 +178,10 @@ export type ScopeProjection = {
    *  the chained KCF's output — controller-node-and-fifo-edges §3.5). The flag
    *  propagates downstream unchanged (tracker → matcher → here → the control
    *  step) so each stage acts correspondingly: the control step switches to
-   *  DIRECT follow ({@link followTarget} — the foveas track the cursor ray 1:1
-   *  at the held vergence, no PID stepping, no match-score gate) while the
-   *  session holds its freeze window open and reports "manual" status. Data,
-   *  not topology — it rides the projection record, no graph change. */
+   *  DIRECT follow ({@link followTarget} — both eyes parallel on the cursor
+   *  ray, vergence at infinity; no PID stepping, no match-score gate) while
+   *  the session holds its freeze window open and reports "manual" status.
+   *  Data, not topology — it rides the projection record, no graph change. */
   overridden: boolean;
 };
 
@@ -420,19 +420,22 @@ export type VergenceSeed = { pan: Point2d; verge: number; v_shift: number };
 
 /**
  * DIRECT target follow (the drag path, user ruling 2026-07-08): reconstruct
- * both fovea poses for `target` from the HELD controller values — the exact
+ * both fovea poses for `target` from the given controller values — the exact
  * forward map of {@link stepVergence}'s tail (`ray = aT + pan`, then
  * `inverseTriangulate` at the verge-implied distance) with NO PID stepping and
  * NO match-score gate. Dragging must move the foveas even where the template
  * match fails; the match-gated loop deadlocked there (the strip recenters on
  * the dragged target, the foveas' actual gaze leaves the strip, both scores
- * drop below `minScore`, control holds, the foveas never move). Vergence is
- * NOT adjusted: `held.verge`/`held.v_shift` pass through untouched, so both
- * eyes pan together to the cursor ray at the current depth. Because the
- * controllers are held (not reset), releasing the drag resumes {@link
- * stepVergence} from the same values + the same target ⇒ the first resumed
- * output equals the last follow output (velocity-form integrator = command) —
- * continuity without any seeding.
+ * drop below `minScore`, control holds, the foveas never move).
+ *
+ * The DRAG passes `verge = v_shift = 0` — vergence at INFINITY, both eyes
+ * PARALLEL on the cursor ray (only the `pan` calibration correction rides
+ * along) — and zeroes those controllers to match, so releasing the drag
+ * resumes {@link stepVergence} from the same values + the same target ⇒ the
+ * first resumed output equals the last follow output (velocity-form
+ * integrator = command) — continuity without any seeding; depth then
+ * re-converges from infinity. The function itself is generic over `held`
+ * (the map is the control law's reconstruction for ANY controller state).
  */
 export function followTarget(
   target: Point2d,
