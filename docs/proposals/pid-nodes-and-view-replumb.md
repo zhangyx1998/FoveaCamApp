@@ -128,15 +128,40 @@ Renderer reactive proxy (client lib, reusable contract fragment):
   L/R/C output frames; foveas arrive pre-warped. Tile math unchanged
   (input IS the aligned fovea now). Emit `projection` in values (see
   contract above). Keep sliced/disparity/guide/match frames.
+
+  **Guide-strip crop refinement (2026-07-08).** The guide strip is now cut
+  from the CENTER TILE (`width/zoom × height/zoom` at the target, the nominal
+  app-config zoom the sliced view uses) expanded by `expand_x/expand_y` — the
+  crop zoom, NOT the (possibly calibration-measured) match magnification. On a
+  calibrated rig the two differ, so the old strip (cut at the match
+  magnification) drifted from the displayed center tile; anchoring the crop +
+  the `center.rect` marker to the crop zoom makes the guide == the sliced
+  center view. The fovea TILES are still pre-sized to the match magnification
+  (`foveaTileSize`), and the tile↔strip pixel-scale agreement is carried by
+  `scale`, so the crop-size choice does not affect match accuracy.
 - vergence.ts `stepVergence`: unchanged math, but packaged INSIDE the PID
   node's control fn: pan → `PID2D`, verge + v_shift → `PID` (uniform params
   from `tuning`); input = scope `projection`; output = `{l, r}` volts.
 - Pointer drag → `override.engage(rayVolts)`-style path through the PID
   node's override slot (target still goes to the kernel for the
-  tracker/strip). On release, seeding reproduces today's "start from the
-  dragged ray" behavior EXACTLY (pan seeds `ray − aT`, verge/v_shift keep
-  their reconstruction values — worker derives the exact seed from
-  `stepVergence`'s inverse).
+  tracker/strip). On release, seeding reproduces "start from the dragged ray"
+  EXACTLY: `pan = ray − aT`, `verge = v_shift = 0`.
+
+  **Release-seam SPACE CONTRACT (refinement 2026-07-08 — the release-jump
+  fix).** The seed's reconstruction inverse (`stepVergence`'s inverse, now
+  the pure `seedVergence(gL, gR, aT, baseline)`) operates on per-eye gaze
+  ANGLES. It MUST be seeded from the ANGLE the drag actually commanded, NOT
+  from the pinned VOLTS: `A2V` and `V2A` are independently-fitted per-eye
+  regressions, so `V2A.L∘A2V.L ≠ V2A.R∘A2V.R`, and inverting a *parallel* drag
+  (both eyes on the same ray) back through V2A returns `gL ≠ gR` — a
+  FABRICATED toe-in that made the mirrors jump to "another location" the
+  instant control resumed. The session therefore records the drag's
+  `overrideRay` at engage time and seeds `gL = gR = overrideRay` (⇒
+  `verge = v_shift = 0`, `A2V(ray)` reproduces the volts exactly). Only the
+  generic volts-only override path (a caller pinning arbitrary per-eye volts
+  that genuinely encode a vergence) round-trips through V2A. Bench-proven in
+  `vergence.test.ts` (engage v → release → next command ≈ v; the volt
+  round-trip seed measurably jumps, the direct-ray seed does not).
 - Graph wiring: scope node inputs = the three undistort pipe ids; new
   `win/disparity-scope/pid` node (kind "pid") with edges scope→pid and
   pid→`controller/<port>` when connected.
@@ -150,6 +175,12 @@ Renderer reactive proxy (client lib, reusable contract fragment):
   Views must render at pipe rate with the kernel busy — that is the point.
 - Drag path: write the PID override proxy (worker A's `usePidOverride`),
   keep sending `target` for tracker/strip placement.
+- **Overlay marker scaling (2026-07-08).** The per-eye pose rects on the wide
+  C view draw at the fovea FOOTPRINT (`size / zoom` via
+  `foveaFootprintOnWide`, app-config zoom clamped ≥1) — a fovea camera is
+  magnified `zoom×`, so its frame projects onto the wide view shrunk by
+  `zoom`; the old rects spanned the whole wide frame. Same crop the sliced
+  center view uses, so the markers frame exactly the sliced tile.
 - Telemetry `pids` readout now comes from the PID node's report (same
   numbers, new source); UI unchanged otherwise.
 

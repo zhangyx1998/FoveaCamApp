@@ -53,7 +53,8 @@ import type {
 export type DisparityParams = {
   kernelW?: number;
   kernelH?: number;
-  /** Nominal UI zoom — drives ONLY the sliced-view crop size. */
+  /** Nominal UI zoom — drives the sliced-view crop AND the guide strip crop
+   *  (the center tile expanded by expand_x/expand_y). NOT the match scale. */
   zoom?: number;
   /** Calibration-MEASURED fovea↔wide magnification (main derives it from the
    *  triple via `foveaWideMagnification`) — drives the tile/strip match scale.
@@ -261,7 +262,12 @@ export function createDisparityKernel(initial: Record<string, unknown>): VisionK
       const analysis = await analyzeVergence({ l: tileL, r: tileR }, c, {
         width,
         height,
-        zoom: matchZoom(), // measured magnification (nominal-zoom fallback)
+        // NOMINAL crop zoom (same as the sliced-view crop above) → the guide
+        // strip is the center tile expanded by expand_x/expand_y, and its
+        // center marker == the sliced center tile. The fovea TILES were already
+        // sized to the match magnification (`tileSize`), so the match scale is
+        // unaffected by this crop-size choice.
+        zoom: Math.max(1, p.zoom),
         scale: p.scale,
         target: p.target,
         expand_x: p.expand_x,

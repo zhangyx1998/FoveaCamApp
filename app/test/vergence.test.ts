@@ -26,9 +26,11 @@ vi.mock("core/Vision", () => ({
 
 import { PID, PID2D } from "@lib/pid";
 import {
+  foveaFootprintOnWide,
   foveaTileSize,
   matchMagnification,
   scopeProjection,
+  seedVergence,
   stepVergence,
   type ScopeProjection,
   type VergenceControllers,
@@ -38,6 +40,7 @@ import {
   foveaWideMagnification,
   type CoordinateConversions,
 } from "@lib/coordinate-conversions";
+import { distanceToVerge } from "@lib/stereo";
 
 // Identity conversions: pixel == angle, angle == volt. Isolates the test from
 // the (separately-defined, already-used-elsewhere) stereo/regression math, so
@@ -233,6 +236,172 @@ describe("scopeProjection (control-output emission math)", () => {
     expect(proj.l).toEqual({ x: 3, y: -2 });
     expect(proj.r).toEqual({ x: -5, y: 8 });
     expect(proj.target).toEqual({ x: 0, y: 0 });
+  });
+});
+
+// The per-eye pose markers on the wide C view must draw at the fovea FOOTPRINT
+// (the magnified fovea frame shrinks onto the wide view by the app-config zoom),
+// not at the full wide-frame size — user-reported marker-scaling bug.
+describe("foveaFootprintOnWide (wide-view marker size)", () => {
+  it("shrinks a full frame by the zoom ratio", () => {
+    expect(foveaFootprintOnWide({ width: 1440, height: 1080 }, 9)).toEqual({
+      width: 160,
+      height: 120,
+    });
+    expect(foveaFootprintOnWide({ width: 1200, height: 900 }, 3)).toEqual({
+      width: 400,
+      height: 300,
+    });
+  });
+
+  it("clamps zoom to >= 1 (a <1 zoom can't shrink the wide FOV)", () => {
+    const full = { width: 1440, height: 1080 };
+    expect(foveaFootprintOnWide(full, 1)).toEqual(full);
+    expect(foveaFootprintOnWide(full, 0.5)).toEqual(full);
+    expect(foveaFootprintOnWide(full, 0)).toEqual(full);
+  });
+
+  it("matches the sliced-center crop math (width/zoom × height/zoom)", () => {
+    // The overlay footprint and the kernel's sliced crop MUST agree so the
+    // markers frame exactly the tile the sliced view shows.
+    for (const zoom of [1, 4, 9, 12.5]) {
+      const f = foveaFootprintOnWide({ width: 1440, height: 1080 }, zoom);
+      const z = Math.max(1, zoom);
+      expect(f.width).toBeCloseTo(1440 / z);
+      expect(f.height).toBeCloseTo(1080 / z);
+    }
+  });
+});
+
+// The drag-release seam (user-reported "mirror jumps to another location"):
+// `seedVergence` inverts `stepVergence`'s reconstruction. A parallel drag (both
+// eyes on the SAME ray) MUST seed verge/v_shift = 0; the jump was recovering the
+// angles from the pinned VOLTS through the asymmetric per-eye V2A, which returns
+// gL ≠ gR and fabricates a toe-in. Seeding from the KNOWN ray keeps them 0.
+describe("seedVergence (drag-release reconstruction — no fabricated toe-in)", () => {
+  it("a PARALLEL gaze (gL == gR) seeds verge = v_shift = 0 and pan = ray − target", () => {
+    const ray = { x: 0.2, y: -0.1 };
+    const aT = { x: 0.15, y: -0.05 };
+    const seed = seedVergence(ray, ray, aT, 200);
+    expect(seed.verge).toBe(0);
+    expect(seed.v_shift).toBe(0);
+    expect(seed.pan.x).toBeCloseTo(ray.x - aT.x);
+    expect(seed.pan.y).toBeCloseTo(ray.y - aT.y);
+  });
+
+  it("target == drag ray ⇒ pan = 0 (resume exactly at the dragged ray)", () => {
+    const ray = { x: 0.3, y: 0.05 };
+    const seed = seedVergence(ray, ray, ray, 200);
+    expect(seed.pan.x).toBeCloseTo(0);
+    expect(seed.pan.y).toBeCloseTo(0);
+    expect(seed.verge).toBe(0);
+    expect(seed.v_shift).toBe(0);
+  });
+
+  it("DOCUMENTS the bug: asymmetric per-eye angles (the volt round-trip) fabricate verge + v_shift", () => {
+    // A parallel drag round-tripped through independent L/R V2A regressions
+    // comes back as two slightly different angles (the OLD seed path).
+    const ray = { x: 0.2, y: -0.1 };
+    const gL = { x: ray.x + 0.01, y: ray.y + 0.006 };
+    const gR = { x: ray.x - 0.008, y: ray.y - 0.004 };
+    const round = seedVergence(gL, gR, ray, 200);
+    expect(Math.abs(round.verge)).toBeGreaterThan(0); // fabricated toe-in = the jump
+    expect(Math.abs(round.v_shift)).toBeGreaterThan(0);
+    // Seeding from the KNOWN ray instead keeps both exactly 0.
+    const direct = seedVergence(ray, ray, ray, 200);
+    expect(direct.verge).toBe(0);
+    expect(direct.v_shift).toBe(0);
+  });
+
+  it("recovers a genuine finite verge from a truly converged pose (generic override path)", () => {
+    // Build gL/gR from the forward model at distance z; the inverse returns z.
+    const baseline = 200;
+    const z = 1000;
+    const ray = { x: 0.1, y: 0.02 };
+    const b = baseline / 2;
+    const x = z * Math.tan(ray.x);
+    const gL = { x: Math.atan2(x + b, z), y: ray.y + 0.03 };
+    const gR = { x: Math.atan2(x - b, z), y: ray.y - 0.03 };
+    const seed = seedVergence(gL, gR, ray, baseline);
+    expect(seed.verge).toBeCloseTo(distanceToVerge(z, baseline));
+    expect(seed.v_shift).toBeCloseTo(0.03);
+    expect(seed.pan.x).toBeCloseTo(0);
+    expect(seed.pan.y).toBeCloseTo(0);
+  });
+});
+
+// End-to-end continuity: seed the controllers from the released override, then
+// run ONE stepVergence — the command must equal the pinned override volts (no
+// jump), and a subsequent disparity must drive convergence.
+describe("drag-release continuity (seed → step reproduces the override)", () => {
+  // Asymmetric per-eye A2V so a volt round-trip WOULD fabricate vergence; P2A
+  // identity (undistorted pixel == angle). stepVergence uses only P2A + A2V.
+  const A2VL = (a: Point2d): Point2d => ({ x: 2 * a.x + 0.05 * a.y + 0.1, y: 3 * a.y - 0.02 });
+  const A2VR = (a: Point2d): Point2d => ({ x: 1.7 * a.x - 0.03 * a.y - 0.2, y: 2.6 * a.y + 0.05 });
+  const conv: Pick<CoordinateConversions, "P2A" | "A2V"> = {
+    P2A: { C: (p: Point2d) => p },
+    A2V: { L: A2VL, R: A2VR },
+  };
+
+  function seededControllers(seed: {
+    pan: Point2d;
+    verge: number;
+    v_shift: number;
+  }): VergenceControllers {
+    const ctl = freshControllers();
+    ctl.pan.value = seed.pan;
+    ctl.verge.value = seed.verge;
+    ctl.v_shift.value = seed.v_shift;
+    return ctl;
+  }
+
+  it("first post-release command == the pinned override volts (drag: both eyes on the ray)", () => {
+    const ray = { x: 12, y: -4 }; // undistorted pixel == angle (identity P2A)
+    const target = ray; // the drag sets target to the drag point
+    const override = { l: A2VL(ray), r: A2VR(ray) };
+    // Drag-path seed: from the KNOWN ray (gL = gR = ray), not V2A(volts).
+    const seed = seedVergence(ray, ray, conv.P2A.C(target, false), 200);
+    const ctl = seededControllers(seed);
+    // The foveas are where the override put them: both on the drag ray, so
+    // their matched wide-pixel centres == the target.
+    const proj = projectionFor(target, ray, ray, 1);
+    const out = stepVergence(proj, ctl, conv, { baseline: 200, minScore: 0.1 }, 10);
+    expect(out).not.toBeNull();
+    expect(out!.left.x).toBeCloseTo(override.l.x);
+    expect(out!.left.y).toBeCloseTo(override.l.y);
+    expect(out!.right.x).toBeCloseTo(override.r.x);
+    expect(out!.right.y).toBeCloseTo(override.r.y);
+  });
+
+  it("the fabricated-verge seed (the volt round-trip) DOES jump; the direct-ray seed does not", () => {
+    const ray = { x: 5, y: 2 };
+    const aT = ray;
+    const override = { l: A2VL(ray), r: A2VR(ray) };
+    // Eyes on the drag ray, matched at the target ⇒ zero first-step error, so
+    // any command deviation is purely the seed's fabricated toe-in.
+    const proj = projectionFor(ray, ray, ray, 1);
+
+    const good = seededControllers(seedVergence(ray, ray, aT, 200));
+    const outGood = stepVergence(proj, good, conv, { baseline: 200, minScore: 0.1 }, 10)!;
+    const jumpGood = Math.hypot(outGood.left.x - override.l.x, outGood.right.x - override.r.x);
+    expect(jumpGood).toBeLessThan(1e-9);
+
+    // Same drag, but seeded from asymmetric per-eye angles (the volt round-trip).
+    const bad = seededControllers(
+      seedVergence({ x: ray.x + 0.02, y: ray.y + 0.01 }, { x: ray.x - 0.02, y: ray.y - 0.01 }, aT, 200),
+    );
+    const outBad = stepVergence(proj, bad, conv, { baseline: 200, minScore: 0.1 }, 10)!;
+    const jumpBad = Math.hypot(outBad.left.x - override.l.x, outBad.right.x - override.r.x);
+    expect(jumpBad).toBeGreaterThan(1e-3);
+  });
+
+  it("then converges: a residual disparity in the next projection steps verge toward closing it", () => {
+    const ray = { x: 0, y: 0 };
+    const ctl = seededControllers(seedVergence(ray, ray, ray, 200));
+    // Matched R further right than L ⇒ positive verge error ⇒ eyes toe in.
+    const proj = projectionFor({ x: 0, y: 0 }, { x: -3, y: 0 }, { x: 3, y: 0 }, 1);
+    stepVergence(proj, ctl, conv, { baseline: 200, minScore: 0.1 }, 10);
+    expect(ctl.verge.value).toBeGreaterThan(0);
   });
 });
 

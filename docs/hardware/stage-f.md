@@ -139,11 +139,25 @@ names the mechanism it gates.
   L/R undistorted views track mirror pose via the feeder (no wrap toggle
   anywhere anymore). RIG-CHECK (pre-existing): feeder H vs inverse — one
   seam in homography-feeder.ts.
+- [ ] **Zoom-scaled pose markers** (2026-07-08 fix) — the per-eye L/R pose
+  rects on the C view now draw at the fovea FOOTPRINT (`size / zoom`,
+  app-config zoom), framing exactly the sliced center tile, NOT the whole
+  wide frame. Confirm they shrink/grow with the Zoom Ratio knob and sit over
+  the magnified fovea footprint.
+- [ ] **Guide strip == sliced center tile** (2026-07-08 fix) — the Template
+  Match Guide strip is the center tile (`width/zoom × height/zoom`) expanded
+  by X/Y Expansion; its translucent center marker overlaps the sliced center
+  view's crop. On a calibrated rig (match magnification ≠ nominal zoom)
+  confirm the strip tracks the NOMINAL zoom, and the fovea match still locks
+  (tile scale unchanged).
 - [ ] **Override semantics live** — disparity drag: mirrors follow, release
-  resumes vergence control from the released pose with NO jump (seeded
-  reconstruction inverse). calibrate-drift / calibrate-extrinsic per-eye
-  drags: dragged eye pins (controllers held reset), other eye keeps
-  servoing; release resumes from the released pose (old behavior snapped).
+  resumes vergence control from the released pose with NO jump. VERIFY THE
+  RELEASE-JUMP FIX (2026-07-08): the seed reconstructs from the drag's exact
+  ray (`overrideRay`, verge/v_shift = 0), NOT from V2A of the pinned volts —
+  a parallel drag must not toe-in to "another location" on release; it should
+  then converge onto the sliced center tile. calibrate-drift /
+  calibrate-extrinsic per-eye drags: dragged eye pins (controllers held
+  reset), other eye keeps servoing; release resumes from the released pose.
 - [ ] **Servo numeric parity** — calibrate-drift/extrinsic marker servoing
   converges exactly as before (PID2D velocity form is bit-identical on the
   bench; confirm no felt difference on hardware).

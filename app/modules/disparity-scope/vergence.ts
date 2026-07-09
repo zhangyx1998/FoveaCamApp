@@ -32,7 +32,7 @@ import {
 } from "core/Vision";
 import { RECT, VEC } from "@lib/util/geometry";
 import { PID } from "@lib/pid";
-import { inverseTriangulate, vergeToDistance } from "@lib/stereo";
+import { distanceToVerge, inverseTriangulate, vergeToDistance } from "@lib/stereo";
 import type { CoordinateConversions } from "@lib/coordinate-conversions";
 
 export type MatchResult = {
@@ -72,7 +72,14 @@ export type VergenceOptions = {
   /** Wide center frame dimensions (pixels). */
   width: number;
   height: number;
-  /** Zoom ratio = FOV(wide) / FOV(fovea). */
+  /** Nominal display zoom (the center-tile crop ratio, wide-px per fovea-px, as
+   *  CONFIGURED in app-config). Defines the guide strip crop — the center tile
+   *  (`width/zoom × height/zoom` at the target) expanded by `expand_x/expand_y`
+   *  — and the center-tile marker, so the guide matches the sliced center view.
+   *  This is NOT the template-match magnification: the fovea tiles are pre-sized
+   *  to the (possibly calibration-measured) match scale by the caller via
+   *  {@link foveaTileSize}, and the tile↔strip pixel-scale agreement is carried
+   *  by `scale` independently of this crop size. */
   zoom: number;
   /** Scale of the fovea tiles (1.0 ~ zoom); higher = more detail, more compute. */
   scale: number;
@@ -83,11 +90,32 @@ export type VergenceOptions = {
   expand_y: number;
 };
 
-/** Fovea tile size at a given wide-frame footprint (matches `analyzeVergence`'s
- *  own math) — callers precompute tiles at this size via `getFoveaTile`. */
-export function foveaTileSize(opts: Pick<VergenceOptions, "width" | "height" | "zoom" | "scale">): Size {
+/** Fovea tile size for the template match. `zoom` here is the MATCH
+ *  MAGNIFICATION (measured fovea↔wide ratio, else nominal) — NOT the display
+ *  crop zoom of {@link VergenceOptions.zoom}: one fovea frame covers
+ *  `width/zoom` wide pixels, and at strip downsample `scale` that footprint is
+ *  `(width*scale)/zoom` tile pixels, so both the tile and the guide strip land
+ *  at `scale` px per wide px (CCOEFF matching is not scale-invariant). Callers
+ *  precompute tiles at this size via {@link getFoveaTile}. */
+export function foveaTileSize(opts: {
+  width: number;
+  height: number;
+  /** Match magnification (measured fovea↔wide ratio, else nominal zoom). */
+  zoom: number;
+  scale: number;
+}): Size {
   const { width, height, zoom: z, scale: s } = opts;
   return { width: (width * s) / z, height: (height * s) / z };
+}
+
+/** The wide-view footprint (px) of ONE fovea frame at the nominal display
+ *  `zoom` — the size the per-eye pose/fovea overlay rects must draw at (a fovea
+ *  camera is magnified `zoom×`, so its frame projects onto the wide view shrunk
+ *  by `zoom`) and the size of the sliced-center crop. `zoom` is clamped to ≥1
+ *  (a <1 "zoom" cannot shrink the wide FOV). */
+export function foveaFootprintOnWide(size: Size, zoom: number): Size {
+  const z = Math.max(1, zoom);
+  return { width: size.width / z, height: size.height / z };
 }
 
 /**
@@ -268,8 +296,13 @@ export async function analyzeVergence(
     expand_x = 3.0,
     expand_y = 2.0,
   } = opts;
-  const W = (width / z) * expand_x; // Strip width
-  const H = (height / z) * expand_y; // Strip height
+  // The guide strip = the CENTER TILE (`width/z × height/z`, the SAME nominal
+  // crop the sliced view shows) expanded by `expand_x` horizontally and
+  // `expand_y` vertically, cut around the target. `z` is the display crop zoom,
+  // NOT the match magnification — the fovea tiles come in pre-sized to the
+  // match scale, so the strip crop size is free to track the displayed tile.
+  const W = (width / z) * expand_x; // Strip width  = center-tile width  · expand_x
+  const H = (height / z) * expand_y; // Strip height = center-tile height · expand_y
   const ox = target.x - W / 2;
   const oy = target.y - H / 2;
   const tc = await getMatchTile(c, ox, oy, W, H, s);
@@ -279,16 +312,18 @@ export async function analyzeVergence(
     matchTemplate(tc, tile, "CCOEFF_NORMED").then((m) =>
       processMatch(gaussian(m, GAUSS_KSIZE, GAUSS_SIGMA), tile, 1 / s),
     );
-  const [h1 = 0, w1 = 0] = tl.shape; // fovea tile size (scaled) — for `center.rect`
   const [guide, ml, mr] = await Promise.all([
     resize(tc, {}, 1 / s),
     matchFovea(tl),
     matchFovea(tr),
   ]);
+  // Center-tile marker: the un-expanded center tile, centred in the strip.
+  // Anchored to the crop zoom `z` (was the fovea tile's match-magnification
+  // shape, which drifts from the displayed center tile on a calibrated rig).
   const center = {
     rect: RECT.fromCenter(VEC.sub(target, { x: ox, y: oy }), {
-      width: w1 / s,
-      height: h1 / s,
+      width: width / z,
+      height: height / z,
     }),
   };
   return { guide, ml, mr, center, ox, oy };
@@ -365,4 +400,58 @@ export function stepVergence(
   const distance = vergeToDistance(verge, ctrl.baseline);
   const A = inverseTriangulate(ray, ctrl.baseline, distance, v_shift);
   return { left: conv.A2V.L(A.l), right: conv.A2V.R(A.r) };
+}
+
+/** The controller state {@link seedVergence} reconstructs — one value per DOF
+ *  {@link stepVergence} integrates. Seeding a released PID node with these makes
+ *  the resumed command continuous (velocity-form integrator = command). */
+export type VergenceSeed = { pan: Point2d; verge: number; v_shift: number };
+
+/**
+ * Reconstruct the `{ pan, verge, v_shift }` controller state whose forward
+ * reconstruction (`inverseTriangulate` + `ray = aT + pan`, see
+ * {@link stepVergence}) reproduces a pair of per-eye gaze ANGLES `gL`/`gR`
+ * (center-camera rad) about the target ray `aT`. This is the exact algebraic
+ * inverse of that forward map, so seeding a released PID node with it gives
+ * output continuity — the "resume from the released pose, no jump" contract.
+ *
+ * SPACE CONTRACT — the drag-release seam (this was the release-jump bug):
+ * the inputs here are ANGLES, not volts. The forward law commands VOLTS via
+ * `A2V(reconstruct(...))`; recovering the angles from an override *volt* pair
+ * by inverting through `V2A` is LOSSY — `A2V` and `V2A` are independently
+ * fitted PER-EYE regressions, so `V2A.L∘A2V.L ≠ V2A.R∘A2V.R`. A *parallel*
+ * drag (both eyes commanded to the SAME ray) round-trips back as two slightly
+ * DIFFERENT angles, which this reconstruction reads as a genuine toe-in ⇒ a
+ * FABRICATED `verge`/`v_shift` the drag never intended ⇒ the mirrors converge
+ * to "another location" the instant control resumes. So a caller that KNOWS the
+ * commanded ray (the disparity drag path) must pass it directly as
+ * `gL = gR = ray`: `tanDiff` is then exactly 0, `verge`/`v_shift` come out 0,
+ * and the forward `A2V(ray)` reproduces the pinned volts exactly. Only the
+ * generic volts-only override path (a caller that pinned arbitrary per-eye
+ * volts, which genuinely encode a vergence) round-trips through `V2A`.
+ *
+ * @param parallelEps `|tan gL.x − tan gR.x|` below this ⇒ treated as parallel
+ *   (verge 0), guarding the `z = baseline/tanDiff` divide.
+ */
+export function seedVergence(
+  gL: Point2d,
+  gR: Point2d,
+  aT: Point2d,
+  baseline: number,
+  parallelEps = 1e-9,
+): VergenceSeed {
+  const v_shift = (gL.y - gR.y) / 2;
+  const rayY = (gL.y + gR.y) / 2;
+  const tanDiff = Math.tan(gL.x) - Math.tan(gR.x);
+  let rayX: number;
+  let verge: number;
+  if (Math.abs(tanDiff) < parallelEps) {
+    rayX = (gL.x + gR.x) / 2;
+    verge = 0;
+  } else {
+    const z = baseline / tanDiff;
+    rayX = Math.atan2((z * (Math.tan(gL.x) + Math.tan(gR.x))) / 2, z);
+    verge = distanceToVerge(z, baseline);
+  }
+  return { pan: { x: rayX - aT.x, y: rayY - aT.y }, verge, v_shift };
 }

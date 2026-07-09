@@ -77,6 +77,7 @@ import {
 } from "./contract";
 import {
   matchMagnification,
+  seedVergence,
   stepVergence,
   type ScopeProjection,
   type VergenceControllers,
@@ -143,6 +144,14 @@ export default function disparityScopeSession(
     // Commanded volts — the PID node's output (control result or pinned
     // override), read synchronously every actuation tick.
     let commandedVolts: VergenceVolts = { l: ORIGIN_POS, r: ORIGIN_POS };
+    // The gaze RAY (center-camera angle) a DRAG pinned the eyes at — set on
+    // every drag engage, cleared on idle + when the generic (volts-only)
+    // override engages. Seeding the release from THIS exact ray (both eyes on
+    // it) — instead of recovering the angles from the pinned volts via V2A —
+    // is what keeps release continuous: the V2A round-trip is per-eye
+    // asymmetric and fabricates a verge/v_shift out of a parallel drag. See
+    // `seedVergence`'s SPACE CONTRACT and `seedFromOverride` below.
+    let overrideRay: Point2d | null = null;
     const actuateMsStats = new RollingStats(0.9, 2, "ms");
 
     // The named DOF controllers (owned by the PID node once created). `pan` is a
@@ -250,6 +259,7 @@ export default function disparityScopeSession(
         l: triple.conv.A2V.L(ray),
         r: triple.conv.A2V.R(ray),
       };
+      overrideRay = ray; // seed the release from this exact ray, not V2A(v)
       pidNode.override.engage(v);
       commandedVolts = v; // actuation reads this synchronously between results
       status = "manual";
@@ -258,46 +268,32 @@ export default function disparityScopeSession(
 
     /**
      * Reseed the controllers from the LAST override value so control resumes
-     * CONTINUOUSLY (velocity-form integrator ⇒ `value(lastOutput)` = no jump).
-     * Invoked by `override.release()`.
+     * CONTINUOUSLY (velocity-form integrator ⇒ output = last command = no jump).
+     * Invoked by `override.release()`; the reconstruction inverse itself lives
+     * in the pure {@link seedVergence} (with its SPACE CONTRACT).
      *
-     * Invert `stepVergence`'s reconstruction (@lib/stereo `inverseTriangulate`):
-     *   ray = aT + pan;  z = vergeToDistance(verge);  b = baseline/2
-     *   out.l.x = atan2(z·tan(ray.x) + b, z),  out.r.x = atan2(z·tan(ray.x) − b, z)
-     *   out.l.y = ray.y + v_shift,             out.r.y = ray.y − v_shift
-     * Given the override's per-eye angles gL/gR (= V2A of the pinned volts) and
-     * the CURRENT target ray aT (= P2A of the target), solve the three DOF:
-     *   v_shift = (gL.y − gR.y)/2,   ray.y = (gL.y + gR.y)/2
-     *   z = baseline / (tan gL.x − tan gR.x)  (∞ ⇒ verge 0 when parallel)
-     *   ray.x = atan((tan gL.x + tan gR.x)/2)
-     *   pan = ray − aT
-     * For the pure drag case both eyes share the ray (gL == gR): this collapses
-     * to `pan = ray − aT`, `verge = 0`, `v_shift = 0` — i.e. "resume from the
-     * dragged ray" (the pre-replumb release intent) but WITHOUT the old
-     * reset-to-zero jump.
+     * The per-eye gaze ANGLES `gL`/`gR` come from ONE of two sources:
+     *  - DRAG path — `overrideRay` is set: both eyes were commanded to that
+     *    exact ray, so `gL = gR = overrideRay`. `seedVergence` then returns
+     *    `verge = v_shift = 0` and `pan = ray − aT` exactly, and the resumed
+     *    `A2V(ray)` reproduces the pinned volts. Recovering the angles from the
+     *    volts via V2A instead was the release-jump bug: the per-eye V2A
+     *    regressions are asymmetric, so a parallel drag came back as `gL ≠ gR`
+     *    and fabricated a toe-in (the mirrors jumped to "another location").
+     *  - GENERIC volts-only path — `overrideRay` is null: a caller pinned
+     *    arbitrary per-eye volts that genuinely encode a vergence, so recover
+     *    the angles through V2A (best available; lossy round-trip accepted).
      */
     function seedFromOverride(v: VergenceVolts): void {
       if (!triple || !triple.undistort) return;
       const conv = triple.conv;
-      const gL = conv.V2A.L(v.l);
-      const gR = conv.V2A.R(v.r);
+      const gL = overrideRay ?? conv.V2A.L(v.l);
+      const gR = overrideRay ?? conv.V2A.R(v.r);
       const aT = conv.P2A.C(s.state.target, false);
-      const vShift = (gL.y - gR.y) / 2;
-      const rayY = (gL.y + gR.y) / 2;
-      const tanDiff = Math.tan(gL.x) - Math.tan(gR.x);
-      let rayX: number;
-      let vergeSeed: number;
-      if (Math.abs(tanDiff) < SEED_PARALLEL_EPS) {
-        rayX = (gL.x + gR.x) / 2;
-        vergeSeed = 0;
-      } else {
-        const z = s.state.baseline / tanDiff;
-        rayX = Math.atan2((z * (Math.tan(gL.x) + Math.tan(gR.x))) / 2, z);
-        vergeSeed = distanceToVerge(z, s.state.baseline);
-      }
-      pan.value = { x: rayX - aT.x, y: rayY - aT.y };
-      verge.value = vergeSeed; // PID setter clamps to its limits
-      v_shift.value = vShift; // PID setter clamps to its limits
+      const seed = seedVergence(gL, gR, aT, s.state.baseline, SEED_PARALLEL_EPS);
+      pan.value = seed.pan; // PID2D setter clamps each axis to its limits
+      verge.value = seed.verge; // PID setter clamps to its limits
+      v_shift.value = seed.v_shift; // PID setter clamps to its limits
     }
 
     // --- worker results ---------------------------------------------------
@@ -556,6 +552,7 @@ export default function disparityScopeSession(
       triple = null;
       status = "initializing";
       commandedVolts = { l: ORIGIN_POS, r: ORIGIN_POS };
+      overrideRay = null;
       s.resetTelemetry(["ready", "status", "tracker_bbox", "match_magnification"]);
     }
 
@@ -604,6 +601,9 @@ export default function disparityScopeSession(
         },
         async pidOverride(command) {
           if (!pidNode) return;
+          // A volts-only engage: no known gaze ray, so the release must recover
+          // the angles via V2A. Drop any stale drag ray so it isn't misused.
+          if ("value" in command) overrideRay = null;
           const state = applyPidOverride(pidNode.override, command);
           if (state.engaged && state.value) {
             commandedVolts = state.value;

@@ -31,6 +31,7 @@ import {
   type Gains,
   type Tuning,
 } from "./contract";
+import { foveaFootprintOnWide } from "./vergence";
 import StreamView from "@src/components/StreamView.vue";
 import PosView from "@src/components/PosView.vue";
 import InlineSelect from "@src/components/InlineSelect.vue";
@@ -87,6 +88,14 @@ const centerSource = computed(() =>
 
 const drawer_height = ref(0);
 const stroke = computed(() => Math.max(telemetry.size.width, telemetry.size.height, 1) * 0.003);
+
+// Per-eye pose markers on the (wide) C view: a fovea camera is magnified by the
+// app-config zoom ratio, so one fovea frame projects onto the wide view shrunk
+// by that ratio. The rects must therefore be the fovea FOOTPRINT (size / zoom),
+// not the full wide-frame size — same crop the sliced center view uses.
+const foveaFootprint = computed(() =>
+  foveaFootprintOnWide(telemetry.size, state.zoom),
+);
 
 // --- tuning: every write replaces the whole `state.tuning` object (a nested
 // mutation like `state.tuning.x = v` would neither reach the server nor
@@ -241,21 +250,21 @@ function onCursor(c: (Point2d & Size & { buttons: number }) | null): void {
       <StreamView class="stream" :title="ROLE.C" :payload="frameC" :theme="THEME.C" @mouse="onCursor">
         <!-- Target center. -->
         <circle :cx="state.target.x" :cy="state.target.y" :r="stroke * 3" :fill="THEME.C" />
-        <!-- Per-eye projected pose. -->
+        <!-- Per-eye projected pose (fovea footprint = wide size / zoom). -->
         <rect
-          :x="telemetry.L_PX.x - telemetry.size.width / 2"
-          :y="telemetry.L_PX.y - telemetry.size.height / 2"
-          :width="telemetry.size.width"
-          :height="telemetry.size.height"
+          :x="telemetry.L_PX.x - foveaFootprint.width / 2"
+          :y="telemetry.L_PX.y - foveaFootprint.height / 2"
+          :width="foveaFootprint.width"
+          :height="foveaFootprint.height"
           :stroke="THEME.L"
           fill="none"
           :stroke-width="stroke"
         />
         <rect
-          :x="telemetry.R_PX.x - telemetry.size.width / 2"
-          :y="telemetry.R_PX.y - telemetry.size.height / 2"
-          :width="telemetry.size.width"
-          :height="telemetry.size.height"
+          :x="telemetry.R_PX.x - foveaFootprint.width / 2"
+          :y="telemetry.R_PX.y - foveaFootprint.height / 2"
+          :width="foveaFootprint.width"
+          :height="foveaFootprint.height"
           :stroke="THEME.R"
           fill="none"
           :stroke-width="stroke"
