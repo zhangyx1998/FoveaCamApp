@@ -25,7 +25,9 @@
 import { cmd, defineContract } from "./protocol.js";
 import type { Serializable } from "./protocol.js";
 import type { StreamType } from "./graph-contract.js";
-import type { Dtype } from "../../../docs/schema/pixel-formats.js";
+/** A pipe's container dtype — the graph contract's widened union (sensor
+ *  dtypes + derived-pipe "F32"; see `ContainerDtype`). */
+export type PipeDtype = import("./graph-contract.js").ContainerDtype;
 
 /** Static typing of one advertised pipe. Mirrors the C++ `Pipe::PipeSpec`.
  *  A `type` (not `interface`) so it satisfies the contract's `Serializable`
@@ -33,10 +35,11 @@ import type { Dtype } from "../../../docs/schema/pixel-formats.js";
 export type PipeSpec = {
   /** Stable pipe identifier the renderer selects by (e.g. `"preview:L"`). */
   id: string;
-  /** Canonical sensor format name from `docs/schema/pixel-formats` (B-owned). */
+  /** Canonical sensor format name from `docs/schema/pixel-formats` (B-owned),
+   *  or a derived-pipe tag (e.g. `"Disparity32F"`). */
   pixelFormat: string;
-  /** Decoded container dtype (from the same schema). */
-  dtype: Dtype;
+  /** Container dtype (sensor schema dtypes + derived-pipe "F32"). */
+  dtype: PipeDtype;
   width: number;
   height: number;
   channels: number;

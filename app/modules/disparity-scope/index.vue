@@ -74,15 +74,35 @@ const frameR = usePipeFrame(() =>
 );
 // Split-disparity-nodes views: the sliced center view IS the session's
 // scope-tile slice pipe; the guide strip IS the scope-strip slice pipe (both
-// live-steered server-side, rendered here at pipe rate); the L-vs-R
-// disparity view is a renderer canvas composite (DiffView) of the two
-// pre-warped fovea pipes above — no kernel frames involved.
+// live-steered server-side, rendered here at pipe rate); the disparity and
+// anaglyph views are renderer canvas composites (DiffView modes) of the two
+// pre-warped fovea pipes above; the SGBM view IS the stereo brick's heatmap
+// pipe. Pipe-backed center views bind their pipe ONLY while selected — the
+// C-21 consumer gate then parks the unwatched producer chain (no subscriber
+// → no compute, stereo-disparity-and-heatmap-nodes ruling 2: deselecting
+// SGBM stops the whole heatmap→stereo chain).
 const frameTile = usePipeFrame(() =>
-  state.serials?.C ? nodeId.slice(state.serials.C, "scope-tile") : null,
+  state.view === "sliced" && state.serials?.C
+    ? nodeId.slice(state.serials.C, "scope-tile")
+    : null,
+);
+const frameSgbm = usePipeFrame(() =>
+  state.view === "sgbm" && state.serials?.C
+    ? nodeId.heatmap(nodeId.stereo("scope"), "view")
+    : null,
 );
 const frameStrip = usePipeFrame(() =>
   state.serials?.C ? nodeId.slice(state.serials.C, "scope-strip") : null,
 );
+
+// Center-view select options (one list, rendered into whichever branch's
+// title slot is live).
+const VIEW_OPTIONS = [
+  { value: "sliced", label: "Wide Angle Sliced" },
+  { value: "disparity", label: "Disparity (Left v.s. Right)" },
+  { value: "anaglyph", label: "Anaglyph (Red = Left, Cyan = Right)" },
+  { value: "sgbm", label: "SGBM Disparity" },
+] as const;
 
 const drawer_height = ref(0);
 const stroke = computed(() => Math.max(telemetry.size.width, telemetry.size.height, 1) * 0.003);
@@ -240,16 +260,28 @@ function onCursor(c: (Point2d & Size & { buttons: number }) | null): void {
       <StreamView v-if="state.view === 'sliced'" class="stream" :payload="frameTile" :theme="THEME.C">
         <template #title>
           <InlineSelect v-model="state.view">
-            <option value="sliced">Wide Angle Sliced</option>
-            <option value="disparity">Disparity (Left v.s. Right)</option>
+            <option v-for="o in VIEW_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</option>
           </InlineSelect>
         </template>
       </StreamView>
-      <DiffView v-else class="stream" :a="frameL" :b="frameR" :theme="THEME.C">
+      <StreamView v-else-if="state.view === 'sgbm'" class="stream" :payload="frameSgbm" :theme="THEME.C">
         <template #title>
           <InlineSelect v-model="state.view">
-            <option value="sliced">Wide Angle Sliced</option>
-            <option value="disparity">Disparity (Left v.s. Right)</option>
+            <option v-for="o in VIEW_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</option>
+          </InlineSelect>
+        </template>
+      </StreamView>
+      <DiffView
+        v-else
+        class="stream"
+        :a="frameL"
+        :b="frameR"
+        :mode="state.view === 'anaglyph' ? 'anaglyph' : 'difference'"
+        :theme="THEME.C"
+      >
+        <template #title>
+          <InlineSelect v-model="state.view">
+            <option v-for="o in VIEW_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</option>
           </InlineSelect>
         </template>
       </DiffView>

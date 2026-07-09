@@ -33,12 +33,15 @@ import type {
 import { nodeId } from "@lib/orchestrator/graph-contract";
 import { humanBytesPerSec, humanHz } from "@lib/orchestrator/stats";
 import type { PipeAdvert } from "@lib/orchestrator/pipe-contract";
-import type { Dtype } from "../../../docs/schema/pixel-formats.js";
+
 import { utilizationLevel, type WorkloadRow, type WorkloadCounterRow } from "./workload-view";
 
 // --- Stage-1 derivation ----------------------------------------------------
 
-const FRAME = (pixelFormat: string, dtype: Dtype): StreamType => ({
+const FRAME = (
+  pixelFormat: string,
+  dtype: import("@lib/orchestrator/graph-contract").ContainerDtype,
+): StreamType => ({
   kind: "frame",
   pixelFormat,
   dtype,

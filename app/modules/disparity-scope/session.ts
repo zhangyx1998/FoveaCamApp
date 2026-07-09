@@ -103,6 +103,8 @@ import {
 } from "./vergence";
 import { createSlicePipe, type SliceHandle, type SlicePipeSeam } from "@orchestrator/slice-pipe";
 import { createScalePipe, type ScaleHandle, type ScalePipeSeam } from "@orchestrator/scale-pipe";
+import { createStereoPipe, type StereoHandle, type StereoPipeSeam } from "@orchestrator/stereo-pipe";
+import { createHeatmapPipe, type HeatmapHandle, type HeatmapPipeSeam } from "@orchestrator/heatmap-pipe";
 import type { TemplateMatchValues } from "@orchestrator/template-match-kernel";
 import { consumeTracker, createDisparityTrackerFeed } from "./tracker-feed";
 import { makeMat } from "@lib/mat";
@@ -165,6 +167,8 @@ export default function disparityScopeSession(
   undistortSeam: UndistortPipeSeam,
   sliceSeam: SlicePipeSeam,
   scaleSeam: ScalePipeSeam,
+  stereoSeam: StereoPipeSeam,
+  heatmapSeam: HeatmapPipeSeam,
 ): ServerSession<typeof disparity> {
   return defineSession("disparity-scope", disparity, (s) => {
     let triple: CalibratedTriple | null = null;
@@ -188,6 +192,12 @@ export default function disparityScopeSession(
       L: null,
       R: null,
     };
+    // SGBM disparity + heatmap (stereo-disparity-and-heatmap-nodes): composed
+    // at activate but PARKED until the renderer connects the heatmap pipe
+    // (ruling 2 — no subscriber → no compute; the consumer gate + the
+    // heatmap→stereo tap propagate demand end to end).
+    let stereo: StereoHandle | null = null;
+    let stereoHeatmap: HeatmapHandle | null = null;
     // Wide (C) frame dims — the crop/scale geometry base (camera features,
     // read once on activate; the old kernel derived them from frames).
     let wide: Size = { width: 0, height: 0 };
@@ -797,6 +807,31 @@ export default function disparityScopeSession(
         );
       }
 
+      // STEREO SGBM + HEATMAP (stereo-disparity-and-heatmap-nodes): the
+      // center view's "SGBM Disparity" option. Chained on the same L/R
+      // pre-warped sources the needles read; the renderer binds ONLY the
+      // heatmap pipe — until it connects (view selected), the consumer gate
+      // keeps BOTH bricks parked and the SGBM cost is zero (ruling 2).
+      // Disparity is left-frame-sized; the heatmap ring matches it.
+      const camL = t.leases.L.camera;
+      const stereoDims = {
+        maxWidth: camL.getFeatureInt("Width"),
+        maxHeight: camL.getFeatureInt("Height"),
+      };
+      stereo = createStereoPipe(
+        stereoSeam,
+        needleSources.L,
+        needleSources.R,
+        nodeId.stereo("scope"),
+        stereoDims,
+      );
+      stereoHeatmap = createHeatmapPipe(
+        heatmapSeam,
+        stereo.pipeId,
+        nodeId.heatmap(stereo.pipeId, "view"),
+        stereoDims,
+      );
+
       // Worker inputs: each match worker reads its pre-sized needle + the
       // SHARED pre-sized strip (refcount++ per connect — demand propagation
       // keeps the whole slice/scale/undistort chain awake while they read).
@@ -852,6 +887,14 @@ export default function disparityScopeSession(
         stripSlice?.retire();
         tileSlice?.retire();
         stripSlice = tileSlice = null;
+      });
+      // Heatmap chains on stereo, stereo on the undistorts — retire in that
+      // order, before the undistort retirers below.
+      disposers.add(() => {
+        stereoHeatmap?.retire();
+        stereoHeatmap = null;
+        stereo?.retire();
+        stereo = null;
       });
       for (const retire of retirers) disposers.add(retire);
 

@@ -1,19 +1,24 @@
 <!-- -------------------------------------------------
-Copyright (c) 2026 Yuxuan Zhang, dev@z-yx.cc
+Copyright (c) 2025 Yuxuan Zhang, dev@z-yx.cc
 This source code is licensed under the MIT license.
 You may find the full license in project root directory.
 --------------------------------------------------- -->
 <!--
-  Renderer-composed A-vs-B difference view (split-disparity-nodes,
-  2026-07-09): the old disparity kernel's `center.disparity` frame was
-  `diff(alignedL, alignedR)` — but the split match nodes each see only ONE
-  fovea, and the renderer already binds both pre-warped fovea undistort pipes
-  for the L/R views, so the diff is composed HERE as a pure display composite:
-  two offscreen canvases + a GPU 'difference' blend. No core, no extra
-  transport — the pipes it reads are already flowing.
+  Renderer-composed A-vs-B stereo composite (split-disparity-nodes 2026-07-09;
+  anaglyph mode added by stereo-disparity-and-heatmap-nodes): the split match
+  nodes each see only ONE fovea, and the renderer already binds both pre-warped
+  fovea undistort pipes for the L/R views, so these composites live HERE as
+  pure display work — no core, no extra transport, computed only while mounted
+  (the on-demand ruling holds trivially).
+
+  Modes:
+   - "difference": |A − B| per channel (GPU 'difference' blend) — the old
+     disparity kernel's diff view.
+   - "anaglyph": red = A (LEFT eye), cyan = B (RIGHT eye) — A×#f00 and
+     B×#0ff via 'multiply', composed additively ('lighter').
 -->
 <script setup lang="ts">
-import { onMounted, useTemplateRef, watch } from "vue";
+import { onMounted, ref, useTemplateRef, watch } from "vue";
 import type { FramePayload } from "@lib/orchestrator/protocol";
 import { NoCheck } from "@lib/util/vue";
 
@@ -23,7 +28,7 @@ const props = defineProps({
     required: false,
     default: "",
   },
-  /** The two frames to diff — bind two `usePipeFrame` payloads. */
+  /** The two frames to compose — bind two `usePipeFrame` payloads. */
   a: {
     type: NoCheck<FramePayload | null | undefined>(),
     required: false,
@@ -33,6 +38,11 @@ const props = defineProps({
     type: NoCheck<FramePayload | null | undefined>(),
     required: false,
     default: undefined,
+  },
+  mode: {
+    type: NoCheck<"difference" | "anaglyph">(),
+    required: false,
+    default: "difference",
   },
   theme: {
     type: String,
@@ -44,9 +54,15 @@ const props = defineProps({
 const canvas = useTemplateRef<HTMLCanvasElement>("canvas");
 const offA = document.createElement("canvas");
 const offB = document.createElement("canvas");
+// Reactive painted flag for the "No Frame" overlay — the plain `offA.width`
+// the template previously read is NOT reactive, so the overlay never cleared
+// once frames arrived (it re-evaluates only on a re-render, and no template
+// dependency changed per frame).
+const painted = ref(false);
 
 /** Paint one payload into its offscreen canvas (4-channel only — every pipe
- *  frame is BGRA8; the channel order cancels out of a difference blend). */
+ *  frame is BGRA8; channel order cancels out of 'difference', and the
+ *  anaglyph masks assume the same R/B convention StreamView renders with). */
 function paint(p: FramePayload, off: HTMLCanvasElement): boolean {
   const [h = 0, w = 0] = p.shape;
   if (!w || !h || p.channels !== 4 || !p.data) return false;
@@ -61,7 +77,23 @@ function paint(p: FramePayload, off: HTMLCanvasElement): boolean {
   return true;
 }
 
-/** GPU blend: |A - B| per channel ('difference' composite). Sized to A. */
+/** Multiply `src` by a solid color into a scratch canvas (channel mask). */
+function masked(src: HTMLCanvasElement, color: string, scratch: HTMLCanvasElement): HTMLCanvasElement {
+  if (scratch.width !== src.width) scratch.width = src.width;
+  if (scratch.height !== src.height) scratch.height = src.height;
+  const ctx = scratch.getContext("2d");
+  if (!ctx) return scratch;
+  ctx.globalCompositeOperation = "source-over";
+  ctx.drawImage(src, 0, 0);
+  ctx.globalCompositeOperation = "multiply";
+  ctx.fillStyle = color;
+  ctx.fillRect(0, 0, scratch.width, scratch.height);
+  return scratch;
+}
+const maskA = document.createElement("canvas");
+const maskB = document.createElement("canvas");
+
+/** GPU composite of the two offscreens per `mode`. Sized to A. */
 function composite(): void {
   const c = canvas.value;
   if (!c || !offA.width || !offB.width) return;
@@ -69,10 +101,20 @@ function composite(): void {
   if (c.height !== offA.height) c.height = offA.height;
   const ctx = c.getContext("2d");
   if (!ctx) return;
-  ctx.globalCompositeOperation = "source-over";
-  ctx.drawImage(offA, 0, 0, c.width, c.height);
-  ctx.globalCompositeOperation = "difference";
-  ctx.drawImage(offB, 0, 0, c.width, c.height);
+  if (props.mode === "anaglyph") {
+    // Red = A (left eye), cyan = B (right eye): keep A's red channel and
+    // B's green+blue, then add.
+    ctx.globalCompositeOperation = "source-over";
+    ctx.drawImage(masked(offA, "#f00", maskA), 0, 0, c.width, c.height);
+    ctx.globalCompositeOperation = "lighter";
+    ctx.drawImage(masked(offB, "#0ff", maskB), 0, 0, c.width, c.height);
+  } else {
+    ctx.globalCompositeOperation = "source-over";
+    ctx.drawImage(offA, 0, 0, c.width, c.height);
+    ctx.globalCompositeOperation = "difference";
+    ctx.drawImage(offB, 0, 0, c.width, c.height);
+  }
+  painted.value = true;
 }
 
 watch(
@@ -89,11 +131,12 @@ watch(
   },
   { immediate: true },
 );
+watch(() => props.mode, composite);
 onMounted(composite);
 </script>
 
 <template>
-  <div class="container" :class="{ 'no-frame': !offA.width }" :style="{ '--theme': theme }">
+  <div class="container" :class="{ 'no-frame': !painted }" :style="{ '--theme': theme }">
     <div class="title" v-if="title !== null">
       <span>{{ title }}</span>
       <div class="title-slot">
@@ -101,7 +144,7 @@ onMounted(composite);
       </div>
     </div>
     <canvas ref="canvas" class="centered"></canvas>
-    <div v-if="!offA.width || !offB.width" class="no-frame-text centered">No Frame</div>
+    <div v-if="!painted" class="no-frame-text centered">No Frame</div>
   </div>
 </template>
 

@@ -93,10 +93,13 @@ export const disparity = defineContract({
      *  influences matching. See docs/applications/disparity-scope.md. */
     zoom: 9.0,
     /** Which center composite the renderer SHOWS (renderer-local since the
-     *  node split: "sliced" = the scope-tile slice pipe, "disparity" = the
-     *  DiffView composite — no server work either way; kept in contract
-     *  state so the choice survives window reloads). */
-    view: "sliced" as "sliced" | "disparity",
+     *  node split: "sliced" = the scope-tile slice pipe, "disparity"/
+     *  "anaglyph" = DiffView composites of the L/R fovea pipes, "sgbm" = the
+     *  stereo brick's heatmap pipe. Selecting a pipe-backed view is what
+     *  CONNECTS its pipe — unselected views' producers park (no subscriber →
+     *  no compute, stereo-disparity-and-heatmap-nodes ruling 2); kept in
+     *  contract state so the choice survives window reloads). */
+    view: "sliced" as "sliced" | "disparity" | "anaglyph" | "sgbm",
     tuning: DEFAULT_TUNING,
     tracker_enabled: false as boolean,
     /** KCF template size (pixels) — the arm ROI of the session-owned CHAINED

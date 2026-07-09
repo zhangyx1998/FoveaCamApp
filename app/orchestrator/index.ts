@@ -222,8 +222,52 @@ const scaleSeam: import("./scale-pipe.js").ScalePipeSeam = {
 registerNativeProbe(
   () => aravisScale.scaleProbeAll() as unknown as Record<string, WorkloadSnapshot>,
 );
+// Stereo SGBM + heatmap bricks (stereo-disparity-and-heatmap-nodes): the
+// center view's on-demand disparity chain. Same cast/seam/probe pattern.
+const aravisStereo = Aravis as unknown as {
+  attachStereoPipe(
+    leftPipeId: string,
+    rightPipeId: string,
+    pipeId: string,
+    params: unknown,
+  ): void;
+  setStereoParams(pipeId: string, params: unknown): boolean;
+  detachStereoPipe(pipeId: string): void;
+  stereoProbeAll(): Record<string, unknown>;
+  attachHeatmapPipe(sourcePipeId: string, pipeId: string, params: unknown): void;
+  setHeatmapParams(pipeId: string, params: unknown): boolean;
+  detachHeatmapPipe(pipeId: string): void;
+  heatmapProbeAll(): Record<string, unknown>;
+};
+const stereoSeam: import("./stereo-pipe.js").StereoPipeSeam = {
+  advertise: pipeBroker.advertise,
+  unadvertise: pipeBroker.unadvertise,
+  attach: (l, r, id, params) => aravisStereo.attachStereoPipe(l, r, id, params),
+  retune: (id, params) => void aravisStereo.setStereoParams(id, params),
+  detach: (id) => aravisStereo.detachStereoPipe(id),
+};
+const heatmapSeam: import("./heatmap-pipe.js").HeatmapPipeSeam = {
+  advertise: pipeBroker.advertise,
+  unadvertise: pipeBroker.unadvertise,
+  attach: (src, id, params) => aravisStereo.attachHeatmapPipe(src, id, params),
+  retune: (id, params) => void aravisStereo.setHeatmapParams(id, params),
+  detach: (id) => aravisStereo.detachHeatmapPipe(id),
+};
+registerNativeProbe(
+  () => aravisStereo.stereoProbeAll() as unknown as Record<string, WorkloadSnapshot>,
+);
+registerNativeProbe(
+  () => aravisStereo.heatmapProbeAll() as unknown as Record<string, WorkloadSnapshot>,
+);
 const disparityScope = hub.add(
-  disparityScopeSession(asBroker(Pipe), undistortSeam, sliceSeam, scaleSeam),
+  disparityScopeSession(
+    asBroker(Pipe),
+    undistortSeam,
+    sliceSeam,
+    scaleSeam,
+    stereoSeam,
+    heatmapSeam,
+  ),
 );
 
 // --- calibrate-intrinsic: per-camera checkerboard/marker calibration (§7.1 S1b)

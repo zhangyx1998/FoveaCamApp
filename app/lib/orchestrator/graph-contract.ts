@@ -33,8 +33,14 @@ import type { WorkloadSnapshot } from "./stats.js";
  *  are fully typed (format + container dtype); non-frame streams are tagged by
  *  kind, `analysis` refined by a named schema (registered in the composition
  *  harness, e.g. "vergence", "checker-corners"). */
+/** A frame stream's container dtype: the sensor schema's decoded dtypes plus
+ *  "F32" for DERIVED float pipes (the stereo brick's disparity map —
+ *  stereo-disparity-and-heatmap-nodes). Not a sensor format: no
+ *  PIXEL_FORMATS row, no renderer decode path. */
+export type ContainerDtype = Dtype | "F32";
+
 export type StreamType =
-  | { kind: "frame"; pixelFormat: string; dtype: Dtype }
+  | { kind: "frame"; pixelFormat: string; dtype: ContainerDtype }
   | { kind: "track" } // KCF TrackResult stream
   | { kind: "detect" } // marker detection sets
   | { kind: "analysis"; schema: string }; // named scalar-record stream
@@ -216,6 +222,15 @@ export const nodeId = {
    *  SOURCE pipe id — that IS its input, same rule as fovea/kcf. */
   scale: (sourceId: string, name: string): string =>
     `${sourceId}/scale/${name}`,
+  /** STEREO disparity node (stereo-disparity-and-heatmap-nodes): a two-input
+   *  join brick (SGBM, F32 disparity out). A NEW root — a cross-camera join
+   *  honestly belongs to neither camera; its left/right edges carry the
+   *  wiring (self-reported via Topology.report()). */
+  stereo: (name: string): string => `stereo/${name}`,
+  /** HEATMAP colormap node (F32/U8 1-channel → BGRA8): nests under its
+   *  SOURCE pipe id — that IS its input, same rule as scale. */
+  heatmap: (sourceId: string, name: string): string =>
+    `${sourceId}/heatmap/${name}`,
   /** The MEMS controller node (controller-node-and-fifo-edges §3): a SINGLETON
    *  logical id — the serial port is a stat, not identity, so PID-node edges
    *  registered before the device connects stay stable. */
