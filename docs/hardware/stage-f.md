@@ -370,6 +370,62 @@ source the RAW fovea CONVERT pipes (single ÷magnification, legacy
 - [ ] **Raw pipes park** — with no recording/capture active, the
   camera/<serial>/raw rows show zero rate (capture: no producer at all).
 
+## Multi-fovea recording (2026-07-09 waves, 9be0c07→I-2; proposal
+`multi-fovea-recording.md` r2.1)
+
+- [ ] **12p payload verbatim** — record a raw12p stream on a live camera in
+  12p readout; per-frame payload byte length == W·H·3/2, and `unpack12p`'s
+  output matches a reference wire capture bit-exactly (the fake camera only
+  proved Mono8 plumbing; GenICam 12p bit order is unit-vector-verified
+  ONLY).
+- [ ] **Zero-loss raw12p recording** — L/C/R raw12p at full sensor rate ≥
+  60 s: recorder stats ingested == written, 0 drops, flat main-loop util
+  (the ~4.7 MiB/frame packed payloads are the heaviest recording load yet).
+- [ ] **Per-stream /zlib live** — one stream routed through CompressStream:
+  bench-measured ~26 MB/s (default) / ~55 MB/s (level 1) says a wide 12p
+  stream WILL drop-account at full rate — verify drops are metered +
+  visible, fovea-crop-sized streams hold, real Bayer data ratio recorded
+  for the codec-choice follow-up.
+- [ ] **Descriptor↔frame pairing live** — under round-robin trigger, each
+  target's descriptors point at the L/R raw12p seqs whose frames were
+  actually aimed at that target (spot-check by reconstructing crops
+  offline); center pointer = nearest free-run (explicitly unsynchronized).
+- [ ] **Free-run descriptor shape** — recording without trigger mode:
+  descriptors carry bbox + center + null L/R, container decodes cleanly.
+- [ ] **Extras binding** — per-fovea-frame `{volts, V2A, H}` extras match
+  the anchor that triggered the frame (v1: live-snapshot volts; FIN-avg is
+  the firmware-v2 item).
+- [ ] **Wide camera matrix singleton** — `fovea:wide-camera` metadata
+  matches the calibration triple's center intrinsics.
+- [ ] **Viewer playback of a rig container** — 12p unpack + debayer display
+  looks right (colors — Bayer order!), /zlib stream plays, bbox overlay
+  tracks the recorded target, channels appearing mid-file (target armed
+  mid-recording) seek cleanly; auto-open on finish.
+- [ ] **Raw12p pipes park** — no recording active → raw12p rows at zero
+  rate and the refcounted registry releases producers (probe shows no
+  attached taps).
+
+## Pairing nodes (2026-07-09 wave, 426eb05 + ac6ee85; proposal
+`pairing-nodes.md`)
+
+- [ ] **Root match rate** — live round-robin trigger: matched-pair rate ≈
+  FIN rate, unmatched-FIN counter near zero at the ruled tolerance (half
+  min frame interval); tune the 8 ms default if the trigger-path latency
+  spread demands it (record the measured per-side deltas from
+  `calibrate()`).
+- [ ] **Downstream exact chain** — with undistort live, the undistort-stage
+  pair emits at the root rate with per-side keys matching (resolved-anchor
+  forwarding at FIN rate; zero tolerance misses by construction).
+- [ ] **Anchor payload physical sanity** — V2A angles vs commanded mirror
+  position; H maps the fovea into the wide frame within calibration error.
+- [ ] **Always-on pool behavior** — pairing bricks idle in free-run (empty
+  pool, zero output, near-zero util); under live churn (trigger start/stop,
+  camera re-lease) pool drop counters stay bounded and no thread leaks
+  across session restarts.
+- [ ] **Trigger-line names** — the GenICam trigger input/strobe names in
+  sync.ts are UNVERIFIED placeholders; confirm against the real camera
+  model before any of the above.
+
 ## Blocked (hardware change required)
 
 - [ ] **Center-camera hardware trigger** — needs the slimmer CAM0 cable
