@@ -11,6 +11,19 @@ dark-room lab rig**. Operators glance at it from a distance, in low ambient ligh
 handling hardware. Glare control, glanceability, and *visible* error state matter more
 than polish.
 
+## Ruled principles (user, 2026-07-09) — binding on every implementation wave
+
+1. **Realtime feedback**: interactive elements give INSTANT visual cues on
+   hover/interaction. No perceptible lag between input and visual response.
+2. **Snap over smooth**: transitions are kept minimal on the critical control
+   path — state changes snap. A transition is allowed only when genuinely
+   necessary (e.g. disambiguating what moved) or when the element is NOT on a
+   critical control path (decorative/peripheral surfaces).
+3. **Layout stability**: a component's CONTENT changing must not trigger
+   layout reflow — reserve space (fixed/min dimensions, `ch`-sized numeric
+   fields, visibility over conditional mount) so live telemetry, state badges,
+   toggling controls, and appearing overlays never shift their neighbors.
+
 ---
 
 ## 1. Foundations (global)
