@@ -99,6 +99,42 @@ describe("createRawPipeRegistry", () => {
     expect(log.filter((l) => l === `unadvertise:${id}`).length).toBe(2);
   });
 
+  it("re-attaches the producer on re-acquire (retire→re-advertise restarts the gate, F1)", () => {
+    // F1 capture-hang guard: manual-control capture (session.ts) and recording
+    // (recording.ts) share `camera/<serial>/raw`. When a prior recording's LAST
+    // release retires the producer (detach → unadvertise), a later capture
+    // acquire of the SAME id is a fresh 0→1 edge that MUST re-advertise AND
+    // re-attach — the attach re-runs `attachRawPipe` → `hub.setConsumerGate`, so
+    // the C-21 producer gate is re-registered on the fresh epoch and the next
+    // consumer connect can start frames flowing again. A registry that skipped
+    // the re-attach would leave the reused id advertised but producer-gate-less
+    // (readSeqInto → NotYet forever). This pins the ORDER too: advertise BEFORE
+    // attach on every 0→1 (attach reads the just-advertised pipe spec).
+    const { seam, log } = fakeSeam();
+    const reg = createRawPipeRegistry(seam);
+    const cam = camera("B2");
+    const id = "camera/B2/raw";
+    const spec = rawPipeSpec(cam, id);
+
+    // Recording: acquire (advertise+attach) then fully retire (detach+unadvertise).
+    reg.acquire({ kind: "raw", camera: cam, pipeId: id, spec }).release();
+    expect(reg.refCount(id)).toBe(0);
+    expect(log).toEqual([
+      `advertise:${id}`,
+      `attach:raw:${id}`,
+      `detach:raw:${id}`,
+      `unadvertise:${id}`,
+    ]);
+
+    // Capture: fresh acquire of the retired id re-advertises AND re-attaches
+    // (gate re-registered), in that order.
+    const cap = reg.acquire({ kind: "raw", camera: cam, pipeId: id, spec });
+    expect(reg.refCount(id)).toBe(1);
+    expect(log.slice(-2)).toEqual([`advertise:${id}`, `attach:raw:${id}`]);
+    expect(log.filter((l) => l === `attach:raw:${id}`).length).toBe(2);
+    cap.release();
+  });
+
   it("release is idempotent per handle (double release cannot over-decrement)", () => {
     const { seam } = fakeSeam();
     const reg = createRawPipeRegistry(seam);

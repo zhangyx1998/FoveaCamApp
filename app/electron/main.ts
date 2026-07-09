@@ -139,12 +139,23 @@ function customizeApp() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
-/** File→Open Recording… (A-11): `.fovea` filter, one viewer window per file
- *  (a re-open of an already-viewed file focuses its window). */
+// Recording container extensions the app opens (standalone-viewer-and-fcap
+// ruling 2): `.fcap` is what the recorder writes now; `.fovea` stays accepted
+// as a READ-ONLY legacy so existing rig recordings still open. The dialog filter,
+// macOS `open-file`, and the Windows/Linux `second-instance` arg association all
+// derive from this one list.
+const RECORDING_EXTENSIONS = ["fcap", "fovea"] as const;
+const isRecordingPath = (p: string): boolean =>
+  RECORDING_EXTENSIONS.some((ext) => p.toLowerCase().endsWith(`.${ext}`));
+
+/** File→Open Recording… (A-11): `.fcap`/`.fovea` filter, one viewer window per
+ *  file (a re-open of an already-viewed file focuses its window). */
 async function openRecordingDialog(): Promise<void> {
   const result = await dialog.showOpenDialog({
     title: "Open Recording",
-    filters: [{ name: "FoveaCam Recording", extensions: ["fovea"] }],
+    filters: [
+      { name: "FoveaCam Recording", extensions: [...RECORDING_EXTENSIONS] },
+    ],
     properties: ["openFile", "multiSelections"],
   });
   if (result.canceled) return;
@@ -214,6 +225,12 @@ handle("perf-snapshot:reveal", (file) => {
   const dir = path.join(DATA, "perf-snapshots");
   if (!path.resolve(file).startsWith(dir + path.sep)) return;
   shell.showItemInFolder(file);
+});
+
+// Reveal a recording container in Finder/Explorer (selects the file) — the
+// viewer window's "Open folder" button (standalone-viewer-and-fcap UX 5).
+handle("viewer:reveal", (file) => {
+  if (typeof file === "string" && file) shell.showItemInFolder(file);
 });
 
 // ---- Orchestrator process -------------------------------------------------
@@ -604,7 +621,7 @@ async function devRestart(): Promise<void> {
 }
 
 // ---- File association (A-11, recorder-container.md §4) --------------------
-// macOS delivers double-clicked/dragged `.fovea` files via `open-file` —
+// macOS delivers double-clicked/dragged `.fcap`/`.fovea` files via `open-file` —
 // which can fire BEFORE `whenReady` when the app is launched by the file
 // itself, so pre-ready paths queue until the window manager can spawn.
 // (Windows/Linux deliver file paths via argv → the `second-instance` handler
@@ -681,9 +698,10 @@ app.on("window-all-closed", () => {
 });
 
 app.on("second-instance", (_e, commandLine = []) => {
-  // Windows/Linux file association: a second launch with `.fovea` args
-  // lands here (single-instance lock) — open viewers instead of focusing.
-  const files = commandLine.filter((arg) => arg.toLowerCase().endsWith(".fovea"));
+  // Windows/Linux file association: a second launch with recording args
+  // (`.fcap`/legacy `.fovea`) lands here (single-instance lock) — open viewers
+  // instead of focusing.
+  const files = commandLine.filter(isRecordingPath);
   if (files.length > 0) {
     for (const f of files) manager.openViewer(f);
     return;

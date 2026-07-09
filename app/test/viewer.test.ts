@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Mat } from "core/Vision";
 import { Channel, topic } from "@lib/orchestrator/protocol";
 import type { ViewerFile, ViewerPosition } from "@lib/orchestrator/viewer-contract";
-import { createFoveaSink } from "@orchestrator/recorder";
+import { createFoveaSink, FOVEA_EXTENSION } from "@orchestrator/recorder";
 import { viewerSession } from "@orchestrator/sessions/viewer";
 import { workloadsSnapshot } from "@orchestrator/metering";
 import type { PlayerClock } from "@orchestrator/viewer/player";
@@ -44,7 +44,7 @@ async function writeFixture(dir: string): Promise<string> {
   }
   sink.write("aux", frame16([9, 9, 9, 9]), "Mono16", 0.35);
   await sink.finalize(0.6);
-  return join(dir, "recording.fovea");
+  return join(dir, `recording${FOVEA_EXTENSION}`);
 }
 
 /** Virtual clock: sleep() records the request and advances time instantly —
@@ -288,7 +288,7 @@ describe("viewer session (C-8)", () => {
       sink.write("cam", big, "Mono12p", 0.1 * (i + 1), {});
     }
     await sink.finalize(0.6);
-    const file = join(dir, "recording.fovea");
+    const file = join(dir, `recording${FOVEA_EXTENSION}`);
     const { size } = await stat(file);
     await truncate(file, Math.floor(size * 0.6));
 
@@ -422,7 +422,7 @@ describe("openFovea source layer", () => {
       sink.write("cam", big, "Mono12p", 0.1 * (i + 1), {});
     }
     await sink.finalize(0.6);
-    const file = join(dir, "recording.fovea");
+    const file = join(dir, `recording${FOVEA_EXTENSION}`);
     await truncate(file, Math.floor((await stat(file)).size * 0.6));
 
     const source = await openFovea(file);
@@ -452,7 +452,7 @@ describe("openFovea source layer", () => {
       sink.write("cam", big, "Mono16", 0.01 * (i + 1), {});
     }
     await sink.finalize(1.0);
-    const file = join(dir, "recording.fovea");
+    const file = join(dir, `recording${FOVEA_EXTENSION}`);
     // Trim just the tail → streaming fallback, but keep most of the body.
     await truncate(file, Math.floor((await stat(file)).size * 0.9));
 

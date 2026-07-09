@@ -20,7 +20,13 @@
 
 ## 1. Container
 
-A recording is one **MCAP** file (`.fovea`): channels per recorded stream,
+A recording is one **MCAP** file with the **`.fcap`** extension (renamed from
+`.fovea` — `standalone-viewer-and-fcap.md` ruling 2; the value lives in
+`app/orchestrator/recorder/schema.ts`'s `FOVEA_EXTENSION` export). Legacy
+`.fovea` recordings stay **readable** — the viewer open filter, macOS
+`open-file`, and the Windows/Linux arg association (`electron/main.ts`) all
+accept both `.fcap` and `.fovea`. The container holds channels per recorded
+stream,
 schemas pinned by the writer (the schema contract is the compatibility
 promise for offline consumers — change it deliberately or not at all).
 Per-frame metadata binds each fovea frame to its **voltage provenance**:

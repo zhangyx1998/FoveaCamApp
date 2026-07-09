@@ -15,6 +15,7 @@ import {
   createFoveaSink,
   createRecordingSink,
   frameVoltageExtras,
+  FOVEA_EXTENSION,
   type RecorderTopology,
 } from "@orchestrator/recorder";
 import { workloadsSnapshot } from "@orchestrator/metering";
@@ -84,7 +85,7 @@ describe("MCAP recorder (fovea sink)", () => {
     sink.write("center", fakeFrame([5, 6, 7, 8]), "Mono16", 1.5, {}); // empty extras → no telemetry doc
     await sink.finalize(3.5);
 
-    const file = join(dir, "recording.fovea");
+    const file = join(dir, `recording${FOVEA_EXTENSION}`);
     expect((await stat(file)).size).toBeGreaterThan(0);
     const { reader, messages, topics } = await readContainer(file);
 
@@ -155,7 +156,7 @@ describe("MCAP recorder (fovea sink)", () => {
     });
     await sink.finalize(1.0);
 
-    const { messages, topics } = await readContainer(join(dir, "recording.fovea"));
+    const { messages, topics } = await readContainer(join(dir, `recording${FOVEA_EXTENSION}`));
     const telemetryId = topics.get("telemetry")!.id;
     const doc = messages
       .filter((m) => m.channelId === telemetryId)
@@ -187,17 +188,17 @@ describe("MCAP recorder (fovea sink)", () => {
       overflow: { frames: 1, dropped: 2, bytes: 8 },
     });
     // metered from day one: drops are visible in the workload snapshot
-    const meter = workloadsSnapshot()["recorder:recording.fovea"];
+    const meter = workloadsSnapshot()[`recorder:recording${FOVEA_EXTENSION}`];
     expect(meter).toBeDefined();
     expect(meter.drops.byReason).toMatchObject({ backpressure: 2 });
     expect(meter.inputs["overflow"].count).toBe(1);
 
     await sink.finalize(1.0);
     // meter released with the writer
-    expect(workloadsSnapshot()["recorder:recording.fovea"]).toBeUndefined();
+    expect(workloadsSnapshot()[`recorder:recording${FOVEA_EXTENSION}`]).toBeUndefined();
 
     // only the accepted frame is in the container
-    const { reader, messages, topics } = await readContainer(join(dir, "recording.fovea"));
+    const { reader, messages, topics } = await readContainer(join(dir, `recording${FOVEA_EXTENSION}`));
     expect(reader.statistics?.messageCount).toBe(1n);
     expect(messages[0].channelId).toBe(topics.get("overflow")!.id);
     expect(
@@ -241,7 +242,7 @@ describe("MCAP recorder (fovea sink)", () => {
     sink.write("rgb", fakeU8Frame([1, 2, 3, 4], 1), "RGB8", 1.0);
     await sink.finalize(1.0);
 
-    const { topics } = await readContainer(join(dir, "recording.fovea"));
+    const { topics } = await readContainer(join(dir, `recording${FOVEA_EXTENSION}`));
     expect(Object.fromEntries(topics.get("rgb")!.metadata)).toMatchObject({
       dtype: "U8",
       channels: "3",

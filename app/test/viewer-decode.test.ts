@@ -139,3 +139,65 @@ describe("createFrameDecoder — significantBits honored on a <fmt>/zlib packed 
     expect((out16 as unknown as Uint8Array)[0]).not.toBe(255);
   });
 });
+
+describe("createFrameDecoder — F3 packed-format name over an UNPACKED U16 container", () => {
+  // The `raw` camera tap (RawPipe.cpp) publishes `frame->raw`, the FULL-DEPTH
+  // 16-bit container: `Arv::Frame` already expanded the 12p at construction. It
+  // ADVERTISES the packed sensor format name (`BayerRG12p`/`Mono12p`, isPacked)
+  // with dtype=U16 — so keying "packed" off `isPacked` alone would run unpack12p
+  // over already-16-bit samples and SHEAR the image (the rig F3 stripe). The
+  // decoder must honor the advert dtype: U16 ⇒ the container is unpacked, take
+  // the reshape branch, never unpack12p.
+  it("reshapes a U16 container instead of unpacking (no shear)", async () => {
+    const width = 4;
+    const height = 2;
+    const decode = await createFrameDecoder({
+      dtype: "U16", // the unpacked container the raw tap publishes
+      shape: JSON.stringify([height, width]),
+      channels: "1",
+      pixelFormat: "Mono12p", // packed format name, isPacked === true
+      significantBits: "12",
+      stride: String(width * 2), // 2 B/px unpacked row (raw-pipe advert)
+    });
+    // 8 little-endian U16 samples 0..4095 laid out row-major (already unpacked).
+    const samples = [0, 4095, 2048, 1024, 100, 200, 300, 400];
+    const buf = new Uint8Array(new Uint16Array(samples).buffer);
+    const mat = decode(buf) as unknown as Uint8Array;
+    // convertType is stubbed to apply the 12-bit scale (255/4095); each sample
+    // maps to its 8-bit value. A unpack12p misread would produce different,
+    // shifted values (and the wrong length).
+    expect(mat.length).toBe(samples.length);
+    expect(Array.from(mat)).toEqual(samples.map((v) => Math.round(v * (255 / 4095))));
+  });
+});
+
+describe("createFrameDecoder — stride-padded packed row (F3 robustness)", () => {
+  // A packed 12p wire with row padding (stride > tight packed row) must be
+  // un-padded per row before unpack, or the second row shears. Even width so
+  // the tight packed row is a whole number of 3-byte groups.
+  it("strips row padding before unpacking a packed 12p payload", async () => {
+    const width = 2; // even → 1 group of 3 bytes per row, 2 samples/row
+    const height = 2;
+    const tightRow = Math.ceil((width * 12) / 8); // 3
+    const pad = 2;
+    const stride = tightRow + pad; // 5-byte padded rows
+    // Row 0 samples s0=0xFFF, s1=0x000 → bytes [0xFF,0x0F,0x00]; row 1
+    // s0=0x000, s1=0xFFF → bytes [0x00,0xF0,0xFF].
+    const row0 = [0xff, 0x0f, 0x00];
+    const row1 = [0x00, 0xf0, 0xff];
+    const wire = new Uint8Array(stride * height);
+    wire.set(row0, 0);
+    wire.set(row1, stride);
+    const decode = await createFrameDecoder({
+      dtype: "U8",
+      shape: JSON.stringify([height, width]),
+      channels: "1",
+      pixelFormat: "Mono12p",
+      significantBits: "12",
+      stride: String(stride),
+    });
+    const mat = decode(wire) as unknown as Uint8Array;
+    // 4095→255, 0→0 (12-bit scale). Row-major: [255,0, 0,255].
+    expect(Array.from(mat)).toEqual([255, 0, 0, 255]);
+  });
+});

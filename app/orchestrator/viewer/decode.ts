@@ -85,6 +85,11 @@ export interface DecodeProps {
   channels: number;
   pixelFormat: string;
   significantBits: number;
+  /** Advertised bytes-per-row on the wire (verbatim from the pipe advert). May
+   *  exceed the tight row (width·channels·bytesPerElement, or the packed row for
+   *  a 12p wire) when the transport carries row padding — the decoder strips it
+   *  before interpreting (F3 striped-decode). `undefined`/0 ⇒ rows are tight. */
+  stride?: number;
 }
 
 export function parseDecodeProps(metadata: Record<string, string>): DecodeProps {
@@ -92,31 +97,60 @@ export function parseDecodeProps(metadata: Record<string, string>): DecodeProps 
   const shape = JSON.parse(metadata.shape ?? "[]") as number[];
   if (!dtype || !Array.isArray(shape) || shape.length < 2)
     throw new Error("channel metadata is missing x-fovea-raw decode props");
+  const strideRaw = Number(metadata.stride);
   const props = {
     dtype,
     shape,
     channels: Number(metadata.channels ?? "1"),
     pixelFormat: metadata.pixelFormat ?? "Mono8",
     significantBits: Number(metadata.significantBits ?? "8"),
+    stride: Number.isFinite(strideRaw) && strideRaw > 0 ? strideRaw : undefined,
   };
   warnOnSchemaDrift(props);
   return props;
+}
+
+/** GenICam 12p packs 12 bits per sample (2 samples in 3 bytes) — every packed
+ *  format in the registry is a `*12p`. The tight (unpadded) packed row for
+ *  `samples` pixels is `ceil(samples · 12 / 8)` bytes. */
+const PACKED_BITS_PER_SAMPLE = 12;
+
+/** Strip row padding: if the wire `stride` exceeds the tight row byte count,
+ *  copy each row's leading `tightRow` bytes into a contiguous buffer so the
+ *  downstream interpretation (unpack12p / Uint8/16 reshape) sees tight rows.
+ *  A no-op when `stride` is absent, equal to (or smaller than — a broken advert
+ *  we don't trust) the tight row, or the payload is too short (F3). */
+function stripRowPadding(
+  bytes: Uint8Array,
+  stride: number | undefined,
+  tightRow: number,
+  rows: number,
+): Uint8Array {
+  if (!stride || stride <= tightRow || rows <= 0) return bytes;
+  if (bytes.byteLength < stride * (rows - 1) + tightRow) return bytes;
+  const out = new Uint8Array(tightRow * rows);
+  for (let r = 0; r < rows; r++)
+    out.set(bytes.subarray(r * stride, r * stride + tightRow), r * tightRow);
+  return out;
 }
 
 function warnOnSchemaDrift(props: DecodeProps): void {
   const { base } = splitCodecs(props.pixelFormat);
   const spec = pixelFormatSpec(base);
   if (!spec) return;
-  // A packed (12p) or codec-suffixed channel is an opaque U8 byte stream on the
-  // wire — the container dtype is intentionally "U8", not the format's unpacked
-  // dtype. Compare the recorded dtype against that transport expectation.
-  const transportDtype =
-    spec.isPacked || base !== props.pixelFormat ? "U8" : spec.dtype;
+  // A packed (12p) or codec-suffixed channel is an opaque byte stream on the
+  // wire — the container dtype is "U8" (packed verbatim / codec blob). A packed
+  // sensor format ALSO legitimately names the UNPACKED 16-bit container (the
+  // `raw` tap expands 12p at Frame construction → dtype = the format's own
+  // unpacked dtype, U16). Both are truthful transport dtypes for a packed base;
+  // only a value that is neither is real drift.
+  const transportPacked = spec.isPacked || base !== props.pixelFormat;
+  const allowedDtypes = transportPacked ? ["U8", spec.dtype] : [spec.dtype];
   const mismatches = [
-    ["dtype", props.dtype, transportDtype],
-    ["channels", props.channels, spec.channels],
-    ["significantBits", props.significantBits, spec.significantBits],
-  ].filter(([, recorded, expected]) => recorded !== expected);
+    ["dtype", props.dtype, allowedDtypes.join(" | "), allowedDtypes.includes(props.dtype)],
+    ["channels", props.channels, spec.channels, props.channels === spec.channels],
+    ["significantBits", props.significantBits, spec.significantBits, props.significantBits === spec.significantBits],
+  ].filter(([, , , ok]) => !ok);
   if (mismatches.length === 0) return;
   console.warn("[viewer] recording metadata differs from pixel-format schema", {
     pixelFormat: props.pixelFormat,
@@ -164,14 +198,26 @@ export async function createFrameDecoder(
   metadata: Record<string, string>,
 ): Promise<FrameDecoder> {
   const props = parseDecodeProps(metadata);
-  const { dtype, shape, channels, pixelFormat, significantBits } = props;
+  const { dtype, shape, channels, pixelFormat, significantBits, stride } = props;
   // The transport pixelFormat may carry `/codec` suffixes over a base format
   // that may itself be PACKED (12p). Peel the codec chain per frame; unpack a
   // packed base to a 16-bit container for display.
   const { base, codecs } = splitCodecs(pixelFormat);
-  const packed = pixelFormatSpec(base)?.isPacked ?? false;
+  // A 12p sensor format names TWO distinct transports (raw-pipe.ts): the packed
+  // verbatim wire (`raw12p` tap → dtype U8, 1.5 B/px) and the UNPACKED 16-bit
+  // container (`raw` tap → dtype U16, 2 B/px — `Arv::Frame` already expanded
+  // the 12p at construction). Both advertise the SAME packed pixelFormat name
+  // (`isPacked` true), so `isPacked` alone can't tell them apart — the advert's
+  // DTYPE is the transport-packing truth: U8 ⇒ packed wire (unpack), U16 ⇒
+  // already-unpacked container (reshape). Trusting `isPacked` blindly is the F3
+  // striped-decode bug: it ran unpack12p over an already-16-bit raw-pipe frame.
+  const formatPacked = pixelFormatSpec(base)?.isPacked ?? false;
+  const packed = formatPacked && dtype === "U8";
   if (!packed && dtype !== "U8" && dtype !== "U16")
     throw new Error(`unsupported preview dtype "${dtype}"`);
+  // Row geometry for stride-aware unpadding: shape is [H, W] or [H, W, C].
+  const rows = shape[0] ?? 0;
+  const rowWidth = shape[1] ?? 0;
 
   const bayer = bayerCode(base);
   const scale8 = 255 / ((1 << significantBits) - 1);
@@ -180,11 +226,15 @@ export async function createFrameDecoder(
 
   return (wire: Uint8Array): Mat<Uint8Array> => {
     // Right-to-left decode: decompress the codec chain, then interpret the base.
-    const bytes = codecs.length > 0 ? decompressChain(wire, codecs) : wire;
+    const decompressed = codecs.length > 0 ? decompressChain(wire, codecs) : wire;
     let mat: Mat<Uint8Array>;
     if (packed) {
       // 12p wire → 16-bit samples (owns a fresh buffer, no aliasing), then the
       // same significantBits down-scale the live 12-bit path uses (→ /4095).
+      // Strip any row padding FIRST (stride ≠ tight packed row) so a padded
+      // payload unpacks row-aligned instead of shearing (F3).
+      const tightRow = Math.ceil((rowWidth * channels * PACKED_BITS_PER_SAMPLE) / 8);
+      const bytes = stripRowPadding(decompressed, stride, tightRow, rows);
       const samples = shape.reduce((a, b) => a * b, 1);
       const raw = Object.assign(unpack12p(bytes, samples), {
         shape: [...shape],
@@ -192,6 +242,7 @@ export async function createFrameDecoder(
       }) as Mat<Uint16Array>;
       mat = vision!.convertType(raw, "8U", scale8);
     } else if (dtype === "U16") {
+      const bytes = stripRowPadding(decompressed, stride, rowWidth * channels * 2, rows);
       const buffer = frameBuffer(bytes, dtype);
       const raw = Object.assign(new Uint16Array(buffer), {
         shape: [...shape],
@@ -201,6 +252,7 @@ export async function createFrameDecoder(
       // significant bit depth, not the container width (12p → /4095).
       mat = vision!.convertType(raw, "8U", scale8);
     } else {
+      const bytes = stripRowPadding(decompressed, stride, rowWidth * channels, rows);
       const buffer = frameBuffer(bytes, dtype);
       mat = Object.assign(new Uint8Array(buffer), {
         shape: [...shape],

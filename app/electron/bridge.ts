@@ -69,6 +69,11 @@ export interface FoveaBridge {
   /** Reveals ONE written snapshot file (selected in Finder/Explorer). Only
    *  paths inside the perf-snapshots dir are accepted — narrow surface. */
   revealPerfSnapshot(file: string): Promise<void>;
+  /** Reveals a recording container in the OS file browser (Finder/Explorer),
+   *  selecting the file — the viewer window's "Open folder" affordance
+   *  (standalone-viewer-and-fcap UX 5). Any path the renderer holds is accepted
+   *  (the bridge already trusts renderer-supplied paths). */
+  revealRecording(file: string): Promise<void>;
   /** Pin THIS window above all others (`setAlwaysOnTop`) — the profiler's
    *  nav-bar pin toggle; the renderer persists the choice in localStorage
    *  and re-applies it on mount. */
@@ -97,6 +102,7 @@ export interface InvokeChannels {
   "perf-snapshot:write": { args: [content: string]; ret: string };
   "perf-snapshot:open-folder": { args: []; ret: string };
   "perf-snapshot:reveal": { args: [file: string]; ret: void };
+  "viewer:reveal": { args: [file: string]; ret: void };
 }
 
 /** Fire-and-forget renderer→main signals (`ipcRenderer.send` ↔ `ipcMain.on`).

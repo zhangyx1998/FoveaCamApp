@@ -63,7 +63,25 @@ const playback = computed(() =>
   fileId.value ? (session.telemetry.position[fileId.value] ?? null) : null,
 );
 const playing = computed(() => playback.value?.playing ?? false);
-const basename = computed(() => props.path.split("/").pop() ?? props.path);
+const basename = computed(() => props.path.split(/[/\\]/).pop() ?? props.path);
+
+// UX 4 (standalone-viewer-and-fcap): a COMPACT path for the subtitle + sidebar
+// — the home directory collapsed to `~`, LEFT-ellipsized (CSS `direction: rtl`)
+// so the filename end stays visible while the leading dirs truncate. The full
+// path stays in the tooltip (`title`). Home collapse is a renderer-side
+// heuristic (no node in the window): `/Users/<u>`, `/home/<u>`, `C:\Users\<u>`.
+const compactPath = computed(() =>
+  props.path.replace(
+    /^(\/Users\/[^/]+|\/home\/[^/]+|[A-Za-z]:\\Users\\[^\\]+)/,
+    "~",
+  ),
+);
+
+function openFolder(): void {
+  // UX 5: reveal the current recording in Finder/Explorer (main brokers
+  // shell.showItemInFolder). The full, un-collapsed path is what the OS needs.
+  void window.foveaBridge?.revealRecording?.(props.path);
+}
 
 // --- tracks ---------------------------------------------------------------
 
@@ -168,6 +186,7 @@ function fmtNs(ns: number): string {
       <div class="tracks">
         <div class="file-info">
           <div class="name" :title="file.path">{{ basename }}</div>
+          <div class="path left-ellipsis" :title="file.path" dir="ltr">{{ compactPath }}</div>
           <div v-if="file.truncated" class="truncated" title="File was footerless (crash-truncated); recovered via re-index">
             recovered (truncated)
           </div>
@@ -237,7 +256,17 @@ function fmtNs(ns: number): string {
       </div>
     </template>
   </div>
-  <TitleBar title="Viewer" :subtitle="basename" @height="(h) => (titleBarHeight = h)" />
+  <TitleBar title="Viewer" :subtitle="compactPath" @height="(h) => (titleBarHeight = h)">
+    <!-- UX 5: right-side "Open folder" button reveals the current file. -->
+    <button
+      v-if="file"
+      class="open-folder"
+      title="Reveal this recording in Finder/Explorer"
+      @click="openFolder"
+    >
+      Open folder
+    </button>
+  </TitleBar>
 </template>
 
 <style scoped lang="scss">
@@ -262,6 +291,22 @@ function fmtNs(ns: number): string {
   flex-grow: 1;
 }
 
+// UX 5: "Open folder" button in the title-bar actions slot (no-drag region).
+.open-folder {
+  background: #222;
+  color: #ccc;
+  border: 1px solid #333;
+  border-radius: 4px;
+  padding: 0.25em 0.9em;
+  font-size: 0.85em;
+  cursor: pointer;
+  white-space: nowrap;
+  &:hover {
+    background: #2a2a2a;
+    color: #fff;
+  }
+}
+
 .tracks {
   width: 30ch;
   min-width: 24ch;
@@ -278,6 +323,22 @@ function fmtNs(ns: number): string {
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+    }
+    // UX 4: compact path, LEFT-ellipsized (rtl direction pushes the overflow +
+    // ellipsis to the start, keeping the filename tail visible). `dir="ltr"` on
+    // the element keeps the path text itself in reading order.
+    .path {
+      margin-top: 0.25em;
+      color: #777;
+      font-size: 0.78em;
+      font-family: monospace;
+    }
+    .left-ellipsis {
+      direction: rtl;
+      text-align: left;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
     .truncated {
       display: inline-block;
