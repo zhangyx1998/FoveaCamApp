@@ -12,11 +12,11 @@
 //  - on activate: `acquireTriple` (calibration); advertise the THREE undistort
 //    pipes the views + the scope kernel source from — C = INTRINSIC undistort
 //    (cal from the triple), L/R = HOMOGRAPHY undistort fed `A2H∘V2A(volts)` from
-//    the actuation loop's mirror history by a `startHomographyFeeder` (the same
-//    seam tracking-single uses); `broker.connect` those pipe ids as the kernel
-//    inputs (refcount++ → demand propagation keeps the undistort bricks + their
-//    converters awake); spawn the vision worker; create the PID controller NODE
-//    (`createPidNode`) and start the fixed-rate `startActuationLoop`.
+//    the controller node's mirror history by a `startHomographyFeeder`;
+//    `broker.connect` those pipe ids as the kernel inputs (refcount++ → demand
+//    propagation keeps the undistort bricks + their converters awake); spawn
+//    the vision worker; create the PID controller NODE (`createPidNode`) and
+//    open a position input on the controller node (push-model transport).
 //  - the worker SHM-reads L/C/R (foveas arrive PRE-WARPED off the homography
 //    pipes; C is the undistorted wide view), runs the tile match, and posts
 //    the scope PROJECTION (matched fovea centres + target, undistorted wide
@@ -31,8 +31,10 @@
 //    to the kernel as the `target` param + the `overridden` flag.
 //  - main runs the vergence control law INSIDE the PID node's control fn
 //    (`node.step(fn)`): `stepVergence` reads the projection and produces the
-//    `{ l, r }` command volts. `startActuationLoop` reads `commandedVolts`
-//    synchronously every tick (unchanged cadence).
+//    `{ l, r }` command volts, PUSHED to the controller NODE's position input
+//    at the projection/PID result rate (controller-node-and-fifo-edges §3 —
+//    the MCU stream holds position between updates; the generic `pidOverride`
+//    command pushes its pinned volts immediately on engage).
 //
 // Pointer drag → the TRACKER's override (§3.5, supersedes the PID-slot drag
 // path in this app): down/move call `tk.override(p)`; the tracker emits
@@ -47,7 +49,7 @@
 
 import { defineSession, type ServerSession } from "@orchestrator/runtime";
 import { acquireTriple, type CalibratedTriple } from "@orchestrator/calibration";
-import { startActuationLoop, type ActuationLoop } from "@orchestrator/actuation";
+import { controllerNode, type PositionInput } from "@orchestrator/controller-node";
 import { DisposerBag, publishSerials, releaseLeases } from "@orchestrator/session-resources";
 import { ORIGIN_POS, radians, VOLT_TELEMETRY_INTERVAL_MS } from "@orchestrator/fovea-pipeline";
 import { createVisionWorker, type VisionWorkerHandle } from "@orchestrator/vision-worker-host";
@@ -116,10 +118,6 @@ const TRACKER_LOST_TOLERANCE = 10;
 // tan-difference — guards the seed inverse against a divide-by-~0 on the pure
 // drag case (both eyes on the same ray).
 const SEED_PARALLEL_EPS = 1e-9;
-// Topology-only downstream node id for the pid → controller edge. The actuation
-// loop abstracts the MEMS controller (no per-port id reaches the session), so
-// this is a stable placeholder the wiring shim renders as a `controller` node.
-const CONTROLLER_NODE_ID = "controller";
 
 // Adapt the native tracker meter to the `WorkloadSnapshot` shape
 // `perfSnapshot.workloads` uses (same adapter tracking-single carries) —
@@ -158,7 +156,11 @@ export default function disparityScopeSession(
   return defineSession("disparity-scope", disparity, (s) => {
     let triple: CalibratedTriple | null = null;
     const disposers = new DisposerBag();
-    let loop: ActuationLoop | null = null;
+    // The controller node's position input (push-model device transport,
+    // controller-node-and-fifo-edges §3) — opened on activate, closed on idle.
+    let posInput: PositionInput | null = null;
+    // v1 awaited-actuate round-trip ms (node `onApplied`); ~0 on v2 streaming.
+    let lastActuateMs = 0;
     let worker: VisionWorkerHandle | null = null;
     // The graph-visible PID controller node (created on activate). Holds the
     // vergence controllers + the renderer-driven override slot.
@@ -187,7 +189,7 @@ export default function disparityScopeSession(
     let overriddenTele = false;
 
     // Commanded volts — the PID node's output (control result or pinned
-    // override), read synchronously every actuation tick.
+    // override), pushed to the controller node on every result (`pushVolts`).
     let commandedVolts: VergenceVolts = { l: ORIGIN_POS, r: ORIGIN_POS };
     const actuateMsStats = new RollingStats(0.9, 2, "ms");
 
@@ -440,12 +442,20 @@ export default function disparityScopeSession(
       if (!pidNode) return;
       commandedVolts = outputOf(pidNode.step(() => controlStep(projection)));
       if (pidNode.override.engaged) status = "manual";
+      pushVolts();
     }
 
-    // --- actuation (fixed-rate, decoupled from vision fps) ----------------
+    // --- actuation (push-model: at the projection/PID result rate) --------
 
-    function targetVolts(): { l: Pos; r: Pos } {
-      return commandedVolts;
+    /** Push the current command to the controller node's position input; the
+     *  MCU stream holds it between pushes (a hold path returning the last
+     *  volts re-pushes the same value — the `StreamUpdateGate` dedupes it).
+     *  `update()`'s synchronous predicted-volt return feeds the volt telemetry
+     *  the old loop's `onVolts` carried. */
+    function pushVolts(): void {
+      if (!posInput) return;
+      const p = posInput.update({ left: commandedVolts.l, right: commandedVolts.r });
+      onVolts({ L: p.left, R: p.right }, lastActuateMs);
     }
 
     function onVolts(vv: { L: Pos; R: Pos }, actuateMs: number): void {
@@ -672,7 +682,7 @@ export default function disparityScopeSession(
         kind: "pid",
         owner: "win/disparity-scope",
         inputs: [{ from: kernelId, port: "projection" }],
-        outputs: [{ to: CONTROLLER_NODE_ID, port: "volt" }],
+        outputs: [{ to: nodeId.controller(), port: "volt" }],
         controllers: { pan, verge, v_shift },
         seed: seedFromOverride,
       });
@@ -681,7 +691,18 @@ export default function disparityScopeSession(
         pidNode = null;
       });
 
-      loop = startActuationLoop({ targetVolts, onVolts });
+      // Open the controller-node position input (was `startActuationLoop`).
+      // The PID node's `pid → controller` output edge above already covers the
+      // topology, so `from` is omitted (no duplicate edge). The immediate push
+      // reproduces the old loop's first tick: enable + drive to the current
+      // command (origin) so the mirrors are parked before the first projection.
+      posInput = controllerNode().openPosition("disparity-scope", {
+        initial: { left: commandedVolts.l, right: commandedVolts.r },
+        onApplied: (_v, actuateMs) => {
+          lastActuateMs = actuateMs;
+        },
+      });
+      pushVolts();
       // Auto-follow was left on: arm the fresh tracker at the current target.
       if (s.state.tracker_enabled) armTracker(s.state.target);
       // Surface the measured magnification (null = nominal-zoom fallback) so
@@ -691,8 +712,10 @@ export default function disparityScopeSession(
     }
 
     function idleSession(): void {
-      loop?.stop();
-      loop = null;
+      // Stop actuating FIRST (as the old loop stop did): terminate the MCU
+      // stream + disable iff the node enabled for us (fire-and-forget close).
+      void posInput?.close();
+      posInput = null;
       worker?.terminate(); // terminate before disconnect: no reads after the gate drops
       worker = null;
       trackerActive = false;
@@ -786,6 +809,9 @@ export default function disparityScopeSession(
           if (state.engaged && state.value) {
             commandedVolts = state.value;
             status = "manual";
+            // Apply immediately (the old 1 ms loop picked this up within a
+            // tick) — don't wait for the next projection to push it.
+            pushVolts();
           } else if (!state.engaged) {
             windowStart = now(); // released via the generic path → restart freeze window
           }

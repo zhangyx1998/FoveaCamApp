@@ -30,7 +30,8 @@ import type { Point2d } from "core/Geometry";
 import { calibrateDrift } from "./contract";
 
 // Mirror position is owned by the shared controller holder, not this
-// session — read it the same way `orchestrator/actuation.ts` does.
+// session — under the controller node's streaming transport the holder's
+// `pos` stays live via `applyStreamedPos` (controller-node.ts).
 function activeControllerPos(): { left: Point2d; right: Point2d } | null {
   const c = activeController();
   return c ? c.pos : null;

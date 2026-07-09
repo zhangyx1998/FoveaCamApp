@@ -6,8 +6,10 @@
 //
 // calibrate-distortion session (docs/history/refactor/orchestrator.md §7.1 S1b):
 // projector-alignment/homography validation. Three `MarkerTracker`s (L/R with
-// subpixel `internal` refinement); the center tracker's observed angle
-// continuously points both mirrors there (via `startActuationLoop`).
+// subpixel `internal` refinement); the center tracker's observed angle points
+// both mirrors there — pushed to the controller NODE's position input on each
+// center-detection tick (controller-node-and-fifo-edges §3; the MCU stream
+// holds position between detections, origin when the marker is lost).
 //
 // C-22b step 3: the per-fovea projection warp moved OFF the JS event loop. The
 // marker trackers run on their own native streams; on each fovea detection main
@@ -20,7 +22,7 @@
 import { type ServerSession } from "@orchestrator/runtime";
 import { defineResourceSession, type ResourceScope } from "@orchestrator/resource-session";
 import { acquireTriple, type CalibratedTriple } from "@orchestrator/calibration";
-import { startActuationLoop, type ActuationLoop } from "@orchestrator/actuation";
+import { controllerNode, type PositionInput } from "@orchestrator/controller-node";
 import { findHomography } from "core/Vision";
 import { area, type Point2d } from "core/Geometry";
 import { type MarkerTracker } from "@orchestrator/marker-tracker";
@@ -48,7 +50,7 @@ export default function calibrateDistortionSession(broker: PipeBroker): ServerSe
   return defineResourceSession("calibrate-distortion", calibrateDistortion, (s) => {
     let triple: CalibratedTriple | null = null;
     let trackers: Record<Role, MarkerTracker> | null = null;
-    let loop: ActuationLoop | null = null;
+    let posInput: PositionInput | null = null;
     let worker: VisionWorkerHandle | null = null;
     let centerAngle: Point2d | null = null;
     const projBusy: Record<"L" | "R", boolean> = { L: false, R: false };
@@ -66,7 +68,22 @@ export default function calibrateDistortionSession(broker: PipeBroker): ServerSe
       if (!triple?.undistort || !trackers) return;
       const c = trackers.C.centerAbsolute;
       centerAngle = c ? triple.undistort.angular([c], true)[0] : null;
+      pushTarget();
       publishDetections();
+    }
+
+    /** Push the mirror target derived from the center marker (origin when the
+     *  marker is lost — the old loop's `targetVolts` fallback). Cadence = the
+     *  center tracker's detection tick, the ONLY place `centerAngle` changes;
+     *  the MCU stream holds position between pushes. No volt telemetry — the
+     *  trackers already publish everything this app shows. */
+    function pushTarget(): void {
+      if (!posInput || !triple) return;
+      posInput.update(
+        centerAngle
+          ? { left: triple.conv.A2V.L(centerAngle), right: triple.conv.A2V.R(centerAngle) }
+          : { left: ORIGIN, right: ORIGIN },
+      );
     }
 
     // Compute the projection homography for one fovea (main, off the camera
@@ -178,18 +195,17 @@ export default function calibrateDistortionSession(broker: PipeBroker): ServerSe
       publishSerials(t.leases, taps, s);
       scope.defer(() => taps.dispose());
 
-      loop = startActuationLoop({
-        targetVolts: () => {
-          if (!centerAngle) return { l: ORIGIN, r: ORIGIN };
-          return { l: triple!.conv.A2V.L(centerAngle), r: triple!.conv.A2V.R(centerAngle) };
-        },
-        onVolts() {
-          /* no telemetry needed beyond what the trackers already publish */
-        },
+      // Controller-node position input (was `startActuationLoop`): the
+      // immediate push reproduces the old loop's first tick — enable + park at
+      // origin until the first center detection retargets the mirrors.
+      posInput = controllerNode().openPosition("calibrate-distortion", {
+        from: nodeId.detect(t.leases.C.camera.serial),
+        initial: { left: ORIGIN, right: ORIGIN },
       });
+      pushTarget();
       scope.defer(() => {
-        loop?.stop();
-        loop = null;
+        void posInput?.close(); // terminate the MCU stream + disable-iff-we-enabled
+        posInput = null;
       });
       s.telemetry({ ready: true });
     }
