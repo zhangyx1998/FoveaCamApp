@@ -14,6 +14,13 @@ work; it must never regress kill()-only teardown.
    relaunch).
 2. **Orchestrator process recreated per app instance**, so cleanup is
    guaranteed by process death, not by in-process teardown bookkeeping.
+   **AMENDED (user, 2026-07-09, post-audit)**: keep ONE persistent
+   orchestrator process; close the audit's five gaps instead (main-crash
+   janitor coverage, darwin window-all-closed teardown, crash-report
+   surface, deterministic clean-exit handshake, window-first quit order).
+   Per-app-instance recreation rejected on the audit's economics — native
+   addon reload + camera re-lease + clock re-convergence on every app
+   switch buys cleanup the janitor already provides.
    *Planner reading (flag at dispatch if wrong)*: one orchestrator process
    per app ACTIVATION — launching an app (manual-control, multi-fovea, a
    calibrate tool…) gets a fresh orchestrator; closing the app's window(s)
