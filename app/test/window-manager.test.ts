@@ -161,9 +161,7 @@ describe("WindowManager", () => {
   // Switch inheritance (UX, 2026-07-08): the replacement window lands on the
   // same bounds + full-screen/maximized state as the window it replaces — in
   // BOTH directions (welcome→app at switch; app→welcome via the welcome rule,
-  // answered from the adapter's last-known snapshot post-destroy). The manager
-  // only THREADS the captured state; main.ts's spawner demotes fullscreen to
-  // maximized (never spawns full-screen — ruling, 2026-07-09).
+  // answered from the adapter's last-known snapshot post-destroy).
   it("welcome→app switch inherits bounds + fullscreen from the welcome window", async () => {
     const { manager, spawned } = harness();
     const welcome = manager.ensureWelcome() as FakeWindow;
