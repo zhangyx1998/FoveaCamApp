@@ -17,6 +17,10 @@ export const ROLE = {
   R: "Right Fovea",
 };
 
+// L/C/R role colors. This is the source of truth for JS consumers; it stays a
+// plain constant (no CSS-var read) because it also loads in the DOM-less
+// orchestrator process. The CSS tokens `--role-l/-c/-r` in `src/tokens.css`
+// MIRROR these values — keep the two in lockstep.
 export const THEME = {
   L: "cyan",
   C: "orange",

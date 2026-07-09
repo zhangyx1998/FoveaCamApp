@@ -506,13 +506,13 @@ const clockRows = computed(() => {
   align-items: center;
   gap: 0.5rem;
   min-width: 0; // let the path truncate instead of pushing the bar wider
-  font-family: "Cascadia Code", "Courier New", Courier, monospace;
+  font-family: var(--font-mono);
 
   button,
   select {
-    background: #222;
-    color: #ddd;
-    border: 1px solid #333;
+    background: var(--bg-app);
+    color: var(--text-strong);
+    border: 1px solid var(--border);
     border-radius: 4px;
     padding: 0.15rem 0.5rem;
     font-size: 0.72rem;
@@ -520,7 +520,7 @@ const clockRows = computed(() => {
     cursor: pointer;
     white-space: nowrap;
     &:hover {
-      background: #2a2a2a;
+      background: var(--bg-elevated);
     }
   }
 
@@ -557,9 +557,10 @@ const clockRows = computed(() => {
   right: 0;
   bottom: 0;
   overflow: auto;
+  /* profiler panel is intentionally darker than app chrome (its own sub-theme) */
   background: #0b0b0d;
-  color: #ddd;
-  font-family: "Cascadia Code", "Courier New", Courier, monospace;
+  color: var(--text-strong);
+  font-family: var(--font-mono);
   padding: 1rem 1.5rem 3rem;
   box-sizing: border-box;
 
@@ -569,9 +570,9 @@ const clockRows = computed(() => {
       font-size: 0.85rem;
       text-transform: uppercase;
       letter-spacing: 0.05em;
-      color: #999;
+      color: var(--text-muted);
       margin: 0 0 0.5rem;
-      border-bottom: 1px solid #222;
+      border-bottom: 1px solid var(--bg-app);
       padding-bottom: 0.25rem;
     }
   }
@@ -592,7 +593,7 @@ const clockRows = computed(() => {
     label {
       display: block;
       font-size: 0.75rem;
-      color: #aaa;
+      color: var(--text-muted);
       margin-bottom: 0.25rem;
     }
   }
@@ -603,7 +604,7 @@ const clockRows = computed(() => {
   }
 
   .dim {
-    color: #777;
+    color: var(--text-disabled);
   }
 
   // Uniform workload sections (workload-metering.md §4). The utilization
@@ -634,7 +635,7 @@ const clockRows = computed(() => {
 
       .name {
         min-width: 16rem;
-        color: #ddd;
+        color: var(--text-strong);
       }
 
       .saturated-badge {
@@ -653,17 +654,18 @@ const clockRows = computed(() => {
         flex: 0 0 160px;
         height: 8px;
         border-radius: 4px;
-        background: #1a1a1a;
+        background: var(--bg-panel-alt);
         overflow: hidden;
 
         .util-fill {
           height: 100%;
           border-radius: 4px;
-          background: #0af;
+          background: var(--accent-bright);
           transition: width 0.3s ease;
           &.warn {
-            background: #fa0;
+            background: var(--warn);
           }
+          // profiler "high/saturated" coral — its own alarm hue, kept literal
           &.high {
             background: #f56;
           }
@@ -672,7 +674,7 @@ const clockRows = computed(() => {
 
       .util-label {
         font-size: 0.8rem;
-        color: #aaa;
+        color: var(--text-muted);
         white-space: nowrap;
       }
     }
@@ -685,7 +687,7 @@ const clockRows = computed(() => {
         padding: 0.05rem 1rem 0.05rem 0;
       }
       .dir {
-        color: #777;
+        color: var(--text-disabled);
         text-transform: uppercase;
         font-size: 0.7rem;
       }
@@ -697,8 +699,9 @@ const clockRows = computed(() => {
       // > 2× nominal period) turns amber + bold so it reads at a glance — the
       // number is always printed, so the tint is redundant, never color-alone.
       .interval {
-        color: #888;
+        color: var(--text-faint);
       }
+      // profiler stall amber — a distinct "stalled stream" hue, kept literal
       .interval.stall {
         color: #e0a030;
         font-weight: 600;
@@ -713,13 +716,13 @@ const clockRows = computed(() => {
       // (warn/high) is the only status encoding in this section.
       .drop-reason {
         margin-left: 0.75rem;
-        color: #aaa;
+        color: var(--text-muted);
       }
     }
   }
 
   .hint {
-    color: #777;
+    color: var(--text-disabled);
     font-style: italic;
     font-size: 0.8rem;
   }
@@ -732,10 +735,10 @@ const clockRows = computed(() => {
     td {
       text-align: left;
       padding: 0.2rem 0.6rem 0.2rem 0;
-      border-bottom: 1px solid #1a1a1a;
+      border-bottom: 1px solid var(--bg-panel-alt);
     }
     th {
-      color: #999;
+      color: var(--text-muted);
       font-weight: 500;
     }
   }

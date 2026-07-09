@@ -48,6 +48,8 @@ function reopen(): void {
 </template>
 
 <style scoped lang="scss">
+/* One app error identity (P2): --danger family, --font-mono. A fixed overlay
+   banner (does not reflow content) that is instantly visible — no fade-in. */
 .crash-report {
   position: fixed;
   z-index: 9999;
@@ -60,12 +62,13 @@ function reopen(): void {
   gap: 16px;
   padding: 12px 16px;
   border-radius: 8px;
-  background: #2a1416;
-  border: 1px solid #7a2a2f;
-  color: #f2d7d9;
+  background: var(--danger-bg);
+  border: 1px solid var(--danger-strong);
+  color: var(--danger-text);
+  font-family: var(--font-mono);
   font-size: 13px;
   line-height: 1.4;
-  box-shadow: 0 6px 24px #0008;
+  box-shadow: 0 6px 24px var(--shadow);
 }
 
 .crash-body {
@@ -80,7 +83,7 @@ function reopen(): void {
   width: 9px;
   height: 9px;
   border-radius: 50%;
-  background: #e5484d;
+  background: var(--danger-strong);
 }
 
 .crash-text {
@@ -92,14 +95,13 @@ function reopen(): void {
   cursor: pointer;
   padding: 6px 12px;
   border-radius: 6px;
-  border: 1px solid #7a2a2f;
-  background: #3a1a1d;
-  color: #f2d7d9;
+  border: 1px solid var(--danger-strong);
+  background: transparent;
+  color: var(--danger-text);
   font: inherit;
-  transition: background 0.1s;
 
   &:hover {
-    background: #4a2226;
+    background: var(--tint-1);
   }
 }
 </style>

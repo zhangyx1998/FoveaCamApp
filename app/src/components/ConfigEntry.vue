@@ -23,18 +23,18 @@
   }
 
   &:hover {
-    border-bottom: 1.5px solid #fff4;
+    border-bottom: 1.5px solid var(--tint-4);
   }
 
   &:focus-within {
-    border-bottom: 1.5px solid #fff8;
+    border-bottom: 1.5px solid var(--tint-8);
   }
 
   :deep(input) {
     text-align: center;
     background: none;
     border: 1.5px solid transparent;
-    color: #ccc;
+    color: var(--text-dim);
     outline: none !important;
     font-size: inherit;
     font-family: inherit;
@@ -44,14 +44,14 @@
     display: inline-block;
     font-family: inherit;
     font-size: inherit;
-    outline: 1px solid #666;
+    outline: 1px solid var(--border-muted);
     border: none;
     background: none;
     border-radius: 4px;
     padding: 0.2em 1ch;
     color: inherit;
     &:focus {
-      outline: 1px solid #08c;
+      outline: 1px solid var(--accent);
     }
   }
 
@@ -60,19 +60,19 @@
     height: 2em;
     background: none;
     border: 1px solid transparent;
-    color: #ccc;
+    color: var(--text-dim);
     cursor: pointer;
     font-size: inherit;
     font-family: inherit;
     padding: 0.2em 0.5em;
     border-radius: 4px;
     &:hover {
-      background-color: #fff1;
-      color: #fff8;
-      border-color: #fff4;
+      background-color: var(--tint-1);
+      color: var(--tint-8);
+      border-color: var(--tint-4);
     }
     &:active {
-      background-color: #fff2;
+      background-color: var(--tint-2);
       color: #fff9;
       border-color: #fff6;
     }

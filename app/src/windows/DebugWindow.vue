@@ -61,7 +61,7 @@ watchEffect(async () => {
 }
 
 .notice {
-  color: #888;
+  color: var(--text-faint);
   font-size: 1.1em;
   text-align: center;
   padding: 2em;

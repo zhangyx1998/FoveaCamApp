@@ -1,0 +1,94 @@
+/* -------------------------------------------------------------------------
+ * FoveaCamApp — design tokens (single source of truth for color + type)
+ *
+ * Proposal P1 (semantic color tokens) + P9 (font token), grounded in
+ * docs/design/design-language.md. This file is the CONTRACT the rest of the
+ * renderer migrates onto; in-flight lanes (modules/**, capture/**, viewer/**)
+ * migrate here in a later sweep.
+ *
+ * Conventions
+ * -----------
+ * - Naming: kebab-case `--<group>-<role>`. Semantic role first (`--bg-app`,
+ *   `--text-muted`, `--danger`), not by hue. Migrations reference these, never
+ *   a raw hex.
+ * - Values are the app's EXISTING canonical values — this is a consolidation,
+ *   not a reskin. Where the survey found the same role expressed as many hexes,
+ *   ONE canonical value was chosen (see notes per group) and the rest collapse
+ *   onto it. Near-identical grey rungs (#999→#aaa, #bbb→#ccc, #777→#888,
+ *   #555→#666) collapse to the nearest tier; these are sub-perceptual shifts
+ *   flagged in the wave report.
+ * - Dark-lab rig: darks stay dark (glare control), semantic accents stay
+ *   instantly legible at distance.
+ *
+ * L/C/R role colors mirror `@lib/camera-config` `THEME` (which is a plain JS
+ * constant because it also loads in the DOM-less orchestrator process, so it
+ * cannot read a CSS var). Keep the two in lockstep — see the note there.
+ * ------------------------------------------------------------------------- */
+
+:root {
+    /* ---- Typography (P9) ------------------------------------------------ */
+    /* The one canonical monospace stack. Kills the re-declared literals and
+       ErrorBoundary's foreign Consolas/Monaco stack. */
+    --font-mono: "Cascadia Code", "Courier New", Courier, monospace;
+    /* Minimal size scale harvested from the survey's recurring sizes. */
+    --fs-sm: 0.8em;     /* overlay/label small text */
+    --fs-base: 1em;
+    --fs-lg: 1.4rem;    /* section headings */
+    --fs-xl: 2rem;      /* page/crash headings */
+
+    /* ---- Surfaces (dark ramp) ----------------------------------------- */
+    --bg-canvas: black;      /* stream / video backdrop */
+    --bg-chrome: #111;       /* window chrome, titlebars, stream gutter */
+    --bg-panel-alt: #1a1a1a; /* recessed panels, code/detail blocks */
+    --bg-app: #222;          /* app + control-panel surface (body bg) */
+    --bg-elevated: #2a2a2a;  /* raised / hover surface */
+
+    /* ---- Dividers / borders ------------------------------------------- */
+    --border: #333;          /* default panel divider */
+    --border-strong: #444;
+    --border-muted: #666;    /* control outline, disabled edge */
+
+    /* ---- Text tiers (on dark) ----------------------------------------- */
+    --text: #fff;            /* base body text */
+    --text-bright: #eee;     /* active / emphasis */
+    --text-strong: #ddd;     /* strong secondary */
+    --text-dim: #ccc;        /* secondary */
+    --text-muted: #aaa;      /* labels */
+    --text-faint: #888;      /* tertiary / idle */
+    --text-disabled: #666;   /* disabled / pending */
+
+    /* ---- Semantic accents --------------------------------------------- */
+    /* accent: #08c won — the closest thing to a "primary" (TitleBar active,
+       ConfigEntry select focus, calibrate primary button). #0af is its
+       brighter hover/active sibling. */
+    --accent: #08c;
+    --accent-bright: #0af;
+    /* ok: #4caf50 won — it is the RULED progress "done" green (ProgressMonitor).
+       Collapses the 7 greens for "good". */
+    --ok: #4caf50;
+    /* warn: #fa0 won — the dominant amber accent (welcome/viewer/profiler). */
+    --warn: #fa0;
+    /* danger family (P2): one error identity. #a00 = solid stop/action red
+       (Record/Save action buttons, the app's own red). Support tiers for the
+       banner/crash look derive a coherent dark-red family. Collapses the 8
+       error reds. */
+    --danger: #a00;          /* solid stop / action / invalid red */
+    --danger-strong: #c0392b;/* border / emphasis on a dark error banner */
+    --danger-text: #ff9b8f;  /* readable error text on a dark fill */
+    --danger-bg: #2a1416;    /* dark red fill behind an error surface */
+
+    /* ---- State tints (white-on-dark overlays) ------------------------- */
+    --tint-1: #fff1;         /* faintest hover/border wash */
+    --tint-2: #fff2;
+    --tint-3: #fff3;
+    --tint-4: #fff4;
+    --tint-8: #fff8;         /* strongest resting affordance */
+
+    /* ---- Elevation ---------------------------------------------------- */
+    --shadow: #0008;         /* drop shadow on floating surfaces */
+
+    /* ---- L/C/R role colors (mirror @lib/camera-config THEME) ---------- */
+    --role-l: cyan;          /* Left Fovea */
+    --role-c: orange;        /* Center Wide */
+    --role-r: greenyellow;   /* Right Fovea */
+}

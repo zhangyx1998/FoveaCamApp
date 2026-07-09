@@ -125,15 +125,16 @@ function handleClick() {
   cursor: pointer;
   color: inherit;
   border-radius: 4px;
-  transition: all 0.1s;
+  // Critical control (record toggle): instant hover feedback, no transition
+  // (ruled principle: realtime feedback / snap over smooth).
   outline: 1px solid transparent;
 
   &:hover {
-    background: #fff1;
+    background: var(--tint-1);
   }
 
   &:not(.active):not(:disabled):hover {
-    outline: 1px solid #666;
+    outline: 1px solid var(--border-muted);
   }
   .circle-outline {
     border-radius: 50%;
@@ -151,7 +152,7 @@ function handleClick() {
   }
 
   &.active .circle-outline {
-    color: #f33;
+    color: var(--danger-strong);
     animation: record-blink 1s steps(1, end) infinite;
   }
 
@@ -178,9 +179,10 @@ function handleClick() {
   right: 0;
   margin-top: 4px;
   padding: 0.5em 0.8em;
+  /* translucent panel wash (kept literal — no semantic token for the alpha) */
   background: #222e;
   backdrop-filter: blur(8px);
-  border: 1px solid #fff3;
+  border: 1px solid var(--tint-3);
   border-radius: 4px;
   white-space: nowrap;
   font-size: 0.75em;
@@ -188,9 +190,9 @@ function handleClick() {
   pointer-events: none;
 
   th {
-    font-family: monospace;
+    font-family: var(--font-mono);
     padding: 0 0.5ch 0.2em;
-    color: #778;
+    color: var(--text-faint);
     font-weight: 600;
     text-align: right;
     &:first-child {
@@ -199,29 +201,31 @@ function handleClick() {
   }
 
   td {
-    font-family: monospace;
+    font-family: var(--font-mono);
     padding: 0 0.5ch;
     &.stream-name {
-      color: #aaa;
+      color: var(--text-muted);
     }
     &.stream-pub {
-      color: #ccc;
+      color: var(--text-dim);
       text-align: right;
     }
     &.stream-frames {
-      color: #fff;
+      color: var(--text);
       text-align: right;
     }
     &.stream-fps {
-      color: #8f8;
+      color: var(--ok);
       text-align: right;
     }
+    // Telemetry categorical accents (bytes blue / drop-cause dim red / drops-ok
+    // dim green) kept literal — a per-column palette, not a semantic role.
     &.stream-bytes {
       color: #8cf;
       text-align: right;
     }
     &.stream-dropped {
-      color: #f66;
+      color: var(--danger-text);
       text-align: right;
       &.ok {
         color: #575;

@@ -36,13 +36,13 @@ const action = action_singleton;
     flex-direction: column;
     justify-content: center;
     align-items: center;
-    background-color: #222;
+    background-color: var(--bg-app);
     user-select: none;
 }
 
 .action {
     margin: 2em 0;
-    color: #888;
+    color: var(--text-faint);
 }
 
 .spinner {

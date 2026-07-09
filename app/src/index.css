@@ -1,6 +1,8 @@
+@import "./tokens.css";
+
 :root {
-    font-family: "Cascadia Code", "Courier New", Courier, monospace;
-    color: white;
+    font-family: var(--font-mono);
+    color: var(--text);
 }
 
 * {
@@ -31,7 +33,7 @@
 }
 
 body {
-    background-color: #222;
+    background-color: var(--bg-app);
     margin: 0;
     padding: 0;
 }
@@ -48,6 +50,6 @@ body {
 .container canvas {
     width: 100%;
     height: auto;
-    background-color: black;
+    background-color: var(--bg-canvas);
     margin: 0.2em 0;
 }

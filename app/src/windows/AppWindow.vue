@@ -145,7 +145,7 @@ window.addEventListener("keydown", (e) => {
 }
 
 .unknown-app {
-  color: #999;
+  color: var(--text-muted);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -167,8 +167,8 @@ window.addEventListener("keydown", (e) => {
   outline: 1px solid transparent;
 
   &:not(:disabled):hover {
-    background: #fff1;
-    outline: 1px solid #666;
+    background: var(--tint-1);
+    outline: 1px solid var(--border-muted);
   }
 
   &:disabled {

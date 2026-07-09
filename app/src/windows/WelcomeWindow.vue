@@ -180,7 +180,7 @@ function openProfiler() {
         <button
           v-for="a in applications"
           :key="a.id"
-          :style="{ '--color': a.dev ? '#f6f' : '#0af' }"
+          :style="{ '--color': a.dev ? '#f6f' : 'var(--accent-bright)' }"
           @click="open(a.id)"
         >
           <Icon :icon="iconOf[a.id]" /> {{ a.title }}
@@ -191,7 +191,7 @@ function openProfiler() {
         <button
           v-for="a in calibration"
           :key="a.id"
-          style="--color: #fa0"
+          style="--color: var(--warn)"
           @click="open(a.id)"
         >
           <Icon :icon="iconOf[a.id]" /> {{ a.title }}
@@ -202,7 +202,7 @@ function openProfiler() {
         <button
           v-for="a in utilities"
           :key="a.id"
-          style="--color: #fa0"
+          style="--color: var(--warn)"
           @click="open(a.id)"
         >
           <Icon :icon="iconOf[a.id]" /> {{ a.title }}
@@ -236,7 +236,7 @@ function openProfiler() {
   flex-grow: 1;
   display: flex;
   flex-direction: column;
-  background-color: #222;
+  background-color: var(--bg-app);
 
   .preview {
     position: relative;
@@ -270,7 +270,7 @@ function openProfiler() {
     h1 {
       font-size: 2rem;
       font-weight: normal;
-      color: #ccc;
+      color: var(--text-dim);
     }
   }
 
@@ -278,38 +278,38 @@ function openProfiler() {
     display: flex;
     align-items: center;
     gap: 1ch;
-    color: #bbb;
+    color: var(--text-dim);
     padding: 0.6em 1em;
-    border-top: 1px solid #fff2;
+    border-top: 1px solid var(--tint-2);
     font-size: 0.9em;
 
     .dot {
       width: 0.7em;
       height: 0.7em;
       border-radius: 50%;
-      background: #a33;
+      background: var(--danger);
       &.ok {
-        background: #3a3;
+        background: var(--ok);
       }
     }
 
     select {
       margin-left: auto;
-      background: #111;
-      color: #ccc;
-      border: 1px solid #444;
+      background: var(--bg-chrome);
+      color: var(--text-dim);
+      border: 1px solid var(--border-strong);
       border-radius: 3px;
     }
   }
 }
 
 .modules {
-  background-color: #1a1a1a;
+  background-color: var(--bg-panel-alt);
   display: flex;
   flex-direction: column;
   justify-content: flex-start;
   min-width: 32ch;
-  border-left: 1px solid #fff4;
+  border-left: 1px solid var(--tint-4);
   overflow-y: auto;
   --color: white;
 
@@ -319,12 +319,12 @@ function openProfiler() {
     padding: 0.5rem 0;
     margin: 0.5rem 0;
     &:not(:first-child) {
-      border-top: 1px solid #fff4;
+      border-top: 1px solid var(--tint-4);
     }
     h2 {
       font-size: 1em;
       margin: 1rem 1.5rem;
-      color: #ccc;
+      color: var(--text-dim);
       font-weight: bolder;
     }
   }
@@ -346,18 +346,18 @@ function openProfiler() {
     &:hover {
       filter: saturate(1);
       border-left: 0.8ch solid var(--color);
-      background-color: #fff1;
+      background-color: var(--tint-1);
     }
 
     &:active {
       filter: saturate(1);
       border-left: 0.8ch solid var(--color);
-      background-color: #fff2;
+      background-color: var(--tint-2);
     }
   }
 
   .footnote {
-    color: #666;
+    color: var(--text-disabled);
     text-align: center;
     padding: 1em 0;
   }

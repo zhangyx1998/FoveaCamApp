@@ -100,7 +100,7 @@ const idle = computed(() => !!source && source.telemetry.ready === false);
 }
 
 .notice {
-  color: #888;
+  color: var(--text-faint);
   font-size: 1.1em;
   text-align: center;
   padding: 2em;
@@ -110,9 +110,10 @@ const idle = computed(() => !!source && source.telemetry.ready === false);
   position: absolute;
   top: 0.8em;
   right: 1em;
-  color: #ccc;
+  color: var(--text-dim);
+  /* translucent black scrim (kept literal — alpha over canvas) */
   background: #000a;
-  border: 1px solid #fff3;
+  border: 1px solid var(--tint-3);
   border-radius: 3px;
   padding: 0.2em 0.8em;
   font-size: 0.85em;

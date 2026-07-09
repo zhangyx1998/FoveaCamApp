@@ -212,7 +212,7 @@ function track(e: MouseEvent) {
 
 <style scoped lang="scss">
 svg {
-  font-family: "Cascadia Code", "Courier New", Courier, monospace;
+  font-family: var(--font-mono);
   --reactive-color: gray;
 
   &:hover,

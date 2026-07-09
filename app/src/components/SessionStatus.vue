@@ -46,14 +46,16 @@ watch(
 </template>
 
 <style scoped lang="scss">
+/* Shares the one app error identity (P2): --danger family, instantly visible
+   (no fade), role="alert". */
 .session-error {
   margin: 0.5em auto;
   max-width: 60ch;
   padding: 0.5em 1ch;
   border-radius: 0.5em;
-  background: #c0392b22;
-  border: 1px solid #c0392b;
-  color: #ff9b8f;
+  background: var(--danger-bg);
+  border: 1px solid var(--danger-strong);
+  color: var(--danger-text);
   text-align: center;
   font-size: 0.9em;
 }

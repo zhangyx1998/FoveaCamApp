@@ -583,7 +583,7 @@ onBeforeUnmount(() => {
     max-width: 32rem;
 
     .hover-title {
-      font-family: monospace;
+      font-family: var(--font-mono);
       color: #d8dde3;
       white-space: nowrap;
       margin-bottom: 3px;
@@ -604,7 +604,7 @@ onBeforeUnmount(() => {
         text-align: right;
       }
       .v {
-        font-family: monospace;
+        font-family: var(--font-mono);
         color: #c3cad2;
       }
     }

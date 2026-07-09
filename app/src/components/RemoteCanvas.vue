@@ -131,33 +131,33 @@ watch(
   align-items: center;
   justify-content: center;
   gap: 1em;
-  background-color: #0008;
+  background-color: var(--shadow);
   backdrop-filter: blur(4px);
   --size: calc(0.8 * max(100vh, 100vw));
 }
 svg {
-  background-color: black;
+  background-color: var(--bg-canvas);
   width: var(--size);
   height: calc(var(--size) * 9 / 16);
-  border: 2px solid #aaa;
+  border: 2px solid var(--text-muted);
   &:hover {
-    border-color: #08c;
+    border-color: var(--accent);
   }
 }
 input {
   width: var(--size);
   padding: 0.5em;
   font-size: 1em;
-  color: white;
-  background-color: #0008;
+  color: var(--text);
+  background-color: var(--shadow);
   border: none;
-  border-bottom: 2px solid #555;
+  border-bottom: 2px solid var(--border-muted);
   outline: none;
   &:hover {
-    border-bottom-color: #aaa;
+    border-bottom-color: var(--text-muted);
   }
   &:focus {
-    border-bottom-color: #08c;
+    border-bottom-color: var(--accent);
   }
 }
 </style>

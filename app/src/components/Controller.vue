@@ -169,10 +169,10 @@ div.indicator {
         .dropdown-intent {
             margin: 0.2em;
             padding: 0.5em;
-            background-color: #222;
-            border: 1px solid #444;
+            background-color: var(--bg-app);
+            border: 1px solid var(--border-strong);
             border-radius: 4px;
-            color: white;
+            color: var(--text);
         }
 
         .title {
@@ -204,7 +204,7 @@ div.indicator {
             text-align: center;
             background: none;
             border: 2px solid transparent;
-            color: #ccc;
+            color: var(--text-dim);
             outline: none !important;
             font-size: inherit;
             font-family: inherit;

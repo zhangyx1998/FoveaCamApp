@@ -210,13 +210,13 @@ const projection = computed(() =>
 <style scoped lang="scss">
 .container {
   position: relative;
-  background-color: black;
+  background-color: var(--bg-canvas);
   background: repeating-linear-gradient(
     45deg,
-    #111,
-    #111 10px,
-    #222 10px,
-    #222 20px
+    var(--bg-chrome),
+    var(--bg-chrome) 10px,
+    var(--bg-app) 10px,
+    var(--bg-app) 20px
   );
   overflow: visible;
   outline: 2px solid var(--theme, gray);
@@ -263,11 +263,11 @@ const projection = computed(() =>
   }
 
   &.no-stream {
-    outline-color: #444 !important;
+    outline-color: var(--border-strong) !important;
   }
 
   .no-stream-text {
-    color: #444;
+    color: var(--border-strong);
     justify-content: center;
     align-items: center;
     font-size: 2em;
@@ -289,8 +289,8 @@ const projection = computed(() =>
   background-color: rgba(0, 0, 0, 0.5);
   backdrop-filter: blur(4px) saturate(50%) brightness(80%);
   -webkit-backdrop-filter: blur(4px) saturate(50%) brightness(80%);
-  color: white;
-  font-family: "Cascadia Code", "Courier New", Courier, monospace;
+  color: var(--text);
+  font-family: var(--font-mono);
   z-index: 10;
   white-space: pre;
 }

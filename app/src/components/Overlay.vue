@@ -58,15 +58,15 @@ button {
   outline: 1px solid transparent;
 
   &.active {
-    outline: 2px solid #3af;
+    outline: 2px solid var(--accent-bright);
   }
 
   &:hover {
-    background: #fff1;
+    background: var(--tint-1);
   }
 
   &:not(.active):not(:disabled):hover {
-    outline: 1px solid #666;
+    outline: 1px solid var(--border-muted);
   }
 
   &:disabled {

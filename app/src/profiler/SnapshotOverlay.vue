@@ -79,9 +79,10 @@ function reveal(): void {
   right: 10px;
   min-width: 50ch;
   max-width: 100ch;
+  /* translucent panel wash (kept literal — alpha on --bg-app) */
   background: #222e;
   backdrop-filter: blur(12px);
-  border: 1px solid #fff3;
+  border: 1px solid var(--tint-3);
   border-radius: 6px;
   padding: 0.8em 1em;
   display: flex;
@@ -91,28 +92,29 @@ function reveal(): void {
 }
 
 .title {
-  color: #aaa;
+  color: var(--text-muted);
   font-weight: 600;
   font-size: 0.9em;
   display: flex;
   align-items: center;
   gap: 0.6ch;
   &.error {
-    color: #f88;
+    color: var(--danger-text);
   }
 }
 
 .path-row {
-  border: 1px solid #fff3;
+  border: 1px solid var(--tint-3);
   border-radius: 4px;
-  background-color: #fff1;
+  background-color: var(--tint-1);
   padding: 0.3em 0.5em;
-  font-family: monospace;
-  color: white;
+  font-family: var(--font-mono);
+  color: var(--text);
   word-break: break-all;
   user-select: text; // copyable
+  // Invalid: single --danger signal (P2c — dropped the yellow double-signal).
   &.error {
-    color: #ff0;
+    color: var(--danger-text);
   }
 }
 
@@ -129,16 +131,16 @@ button.action {
   padding: 0.4em 0.8em;
   border: none;
   border-radius: 4px;
-  background: #fff2;
-  color: white;
+  background: var(--tint-2);
+  color: var(--text);
   font-weight: 600;
   font-size: 0.9em;
   cursor: pointer;
   &.green {
-    background: #080;
+    background: var(--ok);
   }
   &.red {
-    background: #a00;
+    background: var(--danger);
   }
   &:hover {
     filter: brightness(1.2);

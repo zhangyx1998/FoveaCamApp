@@ -47,7 +47,7 @@ const emit = defineEmits<{ close: [] }>();
   display: flex;
   align-items: center;
   justify-content: center;
-  // Dark backdrop consistent with the app's #111/#222 palette.
+  // Dark backdrop consistent with the app's chrome (--bg-chrome at ~80% alpha).
   background: #111c;
   backdrop-filter: blur(2px);
 }
@@ -59,21 +59,21 @@ const emit = defineEmits<{ close: [] }>();
   width: 2em;
   height: 2em;
   padding: 0;
-  border: 1px solid #666;
+  border: 1px solid var(--border-muted);
   border-radius: 4px;
-  background: #222;
-  color: #ccc;
+  background: var(--bg-app);
+  color: var(--text-dim);
   font-size: 1.1em;
   line-height: 1;
   cursor: pointer;
-  // The override is invisible until the user hovers the overlay — then it
-  // reveals, offering the escape hatch to the partially-loaded app.
-  opacity: 0;
+  // Dim resting affordance (ruled principle: prefer dim-resting over invisible)
+  // — the escape hatch stays discoverable, intensifying on overlay hover.
+  opacity: 0.35;
   transition: opacity 0.15s;
 
   &:hover {
-    background: #333;
-    color: #fff;
+    background: var(--bg-elevated);
+    color: var(--text);
   }
 }
 
@@ -95,16 +95,16 @@ const emit = defineEmits<{ close: [] }>();
   align-items: center;
   gap: 0.75ch;
   font-size: 1.05em;
-  // pending: dimmed foreground.
-  color: #777;
+  // Ruled progress vocab: pending (dim) → active (bright) → done (ok green).
+  color: var(--text-faint);
   transition: color 0.15s;
 
   &.active {
-    color: #eee; // bright foreground
+    color: var(--text-bright);
   }
 
   &.done {
-    color: #4caf50; // green
+    color: var(--ok);
   }
 }
 
@@ -122,7 +122,7 @@ const emit = defineEmits<{ close: [] }>();
   width: 1em;
   height: 1em;
   border: 2px solid #eee5;
-  border-top-color: #eee;
+  border-top-color: var(--text-bright);
   border-radius: 50%;
   animation: progress-spin 0.8s linear infinite;
 }

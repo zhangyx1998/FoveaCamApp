@@ -103,9 +103,10 @@ async function start() {
   right: 10px;
   min-width: 70ch;
   max-width: 120ch;
+  /* translucent panel wash (kept literal — no semantic token for the alpha) */
   background: #222e;
   backdrop-filter: blur(12px);
-  border: 1px solid #fff3;
+  border: 1px solid var(--tint-3);
   border-radius: 6px 6px;
   padding: 0.8em 1em;
   display: flex;
@@ -115,7 +116,7 @@ async function start() {
 }
 
 .title {
-  color: #aaa;
+  color: var(--text-muted);
   font-weight: 600;
   font-size: 0.9em;
 }
@@ -123,16 +124,17 @@ async function start() {
 .path-row {
   display: flex;
   align-items: center;
-  border: 1px solid #fff3;
+  border: 1px solid var(--tint-3);
   border-radius: 4px;
-  background-color: #fff1;
+  background-color: var(--tint-1);
   padding: 0.3em 0.5em;
-  font-family: monospace;
+  font-family: var(--font-mono);
   &:focus-within {
-    outline: 1px solid #0af;
+    outline: 1px solid var(--accent-bright);
   }
+  // Invalid: a single --danger signal (P2c — dropped the yellow double-signal).
   &.invalid {
-    outline: 1px solid red !important;
+    outline: 1px solid var(--danger) !important;
   }
   .directory {
     flex: 1;
@@ -140,22 +142,22 @@ async function start() {
   }
   .separator {
     padding: 0 0.3ch;
-    color: #666;
+    color: var(--text-disabled);
   }
   .sequence {
     flex-shrink: 0;
   }
   .invalid,
   .invalid input {
-    color: #ff0;
+    color: var(--danger-text);
   }
   input {
-    font-family: monospace;
+    font-family: var(--font-mono);
     font-size: 1em;
     width: 100%;
     border: none;
     background: none;
-    color: white;
+    color: var(--text);
     outline: none;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -175,21 +177,21 @@ button.action {
   padding: 0.4em 0.8em;
   border: none;
   border-radius: 4px;
-  color: white;
+  color: var(--text);
   font-weight: 600;
   font-size: 0.9em;
   cursor: pointer;
   &.green {
-    background: #080;
+    background: var(--ok);
   }
   &.red {
-    background: #a00;
+    background: var(--danger);
   }
   &:hover:not(:disabled) {
     filter: brightness(1.2);
   }
   &:disabled {
-    background-color: #fff2;
+    background-color: var(--tint-2);
     cursor: not-allowed;
     opacity: 0.5;
   }

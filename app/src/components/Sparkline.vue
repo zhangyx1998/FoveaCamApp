@@ -54,8 +54,8 @@ watch(() => [props.values, props.max, props.color], draw, { deep: true, immediat
 <style scoped lang="scss">
 .sparkline {
   display: block;
-  background: #111;
-  border: 1px solid #222;
+  background: var(--bg-chrome);
+  border: 1px solid var(--bg-app);
   border-radius: 2px;
 }
 </style>

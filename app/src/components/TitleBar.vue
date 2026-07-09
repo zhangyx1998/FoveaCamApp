@@ -165,8 +165,8 @@ onUnmounted(() => {
   align-items: center;
   justify-content: flex-start;
   user-select: none;
-  background-color: #111;
-  border-bottom: 1px solid #222;
+  background-color: var(--bg-chrome);
+  border-bottom: 1px solid var(--bg-app);
   flex-wrap: nowrap;
   overflow: visible;
   box-sizing: border-box;
@@ -178,7 +178,7 @@ onUnmounted(() => {
   }
 
   .title {
-    color: white;
+    color: var(--text);
     position: relative;
     padding: 0.2ch 0.8ch;
     border-radius: 0.4ch;
@@ -194,11 +194,11 @@ onUnmounted(() => {
     // tooltip in any case; non-home-button titles are draggable chrome.
     &.home-button:hover {
       cursor: pointer;
-      background-color: #333;
+      background-color: var(--border);
     }
 
     &.home-button:active {
-      outline: 2px solid #08c;
+      outline: 2px solid var(--accent);
     }
   }
 
@@ -207,7 +207,7 @@ onUnmounted(() => {
   // events to land on the element. They keep .draggable's full bar height
   // (maximizes the grab area) and center their text vertically themselves.
   .connector {
-    color: #888;
+    color: var(--text-faint);
     &.draggable {
       display: flex;
       align-items: center;
@@ -215,7 +215,7 @@ onUnmounted(() => {
   }
 
   .subtitle {
-    color: #bbb;
+    color: var(--text-dim);
     padding: 0 0.5ch;
     &.draggable {
       display: flex;

@@ -152,8 +152,8 @@ function handleKeydown(e: KeyboardEvent) {
   height: 2em;
   border-radius: 4px;
   opacity: 0.8;
-  background-color: #fff2;
-  outline: 1px solid #fff4;
+  background-color: var(--tint-2);
+  outline: 1px solid var(--tint-4);
   cursor: ew-resize;
   user-select: none;
   margin-top: calc(1ch + 8px);
@@ -170,7 +170,7 @@ function handleKeydown(e: KeyboardEvent) {
   }
   &:active,
   &:focus {
-    outline: 2px solid var(--theme, #08c);
+    outline: 2px solid var(--theme, var(--accent));
   }
   .intent {
     position: absolute;
