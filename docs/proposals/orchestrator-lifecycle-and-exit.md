@@ -1,6 +1,6 @@
 # Orchestrator lifecycle + exit sequence — per-app-instance process, audited teardown
 
-Status: **RULED (user 2026-07-09; awaiting dispatch)**. Builds on the
+Status: **SHIPPED (code-complete 2026-07-09, `60793fb`, per the AMENDED ruling 2 — one persistent process, five audit gaps closed; runtime checklist owed — stage-f §Lifecycle)**. Builds on the
 hardware-quiescence invariant (janitor + quiesced handshake, 4f8e016;
 exit-6 HandleScope fix 26871e4) — this program AUDITS and EXTENDS that
 work; it must never regress kill()-only teardown.

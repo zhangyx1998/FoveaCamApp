@@ -475,6 +475,83 @@ source the RAW fovea CONVERT pipes (single ÷magnification, legacy
   brick (record tap unsubscribed; pair brick keep-alive unaffected —
   its pool keeps churning); reselect resumes within a pair or two.
 
+## Iteration 2026-07-09 (F1/F2/F3 fixes + 8 programs, 362b69f→wave close)
+
+### F1/F2/F3 re-verify (the rig findings that started this round)
+- [ ] **F1 capture** — capture completes on the rig; if a port still
+  stalls, the run now REJECTS at 10 s naming it ("center delivered 0/5…")
+  with progress notices before that; app never wedges. If the hang
+  persists against these fixes, the remaining suspect is camera/
+  `Arv::Stream` exclusivity re-open across RECORDING→CAPTURE (core pipe
+  gate exonerated by test 35).
+- [ ] **F2 drops** — record L/C/R ≥60 s; RecordButton hover now splits
+  drops `qN` (queue overflow → encode/write chain) vs `rN` (ring lapped →
+  reader too slow); capture the breakdown for the tuning ruling.
+- [ ] **F3 Bayer12p** — the previously striped BayerRG12p recording
+  demosaics clean in the viewer (play + paused scrub).
+
+### Calibration polish (b62abe9)
+- [ ] Checker: projected checkerboard visible on the projection window,
+  pattern-size-mm slider scales it, live solve produces finite RMS shown
+  in picker + post-solve.
+- [ ] Drift: Update buttons disabled while a fovea tracker is unlocked or
+  Δ below the 0.03° floor; derived shows null when unlocked.
+- [ ] Intrinsic: record thumbnails render; marker scale slider affects
+  detection rate footnote ("Detector @ N Hz").
+
+### Spin-up progress monitor (36997f7 + 3386d12)
+- [ ] Opening each app shows the step overlay (dimmed ⏳ → spinner →
+  green ✓), clears on ready; a failed activation freezes the list at the
+  dying step with the error shown; hover × reveals the partial app.
+
+### Recording/capture everywhere (09695bb + 0100bf7 + 6ce3332)
+- [ ] Record button + Cmd/Ctrl-R work in disparity-scope + all 4
+  calibrate apps (raw streams; intrinsic = selected camera); files play
+  in the viewer.
+- [ ] Capture (camera icon → preview window → Save) works in the 6
+  triple-holder apps (degraded shots declare wrap:none) and
+  calibrate-intrinsic (single-stream); exclusivity refusals hold both
+  ways vs recording.
+
+### Standalone viewer + timeline (d28cd7a + 9efc6bf)
+- [ ] Record→stop auto-opens the `.fcap`; Cmd-O filter fcap+fovea;
+  legacy `.fovea` opens; dedupe focuses.
+- [ ] Viewer works with the ORCHESTRATOR DOWN and keeps playing across
+  app switches / orchestrator crash.
+- [ ] Timeline: master wide track detected; drag block → other/new track
+  (snap, persists, overlap refused); divider drag + drawer collapse;
+  focus + `v` disables; 3D dropdown per pair (anaglyph colors correct —
+  red=L); tile width persists; placeholder tiles (no reflow).
+- [ ] Sidecar: layout/disabled/3D/split/width/playhead survive reopen;
+  deleted ui.json re-inits silently; corrupt/mismatched PROMPTS before
+  overwrite; Reset UI state re-packs; `.fcap` file itself untouched
+  (mtime stable).
+- [ ] Subtitle compact path + tooltip; Open-folder button reveals file;
+  window close releases the handle (file deletable).
+- [ ] Dev restart restores viewer windows onto their files.
+
+### Lifecycle (60793fb)
+- [ ] `kill -9 <orchestrator>` mid-actuation → mirrors parked, cameras
+  released, crash banner (code N) in the app + its debug windows; Reopen
+  reconnects.
+- [ ] `kill -9 <main>` → the detached watchdog quiesces (MEMS off —
+  verify on serial); exactly ONE watchdog per instance (`ps`); watchdog
+  exits after clean quit. ALSO verify core loads under
+  ELECTRON_RUN_AS_NODE (the one unexercised assumption).
+- [ ] darwin last-window-close parks hardware (not Cmd-Q); dock
+  re-activate re-arms.
+- [ ] Graceful Cmd-Q: windows close first (cascade), quiesced ack →
+  clean, no janitor, no banner, no orphan processes.
+- [ ] Wedged quiesce on quit → bounded kill → janitor → "killed" report.
+- [ ] Cmd-Shift-R dev restart: janitor fallback fires if quiesce wedges;
+  no duplicate watchdogs.
+
+### Design foundation (7d7531c)
+- [ ] Visual parity spot-check under rig lighting (deliberate changes:
+  error surfaces brighter/instant, action-green now #4caf50); error
+  banner instantly visible, no layout shift; ProgressMonitor × visible
+  dim at rest.
+
 ## Blocked (hardware change required)
 
 - [ ] **Center-camera hardware trigger** — needs the slimmer CAM0 cable

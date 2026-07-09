@@ -1,6 +1,6 @@
 # Calibration polish — post-migration fixes + UX
 
-Status: **PROPOSED (planner review 2026-07-09; awaiting dispatch)**. Source:
+Status: **SHIPPED (code-complete 2026-07-09, `b62abe9`; rig pass owed — `hardware/stage-f.md` §Calibration polish)**. Source:
 the planner's calibration-pipeline review against master (migration verified
 COMPLETE; ported math faithful; one deliberate master bug fixed — extrinsic
 PRV A2V/V2A swap). These are the residual findings + the UX items worth

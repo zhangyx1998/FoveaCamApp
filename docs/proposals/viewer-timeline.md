@@ -1,6 +1,6 @@
 # Viewer timeline — multi-track correlation UI
 
-Status: **RULED (user 2026-07-09; dispatched same day)**. Builds directly on
+Status: **SHIPPED (code-complete 2026-07-09, `9efc6bf`, all 11 rulings; UI pass owed — stage-f §Standalone viewer + timeline)**. Builds directly on
 [standalone-viewer-and-fcap](./standalone-viewer-and-fcap.md) (d28cd7a: the
 viewer is orchestrator-free; playback lives in a per-window worker). The
 single-stream-at-a-time viewer defeats the system's purpose — correlating
@@ -70,8 +70,9 @@ between views.
 - **Sidecar**: `<recording>.fcap.ui.json` (versioned `{ v: 1, ... }`):
   track overrides, disabled set, 3D mode per pair, panel split, tile
   width, last playhead. Debounced write-through from the window's worker
-  (the only writer); absent/corrupt sidecar → defaults (auto-pack).
-  The MCAP reader path is verified read-only.
+  (the only writer). Absent → silent init; corrupt/mismatched → user
+  confirmation before overwrite (ruling 10 governs). The MCAP reader path
+  is verified read-only.
 - **Ruled interaction principles apply** (design-language.md): snap
   drag/drop and divider drags (no eased transitions on the control path),
   instant hover/focus cues on blocks, and layout stability — tiles

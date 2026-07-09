@@ -1,6 +1,6 @@
 # Capture + recorder everywhere — availability, hang fix, drop diagnosis
 
-Status: **RULED (user 2026-07-09; awaiting dispatch)**. Extends
+Status: **SHIPPED (code-complete 2026-07-09: F1 `5c7c9d4`+`c2c5c43` (core exonerated, test 35), F2 `5c7c9d4`, recording service `09695bb`, capture everywhere `0100bf7`+`6ce3332`; rig pass owed — stage-f §Iteration 2026-07-09)**. Extends
 [capture-recorder-nodes](./capture-recorder-nodes.md) +
 [multi-fovea-recording](./multi-fovea-recording.md). Two rig findings from
 the 2026-07-09 stage-f pass fold in here (they live in this code).

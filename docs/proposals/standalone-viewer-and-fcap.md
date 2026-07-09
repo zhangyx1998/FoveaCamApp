@@ -1,6 +1,6 @@
 # Standalone viewer + fcap — decoupled playback, 12p Bayer decode, rename
 
-Status: **RULED (user 2026-07-09; awaiting dispatch)**. Supersedes the
+Status: **SHIPPED (code-complete 2026-07-09: F3+fcap+UX `d8f6487`, standalone move `d28cd7a`, pyfcap `fea501c`; UI pass owed — stage-f §Iteration 2026-07-09). Extended by [viewer-timeline](./viewer-timeline.md) (`9efc6bf`)**. Supersedes the
 viewer's orchestrator-session architecture (viewer-contract.ts +
 `@orchestrator/sessions/viewer` + `@orchestrator/viewer/*`). One rig finding
 (F3) folds in.
