@@ -142,4 +142,74 @@ ReadStatus readLatestInto(const ReadMapping &m, void *dst, size_t dstBytes,
   return ReadStatus::TornRead;
 }
 
+ReadStatus readSeqInto(const ReadMapping &m, uint64_t wantSeq, void *dst,
+                       size_t dstBytes, ReadResult &out) {
+  const SegmentHeader *h = m.header();
+  const uint32_t slotCount = h->slotCount;
+  if (slotCount == 0)
+    return ReadStatus::TornRead; // defensive (open() validates slotCount >= 1)
+
+  const uint64_t latest = h->latestSeq.load(std::memory_order_acquire);
+  if (wantSeq == 0 || wantSeq > latest) {
+    // The requested frame has not been published yet. If the publisher has
+    // closed the pipe, no newer frame will ever arrive (latestSeq is visible
+    // before the release-stored CLOSED), so report Closed — the FIFO consumer
+    // drains up to latestSeq, then stops. Otherwise NotYet (poll again).
+    if (h->state.load(std::memory_order_acquire) ==
+        static_cast<uint32_t>(PipeState::CLOSED))
+      return ReadStatus::Closed;
+    return ReadStatus::NotYet;
+  }
+  if (dstBytes < h->slotBytes)
+    return ReadStatus::DestTooSmall;
+
+  // Round-robin invariant (ShmWrite): seq N occupies slot N % slotCount.
+  const uint32_t slot = static_cast<uint32_t>(wantSeq % slotCount);
+  for (uint32_t retries = 0; retries < MAX_READ_RETRIES; ++retries) {
+    const SlotHeader *slotHeader = m.slotHeader(slot);
+    const uint64_t before = slotHeader->seq.load(std::memory_order_acquire);
+    if ((before & 1) != 0 || before == 0)
+      continue; // writer mid-fill (odd) or never written — retry
+    const uint64_t stable = before / 2;
+    if (stable != wantSeq) {
+      // `wantSeq <= latest` means the writer published `wantSeq` into this slot
+      // at least once; the slot can therefore only hold a NEWER recycled frame
+      // (stable == wantSeq + k*slotCount, k >= 1) — `wantSeq` is Gone. Report
+      // the oldest still-live seq (`latest - slotCount + 1`, clamped to 1) so
+      // the consumer jumps forward and accounts the gap as drops.
+      const uint64_t latestNow = h->latestSeq.load(std::memory_order_acquire);
+      out.oldestSeq =
+          latestNow >= slotCount ? latestNow - slotCount + 1 : 1;
+      return ReadStatus::Gone;
+    }
+    // The slot still holds `wantSeq` — seqlock-copy it (same discipline as
+    // readLatestInto: acquire fence between the copy and the post-check).
+    std::memcpy(dst, m.slotData(slot), h->slotBytes);
+    const double tCapture = slotHeader->tCapture;
+    const double convertMs = slotHeader->convertMs;
+    const uint64_t deviceTimestamp = slotHeader->deviceTimestamp;
+    const uint64_t systemTimestamp = slotHeader->systemTimestamp;
+    const uint32_t width = slotHeader->width;
+    const uint32_t height = slotHeader->height;
+    const uint32_t originX = slotHeader->originX;
+    const uint32_t originY = slotHeader->originY;
+    std::atomic_thread_fence(std::memory_order_acquire);
+    const uint64_t after = slotHeader->seq.load(std::memory_order_acquire);
+    if (before != after || (after & 1) != 0)
+      continue; // the writer recycled this slot mid-copy — retry
+
+    out.seq = wantSeq;
+    out.gen = h->generation;
+    out.retries = retries;
+    out.width = width;
+    out.height = height;
+    out.originX = originX;
+    out.originY = originY;
+    out.oldestSeq = 0;
+    out.meta = {tCapture, convertMs, deviceTimestamp, systemTimestamp};
+    return ReadStatus::Ok;
+  }
+  return ReadStatus::TornRead;
+}
+
 } // namespace ShmRing

@@ -72,3 +72,49 @@ export type PipeReadDone = {
   closed?: boolean;
   error?: string;
 };
+
+// capture-recorder-nodes Phase 0: FIFO pipe read transport. The recorder/capture
+// consumer reads a SPECIFIC frame (`wantSeq = lastDelivered + 1`) through the
+// same preload MessagePort + C-15 buffer pool as PIPE_READ, but via the reader
+// addon's `readSeqInto` (ordered, lossless-within-a-ring delivery). The DONE
+// message classifies the FIFO outcome (frame / notYet / gone+oldestSeq /
+// closed) so the consumer can drop-account a lagged ring. The latest-wins
+// PIPE_READ path above is unchanged.
+export const PIPE_READ_SEQ = "fovea:pipe:read-seq";
+export const PIPE_READ_SEQ_DONE = "fovea:pipe:read-seq-done";
+
+export type PipeReadSeqRequest = {
+  kind: typeof PIPE_READ_SEQ;
+  id: number;
+  shmName: string;
+  /** The exact stable seq to read (the consumer tracks `lastDelivered + 1`). */
+  wantSeq: bigint;
+  buffer: ArrayBuffer;
+};
+
+export type PipeReadSeqDone = {
+  kind: typeof PIPE_READ_SEQ_DONE;
+  id: number;
+  /** Always transferred back for pool recycling (backs pixels only on a frame). */
+  buffer: ArrayBuffer;
+  /** Present when `wantSeq` was delivered (== `wantSeq`). */
+  seq?: bigint;
+  tCapture?: number;
+  convertMs?: number;
+  gen?: number;
+  retries?: number;
+  width?: number;
+  height?: number;
+  originX?: number;
+  originY?: number;
+  /** `wantSeq` not published yet — the consumer short-polls/backs off + retries. */
+  notYet?: boolean;
+  /** `wantSeq`'s ring slot was recycled (consumer lagged a full ring). Present
+   *  together with `oldestSeq` = the oldest still-live seq to JUMP to; the
+   *  consumer accounts `wantSeq..oldestSeq-1` as drops. */
+  gone?: boolean;
+  oldestSeq?: bigint;
+  /** Publisher CLOSED and nothing newer will arrive — the consumer stops. */
+  closed?: boolean;
+  error?: string;
+};

@@ -47,7 +47,13 @@ export type PipeSpec = {
   stride: number;
   /** Authoritative frame byte size (NOMINAL/initial) — NOT inferred from shape. */
   bytesPerFrame: number;
-  /** Ring slot count for this pipe's segment (the seqlock depth). */
+  /** Ring slot count for this pipe's segment (the seqlock depth). Default 3
+   *  (`ShmRing::SLOT_COUNT`), max 64 (`MAX_SLOT_COUNT`); the C++ advertise path
+   *  (`Pipe::specFromValue` → `Publisher` → `Segment.slotCount`) validates the
+   *  range. Latest-wins consumers ignore it beyond having more slots; FIFO
+   *  consumers (capture-recorder-nodes Phase 0, `readPipeSeq`) request DEEP
+   *  rings (recorder 32–64) so a lagging reader stays lossless up to the depth
+   *  before frames recycle (then drop-accounted, writer never blocked). */
   ringDepth: number;
   /** C-20 dynamic resize: the ring is sized to this MAX per-FOVEA footprint (a
    *  small hi-res crop, NOT the camera resolution — keeps N concurrent max rings

@@ -627,4 +627,29 @@ declare module "core/Aravis" {
    * CompositeProbeSnapshot }` — keys AND meter names are the node ids.
    */
   export function compositeProbeAll(): Record<string, CompositeProbeSnapshot>;
+
+  /**
+   * capture-recorder-nodes Phase 1: attach a RAW camera-source pipe. A gated
+   * `Frame::Ptr` subscriber on the camera's `Arv::Stream` publishes
+   * FULL-BIT-DEPTH sensor bytes (`frame->raw`) into the pipe `pipeId`'s ring —
+   * the path the recorder/capture nodes consume (NOT the 8-bit BGRA8 preview).
+   * The pipe's advertised `channels`/`bytesPerFrame` must match the sensor mat
+   * (a size/format change ⇒ re-advertise); the `pixelFormat` string is opaque
+   * to the copy (bytes are published verbatim). ON-DEMAND: parks with no
+   * consumer (zero capture-thread cost). Throws for an unknown pipe id.
+   * NOTE: packed 12p is UNPACKED to a 16-bit container by `Frame` construction
+   * before any subscriber sees it, so the raw pipe carries the full-depth
+   * container, not literally-packed bytes.
+   */
+  export function attachRawPipe(camera: unknown, pipeId: string): boolean;
+
+  /** Detach + join the raw producer. Idempotent (false if unknown). */
+  export function detachRawPipe(pipeId: string): boolean;
+
+  /**
+   * Out-of-loop probe of every attached raw pipe → `{ [pipeId]: ProbeSnapshot }`
+   * ({frame} input / {shm} output) — keys AND meter names are the node ids.
+   * Present while attached (even parked → zero counts).
+   */
+  export function rawProbeAll(): Record<string, ProbeSnapshot>;
 }

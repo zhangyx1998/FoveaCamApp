@@ -79,5 +79,9 @@ void appendHeatmapReports(Napi::Env env, Napi::Array &rows,
 // (kind "composite", left/right BGRA8 input edges, BGRA8 output).
 void appendCompositeReports(Napi::Env env, Napi::Array &rows,
                             std::set<std::string> &seen);
+// capture-recorder-nodes Phase 1: the RAW camera-source pipe (kind "raw",
+// camera/<serial> input edge, full-bit-depth sensor-format output).
+void appendRawReports(Napi::Env env, Napi::Array &rows,
+                      std::set<std::string> &seen);
 
 } // namespace Arv

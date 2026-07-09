@@ -36,10 +36,14 @@ struct ReadResult {
   uint32_t height = 0;  // v3: active frame height
   uint32_t originX = 0; // v4: frame-bound crop origin in the parent stream
   uint32_t originY = 0; // (0/0 for uncropped streams)
+  // FIFO (`readSeqInto` → `Gone`): the OLDEST still-live seq the consumer
+  // should jump to (it accounts `wantSeq .. oldestSeq-1` as drops). 0 otherwise.
+  uint64_t oldestSeq = 0;
   FrameMeta meta;
 };
 
-/** Outcome of `readLatestInto`. Only `Ok` fills the `ReadResult` / copies. */
+/** Outcome of `readLatestInto` / `readSeqInto`. Only `Ok` fills the pixel copy
+ *  + the `seq/gen/width/...` fields; `Gone` fills only `out.oldestSeq`. */
 enum class ReadStatus {
   Ok,          // fresh frame copied, `out` populated
   NoNewFrame,  // latestSeq <= lastSeq — nothing newer to read (pipe still OPEN)
@@ -47,6 +51,12 @@ enum class ReadStatus {
   TornRead,    // MAX_READ_RETRIES seqlock attempts all raced the writer
   Closed,      // no new frame AND the publisher set state=CLOSED (C-16) — the
                // final frame was already delivered; consumer should unmap
+  // ---- FIFO-mode outcomes (readSeqInto only; capture-recorder-nodes Ph0) ----
+  NotYet,      // wantSeq > latestSeq — the requested frame is not published yet
+               // (pipe still OPEN); the consumer short-polls/backs off and retries
+  Gone,        // wantSeq's ring slot was already recycled by a newer frame — the
+               // consumer lagged a full ring. `out.oldestSeq` = the oldest seq
+               // still live: JUMP there, account `wantSeq..oldestSeq-1` as drops
 };
 
 /** RAII read-only mapping over a published Fovea SHM segment. Opens the named
@@ -78,5 +88,23 @@ public:
  *  `MAX_READ_RETRIES` cap. On `Ok`, `out` carries seq/gen/retries/meta. */
 ReadStatus readLatestInto(const ReadMapping &m, void *dst, size_t dstBytes,
                           uint64_t lastSeq, ReadResult &out);
+
+/** FIFO-mode seqlock read of a SPECIFIC frame `wantSeq` into `dst` (capacity
+ *  `dstBytes`). The consumer drives an ordered, lossless-within-a-ring stream by
+ *  reading `lastDelivered+1` each step. Slot addressing exploits the writer's
+ *  round-robin invariant (`ShmWrite`: `latestSlot` and `latestSeq` both advance
+ *  by exactly 1 per publish from 0/0) → frame `wantSeq` lives in slot
+ *  `wantSeq % slotCount`. Outcomes:
+ *    - `Ok`      slot still holds `wantSeq` → copied, `out` populated (as
+ *                readLatestInto, with `out.seq == wantSeq`).
+ *    - `NotYet`  `wantSeq > latestSeq` (or `wantSeq == 0`) — not published yet.
+ *    - `Gone`    the slot was recycled past `wantSeq` (consumer lagged a full
+ *                ring) → `out.oldestSeq` = the oldest live seq to jump to.
+ *    - `Closed`  `wantSeq` beyond `latestSeq` AND the publisher set CLOSED.
+ *    - `DestTooSmall` / `TornRead` as readLatestInto.
+ *  Same seqlock retry discipline + DestTooSmall (`dstBytes >= slotBytes`, the
+ *  C-20 rule) as `readLatestInto`; never blocks the writer. */
+ReadStatus readSeqInto(const ReadMapping &m, uint64_t wantSeq, void *dst,
+                       size_t dstBytes, ReadResult &out);
 
 } // namespace ShmRing

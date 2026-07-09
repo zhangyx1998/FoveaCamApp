@@ -68,6 +68,12 @@ Napi::Value attachCompositePipe(const Napi::CallbackInfo &info);
 Napi::Value setCompositeParams(const Napi::CallbackInfo &info);
 Napi::Value detachCompositePipe(const Napi::CallbackInfo &info);
 Napi::Value compositeProbeAll(const Napi::CallbackInfo &info);
+// capture-recorder-nodes Phase 1: RAW camera-source pipes (full-bit-depth
+// sensor bytes for the recorder/capture nodes), defined in
+// core/lib/Aravis/RawPipe.cpp.
+Napi::Value attachRawPipe(const Napi::CallbackInfo &info);
+Napi::Value detachRawPipe(const Napi::CallbackInfo &info);
+Napi::Value rawProbeAll(const Napi::CallbackInfo &info);
 }
 // unified-time-and-topology §6: consolidated NodeReport rows for every live
 // native brick + pipe. Defined in core/src/Topology.cpp.
@@ -202,6 +208,16 @@ static Object init(Env env, Object exports) {
                Function::New<Arv::detachCompositePipe>(env, "detachCompositePipe"));
     Aravis.Set("compositeProbeAll",
                Function::New<Arv::compositeProbeAll>(env, "compositeProbeAll"));
+    // capture-recorder-nodes Phase 1: attach/detach a RAW camera-source pipe —
+    // a gated Frame::Ptr subscriber on the camera Arv::Stream that publishes
+    // full-bit-depth sensor bytes (`frame->raw`) into its ring. On-demand
+    // (parks with no recorder/capture consumer). Probe keys = pipeId (node id).
+    Aravis.Set("attachRawPipe",
+               Function::New<Arv::attachRawPipe>(env, "attachRawPipe"));
+    Aravis.Set("detachRawPipe",
+               Function::New<Arv::detachRawPipe>(env, "detachRawPipe"));
+    Aravis.Set("rawProbeAll",
+               Function::New<Arv::rawProbeAll>(env, "rawProbeAll"));
     exports.Set("Aravis", Aravis);
     // Controller Module
     auto Controller = Object::New(env);
