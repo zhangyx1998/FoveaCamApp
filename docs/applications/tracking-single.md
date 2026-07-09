@@ -1,5 +1,12 @@
 # Tracking (Single)
 
+> **RETIRED 2026-07-08 (commit 6f8097c).** This application was DELETED; its
+> role is replaced by [disparity-scope](./disparity-scope.md), and the
+> arm-from-drag / KCF discipline now lives in disparity's chained native
+> tracker (see the §3.5 tracker-override flow). The module
+> `app/modules/tracking-single/` no longer exists. Everything below is kept
+> for historical reference only — do NOT treat it as a live app.
+
 **Seed confidence: HIGH → CONFIRMED + refined by audit (2026-07-08).** The
 root cause of "no box on drag-end" was NOT any of the seed's three primary
 suspects (a–c) but a fourth: the drag-end event never fired `startTracker`

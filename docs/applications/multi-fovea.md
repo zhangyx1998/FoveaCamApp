@@ -1,15 +1,17 @@
 # Tracking (Multi) / Multi-fovea
 
-**Seed confidence: RAISED to HIGH for the scheduling/relay/teardown story
-(derived from code 2026-07-08, auditor) — but the seed's "fovea tiles are live
-`fovea:<index>` session frames" claim is WRONG: no such producer exists (blank
-by design until Stage-F). One real bug found and fixed: the frame scheduler was
-never started.**
+**Updated 2026-07-08 for the C-24 flagship refactor (7e71eef) + native
+multi-KCF (B-25).** Earlier audit notes about a relay worker, main-loop KCF,
+and permanently-blank fovea tiles are SUPERSEDED: the C-22b relay worker is
+gone, tracking runs on a native multi-KCF thread, and the per-target fovea
+tiles are now LIVE renderer-composed nodes with real pixels. The frame
+scheduler bug (never started) was fixed earlier in this app's lane.**
 
 ## Purpose
 Multi-target tracking: the user enables/places/steers up to
 `MAX_MULTI_FOVEA_TARGETS` (8; the UI exposes 4) targets on the center view. Each
-enabled target gets a KCF track (on the main loop) and, on v2 hardware, one
+enabled target gets a KCF track (on the native multi-KCF thread) and, on v2
+hardware, one
 controller "stream" — a saved L/R mirror-pose pair the round-robin scheduler
 time-multiplexes the two physical mirrors across. Real synced frame capture is
 Stage-F hardware-gated; on the current rig `createStream` returns null and the
@@ -18,24 +20,25 @@ capture command returns `stage-f-hardware-gated`.
 Note "add/remove" is really enable/disable + place: `state.targets` is a
 fixed-length slot array (default 4), not a growable list. Removal == disable.
 
-## Pipeline (post-real-1g)
-Session: triple + `undistort:<C>` advertised; a MINIMAL relay worker (`display`
-kernel, `view:"diff"` + `relayCenter:true`, only the C pipe connected) posts the
-undistorted center as a `C` frame **solely** to feed `runtime.onCenterFrame` —
-the multi-target KCF runs ON THE MAIN LOOP (known exception; queued
-async-kcf→C++ refactor). VERIFIED: `relayCenter` → display kernel
-`out.push({name:"C"})` → `onResult` (`f.name==="C"`) → `runtime.onCenterFrame`.
+## Pipeline (post-C-24 flagship, 2026-07-08)
+Session: triple + `undistort:<C>` advertised. Tracking runs on B-25's **native
+multi-KCF thread** (`createMultiTracker`: one free-running thread, batched
+per-frame results, fused undistort → results in UNDISTORTED coordinates when
+calibrated), bound to the shared center stream. The C-22b relay worker is GONE —
+nothing multi-fovea does touches the JS event loop per frame anymore. The session
+consumes the batch iterator into the runtime's policy half (arm/disarm churn,
+lost tolerance, steering, controller streams) and drives each slot's composed
+fovea crop node (`setFoveaRect` per tick — frame-bound origin rides the pipe, v4).
 The renderer binds the `undistort:<serial>` pipe directly for the wide view
 (raw fallback uncalibrated).
 
-**Fovea image tiles are NOT wired.** `index.vue`'s per-target tile binds
-`session.frame("fovea:<index>")`, but nothing in the session (or anywhere) ever
-publishes a `fovea:<i>` frame — the only contract frame is `["C"]`. So the tiles
-are permanently blank. This is expected: the actual per-target fovea imagery
-comes from the v2-controller synced camera streams (`StreamHandle`), which are
-Stage-F hardware-gated and not yet bridged to session frames (the `fovea:`
-dynamic-pipe cut-over is future work — see project memory). The seed's "adding a
-target spawns its fovea tile live" is aspirational, not current behavior.
+**Fovea image tiles ARE wired now (C-24 step 4).** The RENDERER composes the
+per-target fovea crop nodes — a camera-rooted
+`camera/<serial>/undistort/fovea/<slot>` brick via `compose` (refcounted,
+auto-unref on window close; disabling a target decomposes) — and binds each
+node's pipe via `usePipeFrame`. These tiles get REAL pixels (the old
+`session.frame("fovea:<i>")` had no producer; that path is retired). Real
+*synced* frame CAPTURE (recorder-bound) is still Stage-F hardware-gated.
 
 **Mirror scheduling across N targets (derived).** Each enabled target with a
 stream becomes one `ScheduledFrameTarget {stream, pulse, cameras:["L","R"]}`.
@@ -49,12 +52,13 @@ targets by round-robin time-multiplexing, not by any per-target slicing.
 ## UI & controls
 Center view with per-target select (radio) + enable (checkbox); drag = steer
 (`steerTarget`), release/click = place (`placeTarget`); reset; capture (gated).
-Per-target tiles show a (currently blank) fovea view + volt/stream telemetry.
+Per-target tiles show the live composed fovea view + volt/stream telemetry.
 
 ## Expected behavior
 Enabling a target starts its KCF track and (v2) its stream; disabling releases
 both without disturbing others; the center overlay marks every enabled target's
-bbox/center. Fovea tiles stay blank until Stage-F wires per-target imagery.
+bbox/center. Each enabled target's fovea tile shows live composed pixels;
+disabling decomposes its node.
 
 ## Known/suspected issues
 - **Scheduler never started — BUG, FIXED (in this app's lane).** `activateSession`
@@ -65,19 +69,18 @@ bbox/center. Fovea tiles stay blank until Stage-F wires per-target imagery.
   `applyTargets()` (session.ts). Inert on the current rig (`createStream` returns
   null when `!v2Capable` → empty scheduler targets → nothing to pump), so no
   behavior change today. **RIG-GATED:** only observable with Stage-F v2 hardware.
-- **Multi-target KCF on the main loop** — the one remaining on-loop vision
-  (documented exception; do NOT fix here — the async-kcf→C++ follow-up).
-- **Fovea tiles blank** — expected (no `fovea:<i>` producer; Stage-F gated). Not
-  a leak, not a crash — a static `StreamView` bound to a channel that never
-  emits. See Open questions for a possible placeholder.
-- **Target-churn teardown — VERIFIED, no leaks.** `releaseSlot` releases the KCF
-  (`tracker.release()`) and closes the stream (`stream.close()`); `setTargets`
-  releases on disable/config-change and slices off trailing slots; `dispose`
-  releases every slot and clears the scheduler. Generation-guards drop
-  stale-async tracker/stream completions. There is no per-target frame channel or
-  UI tile to leak (tiles are fixed `v-for` over `state.targets`). Covered by
-  `test/multi-fovea-runtime.test.ts` (stream-close-after-dispose, reinit on
-  center change, in-flight-create rerun).
+- **Multi-target KCF off the main loop — RESOLVED (B-25).** Tracking moved to
+  the native multi-KCF thread (`createMultiTracker`); the old per-slot JS KCF
+  (busy-drop + generation guards) is gone. No on-loop per-frame vision remains.
+- **Fovea tiles live — RESOLVED (C-24 step 4).** The renderer-composed
+  `camera/<serial>/undistort/fovea/<slot>` nodes give each enabled target real
+  pixels via `usePipeFrame`; disabling decomposes the node.
+- **Target-churn teardown — VERIFIED, no leaks.** `setTargets` releases slots on
+  disable/config-change and slices off trailing slots; `dispose` releases every
+  slot and clears the scheduler; the composed fovea nodes decompose (refcounted,
+  server-side auto-unref on window close). Generation-guards drop stale-async
+  completions. Covered by `test/multi-fovea-runtime.test.ts` (stream-close-after-
+  dispose, reinit on center change, in-flight-create rerun).
 - **Click coordinate space — CORRECT** (same as manual-control):
   `targetPose` uses `undistort.angular([center], false)` and clicks land on the
   undistorted pipe, so the `false` (already-undistorted) flag is right.
@@ -93,12 +96,11 @@ bbox/center. Fovea tiles stay blank until Stage-F wires per-target imagery.
    1000 mm, zero shift, all fixed (unlike manual-control's verge/baseline/shift
    state). Intended fixed default for the skeleton, or should multi-fovea expose
    baseline/distance controls?
-3. **Blank fovea tiles.** Until Stage-F wires per-target imagery, should each
-   tile show an explicit "hardware-gated / no stream" placeholder instead of a
-   silently-empty `StreamView`?
+3. **Fovea tiles (RESOLVED).** Per-target imagery is now live via composed
+   fovea nodes; the earlier "blank tile placeholder" question is moot. Real
+   *recorder-bound synced capture* remains Stage-F hardware-gated.
 4. **placeTarget stream churn.** A center change makes `setTargets` see the
    config as "changed" → `releaseSlot` closes the v2 stream and `syncStreams`
    recreates it, rather than `stream.update()`-ing the new pose. Re-init of the
    KCF at the new center is correct; the stream close+recreate on every placement
    may be heavier than needed once hardware is live — confirm desired.
-</content>

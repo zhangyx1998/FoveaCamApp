@@ -17,8 +17,9 @@ Resource-scoped triple session via `acquireTriple` (needs existing calibration:
 `undistort` + `conv`). Three `MarkerTracker`s (L/R with `internal` subpixel;
 C plain) on native streams. The center tracker's observed angle
 (`centerAngle = undistort.angular(C.centerAbsolute)`) continuously drives a
-`startActuationLoop` that points BOTH mirrors there (`conv.A2V.L/R(centerAngle)`);
-when the center marker is lost, `centerAngle` is null and the loop targets
+controller-node position input (`openPosition`, push model; was
+`startActuationLoop`) that points BOTH mirrors there (`conv.A2V.L/R(centerAngle)`);
+when the center marker is lost, `centerAngle` is null and the push targets
 ORIGIN (mirrors rest at 0,0).
 
 The per-fovea warp is split off the JS loop:

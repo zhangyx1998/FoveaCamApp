@@ -17,8 +17,11 @@ authority — never inline the strings:
 camera/<serial>                     raw source (native Arv stream)
 camera/<serial>/convert             BGRA8 converted pipe
 camera/<serial>/undistort           undistorted pipe (native remap)
-camera/<serial>/undistort/fovea/<n> dynamic fovea crop pipe
-camera/<serial>/kcf                 native KCF track stream
+camera/<serial>/undistort/fovea/<n> dynamic fovea crop pipe (crop of undistort)
+camera/<serial>/kcf                 native KCF track stream (raw source)
+camera/<serial>/kcf-multi           native multi-target KCF track stream
+camera/<serial>/undistort/kcf       chained KCF on the undistort brick (§3.5)
+camera/<serial>/detect              native marker detector stream
 win/<windowId>/...                  window-composed nodes (kernels, …)
 ```
 
@@ -65,8 +68,8 @@ that GC storm).
 | camera source | Arv stream thread (`core`) | raw frames (native) |
 | converter | `ConverterStream` — one thread per (camera × format) | `camera/<serial>/convert` pipe |
 | undistort | `UndistortStream` — remap maps built natively at attach from the persisted calibration | `camera/<serial>/undistort` pipe |
-| fovea crop | dynamic crop+resize from the raw stream (fused with undistort maps) | `camera/<serial>/undistort/fovea/<n>` pipe |
-| KCF tracker | native thread, latest-frame-wins | track results (async generator + meter) |
+| fovea crop | `FoveaStream` — a ChainedStream taking a plain ROI crop of its upstream brick's frames (the undistort brick, or convert for raw crops); the v1 fused map-ROI convert+remap is retired — undistortion happens ONCE upstream and N foveas share it | `camera/<serial>/undistort/fovea/<n>` pipe |
+| KCF tracker | native thread, latest-frame-wins; a CHAINED variant (`camera/<serial>/undistort/kcf`, controller-node §3.5) tracks the undistorted view on its own thread | track results (async generator + meter) |
 | marker detector | `detector.stream` (native) | detection sets |
 | vision kernels | per-session `worker_thread` (`vision-worker.ts`), dispatched by kind | results + derived frames over MessagePort |
 

@@ -12,25 +12,38 @@ camera, extract a template around it, template-match against the L/R fovea
 streams, compute per-tile disparity + a vergence analysis, and drive the mirror
 verge via PID so the foveas converge on the target depth.
 
-## Pipeline (post-real-1g)
+## Pipeline (post-§3.5, 2026-07-08)
 Session (thin coordinator): acquires the calibrated triple, connects
 `camera:<L|C|R serial>` pipes (consumer-gate → converter threads run), spawns
 the per-session vision worker with the `disparity` kernel
-(modules/disparity-scope/vision.ts). Worker: KCF auto-follow on C (core KCF,
-synchronous), slices the target region, `wrapPerspective` L/R foveas using
-MAIN-COMPUTED homographies (shipped per volt-update), builds tiles + `diff`
-template matching + `analyzeVergence`; posts scalar analysis + derived frames
-(C, center.sliced, guide, match_left, match_right). Main: `stepVergence`/PIDs →
-commandedVolts → shared actuation loop (fire-and-forget CMD_STREAM). Wide
-preview = raw `camera:<C>` pipe by design (disparity works in raw center space).
+(modules/disparity-scope/vision.ts). The L/R foveas arrive **pre-warped** off
+their own `camera/<serial>/undistort` homography pipes and the wide input is the
+center camera's `undistort` pipe — the kernel no longer does `wrapPerspective`
+and takes no homography params (the undistort bricks own the warp; overlays and
+`analyzeVergence` live on the UNDISTORTED C view). The KCF tracker is **off the
+matching thread**: the SESSION owns a chained tracker (`createChainedTracker` on
+the C undistort brick, own native thread) whose scalar output arrives in the
+kernel as the `target` param plus the `overridden` drag flag at result rate.
+Worker: slices the target region, builds tiles + `diff` template matching +
+`analyzeVergence`; posts scalar analysis + derived DIAGNOSTIC frames
+(center.sliced, guide, match_left, match_right; NOT the L/C/R views — those
+source directly from the undistort pipes). Main: the per-eye PID node's
+`stepVergence` → commandedVolts → **controller node** position input
+(`openPosition`, push model; the shared 1 ms actuation loop is deleted).
 
 ## UI & controls
-StreamViews for the wide view + sliced/guide/match/disparity views; verge/
-baseline/shift parameters; PID tuning; target select (KCF auto-follow).
+StreamViews for the wide (undistorted C) view + sliced/guide/match/disparity
+views; verge/baseline/shift parameters; PID tuning; target select (tracker
+auto-follow). Dragging on the C view calls the **tracker's override** with the
+dragged point (NOT the PID slot): the PID vergence node keeps running throughout,
+steering the foveas toward the moving tile; on release the native tracker re-arms
+there and the PID continues seamlessly (no release "jump"). The UI override badge
+reads the `overridden` telemetry (the tracker flag).
 
 ## Expected behavior
 Matching quality visible in match_left/right; disparity/verge numbers steady on
-a static scene; PID engage converges foveas onto the target.
+a static scene; PID engage converges foveas onto the target. During a drag the
+foveas visibly servo toward the dragged tile (status "manual").
 
 ## The fovea↔wide scale math (audit finding — corrects the seed's bug (a))
 

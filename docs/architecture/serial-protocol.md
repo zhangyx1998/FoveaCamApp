@@ -3,7 +3,7 @@
 > Source of truth: `app/orchestrator/controller.ts` (host-side `Controller`),
 > `core/Controller` (native `Device` + `Protocol`), `firmware/` (MCU),
 > `app/orchestrator/scheduler.ts` + `sync.ts` (synced capture),
-> `app/orchestrator/actuation.ts` (the hot loop).
+> `app/orchestrator/controller-node.ts` (the position-stream push model).
 > Full protocol design history: `docs/history/refactor/synced-capture.md`.
 
 ## 1. Device model
@@ -42,18 +42,25 @@ decoded back to volts via `dac2volt`), `Trigger`.
   rather than the DAC's actual state. A control loop owns its stream
   exclusively while running.
 
-## 4. The actuation hot path
+## 4. The actuation path (controller node, push model)
 
-`startActuationLoop` (`actuation.ts`) is the single chokepoint every
-hot-actuating session uses. On v2 firmware it opens one CMD_STREAM per run
-and fire-and-forgets `update()` per tick — no awaited round-trip caps the
-rate — publishing **locally predicted** volts
-(`Controller.predictVolts(pos)`, the exact `channels()`→`dac2volt` math the
-Actuate ACK would echo). On v1 it falls back to the awaited `actuate()` loop
-unchanged. Stream lifecycle: open on start, close on stop, reopen on
-controller reconnect. RIG-VERIFY items for this path live in
-`docs/hardware/stage-f.md` (prediction accuracy vs a sampled readback; FW5
-coexistence with CMD_FRAME).
+The old per-session `startActuationLoop` (1 ms pull loop, `actuation.ts`)
+is **deleted**. Its role is absorbed by the singleton **controller node**
+(`app/orchestrator/controller-node.ts`): each hot-actuating session calls
+`node.openPosition(name, { from, initial })` and PUSHES target poses at its
+own natural cadence (kernel result / pointer / servo tick). On v2 firmware
+each open position input maps 1:1 to a CMD_STREAM (created on first update,
+`StreamUpdateGate`-dedup'd fire-and-forget `update()` per push — no awaited
+round-trip caps the rate — publishing **locally predicted** volts via
+`Controller.predictVolts(pos)`, the exact `channels()`→`dac2volt` math the
+Actuate ACK would echo; the MCU stream holds position between pushes). On v1
+it runs one internal paced awaited `actuate()` loop over the latest pushed
+pose. Enable lifecycle: enable on first open if disabled, disable on last
+close iff the node enabled it; streams drop + lazily recreate on controller
+reconnect. `update()` also records the predicted trajectory into
+mirror-history (the single trusted-time writer). RIG-VERIFY items for this
+path live in `docs/hardware/stage-f.md` (prediction accuracy vs a sampled
+readback; FW5 coexistence with CMD_FRAME).
 
 ## 5. Hardware triggering
 

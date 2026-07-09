@@ -16,7 +16,9 @@ multi-point passes (steer→settle→grab); recording writes streams to disk.
 Session: triple + `undistort:<C>` advertise + camera pipes + `display` kernel
 worker (slice/wrap/diff/depth; C pre-undistorted). Targeting math on main:
 `steer` (pixel → `undistort.angular([px], false)`, or angle passthrough) →
-`inverseTriangulate` → volts → shared actuation loop. Capture uses
+`inverseTriangulate` → volts → controller node position input
+(`controllerNode().openPosition`, push model; the shared 1 ms actuation loop is
+deleted). Capture uses
 `readNextPipeFrame` one-shot SHM reads (pinned to call-time `latestSeq` so a
 steer-then-capture never grabs a pre-steer frame). Recording consumes its own
 `leases.L/C/R.camera.stream` (untouched by real-1f/1g). Wide/clickable view binds
@@ -32,7 +34,8 @@ Click/drag steering on the center view; set-point list (angle mode, per-point
 d/s overrides); verge/shift/zoom/view mode; capture pass + recording start/stop.
 
 ## Expected behavior
-Steering is immediate and smooth (post fire-and-forget actuation, ~kHz capable);
+Steering is immediate and smooth (push-model fire-and-forget CMD_STREAM updates,
+~kHz capable);
 sliced view recenters on target; capture passes save the exact post-steer
 frames; recording FIN metadata binds voltages to frames.
 

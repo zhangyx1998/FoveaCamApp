@@ -28,8 +28,9 @@ view-tap, no vision worker.
 - **FIN** — no actuation (static review). `finalize` fits both L/R regressions
   (`fitExtrinsicRegression(createDataSet(records, key))`) → `fittedL/fittedR`;
   `finalized` telemetry gates "Preview Results".
-- **PRV** — `startActuationLoop` driving both mirrors to `previewVolt`, a
-  drag-computed target, to test the just-fitted regressions.
+- **PRV** — a controller-node position input (`openPosition`, push model; was
+  `startActuationLoop`) driving both mirrors to `previewVolt`, a drag-computed
+  target, to test the just-fitted regressions.
 
 Records persist to a scratch store path across steps/restarts (`persistRecords`),
 and `confirm` writes the final per-fovea datasets to the real
