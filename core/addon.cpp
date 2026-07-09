@@ -85,6 +85,15 @@ Napi::Value raw12pProbeAll(const Napi::CallbackInfo &info);
 Napi::Value attachCompressPipe(const Napi::CallbackInfo &info);
 Napi::Value detachCompressPipe(const Napi::CallbackInfo &info);
 Napi::Value compressProbeAll(const Napi::CallbackInfo &info);
+// pairing-nodes P-1: the per-stage L/R PAIRING brick — two in-process FIFO taps
+// joined against FIN-derived anchors (root tolerance / exact key), batched pair
+// records to JS. Always-running (create-only CoreObject). Defined in
+// core/lib/Aravis/PairStream.cpp. `create*TestSource`/`pushPairTestFrame` are
+// test-only synthetic ConvertedFrame producers (not part of the public d.ts).
+Napi::Value createPairStream(const Napi::CallbackInfo &info);
+Napi::Value createPairTestSource(const Napi::CallbackInfo &info);
+Napi::Value pushPairTestFrame(const Napi::CallbackInfo &info);
+Napi::Value releasePairTestSource(const Napi::CallbackInfo &info);
 }
 // unified-time-and-topology §6: consolidated NodeReport rows for every live
 // native brick + pipe. Defined in core/src/Topology.cpp.
@@ -248,6 +257,19 @@ static Object init(Env env, Object exports) {
                Function::New<Arv::detachCompressPipe>(env, "detachCompressPipe"));
     Aravis.Set("compressProbeAll",
                Function::New<Arv::compressProbeAll>(env, "compressProbeAll"));
+    // pairing-nodes P-1: the per-stage L/R pairing brick (create-only). Two
+    // in-process FIFO taps joined against FIN anchors (root tolerance / exact
+    // key); always-running; batched pair records via [Symbol.asyncIterator].
+    Aravis.Set("createPairStream",
+               Function::New<Arv::createPairStream>(env, "createPairStream"));
+    // Test-only synthetic ConvertedFrame producers feeding a pairing brick with
+    // EXPLICIT deviceTimestamps (core/test/33). Not part of the public d.ts.
+    Aravis.Set("createPairTestSource",
+               Function::New<Arv::createPairTestSource>(env, "createPairTestSource"));
+    Aravis.Set("pushPairTestFrame",
+               Function::New<Arv::pushPairTestFrame>(env, "pushPairTestFrame"));
+    Aravis.Set("releasePairTestSource", Function::New<Arv::releasePairTestSource>(
+                                            env, "releasePairTestSource"));
     exports.Set("Aravis", Aravis);
     // Controller Module
     auto Controller = Object::New(env);

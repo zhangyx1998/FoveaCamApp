@@ -718,4 +718,106 @@ declare module "core/Aravis" {
    * names are the node ids; present while attached (even parked → zero counts).
    */
   export function compressProbeAll(): Record<string, ProbeSnapshot>;
+
+  /**
+   * Construction options for `createPairStream` (pairing-nodes P-1). `mode`
+   * selects the join: `root` tolerance-matches raw camera arrivals against the
+   * FIN anchor (`|deviceTimestamp + sideDelta − tExposure| ≤ toleranceNs`,
+   * `matchPair` semantics), `exact` joins L/R on identical `deviceTimestamp`
+   * with an anchor for that key. All pools are bounded drop-oldest.
+   */
+  export interface PairStreamOptions {
+    /** Join mode. Default `"root"`. */
+    mode?: "root" | "exact";
+    /** Graph node id (`pair/<stage>`). Default `"pair/default"`. */
+    stage?: string;
+    /** The enrichment node id for the `anchor` topology edge. Default
+     *  `"controller"` (use `"controller/anchors"`). */
+    anchorFrom?: string;
+    /** Root-mode match window in ns (default 4e6 = 4 ms). */
+    toleranceNs?: bigint;
+    /** Per-side residual delta (trigger-path latency) folded into the root
+     *  match; default 0 (calibrated owners are already in host-ns). */
+    leftDeltaNs?: bigint;
+    rightDeltaNs?: bigint;
+    /** Bounded pool caps (drop-oldest). Defaults: 64 / 64 / 64. */
+    anchorCap?: number;
+    pendingCap?: number;
+    completedCap?: number;
+  }
+
+  /** A FIN-derived anchor pushed via `PairStream.pushAnchor`. `payload` is
+   *  opaque to the brick (the enrichment node packs volts/angles/H; echoed
+   *  back verbatim in the pair record). */
+  export interface PairAnchor {
+    tExposure: bigint;
+    stream?: number;
+    payload?: Float64Array;
+  }
+
+  /** One matched frame's IDENTITY in a pair record (never the pixel buffer). */
+  export interface PairFrameId {
+    deviceTimestamp: bigint;
+    width: number;
+    height: number;
+    originX: number;
+    originY: number;
+    seq: number;
+  }
+
+  /** One completed pair (batched async-iterator element carries `records`). */
+  export interface PairRecord {
+    anchorId: number;
+    tExposure: bigint;
+    stream: number;
+    payload: Float64Array;
+    left: PairFrameId;
+    right: PairFrameId;
+  }
+
+  /** A batch of completed pairs (MultiKcf batching pattern — zero per-frame JS
+   *  work; a zero-subscriber brick still consumes + drops immediately). */
+  export interface PairBatch {
+    records: PairRecord[];
+  }
+
+  /** `PairStream.probe()` snapshot: the shared meter ({left,right} inputs /
+   *  {pair} output) + per-pool drop counters and the live anchor pool size. */
+  export interface PairProbeSnapshot extends ProbeSnapshot {
+    anchorDrops: number;
+    leftDrops: number;
+    rightDrops: number;
+    completedDrops: number;
+    pairsProduced: number;
+    anchorPoolSize: number;
+    mode: "root" | "exact";
+  }
+
+  /** The per-stage L/R PAIRING brick handle (pairing-nodes P-1). ALWAYS-RUNNING
+   *  (created with the trigger topology, exempt from consumer-refcount teardown)
+   *  and record-output: consumers get RECORDS via the async iterator, never the
+   *  pinned buffers. Release with `release()`. */
+  export interface PairStreamHandle extends AsyncIterable<PairBatch> {
+    /** Push a FIN-derived anchor (drop-oldest at `anchorCap`). Returns the
+     *  brick-assigned monotonic anchor id. */
+    pushAnchor(anchor: PairAnchor): number;
+    probe(): PairProbeSnapshot;
+    /** Drop the brick (join its thread). Idempotent. */
+    release(): void;
+    ref(): PairStreamHandle;
+    readonly id: string;
+  }
+
+  /**
+   * Create the per-stage L/R pairing brick over two live source bricks (convert
+   * / undistort / fovea / scale, resolved by id — a missing source throws). Two
+   * in-process FIFO taps are joined against FIN-derived anchors on the brick's
+   * own thread; always-running (does NOT park on zero subscribers). Trigger
+   * mode only — anchors are REAL exposure outcomes (pairing-nodes ruling 1).
+   */
+  export function createPairStream(
+    leftId: string,
+    rightId: string,
+    options?: PairStreamOptions,
+  ): PairStreamHandle;
 }

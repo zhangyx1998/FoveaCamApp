@@ -91,5 +91,9 @@ void appendRaw12pReports(Napi::Env env, Napi::Array &rows,
 // "compress", source-pipe input edge, `<sourceFormat>/zlib` opaque output).
 void appendCompressReports(Napi::Env env, Napi::Array &rows,
                            std::set<std::string> &seen);
+// pairing-nodes P-1: the per-stage L/R PAIRING brick (kind "pair", THREE input
+// edges left/right/anchor, record output). Always-running, weak-ref registry.
+void appendPairReports(Napi::Env env, Napi::Array &rows,
+                       std::set<std::string> &seen);
 
 } // namespace Arv

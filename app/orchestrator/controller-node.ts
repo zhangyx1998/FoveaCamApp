@@ -35,16 +35,19 @@
 //    invariant (disable-on-disconnect in sessions/controller.ts + the janitor)
 //    is the sole owner of that path, and this node must not bypass it.
 //
-//  - `bindFoveaCameras` + `startTriggerCapture` + `onPair` compose the pure,
-//    tested `RoundRobinFrameScheduler` (scheduler.ts) with `matchPair` (sync.ts)
-//    for trigger-mode fovea PAIR matching: FIN outcomes matched against per-side
-//    descriptor rings by trusted host-ns exposure time. Pairs carry frame
-//    DESCRIPTORS + FIN volt/timestamps (pixel payloads keep riding the existing
-//    pipes); the live Aravis frame-tap + recorder consumption are stage-F.
+//  - `startTriggerCapture` schedules round-robin CMD_FRAME (the pure, tested
+//    `RoundRobinFrameScheduler`, scheduler.ts) and FORWARDS each FIN outcome to
+//    the registered FIN sinks (`onFin`) — the anchor enrichment node
+//    (anchor-node.ts). The per-frame L/R pair matching that used to live here
+//    (`matchAndEmit` + `DescriptorRing` + `onPair` + `bindFoveaCameras`) is
+//    SUPERSEDED by the native root PairStream (docs/proposals/pairing-nodes.md
+//    ruling 6): the brick tolerance-matches raw camera arrivals against the FIN
+//    anchor on its own thread. `sync.ts` `matchPair`/`matchesExposure` stay as
+//    the ruled pure-JS reference (unit tests keep them).
 //
-// NATIVE-FREE by construction: it takes injected `FrameTap` descriptor seams and
-// type-only `Controller`/`FrameOutcome` imports, so sessions and vitest never
-// pull the addon (same idiom as UndistortPipeSeam / the scheduler's requester).
+// NATIVE-FREE by construction: it takes injected FIN-sink seams and type-only
+// `Controller`/`FrameOutcome` imports, so sessions and vitest never pull the
+// addon (same idiom as UndistortPipeSeam / the scheduler's requester).
 
 import type { Pos } from "@lib/controller-codec";
 import type { Controller, FrameOutcome, StreamHandle } from "./controller.js";
@@ -63,8 +66,6 @@ import {
   type FrameRequestPromise,
   type ScheduledFrameTarget,
 } from "./scheduler.js";
-import { matchPair, type ClockCalibration, type DeviceTimestamped } from "./sync.js";
-
 /** A commanded mirror pose (both eyes) — the position-stream payload. */
 export interface PositionPair {
   left: Pos;
@@ -100,43 +101,14 @@ export interface PositionInput {
   close(): Promise<void>;
 }
 
-/** One recent camera-frame descriptor for trigger-mode pair matching — INJECTED
- *  (never a native Frame): trusted host-ns capture time + optional seq. */
-export interface FrameDescriptor extends DeviceTimestamped {
-  readonly deviceTimestamp: bigint;
-  readonly seq?: number;
-}
-
-/** An injected per-side camera descriptor seam (no native imports): the source
- *  node id + a subscribe returning an unsubscribe. */
-export interface FrameTap {
-  nodeId: string;
-  subscribe(cb: (desc: FrameDescriptor) => void): () => void;
-}
-
-/** A trigger-matched fovea pair — the node's `fovea-pair` OUTPUT record. Carries
- *  the FIN outcome (volts + trusted timestamps) and the matched L/R DESCRIPTORS
- *  (pixels keep riding the existing pipes this wave). */
-export interface FoveaPair {
-  outcome: FrameOutcome;
-  left: FrameDescriptor;
-  right: FrameDescriptor;
-  stream: number;
-}
+/** An injected FIN-outcome sink (no native imports): the anchor enrichment
+ *  node registers one, and `startTriggerCapture` forwards every completed
+ *  exposure to it (pairing-nodes ruling 6). */
+export type FinSink = (outcome: FrameOutcome) => void;
 
 export interface TriggerCaptureOptions {
   /** Round-robin CMD_FRAME targets (stream ids from the open position inputs). */
   targets: ScheduledFrameTarget[];
-  /** Match window: `|tExposure − deviceTimestamp| ≤ tolerance`, both trusted
-   *  host-ns. RULED default (§3) = half the minimum frame interval; pass either
-   *  `toleranceNs` directly or `minFrameIntervalNs` (halved). */
-  toleranceNs?: bigint;
-  minFrameIntervalNs?: bigint;
-  /** Per-side residual delta (trigger-path latency) folded into the match;
-   *  default zero (calibrated owners put both sides in host-ns already). */
-  calibration?: ClockCalibration;
-  /** Bounded per-side descriptor ring depth (default 32). */
-  ringSize?: number;
   /** Scheduler pass-through knobs (pacing, timeouts). */
   scheduler?: Partial<
     Pick<
@@ -149,28 +121,7 @@ export interface TriggerCaptureOptions {
   >;
 }
 
-const DEFAULT_RING = 32;
-const DEFAULT_TOLERANCE_NS = 8_000_000n; // 8 ms — rig-tuned at stage-F.
 const V1_INTERVAL_MS = 1;
-
-type Side = "left" | "right";
-
-/** Bounded descriptor ring (newest-last, oldest evicted) — the per-side match
- *  window fed by the fovea taps. */
-class DescriptorRing {
-  private readonly items: FrameDescriptor[] = [];
-  constructor(private readonly capacity: number) {}
-  push(d: FrameDescriptor): void {
-    this.items.push(d);
-    if (this.items.length > this.capacity) this.items.shift();
-  }
-  get list(): readonly FrameDescriptor[] {
-    return this.items;
-  }
-  clear(): void {
-    this.items.length = 0;
-  }
-}
 
 export class ControllerNode {
   private controller: Controller | null = null;
@@ -185,10 +136,8 @@ export class ControllerNode {
   // v1 paced loop.
   private v1Running = false;
 
-  // Trigger mode.
-  private readonly rings = new Map<Side, DescriptorRing>();
-  private readonly pairListeners = new Set<(pair: FoveaPair) => void>();
-  private readonly foveaTaps: Array<() => void> = [];
+  // Trigger mode: FIN outcomes fan out to registered sinks (anchor enrichment).
+  private readonly finListeners = new Set<FinSink>();
 
   // Topology: ONE stable wiring registered at construction (stays first in the
   // registration Set, so its declared `controller` node wins over any
@@ -257,53 +206,18 @@ export class ControllerNode {
 
   // --- trigger mode ----------------------------------------------------------
 
-  /** Bind the named L/R fovea camera descriptor taps (INJECTED seams). Each
-   *  arriving descriptor lands in its side's bounded ring; a graph input
-   *  `camera/<serial> → controller` (port `foveaL`/`foveaR`) is registered.
-   *  Returns an unbind that drops the taps + edges + rings. */
-  bindFoveaCameras(cams: { left?: FrameTap; right?: FrameTap }): () => void {
-    const disposers: Array<() => void> = [];
-    const bind = (side: Side, tap: FrameTap | undefined, port: string): void => {
-      if (!tap) return;
-      const ring = new DescriptorRing(DEFAULT_RING);
-      this.rings.set(side, ring);
-      const off = tap.subscribe((d) => ring.push(d));
-      const edge = {
-        from: tap.nodeId,
-        to: nodeId.controller(),
-        port,
-        type: FRAME_STREAM,
-      };
-      this.wiring.edges.push(edge);
-      disposers.push(() => {
-        off();
-        this.rings.delete(side);
-        const i = this.wiring.edges.indexOf(edge);
-        if (i >= 0) this.wiring.edges.splice(i, 1);
-      });
-    };
-    bind("left", cams.left, "foveaL");
-    bind("right", cams.right, "foveaR");
-    const unbind = () => {
-      for (const d of disposers) d();
-    };
-    this.foveaTaps.push(unbind);
-    return unbind;
+  /** Register a FIN-outcome sink (the anchor enrichment node). Every completed
+   *  exposure from an active `startTriggerCapture` is forwarded here — the root
+   *  PairStream (not this node) does the L/R matching now (pairing-nodes ruling
+   *  6). Returns an unregister. */
+  onFin(sink: FinSink): () => void {
+    this.finListeners.add(sink);
+    return () => this.finListeners.delete(sink);
   }
 
-  /** Start round-robin CMD_FRAME capture; matched L/R pairs emit on `onPair`.
-   *  Composes the pure `RoundRobinFrameScheduler` + `matchPair`. */
+  /** Start round-robin CMD_FRAME capture; each FIN outcome is forwarded to the
+   *  registered FIN sinks. Composes the pure `RoundRobinFrameScheduler`. */
   startTriggerCapture(opts: TriggerCaptureOptions): { stop(): void } {
-    const tolerance =
-      opts.toleranceNs ??
-      (opts.minFrameIntervalNs !== undefined
-        ? opts.minFrameIntervalNs / 2n
-        : DEFAULT_TOLERANCE_NS);
-    const calibration = opts.calibration ?? { left: 0n, right: 0n };
-    if (opts.ringSize !== undefined)
-      for (const side of ["left", "right"] as const)
-        this.rings.set(side, new DescriptorRing(opts.ringSize));
-
     const requester = {
       frame: (request: FrameRequest): FrameRequestPromise => {
         const c = this.controller;
@@ -315,33 +229,14 @@ export class ControllerNode {
       requester,
       targets: opts.targets,
       ...(opts.scheduler ?? {}),
-      onFrame: (outcome) => this.matchAndEmit(outcome, calibration, tolerance),
+      onFrame: (outcome) => this.emitFin(outcome),
     });
     scheduler.start();
     return { stop: () => scheduler.stop() };
   }
 
-  onPair(cb: (pair: FoveaPair) => void): () => void {
-    this.pairListeners.add(cb);
-    return () => this.pairListeners.delete(cb);
-  }
-
-  private matchAndEmit(
-    outcome: FrameOutcome,
-    calibration: ClockCalibration,
-    tolerance: bigint,
-  ): void {
-    const left = this.rings.get("left")?.list ?? [];
-    const right = this.rings.get("right")?.list ?? [];
-    const matched = matchPair(left, right, calibration, outcome, tolerance);
-    if (!matched) return; // unmatched — dropped (aged out of the ring window)
-    const pair: FoveaPair = {
-      outcome,
-      left: matched.left,
-      right: matched.right,
-      stream: outcome.stream,
-    };
-    for (const cb of this.pairListeners) cb(pair);
+  private emitFin(outcome: FrameOutcome): void {
+    for (const sink of this.finListeners) sink(outcome);
   }
 
   // --- internals shared with PositionInputImpl -------------------------------
@@ -422,18 +317,13 @@ export class ControllerNode {
   /** Retire the node entirely (test/teardown). */
   dispose(): void {
     this.v1Running = false;
-    for (const off of this.foveaTaps) off();
-    this.foveaTaps.length = 0;
-    this.rings.clear();
-    this.pairListeners.clear();
+    this.finListeners.clear();
     this.unregisterWiring();
   }
 }
 
 /** Default control-edge type (no frame on the control path — scalars). */
 const PID_STREAM: StreamType = { kind: "analysis", schema: "pid" };
-/** Camera → controller (fovea trigger) edge type. */
-const FRAME_STREAM: StreamType = { kind: "frame", pixelFormat: "sensor", dtype: "U8" };
 
 class PositionInputImpl implements PositionInput {
   private stream: StreamHandle | null = null;

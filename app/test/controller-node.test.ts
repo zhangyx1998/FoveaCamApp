@@ -11,18 +11,18 @@
 //   (4) WIRING — an input with `from` registers a `from → controller` edge that
 //       the topology fold renders on the declared `controller` node; close
 //       retires it.
-//   (5) TRIGGER MATCHING — synthetic descriptors + FIN outcomes emit pairs within
-//       tolerance and drop the unmatched (scheduler.ts + sync.ts composed).
+//   (5) TRIGGER FIN FORWARDING — `startTriggerCapture` schedules CMD_FRAME and
+//       forwards each FIN outcome to every registered `onFin` sink (the L/R pair
+//       matching moved to the native PairStream, pairing-nodes ruling 6).
 //
 // No serial hardware / addon: the node takes injected fake controllers + fake
-// FrameTap seams (type-only `Controller`/`FrameOutcome` imports are erased).
+// FIN sinks (type-only `Controller`/`FrameOutcome` imports are erased).
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ControllerNode,
   controllerNode,
   resetControllerNodeForTest,
-  type FrameDescriptor,
 } from "@orchestrator/controller-node";
 import {
   buildTopology,
@@ -286,63 +286,47 @@ function fakeFrameController(outcome: FrameOutcome) {
   };
 }
 
-describe("ControllerNode — trigger-mode pair matching", () => {
-  it("emits a pair when both sides fall within tolerance of the FIN exposure", async () => {
+describe("ControllerNode — trigger-mode FIN forwarding", () => {
+  it("forwards each FIN outcome to every registered onFin sink", async () => {
     node = new ControllerNode();
-    const c = fakeFrameController(frameOutcome(1_002_000n));
+    const c = fakeFrameController(frameOutcome(1_002_000n, 2));
     node.bindController(c as never);
 
-    let pushL: (d: FrameDescriptor) => void = () => {};
-    let pushR: (d: FrameDescriptor) => void = () => {};
-    node.bindFoveaCameras({
-      left: { nodeId: "camera/L", subscribe: (cb) => ((pushL = cb), () => {}) },
-      right: { nodeId: "camera/R", subscribe: (cb) => ((pushR = cb), () => {}) },
-    });
-    const pairs: Array<{ left: FrameDescriptor; right: FrameDescriptor; stream: number }> = [];
-    node.onPair((p) => pairs.push(p));
-
-    pushL({ deviceTimestamp: 1_000_000n });
-    pushR({ deviceTimestamp: 1_005_000n });
+    const a: FrameOutcome[] = [];
+    const b: FrameOutcome[] = [];
+    node.onFin((o) => a.push(o));
+    node.onFin((o) => b.push(o));
 
     const cap = node.startTriggerCapture({
       targets: [{ stream: 0 }],
-      toleranceNs: 8_000_000n,
       scheduler: { maxInFlight: 1, defaultMinIntervalMs: 1000, acceptedTimeoutMs: 0, completionTimeoutMs: 0 },
     });
     await tick();
     cap.stop();
 
-    expect(pairs.length).toBeGreaterThan(0);
-    expect(pairs[0]!.left.deviceTimestamp).toBe(1_000_000n);
-    expect(pairs[0]!.right.deviceTimestamp).toBe(1_005_000n);
-    expect(pairs[0]!.stream).toBe(0);
+    // Both sinks saw the SAME FIN outcome (fan-out); no in-JS pair matching.
+    expect(a.length).toBeGreaterThan(0);
+    expect(b.length).toBe(a.length);
+    expect(a[0]!.tExposure).toBe(1_002_000n);
+    expect(a[0]!.stream).toBe(2);
   });
 
-  it("drops the FIN when a side has no descriptor within tolerance", async () => {
+  it("stops forwarding once the onFin registration is disposed", async () => {
     node = new ControllerNode();
     const c = fakeFrameController(frameOutcome(1_002_000n));
     node.bindController(c as never);
 
-    let pushL: (d: FrameDescriptor) => void = () => {};
-    let pushR: (d: FrameDescriptor) => void = () => {};
-    node.bindFoveaCameras({
-      left: { nodeId: "camera/L", subscribe: (cb) => ((pushL = cb), () => {}) },
-      right: { nodeId: "camera/R", subscribe: (cb) => ((pushR = cb), () => {}) },
-    });
-    const pairs: unknown[] = [];
-    node.onPair((p) => pairs.push(p));
-
-    pushL({ deviceTimestamp: 1_000_000n });
-    pushR({ deviceTimestamp: 50_000_000n }); // far outside the 8 ms window
+    const seen: FrameOutcome[] = [];
+    const off = node.onFin((o) => seen.push(o));
+    off(); // unregister before any capture
 
     const cap = node.startTriggerCapture({
       targets: [{ stream: 0 }],
-      toleranceNs: 8_000_000n,
       scheduler: { maxInFlight: 1, defaultMinIntervalMs: 1000, acceptedTimeoutMs: 0, completionTimeoutMs: 0 },
     });
     await tick();
     cap.stop();
 
-    expect(pairs.length).toBe(0); // unmatched → dropped
+    expect(seen.length).toBe(0); // no sink → nothing forwarded
   });
 });
