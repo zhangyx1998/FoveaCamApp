@@ -6,8 +6,8 @@
 //
 // Typed boundary for the calibrate-intrinsic session (docs/history/refactor/
 // orchestrator.md §7.1 S1b): per-camera intrinsic calibration (checkerboard
-// or ArUco/AprilTag marker), moved off the renderer. Unlike tracking-single/
-// manual-control/disparity-scope, this session manages an arbitrary set of
+// or ArUco/AprilTag marker), moved off the renderer. Unlike the fixed-triple
+// sessions (manual-control/disparity-scope), this session manages an arbitrary set of
 // connected cameras (like manage-cameras) rather than one fixed leased
 // triple — the renderer selects one at a time to calibrate.
 
@@ -53,7 +53,10 @@ export const calibrateIntrinsic = defineContract({
     recordCount: 0,
     busy: false as boolean,
   },
-  frames: ["preview"] as const,
+  // No session frames: the raw preview binds the active camera's
+  // `camera:<serial>` pipe via `usePipeFrame` (real-1c); detection overlays ride
+  // the `detection` telemetry.
+  frames: [] as const,
   commands: {
     /** Enumerate connected cameras + their calibration status. */
     refresh: cmd(),

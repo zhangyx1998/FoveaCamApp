@@ -83,7 +83,10 @@ export const multiFovea = defineContract({
     scheduler: { inFlight: 0, frames: 0, rejects: 0, timeouts: 0 },
     perf: { trackMs: { mean: 0, max: 0 } as Stat },
   },
-  frames: ["C"] as const,
+  // No session frames: the wide (C) view + the per-fovea processed crops all
+  // bind native pipes via `usePipeFrame` (the old `session.frame` producers were
+  // removed in the pipe migration — see index.vue).
+  frames: [] as const,
   commands: {
     setTargetEnabled: cmd<{ index: number; enabled: boolean }>(),
     steerTarget: cmd<{ index: number; center: Point2d }>(),

@@ -100,9 +100,8 @@ import { RollingStats } from "@lib/util/rolling";
 import { RECT } from "@lib/util/geometry";
 import type { Point2d } from "core/Geometry";
 import type { Pos } from "@lib/controller-codec";
-// Direct core import in a session — same precedent as tracking-single's
-// `createTracker`; all PURE logic lives in tracker-feed.ts/vergence.ts so
-// vitest never loads the native addon.
+// Direct core import in a session — an accepted precedent; all PURE logic lives
+// in tracker-feed.ts/vergence.ts so vitest never loads the native addon.
 import { createChainedTracker, type KcfTracker, type TrackerMeter } from "core/Tracker";
 import { registerNativeProbe } from "@orchestrator/native-probes";
 import type { WorkloadSnapshot } from "@lib/orchestrator/stats";
@@ -120,8 +119,8 @@ const TRACKER_LOST_TOLERANCE = 10;
 const SEED_PARALLEL_EPS = 1e-9;
 
 // Adapt the native tracker meter to the `WorkloadSnapshot` shape
-// `perfSnapshot.workloads` uses (same adapter tracking-single carries) —
-// keyed by the kcf NODE id so the meter folds onto the graph node's badge.
+// `perfSnapshot.workloads` uses — keyed by the kcf NODE id so the meter folds
+// onto the graph node's badge.
 function trackerWorkload(name: string, m: TrackerMeter): WorkloadSnapshot {
   const t = Date.now();
   return {
@@ -176,9 +175,8 @@ export default function disparityScopeSession(
     // The session-owned KCF thread on the C undistort chain (created on
     // activate, released on drain).
     let tk: KcfTracker | null = null;
-    // JS-side auto-follow gate: native has NO disarm (same as tracking-single),
-    // so a "released" tracker keeps emitting results and this gate ignores
-    // them until the next arm.
+    // JS-side auto-follow gate: native has NO disarm, so a "released" tracker
+    // keeps emitting results and this gate ignores them until the next arm.
     let trackerArmed = false;
     // Found results currently flowing (drives `frozen()` + the bbox overlay).
     let trackerActive = false;
@@ -494,7 +492,7 @@ export default function disparityScopeSession(
     // --- lifecycle --------------------------------------------------------
 
     // Connected pipe ids, in `pipeInputs` order — the graph wiring's edge
-    // sources (C-24 stage-1 shim, same pattern as tracking-single).
+    // sources (C-24 stage-1 shim).
     let pipeIds: string[] = [];
 
     /** Connect a pipe by id (refcount++ → C-21 gate) and return its worker
@@ -771,8 +769,7 @@ export default function disparityScopeSession(
               // Native releaseOverride RE-ARMS KCF at the drag end on the next
               // frame; the PID continues seamlessly (no seed — it was never
               // interrupted). With auto-follow OFF the JS gate ignores the
-              // re-armed tracker's results (native has no disarm — same
-              // discipline as tracking-single).
+              // re-armed tracker's results (native has no disarm).
               tk.releaseOverride();
               trackerArmed = s.state.tracker_enabled;
               trackerActive = false;

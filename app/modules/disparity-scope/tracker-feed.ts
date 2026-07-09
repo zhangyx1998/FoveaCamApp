@@ -13,7 +13,7 @@
 //
 // Pure per-result REDUCER (types-only imports → no native load), extracted
 // from the session closure so the routing is unit-testable with synthetic
-// `TrackResult`s — the same pattern as tracking-single's `tracker-consume`.
+// `TrackResult`s.
 //
 // Routing semantics (mirrors the RULED drag flow):
 //  - OVERRIDDEN results (a pointer drag pinned the tracker) are ALWAYS
@@ -21,8 +21,8 @@
 //    `onDrag(center)` fires with the drag point every frame, and the override
 //    flag rides downstream (session → kernel target → projection → PID).
 //  - Normal results are gated by `armed()` (the JS-side "auto-follow engaged"
-//    flag — native has NO disarm, same as tracking-single: released targets
-//    keep emitting results, the gate ignores them until re-armed).
+//    flag — native has NO disarm: released targets keep emitting results, the
+//    gate ignores them until re-armed).
 //  - Found → `onTrack(center, bbox)`; miss → counted, and after
 //    `lostTolerance` CONSECUTIVE misses `onLost()` fires ONCE (the counter
 //    resets so a still-armed caller isn't spammed). Lost POLICY (disarm,

@@ -67,8 +67,8 @@ const drawer_height = ref(0);
 
 // --- targeting: mouse drag (pixel) vs. a selected/hovered set-point (angle).
 // `target_loc` is renderer-local memory of "where the last drag left off" —
-// unlike tracking-single, there's no server-held tracker state to fall back
-// to, so this is what re-activates when a set-point selection clears.
+// this session holds no server-side tracker state to fall back to, so this is
+// what re-activates when a set-point selection clears.
 const target_loc = shallowRef<Point2d>({ x: 0, y: 0 });
 const cursor = shallowRef<(Rect & { buttons: number }) | null>(null);
 const is_drag = computed(() => cursor.value !== null);

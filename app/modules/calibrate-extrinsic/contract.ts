@@ -62,7 +62,9 @@ export const calibrateExtrinsic = defineContract({
       cursor_r: null as Point2d | null,
     },
   },
-  frames: ["L", "C", "R"] as const,
+  // No session frames: the raw L/C/R previews bind the `camera:<serial>` pipe
+  // via `usePipeFrame` (C-22 migration); detections/overlays ride telemetry.
+  frames: [] as const,
   commands: {
     setTargetId: cmd<{ role: "L" | "C" | "R"; id: number }>(),
     /** Per-eye override slot drivers (reusable `pidOverride` fragment): `{ value }`

@@ -52,7 +52,10 @@ export const calibrateDrift = defineContract({
     /** Currently-saved drift (the triple config's `drift_l`/`drift_r`). */
     saved: { L: null, R: null } as Record<"L" | "R", Point2d | null>,
   },
-  frames: ["L", "C", "R"] as const,
+  // No session frames: the raw L/C/R previews bind the `camera:<serial>` pipe
+  // via `usePipeFrame` (C-22 migration); marker overlays are drawn from the
+  // `detection` telemetry, not frames.
+  frames: [] as const,
   commands: {
     setTargetId: cmd<{ role: "L" | "C" | "R"; id: number }>(),
     /** Per-eye override slot drivers (reusable `pidOverride` fragment): `{ value }`

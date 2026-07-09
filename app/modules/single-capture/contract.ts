@@ -6,8 +6,9 @@
 //
 // Typed boundary for the live camera view (`liveview`) session — the
 // streaming-path validation slice. Pick a camera by serial (`state.serial`);
-// the orchestrator opens it and publishes BGRA8 frames on the `frame` channel.
-// No calibration or controller involved.
+// the orchestrator opens it and the renderer binds its `camera:<serial>` convert
+// pipe via `usePipeFrame` (real-1c — no `session.frame`). No calibration or
+// controller involved.
 
 import { cmd, defineContract } from "@lib/orchestrator/protocol";
 import type { CameraInfo } from "@lib/orchestrator/contracts";
@@ -17,7 +18,9 @@ export type { CameraInfo };
 export const liveview = defineContract({
   state: { serial: "" },
   telemetry: { cameras: [] as CameraInfo[] },
-  frames: ["frame"] as const,
+  // No session frames: the live view binds the camera's native `camera:<serial>`
+  // pipe via `usePipeFrame` (real-1c), not `session.frame`.
+  frames: [] as const,
   commands: {
     /** Rescan connected cameras; also pushed as telemetry. */
     refresh: cmd<void, CameraInfo[]>(),

@@ -19,8 +19,9 @@ const { state, telemetry } = session;
 const pipesSession = useSession(pipes, "pipes");
 // real-1g (C-23): the wide view binds the first-class UNDISTORTED pipe when the
 // session advertises it (target overlays are in undistorted pixel space); falls
-// back to raw on uncalibrated rigs. Per-fovea processed crops stay on
-// session.frame.
+// back to raw on uncalibrated rigs. Per-fovea processed crops bind their node
+// pipes via `usePipeFrame` too (see `foveaFrames` below — the old
+// `session.frame("fovea:<i>")` producers are gone).
 const center = usePipeFrame(() =>
   state.undistortPipe ?? (state.serials?.C ? nodeId.convert(state.serials.C) : null),
 );

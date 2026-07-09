@@ -4,8 +4,8 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Manual-control session — same substrate as tracking-single (calibrated
-// L/C/R triple + timer-paced actuation) minus the KCF tracker: the target is
+// Manual-control session — a calibrated L/C/R triple + timer-paced actuation
+// with no KCF tracker: the target is
 // always whatever `steer` last set, either a mouse-drag pixel (converted
 // server-side via `undistort.angular`) or a locally-held set-point's angle.
 // Capture and recording (docs/history/refactor/orchestrator.md roadmap item 6) are

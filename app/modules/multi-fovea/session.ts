@@ -260,8 +260,8 @@ export default function multiFoveaSession(
 
       // Unified-topology §5: L/R mirror-steered HOMOGRAPHY undistort bricks,
       // chained on the shared converters + fed H(mirrorAt(t)) at ~200 Hz
-      // (same wiring as tracking-single — see homography-feeder for the v1
-      // A2H∘V2A derivation + its open direction question). The renderer-
+      // (the same wiring the other steered sessions use — see homography-feeder
+      // for the v1 A2H∘V2A derivation + its open direction question). The renderer-
       // composed fovea crop slots chain on the CENTER camera's intrinsic
       // undistort (advertised above) when calibrated, else its converter —
       // `createFoveaMaterializer` resolves that per camera.
@@ -362,8 +362,8 @@ export default function multiFoveaSession(
   });
 }
 
-/** Adapt the native meter to the `WorkloadSnapshot` shape (same as
- *  tracking-single's `trackerWorkload`, one thread for N targets). */
+/** Adapt the native meter to the `WorkloadSnapshot` shape (the same adapter
+ *  the disparity tracker uses, one thread for N targets). */
 function multiWorkload(m: Tracker.TrackerMeter): WorkloadSnapshot {
   const t = Date.now();
   return {

@@ -13,7 +13,7 @@
 // Checkerboard detection runs on the registry's shared BGRA8 preview (via
 // `onView`, converted to grayscale with `cvtColor` — the same "derive
 // whatever the vision op needs from the one shared preview format" pattern
-// tracking-single/disparity-scope already use, rather than opening a second
+// disparity-scope already uses, rather than opening a second
 // pixel format). Marker detection can't do that: `MarkerDetector` only
 // consumes a raw `Frame`/`Stream<Frame>`, not a `Mat`. Following the
 // concurrent-raw-stream precedent manual-control's capture/recording already
