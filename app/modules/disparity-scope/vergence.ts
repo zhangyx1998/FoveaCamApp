@@ -428,13 +428,14 @@ export type VergenceSeed = { pan: Point2d; verge: number; v_shift: number };
  * the dragged target, the foveas' actual gaze leaves the strip, both scores
  * drop below `minScore`, control holds, the foveas never move).
  *
- * The DRAG passes `verge = v_shift = 0` — vergence at INFINITY, both eyes
- * PARALLEL on the cursor ray (only the `pan` calibration correction rides
- * along) — and zeroes those controllers to match, so releasing the drag
+ * The DRAG resets pan/verge/v_shift at pointer-down (session, user rulings
+ * 2026-07-08/09) and passes the (now all-zero) controller state — both eyes
+ * exactly ON the raw cursor ray: PARALLEL, vergence at INFINITY, no residual
+ * corrections. Controllers == command throughout, so releasing the drag
  * resumes {@link stepVergence} from the same values + the same target ⇒ the
  * first resumed output equals the last follow output (velocity-form
- * integrator = command) — continuity without any seeding; depth then
- * re-converges from infinity. The function itself is generic over `held`
+ * integrator = command) — continuity without any seeding; every DOF then
+ * re-converges from scratch. The function itself is generic over `held`
  * (the map is the control law's reconstruction for ANY controller state).
  */
 export function followTarget(

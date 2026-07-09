@@ -247,12 +247,14 @@ wave lands + E's API is committed):
     strip, both match scores fall below `min_score`, and the control law
     HOLDS: the foveas never move. New semantics: while `overridden`, the
     control step is a DIRECT FOLLOW (`followTarget`, vergence.ts) — BOTH
-    eyes parallel on the cursor ray with **vergence at infinity** (verge =
-    v_shift = 0; only the held `pan` calibration correction rides along —
-    no PID stepping, no match-score gate). The verge/v_shift controllers
-    are zeroed as the command state, so release still resumes the PID
+    eyes parallel on the cursor ray with **vergence at infinity** (no PID
+    stepping, no match-score gate). REFINED 2026-07-09: pointer-down
+    RESETS pan, v_shift AND verge, so the follow rides the RAW cursor ray
+    with no residual corrections (drag start may visibly snap if
+    corrections had accumulated — intended). The all-zero controller
+    state equals the command, so release still resumes the PID
     continuously with no seed (the release-jump class stays dead) and
-    depth re-converges from infinity. Everything else in this ruling
+    every DOF re-converges from scratch. Everything else in this ruling
     (tracker override transport, flag plumbing, re-arm on release, PID
     slot = programmatic only) is unchanged.
 
@@ -284,15 +286,15 @@ wave lands + E's API is committed):
   node's `step` runs on EVERY projection throughout — nothing pins its
   output on this path, no seed on release.
 - "Acts correspondingly" while `projection.overridden` — REVISED per the
-  2026-07-08 amendment above: the control step returns the DIRECT-FOLLOW
-  volts (`followTarget` with verge = v_shift = 0 — both eyes parallel on
-  the cursor ray, vergence at infinity; the pointer handler and `onDrag`
-  also push them synchronously so the follow rides pointer/frame rate,
-  not kernel rate); the session holds the convergence freeze-window open
-  (a drag is user activity) and reports "manual" status. The original
-  "control math unchanged / low score holds during a drag" shipping note
-  is what the amendment repealed — the match gate no longer applies while
-  dragging.
+  2026-07-08/09 amendment above: pointer-down resets pan/verge/v_shift
+  and the control step returns the DIRECT-FOLLOW volts (`followTarget`
+  of the all-zero state — both eyes parallel on the raw cursor ray,
+  vergence at infinity; the pointer handler and `onDrag` also push them
+  synchronously so the follow rides pointer/frame rate, not kernel
+  rate); the session holds the convergence freeze-window open (a drag is
+  user activity) and reports "manual" status. The original "control math
+  unchanged / low score holds during a drag" shipping note is what the
+  amendment repealed — the match gate no longer applies while dragging.
 - The `pidOverride` contract fragment STAYS in disparity-scope as the
   programmatic volts-only path (module-agnostic `usePidOverride` proxy;
   calibrate apps keep their own usage); its seeded release

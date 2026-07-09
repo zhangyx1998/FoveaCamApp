@@ -184,25 +184,27 @@ names the mechanism it gates.
 - [ ] **Tracker tracks what the matcher sees** — the kcf node chains on the
   C UNDISTORT brick: the tracker bbox overlay stays aligned with the
   undistorted C view (no distortion offset near the edges).
-- [ ] **§3.5 drag semantics (AMENDED 2026-07-08: direct follow)** — dragging
-  on the C view: the override badge lights (telemetry `overridden` —
-  tracker flag, NOT the PID slot), the sliced view + guide strip follow
-  the pointer, and BOTH FOVEAS TRACK THE CURSOR RAY IN PARALLEL —
-  vergence at infinity (`followTarget` with verge = v_shift = 0; no PID
-  stepping, no match gate; the earlier "PID servos toward the tile"
-  semantics deadlocked on low score and the foveas never moved — rig
-  find 2026-07-08 22:40). Works over unmatchable content (blank wall)
-  too; the depth readout shows ∞ while dragging. Status reads "manual";
-  a long drag never hits the convergence timeout. Drag should feel
-  snappy (follow rides pointer/frame rate, not kernel rate).
+- [ ] **§3.5 drag semantics (AMENDED 2026-07-08/09: direct parallel follow)**
+  — dragging on the C view: the override badge lights (telemetry
+  `overridden` — tracker flag, NOT the PID slot), the sliced view + guide
+  strip follow the pointer, and BOTH FOVEAS TRACK THE RAW CURSOR RAY IN
+  PARALLEL — vergence at infinity, pan/v_shift/verge all RESET at
+  pointer-down (no PID stepping, no match gate; the earlier "PID servos
+  toward the tile" semantics deadlocked on low score and the foveas never
+  moved — rig find 2026-07-08 22:40). EXPECT a visible snap at drag start
+  when corrections had accumulated (the reset is intended). Works over
+  unmatchable content (blank wall) too; the depth readout shows ∞ while
+  dragging. Status reads "manual"; a long drag never hits the convergence
+  timeout. Drag should feel snappy (follow rides pointer/frame rate, not
+  kernel rate).
 - [ ] **Release re-arms, no jump** — on release with auto-follow ON, the
   tracker re-arms at the drag end and keeps following; with auto-follow
   OFF the target stays put (results gated JS-side; native thread keeps
   running — known cost, no native disarm). Either way the mirrors continue
-  from their in-flight PARALLEL pose (verge/v_shift zeroed as the command
-  state: the first resumed PID output equals the last follow output) — no
-  discontinuity class on this path; vergence then re-converges from
-  infinity onto the release point.
+  from their in-flight PARALLEL pose (all controllers reset at drag start,
+  so state == command: the first resumed PID output equals the last follow
+  output) — no discontinuity class on this path; every DOF then
+  re-converges from scratch onto the release point.
 - [ ] **Lost policy parity** — auto-follow losing the target for ~10
   consecutive frames drops the gate (status returns to armed-off behavior,
   target holds last-good) — same UX as the old in-kernel tolerance.

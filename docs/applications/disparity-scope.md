@@ -36,24 +36,26 @@ StreamViews for the wide (undistorted C) view + sliced/guide/match/disparity
 views; verge/baseline/shift parameters; PID tuning; target select (tracker
 auto-follow). Dragging on the C view calls the **tracker's override** with the
 dragged point (NOT the PID slot) and the foveas **follow the cursor directly**
-(direct-follow ruling 2026-07-08, `followTarget` in vergence.ts): both eyes
-track the cursor ray IN PARALLEL — **vergence at infinity** (verge = v_shift =
-0; only the pan calibration correction rides along) — the PID does NOT step
-and the match-score gate does not apply during the drag (the earlier "PID
-keeps stepping" semantics could never follow a drag onto unmatched content:
-the strip recenters on the dragged target, the match scores drop, control
-holds, the foveas never move). The verge/v_shift controllers are zeroed as
-the command state, so on release the native tracker re-arms there and the PID
-resumes continuously from the parallel pose (first resumed output == last
-follow output — no release "jump"), then re-converges depth from infinity.
-The UI override badge reads the `overridden` telemetry (the tracker flag).
+(direct-follow rulings 2026-07-08/09, `followTarget` in vergence.ts):
+pointer-down **resets pan, v_shift and verge**, so both eyes track the RAW
+cursor ray IN PARALLEL — **vergence at infinity**, no residual corrections —
+the PID does NOT step and the match-score gate does not apply during the drag
+(the earlier "PID keeps stepping" semantics could never follow a drag onto
+unmatched content: the strip recenters on the dragged target, the match
+scores drop, control holds, the foveas never move). The all-zero controller
+state equals the follow command, so on release the native tracker re-arms
+there and the PID resumes continuously from the parallel pose (first resumed
+output == last follow output — no release "jump"), then re-converges every
+DOF from scratch. The UI override badge reads the `overridden` telemetry
+(the tracker flag).
 
 ## Expected behavior
 Matching quality visible in match_left/right; disparity/verge numbers steady on
-a static scene; PID engage converges foveas onto the target. During a drag
-both foveas track the cursor ray in parallel (vergence at infinity, status
-"manual"), regardless of match quality; vergence re-converges from infinity
-on release.
+a static scene; PID engage converges foveas onto the target. Drag start may
+visibly snap the foveas onto the raw cursor ray (accumulated pan/v_shift
+corrections reset); during the drag both foveas track the ray in parallel
+(vergence at infinity, status "manual"), regardless of match quality; all
+DOF re-converge from scratch on release.
 
 ## The fovea↔wide scale math (audit finding — corrects the seed's bug (a))
 
