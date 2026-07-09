@@ -526,4 +526,20 @@ private:
 // converterProbeAll + the real-1g undistortProbeAll).
 Napi::Value meterSnapshotToJs(Napi::Env env, const Meter::Snapshot &s);
 
+// ---- raw12p in-process OwnedFrame tap (multi-fovea-recording R-1 transport) --
+// The packed raw12p producer (RawPipe.cpp) exposes its VERBATIM wire payload as
+// an in-process OwnedFrame tap so brick→brick consumers (CompressStream) read it
+// WITHOUT a SHM ring (rings = IPC/JS-worker boundaries ONLY, ruled 2026-07-09).
+// The tap fans out on the CAPTURE thread, so the channel MUST be latest-wins
+// (LeakyTapChannel) — a blocking FIFO would stall capture. Drops are metered
+// downstream via OwnedFrame.seq gaps. The raw12p RING output is unchanged (it
+// stays the lossless path for DIRECT/uncompressed recording). Defined in
+// RawPipe.cpp (owns the raw12p registry).
+//   openRaw12pTap  — register `channel` in the pipe's fanout; false if unknown.
+//                    The caller must ALSO drive the pipe's consumer gate (a
+//                    connect()) so the gated tap actually exists + produces.
+//   closeRaw12pTap — unregister + close `channel` (wakes a blocked poll); idem.
+bool openRaw12pTap(const std::string &pipeId, const TapChannel::Ptr &channel);
+void closeRaw12pTap(const std::string &pipeId, const TapChannel::Ptr &channel);
+
 } // namespace Arv

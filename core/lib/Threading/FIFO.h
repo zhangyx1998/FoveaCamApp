@@ -124,9 +124,16 @@ public:
 
   T read(unsigned timeout_ms) {
     std::unique_lock lock(mutex);
+    // Deadline computed ONCE (not inside the loop): recomputing `now() +
+    // timeout` every wakeup re-arms a fresh window, so a persistently empty
+    // queue would never time out (the wait loop spins forever on spurious
+    // wakeups / non-satisfying notifies). Bail as soon as the fixed deadline
+    // passes.
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
     while (queue.empty() && !closed)
-      cond_w.wait_until(lock, std::chrono::steady_clock::now() +
-                                  std::chrono::milliseconds(timeout_ms));
+      if (cond_w.wait_until(lock, deadline) == std::cv_status::timeout)
+        break;
     if (queue.empty()) {
       lock.unlock();
       cond_r.notify_all();

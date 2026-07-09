@@ -181,6 +181,7 @@ public:
         {
             CORE_OBJECT_REGISTER(PairObject, env),
             INSTANCE_METHOD(PairObject, pushAnchor),
+            INSTANCE_METHOD(PairObject, pushResolvedAnchor),
             INSTANCE_METHOD(PairObject, probe),
             Napi::InstanceWrap<PairObject>::template InstanceMethod<
                 &PairObject::asyncIterator>(asyncIterator),
@@ -214,6 +215,49 @@ public:
         n = buf.size;
       }
       const uint64_t id = core()->pushAnchor(tExposure, stream, payload, n);
+      return Napi::Number::New(env, static_cast<double>(id));
+    }
+    JS_EXCEPT(env.Undefined())
+  }
+
+  // pushResolvedAnchor({ anchorId?, tExposure, stream?, leftKey, rightKey,
+  //   payload? }) — the root→downstream key delivery (pairing-nodes ruling 2).
+  // The root brick's completed pair carries left/right deviceTimestamps; the
+  // session forwards them (loop-safe, FIN rate) as the exact-join keys for the
+  // NEXT stage's `exact` brick. No frame is re-stamped (trusted-time).
+  FN(pushResolvedAnchor) {
+    auto env = info.Env();
+    try {
+      JS_ASSERT(info[0].IsObject(), TypeError,
+                "pushResolvedAnchor: anchor object required", env.Undefined());
+      auto o = info[0].As<Napi::Object>();
+      JS_ASSERT(o.Has("leftKey") && o.Has("rightKey"), TypeError,
+                "pushResolvedAnchor: `leftKey` and `rightKey` (bigint ns) required",
+                env.Undefined());
+      const int64_t leftKey = convert<int64_t>(o.Get("leftKey"));
+      const int64_t rightKey = convert<int64_t>(o.Get("rightKey"));
+      const int64_t tExposure =
+          o.Has("tExposure") && !o.Get("tExposure").IsUndefined()
+              ? convert<int64_t>(o.Get("tExposure"))
+              : 0;
+      const uint64_t anchorId =
+          o.Has("anchorId") && o.Get("anchorId").IsNumber()
+              ? static_cast<uint64_t>(o.Get("anchorId").As<Napi::Number>().DoubleValue())
+              : 0;
+      const int32_t stream =
+          o.Has("stream") && o.Get("stream").IsNumber()
+              ? o.Get("stream").As<Napi::Number>().Int32Value()
+              : 0;
+      const double *payload = nullptr;
+      size_t n = 0;
+      if (o.Has("payload") && !o.Get("payload").IsUndefined() &&
+          !o.Get("payload").IsNull()) {
+        auto buf = bufferView<double>(o.Get("payload"));
+        payload = buf.data;
+        n = buf.size;
+      }
+      const uint64_t id = core()->pushResolvedAnchor(anchorId, tExposure, stream,
+                                                     leftKey, rightKey, payload, n);
       return Napi::Number::New(env, static_cast<double>(id));
     }
     JS_EXCEPT(env.Undefined())

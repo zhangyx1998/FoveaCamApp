@@ -192,6 +192,7 @@ describe("recorder node churn soak (dynamic streams + descriptors + camera matri
     while (Date.now() - started < SOAK_MS) {
       await sleep(250);
       const frac = (Date.now() - started) / SOAK_MS;
+      // ADD churn FIRST so a newly-added stream posts a descriptor this same tick.
       if (!addedExtra && frac > 0.3) {
         node.addStream(CHURNED, { pipeId: pipeIdFor(CHURNED) });
         addedExtra = true;
@@ -200,14 +201,11 @@ describe("recorder node churn soak (dynamic streams + descriptors + camera matri
         node.addDataStream("fovea/track-2");
         addedTrack2 = true;
       }
-      if (!removedExtra && frac > 0.65) {
-        node.removeStream(CHURNED);
-        removedExtra = true;
-      }
-      if (!removedTrack1 && frac > 0.8) {
-        node.removeDataStream("fovea/track-1");
-        removedTrack1 = true;
-      }
+      // POST descriptors BEFORE the REMOVE gates: under contention a coarse /
+      // overshooting sleep can collapse the whole add→remove window into one
+      // tick; posting first guarantees a removed-this-tick stream still records
+      // at least one descriptor (the "posted at least one" invariant), instead of
+      // the remove gate racing ahead of its only post.
       seqPointer += 1;
       const descriptor = {
         bbox: { x: 10, y: 20, width: 30, height: 40 },
@@ -220,6 +218,15 @@ describe("recorder node churn soak (dynamic streams + descriptors + camera matri
       if (addedTrack2) {
         node.postData("fovea/track-2", { tNs: Date.now() * 1e6, ...descriptor });
         descriptorPosts["fovea/track-2"] += 1;
+      }
+      // REMOVE churn AFTER posting (drain-the-tail still exercised).
+      if (!removedExtra && frac > 0.65) {
+        node.removeStream(CHURNED);
+        removedExtra = true;
+      }
+      if (!removedTrack1 && frac > 0.8) {
+        node.removeDataStream("fovea/track-1");
+        removedTrack1 = true;
       }
       node.stats(); // exercise the low-rate UI-stats path during the soak
     }

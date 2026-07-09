@@ -10,23 +10,24 @@
 // container-seekability ruling) into an output pipe whose advert carries the
 // source format with a `/codec` suffix (`BayerRG12p/zlib`).
 //
-// TRANSPORT (why not the ScaleStream in-process tap): the PRIMARY compression
-// input is the packed `camera/<serial>/raw12p` stream, which exists ONLY as an
-// SHM pipe (a pre-Frame ArvBuffer tap — there is no in-process ConvertedFrame
-// producer carrying the verbatim packed payload). So this brick reads its source
-// via the shared SHM READ path (`ShmRead.h` `readSeqInto`, FIFO — ordered and
-// lossless-within-a-ring, exactly the recorder's discipline) on its OWN native
-// thread, and forwards the SOURCE frame's identity (width/height/origin +
-// device/system timestamps from the source slot meta). It works for any frame
-// pipe (raw12p, raw, convert, undistort, …) uniformly. The NAPI surface /
-// registry / consumer gate / meter / topology row mirror ScaleStream + RawPipe.
+// TRANSPORT (R-1 re-base, multi-fovea-recording): brick→brick handoffs are
+// in-process OwnedFrame taps, NEVER SHM rings (rings = IPC/JS-worker boundaries
+// ONLY, ruled 2026-07-09). The PRIMARY compression input is the packed
+// `camera/<serial>/raw12p` stream; RawPipe.cpp now exposes its verbatim payload
+// as an OwnedFrame tap (`openRaw12pTap`), so this brick reads its source via a
+// latest-wins `LeakyTapChannel` (the raw12p fan-out runs on the CAPTURE thread —
+// a blocking FIFO would stall capture; drops are metered via OwnedFrame.seq
+// gaps). It forwards the SOURCE frame's identity (width/height/origin +
+// device/system timestamps) from the OwnedFrame. The raw12p RING output stays
+// unchanged as the lossless path for DIRECT (uncompressed) recording.
 //
 // DEMAND: the output (compress) pipe's consumer refcount gates the brick (C-21).
-// On the 0→1 edge the gate CONNECTS the source pipe (driving the source
-// producer's own gate) and spawns the runner thread; on →0 it joins the runner
-// and disconnects the source. All connect/disconnect + registry mutation stay on
-// the NAPI thread (the gate fires there); the runner touches only its private
-// ReadMapping + the output FrameSink.
+// On the 0→1 edge the gate OPENS a tap channel on the source + CONNECTS the
+// source pipe (driving the raw12p producer's own gate, so the gated tap exists)
+// + spawns the runner reading that channel; on →0 it closes the channel (waking
+// the runner), joins it, and disconnects the source. All connect/disconnect +
+// registry mutation stay on the NAPI thread (the gate fires there); the runner
+// touches only its private tap channel + scratch buffer + the output FrameSink.
 //
 // zlib (system libz, no new dep): per-frame `compress2` at a construction-time
 // level (default `Z_DEFAULT_COMPRESSION`). The blob is published verbatim via
@@ -49,36 +50,33 @@
 #include <Topology.h>
 #include <napi-helper.h>
 
-#include "../../include/ShmRead.h" // ReadMapping, readSeqInto (libc-only read TU)
-#include "ConverterStream.h" // converterNowMs, meterSnapshotToJs, Pipe::*, Meter
+#include "ConverterStream.h" // converterNowMs, meterSnapshotToJs, Pipe::*, Meter,
+                             // OwnedFrame, TapChannel, openRaw12pTap/closeRaw12pTap
 
 using namespace Napi;
 
 namespace Arv {
 
-// ---- the runner: a private native thread FIFO-reading the source SHM ring ----
-// Owns its ReadMapping + scratch buffers; touches nothing NAPI/registry. Created
-// while the output pipe has ≥1 consumer, joined when it drops to 0.
+// ---- the runner: a private native thread polling the source OwnedFrame tap ----
+// Owns its scratch buffer + the tap channel; touches nothing NAPI/registry.
+// Created while the output pipe has ≥1 consumer, joined when it drops to 0.
 class CompressRunner {
 public:
-  CompressRunner(std::string sourceShmName, Pipe::FrameSink *sink,
-                 size_t srcSlotBytes, uint32_t srcChannels,
-                 size_t srcBytesPerPixel, size_t outMaxBytes, int level,
-                 Meter::ThreadMeter *meter)
-      : sourceShmName_(std::move(sourceShmName)), sink_(sink),
-        srcSlotBytes_(srcSlotBytes), srcChannels_(srcChannels),
-        srcBytesPerPixel_(srcBytesPerPixel ? srcBytesPerPixel : 1),
+  CompressRunner(TapChannel::Ptr channel, Pipe::FrameSink *sink,
+                 size_t srcSlotBytes, uint32_t srcChannels, size_t outMaxBytes,
+                 int level, Meter::ThreadMeter *meter)
+      : channel_(std::move(channel)), sink_(sink), srcChannels_(srcChannels),
         outMaxBytes_(outMaxBytes), level_(level), meter_(meter) {
-    src_.resize(srcSlotBytes_ ? srcSlotBytes_ : 1);
     // Worst-case compressed size for a full source slot (compress2 never writes
     // past this). The output pipe's advert must size maxBytes ≥ this; an
     // undersize makes offer() drop the (near-incompressible) frame.
-    dst_.resize(static_cast<size_t>(::compressBound(
-        static_cast<uLong>(src_.size()))));
+    dst_.resize(static_cast<size_t>(
+        ::compressBound(static_cast<uLong>(srcSlotBytes ? srcSlotBytes : 1))));
     thread_ = std::thread([this] { run(); });
   }
   ~CompressRunner() {
-    stop_.store(true, std::memory_order_release);
+    if (channel_)
+      channel_->close(); // wake a blocked poll(wait) (EOS -> run() returns)
     if (thread_.joinable())
       thread_.join();
   }
@@ -87,65 +85,38 @@ public:
 
 private:
   void run() {
-    std::unique_ptr<ShmRing::ReadMapping> map;
-    try {
-      map = std::make_unique<ShmRing::ReadMapping>(sourceShmName_);
-    } catch (...) {
-      return; // source segment vanished/never mapped — park (re-attach re-opens)
-    }
-    uint64_t want = 1; // FIFO cursor: lastDelivered + 1 (ShmWrite round-robin)
-    while (!stop_.load(std::memory_order_acquire)) {
-      ShmRing::ReadResult r;
-      const auto st =
-          ShmRing::readSeqInto(*map, want, src_.data(), src_.size(), r);
-      switch (st) {
-      case ShmRing::ReadStatus::Ok: {
-        // Active source bytes: the slot's own payloadBytes when it records one
-        // (a chained/opaque source), else the dim-derived active length
-        // (width*height*bytes-per-pixel). Clamp to the buffer for safety.
-        size_t srcBytes = r.payloadBytes
-                              ? static_cast<size_t>(r.payloadBytes)
-                              : static_cast<size_t>(r.width) * r.height *
-                                    srcBytesPerPixel_;
-        if (srcBytes > src_.size())
-          srcBytes = src_.size();
-        compressAndOffer(srcBytes, r);
-        ++want;
-        break;
+    while (true) {
+      OwnedFrame::Ptr in;
+      try {
+        if (!channel_->poll(in, /*wait=*/true))
+          continue; // spurious wake (Leaky) — no new frame yet
+      } catch (Threading::EOS &) {
+        return; // channel closed (teardown / source detach) — park
       }
-      case ShmRing::ReadStatus::NotYet:
-        std::this_thread::sleep_for(std::chrono::milliseconds(1)); // short poll
-        break;
-      case ShmRing::ReadStatus::Gone:
-        // Lagged a full ring: account the gap as drops and jump to the oldest
-        // still-live seq (exactly the recorder's Gone handling).
-        if (meter_ && r.oldestSeq > want)
-          meter_->drop(static_cast<uint32_t>(r.oldestSeq - want));
-        want = r.oldestSeq;
-        break;
-      case ShmRing::ReadStatus::Closed:
-        return; // source pipe retired — park (re-attach re-opens a fresh epoch)
-      case ShmRing::ReadStatus::TornRead:
-        std::this_thread::yield(); // transient — retry the SAME want
-        break;
-      case ShmRing::ReadStatus::DestTooSmall: // src_ == slot size: never expected
-      case ShmRing::ReadStatus::NoNewFrame:   // not produced by readSeqInto
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        break;
-      }
+      if (!in)
+        continue;
+      // Latest-wins drops on the capture-thread fan-out since the last frame
+      // (seq-gap accounting — the raw12p tap is Leaky, so a slow compressor
+      // sheds stale frames, metered here exactly like a ChainedStream tap).
+      if (lastSeq_ && in->seq > lastSeq_ + 1 && meter_)
+        meter_->drop(static_cast<uint32_t>(in->seq - lastSeq_ - 1));
+      lastSeq_ = in->seq;
+      compressAndOffer(in);
     }
   }
 
-  void compressAndOffer(size_t srcBytes, const ShmRing::ReadResult &r) {
+  void compressAndOffer(const OwnedFrame::Ptr &in) {
     if (!sink_)
       return;
+    const cv::Mat &m = in->mat; // U8 packed payload (deep-copied, continuous)
+    const size_t srcBytes = static_cast<size_t>(m.total()) * m.elemSize();
     const int64_t t = converterNowMs();
     if (meter_) {
       meter_->ingest("frame", t);
       meter_->begin(t);
     }
     uLongf dstLen = static_cast<uLongf>(dst_.size());
-    const int rc = ::compress2(dst_.data(), &dstLen, src_.data(),
+    const int rc = ::compress2(dst_.data(), &dstLen, m.data,
                                static_cast<uLong>(srcBytes), level_);
     if (rc != Z_OK) {
       if (meter_) {
@@ -157,17 +128,17 @@ private:
     Pipe::FrameInfo info;
     // SOURCE identity forwarded verbatim (the compressed consumer must see the
     // source frame's width/height/origin, not the blob shape).
-    info.width = r.width;
-    info.height = r.height;
+    info.width = in->width();
+    info.height = in->height();
     info.channels = srcChannels_;
-    info.originX = r.originX;
-    info.originY = r.originY;
+    info.originX = in->originX;
+    info.originY = in->originY;
     info.payloadBytes = static_cast<size_t>(dstLen); // v5 opaque blob length
     ShmRing::FrameMeta meta;
     meta.tCapture = static_cast<double>(t);
     // Trusted-time: forward the source's device/system time (never restamp).
-    meta.deviceTimestamp = r.meta.deviceTimestamp;
-    meta.systemTimestamp = r.meta.systemTimestamp;
+    meta.deviceTimestamp = in->deviceTimestamp;
+    meta.systemTimestamp = in->systemTimestamp;
     sink_->offer(dst_.data(), info, meta); // v5 opaque copy of dstLen bytes
     if (meter_) {
       const int64_t done = converterNowMs();
@@ -176,50 +147,44 @@ private:
     }
   }
 
-  const std::string sourceShmName_;
+  TapChannel::Ptr channel_;         // the source's in-process OwnedFrame tap
   Pipe::FrameSink *const sink_;
-  const size_t srcSlotBytes_;
   const uint32_t srcChannels_;
-  const size_t srcBytesPerPixel_;
   const size_t outMaxBytes_;
   const int level_;
   Meter::ThreadMeter *const meter_; // owned by the binding; single writer here
-  std::vector<uint8_t> src_;        // one source slot (runner thread only)
   std::vector<uint8_t> dst_;        // compressBound(slot) scratch (runner only)
-  std::atomic<bool> stop_{false};
+  uint64_t lastSeq_ = 0;            // runner-thread-only seq-gap cursor
   std::thread thread_;
 };
 
 // ---- per-pipe registry (NAPI-thread only; mutex is defensive) --------------
 struct CompressBinding {
-  const std::string sourcePipeId; // the source pipe we connect + read
-  const std::string sourceShmName;
+  const std::string sourcePipeId; // the raw12p source pipe we tap + connect
   const std::string sourceFormat; // source pixelFormat (topology input edge)
   const std::string dtype;        // source container dtype (U8/U16)
   const std::string outputFormat; // sourceFormat + "/zlib" (topology fallback)
   Pipe::FrameSink *const sink = nullptr;
   const size_t srcSlotBytes = 0;
   const uint32_t srcChannels = 1;
-  const size_t srcBytesPerPixel = 1;
   const size_t outMaxBytes = 0;
   const int level = Z_DEFAULT_COMPRESSION;
   bool sourceConnected = false;           // true while the runner holds a connect
+  TapChannel::Ptr channel;                // in-process tap (open while runner runs)
   Meter::ThreadMeter meter;               // persists across gate toggles
   std::unique_ptr<CompressRunner> runner; // gated lifetime (declared LAST → dtor FIRST)
 
   CompressBinding(const std::string &name, std::string sourcePipeId,
-                  std::string sourceShmName, std::string sourceFormat,
-                  std::string dtype, std::string outputFormat,
-                  Pipe::FrameSink *sink, size_t srcSlotBytes,
-                  uint32_t srcChannels, size_t srcBytesPerPixel,
-                  size_t outMaxBytes, int level)
+                  std::string sourceFormat, std::string dtype,
+                  std::string outputFormat, Pipe::FrameSink *sink,
+                  size_t srcSlotBytes, uint32_t srcChannels, size_t outMaxBytes,
+                  int level)
       : sourcePipeId(std::move(sourcePipeId)),
-        sourceShmName(std::move(sourceShmName)),
         sourceFormat(std::move(sourceFormat)), dtype(std::move(dtype)),
         outputFormat(std::move(outputFormat)), sink(sink),
         srcSlotBytes(srcSlotBytes), srcChannels(srcChannels),
-        srcBytesPerPixel(srcBytesPerPixel), outMaxBytes(outMaxBytes),
-        level(level), meter(name, {"frame"}, {"shm"}, converterNowMs()) {}
+        outMaxBytes(outMaxBytes), level(level),
+        meter(name, {"frame"}, {"shm"}, converterNowMs()) {}
 };
 
 static std::mutex g_mutex;
@@ -260,19 +225,10 @@ FN(attachCompressPipe) {
                env.Undefined());
     }
     const auto &srcSpec = srcPub->spec();
-    const std::string sourceShmName = srcPub->shmName();
     const size_t srcSlotBytes =
         srcSpec.maxBytes ? static_cast<size_t>(srcSpec.maxBytes)
                          : static_cast<size_t>(srcSpec.bytesPerFrame);
     const uint32_t srcChannels = srcSpec.channels ? srcSpec.channels : 1;
-    // Bytes per pixel-POSITION (channels × element size), derived from the
-    // nominal advert — active bytes = width*height*this for a payloadBytes-less
-    // source (raw12p → 1, BGRA8 → 4).
-    const size_t pixels = static_cast<size_t>(srcSpec.width) * srcSpec.height;
-    const size_t srcBytesPerPixel =
-        pixels ? std::max<size_t>(1, static_cast<size_t>(srcSpec.bytesPerFrame) /
-                                         pixels)
-               : 1;
     // The output pipe's advertised slot capacity (offer drops if a blob exceeds
     // it — the advert should size it via compressBound(srcSlotBytes)).
     const auto &outSpec = hub.publisher(pipeId).spec();
@@ -286,6 +242,12 @@ FN(attachCompressPipe) {
       // Re-attach replaces the binding wholesale (its gated runner destructs
       // here, joining + disconnecting the old source).
       auto &existing = g_pipes[pipeId];
+      if (existing && existing->channel) {
+        // Unregister the old tap channel from the fan-out + close it (wakes the
+        // runner's poll) before the binding is replaced (its dtor joins).
+        closeRaw12pTap(existing->sourcePipeId, existing->channel);
+        existing->channel = nullptr;
+      }
       if (existing && existing->sourceConnected) {
         // Release the old source connection before the binding is replaced.
         try {
@@ -295,9 +257,8 @@ FN(attachCompressPipe) {
         existing->sourceConnected = false;
       }
       g_pipes[pipeId] = std::make_unique<CompressBinding>(
-          pipeId, sourcePipeId, sourceShmName, srcSpec.pixelFormat,
-          srcSpec.dtype, outputFormat, sink, srcSlotBytes, srcChannels,
-          srcBytesPerPixel, outMaxBytes, level);
+          pipeId, sourcePipeId, srcSpec.pixelFormat, srcSpec.dtype, outputFormat,
+          sink, srcSlotBytes, srcChannels, outMaxBytes, level);
     }
     // Register the gate OUTSIDE the lock: it fires immediately with the current
     // consumer state (spinning the runner + connecting the source if a consumer
@@ -309,7 +270,17 @@ FN(attachCompressPipe) {
         return;
       auto &b = *it->second;
       if (active && !b.runner) {
-        // Connect the SOURCE (drives its producer's own gate) THEN read it.
+        // Open an in-process OwnedFrame tap on the source, THEN connect the
+        // source pipe (drives the raw12p producer's gate so the gated tap
+        // actually exists + fans out to our channel), THEN spawn the runner.
+        // Leaky (latest-wins): the raw12p fan-out runs on the capture thread and
+        // must never block.
+        b.channel = ChannelKind::leaky().make();
+        if (!openRaw12pTap(b.sourcePipeId, b.channel)) {
+          // Not a raw12p source (or unknown) — no in-process tap available.
+          b.channel = nullptr;
+          return;
+        }
         try {
           Pipe::PipeHub::instance().publisher(b.sourcePipeId).connect();
           b.sourceConnected = true;
@@ -317,10 +288,16 @@ FN(attachCompressPipe) {
           b.sourceConnected = false;
         }
         b.runner = std::make_unique<CompressRunner>(
-            b.sourceShmName, b.sink, b.srcSlotBytes, b.srcChannels,
-            b.srcBytesPerPixel, b.outMaxBytes, b.level, &b.meter);
+            b.channel, b.sink, b.srcSlotBytes, b.srcChannels, b.outMaxBytes,
+            b.level, &b.meter);
       } else if (!active && b.runner) {
-        b.runner.reset(); // join the runner first (no more reads)
+        // Close the tap FIRST (wakes the runner's blocked poll → EOS), then join
+        // the runner, then disconnect the source.
+        if (b.channel) {
+          closeRaw12pTap(b.sourcePipeId, b.channel);
+          b.channel = nullptr;
+        }
+        b.runner.reset(); // join the runner (no more reads)
         if (b.sourceConnected) {
           try {
             Pipe::PipeHub::instance().publisher(b.sourcePipeId).disconnect();
@@ -351,6 +328,11 @@ FN(detachCompressPipe) {
       }
     }
     if (removed) {
+      if (removed->channel) {
+        // Unregister + close the tap (wakes the runner's poll) before joining.
+        closeRaw12pTap(removed->sourcePipeId, removed->channel);
+        removed->channel = nullptr;
+      }
       removed->runner.reset(); // join before releasing the source connection
       if (removed->sourceConnected) {
         try {

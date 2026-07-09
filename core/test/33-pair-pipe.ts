@@ -67,6 +67,14 @@ interface Batch {
 }
 interface PairObj {
   pushAnchor(a: { tExposure: bigint; stream?: number; payload?: Float64Array }): number;
+  pushResolvedAnchor(a: {
+    anchorId?: number;
+    tExposure?: bigint;
+    stream?: number;
+    leftKey: bigint;
+    rightKey: bigint;
+    payload?: Float64Array;
+  }): number;
   probe(): {
     outputs: { pair: { count: number } };
     inputs: { left: { count: number }; right: { count: number } };
@@ -170,27 +178,84 @@ function teardown(pair: PairObj, L: string, R: string): void {
   teardown(pair, L, R);
 }
 
-// --- 4: EXACT join -----------------------------------------------------------
+// --- 4: EXACT join on RESOLVED per-side keys ---------------------------------
 {
   const { pair, L, R } = makePair("exact");
   const it = pair[Symbol.asyncIterator]();
   assert.equal(pair.probe().mode, "exact", "brick reports exact mode");
-  const key = 3_000_000_000n;
-  // A frame whose key has NO anchor → ages out (no pair).
+  // Exact mode joins on the RESOLVED per-side keys (leftKey/rightKey), which
+  // may DIFFER between the two sides (the two cameras' own timestamps). A frame
+  // whose key has NO resolved anchor → ages out (no pair).
   A.pushPairTestFrame(L, { deviceTimestamp: 9_999_000_000n });
   A.pushPairTestFrame(R, { deviceTimestamp: 9_999_000_000n });
   await sleep(150);
   assert.equal(pair.probe().pairsProduced, 0, "anchor-less identical frames do NOT pair (exact)");
-  // Now the keyed anchor + identical-timestamp L/R.
-  pair.pushAnchor({ tExposure: key, stream: 2 });
-  A.pushPairTestFrame(L, { deviceTimestamp: key });
-  A.pushPairTestFrame(R, { deviceTimestamp: key });
+  // A resolved anchor with DISTINCT L/R keys + frames carrying exactly those.
+  const kL = 3_000_000_000n;
+  const kR = 3_000_555_000n; // per-side keys differ (independent camera clocks)
+  const id = pair.pushResolvedAnchor({
+    anchorId: 77, tExposure: 3_000_000_000n, stream: 2, leftKey: kL, rightKey: kR,
+  });
+  assert.equal(id, 77, "pushResolvedAnchor carries the origin anchorId for provenance");
+  A.pushPairTestFrame(L, { deviceTimestamp: kL });
+  A.pushPairTestFrame(R, { deviceTimestamp: kR });
   const batch = await nextBatch(it, 3000);
-  assert(batch && batch.records.length >= 1, "exact-key L/R + anchor join");
-  assert.equal(batch.records[0]!.left.deviceTimestamp, key, "exact join on the shared key");
-  console.log("33-pair: EXACT key join (+ anchor-less age-out) OK.");
+  assert(batch && batch.records.length >= 1, "exact-key L/R + resolved anchor join");
+  assert.equal(batch.records[0]!.left.deviceTimestamp, kL, "exact join on the LEFT key");
+  assert.equal(batch.records[0]!.right.deviceTimestamp, kR, "exact join on the RIGHT key");
+  assert.equal(batch.records[0]!.anchorId, 77, "record carries the origin anchorId");
+  console.log("33-pair: EXACT resolved per-side key join (+ anchor-less age-out) OK.");
   await it.return?.();
   teardown(pair, L, R);
+}
+
+// --- 4b: two-stage ROOT → DOWNSTREAM exact chain -----------------------------
+// The root tolerance-matches raw arrivals against a FIN anchor; the completed
+// pair's L/R deviceTimestamps become the resolved keys the session forwards to
+// the DOWNSTREAM exact brick, which joins the NEXT stage's frames (same
+// timestamps, meta-passthrough) by per-side key equality. No re-stamping.
+{
+  const root = makePair("root");
+  const down = makePair("exact");
+  const rootIt = root.pair[Symbol.asyncIterator]();
+  const downIt = down.pair[Symbol.asyncIterator]();
+
+  const tExp = 6_000_000_000n;
+  const kL = tExp;             // left camera arrival (in tolerance of the FIN)
+  const kR = tExp + 1_500_000n; // right camera arrival (+1.5 ms, in tolerance)
+  root.pair.pushAnchor({ tExposure: tExp, stream: 5, payload: new Float64Array([9.5]) });
+  A.pushPairTestFrame(root.L, { deviceTimestamp: kL });
+  A.pushPairTestFrame(root.R, { deviceTimestamp: kR });
+
+  const rootBatch = await nextBatch(rootIt, 3000);
+  assert(rootBatch && rootBatch.records.length >= 1, "root produced a pair");
+  const rec = rootBatch.records[0]!;
+  // Forward the resolved anchor to the downstream stage (the I-2 session seam;
+  // loop-safe FIN-rate forwarding — per-side keys are the frames' OWN timestamps).
+  down.pair.pushResolvedAnchor({
+    anchorId: rec.anchorId,
+    tExposure: rec.tExposure,
+    stream: rec.stream,
+    leftKey: rec.left.deviceTimestamp,
+    rightKey: rec.right.deviceTimestamp,
+    payload: rec.payload,
+  });
+  // The next stage's frames carry the SAME deviceTimestamps (meta-passthrough).
+  A.pushPairTestFrame(down.L, { deviceTimestamp: rec.left.deviceTimestamp });
+  A.pushPairTestFrame(down.R, { deviceTimestamp: rec.right.deviceTimestamp });
+
+  const downBatch = await nextBatch(downIt, 3000);
+  assert(downBatch && downBatch.records.length >= 1, "downstream exact-joined the next stage");
+  const drec = downBatch.records[0]!;
+  assert.equal(drec.anchorId, rec.anchorId, "downstream record carries the origin anchorId");
+  assert.equal(drec.left.deviceTimestamp, kL, "downstream left joined on the resolved left key");
+  assert.equal(drec.right.deviceTimestamp, kR, "downstream right joined on the resolved right key");
+  assert.deepEqual(Array.from(drec.payload), [9.5], "enrichment payload rode through the chain");
+  console.log("33-pair: two-stage root → downstream exact key-join OK.");
+  await rootIt.return?.();
+  await downIt.return?.();
+  teardown(root.pair, root.L, root.R);
+  teardown(down.pair, down.L, down.R);
 }
 
 // --- 5: pool bounds (drop-oldest observable in the meter) --------------------

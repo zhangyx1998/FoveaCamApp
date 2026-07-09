@@ -755,6 +755,23 @@ declare module "core/Aravis" {
     payload?: Float64Array;
   }
 
+  /** A RESOLVED anchor pushed via `PairStream.pushResolvedAnchor` — the
+   *  root→downstream key delivery (pairing-nodes ruling 2). The ROOT brick's
+   *  completed pair yields the two matched frames' per-side deviceTimestamps
+   *  (`leftKey`/`rightKey`); the session forwards them (loop-safe, FIN rate) so
+   *  a DOWNSTREAM `exact` brick joins the NEXT stage's frames by per-side key
+   *  equality. Frames are NEVER re-stamped (trusted-time): the keys ARE the
+   *  frames' own passed-through timestamps. `anchorId` carries origin provenance
+   *  (echoed into the downstream record); omit to assign a fresh one. */
+  export interface PairResolvedAnchor {
+    anchorId?: number;
+    tExposure?: bigint;
+    stream?: number;
+    leftKey: bigint;
+    rightKey: bigint;
+    payload?: Float64Array;
+  }
+
   /** One matched frame's IDENTITY in a pair record (never the pixel buffer). */
   export interface PairFrameId {
     deviceTimestamp: bigint;
@@ -799,8 +816,12 @@ declare module "core/Aravis" {
    *  pinned buffers. Release with `release()`. */
   export interface PairStreamHandle extends AsyncIterable<PairBatch> {
     /** Push a FIN-derived anchor (drop-oldest at `anchorCap`). Returns the
-     *  brick-assigned monotonic anchor id. */
+     *  brick-assigned monotonic anchor id. Root mode: the tolerance-match key. */
     pushAnchor(anchor: PairAnchor): number;
+    /** Push a RESOLVED anchor for a DOWNSTREAM `exact` brick (root→downstream key
+     *  delivery, pairing-nodes ruling 2). Joins the next stage's L/R by per-side
+     *  `leftKey`/`rightKey` equality. Returns the (origin or assigned) anchor id. */
+    pushResolvedAnchor(anchor: PairResolvedAnchor): number;
     probe(): PairProbeSnapshot;
     /** Drop the brick (join its thread). Idempotent. */
     release(): void;

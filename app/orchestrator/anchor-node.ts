@@ -44,6 +44,56 @@ export interface PairAnchorSink {
  *  the SAME `V2A`/`A2H` the display wrap + `conversionComputeH` consume). */
 export type AnchorConversions = Pick<CoordinateConversions, "V2A" | "A2H">;
 
+// --- root → downstream resolved-anchor key delivery (pairing-nodes ruling 2) --
+// P-1 deferred "how downstream frames land identical keys"; R-1 resolves it with
+// RESOLVED anchors (never re-stamping — that would violate trusted-time). The
+// ROOT pairing brick tolerance-matches raw camera arrivals against the FIN
+// anchor; the two matched frames' ACTUAL deviceTimestamps are the join keys the
+// NEXT stage joins on (its convert/undistort output carries the same timestamps
+// unchanged, meta-passthrough). The session reads the root's (FIN-rate, low)
+// batched pair records and forwards each as a resolved anchor to the downstream
+// `exact` brick — loop-safe, symmetric with the FIN-rate enrichment fan-out.
+
+/** The subset of a native pair RECORD this forwarding needs (frame identity +
+ *  provenance). Matches `Aravis.PairRecord` structurally. */
+export interface PairRecordKeys {
+  anchorId: number;
+  tExposure: bigint;
+  stream: number;
+  payload: Float64Array;
+  left: { deviceTimestamp: bigint };
+  right: { deviceTimestamp: bigint };
+}
+
+/** The downstream `exact` brick's resolved-anchor input (injected —
+ *  `PairStream.pushResolvedAnchor`). */
+export interface PairResolvedAnchorSink {
+  pushResolvedAnchor(anchor: {
+    anchorId: number;
+    tExposure: bigint;
+    stream: number;
+    leftKey: bigint;
+    rightKey: bigint;
+    payload?: Float64Array;
+  }): number;
+}
+
+/** Map a ROOT pair record to the resolved-anchor push args for the NEXT stage:
+ *  per-side keys are the matched frames' OWN deviceTimestamps (no re-stamping),
+ *  origin `anchorId`/`tExposure`/`stream`/`payload` carried for provenance. */
+export function resolvedAnchorFromRecord(
+  rec: PairRecordKeys,
+): Parameters<PairResolvedAnchorSink["pushResolvedAnchor"]>[0] {
+  return {
+    anchorId: rec.anchorId,
+    tExposure: rec.tExposure,
+    stream: rec.stream,
+    leftKey: rec.left.deviceTimestamp,
+    rightKey: rec.right.deviceTimestamp,
+    payload: rec.payload,
+  };
+}
+
 // --- opaque payload layout (doubles) ----------------------------------------
 // Without conversions: [voltsL.x, voltsL.y, voltsR.x, voltsR.y] (length 4).
 // With conversions: the above + [angL.x, angL.y, angR.x, angR.y] + H_L[9] +

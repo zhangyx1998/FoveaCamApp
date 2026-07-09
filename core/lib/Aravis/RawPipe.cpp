@@ -33,9 +33,12 @@
 // pipes tap the ArvBuffer BEFORE Frame construction via `Arv::Stream::BufferTap`
 // and publish the verbatim packed wire payload.
 
+#include <algorithm>
+#include <atomic>
 #include <map>
 #include <memory>
 #include <mutex>
+#include <vector>
 
 #include <Topology.h>
 #include <napi-helper.h>
@@ -284,6 +287,48 @@ protected:
   void push(const Frame::Ptr &) override {}
 };
 
+// The in-process OwnedFrame tap fan-out (multi-fovea-recording R-1). Lives in
+// the Raw12pBinding (persists across gate toggles); the gated Raw12pTap holds a
+// pointer to it and, on the CAPTURE thread, publishes ONE deep-copied OwnedFrame
+// to each registered channel — but ONLY when ≥1 channel is registered (the
+// atomic count is the lock-free fast-path gate, so a raw12p pipe with no
+// in-process consumer pays zero extra capture-thread cost). Channels are
+// latest-wins (Leaky): a write NEVER blocks the capture thread; a channel that
+// reports EOS (its downstream closed) is dropped.
+struct Raw12pFanout {
+  std::mutex mutex;
+  std::vector<TapChannel::Ptr> channels;
+  std::atomic<uint32_t> count{0}; // lock-free capture-thread gate
+
+  void add(const TapChannel::Ptr &ch) {
+    std::scoped_lock lk(mutex);
+    channels.push_back(ch);
+    count.store(channels.size(), std::memory_order_release);
+  }
+  void remove(const TapChannel::Ptr &ch) {
+    std::scoped_lock lk(mutex);
+    channels.erase(std::remove(channels.begin(), channels.end(), ch),
+                   channels.end());
+    count.store(channels.size(), std::memory_order_release);
+  }
+  bool active() const { return count.load(std::memory_order_acquire) != 0; }
+
+  // Capture thread: fan ONE OwnedFrame out to every channel (non-blocking).
+  void publish(const OwnedFrame::Ptr &of) {
+    std::scoped_lock lk(mutex);
+    for (auto it = channels.begin(); it != channels.end();) {
+      try {
+        OwnedFrame::Ptr sp = of; // Leaky::write takes an lvalue ref
+        (*it)->write(sp);
+        ++it;
+      } catch (Threading::EOS &) {
+        it = channels.erase(it); // downstream closed — drop it
+      }
+    }
+    count.store(channels.size(), std::memory_order_release);
+  }
+};
+
 // The packed producer: an `Arv::Stream::BufferTap` (not a Frame::Ptr Subscriber
 // — the packed bytes are gone by the time any Frame exists). Registers itself on
 // the stream's buffer-tap registry at construction and unregisters at
@@ -294,9 +339,10 @@ protected:
 class Raw12pTap : public Arv::Stream::BufferTap {
 public:
   Raw12pTap(Arv::Stream *stream, Pipe::FrameSink *sink, uint32_t maxRowBytes,
-            uint32_t maxRows, size_t maxBytes, Meter::ThreadMeter *meter)
+            uint32_t maxRows, size_t maxBytes, Meter::ThreadMeter *meter,
+            Raw12pFanout *fanout)
       : stream_(stream), sink_(sink), maxRowBytes_(maxRowBytes),
-        maxRows_(maxRows), maxBytes_(maxBytes), meter_(meter) {
+        maxRows_(maxRows), maxBytes_(maxBytes), meter_(meter), fanout_(fanout) {
     if (stream_) {
       stream_->addBufferTap(this);          // iterate() → onBuffer
       keepAlive_ = std::make_unique<StreamKeepAlive>(stream_); // run the loop
@@ -364,6 +410,22 @@ public:
         static_cast<int64_t>(arv_buffer_get_timestamp(buffer)) + clockOffsetNs);
     meta.systemTimestamp = arv_buffer_get_system_timestamp(buffer);
     sink_->offer(data, info, meta); // synchronous copy into the ring, pre-requeue
+    // In-process OwnedFrame tap (R-1): deep-copy the SAME verbatim payload into
+    // an OwnedFrame (U8 Mat header, rows×rowBytes) and fan it out — but only if
+    // a brick consumer registered a channel (lock-free `active()` gate). The
+    // packed payload rides a U8 Mat; dims/origin(0,0)/timestamps/seq carried.
+    if (fanout_ && fanout_->active()) {
+      auto of = OwnedFrame::create();
+      cv::Mat header(static_cast<int>(rows), static_cast<int>(rowBytes),
+                     CV_8UC1, const_cast<void *>(data));
+      header.copyTo(of->mat); // DEEP copy — ownership transfer off the ArvBuffer
+      of->deviceTimestamp = meta.deviceTimestamp;
+      of->systemTimestamp = meta.systemTimestamp;
+      of->originX = 0;
+      of->originY = 0;
+      of->seq = ++tapSeq_;
+      fanout_->publish(of);
+    }
     if (meter_) {
       const int64_t done = converterNowMs(); // one clock read, not two
       meter_->end(done);
@@ -377,6 +439,8 @@ private:
   const uint32_t maxRowBytes_, maxRows_;
   const size_t maxBytes_;
   Meter::ThreadMeter *const meter_; // owned by the binding; single writer here
+  Raw12pFanout *const fanout_;      // owned by the binding; capture-thread fanout
+  uint64_t tapSeq_ = 0;             // capture-thread-only OwnedFrame sequence
   std::unique_ptr<StreamKeepAlive> keepAlive_; // holds the capture loop open
 };
 
@@ -390,6 +454,8 @@ struct Raw12pBinding {
   const uint32_t maxRows = 0;
   const size_t maxBytes = 0;
   Meter::ThreadMeter meter;               // persists across gate toggles
+  Raw12pFanout fanout;            // in-process tap fan-out (persists; tap → dtor
+                                  // FIRST so it stops touching this)
   std::unique_ptr<Raw12pTap> tap; // gated lifetime (declared LAST → dtor FIRST)
 
   Raw12pBinding(const std::string &name, Arv::Stream::Ptr source,
@@ -451,7 +517,7 @@ FN(attachRaw12pPipe) {
       if (active && !b.tap)
         b.tap = std::make_unique<Raw12pTap>(b.source.get(), b.sink,
                                             b.maxRowBytes, b.maxRows, b.maxBytes,
-                                            &b.meter);
+                                            &b.meter, &b.fanout);
       else if (!active && b.tap)
         b.tap.reset(); // unregisters the tap from the stream
     });
@@ -478,6 +544,33 @@ FN(detachRaw12pPipe) {
     return Boolean::New(env, removed != nullptr);
   }
   JS_EXCEPT(env.Undefined())
+}
+
+// ---- in-process OwnedFrame tap open/close (R-1; brick→brick transport) ------
+// Register/unregister an OwnedFrame channel on the raw12p pipe's fan-out. The
+// CALLER (CompressStream) must ALSO drive the pipe's consumer gate (a
+// connect()) so the gated Raw12pTap exists and produces. Channel MUST be Leaky
+// (capture-thread fan-out never blocks). Both hold g_mutex12 only briefly.
+bool openRaw12pTap(const std::string &pipeId, const TapChannel::Ptr &channel) {
+  if (!channel)
+    return false;
+  std::scoped_lock lock(g_mutex12);
+  auto it = g_pipes12.find(pipeId);
+  if (it == g_pipes12.end() || !it->second)
+    return false;
+  it->second->fanout.add(channel);
+  return true;
+}
+
+void closeRaw12pTap(const std::string &pipeId, const TapChannel::Ptr &channel) {
+  {
+    std::scoped_lock lock(g_mutex12);
+    auto it = g_pipes12.find(pipeId);
+    if (it != g_pipes12.end() && it->second)
+      it->second->fanout.remove(channel);
+  }
+  if (channel)
+    channel->close(); // wake a consumer blocked in poll(wait) (EOS -> stop)
 }
 
 // ---- per-pipeId packed producer meter snapshots -----------------------------

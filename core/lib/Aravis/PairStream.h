@@ -62,10 +62,21 @@ enum class PairMode { Root, Exact };
 // `payload` is OPAQUE to the brick — the JS enrichment node packs volts / V2A
 // angles / H into it; the brick pins it and echoes it back in the record.
 struct PairAnchor {
-  uint64_t id = 0;        // brick-assigned monotonic anchor id
-  int64_t tExposure = 0;  // trusted host-ns exposure time (the match/join key)
+  uint64_t id = 0;        // monotonic anchor id (root-assigned; carried downstream)
+  int64_t tExposure = 0;  // trusted host-ns exposure time (ROOT match key)
   int32_t stream = 0;     // FIN stream id
   std::vector<double> payload; // opaque enrichment attachment (may be empty)
+  // RESOLVED per-side join keys (pairing-nodes ruling 2, R-1 resolution of the
+  // deferred "how downstream frames land identical keys"). A ROOT pair completes
+  // on the ±tolerance window; the two matched frames' ACTUAL deviceTimestamps
+  // become these keys. The root re-emits this anchor (via `pushResolvedAnchor`)
+  // to DOWNSTREAM `exact`-mode bricks, which join their per-side inputs by EXACT
+  // key equality (`left.deviceTimestamp == leftKey && right == rightKey`) — the
+  // deviceTimestamp is passed through convert/undistort UNCHANGED (meta-passthrough
+  // contract), so no frame is ever re-stamped mid-chain (trusted-time invariant).
+  // Zero on a plain (unresolved) root anchor; `exact` mode uses ONLY these keys.
+  int64_t leftKey = 0;
+  int64_t rightKey = 0;
 };
 
 // One completed pair — PINS the two frames (no pixel copy). The pins exist so a
@@ -149,6 +160,33 @@ public:
       anchorDrops_.fetch_add(1, std::memory_order_relaxed);
     }
     return anchorSeq_;
+  }
+
+  // NAPI thread: push a RESOLVED anchor into the bounded pool (drop-oldest) — the
+  // root→downstream key delivery (pairing-nodes ruling 2). `id` carries the
+  // ORIGIN anchor id for provenance (0 → assign a fresh one); `leftKey`/`rightKey`
+  // are the root-matched per-side deviceTimestamps a downstream `exact` brick
+  // joins on. `tExposure`/`payload` are echoed through unchanged. Frames are
+  // NEVER re-stamped — the keys ARE the frames' own passed-through timestamps.
+  uint64_t pushResolvedAnchor(uint64_t id, int64_t tExposure, int32_t stream,
+                              int64_t leftKey, int64_t rightKey,
+                              const double *payload, size_t n) {
+    std::scoped_lock lk(anchorMutex_);
+    PairAnchor a;
+    const uint64_t assigned = id ? id : ++anchorSeq_;
+    a.id = assigned;
+    a.tExposure = tExposure;
+    a.stream = stream;
+    a.leftKey = leftKey;
+    a.rightKey = rightKey;
+    if (payload && n)
+      a.payload.assign(payload, payload + n);
+    anchorPool_.push_back(std::move(a));
+    if (anchorPool_.size() > caps_.anchors) {
+      anchorPool_.pop_front();
+      anchorDrops_.fetch_add(1, std::memory_order_relaxed);
+    }
+    return assigned;
   }
 
   Meter::Snapshot probe() const { return meter_.probe(converterNowMs()); }
@@ -299,11 +337,14 @@ private:
     }
   }
 
-  bool matchesFrame(const OwnedFrame::Ptr &f, const PairAnchor &a,
-                    int64_t delta) const {
+  // `exactKey` is the per-side join key (leftKey for the left pool, rightKey for
+  // the right) — used ONLY in Exact mode; Root mode ignores it and tolerance-
+  // matches the frame's deviceTimestamp (+ side delta) against tExposure.
+  bool matchesFrame(const OwnedFrame::Ptr &f, const PairAnchor &a, int64_t delta,
+                    int64_t exactKey) const {
     const int64_t ts = static_cast<int64_t>(f->deviceTimestamp);
     if (mode_ == PairMode::Exact)
-      return ts == a.tExposure; // key equality (delta ignored downstream)
+      return ts == exactKey; // per-side key equality (root-resolved downstream)
     const int64_t predicted = ts + delta;             // matchesExposure (sync.ts)
     const int64_t diff = predicted > a.tExposure ? predicted - a.tExposure
                                                  : a.tExposure - predicted;
@@ -315,8 +356,8 @@ private:
     std::scoped_lock lk(anchorMutex_);
     for (auto ai = anchorPool_.begin(); ai != anchorPool_.end();) {
       const PairAnchor &a = *ai;
-      auto li = findSide(leftPending_, a, leftDeltaNs_);
-      auto ri = findSide(rightPending_, a, rightDeltaNs_);
+      auto li = findSide(leftPending_, a, leftDeltaNs_, a.leftKey);
+      auto ri = findSide(rightPending_, a, rightDeltaNs_, a.rightKey);
       if (li != leftPending_.end() && ri != rightPending_.end()) {
         PairRecord rec{a, *li, *ri};
         leftPending_.erase(li);
@@ -330,10 +371,10 @@ private:
   }
 
   std::deque<OwnedFrame::Ptr>::iterator
-  findSide(std::deque<OwnedFrame::Ptr> &pool, const PairAnchor &a,
-           int64_t delta) {
+  findSide(std::deque<OwnedFrame::Ptr> &pool, const PairAnchor &a, int64_t delta,
+           int64_t exactKey) {
     for (auto it = pool.begin(); it != pool.end(); ++it)
-      if (matchesFrame(*it, a, delta))
+      if (matchesFrame(*it, a, delta, exactKey))
         return it;
     return pool.end();
   }

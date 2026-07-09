@@ -17,8 +17,10 @@ import {
   packAnchorPayload,
   ANCHOR_PAYLOAD,
   resetAnchorNodeForTest,
+  resolvedAnchorFromRecord,
   type AnchorConversions,
   type PairAnchorSink,
+  type PairRecordKeys,
 } from "@orchestrator/anchor-node";
 import {
   buildTopology,
@@ -132,5 +134,28 @@ describe("AnchorNode — graph row", () => {
     const topo = buildTopology({ listPipes: () => [], workloads: () => ({}), now: () => 0 });
     expect(topo.nodes.find((n) => n.id === anchorNodeId())).toBeTruthy();
     expect(anchorNodeId()).toBe("controller/anchors");
+  });
+});
+
+// (4) RESOLVED-ANCHOR key delivery (pairing-nodes ruling 2, R-1). The root pair
+// record's per-side deviceTimestamps become the downstream exact-join keys —
+// carried, never re-stamped (trusted-time).
+describe("resolvedAnchorFromRecord — root → downstream key delivery", () => {
+  it("maps a root pair record to the next stage's per-side join keys", () => {
+    const rec: PairRecordKeys = {
+      anchorId: 42,
+      tExposure: 1_000_000_000n,
+      stream: 3,
+      payload: new Float64Array([1.5, 2.5]),
+      left: { deviceTimestamp: 1_000_000_000n },
+      right: { deviceTimestamp: 1_000_222_000n }, // per-side keys differ
+    };
+    const resolved = resolvedAnchorFromRecord(rec);
+    expect(resolved.leftKey).toBe(rec.left.deviceTimestamp);
+    expect(resolved.rightKey).toBe(rec.right.deviceTimestamp);
+    expect(resolved.anchorId).toBe(42); // origin provenance preserved
+    expect(resolved.tExposure).toBe(rec.tExposure);
+    expect(resolved.stream).toBe(3);
+    expect(Array.from(resolved.payload!)).toEqual([1.5, 2.5]);
   });
 });
