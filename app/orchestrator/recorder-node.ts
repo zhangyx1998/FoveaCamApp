@@ -187,8 +187,18 @@ export async function runStreamConsumer(cfg: StreamConsumerCfg): Promise<void> {
 export interface StreamCounters {
   /** Frames read off the pipe in order (ingested by the consume loop). */
   ingested: number;
-  /** Ring-recycled frames the consumer skipped (accounted, not silent). */
+  /** Ring-recycled frames the consumer skipped (accounted, not silent). TOTAL —
+   *  invariant `written + dropped == published`; equals `droppedQueue +
+   *  droppedRing` (F2 attribution). */
   dropped: number;
+  /** F2 drop attribution — a `Gone` (ring-recycled) drop while the consumer was
+   *  PARKED on writer backpressure (`pending >= maxQueued`): the mcap encode/
+   *  write chain couldn't keep up, so tune the queue cap / write batching. */
+  droppedQueue: number;
+  /** F2 drop attribution — a `Gone` drop while the consumer was NOT parked: the
+   *  read loop itself lagged the producer (ring depth vs source rate), so tune
+   *  the ring depth. `droppedQueue + droppedRing == dropped`. */
+  droppedRing: number;
   /** Frames the mcap writer encoded + wrote. */
   written: number;
   /** Bytes the mcap writer wrote (frame payloads). */
@@ -216,21 +226,35 @@ export function foldStreamStats(
   for (const [name, next] of Object.entries(incoming)) {
     let fold = folds.get(name);
     if (!fold) {
-      fold = { prev: { ingested: 0, dropped: 0, written: 0, bytes: 0 }, fps: new FreqMeter() };
+      fold = {
+        prev: { ingested: 0, dropped: 0, droppedQueue: 0, droppedRing: 0, written: 0, bytes: 0 },
+        fps: new FreqMeter(),
+      };
       folds.set(name, fold);
     }
     const { prev } = fold;
     const dIngest = Math.max(0, next.ingested - prev.ingested);
-    const dDrop = Math.max(0, next.dropped - prev.dropped);
+    const dDropQueue = Math.max(0, next.droppedQueue - prev.droppedQueue);
+    const dDropRing = Math.max(0, next.droppedRing - prev.droppedRing);
     const dWritten = Math.max(0, next.written - prev.written);
     const dBytes = Math.max(0, next.bytes - prev.bytes);
     if (dIngest) meter.ingest(name, dIngest);
-    if (dDrop) meter.drop("ring-recycled", dDrop);
+    // F2 attribution: split drop causes into distinct meter reasons (they sum to
+    // the old single "ring-recycled" total, so the drop invariant is unchanged).
+    if (dDropQueue) meter.drop("queue-overflow", dDropQueue);
+    if (dDropRing) meter.drop("ring-recycled", dDropRing);
     if (dWritten) meter.emit("written", dWritten);
     if (dBytes) meter.emit("bytes", dBytes);
     for (let i = 0; i < dWritten; i++) fold.fps.tick();
     fold.prev = next;
-    out[name] = { frames: next.written, dropped: next.dropped, bytes: next.bytes, fps: fold.fps.value };
+    out[name] = {
+      frames: next.written,
+      dropped: next.dropped,
+      droppedQueue: next.droppedQueue,
+      droppedRing: next.droppedRing,
+      bytes: next.bytes,
+      fps: fold.fps.value,
+    };
   }
   return out;
 }
@@ -871,10 +895,15 @@ function enqueue(task) { chain = chain.then(task).catch(report); }
 // carries the R-1 finalize/remove snapshot.
 const streamsByName = new Map();  // name -> live stream {…init, h, dst}
 const consumers = new Map();      // name -> consumer Promise
-const counters = {};              // name -> {ingested,dropped,written,bytes}
+const counters = {};              // name -> {ingested,dropped,droppedQueue,droppedRing,written,bytes}
 const writeSeq = {};              // name -> next mcap sequence
 const pending = {};               // name -> in-flight writes (backpressure)
 const waiters = {};               // name -> afterWrite resolver | null
+// F2 drop attribution: TRUE while the consumer is parked in afterWrite (queue
+// full). A Gone drop seen while parked is queue-caused (encode too slow); one
+// seen while not parked is ring-caused (read loop lagged the producer). Reset to
+// false on each delivered frame (momentarily caught up), re-set by afterWrite.
+const backpressured = {};         // name -> bool
 const registered = new Set();     // frame channels registered in the container
 const dataChannels = new Set();   // data (descriptor) channels currently open
 const dataSeq = {};               // data channel name -> next sequence
@@ -976,10 +1005,11 @@ function enqueueStart(m) {
 function initStreamState(name) {
   // PERSIST across re-add (channel + sequence continue); RESET the per-run
   // backpressure + drain state so a re-added stream reads fresh.
-  if (counters[name] === undefined) counters[name] = { ingested: 0, dropped: 0, written: 0, bytes: 0 };
+  if (counters[name] === undefined) counters[name] = { ingested: 0, dropped: 0, droppedQueue: 0, droppedRing: 0, written: 0, bytes: 0 };
   if (writeSeq[name] === undefined) writeSeq[name] = 0;
   pending[name] = 0;
   waiters[name] = null;
+  backpressured[name] = false;
   drainTargets[name] = null;
 }
 
@@ -1098,9 +1128,19 @@ function makeConsumer(s) {
     read: (want) => reader.readSeqInto(s.h, s.dst, want),
     delay: () => sleep(2),
     drainTarget: () => drainTargets[s.name],
-    onDrop: (n) => { if (n > 0) counters[s.name].dropped += n; },
+    onDrop: (n) => {
+      if (n <= 0) return;
+      // F2: total stays the invariant sum; attribute the cause by whether the
+      // consumer was parked on writer backpressure when the ring lapped it.
+      counters[s.name].dropped += n;
+      if (backpressured[s.name]) counters[s.name].droppedQueue += n;
+      else counters[s.name].droppedRing += n;
+    },
     onFrame: (view, seq, width, height, deviceTs) => {
       if (!registered.has(s.name)) { registered.add(s.name); registerFrameChannel(s); }
+      // A delivered frame means the read side is momentarily caught up — a later
+      // Gone is ring-caused unless afterWrite re-parks below (F2 attribution).
+      backpressured[s.name] = false;
       counters[s.name].ingested += 1;
       const outSeq = writeSeq[s.name]++;
       // logTimeNs = the container time AXIS (worker monotonic clock, shared by
@@ -1140,6 +1180,8 @@ function makeConsumer(s) {
       // Yield so the writer chain advances; block while the channel window is
       // full (surfaces as ring Gone drops on resume — never an unbounded queue).
       if (pending[s.name] < maxQueued) return Promise.resolve();
+      // F2: parked on the writer → a Gone seen after resume is queue-caused.
+      backpressured[s.name] = true;
       return new Promise((r) => { waiters[s.name] = r; });
     },
   });

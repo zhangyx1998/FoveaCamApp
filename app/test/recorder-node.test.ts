@@ -182,7 +182,7 @@ describe("foldStreamStats (worker counters → meter deltas + UI stats)", () => 
     const meter = fakeMeter();
     const folds = new Map<string, StreamFold>();
     const first: Record<string, StreamCounters> = {
-      "left-fovea": { ingested: 10, dropped: 2, written: 8, bytes: 800 },
+      "left-fovea": { ingested: 10, dropped: 2, droppedQueue: 0, droppedRing: 2, written: 8, bytes: 800 },
     };
     let out = foldStreamStats(meter, folds, first);
     expect(meter.ingest).toHaveBeenCalledWith("left-fovea", 10);
@@ -196,7 +196,7 @@ describe("foldStreamStats (worker counters → meter deltas + UI stats)", () => 
     meter.emit.mockClear();
     meter.drop.mockClear();
     out = foldStreamStats(meter, folds, {
-      "left-fovea": { ingested: 15, dropped: 2, written: 13, bytes: 1300 },
+      "left-fovea": { ingested: 15, dropped: 2, droppedQueue: 0, droppedRing: 2, written: 13, bytes: 1300 },
     });
     expect(meter.ingest).toHaveBeenCalledWith("left-fovea", 5);
     expect(meter.emit).toHaveBeenCalledWith("written", 5);
@@ -205,18 +205,41 @@ describe("foldStreamStats (worker counters → meter deltas + UI stats)", () => 
     expect(out["left-fovea"]).toMatchObject({ frames: 13, dropped: 2, bytes: 1300 });
   });
 
+  it("splits drop attribution into queue-overflow vs ring-recycled meter reasons (F2)", () => {
+    const meter = fakeMeter();
+    const folds = new Map<string, StreamFold>();
+    // A stream with BOTH causes: 3 queue-overflow drops + 4 ring-lapped drops
+    // (dropped == droppedQueue + droppedRing — the pinned invariant).
+    let out = foldStreamStats(meter, folds, {
+      wide: { ingested: 20, dropped: 7, droppedQueue: 3, droppedRing: 4, written: 13, bytes: 1300 },
+    });
+    expect(meter.drop).toHaveBeenCalledWith("queue-overflow", 3);
+    expect(meter.drop).toHaveBeenCalledWith("ring-recycled", 4);
+    // The UI stats carry the split so a rig run reads the cause without devtools.
+    expect(out.wide).toMatchObject({ frames: 13, dropped: 7, droppedQueue: 3, droppedRing: 4 });
+
+    // Next snapshot: only the queue cause advanced — just that delta is metered.
+    meter.drop.mockClear();
+    out = foldStreamStats(meter, folds, {
+      wide: { ingested: 25, dropped: 9, droppedQueue: 5, droppedRing: 4, written: 16, bytes: 1600 },
+    });
+    expect(meter.drop).toHaveBeenCalledWith("queue-overflow", 2);
+    expect(meter.drop).not.toHaveBeenCalledWith("ring-recycled", expect.anything());
+    expect(out.wide).toMatchObject({ dropped: 9, droppedQueue: 5, droppedRing: 4 });
+  });
+
   it("folds over a GROWING then shrinking-but-retained key set (churn)", () => {
     const meter = fakeMeter();
     const folds = new Map<string, StreamFold>();
     // Wave 1: only stream `a`.
-    foldStreamStats(meter, folds, { a: { ingested: 5, dropped: 0, written: 5, bytes: 50 } });
+    foldStreamStats(meter, folds, { a: { ingested: 5, dropped: 0, droppedQueue: 0, droppedRing: 0, written: 5, bytes: 50 } });
     // Wave 2: `b` churned IN mid-run (a new key mid-snapshot); `a` unchanged.
     // The worker keeps ended streams in its counters, so a departed stream still
     // appears here with frozen totals — the fold must handle the changing set.
     meter.ingest.mockClear();
     const out = foldStreamStats(meter, folds, {
-      a: { ingested: 5, dropped: 0, written: 5, bytes: 50 }, // ended, frozen
-      b: { ingested: 3, dropped: 1, written: 2, bytes: 20 }, // newly added
+      a: { ingested: 5, dropped: 0, droppedQueue: 0, droppedRing: 0, written: 5, bytes: 50 }, // ended, frozen
+      b: { ingested: 3, dropped: 1, droppedQueue: 0, droppedRing: 1, written: 2, bytes: 20 }, // newly added
     });
     expect(meter.ingest).toHaveBeenCalledWith("b", 3);
     expect(meter.ingest).not.toHaveBeenCalledWith("a", expect.anything()); // no delta

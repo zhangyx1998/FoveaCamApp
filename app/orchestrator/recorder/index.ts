@@ -246,8 +246,17 @@ export async function createFoveaSink(
 
     stats() {
       const out: Record<string, StreamStats> = {};
+      // This sink's only drop is a full-queue `writeFrame` rejection — i.e. the
+      // queue-overflow cause (F2); it never laps a ring (it's push-driven).
       for (const [name, s] of streams)
-        out[name] = { frames: s.frames, dropped: s.dropped, bytes: s.bytes, fps: s.fps.value };
+        out[name] = {
+          frames: s.frames,
+          dropped: s.dropped,
+          droppedQueue: s.dropped,
+          droppedRing: 0,
+          bytes: s.bytes,
+          fps: s.fps.value,
+        };
       return out;
     },
 

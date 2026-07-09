@@ -46,10 +46,15 @@ export function singleFileTopology(baseName: string): RecorderTopology {
 
 /** Per-stream counters exposed to recording telemetry — same shape the
  *  legacy path derived from `StreamWriter` (`frames`/`dropped`/`bytes` from
- *  `summary`, `fps` from its `FreqMeter`). */
+ *  `summary`, `fps` from its `FreqMeter`), plus the F2 drop-cause split
+ *  (`droppedQueue + droppedRing == dropped`). */
 export interface StreamStats {
   frames: number;
   dropped: number;
+  /** F2: drops caused by writer/encode backpressure (queue full). */
+  droppedQueue: number;
+  /** F2: drops caused by the ring lapping the read loop (source faster). */
+  droppedRing: number;
   bytes: number;
   fps: number;
 }

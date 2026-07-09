@@ -21,6 +21,12 @@ import type { Contract, Command } from "@lib/orchestrator/protocol";
 export type StreamInfo = {
   frames: number;
   dropped: number;
+  /** F2 drop attribution (`droppedQueue + droppedRing == dropped`). Optional so
+   *  a session whose contract predates the split still assigns cleanly — the
+   *  data rides the telemetry object at runtime regardless (RecordButton reads
+   *  `?? 0`). */
+  droppedQueue?: number;
+  droppedRing?: number;
   fps: number;
   bytes: number;
 };

@@ -41,6 +41,16 @@ import type { FramePayload } from "@lib/orchestrator/protocol.js";
 
 const requireFromHere = createRequire(import.meta.url);
 
+/** F1 default burst read timeout (ms). Overridable per shot via
+ *  `CaptureShot.burstTimeoutMs`. Generous vs a healthy burst (5 fresh frames at
+ *  camera rate is sub-second) — it only fires when a raw producer never
+ *  delivers, so a hung capture rejects instead of requiring an app restart. */
+export const DEFAULT_BURST_TIMEOUT_MS = 10_000;
+
+/** F1 per-port progress post cadence (ms) — rate-limits the worker→main burst
+ *  progress notices so a rig watcher sees WHICH port stalls before the timeout. */
+const PROGRESS_INTERVAL_MS = 250;
+
 // ============================================================================
 // PURE PART 1 — burst grab (read N consecutive FRESH frames off a FIFO pipe).
 // ============================================================================
@@ -68,6 +78,14 @@ export interface BurstCfg {
   startSeq: bigint;
   /** Number of consecutive fresh frames to grab (the cap-stack count). */
   count: number;
+  /** F1 burst timeout hook: TRUE once the run's deadline has passed. On a live
+   *  rig a raw producer whose gate never fired (a prior recording retired the
+   *  shared `camera/<serial>/raw` ids; re-advertise didn't restart it) leaves
+   *  `read` forever NotYet — without this the burst hangs and starves the
+   *  single-threaded worker (Save never enables). On expiry `grabBurst` returns
+   *  SHORT (the caller names the stalled port). Omitted in unit tests (never
+   *  expires — the scripted reader always delivers). */
+  expired?(): boolean;
 }
 
 /**
@@ -86,6 +104,7 @@ export async function grabBurst(cfg: BurstCfg): Promise<number> {
   let want = cfg.startSeq;
   let got = 0;
   while (got < cfg.count) {
+    if (cfg.expired?.()) return got; // F1: deadline passed → return short, never hang
     const r = cfg.read(want);
     if (r === null) continue; // torn seqlock read — retry the same seq
     if ("closed" in r) return got; // producer retired mid-burst
@@ -98,7 +117,11 @@ export async function grabBurst(cfg: BurstCfg): Promise<number> {
       want = r.oldestSeq;
       continue;
     }
-    cfg.onFrame(cfg.dst.subarray(0, cfg.bytesFor(r.width, r.height)), r.seq, r.width, r.height);
+    // Write length = the reader's ACTUAL payload length when reported (ring v5),
+    // else the advert fallback — recorder-node parity (`runStreamConsumer`), so a
+    // packed/variable-length payload is byte-exact and never dim-derived.
+    const len = typeof r.bytes === "number" ? r.bytes : cfg.bytesFor(r.width, r.height);
+    cfg.onFrame(cfg.dst.subarray(0, len), r.seq, r.width, r.height);
     want = r.seq + 1n;
     got += 1;
   }
@@ -220,6 +243,11 @@ export interface CaptureShot {
   indexed: boolean;
   /** Frames averaged per fovea (cap-stack). */
   stackCount: number;
+  /** F1: per-shot burst read timeout (ms). Omit → `DEFAULT_BURST_TIMEOUT_MS`.
+   *  On expiry the run is abandoned and rejected WITH per-port delivered counts
+   *  (the stalled port is named), the host releases the acquired pipes, and
+   *  `captureBusy` clears — a stuck raw producer never wedges the app. */
+  burstTimeoutMs?: number;
   /** Fovea homographies (flat 3×3, Float64) — `wrapPerspective` aligns the
    *  stacked L/R foveae exactly as the live L/R views. */
   H_L: number[];
@@ -300,10 +328,17 @@ export type CaptureNodeIn =
 export type CaptureNodeOut =
   | { type: "reading-done"; runId: number }
   | { type: "captured"; runId: number; manifest: Record<string, Serializable>; bursts: Record<string, number>; stackMs: number }
+  /** F1 rate-limited per-port burst progress — `delivered[port]` frames of the
+   *  `expected` cap-stack count so far (center is a single frame → expected 1);
+   *  surfaced so a rig watcher sees WHICH port stalls before the timeout fires. */
+  | { type: "progress"; runId: number; delivered: Record<string, number>; expected: number }
   | { type: "preview"; reqId: number; payload: FramePayload | null }
   | { type: "saved"; reqId: number }
   | { type: "discarded"; reqId: number }
-  | { type: "error"; runId?: number; reqId?: number; message: string; stack?: string };
+  /** F1: an error carries the partial per-port `bursts` counts on a run failure
+   *  (timeout / short burst) so the host meters honest partial deliveries and the
+   *  message already names the stalled port. */
+  | { type: "error"; runId?: number; reqId?: number; message: string; stack?: string; bursts?: Record<string, number> };
 
 /**
  * Create the capture node. Registers the `capture/<session>` graph row (+ per-
@@ -371,6 +406,15 @@ export function createCaptureNode(options: CaptureNodeOptions): CaptureNodeHandl
       meter.emit("captured", 1);
       meter.emit("stackMs", Math.round(msg.stackMs));
       run?.resolve(msg.manifest);
+    } else if (msg.type === "progress") {
+      // F1: rate-limited per-port burst progress — name WHICH port stalls while
+      // the burst is still running (before the timeout rejects it).
+      report(
+        "capture-node",
+        `capture ${msg.runId} progress — center ${msg.delivered.center ?? 0}/1, ` +
+          `left ${msg.delivered.left ?? 0}/${msg.expected}, ` +
+          `right ${msg.delivered.right ?? 0}/${msg.expected}`,
+      );
     } else if (msg.type === "preview") {
       pendingReqs.get(msg.reqId)?.resolve(msg.payload);
       pendingReqs.delete(msg.reqId);
@@ -383,6 +427,13 @@ export function createCaptureNode(options: CaptureNodeOptions): CaptureNodeHandl
         const run = pendingRuns.get(msg.runId);
         pendingRuns.delete(msg.runId);
         releaseRun(run);
+        // F1: meter the partial per-port deliveries even on failure (honest —
+        // a stalled port ingests 0, the healthy ports their real counts).
+        if (msg.bursts) {
+          meter.ingest("left", msg.bursts.left ?? 0);
+          meter.ingest("right", msg.bursts.right ?? 0);
+          meter.ingest("center", msg.bursts.center ?? 0);
+        }
         run?.reject(err);
       } else if (msg.reqId !== undefined) {
         pendingReqs.get(msg.reqId)?.reject(err);
@@ -496,6 +547,8 @@ const needsDownconvert = (${needsDownconvert.toString()});
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const now = () => (typeof performance !== "undefined" ? performance.now() : Date.now());
+const DEFAULT_BURST_TIMEOUT_MS = ${DEFAULT_BURST_TIMEOUT_MS};
+const PROGRESS_INTERVAL_MS = ${PROGRESS_INTERVAL_MS};
 
 function post(message, transfer) { parentPort.postMessage(message, transfer || []); }
 function reportErr(fields, error) {
@@ -547,7 +600,11 @@ function normalizeFovea(image, H) {
 const store = new Map();
 
 // --- stack a burst of raw frames into a Float32 average (imgproc.stack) ------
-async function stackStream(s, count) {
+// expired() bounds the burst (F1): a raw producer whose gate never fired
+// leaves the read forever NotYet — on expiry grabBurst returns SHORT and the
+// caller (runCapture) names the stalled port. onProgress(n) reports the
+// running delivered count for the rate-limited per-port progress post.
+async function stackStream(s, count, expired, onProgress) {
   const h = reader.open(s.shmName);
   const dst = new Uint8Array(s.maxBytes);
   const ElemCtor = s.bytesPerElement > 1 ? Uint16Array : Uint8Array;
@@ -555,6 +612,7 @@ async function stackStream(s, count) {
   let acc = null; // Float32 Mat accumulator
   let shape = null;
   let grabbed = 0;
+  let delivered = 0;
   try {
     let startSeq;
     try {
@@ -566,6 +624,7 @@ async function stackStream(s, count) {
       dst,
       startSeq,
       count,
+      expired,
       bytesFor: (w, hh) => w * hh * s.channels * s.bytesPerElement,
       read: (want) => reader.readSeqInto(h, dst, want),
       delay: () => sleep(1),
@@ -579,24 +638,28 @@ async function stackStream(s, count) {
         const fp = V.convertType(raw, "32F", alpha, 0);
         if (acc === null) { acc = fp; shape = [hh, w]; }
         else { for (let i = 0; i < acc.length; i++) acc[i] += fp[i]; }
+        onProgress(++delivered);
       },
     });
   } finally {
     try { reader.close(h); } catch {}
   }
-  if (acc === null || grabbed === 0) throw new Error("capture: no frames on " + s.shmName);
-  for (let i = 0; i < acc.length; i++) acc[i] /= grabbed;
+  // NO throw on a short/empty burst — runCapture's completeness gate names the
+  // stalled port with per-port counts (F1). A complete burst averages by grabbed.
+  if (acc !== null && grabbed > 0) for (let i = 0; i < acc.length; i++) acc[i] /= grabbed;
   return { image: acc, grabbed };
 }
 
 // --- read ONE fresh center frame (latest-wins, strictly after start) ---------
-async function readCenter(c, timeoutMs) {
+// Bounded by the SHARED run deadline (expired()) — the center rides the
+// session's persistent undistort pipe (live for the session span), so this
+// only trips if that pipe stalls; it returns null (never hangs).
+async function readCenter(c, expired, onProgress) {
   const h = reader.open(c.shmName);
   const dst = new Uint8Array(c.maxBytes);
   try {
     let lastSeq = reader.latestSeq(h); // skip whatever is already in the ring
     if (typeof lastSeq !== "bigint") lastSeq = BigInt(lastSeq);
-    const deadline = Date.now() + timeoutMs;
     for (;;) {
       const r = reader.readInto(h, dst, lastSeq);
       if (r !== null) {
@@ -605,9 +668,10 @@ async function readCenter(c, timeoutMs) {
         const view = dst.subarray(0, len);
         // Independent copy (dst is reused) → an 8-bit BGRA Mat.
         const copy = new Uint8Array(view);
+        onProgress(1);
         return makeMat(copy, [r.height, r.width], c.channels);
       }
-      if (Date.now() > deadline) return null;
+      if (expired()) return null;
       await sleep(2);
     }
   } finally {
@@ -619,16 +683,34 @@ async function readCenter(c, timeoutMs) {
 async function runCapture(m) {
   const { runId, streams, shot } = m;
   const t0 = now();
+  const count = shot.stackCount;
   const bursts = { left: 0, right: 0, center: 0 };
+
+  // F1 shared burst deadline: a raw producer that never delivers (stalled gate)
+  // trips this instead of hanging the single-threaded worker forever.
+  const timeoutMs = shot.burstTimeoutMs > 0 ? shot.burstTimeoutMs : DEFAULT_BURST_TIMEOUT_MS;
+  const deadline = now() + timeoutMs;
+  const expired = () => now() > deadline;
+
+  // Rate-limited per-port progress: name WHICH port stalls before the timeout.
+  const delivered = { left: 0, right: 0, center: 0 };
+  let lastProgress = 0;
+  function reportProgress(force) {
+    const t = now();
+    if (!force && t - lastProgress < PROGRESS_INTERVAL_MS) return;
+    lastProgress = t;
+    post({ type: "progress", runId, delivered: { ...delivered }, expected: count });
+  }
+  const prog = (port) => (n) => { delivered[port] = n; reportProgress(false); };
 
   // Drain the raw L/R bursts + the center frame, then signal reading-done so the
   // host parks the raw producers before the (pipe-free) stack math finishes.
   let lStack, rStack, centerRaw;
   try {
     [lStack, rStack, centerRaw] = await Promise.all([
-      stackStream(streams.left, shot.stackCount),
-      stackStream(streams.right, shot.stackCount),
-      readCenter(streams.center, 2000),
+      stackStream(streams.left, count, expired, prog("left")),
+      stackStream(streams.right, count, expired, prog("right")),
+      readCenter(streams.center, expired, prog("center")),
     ]);
   } catch (e) {
     post({ type: "reading-done", runId });
@@ -639,9 +721,26 @@ async function runCapture(m) {
   bursts.right = rStack.grabbed;
   bursts.center = centerRaw ? 1 : 0;
   post({ type: "reading-done", runId });
+  reportProgress(true); // final per-port snapshot
+
+  // F1 completeness gate: a stalled raw producer (never-delivering pipe) or a
+  // mid-burst retire leaves a port short — abandon the run and NAME the stalled
+  // port(s) with per-port delivered counts, carrying the partial bursts so the
+  // host meters honestly. A hung capture rejects (releases pipes, clears
+  // captureBusy) instead of requiring an app restart.
+  if (lStack.grabbed < count || rStack.grabbed < count || centerRaw === null) {
+    const detail =
+      "center delivered " + bursts.center + "/1, " +
+      "left delivered " + bursts.left + "/" + count + ", " +
+      "right delivered " + bursts.right + "/" + count;
+    const reason = expired()
+      ? "capture burst timed out after " + timeoutMs + "ms"
+      : "capture burst incomplete (producer retired mid-burst)";
+    reportErr({ runId, bursts }, new Error(reason + ": " + detail));
+    return;
+  }
 
   try {
-    if (centerRaw === null) throw new Error("capture: no center frame (undistort pipe timeout)");
     const { reset, indexed } = shot;
     if (reset) {
       store.clear();

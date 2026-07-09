@@ -81,13 +81,33 @@ function handleClick() {
       </div>
     </button>
     <table v-if="isRecording && hover && streams" class="record-tooltip">
-      <tr v-for="[name, info] of streams" :key="name">
-        <td class="stream-name">{{ name }}</td>
-        <td class="stream-frames">{{ info.frames }}</td>
-        <td class="stream-fps">{{ info.fps.toFixed(1) }} fps</td>
-        <td class="stream-bytes">{{ formatSize(info.bytes) }}</td>
-        <td v-if="info.dropped" class="stream-dropped">-{{ info.dropped }}</td>
-      </tr>
+      <thead>
+        <tr>
+          <th></th>
+          <th>pub</th>
+          <th>wrote</th>
+          <th>fps</th>
+          <th>size</th>
+          <th>drops</th>
+        </tr>
+      </thead>
+      <tbody>
+        <!-- F2 attribution: published = written + drops (pinned invariant); the
+             drops cell splits queue-overflow (q) vs ring-lapped (r) so a rig run
+             reads the cause without devtools. -->
+        <tr v-for="[name, info] of streams" :key="name">
+          <td class="stream-name">{{ name }}</td>
+          <td class="stream-pub">{{ info.frames + info.dropped }}</td>
+          <td class="stream-frames">{{ info.frames }}</td>
+          <td class="stream-fps">{{ info.fps.toFixed(1) }}</td>
+          <td class="stream-bytes">{{ formatSize(info.bytes) }}</td>
+          <td v-if="info.dropped" class="stream-dropped">
+            -{{ info.dropped }}
+            <span class="drop-cause">(q{{ info.droppedQueue ?? 0 }}/r{{ info.droppedRing ?? 0 }})</span>
+          </td>
+          <td v-else class="stream-dropped ok">0</td>
+        </tr>
+      </tbody>
     </table>
   </div>
 </template>
@@ -167,11 +187,26 @@ function handleClick() {
   z-index: 100;
   pointer-events: none;
 
+  th {
+    font-family: monospace;
+    padding: 0 0.5ch 0.2em;
+    color: #778;
+    font-weight: 600;
+    text-align: right;
+    &:first-child {
+      text-align: left;
+    }
+  }
+
   td {
     font-family: monospace;
     padding: 0 0.5ch;
     &.stream-name {
       color: #aaa;
+    }
+    &.stream-pub {
+      color: #ccc;
+      text-align: right;
     }
     &.stream-frames {
       color: #fff;
@@ -188,6 +223,13 @@ function handleClick() {
     &.stream-dropped {
       color: #f66;
       text-align: right;
+      &.ok {
+        color: #575;
+      }
+      .drop-cause {
+        color: #b77;
+        font-size: 0.85em;
+      }
     }
   }
 }

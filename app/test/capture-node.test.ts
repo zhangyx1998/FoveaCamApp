@@ -100,6 +100,63 @@ describe("grabBurst", () => {
     await grabBurst(cfg);
     expect(seen).toEqual([2 * 1 * 3]);
   });
+
+  it("writes the reader's ACTUAL payload length (ring-v5 bytes) over bytesFor (F1 suspect a)", async () => {
+    // Recorder-node parity: a per-frame `bytes` (variable-length / packed
+    // payload) supersedes the dim-derived bytesFor so the stack reads byte-exact.
+    const seen: number[] = [];
+    const { cfg } = scriptedBurst(
+      [{ seq: 1n, width: 8, height: 8, bytes: 96 } as SeqRead],
+      {
+        count: 1,
+        dst: new Uint8Array(256),
+        bytesFor: () => 999, // wrong on purpose — must be IGNORED when bytes present
+        onFrame: (view) => seen.push(view.byteLength),
+      },
+    );
+    await grabBurst(cfg);
+    expect(seen).toEqual([96]);
+  });
+
+  it("returns SHORT on the burst deadline instead of hanging (F1 timeout)", async () => {
+    // A raw producer whose gate never fired reads forever NotYet; `expired`
+    // bounds the burst so grabBurst returns the partial count (the caller then
+    // names the stalled port) — a hung capture must never require an app restart.
+    let reads = 0;
+    let expired = false;
+    const { cfg, frames } = scriptedBurst([], {
+      count: 5,
+      read: () => {
+        reads++;
+        if (reads >= 3) expired = true; // deadline trips after a few NotYets
+        return { notYet: true };
+      },
+      expired: () => expired,
+      delay: () => nextTick(),
+    });
+    const got = await grabBurst(cfg);
+    expect(got).toBe(0); // nothing delivered — the stalled-port signal
+    expect(frames).toEqual([]);
+  });
+
+  it("delivers what it can, then stops at the deadline (partial burst)", async () => {
+    let expired = false;
+    const script: SeqRead[] = [ok(1), ok(2)];
+    let i = 0;
+    const { cfg, frames } = scriptedBurst([], {
+      count: 5,
+      read: () => {
+        if (i < script.length) return script[i++]!;
+        expired = true; // producer went quiet mid-burst → deadline trips
+        return { notYet: true };
+      },
+      expired: () => expired,
+      delay: () => nextTick(),
+    });
+    const got = await grabBurst(cfg);
+    expect(got).toBe(2);
+    expect(frames).toEqual([1n, 2n]);
+  });
 });
 
 describe("accumulate / manifestOf", () => {
