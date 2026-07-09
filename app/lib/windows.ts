@@ -64,11 +64,6 @@ export const APP_REGISTRY = {
     session: "disparity-scope",
     group: "application",
   },
-  "tracking-single": {
-    title: "Tracking - Single",
-    session: "tracking",
-    group: "application",
-  },
   "multi-fovea": {
     title: "Tracking - Multi",
     session: "multi-fovea",

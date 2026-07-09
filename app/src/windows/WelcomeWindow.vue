@@ -123,7 +123,6 @@ const utilities = launchableApps.filter((a) => a.group === "utility");
 
 const iconOf: Record<string, object> = {
   "disparity-scope": faCircleHalfStroke,
-  "tracking-single": faObjectGroup,
   "multi-fovea": faObjectGroup,
   "manual-control": faCompass,
   "single-capture": faCameraAlt,

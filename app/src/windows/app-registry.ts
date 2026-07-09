@@ -19,7 +19,6 @@ type Loader = () => Promise<{ default: Component }>;
 
 const appLoaders: Partial<Record<AppId, Loader>> = {
   "disparity-scope": () => import("@modules/disparity-scope/index.vue"),
-  "tracking-single": () => import("@modules/tracking-single/index.vue"),
   "multi-fovea": () => import("@modules/multi-fovea/index.vue"),
   "manual-control": () => import("@modules/manual-control/index.vue"),
   "single-capture": () => import("@modules/single-capture/index.vue"),

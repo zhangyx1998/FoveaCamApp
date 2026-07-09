@@ -11,8 +11,6 @@
 
 import type { Component } from "vue";
 import type { Contract } from "@lib/orchestrator/protocol";
-import { tracking } from "@modules/tracking-single/contract";
-import TrackingAnnotations from "@modules/tracking-single/TrackingAnnotations.vue";
 
 export interface DebugOverlay {
   /** The real module contract the debug window passively subscribes to. */
@@ -21,9 +19,7 @@ export interface DebugOverlay {
   component: Component;
 }
 
-export const DEBUG_OVERLAYS: Record<string, DebugOverlay> = {
-  tracking: { contract: tracking, component: TrackingAnnotations },
-};
+export const DEBUG_OVERLAYS: Record<string, DebugOverlay> = {};
 
 export function debugOverlayFor(session: string): DebugOverlay | null {
   return DEBUG_OVERLAYS[session] ?? null;

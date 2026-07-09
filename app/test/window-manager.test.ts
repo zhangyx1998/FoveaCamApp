@@ -269,7 +269,7 @@ describe("WindowManager", () => {
 
   it("projections don't count for the welcome rule and survive app close", async () => {
     const { manager, spawned } = harness();
-    await manager.openApp("tracking-single");
+    await manager.openApp("manual-control");
     const projection = manager.openProjection({ session: "tracking", frame: "C" }) as FakeWindow;
     // Closing the app respawns welcome even though a projection stays open…
     manager.appWindow()!.close();
@@ -283,7 +283,7 @@ describe("WindowManager", () => {
 
   it("app switching neither drains nor closes projections", async () => {
     const { manager, spawned, drain } = harness();
-    await manager.openApp("tracking-single");
+    await manager.openApp("manual-control");
     const projection = manager.openProjection({ session: "tracking", frame: "C" }) as FakeWindow;
     drain.mockClear();
     await manager.openApp("disparity-scope");
@@ -344,7 +344,7 @@ describe("WindowManager", () => {
 
   it("viewers don't count for the welcome rule and survive app switching", async () => {
     const { manager, spawned, drain } = harness();
-    await manager.openApp("tracking-single");
+    await manager.openApp("manual-control");
     const v = manager.openViewer("/tmp/a.fovea") as FakeWindow;
     await manager.openApp("disparity-scope"); // drain + switch
     expect(drain).toHaveBeenCalledTimes(1);
@@ -393,7 +393,7 @@ describe("WindowManager", () => {
 
   it("childrenOf walks the windows owned by a parent", async () => {
     const { manager } = harness();
-    await manager.openApp("tracking-single");
+    await manager.openApp("manual-control");
     const app = manager.appWindow()!;
     const a = child(manager, "dbg:a", app);
     const b = child(manager, "dbg:b", app);
@@ -406,7 +406,7 @@ describe("WindowManager", () => {
 
   it("survive-policy children stay open when their owner closes (default)", async () => {
     const { manager } = harness();
-    await manager.openApp("tracking-single");
+    await manager.openApp("manual-control");
     const app = manager.appWindow()! as FakeWindow;
     const c = child(manager, "proj", app); // projection = survive
     app.close();
@@ -418,7 +418,7 @@ describe("WindowManager", () => {
     // the real cascade class); restored in afterEach below.
     WINDOWS.projection.onOwnerClose = "cascade";
     const { manager } = harness();
-    await manager.openApp("tracking-single");
+    await manager.openApp("manual-control");
     const app = manager.appWindow()! as FakeWindow;
     const c = child(manager, "dbg", app);
     const grandchild = child(manager, "dbg2", c); // owned by the child
@@ -450,7 +450,7 @@ describe("WindowManager", () => {
 
   it("toggleDebug opens a cascade-owned debug window keyed by session", async () => {
     const { manager } = harness();
-    await manager.openApp("tracking-single");
+    await manager.openApp("manual-control");
     const app = manager.appWindow()! as FakeWindow;
     const dbg = manager.toggleDebug({ session: "tracking", frame: "C" }, app) as FakeWindow;
     expect(dbg).not.toBeNull();
@@ -462,7 +462,7 @@ describe("WindowManager", () => {
 
   it("toggleDebug is a real toggle (second call on the same session closes it)", async () => {
     const { manager } = harness();
-    await manager.openApp("tracking-single");
+    await manager.openApp("manual-control");
     const app = manager.appWindow()!;
     const dbg = manager.toggleDebug({ session: "tracking", frame: "C" }, app) as FakeWindow;
     expect(manager.toggleDebug({ session: "tracking", frame: "C" }, app)).toBeNull();
@@ -471,7 +471,7 @@ describe("WindowManager", () => {
 
   it("the debug window cascade-closes when its owner app closes", async () => {
     const { manager } = harness();
-    await manager.openApp("tracking-single");
+    await manager.openApp("manual-control");
     const app = manager.appWindow()! as FakeWindow;
     const dbg = manager.toggleDebug({ session: "tracking", frame: "C" }, app) as FakeWindow;
     app.close();
@@ -480,17 +480,17 @@ describe("WindowManager", () => {
 
   it("the debug window cascade-closes when its owner app is switched away", async () => {
     const { manager } = harness();
-    await manager.openApp("tracking-single");
+    await manager.openApp("manual-control");
     const app = manager.appWindow()! as FakeWindow;
     const dbg = manager.toggleDebug({ session: "tracking", frame: "C" }, app) as FakeWindow;
-    await manager.openApp("disparity-scope"); // drains + closes tracking app
+    await manager.openApp("disparity-scope"); // drains + closes the open app
     expect(dbg.destroyed).toBe(true);
     expect(manager.appWindow()?.appId).toBe("disparity-scope");
   });
 
   it("supports one debug window per session; all cascade with the owner app", async () => {
     const { manager } = harness();
-    await manager.openApp("tracking-single");
+    await manager.openApp("manual-control");
     const app = manager.appWindow()! as FakeWindow;
     const d1 = manager.toggleDebug({ session: "tracking", frame: "C" }, app) as FakeWindow;
     const d2 = manager.toggleDebug({ session: "manual-control", frame: "L" }, app) as FakeWindow;

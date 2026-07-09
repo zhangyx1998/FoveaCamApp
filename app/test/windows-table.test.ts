@@ -84,7 +84,7 @@ describe("WINDOWS taxonomy table", () => {
     expect(entryFor("welcome")).toBe(WINDOWS.welcome.entry);
     expect(entryFor("profiler")).toBe(WINDOWS.profiler.entry);
     expect(entryFor("viewer")).toBe(WINDOWS.viewer.entry);
-    expect(entryFor("app", "tracking-single")).toBe("windows/tracking-single.html");
+    expect(entryFor("app", "disparity-scope")).toBe("windows/disparity-scope.html");
     expect(() => entryFor("app", "not-a-real-app")).toThrow();
   });
 

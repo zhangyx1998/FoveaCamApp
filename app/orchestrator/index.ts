@@ -36,7 +36,6 @@ import { controllerNode } from "./controller-node.js";
 import { viewerSession } from "./sessions/viewer.js";
 import liveViewSession from "@modules/single-capture/session";
 import manageCamerasSession from "@modules/manage-cameras/session";
-import trackingSession from "@modules/tracking-single/session";
 import manualControlSession from "@modules/manual-control/session";
 import multiFoveaSession from "@modules/multi-fovea/session";
 import disparityScopeSession from "@modules/disparity-scope/session";
@@ -186,9 +185,6 @@ const manageCameras = hub.add(manageCamerasSession());
 controllerNode();
 hub.add(controllerSession());
 
-// --- tracking: first frame-driven control loop (KCF + actuation) ----------
-const tracking = hub.add(trackingSession(asBroker(Pipe), undistortSeam));
-
 // --- manual-control: manual steering + capture + recording ----------------
 const manualControl = hub.add(manualControlSession(asBroker(Pipe), undistortSeam));
 
@@ -223,7 +219,6 @@ hub.add(viewerSession());
 const cameraOwning: ServerSession<any>[] = [
   liveview,
   manageCameras,
-  tracking,
   manualControl,
   multiFovea,
   disparityScope,

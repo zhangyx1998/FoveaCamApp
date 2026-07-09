@@ -43,11 +43,11 @@ afterEach(() => {
 
 describe("url-state", () => {
   it("reads params from the current URL", () => {
-    stubLocation("http://x/windows/projection.html?session=tracking&frame=C");
-    expect(readUrlParam("session")).toBe("tracking");
+    stubLocation("http://x/windows/projection.html?session=disparity-scope&frame=C");
+    expect(readUrlParam("session")).toBe("disparity-scope");
     expect(readUrlParam("frame")).toBe("C");
     expect(readUrlParam("missing")).toBeNull();
-    expect(readUrlState()).toEqual({ session: "tracking", frame: "C" });
+    expect(readUrlState()).toEqual({ session: "disparity-scope", frame: "C" });
   });
 
   it("merges a patch via replaceState, preserving unrelated params", () => {
