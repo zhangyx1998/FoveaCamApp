@@ -39,8 +39,11 @@ Napi::Object node(Napi::Env env, const std::string &id, const std::string &kind,
 Napi::Object frameType(Napi::Env env, const std::string &pixelFormat,
                        const std::string &dtype);
 // Append one ACTUAL input edge {from, port, type} to the row's `inputs`.
+// `lossy`: -1 = leave the field absent (JS fold defaults it from the
+// producer's transport); 0 = explicit `lossy:false` (a lossless FIFO edge —
+// must WIN over the pipe-producer default); 1 = explicit `lossy:true`.
 void addInput(Napi::Env env, Napi::Object &node, const std::string &from,
-              const std::string &port, Napi::Object type);
+              const std::string &port, Napi::Object type, int lossy = -1);
 // If `pipeId` is a live advertised pipe: stamp the row transport="pipe" +
 // {epoch, pipe: {consumers, bytesTotal}, output(from the pipe spec)} and
 // return true. Otherwise leave the row native-only and return false.

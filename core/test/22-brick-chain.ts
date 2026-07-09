@@ -203,10 +203,63 @@ const fov = open(fovId, R0.width * R0.height * CH);
   console.log("22-brick-chain: depth-3 chain (convert→undistort→fovea) byte-exact OK.");
 }
 
-// --- 7: orderly teardown (B-20 pattern) → natural exit -----------------------
+// Detach the Leaky fovea before the FIFO section to isolate the convert→
+// undistort edge (the fovea chain behaviour was already asserted byte-exact
+// above — that IS the "Leaky chain still behaves" check).
 reader.close(fov.rh); P.disconnect(fovId);
 assert.equal(A.detachFoveaPipe(fovId), true, "detach fovea");
 P.close(fovId); P.drop(fovId);
+
+// --- 8: FIFO backpressure — every converted frame reaches undistort IN ORDER --
+// The convert→undistort edge is a bounded blocking FIFO (§1): slow the
+// undistort consumer past the camera frame interval so its input queue backs
+// up. The FIFO must never skip (undistort drops stay 0, deviceTimestamps
+// strictly increase), the queue high-water must climb above 1, and the
+// converter must shed the overload at its OWN latest-wins camera input.
+{
+  const convBefore = A.converterProbeAll()[cnvId].outputs.converted.count as number;
+  assert.equal(A.undistortStall(wrpId, 80), true, "stall the undistort consumer"); // > ~42ms cam interval
+  let last = -1n;
+  let frames = 0;
+  const deadline = Date.now() + 6000;
+  while (frames < 20 && Date.now() < deadline) {
+    const rw = pull(wrp);
+    if (rw) {
+      const ts = rw.meta.deviceTimestamp;
+      assert(ts > last, `undistort output strictly ordered (${last} -> ${ts})`);
+      last = ts;
+      frames++;
+    } else {
+      await sleep(5);
+    }
+  }
+  assert(frames >= 10, `undistort kept producing under backpressure (${frames})`);
+  const up = A.undistortProbeAll()[wrpId];
+  assert(up.queue, "undistort probe carries a queue block (FIFO input)");
+  assert.equal(up.queue.capacity, 8, "queue capacity is the ruled 8");
+  assert(up.queue.highWater > 1, `queue backed up under the stall (highWater=${up.queue.highWater})`);
+  assert.equal(up.dropTotal, 0, `undistort NEVER skips a frame (drops=${up.dropTotal})`);
+  // The overload sheds at camera→convert (converter's latest-wins input),
+  // metered as converter drops — convert→undistort stays complete.
+  const cp = A.converterProbeAll()[cnvId];
+  assert(cp.dropTotal > 0, `overload shed at the camera→convert edge (converter drops=${cp.dropTotal})`);
+
+  // Release the stall and let the FIFO drain: undistort ingests EVERY converted
+  // frame (lossless) — its input count catches up to the converter's output to
+  // within the FIFO's in-flight depth, still with zero drops.
+  assert.equal(A.undistortStall(wrpId, 0), true, "release the stall");
+  const drainEnd = Date.now() + 3000;
+  while (Date.now() < drainEnd) { if (!pull(wrp)) await sleep(5); }
+  const conv = A.converterProbeAll()[cnvId].outputs.converted.count as number;
+  const undIn = A.undistortProbeAll()[wrpId].inputs.frame.count as number;
+  assert(conv > convBefore, "converter kept producing across the test");
+  assert(undIn <= conv && conv - undIn <= 10,
+    `undistort ingested every converted frame within FIFO depth (converted=${conv}, undistort=${undIn})`);
+  assert.equal(A.undistortProbeAll()[wrpId].dropTotal, 0, "still zero undistort drops after drain");
+  console.log(`22-brick-chain: FIFO backpressure OK (highWater=${up.queue.highWater}/cap ${up.queue.capacity}, undistort drops 0, converter shed ${cp.dropTotal}, complete convert=${conv}/undistort=${undIn}).`);
+}
+
+// --- 7: orderly teardown (B-20 pattern) → natural exit -----------------------
 reader.close(wrp.rh); P.disconnect(wrpId);
 assert.equal(A.detachUndistortPipe(wrpId), true, "detach undistort");
 P.close(wrpId); P.drop(wrpId);

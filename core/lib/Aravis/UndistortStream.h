@@ -31,6 +31,7 @@
 // `TapPublisher` (which deep-copies before the buffer is reused).
 
 #include <atomic>
+#include <thread>
 
 #include <opencv2/opencv.hpp>
 
@@ -46,6 +47,12 @@ class UndistortStream : public ChainedStream {
 public:
   using Ptr = std::shared_ptr<UndistortStream>;
   enum class Variant { Intrinsic, Homography };
+  // FIFO input capacity (controller-node-and-fifo-edges §1): the undistort
+  // brick consumes the converter's OwnedFrame tap through a bounded blocking
+  // FIFO so EVERY converted frame is processed in order; a full queue
+  // backpressures the converter (which sheds at its own latest-wins camera
+  // input). 8 = a few frames of slack without unbounded memory growth.
+  static constexpr size_t kFifoCapacity = 8;
 
   // INTRINSIC variant. Maps built SYNCHRONOUSLY here (attach, NAPI thread —
   // tens of ms once per session-open, B-23 ruling #4), owned by the stream
@@ -58,8 +65,9 @@ public:
   }
   UndistortStream(Source source, std::string sourceId,
                   const CameraCalibration::Ptr &cal, std::string name)
-      : ChainedStream(std::move(source)), variant_(Variant::Intrinsic),
-        name_(name), sourceId_(std::move(sourceId)),
+      : ChainedStream(std::move(source), ChannelKind::fifo(kFifoCapacity)),
+        variant_(Variant::Intrinsic), name_(name),
+        sourceId_(std::move(sourceId)),
         ring_(2), // unused by this variant — minimum footprint
         meter_(std::move(name), {"frame"}, {"undistorted"}, converterNowMs()) {
     const auto &mtx = cal->camera_matrix;
@@ -76,8 +84,9 @@ public:
   }
   UndistortStream(Source source, std::string sourceId, size_t ringCapacity,
                   std::string name)
-      : ChainedStream(std::move(source)), variant_(Variant::Homography),
-        name_(name), sourceId_(std::move(sourceId)), ring_(ringCapacity),
+      : ChainedStream(std::move(source), ChannelKind::fifo(kFifoCapacity)),
+        variant_(Variant::Homography), name_(name),
+        sourceId_(std::move(sourceId)), ring_(ringCapacity),
         meter_(std::move(name), {"frame"}, {"undistorted"}, converterNowMs()) {}
 
   ~UndistortStream() override {
@@ -113,8 +122,20 @@ public:
   }
   const std::string &name() const { return name_; }
   const std::string &sourceId() const { return sourceId_; }
+  // Test hook (mirrors KcfTrackerStream::stall): add `ms` of artificial
+  // per-frame work so the converter outruns this brick, filling the input FIFO
+  // and exercising the backpressure + high-water metering. NAPI-thread writer.
+  void stall(double ms) { stallMs_.store(ms, std::memory_order_release); }
 
 protected:
+  // FIFO metering (single-writer rule preserved — this brick's own thread):
+  // the peak input-queue occupancy since the last dequeue + the FIFO capacity,
+  // per-bin MAX over the meter's 10s/1s window. Surfaced as `queue:{depth,
+  // highWater, capacity}` by `meterSnapshotToJs`.
+  void onQueueSample(uint32_t highWater, uint32_t capacity) override {
+    meter_.queueDepth(highWater, capacity, converterNowMs());
+  }
+
   ConvertedFrame::Ptr process(const OwnedFrame::Ptr &in) override {
     const int64_t t = converterNowMs();
     if (const uint64_t gap = seqGap(in)) // tap outran this brick (latest-wins)
@@ -146,6 +167,9 @@ protected:
         passthrough_.fetch_add(1, std::memory_order_relaxed);
       }
     }
+    if (const double s = stallMs_.load(std::memory_order_acquire); s > 0)
+      std::this_thread::sleep_for(
+          std::chrono::duration<double, std::milli>(s));
     const double processMs = std::chrono::duration<double, std::milli>(
                                  std::chrono::steady_clock::now() - c0)
                                  .count();
@@ -169,6 +193,7 @@ private:
   ParamRing ring_;             // homography history (JS writer / this reader)
   std::string serial_;         // owning camera (probe: calibratedClock)
   std::atomic<uint64_t> passthrough_{0};
+  std::atomic<double> stallMs_{0}; // test-only induced slowness
   Meter::ThreadMeter meter_; // single writer = this brick's thread
   cv::Mat buf_;              // reused output buffer (this thread only)
 };

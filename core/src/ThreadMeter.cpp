@@ -52,6 +52,23 @@ double ThreadMeter::ringMax(Ring r, int64_t now) {
   return std::max(m, inProgress);
 }
 
+void ThreadMeter::recordValue(Ring &r, int64_t now, double value) {
+  rotate(r, now);
+  if (value > r.bins[r.cursor])
+    r.bins[r.cursor] = value;
+  r.lastEventTs = now;
+  r.count++;
+}
+
+double ThreadMeter::ringValueMax(Ring r, int64_t now) {
+  rotate(r, now); // r is a by-value copy — safe to mutate on the probe side
+  double m = 0;
+  for (const double b : r.bins)
+    if (b > m)
+      m = b;
+  return m; // pure windowed max — no in-progress interval term (values, not gaps)
+}
+
 StreamStat ThreadMeter::streamStat(const Ring &r, int64_t now,
                                    int64_t uptimeMs) {
   StreamStat s;
@@ -71,6 +88,7 @@ ThreadMeter::ThreadMeter(std::string name, std::vector<std::string> inputs,
     r.binStart = nowMs;
   for (Ring &r : block_.outputs)
     r.binStart = nowMs;
+  block_.queueRing.binStart = nowMs;
 }
 
 int32_t ThreadMeter::indexOf(const std::vector<std::string> &names,
@@ -137,6 +155,16 @@ void ThreadMeter::drop(uint64_t n) {
   version_.store(v + 2, std::memory_order_release);
 }
 
+void ThreadMeter::queueDepth(uint32_t depth, uint32_t capacity, int64_t nowMs) {
+  const uint64_t v = version_.load(std::memory_order_relaxed);
+  version_.store(v + 1, std::memory_order_release); // odd
+  block_.hasQueue = true;
+  block_.queueCapacity = capacity;
+  block_.queueLastDepth = depth;
+  recordValue(block_.queueRing, nowMs, static_cast<double>(depth));
+  version_.store(v + 2, std::memory_order_release); // even
+}
+
 // ---- probe side (any thread) — seqlock read of a consistent copy -----------
 
 Snapshot ThreadMeter::probe(int64_t nowMs) const {
@@ -173,6 +201,13 @@ Snapshot ThreadMeter::probe(int64_t nowMs) const {
   for (size_t i = 0; i < outputNames_.size() && i < MAX_STREAMS; ++i)
     s.outputs.push_back({outputNames_[i], streamStat(copy.outputs[i], nowMs, s.uptimeMs)});
   s.dropTotal = copy.dropTotal;
+  if (copy.hasQueue) {
+    s.hasQueue = true;
+    s.queueDepth = copy.queueLastDepth;
+    s.queueHighWater =
+        static_cast<uint32_t>(ringValueMax(copy.queueRing, nowMs));
+    s.queueCapacity = copy.queueCapacity;
+  }
   return s;
 }
 

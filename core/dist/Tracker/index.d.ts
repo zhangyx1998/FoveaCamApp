@@ -5,7 +5,7 @@
 // -------------------------------------------------------
 import type { CoreObject } from "../types";
 import type { CameraCalibration, Mat } from "core/Vision";
-import type { Rect } from "core/Geometry";
+import type { Point2d, Rect } from "core/Geometry";
 import type { Camera } from "core/Aravis";
 
 declare module "core/Tracker" {
@@ -19,8 +19,17 @@ declare module "core/Tracker" {
   /** One KCF result off the 1d tracker thread (WS1 1d). */
   export interface TrackResult {
     found: boolean;
-    /** Tracked box in frame pixels, or null when tracking is lost. */
+    /** Tracked box in frame pixels, or null when tracking is lost. On an
+     *  OVERRIDDEN result: a box of the last armed size centered on the override
+     *  point (or null if the tracker was never armed). */
     bbox: Rect | null;
+    /** Bbox center in frame pixels (computed in native), or null when lost.
+     *  On an overridden result this is the override point. */
+    center: Point2d | null;
+    /** True while the tracker is under a JS `override()` drag: KCF is NOT
+     *  updated and `center` is the override point. Flows downstream (matcher →
+     *  PID vergence) so each stage acts on the drag correspondingly. */
+    overridden: boolean;
     /** Monotonic result counter (produced by the tracker thread). */
     seq: number;
     /** Source frame's camera-clock timestamp — correlate with recorder/pipe. */
@@ -52,6 +61,14 @@ declare module "core/Tracker" {
    *  arrive via async iteration. `arm(roi)` (re-)inits KCF on the next frame. */
   export interface KcfTracker extends CoreObject<KcfTracker>, AsyncIterable<TrackResult> {
     arm(roi: Rect): void;
+    /** Engage a drag override at `center` (wide-view point): the tracker stops
+     *  updating KCF and emits `{found:true, overridden:true, center}` every
+     *  frame until `releaseOverride()`. Atomic (applied on the next frame). */
+    override(center: Point2d): void;
+    /** Release the override: re-arm KCF at the last override center on the next
+     *  frame (roi = last armed size, else a default), then resume normal
+     *  (`overridden:false`) results. */
+    releaseOverride(): void;
     /** Snapshot the native meter (safe from the orchestrator thread). */
     probe(): TrackerMeter;
     /** Test-only: add `ms` of artificial per-frame work (drives the drop path). */
@@ -62,6 +79,18 @@ declare module "core/Tracker" {
    *  Optional `name` = the graph node id (becomes the meter/probe name;
    *  defaults to the legacy `"tracker:center"`). */
   export function createTracker(camera: Camera, name?: string): KcfTracker;
+
+  /** Create a CHAINED KCF tracker on another brick's in-process OwnedFrame tap
+   *  (controller-node-and-fifo-edges §3.5): `sourcePipeId` is a live convert or
+   *  undistort pipe id, so the tracker tracks EXACTLY that brick's view (e.g.
+   *  the undistorted C frame the disparity kernel sees). Input transport is
+   *  latest-wins (track the freshest frame). Same object surface as
+   *  `createTracker`. `name` = the graph node id / meter name (default
+   *  `"<sourcePipeId>/kcf"`). Throws if no brick is attached to the pipe. */
+  export function createChainedTracker(
+    sourcePipeId: string,
+    name?: string,
+  ): KcfTracker;
 
   /** One target's verdict inside a `MultiTrackResult` batch (real-2, B-25). */
   export interface MultiTrackTarget {

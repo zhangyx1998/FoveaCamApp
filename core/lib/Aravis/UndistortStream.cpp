@@ -204,6 +204,30 @@ FN(pushHomography) {
   JS_EXCEPT(env.Undefined())
 }
 
+// ---- test-only stall hook (drives the FIFO backpressure / high-water path) --
+// undistortStall(pipeId, ms) — inject `ms` of per-frame work into the brick's
+// process() so the converter outruns it, filling the input FIFO. False for an
+// unknown pipe. Hardware-free; driven by core/test/22.
+FN(undistortStall) {
+  auto env = info.Env();
+  try {
+    const auto pipeId = info[0].As<Napi::String>().Utf8Value();
+    const double ms = info[1].As<Napi::Number>().DoubleValue();
+    UndistortStream::Ptr stream;
+    {
+      std::scoped_lock lock(g_mutex);
+      auto it = g_pipes.find(pipeId);
+      if (it != g_pipes.end())
+        stream = it->second.stream;
+    }
+    if (!stream)
+      return Boolean::New(env, false);
+    stream->stall(ms);
+    return Boolean::New(env, true);
+  }
+  JS_EXCEPT(env.Undefined())
+}
+
 // DEPRECATED NO-OP (unified-time ruling 2026-07-08: owner-applied
 // timestamps). The camera itself now stamps every frame with its calibrated
 // dt at Frame creation (`camera.calibrateClock`), so the per-brick offset
@@ -254,8 +278,12 @@ void appendUndistortReports(Napi::Env env, Napi::Array &rows,
       appendConvertNodeRow(env, rows, b.privateSource->name(),
                            b.privateSource);
     auto row = Topology::node(env, pipeId, "undistort", "native");
+    // The convert→undistort edge is a bounded FIFO (controller-node-and-fifo-
+    // edges §1): LOSSLESS + ordered. Mark it `lossy:false` EXPLICITLY so worker
+    // F's fold does not default it to lossy from the convert producer's pipe
+    // transport (the queue high-water replaces the drop rate on this edge).
     Topology::addInput(env, row, b.stream->sourceId(), "frame",
-                       Topology::frameType(env, "BGRA8", "U8"));
+                       Topology::frameType(env, "BGRA8", "U8"), /*lossy=*/0);
     if (!Topology::decoratePipe(env, row, pipeId))
       row.Set("output", Topology::frameType(env, "BGRA8", "U8"));
     row.Set("stats", meterSnapshotToJs(env, b.stream->probe()));

@@ -17,6 +17,8 @@
 #include <Aravis/Frame.h> // convertFrame (B-25 cal-mode source prep)
 #include <Aravis/Stream.h>
 
+#include "Aravis/ConverterStream.h" // OwnedFrame, ChainedStreamOf, findConverter
+#include "Aravis/UndistortStream.h" // findUndistort (chained-tracker source)
 #include "AsyncTask.h"
 #include "CoreObject.h"
 #include "Iterator.h"    // TransformStream, Sub::Queue/Iterator (async-generator seam)
@@ -145,6 +147,14 @@ static int64_t nowMs() {
 struct TrackResult : Shared<TrackResult> {
   bool found = false;
   cv::Rect bbox;
+  // Bbox center (computed once in native — the value every consumer wants).
+  // For an OVERRIDDEN result this is the override point (bbox may be a centered
+  // box of the last armed size, or empty if never armed). Valid iff `found`.
+  cv::Point2d center{0, 0};
+  // True while the tracker is under a JS override (drag): KCF is NOT updated;
+  // `center` is the override value. Flows downstream (matcher → PID) so each
+  // stage acts correspondingly (controller-node-and-fifo-edges §3.5).
+  bool overridden = false;
   uint64_t seq = 0;             // result counter (transform thread)
   uint64_t deviceTimestamp = 0; // source frame's camera-clock stamp (correlation)
 };
@@ -155,6 +165,8 @@ template <> Napi::Value convert(Napi::Env env, const TrackResult::Ptr &r) noexce
   auto o = Napi::Object::New(env);
   o.Set("found", Napi::Boolean::New(env, r->found));
   o.Set("bbox", r->found ? convert(env, r->bbox) : env.Null());
+  o.Set("center", r->found ? convert(env, r->center) : env.Null());
+  o.Set("overridden", Napi::Boolean::New(env, r->overridden));
   o.Set("seq", Napi::Number::New(env, static_cast<double>(r->seq)));
   o.Set("deviceTimestamp", convert(env, r->deviceTimestamp));
   return o;
@@ -164,8 +176,148 @@ Napi::Value convert(Napi::Env env, const Napi::Value &, const TrackResult::Ptr &
   return convert(env, r);
 }
 
+// The tracking + override state machine, SHARED by the raw (camera-frame) and
+// chained (OwnedFrame tap) KCF variants — the only difference between them is
+// how each obtains a single-channel `gray` mat; the arm/override/produce logic
+// is identical and lives here ONCE. All state is touched only on the owning
+// stream's transform thread, except the atomic-flagged JS handoffs (arm /
+// override / release), same discipline as the original `arm()`.
+class KcfCore {
+public:
+  // Default roi size used when releasing an override with no prior arm.
+  static constexpr int kDefaultOverrideRoi = 64;
+
+  // JS-thread control surface (atomic slots applied on the next frame).
+  void arm(const cv::Rect &roi) {
+    *pending_.ref() = roi;
+    hasPending_.store(true, std::memory_order_release);
+  }
+  void overrideCenter(const cv::Point2d &c) {
+    *override_.ref() = c;
+    overriding_.store(true, std::memory_order_release);
+  }
+  void releaseOverride() {
+    // Only schedule a re-arm if we were actually engaged (idempotent release).
+    if (overriding_.exchange(false, std::memory_order_acq_rel))
+      wantRearm_.store(true, std::memory_order_release);
+  }
+
+  // Run one step on `gray` (single-channel 8-bit); transform-thread only.
+  // Returns a result, or null for a frame that yields none (the KCF (re-)init
+  // frame). `meter` gets begin/end (busy) around KCF work + emit("track") per
+  // produced result; ingest/drop stay with the caller (they differ per variant).
+  TrackResult::Ptr step(const cv::Mat &gray, uint64_t deviceTimestamp,
+                        Meter::ThreadMeter &meter, double stallMs) {
+    const cv::Rect frameRect(0, 0, gray.cols, gray.rows);
+
+    // Override RELEASE → schedule a re-arm at the last override center, sized
+    // to the last armed roi (or the documented default if never armed).
+    if (wantRearm_.exchange(false, std::memory_order_acq_rel)) {
+      const cv::Point2d c = *override_.ref();
+      const cv::Size sz = armedSize_.width > 0
+                              ? armedSize_
+                              : cv::Size(kDefaultOverrideRoi, kDefaultOverrideRoi);
+      *pending_.ref() = centeredRect(c, sz);
+      hasPending_.store(true, std::memory_order_release);
+    }
+
+    // Explicit (re-)arm request → KCF init on this frame, no result emitted.
+    if (hasPending_.exchange(false, std::memory_order_acq_rel)) {
+      const cv::Rect roi = *pending_.ref() & frameRect; // frame-bound clamp
+      if (roi.width >= 4 && roi.height >= 4) {
+        try {
+          tracker_->init(gray, roi);
+          armed_ = true;
+          armedSize_ = roi.size();
+        } catch (const std::exception &) {
+          armed_ = false; // degenerate init — stay idle until re-armed
+        }
+      }
+      return nullptr;
+    }
+
+    // Override ENGAGED → emit the override center, DO NOT touch KCF state.
+    if (overriding_.load(std::memory_order_acquire)) {
+      const cv::Point2d c = *override_.ref();
+      auto result = TrackResult::create();
+      result->found = true;
+      result->overridden = true;
+      result->center = c;
+      // A centered box of the last armed size (empty if never armed).
+      result->bbox = armedSize_.width > 0 ? centeredRect(c, armedSize_)
+                                          : cv::Rect();
+      result->seq = ++produced_;
+      result->deviceTimestamp = deviceTimestamp;
+      meter.emit("track", nowMs());
+      return result;
+    }
+
+    if (!armed_)
+      return nullptr; // idle until armed
+
+    const int64_t t = nowMs();
+    meter.begin(t);
+    cv::Rect bbox;
+    bool ok = false;
+    try {
+      ok = tracker_->update(gray, bbox);
+    } catch (const std::exception &) {
+      ok = false; // lost: KCF throws on a degenerate (edge-drifted) patch
+    }
+    if (stallMs > 0)
+      std::this_thread::sleep_for(
+          std::chrono::duration<double, std::milli>(stallMs));
+    meter.end(nowMs());
+
+    auto result = TrackResult::create();
+    result->found = ok;
+    result->overridden = false;
+    result->bbox = bbox;
+    if (ok)
+      result->center = cv::Point2d(bbox.x + bbox.width / 2.0,
+                                   bbox.y + bbox.height / 2.0);
+    result->seq = ++produced_;
+    result->deviceTimestamp = deviceTimestamp;
+    meter.emit("track", nowMs());
+    return result;
+  }
+
+private:
+  static cv::Rect centeredRect(const cv::Point2d &c, const cv::Size &sz) {
+    return cv::Rect(cvRound(c.x - sz.width / 2.0), cvRound(c.y - sz.height / 2.0),
+                    sz.width, sz.height);
+  }
+
+  cv::Ptr<cv::TrackerKCF> tracker_ = cv::TrackerKCF::create(); // xform thread
+  Threading::Guard<cv::Rect> pending_ = {cv::Rect()};
+  std::atomic<bool> hasPending_{false};
+  Threading::Guard<cv::Point2d> override_ = {cv::Point2d(0, 0)};
+  std::atomic<bool> overriding_{false};
+  std::atomic<bool> wantRearm_{false};
+  bool armed_ = false;           // transform-thread only
+  cv::Size armedSize_{0, 0};     // last armed roi size (0 = never armed)
+  uint64_t produced_ = 0;        // transform-thread only
+};
+
+// Abstract handle the JS CoreObject holds: BOTH tracker variants (raw camera
+// stream + chained OwnedFrame tap) implement it, so one `KcfTrackerObject`
+// surface (arm / override / release / probe / stall / async-iterate) drives
+// either. Not a Stream itself (avoids a diamond) — `stream()` exposes the
+// underlying `Stream<TrackResult::Ptr>` for the Sub::Queue iterator.
+struct TrackerHandle {
+  using Ptr = std::shared_ptr<TrackerHandle>;
+  virtual ~TrackerHandle() = default;
+  virtual void arm(const cv::Rect &roi) = 0;
+  virtual void overrideCenter(const cv::Point2d &c) = 0;
+  virtual void releaseOverride() = 0;
+  virtual Meter::Snapshot probe() const = 0;
+  virtual void stall(double ms) = 0;
+  virtual Stream<TrackResult::Ptr> *stream() = 0;
+};
+
 class KcfTrackerStream
-    : public TransformStream<Arv::Frame::Ptr, TrackResult::Ptr> {
+    : public TransformStream<Arv::Frame::Ptr, TrackResult::Ptr>,
+      public TrackerHandle {
 public:
   using Ptr = std::shared_ptr<KcfTrackerStream>;
   // Optional `name` = the graph node id (B-24: meter names ARE node ids);
@@ -177,21 +329,21 @@ public:
   }
   explicit KcfTrackerStream(Arv::Stream::Ptr upstream,
                             std::string name = "tracker:center")
-      : upstream_(std::move(upstream)), tracker_(cv::TrackerKCF::create()),
+      : upstream_(std::move(upstream)),
         meter_(std::move(name), {"frame"}, {"track"}, nowMs()) {}
   // Stream requires shutdown() before the base is destroyed (joins the thread
-  // before the derived vtable/tracker_ go away).
+  // before the derived vtable/core_ go away).
   ~KcfTrackerStream() override { shutdown(); }
 
-  // Arm/re-arm: KCF (re-)inits on the next frame with `roi`. Callable from JS.
-  void arm(const cv::Rect &roi) {
-    *pending_.ref() = roi;
-    hasPending_.store(true, std::memory_order_release);
-  }
-  Meter::Snapshot probe() const { return meter_.probe(nowMs()); }
+  // TrackerHandle surface (delegates the state machine to KcfCore).
+  void arm(const cv::Rect &roi) override { core_.arm(roi); }
+  void overrideCenter(const cv::Point2d &c) override { core_.overrideCenter(c); }
+  void releaseOverride() override { core_.releaseOverride(); }
+  Meter::Snapshot probe() const override { return meter_.probe(nowMs()); }
   // Test hook: add `ms` of artificial per-frame work so the camera outruns the
   // transform, exercising the latest-wins drop counter / meter.drop path.
-  void stall(double ms) { stallMs_.store(ms, std::memory_order_release); }
+  void stall(double ms) override { stallMs_.store(ms, std::memory_order_release); }
+  Stream<TrackResult::Ptr> *stream() override { return this; }
 
 protected:
   Stream<Arv::Frame::Ptr> *upstream() override { return upstream_.get(); }
@@ -206,53 +358,74 @@ protected:
       lastDrops_ = drops;
     }
     meter_.ingest("frame", t);
-
-    const cv::Mat &gray = frame->raw; // center camera is Mono8 — track raw
-    if (hasPending_.exchange(false, std::memory_order_acq_rel)) {
-      // Frame-bound clamp: an out-of-frame roi makes cv::TrackerKCF throw on
-      // its empty internal patch (B-25 finding — same guard as MultiKcf).
-      const cv::Rect roi =
-          *pending_.ref() & cv::Rect(0, 0, gray.cols, gray.rows);
-      if (roi.width >= 4 && roi.height >= 4) {
-        tracker_->init(gray, roi);
-        armed_ = true;
-      }
-      return nullptr; // the init frame yields no result
-    }
-    if (!armed_)
-      return nullptr; // idle until armed
-
-    meter_.begin(t);
-    cv::Rect bbox;
-    bool ok = false;
-    try {
-      ok = tracker_->update(gray, bbox);
-    } catch (const std::exception &) {
-      ok = false; // lost: KCF throws on a degenerate (edge-drifted) patch
-    }
-    if (const double s = stallMs_.load(std::memory_order_acquire); s > 0)
-      std::this_thread::sleep_for(std::chrono::duration<double, std::milli>(s));
-    meter_.end(nowMs());
-
-    auto result = TrackResult::create();
-    result->found = ok;
-    result->bbox = bbox;
-    result->seq = ++produced_;
-    result->deviceTimestamp = frame->device_timestamp;
-    meter_.emit("track", nowMs());
-    return result;
+    // Center camera is Mono8 — track the raw single-channel frame directly.
+    return core_.step(frame->raw, frame->device_timestamp, meter_,
+                      stallMs_.load(std::memory_order_acquire));
   }
 
 private:
   Arv::Stream::Ptr upstream_;
-  cv::Ptr<cv::TrackerKCF> tracker_; // transform-thread only
-  Meter::ThreadMeter meter_;        // single writer = transform thread
-  Threading::Guard<cv::Rect> pending_ = {cv::Rect()};
-  std::atomic<bool> hasPending_{false};
+  Meter::ThreadMeter meter_; // single writer = transform thread
+  KcfCore core_;             // tracking + override state machine
   std::atomic<double> stallMs_{0}; // test-only induced slowness
-  bool armed_ = false;    // transform-thread only
-  uint64_t produced_ = 0; // transform-thread only
-  uint64_t lastDrops_ = 0; // transform-thread only
+  uint64_t lastDrops_ = 0;   // transform-thread only
+};
+
+// CHAINED KCF variant (controller-node-and-fifo-edges §3.5): tracks another
+// brick's OwnedFrame tap (the convert/undistort C view the disparity kernel
+// sees) instead of the raw camera stream. Input channel = Leaky (latest-wins
+// is right for a tracker — track the freshest frame; skips meter as drops).
+// Reuses the exact same `KcfCore` loop; converts the BGRA/undistorted tap mat
+// to gray as cv::TrackerKCF needs a single channel.
+class ChainedKcfTrackerStream : public Arv::ChainedStreamOf<TrackResult::Ptr>,
+                                public TrackerHandle {
+public:
+  using Ptr = std::shared_ptr<ChainedKcfTrackerStream>;
+  static Ptr create(Source source, std::string name) {
+    return std::make_shared<ChainedKcfTrackerStream>(std::move(source),
+                                                     std::move(name));
+  }
+  ChainedKcfTrackerStream(Source source, std::string name)
+      : Arv::ChainedStreamOf<TrackResult::Ptr>(std::move(source)), // Leaky
+        meter_(std::move(name), {"frame"}, {"track"}, nowMs()) {}
+  ~ChainedKcfTrackerStream() override {
+    closeChain(); // wake a blocked tap read (ChainedStream contract)
+    shutdown();
+  }
+
+  void arm(const cv::Rect &roi) override { core_.arm(roi); }
+  void overrideCenter(const cv::Point2d &c) override { core_.overrideCenter(c); }
+  void releaseOverride() override { core_.releaseOverride(); }
+  Meter::Snapshot probe() const override { return meter_.probe(nowMs()); }
+  void stall(double ms) override { stallMs_.store(ms, std::memory_order_release); }
+  Stream<TrackResult::Ptr> *stream() override { return this; }
+
+protected:
+  TrackResult::Ptr process(const Arv::OwnedFrame::Ptr &in) override {
+    const int64_t t = nowMs();
+    if (const uint64_t gap = seqGap(in)) // tap outran us (latest-wins)
+      meter_.drop(gap);
+    meter_.ingest("frame", t);
+    // KCF needs a single-channel 8-bit mat; the tap carries BGRA8 (converted)
+    // or undistorted BGRA — convert once into a reused buffer.
+    const cv::Mat &m = in->mat;
+    const cv::Mat *gray = &m;
+    if (m.channels() == 4) {
+      cv::cvtColor(m, gray_, cv::COLOR_BGRA2GRAY);
+      gray = &gray_;
+    } else if (m.channels() == 3) {
+      cv::cvtColor(m, gray_, cv::COLOR_BGR2GRAY);
+      gray = &gray_;
+    }
+    return core_.step(*gray, in->deviceTimestamp, meter_,
+                      stallMs_.load(std::memory_order_acquire));
+  }
+
+private:
+  Meter::ThreadMeter meter_; // single writer = this brick's thread
+  KcfCore core_;             // tracking + override state machine
+  cv::Mat gray_;             // reused gray buffer (this thread only)
+  std::atomic<double> stallMs_{0}; // test-only induced slowness
 };
 
 // Shared full-schema serializer (window + drops + flat back-compat fields) —
@@ -267,11 +440,13 @@ static Napi::Value snapshotToJs(Napi::Env env, const Meter::Snapshot &s) {
   return Arv::meterSnapshotToJs(env, s);
 }
 
-// CoreObject over a KcfTrackerStream: `arm(roi)`, `[Symbol.asyncIterator]`
-// (a Sub::Queue on the tracker stream, exactly like StreamObject), and an
-// out-of-loop `probe()` of the native meter. Create-only (via `createTracker`).
+// CoreObject over a TrackerHandle (raw OR chained variant): `arm(roi)`,
+// `override({x,y})` / `releaseOverride()`, `[Symbol.asyncIterator]` (a
+// Sub::Queue on the tracker stream, exactly like StreamObject), and an
+// out-of-loop `probe()` of the native meter. Create-only (via `createTracker`
+// / `createChainedTracker`).
 class KcfTrackerObject
-    : public CoreObject<KcfTrackerObject, KcfTrackerStream::Ptr> {
+    : public CoreObject<KcfTrackerObject, TrackerHandle::Ptr> {
 public:
   // Exported as `KcfTracker` (not `Tracker`): the module is already named
   // `Tracker`, so a member named `Tracker` collides with the module name — the
@@ -290,6 +465,11 @@ public:
             INSTANCE_METHOD(KcfTrackerObject, arm),
             INSTANCE_METHOD(KcfTrackerObject, probe),
             INSTANCE_METHOD(KcfTrackerObject, stall),
+            INSTANCE_METHOD(KcfTrackerObject, releaseOverride),
+            // `override` is a C++ keyword — register the C++ `overrideCenter`
+            // under the JS name "override".
+            Napi::InstanceWrap<KcfTrackerObject>::template InstanceMethod<
+                &KcfTrackerObject::overrideCenter>("override"),
             Napi::InstanceWrap<KcfTrackerObject>::template InstanceMethod<
                 &KcfTrackerObject::asyncIterator>(asyncIterator),
         });
@@ -303,6 +483,26 @@ public:
     auto env = info.Env();
     try {
       core()->arm(convert<cv::Rect>(info[0]));
+      return env.Undefined();
+    }
+    JS_EXCEPT(env.Undefined())
+  }
+  // JS `override({x,y})` — engage a drag override: emit the override center,
+  // skip KCF, flag results `overridden:true` until releaseOverride().
+  FN(overrideCenter) {
+    auto env = info.Env();
+    try {
+      core()->overrideCenter(convert<cv::Point2d>(info[0]));
+      return env.Undefined();
+    }
+    JS_EXCEPT(env.Undefined())
+  }
+  // JS `releaseOverride()` — re-arm KCF at the last override center on the next
+  // frame, then resume normal (non-overridden) results.
+  FN(releaseOverride) {
+    auto env = info.Env();
+    try {
+      core()->releaseOverride();
       return env.Undefined();
     }
     JS_EXCEPT(env.Undefined())
@@ -325,7 +525,7 @@ public:
   FN(asyncIterator) {
     auto env = info.Env();
     try {
-      auto stream = core().get();
+      auto stream = core()->stream();
       auto queue = Sub::Queue<TrackResult::Ptr>::create(stream);
       Napi::Value it =
           Sub::Iterator<Sub::Queue<TrackResult::Ptr>>::Create(env, queue);
@@ -353,7 +553,40 @@ static FN(createTracker) {
                             Arv::Stream::get(camera),
                             info[1].As<Napi::String>().Utf8Value())
                       : KcfTrackerStream::create(Arv::Stream::get(camera));
-    return KcfTrackerObject::Create(env, stream);
+    TrackerHandle::Ptr handle = std::move(stream);
+    return KcfTrackerObject::Create(env, handle);
+  }
+  JS_EXCEPT(env.Undefined())
+}
+
+// Factory: `createChainedTracker(sourcePipeId, name?)` — a KCF tracker on
+// another brick's OwnedFrame tap (controller-node-and-fifo-edges §3.5), so it
+// tracks EXACTLY the convert/undistort view the kernel sees. `sourcePipeId`
+// resolves to a live convert brick (findConverter) or undistort brick
+// (findUndistort); the tracker holds it by shared_ptr (survives a later
+// detach). `name` = the graph node id / meter name (default `<src>/kcf`).
+// Mirrors createTracker's object surface (arm/override/probe/stall/iterate).
+static FN(createChainedTracker) {
+  auto env = info.Env();
+  try {
+    const auto srcId = info[0].As<Napi::String>().Utf8Value();
+    ChainedKcfTrackerStream::Source source;
+    if (auto conv = Arv::findConverter(srcId))
+      source = conv;
+    else if (auto und = Arv::findUndistort(srcId))
+      source = und;
+    JS_ASSERT(source != nullptr, Error,
+              "createChainedTracker: no convert/undistort brick attached to "
+              "pipe " +
+                  srcId,
+              env.Undefined());
+    std::string name = info.Length() >= 2 && info[1].IsString()
+                           ? info[1].As<Napi::String>().Utf8Value()
+                           : srcId + "/kcf";
+    auto stream = ChainedKcfTrackerStream::create(std::move(source),
+                                                  std::move(name));
+    TrackerHandle::Ptr handle = std::move(stream);
+    return KcfTrackerObject::Create(env, handle);
   }
   JS_EXCEPT(env.Undefined())
 }
@@ -734,6 +967,7 @@ void exportTrackerNamespace(Napi::Env env, Napi::Object &exports) {
   KcfTrackerObject::Export(env, exports); // register the class for Create()
   MultiKcfObject::Export(env, exports);   // register the class for Create()
   EXPORT(exports, createTracker);
+  EXPORT(exports, createChainedTracker);
   EXPORT(exports, createMultiTracker);
 }
 #undef EXPORT

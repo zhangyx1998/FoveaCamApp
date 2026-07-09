@@ -29,6 +29,7 @@ Napi::Value detachUndistortPipe(const Napi::CallbackInfo &info);
 Napi::Value undistortProbeAll(const Napi::CallbackInfo &info);
 Napi::Value pushHomography(const Napi::CallbackInfo &info);
 Napi::Value setClockOffset(const Napi::CallbackInfo &info);
+Napi::Value undistortStall(const Napi::CallbackInfo &info);
 Napi::Value __paramRingSelfTest(const Napi::CallbackInfo &info);
 // unified-time (2026-07-08): native camera clock calibration read surface +
 // THE host time authority. Defined in core/lib/Aravis/ClockCalibration.cpp.
@@ -97,6 +98,11 @@ static Object init(Env env, Object exports) {
                Function::New<Arv::pushHomography>(env, "pushHomography"));
     Aravis.Set("setClockOffset",
                Function::New<Arv::setClockOffset>(env, "setClockOffset"));
+    // Test-only: inject per-frame stall into an undistort brick so the
+    // converter outruns it — drives the FIFO backpressure + high-water path
+    // (core/test/22). Not part of the public d.ts surface.
+    Aravis.Set("undistortStall",
+               Function::New<Arv::undistortStall>(env, "undistortStall"));
     // Hardware-free native self-test of the ParamRing lookup semantics
     // (core/test/22). Not part of the public d.ts surface.
     Aravis.Set("__paramRingSelfTest", Function::New<Arv::__paramRingSelfTest>(

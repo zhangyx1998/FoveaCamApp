@@ -21,6 +21,7 @@
 
 #include <Pipe.h> // C's FrameSink/FrameInfo + ShmRing::FrameMeta (call across)
 #include <ThreadMeter.h>
+#include <Threading/FIFO.h>
 #include <Threading/Leaky.h>
 #include <Threading/exception.h>
 
@@ -87,20 +88,112 @@ struct OwnedFrame : Shared<OwnedFrame> {
   uint32_t stride() const { return static_cast<uint32_t>(mat.step); }
 };
 
+// The transport of the brick→brick OwnedFrame handoff. Two implementations
+// (selected per-chain via `ChannelKind`), presenting ONE producer/consumer
+// surface so `TapPublisher` and `ChainedStreamOf` are transport-agnostic:
+//   - LeakyTapChannel (default): latest-wins — a slow consumer sheds stale
+//     frames; the ruled transport for previews, fovea crops and trackers
+//     (track the freshest). Skips are metered downstream via `OwnedFrame.seq`.
+//   - FifoTapChannel{capacity}: bounded blocking queue — EVERY frame in order,
+//     and a full queue BLOCKS the producer's synchronous dispatch. That
+//     backpressure is the DESIGN for the undistort input (controller-node-and-
+//     fifo-edges §1): the source's own camera input is latest-wins, so
+//     sustained overload sheds at the camera→convert edge (metered as
+//     converter drops) while convert→undistort stays complete and ordered.
+//     Metered: exposes depth / windowed high-water / capacity for the
+//     consumer brick's ThreadMeter.
+// Both close from either end (producer death or downstream close); a full FIFO
+// close wakes the blocked producer (EOS -> Unsubscribe) — FIFO.h notifies
+// cond_r on close, and its push wait-loop rechecks `closed`.
+class TapChannel {
+public:
+  using Ptr = std::shared_ptr<TapChannel>;
+  virtual ~TapChannel() = default;
+  // Producer side (source-brick dispatch thread). Throws Threading::EOS once
+  // the channel is closed. A FIFO channel BLOCKS here while full (backpressure).
+  virtual void write(OwnedFrame::Ptr &frame) = 0;
+  // Consumer side (chained-brick thread). Blocks for the next frame (wait);
+  // sets `out` and returns true on a frame, false on a spurious wake with no
+  // new frame (Leaky only — caller yields). Throws Threading::EOS on close.
+  virtual bool poll(OwnedFrame::Ptr &out, bool wait) = 0;
+  virtual void close() = 0;
+  // Queue metering — FIFO only (`metered()` is false for Leaky). `takeHighWater`
+  // returns the peak occupancy since the previous call (windowed-max feed) and
+  // resets the tracker; consumer-thread only.
+  virtual bool metered() const { return false; }
+  virtual uint32_t takeHighWater() { return 0; }
+  virtual uint32_t capacity() const { return 0; }
+};
+
+class LeakyTapChannel : public TapChannel {
+public:
+  void write(OwnedFrame::Ptr &frame) override { leaky_.write(frame); }
+  bool poll(OwnedFrame::Ptr &out, bool wait) override {
+    if (!leaky_.next(cursor_, wait)) // latest-wins: only a NEW ptr counts
+      return false;
+    out = cursor_;
+    return out != nullptr;
+  }
+  void close() override { leaky_.close(); }
+
+private:
+  Threading::Leaky<OwnedFrame> leaky_;
+  OwnedFrame::Ptr cursor_; // consumer-thread latest-wins cursor
+};
+
+class FifoTapChannel : public TapChannel {
+public:
+  explicit FifoTapChannel(size_t capacity)
+      : fifo_(capacity), capacity_(capacity) {}
+  void write(OwnedFrame::Ptr &frame) override {
+    fifo_.write(frame); // BLOCKS while full (backpressure); throws EOS on close
+  }
+  bool poll(OwnedFrame::Ptr &out, bool /*wait*/) override {
+    out = fifo_.read(); // blocks until a frame or EOS (never nullptr in-band)
+    return out != nullptr;
+  }
+  void close() override { fifo_.close(); }
+  bool metered() const override { return true; }
+  uint32_t takeHighWater() override {
+    return static_cast<uint32_t>(fifo_.take_high_water());
+  }
+  uint32_t capacity() const override {
+    return static_cast<uint32_t>(capacity_);
+  }
+
+private:
+  Threading::FIFO<OwnedFrame::Ptr> fifo_;
+  const size_t capacity_;
+};
+
+// Per-chain transport selector: Leaky (default) or a bounded Fifo.
+struct ChannelKind {
+  enum Type { Leaky, Fifo } type = Leaky;
+  size_t capacity = 0; // Fifo only
+  static ChannelKind leaky() { return {}; }
+  static ChannelKind fifo(size_t cap) { return {Fifo, cap}; }
+  TapChannel::Ptr make() const {
+    if (type == Fifo)
+      return std::static_pointer_cast<TapChannel>(
+          std::make_shared<FifoTapChannel>(capacity));
+    return std::static_pointer_cast<TapChannel>(
+        std::make_shared<LeakyTapChannel>());
+  }
+};
+
 // The in-process tap: a DIRECT synchronous-consume Subscriber on any
 // ConvertedFrame producer (ConverterStream / UndistortStream / FoveaStream)
 // that deep-copies each product into a fresh OwnedFrame and publishes it into
-// a `Threading::Leaky<OwnedFrame>` (latest-wins — the ruled default transport
-// for vision stages). Its EXISTENCE is the demand signal: constructing it
-// subscribes (waking the producer via the Stream base's auto-park), destroying
-// it unsubscribes (producer parks when no other subscriber remains). The
-// channel is closeable from both ends: producer death closes it via close()
-// (downstream sees EOS); downstream closing the channel ejects this publisher
-// from the producer on the next push (Unsubscribe).
+// a `TapChannel` (Leaky or Fifo — the chain picks). Its EXISTENCE is the demand
+// signal: constructing it subscribes (waking the producer via the Stream base's
+// auto-park), destroying it unsubscribes (producer parks when no other
+// subscriber remains). The channel is closeable from both ends: producer death
+// closes it via close() (downstream sees EOS); downstream closing the channel
+// ejects this publisher from the producer on the next push/blocked-push
+// (Unsubscribe).
 class TapPublisher : public Subscriber<ConvertedFrame::Ptr> {
 public:
-  using Channel = Threading::Leaky<OwnedFrame>;
-  TapPublisher(::Stream<ConvertedFrame::Ptr> *producer, Channel::Ptr channel)
+  TapPublisher(::Stream<ConvertedFrame::Ptr> *producer, TapChannel::Ptr channel)
       : Subscriber<ConvertedFrame::Ptr>(producer),
         channel_(std::move(channel)) {}
   ~TapPublisher() { close(); }
@@ -108,7 +201,7 @@ public:
   void close(bool unsubscribe = true, TracedError::Ptr err = nullptr) override {
     Subscriber<ConvertedFrame::Ptr>::close(unsubscribe, err);
     if (channel_)
-      channel_->close(); // downstream `next()` throws EOS -> orderly stop
+      channel_->close(); // downstream `poll()` throws EOS -> orderly stop
   }
 
 protected:
@@ -126,22 +219,25 @@ protected:
     of->seq = ++seq_;
     try {
       OwnedFrame::Ptr sp = std::move(of);
-      channel_->write(sp);
+      channel_->write(sp); // FIFO: may block here (backpressure) until drained
     } catch (Threading::EOS &) {
       throw Unsubscribe(); // downstream closed the channel — eject self
     }
   }
 
 private:
-  Channel::Ptr channel_;
+  TapChannel::Ptr channel_;
   uint64_t seq_ = 0; // producer-thread only
 };
 
-// Base of the CHAINED bricks (undistort v2, fovea v2): a producer thread whose
-// INPUT is another brick's OwnedFrame tap instead of the raw Arv::Stream.
-// Demand propagates through the existing park machinery with no extra state:
+// Base of the CHAINED bricks (undistort v2, fovea v2, chained KCF tracker): a
+// producer thread whose INPUT is another brick's OwnedFrame tap instead of the
+// raw Arv::Stream. Templated on the OUTPUT payload (ConvertedFrame for the
+// vision bricks, TrackResult for the chained tracker) — the input tap type is
+// always OwnedFrame. Demand propagates through the existing park machinery with
+// no extra state:
 //   - this brick runs iff it has ≥1 subscriber (SHM PipeOfferSubscriber via
-//     the consumer gate, or a downstream brick's TapPublisher);
+//     the consumer gate, a downstream brick's TapPublisher, or a JS Sub::Queue);
 //   - start() (fired by the Stream base on the parked→active edge) opens the
 //     tap on the source — subscribing wakes the source brick;
 //   - stop() (active→parked) closes it — the source parks when nothing else
@@ -150,20 +246,21 @@ private:
 // alive even if the upstream's NAPI binding detaches first (no dangling
 // Subscriber back-pointers). If the source stream TERMINATED, this brick
 // crashes (subscribers ejected) rather than spinning on a dead tap.
-class ChainedStream : public ::Stream<ConvertedFrame::Ptr> {
+template <SmartPtrLike Out> class ChainedStreamOf : public ::Stream<Out> {
 public:
   using Source = std::shared_ptr<::Stream<ConvertedFrame::Ptr>>;
 
 public:
-  virtual ~ChainedStream() { assert_shutdown_called(); }
+  virtual ~ChainedStreamOf() { this->assert_shutdown_called(); }
 
 protected:
-  explicit ChainedStream(Source source) : source_(std::move(source)) {}
+  explicit ChainedStreamOf(Source source, ChannelKind kind = {})
+      : source_(std::move(source)), kind_(kind) {}
   // Derived destructors MUST call closeChain() then shutdown(): closing the
-  // channel wakes a `next(wait)`-blocked thread (EOS -> StopIteration) so the
+  // channel wakes a `poll(wait)`-blocked thread (EOS -> StopIteration) so the
   // join in shutdown() can never hang on a stalled upstream.
   void closeChain() {
-    TapPublisher::Channel::Ptr ch;
+    TapChannel::Ptr ch;
     {
       auto ref = channel_.ref();
       ch = *ref;
@@ -173,12 +270,11 @@ protected:
   }
 
   void start() override {
-    auto ch = TapPublisher::Channel::create();
+    auto ch = kind_.make();
     {
       auto ref = channel_.ref();
       *ref = ch;
     }
-    last_ = nullptr;
     pub_ = std::make_unique<TapPublisher>(source_.get(), ch);
     // A terminated source refuses the subscription (state closed immediately).
     if (!pub_->state.snapshot().isActive())
@@ -186,26 +282,34 @@ protected:
   }
 
   void stop() override {
-    pub_.reset(); // unsubscribe FIRST — the source may park
+    // Close the channel FIRST: a FIFO channel may have the source blocked in a
+    // full-queue push (backpressure) while holding the source's dispatch mutex.
+    // Closing wakes it (EOS -> Unsubscribe) so the source releases that mutex
+    // before we unsubscribe (which also needs it) — otherwise deadlock.
+    // Harmless for Leaky (its write never blocks).
     {
       auto ref = channel_.ref();
       if (*ref)
         (*ref)->close();
+    }
+    pub_.reset(); // unsubscribe — the source parks if we were its last demand
+    {
+      auto ref = channel_.ref();
       *ref = nullptr;
     }
-    last_ = nullptr;
   }
 
-  ConvertedFrame::Ptr iterate() override {
-    TapPublisher::Channel::Ptr ch;
+  Out iterate() override {
+    TapChannel::Ptr ch;
     {
       auto ref = channel_.ref();
       ch = *ref;
     }
     if (!ch)
       throw StopIteration();
+    OwnedFrame::Ptr in;
     try {
-      if (!ch->next(last_, /*wait=*/true))
+      if (!ch->poll(in, /*wait=*/true))
         return nullptr;
     } catch (Threading::EOS &) {
       // Channel closed: by our own teardown (destructor/stop) OR by the source
@@ -214,15 +318,24 @@ protected:
       // (-> crash, subscribers ejected) when the source is truly gone.
       throw StopIteration();
     }
-    if (!last_)
+    if (!in)
       return nullptr;
-    return process(last_);
+    // FIFO input metering: sample the peak occupancy observed since the last
+    // read (Leaky channels report unmetered — hook is a no-op there).
+    if (ch->metered())
+      onQueueSample(ch->takeHighWater(), ch->capacity());
+    return process(in);
   }
 
   // Per-frame work, on this brick's thread, input OWNED (retainable).
-  virtual ConvertedFrame::Ptr process(const OwnedFrame::Ptr &input) = 0;
+  virtual Out process(const OwnedFrame::Ptr &input) = 0;
+  // Called (FIFO chains only) right after a frame is dequeued, before process:
+  // `highWater` = peak occupancy since the last read, `capacity` = FIFO bound.
+  // Bricks record it into their ThreadMeter (single-writer rule preserved).
+  virtual void onQueueSample(uint32_t /*highWater*/, uint32_t /*capacity*/) {}
 
-  // Latest-wins drops on the tap since the last call (seq-gap accounting).
+  // Latest-wins drops on the tap since the last call (seq-gap accounting). On a
+  // FIFO chain this is structurally 0; a nonzero value is a bug telltale.
   uint64_t seqGap(const OwnedFrame::Ptr &in) {
     const uint64_t gap =
         (lastSeq_ && in->seq > lastSeq_ + 1) ? in->seq - lastSeq_ - 1 : 0;
@@ -233,13 +346,18 @@ protected:
   const Source source_; // shared: keeps the upstream brick alive
 
 private:
-  Threading::Guard<TapPublisher::Channel::Ptr> channel_{nullptr};
+  ChannelKind kind_;
+  Threading::Guard<TapChannel::Ptr> channel_{nullptr};
   std::unique_ptr<TapPublisher> pub_; // exists only while active (start..stop)
-  OwnedFrame::Ptr last_;              // this thread only (Leaky cursor)
   uint64_t lastSeq_ = 0;              // this thread only (start() epoch-safe:
                                       // a fresh tap restarts seq at 1; gaps
                                       // only ever shrink to 0 across restarts)
 };
+
+// The vision-brick chained base (undistort v2, fovea v2): produces
+// ConvertedFrames. The chained KCF tracker instantiates ChainedStreamOf with
+// TrackResult directly.
+using ChainedStream = ChainedStreamOf<ConvertedFrame::Ptr>;
 
 // A converter thread bound to one camera stream + one target PixelFormat (the
 // target IS the selector). TransformStream: its base thread pulls the LATEST

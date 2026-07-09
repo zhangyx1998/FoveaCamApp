@@ -39,12 +39,14 @@ Object frameType(Env env, const std::string &pixelFormat,
 }
 
 void addInput(Env env, Object &node, const std::string &from,
-              const std::string &port, Object type) {
+              const std::string &port, Object type, int lossy) {
   auto inputs = node.Get("inputs").As<Array>();
   auto edge = Object::New(env);
   edge.Set("from", String::New(env, from));
   edge.Set("port", String::New(env, port));
   edge.Set("type", type);
+  if (lossy >= 0) // explicit flag WINS over the JS pipe-producer default
+    edge.Set("lossy", Boolean::New(env, lossy != 0));
   inputs.Set(inputs.Length(), edge);
 }
 

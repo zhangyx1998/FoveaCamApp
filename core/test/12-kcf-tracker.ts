@@ -20,6 +20,8 @@ void __origin__;
 type Result = {
   found: boolean;
   bbox: { x: number; y: number; width: number; height: number } | null;
+  center: { x: number; y: number } | null;
+  overridden: boolean;
   seq: number;
   deviceTimestamp: bigint;
 };
@@ -34,17 +36,35 @@ type Snapshot = {
 
 const A = Aravis as unknown as {
   enableFakeCamera(): void;
-  Camera: { list(): Promise<Array<{ grab(t: number): Promise<{ raw: { shape: number[] } }> }>> };
+  attachCameraPipe(camera: unknown, id: string): boolean;
+  detachCameraPipe(id: string): boolean;
+  Camera: { list(): Promise<Array<{ grab(t: number): Promise<{ raw: { shape: number[] } }>; serial?: string; release?(): void }>> };
+};
+type Tracker = {
+  arm(roi: { x: number; y: number; width: number; height: number }): void;
+  override(center: { x: number; y: number }): void;
+  releaseOverride(): void;
+  probe(): Snapshot;
+  stall(ms: number): void;
+  release(): void;
+  [Symbol.asyncIterator](): AsyncIterator<Result>;
 };
 const T = (await import("core")).Tracker as unknown as {
-  createTracker(camera: unknown): {
-    arm(roi: { x: number; y: number; width: number; height: number }): void;
-    probe(): Snapshot;
-    stall(ms: number): void;
-    release(): void;
-    [Symbol.asyncIterator](): AsyncIterator<Result>;
-  };
+  createTracker(camera: unknown): Tracker;
+  createChainedTracker(sourcePipeId: string, name?: string): Tracker;
 };
+const P = (await import("core")).Pipe as any;
+
+// Pull up to `n` results off a tracker's async iterator, subject to a deadline.
+async function take(tr: Tracker, n: number, ms = 8000): Promise<Result[]> {
+  const out: Result[] = [];
+  const deadline = Date.now() + ms;
+  for await (const r of tr as AsyncIterable<Result>) {
+    out.push(r);
+    if (out.length >= n || Date.now() > deadline) break;
+  }
+  return out;
+}
 
 {
   A.enableFakeCamera();
@@ -121,7 +141,94 @@ const T = (await import("core")).Tracker as unknown as {
       `(busyMs=${after.busyMs.toFixed(1)})`,
   );
 
+  // Override on the RAW variant: while engaged, results carry the override
+  // center + overridden:true and KCF is NOT consulted (proposal §3.5, both
+  // variants). Un-stall first so frames flow quickly.
+  tracker.stall(0);
+  const OVR = { x: Math.floor(width / 2), y: Math.floor(height / 2) };
+  tracker.override(OVR);
+  // A frame that was mid-stall when we engaged the override still flushes its
+  // pre-override result — tolerate that transient, then assert every FLAGGED
+  // result carries the exact override center and found:true.
+  const overrid = await take(tracker, 8);
+  const flagged = overrid.filter((r) => r.overridden);
+  assert(flagged.length >= 3, `override engages (${flagged.length}/${overrid.length} flagged)`);
+  for (const r of flagged) {
+    assert.equal(r.found, true, "raw override result is found");
+    assert(r.center && r.center.x === OVR.x && r.center.y === OVR.y,
+      `raw override center echoes the override point (${JSON.stringify(r.center)})`);
+  }
+  console.log(`12-kcf-tracker: raw override emits ${flagged.length} flagged results at the override center.`);
   tracker.release();
+}
+
+// --- §3.5 CHAINED tracker on a convert brick + override/release re-arm --------
+{
+  const cams = await A.Camera.list();
+  const camera = cams[0]!;
+  const probe = await camera.grab(2_000_000);
+  const [height, width] = probe.raw.shape as [number, number];
+  const serial = String(camera.serial ?? "0");
+
+  // A convert brick with NO SHM consumer: the chained tracker's tap alone wakes
+  // it (demand propagation across the in-process channel, same as test 22).
+  const cnvId = `camera/${serial}/convert`;
+  P.advertise({
+    id: cnvId, pixelFormat: "BGRA8", dtype: "U8", width, height,
+    channels: 4, stride: width * 4, bytesPerFrame: width * height * 4, ringDepth: 4,
+  });
+  assert.equal(A.attachCameraPipe(camera, cnvId), true, "converter attaches");
+
+  const chained = T.createChainedTracker(cnvId);
+  assert.equal(P.consumers(cnvId), 0, "convert pipe has no SHM consumers (tap-only demand)");
+  chained.arm({ x: Math.floor(width / 3), y: Math.floor(height / 3), width: 96, height: 96 });
+
+  // Normal tracking off the tap: results stream with a center + overridden:false.
+  const normal = await take(chained, 5);
+  assert(normal.length >= 5, `chained tracker streamed results (${normal.length})`);
+  let lastSeq = 0;
+  for (const r of normal) {
+    assert(r.seq > lastSeq, "chained seq strictly increases");
+    lastSeq = r.seq;
+    assert.equal(r.overridden, false, "normal result not overridden");
+    if (r.found) assert(r.center && r.center.x >= 0 && r.center.y >= 0, "center present when found");
+  }
+  const snap = chained.probe();
+  assert.equal(snap.name, `${cnvId}/kcf`, "chained meter name = <src>/kcf");
+  assert(snap.inputs.frame.count > 0 && snap.outputs.track.count > 0, "chained meter recorded frame/track");
+  console.log(`12-kcf-tracker: chained tracker off convert brick streamed ${normal.length} results (meter ${snap.name}).`);
+
+  // Override → flagged results at the override center, KCF untouched.
+  const OVR = { x: 137, y: 91 };
+  chained.override(OVR);
+  const during = await take(chained, 6);
+  const flagged = during.filter((r) => r.overridden);
+  assert(flagged.length >= 3, `chained override engages (${flagged.length}/${during.length} flagged)`);
+  for (const r of flagged) {
+    assert.equal(r.found, true, "chained override result is found");
+    assert(r.center && r.center.x === OVR.x && r.center.y === OVR.y,
+      `chained override center echoes the override point (${JSON.stringify(r.center)})`);
+  }
+
+  // Release → the tracker RE-ARMS at the override center on the next frame,
+  // then resumes normal (overridden:false) results.
+  chained.releaseOverride();
+  const after = await take(chained, 6);
+  const resumed = after.filter((r) => !r.overridden);
+  assert(resumed.length >= 1, `results resume non-overridden after release (${after.length} seen)`);
+  // The re-armed tracker starts at the override center — its first normal
+  // result's center sits near the override point (KCF may drift a little).
+  const first = resumed[0]!;
+  if (first.found && first.center) {
+    assert(Math.abs(first.center.x - OVR.x) <= 64 && Math.abs(first.center.y - OVR.y) <= 64,
+      `re-armed center is near the override point (${JSON.stringify(first.center)})`);
+  }
+  console.log(`12-kcf-tracker: chained override→release re-armed at the override center (${resumed.length}/${after.length} resumed).`);
+
+  chained.release();
+  assert.equal(A.detachCameraPipe(cnvId), true, "detach converter");
+  P.close(cnvId); P.drop(cnvId);
+  camera.release?.();
 }
 
 cleanup();

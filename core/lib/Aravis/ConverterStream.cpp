@@ -88,6 +88,18 @@ Napi::Value meterSnapshotToJs(Napi::Env env, const Meter::Snapshot &s) {
   o.Set("dropTotal", Napi::Number::New(env, static_cast<double>(s.dropTotal)));
   o.Set("inputs", statsToJs(env, s.inputs));
   o.Set("outputs", statsToJs(env, s.outputs));
+  // FIFO-input queue metering (controller-node-and-fifo-edges §2): present ONLY
+  // for a brick whose meter recorded a depth sample (the undistort FIFO chain);
+  // ABSENT for Leaky bricks so worker F's fold keeps its lossy/drops behavior.
+  if (s.hasQueue) {
+    auto q = Napi::Object::New(env);
+    q.Set("depth", Napi::Number::New(env, static_cast<double>(s.queueDepth)));
+    q.Set("highWater",
+          Napi::Number::New(env, static_cast<double>(s.queueHighWater)));
+    q.Set("capacity",
+          Napi::Number::New(env, static_cast<double>(s.queueCapacity)));
+    o.Set("queue", q);
+  }
   return o;
 }
 

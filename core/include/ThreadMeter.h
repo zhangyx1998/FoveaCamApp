@@ -54,6 +54,15 @@ struct Snapshot {
   std::vector<std::pair<std::string, StreamStat>> inputs;
   std::vector<std::pair<std::string, StreamStat>> outputs;
   uint64_t dropTotal = 0;
+  // FIFO-input queue metering (controller-node-and-fifo-edges §1/§2). Present
+  // ONLY when the meter recorded ≥1 depth sample (`hasQueue`) — a FIFO-fed
+  // brick (undistort). Leaky-fed bricks leave it absent so `meterSnapshotToJs`
+  // omits the `queue` key. `queueHighWater` is the windowed (10s) max of the
+  // sampled depths; `queueDepth` is the last sample; `queueCapacity` the bound.
+  bool hasQueue = false;
+  uint32_t queueDepth = 0;
+  uint32_t queueHighWater = 0;
+  uint32_t queueCapacity = 0;
 };
 
 class ThreadMeter {
@@ -72,6 +81,12 @@ public:
    *  time from `FrameMeta.convertMs`) without an open span. */
   void addBusy(double ms);
   void drop(uint64_t n = 1);
+  /** Record one input-queue depth sample (FIFO-fed bricks only). `depth` is
+   *  the peak occupancy observed since the previous sample (windowed-max fed →
+   *  `queueHighWater`) and also stored as the last-sampled `queueDepth`;
+   *  `capacity` is the FIFO bound. The first call flips the snapshot's
+   *  `hasQueue` on. Same 10s/1s-bin aging as `maxIntervalMs`. */
+  void queueDepth(uint32_t depth, uint32_t capacity, int64_t nowMs);
 
   // ---- probe side (any thread) ----
   /** Seqlock-read a consistent copy and compute the metrics at `nowMs`. */
@@ -93,6 +108,13 @@ private:
     double busyMs = 0;
     int64_t openSpanAt = -1; // -1 = no open busy span
     uint64_t dropTotal = 0;
+    // Queue-depth metering (FIFO inputs). `queueRing` bins the depth samples
+    // as per-bin MAX (windowed high-water); `queueLastDepth`/`queueCapacity`
+    // are scalars; `hasQueue` gates emission.
+    Ring queueRing = {};
+    uint32_t queueLastDepth = 0;
+    uint32_t queueCapacity = 0;
+    bool hasQueue = false;
   };
 
   int32_t indexOf(const std::vector<std::string> &names, const std::string &s) const;
@@ -103,6 +125,11 @@ private:
   static void recordEvent(Ring &r, int64_t now);
   static double ringMax(Ring r, int64_t now); // by value: rotates the copy
   static StreamStat streamStat(const Ring &r, int64_t now, int64_t uptimeMs);
+  // Record a raw VALUE (not an interval) as the current bin's max, and the
+  // windowed max over the bins (queue-depth metering). recordValue mutates the
+  // live block; ringValueMax rotates a by-value copy on the probe side.
+  static void recordValue(Ring &r, int64_t now, double value);
+  static double ringValueMax(Ring r, int64_t now);
 
   std::string name_;
   std::vector<std::string> inputNames_;
