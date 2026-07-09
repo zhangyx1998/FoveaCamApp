@@ -72,6 +72,11 @@ export function viewerSession(deps: ViewerSessionDeps = {}): ServerSession<typeo
   return defineSession("viewer", viewer, (s) => {
     const files = new Map<string, OpenFile>();
     const playbackDocs: Record<string, PlaybackDoc | null> = {};
+    // Latest descriptor doc per file, keyed by channel topic (`fovea/<target>`
+    // overlay data — wave I-2 ruling 6). Latest-wins; reset on seek so a
+    // backwards scrub can't leave a future bbox on screen (the latest-before
+    // republish repopulates whatever exists at the new position).
+    const descriptorDocs: Record<string, Record<string, PlaybackDoc> | null> = {};
     const positions: Record<string, ViewerPosition | null> = {};
     let nextId = 1;
 
@@ -97,10 +102,11 @@ export function viewerSession(deps: ViewerSessionDeps = {}): ServerSession<typeo
       if (!f) return;
       files.delete(fileId);
       delete playbackDocs[fileId];
+      delete descriptorDocs[fileId];
       await f.player.close(); // also disposes the file's workload meter
       pushFiles();
       pushPosition(fileId, null);
-      s.telemetry({ playback: { ...playbackDocs } });
+      s.telemetry({ playback: { ...playbackDocs }, descriptors: { ...descriptorDocs } });
     }
 
     return {
@@ -155,6 +161,11 @@ export function viewerSession(deps: ViewerSessionDeps = {}): ServerSession<typeo
                 playbackDocs[fileId] = doc;
                 s.telemetry({ playback: { ...playbackDocs } });
               },
+              emitDescriptor: (topic, doc) => {
+                const forFile = (descriptorDocs[fileId] ??= {});
+                forFile[topic] = doc;
+                s.telemetry({ descriptors: { ...descriptorDocs } });
+              },
               emitPosition: (positionNs, playing) =>
                 pushPosition(fileId, { positionNs, playing }),
             },
@@ -171,6 +182,11 @@ export function viewerSession(deps: ViewerSessionDeps = {}): ServerSession<typeo
         },
 
         async seek({ fileId, tNs }: { fileId: string; tNs: number }): Promise<void> {
+          // Reset overlay docs before the seek: the latest-before republish
+          // repopulates only what exists at the new position, so a backwards
+          // scrub drops bboxes from the future instead of freezing them.
+          descriptorDocs[fileId] = {};
+          s.telemetry({ descriptors: { ...descriptorDocs } });
           await required(fileId).player.seek(tNs);
         },
 

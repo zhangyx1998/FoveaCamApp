@@ -27,6 +27,7 @@ import type { PlaybackDoc } from "@lib/orchestrator/viewer-contract";
 import type { WorkloadHandle } from "../metering.js";
 import type { FrameDecoder } from "./decode.js";
 import type { FoveaChannel, FoveaMessage, FoveaSource } from "./source.js";
+import { TELEMETRY_TOPIC } from "../../../docs/schema/fovea.js";
 
 export interface PlayerClock {
   /** Monotonic milliseconds. */
@@ -53,6 +54,11 @@ export interface PlayerHooks {
   publishFrame(topic: string, mat: Mat<Uint8Array>, convertMs: number): void;
   /** Latest replayed telemetry-channel document (parsed JSON). */
   emitTelemetry?: (doc: PlaybackDoc) => void;
+  /** Latest replayed DESCRIPTOR document for a non-telemetry json channel
+   *  (multi-fovea `fovea/<target>` tracks — bbox overlay data, ruling 6).
+   *  Keyed by channel topic; latest-wins at playback rate (the nearest-sample
+   *  the overlay draws). Absent → descriptor tracks are ingested + dropped. */
+  emitDescriptor?: (topic: string, doc: PlaybackDoc) => void;
   /** Position/playing changed (throttled during playback). */
   emitPosition(positionNs: number, playing: boolean): void;
 }
@@ -77,9 +83,14 @@ export function createPlayer(
 ): Player {
   const durationNs = Number(source.endNs - source.startNs);
   const channelById = new Map(source.channels.map((c) => [c.id, c]));
-  // Frame channels = everything except json-encoded (telemetry) tracks.
+  // Frame channels = everything except json-encoded (telemetry/descriptor)
+  // tracks; descriptor topics = json tracks other than `telemetry` (their
+  // latest-before doc is republished on a paused scrub like frames are).
   const frameTopics = source.channels
     .filter((c) => c.messageEncoding !== "json")
+    .map((c) => c.topic);
+  const descriptorTopics = source.channels
+    .filter((c) => c.messageEncoding === "json" && c.topic !== TELEMETRY_TOPIC)
     .map((c) => c.topic);
 
   const decoders = new Map<number, Promise<FrameDecoder | null>>();
@@ -121,9 +132,16 @@ export function createPlayer(
     workload.ingest(channel.topic);
     if (channel.messageEncoding === "json") {
       try {
-        const emitTelemetry = hooks.emitTelemetry;
-        if (!emitTelemetry) throw new Error("viewer player missing telemetry hook");
-        emitTelemetry(JSON.parse(telemetryDecoder.decode(msg.data)));
+        const doc = JSON.parse(telemetryDecoder.decode(msg.data)) as PlaybackDoc;
+        if (channel.topic === TELEMETRY_TOPIC) {
+          const emitTelemetry = hooks.emitTelemetry;
+          if (!emitTelemetry) throw new Error("viewer player missing telemetry hook");
+          emitTelemetry(doc);
+        } else {
+          // Descriptor track (`fovea/<target>` — ruling 6): latest-wins per
+          // topic; no hook → ingest-and-drop (still accounted above).
+          hooks.emitDescriptor?.(channel.topic, doc);
+        }
         workload.emit("telemetry");
       } catch {
         workload.drop("undecodable");
@@ -179,11 +197,15 @@ export function createPlayer(
   }
 
   /** Paused-scrub redraw: latest frame at-or-before the position, per frame
-   *  channel (channels with nothing before the position stay as they were). */
+   *  channel (channels with nothing before the position stay as they were) +
+   *  the latest descriptor doc per descriptor track (nearest-sample overlay).
+   *  A channel with nothing at-or-before the position (mid-file appearance,
+   *  seek before its first message) is simply absent — no frame, not a crash. */
   async function republishAt(tNs: number): Promise<void> {
-    if (frameTopics.length === 0) return;
+    const topics = [...frameTopics, ...descriptorTopics];
+    if (topics.length === 0) return;
     const at = source.startNs + BigInt(Math.round(tNs));
-    const latest = await source.latestBefore(at, frameTopics);
+    const latest = await source.latestBefore(at, topics);
     for (const msg of latest.values()) await handleMessage(msg, 0);
   }
 

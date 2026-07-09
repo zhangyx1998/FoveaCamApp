@@ -47,8 +47,15 @@ export const DESCRIPTOR_SCHEMA_DATA = JSON.stringify({
     "Multi-fovea target descriptor: {tNs, bbox:{x,y,width,height}, " +
     "frames:{left,center,right}} where `frames` values are per-stream mcap " +
     "sequence pointers into the raw camera channels the observation " +
-    "corresponds to. One channel per live target; the fovea imagery is " +
-    "reconstructed offline from the pointed-at raw frames + per-frame params.",
+    "corresponds to, OR NULL when no frame binds (wave I-2): `left`/`right` " +
+    "are non-null only when a trigger-mode pair record bound this " +
+    "observation's exposures (pairing-nodes ruling 1 — free-run recordings " +
+    "always carry left:null, right:null); `center` is the NEAREST recorded " +
+    "wide frame by timestamp and is explicitly UNSYNCHRONIZED (the wide " +
+    "camera is not hardware-triggerable — CAM0 GPIO uncabled). `bbox` is in " +
+    "wide (undistorted) pixel coordinates from the tracker batch. One " +
+    "channel per live target; the fovea imagery is reconstructed offline " +
+    "from the pointed-at raw frames + per-frame params.",
 });
 
 // All copied VERBATIM from the pipe advert (multi-fovea-recording r2.1 ruling

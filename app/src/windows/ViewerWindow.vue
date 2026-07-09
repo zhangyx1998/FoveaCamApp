@@ -81,6 +81,35 @@ const payload = computed(() =>
     : null,
 );
 
+// --- descriptor overlay (multi-fovea recordings, wave I-2 ruling 6) --------
+// `fovea/<target>` tracks carry `{tNs, bbox, frames}` observation docs whose
+// bbox is in WIDE (center-stream) coordinates. The session replays them
+// latest-wins (nearest-sample at playback rate; scrub redraw repopulates the
+// latest-before doc), so the overlay just draws the current doc per target
+// whenever the wide stream is the one displayed.
+const TARGET_COLORS = [
+  "#00aaff", "#ffb000", "#36d16f", "#ff5b8a",
+  "#b983ff", "#00d5c7", "#ff7a35", "#d6e04f",
+];
+type OverlayBox = { topic: string; index: number; bbox: { x: number; y: number; width: number; height: number } };
+const overlayBoxes = computed<OverlayBox[]>(() => {
+  if (!fileId.value || selectedChannel.value !== "center") return [];
+  const docs = session.telemetry.descriptors[fileId.value];
+  if (!docs) return [];
+  const out: OverlayBox[] = [];
+  for (const [topic, doc] of Object.entries(docs)) {
+    const bbox = (doc as { bbox?: OverlayBox["bbox"] }).bbox;
+    if (!bbox || typeof bbox.x !== "number") continue;
+    const index = Number(topic.split("/").pop());
+    out.push({ topic, index: Number.isFinite(index) ? index : 0, bbox });
+  }
+  return out;
+});
+const overlayStroke = computed(() => {
+  const w = overlayBoxes.value.reduce((m, b) => Math.max(m, b.bbox.x + b.bbox.width), 0);
+  return Math.max(2, w * 0.003);
+});
+
 // --- transport controls -----------------------------------------------------
 
 const RATES = [0.25, 0.5, 1, 2, 4];
@@ -155,7 +184,31 @@ function fmtNs(ns: number): string {
       </div>
       <div class="stage">
         <div class="display">
-          <StreamView v-if="payload" :payload="payload" width="100%" height="100%" />
+          <StreamView v-if="payload" :payload="payload" width="100%" height="100%">
+            <g v-for="box in overlayBoxes" :key="box.topic">
+              <rect
+                :x="box.bbox.x"
+                :y="box.bbox.y"
+                :width="box.bbox.width"
+                :height="box.bbox.height"
+                :stroke="TARGET_COLORS[box.index % TARGET_COLORS.length]"
+                :stroke-width="overlayStroke"
+                fill="none"
+              />
+              <text
+                :x="box.bbox.x + overlayStroke * 2"
+                :y="box.bbox.y - overlayStroke * 2"
+                :fill="TARGET_COLORS[box.index % TARGET_COLORS.length]"
+                :font-size="overlayStroke * 8"
+                font-weight="700"
+                paint-order="stroke"
+                stroke="#000"
+                :stroke-width="overlayStroke"
+              >
+                {{ box.index + 1 }}
+              </text>
+            </g>
+          </StreamView>
           <div v-else class="notice">No frames on {{ selectedChannel ?? "…" }} yet — press play or scrub</div>
         </div>
         <div class="transport">

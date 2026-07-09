@@ -12,10 +12,19 @@ import { multiFovea, MAX_MULTI_FOVEA_TARGETS } from "./contract";
 import StreamView from "@src/components/StreamView.vue";
 import PosView from "@src/components/PosView.vue";
 import RangeSlider from "@src/inputs/range-slider.vue";
+import Recording from "@src/record";
 import type { Point2d, Rect, Size } from "core/Geometry";
 
 const session = useSession(multiFovea, "multi-fovea");
 const { state, telemetry } = session;
+// Recording context (multi-fovea-recording ruling 7): registers this window's
+// title-bar RecordButton (AppWindow) + its Cmd/Ctrl-R `onRecorderTrigger`
+// consumer against the session's startRecording/stopRecording — the exact
+// manual-control facade, reused not forked. Per-window singleton (each app
+// window is its own renderer), so no double-registration across apps; the
+// RecordButton's onBeforeUnmount disposer drops the trigger hook with the
+// window.
+new Recording(session, "multi-fovea");
 const pipesSession = useSession(pipes, "pipes");
 // real-1g (C-23): the wide view binds the first-class UNDISTORTED pipe when the
 // session advertises it (target overlays are in undistorted pixel space); falls

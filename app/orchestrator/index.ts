@@ -216,9 +216,48 @@ const rawPipes = createRawPipeRegistry(rawSeam);
 const manualControl = hub.add(manualControlSession(asBroker(Pipe), undistortSeam, rawPipes));
 
 // --- multi-fovea: protocol-v2 multi-target logic skeleton ------------------
+// Wave I-2 seams: the PAIRING brick factory (pairing-nodes P-1 — always-running
+// per-stage L/R joins) + the zlib COMPRESSION brick (multi-fovea-recording
+// ruling 9 — optional per-stream, the recorder consumes the /zlib sibling).
+const aravisPair = Aravis as unknown as {
+  createPairStream(
+    leftId: string,
+    rightId: string,
+    options?: unknown,
+  ): import("./pair-pipe.js").PairHandle;
+  attachCompressPipe(
+    sourcePipeId: string,
+    pipeId: string,
+    options?: { level?: number },
+  ): boolean;
+  detachCompressPipe(pipeId: string): boolean;
+  compressProbeAll(): Record<string, unknown>;
+};
+const pairSeam: import("./pair-pipe.js").PairPipeSeam = (leftId, rightId, options) =>
+  aravisPair.createPairStream(leftId, rightId, options);
+const compressSeam: import("./compress-pipe.js").CompressPipeSeam = {
+  advertise: pipeBroker.advertise,
+  unadvertise: pipeBroker.unadvertise,
+  attach: (src, id, opts) => void aravisPair.attachCompressPipe(src, id, opts),
+  detach: (id) => void aravisPair.detachCompressPipe(id),
+};
+// Compression brick meters — same sibling-probe shape as the other bricks.
+registerNativeProbe(
+  () => aravisPair.compressProbeAll() as unknown as Record<string, WorkloadSnapshot>,
+);
 const multiFovea = hub.add(
-  multiFoveaSession(asBroker(Pipe), undistortSeam, (pipeId, rect) =>
-    aravisFovea.setFoveaRect(pipeId, rect),
+  multiFoveaSession(
+    asBroker(Pipe),
+    undistortSeam,
+    (pipeId, rect) => aravisFovea.setFoveaRect(pipeId, rect),
+    {
+      rawPipes,
+      pair: pairSeam,
+      compress: compressSeam,
+      // Notify main so the viewer window auto-opens the finished `.fovea`.
+      finished: (foveaPath) =>
+        process.parentPort?.postMessage({ type: "recording:finished", path: foveaPath }),
+    },
   ),
 );
 

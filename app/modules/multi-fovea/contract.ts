@@ -73,6 +73,15 @@ export const multiFovea = defineContract({
     undistortPipe: null as string | null,
     targets: [0, 1, 2, 3].map(defaultMultiFoveaTarget) as MultiFoveaTargetConfig[],
     pulse_ns: 1000000,
+    /** Per-stream RECORDING compression switches (multi-fovea-recording ruling
+     *  9): a flagged stream routes through the zlib CompressStream brick and
+     *  the recorder consumes the `/zlib` sibling pipe instead. Default all off
+     *  — lossless zlib may not hold full-rate 12p on all three cameras
+     *  (rig-gated). A session contract option, deliberately not UI polish. */
+    record_compress: { left: false, center: false, right: false } as Record<
+      "left" | "center" | "right",
+      boolean
+    >,
   },
   telemetry: {
     ready: false as boolean,
@@ -82,6 +91,13 @@ export const multiFovea = defineContract({
     targets: [] as MultiFoveaTargetTelemetry[],
     scheduler: { inFlight: 0, frames: 0, rejects: 0, timeouts: 0 },
     perf: { trackMs: { mean: 0, max: 0 } as Stat },
+    // Recording (same field names as manual-control so the renderer's
+    // `Recording` facade + RecordButton work verbatim).
+    recording_active: false as boolean,
+    recordingStreams: {} as Record<
+      string,
+      { frames: number; dropped: number; fps: number; bytes: number }
+    >,
   },
   // No session frames: the wide (C) view + the per-fovea processed crops all
   // bind native pipes via `usePipeFrame` (the old `session.frame` producers were
@@ -93,6 +109,11 @@ export const multiFovea = defineContract({
     placeTarget: cmd<{ index: number; center: Point2d }>(),
     resetTargets: cmd(),
     captureOnce: cmd<void, MultiFoveaCaptureResult>(),
+    /** Start a multi-fovea recording at `path` (multi-fovea-recording r2.1:
+     *  raw12p streams + descriptor channels + wide singleton). */
+    startRecording: cmd<{ path: string }, boolean>(),
+    /** Stop the active recording (finalize → auto-open viewer). */
+    stopRecording: cmd(),
   },
 });
 

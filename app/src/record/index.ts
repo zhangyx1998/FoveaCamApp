@@ -16,7 +16,7 @@
 import { onScopeDispose, reactive, shallowRef, toRef, watch, type Ref } from "vue";
 import { SavePath } from "@lib/save-path";
 import type { Session } from "@lib/orchestrator/client";
-import type { ManualControlContract } from "@modules/manual-control/contract";
+import type { Contract, Command } from "@lib/orchestrator/protocol";
 
 export type StreamInfo = {
   frames: number;
@@ -25,16 +25,30 @@ export type StreamInfo = {
   bytes: number;
 };
 
-export const current_recording = shallowRef<Recording | null>(null);
+/** The minimal contract shape a recording-capable session must expose (wave
+ *  I-2: multi-fovea reuses the manual-control facade verbatim — same command
+ *  names, same telemetry field names). */
+export type RecordableContract = Contract & {
+  telemetry: {
+    recording_active: boolean;
+    recordingStreams: Record<string, StreamInfo>;
+  };
+  commands: {
+    startRecording: Command<{ path: string }, boolean>;
+    stopRecording: Command<void, void>;
+  };
+};
 
-export default class Recording extends SavePath {
+export const current_recording = shallowRef<Recording<RecordableContract> | null>(null);
+
+export default class Recording<C extends RecordableContract> extends SavePath {
   readonly active: Ref<boolean>;
   // A genuine `Map` (not the contract's plain object) so `RecordButton.vue`'s
   // `v-for="[name, info] of streams"` needs no template change.
   readonly streams = reactive(new Map<string, StreamInfo>());
 
   constructor(
-    private readonly session: Session<ManualControlContract>,
+    private readonly session: Session<C>,
     namespace: string,
   ) {
     super(namespace);
@@ -42,7 +56,10 @@ export default class Recording extends SavePath {
       throw new Error(
         `A recording context is already active for "${current_recording.value.namespace}".`,
       );
-    current_recording.value = this;
+    // The singleton is typed on the minimal contract — a widening reference
+    // cast (C extends RecordableContract; the button only touches the shared
+    // surface).
+    current_recording.value = this as unknown as Recording<RecordableContract>;
     this.active = toRef(this.session.telemetry, "recording_active");
     watch(
       () => this.session.telemetry.recordingStreams,
@@ -56,7 +73,7 @@ export default class Recording extends SavePath {
   }
 
   dispose() {
-    if (current_recording.value === this) current_recording.value = null;
+    if ((current_recording.value as unknown) === this) current_recording.value = null;
   }
 
   async start(path: string): Promise<boolean> {

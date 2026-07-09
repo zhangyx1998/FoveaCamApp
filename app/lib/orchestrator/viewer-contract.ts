@@ -69,6 +69,13 @@ export const viewer = defineContract({
      *  carries the static file inventory; the per-frame doc stream rides
      *  telemetry, mirroring how live sessions publish volt telemetry. */
     playback: {} as Record<string, PlaybackDoc | null>,
+    /** Latest DESCRIPTOR document per open file, keyed by descriptor channel
+     *  topic (multi-fovea `fovea/<target>` tracks — wave I-2 ruling 6): the
+     *  nearest-sample bbox overlay data the viewer window draws over the wide
+     *  stream. Latest-wins at playback rate; reset on seek (repopulated from
+     *  the latest-before scrub redraw); null on close. ADDITIVE to the pinned
+     *  contract (planner-flagged in the I-2 report). */
+    descriptors: {} as Record<string, Record<string, PlaybackDoc> | null>,
     /** Mutable playback position per open file. Updated at playback cadence
      *  and cleared to null on close, separate from `state.files` so static
      *  channel metadata is not serialized on every position tick. */

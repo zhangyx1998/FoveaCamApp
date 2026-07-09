@@ -182,6 +182,25 @@ describe("raw12pPipeSpec (packed geometry)", () => {
   });
 });
 
+describe("compressPipeSpec (/zlib sibling advert)", () => {
+  it("keeps the SOURCE active dims, suffixes the format, grows only the slot", async () => {
+    const { compressPipeSpec, zlibBound } = await import("@orchestrator/compress-pipe");
+    const src = raw12pPipeSpec(camera("Z", "BayerRG12p", 640, 480));
+    const out = compressPipeSpec(src);
+    expect(out.id).toBe("camera/Z/raw12p/zlib");
+    expect(out.pixelFormat).toBe("BayerRG12p/zlib");
+    expect(out.significantBits).toBe(12);
+    // The brick forwards the source frame's identity per blob (core test 32):
+    // the output ring must admit the source's max ACTIVE dims — only maxBytes
+    // grows to the zlib worst case (regression: maxHeight=1 rejected every
+    // offer() and the stream recorded zero frames).
+    expect(out.maxWidth).toBe(src.maxWidth ?? src.stride);
+    expect(out.maxHeight).toBe(src.maxHeight ?? src.height);
+    expect(out.maxBytes).toBe(zlibBound(Math.max(src.maxBytes ?? 0, src.bytesPerFrame)));
+    expect(out.maxBytes!).toBeGreaterThan(src.bytesPerFrame);
+  });
+});
+
 describe("rawPipeSpec (unpacked container geometry)", () => {
   it("unpacks a 12p format to a U16 container", () => {
     const cam = camera("I", "BayerRG12p", 640, 480);
