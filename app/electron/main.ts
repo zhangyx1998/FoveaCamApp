@@ -415,14 +415,15 @@ function spawnWindow(desc: WindowDescriptor): ManagedWindow {
   const win = new BrowserWindow({
     ...windowOptions(desc),
     ...(desc.bounds ?? {}),
-    // Switch inheritance: land in the same display state as the window this
-    // one replaces (welcome↔app switches thread these through the manager).
-    ...(desc.fullscreen ? { fullscreen: true } : {}),
   });
-  if (desc.maximized && !desc.fullscreen) win.maximize();
+  // Ruling (user, 2026-07-09): a spawned window NEVER lands full-screen — an
+  // inherited/restored fullscreen state demotes to maximized (the user
+  // re-enters full-screen themselves). Bounds/maximized inheritance
+  // (welcome↔app switches) is otherwise unchanged.
+  if (desc.maximized || desc.fullscreen) win.maximize();
   // App windows maximize by default (legacy behavior) unless restoring or
   // inheriting a specific display state.
-  else if (desc.class === "app" && !desc.bounds && !desc.fullscreen) win.maximize();
+  else if (desc.class === "app" && !desc.bounds) win.maximize();
 
   const target = entryURL(desc);
   if (target.url) void win.loadURL(target.url);

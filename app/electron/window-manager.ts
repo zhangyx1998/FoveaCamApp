@@ -47,9 +47,12 @@ export interface WindowDescriptor {
   search?: string;
   /** Restore geometry (from a manifest); spawn uses defaults when absent. */
   bounds?: WindowBounds;
-  /** Spawn full-screen / maximized — inherited from the switched-from window
-   *  on welcome↔app switches so the new window lands exactly where (and how)
-   *  the old one was. */
+  /** Display state inherited from the switched-from window on welcome↔app
+   *  switches so the new window lands where (and how) the old one was.
+   *  `fullscreen` records the state but NEVER spawns full-screen — the
+   *  spawner demotes it to maximized (ruling, 2026-07-09): a fresh window
+   *  landing in a macOS fullscreen space is disorienting; the user re-enters
+   *  full-screen themselves. */
   fullscreen?: boolean;
   maximized?: boolean;
   /** Full landing URL to restore (overrides `entry` when given — carries the
