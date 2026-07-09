@@ -473,6 +473,9 @@ export default function disparityScopeSession(
 
     function onMatch(side: SideKey, r: VisionResult): void {
       const v = r.values as unknown as TemplateMatchValues;
+      // Meter the pid node's per-port arrival (edge rx — the graph's
+      // match → pid rates; the join/step below is unchanged).
+      pidNode?.ingest(side === "L" ? "l" : "r");
       // The correlation heatmap → this side's session frame channel.
       for (const f of r.frames)
         if (f.name === "match")

@@ -490,10 +490,14 @@ export function buildTopology(deps: TopologyDeps): GraphTopology {
 }
 
 function inputRate(w: WorkloadSnapshot | undefined): number | undefined {
+  // `undefined` (not 0) when the meter declares NO input channels — mirrors
+  // `outputRate`. A meter that doesn't observe its inputs (the controller's
+  // serial meter: `inputs: []`) must not claim a 0 Hz rx for edges into its
+  // node; that read as "controller input edge: 0Hz" during live control.
   if (!w) return undefined;
-  let rate = 0;
+  let rate: number | undefined;
   for (const s of Object.values(w.inputs ?? {}))
-    rate = Math.max(rate, s.ratePerSec ?? 0);
+    rate = Math.max(rate ?? 0, s.ratePerSec ?? 0);
   return rate;
 }
 

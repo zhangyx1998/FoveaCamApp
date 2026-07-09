@@ -37,6 +37,7 @@ import {
   registerGraphWiring,
   type GraphWiring,
 } from "./graph-topology.js";
+import { registerWorkload } from "./metering.js";
 import type {
   NodeReport,
   StreamType,
@@ -135,6 +136,9 @@ export interface PidNodeHandle<V> {
    *  reset, and the pinned override value is returned (wrapped as
    *  {@link OverrideHeld}). Use {@link outputOf} to get the command either way. */
   step(fn: () => V): V | OverrideHeld<V>;
+  /** Count one arrival on a named input port (meter only — the node still
+   *  reads its result via `step`). Feeds the graph edge's RX rate. */
+  ingest(port: string): void;
   readonly override: OverrideSlot<V>;
   /** The node's self-report (inputs = incoming edges; the outgoing edge is the
    *  consumer's input, registered via the wiring shim). */
@@ -217,6 +221,20 @@ export function createPidNode<V>(opts: PidNodeOptions<V>): PidNodeHandle<V> {
   };
   const unregister = registerGraphWiring(wiring);
 
+  // Self-meter keyed by the NODE id (the fold reads workloads by id when no
+  // statsKey is set): without it the pid → controller edge had NO tx rate,
+  // and the controller's serial meter (empty `inputs`) supplied a false
+  // 0 Hz rx — the profiler edge read "0Hz" during live control. `step`
+  // emits one unit per output port per tick (held or computed — either way
+  // a command went downstream); `ingest` is the caller's per-arrival hook.
+  const meter = registerWorkload(id, {
+    inputs: opts.inputs.map((i) => i.port),
+    outputs: opts.outputs.map((o) => o.port),
+  });
+  const emitAll = (): void => {
+    for (const o of opts.outputs) meter.emit(o.port);
+  };
+
   return {
     id,
     step(fn: () => V): V | OverrideHeld<V> {
@@ -224,9 +242,15 @@ export function createPidNode<V>(opts: PidNodeOptions<V>): PidNodeHandle<V> {
         // Hold every controller reset each tick so no windup builds behind the
         // override; the output is the pinned value, not a computed command.
         for (const c of controllerList) c.reset();
+        emitAll();
         return { held: true, value: value as V };
       }
-      return fn();
+      const out = meter.measure(fn);
+      emitAll();
+      return out;
+    },
+    ingest(port: string): void {
+      meter.ingest(port);
     },
     override,
     report(): NodeReport {
@@ -246,6 +270,7 @@ export function createPidNode<V>(opts: PidNodeOptions<V>): PidNodeHandle<V> {
       };
     },
     dispose() {
+      meter.dispose();
       unregister();
     },
   };

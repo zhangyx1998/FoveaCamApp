@@ -213,6 +213,42 @@ describe("buildTopology", () => {
       expect(edge.dropPerSec).toBe(20); // tx 60 − rx 40
     });
 
+    it("a consumer meter with NO input channels yields rx ABSENT, not 0 Hz", () => {
+      // The controller's serial meter declares `inputs: []` — it observes the
+      // wire, not its position inputs. The pid → controller edge must then
+      // show the producer's tx rate alone; a defaulted rx of 0 Hz made the
+      // profiler label the live control edge "0Hz" (min(tx, 0)).
+      const pidStats = load("win/x/pid", 0.1, 25);
+      const reports: NodeReport[] = [
+        {
+          id: "win/x/pid",
+          kind: "pid",
+          transport: "native",
+          inputs: [],
+          output: { kind: "analysis", schema: "pid" },
+          stats: pidStats,
+        },
+        {
+          id: "controller",
+          kind: "controller",
+          transport: "native",
+          inputs: [
+            {
+              from: "win/x/pid",
+              port: "volt",
+              type: { kind: "analysis", schema: "pid" },
+            },
+          ],
+          output: null,
+          stats: { ...load("controller", 0.2, 40), inputs: {} },
+        },
+      ];
+      const t = buildTopologyFromReports(reports, { workloads: {} });
+      const edge = t.edges.find((e) => e.to === "controller")!;
+      expect(edge.tx?.hz).toBe(25);
+      expect(edge.rx).toBeUndefined();
+    });
+
     it("omits drop info on lossless links; sink edges carry TX + bytes delta", () => {
       const mk = (bytesTotal: number) => [
         {
