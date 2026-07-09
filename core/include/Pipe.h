@@ -64,6 +64,12 @@ struct FrameInfo {
   size_t bytes = 0;
   uint32_t originX = 0;
   uint32_t originY = 0;
+  // Bytes per CHANNEL element (`cv::Mat::elemSize1()`): 1 for U8 frames
+  // (default — every existing BGRA8/U8 pipe), 4 for a CV_32FC1 disparity map.
+  // The publisher's tight-packed row/active-byte math multiplies by this so a
+  // non-U8 mat (stereo Disparity32F) publishes without truncation. Additive:
+  // defaulting to 1 keeps every U8 producer byte-for-byte unchanged.
+  uint32_t bytesPerElement = 1;
 };
 
 /** THE producer→publisher seam (C-19). Every producer plugs in here: B's Aravis

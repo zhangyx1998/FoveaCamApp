@@ -92,8 +92,11 @@ void Publisher::offer(const void *data, const FrameInfo &info,
   // double-count. This meter's busy = the SHM WRITE below.)
   meter_.ingest("frame", now);
 
+  // Element size (bytes per channel; 1 for U8, 4 for CV_32FC1) folds into the
+  // tight-packed byte math so non-U8 mats (Disparity32F) publish uncorrupted.
+  const size_t elemBytes = info.bytesPerElement ? info.bytesPerElement : 1;
   const size_t activeBytes =
-      static_cast<size_t>(info.width) * info.height * info.channels;
+      static_cast<size_t>(info.width) * info.height * info.channels * elemBytes;
   if (data == nullptr || info.channels != spec_.channels ||
       info.width > spec_.maxWidth || info.height > spec_.maxHeight ||
       activeBytes > spec_.maxBytes) {
@@ -114,7 +117,8 @@ void Publisher::offer(const void *data, const FrameInfo &info,
   const uint32_t slot = segment_->beginSlot();
   auto *dst = static_cast<uint8_t *>(segment_->slotData(slot));
   const auto *src = static_cast<const uint8_t *>(data);
-  const size_t rowBytes = static_cast<size_t>(info.width) * info.channels;
+  const size_t rowBytes =
+      static_cast<size_t>(info.width) * info.channels * elemBytes;
   const size_t stride = info.stride ? info.stride : rowBytes;
   for (uint32_t y = 0; y < info.height; ++y)
     std::memcpy(dst + static_cast<size_t>(y) * rowBytes,

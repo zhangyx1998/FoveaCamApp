@@ -50,6 +50,18 @@ Napi::Value attachScalePipe(const Napi::CallbackInfo &info);
 Napi::Value setScaleParams(const Napi::CallbackInfo &info);
 Napi::Value detachScalePipe(const Napi::CallbackInfo &info);
 Napi::Value scaleProbeAll(const Napi::CallbackInfo &info);
+// stereo-disparity-and-heatmap-nodes: the two-input SGBM disparity brick,
+// defined in core/lib/Aravis/StereoStream.cpp.
+Napi::Value attachStereoPipe(const Napi::CallbackInfo &info);
+Napi::Value setStereoParams(const Napi::CallbackInfo &info);
+Napi::Value detachStereoPipe(const Napi::CallbackInfo &info);
+Napi::Value stereoProbeAll(const Napi::CallbackInfo &info);
+// stereo-disparity-and-heatmap-nodes: the colormap brick, defined in
+// core/lib/Aravis/HeatmapStream.cpp.
+Napi::Value attachHeatmapPipe(const Napi::CallbackInfo &info);
+Napi::Value setHeatmapParams(const Napi::CallbackInfo &info);
+Napi::Value detachHeatmapPipe(const Napi::CallbackInfo &info);
+Napi::Value heatmapProbeAll(const Napi::CallbackInfo &info);
 }
 // unified-time-and-topology §6: consolidated NodeReport rows for every live
 // native brick + pipe. Defined in core/src/Topology.cpp.
@@ -151,6 +163,27 @@ static Object init(Env env, Object exports) {
                Function::New<Arv::detachScalePipe>(env, "detachScalePipe"));
     Aravis.Set("scaleProbeAll",
                Function::New<Arv::scaleProbeAll>(env, "scaleProbeAll"));
+    // stereo-disparity-and-heatmap-nodes: the FIRST two-input brick — a native
+    // cv::StereoSGBM thread pairing two convert/undistort/fovea/scale taps into
+    // a CV_32F disparity pipe (reactive {numDisparities|blockSize|minDisparity})
+    // + a colormap brick turning a 1-channel (F32/U8) input into a BGRA8 TURBO
+    // heatmap. Both on-demand (park with no consumer).
+    Aravis.Set("attachStereoPipe",
+               Function::New<Arv::attachStereoPipe>(env, "attachStereoPipe"));
+    Aravis.Set("setStereoParams",
+               Function::New<Arv::setStereoParams>(env, "setStereoParams"));
+    Aravis.Set("detachStereoPipe",
+               Function::New<Arv::detachStereoPipe>(env, "detachStereoPipe"));
+    Aravis.Set("stereoProbeAll",
+               Function::New<Arv::stereoProbeAll>(env, "stereoProbeAll"));
+    Aravis.Set("attachHeatmapPipe",
+               Function::New<Arv::attachHeatmapPipe>(env, "attachHeatmapPipe"));
+    Aravis.Set("setHeatmapParams",
+               Function::New<Arv::setHeatmapParams>(env, "setHeatmapParams"));
+    Aravis.Set("detachHeatmapPipe",
+               Function::New<Arv::detachHeatmapPipe>(env, "detachHeatmapPipe"));
+    Aravis.Set("heatmapProbeAll",
+               Function::New<Arv::heatmapProbeAll>(env, "heatmapProbeAll"));
     exports.Set("Aravis", Aravis);
     // Controller Module
     auto Controller = Object::New(env);

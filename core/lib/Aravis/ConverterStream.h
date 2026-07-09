@@ -497,7 +497,12 @@ protected:
     info.height = static_cast<uint32_t>(m.rows);
     info.channels = static_cast<uint32_t>(m.channels());
     info.stride = static_cast<uint32_t>(m.step);
-    info.bytes = static_cast<size_t>(m.cols) * m.rows * m.channels();
+    // Bytes per channel element: 1 for U8 (every existing pipe), 4 for a
+    // CV_32FC1 disparity map (stereo brick) — the publisher's row/active-byte
+    // math multiplies by it so a non-U8 mat is not truncated to 1 byte/elem.
+    info.bytesPerElement = static_cast<uint32_t>(m.elemSize1());
+    info.bytes =
+        static_cast<size_t>(m.cols) * m.rows * m.channels() * m.elemSize1();
     // v4 (B-24/C-24): FRAME-BOUND crop origin rides the slot header with the
     // active size (fovea producers set it; full-frame producers leave 0/0).
     info.originX = cf->originX;

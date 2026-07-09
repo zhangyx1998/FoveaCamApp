@@ -462,4 +462,112 @@ declare module "core/Aravis" {
    * `perfSnapshot.workloads`/`graphTopology()` identically to `foveaProbeAll`.
    */
   export function scaleProbeAll(): Record<string, ScaleProbeSnapshot>;
+
+  /**
+   * Reactive SGBM spec for `attachStereoPipe`/`setStereoParams`
+   * (stereo-disparity-and-heatmap-nodes §"StereoStream"). All fields optional;
+   * validated NAPI-side and applied on the next frame (matcher rebuilt).
+   *   - `numDisparities` — search range, rounded UP to a multiple of 16
+   *                        (min 16; default 128).
+   *   - `blockSize`      — matched block size, forced ODD (min 1; default 5).
+   *   - `minDisparity`   — smallest disparity (default 0).
+   */
+  export interface StereoParams {
+    numDisparities?: number;
+    blockSize?: number;
+    minDisparity?: number;
+  }
+
+  /**
+   * Attach the FIRST two-input chained brick: a `cv::StereoSGBM` disparity
+   * producer pairing the LEFT and RIGHT source bricks' OwnedFrame taps (any
+   * convert / undistort / fovea / scale pipe; both resolved by id — a missing
+   * pipe throws). LEFT is the pacing side (a tick per left arrival, matched with
+   * the latest right frame). Output is a CV_32F disparity pipe (`Disparity32F`
+   * / `F32`, channels 1) — advertise it with `maxWidth`/`maxHeight`/`maxBytes`
+   * (F32 ⇒ 4 bytes/px). deviceTimestamp/systemTimestamp/origin are forwarded
+   * from the LEFT frame (trusted-time). Unequal L/R dims → the frame is dropped
+   * (a metered transient during steer/retune). On-demand: parks with no
+   * consumer (or downstream tap). Retune live via `setStereoParams`.
+   */
+  export function attachStereoPipe(
+    leftPipeId: string,
+    rightPipeId: string,
+    pipeId: string,
+    params: StereoParams,
+  ): boolean;
+
+  /** Live-retune a stereo pipe (SGBM matcher rebuilt on the NEXT frame). No
+   *  re-attach. Returns false for an unknown pipe id. */
+  export function setStereoParams(pipeId: string, params: StereoParams): boolean;
+
+  /** Detach + join the stereo producer. Idempotent (false if unknown). */
+  export function detachStereoPipe(pipeId: string): boolean;
+
+  /** `stereoProbeAll` snapshot: the shared meter shape ({left,right} inputs,
+   *  {disparity} output) + the last produced frame's active out dims + the
+   *  forwarded LEFT-frame crop origin. */
+  export interface StereoProbeSnapshot extends ProbeSnapshot {
+    activeWidth: number;
+    activeHeight: number;
+    originX: number;
+    originY: number;
+  }
+
+  /**
+   * Out-of-loop probe of every ACTIVE stereo thread → `{ [pipeId]:
+   * StereoProbeSnapshot }` — keys AND meter names are the node ids.
+   */
+  export function stereoProbeAll(): Record<string, StereoProbeSnapshot>;
+
+  /**
+   * Reactive colormap spec for `attachHeatmapPipe`/`setHeatmapParams`
+   * (stereo-disparity-and-heatmap-nodes §"HeatmapStream"). Both fields optional
+   * and INDEPENDENT: an absent bound is auto-derived from that frame's
+   * min/max (`cv::minMaxLoc`). Values outside `[min,max]` are clamped.
+   */
+  export interface HeatmapParams {
+    min?: number;
+    max?: number;
+  }
+
+  /**
+   * Attach a colormap brick: normalizes a 1-channel input (CV_32FC1 or CV_8UC1)
+   * to [0,255] and maps it through `cv::COLORMAP_TURBO` → BGRA8 (alpha 255), so
+   * the output matches every other BGRA8 pipe. Chained on a stereo disparity
+   * pipe's OwnedFrame tap (or any convert / undistort / fovea / scale pipe —
+   * `findStereo` FIRST). Active dims + origin + timestamps forwarded. An
+   * unsupported input format is dropped (metered). On-demand: parks with no
+   * consumer. Retune live via `setHeatmapParams`.
+   */
+  export function attachHeatmapPipe(
+    sourcePipeId: string,
+    pipeId: string,
+    params: HeatmapParams,
+  ): boolean;
+
+  /** Live-retune a heatmap pipe (applied on the NEXT frame). No re-attach.
+   *  Returns false for an unknown pipe id. */
+  export function setHeatmapParams(
+    pipeId: string,
+    params: HeatmapParams,
+  ): boolean;
+
+  /** Detach + join the heatmap producer. Idempotent (false if unknown). */
+  export function detachHeatmapPipe(pipeId: string): boolean;
+
+  /** `heatmapProbeAll` snapshot: the shared meter shape + the last produced
+   *  frame's active out dims and forwarded crop origin. */
+  export interface HeatmapProbeSnapshot extends ProbeSnapshot {
+    activeWidth: number;
+    activeHeight: number;
+    originX: number;
+    originY: number;
+  }
+
+  /**
+   * Out-of-loop probe of every ACTIVE heatmap thread → `{ [pipeId]:
+   * HeatmapProbeSnapshot }` — keys AND meter names are the node ids.
+   */
+  export function heatmapProbeAll(): Record<string, HeatmapProbeSnapshot>;
 }

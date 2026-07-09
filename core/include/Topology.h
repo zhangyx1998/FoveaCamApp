@@ -69,5 +69,11 @@ void appendFoveaReports(Napi::Env env, Napi::Array &rows,
                         std::set<std::string> &seen);
 void appendScaleReports(Napi::Env env, Napi::Array &rows,
                         std::set<std::string> &seen);
+// stereo-disparity-and-heatmap-nodes: the two-input SGBM brick (kind "stereo",
+// left/right input edges) + the colormap brick (kind "heatmap").
+void appendStereoReports(Napi::Env env, Napi::Array &rows,
+                         std::set<std::string> &seen);
+void appendHeatmapReports(Napi::Env env, Napi::Array &rows,
+                          std::set<std::string> &seen);
 
 } // namespace Arv
