@@ -165,28 +165,6 @@ function save(path: string, img_format: string) {
     right: 0;
     bottom: 0;
   }
-  .run-error {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 1.5rem;
-    .message {
-      color: #f56;
-      font-size: 1.2rem;
-      max-width: 60ch;
-      text-align: center;
-    }
-    .actions {
-      display: flex;
-      gap: 1rem;
-      button {
-        padding: 0.4rem 1.6rem;
-        font-size: 1rem;
-        cursor: pointer;
-      }
-    }
-  }
 }
 
 .meta-container,

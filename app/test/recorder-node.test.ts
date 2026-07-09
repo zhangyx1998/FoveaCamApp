@@ -17,10 +17,14 @@ import {
   runStreamConsumer,
   foldStreamStats,
   dispatchFrame,
+  createRecorderNode,
   type SeqRead,
   type StreamFold,
   type StreamCounters,
   type ExtrasMessage,
+  type WorkerLike,
+  type WorkerStreamInit,
+  type RecorderPipeConnection,
 } from "@orchestrator/recorder-node";
 
 /** Drive `runStreamConsumer` with a scripted `read(want)` and collect frames. */
@@ -190,5 +194,102 @@ describe("dispatchFrame (ruling-3 extras correlation)", () => {
     expect(dispatchFrame(() => ({}), (m) => posts.push(m), notice)).toBeNull();
     expect(dispatchFrame(undefined, (m) => posts.push(m), notice)).toBeNull();
     expect(posts).toHaveLength(0);
+  });
+});
+
+// A fake worker that swallows every message (never replies to "finalize").
+function wedgedWorker(): WorkerLike {
+  return {
+    postMessage() {},
+    on() {},
+    terminate() {},
+  };
+}
+
+const fakeConn =
+  (released: string[]) =>
+  (pipeId: string): RecorderPipeConnection => ({
+    shmName: `shm/${pipeId}`,
+    spec: {
+      pixelFormat: "Mono8",
+      dtype: "U8",
+      width: 2,
+      height: 2,
+      channels: 1,
+      bytesPerFrame: 4,
+      maxBytes: 4,
+    },
+    release: () => released.push(pipeId),
+  });
+
+describe("createRecorderNode host lifecycle", () => {
+  it("stop() force-terminates on a wedged finalize (deadline) and releases pipes AFTER", async () => {
+    let terminated = false;
+    const released: string[] = [];
+    const node = createRecorderNode({
+      id: "recorder/test-deadline",
+      path: "/tmp/recorder-deadline-test",
+      streams: { center: { pipeId: "pipe/center" } },
+      connect: fakeConn(released),
+      timestamp: "2026-07-09T00:00:00.000Z",
+      readerPath: "unused-in-fake",
+      finalizeDeadlineMs: 20, // race the never-replying worker
+      spawn: () => {
+        const w = wedgedWorker();
+        w.terminate = () => {
+          terminated = true;
+        };
+        return w;
+      },
+    });
+    const stats = await node.stop();
+    // Deadline path → truncated stats, worker terminated, container left on disk.
+    expect(stats).toEqual({ messageCount: "0", chunkCount: 0, bytes: 0 });
+    expect(terminated).toBe(true);
+    // Ordering preserved: pipes released only AFTER the (forced) worker stop.
+    expect(released).toEqual(["pipe/center"]);
+    // stop() is idempotent.
+    expect(await node.stop()).toEqual({ messageCount: "0", chunkCount: 0, bytes: 0 });
+  });
+
+  it("gates per-frame notices to extrasStreams only (center opted out)", () => {
+    let captured: WorkerStreamInit[] = [];
+    const node = createRecorderNode({
+      id: "recorder/test-gating",
+      path: "/tmp/recorder-gating-test",
+      streams: {
+        "left-fovea": { pipeId: "pipe/L" },
+        center: { pipeId: "pipe/C" },
+        "right-fovea": { pipeId: "pipe/R" },
+      },
+      connect: fakeConn([]),
+      timestamp: "2026-07-09T00:00:00.000Z",
+      readerPath: "unused-in-fake",
+      extrasStreams: ["left-fovea", "right-fovea"],
+      spawn: (streams) => {
+        captured = streams;
+        return wedgedWorker();
+      },
+    });
+    const byName = Object.fromEntries(captured.map((s) => [s.name, s.wantsExtras]));
+    expect(byName).toEqual({ "left-fovea": true, center: false, "right-fovea": true });
+    void node; // constructed; no teardown needed (fake worker)
+  });
+
+  it("posts notices for every stream when extrasStreams is omitted (back-compat)", () => {
+    let captured: WorkerStreamInit[] = [];
+    createRecorderNode({
+      id: "recorder/test-gating-default",
+      path: "/tmp/recorder-gating-default",
+      streams: { a: { pipeId: "pipe/a" }, b: { pipeId: "pipe/b" } },
+      connect: fakeConn([]),
+      timestamp: "2026-07-09T00:00:00.000Z",
+      readerPath: "unused-in-fake",
+      spawn: (streams) => {
+        captured = streams;
+        return wedgedWorker();
+      },
+    });
+    expect(captured.every((s) => s.wantsExtras)).toBe(true);
   });
 });

@@ -189,6 +189,9 @@ export function createRecording(deps: RecordingDeps): RecordingController {
         streams,
         connect: deps.connect,
         timestamp: new Date().toISOString(),
+        // R-2 opt: only the L/R foveae carry a binding — gate the per-frame
+        // notice so the center channel skips the pointless main round-trip.
+        extrasStreams: ["left-fovea", "right-fovea"],
         // Ruling-3: per NEW frame, the session injects volt/angle/homography for
         // the L/R foveae (center carries none). Never blocks the frame write.
         onFrame: (stream) => {

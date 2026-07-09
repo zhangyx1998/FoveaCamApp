@@ -581,6 +581,12 @@ export default function manualControlSession(
         },
         async capture({ tag }) {
           if (!triple?.undistort || !captureNode) throw new Error("Capture not ready");
+          // EXCLUSIVITY (R-3 flag 2): capture and recording advertise the SAME
+          // `camera/<serial>/raw` ids; capture's per-shot advertise/retire would
+          // clobber (epoch-bump + slot-recycle, then detach+unadvertise) an
+          // active recording's pipes. Refuse cleanly (typed error → renderer)
+          // instead. Single-threaded, so the flag read is race-free.
+          if (recording.active) throw new Error("Cannot capture while a recording is active");
           // `tag` absent OR 0 starts a fresh accumulation (clear + provide
           // "wide"); a present tag accumulates an indexed resource (raster).
           const reset = tag === undefined || tag === 0;
@@ -611,6 +617,14 @@ export default function manualControlSession(
           s.telemetry({ capture_meta: {} });
         },
         async startRecording({ path }) {
+          // EXCLUSIVITY (R-3 flag 2): a capture shot in flight holds the raw
+          // L/R pipes; starting a recording would re-advertise the same ids and
+          // the shot's release would then retire the recording's producers.
+          // Refuse cleanly (false, like every other start refusal). Between
+          // raster shots `capturing` is false, so a recording CAN start there —
+          // the next `capture` shot is then refused by the guard above (no
+          // clobber either way).
+          if (capturing) return false;
           return recording.start(path);
         },
         async stopRecording() {

@@ -339,6 +339,12 @@ export interface RecorderNodeOptions {
   timestamp: string;
   /** Ruling-3 per-frame extras callback (optional). */
   onFrame?: OnRecordedFrame;
+  /** R-2 opt: the streams `onFrame` can actually return extras for. The worker
+   *  posts a per-frame notice (and main invokes `onFrame`) ONLY for these — a
+   *  stream absent here (e.g. the center channel, which never carries a fovea
+   *  binding) skips the pointless per-frame main-thread round-trip. Omit ⇒ every
+   *  stream posts notices (backward-compatible). */
+  extrasStreams?: string[];
   /** Test seam: spawn the worker (default: the eval'd WORKER_SOURCE). */
   spawn?: (streams: WorkerStreamInit[]) => WorkerLike;
   /** Test seam: reader-addon path (default: parent-resolved). */
@@ -347,6 +353,13 @@ export interface RecorderNodeOptions {
   chunkBytes?: number;
   /** Per-channel in-flight window before backpressure (default 8). */
   maxQueuedFrames?: number;
+  /** R-2: hard ceiling on `stop()`'s finalize wait (ms, default 30_000). A
+   *  wedged in-worker finalize must NEVER hang session teardown / hardware
+   *  quiescence: on expiry we log, force-terminate the worker, release the pipes
+   *  in order (finalize-before-lease-release is preserved — `stop()` still
+   *  returns before the session retires pipes + releases leases), and leave the
+   *  truncated container on disk (the documented crash contract). */
+  finalizeDeadlineMs?: number;
 }
 
 export interface RecorderNodeHandle {
@@ -371,6 +384,8 @@ export interface WorkerStreamInit {
   pixelFormat: string;
   dtype: string;
   significantBits: number;
+  /** R-2 opt: post per-frame notices (ruling-3 dispatch) for this stream. */
+  wantsExtras: boolean;
 }
 
 /** The `worker_threads.Worker` subset the host drives (injectable for tests). */
@@ -409,9 +424,14 @@ export function createRecorderNode(options: RecorderNodeOptions): RecorderNodeHa
     connect,
     timestamp,
     onFrame,
+    extrasStreams,
     chunkBytes = DEFAULT_CHUNK_BYTES,
     maxQueuedFrames = DEFAULT_MAX_QUEUED_FRAMES,
+    finalizeDeadlineMs = 30_000,
   } = options;
+  // Default (no list): every stream posts notices — backward compatible.
+  const wantsExtras = (name: string): boolean =>
+    extrasStreams === undefined || extrasStreams.includes(name);
 
   const filePath = resolve(path, `recording${FOVEA_EXTENSION}`);
   const readerPath = options.readerPath ?? readerAddonPath();
@@ -435,6 +455,7 @@ export function createRecorderNode(options: RecorderNodeOptions): RecorderNodeHa
       pixelFormat: conn.spec.pixelFormat,
       dtype: conn.spec.dtype,
       significantBits: significantBits(conn.spec.pixelFormat as never),
+      wantsExtras: wantsExtras(name),
     });
     edges.push({
       from: pipeId,
@@ -514,14 +535,37 @@ export function createRecorderNode(options: RecorderNodeOptions): RecorderNodeHa
       if (stopped) return { messageCount: "0", chunkCount: 0, bytes: 0 };
       stopped = true;
       const durationSec = (performance.now() - startedAt) / 1000;
-      const stats = await new Promise<FinalizeStats>((res, rej) => {
+      const truncated: FinalizeStats = { messageCount: "0", chunkCount: 0, bytes: 0 };
+      // Race the in-worker finalize against a hard deadline so a wedged writer
+      // can never hang teardown / hardware quiescence (R-2). On expiry we drop
+      // the pending waiter, log, and fall through to terminate + release with
+      // the truncated container left on disk (the crash contract).
+      let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+      const finalizePromise = new Promise<FinalizeStats>((res, rej) => {
         if (failed) return rej(failed);
         pendingFinalize = { resolve: res, reject: rej };
         post({ type: "finalize", durationSec });
-      }).catch((e) => {
-        report("recorder-node", `finalize failed: ${(e as Error).message}`);
-        return { messageCount: "0", chunkCount: 0, bytes: 0 } as FinalizeStats;
       });
+      const deadline = new Promise<FinalizeStats>((res) => {
+        deadlineTimer = setTimeout(() => {
+          if (!pendingFinalize) return; // already finalized
+          pendingFinalize = null; // stop the worker's late "finalized" from resolving
+          report(
+            "recorder-node",
+            `finalize exceeded ${finalizeDeadlineMs}ms — terminating; truncated container left on disk`,
+          );
+          res(truncated);
+        }, finalizeDeadlineMs);
+        (deadlineTimer as { unref?: () => void }).unref?.();
+      });
+      const stats = await Promise.race([finalizePromise, deadline])
+        .catch((e) => {
+          report("recorder-node", `finalize failed: ${(e as Error).message}`);
+          return truncated;
+        })
+        .finally(() => {
+          if (deadlineTimer) clearTimeout(deadlineTimer);
+        });
       await worker.terminate();
       for (const c of connections) c.release(); // disconnect AFTER the worker's reads
       meter.dispose();
@@ -771,10 +815,12 @@ function makeConsumer(s, maxQueued) {
         pending[s.name] -= 1;
         if (pending[s.name] < maxQueued) releaseWaiter(s.name);
       });
-      // Ruling-3: notify main of the NEW frame (extras ride back async). Carry
-      // BOTH clocks: the axis time so the telemetry doc co-clocks with its
+      // Ruling-3: notify main of the NEW frame (extras ride back async), but
+      // ONLY for streams the session can inject extras for (R-2 opt) — a
+      // no-extras stream (e.g. center) skips the pointless main round-trip.
+      // Carry BOTH clocks: the axis time so the telemetry doc co-clocks with its
       // frame, and the trusted capture time for the FIN-correlation 't' field.
-      post({ type: "frame", stream: s.name, seq: outSeq, logTimeNs, tNs });
+      if (s.wantsExtras) post({ type: "frame", stream: s.name, seq: outSeq, logTimeNs, tNs });
     },
     afterWrite: () => {
       // Yield so the writer chain advances; block while the channel window is
