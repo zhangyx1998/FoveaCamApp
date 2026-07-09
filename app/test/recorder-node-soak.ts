@@ -4,18 +4,22 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// capture-recorder-nodes Wave R-2 SOAK. Drives the ACTUAL recorder node (its
-// real worker thread + the real MCAP writer) over NATIVE fake-camera raw pipes
-// for ~10-20s, then finalizes and DECODES the `.fovea` to prove:
-//   (a) exact frame accounting — decoded messages/channel == worker `written`,
-//       mcap sequences contiguous (zero unexplained write loss), and
-//       written + ring-drops reconciles with the producer's published span;
-//   (b) the container decodes — per-channel x-fovea-raw metadata, one telemetry
-//       channel, `fovea:session` + `fovea:finalize` metadata records, telemetry
-//       docs correlate stream+seq and survive after-frame physical ordering;
-//   (c) shape metadata parity ([H,W] mono / [H,W,C] multi-channel);
-//   (d) logTime is a single monotonic clock across EVERY channel and the
-//       viewer's relative domain still starts at 0 (messageStartTime anchor).
+// multi-fovea-recording Wave I-1a CHURN SOAK. Drives the ACTUAL recorder node
+// (its real worker thread + the real MCAP writer) over NATIVE fake-camera raw
+// pipes for ~10-20s while CHURNING streams the way multi-fovea does, then
+// finalizes and DECODES the `.fovea` to prove:
+//   (a) exact frame accounting on the STABLE (whole-recording) streams —
+//       decoded messages/channel == worker `written`, mcap sequences contiguous
+//       0..N-1 (zero unexplained write loss), written+drops >= published span;
+//   (b) a CHURNED frame stream added + removed mid-run records a mid-file
+//       channel with contiguous 0..N-1 sequences (drain-the-tail on removal);
+//   (c) DESCRIPTOR (data) channels added/removed mid-run carry JSON docs
+//       ({tNs, bbox, frames}) — count == posted, structure intact, mid-file;
+//   (d) the GLOBAL wide cameraMatrix metadata record is present + decodes;
+//   (e) VERBATIM advert metadata on frame channels (stride/significantBits/
+//       width/height copied from the advert, pixelFormat opaque);
+//   (f) logTime is a single monotonic clock across EVERY channel; the viewer's
+//       relative domain still starts at 0 (messageStartTime anchor).
 //
 // NOT part of the unit gate — see vitest.soak.config.ts. Run with:
 //   ../node_modules/.bin/vitest run -c vitest.soak.config.ts
@@ -66,8 +70,8 @@ interface McapReadable {
   read(offset: bigint, length: bigint): Promise<Uint8Array>;
 }
 
-describe("recorder node soak (real worker + native pipes + mcap decode)", () => {
-  it(`records ~${SOAK_MS}ms across 3 channels then decodes with exact accounting`, async () => {
+describe("recorder node churn soak (dynamic streams + descriptors + camera matrix)", () => {
+  it(`records ~${SOAK_MS}ms churning streams+descriptors, then decodes with exact accounting`, async () => {
     A.enableFakeCamera();
     const cams = await A.Camera.list();
     expect(cams.length).toBeGreaterThan(0);
@@ -80,16 +84,21 @@ describe("recorder node soak (real worker + native pipes + mcap decode)", () => 
     const CH = probe.raw.channels ?? (shape.length === 3 ? shape[2]! : 1);
     const BPE = probe.raw.BYTES_PER_ELEMENT;
     probe.release?.();
-    const bytesPerFrame = Ww * Hh * CH * BPE;
+    const stride = Ww * CH * BPE;
+    const bytesPerFrame = stride * Hh;
     const dtype = BPE > 1 ? "U16" : "U8";
     const pixelFormat = "Mono8"; // fake camera readout label
+    const SIG_BITS = 8;
 
-    // --- advertise + attach 3 raw pipes off the one fake camera ------------
-    const CHANNELS = ["left-fovea", "center", "right-fovea"] as const;
+    // --- advertise + attach raw pipes off the one fake camera --------------
+    // 3 STATIC streams (whole recording) + 1 CHURNED (added/removed mid-run).
+    const STATIC = ["left-fovea", "center", "right-fovea"] as const;
+    const CHURNED = "extra-fovea";
+    const ALL_PIPES = [...STATIC, CHURNED];
     const pipeIdFor = (name: string) => `camera/${camera.serial ?? "1"}/raw/${name}`;
     const specById = new Map<string, Record<string, unknown>>();
     const attached: string[] = [];
-    for (const name of CHANNELS) {
+    for (const name of ALL_PIPES) {
       const id = pipeIdFor(name);
       const spec = {
         id,
@@ -98,8 +107,9 @@ describe("recorder node soak (real worker + native pipes + mcap decode)", () => 
         width: Ww,
         height: Hh,
         channels: CH,
-        stride: Ww * CH * BPE,
+        stride,
         bytesPerFrame,
+        significantBits: SIG_BITS,
         ringDepth: 48,
       };
       specById.set(id, spec);
@@ -109,11 +119,9 @@ describe("recorder node soak (real worker + native pipes + mcap decode)", () => 
       attached.push(id);
     }
 
-    // --- connect seam (broker stand-in) ------------------------------------
-    const connected: string[] = [];
+    // --- connect seam (broker stand-in) — copies advert fields VERBATIM ----
     const connect = (pipeId: string): RecorderPipeConnection => {
       const { shmName } = P.connect(pipeId);
-      connected.push(pipeId);
       const spec = specById.get(pipeId)!;
       return {
         shmName,
@@ -124,53 +132,100 @@ describe("recorder node soak (real worker + native pipes + mcap decode)", () => 
           height: spec.height as number,
           channels: spec.channels as number,
           bytesPerFrame: spec.bytesPerFrame as number,
+          stride: spec.stride as number,
+          significantBits: spec.significantBits as number,
           maxBytes: spec.bytesPerFrame as number,
         },
         release: () => void P.disconnect(pipeId),
       };
     };
 
-    const dir = await mkdtemp(join(tmpdir(), "fovea-soak-"));
+    const dir = await mkdtemp(join(tmpdir(), "fovea-churn-soak-"));
+    // Only the STATIC streams start with the recording; CHURNED is added later.
     const streams = Object.fromEntries(
-      CHANNELS.map((name) => [name, { pipeId: pipeIdFor(name) }]),
+      STATIC.map((name) => [name, { pipeId: pipeIdFor(name) }]),
     );
 
-    // ruling-3 extras: L/R foveae carry a (fake) volt/angle doc, center none.
+    // ruling-4 extras: L/R foveae carry a (fake) volt/H doc, center wide none.
     const MIRROR: Record<string, "L" | "R" | null> = {
       "left-fovea": "L",
       center: null,
       "right-fovea": "R",
+      [CHURNED]: "R",
     };
-    const extrasSeen = new Map<string, number>(); // stream -> count dispatched
+    const cameraMatrix = {
+      matrix: [
+        [1000, 0, Ww / 2],
+        [0, 1000, Hh / 2],
+        [0, 0, 1],
+      ],
+      distortion: [0.1, -0.2, 0, 0, 0.05],
+      model: "pinhole",
+    };
     const node = createRecorderNode({
-      id: "recorder/soak",
+      id: "recorder/churn-soak",
       path: dir,
       streams,
       connect,
       timestamp: new Date().toISOString(),
-      onFrame: (stream, _seq, tNs) => {
-        if (!MIRROR[stream]) return null;
+      cameraMatrix,
+      onFrame: (streamName, _seq, tNs) => {
+        if (!MIRROR[streamName]) return null;
         expect(typeof tNs).toBe("bigint");
-        extrasSeen.set(stream, (extrasSeen.get(stream) ?? 0) + 1);
-        return {
-          volt: { x: 1.5, y: -2.25 },
-          "volt.unit": "volt",
-          "volt.source": "live-snapshot",
-          angle: { x: 0.1, y: 0.2 },
-          "angle.unit": "radian",
-        };
+        return { volt: { x: 1.5, y: -2.25 }, "volt.unit": "volt", H: [1, 0, 0, 0, 1, 0, 0, 0, 1] };
       },
     });
 
-    // --- soak -------------------------------------------------------------
+    // --- soak with churn --------------------------------------------------
+    // track-1: added at start, descriptors every tick, removed at ~80%.
+    // track-2: added at ~50%, descriptors, kept to the end.
+    // extra-fovea frame stream: added ~30%, removed ~65% (drain-the-tail).
+    node.addDataStream("fovea/track-1");
+    const descriptorPosts: Record<string, number> = { "fovea/track-1": 0, "fovea/track-2": 0 };
+    let addedExtra = false;
+    let removedExtra = false;
+    let addedTrack2 = false;
+    let removedTrack1 = false;
+    let seqPointer = 0;
+
     const started = Date.now();
     while (Date.now() - started < SOAK_MS) {
-      await sleep(500);
+      await sleep(250);
+      const frac = (Date.now() - started) / SOAK_MS;
+      if (!addedExtra && frac > 0.3) {
+        node.addStream(CHURNED, { pipeId: pipeIdFor(CHURNED) });
+        addedExtra = true;
+      }
+      if (!addedTrack2 && frac > 0.5) {
+        node.addDataStream("fovea/track-2");
+        addedTrack2 = true;
+      }
+      if (!removedExtra && frac > 0.65) {
+        node.removeStream(CHURNED);
+        removedExtra = true;
+      }
+      if (!removedTrack1 && frac > 0.8) {
+        node.removeDataStream("fovea/track-1");
+        removedTrack1 = true;
+      }
+      seqPointer += 1;
+      const descriptor = {
+        bbox: { x: 10, y: 20, width: 30, height: 40 },
+        frames: { left: seqPointer, center: seqPointer, right: seqPointer },
+      };
+      if (!removedTrack1) {
+        node.postData("fovea/track-1", { tNs: Date.now() * 1e6, ...descriptor });
+        descriptorPosts["fovea/track-1"] += 1;
+      }
+      if (addedTrack2) {
+        node.postData("fovea/track-2", { tNs: Date.now() * 1e6, ...descriptor });
+        descriptorPosts["fovea/track-2"] += 1;
+      }
       node.stats(); // exercise the low-rate UI-stats path during the soak
     }
 
-    // Sample each producer's published latest seq on a MAIN-side reader BEFORE
-    // finalize (the connections unmap on release) — the independent ground
+    // Sample each STATIC producer's published latest seq on a MAIN-side reader
+    // BEFORE finalize (connections unmap on release) — the independent ground
     // truth for "published" against which written + drops must reconcile.
     const addon = createRequire(import.meta.url)(readerAddonPath()) as {
       open(name: string): object;
@@ -178,7 +233,7 @@ describe("recorder node soak (real worker + native pipes + mcap decode)", () => 
       close(h: object): void;
     };
     const publishedAtStop: Record<string, number> = {};
-    for (const name of CHANNELS) {
+    for (const name of STATIC) {
       const { shmName } = P.connect(pipeIdFor(name)); // extra refcount; released below
       const h = addon.open(shmName);
       publishedAtStop[name] = Number(addon.latestSeq(h));
@@ -188,8 +243,6 @@ describe("recorder node soak (real worker + native pipes + mcap decode)", () => 
 
     const elapsedSec = (Date.now() - started) / 1000;
     const finalize = await node.stop();
-    // Final counts: stop() folds the worker's finalize stats push (the tail
-    // drained past our last in-loop sample) before it resolves.
     const finalStats = node.stats();
 
     // Retire producers (consumers already released inside node.stop()).
@@ -206,41 +259,49 @@ describe("recorder node soak (real worker + native pipes + mcap decode)", () => 
     const buf = await readFile(filePath);
     const readable: McapReadable = {
       size: async () => BigInt(buf.byteLength),
-      read: async (offset, length) =>
-        buf.subarray(Number(offset), Number(offset + length)),
+      read: async (offset, length) => buf.subarray(Number(offset), Number(offset + length)),
     };
     const reader = await McapIndexedReader.Initialize({ readable });
 
-    // (b) metadata records present
+    // (d) metadata records present — incl. the wide cameraMatrix singleton.
     const metaRecords = new Map<string, Map<string, string>>();
-    for await (const m of reader.readMetadata())
-      metaRecords.set(m.name, new Map(m.metadata));
+    for await (const m of reader.readMetadata()) metaRecords.set(m.name, new Map(m.metadata));
     expect([...metaRecords.keys()]).toEqual(
-      expect.arrayContaining(["fovea:session", "fovea:finalize"]),
+      expect.arrayContaining(["fovea:session", "fovea:finalize", "fovea:wide-camera"]),
     );
     expect(metaRecords.get("fovea:session")!.has("timestamp")).toBe(true);
     expect(metaRecords.get("fovea:finalize")!.has("durationSec")).toBe(true);
+    const cam = metaRecords.get("fovea:wide-camera")!;
+    expect(JSON.parse(cam.get("matrix")!)).toEqual(cameraMatrix.matrix);
+    expect(JSON.parse(cam.get("distortion")!)).toEqual(cameraMatrix.distortion);
+    expect(cam.get("model")).toBe("pinhole");
 
-    // channels: 3 frame + 1 telemetry
+    // channels: static frames + churned frame + 2 descriptor + 1 telemetry
     const channels = [...reader.channelsById.values()];
     const byTopic = new Map(channels.map((c) => [c.topic, c]));
-    for (const name of CHANNELS) {
+    for (const name of [...STATIC, CHURNED]) {
       const ch = byTopic.get(name);
       expect(ch, `channel ${name}`).toBeTruthy();
       const md = ch!.metadata;
-      // (c) shape parity: mono → [H,W]; multi-channel → [H,W,C]
+      // (e) VERBATIM advert metadata.
       const parsedShape = JSON.parse(md.get("shape")!);
       expect(parsedShape).toEqual(CH > 1 ? [Hh, Ww, CH] : [Hh, Ww]);
       expect(md.get("dtype")).toBe(dtype);
+      expect(md.get("width")).toBe(String(Ww));
+      expect(md.get("height")).toBe(String(Hh));
       expect(md.get("channels")).toBe(String(CH));
       expect(md.get("pixelFormat")).toBe(pixelFormat);
-      expect(md.get("significantBits")).toBeTruthy();
+      expect(md.get("significantBits")).toBe(String(SIG_BITS));
+      expect(md.get("stride")).toBe(String(stride)); // advert's own number
     }
     expect(byTopic.has("telemetry")).toBe(true);
+    expect(byTopic.has("fovea/track-1")).toBe(true);
+    expect(byTopic.has("fovea/track-2")).toBe(true);
 
     // Walk every message once (readMessages yields in logTime order).
     const perChannelSeqs = new Map<string, number[]>();
     const telemetryDocs: Array<{ stream: string; seq: number; t: number }> = [];
+    const descriptorDocs = new Map<string, Array<Record<string, unknown>>>();
     const idToTopic = new Map(channels.map((c) => [c.id, c.topic]));
     let prevLogTime = -1n;
     let monotonic = true;
@@ -255,6 +316,11 @@ describe("recorder node soak (real worker + native pipes + mcap decode)", () => 
       if (topic === "telemetry") {
         const doc = JSON.parse(new TextDecoder().decode(msg.data));
         telemetryDocs.push({ stream: doc.stream, seq: doc.seq, t: doc.t });
+      } else if (topic.startsWith("fovea/")) {
+        const doc = JSON.parse(new TextDecoder().decode(msg.data));
+        const arr = descriptorDocs.get(topic) ?? [];
+        arr.push(doc);
+        descriptorDocs.set(topic, arr);
       } else {
         const arr = perChannelSeqs.get(topic) ?? [];
         arr.push(Number(msg.sequence));
@@ -262,60 +328,69 @@ describe("recorder node soak (real worker + native pipes + mcap decode)", () => 
       }
     }
 
-    // (d) single monotonic clock + 0-based relative domain
+    // (f) single monotonic clock + 0-based relative domain
     expect(monotonic).toBe(true);
     const stats = reader.statistics!;
     expect(stats.messageStartTime).toBe(minLogTime);
     expect(stats.messageEndTime).toBe(maxLogTime);
-    // Relative domain starts at 0 (viewer subtracts messageStartTime).
     expect(Number(minLogTime! - stats.messageStartTime)).toBe(0);
 
-    // (a) exact accounting per channel
+    // (a) exact accounting on the STABLE streams
     const report: Record<string, unknown> = {};
-    for (const name of CHANNELS) {
+    for (const name of STATIC) {
       const seqs = perChannelSeqs.get(name) ?? [];
       const written = finalStats[name]?.frames ?? 0;
       const dropped = finalStats[name]?.dropped ?? 0;
-      // decoded count == worker-reported written (final stats push in finalize)
       expect(seqs.length, `${name} decoded==written`).toBe(written);
-      // mcap sequences contiguous 0..N-1 — no lost write between ingest + file
       for (let i = 0; i < seqs.length; i++)
         expect(seqs[i], `${name} contiguous seq @${i}`).toBe(i);
-      // written + ring drops reconciles with the producer's published span.
-      // (main-side latest sampled a hair before finalize → worker may drain a
-      // few more; allow a tiny latch/connect-race slack, never NEGATIVE loss.)
       const accounted = written + dropped;
       const published = publishedAtStop[name]!;
       const slack = accounted - published;
       report[name] = { written, dropped, accounted, published, slack, fps: finalStats[name]?.fps };
       expect(slack, `${name} no unexplained loss (accounted>=published)`).toBeGreaterThanOrEqual(0);
       expect(slack, `${name} accounting tight (<=1s of frames)`).toBeLessThanOrEqual(
-        Math.ceil((finalStats[name]?.fps ?? 60)),
+        Math.ceil(finalStats[name]?.fps ?? 60),
       );
     }
 
-    // telemetry docs correlate stream+seq with an existing frame sequence
+    // (b) the CHURNED frame stream: a mid-file channel, contiguous 0..N-1,
+    // decoded == worker-written (drain-the-tail delivered the whole tail).
+    const churnSeqs = perChannelSeqs.get(CHURNED) ?? [];
+    const churnWritten = finalStats[CHURNED]?.frames ?? 0;
+    expect(churnWritten, "churned stream recorded frames").toBeGreaterThan(0);
+    expect(churnSeqs.length, "churned decoded==written").toBe(churnWritten);
+    for (let i = 0; i < churnSeqs.length; i++)
+      expect(churnSeqs[i], `churned contiguous seq @${i}`).toBe(i);
+    report[CHURNED] = { written: churnWritten, decoded: churnSeqs.length };
+
+    // (c) descriptor channels: count == posted, structure intact.
+    for (const name of ["fovea/track-1", "fovea/track-2"]) {
+      const docs = descriptorDocs.get(name) ?? [];
+      expect(docs.length, `${name} descriptor count == posted`).toBe(descriptorPosts[name]);
+      expect(docs.length, `${name} posted at least one`).toBeGreaterThan(0);
+      for (const d of docs) {
+        expect(typeof d.tNs).toBe("number");
+        expect(d.bbox).toMatchObject({ x: 10, y: 20, width: 30, height: 40 });
+        expect((d.frames as Record<string, number>).left).toBeGreaterThan(0);
+      }
+    }
+
+    // telemetry docs correlate stream+seq with a real frame sequence
     for (const doc of telemetryDocs) {
-      expect(MIRROR[doc.stream]).toBeTruthy(); // only L/R produce extras
+      expect(MIRROR[doc.stream]).toBeTruthy(); // only L/R + churned produce extras
       expect(perChannelSeqs.get(doc.stream)!).toContain(doc.seq);
       expect(Number.isFinite(doc.t)).toBe(true);
-    }
-    // one telemetry doc per dispatched-extras frame that actually got written
-    for (const name of ["left-fovea", "right-fovea"]) {
-      const docs = telemetryDocs.filter((d) => d.stream === name).length;
-      expect(docs).toBeGreaterThan(0);
-      expect(docs).toBeLessThanOrEqual(finalStats[name]?.frames ?? 0);
     }
     // center never carries extras
     expect(telemetryDocs.some((d) => d.stream === "center")).toBe(false);
 
-    // finalize stats sanity
     expect(Number(finalize.bytes)).toBeGreaterThan(0);
     expect(fileBytes).toBeGreaterThan(0);
 
     // eslint-disable-next-line no-console
     console.log(
-      "\n[soak] " +
+      "\n[churn-soak] " +
         JSON.stringify(
           {
             elapsedSec: Number(elapsedSec.toFixed(1)),
@@ -323,6 +398,7 @@ describe("recorder node soak (real worker + native pipes + mcap decode)", () => 
             messageCount: finalize.messageCount,
             chunkCount: finalize.chunkCount,
             telemetryDocs: telemetryDocs.length,
+            descriptorPosts,
             channels: report,
           },
           null,

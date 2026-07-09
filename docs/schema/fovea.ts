@@ -5,20 +5,34 @@ export const FOVEA_LIBRARY = "FoveaCamApp";
 export const TELEMETRY_TOPIC = "telemetry";
 export const RAW_FRAME_SCHEMA_NAME = "fovea.raw_frame/v1";
 export const TELEMETRY_SCHEMA_NAME = "fovea.frame_meta/v1";
+/** Multi-fovea descriptor (data) channel schema — one JSON channel per live
+ *  target (`fovea/<target-id>`), churned in/out with targets (multi-fovea-
+ *  recording r2 ruling 3). Fovea imagery is reconstructed OFFLINE from the raw
+ *  streams + per-frame params; these descriptors carry only the geometry +
+ *  frame pointers, never pixels. */
+export const DESCRIPTOR_SCHEMA_NAME = "fovea.descriptor/v1";
 export const JSON_SCHEMA_ENCODING = "jsonschema";
 export const RAW_FRAME_MESSAGE_ENCODING = "x-fovea-raw";
 export const TELEMETRY_MESSAGE_ENCODING = "json";
+export const DESCRIPTOR_MESSAGE_ENCODING = "json";
 
 export const SESSION_METADATA_NAME = "fovea:session";
 export const FINALIZE_METADATA_NAME = "fovea:finalize";
+/** Global singleton written once at start (multi-fovea-recording r2 ruling 2):
+ *  the wide camera's intrinsics + distortion. The wide camera is static, so it
+ *  applies to every wide frame and there are NO per-frame wide extras. */
+export const WIDE_CAMERA_METADATA_NAME = "fovea:wide-camera";
 
 export const DEFAULT_CHUNK_BYTES = 256 * 1024;
 export const DEFAULT_MAX_QUEUED_FRAMES = 8;
 
 export const RAW_FRAME_SCHEMA_DATA = JSON.stringify({
   description:
-    "Raw frame bytes exactly as captured (12p formats stay packed). " +
-    "Decode props are in the channel metadata.",
+    "Frame payload exactly as it arrived on the pipe — VERBATIM, never " +
+    "unpacked/decoded/decompressed. The channel metadata (pixelFormat, width, " +
+    "height, stride, significantBits, dtype, channels) is copied verbatim from " +
+    "the pipe advert; `pixelFormat` is OPAQUE and may carry codec suffixes " +
+    "(e.g. \"BayerRG12p/bz2\"). Those fields are the authoritative decode props.",
 });
 
 export const TELEMETRY_SCHEMA_DATA = JSON.stringify({
@@ -28,11 +42,26 @@ export const TELEMETRY_SCHEMA_DATA = JSON.stringify({
     "Correlate with the frame by stream+seq (or logTime).",
 });
 
+export const DESCRIPTOR_SCHEMA_DATA = JSON.stringify({
+  description:
+    "Multi-fovea target descriptor: {tNs, bbox:{x,y,width,height}, " +
+    "frames:{left,center,right}} where `frames` values are per-stream mcap " +
+    "sequence pointers into the raw camera channels the observation " +
+    "corresponds to. One channel per live target; the fovea imagery is " +
+    "reconstructed offline from the pointed-at raw frames + per-frame params.",
+});
+
+// All copied VERBATIM from the pipe advert (multi-fovea-recording r2.1 ruling
+// 8) — the recorder never interprets them. `stride` (bytes/row) is the advert's
+// own number (packed 12p / codec payloads own it, not a dtype computation).
 export const FRAME_METADATA_KEYS = [
   "dtype",
   "shape",
+  "width",
+  "height",
   "channels",
   "pixelFormat",
   "significantBits",
+  "stride",
 ] as const;
 

@@ -18,6 +18,7 @@ import {
   foldStreamStats,
   dispatchFrame,
   createRecorderNode,
+  RecorderFinalizedError,
   type SeqRead,
   type StreamFold,
   type StreamCounters,
@@ -25,6 +26,8 @@ import {
   type WorkerLike,
   type WorkerStreamInit,
   type RecorderPipeConnection,
+  type RecorderNodeIn,
+  type RecorderNodeOut,
 } from "@orchestrator/recorder-node";
 
 /** Drive `runStreamConsumer` with a scripted `read(want)` and collect frames. */
@@ -121,6 +124,50 @@ describe("runStreamConsumer (FIFO consume state machine)", () => {
     );
     expect(delivered).toEqual([5n, 6n]);
   });
+
+  it("writes the reader's ACTUAL payload length (ring-v5 bytes), byte-exact, not dim-derived", async () => {
+    // A compressed/codec stream: per-frame length varies and is NOT
+    // width*height*channels*bytesPerElement. The reader reports `bytes`; the
+    // consumer must slice `dst` to THAT (never bytesFor, never w*h*c*bpe), and
+    // the exact bytes must round-trip. `bytesFor` returns a wrong 999 to prove
+    // it is ignored whenever `bytes` is present.
+    const dst = new Uint8Array(64);
+    const frames: number[][] = [];
+    await runStreamConsumer({
+      dst,
+      startSeq: 1n,
+      bytesFor: () => 999,
+      read: (want) => {
+        if (want > 2n) return { closed: true };
+        const n = Number(want) * 3; // 3, then 6 — differs from 8*8 dims
+        for (let i = 0; i < n; i++) dst[i] = Number(want) * 10 + i;
+        return { seq: want, width: 8, height: 8, bytes: n };
+      },
+      delay: async () => {},
+      drainTarget: () => null,
+      onDrop: () => {},
+      onFrame: (view) => frames.push([...view]),
+    });
+    expect(frames).toEqual([
+      [10, 11, 12],
+      [20, 21, 22, 23, 24, 25],
+    ]);
+  });
+
+  it("falls back to bytesFor (advert frame size) when the ring reports no per-frame bytes (v4)", async () => {
+    const lengths: number[] = [];
+    await runStreamConsumer({
+      dst: new Uint8Array(64),
+      startSeq: 1n,
+      bytesFor: () => 12, // advert bytesPerFrame — used when `bytes` is absent
+      read: (want) => (want <= 2n ? { seq: want, width: 2, height: 2 } : { closed: true }),
+      delay: async () => {},
+      drainTarget: () => null,
+      onDrop: () => {},
+      onFrame: (view) => lengths.push(view.byteLength),
+    });
+    expect(lengths).toEqual([12, 12]);
+  });
 });
 
 describe("foldStreamStats (worker counters → meter deltas + UI stats)", () => {
@@ -156,6 +203,25 @@ describe("foldStreamStats (worker counters → meter deltas + UI stats)", () => 
     expect(meter.emit).toHaveBeenCalledWith("bytes", 500);
     expect(meter.drop).not.toHaveBeenCalled(); // no new drops
     expect(out["left-fovea"]).toMatchObject({ frames: 13, dropped: 2, bytes: 1300 });
+  });
+
+  it("folds over a GROWING then shrinking-but-retained key set (churn)", () => {
+    const meter = fakeMeter();
+    const folds = new Map<string, StreamFold>();
+    // Wave 1: only stream `a`.
+    foldStreamStats(meter, folds, { a: { ingested: 5, dropped: 0, written: 5, bytes: 50 } });
+    // Wave 2: `b` churned IN mid-run (a new key mid-snapshot); `a` unchanged.
+    // The worker keeps ended streams in its counters, so a departed stream still
+    // appears here with frozen totals — the fold must handle the changing set.
+    meter.ingest.mockClear();
+    const out = foldStreamStats(meter, folds, {
+      a: { ingested: 5, dropped: 0, written: 5, bytes: 50 }, // ended, frozen
+      b: { ingested: 3, dropped: 1, written: 2, bytes: 20 }, // newly added
+    });
+    expect(meter.ingest).toHaveBeenCalledWith("b", 3);
+    expect(meter.ingest).not.toHaveBeenCalledWith("a", expect.anything()); // no delta
+    expect(out.a).toMatchObject({ frames: 5, bytes: 50 }); // retained truthfully
+    expect(out.b).toMatchObject({ frames: 2, dropped: 1, bytes: 20 });
   });
 });
 
@@ -291,5 +357,210 @@ describe("createRecorderNode host lifecycle", () => {
       },
     });
     expect(captured.every((s) => s.wantsExtras)).toBe(true);
+  });
+});
+
+// A controllable fake worker: records everything posted to it and lets a test
+// drive the worker→main channel (so host-side orchestration — churn releases,
+// data-channel plumbing, start metadata — is exercised without a real thread).
+function controllableWorker() {
+  const posted: RecorderNodeIn[] = [];
+  let onMessage: ((m: RecorderNodeOut) => void) | undefined;
+  const worker: WorkerLike = {
+    postMessage: (m) => void posted.push(m as RecorderNodeIn),
+    on: (event, cb) => {
+      if (event === "message") onMessage = cb as (m: RecorderNodeOut) => void;
+    },
+    terminate: () => {},
+  };
+  return {
+    worker,
+    posted,
+    /** Push a worker→main message into the host. */
+    emit: (m: RecorderNodeOut) => onMessage?.(m),
+    /** Every message of a given type, in order. */
+    of: <T extends RecorderNodeIn["type"]>(type: T) =>
+      posted.filter((m): m is Extract<RecorderNodeIn, { type: T }> => m.type === type),
+  };
+}
+
+/** A pipe advert with codec-suffixed opaque pixelFormat + explicit
+ *  stride/significantBits — the recorder must copy these VERBATIM. */
+const advert12p = (pipeId: string, released: string[]): RecorderPipeConnection => ({
+  shmName: `shm/${pipeId}`,
+  spec: {
+    pixelFormat: "BayerRG12p/bz2", // opaque, codec-suffixed — never parsed
+    dtype: "U16",
+    width: 100,
+    height: 50,
+    channels: 1,
+    bytesPerFrame: 7500, // 150 * 50
+    stride: 150, // advert's own number (100 * 1.5) — NOT recomputed
+    significantBits: 12,
+    maxBytes: 8192, // over-provisioned slot
+  },
+  release: () => released.push(pipeId),
+});
+
+describe("createRecorderNode dynamic streams + data channels (host orchestration)", () => {
+  it("addStream connects the pipe, posts add-stream with verbatim advert fields", () => {
+    const fw = controllableWorker();
+    const node = createRecorderNode({
+      id: "recorder/add",
+      path: "/tmp/rec-add",
+      streams: {},
+      connect: (id) => advert12p(id, []),
+      timestamp: "2026-07-09T00:00:00.000Z",
+      readerPath: "unused",
+      spawn: () => fw.worker,
+    });
+    node.addStream("left", { pipeId: "pipe/L" });
+    const add = fw.of("add-stream");
+    expect(add).toHaveLength(1);
+    expect(add[0]!.stream).toMatchObject({
+      name: "left",
+      pixelFormat: "BayerRG12p/bz2", // opaque, unchanged
+      dtype: "U16",
+      width: 100,
+      height: 50,
+      channels: 1,
+      stride: 150, // verbatim
+      significantBits: 12, // verbatim (NOT derived from the suffixed name)
+      frameBytes: 7500, // advert bytesPerFrame → fallback length
+      maxBytes: 8192, // max(maxBytes, bytesPerFrame) → dst allocation
+    });
+    // Re-adding a live name is rejected (typed).
+    expect(() => node.addStream("left", { pipeId: "pipe/L2" })).toThrow(RecorderFinalizedError);
+  });
+
+  it("removeStream drains via the worker; the pipe releases only on stream-ended", () => {
+    const fw = controllableWorker();
+    const released: string[] = [];
+    const node = createRecorderNode({
+      id: "recorder/remove",
+      path: "/tmp/rec-remove",
+      streams: { left: { pipeId: "pipe/L" } },
+      connect: (id) => advert12p(id, released),
+      timestamp: "2026-07-09T00:00:00.000Z",
+      readerPath: "unused",
+      spawn: () => fw.worker,
+    });
+    node.removeStream("left");
+    expect(fw.of("remove-stream").map((m) => m.name)).toEqual(["left"]);
+    expect(released).toEqual([]); // NOT released yet — worker still draining
+    fw.emit({ type: "stream-ended", name: "left" });
+    expect(released).toEqual(["pipe/L"]); // released only after the confirmation
+  });
+
+  it("releases the pipe when a consumer ends because the pipe CLOSED (fovea-slot destroyed)", () => {
+    const fw = controllableWorker();
+    const released: string[] = [];
+    createRecorderNode({
+      id: "recorder/closed",
+      path: "/tmp/rec-closed",
+      streams: { left: { pipeId: "pipe/L" } },
+      connect: (id) => advert12p(id, released),
+      timestamp: "2026-07-09T00:00:00.000Z",
+      readerPath: "unused",
+      spawn: () => fw.worker,
+    });
+    // No removeStream — the worker posts stream-ended because the pipe closed.
+    fw.emit({ type: "stream-ended", name: "left" });
+    expect(released).toEqual(["pipe/L"]);
+  });
+
+  it("addStream / addDataStream after stop() throw RecorderFinalizedError", async () => {
+    const fw = controllableWorker();
+    const node = createRecorderNode({
+      id: "recorder/finalized",
+      path: "/tmp/rec-finalized",
+      streams: {},
+      connect: (id) => advert12p(id, []),
+      timestamp: "2026-07-09T00:00:00.000Z",
+      readerPath: "unused",
+      finalizeDeadlineMs: 10,
+      spawn: () => fw.worker,
+    });
+    const stopping = node.stop(); // sets finalizing synchronously
+    expect(() => node.addStream("late", { pipeId: "pipe/late" })).toThrow(RecorderFinalizedError);
+    expect(() => node.addDataStream("fovea/late")).toThrow(RecorderFinalizedError);
+    await stopping;
+  });
+
+  it("data channels: addDataStream/postData/removeDataStream plumb through, with guards", () => {
+    const fw = controllableWorker();
+    const node = createRecorderNode({
+      id: "recorder/data",
+      path: "/tmp/rec-data",
+      streams: {},
+      connect: (id) => advert12p(id, []),
+      timestamp: "2026-07-09T00:00:00.000Z",
+      readerPath: "unused",
+      spawn: () => fw.worker,
+    });
+    // postData for an unadded channel is silently dropped (not posted).
+    node.postData("fovea/1", { tNs: 1, bbox: { x: 0, y: 0, width: 1, height: 1 }, frames: {} });
+    expect(fw.of("data")).toHaveLength(0);
+
+    node.addDataStream("fovea/1");
+    expect(fw.of("add-data-stream").map((m) => m.name)).toEqual(["fovea/1"]);
+
+    node.postData("fovea/1", {
+      tNs: 1234,
+      bbox: { x: 10, y: 20, width: 30, height: 40 },
+      frames: { left: 7, center: 7, right: 8 },
+    });
+    const data = fw.of("data");
+    expect(data).toHaveLength(1);
+    expect(data[0]!.name).toBe("fovea/1");
+    expect(JSON.parse(data[0]!.payload)).toEqual({
+      tNs: 1234,
+      bbox: { x: 10, y: 20, width: 30, height: 40 },
+      frames: { left: 7, center: 7, right: 8 },
+    });
+
+    node.removeDataStream("fovea/1");
+    expect(fw.of("remove-data-stream").map((m) => m.name)).toEqual(["fovea/1"]);
+    // After removal, postData is dropped again.
+    node.postData("fovea/1", { tNs: 2, bbox: { x: 0, y: 0, width: 1, height: 1 }, frames: {} });
+    expect(fw.of("data")).toHaveLength(1); // unchanged
+  });
+
+  it("writes the wide cameraMatrix singleton into the start message (JSON-encoded)", () => {
+    const fw = controllableWorker();
+    createRecorderNode({
+      id: "recorder/cam",
+      path: "/tmp/rec-cam",
+      streams: {},
+      connect: (id) => advert12p(id, []),
+      timestamp: "2026-07-09T00:00:00.000Z",
+      readerPath: "unused",
+      cameraMatrix: {
+        matrix: [[1000, 0, 512], [0, 1000, 384], [0, 0, 1]],
+        distortion: [0.1, -0.2, 0, 0, 0.05],
+        model: "pinhole", // a string value stays a string
+      },
+      spawn: () => fw.worker,
+    });
+    const start = fw.of("start")[0]!;
+    expect(start.cameraMatrix).toEqual({
+      matrix: "[[1000,0,512],[0,1000,384],[0,0,1]]",
+      distortion: "[0.1,-0.2,0,0,0.05]",
+      model: "pinhole",
+    });
+  });
+
+  it("omits cameraMatrix from start when not provided", () => {
+    const fw = controllableWorker();
+    createRecorderNode({
+      id: "recorder/nocam",
+      path: "/tmp/rec-nocam",
+      streams: {},
+      connect: (id) => advert12p(id, []),
+      timestamp: "2026-07-09T00:00:00.000Z",
+      readerPath: "unused",
+      spawn: () => fw.worker,
+    });
+    expect(fw.of("start")[0]!.cameraMatrix).toBeUndefined();
   });
 });
