@@ -59,6 +59,15 @@ process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL
 // Set application name for Windows 10+ notifications
 if (process.platform === "win32") app.setAppUserModelId(app.getName());
 
+// Disable Chromium's Graphite (Skia's new raster backend, default-on in this
+// Electron's Chromium): under our sustained many-canvas putImageData load
+// (disparity-scope paints ~7 full-rate views) it dies after minutes with
+// "Graphite insertRecording failed with status 5" → GPU process exit_code=5
+// (rig 2026-07-09 00:41). Ganesh (the fallback) carries the same load
+// stably. Must be appended BEFORE app ready. Revisit on Electron upgrades —
+// Graphite may stabilize, and this line then deserves an A/B on the rig.
+app.commandLine.appendSwitch("disable-features", "SkiaGraphite");
+
 if (!app.requestSingleInstanceLock()) {
   app.quit();
   process.exit(0);
