@@ -1,7 +1,7 @@
 # Capture + recorder as thread nodes (named streams, metadata callbacks, raster capture)
 
-Status: **RULED** (user, 2026-07-09) — design sketch for review; phases below
-are planner checkpoints, not yet dispatched.
+Status: **SHIPPED** (2026-07-09/10 — all waves landed; see AS SHIPPED at the
+bottom; rig pass owed, stage-f §"Capture/recorder nodes").
 
 ## Rulings round 2 (user, 2026-07-09 — veto answers + scope)
 
@@ -238,3 +238,45 @@ with the previous writer (bench-recorder pass); capture parity (same
 resources, full bit depth) vs a pre-wave capture; raster capture: N-cell grid
 → N indexed resources with per-shot metadata snapshots; orchestrator main-loop
 utilization flat while recording (the point of the wave).
+
+## AS SHIPPED (2026-07-09/10, waves I-1 → R-3)
+
+All 10 rulings + phases 0–5 landed (R-3 drain table: no gaps). Commits:
+
+- **I-1a `388454f`** — Phase 0 FIFO (`readSeqInto`: Ok/NotYet/Gone(oldest)/
+  Closed; writer untouched; test 28) + Phase 1 raw pipes (`RawPipe.cpp`,
+  `camera/<serial>/raw`, test 29). `ringDepth` was already plumbed C++-side.
+- **I-1b `b50f63c`** — debug-class `kind` dimension (capture-preview window
+  coexists with the debugger), `recording:finished`→`openViewer` receive
+  side, Cmd-R consumer, Delegation/overlay legacy deleted.
+- **R-1 `3c60257`** — found+fixed a close/publish race LOSING THE LAST FRAME
+  (both read fns re-load latestSeq after observing CLOSED); preload
+  readSeqInto mirror; verified no-false-Gone ordering + jump termination.
+- **I-2 `2e35fa7`** — recorder node: ONE worker (FIFO consume + MCAP encode,
+  frames copied once, never postMessage'd); recording.ts on raw pipes
+  (ringDepth 48); legacy deleted (legacy.ts, RECORDER_BACKEND,
+  stream-writer.ts, stream-decoder.py); graph row recorder/<session>.
+- **R-2 `7de9107`** — onFrame carries deviceTimestamp (trusted time, the FIN
+  anchor) SEPARATE from the single monotonic logTime axis; permanent
+  zero-loss soak (real worker + native pipes + mcap decode; slack 0).
+- **I-3 `e951401`** — capture node (in-worker full-depth stack/wrap/diff/
+  slice, VERBATIM port; pending held in-worker; onCaptureStart once/run);
+  pull-based getPreview (ruling 7); per-shot awaitable capture({tag});
+  drawer Capture + Raster Capture (renderer-sequenced, abortable);
+  openDebug open-or-focus; on-demand raw pipes (idle = no producer AND no
+  consumer).
+- **R-3 `bee815c`** — HIGH fix: capture↔recording raw-pipe exclusivity
+  (unrefcounted broker advertise would clobber a live recording); recorder
+  finalize deadline (30 s → force-terminate, truncated-container crash
+  contract); per-stream extras gating (center posts no per-frame notices);
+  numeric ground-truth capture soak; pixel parity CONFIRMED verbatim.
+
+Notes: the `.fovea` container surface (writer/worker-source/types) survives
+as the bench/test contract; `frame.raw` is the UNPACKED full-depth container
+(byte-identical to the pre-wave writer; truly-packed 12p would need a
+pre-Frame ArvBuffer tap — documented, not planned). Known residuals
+(pre-existing class, non-blocking): `grabBurst` has no mid-burst stall
+timeout; `nodeId.recorder/<session>`-style helpers worth adding when
+graph-contract next opens. Gates at close: vue-tsc 0; vitest 483/483; soaks
+3/3; vite build 0 (orchestrator 268.33 kB gzip 79.91 kB); core make + tests
+09–29. Rig pass owed: stage-f §"Capture/recorder nodes".

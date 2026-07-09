@@ -343,6 +343,33 @@ source the RAW fovea CONVERT pipes (single ÷magnification, legacy
 - [ ] **Stereo/composite unaffected** — SGBM + anaglyph/difference center
   views still consume the warped pipes (wide-registered imagery).
 
+## Capture/recorder nodes (2026-07-09/10 waves, 388454f→bee815c)
+
+- [ ] **Recorder zero-loss on real cameras** — record L/C/R for ≥ 60 s at
+  full rate: recorder/<session> graph row shows ingest ≈ camera rate,
+  drops ≈ 0, `written + drops == published` per channel; orchestrator
+  main-loop utilization FLAT while recording (the point of the wave).
+- [ ] **Auto-open** — stopping a recording opens the viewer window on the
+  finished `.fovea`; playback seeks from 0; telemetry extras present on
+  L/R frames (live-snapshot provenance until FIN pairing lands).
+- [ ] **Capture full-depth parity** — same resources as a pre-wave capture
+  (wide/fovea/center/left/right/diff), byte-identical saved output on live
+  sensor formats; `significantBits` of the raw-pipe container matches
+  `frame.raw_format`.
+- [ ] **Raster capture** — N set-points → N indexed resources with per-shot
+  metadata snapshots; preview window opens (and re-focuses, never toggles
+  shut) after each run; abort (Esc / second click) discards + retires the
+  raw pipes.
+- [ ] **Exclusivity live-race** — capture button mid-recording → typed
+  refusal; Cmd-R mid-raster → startRecording returns false; no clobbered
+  recording, no wedge, recording file intact.
+- [ ] **Cmd-R** — toggles recording start/stop in manual-control; no-op in
+  other apps.
+- [ ] **Finalize deadline** — a legitimately large container finalizes well
+  inside 30 s (the force-terminate path should never fire on healthy disk).
+- [ ] **Raw pipes park** — with no recording/capture active, the
+  camera/<serial>/raw rows show zero rate (capture: no producer at all).
+
 ## Blocked (hardware change required)
 
 - [ ] **Center-camera hardware trigger** — needs the slimmer CAM0 cable

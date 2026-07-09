@@ -1,10 +1,17 @@
 # The `.fovea` recorder container and viewer
 
-> Source of truth: `app/orchestrator/recorder/*` (writer worker),
-> `app/orchestrator/stream-writer.ts`, `app/modules/manual-control/
-> recording.ts` (voltage binding), the `viewer` session +
-> `app/src/windows/ViewerWindow.vue`, `app/lib/orchestrator/
-> viewer-contract.ts`.
+> Source of truth: `app/orchestrator/recorder-node.ts` (the recorder THREAD
+> NODE — one worker: FIFO pipe consume + MCAP encode/write) +
+> `app/orchestrator/capture-node.ts` (its capture sibling),
+> `app/orchestrator/recorder/*` (the container/writer contract surface),
+> `app/modules/manual-control/recording.ts` (streams map + extras callback),
+> the `viewer` session + `app/src/windows/ViewerWindow.vue`,
+> `app/lib/orchestrator/viewer-contract.ts`. Design + rulings:
+> `docs/proposals/capture-recorder-nodes.md` (SHIPPED 2026-07-09/10 — named
+> raw FIFO pipes, per-frame `onFrame(stream, seq, deviceTs)` extras callback,
+> capture `onCaptureStart` once per run, pull-based capture previews,
+> auto-open viewer on `recording:finished`; legacy `.stream`/`.meta` backend
+> DELETED).
 
 ## 1. Container
 
