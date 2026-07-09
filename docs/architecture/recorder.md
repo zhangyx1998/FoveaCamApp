@@ -65,9 +65,18 @@ own byte count.
   uncabled). Fovea imagery is reconstructed offline from the pointed-at raw
   frames + per-frame params; it is never re-encoded.
 
-*(Planner-review stub: the exact channel/schema table is B-owned — transcribe
-from the writer's schema registry in `orchestrator/recorder/` when pinning
-this section.)*
+**Channel/schema table** (pinned from `docs/schema/fovea.ts`, re-exported by
+`orchestrator/recorder/schema.ts` — the writer registers exactly these):
+
+| Channel/topic | Schema | Encoding | Payload |
+|---|---|---|---|
+| one per recorded stream (topic = stream name, e.g. `camera/<serial>/raw12p`) | `fovea.raw_frame/v1` | `x-fovea-raw` | frame bytes VERBATIM from the pipe; channel metadata = `FRAME_METADATA_KEYS` copied from the advert |
+| `telemetry` | `fovea.frame_meta/v1` | `json` | per-frame `{stream, seq, t, ...extras}` (volt/angle/affine — the legacy `.meta` sidecar's `x` payload); correlate by stream+seq |
+| `fovea/<target-id>` (one per live target, churned with arm/disarm) | `fovea.descriptor/v1` | `json` | `{tNs, bbox, frames:{left,center,right}}` — see below |
+
+Metadata records (not channels): `fovea:session` (ISO wall-clock anchor at
+start), `fovea:wide-camera` (below), `fovea:finalize` (durationSec, written
+at finalize — its presence marks a clean close).
 
 ## 2. Write path
 

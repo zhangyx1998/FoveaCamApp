@@ -1,5 +1,9 @@
 # Controller node + FIFO edges (ruled proposal, 2026-07-08)
 
+Status: **SHIPPED (code-complete 2026-07-08, through `417e8f2`; drag ruling
+amended through `22aeabc`; rig pass owed — `hardware/stage-f.md`
+§"Controller node + FIFO edges")**.
+
 User directives (planner-ruled into this wave):
 
 1. **Use FIFO for undistort node input.** The undistort brick must process

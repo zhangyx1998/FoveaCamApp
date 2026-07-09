@@ -4,12 +4,11 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// The `viewer` session contract — the PINNED CONTRACT shared by C-8 (the
-// data layer, `@orchestrator/sessions/viewer`) and A-11 (the viewer window
-// UI), spelled out verbatim in docs/history/refactor/split-of-work.md; the planner
-// arbitrates any change. Kept in its own file (not `contracts.ts`) so the
-// two concurrent threads never edit the same file. Renderer-safe and
-// Vue-free, like every contract.
+// The `viewer` session contract — the PINNED CONTRACT shared by the data
+// layer (`@orchestrator/sessions/viewer`) and the viewer window UI; the
+// planner arbitrates any change (additive evolution only). Kept in its own
+// file (not `contracts.ts`) so the two sides never edit the same file.
+// Renderer-safe and Vue-free, like every contract.
 //
 // Frames: published through the STANDARD frame transport under this
 // session's namespace with frame name `<fileId>:<channel>` — i.e. wire topic

@@ -1,5 +1,8 @@
 # PID nodes + disparity-scope view re-plumb (directive 2026-07-08)
 
+Status: **SHIPPED (code-complete 2026-07-08, through `9217523`; rig pass
+owed — `hardware/stage-f.md` §"PID nodes + view re-plumb")**.
+
 User directive (rig finding + architecture ruling), verbatim intent:
 
 1. **Undistort nodes are still not in place** for disparity-scope. Finding

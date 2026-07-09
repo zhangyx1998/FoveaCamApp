@@ -19,7 +19,8 @@ camera/<serial>/raw                 UNPACKED 16-bit container tap (recorder src)
 camera/<serial>/raw12p              PACKED verbatim wire payload tap, dtype U8
                                     (recorder src; refcounted raw-pipe registry)
 <sourceId>/zlib                     per-frame zlib compression sibling
-                                    (CompressStream; `pixelFormat` gains `/zlib`)
+                                    (the compress brick; `pixelFormat` gains
+                                    `/zlib`)
 camera/<serial>/convert             BGRA8 converted pipe
 camera/<serial>/undistort           undistorted pipe (native remap)
 camera/<serial>/undistort/fovea/<n> dynamic fovea crop pipe (crop of undistort)
@@ -97,7 +98,7 @@ that GC storm).
 | heatmap | `HeatmapStream` — ChainedStream colormap (TURBO) of a 1-channel F32/U8 source to BGRA8; reactive `{min,max}` (absent = per-frame auto-normalize) | `<sourceId>/heatmap/<name>` pipe |
 | composite | `CompositeStream` — two-input BGRA8 color join (StereoStream skeleton, no SGBM): reactive `{mode: anaglyph\|difference}`; anaglyph = LEFT's R + RIGHT's G/B (red = left eye), difference = per-channel `absdiff`; left-paced, latest-wins right; alpha 255 | `stereo/<name>` pipe (BGRA8) |
 | pair | `PairStream` — per-stage L/R join on its own thread; two in-process FIFO `TapChannel` inputs (`OwnedFrame::Ptr` — pins references, no pixel copy); anchors pushed via NAPI at FIN rate; `root` tolerance-matches raw arrivals to the FIN, `exact` joins on carried deviceTimestamps; batched record iterator + meter; always-running with the trigger topology (`pairing-nodes.md`) | pair records (async generator + meter) |
-| compress | `CompressStream` — FIFO-reads any frame pipe, republishes each frame as an INDEPENDENT zlib blob (seekable) into a `/zlib` sibling pipe; ring-v5 `payloadBytes` carries the variable length; optional per-stream (`multi-fovea-recording.md` ruling 9) | `<sourceId>/zlib` pipe |
+| compress | `CompressRunner`/`CompressBinding` (`CompressStream.cpp` — no class named `CompressStream`) — taps any frame brick (`OwnedFrame` FIFO), republishes each frame as an INDEPENDENT zlib blob (seekable) into a `/zlib` sibling pipe; ring-v5 `payloadBytes` carries the variable length; optional per-stream (`multi-fovea-recording.md` ruling 9) | `<sourceId>/zlib` pipe |
 | KCF tracker | native thread, latest-frame-wins; a CHAINED variant (`camera/<serial>/undistort/kcf`, controller-node §3.5) tracks the undistorted view on its own thread | track results (async generator + meter) |
 | marker detector | `detector.stream` (native) | detection sets |
 | vision kernels | per-session `worker_thread` (`vision-worker.ts`), dispatched by kind | results + derived frames over MessagePort |
@@ -131,8 +132,22 @@ wire it under `win/<windowId>/...` (the channel's windowId — spoof-proof,
 `hub.onWindowClosed`. Multi-fovea is the flagship: per-target fovea nodes +
 KCF spawn/cancel mid-flight as targets come and go.
 
-*(Planner-review stub: the compose request/validation surface is C-owned —
-expand this section from `pipe-session.ts` once its API is final.)*
+The command surface (`pipe-contract.ts`): `compose({id, kind, inputs,
+params?}) → NodeAdvert` and `decompose(id)`, with two id-rooted modes
+(`pipe-session.ts`):
+
+- **`win/<windowId>/...`** — validated against the CALLER's channel identity
+  (spoof-proof: composing outside your own `win/` namespace is rejected);
+  owned by that window; decompose/window-close tears it down.
+- **`camera/...`** — REFCOUNT semantics: compose = ensure-materialized + ref
+  (N windows share one brick), decompose = unref, refs→0 = teardown through
+  the kind's registered `NodeMaterializer`. Kinds without a materializer
+  (convert/undistort, already advertised by the session) are ref-only.
+
+Materializers (`PipeSessionDeps.materializers`, one per brick kind) own
+create/teardown of the native resources; every (re)materialization bumps the
+node's epoch so consumers reconnect. The broker, materializers, and window
+hooks are injected — vitest drives the whole surface core-free.
 
 ## 6. Observability
 

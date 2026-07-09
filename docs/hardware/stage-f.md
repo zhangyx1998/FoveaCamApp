@@ -13,7 +13,7 @@ names the mechanism it gates.
   channels (streamed telemetry correctness). `orchestrator/controller.ts`.
 - [ ] **FW5 coexistence** — streamed actuation + CMD_FRAME captures together:
   no `Streams::snapshot` corruption, FIN voltages sane.
-  `orchestrator/actuation.ts` + `scheduler.ts`.
+  `orchestrator/controller-node.ts` (absorbed actuation.ts) + `scheduler.ts`.
 - [ ] **Serial rate** — `controller:<port>` packets/sec in the profiler at
   target (kHz-class) with the loop freed + fire-and-forget streaming.
 - [ ] **FIN exposure voltage** — live FIN↔frame pairing: recorded
@@ -228,11 +228,12 @@ names the mechanism it gates.
   distortion mirror-following at detection rate (gate dedupe means wire
   traffic equal or lower than the old 1 ms loop); marker servo + manual-
   control unchanged in feel.
-- [ ] **Trigger-mode pairing e2e** — v2 firmware + L/R trigger cabling:
-  `startTriggerCapture` round-robins CMD_FRAME over registered position
-  streams; `onPair` emits L/R descriptor pairs matched by tExposure within
-  tolerance (bench default 8 ms — TUNE on hardware to half the min frame
-  interval); unmatched FINs age out of the ring without wedging.
+- ~~**Trigger-mode pairing e2e** — `onPair` emits L/R descriptor pairs
+  matched by tExposure within tolerance~~ — SUPERSEDED: the in-JS `onPair`
+  matcher was deleted when pairing moved into the native PairStream brick
+  (pairing-nodes ruling 6). Live checks — including the round-robin
+  `startTriggerCapture` path and tolerance tuning — are §"Pairing nodes"
+  below.
 - [ ] **Cmd/Ctrl-W** — closes each window class with the expected rules
   (app close respawns welcome; profiler/projection just close).
 - [ ] **Launcher regroup** — welcome shows Applications / Calibration /
@@ -258,8 +259,9 @@ names the mechanism it gates.
   changing Template Scale retunes the scalers live; extreme zoom/expansion
   combos clamp (native ring guard) rather than crash.
 - [ ] **Views at pipe rate** — sliced center view + guide strip render at
-  their slice pipes' rate; the DiffView (L vs R difference) composites at
-  fovea pipe rate; match heatmaps still arrive as session frames.
+  their slice pipes' rate; the composite center tile (anaglyph | difference —
+  replaced the old DiffView canvas in the composite-node wave) renders at its
+  pipe's rate; match heatmaps still arrive as session frames.
 - [ ] **Scale brick health** — `scaleProbeAll` rows show sane rate/util; the
   strip scaler's upsample cost is visible per node (was hidden inside the
   monolithic kernel's budget).

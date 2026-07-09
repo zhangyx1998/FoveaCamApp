@@ -1,8 +1,9 @@
 # Split disparity nodes (slice + per-side template match + pid join)
 
-Status: **RULED** (user, 2026-07-09). Supersedes the monolithic disparity
-kernel (`win/disparity-scope/disparity`, C-22b) — the last app-private
-many-input vision worker.
+Status: **SHIPPED (code-complete 2026-07-09, through `7128f5a`; rig pass
+owed — `hardware/stage-f.md` §"Split disparity nodes")**. Supersedes the
+monolithic disparity kernel (`win/disparity-scope/disparity`, C-22b) — the
+last app-private many-input vision worker.
 
 ## The rulings (user, 2026-07-09, verbatim intent)
 

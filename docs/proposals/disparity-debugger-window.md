@@ -1,6 +1,7 @@
 # Disparity-scope debugger window (module-owned debug sub-window)
 
-Status: **RULED** (user, 2026-07-09). Follow-up to
+Status: **SHIPPED (code-complete 2026-07-09, `fc9ac30`; rig pass owed —
+`hardware/stage-f.md` §"Disparity debugger window")**. Follow-up to
 `stereo-disparity-and-heatmap-nodes.md` — the main UI sheds its inline debug
 strip; the WS2 2b `debug` window class gains its first real user.
 

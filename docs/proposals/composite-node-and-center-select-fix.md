@@ -1,6 +1,7 @@
 # Composite (anaglyph/difference) node + center-select dropdown fix
 
-Status: **RULED** (user, 2026-07-09). AMENDS
+Status: **SHIPPED (code-complete 2026-07-09, `59ad332`; rig pass owed —
+`hardware/stage-f.md` §"Composite node + center select")**. AMENDS
 `stereo-disparity-and-heatmap-nodes.md` §Anaglyph: the anaglyph (and the
 L-vs-R difference) center views become a REAL two-input native brick with a
 node-graph row — the "renderer canvas composite" design is retired.

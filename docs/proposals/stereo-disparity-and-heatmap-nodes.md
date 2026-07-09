@@ -1,8 +1,9 @@
 # Stereo SGBM + heatmap nodes; center-view anaglyph/SGBM restore
 
-Status: **RULED** (user, 2026-07-09). Follow-up to
-`split-disparity-nodes.md` — the center view's option set grows back past
-the split.
+Status: **SHIPPED (code-complete 2026-07-09, `9e15592`→`7a93e48`; rig pass
+owed — `hardware/stage-f.md` §"Center-view restore + stereo SGBM/heatmap
+nodes")**. Follow-up to `split-disparity-nodes.md` — the center view's
+option set grows back past the split.
 
 ## The rulings (user, 2026-07-09, verbatim intent)
 
