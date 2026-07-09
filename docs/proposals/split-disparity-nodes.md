@@ -27,16 +27,22 @@ many-input vision worker.
 ```
 camera/<C>/undistort ─► …/slice/scope-strip ─► …/scale/match ────────► match/L (haystack)   match/L ─► win/disparity-scope/pid ─► controller
                     └─► …/slice/scope-tile                     └─────► match/R (haystack)   match/R ─►        ▲
-camera/<L>/undistort ─► …/undistort/scale/scope-needle ─(needle)────► match/L                                 │ (target)
-camera/<R>/undistort ─► …/undistort/scale/scope-needle ─(needle)────► match/R                camera/<C>/undistort/kcf
+camera/<L>/convert ──► …/convert/scale/scope-needle ─(needle)──────► match/L                                 │ (target)
+camera/<R>/convert ──► …/convert/scale/scope-needle ─(needle)──────► match/R                camera/<C>/undistort/kcf
 ```
 
 - `slice/scope-strip`: the match haystack CROP — the target-centered center
   tile expanded by `expand_x/expand_y`. One crop, shared by both sides.
 - `…/scope-strip/scale/match`: the strip SCALER (`ratio = downsample`) — the
   pre-sized haystack both match nodes read.
-- `camera/<L|R>/undistort/scale/scope-needle`: per-side needle scaler
-  (`dsize = foveaTileSize(...)`) — the pre-sized match tile.
+- `camera/<L|R>/convert/scale/scope-needle`: per-side needle scaler
+  (`dsize = foveaTileSize(...)`) — the pre-sized match tile. Source is the RAW
+  fovea CONVERT pipe, NOT the homography-undistort pipe (round-2 too-small-
+  needle fix, 2026-07-09): the warp already lands the fovea at wide density, so
+  `foveaTileSize` would divide by the magnification a second time (≈81× area
+  too small). The raw convert pipe fills the frame at fovea-native resolution
+  → a single, correct ÷magnification. The undistort pipes stay the
+  stereo/composite source.
 - `slice/scope-tile`: display-only — the unexpanded center tile the "Wide
   Angle Sliced" view shows. Pure view pipe; no consumer other than the
   renderer.

@@ -23,9 +23,15 @@ feeders), then composes the pipeline out of GENERAL-PURPOSE nodes:
   center tile) — live-steered (`setFoveaRect`) as the target/zoom move.
 - **Scale nodes** (the ScaleStream brick; the match workers do NO resizing):
   `.../scope-strip/scale/match` at reactive `{ratio: s}` and one
-  `camera/<L|R>/undistort/scale/scope-needle` per fovea at
+  `camera/<L|R>/convert/scale/scope-needle` per fovea at
   `{dsize: foveaTileSize}` — both sides land at `s` px per wide px (CCOEFF
-  matching is not scale-invariant).
+  matching is not scale-invariant). The needle source is the **raw fovea
+  CONVERT pipe**, NOT the homography-undistort pipe: the warp already lands
+  the fovea at wide density, so feeding it to `foveaTileSize` (which divides
+  by the magnification too) demagnifies TWICE (≈9× linear / 81× area too
+  small — the round-2 too-small-needle defect). The raw convert pipe fills
+  the frame at fovea-native resolution, so `foveaTileSize` is the single,
+  correct ÷magnification (legacy `getFoveaTile` semantics).
 - **Two `template-match` vision workers** (`win/disparity-scope/match/L`,
   `/R`): needle = the pre-sized fovea, haystack = the shared pre-sized strip.
   Results carry the strip frame's **crop origin** (forwarded unscaled through
@@ -174,6 +180,22 @@ scale-consistency invariants).
   under the measured magnification, center dims under the nominal FOV-ratio
   fallback (the legacy `W_c/z`). RIG-GATED: verify the match rects on the
   debugger strip are fovea-footprint sized.
+- **RESOLVED — round 2 (user-confirmed after 8bdd5b6, "needles STILL far too
+  small — ≈9× linear / 81× area"):** the needle scaler's SOURCE was the L/R
+  **homography-undistort** pipe. That warp lands the fovea at WIDE pixel
+  density (it has already divided by the magnification once); `foveaTileSize`
+  then divides by it a SECOND time → the ≈81× area shrink. The strip has no
+  such division (it is native center imagery scaled to `s`), so the defect is
+  needle-only. Fix (session `needleSources`): feed the needle scalers from the
+  **raw fovea CONVERT pipe** (`camera/<L|R>/convert`) — full fovea FOV filling
+  the frame at fovea-native resolution — so `foveaTileSize` is the single,
+  correct ÷magnification (legacy `getFoveaTile` semantics). `foveaTileSize` +
+  `needleGeometry` are UNCHANGED (they were correct for a frame-filling
+  source; only the source was wrong). The warped undistort pipes stay the
+  stereo/composite source (`warpedSources`) — those bricks want the wide-
+  aligned warp. RIG-GATED: verify the debugger needle now renders the
+  fovea view at the strip's pixel scale (not a ~1/9 sub-tile), and that
+  match_left/right scores recover.
 - `analyzeVergence` inputs verified scale-consistent: the guide strip, the tile
   grid, and `center.rect` all resolve in the same wide-frame-pixel space that
   `stepVergence` lifts to angles via `P2A.C`. No additional ratio needed there.

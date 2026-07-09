@@ -843,9 +843,23 @@ export default function disparityScopeSession(
         width: Math.max(1, Math.round(tile0.width)),
         height: Math.max(1, Math.round(tile0.height)),
       };
+      // The NEEDLE scaler source is the RAW fovea CONVERT pipe — NOT the L/R
+      // homography-undistort pipe (too-small-needle defect, user-confirmed
+      // round 2). The homography warp maps the fovea into the wide/projection
+      // frame: on this branch it lands the fovea view at WIDE pixel density (a
+      // demagnified patch), so it has ALREADY divided by the magnification
+      // once. Feeding that pipe to the needle scaler — whose `foveaTileSize`
+      // dsize divides by the magnification AGAIN — demagnifies TWICE (≈9× linear
+      // / 81× area too small vs the strip; the strip has no such division). The
+      // raw convert pipe is the full fovea FOV filling the frame at fovea-native
+      // resolution, so `foveaTileSize` (resize the WHOLE frame to the fovea's
+      // wide-frame footprint at `sF`) is the SINGLE, correct ÷magnification —
+      // the exact legacy `getFoveaTile` semantics, now robust to the warp's
+      // (rig-gated) scale. The warped pipes stay the stereo/composite source
+      // below (`warpedSources`) — those bricks WANT the wide-aligned warp.
       const needleSources: Record<"L" | "R", string> = {
-        L: undistortIds.L ?? nodeId.convert(t.leases.L.camera.serial),
-        R: undistortIds.R ?? nodeId.convert(t.leases.R.camera.serial),
+        L: nodeId.convert(t.leases.L.camera.serial),
+        R: nodeId.convert(t.leases.R.camera.serial),
       };
       for (const side of ["L", "R"] as const) {
         const cam = t.leases[side].camera;
@@ -861,12 +875,23 @@ export default function disparityScopeSession(
         );
       }
 
+      // The L/R HOMOGRAPHY-warped undistort pipes — the wide-aligned,
+      // pre-warped sources the STEREO (SGBM) + COMPOSITE (anaglyph/difference)
+      // bricks consume (they WANT the warp — it registers both foveas into the
+      // shared wide/projection frame). NOT the needle source (see above): the
+      // warp is overlay-shaped, not a match template. Convert fallback on an
+      // uncalibrated fovea cam (no undistort brick advertised).
+      const warpedSources: Record<"L" | "R", string> = {
+        L: undistortIds.L ?? nodeId.convert(t.leases.L.camera.serial),
+        R: undistortIds.R ?? nodeId.convert(t.leases.R.camera.serial),
+      };
+
       // STEREO SGBM + HEATMAP (stereo-disparity-and-heatmap-nodes): the
-      // center view's "SGBM Disparity" option. Chained on the same L/R
-      // pre-warped sources the needles read; the renderer binds ONLY the
-      // heatmap pipe — until it connects (view selected), the consumer gate
-      // keeps BOTH bricks parked and the SGBM cost is zero (ruling 2).
-      // Disparity is left-frame-sized; the heatmap ring matches it.
+      // center view's "SGBM Disparity" option. Chained on the L/R pre-warped
+      // undistort sources; the renderer binds ONLY the heatmap pipe — until it
+      // connects (view selected), the consumer gate keeps BOTH bricks parked
+      // and the SGBM cost is zero (ruling 2). Disparity is left-frame-sized;
+      // the heatmap ring matches it.
       const camL = t.leases.L.camera;
       const stereoDims = {
         maxWidth: camL.getFeatureInt("Width"),
@@ -874,8 +899,8 @@ export default function disparityScopeSession(
       };
       stereo = createStereoPipe(
         stereoSeam,
-        needleSources.L,
-        needleSources.R,
+        warpedSources.L,
+        warpedSources.R,
         nodeId.stereo("scope"),
         stereoDims,
       );
@@ -889,14 +914,14 @@ export default function disparityScopeSession(
       // COMPOSITE (composite-node-and-center-select-fix): the center view's
       // "Disparity (L v.s. R)" and "Anaglyph" options — the two-input BGRA
       // brick that REPLACES the renderer's DiffView canvas composite. Chained
-      // on the SAME L/R undistort pipes DiffView consumed (`needleSources`).
-      // Parked until the renderer connects it (view selected); the mode is
-      // retuned from `state.view` below (initial sync covers activate on an
-      // already-selected disparity/anaglyph view).
+      // on the SAME L/R warped undistort pipes DiffView consumed
+      // (`warpedSources`). Parked until the renderer connects it (view
+      // selected); the mode is retuned from `state.view` below (initial sync
+      // covers activate on an already-selected disparity/anaglyph view).
       composite = createCompositePipe(
         compositeSeam,
-        needleSources.L,
-        needleSources.R,
+        warpedSources.L,
+        warpedSources.R,
         nodeId.stereo("composite"),
         stereoDims,
       );

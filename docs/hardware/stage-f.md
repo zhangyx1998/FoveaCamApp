@@ -321,14 +321,27 @@ names the mechanism it gates.
   build under the same scene (Graphite-relevant: fewer per-frame
   putImageData/composite passes).
 
-## Needle sizing fix (2026-07-09, user rig find "needles way too small")
+## Needle sizing fix (2026-07-09, user rig find "needles way too small", 2 rounds)
 
-- [ ] **Needle footprint** — with a calibrated triple, the L/R match rects on
-  the debugger's guide strip are fovea-FOOTPRINT sized (≈ stripWidth ×
-  centerFov/foveaFov, i.e. `foveaWidth/matchZoom` wide-px), not shrunk by
-  the fovea/center resolution ratio; match scores recover accordingly.
+Round 1 (8bdd5b6) paired the tile dims with the zoom source; round 2 (the
+real defect, user-diagnosed "9x applied twice / 81x"): the needle scalers
+sourced the HOMOGRAPHY-undistort pipes — whose warp already lands the fovea
+at wide density — and then divided by the magnification again. Needles now
+source the RAW fovea CONVERT pipes (single ÷magnification, legacy
+`getFoveaTile` semantics); stereo/composite keep the warped pipes.
+
+- [ ] **Needle footprint** — with a calibrated triple, the L/R match rects
+  on the debugger's guide strip are fovea-FOOTPRINT sized (≈
+  `foveaWidth/matchZoom` wide-px — NOT a ~1/9 sub-tile); match scores
+  recover accordingly.
+- [ ] **Raw-vs-rectified tolerance** — the needle is now the RAW
+  (un-rectified) fovea against the intrinsic-undistorted strip, as legacy
+  tolerated; watch for score degradation from the perspective difference
+  over the narrow fovea FOV (the loop absorbs constant offsets).
 - [ ] **Nominal fallback unchanged** — with calibration cleared (no measured
   magnification), needle sizing matches the legacy `W_c/zoom` behavior.
+- [ ] **Stereo/composite unaffected** — SGBM + anaglyph/difference center
+  views still consume the warped pipes (wide-registered imagery).
 
 ## Blocked (hardware change required)
 

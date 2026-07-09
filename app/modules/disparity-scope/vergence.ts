@@ -35,17 +35,24 @@ import type { CoordinateConversions } from "@lib/coordinate-conversions";
  *  MATCH MAGNIFICATION (measured fovea↔wide ratio, else nominal) — NOT the
  *  display crop zoom.
  *
+ *  The needle scaler's SOURCE is the RAW fovea CONVERT pipe — the full fovea
+ *  FOV filling the frame at fovea-native resolution (NOT the homography-
+ *  undistort pipe, which lands the fovea at wide density and would divide by
+ *  the magnification a SECOND time → the 81× too-small-needle defect; the
+ *  session's `needleSources` owns that choice). Resizing that whole frame to
+ *  this size lands the fovea view at `scale` px per wide px — the single,
+ *  correct ÷magnification (legacy `getFoveaTile` semantics).
+ *
  *  `width`/`height` must be PAIRED with `zoom`'s units (the session's
  *  `needleGeometry` owns the pairing): a MEASURED magnification is a
  *  fovea-px-per-center-px ratio → pass the FOVEA SOURCE frame dims (the
- *  needle scaler's input = the fovea undistort pipe); the nominal-zoom
- *  fallback is a pure FOV ratio → pass the CENTER dims (the legacy `W_c/z`).
- *  Either way `width/zoom` is the frame's footprint in WIDE (center) pixels
- *  of world; at strip scale `scale` that footprint is `(width*scale)/zoom`
- *  tile pixels, landing the tile at `scale` px per wide px — the SAME scale
- *  the strip's `{ratio: scale}` node produces (CCOEFF matching is not
- *  scale-invariant). Mismatched pairing injects an uncorrected
- *  foveaRes/centerRes factor (the too-small-needle defect). */
+ *  convert pipe's native dims); the nominal-zoom fallback is a pure FOV ratio
+ *  → pass the CENTER dims (the legacy `W_c/z`). Either way `width/zoom` is the
+ *  frame's footprint in WIDE (center) pixels of world; at strip scale `scale`
+ *  that footprint is `(width*scale)/zoom` tile pixels, landing the tile at
+ *  `scale` px per wide px — the SAME scale the strip's `{ratio: scale}` node
+ *  produces (CCOEFF matching is not scale-invariant). Mismatched pairing
+ *  injects an uncorrected foveaRes/centerRes factor. */
 export function foveaTileSize(opts: {
   /** Frame width paired with `zoom` (fovea dims for measured, center for nominal). */
   width: number;
