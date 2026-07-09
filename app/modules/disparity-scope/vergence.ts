@@ -33,13 +33,23 @@ import type { CoordinateConversions } from "@lib/coordinate-conversions";
 /** Fovea tile size for the template match — since the node split this is the
  *  `dsize` the session tunes the NEEDLE SCALE nodes with. `zoom` here is the
  *  MATCH MAGNIFICATION (measured fovea↔wide ratio, else nominal) — NOT the
- *  display crop zoom: one fovea frame covers `width/zoom` wide pixels, and at
- *  strip scale `scale` that footprint is `(width*scale)/zoom` tile pixels, so
- *  both the tile and the strip land at `scale` px per wide px (CCOEFF
- *  matching is not scale-invariant; the strip's scale node gets
- *  `{ratio: scale}` for the same reason). */
+ *  display crop zoom.
+ *
+ *  `width`/`height` must be PAIRED with `zoom`'s units (the session's
+ *  `needleGeometry` owns the pairing): a MEASURED magnification is a
+ *  fovea-px-per-center-px ratio → pass the FOVEA SOURCE frame dims (the
+ *  needle scaler's input = the fovea undistort pipe); the nominal-zoom
+ *  fallback is a pure FOV ratio → pass the CENTER dims (the legacy `W_c/z`).
+ *  Either way `width/zoom` is the frame's footprint in WIDE (center) pixels
+ *  of world; at strip scale `scale` that footprint is `(width*scale)/zoom`
+ *  tile pixels, landing the tile at `scale` px per wide px — the SAME scale
+ *  the strip's `{ratio: scale}` node produces (CCOEFF matching is not
+ *  scale-invariant). Mismatched pairing injects an uncorrected
+ *  foveaRes/centerRes factor (the too-small-needle defect). */
 export function foveaTileSize(opts: {
+  /** Frame width paired with `zoom` (fovea dims for measured, center for nominal). */
   width: number;
+  /** Frame height, same pairing as `width`. */
   height: number;
   /** Match magnification (measured fovea↔wide ratio, else nominal zoom). */
   zoom: number;

@@ -321,6 +321,15 @@ names the mechanism it gates.
   build under the same scene (Graphite-relevant: fewer per-frame
   putImageData/composite passes).
 
+## Needle sizing fix (2026-07-09, user rig find "needles way too small")
+
+- [ ] **Needle footprint** — with a calibrated triple, the L/R match rects on
+  the debugger's guide strip are fovea-FOOTPRINT sized (≈ stripWidth ×
+  centerFov/foveaFov, i.e. `foveaWidth/matchZoom` wide-px), not shrunk by
+  the fovea/center resolution ratio; match scores recover accordingly.
+- [ ] **Nominal fallback unchanged** — with calibration cleared (no measured
+  magnification), needle sizing matches the legacy `W_c/zoom` behavior.
+
 ## Blocked (hardware change required)
 
 - [ ] **Center-camera hardware trigger** — needs the slimmer CAM0 cable

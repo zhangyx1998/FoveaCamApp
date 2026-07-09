@@ -212,6 +212,19 @@ export default function disparityScopeSession(
     // Wide (C) frame dims — the crop/scale geometry base (camera features,
     // read once on activate; the old kernel derived them from frames).
     let wide: Size = { width: 0, height: 0 };
+    // Fovea (L/R) source frame dims — the NEEDLE scale base when the MEASURED
+    // magnification drives the match (see `needleGeometry`): the measured
+    // matchZoom is a fovea-px-per-center-px ratio (folds in any fovea↔center
+    // RESOLUTION difference, not just the optical FOV ratio), so the fovea
+    // frame's footprint in wide-px is `foveaWidth / matchZoom`. Sizing the
+    // tile from the CENTER width under that zoom added an uncorrected
+    // foveaRes/centerRes factor that shrank the needle on rigs where the
+    // fovea cams out-resolve the center (the too-small-needle defect; was the
+    // docs/applications/disparity-scope.md "Secondary (RIG-GATED)" finding).
+    // The nominal-zoom FALLBACK is a pure FOV ratio and keeps the legacy
+    // center-dims base. L/R share a model/resolution on the Duo, matching the
+    // single mean matchZoom; read from the L lease on activate.
+    let fovea: Size = { width: 0, height: 0 };
     // The match scale `s` currently commanded to the strip scaler — the
     // divisor that lifts match rects back to full-res strip-local px.
     let stripScaleFactor = 1;
@@ -293,6 +306,19 @@ export default function disparityScopeSession(
       return matchMagnification(measuredMatchZoom(), s.state.zoom);
     }
 
+    /** The needle scaler's zoom + BASE DIMS, paired by the zoom's units: the
+     *  MEASURED magnification is a fovea-px-per-center-px ratio → divide the
+     *  FOVEA source dims; the nominal fallback is a pure FOV ratio → divide
+     *  the CENTER dims (the legacy `W_c/z`). Pairing either zoom with the
+     *  other width injects an uncorrected foveaRes/centerRes factor (the
+     *  too-small-needle defect). `matchMagnification` returns the measured
+     *  value VERBATIM when it accepts it, so identity picks the branch. */
+    function needleGeometry(): { zoom: number; base: Size } {
+      const measured = measuredMatchZoom();
+      const zoom = matchMagnification(measured, s.state.zoom);
+      return { zoom, base: zoom === measured ? fovea : wide };
+    }
+
     function effectiveScale(): number {
       const ratio = Math.max(0, Math.min(1, s.state.tuning.scale));
       return 1 + (matchZoom() - 1) * ratio;
@@ -363,10 +389,11 @@ export default function disparityScopeSession(
       const sF = effectiveScale();
       stripScaleFactor = sF;
       stripScale?.retune({ ratio: sF });
+      const g = needleGeometry();
       const size = foveaTileSize({
-        width: wide.width,
-        height: wide.height,
-        zoom: matchZoom(),
+        width: g.base.width,
+        height: g.base.height,
+        zoom: g.zoom,
         scale: sF,
       });
       const dsize = {
@@ -763,6 +790,13 @@ export default function disparityScopeSession(
         width: camC.getFeatureInt("Width"),
         height: camC.getFeatureInt("Height"),
       };
+      // Fovea source dims for the needle scale base (see the `fovea` decl):
+      // read from L; L/R share a model/resolution on the Duo (the same single-
+      // eye assumption the mean `matchZoom` already bakes in).
+      fovea = {
+        width: t.leases.L.camera.getFeatureInt("Width"),
+        height: t.leases.L.camera.getFeatureInt("Height"),
+      };
       s.telemetry({ size: { ...wide } }); // was the old kernel's `values.size`
 
       // SLICE nodes: the match strip + the display center tile, both crops of
@@ -798,10 +832,11 @@ export default function disparityScopeSession(
           maxHeight: wide.height * 2,
         },
       );
+      const g0 = needleGeometry();
       const tile0 = foveaTileSize({
-        width: wide.width,
-        height: wide.height,
-        zoom: matchZoom(),
+        width: g0.base.width,
+        height: g0.base.height,
+        zoom: g0.zoom,
         scale: stripScaleFactor,
       });
       const dsize0 = {
@@ -1076,6 +1111,7 @@ export default function disparityScopeSession(
       triple = null;
       status = "initializing";
       wide = { width: 0, height: 0 };
+      fovea = { width: 0, height: 0 };
       stripScaleFactor = 1;
       commandedVolts = { l: ORIGIN_POS, r: ORIGIN_POS };
       s.resetTelemetry([

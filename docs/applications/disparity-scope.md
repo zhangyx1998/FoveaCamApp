@@ -165,11 +165,15 @@ scale-consistency invariants).
   magnification (nominal-zoom fallback). RIG-GATED: verify match_left/right
   quality improves (or at minimum, `match_magnification` telemetry reads a
   plausible ~9x) on the calibrated rig.
-- Secondary (RIG-GATED): if the fovea camera's native resolution differs from
-  the center camera's, `foveaTileSize` uses the CENTER `width/height` to size the
-  fovea tile, adding an uncorrected `foveaRes/centerRes` factor. Harmless when
-  all three cameras are the same model/resolution (expected for FoveaCam Duo);
-  worth confirming on the rig.
+- **RESOLVED — secondary (was RIG-GATED, hit on the rig 2026-07-09 as
+  "needles way too small"):** `foveaTileSize` sized the tile from the CENTER
+  `width/height` while dividing by the MEASURED magnification (a
+  fovea-px-per-center-px ratio), adding an uncorrected `foveaRes/centerRes`
+  factor whenever the fovea cams out-resolve the center. The session's
+  `needleGeometry` now pairs the base dims with the zoom source: fovea dims
+  under the measured magnification, center dims under the nominal FOV-ratio
+  fallback (the legacy `W_c/z`). RIG-GATED: verify the match rects on the
+  debugger strip are fovea-footprint sized.
 - `analyzeVergence` inputs verified scale-consistent: the guide strip, the tile
   grid, and `center.rect` all resolve in the same wide-frame-pixel space that
   `stepVergence` lifts to angles via `P2A.C`. No additional ratio needed there.
