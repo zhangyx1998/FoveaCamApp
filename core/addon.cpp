@@ -15,7 +15,8 @@
 
 // Forward-declared (not #included) so the Aravis headers' global `Object`
 // template doesn't collide with `Napi::Object` under this file's `using
-// namespace Napi`. Defined in core/lib/Aravis/CaptureSink.cpp.
+// namespace Napi`. Defined in core/lib/Aravis/ConverterStream.cpp (the
+// per-camera converter thread that replaced the inline-convert CaptureSink).
 namespace Arv {
 Napi::Value feedTestFrame(const Napi::CallbackInfo &info);
 Napi::Value attachCameraPipe(const Napi::CallbackInfo &info);

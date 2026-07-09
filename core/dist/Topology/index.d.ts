@@ -22,6 +22,12 @@ declare module "core/Topology" {
     from: string;
     port: string;
     type: StreamType;
+    /** Transport lossiness of THIS edge (mirror of `graph-contract.ts`
+     *  `NodeInput.lossy`). Absent = the graph fold defaults it from the
+     *  producer's transport; explicit `false` marks a lossless FIFO edge
+     *  (convert→undistort) that must WIN over that default; `true` marks an
+     *  explicitly latest-wins edge. */
+    lossy?: boolean;
   }
 
   /**

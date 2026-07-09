@@ -58,6 +58,11 @@ declare module "core/Pipe" {
     inputs: Record<string, { count: number; ratePerSec: number; maxIntervalMs: number }>;
     outputs: Record<string, { count: number; ratePerSec: number; maxIntervalMs: number }>;
     drops: { total: number; ratePerSec: number; byReason: Record<string, number> };
+    /** FIFO-input queue metering (controller-node-and-fifo-edges §2). Present
+     *  ONLY on a FIFO-fed brick's meter (e.g. the undistort brick); absent on
+     *  latest-wins/Leaky-fed producers. `highWater` = windowed (10s) max sampled
+     *  depth, `depth` = last sample, `capacity` = the FIFO bound. */
+    queue?: { depth: number; highWater: number; capacity: number };
   }
   /** Out-of-loop probe of a pipe's native producer meter (C-19). Read at ~1 Hz;
    *  never per-frame — the free-running producer thread records lock-free. */

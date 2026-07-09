@@ -23,7 +23,10 @@ declare module "core" {
     export * as Aravis from "core/Aravis";
     export * as Controller from "core/Controller";
     export * as Vision from "core/Vision";
+    export * as Tracker from "core/Tracker";
     export * as Regression from "core/Regression";
+    export * as Geometry from "core/Geometry";
+    export * as Compression from "core/Compression";
     export * as Log from "core/Log";
     export * as Shm from "core/Shm";
     export * as Pipe from "core/Pipe";
