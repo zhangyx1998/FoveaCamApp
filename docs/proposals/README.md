@@ -23,3 +23,4 @@ workers implement against these files, and live-rig items accumulate in
 | [capture-recorder-everywhere](./capture-recorder-everywhere.md) | ruled; queued | capture/record in every app; capture-hang + recording-drop rig fixes |
 | [standalone-viewer-and-fcap](./standalone-viewer-and-fcap.md) | ruled; queued | viewer decouples from the orchestrator (core-import exception); BayerRG12p fix; `.fcap`/pyfcap rename |
 | [orchestrator-lifecycle-and-exit](./orchestrator-lifecycle-and-exit.md) | ruled; queued | per-app-instance orchestrator process, audited exit sequence, crash reports + cleanup worker |
+| [viewer-timeline](./viewer-timeline.md) | ruled; in flight | multi-track timeline viewer: master wide track, packed blocks, playhead preview tiles, 3D dropdown, sidecar UI state |
