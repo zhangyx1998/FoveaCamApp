@@ -65,7 +65,13 @@ export function createPipeConsumer(
     if (closed) return;
     let r: PipeReadFrame | "closed" | null;
     try {
-      r = await io.readPipe(shmName, lastSeq, spec.bytesPerFrame);
+      // Buffer = the ring's SLOT size: C-20 dynamic pipes size slots to
+      // `maxBytes` (max footprint), and the reader rejects any destination
+      // smaller than the slot (DestTooSmall) — provisioning the nominal
+      // `bytesPerFrame` here made every read of a variable-size pipe throw,
+      // which this catch silently retried forever ("No Frame"). Same rule the
+      // worker path already applies (session `connectPipe`).
+      r = await io.readPipe(shmName, lastSeq, spec.maxBytes ?? spec.bytesPerFrame);
     } catch {
       return; // transport hiccup (timeout/error) — retry next tick
     }

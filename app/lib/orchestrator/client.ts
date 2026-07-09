@@ -66,13 +66,22 @@ import {
   type PidOverrideState,
 } from "./pid-override-contract.js";
 
-/** Rebuild the Mat shape (`FrameView`/vision ops expect) from a frame payload. */
+/** Rebuild the Mat shape (`FrameView`/vision ops expect) from a frame payload.
+ *  The view is LENGTH-BOUNDED to the payload's shape — pool buffers are sized
+ *  to the pipe's max footprint (C-20 slot bytes), so `p.data` may be larger
+ *  than the active frame; a whole-buffer view would fail `new ImageData`'s
+ *  exact-length check downstream. */
 export function payloadToMat(p: FramePayload | null): Mat<Uint8Array> | null {
   if (!p?.data) return null;
-  return Object.assign(new Uint8Array(p.data), {
-    shape: p.shape,
-    channels: p.channels,
-  }) as unknown as Mat<Uint8Array>;
+  const [h = 0, w = 0] = p.shape;
+  const bytes = h * w * p.channels;
+  return Object.assign(
+    new Uint8Array(p.data, 0, Math.min(bytes, p.data.byteLength)),
+    {
+      shape: p.shape,
+      channels: p.channels,
+    },
+  ) as unknown as Mat<Uint8Array>;
 }
 
 // Renderer SHM transfer pool (C-P2) — the ping-pong buffer pool, port

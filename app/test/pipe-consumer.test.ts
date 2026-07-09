@@ -85,6 +85,30 @@ describe("pipe consumer (C-17)", () => {
     expect(out[1]!.shape).toEqual([3, 4]);
   });
 
+  it("provisions the read buffer at maxBytes on a C-20 variable-size pipe", async () => {
+    // The ring's slots are sized to `maxBytes` (Pipe.cpp passes it as the slot
+    // override) and the reader REJECTS a smaller destination (DestTooSmall) —
+    // provisioning the nominal bytesPerFrame made every read of a dynamic pipe
+    // throw, silently retried as a "transport hiccup" ("No Frame" forever).
+    const h = handle();
+    h.spec.maxWidth = 8;
+    h.spec.maxHeight = 6;
+    h.spec.maxBytes = 48;
+    const bytesSeen: number[] = [];
+    const io: PipeReaderIO = {
+      readPipe: vi.fn(async (_n, _s, bytes) => {
+        bytesSeen.push(bytes);
+        return { data: new ArrayBuffer(48), seq: 1n, width: 4, height: 3 };
+      }),
+      releaseBuffer: vi.fn(),
+    };
+    const out: (FramePayload | null)[] = [];
+    const c = createPipeConsumer(h, io, (f) => out.push(f));
+    await c.poll();
+    expect(bytesSeen).toEqual([48]); // slot size, not the 12-byte nominal
+    expect(out[0]!.shape).toEqual([3, 4]); // active dims still drive the shape
+  });
+
   it("stops on the CLOSED signal and clears the display", async () => {
     const io: PipeReaderIO = {
       readPipe: vi.fn(async () => "closed" as const),
