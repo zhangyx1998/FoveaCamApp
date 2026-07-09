@@ -118,6 +118,7 @@ watchEffect(
 
 // Launcher entries — dev-only apps hidden in production builds.
 const applications = launchableApps.filter((a) => a.group === "application");
+const calibration = launchableApps.filter((a) => a.group === "calibration");
 const utilities = launchableApps.filter((a) => a.group === "utility");
 
 const iconOf: Record<string, object> = {
@@ -181,6 +182,17 @@ function openProfiler() {
           v-for="a in applications"
           :key="a.id"
           :style="{ '--color': a.dev ? '#f6f' : '#0af' }"
+          @click="open(a.id)"
+        >
+          <Icon :icon="iconOf[a.id]" /> {{ a.title }}
+        </button>
+      </div>
+      <div class="group">
+        <h2>Calibration</h2>
+        <button
+          v-for="a in calibration"
+          :key="a.id"
+          style="--color: #fa0"
           @click="open(a.id)"
         >
           <Icon :icon="iconOf[a.id]" /> {{ a.title }}

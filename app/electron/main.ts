@@ -91,6 +91,8 @@ function customizeApp() {
     submenu: [
       ...launchable.filter((a) => a.group === "application").map(appItem),
       { type: "separator" },
+      ...launchable.filter((a) => a.group === "calibration").map(appItem),
+      { type: "separator" },
       ...launchable.filter((a) => a.group === "utility").map(appItem),
     ],
   };

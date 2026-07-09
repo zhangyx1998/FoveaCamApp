@@ -49,8 +49,8 @@ export interface AppMeta {
   title: string;
   /** Orchestrator session name this app activates (drain target). */
   session: string | null;
-  /** Launcher grouping (mirrors the old App.vue sidebar groups). */
-  group: "application" | "utility";
+  /** Launcher grouping: Applications / Calibration / Utilities. */
+  group: "application" | "calibration" | "utility";
   /** Dev-only app (excluded from production launcher + registry). */
   dev?: true;
 }
@@ -90,30 +90,33 @@ export const APP_REGISTRY = {
     group: "application",
     dev: true,
   },
+  // --- calibration ------------------------------------------------------
+  // Titles drop the "Calibrate" prefix — the GROUP heading says it (welcome
+  // launcher + the Apps menu section).
+  "calibrate-intrinsic": {
+    title: "Intrinsic",
+    session: "calibrate-intrinsic",
+    group: "calibration",
+  },
+  "calibrate-extrinsic": {
+    title: "Extrinsic",
+    session: "calibrate-extrinsic",
+    group: "calibration",
+  },
+  "calibrate-distortion": {
+    title: "Distortion",
+    session: "calibrate-distortion",
+    group: "calibration",
+  },
+  "calibrate-drift": {
+    title: "Drift",
+    session: "calibrate-drift",
+    group: "calibration",
+  },
   // --- utilities ------------------------------------------------------
   "manage-cameras": {
     title: "Manage Cameras",
     session: "manage-cameras",
-    group: "utility",
-  },
-  "calibrate-intrinsic": {
-    title: "Calibrate Intrinsic",
-    session: "calibrate-intrinsic",
-    group: "utility",
-  },
-  "calibrate-extrinsic": {
-    title: "Calibrate Extrinsic",
-    session: "calibrate-extrinsic",
-    group: "utility",
-  },
-  "calibrate-distortion": {
-    title: "Calibrate Distortion",
-    session: "calibrate-distortion",
-    group: "utility",
-  },
-  "calibrate-drift": {
-    title: "Calibrate Drift",
-    session: "calibrate-drift",
     group: "utility",
   },
 } as const satisfies Record<string, AppSpec>;
