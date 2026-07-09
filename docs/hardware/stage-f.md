@@ -447,6 +447,27 @@ source the RAW fovea CONVERT pipes (single ÷magnification, legacy
   sync.ts are UNVERIFIED placeholders; confirm against the real camera
   model before any of the above.
 
+## Stereo paired inputs (2026-07-09, 5537745; proposal
+`stereo-paired-inputs.md`)
+
+- [ ] **Epoch-mixing gone under motion** — with trigger pairing live, the
+  paired-SGBM view (`stereo/paired` over `pair/undistort`) shows no
+  disparity smearing on a laterally moving target where the latest-wins
+  view does (the migration's point); output rate ≈ pair rate ≈ FIN rate.
+- [ ] **pairDrops under load** — `stereoProbeAll` shows `paired: true` and
+  `pairDrops` staying near zero when SGBM keeps up; artificially slow SGBM
+  (large numDisparities) sheds OLDEST records with the meter counting —
+  the pairing pipeline (anchor forwarding, undistort backpressure) is
+  unaffected while it sheds.
+- [ ] **Live mode flip** — once hardware trigger wiring drives
+  `startTriggerCapture` from a session: trigger start recomposes the
+  disparity view onto the paired node and stop returns it to latest-wins,
+  seamlessly (no re-advertise flicker — same Disparity32F advert). Until
+  then the paired node rides the multi-fovea pairing topology only.
+- [ ] **Park/resume** — deselecting the paired disparity view parks the
+  brick (record tap unsubscribed; pair brick keep-alive unaffected —
+  its pool keeps churning); reselect resumes within a pair or two.
+
 ## Blocked (hardware change required)
 
 - [ ] **Center-camera hardware trigger** — needs the slimmer CAM0 cable

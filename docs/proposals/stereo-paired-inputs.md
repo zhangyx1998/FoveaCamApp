@@ -1,9 +1,10 @@
 # Stereo paired inputs — SGBM over exposure pairs
 
-Status: **RULED** (user, 2026-07-09 — "dispatch them all" over the planner's
-presented design); implementation wave in flight. Closes `pairing-nodes.md`
-ruling 8's open item: StereoStream was the last unanchored two-input join in
-the graph.
+Status: **SHIPPED (code-complete 2026-07-09, `5537745`; rig pass owed —
+`hardware/stage-f.md` §"Stereo paired inputs")**. Ruled by the user
+2026-07-09 ("dispatch them all" over the planner's presented design). Closes
+`pairing-nodes.md` ruling 8's open item: StereoStream was the last
+unanchored two-input join in the graph. See **AS SHIPPED** at the end.
 
 ## Problem
 
@@ -48,3 +49,39 @@ recompose on trigger start/stop + `core/test/34-stereo-paired.ts` (synthetic
 pair source → per-record SGBM ticks, mode parity, park/resume). Rig items
 land in `hardware/stage-f.md` §"Stereo paired inputs" at wave close (SGBM
 epoch-mixing gone under motion; recompose on trigger toggle is seamless).
+
+## AS SHIPPED (2026-07-09, `5537745`)
+
+- **`StereoStream` paired mode is construction-time** (`createPaired(pairSource,
+  pairFrom, …)`): `start/stop/iterate` branch on `paired_`; the paired path
+  adds a `RecordSink` (a `Subscriber<PairBatch::Ptr>` on the pair brick)
+  feeding a bounded `RecordChannel` the SGBM thread drains, calling the
+  UNCHANGED `process(left, right)`. NAPI `attachStereoPaired(pairStage,
+  pipeId, params)`; topology reports ONE input edge `pair/<stage>` →
+  `stereo/<name>` (port `pair`); `stereoProbeAll` gains `paired` +
+  `pairDrops`.
+- **Delta from ruling 1 ("ONE FIFO tap"): the record tap is bounded
+  DROP-OLDEST (cap 8), not a blocking FIFO.** A blocking FIFO would let a
+  slow SGBM backpressure the always-running pair brick's dispatch (stalling
+  root anchor forwarding — violating ruling 5). Drops are metered
+  (`pairDrops`) — correct semantics for an on-demand live disparity view.
+- **Composition lives in multi-fovea, not disparity-scope**: the trigger
+  topology, FIN anchors, and `pair/undistort` stage exist only there — the
+  session composes `stereo/paired` with the pairing topology (on-demand,
+  seam-degrading); disparity-scope's free-run latest-wins node is unchanged
+  (ruling 2's free-run half).
+- **Recompose granularity = topology up/down.** A WITHIN-activation live
+  flip between latest-wins and paired awaits hardware trigger wiring
+  (`startTriggerCapture` is not yet driven by any live session — stage-f
+  gated); both compositions + the seam exist, so the flip is wiring, not
+  design.
+- **`PairStream` production surface unchanged** — the only touch is the
+  test-only `pushPairTestFrame` deterministic `texture`/`shift` fill (the
+  cross-mode SGBM parity oracle in test 34: bit-identical maxΔ=0 on a
+  static pair, median tracks the injected 16 px shift).
+
+### Final gates
+
+Core make clean; `core/test/10,11,26–34` all exit 0 (from repo root);
+`vue-tsc --noEmit` 0; vitest 535/535; soak 4/4; `vite build` clean
+(orchestrator 292.94 kB). No Electron.

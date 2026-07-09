@@ -18,4 +18,4 @@ workers implement against these files, and live-rig items accumulate in
 | [capture-recorder-nodes](./capture-recorder-nodes.md) | shipped; rig owed | capture + recorder as one-worker thread nodes over named raw FIFO pipes |
 | [multi-fovea-recording](./multi-fovea-recording.md) | shipped; rig owed | recordings = raw 12p wire payloads + descriptor streams + global wide matrix; advert-verbatim recorder; `/codec` suffix |
 | [pairing-nodes](./pairing-nodes.md) | shipped; rig owed | per-stage L/R PairStream joins anchored on FINs — trigger-only, tolerance once at root |
-| [stereo-paired-inputs](./stereo-paired-inputs.md) | ruled 2026-07-09; in flight | migrate the SGBM join from latest-wins taps onto exposure pairs |
+| [stereo-paired-inputs](./stereo-paired-inputs.md) | shipped; rig owed | migrate the SGBM join from latest-wins taps onto exposure pairs |

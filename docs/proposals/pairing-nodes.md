@@ -127,10 +127,9 @@ tolerance tuning, always-on pool behavior under live churn) accumulate in
 
 ### Residuals (rig / follow-on rulings)
 
-- **StereoStream/SGBM latest-L/latest-R → paired inputs** (OPEN follow-up
-  ruling, ruling 8): still joins latest-latest with no anchor (temporal
-  misalignment under motion); migrating it onto paired inputs is its own
-  ruling when reached.
+- **StereoStream/SGBM latest-L/latest-R → paired inputs** — RESOLVED
+  2026-07-09: ruled + shipped as `stereo-paired-inputs.md` (`5537745`);
+  the paired-SGBM node consumes pair records over `pair/undistort`.
 - **Anchor edge `frameType`** — the `controller → controller/anchors` edge
   is typed `analysis/pid` (scalars, no frame); a dedicated FIN edge type is
   cosmetic, deferred.
