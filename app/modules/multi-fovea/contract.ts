@@ -11,7 +11,7 @@
 import { cmd, defineContract } from "@lib/orchestrator/protocol";
 import type { Point2d, Rect, Size } from "core/Geometry";
 import type { Pos } from "@lib/controller-codec";
-import type { Stat } from "@lib/orchestrator/contracts";
+import { captureCommands, captureTelemetry, type Stat } from "@lib/orchestrator/contracts";
 
 export const MAX_MULTI_FOVEA_TARGETS = 8;
 
@@ -91,6 +91,9 @@ export const multiFovea = defineContract({
     targets: [] as MultiFoveaTargetTelemetry[],
     scheduler: { inFlight: 0, frames: 0, rejects: 0, timeouts: 0 },
     perf: { trackMs: { mean: 0, max: 0 } as Stat },
+    // Capture (shared mixin, ruling 3) — the stacked L/R + center-slice capture,
+    // distinct from `captureOnce` (the stage-f hardware-synchronized MEMS shot).
+    ...captureTelemetry(),
     // Recording (same field names as manual-control so the renderer's
     // `Recording` facade + RecordButton work verbatim).
     recording_active: false as boolean,
@@ -109,6 +112,9 @@ export const multiFovea = defineContract({
     placeTarget: cmd<{ index: number; center: Point2d }>(),
     resetTargets: cmd(),
     captureOnce: cmd<void, MultiFoveaCaptureResult>(),
+    // Shared capture mixin (ruling 3): `captureShot`/`getCapturePreview`/
+    // `saveCapture`/`discardCapture` — the stacked L/R + center-slice capture.
+    ...captureCommands(),
     /** Start a multi-fovea recording at `path` (multi-fovea-recording r2.1:
      *  raw12p streams + descriptor channels + wide singleton). */
     startRecording: cmd<{ path: string }, boolean>(),

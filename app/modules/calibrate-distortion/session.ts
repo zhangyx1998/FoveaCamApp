@@ -32,6 +32,11 @@ import { createVisionWorker, type VisionWorkerHandle } from "@orchestrator/visio
 import { nodeId } from "@lib/orchestrator/graph-contract";
 import type { PipeBroker } from "@orchestrator/pipe-session";
 import { createRawRecording } from "@orchestrator/raw-recording";
+import {
+  createCaptureHelper,
+  rawTripleShot,
+  type CaptureHelper,
+} from "@orchestrator/capture-helper";
 import type { RawPipeRegistry } from "@orchestrator/raw-pipe";
 import type { PipeInput, VisionResult } from "@orchestrator/vision-worker-protocol";
 import {
@@ -54,6 +59,10 @@ export default function calibrateDistortionSession(
 ): ServerSession<typeof calibrateDistortion> {
   return defineResourceSession("calibrate-distortion", calibrateDistortion, (s) => {
     let triple: CalibratedTriple | null = null;
+    // Capture (ruling 3): degraded raw-stack capture over the leased triple (no
+    // per-shot mirror pose → no fovea wrap; stated in `capture_meta`).
+    let captureHelper: CaptureHelper | null = null;
+    let captureCenter: { shmName: string; maxBytes: number; channels: number } | null = null;
     let trackers: Record<Role, MarkerTracker> | null = null;
     let posInput: PositionInput | null = null;
     let worker: VisionWorkerHandle | null = null;
@@ -249,6 +258,54 @@ export default function calibrateDistortionSession(
         void posInput?.close(); // terminate the MCU stream + disable-iff-we-enabled
         posInput = null;
       });
+
+      // --- capture (ruling 3) ------------------------------------------------
+      // Connect the C convert pipe as the persistent capture-center source
+      // (one-shot BGRA read; disconnect deferred), then build the (idle) node.
+      const capCenterId = nodeId.convert(t.leases.C.camera.serial);
+      const capCenter = broker.connect(capCenterId);
+      scope.defer(() => void broker.disconnect(capCenterId));
+      captureCenter = {
+        shmName: capCenter.shmName,
+        maxBytes: capCenter.spec.maxBytes ?? capCenter.spec.bytesPerFrame,
+        channels: capCenter.spec.channels,
+      };
+      scope.defer(() => {
+        captureCenter = null;
+      });
+      captureHelper = createCaptureHelper({
+        id: nodeId.win("calibrate-distortion", "capture"),
+        broker,
+        rawPipes,
+        graphInputs: {
+          left: `camera/${t.leases.L.camera.serial}/raw`,
+          right: `camera/${t.leases.R.camera.serial}/raw`,
+          center: capCenterId,
+        },
+        cameras: () =>
+          triple ? { left: triple.leases.L.camera, right: triple.leases.R.camera } : null,
+        centerPipe: () => captureCenter,
+        snapshot: (reset, indexed) =>
+          triple
+            ? rawTripleShot({
+                reset,
+                indexed,
+                stackCount: 5,
+                note: "calibrate-distortion: raw stacks, no per-shot mirror pose (no wrap)",
+              })
+            : null,
+        recordingActive: () => recording.active,
+        telemetry: (patch) => s.telemetry(patch),
+      });
+      captureHelper.build();
+      // Drain an in-flight shot then stop the node — deferred so it runs while
+      // the center pipe + cameras are still live (before leases release).
+      scope.defer(async () => {
+        await captureHelper?.activeCapture;
+        await captureHelper?.stop();
+        captureHelper = null;
+      });
+
       monitor.done("controller");
       s.telemetry({ ready: true });
       monitor.complete(); // spin-up finished — clear the overlay
@@ -266,7 +323,22 @@ export default function calibrateDistortionSession(
           s.setState("targetId", { ...s.state.targetId, [role]: id });
           retarget(trackers, role, id);
         },
+        // Capture (ruling 3) — forward to the shared helper.
+        async captureShot({ tag }) {
+          if (!captureHelper) throw new Error("Capture not ready");
+          await captureHelper.captureShot(tag);
+        },
+        async getCapturePreview({ resource, index }) {
+          return captureHelper ? captureHelper.getPreview(resource, index) : null;
+        },
+        async saveCapture({ path, format }) {
+          await captureHelper?.save(path, format);
+        },
+        async discardCapture() {
+          await captureHelper?.discard();
+        },
         async startRecording({ path }) {
+          if (captureHelper?.capturing) return false; // exclusivity (ruling 6)
           return recording.start(path);
         },
         async stopRecording() {
@@ -274,6 +346,7 @@ export default function calibrateDistortionSession(
         },
       },
       busy() {
+        if (captureHelper?.capturing) return "capture in progress";
         if (recording.active) return "recording in progress";
         return null;
       },

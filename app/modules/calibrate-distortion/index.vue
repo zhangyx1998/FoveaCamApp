@@ -22,6 +22,7 @@ import { createMat } from "@lib/mat";
 import type { Point2d } from "core/Geometry";
 import { calibrateDistortion } from "./contract";
 import Recording from "@src/record";
+import Capture from "@src/capture";
 import StreamView from "@src/components/StreamView.vue";
 import ConfigEntry from "@src/components/ConfigEntry.vue";
 import MarkerTargetInputs from "@src/components/MarkerTargetInputs.vue";
@@ -35,6 +36,10 @@ const ctrl = useController();
 const { state, telemetry } = session;
 // Recording context (capture-recorder-everywhere ruling 2).
 new Recording(session, "calibrate-distortion");
+// Capture context (capture-recorder-everywhere ruling 3): lights this window's
+// camera icon (AppWindow) → the shared CapturePreview window (its in-window
+// button drives the shot). Per-window singleton, disposed on unmount.
+new Capture(session, "calibrate-distortion");
 
 // C-2c: raw fovea previews (L/C/R) all ride their native camera:<serial>
 // convert pipe directly (off the JS view-tap relay loop); only the

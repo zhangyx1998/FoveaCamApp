@@ -12,7 +12,7 @@
 
 import { cmd, defineContract } from "@lib/orchestrator/protocol";
 import type { Point2d, Rect } from "core/Geometry";
-import { recordingCommands, recordingTelemetry, type Stat } from "@lib/orchestrator/contracts";
+import { captureCommands, captureTelemetry, recordingCommands, recordingTelemetry, type Stat } from "@lib/orchestrator/contracts";
 import {
   pidOverrideCmd,
   pidOverrideState,
@@ -161,6 +161,7 @@ export const disparity = defineContract({
     perf: { actuateMs: { mean: 0, max: 0 } as Stat },
     // Recording (capture-recorder-everywhere ruling 2): the shared mixin shape
     // the renderer's `Recording` facade + title-bar RecordButton read.
+    ...captureTelemetry(),
     ...recordingTelemetry(),
   },
   // Only the per-side correlation HEATMAPS remain session frames (split-
@@ -194,6 +195,7 @@ export const disparity = defineContract({
     pidOverride: pidOverrideCmd<VergenceVolts>(),
     // Recording (capture-recorder-everywhere ruling 2): records the app's raw
     // L/C/R sensor streams (advert-verbatim; the OBVIOUS default set).
+    ...captureCommands(),
     ...recordingCommands(),
   },
 });

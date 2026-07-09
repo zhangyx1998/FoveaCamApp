@@ -29,6 +29,12 @@ import {
 import type { Point2d } from "core/Geometry";
 import type { PipeBroker } from "@orchestrator/pipe-session";
 import { createRawRecording } from "@orchestrator/raw-recording";
+import {
+  createCaptureHelper,
+  rawTripleShot,
+  type CaptureHelper,
+} from "@orchestrator/capture-helper";
+import { nodeId } from "@lib/orchestrator/graph-contract";
 import type { RawPipeRegistry } from "@orchestrator/raw-pipe";
 import { calibrateDrift } from "./contract";
 import { gateOnLock } from "./drift-gate";
@@ -50,6 +56,9 @@ export default function calibrateDriftSession(
 ): ServerSession<typeof calibrateDrift> {
   return defineResourceSession("calibrate-drift", calibrateDrift, (s) => {
     let triple: CalibratedTriple | null = null;
+    // Capture (ruling 3): degraded raw-stack capture over the leased triple.
+    let captureHelper: CaptureHelper | null = null;
+    let captureCenter: { shmName: string; maxBytes: number; channels: number } | null = null;
     let trackers: Record<Role, MarkerTracker> | null = null;
     let servo: Servo | null = null;
     let saved: DriftPair = { L: null, R: null };
@@ -171,6 +180,50 @@ export default function calibrateDriftSession(
         servo = null;
       });
       monitor.done("servo");
+
+      // --- capture (ruling 3) ------------------------------------------------
+      const capCenterId = nodeId.convert(t.leases.C.camera.serial);
+      const capCenter = broker.connect(capCenterId);
+      scope.defer(() => void broker.disconnect(capCenterId));
+      captureCenter = {
+        shmName: capCenter.shmName,
+        maxBytes: capCenter.spec.maxBytes ?? capCenter.spec.bytesPerFrame,
+        channels: capCenter.spec.channels,
+      };
+      scope.defer(() => {
+        captureCenter = null;
+      });
+      captureHelper = createCaptureHelper({
+        id: nodeId.win("calibrate-drift", "capture"),
+        broker,
+        rawPipes,
+        graphInputs: {
+          left: `camera/${t.leases.L.camera.serial}/raw`,
+          right: `camera/${t.leases.R.camera.serial}/raw`,
+          center: capCenterId,
+        },
+        cameras: () =>
+          triple ? { left: triple.leases.L.camera, right: triple.leases.R.camera } : null,
+        centerPipe: () => captureCenter,
+        snapshot: (reset, indexed) =>
+          triple
+            ? rawTripleShot({
+                reset,
+                indexed,
+                stackCount: 5,
+                note: "calibrate-drift: raw stacks, no per-shot mirror pose (no wrap)",
+              })
+            : null,
+        recordingActive: () => recording.active,
+        telemetry: (patch) => s.telemetry(patch),
+      });
+      captureHelper.build();
+      scope.defer(async () => {
+        await captureHelper?.activeCapture;
+        await captureHelper?.stop();
+        captureHelper = null;
+      });
+
       s.telemetry({ ready: true });
 
       // Publish live derived drift at a modest rate (tracker ticks don't
@@ -241,7 +294,22 @@ export default function calibrateDriftSession(
           });
           s.telemetry({ saved });
         },
+        // Capture (ruling 3) — forward to the shared helper.
+        async captureShot({ tag }) {
+          if (!captureHelper) throw new Error("Capture not ready");
+          await captureHelper.captureShot(tag);
+        },
+        async getCapturePreview({ resource, index }) {
+          return captureHelper ? captureHelper.getPreview(resource, index) : null;
+        },
+        async saveCapture({ path, format }) {
+          await captureHelper?.save(path, format);
+        },
+        async discardCapture() {
+          await captureHelper?.discard();
+        },
         async startRecording({ path }) {
+          if (captureHelper?.capturing) return false; // exclusivity (ruling 6)
           return recording.start(path);
         },
         async stopRecording() {
@@ -249,7 +317,8 @@ export default function calibrateDriftSession(
         },
       },
       busy() {
-        // Drain refusal (manual-control pattern): don't force-drain mid-recording.
+        // Drain refusal (manual-control pattern): don't force-drain mid-record/capture.
+        if (captureHelper?.capturing) return "capture in progress";
         if (recording.active) return "recording in progress";
         return null;
       },

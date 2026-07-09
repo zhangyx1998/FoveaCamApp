@@ -21,6 +21,7 @@ import { useController, useSession, usePipeFrame, usePidOverride } from "@lib/or
 import { nodeId } from "@lib/orchestrator/graph-contract";
 import { calibrateDrift } from "./contract";
 import Recording from "@src/record";
+import Capture from "@src/capture";
 import StreamView from "@src/components/StreamView.vue";
 import PosView, { type Pos } from "@src/components/PosView.vue";
 import MarkerTargetInputs from "@src/components/MarkerTargetInputs.vue";
@@ -40,6 +41,10 @@ const { state, telemetry } = session;
 // Recording context (capture-recorder-everywhere ruling 2): title-bar
 // RecordButton + Cmd/Ctrl-R over the session's startRecording/stopRecording.
 new Recording(session, "calibrate-drift");
+// Capture context (capture-recorder-everywhere ruling 3): lights this window's
+// camera icon (AppWindow) → the shared CapturePreview window (its in-window
+// button drives the shot). Per-window singleton, disposed on unmount.
+new Capture(session, "calibrate-drift");
 
 // Derived-vs-saved delta per eye (proposal finding 7). `updatable*` also gates
 // the Update buttons: a derived drift within the tracker's measurement-noise

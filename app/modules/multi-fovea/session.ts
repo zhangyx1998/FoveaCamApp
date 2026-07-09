@@ -55,6 +55,11 @@ import { matToArray } from "@lib/mat";
 import { multiFovea, defaultMultiFoveaTarget, MAX_MULTI_FOVEA_TARGETS } from "./contract";
 import { MultiFoveaRuntime, type MultiTrackBatch } from "./runtime";
 import { createMultiFoveaRecording, type RecordingCamera } from "./recording";
+import {
+  createCaptureHelper,
+  rawTripleShot,
+  type CaptureHelper,
+} from "@orchestrator/capture-helper";
 import * as Tracker from "core/Tracker";
 import type { Point2d, Rect } from "core/Geometry";
 import type { Pos } from "@lib/controller-codec";
@@ -113,6 +118,9 @@ export default function multiFoveaSession(
 ): ServerSession<typeof multiFovea> {
   return defineResourceSession("multi-fovea", multiFovea, (s) => {
     let triple: CalibratedTriple | null = null;
+    // Capture (ruling 3): degraded raw-stack capture over the leased triple.
+    let captureHelper: CaptureHelper | null = null;
+    let captureCenter: { shmName: string; maxBytes: number; channels: number } | null = null;
     let tk: MultiKcfTracker | null = null;
     let serialC: string | null = null;
     const trackMs = new RollingStats(0.9, 2, "ms");
@@ -532,6 +540,54 @@ export default function multiFoveaSession(
       // returns null when !v2Capable → empty targets → pump has nothing to issue.
       scheduler.start();
       applyTargets();
+
+      // --- capture (ruling 3) ------------------------------------------------
+      // Stacked L/R + center-slice capture over the leased triple (distinct from
+      // `captureOnce`, the stage-f hardware-synchronized MEMS shot). Degraded
+      // shot (`rawTripleShot`): no per-shot mirror pose → no fovea wrap. Center
+      // rides the undistort pipe (or convert fallback) connected here.
+      const capCenterId = undistortC ?? nodeId.convert(serialC);
+      const capCenter = broker.connect(capCenterId);
+      scope.defer(() => void broker.disconnect(capCenterId));
+      captureCenter = {
+        shmName: capCenter.shmName,
+        maxBytes: capCenter.spec.maxBytes ?? capCenter.spec.bytesPerFrame,
+        channels: capCenter.spec.channels,
+      };
+      scope.defer(() => {
+        captureCenter = null;
+      });
+      captureHelper = createCaptureHelper({
+        id: nodeId.win("multi-fovea", "capture"),
+        broker,
+        rawPipes: seams.rawPipes,
+        graphInputs: {
+          left: `camera/${t.leases.L.camera.serial}/raw`,
+          right: `camera/${t.leases.R.camera.serial}/raw`,
+          center: capCenterId,
+        },
+        cameras: () =>
+          triple ? { left: triple.leases.L.camera, right: triple.leases.R.camera } : null,
+        centerPipe: () => captureCenter,
+        snapshot: (reset, indexed) =>
+          triple
+            ? rawTripleShot({
+                reset,
+                indexed,
+                stackCount: 5,
+                note: "multi-fovea: raw stacks, no per-shot mirror pose (no wrap)",
+              })
+            : null,
+        recordingActive: () => recording.active,
+        telemetry: (patch) => s.telemetry(patch),
+      });
+      captureHelper.build();
+      scope.defer(async () => {
+        await captureHelper?.activeCapture;
+        await captureHelper?.stop();
+        captureHelper = null;
+      });
+
       s.telemetry({
         ready: true,
         v2Capable: activeController()?.v2Capable ?? false,
@@ -571,7 +627,22 @@ export default function multiFoveaSession(
             return { ok: false, reason: "controller-not-v2-capable" };
           return { ok: false, reason: "stage-f-hardware-gated" };
         },
+        // Capture (ruling 3) — forward to the shared helper.
+        async captureShot({ tag }) {
+          if (!captureHelper) throw new Error("Capture not ready");
+          await captureHelper.captureShot(tag);
+        },
+        async getCapturePreview({ resource, index }) {
+          return captureHelper ? captureHelper.getPreview(resource, index) : null;
+        },
+        async saveCapture({ path, format }) {
+          await captureHelper?.save(path, format);
+        },
+        async discardCapture() {
+          await captureHelper?.discard();
+        },
         async startRecording({ path }) {
+          if (captureHelper?.capturing) return false; // exclusivity (ruling 6)
           return recording.start(path);
         },
         async stopRecording() {
@@ -584,7 +655,8 @@ export default function multiFoveaSession(
       },
       busy() {
         // Drain refusal (manual-control pattern): the multi-window switch path
-        // must not force-drain mid-recording.
+        // must not force-drain mid-recording or mid-capture.
+        if (captureHelper?.capturing) return "capture in progress";
         if (recording.active) return "recording in progress";
         return null;
       },

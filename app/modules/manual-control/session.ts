@@ -45,17 +45,9 @@ import { conversionComputeH, startHomographyFeeder } from "@orchestrator/homogra
 import { pushHomography } from "core/Aravis";
 import { nodeId } from "@lib/orchestrator/graph-contract";
 import type { PipeBroker } from "@orchestrator/pipe-session";
-import {
-  rawPipeSpec,
-  type RawPipeRegistry,
-  type RawPipeAcquisition,
-} from "@orchestrator/raw-pipe";
-import {
-  createCaptureNode,
-  type CaptureNodeHandle,
-  type CaptureShot,
-  type CaptureStreamInit,
-} from "@orchestrator/capture-node";
+import { type RawPipeRegistry } from "@orchestrator/raw-pipe";
+import { type CaptureShot } from "@orchestrator/capture-node";
+import { createCaptureHelper, type CaptureHelper } from "@orchestrator/capture-helper";
 import type { PipeInput, VisionResult } from "@orchestrator/vision-worker-protocol";
 import { manualControl } from "./contract";
 import { createRecording } from "./recording";
@@ -67,8 +59,6 @@ import {
   vergeToDistance,
 } from "@lib/stereo";
 import { RECT } from "@lib/util/geometry";
-import { significantBits } from "@lib/util/dtype";
-import type { PixelFormat } from "core/Aravis";
 import type { Point2d } from "core/Geometry";
 import type { Pos } from "@lib/controller-codec";
 import { RollingStats } from "@lib/util/rolling";
@@ -193,101 +183,15 @@ export default function manualControlSession(
     // connected for the session's whole active span, so the producer is live.
     let centerPipe: { shmName: string; maxBytes: number; channels: number } | null = null;
 
-    // --- capture NODE (capture-recorder-nodes Phase 3) --------------------
-    // The stack/wrap/diff/slice math moved OFF the main JS loop into a worker
-    // thread (`@orchestrator/capture-node`) that holds the full-depth resources.
-    // Main only computes the ruling-3 `onCaptureStart` metadata snapshot (from
-    // the calibrated triple), brokers the ON-DEMAND raw-pipe connect per shot,
-    // and republishes the node's resource manifest as `capture_meta`.
-    let captureNode: CaptureNodeHandle | null = null;
-    let activeCapture: Promise<void> = Promise.resolve();
-    let capturing = false;
-
-    /** One connected raw stream → the worker's per-stream init. */
-    function streamInitFrom(conn: {
-      shmName: string;
-      spec: {
-        pixelFormat: string;
-        dtype: string;
-        channels: number;
-        bytesPerFrame: number;
-        maxBytes?: number;
-      };
-    }): CaptureStreamInit {
-      return {
-        shmName: conn.shmName,
-        maxBytes: conn.spec.maxBytes ?? conn.spec.bytesPerFrame,
-        channels: conn.spec.channels,
-        bytesPerElement: conn.spec.dtype === "U16" ? 2 : 1,
-        significantBits: significantBits(conn.spec.pixelFormat as PixelFormat),
-        pixelFormat: conn.spec.pixelFormat,
-      };
-    }
-
-    /** ON-DEMAND per-shot connect (capture-node `AcquireStreams`): advertise +
-     *  attach the raw L/R producers (gate fires → capture-thread subscriber),
-     *  connect all three streams; `release` disconnects + retires them (gate
-     *  parks the subscriber → zero capture-thread cost while idle). Center rides
-     *  the session's already-connected undistort pipe. */
-    function acquireCaptureStreams() {
-      if (!triple || !centerPipe) throw new Error("capture: session not active");
-      const { L, R } = triple.leases;
-      // Refcounted acquire (ruling 5): advertise+attach the UNPACKED raw L/R
-      // producers ONCE (a short capture-burst ring depth of 8); connect the
-      // consumer gate; release() disconnects then retires at refcount 0.
-      //
-      // Error-path guard: a throw mid-sequence (a second acquire, either broker
-      // connect) must unwind what already succeeded in REVERSE order — else the
-      // orphaned refcount/connection never unadvertises (camera-exclusivity
-      // hazard) and the next shot re-advertises over a live producer.
-      let rawL: RawPipeAcquisition | null = null;
-      let rawR: RawPipeAcquisition | null = null;
-      let lConnected = false;
-      let rConnected = false;
-      try {
-        const aL = rawPipes.acquire({
-          kind: "raw",
-          camera: L.camera,
-          pipeId: `camera/${L.camera.serial}/raw`,
-          spec: rawPipeSpec(L.camera, `camera/${L.camera.serial}/raw`, 8),
-        });
-        rawL = aL;
-        const aR = rawPipes.acquire({
-          kind: "raw",
-          camera: R.camera,
-          pipeId: `camera/${R.camera.serial}/raw`,
-          spec: rawPipeSpec(R.camera, `camera/${R.camera.serial}/raw`, 8),
-        });
-        rawR = aR;
-        const cL = broker.connect(aL.pipeId);
-        lConnected = true;
-        const cR = broker.connect(aR.pipeId);
-        rConnected = true;
-        return {
-          streams: {
-            left: streamInitFrom(cL),
-            right: streamInitFrom(cR),
-            center: {
-              shmName: centerPipe.shmName,
-              maxBytes: centerPipe.maxBytes,
-              channels: centerPipe.channels,
-            },
-          },
-          release: () => {
-            broker.disconnect(aL.pipeId);
-            broker.disconnect(aR.pipeId);
-            aL.release();
-            aR.release();
-          },
-        };
-      } catch (err) {
-        if (rConnected && rawR) broker.disconnect(rawR.pipeId);
-        if (lConnected && rawL) broker.disconnect(rawL.pipeId);
-        rawR?.release();
-        rawL?.release();
-        throw err;
-      }
-    }
+    // --- capture NODE via the shared helper (capture-recorder-everywhere R-3) --
+    // The createCaptureNode wiring + the ON-DEMAND per-shot raw L/R advertise/
+    // connect + the captureBusy/capture_meta telemetry + the recording-vs-
+    // capture exclusivity guard were lifted VERBATIM into
+    // `@orchestrator/capture-helper` (behavior pinned). manual-control is now a
+    // CONSUMER: it supplies its calibrated-triple snapshot below; the helper owns
+    // everything else. Built during activation (once the triple + center pipe +
+    // undistort id are known), so `captureHelper` is null until then.
+    let captureHelper: CaptureHelper | null = null;
 
     /** Ruling-3 `onCaptureStart` snapshot: the calibration-derived transforms +
      *  per-resource metadata for the WHOLE shot (regardless of stack depth).
@@ -493,17 +397,31 @@ export default function manualControlSession(
       monitor.done("worker");
 
       monitor.start("capture");
-      // Capture node (idle until `capture()`): graph row + worker; the raw L/R
-      // producers are advertised/connected ON DEMAND per shot (acquireStreams).
-      captureNode = createCaptureNode({
+      // Capture node via the shared helper (idle until `captureShot()`): graph
+      // row + worker; the raw L/R producers are advertised/connected ON DEMAND
+      // per shot. manual-control supplies its calibrated-triple snapshot; the
+      // helper owns the on-demand acquire + telemetry + the exclusivity guard
+      // against the recording service's `active`.
+      captureHelper = createCaptureHelper({
         id: nodeId.win("manual-control", "capture"),
+        broker,
+        rawPipes,
         graphInputs: {
           left: `camera/${t.leases.L.camera.serial}/raw`,
           right: `camera/${t.leases.R.camera.serial}/raw`,
           center: undistortC ?? nodeId.convert(t.leases.C.camera.serial),
         },
-        acquireStreams: acquireCaptureStreams,
+        cameras: () =>
+          triple ? { left: triple.leases.L.camera, right: triple.leases.R.camera } : null,
+        centerPipe: () => centerPipe,
+        // Full fovea snapshot (undistort required) — null degrades the command
+        // to "Capture not ready" exactly as the old `!triple?.undistort` guard.
+        snapshot: (reset, indexed) =>
+          triple?.undistort ? captureSnapshot(reset, indexed) : null,
+        recordingActive: () => recording.active,
+        telemetry: (patch) => s.telemetry(patch),
       });
+      captureHelper.build();
       monitor.done("capture");
 
       monitor.start("controller");
@@ -557,9 +475,9 @@ export default function manualControlSession(
       // release) before the vision worker + pipes tear down; then stop the
       // capture node's own worker.
       scope.defer(async () => {
-        await Promise.all([recording.stop(), activeCapture]);
-        await captureNode?.stop();
-        captureNode = null;
+        await Promise.all([recording.stop(), captureHelper?.activeCapture ?? Promise.resolve()]);
+        await captureHelper?.stop();
+        captureHelper = null;
       });
       // Before the drain: new activity sees "not ready" instead of racing it.
       scope.defer(() => {
@@ -617,52 +535,38 @@ export default function manualControlSession(
             return { l: triple!.conv.A2V.L(A.l), r: triple!.conv.A2V.R(A.r) };
           });
         },
+        // Legacy `capture`/`getPreview` names (backward compat for index.vue) +
+        // the mixin `captureShot`/`getCapturePreview` (shared preview window) —
+        // both forward to the helper (the exclusivity guard + "Capture not
+        // ready" degradation live inside `captureShot`).
         async capture({ tag }) {
-          if (!triple?.undistort || !captureNode) throw new Error("Capture not ready");
-          // EXCLUSIVITY (R-3 flag 2): capture and recording advertise the SAME
-          // `camera/<serial>/raw` ids; capture's per-shot advertise/retire would
-          // clobber (epoch-bump + slot-recycle, then detach+unadvertise) an
-          // active recording's pipes. Refuse cleanly (typed error → renderer)
-          // instead. Single-threaded, so the flag read is race-free.
-          if (recording.active) throw new Error("Cannot capture while a recording is active");
-          // `tag` absent OR 0 starts a fresh accumulation (clear + provide
-          // "wide"); a present tag accumulates an indexed resource (raster).
-          const reset = tag === undefined || tag === 0;
-          const indexed = tag !== undefined;
-          const shot = captureSnapshot(reset, indexed);
-          capturing = true;
-          s.telemetry({ captureBusy: true });
-          activeCapture = captureNode
-            .capture(shot)
-            .then((manifest) => {
-              s.telemetry({ capture_meta: manifest });
-            })
-            .finally(() => {
-              capturing = false;
-              s.telemetry({ captureBusy: false });
-            });
-          await activeCapture;
+          if (!captureHelper) throw new Error("Capture not ready");
+          await captureHelper.captureShot(tag);
+        },
+        async captureShot({ tag }) {
+          if (!captureHelper) throw new Error("Capture not ready");
+          await captureHelper.captureShot(tag);
         },
         async getPreview({ resource, index }) {
-          return captureNode ? captureNode.getPreview(resource, index) : null;
+          return captureHelper ? captureHelper.getPreview(resource, index) : null;
+        },
+        async getCapturePreview({ resource, index }) {
+          return captureHelper ? captureHelper.getPreview(resource, index) : null;
         },
         async saveCapture({ path, format }) {
-          await captureNode?.save(path, format);
-          s.telemetry({ capture_meta: {} });
+          await captureHelper?.save(path, format);
         },
         async discardCapture() {
-          await captureNode?.discard();
-          s.telemetry({ capture_meta: {} });
+          await captureHelper?.discard();
         },
         async startRecording({ path }) {
-          // EXCLUSIVITY (R-3 flag 2): a capture shot in flight holds the raw
-          // L/R pipes; starting a recording would re-advertise the same ids and
-          // the shot's release would then retire the recording's producers.
-          // Refuse cleanly (false, like every other start refusal). Between
-          // raster shots `capturing` is false, so a recording CAN start there —
-          // the next `capture` shot is then refused by the guard above (no
-          // clobber either way).
-          if (capturing) return false;
+          // EXCLUSIVITY (ruling 6): a capture shot in flight holds the raw L/R
+          // pipes; starting a recording would re-advertise the same ids and the
+          // shot's release would then retire the recording's producers. Refuse
+          // cleanly (false). Between raster shots `capturing` is false, so a
+          // recording CAN start there — the next capture shot is then refused by
+          // the helper's guard (no clobber either way).
+          if (captureHelper?.capturing) return false;
           return recording.start(path);
         },
         async stopRecording() {
@@ -670,7 +574,7 @@ export default function manualControlSession(
         },
       },
       busy() {
-        if (capturing) return "capture in progress";
+        if (captureHelper?.capturing) return "capture in progress";
         if (recording.active) return "recording in progress";
         return null;
       },

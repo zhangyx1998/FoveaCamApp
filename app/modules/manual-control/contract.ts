@@ -15,10 +15,10 @@
 // run without the raw camera access this session already holds — see
 // docs/history/refactor/orchestrator.md roadmap items 5/6.
 
-import { cmd, defineContract, type FramePayload, type Serializable } from "@lib/orchestrator/protocol";
+import { cmd, defineContract, type FramePayload } from "@lib/orchestrator/protocol";
 import type { Point2d, Size } from "core/Geometry";
 import type { Pos } from "@lib/controller-codec";
-import type { Stat } from "@lib/orchestrator/contracts";
+import { captureCommands, captureTelemetry, type Stat } from "@lib/orchestrator/contracts";
 
 /** Where to steer the target. Pixel mode needs server-side `undistort` (the
  *  renderer no longer holds calibration); angle mode is radians the renderer
@@ -79,13 +79,11 @@ export const manualControl = defineContract({
     // §7.3 item 2) — `c.actuate()` round-trip, published at the same
     // throttle as `volt`.
     perf: { actuateMs: { mean: 0, max: 0 } as Stat },
-    // Capture: per-resource metadata (name -> meta object, or array of them
-    // for an indexed/raster capture) — the capture NODE's manifest, republished
-    // after each shot. The renderer reads this for the resource list + meta;
-    // image data is PULLED per resource via `getPreview` (ruling 7), never
-    // streamed on a frame channel.
-    captureBusy: false as boolean,
-    capture_meta: {} as Record<string, Serializable>,
+    // Capture: `captureBusy` + `capture_meta` (the capture NODE's manifest,
+    // republished after each shot) — the shared capture mixin (ruling 3). The
+    // renderer reads `capture_meta` for the resource list; image data is PULLED
+    // per resource via `getCapturePreview`/`getPreview` (ruling 7).
+    ...captureTelemetry(),
     // Recording.
     recording_active: false as boolean,
     recordingStreams: {} as Record<
@@ -118,12 +116,14 @@ export const manualControl = defineContract({
     /** Pull one held capture resource's ACTUAL data (ruling 7) downconverted to
      *  8-bit BGRA — the byte-source of what will be saved. `index` selects an
      *  entry of an indexed (raster) resource (default: the latest). Null for a
-     *  meta-only resource. */
+     *  meta-only resource. Legacy name kept for index.vue; `getCapturePreview`
+     *  (the mixin name, spread below) is its alias for the shared preview. */
     getPreview: cmd<{ resource: string; index?: number }, FramePayload | null>(),
-    /** Persist the pending capture to disk and clear it. */
-    saveCapture: cmd<{ path: string; format: string }>(),
-    /** Discard the pending capture without saving. */
-    discardCapture: cmd(),
+    // Shared capture mixin (ruling 3): `captureShot` / `getCapturePreview` /
+    // `saveCapture` / `discardCapture` — the collision-free names the generic
+    // `Capture` facade + the shared CapturePreview window use. `saveCapture` /
+    // `discardCapture` were previously inline here; they now ride the mixin.
+    ...captureCommands(),
     /** Start writing raw L/C/R streams to disk at `path`. */
     startRecording: cmd<{ path: string }, boolean>(),
     /** Stop the active recording. */

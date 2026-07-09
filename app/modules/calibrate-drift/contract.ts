@@ -22,7 +22,7 @@ import {
 } from "@lib/orchestrator/pid-override-contract";
 import type { Point2d } from "core/Geometry";
 import type { Pos } from "@lib/controller-codec";
-import { recordingCommands, recordingTelemetry } from "@lib/orchestrator/contracts";
+import { captureCommands, captureTelemetry, recordingCommands, recordingTelemetry } from "@lib/orchestrator/contracts";
 
 /** Live per-camera detection overlay — a generic point list (the matched
  *  marker's 4 corners), same simplification as calibrate-intrinsic. */
@@ -53,6 +53,7 @@ export const calibrateDrift = defineContract({
     /** Currently-saved drift (the triple config's `drift_l`/`drift_r`). */
     saved: { L: null, R: null } as Record<"L" | "R", Point2d | null>,
     // Recording (capture-recorder-everywhere ruling 2).
+    ...captureTelemetry(),
     ...recordingTelemetry(),
   },
   // No session frames: the raw L/C/R previews bind the `camera:<serial>` pipe
@@ -72,6 +73,7 @@ export const calibrateDrift = defineContract({
     clearDrift: cmd<{ role: "L" | "R" | "ALL" }>(),
     // Recording (capture-recorder-everywhere ruling 2): records the raw L/C/R
     // sensor streams (advert-verbatim, the OBVIOUS default set).
+    ...captureCommands(),
     ...recordingCommands(),
   },
 });

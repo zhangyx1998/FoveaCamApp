@@ -40,6 +40,12 @@ import { read, write } from "@orchestrator/store-hub";
 import { activeController } from "@orchestrator/controller";
 import type { PipeBroker } from "@orchestrator/pipe-session";
 import { createRawRecording } from "@orchestrator/raw-recording";
+import {
+  createCaptureHelper,
+  rawTripleShot,
+  type CaptureHelper,
+} from "@orchestrator/capture-helper";
+import { nodeId } from "@lib/orchestrator/graph-contract";
 import type { RawPipeRegistry } from "@orchestrator/raw-pipe";
 import { getCameraKey } from "@lib/camera-config";
 import { type Undistort } from "core/Vision";
@@ -70,6 +76,11 @@ export default function calibrateExtrinsicSession(
 ): ServerSession<typeof calibrateExtrinsic> {
   return defineResourceSession("calibrate-extrinsic", calibrateExtrinsic, (s) => {
     let leases: Record<Role, CameraLease> | null = null;
+    // Capture (ruling 3): DEGRADED raw-stack capture — this tool holds no
+    // undistort (it PRODUCES the extrinsic data), so the L/R foveae stack raw
+    // WITHOUT the fovea homography wrap (stated in `capture_meta`).
+    let captureHelper: CaptureHelper | null = null;
+    let captureCenter: { shmName: string; maxBytes: number; channels: number } | null = null;
     let undistort: Undistort | null = null;
 
     // Recording (capture-recorder-everywhere ruling 2): the raw L/C/R sensor
@@ -232,6 +243,50 @@ export default function calibrateExtrinsicSession(
       monitor.start("actuation");
       enterStep(s.state.step);
       monitor.done("actuation");
+
+      // --- capture (ruling 3, DEGRADED — no undistort) -----------------------
+      const capCenterId = nodeId.convert(leases.C.camera.serial);
+      const capCenter = broker.connect(capCenterId);
+      scope.defer(() => void broker.disconnect(capCenterId));
+      captureCenter = {
+        shmName: capCenter.shmName,
+        maxBytes: capCenter.spec.maxBytes ?? capCenter.spec.bytesPerFrame,
+        channels: capCenter.spec.channels,
+      };
+      scope.defer(() => {
+        captureCenter = null;
+      });
+      captureHelper = createCaptureHelper({
+        id: nodeId.win("calibrate-extrinsic", "capture"),
+        broker,
+        rawPipes,
+        graphInputs: {
+          left: `camera/${leases.L.camera.serial}/raw`,
+          right: `camera/${leases.R.camera.serial}/raw`,
+          center: capCenterId,
+        },
+        cameras: () =>
+          leases ? { left: leases.L.camera, right: leases.R.camera } : null,
+        centerPipe: () => captureCenter,
+        snapshot: (reset, indexed) =>
+          leases
+            ? rawTripleShot({
+                reset,
+                indexed,
+                stackCount: 5,
+                note: "calibrate-extrinsic: no undistort (pre-calibration) — raw stacks, no wrap",
+              })
+            : null,
+        recordingActive: () => recording.active,
+        telemetry: (patch) => s.telemetry(patch),
+      });
+      captureHelper.build();
+      scope.defer(async () => {
+        await captureHelper?.activeCapture;
+        await captureHelper?.stop();
+        captureHelper = null;
+      });
+
       s.telemetry({ ready: true });
       monitor.complete(); // spin-up finished — clear the overlay
     }
@@ -320,7 +375,22 @@ export default function calibrateExtrinsicSession(
           await write(["calibrate-extrinsic", getCameraKey(leases.R.camera)], createDataSet(records, "R"));
           s.telemetry({ saved: true });
         },
+        // Capture (ruling 3) — forward to the shared helper.
+        async captureShot({ tag }) {
+          if (!captureHelper) throw new Error("Capture not ready");
+          await captureHelper.captureShot(tag);
+        },
+        async getCapturePreview({ resource, index }) {
+          return captureHelper ? captureHelper.getPreview(resource, index) : null;
+        },
+        async saveCapture({ path, format }) {
+          await captureHelper?.save(path, format);
+        },
+        async discardCapture() {
+          await captureHelper?.discard();
+        },
         async startRecording({ path }) {
+          if (captureHelper?.capturing) return false; // exclusivity (ruling 6)
           return recording.start(path);
         },
         async stopRecording() {
@@ -333,6 +403,7 @@ export default function calibrateExtrinsicSession(
         },
       },
       busy() {
+        if (captureHelper?.capturing) return "capture in progress";
         if (recording.active) return "recording in progress";
         return null;
       },

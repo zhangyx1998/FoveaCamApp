@@ -13,6 +13,7 @@ import StreamView from "@src/components/StreamView.vue";
 import PosView from "@src/components/PosView.vue";
 import RangeSlider from "@src/inputs/range-slider.vue";
 import Recording from "@src/record";
+import Capture from "@src/capture";
 import type { Point2d, Rect, Size } from "core/Geometry";
 
 const session = useSession(multiFovea, "multi-fovea");
@@ -25,6 +26,10 @@ const { state, telemetry } = session;
 // RecordButton's onBeforeUnmount disposer drops the trigger hook with the
 // window.
 new Recording(session, "multi-fovea");
+// Capture context (capture-recorder-everywhere ruling 3): lights this window's
+// camera icon (AppWindow) → the shared CapturePreview window (its in-window
+// button drives the shot). Per-window singleton, disposed on unmount.
+new Capture(session, "multi-fovea");
 const pipesSession = useSession(pipes, "pipes");
 // real-1g (C-23): the wide view binds the first-class UNDISTORTED pipe when the
 // session advertises it (target overlays are in undistorted pixel space); falls

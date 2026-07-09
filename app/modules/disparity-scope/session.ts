@@ -123,6 +123,11 @@ import { createChainedTracker, type KcfTracker, type TrackerMeter } from "core/T
 import { registerNativeProbe } from "@orchestrator/native-probes";
 import type { WorkloadSnapshot } from "@lib/orchestrator/stats";
 import { createRawRecording } from "@orchestrator/raw-recording";
+import {
+  createCaptureHelper,
+  rawTripleShot,
+  type CaptureHelper,
+} from "@orchestrator/capture-helper";
 import type { RawPipeRegistry } from "@orchestrator/raw-pipe";
 
 const ZERO: Point2d = { x: 0, y: 0 };
@@ -179,6 +184,15 @@ export default function disparityScopeSession(
 ): ServerSession<typeof disparity> {
   return defineSession("disparity-scope", disparity, (s) => {
     let triple: CalibratedTriple | null = null;
+
+    // Capture (capture-recorder-everywhere ruling 3): the shared helper composes
+    // the stacked L/R + center-slice capture over this session's leased triple.
+    // Degraded shot (`rawTripleShot`): raw stacks WITHOUT the fovea homography
+    // wrap (the vergence loop steers the mirrors, but the session tracks no
+    // per-shot pose to derive H from) — stated in `capture_meta`. Built on
+    // activate once the center pipe is connected; null until then.
+    let captureHelper: CaptureHelper | null = null;
+    let captureCenter: { shmName: string; maxBytes: number; channels: number } | null = null;
 
     // Recording (capture-recorder-everywhere ruling 2): records the app's raw
     // L/C/R sensor streams (advert-verbatim, the OBVIOUS default set). The
@@ -1156,6 +1170,46 @@ export default function disparityScopeSession(
       pushVolts();
       // Auto-follow was left on: arm the fresh tracker at the current target.
       if (s.state.tracker_enabled) armTracker(s.state.target);
+
+      // --- capture (ruling 3) ------------------------------------------------
+      // Connect the C source as a persistent capture-center pipe (refcount++ —
+      // keeps the producer live for the worker's one-shot read; disconnect rides
+      // `disposers`). Then build the (idle) capture node over the leased triple.
+      const capCenter = connectPipe("cap-center", cSourceId);
+      captureCenter = {
+        shmName: capCenter.shmName,
+        maxBytes: capCenter.bytesPerFrame,
+        channels: capCenter.channels,
+      };
+      disposers.add(() => {
+        captureCenter = null;
+      });
+      captureHelper = createCaptureHelper({
+        id: nodeId.win("disparity-scope", "capture"),
+        broker,
+        rawPipes,
+        graphInputs: {
+          left: `camera/${t.leases.L.camera.serial}/raw`,
+          right: `camera/${t.leases.R.camera.serial}/raw`,
+          center: cSourceId,
+        },
+        cameras: () =>
+          triple ? { left: triple.leases.L.camera, right: triple.leases.R.camera } : null,
+        centerPipe: () => captureCenter,
+        snapshot: (reset, indexed) =>
+          triple
+            ? rawTripleShot({
+                reset,
+                indexed,
+                stackCount: 5,
+                note: "disparity-scope: raw stacks, no per-shot mirror pose (no wrap)",
+              })
+            : null,
+        recordingActive: () => recording.active,
+        telemetry: (patch) => s.telemetry(patch),
+      });
+      captureHelper.build();
+
       // Surface the measured magnification (null = nominal-zoom fallback) so
       // the UI can display the actual match scale instead of guessing from
       // the (now crop-only) zoom knob.
@@ -1170,6 +1224,12 @@ export default function disparityScopeSession(
       // release below. busy() refuses the normal window-switch drain mid-
       // recording; this covers the forced dispose (quit / releaseCameras).
       await recording.stop();
+      // Drain any in-flight capture shot (its raw pipes release) BEFORE the
+      // center pipe disconnects + leases release, then stop the capture node.
+      await captureHelper?.activeCapture;
+      await captureHelper?.stop();
+      captureHelper = null;
+      captureCenter = null;
       // Stop actuating (as the old loop stop did): terminate the MCU stream +
       // disable iff the node enabled for us (fire-and-forget close).
       void posInput?.close();
@@ -1303,7 +1363,25 @@ export default function disparityScopeSession(
           }
           s.setState("pidOverride", state);
         },
+        // Capture (ruling 3) — forward to the shared helper (exclusivity guard +
+        // "not ready" degradation live inside `captureShot`).
+        async captureShot({ tag }) {
+          if (!captureHelper) throw new Error("Capture not ready");
+          await captureHelper.captureShot(tag);
+        },
+        async getCapturePreview({ resource, index }) {
+          return captureHelper ? captureHelper.getPreview(resource, index) : null;
+        },
+        async saveCapture({ path, format }) {
+          await captureHelper?.save(path, format);
+        },
+        async discardCapture() {
+          await captureHelper?.discard();
+        },
         async startRecording({ path }) {
+          // EXCLUSIVITY (ruling 6): refuse a recording while a capture shot holds
+          // the shared raw pipes.
+          if (captureHelper?.capturing) return false;
           return recording.start(path);
         },
         async stopRecording() {
@@ -1358,7 +1436,8 @@ export default function disparityScopeSession(
       idle: idleSession,
       busy() {
         // Drain refusal (manual-control pattern): the multi-window switch path
-        // must not force-drain mid-recording.
+        // must not force-drain mid-recording or mid-capture.
+        if (captureHelper?.capturing) return "capture in progress";
         if (recording.active) return "recording in progress";
         return null;
       },

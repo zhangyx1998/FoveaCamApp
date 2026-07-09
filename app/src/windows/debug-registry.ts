@@ -19,9 +19,37 @@
 // The window dedupe key is `debug:<session>:<kind>` (see WindowManager.
 // toggleDebug), so a session's debugger and capture-preview windows coexist.
 
-import type { Component } from "vue";
+import { defineComponent, h, type Component } from "vue";
 
 type Loader = () => Promise<{ default: Component }>;
+
+// Session-baked capture-preview loader (capture-recorder-everywhere ruling 3):
+// the shared `@src/capture/CapturePreview.vue` is parameterized by a `session`
+// prop, but the DebugWindow shell mounts the resolved component WITHOUT passing
+// props (it stays contract-agnostic). So the registry bakes the session name in
+// per app — a tiny wrapper that renders the shared preview with its `session`.
+function capturePreviewFor(session: string): Loader {
+  return async () => {
+    const { default: CapturePreview } = await import("@src/capture/CapturePreview.vue");
+    return {
+      default: defineComponent({
+        name: `CapturePreview-${session}`,
+        setup: () => () => h(CapturePreview, { session }),
+      }),
+    };
+  };
+}
+
+/** Every app that composes the capture helper (ruling 3) — registers a
+ *  `(session, "capture")` preview window, so AppWindow's camera icon toggles it. */
+const CAPTURE_SESSIONS = [
+  "manual-control",
+  "multi-fovea",
+  "disparity-scope",
+  "calibrate-drift",
+  "calibrate-distortion",
+  "calibrate-extrinsic",
+] as const;
 
 /** The module-component kinds a `debug`-class window can host. Add a new kind
  *  here + a `<kind>Title` entry below + a per-session loader in `registries`. */
@@ -31,11 +59,12 @@ const registries: Record<DebugKind, Record<string, Loader>> = {
   debugger: {
     "disparity-scope": () => import("@modules/disparity-scope/Debugger.vue"),
   },
-  // Capture-preview windows (ruling 8): the module's own preview component,
-  // mounted full-window instead of the retired title-bar capture overlay.
-  capture: {
-    "manual-control": () => import("@modules/manual-control/CapturePreview.vue"),
-  },
+  // Capture-preview windows (ruling 8, generalized by capture-recorder-everywhere
+  // ruling 3): the SHARED preview component, session-baked per app (was the
+  // per-module manual-control component).
+  capture: Object.fromEntries(
+    CAPTURE_SESSIONS.map((session) => [session, capturePreviewFor(session)]),
+  ) as Record<string, Loader>,
 };
 
 /** The `debug`-window TitleBar caption for each kind (the session name rides as

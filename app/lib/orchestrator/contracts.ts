@@ -10,7 +10,7 @@
 // module and re-export) so both ends stay in lock-step.
 
 import { cmd, defineContract } from "./protocol.js";
-import type { Command, FrameTopicStats } from "./protocol.js";
+import type { Command, FramePayload, FrameTopicStats, Serializable } from "./protocol.js";
 import type { GraphTopology } from "./graph-contract.js";
 import type { Pos } from "../controller-codec.js";
 
@@ -69,6 +69,61 @@ export function recordingCommands(): {
     startRecording: cmd<{ path: string }, boolean>(),
     /** Stop the active recording (finalize → auto-open viewer). */
     stopRecording: cmd(),
+  };
+}
+
+// --- capture mixin (capture-recorder-everywhere ruling 3) ------------------
+// Every triple-holding app gets capture: this additive helper produces the
+// `captureShot`/`getCapturePreview`/`saveCapture`/`discardCapture` command shape
+// + the `captureBusy`/`capture_meta` telemetry the renderer's `Capture` facade
+// (`@src/capture`) + the shared `CapturePreview` window read. Spread the two
+// helpers into a contract's `telemetry`/`commands` so a new app opts in with one
+// line each.
+//
+// NAMING (planner ruling): the mixin uses `captureShot`/`getCapturePreview` —
+// collision-free with app-local commands (calibrate-intrinsic already has a
+// `capture` for calibration records). manual-control keeps its legacy
+// `capture`/`getPreview` names ALSO (aliased to the same helper) for backward
+// compat, and additionally spreads this mixin so the shared preview window works.
+
+/** Telemetry fields a capture-capable app publishes. Spread into a contract's
+ *  `telemetry`: `telemetry: { ...captureTelemetry(), ...myFields }`. */
+export function captureTelemetry(): {
+  captureBusy: boolean;
+  capture_meta: Record<string, Serializable>;
+} {
+  return {
+    // A shot is draining/stacking in the capture worker (Save stays disabled).
+    captureBusy: false as boolean,
+    // Per-resource metadata (name -> meta object, or an array for a raster
+    // capture) — the capture NODE's manifest, republished after each shot. The
+    // renderer reads this for the resource list; image data is PULLED per
+    // resource via `getCapturePreview` (ruling 7), never streamed on a channel.
+    capture_meta: {} as Record<string, Serializable>,
+  };
+}
+
+/** Commands a capture-capable app exposes. Spread into a contract's `commands`:
+ *  `commands: { ...captureCommands(), ...myCommands }`. */
+export function captureCommands(): {
+  captureShot: Command<{ tag?: number }, void>;
+  getCapturePreview: Command<{ resource: string; index?: number }, FramePayload | null>;
+  saveCapture: Command<{ path: string; format: string }, void>;
+  discardCapture: Command<void, void>;
+} {
+  return {
+    /** Run ONE capture shot: stacks the raw L/R foveae + slices the center in
+     *  the capture worker, holding the full-depth resources. `tag` present ⇒ a
+     *  raster shot accumulating an indexed resource; absent/0 ⇒ a fresh
+     *  accumulation. Refused while a recording is active (ruling 6). */
+    captureShot: cmd<{ tag?: number }>(),
+    /** Pull one held capture resource downconverted to 8-bit BGRA (ruling 7) —
+     *  `index` selects an entry of a raster resource (default: the latest). */
+    getCapturePreview: cmd<{ resource: string; index?: number }, FramePayload | null>(),
+    /** Persist the pending capture to disk and clear it. */
+    saveCapture: cmd<{ path: string; format: string }>(),
+    /** Discard the pending capture without saving. */
+    discardCapture: cmd(),
   };
 }
 

@@ -35,6 +35,7 @@ import {
 // core/Vision, which the renderer must never pull).
 import { foveaFootprintOnWide } from "./display-geometry";
 import Recording from "@src/record";
+import Capture from "@src/capture";
 import StreamView from "@src/components/StreamView.vue";
 import PosView from "@src/components/PosView.vue";
 import InlineSelect from "@src/components/InlineSelect.vue";
@@ -49,6 +50,12 @@ const { state, telemetry } = session;
 // the session's startRecording/stopRecording — the shared manual-control facade,
 // reused not forked. Per-window singleton; disposed on unmount by the facade.
 new Recording(session, "disparity-scope");
+// Capture context (capture-recorder-everywhere ruling 3): registers this
+// window's camera icon (AppWindow) which toggles the shared CapturePreview
+// window. Capture DRIVING (the shot trigger) lives in that preview window's
+// in-window button — this app needs no bespoke capture UI. Per-window singleton;
+// disposed on unmount by the facade.
+new Capture(session, "disparity-scope");
 
 onMounted(() => {
   if (app_config.baseline_distance_mm) state.baseline = app_config.baseline_distance_mm;

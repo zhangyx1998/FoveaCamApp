@@ -4,45 +4,52 @@ This source code is licensed under the MIT license.
 You may find the full license in project root directory.
 --------------------------------------------------- -->
 <!--
-  Capture-preview window body (capture-recorder-nodes.md ruling 8): the capture
-  previews + SaveControls/SaveReport, lifted out of the retired title-bar
-  overlay (`src/capture/index.vue`) into a `debug`-class window
-  (`kind: "capture"`) the camera icon toggles. Mounted full-window by
-  DebugWindow, which supplies the TitleBar.
+  Shared capture-preview window body (capture-recorder-everywhere ruling 3):
+  the capture previews + SaveControls/SaveReport, PARAMETERIZED by session name
+  (was hardcoded to manual-control per capture-recorder-nodes ruling 8). A
+  `debug`-class window (`kind: "capture"`) the camera icon toggles, mounted
+  full-window by DebugWindow.
 
-  It connects its OWN passive `manual-control` session (the debugger pattern) —
-  the app window keeps the session active/leased; this window only reads the
-  server-held capture resources and forwards save. `current_capture` is a
-  per-window global, so constructing a `Capture` facade here does not collide
-  with the app window's.
+  The window is a PASSIVE viewer over ANY capturable app's session (the debugger
+  pattern): the opener app window keeps the session active/leased; this window
+  only reads the server-held capture resources (via the minimal `captureContract`
+  — the WS telemetry stream carries every field regardless) and forwards save.
+  `current_capture` is a per-window global, so constructing a `Capture` facade
+  here does not collide with the app window's.
+
+  The `session` prop is baked per-app by `debug-registry.ts` (the DebugWindow
+  shell mounts this component without passing props, so the registry loader
+  wraps it with the session name).
 -->
 <script setup lang="ts">
 import { computed, ref, shallowRef, watch } from "vue";
 import { useSession } from "@lib/orchestrator/client";
 import { isEmpty } from "@lib/util";
 import type { FramePayload } from "@lib/orchestrator/protocol";
-import { manualControl } from "./contract";
-import Capture from "@src/capture";
-import SaveControls from "@src/capture/SaveControls.vue";
-import SaveReport from "@src/capture/SaveReport.vue";
-import PreviewMeta from "@src/capture/preview-meta/index.vue";
-import PreviewImage from "@src/capture/preview-image/index.vue";
+import { captureContract } from "./contract";
+import Capture from "./index";
+import SaveControls from "./SaveControls.vue";
+import SaveReport from "./SaveReport.vue";
+import PreviewMeta from "./preview-meta/index.vue";
+import PreviewImage from "./preview-image/index.vue";
 import HorizontalDivision from "@src/layouts/HorizontalDivision.vue";
 
-const session = useSession(manualControl, "manual-control");
+const props = defineProps<{ session: string }>();
+
+// Passive subscription over the minimal capture contract — the opener app owns
+// the active session; this window only pulls held resources + forwards save.
+const session = useSession(captureContract, props.session, { passive: true });
 
 // The renderer-side save-path/save facade (SavePath UI + current_capture
-// registration). Capture DRIVING lives in the app window (manual-control's
-// Capture / Raster Capture buttons) — this window is a passive VIEWER that
-// pulls the node's held resources.
-const cap = new Capture(session, "manual-control");
+// registration). Capture DRIVING lives in the app window — this window is a
+// passive VIEWER that pulls the node's held resources.
+const cap = new Capture(session, props.session);
 
-// ── DATA-SOURCE SEAM (capture-node wave, Phase 3 ruling 7) ─────────────────
-// Preview = the capture node's ACTUAL held resources (ruling 7): the resource
-// list + metadata ride `telemetry.capture_meta` (the node's manifest, computed
-// on the server), and each IMAGE is PULLED on demand via the `getPreview`
-// command (the node downconverts its real full-depth resource to 8-bit BGRA).
-// No republished preview frame stream. Re-pulled whenever a capture/raster run
+// ── DATA-SOURCE SEAM (ruling 7) ────────────────────────────────────────────
+// Preview = the capture node's ACTUAL held resources: the resource list +
+// metadata ride `telemetry.capture_meta` (the node's manifest), and each IMAGE
+// is PULLED on demand via `getCapturePreview` (the node downconverts its real
+// full-depth resource to 8-bit BGRA). Re-pulled whenever a capture/raster run
 // republishes `capture_meta`.
 function* entries() {
   const meta = session.telemetry.capture_meta;
@@ -95,6 +102,22 @@ const image_entries = computed(() =>
 
 const data_ready = computed(() => Object.keys(session.telemetry.capture_meta).length > 0);
 
+// In-window capture trigger (ruling 3): apps without bespoke capture-driving UI
+// (every app but manual-control) get a basic single-shot trigger here, so the
+// camera icon → preview window is a complete capture→preview→save loop. The
+// server refuses (typed error) while a recording is active — surfaced inline.
+const captureBusy = computed(() => session.telemetry.captureBusy === true);
+const capture_error = ref<string | null>(null);
+async function triggerCapture() {
+  if (captureBusy.value) return;
+  capture_error.value = null;
+  try {
+    await cap.capture(); // fresh single-shot (unindexed)
+  } catch (e) {
+    capture_error.value = e instanceof Error ? e.message : String(e);
+  }
+}
+
 const save_state = ref<Promise<void> | null>(null);
 
 // Closing the window = the old overlay's "exit" (server holds the resources
@@ -113,6 +136,12 @@ function save(path: string, img_format: string) {
 
 <template>
   <div class="container">
+    <div class="trigger-bar" v-if="save_state === null">
+      <button :disabled="captureBusy" @click="triggerCapture">
+        {{ captureBusy ? "Capturing…" : "Capture shot" }}
+      </button>
+      <span class="cap-error" v-if="capture_error">{{ capture_error }}</span>
+    </div>
     <SaveControls
       style="height: 4rem"
       :capture="cap"
@@ -164,6 +193,32 @@ function save(path: string, img_format: string) {
     left: 0;
     right: 0;
     bottom: 0;
+  }
+}
+
+// Floating in-window capture trigger (non-invasive overlay — leaves the
+// SaveControls/content absolute layout untouched).
+.trigger-bar {
+  position: absolute;
+  right: 1.5rem;
+  bottom: 1.5rem;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  button {
+    padding: 0.5rem 1rem;
+    font-size: 0.95rem;
+    cursor: pointer;
+  }
+  button:disabled {
+    cursor: default;
+    opacity: 0.6;
+  }
+  .cap-error {
+    color: #e66;
+    font-size: 0.85rem;
+    max-width: 20rem;
   }
 }
 
