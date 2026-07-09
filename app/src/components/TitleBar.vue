@@ -133,9 +133,12 @@ onUnmounted(() => {
     >
       {{ title }}
     </div>
-    <template v-if="subtitle" class="subtitle draggable">
-      <div class="connector">-</div>
-      <div class="subtitle">{{ subtitle }}</div>
+    <!-- The subtitle joins the draggable chrome. The class must sit on the
+         real elements — a `<template>` renders nothing, so a class on it is
+         silently dropped (the old bug: the subtitle area wasn't draggable). -->
+    <template v-if="subtitle">
+      <div class="connector draggable">-</div>
+      <div class="subtitle draggable">{{ subtitle }}</div>
     </template>
     <div class="draggable" style="width: 0; flex-grow: 1"></div>
     <!-- Actions slot: right-aligned window-level controls (record/capture in
@@ -199,14 +202,25 @@ onUnmounted(() => {
     }
   }
 
+  // Connector + subtitle are draggable chrome (system window drag). No
+  // `pointer-events: none` on the connector — the app-region hit-test needs
+  // events to land on the element. They keep .draggable's full bar height
+  // (maximizes the grab area) and center their text vertically themselves.
   .connector {
-    pointer-events: none;
     color: #888;
+    &.draggable {
+      display: flex;
+      align-items: center;
+    }
   }
 
   .subtitle {
     color: #bbb;
-    padding: 0.5ch;
+    padding: 0 0.5ch;
+    &.draggable {
+      display: flex;
+      align-items: center;
+    }
   }
 
   .slot {
