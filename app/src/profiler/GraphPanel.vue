@@ -67,6 +67,7 @@ const KIND_COLORS: Record<string, string> = {
   kcf: "#7a5da8",
   detect: "#8a6d2b",
   fovea: "#2b8a83",
+  composite: "#5a7d8a",
   view: "#555c66",
   record: "#8a2b4f",
   controller: "#a8742f",

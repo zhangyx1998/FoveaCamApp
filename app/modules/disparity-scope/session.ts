@@ -37,9 +37,11 @@
 //    flag is SESSION-LOCAL now (`dragging`) — nothing app-specific rides the
 //    reusable nodes.
 //  - views: the sliced/guide views ARE the slice pipes (renderer
-//    `usePipeFrame`); the L-vs-R disparity view is a renderer canvas
-//    composite (DiffView) of the two fovea undistort pipes; only the per-side
-//    match heatmaps remain session frame channels.
+//    `usePipeFrame`); the L-vs-R difference AND anaglyph center views are a
+//    real two-input COMPOSITE brick (`stereo/composite`, mode retuned from
+//    `state.view`) chained on the two fovea undistort pipes (composite-node-
+//    and-center-select-fix — the renderer DiffView canvas composite is
+//    retired); only the per-side match heatmaps remain session frame channels.
 //
 // Pointer drag → the TRACKER's override (§3.5): down/move call
 // `tk.override(p)`; the control step switches to DIRECT FOLLOW (user rulings
@@ -105,6 +107,7 @@ import { createSlicePipe, type SliceHandle, type SlicePipeSeam } from "@orchestr
 import { createScalePipe, type ScaleHandle, type ScalePipeSeam } from "@orchestrator/scale-pipe";
 import { createStereoPipe, type StereoHandle, type StereoPipeSeam } from "@orchestrator/stereo-pipe";
 import { createHeatmapPipe, type HeatmapHandle, type HeatmapPipeSeam } from "@orchestrator/heatmap-pipe";
+import { createCompositePipe, type CompositeHandle, type CompositePipeSeam } from "@orchestrator/composite-pipe";
 import type { TemplateMatchValues } from "@orchestrator/template-match-kernel";
 import { consumeTracker, createDisparityTrackerFeed } from "./tracker-feed";
 import { makeMat } from "@lib/mat";
@@ -169,6 +172,7 @@ export default function disparityScopeSession(
   scaleSeam: ScalePipeSeam,
   stereoSeam: StereoPipeSeam,
   heatmapSeam: HeatmapPipeSeam,
+  compositeSeam: CompositePipeSeam,
 ): ServerSession<typeof disparity> {
   return defineSession("disparity-scope", disparity, (s) => {
     let triple: CalibratedTriple | null = null;
@@ -198,6 +202,13 @@ export default function disparityScopeSession(
     // heatmap→stereo tap propagate demand end to end).
     let stereo: StereoHandle | null = null;
     let stereoHeatmap: HeatmapHandle | null = null;
+    // The anaglyph / L-vs-R difference COMPOSITE node (composite-node-and-
+    // center-select-fix): a two-input BGRA brick chained on the same L/R
+    // undistort pipes DiffView used to composite in the renderer. Parked until
+    // the center view selects disparity/anaglyph (ruling 2); its mode is
+    // retuned from `state.view` (`disparity` → difference, `anaglyph` →
+    // anaglyph). One connected pipe replaces three per-frame canvas passes.
+    let composite: CompositeHandle | null = null;
     // Wide (C) frame dims — the crop/scale geometry base (camera features,
     // read once on activate; the old kernel derived them from frames).
     let wide: Size = { width: 0, height: 0 };
@@ -364,6 +375,14 @@ export default function disparityScopeSession(
       };
       needleScales.L?.retune({ dsize });
       needleScales.R?.retune({ dsize });
+    }
+
+    /** Retune the composite brick's mode from the selected center view:
+     *  `disparity` → the L-vs-R difference, `anaglyph` → the anaglyph. Other
+     *  views leave the mode alone (the node is parked anyway — no consumer). */
+    function syncCompositeMode(view: string): void {
+      if (view === "disparity") composite?.retune({ mode: "difference" });
+      else if (view === "anaglyph") composite?.retune({ mode: "anaglyph" });
     }
 
     // --- chained tracker (§3.5): arm + result feed -------------------------
@@ -832,6 +851,22 @@ export default function disparityScopeSession(
         stereoDims,
       );
 
+      // COMPOSITE (composite-node-and-center-select-fix): the center view's
+      // "Disparity (L v.s. R)" and "Anaglyph" options — the two-input BGRA
+      // brick that REPLACES the renderer's DiffView canvas composite. Chained
+      // on the SAME L/R undistort pipes DiffView consumed (`needleSources`).
+      // Parked until the renderer connects it (view selected); the mode is
+      // retuned from `state.view` below (initial sync covers activate on an
+      // already-selected disparity/anaglyph view).
+      composite = createCompositePipe(
+        compositeSeam,
+        needleSources.L,
+        needleSources.R,
+        nodeId.stereo("composite"),
+        stereoDims,
+      );
+      syncCompositeMode(s.state.view);
+
       // Worker inputs: each match worker reads its pre-sized needle + the
       // SHARED pre-sized strip (refcount++ per connect — demand propagation
       // keeps the whole slice/scale/undistort chain awake while they read).
@@ -888,13 +923,16 @@ export default function disparityScopeSession(
         tileSlice?.retire();
         stripSlice = tileSlice = null;
       });
-      // Heatmap chains on stereo, stereo on the undistorts — retire in that
-      // order, before the undistort retirers below.
+      // Heatmap chains on stereo, stereo on the undistorts; composite chains
+      // on the undistorts directly — retire all three before the undistort
+      // retirers below.
       disposers.add(() => {
         stereoHeatmap?.retire();
         stereoHeatmap = null;
         stereo?.retire();
         stereo = null;
+        composite?.retire();
+        composite = null;
       });
       for (const retire of retirers) disposers.add(retire);
 
@@ -1165,8 +1203,14 @@ export default function disparityScopeSession(
           steerCrops();
           retuneScalers();
         },
-        // `view` (sliced vs disparity) is renderer-only now: both center views
-        // are pipe/renderer-composed (split-disparity-nodes) — no server work.
+        // `view` now drives the composite brick's MODE server-side (composite-
+        // node-and-center-select-fix): disparity → difference, anaglyph →
+        // anaglyph. `sliced`/`sgbm` leave the mode alone (composite parked —
+        // the renderer connects the composite pipe only for the disparity/
+        // anaglyph options, so demand + mode are coherent).
+        view(v) {
+          syncCompositeMode(v);
+        },
         kernel() {
           // The template size feeds the session-side arm ROI now (the kernel
           // runs no KCF — no params to push). Re-arm live at the current

@@ -75,5 +75,9 @@ void appendStereoReports(Napi::Env env, Napi::Array &rows,
                          std::set<std::string> &seen);
 void appendHeatmapReports(Napi::Env env, Napi::Array &rows,
                           std::set<std::string> &seen);
+// composite-node-and-center-select-fix: the two-input composite brick
+// (kind "composite", left/right BGRA8 input edges, BGRA8 output).
+void appendCompositeReports(Napi::Env env, Napi::Array &rows,
+                            std::set<std::string> &seen);
 
 } // namespace Arv

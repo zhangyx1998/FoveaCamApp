@@ -35,7 +35,6 @@ import {
 // core/Vision, which the renderer must never pull).
 import { foveaFootprintOnWide } from "./display-geometry";
 import StreamView from "@src/components/StreamView.vue";
-import DiffView from "@src/components/DiffView.vue";
 import PosView from "@src/components/PosView.vue";
 import InlineSelect from "@src/components/InlineSelect.vue";
 import Drawer from "@src/components/Drawer.vue";
@@ -65,26 +64,33 @@ const frameC = usePipeFrame(() =>
 const frameR = usePipeFrame(() =>
   state.serials?.R ? nodeId.undistort(state.serials.R) : null,
 );
-// Split-disparity-nodes views: the sliced center view IS the session's
-// scope-tile slice pipe (live-steered server-side, rendered here at pipe rate);
-// the disparity and anaglyph views are renderer canvas composites (DiffView
-// modes) of the two pre-warped fovea pipes above; the SGBM view IS the stereo
-// brick's heatmap pipe. (The guide strip + per-side match heatmaps moved to the
-// module's Debugger.vue sub-window — disparity-debugger-window.md.) Pipe-backed
-// center views bind their pipe ONLY while selected — the C-21 consumer gate
-// then parks the unwatched producer chain (no subscriber → no compute,
-// stereo-disparity-and-heatmap-nodes ruling 2: deselecting SGBM stops the whole
-// heatmap→stereo chain).
-const frameTile = usePipeFrame(() =>
-  state.view === "sliced" && state.serials?.C
-    ? nodeId.slice(state.serials.C, "scope-tile")
-    : null,
-);
-const frameSgbm = usePipeFrame(() =>
-  state.view === "sgbm" && state.serials?.C
-    ? nodeId.heatmap(nodeId.stereo("scope"), "view")
-    : null,
-);
+// Center view is ONE pipe-backed StreamView over a computed pipe id (composite-
+// node-and-center-select-fix §D): every option is a pipe now —
+//   sliced    → the scope-tile slice pipe (live-steered server-side),
+//   disparity → the `stereo/composite` brick's pipe (mode = difference),
+//   anaglyph  → the SAME `stereo/composite` pipe (session retunes mode = anaglyph),
+//   sgbm      → the stereo brick's heatmap pipe.
+// `usePipeFrame` binds ONLY the selected view's pipe — the C-21 consumer gate
+// parks the unwatched producer chain (no subscriber → no compute, stereo-
+// disparity-and-heatmap-nodes ruling 2). disparity↔anaglyph flips retune the
+// SAME connected composite pipe server-side (no reconnect churn). (The guide
+// strip + per-side match heatmaps moved to the module's Debugger.vue sub-window
+// — disparity-debugger-window.md.)
+const centerFrame = usePipeFrame(() => {
+  const c = state.serials?.C;
+  if (!c) return null;
+  switch (state.view) {
+    case "sliced":
+      return nodeId.slice(c, "scope-tile");
+    case "disparity":
+    case "anaglyph":
+      return nodeId.stereo("composite");
+    case "sgbm":
+      return nodeId.heatmap(nodeId.stereo("scope"), "view");
+    default:
+      return null;
+  }
+});
 
 // Center-view select options (one list, rendered into whichever branch's
 // title slot is live).
@@ -254,34 +260,16 @@ function openDebugger(): void {
       <PosView :pos="telemetry.volt.L" :color="THEME.L" style="width: 100%" />
     </div>
     <div class="view">
-      <StreamView v-if="state.view === 'sliced'" class="stream" :payload="frameTile" :theme="THEME.C">
+      <!-- Single pipe-backed center view (composite-node-and-center-select-fix
+           §D): the computed `centerFrame` picks the pipe per `state.view`; the
+           InlineSelect rides the (now-forwarded) #title slot once. -->
+      <StreamView class="stream" :payload="centerFrame" :theme="THEME.C">
         <template #title>
           <InlineSelect v-model="state.view">
             <option v-for="o in VIEW_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</option>
           </InlineSelect>
         </template>
       </StreamView>
-      <StreamView v-else-if="state.view === 'sgbm'" class="stream" :payload="frameSgbm" :theme="THEME.C">
-        <template #title>
-          <InlineSelect v-model="state.view">
-            <option v-for="o in VIEW_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</option>
-          </InlineSelect>
-        </template>
-      </StreamView>
-      <DiffView
-        v-else
-        class="stream"
-        :a="frameL"
-        :b="frameR"
-        :mode="state.view === 'anaglyph' ? 'anaglyph' : 'difference'"
-        :theme="THEME.C"
-      >
-        <template #title>
-          <InlineSelect v-model="state.view">
-            <option v-for="o in VIEW_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</option>
-          </InlineSelect>
-        </template>
-      </DiffView>
       <StreamView class="stream" :title="ROLE.C" :payload="frameC" :theme="THEME.C" @mouse="onCursor">
         <!-- Target center. -->
         <circle :cx="state.target.x" :cy="state.target.y" :r="stroke * 3" :fill="THEME.C" />

@@ -92,12 +92,14 @@ export const disparity = defineContract({
      *  instead (telemetry `match_magnification`); this knob then no longer
      *  influences matching. See docs/applications/disparity-scope.md. */
     zoom: 9.0,
-    /** Which center composite the renderer SHOWS (renderer-local since the
-     *  node split: "sliced" = the scope-tile slice pipe, "disparity"/
-     *  "anaglyph" = DiffView composites of the L/R fovea pipes, "sgbm" = the
-     *  stereo brick's heatmap pipe. Selecting a pipe-backed view is what
-     *  CONNECTS its pipe — unselected views' producers park (no subscriber →
-     *  no compute, stereo-disparity-and-heatmap-nodes ruling 2); kept in
+    /** Which center view the renderer SHOWS (every option is pipe-backed now:
+     *  "sliced" = the scope-tile slice pipe, "disparity"/"anaglyph" = the
+     *  `stereo/composite` brick's BGRA8 pipe (ONE pipe, mode retuned server-
+     *  side from this field — composite-node-and-center-select-fix), "sgbm" =
+     *  the stereo brick's heatmap pipe. Selecting a view is what CONNECTS its
+     *  pipe — unselected views' producers park (no subscriber → no compute,
+     *  stereo-disparity-and-heatmap-nodes ruling 2); the disparity↔anaglyph
+     *  flip retunes the SAME connected composite pipe (no reconnect). Kept in
      *  contract state so the choice survives window reloads). */
     view: "sliced" as "sliced" | "disparity" | "anaglyph" | "sgbm",
     tuning: DEFAULT_TUNING,
@@ -162,10 +164,11 @@ export const disparity = defineContract({
   // disparity-nodes, 2026-07-09): the sliced center view and the guide strip
   // ARE the session's slice pipes now (`camera/<serialC>/undistort/slice/
   // scope-tile` / `scope-strip`, renderer binds via `usePipeFrame`), the
-  // L-vs-R disparity view is a renderer canvas composite (DiffView) of the
-  // two fovea undistort pipes, and the L/C/R views source their own undistort
-  // pipes as before. The heatmaps' `{rect, score}` rides telemetry as
-  // `MatchInfo`, per this file's header comment.
+  // L-vs-R difference AND anaglyph views are the `stereo/composite` brick's
+  // pipe (composite-node-and-center-select-fix — no longer a renderer
+  // composite), and the L/C/R views source their own undistort pipes as
+  // before. The heatmaps' `{rect, score}` rides telemetry as `MatchInfo`,
+  // per this file's header comment.
   frames: ["match_left", "match_right"] as const,
   commands: {
     /** Pointer interaction on the wide view, in wide-frame pixels. */

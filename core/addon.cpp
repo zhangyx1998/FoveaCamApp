@@ -62,6 +62,12 @@ Napi::Value attachHeatmapPipe(const Napi::CallbackInfo &info);
 Napi::Value setHeatmapParams(const Napi::CallbackInfo &info);
 Napi::Value detachHeatmapPipe(const Napi::CallbackInfo &info);
 Napi::Value heatmapProbeAll(const Napi::CallbackInfo &info);
+// composite-node-and-center-select-fix: the two-input composite brick
+// (anaglyph / L-vs-R difference), defined in core/lib/Aravis/CompositeStream.cpp.
+Napi::Value attachCompositePipe(const Napi::CallbackInfo &info);
+Napi::Value setCompositeParams(const Napi::CallbackInfo &info);
+Napi::Value detachCompositePipe(const Napi::CallbackInfo &info);
+Napi::Value compositeProbeAll(const Napi::CallbackInfo &info);
 }
 // unified-time-and-topology §6: consolidated NodeReport rows for every live
 // native brick + pipe. Defined in core/src/Topology.cpp.
@@ -184,6 +190,18 @@ static Object init(Env env, Object exports) {
                Function::New<Arv::detachHeatmapPipe>(env, "detachHeatmapPipe"));
     Aravis.Set("heatmapProbeAll",
                Function::New<Arv::heatmapProbeAll>(env, "heatmapProbeAll"));
+    // composite-node-and-center-select-fix: the two-input composite brick —
+    // a per-pixel BGRA op (anaglyph / L-vs-R difference) pairing two
+    // convert/undistort/fovea/scale taps into a BGRA8 pipe (reactive
+    // {mode}). On-demand (parks with no consumer).
+    Aravis.Set("attachCompositePipe",
+               Function::New<Arv::attachCompositePipe>(env, "attachCompositePipe"));
+    Aravis.Set("setCompositeParams",
+               Function::New<Arv::setCompositeParams>(env, "setCompositeParams"));
+    Aravis.Set("detachCompositePipe",
+               Function::New<Arv::detachCompositePipe>(env, "detachCompositePipe"));
+    Aravis.Set("compositeProbeAll",
+               Function::New<Arv::compositeProbeAll>(env, "compositeProbeAll"));
     exports.Set("Aravis", Aravis);
     // Controller Module
     auto Controller = Object::New(env);

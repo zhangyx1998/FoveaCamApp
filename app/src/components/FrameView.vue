@@ -310,7 +310,7 @@ function mix<T, P>(t: T, p: P): T & P {
     ref="container"
     @mousedown.right.prevent="overlayToggle = !overlayToggle"
   >
-    <div class="title" v-if="title !== null">
+    <div class="title" v-if="title !== null || !!$slots.title">
       <span>{{ title }}</span>
       <div class="title-slot">
         <slot name="title"></slot>

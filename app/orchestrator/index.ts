@@ -238,6 +238,15 @@ const aravisStereo = Aravis as unknown as {
   setHeatmapParams(pipeId: string, params: unknown): boolean;
   detachHeatmapPipe(pipeId: string): void;
   heatmapProbeAll(): Record<string, unknown>;
+  attachCompositePipe(
+    leftPipeId: string,
+    rightPipeId: string,
+    pipeId: string,
+    params: unknown,
+  ): void;
+  setCompositeParams(pipeId: string, params: unknown): boolean;
+  detachCompositePipe(pipeId: string): void;
+  compositeProbeAll(): Record<string, unknown>;
 };
 const stereoSeam: import("./stereo-pipe.js").StereoPipeSeam = {
   advertise: pipeBroker.advertise,
@@ -253,11 +262,21 @@ const heatmapSeam: import("./heatmap-pipe.js").HeatmapPipeSeam = {
   retune: (id, params) => void aravisStereo.setHeatmapParams(id, params),
   detach: (id) => aravisStereo.detachHeatmapPipe(id),
 };
+const compositeSeam: import("./composite-pipe.js").CompositePipeSeam = {
+  advertise: pipeBroker.advertise,
+  unadvertise: pipeBroker.unadvertise,
+  attach: (l, r, id, params) => aravisStereo.attachCompositePipe(l, r, id, params),
+  retune: (id, params) => void aravisStereo.setCompositeParams(id, params),
+  detach: (id) => aravisStereo.detachCompositePipe(id),
+};
 registerNativeProbe(
   () => aravisStereo.stereoProbeAll() as unknown as Record<string, WorkloadSnapshot>,
 );
 registerNativeProbe(
   () => aravisStereo.heatmapProbeAll() as unknown as Record<string, WorkloadSnapshot>,
+);
+registerNativeProbe(
+  () => aravisStereo.compositeProbeAll() as unknown as Record<string, WorkloadSnapshot>,
 );
 const disparityScope = hub.add(
   disparityScopeSession(
@@ -267,6 +286,7 @@ const disparityScope = hub.add(
     scaleSeam,
     stereoSeam,
     heatmapSeam,
+    compositeSeam,
   ),
 );
 

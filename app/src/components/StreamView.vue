@@ -204,7 +204,14 @@ const projection = computed(() =>
     @update:modelValue="(e) => emit('update:modelValue', e)"
     @mouse="(e) => emit('mouse', e)"
   >
-    <slot></slot>
+    <!-- Forward EVERY slot the caller passed (default + named, e.g. #title)
+         to FrameView. `#[name]` with name === "default" reaches FrameView's
+         unnamed <slot>, so the default renders exactly once in its original
+         position; only slots actually passed are forwarded, so untitled
+         StreamViews are unchanged (composite-node-and-center-select-fix §A). -->
+    <template v-for="(_, name) in $slots" #[name]="slotProps">
+      <slot :name="name" v-bind="slotProps ?? {}" />
+    </template>
   </FrameView>
 </template>
 

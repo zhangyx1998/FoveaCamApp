@@ -570,4 +570,61 @@ declare module "core/Aravis" {
    * HeatmapProbeSnapshot }` — keys AND meter names are the node ids.
    */
   export function heatmapProbeAll(): Record<string, HeatmapProbeSnapshot>;
+
+  /**
+   * Reactive composite spec for `attachCompositePipe`/`setCompositeParams`
+   * (composite-node-and-center-select-fix §B). Validated NAPI-side and applied
+   * on the next frame (just the mode enum — no matcher rebuild).
+   *   - `anaglyph`   — out.R = LEFT.R; out.G = RIGHT.G; out.B = RIGHT.B
+   *                    (red = LEFT eye, cyan = RIGHT eye).
+   *   - `difference` — `cv::absdiff(L, R)` on the color channels (alpha 255).
+   */
+  export interface CompositeParams {
+    mode?: "anaglyph" | "difference";
+  }
+
+  /**
+   * Attach a two-input COMPOSITE brick: a per-pixel BGRA op pairing the LEFT
+   * and RIGHT source bricks' OwnedFrame taps (any convert / undistort / fovea /
+   * scale pipe; both resolved by id — a missing pipe throws). LEFT is the
+   * pacing side (a tick per left arrival, matched with the latest right frame).
+   * Output is a BGRA8 pipe (`BGRA8` / `U8`, channels 4, alpha 255) — advertise
+   * it with `maxWidth`/`maxHeight`/`maxBytes` (4 bytes/px). deviceTimestamp/
+   * systemTimestamp/origin are forwarded from the LEFT frame (trusted-time).
+   * Unequal L/R dims or a non-BGRA input → the frame is dropped (a metered
+   * transient during steer/retune). On-demand: parks with no consumer. Retune
+   * live via `setCompositeParams`.
+   */
+  export function attachCompositePipe(
+    leftPipeId: string,
+    rightPipeId: string,
+    pipeId: string,
+    params: CompositeParams,
+  ): boolean;
+
+  /** Live-retune a composite pipe (mode applied on the NEXT frame). No
+   *  re-attach. Returns false for an unknown pipe id. */
+  export function setCompositeParams(
+    pipeId: string,
+    params: CompositeParams,
+  ): boolean;
+
+  /** Detach + join the composite producer. Idempotent (false if unknown). */
+  export function detachCompositePipe(pipeId: string): boolean;
+
+  /** `compositeProbeAll` snapshot: the shared meter shape ({left,right} inputs,
+   *  {composite} output) + the last produced frame's active out dims + the
+   *  forwarded LEFT-frame crop origin. */
+  export interface CompositeProbeSnapshot extends ProbeSnapshot {
+    activeWidth: number;
+    activeHeight: number;
+    originX: number;
+    originY: number;
+  }
+
+  /**
+   * Out-of-loop probe of every ACTIVE composite thread → `{ [pipeId]:
+   * CompositeProbeSnapshot }` — keys AND meter names are the node ids.
+   */
+  export function compositeProbeAll(): Record<string, CompositeProbeSnapshot>;
 }
