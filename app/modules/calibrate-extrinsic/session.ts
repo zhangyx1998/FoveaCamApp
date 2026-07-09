@@ -17,15 +17,15 @@
 // (`loadIntrinsic`, exported from `calibration.ts`).
 //
 // Actuation mode switches with the wizard step: CAL runs `startServo`
-// (tracker-driven visual servo, manual override via drag); PRV runs a
-// direct `startActuationLoop` against a drag-computed target (testing the
-// just-fitted regressions); FIN has no actuation (static review).
+// (tracker-driven visual servo, manual override via drag); PRV pushes a
+// drag-computed target to the controller NODE via a paced position input
+// (testing the just-fitted regressions); FIN has no actuation (static review).
 
 import { type ServerSession } from "@orchestrator/runtime";
 import { defineResourceSession, type ResourceScope } from "@orchestrator/resource-session";
 import { matchTriple, retryUntil, type CameraLease } from "@orchestrator/registry";
 import { loadIntrinsic, fitExtrinsicRegression } from "@orchestrator/calibration";
-import { startActuationLoop, type ActuationLoop } from "@orchestrator/actuation";
+import { controllerNode, startPacer, type PositionInput } from "@orchestrator/controller-node";
 import { startServo, type MarkerTracker, type Servo } from "@orchestrator/marker-tracker";
 import { applyPidOverride } from "@orchestrator/pid-node";
 import { publishSerials, DisposerBag, releaseLeases } from "@orchestrator/session-resources";
@@ -67,7 +67,8 @@ export default function calibrateExtrinsicSession(): ServerSession<typeof calibr
     let undistort: Undistort | null = null;
     let trackers: Record<Role, MarkerTracker> | null = null;
     let servo: Servo | null = null;
-    let preview: ActuationLoop | null = null;
+    let previewInput: PositionInput | null = null;
+    let previewStop: (() => void) | null = null;
     let previewVolt: { l: Pos; r: Pos } = { l: ORIGIN, r: ORIGIN };
     let records: ExtrinsicRecord[] = [];
     let fittedL: ExtrinsicConversions | null = null;
@@ -83,8 +84,10 @@ export default function calibrateExtrinsicSession(): ServerSession<typeof calibr
       servo = null;
     }
     function stopPreview(): void {
-      preview?.stop();
-      preview = null;
+      previewStop?.();
+      previewStop = null;
+      void previewInput?.close(); // terminate the MCU stream + disable-iff-we-enabled
+      previewInput = null;
     }
 
     /** Switch the active actuation mode to match the wizard step. Called
@@ -104,7 +107,15 @@ export default function calibrateExtrinsicSession(): ServerSession<typeof calibr
         s.setState("pidOverrideL", { engaged: false, value: null });
         s.setState("pidOverrideR", { engaged: false, value: null });
       } else if (step === "PRV") {
-        preview = startActuationLoop({ targetVolts: () => previewVolt, onVolts() {} });
+        // Push model: a paced timer pushes the drag-computed `previewVolt` to the
+        // controller node (was `startActuationLoop`). No telemetry body — the PRV
+        // step tests the just-fitted regressions, it doesn't mirror volts.
+        previewInput = controllerNode().openPosition("calibrate-extrinsic-preview", {
+          initial: { left: previewVolt.l, right: previewVolt.r },
+        });
+        previewStop = startPacer(1, () => {
+          previewInput!.update({ left: previewVolt.l, right: previewVolt.r });
+        });
       }
     }
 

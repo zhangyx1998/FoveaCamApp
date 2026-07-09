@@ -1,19 +1,23 @@
 // Coverage for the marker servo's PID-node control core (marker-tracker.ts
-// `startServo`), rebuilt on the landed PID infra (docs/proposals/pid-nodes-and-
-// view-replumb.md). Three concerns:
+// `startServo`), now pushing through the controller NODE (controller-node-and-
+// fifo-edges §3) instead of its own actuate loop. Three concerns:
 //   (1) NUMERIC EQUIVALENCE — the PID2D velocity-form step (ki = kp, kp = kd = 0)
 //       reproduces the original hand-rolled `pos += rel*kp`, and the no-marker
 //       branch reproduces the overshoot-guarded `backToCenter` return-to-origin.
+//       The re-base source moved from `c.pos` to `update()`'s predicted return
+//       (seeded from `c.pos` on the first tick) — bit-identical under A-30.
 //   (2) OVERRIDE — the ruled slot through the servo: while a per-eye override is
 //       held the control law is skipped and the output is pinned; on release the
 //       servo resumes FROM the released pose (no snap-back).
 //   (3) GRAPH WIRING — each eye registers a `pid` node + its detect→pid and
 //       pid→controller edges; `stop()` retires them.
 //
-// The native controller module is mocked to a settable holder (no serial
-// hardware); `core/*` value imports pulled in transitively by `marker-tracker`
-// (via `@lib/marker`) are stubbed so importing it needs no addon. The servo runs
-// against structural fake trackers (same pattern as `marker-calibration.test`).
+// The servo no longer touches `@orchestrator/controller`; it binds a v1 fake
+// controller onto the node (no serial hardware, no addon — `core/*` value
+// imports pulled in transitively via `@lib/marker` are stubbed). The v1 fake is
+// pre-enabled so the node's enable/origin path is skipped (like the original),
+// and its `actuate` (driven by the node's v1 loop) updates `pos`; `predictVolts`
+// is identity so the predicted return the servo re-bases on equals `pos`.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Point2d } from "core/Geometry";
@@ -33,16 +37,11 @@ vi.mock("core/Vision", () => ({
 vi.mock("core/Geometry", () => ({ area: vi.fn() }));
 vi.mock("core/Regression", () => ({ default: class {}, RegressionConfig: class {} }));
 
-// A settable active-controller holder standing in for the shared MEMS device.
-const { holder } = vi.hoisted(() => ({ holder: { c: null as FakeController | null } }));
-vi.mock("@orchestrator/controller", () => ({
-  activeController: () => holder.c,
-  setActiveController: (c: FakeController | null) => {
-    holder.c = c;
-  },
-}));
-
 import { startServo, type MarkerTracker } from "@orchestrator/marker-tracker";
+import {
+  controllerNode,
+  resetControllerNodeForTest,
+} from "@orchestrator/controller-node";
 import {
   buildTopology,
   resetTopologyStateForTest,
@@ -51,23 +50,28 @@ import {
 // --- fakes -------------------------------------------------------------------
 
 class FakeController {
-  enabled = true; // pre-enabled: skip the servo's enable+origin actuate
+  port = "/dev/fake";
+  v2Capable = false; // v1: the node's paced loop awaits actuate(), updating pos
+  enabled = true; // pre-enabled: skip the node's enable path (no origin actuate)
   pos: { left: Pos; right: Pos } = { left: { x: 0, y: 0 }, right: { x: 0, y: 0 } };
-  actuated: Array<{ left?: Pos; right?: Pos }> = [];
+  actuated: Array<{ left: Pos; right: Pos }> = [];
   async enable() {
     this.enabled = true;
   }
   async disable() {
     this.enabled = false;
   }
-  async actuate(p: { left?: Pos; right?: Pos }) {
-    this.actuated.push({
-      ...(p.left ? { left: { ...p.left } } : {}),
-      ...(p.right ? { right: { ...p.right } } : {}),
-    });
-    if (p.left) this.pos.left = { ...p.left };
-    if (p.right) this.pos.right = { ...p.right };
+  // The node's v1 loop pushes the full latest pose here.
+  async actuate(p: { left: Pos; right: Pos }) {
+    this.actuated.push({ left: { ...p.left }, right: { ...p.right } });
+    this.pos.left = { ...p.left };
+    this.pos.right = { ...p.right };
     return { ...this.pos };
+  }
+  // Identity prediction — the servo re-bases on this return; A-30 says it equals
+  // the actuate readback (here trivially so).
+  predictVolts(p: { left: Pos; right: Pos }) {
+    return { left: { ...p.left }, right: { ...p.right } };
   }
   last() {
     return this.actuated[this.actuated.length - 1];
@@ -104,23 +108,27 @@ function fakeTracker(serial: string): FakeTracker {
 }
 
 const asTracker = (t: FakeTracker): MarkerTracker => t as unknown as MarkerTracker;
-/** Let the async actuation loop pick up a fired detection's `pending` command. */
+/** Let the node's async v1 loop apply the last pushed pose. */
 const settle = () => new Promise<void>((r) => setTimeout(r, 25));
 
+let fake: FakeController;
+
 beforeEach(() => {
+  resetControllerNodeForTest();
   resetTopologyStateForTest();
-  holder.c = new FakeController();
+  controllerNode(); // create + register the `controller` graph node
+  fake = new FakeController();
+  controllerNode().bindController(fake as never);
 });
 afterEach(() => {
-  holder.c = null;
+  resetControllerNodeForTest();
 });
 
 // --- (1) numeric equivalence -------------------------------------------------
 
 describe("marker servo — numeric equivalence with the original proportional update", () => {
   it("marker branch reproduces `pos += rel*kp` (default kp=16) across a sequence", async () => {
-    const c = holder.c!;
-    c.pos.left = { x: 1, y: 2 };
+    fake.pos.left = { x: 1, y: 2 }; // seeds the servo's re-base on the first tick
     const L = fakeTracker("SER-L");
     const servo = startServo(asTracker(L), undefined, {}); // kp defaults to 16.0
 
@@ -128,23 +136,23 @@ describe("marker servo — numeric equivalence with the original proportional up
     L.fire();
     await settle();
     // base {1,2} + rel*16 = {2.6, -1.2}
-    expect(c.last()!.left!.x).toBeCloseTo(2.6, 10);
-    expect(c.last()!.left!.y).toBeCloseTo(-1.2, 10);
-    expect(c.last()!.right).toBeUndefined(); // no right tracker
+    expect(fake.last()!.left.x).toBeCloseTo(2.6, 10);
+    expect(fake.last()!.left.y).toBeCloseTo(-1.2, 10);
+    // No right tracker → the right eye holds its seeded origin (full-pair push).
+    expect(fake.last()!.right).toEqual({ x: 0, y: 0 });
 
     L.rel = { x: 0.05, y: 0.05 };
     L.fire();
     await settle();
-    // base is now the live readback {2.6,-1.2} + rel*16 = {3.4, -0.4}
-    expect(c.last()!.left!.x).toBeCloseTo(3.4, 10);
-    expect(c.last()!.left!.y).toBeCloseTo(-0.4, 10);
+    // base is now the applied (predicted) {2.6,-1.2} + rel*16 = {3.4, -0.4}
+    expect(fake.last()!.left.x).toBeCloseTo(3.4, 10);
+    expect(fake.last()!.left.y).toBeCloseTo(-0.4, 10);
 
     servo.stop();
   });
 
   it("no-marker branch reproduces the overshoot-guarded backToCenter return", async () => {
-    const c = holder.c!;
-    c.pos.left = { x: 5, y: -3 };
+    fake.pos.left = { x: 5, y: -3 };
     const L = fakeTracker("SER-L");
     // kp=2 so the return step is a PARTIAL move (doesn't reach origin in one tick).
     const servo = startServo(asTracker(L), undefined, {
@@ -156,8 +164,8 @@ describe("marker servo — numeric equivalence with the original proportional up
     L.fire();
     await settle();
     // x: 5 + backToCenter(5,2) = 5 - 2 = 3 ; y: -3 + backToCenter(-3,2) = -3 + 2 = -1
-    expect(c.last()!.left!.x).toBeCloseTo(3, 10);
-    expect(c.last()!.left!.y).toBeCloseTo(-1, 10);
+    expect(fake.last()!.left.x).toBeCloseTo(3, 10);
+    expect(fake.last()!.left.y).toBeCloseTo(-1, 10);
 
     servo.stop();
   });
@@ -167,8 +175,7 @@ describe("marker servo — numeric equivalence with the original proportional up
 
 describe("marker servo — ruled override slot (held pins output, release resumes from pose)", () => {
   it("while held: skips the control law and pins the output; on release: resumes from the released pose", async () => {
-    const c = holder.c!;
-    c.pos.left = { x: 0, y: 0 };
+    fake.pos.left = { x: 0, y: 0 };
     const L = fakeTracker("SER-L");
     const servo = startServo(asTracker(L), undefined, {
       originLeft: () => ({ x: 0, y: 0 }),
@@ -181,14 +188,14 @@ describe("marker servo — ruled override slot (held pins output, release resume
     L.rel = { x: 0.1, y: 0.1 };
     L.fire();
     await settle();
-    expect(c.last()!.left).toEqual({ x: 7, y: 8 }); // pinned, control fn skipped
+    expect(fake.last()!.left).toEqual({ x: 7, y: 8 }); // pinned, control fn skipped
     expect(servo.override.left!.engaged).toBe(true);
 
     // Still held, marker jumps — output stays pinned (control law not run).
     L.rel = { x: 0.5, y: 0.5 };
     L.fire();
     await settle();
-    expect(c.last()!.left).toEqual({ x: 7, y: 8 });
+    expect(fake.last()!.left).toEqual({ x: 7, y: 8 });
 
     // Release: resume from the released pose {7,8}, NOT a snap toward origin.
     servo.override.left!.release();
@@ -196,17 +203,16 @@ describe("marker servo — ruled override slot (held pins output, release resume
     L.fire();
     await settle();
     expect(servo.override.left!.engaged).toBe(false);
-    // base = live readback {7,8} + rel*16 = {8.6, 9.6} (would be ~{1.6,1.6} on a snap)
-    expect(c.last()!.left!.x).toBeCloseTo(8.6, 10);
-    expect(c.last()!.left!.y).toBeCloseTo(9.6, 10);
+    // base = applied {7,8} + rel*16 = {8.6, 9.6} (would be ~{1.6,1.6} on a snap)
+    expect(fake.last()!.left.x).toBeCloseTo(8.6, 10);
+    expect(fake.last()!.left.y).toBeCloseTo(9.6, 10);
 
     servo.stop();
   });
 
   it("overriding ONE eye pins it while the other keeps servoing (per-eye grain)", async () => {
-    const c = holder.c!;
-    c.pos.left = { x: 0, y: 0 };
-    c.pos.right = { x: 0, y: 0 };
+    fake.pos.left = { x: 0, y: 0 };
+    fake.pos.right = { x: 0, y: 0 };
     const L = fakeTracker("SER-L");
     const R = fakeTracker("SER-R");
     const servo = startServo(asTracker(L), asTracker(R), {});
@@ -218,9 +224,9 @@ describe("marker servo — ruled override slot (held pins output, release resume
     R.fire();
     await settle();
     // left held at the override; right still servos `pos += rel*16`.
-    expect(c.pos.left).toEqual({ x: 3, y: 3 });
-    expect(c.pos.right.x).toBeCloseTo(3.2, 10);
-    expect(c.pos.right.y).toBeCloseTo(3.2, 10);
+    expect(fake.pos.left).toEqual({ x: 3, y: 3 });
+    expect(fake.pos.right.x).toBeCloseTo(3.2, 10);
+    expect(fake.pos.right.y).toBeCloseTo(3.2, 10);
     expect(servo.override.left!.engaged).toBe(true);
     expect(servo.override.right!.engaged).toBe(false);
 

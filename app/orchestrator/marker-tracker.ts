@@ -37,7 +37,7 @@ import { clamp } from "@lib/util/math";
 import { bilinearInterpolate, CORNER_OBJ_POINTS, getInternalObjectPoints } from "@lib/marker";
 import abortableNext from "@lib/abortable.next";
 import { report } from "./diagnostics.js";
-import { activeController } from "./controller.js";
+import { controllerNode, type PositionPair } from "./controller-node.js";
 import { PID2D, type PidParams } from "@lib/pid";
 import { nodeId } from "@lib/orchestrator/graph-contract";
 import {
@@ -195,12 +195,6 @@ function backToCenter(p: number, kp: number): number {
   return -clamp(Math.sign(p) * kp, [Math.min(0, p), Math.max(0, p)]);
 }
 
-/** Topology-only downstream node id for each eye's pid → controller edge. The
- *  servo actuates the shared `activeController()` (no per-port MEMS id reaches
- *  here), so this is a stable placeholder the wiring shim renders as a
- *  `controller` node — same convention as disparity-scope's CONTROLLER_NODE_ID. */
-const CONTROLLER_NODE_ID = "controller";
-
 export interface ServoOptions {
   kp?: number;
   originLeft?: () => Point2d;
@@ -231,10 +225,11 @@ export interface Servo {
  * Visual-servo the controller toward `left`/`right` trackers' targets (or
  * back toward `origin*` when no target is visible) — the original `actuate()`
  * control loop, rebuilt as a pair of graph-visible PID controller NODES
- * (docs/proposals/pid-nodes-and-view-replumb.md). Runs against the
- * orchestrator's shared `activeController()` (same holder tracking-single/
- * manual-control's `startActuationLoop` reads), not a passed-in facade — the
- * caller doesn't own enable/disable bracketing beyond calling `stop()`.
+ * (docs/proposals/pid-nodes-and-view-replumb.md) that push a combined pose to
+ * the shared controller NODE (controller-node-and-fifo-edges §3). The device
+ * transport (v2 CMD_STREAM / v1 awaited actuate + enable lifecycle) lives in the
+ * node; this function no longer runs its own actuate loop or touches
+ * `activeController` — it opens ONE position input and pushes on each detection.
  *
  * CONTROL CORE. The original hand-rolled `pos += rel*kp` is a VELOCITY-FORM
  * update: the running command is `previous + gain·error`. Mapped onto the
@@ -243,11 +238,13 @@ export interface Servo {
  * integrator, so `PID2D.step(rel)` returns `base + kp·rel` exactly (see
  * @lib/pid). Each eye owns a `PID2D` (independent x/y integrators, exactly the
  * original's component-wise `{x,y}` update); dt is 1 per detection tick. The
- * integrator is RE-BASED on the live controller position (`c.pos.left/right`)
- * every tick — the SAME base the original read — so the command sequence
- * (including its DAC-quantized feedback) is bit-identical. The default `kp`
- * (16.0) and the per-caller value (calibrate-drift passes 10.0) carry through
- * unchanged as `ki`.
+ * integrator is RE-BASED each tick on the last APPLIED volts — `update()`'s
+ * synchronous return (`predictVolts`), SEEDED from the controller's live `pos`
+ * on the first tick. This is bit-identical to the original read of
+ * `c.pos.left/right` (A-30: `predictVolts` equals the actuate readback) AND
+ * correct on the streaming path, where `c.pos` is static because updates never
+ * round-trip. The default `kp` (16.0) and the per-caller value (calibrate-drift
+ * passes 10.0) carry through unchanged as `ki`.
  *
  * OVERRIDE. Each eye's PID node exposes a RULED override slot
  * (`servo.override.left`/`right`); the owning module drives it from its
@@ -270,10 +267,22 @@ export function startServo(
 ): Servo {
   const { kp = 16.0 } = opts;
   const owner = opts.owner ?? "marker-servo";
-  const pending: { left?: Pos; right?: Pos } = {};
+  const node = controllerNode();
   const disposers: Array<() => void> = [];
-  let running = true;
-  let enabledByUs = false;
+
+  // The pose the node holds. `applied` = last APPLIED volts (re-base source),
+  // seeded once from the controller's live `pos`; `pending` = the pose pushed on
+  // each detection (the non-firing eye holds its last applied value — physically
+  // identical to the original's per-eye `_pos` hold). A single MCU stream drives
+  // both eyes, so the push is always a full pair.
+  const applied: PositionPair = { left: { x: 0, y: 0 }, right: { x: 0, y: 0 } };
+  const pending: PositionPair = { left: { x: 0, y: 0 }, right: { x: 0, y: 0 } };
+  let seeded = false;
+  const input = node.openPosition("servo", {
+    // `from` omitted: the per-eye PID nodes already draw `…/pid/<side> →
+    // controller` edges, so the input registers no additional edge.
+    initial: { left: { x: 0, y: 0 }, right: { x: 0, y: 0 } },
+  });
 
   // Velocity-form params (see the doc comment): ki = kp, kp = kd = 0, unbounded.
   const axis = (): PidParams => ({ kp: 0, ki: kp, kd: 0 });
@@ -296,7 +305,7 @@ export function startServo(
       kind: "pid",
       owner: nodeId.win(owner),
       inputs: [{ from: nodeId.detect(tracker.serial), port: "marker", type: { kind: "detect" } }],
-      outputs: [{ to: CONTROLLER_NODE_ID, port: side }],
+      outputs: [{ to: nodeId.controller(), port: side }],
       controllers: { pos: pid },
       seed: (v) => {
         pid.value = v;
@@ -325,23 +334,40 @@ export function startServo(
     return cmd;
   }
 
+  /** Seed the re-base source from the controller's live position ONCE, so the
+   *  first tick starts from the real mirror pose (as the original read of
+   *  `c.pos` did). After this, `applied` tracks `update()`'s predicted return. */
+  function ensureSeeded(pos: { left: Pos; right: Pos }): void {
+    if (seeded) return;
+    seeded = true;
+    applied.left = { ...pos.left };
+    applied.right = { ...pos.right };
+  }
+
   function onDetection(
     side: "left" | "right",
     tracker: MarkerTracker,
     pid: PID2D,
-    node: PidNodeHandle<Pos>,
+    pidNode: PidNodeHandle<Pos>,
     originThunk: (() => Point2d) | undefined,
   ): void {
-    const c = activeController();
+    const c = node.liveController;
     if (!c) return;
-    const base = side === "left" ? c.pos.left : c.pos.right;
+    ensureSeeded(c.pos);
+    const base = side === "left" ? applied.left : applied.right;
     const origin = originThunk?.() ?? { x: 0, y: 0 };
     // The node's override slot is driven externally (the module's `pidOverride`
-    // command → `applyPidOverride(node.override, …)`). `node.step` runs `control`
-    // UNLESS the slot is engaged — then it resets `pid` and returns the pinned
-    // pose, so `pending` carries the override-or-servo command resolved for this
-    // tick (the old actuation-loop `override ?? pending` poll, now at the node).
-    pending[side] = outputOf(node.step(() => control(base, tracker.centerRelative, origin, pid)));
+    // command → `applyPidOverride(pidNode.override, …)`). `pidNode.step` runs
+    // `control` UNLESS the slot is engaged — then it resets `pid` and returns the
+    // pinned pose (the old `override ?? servo` poll, at the node).
+    pending[side] = outputOf(pidNode.step(() => control(base, tracker.centerRelative, origin, pid)));
+    // Push the combined pose; the return is the applied (predicted) volts — the
+    // next tick's re-base for BOTH eyes (the held eye keeps its last value).
+    const predicted = input.update({ left: pending.left, right: pending.right });
+    applied.left = predicted.left;
+    applied.right = predicted.right;
+    pending.left = predicted.left;
+    pending.right = predicted.right;
   }
 
   if (left && pidLeft && nodeLeft)
@@ -353,39 +379,6 @@ export function startServo(
       right.onDetection(() => onDetection("right", right, pidRight, nodeRight, opts.originRight)),
     );
 
-  void (async () => {
-    while (running) {
-      const c = activeController();
-      if (!c) {
-        enabledByUs = false;
-        await new Promise((r) => setTimeout(r, 250));
-        continue;
-      }
-      try {
-        if (!c.enabled) {
-          await c.enable();
-          enabledByUs = true;
-          await c.actuate({
-            left: opts.originLeft?.() ?? { x: 0, y: 0 },
-            right: opts.originRight?.() ?? { x: 0, y: 0 },
-          });
-        }
-        if (pending.left || pending.right) {
-          // `pending` already carries the override-or-servo command (resolved in
-          // `onDetection` through each eye's PID node), so the loop just flushes
-          // it — the old `overrideLeft?.() ?? pending` poll now lives at the node.
-          await c.actuate({ left: pending.left, right: pending.right });
-          delete pending.left;
-          delete pending.right;
-        } else {
-          await new Promise((r) => setTimeout(r, 1));
-        }
-      } catch {
-        enabledByUs = false;
-      }
-    }
-  })();
-
   return {
     nodes: { left: nodeLeft, right: nodeRight },
     override: {
@@ -393,14 +386,12 @@ export function startServo(
       right: nodeRight?.override ?? null,
     },
     stop() {
-      running = false;
       for (const d of disposers) d();
       nodeLeft?.dispose();
       nodeRight?.dispose();
-      if (enabledByUs) {
-        activeController()?.disable();
-        enabledByUs = false;
-      }
+      // Terminate the MCU stream + disable the controller iff the node enabled it
+      // (fire-and-forget, matching the original's un-awaited disable).
+      void input.close();
     },
   };
 }

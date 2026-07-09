@@ -32,6 +32,7 @@ import { onReport, onSpan, span } from "./diagnostics.js";
 import { systemSession } from "./sessions/system.js";
 import { controllerSession } from "./sessions/controller.js";
 import { activeController, setActiveController } from "./controller.js";
+import { controllerNode } from "./controller-node.js";
 import { viewerSession } from "./sessions/viewer.js";
 import liveViewSession from "@modules/single-capture/session";
 import manageCamerasSession from "@modules/manage-cameras/session";
@@ -178,6 +179,11 @@ const liveview = hub.add(liveViewSession());
 const manageCameras = hub.add(manageCamerasSession());
 
 // --- controller: serial MEMS mirror device (dormant until `connect`) ------
+// Create the long-lived controller NODE up front (controller-node-and-fifo-
+// edges §3): registers its `controller` graph node BEFORE any session's
+// PID/position edges, so the declared node (with the serial-meter statsKey)
+// wins over a synthesized placeholder. The session binds/unbinds the device.
+controllerNode();
 hub.add(controllerSession());
 
 // --- tracking: first frame-driven control loop (KCF + actuation) ----------

@@ -25,7 +25,7 @@
 import { type ServerSession } from "@orchestrator/runtime";
 import { defineResourceSession, type ResourceScope } from "@orchestrator/resource-session";
 import { acquireTriple, type CalibratedTriple } from "@orchestrator/calibration";
-import { startActuationLoop, type ActuationLoop } from "@orchestrator/actuation";
+import { controllerNode, startPacer, type PositionInput } from "@orchestrator/controller-node";
 import { DisposerBag, publishSerials, releaseLeases } from "@orchestrator/session-resources";
 import {
   depthFromInverse,
@@ -67,7 +67,8 @@ export default function manualControlSession(
 ): ServerSession<typeof manualControl> {
   return defineResourceSession("manual-control", manualControl, (s) => {
     let triple: CalibratedTriple | null = null;
-    let loop: ActuationLoop | null = null;
+    let posInput: PositionInput | null = null;
+    let stopActuation: (() => void) | null = null;
     let worker: VisionWorkerHandle | null = null;
 
     // Center-frame geometry, learned from the worker's processed center.
@@ -313,26 +314,39 @@ export default function manualControlSession(
         onResult,
       );
 
-      loop = startActuationLoop({
-        targetVolts,
-        onVolts(v, actuateMs) {
-          volts.L = v.L;
-          volts.R = v.R;
-          actuateMsStats.push(actuateMs);
-          const now = performance.now();
-          if (now - lastParamPush >= VOLT_TELEMETRY_INTERVAL_MS) {
-            lastParamPush = now;
-            pushParams(voltParams());
-          }
-          if (now - lastVoltEmit >= VOLT_TELEMETRY_INTERVAL_MS) {
-            lastVoltEmit = now;
-            s.telemetry({
-              volt: v,
-              perf: { actuateMs: { mean: actuateMsStats.mean, max: actuateMsStats.max } },
-            });
-            actuateMsStats.resetMax();
-          }
+      // Push model (controller-node-and-fifo-edges §3): the SESSION owns the
+      // 1 ms cadence; each tick pushes the current target and uses the node's
+      // synchronous predicted-volts return for the local mirror + telemetry
+      // (was `onVolts`). `onApplied` supplies the awaited round-trip ms on the v1
+      // fallback (~0 on the v2 streaming path).
+      let lastActuateMs = 0;
+      posInput = controllerNode().openPosition("manual-control", {
+        from: nodeId.win("manual-control", "display"),
+        initial: { left: { ...volts.L }, right: { ...volts.R } },
+        onApplied: (_v, actuateMs) => {
+          lastActuateMs = actuateMs;
         },
+      });
+      stopActuation = startPacer(1, () => {
+        const t = targetVolts();
+        const p = posInput!.update({ left: t.l, right: t.r });
+        const v = { L: p.left, R: p.right };
+        volts.L = p.left;
+        volts.R = p.right;
+        actuateMsStats.push(lastActuateMs);
+        const now = performance.now();
+        if (now - lastParamPush >= VOLT_TELEMETRY_INTERVAL_MS) {
+          lastParamPush = now;
+          pushParams(voltParams());
+        }
+        if (now - lastVoltEmit >= VOLT_TELEMETRY_INTERVAL_MS) {
+          lastVoltEmit = now;
+          s.telemetry({
+            volt: v,
+            perf: { actuateMs: { mean: actuateMsStats.mean, max: actuateMsStats.max } },
+          });
+          actuateMsStats.resetMax();
+        }
       });
 
       // --- teardown (registered reverse of drain; LIFO) -----------------
@@ -357,8 +371,10 @@ export default function manualControlSession(
         s.telemetry({ ready: false });
       });
       scope.defer(() => {
-        loop?.stop(); // drains FIRST — stop actuating immediately
-        loop = null;
+        stopActuation?.(); // drains FIRST — stop pushing immediately
+        stopActuation = null;
+        void posInput?.close(); // terminate the MCU stream + disable-iff-we-enabled
+        posInput = null;
       });
 
       s.telemetry({ ready: true });

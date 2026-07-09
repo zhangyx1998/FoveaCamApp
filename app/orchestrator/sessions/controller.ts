@@ -15,6 +15,7 @@ import {
   activeController,
   setActiveController,
 } from "../controller.js";
+import { controllerNode } from "../controller-node.js";
 import { report, timeSpan } from "../diagnostics.js";
 import { pingControllerOffset, setCalibration } from "../time-align.js";
 import { controller } from "@lib/orchestrator/contracts";
@@ -95,6 +96,10 @@ export function controllerSession(): ServerSession<typeof controller> {
               const c = new Controller(info);
               await c.ready;
               setActiveController(c);
+              // Bind the device into the long-lived controller NODE (position
+              // streams + trigger mode). Folds its `controller:<port>` serial
+              // meter into the node's graph stats; streams recreate lazily.
+              controllerNode().bindController(c);
               publish();
               startProbe();
               // Unified time (proposal §3): MCU↔host clock calibration via
@@ -131,6 +136,10 @@ export function controllerSession(): ServerSession<typeof controller> {
         async disconnect() {
           const c = ctrl();
           setActiveController(null);
+          // Unbind from the node FIRST (drops MCU streams, stops the v1 loop) so
+          // the disable-on-disconnect below is the sole quiescence path — the
+          // node never bypasses it (hardware-quiescence invariant).
+          await controllerNode().unbindController();
           try {
             // Never hand back an energized mirror driver: releasing the port
             // leaves the firmware's Enable state untouched (hardware-safety

@@ -133,6 +133,10 @@ export class Controller {
 
   private readonly device: Device;
   readonly ready: Promise<void>;
+  /** Serial port path (e.g. `/dev/tty…`) — the identity behind this device's
+   *  `controller:<port>` serial meter. The controller NODE folds that meter
+   *  into its stats by this key on bind. */
+  readonly port: string;
   private bias = 0;
   // Owner-applied dt (unified-time ruling 0): host-steady-ns offset mapping
   // the MCU µs clock into the trusted domain. 0 until calibration (the ping
@@ -174,6 +178,7 @@ export class Controller {
     lpf: number = 120,
     log_level: LogLevel = "INFO",
   ) {
+    this.port = info.path;
     this.serialMeter = registerWorkload(`controller:${info.path}`, {
       inputs: [],
       outputs: ["packets"],
@@ -335,6 +340,15 @@ export class Controller {
       left: decodeChannels(channels(pos.left ?? this._pos.left, this.bias, this.dv)),
       right: decodeChannels(channels(pos.right ?? this._pos.right, this.bias, this.dv)),
     };
+  }
+
+  /** Mirror a STREAMED target into the local `pos` (v2 fire-and-forget has no
+   *  readback). The controller node feeds the predicted volts it just applied so
+   *  `pos` stays live for readers that expect the awaited-actuate invariant —
+   *  calibrate voltage capture, drift derivation. LOCAL only: sends nothing to
+   *  the wire (the CMD_STREAM update already carries the command). */
+  applyStreamedPos(pos: { left: Pos; right: Pos }): void {
+    this._pos = { left: clonePos(pos.left), right: clonePos(pos.right) };
   }
 
   trigger(duration_ns: number) {
