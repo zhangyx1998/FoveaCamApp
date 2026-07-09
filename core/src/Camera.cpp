@@ -136,11 +136,17 @@ public:
   // Camera::Ptr — without this, `camera.release()` kept the DEVICE claimed
   // until GC collected the JS stream object (janitor rig find 2026-07-08:
   // "RootReference of Arv::Stream destroyed with non-zero reference").
-  // Native-only (releaseNative), safe from finalizer/cleanup context.
   static void destruct(CameraObject *obj) {
     if (obj->stream_ref.IsEmpty())
       return;
     try {
+      // This runs from the Cleanup registry at env teardown (RunCleanup),
+      // where node provides NO HandleScope — `Reference::Value()` creates a
+      // handle, so open a scope explicitly or V8 fatals ("Cannot create a
+      // handle without a HandleScope" → abort, SIGABRT on orchestrator exit
+      // with any live camera). Harmless extra scope on the JS-call/finalizer
+      // paths.
+      Napi::HandleScope scope(obj->env);
       auto *stream = StreamObject<Arv::Stream>::Unwrap(obj->stream_ref.Value());
       if (stream)
         stream->releaseNative();
