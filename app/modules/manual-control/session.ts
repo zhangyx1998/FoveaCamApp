@@ -45,7 +45,11 @@ import { conversionComputeH, startHomographyFeeder } from "@orchestrator/homogra
 import { pushHomography } from "core/Aravis";
 import { nodeId } from "@lib/orchestrator/graph-contract";
 import type { PipeBroker } from "@orchestrator/pipe-session";
-import { createRawPipe, type RawPipeSeam, type RawHandle } from "@orchestrator/raw-pipe";
+import {
+  rawPipeSpec,
+  type RawPipeRegistry,
+  type RawPipeAcquisition,
+} from "@orchestrator/raw-pipe";
 import {
   createCaptureNode,
   type CaptureNodeHandle,
@@ -63,7 +67,7 @@ import {
   vergeToDistance,
 } from "@lib/stereo";
 import { RECT } from "@lib/util/geometry";
-import { pixelFormatChannels, pixelFormatDtype, significantBits } from "@lib/util/dtype";
+import { significantBits } from "@lib/util/dtype";
 import type { PixelFormat } from "core/Aravis";
 import type { Point2d } from "core/Geometry";
 import type { Pos } from "@lib/controller-codec";
@@ -72,7 +76,7 @@ import { RollingStats } from "@lib/util/rolling";
 export default function manualControlSession(
   broker: PipeBroker,
   undistortSeam: UndistortPipeSeam,
-  rawSeam: RawPipeSeam,
+  rawPipes: RawPipeRegistry,
 ): ServerSession<typeof manualControl> {
   return defineResourceSession("manual-control", manualControl, (s) => {
     let triple: CalibratedTriple | null = null;
@@ -199,23 +203,6 @@ export default function manualControlSession(
     let activeCapture: Promise<void> = Promise.resolve();
     let capturing = false;
 
-    /** Raw-pipe geometry for a camera (its ACTUAL sensor readout format+dims). */
-    function rawGeometryFor(camera: {
-      pixel_format: PixelFormat;
-      getFeatureInt(name: string): number;
-    }) {
-      const format = camera.pixel_format;
-      const dtype = pixelFormatDtype(format);
-      return {
-        width: camera.getFeatureInt("Width"),
-        height: camera.getFeatureInt("Height"),
-        channels: pixelFormatChannels(format),
-        bytesPerElement: dtype === "U16" ? 2 : 1,
-        pixelFormat: format,
-        ringDepth: 8, // a short burst; a deep recorder ring isn't needed
-      };
-    }
-
     /** One connected raw stream → the worker's per-stream init. */
     function streamInitFrom(conn: {
       shmName: string;
@@ -245,18 +232,21 @@ export default function manualControlSession(
     function acquireCaptureStreams() {
       if (!triple || !centerPipe) throw new Error("capture: session not active");
       const { L, R } = triple.leases;
-      const rawL: RawHandle = createRawPipe(
-        rawSeam,
-        L.camera,
-        `camera/${L.camera.serial}/raw`,
-        rawGeometryFor(L.camera),
-      );
-      const rawR: RawHandle = createRawPipe(
-        rawSeam,
-        R.camera,
-        `camera/${R.camera.serial}/raw`,
-        rawGeometryFor(R.camera),
-      );
+      // Refcounted acquire (ruling 5): advertise+attach the UNPACKED raw L/R
+      // producers ONCE (a short capture-burst ring depth of 8); connect the
+      // consumer gate; release() disconnects then retires at refcount 0.
+      const rawL: RawPipeAcquisition = rawPipes.acquire({
+        kind: "raw",
+        camera: L.camera,
+        pipeId: `camera/${L.camera.serial}/raw`,
+        spec: rawPipeSpec(L.camera, `camera/${L.camera.serial}/raw`, 8),
+      });
+      const rawR: RawPipeAcquisition = rawPipes.acquire({
+        kind: "raw",
+        camera: R.camera,
+        pipeId: `camera/${R.camera.serial}/raw`,
+        spec: rawPipeSpec(R.camera, `camera/${R.camera.serial}/raw`, 8),
+      });
       const cL = broker.connect(rawL.pipeId);
       const cR = broker.connect(rawR.pipeId);
       return {
@@ -272,8 +262,8 @@ export default function manualControlSession(
         release: () => {
           broker.disconnect(rawL.pipeId);
           broker.disconnect(rawR.pipeId);
-          rawL.retire();
-          rawR.retire();
+          rawL.release();
+          rawR.release();
         },
       };
     }
@@ -335,14 +325,18 @@ export default function manualControlSession(
     const recording = createRecording({
       getTriple: () => triple,
       volts: () => volts,
-      rawSeam,
+      rawPipes,
       // Connect a raw pipe for the recorder node (refcount++ → C-21 gate →
-      // producer runs); the node releases it on stop.
+      // producer runs); the node releases it on stop. Inject the JS-side
+      // significantBits the native spec drops (ruling 8 — the advertiser's job).
       connect: (pipeId) => {
         const handle = broker.connect(pipeId);
+        const injected = rawPipes.specOf(pipeId);
         return {
           shmName: handle.shmName,
-          spec: handle.spec,
+          spec: injected
+            ? { ...handle.spec, significantBits: injected.significantBits }
+            : handle.spec,
           release: () => void broker.disconnect(pipeId),
         };
       },

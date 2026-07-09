@@ -19,7 +19,6 @@
 // electron/main.ts).
 
 import { mkdirSync } from "node:fs";
-import type { PixelFormat } from "core/Aravis";
 import type { Point2d } from "core/Geometry";
 import type { Mat } from "core/Vision";
 import { frameVoltageExtras } from "@orchestrator/recorder";
@@ -29,9 +28,13 @@ import {
   type RecorderNodeHandle,
   type RecorderStreamStats,
 } from "@orchestrator/recorder-node";
-import { createRawPipe, type RawPipeSeam, type RawHandle } from "@orchestrator/raw-pipe";
+import {
+  rawPipeSpec,
+  DEFAULT_RAW_RING_DEPTH,
+  type RawPipeRegistry,
+  type RawPipeAcquisition,
+} from "@orchestrator/raw-pipe";
 import { matToArray } from "@lib/mat";
-import { pixelFormatChannels, pixelFormatDtype } from "@lib/util/dtype";
 import type { Pos } from "@lib/controller-codec";
 import type { CalibratedTriple } from "@orchestrator/calibration";
 
@@ -48,9 +51,9 @@ export type FoveaBinding = { A: Point2d; H: Mat<Float64Array> } & (
 export interface RecordingDeps {
   getTriple(): CalibratedTriple | null;
   volts(): { L: Pos; R: Pos };
-  /** Advertise+attach / retire the full-bit-depth `camera/<serial>/raw` pipes
-   *  (native producer). Injected from index.ts (never imports core here). */
-  rawSeam: RawPipeSeam;
+  /** Refcounted registry for the full-bit-depth `camera/<serial>/raw` pipes
+   *  (ONE advertise per id ever; native producer). Injected from index.ts. */
+  rawPipes: RawPipeRegistry;
   /** Connect a pipe for the recorder node (refcount++ → C-21 gate → producer
    *  runs); the node releases it on stop. Injected from the session (broker). */
   connect: RecorderConnect;
@@ -123,30 +126,10 @@ const STREAM_MIRROR: Record<string, "L" | "R" | null> = {
   "right-fovea": "R",
 };
 
-/** Raw-pipe geometry for a camera (its ACTUAL sensor readout format + dims). */
-function rawGeometry(camera: {
-  serial: string;
-  pixel_format: PixelFormat;
-  getFeatureInt(name: string): number;
-}) {
-  const format = camera.pixel_format;
-  const dtype = pixelFormatDtype(format);
-  return {
-    width: camera.getFeatureInt("Width"),
-    height: camera.getFeatureInt("Height"),
-    channels: pixelFormatChannels(format),
-    bytesPerElement: dtype === "U16" ? 2 : 1,
-    pixelFormat: format,
-    // Deep ring (recorder territory): a lagging FIFO consumer stays lossless up
-    // to the depth, drop-accounted past it, the writer never blocked.
-    ringDepth: 48,
-  };
-}
-
 export function createRecording(deps: RecordingDeps): RecordingController {
   let active = false;
   let node: RecorderNodeHandle | null = null;
-  let rawPipes: RawHandle[] = [];
+  let acquisitions: RawPipeAcquisition[] = [];
   let pollTimer: ReturnType<typeof setInterval> | null = null;
 
   function publishStreams(): void {
@@ -169,18 +152,29 @@ export function createRecording(deps: RecordingDeps): RecordingController {
       const { L, C, R } = triple.leases;
       const { conv } = triple;
 
-      // Advertise+attach the full-bit-depth raw producers (consumer-gated: the
-      // node's connect below spins them up).
-      const rawFor = (
-        camera: { serial: string; pixel_format: PixelFormat; getFeatureInt(n: string): number },
-      ): RawHandle =>
-        createRawPipe(deps.rawSeam, camera, `camera/${camera.serial}/raw`, rawGeometry(camera));
-      rawPipes = [rawFor(L.camera), rawFor(C.camera), rawFor(R.camera)];
+      // Refcounted acquire (ruling 5): advertise+attach the full-bit-depth raw
+      // producers ONCE, shared with any concurrent acquirer (capture) instead of
+      // a clobbering second advertise. Consumer-gated: the node's connect below
+      // spins them up; deep recorder ring (48).
+      const rawFor = (camera: {
+        serial: string;
+        pixel_format: string;
+        getFeatureInt(n: string): number;
+      }): RawPipeAcquisition => {
+        const pipeId = `camera/${camera.serial}/raw`;
+        return deps.rawPipes.acquire({
+          kind: "raw",
+          camera,
+          pipeId,
+          spec: rawPipeSpec(camera, pipeId, DEFAULT_RAW_RING_DEPTH),
+        });
+      };
+      acquisitions = [rawFor(L.camera), rawFor(C.camera), rawFor(R.camera)];
 
       const streams = {
-        "left-fovea": { pipeId: rawPipes[0]!.pipeId },
-        center: { pipeId: rawPipes[1]!.pipeId },
-        "right-fovea": { pipeId: rawPipes[2]!.pipeId },
+        "left-fovea": { pipeId: acquisitions[0]!.pipeId },
+        center: { pipeId: acquisitions[1]!.pipeId },
+        "right-fovea": { pipeId: acquisitions[2]!.pipeId },
       };
 
       node = createRecorderNode({
@@ -219,9 +213,10 @@ export function createRecording(deps: RecordingDeps): RecordingController {
       // summary/index, terminates the worker, disconnects the pipes).
       await node?.stop();
       node = null;
-      // Retire the raw producers AFTER the node released its connections.
-      for (const p of rawPipes) p.retire();
-      rawPipes = [];
+      // Release the raw acquisitions AFTER the node released its connections
+      // (last release retires the producer + unadvertises).
+      for (const p of acquisitions) p.release();
+      acquisitions = [];
       deps.telemetry({ recording_active: false, recordingStreams: {} });
       // Auto-open the finished recording in the viewer window (rulings 8/9).
       if (finished) deps.finished(finished.filePath);

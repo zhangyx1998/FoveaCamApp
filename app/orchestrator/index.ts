@@ -25,6 +25,7 @@ import {
 import { Hub, setFrameTransportFactory, type ServerSession } from "./runtime.js";
 import { releaseAll, setRegistryPipeSeam } from "./registry.js";
 import { pipeSession, asBroker, createFoveaMaterializer } from "./pipe-session.js";
+import { createRawPipeRegistry } from "./raw-pipe.js";
 import { buildTopology } from "./graph-topology.js";
 import { registerNativeProbe, registerNodeReports, nodeReports } from "./native-probes.js";
 import type { WorkloadSnapshot } from "@lib/orchestrator/stats.js";
@@ -189,16 +190,30 @@ hub.add(controllerSession());
 const aravisRaw = Aravis as unknown as {
   attachRawPipe(camera: unknown, pipeId: string): boolean;
   detachRawPipe(pipeId: string): boolean;
+  attachRaw12pPipe(camera: unknown, pipeId: string): boolean;
+  detachRaw12pPipe(pipeId: string): boolean;
 };
+// Kind-routed seam: `"raw"` → the UNPACKED 16-bit container; `"raw12p"` → the
+// VERBATIM packed wire payload (multi-fovea-recording ruling 1).
 const rawSeam: import("./raw-pipe.js").RawPipeSeam = {
   advertise: pipeBroker.advertise,
   unadvertise: pipeBroker.unadvertise,
-  attach: (camera, pipeId) => void aravisRaw.attachRawPipe(camera, pipeId),
-  detach: (pipeId) => void aravisRaw.detachRawPipe(pipeId),
+  attach: (kind, camera, pipeId) =>
+    void (kind === "raw12p"
+      ? aravisRaw.attachRaw12pPipe(camera, pipeId)
+      : aravisRaw.attachRawPipe(camera, pipeId)),
+  detach: (kind, pipeId) =>
+    void (kind === "raw12p"
+      ? aravisRaw.detachRaw12pPipe(pipeId)
+      : aravisRaw.detachRawPipe(pipeId)),
 };
+// ONE process-wide refcounted registry (multi-fovea-recording ruling 5): shared
+// by manual-control + multi-fovea so a live raw pipe id is advertised ONCE and
+// shared, never clobbered by a second advertise.
+const rawPipes = createRawPipeRegistry(rawSeam);
 
 // --- manual-control: manual steering + capture + recording ----------------
-const manualControl = hub.add(manualControlSession(asBroker(Pipe), undistortSeam, rawSeam));
+const manualControl = hub.add(manualControlSession(asBroker(Pipe), undistortSeam, rawPipes));
 
 // --- multi-fovea: protocol-v2 multi-target logic skeleton ------------------
 const multiFovea = hub.add(
