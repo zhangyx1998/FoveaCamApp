@@ -41,6 +41,10 @@ export interface StereoPipeSeam {
     pipeId: string,
     params: StereoParams,
   ): void;
+  /** stereo-paired-inputs: attach the PAIRED variant — SGBM per exposure pair
+   *  off the always-running pairing brick (`pair/<stage>`), matched L/R by
+   *  construction. Same output advert + on-demand gate as `attach`. */
+  attachPaired(pairStage: string, pipeId: string, params: StereoParams): void;
   retune(pipeId: string, params: StereoParams): void;
   detach(pipeId: string): void;
 }
@@ -62,15 +66,10 @@ export interface StereoHandle {
 
 const F32_BYTES = 4;
 
-/** Advertise the F32 disparity pipe + attach the stereo brick chained on the
- *  two source pipes. Advertise BEFORE attach. */
-export function createStereoPipe(
-  seam: StereoPipeSeam,
-  leftPipeId: string,
-  rightPipeId: string,
-  pipeId: string,
-  opts: StereoPipeOptions,
-): StereoHandle {
+/** The F32 disparity pipe advert — IDENTICAL in both modes (stereo-paired-inputs
+ *  ruling 4: `Disparity32F`, F32, left-sized; heatmap chaining + consumers see
+ *  no difference between latest-wins and paired). */
+function advertiseDisparity(seam: StereoPipeSeam, pipeId: string, opts: StereoPipeOptions): void {
   const { maxWidth, maxHeight } = opts;
   seam.advertise({
     id: pipeId,
@@ -86,7 +85,9 @@ export function createStereoPipe(
     maxHeight,
     maxBytes: maxWidth * maxHeight * F32_BYTES,
   });
-  seam.attach(leftPipeId, rightPipeId, pipeId, opts.params ?? {});
+}
+
+function stereoHandle(seam: StereoPipeSeam, pipeId: string): StereoHandle {
   return {
     pipeId,
     retune: (p) => seam.retune(pipeId, p),
@@ -95,4 +96,33 @@ export function createStereoPipe(
       seam.unadvertise(pipeId);
     },
   };
+}
+
+/** Advertise the F32 disparity pipe + attach the LATEST-WINS stereo brick
+ *  chained on the two source pipes (free-run). Advertise BEFORE attach. */
+export function createStereoPipe(
+  seam: StereoPipeSeam,
+  leftPipeId: string,
+  rightPipeId: string,
+  pipeId: string,
+  opts: StereoPipeOptions,
+): StereoHandle {
+  advertiseDisparity(seam, pipeId, opts);
+  seam.attach(leftPipeId, rightPipeId, pipeId, opts.params ?? {});
+  return stereoHandle(seam, pipeId);
+}
+
+/** stereo-paired-inputs (ruling 1/2): advertise the SAME F32 disparity pipe +
+ *  attach the PAIRED stereo brick chained on the pairing brick (`pair/<stage>`).
+ *  Composed when the session's trigger topology is live; the advert + returned
+ *  handle are identical to `createStereoPipe` (consumers/heatmap unchanged). */
+export function createPairedStereoPipe(
+  seam: StereoPipeSeam,
+  pairStage: string,
+  pipeId: string,
+  opts: StereoPipeOptions,
+): StereoHandle {
+  advertiseDisparity(seam, pipeId, opts);
+  seam.attachPaired(pairStage, pipeId, opts.params ?? {});
+  return stereoHandle(seam, pipeId);
 }

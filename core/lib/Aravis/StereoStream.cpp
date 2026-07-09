@@ -84,6 +84,9 @@ StereoStream::Ptr findStereo(const std::string &pipeId) {
 
 // Resolve one input pipeId to a live ConvertedFrame producer (undistort /
 // convert / fovea / scale). Returns nullptr if none — caller reports the miss.
+// Also resolves a pairing test source (test-only; the registry is empty in
+// production, same precedent as PairStream's resolvePairSource) so the paired
+// core test can drive a latest-wins parity reference off the same frames.
 static ChainedStream::Source resolveSource(const std::string &srcId) {
   if (auto und = findUndistort(srcId))
     return und;
@@ -93,6 +96,8 @@ static ChainedStream::Source resolveSource(const std::string &srcId) {
     return fov;
   if (auto sc = findScale(srcId))
     return sc;
+  if (auto t = findPairTestSource(srcId))
+    return t;
   return nullptr;
 }
 
@@ -134,6 +139,65 @@ FN(attachStereoPipe) {
     auto stream =
         StereoStream::create(std::move(left), leftId, std::move(right), rightId,
                              pipeId, params, maxW, maxH);
+    {
+      std::scoped_lock lock(g_mutex);
+      auto &b = g_pipes[pipeId];
+      b.subscriber.reset(); // re-attach: gated sub points at the old stream
+      b.stream = std::move(stream);
+      b.sink = sink;
+      b.maxW = maxW;
+      b.maxH = maxH;
+    }
+    hub.setConsumerGate(pipeId, [pipeId](bool active) {
+      std::scoped_lock lock(g_mutex);
+      auto it = g_pipes.find(pipeId);
+      if (it == g_pipes.end())
+        return;
+      auto &b = it->second;
+      if (active && !b.subscriber)
+        b.subscriber = std::make_unique<PipeOfferSubscriber>(
+            b.stream.get(), b.sink, b.maxW, b.maxH, /*maxBound=*/true);
+      else if (!active && b.subscriber)
+        b.subscriber.reset();
+    });
+    return Boolean::New(env, true);
+  }
+  JS_EXCEPT(env.Undefined())
+}
+
+// ---- attach PAIRED: SGBM per exposure pair off the pair brick ---------------
+// stereo-paired-inputs: the trigger-mode variant. ONE input = a live pairing
+// brick (`pair/<stage>`, e.g. `pair/undistort`); records carry matched L/R
+// frames. Same output pipe (Disparity32F / F32, left-sized), same consumer gate
+// (on-demand), same reactive params + probe surface as attachStereoPipe.
+FN(attachStereoPaired) {
+  auto env = info.Env();
+  try {
+    JS_ASSERT(info[0].IsString() && info[1].IsString(), TypeError,
+              "attachStereoPaired: pairStage, pipeId (strings) required",
+              env.Undefined());
+    const auto pairStage = info[0].As<Napi::String>().Utf8Value();
+    const auto pipeId = info[1].As<Napi::String>().Utf8Value();
+    JS_ASSERT(info[2].IsObject(), TypeError,
+              "attachStereoPaired: params object required", env.Undefined());
+    const StereoParams params = parseStereoParams(info[2].As<Napi::Object>());
+
+    auto &hub = Pipe::PipeHub::instance();
+    auto *sink = hub.sink(pipeId);
+    JS_ASSERT(sink != nullptr, Error,
+              "attachStereoPaired: unknown pipe " + pipeId, env.Undefined());
+    const auto &spec = hub.publisher(pipeId).spec();
+    const uint32_t maxW = spec.maxWidth ? spec.maxWidth : spec.width;
+    const uint32_t maxH = spec.maxHeight ? spec.maxHeight : spec.height;
+
+    PairStream::Ptr pair = findPair(pairStage);
+    JS_ASSERT(pair != nullptr, Error,
+              "attachStereoPaired: no pairing brick on stage " + pairStage,
+              env.Undefined());
+
+    auto stream = StereoStream::createPaired(
+        std::static_pointer_cast<::Stream<PairBatch::Ptr>>(pair), pairStage,
+        pipeId, params, maxW, maxH);
     {
       std::scoped_lock lock(g_mutex);
       auto &b = g_pipes[pipeId];
@@ -212,6 +276,9 @@ FN(stereoProbeAll) {
     o.Set("activeHeight", Napi::Number::New(env, r.height));
     o.Set("originX", Napi::Number::New(env, r.x));
     o.Set("originY", Napi::Number::New(env, r.y));
+    o.Set("paired", Napi::Boolean::New(env, b.stream->paired()));
+    o.Set("pairDrops",
+          Napi::Number::New(env, static_cast<double>(b.stream->pairDrops())));
     out.Set(pipeId, o);
   }
   return out;
@@ -227,10 +294,17 @@ void appendStereoReports(Napi::Env env, Napi::Array &rows,
     if (!b.stream)
       continue;
     auto row = Topology::node(env, pipeId, "stereo", "native");
-    Topology::addInput(env, row, b.stream->leftId(), "left",
-                       Topology::frameType(env, "BGRA8", "U8"));
-    Topology::addInput(env, row, b.stream->rightId(), "right",
-                       Topology::frameType(env, "BGRA8", "U8"));
+    if (b.stream->paired()) {
+      // stereo-paired-inputs: ONE edge from the pair node (`pair/<stage>` →
+      // `stereo/<name>`); the pair record carries the matched L/R frames.
+      Topology::addInput(env, row, b.stream->pairFrom(), "pair",
+                         Topology::frameType(env, "BGRA8", "U8"));
+    } else {
+      Topology::addInput(env, row, b.stream->leftId(), "left",
+                         Topology::frameType(env, "BGRA8", "U8"));
+      Topology::addInput(env, row, b.stream->rightId(), "right",
+                         Topology::frameType(env, "BGRA8", "U8"));
+    }
     if (!Topology::decoratePipe(env, row, pipeId))
       row.Set("output", Topology::frameType(env, "Disparity32F", "F32"));
     row.Set("stats", meterSnapshotToJs(env, b.stream->probe()));

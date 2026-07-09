@@ -53,6 +53,7 @@ Napi::Value scaleProbeAll(const Napi::CallbackInfo &info);
 // stereo-disparity-and-heatmap-nodes: the two-input SGBM disparity brick,
 // defined in core/lib/Aravis/StereoStream.cpp.
 Napi::Value attachStereoPipe(const Napi::CallbackInfo &info);
+Napi::Value attachStereoPaired(const Napi::CallbackInfo &info);
 Napi::Value setStereoParams(const Napi::CallbackInfo &info);
 Napi::Value detachStereoPipe(const Napi::CallbackInfo &info);
 Napi::Value stereoProbeAll(const Napi::CallbackInfo &info);
@@ -202,6 +203,8 @@ static Object init(Env env, Object exports) {
     // heatmap. Both on-demand (park with no consumer).
     Aravis.Set("attachStereoPipe",
                Function::New<Arv::attachStereoPipe>(env, "attachStereoPipe"));
+    Aravis.Set("attachStereoPaired",
+               Function::New<Arv::attachStereoPaired>(env, "attachStereoPaired"));
     Aravis.Set("setStereoParams",
                Function::New<Arv::setStereoParams>(env, "setStereoParams"));
     Aravis.Set("detachStereoPipe",

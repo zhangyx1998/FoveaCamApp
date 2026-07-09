@@ -25,14 +25,33 @@
 // Reactive params (validated NAPI-side, applied on the brick thread): the SGBM
 // matcher is rebuilt when a pending param lands.
 
+//
+// stereo-paired-inputs (ruled 2026-07-09): a SECOND input mode — the SGBM join
+// over EXPOSURE PAIRS. Instead of two latest-wins OwnedFrame taps, the paired
+// variant chains on the always-running `PairStream` brick with ONE record tap
+// (pairing-nodes: `PairStream` is a `Stream<PairBatch::Ptr>`), running SGBM per
+// PairRecord — L/R matched by construction (anchored on the FIN), no in-brick
+// anchor matching (tolerance-once ruling). The `process(left,right)` compute
+// path, reactive params, F32 left-coords output, and meter surface are the SAME
+// (REUSED, not rewritten); only the input side differs. Mode is chosen at
+// CONSTRUCTION (session recompose on trigger start/stop), never a runtime
+// switch. On-demand like the latest-wins brick (parks with no consumers → the
+// record tap unsubscribes; the pair brick's keep-alive is unaffected). Output
+// advert + timestamps (LEFT frame's, never re-stamped) are identical in both
+// modes.
+
 #include <atomic>
 #include <cmath>
+#include <condition_variable>
+#include <deque>
+#include <mutex>
 
 #include <opencv2/opencv.hpp>
 
 #include <Threading/Guard.h>
 
 #include "ConverterStream.h" // TapPublisher, TapChannel, ChannelKind, ...
+#include "PairStream.h"      // PairBatch, PairRecord, Stream<PairBatch::Ptr>
 
 namespace Arv {
 
@@ -68,6 +87,25 @@ public:
         maxH_(maxH), params_(params),
         meter_(std::move(name), {"left", "right"}, {"disparity"},
                converterNowMs()) {}
+
+  // stereo-paired-inputs: the PAIRED-input variant — SGBM per PairRecord off the
+  // always-running `PairStream` brick (`pairSource`). `pairFrom` is the pair
+  // node id (topology input edge `pair/<stage>` → this brick). Compute + output
+  // are identical to the latest-wins ctor above.
+  using PairSource = std::shared_ptr<::Stream<PairBatch::Ptr>>;
+  static Ptr createPaired(PairSource pairSource, std::string pairFrom,
+                          std::string name, const StereoParams &params,
+                          uint32_t maxW, uint32_t maxH) {
+    return std::make_shared<StereoStream>(std::move(pairSource),
+                                          std::move(pairFrom), std::move(name),
+                                          params, maxW, maxH);
+  }
+  StereoStream(PairSource pairSource, std::string pairFrom, std::string name,
+               const StereoParams &params, uint32_t maxW, uint32_t maxH)
+      : name_(name), maxW_(maxW), maxH_(maxH), params_(params), paired_(true),
+        pairSource_(std::move(pairSource)), pairFrom_(std::move(pairFrom)),
+        meter_(std::move(name), {"left", "right"}, {"disparity"},
+               converterNowMs()) {}
   // NB: ::Stream<T>'s destructor is non-virtual, but this brick is only ever
   // held by shared_ptr (its type-erased deleter destructs the concrete type).
   ~StereoStream() {
@@ -90,9 +128,21 @@ public:
   const std::string &name() const { return name_; }
   const std::string &leftId() const { return leftId_; }
   const std::string &rightId() const { return rightId_; }
+  // stereo-paired-inputs: topology — a paired brick reports ONE input edge from
+  // the pair node (`pairFrom`, port "pair"); the latest-wins brick keeps its
+  // two left/right edges. `pairDrops` = records shed by the record tap when the
+  // SGBM thread outran it (drop-oldest, never backpressures the pair brick).
+  bool paired() const { return paired_; }
+  const std::string &pairFrom() const { return pairFrom_; }
+  uint64_t pairDrops() {
+    auto ch = *recCh_.ref();
+    return ch ? ch->drops() : 0;
+  }
 
 protected:
   void start() override {
+    if (paired_)
+      return startPaired();
     auto lch = kind_.make();
     auto rch = kind_.make();
     { *leftCh_.ref() = lch; }
@@ -106,6 +156,8 @@ protected:
   }
 
   void stop() override {
+    if (paired_)
+      return stopPaired();
     // Close BOTH channels FIRST (ChannelKind::Leaky here, but preserve the
     // ChainedStreamOf deadlock note for both): closing wakes a poll-blocked
     // read (EOS) and, for a FIFO channel, a backpressure-blocked source push,
@@ -128,6 +180,8 @@ protected:
   }
 
   ConvertedFrame::Ptr iterate() override {
+    if (paired_)
+      return iteratePaired();
     TapChannel::Ptr lch, rch;
     {
       auto ref = leftCh_.ref();
@@ -164,6 +218,123 @@ protected:
   }
 
 private:
+  // ---- paired-input transport (stereo-paired-inputs) ------------------------
+  // A bounded, DROP-OLDEST record queue. The pair brick's dispatch thread writes
+  // (non-blocking — it must NEVER stall the always-running pair brick), the SGBM
+  // thread reads (blocking). `close()` wakes a blocked reader (teardown / pair
+  // brick death). Records are cheap (2 frame pins + a small anchor), bounded by
+  // `cap`; under SGBM overload the OLDEST record is shed (metered as `drops`),
+  // never backpressured upstream.
+  class RecordChannel {
+  public:
+    explicit RecordChannel(size_t cap) : cap_(cap) {}
+    void write(PairRecord rec) { // producer (pair brick thread) — non-blocking
+      {
+        std::scoped_lock lk(m_);
+        if (closed_)
+          return;
+        q_.push_back(std::move(rec));
+        while (q_.size() > cap_) {
+          q_.pop_front();
+          drops_.fetch_add(1, std::memory_order_relaxed);
+        }
+      }
+      cv_.notify_one();
+    }
+    bool read(PairRecord &out) { // consumer (SGBM thread) — blocks; false=closed
+      std::unique_lock lk(m_);
+      cv_.wait(lk, [&] { return closed_ || !q_.empty(); });
+      if (q_.empty())
+        return false; // closed + drained
+      out = std::move(q_.front());
+      q_.pop_front();
+      return true;
+    }
+    void close() {
+      {
+        std::scoped_lock lk(m_);
+        closed_ = true;
+      }
+      cv_.notify_all();
+    }
+    uint64_t drops() const { return drops_.load(std::memory_order_relaxed); }
+
+  private:
+    std::mutex m_;
+    std::condition_variable cv_;
+    std::deque<PairRecord> q_;
+    const size_t cap_;
+    bool closed_ = false;
+    std::atomic<uint64_t> drops_{0};
+  };
+
+  // The record tap: a Subscriber on the always-running PairStream that fans each
+  // completed batch's records into the RecordChannel. Its EXISTENCE is the
+  // demand on the pair brick (like TapPublisher on a frame brick). Records are
+  // COPIED (2 shared_ptr + a small vector) — the delivered batch is shared with
+  // the pair brick's keep-alive (+ any other subscriber), never moved-from here.
+  class RecordSink : public Subscriber<PairBatch::Ptr> {
+  public:
+    RecordSink(::Stream<PairBatch::Ptr> *producer,
+               std::shared_ptr<RecordChannel> ch)
+        : Subscriber<PairBatch::Ptr>(producer), ch_(std::move(ch)) {}
+    ~RecordSink() { close(); }
+    void close(bool unsubscribe = true, TracedError::Ptr err = nullptr) override {
+      Subscriber<PairBatch::Ptr>::close(unsubscribe, err);
+      if (ch_)
+        ch_->close(); // downstream read() throws EOS-equivalent (false) → stop
+    }
+
+  protected:
+    void push(const PairBatch::Ptr &b) override {
+      if (!b || !ch_)
+        return;
+      for (const auto &rec : b->records)
+        ch_->write(rec); // COPY the record (pins its two frames)
+    }
+
+  private:
+    std::shared_ptr<RecordChannel> ch_;
+  };
+
+  void startPaired() {
+    if (!pairSource_)
+      throw std::runtime_error("stereo paired: no pair source");
+    auto ch = std::make_shared<RecordChannel>(kPairedRecordCap);
+    { *recCh_.ref() = ch; }
+    recSub_ = std::make_unique<RecordSink>(pairSource_.get(), ch);
+    // A terminated pair brick refuses the subscription (state closed at once).
+    if (!recSub_->state.snapshot().isActive())
+      throw std::runtime_error("stereo paired source stream already terminated");
+  }
+
+  void stopPaired() {
+    // Close the channel FIRST (ChainedStream deadlock discipline): wakes an
+    // iteratePaired() blocked in read(), then drop the subscriber so the pair
+    // brick stops fanning to us (its keep-alive keeps it running — ruling 5).
+    {
+      auto ref = recCh_.ref();
+      if (*ref)
+        (*ref)->close();
+    }
+    recSub_.reset();
+    { *recCh_.ref() = nullptr; }
+  }
+
+  ConvertedFrame::Ptr iteratePaired() {
+    std::shared_ptr<RecordChannel> ch;
+    { ch = *recCh_.ref(); }
+    if (!ch)
+      throw StopIteration();
+    PairRecord rec;
+    if (!ch->read(rec))
+      throw StopIteration(); // channel closed (teardown / pair brick death)
+    if (!rec.left || !rec.right)
+      return nullptr; // defensive — a record always pins both sides
+    // SGBM per pair — L/R matched by construction (no in-brick anchor match).
+    return process(rec.left, rec.right);
+  }
+
   ConvertedFrame::Ptr process(const OwnedFrame::Ptr &left,
                               const OwnedFrame::Ptr &right) {
     const int64_t t = converterNowMs();
@@ -268,7 +439,14 @@ private:
       if (*ref)
         (*ref)->close();
     }
+    { // paired-input record tap (no-op in latest-wins mode)
+      auto ref = recCh_.ref();
+      if (*ref)
+        (*ref)->close();
+    }
   }
+
+  static constexpr size_t kPairedRecordCap = 8; // bounded record tap (view rate)
 
   const Source left_, right_; // shared: keep the upstream bricks alive
   const std::string name_;
@@ -281,6 +459,13 @@ private:
   std::unique_ptr<TapPublisher> leftPub_;  // exists only while active
   std::unique_ptr<TapPublisher> rightPub_;
   OwnedFrame::Ptr lastRight_; // retained newest right frame (brick thread only)
+
+  // stereo-paired-inputs: the paired-mode input (unused in latest-wins mode).
+  const bool paired_ = false;
+  const PairSource pairSource_{};  // shared: keeps the pair brick alive
+  const std::string pairFrom_;     // pair node id (topology input edge)
+  Threading::Guard<std::shared_ptr<RecordChannel>> recCh_{nullptr};
+  std::unique_ptr<RecordSink> recSub_; // exists only while active (paired mode)
 
   Meter::ThreadMeter meter_; // single writer = this brick's thread
   cv::Mat leftGray_, rightGray_, disp16_, dispF32_; // reused buffers (this thread)

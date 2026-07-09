@@ -41,6 +41,11 @@ import type { RawPipeRegistry } from "@orchestrator/raw-pipe";
 import type { CompressPipeSeam } from "@orchestrator/compress-pipe";
 import type { PairPipeSeam, PairHandle } from "@orchestrator/pair-pipe";
 import {
+  createPairedStereoPipe,
+  type StereoHandle,
+  type StereoPipeSeam,
+} from "@orchestrator/stereo-pipe";
+import {
   anchorNode,
   anchorNodeId,
   resolvedAnchorFromRecord,
@@ -92,6 +97,11 @@ export interface MultiFoveaSessionSeams {
   rawPipes: RawPipeRegistry;
   pair?: PairPipeSeam;
   compress?: CompressPipeSeam;
+  /** stereo-paired-inputs (ruling 2): the paired-SGBM disparity brick. Composed
+   *  over the `pair/undistort` stage when the trigger pairing topology is live
+   *  (absent → no paired disparity node; free-run keeps the latest-wins node in
+   *  disparity-scope). */
+  stereo?: StereoPipeSeam;
   finished?: (foveaPath: string) => void;
 }
 
@@ -416,6 +426,30 @@ export default function multiFoveaSession(
               anchorFrom: "pair/convert",
             });
             scope.defer(() => downstream!.release());
+            // stereo-paired-inputs (ruling 1/2): the paired-SGBM disparity node,
+            // composed over the `pair/undistort` stage with the trigger pairing
+            // topology (RECOMPOSE-on-trigger, at the granularity the runtime
+            // exposes — the pairing topology is the trigger topology). ON-DEMAND
+            // (ruling 5): parked with no consumer, it taps nothing; the pair
+            // brick's keep-alive is unaffected. Output advert + timestamps are
+            // identical to the free-run latest-wins node (ruling 4). Degrades
+            // silently if the seam is absent (vitest / no-stereo builds).
+            if (seams.stereo) {
+              const camL = t.leases.L.camera;
+              let stereo: StereoHandle | null = createPairedStereoPipe(
+                seams.stereo,
+                "pair/undistort",
+                nodeId.stereo("paired"),
+                {
+                  maxWidth: camL.getFeatureInt("Width"),
+                  maxHeight: camL.getFeatureInt("Height"),
+                },
+              );
+              scope.defer(() => {
+                stereo?.retire();
+                stereo = null;
+              });
+            }
           }
           // ONE enrichment source (ruling 4): conversions bound per activation
           // (volts→angle→H attachments); the controller's FIN outcomes fan in.

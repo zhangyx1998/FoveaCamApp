@@ -245,21 +245,9 @@ const compressSeam: import("./compress-pipe.js").CompressPipeSeam = {
 registerNativeProbe(
   () => aravisPair.compressProbeAll() as unknown as Record<string, WorkloadSnapshot>,
 );
-const multiFovea = hub.add(
-  multiFoveaSession(
-    asBroker(Pipe),
-    undistortSeam,
-    (pipeId, rect) => aravisFovea.setFoveaRect(pipeId, rect),
-    {
-      rawPipes,
-      pair: pairSeam,
-      compress: compressSeam,
-      // Notify main so the viewer window auto-opens the finished `.fovea`.
-      finished: (foveaPath) =>
-        process.parentPort?.postMessage({ type: "recording:finished", path: foveaPath }),
-    },
-  ),
-);
+// The multi-fovea session is constructed AFTER `stereoSeam` (below) so it can
+// receive the paired-SGBM seam (stereo-paired-inputs) — see its `hub.add` after
+// the stereo seams are defined.
 
 // --- disparity-scope: auto-vergence control loop (§7.1 S1a; split-node
 // topology per docs/proposals/split-disparity-nodes.md) ---------------------
@@ -300,6 +288,7 @@ const aravisStereo = Aravis as unknown as {
     pipeId: string,
     params: unknown,
   ): void;
+  attachStereoPaired(pairStage: string, pipeId: string, params: unknown): void;
   setStereoParams(pipeId: string, params: unknown): boolean;
   detachStereoPipe(pipeId: string): void;
   stereoProbeAll(): Record<string, unknown>;
@@ -321,6 +310,7 @@ const stereoSeam: import("./stereo-pipe.js").StereoPipeSeam = {
   advertise: pipeBroker.advertise,
   unadvertise: pipeBroker.unadvertise,
   attach: (l, r, id, params) => aravisStereo.attachStereoPipe(l, r, id, params),
+  attachPaired: (stage, id, params) => aravisStereo.attachStereoPaired(stage, id, params),
   retune: (id, params) => void aravisStereo.setStereoParams(id, params),
   detach: (id) => aravisStereo.detachStereoPipe(id),
 };
@@ -347,6 +337,27 @@ registerNativeProbe(
 registerNativeProbe(
   () => aravisStereo.compositeProbeAll() as unknown as Record<string, WorkloadSnapshot>,
 );
+
+// --- multi-fovea: protocol-v2 multi-target logic skeleton ------------------
+// Constructed here (not with its sibling seams above) so the paired-SGBM seam
+// (stereo-paired-inputs — the `pair/undistort` disparity node) is available.
+const multiFovea = hub.add(
+  multiFoveaSession(
+    asBroker(Pipe),
+    undistortSeam,
+    (pipeId, rect) => aravisFovea.setFoveaRect(pipeId, rect),
+    {
+      rawPipes,
+      pair: pairSeam,
+      compress: compressSeam,
+      stereo: stereoSeam,
+      // Notify main so the viewer window auto-opens the finished `.fovea`.
+      finished: (foveaPath) =>
+        process.parentPort?.postMessage({ type: "recording:finished", path: foveaPath }),
+    },
+  ),
+);
+
 const disparityScope = hub.add(
   disparityScopeSession(
     asBroker(Pipe),

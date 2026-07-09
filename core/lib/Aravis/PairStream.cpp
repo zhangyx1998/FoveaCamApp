@@ -415,6 +415,33 @@ FN(pushPairTestFrame) {
                       : 8;
     auto cf = ConvertedFrame::create();
     cf->mat = cv::Mat(std::max(1, h), std::max(1, w), CV_8UC4, cv::Scalar(0));
+    // stereo-paired-inputs test hook: optional deterministic column TEXTURE so
+    // the paired-SGBM core test has matchable content. A feature at column `c`
+    // in a shift-0 frame lands at column `c - shift` in a `shift` frame, so a
+    // LEFT (shift 0) / RIGHT (shift +D) pair encodes a ground-truth disparity of
+    // D everywhere. Quasi-random low-frequency profile (locally unique over the
+    // disparity search window), constant along rows. Test-only; the fill is
+    // skipped unless `texture` is set, so no production path is affected.
+    if (o.Has("texture") && o.Get("texture").ToBoolean().Value()) {
+      const int shift = o.Has("shift") && o.Get("shift").IsNumber()
+                            ? o.Get("shift").As<Napi::Number>().Int32Value()
+                            : 0;
+      cv::Mat &m = cf->mat;
+      for (int x = 0; x < m.cols; x++) {
+        const double c = static_cast<double>(x + shift);
+        double v = 128.0 + 60.0 * std::sin(c * 0.21) +
+                   40.0 * std::sin(c * 0.077 + 1.3) + 27.0 * std::sin(c * 0.53);
+        v = std::min(255.0, std::max(0.0, v));
+        const auto g = static_cast<uchar>(std::lround(v));
+        for (int y = 0; y < m.rows; y++) {
+          auto *px = m.ptr<cv::Vec4b>(y, x);
+          (*px)[0] = g;
+          (*px)[1] = g;
+          (*px)[2] = g;
+          (*px)[3] = 255;
+        }
+      }
+    }
     cf->format = BGRA8;
     cf->deviceTimestamp = deviceTimestamp;
     cf->systemTimestamp = deviceTimestamp;
