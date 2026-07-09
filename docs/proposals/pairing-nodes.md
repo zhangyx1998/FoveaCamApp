@@ -30,16 +30,20 @@ references per pair, never pixels).
    through unchanged (established meta-passthrough contract), so downstream
    stage pairs join by EXACT key equality on the carried timestamp — no
    re-matching, no compounding windows.
-3. **PairStream native brick** (the per-stage join): two FIFO pipe inputs
-   on its own thread; anchors pushed in via NAPI at FIN rate (the
-   `pushHomography` pattern); joins emit pair descriptors
-   `{anchor, leftSeq, rightSeq}` — seq pointers into the two stage pipes,
-   NEVER pixel copies (ring slots recycle; a slow consumer sees Gone +
-   drop-accounting like any pipe consumer; `ringDepth` is the per-stage
-   slack knob). Output surfaces: a batched async iterator for JS consumers
-   (MultiKcfStream pattern — zero per-frame JS work) + the standard brick
-   meter block. One brick class, two join modes: `root` (toleranceNs) and
-   `exact` (key equality).
+3. **PairStream native brick** (the per-stage join): two **in-process FIFO
+   TapChannel inputs** (`OwnedFrame::Ptr` — the unified-time §5 tap
+   transport; SHM rings are for IPC/JS-worker boundaries ONLY, ruled
+   2026-07-09) on its own thread; anchors pushed in via NAPI at FIN rate
+   (the `pushHomography` pattern); a pair record PINS
+   `{anchor, OwnedFrame::Ptr left, OwnedFrame::Ptr right}` — three shared
+   references, no pixel copies, no ring-recycling hazard. Memory is bounded
+   by the pair/anchor pool (drop-oldest releases the buffers), NOT
+   ringDepth. Output surfaces: a batched async iterator for JS consumers
+   (MultiKcfStream pattern — zero per-frame JS work; descriptors for
+   RECORDING re-key onto recorded-stream seqs via deviceTimestamp, which
+   the raw12p tap stamps identically to the Frame path) + the standard
+   brick meter block. One brick class, two join modes: `root` (toleranceNs)
+   and `exact` (key equality).
 4. **Anchor enrichment middle node** (JS, FIN-rate — low, loop-safe): FIN
    outcome → `{tExposure, stream, volts, V2A angles, H}` using the V2A
    calibration + `mirror-history`/`conversionComputeH`, then `pushAnchor`
