@@ -16,8 +16,13 @@ import {
 } from "electron";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { existsSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { existsSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
+import {
+  classifyOrchestratorExit,
+  shouldRunJanitor,
+} from "./orchestrator-exit";
 import { getIcon } from "./util";
 import { resolveDefaultSavePath, validateWritablePath } from "@lib/util/fs";
 import {
@@ -257,7 +262,34 @@ const pendingDrains = new Map<
 // fresh process, fresh device claims, disables the MEMS controller over
 // serial and stops every camera's acquisition (which also clears
 // TLParamsLocked, unblocking the next boot's config restore).
+// The `quiesced` clean-exit ACK (ruling 3/4): flipped when the orchestrator
+// confirms hardware is parked, BEFORE it stops. Authoritative for the
+// clean-vs-crash decision — never the exit code.
 let orchestratorQuiesced = false;
+// Did MAIN initiate this orchestrator's termination (quit / dev-restart)? Lets
+// a missing ack read as "killed" (expected) vs "crash" (unexpected). Reset in
+// startOrchestrator.
+let orchestratorExpectedExit = false;
+// Resolvers waiting on the next `quiesced` ack (the quit/dev-restart paths).
+let ackWaiters: Array<() => void> = [];
+/** Resolve `true` once the orchestrator posts `quiesced`, or `false` at the
+ *  bounded deadline (a hung quiesce still lets the app quit → classified
+ *  "killed"). */
+function waitForQuiesceAck(timeoutMs: number): Promise<boolean> {
+  if (orchestratorQuiesced) return Promise.resolve(true);
+  return new Promise<boolean>((resolve) => {
+    const timer = setTimeout(() => {
+      ackWaiters = ackWaiters.filter((w) => w !== onAck);
+      resolve(false);
+    }, timeoutMs);
+    const onAck = () => {
+      clearTimeout(timer);
+      resolve(true);
+    };
+    ackWaiters.push(onAck);
+  });
+}
+
 // One janitor run covers everything armed by the dead orchestrator — dedupe
 // concurrent triggers (unexpected-exit handler racing the quit path).
 let janitorRun: Promise<void> | null = null;
@@ -285,9 +317,122 @@ function runJanitor(reason: string): Promise<void> {
   });
 }
 
+// ---- Main-crash watchdog (safety invariant gap 1) -------------------------
+// PROCESS TREE (why a detached process, not a utilityProcess child):
+//
+//   OS
+//   ├─ main (Electron)            spawns ↓ once, detached, at startup
+//   │   ├─ orchestrator  (utilityProcess.fork — dies WITH main, no quiesce)
+//   │   └─ janitor       (utilityProcess.fork — one-shot, on orch death)
+//   └─ watchdog (detached, ELECTRON_RUN_AS_NODE — OUTLIVES main)
+//
+// The janitor above is forked BY main, so main's OWN hard crash (SIGKILL /
+// SIGSEGV) reaps the orchestrator with NOTHING left to disarm the MEMS mirrors
+// (releasing a serial port does not de-energize them). The watchdog closes that
+// hole: a detached sibling that reads a per-main-pid state file and polls
+// main's liveness. On a CLEAN shutdown main deletes the file first (stand-down
+// = the file is gone). If main dies while the file still exists, the watchdog
+// waits for the orphaned orchestrator to be reaped (killing it if it lingers so
+// its device claims free), then runs the SAME quiescence as the janitor, and
+// exits. It never keeps the app open (detached + unref'd), never fights the
+// normal janitor path (that path only runs while main is ALIVE; the watchdog
+// acts only after main is GONE), and exits quietly on stand-down.
+//
+// Implemented as janitor.js in FOVEA_JANITOR_MODE=watchdog so there is exactly
+// one hardware-quiescence codebase.
+const watchdogStatePath = path.join(DATA, `watchdog-${process.pid}.json`);
+let watchdogSpawned = false;
+
+/** (Re)write this main instance's watchdog state file — mainPid is fixed;
+ *  orchestratorPid is refreshed on every (re)spawn so the watchdog can wait on
+ *  the CURRENT orphan before quiescing. */
+function writeWatchdogState(): void {
+  try {
+    writeFileSync(
+      watchdogStatePath,
+      JSON.stringify({
+        mainPid: process.pid,
+        orchestratorPid: orchestrator?.pid ?? null,
+      }),
+    );
+  } catch (e) {
+    console.error("[watchdog] state write failed:", e);
+  }
+}
+
+/** Spawn the detached watchdog ONCE, at orchestrator-spawn time. */
+function spawnWatchdog(): void {
+  if (watchdogSpawned) return;
+  watchdogSpawned = true;
+  writeWatchdogState();
+  try {
+    const wd = spawn(process.execPath, [path.join(DIR, "janitor.js")], {
+      detached: true,
+      stdio: "ignore",
+      env: {
+        ...process.env,
+        // Run the Electron binary as plain Node (no window/dock) so the
+        // watchdog survives main and can still load the native `core` addon.
+        ELECTRON_RUN_AS_NODE: "1",
+        FOVEA_JANITOR_MODE: "watchdog",
+        FOVEA_WATCHDOG_STATE: watchdogStatePath,
+        FOVEA_MAIN_PID: String(process.pid),
+        FOVEA_DATA_PATH: DATA,
+      },
+    });
+    wd.unref();
+  } catch (e) {
+    console.error("[watchdog] spawn failed:", e);
+    watchdogSpawned = false;
+  }
+}
+
+/** Clean-shutdown stand-down: delete this instance's state file so the watchdog
+ *  exits quietly instead of quiescing. Synchronous — must complete before main
+ *  exits. */
+function standDownWatchdog(): void {
+  try {
+    unlinkSync(watchdogStatePath);
+  } catch {
+    /* already gone (or never created) */
+  }
+}
+
+/** Best-effort sweep of watchdog state files left by a dead main whose watchdog
+ *  also died before cleaning up (double-fault) — keeps the data dir tidy. */
+function sweepStaleWatchdogState(): void {
+  try {
+    for (const f of readdirSync(DATA)) {
+      const m = /^watchdog-(\d+)\.json$/.exec(f);
+      if (!m) continue;
+      const pid = Number(m[1]);
+      if (pid === process.pid) continue;
+      const alive = (() => {
+        try {
+          process.kill(pid, 0);
+          return true;
+        } catch (e) {
+          return (e as NodeJS.ErrnoException).code === "EPERM";
+        }
+      })();
+      if (!alive) unlinkSync(path.join(DATA, f));
+    }
+  } catch {
+    /* best-effort */
+  }
+}
+
+const delay = (ms: number): Promise<void> => new Promise<void>((r) => setTimeout(r, ms));
+/** Poll `pred` until true or the deadline lapses (bounded quit waits). */
+async function waitUntil(pred: () => boolean, timeoutMs: number): Promise<void> {
+  const start = Date.now();
+  while (!pred() && Date.now() - start < timeoutMs) await delay(50);
+}
+
 function startOrchestrator() {
   const entry = path.join(DIR, "orchestrator.js");
   orchestratorQuiesced = false;
+  orchestratorExpectedExit = false;
   orchestrator = utilityProcess.fork(entry, [], {
     stdio: "inherit",
     env: {
@@ -300,6 +445,9 @@ function startOrchestrator() {
       FOVEA_FORK_TS: String(Date.now()),
     },
   });
+  // The watchdog needs the CURRENT orchestrator pid to wait on the right orphan
+  // after a main crash. `pid` is populated once the child has spawned.
+  orchestrator.on("spawn", () => writeWatchdogState());
   orchestrator.on("message", (data: unknown) => {
     const msg = data as {
       type?: string;
@@ -309,7 +457,10 @@ function startOrchestrator() {
       path?: string;
     };
     if (msg?.type === "quiesced") {
+      // The authoritative clean-exit ack (ruling 3/4): record it and release
+      // any quit/dev-restart path waiting on it.
       orchestratorQuiesced = true;
+      for (const w of ackWaiters.splice(0)) w();
       return;
     }
     // Phase 5 auto-open (capture-recorder-nodes.md ruling 8): the recorder
@@ -337,12 +488,18 @@ function startOrchestrator() {
   orchestrator.on("exit", (code) => {
     console.warn("Orchestrator exited:", code);
     orchestrator = null;
-    // Safety invariant: an exit without the `quiesced` handshake means the
-    // MEMS controller and cameras may still be armed — clean up out-of-process.
-    // Exit code 0 only comes from quiesceAndExit(0) (graceful paths), so treat
-    // it as clean even if the confirmation message lost the flush race.
-    if (!orchestratorQuiesced && code !== 0)
-      void ensureJanitor(`orchestrator exited (code ${code}) without quiescing`);
+    // Ack-based classification (ruling 4): ack present ⇒ clean (code ignored);
+    // absent + main-initiated ⇒ killed; absent + unexpected ⇒ crash.
+    const report = classifyOrchestratorExit({
+      acked: orchestratorQuiesced,
+      expected: orchestratorExpectedExit,
+      code: code ?? null,
+    });
+    // Safety invariant: any non-clean exit may have left the MEMS controller /
+    // cameras armed — quiesce out-of-process. (A clean exit already did so
+    // in-process and posted the ack.)
+    if (shouldRunJanitor(report))
+      void ensureJanitor(`orchestrator ${report.reason} (code ${code})`);
     // A dead orchestrator has nothing left to drain — unblock any switch
     // waiting on it rather than letting it time out.
     for (const [id, resolve] of pendingDrains) {
@@ -351,9 +508,11 @@ function startOrchestrator() {
     }
     // Every renderer's pending orchestrator requests would otherwise hang
     // forever (the crashed process can't reply) — notify them to reject
-    // in-flight calls. See docs/history/refactor/orchestrator.md §12.1 C5.
+    // in-flight calls AND surface the crash report to the associated windows
+    // (client.ts scopes it to windows that actually connected). See
+    // docs/history/refactor/orchestrator.md §12.1 C5.
     for (const w of BrowserWindow.getAllWindows())
-      pushTo(w.webContents, "orchestrator:down");
+      pushTo(w.webContents, "orchestrator:down", report);
   });
 }
 
@@ -608,19 +767,26 @@ async function devRestart(): Promise<void> {
     console.error("Failed to persist window manifest:", error);
   }
   app.relaunch();
-  // `app.exit()` skips `before-quit`, so run the quiesce handshake here:
-  // give the orchestrator a beat to disable the MEMS controller + release
-  // cameras (async serial write — a bare kill() can't complete it) before
-  // the hard exit. Short deadline keeps dev restarts snappy; the relaunched
-  // controller connect re-disables as a backstop.
+  // `app.exit()` skips `before-quit`, so run the quiesce handshake here: give
+  // the orchestrator a beat to disable the MEMS controller + release cameras
+  // (async serial write — a bare kill() can't complete it) before the hard
+  // exit. Ack-based like the quit path; short deadline keeps dev restarts
+  // snappy. Unlike before, add the JANITOR FALLBACK the audit flagged as
+  // missing on this path (a wedged quiesce must not relaunch over armed
+  // hardware).
   const proc = orchestrator;
-  orchestrator = null;
   if (proc) {
+    orchestratorExpectedExit = true;
     const exited = new Promise<void>((r) => proc.once("exit", () => r()));
     proc.postMessage({ type: "shutdown" });
-    await Promise.race([exited, new Promise((r) => setTimeout(r, 2000))]);
+    await waitForQuiesceAck(2000);
     proc.kill();
+    await Promise.race([exited, delay(500)]);
   }
+  orchestrator = null;
+  if (!orchestratorQuiesced) await ensureJanitor("dev restart");
+  // The relaunched main spawns its own watchdog — stand this instance's down.
+  standDownWatchdog();
   app.exit(0);
 }
 
@@ -655,8 +821,12 @@ async function createInitialWindows(): Promise<void> {
 
 app
   .whenReady()
+  .then(sweepStaleWatchdogState)
   .then(customizeApp)
   .then(startOrchestrator)
+  // Detached main-crash watchdog (gap 1): spawned once, right after the
+  // orchestrator, so it is guarding energized hardware for the whole session.
+  .then(spawnWatchdog)
   .then(createInitialWindows);
 
 // Quit = graceful hardware quiescence first (safety invariant): ask the
@@ -671,34 +841,58 @@ app.on("before-quit", (event) => {
   if (quitting) return; // second pass: proceed with the real quit
   quitting = true;
   event.preventDefault();
-  const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
   void (async () => {
     try {
+      // Gap 5 — WINDOW-FIRST teardown order (ruling 1/3): close owned
+      // sub-windows (they cascade) then app/top windows, and let their teardown
+      // (pipe reads, `window:closed`) flush BEFORE the orchestrator handshake,
+      // so no renderer is mid pipe-read while the orchestrator disarms. Bounded
+      // so a stuck window can't hang quit.
+      manager.closeAll();
+      await waitUntil(
+        () => BrowserWindow.getAllWindows().every((w) => w.isDestroyed()),
+        3000,
+      );
+      // Orchestrator handshake (ruling 3/4): the orchestrator quiesces + posts
+      // `quiesced` and WAITS; we reap it once we have the ack (authoritative
+      // clean signal) or the deadline lapses (→ classified "killed").
       const proc = orchestrator;
       if (proc) {
+        orchestratorExpectedExit = true;
         const exited = new Promise<void>((r) => proc.once("exit", () => r()));
         proc.postMessage({ type: "shutdown" });
-        const graceful = await Promise.race([
-          exited.then(() => true),
-          delay(5000).then(() => false),
-        ]);
-        if (!graceful) {
-          proc.kill();
-          await Promise.race([exited, delay(2000)]);
-        }
+        await waitForQuiesceAck(5000);
+        proc.kill();
+        await Promise.race([exited, delay(2000)]);
       }
+      // Fallback if the ack never came (hung/killed quiesce).
       if (!orchestratorQuiesced) await ensureJanitor("app quit");
     } finally {
       orchestrator = null;
+      // Clean shutdown reached — stand the crash watchdog down before we exit.
+      standDownWatchdog();
       app.quit();
     }
   })();
 });
 
 app.on("window-all-closed", () => {
-  // On macOS it is common for applications and their menu bar
-  // to stay active until the user quits explicitly with Cmd + Q
-  if (process.platform !== "darwin") app.quit();
+  // before-quit already owns the teardown order — don't race it (and on
+  // non-darwin, closing the last window here during a controlled quit would
+  // otherwise fire a premature app.quit()).
+  if (quitting) return;
+  // On non-macOS, no windows = quit.
+  if (process.platform !== "darwin") {
+    app.quit();
+    return;
+  }
+  // Gap 2 — macOS keeps the app + menu bar alive with no windows, but it must
+  // NEVER hold energized MEMS / streaming cameras headless (safety invariant).
+  // Park the orchestrator (drain sessions, release cameras, DISABLE the MEMS
+  // controller) while keeping the process for a fast dock re-activate, which
+  // re-leases + re-arms on demand. Same disarm the app-switch drain performs,
+  // plus the MEMS-off the headless state requires.
+  orchestrator?.postMessage({ type: "park" });
 });
 
 app.on("second-instance", (_e, commandLine = []) => {

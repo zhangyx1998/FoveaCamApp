@@ -465,35 +465,70 @@ async function quiesceHardware(): Promise<void> {
   }
 }
 
+/** Drain camera-owning sessions best-effort, then disarm all hardware. Shared
+ *  by the graceful, cold, and park paths. */
+async function drainAndQuiesce(): Promise<void> {
+  const deadline = new Promise<void>((r) => setTimeout(r, 4000));
+  try {
+    for (const s of cameraOwning) s.dispose();
+    await Promise.race([
+      Promise.all(cameraOwning.map((s) => s.drained())),
+      new Promise((r) => setTimeout(r, 2000)),
+    ]);
+  } catch {
+    /* drain is best-effort on the way out */
+  }
+  await Promise.race([quiesceHardware(), deadline]);
+}
+
 let quiescing = false;
-/** Graceful exit: drain sessions best-effort, quiesce hardware, confirm to
- *  main (suppresses its janitor), then exit. */
-function quiesceAndExit(code: number): void {
+/** GRACEFUL shutdown (main's `shutdown` message): drain, disarm hardware, then
+ *  post the clean-exit ACK and WAIT — main reaps us (kill) once it records the
+ *  ack. NOT self-exiting is deliberate: a still-running process cannot drop the
+ *  queued `quiesced` message, so main's clean/crash decision is deterministic
+ *  without the old flush-sleep + code===0 fallback (lifecycle ruling 3/4). */
+function quiesceAndAck(): void {
   if (quiescing) return;
   quiescing = true;
-  const deadline = new Promise<void>((r) => setTimeout(r, 4000));
   void (async () => {
-    try {
-      for (const s of cameraOwning) s.dispose();
-      await Promise.race([
-        Promise.all(cameraOwning.map((s) => s.drained())),
-        new Promise((r) => setTimeout(r, 2000)),
-      ]);
-    } catch {
-      /* drain is best-effort on the way out */
-    }
-    await Promise.race([quiesceHardware(), deadline]);
+    await drainAndQuiesce();
     try {
       process.parentPort.postMessage({ type: "quiesced" });
     } catch {
       /* parent may already be gone */
     }
-    // Give the parentPort pipe a beat to FLUSH the confirmation — exiting
-    // right after postMessage can drop it, and a lost `quiesced` makes main
-    // run the janitor after a perfectly clean shutdown.
-    await new Promise((r) => setTimeout(r, 100));
+    // No process.exit here — main's kill() (→ SIGTERM below) reaps us after it
+    // has the ack.
+  })();
+}
+
+/** COLD / CRASH exit: disarm hardware, then die. Posts NO ack, so main treats
+ *  the exit as crash/killed and its janitor backstops. Used by uncaught JS
+ *  errors and a cold SIGTERM (killed without a prior `shutdown`). */
+function quiesceAndExit(code: number): void {
+  if (quiescing) return;
+  quiescing = true;
+  void (async () => {
+    await drainAndQuiesce();
     shutdown();
     process.exit(code);
+  })();
+}
+
+// Headless PARK (darwin window-all-closed): drain + disarm hardware WITHOUT
+// exiting, so the macOS app can stay alive with no armed hardware and a dock
+// re-activate re-leases + re-arms on demand. Re-entrant (never latches the
+// terminal `quiescing`), so repeated close/reopen cycles keep working.
+let parking = false;
+function parkHardware(): void {
+  if (parking || quiescing) return;
+  parking = true;
+  void (async () => {
+    try {
+      await drainAndQuiesce();
+    } finally {
+      parking = false;
+    }
   })();
 }
 
@@ -521,7 +556,11 @@ process.parentPort.on("message", (e) => {
     | { type?: string; id?: number; windowId?: string | null }
     | null;
   if (data?.type === "shutdown") {
-    quiesceAndExit(0);
+    quiesceAndAck();
+    return;
+  }
+  if (data?.type === "park") {
+    parkHardware();
     return;
   }
   if (data?.type === "window:drain") {
@@ -560,10 +599,16 @@ function shutdown(): void {
   cleanup?.();
 }
 process.on("SIGTERM", () => {
-  // Best-effort async quiesce (MEMS disable is a serial write and cannot run
-  // inside the sync `exit` handler). Main waits for our `quiesced`
-  // confirmation before letting the app die; if we're reaped first, its
-  // janitor covers the rest.
-  quiesceAndExit(0);
+  // main's REAP signal. After a graceful `shutdown` we already drained,
+  // disarmed, and posted `quiesced` (the process idled waiting for this) — so
+  // just exit cleanly. A COLD SIGTERM (killed without a prior `shutdown`)
+  // disarms first; main's janitor still backstops a wedge. Either way the
+  // ack-based decision main already made stands (code is ignored there).
+  if (quiescing) {
+    shutdown();
+    process.exit(0);
+  } else {
+    quiesceAndExit(0);
+  }
 });
 process.on("exit", shutdown);

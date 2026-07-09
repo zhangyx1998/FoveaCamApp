@@ -17,9 +17,19 @@
 // checks, not a general fs passthrough) even though none of it is a real
 // security boundary today (the orchestrator process still trusts whatever
 // path the renderer sends) — smaller surface is just less to keep in sync.
+// TYPE-ONLY import (erased at build — keeps this module runtime-value-free so it
+// never lands in the self-contained CJS preload bundle, V11). The crash-report
+// payload is defined renderer-side (its primary consumer) and shared here.
+import type { OrchestratorDownReport } from "@lib/orchestrator/client";
+export type { OrchestratorDownReport };
+
 export interface FoveaBridge {
   connectOrchestrator(): void;
-  onOrchestratorDown(cb: () => void): void;
+  /** The orchestrator process went down. The callback receives a typed report
+   *  (clean / killed / crash + exit code) so a window can surface a crash
+   *  banner (orchestrator-lifecycle-and-exit ruling 3/4); a `clean` report is
+   *  delivered too but the surface hides it. */
+  onOrchestratorDown(cb: (report: OrchestratorDownReport) => void): void;
   openProfilerWindow(): void;
   /** Open (or switch to) an app window by catalog id (`@lib/windows`) — the
    *  main-process window manager enforces exclusivity + drain
@@ -121,7 +131,7 @@ export interface SendChannels {
  *  arg tuple. `orchestrator:port` is deliberately absent — it transfers a
  *  MessagePort via `postMessage`'s transfer list, outside this typed table. */
 export interface PushChannels {
-  "orchestrator:down": [];
+  "orchestrator:down": [report: OrchestratorDownReport];
   "window:fullscreen": [fullscreen: boolean];
   "recorder:trigger": [];
 }

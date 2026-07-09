@@ -19,6 +19,7 @@ import Loading from "../components/Loading.vue";
 import ErrorBoundary from "../components/ErrorBoundary.vue";
 import SessionStatus from "../components/SessionStatus.vue";
 import ProgressMonitor from "../components/ProgressMonitor.vue";
+import CrashReport from "../components/CrashReport.vue";
 import { useSessionStatus } from "@lib/orchestrator/client";
 import Overlay, { overlay } from "../components/Overlay.vue";
 import RemoteCanvas from "../components/RemoteCanvas.vue";
@@ -102,6 +103,8 @@ window.addEventListener("keydown", (e) => {
       :items="sessionStatus!.progress!"
       @close="progressDismissed = true"
     />
+    <!-- Orchestrator crash banner (lifecycle ruling 4) — self-hiding on clean. -->
+    <CrashReport />
   </div>
   <TitleBar
     title="FoveaCam Duo"

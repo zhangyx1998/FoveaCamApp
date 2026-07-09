@@ -147,6 +147,29 @@ export function connect(): Promise<Channel> {
   }));
 }
 
+/** Why the orchestrator process went down, delivered on the `orchestrator:down`
+ *  push (orchestrator-lifecycle-and-exit ruling 3/4). `clean` = it acked a
+ *  graceful quiesce before exit; `killed` = main terminated it (quit / hung-
+ *  quiesce timeout) without an ack; `crash` = it died unexpectedly (native
+ *  fault, signal, OOM). The clean/crash decision is ACK-based on main's side —
+ *  never exit-code guessing. */
+export type OrchestratorDownReason = "clean" | "killed" | "crash";
+export type OrchestratorDownReport = {
+  reason: OrchestratorDownReason;
+  /** Process exit code, or null for a signal/unknown death. INFORMATIONAL only
+   *  (shown in the crash banner) — never the clean/crash discriminator. */
+  code: number | null;
+  message?: string;
+};
+
+/** Reactive last-seen orchestrator-down report for THIS window, or null while
+ *  the orchestrator is up. The crash surface (`CrashReport.vue`) renders off
+ *  it. Owner-scoping (ruling 4): set ONLY when this window actually held an
+ *  orchestrator channel, so a window never associated with the dead task
+ *  ignores the broadcast. A `clean` report is recorded but the surface hides
+ *  it (a graceful shutdown is not a user-facing failure). */
+export const orchestratorDown = shallowRef<OrchestratorDownReport | null>(null);
+
 // If the orchestrator process dies, every request awaiting a response on the
 // current channel would otherwise hang forever (a module `await`ing a command
 // inside <suspense> never resolves). `main.ts` owns the child process and
@@ -154,7 +177,10 @@ export function connect(): Promise<Channel> {
 // MessagePort close semantics across a process crash. Full transparent
 // reconnect (respawn + re-subscribe already-mounted sessions) is out of scope
 // for this fix — see docs/history/refactor/orchestrator.md §12.1 C5 / §12.3 R3.
-window.foveaBridge.onOrchestratorDown(() => {
+window.foveaBridge.onOrchestratorDown((report) => {
+  // Only surface in windows that actually connected to the orchestrator — a
+  // passive/never-connected window is not "associated with the dead task".
+  if (channel) orchestratorDown.value = report;
   channel?.then((ch) => ch.close());
 });
 

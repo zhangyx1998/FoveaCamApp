@@ -205,6 +205,20 @@ export class WindowManager {
     this.quitting = true;
   }
 
+  /** Quit teardown (orchestrator-lifecycle-and-exit gap 5): close owned
+   *  sub-windows FIRST so their `onOwnerClose` cascade runs before the app/top
+   *  windows they belong to, then everything else — establishing the
+   *  window-first order (sub-windows → app windows → orchestrator handshake).
+   *  `markQuitting()` must already have suspended the welcome rule so no
+   *  respawn races this. Idempotent; safe to call once from `before-quit`. */
+  closeAll(): void {
+    const all = this.open();
+    const owned = all.filter((w) => w.owner);
+    const rest = all.filter((w) => !w.owner);
+    for (const w of owned) if (!w.isDestroyed()) w.close();
+    for (const w of rest) if (!w.isDestroyed()) w.close();
+  }
+
   private track(win: ManagedWindow): ManagedWindow {
     this.windows.add(win);
     return win;

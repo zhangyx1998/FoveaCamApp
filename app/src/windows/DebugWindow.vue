@@ -16,6 +16,7 @@ You may find the full license in project root directory.
 <script setup lang="ts">
 import { computed, ref, shallowRef, watchEffect, type Component } from "vue";
 import TitleBar from "../components/TitleBar.vue";
+import CrashReport from "../components/CrashReport.vue";
 import { asDebugKind, debugKindTitle, debugLoaderFor } from "./debug-registry";
 
 const props = defineProps<{ session: string; kind?: string }>();
@@ -37,6 +38,8 @@ watchEffect(async () => {
     <div v-else class="notice">
       No {{ kind }} registered for "{{ session }}"
     </div>
+    <!-- Owned sub-window of the app: surface the same orchestrator crash banner. -->
+    <CrashReport />
   </div>
   <TitleBar
     :title="debugKindTitle(kind)"
