@@ -50,6 +50,14 @@ struct FoveaBinding {
 static std::mutex g_mutex;
 static std::map<std::string, FoveaBinding> g_pipes;
 
+// Cross-brick lookup (ScaleStream chains on a fovea/slice pipe): the live fovea
+// brick bound to `pipeId`, or nullptr (mirrors findUndistort/findConverter).
+FoveaStream::Ptr findFovea(const std::string &pipeId) {
+  std::scoped_lock lock(g_mutex);
+  auto it = g_pipes.find(pipeId);
+  return it != g_pipes.end() ? it->second.stream : nullptr;
+}
+
 // ---- attach: resolve the source brick (or build a private chain), gate -----
 FN(attachFoveaPipe) {
   auto env = info.Env();

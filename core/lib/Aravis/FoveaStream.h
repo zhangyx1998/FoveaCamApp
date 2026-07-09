@@ -147,4 +147,9 @@ private:
   std::atomic<uint64_t> activePacked_{0}; // last produced rect (probe surface)
 };
 
+// Cross-brick lookup (ScaleStream chaining on a fovea/slice pipe): the live
+// fovea brick bound to `pipeId`, or nullptr. Defined in FoveaStream.cpp (owns
+// the registry); NAPI-thread only.
+FoveaStream::Ptr findFovea(const std::string &pipeId);
+
 } // namespace Arv

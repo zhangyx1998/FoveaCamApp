@@ -67,5 +67,7 @@ void appendUndistortReports(Napi::Env env, Napi::Array &rows,
                             std::set<std::string> &seen);
 void appendFoveaReports(Napi::Env env, Napi::Array &rows,
                         std::set<std::string> &seen);
+void appendScaleReports(Napi::Env env, Napi::Array &rows,
+                        std::set<std::string> &seen);
 
 } // namespace Arv

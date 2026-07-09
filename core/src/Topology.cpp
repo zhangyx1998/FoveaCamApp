@@ -79,6 +79,7 @@ Value report(const CallbackInfo &info) {
     Arv::appendConverterReports(env, rows, seen);
     Arv::appendUndistortReports(env, rows, seen);
     Arv::appendFoveaReports(env, rows, seen);
+    Arv::appendScaleReports(env, rows, seen);
     auto &hub = Pipe::PipeHub::instance();
     auto probes = hub.probeAll(); // publisher (offer-side) meters, keyed by id
     for (const auto &entry : hub.list()) {

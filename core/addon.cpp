@@ -44,6 +44,12 @@ Napi::Value attachFoveaPipe(const Napi::CallbackInfo &info);
 Napi::Value setFoveaRect(const Napi::CallbackInfo &info);
 Napi::Value detachFoveaPipe(const Napi::CallbackInfo &info);
 Napi::Value foveaProbeAll(const Napi::CallbackInfo &info);
+// split-disparity-nodes: the RESIZE brick, defined in
+// core/lib/Aravis/ScaleStream.cpp.
+Napi::Value attachScalePipe(const Napi::CallbackInfo &info);
+Napi::Value setScaleParams(const Napi::CallbackInfo &info);
+Napi::Value detachScalePipe(const Napi::CallbackInfo &info);
+Napi::Value scaleProbeAll(const Napi::CallbackInfo &info);
 }
 // unified-time-and-topology §6: consolidated NodeReport rows for every live
 // native brick + pipe. Defined in core/src/Topology.cpp.
@@ -133,6 +139,18 @@ static Object init(Env env, Object exports) {
                Function::New<Arv::detachFoveaPipe>(env, "detachFoveaPipe"));
     Aravis.Set("foveaProbeAll",
                Function::New<Arv::foveaProbeAll>(env, "foveaProbeAll"));
+    // split-disparity-nodes: spawn/cancel-able RESIZE pipes — a native
+    // cv::resize thread chained on any convert/undistort/fovea/scale pipe,
+    // reactive {ratio|dwidth|dheight|dsize} params, C-20 max-footprint dynamic
+    // geometry with the source crop origin forwarded unscaled.
+    Aravis.Set("attachScalePipe",
+               Function::New<Arv::attachScalePipe>(env, "attachScalePipe"));
+    Aravis.Set("setScaleParams",
+               Function::New<Arv::setScaleParams>(env, "setScaleParams"));
+    Aravis.Set("detachScalePipe",
+               Function::New<Arv::detachScalePipe>(env, "detachScalePipe"));
+    Aravis.Set("scaleProbeAll",
+               Function::New<Arv::scaleProbeAll>(env, "scaleProbeAll"));
     exports.Set("Aravis", Aravis);
     // Controller Module
     auto Controller = Object::New(env);

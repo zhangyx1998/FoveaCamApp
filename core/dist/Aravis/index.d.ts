@@ -395,4 +395,71 @@ declare module "core/Aravis" {
    * ids. Folds into `perfSnapshot.workloads`/`graphTopology()` identically.
    */
   export function foveaProbeAll(): Record<string, FoveaProbeSnapshot>;
+
+  /**
+   * Reactive resize spec for `attachScalePipe`/`setScaleParams`
+   * (split-disparity-nodes §"Scale node"). EXACTLY ONE field must be present;
+   * providing zero or more than one throws. Output dims are recomputed PER
+   * FRAME from these params + that frame's ACTIVE input dims (variable-size
+   * sources like a slice/fovea pipe just work), then clamped to the ring's max
+   * footprint.
+   *   - `ratio`   — uniform scale factor (> 0).
+   *   - `dwidth`  — target width (>= 1); height derived to PRESERVE the input
+   *                 frame's aspect.
+   *   - `dheight` — target height (>= 1); width derived to preserve aspect.
+   *   - `dsize`   — explicit output {width, height} (each >= 1); aspect NOT
+   *                 preserved.
+   */
+  export type ScaleParams =
+    | { ratio: number }
+    | { dwidth: number }
+    | { dheight: number }
+    | { dsize: { width: number; height: number } };
+
+  /**
+   * Attach a spawn/cancel-able RESIZE brick: a `cv::resize` of the source
+   * brick's frames (INTER_AREA when shrinking, INTER_LINEAR when growing),
+   * chained on any convert / undistort / fovea (slice) / scale pipe's
+   * OwnedFrame tap (Leaky/latest-wins input; demand propagation keeps the
+   * whole upstream chain awake). The pipe MUST be advertised first (unknown
+   * pipe throws). The pipe is DYNAMIC with C-20 semantics — advertise with
+   * `maxWidth`/`maxHeight`/`maxBytes` (the ring footprint); every frame carries
+   * its ACTIVE out w/h and the source frame's crop origin — forwarded UNSCALED
+   * in SOURCE full-res coords — in the v4 slot header (surfaced by the reader
+   * as `width`/`height`/`originX`/`originY`). deviceTimestamp/systemTimestamp
+   * are forwarded from the source frame (trusted-time: never restamped).
+   * Retune live via `setScaleParams`. Throws on invalid/ambiguous params.
+   */
+  export function attachScalePipe(
+    sourcePipeId: string,
+    pipeId: string,
+    params: ScaleParams,
+  ): boolean;
+
+  /**
+   * Live-retune a scale pipe (applied on the NEXT frame; output dims recomputed
+   * from the new params + each frame's active input dims, clamped to the ring's
+   * max footprint). No re-attach. Returns false for an unknown pipe id; throws
+   * on invalid/ambiguous params.
+   */
+  export function setScaleParams(pipeId: string, params: ScaleParams): boolean;
+
+  /** Detach + join the scale producer. Idempotent (false if unknown). */
+  export function detachScalePipe(pipeId: string): boolean;
+
+  /** `scaleProbeAll` snapshot: the shared meter shape + the last produced
+   *  frame's ACTIVE out dims and forwarded crop origin (source full-res px). */
+  export interface ScaleProbeSnapshot extends ProbeSnapshot {
+    activeWidth: number;
+    activeHeight: number;
+    originX: number;
+    originY: number;
+  }
+
+  /**
+   * Out-of-loop probe of every ACTIVE scale thread → `{ [pipeId]:
+   * ScaleProbeSnapshot }` — keys AND meter names are the node ids. Folds into
+   * `perfSnapshot.workloads`/`graphTopology()` identically to `foveaProbeAll`.
+   */
+  export function scaleProbeAll(): Record<string, ScaleProbeSnapshot>;
 }
