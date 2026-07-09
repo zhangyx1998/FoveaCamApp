@@ -122,18 +122,6 @@ async function awaitPendingClose(serial: string): Promise<void> {
   if (pending) await pending;
 }
 
-/** Serials with a live lease (preview running or not). */
-export const leasedSerials = (): string[] => [...shared.keys()];
-
-/** The LEASED shared camera handle for `serial`, or null when the camera is
- *  not currently held (C-24 step 4: the fovea materializer's camera source —
- *  a fovea brick is composable only while its camera lives; the caller fails
- *  the compose with a clear error rather than acquiring). Never refs. */
-export function leasedCamera(serial: string): Camera | null {
-  const s = shared.get(serial);
-  return s && !s.closed ? s.camera : null;
-}
-
 // Free the native camera handle (releasing the per-process device claim).
 // Idempotent — safe if a lingering lease also releases later. No JS preview loop
 // to stop anymore (C-22b step 3): camera frames flow through B's native

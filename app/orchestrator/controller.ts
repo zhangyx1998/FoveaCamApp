@@ -330,7 +330,8 @@ export class Controller {
    * the exact `channels()`→`dac2volt` math `actuate()` applies to the ACK
    * readback, assuming the firmware echoes the commanded channels (A-30 ruling
    * Q1; RIG-VERIFY predicted vs a sampled real readback). This lets the fire-
-   * and-forget streaming actuation path (`actuation.ts`) publish telemetry /
+   * and-forget streaming actuation path (the controller thread node,
+   * `controller-node.ts`) publish telemetry /
    * fovea-wrap volts without paying the awaited readback the streaming protocol
    * has no response for anyway. Pure: reads only `pos`, `_pos` (fallback for an
    * unspecified axis), `bias`, and `dv` — no serial I/O, no mutation.
