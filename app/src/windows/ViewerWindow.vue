@@ -721,14 +721,14 @@ function onTileWidthCommit(): void {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background: #111;
+  background: var(--bg-chrome);
   * {
     user-select: none;
   }
 }
 
 .notice {
-  color: #888;
+  color: var(--text-faint);
   font-size: 1.05em;
   text-align: center;
   padding: 2em;
@@ -740,23 +740,23 @@ function onTileWidthCommit(): void {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  background: #0d0d0d;
-  border-bottom: 1px solid #fff2;
+  background: var(--bg-chrome);
+  border-bottom: 1px solid var(--tint-2);
 
   .preview-head {
     display: flex;
     align-items: center;
     gap: 1.2ch;
     padding: 0.35em 1em;
-    border-bottom: 1px solid #fff1;
-    background: #161616;
+    border-bottom: 1px solid var(--tint-1);
+    background: var(--bg-panel-alt);
     font-size: 0.82em;
-    color: #999;
+    color: var(--text-muted);
     .count {
-      color: #ccc;
+      color: var(--text-dim);
     }
     .hint {
-      color: #fa0;
+      color: var(--warn);
       border: 1px solid #fa06;
       border-radius: 3px;
       padding: 0 0.5em;
@@ -766,7 +766,7 @@ function onTileWidthCommit(): void {
       display: flex;
       align-items: center;
       gap: 0.6ch;
-      color: #888;
+      color: var(--text-faint);
       input {
         width: 12ch;
       }
@@ -791,22 +791,22 @@ function onTileWidthCommit(): void {
     display: flex;
     flex-direction: column;
     min-height: 0;
-    background: #000;
-    border: 1px solid #fff2;
+    background: var(--bg-canvas);
+    border: 1px solid var(--tint-2);
     border-radius: 4px;
     overflow: hidden;
 
     .tile-head {
       padding: 0.2em 0.6em;
       font-size: 0.78em;
-      color: #bbb;
-      background: #181818;
-      border-bottom: 1px solid #fff1;
+      color: var(--text-dim);
+      background: var(--bg-panel-alt);
+      border-bottom: 1px solid var(--tint-1);
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
       .tile-name.master {
-        color: #0af;
+        color: var(--accent-bright);
         font-weight: 600;
       }
     }
@@ -816,10 +816,10 @@ function onTileWidthCommit(): void {
       align-items: center;
       justify-content: center;
       min-height: 0;
-      background: #111;
+      background: var(--bg-chrome);
     }
     .tile-placeholder {
-      color: #555;
+      color: var(--text-disabled);
       font-size: 0.85em;
     }
   }
@@ -829,7 +829,7 @@ function onTileWidthCommit(): void {
 .divider {
   height: 6px;
   flex: 0 0 6px;
-  background: #222;
+  background: var(--bg-app);
   cursor: row-resize;
   // SNAP: no transition on the control path.
   &:hover {
@@ -839,18 +839,18 @@ function onTileWidthCommit(): void {
 .drawer {
   flex: 0 0 auto;
   padding: 0.3em 1em;
-  background: #161616;
-  border-top: 1px solid #fff2;
-  color: #aaa;
+  background: var(--bg-panel-alt);
+  border-top: 1px solid var(--tint-2);
+  color: var(--text-muted);
   font-size: 0.85em;
   cursor: pointer;
   text-align: center;
   &:hover {
-    color: #fff;
-    background: #1c1c1c;
+    color: var(--text);
+    background: var(--bg-panel-alt);
   }
   .uparrow {
-    color: #0af;
+    color: var(--accent-bright);
   }
 }
 
@@ -860,39 +860,39 @@ function onTileWidthCommit(): void {
   flex-direction: column;
   min-height: 0;
   flex-grow: 1;
-  background: #141414;
+  background: var(--bg-chrome);
 
   .transport {
     display: flex;
     align-items: center;
     gap: 1ch;
     padding: 0.5em 1em;
-    border-bottom: 1px solid #fff1;
-    background: #161616;
+    border-bottom: 1px solid var(--tint-1);
+    background: var(--bg-panel-alt);
     flex: 0 0 auto;
 
     .play,
     .collapse {
-      background: #222;
-      color: #ddd;
-      border: 1px solid #333;
+      background: var(--bg-app);
+      color: var(--text-strong);
+      border: 1px solid var(--border);
       border-radius: 4px;
       padding: 0.3em 0;
       width: 2.6em;
       cursor: pointer;
       &:hover {
-        background: #2a2a2a;
+        background: var(--bg-elevated);
       }
     }
     select {
-      background: #111;
-      color: #ccc;
-      border: 1px solid #444;
+      background: var(--bg-chrome);
+      color: var(--text-dim);
+      border: 1px solid var(--border-strong);
       border-radius: 3px;
     }
     .time {
-      color: #999;
-      font-family: monospace;
+      color: var(--text-muted);
+      font-family: var(--font-mono);
       font-size: 0.85em;
       min-width: 9ch;
       text-align: center;
@@ -917,7 +917,7 @@ function onTileWidthCommit(): void {
       top: 0;
       bottom: 0;
       width: 2px;
-      background: #0af;
+      background: var(--accent-bright);
       pointer-events: none;
       z-index: 5;
     }
@@ -926,12 +926,12 @@ function onTileWidthCommit(): void {
       position: relative;
       height: 2.6em;
       margin: 0.25em 0.6em;
-      border: 1px dashed #ffffff14;
+      border: 1px dashed var(--tint-1);
       border-radius: 4px;
       background: #ffffff06;
       // SNAP: instant drop-target feedback, no eased transition.
       &.drop-ok {
-        border-color: #0af;
+        border-color: var(--accent-bright);
         background: #0af2;
       }
       &.drop-bad {
@@ -947,7 +947,7 @@ function onTileWidthCommit(): void {
         left: 0.5ch;
         top: 0.2em;
         font-size: 0.68em;
-        color: #666;
+        color: var(--text-disabled);
         pointer-events: none;
         z-index: 1;
       }
@@ -975,16 +975,16 @@ function onTileWidthCommit(): void {
       }
       &.master {
         background: #23405a;
-        border-color: #0af;
+        border-color: var(--accent-bright);
       }
       &.focused {
-        outline: 2px solid #0af;
+        outline: 2px solid var(--accent);
         outline-offset: 0;
       }
       &.disabled {
         opacity: 0.4;
-        background: #333;
-        border-color: #555;
+        background: var(--border);
+        border-color: var(--border-muted);
       }
       &.dragging {
         cursor: grabbing;
@@ -1018,20 +1018,20 @@ function onTileWidthCommit(): void {
   justify-content: center;
   z-index: 100;
   .modal {
-    background: #1c1c1c;
-    border: 1px solid #fff3;
+    background: var(--bg-panel-alt);
+    border: 1px solid var(--tint-3);
     border-radius: 8px;
     padding: 1.2em 1.4em;
     max-width: 34ch;
-    color: #ddd;
+    color: var(--text-strong);
     h3 {
       margin: 0 0 0.6em;
-      color: #fff;
+      color: var(--text);
     }
     p {
       margin: 0 0 1em;
       font-size: 0.9em;
-      color: #bbb;
+      color: var(--text-dim);
       line-height: 1.4;
     }
     code {
@@ -1043,20 +1043,20 @@ function onTileWidthCommit(): void {
       justify-content: flex-end;
       gap: 1ch;
       button {
-        background: #222;
-        color: #ddd;
-        border: 1px solid #444;
+        background: var(--bg-app);
+        color: var(--text-strong);
+        border: 1px solid var(--border-strong);
         border-radius: 4px;
         padding: 0.35em 1.1em;
         cursor: pointer;
         &:hover {
-          background: #2a2a2a;
+          background: var(--bg-elevated);
         }
         &.danger {
-          border-color: #a44;
-          color: #f99;
+          border-color: var(--danger-strong);
+          color: var(--danger-text);
           &:hover {
-            background: #3a2020;
+            background: var(--danger-bg);
           }
         }
       }
@@ -1066,9 +1066,9 @@ function onTileWidthCommit(): void {
 
 // ---- title-bar buttons ----
 .tb-btn {
-  background: #222;
-  color: #ccc;
-  border: 1px solid #333;
+  background: var(--bg-app);
+  color: var(--text-dim);
+  border: 1px solid var(--border);
   border-radius: 4px;
   padding: 0.25em 0.9em;
   font-size: 0.85em;
@@ -1076,8 +1076,8 @@ function onTileWidthCommit(): void {
   white-space: nowrap;
   margin-left: 0.5ch;
   &:hover {
-    background: #2a2a2a;
-    color: #fff;
+    background: var(--bg-elevated);
+    color: var(--text);
   }
 }
 </style>

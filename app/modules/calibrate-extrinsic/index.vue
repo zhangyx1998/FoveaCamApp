@@ -160,18 +160,18 @@ function bbox(points: Point2d[]): string {
         </StreamView>
         <MarkerTargetInputs :session="session" role="C" :detected="!!telemetry.detection.C" />
         <div class="actions">
-          <button style="--color: #080" :disabled="!canRecord" @click="session.call('capture', undefined)">
+          <button style="--color: var(--ok)" :disabled="!canRecord" @click="session.call('capture', undefined)">
             Capture
           </button>
           <button
-            style="--color: #a00"
+            style="--color: var(--danger)"
             :disabled="telemetry.records.length === 0"
             @click="session.call('clearRecords', undefined)"
           >
             Clear
           </button>
           <button
-            style="--color: #08a"
+            style="--color: var(--accent)"
             :disabled="telemetry.records.length === 0"
             @click="session.call('finalize', undefined)"
           >
@@ -368,10 +368,10 @@ function bbox(points: Point2d[]): string {
     width: 0;
     flex-grow: 1;
     height: 2rem;
-    background-color: var(--color, #888);
+    background-color: var(--color, var(--text-faint));
     border-radius: 0.2em;
     border: none;
-    color: white;
+    color: var(--text);
     &:not(:disabled) {
       cursor: pointer;
       &:hover {
@@ -399,12 +399,12 @@ function bbox(points: Point2d[]): string {
     justify-content: space-between;
     align-items: center;
     &:hover {
-      background-color: #fff1;
+      background-color: var(--tint-1);
     }
     button {
       background: none;
       border: none;
-      color: #f66;
+      color: var(--danger-text);
       cursor: pointer;
       font-size: 1.2em;
       padding: 0.2em;
@@ -414,8 +414,8 @@ function bbox(points: Point2d[]): string {
   }
   &,
   & > * {
-    border-top: 1px solid #fff4;
-    border-bottom: 1px solid #fff4;
+    border-top: 1px solid var(--tint-4);
+    border-bottom: 1px solid var(--tint-4);
   }
 }
 
@@ -442,22 +442,22 @@ function bbox(points: Point2d[]): string {
     position: relative;
     width: 30%;
     aspect-ratio: 4 / 3;
-    background: #111;
-    outline: 1px solid #444;
+    background: var(--bg-chrome);
+    outline: 1px solid var(--border-strong);
 
     .frame-title {
       position: absolute;
       top: -1.6em;
       left: 0;
       font-size: 0.8em;
-      color: gray;
+      color: var(--text-faint);
     }
   }
 
   .divider {
     width: 100%;
     height: 1px;
-    background-color: #333;
+    background-color: var(--border);
   }
 }
 </style>

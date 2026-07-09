@@ -178,11 +178,11 @@ const points = new SetPoints();
     width: 100%;
     margin: 2rem 0;
     svg {
-      outline: 4px solid #fff4;
+      outline: 4px solid var(--tint-4);
       width: var(--size);
       height: var(--size);
       &:hover {
-        outline-color: #fff8;
+        outline-color: var(--tint-8);
       }
       &:active {
         outline-color: #08fa;

@@ -186,7 +186,7 @@ function save(path: string, img_format: string) {
   height: 100%;
   position: absolute;
   inset: 0;
-  background-color: #111;
+  background-color: var(--bg-chrome);
   .content {
     position: absolute;
     top: 4rem;
@@ -216,7 +216,7 @@ function save(path: string, img_format: string) {
     opacity: 0.6;
   }
   .cap-error {
-    color: #e66;
+    color: var(--danger-text);
     font-size: 0.85rem;
     max-width: 20rem;
   }

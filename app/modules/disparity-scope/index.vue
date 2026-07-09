@@ -542,9 +542,9 @@ function openDebugger(): void {
 .debugger-toggle {
   cursor: pointer;
   margin-top: 0.5em;
-  border: 1px solid #fff4;
+  border: 1px solid var(--tint-4);
   border-radius: 4px;
-  background: #fff1;
+  background: var(--tint-1);
   color: inherit;
   font: inherit;
   padding: 0.3em 1.2em;
@@ -552,17 +552,17 @@ function openDebugger(): void {
 
   &:hover {
     opacity: 1;
-    background: #fff3;
+    background: var(--tint-3);
   }
 
   &:active {
-    background: #fff2;
+    background: var(--tint-2);
   }
 }
 
 .report {
   user-select: none;
-  font-family: monospace;
+  font-family: var(--font-mono);
   font-size: 1.4em;
   font-weight: 500;
   padding: 1em 0;
@@ -577,7 +577,7 @@ function openDebugger(): void {
     padding: 0 0.5ch;
     border-radius: 4px;
     background: #fd05;
-    color: #fff;
+    color: var(--text);
     font-size: 0.8em;
     text-transform: uppercase;
     letter-spacing: 0.05em;
@@ -592,7 +592,7 @@ function openDebugger(): void {
 
   & > .options {
     flex: 1;
-    border-right: 1px solid #fff2;
+    border-right: 1px solid var(--tint-2);
     &:last-child {
       border-right: none;
     }
@@ -623,9 +623,9 @@ function openDebugger(): void {
 
     .reset {
       cursor: pointer;
-      border: 1px solid #fff4;
+      border: 1px solid var(--tint-4);
       border-radius: 4px;
-      background: #fff1;
+      background: var(--tint-1);
       color: inherit;
       font: inherit;
       text-transform: none;
@@ -635,11 +635,11 @@ function openDebugger(): void {
 
       &:hover {
         opacity: 1;
-        background: #fff3;
+        background: var(--tint-3);
       }
 
       &:active {
-        background: #fff2;
+        background: var(--tint-2);
       }
 
       &.toggle {
@@ -674,8 +674,8 @@ function openDebugger(): void {
       width: 5ch;
       font: inherit;
       color: inherit;
-      background: #fff1;
-      border: 1px solid #fff3;
+      background: var(--tint-1);
+      border: 1px solid var(--tint-3);
       border-radius: 4px;
       padding: 0.1em 0.4em;
     }
@@ -698,10 +698,10 @@ function openDebugger(): void {
 
 .debug {
   margin-top: 1em;
-  border: 1px solid #fff4;
+  border: 1px solid var(--tint-4);
   border-radius: 4px;
   padding: 0.5em 1em 1em;
-  font-family: monospace;
+  font-family: var(--font-mono);
   font-size: 0.9em;
 
   legend {

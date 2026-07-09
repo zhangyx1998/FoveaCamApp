@@ -115,18 +115,18 @@ const pattern_h = computed<number>({
             <CameraRole v-if="v.role" :role="(v.role as any)" />
           </div>
           <template v-if="v.fov">
-            <ConfigEntry style="color: white">
+            <ConfigEntry style="color: var(--text)">
               Calibrated @ {{ v.calibrated_at ? new Date(v.calibrated_at).toLocaleString() : "N/A" }}
             </ConfigEntry>
-            <ConfigEntry style="color: white">
+            <ConfigEntry style="color: var(--text)">
               FOV: X {{ degrees(v.fov.x) }}&deg;, Y {{ degrees(v.fov.y) }}&deg;
             </ConfigEntry>
-            <ConfigEntry v-if="v.rms != null" style="color: white">
+            <ConfigEntry v-if="v.rms != null" style="color: var(--text)">
               RMS: {{ v.rms.toFixed(3) }} px
             </ConfigEntry>
           </template>
           <template v-else>
-            <ConfigEntry style="color: gray">Camera not calibrated.</ConfigEntry>
+            <ConfigEntry style="color: var(--text-faint)">Camera not calibrated.</ConfigEntry>
           </template>
         </div>
         <div class="actions">
@@ -144,7 +144,7 @@ const pattern_h = computed<number>({
           </button>
           <button
             :disabled="!v.fov"
-            style="--theme: #a00"
+            style="--theme: var(--danger)"
             @click="session.call('resetCalibration', { serial: v.info.serial })"
           >
             Reset
@@ -263,7 +263,7 @@ const pattern_h = computed<number>({
 }
 .divider {
   height: 1px;
-  background-color: #333;
+  background-color: var(--border);
   margin: 1em 0;
 }
 .list-item {
@@ -273,11 +273,11 @@ const pattern_h = computed<number>({
   align-items: stretch;
   gap: 2em;
   padding: 1.5em;
-  outline: 1px solid #666;
+  outline: 1px solid var(--border-muted);
   border-radius: 1em;
   &:hover {
-    outline-color: #08c;
-    background-color: #fff1;
+    outline-color: var(--accent);
+    background-color: var(--tint-1);
   }
 }
 .info {
@@ -290,14 +290,14 @@ const pattern_h = computed<number>({
   align-items: stretch;
   gap: 0.5em;
   button {
-    --theme: #08c;
+    --theme: var(--accent);
     display: block;
     padding: 0.5em 1em;
     border-radius: 0.5em;
     &:not(:disabled) {
       cursor: pointer;
       background-color: var(--theme);
-      color: white;
+      color: var(--text);
       border: 1px solid transparent;
       &:hover {
         filter: brightness(1.2);
@@ -305,8 +305,8 @@ const pattern_h = computed<number>({
     }
     &:disabled {
       background-color: transparent;
-      color: #666;
-      border: 1px solid #666;
+      color: var(--text-disabled);
+      border: 1px solid var(--border-muted);
       cursor: not-allowed;
     }
   }
@@ -325,11 +325,11 @@ const pattern_h = computed<number>({
   .left {
     justify-content: center;
     align-items: center;
-    background-color: #111;
+    background-color: var(--bg-chrome);
   }
   .right {
-    border-left: 2px solid #333;
-    background-color: #222;
+    border-left: 2px solid var(--border);
+    background-color: var(--bg-app);
     width: max(30vw, 20ch);
     box-sizing: border-box;
     padding: 1rem;
@@ -349,10 +349,10 @@ const pattern_h = computed<number>({
     .record-chip {
       padding: 0.4em 0.8em;
       border-radius: 0.4em;
-      background: #fff2;
+      background: var(--tint-2);
       cursor: pointer;
       &:hover {
-        background: #fff4;
+        background: var(--tint-4);
       }
     }
     .buttons {

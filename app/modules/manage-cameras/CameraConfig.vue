@@ -234,10 +234,10 @@ function reset() {
 fieldset {
   border-radius: 1em;
   border-width: 1px;
-  border-color: #fff8;
+  border-color: var(--tint-8);
   &:focus,
   &:focus-within {
-    border-color: #08c;
+    border-color: var(--accent);
   }
   legend {
     padding: 0 1ch;
@@ -248,14 +248,14 @@ fieldset {
 select {
   font-family: inherit;
   font-size: inherit;
-  outline: 1px solid #666;
+  outline: 1px solid var(--border-muted);
   border: none;
   background: none;
   border-radius: 4px;
   padding: 0.2em 1ch;
   color: inherit;
   &:focus {
-    outline: 1px solid #08c;
+    outline: 1px solid var(--accent);
   }
 }
 

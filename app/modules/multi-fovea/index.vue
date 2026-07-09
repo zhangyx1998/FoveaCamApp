@@ -315,8 +315,8 @@ async function captureOnce(): Promise<void> {
   padding: 1rem;
   min-height: 100%;
   box-sizing: border-box;
-  background: #161616;
-  color: #ddd;
+  background: var(--bg-panel-alt);
+  color: var(--text-strong);
 }
 
 .overview {
@@ -335,8 +335,8 @@ async function captureOnce(): Promise<void> {
   flex-direction: column;
   gap: 0.75rem;
   padding: 0.75rem;
-  background: #202020;
-  border: 1px solid #333;
+  background: var(--bg-app);
+  border: 1px solid var(--border);
   border-radius: 6px;
 }
 
@@ -348,20 +348,20 @@ async function captureOnce(): Promise<void> {
   span {
     padding: 0.2rem 0.4rem;
     border-radius: 4px;
-    background: #333;
-    color: #aaa;
+    background: var(--border);
+    color: var(--text-muted);
 
     &.live {
       background: #064;
-      color: white;
+      color: var(--text);
     }
   }
 }
 
 button {
-  border: 1px solid #555;
+  border: 1px solid var(--border-muted);
   border-radius: 4px;
-  background: #292929;
+  background: var(--bg-elevated);
   color: inherit;
   padding: 0.45rem 0.65rem;
   cursor: pointer;
@@ -377,8 +377,8 @@ button {
   display: grid;
   gap: 0.5rem;
   padding: 0.75rem;
-  background: #202020;
-  border: 1px solid #333;
+  background: var(--bg-app);
+  border: 1px solid var(--border);
   border-radius: 6px;
 
   header,
@@ -386,7 +386,7 @@ button {
     display: flex;
     justify-content: space-between;
     gap: 0.75rem;
-    color: #aaa;
+    color: var(--text-muted);
     font-size: 0.85rem;
   }
 }

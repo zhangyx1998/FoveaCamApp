@@ -148,7 +148,7 @@ async function save() {
   padding: 0 1rem;
   border-radius: 8px;
   justify-content: space-evenly;
-  border-bottom: 1px solid #fff4;
+  border-bottom: 1px solid var(--tint-4);
   &,
   & > * {
     flex-direction: row;
@@ -160,37 +160,37 @@ async function save() {
   .divider {
     height: 100%;
     width: 1px;
-    background-color: #fff4;
+    background-color: var(--tint-4);
   }
 }
 
 .path-select {
   display: flex;
-  border: 1px solid #fff3;
+  border: 1px solid var(--tint-3);
   border-radius: 4px;
-  background-color: #fff1;
+  background-color: var(--tint-1);
   flex-grow: 1;
   padding: 0.2em 0.5em;
   &:focus-within {
-    outline: 1px solid #0af;
+    outline: 1px solid var(--accent-bright);
   }
   &.invalid {
-    outline: 1px solid red !important;
+    outline: 1px solid var(--danger) !important;
   }
   * {
-    font-family: monospace;
+    font-family: var(--font-mono);
   }
   & > * {
     padding: 0;
     margin: 0;
     font-size: 0.8em;
-    color: white;
+    color: var(--text);
     &.directory {
       flex-grow: 1;
     }
     &.invalid,
     &.invalid * {
-      color: #ff0;
+      color: var(--danger-text);
       opacity: 1;
     }
     &:not(.invalid):not(:focus):not(:focus-within):not(:hover) {
@@ -216,20 +216,19 @@ async function save() {
 }
 
 .path-input::placeholder {
-  color: #fff8;
+  color: var(--tint-8);
 }
 
 .browse-btn {
   padding: 0.5em;
-  border: 1px solid #fff3;
-  background-color: #fff2;
-  color: white;
+  border: 1px solid var(--tint-3);
+  background-color: var(--tint-2);
+  color: var(--text);
   cursor: pointer;
-  transition: background-color 0.2s;
 }
 
 .browse-btn:hover {
-  background-color: #fff3;
+  background-color: var(--tint-3);
 }
 
 .format-select {
@@ -239,15 +238,15 @@ async function save() {
 }
 
 .format-select label {
-  color: white;
+  color: var(--text);
 }
 
 .format-select select {
   padding: 0.5em;
-  border: 1px solid #fff3;
+  border: 1px solid var(--tint-3);
   border-radius: 4px;
-  background-color: #fff1;
-  color: white;
+  background-color: var(--tint-1);
+  color: var(--text);
   cursor: pointer;
 }
 
@@ -258,14 +257,13 @@ button.action {
   padding: 0.6em 0.8em;
   border: none;
   border-radius: 4px;
-  color: white;
+  color: var(--text);
   font-weight: 600;
-  transition: background-color 0.2s;
   &.green {
-    background: #080;
+    background: var(--ok);
   }
   &.red {
-    background: #a00;
+    background: var(--danger);
   }
 }
 
@@ -274,7 +272,7 @@ button.action:hover:not(:disabled) {
 }
 
 button.action:disabled {
-  background-color: #fff2;
+  background-color: var(--tint-2);
   cursor: not-allowed;
   opacity: 0.5;
 }
