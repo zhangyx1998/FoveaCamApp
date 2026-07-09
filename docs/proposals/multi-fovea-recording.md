@@ -1,7 +1,8 @@
 # Multi-fovea recording — raw 12p sensor streams + descriptor streams
 
-Status: **RULED r2 — in execution** (user 2026-07-09, superseding the r1
-tile-recording model the same day). Successor to
+Status: **RULED r2.1 — in execution** (user 2026-07-09, superseding the r1
+tile-recording model the same day; r2.1 adds rulings 8–10: advert-verbatim
+format metadata + `/codec` compression suffix + ring v5). Successor to
 [capture-recorder-nodes](./capture-recorder-nodes.md) — reuses its recorder
 thread node; r1's per-frame-dims pixel schema is DROPPED.
 
@@ -65,12 +66,39 @@ container the complete, minimal, offline-reconstructable record.
    schema is the contract).
 7. **UI**: record button in the multi-fovea drawer, Cmd-R via
    `onRecorderTrigger`, `recording:finished` → auto-open viewer.
-8. **Interleaved execution**: I-1a (recorder: dynamic streams + data
-   channels + raw12p schema + global metadata) ∥ I-1b (core: ArvBuffer tap →
-   raw12p pipes) → R-1 (review/opt) → I-2 (session wiring: descriptors from
-   the runtime/scheduler, params extras, refcounted raw pipes, UI, viewer
-   playback) → R-2 (review/opt + churn soak end-to-end + docs/stage-f
-   close).
+8. **Pixel format lives in per-stream metadata, sourced from the pipe
+   advert VERBATIM** (user r2.1, 2026-07-09): the recorder input is a named
+   SOCKET — the orchestrator connects a raw camera node output, a convert
+   node output, or a compression node output to it with NO extra config.
+   The recorder copies the advert's format fields (pixelFormat, dims,
+   stride, significantBits) into the MCAP channel metadata and treats the
+   payload as opaque bytes. It must never parse, assume, or unpack.
+9. **Intra-frame compression, spec'ed per raw stream, baked into the
+   pixelFormat string with a slash** — e.g. `BayerRG12p/bz2` — attached to
+   the metadata of the compression node's OUTPUT pipe. A compression brick
+   (native thread, per-frame independent compression so the container stays
+   seekable) consumes any frame pipe and advertises the same dims with the
+   `/codec` suffix appended. Offline readers split on `/`: decompress the
+   suffix chain right-to-left, then interpret the base format. Codec set
+   starts with what the system provides without new deps (zlib; bz2
+   available likewise — suffix makes codecs pluggable); throughput per
+   codec is measured, drop-accounted, and rig-verified — compression is
+   OPTIONAL per stream precisely because lossless codecs may not hold
+   full-rate 12p on all three cameras.
+10. **Ring layout v5**: compressed payloads vary per frame, so `SlotHeader`
+   gains `payloadBytes` (0 = derive from dims, the uncompressed/live path —
+   field appended, offsets unchanged, LAYOUT_VERSION 5; single-process
+   writer+reader rebuild together, no skew). `readSeqInto` surfaces the
+   actual payload length; consumers trust the returned view length, never
+   dim-derived math.
+11. **Interleaved execution**: I-1a (recorder: dynamic streams + data
+   channels + advert-verbatim schema + global metadata) ∥ I-1b (core:
+   ArvBuffer tap → raw12p pipes) → I-1c (core: ring v5 payloadBytes +
+   compression brick — AFTER I-1b, serialized core builds) → R-1
+   (review/opt) → I-2 (session wiring: descriptors from the
+   runtime/scheduler, params extras, refcounted raw pipes, UI, viewer
+   playback incl. `/codec` decode) → R-2 (review/opt + churn soak
+   end-to-end + docs/stage-f close).
 
 ## Gates
 
