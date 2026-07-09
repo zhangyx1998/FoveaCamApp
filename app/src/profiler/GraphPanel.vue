@@ -127,8 +127,10 @@ const STYLE: cytoscape.StylesheetJson = [
     },
   },
   {
-    // Lossy link actively dropping — warning-red accent on line + caption
-    // (the label carries the "− N/s" drop marker, see edgeLabel()).
+    // Edge WARNING accent (`edgeWarns`): a lossy link actively dropping OR a
+    // FIFO link backpressured to its capacity. Red on line + caption; the
+    // label itself carries only the effective rate (`edgeLabel`) — the drop /
+    // queue detail lives in the hover card (`edgeDetail`).
     selector: "edge.dropping",
     style: {
       "line-color": "#a8323e",

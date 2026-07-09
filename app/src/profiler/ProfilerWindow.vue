@@ -384,8 +384,8 @@ const clockRows = computed(() => {
     <section>
       <h2>Pipeline graph</h2>
       <p class="hint">
-        Live stream topology — node badges show util% · rate · worst gap (drops when nonzero);
-        saturated (≥90%) nodes are flagged red. Stage-1 view derived from meters + advertised pipes.
+        Live pipeline topology — hover a node or edge for its full metrics (util% · rate · worst
+        gap · drops/queue); saturated (≥90%) nodes and dropping/backpressured edges are flagged red.
       </p>
       <GraphPanel :topology="graphTopology" />
     </section>

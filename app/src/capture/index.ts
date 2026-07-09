@@ -12,7 +12,7 @@
 // which is a pure renderer concern independent of where the pixels live.
 //
 // `current_capture` keeps the same global-registration shape the title bar
-// (`App.vue`) and `capture/index.vue` already depend on — only
+// (`AppWindow.vue`) and `capture/index.vue` already depend on — only
 // `manual-control/index.vue` ever constructs one, for exactly as long as it's
 // mounted, same lifetime as before.
 

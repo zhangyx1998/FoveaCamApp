@@ -26,9 +26,9 @@ const overlay = debugOverlayFor(props.session);
 const valid = computed(() => !!props.session && !!props.frame && !!overlay);
 
 // A-32: a `pipe:<pipeId>` frame address binds the pixels to a native SHM pipe
-// (e.g. tracking's `pipe:undistort:<serial>` — with the worker no longer
-// posting a "C" session frame, the pipe IS the debug view's frame source).
-// Any other address stays on the session frame channel, untouched.
+// (e.g. `pipe:camera/<serial>/undistort` — when a module publishes its debug
+// pixels through a pipe rather than a "C" session frame, the pipe IS the debug
+// view's frame source). Any other address stays on the session frame channel.
 const PIPE_PREFIX = "pipe:";
 const pipeId = props.frame.startsWith(PIPE_PREFIX)
   ? props.frame.slice(PIPE_PREFIX.length)
