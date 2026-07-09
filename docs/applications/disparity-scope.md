@@ -12,28 +12,42 @@ camera, extract a template around it, template-match against the L/R fovea
 streams, compute per-tile disparity + a vergence analysis, and drive the mirror
 verge via PID so the foveas converge on the target depth.
 
-## Pipeline (post-§3.5, 2026-07-08)
-Session (thin coordinator): acquires the calibrated triple, connects
-`camera:<L|C|R serial>` pipes (consumer-gate → converter threads run), spawns
-the per-session vision worker with the `disparity` kernel
-(modules/disparity-scope/vision.ts). The L/R foveas arrive **pre-warped** off
-their own `camera/<serial>/undistort` homography pipes and the wide input is the
-center camera's `undistort` pipe — the kernel no longer does `wrapPerspective`
-and takes no homography params (the undistort bricks own the warp; overlays and
-`analyzeVergence` live on the UNDISTORTED C view). The KCF tracker is **off the
-matching thread**: the SESSION owns a chained tracker (`createChainedTracker` on
-the C undistort brick, own native thread) whose scalar output arrives in the
-kernel as the `target` param plus the `overridden` drag flag at result rate.
-Worker: slices the target region, builds tiles + `diff` template matching +
-`analyzeVergence`; posts scalar analysis + derived DIAGNOSTIC frames
-(center.sliced, guide, match_left, match_right; NOT the L/C/R views — those
-source directly from the undistort pipes). Main: the per-eye PID node's
-`stepVergence` → commandedVolts → **controller node** position input
-(`openPosition`, push model; the shared 1 ms actuation loop is deleted).
+## Pipeline (SPLIT-NODE topology, docs/proposals/split-disparity-nodes.md, 2026-07-09)
+Session (thin coordinator): acquires the calibrated triple, advertises the
+three undistort pipes (C intrinsic; L/R homography, fed by the mirror-history
+feeders), then composes the pipeline out of GENERAL-PURPOSE nodes:
+
+- **Slice nodes** (the fovea crop brick under session ids):
+  `camera/<C>/undistort/slice/scope-strip` (the target-centered match strip,
+  center tile × expand_x/expand_y) and `.../slice/scope-tile` (the display
+  center tile) — live-steered (`setFoveaRect`) as the target/zoom move.
+- **Scale nodes** (the ScaleStream brick; the match workers do NO resizing):
+  `.../scope-strip/scale/match` at reactive `{ratio: s}` and one
+  `camera/<L|R>/undistort/scale/scope-needle` per fovea at
+  `{dsize: foveaTileSize}` — both sides land at `s` px per wide px (CCOEFF
+  matching is not scale-invariant).
+- **Two `template-match` vision workers** (`win/disparity-scope/match/L`,
+  `/R`): needle = the pre-sized fovea, haystack = the shared pre-sized strip.
+  Results carry the strip frame's **crop origin** (forwarded unscaled through
+  slice → scale), so `origin + rectCenter/s` is an ABSOLUTE undistorted-wide
+  position — no target or drag flag ever rides a worker.
+- **The pid node** (`win/disparity-scope/pid`) is the app-specific JOIN: per-
+  side results land keyed L/R, the vergence step runs when the arriving side
+  completes a seq pair (~once per strip frame), and `stepVergence` →
+  commandedVolts → **controller node** position input (`openPosition`, push
+  model).
+
+The KCF tracker is unchanged (§3.5): a chained native thread on the C
+undistort brick; its output drives the session's target state, which steers
+the slice crops. The per-side correlation heatmaps are the only session
+frames left (`match_left`/`match_right`).
 
 ## UI & controls
-StreamViews for the wide (undistorted C) view + sliced/guide/match/disparity
-views; verge/baseline/shift parameters; PID tuning; target select (tracker
+StreamViews for the wide (undistorted C) view + the sliced center view (the
+scope-tile SLICE PIPE) + the guide strip (the scope-strip SLICE PIPE) + the
+per-side match heatmaps; the L-vs-R disparity view is a renderer canvas
+composite (`DiffView`, 'difference' blend of the two fovea undistort pipes).
+Verge/baseline/shift parameters; PID tuning; target select (tracker
 auto-follow). Dragging on the C view calls the **tracker's override** with the
 dragged point (NOT the PID slot) and the foveas **follow the cursor directly**
 (direct-follow rulings 2026-07-08/09, `followTarget` in vergence.ts):

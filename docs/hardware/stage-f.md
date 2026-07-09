@@ -240,6 +240,33 @@ names the mechanism it gates.
   Drift; tracking-single is gone everywhere (menu, Apps menu, restore of an
   old layout referencing it degrades silently).
 
+## Split disparity nodes (2026-07-09 wave, through f1be670)
+
+- [ ] **Node graph shows the split** — with disparity-scope live, the graph
+  renders `slice/scope-strip` + `slice/scope-tile` (fovea-brick rows),
+  `scope-strip/scale/match` + two `scale/scope-needle` rows (kind "scale",
+  scale ← source edges from Topology self-report), `match/L` + `match/R`
+  worker nodes with individual meters, and the pid node with l/r/target
+  input edges. No orphan `win/disparity-scope/disparity` row remains.
+- [ ] **Match parity** — per-side match rects/scores on the guide strip look
+  equivalent to the pre-split matcher on the same scene; `min_score` gating
+  and convergence behave as before. Join rate ≈ strip frame rate (the two
+  workers run concurrently; the pair-completion join steps ~once per strip
+  frame and degrades to the slower side, not the sum).
+- [ ] **Live steering** — dragging/zooming re-steers the strip + tile crops
+  next-frame (sliced view + guide strip follow with no re-advertise churn);
+  changing Template Scale retunes the scalers live; extreme zoom/expansion
+  combos clamp (native ring guard) rather than crash.
+- [ ] **Views at pipe rate** — sliced center view + guide strip render at
+  their slice pipes' rate; the DiffView (L vs R difference) composites at
+  fovea pipe rate; match heatmaps still arrive as session frames.
+- [ ] **Scale brick health** — `scaleProbeAll` rows show sane rate/util; the
+  strip scaler's upsample cost is visible per node (was hidden inside the
+  monolithic kernel's budget).
+- [ ] **Teardown** — exiting the app retires scalers → slices → undistort
+  bricks cleanly (no brick-leak warnings, no reopen race on immediate
+  re-entry); reopening works first try.
+
 ## Blocked (hardware change required)
 
 - [ ] **Center-camera hardware trigger** — needs the slimmer CAM0 cable

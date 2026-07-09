@@ -18,6 +18,10 @@ camera/<serial>                     raw source (native Arv stream)
 camera/<serial>/convert             BGRA8 converted pipe
 camera/<serial>/undistort           undistorted pipe (native remap)
 camera/<serial>/undistort/fovea/<n> dynamic fovea crop pipe (crop of undistort)
+camera/<serial>/undistort/slice/<name>  SESSION-owned named crop (same brick as
+                                    fovea, outside the composed slot space)
+<sourceId>/scale/<name>             reactive resize pipe (ScaleStream brick;
+                                    nests under its source — that IS its input)
 camera/<serial>/kcf                 native KCF track stream (raw source)
 camera/<serial>/kcf-multi           native multi-target KCF track stream
 camera/<serial>/undistort/kcf       chained KCF on the undistort brick (§3.5)

@@ -163,3 +163,24 @@ join.
 Added to stage-f §"Split disparity nodes" (graph shows slice/match nodes with
 meters; per-side match rects/scores; join rate ≈ strip rate; sliced/guide
 views at pipe rate; DiffView parity; drag semantics unchanged).
+
+## AS SHIPPED (2026-07-09, commits 544791e + f1be670)
+
+Implemented exactly as ruled. Deltas/notes against the sections above:
+
+- ScaleStream resolves sources via findUndistort → findConverter →
+  findFovea (added — scale chains on slice pipes) → findScale (scale-on-
+  scale composes); `kind: "scale"` Topology self-report rows.
+- The strip scaler's advertised max footprint is 2× the wide frame
+  (extreme zoom/expansion combos clamp natively rather than over-allocate
+  the ring); slices max at the full frame.
+- The join steps on seq PAIR COMPLETION (`arriving.seq >= other.latest`) —
+  order-agnostic, ~once per strip frame, slower-side degradation.
+- `overridden` went session-local (`dragging`) — the one-kernel-tick flag
+  lag the old plumbing had is gone with the plumbing.
+- vergence.ts is now CORE-FREE pure math (the native-mock shim left its
+  test); `match_center` telemetry anchors to each result's actual strip
+  origin so the guide marker stays aligned mid-steer.
+- Gates at close: core make + tests 25/09/18/22/23/12; vue-tsc 0; vitest
+  456/456; vite build 0 (orchestrator 242.61 kB, vision-worker 10.03 kB).
+  Rig pass owed: stage-f §"Split disparity nodes".
