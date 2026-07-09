@@ -6,7 +6,7 @@
 
 <!-- The profiler window (docs/history/refactor/orchestrator.md §7.1 S4/V12) — a
      second `BrowserWindow`, read-only over existing telemetry. `system` is the
-     always-on session and stays active; controller/tracking/manual-control are
+     always-on session and stays active; controller/manual-control are
      passive observers so opening the profiler never starts actuation loops or
      camera taps. -->
 
@@ -14,7 +14,6 @@
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useSession, rendererLoopLag, orchestratorSpans, dumpPerfSnapshot } from "@lib/orchestrator/client";
 import { system, controller, type PerfSnapshot, type Span } from "@lib/orchestrator/contracts";
-import { tracking } from "@modules/tracking-single/contract";
 import { manualControl } from "@modules/manual-control/contract";
 import { workloadRows, utilizationLevel, UTILIZATION_HIGH, type WorkloadRow } from "./workload-view";
 import { pipes } from "@lib/orchestrator/pipe-contract";
@@ -45,7 +44,6 @@ const titleBarHeight = ref(0);
 
 const sys = useSession(system, "system");
 const ctrl = useSession(controller, "controller", { passive: true });
-const trk = useSession(tracking, "tracking", { passive: true });
 const mc = useSession(manualControl, "manual-control", { passive: true });
 
 // Live streams (docs/history/refactor/orchestrator.md §7.1 S4 added scope): render
@@ -66,9 +64,6 @@ function history(): number[] {
 
 const orchLoopLag = ref<number[]>(history());
 const rendLoopLag = ref<number[]>(history());
-const trackMs = ref<number[]>(history());
-const actuateMs = ref<number[]>(history());
-const frameAge = ref<number[]>(history());
 const mcActuateMs = ref<number[]>(history());
 
 function push(hist: { value: number[] }, v: number): void {
@@ -135,9 +130,6 @@ let timer: ReturnType<typeof setInterval> | null = null;
 async function tick(): Promise<void> {
   push(orchLoopLag, sys.telemetry.loopLag.mean);
   push(rendLoopLag, rendererLoopLag.stats.mean);
-  push(trackMs, trk.telemetry.perf.trackMs.mean);
-  push(actuateMs, trk.telemetry.perf.actuateMs.mean);
-  push(frameAge, trk.telemetry.perf.frameAgeAtActuate.mean);
   push(mcActuateMs, mc.telemetry.perf.actuateMs.mean);
   spans.value = [...orchestratorSpans].slice(-50).reverse();
   try {
@@ -400,22 +392,10 @@ const clockRows = computed(() => {
 
     <section>
       <h2>Control-path latency</h2>
-      <p class="hint" v-if="!trk.telemetry.ready && !mc.telemetry.ready">
-        Neither tracking nor manual-control is active in any window — these read zero until one is.
+      <p class="hint" v-if="!mc.telemetry.ready">
+        Manual-control is not active in any window — these read zero until it is.
       </p>
       <div class="row">
-        <div class="stat">
-          <label>tracking.trackMs (mean {{ fmt(trk.telemetry.perf.trackMs.mean, 2) }}ms)</label>
-          <Sparkline :values="trackMs" color="#0af" />
-        </div>
-        <div class="stat">
-          <label>tracking.actuateMs (mean {{ fmt(trk.telemetry.perf.actuateMs.mean, 2) }}ms)</label>
-          <Sparkline :values="actuateMs" color="#0af" />
-        </div>
-        <div class="stat">
-          <label>tracking.frameAgeAtActuate (mean {{ fmt(trk.telemetry.perf.frameAgeAtActuate.mean) }}ms)</label>
-          <Sparkline :values="frameAge" color="#0af" />
-        </div>
         <div class="stat">
           <label>manual-control.actuateMs (mean {{ fmt(mc.telemetry.perf.actuateMs.mean, 2) }}ms)</label>
           <Sparkline :values="mcActuateMs" color="#af0" />
@@ -426,13 +406,6 @@ const clockRows = computed(() => {
     <section>
       <h2>Volt telemetry</h2>
       <div class="row">
-        <div class="stat">
-          <label>tracking.volt</label>
-          <div class="mono">
-            L ({{ fmt(trk.telemetry.volt.L.x) }}, {{ fmt(trk.telemetry.volt.L.y) }})
-            R ({{ fmt(trk.telemetry.volt.R.x) }}, {{ fmt(trk.telemetry.volt.R.y) }})
-          </div>
-        </div>
         <div class="stat">
           <label>manual-control.volt</label>
           <div class="mono">

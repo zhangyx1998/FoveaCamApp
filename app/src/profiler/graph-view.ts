@@ -148,7 +148,7 @@ export function deriveTopology(
   // names CONTAINING "/" are path-like node ids (B's pipe-backed meters use
   // the pipe id verbatim) — attach directly, or surface a standalone node when
   // no advert built one (e.g. a parked pipe's meter). Names with ":" are
-  // legacy families (tracking:kcf, controller:*, …) until their nodes migrate.
+  // legacy families (controller:*, recorder:*, …) until their nodes migrate.
   for (const row of workloads) {
     const stats = badge(row);
 
@@ -184,11 +184,13 @@ export function deriveTopology(
     }
 
     // Known standalone families — path-ified id, kind from the name's root.
-    // `tracking:kcf` → track output; `controller:<port>` / `recorder:<name>` /
-    // `viewer:<file>` → sinks; anything else → a generic metered node.
+    // `controller:<port>` / `recorder:<name>` / `viewer:<file>` → sinks;
+    // anything else → a generic metered node. (The legacy `tracking:kcf`
+    // mapping died with the tracking-single app — KCF meters are path-like
+    // now: camera/<serial>/kcf, /kcf-multi, /undistort/kcf, handled by the
+    // "/" branch above via kindOf.)
     const root = row.name.split(":")[0] || "workload";
     const kindMap: Record<string, { kind: string; output: StreamType | null }> = {
-      tracking: { kind: "kcf", output: { kind: "track" } },
       controller: { kind: "controller", output: null },
       recorder: { kind: "record", output: null },
       viewer: { kind: "view", output: null },

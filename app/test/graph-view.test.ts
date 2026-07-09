@@ -100,10 +100,9 @@ describe("deriveTopology — Stage 1", () => {
     );
   });
 
-  it("maps known standalone meters (kcf/controller) and keeps unknown ones visible", () => {
+  it("maps known standalone meters (controller) and keeps unknown ones visible", () => {
     const t = deriveTopology(
       [
-        row("tracking:kcf"),
         row("controller:/dev/tty.usb"),
         row("mystery:thing"), // unknown pattern — must still land on the graph
       ],
@@ -111,11 +110,27 @@ describe("deriveTopology — Stage 1", () => {
       1,
       0,
     );
-    const kcf = t.nodes.find((n) => n.id === "tracking/kcf")!;
-    expect(kcf.kind).toBe("kcf");
-    expect(kcf.output).toEqual({ kind: "track" });
     expect(t.nodes.find((n) => n.id === "controller/dev/tty.usb")!.kind).toBe("controller");
     expect(t.nodes.find((n) => n.id === "mystery/thing")).toBeTruthy();
+  });
+
+  // The legacy `tracking:kcf` recognition is PRUNED (tracking-single app
+  // deleted, 6f8097c) — KCF meters are path-like node ids now; the "/"
+  // branch's kindOf derivation must cover every KCF flavor.
+  it("derives KCF kinds from path-like meter names (legacy tracking:kcf pruned)", () => {
+    const t = deriveTopology(
+      [row("camera/123/kcf"), row("camera/123/kcf-multi"), row("camera/123/undistort/kcf")],
+      {},
+      1,
+      0,
+    );
+    expect(t.nodes.find((n) => n.id === "camera/123/kcf")!.kind).toBe("kcf");
+    expect(t.nodes.find((n) => n.id === "camera/123/kcf-multi")!.kind).toBe("kcf-multi");
+    expect(t.nodes.find((n) => n.id === "camera/123/undistort/kcf")!.kind).toBe("kcf");
+    // A stray legacy-family name no longer maps to a kcf node — it degrades to
+    // a generic metered node (still visible, never special-cased).
+    const legacy = deriveTopology([row("tracking:kcf")], {}, 1, 0);
+    expect(legacy.nodes.find((n) => n.id === "tracking/kcf")!.kind).toBe("tracking");
   });
 
   it("parents the legacy registry view-loop under its camera", () => {
@@ -134,7 +149,7 @@ describe("membershipKey / toElements — layout stability", () => {
     const b = deriveTopology([row("camera/123/convert", { utilization: 0.95 })], PIPES, 2, 1000);
     expect(membershipKey(a)).toBe(membershipKey(b)); // stats change ≠ re-layout
 
-    const withKcf = deriveTopology([row("camera/123/convert"), row("tracking:kcf")], PIPES, 3, 2000);
+    const withKcf = deriveTopology([row("camera/123/convert"), row("camera/123/kcf")], PIPES, 3, 2000);
     expect(membershipKey(withKcf)).not.toBe(membershipKey(a)); // node appeared
 
     const bumped = deriveTopology([], { "camera/123/convert": advert("camera/123/convert", 2), "camera/123/undistort": advert("camera/123/undistort") }, 4, 3000);
@@ -192,11 +207,11 @@ describe("Stage-2 source selection + served-shape rendering (A-36)", () => {
       },
       { id: "camera/123/convert/consumers", kind: "view", output: null, transport: "sink" },
       {
-        id: "win/tracking-single-1/kcf",
+        id: "win/scope-1/kcf",
         kind: "kcf",
         output: { kind: "track" },
         transport: "native",
-        owner: "win/tracking-single-1",
+        owner: "win/scope-1",
         stats: { utilization: 0.95, ratePerSec: 54, saturated: true },
       },
     ],
@@ -244,9 +259,9 @@ describe("Stage-2 source selection + served-shape rendering (A-36)", () => {
     expect(sink.data.label).toBe("convert/consumers");
     // The wired kcf node under win/ carries its saturation class; the
     // metrics moved into the hover card.
-    const kcf = els.find((e) => e.data.id === "win/tracking-single-1/kcf")!;
+    const kcf = els.find((e) => e.data.id === "win/scope-1/kcf")!;
     expect(kcf.classes).toBe("saturated");
-    expect(kcf.data.label).toBe("tracking-single-1/kcf");
+    expect(kcf.data.label).toBe("scope-1/kcf");
     expect((kcf.data.detail as HoverDetail).rows).toContainEqual([
       "utilization",
       "95% — SATURATED",

@@ -139,6 +139,9 @@ describe("buildTopology", () => {
   });
 
   it("merges registered wiring, folds legacy statsKey, and disposes cleanly", () => {
+    // The statsKey MECHANISM stays (a node may fold from a `:`-family legacy
+    // meter name); the fixture no longer uses the dead `tracking:kcf` meter —
+    // that family died with the tracking-single app (6f8097c).
     const dispose = registerGraphWiring({
       nodes: [
         {
@@ -146,7 +149,7 @@ describe("buildTopology", () => {
           kind: "kcf",
           output: { kind: "track" },
           transport: "native",
-          statsKey: "tracking:kcf",
+          statsKey: "legacy:kcf",
         },
       ],
       edges: [
@@ -155,7 +158,7 @@ describe("buildTopology", () => {
     });
     const deps = {
       listPipes: () => [row("camera/1/convert")],
-      workloads: () => ({ "tracking:kcf": load("tracking:kcf", 0.3, 25) }),
+      workloads: () => ({ "legacy:kcf": load("legacy:kcf", 0.3, 25) }),
     };
     const t = buildTopology(deps);
     const kcf = t.nodes.find((n) => n.id === "camera/1/kcf")!;
