@@ -394,6 +394,11 @@ export function createCaptureNode(options: CaptureNodeOptions): CaptureNodeHandl
   });
   worker.on("error", (err) => {
     report("capture-node", err.message);
+    // The worker is dead. Mark the node stopped so a subsequent capture()
+    // rejects FAST without acquiring pipes (posting to a dead worker would
+    // leave the run unsettled → its raw pipes never release). In-flight runs
+    // still release + reject here. No respawn (session teardown owns that).
+    stopped = true;
     for (const run of pendingRuns.values()) {
       releaseRun(run);
       run.reject(err);
@@ -420,6 +425,10 @@ export function createCaptureNode(options: CaptureNodeOptions): CaptureNodeHandl
   return {
     id,
     capture(shot: CaptureShot): Promise<Record<string, Serializable>> {
+      // Node dead (stop() or a worker "error"): reject before acquiring any
+      // pipes — never post a run to a dead worker (it would never settle/
+      // release).
+      if (stopped) return Promise.reject(new Error("capture node stopped"));
       const rid = ++runId;
       // Connect the raw pipes ON DEMAND (gate fires → producers run).
       const acquired = acquireStreams();

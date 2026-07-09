@@ -11,13 +11,31 @@
 // round trip end to end through the decoder factory.
 
 import { deflateSync } from "node:zlib";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   splitCodecs,
   decompressChain,
   unpack12p,
   createFrameDecoder,
 } from "@orchestrator/viewer/decode";
+
+// The PACKED decode branch (unpack12p → convertType with the significantBits-
+// derived scale) needs core Vision. Stub it to apply the scale it is handed so
+// the test can OBSERVE that the advertiser's significantBits — written VERBATIM
+// into channel metadata by the recorder — drives the 8-bit downscale, without a
+// native core build. Pure-U8 channels never import Vision, so this is inert for
+// the other tests in this file.
+vi.mock("core/Vision", () => ({
+  convertType: (
+    mat: Uint16Array & { shape: number[]; channels: number },
+    _dtype: string,
+    scale: number,
+  ) =>
+    Object.assign(
+      Uint8Array.from(mat, (v: number) => Math.round(v * scale)),
+      { shape: mat.shape, channels: mat.channels },
+    ),
+}));
 
 describe("splitCodecs", () => {
   it("splits a base format off its codec suffix chain (apply order)", () => {
@@ -84,5 +102,40 @@ describe("createFrameDecoder — /zlib over U8 (no vision)", () => {
     const mat = decode(new Uint8Array(deflateSync(frame)));
     expect(Array.from(mat as unknown as Uint8Array)).toEqual(Array.from(frame));
     expect((mat as unknown as { shape: number[] }).shape).toEqual([height, width]);
+  });
+});
+
+describe("createFrameDecoder — significantBits honored on a <fmt>/zlib packed stream", () => {
+  it("scales by the advertiser significantBits carried verbatim in metadata", async () => {
+    const width = 2;
+    const height = 1;
+    // Two 12-bit samples packed in 3 bytes: s0 = 0xFFF (4095), s1 = 0x000.
+    const packed = new Uint8Array([0xff, 0x0f, 0x00]);
+    const decode12 = await createFrameDecoder({
+      dtype: "U8", // packed/codec channels ride the wire as opaque U8
+      shape: JSON.stringify([height, width]),
+      channels: "1",
+      pixelFormat: "Mono12p/zlib", // packed base + zlib codec (a /zlib pipe)
+      significantBits: "12",
+    });
+    const out12 = decode12(new Uint8Array(deflateSync(packed)));
+    // 4095 * 255/4095 = 255; 0 → 0 — the 12-bit downscale (/4095), not the
+    // container width. This is the significantBits the advertiser injected and
+    // the recorder copied verbatim into the channel metadata.
+    expect(Array.from(out12 as unknown as Uint8Array)).toEqual([255, 0]);
+
+    // Guard the silent wrong-bit-depth regression: the SAME bytes with a
+    // different significantBits scale differently — the metadata is honored
+    // VERBATIM, never re-derived from the base format.
+    const decode16 = await createFrameDecoder({
+      dtype: "U8",
+      shape: JSON.stringify([height, width]),
+      channels: "1",
+      pixelFormat: "Mono12p/zlib",
+      significantBits: "16",
+    });
+    const out16 = decode16(new Uint8Array(deflateSync(packed)));
+    expect((out16 as unknown as Uint8Array)[0]).toBe(Math.round(4095 * (255 / 65535)));
+    expect((out16 as unknown as Uint8Array)[0]).not.toBe(255);
   });
 });

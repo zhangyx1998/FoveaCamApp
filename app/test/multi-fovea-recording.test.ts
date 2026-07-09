@@ -12,7 +12,7 @@
 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createMultiFoveaRecording,
   anchorExtras,
@@ -352,6 +352,70 @@ describe("multi-fovea recording controller", () => {
     const { doc } = node.posted[0]!;
     expect(doc.frames.left).toBeNull(); // evicted → null pointer, never a stall
     await rec.stop();
+  });
+
+  it("a pair older than the freshness window degrades to free-run (null L/R)", async () => {
+    // The round-robin schedule revisits each target far faster than
+    // PAIR_FRESH_MS (1000 ms) in live trigger capture; a STALE pair must not
+    // bind L/R pointers — the descriptor degrades to the free-run shape. Only
+    // the fresh path was covered before.
+    const nowSpy = vi.spyOn(performance, "now");
+    try {
+      const { deps, nodes } = makeDeps();
+      const rec = createMultiFoveaRecording(deps);
+      rec.onTargets([{ index: 0, enabled: true, streamId: 7 }]);
+      await rec.start(tmp());
+      const node = nodes[0]!;
+      const onFrame = node.options.onFrame!;
+      onFrame("left", 5, 100n);
+      onFrame("right", 6, 200n);
+      onFrame("center", 3, 150n);
+
+      // Pair recorded at t=0, observed > PAIR_FRESH_MS later → stale → null L/R.
+      nowSpy.mockReturnValue(0);
+      rec.onPairRecord(pairRecord(7, 100n, 200n));
+      nowSpy.mockReturnValue(1001);
+      rec.onTrackBatch(batch(150n, [0]));
+      expect(node.posted[0]!.doc.frames).toEqual({ left: null, center: 3, right: null });
+
+      // A FRESH pair (same tick) binds the recorded L/R sequences.
+      rec.onPairRecord(pairRecord(7, 100n, 200n));
+      rec.onTrackBatch(batch(150n, [0]));
+      expect(node.posted[1]!.doc.frames).toEqual({ left: 5, center: 3, right: 6 });
+      await rec.stop();
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("releases every acquired raw pipe when the recorder node throws at start (retry clean)", async () => {
+    // A throw during the acquire→build sequence (worker spawn / broker connect)
+    // must retire compress bricks + release ALL acquisitions — else the orphaned
+    // refcount never unadvertises (camera-exclusivity hazard) and a retry
+    // double-refcounts. Assert refcounts return to zero and a retry succeeds.
+    const { createNode } = fakeNodeFactory();
+    let armed = true;
+    const { deps, registry } = makeDeps({
+      createNode: (opts) => {
+        if (armed) {
+          armed = false;
+          throw new Error("boom: recorder worker spawn failed");
+        }
+        return createNode(opts);
+      },
+    });
+    const rec = createMultiFoveaRecording(deps);
+    await expect(rec.start(tmp())).rejects.toThrow("boom");
+    // No orphaned refcounts — every acquired raw pipe was released.
+    expect(registry.refCount("camera/SL/raw12p")).toBe(0);
+    expect(registry.refCount("camera/SC/raw12p")).toBe(0);
+    expect(registry.refCount("camera/SR/raw12p")).toBe(0);
+    expect(rec.active).toBe(false);
+    // A retry re-acquires cleanly (no double-refcount, node built).
+    expect(await rec.start(tmp())).toBe(true);
+    expect(registry.refCount("camera/SL/raw12p")).toBe(1);
+    await rec.stop();
+    expect(registry.refCount("camera/SL/raw12p")).toBe(0);
   });
 });
 

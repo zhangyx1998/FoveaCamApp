@@ -235,37 +235,58 @@ export default function manualControlSession(
       // Refcounted acquire (ruling 5): advertise+attach the UNPACKED raw L/R
       // producers ONCE (a short capture-burst ring depth of 8); connect the
       // consumer gate; release() disconnects then retires at refcount 0.
-      const rawL: RawPipeAcquisition = rawPipes.acquire({
-        kind: "raw",
-        camera: L.camera,
-        pipeId: `camera/${L.camera.serial}/raw`,
-        spec: rawPipeSpec(L.camera, `camera/${L.camera.serial}/raw`, 8),
-      });
-      const rawR: RawPipeAcquisition = rawPipes.acquire({
-        kind: "raw",
-        camera: R.camera,
-        pipeId: `camera/${R.camera.serial}/raw`,
-        spec: rawPipeSpec(R.camera, `camera/${R.camera.serial}/raw`, 8),
-      });
-      const cL = broker.connect(rawL.pipeId);
-      const cR = broker.connect(rawR.pipeId);
-      return {
-        streams: {
-          left: streamInitFrom(cL),
-          right: streamInitFrom(cR),
-          center: {
-            shmName: centerPipe.shmName,
-            maxBytes: centerPipe.maxBytes,
-            channels: centerPipe.channels,
+      //
+      // Error-path guard: a throw mid-sequence (a second acquire, either broker
+      // connect) must unwind what already succeeded in REVERSE order — else the
+      // orphaned refcount/connection never unadvertises (camera-exclusivity
+      // hazard) and the next shot re-advertises over a live producer.
+      let rawL: RawPipeAcquisition | null = null;
+      let rawR: RawPipeAcquisition | null = null;
+      let lConnected = false;
+      let rConnected = false;
+      try {
+        const aL = rawPipes.acquire({
+          kind: "raw",
+          camera: L.camera,
+          pipeId: `camera/${L.camera.serial}/raw`,
+          spec: rawPipeSpec(L.camera, `camera/${L.camera.serial}/raw`, 8),
+        });
+        rawL = aL;
+        const aR = rawPipes.acquire({
+          kind: "raw",
+          camera: R.camera,
+          pipeId: `camera/${R.camera.serial}/raw`,
+          spec: rawPipeSpec(R.camera, `camera/${R.camera.serial}/raw`, 8),
+        });
+        rawR = aR;
+        const cL = broker.connect(aL.pipeId);
+        lConnected = true;
+        const cR = broker.connect(aR.pipeId);
+        rConnected = true;
+        return {
+          streams: {
+            left: streamInitFrom(cL),
+            right: streamInitFrom(cR),
+            center: {
+              shmName: centerPipe.shmName,
+              maxBytes: centerPipe.maxBytes,
+              channels: centerPipe.channels,
+            },
           },
-        },
-        release: () => {
-          broker.disconnect(rawL.pipeId);
-          broker.disconnect(rawR.pipeId);
-          rawL.release();
-          rawR.release();
-        },
-      };
+          release: () => {
+            broker.disconnect(aL.pipeId);
+            broker.disconnect(aR.pipeId);
+            aL.release();
+            aR.release();
+          },
+        };
+      } catch (err) {
+        if (rConnected && rawR) broker.disconnect(rawR.pipeId);
+        if (lConnected && rawL) broker.disconnect(rawL.pipeId);
+        rawR?.release();
+        rawL?.release();
+        throw err;
+      }
     }
 
     /** Ruling-3 `onCaptureStart` snapshot: the calibration-derived transforms +

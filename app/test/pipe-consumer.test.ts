@@ -9,6 +9,7 @@ import {
 } from "@lib/orchestrator/pipe-consumer";
 import type { PipeHandle } from "@lib/orchestrator/pipe-contract";
 import type { FramePayload } from "@lib/orchestrator/protocol";
+import type { PipeReadFrame } from "@lib/orchestrator/shm-client";
 
 function handle(): PipeHandle {
   return {
@@ -138,6 +139,31 @@ describe("pipe consumer (C-17)", () => {
     expect(out).toHaveLength(0);
     await c.poll(); // frame
     expect(out.filter(Boolean)).toHaveLength(1);
+  });
+
+  it("recycles the fresh buffer when stop() lands mid-poll (pool discipline)", async () => {
+    // A stop() during an in-flight read must not push the resolved frame to the
+    // torn-down sink NOR strand its fresh pool buffer in `displayed` — the
+    // buffer must return to the pool (the reuse invariant this loop implements).
+    let resolveRead!: (v: PipeReadFrame | "closed" | null) => void;
+    const buf = new ArrayBuffer(12);
+    const released: ArrayBuffer[] = [];
+    const io: PipeReaderIO = {
+      readPipe: vi.fn(
+        () => new Promise<PipeReadFrame | "closed" | null>((res) => (resolveRead = res)),
+      ),
+      releaseBuffer: (b) => {
+        if (b) released.push(b);
+      },
+    };
+    const out: (FramePayload | null)[] = [];
+    const c = createPipeConsumer(handle(), io, (f) => out.push(f));
+    const p = c.poll(); // read in flight (awaiting the deferred resolve)
+    c.stop(); // stop lands while the read is pending
+    resolveRead({ data: buf, seq: 1n }); // read resolves AFTER stop
+    await p;
+    expect(out).toHaveLength(0); // never displayed to the torn-down sink
+    expect(released).toEqual([buf]); // fresh buffer returned to the pool, not stranded
   });
 
   it("stop() releases the displayed buffer", async () => {

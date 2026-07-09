@@ -306,52 +306,70 @@ export function createMultiFoveaRecording(
         ["center", cams.C],
         ["right", cams.R],
       ];
-      acquisitions = order.map(([, cam]) => acquire(cam));
+      // Error-path guard: acquisition + the native compress/recorder builds all
+      // refcount the raw producers; a throw between here and `active = true`
+      // (worker spawn, broker connect, brick attach) would orphan acquired
+      // handles with `active` false — the session's deferred cleanup never
+      // fires and a retry double-refcounts (never unadvertises → camera-
+      // exclusivity hazard). Unwind symmetrically with stop()'s release path.
+      try {
+        acquisitions = order.map(([, cam]) => acquire(cam));
 
-      // Optional per-stream compression (ruling 9): route the flagged streams
-      // through the CompressStream brick and record the `/zlib` sibling pipe
-      // INSTEAD — the recorder needs zero extra config (advert-verbatim).
-      const compressCfg = deps.compressStreams();
-      const streams: Record<string, { pipeId: string }> = {};
-      const significantBitsOf = new Map<string, number>();
-      compressed = [];
-      order.forEach(([name], i) => {
-        const acq = acquisitions[i]!;
-        significantBitsOf.set(acq.pipeId, acq.spec.significantBits);
-        if (compressCfg[name] && deps.compress) {
-          const handle = createCompressPipe(deps.compress, acq.spec);
-          compressed.push(handle);
-          significantBitsOf.set(handle.pipeId, handle.spec.significantBits);
-          streams[name] = { pipeId: handle.pipeId };
-        } else {
-          streams[name] = { pipeId: acq.pipeId };
-        }
-      });
+        // Optional per-stream compression (ruling 9): route the flagged streams
+        // through the CompressStream brick and record the `/zlib` sibling pipe
+        // INSTEAD — the recorder needs zero extra config (advert-verbatim).
+        const compressCfg = deps.compressStreams();
+        const streams: Record<string, { pipeId: string }> = {};
+        const significantBitsOf = new Map<string, number>();
+        compressed = [];
+        order.forEach(([name], i) => {
+          const acq = acquisitions[i]!;
+          significantBitsOf.set(acq.pipeId, acq.spec.significantBits);
+          if (compressCfg[name] && deps.compress) {
+            const handle = createCompressPipe(deps.compress, acq.spec);
+            compressed.push(handle);
+            significantBitsOf.set(handle.pipeId, handle.spec.significantBits);
+            streams[name] = { pipeId: handle.pipeId };
+          } else {
+            streams[name] = { pipeId: acq.pipeId };
+          }
+        });
 
-      // Ruling 8: the advertiser injects the JS-side significantBits the
-      // native spec round-trip drops — for raw AND compressed pipes.
-      const connect: RecorderConnect = (pipeId) => {
-        const conn = deps.connect(pipeId);
-        const sb = significantBitsOf.get(pipeId);
-        return sb === undefined
-          ? conn
-          : { ...conn, spec: { ...conn.spec, significantBits: sb } };
-      };
+        // Ruling 8: the advertiser injects the JS-side significantBits the
+        // native spec round-trip drops — for raw AND compressed pipes.
+        const connect: RecorderConnect = (pipeId) => {
+          const conn = deps.connect(pipeId);
+          const sb = significantBitsOf.get(pipeId);
+          return sb === undefined
+            ? conn
+            : { ...conn, spec: { ...conn.spec, significantBits: sb } };
+        };
 
-      node = (deps.createNode ?? createRecorderNode)({
-        id: "recorder/multi-fovea",
-        path,
-        streams,
-        connect,
-        timestamp: new Date().toISOString(),
-        // Ruling 2: the wide camera's singleton metadata record (omitted on an
-        // uncalibrated rig).
-        cameraMatrix: deps.wideCamera() ?? undefined,
-        // Every stream posts notices: L/R for extras + dts→seq re-keying,
-        // center for the descriptor nearest-pointer map (it still POSTS no
-        // extras — onFrame returns null for it, so nothing rides telemetry).
-        onFrame,
-      });
+        node = (deps.createNode ?? createRecorderNode)({
+          id: "recorder/multi-fovea",
+          path,
+          streams,
+          connect,
+          timestamp: new Date().toISOString(),
+          // Ruling 2: the wide camera's singleton metadata record (omitted on an
+          // uncalibrated rig).
+          cameraMatrix: deps.wideCamera() ?? undefined,
+          // Every stream posts notices: L/R for extras + dts→seq re-keying,
+          // center for the descriptor nearest-pointer map (it still POSTS no
+          // extras — onFrame returns null for it, so nothing rides telemetry).
+          onFrame,
+        });
+      } catch (err) {
+        // Retire any compress bricks built so far (they consume the raw pipes),
+        // then release ALL acquisitions in reverse order (last release retires
+        // + unadvertises) — symmetric with stop(). Reset local state + rethrow.
+        for (const c of compressed) c.retire();
+        compressed = [];
+        for (const a of [...acquisitions].reverse()) a.release();
+        acquisitions = [];
+        node = null;
+        throw err;
+      }
 
       active = true;
       deps.telemetry({ recording_active: true, recordingStreams: {} });

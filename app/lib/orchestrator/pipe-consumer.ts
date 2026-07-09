@@ -60,9 +60,13 @@ export function createPipeConsumer(
   let closed = false;
   let running = false;
   let handle_ = 0;
+  // Bumped by stop(): an in-flight poll compares its captured value after the
+  // await and, on a mismatch, RECYCLES the fresh frame instead of displaying it.
+  let generation = 0;
 
   async function poll(): Promise<void> {
     if (closed) return;
+    const gen = generation;
     let r: PipeReadFrame | "closed" | null;
     try {
       // Buffer = the ring's SLOT size: C-20 dynamic pipes size slots to
@@ -74,6 +78,14 @@ export function createPipeConsumer(
       r = await io.readPipe(shmName, lastSeq, spec.maxBytes ?? spec.bytesPerFrame);
     } catch {
       return; // transport hiccup (timeout/error) — retry next tick
+    }
+    // Liveness recheck: a stop() (or a close) landed while this read was in
+    // flight. The sink is torn down and any `displayed` buffer was already
+    // recycled by stop(), so displaying now would strand this FRESH pool buffer
+    // in `displayed` (it escapes the pool). Return it instead (pool discipline).
+    if (closed || generation !== gen) {
+      if (r && r !== "closed") io.releaseBuffer(r.data);
+      return;
     }
     if (r === "closed") {
       closed = true;
@@ -129,6 +141,7 @@ export function createPipeConsumer(
     },
     stop() {
       running = false;
+      generation++; // invalidate any in-flight poll's pending result
       if (handle_) cancelRaf(handle_);
       handle_ = 0;
       if (displayed) {

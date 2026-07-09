@@ -4,7 +4,7 @@
  * You may find the full license in project root directory.
  --------------------------------------------------------- -->
 <script setup lang="ts">
-import { Mat } from "core/Vision";
+import type { Mat } from "core/Vision";
 import { computed } from "vue";
 const props = defineProps<{ mat: Mat; round?: number }>();
 const h = computed(() => props.mat.shape[0] ?? 0);

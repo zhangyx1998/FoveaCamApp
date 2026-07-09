@@ -169,31 +169,44 @@ export function createRecording(deps: RecordingDeps): RecordingController {
           spec: rawPipeSpec(camera, pipeId, DEFAULT_RAW_RING_DEPTH),
         });
       };
-      acquisitions = [rawFor(L.camera), rawFor(C.camera), rawFor(R.camera)];
+      // Error-path guard: the acquire refcounts the raw producers, and the
+      // native recorder-node build can throw (worker spawn / broker connect).
+      // A throw before `active = true` would orphan acquired handles with the
+      // controller idle — the deferred cleanup never fires, and a retry
+      // double-refcounts (never unadvertises → camera-exclusivity hazard).
+      // Release symmetrically with stop() (reverse order, last release retires).
+      try {
+        acquisitions = [rawFor(L.camera), rawFor(C.camera), rawFor(R.camera)];
 
-      const streams = {
-        "left-fovea": { pipeId: acquisitions[0]!.pipeId },
-        center: { pipeId: acquisitions[1]!.pipeId },
-        "right-fovea": { pipeId: acquisitions[2]!.pipeId },
-      };
+        const streams = {
+          "left-fovea": { pipeId: acquisitions[0]!.pipeId },
+          center: { pipeId: acquisitions[1]!.pipeId },
+          "right-fovea": { pipeId: acquisitions[2]!.pipeId },
+        };
 
-      node = createRecorderNode({
-        id: "recorder/manual-control",
-        path,
-        streams,
-        connect: deps.connect,
-        timestamp: new Date().toISOString(),
-        // R-2 opt: only the L/R foveae carry a binding — gate the per-frame
-        // notice so the center channel skips the pointless main round-trip.
-        extrasStreams: ["left-fovea", "right-fovea"],
-        // Ruling-3: per NEW frame, the session injects volt/angle/homography for
-        // the L/R foveae (center carries none). Never blocks the frame write.
-        onFrame: (stream) => {
-          const mirror = STREAM_MIRROR[stream];
-          if (!mirror) return null;
-          return buildFoveaMeta(resolveFoveaBinding(deps, conv, mirror));
-        },
-      });
+        node = createRecorderNode({
+          id: "recorder/manual-control",
+          path,
+          streams,
+          connect: deps.connect,
+          timestamp: new Date().toISOString(),
+          // R-2 opt: only the L/R foveae carry a binding — gate the per-frame
+          // notice so the center channel skips the pointless main round-trip.
+          extrasStreams: ["left-fovea", "right-fovea"],
+          // Ruling-3: per NEW frame, the session injects volt/angle/homography for
+          // the L/R foveae (center carries none). Never blocks the frame write.
+          onFrame: (stream) => {
+            const mirror = STREAM_MIRROR[stream];
+            if (!mirror) return null;
+            return buildFoveaMeta(resolveFoveaBinding(deps, conv, mirror));
+          },
+        });
+      } catch (err) {
+        for (const a of [...acquisitions].reverse()) a.release();
+        acquisitions = [];
+        node = null;
+        throw err;
+      }
 
       active = true;
       deps.telemetry({ recording_active: true, recordingStreams: {} });

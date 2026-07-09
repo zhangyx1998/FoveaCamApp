@@ -18,7 +18,7 @@ You may find the full license in project root directory.
   covers the crash path.
 -->
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import { useSession } from "@lib/orchestrator/client";
 import { viewer, type ViewerChannel } from "@lib/orchestrator/viewer-contract";
 import TitleBar from "../components/TitleBar.vue";
@@ -45,10 +45,13 @@ onMounted(async () => {
   }
 });
 
-// Best-effort explicit close — the channel-detach path covers crashes.
-window.addEventListener("pagehide", () => {
+// Best-effort explicit close — the channel-detach path covers crashes. Removed
+// on unmount so a torn-down window leaves no dangling listener.
+function onPageHide(): void {
   if (fileId.value) void session.call("close", fileId.value);
-});
+}
+window.addEventListener("pagehide", onPageHide);
+onUnmounted(() => window.removeEventListener("pagehide", onPageHide));
 
 const file = computed(() =>
   fileId.value ? (session.state.files[fileId.value] ?? null) : null,
