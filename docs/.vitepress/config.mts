@@ -48,14 +48,17 @@ export default defineConfig({
   ignoreDeadLinks: [
     (url: string) => OUT_OF_DOCS.test(url) || SOURCE_EXT.test(url),
     // Frozen-archive staleness: history/ is "archived verbatim, not current"
-    // (see history/refactor/README.md) and must not be edited. Two archive files
-    // (orchestrator.md, synced-capture.md) still link to ./verification-playbook,
-    // which the docs-restructure relocated to /dev/. VitePress 1.6's ignore fn
-    // receives only the url (not the source file), so we cannot scope this to the
-    // archive by source — we allowlist this one exact stale target instead of
-    // editing the frozen archive or blanket-ignoring. Every other broken
-    // intra-docs .md link still fails the build.
+    // (see history/refactor/README.md) and must not be edited. Archive files
+    // still link to ./verification-playbook (relocated to /dev/ by the
+    // docs-restructure) and to ./split-of-work + ./stream-hot-path (pruned in
+    // the 2026-07-09 docs cleanup; retrievable at 086045d). VitePress 1.6's
+    // ignore fn receives only the url (not the source file), so we cannot
+    // scope this to the archive by source — we allowlist these exact stale
+    // targets instead of editing the frozen archive or blanket-ignoring.
+    // Every other broken intra-docs .md link still fails the build.
     /^\.\/verification-playbook$/,
+    /^\.\/split-of-work$/,
+    /^\.\/stream-hot-path$/,
   ],
 
   // The docs are GitHub-flavored markdown full of bare identifiers in prose:
