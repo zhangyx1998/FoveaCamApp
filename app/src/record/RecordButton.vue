@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { FontAwesomeIcon as Icon } from "@fortawesome/vue-fontawesome";
 import { faCircle } from "@fortawesome/free-solid-svg-icons";
 import { overlay } from "@src/components/Overlay.vue";
@@ -12,6 +12,44 @@ const isRecording = computed(
 );
 const streams = computed(() => current_recording.value?.streams);
 const hover = ref(false);
+
+// Cmd/Ctrl-R consumer (capture-recorder-nodes.md ruling 9). Main rebinds plain
+// Cmd/Ctrl-R off reload and pushes `recorder:trigger` to the focused window;
+// here it toggles recording where a context exists — start (resolving the save
+// path exactly like RecordControls' Start button) / stop — else a no-op.
+let triggerBusy = false;
+async function handleRecorderTrigger(): Promise<void> {
+  if (triggerBusy) return;
+  const rec = current_recording.value;
+  if (!rec) return; // no recording context here → no-op
+  triggerBusy = true;
+  try {
+    if (rec.active.value) {
+      await rec.stop();
+    } else {
+      // Same resolution RecordControls.start() does, but against the current
+      // save-path defaults (no dialog): resolve <dir>/<sequence>, start, bump.
+      const path = rec.current_path;
+      const full = await window.foveaBridge.resolvePath(path, rec.sequence);
+      await rec.start(full);
+      rec.updateSequence(rec.sequence);
+      rec.current_path = path;
+    }
+  } finally {
+    triggerBusy = false;
+  }
+}
+
+let disposeTrigger: (() => void) | null = null;
+onMounted(() => {
+  disposeTrigger =
+    window.foveaBridge?.onRecorderTrigger?.(() => void handleRecorderTrigger()) ??
+    null;
+});
+onBeforeUnmount(() => {
+  disposeTrigger?.();
+  disposeTrigger = null;
+});
 
 function formatSize(bytes: number): string {
   if (bytes >= 1024 * 1024 * 1024)

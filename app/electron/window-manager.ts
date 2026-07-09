@@ -308,16 +308,26 @@ export class WindowManager {
   }
 
   /**
-   * Toggle a module's debug sub-window (WS2 2b) — the FIRST `owner`-setting
-   * caller of `toggle`, proving the 2a substrate end to end. Owner-bound
-   * (`debug` is the sole `onOwnerClose: cascade` class): it tears down when the
-   * opener app window closes or is switched away. The `session` name rides the
-   * URL (the debugger component resolves its own contract/pipes from it). One
-   * per session (keyed `debug:<session>`).
+   * Toggle a module's `debug`-class sub-window (WS2 2b) — the FIRST
+   * `owner`-setting caller of `toggle`, proving the 2a substrate end to end.
+   * Owner-bound (`debug` is the sole `onOwnerClose: cascade` class): it tears
+   * down when the opener app window closes or is switched away. The `session`
+   * name + `kind` ride the URL (the mounted module component resolves its own
+   * contract/pipes from them).
+   *
+   * `kind` (default `debugger`) selects WHICH module component the `debug`
+   * host mounts (`debug-registry`), and — because it is part of the dedupe key
+   * `debug:<session>:<kind>` — lets ONE session own more than one such window
+   * at a time (its debugger AND its capture-preview, capture-recorder-nodes.md
+   * ruling 8). Same session + same kind still dedupes to one window.
    */
-  toggleDebug(session: string, owner: ManagedWindow | null): ManagedWindow | null {
-    const search = "?" + new URLSearchParams({ session }).toString();
-    return this.toggle(`debug:${session}`, {
+  toggleDebug(
+    session: string,
+    owner: ManagedWindow | null,
+    kind: string = "debugger",
+  ): ManagedWindow | null {
+    const search = "?" + new URLSearchParams({ session, kind }).toString();
+    return this.toggle(`debug:${session}:${kind}`, {
       class: "debug",
       entry: entryFor("debug"),
       search,

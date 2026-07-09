@@ -30,17 +30,22 @@ export interface FoveaBridge {
    *  never activates the source session, never counted for the welcome
    *  rule, survives its source app's close. */
   openProjectionWindow(session: string, frame: string): void;
-  /** Toggle a module's debug sub-window (WS2 2b): open-or-close its
-   *  module-owned debugger window for `session`. Owner-bound to the app that
-   *  requested it (cascade-closes on app close/switch). */
-  toggleDebugWindow(session: string): void;
+  /** Toggle a module's `debug`-class sub-window (WS2 2b): open-or-close a
+   *  module-owned window for `session`. Owner-bound to the app that requested
+   *  it (cascade-closes on app close/switch). `kind` (default `debugger`)
+   *  selects which module component the host mounts and lets one session own
+   *  both a debugger and a capture-preview window at once
+   *  (capture-recorder-nodes.md ruling 8). */
+  toggleDebugWindow(session: string, kind?: string): void;
   /** Fullscreen transitions for THIS window, forwarded by main from the
    *  BrowserWindow enter/leave-full-screen events — the shared window chrome
    *  adjusts traffic-light inset + drag regions on both edges (A-7). */
   onFullscreenChange(cb: (fullscreen: boolean) => void): void;
   /** Recorder trigger (plain Ctrl/Cmd-R, rebound from reload — multi-window.md
-   *  req. 6). Stub for now; real semantics land with the recorder stage. */
-  onRecorderTrigger(cb: () => void): void;
+   *  req. 6). Consumed by `RecordButton.vue` (capture-recorder-nodes.md ruling
+   *  9): where a recording context exists it toggles start/stop. Returns a
+   *  disposer so the consumer can drop the listener on unmount. */
+  onRecorderTrigger(cb: () => void): () => void;
   /** Join path segments (replaces `node:path`'s `resolve`, which isn't
    *  reachable from an isolated renderer — the polyfill plugin needs a real
    *  `require`, which only exists under `nodeIntegration: true`). */
@@ -96,7 +101,7 @@ export interface SendChannels {
   "open-profiler-window": [];
   "window:open-app": [appId: string];
   "window:open-projection": [session: string, frame: string];
-  "window:toggle-debug": [session: string];
+  "window:toggle-debug": [session: string, kind?: string];
   /** Sender-scoped: main resolves the window from `event.sender`. */
   "window:set-pinned": [pinned: boolean];
 }

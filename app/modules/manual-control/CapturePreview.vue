@@ -1,36 +1,55 @@
+<!-- -------------------------------------------------
+Copyright (c) 2026 Yuxuan Zhang, dev@z-yx.cc
+This source code is licensed under the MIT license.
+You may find the full license in project root directory.
+--------------------------------------------------- -->
+<!--
+  Capture-preview window body (capture-recorder-nodes.md ruling 8): the capture
+  previews + SaveControls/SaveReport, lifted out of the retired title-bar
+  overlay (`src/capture/index.vue`) into a `debug`-class window
+  (`kind: "capture"`) the camera icon toggles. Mounted full-window by
+  DebugWindow, which supplies the TitleBar.
+
+  It connects its OWN passive `manual-control` session (the debugger pattern) —
+  the app window keeps the session active/leased; this window only reads the
+  server-held capture resources and forwards save. `current_capture` is a
+  per-window global, so constructing a `Capture` facade here does not collide
+  with the app window's.
+-->
 <script setup lang="ts">
-import { current_capture } from ".";
-import SaveControls from "./SaveControls.vue";
-import HorizontalDivision from "@src/layouts/HorizontalDivision.vue";
 import { computed, onMounted, ref } from "vue";
-import PreviewMeta from "./preview-meta/index.vue";
-import PreviewImage from "./preview-image/index.vue";
+import { useSession } from "@lib/orchestrator/client";
 import { isEmpty } from "@lib/util";
-import SaveReport from "./SaveReport.vue";
+import { manualControl } from "./contract";
+import Capture from "@src/capture";
+import SaveControls from "@src/capture/SaveControls.vue";
+import SaveReport from "@src/capture/SaveReport.vue";
+import PreviewMeta from "@src/capture/preview-meta/index.vue";
+import PreviewImage from "@src/capture/preview-image/index.vue";
+import HorizontalDivision from "@src/layouts/HorizontalDivision.vue";
 
-const emit = defineEmits(["exit"]);
-const capture = current_capture.value;
-if (isEmpty(capture))
-  throw new Error("Overlay must be used within a Capture context");
-// Re-bind to a fresh `const` so the non-null narrowing above survives into
-// the function declarations below (TS doesn't narrow `capture` itself across
-// a hoisted function boundary).
-const cap = capture;
+const session = useSession(manualControl, "manual-control");
 
-// Resource names present in this capture pass, in whatever order the server
-// first reported them (`capture_meta` is a plain object, so this only needs
-// to react to key-set changes — Vue's reactivity on `Object.keys` already
-// does that for a reactive object). Image-only resources (center/diff) are
-// published with a NULL meta — the name is still the resource's presence
-// signal, so no `isEmpty` filter here (A-35: that stale predicate hid their
-// previews entirely); the meta PANEL filters below instead.
+// The renderer-side save-path/save facade. `getSetpoints` is `() => []` here
+// (single-shot): the app window's live set-point SELECTION is renderer-local
+// UI state, not reachable across windows. The proposal replaces the internal
+// setpoints sweep with a renderer-driven per-shot loop anyway (§Phase 4 raster
+// capture), which is where multi-set-point capture is restored.
+const cap = new Capture(session, "manual-control", () => []);
+
+// ── DATA-SOURCE SEAM (capture-node wave, Phase 3 ruling 7) ─────────────────
+// This wave reads the SAME server-held capture resources the old overlay read:
+//   `telemetry.capture_meta`  → the per-resource metadata map
+//   `session.frame("capture:<name>")` → the 8-bit preview frame(s)
+// The capture-node wave replaces THIS block (entries/meta_entries/image_entries
+// + runCapture) with pull-based `getPreview(resource, index?)` against the
+// node's real held resources. The SaveControls/SaveReport chrome + save() flow
+// below stay unchanged — only the data source swaps.
 function* entries() {
-  const meta = cap.session.telemetry.capture_meta;
+  const meta = session.telemetry.capture_meta;
   for (const name of Object.keys(meta)) yield { name, meta: meta[name] as any };
 }
 
-// Meta panel: only resources that actually carry metadata (a multi-set-point
-// image-only resource reports an ARRAY of nulls — equally meta-less).
 const hasMeta = (m: unknown): boolean =>
   Array.isArray(m) ? m.some((x) => !isEmpty(x)) : !isEmpty(m);
 const meta_entries = computed(() =>
@@ -42,26 +61,15 @@ const meta_entries = computed(() =>
 const image_entries = computed(() =>
   [...entries()]
     .map(({ name, meta }) => {
-      // Frame channel(s) for this resource — indexed iff its meta is an
-      // array (a multi-set-point capture), matching the server's exact
-      // `capture:<name>` / `capture:<name>#<i>` naming (see `capture.ts`).
       const image = Array.isArray(meta)
-        ? meta.map((_, i) => cap.session.frame(`capture:${name}#${i}`).payload.value)
-        : cap.session.frame(`capture:${name}`).payload.value;
+        ? meta.map((_, i) => session.frame(`capture:${name}#${i}`).payload.value)
+        : session.frame(`capture:${name}`).payload.value;
       return [name, image] as const;
     })
     .toReversed(),
 );
+// ── END DATA-SOURCE SEAM ───────────────────────────────────────────────────
 
-// Note: the server-side capture isn't cancellable mid-flight (unlike the old
-// renderer-local `abortable` provider chain) — closing the overlay before
-// this resolves just stops watching; the pass still completes and its
-// result sits server-side until the next save/discard/run.
-//
-// A-35: a rejected run (e.g. the 2s one-shot pipe-read timeout throws
-// server-side) must not strand the overlay on "loading" — surface the error
-// with a retry, keep `data_ready` false so save stays disabled. Teardown is
-// unaffected (the session's drain already tolerates a rejected pass).
 const data_ready = ref(false);
 const run_error = ref<string | null>(null);
 async function runCapture(): Promise<void> {
@@ -77,11 +85,17 @@ onMounted(() => void runCapture());
 
 const save_state = ref<Promise<void> | null>(null);
 
+// Closing the window = the old overlay's "exit" (server holds the resources
+// until the next save/discard/run, unchanged).
+function close() {
+  window.close();
+}
+
 function save(path: string, img_format: string) {
   if (save_state.value !== null) return;
   const p = cap.save(path, img_format);
   save_state.value = p;
-  p.then(() => emit("exit"));
+  p.then(() => close());
 }
 </script>
 
@@ -89,9 +103,9 @@ function save(path: string, img_format: string) {
   <div class="container">
     <SaveControls
       style="height: 4rem"
-      :capture="capture"
+      :capture="cap"
       @save="save"
-      @exit="emit('exit')"
+      @exit="close"
       :data_ready="data_ready"
       :save_state="save_state !== null"
     />
@@ -99,7 +113,7 @@ function save(path: string, img_format: string) {
       <p class="message">Capture failed: {{ run_error }}</p>
       <div class="actions">
         <button @click="runCapture">Retry</button>
-        <button @click="emit('exit')">Close</button>
+        <button @click="close">Close</button>
       </div>
     </div>
     <HorizontalDivision
@@ -128,7 +142,7 @@ function save(path: string, img_format: string) {
         </div>
       </template>
     </HorizontalDivision>
-    <SaveReport v-else :state="save_state" @exit="emit('exit')" />
+    <SaveReport v-else :state="save_state" @exit="close" />
   </div>
 </template>
 
@@ -136,9 +150,9 @@ function save(path: string, img_format: string) {
 .container {
   width: 100%;
   height: 100%;
-  position: relative;
-  background-color: #0008;
-  backdrop-filter: blur(12px) brightness(0.8);
+  position: absolute;
+  inset: 0;
+  background-color: #111;
   .content {
     position: absolute;
     top: 4rem;
@@ -146,14 +160,6 @@ function save(path: string, img_format: string) {
     right: 0;
     bottom: 0;
   }
-  .done {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 2rem;
-    font-weight: bold;
-  }
-  // A-35: failed capture pass — message + retry, in place of the previews.
   .run-error {
     display: flex;
     flex-direction: column;

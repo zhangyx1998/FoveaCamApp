@@ -23,7 +23,6 @@ import RemoteCanvas from "../components/RemoteCanvas.vue";
 import { FontAwesomeIcon as Icon } from "@fortawesome/vue-fontawesome";
 import { faCamera, faTelevision, faChartLine } from "./icons";
 import { current_capture } from "../capture";
-import CaptureOverlay from "../capture/index.vue";
 import RecordButton from "../record/RecordButton.vue";
 import { appRegistry } from "./app-registry";
 
@@ -31,12 +30,23 @@ const props = defineProps<{ appId: string }>();
 
 const meta = appRegistry[props.appId];
 const moduleComponent = meta ? defineAsyncComponent(meta.loader) : null;
+const session = meta?.session ?? null;
 
 const titleBarHeight = ref(0);
 const isCapAvailable = computed(() => current_capture.value !== null);
 
 function openProfiler() {
   window.foveaBridge.openProfilerWindow();
+}
+
+// Capture preview moved out of the title-bar overlay into its own `debug`-class
+// window (capture-recorder-nodes.md ruling 8): the camera icon now TOGGLES that
+// window (open-or-close) instead of flipping an in-window overlay. Gated on a
+// live capture context (only manual-control constructs one) and the app's
+// session name (the window resolves its module component from it).
+function toggleCapture() {
+  if (!isCapAvailable.value || !session) return;
+  window.foveaBridge.toggleDebugWindow(session, "capture");
 }
 
 // "Back to Home": in the multi-window world home is the welcome window —
@@ -48,9 +58,7 @@ function backToHome() {
 window.addEventListener("keydown", (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
     e.preventDefault();
-    if (isCapAvailable.value && overlay.value === null) {
-      overlay.value = { overlay: CaptureOverlay };
-    }
+    toggleCapture();
   }
 });
 </script>
@@ -76,9 +84,14 @@ window.addEventListener("keydown", (e) => {
     @back-to-home="backToHome"
   >
     <RecordButton />
-    <Overlay :overlay="CaptureOverlay" :disabled="!isCapAvailable">
+    <button
+      class="icon-button"
+      title="Capture preview"
+      :disabled="!isCapAvailable"
+      @click="toggleCapture"
+    >
       <Icon :icon="faCamera" />
-    </Overlay>
+    </button>
     <Overlay :overlay="RemoteCanvas">
       <Icon :icon="faTelevision" />
     </Overlay>
@@ -123,9 +136,14 @@ window.addEventListener("keydown", (e) => {
   transition: all 0.1s;
   outline: 1px solid transparent;
 
-  &:hover {
+  &:not(:disabled):hover {
     background: #fff1;
     outline: 1px solid #666;
+  }
+
+  &:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
   }
 }
 </style>

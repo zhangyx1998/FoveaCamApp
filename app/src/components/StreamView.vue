@@ -8,7 +8,6 @@ import FrameView, { TransformFunction } from "./FrameView.vue";
 import { payloadToMat, rendererLoopLag, shmReadStats, type FrameSource } from "@lib/orchestrator/client";
 import { formatCounterRate, formatSampleStats } from "@lib/orchestrator/stats";
 import type { FramePayload } from "@lib/orchestrator/protocol";
-import { Delegation } from "@src/capture";
 import { NoCheck } from "@lib/util/vue";
 
 // Payload-only (docs/history/refactor/orchestrator.md §7.1 S1c): every camera/stream
@@ -72,12 +71,6 @@ const props = defineProps({
   },
   height: {
     type: String,
-    required: false,
-    default: null,
-  },
-  capture: {
-    // Delegation is a function, not an object; Vue runtime type check needs Function
-    type: NoCheck<Delegation | string | null>(),
     required: false,
     default: null,
   },
@@ -199,7 +192,6 @@ const projection = computed(() =>
     :theme="theme"
     :width="width"
     :height="height"
-    :capture="capture"
     :projection="projection"
     @update:modelValue="(e) => emit('update:modelValue', e)"
     @mouse="(e) => emit('mouse', e)"

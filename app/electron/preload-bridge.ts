@@ -40,8 +40,11 @@ function send<K extends keyof SendChannels>(channel: K, ...args: SendChannels[K]
 function listen<K extends keyof PushChannels>(
   channel: K,
   cb: (...args: PushChannels[K]) => void,
-): void {
-  ipcRenderer.on(channel, (_e, ...args) => cb(...(args as PushChannels[K])));
+): () => void {
+  const wrapped = (_e: unknown, ...args: unknown[]) =>
+    cb(...(args as PushChannels[K]));
+  ipcRenderer.on(channel, wrapped);
+  return () => ipcRenderer.removeListener(channel, wrapped);
 }
 
 export function installBridge(extra: Partial<FoveaBridge> = {}) {
@@ -55,7 +58,7 @@ export function installBridge(extra: Partial<FoveaBridge> = {}) {
     openProfilerWindow: () => send("open-profiler-window"),
     openAppWindow: (appId) => send("window:open-app", appId),
     openProjectionWindow: (session, frame) => send("window:open-projection", session, frame),
-    toggleDebugWindow: (session) => send("window:toggle-debug", session),
+    toggleDebugWindow: (session, kind) => send("window:toggle-debug", session, kind),
     onFullscreenChange: (cb) => listen("window:fullscreen", (fullscreen) => cb(fullscreen)),
     onRecorderTrigger: (cb) => listen("recorder:trigger", () => cb()),
     resolvePath: (...segments) => invoke("save-path:resolve", segments),

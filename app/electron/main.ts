@@ -281,9 +281,32 @@ function startOrchestrator() {
     },
   });
   orchestrator.on("message", (data: unknown) => {
-    const msg = data as { type?: string; id?: number; ok?: boolean; reason?: string };
+    const msg = data as {
+      type?: string;
+      id?: number;
+      ok?: boolean;
+      reason?: string;
+      path?: string;
+    };
     if (msg?.type === "quiesced") {
       orchestratorQuiesced = true;
+      return;
+    }
+    // Phase 5 auto-open (capture-recorder-nodes.md ruling 8): the recorder
+    // node finalized a `.fovea` file — surface it in a viewer window without
+    // user action (the viewer window + `viewer` session already exist; one
+    // per file, so a re-finalize just focuses it).
+    //
+    // ── SEAM (recorder wave, orchestrator-side; NOT in this wave's scope) ──
+    // The SEND side belongs in `orchestrator/recorder-node.ts`'s stopRecording
+    // finalize path (Phase 2). One line, mirroring the `quiesced` /
+    // `window:drain-result` posts in `orchestrator/index.ts`:
+    //     process.parentPort.postMessage({ type: "recording:finished", path });
+    // where `path` is the just-closed container path. No renderer bridge is
+    // involved — recording runs orchestrator-side, so it flows
+    // orchestrator → MAIN directly (this handler), not renderer → main.
+    if (msg?.type === "recording:finished") {
+      if (typeof msg.path === "string" && msg.path) manager.openViewer(msg.path);
       return;
     }
     if (msg?.type !== "window:drain-result" || msg.id === undefined) return;
@@ -535,11 +558,13 @@ onRenderer("window:open-projection", (session, frame) => {
   if (typeof session === "string" && session && typeof frame === "string" && frame)
     manager.openProjection({ session, frame });
 });
-// WS2 2b: toggle a module's debug sub-window. Owner = the current app window
-// (apps are exclusive, so it's the opener); cascade tears it down on switch.
-onRenderer("window:toggle-debug", (session) => {
+// WS2 2b: toggle a module's `debug`-class sub-window. Owner = the current app
+// window (apps are exclusive, so it's the opener); cascade tears it down on
+// switch. `kind` selects the module component (debugger vs capture-preview,
+// capture-recorder-nodes.md ruling 8) and keys a distinct window per kind.
+onRenderer("window:toggle-debug", (session, kind) => {
   if (typeof session === "string" && session)
-    manager.toggleDebug(session, manager.appWindow());
+    manager.toggleDebug(session, manager.appWindow(), kind);
 });
 
 // ---- Dev restart (Ctrl/Cmd-Shift-R, multi-window.md req. 6 / §4) ----------

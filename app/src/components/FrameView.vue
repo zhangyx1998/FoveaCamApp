@@ -19,7 +19,6 @@ import { faExpand } from "@fortawesome/free-solid-svg-icons";
 import ElementSize from "@lib/element-size";
 import { NoCheck } from "@lib/util/vue";
 import FrameOverlay from "./FrameOverlay.vue";
-import { current_capture, Delegation } from "../capture";
 import { clamp } from "@lib/util";
 
 const props = defineProps({
@@ -63,11 +62,6 @@ const props = defineProps({
     required: false,
     default: null,
   },
-  capture: {
-    type: NoCheck<Delegation | string | null>(),
-    required: false,
-    default: null,
-  },
   // Stream address for the expand button (multi-window.md req. 4): when set,
   // the button opens a projection window for this session+frame channel
   // instead of element-fullscreening the container (the pre-Stage-5
@@ -105,14 +99,6 @@ const canvasSize = new ElementSize(canvas);
 const overlayToggle = ref(false);
 
 const image = shallowRef<ImageData | null>(null);
-const { capture } = props;
-if (typeof capture === "function")
-  capture(() => (mat.value ? { image: mat.value } : null));
-else if (typeof capture === "string")
-  current_capture.value?.provide((provide) => {
-    const image = mat.value;
-    if (image) provide(capture, { image });
-  });
 
 const canvasStyle = computed(() => {
   if (!image.value) return {};

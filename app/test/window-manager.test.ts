@@ -448,7 +448,7 @@ describe("WindowManager", () => {
 
   // --- debug sub-window (WS2 2b, the FIRST real owner-setter) --------------
 
-  it("toggleDebug opens a cascade-owned debug window keyed by session", async () => {
+  it("toggleDebug opens a cascade-owned debug window keyed by session + kind", async () => {
     const { manager } = harness();
     await manager.openApp("manual-control");
     const app = manager.appWindow()! as FakeWindow;
@@ -456,13 +456,44 @@ describe("WindowManager", () => {
     expect(dbg).not.toBeNull();
     expect(dbg.class).toBe("debug");
     expect(dbg.owner).toBe(app);
-    expect(dbg.key).toBe("debug:tracking");
+    expect(dbg.key).toBe("debug:tracking:debugger"); // kind defaults to debugger
     expect(manager.childrenOf(app)).toContain(dbg);
-    // The session name rides the URL; no `frame` arg any more (the module's
-    // Debugger.vue resolves its own subscriptions from the session).
+    // The session name + kind ride the URL; no `frame` arg any more (the
+    // mounted module component resolves its own subscriptions from the session).
     const params = new URLSearchParams(dbg.desc.search);
     expect(params.get("session")).toBe("tracking");
+    expect(params.get("kind")).toBe("debugger");
     expect(params.has("frame")).toBe(false);
+  });
+
+  it("kinds are independent: a session's debugger and capture windows coexist", async () => {
+    const { manager } = harness();
+    await manager.openApp("manual-control");
+    const app = manager.appWindow()! as FakeWindow;
+    const debugger_ = manager.toggleDebug("manual-control", app, "debugger") as FakeWindow;
+    const capture = manager.toggleDebug("manual-control", app, "capture") as FakeWindow;
+    expect(debugger_).not.toBe(capture); // distinct kinds ⇒ two windows
+    expect(debugger_.key).toBe("debug:manual-control:debugger");
+    expect(capture.key).toBe("debug:manual-control:capture");
+    expect(new URLSearchParams(capture.desc.search).get("kind")).toBe("capture");
+    expect(manager.childrenOf(app)).toHaveLength(2);
+    // Both cascade with the owner app.
+    app.close();
+    expect(debugger_.destroyed).toBe(true);
+    expect(capture.destroyed).toBe(true);
+  });
+
+  it("toggleDebug dedupes per (session, kind): re-toggling one kind leaves the other", async () => {
+    const { manager } = harness();
+    await manager.openApp("manual-control");
+    const app = manager.appWindow()! as FakeWindow;
+    const debugger_ = manager.toggleDebug("manual-control", app, "debugger") as FakeWindow;
+    const capture = manager.toggleDebug("manual-control", app, "capture") as FakeWindow;
+    // Toggling the capture window off closes ONLY it — the debugger stays.
+    expect(manager.toggleDebug("manual-control", app, "capture")).toBeNull();
+    expect(capture.destroyed).toBe(true);
+    expect(debugger_.destroyed).toBe(false);
+    expect(manager.childrenOf(app)).toEqual([debugger_]);
   });
 
   it("toggleDebug is a real toggle (second call on the same session closes it)", async () => {
@@ -500,8 +531,8 @@ describe("WindowManager", () => {
     const d1 = manager.toggleDebug("tracking", app) as FakeWindow;
     const d2 = manager.toggleDebug("manual-control", app) as FakeWindow;
     expect(d1).not.toBe(d2); // distinct keys ⇒ two windows
-    expect(d1.key).toBe("debug:tracking");
-    expect(d2.key).toBe("debug:manual-control");
+    expect(d1.key).toBe("debug:tracking:debugger");
+    expect(d2.key).toBe("debug:manual-control:debugger");
     expect(manager.childrenOf(app)).toHaveLength(2);
     app.close();
     expect(d1.destroyed).toBe(true);
