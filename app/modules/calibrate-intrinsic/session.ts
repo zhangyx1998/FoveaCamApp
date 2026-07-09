@@ -312,16 +312,30 @@ export default function calibrateIntrinsicSession(broker: PipeBroker): ServerSes
 
     async function select({ serial }: { serial: string }): Promise<void> {
       await deselect();
+      // Spin-up progress (ruling 2026-07-09): this session has no `activate`
+      // hook — a camera is leased per `select`, so the monitor is declared here
+      // (after the previous camera's teardown). A failed lease leaves the list
+      // FROZEN at "Leasing camera"; the next `select` supersedes it and window-
+      // close idle (runIdle) clears it. `complete` fires once detection is live.
+      const monitor = s.progressMonitor([
+        { id: "lease", label: "Leasing camera" },
+        { id: "detection", label: "Starting detection" },
+      ]);
+      monitor.start("lease");
       const lease = await retryUntil(() => acquire(serial));
-      if (!lease) return;
+      if (!lease) return; // frozen at "Leasing camera"
+      monitor.done("lease");
       activeLease = lease;
       activeInfo = known.get(serial) ?? null;
       // real-1c: the raw preview now rides the `camera:<serial>` native pipe;
       // the renderer reads it via `usePipeFrame`, not `s.frame("preview")`.
       // (The marker-detection view-tap below stays on the JS loop.)
       s.setState("activeSerial", serial);
+      monitor.start("detection");
       restartDetection();
       startRateTimer();
+      monitor.done("detection");
+      monitor.complete(); // spin-up finished — clear the overlay
     }
 
     async function deselect(): Promise<void> {

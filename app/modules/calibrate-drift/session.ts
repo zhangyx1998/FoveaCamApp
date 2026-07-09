@@ -77,16 +77,32 @@ export default function calibrateDriftSession(): ServerSession<typeof calibrateD
     // superseded). Leases go through `scope.use` so they release LAST, after
     // the servo/trackers/taps that read them have stopped.
     async function activateSession(scope: ResourceScope): Promise<void> {
+      // Spin-up progress (ruling 2026-07-09): declare the activation steps
+      // upfront so the window renders this sequence instead of blanking while
+      // the graph builds. A failure/early-return leaves the list FROZEN at the
+      // step it died on (never `done`/`complete`); idle teardown clears a
+      // cancelled spin-up.
+      const monitor = s.progressMonitor([
+        { id: "lease", label: "Leasing cameras" },
+        { id: "config", label: "Loading drift config" },
+        { id: "trackers", label: "Starting trackers" },
+        { id: "servo", label: "Starting servo" },
+      ]);
+      monitor.start("lease");
       const t = await scope.use(() => acquireTriple(s), releaseLeases);
       if (!t) return; // no cameras (acquireTriple published fail) or superseded
+      monitor.done("lease");
       triple = t;
       scope.defer(() => {
         triple = null;
       });
+      monitor.start("config");
       const doc = await read<{ drift_l?: Point2d; drift_r?: Point2d }>(t.configPath, {});
-      if (scope.cancelled) return;
+      if (scope.cancelled) return; // frozen at "Loading drift config" (scope cancel)
       saved = { L: doc.drift_l ?? null, R: doc.drift_r ?? null };
       s.telemetry({ saved });
+      monitor.done("config");
+      monitor.start("trackers");
       trackers = createTrackerTriple(
         { L: t.leases.L.camera, C: t.leases.C.camera, R: t.leases.R.camera },
         s.state.targetId,
@@ -102,7 +118,9 @@ export default function calibrateDriftSession(): ServerSession<typeof calibrateD
       // `detector.stream`, so this session no longer taps `onView` at all.
       publishSerials(t.leases, taps, s);
       scope.defer(() => taps.dispose());
+      monitor.done("trackers");
 
+      monitor.start("servo");
       servo = startServo(trackers.L, trackers.R, {
         kp: 10.0,
         owner: "calibrate-drift",
@@ -123,6 +141,7 @@ export default function calibrateDriftSession(): ServerSession<typeof calibrateD
         servo?.stop();
         servo = null;
       });
+      monitor.done("servo");
       s.telemetry({ ready: true });
 
       // Publish live derived drift at a modest rate (tracker ticks don't
@@ -141,6 +160,7 @@ export default function calibrateDriftSession(): ServerSession<typeof calibrateD
         });
       }, 200);
       scope.defer(() => clearInterval(timer));
+      monitor.complete(); // spin-up finished — clear the overlay
     }
 
     return {

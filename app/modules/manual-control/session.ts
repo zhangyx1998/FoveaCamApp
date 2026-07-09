@@ -400,14 +400,29 @@ export default function manualControlSession(
     // fully drain BEFORE the worker terminates + the pipes disconnect + the
     // leases release. Registration order below is reverse of the drain.
     async function activateSession(scope: ResourceScope): Promise<void> {
+      // Spin-up progress (ruling 2026-07-09): declare the activation steps
+      // upfront so the window renders this sequence instead of blanking while
+      // the graph builds. A failure/early-return leaves the list FROZEN at its
+      // step (never `done`/`complete`); idle teardown clears a cancelled
+      // spin-up. This is the heaviest activation in the fleet.
+      const monitor = s.progressMonitor([
+        { id: "lease", label: "Leasing cameras" },
+        { id: "pipes", label: "Building undistort pipes" },
+        { id: "worker", label: "Starting display worker" },
+        { id: "capture", label: "Preparing capture" },
+        { id: "controller", label: "Wiring controller" },
+      ]);
+      monitor.start("lease");
       const t = await scope.use(() => acquireTriple(s), releaseLeases); // drains LAST
-      if (!t) return;
+      if (!t) return; // frozen at "Leasing cameras" (contention/fail)
+      monitor.done("lease");
       triple = t;
 
       // real-1g (C-23): advertise the first-class `undistort:<serial>` center
       // pipe; the renderer binds it for the wide view, the worker consumes it
       // for slice, and capture's one-shot read rides it. Registered before the
       // worker's defer → retires AFTER consumers disconnect (LIFO).
+      monitor.start("pipes");
       let undistortC: string | null = null;
       if (t.undistort) {
         undistortC = advertiseUndistortPipe(
@@ -445,7 +460,9 @@ export default function manualControlSession(
           retireUndistortPipe(undistortSeam, pipeId);
         });
       }
+      monitor.done("pipes");
 
+      monitor.start("worker");
       const pipeIds: string[] = [];
       const centerInput = connectPipe(
         "C",
@@ -473,7 +490,9 @@ export default function manualControlSession(
         { pipes, params: initParams(), meterName: nodeId.win("manual-control", "display") },
         onResult,
       );
+      monitor.done("worker");
 
+      monitor.start("capture");
       // Capture node (idle until `capture()`): graph row + worker; the raw L/R
       // producers are advertised/connected ON DEMAND per shot (acquireStreams).
       captureNode = createCaptureNode({
@@ -485,7 +504,9 @@ export default function manualControlSession(
         },
         acquireStreams: acquireCaptureStreams,
       });
+      monitor.done("capture");
 
+      monitor.start("controller");
       // Push model (controller-node-and-fifo-edges §3): the SESSION owns the
       // 1 ms cadence; each tick pushes the current target and uses the node's
       // synchronous predicted-volts return for the local mirror + telemetry
@@ -552,7 +573,9 @@ export default function manualControlSession(
         posInput = null;
       });
 
+      monitor.done("controller");
       s.telemetry({ ready: true });
+      monitor.complete(); // spin-up finished — clear the overlay
     }
 
     return {

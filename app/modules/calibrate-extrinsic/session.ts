@@ -130,6 +130,20 @@ export default function calibrateExtrinsicSession(): ServerSession<typeof calibr
     // preview toggle per wizard step via `enterStep`; the scope's drain stops
     // whichever is active. Lease releases LAST.
     async function activateSession(scope: ResourceScope): Promise<void> {
+      // Spin-up progress (ruling 2026-07-09): declared steps ride the status
+      // channel so the window shows this sequence instead of blanking while the
+      // graph builds. A failure/early-return leaves the list FROZEN at its step
+      // (never `done`/`complete`) — the two-stage acquire freezes at "Leasing
+      // cameras" on match failure, at "Loading center intrinsics" if the center
+      // intrinsic is missing; idle teardown clears a cancelled spin-up.
+      const monitor = s.progressMonitor([
+        { id: "lease", label: "Leasing cameras" },
+        { id: "intrinsic", label: "Loading center intrinsics" },
+        { id: "records", label: "Loading records" },
+        { id: "trackers", label: "Starting trackers" },
+        { id: "actuation", label: "Starting actuation" },
+      ]);
+      monitor.start("lease");
       const matched = await retryUntil(matchTriple);
       if (scope.cancelled) {
         if (matched) releaseLeases(matched);
@@ -138,8 +152,10 @@ export default function calibrateExtrinsicSession(): ServerSession<typeof calibr
       if (!matched) {
         s.telemetry({ ready: false });
         s.fail("Cameras unavailable — held by another app or not connected");
-        return;
+        return; // frozen at "Leasing cameras"
       }
+      monitor.done("lease");
+      monitor.start("intrinsic");
       const { undistort: u } = await loadIntrinsic(matched.C.camera);
       if (scope.cancelled || !u) {
         releaseLeases(matched);
@@ -147,7 +163,7 @@ export default function calibrateExtrinsicSession(): ServerSession<typeof calibr
           s.telemetry({ ready: false });
           s.fail("Center camera intrinsic calibration unavailable");
         }
-        return;
+        return; // frozen at "Loading center intrinsics"
       }
       leases = matched;
       undistort = u;
@@ -156,10 +172,14 @@ export default function calibrateExtrinsicSession(): ServerSession<typeof calibr
         leases = null;
         undistort = null;
       });
+      monitor.done("intrinsic");
+      monitor.start("records");
       records = await read<ExtrinsicRecord[]>(SCRATCH_PATH, []);
-      if (scope.cancelled) return;
+      if (scope.cancelled) return; // frozen at "Loading records" (scope cancel)
       s.telemetry({ records, saved: false });
+      monitor.done("records");
 
+      monitor.start("trackers");
       trackers = createTrackerTriple(
         { L: leases.L.camera, C: leases.C.camera, R: leases.R.camera },
         s.state.targetId,
@@ -181,9 +201,13 @@ export default function calibrateExtrinsicSession(): ServerSession<typeof calibr
         stopServo();
         stopPreview();
       });
+      monitor.done("trackers");
 
+      monitor.start("actuation");
       enterStep(s.state.step);
+      monitor.done("actuation");
       s.telemetry({ ready: true });
+      monitor.complete(); // spin-up finished — clear the overlay
     }
 
     return {

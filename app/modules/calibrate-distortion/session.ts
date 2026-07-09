@@ -135,12 +135,25 @@ export default function calibrateDistortionSession(broker: PipeBroker): ServerSe
     // Resource-scoped activation (A-P1): cleanups drain LIFO on idle; leases go
     // through `scope.use` so they release LAST.
     async function activateSession(scope: ResourceScope): Promise<void> {
+      // Spin-up progress (ruling 2026-07-09): declared steps ride the status
+      // channel so the window shows this sequence instead of blanking while the
+      // graph builds. A failure/early-return leaves the list FROZEN at its step
+      // (never `done`/`complete`); idle teardown clears a cancelled spin-up.
+      const monitor = s.progressMonitor([
+        { id: "lease", label: "Leasing cameras" },
+        { id: "trackers", label: "Starting trackers" },
+        { id: "worker", label: "Starting vision worker" },
+        { id: "controller", label: "Wiring controller" },
+      ]);
+      monitor.start("lease");
       const t = await scope.use(() => acquireTriple(s), releaseLeases);
-      if (!t) return;
+      if (!t) return; // frozen at "Leasing cameras" (contention/fail)
+      monitor.done("lease");
       triple = t;
       scope.defer(() => {
         triple = null;
       });
+      monitor.start("trackers");
       trackers = createTrackerTriple(
         { L: t.leases.L.camera, C: t.leases.C.camera, R: t.leases.R.camera },
         s.state.targetId,
@@ -149,7 +162,9 @@ export default function calibrateDistortionSession(broker: PipeBroker): ServerSe
       scope.defer(() => {
         trackers = stopTriple(trackers);
       });
+      monitor.done("trackers");
 
+      monitor.start("worker");
       const pipeIds: string[] = [];
       const pipes: PipeInput[] = [
         connectPipe("L", t.leases.L.camera.serial, pipeIds),
@@ -169,7 +184,9 @@ export default function calibrateDistortionSession(broker: PipeBroker): ServerSe
         worker = null;
         for (const id of pipeIds) broker.disconnect(id);
       });
+      monitor.done("worker");
 
+      monitor.start("controller");
       // Detection subscriptions — each fovea recomputes+ships its projection on
       // its own detection; the center recomputes both (it moves `centerAngle`).
       const taps = new DisposerBag();
@@ -207,7 +224,9 @@ export default function calibrateDistortionSession(broker: PipeBroker): ServerSe
         void posInput?.close(); // terminate the MCU stream + disable-iff-we-enabled
         posInput = null;
       });
+      monitor.done("controller");
       s.telemetry({ ready: true });
+      monitor.complete(); // spin-up finished — clear the overlay
     }
 
     return {
