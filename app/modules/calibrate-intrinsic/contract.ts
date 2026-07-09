@@ -25,6 +25,20 @@ export type CalibrationView = {
   calibrated_at: string | null;
   /** Field of view (radians), if calibrated. */
   fov: { x: number; y: number } | null;
+  /** Overall RMS re-projection error of the stored solve, or null (uncalibrated
+   *  or a calibration persisted before the core exposed it). */
+  rms: number | null;
+};
+
+/** A captured record's downscaled grayscale preview (proposal item 4): a small
+ *  Mono8 image (~160 px wide) so the records list shows what's being removed.
+ *  `id` is a stable per-capture key (survives sibling removal). */
+export type RecordThumb = {
+  id: number;
+  width: number;
+  height: number;
+  /** Row-major Mono8 pixels; the renderer wraps it in a Mat for `FrameView`. */
+  data: Uint8Array;
 };
 
 /** Live per-frame detection overlay — a generic point list (checkerboard
@@ -51,7 +65,14 @@ export const calibrateIntrinsic = defineContract({
     size: { width: 0, height: 0 },
     detection: null as DetectionView | null,
     recordCount: 0,
+    /** Per-record downscaled previews, parallel to `recordCount` (item 4). */
+    records: [] as RecordThumb[],
     busy: false as boolean,
+    /** RMS re-projection error of the most recent solve (item 5), or null. */
+    lastRms: null as number | null,
+    /** Detector throughput in Hz, republished ~1×/s while a camera is open
+     *  (item 6) — surfaced in the StreamView footnote. */
+    detectRate: 0,
   },
   // No session frames: the raw preview binds the active camera's
   // `camera:<serial>` pipe via `usePipeFrame` (real-1c); detection overlays ride

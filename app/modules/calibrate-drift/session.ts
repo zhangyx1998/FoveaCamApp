@@ -28,6 +28,7 @@ import {
 } from "@orchestrator/marker-calibration";
 import type { Point2d } from "core/Geometry";
 import { calibrateDrift } from "./contract";
+import { gateOnLock } from "./drift-gate";
 
 // Mirror position is owned by the shared controller holder, not this
 // session — under the controller node's streaming transport the holder's
@@ -130,10 +131,12 @@ export default function calibrateDriftSession(): ServerSession<typeof calibrateD
       const timer = setInterval(() => {
         if (!triple) return;
         const c = activeControllerPos();
+        // Gate each eye on that fovea tracker's live lock (proposal finding 1):
+        // an unlocked eye's derived drift is meaningless, so publish null.
         s.telemetry({
           derived: {
-            L: c ? deriveDrift(triple.conv.V2A.L(c.left)) : null,
-            R: c ? deriveDrift(triple.conv.V2A.R(c.right)) : null,
+            L: gateOnLock(c ? deriveDrift(triple.conv.V2A.L(c.left)) : null, trackers?.L),
+            R: gateOnLock(c ? deriveDrift(triple.conv.V2A.R(c.right)) : null, trackers?.R),
           },
         });
       }, 200);
@@ -162,8 +165,12 @@ export default function calibrateDriftSession(): ServerSession<typeof calibrateD
           if (!triple) return;
           const c = activeControllerPos();
           if (!c) return;
-          const nextL = role !== "R" ? deriveDrift(triple.conv.V2A.L(c.left)) : saved.L;
-          const nextR = role !== "L" ? deriveDrift(triple.conv.V2A.R(c.right)) : saved.R;
+          // Defense in depth (proposal finding 1): only commit an eye whose fovea
+          // tracker is currently locked — otherwise keep the saved value untouched.
+          const canL = !!trackers?.L.target;
+          const canR = !!trackers?.R.target;
+          const nextL = role !== "R" && canL ? deriveDrift(triple.conv.V2A.L(c.left)) : saved.L;
+          const nextR = role !== "L" && canR ? deriveDrift(triple.conv.V2A.R(c.right)) : saved.R;
           saved = { L: nextL, R: nextR };
           await write(triple.configPath, {
             ...(await read(triple.configPath, {})),

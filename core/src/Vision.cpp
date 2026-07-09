@@ -412,9 +412,9 @@ static FN(calibrateCamera) {
     auto task = [env, sensor_size, img_points, obj_points, criteria] {
       auto ret = CameraCalibration::create();
       ret->sensor_size = sensor_size;
-      cv::calibrateCamera(obj_points, img_points, sensor_size,
-                          ret->camera_matrix, ret->dist_coeffs, ret->rvecs,
-                          ret->tvecs, 0, criteria);
+      ret->rms = cv::calibrateCamera(obj_points, img_points, sensor_size,
+                                     ret->camera_matrix, ret->dist_coeffs,
+                                     ret->rvecs, ret->tvecs, 0, criteria);
       return ret;
     };
     return AsyncTask<CameraCalibration::Ptr>::run(env, task,

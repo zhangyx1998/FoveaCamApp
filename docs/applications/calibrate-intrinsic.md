@@ -32,18 +32,30 @@ frame, extracts an owned `Mono8` gray via `frame.view()` (a COPY — safe to ret
 after release), builds per-marker samples (corner + interpolated internal points),
 releases both the temporary and the loop's implicit ref, and pushes the record.
 
+Every capture also downscales its gray to a ~160 px-wide `Mono8` thumbnail
+(`makeThumb`), published in the `records` telemetry so the records list shows the
+image (not an anonymous `#N` chip); records still clear on size/pattern change.
+
 At `calibrateNow()`: flattens all records' samples, runs `cornerSubPix` per sample
 on the retained gray, then `calibrateCamera(size, img_points, obj_points)`, and
-persists `{ ...result, date }`. `resetCalibration` clears a camera's stored cal.
+persists `{ ...result, date }` — including the solve's `rms` re-projection error
+(exposed by the core binding; additive). `rms` is surfaced post-solve
+(`telemetry.lastRms`) and per-camera in the picker (`CalibrationView.rms`, via
+`loadIntrinsic`). `resetCalibration` clears a camera's stored cal.
 
 ## UI & controls
 `index.vue`: picker list of connected cameras with vendor/model/serial, role
-badge, calibrated-at + FOV (degrees) readout, and Calibrate(Checker)/
+badge, calibrated-at + FOV (degrees) + RMS readout, and Calibrate(Checker)/
 Calibrate(Marker)/Reset buttons per camera. In the active view: raw preview with
-green-dot corner/marker overlay (drawn from `telemetry.detection.points`), pattern
-W×H inputs (checker) or dictionary selector (marker), captured-records chip list
-(click a chip to remove it), Capture (disabled until a detection exists), and
-Calibrate (disabled until ≥1 record; shows "Calibrating…" while `busy`).
+green-dot corner/marker overlay (drawn from `telemetry.detection.points`) and a
+"Detector @ N Hz" footnote (`telemetry.detectRate`, session-metered ~1×/s);
+CHECKER adds pattern W×H inputs + a pattern-size-mm slider that projects a
+physical checkerboard via `RemoteCanvasTeleport` (mm is renderer-local — it
+scales only the projected board, never the corner-count math); MARKER adds the
+dictionary selector + a detector-downscale (`state.scale`) slider. Captured
+records show as thumbnail tiles (click a tile to remove it), Capture (disabled
+until a detection exists), and Calibrate (disabled until ≥1 record; shows
+"Calibrating…" while `busy`).
 
 ## Expected behavior
 Corners/markers overlay live at usable rate; captures accumulate as chips;

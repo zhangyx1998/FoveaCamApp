@@ -51,18 +51,21 @@ function validate(cal?: Partial<CameraCalibration>): cal is CameraCalibration {
 // the picker list only has plain `CameraInfo`s, not opened `Camera` handles.
 export async function loadIntrinsic(
   camera: Pick<Camera, "vendor" | "model" | "serial">,
-): Promise<{ undistort: Undistort | null; date: Date | null }> {
+): Promise<{ undistort: Undistort | null; date: Date | null; rms: number | null }> {
   const cal = await read<Partial<CameraCalibration>>(
     ["calibrate-intrinsic", getCameraKey(camera)],
     {},
   );
   const date = cal.date instanceof Date ? cal.date : null;
+  // Additive (proposal item 5): absent on calibrations solved before the core
+  // returned it, so degrade to null rather than 0 (which would read as "perfect").
+  const rms = typeof cal.rms === "number" ? cal.rms : null;
   try {
-    if (validate(cal)) return { undistort: new Undistort(cal), date };
+    if (validate(cal)) return { undistort: new Undistort(cal), date, rms };
   } catch (e) {
     console.warn("[calibration] failed to build undistort:", e);
   }
-  return { undistort: null, date };
+  return { undistort: null, date, rms };
 }
 
 // Exported for calibrate-extrinsic's session (§7.1 S1b) — its FIN wizard

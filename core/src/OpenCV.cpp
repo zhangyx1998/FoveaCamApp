@@ -343,6 +343,9 @@ template <> CameraCalibration::Ptr convert(const Napi::Value &value) {
   cal->dist_coeffs = convert<cv::Mat>(obj.Get("dist_coeffs"));
   cal->rvecs = convert<std::vector<cv::Mat>>(obj.Get("rvecs"));
   cal->tvecs = convert<std::vector<cv::Mat>>(obj.Get("tvecs"));
+  // Optional (additive): absent on calibrations persisted before `rms` existed.
+  if (obj.Has("rms"))
+    cal->rms = convert<double>(obj.Get("rms"));
   return cal;
 }
 
@@ -355,6 +358,7 @@ Napi::Value convert(Napi::Env env, const Napi::Value &container,
   obj.Set("dist_coeffs", convert(env, cal->dist_coeffs));
   obj.Set("rvecs", convert(env, cal->rvecs));
   obj.Set("tvecs", convert(env, cal->tvecs));
+  obj.Set("rms", convert(env, cal->rms));
   return obj;
 }
 

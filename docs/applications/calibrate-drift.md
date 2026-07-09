@@ -29,15 +29,23 @@ Drift derivation: `deriveDrift(fovea) = centerAngle − fovea`, where `fovea` is
 mirror's current actuated angle (`conv.V2A(activeControllerPos())`) and
 `centerAngle` is the wide tracker's `angular(centerAbsolute)`. A 200 ms timer
 publishes the live `derived` drift (it needs the actuated mirror position, which
-only changes on the servo's own tick, so it can't ride tracker ticks).
+only changes on the servo's own tick, so it can't ride tracker ticks). Each eye's
+`derived` is **gated on that fovea tracker's live lock** (`trackers.L/R.target`,
+via `drift-gate.gateOnLock`) — an unlocked eye publishes `null`, never a
+meaningless mirror-parked-at-origin value; `updateDrift` re-checks the lock before
+committing (defense in depth).
 
 ## UI & controls
 `index.vue`: three previews with marker-corner overlays and `MarkerTargetInputs`;
-per fovea a `Drift` readout of derived + saved drift and a `PosView` mirror
-override; center column has Update Drift (L / All / R) buttons (commit `derived`
-→ persisted config) — each disabled until its derived drift exists.
-`RemoteCanvasTeleport` draws the target markers/crosshair; a Drawer exposes marker
-size/ratio. `PosView`/controller state read directly via `useController`.
+per fovea a `Drift` readout of derived drift, a **Δ-vs-saved** readout, saved
+drift, and a `PosView` mirror override; center column has Update Drift (L / All /
+R) buttons (commit `derived` → persisted config). A button is **disabled unless
+its derived drift is present AND the Δ vs saved clears a small angular noise
+floor** (`drift-gate.driftUpdatable`, `DRIFT_NOISE_FLOOR_RAD ≈ 0.03°`) — so a
+re-commit that is within tracker measurement noise (pure churn) is blocked, and an
+unlocked eye (derived `null`) is blocked too. `RemoteCanvasTeleport` draws the
+target markers/crosshair; a Drawer exposes marker size/ratio. `PosView`/controller
+state read directly via `useController`.
 
 ## Expected behavior
 Markers track live; the servo converges each mirror onto the drift-corrected

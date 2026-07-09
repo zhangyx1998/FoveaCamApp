@@ -13,20 +13,46 @@ You may find the full license in project root directory.
   machine is unified too (`state.method` switches which detector runs).
 -->
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import { useSession, usePipeFrame } from "@lib/orchestrator/client";
 import { nodeId } from "@lib/orchestrator/graph-contract";
-import { calibrateIntrinsic } from "./contract";
+import { calibrateIntrinsic, type RecordThumb } from "./contract";
 import StreamView from "@src/components/StreamView.vue";
+import FrameView from "@src/components/FrameView.vue";
 import NavBack from "@src/components/NavBack.vue";
 import ConfigEntry from "@src/components/ConfigEntry.vue";
 import CameraRole from "@src/components/CameraRole.vue";
 import Badge from "@src/components/Badge.vue";
+import RangeSlider from "@src/inputs/range-slider.vue";
+import RemoteCanvasTeleport from "@src/components/RemoteCanvasTeleport.vue";
+import { makeMat } from "@lib/mat";
 import { DictionaryTypeSelector } from "./dictionary-selector";
 import type { PreDefinedDictionary } from "core/Vision";
 
 const session = useSession(calibrateIntrinsic, "calibrate-intrinsic");
 const { state, telemetry } = session;
+
+// Wrap a record's downscaled Mono8 preview in a Mat for FrameView (item 4).
+function thumbMat(t: RecordThumb) {
+  return makeMat(t.data, [t.height, t.width], 1);
+}
+
+// CHECKER projection (item 2, ported from master's calibrate-checker.vue). The
+// physical square size is renderer-local — it only scales the projected board,
+// never the corner-count math the session solves on.
+const pattern_size_mm = ref(10.0);
+const pattern = computed(() => {
+  const mm = pattern_size_mm.value;
+  const { width, height } = state.pattern_size;
+  const blacks: Array<{ x: number; y: number; width: string; height: string }> = [];
+  const x0 = (width + 1) * mm * -0.5;
+  const y0 = (height + 1) * mm * -0.5;
+  for (let y = 0; y <= height; y++)
+    for (let x = 0; x <= width; x++)
+      if ((x + y) % 2 === 0)
+        blacks.push({ x: x0 + x * mm, y: y0 + y * mm, width: mm + "px", height: mm + "px" });
+  return blacks;
+});
 // real-1c: raw preview off the active camera's native pipe (marker-detection
 // overlay still rides telemetry).
 const preview = usePipeFrame(() =>
@@ -86,6 +112,9 @@ const pattern_h = computed<number>({
             <ConfigEntry style="color: white">
               FOV: X {{ degrees(v.fov.x) }}&deg;, Y {{ degrees(v.fov.y) }}&deg;
             </ConfigEntry>
+            <ConfigEntry v-if="v.rms != null" style="color: white">
+              RMS: {{ v.rms.toFixed(3) }} px
+            </ConfigEntry>
           </template>
           <template v-else>
             <ConfigEntry style="color: gray">Camera not calibrated.</ConfigEntry>
@@ -122,7 +151,12 @@ const pattern_h = computed<number>({
         <span>{{ activeView?.info.vendor }} {{ activeView?.info.model }}</span>
         <CameraRole v-if="activeView?.role" :role="(activeView.role as any)" />
       </NavBack>
-      <StreamView class="stream" :payload="preview" height="min(60vh, 80vw)">
+      <StreamView
+        class="stream"
+        :payload="preview"
+        height="min(60vh, 80vw)"
+        :footnote="`Detector @ ${telemetry.detectRate.toFixed(1)} Hz`"
+      >
         <circle
           v-for="(p, i) in telemetry.detection?.points ?? []"
           :key="i"
@@ -134,34 +168,55 @@ const pattern_h = computed<number>({
           :stroke-width="stroke() * 0.3"
         />
       </StreamView>
-      <ConfigEntry v-if="state.method === 'CHECKER'">
-        Pattern Size: W
-        <input v-model.number="pattern_w" style="width: 2ch" />
-        &times; H
-        <input v-model.number="pattern_h" style="width: 2ch" />
-        -&gt; {{ telemetry.detection?.points.length ?? 0 }} corners
-      </ConfigEntry>
-      <ConfigEntry v-else>
-        <label>
-          Marker Dictionary
-          <DictionaryTypeSelector
-            :model-value="state.dictionary as PreDefinedDictionary"
-            @update:model-value="(v: PreDefinedDictionary) => (state.dictionary = v)"
-          />
-        </label>
-      </ConfigEntry>
+      <template v-if="state.method === 'CHECKER'">
+        <ConfigEntry>
+          Pattern Size: W
+          <input v-model.number="pattern_w" style="width: 2ch" />
+          &times; H
+          <input v-model.number="pattern_h" style="width: 2ch" />
+          -&gt; {{ telemetry.detection?.points.length ?? 0 }} corners
+        </ConfigEntry>
+        <RangeSlider v-model.number="pattern_size_mm" :min="1" :max="50" :step="1" style="max-width: 40ch">
+          <span>Pattern Size (mm)</span>
+          <span>{{ pattern_size_mm.toFixed(2) }} mm</span>
+        </RangeSlider>
+      </template>
+      <template v-else>
+        <ConfigEntry>
+          <label>
+            Marker Dictionary
+            <DictionaryTypeSelector
+              :model-value="state.dictionary as PreDefinedDictionary"
+              @update:model-value="(v: PreDefinedDictionary) => (state.dictionary = v)"
+            />
+          </label>
+        </ConfigEntry>
+        <RangeSlider v-model.number="state.scale" :min="1" :max="8" :step="1" style="max-width: 40ch">
+          <span>Detector Downscale</span>
+          <span>1 / {{ state.scale }}</span>
+        </RangeSlider>
+      </template>
       <ConfigEntry v-if="activeView?.calibrated_at">
         Calibrated At&nbsp;<span>{{ new Date(activeView.calibrated_at).toLocaleString() }}</span>
       </ConfigEntry>
       <ConfigEntry v-if="activeView?.fov">
         FOV: X {{ degrees(activeView.fov.x) }}&deg;, Y {{ degrees(activeView.fov.y) }}&deg;
       </ConfigEntry>
+      <ConfigEntry v-if="telemetry.lastRms != null">
+        Last Solve RMS&nbsp;<span>{{ telemetry.lastRms.toFixed(3) }} px</span>
+      </ConfigEntry>
     </div>
     <div class="right">
       <h2>Captured Records ({{ telemetry.recordCount }})</h2>
       <div class="records">
-        <div v-for="i in telemetry.recordCount" :key="i" class="record-chip" @click="session.call('removeRecord', { index: i - 1 })">
-          #{{ i }}
+        <div
+          v-for="(rec, i) in telemetry.records"
+          :key="rec.id"
+          class="record-chip"
+          title="Click to remove"
+          @click="session.call('removeRecord', { index: i })"
+        >
+          <FrameView :mat="thumbMat(rec)" width="100%" />
         </div>
       </div>
       <div class="buttons">
@@ -171,6 +226,12 @@ const pattern_h = computed<number>({
         </button>
       </div>
     </div>
+    <!-- CHECKER projection (item 2): white field + black squares projected onto
+         the remote display so the operator has a physical board to calibrate. -->
+    <RemoteCanvasTeleport v-if="state.method === 'CHECKER'">
+      <rect x="-50vw" y="-50vh" width="100vw" height="100vh" fill="white" />
+      <rect v-for="(p, i) in pattern" :key="i" v-bind="p" fill="black" />
+    </RemoteCanvasTeleport>
   </div>
 </template>
 

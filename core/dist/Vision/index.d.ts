@@ -28,6 +28,9 @@ declare module "core/Vision" {
     rvecs: Mat<Float64Array>[];
     // Projection transform vectors - 3 row x 4 col
     tvecs: Mat<Float64Array>[];
+    // Overall RMS re-projection error from cv::calibrateCamera (0 for
+    // calibrations persisted before this field existed).
+    rms: number;
   };
 
   // Default: { max_count: 30, epsilon: 1e-8 }

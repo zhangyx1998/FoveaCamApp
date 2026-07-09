@@ -29,11 +29,25 @@ import Marker from "@src/graphics/Marker.vue";
 import CrossHair from "@src/graphics/CrossHair.vue";
 import RangeSlider from "@src/inputs/range-slider.vue";
 import Drawer from "@src/components/Drawer.vue";
+import { driftUpdatable } from "./drift-gate";
+import type { Point2d } from "core/Geometry";
 
 const app_config = await useAppConfig();
 const session = useSession(calibrateDrift, "calibrate-drift");
 const ctrl = useController();
 const { state, telemetry } = session;
+
+// Derived-vs-saved delta per eye (proposal finding 7). `updatable*` also gates
+// the Update buttons: a derived drift within the tracker's measurement-noise
+// floor of what's saved is churn, not signal (see drift-gate.ts).
+function delta(derived: Point2d | null, saved: Point2d | null): Point2d | null {
+  if (!derived) return null;
+  return { x: derived.x - (saved?.x ?? 0), y: derived.y - (saved?.y ?? 0) };
+}
+const deltaL = computed(() => delta(telemetry.derived.L, telemetry.saved.L));
+const deltaR = computed(() => delta(telemetry.derived.R, telemetry.saved.R));
+const updatableL = computed(() => driftUpdatable(telemetry.derived.L, telemetry.saved.L));
+const updatableR = computed(() => driftUpdatable(telemetry.derived.R, telemetry.saved.R));
 
 // C-22: raw L/C/R previews now ride the native `camera:<serial>` pipe (off the
 // JS view-tap loop) via `usePipeFrame`; the marker-detection overlays are drawn
@@ -81,6 +95,7 @@ const overrideR = usePidOverride<typeof calibrateDrift, Pos>(session, {
       </StreamView>
       <MarkerTargetInputs :session="session" role="L" :detected="!!telemetry.detection.L" />
       <Drift :drift="telemetry.derived.L">Derived Drift</Drift>
+      <Drift :drift="deltaL">&Delta; vs Saved</Drift>
       <PosView
         v-if="ctrl.telemetry.connected"
         :pos="ctrl.telemetry.pos.left"
@@ -104,16 +119,16 @@ const overrideR = usePidOverride<typeof calibrateDrift, Pos>(session, {
       </StreamView>
       <MarkerTargetInputs :session="session" role="C" :detected="!!telemetry.detection.C" />
       <div class="actions">
-        <button :disabled="!telemetry.derived.L" @click="session.call('updateDrift', { role: 'L' })">
+        <button :disabled="!updatableL" @click="session.call('updateDrift', { role: 'L' })">
           Update Drift (L)
         </button>
         <button
-          :disabled="!telemetry.derived.L || !telemetry.derived.R"
+          :disabled="!updatableL || !updatableR"
           @click="session.call('updateDrift', { role: 'ALL' })"
         >
           Update Drift (All)
         </button>
-        <button :disabled="!telemetry.derived.R" @click="session.call('updateDrift', { role: 'R' })">
+        <button :disabled="!updatableR" @click="session.call('updateDrift', { role: 'R' })">
           Update Drift (R)
         </button>
       </div>
@@ -133,6 +148,7 @@ const overrideR = usePidOverride<typeof calibrateDrift, Pos>(session, {
       </StreamView>
       <MarkerTargetInputs :session="session" role="R" :detected="!!telemetry.detection.R" />
       <Drift :drift="telemetry.derived.R">Derived Drift</Drift>
+      <Drift :drift="deltaR">&Delta; vs Saved</Drift>
       <PosView
         v-if="ctrl.telemetry.connected"
         :pos="ctrl.telemetry.pos.right"

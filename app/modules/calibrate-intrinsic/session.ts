@@ -39,6 +39,7 @@ import {
   calibrateCamera,
   cornerSubPix,
   MarkerDetector,
+  resize,
   type CameraCalibration,
   type Mat,
   type MarkerDetectResults,
@@ -52,10 +53,29 @@ import type { CheckerValues } from "./vision";
 import { makeMat } from "@lib/mat";
 import type { CameraInfo } from "@lib/orchestrator/contracts";
 import type { Point2d, Point3d } from "core/Geometry";
-import { calibrateIntrinsic, type CalibrationView } from "./contract";
+import { calibrateIntrinsic, type CalibrationView, type RecordThumb } from "./contract";
 
 type Sample = { img_points: Point2d[]; obj_points: Point3d[] };
-type Record_ = { gray: Mat<Uint8Array>; samples: Sample[] };
+type Record_ = { gray: Mat<Uint8Array>; samples: Sample[]; thumb: RecordThumb };
+
+/** Longest edge (px) of a record preview thumbnail (proposal item 4 — keep the
+ *  telemetry payload small). */
+const THUMB_WIDTH = 160;
+
+/** Downscale a captured grayscale Mat to a small Mono8 preview for the records
+ *  list. `id` is the record's stable key. */
+async function makeThumb(gray: Mat<Uint8Array>, id: number): Promise<RecordThumb> {
+  const gw = gray.shape[1] ?? 1;
+  const gh = gray.shape[0] ?? 1;
+  const width = Math.min(THUMB_WIDTH, gw);
+  const height = Math.max(1, Math.round((gh * width) / gw));
+  const small = await resize(gray, { width, height });
+  // Copy out of the (possibly reused) native buffer before it can be recycled.
+  const data = new Uint8Array(
+    small.buffer.slice(small.byteOffset, small.byteOffset + small.byteLength),
+  );
+  return { id, width: small.shape[1] ?? width, height: small.shape[0] ?? height, data };
+}
 
 /** Checkerboard object points for the configured pattern size, unit spacing
  *  (matches the original renderer's `objPoints()` exactly). */
@@ -82,6 +102,21 @@ export default function calibrateIntrinsicSession(broker: PipeBroker): ServerSes
     let width = 0;
     let height = 0;
     let records: Record_[] = [];
+    // Stable per-capture id (item 4) — survives sibling removal reindexing.
+    let recordSeq = 0;
+
+    // Detector throughput (item 6): every detection tick bumps `detectCount`;
+    // a ~1 Hz timer converts the delta to Hz for the StreamView footnote.
+    let detectCount = 0;
+    let rateTimer: ReturnType<typeof setInterval> | null = null;
+    let rateAnchor = 0;
+
+    function publishRecords(): void {
+      s.telemetry({
+        recordCount: records.length,
+        records: records.map((r) => r.thumb),
+      });
+    }
 
     // CHECKER mode — detection runs in the `checker` vision worker (C-22b step 3,
     // off the JS event loop). It posts the corner points + the gray frame; main
@@ -97,17 +132,37 @@ export default function calibrateIntrinsicSession(broker: PipeBroker): ServerSes
 
     function clearRecords(): void {
       records = [];
-      s.telemetry({ recordCount: 0 });
+      publishRecords();
     }
 
     async function buildView(info: CameraInfo, role: string | undefined): Promise<CalibrationView> {
-      const { undistort, date } = await loadIntrinsic(info);
+      const { undistort, date, rms } = await loadIntrinsic(info);
       return {
         info,
         role,
         calibrated_at: date ? date.toISOString() : null,
         fov: undistort ? { x: undistort.fov.x, y: undistort.fov.y } : null,
+        rms,
       };
+    }
+
+    function startRateTimer(): void {
+      detectCount = 0;
+      rateAnchor = performance.now();
+      rateTimer ??= setInterval(() => {
+        const now = performance.now();
+        const dt = (now - rateAnchor) / 1000;
+        s.telemetry({ detectRate: dt > 0 ? detectCount / dt : 0 });
+        detectCount = 0;
+        rateAnchor = now;
+      }, 1000);
+    }
+
+    function stopRateTimer(): void {
+      if (rateTimer) clearInterval(rateTimer);
+      rateTimer = null;
+      detectCount = 0;
+      s.telemetry({ detectRate: 0 });
     }
 
     async function refresh(): Promise<void> {
@@ -163,6 +218,7 @@ export default function calibrateIntrinsicSession(broker: PipeBroker): ServerSes
     }
 
     function onCheckerResult(r: VisionResult): void {
+      detectCount++; // item 6: one processed frame (matched or not)
       const v = r.values as CheckerValues;
       if (v.size) {
         width = v.size.width;
@@ -220,6 +276,7 @@ export default function calibrateIntrinsicSession(broker: PipeBroker): ServerSes
           // via `.ref()` before it would otherwise be released here.
           if (latestMarker && latestMarker !== result) latestMarker.frame.release();
           latestMarker = result;
+          detectCount++; // item 6: one processed frame
           const points = result.flatMap((r: Point2d[]) => [...r]);
           s.telemetry({ detection: points.length > 0 ? { points } : null });
         }
@@ -264,11 +321,13 @@ export default function calibrateIntrinsicSession(broker: PipeBroker): ServerSes
       // (The marker-detection view-tap below stays on the JS loop.)
       s.setState("activeSerial", serial);
       restartDetection();
+      startRateTimer();
     }
 
     async function deselect(): Promise<void> {
       previewDisposer?.();
       previewDisposer = null;
+      stopRateTimer();
       stopCheckerWorker();
       stopMarkerTask();
       latestChecker = null;
@@ -278,7 +337,15 @@ export default function calibrateIntrinsicSession(broker: PipeBroker): ServerSes
       activeInfo = null;
       width = height = 0;
       s.setState("activeSerial", null);
-      s.telemetry({ detection: null, size: { width: 0, height: 0 } });
+      s.telemetry({ detection: null, size: { width: 0, height: 0 }, lastRms: null });
+    }
+
+    /** Commit one captured (gray, samples) pair as a record + its preview
+     *  thumbnail (item 4), then republish the records list. */
+    async function pushRecord(gray: Mat<Uint8Array>, samples: Sample[]): Promise<void> {
+      const thumb = await makeThumb(gray, recordSeq++);
+      records.push({ gray, samples, thumb });
+      publishRecords();
     }
 
     async function capture(): Promise<void> {
@@ -286,10 +353,9 @@ export default function calibrateIntrinsicSession(broker: PipeBroker): ServerSes
         const d = latestChecker;
         if (!d) return;
         latestChecker = null;
-        records.push({
-          gray: d.gray,
-          samples: [{ img_points: d.img_points, obj_points: checkerObjPoints(s.state.pattern_size) }],
-        });
+        await pushRecord(d.gray, [
+          { img_points: d.img_points, obj_points: checkerObjPoints(s.state.pattern_size) },
+        ]);
       } else {
         const d = latestMarker;
         const detector = markerDetector;
@@ -314,14 +380,13 @@ export default function calibrateIntrinsicSession(broker: PipeBroker): ServerSes
           const img_points = [...(r as unknown as Point2d[]), ...bilinearInterpolate(r, internal)];
           samples.push({ img_points, obj_points });
         }
-        records.push({ gray, samples });
+        await pushRecord(gray, samples);
       }
-      s.telemetry({ recordCount: records.length });
     }
 
     function removeRecord({ index }: { index: number }): void {
       records.splice(index, 1);
-      s.telemetry({ recordCount: records.length });
+      publishRecords();
     }
 
     async function calibrateNow(): Promise<void> {
@@ -340,7 +405,8 @@ export default function calibrateIntrinsicSession(broker: PipeBroker): ServerSes
         await write(["calibrate-intrinsic", key], { ...result, date: new Date() });
         const view = await buildView(activeInfo, views[activeInfo.serial]?.role);
         views = { ...views, [activeInfo.serial]: view };
-        s.telemetry({ views });
+        // item 5: report the solve's RMS re-projection error post-solve.
+        s.telemetry({ views, lastRms: typeof result.rms === "number" ? result.rms : null });
       } finally {
         s.telemetry({ busy: false });
       }
