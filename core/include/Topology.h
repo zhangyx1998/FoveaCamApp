@@ -83,5 +83,9 @@ void appendCompositeReports(Napi::Env env, Napi::Array &rows,
 // camera/<serial> input edge, full-bit-depth sensor-format output).
 void appendRawReports(Napi::Env env, Napi::Array &rows,
                       std::set<std::string> &seen);
+// multi-fovea-recording ruling 1: the PACKED raw-12p camera-source pipe (kind
+// "raw12p", camera/<serial> input edge, verbatim wire-format payload output).
+void appendRaw12pReports(Napi::Env env, Napi::Array &rows,
+                         std::set<std::string> &seen);
 
 } // namespace Arv

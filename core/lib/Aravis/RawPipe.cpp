@@ -28,8 +28,10 @@
 // therefore carries `frame->raw` = the FULL-BIT-DEPTH container (16-bit for
 // 12p/Mono16, 8-bit for Mono8), which is exactly what the recorder needs
 // (full depth, not the preview). `pixelFormat` = the sensor format string;
-// `dtype` (U8/U16) follows the container width. Truly-packed preservation
-// would require a pre-Frame ArvBuffer tap in Stream::iterate() — out of scope.
+// `dtype` (U8/U16) follows the container width. Truly-packed preservation lives
+// in the SECOND half of this file (multi-fovea-recording ruling 1): the raw12p
+// pipes tap the ArvBuffer BEFORE Frame construction via `Arv::Stream::BufferTap`
+// and publish the verbatim packed wire payload.
 
 #include <map>
 #include <memory>
@@ -237,6 +239,266 @@ void appendRawReports(Napi::Env env, Napi::Array &rows,
     if (!b)
       continue;
     auto row = Topology::node(env, pipeId, "raw", "native");
+    Topology::addInput(env, row, b->sourceId, "frame",
+                       Topology::frameType(env, b->sensorFormat, b->dtype));
+    if (!Topology::decoratePipe(env, row, pipeId))
+      row.Set("output", Topology::frameType(env, b->sensorFormat, b->dtype));
+    row.Set("stats", meterSnapshotToJs(env, b->meter.probe(converterNowMs())));
+    rows.Set(rows.Length(), row);
+    seen.insert(pipeId);
+  }
+}
+
+// ============================================================================
+// multi-fovea-recording ruling 1: PACKED raw-12p pipes (pre-Frame ArvBuffer tap)
+// ============================================================================
+// The raw tap above publishes `frame->raw` — the UNPACKED full-depth container
+// (packed 12p is expanded to 16-bit at Frame construction, see Frame.h). A
+// multi-fovea recording instead wants the VERBATIM packed wire payload (the
+// literal Bayer-12p bytes the sensor sent) so fovea imagery re-encodes offline
+// without a lossy expand→repack round trip. Those bytes exist ONLY before Frame
+// construction, so this tap captures them at the ArvBuffer level via
+// `Arv::Stream::BufferTap` — fired inside `Stream::iterate()` BEFORE the unpack
+// and BEFORE the requeue — and publishes the arv_buffer payload byte-for-byte
+// into a `camera/<serial>/raw12p` pipe.
+//
+// FORMAT-AGNOSTIC: it copies whatever the negotiated wire format is (packed 12p
+// on a 12p-readout sensor; plain Mono8/Bayer8/Mono16 otherwise) — it NEVER
+// assumes packing. Payload size, dims and (implicitly) stride are read from the
+// buffer, not computed. Same consumer gate as the raw tap: no consumer ⇒ the
+// tap is not registered on the stream ⇒ zero capture-thread cost.
+
+// Keeps the camera capture loop RUNNING while a packed tap is attached. Every
+// `::Stream` iterates ONLY while it has ≥1 Frame::Ptr subscriber (see
+// Stream/Stream.h loop()), so a buffer tap alone would never see a frame. This
+// no-op subscriber holds the loop open (and parks it when the last tap detaches
+// — the same on-demand contract as the raw pipe's real subscriber); its push()
+// ignores the already-unpacked Frame — the tap grabbed the packed bytes
+// upstream inside iterate().
+class StreamKeepAlive : public Subscriber<Frame::Ptr> {
+public:
+  explicit StreamKeepAlive(::Stream<Frame::Ptr> *producer)
+      : Subscriber<Frame::Ptr>(producer) {}
+
+protected:
+  void push(const Frame::Ptr &) override {}
+};
+
+// The packed producer: an `Arv::Stream::BufferTap` (not a Frame::Ptr Subscriber
+// — the packed bytes are gone by the time any Frame exists). Registers itself on
+// the stream's buffer-tap registry at construction and unregisters at
+// destruction; `onBuffer` runs on the CAPTURE thread synchronously inside
+// iterate(), copying the payload into the ring BEFORE the ArvBuffer is requeued
+// (extract-before-release at buffer level). It ALSO holds a `StreamKeepAlive` so
+// the capture loop actually runs on-demand.
+class Raw12pTap : public Arv::Stream::BufferTap {
+public:
+  Raw12pTap(Arv::Stream *stream, Pipe::FrameSink *sink, uint32_t maxRowBytes,
+            uint32_t maxRows, size_t maxBytes, Meter::ThreadMeter *meter)
+      : stream_(stream), sink_(sink), maxRowBytes_(maxRowBytes),
+        maxRows_(maxRows), maxBytes_(maxBytes), meter_(meter) {
+    if (stream_) {
+      stream_->addBufferTap(this);          // iterate() → onBuffer
+      keepAlive_ = std::make_unique<StreamKeepAlive>(stream_); // run the loop
+    }
+  }
+  ~Raw12pTap() {
+    if (stream_)
+      stream_->removeBufferTap(this); // stop onBuffer (blocks on in-flight copy)
+    keepAlive_.reset();               // then park the capture loop (unsubscribe)
+  }
+
+  void onBuffer(ArvBuffer *buffer, int64_t clockOffsetNs) override {
+    if (!buffer || !sink_)
+      return;
+    if (arv_buffer_get_status(buffer) != ARV_BUFFER_STATUS_SUCCESS) {
+      if (meter_)
+        meter_->drop();
+      return;
+    }
+    size_t payloadSize = 0;
+    const void *data = arv_buffer_get_data(buffer, &payloadSize);
+    if (!data || payloadSize == 0) {
+      if (meter_)
+        meter_->drop();
+      return;
+    }
+    const int64_t t = converterNowMs();
+    // Represent the verbatim payload as tight rows for the ring's row-by-row
+    // copy. Preserve the image row count when the payload divides evenly (the
+    // common case — every whole-byte format, and packed 12p on even widths);
+    // otherwise fall back to ONE contiguous blob (`rows==1`). Either way the
+    // copy is `rowBytes*rows == payloadSize` bytes, verbatim — the tap makes no
+    // assumption about the wire packing layout.
+    const uint32_t imgH = arv_buffer_get_image_height(buffer);
+    const uint32_t rows = (imgH > 0 && (payloadSize % imgH) == 0) ? imgH : 1u;
+    const uint32_t rowBytes = static_cast<uint32_t>(payloadSize / rows);
+    // Fixed-footprint guard: the packed payload must fit the advertised max
+    // (advertise in the PACKED representation — maxWidth ≥ rowBytes, maxHeight ≥
+    // rows, maxBytes ≥ payloadSize); a wire-format/resolution change ⇒
+    // re-advertise. offer() re-checks identically and would drop anyway.
+    if (rowBytes == 0 || rowBytes > maxRowBytes_ || rows > maxRows_ ||
+        payloadSize > maxBytes_) {
+      if (meter_)
+        meter_->drop();
+      return;
+    }
+    if (meter_) {
+      meter_->ingest("frame", t);
+      meter_->begin(t);
+    }
+    Pipe::FrameInfo info;
+    info.width = rowBytes;
+    info.height = rows;
+    info.channels = 1;
+    info.bytesPerElement = 1;   // a raw byte stream (the packing is opaque)
+    info.stride = rowBytes;     // tight — the payload is already contiguous
+    info.bytes = payloadSize;
+    ShmRing::FrameMeta meta;
+    meta.tCapture = static_cast<double>(t);
+    // Owner-applied calibrated device time — computed EXACTLY as Frame's ctor
+    // (raw device counter + the SAME clock offset iterate() passed to
+    // Frame::create), so raw12p and raw stamp identical times for one frame
+    // (trusted-time: applied once at the source, never restamped downstream).
+    meta.deviceTimestamp = static_cast<uint64_t>(
+        static_cast<int64_t>(arv_buffer_get_timestamp(buffer)) + clockOffsetNs);
+    meta.systemTimestamp = arv_buffer_get_system_timestamp(buffer);
+    sink_->offer(data, info, meta); // synchronous copy into the ring, pre-requeue
+    if (meter_) {
+      const int64_t done = converterNowMs(); // one clock read, not two
+      meter_->end(done);
+      meter_->emit("shm", done);
+    }
+  }
+
+private:
+  Arv::Stream *const stream_; // the tap registry we (un)register on
+  Pipe::FrameSink *const sink_;
+  const uint32_t maxRowBytes_, maxRows_;
+  const size_t maxBytes_;
+  Meter::ThreadMeter *const meter_; // owned by the binding; single writer here
+  std::unique_ptr<StreamKeepAlive> keepAlive_; // holds the capture loop open
+};
+
+struct Raw12pBinding {
+  Arv::Stream::Ptr source;        // keeps the camera stream alive for the pipe
+  const std::string sourceId;     // "camera/<serial>" (topology input edge)
+  const std::string sensorFormat; // wire format string (pipe pixelFormat)
+  const std::string dtype;        // container dtype (U8 — a packed byte stream)
+  Pipe::FrameSink *const sink = nullptr;
+  const uint32_t maxRowBytes = 0; // packed representation (see the tap guard)
+  const uint32_t maxRows = 0;
+  const size_t maxBytes = 0;
+  Meter::ThreadMeter meter;               // persists across gate toggles
+  std::unique_ptr<Raw12pTap> tap; // gated lifetime (declared LAST → dtor FIRST)
+
+  Raw12pBinding(const std::string &name, Arv::Stream::Ptr source,
+                std::string sourceId, std::string sensorFormat,
+                std::string dtype, Pipe::FrameSink *sink, uint32_t maxRowBytes,
+                uint32_t maxRows, size_t maxBytes)
+      : source(std::move(source)), sourceId(std::move(sourceId)),
+        sensorFormat(std::move(sensorFormat)), dtype(std::move(dtype)),
+        sink(sink), maxRowBytes(maxRowBytes), maxRows(maxRows),
+        maxBytes(maxBytes),
+        meter(name, {"frame"}, {"shm"}, converterNowMs()) {}
+};
+
+static std::mutex g_mutex12;
+static std::map<std::string, std::unique_ptr<Raw12pBinding>> g_pipes12;
+
+// ---- attach: bind the camera source, gate the packed tap -------------------
+FN(attachRaw12pPipe) {
+  auto env = info.Env();
+  try {
+    auto camera = convert<Arv::Camera::Ptr>(info[0]);
+    JS_ASSERT(info[1].IsString(), TypeError,
+              "attachRaw12pPipe: pipeId (string) required", env.Undefined());
+    const auto pipeId = info[1].As<Napi::String>().Utf8Value();
+    auto &hub = Pipe::PipeHub::instance();
+    auto *sink = hub.sink(pipeId);
+    JS_ASSERT(sink != nullptr, Error,
+              "attachRaw12pPipe: unknown pipe " + pipeId, env.Undefined());
+    const auto &spec = hub.publisher(pipeId).spec();
+    // Advertise in the PACKED representation (maxWidth = max packed row bytes,
+    // maxHeight = row count, maxBytes = max payload). Fall back to nominal.
+    const uint32_t maxRowBytes = spec.maxWidth ? spec.maxWidth : spec.width;
+    const uint32_t maxRows = spec.maxHeight ? spec.maxHeight : spec.height;
+    const size_t maxBytes =
+        spec.maxBytes ? static_cast<size_t>(spec.maxBytes)
+                      : static_cast<size_t>(spec.bytesPerFrame);
+
+    auto source = Arv::Stream::get(camera); // shared camera stream (exclusivity)
+    std::string sourceId = "camera/?";
+    try {
+      sourceId = std::string("camera/") + camera->get_serial();
+    } catch (...) {
+    }
+    {
+      std::scoped_lock lock(g_mutex12);
+      g_pipes12[pipeId] = std::make_unique<Raw12pBinding>(
+          pipeId, std::move(source), std::move(sourceId), spec.pixelFormat,
+          spec.dtype, sink, maxRowBytes, maxRows, maxBytes);
+    }
+    // Register the gate OUTSIDE the lock: it fires immediately with the current
+    // consumer state (creating the tap if a consumer is already connected),
+    // which re-locks g_mutex12.
+    hub.setConsumerGate(pipeId, [pipeId](bool active) {
+      std::scoped_lock lock(g_mutex12);
+      auto it = g_pipes12.find(pipeId);
+      if (it == g_pipes12.end() || !it->second)
+        return;
+      auto &b = *it->second;
+      if (active && !b.tap)
+        b.tap = std::make_unique<Raw12pTap>(b.source.get(), b.sink,
+                                            b.maxRowBytes, b.maxRows, b.maxBytes,
+                                            &b.meter);
+      else if (!active && b.tap)
+        b.tap.reset(); // unregisters the tap from the stream
+    });
+    return Boolean::New(env, true);
+  }
+  JS_EXCEPT(env.Undefined())
+}
+
+// ---- detach: unregister the gate FIRST, then drop the binding --------------
+FN(detachRaw12pPipe) {
+  auto env = info.Env();
+  try {
+    const auto pipeId = info[0].As<Napi::String>().Utf8Value();
+    Pipe::PipeHub::instance().setConsumerGate(pipeId, nullptr);
+    std::unique_ptr<Raw12pBinding> removed; // destructed OUTSIDE the lock
+    {
+      std::scoped_lock lock(g_mutex12);
+      auto it = g_pipes12.find(pipeId);
+      if (it != g_pipes12.end()) {
+        removed = std::move(it->second);
+        g_pipes12.erase(it);
+      }
+    }
+    return Boolean::New(env, removed != nullptr);
+  }
+  JS_EXCEPT(env.Undefined())
+}
+
+// ---- per-pipeId packed producer meter snapshots -----------------------------
+FN(raw12pProbeAll) {
+  auto env = info.Env();
+  auto out = Napi::Object::New(env);
+  std::scoped_lock lock(g_mutex12);
+  for (const auto &[pipeId, b] : g_pipes12)
+    if (b)
+      out.Set(pipeId, meterSnapshotToJs(env, b->meter.probe(converterNowMs())));
+  return out;
+}
+
+// ---- Topology.report() rows: one row per packed pipe, kind "raw12p" ---------
+void appendRaw12pReports(Napi::Env env, Napi::Array &rows,
+                         std::set<std::string> &seen) {
+  std::scoped_lock lock(g_mutex12);
+  for (const auto &[pipeId, b] : g_pipes12) {
+    if (!b)
+      continue;
+    auto row = Topology::node(env, pipeId, "raw12p", "native");
     Topology::addInput(env, row, b->sourceId, "frame",
                        Topology::frameType(env, b->sensorFormat, b->dtype));
     if (!Topology::decoratePipe(env, row, pipeId))

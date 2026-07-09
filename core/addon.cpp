@@ -74,6 +74,11 @@ Napi::Value compositeProbeAll(const Napi::CallbackInfo &info);
 Napi::Value attachRawPipe(const Napi::CallbackInfo &info);
 Napi::Value detachRawPipe(const Napi::CallbackInfo &info);
 Napi::Value rawProbeAll(const Napi::CallbackInfo &info);
+// multi-fovea-recording ruling 1: PACKED raw-12p camera pipes (verbatim wire
+// payload via a pre-Frame ArvBuffer tap), defined in core/lib/Aravis/RawPipe.cpp.
+Napi::Value attachRaw12pPipe(const Napi::CallbackInfo &info);
+Napi::Value detachRaw12pPipe(const Napi::CallbackInfo &info);
+Napi::Value raw12pProbeAll(const Napi::CallbackInfo &info);
 }
 // unified-time-and-topology §6: consolidated NodeReport rows for every live
 // native brick + pipe. Defined in core/src/Topology.cpp.
@@ -218,6 +223,15 @@ static Object init(Env env, Object exports) {
                Function::New<Arv::detachRawPipe>(env, "detachRawPipe"));
     Aravis.Set("rawProbeAll",
                Function::New<Arv::rawProbeAll>(env, "rawProbeAll"));
+    // multi-fovea-recording ruling 1: PACKED raw-12p pipes — a pre-Frame
+    // ArvBuffer tap publishes the VERBATIM wire payload (packed 12p when the
+    // sensor runs 12p readout). Same consumer-gate/on-demand contract as raw.
+    Aravis.Set("attachRaw12pPipe",
+               Function::New<Arv::attachRaw12pPipe>(env, "attachRaw12pPipe"));
+    Aravis.Set("detachRaw12pPipe",
+               Function::New<Arv::detachRaw12pPipe>(env, "detachRaw12pPipe"));
+    Aravis.Set("raw12pProbeAll",
+               Function::New<Arv::raw12pProbeAll>(env, "raw12pProbeAll"));
     exports.Set("Aravis", Aravis);
     // Controller Module
     auto Controller = Object::New(env);

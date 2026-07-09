@@ -652,4 +652,29 @@ declare module "core/Aravis" {
    * Present while attached (even parked → zero counts).
    */
   export function rawProbeAll(): Record<string, ProbeSnapshot>;
+
+  /**
+   * multi-fovea-recording ruling 1: subscribe a gated PACKED raw-12p producer to
+   * the camera's `Arv::Stream`. Unlike `attachRawPipe` (which publishes the
+   * UNPACKED 16-bit `frame->raw`), this taps the ArvBuffer BEFORE Frame
+   * construction and publishes the VERBATIM wire payload — packed Bayer-12p when
+   * the sensor runs 12p readout, otherwise whatever whole-byte format is
+   * negotiated. FORMAT-AGNOSTIC (no packing assumption). Advertise the pipe in
+   * the PACKED representation: `bytesPerFrame` = the actual payload size, `stride`
+   * = packed bytes per row (12p even width = width*3/2), `maxWidth`/`maxHeight`/
+   * `maxBytes` sized to the packed footprint, `channels` = 1, `dtype` = "U8".
+   * ON-DEMAND: parks with no consumer (zero capture-thread cost). Throws for an
+   * unknown pipe id.
+   */
+  export function attachRaw12pPipe(camera: unknown, pipeId: string): boolean;
+
+  /** Detach the packed raw-12p producer. Idempotent (false if unknown). */
+  export function detachRaw12pPipe(pipeId: string): boolean;
+
+  /**
+   * Out-of-loop probe of every attached raw-12p pipe → `{ [pipeId]: ProbeSnapshot }`
+   * ({frame} input / {shm} output). Keys AND meter names are the node ids;
+   * present while attached (even parked → zero counts).
+   */
+  export function raw12pProbeAll(): Record<string, ProbeSnapshot>;
 }

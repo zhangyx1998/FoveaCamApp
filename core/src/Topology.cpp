@@ -84,6 +84,7 @@ Value report(const CallbackInfo &info) {
     Arv::appendHeatmapReports(env, rows, seen);
     Arv::appendCompositeReports(env, rows, seen);
     Arv::appendRawReports(env, rows, seen);
+    Arv::appendRaw12pReports(env, rows, seen);
     auto &hub = Pipe::PipeHub::instance();
     auto probes = hub.probeAll(); // publisher (offer-side) meters, keyed by id
     for (const auto &entry : hub.list()) {
