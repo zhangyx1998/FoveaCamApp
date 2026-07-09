@@ -168,21 +168,6 @@ export function deriveTopology(
       continue;
     }
 
-    // Legacy JS view-tap loop (dies with C's step-3) — parent it to its camera.
-    const registry = /^registry:(.+)$/.exec(row.name);
-    if (registry) {
-      const cam = cameraNode(registry[1]);
-      const node = ensure({
-        id: `camera/${registry[1]}/view-loop`,
-        kind: "view",
-        output: null,
-        transport: "sink",
-      });
-      node.stats = stats;
-      edges.push({ from: cam.id, to: node.id, port: "in", type: cam.output! });
-      continue;
-    }
-
     // Known standalone families — path-ified id, kind from the name's root.
     // `controller:<port>` / `recorder:<name>` / `viewer:<file>` → sinks;
     // anything else → a generic metered node. (The legacy `tracking:kcf`

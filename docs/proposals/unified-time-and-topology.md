@@ -183,8 +183,9 @@ calibration(clock): { offsetNs, skew, jitterNs, at } | null
 `orchestrator/mirror-history.ts`: fixed-size ring (e.g. 4096 samples ≈ 4 s at
 1 kHz) of `{ hostNs, left: Pos, right: Pos }`.
 
-- Writers: the actuation loop records `predictVolts` output at every SENT
-  stream update; `actuate()` records its readback; FIN outcomes record the
+- Writers: the controller node (`controller-node.ts` — successor of the
+  actuation loop) records `predictVolts` output at every SENT
+  stream update; its v1 awaited `actuate()` path records the readback; FIN outcomes record the
   exposure-averaged voltage (ground truth for triggered frames — prefer it
   when present, Stage-F).
 - Reader: `mirrorAt(hostNs)` → linear interpolation between neighbors +

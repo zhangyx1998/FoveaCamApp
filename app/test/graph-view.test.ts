@@ -133,14 +133,6 @@ describe("deriveTopology — Stage 1", () => {
     expect(legacy.nodes.find((n) => n.id === "tracking/kcf")!.kind).toBe("tracking");
   });
 
-  it("parents the legacy registry view-loop under its camera", () => {
-    const t = deriveTopology([row("registry:123", { utilization: 0.99 })], PIPES, 1, 0);
-    const loop = t.nodes.find((n) => n.id === "camera/123/view-loop")!;
-    expect(loop.stats?.saturated).toBe(true);
-    expect(t.edges).toContainEqual(
-      expect.objectContaining({ from: "camera/123", to: "camera/123/view-loop" }),
-    );
-  });
 });
 
 describe("membershipKey / toElements — layout stability", () => {

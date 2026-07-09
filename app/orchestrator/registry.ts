@@ -9,8 +9,8 @@
 // (future) control loops lease the same handle through `acquire(serial)`, so they
 // never open the same camera twice or fight over its pixel format/config.
 //
-// Each shared camera advertises one native `camera:<serial>` SHM pipe (B's
-// CaptureSink producer, C's pipe broker) — so N windows viewing one camera cost
+// Each shared camera advertises one native `camera:<serial>` SHM pipe (the
+// native converter producer, C's pipe broker) — so N windows viewing one camera cost
 // one acquisition and one native producer, delivering the shared-stream half of
 // the multi-window/projector goal (§2 secondary). No camera frames touch the JS
 // event loop: C-22b step 3 retired the in-process view-tap loop (`onView` +
@@ -24,8 +24,9 @@ import { applyStoredConfig, cameraConfigPath, listCameraInfo } from "./camera.js
 import { timeSpan } from "./diagnostics.js";
 import { read } from "./store-hub.js";
 
-// WS1 real-1c: the SHM PREVIEW write moved OFF this JS loop onto B's native
-// `Arv::CaptureSink` thread (via `Aravis.attachCameraPipe`), published through
+// WS1 real-1c: the SHM PREVIEW write moved OFF this JS loop onto the native
+// per-camera converter thread (`ConverterStream`, via `Aravis.attachCameraPipe`
+// — the CaptureSink it replaced is deleted), published through
 // C's `camera:<serial>` pipe. The orchestrator index injects the pipe broker's
 // advertise/unadvertise + the native attach/detach here so the registry can
 // (un)advertise a pipe per shared camera. Injected (not imported) so this

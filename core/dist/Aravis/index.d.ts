@@ -199,6 +199,18 @@ declare module "core/Aravis" {
    */
   export function converterProbeAll(): Record<string, ProbeSnapshot>;
 
+  /**
+   * Attach the CONVERT brick: builds a per-camera converter thread targeting
+   * the pipe's advertised pixelFormat and gates the SHM subscriber on the
+   * pipe's consumer refcount (parks when no demand). The pipe must be
+   * advertised first; `pipeId` is the graph node id (`camera/<serial>/convert`).
+   * Throws on an unknown pipe.
+   */
+  export function attachCameraPipe(camera: Camera, pipeId: string): boolean;
+
+  /** Detach + join the convert producer. Idempotent (false if unknown). */
+  export function detachCameraPipe(pipeId: string): boolean;
+
   /** One clock-calibration result (unified-time): `hostNs = rawDeviceNs +
    *  offsetNs`, everything in the `steadyNowNs` domain. `jitterNs` =
    *  p90 − min over the candidate offsets (the min-filter's confidence). */

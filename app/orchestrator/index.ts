@@ -121,20 +121,17 @@ const pipeBroker = pipeSession({
   materializers: { fovea: foveaMaterializer },
 });
 hub.add(pipeBroker.session);
-const aravisPipe = Aravis as unknown as {
-  attachCameraPipe(camera: unknown, pipeId: string): void;
-  detachCameraPipe(pipeId: string): void;
-};
 setRegistryPipeSeam({
   advertise: pipeBroker.advertise,
   unadvertise: pipeBroker.unadvertise,
-  attach: (camera, pipeId) => aravisPipe.attachCameraPipe(camera, pipeId),
-  detach: (pipeId) => aravisPipe.detachCameraPipe(pipeId),
+  attach: (camera, pipeId) => void Aravis.attachCameraPipe(camera, pipeId),
+  detach: (pipeId) => void Aravis.detachCameraPipe(pipeId),
 });
 // real-1g (C-23/B-23): the SESSION-advertised `undistort:<serial>` pipes —
 // B's native remap producer (camera → convert → precomputed-map remap →
 // FrameSink), attached with the plain persisted calibration record; B rebuilds
-// the maps natively. Same cast rationale as `aravisPipe` above.
+// the maps natively. The seam types camera/cal as `unknown` (so it unit-tests
+// without the native core) — this local cast bridges to the typed NAPI surface.
 const aravisUndistort = Aravis as unknown as {
   attachUndistortPipe(camera: unknown, pipeId: string, cal: unknown): void;
   detachUndistortPipe(pipeId: string): void;
