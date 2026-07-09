@@ -4,10 +4,10 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Typed boundary for the manual-control session. Same substrate as
-// tracking-single (calibrated L/C/R triple + actuation loop, both
-// frame/timer-driven off the renderer's UI loop) minus the KCF tracker state
-// machine — the target here is always whatever the renderer last steered to,
+// Typed boundary for the manual-control session: a calibrated L/C/R triple
+// steering the controller node, driven off the renderer's UI loop with no
+// tracker state machine — the target here is always whatever the renderer
+// last steered to,
 // either a mouse-drag pixel or a locally-held "set-point" (pure client-side
 // data, no camera access — see `steer`'s tagged union). Also owns capture
 // (stack/wrap/diff raw frames server-side, preview to the renderer, save on

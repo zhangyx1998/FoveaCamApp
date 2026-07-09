@@ -202,6 +202,33 @@ names the mechanism it gates.
   tracker releases (watch for brick-leak warnings in the orchestrator log);
   reopening the app immediately works (no reopen race).
 
+## Controller node + FIFO edges (2026-07-08 wave close, through c3132f5)
+
+- [ ] **FIFO backpressure live** — under real camera load the undistort
+  node's input edge shows `queue hwm/cap` in the graph hover (no drop rate);
+  zero undistort drops while the converter's camera edge absorbs overload;
+  the edge warn marker fires only if hwm actually reaches capacity.
+- [ ] **Controller node live** — connect the controller: the `controller`
+  graph node folds the `controller:<port>` packets/sec meter; each active
+  app draws its position edge (pid → controller for disparity; detect →
+  controller for calibrate-distortion); edges retire on app close.
+- [ ] **Push-model actuation parity** — disparity volt telemetry now rides
+  the kernel result rate (verify the readout feels live); calibrate-
+  distortion mirror-following at detection rate (gate dedupe means wire
+  traffic equal or lower than the old 1 ms loop); marker servo + manual-
+  control unchanged in feel.
+- [ ] **Trigger-mode pairing e2e** — v2 firmware + L/R trigger cabling:
+  `startTriggerCapture` round-robins CMD_FRAME over registered position
+  streams; `onPair` emits L/R descriptor pairs matched by tExposure within
+  tolerance (bench default 8 ms — TUNE on hardware to half the min frame
+  interval); unmatched FINs age out of the ring without wedging.
+- [ ] **Cmd/Ctrl-W** — closes each window class with the expected rules
+  (app close respawns welcome; profiler/projection just close).
+- [ ] **Launcher regroup** — welcome shows Applications / Calibration /
+  Utilities; calibration titles read Intrinsic / Extrinsic / Distortion /
+  Drift; tracking-single is gone everywhere (menu, Apps menu, restore of an
+  old layout referencing it degrades silently).
+
 ## Blocked (hardware change required)
 
 - [ ] **Center-camera hardware trigger** — needs the slimmer CAM0 cable

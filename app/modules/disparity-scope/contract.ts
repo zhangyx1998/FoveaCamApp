@@ -19,7 +19,8 @@ import {
 } from "@lib/orchestrator/pid-override-contract";
 
 /** The disparity-scope PID node's value type — per-eye mirror volts (the
- *  actuation loop's `{ l, r }` command). The override slot pins THIS. */
+ *  `{ l, r }` command pushed to the controller node). The override slot pins
+ *  THIS. */
 export type VergenceVolts = { l: Point2d; r: Point2d };
 
 const ZERO: Point2d = { x: 0, y: 0 };

@@ -11,8 +11,9 @@
 // orchestrator keeps a small ring of {hostNs, left, right} and answers
 // `mirrorAt(hostNs)` with linear interpolation between the two neighbors.
 //
-// Writers (see actuation.ts): every SENT stream update records its
-// `predictVolts` result; awaited `actuate()` records the readback. Honesty
+// Writers (see controller-node.ts — the ONE trajectory place): every SENT
+// position update records its `predictVolts` result; the v1 awaited
+// `actuate()` path records the readback. Honesty
 // note (proposal §4): these are COMMANDS — the physical mirror follows with
 // LPF group delay (~1.3 ms at the 120 Hz LPF) + settle; triggered captures
 // should prefer the FIN exposure-averaged voltage when present (P4).
@@ -132,5 +133,6 @@ export class MirrorHistory {
 }
 
 /** THE orchestrator-wide history (single controller ⇒ single trajectory).
- *  Written by the actuation loop; read by the fovea/undistort homography. */
+ *  Written by the controller node's update path; read by the fovea/undistort
+ *  homography. */
 export const mirrorHistory = new MirrorHistory();

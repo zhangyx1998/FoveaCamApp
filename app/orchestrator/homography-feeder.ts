@@ -13,7 +13,7 @@
 // between neighbors tracks the ~1 kHz actuation trajectory) that:
 //
 //   1. reads the NEWEST mirror sample from the orchestrator-wide
-//      `mirrorHistory` (written by the actuation loop),
+//      `mirrorHistory` (written by the controller node's update path),
 //   2. derives H for its side via the injected `computeH` seam,
 //   3. pushes it via `Aravis.pushHomography(pipeId, hostNs, h9)` with
 //      hostNs = the SAMPLE's time (not push time) — the brick matches frames
