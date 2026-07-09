@@ -38,6 +38,9 @@ import {
 } from "@orchestrator/marker-calibration";
 import { read, write } from "@orchestrator/store-hub";
 import { activeController } from "@orchestrator/controller";
+import type { PipeBroker } from "@orchestrator/pipe-session";
+import { createRawRecording } from "@orchestrator/raw-recording";
+import type { RawPipeRegistry } from "@orchestrator/raw-pipe";
 import { getCameraKey } from "@lib/camera-config";
 import { type Undistort } from "core/Vision";
 import type { Point2d } from "core/Geometry";
@@ -61,10 +64,32 @@ function createDataSet(records: ExtrinsicRecord[], key: "L" | "R"): ExtrinsicDat
   }));
 }
 
-export default function calibrateExtrinsicSession(): ServerSession<typeof calibrateExtrinsic> {
+export default function calibrateExtrinsicSession(
+  broker: PipeBroker,
+  rawPipes: RawPipeRegistry,
+): ServerSession<typeof calibrateExtrinsic> {
   return defineResourceSession("calibrate-extrinsic", calibrateExtrinsic, (s) => {
     let leases: Record<Role, CameraLease> | null = null;
     let undistort: Undistort | null = null;
+
+    // Recording (capture-recorder-everywhere ruling 2): the raw L/C/R sensor
+    // streams (advert-verbatim, the OBVIOUS default set) via the shared facility.
+    const recording = createRawRecording({
+      id: "recorder/calibrate-extrinsic",
+      broker,
+      rawPipes,
+      streams: () =>
+        leases
+          ? {
+              "left-fovea": leases.L.camera,
+              center: leases.C.camera,
+              "right-fovea": leases.R.camera,
+            }
+          : null,
+      finished: (foveaPath) =>
+        process.parentPort?.postMessage({ type: "recording:finished", path: foveaPath }),
+      telemetry: (patch) => s.telemetry(patch),
+    });
     let trackers: Record<Role, MarkerTracker> | null = null;
     let servo: Servo | null = null;
     let previewInput: PositionInput | null = null;
@@ -167,6 +192,7 @@ export default function calibrateExtrinsicSession(): ServerSession<typeof calibr
       }
       leases = matched;
       undistort = u;
+      scope.defer(async () => void (await recording.stop())); // finalize before leases release (LIFO)
       scope.defer(() => {
         releaseLeases(leases);
         leases = null;
@@ -294,11 +320,21 @@ export default function calibrateExtrinsicSession(): ServerSession<typeof calibr
           await write(["calibrate-extrinsic", getCameraKey(leases.R.camera)], createDataSet(records, "R"));
           s.telemetry({ saved: true });
         },
+        async startRecording({ path }) {
+          return recording.start(path);
+        },
+        async stopRecording() {
+          await recording.stop();
+        },
       },
       watch: {
         step(step) {
           enterStep(step);
         },
+      },
+      busy() {
+        if (recording.active) return "recording in progress";
+        return null;
       },
     };
   });

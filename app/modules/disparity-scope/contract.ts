@@ -12,7 +12,7 @@
 
 import { cmd, defineContract } from "@lib/orchestrator/protocol";
 import type { Point2d, Rect } from "core/Geometry";
-import type { Stat } from "@lib/orchestrator/contracts";
+import { recordingCommands, recordingTelemetry, type Stat } from "@lib/orchestrator/contracts";
 import {
   pidOverrideCmd,
   pidOverrideState,
@@ -159,6 +159,9 @@ export const disparity = defineContract({
     // Control-path latency (perf substrate, docs/history/refactor/orchestrator.md
     // §7.3 item 2), same shape/throttle as manual-control.
     perf: { actuateMs: { mean: 0, max: 0 } as Stat },
+    // Recording (capture-recorder-everywhere ruling 2): the shared mixin shape
+    // the renderer's `Recording` facade + title-bar RecordButton read.
+    ...recordingTelemetry(),
   },
   // Only the per-side correlation HEATMAPS remain session frames (split-
   // disparity-nodes, 2026-07-09): the sliced center view and the guide strip
@@ -189,6 +192,9 @@ export const disparity = defineContract({
      *  TRACKER override via `pointer` instead (PID keeps running, no pinning);
      *  this command remains the module-agnostic volts proxy (`usePidOverride`). */
     pidOverride: pidOverrideCmd<VergenceVolts>(),
+    // Recording (capture-recorder-everywhere ruling 2): records the app's raw
+    // L/C/R sensor streams (advert-verbatim; the OBVIOUS default set).
+    ...recordingCommands(),
   },
 });
 

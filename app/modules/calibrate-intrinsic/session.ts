@@ -48,6 +48,8 @@ import {
 import { createVisionWorker, type VisionWorkerHandle } from "@orchestrator/vision-worker-host";
 import { nodeId } from "@lib/orchestrator/graph-contract";
 import type { PipeBroker } from "@orchestrator/pipe-session";
+import { createRawRecording } from "@orchestrator/raw-recording";
+import type { RawPipeRegistry } from "@orchestrator/raw-pipe";
 import type { PipeInput, VisionResult } from "@orchestrator/vision-worker-protocol";
 import type { CheckerValues } from "./vision";
 import { makeMat } from "@lib/mat";
@@ -89,7 +91,10 @@ function checkerObjPoints(pattern: { width: number; height: number }): Point3d[]
   return out;
 }
 
-export default function calibrateIntrinsicSession(broker: PipeBroker): ServerSession<typeof calibrateIntrinsic> {
+export default function calibrateIntrinsicSession(
+  broker: PipeBroker,
+  rawPipes: RawPipeRegistry,
+): ServerSession<typeof calibrateIntrinsic> {
   return defineSession("calibrate-intrinsic", calibrateIntrinsic, (s) => {
     const known = new Map<string, CameraInfo>();
     // `ServerSession.telemetry()` is publish-only (no getter) — keep our own
@@ -99,6 +104,19 @@ export default function calibrateIntrinsicSession(broker: PipeBroker): ServerSes
     let activeInfo: CameraInfo | null = null;
     let activeLease: CameraLease | null = null;
     let previewDisposer: (() => void) | null = null;
+
+    // Recording (capture-recorder-everywhere ruling 2): the DEGENERATE single-
+    // stream case — record the selected camera's raw full-depth sensor stream
+    // (advert-verbatim) via the shared facility, same UI, one resource.
+    const recording = createRawRecording({
+      id: "recorder/calibrate-intrinsic",
+      broker,
+      rawPipes,
+      streams: () => (activeLease ? { camera: activeLease.camera } : null),
+      finished: (foveaPath) =>
+        process.parentPort?.postMessage({ type: "recording:finished", path: foveaPath }),
+      telemetry: (patch) => s.telemetry(patch),
+    });
     let width = 0;
     let height = 0;
     let records: Record_[] = [];
@@ -339,6 +357,9 @@ export default function calibrateIntrinsicSession(broker: PipeBroker): ServerSes
     }
 
     async function deselect(): Promise<void> {
+      // Finalize an in-flight recording before the lease releases (the recorder
+      // drains + releases its raw pipe while the camera is still leased).
+      await recording.stop();
       previewDisposer?.();
       previewDisposer = null;
       stopRateTimer();
@@ -444,6 +465,12 @@ export default function calibrateIntrinsicSession(broker: PipeBroker): ServerSes
         removeRecord,
         calibrateNow,
         resetCalibration,
+        async startRecording({ path }) {
+          return recording.start(path);
+        },
+        async stopRecording() {
+          await recording.stop();
+        },
       },
       watch: {
         method: restartDetection,
@@ -453,6 +480,10 @@ export default function calibrateIntrinsicSession(broker: PipeBroker): ServerSes
       },
       idle() {
         void deselect();
+      },
+      busy() {
+        if (recording.active) return "recording in progress";
+        return null;
       },
     };
   });

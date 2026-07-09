@@ -14,6 +14,7 @@
 
 import { cmd, defineContract } from "@lib/orchestrator/protocol";
 import type { Point2d } from "core/Geometry";
+import { recordingCommands, recordingTelemetry } from "@lib/orchestrator/contracts";
 
 export type DetectionView = { points: Point2d[] } | null;
 /** Live homography-warped preview + the marker footprint it targeted —
@@ -33,6 +34,8 @@ export const calibrateDistortion = defineContract({
     ready: false as boolean,
     detection: { L: null, C: null, R: null } as Record<"L" | "C" | "R", DetectionView>,
     projection: { L: null, R: null } as Record<"L" | "R", ProjectionView>,
+    // Recording (capture-recorder-everywhere ruling 2).
+    ...recordingTelemetry(),
   },
   // C-2c: raw fovea previews (L/C/R) ride the native `camera:<serial>` convert
   // pipe via `usePipeFrame`; only the worker-derived homography overlays remain
@@ -40,6 +43,8 @@ export const calibrateDistortion = defineContract({
   frames: ["proj_L", "proj_R"] as const,
   commands: {
     setTargetId: cmd<{ role: "L" | "C" | "R"; id: number }>(),
+    // Recording (capture-recorder-everywhere ruling 2): the raw L/C/R streams.
+    ...recordingCommands(),
   },
 });
 

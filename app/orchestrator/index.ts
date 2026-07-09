@@ -34,7 +34,6 @@ import { systemSession } from "./sessions/system.js";
 import { controllerSession } from "./sessions/controller.js";
 import { activeController, setActiveController } from "./controller.js";
 import { controllerNode } from "./controller-node.js";
-import { viewerSession } from "./sessions/viewer.js";
 import liveViewSession from "@modules/single-capture/session";
 import manageCamerasSession from "@modules/manage-cameras/session";
 import manualControlSession from "@modules/manual-control/session";
@@ -367,24 +366,26 @@ const disparityScope = hub.add(
     stereoSeam,
     heatmapSeam,
     compositeSeam,
+    rawPipes,
   ),
 );
 
 // --- calibrate-intrinsic: per-camera checkerboard/marker calibration (§7.1 S1b)
-const calibrateIntrinsic = hub.add(calibrateIntrinsicSession(asBroker(Pipe)));
+const calibrateIntrinsic = hub.add(calibrateIntrinsicSession(asBroker(Pipe), rawPipes));
 
 // --- calibrate-drift: per-fovea drift measurement (§7.1 S1b) --------------
-const calibrateDrift = hub.add(calibrateDriftSession());
+const calibrateDrift = hub.add(calibrateDriftSession(asBroker(Pipe), rawPipes));
 
 // --- calibrate-distortion: projector-alignment/homography check (§7.1 S1b)
-const calibrateDistortion = hub.add(calibrateDistortionSession(asBroker(Pipe)));
+const calibrateDistortion = hub.add(calibrateDistortionSession(asBroker(Pipe), rawPipes));
 
 // --- calibrate-extrinsic: extrinsic calibration wizard (§7.1 S1b) --------
-const calibrateExtrinsic = hub.add(calibrateExtrinsicSession());
+const calibrateExtrinsic = hub.add(calibrateExtrinsicSession(asBroker(Pipe), rawPipes));
 
-// --- viewer: .fovea container playback (C-8) — no camera/serial, so NOT in
-// the camera-owning drain set below (viewer windows survive app switches).
-hub.add(viewerSession());
+// The former `viewer` session (C-8) is RETIRED (standalone-viewer-and-fcap
+// ruling 1): container playback now lives entirely inside the viewer window
+// (src/viewer/worker.ts via preload-viewer) and never touches this process —
+// playback survives orchestrator restarts by construction.
 
 // Camera-owning sessions — the force-idle set shared by `system.releaseCameras`
 // (§12.3 R4) and the multi-window drain path below.

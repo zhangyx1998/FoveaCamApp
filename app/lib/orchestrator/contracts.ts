@@ -10,7 +10,7 @@
 // module and re-export) so both ends stay in lock-step.
 
 import { cmd, defineContract } from "./protocol.js";
-import type { FrameTopicStats } from "./protocol.js";
+import type { Command, FrameTopicStats } from "./protocol.js";
 import type { GraphTopology } from "./graph-contract.js";
 import type { Pos } from "../controller-codec.js";
 
@@ -24,6 +24,53 @@ export type CameraInfo = {
 /** Rolling mean/max pair, the shape every perf-substrate stat publishes as
  *  (docs/history/refactor/orchestrator.md §7.3). */
 export type Stat = { mean: number; max: number };
+
+// --- recording mixin (capture-recorder-everywhere ruling 2) ----------------
+// Every app gets recording: this additive helper produces the
+// `startRecording`/`stopRecording`/`recordingStats` telemetry+command shape the
+// renderer's `Recording` facade (`@src/record`) + the title-bar RecordButton
+// already read (manual-control / multi-fovea established it inline). Spread the
+// two helpers into a contract's `telemetry` / `commands` so a new app opts in
+// with one line each instead of re-declaring the shape.
+
+/** One recorded stream's live UI counters — the value type of
+ *  `recordingStreams`. `published = frames + dropped` (pinned invariant); the F2
+ *  drop split (5c7c9d4) rides `droppedQueue + droppedRing == dropped`, optional
+ *  so a contract predating it still assigns cleanly (RecordButton reads `?? 0`). */
+export type RecordingStreamInfo = {
+  frames: number;
+  dropped: number;
+  droppedQueue?: number;
+  droppedRing?: number;
+  fps: number;
+  bytes: number;
+};
+
+/** Telemetry fields a recording-capable app publishes. Spread into a contract's
+ *  `telemetry`: `telemetry: { ...recordingTelemetry(), ...myFields }`. */
+export function recordingTelemetry(): {
+  recording_active: boolean;
+  recordingStreams: Record<string, RecordingStreamInfo>;
+} {
+  return {
+    recording_active: false as boolean,
+    recordingStreams: {} as Record<string, RecordingStreamInfo>,
+  };
+}
+
+/** Commands a recording-capable app exposes. Spread into a contract's
+ *  `commands`: `commands: { ...recordingCommands(), ...myCommands }`. */
+export function recordingCommands(): {
+  startRecording: Command<{ path: string }, boolean>;
+  stopRecording: Command<void, void>;
+} {
+  return {
+    /** Start writing the app's default recordable streams to disk at `path`. */
+    startRecording: cmd<{ path: string }, boolean>(),
+    /** Stop the active recording (finalize → auto-open viewer). */
+    stopRecording: cmd(),
+  };
+}
 
 /** A structured timing measurement (§7.1 S5) — boot phases, per-activation
  *  camera/calibration work, controller connect. Mirrors
@@ -166,7 +213,7 @@ export const controller = defineContract({
 
 export type ControllerContract = typeof controller;
 
-// The `viewer` session contract (Stage 5 A-11/C-8 pinned contract) lives in
-// `./viewer-contract.ts` — its own file so the two concurrent threads (C-8
-// session, A-11 window) never edit the same file; both import that single
-// definition, so the compiler enforces the pin.
+// The former `viewer` session contract (`./viewer-contract.ts`) is RETIRED
+// (standalone-viewer-and-fcap ruling 1): the viewer window no longer talks to
+// the orchestrator at all — playback lives in the window's own worker
+// (`src/viewer/worker.ts`, protocol in `src/viewer/protocol.ts`).

@@ -34,6 +34,7 @@ import {
 // Core-free display math (NOT ./vergence — that module runtime-imports
 // core/Vision, which the renderer must never pull).
 import { foveaFootprintOnWide } from "./display-geometry";
+import Recording from "@src/record";
 import StreamView from "@src/components/StreamView.vue";
 import PosView from "@src/components/PosView.vue";
 import InlineSelect from "@src/components/InlineSelect.vue";
@@ -43,6 +44,11 @@ import RangeSlider from "@src/inputs/range-slider.vue";
 const app_config = await useAppConfig();
 const session = useSession(disparity, "disparity-scope");
 const { state, telemetry } = session;
+// Recording context (capture-recorder-everywhere ruling 2): registers this
+// window's title-bar RecordButton (AppWindow) + its Cmd/Ctrl-R trigger against
+// the session's startRecording/stopRecording — the shared manual-control facade,
+// reused not forked. Per-window singleton; disposed on unmount by the facade.
+new Recording(session, "disparity-scope");
 
 onMounted(() => {
   if (app_config.baseline_distance_mm) state.baseline = app_config.baseline_distance_mm;

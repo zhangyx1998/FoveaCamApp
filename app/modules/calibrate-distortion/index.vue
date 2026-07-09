@@ -21,6 +21,7 @@ import { formatNumber, type FormatNumberOptions } from "@lib/util";
 import { createMat } from "@lib/mat";
 import type { Point2d } from "core/Geometry";
 import { calibrateDistortion } from "./contract";
+import Recording from "@src/record";
 import StreamView from "@src/components/StreamView.vue";
 import ConfigEntry from "@src/components/ConfigEntry.vue";
 import MarkerTargetInputs from "@src/components/MarkerTargetInputs.vue";
@@ -32,6 +33,8 @@ const app_config = await useAppConfig();
 const session = useSession(calibrateDistortion, "calibrate-distortion");
 const ctrl = useController();
 const { state, telemetry } = session;
+// Recording context (capture-recorder-everywhere ruling 2).
+new Recording(session, "calibrate-distortion");
 
 // C-2c: raw fovea previews (L/C/R) all ride their native camera:<serial>
 // convert pipe directly (off the JS view-tap relay loop); only the

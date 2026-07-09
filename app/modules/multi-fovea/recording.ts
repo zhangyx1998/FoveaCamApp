@@ -41,17 +41,22 @@
 // Injection-seamed like manual-control's controller: no native imports, the
 // recorder node factory is injectable, so vitest drives the whole thing with
 // fakes.
+//
+// capture-recorder-everywhere ruling 1: the start/stop/poll/telemetry/error-
+// unwind skeleton lifted into the composable `@orchestrator/recording-service`
+// facility — this file keeps ONLY multi-fovea's semantics (raw12p streams,
+// optional /zlib compression routing, descriptor channels, extras/dts maps).
+// Observable behavior is unchanged (see multi-fovea-recording.test.ts).
 
-import { mkdirSync } from "node:fs";
 import type { Rect } from "core/Geometry";
 import {
-  createRecorderNode,
   type RecorderConnect,
   type RecorderNodeHandle,
   type RecorderNodeOptions,
   type RecorderStreamStats,
   type FoveaDescriptor,
 } from "@orchestrator/recorder-node";
+import { createRecordingService } from "@orchestrator/recording-service";
 import {
   raw12pPipeSpec,
   type RawPipeRegistry,
@@ -188,12 +193,6 @@ export function anchorExtras(
 export function createMultiFoveaRecording(
   deps: MultiFoveaRecordingDeps,
 ): MultiFoveaRecordingController {
-  let active = false;
-  let node: RecorderNodeHandle | null = null;
-  let acquisitions: RawPipeAcquisition[] = [];
-  let compressed: CompressHandle[] = [];
-  let pollTimer: ReturnType<typeof setInterval> | null = null;
-
   // --- dts→seq + dts→anchor state (see header) ------------------------------
   const seqByDts: Record<"left" | "right", Map<bigint, number>> = {
     left: new Map(),
@@ -255,13 +254,10 @@ export function createMultiFoveaRecording(
     return anchorExtras(payload, stream === "left" ? "L" : "R");
   }
 
-  function publishStreams(): void {
-    deps.telemetry({ recordingStreams: node?.stats() ?? {} });
-  }
-
   /** Diff the live channel set against the enabled targets (ruling 3 churn).
    *  Only meaningful with a live node; the snapshot persists for `start`. */
   function syncChannels(): void {
+    const node = service.node;
     if (!node) return;
     const want = new Set(
       targetSnapshot.filter((t) => t.enabled).map((t) => `fovea/${t.index}`),
@@ -278,18 +274,22 @@ export function createMultiFoveaRecording(
       }
   }
 
-  return {
-    get active() {
-      return active;
-    },
-
-    async start(path: string): Promise<boolean> {
-      if (active) return false;
-      path = path.trim();
-      if (path === "") return false;
-      const cams = deps.cameras();
-      if (!cams) return false;
-      mkdirSync(path, { recursive: true });
+  // Thin config over the shared facility (capture-recorder-everywhere ruling 1):
+  // the raw12p streams + optional /zlib compression routing + the descriptor
+  // `onFrame`. The facility owns start/stop/poll/telemetry + the acquire-then-
+  // build error unwind (compress bricks retired, raw acquisitions released in
+  // reverse — symmetric with the documented discipline).
+  const service = createRecordingService({
+    id: "recorder/multi-fovea",
+    createNode: deps.createNode,
+    ready: () => deps.cameras() !== null,
+    telemetry: deps.telemetry,
+    finished: deps.finished,
+    // Channels for targets already armed at start (ruling 3).
+    onStarted: () => syncChannels(),
+    onStopped: () => clearMaps(),
+    acquire() {
+      const cams = deps.cameras()!; // `ready()` guaranteed non-null
 
       // Refcounted raw12p acquire (rulings 1/5): the PACKED verbatim wire
       // payload per camera, deep recorder ring (default 48), ONE advertise per
@@ -306,51 +306,42 @@ export function createMultiFoveaRecording(
         ["center", cams.C],
         ["right", cams.R],
       ];
-      // Error-path guard: acquisition + the native compress/recorder builds all
-      // refcount the raw producers; a throw between here and `active = true`
-      // (worker spawn, broker connect, brick attach) would orphan acquired
-      // handles with `active` false — the session's deferred cleanup never
-      // fires and a retry double-refcounts (never unadvertises → camera-
-      // exclusivity hazard). Unwind symmetrically with stop()'s release path.
-      try {
-        acquisitions = order.map(([, cam]) => acquire(cam));
+      const acquisitions = order.map(([, cam]) => acquire(cam));
 
-        // Optional per-stream compression (ruling 9): route the flagged streams
-        // through the CompressStream brick and record the `/zlib` sibling pipe
-        // INSTEAD — the recorder needs zero extra config (advert-verbatim).
-        const compressCfg = deps.compressStreams();
-        const streams: Record<string, { pipeId: string }> = {};
-        const significantBitsOf = new Map<string, number>();
-        compressed = [];
-        order.forEach(([name], i) => {
-          const acq = acquisitions[i]!;
-          significantBitsOf.set(acq.pipeId, acq.spec.significantBits);
-          if (compressCfg[name] && deps.compress) {
-            const handle = createCompressPipe(deps.compress, acq.spec);
-            compressed.push(handle);
-            significantBitsOf.set(handle.pipeId, handle.spec.significantBits);
-            streams[name] = { pipeId: handle.pipeId };
-          } else {
-            streams[name] = { pipeId: acq.pipeId };
-          }
-        });
+      // Optional per-stream compression (ruling 9): route the flagged streams
+      // through the CompressStream brick and record the `/zlib` sibling pipe
+      // INSTEAD — the recorder needs zero extra config (advert-verbatim).
+      const compressCfg = deps.compressStreams();
+      const streams: Record<string, { pipeId: string }> = {};
+      const significantBitsOf = new Map<string, number>();
+      const compressed: CompressHandle[] = [];
+      order.forEach(([name], i) => {
+        const acq = acquisitions[i]!;
+        significantBitsOf.set(acq.pipeId, acq.spec.significantBits);
+        if (compressCfg[name] && deps.compress) {
+          const handle = createCompressPipe(deps.compress, acq.spec);
+          compressed.push(handle);
+          significantBitsOf.set(handle.pipeId, handle.spec.significantBits);
+          streams[name] = { pipeId: handle.pipeId };
+        } else {
+          streams[name] = { pipeId: acq.pipeId };
+        }
+      });
 
-        // Ruling 8: the advertiser injects the JS-side significantBits the
-        // native spec round-trip drops — for raw AND compressed pipes.
-        const connect: RecorderConnect = (pipeId) => {
-          const conn = deps.connect(pipeId);
-          const sb = significantBitsOf.get(pipeId);
-          return sb === undefined
-            ? conn
-            : { ...conn, spec: { ...conn.spec, significantBits: sb } };
-        };
+      // Ruling 8: the advertiser injects the JS-side significantBits the native
+      // spec round-trip drops — for raw AND compressed pipes.
+      const connect: RecorderConnect = (pipeId) => {
+        const conn = deps.connect(pipeId);
+        const sb = significantBitsOf.get(pipeId);
+        return sb === undefined
+          ? conn
+          : { ...conn, spec: { ...conn.spec, significantBits: sb } };
+      };
 
-        node = (deps.createNode ?? createRecorderNode)({
-          id: "recorder/multi-fovea",
-          path,
+      return {
+        nodeOptions: {
           streams,
           connect,
-          timestamp: new Date().toISOString(),
           // Ruling 2: the wide camera's singleton metadata record (omitted on an
           // uncalibrated rig).
           cameraMatrix: deps.wideCamera() ?? undefined,
@@ -358,50 +349,24 @@ export function createMultiFoveaRecording(
           // center for the descriptor nearest-pointer map (it still POSTS no
           // extras — onFrame returns null for it, so nothing rides telemetry).
           onFrame,
-        });
-      } catch (err) {
-        // Retire any compress bricks built so far (they consume the raw pipes),
-        // then release ALL acquisitions in reverse order (last release retires
-        // + unadvertises) — symmetric with stop(). Reset local state + rethrow.
-        for (const c of compressed) c.retire();
-        compressed = [];
-        for (const a of [...acquisitions].reverse()) a.release();
-        acquisitions = [];
-        node = null;
-        throw err;
-      }
+        },
+        // Retire compress bricks first (they consume the raw pipes), then release
+        // ALL acquisitions in reverse order (last release retires + unadvertises).
+        release: () => {
+          for (const c of compressed) c.retire();
+          for (const a of [...acquisitions].reverse()) a.release();
+        },
+      };
+    },
+  });
 
-      active = true;
-      deps.telemetry({ recording_active: true, recordingStreams: {} });
-      pollTimer = setInterval(publishStreams, 250);
-      // Channels for targets already armed at start (ruling 3).
-      syncChannels();
-      return true;
+  return {
+    get active() {
+      return service.active;
     },
 
-    async stop(): Promise<boolean> {
-      if (!active) return false;
-      active = false;
-      if (pollTimer) {
-        clearInterval(pollTimer);
-        pollTimer = null;
-      }
-      const finished = node;
-      // Finalize (drains every live consumer, writes the summary, terminates
-      // the worker, disconnects the pipes) BEFORE retiring producers.
-      await node?.stop();
-      node = null;
-      // Compression bricks first (they consume the raw pipes), then the raw
-      // acquisitions (last release retires + unadvertises).
-      for (const c of compressed) c.retire();
-      compressed = [];
-      for (const a of acquisitions) a.release();
-      acquisitions = [];
-      clearMaps();
-      deps.telemetry({ recording_active: false, recordingStreams: {} });
-      if (finished) deps.finished(finished.filePath);
-      return true;
-    },
+    start: (path) => service.start(path),
+    stop: () => service.stop(),
 
     onPairRecord(rec: PairRecord): void {
       boundedSet(anchorByDts.left, rec.left.deviceTimestamp, rec.payload);
@@ -414,7 +379,8 @@ export function createMultiFoveaRecording(
     },
 
     onTrackBatch(batch: MultiTrackBatch): void {
-      if (!node || !active) return;
+      const node = service.node;
+      if (!node || !service.active) return;
       // The batch IS a center-camera observation; when the source doesn't
       // stamp device time, the latest recorded center frame is the nearest
       // sample by construction.

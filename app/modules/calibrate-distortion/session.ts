@@ -31,6 +31,8 @@ import { detectionViews, retarget } from "@orchestrator/marker-calibration";
 import { createVisionWorker, type VisionWorkerHandle } from "@orchestrator/vision-worker-host";
 import { nodeId } from "@lib/orchestrator/graph-contract";
 import type { PipeBroker } from "@orchestrator/pipe-session";
+import { createRawRecording } from "@orchestrator/raw-recording";
+import type { RawPipeRegistry } from "@orchestrator/raw-pipe";
 import type { PipeInput, VisionResult } from "@orchestrator/vision-worker-protocol";
 import {
   bilinearInterpolate,
@@ -46,7 +48,10 @@ import { calibrateDistortion, type ProjectionView } from "./contract";
 type Role = "L" | "C" | "R";
 const ORIGIN: Pos = { x: 0, y: 0 };
 
-export default function calibrateDistortionSession(broker: PipeBroker): ServerSession<typeof calibrateDistortion> {
+export default function calibrateDistortionSession(
+  broker: PipeBroker,
+  rawPipes: RawPipeRegistry,
+): ServerSession<typeof calibrateDistortion> {
   return defineResourceSession("calibrate-distortion", calibrateDistortion, (s) => {
     let triple: CalibratedTriple | null = null;
     let trackers: Record<Role, MarkerTracker> | null = null;
@@ -54,6 +59,25 @@ export default function calibrateDistortionSession(broker: PipeBroker): ServerSe
     let worker: VisionWorkerHandle | null = null;
     let centerAngle: Point2d | null = null;
     const projBusy: Record<"L" | "R", boolean> = { L: false, R: false };
+
+    // Recording (capture-recorder-everywhere ruling 2): the raw L/C/R sensor
+    // streams (advert-verbatim, the OBVIOUS default set) via the shared facility.
+    const recording = createRawRecording({
+      id: "recorder/calibrate-distortion",
+      broker,
+      rawPipes,
+      streams: () =>
+        triple
+          ? {
+              "left-fovea": triple.leases.L.camera,
+              center: triple.leases.C.camera,
+              "right-fovea": triple.leases.R.camera,
+            }
+          : null,
+      finished: (foveaPath) =>
+        process.parentPort?.postMessage({ type: "recording:finished", path: foveaPath }),
+      telemetry: (patch) => s.telemetry(patch),
+    });
 
     function publishDetections(): void {
       if (!trackers) return;
@@ -150,6 +174,7 @@ export default function calibrateDistortionSession(broker: PipeBroker): ServerSe
       if (!t) return; // frozen at "Leasing cameras" (contention/fail)
       monitor.done("lease");
       triple = t;
+      scope.defer(async () => void (await recording.stop())); // finalize before leases release (LIFO)
       scope.defer(() => {
         triple = null;
       });
@@ -241,6 +266,16 @@ export default function calibrateDistortionSession(broker: PipeBroker): ServerSe
           s.setState("targetId", { ...s.state.targetId, [role]: id });
           retarget(trackers, role, id);
         },
+        async startRecording({ path }) {
+          return recording.start(path);
+        },
+        async stopRecording() {
+          await recording.stop();
+        },
+      },
+      busy() {
+        if (recording.active) return "recording in progress";
+        return null;
       },
     };
   });

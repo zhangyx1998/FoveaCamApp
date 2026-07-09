@@ -27,6 +27,9 @@ import {
   stopTriple,
 } from "@orchestrator/marker-calibration";
 import type { Point2d } from "core/Geometry";
+import type { PipeBroker } from "@orchestrator/pipe-session";
+import { createRawRecording } from "@orchestrator/raw-recording";
+import type { RawPipeRegistry } from "@orchestrator/raw-pipe";
 import { calibrateDrift } from "./contract";
 import { gateOnLock } from "./drift-gate";
 
@@ -41,12 +44,35 @@ function activeControllerPos(): { left: Point2d; right: Point2d } | null {
 type Role = "L" | "C" | "R";
 type DriftPair = { L: Point2d | null; R: Point2d | null };
 
-export default function calibrateDriftSession(): ServerSession<typeof calibrateDrift> {
+export default function calibrateDriftSession(
+  broker: PipeBroker,
+  rawPipes: RawPipeRegistry,
+): ServerSession<typeof calibrateDrift> {
   return defineResourceSession("calibrate-drift", calibrateDrift, (s) => {
     let triple: CalibratedTriple | null = null;
     let trackers: Record<Role, MarkerTracker> | null = null;
     let servo: Servo | null = null;
     let saved: DriftPair = { L: null, R: null };
+
+    // Recording (capture-recorder-everywhere ruling 2): records the app's raw
+    // L/C/R sensor streams (advert-verbatim, the OBVIOUS default set) via the
+    // shared facility. Thin config over the leased triple's cameras.
+    const recording = createRawRecording({
+      id: "recorder/calibrate-drift",
+      broker,
+      rawPipes,
+      streams: () =>
+        triple
+          ? {
+              "left-fovea": triple.leases.L.camera,
+              center: triple.leases.C.camera,
+              "right-fovea": triple.leases.R.camera,
+            }
+          : null,
+      finished: (foveaPath) =>
+        process.parentPort?.postMessage({ type: "recording:finished", path: foveaPath }),
+      telemetry: (patch) => s.telemetry(patch),
+    });
 
     function angularFromCenter(): Point2d | null {
       if (!triple?.undistort || !trackers) return null;
@@ -93,6 +119,9 @@ export default function calibrateDriftSession(): ServerSession<typeof calibrateD
       if (!t) return; // no cameras (acquireTriple published fail) or superseded
       monitor.done("lease");
       triple = t;
+      // Finalize an in-flight recording before the lease releases (defer is LIFO
+      // and leases release LAST via scope.use — this runs while cameras live).
+      scope.defer(async () => void (await recording.stop()));
       scope.defer(() => {
         triple = null;
       });
@@ -212,6 +241,17 @@ export default function calibrateDriftSession(): ServerSession<typeof calibrateD
           });
           s.telemetry({ saved });
         },
+        async startRecording({ path }) {
+          return recording.start(path);
+        },
+        async stopRecording() {
+          await recording.stop();
+        },
+      },
+      busy() {
+        // Drain refusal (manual-control pattern): don't force-drain mid-recording.
+        if (recording.active) return "recording in progress";
+        return null;
       },
     };
   });

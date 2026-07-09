@@ -22,6 +22,7 @@ import {
 } from "@lib/orchestrator/pid-override-contract";
 import type { Point2d, Point3d } from "core/Geometry";
 import type { Pos } from "@lib/controller-codec";
+import { recordingCommands, recordingTelemetry } from "@lib/orchestrator/contracts";
 
 export type TrackerRecord = { img_pts: Point2d[]; obj_pts: Point3d[] };
 export type ExtrinsicRecord = {
@@ -61,6 +62,8 @@ export const calibrateExtrinsic = defineContract({
       cursor_l: null as Point2d | null,
       cursor_r: null as Point2d | null,
     },
+    // Recording (capture-recorder-everywhere ruling 2).
+    ...recordingTelemetry(),
   },
   // No session frames: the raw L/C/R previews bind the `camera:<serial>` pipe
   // via `usePipeFrame` (C-22 migration); detections/overlays ride telemetry.
@@ -86,6 +89,8 @@ export const calibrateExtrinsic = defineContract({
     setPreviewTarget: cmd<{ p: Point2d }>(),
     /** Persist `records` to the real `calibrate-extrinsic` store paths. */
     confirm: cmd(),
+    // Recording (capture-recorder-everywhere ruling 2): the raw L/C/R streams.
+    ...recordingCommands(),
   },
 });
 

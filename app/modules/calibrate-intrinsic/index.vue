@@ -17,6 +17,7 @@ import { computed, onMounted, onUnmounted, ref } from "vue";
 import { useSession, usePipeFrame } from "@lib/orchestrator/client";
 import { nodeId } from "@lib/orchestrator/graph-contract";
 import { calibrateIntrinsic, type RecordThumb } from "./contract";
+import Recording from "@src/record";
 import StreamView from "@src/components/StreamView.vue";
 import FrameView from "@src/components/FrameView.vue";
 import NavBack from "@src/components/NavBack.vue";
@@ -31,6 +32,9 @@ import type { PreDefinedDictionary } from "core/Vision";
 
 const session = useSession(calibrateIntrinsic, "calibrate-intrinsic");
 const { state, telemetry } = session;
+// Recording context (capture-recorder-everywhere ruling 2): the title-bar
+// RecordButton + Cmd/Ctrl-R record the selected camera's raw sensor stream.
+new Recording(session, "calibrate-intrinsic");
 
 // Wrap a record's downscaled Mono8 preview in a Mat for FrameView (item 4).
 function thumbMat(t: RecordThumb) {

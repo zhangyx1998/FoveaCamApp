@@ -23,6 +23,7 @@ import { readUrlParam, writeUrlState } from "@lib/url-state";
 import { degrees } from "@lib/util";
 import type { Point2d } from "core/Geometry";
 import { calibrateExtrinsic } from "./contract";
+import Recording from "@src/record";
 import StreamView from "@src/components/StreamView.vue";
 import PosView, { type Pos } from "@src/components/PosView.vue";
 import MarkerTargetInputs from "@src/components/MarkerTargetInputs.vue";
@@ -40,6 +41,8 @@ const app_config = await useAppConfig();
 const session = useSession(calibrateExtrinsic, "calibrate-extrinsic");
 const ctrl = useController();
 const { state, telemetry } = session;
+// Recording context (capture-recorder-everywhere ruling 2).
+new Recording(session, "calibrate-extrinsic");
 
 // State-in-URL (multi-window.md req. 7): the wizard step is addressable —
 // `?step=FIN` seeds the session once on load (the session/scratch store

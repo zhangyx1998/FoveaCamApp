@@ -12,7 +12,11 @@
 // triple — the renderer selects one at a time to calibrate.
 
 import { cmd, defineContract } from "@lib/orchestrator/protocol";
-import type { CameraInfo } from "@lib/orchestrator/contracts";
+import {
+  recordingCommands,
+  recordingTelemetry,
+  type CameraInfo,
+} from "@lib/orchestrator/contracts";
 import type { Point2d } from "core/Geometry";
 
 export type PatternSize = { width: number; height: number };
@@ -73,6 +77,9 @@ export const calibrateIntrinsic = defineContract({
     /** Detector throughput in Hz, republished ~1×/s while a camera is open
      *  (item 6) — surfaced in the StreamView footnote. */
     detectRate: 0,
+    // Recording (capture-recorder-everywhere ruling 2): degenerate single-stream
+    // capture of the selected camera's raw sensor stream.
+    ...recordingTelemetry(),
   },
   // No session frames: the raw preview binds the active camera's
   // `camera:<serial>` pipe via `usePipeFrame` (real-1c); detection overlays ride
@@ -92,6 +99,9 @@ export const calibrateIntrinsic = defineContract({
     calibrateNow: cmd(),
     /** Clear a camera's stored intrinsic calibration (no need to select it). */
     resetCalibration: cmd<{ serial: string }>(),
+    // Recording (capture-recorder-everywhere ruling 2): the selected camera's
+    // raw sensor stream (advert-verbatim, degenerate single-stream default).
+    ...recordingCommands(),
   },
 });
 

@@ -122,6 +122,8 @@ import type { Pos } from "@lib/controller-codec";
 import { createChainedTracker, type KcfTracker, type TrackerMeter } from "core/Tracker";
 import { registerNativeProbe } from "@orchestrator/native-probes";
 import type { WorkloadSnapshot } from "@lib/orchestrator/stats";
+import { createRawRecording } from "@orchestrator/raw-recording";
+import type { RawPipeRegistry } from "@orchestrator/raw-pipe";
 
 const ZERO: Point2d = { x: 0, y: 0 };
 const now = () => performance.now();
@@ -173,9 +175,31 @@ export default function disparityScopeSession(
   stereoSeam: StereoPipeSeam,
   heatmapSeam: HeatmapPipeSeam,
   compositeSeam: CompositePipeSeam,
+  rawPipes: RawPipeRegistry,
 ): ServerSession<typeof disparity> {
   return defineSession("disparity-scope", disparity, (s) => {
     let triple: CalibratedTriple | null = null;
+
+    // Recording (capture-recorder-everywhere ruling 2): records the app's raw
+    // L/C/R sensor streams (advert-verbatim, the OBVIOUS default set). The
+    // shared facility owns start/stop/poll/telemetry + the error unwind; here
+    // it's thin config over the leased triple's cameras.
+    const recording = createRawRecording({
+      id: "recorder/disparity-scope",
+      broker,
+      rawPipes,
+      streams: () =>
+        triple
+          ? {
+              "left-fovea": triple.leases.L.camera,
+              center: triple.leases.C.camera,
+              "right-fovea": triple.leases.R.camera,
+            }
+          : null,
+      finished: (foveaPath) =>
+        process.parentPort?.postMessage({ type: "recording:finished", path: foveaPath }),
+      telemetry: (patch) => s.telemetry(patch),
+    });
     const disposers = new DisposerBag();
     // The controller node's position input (push-model device transport,
     // controller-node-and-fifo-edges §3) — opened on activate, closed on idle.
@@ -1140,9 +1164,14 @@ export default function disparityScopeSession(
       monitor.complete(); // spin-up finished — clear the overlay
     }
 
-    function idleSession(): void {
-      // Stop actuating FIRST (as the old loop stop did): terminate the MCU
-      // stream + disable iff the node enabled for us (fire-and-forget close).
+    async function idleSession(): Promise<void> {
+      // Finalize an in-flight recording FIRST (while the cameras are still
+      // leased) — the recorder drains + releases its raw pipes before the leases
+      // release below. busy() refuses the normal window-switch drain mid-
+      // recording; this covers the forced dispose (quit / releaseCameras).
+      await recording.stop();
+      // Stop actuating (as the old loop stop did): terminate the MCU stream +
+      // disable iff the node enabled for us (fire-and-forget close).
       void posInput?.close();
       posInput = null;
       // Terminate both match workers before disconnect: no reads after the
@@ -1274,6 +1303,12 @@ export default function disparityScopeSession(
           }
           s.setState("pidOverride", state);
         },
+        async startRecording({ path }) {
+          return recording.start(path);
+        },
+        async stopRecording() {
+          await recording.stop();
+        },
       },
       watch: {
         tuning(t) {
@@ -1321,6 +1356,12 @@ export default function disparityScopeSession(
         void activateSession();
       },
       idle: idleSession,
+      busy() {
+        // Drain refusal (manual-control pattern): the multi-window switch path
+        // must not force-drain mid-recording.
+        if (recording.active) return "recording in progress";
+        return null;
+      },
     };
   });
 }

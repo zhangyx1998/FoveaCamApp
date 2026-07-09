@@ -14,20 +14,27 @@
 // answers the ruling-3 per-frame metadata callback (volt/angle/homography). The
 // container contract is UNCHANGED (see recorder/schema.ts).
 //
+// capture-recorder-everywhere ruling 1: the start/stop/poll/telemetry/error-
+// unwind skeleton lifted into the composable `@orchestrator/recording-service`
+// facility — this file is now THIN CONFIG (the L/C/R fovea streams + the ruling-3
+// fovea-binding `onFrame`). Observable behavior is unchanged (advert-verbatim raw
+// pipes, extras gating, the ruling-3 per-frame metadata).
+//
 // On finalize we notify main (`recording:finished`) so the viewer window
 // auto-opens the finished `.fovea` (rulings 8/9; the receive side lives in
 // electron/main.ts).
 
-import { mkdirSync } from "node:fs";
 import type { Point2d } from "core/Geometry";
 import type { Mat } from "core/Vision";
 import { frameVoltageExtras } from "@orchestrator/recorder";
 import {
-  createRecorderNode,
   type RecorderConnect,
-  type RecorderNodeHandle,
   type RecorderStreamStats,
 } from "@orchestrator/recorder-node";
+import {
+  createRecordingService,
+  type RecordingAcquisition,
+} from "@orchestrator/recording-service";
 import {
   rawPipeSpec,
   DEFAULT_RAW_RING_DEPTH,
@@ -127,28 +134,16 @@ const STREAM_MIRROR: Record<string, "L" | "R" | null> = {
 };
 
 export function createRecording(deps: RecordingDeps): RecordingController {
-  let active = false;
-  let node: RecorderNodeHandle | null = null;
-  let acquisitions: RawPipeAcquisition[] = [];
-  let pollTimer: ReturnType<typeof setInterval> | null = null;
-
-  function publishStreams(): void {
-    deps.telemetry({ recordingStreams: node?.stats() ?? {} });
-  }
-
-  return {
-    get active() {
-      return active;
-    },
-
-    async start(path) {
-      if (active) return false;
-      path = path.trim();
-      if (path === "") return false;
-      const triple = deps.getTriple();
-      if (!triple) return false;
-      mkdirSync(path, { recursive: true });
-
+  // Thin config over the shared facility (capture-recorder-everywhere ruling 1):
+  // the L/C/R fovea streams + the ruling-3 fovea-binding `onFrame`. The facility
+  // owns start/stop/poll/telemetry + the acquire-then-build error unwind.
+  const service = createRecordingService({
+    id: "recorder/manual-control",
+    ready: () => deps.getTriple() !== null,
+    telemetry: deps.telemetry,
+    finished: deps.finished,
+    acquire(): RecordingAcquisition {
+      const triple = deps.getTriple()!; // `ready()` guaranteed non-null
       const { L, C, R } = triple.leases;
       const { conv } = triple;
 
@@ -169,71 +164,41 @@ export function createRecording(deps: RecordingDeps): RecordingController {
           spec: rawPipeSpec(camera, pipeId, DEFAULT_RAW_RING_DEPTH),
         });
       };
-      // Error-path guard: the acquire refcounts the raw producers, and the
-      // native recorder-node build can throw (worker spawn / broker connect).
-      // A throw before `active = true` would orphan acquired handles with the
-      // controller idle — the deferred cleanup never fires, and a retry
-      // double-refcounts (never unadvertises → camera-exclusivity hazard).
-      // Release symmetrically with stop() (reverse order, last release retires).
-      try {
-        acquisitions = [rawFor(L.camera), rawFor(C.camera), rawFor(R.camera)];
+      const acquisitions = [rawFor(L.camera), rawFor(C.camera), rawFor(R.camera)];
 
-        const streams = {
-          "left-fovea": { pipeId: acquisitions[0]!.pipeId },
-          center: { pipeId: acquisitions[1]!.pipeId },
-          "right-fovea": { pipeId: acquisitions[2]!.pipeId },
-        };
+      const streams = {
+        "left-fovea": { pipeId: acquisitions[0]!.pipeId },
+        center: { pipeId: acquisitions[1]!.pipeId },
+        "right-fovea": { pipeId: acquisitions[2]!.pipeId },
+      };
 
-        node = createRecorderNode({
-          id: "recorder/manual-control",
-          path,
+      return {
+        nodeOptions: {
           streams,
           connect: deps.connect,
-          timestamp: new Date().toISOString(),
           // R-2 opt: only the L/R foveae carry a binding — gate the per-frame
           // notice so the center channel skips the pointless main round-trip.
           extrasStreams: ["left-fovea", "right-fovea"],
-          // Ruling-3: per NEW frame, the session injects volt/angle/homography for
-          // the L/R foveae (center carries none). Never blocks the frame write.
+          // Ruling-3: per NEW frame, the session injects volt/angle/homography
+          // for the L/R foveae (center carries none). Never blocks the write.
           onFrame: (stream) => {
             const mirror = STREAM_MIRROR[stream];
             if (!mirror) return null;
             return buildFoveaMeta(resolveFoveaBinding(deps, conv, mirror));
           },
-        });
-      } catch (err) {
-        for (const a of [...acquisitions].reverse()) a.release();
-        acquisitions = [];
-        node = null;
-        throw err;
-      }
-
-      active = true;
-      deps.telemetry({ recording_active: true, recordingStreams: {} });
-      pollTimer = setInterval(publishStreams, 250);
-      return true;
+        },
+        release: () => {
+          for (const a of [...acquisitions].reverse()) a.release();
+        },
+      };
     },
+  });
 
-    async stop() {
-      if (!active) return false;
-      active = false;
-      if (pollTimer) {
-        clearInterval(pollTimer);
-        pollTimer = null;
-      }
-      const finished = node;
-      // Finalize the container (drains to the producers' latest, writes the mcap
-      // summary/index, terminates the worker, disconnects the pipes).
-      await node?.stop();
-      node = null;
-      // Release the raw acquisitions AFTER the node released its connections
-      // (last release retires the producer + unadvertises).
-      for (const p of acquisitions) p.release();
-      acquisitions = [];
-      deps.telemetry({ recording_active: false, recordingStreams: {} });
-      // Auto-open the finished recording in the viewer window (rulings 8/9).
-      if (finished) deps.finished(finished.filePath);
-      return true;
+  return {
+    get active() {
+      return service.active;
     },
+    start: (path) => service.start(path),
+    stop: () => service.stop(),
   };
 }
