@@ -64,6 +64,11 @@ names the mechanism it gates.
 - [ ] **No more exit-6 aborts** — the same switch marathon never ends in
   `libc++abi: terminating due to uncaught exception of type Napi::Error`
   (core now builds with `NODE_API_SWALLOW_UNTHROWABLE_EXCEPTIONS`).
+- [ ] **Exit-with-live-camera clean (fix 2026-07-08 late, rig find 22:40)** —
+  exit the orchestrator while cameras are open (e.g. right after leaving
+  disparity-scope): NO `SIGABRT`/exit-6 from `v8::HandleScope` fatal in the
+  cleanup registry (`CameraObject::destruct` now opens its own HandleScope);
+  the janitor/quiesce flow above still completes normally after it.
 - [ ] **Graceful-quit quiesce** — quit the app with MEMS enabled + streams
   live: orchestrator log shows the drain, the device echoes `MEMS Disable`,
   and the next boot's config restore succeeds first try.
@@ -179,21 +184,24 @@ names the mechanism it gates.
 - [ ] **Tracker tracks what the matcher sees** — the kcf node chains on the
   C UNDISTORT brick: the tracker bbox overlay stays aligned with the
   undistorted C view (no distortion offset near the edges).
-- [ ] **§3.5 drag semantics** — dragging on the C view: the override badge
-  lights (telemetry `overridden` — tracker flag, NOT the PID slot), the
-  sliced view + guide strip follow the pointer, and the FOVEAS VISIBLY
-  SERVO toward the dragged tile WHILE dragging (the PID runs throughout —
-  this is new; the old path pinned the mirrors to the ray instantly).
-  Status reads "manual"; a long drag never hits the convergence timeout.
+- [ ] **§3.5 drag semantics (AMENDED 2026-07-08: direct follow)** — dragging
+  on the C view: the override badge lights (telemetry `overridden` —
+  tracker flag, NOT the PID slot), the sliced view + guide strip follow
+  the pointer, and the FOVEAS TRACK THE CURSOR 1:1 at the current depth
+  (`followTarget` — no PID stepping, no match gate; the earlier
+  "PID servos toward the tile" semantics deadlocked on low score and the
+  foveas never moved — rig find 2026-07-08 22:40). Works over unmatchable
+  content (blank wall) too. Status reads "manual"; a long drag never hits
+  the convergence timeout. Drag should feel snappy (follow rides
+  pointer/frame rate, not kernel rate).
 - [ ] **Release re-arms, no jump** — on release with auto-follow ON, the
   tracker re-arms at the drag end and keeps following; with auto-follow
   OFF the target stays put (results gated JS-side; native thread keeps
   running — known cost, no native disarm). Either way the mirrors continue
-  from their in-flight pose — there is NO discontinuity class left on this
-  path (nothing was pinned/seeded).
-- [ ] **Low-score drag hold** — dragging onto unmatchable content (blank
-  wall): status "low score", mirrors pause rather than fling; controllers
-  rest at their clamps at worst (windup bounded by the PID limits).
+  from their in-flight pose (controllers HELD through the follow: the
+  first resumed PID output equals the last follow output) — no
+  discontinuity class on this path; vergence resumes converging on the
+  release point.
 - [ ] **Lost policy parity** — auto-follow losing the target for ~10
   consecutive frames drops the gate (status returns to armed-off behavior,
   target holds last-good) — same UX as the old in-kernel tolerance.
