@@ -21,7 +21,7 @@ export default function rainbow(brightness: number) {
         `hsl(120, 100%, ${bri})`,
         `hsl(180, 100%, ${bri})`,
         `hsl(240, 100%, ${bri})`,
-        `hsl(270, 100${bri}%`
+        `hsl(270, 100%, ${bri})`
     );
 }
 
