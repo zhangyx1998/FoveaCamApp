@@ -108,15 +108,11 @@ export function foveaTileSize(opts: {
   return { width: (width * s) / z, height: (height * s) / z };
 }
 
-/** The wide-view footprint (px) of ONE fovea frame at the nominal display
- *  `zoom` — the size the per-eye pose/fovea overlay rects must draw at (a fovea
- *  camera is magnified `zoom×`, so its frame projects onto the wide view shrunk
- *  by `zoom`) and the size of the sliced-center crop. `zoom` is clamped to ≥1
- *  (a <1 "zoom" cannot shrink the wide FOV). */
-export function foveaFootprintOnWide(size: Size, zoom: number): Size {
-  const z = Math.max(1, zoom);
-  return { width: size.width / z, height: size.height / z };
-}
+// The fovea-footprint display math lives in the core-free `display-geometry.ts`
+// (the RENDERER draws the pose markers with it and must not pull this module's
+// runtime `core/Vision` imports); re-exported here so the vision/control side
+// and the tests keep one import surface.
+export { foveaFootprintOnWide } from "./display-geometry";
 
 /**
  * The magnification that drives the fovea↔wide template match: the
@@ -178,6 +174,14 @@ export type ScopeProjection = {
   r: Point2d;
   target: Point2d;
   scores: { l: number; r: number };
+  /** True while the target rides a TRACKER OVERRIDE (a pointer drag pinning
+   *  the chained KCF's output — controller-node-and-fifo-edges §3.5). The flag
+   *  propagates downstream unchanged (tracker → matcher → here → the PID
+   *  vergence step) so each stage acts correspondingly: the control law keeps
+   *  stepping (the foveas servo onto the moving dragged tile) while the
+   *  session holds its freeze window open and reports "manual" status. Data,
+   *  not topology — it rides the projection record, no graph change. */
+  overridden: boolean;
 };
 
 /**
@@ -189,7 +193,12 @@ export type ScopeProjection = {
  * native Vision op. The kernel emits this alongside the diagnostic frames; the
  * control step consumes it.
  */
-export function scopeProjection(a: VergenceStepInput): ScopeProjection {
+export function scopeProjection(
+  a: VergenceStepInput,
+  /** Tracker-override flag on the target that drove this match — carried
+   *  through unchanged (see {@link ScopeProjection.overridden}). */
+  overridden = false,
+): ScopeProjection {
   const lift = (rect: Rect): Point2d => {
     const c = RECT.getCenter(rect);
     return { x: c.x + a.ox, y: c.y + a.oy };
@@ -199,6 +208,7 @@ export function scopeProjection(a: VergenceStepInput): ScopeProjection {
     r: lift(a.mr.rect),
     target: lift(a.center.rect),
     scores: { l: a.ml.score, r: a.mr.score },
+    overridden,
   };
 }
 

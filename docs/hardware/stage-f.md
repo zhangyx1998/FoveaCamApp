@@ -150,20 +150,54 @@ names the mechanism it gates.
   view's crop. On a calibrated rig (match magnification ≠ nominal zoom)
   confirm the strip tracks the NOMINAL zoom, and the fovea match still locks
   (tile scale unchanged).
-- [ ] **Override semantics live** — disparity drag: mirrors follow, release
-  resumes vergence control from the released pose with NO jump. VERIFY THE
-  RELEASE-JUMP FIX (2026-07-08): the seed reconstructs from the drag's exact
-  ray (`overrideRay`, verge/v_shift = 0), NOT from V2A of the pinned volts —
-  a parallel drag must not toe-in to "another location" on release; it should
-  then converge onto the sliced center tile. calibrate-drift /
-  calibrate-extrinsic per-eye drags: dragged eye pins (controllers held
-  reset), other eye keeps servoing; release resumes from the released pose.
+- [ ] **Override semantics live** — SUPERSEDED for disparity drags by the
+  §3.5 tracker-override flow (see the next section): the disparity drag no
+  longer pins the PID at all. Still verify the PID-slot path where it
+  remains live: calibrate-drift / calibrate-extrinsic per-eye drags —
+  dragged eye pins (controllers held reset), other eye keeps servoing;
+  release resumes from the released pose. Disparity's generic `pidOverride`
+  command (programmatic volts) still seeds on release via the V2A
+  reconstruction inverse.
 - [ ] **Servo numeric parity** — calibrate-drift/extrinsic marker servoing
   converges exactly as before (PID2D velocity form is bit-identical on the
   bench; confirm no felt difference on hardware).
 - [ ] **Capture wrap default** — manual-control captures always save
   WRAPPED foveae now (the retired toggle's default); confirm downstream
   consumers of recorded captures expect this.
+
+## Disparity tracker → own thread (§3.5, 2026-07-08 D2 wave)
+
+- [ ] **Tracker off the matching thread** — with auto-follow ON, the
+  disparity kernel node's meter no longer includes KCF work; a new
+  `camera/<serialC>/undistort/kcf` node renders in the graph (edges
+  C-undistort → kcf → disparity kernel) with its own utilization/rate
+  badge. Kernel throughput should HOLD or improve while tracking (the KCF
+  budget left the loop).
+- [ ] **Tracker tracks what the matcher sees** — the kcf node chains on the
+  C UNDISTORT brick: the tracker bbox overlay stays aligned with the
+  undistorted C view (no distortion offset near the edges).
+- [ ] **§3.5 drag semantics** — dragging on the C view: the override badge
+  lights (telemetry `overridden` — tracker flag, NOT the PID slot), the
+  sliced view + guide strip follow the pointer, and the FOVEAS VISIBLY
+  SERVO toward the dragged tile WHILE dragging (the PID runs throughout —
+  this is new; the old path pinned the mirrors to the ray instantly).
+  Status reads "manual"; a long drag never hits the convergence timeout.
+- [ ] **Release re-arms, no jump** — on release with auto-follow ON, the
+  tracker re-arms at the drag end and keeps following; with auto-follow
+  OFF the target stays put (results gated JS-side; native thread keeps
+  running — known cost, no native disarm). Either way the mirrors continue
+  from their in-flight pose — there is NO discontinuity class left on this
+  path (nothing was pinned/seeded).
+- [ ] **Low-score drag hold** — dragging onto unmatchable content (blank
+  wall): status "low score", mirrors pause rather than fling; controllers
+  rest at their clamps at worst (windup bounded by the PID limits).
+- [ ] **Lost policy parity** — auto-follow losing the target for ~10
+  consecutive frames drops the gate (status returns to armed-off behavior,
+  target holds last-good) — same UX as the old in-kernel tolerance.
+- [ ] **Teardown ordering** — closing the app/session with the tracker live
+  leaves no orphan brick/tap: the undistort brick retires cleanly after the
+  tracker releases (watch for brick-leak warnings in the orchestrator log);
+  reopening the app immediately works (no reopen race).
 
 ## Blocked (hardware change required)
 

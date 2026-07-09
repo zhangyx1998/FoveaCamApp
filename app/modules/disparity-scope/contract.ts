@@ -95,14 +95,18 @@ export const disparity = defineContract({
     view: "sliced" as "sliced" | "disparity",
     tuning: DEFAULT_TUNING,
     tracker_enabled: false as boolean,
-    /** KCF template size (pixels); also used as the search-window pad, same
-     *  as the original renderer implementation. */
+    /** KCF template size (pixels) — the arm ROI of the session-owned CHAINED
+     *  tracker thread (controller-node-and-fifo-edges §3.5). Applied on the
+     *  next (re-)arm, not live: the kernel no longer runs any KCF. */
     kernel: { w: 64, h: 64 },
     /** PID-node OVERRIDE slot (reusable fragment,
      *  `@lib/orchestrator/pid-override-contract`): server-authoritative
-     *  `{ engaged, value }`. A pointer drag pins the vergence output at the
-     *  dragged ray's volts (control law held reset); the renderer reads it back
-     *  via `usePidOverride`. Mirrored by the session on every engage/release. */
+     *  `{ engaged, value }`, driven ONLY by the generic `pidOverride` command
+     *  now (a programmatic caller that already has volts — output pinned,
+     *  control law held reset, seeded release). Since §3.5 the scope UI's
+     *  pointer DRAGS no longer touch this slot: they ride the TRACKER's
+     *  override, with the PID node RUNNING throughout (see telemetry
+     *  `overridden`). Kept for the module-agnostic `usePidOverride` proxy. */
     pidOverride: pidOverrideState<VergenceVolts>(),
   },
   telemetry: {
@@ -133,6 +137,11 @@ export const disparity = defineContract({
      *  scale. Set on activate; constant per activation. */
     match_magnification: null as number | null,
     tracker_bbox: null as Rect | null,
+    /** True while the target rides the chained tracker's OVERRIDE (a pointer
+     *  drag) — the flag the tracker propagates downstream (matcher →
+     *  `projection.overridden` → PID step). Drives the UI's override badge
+     *  (which no longer reads the PID slot). */
+    overridden: false as boolean,
     /** Live PID integrator values (debug readout, matches the original
      *  renderer's "PID Debug" fieldset). */
     pids: { verge: 0, panX: 0, panY: 0, v_shift: 0 } as PidReadout,
@@ -169,9 +178,9 @@ export const disparity = defineContract({
     /** Engage/update/release the vergence PID node's output override (reusable
      *  fragment). `{ value }` pins the output at those volts (engage/update);
      *  `{ release: true }` resumes control (the node's `seed` keeps it
-     *  continuous). The disparity DRAG path drives the slot server-side via
-     *  `pointer` (it converts the pixel → ray volts the renderer can't compute);
-     *  this command is the module-agnostic proxy path (`usePidOverride`). */
+     *  continuous). PROGRAMMATIC path only since §3.5 — pointer drags ride the
+     *  TRACKER override via `pointer` instead (PID keeps running, no pinning);
+     *  this command remains the module-agnostic volts proxy (`usePidOverride`). */
     pidOverride: pidOverrideCmd<VergenceVolts>(),
   },
 });

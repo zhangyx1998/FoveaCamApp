@@ -15,22 +15,26 @@
 //     (`getFoveaTile`);
 //   - center: the wide input is now the center camera's `undistort` pipe, so
 //     `analyzeVergence`'s template match + the projected positions live on the
-//     UNDISTORTED view (P2A on it is linear). It runs synchronous `KCF`
-//     auto-follow (single-threaded loop, so the async-kcf busy-drop/staleness
-//     dance dissolves — see the deleted `@orchestrator/async-kcf`), cuts the
-//     "sliced" view, and matches each fovea into the wide strip.
-// It posts SCALAR results (match rects/scores, tracker bbox) + the scope
-// `projection` (matched centres + target, wide pixels) + derived DIAGNOSTIC
-// frames (`center.sliced`/`center.disparity`/`guide`/`match_*`); MAIN keeps
-// calibration + the PID node's `stepVergence` → voltages (session.ts). The
-// kernel no longer emits L/C/R view frames — the views source directly from the
-// undistort pipes so a busy kernel can't cap their fps.
+//     UNDISTORTED view (P2A on it is linear). It cuts the "sliced" view and
+//     matches each fovea into the wide strip.
+// The KCF auto-follow is GONE from this kernel (controller-node-and-fifo-edges
+// §3.5 — "the tracker must leave the disparity-matching thread"): the tracker
+// runs on its OWN native thread (`createChainedTracker` on the C undistort
+// brick, owned by the SESSION), and its scalar output arrives here as the
+// `target` param + the `overridden` drag flag at result rate — tracking
+// latency no longer rides the matching budget.
+// It posts SCALAR results (match rects/scores) + the scope `projection`
+// (matched centres + target, wide pixels, `overridden` carried through) +
+// derived DIAGNOSTIC frames (`center.sliced`/`center.disparity`/`guide`/
+// `match_*`); MAIN keeps calibration + the PID node's `stepVergence` →
+// voltages (session.ts). The kernel no longer emits L/C/R view frames — the
+// views source directly from the undistort pipes so a busy kernel can't cap
+// their fps.
 
 import { copyMat } from "@lib/mat";
 import { RECT } from "@lib/util/geometry";
 import type { Point2d, Rect, Size } from "core/Geometry";
-import { cvtColor, diff, slice, type Mat } from "core/Vision";
-import { KCF } from "core/Tracker";
+import { diff, slice, type Mat } from "core/Vision";
 import {
   analyzeVergence,
   getFoveaTile,
@@ -48,11 +52,10 @@ import type {
 } from "@orchestrator/vision-kernel";
 
 /** Params main pushes to the kernel (init + live updates, merged). Post-replumb
- *  there are NO homographies: the foveas arrive pre-warped off their undistort
- *  pipes, so the kernel only needs tuning/zoom/view/target knobs. */
+ *  there are NO homographies (the foveas arrive pre-warped off their undistort
+ *  pipes) and NO tracker knobs (§3.5 — the session owns the chained tracker
+ *  and pushes its scalar output here as `target` + `overridden`). */
 export type DisparityParams = {
-  kernelW?: number;
-  kernelH?: number;
   /** Nominal UI zoom — drives the sliced-view crop AND the guide strip crop
    *  (the center tile expanded by expand_x/expand_y). NOT the match scale. */
   zoom?: number;
@@ -63,15 +66,16 @@ export type DisparityParams = {
   matchZoom?: number | null;
   /** Effective fovea-tile scale (main folds the match zoom + tuning.scale). */
   scale?: number;
+  /** Target center on the undistorted wide frame — the chained tracker's
+   *  output (or the pointer, while dragging), pushed by main at result rate. */
   target?: Point2d;
+  /** True while `target` rides the TRACKER OVERRIDE (pointer drag) — carried
+   *  through onto `projection.overridden` so downstream stages (PID vergence)
+   *  can act correspondingly. */
+  overridden?: boolean;
   expand_x?: number;
   expand_y?: number;
   view?: string;
-  lostTolerance?: number;
-  /** Main requests a (re)init at this center on the next center tick. */
-  trackerInit?: Point2d | null;
-  /** Main requests release of the auto-follow tracker. */
-  trackerRelease?: boolean;
 };
 
 /** Scalar match result over the wire (the heatmap `mat` goes as a frame). */
@@ -89,33 +93,27 @@ export type DisparityValues = {
     oy: number;
   };
   /** The scope's control OUTPUT — matched fovea centres + target on the
-   *  undistorted wide frame (full-res wide pixels) + per-eye scores. Consumed
-   *  by the PID node's `stepVergence`; emitted whenever `analysis` is. */
+   *  undistorted wide frame (full-res wide pixels) + per-eye scores + the
+   *  `overridden` drag flag. Consumed by the PID node's `stepVergence`;
+   *  emitted whenever `analysis` is. */
   projection?: ScopeProjection;
-  tracker?:
-    | { status: "tracking"; center: Point2d; bbox: Rect }
-    | { status: "lost" };
   size?: Size;
 };
 
 const wire = (m: MatchResult): WireMatch => ({ rect: m.rect, score: m.score });
 
 export function createDisparityKernel(initial: Record<string, unknown>): VisionKernel {
-  const p: Required<
-    Omit<DisparityParams, "trackerInit" | "trackerRelease" | "matchZoom">
-  > & {
+  const p: Required<Omit<DisparityParams, "matchZoom">> & {
     matchZoom: number | null;
   } = {
-    kernelW: 64,
-    kernelH: 64,
     zoom: 1,
     matchZoom: null,
     scale: 1,
     target: { x: 0, y: 0 },
+    overridden: false,
     expand_x: 3,
     expand_y: 2,
     view: "sliced",
-    lostTolerance: 10,
   };
 
   let width = 0;
@@ -127,12 +125,6 @@ export function createDisparityKernel(initial: Record<string, unknown>): VisionK
     R: null,
   };
 
-  // Synchronous KCF auto-follow (no async-kcf — single-threaded loop).
-  let kcf: KCF | null = null;
-  let search: Rect | null = null;
-  let lostCount = 0;
-  let pendingInit: Point2d | null = null;
-
   function clampRect(r: Rect): Rect {
     const x = Math.max(0, Math.min(r.x, width));
     const y = Math.max(0, Math.min(r.y, height));
@@ -142,58 +134,6 @@ export function createDisparityKernel(initial: Record<string, unknown>): VisionK
       width: Math.max(0, Math.min(r.width, width - x)),
       height: Math.max(0, Math.min(r.height, height - y)),
     };
-  }
-
-  function searchWindow(box: Rect, scale = 1): Rect {
-    const px = Math.max(0, p.kernelW * scale);
-    const py = Math.max(0, p.kernelH * scale);
-    const x = Math.max(0, Math.round(box.x - px));
-    const y = Math.max(0, Math.round(box.y - py));
-    const right = Math.min(width, Math.round(box.x + box.width + px));
-    const bottom = Math.min(height, Math.round(box.y + box.height + py));
-    return clampRect({ x, y, width: right - x, height: bottom - y });
-  }
-
-  function releaseTracker(): void {
-    kcf?.release();
-    kcf = null;
-    search = null;
-    lostCount = 0;
-  }
-
-  function initTracker(view: Mat<Uint8Array>, center: Point2d): DisparityValues["tracker"] {
-    const roi = clampRect(RECT.fromCenter(center, { width: p.kernelW, height: p.kernelH }));
-    if (roi.width <= 0 || roi.height <= 0) return undefined;
-    releaseTracker();
-    const win = searchWindow(roi);
-    const patch = cvtColor(slice(view, win), "BGRA2BGR");
-    const t = new KCF();
-    t.init(patch, { x: roi.x - win.x, y: roi.y - win.y, width: roi.width, height: roi.height });
-    kcf = t;
-    search = roi;
-    lostCount = 0;
-    p.target = center;
-    return { status: "tracking", center, bbox: roi };
-  }
-
-  function updateTracker(view: Mat<Uint8Array>): DisparityValues["tracker"] {
-    if (!kcf || !search) return undefined;
-    const win = searchWindow(search, 1 + lostCount);
-    const patch = cvtColor(slice(view, win), "BGRA2BGR");
-    const r = kcf.update(patch); // synchronous — worker thread
-    if (r) {
-      lostCount = 0;
-      const full = clampRect({ x: r.x + win.x, y: r.y + win.y, width: r.width, height: r.height });
-      search = full;
-      const center = RECT.getCenter(full);
-      p.target = center;
-      return { status: "tracking", center, bbox: full };
-    }
-    if (++lostCount >= p.lostTolerance) {
-      releaseTracker();
-      return { status: "lost" };
-    }
-    return undefined; // dropped: sub-threshold miss, no observable change
   }
 
   /** Magnification for the fovea↔wide match: measured, else nominal zoom. */
@@ -239,14 +179,8 @@ export function createDisparityKernel(initial: Record<string, unknown>): VisionK
       height = h;
       values.size = { width, height };
     }
-    if (pendingInit) {
-      const center = pendingInit;
-      pendingInit = null;
-      values.tracker = initTracker(c, center);
-    } else if (kcf) {
-      const r = updateTracker(c);
-      if (r) values.tracker = r;
-    }
+    // No KCF here (§3.5): `p.target`/`p.overridden` arrive from the session's
+    // chained tracker thread via setParams.
     // No "C" view frame — the center view sources directly from the undistort
     // pipe. `c` is the UNDISTORTED wide frame (the kernel's C input is now the
     // center camera's undistort pipe), so the sliced crop + the match + the
@@ -285,8 +219,9 @@ export function createDisparityKernel(initial: Record<string, unknown>): VisionK
       };
       values.analysis = wireAnalysis;
       // The control OUTPUT: matched centres + target lifted to full-res wide
-      // pixels (strip offsets folded in) — the only thing the PID node reads.
-      values.projection = scopeProjection(wireAnalysis);
+      // pixels (strip offsets folded in), the tracker-override flag carried
+      // through — the only thing the PID node reads.
+      values.projection = scopeProjection(wireAnalysis, p.overridden);
     }
     void seq;
   }
@@ -294,18 +229,14 @@ export function createDisparityKernel(initial: Record<string, unknown>): VisionK
   const kernel: VisionKernel = {
     setParams(params: Record<string, unknown>): void {
       const d = params as DisparityParams;
-      if (d.kernelW !== undefined) p.kernelW = d.kernelW;
-      if (d.kernelH !== undefined) p.kernelH = d.kernelH;
       if (d.zoom !== undefined) p.zoom = d.zoom;
       if (d.matchZoom !== undefined) p.matchZoom = d.matchZoom;
       if (d.scale !== undefined) p.scale = d.scale;
       if (d.target !== undefined) p.target = d.target;
+      if (d.overridden !== undefined) p.overridden = d.overridden;
       if (d.expand_x !== undefined) p.expand_x = d.expand_x;
       if (d.expand_y !== undefined) p.expand_y = d.expand_y;
       if (d.view !== undefined) p.view = d.view;
-      if (d.lostTolerance !== undefined) p.lostTolerance = d.lostTolerance;
-      if (d.trackerRelease) releaseTracker();
-      if ("trackerInit" in d) pendingInit = d.trackerInit ?? null;
     },
 
     async process(frames: FrameSet): Promise<KernelOutput> {
@@ -325,7 +256,8 @@ export function createDisparityKernel(initial: Record<string, unknown>): VisionK
     },
 
     dispose(): void {
-      releaseTracker();
+      // Nothing owned: the tracker lives on its own native thread (session-
+      // owned); tiles/aligned Mats are GC-managed.
     },
   };
 

@@ -147,6 +147,15 @@ Renderer reactive proxy (client lib, reusable contract fragment):
   tracker/strip). On release, seeding reproduces "start from the dragged ray"
   EXACTLY: `pan = ray − aT`, `verge = v_shift = 0`.
 
+  > **SUPERSEDED for disparity-scope drags (2026-07-08, controller-node-and-
+  > fifo-edges §3.5):** the scope UI's pointer drags now ride the CHAINED
+  > TRACKER's override (the PID node keeps running throughout; no pinning,
+  > no seed, the release-jump class dies structurally). The PID-slot
+  > override + the seeded release below remain LIVE for the generic
+  > `pidOverride` command (programmatic volts) and for the calibrate apps'
+  > per-eye drags; on that volts-only path the angles are recovered via V2A
+  > (the `overrideRay` shortcut left with the drag path).
+
   **Release-seam SPACE CONTRACT (refinement 2026-07-08 — the release-jump
   fix).** The seed's reconstruction inverse (`stepVergence`'s inverse, now
   the pure `seedVergence(gL, gR, aT, baseline)`) operates on per-eye gaze
@@ -181,6 +190,10 @@ Renderer reactive proxy (client lib, reusable contract fragment):
   magnified `zoom×`, so its frame projects onto the wide view shrunk by
   `zoom`; the old rects spanned the whole wide frame. Same crop the sliced
   center view uses, so the markers frame exactly the sliced tile.
+  (D2 follow-up: the helper moved to the core-free `display-geometry.ts` —
+  the renderer must not import `vergence.ts`, whose runtime `core/Vision`
+  imports would pull the native addon into the renderer bundle; vergence.ts
+  re-exports it.)
 - Telemetry `pids` readout now comes from the PID node's report (same
   numbers, new source); UI unchanged otherwise.
 

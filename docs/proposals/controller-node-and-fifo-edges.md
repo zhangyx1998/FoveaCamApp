@@ -237,6 +237,57 @@ wave lands + E's API is committed):
   UI simply stops using it for drags. While `overridden` is set the PID may
   clamp/soften rates if needed — worker's judgment, documented.
 
+**AS SHIPPED (integration half, 2026-07-08 — disparity worker D2):**
+
+- Kernel (`app/modules/disparity-scope/vision.ts`): all KCF machinery gone
+  (`trackerInit`/`trackerRelease`/`lostTolerance`/`kernelW/H` params
+  deleted); `DisparityParams` gains `overridden?: boolean`, and the kernel
+  stamps it onto `projection.overridden` (`scopeProjection(a, overridden)`
+  in vergence.ts) — the flag is DATA on the result stream, not topology.
+- Session owns `createChainedTracker(cSourcePipeId, nodeId.undistortKcf(
+  serialC))` — created on activate right after the C pipe is advertised +
+  connected (the chained tap resolves the brick by pipe id), released on
+  drain BEFORE the producer retirer runs (DisposerBag FIFO: pipe
+  disconnects → tracker release → undistort retire), so the tap never
+  outlives its brick. On an uncalibrated wide camera the tracker chains on
+  the CONVERT pipe (same fallback the kernel's C input takes).
+- Result routing = the pure reducer `tracker-feed.ts`
+  (`createDisparityTrackerFeed`): OVERRIDDEN results ALWAYS drive the
+  target push (the drag bypasses the armed gate, so drags work with
+  auto-follow off); found results are gated by the JS-side `trackerArmed`
+  flag (native has no disarm — tracking-single's discipline); lostTolerance
+  (10) consecutive misses fire a single lost (gate drops, target holds
+  `lastGood` — the old in-kernel policy). Unit-tested with synthetic
+  `TrackResult`s (`app/test/disparity-tracker-feed.test.ts`).
+- Drag flow as ruled: pointer down/move → `tk.override(p)` + a synchronous
+  target/flag push (no one-frame lag); up → `tk.releaseOverride()` (native
+  re-arms at the drag end), `trackerArmed = state.tracker_enabled`. The PID
+  node's `step` runs on EVERY projection throughout — nothing pins its
+  output on this path, no seed on release.
+- "Acts correspondingly" while `projection.overridden`: the session holds
+  the convergence freeze-window open (a drag is user activity) and reports
+  "manual" status; the control math is UNCHANGED (bench-pinned: identical
+  commands for flagged/unflagged projections). NO extra rate clamp — every
+  DOF's integrator is already anti-windup-clamped to its physical range
+  (verge [0, max], pan ±5°, v_shift ±2°), so an unreachable drag at worst
+  rests a controller at its limit; a low match score during a drag holds
+  the output (foveas pause until the matcher reacquires the dragged tile).
+- The `pidOverride` contract fragment STAYS in disparity-scope as the
+  programmatic volts-only path (module-agnostic `usePidOverride` proxy;
+  calibrate apps keep their own usage); its seeded release
+  (`seedFromOverride` → the pure `seedVergence`) now serves only that path
+  and always recovers angles via V2A (the drag's `overrideRay` shortcut
+  from the previous wave is gone with the drag itself). The UI override
+  badge reads the new telemetry `overridden` (the tracker flag), NOT the
+  PID slot.
+- Graph: the chained tracker does not self-report topology, so the session
+  registers `{ id: nodeId.undistortKcf(serialC), kind: "kcf",
+  output: {kind:"track"} }` with edges `C-source → kcf` (frame tap) and
+  `kcf → kernel` (port "target", track stream); the tracker's native meter
+  is probed out-of-loop under that node id (`registerNativeProbe`).
+- `startActuationLoop` NOT migrated here (worker G phase 2 owns the
+  disparity migration + actuation.ts deletion, per §4.5).
+
 ## §4 Cmd/Ctrl-W closes the window (planner-direct)
 
 `app/electron/main.ts` builds a custom application menu without any Close

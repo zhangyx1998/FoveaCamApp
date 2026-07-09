@@ -31,7 +31,9 @@ import {
   type Gains,
   type Tuning,
 } from "./contract";
-import { foveaFootprintOnWide } from "./vergence";
+// Core-free display math (NOT ./vergence — that module runtime-imports
+// core/Vision, which the renderer must never pull).
+import { foveaFootprintOnWide } from "./display-geometry";
 import StreamView from "@src/components/StreamView.vue";
 import PosView from "@src/components/PosView.vue";
 import InlineSelect from "@src/components/InlineSelect.vue";
@@ -288,10 +290,14 @@ function onCursor(c: (Point2d & Size & { buttons: number }) | null): void {
           telemetry.realized_distance === Infinity ? "&#x221E;" : telemetry.realized_distance.toFixed(4)
         }}</span>m
         | <span class="value">{{ telemetry.status }}</span>
+        <!-- §3.5: drags ride the TRACKER override (the vergence PID keeps
+             running, converging on the dragged tile) — the badge mirrors the
+             flag the tracker propagates downstream, NOT the PID slot (that
+             slot is programmatic-only now, via the pidOverride command). -->
         <span
-          v-if="state.pidOverride.engaged"
+          v-if="telemetry.overridden"
           class="value override"
-          title="Vergence PID output pinned by pointer drag (control law held reset)"
+          title="Target pinned by pointer drag (tracker override; vergence PID converging on it)"
           >override</span
         >
       </div>

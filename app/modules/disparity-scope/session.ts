@@ -18,25 +18,32 @@
 //    converters awake); spawn the vision worker; create the PID controller NODE
 //    (`createPidNode`) and start the fixed-rate `startActuationLoop`.
 //  - the worker SHM-reads L/C/R (foveas arrive PRE-WARPED off the homography
-//    pipes; C is the undistorted wide view), runs KCF + the tile match, and
-//    posts the scope PROJECTION (matched fovea centres + target, undistorted
-//    wide pixels) + diagnostic frames. The kernel no longer emits L/C/R view
-//    frames — the views source directly from the undistort pipes, so a busy
-//    kernel can't cap their fps.
+//    pipes; C is the undistorted wide view), runs the tile match, and posts
+//    the scope PROJECTION (matched fovea centres + target, undistorted wide
+//    pixels, + the tracker-override flag) + diagnostic frames. The kernel no
+//    longer emits L/C/R view frames — the views source directly from the
+//    undistort pipes, so a busy kernel can't cap their fps.
+//  - the KCF auto-follow runs on its OWN native thread (controller-node-and-
+//    fifo-edges §3.5): `createChainedTracker` on the C undistort brick's
+//    OwnedFrame tap (latest-wins), so it tracks exactly what the matcher sees
+//    and tracking latency never rides the matching budget. The session
+//    consumes its results (`tracker-feed.ts`) and forwards each scalar center
+//    to the kernel as the `target` param + the `overridden` flag.
 //  - main runs the vergence control law INSIDE the PID node's control fn
 //    (`node.step(fn)`): `stepVergence` reads the projection and produces the
 //    `{ l, r }` command volts. `startActuationLoop` reads `commandedVolts`
 //    synchronously every tick (unchanged cadence).
 //
-// Pointer drag → the PID node's OVERRIDE slot: engage on down, update on move,
-// release on up. The renderer only has a pixel, so the SESSION converts it
-// (undistorted wide pixel → ray → both-eye volts) and pins the slot server-side
-// (the generic `pidOverride` command exists too, for a caller that already has
-// volts). On release the node's `seed` hook reseeds the controllers from the
-// LAST override value (velocity-form integrator ⇒ output continuity, no jump) —
-// see `seedFromOverride` for the reconstruction inverse. This replaces the old
-// kernel `wrapPerspective` + homography-param push (the foveas are pre-warped
-// upstream now) and the inline `pids`/`dragging` control path.
+// Pointer drag → the TRACKER's override (§3.5, supersedes the PID-slot drag
+// path in this app): down/move call `tk.override(p)`; the tracker emits
+// `{overridden: true, center: p}` results every frame, the flag rides the
+// kernel target push → `projection.overridden` → the PID step — WHICH KEEPS
+// RUNNING throughout, steering the foveas to converge on the (moving) dragged
+// tile. On release the tracker RE-ARMS at the drag end and the PID simply
+// continues — no seed reconstruction on this path (the release-jump class dies
+// structurally). The PID node's own override slot stays for the generic
+// `pidOverride` command (a programmatic caller that already has volts); its
+// seeded release (`seedFromOverride`) now serves only that path.
 
 import { defineSession, type ServerSession } from "@orchestrator/runtime";
 import { acquireTriple, type CalibratedTriple } from "@orchestrator/calibration";
@@ -83,12 +90,20 @@ import {
   type VergenceControllers,
 } from "./vergence";
 import type { DisparityParams, DisparityValues } from "./vision";
+import { consumeTracker, createDisparityTrackerFeed } from "./tracker-feed";
 import { makeMat } from "@lib/mat";
 import { PID, PID2D, type PidParams } from "@lib/pid";
 import { distanceToVerge, vergeToDistance, vergenceToDistance } from "@lib/stereo";
 import { RollingStats } from "@lib/util/rolling";
+import { RECT } from "@lib/util/geometry";
 import type { Point2d } from "core/Geometry";
 import type { Pos } from "@lib/controller-codec";
+// Direct core import in a session — same precedent as tracking-single's
+// `createTracker`; all PURE logic lives in tracker-feed.ts/vergence.ts so
+// vitest never loads the native addon.
+import { createChainedTracker, type KcfTracker, type TrackerMeter } from "core/Tracker";
+import { registerNativeProbe } from "@orchestrator/native-probes";
+import type { WorkloadSnapshot } from "@lib/orchestrator/stats";
 
 const ZERO: Point2d = { x: 0, y: 0 };
 const now = () => performance.now();
@@ -105,6 +120,22 @@ const SEED_PARALLEL_EPS = 1e-9;
 // loop abstracts the MEMS controller (no per-port id reaches the session), so
 // this is a stable placeholder the wiring shim renders as a `controller` node.
 const CONTROLLER_NODE_ID = "controller";
+
+// Adapt the native tracker meter to the `WorkloadSnapshot` shape
+// `perfSnapshot.workloads` uses (same adapter tracking-single carries) —
+// keyed by the kcf NODE id so the meter folds onto the graph node's badge.
+function trackerWorkload(name: string, m: TrackerMeter): WorkloadSnapshot {
+  const t = Date.now();
+  return {
+    name,
+    window: { startedAt: t - m.uptimeMs, snapshotAt: t, uptimeMs: m.uptimeMs },
+    utilization: m.utilization,
+    busyMs: m.busyMs,
+    inputs: m.inputs,
+    outputs: m.outputs,
+    drops: { total: m.dropTotal, ratePerSec: 0, byReason: {} },
+  };
+}
 
 function cloneTuning(t: Tuning): Tuning {
   return {
@@ -137,21 +168,27 @@ export default function disparityScopeSession(
     let lastStep = now();
     let lastVoltEmit = 0;
     let status = "initializing";
-    // Mirror of the worker's tracker liveness (drives `frozen()` + freeze reset).
-    let trackerActive = false;
     let lastGood: Point2d = ZERO;
+
+    // --- chained tracker state (§3.5) ---
+    // The session-owned KCF thread on the C undistort chain (created on
+    // activate, released on drain).
+    let tk: KcfTracker | null = null;
+    // JS-side auto-follow gate: native has NO disarm (same as tracking-single),
+    // so a "released" tracker keeps emitting results and this gate ignores
+    // them until the next arm.
+    let trackerArmed = false;
+    // Found results currently flowing (drives `frozen()` + the bbox overlay).
+    let trackerActive = false;
+    // A pointer drag is in flight (down..up) — the tracker override is engaged.
+    let dragging = false;
+    // Last `overridden` telemetry sent (publish transitions only, not every
+    // tracker result).
+    let overriddenTele = false;
 
     // Commanded volts — the PID node's output (control result or pinned
     // override), read synchronously every actuation tick.
     let commandedVolts: VergenceVolts = { l: ORIGIN_POS, r: ORIGIN_POS };
-    // The gaze RAY (center-camera angle) a DRAG pinned the eyes at — set on
-    // every drag engage, cleared on idle + when the generic (volts-only)
-    // override engages. Seeding the release from THIS exact ray (both eyes on
-    // it) — instead of recovering the angles from the pinned volts via V2A —
-    // is what keeps release continuous: the V2A round-trip is per-eye
-    // asymmetric and fabricates a verge/v_shift out of a parallel drag. See
-    // `seedVergence`'s SPACE CONTRACT and `seedFromOverride` below.
-    let overrideRay: Point2d | null = null;
     const actuateMsStats = new RollingStats(0.9, 2, "ms");
 
     // The named DOF controllers (owned by the PID node once created). `pan` is a
@@ -219,23 +256,82 @@ export default function disparityScopeSession(
     }
 
     function initParams(): Record<string, unknown> {
+      // No tracker knobs (§3.5): the kernel runs no KCF — the session pushes
+      // the chained tracker's output as `target`/`overridden` at result rate.
       return {
         kind: "disparity",
-        kernelW: s.state.kernel.w,
-        kernelH: s.state.kernel.h,
         zoom: Math.max(1, s.state.zoom),
         matchZoom: measuredMatchZoom(),
         scale: effectiveScale(),
         target: s.state.target,
+        overridden: false,
         expand_x: s.state.tuning.expand_x,
         expand_y: s.state.tuning.expand_y,
         view: s.state.view,
-        lostTolerance: TRACKER_LOST_TOLERANCE,
-        trackerInit: s.state.tracker_enabled ? s.state.target : null,
       };
     }
 
-    // --- override slot (renderer drag → pinned output) --------------------
+    // --- chained tracker (§3.5): arm + result feed -------------------------
+
+    /** Publish the `overridden` telemetry on TRANSITIONS only (the tracker
+     *  re-affirms the flag every frame; the UI badge needs edges, not spam). */
+    function publishOverridden(v: boolean): void {
+      if (v === overriddenTele) return;
+      overriddenTele = v;
+      s.telemetry({ overridden: v });
+    }
+
+    /** (Re-)arm the chained tracker at `center` with the contract's KCF
+     *  template size. Native clamps the ROI to the frame. */
+    function armTracker(center: Point2d): void {
+      if (!tk) return;
+      tk.arm(
+        RECT.fromCenter(center, {
+          width: s.state.kernel.w,
+          height: s.state.kernel.h,
+        }),
+      );
+      trackerArmed = true;
+    }
+
+    // Per-result routing off the tracker thread (pure reducer — see
+    // tracker-feed.ts for the gating/tolerance semantics). Every path forwards
+    // the scalar target + the override flag to the KERNEL, which carries it
+    // onto `projection.overridden` for the PID step.
+    const trackerFeed = createDisparityTrackerFeed(
+      {
+        armed: () => trackerArmed,
+        onDrag(center) {
+          // Drag in flight: the tracker echoes the override point every frame.
+          // The pointer handler already pushed it synchronously; this keeps
+          // target+flag coherent at frame rate even if a pointer move was
+          // coalesced away.
+          lastGood = center;
+          s.setState("target", center);
+          sendParams({ target: center, overridden: true });
+          publishOverridden(true);
+        },
+        onTrack(center, bbox) {
+          trackerActive = true;
+          lastGood = center;
+          s.setState("target", center);
+          sendParams({ target: center, overridden: false });
+          s.telemetry({ tracker_bbox: bbox });
+          publishOverridden(false);
+        },
+        onLost() {
+          // Tolerance exceeded: release auto-follow (JS gate), hold the last
+          // good target — the same policy the old in-kernel tracker had.
+          trackerArmed = false;
+          trackerActive = false;
+          s.setState("target", lastGood);
+          s.telemetry({ tracker_bbox: null });
+        },
+      },
+      TRACKER_LOST_TOLERANCE,
+    );
+
+    // --- PID-node override slot (generic volts path ONLY since §3.5) --------
 
     /** Mirror the server-authoritative override slot into contract state so the
      *  renderer's `usePidOverride` proxy reads `engaged`/`value` back. */
@@ -248,47 +344,24 @@ export default function disparityScopeSession(
       );
     }
 
-    /** Pin the override at the volts that aim BOTH foveas along the ray through
-     *  the (undistorted wide) pixel `p` — the manual "look here". Same intent as
-     *  the pre-replumb drag path, but `p` is now undistorted (the C view reads
-     *  the undistort pipe), so lift with distort=false. */
-    function engageOverrideAt(p: Point2d): void {
-      if (!pidNode || !triple || !triple.undistort) return;
-      const ray = triple.conv.P2A.C(p, false);
-      const v: VergenceVolts = {
-        l: triple.conv.A2V.L(ray),
-        r: triple.conv.A2V.R(ray),
-      };
-      overrideRay = ray; // seed the release from this exact ray, not V2A(v)
-      pidNode.override.engage(v);
-      commandedVolts = v; // actuation reads this synchronously between results
-      status = "manual";
-      publishOverride();
-    }
-
     /**
      * Reseed the controllers from the LAST override value so control resumes
      * CONTINUOUSLY (velocity-form integrator ⇒ output = last command = no jump).
-     * Invoked by `override.release()`; the reconstruction inverse itself lives
-     * in the pure {@link seedVergence} (with its SPACE CONTRACT).
+     * Invoked by `override.release()`; the reconstruction inverse lives in the
+     * pure {@link seedVergence} (see its SPACE CONTRACT).
      *
-     * The per-eye gaze ANGLES `gL`/`gR` come from ONE of two sources:
-     *  - DRAG path — `overrideRay` is set: both eyes were commanded to that
-     *    exact ray, so `gL = gR = overrideRay`. `seedVergence` then returns
-     *    `verge = v_shift = 0` and `pan = ray − aT` exactly, and the resumed
-     *    `A2V(ray)` reproduces the pinned volts. Recovering the angles from the
-     *    volts via V2A instead was the release-jump bug: the per-eye V2A
-     *    regressions are asymmetric, so a parallel drag came back as `gL ≠ gR`
-     *    and fabricated a toe-in (the mirrors jumped to "another location").
-     *  - GENERIC volts-only path — `overrideRay` is null: a caller pinned
-     *    arbitrary per-eye volts that genuinely encode a vergence, so recover
-     *    the angles through V2A (best available; lossy round-trip accepted).
+     * GENERIC volts path only since §3.5: pointer drags ride the TRACKER
+     * override (the PID keeps running — nothing pins, nothing seeds), so the
+     * slot is only ever engaged by the `pidOverride` command with arbitrary
+     * per-eye volts that genuinely encode a vergence. Those are recovered
+     * through V2A (per-eye lossy round-trip accepted — there is no shared ray
+     * to seed from on this path).
      */
     function seedFromOverride(v: VergenceVolts): void {
       if (!triple || !triple.undistort) return;
       const conv = triple.conv;
-      const gL = overrideRay ?? conv.V2A.L(v.l);
-      const gR = overrideRay ?? conv.V2A.R(v.r);
+      const gL = conv.V2A.L(v.l);
+      const gR = conv.V2A.R(v.r);
       const aT = conv.P2A.C(s.state.target, false);
       const seed = seedVergence(gL, gR, aT, s.state.baseline, SEED_PARALLEL_EPS);
       pan.value = seed.pan; // PID2D setter clamps each axis to its limits
@@ -301,18 +374,8 @@ export default function disparityScopeSession(
     function onResult(r: VisionResult): void {
       const v = r.values as DisparityValues;
       if (v.size) s.telemetry({ size: v.size });
-      if (v.tracker) {
-        if (v.tracker.status === "tracking") {
-          trackerActive = true;
-          lastGood = v.tracker.center;
-          s.setState("target", v.tracker.center);
-          s.telemetry({ tracker_bbox: v.tracker.bbox });
-        } else {
-          trackerActive = false;
-          s.setState("target", lastGood);
-          s.telemetry({ tracker_bbox: null });
-        }
-      }
+      // No tracker values from the kernel anymore (§3.5) — the chained
+      // tracker's results arrive on their own path (`trackerFeed`).
       for (const f of r.frames) {
         s.frame(f.name, makeMat(new Uint8Array(f.buffer), [f.height, f.width], f.channels));
       }
@@ -327,14 +390,30 @@ export default function disparityScopeSession(
     }
 
     /** The vergence control law, run INSIDE the PID node's control fn — invoked
-     *  by `node.step` only when the override is NOT engaged (the node resets the
-     *  controllers itself while overridden). Returns the held/last volts on any
-     *  hold condition so the actuation output freezes rather than winds down. */
+     *  by `node.step` only when the (generic) override is NOT engaged (the node
+     *  resets the controllers itself while overridden). Returns the held/last
+     *  volts on any hold condition so the actuation output freezes rather than
+     *  winds down.
+     *
+     *  §3.5 "act correspondingly" on `projection.overridden` (a tracker-override
+     *  drag riding the projection): the PID KEEPS STEPPING — the foveas servo
+     *  onto the moving dragged tile — with two adjustments:
+     *   - the freeze window is held open (a drag is user activity; a long drag
+     *     must not hit the convergence timeout mid-gesture);
+     *   - status reads "manual" so the UI shows the drag.
+     *  No rate clamp/softening beyond the existing PID saturation: every DOF's
+     *  integrator is anti-windup-clamped to its physical range (`verge`
+     *  [0, max], `pan` ±SHIFT_LIMIT, `v_shift` ±VSHIFT_LIMIT), so a long drag
+     *  toward an unreachable/unmatchable target at worst rests a controller at
+     *  its limit — the bounded-windup case the limits exist for. A low match
+     *  score during a drag holds (as always): the foveas pause until the
+     *  matcher reacquires the dragged tile. */
     function controlStep(projection: ScopeProjection): VergenceVolts {
       if (!triple || !triple.undistort) {
         status = "no calibration";
         return commandedVolts;
       }
+      if (projection.overridden) windowStart = now(); // drag = activity
       if (frozen()) {
         status = "frozen";
         return commandedVolts;
@@ -353,7 +432,7 @@ export default function disparityScopeSession(
         return commandedVolts;
       }
       lastStep = t;
-      status = "tracking";
+      status = projection.overridden ? "manual" : "tracking";
       return { l: result.left, r: result.right };
     }
 
@@ -478,12 +557,42 @@ export default function disparityScopeSession(
       // pipe on an uncalibrated wide camera (control then holds "no
       // calibration", the same degradation as before).
       pipeIds = [];
+      const serialC = t.leases.C.camera.serial;
+      const cSourceId = undistortIds.C ?? nodeId.convert(serialC);
       const pipeInputs: PipeInput[] = [
         connectCameraPipe("L", undistortIds.L ?? nodeId.convert(t.leases.L.camera.serial)),
-        connectCameraPipe("C", undistortIds.C ?? nodeId.convert(t.leases.C.camera.serial)),
+        connectCameraPipe("C", cSourceId),
         connectCameraPipe("R", undistortIds.R ?? nodeId.convert(t.leases.R.camera.serial)),
       ];
-      // Now defer the producer teardown (runs AFTER the consumer disconnects).
+
+      // §3.5: the chained KCF tracker — its OWN native thread, tapping the
+      // SAME C brick the kernel reads (undistort; convert fallback), so it
+      // tracks exactly what the matcher sees. Resolved by PIPE id (the brick
+      // was just advertised); the tap keeps the brick awake independent of
+      // SHM consumers (same demand rule as the §5 chain). Its disposer is
+      // added HERE — after the pipe disconnects, BEFORE the producer retirers
+      // (DisposerBag is FIFO) — so the tap detaches before the brick dies.
+      const kcfId = nodeId.undistortKcf(serialC);
+      try {
+        tk = createChainedTracker(cSourceId, kcfId);
+      } catch (e) {
+        // No brick on the pipe (shouldn't happen post-advertise) — degrade to
+        // pointer-only targeting, same UX as tracker-disabled.
+        console.error("[disparity-scope] chained tracker unavailable:", e);
+        tk = null;
+      }
+      if (tk) {
+        disposers.add(() => {
+          tk?.release(); // closes the async iterator → consumeTracker exits
+          tk = null;
+          trackerArmed = false;
+          trackerActive = false;
+        });
+        void consumeTracker(tk, trackerFeed);
+      }
+
+      // Now defer the producer teardown (runs AFTER the consumer disconnects
+      // and the tracker tap is released).
       for (const retire of retirers) disposers.add(retire);
 
       const kernelId = nodeId.win("disparity-scope", "disparity");
@@ -506,15 +615,54 @@ export default function disparityScopeSession(
               output: bgra,
               transport: "port",
             },
+            // The chained tracker does NOT self-report topology (no row from
+            // native Topology.report() — unlike undistort bricks), so the
+            // session registers it: C source → kcf (frames, native tap) and
+            // kcf → kernel (the scalar target feed; `overridden` is DATA on
+            // that stream, not topology).
+            ...(tk
+              ? [
+                  {
+                    id: kcfId,
+                    kind: "kcf",
+                    owner: "win/disparity-scope",
+                    output: { kind: "track" } as const,
+                    transport: "native" as const,
+                  },
+                ]
+              : []),
           ],
-          edges: pipeInputs.map((p, i) => ({
-            from: pipeIds[i]!,
-            to: kernelId,
-            port: p.role,
-            type: bgra,
-          })),
+          edges: [
+            ...pipeInputs.map((p, i) => ({
+              from: pipeIds[i]!,
+              to: kernelId,
+              port: p.role,
+              type: bgra,
+            })),
+            ...(tk
+              ? [
+                  { from: cSourceId, to: kcfId, port: "C", type: bgra },
+                  {
+                    from: kcfId,
+                    to: kernelId,
+                    port: "target",
+                    type: { kind: "track" } as const,
+                  },
+                ]
+              : []),
+          ],
         }),
       );
+      // The tracker self-meters under the kcf node id — probe it out-of-loop
+      // so utilization/rate/drops fold onto the node's badge.
+      if (tk) {
+        disposers.add(
+          registerNativeProbe(
+            (): Record<string, WorkloadSnapshot> =>
+              tk ? { [kcfId]: trackerWorkload(kcfId, tk.probe()) } : {},
+          ),
+        );
+      }
 
       // The PID controller node: scope → pid (input edge) + pid → controller
       // (output edge, filed on the controller node by the wiring shim).
@@ -534,6 +682,8 @@ export default function disparityScopeSession(
       });
 
       loop = startActuationLoop({ targetVolts, onVolts });
+      // Auto-follow was left on: arm the fresh tracker at the current target.
+      if (s.state.tracker_enabled) armTracker(s.state.target);
       // Surface the measured magnification (null = nominal-zoom fallback) so
       // the UI can display the actual match scale instead of guessing from
       // the (now crop-only) zoom knob.
@@ -546,33 +696,64 @@ export default function disparityScopeSession(
       worker?.terminate(); // terminate before disconnect: no reads after the gate drops
       worker = null;
       trackerActive = false;
-      disposers.dispose(); // disconnect pipes, stop feeders, retire undistort, dispose pid node
+      dragging = false;
+      overriddenTele = false;
+      disposers.dispose(); // disconnect pipes, release tracker, retire undistort, dispose pid node
       publishOverride(); // pidNode is now null → released state
       releaseLeases(triple);
       triple = null;
       status = "initializing";
       commandedVolts = { l: ORIGIN_POS, r: ORIGIN_POS };
-      overrideRay = null;
-      s.resetTelemetry(["ready", "status", "tracker_bbox", "match_magnification"]);
+      s.resetTelemetry([
+        "ready",
+        "status",
+        "tracker_bbox",
+        "match_magnification",
+        "overridden",
+      ]);
     }
 
     return {
       commands: {
         async pointer({ p, buttons: _buttons, phase }) {
-          if (phase === "down") {
-            trackerActive = false;
-            sendParams({ trackerRelease: true, target: p });
-            s.telemetry({ tracker_bbox: null });
-          }
+          // §3.5 drag semantics: down/move engage the TRACKER's override; the
+          // PID vergence node KEEPS RUNNING throughout (nothing pins its
+          // output), steering the foveas to converge on the moving dragged
+          // tile. The `overridden` flag rides tracker → kernel target →
+          // projection → PID.
           if (phase !== "up") {
+            if (phase === "down") {
+              dragging = true;
+              trackerActive = false;
+              s.telemetry({ tracker_bbox: null });
+            }
+            tk?.override(p);
+            // Push synchronously too (don't wait one tracker frame) — the feed
+            // re-affirms the same values at result rate.
+            lastGood = p;
             s.setState("target", p);
-            sendParams({ target: p });
-            engageOverrideAt(p); // pin the override at the dragged ray (engage/update)
-          } else {
-            pidNode?.override.release(); // seeds the controllers → continuity
-            publishOverride();
+            sendParams({ target: p, overridden: true });
+            publishOverridden(true);
+            status = "manual";
+            // Refresh the freeze window NOW (the flagged projection that also
+            // refreshes it lags one kernel tick — a drag started while frozen
+            // must servo immediately).
             windowStart = now();
-            if (s.state.tracker_enabled) sendParams({ trackerInit: s.state.target });
+          } else {
+            dragging = false;
+            windowStart = now(); // drag end restarts the convergence window
+            sendParams({ target: s.state.target, overridden: false });
+            publishOverridden(false);
+            if (tk) {
+              // Native releaseOverride RE-ARMS KCF at the drag end on the next
+              // frame; the PID continues seamlessly (no seed — it was never
+              // interrupted). With auto-follow OFF the JS gate ignores the
+              // re-armed tracker's results (native has no disarm — same
+              // discipline as tracking-single).
+              tk.releaseOverride();
+              trackerArmed = s.state.tracker_enabled;
+              trackerActive = false;
+            }
           }
         },
         async resetTuning() {
@@ -601,9 +782,6 @@ export default function disparityScopeSession(
         },
         async pidOverride(command) {
           if (!pidNode) return;
-          // A volts-only engage: no known gaze ray, so the release must recover
-          // the angles via V2A. Drop any stale drag ray so it isn't misused.
-          if ("value" in command) overrideRay = null;
           const state = applyPidOverride(pidNode.override, command);
           if (state.engaged && state.value) {
             commandedVolts = state.value;
@@ -632,17 +810,23 @@ export default function disparityScopeSession(
         view(view) {
           sendParams({ view });
         },
-        kernel(k) {
-          sendParams({ kernelW: k.w, kernelH: k.h });
+        kernel() {
+          // The template size feeds the session-side arm ROI now (the kernel
+          // runs no KCF — no params to push). Re-arm live at the current
+          // target so the knob takes effect immediately — unless a drag is in
+          // flight (its release re-arms anyway).
+          if (trackerArmed && !dragging) armTracker(s.state.target);
         },
         tracker_enabled(on) {
           if (!on) {
+            trackerArmed = false; // JS gate: results ignored (no native disarm)
             trackerActive = false;
-            sendParams({ trackerRelease: true });
             s.telemetry({ tracker_bbox: null });
-          } else if (!pidNode?.override.engaged) {
-            sendParams({ trackerInit: s.state.target });
+          } else if (!dragging) {
+            armTracker(s.state.target);
           }
+          // While dragging, the pointer-up releaseOverride re-arms and
+          // `trackerArmed` follows the (fresh) tracker_enabled state there.
         },
       },
       activate() {

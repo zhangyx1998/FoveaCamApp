@@ -73,8 +73,15 @@ function projectionFor(
   matchedL: Point2d,
   matchedR: Point2d,
   score = 1,
+  overridden = false,
 ): ScopeProjection {
-  return { l: matchedL, r: matchedR, target, scores: { l: score, r: score } };
+  return {
+    l: matchedL,
+    r: matchedR,
+    target,
+    scores: { l: score, r: score },
+    overridden,
+  };
 }
 
 // The fovea↔wide template match is only meaningful when the fovea tile and the
@@ -236,6 +243,60 @@ describe("scopeProjection (control-output emission math)", () => {
     expect(proj.l).toEqual({ x: 3, y: -2 });
     expect(proj.r).toEqual({ x: -5, y: 8 });
     expect(proj.target).toEqual({ x: 0, y: 0 });
+  });
+
+  // §3.5 (controller-node-and-fifo-edges): the tracker's override flag rides
+  // the projection downstream unchanged so the PID stage can act on the drag.
+  it("carries the tracker-override flag through (default false)", () => {
+    const input = {
+      ml: { rect: rect(1, 1), score: 1 },
+      mr: { rect: rect(2, 2), score: 1 },
+      center: { rect: rect(0, 0) },
+      ox: 0,
+      oy: 0,
+    };
+    expect(scopeProjection(input).overridden).toBe(false);
+    expect(scopeProjection(input, false).overridden).toBe(false);
+    expect(scopeProjection(input, true).overridden).toBe(true);
+  });
+});
+
+// §3.5 "act correspondingly": with the tracker override riding the projection
+// the PID node keeps RUNNING — stepVergence must integrate toward the dragged
+// target exactly as it does toward a tracked one (the flag is metadata for the
+// session's status/freeze handling, never a control-math input).
+describe("stepVergence on an overridden projection (drag: PID keeps running)", () => {
+  it("produces the identical command for overridden and non-overridden inputs", () => {
+    const target = { x: 10, y: 4 };
+    const l = { x: 8, y: 2 };
+    const r = { x: 12, y: 3 };
+    const a = freshControllers();
+    const b = freshControllers();
+    const outA = stepVergence(
+      projectionFor(target, l, r, 1, false),
+      a,
+      identityConv,
+      { baseline: 200, minScore: 0.1 },
+      10,
+    );
+    const outB = stepVergence(
+      projectionFor(target, l, r, 1, true),
+      b,
+      identityConv,
+      { baseline: 200, minScore: 0.1 },
+      10,
+    );
+    expect(outB).toEqual(outA); // drag changes nothing in the control law
+    expect(b.verge.value).toBeCloseTo(a.verge.value);
+    expect(b.pan.value.x).toBeCloseTo(a.pan.value.x);
+  });
+
+  it("still holds on a low score during a drag (foveas pause until the matcher reacquires)", () => {
+    const ctl = freshControllers();
+    const proj = projectionFor({ x: 0, y: 0 }, { x: 1, y: 0 }, { x: -1, y: 0 }, 0.01, true);
+    const out = stepVergence(proj, ctl, identityConv, { baseline: 200, minScore: 0.1 }, 10);
+    expect(out).toBeNull();
+    expect(ctl.verge.value).toBe(0); // untouched — no windup behind the hold
   });
 });
 
