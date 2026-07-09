@@ -227,10 +227,23 @@ export interface CaptureStreams {
   center: CaptureCenterInit;
 }
 
-/** On-demand pipe seam (session-owned): advertise+attach the raw L/R producers,
- *  connect all three streams (refcount++ → gate → producers run), and return a
+/** The DEGENERATE single-stream composition (capture-recorder-everywhere ruling
+ *  3, item 4): exactly ONE raw stream is provided. The worker stacks that one
+ *  stream full-depth (same stack math, no wrap / center slice / diff) and holds
+ *  the result as a single named resource. Used by calibrate-intrinsic, which
+ *  leases one camera at a time (never a fixed triple). */
+export interface CaptureSingleStreams {
+  single: CaptureStreamInit;
+}
+
+/** Either the fixed triple (L/R + center) or the degenerate single stream. The
+ *  worker dispatches on `"single" in streams`; the host forwards it opaquely. */
+export type CaptureStreamsAny = CaptureStreams | CaptureSingleStreams;
+
+/** On-demand pipe seam (session-owned): advertise+attach the raw producer(s),
+ *  connect the stream(s) (refcount++ → gate → producers run), and return a
  *  `release` that disconnects + retires them (gate parks the producers). */
-export type AcquireStreams = () => { streams: CaptureStreams; release: () => void };
+export type AcquireStreams = () => { streams: CaptureStreamsAny; release: () => void };
 
 /** One capture shot's calibration-derived transforms + per-resource metadata —
  *  computed on MAIN in the ruling-3 `onCaptureStart` snapshot and attached to
@@ -264,13 +277,37 @@ export interface CaptureShot {
   };
 }
 
+/** One SINGLE-STREAM shot's descriptor — the degenerate `CaptureShot`. Carries
+ *  the same accumulation controls (reset/indexed/stackCount/burstTimeoutMs) but
+ *  NO fovea homographies / center rect: the one stacked full-depth image is held
+ *  UNWRAPPED under `resource`. */
+export interface CaptureSingleShot {
+  reset: boolean;
+  indexed: boolean;
+  stackCount: number;
+  /** F1: per-shot burst read timeout (ms). Omit → `DEFAULT_BURST_TIMEOUT_MS`. */
+  burstTimeoutMs?: number;
+  /** Resource name for the one stacked full-depth image (e.g. "sensor"). */
+  resource: string;
+  meta: {
+    /** Rides the reset shot only (parity with the triple's `wide`). */
+    wide?: Serializable;
+    /** The single resource's metadata. */
+    single: Serializable;
+  };
+}
+
+/** Either shot shape — the node forwards it opaquely; the worker branches on the
+ *  stream shape (`"single" in streams`). */
+export type CaptureShotAny = CaptureShot | CaptureSingleShot;
+
 export interface CaptureNodeOptions {
   /** Graph node id — `capture/<session>` (composed in the session wrapper). */
   id: string;
-  /** Pipe ids for the graph input edges (stable per session — the raw L/R
-   *  producers + the center undistort pipe). Wiring only; the actual connect is
-   *  per-run via `acquireStreams`. */
-  graphInputs: { left: string; right: string; center: string };
+  /** Pipe ids for the graph input edges. Wiring only; the actual connect is
+   *  per-run via `acquireStreams`. Triple: the raw L/R producers + the center
+   *  undistort pipe. Single (degenerate): the one raw producer. */
+  graphInputs: { left: string; right: string; center: string } | { single: string };
   /** On-demand pipe connect/release (session-owned; see `AcquireStreams`). */
   acquireStreams: AcquireStreams;
   /** Test seam: spawn the worker (default: the eval'd WORKER_SOURCE). */
@@ -284,7 +321,7 @@ export interface CaptureNodeHandle {
   /** Run one capture shot: connect the raw pipes on demand, drain the burst,
    *  stack/wrap/diff/slice in-worker, hold the resources, release the pipes.
    *  Resolves with the resource → metadata manifest (`capture_meta`). */
-  capture(shot: CaptureShot): Promise<Record<string, Serializable>>;
+  capture(shot: CaptureShotAny): Promise<Record<string, Serializable>>;
   /** Pull one held resource's ACTUAL data downconverted to 8-bit BGRA (ruling
    *  7). Returns null for a meta-only resource / a bad index. */
   getPreview(resource: string, index?: number): Promise<FramePayload | null>;
@@ -305,12 +342,9 @@ export interface WorkerLike {
   terminate(): Promise<number> | void;
 }
 
-/** Per-run stream init the worker gets (shmNames + geometry). */
-interface WorkerCaptureStreams {
-  left: CaptureStreamInit;
-  right: CaptureStreamInit;
-  center: CaptureCenterInit;
-}
+/** Per-run stream init the worker gets (shmNames + geometry) — triple or the
+ *  degenerate single stream. */
+type WorkerCaptureStreams = CaptureStreamsAny;
 
 /** main → worker protocol. */
 export type CaptureNodeIn =
@@ -318,7 +352,7 @@ export type CaptureNodeIn =
       type: "capture";
       runId: number;
       streams: WorkerCaptureStreams;
-      shot: CaptureShot;
+      shot: CaptureShotAny;
     }
   | { type: "getPreview"; reqId: number; resource: string; index?: number }
   | { type: "save"; reqId: number; path: string; format: string }
@@ -351,17 +385,23 @@ export function createCaptureNode(options: CaptureNodeOptions): CaptureNodeHandl
   const { id, graphInputs, acquireStreams } = options;
 
   // --- graph row + meter (per-run burst counts + stack timing) --------------
+  // Single (degenerate) mode wires ONE input edge; triple wires L/R + center.
+  const single = "single" in graphInputs;
   const wiring: GraphWiring = {
     nodes: [{ id, kind: "capture", output: null, transport: "sink" }],
-    edges: [
-      { from: graphInputs.left, to: id, port: "left", type: { kind: "frame", pixelFormat: "sensor", dtype: "U16" }, lossy: false },
-      { from: graphInputs.right, to: id, port: "right", type: { kind: "frame", pixelFormat: "sensor", dtype: "U16" }, lossy: false },
-      { from: graphInputs.center, to: id, port: "center", type: { kind: "frame", pixelFormat: "bgra", dtype: "U8" }, lossy: true },
-    ],
+    edges: single
+      ? [
+          { from: graphInputs.single, to: id, port: "single", type: { kind: "frame", pixelFormat: "sensor", dtype: "U16" }, lossy: false },
+        ]
+      : [
+          { from: graphInputs.left, to: id, port: "left", type: { kind: "frame", pixelFormat: "sensor", dtype: "U16" }, lossy: false },
+          { from: graphInputs.right, to: id, port: "right", type: { kind: "frame", pixelFormat: "sensor", dtype: "U16" }, lossy: false },
+          { from: graphInputs.center, to: id, port: "center", type: { kind: "frame", pixelFormat: "bgra", dtype: "U8" }, lossy: true },
+        ],
   };
   const unregisterWiring = registerGraphWiring(wiring);
   const meter: WorkloadHandle = registerWorkload(id, {
-    inputs: ["left", "right", "center"],
+    inputs: single ? ["single"] : ["left", "right", "center"],
     outputs: ["captured", "stackMs"],
   });
 
@@ -399,22 +439,21 @@ export function createCaptureNode(options: CaptureNodeOptions): CaptureNodeHandl
       const run = pendingRuns.get(msg.runId);
       pendingRuns.delete(msg.runId);
       releaseRun(run); // idempotent (already released on reading-done)
-      // Meter: honest per-run burst counts + stack timing; parked = zero.
-      meter.ingest("left", msg.bursts.left ?? 0);
-      meter.ingest("right", msg.bursts.right ?? 0);
-      meter.ingest("center", msg.bursts.center ?? 0);
+      // Meter: honest per-run burst counts + stack timing; parked = zero. Keyed
+      // by whatever ports the worker reported (triple: left/right/center; single:
+      // single) — the meter tracks any input string.
+      for (const [port, n] of Object.entries(msg.bursts)) meter.ingest(port, n ?? 0);
       meter.emit("captured", 1);
       meter.emit("stackMs", Math.round(msg.stackMs));
       run?.resolve(msg.manifest);
     } else if (msg.type === "progress") {
       // F1: rate-limited per-port burst progress — name WHICH port stalls while
-      // the burst is still running (before the timeout rejects it).
-      report(
-        "capture-node",
-        `capture ${msg.runId} progress — center ${msg.delivered.center ?? 0}/1, ` +
-          `left ${msg.delivered.left ?? 0}/${msg.expected}, ` +
-          `right ${msg.delivered.right ?? 0}/${msg.expected}`,
-      );
+      // the burst is still running (before the timeout rejects it). Generic over
+      // the reported ports (triple: left/right/center; single: single).
+      const parts = Object.entries(msg.delivered)
+        .map(([port, n]) => `${port} ${n ?? 0}/${port === "center" ? 1 : msg.expected}`)
+        .join(", ");
+      report("capture-node", `capture ${msg.runId} progress — ${parts}`);
     } else if (msg.type === "preview") {
       pendingReqs.get(msg.reqId)?.resolve(msg.payload);
       pendingReqs.delete(msg.reqId);
@@ -429,11 +468,8 @@ export function createCaptureNode(options: CaptureNodeOptions): CaptureNodeHandl
         releaseRun(run);
         // F1: meter the partial per-port deliveries even on failure (honest —
         // a stalled port ingests 0, the healthy ports their real counts).
-        if (msg.bursts) {
-          meter.ingest("left", msg.bursts.left ?? 0);
-          meter.ingest("right", msg.bursts.right ?? 0);
-          meter.ingest("center", msg.bursts.center ?? 0);
-        }
+        if (msg.bursts)
+          for (const [port, n] of Object.entries(msg.bursts)) meter.ingest(port, n ?? 0);
         run?.reject(err);
       } else if (msg.reqId !== undefined) {
         pendingReqs.get(msg.reqId)?.reject(err);
@@ -475,7 +511,7 @@ export function createCaptureNode(options: CaptureNodeOptions): CaptureNodeHandl
   let stopped = false;
   return {
     id,
-    capture(shot: CaptureShot): Promise<Record<string, Serializable>> {
+    capture(shot: CaptureShotAny): Promise<Record<string, Serializable>> {
       // Node dead (stop() or a worker "error"): reject before acquiring any
       // pipes — never post a run to a dead worker (it would never settle/
       // release).
@@ -767,6 +803,73 @@ async function runCapture(m) {
   }
 }
 
+// --- one SINGLE-STREAM capture shot (degenerate: one stacked full-depth
+// resource; NO wrap, no center slice, no diff). Reuses stackStream + the pure
+// accumulate/manifest helpers verbatim — the triple runCapture path above is
+// left untouched. Dispatched when the run's streams carry only "single".
+async function runSingleCapture(m) {
+  const { runId, streams, shot } = m;
+  const t0 = now();
+  const count = shot.stackCount;
+  const bursts = { single: 0 };
+
+  // Same F1 shared burst deadline as the triple path.
+  const timeoutMs = shot.burstTimeoutMs > 0 ? shot.burstTimeoutMs : DEFAULT_BURST_TIMEOUT_MS;
+  const deadline = now() + timeoutMs;
+  const expired = () => now() > deadline;
+
+  // Rate-limited progress (one port).
+  const delivered = { single: 0 };
+  let lastProgress = 0;
+  function reportProgress(force) {
+    const t = now();
+    if (!force && t - lastProgress < PROGRESS_INTERVAL_MS) return;
+    lastProgress = t;
+    post({ type: "progress", runId, delivered: { ...delivered }, expected: count });
+  }
+  const prog = (n) => { delivered.single = n; reportProgress(false); };
+
+  // Drain the one raw burst, then signal reading-done so the host parks the
+  // producer before the (pipe-free) stack math finishes.
+  let sStack;
+  try {
+    sStack = await stackStream(streams.single, count, expired, prog);
+  } catch (e) {
+    post({ type: "reading-done", runId });
+    reportErr({ runId }, e);
+    return;
+  }
+  bursts.single = sStack.grabbed;
+  post({ type: "reading-done", runId });
+  reportProgress(true); // final per-port snapshot
+
+  // F1 completeness gate (same contract as the triple path, one port).
+  if (sStack.grabbed < count) {
+    const detail = "single delivered " + bursts.single + "/" + count;
+    const reason = expired()
+      ? "capture burst timed out after " + timeoutMs + "ms"
+      : "capture burst incomplete (producer retired mid-burst)";
+    reportErr({ runId, bursts }, new Error(reason + ": " + detail));
+    return;
+  }
+
+  try {
+    const { reset, indexed } = shot;
+    if (reset) {
+      store.clear();
+      if (shot.meta.wide !== undefined) accumulate(store, "wide", { meta: shot.meta.wide }, false);
+    }
+    // The one stacked burst → full-depth (16-bit) BGRA, held UNWRAPPED (same
+    // makeBGRA call as normalizeFovea, minus the wrapPerspective).
+    const image = makeBGRA(V.convertType(sStack.image, "16U"), streams.single.pixelFormat);
+    accumulate(store, shot.resource, { image, meta: shot.meta.single }, indexed);
+    const manifest = manifestOf(store, (e) => (e && e.meta !== undefined ? e.meta : null));
+    post({ type: "captured", runId, manifest, bursts, stackMs: now() - t0 });
+  } catch (e) {
+    reportErr({ runId }, e);
+  }
+}
+
 // --- getPreview: downconvert the ACTUAL held resource to 8-bit BGRA ----------
 function getPreview(m) {
   try {
@@ -826,7 +929,12 @@ async function save(m) {
 }
 
 parentPort.on("message", (m) => {
-  if (m.type === "capture") void runCapture(m);
+  if (m.type === "capture") {
+    // Dispatch on the stream shape: one stream → the degenerate single path;
+    // otherwise the (untouched) triple path.
+    if (m.streams && m.streams.single) void runSingleCapture(m);
+    else void runCapture(m);
+  }
   else if (m.type === "getPreview") getPreview(m);
   else if (m.type === "save") void save(m);
   else if (m.type === "discard") { store.clear(); post({ type: "discarded", reqId: m.reqId }); }

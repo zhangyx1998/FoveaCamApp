@@ -177,6 +177,18 @@ describe("accumulate / manifestOf", () => {
     expect(store.get("left")).toEqual([{ image: "L0" }, { image: "L1" }, { image: "L2" }]);
   });
 
+  it("single-stream shape: reset wide meta + one image-only resource (ruling 3, item 4)", () => {
+    // Mirrors runSingleCapture's accumulation: a reset shot clears + provides
+    // `wide` (meta), then the one stacked full-depth image lands unindexed under
+    // its resource name (image-only → null meta). No left/right/center/diff.
+    const store = new Map<string, E | E[]>();
+    accumulate(store, "wide", { meta: { note: "raw-stack" } }, false);
+    accumulate(store, "sensor", { image: "S0" }, false); // unindexed single shot
+    const manifest = manifestOf(store, (e) => (e.meta !== undefined ? (e.meta as never) : null));
+    expect(manifest).toEqual({ wide: { note: "raw-stack" }, sensor: null });
+    expect(Object.keys(manifest)).toEqual(["wide", "sensor"]);
+  });
+
   it("builds the manifest: meta-or-null, arrays for indexed resources", () => {
     const store = new Map<string, E | E[]>();
     accumulate(store, "wide", { meta: { sensor: 1 } }, false);

@@ -49,6 +49,11 @@ import { createVisionWorker, type VisionWorkerHandle } from "@orchestrator/visio
 import { nodeId } from "@lib/orchestrator/graph-contract";
 import type { PipeBroker } from "@orchestrator/pipe-session";
 import { createRawRecording } from "@orchestrator/raw-recording";
+import {
+  createCaptureHelper,
+  rawSingleShot,
+  type CaptureHelper,
+} from "@orchestrator/capture-helper";
 import type { RawPipeRegistry } from "@orchestrator/raw-pipe";
 import type { PipeInput, VisionResult } from "@orchestrator/vision-worker-protocol";
 import type { CheckerValues } from "./vision";
@@ -117,6 +122,15 @@ export default function calibrateIntrinsicSession(
         process.parentPort?.postMessage({ type: "recording:finished", path: foveaPath }),
       telemetry: (patch) => s.telemetry(patch),
     });
+
+    // Capture (capture-recorder-everywhere ruling 3, item 4): the DEGENERATE
+    // single-stream case — burst-stack the selected camera's raw full-depth
+    // sensor into ONE held resource (no wrap / center / diff). Built per
+    // `select` (the lease is per-camera, unlike the fixed-triple sessions) and
+    // stopped on `deselect`. The capture REUSES the session's `select` lease —
+    // it never acquires its own camera — and refuses while a recording is active
+    // (ruling 6, shared raw pipe ids).
+    let captureHelper: CaptureHelper | null = null;
     let width = 0;
     let height = 0;
     let records: Record_[] = [];
@@ -352,6 +366,28 @@ export default function calibrateIntrinsicSession(
       monitor.start("detection");
       restartDetection();
       startRateTimer();
+      // Capture (ruling 3, item 4): single-stream capture over this camera's raw
+      // sensor pipe. Built here (per-lease) — stopped in `deselect`.
+      captureHelper = createCaptureHelper({
+        id: nodeId.win("calibrate-intrinsic", "capture"),
+        broker,
+        rawPipes,
+        graphInputs: { single: `camera/${serial}/raw` },
+        camera: () => activeLease?.camera ?? null,
+        snapshot: (reset, indexed) =>
+          activeLease
+            ? rawSingleShot({
+                reset,
+                indexed,
+                stackCount: 5,
+                resource: "sensor",
+                note: "calibrate-intrinsic: raw sensor stack (single camera)",
+              })
+            : null,
+        recordingActive: () => recording.active,
+        telemetry: (patch) => s.telemetry(patch),
+      });
+      captureHelper.build();
       monitor.done("detection");
       monitor.complete(); // spin-up finished — clear the overlay
     }
@@ -360,6 +396,14 @@ export default function calibrateIntrinsicSession(
       // Finalize an in-flight recording before the lease releases (the recorder
       // drains + releases its raw pipe while the camera is still leased).
       await recording.stop();
+      // Finalize + tear down capture before the lease releases (await any
+      // in-flight shot so its on-demand raw pipe releases while still leased).
+      if (captureHelper) {
+        await captureHelper.activeCapture;
+        await captureHelper.stop();
+        captureHelper = null;
+        s.telemetry({ capture_meta: {} });
+      }
       previewDisposer?.();
       previewDisposer = null;
       stopRateTimer();
@@ -466,10 +510,26 @@ export default function calibrateIntrinsicSession(
         calibrateNow,
         resetCalibration,
         async startRecording({ path }) {
+          if (captureHelper?.capturing) return false; // exclusivity (ruling 6)
           return recording.start(path);
         },
         async stopRecording() {
           await recording.stop();
+        },
+        // Capture (ruling 3, item 4) — forward to the shared single-stream helper
+        // (distinct from the `capture` calibration-record command above).
+        async captureShot({ tag }) {
+          if (!captureHelper) throw new Error("Capture not ready");
+          await captureHelper.captureShot(tag);
+        },
+        async getCapturePreview({ resource, index }) {
+          return captureHelper ? captureHelper.getPreview(resource, index) : null;
+        },
+        async saveCapture({ path, format }) {
+          await captureHelper?.save(path, format);
+        },
+        async discardCapture() {
+          await captureHelper?.discard();
         },
       },
       watch: {
@@ -482,6 +542,7 @@ export default function calibrateIntrinsicSession(
         void deselect();
       },
       busy() {
+        if (captureHelper?.capturing) return "capture in progress";
         if (recording.active) return "recording in progress";
         return null;
       },

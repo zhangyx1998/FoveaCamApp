@@ -49,6 +49,7 @@ const CAPTURE_SESSIONS = [
   "calibrate-drift",
   "calibrate-distortion",
   "calibrate-extrinsic",
+  "calibrate-intrinsic",
 ] as const;
 
 /** The module-component kinds a `debug`-class window can host. Add a new kind

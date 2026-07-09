@@ -15,12 +15,14 @@
 import { describe, it, expect, vi } from "vitest";
 import {
   createCaptureHelper,
+  rawSingleShot,
   type CaptureHelperDeps,
 } from "@orchestrator/capture-helper";
 import type {
   CaptureNodeHandle,
   CaptureNodeOptions,
   CaptureShot,
+  CaptureSingleShot,
   AcquireStreams,
 } from "@orchestrator/capture-node";
 import type { Serializable } from "@lib/orchestrator/protocol";
@@ -103,6 +105,37 @@ function makeHelper(over: Partial<CaptureHelperDeps> = {}) {
     telemetry,
     node,
     setRecording: (v: boolean) => (recording = v),
+  };
+}
+
+/** A SINGLE-STREAM helper (ruling 3, item 4): the `camera` dep switches the
+ *  helper to the degenerate single-stream mode. `snapshot` builds a
+ *  `rawSingleShot` (or null when no camera is selected). */
+function makeSingleHelper(over: Partial<CaptureHelperDeps> = {}) {
+  const telemetry = vi.fn();
+  const node = fakeNode({});
+  let recording = false;
+  let camera: (typeof CAMERAS.left) | null = CAMERAS.left;
+  const deps: CaptureHelperDeps = {
+    id: "capture/test",
+    broker: { connect: vi.fn(), disconnect: vi.fn() } as never,
+    rawPipes: { acquire: vi.fn(), refCount: () => 0, specOf: () => undefined } as never,
+    graphInputs: { single: "camera/L1/raw" },
+    camera: () => camera,
+    snapshot: (reset, indexed) =>
+      camera ? rawSingleShot({ reset, indexed, stackCount: 3, resource: "sensor" }) : null,
+    recordingActive: () => recording,
+    telemetry,
+    createNode: node.createNode,
+    ...over,
+  };
+  const helper = createCaptureHelper(deps);
+  return {
+    helper,
+    telemetry,
+    node,
+    setRecording: (v: boolean) => (recording = v),
+    setCamera: (c: (typeof CAMERAS.left) | null) => (camera = c),
   };
 }
 
@@ -270,5 +303,113 @@ describe("on-demand acquireStreams (extracted verbatim from manual-control)", ()
     expect(disconnect).toHaveBeenCalledWith("camera/L1/raw");
     expect(acquireL.release).toHaveBeenCalled();
     expect(acquireR.release).toHaveBeenCalled();
+  });
+});
+
+describe("single-stream capture (capture-recorder-everywhere ruling 3, item 4)", () => {
+  it("rawSingleShot: one full-depth resource, `wide` only on the reset shot", () => {
+    const s0 = rawSingleShot({ reset: true, indexed: false, stackCount: 5, resource: "sensor" });
+    expect(s0).toMatchObject({ reset: true, indexed: false, stackCount: 5, resource: "sensor" });
+    expect(s0.meta.wide).toBeDefined();
+    expect(s0.meta.single).toMatchObject({ capture: "raw-stack", wrap: "none" });
+    // A non-reset (raster continuation) shot carries no `wide`; default resource.
+    const s1 = rawSingleShot({ reset: false, indexed: true, stackCount: 5 });
+    expect(s1.meta.wide).toBeUndefined();
+    expect(s1.resource).toBe("sensor");
+  });
+
+  it("forwards a single-stream shot and toggles captureBusy + capture_meta", async () => {
+    const { helper, telemetry, node } = makeSingleHelper();
+    helper.build();
+    await helper.captureShot(); // fresh (unindexed)
+    expect(node.shots).toHaveLength(1);
+    expect(node.shots[0]).toMatchObject({ reset: true, indexed: false, resource: "sensor" });
+    // The forwarded shot is the DEGENERATE single shape (no H_L/H_R/rect).
+    const shot = node.shots[0] as CaptureSingleShot;
+    expect(shot.meta.single).toBeDefined();
+    expect("H_L" in shot).toBe(false);
+    expect(helper.capturing).toBe(false);
+    expect(telemetry).toHaveBeenCalledWith({ captureBusy: true });
+    expect(telemetry).toHaveBeenCalledWith({ captureBusy: false });
+    // capture_meta published from the node's manifest (stack held server-side).
+    expect(telemetry).toHaveBeenCalledWith(
+      expect.objectContaining({ capture_meta: expect.anything() }),
+    );
+  });
+
+  it("composes exactly ONE raw stream (reusing the session lease) and release()s it", () => {
+    const acquireS = { pipeId: "camera/L1/raw", release: vi.fn() };
+    const acquire = vi.fn().mockReturnValue(acquireS);
+    const connect = vi.fn((pipeId: string) => ({
+      shmName: `${pipeId}-shm`,
+      spec: { pixelFormat: "Mono8", dtype: "U8", channels: 1, bytesPerFrame: 16, maxBytes: 16 },
+    }));
+    const disconnect = vi.fn();
+    const nodeRef = fakeNode({});
+    const helper = createCaptureHelper({
+      id: "capture/test",
+      broker: { connect, disconnect } as never,
+      rawPipes: { acquire, refCount: () => 0, specOf: () => undefined } as never,
+      graphInputs: { single: "camera/L1/raw" },
+      camera: () => CAMERAS.left,
+      snapshot: (reset, indexed) => rawSingleShot({ reset, indexed, stackCount: 3 }),
+      recordingActive: () => false,
+      telemetry: vi.fn(),
+      createNode: nodeRef.createNode,
+    });
+    helper.build();
+    const acq = nodeRef.acquireStreams!();
+    // ONE camera acquired + connected (not the triple's two), no center pipe.
+    expect(acquire).toHaveBeenCalledTimes(1);
+    expect(connect).toHaveBeenCalledTimes(1);
+    expect(connect).toHaveBeenCalledWith("camera/L1/raw");
+    expect("single" in acq.streams).toBe(true);
+    const streams = acq.streams as { single: { shmName: string; channels: number } };
+    expect(streams.single.shmName).toBe("camera/L1/raw-shm");
+    expect(streams.single.channels).toBe(1);
+    // release disconnects then releases the one acquisition.
+    acq.release();
+    expect(disconnect).toHaveBeenCalledWith("camera/L1/raw");
+    expect(acquireS.release).toHaveBeenCalled();
+  });
+
+  it("refuses when no camera is selected — acquire throws, captureShot rejects, node untouched", async () => {
+    const nodeRef = fakeNode({});
+    const helper = createCaptureHelper({
+      id: "capture/test",
+      broker: { connect: vi.fn(), disconnect: vi.fn() } as never,
+      rawPipes: { acquire: vi.fn(), refCount: () => 0, specOf: () => undefined } as never,
+      graphInputs: { single: "camera/L1/raw" },
+      camera: () => null, // nothing selected
+      snapshot: () => null, // → "Capture not ready"
+      recordingActive: () => false,
+      telemetry: vi.fn(),
+      createNode: nodeRef.createNode,
+    });
+    helper.build();
+    // The wired on-demand acquire refuses cleanly (never touches rawPipes).
+    expect(() => nodeRef.acquireStreams!()).toThrow(/no camera selected/);
+    // The command rejects before it would post any run to the node.
+    await expect(helper.captureShot()).rejects.toThrow(/not ready/i);
+    expect(nodeRef.handle.capture).not.toHaveBeenCalled();
+  });
+
+  it("passes a single-stream burst-timeout rejection through and still clears captureBusy", async () => {
+    const err = new Error("capture burst timed out after 10000ms: single delivered 0/3");
+    const node = fakeNode({ capture: () => Promise.reject(err) });
+    const { helper, telemetry } = makeSingleHelper({ createNode: node.createNode });
+    helper.build();
+    await expect(helper.captureShot()).rejects.toThrow(/timed out/);
+    expect(helper.capturing).toBe(false);
+    expect(telemetry).toHaveBeenLastCalledWith({ captureBusy: false });
+  });
+
+  it("refuses a single-stream capture while a recording is active (exclusivity, ruling 6)", async () => {
+    const { helper, node, setRecording } = makeSingleHelper();
+    helper.build();
+    setRecording(true);
+    await expect(helper.captureShot()).rejects.toThrow(/recording is active/);
+    expect(node.handle.capture).not.toHaveBeenCalled();
+    expect(helper.capturing).toBe(false);
   });
 });

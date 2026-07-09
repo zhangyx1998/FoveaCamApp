@@ -34,6 +34,7 @@ import {
   type CaptureNodeHandle,
   type CaptureNodeOptions,
   type CaptureShot,
+  type CaptureSingleShot,
   type CaptureStreamInit,
 } from "@orchestrator/capture-node";
 import type { PipeBroker } from "@orchestrator/pipe-session";
@@ -75,17 +76,25 @@ export interface CaptureHelperDeps {
   /** Refcounted raw-pipe registry (shared process-wide with recording). */
   rawPipes: RawPipeRegistry;
   /** Stable graph input pipe ids (wiring only — the actual raw connect is
-   *  per-shot). `center` is the session's undistort/convert pipe id. */
-  graphInputs: { left: string; right: string; center: string };
-  /** The two raw camera leases (L/R), or null when the session is not active. */
-  cameras(): CaptureLeases | null;
-  /** The session's already-connected center pipe (undistort/convert), or null
-   *  when not connected. Keeps the producer live for the one-shot read. */
-  centerPipe(): CaptureCenterPipe | null;
+   *  per-shot). Triple: L/R raw + the session's `center` undistort/convert pipe
+   *  id. Single (degenerate): the one selected camera's raw pipe id. */
+  graphInputs: { left: string; right: string; center: string } | { single: string };
+  /** TRIPLE mode: the two raw camera leases (L/R), or null when the session is
+   *  not active. Omit for single-stream mode. */
+  cameras?(): CaptureLeases | null;
+  /** TRIPLE mode: the session's already-connected center pipe (undistort/
+   *  convert), or null when not connected. Omit for single-stream mode. */
+  centerPipe?(): CaptureCenterPipe | null;
+  /** SINGLE-STREAM mode (ruling 3, item 4): the ONE selected camera lease. Its
+   *  PRESENCE switches the helper to single-stream composition. The capture
+   *  REUSES the session's `select` lease — it NEVER acquires its own camera —
+   *  and returns null when no camera is selected (→ capture refuses cleanly). */
+  camera?(): RawGeometrySource | null;
   /** App-specific per-shot snapshot: the calibration-derived transforms +
-   *  per-resource metadata for the whole shot. Return null when the session is
-   *  not ready to capture (→ the command rejects "Capture not ready"). */
-  snapshot(reset: boolean, indexed: boolean): CaptureShot | null;
+   *  per-resource metadata for the whole shot (single-stream apps return a
+   *  `CaptureSingleShot`). Return null when the session is not ready to capture
+   *  (→ the command rejects "Capture not ready"). */
+  snapshot(reset: boolean, indexed: boolean): CaptureShot | CaptureSingleShot | null;
   /** Exclusivity (ruling 6): true while a recording is active. Capture is
    *  refused while true — capture and recording share the raw pipe ids. */
   recordingActive(): boolean;
@@ -181,6 +190,34 @@ export function rawTripleShot(opts: {
   };
 }
 
+/** A degraded SINGLE-STREAM shot (capture-recorder-everywhere ruling 3, item 4):
+ *  stack the one selected camera's raw full-depth sensor into ONE held resource,
+ *  UNWRAPPED (no fovea homography, no center slice, no diff). `capture_meta`
+ *  states the raw-stack mode explicitly. Every single-camera session (calibrate-
+ *  intrinsic) produces this uniformly. */
+export function rawSingleShot(opts: {
+  reset: boolean;
+  indexed: boolean;
+  stackCount: number;
+  /** Held-resource name (default "sensor"). */
+  resource?: string;
+  /** Human note for `capture_meta`. */
+  note?: string;
+}): CaptureSingleShot {
+  const note = opts.note ?? "raw sensor stack (single camera)";
+  const modeMeta: Serializable = { capture: "raw-stack", wrap: "none", note };
+  return {
+    reset: opts.reset,
+    indexed: opts.indexed,
+    stackCount: opts.stackCount,
+    resource: opts.resource ?? "sensor",
+    meta: {
+      wide: opts.reset ? modeMeta : undefined,
+      single: modeMeta,
+    },
+  };
+}
+
 export function createCaptureHelper(deps: CaptureHelperDeps): CaptureHelper {
   let node: CaptureNodeHandle | null = null;
   let activeCapture: Promise<void> = Promise.resolve();
@@ -194,8 +231,8 @@ export function createCaptureHelper(deps: CaptureHelperDeps): CaptureHelper {
    *  unwinds what already succeeded in REVERSE order (else the orphaned
    *  refcount/connection never unadvertises — camera-exclusivity hazard). */
   function acquireCaptureStreams() {
-    const cams = deps.cameras();
-    const center = deps.centerPipe();
+    const cams = deps.cameras?.() ?? null;
+    const center = deps.centerPipe?.() ?? null;
     if (!cams || !center) throw new Error("capture: session not active");
     const { left, right } = cams;
     let rawL: RawPipeAcquisition | null = null;
@@ -247,6 +284,42 @@ export function createCaptureHelper(deps: CaptureHelperDeps): CaptureHelper {
     }
   }
 
+  /** ON-DEMAND per-shot connect for the DEGENERATE single-stream mode: advertise
+   *  + attach the ONE selected camera's raw producer (refcounted, reusing the
+   *  session's lease — never a fresh camera acquire), connect it, and return a
+   *  `release` that disconnects then releases it. Same reverse-unwind discipline
+   *  as the triple acquire (a throw never orphans a refcount). Refuses cleanly
+   *  when no camera is selected. */
+  function acquireSingleStream() {
+    const cam = deps.camera?.() ?? null;
+    if (!cam) throw new Error("capture: no camera selected");
+    let raw: RawPipeAcquisition | null = null;
+    let connected = false;
+    try {
+      const pipeId = `camera/${cam.serial}/raw`;
+      const a = deps.rawPipes.acquire({
+        kind: "raw",
+        camera: cam,
+        pipeId,
+        spec: rawPipeSpec(cam, pipeId, CAPTURE_RING_DEPTH),
+      });
+      raw = a;
+      const c = deps.broker.connect(a.pipeId);
+      connected = true;
+      return {
+        streams: { single: streamInitFrom(c) },
+        release: () => {
+          deps.broker.disconnect(a.pipeId);
+          a.release();
+        },
+      };
+    } catch (err) {
+      if (connected && raw) deps.broker.disconnect(raw.pipeId);
+      raw?.release();
+      throw err;
+    }
+  }
+
   return {
     get capturing() {
       return capturing;
@@ -256,10 +329,11 @@ export function createCaptureHelper(deps: CaptureHelperDeps): CaptureHelper {
     },
 
     build() {
+      // `camera` present ⇒ single-stream (degenerate) mode; else the triple.
       node = createNode({
         id: deps.id,
         graphInputs: deps.graphInputs,
-        acquireStreams: acquireCaptureStreams,
+        acquireStreams: deps.camera ? acquireSingleStream : acquireCaptureStreams,
       });
     },
 

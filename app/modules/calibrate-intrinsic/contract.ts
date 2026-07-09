@@ -13,6 +13,8 @@
 
 import { cmd, defineContract } from "@lib/orchestrator/protocol";
 import {
+  captureCommands,
+  captureTelemetry,
   recordingCommands,
   recordingTelemetry,
   type CameraInfo,
@@ -80,6 +82,9 @@ export const calibrateIntrinsic = defineContract({
     // Recording (capture-recorder-everywhere ruling 2): degenerate single-stream
     // capture of the selected camera's raw sensor stream.
     ...recordingTelemetry(),
+    // Capture (capture-recorder-everywhere ruling 3, item 4): single-stream still
+    // capture (burst-stacked full-depth) of the selected camera's raw sensor.
+    ...captureTelemetry(),
   },
   // No session frames: the raw preview binds the active camera's
   // `camera:<serial>` pipe via `usePipeFrame` (real-1c); detection overlays ride
@@ -102,6 +107,10 @@ export const calibrateIntrinsic = defineContract({
     // Recording (capture-recorder-everywhere ruling 2): the selected camera's
     // raw sensor stream (advert-verbatim, degenerate single-stream default).
     ...recordingCommands(),
+    // Capture (capture-recorder-everywhere ruling 3, item 4): the single-stream
+    // capture mixin (captureShot / getCapturePreview / saveCapture / discardCapture).
+    // Distinct from the app-local `capture` command (calibration records) above.
+    ...captureCommands(),
   },
 });
 

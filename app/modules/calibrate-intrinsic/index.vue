@@ -18,6 +18,7 @@ import { useSession, usePipeFrame } from "@lib/orchestrator/client";
 import { nodeId } from "@lib/orchestrator/graph-contract";
 import { calibrateIntrinsic, type RecordThumb } from "./contract";
 import Recording from "@src/record";
+import Capture from "@src/capture";
 import StreamView from "@src/components/StreamView.vue";
 import FrameView from "@src/components/FrameView.vue";
 import NavBack from "@src/components/NavBack.vue";
@@ -35,6 +36,10 @@ const { state, telemetry } = session;
 // Recording context (capture-recorder-everywhere ruling 2): the title-bar
 // RecordButton + Cmd/Ctrl-R record the selected camera's raw sensor stream.
 new Recording(session, "calibrate-intrinsic");
+// Capture facade (capture-recorder-everywhere ruling 3, item 4): registers
+// `current_capture` so AppWindow's camera icon lights + toggles the shared
+// capture-preview window (single-stream still capture of the selected camera).
+new Capture(session, "calibrate-intrinsic");
 
 // Wrap a record's downscaled Mono8 preview in a Mat for FrameView (item 4).
 function thumbMat(t: RecordThumb) {
