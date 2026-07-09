@@ -413,7 +413,7 @@ export function createMultiFoveaRecording(
         const streamId = streamBySlot.get(slot);
         const pair = streamId !== undefined ? pairByStream.get(streamId) : undefined;
         const fresh = pair !== undefined && now - pair.at < PAIR_FRESH_MS;
-        const descriptor: MultiFoveaDescriptor = {
+        const descriptor: FoveaDescriptor = {
           tNs: Number(tNs),
           bbox: t.bbox,
           frames: {
@@ -422,7 +422,7 @@ export function createMultiFoveaRecording(
             right: fresh ? seqByDts.right.get(pair.rightDts) ?? null : null,
           },
         };
-        node.postData(channel, descriptor as unknown as FoveaDescriptor);
+        node.postData(channel, descriptor);
       }
     },
 

@@ -1,10 +1,14 @@
 # Multi-fovea recording — raw 12p sensor streams + descriptor streams
 
-Status: **RULED r2.1 — in execution** (user 2026-07-09, superseding the r1
-tile-recording model the same day; r2.1 adds rulings 8–10: advert-verbatim
-format metadata + `/codec` compression suffix + ring v5). Successor to
+Status: **SHIPPED (code-complete; rig pass owed)** — 2026-07-09, through the
+R-2 close. Ruled r2.1 (user 2026-07-09, superseding the r1 tile-recording
+model the same day; r2.1 added rulings 8–10: advert-verbatim format metadata
++ `/codec` compression suffix + ring v5). Successor to
 [capture-recorder-nodes](./capture-recorder-nodes.md) — reuses its recorder
-thread node; r1's per-frame-dims pixel schema is DROPPED.
+thread node; r1's per-frame-dims pixel schema is DROPPED. Live-rig
+verification accumulates in `docs/hardware/stage-f.md` §"Multi-fovea
+recording". See **AS SHIPPED** at the end for the commit chain, deltas from
+the ruled design, and residuals.
 
 ## The recording model (user ruling, verbatim intent)
 
@@ -107,3 +111,92 @@ make` + hardware-free `core/test/NN-*.ts` set from repo ROOT. No Electron.
 Rig items accumulate in `docs/hardware/stage-f.md` §"Multi-fovea recording"
 (12p payload verbatim vs a reference wire capture, descriptor↔frame pairing
 under live round-robin, offline reconstruction fidelity).
+
+## AS SHIPPED (2026-07-09, R-2 close)
+
+### Commit chain (one line per wave)
+
+- **I-1a** `b3e3aaf` — recorder node: dynamic `addStream`/`removeStream` +
+  `addDataStream`/`postData` data channels + advert-verbatim schema
+  (`FRAME_METADATA_KEYS` copied from the pipe, never re-derived) + the
+  `fovea:wide-camera` global metadata record.
+- **I-1b** `9be0c07` — core: pre-Frame ArvBuffer tap → `camera/<serial>/raw12p`
+  pipes (verbatim packed wire payload; extract-before-release at the buffer).
+- **I-1c** `b8c86fc` — core: ring layout v5 (`SlotHeader.payloadBytes`,
+  `readSeqInto` surfaces actual length) + the per-frame zlib compression brick.
+- **P-1** `426eb05` — pairing-nodes: PairStream brick + anchor enrichment node
+  + controller migration (see `pairing-nodes.md` AS SHIPPED).
+- **R-1** `ac6ee85` — review/opt over I-1a/b/c + P-1; resolved-anchor key
+  delivery for the downstream exact stage.
+- **I-2a** `6e14b6e` — refcounted `raw-pipe` registry (one advertise per id
+  ever, `raw`/`raw12p` distinct kinds; manual-control capture+recording
+  migrated) + viewer codec/12p decode (`splitCodecs`/`decompressChain`/
+  `unpack12p` + significantBits down-scale + Bayer demosaic).
+- **I-2b** `c015a01` — the multi-fovea recording controller (raw12p L/C/R,
+  optional `/zlib` sibling routing, `fovea/<slot>` descriptor channels, extras
+  from matched anchors, wide-camera singleton), pairing wiring
+  (root convert-tap pair + downstream exact undistort pair + enrichment fan-in),
+  UI (RecordButton + Cmd-R generic over `RecordableContract`), viewer
+  descriptor overlay.
+- **R-2** (this wave) — review + `FoveaDescriptor.frames` null-widening (cast
+  removed) + this close. All gates green (see below).
+
+### Deltas from the ruled design
+
+- **Descriptor L/R pointers come from PAIR RECORDS, not a bespoke matcher.**
+  Ruling 3/4 named the descriptor shape; the L/R `frames` pointers are
+  enriched by re-keying the pairing-nodes root pair record's matched
+  deviceTimestamps onto the recorder's `dts→seq` maps (built in the
+  `onFrame(stream, seq, deviceTs)` notice). This is why pairing-nodes is the
+  descriptor channels' "first consumer" in the concrete.
+- **`/zlib` sibling advert re-based on the SOURCE frame identity** (soak find,
+  I-2b): the compression brick forwards the source frame's `width/height/origin`
+  per blob, so the sibling advert keeps the source `maxWidth`/`maxHeight`
+  (`offer()` guards width>maxWidth — core test 32); only `maxBytes` grows to
+  the zlib worst case. The variable per-frame length rides ring-v5
+  `payloadBytes`, never a dim computation.
+- **`significantBits` injected JS-side at connect** (ruling 8): the native
+  `PipeSpec` drops it (C++ derives it from the format enum, which a
+  codec-suffixed `pixelFormat` would lose), so the advertiser carries it and
+  the recorder connect seam copies it verbatim for BOTH raw and `/zlib` pipes —
+  fixes the `?? 0` U16-scale hazard.
+- **Extras `volt.source: "fin-averaged"`** — the L/R extras are sourced from
+  the pairing anchor (a real FIN outcome, trigger-only), so the FIN-sourced
+  provenance token applies (matching capture-recorder). Ruling 1's phrasing
+  "live-snapshot now" anticipated a per-frame controller snapshot; the shipped
+  path has no live-snapshot leg — free-run has no anchor, hence NO extras (not
+  a snapshot). The actual exposure-AVERAGING of the FIN value is the separate
+  `fin-exposure-voltage` firmware-v2 item; the token denotes source, not algo.
+- **`FoveaDescriptor.frames` widened to `number | null`** (R-2) — the recorder
+  type now models absent pointers as explicit null, removing I-2b's cast.
+
+### Residuals (rig / follow-on rulings)
+
+- **Observation-driven vs pair-driven descriptor emission** (OPEN follow-on
+  ruling): descriptors are emitted per tracker batch (a center observation);
+  the FIN pair for that exposure may land slightly later. The controller binds
+  the latest FRESH pair (`PAIR_FRESH_MS`, below) — so a descriptor emitted just
+  before its pair arrives binds to the previous round's pair or to null. This
+  is acceptable for offline reconstruction today (a neighbouring L/R frame);
+  a stricter defer-until-pair or pair-driven emission wants a user ruling.
+- **`PAIR_FRESH_MS` = 1000 ms tuning** — the round-robin revisits each target
+  far faster than this in live capture; rig-tune if target count × dwell
+  approaches it (a stale pair past the window degrades to null L/R).
+- **Compression path still writes the source ring** — a `/zlib` stream both
+  feeds the compression brick AND keeps its source raw12p ring producing
+  (the brick is a normal FIFO consumer of it). Decoupling a
+  compress-ONLY stream from writing the uncompressed source is a possible
+  optimization, not ruled.
+- **Viewer overlay is undistorted-bbox over the recorded (distorted) wide
+  frame** — the tracker bbox is in undistorted center coordinates; the
+  recorded `center` stream is raw12p (packed, distorted). "Minimal playback"
+  (ruling 6) honors "bbox on wide"; exact overlay fidelity is a rig-gated
+  reconstruction concern, not a live-path fix.
+- Rig checklist: `docs/hardware/stage-f.md` §"Multi-fovea recording".
+
+### Final gates (R-2)
+
+`cd core && make` → 0 (ninja no-op, already built); `core/test/28..33` → all
+exit 0 from repo ROOT; app `vue-tsc --noEmit` → 0; `vitest run` → 531/531;
+`vitest run -c vitest.soak.config.ts` → 4/4 TWICE; `vite build` → 0
+(orchestrator 291.35 kB). No Electron launched.

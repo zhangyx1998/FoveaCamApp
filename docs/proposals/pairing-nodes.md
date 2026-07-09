@@ -1,8 +1,11 @@
 # Pairing nodes — per-stage L/R pairs anchored on exposure completions
 
-Status: **RULED — in execution** (user 2026-07-09). Companion to
+Status: **SHIPPED (code-complete; rig pass owed)** — 2026-07-09, through the
+R-2 close. Ruled by the user 2026-07-09. Companion to
 [multi-fovea-recording](./multi-fovea-recording.md) (its descriptor channels
-become this design's first consumer).
+are this design's first consumer — the shipped L/R descriptor pointers come
+from these pair records). Live-rig verification accumulates in
+`docs/hardware/stage-f.md` §"Pairing nodes". See **AS SHIPPED** at the end.
 
 ## Intent (user ruling)
 
@@ -79,3 +82,67 @@ vitest) → R-1 (review over I-1a/b/c + P-1) → I-2 (session wiring, descriptor
 channels consume pair records) → R-2 (close). Rig items (real FIN pairing,
 tolerance tuning, always-on pool behavior under live churn) accumulate in
 `docs/hardware/stage-f.md` §"Pairing nodes".
+
+## AS SHIPPED (2026-07-09, R-2 close)
+
+### Commit chain
+
+- **P-1** `426eb05` — the `PairStream` native brick (one class, two join
+  modes: `root` tolerance-match + `exact` key-equality; two in-process FIFO
+  `TapChannel` inputs on its own thread; batched async-iterator output, the
+  MultiKcf pattern) + the anchor **enrichment node** (`anchor-node.ts` —
+  FIN outcome → opaque `Float64Array` payload of `{volts, V2A angles, H_L,
+  H_R}`, fanned to every registered brick) + the controller-node migration
+  (in-JS `matchAndEmit`/`DescriptorRing`/`onPair` removed; `sync.ts`
+  `matchPair`/`matchesExposure` kept as the ported pure-JS reference) +
+  graph rows (`pair/<stage>`, `controller/anchors`).
+- **R-1** `ac6ee85` — resolved-anchor **key delivery** for the downstream
+  `exact` stage: P-1 deferred "how downstream frames land identical keys";
+  R-1 rules it with RESOLVED anchors (`resolvedAnchorFromRecord` — the root
+  record's two matched deviceTimestamps ARE the next stage's join keys, never
+  re-stamped → trusted-time preserved).
+- **I-2b** `c015a01` — the session **wiring** (`multi-fovea/session.ts`):
+  root pair over the L/R convert taps + downstream exact pair over the
+  homography-undistort outputs, both always-running with the trigger topology;
+  `controllerNode().onFin → anchorNode.ingest → pushAnchor`; the session
+  consumes root records → `pushResolvedAnchor` downstream + `onPairRecord`
+  into the recording controller.
+- **R-2** (this wave) — review + this close. All gates green.
+
+### Deltas from the ruled design
+
+- **Resolved-anchor mechanism** (R-1, above) concretizes ruling 2's
+  "exact-key joins downstream": the root is the ONLY tolerance-match; the
+  downstream `exact` brick receives keys, never re-windows.
+- **Merge-FIFO / keep-alive**: the always-running brick (ruling 5) is wired
+  via a **keep-alive subscriber** — the session's `consumePairs` iterator
+  drains the root's batched records at FIN rate even when no other consumer
+  subscribes, so the pool churns (drop-completed) and the resolved-anchor +
+  descriptor fan-out always runs.
+- **Degrade path**: a missing source brick (converters not live on a rig
+  shape) is caught and logged (`console.warn("[multi-fovea] pairing wiring
+  unavailable")`) → recording degrades to unpaired (descriptors without pair
+  provenance), never fails activation. Root release is deferred BEFORE the
+  downstream attempt, so a downstream throw leaks nothing.
+
+### Residuals (rig / follow-on rulings)
+
+- **StereoStream/SGBM latest-L/latest-R → paired inputs** (OPEN follow-up
+  ruling, ruling 8): still joins latest-latest with no anchor (temporal
+  misalignment under motion); migrating it onto paired inputs is its own
+  ruling when reached.
+- **Anchor edge `frameType`** — the `controller → controller/anchors` edge
+  is typed `analysis/pid` (scalars, no frame); a dedicated FIN edge type is
+  cosmetic, deferred.
+- **GenICam trigger-line names** in `sync.ts` are UNVERIFIED placeholders —
+  confirm against the real camera model (stage-f).
+- **Tolerance tuning** (`toleranceNs` default = half min frame interval) +
+  always-on pool behavior under live churn: rig items, `docs/hardware/stage-f.md`
+  §"Pairing nodes".
+
+### Final gates (R-2)
+
+Shared with multi-fovea-recording's R-2 close: `cd core && make` → 0;
+`core/test/28..33` → all exit 0; `vue-tsc --noEmit` → 0; `vitest run` →
+531/531; soaks 4/4 TWICE; `vite build` → 0. Core test 33 (`33-pair-pipe.ts`)
+covers the brick. No Electron.

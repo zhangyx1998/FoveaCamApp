@@ -11,7 +11,12 @@
 > raw FIFO pipes, per-frame `onFrame(stream, seq, deviceTs)` extras callback,
 > capture `onCaptureStart` once per run, pull-based capture previews,
 > auto-open viewer on `recording:finished`; legacy `.stream`/`.meta` backend
-> DELETED).
+> DELETED) + `docs/proposals/multi-fovea-recording.md` (SHIPPED 2026-07-09 —
+> raw12p packed sensor streams, `fovea.descriptor/v1` data channels, the
+> `fovea:wide-camera` singleton, `/codec` compressed pipes; see
+> `app/modules/multi-fovea/recording.ts` + `app/orchestrator/{raw-pipe,
+> compress-pipe,viewer/decode}.ts`) + `docs/proposals/pairing-nodes.md`
+> (SHIPPED 2026-07-09 — L/R exposure pairs feed the descriptor L/R pointers).
 
 ## 1. Container
 
@@ -28,6 +33,37 @@ Per-frame metadata binds each fovea frame to its **voltage provenance**:
 
 Angles/homography snapshots ride the same per-frame metadata so recorded
 frames are reconstructable without the live calibration.
+
+**Channel/payload facts (VERBATIM from the pipe advert — the recorder never
+interprets bytes, `multi-fovea-recording.md` rulings 8–10):** each frame
+channel's `metadata` carries `{dtype, width, height, channels, pixelFormat,
+significantBits, stride}` copied straight from the source pipe. `pixelFormat`
+is **opaque** and may be a **packed** wire format (`BayerRG12p` — the
+`camera/<serial>/raw12p` container option, 2 samples in 3 bytes, `dtype:"U8"`)
+and/or carry a `/codec` **compression suffix** (`BayerRG12p/zlib`); offline
+readers split on `/` and decompress right-to-left before interpreting the
+base format (per-frame independent blobs, so the container stays seekable —
+the exact compressed length rides the ring-v5 slot header, not a dim
+computation). Whole-byte formats (the fake rig runs `Mono8`) pack to their
+own byte count.
+
+**Non-frame records (multi-fovea):**
+
+- `fovea:wide-camera` (`WIDE_CAMERA_METADATA_NAME`) — a single metadata record
+  written once at start: the wide/center camera's intrinsics + distortion
+  (`multi-fovea-recording.md` ruling 2). The wide camera is static, so there
+  are NO per-frame wide extras.
+- `fovea.descriptor/v1` **data channels** — one JSON channel per live target
+  (`fovea/<target>`), churned in/out with target arm/disarm. Each doc is
+  `{tNs, bbox, frames:{left,center,right}}` where the `frames` values are
+  per-stream MCAP **sequence pointers** into the recorded raw streams, and
+  are **null-able**: `left`/`right` are non-null only when a trigger-mode
+  pairing record bound the observation's exposures (`pairing-nodes.md`
+  ruling 1 — free-run recordings always carry `left:null, right:null`);
+  `center` is the NEAREST recorded wide frame by timestamp and is explicitly
+  UNSYNCHRONIZED (the wide camera is not hardware-triggerable — CAM0 GPIO
+  uncabled). Fovea imagery is reconstructed offline from the pointed-at raw
+  frames + per-frame params; it is never re-encoded.
 
 *(Planner-review stub: the exact channel/schema table is B-owned — transcribe
 from the writer's schema registry in `orchestrator/recorder/` when pinning

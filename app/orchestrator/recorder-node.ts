@@ -354,7 +354,15 @@ export interface FoveaDescriptor {
    *  worker independently; this is the trusted correlation time in the doc. */
   tNs: number;
   bbox: { x: number; y: number; width: number; height: number };
-  frames: { left?: number; center?: number; right?: number };
+  // Pointers are NULLABLE (wave I-2): free-run recordings carry left/right =
+  // null (no trigger-mode pair bound the exposure, pairing-nodes ruling 1); an
+  // evicted/unmatched dts key is likewise null rather than absent. Offline
+  // readers treat null and missing identically (no frame binds).
+  frames: {
+    left?: number | null;
+    center?: number | null;
+    right?: number | null;
+  };
   /** Room for provenance/extra fields without a schema change. */
   [key: string]: unknown;
 }

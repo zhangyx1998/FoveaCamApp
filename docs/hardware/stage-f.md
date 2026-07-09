@@ -393,8 +393,27 @@ source the RAW fovea CONVERT pipes (single ÷magnification, legacy
 - [ ] **Free-run descriptor shape** — recording without trigger mode:
   descriptors carry bbox + center + null L/R, container decodes cleanly.
 - [ ] **Extras binding** — per-fovea-frame `{volts, V2A, H}` extras match
-  the anchor that triggered the frame (v1: live-snapshot volts; FIN-avg is
-  the firmware-v2 item).
+  the FIN anchor that triggered the frame. The L/R extras are sourced from
+  the pairing anchor (a real FIN outcome, trigger mode only) and labelled
+  `volt.source: "fin-averaged"` — the FIN-sourced provenance token, matching
+  the capture-recorder convention. NOTE the value is only truly exposure-
+  averaged once v2 firmware lands (FIN currently reports its initial reading —
+  the `fin-exposure-voltage` item); the label denotes the SOURCE, not the
+  averaging algorithm. Free-run frames get no anchor → NO extras (not a
+  live-snapshot: multi-fovea extras ride pairing, which is trigger-only).
+- [ ] **Record button + Cmd-R (multi-fovea drawer)** — the title-bar
+  RecordButton starts/stops on a rig; plain Cmd/Ctrl-R toggles the FOCUSED
+  window only (per-window `before-input-event`), so a second app window (or
+  manual-control) open at once does NOT double-toggle; hover stats show the
+  three raw12p streams.
+- [ ] **PAIR_FRESH_MS tuning (1 s default)** — under live round-robin
+  trigger, confirm each target's controller stream is revisited faster than
+  the 1 s freshness window so descriptor L/R pointers bind to the CURRENT
+  round's pair (a stale pair past the window degrades to null L/R); tune the
+  constant if the target count × dwell exceeds it. (Cross-ref the
+  observation-driven-vs-pair-driven descriptor-emission follow-on ruling —
+  a descriptor emitted just before its pair arrives binds to the previous
+  round's pair or null; acceptable for offline reconstruction today.)
 - [ ] **Wide camera matrix singleton** — `fovea:wide-camera` metadata
   matches the calibration triple's center intrinsics.
 - [ ] **Viewer playback of a rig container** — 12p unpack + debayer display
