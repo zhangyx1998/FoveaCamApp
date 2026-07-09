@@ -82,6 +82,33 @@ describe("native-probes registry", () => {
       dispose();
     }
   });
+
+  // FIFO queue stats (controller-node-and-fifo-edges §1/§2): the undistort
+  // brick's snapshot carries `queue: {depth, highWater, capacity}`. Pass a
+  // well-formed one through; a malformed one (any field missing/non-numeric)
+  // must degrade to `queue` ABSENT, never throw — same defensive contract that
+  // the flat-row coercion above enforces.
+  it("passes a well-formed FIFO queue through and strips a malformed one", () => {
+    const good = {
+      ...probeSnap("camera/SN1/undistort"),
+      queue: { depth: 2, highWater: 5, capacity: 8 },
+    } as WorkloadSnapshot;
+    const bad = {
+      ...probeSnap("camera/SN2/undistort"),
+      queue: { highWater: 5 }, // missing depth/capacity
+    } as unknown as WorkloadSnapshot;
+    const dispose = registerNativeProbe(() => ({
+      [good.name]: good,
+      [bad.name]: bad,
+    }));
+    try {
+      const merged = nativeProbes();
+      expect(merged[good.name]!.queue).toEqual({ depth: 2, highWater: 5, capacity: 8 });
+      expect(merged[bad.name]!.queue).toBeUndefined(); // malformed → absent
+    } finally {
+      dispose();
+    }
+  });
 });
 
 // Universal node reporting (unified-time-and-topology §6): the same seam one

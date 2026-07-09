@@ -8,6 +8,8 @@ import {
   deriveTopology,
   edgeDetail,
   edgeLabel,
+  edgeWarns,
+  isBackpressured,
   isDropping,
   membershipKey,
   nodeDetail,
@@ -345,5 +347,49 @@ describe("edge flow labels (tx/rx/drop — 4732f64 contract)", () => {
       "30.0/s (lossy latest-wins)",
     ]);
     expect(edges[1].classes).toBe(""); // unmetered edge stays quiet
+  });
+});
+
+describe("FIFO queue edges (controller-node-and-fifo-edges §2)", () => {
+  const fifo: GraphEdge = {
+    from: "camera/123/convert",
+    to: "camera/123/undistort",
+    port: "in",
+    type: { kind: "frame", pixelFormat: "BGRA8", dtype: "U8" },
+    tx: { hz: 60, maxIntervalMs: 20 },
+    rx: { hz: 60 },
+    queue: { highWater: 6, capacity: 8, depth: 3 },
+  };
+
+  it("hover shows the queue row IN PLACE OF the drops row", () => {
+    const detail = edgeDetail(fifo);
+    expect(detail.rows).toContainEqual(["queue", "hwm 6 / cap 8 (10s) · now 3"]);
+    expect(detail.rows.some(([label]) => label === "drops")).toBe(false);
+  });
+
+  it("omits the depth suffix when depth is absent", () => {
+    const detail = edgeDetail({ ...fifo, queue: { highWater: 2, capacity: 8 } });
+    expect(detail.rows).toContainEqual(["queue", "hwm 2 / cap 8 (10s)"]);
+  });
+
+  it("warns only when hwm >= capacity (backpressure engaged), never as a drop", () => {
+    expect(isBackpressured(fifo)).toBe(false);
+    expect(edgeWarns(fifo)).toBe(false);
+    const full: GraphEdge = { ...fifo, queue: { highWater: 8, capacity: 8, depth: 8 } };
+    expect(isBackpressured(full)).toBe(true);
+    expect(edgeWarns(full)).toBe(true);
+    expect(isDropping(full)).toBe(false); // a FIFO edge never reads as a drop
+  });
+
+  it("toElements marks a backpressured FIFO edge with the warning class + queue detail", () => {
+    const t = deriveTopology([], PIPES, 1, 0);
+    t.edges[0] = { ...t.edges[0], queue: { highWater: 8, capacity: 8, depth: 8 } };
+    const edges = toElements(t).filter((e) => e.group === "edges");
+    expect(edges[0].classes).toBe("dropping"); // shared warn styling
+    expect((edges[0].data.detail as HoverDetail).rows).toContainEqual([
+      "queue",
+      "hwm 8 / cap 8 (10s) · now 8",
+    ]);
+    expect(edges[1].classes).toBe(""); // the queue-less edge stays quiet
   });
 });

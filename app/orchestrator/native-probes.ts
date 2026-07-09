@@ -15,7 +15,7 @@
 // profiler render a native producer/tracker stream identically to a JS one.
 
 import type { NodeReport } from "@lib/orchestrator/graph-contract.js";
-import type { WorkloadSnapshot } from "@lib/orchestrator/stats.js";
+import type { QueueStat, WorkloadSnapshot } from "@lib/orchestrator/stats.js";
 
 /** A native probe batch — a set of workload snapshots keyed by name, read at
  *  snapshot time. Returns `{}` when its threads are idle (no stale rows). */
@@ -41,6 +41,12 @@ export function normalizeProbeRow(row: WorkloadSnapshot): WorkloadSnapshot {
     Partial<{ uptimeMs: number; dropTotal: number }>;
   const uptimeMs = r.window?.uptimeMs ?? r.uptimeMs ?? 1;
   const total = r.drops?.total ?? r.dropTotal ?? 0;
+  // FIFO queue stats (controller-node-and-fifo-edges §1/§2): the undistort
+  // brick's snapshot carries `queue: {depth, highWater, capacity}`; Leaky
+  // bricks omit it. Pass it through ONLY when fully well-formed — a partial /
+  // malformed row must degrade to `queue` absent, never blank the graph (same
+  // defensive contract as the `drops`/`window` normalization above).
+  const queue = normalizeQueue(r.queue);
   return {
     ...r,
     window: r.window ?? { startedAt: 0, snapshotAt: 0, uptimeMs },
@@ -53,7 +59,23 @@ export function normalizeProbeRow(row: WorkloadSnapshot): WorkloadSnapshot {
       ratePerSec: uptimeMs > 0 ? total / (uptimeMs / 1000) : 0,
       byReason: {},
     },
+    // Overrides any malformed `queue` swept in by `...r` (present → undefined).
+    queue,
   };
+}
+
+/** Coerce a raw probe `queue` field to `QueueStat`, or `undefined` when absent
+ *  or malformed (any of the three fields missing/non-numeric). Never throws. */
+function normalizeQueue(q: unknown): QueueStat | undefined {
+  if (!q || typeof q !== "object") return undefined;
+  const { depth, highWater, capacity } = q as Record<string, unknown>;
+  if (
+    typeof depth === "number" &&
+    typeof highWater === "number" &&
+    typeof capacity === "number"
+  )
+    return { depth, highWater, capacity };
+  return undefined;
 }
 
 // --- Universal node reports (unified-time-and-topology §6) -------------------

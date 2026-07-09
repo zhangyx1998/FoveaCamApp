@@ -239,6 +239,109 @@ describe("buildTopology", () => {
       expect(sink.lossy).toBe(true); // SHM seqlock is latest-wins by design
     });
   });
+
+  // FIFO edges (controller-node-and-fifo-edges §2): a NON-lossy edge whose
+  // consumer snapshot carries `queue` reports the high-water mark IN PLACE OF a
+  // drop rate. The undistort brick's input off the (pipe-transport) convert
+  // brick is the live case — its explicit `lossy: false` must defeat the
+  // pipe-producer default.
+  describe("FIFO queue edges", () => {
+    const producer = (): NodeReport => ({
+      id: "camera/1/convert",
+      kind: "convert",
+      transport: "pipe",
+      inputs: [],
+      output: { kind: "frame", pixelFormat: "BGRA8", dtype: "U8" },
+      pipe: { consumers: 0, bytesTotal: 0 },
+      stats: load("camera/1/convert", 0.3, 60), // outputs 60Hz
+    });
+
+    it("explicit lossy:false defeats the pipe-producer default and attaches the queue", () => {
+      const reports: NodeReport[] = [
+        producer(),
+        {
+          id: "camera/1/undistort",
+          kind: "undistort",
+          transport: "native",
+          inputs: [
+            {
+              from: "camera/1/convert", // pipe producer → default would be lossy
+              port: "frame",
+              type: { kind: "frame", pixelFormat: "BGRA8", dtype: "U8" },
+              lossy: false, // FIFO input — explicit flag must win
+            },
+          ],
+          output: { kind: "frame", pixelFormat: "BGRA8", dtype: "U8" },
+          stats: {
+            ...load("camera/1/undistort", 0.7, 60),
+            queue: { depth: 3, highWater: 6, capacity: 8 },
+          },
+        },
+      ];
+      const t = buildTopologyFromReports(reports, { workloads: {} });
+      const edge = t.edges.find((e) => e.to === "camera/1/undistort")!;
+      expect(edge.lossy).toBeUndefined(); // explicit false beat the pipe default
+      expect(edge.dropPerSec).toBeUndefined(); // non-lossy → no drop rate
+      expect(edge.queue).toEqual({ highWater: 6, capacity: 8, depth: 3 });
+    });
+
+    it("a lossy edge keeps drops and never attaches queue, even if the snapshot has one", () => {
+      const reports: NodeReport[] = [
+        producer(),
+        {
+          id: "win/x/kernel",
+          kind: "kernel",
+          transport: "worker",
+          inputs: [
+            {
+              from: "camera/1/convert",
+              port: "frame",
+              type: { kind: "frame", pixelFormat: "BGRA8", dtype: "U8" },
+              lossy: true,
+            },
+          ],
+          output: null,
+          stats: {
+            ...load("win/x/kernel", 0.9, 40), // inputs frame 40Hz
+            queue: { depth: 1, highWater: 4, capacity: 8 },
+          },
+        },
+      ];
+      const t = buildTopologyFromReports(reports, { workloads: {} });
+      const edge = t.edges.find((e) => e.to === "win/x/kernel")!;
+      expect(edge.lossy).toBe(true);
+      expect(edge.dropPerSec).toBe(20); // tx 60 − rx 40, unchanged
+      expect(edge.queue).toBeUndefined(); // never on a lossy edge
+    });
+
+    it("degrades a malformed queue on a non-lossy edge to absent — never throws", () => {
+      const reports: NodeReport[] = [
+        producer(),
+        {
+          id: "camera/1/undistort",
+          kind: "undistort",
+          transport: "native",
+          inputs: [
+            {
+              from: "camera/1/convert",
+              port: "frame",
+              type: { kind: "frame", pixelFormat: "BGRA8", dtype: "U8" },
+              lossy: false,
+            },
+          ],
+          output: { kind: "frame", pixelFormat: "BGRA8", dtype: "U8" },
+          stats: {
+            ...load("camera/1/undistort", 0.7, 60),
+            queue: { highWater: 6 } as unknown as WorkloadSnapshot["queue"],
+          },
+        },
+      ];
+      const t = buildTopologyFromReports(reports, { workloads: {} });
+      const edge = t.edges.find((e) => e.to === "camera/1/undistort")!;
+      expect(edge.queue).toBeUndefined();
+      expect(edge.dropPerSec).toBeUndefined();
+    });
+  });
 });
 
 // --- Universal node reporting (unified-time-and-topology §6) -----------------

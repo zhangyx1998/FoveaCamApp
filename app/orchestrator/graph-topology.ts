@@ -308,6 +308,12 @@ export function buildTopologyFromReports(
         : txHz !== undefined && rxHz !== undefined
           ? Math.max(0, txHz - rxHz)
           : snap?.drops?.ratePerSec;
+      // FIFO (lossless) edges report the consumer's high-water mark IN PLACE OF
+      // a drop rate (controller-node-and-fifo-edges §2). Only when the consumer
+      // snapshot carries a well-formed `queue`; explicit `input.lossy === false`
+      // already defeats the pipe-producer default above so a FIFO input off a
+      // pipe producer still lands here. Malformed queue → attribute absent.
+      const queue = !lossy ? queueEdgeStat(snap) : undefined;
       edges.push({
         from: input.from,
         to: r.id,
@@ -332,6 +338,7 @@ export function buildTopologyFromReports(
           : {}),
         ...(lossy ? { lossy: true } : {}),
         ...(dropPerSec !== undefined ? { dropPerSec } : {}),
+        ...(queue ? { queue } : {}),
         // Legacy mirror (deprecated): pre-tx/rx readers saw the consumer's
         // input rate here — unchanged during the migration.
         ratePerSec: rxHz,
@@ -377,6 +384,22 @@ export function buildTopologyFromReports(
   }
 
   return { seq: ++seq, at, nodes: [...nodes.values()], edges };
+}
+
+/** Consumer-side FIFO queue stats for a NON-lossy edge (§2): the trailing-10s
+ *  high-water mark + capacity (+ last-sampled depth). Defensive — a partial or
+ *  non-numeric `queue` degrades to `undefined`, never throws. */
+function queueEdgeStat(
+  w: WorkloadSnapshot | undefined,
+): GraphEdge["queue"] | undefined {
+  const q = w?.queue;
+  if (!q || typeof q.highWater !== "number" || typeof q.capacity !== "number")
+    return undefined;
+  return {
+    highWater: q.highWater,
+    capacity: q.capacity,
+    ...(typeof q.depth === "number" ? { depth: q.depth } : {}),
+  };
 }
 
 /** Max output-stream rate of a snapshot (the producer-side Hz for TX). */

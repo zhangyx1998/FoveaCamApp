@@ -271,6 +271,19 @@ export function isDropping(e: GraphEdge): boolean {
   return !!e.lossy && (e.dropPerSec ?? 0) > 0;
 }
 
+/** Backpressure marker: a FIFO (lossless) edge whose consumer queue reached its
+ *  capacity over the window — the FIFO actually blocked its producer
+ *  (controller-node-and-fifo-edges §2). */
+export function isBackpressured(e: GraphEdge): boolean {
+  return !!e.queue && e.queue.highWater >= e.queue.capacity;
+}
+
+/** The always-on edge WARNING styling (`edge.dropping` class): lossy links
+ *  actually dropping OR FIFO links actually backpressured. */
+export function edgeWarns(e: GraphEdge): boolean {
+  return isDropping(e) || isBackpressured(e);
+}
+
 /** Always-on edge caption — the EFFECTIVE rate only: min(tx, rx) when both
  *  directions are metered (the slower side is what downstream actually
  *  receives), the single metered direction otherwise. Everything else
@@ -304,8 +317,16 @@ export function edgeDetail(e: GraphEdge): HoverDetail {
   if (tx?.maxIntervalMs) gaps.push(`↑ ${tx.maxIntervalMs.toFixed(0)} ms`);
   if (rx?.maxIntervalMs) gaps.push(`↓ ${rx.maxIntervalMs.toFixed(0)} ms`);
   if (gaps.length > 0) rows.push(["worst gap", gaps.join(" · ")]);
-  if (isDropping(e))
+  // FIFO (lossless) edges show the high-water mark IN PLACE OF the drops row
+  // (§2); drops and queue are mutually exclusive in practice (drops absent on
+  // non-lossy edges).
+  if (e.queue) {
+    const q = e.queue;
+    const depth = q.depth !== undefined ? ` · now ${q.depth}` : "";
+    rows.push(["queue", `hwm ${q.highWater} / cap ${q.capacity} (10s)${depth}`]);
+  } else if (isDropping(e)) {
     rows.push(["drops", `${fmtRate(e.dropPerSec!)}/s (lossy latest-wins)`]);
+  }
   if (e.consumers !== undefined) rows.push(["consumers", `×${e.consumers}`]);
   return { title: `${e.from} → ${e.to}`, rows };
 }
@@ -333,7 +354,7 @@ export function toElements(t: GraphTopology): GraphElement[] {
         label: edgeLabel(e),
         detail: edgeDetail(e),
       },
-      classes: isDropping(e) ? "dropping" : "",
+      classes: edgeWarns(e) ? "dropping" : "",
     });
   }
   return els;
