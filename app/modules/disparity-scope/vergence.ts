@@ -6,97 +6,38 @@
 //
 // Auto-vergence: drive both fovea cameras to fixate the same physical point.
 //
-// Each frame triple is processed in two stages:
+// PURE geometry + control math since the node split (docs/proposals/
+// split-disparity-nodes.md, 2026-07-09) — the template-match MECHANISM lives
+// in the generic worker kernel (@orchestrator/template-match-kernel) fed by
+// slice/scale bricks; this module keeps what the SESSION and the PID node
+// need:
 //
-//   1. analyzeVergence() — template-match each fovea tile into a strip taken
-//      from the wide center frame to find where each fovea is *actually*
-//      looking, in wide-frame pixels.
-//   2. stepVergence() — constrained proportional control on {pan, verge,
-//      v_shift}, reconstructing both fovea poses symmetrically about the gaze
-//      ray, returning new actuator voltages.
+//   - the sizing math the scale nodes are tuned with (`foveaTileSize`,
+//     `matchMagnification`);
+//   - stepVergence() — constrained control on {pan, verge, v_shift},
+//     reconstructing both fovea poses symmetrically about the gaze ray;
+//   - followTarget() — the drag path's direct parallel follow;
+//   - seedVergence() — the generic pidOverride release seed.
 //
 // The loop feeds back on the image-matched position rather than the
 // calibration-predicted one, so a constant extrinsic-calibration offset is
-// absorbed by the loop instead of biasing convergence.
+// absorbed by the loop instead of biasing convergence. Core-free (types
+// only): the control law and its tests never load the native addon.
 
-import type { Point2d, Rect, Size } from "core/Geometry";
-import {
-  cvtColor,
-  gaussian,
-  heatmap,
-  Mat,
-  matchTemplate,
-  minMaxLoc,
-  resize,
-  slice,
-} from "core/Vision";
-import { RECT, VEC } from "@lib/util/geometry";
+import type { Point2d, Size } from "core/Geometry";
+import { VEC } from "@lib/util/geometry";
 import { PID } from "@lib/pid";
 import { distanceToVerge, inverseTriangulate, vergeToDistance } from "@lib/stereo";
 import type { CoordinateConversions } from "@lib/coordinate-conversions";
 
-export type MatchResult = {
-  /** Heatmap visualization of the correlation map (red = match). */
-  mat: Mat<Uint8Array>;
-  /** Matched fovea footprint within the guide strip, full-resolution pixels. */
-  rect: Rect;
-  /** CCOEFF_NORMED peak score in [-1, 1]; higher = more confident. */
-  score: number;
-};
-
-export type VergenceAnalysis = {
-  /** Full-resolution wide strip used as the match guide. */
-  guide: Mat<Uint8Array>;
-  ml: MatchResult;
-  mr: MatchResult;
-  /** Target footprint within the guide strip. */
-  center: { rect: Rect };
-  /** Position of the top left corner of the guide strip on wide frame */
-  ox: number;
-  oy: number;
-};
-
-/** The scalar subset of {@link VergenceAnalysis} that {@link stepVergence}
- *  actually reads (no Mats). C-22b: the vision worker computes the analysis and
- *  posts only these fields back over the MessagePort; the main-thread control
- *  step consumes them. A full `VergenceAnalysis` is structurally assignable. */
-export type VergenceStepInput = {
-  ml: Pick<MatchResult, "rect" | "score">;
-  mr: Pick<MatchResult, "rect" | "score">;
-  center: { rect: Rect };
-  ox: number;
-  oy: number;
-};
-
-export type VergenceOptions = {
-  /** Wide center frame dimensions (pixels). */
-  width: number;
-  height: number;
-  /** Nominal display zoom (the center-tile crop ratio, wide-px per fovea-px, as
-   *  CONFIGURED in app-config). Defines the guide strip crop — the center tile
-   *  (`width/zoom × height/zoom` at the target) expanded by `expand_x/expand_y`
-   *  — and the center-tile marker, so the guide matches the sliced center view.
-   *  This is NOT the template-match magnification: the fovea tiles are pre-sized
-   *  to the (possibly calibration-measured) match scale by the caller via
-   *  {@link foveaTileSize}, and the tile↔strip pixel-scale agreement is carried
-   *  by `scale` independently of this crop size. */
-  zoom: number;
-  /** Scale of the fovea tiles (1.0 ~ zoom); higher = more detail, more compute. */
-  scale: number;
-  /** Target center within the wide frame (pixels). */
-  target: Point2d;
-  /** Expansion factor for the match strip. */
-  expand_x: number;
-  expand_y: number;
-};
-
-/** Fovea tile size for the template match. `zoom` here is the MATCH
- *  MAGNIFICATION (measured fovea↔wide ratio, else nominal) — NOT the display
- *  crop zoom of {@link VergenceOptions.zoom}: one fovea frame covers
- *  `width/zoom` wide pixels, and at strip downsample `scale` that footprint is
- *  `(width*scale)/zoom` tile pixels, so both the tile and the guide strip land
- *  at `scale` px per wide px (CCOEFF matching is not scale-invariant). Callers
- *  precompute tiles at this size via {@link getFoveaTile}. */
+/** Fovea tile size for the template match — since the node split this is the
+ *  `dsize` the session tunes the NEEDLE SCALE nodes with. `zoom` here is the
+ *  MATCH MAGNIFICATION (measured fovea↔wide ratio, else nominal) — NOT the
+ *  display crop zoom: one fovea frame covers `width/zoom` wide pixels, and at
+ *  strip scale `scale` that footprint is `(width*scale)/zoom` tile pixels, so
+ *  both the tile and the strip land at `scale` px per wide px (CCOEFF
+ *  matching is not scale-invariant; the strip's scale node gets
+ *  `{ratio: scale}` for the same reason). */
 export function foveaTileSize(opts: {
   width: number;
   height: number;
@@ -161,57 +102,26 @@ export type VergenceControllers = {
 };
 
 /**
- * The scope's control OUTPUT (docs/proposals/pid-nodes-and-view-replumb.md
- * §"Disparity re-plumb"): the matched fovea centers + the target, projected
- * onto the UNDISTORTED wide frame in full-resolution wide pixels (the strip
- * offsets `ox`/`oy` are already folded in), plus the per-eye match confidence.
- * This is the only thing the control path (the PID node) consumes — the views
- * source independently from their undistort pipes, so the scope kernel no
- * longer bottlenecks view fps.
+ * The scope's control INPUT: the matched fovea centers + the target on the
+ * UNDISTORTED wide frame in full-resolution wide pixels, plus the per-eye
+ * match confidence. Since the node split the SESSION's join composes this
+ * from the two template-match nodes' results (each side's `origin +
+ * rectCenter / stripScale`) — the pure lift is three additions, done at the
+ * join (session.ts `onMatch`).
  */
 export type ScopeProjection = {
   l: Point2d;
   r: Point2d;
   target: Point2d;
   scores: { l: number; r: number };
-  /** True while the target rides a TRACKER OVERRIDE (a pointer drag pinning
-   *  the chained KCF's output — controller-node-and-fifo-edges §3.5). The flag
-   *  propagates downstream unchanged (tracker → matcher → here → the control
-   *  step) so each stage acts correspondingly: the control step switches to
-   *  DIRECT follow ({@link followTarget} — both eyes parallel on the cursor
-   *  ray, vergence at infinity; no PID stepping, no match-score gate) while
-   *  the session holds its freeze window open and reports "manual" status.
-   *  Data, not topology — it rides the projection record, no graph change. */
+  /** True while a pointer drag pins the target (SESSION-LOCAL since the node
+   *  split — the join stamps `dragging` here; nothing rides the reusable
+   *  nodes). The control step acts on it: DIRECT follow ({@link followTarget}
+   *  — both eyes parallel on the cursor ray, vergence at infinity; no PID
+   *  stepping, no match-score gate) while the session holds its freeze window
+   *  open and reports "manual" status. */
   overridden: boolean;
 };
-
-/**
- * Lift the analysis' strip-local match rects into the scope {@link
- * ScopeProjection}: each rect centre + the strip origin `(ox, oy)` is that
- * match's full-resolution wide-frame position — EXACTLY the point the
- * pre-replumb `stepVergence.toAngle` fed to `P2A` (`{x: cx + ox, y: cy + oy}`),
- * extracted here as the pure emission math so it is unit-testable without any
- * native Vision op. The kernel emits this alongside the diagnostic frames; the
- * control step consumes it.
- */
-export function scopeProjection(
-  a: VergenceStepInput,
-  /** Tracker-override flag on the target that drove this match — carried
-   *  through unchanged (see {@link ScopeProjection.overridden}). */
-  overridden = false,
-): ScopeProjection {
-  const lift = (rect: Rect): Point2d => {
-    const c = RECT.getCenter(rect);
-    return { x: c.x + a.ox, y: c.y + a.oy };
-  };
-  return {
-    l: lift(a.ml.rect),
-    r: lift(a.mr.rect),
-    target: lift(a.center.rect),
-    scores: { l: a.ml.score, r: a.mr.score },
-    overridden,
-  };
-}
 
 export type VergenceControl = {
   /** Inter-fovea baseline (mm). */
@@ -220,128 +130,8 @@ export type VergenceControl = {
   minScore: number;
 };
 
-// Smoothing applied to each correlation map before peak-finding, so a single
-// noisy pixel can't win over a broader, more confident lobe.
-const GAUSS_KSIZE = 9;
-const GAUSS_SIGMA = 10;
-
 /**
- * Grayscale, downsampled fovea tile at its wide-frame footprint size. Exported
- * so callers driven by per-camera frame taps (the orchestrator registry's
- * `onView`, whose Mat is only valid for the duration of that synchronous
- * call) can compute a tile — safe to retain past the call, since `cvtColor`
- * reads the source and allocates a fresh buffer before this function's first
- * `await` — independently of the other eye's tick, then hand the pair to
- * {@link analyzeVergence} once the center tick arrives. See
- * docs/history/refactor/orchestrator.md §7.1 S1a.
- */
-export async function getFoveaTile(f: Mat<Uint8Array>, size: Size) {
-  return await resize(cvtColor(f, "RGBA2GRAY"), size);
-}
-
-/** Grayscale horizontal strip from the wide frame, scaled by `s`. */
-async function getMatchTile(
-  f: Mat<Uint8Array>,
-  ox: number,
-  oy: number,
-  W: number,
-  H: number,
-  s: number,
-) {
-  const m = cvtColor(f, "RGBA2GRAY");
-  const sliced = slice(m, { x: ox, y: oy, width: W, height: H });
-  return await resize(sliced, {}, s, s);
-}
-
-/**
- * Locate the correlation peak and un-scale it back to full-resolution strip
- * coordinates (`s` is the inverse of the strip's scale factor).
- */
-async function processMatch(
-  match: Mat<Float32Array>,
-  needle: Mat,
-  s: number,
-): Promise<MatchResult> {
-  const { max } = minMaxLoc(match);
-  const [height = 0, width = 0] = needle.shape;
-  const rect = RECT.fromTopLeft(max, { width, height });
-  const [h1 = 0, w1 = 0] = match.shape;
-  const [, w2 = 0] = needle.shape;
-  const sliced = slice(match, {
-    x: -w2 / 2,
-    y: 0,
-    width: w1 + w2 * 2,
-    height: h1,
-  });
-  const resized = await resize(sliced, {}, s);
-  return {
-    mat: heatmap(resized),
-    rect: VEC.mul(rect, s),
-    score: max.value,
-  };
-}
-
-/**
- * Stage 1: template-match each fovea tile into the wide-frame strip and report
- * where each fovea is currently looking, plus the target footprint.
- *
- * `tiles` are precomputed per-eye via {@link getFoveaTile} (see that
- * function's doc for why — the registry's per-camera `onView` taps don't
- * arrive synchronized, so each eye's tile is captured independently on its
- * own tick and handed in here once the center tick drives a match); `c` is
- * the wide center Mat, read synchronously within this call (safe even for a
- * reused-buffer tap, same reasoning as `getFoveaTile`).
- */
-export async function analyzeVergence(
-  tiles: { l: Mat<Uint8Array>; r: Mat<Uint8Array> },
-  c: Mat<Uint8Array>,
-  opts: VergenceOptions,
-): Promise<VergenceAnalysis> {
-  const { l: tl, r: tr } = tiles;
-  const {
-    width,
-    height,
-    zoom: z,
-    scale: s,
-    target,
-    expand_x = 3.0,
-    expand_y = 2.0,
-  } = opts;
-  // The guide strip = the CENTER TILE (`width/z × height/z`, the SAME nominal
-  // crop the sliced view shows) expanded by `expand_x` horizontally and
-  // `expand_y` vertically, cut around the target. `z` is the display crop zoom,
-  // NOT the match magnification — the fovea tiles come in pre-sized to the
-  // match scale, so the strip crop size is free to track the displayed tile.
-  const W = (width / z) * expand_x; // Strip width  = center-tile width  · expand_x
-  const H = (height / z) * expand_y; // Strip height = center-tile height · expand_y
-  const ox = target.x - W / 2;
-  const oy = target.y - H / 2;
-  const tc = await getMatchTile(c, ox, oy, W, H, s);
-  // Identical pipeline per eye: correlate the fovea tile into the wide strip,
-  // smooth, then un-scale the peak back to full-resolution strip coordinates.
-  const matchFovea = (tile: Mat<Uint8Array>) =>
-    matchTemplate(tc, tile, "CCOEFF_NORMED").then((m) =>
-      processMatch(gaussian(m, GAUSS_KSIZE, GAUSS_SIGMA), tile, 1 / s),
-    );
-  const [guide, ml, mr] = await Promise.all([
-    resize(tc, {}, 1 / s),
-    matchFovea(tl),
-    matchFovea(tr),
-  ]);
-  // Center-tile marker: the un-expanded center tile, centred in the strip.
-  // Anchored to the crop zoom `z` (was the fovea tile's match-magnification
-  // shape, which drifts from the displayed center tile on a calibrated rig).
-  const center = {
-    rect: RECT.fromCenter(VEC.sub(target, { x: ox, y: oy }), {
-      width: width / z,
-      height: height / z,
-    }),
-  };
-  return { guide, ml, mr, center, ox, oy };
-}
-
-/**
- * Stage 2: constrained vergence step.
+ * Constrained vergence step.
  *
  * The matched fovea centers and the target are lifted into center-camera angle
  * space, decomposed into {pan, verge, v_shift} errors, fed through the per-DOF

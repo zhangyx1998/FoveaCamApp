@@ -192,8 +192,39 @@ const multiFovea = hub.add(
   ),
 );
 
-// --- disparity-scope: auto-vergence control loop (§7.1 S1a) ---------------
-const disparityScope = hub.add(disparityScopeSession(asBroker(Pipe), undistortSeam));
+// --- disparity-scope: auto-vergence control loop (§7.1 S1a; split-node
+// topology per docs/proposals/split-disparity-nodes.md) ---------------------
+// The session composes GENERAL-PURPOSE bricks: slice (the fovea crop brick
+// under session-owned ids) + scale (the ScaleStream brick) + template-match
+// workers. Seams injected so the session unit-tests without native core.
+const aravisScale = Aravis as unknown as {
+  attachScalePipe(sourcePipeId: string, pipeId: string, params: unknown): void;
+  setScaleParams(pipeId: string, params: unknown): boolean;
+  detachScalePipe(pipeId: string): void;
+  scaleProbeAll(): Record<string, unknown>;
+};
+const sliceSeam: import("./slice-pipe.js").SlicePipeSeam = {
+  advertise: pipeBroker.advertise,
+  unadvertise: pipeBroker.unadvertise,
+  attach: (src, id, opts) => aravisFovea.attachFoveaPipe(src, id, opts),
+  steer: (id, rect) => void aravisFovea.setFoveaRect(id, rect),
+  detach: (id) => aravisFovea.detachFoveaPipe(id),
+};
+const scaleSeam: import("./scale-pipe.js").ScalePipeSeam = {
+  advertise: pipeBroker.advertise,
+  unadvertise: pipeBroker.unadvertise,
+  attach: (src, id, params) => aravisScale.attachScalePipe(src, id, params),
+  retune: (id, params) => void aravisScale.setScaleParams(id, params),
+  detach: (id) => aravisScale.detachScalePipe(id),
+};
+// The scale bricks' meters — same sibling-probe shape as converter/undistort/
+// fovea (keys = node ids, folded onto the graph badges).
+registerNativeProbe(
+  () => aravisScale.scaleProbeAll() as unknown as Record<string, WorkloadSnapshot>,
+);
+const disparityScope = hub.add(
+  disparityScopeSession(asBroker(Pipe), undistortSeam, sliceSeam, scaleSeam),
+);
 
 // --- calibrate-intrinsic: per-camera checkerboard/marker calibration (§7.1 S1b)
 const calibrateIntrinsic = hub.add(calibrateIntrinsicSession(asBroker(Pipe)));

@@ -205,6 +205,17 @@ export const nodeId = {
    *  pipe-row derivation still renders camera→fovea for unreported rows. */
   fovea: (serial: string, slot: number): string =>
     `camera/${serial}/undistort/fovea/${slot}`,
+  /** SESSION-owned slice node (split-disparity-nodes): a named reuse of the
+   *  fovea crop brick, nested under /undistort/ like `fovea` (it IS a crop of
+   *  the undistorted space) but keyed by NAME, not slot — session-owned crops
+   *  never churn through the renderer compose protocol, so they live outside
+   *  the numbered slot space. */
+  slice: (serial: string, name: string): string =>
+    `camera/${serial}/undistort/slice/${name}`,
+  /** SCALE/RESIZE node (split-disparity-nodes ruling 5): nests under its
+   *  SOURCE pipe id — that IS its input, same rule as fovea/kcf. */
+  scale: (sourceId: string, name: string): string =>
+    `${sourceId}/scale/${name}`,
   /** The MEMS controller node (controller-node-and-fifo-edges §3): a SINGLETON
    *  logical id — the serial port is a stat, not identity, so PID-node edges
    *  registered before the device connects stay stable. */

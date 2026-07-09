@@ -92,7 +92,10 @@ export const disparity = defineContract({
      *  instead (telemetry `match_magnification`); this knob then no longer
      *  influences matching. See docs/applications/disparity-scope.md. */
     zoom: 9.0,
-    /** Which composite the renderer wants for the `center.*` channel. */
+    /** Which center composite the renderer SHOWS (renderer-local since the
+     *  node split: "sliced" = the scope-tile slice pipe, "disparity" = the
+     *  DiffView composite — no server work either way; kept in contract
+     *  state so the choice survives window reloads). */
     view: "sliced" as "sliced" | "disparity",
     tuning: DEFAULT_TUNING,
     tracker_enabled: false as boolean,
@@ -140,10 +143,10 @@ export const disparity = defineContract({
      *  scale. Set on activate; constant per activation. */
     match_magnification: null as number | null,
     tracker_bbox: null as Rect | null,
-    /** True while the target rides the chained tracker's OVERRIDE (a pointer
-     *  drag) — the flag the tracker propagates downstream (matcher →
-     *  `projection.overridden` → PID step). Drives the UI's override badge
-     *  (which no longer reads the PID slot). */
+    /** True while a pointer drag pins the target (the tracker's override is
+     *  engaged; SESSION-LOCAL flag since the node split — nothing rides the
+     *  reusable match nodes). Drives the UI's override badge (which does not
+     *  read the PID slot). */
     overridden: false as boolean,
     /** Live PID integrator values (debug readout, matches the original
      *  renderer's "PID Debug" fieldset). */
@@ -152,20 +155,15 @@ export const disparity = defineContract({
     // §7.3 item 2), same shape/throttle as manual-control.
     perf: { actuateMs: { mean: 0, max: 0 } as Stat },
   },
-  // The kernel emits DIAGNOSTIC frames only (view re-plumb, §2): `center.*` is
-  // the magnified/combined fovea view; `guide`/`match_left`/`match_right` are
-  // the template-match debug visualizations (heatmap Mats — their `{rect,score}`
-  // rides telemetry as `MatchInfo`, per this file's header comment). The L/C/R
-  // views are GONE from here — they source directly from the per-camera
-  // `camera/<serial>/undistort` pipes (renderer binds them via `usePipeFrame`),
-  // so a busy kernel can't cap their fps.
-  frames: [
-    "center.sliced",
-    "center.disparity",
-    "guide",
-    "match_left",
-    "match_right",
-  ] as const,
+  // Only the per-side correlation HEATMAPS remain session frames (split-
+  // disparity-nodes, 2026-07-09): the sliced center view and the guide strip
+  // ARE the session's slice pipes now (`camera/<serialC>/undistort/slice/
+  // scope-tile` / `scope-strip`, renderer binds via `usePipeFrame`), the
+  // L-vs-R disparity view is a renderer canvas composite (DiffView) of the
+  // two fovea undistort pipes, and the L/C/R views source their own undistort
+  // pipes as before. The heatmaps' `{rect, score}` rides telemetry as
+  // `MatchInfo`, per this file's header comment.
+  frames: ["match_left", "match_right"] as const,
   commands: {
     /** Pointer interaction on the wide view, in wide-frame pixels. */
     pointer:

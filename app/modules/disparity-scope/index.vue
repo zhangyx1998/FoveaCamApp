@@ -35,6 +35,7 @@ import {
 // core/Vision, which the renderer must never pull).
 import { foveaFootprintOnWide } from "./display-geometry";
 import StreamView from "@src/components/StreamView.vue";
+import DiffView from "@src/components/DiffView.vue";
 import PosView from "@src/components/PosView.vue";
 import InlineSelect from "@src/components/InlineSelect.vue";
 import Drawer from "@src/components/Drawer.vue";
@@ -48,22 +49,13 @@ onMounted(() => {
   if (app_config.baseline_distance_mm) state.baseline = app_config.baseline_distance_mm;
 });
 
-// DIAGNOSTIC frames fanned from the orchestrator — the scope kernel's product
-// (the combined/sliced fovea view + the template-match debug strips). The L/C/R
-// MAIN views are NOT here anymore: the kernel no longer emits them.
-const {
-  "center.sliced": slicedFrame,
-  "center.disparity": disparityFrame,
-  guide: frameGuide,
-  match_left: frameMatchLeft,
-  match_right: frameMatchRight,
-} = useFrames(session, [
-  "center.sliced",
-  "center.disparity",
-  "guide",
-  "match_left",
-  "match_right",
-]);
+// DIAGNOSTIC frames fanned from the orchestrator — only the two per-side
+// correlation heatmaps since the node split (split-disparity-nodes): every
+// other view is a pipe or a renderer composite.
+const { match_left: frameMatchLeft, match_right: frameMatchRight } = useFrames(
+  session,
+  ["match_left", "match_right"],
+);
 // View re-plumb (pid-nodes-and-view-replumb.md §Renderer): the L/C/R main views
 // source their per-camera `undistort` pipes DIRECTLY via `usePipeFrame` (off the
 // JS view-tap loop AND independent of the scope kernel), so a busy kernel can no
@@ -80,12 +72,16 @@ const frameC = usePipeFrame(() =>
 const frameR = usePipeFrame(() =>
   state.serials?.R ? nodeId.undistort(state.serials.R) : null,
 );
-const frameCenter = computed(() =>
-  state.view === "sliced" ? slicedFrame.payload.value : disparityFrame.payload.value,
+// Split-disparity-nodes views: the sliced center view IS the session's
+// scope-tile slice pipe; the guide strip IS the scope-strip slice pipe (both
+// live-steered server-side, rendered here at pipe rate); the L-vs-R
+// disparity view is a renderer canvas composite (DiffView) of the two
+// pre-warped fovea pipes above — no kernel frames involved.
+const frameTile = usePipeFrame(() =>
+  state.serials?.C ? nodeId.slice(state.serials.C, "scope-tile") : null,
 );
-// The toggled center view's projection address follows the active channel.
-const centerSource = computed(() =>
-  state.view === "sliced" ? slicedFrame.source : disparityFrame.source,
+const frameStrip = usePipeFrame(() =>
+  state.serials?.C ? nodeId.slice(state.serials.C, "scope-strip") : null,
 );
 
 const drawer_height = ref(0);
@@ -241,7 +237,7 @@ function onCursor(c: (Point2d & Size & { buttons: number }) | null): void {
       <PosView :pos="telemetry.volt.L" :color="THEME.L" style="width: 100%" />
     </div>
     <div class="view">
-      <StreamView class="stream" :payload="frameCenter" :source="centerSource" :theme="THEME.C">
+      <StreamView v-if="state.view === 'sliced'" class="stream" :payload="frameTile" :theme="THEME.C">
         <template #title>
           <InlineSelect v-model="state.view">
             <option value="sliced">Wide Angle Sliced</option>
@@ -249,6 +245,14 @@ function onCursor(c: (Point2d & Size & { buttons: number }) | null): void {
           </InlineSelect>
         </template>
       </StreamView>
+      <DiffView v-else class="stream" :a="frameL" :b="frameR" :theme="THEME.C">
+        <template #title>
+          <InlineSelect v-model="state.view">
+            <option value="sliced">Wide Angle Sliced</option>
+            <option value="disparity">Disparity (Left v.s. Right)</option>
+          </InlineSelect>
+        </template>
+      </DiffView>
       <StreamView class="stream" :title="ROLE.C" :payload="frameC" :theme="THEME.C" @mouse="onCursor">
         <!-- Target center. -->
         <circle :cx="state.target.x" :cy="state.target.y" :r="stroke * 3" :fill="THEME.C" />
@@ -313,8 +317,8 @@ function onCursor(c: (Point2d & Size & { buttons: number }) | null): void {
     class="divergence"
     :style="{ paddingBottom: (drawer_height ? drawer_height + 20 : 0) + 'px' }"
   >
-    <StreamView class="wide" title="Template Match Guide Strip" :payload="frameGuide.payload.value" :source="frameGuide.source">
-      <template v-if="frameGuide">
+    <StreamView class="wide" title="Template Match Guide Strip" :payload="frameStrip">
+      <template v-if="frameStrip">
         <rect
           v-if="telemetry.match_center"
           v-bind="{ x: telemetry.match_center.rect.x, y: telemetry.match_center.rect.y, width: telemetry.match_center.rect.width, height: telemetry.match_center.rect.height }"

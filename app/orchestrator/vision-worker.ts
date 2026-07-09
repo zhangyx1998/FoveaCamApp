@@ -28,16 +28,18 @@ import type {
   VisionResult,
   VisionWorkerIn,
 } from "./vision-worker-protocol.js";
-import { createDisparityKernel } from "@modules/disparity-scope/vision";
+import { createTemplateMatchKernel } from "./template-match-kernel.js";
 import { createDisplayKernel } from "./display-kernel.js";
 import { createDistortionKernel } from "@modules/calibrate-distortion/vision";
 import { createCheckerKernel } from "@modules/calibrate-intrinsic/vision";
 
-/** Kernel registry — keyed by `params.kind`. `display` serves tracking-single +
- *  manual-control + multi-fovea (center only); `distortion`/`checker` serve the
- *  calibrate apps (C-22b step 2/3). */
+/** Kernel registry — keyed by `params.kind`. `template-match` is the generic
+ *  needle-into-haystack correlator (split-disparity-nodes — disparity-scope
+ *  spawns two; the monolithic `disparity` kernel is deleted); `display`
+ *  serves manual-control + multi-fovea (center only); `distortion`/`checker`
+ *  serve the calibrate apps (C-22b step 2/3). */
 const KERNELS: Record<string, KernelFactory> = {
-  disparity: createDisparityKernel,
+  "template-match": createTemplateMatchKernel,
   display: createDisplayKernel,
   distortion: createDistortionKernel,
   checker: createCheckerKernel,
@@ -159,7 +161,7 @@ function start(init: VisionInit): void {
     fail(`reader addon load failed: ${(e as Error).message}`);
     return;
   }
-  const kind = String((init.params as { kind?: unknown }).kind ?? "disparity");
+  const kind = String((init.params as { kind?: unknown }).kind ?? "");
   const factory = KERNELS[kind];
   if (!factory) {
     fail(`unknown vision kernel: ${kind}`);

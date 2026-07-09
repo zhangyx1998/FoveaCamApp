@@ -18,7 +18,7 @@ import type { Role } from "./vision-worker-protocol.js";
 /** One freshly-read frame handed to a kernel. `mat` is a worker-owned buffer,
  *  valid for the duration of the `process` call only (the worker reuses the
  *  per-role read buffer next tick) — a kernel that retains pixels past the call
- *  must copy (e.g. `getFoveaTile`/`wrapPerspective` already allocate fresh). */
+ *  must copy (`cvtColor` and friends already allocate fresh output). */
 export type KernelFrame = {
   mat: Mat<Uint8Array>;
   seq: number;

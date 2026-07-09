@@ -1,28 +1,13 @@
 // disparity-scope's `stepVergence` control law (docs/history/refactor/orchestrator.md
-// §7.1 S1a — the §1 flagship migration). `analyzeVergence`/`getFoveaTile` are
-// native-Vision-backed (real template matching against real frames) and not
-// practically unit-testable here; `stepVergence` is the actual new risk
-// surface this migration ports (error decomposition, PID wiring, sign
-// conventions, low-score hold behavior) and is pure math over a synthetic
-// `VergenceAnalysis` — exactly "the vergence math with synthetic frames"
-// stands in for here: synthetic *analysis results* (a matched-rect pair +
-// score), decoupled from how they'd be produced by real template matching.
-//
-// `core/Vision`'s ops are mocked to trivial stubs (same pattern as
-// `manual-control-capture.test.ts`) purely so importing `vergence.ts` at all
-// doesn't require the native addon — `stepVergence` never calls any of them.
+// §7.1 S1a — the §1 flagship migration; PURE since the node split — the
+// template-match mechanism lives in @orchestrator/template-match-kernel, fed
+// by slice/scale bricks). `stepVergence` is the actual risk surface (error
+// decomposition, PID wiring, sign conventions, low-score hold behavior) and
+// is pure math over synthetic projections — matched-point pairs + scores,
+// decoupled from how the split match nodes produce them. vergence.ts is
+// core-free now (types only), so no native mocks are needed.
 
-import { describe, expect, it, vi } from "vitest";
-
-vi.mock("core/Vision", () => ({
-  cvtColor: vi.fn(),
-  gaussian: vi.fn(),
-  heatmap: vi.fn(),
-  matchTemplate: vi.fn(),
-  minMaxLoc: vi.fn(),
-  resize: vi.fn(),
-  slice: vi.fn(),
-}));
+import { describe, expect, it } from "vitest";
 
 import { PID, PID2D } from "@lib/pid";
 import {
@@ -30,13 +15,12 @@ import {
   foveaFootprintOnWide,
   foveaTileSize,
   matchMagnification,
-  scopeProjection,
   seedVergence,
   stepVergence,
   type ScopeProjection,
   type VergenceControllers,
 } from "@modules/disparity-scope/vergence";
-import type { Point2d, Rect } from "core/Geometry";
+import type { Point2d } from "core/Geometry";
 import {
   foveaWideMagnification,
   type CoordinateConversions,
@@ -52,12 +36,8 @@ const identityConv: Pick<CoordinateConversions, "P2A" | "A2V"> = {
   A2V: { L: (a: Point2d) => a, R: (a: Point2d) => a },
 };
 
-function rectAt(center: Point2d, size = 10): Rect {
-  return { x: center.x - size / 2, y: center.y - size / 2, width: size, height: size };
-}
-
-// The scope now feeds `stepVergence` a projection (points already lifted to
-// wide-frame pixels), not the strip-local analysis rects. Under `identityConv`
+// The scope feeds `stepVergence` a projection (points already lifted to
+// wide-frame pixels by the session's join). Under `identityConv`
 // the projected points ARE the center-camera angles.
 function freshControllers(): VergenceControllers {
   const scalar = () => new PID({ kp: 0, ki: 1, kd: 0, limits: [-10, 10] });
@@ -204,61 +184,6 @@ describe("matchMagnification (measured-vs-fallback selection)", () => {
       expect(tile.width).toBeCloseTo((1440 / zoom) * 3);
       expect(tile.height).toBeCloseTo((1080 / zoom) * 3);
     }
-  });
-});
-
-// `scopeProjection` is the pure emission math the kernel runs to hand the
-// control path its input: each strip-local match rect centre + the strip
-// origin (ox, oy) = its full-resolution wide-frame position. Pins the offset
-// application + score routing so a re-plumb regression can't drop them.
-describe("scopeProjection (control-output emission math)", () => {
-  const rect = (cx: number, cy: number, size = 10): Rect => ({
-    x: cx - size / 2,
-    y: cy - size / 2,
-    width: size,
-    height: size,
-  });
-
-  it("lifts each match rect centre by the strip origin (ox, oy) and routes scores", () => {
-    const proj = scopeProjection({
-      ml: { rect: rect(4, 6), score: 0.8 },
-      mr: { rect: rect(10, 6), score: 0.6 },
-      center: { rect: rect(7, 6) },
-      ox: 100,
-      oy: 50,
-    });
-    expect(proj.l).toEqual({ x: 104, y: 56 });
-    expect(proj.r).toEqual({ x: 110, y: 56 });
-    expect(proj.target).toEqual({ x: 107, y: 56 });
-    expect(proj.scores).toEqual({ l: 0.8, r: 0.6 });
-  });
-
-  it("is identity on the rect centres when the strip origin is (0, 0)", () => {
-    const proj = scopeProjection({
-      ml: { rect: rect(3, -2), score: 1 },
-      mr: { rect: rect(-5, 8), score: 1 },
-      center: { rect: rect(0, 0) },
-      ox: 0,
-      oy: 0,
-    });
-    expect(proj.l).toEqual({ x: 3, y: -2 });
-    expect(proj.r).toEqual({ x: -5, y: 8 });
-    expect(proj.target).toEqual({ x: 0, y: 0 });
-  });
-
-  // §3.5 (controller-node-and-fifo-edges): the tracker's override flag rides
-  // the projection downstream unchanged so the PID stage can act on the drag.
-  it("carries the tracker-override flag through (default false)", () => {
-    const input = {
-      ml: { rect: rect(1, 1), score: 1 },
-      mr: { rect: rect(2, 2), score: 1 },
-      center: { rect: rect(0, 0) },
-      ox: 0,
-      oy: 0,
-    };
-    expect(scopeProjection(input).overridden).toBe(false);
-    expect(scopeProjection(input, false).overridden).toBe(false);
-    expect(scopeProjection(input, true).overridden).toBe(true);
   });
 });
 

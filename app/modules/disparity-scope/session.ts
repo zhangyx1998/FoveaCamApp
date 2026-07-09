@@ -4,57 +4,56 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Disparity-scope session — auto-vergence, re-plumbed per
-// docs/proposals/pid-nodes-and-view-replumb.md §"Disparity re-plumb (worker B)".
-// This module is the thin main-thread coordinator: it wires up the graph and
-// forwards final results, it does not micro-manage frames.
+// Disparity-scope session — auto-vergence, SPLIT-NODE topology per
+// docs/proposals/split-disparity-nodes.md (ruled 2026-07-09). This module is
+// the thin main-thread coordinator: it wires up the graph and forwards final
+// results, it does not micro-manage frames.
 //
 //  - on activate: `acquireTriple` (calibration); advertise the THREE undistort
-//    pipes the views + the scope kernel source from — C = INTRINSIC undistort
-//    (cal from the triple), L/R = HOMOGRAPHY undistort fed `A2H∘V2A(volts)` from
-//    the controller node's mirror history by a `startHomographyFeeder`;
-//    `broker.connect` those pipe ids as the kernel inputs (refcount++ → demand
-//    propagation keeps the undistort bricks + their converters awake); spawn
-//    the vision worker; create the PID controller NODE (`createPidNode`) and
-//    open a position input on the controller node (push-model transport).
-//  - the worker SHM-reads L/C/R (foveas arrive PRE-WARPED off the homography
-//    pipes; C is the undistorted wide view), runs the tile match, and posts
-//    the scope PROJECTION (matched fovea centres + target, undistorted wide
-//    pixels, + the tracker-override flag) + diagnostic frames. The kernel no
-//    longer emits L/C/R view frames — the views source directly from the
-//    undistort pipes, so a busy kernel can't cap their fps.
-//  - the KCF auto-follow runs on its OWN native thread (controller-node-and-
-//    fifo-edges §3.5): `createChainedTracker` on the C undistort brick's
-//    OwnedFrame tap (latest-wins), so it tracks exactly what the matcher sees
-//    and tracking latency never rides the matching budget. The session
-//    consumes its results (`tracker-feed.ts`) and forwards each scalar center
-//    to the kernel as the `target` param + the `overridden` flag.
-//  - main runs the vergence control law INSIDE the PID node's control fn
-//    (`node.step(fn)`): `stepVergence` reads the projection and produces the
-//    `{ l, r }` command volts, PUSHED to the controller NODE's position input
-//    at the projection/PID result rate (controller-node-and-fifo-edges §3 —
-//    the MCU stream holds position between updates; the generic `pidOverride`
-//    command pushes its pinned volts immediately on engage).
+//    pipes (C = INTRINSIC undistort, L/R = HOMOGRAPHY undistort fed
+//    `A2H∘V2A(volts)` by `startHomographyFeeder`); then compose the split
+//    pipeline out of GENERAL-PURPOSE nodes:
+//      · two SLICE nodes on the C undistort (the fovea crop brick, reused):
+//        `slice/scope-strip` (the target-centered match strip) and
+//        `slice/scope-tile` (the display center tile) — live-steered
+//        (`steerCrops`) as the target/zoom move;
+//      · three SCALE nodes (ruling 5 — the match kernel does NO resizing):
+//        the strip's `scale/match` (reactive `ratio` = the match scale `s`)
+//        and one `scale/scope-needle` per fovea (`dsize` = foveaTileSize) —
+//        retuned (`retuneScalers`) when zoom/magnification/tuning change;
+//      · two TEMPLATE-MATCH vision workers (`match/L`, `match/R`), each
+//        reading its pre-sized needle + the shared pre-sized strip. Their
+//        results carry the strip frame's crop ORIGIN, so origin +
+//        rectCenter/s is an ABSOLUTE undistorted-wide position — no target
+//        or drag flag ever rides a worker.
+//  - the PID node (`win/disparity-scope/pid`) is the app-specific JOIN: per-
+//    side results land keyed L/R and the vergence step runs when the arriving
+//    side COMPLETES a pair (seq-gated, order-agnostic, ~once per strip
+//    frame). `stepVergence` → `{ l, r }` volts → the controller NODE's
+//    position input (push model; the MCU stream holds between updates).
+//  - the KCF auto-follow runs on its OWN native thread (§3.5):
+//    `createChainedTracker` on the C undistort brick. Its output drives the
+//    session's target state (which steers the slice crops); the `overridden`
+//    flag is SESSION-LOCAL now (`dragging`) — nothing app-specific rides the
+//    reusable nodes.
+//  - views: the sliced/guide views ARE the slice pipes (renderer
+//    `usePipeFrame`); the L-vs-R disparity view is a renderer canvas
+//    composite (DiffView) of the two fovea undistort pipes; only the per-side
+//    match heatmaps remain session frame channels.
 //
-// Pointer drag → the TRACKER's override (§3.5, supersedes the PID-slot drag
-// path in this app): down/move call `tk.override(p)`; the tracker emits
-// `{overridden: true, center: p}` results every frame, the flag rides the
-// kernel target push → `projection.overridden` → the control step, which
-// switches to DIRECT FOLLOW (user rulings 2026-07-08/09, supersede the
-// earlier "PID keeps stepping" drag semantics): pointer-down RESETS
-// pan/verge/v_shift, so BOTH eyes ride exactly ON the raw cursor ray —
-// parallel, vergence at INFINITY, no residual corrections — with no PID
-// stepping and NO match-score gate (the pure `followTarget`; the match-gated
-// loop could never follow a drag onto unmatched content — it held on "low
-// score" and the foveas never moved). The pointer handler also pushes the
-// follow volts synchronously so the drag doesn't lag a kernel tick. The
-// all-zero controller state equals the follow command, so on release the
-// tracker RE-ARMS at the drag end and the PID resumes continuously from the
-// parallel pose (first resumed output == last follow output, velocity-form
-// integrator = command — no seed on this path), then re-converges every DOF
-// from scratch. The PID node's own override slot stays for the generic
-// `pidOverride` command (a programmatic caller that already has volts); its
-// seeded release (`seedFromOverride`) now serves only that path.
+// Pointer drag → the TRACKER's override (§3.5): down/move call
+// `tk.override(p)`; the control step switches to DIRECT FOLLOW (user rulings
+// 2026-07-08/09): pointer-down RESETS pan/verge/v_shift, so BOTH eyes ride
+// exactly ON the raw cursor ray — parallel, vergence at INFINITY, no residual
+// corrections — with no PID stepping and NO match-score gate (the pure
+// `followTarget`; the match-gated loop could never follow a drag onto
+// unmatched content). The pointer handler also pushes the follow volts
+// synchronously so the drag doesn't lag a match tick. The all-zero controller
+// state equals the follow command, so on release the tracker RE-ARMS at the
+// drag end and the PID resumes continuously from the parallel pose (no seed),
+// then re-converges every DOF from scratch. The PID node's own override slot
+// stays for the generic `pidOverride` command; its seeded release
+// (`seedFromOverride`) serves only that path.
 
 import { defineSession, type ServerSession } from "@orchestrator/runtime";
 import { acquireTriple, type CalibratedTriple } from "@orchestrator/calibration";
@@ -95,20 +94,23 @@ import {
 } from "./contract";
 import {
   followTarget,
+  foveaTileSize,
   matchMagnification,
   seedVergence,
   stepVergence,
   type ScopeProjection,
   type VergenceControllers,
 } from "./vergence";
-import type { DisparityParams, DisparityValues } from "./vision";
+import { createSlicePipe, type SliceHandle, type SlicePipeSeam } from "@orchestrator/slice-pipe";
+import { createScalePipe, type ScaleHandle, type ScalePipeSeam } from "@orchestrator/scale-pipe";
+import type { TemplateMatchValues } from "@orchestrator/template-match-kernel";
 import { consumeTracker, createDisparityTrackerFeed } from "./tracker-feed";
 import { makeMat } from "@lib/mat";
 import { PID, PID2D, type PidParams } from "@lib/pid";
 import { distanceToVerge, vergeToDistance, vergenceToDistance } from "@lib/stereo";
 import { RollingStats } from "@lib/util/rolling";
-import { RECT } from "@lib/util/geometry";
-import type { Point2d } from "core/Geometry";
+import { RECT, VEC } from "@lib/util/geometry";
+import type { Point2d, Rect, Size } from "core/Geometry";
 import type { Pos } from "@lib/controller-codec";
 // Direct core import in a session — an accepted precedent; all PURE logic lives
 // in tracker-feed.ts/vergence.ts so vitest never loads the native addon.
@@ -161,6 +163,8 @@ function cloneTuning(t: Tuning): Tuning {
 export default function disparityScopeSession(
   broker: PipeBroker,
   undistortSeam: UndistortPipeSeam,
+  sliceSeam: SlicePipeSeam,
+  scaleSeam: ScalePipeSeam,
 ): ServerSession<typeof disparity> {
   return defineSession("disparity-scope", disparity, (s) => {
     let triple: CalibratedTriple | null = null;
@@ -170,7 +174,28 @@ export default function disparityScopeSession(
     let posInput: PositionInput | null = null;
     // v1 awaited-actuate round-trip ms (node `onApplied`); ~0 on v2 streaming.
     let lastActuateMs = 0;
-    let worker: VisionWorkerHandle | null = null;
+    // The two per-side template-match workers (split-disparity-nodes).
+    const workers: { L: VisionWorkerHandle | null; R: VisionWorkerHandle | null } = {
+      L: null,
+      R: null,
+    };
+    // The general-purpose bricks this session composes (created on activate,
+    // retired via `disposers` on idle — consumer-most first).
+    let stripSlice: SliceHandle | null = null;
+    let tileSlice: SliceHandle | null = null;
+    let stripScale: ScaleHandle | null = null;
+    const needleScales: { L: ScaleHandle | null; R: ScaleHandle | null } = {
+      L: null,
+      R: null,
+    };
+    // Wide (C) frame dims — the crop/scale geometry base (camera features,
+    // read once on activate; the old kernel derived them from frames).
+    let wide: Size = { width: 0, height: 0 };
+    // The match scale `s` currently commanded to the strip scaler — the
+    // divisor that lifts match rects back to full-res strip-local px.
+    let stripScaleFactor = 1;
+    // The strip crop rect currently commanded (source/undistorted px).
+    let stripRect: Rect = { x: 0, y: 0, width: 0, height: 0 };
     // The graph-visible PID controller node (created on activate). Holds the
     // vergence controllers + the renderer-driven override slot.
     let pidNode: PidNodeHandle<VergenceVolts> | null = null;
@@ -259,26 +284,76 @@ export default function disparityScopeSession(
       return timeoutMs !== Infinity && now() - windowStart > timeoutMs;
     }
 
-    // --- worker params ----------------------------------------------------
+    // --- crop/scale geometry (split-disparity-nodes) -----------------------
+    // The session owns ALL sizing math (ruling 5): the slice nodes get crop
+    // rects, the scale nodes get ratio/dsize, and the match workers stay
+    // geometry-free. Steering is reactive (`setFoveaRect`/`setScaleParams`,
+    // applied on the producers' next frame — no re-attach, no gate churn).
 
-    function sendParams(params: Partial<DisparityParams>): void {
-      worker?.sendParams(params as Record<string, unknown>);
+    function clampToWide(r: Rect): Rect {
+      const x = Math.max(0, Math.min(r.x, wide.width));
+      const y = Math.max(0, Math.min(r.y, wide.height));
+      return {
+        x,
+        y,
+        width: Math.max(1, Math.min(r.width, wide.width - x)),
+        height: Math.max(1, Math.min(r.height, wide.height - y)),
+      };
     }
 
-    function initParams(): Record<string, unknown> {
-      // No tracker knobs (§3.5): the kernel runs no KCF — the session pushes
-      // the chained tracker's output as `target`/`overridden` at result rate.
-      return {
-        kind: "disparity",
-        zoom: Math.max(1, s.state.zoom),
-        matchZoom: measuredMatchZoom(),
-        scale: effectiveScale(),
-        target: s.state.target,
-        overridden: false,
-        expand_x: s.state.tuning.expand_x,
-        expand_y: s.state.tuning.expand_y,
-        view: s.state.view,
+    /** The display center tile: `wide/zoom`, target-centered (the same crop
+     *  the old kernel's "sliced" view cut). */
+    function tileRect(): Rect {
+      const z = Math.max(1, s.state.zoom);
+      return clampToWide(
+        RECT.fromCenter(s.state.target, {
+          width: wide.width / z,
+          height: wide.height / z,
+        }),
+      );
+    }
+
+    /** The match strip: the center tile expanded by `expand_x`/`expand_y`,
+     *  target-centered (the guide strip `analyzeVergence` used to cut). */
+    function computeStripRect(): Rect {
+      const z = Math.max(1, s.state.zoom);
+      const t = s.state.tuning;
+      return clampToWide(
+        RECT.fromCenter(s.state.target, {
+          width: (wide.width / z) * t.expand_x,
+          height: (wide.height / z) * t.expand_y,
+        }),
+      );
+    }
+
+    /** Re-steer both slice crops to the current target/zoom/expansion. */
+    function steerCrops(): void {
+      if (!wide.width) return;
+      tileSlice?.steer(tileRect());
+      stripRect = computeStripRect();
+      stripSlice?.steer(stripRect);
+    }
+
+    /** Retune the three scale nodes: strip ratio = the match scale `s` (both
+     *  sides land at `s` px per wide px — CCOEFF matching is not scale-
+     *  invariant), needles to the fovea's wide-frame footprint at `s`. */
+    function retuneScalers(): void {
+      if (!wide.width) return;
+      const sF = effectiveScale();
+      stripScaleFactor = sF;
+      stripScale?.retune({ ratio: sF });
+      const size = foveaTileSize({
+        width: wide.width,
+        height: wide.height,
+        zoom: matchZoom(),
+        scale: sF,
+      });
+      const dsize = {
+        width: Math.max(1, Math.round(size.width)),
+        height: Math.max(1, Math.round(size.height)),
       };
+      needleScales.L?.retune({ dsize });
+      needleScales.R?.retune({ dsize });
     }
 
     // --- chained tracker (§3.5): arm + result feed -------------------------
@@ -314,11 +389,11 @@ export default function disparityScopeSession(
         onDrag(center) {
           // Drag in flight: the tracker echoes the override point every frame.
           // The pointer handler already pushed it synchronously; this keeps
-          // target+flag+follow coherent at FRAME rate even if a pointer move
-          // was coalesced away (the kernel-rate projection path is slower).
+          // target+crops+follow coherent at FRAME rate even if a pointer move
+          // was coalesced away (the match-rate join path is slower).
           lastGood = center;
           s.setState("target", center);
-          sendParams({ target: center, overridden: true });
+          steerCrops();
           publishOverridden(true);
           const v = followVolts(center);
           if (v && !pidNode?.override.engaged) {
@@ -330,7 +405,7 @@ export default function disparityScopeSession(
           trackerActive = true;
           lastGood = center;
           s.setState("target", center);
-          sendParams({ target: center, overridden: false });
+          steerCrops();
           s.telemetry({ tracker_bbox: bbox });
           publishOverridden(false);
         },
@@ -384,24 +459,70 @@ export default function disparityScopeSession(
       v_shift.value = seed.v_shift; // PID setter clamps to its limits
     }
 
-    // --- worker results ---------------------------------------------------
+    // --- per-side match results → the pid JOIN (split-disparity-nodes) -----
 
-    function onResult(r: VisionResult): void {
-      const v = r.values as DisparityValues;
-      if (v.size) s.telemetry({ size: v.size });
-      // No tracker values from the kernel anymore (§3.5) — the chained
-      // tracker's results arrive on their own path (`trackerFeed`).
-      for (const f of r.frames) {
-        s.frame(f.name, makeMat(new Uint8Array(f.buffer), [f.height, f.width], f.channels));
-      }
-      if (v.analysis) {
-        s.telemetry({
-          match_left: v.analysis.ml,
-          match_right: v.analysis.mr,
-          match_center: v.analysis.center,
-        });
-      }
-      if (v.projection) runControl(v.projection);
+    type SideKey = "L" | "R";
+    type SideMatch = { center: Point2d; score: number; seq: number };
+    // Latest result per side; the vergence step runs when the ARRIVING side
+    // completes a pair (its seq >= the other side's latest) — order-agnostic,
+    // ~once per strip frame, degrades gracefully to the slower side's rate.
+    const latestMatch: { L: SideMatch | null; R: SideMatch | null } = {
+      L: null,
+      R: null,
+    };
+
+    function onMatch(side: SideKey, r: VisionResult): void {
+      const v = r.values as unknown as TemplateMatchValues;
+      // The correlation heatmap → this side's session frame channel.
+      for (const f of r.frames)
+        if (f.name === "match")
+          s.frame(
+            side === "L" ? "match_left" : "match_right",
+            makeMat(new Uint8Array(f.buffer), [f.height, f.width], f.channels),
+          );
+      // Lift out of the scaled-strip space: /s → full-res strip-local px
+      // (what the guide-strip overlay draws), + the frame's forwarded crop
+      // origin → ABSOLUTE undistorted-wide px (what the control law reads).
+      const sF = stripScaleFactor > 0 ? stripScaleFactor : 1;
+      const rectFull = VEC.mul(v.rect, 1 / sF);
+      const c = RECT.getCenter(rectFull);
+      const m: SideMatch = {
+        center: { x: v.origin.x + c.x, y: v.origin.y + c.y },
+        score: v.score,
+        seq: v.seq ?? 0,
+      };
+      latestMatch[side] = m;
+      s.telemetry(
+        side === "L"
+          ? { match_left: { rect: rectFull, score: v.score } }
+          : { match_right: { rect: rectFull, score: v.score } },
+      );
+      const other = latestMatch[side === "L" ? "R" : "L"];
+      if (!other || m.seq < other.seq) return; // pair incomplete — wait
+      // Center-tile marker for the guide overlay (strip-local full-res px,
+      // anchored to THIS strip frame's origin so it stays aligned mid-steer).
+      const z = Math.max(1, s.state.zoom);
+      s.telemetry({
+        match_center: {
+          rect: RECT.fromCenter(VEC.sub(s.state.target, v.origin), {
+            width: wide.width / z,
+            height: wide.height / z,
+          }),
+        },
+      });
+      runControl({
+        l: (side === "L" ? m : other).center,
+        r: (side === "R" ? m : other).center,
+        target: s.state.target,
+        scores: {
+          l: (side === "L" ? m : other).score,
+          r: (side === "R" ? m : other).score,
+        },
+        // SESSION-LOCAL now (split-disparity-nodes): the drag flag never rides
+        // a reusable node — the pointer handler owns `dragging` directly, so
+        // the old one-kernel-tick flag lag is gone too.
+        overridden: dragging,
+      });
     }
 
     /** Direct-follow volts for `target` (the drag path — see
@@ -532,15 +653,12 @@ export default function disparityScopeSession(
 
     // --- lifecycle --------------------------------------------------------
 
-    // Connected pipe ids, in `pipeInputs` order — the graph wiring's edge
-    // sources (C-24 stage-1 shim).
-    let pipeIds: string[] = [];
-
     /** Connect a pipe by id (refcount++ → C-21 gate) and return its worker
-     *  `PipeInput`; registers the matching `disconnect` on `disposers`. */
-    function connectCameraPipe(role: "L" | "C" | "R", pipeId: string): PipeInput {
+     *  `PipeInput` under `role`; registers the matching `disconnect` on
+     *  `disposers`. Connecting the same pipe twice (the shared strip) is
+     *  fine — refcounted, two disconnects. */
+    function connectPipe(role: string, pipeId: string): PipeInput {
       const handle = broker.connect(pipeId);
-      pipeIds.push(pipeId);
       disposers.add(() => broker.disconnect(pipeId));
       const { width, height, channels, bytesPerFrame, maxBytes } = handle.spec;
       return {
@@ -601,18 +719,94 @@ export default function disparityScopeSession(
         });
       }
 
-      // Kernel inputs = the UNDISTORT pipe ids (demand propagation keeps the
-      // undistort bricks + converters awake). C falls back to the raw convert
-      // pipe on an uncalibrated wide camera (control then holds "no
-      // calibration", the same degradation as before).
-      pipeIds = [];
+      // Split pipeline (split-disparity-nodes, ruled 2026-07-09): compose the
+      // GENERAL-PURPOSE bricks — slice (fovea crop) → scale → template-match
+      // ×2 — on the C source. C falls back to the raw convert pipe on an
+      // uncalibrated wide camera (control then holds "no calibration", the
+      // same degradation as before).
       const serialC = t.leases.C.camera.serial;
       const cSourceId = undistortIds.C ?? nodeId.convert(serialC);
-      const pipeInputs: PipeInput[] = [
-        connectCameraPipe("L", undistortIds.L ?? nodeId.convert(t.leases.L.camera.serial)),
-        connectCameraPipe("C", cSourceId),
-        connectCameraPipe("R", undistortIds.R ?? nodeId.convert(t.leases.R.camera.serial)),
-      ];
+      const camC = t.leases.C.camera;
+      wide = {
+        width: camC.getFeatureInt("Width"),
+        height: camC.getFeatureInt("Height"),
+      };
+      s.telemetry({ size: { ...wide } }); // was the old kernel's `values.size`
+
+      // SLICE nodes: the match strip + the display center tile, both crops of
+      // the C source, live-steered by `steerCrops`. Max footprint = the full
+      // frame (zoom → 1 legally grows either crop to the whole frame).
+      stripRect = computeStripRect();
+      stripSlice = createSlicePipe(
+        sliceSeam,
+        cSourceId,
+        nodeId.slice(serialC, "scope-strip"),
+        { rect: stripRect, maxWidth: wide.width, maxHeight: wide.height },
+      );
+      tileSlice = createSlicePipe(
+        sliceSeam,
+        cSourceId,
+        nodeId.slice(serialC, "scope-tile"),
+        { rect: tileRect(), maxWidth: wide.width, maxHeight: wide.height },
+      );
+
+      // SCALE nodes (ruling 5 — the match workers do NO resizing): the strip
+      // at ratio `s` (UPSAMPLED to `s` px per wide px, meeting the demagnified
+      // fovea tiles at the same pixel scale) and one needle per fovea at the
+      // tile dsize. Strip max = 2× the frame; extreme zoom/expansion settings
+      // clamp natively rather than over-allocate the ring.
+      stripScaleFactor = effectiveScale();
+      stripScale = createScalePipe(
+        scaleSeam,
+        stripSlice.pipeId,
+        nodeId.scale(stripSlice.pipeId, "match"),
+        {
+          params: { ratio: stripScaleFactor },
+          maxWidth: wide.width * 2,
+          maxHeight: wide.height * 2,
+        },
+      );
+      const tile0 = foveaTileSize({
+        width: wide.width,
+        height: wide.height,
+        zoom: matchZoom(),
+        scale: stripScaleFactor,
+      });
+      const dsize0 = {
+        width: Math.max(1, Math.round(tile0.width)),
+        height: Math.max(1, Math.round(tile0.height)),
+      };
+      const needleSources: Record<"L" | "R", string> = {
+        L: undistortIds.L ?? nodeId.convert(t.leases.L.camera.serial),
+        R: undistortIds.R ?? nodeId.convert(t.leases.R.camera.serial),
+      };
+      for (const side of ["L", "R"] as const) {
+        const cam = t.leases[side].camera;
+        needleScales[side] = createScalePipe(
+          scaleSeam,
+          needleSources[side],
+          nodeId.scale(needleSources[side], "scope-needle"),
+          {
+            params: { dsize: dsize0 },
+            maxWidth: cam.getFeatureInt("Width"),
+            maxHeight: cam.getFeatureInt("Height"),
+          },
+        );
+      }
+
+      // Worker inputs: each match worker reads its pre-sized needle + the
+      // SHARED pre-sized strip (refcount++ per connect — demand propagation
+      // keeps the whole slice/scale/undistort chain awake while they read).
+      const matchInputs: Record<"L" | "R", PipeInput[]> = {
+        L: [
+          connectPipe("needle", needleScales.L!.pipeId),
+          connectPipe("haystack", stripScale.pipeId),
+        ],
+        R: [
+          connectPipe("needle", needleScales.R!.pipeId),
+          connectPipe("haystack", stripScale.pipeId),
+        ],
+      };
 
       // §3.5: the chained KCF tracker — its OWN native thread, tapping the
       // SAME C brick the kernel reads (undistort; convert fallback), so it
@@ -640,35 +834,58 @@ export default function disparityScopeSession(
         void consumeTracker(tk, trackerFeed);
       }
 
-      // Now defer the producer teardown (runs AFTER the consumer disconnects
-      // and the tracker tap is released).
+      // Producer teardown, consumer-most first (DisposerBag is FIFO; the pipe
+      // disconnects + tracker release above run before these): scalers
+      // (chained on slices/undistorts) → slices (chained on the C source) →
+      // the undistort bricks + homography feeders.
+      disposers.add(() => {
+        stripScale?.retire();
+        stripScale = null;
+        needleScales.L?.retire();
+        needleScales.R?.retire();
+        needleScales.L = needleScales.R = null;
+      });
+      disposers.add(() => {
+        stripSlice?.retire();
+        tileSlice?.retire();
+        stripSlice = tileSlice = null;
+      });
       for (const retire of retirers) disposers.add(retire);
 
-      const kernelId = nodeId.win("disparity-scope", "disparity");
       const pidId = nodeId.win("disparity-scope", "pid");
       const bgra = { kind: "frame", pixelFormat: "BGRA8", dtype: "U8" } as const;
-      // meterName = the kernel node id, so the worker's self-meter folds onto
-      // this node's badge (rig 2026-07-08: the kernel was the 35-vs-60fps
-      // limiter, invisible until it showed as a node).
-      worker = createVisionWorker(
-        { pipes: pipeInputs, params: initParams(), meterName: kernelId },
-        onResult,
-      );
+      const analysis = { kind: "analysis", schema: "template-match" } as const;
+      const matchIds = {
+        L: nodeId.win("disparity-scope", "match", "L"),
+        R: nodeId.win("disparity-scope", "match", "R"),
+      } as const;
+      // Two GENERIC match workers — meterName = the node id, so each worker's
+      // self-meter folds onto its own graph node badge (per-side match cost
+      // is now individually visible; the monolithic kernel hid the split).
+      for (const side of ["L", "R"] as const) {
+        workers[side] = createVisionWorker(
+          {
+            pipes: matchInputs[side],
+            params: { kind: "template-match" },
+            meterName: matchIds[side],
+          },
+          (r) => onMatch(side, r),
+        );
+      }
       disposers.add(
         registerGraphWiring({
           nodes: [
-            {
-              id: kernelId,
-              kind: "disparity",
+            ...(["L", "R"] as const).map((side) => ({
+              id: matchIds[side],
+              kind: "template-match",
               owner: "win/disparity-scope",
-              output: bgra,
-              transport: "port",
-            },
+              output: analysis,
+              transport: "worker" as const,
+            })),
             // The chained tracker does NOT self-report topology (no row from
             // native Topology.report() — unlike undistort bricks), so the
-            // session registers it: C source → kcf (frames, native tap) and
-            // kcf → kernel (the scalar target feed; `overridden` is DATA on
-            // that stream, not topology).
+            // session registers it: C source → kcf (frames, native tap); its
+            // kcf → pid target edge rides the pid node's inputs below.
             ...(tk
               ? [
                   {
@@ -682,23 +899,21 @@ export default function disparityScopeSession(
               : []),
           ],
           edges: [
-            ...pipeInputs.map((p, i) => ({
-              from: pipeIds[i]!,
-              to: kernelId,
-              port: p.role,
-              type: bgra,
-            })),
-            ...(tk
-              ? [
-                  { from: cSourceId, to: kcfId, port: "C", type: bgra },
-                  {
-                    from: kcfId,
-                    to: kernelId,
-                    port: "target",
-                    type: { kind: "track" } as const,
-                  },
-                ]
-              : []),
+            ...(["L", "R"] as const).flatMap((side) => [
+              {
+                from: needleScales[side]!.pipeId,
+                to: matchIds[side],
+                port: "needle",
+                type: bgra,
+              },
+              {
+                from: stripScale!.pipeId,
+                to: matchIds[side],
+                port: "haystack",
+                type: bgra,
+              },
+            ]),
+            ...(tk ? [{ from: cSourceId, to: kcfId, port: "C", type: bgra }] : []),
           ],
         }),
       );
@@ -713,14 +928,19 @@ export default function disparityScopeSession(
         );
       }
 
-      // The PID controller node: scope → pid (input edge) + pid → controller
-      // (output edge, filed on the controller node by the wiring shim).
+      // The PID controller node — the app-specific JOIN (split-disparity-
+      // nodes ruling 4): both match sides + the tracker's target feed
+      // converge here; pid → controller carries the position-stream output.
       // `createPidNode` owns its own graph registration; dispose retires it.
       pidNode = createPidNode<VergenceVolts>({
         id: pidId,
         kind: "pid",
         owner: "win/disparity-scope",
-        inputs: [{ from: kernelId, port: "projection" }],
+        inputs: [
+          { from: matchIds.L, port: "l" },
+          { from: matchIds.R, port: "r" },
+          ...(tk ? [{ from: kcfId, port: "target" }] : []),
+        ],
         outputs: [{ to: nodeId.controller(), port: "volt" }],
         controllers: { pan, verge, v_shift },
         seed: seedFromOverride,
@@ -755,16 +975,24 @@ export default function disparityScopeSession(
       // stream + disable iff the node enabled for us (fire-and-forget close).
       void posInput?.close();
       posInput = null;
-      worker?.terminate(); // terminate before disconnect: no reads after the gate drops
-      worker = null;
+      // Terminate both match workers before disconnect: no reads after the
+      // gate drops.
+      workers.L?.terminate();
+      workers.R?.terminate();
+      workers.L = workers.R = null;
+      latestMatch.L = latestMatch.R = null;
       trackerActive = false;
       dragging = false;
       overriddenTele = false;
-      disposers.dispose(); // disconnect pipes, release tracker, retire undistort, dispose pid node
+      // Disconnect pipes, release tracker, retire scalers → slices →
+      // undistort bricks, dispose pid node (FIFO — see activate).
+      disposers.dispose();
       publishOverride(); // pidNode is now null → released state
       releaseLeases(triple);
       triple = null;
       status = "initializing";
+      wide = { width: 0, height: 0 };
+      stripScaleFactor = 1;
       commandedVolts = { l: ORIGIN_POS, r: ORIGIN_POS };
       s.resetTelemetry([
         "ready",
@@ -779,11 +1007,11 @@ export default function disparityScopeSession(
       commands: {
         async pointer({ p, buttons: _buttons, phase }) {
           // §3.5 drag semantics (direct-follow ruling 2026-07-08): down/move
-          // engage the TRACKER's override AND directly drive the foveas to the
-          // cursor ray (`followVolts` — held vergence, no PID stepping, no
-          // match gate). The `overridden` flag still rides tracker → kernel
-          // target → projection → control step, which re-affirms the follow
-          // at kernel rate.
+          // engage the TRACKER's override AND directly drive the foveas to
+          // the cursor ray (`followVolts` — no PID stepping, no match gate).
+          // `overridden` is SESSION-LOCAL (`dragging`) since the node split —
+          // the join stamps it onto each projection, so the control step
+          // re-affirms the follow at match rate.
           if (phase !== "up") {
             if (phase === "down") {
               dragging = true;
@@ -800,21 +1028,21 @@ export default function disparityScopeSession(
               v_shift.reset();
             }
             tk?.override(p);
-            // Push synchronously too (don't wait one tracker frame) — the feed
-            // re-affirms the same values at result rate.
+            // Steer synchronously too (don't wait one tracker frame) — the
+            // feed re-affirms the same target at result rate.
             lastGood = p;
             s.setState("target", p);
-            sendParams({ target: p, overridden: true });
+            steerCrops();
             publishOverridden(true);
             status = "manual";
-            // Refresh the freeze window NOW (the flagged projection that also
-            // refreshes it lags one kernel tick — a drag started while frozen
-            // must servo immediately).
+            // Refresh the freeze window NOW (`dragging` reaches the join one
+            // match tick late — a drag started while frozen must servo
+            // immediately).
             windowStart = now();
             // Direct follow NOW (same immediate-apply precedent as the
-            // pidOverride command): the projection path re-affirms at kernel
-            // rate. Skipped while the generic PID override pins the output —
-            // that slot outranks the drag, matching `node.step`'s semantics.
+            // pidOverride command): the join path re-affirms at match rate.
+            // Skipped while the generic PID override pins the output — that
+            // slot outranks the drag, matching `node.step`'s semantics.
             const v = followVolts(p);
             if (v && !pidNode?.override.engaged) {
               commandedVolts = v;
@@ -823,7 +1051,6 @@ export default function disparityScopeSession(
           } else {
             dragging = false;
             windowStart = now(); // drag end restarts the convergence window
-            sendParams({ target: s.state.target, overridden: false });
             publishOverridden(false);
             if (tk) {
               // Native releaseOverride RE-ARMS KCF at the drag end on the next
@@ -880,21 +1107,20 @@ export default function disparityScopeSession(
       watch: {
         tuning(t) {
           syncGains(t);
-          sendParams({
-            scale: effectiveScale(),
-            expand_x: t.expand_x,
-            expand_y: t.expand_y,
-          });
+          // Expansion re-shapes the strip crop; scale retunes the scalers.
+          steerCrops();
+          retuneScalers();
         },
         baseline(v) {
           verge.limits = [0, distanceToVerge(VERGE_MIN_DISTANCE_MM, v)];
         },
         zoom() {
-          sendParams({ zoom: Math.max(1, s.state.zoom), scale: effectiveScale() });
+          // Zoom re-shapes both crops AND the tile/strip scale geometry.
+          steerCrops();
+          retuneScalers();
         },
-        view(view) {
-          sendParams({ view });
-        },
+        // `view` (sliced vs disparity) is renderer-only now: both center views
+        // are pipe/renderer-composed (split-disparity-nodes) — no server work.
         kernel() {
           // The template size feeds the session-side arm ROI now (the kernel
           // runs no KCF — no params to push). Re-arm live at the current

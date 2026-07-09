@@ -16,7 +16,11 @@
 
 import type { WorkloadSnapshot } from "@lib/orchestrator/stats.js";
 
-export type Role = "L" | "C" | "R";
+/** Pipe role, kernel-defined. The camera-triple kernels use "L"/"C"/"R";
+ *  generic kernels name their inputs (template-match: "needle"/"haystack" —
+ *  split-disparity-nodes proposal). Widened from the literal triple union so
+ *  reusable kernels don't force camera semantics into the protocol. */
+export type Role = string;
 
 /** One camera pipe the worker reads (SHM), keyed by role. */
 export type PipeInput = {
