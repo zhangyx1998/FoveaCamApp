@@ -151,6 +151,19 @@ column x shows its score peak at the same display column in rows 2/3);
 `:projectable="false"` — no projection/fullscreen button on the debug views;
 main UI no longer shows the inline strip.
 
-## AS SHIPPED
+## AS SHIPPED (2026-07-09, commit fc9ac30)
 
-_(filled at wave close)_
+Implemented as ruled (worker-built, planner-verified). Deltas/notes:
+
+- §D button wiring: the bridge call lives in a script `openDebugger()`
+  handler (Vue templates don't expose `window`), matching every existing
+  bridge caller.
+- Debugger row 1 keeps the "Template Match Guide Strip" title (proposal only
+  pinned rows 2/3); `DebugWindow` shell scrolls (`overflow: auto`) instead of
+  centering, since the stack is taller than one frame.
+- `drawer_height` stayed in `index.vue` (still the Drawer v-model); only the
+  `.divergence` spacer went.
+- Gates at close: vue-tsc 0; vitest 458/458 (window-manager toggleDebug tests
+  updated to the single-arg signature + a search-carries-session-only
+  assertion); vite build 0 (orchestrator 245.68 kB unchanged).
+- Rig pass owed: stage-f §"Disparity debugger window".

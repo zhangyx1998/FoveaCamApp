@@ -51,8 +51,15 @@ frames left (`match_left`/`match_right`).
   compute).
 
 ## UI & controls
-StreamViews for the wide (undistorted C) view + the guide strip (the
-scope-strip SLICE PIPE) + the per-side match heatmaps. The CENTER view is a
+StreamViews for the wide (undistorted C) view; the guide strip + per-side
+match heatmaps moved OFF the main UI into the module's **debugger sub-window**
+(`Debugger.vue`, toggled by the button at the bottom of the center column —
+disparity-debugger-window.md): a vertical, pixel-column-aligned stack of the
+scope-strip SLICE PIPE (with the match/center overlay rects) over the two
+match heatmaps, which the match kernel pads to the strip's dims (each heatmap
+pixel = the needle CENTERED at that strip pixel). The window is the `debug`
+class: exempt from app exclusivity, cascade-closes with the app, passive
+subscriber. The CENTER view is a
 four-way select — **Wide Angle Sliced** (the scope-tile slice pipe),
 **Disparity L-vs-R** and **Anaglyph** (renderer `DiffView` composites of the
 two fovea undistort pipes: 'difference' blend, and red = LEFT / cyan = RIGHT),

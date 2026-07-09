@@ -289,6 +289,22 @@ names the mechanism it gates.
 - [ ] **Teardown** — exiting the app retires heatmap → stereo → undistort
   cleanly (no brick-leak warnings; immediate re-entry works first try).
 
+## Disparity debugger window (2026-07-09 wave, fc9ac30)
+
+- [ ] **Toggle** — the "Debugger" button (bottom of the center column) opens
+  the debugger window; pressing it again closes it; opening it does NOT
+  drain/switch the app (exclusivity exemption).
+- [ ] **Cascade** — closing the disparity-scope window (or switching apps)
+  closes the debugger with it.
+- [ ] **Column alignment** — a feature at strip column x shows its score
+  peak at the same display column in the Left/Right match rows (the padded
+  heatmaps line up with the strip; check near BOTH edges too — the zero
+  border is the neutral mid color, not a shifted copy).
+- [ ] **No projection/fullscreen button** on the three debug views
+  (`:projectable="false"` — the old button misbehaved as element-fullscreen).
+- [ ] **Main UI** — the inline strip + match views are gone; layout below
+  the cameras is clean with the drawer open and closed.
+
 ## Blocked (hardware change required)
 
 - [ ] **Center-camera hardware trigger** — needs the slimmer CAM0 cable
