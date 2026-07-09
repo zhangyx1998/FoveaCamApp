@@ -39,13 +39,20 @@
 // Pointer drag → the TRACKER's override (§3.5, supersedes the PID-slot drag
 // path in this app): down/move call `tk.override(p)`; the tracker emits
 // `{overridden: true, center: p}` results every frame, the flag rides the
-// kernel target push → `projection.overridden` → the PID step — WHICH KEEPS
-// RUNNING throughout, steering the foveas to converge on the (moving) dragged
-// tile. On release the tracker RE-ARMS at the drag end and the PID simply
-// continues — no seed reconstruction on this path (the release-jump class dies
-// structurally). The PID node's own override slot stays for the generic
-// `pidOverride` command (a programmatic caller that already has volts); its
-// seeded release (`seedFromOverride`) now serves only that path.
+// kernel target push → `projection.overridden` → the control step, which
+// switches to DIRECT FOLLOW (user ruling 2026-07-08, supersedes the earlier
+// "PID keeps stepping" drag semantics): the foveas track the cursor ray 1:1
+// at the held vergence — no PID stepping, NO match-score gate (the pure
+// `followTarget`; the match-gated loop could never follow a drag onto
+// unmatched content — it held on "low score" and the foveas never moved).
+// The pointer handler also pushes the follow volts synchronously so the drag
+// doesn't lag a kernel tick. On release the tracker RE-ARMS at the drag end
+// and the PID resumes from the HELD controller values + that target — the
+// first resumed output equals the last follow output (velocity-form
+// integrator = command), so no seed reconstruction on this path. The PID
+// node's own override slot stays for the generic `pidOverride` command (a
+// programmatic caller that already has volts); its seeded release
+// (`seedFromOverride`) now serves only that path.
 
 import { defineSession, type ServerSession } from "@orchestrator/runtime";
 import { acquireTriple, type CalibratedTriple } from "@orchestrator/calibration";
@@ -85,6 +92,7 @@ import {
   type VergenceVolts,
 } from "./contract";
 import {
+  followTarget,
   matchMagnification,
   seedVergence,
   stepVergence,
@@ -304,12 +312,17 @@ export default function disparityScopeSession(
         onDrag(center) {
           // Drag in flight: the tracker echoes the override point every frame.
           // The pointer handler already pushed it synchronously; this keeps
-          // target+flag coherent at frame rate even if a pointer move was
-          // coalesced away.
+          // target+flag+follow coherent at FRAME rate even if a pointer move
+          // was coalesced away (the kernel-rate projection path is slower).
           lastGood = center;
           s.setState("target", center);
           sendParams({ target: center, overridden: true });
           publishOverridden(true);
+          const v = followVolts(center);
+          if (v && !pidNode?.override.engaged) {
+            commandedVolts = v;
+            pushVolts();
+          }
         },
         onTrack(center, bbox) {
           trackerActive = true;
@@ -389,6 +402,21 @@ export default function disparityScopeSession(
       if (v.projection) runControl(v.projection);
     }
 
+    /** Direct-follow volts for `target` from the HELD controller values (the
+     *  drag path — see {@link followTarget} for the semantics + why the match
+     *  gate must not apply). Null without a calibrated triple (nothing can
+     *  lift pixels to angles — same degradation as the control law). */
+    function followVolts(target: Point2d): VergenceVolts | null {
+      if (!triple || !triple.undistort) return null;
+      const r = followTarget(
+        target,
+        { pan: pan.value, verge: verge.value, v_shift: v_shift.value },
+        { P2A: triple.conv.P2A, A2V: triple.conv.A2V },
+        s.state.baseline,
+      );
+      return { l: r.left, r: r.right };
+    }
+
     /** The vergence control law, run INSIDE the PID node's control fn — invoked
      *  by `node.step` only when the (generic) override is NOT engaged (the node
      *  resets the controllers itself while overridden). Returns the held/last
@@ -396,24 +424,28 @@ export default function disparityScopeSession(
      *  winds down.
      *
      *  §3.5 "act correspondingly" on `projection.overridden` (a tracker-override
-     *  drag riding the projection): the PID KEEPS STEPPING — the foveas servo
-     *  onto the moving dragged tile — with two adjustments:
-     *   - the freeze window is held open (a drag is user activity; a long drag
-     *     must not hit the convergence timeout mid-gesture);
-     *   - status reads "manual" so the UI shows the drag.
-     *  No rate clamp/softening beyond the existing PID saturation: every DOF's
-     *  integrator is anti-windup-clamped to its physical range (`verge`
-     *  [0, max], `pan` ±SHIFT_LIMIT, `v_shift` ±VSHIFT_LIMIT), so a long drag
-     *  toward an unreachable/unmatchable target at worst rests a controller at
-     *  its limit — the bounded-windup case the limits exist for. A low match
-     *  score during a drag holds (as always): the foveas pause until the
-     *  matcher reacquires the dragged tile. */
+     *  drag riding the projection): DIRECT FOLLOW (user ruling 2026-07-08) —
+     *  the foveas track the dragged target 1:1 at the held vergence via
+     *  {@link followTarget}; the PID does NOT step and the match-score gate
+     *  does NOT apply (a drag onto unmatched content must still move the
+     *  foveas). The freeze window is held open (a drag is user activity; a
+     *  long drag must not hit the convergence timeout mid-gesture) and status
+     *  reads "manual" so the UI shows the drag. The controllers hold their
+     *  values throughout, so the release resumes the PID continuously (no
+     *  seed — see the header). */
     function controlStep(projection: ScopeProjection): VergenceVolts {
       if (!triple || !triple.undistort) {
         status = "no calibration";
         return commandedVolts;
       }
-      if (projection.overridden) windowStart = now(); // drag = activity
+      if (projection.overridden) {
+        windowStart = now(); // drag = activity
+        status = "manual";
+        // Kernel-rate re-affirmation of the drag follow (the pointer handler
+        // already pushed synchronously; this keeps the output tracking a
+        // coalesced-away pointer move and any target clamp the kernel applied).
+        return followVolts(projection.target) ?? commandedVolts;
+      }
       if (frozen()) {
         status = "frozen";
         return commandedVolts;
@@ -432,7 +464,7 @@ export default function disparityScopeSession(
         return commandedVolts;
       }
       lastStep = t;
-      status = projection.overridden ? "manual" : "tracking";
+      status = "tracking";
       return { l: result.left, r: result.right };
     }
 
@@ -737,11 +769,12 @@ export default function disparityScopeSession(
     return {
       commands: {
         async pointer({ p, buttons: _buttons, phase }) {
-          // §3.5 drag semantics: down/move engage the TRACKER's override; the
-          // PID vergence node KEEPS RUNNING throughout (nothing pins its
-          // output), steering the foveas to converge on the moving dragged
-          // tile. The `overridden` flag rides tracker → kernel target →
-          // projection → PID.
+          // §3.5 drag semantics (direct-follow ruling 2026-07-08): down/move
+          // engage the TRACKER's override AND directly drive the foveas to the
+          // cursor ray (`followVolts` — held vergence, no PID stepping, no
+          // match gate). The `overridden` flag still rides tracker → kernel
+          // target → projection → control step, which re-affirms the follow
+          // at kernel rate.
           if (phase !== "up") {
             if (phase === "down") {
               dragging = true;
@@ -760,6 +793,15 @@ export default function disparityScopeSession(
             // refreshes it lags one kernel tick — a drag started while frozen
             // must servo immediately).
             windowStart = now();
+            // Direct follow NOW (same immediate-apply precedent as the
+            // pidOverride command): the projection path re-affirms at kernel
+            // rate. Skipped while the generic PID override pins the output —
+            // that slot outranks the drag, matching `node.step`'s semantics.
+            const v = followVolts(p);
+            if (v && !pidNode?.override.engaged) {
+              commandedVolts = v;
+              pushVolts();
+            }
           } else {
             dragging = false;
             windowStart = now(); // drag end restarts the convergence window
@@ -767,9 +809,11 @@ export default function disparityScopeSession(
             publishOverridden(false);
             if (tk) {
               // Native releaseOverride RE-ARMS KCF at the drag end on the next
-              // frame; the PID continues seamlessly (no seed — it was never
-              // interrupted). With auto-follow OFF the JS gate ignores the
-              // re-armed tracker's results (native has no disarm).
+              // frame; the PID resumes seamlessly (no seed — the controllers
+              // held their values through the direct follow, so the first
+              // resumed step's output equals the last follow output). With
+              // auto-follow OFF the JS gate ignores the re-armed tracker's
+              // results (native has no disarm).
               tk.releaseOverride();
               trackerArmed = s.state.tracker_enabled;
               trackerActive = false;

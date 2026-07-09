@@ -241,6 +241,18 @@ wave lands + E's API is committed):
   The PID node's own override slot stays (calibrate apps use it); the scope
   UI simply stops using it for drags. While `overridden` is set the PID may
   clamp/soften rates if needed — worker's judgment, documented.
+  - **AMENDED (user ruling 2026-07-08, rig find)**: "the PID keeps
+    stepping" could never follow a drag in practice — the guide strip
+    recenters on the dragged target, the foveas' actual gaze leaves the
+    strip, both match scores fall below `min_score`, and the control law
+    HOLDS: the foveas never move. New semantics: while `overridden`, the
+    control step is a DIRECT FOLLOW (`followTarget`, vergence.ts) — both
+    eyes pan 1:1 to the cursor ray at the HELD vergence (no PID stepping,
+    no match-score gate, "no vergence" during the drag). The controllers
+    hold their values, so release still resumes the PID continuously with
+    no seed (the release-jump class stays dead). Everything else in this
+    ruling (tracker override transport, flag plumbing, re-arm on release,
+    PID slot = programmatic only) is unchanged.
 
 **AS SHIPPED (integration half, 2026-07-08 — disparity worker D2):**
 
@@ -269,14 +281,15 @@ wave lands + E's API is committed):
   re-arms at the drag end), `trackerArmed = state.tracker_enabled`. The PID
   node's `step` runs on EVERY projection throughout — nothing pins its
   output on this path, no seed on release.
-- "Acts correspondingly" while `projection.overridden`: the session holds
-  the convergence freeze-window open (a drag is user activity) and reports
-  "manual" status; the control math is UNCHANGED (bench-pinned: identical
-  commands for flagged/unflagged projections). NO extra rate clamp — every
-  DOF's integrator is already anti-windup-clamped to its physical range
-  (verge [0, max], pan ±5°, v_shift ±2°), so an unreachable drag at worst
-  rests a controller at its limit; a low match score during a drag holds
-  the output (foveas pause until the matcher reacquires the dragged tile).
+- "Acts correspondingly" while `projection.overridden` — REVISED per the
+  2026-07-08 amendment above: the control step returns the DIRECT-FOLLOW
+  volts (`followTarget` from the held controller values; the pointer
+  handler and `onDrag` also push them synchronously so the follow rides
+  pointer/frame rate, not kernel rate); the session holds the convergence
+  freeze-window open (a drag is user activity) and reports "manual"
+  status. The original "control math unchanged / low score holds during a
+  drag" shipping note is what the amendment repealed — the match gate no
+  longer applies while dragging.
 - The `pidOverride` contract fragment STAYS in disparity-scope as the
   programmatic volts-only path (module-agnostic `usePidOverride` proxy;
   calibrate apps keep their own usage); its seeded release

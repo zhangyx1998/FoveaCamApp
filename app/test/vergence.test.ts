@@ -26,6 +26,7 @@ vi.mock("core/Vision", () => ({
 
 import { PID, PID2D } from "@lib/pid";
 import {
+  followTarget,
   foveaFootprintOnWide,
   foveaTileSize,
   matchMagnification,
@@ -261,11 +262,11 @@ describe("scopeProjection (control-output emission math)", () => {
   });
 });
 
-// §3.5 "act correspondingly": with the tracker override riding the projection
-// the PID node keeps RUNNING — stepVergence must integrate toward the dragged
-// target exactly as it does toward a tracked one (the flag is metadata for the
-// session's status/freeze handling, never a control-math input).
-describe("stepVergence on an overridden projection (drag: PID keeps running)", () => {
+// The `overridden` flag is metadata: stepVergence itself never reads it (the
+// SESSION branches to `followTarget` before calling stepVergence — direct-follow
+// ruling 2026-07-08). Pinning flag-agnosticism here keeps the control law honest
+// if a future caller ever routes a flagged projection through it.
+describe("stepVergence on an overridden projection (flag is not a control input)", () => {
   it("produces the identical command for overridden and non-overridden inputs", () => {
     const target = { x: 10, y: 4 };
     const l = { x: 8, y: 2 };
@@ -291,12 +292,84 @@ describe("stepVergence on an overridden projection (drag: PID keeps running)", (
     expect(b.pan.value.x).toBeCloseTo(a.pan.value.x);
   });
 
-  it("still holds on a low score during a drag (foveas pause until the matcher reacquires)", () => {
+  it("holds on a low score even when flagged (why the session must NOT route drags here)", () => {
     const ctl = freshControllers();
     const proj = projectionFor({ x: 0, y: 0 }, { x: 1, y: 0 }, { x: -1, y: 0 }, 0.01, true);
     const out = stepVergence(proj, ctl, identityConv, { baseline: 200, minScore: 0.1 }, 10);
     expect(out).toBeNull();
     expect(ctl.verge.value).toBe(0); // untouched — no windup behind the hold
+  });
+});
+
+// The drag path (direct-follow ruling 2026-07-08): while `overridden`, the
+// session commands `followTarget` — both eyes pan 1:1 to the cursor ray at the
+// HELD vergence, with no PID stepping and no match-score gate. The old
+// match-gated drag deadlocked (strip recenters on the dragged target → scores
+// drop → hold → foveas never move); these pin the follow map + the release
+// continuity that replaces the seed on this path.
+describe("followTarget (drag: direct follow, vergence held)", () => {
+  const zeroHeld = { pan: { x: 0, y: 0 }, verge: 0, v_shift: 0 };
+
+  it("tracks the target 1:1 with zero held state (parallel eyes, both on the cursor ray)", () => {
+    for (const target of [
+      { x: 0, y: 0 },
+      { x: 12, y: -4 },
+      { x: -7, y: 9 },
+    ]) {
+      const out = followTarget(target, zeroHeld, identityConv, 200);
+      expect(out.left).toEqual(target);
+      expect(out.right).toEqual(target);
+    }
+  });
+
+  it("applies the held pan as the same ray offset the control law would", () => {
+    const held = { ...zeroHeld, pan: { x: 1.5, y: -0.5 } };
+    const out = followTarget({ x: 10, y: 4 }, held, identityConv, 200);
+    expect(out.left).toEqual({ x: 11.5, y: 3.5 });
+    expect(out.right).toEqual({ x: 11.5, y: 3.5 });
+  });
+
+  it("holds the vergence: verge/v_shift pass through inverseTriangulate untouched", () => {
+    // Small angles so tan/atan2 stay in range; verge > 0 ⇒ finite distance ⇒
+    // the eyes toe in symmetrically about the ray; v_shift splits vertically.
+    const held = { pan: { x: 0, y: 0 }, verge: 0.5, v_shift: 0.02 };
+    const baseline = 200;
+    const target = { x: 0.1, y: 0.05 };
+    const out = followTarget(target, held, identityConv, baseline);
+    expect(out.left.x).toBeGreaterThan(out.right.x); // toe-in (converged)
+    expect(out.left.y - target.y).toBeCloseTo(held.v_shift);
+    expect(out.right.y - target.y).toBeCloseTo(-held.v_shift);
+    // Moving the target moves BOTH eyes (the follow), same held convergence.
+    const out2 = followTarget({ x: 0.2, y: 0.05 }, held, identityConv, baseline);
+    expect(out2.left.x).toBeGreaterThan(out.left.x);
+    expect(out2.right.x).toBeGreaterThan(out.right.x);
+    expect(out2.left.x).toBeGreaterThan(out2.right.x);
+  });
+
+  it("release continuity: a zero-error stepVergence from the same held values reproduces the follow output", () => {
+    // On pointer-up the target stays at the drag end and the controllers kept
+    // their values through the follow. Once the foveas arrive (matched centres
+    // == target ⇒ zero error), the first PID step's reconstruction is the SAME
+    // forward map followTarget used ⇒ identical volts, no release jump.
+    const held = { pan: { x: 0.02, y: -0.01 }, verge: 0.4, v_shift: 0.015 };
+    const target = { x: 0.08, y: -0.03 };
+    const follow = followTarget(target, held, identityConv, 200);
+    const ctl = freshControllers();
+    ctl.pan.value = held.pan;
+    ctl.verge.value = held.verge;
+    ctl.v_shift.value = held.v_shift;
+    const resumed = stepVergence(
+      projectionFor(target, target, target, 1),
+      ctl,
+      identityConv,
+      { baseline: 200, minScore: 0.1 },
+      10,
+    );
+    expect(resumed).not.toBeNull();
+    expect(resumed!.left.x).toBeCloseTo(follow.left.x);
+    expect(resumed!.left.y).toBeCloseTo(follow.left.y);
+    expect(resumed!.right.x).toBeCloseTo(follow.right.x);
+    expect(resumed!.right.y).toBeCloseTo(follow.right.y);
   });
 });
 

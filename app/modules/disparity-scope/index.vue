@@ -290,14 +290,15 @@ function onCursor(c: (Point2d & Size & { buttons: number }) | null): void {
           telemetry.realized_distance === Infinity ? "&#x221E;" : telemetry.realized_distance.toFixed(4)
         }}</span>m
         | <span class="value">{{ telemetry.status }}</span>
-        <!-- §3.5: drags ride the TRACKER override (the vergence PID keeps
-             running, converging on the dragged tile) — the badge mirrors the
-             flag the tracker propagates downstream, NOT the PID slot (that
-             slot is programmatic-only now, via the pidOverride command). -->
+        <!-- §3.5: drags ride the TRACKER override (foveas follow the cursor
+             directly at the held vergence — direct-follow ruling 2026-07-08)
+             — the badge mirrors the flag the tracker propagates downstream,
+             NOT the PID slot (that slot is programmatic-only now, via the
+             pidOverride command). -->
         <span
           v-if="telemetry.overridden"
           class="value override"
-          title="Target pinned by pointer drag (tracker override; vergence PID converging on it)"
+          title="Target pinned by pointer drag (tracker override; foveas follow the cursor directly, vergence held)"
           >override</span
         >
       </div>

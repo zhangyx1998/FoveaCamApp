@@ -35,15 +35,22 @@ source directly from the undistort pipes). Main: the per-eye PID node's
 StreamViews for the wide (undistorted C) view + sliced/guide/match/disparity
 views; verge/baseline/shift parameters; PID tuning; target select (tracker
 auto-follow). Dragging on the C view calls the **tracker's override** with the
-dragged point (NOT the PID slot): the PID vergence node keeps running throughout,
-steering the foveas toward the moving tile; on release the native tracker re-arms
-there and the PID continues seamlessly (no release "jump"). The UI override badge
-reads the `overridden` telemetry (the tracker flag).
+dragged point (NOT the PID slot) and the foveas **follow the cursor directly**
+(direct-follow ruling 2026-07-08, `followTarget` in vergence.ts): both eyes pan
+to the cursor ray 1:1 at the held vergence — the PID does NOT step and the
+match-score gate does not apply during the drag (the earlier "PID keeps
+stepping" semantics could never follow a drag onto unmatched content: the strip
+recenters on the dragged target, the match scores drop, control holds, the
+foveas never move). On release the native tracker re-arms there and the PID
+resumes from the held controller values + that target — the first resumed
+output equals the last follow output, so no release "jump". The UI override
+badge reads the `overridden` telemetry (the tracker flag).
 
 ## Expected behavior
 Matching quality visible in match_left/right; disparity/verge numbers steady on
 a static scene; PID engage converges foveas onto the target. During a drag the
-foveas visibly servo toward the dragged tile (status "manual").
+foveas track the cursor 1:1 at the current depth (status "manual"), regardless
+of match quality; vergence resumes converging on release.
 
 ## The fovea↔wide scale math (audit finding — corrects the seed's bug (a))
 

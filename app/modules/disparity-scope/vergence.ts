@@ -176,9 +176,10 @@ export type ScopeProjection = {
   scores: { l: number; r: number };
   /** True while the target rides a TRACKER OVERRIDE (a pointer drag pinning
    *  the chained KCF's output — controller-node-and-fifo-edges §3.5). The flag
-   *  propagates downstream unchanged (tracker → matcher → here → the PID
-   *  vergence step) so each stage acts correspondingly: the control law keeps
-   *  stepping (the foveas servo onto the moving dragged tile) while the
+   *  propagates downstream unchanged (tracker → matcher → here → the control
+   *  step) so each stage acts correspondingly: the control step switches to
+   *  DIRECT follow ({@link followTarget} — the foveas track the cursor ray 1:1
+   *  at the held vergence, no PID stepping, no match-score gate) while the
    *  session holds its freeze window open and reports "manual" status. Data,
    *  not topology — it rides the projection record, no graph change. */
   overridden: boolean;
@@ -416,6 +417,34 @@ export function stepVergence(
  *  {@link stepVergence} integrates. Seeding a released PID node with these makes
  *  the resumed command continuous (velocity-form integrator = command). */
 export type VergenceSeed = { pan: Point2d; verge: number; v_shift: number };
+
+/**
+ * DIRECT target follow (the drag path, user ruling 2026-07-08): reconstruct
+ * both fovea poses for `target` from the HELD controller values — the exact
+ * forward map of {@link stepVergence}'s tail (`ray = aT + pan`, then
+ * `inverseTriangulate` at the verge-implied distance) with NO PID stepping and
+ * NO match-score gate. Dragging must move the foveas even where the template
+ * match fails; the match-gated loop deadlocked there (the strip recenters on
+ * the dragged target, the foveas' actual gaze leaves the strip, both scores
+ * drop below `minScore`, control holds, the foveas never move). Vergence is
+ * NOT adjusted: `held.verge`/`held.v_shift` pass through untouched, so both
+ * eyes pan together to the cursor ray at the current depth. Because the
+ * controllers are held (not reset), releasing the drag resumes {@link
+ * stepVergence} from the same values + the same target ⇒ the first resumed
+ * output equals the last follow output (velocity-form integrator = command) —
+ * continuity without any seeding.
+ */
+export function followTarget(
+  target: Point2d,
+  held: VergenceSeed,
+  conv: Pick<CoordinateConversions, "P2A" | "A2V">,
+  baseline: number,
+): { left: Point2d; right: Point2d } {
+  const ray = VEC.add(conv.P2A.C(target, false), held.pan);
+  const distance = vergeToDistance(held.verge, baseline);
+  const A = inverseTriangulate(ray, baseline, distance, held.v_shift);
+  return { left: conv.A2V.L(A.l), right: conv.A2V.R(A.r) };
+}
 
 /**
  * Reconstruct the `{ pan, verge, v_shift }` controller state whose forward
