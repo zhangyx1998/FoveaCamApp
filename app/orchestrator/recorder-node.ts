@@ -74,7 +74,17 @@ export type SeqRead =
   | { closed: true }
   | { notYet: true }
   | { gone: true; oldestSeq: bigint }
-  | { seq: bigint; width: number; height: number };
+  | {
+      seq: bigint;
+      width: number;
+      height: number;
+      /** The addon's `okResult` marshals the frame's capture-time metadata
+       *  (BigInt ns, present only when the source stamps it — hardware devices
+       *  do, the fake camera does not). `deviceTimestamp` is the TRUSTED device
+       *  time future FIN pairing correlates on; absent → the consumer falls
+       *  back to its own monotonic clock (documented in `onFrame`). */
+      meta?: { deviceTimestamp?: bigint; systemTimestamp?: bigint };
+    };
 
 /** Everything the FIFO consumer touches — all injected, so the state machine
  *  is exercised in vitest with a fake reader and never loads native core. */
@@ -87,8 +97,17 @@ export interface StreamConsumerCfg {
   /** Active-frame byte length for the writer copy (W·H·channels·bytesPerElem). */
   bytesFor(width: number, height: number): number;
   /** One in-order frame. `view` is `dst` sliced to the active bytes — CONSUME
-   *  IT SYNCHRONOUSLY (copy out); `dst` is overwritten by the next read. */
-  onFrame(view: Uint8Array, seq: bigint, width: number, height: number): void;
+   *  IT SYNCHRONOUSLY (copy out); `dst` is overwritten by the next read.
+   *  `deviceTs` is the frame's TRUSTED capture time (ns) when the source stamps
+   *  it (from the addon's `meta.deviceTimestamp`), else `undefined` — the worker
+   *  substitutes its monotonic clock. */
+  onFrame(
+    view: Uint8Array,
+    seq: bigint,
+    width: number,
+    height: number,
+    deviceTs: bigint | undefined,
+  ): void;
   /** Account `n` ring-recycled frames (consumer lagged a full ring). */
   onDrop(n: number): void;
   /** Short backoff on NotYet (a caught-up, still-open pipe). */
@@ -136,7 +155,13 @@ export async function runStreamConsumer(cfg: StreamConsumerCfg): Promise<void> {
       want = r.oldestSeq; // jump forward to the oldest still-live seq
       continue;
     }
-    cfg.onFrame(cfg.dst.subarray(0, cfg.bytesFor(r.width, r.height)), r.seq, r.width, r.height);
+    cfg.onFrame(
+      cfg.dst.subarray(0, cfg.bytesFor(r.width, r.height)),
+      r.seq,
+      r.width,
+      r.height,
+      r.meta?.deviceTimestamp,
+    );
     want = r.seq + 1n;
     if (cfg.afterWrite) await cfg.afterWrite();
   }
@@ -202,39 +227,54 @@ export function foldStreamStats(
 // PURE PART 3 — ruling-3 per-frame metadata dispatch (extras correlation).
 // ============================================================================
 
-/** The session's ruling-3 handler: given a NEW frame's stream + seq +
- *  device/capture time (ns), return per-frame extras to ride the telemetry
- *  channel, or null. NEVER blocks the frame write (main invokes it AFTER the
- *  frame message is already queued in the worker). */
+/** The session's ruling-3 handler: given a NEW frame's stream + seq + TRUSTED
+ *  capture time (`tNs`, ns — device time when the source stamps it, else the
+ *  worker's monotonic clock), return per-frame extras to ride the telemetry
+ *  channel, or null. This `tNs` is the value future FIN pairing correlates on.
+ *  NEVER blocks the frame write (main invokes it AFTER the frame message is
+ *  already queued in the worker). */
 export type OnRecordedFrame = (
   stream: string,
   seq: number,
   tNs: bigint,
 ) => Record<string, unknown> | null | undefined;
 
-/** A worker→main "new frame" notification. */
+/** A worker→main "new frame" notification. Two clocks travel together:
+ *  - `logTimeNs` — the container time AXIS the frame was written at (the
+ *    worker's monotonic clock, shared across every channel; the telemetry doc
+ *    MUST reuse it as its message `logTime` so the viewer's relative-time seek
+ *    domain stays single-clock and 0-based — see viewer/source.ts).
+ *  - `tNs` — the frame's TRUSTED capture time (device time when stamped, else
+ *    equal to `logTimeNs`); the FIN-correlation value carried in the telemetry
+ *    doc's `t` field. */
 export interface FrameNotice {
   stream: string;
   seq: number;
+  logTimeNs: bigint;
   tNs: bigint;
 }
 
-/** The main→worker extras message (telemetry doc correlated by stream+seq). */
+/** The main→worker extras message (telemetry doc correlated by stream+seq).
+ *  `logTimeNs` is the OWNING frame's container axis time — the telemetry
+ *  message reuses it so telemetry and frames stay co-clocked (the trusted `tNs`
+ *  lives in the doc `payload`, not on the message logTime). */
 export interface ExtrasMessage {
   type: "extras";
   stream: string;
   seq: number;
-  tNs: bigint;
+  logTimeNs: bigint;
   payload: string;
 }
 
 /**
  * Invoke the ruling-3 callback for one frame and, if it returns extras, build
- * the telemetry doc (`{stream, seq, t, ...extras}`, `t` in SECONDS — the exact
- * pre-wave `telemetry` channel shape) and post it back to the worker. Returns
- * the message posted (or null when there are no extras / no callback). Pure
- * over the injected callback + post fn — a late/absent reply just means the
- * frame carries no extras, never a stall.
+ * the telemetry doc (`{stream, seq, t, ...extras}`, `t` = the TRUSTED capture
+ * time in SECONDS — the exact pre-wave `telemetry` channel shape) and post it
+ * back to the worker with the OWNING frame's `logTimeNs` (so the telemetry
+ * message logs on the same container axis as its frame). Returns the message
+ * posted (or null when there are no extras / no callback). Pure over the
+ * injected callback + post fn — a late/absent reply just means the frame
+ * carries no extras, never a stall.
  */
 export function dispatchFrame(
   onFrame: OnRecordedFrame | undefined,
@@ -253,7 +293,7 @@ export function dispatchFrame(
     type: "extras",
     stream: notice.stream,
     seq: notice.seq,
-    tNs: notice.tNs,
+    logTimeNs: notice.logTimeNs,
     payload,
   };
   post(message);
@@ -344,7 +384,7 @@ export interface WorkerLike {
 
 /** worker → main protocol. */
 export type RecorderNodeOut =
-  | { type: "frame"; stream: string; seq: number; tNs: bigint }
+  | { type: "frame"; stream: string; seq: number; logTimeNs: bigint; tNs: bigint }
   | { type: "stats"; streams: Record<string, StreamCounters> }
   | { type: "finalized"; stats: FinalizeStats }
   | { type: "error"; message: string; stack?: string };
@@ -440,7 +480,12 @@ export function createRecorderNode(options: RecorderNodeOptions): RecorderNodeHa
       // Ruling-3: invoke the session callback and, if it returns extras, ride
       // them on the telemetry channel. The frame is ALREADY written in-worker;
       // this never blocks it.
-      dispatchFrame(onFrame, (m) => post(m), { stream: msg.stream, seq: msg.seq, tNs: msg.tNs });
+      dispatchFrame(onFrame, (m) => post(m), {
+        stream: msg.stream,
+        seq: msg.seq,
+        logTimeNs: msg.logTimeNs,
+        tNs: msg.tNs,
+      });
     } else if (msg.type === "stats") {
       uiStats = foldStreamStats(meter, folds, msg.streams);
     } else if (msg.type === "finalized") {
@@ -611,8 +656,8 @@ parentPort.on("message", (m) => {
       await writer.addMessage({
         channelId,
         sequence: m.seq,
-        logTime: m.tNs,
-        publishTime: m.tNs,
+        logTime: m.logTimeNs,
+        publishTime: m.logTimeNs,
         data: encoder.encode(m.payload),
       });
     });
@@ -697,11 +742,16 @@ function makeConsumer(s, maxQueued) {
     delay: () => sleep(2),
     drainTarget: () => drainTargets[s.name],
     onDrop: (n) => { if (n > 0) counters[s.name].dropped += n; },
-    onFrame: (view, seq, width, height) => {
+    onFrame: (view, seq, width, height, deviceTs) => {
       if (!registered.has(s.name)) { registered.add(s.name); registerFrameChannel(s, width, height); }
       counters[s.name].ingested += 1;
       const outSeq = writeSeq[s.name]++;
-      const tNs = BigInt(Math.round(now() * 1e6)); // ns on the worker's monotonic clock
+      // logTimeNs = the container time AXIS (worker monotonic clock, shared by
+      // EVERY channel incl. telemetry — keeps the viewer seek domain single-
+      // clock/0-based). tNs = the TRUSTED capture time: the frame's device
+      // timestamp when the source stamps it (R-2 fix), else the axis clock.
+      const logTimeNs = BigInt(Math.round(now() * 1e6));
+      const tNs = typeof deviceTs === "bigint" ? deviceTs : logTimeNs;
       // ONE copy: reused SHM read buffer → an owned ArrayBuffer for the chain.
       const data = new ArrayBuffer(view.byteLength);
       new Uint8Array(data).set(view);
@@ -712,8 +762,8 @@ function makeConsumer(s, maxQueued) {
         await writer.addMessage({
           channelId,
           sequence: outSeq,
-          logTime: tNs,
-          publishTime: tNs,
+          logTime: logTimeNs,
+          publishTime: logTimeNs,
           data: bytes,
         });
         counters[s.name].written += 1;
@@ -721,8 +771,10 @@ function makeConsumer(s, maxQueued) {
         pending[s.name] -= 1;
         if (pending[s.name] < maxQueued) releaseWaiter(s.name);
       });
-      // Ruling-3: notify main of the NEW frame (extras ride back async).
-      post({ type: "frame", stream: s.name, seq: outSeq, tNs });
+      // Ruling-3: notify main of the NEW frame (extras ride back async). Carry
+      // BOTH clocks: the axis time so the telemetry doc co-clocks with its
+      // frame, and the trusted capture time for the FIN-correlation 't' field.
+      post({ type: "frame", stream: s.name, seq: outSeq, logTimeNs, tNs });
     },
     afterWrite: () => {
       // Yield so the writer chain advances; block while the channel window is

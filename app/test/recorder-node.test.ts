@@ -20,6 +20,7 @@ import {
   type SeqRead,
   type StreamFold,
   type StreamCounters,
+  type ExtrasMessage,
 } from "@orchestrator/recorder-node";
 
 /** Drive `runStreamConsumer` with a scripted `read(want)` and collect frames. */
@@ -28,6 +29,7 @@ async function drive(
   opts: { startSeq?: bigint; drainTarget?: () => bigint | null } = {},
 ) {
   const delivered: bigint[] = [];
+  const deviceTimes: (bigint | undefined)[] = [];
   let drops = 0;
   let delays = 0;
   await runStreamConsumer({
@@ -42,11 +44,12 @@ async function drive(
     onDrop: (n) => {
       drops += n;
     },
-    onFrame: (_view, seq) => {
+    onFrame: (_view, seq, _w, _h, deviceTs) => {
       delivered.push(seq);
+      deviceTimes.push(deviceTs);
     },
   });
-  return { delivered, drops, delays };
+  return { delivered, drops, delays, deviceTimes };
 }
 
 describe("runStreamConsumer (FIFO consume state machine)", () => {
@@ -90,6 +93,21 @@ describe("runStreamConsumer (FIFO consume state machine)", () => {
       { drainTarget: () => 10n },
     );
     expect(delivered).toEqual([1n, 2n]);
+  });
+
+  it("surfaces the frame's device timestamp to onFrame, undefined when unstamped", async () => {
+    // The addon's okResult marshals meta.deviceTimestamp only when the source
+    // stamps it (hardware does, the fake camera does not). The state machine
+    // must pass it through verbatim so the worker can prefer trusted device
+    // time over its monotonic fallback (R-2 fix item 1).
+    const { delivered, deviceTimes } = await drive((want) => {
+      if (want === 1n) return { seq: 1n, width: 1, height: 1, meta: { deviceTimestamp: 111n } };
+      if (want === 2n) return { seq: 2n, width: 1, height: 1 }; // unstamped source
+      if (want === 3n) return { seq: 3n, width: 1, height: 1, meta: {} }; // meta w/o device ts
+      return { closed: true };
+    });
+    expect(delivered).toEqual([1n, 2n, 3n]);
+    expect(deviceTimes).toEqual([111n, undefined, undefined]);
   });
 
   it("honors a non-1 startSeq (producer latest at connect)", async () => {
@@ -139,19 +157,27 @@ describe("foldStreamStats (worker counters → meter deltas + UI stats)", () => 
 
 describe("dispatchFrame (ruling-3 extras correlation)", () => {
   it("builds a stream+seq-correlated telemetry doc and posts it", () => {
-    const posts: unknown[] = [];
+    const posts: ExtrasMessage[] = [];
+    // The trusted capture time (tNs) rides the doc's `t`; the message logs on
+    // the OWNING frame's container axis (logTimeNs), which differs when the
+    // source stamps device time — telemetry must stay co-clocked with frames.
     const msg = dispatchFrame(
-      (stream) => (stream === "left-fovea" ? { volt: { x: 1, y: 2 }, "volt.unit": "volt" } : null),
+      (stream, seq, tNs) =>
+        stream === "left-fovea"
+          ? { volt: { x: 1, y: 2 }, "volt.unit": "volt", seenTNs: String(tNs) }
+          : null,
       (m) => posts.push(m),
-      { stream: "left-fovea", seq: 7, tNs: 1_500_000_000n },
+      { stream: "left-fovea", seq: 7, logTimeNs: 900_000_000n, tNs: 1_500_000_000n },
     );
     expect(msg).not.toBeNull();
+    expect(msg!.logTimeNs).toBe(900_000_000n); // message logs on the frame axis
     expect(posts).toHaveLength(1);
     const payload = JSON.parse(msg!.payload);
     expect(payload).toMatchObject({
       stream: "left-fovea",
       seq: 7,
-      t: 1.5, // ns → seconds
+      t: 1.5, // trusted capture time, ns → seconds (NOT the axis time)
+      seenTNs: "1500000000", // callback received the trusted device time
       volt: { x: 1, y: 2 },
       "volt.unit": "volt",
     });
@@ -159,9 +185,10 @@ describe("dispatchFrame (ruling-3 extras correlation)", () => {
 
   it("posts nothing when the callback returns null or empty extras", () => {
     const posts: unknown[] = [];
-    expect(dispatchFrame(() => null, (m) => posts.push(m), { stream: "center", seq: 0, tNs: 0n })).toBeNull();
-    expect(dispatchFrame(() => ({}), (m) => posts.push(m), { stream: "center", seq: 0, tNs: 0n })).toBeNull();
-    expect(dispatchFrame(undefined, (m) => posts.push(m), { stream: "center", seq: 0, tNs: 0n })).toBeNull();
+    const notice = { stream: "center", seq: 0, logTimeNs: 0n, tNs: 0n };
+    expect(dispatchFrame(() => null, (m) => posts.push(m), notice)).toBeNull();
+    expect(dispatchFrame(() => ({}), (m) => posts.push(m), notice)).toBeNull();
+    expect(dispatchFrame(undefined, (m) => posts.push(m), notice)).toBeNull();
     expect(posts).toHaveLength(0);
   });
 });
