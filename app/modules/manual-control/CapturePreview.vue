@@ -17,9 +17,10 @@ You may find the full license in project root directory.
   with the app window's.
 -->
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, ref, shallowRef, watch } from "vue";
 import { useSession } from "@lib/orchestrator/client";
 import { isEmpty } from "@lib/util";
+import type { FramePayload } from "@lib/orchestrator/protocol";
 import { manualControl } from "./contract";
 import Capture from "@src/capture";
 import SaveControls from "@src/capture/SaveControls.vue";
@@ -30,21 +31,19 @@ import HorizontalDivision from "@src/layouts/HorizontalDivision.vue";
 
 const session = useSession(manualControl, "manual-control");
 
-// The renderer-side save-path/save facade. `getSetpoints` is `() => []` here
-// (single-shot): the app window's live set-point SELECTION is renderer-local
-// UI state, not reachable across windows. The proposal replaces the internal
-// setpoints sweep with a renderer-driven per-shot loop anyway (§Phase 4 raster
-// capture), which is where multi-set-point capture is restored.
-const cap = new Capture(session, "manual-control", () => []);
+// The renderer-side save-path/save facade (SavePath UI + current_capture
+// registration). Capture DRIVING lives in the app window (manual-control's
+// Capture / Raster Capture buttons) — this window is a passive VIEWER that
+// pulls the node's held resources.
+const cap = new Capture(session, "manual-control");
 
 // ── DATA-SOURCE SEAM (capture-node wave, Phase 3 ruling 7) ─────────────────
-// This wave reads the SAME server-held capture resources the old overlay read:
-//   `telemetry.capture_meta`  → the per-resource metadata map
-//   `session.frame("capture:<name>")` → the 8-bit preview frame(s)
-// The capture-node wave replaces THIS block (entries/meta_entries/image_entries
-// + runCapture) with pull-based `getPreview(resource, index?)` against the
-// node's real held resources. The SaveControls/SaveReport chrome + save() flow
-// below stay unchanged — only the data source swaps.
+// Preview = the capture node's ACTUAL held resources (ruling 7): the resource
+// list + metadata ride `telemetry.capture_meta` (the node's manifest, computed
+// on the server), and each IMAGE is PULLED on demand via the `getPreview`
+// command (the node downconverts its real full-depth resource to 8-bit BGRA).
+// No republished preview frame stream. Re-pulled whenever a capture/raster run
+// republishes `capture_meta`.
 function* entries() {
   const meta = session.telemetry.capture_meta;
   for (const name of Object.keys(meta)) yield { name, meta: meta[name] as any };
@@ -58,30 +57,43 @@ const meta_entries = computed(() =>
     .map(({ name, meta }) => [name, meta] as const),
 );
 
+// Pulled previews, keyed by resource name (an array for a raster/indexed
+// resource, a single payload otherwise). Repopulated on every `capture_meta`
+// change by querying the node — the byte-source of what will be saved.
+type Preview = FramePayload | null;
+const previews = shallowRef<Record<string, Preview | Preview[]>>({});
+
+async function refreshPreviews(): Promise<void> {
+  const meta = session.telemetry.capture_meta;
+  const next: Record<string, Preview | Preview[]> = {};
+  await Promise.all(
+    Object.keys(meta).map(async (name) => {
+      const m = meta[name];
+      if (Array.isArray(m)) {
+        next[name] = await Promise.all(
+          m.map((_, i) => cap.getPreview(name, i)),
+        );
+      } else {
+        next[name] = await cap.getPreview(name);
+      }
+    }),
+  );
+  previews.value = next;
+}
+watch(() => session.telemetry.capture_meta, () => void refreshPreviews(), {
+  deep: true,
+  immediate: true,
+});
+
 const image_entries = computed(() =>
   [...entries()]
-    .map(({ name, meta }) => {
-      const image = Array.isArray(meta)
-        ? meta.map((_, i) => session.frame(`capture:${name}#${i}`).payload.value)
-        : session.frame(`capture:${name}`).payload.value;
-      return [name, image] as const;
-    })
+    .map(({ name }) => [name, previews.value[name] ?? null] as const)
+    .filter(([, image]) => !isEmpty(image))
     .toReversed(),
 );
 // ── END DATA-SOURCE SEAM ───────────────────────────────────────────────────
 
-const data_ready = ref(false);
-const run_error = ref<string | null>(null);
-async function runCapture(): Promise<void> {
-  run_error.value = null;
-  try {
-    await cap.run();
-    data_ready.value = true;
-  } catch (e) {
-    run_error.value = e instanceof Error ? e.message : String(e);
-  }
-}
-onMounted(() => void runCapture());
+const data_ready = computed(() => Object.keys(session.telemetry.capture_meta).length > 0);
 
 const save_state = ref<Promise<void> | null>(null);
 
@@ -109,17 +121,10 @@ function save(path: string, img_format: string) {
       :data_ready="data_ready"
       :save_state="save_state !== null"
     />
-    <div v-if="run_error !== null" class="content run-error">
-      <p class="message">Capture failed: {{ run_error }}</p>
-      <div class="actions">
-        <button @click="runCapture">Retry</button>
-        <button @click="close">Close</button>
-      </div>
-    </div>
     <HorizontalDivision
       :division="0.2"
       class="content"
-      v-else-if="save_state === null"
+      v-if="save_state === null"
     >
       <template #left>
         <div class="meta-container">

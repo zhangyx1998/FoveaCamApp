@@ -15,7 +15,7 @@
 // run without the raw camera access this session already holds — see
 // docs/history/refactor/orchestrator.md roadmap items 5/6.
 
-import { cmd, defineContract, type Serializable } from "@lib/orchestrator/protocol";
+import { cmd, defineContract, type FramePayload, type Serializable } from "@lib/orchestrator/protocol";
 import type { Point2d, Size } from "core/Geometry";
 import type { Pos } from "@lib/controller-codec";
 import type { Stat } from "@lib/orchestrator/contracts";
@@ -80,9 +80,10 @@ export const manualControl = defineContract({
     // throttle as `volt`.
     perf: { actuateMs: { mean: 0, max: 0 } as Stat },
     // Capture: per-resource metadata (name -> meta object, or array of them
-    // for an indexed/multi-set-point capture), populated progressively as
-    // each resource resolves. Image data arrives separately as frames on
-    // dynamic `capture:<name>` (or `capture:<name>#<i>`) channels.
+    // for an indexed/raster capture) — the capture NODE's manifest, republished
+    // after each shot. The renderer reads this for the resource list + meta;
+    // image data is PULLED per resource via `getPreview` (ruling 7), never
+    // streamed on a frame channel.
     captureBusy: false as boolean,
     capture_meta: {} as Record<string, Serializable>,
     // Recording.
@@ -95,8 +96,8 @@ export const manualControl = defineContract({
   // `center` is the magnified fovea crop around the target (sliced/diff/depth) —
   // the only session-frame view now (real-2b). The L/C/R main views bind their
   // `camera/<serial>/undistort` pipes directly (C intrinsic, L/R homography), so
-  // they no longer ride session.frame. `capture:<name>` channels are dynamic,
-  // opened per capture resource.
+  // they no longer ride session.frame. Capture previews are PULLED via
+  // `getPreview` (ruling 7), not streamed on frame channels.
   frames: ["center"] as const,
   commands: {
     /** Steer the target (pixel drag or a selected set-point's angle). */
@@ -104,10 +105,21 @@ export const manualControl = defineContract({
     /** Resolve a batch of set-point angles to volts, for the trace overlay —
      *  does not steer or change any state. */
     previewVolts: cmd<VoltPreviewQuery[], VoltPair[]>(),
-    /** Capture wide/fovea/center/diff resources (optionally once per entry
-     *  in `setpoints`, matching manual-control's per-set-point capture
-     *  loop) into server-held pending state; previews stream as frames. */
-    runCapture: cmd<{ setpoints: VoltPreviewQuery[] }>(),
+    /** Run ONE capture shot (capture-recorder-nodes Phase 3/4, ruling 4):
+     *  fires the ruling-3 `onCaptureStart` metadata snapshot, then drains +
+     *  stacks the raw L/R foveae + slices the center in the capture worker,
+     *  holding the full-depth resources. AWAITABLE (resolves once THIS shot is
+     *  stacked + held). `tag` present ⇒ a raster shot that ACCUMULATES an
+     *  indexed resource (the renderer sequences volts between shots); `tag === 0`
+     *  (or absent) starts a fresh accumulation. The resource → metadata manifest
+     *  arrives on the `capture_meta` telemetry; images are pulled via
+     *  `getPreview` (ruling 7). */
+    capture: cmd<{ tag?: number }>(),
+    /** Pull one held capture resource's ACTUAL data (ruling 7) downconverted to
+     *  8-bit BGRA — the byte-source of what will be saved. `index` selects an
+     *  entry of an indexed (raster) resource (default: the latest). Null for a
+     *  meta-only resource. */
+    getPreview: cmd<{ resource: string; index?: number }, FramePayload | null>(),
     /** Persist the pending capture to disk and clear it. */
     saveCapture: cmd<{ path: string; format: string }>(),
     /** Discard the pending capture without saving. */

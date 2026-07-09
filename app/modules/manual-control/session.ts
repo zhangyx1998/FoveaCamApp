@@ -43,21 +43,28 @@ import {
 } from "@orchestrator/undistort-pipe";
 import { conversionComputeH, startHomographyFeeder } from "@orchestrator/homography-feeder";
 import { pushHomography } from "core/Aravis";
-import { readNextPipeFrame } from "@orchestrator/pipe-read-once";
 import { nodeId } from "@lib/orchestrator/graph-contract";
 import type { PipeBroker } from "@orchestrator/pipe-session";
-import type { RawPipeSeam } from "@orchestrator/raw-pipe";
+import { createRawPipe, type RawPipeSeam, type RawHandle } from "@orchestrator/raw-pipe";
+import {
+  createCaptureNode,
+  type CaptureNodeHandle,
+  type CaptureShot,
+  type CaptureStreamInit,
+} from "@orchestrator/capture-node";
 import type { PipeInput, VisionResult } from "@orchestrator/vision-worker-protocol";
 import { manualControl } from "./contract";
-import { createCapture } from "./capture";
 import { createRecording } from "./recording";
-import { makeMat } from "@lib/mat";
+import { makeMat, matToArray } from "@lib/mat";
 import {
   createQMatrix,
   deriveFoveaIntrinsics,
   inverseTriangulate,
   vergeToDistance,
 } from "@lib/stereo";
+import { RECT } from "@lib/util/geometry";
+import { pixelFormatChannels, pixelFormatDtype, significantBits } from "@lib/util/dtype";
+import type { PixelFormat } from "core/Aravis";
 import type { Point2d } from "core/Geometry";
 import type { Pos } from "@lib/controller-codec";
 import { RollingStats } from "@lib/util/rolling";
@@ -182,24 +189,146 @@ export default function manualControlSession(
     // connected for the session's whole active span, so the producer is live.
     let centerPipe: { shmName: string; maxBytes: number; channels: number } | null = null;
 
-    const capture = createCapture({
-      getTriple: () => triple,
-      volts: () => volts,
-      targetAngle: () => targetAngle,
-      centerFrameSize: () => ({ width, height }),
-      zoom: () => s.state.zoom,
-      capStack: () => s.state.cap_stack,
-      baseline: () => s.state.baseline,
-      steerToAngle: setTargetFromAngle,
-      // C-23 ruled Q2: the NEXT undistorted center via a one-shot SHM read of
-      // the already-connected pipe (on-demand, user-initiated — not per-frame).
-      readCenter: () =>
-        centerPipe
-          ? readNextPipeFrame(centerPipe.shmName, centerPipe.maxBytes, centerPipe.channels)
-          : Promise.resolve(null),
-      frame: (name, payload) => s.frame(name, payload),
-      telemetry: (patch) => s.telemetry(patch),
-    });
+    // --- capture NODE (capture-recorder-nodes Phase 3) --------------------
+    // The stack/wrap/diff/slice math moved OFF the main JS loop into a worker
+    // thread (`@orchestrator/capture-node`) that holds the full-depth resources.
+    // Main only computes the ruling-3 `onCaptureStart` metadata snapshot (from
+    // the calibrated triple), brokers the ON-DEMAND raw-pipe connect per shot,
+    // and republishes the node's resource manifest as `capture_meta`.
+    let captureNode: CaptureNodeHandle | null = null;
+    let activeCapture: Promise<void> = Promise.resolve();
+    let capturing = false;
+
+    /** Raw-pipe geometry for a camera (its ACTUAL sensor readout format+dims). */
+    function rawGeometryFor(camera: {
+      pixel_format: PixelFormat;
+      getFeatureInt(name: string): number;
+    }) {
+      const format = camera.pixel_format;
+      const dtype = pixelFormatDtype(format);
+      return {
+        width: camera.getFeatureInt("Width"),
+        height: camera.getFeatureInt("Height"),
+        channels: pixelFormatChannels(format),
+        bytesPerElement: dtype === "U16" ? 2 : 1,
+        pixelFormat: format,
+        ringDepth: 8, // a short burst; a deep recorder ring isn't needed
+      };
+    }
+
+    /** One connected raw stream → the worker's per-stream init. */
+    function streamInitFrom(conn: {
+      shmName: string;
+      spec: {
+        pixelFormat: string;
+        dtype: string;
+        channels: number;
+        bytesPerFrame: number;
+        maxBytes?: number;
+      };
+    }): CaptureStreamInit {
+      return {
+        shmName: conn.shmName,
+        maxBytes: conn.spec.maxBytes ?? conn.spec.bytesPerFrame,
+        channels: conn.spec.channels,
+        bytesPerElement: conn.spec.dtype === "U16" ? 2 : 1,
+        significantBits: significantBits(conn.spec.pixelFormat as PixelFormat),
+        pixelFormat: conn.spec.pixelFormat,
+      };
+    }
+
+    /** ON-DEMAND per-shot connect (capture-node `AcquireStreams`): advertise +
+     *  attach the raw L/R producers (gate fires → capture-thread subscriber),
+     *  connect all three streams; `release` disconnects + retires them (gate
+     *  parks the subscriber → zero capture-thread cost while idle). Center rides
+     *  the session's already-connected undistort pipe. */
+    function acquireCaptureStreams() {
+      if (!triple || !centerPipe) throw new Error("capture: session not active");
+      const { L, R } = triple.leases;
+      const rawL: RawHandle = createRawPipe(
+        rawSeam,
+        L.camera,
+        `camera/${L.camera.serial}/raw`,
+        rawGeometryFor(L.camera),
+      );
+      const rawR: RawHandle = createRawPipe(
+        rawSeam,
+        R.camera,
+        `camera/${R.camera.serial}/raw`,
+        rawGeometryFor(R.camera),
+      );
+      const cL = broker.connect(rawL.pipeId);
+      const cR = broker.connect(rawR.pipeId);
+      return {
+        streams: {
+          left: streamInitFrom(cL),
+          right: streamInitFrom(cR),
+          center: {
+            shmName: centerPipe.shmName,
+            maxBytes: centerPipe.maxBytes,
+            channels: centerPipe.channels,
+          },
+        },
+        release: () => {
+          broker.disconnect(rawL.pipeId);
+          broker.disconnect(rawR.pipeId);
+          rawL.retire();
+          rawR.retire();
+        },
+      };
+    }
+
+    /** Ruling-3 `onCaptureStart` snapshot: the calibration-derived transforms +
+     *  per-resource metadata for the WHOLE shot (regardless of stack depth).
+     *  Ported faithfully from the deleted `capture.ts` captureOnce/runInner. */
+    function captureSnapshot(reset: boolean, indexed: boolean): CaptureShot {
+      const und = triple!.undistort!;
+      const { conv } = triple!;
+      const zoom = Math.max(1, s.state.zoom);
+      const baseline = s.state.baseline;
+      const A = { L: conv.V2A.L(volts.L), R: conv.V2A.R(volts.R) };
+      const intrinsics = {
+        L: deriveFoveaIntrinsics(und, A.L, zoom),
+        R: deriveFoveaIntrinsics(und, A.R, zoom),
+      };
+      const Q = createQMatrix(intrinsics.L, intrinsics.R, baseline);
+      const HL = conv.A2H.L(A.L);
+      const HR = conv.A2H.R(A.R);
+      const size = { width: width / zoom, height: height / zoom };
+      const at = und.position([targetAngle], false)[0]!;
+      const rect = RECT.fromCenter(at, size);
+      const sensor_size = und.sensor_size;
+      return {
+        reset,
+        indexed,
+        stackCount: s.state.cap_stack,
+        H_L: Array.from(HL as unknown as Float64Array),
+        H_R: Array.from(HR as unknown as Float64Array),
+        rect,
+        meta: {
+          wide: reset
+            ? { sensor_size, focal: und.focal, center: und.center, fov: und.fov }
+            : undefined,
+          fovea: { Q: matToArray(Q), baseline, "baseline.unit": "millimeter" },
+          left: {
+            sensor_size,
+            volt: volts.L,
+            "volt.unit": "volt",
+            angle: A.L,
+            "angle.unit": "radian",
+            intrinsics: intrinsics.L,
+          },
+          right: {
+            sensor_size,
+            volt: volts.R,
+            "volt.unit": "volt",
+            angle: A.R,
+            "angle.unit": "radian",
+            intrinsics: intrinsics.R,
+          },
+        },
+      } as CaptureShot;
+    }
 
     // --- recording (reads leases.L/C/R.camera.stream directly; unchanged) --
 
@@ -330,6 +459,18 @@ export default function manualControlSession(
         onResult,
       );
 
+      // Capture node (idle until `capture()`): graph row + worker; the raw L/R
+      // producers are advertised/connected ON DEMAND per shot (acquireStreams).
+      captureNode = createCaptureNode({
+        id: nodeId.win("manual-control", "capture"),
+        graphInputs: {
+          left: `camera/${t.leases.L.camera.serial}/raw`,
+          right: `camera/${t.leases.R.camera.serial}/raw`,
+          center: undistortC ?? nodeId.convert(t.leases.C.camera.serial),
+        },
+        acquireStreams: acquireCaptureStreams,
+      });
+
       // Push model (controller-node-and-fifo-edges §3): the SESSION owns the
       // 1 ms cadence; each tick pushes the current target and uses the node's
       // synchronous predicted-volts return for the local mirror + telemetry
@@ -376,10 +517,13 @@ export default function manualControlSession(
         for (const id of pipeIds) broker.disconnect(id);
         taps.dispose();
       });
-      // The awaited async drain: a capture can be waiting on the next center
-      // tick, so this MUST run while the worker is still live.
+      // The awaited async drain: a capture in flight must finish (its raw pipes
+      // release) before the vision worker + pipes tear down; then stop the
+      // capture node's own worker.
       scope.defer(async () => {
-        await Promise.all([recording.stop(), capture.waitIdle()]);
+        await Promise.all([recording.stop(), activeCapture]);
+        await captureNode?.stop();
+        captureNode = null;
       });
       // Before the drain: new activity sees "not ready" instead of racing it.
       scope.defer(() => {
@@ -435,14 +579,36 @@ export default function manualControlSession(
             return { l: triple!.conv.A2V.L(A.l), r: triple!.conv.A2V.R(A.r) };
           });
         },
-        async runCapture({ setpoints }) {
-          await capture.run(setpoints);
+        async capture({ tag }) {
+          if (!triple?.undistort || !captureNode) throw new Error("Capture not ready");
+          // `tag` absent OR 0 starts a fresh accumulation (clear + provide
+          // "wide"); a present tag accumulates an indexed resource (raster).
+          const reset = tag === undefined || tag === 0;
+          const indexed = tag !== undefined;
+          const shot = captureSnapshot(reset, indexed);
+          capturing = true;
+          s.telemetry({ captureBusy: true });
+          activeCapture = captureNode
+            .capture(shot)
+            .then((manifest) => {
+              s.telemetry({ capture_meta: manifest });
+            })
+            .finally(() => {
+              capturing = false;
+              s.telemetry({ captureBusy: false });
+            });
+          await activeCapture;
+        },
+        async getPreview({ resource, index }) {
+          return captureNode ? captureNode.getPreview(resource, index) : null;
         },
         async saveCapture({ path, format }) {
-          await capture.save(path, format);
+          await captureNode?.save(path, format);
+          s.telemetry({ capture_meta: {} });
         },
         async discardCapture() {
-          capture.discard();
+          await captureNode?.discard();
+          s.telemetry({ capture_meta: {} });
         },
         async startRecording({ path }) {
           return recording.start(path);
@@ -452,7 +618,7 @@ export default function manualControlSession(
         },
       },
       busy() {
-        if (capture.busy) return "capture in progress";
+        if (capturing) return "capture in progress";
         if (recording.active) return "recording in progress";
         return null;
       },

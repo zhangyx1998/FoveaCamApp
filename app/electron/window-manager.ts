@@ -336,6 +336,34 @@ export class WindowManager {
   }
 
   /**
+   * OPEN-OR-FOCUS a module's `debug`-class sub-window (never closes) — the
+   * idempotent sibling of `toggleDebug` for callers that must ENSURE the window
+   * is up (capture-recorder-nodes.md ruling 8 / Phase 4: the capture / raster
+   * buttons open the preview window after a shot without a second click
+   * toggling it back shut). Same dedupe key + owner cascade as `toggleDebug`.
+   */
+  openDebug(
+    session: string,
+    owner: ManagedWindow | null,
+    kind: string = "debugger",
+  ): ManagedWindow {
+    const key = `debug:${session}:${kind}`;
+    const existing = this.open().find((w) => w.key === key);
+    if (existing) {
+      existing.focus();
+      return existing;
+    }
+    const search = "?" + new URLSearchParams({ session, kind }).toString();
+    return this.spawn({
+      key,
+      class: "debug",
+      entry: entryFor("debug"),
+      search,
+      owner: owner ?? undefined,
+    });
+  }
+
+  /**
    * Open a projection window for one stream (multi-window.md req. 4).
    * 0..N instances — never a singleton, never exclusive, never counted for
    * the welcome rule, never drained (passive subscriber), and deliberately

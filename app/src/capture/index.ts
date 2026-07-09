@@ -21,8 +21,9 @@
 
 import { onScopeDispose, shallowRef } from "vue";
 import { SavePath } from "@lib/save-path";
+import type { FramePayload } from "@lib/orchestrator/protocol";
 import type { Session } from "@lib/orchestrator/client";
-import type { ManualControlContract, VoltPreviewQuery } from "@modules/manual-control/contract";
+import type { ManualControlContract } from "@modules/manual-control/contract";
 
 export const current_capture = shallowRef<Capture | null>(null);
 
@@ -30,9 +31,6 @@ export default class Capture extends SavePath {
   constructor(
     public readonly session: Session<ManualControlContract>,
     namespace: string,
-    /** The capture UI has no access to manual-control's local set-points list —
-     *  it asks for the current one via this, called fresh on every `run()`. */
-    private readonly getSetpoints: () => VoltPreviewQuery[],
   ) {
     super(namespace);
     if (current_capture.value !== null)
@@ -47,8 +45,17 @@ export default class Capture extends SavePath {
     if (current_capture.value === this) current_capture.value = null;
   }
 
-  run(): Promise<void> {
-    return this.session.call("runCapture", { setpoints: this.getSetpoints() });
+  /** Run ONE capture shot (capture-recorder-nodes Phase 3/4). `tag` accumulates
+   *  an indexed resource (a raster shot); absent/0 starts a fresh accumulation.
+   *  Awaitable — resolves once the node has stacked + held that shot. */
+  capture(tag?: number): Promise<void> {
+    return this.session.call("capture", { tag });
+  }
+
+  /** Pull one held resource's ACTUAL data (ruling 7), downconverted to 8-bit
+   *  BGRA by the node. `index` selects an entry of a raster resource. */
+  getPreview(resource: string, index?: number): Promise<FramePayload | null> {
+    return this.session.call("getPreview", { resource, index });
   }
 
   save(path: string, format: string): Promise<void> {

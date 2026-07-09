@@ -37,6 +37,11 @@ export interface FoveaBridge {
    *  both a debugger and a capture-preview window at once
    *  (capture-recorder-nodes.md ruling 8). */
   toggleDebugWindow(session: string, kind?: string): void;
+  /** OPEN-OR-FOCUS a module's `debug`-class sub-window (never closes) — the
+   *  idempotent sibling of `toggleDebugWindow` for callers that must ENSURE the
+   *  window is up (capture-recorder-nodes.md Phase 4: the capture / raster
+   *  buttons open the preview window after a shot). */
+  openDebugWindow(session: string, kind?: string): void;
   /** Fullscreen transitions for THIS window, forwarded by main from the
    *  BrowserWindow enter/leave-full-screen events — the shared window chrome
    *  adjusts traffic-light inset + drag regions on both edges (A-7). */

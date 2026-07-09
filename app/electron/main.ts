@@ -566,6 +566,12 @@ onRenderer("window:toggle-debug", (session, kind) => {
   if (typeof session === "string" && session)
     manager.toggleDebug(session, manager.appWindow(), kind);
 });
+// Idempotent open-or-focus of the same `debug`-class sub-window (ruling 8 /
+// Phase 4): the capture / raster buttons ENSURE the preview window is up.
+onRenderer("window:open-debug", (session, kind) => {
+  if (typeof session === "string" && session)
+    manager.openDebug(session, manager.appWindow(), kind);
+});
 
 // ---- Dev restart (Ctrl/Cmd-Shift-R, multi-window.md req. 6 / §4) ----------
 // Persist the window manifest → relaunch the whole app (orchestrator dies

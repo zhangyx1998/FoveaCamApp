@@ -59,6 +59,7 @@ export function installBridge(extra: Partial<FoveaBridge> = {}) {
     openAppWindow: (appId) => send("window:open-app", appId),
     openProjectionWindow: (session, frame) => send("window:open-projection", session, frame),
     toggleDebugWindow: (session, kind) => send("window:toggle-debug", session, kind),
+    openDebugWindow: (session, kind) => send("window:open-debug", session, kind),
     onFullscreenChange: (cb) => listen("window:fullscreen", (fullscreen) => cb(fullscreen)),
     onRecorderTrigger: (cb) => listen("recorder:trigger", () => cb()),
     resolvePath: (...segments) => invoke("save-path:resolve", segments),

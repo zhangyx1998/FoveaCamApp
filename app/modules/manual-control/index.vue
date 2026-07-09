@@ -164,18 +164,67 @@ const stroke = computed(
 
 // --- capture / recording ----------------------------------------------
 
-const capture = new Capture(session, "manual-control", () => {
-  // No set-point selected → a single pass at the current target (matches
-  // the original: setpoints only get swept when one is actively selected).
-  const { output } = points;
-  if (!Array.isArray(output) || setpoint.value === null) return [];
-  return output.map(([x, y, d, s]) => ({
-    value: { x: radians(x), y: radians(y) },
-    distance_mm: isEmpty(d) ? undefined : d * 1000,
-    shift_deg: isEmpty(s) ? undefined : s,
-  }));
-});
+const capture = new Capture(session, "manual-control");
 const recording = new Recording(session, "manual-control");
+
+// --- capture driving (capture-recorder-nodes Phase 4, ruling 4) ----------
+// The renderer sequences the raster: it owns the set-points + steer, so the
+// per-shot `capture({ tag })` command replaces the old server-side setpoints
+// sweep. The capture NODE holds the resources; the capture-preview window (a
+// passive viewer) pulls them via `getPreview`.
+const capturing = ref(false);
+let abort = false;
+
+function openPreview(): void {
+  window.foveaBridge.openDebugWindow("manual-control", "capture");
+}
+
+async function runOneShot(): Promise<void> {
+  if (capturing.value) return;
+  capturing.value = true;
+  try {
+    await capture.capture(); // fresh single-shot (unindexed)
+    openPreview();
+  } finally {
+    capturing.value = false;
+  }
+}
+
+async function runRaster(): Promise<void> {
+  // A second click / Escape aborts an in-progress raster.
+  if (capturing.value) {
+    abort = true;
+    return;
+  }
+  const { output } = points;
+  if (!Array.isArray(output) || output.length === 0) return runOneShot();
+  capturing.value = true;
+  abort = false;
+  try {
+    for (let i = 0; i < output.length; i++) {
+      if (abort) break;
+      const [x, y, d, s] = output[i]!;
+      await session.call("steer", {
+        mode: "angle",
+        value: { x: radians(x), y: radians(y) },
+        distance_mm: isEmpty(d) ? undefined : d * 1000,
+        shift_deg: isEmpty(s) ? undefined : s,
+      });
+      await new Promise((r) => setTimeout(r, 250)); // let the mirrors settle
+      if (abort) break;
+      await capture.capture(i); // tag i → accumulate an indexed resource
+    }
+    if (abort) await capture.discard();
+    else openPreview();
+  } finally {
+    capturing.value = false;
+    abort = false;
+  }
+}
+
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && capturing.value) abort = true;
+});
 </script>
 
 <template>
@@ -348,6 +397,15 @@ const recording = new Recording(session, "manual-control");
             <span>Capture Stack</span>
             <span>{{ state.cap_stack }}</span>
           </RangeSlider>
+          <ConfigEntry>
+            <button :disabled="capturing" @click="runOneShot">Capture</button>
+            <button
+              :disabled="!capturing && (!Array.isArray(points.output) || points.output.length === 0)"
+              @click="runRaster"
+            >
+              {{ capturing ? "Abort" : "Raster Capture" }}
+            </button>
+          </ConfigEntry>
           <ConfigEntry>
             <label>
               <span>Remote Display</span>
