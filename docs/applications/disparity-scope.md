@@ -42,11 +42,22 @@ undistort brick; its output drives the session's target state, which steers
 the slice crops. The per-side correlation heatmaps are the only session
 frames left (`match_left`/`match_right`).
 
+- **SGBM chain** (stereo-disparity-and-heatmap-nodes, 2026-07-09): the
+  session also composes `stereo/scope` (two-input SGBM brick on the L/R
+  undistort pipes → F32 disparity) + `stereo/scope/heatmap/view` (TURBO
+  colormap → BGRA8). Both stay PARKED until the renderer selects the SGBM
+  center view and connects the heatmap pipe — the consumer gate + the
+  heatmap→stereo tap propagate demand end to end (no subscriber → no
+  compute).
+
 ## UI & controls
-StreamViews for the wide (undistorted C) view + the sliced center view (the
-scope-tile SLICE PIPE) + the guide strip (the scope-strip SLICE PIPE) + the
-per-side match heatmaps; the L-vs-R disparity view is a renderer canvas
-composite (`DiffView`, 'difference' blend of the two fovea undistort pipes).
+StreamViews for the wide (undistorted C) view + the guide strip (the
+scope-strip SLICE PIPE) + the per-side match heatmaps. The CENTER view is a
+four-way select — **Wide Angle Sliced** (the scope-tile slice pipe),
+**Disparity L-vs-R** and **Anaglyph** (renderer `DiffView` composites of the
+two fovea undistort pipes: 'difference' blend, and red = LEFT / cyan = RIGHT),
+and **SGBM Disparity** (the stereo heatmap pipe). Pipe-backed center views
+connect their pipe ONLY while selected, so unwatched producers park.
 Verge/baseline/shift parameters; PID tuning; target select (tracker
 auto-follow). Dragging on the C view calls the **tracker's override** with the
 dragged point (NOT the PID slot) and the foveas **follow the cursor directly**

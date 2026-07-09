@@ -22,6 +22,12 @@ camera/<serial>/undistort/slice/<name>  SESSION-owned named crop (same brick as
                                     fovea, outside the composed slot space)
 <sourceId>/scale/<name>             reactive resize pipe (ScaleStream brick;
                                     nests under its source — that IS its input)
+stereo/<name>                       two-input SGBM join (StereoStream brick;
+                                    F32 disparity out — a root: a cross-camera
+                                    join belongs to neither camera; its
+                                    left/right edges carry the wiring)
+<sourceId>/heatmap/<name>           colormap pipe (HeatmapStream brick; F32/U8
+                                    1-channel → BGRA8; nests under its source)
 camera/<serial>/kcf                 native KCF track stream (raw source)
 camera/<serial>/kcf-multi           native multi-target KCF track stream
 camera/<serial>/undistort/kcf       chained KCF on the undistort brick (§3.5)
@@ -73,6 +79,9 @@ that GC storm).
 | converter | `ConverterStream` — one thread per (camera × format) | `camera/<serial>/convert` pipe |
 | undistort | `UndistortStream` — remap maps built natively at attach from the persisted calibration | `camera/<serial>/undistort` pipe |
 | fovea crop | `FoveaStream` — a ChainedStream taking a plain ROI crop of its upstream brick's frames (the undistort brick, or convert for raw crops); the v1 fused map-ROI convert+remap is retired — undistortion happens ONCE upstream and N foveas share it | `camera/<serial>/undistort/fovea/<n>` pipe |
+| scale | `ScaleStream` — ChainedStream `cv::resize` with reactive params (`ratio`/`dwidth`/`dheight`/`dsize`); out dims recomputed per frame from the active input dims; origin forwarded unscaled | `<sourceId>/scale/<name>` pipe |
+| stereo (SGBM) | `StereoStream` — the first TWO-input chained brick: SGBM over a left/right tap pair (latest-wins; ticks on left arrivals), F32 disparity out in left-frame coords; parked unless demanded (the on-demand SGBM view) | `stereo/<name>` pipe (F32) |
+| heatmap | `HeatmapStream` — ChainedStream colormap (TURBO) of a 1-channel F32/U8 source to BGRA8; reactive `{min,max}` (absent = per-frame auto-normalize) | `<sourceId>/heatmap/<name>` pipe |
 | KCF tracker | native thread, latest-frame-wins; a CHAINED variant (`camera/<serial>/undistort/kcf`, controller-node §3.5) tracks the undistorted view on its own thread | track results (async generator + meter) |
 | marker detector | `detector.stream` (native) | detection sets |
 | vision kernels | per-session `worker_thread` (`vision-worker.ts`), dispatched by kind | results + derived frames over MessagePort |

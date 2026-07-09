@@ -267,6 +267,28 @@ names the mechanism it gates.
   bricks cleanly (no brick-leak warnings, no reopen race on immediate
   re-entry); reopening works first try.
 
+## Center-view restore + stereo SGBM/heatmap nodes (2026-07-09 wave)
+
+- [ ] **"No Frame" fixed (9e15592)** — the sliced center view, the guide
+  strip, AND the multi-fovea preview tiles all render real pixels now (every
+  C-20 variable-size pipe read was rejected renderer-side before this fix —
+  multi-fovea previews had never actually rendered on the rig).
+- [ ] **Controller edge rate (b1ba49d)** — with the PID engaged, the
+  pid → controller edge in the profiler graph shows the real position push
+  rate (≈ strip frame rate), not 0Hz; match → pid edges show rx rates.
+- [ ] **Anaglyph view** — red = LEFT eye, cyan = RIGHT (swap check: cover
+  the left fovea camera → the red channel goes dark).
+- [ ] **SGBM view** — selecting "SGBM Disparity" starts the stereo + heatmap
+  bricks (graph gains `stereo/scope` + `stereo/scope/heatmap/view` rows with
+  live meters); a static textured scene shows a plausible depth-ordered
+  TURBO heatmap; near objects hotter than far ones once verged.
+- [ ] **On-demand park/resume** — deselecting the SGBM view parks BOTH
+  bricks (their meter rates fall to 0 within a second; orchestrator CPU
+  returns to baseline); reselecting resumes within a frame or two. Same
+  check for the sliced view's scope-tile pipe (selected ⇄ parked).
+- [ ] **Teardown** — exiting the app retires heatmap → stereo → undistort
+  cleanly (no brick-leak warnings; immediate re-entry works first try).
+
 ## Blocked (hardware change required)
 
 - [ ] **Center-camera hardware trigger** — needs the slimmer CAM0 cable
