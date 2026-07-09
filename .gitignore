@@ -41,3 +41,7 @@ app/windows/*.html
 # Test logs
 *.log
 .worker-logs/
+
+# VitePress build output + dev cache (generated; never committed)
+docs/.vitepress/dist/
+docs/.vitepress/cache/
