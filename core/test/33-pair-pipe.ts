@@ -258,6 +258,54 @@ function teardown(pair: PairObj, L: string, R: string): void {
   teardown(down.pair, down.L, down.R);
 }
 
+// --- 4c: EXACT join under DUPLICATE / COLLIDING keys -------------------------
+// Regression pin for the exact-mode matcher (PairStream::tryMatch/findSide).
+// SEMANTIC (verified against the code, and asserted below): each anchor consumes
+// EXACTLY ONE left + ONE right frame — findSide returns the FRONT-most (oldest)
+// key match, tryMatch erases both matched frames and RETIRES the anchor. So:
+//   * Two frames on ONE side sharing a deviceTimestamp key never double-emit and
+//     never cross-bind sides; the front duplicate pairs, the other stays pending.
+//   * A DUPLICATE resolved-anchor (same leftKey/rightKey) is an INDEPENDENT pool
+//     entry: it only matches if a second, still-unconsumed frame pair with those
+//     keys exists — otherwise it lingers, bounded by anchorCap. No frame is ever
+//     paired twice. Behavior is sane (no double-emit, no wrong-side bind,
+//     bounded), so it is PINNED rather than changed.
+{
+  const { pair, L, R } = makePair("exact");
+  const it = pair[Symbol.asyncIterator]();
+  const kL = 7_000_000_000n;
+  const kR = 7_000_222_000n; // distinct per-side keys (independent camera clocks)
+
+  // Two LEFT frames COLLIDING on kL (distinguishable by width), one RIGHT on kR,
+  // and one resolved anchor {kL,kR}.
+  pair.pushResolvedAnchor({ anchorId: 11, tExposure: 7_000_000_000n, stream: 1, leftKey: kL, rightKey: kR });
+  A.pushPairTestFrame(L, { deviceTimestamp: kL, width: 10, height: 10 }); // front
+  A.pushPairTestFrame(L, { deviceTimestamp: kL, width: 20, height: 20 }); // duplicate key
+  A.pushPairTestFrame(R, { deviceTimestamp: kR, width: 30, height: 30 });
+
+  const b1 = await nextBatch(it, 3000);
+  assert(b1 && b1.records.length === 1, "colliding-key frames yield EXACTLY ONE pair (no double-emit)");
+  assert.equal(b1.records[0]!.left.deviceTimestamp, kL, "left bound on kL");
+  assert.equal(b1.records[0]!.right.deviceTimestamp, kR, "right bound on kR (no cross-side bind)");
+  assert.equal(b1.records[0]!.left.width, 10, "the FRONT (oldest) duplicate-key left was consumed");
+  assert.equal(pair.probe().pairsProduced, 1, "meter: exactly one pair from the colliding key");
+
+  // A DUPLICATE resolved anchor (same keys) + a fresh RIGHT frame → pairs the
+  // LEFTOVER duplicate-key left frame (width 20, still pending) with the new
+  // right. Proves the leftover is reusable and the duplicate anchor is an
+  // independent entry — each frame used once, in FIFO order.
+  pair.pushResolvedAnchor({ anchorId: 12, tExposure: 7_000_000_000n, stream: 1, leftKey: kL, rightKey: kR });
+  A.pushPairTestFrame(R, { deviceTimestamp: kR, width: 40, height: 40 });
+  const b2 = await nextBatch(it, 3000);
+  assert(b2 && b2.records.length === 1, "duplicate anchor pairs the leftover colliding-key frame");
+  assert.equal(b2.records[0]!.left.width, 20, "the SECOND duplicate-key left was consumed (FIFO)");
+  assert.equal(b2.records[0]!.anchorId, 12, "the duplicate anchor (independent entry) formed the pair");
+  assert.equal(pair.probe().pairsProduced, 2, "two total pairs — each frame paired exactly once");
+  console.log("33-pair: EXACT duplicate/colliding-key semantics (no double-emit, FIFO, bounded) OK.");
+  await it.return?.();
+  teardown(pair, L, R);
+}
+
 // --- 5: pool bounds (drop-oldest observable in the meter) --------------------
 {
   const { pair, L, R } = makePair("root", { anchorCap: 4, pendingCap: 4 });
@@ -273,6 +321,56 @@ function teardown(pair: PairObj, L: string, R: string): void {
   assert(p.leftDrops >= 6, `left pending drop-oldest observable (leftDrops=${p.leftDrops})`);
   assert(p.inputs.left.count >= 10, "left ingest metered");
   console.log("33-pair: pool bounds (anchor + pending drop-oldest) OK.");
+  teardown(pair, L, R);
+}
+
+// --- 5b: late anchor AFTER pending-pool eviction -----------------------------
+// Pin the eviction/late-anchor interaction. Overflow BOTH pending pools past
+// pendingCap so the OLDEST frames age out (drop-oldest, metered). THEN push an
+// anchor keyed to an EVICTED frame: the matcher (run by a subsequent "poke"
+// frame, since anchors alone don't wake the brick) finds nothing on that side →
+// NO pair, NO crash, NO stale binding, and the loss is OBSERVABLE as
+// leftDrops/rightDrops. A follow-up anchor keyed to a SURVIVOR still pairs — the
+// pool is intact for frames that were NOT aged out.
+{
+  const { pair, L, R } = makePair("exact", { pendingCap: 4, anchorCap: 16 });
+  const it = pair[Symbol.asyncIterator]();
+  const base = 800_000_000n;
+  // 8 keys per side; pendingCap 4 evicts the oldest four (base..base+3), keeps
+  // base+4..base+7. No anchors yet → nothing matches, everything just ages out.
+  for (let i = 0; i < 8; i++) {
+    A.pushPairTestFrame(L, { deviceTimestamp: base + BigInt(i) });
+    A.pushPairTestFrame(R, { deviceTimestamp: base + BigInt(i) });
+  }
+  await sleep(300);
+  const pe = pair.probe();
+  assert(pe.leftDrops >= 4 && pe.rightDrops >= 4,
+    `oldest pending frames aged out and were metered (L=${pe.leftDrops} R=${pe.rightDrops})`);
+  assert.equal(pe.pairsProduced, 0, "no pairs formed before any anchor");
+
+  // Late anchor for an EVICTED key (base) + a poke frame pair (own, unmatched
+  // key) to RUN the matcher → the evicted frame is gone, so no pair, no crash.
+  // Assert the miss via probe() (NOT the iterator): a raced-out it.next() would
+  // stay pending and later swallow the survivor batch below.
+  pair.pushResolvedAnchor({ anchorId: 21, tExposure: 0n, stream: 0, leftKey: base, rightKey: base });
+  A.pushPairTestFrame(L, { deviceTimestamp: 111_000_000_000n });
+  A.pushPairTestFrame(R, { deviceTimestamp: 111_000_000_000n });
+  await sleep(300);
+  assert.equal(pair.probe().pairsProduced, 0,
+    "late anchor for an EVICTED frame forms NO pair (no crash, no stale binding)");
+
+  // Follow-up anchor for a SURVIVOR key (base+6) + a poke to run the matcher →
+  // the retained frame still pairs (survivors intact after eviction).
+  const kept = base + 6n;
+  pair.pushResolvedAnchor({ anchorId: 22, tExposure: 0n, stream: 0, leftKey: kept, rightKey: kept });
+  A.pushPairTestFrame(L, { deviceTimestamp: 222_000_000_000n });
+  A.pushPairTestFrame(R, { deviceTimestamp: 222_000_000_000n });
+  const hit = await nextBatch(it, 3000);
+  assert(hit && hit.records.some((r) => r.left.deviceTimestamp === kept),
+    "a SURVIVING-key frame still pairs after eviction (pool intact for survivors)");
+  assert.equal(pair.probe().pairsProduced, 1, "exactly the survivor pair formed (evicted key never matched)");
+  console.log("33-pair: late-anchor-after-eviction (loss metered, no stale pairing, survivors intact) OK.");
+  await it.return?.();
   teardown(pair, L, R);
 }
 

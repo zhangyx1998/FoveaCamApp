@@ -107,6 +107,11 @@ void ThreadMeter::ingest(const std::string &stream, int64_t nowMs) {
     return;
   const uint64_t v = version_.load(std::memory_order_relaxed);
   version_.store(v + 1, std::memory_order_release); // odd
+  // StoreStore fence: a release store orders PRIOR writes before itself, NOT the
+  // SUBSEQUENT block mutations — without this the block writes could become
+  // visible before the odd version on arm64, so a concurrent probe() reads a
+  // torn block as consistent. Matches the ShmWrite.cpp beginSlot() discipline.
+  std::atomic_thread_fence(std::memory_order_seq_cst);
   recordEvent(block_.inputs[i], nowMs);
   version_.store(v + 2, std::memory_order_release); // even
 }
@@ -116,14 +121,16 @@ void ThreadMeter::emit(const std::string &stream, int64_t nowMs) {
   if (i < 0)
     return;
   const uint64_t v = version_.load(std::memory_order_relaxed);
-  version_.store(v + 1, std::memory_order_release);
+  version_.store(v + 1, std::memory_order_release); // odd
+  std::atomic_thread_fence(std::memory_order_seq_cst); // StoreStore (see ingest)
   recordEvent(block_.outputs[i], nowMs);
   version_.store(v + 2, std::memory_order_release);
 }
 
 void ThreadMeter::begin(int64_t nowMs) {
   const uint64_t v = version_.load(std::memory_order_relaxed);
-  version_.store(v + 1, std::memory_order_release);
+  version_.store(v + 1, std::memory_order_release); // odd
+  std::atomic_thread_fence(std::memory_order_seq_cst); // StoreStore (see ingest)
   if (block_.openSpanAt < 0)
     block_.openSpanAt = nowMs;
   version_.store(v + 2, std::memory_order_release);
@@ -131,7 +138,8 @@ void ThreadMeter::begin(int64_t nowMs) {
 
 void ThreadMeter::end(int64_t nowMs) {
   const uint64_t v = version_.load(std::memory_order_relaxed);
-  version_.store(v + 1, std::memory_order_release);
+  version_.store(v + 1, std::memory_order_release); // odd
+  std::atomic_thread_fence(std::memory_order_seq_cst); // StoreStore (see ingest)
   if (block_.openSpanAt >= 0) {
     block_.busyMs += std::max<int64_t>(0, nowMs - block_.openSpanAt);
     block_.openSpanAt = -1;
@@ -143,14 +151,16 @@ void ThreadMeter::addBusy(double ms) {
   if (ms <= 0)
     return;
   const uint64_t v = version_.load(std::memory_order_relaxed);
-  version_.store(v + 1, std::memory_order_release);
+  version_.store(v + 1, std::memory_order_release); // odd
+  std::atomic_thread_fence(std::memory_order_seq_cst); // StoreStore (see ingest)
   block_.busyMs += ms;
   version_.store(v + 2, std::memory_order_release);
 }
 
 void ThreadMeter::drop(uint64_t n) {
   const uint64_t v = version_.load(std::memory_order_relaxed);
-  version_.store(v + 1, std::memory_order_release);
+  version_.store(v + 1, std::memory_order_release); // odd
+  std::atomic_thread_fence(std::memory_order_seq_cst); // StoreStore (see ingest)
   block_.dropTotal += n;
   version_.store(v + 2, std::memory_order_release);
 }
@@ -158,6 +168,7 @@ void ThreadMeter::drop(uint64_t n) {
 void ThreadMeter::queueDepth(uint32_t depth, uint32_t capacity, int64_t nowMs) {
   const uint64_t v = version_.load(std::memory_order_relaxed);
   version_.store(v + 1, std::memory_order_release); // odd
+  std::atomic_thread_fence(std::memory_order_seq_cst); // StoreStore (see ingest)
   block_.hasQueue = true;
   block_.queueCapacity = capacity;
   block_.queueLastDepth = depth;

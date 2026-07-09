@@ -179,6 +179,18 @@ void Publisher::close() {
     segment_->setState(ShmRing::PipeState::CLOSED); // release-ordered signal
 }
 
+void Publisher::quiesceConsumers() {
+  // Fire the consumer gate OFF so any gated producer subscriber caching this
+  // Publisher's FrameSink* tears down SYNCHRONOUSLY (a subscriber-dtor that
+  // unsubscribes from the capture/convert source, so no thread offers into the
+  // about-to-be-freed segment). Fired OUTSIDE the hub mutex by drop() — the same
+  // discipline as connect/disconnect and setConsumerGate, whose gate callbacks
+  // take the producer-registry mutex; no lock inversion. The gate is
+  // NAPI-thread-only, so this cannot race a concurrent gate fire.
+  if (gate_)
+    gate_(false);
+}
+
 Meter::Snapshot Publisher::probe() const { return meter_.probe(nowMs()); }
 
 // ---- SyntheticProducer (test driver — offers on its own thread) -----------
@@ -317,6 +329,17 @@ void PipeHub::drop(const std::string &id) {
     entry = std::make_unique<PipeEntry>(std::move(it->second));
     pipes_.erase(it);
   }
+  // Defense in depth (S-1a): BEFORE the Publisher (segment unmap) is destroyed,
+  // synchronously fire the consumer gate OFF. Gated producer subscribers in
+  // separate registries (RawPipe/Converter/Compress) cache this Publisher's raw
+  // FrameSink and only tear down on a consumer-gate→0 edge or an explicit
+  // detach, so a drop() BEFORE detach could leave a live subscriber offering
+  // into freed memory on the capture/convert thread. This makes the guarantee
+  // STRUCTURAL (the JS detach-before-unadvertise convention still holds; this is
+  // a backstop). Fired outside the hub mutex (released above) — no lock
+  // inversion with the producer-registry mutex the gate callback takes.
+  if (entry->publisher)
+    entry->publisher->quiesceConsumers();
   // Tear down producer first (stops offering), then publisher (unmaps/unlinks).
   if (entry->producer)
     entry->producer->stop();

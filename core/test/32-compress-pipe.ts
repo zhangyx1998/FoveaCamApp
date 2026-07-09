@@ -277,6 +277,107 @@ function outByteCopy(buf: ArrayBuffer, len: number): Uint8Array {
   console.log("32-compress: /zlib advert + compress topology row + meter probe OK.");
 }
 
+// --- 3b: drop-path accounting — meter faithfully counts Leaky-tap sheds -------
+// The compress runner reads its raw12p source through a LEAKY (latest-wins) tap:
+// if the runner falls behind the capture thread, intermediate frames are shed on
+// the capture-thread fan-out and metered as OwnedFrame.seq-gap drops
+// (CompressRunner::run → meter_.drop(gap)). We pin the accounting invariant this
+// maintains: for a CONTIGUOUS window of delivered output frames, the meter's
+// drop DELTA equals the ACTUAL source-seq holes between consecutively delivered
+// frames — i.e. published(source span) == delivered + drops. A metering
+// regression (an unmetered shed) would break the equality.
+//
+// LIMITATION (honest): deterministic OVERLOAD is NOT reachable in a hardware-
+// free test. The runner (per-frame zlib on a 512x512 fake frame, ~2 ms, ~5%
+// util) outpaces the ~24 fps fake camera ~20x, so the seq-gap branch stays
+// dormant and drops are 0 in practice. This test therefore validates the
+// zero-shed steady state tightly (contiguous source coverage + meter agreement +
+// input==output) and asserts the balance equation generally (it also holds, and
+// is checked, should any shed ever occur); the seq-gap arithmetic itself is
+// unit-covered by test 33's pending drop-oldest metering.
+{
+  // Continuously drain the source ring → deviceTimestamp -> source seq (identity
+  // map). Depth-16 ring @24fps buffers ~660 ms; draining every few ms never lags.
+  const tsToSrcSeq = new Map<string, number>();
+  let srcSeqCursor = 1;
+  const drainSrc = () => {
+    for (let i = 0; i < 128; i++) {
+      const r = reader.readSeqInto(srh, srcDst, BigInt(srcSeqCursor));
+      if (isGone(r)) { srcSeqCursor = Number(r.oldestSeq); continue; }
+      if (!isOk(r)) break;
+      const ts = r.meta.deviceTimestamp;
+      if (typeof ts === "bigint") tsToSrcSeq.set(ts.toString(), srcSeqCursor);
+      srcSeqCursor += 1;
+    }
+  };
+
+  // Wait for a SPECIFIC output seq without jumping (a Gone here means our reader
+  // lagged the output ring — unexpected at this cadence, so fail loudly rather
+  // than silently miscount the window).
+  const readOutExact = async (want: number): Promise<Ok> => {
+    const deadline = Date.now() + 5000;
+    for (;;) {
+      const r = reader.readSeqInto(orh, outDst, BigInt(want));
+      if (isOk(r)) return r;
+      assert(!isGone(r), `output reader lagged the ring at seq ${want}`);
+      assert(!(r && "closed" in r), `output seq ${want} unexpectedly Closed`);
+      if (Date.now() > deadline) throw new Error(`timeout waiting for output seq ${want}`);
+      drainSrc();
+      await sleep(2);
+    }
+  };
+
+  // Warm up to steady state, keeping the source map fresh.
+  for (let i = 0; i < 10; i++) { drainSrc(); await sleep(20); }
+
+  // Bracket the window on the meter.
+  const m0 = A.compressProbeAll()[OUT]!;
+  const e0 = m0.inputs.frame.count;                 // emit==ingest; use as seq base
+  const d0 = (m0 as unknown as { dropTotal: number }).dropTotal;
+
+  // Collect a CONTIGUOUS run of output frames, recording each one's source seq
+  // via its forwarded deviceTimestamp; drain the source alongside so no source
+  // seq is overwritten before we map it.
+  const WINDOW = 20;
+  const startOut = e0 + 1;
+  const srcSeqs: number[] = [];
+  for (let k = 0; k < WINDOW; k++) {
+    const r = await readOutExact(startOut + k);
+    drainSrc();
+    const ts = r.meta.deviceTimestamp;
+    const s = typeof ts === "bigint" ? tsToSrcSeq.get(ts.toString()) : undefined;
+    assert(s !== undefined, `output frame ${startOut + k} maps to a known source frame`);
+    srcSeqs.push(s!);
+  }
+  drainSrc();
+  const m1 = A.compressProbeAll()[OUT]!;
+  const d1 = (m1 as unknown as { dropTotal: number }).dropTotal;
+
+  // Ordering preserved: source seqs strictly increasing across delivered frames.
+  for (let i = 1; i < srcSeqs.length; i++)
+    assert(srcSeqs[i]! > srcSeqs[i - 1]!, "delivered output frames carry strictly increasing source seqs");
+
+  // ACTUAL source-seq holes between consecutively delivered output frames.
+  const observedGaps = srcSeqs[srcSeqs.length - 1]! - srcSeqs[0]! - (srcSeqs.length - 1);
+  const meteredDrops = d1 - d0;
+  // Accounting balance: the meter's drop delta accounts for EXACTLY the frames
+  // the Leaky tap shed within the window (0 in steady state — contiguous
+  // coverage; ≥observedGaps if the runner ever fell behind).
+  assert(meteredDrops >= observedGaps,
+    `meter drop-delta (${meteredDrops}) covers the observed Leaky-tap sheds (${observedGaps})`);
+  assert.equal(observedGaps, 0,
+    "steady state: delivered frames cover a CONTIGUOUS source span (no unmetered holes)");
+  assert.equal(meteredDrops, 0, "steady state: meter agrees — zero sheds within the window");
+  // published(source span covered) == delivered + drops.
+  const publishedSpan = srcSeqs[srcSeqs.length - 1]! - srcSeqs[0]! + 1;
+  assert.equal(publishedSpan, WINDOW + observedGaps,
+    "balance: published source span == delivered + drops");
+  // No silent loss between ingest and emit across the whole run.
+  assert.equal(m1.inputs.frame.count, (m1 as unknown as { outputs: { shm: { count: number } } }).outputs.shm.count,
+    "every ingested frame is emitted (input count == output count)");
+  console.log(`32-compress: drop-path accounting balanced — delivered=${WINDOW} drops=${meteredDrops} span=${publishedSpan} (published == delivered + drops; overload dormant, see comment) OK.`);
+}
+
 // --- 4: detach tears down cleanly → natural exit ------------------------------
 reader.close(orh);
 reader.close(srh);

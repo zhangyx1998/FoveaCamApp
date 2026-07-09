@@ -147,6 +147,20 @@ public:
    *  explicit signal after the final frame; further offers are dropped. */
   void close();
 
+  /** Defense-in-depth teardown backstop (S-1a), fired by `PipeHub::drop` BEFORE
+   *  the Publisher (segment unmap) is destroyed. Producer bindings in SEPARATE
+   *  registries (RawPipe/Converter/Compress) cache this Publisher's raw
+   *  `FrameSink*` and only release their gated subscriber on a consumer-gate→0
+   *  edge or an explicit detach — so a `drop()` BEFORE detach would otherwise
+   *  leave a live subscriber offering into freed memory on the capture/convert
+   *  thread. This synchronously fires the consumer gate OFF (tearing those
+   *  subscribers down), making the guarantee STRUCTURAL rather than reliant on
+   *  the detach-before-unadvertise JS convention. No-op if no gate is
+   *  registered. NAPI-thread only (serialized with connect/disconnect/
+   *  setConsumerGate); idempotent (gate(false) with no live subscriber is a
+   *  no-op). */
+  void quiesceConsumers();
+
   const PipeSpec &spec() const { return spec_; }
   const std::string &shmName() const { return shmName_; }
   /** Segment generation = the pipe's epoch (C-20 reuse-safe identity). */
