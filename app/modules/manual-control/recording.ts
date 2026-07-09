@@ -4,33 +4,36 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Server-side recording, ported from `src/record/index.ts`'s `Recording`
-// class + manual-control's `emitRecFrame`/three `recording.provide` raw
-// stream consumers (docs/history/refactor/orchestrator.md roadmap item 6). Three
-// independent raw consumers of `leases.L/C/R.camera.stream` (safe alongside
-// the registry's own preview loop and a concurrent capture pass — see
-// `capture.ts`'s header) write to disk through the format-agnostic
-// `RecordingSink` facade (B-5, docs/history/refactor/recorder-container.md): the
-// `RECORDER_BACKEND` constant in `@orchestrator/recorder` selects the new
-// single-file `.fovea` (MCAP) container or the legacy `.stream`/`.meta`/
-// manifest dump (unchanged on disk — external decoder tooling depends on
-// it). L/R frames carry a volt/angle/homography metadata snapshot taken at
-// arrival, matching the original `emitRecFrame`, on either backend.
+// Server-side recording (capture-recorder-nodes Phase 2, Wave I-2). The
+// per-frame consume/copy/transfer that used to run on the orchestrator MAIN JS
+// loop (three `lease.camera.stream` taps → bytes → transfer to the mcap worker)
+// is GONE: recording now flows entirely through the RECORDER NODE
+// (`@orchestrator/recorder-node`) — one worker thread that FIFO-consumes the
+// full-bit-depth `camera/<serial>/raw` pipes and hosts the mcap writer
+// in-worker. Main only advertises the raw pipes, creates/retires the node, and
+// answers the ruling-3 per-frame metadata callback (volt/angle/homography). The
+// container contract is UNCHANGED (see recorder/schema.ts).
+//
+// On finalize we notify main (`recording:finished`) so the viewer window
+// auto-opens the finished `.fovea` (rulings 8/9; the receive side lives in
+// electron/main.ts).
 
 import { mkdirSync } from "node:fs";
-import type { Frame, PixelFormat } from "core/Aravis";
+import type { PixelFormat } from "core/Aravis";
 import type { Point2d } from "core/Geometry";
 import type { Mat } from "core/Vision";
+import { frameVoltageExtras } from "@orchestrator/recorder";
 import {
-  createRecordingSink,
-  frameVoltageExtras,
-  type RecordingSink,
-} from "@orchestrator/recorder";
+  createRecorderNode,
+  type RecorderConnect,
+  type RecorderNodeHandle,
+  type RecorderStreamStats,
+} from "@orchestrator/recorder-node";
+import { createRawPipe, type RawPipeSeam, type RawHandle } from "@orchestrator/raw-pipe";
 import { matToArray } from "@lib/mat";
+import { pixelFormatChannels, pixelFormatDtype } from "@lib/util/dtype";
 import type { Pos } from "@lib/controller-codec";
 import type { CalibratedTriple } from "@orchestrator/calibration";
-
-export type { StreamSummary } from "@orchestrator/recorder/legacy";
 
 /** A recorded fovea frame's voltage provenance (WS4 4b):
  *  - `fin`  — bind the FIN's exposure-AVERAGED voltage (B-12) for the exact
@@ -45,6 +48,15 @@ export type FoveaBinding = { A: Point2d; H: Mat<Float64Array> } & (
 export interface RecordingDeps {
   getTriple(): CalibratedTriple | null;
   volts(): { L: Pos; R: Pos };
+  /** Advertise+attach / retire the full-bit-depth `camera/<serial>/raw` pipes
+   *  (native producer). Injected from index.ts (never imports core here). */
+  rawSeam: RawPipeSeam;
+  /** Connect a pipe for the recorder node (refcount++ → C-21 gate → producer
+   *  runs); the node releases it on stop. Injected from the session (broker). */
+  connect: RecorderConnect;
+  /** Notify main a recording finished so the viewer auto-opens it (rulings
+   *  8/9). Injected (production: `process.parentPort` post). */
+  finished(foveaPath: string): void;
   /** Optional (WS4 4b): the FIN outcome matched to the frame currently being
    *  recorded on this fovea mirror (by `frame_id`/`t_exposure`), or null when
    *  no triggered capture is bound → the free-run live snapshot is used. Left
@@ -52,10 +64,7 @@ export interface RecordingDeps {
   foveaBinding?(mirror: "L" | "R"): { frameId: number; volt: Pos } | null;
   telemetry(patch: {
     recording_active?: boolean;
-    recordingStreams?: Record<
-      string,
-      { frames: number; dropped: number; fps: number; bytes: number }
-    >;
+    recordingStreams?: Record<string, RecorderStreamStats>;
   }): void;
 }
 
@@ -106,45 +115,42 @@ export interface RecordingController {
   stop(): Promise<boolean>;
 }
 
-type RecordFrame = {
-  name: string;
-  frame: Mat;
-  format: PixelFormat;
-  meta?: Record<string, unknown>;
+/** The three recorded streams → the mirror they carry a fovea binding for
+ *  (center has none). Names are the container channel names (unchanged). */
+const STREAM_MIRROR: Record<string, "L" | "R" | null> = {
+  "left-fovea": "L",
+  center: null,
+  "right-fovea": "R",
 };
+
+/** Raw-pipe geometry for a camera (its ACTUAL sensor readout format + dims). */
+function rawGeometry(camera: {
+  serial: string;
+  pixel_format: PixelFormat;
+  getFeatureInt(name: string): number;
+}) {
+  const format = camera.pixel_format;
+  const dtype = pixelFormatDtype(format);
+  return {
+    width: camera.getFeatureInt("Width"),
+    height: camera.getFeatureInt("Height"),
+    channels: pixelFormatChannels(format),
+    bytesPerElement: dtype === "U16" ? 2 : 1,
+    pixelFormat: format,
+    // Deep ring (recorder territory): a lagging FIFO consumer stays lossless up
+    // to the depth, drop-accounted past it, the writer never blocked.
+    ringDepth: 48,
+  };
+}
 
 export function createRecording(deps: RecordingDeps): RecordingController {
   let active = false;
-  let sink: RecordingSink | null = null;
-  let t0 = 0;
-  let tasks: Promise<void>[] = [];
+  let node: RecorderNodeHandle | null = null;
+  let rawPipes: RawHandle[] = [];
   let pollTimer: ReturnType<typeof setInterval> | null = null;
 
   function publishStreams(): void {
-    deps.telemetry({ recordingStreams: sink?.stats() ?? {} });
-  }
-
-  function emitRecFrame(name: string, frame: Frame, fovea?: FoveaBinding): RecordFrame {
-    const { raw, raw_format: format } = frame;
-    frame.release();
-    const meta: Record<string, unknown> = fovea ? buildFoveaMeta(fovea) : {};
-    return { name, frame: raw, format, meta };
-  }
-
-  async function consume(
-    name: string,
-    stream: AsyncIterable<Frame>,
-    bind?: () => FoveaBinding,
-  ): Promise<void> {
-    try {
-      for await (const frame of stream) {
-        if (!active) return;
-        const rec = emitRecFrame(name, frame, bind?.());
-        sink?.write(rec.name, rec.frame, rec.format, undefined, rec.meta);
-      }
-    } catch (e) {
-      console.error(`[manual-control] recording stream "${name}":`, e);
-    }
+    deps.telemetry({ recordingStreams: node?.stats() ?? {} });
   }
 
   return {
@@ -159,16 +165,40 @@ export function createRecording(deps: RecordingDeps): RecordingController {
       const triple = deps.getTriple();
       if (!triple) return false;
       mkdirSync(path, { recursive: true });
-      t0 = performance.now();
-      sink = await createRecordingSink(path, new Date().toISOString());
-      active = true;
+
       const { L, C, R } = triple.leases;
       const { conv } = triple;
-      tasks = [
-        consume("left-fovea", L.camera.stream, () => resolveFoveaBinding(deps, conv, "L")),
-        consume("center", C.camera.stream),
-        consume("right-fovea", R.camera.stream, () => resolveFoveaBinding(deps, conv, "R")),
-      ];
+
+      // Advertise+attach the full-bit-depth raw producers (consumer-gated: the
+      // node's connect below spins them up).
+      const rawFor = (
+        camera: { serial: string; pixel_format: PixelFormat; getFeatureInt(n: string): number },
+      ): RawHandle =>
+        createRawPipe(deps.rawSeam, camera, `camera/${camera.serial}/raw`, rawGeometry(camera));
+      rawPipes = [rawFor(L.camera), rawFor(C.camera), rawFor(R.camera)];
+
+      const streams = {
+        "left-fovea": { pipeId: rawPipes[0]!.pipeId },
+        center: { pipeId: rawPipes[1]!.pipeId },
+        "right-fovea": { pipeId: rawPipes[2]!.pipeId },
+      };
+
+      node = createRecorderNode({
+        id: "recorder/manual-control",
+        path,
+        streams,
+        connect: deps.connect,
+        timestamp: new Date().toISOString(),
+        // Ruling-3: per NEW frame, the session injects volt/angle/homography for
+        // the L/R foveae (center carries none). Never blocks the frame write.
+        onFrame: (stream) => {
+          const mirror = STREAM_MIRROR[stream];
+          if (!mirror) return null;
+          return buildFoveaMeta(resolveFoveaBinding(deps, conv, mirror));
+        },
+      });
+
+      active = true;
       deps.telemetry({ recording_active: true, recordingStreams: {} });
       pollTimer = setInterval(publishStreams, 250);
       return true;
@@ -181,12 +211,17 @@ export function createRecording(deps: RecordingDeps): RecordingController {
         clearInterval(pollTimer);
         pollTimer = null;
       }
-      await Promise.allSettled(tasks);
-      tasks = [];
-      const duration = (performance.now() - t0) / 1000;
-      await sink?.finalize(duration);
-      sink = null;
+      const finished = node;
+      // Finalize the container (drains to the producers' latest, writes the mcap
+      // summary/index, terminates the worker, disconnects the pipes).
+      await node?.stop();
+      node = null;
+      // Retire the raw producers AFTER the node released its connections.
+      for (const p of rawPipes) p.retire();
+      rawPipes = [];
       deps.telemetry({ recording_active: false, recordingStreams: {} });
+      // Auto-open the finished recording in the viewer window (rulings 8/9).
+      if (finished) deps.finished(finished.filePath);
       return true;
     },
   };

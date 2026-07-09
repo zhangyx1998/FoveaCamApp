@@ -5,12 +5,13 @@
 // -------------------------------------------------------
 //
 // Main-thread host for one recorder worker (one McapWriter, one container
-// file). Mirrors `stream-writer.ts`'s architecture — worker_threads worker
-// fed by transferred ArrayBuffers, bounded queue, fail-fast on worker error
-// — but multiplexes N channels into a single file and is metered from day
-// one (docs/history/refactor/workload-metering.md; the `recorder:<name>` family
-// `stream-writer.ts` started, extended here to one workload per container
-// file with per-channel ingest counters).
+// file): a worker_threads worker fed by transferred ArrayBuffers, bounded
+// queue, fail-fast on worker error, multiplexing N channels into a single
+// file and metered from day one (docs/history/refactor/workload-metering.md).
+// NOTE: the live recording path is the RECORDER NODE
+// (`@orchestrator/recorder-node`, one worker: FIFO consume + mcap encode);
+// this sink writer remains as the container surface the recorder bench + the
+// `test/recorder.test.ts` container-contract tests drive directly.
 //
 // Backpressure contract (recorder-container.md §3): the orchestrator loop
 // must never block on the recorder. `writeFrame` is synchronous and never
@@ -21,7 +22,8 @@
 // failed) and in the caller's per-stream stats.
 //
 // This class is deliberately core-free (bytes in, bytes out) — Mat/
-// PixelFormat handling lives in the sink layer (`index.ts`).
+// PixelFormat handling lives in the sink layer (`index.ts`); the recorder-node
+// worker embeds the equivalent mcap chain in-thread.
 
 import { Worker, type TransferListItem } from "node:worker_threads";
 import { createRequire } from "node:module";

@@ -4,8 +4,8 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Source string for the recorder's worker_threads worker — eval'd CJS, the
-// same pattern as `stream-writer.ts`'s WORKER_SOURCE: the orchestrator is
+// Source string for the recorder sink's worker_threads worker — eval'd CJS
+// (the recorder-node worker uses the same technique): the orchestrator is
 // bundled to a single file, so a separate worker source file would not exist
 // at runtime. `@mcap/core` cannot be require()d by bare name from an eval
 // worker (its `require` resolves against the process cwd, which is not the
@@ -16,7 +16,7 @@
 // file. McapWriter is documented non-reentrant ("wait on any method call to
 // complete before calling another"), so every operation — init, channel
 // registration, frame/meta writes, finalize — is serialized through a single
-// promise chain, exactly like `stream-writer.ts`'s `chain = chain.then(...)`.
+// promise chain (`chain = chain.then(...)`).
 // Message order on the port is preserved, so a "channel" registration posted
 // before that channel's first "frame" is guaranteed to run first.
 //

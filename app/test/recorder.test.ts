@@ -15,10 +15,8 @@ import {
   createFoveaSink,
   createRecordingSink,
   frameVoltageExtras,
-  RECORDER_BACKEND,
   type RecorderTopology,
 } from "@orchestrator/recorder";
-import { createLegacySink } from "@orchestrator/recorder/legacy";
 import { workloadsSnapshot } from "@orchestrator/metering";
 
 const tmpRoots: string[] = [];
@@ -252,41 +250,9 @@ describe("MCAP recorder (fovea sink)", () => {
     });
   });
 
-  it("keeps the legacy .stream/.meta/manifest backend intact behind the constant", async () => {
-    // the default backend is the new container…
-    expect(RECORDER_BACKEND).toBe("fovea");
+  it("createRecordingSink resolves to the MCAP (`fovea`) sink — legacy backend dropped", async () => {
     const facade = await createRecordingSink(await tempRoot(), "2026-07-06T00:00:00.000Z");
     expect(facade.kind).toBe("fovea");
     await facade.finalize(0);
-
-    // …and the legacy sink still produces the exact pre-B-5 on-disk dump
-    const dir = await tempRoot();
-    const sink = await createLegacySink(dir, "2026-07-06T00:00:00.000Z");
-    sink.write("left", fakeFrame([1, 2, 3, 4]), "Mono12p", 12.5, { tag: "sample" });
-    await sink.finalize(2.25);
-
-    const bytes = await readFile(join(dir, "left.stream"));
-    expect(
-      Array.from(new Uint16Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 2)),
-    ).toEqual([1, 2, 3, 4]);
-    const lines = (await readFile(join(dir, "left.meta"), "utf8")).trim().split("\n");
-    expect(JSON.parse(lines[0])).toMatchObject({
-      o: 0,
-      d: "U16",
-      s: [2, 2],
-      t: 12.5,
-      f: "Mono12p",
-      b: 12,
-      x: { tag: "sample" },
-    });
-    const manifest = JSON.parse(await readFile(join(dir, "manifest.json"), "utf8"));
-    expect(manifest).toMatchObject({
-      format: "FCRS",
-      timestamp: "2026-07-06T00:00:00.000Z",
-      duration: 2.25,
-      streams: { left: { frames: 1, dropped: 0, bytes: 8 } },
-    });
-    expect((await readFile(join(dir, "__init__.py"), "utf8")).length).toBeGreaterThan(0);
-    expect((await readFile(join(dir, "play"), "utf8"))).toContain("__init__.py");
   });
 });

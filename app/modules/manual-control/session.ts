@@ -46,6 +46,7 @@ import { pushHomography } from "core/Aravis";
 import { readNextPipeFrame } from "@orchestrator/pipe-read-once";
 import { nodeId } from "@lib/orchestrator/graph-contract";
 import type { PipeBroker } from "@orchestrator/pipe-session";
+import type { RawPipeSeam } from "@orchestrator/raw-pipe";
 import type { PipeInput, VisionResult } from "@orchestrator/vision-worker-protocol";
 import { manualControl } from "./contract";
 import { createCapture } from "./capture";
@@ -64,6 +65,7 @@ import { RollingStats } from "@lib/util/rolling";
 export default function manualControlSession(
   broker: PipeBroker,
   undistortSeam: UndistortPipeSeam,
+  rawSeam: RawPipeSeam,
 ): ServerSession<typeof manualControl> {
   return defineResourceSession("manual-control", manualControl, (s) => {
     let triple: CalibratedTriple | null = null;
@@ -204,6 +206,20 @@ export default function manualControlSession(
     const recording = createRecording({
       getTriple: () => triple,
       volts: () => volts,
+      rawSeam,
+      // Connect a raw pipe for the recorder node (refcount++ → C-21 gate →
+      // producer runs); the node releases it on stop.
+      connect: (pipeId) => {
+        const handle = broker.connect(pipeId);
+        return {
+          shmName: handle.shmName,
+          spec: handle.spec,
+          release: () => void broker.disconnect(pipeId),
+        };
+      },
+      // Notify main so the viewer window auto-opens the finished `.fovea`.
+      finished: (foveaPath) =>
+        process.parentPort?.postMessage({ type: "recording:finished", path: foveaPath }),
       telemetry: (patch) => s.telemetry(patch),
     });
 

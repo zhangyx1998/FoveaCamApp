@@ -9,7 +9,7 @@
 // topology seam, and the main↔worker message protocol. Vue-free and
 // core-free — `writer.ts`/the worker never touch `core`; all Mat/PixelFormat
 // handling stays in `index.ts` (the sink layer), so the worker host code
-// stays a pure bytes-in/bytes-out pipeline like `stream-writer.ts`'s worker.
+// stays a pure bytes-in/bytes-out pipeline (Mat/PixelFormat lives in the sink).
 
 import { FOVEA_EXTENSION } from "./schema.js";
 

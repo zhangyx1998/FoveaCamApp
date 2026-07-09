@@ -182,8 +182,23 @@ const manageCameras = hub.add(manageCamerasSession());
 controllerNode();
 hub.add(controllerSession());
 
+// capture-recorder-nodes Phase 1/2: the full-bit-depth `camera/<serial>/raw`
+// pipes the recorder node FIFO-consumes (Aravis.attachRawPipe publishes
+// `frame->raw` verbatim; consumer-gated like every pipe). Seam types the camera
+// as `unknown` so the session/recorder unit-test without native core.
+const aravisRaw = Aravis as unknown as {
+  attachRawPipe(camera: unknown, pipeId: string): boolean;
+  detachRawPipe(pipeId: string): boolean;
+};
+const rawSeam: import("./raw-pipe.js").RawPipeSeam = {
+  advertise: pipeBroker.advertise,
+  unadvertise: pipeBroker.unadvertise,
+  attach: (camera, pipeId) => void aravisRaw.attachRawPipe(camera, pipeId),
+  detach: (pipeId) => void aravisRaw.detachRawPipe(pipeId),
+};
+
 // --- manual-control: manual steering + capture + recording ----------------
-const manualControl = hub.add(manualControlSession(asBroker(Pipe), undistortSeam));
+const manualControl = hub.add(manualControlSession(asBroker(Pipe), undistortSeam, rawSeam));
 
 // --- multi-fovea: protocol-v2 multi-target logic skeleton ------------------
 const multiFovea = hub.add(

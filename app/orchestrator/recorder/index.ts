@@ -4,12 +4,18 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Production recorder facade (B-5; docs/history/refactor/recorder-container.md §2
-// decision + §3). Recording sessions write a single `.fovea` container —
-// standard MCAP inside — through one worker_threads writer per topology key
-// (`singleFileTopology` today: exactly one worker, one file). The legacy
-// `.stream`/`.meta`/manifest backend stays in-tree behind `RECORDER_BACKEND`
-// as the fallback.
+// Recorder sink facade (B-5; docs/history/refactor/recorder-container.md §2
+// decision + §3). Writes a single `.fovea` container — standard MCAP inside —
+// through one worker_threads writer per topology key (`singleFileTopology`
+// today: exactly one worker, one file). The legacy `.stream`/`.meta`/manifest
+// backend + its `RECORDER_BACKEND` selector were DROPPED (capture-recorder-nodes
+// ruling 6); this MCAP sink is the only backend.
+//
+// NOTE (capture-recorder-nodes Phase 2): live manual-control recording no longer
+// goes through this sink — it flows through the RECORDER NODE
+// (`@orchestrator/recorder-node`), one worker that FIFO-consumes the raw pipes
+// and hosts the mcap writer in-worker. This sink + `McapWriterWorker` remain as
+// the container-writing surface the recorder bench + tests drive directly.
 //
 // Container layout (documented in the per-dump README):
 // - one channel per recorded stream, `messageEncoding: "x-fovea-raw"` —
@@ -40,7 +46,6 @@ import {
   significantBits,
 } from "@lib/util/dtype";
 import { McapWriterWorker, type McapWriterWorkerOptions } from "./writer.js";
-import { createLegacySink } from "./legacy.js";
 import {
   singleFileTopology,
   type RecorderTopology,
@@ -80,18 +85,10 @@ export {
   type Volt,
 } from "./metadata.js";
 
-export type RecorderBackend = "fovea" | "legacy";
-
-/** Recording backend selector. `"fovea"` = the new single-file MCAP
- *  container; flip to `"legacy"` to restore the pre-B-5 `.stream`/`.meta`/
- *  manifest dumps (the writer itself stays in-tree — `stream-writer.ts`). */
-export const RECORDER_BACKEND: RecorderBackend = "fovea";
-
-/** The format-agnostic surface `manual-control/recording.ts` records
- *  through — both backends implement it, so the session code never branches
- *  on container format. */
+/** The recorder sink surface the container-writing tests + bench drive (the
+ *  legacy `RecorderBackend` selector is gone — MCAP is the only backend). */
 export interface RecordingSink {
-  readonly kind: RecorderBackend;
+  readonly kind: "fovea";
   /** Write one frame on a named stream (lazily registers the stream on
    *  first use). Synchronous, never blocks the orchestrator loop — frames
    *  that cannot ship are dropped and accounted (never silently).
@@ -113,15 +110,14 @@ export interface RecordingSink {
   finalize(durationSec: number): Promise<void>;
 }
 
-/** Create the recording sink for a session directory using the backend
- *  selected by `RECORDER_BACKEND`. `timestamp` = the session's ISO string. */
+/** Create the recording sink for a session directory (MCAP `.fovea`).
+ *  `timestamp` = the session's ISO string. Retained as the tests'/bench's
+ *  entry point; kept distinct from `createFoveaSink` for call-site clarity. */
 export function createRecordingSink(
   basePath: string,
   timestamp: string,
 ): Promise<RecordingSink> {
-  return RECORDER_BACKEND === "legacy"
-    ? createLegacySink(basePath, timestamp)
-    : createFoveaSink(basePath, timestamp);
+  return createFoveaSink(basePath, timestamp);
 }
 
 export interface FoveaSinkOptions {
@@ -160,8 +156,7 @@ interface StreamState {
 }
 
 /** The MCAP-backed sink. Exported directly (in addition to the
- *  `createRecordingSink` selector) so tests can drive it regardless of the
- *  `RECORDER_BACKEND` constant. */
+ *  `createRecordingSink` wrapper) so tests can drive it by name. */
 export async function createFoveaSink(
   basePath: string,
   timestamp: string,
