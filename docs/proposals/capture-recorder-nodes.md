@@ -3,6 +3,28 @@
 Status: **RULED** (user, 2026-07-09) — design sketch for review; phases below
 are planner checkpoints, not yet dispatched.
 
+## Rulings round 2 (user, 2026-07-09 — veto answers + scope)
+
+5. **Pipes support FIFO mode — implement FIRST if absent.** (Verified absent;
+   Phase 0 below.)
+6. **Drop ALL legacy interfaces** (the `.stream`/`.meta`/manifest backend,
+   `RECORDER_BACKEND`, `orchestrator/recorder/legacy.ts`, the old
+   `stream-writer.ts` path, the no-op `Delegation` capture prop mechanism).
+7. **Capture preview uses ACTUAL data, gathered from the node** — the
+   renderer pulls the node's real held resources; no separate republished
+   preview stream.
+8. **Capture preview moves into its OWN window**; **recording preview (the
+   playback/viewer window) opens automatically when a recording finishes**
+   (the viewer window + session already exist — wire the auto-open).
+9. **Revive stalled items**: the FIFO queue (was "hardening follow-up" → now
+   Phase 0); the Cmd/Cmd-R `recorder:trigger` stub ("real semantics land with
+   the recorder stage" — this IS the recorder stage: Cmd-R toggles recording
+   where a recording context exists). The FIN-averaged voltage binding stays
+   hardware/firmware-gated (stage-f) — its injection point is ruling 3's
+   per-frame callback.
+10. **Drain the whole plan** — dispatch aggressively, keep going until every
+    phase lands.
+
 ## The rulings (user, 2026-07-09, verbatim intent)
 
 1. **Move the capture/recorder core logic to the orchestrator so they run as
@@ -45,6 +67,31 @@ are planner checkpoints, not yet dispatched.
 
 ## Design (pinned)
 
+### Phase 0 — FIFO pipe read mode (core, FIRST — ruling 5)
+
+The v4 SHM layout already carries what FIFO needs: per-pipe `slotCount`
+(ring depth, up to `MAX_SLOT_COUNT` 64), per-slot seqlock'd `SlotHeader.seq`,
+and `latestSeq` — the writer round-robins slots by seq. FIFO is therefore a
+CONSUMER-SIDE read mode; the writer path does not change:
+
+- `readSeqInto(mapping, wantSeq, dst, ...)` in the read TU: locate slot
+  `wantSeq % slotCount`, seqlock-read it, and classify: **Ok** (slot held
+  `wantSeq`), **NotYet** (`wantSeq > latestSeq`), **Gone** (slot already
+  recycled — return the oldest still-live seq so the consumer JUMPS and
+  accounts `wantSeq..oldest-1` as drops). Never blocks the writer; loss
+  happens only when the consumer lags a full ring (depth = the hwm), and is
+  always accounted.
+- Consumer surfaces: the JS `shm-client` gains `readPipeSeq(shmName, seq,
+  bytes)` beside `readPipe` (same maxBytes slot-size provisioning — the C-20
+  rule); worker-side consumption loops on `lastSeq+1` with `NotYet` →
+  short-poll/backoff, `Gone` → jump + drop-account.
+- Advertise: `PipeSpec.ringDepth?` (default today's 3) so FIFO consumers can
+  request deep rings (recorder: 32–64); plumb through the broker advertise
+  path. No new pixel semantics.
+- Test: a core test proving ordered lossless delivery through a deep ring
+  under a slow consumer, the Gone/jump accounting, and that latest-wins
+  readers of the SAME pipe are unaffected.
+
 ### Phase 1 — raw pipes (core, the enabler)
 
 A `RawPipePublisher` on the camera source brick, the `PipeOfferSubscriber`
@@ -57,19 +104,20 @@ change — only a new attach fn + typings (planner-owned graph-contract needs
 nothing; `nodeId` gains nothing — reuse the `<sourceId>/<kind>` id shape
 composed in the session wrapper).
 
-Loss semantics (pinned): seqlock latest-wins + a consumer polling ≥ 2× frame
-rate + seq-gap DROP ACCOUNTING. Recording is drop-accounted today (never
-blocking), so this does not regress the contract; a lossless SHM FIFO queue
-is noted as a hardening follow-up if the rig shows gap losses at full rate.
+Loss semantics (RULED round 2): recorder/capture consume raw pipes in FIFO
+mode (Phase 0) with deep rings — lossless up to ring depth, drop-accounted
+past it, writer never blocked.
 
 ### Phase 2 — recorder node (worker thread)
 
 `orchestrator/recorder-node.ts`: ONE worker thread that owns the whole write
-path — connects the named pipes (`{name → pipeId}`, raw or derived), polls
-them in its own loop (vision-worker consumption pattern), and hosts the
-existing `RecordingSink` facade INSIDE the worker (MCAP writer becomes
-in-worker; the legacy `.stream` backend rides along unchanged behind
-`RECORDER_BACKEND`). The container layout/schema contract is UNCHANGED.
+path — connects the named pipes (`{name → pipeId}`, raw or derived) in FIFO
+mode (Phase 0), reads them in its own loop, and hosts the MCAP writer
+in-worker. The container layout/schema contract is UNCHANGED. **Legacy is
+DELETED (ruling 6)**: `recorder/legacy.ts`, `RECORDER_BACKEND`, the
+`.stream`/`.meta` sink, and `orchestrator/stream-writer.ts` + its worker
+source go away (grep for external references first; the external decoder
+tooling concern is superseded by the ruling).
 
 - **Graph node** `recorder/<session>` (kind `"recorder"`): input edges from
   each named source pipe (port = stream name), meters = per-stream ingest
@@ -103,6 +151,19 @@ Idle between captures (consumer-gated pipes park). On `capture(params)`:
   count), does the stack/wrap/diff at full bit depth IN-WORKER, holds the
   pending resources IN-WORKER, and posts back 8-bit preview payloads (the
   same downconverted previews the renderer sees today).
+- **Preview = the node's ACTUAL data (ruling 7)**: no republished preview
+  stream. The renderer PULLS previews via a session command
+  (`getPreview(resource, index?)`) that the node answers from its real held
+  resources (downconverting full-depth → displayable 8-bit on demand,
+  in-worker). What you see is byte-derived from what will be saved.
+- **Capture preview window (ruling 8)**: the preview + SaveControls/
+  SaveReport UI moves OUT of the title-bar overlay into its own window —
+  reuse the module-debugger substrate (`debug` class registry pattern) or a
+  sibling `capture-preview` keyed toggle window owned by the app window
+  (cascade on close). Opens on capture completion (and via a button);
+  save/discard live there. The old `Overlay`+`current_capture` title-bar
+  camera icon and the no-op `Delegation` prop mechanism are DELETED
+  (ruling 6).
 - `save(path, format)` / `discard()` forward to the worker (file I/O
   in-worker). Indexed-resource accumulation semantics (one entry per
   setpoint, "wide" captured once) are preserved but move behind the node's
@@ -126,21 +187,48 @@ Idle between captures (consumer-gated pipes park). On `capture(params)`:
   SaveControls flow commits (or discards) the accumulated indexed resources.
   Abortable mid-raster (Escape/second click) → `discard()`.
 - The plain capture button keeps working as a 1-shot raster.
+- **Cmd/Ctrl-R revival (ruling 9)**: the renderer finally consumes
+  `onRecorderTrigger` — where a recording context exists (manual-control),
+  Cmd-R toggles start/stop recording (RecordButton's exact action); no-op
+  chirp elsewhere.
 
-## Open questions (veto points before dispatch)
+### Phase 5 — playback window + auto-open (rulings 8/9)
 
-1. **Loss contract**: is drop-accounted latest-wins polling acceptable for
-   the recorder at target rates, or is the lossless SHM FIFO queue required
-   up front? (Pinned above as acceptable-with-accounting; FIFO is a
-   follow-up.)
-2. **Raster grid definition**: renderer-defined loop (pinned — max
-   flexibility, matches ruling 4's "renderer can setup fovea positions"), or
-   should the grid (rows × cols × bounds) also live in session state so
-   headless/scripted rasters work later?
-3. **Legacy backend**: keep `.stream`/`.meta` behind `RECORDER_BACKEND`
-   inside the worker (pinned), or drop it this wave?
-4. **Preview channel**: capture previews keep riding session frames (pinned,
-   zero renderer change) vs becoming pipes.
+The `.fovea` viewer window + `viewer` session ALREADY EXIST (one window per
+file, ns seek, standard frame transport). This phase: (a) verify playback
+against the new recorder node's output (container contract unchanged, so
+this is a regression check + fixes if drift is found); (b) **auto-open**: when
+`stopRecording` finalizes, the session notifies main (bridge push) and main
+calls the existing `openViewer(path)` — the finished recording's preview
+appears without user action.
+
+## Veto points — ANSWERED (user, round 2)
+
+1. Loss contract → **FIFO pipes, implemented first** (Phase 0).
+2. Raster grid → renderer-defined loop (unchallenged — stays pinned).
+3. Legacy backend → **dropped entirely** (ruling 6).
+4. Preview channel → **pull actual data from the node** (ruling 7).
+
+## Execution (ruled): interleave refactor and review/optimization waves
+
+Waves alternate: each implementation wave is followed by a REVIEW +
+OPTIMIZATION wave (fresh-eyes worker audit of the just-landed code against
+this proposal + the standing invariants, plus a perf pass: main-loop
+utilization, per-frame allocations, meter overhead) before the next
+implementation wave dispatches. Planned order:
+
+1. **Wave I-1** (impl): Phase 0 FIFO + Phase 1 raw pipes (core, one worker)
+   ∥ the window-substrate half of Phase 3/5 (capture-preview window shell,
+   viewer auto-open plumbing, Cmd-R consumer — app-side, disjoint files).
+2. **Wave R-1** (review/opt): audit FIFO memory ordering + ring recycling,
+   raw-pipe zero-copy path, window-substrate lifecycle; optimize hot spots.
+3. **Wave I-2** (impl): Phase 2 recorder node + legacy deletion.
+4. **Wave R-2** (review/opt): recorder soak (synthetic fake-camera run),
+   drop accounting audit, main-loop utilization delta.
+5. **Wave I-3** (impl): Phase 3 capture node + preview-from-node + Phase 4
+   raster UI.
+6. **Wave R-3** (review/opt): capture parity audit (full-depth math vs the
+   deleted in-session implementation), UI review, plan-drain check.
 
 ## Rig items (stage-f, accumulated at dispatch)
 
