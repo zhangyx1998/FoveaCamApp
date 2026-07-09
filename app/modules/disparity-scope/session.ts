@@ -731,10 +731,25 @@ export default function disparityScopeSession(
     }
 
     async function activateSession(): Promise<void> {
+      // Spin-up progress (ruling 2026-07-09): declare the activation steps
+      // upfront so the window shows this sequence instead of blanking while the
+      // split-node graph builds. A failure/early-return leaves the list FROZEN
+      // at the step it died on (never `done`/`complete`); `idleSession`'s
+      // `disposers.dispose()` path clears it via the runtime's idle reset.
+      const monitor = s.progressMonitor([
+        { id: "lease", label: "Leasing cameras" },
+        { id: "undistort", label: "Loading calibration" },
+        { id: "pipeline", label: "Building vision pipeline" },
+        { id: "tracker", label: "Starting tracker" },
+        { id: "controller", label: "Wiring controllers" },
+      ]);
+      monitor.start("lease");
       const t = await acquireTriple(s);
-      if (!t) return;
+      if (!t) return; // frozen at "Leasing cameras" — honest (contention/fail)
+      monitor.done("lease");
       triple = t;
       publishSerials(t.leases, disposers, s);
+      monitor.start("undistort");
 
       // §5 view re-plumb: advertise the three undistort pipes the views + the
       // scope kernel source from. C = INTRINSIC undistort (cal = the SAME
@@ -778,6 +793,9 @@ export default function disparityScopeSession(
         });
       }
 
+      monitor.done("undistort");
+
+      monitor.start("pipeline");
       // Split pipeline (split-disparity-nodes, ruled 2026-07-09): compose the
       // GENERAL-PURPOSE bricks — slice (fovea crop) → scale → template-match
       // ×2 — on the C source. C falls back to the raw convert pipe on an
@@ -941,6 +959,9 @@ export default function disparityScopeSession(
         ],
       };
 
+      monitor.done("pipeline");
+
+      monitor.start("tracker");
       // §3.5: the chained KCF tracker — its OWN native thread, tapping the
       // SAME C brick the kernel reads (undistort; convert fallback), so it
       // tracks exactly what the matcher sees. Resolved by PIPE id (the brick
@@ -967,6 +988,9 @@ export default function disparityScopeSession(
         void consumeTracker(tk, trackerFeed);
       }
 
+      monitor.done("tracker");
+
+      monitor.start("controller");
       // Producer teardown, consumer-most first (DisposerBag is FIFO; the pipe
       // disconnects + tracker release above run before these): scalers
       // (chained on slices/undistorts) → slices (chained on the C source) →
@@ -1112,6 +1136,8 @@ export default function disparityScopeSession(
       // the UI can display the actual match scale instead of guessing from
       // the (now crop-only) zoom knob.
       s.telemetry({ ready: true, match_magnification: measuredMatchZoom() });
+      monitor.done("controller");
+      monitor.complete(); // spin-up finished — clear the overlay
     }
 
     function idleSession(): void {

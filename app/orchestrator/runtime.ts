@@ -25,6 +25,13 @@ import {
   type StateOf,
   type TelemetryOf,
 } from "../lib/orchestrator/protocol.js";
+import {
+  pendingList,
+  withStepState,
+  type ProgressItem,
+  type ProgressMonitor,
+  type ProgressStep,
+} from "../lib/orchestrator/progress.js";
 import { report, span, type Span } from "./diagnostics.js";
 import type {
   FrameTransport,
@@ -76,7 +83,9 @@ export class ServerSession<C extends Contract> {
   // A-P13: current user-visible failure (e.g. a failed activation), seeded to
   // new subscribers like the telemetry snapshot so a failure that happened
   // before a window opened is still shown, not lost to stderr.
-  private readonly statusSnapshot: SessionStatus = { error: null };
+  private readonly statusSnapshot: SessionStatus = { error: null, progress: null };
+  // Ownership token for the CURRENT progressMonitor — stale handles are inert.
+  private activeMonitor: symbol | null = null;
   private readonly channels = new Set<Channel>(); // attached (command-capable)
   private readonly subscribers = new Set<Channel>(); // observers (state/telemetry/frames)
   private readonly activeSubscribers = new Set<Channel>(); // activation interest
@@ -170,6 +179,12 @@ export class ServerSession<C extends Contract> {
   }
 
   private runIdle(): void {
+    // Spin-up ruling 2026-07-09: a teardown (last window closed, or a forced
+    // drain / dispose) must never leave a stale progress overlay for the next
+    // subscriber — clear it (and orphan any outstanding monitor handle) before
+    // the module's own idle hook runs.
+    this.activeMonitor = null;
+    if (this.statusSnapshot.progress !== null) this.setProgress(null);
     const r = this.idleFn?.();
     // Swallow (but log) idle failures — a rejected drain must not wedge
     // `drained()` awaiters or the switch path.
@@ -221,6 +236,45 @@ export class ServerSession<C extends Contract> {
   private broadcastStatus(): void {
     for (const ch of this.subscribers)
       ch.emit(topic.status(this.name), { ...this.statusSnapshot });
+  }
+
+  /** Seed the current progress list into the snapshot and push it, or clear it
+   *  (null). Rides the same status channel as `error`, so it's seeded to future
+   *  subscribers too (a window opened mid-activation still sees the overlay). */
+  private setProgress(progress: ProgressItem[] | null): void {
+    this.statusSnapshot.progress = progress;
+    this.broadcastStatus();
+  }
+
+  /**
+   * Declare an ORCHESTRATOR SPIN-UP progress monitor (user ruling 2026-07-09):
+   * a session names its activation steps UPFRONT, then transitions each one as
+   * it works, so any subscribed window can render a progress overlay instead of
+   * a blank screen while the graph builds. Declaring publishes the full pending
+   * list immediately; `start`/`done` publish single transitions; `complete`
+   * clears it (progress → null). A FAILURE path calls neither `done` nor
+   * `complete`: the frozen list shows WHERE spin-up died (the error surfaces
+   * separately via `fail()`). Idle teardown (`runIdle`) also clears progress —
+   * a cancelled/superseded spin-up never leaves a stale overlay behind.
+   */
+  progressMonitor(steps: readonly ProgressStep[]): ProgressMonitor {
+    // A superseded activation can hold its monitor past an await and fire a
+    // late `start`/`done` AFTER idle teardown cleared the snapshot — or after
+    // the replacing activation declared its own list. A stale handle must be
+    // INERT (not merely detached), or it resurrects/clobbers the overlay:
+    // only the CURRENT monitor may publish.
+    const mine = Symbol("progress-monitor");
+    this.activeMonitor = mine;
+    let items = pendingList(steps);
+    this.setProgress(items);
+    const publish = (next: ProgressItem[] | null): void => {
+      if (this.activeMonitor === mine) this.setProgress(next);
+    };
+    return {
+      start: (id) => publish((items = withStepState(items, id, "active"))),
+      done: (id) => publish((items = withStepState(items, id, "done"))),
+      complete: () => publish(null),
+    };
   }
 
   /** @deprecated Alias of `fail()` — kept for callers that read as "report an

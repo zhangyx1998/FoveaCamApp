@@ -273,8 +273,9 @@ export type Session<C extends Contract> = {
   state: StateOf<C>;
   /** Reactive, readonly — read as plain properties (`telemetry.foo`). */
   telemetry: Readonly<TelemetryOf<C>>;
-  /** Reactive, readonly — the current user-visible session failure
-   *  (`status.error`), or null. Seeded on subscribe and updated live (A-P13);
+  /** Reactive, readonly — the current session status: `error` (the user-visible
+   *  failure, or null; A-P13) and `progress` (the in-flight spin-up step list,
+   *  or null; ruling 2026-07-09). Seeded on subscribe and updated live;
    *  additive, so modules opt in to showing it. */
   status: Readonly<SessionStatus>;
   // `string & {}` keeps autocomplete for the contract's static frame names while
@@ -519,13 +520,15 @@ export function useSession<C extends Contract>(
   }
   const telemetry = readonly(reactive(telemetryRefs)) as Readonly<TelemetryOf<C>>;
 
-  // Status (A-P13): one reactive object carrying the current failure, seeded on
+  // Status (A-P13 + spin-up ruling 2026-07-09): one reactive object carrying the
+  // current failure AND the in-flight activation progress list, seeded on
   // subscribe and updated live via the status topic.
-  const statusState = reactive<SessionStatus>({ error: null });
+  const statusState = reactive<SessionStatus>({ error: null, progress: null });
   track(
     ready.then((ch) =>
       ch.on(topic.status(name), (s: SessionStatus) => {
         statusState.error = s.error;
+        statusState.progress = s.progress;
       }),
     ),
   );
@@ -618,6 +621,36 @@ export function useSession<C extends Contract>(
 
 export function useController(options: UseSessionOptions = {}): Session<typeof controller> {
   return useSession(controller, "controller", options);
+}
+
+/**
+ * Observe a session's STATUS (`error` + spin-up `progress`) generically — no
+ * typed contract, no state/telemetry plumbing. A PASSIVE subscriber (never
+ * counts toward activation), so a host shell (e.g. `AppWindow`) can render the
+ * progress overlay for WHATEVER app it hosts while the app's own `useSession`
+ * drives the active subscription that triggers activation. Subscription is torn
+ * down with the current effect scope. Reactive + readonly, same shape as
+ * `useSession(...).status`.
+ */
+export function useSessionStatus(name: string): Readonly<SessionStatus> {
+  const statusState = reactive<SessionStatus>({ error: null, progress: null });
+  const ready = connect();
+  const subscription = { name, passive: true };
+  ready.then((ch) => ch.emit(topic.subscribe, subscription));
+  const disposers: Array<() => void> = [];
+  ready.then((ch) =>
+    disposers.push(
+      ch.on(topic.status(name), (s: SessionStatus) => {
+        statusState.error = s.error;
+        statusState.progress = s.progress;
+      }),
+    ),
+  );
+  onScopeDispose(() => {
+    disposers.forEach((d) => d());
+    ready.then((ch) => ch.emit(topic.unsubscribe, subscription));
+  });
+  return readonly(statusState) as Readonly<SessionStatus>;
 }
 
 /** The reactive PID-override proxy `usePidOverride` returns (deliverable 3):

@@ -18,6 +18,7 @@
 import { RollingStats } from "../util/rolling.js";
 import { ratePerSec, snapshotWindow, type SampleStats } from "./stats.js";
 import { withFrameMeta } from "./frame-payload.js";
+import type { ProgressItem } from "./progress.js";
 
 export type Serializable =
   | null
@@ -461,8 +462,14 @@ export class Channel {
 // --- Topic helpers (shared so both ends agree on the wire strings) -------
 
 /** Per-session status snapshot (A-P13). `error` is the current user-visible
- *  failure (e.g. a failed activation / camera contention), or null when healthy. */
-export type SessionStatus = { error: string | null };
+ *  failure (e.g. a failed activation / camera contention), or null when healthy.
+ *  `progress` (spin-up ruling 2026-07-09) is the session's in-flight activation
+ *  step list, or null when no spin-up is in flight — additive, so seeded to new
+ *  subscribers exactly like `error` (see `ServerSession.progressMonitor`). */
+export type SessionStatus = {
+  error: string | null;
+  progress: ProgressItem[] | null;
+};
 
 export const topic = {
   state: (session: string) => `st:${session}`,

@@ -12,12 +12,14 @@ You may find the full license in project root directory.
   window, which lets the main-process welcome rule respawn the launcher.
 -->
 <script setup lang="ts">
-import { computed, defineAsyncComponent, ref } from "vue";
+import { computed, defineAsyncComponent, ref, watch } from "vue";
 import TitleBar from "../components/TitleBar.vue";
 import Controller from "../components/Controller.vue";
 import Loading from "../components/Loading.vue";
 import ErrorBoundary from "../components/ErrorBoundary.vue";
 import SessionStatus from "../components/SessionStatus.vue";
+import ProgressMonitor from "../components/ProgressMonitor.vue";
+import { useSessionStatus } from "@lib/orchestrator/client";
 import Overlay, { overlay } from "../components/Overlay.vue";
 import RemoteCanvas from "../components/RemoteCanvas.vue";
 import { FontAwesomeIcon as Icon } from "@fortawesome/vue-fontawesome";
@@ -34,6 +36,26 @@ const session = meta?.session ?? null;
 
 const titleBarHeight = ref(0);
 const isCapAvailable = computed(() => current_capture.value !== null);
+
+// Spin-up progress overlay (ruling 2026-07-09): observe the hosted session's
+// status generically (passive — the app's own module drives the active
+// subscription that triggers activation). While the session reports an in-flight
+// progress list AND the user hasn't dismissed it, cover the blank app area with
+// the reusable ProgressMonitor. The dismiss RESETS whenever a NEW spin-up begins
+// (progress transitions null → non-null), so dismissing a stale run never
+// suppresses the next activation's overlay.
+const sessionStatus = session ? useSessionStatus(session) : null;
+const progressDismissed = ref(false);
+watch(
+  () => sessionStatus?.progress ?? null,
+  (progress, prev) => {
+    if (progress !== null && (prev === null || prev === undefined))
+      progressDismissed.value = false;
+  },
+);
+const showProgress = computed(
+  () => !!sessionStatus?.progress && !progressDismissed.value,
+);
 
 function openProfiler() {
   window.foveaBridge.openProfilerWindow();
@@ -75,6 +97,11 @@ window.addEventListener("keydown", (e) => {
       </suspense>
     </ErrorBoundary>
     <div v-else class="unknown-app">Unknown app: {{ appId }}</div>
+    <ProgressMonitor
+      v-if="showProgress"
+      :items="sessionStatus!.progress!"
+      @close="progressDismissed = true"
+    />
   </div>
   <TitleBar
     title="FoveaCam Duo"

@@ -342,8 +342,22 @@ export default function multiFoveaSession(
     // thread, and the drain releases the tracker (closing its iterator) +
     // stops the scheduler + disposes the runtime. Lease releases LAST.
     async function activateSession(scope: ResourceScope): Promise<void> {
+      // Spin-up progress (ruling 2026-07-09): declare the activation steps
+      // upfront so the window shows this sequence instead of blanking while the
+      // graph builds. A failure/early-return path leaves the list FROZEN at the
+      // step it died on (never `done`/`complete`) — the error surfaces
+      // separately; the scope's idle teardown clears it on a cancelled spin-up.
+      const monitor = s.progressMonitor([
+        { id: "lease", label: "Leasing cameras" },
+        { id: "calibration", label: "Loading calibration" },
+        { id: "pipes", label: "Building fovea pipes" },
+        { id: "trackers", label: "Starting trackers" },
+        { id: "controller", label: "Wiring controller" },
+      ]);
+      monitor.start("lease");
       const t = await scope.use(() => acquireTriple(s), releaseLeases);
-      if (!t) return;
+      if (!t) return; // frozen at "Leasing cameras" — honest (contention/fail)
+      monitor.done("lease");
       triple = t;
       serialC = t.leases.C.camera.serial;
       scope.defer(() => {
@@ -359,6 +373,7 @@ export default function multiFoveaSession(
       });
       // real-1g (C-23): advertise the first-class `undistort:<serial>` center
       // pipe — the renderer binds it directly for the wide view.
+      monitor.start("calibration");
       let undistortC: string | null = null;
       if (t.undistort) {
         undistortC = advertiseUndistortPipe(
@@ -373,6 +388,8 @@ export default function multiFoveaSession(
         });
       }
 
+      monitor.done("calibration");
+
       // Unified-topology §5: L/R mirror-steered HOMOGRAPHY undistort bricks,
       // chained on the shared converters + fed H(mirrorAt(t)) at ~200 Hz
       // (the same wiring the other steered sessions use — see homography-feeder
@@ -380,6 +397,7 @@ export default function multiFoveaSession(
       // composed fovea crop slots chain on the CENTER camera's intrinsic
       // undistort (advertised above) when calibrated, else its converter —
       // `createFoveaMaterializer` resolves that per camera.
+      monitor.start("pipes");
       const computeH = conversionComputeH(t.conv);
       const undistortIds: Partial<Record<"L" | "R", string>> = {};
       for (const side of ["L", "R"] as const) {
@@ -474,10 +492,13 @@ export default function multiFoveaSession(
           console.warn("[multi-fovea] pairing wiring unavailable:", e);
         }
       }
+      monitor.done("pipes");
+
       // B-25: the multi-target KCF thread, bound to the shared center stream,
       // batched results OFF the JS loop; fused undistort when calibrated (so
       // bboxes land in the same undistorted space targetPose expects). Probe
       // key = node id (B-24 convention) → folds into the topology for free.
+      monitor.start("trackers");
       tk = createMultiTracker(t.leases.C.camera, {
         cal: t.undistort?.calibration,
         name: nodeId.kcfMulti(serialC),
@@ -495,6 +516,9 @@ export default function multiFoveaSession(
         ),
       );
       void consumeTracker(tk);
+      monitor.done("trackers");
+
+      monitor.start("controller");
       // Arm-rect clamp source (ruled): camera dims from the lease at activate.
       runtime.setFrameSize({
         width: t.leases.C.camera.getFeatureInt("Width"),
@@ -513,6 +537,8 @@ export default function multiFoveaSession(
         v2Capable: activeController()?.v2Capable ?? false,
         captureRejected: "stage-f-hardware-gated",
       });
+      monitor.done("controller");
+      monitor.complete(); // spin-up finished — clear the overlay
     }
 
     return {
