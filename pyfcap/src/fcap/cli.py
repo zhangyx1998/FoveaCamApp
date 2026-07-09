@@ -3,15 +3,16 @@
 # This source code is licensed under the MIT license.
 # You may find the full license in project root directory.
 # -------------------------------------------------------
-"""``pyfovea`` CLI — inspect / export / convert.
+"""``fcap`` CLI — inspect / export / convert.
 
-- ``pyfovea inspect <file.fovea | legacy-dir>`` — streams, counts, timing,
+- ``fcap inspect <file.fcap | legacy-dir>`` — streams, counts, timing,
   session metadata (works on crash-truncated files via the recovery path).
-- ``pyfovea export <file.fovea> [-s stream] [-o dir] [-f npy|pgm]`` — dump
+  Reads ``.fcap`` and legacy ``.fovea`` containers alike (extension-agnostic).
+- ``fcap export <file.fcap> [-s stream] [-o dir] [-f npy|pgm]`` — dump
   frames as ``.npy`` (raw, exact) or ``.pgm`` (8-bit display-scaled,
   mono-only; pure stdlib — no OpenCV requirement).
-- ``pyfovea convert <legacy-dir> [-o out.fovea]`` — re-encode a legacy
-  ``.stream``/``.meta`` dump as a single ``.fovea`` container (§2b schema).
+- ``fcap convert <legacy-dir> [-o out.fcap]`` — re-encode a legacy
+  ``.stream``/``.meta`` dump as a single ``.fcap`` container (§2b schema).
 """
 
 from __future__ import annotations
@@ -58,7 +59,7 @@ def cmd_inspect(args: argparse.Namespace) -> int:
             return 0
 
         flag = " [TRUNCATED — recovered via streaming scan]" if reader.truncated else ""
-        print(f"{args.path}: .fovea (MCAP) container{flag}")
+        print(f"{args.path}: MCAP container{flag}")
         if reader.session:
             print("  session: " + ", ".join(f"{k}={v}" for k, v in sorted(reader.session.items())))
         for name, info in reader.streams.items():
@@ -110,7 +111,7 @@ def cmd_convert(args: argparse.Namespace) -> int:
     from .convert import convert_legacy
 
     src = Path(args.path)
-    dst = Path(args.output) if args.output else src / f"{src.resolve().name}.fovea"
+    dst = Path(args.output) if args.output else src / f"{src.resolve().name}.fcap"
     counts = convert_legacy(src, dst)
     total = sum(counts.values())
     per = ", ".join(f"{k}={v}" for k, v in counts.items())
@@ -120,26 +121,26 @@ def cmd_convert(args: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="pyfovea",
+        prog="fcap",
         description="Read, export and convert FoveaCam recordings "
-        "(.fovea MCAP containers and legacy .stream/.meta dumps).",
+        "(.fcap MCAP containers, legacy .fovea, and legacy .stream/.meta dumps).",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p = sub.add_parser("inspect", help="summarize a .fovea file or legacy dump directory")
+    p = sub.add_parser("inspect", help="summarize a .fcap/.fovea file or legacy dump directory")
     p.add_argument("path")
     p.set_defaults(fn=cmd_inspect)
 
-    p = sub.add_parser("export", help="dump frames from a .fovea file")
+    p = sub.add_parser("export", help="dump frames from a .fcap/.fovea file")
     p.add_argument("path")
     p.add_argument("-s", "--stream", default=None, help="only this stream (default: all)")
     p.add_argument("-o", "--output", default="./export", help="output directory")
     p.add_argument("-f", "--format", choices=("npy", "pgm"), default="npy")
     p.set_defaults(fn=cmd_export)
 
-    p = sub.add_parser("convert", help="legacy dump directory -> single .fovea container")
+    p = sub.add_parser("convert", help="legacy dump directory -> single .fcap container")
     p.add_argument("path")
-    p.add_argument("-o", "--output", default=None, help="output .fovea path")
+    p.add_argument("-o", "--output", default=None, help="output .fcap path")
     p.set_defaults(fn=cmd_convert)
 
     args = parser.parse_args(argv)

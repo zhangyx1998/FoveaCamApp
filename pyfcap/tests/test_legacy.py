@@ -12,7 +12,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from pyfovea import LegacyRecording, LegacyStream
+from fcap import LegacyRecording, LegacyStream
 
 FIXTURES = Path(__file__).parent / "fixtures" / "legacy"
 

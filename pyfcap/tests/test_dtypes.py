@@ -12,7 +12,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from pyfovea import decode_payload, significant_bits, to_display, unpack_12p
+from fcap import decode_payload, significant_bits, to_display, unpack_12p
 
 
 ROOT = Path(__file__).resolve().parents[2]

@@ -14,8 +14,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from pyfovea import FoveaReader
-from pyfovea.schema import (
+from fcap import FoveaReader
+from fcap.schema import (
     RAW_FRAME_MESSAGE_ENCODING,
     RAW_FRAME_SCHEMA_NAME,
     TELEMETRY_MESSAGE_ENCODING,

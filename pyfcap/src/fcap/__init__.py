@@ -3,20 +3,22 @@
 # This source code is licensed under the MIT license.
 # You may find the full license in project root directory.
 # -------------------------------------------------------
-"""pyfovea — reader and CLI for FoveaCam Duo recordings.
+"""fcap — reader and CLI for FoveaCam Duo recordings.
 
 Two on-disk formats, one API surface:
 
-- ``.fovea`` single-file containers (standard MCAP inside; the
+- ``.fcap`` single-file containers (standard MCAP inside; the
   recorder-container.md §2b schema) via :class:`FoveaReader` — including
-  the streaming recovery path for crash-truncated (footerless) files;
+  the streaming recovery path for crash-truncated (footerless) files.
+  Legacy ``.fovea`` files use the identical container and read the same
+  way (the reader is extension-agnostic);
 - legacy ``.stream``/``.meta`` dump directories via
   :class:`LegacyRecording` / :class:`LegacyStream`, absorbing the retired
   per-dump ``stream-decoder.py`` template's decode logic;
-- :func:`convert_legacy` re-encodes a legacy dump as ``.fovea``.
+- :func:`convert_legacy` re-encodes a legacy dump as ``.fcap``.
 
-The package name is a placeholder — the user may rename it before any
-PyPI release (publishing is user-gated).
+Distribution/import name ``fcap``; PyPI publishing is user-gated (check
+name availability at publish time).
 """
 
 from .convert import convert_legacy

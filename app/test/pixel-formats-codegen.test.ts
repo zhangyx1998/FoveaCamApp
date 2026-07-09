@@ -1,10 +1,10 @@
 // Cross-language conformance for the pixel-format registry (B-P1/B-11): the
-// C++ X-macro header (core/lib/Aravis/PixelFormat.gen.h) and the pyfovea mirror
-// (pyfovea/src/pyfovea/pixel_formats.py) are GENERATED from the single TS
+// C++ X-macro header (core/lib/Aravis/PixelFormat.gen.h) and the fcap (pyfcap) mirror
+// (pyfcap/src/fcap/pixel_formats.py) are GENERATED from the single TS
 // source (docs/schema/pixel-formats.ts) by a checked-in generator. Nothing
 // re-runs that generator in CI, so this asserts the checked-in artifacts still
 // match the source — catching a "edited the table, forgot to regenerate" drift
-// that would silently desync host C++ / MCU / pyfovea decode. (C-P6's
+// that would silently desync host C++ / MCU / fcap decode. (C-P6's
 // decode-conformance test covers TS↔d.ts; this covers TS↔generated C++/Python.)
 
 import { readFileSync } from "node:fs";
@@ -31,7 +31,7 @@ function cppRows() {
 
 /** Rows of the Python mirror's `PixelFormatSpec(...)` tuple. */
 function pyRows() {
-  const text = repoFile("pyfovea/src/pyfovea/pixel_formats.py");
+  const text = repoFile("pyfcap/src/fcap/pixel_formats.py");
   const re =
     /PixelFormatSpec\(name="([^"]+)", aravis="([^"]+)", cv="([^"]+)", dtype="([^"]+)", channels=(\d+), significant_bits=(\d+), is_packed=(True|False), bayer=(None|"[^"]+")\)/g;
   return [...text.matchAll(re)].map((m) => ({
@@ -61,7 +61,7 @@ describe("pixel-format registry codegen conformance (TS source ↔ generated C++
     });
   });
 
-  it("generated pyfovea mirror matches the TS source exactly", () => {
+  it("generated fcap mirror matches the TS source exactly", () => {
     const py = pyRows();
     expect(py).toHaveLength(PIXEL_FORMATS.length);
     PIXEL_FORMATS.forEach((spec, i) => {

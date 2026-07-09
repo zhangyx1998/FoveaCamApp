@@ -3,7 +3,7 @@
 # Edit the source table and rerun the generator, then commit both.
 """Mirror of docs/schema/pixel-formats.ts — the sensor pixel-format registry.
 
-The single source is the TS table; this checked-in mirror lets pyfovea consume
+The single source is the TS table; this checked-in mirror lets fcap consume
 the same format facts without importing app code (same pattern as schema.py).
 """
 

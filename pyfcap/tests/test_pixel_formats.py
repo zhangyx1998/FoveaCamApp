@@ -4,7 +4,7 @@
 # You may find the full license in project root directory.
 # -------------------------------------------------------
 """Coverage for the generated pixel-format registry mirror (B-P1/B-11):
-``pyfovea/src/pyfovea/pixel_formats.py`` is generated from
+``pyfcap/src/fcap/pixel_formats.py`` is generated from
 ``docs/schema/pixel-formats.ts`` and is the single source `dtypes.py` reads.
 These tests lock its internal consistency (so generator drift or a hand-edit is
 caught) and its agreement with `significant_bits`/`BAYER_PATTERNS`. Purely
@@ -12,8 +12,8 @@ schema-as-code — no runtime behavior."""
 
 import pytest
 
-from pyfovea.dtypes import significant_bits
-from pyfovea.pixel_formats import (
+from fcap.dtypes import significant_bits
+from fcap.pixel_formats import (
     BAYER_PATTERNS,
     PIXEL_FORMAT_NAMES,
     PIXEL_FORMATS,

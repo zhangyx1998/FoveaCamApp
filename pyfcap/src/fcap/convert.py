@@ -4,7 +4,7 @@
 # You may find the full license in project root directory.
 # -------------------------------------------------------
 """Convert a legacy ``.stream``/``.meta`` dump directory into a single
-``.fovea`` container, emitting exactly the recorder-container.md §2b schema
+``.fcap`` container, emitting exactly the recorder-container.md §2b schema
 the B-5 writer produces (channels + telemetry + fovea:session/:finalize
 metadata), so every downstream consumer — this package, the viewer — sees
 one format regardless of the dump's age.
@@ -39,14 +39,14 @@ from .schema import (
 
 
 def convert_legacy(src: str | Path, dst: str | Path) -> dict[str, int]:
-    """Convert a legacy dump directory to ``dst`` (a ``.fovea`` path).
+    """Convert a legacy dump directory to ``dst`` (a ``.fcap`` path).
     Returns per-stream frame counts."""
     counts: dict[str, int] = {}
     with LegacyRecording(src) as rec:
         with open(dst, "wb") as out:
             writer = Writer(out, chunk_size=DEFAULT_CHUNK_BYTES, compression=CompressionType.NONE)
-            writer.start(profile=FOVEA_PROFILE, library="pyfovea (convert)")
-            session: dict[str, str] = {"app": "pyfovea convert"}
+            writer.start(profile=FOVEA_PROFILE, library="fcap (convert)")
+            session: dict[str, str] = {"app": "fcap convert"}
             if rec.manifest.get("timestamp"):
                 session["timestamp"] = str(rec.manifest["timestamp"])
             writer.add_metadata(SESSION_METADATA_NAME, session)

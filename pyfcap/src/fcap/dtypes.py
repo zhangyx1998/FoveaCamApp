@@ -3,7 +3,7 @@
 # This source code is licensed under the MIT license.
 # You may find the full license in project root directory.
 # -------------------------------------------------------
-"""Payload decoding primitives shared by the .fovea and legacy readers.
+"""Payload decoding primitives shared by the .fcap and legacy readers.
 
 Ports the decode logic of the retired per-dump ``stream-decoder.py``
 template: dtype mapping (must match ``app/lib/util/dtype.ts``),
@@ -127,6 +127,6 @@ def demosaic(img: np.ndarray, pixel_format: str) -> np.ndarray:
         import cv2
     except ImportError as e:  # pragma: no cover - depends on optional extra
         raise ImportError(
-            "demosaic requires OpenCV — install with `pip install pyfovea[cv]`"
+            "demosaic requires OpenCV — install with `pip install fcap[cv]`"
         ) from e
     return cv2.cvtColor(img, getattr(cv2, f"COLOR_{pattern}2RGB"))

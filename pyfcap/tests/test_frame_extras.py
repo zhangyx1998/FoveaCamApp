@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-from pyfovea import FoveaReader, XY
+from fcap import FoveaReader, XY
 
 RAW_META = {
     "dtype": "U8",

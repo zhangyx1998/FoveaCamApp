@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from pyfovea import FoveaReader, LegacyRecording, convert_legacy
+from fcap import FoveaReader, LegacyRecording, convert_legacy
 
 FIXTURES = Path(__file__).parent / "fixtures"
 

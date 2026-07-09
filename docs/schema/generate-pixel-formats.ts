@@ -86,7 +86,7 @@ const py = [
   "# Edit the source table and rerun the generator, then commit both.",
   '"""Mirror of docs/schema/pixel-formats.ts — the sensor pixel-format registry.',
   "",
-  "The single source is the TS table; this checked-in mirror lets pyfovea consume",
+  "The single source is the TS table; this checked-in mirror lets fcap consume",
   "the same format facts without importing app code (same pattern as schema.py).",
   '"""',
   "",
@@ -124,7 +124,7 @@ const py = [
   "    return _BY_NAME.get(name)",
   "",
 ].join("\n");
-writeFileSync(resolve(repo, "pyfovea/src/pyfovea/pixel_formats.py"), py);
+writeFileSync(resolve(repo, "pyfcap/src/fcap/pixel_formats.py"), py);
 
 // ---- Python .fovea schema mirror ----------------------------------------
 function pyString(value: string): string {
@@ -204,8 +204,8 @@ const schemaPy = [
   "",
   "",
 ].join("\n");
-writeFileSync(resolve(repo, "pyfovea/src/pyfovea/schema.py"), schemaPy);
+writeFileSync(resolve(repo, "pyfcap/src/fcap/schema.py"), schemaPy);
 
 console.log(
-  `wrote core/lib/Aravis/PixelFormat.gen.h, pyfovea/src/pyfovea/pixel_formats.py, and pyfovea/src/pyfovea/schema.py (${PIXEL_FORMATS.length} formats)`,
+  `wrote core/lib/Aravis/PixelFormat.gen.h, pyfcap/src/fcap/pixel_formats.py, and pyfcap/src/fcap/schema.py (${PIXEL_FORMATS.length} formats)`,
 );

@@ -8,10 +8,10 @@
 //
 // Every hand-maintained format list — the C++ `Arv::PixelFormat` enum + its
 // string/Aravis/cv::Format switches + `significantBits`/`isPacked` helpers
-// (core/lib/Aravis/PixelFormat.*), the TS `PixelFormat` union, and the pyfovea
+// (core/lib/Aravis/PixelFormat.*), the TS `PixelFormat` union, and the fcap
 // dtype/Bayer maps — derives from THIS table. The C++ header
 // (core/lib/Aravis/PixelFormat.gen.h) and the Python mirror
-// (pyfovea/src/pyfovea/pixel_formats.py) are GENERATED and checked in via
+// (pyfcap/src/fcap/pixel_formats.py) are GENERATED and checked in via
 //   /opt/homebrew/bin/node docs/schema/generate-pixel-formats.ts
 // (a trivial emitter — NOT wired into any build). Edit this table, regenerate,
 // and commit the artifacts together. TS consumers (viewer decode, dtype

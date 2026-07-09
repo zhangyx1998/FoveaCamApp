@@ -4,7 +4,7 @@
 # You may find the full license in project root directory.
 # -------------------------------------------------------
 """CLI entry points (inspect / export / convert) driven in-process via
-``pyfovea.cli.main`` — same code path as the installed console script."""
+``fcap.cli.main`` — same code path as the installed console script."""
 
 import json
 from pathlib import Path
@@ -12,8 +12,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from pyfovea import FoveaReader
-from pyfovea.cli import main
+from fcap import FoveaReader
+from fcap.cli import main
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -21,7 +21,7 @@ FIXTURES = Path(__file__).parent / "fixtures"
 def test_inspect_fovea(capsys: pytest.CaptureFixture):
     assert main(["inspect", str(FIXTURES / "tiny.fovea")]) == 0
     out = capsys.readouterr().out
-    assert ".fovea (MCAP) container" in out
+    assert "MCAP container" in out
     assert "left-fovea: 2 frames, BayerRG12p [2, 2] U8 (12 bits)" in out
     assert "2 with telemetry" in out
     assert "timestamp=2026-07-06T12:00:00.000Z" in out

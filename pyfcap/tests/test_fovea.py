@@ -12,7 +12,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from pyfovea import FoveaReader
+from fcap import FoveaReader
 
 FIXTURES = Path(__file__).parent / "fixtures"
 

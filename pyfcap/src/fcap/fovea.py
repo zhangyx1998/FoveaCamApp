@@ -3,7 +3,8 @@
 # This source code is licensed under the MIT license.
 # You may find the full license in project root directory.
 # -------------------------------------------------------
-"""Typed reader for ``.fovea`` recordings (standard MCAP inside).
+"""Typed reader for ``.fcap`` recordings (standard MCAP inside; legacy
+``.fovea`` files use the identical container and read the same way).
 
 Implements the recorder-container.md §2b schema contract:
 
@@ -156,11 +157,12 @@ def _stream_info(channel: Channel) -> StreamInfo:
 
 
 class FoveaReader:
-    """Reader over one ``.fovea`` file.
+    """Reader over one ``.fcap`` file (or a legacy ``.fovea`` container —
+    the reader does not gate on extension).
 
     Usage::
 
-        with FoveaReader("dump/recording.fovea") as r:
+        with FoveaReader("dump/recording.fcap") as r:
             r.streams            # {name: StreamInfo}
             r.session            # {"timestamp": ..., "durationSec": ...}
             for frame in r.iter_frames("left-fovea"):
