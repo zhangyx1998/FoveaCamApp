@@ -19,3 +19,7 @@ workers implement against these files, and live-rig items accumulate in
 | [multi-fovea-recording](./multi-fovea-recording.md) | shipped; rig owed | recordings = raw 12p wire payloads + descriptor streams + global wide matrix; advert-verbatim recorder; `/codec` suffix |
 | [pairing-nodes](./pairing-nodes.md) | shipped; rig owed | per-stage L/R PairStream joins anchored on FINs — trigger-only, tolerance once at root |
 | [stereo-paired-inputs](./stereo-paired-inputs.md) | shipped; rig owed | migrate the SGBM join from latest-wins taps onto exposure pairs |
+| [calibration-polish](./calibration-polish.md) | proposed | post-migration calibration fixes (drift lock gate, projected checkerboard) + UX |
+| [capture-recorder-everywhere](./capture-recorder-everywhere.md) | ruled; queued | capture/record in every app; capture-hang + recording-drop rig fixes |
+| [standalone-viewer-and-fcap](./standalone-viewer-and-fcap.md) | ruled; queued | viewer decouples from the orchestrator (core-import exception); BayerRG12p fix; `.fcap`/pyfcap rename |
+| [orchestrator-lifecycle-and-exit](./orchestrator-lifecycle-and-exit.md) | ruled; queued | per-app-instance orchestrator process, audited exit sequence, crash reports + cleanup worker |

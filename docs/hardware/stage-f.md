@@ -347,6 +347,13 @@ source the RAW fovea CONVERT pipes (single ÷magnification, legacy
 
 ## Capture/recorder nodes (2026-07-09/10 waves, 388454f→bee815c)
 
+> **Rig findings 2026-07-09 (user)** — three items below FAILED on the live
+> rig; fixes are planned, re-verify after they land:
+> capture preview waits forever / Save disabled (F1) and recording drops
+> many frames (F2) → `docs/proposals/capture-recorder-everywhere.md`;
+> viewer BayerRG12p striped decode (F3) →
+> `docs/proposals/standalone-viewer-and-fcap.md`.
+
 - [ ] **Recorder zero-loss on real cameras** — record L/C/R for ≥ 60 s at
   full rate: recorder/<session> graph row shows ingest ≈ camera rate,
   drops ≈ 0, `written + drops == published` per channel; orchestrator
