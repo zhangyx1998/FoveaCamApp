@@ -24,6 +24,8 @@
 //
 // Renderer-safe and Node-free: types + string constants only.
 
+import type { SidecarLoad, SidecarState } from "./sidecar.js";
+
 /** `window.postMessage` handshake kind — carries the renderer's MessagePort
  *  to the preload (see preload-viewer.ts). */
 export const VIEWER_INIT = "fovea:viewer:init";
@@ -35,6 +37,12 @@ export const VIEWER_INIT = "fovea:viewer:init";
 export type ViewerChannelInfo = {
   name: string;
   metadata: Record<string, string>;
+  /** File-relative ns [startNs,lastNs] of this channel's FIRST and LAST
+   *  message — the timeline block span (viewer-timeline §Blocks). Absent when
+   *  the channel carried no message (registered but never written, or nothing
+   *  recovered from a truncated tail): such a channel gets no block. */
+  startNs?: number;
+  lastNs?: number;
 };
 
 /** The static half of an open container. Times are nanoseconds RELATIVE to
@@ -47,6 +55,12 @@ export type ViewerFileInfo = {
   /** True when the container had no MCAP footer (crash-truncated recording)
    *  and was opened through the streaming re-index fallback. */
   truncated: boolean;
+  /** True when the container carries a `fovea:wide-camera` metadata record —
+   *  the recorder DECLARED a wide camera (viewer-timeline ruling 1). Drives
+   *  the "no wide designation" hint alongside master detection (the record is
+   *  container-level intrinsics with no channel pointer, so the master CHANNEL
+   *  is chosen by naming convention, not this flag). */
+  wideCameraDeclared: boolean;
 };
 
 /** One replayed json-channel document (parsed JSON — telemetry extras or a
@@ -59,6 +73,16 @@ export type ViewerCommand =
   | { type: "play"; rate: number }
   | { type: "pause" }
   | { type: "seek"; tNs: number }
+  /** The set of frame channels the worker should DECODE (viewer-timeline
+   *  ruling 3/§Playback): only ENABLED, displayed streams. The worker skips
+   *  decode for channels absent here (still ingested + accounted as dropped);
+   *  a newly-added channel triggers a seek-refresh of that channel at the
+   *  current playhead so it repaints immediately while paused. `channels` is
+   *  the `decodeSet()` shape — sorted, de-duplicated topic names. */
+  | { type: "set-enabled"; channels: string[] }
+  /** Persist viewer UI state to the sidecar (ruling 8). The worker debounces
+   *  and writes `<path>.fcap.ui.json`; the `.fcap` stays read-only. */
+  | { type: "save-ui"; state: SidecarState }
   | { type: "close" };
 
 /** One decoded display frame. `buffer` is TRANSFERRED (never copied across
@@ -77,7 +101,7 @@ export type ViewerFrameEvent = {
 
 /** Worker → renderer events. */
 export type ViewerEvent =
-  | { type: "opened"; info: ViewerFileInfo }
+  | { type: "opened"; info: ViewerFileInfo; sidecar: SidecarLoad }
   | { type: "open-error"; message: string }
   | { type: "position"; positionNs: number; playing: boolean }
   | { type: "telemetry"; doc: PlaybackDoc }

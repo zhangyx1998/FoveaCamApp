@@ -34,6 +34,7 @@ import {
   type IReadable,
   type McapTypes,
 } from "@mcap/core";
+import { WIDE_CAMERA_METADATA_NAME } from "../../../docs/schema/fovea.js";
 
 export interface FoveaChannel {
   id: number;
@@ -57,6 +58,9 @@ export interface FoveaSource {
   readonly endNs: bigint;
   /** True = opened through the footerless streaming fallback. */
   readonly truncated: boolean;
+  /** True when the container carries a `fovea:wide-camera` metadata record —
+   *  the recorder declared a wide camera (viewer-timeline ruling 1). */
+  readonly wideCameraDeclared: boolean;
   /** Messages in log-time order (file order for truncated sources — the
    *  writer emits in arrival order, so it's log-time-ordered per channel and
    *  near-ordered globally), filtered to `[startNs, endNs]` (absolute). */
@@ -69,6 +73,11 @@ export interface FoveaSource {
    *  the paused-scrub redraw query. Topics with no message ≤ tNs are absent
    *  from the result. */
   latestBefore(tNs: bigint, topics: readonly string[]): Promise<Map<string, FoveaMessage>>;
+  /** First/last message ABSOLUTE log-time per channel topic — the timeline
+   *  block spans (viewer-timeline §Blocks). Channels with no message are
+   *  absent. Computed once at open (cheap seeks on the indexed path; one extra
+   *  scan on the truncated path — the crash-recovery edge case). */
+  channelSpans(): Promise<Map<string, { startNs: bigint; endNs: bigint }>>;
   close(): Promise<void>;
 }
 
@@ -120,12 +129,17 @@ class IndexedSource implements FoveaSource {
   readonly channels: readonly FoveaChannel[];
   readonly startNs: bigint;
   readonly endNs: bigint;
+  readonly wideCameraDeclared: boolean;
 
   constructor(
     private readonly handle: FileHandle,
     private readonly reader: McapIndexedReader,
   ) {
     this.channels = [...reader.channelsById.values()].map(toChannel);
+    // Metadata INDEX carries record names in the summary — no body read needed.
+    this.wideCameraDeclared = reader.metadataIndexes.some(
+      (m) => m.name === WIDE_CAMERA_METADATA_NAME,
+    );
     // Statistics carry the exact bounds when present; the chunk index is the
     // fallback ground truth (both are summary-section records).
     const stats = reader.statistics;
@@ -184,6 +198,27 @@ class IndexedSource implements FoveaSource {
     return out;
   }
 
+  async channelSpans(): Promise<Map<string, { startNs: bigint; endNs: bigint }>> {
+    const out = new Map<string, { startNs: bigint; endNs: bigint }>();
+    for (const c of this.channels) {
+      // The chunk index serves both the first (forward) and last (reverse)
+      // message of a topic with a single record pulled from each direction.
+      let first: bigint | undefined;
+      let last: bigint | undefined;
+      for await (const m of this.reader.readMessages({ topics: [c.topic] })) {
+        first = m.logTime;
+        break;
+      }
+      if (first === undefined) continue; // channel carried no message
+      for await (const m of this.reader.readMessages({ topics: [c.topic], reverse: true })) {
+        last = m.logTime;
+        break;
+      }
+      out.set(c.topic, { startNs: first, endNs: last ?? first });
+    }
+    return out;
+  }
+
   async close(): Promise<void> {
     await this.handle.close();
   }
@@ -232,12 +267,14 @@ class TruncatedSource implements FoveaSource {
     readonly channels: readonly FoveaChannel[],
     readonly startNs: bigint,
     readonly endNs: bigint,
+    readonly wideCameraDeclared: boolean,
   ) {}
 
   static async open(handle: FileHandle): Promise<TruncatedSource> {
     const channels: FoveaChannel[] = [];
     let startNs: bigint | null = null;
     let endNs: bigint | null = null;
+    let wideCamera = false;
     // The initial index pass must see the whole recovered stream (it needs
     // full time bounds), but retains only channels + min/max — not messages.
     for await (const record of scanRecords(handle)) {
@@ -246,9 +283,11 @@ class TruncatedSource implements FoveaSource {
       } else if (record.type === "Message") {
         if (startNs === null || record.logTime < startNs) startNs = record.logTime;
         if (endNs === null || record.logTime > endNs) endNs = record.logTime;
+      } else if (record.type === "Metadata" && record.name === WIDE_CAMERA_METADATA_NAME) {
+        wideCamera = true;
       }
     }
-    return new TruncatedSource(handle, channels, startNs ?? 0n, endNs ?? 0n);
+    return new TruncatedSource(handle, channels, startNs ?? 0n, endNs ?? 0n, wideCamera);
   }
 
   async *messages(opts: {
@@ -300,6 +339,27 @@ class TruncatedSource implements FoveaSource {
     if (!topics) return null;
     const wanted = new Set(topics);
     return new Set(this.channels.filter((c) => wanted.has(c.topic)).map((c) => c.id));
+  }
+
+  async channelSpans(): Promise<Map<string, { startNs: bigint; endNs: bigint }>> {
+    const topicById = new Map(this.channels.map((c) => [c.id, c.topic]));
+    const byId = new Map<number, { startNs: bigint; endNs: bigint }>();
+    // One extra sequential scan (crash-recovery edge case), min/max per channel.
+    for await (const record of scanRecords(this.handle)) {
+      if (record.type !== "Message") continue;
+      const cur = byId.get(record.channelId);
+      if (!cur) byId.set(record.channelId, { startNs: record.logTime, endNs: record.logTime });
+      else {
+        if (record.logTime < cur.startNs) cur.startNs = record.logTime;
+        if (record.logTime > cur.endNs) cur.endNs = record.logTime;
+      }
+    }
+    const out = new Map<string, { startNs: bigint; endNs: bigint }>();
+    for (const [id, span] of byId) {
+      const topic = topicById.get(id);
+      if (topic) out.set(topic, span);
+    }
+    return out;
   }
 
   async close(): Promise<void> {

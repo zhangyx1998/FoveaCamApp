@@ -24,11 +24,19 @@
 // orchestrator bundle's own runtime requires.
 
 import { parentPort } from "node:worker_threads";
+import { readFile, writeFile } from "node:fs/promises";
 import type { Mat } from "core/Vision";
 import { createFrameDecoder } from "./decode.js";
 import { createPlayer, nullMeter, type Player } from "./player.js";
 import { openFovea, type FoveaSource } from "./source.js";
 import type { ViewerCommand, ViewerEvent } from "./protocol.js";
+import {
+  classifySidecar,
+  serializeSidecar,
+  sidecarPathFor,
+  type SidecarLoad,
+  type SidecarState,
+} from "./sidecar.js";
 
 const port = parentPort;
 if (!port) throw new Error("viewer-worker must run as a worker thread");
@@ -63,13 +71,51 @@ function postFrame(channel: string, mat: Mat<Uint8Array>, convertMs: number): vo
 let source: FoveaSource | null = null;
 let player: Player | null = null;
 let opening = false;
+let openedPath: string | null = null;
+
+// --- sidecar (ruling 8): debounced write-through, worker is the ONLY writer.
+const SIDECAR_DEBOUNCE_MS = 400;
+let sidecarTimer: ReturnType<typeof setTimeout> | null = null;
+let pendingSidecar: SidecarState | null = null;
+
+async function readSidecar(fcapPath: string): Promise<SidecarLoad> {
+  // Sidecar is a SEPARATE file next to the read-only container. ENOENT ⇒
+  // ABSENT (renderer silently initializes); a present-but-broken file ⇒
+  // CORRUPT (renderer confirms before overwrite) — ruling 10.
+  let text: string | null = null;
+  try {
+    text = await readFile(sidecarPathFor(fcapPath), "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT")
+      return { status: "absent" };
+    return { status: "corrupt" }; // unreadable (perms, etc.) — don't overwrite
+  }
+  return classifySidecar(text);
+}
+
+function scheduleSidecarWrite(state: SidecarState): void {
+  pendingSidecar = state;
+  if (sidecarTimer) return;
+  sidecarTimer = setTimeout(() => {
+    sidecarTimer = null;
+    const s = pendingSidecar;
+    const p = openedPath;
+    pendingSidecar = null;
+    if (!s || !p) return;
+    // Never touches the .fcap — writes the adjacent `.fcap.ui.json` only.
+    void writeFile(sidecarPathFor(p), serializeSidecar(s), "utf8").catch((error) => {
+      post({ type: "error", message: `sidecar write failed: ${String(error)}` });
+    });
+  }, SIDECAR_DEBOUNCE_MS);
+}
 
 async function open(path: string): Promise<void> {
   if (opening || source) return; // one container per worker; re-open is a no-op
   opening = true;
   try {
-    const s = await openFovea(path);
+    const [s, sidecar] = await Promise.all([openFovea(path), readSidecar(path)]);
     source = s;
+    openedPath = path;
     player = createPlayer(
       s,
       (channel) => createFrameDecoder(channel.metadata),
@@ -82,14 +128,26 @@ async function open(path: string): Promise<void> {
           post({ type: "position", positionNs, playing }),
       },
     );
+    const spans = await s.channelSpans();
     post({
       type: "opened",
       info: {
         path,
-        channels: s.channels.map((c) => ({ name: c.topic, metadata: c.metadata })),
+        channels: s.channels.map((c) => {
+          const span = spans.get(c.topic);
+          return {
+            name: c.topic,
+            metadata: c.metadata,
+            // File-relative ns: absolute span minus the file's first message.
+            startNs: span ? Number(span.startNs - s.startNs) : undefined,
+            lastNs: span ? Number(span.endNs - s.startNs) : undefined,
+          };
+        }),
         durationNs: Number(s.endNs - s.startNs),
         truncated: s.truncated,
+        wideCameraDeclared: s.wideCameraDeclared,
       },
+      sidecar,
     });
   } catch (error) {
     post({
@@ -105,6 +163,17 @@ async function close(): Promise<void> {
   const p = player;
   player = null;
   source = null;
+  // Flush any pending sidecar write before the handle drops.
+  if (sidecarTimer) {
+    clearTimeout(sidecarTimer);
+    sidecarTimer = null;
+    const s = pendingSidecar;
+    const path = openedPath;
+    pendingSidecar = null;
+    if (s && path)
+      await writeFile(sidecarPathFor(path), serializeSidecar(s), "utf8").catch(() => {});
+  }
+  openedPath = null;
   await p?.close(); // also closes the source
 }
 
@@ -124,6 +193,12 @@ port.on("message", (msg: ViewerCommand) => {
         void player?.seek(msg.tNs).catch((error) => {
           post({ type: "error", message: String(error) });
         });
+        break;
+      case "set-enabled":
+        player?.setEnabled(msg.channels);
+        break;
+      case "save-ui":
+        scheduleSidecarWrite(msg.state);
         break;
       case "close":
         void close();

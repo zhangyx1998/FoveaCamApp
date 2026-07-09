@@ -57,6 +57,12 @@ function fakeSource(): FoveaSource {
     startNs: 100n,
     endNs: 350n,
     truncated: false,
+    wideCameraDeclared: false,
+    async channelSpans() {
+      return new Map([
+        ["center", { startNs: 100n, endNs: 200n }],
+      ]);
+    },
     async *messages(opts) {
       const from = opts?.startNs ?? 0n;
       for (const m of messages) if (m.logTime >= from) yield m;

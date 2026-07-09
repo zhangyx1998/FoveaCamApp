@@ -94,6 +94,11 @@ export interface Player {
   /** Jump to `tNs` (relative). Paused: republish latest-before frames so a
    *  scrub redraws. Playing: resume from there. */
   seek(tNs: number): Promise<void>;
+  /** Restrict which FRAME channels are decoded (viewer-timeline ruling 3): a
+   *  channel absent from the set is ingested + dropped without decode. `null`
+   *  = decode all frame channels (the default). Newly-enabled channels get a
+   *  seek-refresh at the current position while paused so they repaint. */
+  setEnabled(channels: readonly string[] | null): void;
   close(): Promise<void>;
 }
 
@@ -134,6 +139,12 @@ export function createPlayer(
   let generation = 0;
   let closed = false;
   let lastUpdateAt = -Infinity;
+  // Enabled frame-channel gate (ruling 3): null = decode every frame channel;
+  // a Set restricts decode to those topics (others ingest + drop). json
+  // (telemetry/descriptor) channels are never gated — they're cheap and feed
+  // overlays regardless of which tiles are shown.
+  let enabled: Set<string> | null = null;
+  const frameTopicSet = new Set(frameTopics);
 
   function startLoop(myGeneration: number): void {
     void runLoop(myGeneration, rate).catch((e) => {
@@ -169,6 +180,12 @@ export function createPlayer(
       } catch {
         workload.drop("undecodable");
       }
+      return;
+    }
+    // Enabled-set gate (ruling 3): a frame channel that isn't currently
+    // displayed is ingested + dropped BEFORE the (expensive) decode.
+    if (enabled && !enabled.has(channel.topic)) {
+      workload.drop("disabled");
       return;
     }
     if (lateMs > LATE_SKIP_MS) {
@@ -232,6 +249,19 @@ export function createPlayer(
     for (const msg of latest.values()) await handleMessage(msg, 0);
   }
 
+  /** Republish the latest-before frame for a specific set of frame topics at
+   *  the current position — the seek-refresh a channel gets when it is newly
+   *  enabled while paused (ruling 3), so it repaints without a full re-seek. */
+  async function refreshTopics(topics: readonly string[]): Promise<void> {
+    const wanted = topics.filter((t) => frameTopicSet.has(t));
+    if (wanted.length === 0) return;
+    const myGeneration = generation;
+    const at = source.startNs + BigInt(Math.round(positionNs));
+    const latest = await source.latestBefore(at, wanted);
+    if (myGeneration !== generation) return;
+    for (const msg of latest.values()) await handleMessage(msg, 0);
+  }
+
   return {
     get positionNs() {
       return positionNs;
@@ -273,6 +303,24 @@ export function createPlayer(
       await republishAt(positionNs);
       if (myGeneration !== generation) return;
       pushUpdate(true);
+    },
+
+    setEnabled(channels: readonly string[] | null): void {
+      if (closed) return;
+      const prev = enabled;
+      enabled = channels ? new Set(channels) : null;
+      // Newly-enabled frame channels get a paused seek-refresh so they repaint
+      // at the playhead immediately (during playback their frames stream in on
+      // their own). Skip while playing — the running loop already feeds them.
+      if (playing) return;
+      const added = [...(enabled ?? frameTopicSet)].filter(
+        (t) => frameTopicSet.has(t) && !(prev ? prev.has(t) : true),
+      );
+      if (added.length === 0) return;
+      void refreshTopics(added).catch((error) => {
+        workload.drop("error");
+        console.error("[viewer] enable-refresh failed:", error);
+      });
     },
 
     async close(): Promise<void> {
