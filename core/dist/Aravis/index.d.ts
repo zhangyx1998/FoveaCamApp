@@ -677,4 +677,45 @@ declare module "core/Aravis" {
    * present while attached (even parked → zero counts).
    */
   export function raw12pProbeAll(): Record<string, ProbeSnapshot>;
+
+  /** Construction options for `attachCompressPipe` (multi-fovea-recording
+   *  rulings 9/10). */
+  export interface CompressOptions {
+    /** zlib compression level: 0 (store) … 9 (max), or -1 / omitted =
+     *  `Z_DEFAULT_COMPRESSION`. */
+    level?: number;
+  }
+
+  /**
+   * multi-fovea-recording rulings 9/10: attach an intra-frame COMPRESSION brick.
+   * A native thread FIFO-reads the ALREADY-ADVERTISED `sourcePipeId` (raw12p,
+   * raw, convert, undistort, …) and republishes each frame zlib-compressed into
+   * `pipeId` — a per-frame INDEPENDENT blob (every output frame decompresses
+   * alone, keeping the container seekable). The output pipe's advert must carry
+   * the source format with a `/zlib` suffix (`BayerRG12p/zlib`), the SAME
+   * width/height/channels/significantBits as the source, and `maxBytes` sized for
+   * the worst case (`compressBound(sourceMaxBytes)`); the blob is published via
+   * the ring-v5 opaque-payload path (`payloadBytes` = the exact compressed
+   * length) and the SOURCE frame's identity (width/height/origin + device/system
+   * timestamps) is forwarded per frame. ON-DEMAND: gated by the output pipe's own
+   * consumer refcount (the 0→1 edge connects the source + spawns the runner,
+   * →0 joins it + disconnects the source). Throws for an unknown source or output
+   * pipe id.
+   */
+  export function attachCompressPipe(
+    sourcePipeId: string,
+    pipeId: string,
+    options?: CompressOptions,
+  ): boolean;
+
+  /** Detach the compression brick (join the runner + release the source
+   *  connection). Idempotent (false if unknown). */
+  export function detachCompressPipe(pipeId: string): boolean;
+
+  /**
+   * Out-of-loop probe of every attached compression pipe →
+   * `{ [pipeId]: ProbeSnapshot }` ({frame} input / {shm} output). Keys AND meter
+   * names are the node ids; present while attached (even parked → zero counts).
+   */
+  export function compressProbeAll(): Record<string, ProbeSnapshot>;
 }

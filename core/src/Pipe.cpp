@@ -95,8 +95,14 @@ void Publisher::offer(const void *data, const FrameInfo &info,
   // Element size (bytes per channel; 1 for U8, 4 for CV_32FC1) folds into the
   // tight-packed byte math so non-U8 mats (Disparity32F) publish uncorrupted.
   const size_t elemBytes = info.bytesPerElement ? info.bytesPerElement : 1;
-  const size_t activeBytes =
+  // v5: an OPAQUE variable-length blob (compression bricks) sets payloadBytes —
+  // the write is that many contiguous bytes and the slot records the length,
+  // while width/height/origin keep the SOURCE frame's identity. 0 = a normal
+  // dim-derived frame (every existing producer — path byte-for-byte unchanged).
+  const bool opaque = info.payloadBytes > 0;
+  const size_t dimsBytes =
       static_cast<size_t>(info.width) * info.height * info.channels * elemBytes;
+  const size_t activeBytes = opaque ? info.payloadBytes : dimsBytes;
   if (data == nullptr || info.channels != spec_.channels ||
       info.width > spec_.maxWidth || info.height > spec_.maxHeight ||
       activeBytes > spec_.maxBytes) {
@@ -117,14 +123,22 @@ void Publisher::offer(const void *data, const FrameInfo &info,
   const uint32_t slot = segment_->beginSlot();
   auto *dst = static_cast<uint8_t *>(segment_->slotData(slot));
   const auto *src = static_cast<const uint8_t *>(data);
-  const size_t rowBytes =
-      static_cast<size_t>(info.width) * info.channels * elemBytes;
-  const size_t stride = info.stride ? info.stride : rowBytes;
-  for (uint32_t y = 0; y < info.height; ++y)
-    std::memcpy(dst + static_cast<size_t>(y) * rowBytes,
-                src + static_cast<size_t>(y) * stride, rowBytes);
+  if (opaque) {
+    // Verbatim contiguous copy of the compressed blob (payload is opaque; row
+    // shape is meaningless). The slot records payloadBytes so the reader copies
+    // exactly this length back out.
+    std::memcpy(dst, src, info.payloadBytes);
+  } else {
+    const size_t rowBytes =
+        static_cast<size_t>(info.width) * info.channels * elemBytes;
+    const size_t stride = info.stride ? info.stride : rowBytes;
+    for (uint32_t y = 0; y < info.height; ++y)
+      std::memcpy(dst + static_cast<size_t>(y) * rowBytes,
+                  src + static_cast<size_t>(y) * stride, rowBytes);
+  }
   segment_->publish(slot, meta, info.width, info.height, info.originX,
-                    info.originY); // v4: frame-bound crop origin
+                    info.originY, // v4: frame-bound crop origin
+                    opaque ? info.payloadBytes : 0); // v5: actual blob length
   meter_.emit("shm", now);
   // C-24 item 3: exact per-edge byte flow (variable-size fovea frames make
   // rate × nominal-bytes wrong; count what was actually ring-written).
@@ -528,7 +542,11 @@ Value injectStall(const CallbackInfo &info) {
 
 // Test hook (C-20): offer one synthetic frame of ACTIVE size w×h (filled with
 // `byte`) into a live pipe, on the calling thread — drives the resize/reuse
-// tests without the synthetic producer thread.
+// tests without the synthetic producer thread. v5 (ring-v5-payload-bytes): an
+// optional 5th arg `payloadBytes` publishes an OPAQUE variable-length blob — the
+// buffer is filled with a RAMP `(byte + i) & 0xff` (verifiable content), offered
+// with `FrameInfo.payloadBytes` set so the ring records the exact length while
+// width/height keep the source identity.
 Value offerFrame(const CallbackInfo &info) {
   auto env = info.Env();
   try {
@@ -540,11 +558,23 @@ Value offerFrame(const CallbackInfo &info) {
                            : 0;
     auto &pub = PipeHub::instance().publisher(id);
     const uint32_t channels = pub.spec().channels;
-    const size_t bytes = static_cast<size_t>(w) * h * channels;
-    std::vector<uint8_t> buf(bytes, byte);
-    FrameInfo fi{w, h, channels, w * channels, bytes};
+    const size_t dimsBytes = static_cast<size_t>(w) * h * channels;
+    const size_t payloadBytes =
+        info[4].IsNumber()
+            ? static_cast<size_t>(info[4].As<Number>().Int64Value())
+            : 0;
+    FrameInfo fi{w, h, channels, w * channels, dimsBytes};
     ShmRing::FrameMeta meta;
-    pub.offer(buf.data(), fi, meta);
+    if (payloadBytes > 0) {
+      std::vector<uint8_t> buf(payloadBytes);
+      for (size_t i = 0; i < payloadBytes; ++i)
+        buf[i] = static_cast<uint8_t>((byte + i) & 0xff);
+      fi.payloadBytes = payloadBytes;
+      pub.offer(buf.data(), fi, meta);
+    } else {
+      std::vector<uint8_t> buf(dimsBytes, byte);
+      pub.offer(buf.data(), fi, meta);
+    }
   } catch (const std::exception &e) {
     Error::New(env, e.what()).ThrowAsJavaScriptException();
   }

@@ -119,6 +119,12 @@ Object okResult(Napi::Env env, const ShmRing::ReadResult &r) {
   result.Set("height", r.height);
   result.Set("originX", r.originX); // v4: frame-bound crop origin
   result.Set("originY", r.originY); // (0/0 = uncropped stream)
+  // v5: the ACTUAL payload byte length the reader copied — present ONLY when the
+  // slot records a nonzero payloadBytes (compression bricks), ABSENT otherwise so
+  // the consumer's dim-derived fallback engages (recorder-node.ts `SeqRead.bytes`
+  // contract). Marshaled as the JS number property `bytes`.
+  if (r.payloadBytes)
+    result.Set("bytes", Number::New(env, static_cast<double>(r.payloadBytes)));
   auto meta = Object::New(env);
   meta.Set("tCapture", r.meta.tCapture);
   meta.Set("convertMs", r.meta.convertMs);

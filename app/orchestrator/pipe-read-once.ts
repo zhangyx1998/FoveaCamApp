@@ -30,7 +30,10 @@ interface ReaderAddon {
     handle: unknown,
     dst: ArrayBufferView,
     lastSeq: bigint,
-  ): null | { closed: true } | { seq: bigint; width: number; height: number };
+  ):
+    | null
+    | { closed: true }
+    | { seq: bigint; width: number; height: number; bytes?: number };
   /** FIFO read of a SPECIFIC frame (capture-recorder-nodes Phase 0). The
    *  recorder/capture worker reads `wantSeq = lastDelivered + 1` in order:
    *  a frame (`seq === wantSeq`), `{ notYet }` (not published yet — retry),
@@ -45,7 +48,7 @@ interface ReaderAddon {
     | { closed: true }
     | { notYet: true }
     | { gone: true; oldestSeq: bigint }
-    | { seq: bigint; width: number; height: number };
+    | { seq: bigint; width: number; height: number; bytes?: number };
   close(handle: unknown): void;
 }
 

@@ -62,10 +62,14 @@ public:
    *  `activeWidth/activeHeight` (v3) record the frame's live size within a
    *  MAX-sized ring; 0 = use the segment's header dimensions (live writer).
    *  `originX/originY` (v4) record a crop's FRAME-BOUND position within its
-   *  parent stream (fovea nodes); uncropped streams leave them 0. */
+   *  parent stream (fovea nodes); uncropped streams leave them 0.
+   *  `payloadBytes` (v5) records the ACTUAL blob length for a variable-length
+   *  payload (compression bricks); 0 = derive from dims (every existing caller
+   *  omits it → the slot's payloadBytes stays 0, zero behavior change). */
   uint64_t publish(uint32_t slot, const FrameMeta &meta,
                    uint32_t activeWidth = 0, uint32_t activeHeight = 0,
-                   uint32_t originX = 0, uint32_t originY = 0);
+                   uint32_t originX = 0, uint32_t originY = 0,
+                   uint64_t payloadBytes = 0);
   /** Release-ordered `state` store — the symmetric-close signal (C-16). Call
    *  after the final `publish()`; consumers observe it on their next read. */
   void setState(PipeState state);

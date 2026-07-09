@@ -26,9 +26,13 @@ static constexpr char MAGIC[8] = {'F', 'V', 'S', 'H', 'M', 'R', 'G', '\0'};
 // (the consumer reads the active size per frame). v4 (C-24/B-24): SlotHeader
 // gains per-frame crop `originX/originY` — a fovea crop's position in its
 // parent stream, FRAME-BOUND like the active size (a JS-side rect echo races
-// frame timing; FIN-voltage precedent). Single process — writer + reader share
-// this header, rebuilt together, so there is no version skew.
-static constexpr uint32_t LAYOUT_VERSION = 4;
+// frame timing; FIN-voltage precedent). v5 (multi-fovea-recording ruling 10):
+// SlotHeader gains per-frame `payloadBytes` — the ACTUAL byte length of this
+// slot's payload (compression bricks emit variable-length blobs); 0 = derive
+// from dims (the live/uncompressed writers leave it 0 → zero behavior change).
+// Single process — writer + reader share this header, rebuilt together, so
+// there is no version skew.
+static constexpr uint32_t LAYOUT_VERSION = 5;
 // Default ring depth of the live preview writer (unchanged). Pipes carry their
 // own `ringDepth` in the segment header's `slotCount`; the reader validates it
 // against [1, MAX_SLOT_COUNT] rather than a fixed value.
@@ -99,6 +103,14 @@ struct alignas(64) SlotHeader {
   // crop nodes). 0/0 for uncropped streams (publish's defaulted args).
   uint32_t originX;
   uint32_t originY;
+  // v5 (multi-fovea-recording ruling 10): the ACTUAL payload byte length in this
+  // slot. Compression bricks emit variable-length blobs, so the reader copies
+  // exactly this many bytes and surfaces it to the consumer instead of the
+  // dim-derived count. 0 = derive from dims (every live/uncompressed writer —
+  // publish's defaulted arg). Read UNDER the seqlock like width/height. Appended
+  // at offset 56 (uint64-aligned); dataOffset (alignUp(sizeof,64)) is unchanged,
+  // so the payload region and every existing field offset are identical.
+  uint64_t payloadBytes;
 };
 
 } // namespace ShmRing

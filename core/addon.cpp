@@ -79,6 +79,12 @@ Napi::Value rawProbeAll(const Napi::CallbackInfo &info);
 Napi::Value attachRaw12pPipe(const Napi::CallbackInfo &info);
 Napi::Value detachRaw12pPipe(const Napi::CallbackInfo &info);
 Napi::Value raw12pProbeAll(const Napi::CallbackInfo &info);
+// multi-fovea-recording rulings 9/10: the intra-frame COMPRESSION brick (a
+// native thread FIFO-reads a source pipe, zlib-compresses per frame, publishes
+// an opaque /zlib blob), defined in core/lib/Aravis/CompressStream.cpp.
+Napi::Value attachCompressPipe(const Napi::CallbackInfo &info);
+Napi::Value detachCompressPipe(const Napi::CallbackInfo &info);
+Napi::Value compressProbeAll(const Napi::CallbackInfo &info);
 }
 // unified-time-and-topology §6: consolidated NodeReport rows for every live
 // native brick + pipe. Defined in core/src/Topology.cpp.
@@ -232,6 +238,16 @@ static Object init(Env env, Object exports) {
                Function::New<Arv::detachRaw12pPipe>(env, "detachRaw12pPipe"));
     Aravis.Set("raw12pProbeAll",
                Function::New<Arv::raw12pProbeAll>(env, "raw12pProbeAll"));
+    // multi-fovea-recording rulings 9/10: intra-frame COMPRESSION pipes — a
+    // native thread FIFO-reads a source pipe and republishes each frame zlib-
+    // compressed (opaque /zlib blob, ring-v5 payloadBytes). Gated by the output
+    // pipe's own consumer refcount (parks with no consumer).
+    Aravis.Set("attachCompressPipe",
+               Function::New<Arv::attachCompressPipe>(env, "attachCompressPipe"));
+    Aravis.Set("detachCompressPipe",
+               Function::New<Arv::detachCompressPipe>(env, "detachCompressPipe"));
+    Aravis.Set("compressProbeAll",
+               Function::New<Arv::compressProbeAll>(env, "compressProbeAll"));
     exports.Set("Aravis", Aravis);
     // Controller Module
     auto Controller = Object::New(env);

@@ -68,6 +68,10 @@ export type PipeReadDone = {
   /** Frame-bound crop origin in the parent stream (v4, fovea pipes). */
   originX?: number;
   originY?: number;
+  /** Actual payload byte length the reader copied (ring v5 `payloadBytes`) —
+   *  present only for a variable-length blob (compression pipes); absent on a
+   *  dim-derived frame. */
+  bytes?: number;
   /** True when the publisher has set state=CLOSED — the consumer should unmap. */
   closed?: boolean;
   error?: string;
@@ -107,6 +111,10 @@ export type PipeReadSeqDone = {
   height?: number;
   originX?: number;
   originY?: number;
+  /** Actual payload byte length the reader copied (ring v5 `payloadBytes`) —
+   *  present only for a variable-length blob (compression pipes); absent on a
+   *  dim-derived frame (the consumer falls back to dims). */
+  bytes?: number;
   /** `wantSeq` not published yet — the consumer short-polls/backs off + retries. */
   notYet?: boolean;
   /** `wantSeq`'s ring slot was recycled (consumer lagged a full ring). Present

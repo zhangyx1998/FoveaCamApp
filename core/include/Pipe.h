@@ -70,6 +70,13 @@ struct FrameInfo {
   // non-U8 mat (stereo Disparity32F) publishes without truncation. Additive:
   // defaulting to 1 keeps every U8 producer byte-for-byte unchanged.
   uint32_t bytesPerElement = 1;
+  // v5 (multi-fovea-recording ruling 10): an OPAQUE variable-length payload
+  // (compression bricks). When nonzero, `offer()` copies exactly `payloadBytes`
+  // contiguous bytes from `data` (ignoring stride/rows) and records the length
+  // in the slot header — `width/height/origin` still carry the SOURCE frame's
+  // identity. 0 = a normal dim-derived frame (every existing producer — the copy
+  // and slot are byte-for-byte unchanged).
+  size_t payloadBytes = 0;
 };
 
 /** THE producer→publisher seam (C-19). Every producer plugs in here: B's Aravis

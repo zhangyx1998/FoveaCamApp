@@ -146,6 +146,8 @@ function handlePipeRead(port: MessagePort, msg: PipeReadRequest): void {
         // v4: frame-bound crop origin (fovea pipes; 0/0 elsewhere).
         originX: result ? result.originX : undefined,
         originY: result ? result.originY : undefined,
+        // v5: actual blob length for a compressed pipe (absent on dim-derived).
+        bytes: result ? result.bytes : undefined,
       },
       [msg.buffer],
     );
@@ -217,6 +219,8 @@ function handlePipeReadSeq(port: MessagePort, msg: PipeReadSeqRequest): void {
         height: result ? result.height : undefined,
         originX: result ? result.originX : undefined,
         originY: result ? result.originY : undefined,
+        // v5: actual blob length for a compressed pipe (absent on dim-derived).
+        bytes: result ? result.bytes : undefined,
       },
       [msg.buffer],
     );

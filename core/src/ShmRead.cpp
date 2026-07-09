@@ -10,6 +10,7 @@
 
 #include "ShmRead.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cerrno>
 #include <cstring>
@@ -114,8 +115,9 @@ ReadStatus readLatestInto(const ReadMapping &m, void *dst, size_t dstBytes,
       return closed ? ReadStatus::Closed : ReadStatus::NoNewFrame;
     // else: a newer frame WAS published before close — fall through and read it.
   }
-  if (dstBytes < h->slotBytes)
-    return ReadStatus::DestTooSmall;
+  // DestTooSmall is now checked INSIDE the seqlock window against the ACTUAL
+  // copied length (v5: `payloadBytes` when nonzero, else the full slot) — a
+  // consumer sized to a compressed blob (< slotBytes) is no longer rejected.
 
   for (uint32_t retries = 0; retries < MAX_READ_RETRIES; ++retries) {
     const uint32_t slot = h->latestSlot.load(std::memory_order_acquire);
@@ -123,7 +125,23 @@ ReadStatus readLatestInto(const ReadMapping &m, void *dst, size_t dstBytes,
     const uint64_t before = slotHeader->seq.load(std::memory_order_acquire);
     if ((before & 1) != 0 || before == 0)
       continue;
-    std::memcpy(dst, m.slotData(slot), h->slotBytes);
+    // v5: the actual copy length. Clamp payloadBytes to slotBytes so a TORN read
+    // (garbage payloadBytes) can never over-read the slot mapping before the
+    // post-check discards it; a valid payloadBytes is always ≤ slotBytes.
+    const uint64_t payloadBytes = slotHeader->payloadBytes;
+    const size_t copyBytes =
+        payloadBytes ? std::min<size_t>(payloadBytes, h->slotBytes)
+                     : h->slotBytes;
+    if (dstBytes < copyBytes) {
+      // Might be a torn read (garbage payloadBytes) — validate the seqlock before
+      // reporting; a clean read means the destination is genuinely too small.
+      std::atomic_thread_fence(std::memory_order_acquire);
+      const uint64_t chk = slotHeader->seq.load(std::memory_order_acquire);
+      if (before != chk || (chk & 1) != 0)
+        continue;
+      return ReadStatus::DestTooSmall;
+    }
+    std::memcpy(dst, m.slotData(slot), copyBytes);
     const double tCapture = slotHeader->tCapture;
     const double convertMs = slotHeader->convertMs;
     const uint64_t deviceTimestamp = slotHeader->deviceTimestamp;
@@ -144,6 +162,7 @@ ReadStatus readLatestInto(const ReadMapping &m, void *dst, size_t dstBytes,
     out.height = height;
     out.originX = originX;
     out.originY = originY;
+    out.payloadBytes = payloadBytes; // v5: 0 (dims-derived) or the actual length
     out.meta = {tCapture, convertMs, deviceTimestamp, systemTimestamp};
     return ReadStatus::Ok;
   }
@@ -176,8 +195,8 @@ ReadStatus readSeqInto(const ReadMapping &m, uint64_t wantSeq, void *dst,
       return closed ? ReadStatus::Closed : ReadStatus::NotYet;
     // else: wantSeq was published before close — fall through and read the slot.
   }
-  if (dstBytes < h->slotBytes)
-    return ReadStatus::DestTooSmall;
+  // DestTooSmall is checked INSIDE the seqlock window against the ACTUAL copied
+  // length (v5 payloadBytes), like readLatestInto.
 
   // Round-robin invariant (ShmWrite): seq N occupies slot N % slotCount.
   const uint32_t slot = static_cast<uint32_t>(wantSeq % slotCount);
@@ -200,7 +219,20 @@ ReadStatus readSeqInto(const ReadMapping &m, uint64_t wantSeq, void *dst,
     }
     // The slot still holds `wantSeq` — seqlock-copy it (same discipline as
     // readLatestInto: acquire fence between the copy and the post-check).
-    std::memcpy(dst, m.slotData(slot), h->slotBytes);
+    // v5: copy the ACTUAL payload length (clamped to slotBytes for torn-read
+    // safety); DestTooSmall against it, validated against the seqlock.
+    const uint64_t payloadBytes = slotHeader->payloadBytes;
+    const size_t copyBytes =
+        payloadBytes ? std::min<size_t>(payloadBytes, h->slotBytes)
+                     : h->slotBytes;
+    if (dstBytes < copyBytes) {
+      std::atomic_thread_fence(std::memory_order_acquire);
+      const uint64_t chk = slotHeader->seq.load(std::memory_order_acquire);
+      if (before != chk || (chk & 1) != 0)
+        continue; // torn — retry
+      return ReadStatus::DestTooSmall;
+    }
+    std::memcpy(dst, m.slotData(slot), copyBytes);
     const double tCapture = slotHeader->tCapture;
     const double convertMs = slotHeader->convertMs;
     const uint64_t deviceTimestamp = slotHeader->deviceTimestamp;
@@ -221,6 +253,7 @@ ReadStatus readSeqInto(const ReadMapping &m, uint64_t wantSeq, void *dst,
     out.height = height;
     out.originX = originX;
     out.originY = originY;
+    out.payloadBytes = payloadBytes; // v5: 0 (dims-derived) or the actual length
     out.oldestSeq = 0;
     out.meta = {tCapture, convertMs, deviceTimestamp, systemTimestamp};
     return ReadStatus::Ok;

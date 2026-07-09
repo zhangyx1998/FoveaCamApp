@@ -114,6 +114,10 @@ export type PipeReadFrame = {
    *  0 for uncropped streams. */
   originX?: number;
   originY?: number;
+  /** Actual payload byte length the reader copied (ring v5 `payloadBytes`) —
+   *  present only for a variable-length blob (compression pipes); absent on a
+   *  dim-derived frame, where `width*height*channels` is the length. */
+  bytes?: number;
 };
 
 /** A FIFO pipe read outcome (capture-recorder-nodes Phase 0). Mirrors the
@@ -345,6 +349,7 @@ export function createShmClient(
       height: msg.height,
       originX: msg.originX,
       originY: msg.originY,
+      bytes: msg.bytes,
     });
   }
 
@@ -390,6 +395,7 @@ export function createShmClient(
       height: msg.height,
       originX: msg.originX,
       originY: msg.originY,
+      bytes: msg.bytes,
     });
   }
 

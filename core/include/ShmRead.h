@@ -36,6 +36,10 @@ struct ReadResult {
   uint32_t height = 0;  // v3: active frame height
   uint32_t originX = 0; // v4: frame-bound crop origin in the parent stream
   uint32_t originY = 0; // (0/0 for uncropped streams)
+  // v5: the ACTUAL payload byte length the read COPIED into `dst` when the slot
+  // records one (compression bricks); 0 = the slot left it unset and the copy
+  // was the dim-derived / full-slot count (every uncompressed producer).
+  uint64_t payloadBytes = 0;
   // FIFO (`readSeqInto` → `Gone`): the OLDEST still-live seq the consumer
   // should jump to (it accounts `wantSeq .. oldestSeq-1` as drops). 0 otherwise.
   uint64_t oldestSeq = 0;

@@ -17,6 +17,10 @@ export type ShmReadResult = {
   /** Frame-bound crop origin in the parent stream (v4, fovea pipes). */
   originX?: number;
   originY?: number;
+  /** Actual payload byte length the reader copied (ring v5 `payloadBytes`) —
+   *  present ONLY when the slot records a nonzero length (compression bricks);
+   *  absent on dim-derived frames (the consumer falls back to dims). */
+  bytes?: number;
   meta?: FrameMeta;
 };
 

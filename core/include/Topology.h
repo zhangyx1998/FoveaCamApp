@@ -87,5 +87,9 @@ void appendRawReports(Napi::Env env, Napi::Array &rows,
 // "raw12p", camera/<serial> input edge, verbatim wire-format payload output).
 void appendRaw12pReports(Napi::Env env, Napi::Array &rows,
                          std::set<std::string> &seen);
+// multi-fovea-recording rulings 9/10: the intra-frame COMPRESSION pipe (kind
+// "compress", source-pipe input edge, `<sourceFormat>/zlib` opaque output).
+void appendCompressReports(Napi::Env env, Napi::Array &rows,
+                           std::set<std::string> &seen);
 
 } // namespace Arv
