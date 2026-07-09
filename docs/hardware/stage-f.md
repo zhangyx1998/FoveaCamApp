@@ -305,6 +305,22 @@ names the mechanism it gates.
 - [ ] **Main UI** — the inline strip + match views are gone; layout below
   the cameras is clean with the drawer open and closed.
 
+## Composite node + center select (2026-07-09 wave, 59ad332)
+
+- [ ] **Center dropdown visible** — the view select shows on ALL four center
+  views including the default sliced one (it was silently dropped before —
+  StreamView never forwarded the #title slot), and switches live.
+- [ ] **Composite node in the graph** — `stereo/composite` appears in the
+  profiler with left/right input edges; meters run ONLY while the
+  disparity or anaglyph view is selected (parked otherwise, rate → 0).
+- [ ] **Anaglyph parity** — red = LEFT eye, cyan = RIGHT (cover the left
+  fovea camera → red goes dark). disparity ↔ anaglyph flip retunes the same
+  connected pipe without a frame gap or reconnect flicker.
+- [ ] **Renderer load drop** — the old DiffView canvas composite is gone;
+  with anaglyph selected, renderer CPU/GPU should be LOWER than the previous
+  build under the same scene (Graphite-relevant: fewer per-frame
+  putImageData/composite passes).
+
 ## Blocked (hardware change required)
 
 - [ ] **Center-camera hardware trigger** — needs the slimmer CAM0 cable

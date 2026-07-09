@@ -59,12 +59,14 @@ scope-strip SLICE PIPE (with the match/center overlay rects) over the two
 match heatmaps, which the match kernel pads to the strip's dims (each heatmap
 pixel = the needle CENTERED at that strip pixel). The window is the `debug`
 class: exempt from app exclusivity, cascade-closes with the app, passive
-subscriber. The CENTER view is a
-four-way select — **Wide Angle Sliced** (the scope-tile slice pipe),
-**Disparity L-vs-R** and **Anaglyph** (renderer `DiffView` composites of the
-two fovea undistort pipes: 'difference' blend, and red = LEFT / cyan = RIGHT),
-and **SGBM Disparity** (the stereo heatmap pipe). Pipe-backed center views
-connect their pipe ONLY while selected, so unwatched producers park.
+subscriber. The CENTER view is ONE pipe-backed StreamView with a four-way
+title-slot select (composite-node-and-center-select-fix) — **Wide Angle
+Sliced** (the scope-tile slice pipe), **Disparity L-vs-R** and **Anaglyph**
+(BOTH the `stereo/composite` CompositeStream brick's pipe; the session
+retunes its mode from `state.view` — red = LEFT / cyan = RIGHT), and **SGBM
+Disparity** (the stereo heatmap pipe). Only the selected view's pipe is
+connected, so unwatched producers park; disparity↔anaglyph flips retune the
+same connected pipe (no reconnect).
 Verge/baseline/shift parameters; PID tuning; target select (tracker
 auto-follow). Dragging on the C view calls the **tracker's override** with the
 dragged point (NOT the PID slot) and the foveas **follow the cursor directly**

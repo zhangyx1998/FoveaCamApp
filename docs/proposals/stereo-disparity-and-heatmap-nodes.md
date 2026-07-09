@@ -100,7 +100,12 @@ scale-pipe.ts (advertise + attach + retune + retire). `nodeId.stereo(name)`
 neither camera; its edges carry the wiring). `nodeId.heatmap(sourceId,
 name)` → `<sourceId>/heatmap/<name>` (nests under its input, scale rule).
 
-### Anaglyph (ruling 1, renderer-side)
+### Anaglyph (ruling 1, renderer-side) — SUPERSEDED
+
+> **AMENDED 2026-07-09** (`composite-node-and-center-select-fix.md`): the
+> anaglyph AND difference views are now a real two-input native brick
+> (`stereo/composite`, CompositeStream) with a node-graph row; DiffView is
+> deleted. The section below records the original (retired) design.
 
 A pure display composite of the two fovea undistort pipes the window
 already binds — same class as the difference view, so **DiffView gains a

@@ -130,6 +130,20 @@ anaglyph red = LEFT / cyan = RIGHT parity (cover the left fovea → red goes
 dark); disparity↔anaglyph flip retunes without a frame gap; renderer CPU/GPU
 load DROPS vs the old canvas composite (Graphite-relevant).
 
-## AS SHIPPED
+## AS SHIPPED (2026-07-09, commit 59ad332)
 
-_(filled at wave close)_
+Implemented as ruled (worker-built, planner-verified). Deltas/notes:
+
+- Anaglyph compute pinned as `right.copyTo(buf)` + `mixChannels` of LEFT's R
+  plane (BGRA channel 2) — one copy + one plane splice, alpha forced 255 via
+  a reused mask; difference = 4-channel `absdiff` with the alpha restored.
+- Profiler kinds: `stereo`/`heatmap`/`scale` were never in `KIND_COLORS`
+  (default slate); only a `composite` entry was added. Backfilling the other
+  kinds' colors is OPEN (cosmetic).
+- Composite inputs = `needleSources.L/R` (undistort when calibrated, convert
+  fallback) — exactly what DiffView's `frameL/frameR` bound.
+- Gates at close: core make clean + tests 09/12/18/22/23/25/26/27 (27:
+  anaglyph channel identity 100%, zero-offset difference == 0, alpha 255,
+  park/wake/park); vue-tsc 0; vitest 458/458; vite build 0 (orchestrator
+  247.28 kB gzip 74.53 kB). Rig pass owed: stage-f §"Composite node +
+  center select".

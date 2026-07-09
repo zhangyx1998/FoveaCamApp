@@ -26,6 +26,9 @@ stereo/<name>                       two-input SGBM join (StereoStream brick;
                                     F32 disparity out — a root: a cross-camera
                                     join belongs to neither camera; its
                                     left/right edges carry the wiring)
+stereo/composite                    two-input composite join (CompositeStream
+                                    brick; BGRA8 anaglyph|difference — same
+                                    root rule as stereo/<name>)
 <sourceId>/heatmap/<name>           colormap pipe (HeatmapStream brick; F32/U8
                                     1-channel → BGRA8; nests under its source)
 camera/<serial>/kcf                 native KCF track stream (raw source)
@@ -82,6 +85,7 @@ that GC storm).
 | scale | `ScaleStream` — ChainedStream `cv::resize` with reactive params (`ratio`/`dwidth`/`dheight`/`dsize`); out dims recomputed per frame from the active input dims; origin forwarded unscaled | `<sourceId>/scale/<name>` pipe |
 | stereo (SGBM) | `StereoStream` — the first TWO-input chained brick: SGBM over a left/right tap pair (latest-wins; ticks on left arrivals), F32 disparity out in left-frame coords; parked unless demanded (the on-demand SGBM view) | `stereo/<name>` pipe (F32) |
 | heatmap | `HeatmapStream` — ChainedStream colormap (TURBO) of a 1-channel F32/U8 source to BGRA8; reactive `{min,max}` (absent = per-frame auto-normalize) | `<sourceId>/heatmap/<name>` pipe |
+| composite | `CompositeStream` — two-input BGRA8 color join (StereoStream skeleton, no SGBM): reactive `{mode: anaglyph\|difference}`; anaglyph = LEFT's R + RIGHT's G/B (red = left eye), difference = per-channel `absdiff`; left-paced, latest-wins right; alpha 255 | `stereo/<name>` pipe (BGRA8) |
 | KCF tracker | native thread, latest-frame-wins; a CHAINED variant (`camera/<serial>/undistort/kcf`, controller-node §3.5) tracks the undistorted view on its own thread | track results (async generator + meter) |
 | marker detector | `detector.stream` (native) | detection sets |
 | vision kernels | per-session `worker_thread` (`vision-worker.ts`), dispatched by kind | results + derived frames over MessagePort |
