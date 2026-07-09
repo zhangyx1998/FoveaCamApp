@@ -169,9 +169,17 @@ const dstLatest = new ArrayBuffer(BYTES);
 // --- 5: Closed after the publisher closes ------------------------------------
 {
   P.close(ID);
+  // Invariant: a frame published BEFORE close must still be readable — CLOSED is
+  // an explicit end-of-stream signal, never a mask over already-delivered seqs.
+  let last = readSeq(48); // the final published frame, still in the live ring
+  while (last === null) last = readSeq(48);
+  assert(isOk(last), `final pre-close frame (48) still readable, got ${show(last)}`);
+  assert.equal(Number(last.seq), 48, "closed pipe still serves its last frame");
+  assert.equal(contentByte(), 48 & 0xff, "final frame content intact after close");
+
   const r = readSeq(49); // past latest (48) + pipe now CLOSED
   assert(r !== null && "closed" in r, `seq past latest on a closed pipe is Closed, got ${show(r)}`);
-  console.log("28-fifo-pipe: Closed after publisher close OK.");
+  console.log("28-fifo-pipe: last frame readable after close + Closed past latest OK.");
 }
 
 // --- 6: orderly teardown → natural exit --------------------------------------

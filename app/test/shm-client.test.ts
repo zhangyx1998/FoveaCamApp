@@ -260,3 +260,97 @@ describe("shm-client transfer pool", () => {
     expect(client.stats().allocations).toBe(allocsAfterA + 2); // +1 for B, +1 re-alloc A
   });
 });
+
+// capture-recorder-nodes Phase 0: the FIFO `readPipeSeq` round-trip. Same pool
+// as the latest-wins path (a frame's buffer must be released; notYet/gone/closed
+// reclaim it immediately), but a wider outcome set (frame / notyet / gone /
+// closed). Drives the preload via the fake port's read-seq-done reply.
+describe("shm-client readPipeSeq (FIFO)", () => {
+  const BYTES = 16;
+  const seqReply = (
+    port: ReturnType<typeof fakePort>,
+    msg: Record<string, unknown> & { id: number; buffer: ArrayBuffer },
+  ) => port.onmessage?.({ data: { kind: "fovea:pipe:read-seq-done", ...msg } });
+  const lastReq = (port: ReturnType<typeof fakePort>) =>
+    port.posted[port.posted.length - 1] as unknown as {
+      kind: string;
+      id: number;
+      shmName: string;
+      wantSeq: bigint;
+      buffer: ArrayBuffer;
+    };
+
+  it("FRAME: resolves the frame; buffer returns to pool via releaseBuffer", async () => {
+    const port = fakePort();
+    const client = createShmClient(() => port as unknown as MessagePort);
+
+    const p = client.readPipeSeq("seg", 7n, BYTES);
+    const req = lastReq(port);
+    expect(req.kind).toBe("fovea:pipe:read-seq");
+    expect(req.wantSeq).toBe(7n);
+    seqReply(port, { id: req.id, buffer: req.buffer, seq: 7n, width: 4, height: 4 });
+    const r = await p;
+    expect(r).toMatchObject({ seq: 7n, data: req.buffer, width: 4, height: 4 });
+    expect(client.stats().reads).toBe(1);
+
+    // Buffer only recycles once the consumer returns it.
+    client.releaseBuffer((r as { data: ArrayBuffer }).data);
+    const p2 = client.readPipeSeq("seg", 8n, BYTES);
+    expect(lastReq(port).buffer).toBe(req.buffer); // reused, no re-alloc
+    expect(client.stats().poolHits).toBe(1);
+    seqReply(port, { id: lastReq(port).id, buffer: lastReq(port).buffer, notYet: true });
+    await p2;
+  });
+
+  it("NOTYET: resolves 'notyet' and reclaims the buffer immediately", async () => {
+    const port = fakePort();
+    const client = createShmClient(() => port as unknown as MessagePort);
+    const p = client.readPipeSeq("seg", 1n, BYTES);
+    const req = lastReq(port);
+    seqReply(port, { id: req.id, buffer: req.buffer, notYet: true });
+    expect(await p).toBe("notyet");
+    // Reclaimed without releaseBuffer → next read reuses it.
+    client.readPipeSeq("seg", 1n, BYTES);
+    expect(lastReq(port).buffer).toBe(req.buffer);
+    expect(client.stats().poolHits).toBe(1);
+  });
+
+  it("GONE: resolves { gone, oldestSeq } and reclaims the buffer", async () => {
+    const port = fakePort();
+    const client = createShmClient(() => port as unknown as MessagePort);
+    const p = client.readPipeSeq("seg", 3n, BYTES);
+    const req = lastReq(port);
+    seqReply(port, { id: req.id, buffer: req.buffer, gone: true, oldestSeq: 33n });
+    expect(await p).toEqual({ gone: true, oldestSeq: 33n });
+    client.readPipeSeq("seg", 33n, BYTES);
+    expect(lastReq(port).buffer).toBe(req.buffer); // reclaimed → reused
+  });
+
+  it("CLOSED: resolves 'closed' and reclaims the buffer", async () => {
+    const port = fakePort();
+    const client = createShmClient(() => port as unknown as MessagePort);
+    const p = client.readPipeSeq("seg", 9n, BYTES);
+    const req = lastReq(port);
+    seqReply(port, { id: req.id, buffer: req.buffer, closed: true });
+    expect(await p).toBe("closed");
+    client.readPipeSeq("seg", 9n, BYTES);
+    expect(lastReq(port).buffer).toBe(req.buffer);
+  });
+
+  it("STALE/late seq reply reclaims its buffer without throwing", () => {
+    const port = fakePort();
+    const client = createShmClient(() => port as unknown as MessagePort);
+    const stray = new ArrayBuffer(BYTES);
+    expect(() =>
+      seqReply(port, { id: 4242, buffer: stray, notYet: true }),
+    ).not.toThrow();
+  });
+
+  it("DISPOSE rejects a pending FIFO read", async () => {
+    const port = fakePort();
+    const client = createShmClient(() => port as unknown as MessagePort);
+    const p = client.readPipeSeq("seg", 1n, BYTES);
+    client.dispose();
+    await expect(p).rejects.toThrow(/disposed/);
+  });
+});

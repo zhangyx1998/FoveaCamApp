@@ -19,10 +19,13 @@ import {
 import {
   PIPE_READ,
   PIPE_READ_DONE,
+  PIPE_READ_SEQ,
+  PIPE_READ_SEQ_DONE,
   SHM_INIT,
   SHM_READ,
   SHM_READ_DONE,
   type PipeReadRequest,
+  type PipeReadSeqRequest,
   type ShmReadRequest,
 } from "@lib/orchestrator/shm-messages";
 
@@ -30,6 +33,11 @@ type ReaderHandle = object;
 /** A closed pipe read (C-17): explicit signal, distinct from `null` (no new
  *  frame) — the reader addon returns this once the publisher sets state=CLOSED. */
 type ReaderClosed = { closed: true };
+/** FIFO reader outcomes (capture-recorder-nodes Phase 0): `wantSeq` isn't
+ *  published yet (poll again), or its ring slot was recycled (jump to
+ *  `oldestSeq`, drop-account the gap). Ok/Closed reuse the readInto shapes. */
+type ReaderNotYet = { notYet: true };
+type ReaderGone = { gone: true; oldestSeq: bigint };
 type ReaderAddon = {
   open(seg: string): ReaderHandle;
   readInto(
@@ -37,11 +45,20 @@ type ReaderAddon = {
     dest: ArrayBuffer,
     lastSeq: bigint,
   ): ShmReadResult | ReaderClosed | null;
+  readSeqInto(
+    handle: ReaderHandle,
+    dest: ArrayBuffer,
+    wantSeq: bigint,
+  ): ShmReadResult | ReaderNotYet | ReaderGone | ReaderClosed | null;
   close(handle: ReaderHandle): void;
 };
 
 const isClosed = (r: unknown): r is ReaderClosed =>
   typeof r === "object" && r !== null && (r as ReaderClosed).closed === true;
+const isNotYet = (r: unknown): r is ReaderNotYet =>
+  typeof r === "object" && r !== null && (r as ReaderNotYet).notYet === true;
+const isGone = (r: unknown): r is ReaderGone =>
+  typeof r === "object" && r !== null && (r as ReaderGone).gone === true;
 
 // This bundle is emitted as CommonJS (unsandboxed preloads load `.mjs` as
 // real ESM where bare `require` throws — V11b), so the module wrapper's own
@@ -145,8 +162,84 @@ function handlePipeRead(port: MessagePort, msg: PipeReadRequest): void {
   }
 }
 
+// FIFO consumer reads (capture-recorder-nodes Phase 0): the recorder/capture
+// node asks for a SPECIFIC `wantSeq` via `readSeqInto` (ordered, lossless-
+// within-a-ring). Shares the same by-name handle cache + transferred buffer as
+// the latest-wins path; only the classification (notYet / gone+oldestSeq /
+// closed / frame) differs. The reader addon reuses `buffer` as its dest (C-15),
+// so nothing is copied beyond the ring→buffer memcpy inside the addon.
+function handlePipeReadSeq(port: MessagePort, msg: PipeReadSeqRequest): void {
+  try {
+    const handle = pipeHandleFor(msg.shmName);
+    const result = reader.readSeqInto(handle, msg.buffer, msg.wantSeq);
+    if (isClosed(result)) {
+      // Drop the cached handle so a re-advertised pipe re-opens fresh.
+      reader.close(handle);
+      pipeHandles.delete(msg.shmName);
+      port.postMessage(
+        { kind: PIPE_READ_SEQ_DONE, id: msg.id, buffer: msg.buffer, closed: true },
+        [msg.buffer],
+      );
+      return;
+    }
+    if (isNotYet(result)) {
+      port.postMessage(
+        { kind: PIPE_READ_SEQ_DONE, id: msg.id, buffer: msg.buffer, notYet: true },
+        [msg.buffer],
+      );
+      return;
+    }
+    if (isGone(result)) {
+      port.postMessage(
+        {
+          kind: PIPE_READ_SEQ_DONE,
+          id: msg.id,
+          buffer: msg.buffer,
+          gone: true,
+          oldestSeq: result.oldestSeq,
+        },
+        [msg.buffer],
+      );
+      return;
+    }
+    // `null` (torn read) → no seq: the consumer retries the same wantSeq.
+    port.postMessage(
+      {
+        kind: PIPE_READ_SEQ_DONE,
+        id: msg.id,
+        buffer: msg.buffer,
+        seq: result ? result.seq : undefined,
+        tCapture: result ? result.meta?.tCapture : undefined,
+        convertMs: result ? result.meta?.convertMs : undefined,
+        gen: result ? result.gen : undefined,
+        retries: result ? result.retries : undefined,
+        width: result ? result.width : undefined,
+        height: result ? result.height : undefined,
+        originX: result ? result.originX : undefined,
+        originY: result ? result.originY : undefined,
+      },
+      [msg.buffer],
+    );
+  } catch (error) {
+    port.postMessage(
+      {
+        kind: PIPE_READ_SEQ_DONE,
+        id: msg.id,
+        buffer: msg.buffer,
+        error: error instanceof Error ? error.message : String(error),
+      },
+      [msg.buffer],
+    );
+  }
+}
+
 function handleReadMessage(port: MessagePort, data: unknown): void {
-  const msg = data as ShmReadRequest | PipeReadRequest | undefined;
+  const msg = data as
+    | ShmReadRequest
+    | PipeReadRequest
+    | PipeReadSeqRequest
+    | undefined;
+  if (msg?.kind === PIPE_READ_SEQ) return handlePipeReadSeq(port, msg);
   if (msg?.kind === PIPE_READ) return handlePipeRead(port, msg);
   if (msg?.kind !== SHM_READ) return;
   try {

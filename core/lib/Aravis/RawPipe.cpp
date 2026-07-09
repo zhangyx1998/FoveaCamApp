@@ -97,8 +97,9 @@ protected:
     meta.systemTimestamp = frame->system_timestamp;
     sink_->offer(m.data, info, meta); // synchronous copy into the ring
     if (meter_) {
-      meter_->end(converterNowMs());
-      meter_->emit("shm", converterNowMs());
+      const int64_t done = converterNowMs(); // one clock read, not two
+      meter_->end(done);
+      meter_->emit("shm", done);
     }
   }
 

@@ -96,15 +96,23 @@ const void *ReadMapping::slotData(uint32_t slot) const {
 ReadStatus readLatestInto(const ReadMapping &m, void *dst, size_t dstBytes,
                           uint64_t lastSeq, ReadResult &out) {
   const SegmentHeader *h = m.header();
-  const uint64_t latest = h->latestSeq.load(std::memory_order_acquire);
+  uint64_t latest = h->latestSeq.load(std::memory_order_acquire);
   if (latest <= lastSeq) {
     // Cold path only: no newer frame. If the publisher has closed the pipe, the
     // final frame was already delivered (its latestSeq is visible before the
     // release-stored CLOSED), so report Closed here — not a frozen last frame.
-    if (h->state.load(std::memory_order_acquire) ==
-        static_cast<uint32_t>(PipeState::CLOSED))
-      return ReadStatus::Closed;
-    return ReadStatus::NoNewFrame;
+    const bool closed = h->state.load(std::memory_order_acquire) ==
+                        static_cast<uint32_t>(PipeState::CLOSED);
+    // Close/publish race: our `latest` load may predate the writer's FINAL
+    // publish while our `state` load observes CLOSED (the two loads can straddle
+    // a preemption). The CLOSED store is release-ordered AFTER that publish, so
+    // observing CLOSED lets a RE-LOAD of latestSeq see the final value — re-read
+    // and re-check so a frame published concurrently with close is never lost.
+    if (closed)
+      latest = h->latestSeq.load(std::memory_order_acquire);
+    if (latest <= lastSeq)
+      return closed ? ReadStatus::Closed : ReadStatus::NoNewFrame;
+    // else: a newer frame WAS published before close — fall through and read it.
   }
   if (dstBytes < h->slotBytes)
     return ReadStatus::DestTooSmall;
@@ -149,16 +157,24 @@ ReadStatus readSeqInto(const ReadMapping &m, uint64_t wantSeq, void *dst,
   if (slotCount == 0)
     return ReadStatus::TornRead; // defensive (open() validates slotCount >= 1)
 
-  const uint64_t latest = h->latestSeq.load(std::memory_order_acquire);
+  uint64_t latest = h->latestSeq.load(std::memory_order_acquire);
   if (wantSeq == 0 || wantSeq > latest) {
     // The requested frame has not been published yet. If the publisher has
     // closed the pipe, no newer frame will ever arrive (latestSeq is visible
     // before the release-stored CLOSED), so report Closed — the FIFO consumer
     // drains up to latestSeq, then stops. Otherwise NotYet (poll again).
-    if (h->state.load(std::memory_order_acquire) ==
-        static_cast<uint32_t>(PipeState::CLOSED))
-      return ReadStatus::Closed;
-    return ReadStatus::NotYet;
+    const bool closed = h->state.load(std::memory_order_acquire) ==
+                        static_cast<uint32_t>(PipeState::CLOSED);
+    // Close/publish race (see readLatestInto): our `latest` load may predate the
+    // writer's FINAL publish while `state` observes CLOSED. CLOSED is release-
+    // ordered after that publish, so re-load latestSeq once we've seen CLOSED
+    // and re-check — a frame published concurrently with close stays deliverable
+    // (never falsely NotYet→Closed) so the recorder keeps its last frame.
+    if (closed)
+      latest = h->latestSeq.load(std::memory_order_acquire);
+    if (wantSeq == 0 || wantSeq > latest)
+      return closed ? ReadStatus::Closed : ReadStatus::NotYet;
+    // else: wantSeq was published before close — fall through and read the slot.
   }
   if (dstBytes < h->slotBytes)
     return ReadStatus::DestTooSmall;
