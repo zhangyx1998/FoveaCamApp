@@ -17,7 +17,7 @@ import { computed, onMounted, ref } from "vue";
 import type { Point2d, Size } from "core/Geometry";
 import { ROLE, THEME } from "@lib/camera-config";
 import { useAppConfig } from "@lib/config";
-import { useFrames, useSession, usePipeFrame } from "@lib/orchestrator/client";
+import { useSession, usePipeFrame } from "@lib/orchestrator/client";
 import { nodeId } from "@lib/orchestrator/graph-contract";
 import { degrees, clamp } from "@lib/util";
 import { logScale } from "@lib/conversion";
@@ -49,13 +49,6 @@ onMounted(() => {
   if (app_config.baseline_distance_mm) state.baseline = app_config.baseline_distance_mm;
 });
 
-// DIAGNOSTIC frames fanned from the orchestrator — only the two per-side
-// correlation heatmaps since the node split (split-disparity-nodes): every
-// other view is a pipe or a renderer composite.
-const { match_left: frameMatchLeft, match_right: frameMatchRight } = useFrames(
-  session,
-  ["match_left", "match_right"],
-);
 // View re-plumb (pid-nodes-and-view-replumb.md §Renderer): the L/C/R main views
 // source their per-camera `undistort` pipes DIRECTLY via `usePipeFrame` (off the
 // JS view-tap loop AND independent of the scope kernel), so a busy kernel can no
@@ -73,14 +66,15 @@ const frameR = usePipeFrame(() =>
   state.serials?.R ? nodeId.undistort(state.serials.R) : null,
 );
 // Split-disparity-nodes views: the sliced center view IS the session's
-// scope-tile slice pipe; the guide strip IS the scope-strip slice pipe (both
-// live-steered server-side, rendered here at pipe rate); the disparity and
-// anaglyph views are renderer canvas composites (DiffView modes) of the two
-// pre-warped fovea pipes above; the SGBM view IS the stereo brick's heatmap
-// pipe. Pipe-backed center views bind their pipe ONLY while selected — the
-// C-21 consumer gate then parks the unwatched producer chain (no subscriber
-// → no compute, stereo-disparity-and-heatmap-nodes ruling 2: deselecting
-// SGBM stops the whole heatmap→stereo chain).
+// scope-tile slice pipe (live-steered server-side, rendered here at pipe rate);
+// the disparity and anaglyph views are renderer canvas composites (DiffView
+// modes) of the two pre-warped fovea pipes above; the SGBM view IS the stereo
+// brick's heatmap pipe. (The guide strip + per-side match heatmaps moved to the
+// module's Debugger.vue sub-window — disparity-debugger-window.md.) Pipe-backed
+// center views bind their pipe ONLY while selected — the C-21 consumer gate
+// then parks the unwatched producer chain (no subscriber → no compute,
+// stereo-disparity-and-heatmap-nodes ruling 2: deselecting SGBM stops the whole
+// heatmap→stereo chain).
 const frameTile = usePipeFrame(() =>
   state.view === "sliced" && state.serials?.C
     ? nodeId.slice(state.serials.C, "scope-tile")
@@ -90,9 +84,6 @@ const frameSgbm = usePipeFrame(() =>
   state.view === "sgbm" && state.serials?.C
     ? nodeId.heatmap(nodeId.stereo("scope"), "view")
     : null,
-);
-const frameStrip = usePipeFrame(() =>
-  state.serials?.C ? nodeId.slice(state.serials.C, "scope-strip") : null,
 );
 
 // Center-view select options (one list, rendered into whichever branch's
@@ -248,6 +239,12 @@ function onCursor(c: (Point2d & Size & { buttons: number }) | null): void {
   }
   wasDown = down;
 }
+
+// Toggle the module's Debugger sub-window (disparity-debugger-window.md) — the
+// guide strip + per-side match heatmaps moved off this main UI.
+function openDebugger(): void {
+  window.foveaBridge.toggleDebugWindow("disparity-scope");
+}
 </script>
 
 <template>
@@ -338,53 +335,21 @@ function onCursor(c: (Point2d & Size & { buttons: number }) | null): void {
           >override</span
         >
       </div>
+      <!-- Debugger sub-window toggle (disparity-debugger-window.md): opens the
+           module's Debugger.vue — the guide strip + per-side match heatmaps
+           that used to inline below the cameras. -->
+      <button
+        class="debugger-toggle"
+        title="Open the template-match debugger window"
+        @click="openDebugger"
+      >
+        Debugger
+      </button>
     </div>
     <div class="view">
       <StreamView class="stream" :title="ROLE.R" :payload="frameR" :theme="THEME.R" />
       <PosView :pos="telemetry.volt.R" :color="THEME.R" style="width: 100%" />
     </div>
-  </div>
-
-  <div
-    class="divergence"
-    :style="{ paddingBottom: (drawer_height ? drawer_height + 20 : 0) + 'px' }"
-  >
-    <StreamView class="wide" title="Template Match Guide Strip" :payload="frameStrip">
-      <template v-if="frameStrip">
-        <rect
-          v-if="telemetry.match_center"
-          v-bind="{ x: telemetry.match_center.rect.x, y: telemetry.match_center.rect.y, width: telemetry.match_center.rect.width, height: telemetry.match_center.rect.height }"
-          :fill="THEME.C"
-          opacity="0.2"
-        />
-        <rect
-          v-if="telemetry.match_left"
-          v-bind="{ x: telemetry.match_left.rect.x - 2, y: telemetry.match_left.rect.y - 2, width: telemetry.match_left.rect.width + 4, height: telemetry.match_left.rect.height + 4 }"
-          fill="none"
-          :stroke="THEME.L"
-          stroke-width="2"
-          opacity="0.4"
-        />
-        <rect
-          v-if="telemetry.match_right"
-          v-bind="{ x: telemetry.match_right.rect.x - 2, y: telemetry.match_right.rect.y - 2, width: telemetry.match_right.rect.width + 4, height: telemetry.match_right.rect.height + 4 }"
-          fill="none"
-          :stroke="THEME.R"
-          stroke-width="2"
-          opacity="0.4"
-        />
-      </template>
-    </StreamView>
-    <StreamView
-      class="wide"
-      :title="`Left Match (Red = Match, Blue = Mismatch)`"
-      :payload="frameMatchLeft.payload.value" :source="frameMatchLeft.source"
-    />
-    <StreamView
-      class="wide"
-      :title="`Right Match (Red = Match, Blue = Mismatch)`"
-      :payload="frameMatchRight.payload.value" :source="frameMatchRight.source"
-    />
   </div>
 
   <Drawer v-model="drawer_height">
@@ -573,16 +538,24 @@ function onCursor(c: (Point2d & Size & { buttons: number }) | null): void {
   }
 }
 
-.divergence {
-  width: 95vw;
-  margin: 2em auto;
-  display: flex;
-  position: relative;
-  flex-direction: column;
-  gap: 1em;
+.debugger-toggle {
+  cursor: pointer;
+  margin-top: 0.5em;
+  border: 1px solid #fff4;
+  border-radius: 4px;
+  background: #fff1;
+  color: inherit;
+  font: inherit;
+  padding: 0.3em 1.2em;
+  opacity: 0.8;
 
-  .wide {
-    width: 100%;
+  &:hover {
+    opacity: 1;
+    background: #fff3;
+  }
+
+  &:active {
+    background: #fff2;
   }
 }
 

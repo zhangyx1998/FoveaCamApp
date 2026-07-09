@@ -20,12 +20,19 @@
 //    chain in the v4 slot header). `origin + rect-center / <caller's
 //    downsample>` lifts a match to ABSOLUTE source-frame coordinates — the
 //    kernel never needs a target, and no app state rides its params.
+//  - The emitted `match` heatmap is PADDED back to the haystack's exact dims
+//    (see `emitHeatmap`): the correlation map is only (sh-th+1)×(sw-tw+1)
+//    placement-space pixels, but the sole consumer (the debugger's stacked
+//    pixel-column cross-reference) needs each heatmap pixel (x,y) to be the
+//    score of the needle CENTERED at haystack pixel (x,y), so it aligns
+//    column-for-column with the full-res strip above it. The scalar `values`
+//    (peak/rect/score) stay computed on the UNPADDED map (placement space).
 //
 // Used by disparity-scope twice (match/L, match/R); reusable by anything
 // that needs "where does this tile sit in that stream".
 
 import type { Rect } from "core/Geometry";
-import { cvtColor, gaussian, heatmap, matchTemplate, minMaxLoc, type Mat } from "core/Vision";
+import { cvtColor, gaussian, heatmap, matchTemplate, minMaxLoc, slice, type Mat } from "core/Vision";
 import { RECT } from "@lib/util/geometry";
 import type { FrameSet, KernelFrameOut, KernelOutput, VisionKernel } from "./vision-kernel.js";
 
@@ -37,7 +44,10 @@ export type TemplateMatchParams = {
    *  pixel must not win over a broader lobe). 0 disables. */
   gaussKsize?: number;
   gaussSigma?: number;
-  /** Emit the smoothed correlation map as the `match` heatmap frame. */
+  /** Emit the smoothed correlation map as the `match` heatmap frame, padded
+   *  (zero-filled out-of-bounds `slice`) to the haystack's dims so pixel (x,y)
+   *  is the needle CENTERED at haystack (x,y) — haystack-column-aligned for a
+   *  diagnostic stacked under the strip. The scalar peak stays map-local. */
   emitHeatmap?: boolean;
 };
 
@@ -102,8 +112,26 @@ export function createTemplateMatchKernel(
         seq: hay.seq,
         deviceTimestamp: hay.deviceTimestamp,
       };
+      // Pad the (post-gaussian) placement-space map to the haystack dims for
+      // the emitted frame ONLY: the out-of-bounds `slice` zero-fills the border
+      // (core Vision.cpp fills out-of-range with zeros — neutral mid color in
+      // the heatmap), and the -floor(t/2) offset recenters the needle so pixel
+      // (x,y) = the needle CENTERED at haystack (x,y). `values` above already
+      // read the peak off the unpadded `map`, so the shift never touches it.
       const out: KernelFrameOut[] = p.emitHeatmap
-        ? [{ name: "match", mat: heatmap(map) }]
+        ? [
+            {
+              name: "match",
+              mat: heatmap(
+                slice(map, {
+                  x: -Math.floor(tw / 2),
+                  y: -Math.floor(th / 2),
+                  width: sw,
+                  height: sh,
+                }),
+              ),
+            },
+          ]
         : [];
       return { values: values as unknown as Record<string, unknown>, frames: out };
     },

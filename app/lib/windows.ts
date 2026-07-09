@@ -242,9 +242,12 @@ export const WINDOWS: Record<WindowClass, WindowSpec> = {
     bounds: { width: 1100, height: 760, minWidth: 640, minHeight: 420 },
   },
   debug: {
-    // WS2 2b: a module's annotation-overlay sub-window. Owner-bound — the
-    // FIRST class to opt into cascade (closes with its opener app; A-20/2a).
-    // Projection-style: renderer preload (shm reader), passive subscriber.
+    // WS2 2b: a module's own debugger sub-window (mounts the module's
+    // `Debugger.vue` full-window; disparity-scope is its first real user — a
+    // vertical stack of the match strip + per-side correlation heatmaps).
+    // Owner-bound — the FIRST class to opt into cascade (closes with its opener
+    // app; A-20/2a). Projection-style: renderer preload (shm reader), passive
+    // subscriber (never drains/switches the app, never counts for welcome).
     singleton: false,
     exclusive: false,
     countsForWelcome: false,
@@ -252,8 +255,8 @@ export const WINDOWS: Record<WindowClass, WindowSpec> = {
     entry: "windows/debug.html",
     preload: "renderer",
     sandbox: false,
-    title: "FoveaCam Duo — Debug",
-    bounds: { width: 720, height: 560, minWidth: 320, minHeight: 240 },
+    title: "FoveaCam Duo — Debugger",
+    bounds: { width: 1080, height: 640, minWidth: 480, minHeight: 320 },
   },
 };
 

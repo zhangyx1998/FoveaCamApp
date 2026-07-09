@@ -48,10 +48,7 @@ const windowRoots: Record<string, SpecialEntry> = {
   },
   debug: {
     load: () => import("./DebugWindow.vue"),
-    props: () => ({
-      session: readUrlParam("session") ?? "",
-      frame: readUrlParam("frame") ?? "",
-    }),
+    props: () => ({ session: readUrlParam("session") ?? "" }),
   },
 };
 

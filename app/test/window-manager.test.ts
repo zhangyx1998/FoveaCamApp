@@ -452,20 +452,25 @@ describe("WindowManager", () => {
     const { manager } = harness();
     await manager.openApp("manual-control");
     const app = manager.appWindow()! as FakeWindow;
-    const dbg = manager.toggleDebug({ session: "tracking", frame: "C" }, app) as FakeWindow;
+    const dbg = manager.toggleDebug("tracking", app) as FakeWindow;
     expect(dbg).not.toBeNull();
     expect(dbg.class).toBe("debug");
     expect(dbg.owner).toBe(app);
     expect(dbg.key).toBe("debug:tracking");
     expect(manager.childrenOf(app)).toContain(dbg);
+    // The session name rides the URL; no `frame` arg any more (the module's
+    // Debugger.vue resolves its own subscriptions from the session).
+    const params = new URLSearchParams(dbg.desc.search);
+    expect(params.get("session")).toBe("tracking");
+    expect(params.has("frame")).toBe(false);
   });
 
   it("toggleDebug is a real toggle (second call on the same session closes it)", async () => {
     const { manager } = harness();
     await manager.openApp("manual-control");
     const app = manager.appWindow()!;
-    const dbg = manager.toggleDebug({ session: "tracking", frame: "C" }, app) as FakeWindow;
-    expect(manager.toggleDebug({ session: "tracking", frame: "C" }, app)).toBeNull();
+    const dbg = manager.toggleDebug("tracking", app) as FakeWindow;
+    expect(manager.toggleDebug("tracking", app)).toBeNull();
     expect(dbg.destroyed).toBe(true);
   });
 
@@ -473,7 +478,7 @@ describe("WindowManager", () => {
     const { manager } = harness();
     await manager.openApp("manual-control");
     const app = manager.appWindow()! as FakeWindow;
-    const dbg = manager.toggleDebug({ session: "tracking", frame: "C" }, app) as FakeWindow;
+    const dbg = manager.toggleDebug("tracking", app) as FakeWindow;
     app.close();
     expect(dbg.destroyed).toBe(true); // debug is the cascade class
   });
@@ -482,7 +487,7 @@ describe("WindowManager", () => {
     const { manager } = harness();
     await manager.openApp("manual-control");
     const app = manager.appWindow()! as FakeWindow;
-    const dbg = manager.toggleDebug({ session: "tracking", frame: "C" }, app) as FakeWindow;
+    const dbg = manager.toggleDebug("tracking", app) as FakeWindow;
     await manager.openApp("disparity-scope"); // drains + closes the open app
     expect(dbg.destroyed).toBe(true);
     expect(manager.appWindow()?.appId).toBe("disparity-scope");
@@ -492,8 +497,8 @@ describe("WindowManager", () => {
     const { manager } = harness();
     await manager.openApp("manual-control");
     const app = manager.appWindow()! as FakeWindow;
-    const d1 = manager.toggleDebug({ session: "tracking", frame: "C" }, app) as FakeWindow;
-    const d2 = manager.toggleDebug({ session: "manual-control", frame: "L" }, app) as FakeWindow;
+    const d1 = manager.toggleDebug("tracking", app) as FakeWindow;
+    const d2 = manager.toggleDebug("manual-control", app) as FakeWindow;
     expect(d1).not.toBe(d2); // distinct keys ⇒ two windows
     expect(d1.key).toBe("debug:tracking");
     expect(d2.key).toBe("debug:manual-control");
@@ -506,7 +511,7 @@ describe("WindowManager", () => {
   it("toggleDebug with no app window spawns an ownerless (non-cascading) debug window", () => {
     // Defensive: no owner ⇒ nothing cascades it (it just lives until closed).
     const { manager } = harness();
-    const dbg = manager.toggleDebug({ session: "tracking", frame: "C" }, null) as FakeWindow;
+    const dbg = manager.toggleDebug("tracking", null) as FakeWindow;
     expect(dbg).not.toBeNull();
     expect(dbg.owner).toBeUndefined();
   });

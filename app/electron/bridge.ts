@@ -31,9 +31,9 @@ export interface FoveaBridge {
    *  rule, survives its source app's close. */
   openProjectionWindow(session: string, frame: string): void;
   /** Toggle a module's debug sub-window (WS2 2b): open-or-close its
-   *  annotation-overlay window for `session`/`frame`. Owner-bound to the app
-   *  that requested it (cascade-closes on app close/switch). */
-  toggleDebugWindow(session: string, frame: string): void;
+   *  module-owned debugger window for `session`. Owner-bound to the app that
+   *  requested it (cascade-closes on app close/switch). */
+  toggleDebugWindow(session: string): void;
   /** Fullscreen transitions for THIS window, forwarded by main from the
    *  BrowserWindow enter/leave-full-screen events — the shared window chrome
    *  adjusts traffic-light inset + drag regions on both edges (A-7). */
@@ -96,7 +96,7 @@ export interface SendChannels {
   "open-profiler-window": [];
   "window:open-app": [appId: string];
   "window:open-projection": [session: string, frame: string];
-  "window:toggle-debug": [session: string, frame: string];
+  "window:toggle-debug": [session: string];
   /** Sender-scoped: main resolves the window from `event.sender`. */
   "window:set-pinned": [pinned: boolean];
 }
