@@ -38,6 +38,19 @@ between views.
 9. **Z order → tile order**: the track stacking order (master track first,
    then tracks top→bottom) determines the order of the preview tiles —
    dragging a block to another track therefore also reorders its tile.
+10. **Sidecar lifecycle (amendment, user 2026-07-09)**: greedy fitting runs
+    ONLY at ui.json INITIALIZATION (first open, or reset). After that the
+    sidecar is the source of truth — dragging mutates track assignment in
+    ui.json directly (creating/removing tracks as needed; auto-pack is
+    never re-applied on top of user placement). A **Reset UI state**
+    button re-initializes ui.json (re-runs greedy fit, defaults).
+    Corrupted or MISMATCHED ui metadata (e.g. channels that don't match
+    the container) → CONFIRM with the user before reinitializing and
+    overwriting the json — never silently discard their layout.
+11. **Exclusive ownership**: ui.json is owned exclusively by the viewer,
+    duplication-free — the one-window-per-file dedupe makes that window's
+    worker the single writer; no other process/surface writes it, and a
+    reopen must not spawn a second writer.
 
 ## Design
 
