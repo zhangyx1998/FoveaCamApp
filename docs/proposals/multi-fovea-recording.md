@@ -1,97 +1,81 @@
-# Multi-fovea recording — churning per-target streams into the recorder node
+# Multi-fovea recording — raw 12p sensor streams + descriptor streams
 
-Status: **RULED — in execution** (user 2026-07-09). Successor to
+Status: **RULED r2 — in execution** (user 2026-07-09, superseding the r1
+tile-recording model the same day). Successor to
 [capture-recorder-nodes](./capture-recorder-nodes.md) — reuses its recorder
-thread node and extends it for the multi-fovea app's churn semantics.
+thread node; r1's per-frame-dims pixel schema is DROPPED.
 
-## Intent (user ruling)
+## The recording model (user ruling, verbatim intent)
 
-Recording **per-target fovea pipes is the intention** of multi-fovea support.
-A multi-fovea recording captures:
+A multi-fovea recording contains ONLY:
 
-- **Every live per-target fovea pipe** (`camera/<serial>/undistort/fovea/<slot>`
-  — the composed BGRA8 tiles, recorded as-is at pipe depth), **including
-  targets armed/disarmed/resized mid-recording** (C-20 churn is the app's
-  premise; a snapshot-at-start recorder betrays it).
-- **The full-depth raw wide streams** (`camera/<serial>/raw`, ruled
-  2026-07-09) — same on-demand raw pipes + ringDepth 48 as manual-control
-  recording; full offline re-analysis accepted at the file-size cost.
-- **Per-frame target telemetry** via the existing extras channel: track
-  score, crop rect/origin, triangulated 3D position when calibrated.
+1. **Raw Bayer 12p-encoded sensor frames** — the wire payload, verbatim and
+   packed, for each camera (left fovea / center wide / right fovea). NOT the
+   unpacked 16-bit container, NOT BGRA tiles. Each frame binds its
+   **dynamic parameters**: mirror location (voltages; live-snapshot now,
+   FIN-averaged when v2 firmware lands — same `volt.source` provenance as
+   capture-recorder ruling) and the dynamic undistortion/homography mapping
+   for the fovea cameras (mirror-dependent, changes per frame).
+2. **A global singleton camera matrix for the wide stream** — one metadata
+   record (intrinsics + distortion) applying to every wide frame; the wide
+   camera is static so nothing per-frame.
+3. **Multi-fovea target streams as DESCRIPTORS, not pixels**: per target, a
+   stream of `{timestamp, bbox on the wide frame, frame pointers}` where the
+   pointers name the left/center/right raw frames (per-stream seq) that
+   observation corresponds to. Fovea imagery is RECONSTRUCTED offline from
+   the raw streams + per-frame dynamic params; it is never re-encoded.
+
+Rationale: the raw streams already contain every pixel the rig saw — the
+fovea cameras ARE the per-target imagery (the scheduler round-robins the
+mirror across targets, so each L/R frame belongs to one target). Recording
+composed tiles would duplicate pixels lossily; descriptors + params make the
+container the complete, minimal, offline-reconstructable record.
 
 ## Rulings
 
-1. **Dynamic streams**: the recorder node gains `addStream(name, pipeId)` /
-   `removeStream(name)` usable mid-recording. MCAP registers channels
-   mid-file; the worker's consumer set becomes dynamic (counters/writeSeq/
-   drainTargets keyed maps already are). `removeStream` sets that stream's
-   drain target (R-1 semantics) and lets the consumer exit; the channel stays
-   in the container. Finalize drains whatever set is live.
-2. **Frame schema carries per-frame dims** — DELIBERATE schema version bump
-   (the §1 compatibility promise, exercised on purpose): messages gain
-   `width`/`height` (a fovea resizes continuously inside its max-footprint
-   ring). Channel metadata keeps max/nominal shape; the viewer honors
-   per-frame dims and tolerates channels appearing mid-file + seq gaps.
-3. **Recorder stays a pure consumer of fovea pipes** — it NEVER advertises
-   them (the capture-recorder R-3 exclusivity rule). The compose
-   materializer owns them. If the renderer decomposes a slot mid-recording
-   (target destroyed / window closed) the pipe closes → the consumer drains
-   the tail and the stream ends. That IS the churn semantics, not an error.
-4. **Raw-pipe acquisition becomes refcount-shared**: `camera/<serial>/raw`
-   ids are global, and manual-control recording, capture shots, and now
-   multi-fovea recording can all want them. `app/orchestrator/raw-pipe.ts`
-   grows a single-owner refcounted acquire/release (ONE advertise per id,
-   attach refcounted) so two features never advertise the same pipe id —
-   fixing the R-3 class problem at the source instead of per-feature guards.
-   Existing manual-control/capture call sites move onto it.
-5. **Extras**: the session answers `onFrame` for fovea streams with the
-   target's track state at that seq (score, rect, 3D position); raw wides
-   post no extras (`extrasStreams` gating). FIN voltage binding remains
-   firmware-gated exactly as in manual-control.
-6. **UI**: a record button in the multi-fovea drawer (RecordControls
-   pattern), Cmd-R via the existing `onRecorderTrigger` consumer,
-   `recording:finished` → auto-open viewer (existing main.ts path).
-7. **FIFO slack**: fovea materializer `ringDepth` 4 → evaluate a bump
-   (512²·4 B ≈ 1 MiB/slot; depth 8 costs ~4 MiB extra per fovea) with the
-   soak's drop accounting deciding; keep latest-wins renderer reads
-   unaffected.
-8. **Interleaved execution** (standing directive): I-1 (recorder dynamics +
-   schema + viewer) → R-1 (review/opt) → I-2 (session wiring + raw-pipe
-   refcount + UI) → R-2 (review/opt + soak + close).
-
-## Phases
-
-### Phase 1 (wave I-1) — recorder node: dynamic streams + per-frame dims
-
-`app/orchestrator/recorder-node.ts` (+ `recorder/schema.ts`):
-- `addStream`/`removeStream` on the handle + worker messages; dynamic
-  consumer set; finalize/drain over the live set; stats fold over a
-  changing key set.
-- Frame message carries per-frame `width`/`height` (schema version bump in
-  `recorder/schema.ts`; channel metadata documents max shape).
-- Stream-ends-on-pipe-CLOSED is a normal exit (already true via
-  runStreamConsumer Closed handling — verify + test).
-- Viewer (`app/orchestrator/viewer/decode.ts` / `player.ts` /
-  `sessions/viewer.ts`): honor per-frame dims, channels appearing mid-file,
-  per-stream time ranges shorter than the container.
-- Tests: unit (dynamic add/remove state machine, resize sequences) + a
-  churn soak (`*-soak.ts` pattern): streams added/removed mid-run, dims
-  varying per frame, exact accounting on stable segments.
-
-### Phase 2 (wave I-2) — multi-fovea session wiring + shared raw pipes
-
-- `raw-pipe.ts` refcounted acquire/release; manual-control recording.ts +
-  capture path migrated onto it (guards in manual-control/session.ts stay —
-  capture-vs-recording exclusivity is still policy, but clobber becomes
-  structurally impossible).
-- `app/modules/multi-fovea/session.ts`: recording controller — streams =
-  live slot pipes + raw wides; arm/disarm hooks call add/removeStream;
-  extras from the runtime's per-target state; `recording:finished` post.
-- `app/modules/multi-fovea/index.vue` (+ contract.ts): record button,
-  Cmd-R, recording stats surface.
+1. **Packed 12p tap (core)**: `frame->raw` is the UNPACKED container (12p→16
+   at Frame construction) — unusable here. New pre-Frame ArvBuffer tap in
+   `core/lib/Aravis/RawPipe.cpp` (or sibling) publishing the verbatim wire
+   payload to `camera/<serial>/raw12p` pipes: fixed dims, pixelFormat = the
+   wire format (Bayer 12p when the sensor runs 12p readout), stride/packing
+   documented in the pipe advert. Extract-before-release discipline applies
+   at the ArvBuffer level (copy into the ring inside the stream callback).
+2. **Dynamic streams** (kept from r1): recorder node `addStream`/
+   `removeStream` mid-recording; MCAP channels register mid-file; removal =
+   drain-the-tail (R-1 semantics); pipe-CLOSED is a normal stream end.
+3. **Descriptor channels**: recorder gains data (non-frame) channels —
+   `addDataStream(name)` + `postData(name, message)` from the session, one
+   channel per live target (`fovea/<target-id>`), JSON-encoded
+   `{tNs, bbox:{x,y,width,height}, frames:{left,center,right}}` with seq
+   pointers. Channels churn with targets (ruling 2 machinery).
+4. **Per-frame dynamic params** ride the existing extras path (telemetry
+   channel, correlated by stream+seq — exact binding, never blocks writes):
+   fovea streams answer `onFrame` with `{volts, H}`; the wide stream posts
+   no per-frame extras (`extrasStreams` gating) — its camera matrix is the
+   §2 global metadata record written once at start.
+5. **Recorder stays a pure pipe consumer**; raw12p pipes are acquired via a
+   refcount-shared `raw-pipe` helper (one advertise per id ever — kills the
+   R-3 double-advertise class; manual-control recording/capture migrate onto
+   it. Whether manual-control ALSO moves to packed 12p payloads is a
+   follow-on ruling — the helper supports both payload kinds meanwhile).
+6. **Viewer**: minimal playback support — unpack 12p→16 + debayer for
+   display, descriptor channels surfaced as overlay data (bbox on wide).
+   Channels appearing mid-file + per-stream ranges shorter than the
+   container must work. Deep analysis tooling stays offline/Python (MCAP
+   schema is the contract).
+7. **UI**: record button in the multi-fovea drawer, Cmd-R via
+   `onRecorderTrigger`, `recording:finished` → auto-open viewer.
+8. **Interleaved execution**: I-1a (recorder: dynamic streams + data
+   channels + raw12p schema + global metadata) ∥ I-1b (core: ArvBuffer tap →
+   raw12p pipes) → R-1 (review/opt) → I-2 (session wiring: descriptors from
+   the runtime/scheduler, params extras, refcounted raw pipes, UI, viewer
+   playback) → R-2 (review/opt + churn soak end-to-end + docs/stage-f
+   close).
 
 ## Gates
 
-vue-tsc 0 / vitest / soaks / vite build at wave closes; core untouched
-(consumer-side only). No Electron launches. Rig items accumulate in
-`docs/hardware/stage-f.md` §"Multi-fovea recording".
+vue-tsc 0 / vitest / soaks / vite build at wave closes; core: `cd core &&
+make` + hardware-free `core/test/NN-*.ts` set from repo ROOT. No Electron.
+Rig items accumulate in `docs/hardware/stage-f.md` §"Multi-fovea recording"
+(12p payload verbatim vs a reference wire capture, descriptor↔frame pairing
+under live round-robin, offline reconstruction fidelity).
