@@ -184,6 +184,11 @@ the active `Controller` as it connects/disconnects.
   tracking-single + manual-control + calibrate-extrinsic, keep actuation.ts
   alive for disparity-scope. Phase 2 (after the disparity worker lands):
   migrate disparity-scope, delete actuation.ts.
+  - SUPERSEDED mid-wave (user ruling): tracking-single was DELETED outright
+    (6f8097c — replaced by disparity-scope), so its migration never
+    happened; phase 2's migration set became disparity-scope +
+    calibrate-distortion (worker H's census caught the latter still
+    importing the loop).
 
 ## §3.5 Disparity-scope tracker → its own native thread (worker E native half; disparity worker integration half)
 

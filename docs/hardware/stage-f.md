@@ -34,8 +34,10 @@ names the mechanism it gates.
 - [ ] **Undistort producer calibration** — B's native remap uses the intended
   camera matrix (`mtx` via `initUndistortRectifyMap`, not an alternate) —
   manual-control residual.
-- [ ] **KCF arm-in-raw-space** — tracking-single: native KCF armed from
-  drag-end + the on-screen box on the wide view (user-reported bug fix).
+- ~~**KCF arm-in-raw-space** — tracking-single~~ — RETIRED: tracking-single
+  was deleted 2026-07-08 (role replaced by disparity-scope; commit 6f8097c).
+  The arm-from-drag discipline now lives in disparity's chained tracker —
+  covered by §"Disparity tracker → own thread".
 - [ ] **Disparity-scope magnification** — absolute magnification (~9×
   expected) + match_left/right quality with the measured fovea↔wide scale
   ratio; projection-plane bake-in check.
@@ -127,8 +129,9 @@ names the mechanism it gates.
 
 ## PID nodes + view re-plumb (2026-07-08 wave, through 9217523)
 
-- [ ] **View fps decoupled** — disparity-scope / tracking-single /
-  manual-control / calibrate-distortion: L/R (and disparity's C) main views
+- [ ] **View fps decoupled** — disparity-scope /
+  manual-control / calibrate-distortion (tracking-single deleted 2026-07-08):
+  L/R (and disparity's C) main views
   render at CAMERA rate while the kernel meters lower (the 36–40 vs 60 fps
   gap closes); profiler graph shows the undistort nodes in every chain.
 - [ ] **Disparity chain renders** — camera→convert→undistort→scope→pid→
