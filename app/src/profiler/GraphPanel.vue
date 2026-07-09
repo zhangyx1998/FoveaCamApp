@@ -32,7 +32,13 @@ import {
   faRotateLeft,
 } from "@fortawesome/free-solid-svg-icons";
 import type { GraphTopology } from "@lib/orchestrator/graph-contract";
-import { membershipKey, toElements, type HoverDetail } from "./graph-view";
+import {
+  focusSet,
+  membershipKey,
+  toElements,
+  type GraphElement,
+  type HoverDetail,
+} from "./graph-view";
 import {
   GRAPH_HEIGHT_KEY,
   DEFAULT_GRAPH_HEIGHT,
@@ -141,6 +147,17 @@ const STYLE: cytoscape.StylesheetJson = [
       "overlay-padding": 4,
     },
   },
+  {
+    // Hover FOCUS dim: everything OUTSIDE the hovered element's focus set
+    // (graph-view's focusSet) recedes. Opacity ONLY — element opacity covers
+    // body/line + label without clobbering the semantic tints or the .hover
+    // overlay-halo (deliberately orthogonal channels). 0.2 clearly recedes
+    // while the dimmed labels stay legible for orientation.
+    selector: ".dimmed",
+    style: {
+      opacity: 0.2,
+    },
+  },
 ];
 
 const LAYOUT = {
@@ -162,11 +179,12 @@ let dragged = new Map<string, NodePosition>();
 function apply(t: GraphTopology): void {
   if (!cy) return;
   const els = toElements(t);
+  lastEls = els;
   const key = membershipKey(t);
   const changed = key !== lastKey;
   lastKey = key;
+  const wanted = new Set(els.map((e) => e.data.id));
   cy.batch(() => {
-    const wanted = new Set(els.map((e) => e.data.id));
     // Remove departed elements first (removing a node also drops its edges).
     for (const el of cy!.elements().toArray()) if (!wanted.has(el.id())) el.remove();
     for (const el of els) {
@@ -190,6 +208,47 @@ function apply(t: GraphTopology): void {
       if (node.nonempty()) node.position({ ...pos });
     }
   }
+  // Hover/dim reconciliation: the diff above rewrites classes wholesale
+  // (`existing.classes(...)`) and adds fresh elements without dim state — a
+  // dimmed class must neither leak onto re-created elements nor vanish from
+  // surviving ones mid-hover. If the hovered element itself churned away,
+  // drop the whole hover state (its mouseout never fires); otherwise restore
+  // the halo + re-derive the focus dim from the new element set.
+  if (hoveredId && !wanted.has(hoveredId)) {
+    hoveredId = null;
+    hover.value = null;
+    overNode = overEdge = false;
+    settleCursor();
+  }
+  if (hoveredId) {
+    cy.getElementById(hoveredId).addClass("hover");
+    applyFocus();
+  }
+}
+
+// --- Hover focus dim (user 2026-07-08) ----------------------------------------
+
+// The elements last applied to the canvas — the pure `focusSet` computes the
+// focus set from these (same ids as the live cytoscape elements).
+let lastEls: GraphElement[] = [];
+let hoveredId: string | null = null;
+
+/** Dim everything outside the hovered element's focus set (batched — one
+ *  style recalc per hover, not N). An unknown/absent hovered id degrades to
+ *  clearing all dimming — never a fully-dimmed graph. */
+function applyFocus(): void {
+  if (!cy) return;
+  const keep = hoveredId ? focusSet(lastEls, hoveredId) : new Set<string>();
+  if (keep.size === 0) return clearFocus();
+  cy.batch(() => {
+    for (const el of cy!.elements().toArray())
+      if (keep.has(el.id())) el.removeClass("dimmed");
+      else el.addClass("dimmed");
+  });
+}
+
+function clearFocus(): void {
+  cy?.batch(() => cy!.elements().removeClass("dimmed"));
 }
 
 // --- Vertical resize (persisted) ---------------------------------------------
@@ -320,11 +379,14 @@ onMounted(() => {
     dragged.set(evt.target.id(), { ...evt.target.position() });
   });
   // Hover feedback: the .hover overlay halo (see STYLE) on both element
-  // kinds + the detail card (node metrics / edge flow breakdown).
+  // kinds + the detail card (node metrics / edge flow breakdown) + the focus
+  // dim (everything outside the hovered neighborhood recedes).
   cy.on("mouseover", "node", (evt) => {
     evt.target.addClass("hover");
     overNode = true;
     settleCursor();
+    hoveredId = evt.target.id();
+    applyFocus();
     const detail = evt.target.data("detail") as HoverDetail | undefined;
     if (!detail) return;
     const bb = evt.target.renderedBoundingBox();
@@ -334,12 +396,16 @@ onMounted(() => {
     evt.target.removeClass("hover");
     overNode = false;
     settleCursor();
+    hoveredId = null;
+    clearFocus();
     hover.value = null;
   });
   cy.on("mouseover", "edge", (evt) => {
     evt.target.addClass("hover");
     overEdge = true;
     settleCursor();
+    hoveredId = evt.target.id();
+    applyFocus();
     const detail = evt.target.data("detail") as HoverDetail | undefined;
     if (!detail) return;
     const p = evt.target.renderedMidpoint();
@@ -349,6 +415,8 @@ onMounted(() => {
     evt.target.removeClass("hover");
     overEdge = false;
     settleCursor();
+    hoveredId = null;
+    clearFocus();
     hover.value = null;
   });
   // The card's anchor goes stale the moment the scene moves under it.

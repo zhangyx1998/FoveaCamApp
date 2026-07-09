@@ -360,6 +360,38 @@ export function toElements(t: GraphTopology): GraphElement[] {
   return els;
 }
 
+/** Hover FOCUS SET (user 2026-07-08): the element ids that stay at full
+ *  opacity while everything else dims. Pure — the panel applies it as a
+ *  `dimmed` class inside one cytoscape batch.
+ *
+ *  - Hovered NODE → the node + every edge touching it + the nodes at the
+ *    other end of those edges. Including the neighbor nodes is a deliberate
+ *    refinement over "node and all its edges": an edge kept bright while its
+ *    far endpoint fades reads as a dangling arrow — the one-hop neighborhood
+ *    is the unit the user is inspecting.
+ *  - Hovered EDGE → the edge + its producer and consumer nodes.
+ *  - Unknown id (element churned away mid-hover) → EMPTY set; the panel
+ *    treats that as "clear all dimming", never dims the whole graph. */
+export function focusSet(els: GraphElement[], hoveredId: string): Set<string> {
+  const hovered = els.find((e) => e.data.id === hoveredId);
+  if (!hovered) return new Set();
+  const keep = new Set<string>([hoveredId]);
+  if (hovered.group === "nodes") {
+    for (const e of els) {
+      if (e.group !== "edges") continue;
+      if (e.data.source === hoveredId || e.data.target === hoveredId) {
+        keep.add(e.data.id);
+        keep.add(String(e.data.source));
+        keep.add(String(e.data.target));
+      }
+    }
+  } else {
+    keep.add(String(hovered.data.source));
+    keep.add(String(hovered.data.target));
+  }
+  return keep;
+}
+
 /** Stable membership key — layout re-runs ONLY when this changes. Nodes are
  *  keyed by (id, epoch) per the contract (an epoch bump = a re-created node =
  *  worth a re-layout); stats are deliberately excluded. */

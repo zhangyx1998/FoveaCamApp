@@ -9,6 +9,7 @@ import {
   edgeDetail,
   edgeLabel,
   edgeWarns,
+  focusSet,
   isBackpressured,
   isDropping,
   membershipKey,
@@ -391,5 +392,43 @@ describe("FIFO queue edges (controller-node-and-fifo-edges §2)", () => {
       "hwm 8 / cap 8 (10s) · now 8",
     ]);
     expect(edges[1].classes).toBe(""); // the queue-less edge stays quiet
+  });
+});
+
+describe("focusSet — hover focus dim (user 2026-07-08)", () => {
+  // camera/123 → convert, camera/123 → undistort (two edges, three nodes).
+  const els = toElements(deriveTopology([], PIPES, 1, 0));
+  const CONVERT_EDGE = "edge:camera/123->camera/123/convert#in";
+  const UNDISTORT_EDGE = "edge:camera/123->camera/123/undistort#in";
+
+  it("node hover keeps the node, its edges, AND the neighbor nodes", () => {
+    // The one-hop neighborhood reads as a unit — far endpoints stay bright so
+    // no edge renders as a dangling arrow (documented refinement).
+    expect(focusSet(els, "camera/123")).toEqual(
+      new Set([
+        "camera/123",
+        "camera/123/convert",
+        "camera/123/undistort",
+        CONVERT_EDGE,
+        UNDISTORT_EDGE,
+      ]),
+    );
+  });
+
+  it("a leaf node's focus excludes the sibling branch", () => {
+    expect(focusSet(els, "camera/123/convert")).toEqual(
+      new Set(["camera/123/convert", CONVERT_EDGE, "camera/123"]),
+    );
+  });
+
+  it("edge hover keeps the edge and its producer + consumer nodes only", () => {
+    expect(focusSet(els, CONVERT_EDGE)).toEqual(
+      new Set([CONVERT_EDGE, "camera/123", "camera/123/convert"]),
+    );
+  });
+
+  it("an unknown hovered id (element churned away) yields the EMPTY set", () => {
+    expect(focusSet(els, "ghost/node")).toEqual(new Set());
+    expect(focusSet([], "camera/123")).toEqual(new Set());
   });
 });
