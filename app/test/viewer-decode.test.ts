@@ -17,7 +17,7 @@ import {
   decompressChain,
   unpack12p,
   createFrameDecoder,
-} from "@orchestrator/viewer/decode";
+} from "@src/viewer/decode";
 
 // The PACKED decode branch (unpack12p → convertType with the significantBits-
 // derived scale) needs core Vision. Stub it to apply the scale it is handed so

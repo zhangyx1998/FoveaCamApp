@@ -4,65 +4,118 @@ This source code is licensed under the MIT license.
 You may find the full license in project root directory.
 --------------------------------------------------- -->
 <!--
-  Recorder viewer window (A-11, docs/history/refactor/recorder-container.md §4):
-  playback UI for one `.fovea` file. Everything data-side comes from the
-  PINNED `viewer` contract (`@lib/orchestrator/contracts` — C-8 implements
-  the session): `open(path)` on mount, authoritative playback state in
-  `state.files[fileId]`, frames consumed exactly like live streams through
-  `session.frame("<fileId>:<channel>")` (one ref = one finterest, C10).
+  STANDALONE recorder viewer window (standalone-viewer-and-fcap ruling 1;
+  formerly A-11 over the C-8 `viewer` session, both retired): playback UI for
+  one `.fcap`/`.fovea` file, fully self-contained in this window. The data
+  layer (MCAP read + core-Vision decode + timestamp-paced playback) runs on a
+  worker thread INSIDE this window's process (src/viewer/worker.ts), spawned
+  by the dedicated viewer preload — the orchestrator is never involved, so
+  playback keeps working while it is down, busy, or restarting.
 
-  Subscription is ACTIVE (not passive): the viewer session holds no cameras,
-  and active interest gives C-8's session a meaningful activate/idle
-  lifecycle (last viewer window gone → idle → close open readers). `close`
-  is also sent explicitly on pagehide, best-effort — the port-close detach
-  covers the crash path.
+  Wire-up: this component creates a DOM MessageChannel, keeps port1, and
+  hands port2 to the preload via `window.postMessage({kind: VIEWER_INIT})`
+  (the SHM_INIT pattern — see src/viewer/protocol.ts). Decoded Mats arrive
+  with transferred buffers and render through FrameView's ImageData path
+  directly — no SHM hop, no frame transport. All playback state
+  (position/playing/docs) is window-local.
 -->
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue";
-import { useSession } from "@lib/orchestrator/client";
-import { viewer, type ViewerChannel } from "@lib/orchestrator/viewer-contract";
+import type { Mat } from "core/Vision";
+import {
+  VIEWER_INIT,
+  type PlaybackDoc,
+  type ViewerChannelInfo,
+  type ViewerCommand,
+  type ViewerEvent,
+  type ViewerFileInfo,
+} from "../viewer/protocol";
 import TitleBar from "../components/TitleBar.vue";
-import StreamView from "../components/StreamView.vue";
+import FrameView from "../components/FrameView.vue";
 
 const props = defineProps<{ path: string }>();
 
 const titleBarHeight = ref(0);
-const session = useSession(viewer, "viewer");
 
-const fileId = ref<string | null>(null);
+// --- worker link (window-local playback state) ------------------------------
+
+const file = ref<ViewerFileInfo | null>(null);
 const openError = ref<string | null>(null);
+const playing = ref(false);
+const workerPositionNs = ref(0);
+/** Latest descriptor doc per `fovea/<target>` topic (overlay data). Reset on
+ *  seek BEFORE the command goes out, so a backwards scrub can't leave a
+ *  future bbox on screen (the worker's latest-before republish repopulates
+ *  whatever exists at the new position — the retired session's semantics). */
+const descriptors = ref<Record<string, PlaybackDoc>>({});
+/** Latest decoded Mat per frame channel. A plain Map + tick (not a reactive
+ *  Map): frames arrive at playback rate and only the selected channel needs
+ *  a re-render. */
+const mats = new Map<string, Mat<Uint8Array>>();
+const frameTick = ref(0);
 
-onMounted(async () => {
+const link = new MessageChannel();
+const port = link.port1;
+
+function send(cmd: ViewerCommand): void {
+  port.postMessage(cmd);
+}
+
+port.onmessage = (e: MessageEvent) => {
+  const ev = e.data as ViewerEvent;
+  switch (ev?.type) {
+    case "opened":
+      file.value = ev.info;
+      break;
+    case "open-error":
+      openError.value = ev.message;
+      break;
+    case "position":
+      workerPositionNs.value = ev.positionNs;
+      playing.value = ev.playing;
+      break;
+    case "telemetry":
+      // Per-frame extras doc (volt/angle/affine) — not surfaced in this UI
+      // yet; kept in the protocol for the metadata inspector to come.
+      break;
+    case "descriptor":
+      descriptors.value = { ...descriptors.value, [ev.topic]: ev.doc };
+      break;
+    case "frame": {
+      const mat = Object.assign(
+        new Uint8Array(ev.buffer, ev.byteOffset, ev.length),
+        { shape: ev.shape, channels: ev.channels },
+      ) as Mat<Uint8Array>;
+      mats.set(ev.channel, mat);
+      frameTick.value++;
+      break;
+    }
+    case "error":
+      console.error("[viewer]", ev.message);
+      break;
+  }
+};
+// Hand the sibling port to the preload — it spawns the playback worker and
+// relays verbatim (frame buffers re-transferred, never copied).
+window.postMessage({ kind: VIEWER_INIT }, "*", [link.port2]);
+
+onMounted(() => {
   if (!props.path) {
     openError.value = "Missing file path (?path=…)";
     return;
   }
-  try {
-    const result = await session.call("open", props.path);
-    fileId.value = result.fileId;
-  } catch (error) {
-    openError.value = error instanceof Error ? error.message : String(error);
-  }
+  send({ type: "open", path: props.path });
 });
 
-// Best-effort explicit close — the channel-detach path covers crashes. Removed
-// on unmount so a torn-down window leaves no dangling listener.
+// Best-effort explicit close (releases the file handle promptly); the preload
+// terminates the worker on pagehide as the backstop, and the whole worker
+// dies with this window's process in every crash path.
 function onPageHide(): void {
-  if (fileId.value) void session.call("close", fileId.value);
+  send({ type: "close" });
 }
 window.addEventListener("pagehide", onPageHide);
 onUnmounted(() => window.removeEventListener("pagehide", onPageHide));
 
-const file = computed(() =>
-  fileId.value ? (session.state.files[fileId.value] ?? null) : null,
-);
-// Mutable playback state rides telemetry (C-14 reshape): the static `file`
-// entry no longer carries `positionNs`/`playing`. Null = closed / not yet
-// pushed → treat as not playing, position 0.
-const playback = computed(() =>
-  fileId.value ? (session.telemetry.position[fileId.value] ?? null) : null,
-);
-const playing = computed(() => playback.value?.playing ?? false);
 const basename = computed(() => props.path.split(/[/\\]/).pop() ?? props.path);
 
 // UX 4 (standalone-viewer-and-fcap): a COMPACT path for the subtitle + sidebar
@@ -86,8 +139,9 @@ function openFolder(): void {
 // --- tracks ---------------------------------------------------------------
 
 // The §2b telemetry channel is JSON (per-frame extras), not pixels — listed
-// as a track but not selectable for display.
-const isVisual = (c: ViewerChannel) => c.name !== "telemetry";
+// as a track but not selectable for display; descriptor (`fovea/<n>`) tracks
+// are json too and draw as overlays instead.
+const isVisual = (c: ViewerChannelInfo) => c.metadata.messageEncoding !== "json";
 const selected = ref<string | null>(null);
 const selectedChannel = computed(() => {
   const channels = file.value?.channels ?? [];
@@ -96,15 +150,14 @@ const selectedChannel = computed(() => {
   return channels.find(isVisual)?.name ?? null;
 });
 
-const payload = computed(() =>
-  fileId.value && selectedChannel.value
-    ? session.frame(`${fileId.value}:${selectedChannel.value}`).payload.value
-    : null,
-);
+const displayMat = computed(() => {
+  void frameTick.value; // re-evaluate on every delivered frame
+  return selectedChannel.value ? (mats.get(selectedChannel.value) ?? null) : null;
+});
 
 // --- descriptor overlay (multi-fovea recordings, wave I-2 ruling 6) --------
 // `fovea/<target>` tracks carry `{tNs, bbox, frames}` observation docs whose
-// bbox is in WIDE (center-stream) coordinates. The session replays them
+// bbox is in WIDE (center-stream) coordinates. The worker replays them
 // latest-wins (nearest-sample at playback rate; scrub redraw repopulates the
 // latest-before doc), so the overlay just draws the current doc per target
 // whenever the wide stream is the one displayed.
@@ -114,11 +167,9 @@ const TARGET_COLORS = [
 ];
 type OverlayBox = { topic: string; index: number; bbox: { x: number; y: number; width: number; height: number } };
 const overlayBoxes = computed<OverlayBox[]>(() => {
-  if (!fileId.value || selectedChannel.value !== "center") return [];
-  const docs = session.telemetry.descriptors[fileId.value];
-  if (!docs) return [];
+  if (selectedChannel.value !== "center") return [];
   const out: OverlayBox[] = [];
-  for (const [topic, doc] of Object.entries(docs)) {
+  for (const [topic, doc] of Object.entries(descriptors.value)) {
     const bbox = (doc as { bbox?: OverlayBox["bbox"] }).bbox;
     if (!bbox || typeof bbox.x !== "number") continue;
     const index = Number(topic.split("/").pop());
@@ -137,32 +188,32 @@ const RATES = [0.25, 0.5, 1, 2, 4];
 const rate = ref(1);
 
 function togglePlay(): void {
-  if (!fileId.value || !file.value) return;
-  if (playing.value) void session.call("pause", fileId.value);
-  else void session.call("play", { fileId: fileId.value, rate: rate.value });
+  if (!file.value) return;
+  if (playing.value) send({ type: "pause" });
+  else send({ type: "play", rate: rate.value });
 }
 
 function setRate(event: Event): void {
   rate.value = Number((event.target as HTMLSelectElement).value);
   // Re-issue play at the new rate if currently playing.
-  if (fileId.value && playing.value)
-    void session.call("play", { fileId: fileId.value, rate: rate.value });
+  if (playing.value) send({ type: "play", rate: rate.value });
 }
 
-// Scrub: while dragging, the slider shows the local value (the session's
+// Scrub: while dragging, the slider shows the local value (the worker's
 // `positionNs` echo would fight the thumb); seeks are sent live while
 // dragging (commands are cheap) and the local override lifts on release.
 const scrubbing = ref(false);
 const scrubNs = ref(0);
 const positionNs = computed(() =>
-  scrubbing.value ? scrubNs.value : (playback.value?.positionNs ?? 0),
+  scrubbing.value ? scrubNs.value : workerPositionNs.value,
 );
 
 function onScrub(event: Event): void {
   const tNs = Number((event.target as HTMLInputElement).value);
   scrubbing.value = true;
   scrubNs.value = tNs;
-  if (fileId.value) void session.call("seek", { fileId: fileId.value, tNs });
+  descriptors.value = {}; // reset-on-seek — see the `descriptors` doc above
+  send({ type: "seek", tNs });
 }
 
 function onScrubEnd(): void {
@@ -206,7 +257,7 @@ function fmtNs(ns: number): string {
       </div>
       <div class="stage">
         <div class="display">
-          <StreamView v-if="payload" :payload="payload" width="100%" height="100%">
+          <FrameView v-if="displayMat" :mat="displayMat" width="100%" height="100%">
             <g v-for="box in overlayBoxes" :key="box.topic">
               <rect
                 :x="box.bbox.x"
@@ -230,7 +281,7 @@ function fmtNs(ns: number): string {
                 {{ box.index + 1 }}
               </text>
             </g>
-          </StreamView>
+          </FrameView>
           <div v-else class="notice">No frames on {{ selectedChannel ?? "…" }} yet — press play or scrub</div>
         </div>
         <div class="transport">

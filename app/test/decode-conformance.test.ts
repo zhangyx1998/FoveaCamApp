@@ -20,7 +20,7 @@ import {
   pixelFormatDtype,
   significantBits,
 } from "@lib/util/dtype";
-import { bayerCode, parseDecodeProps } from "@orchestrator/viewer/decode";
+import { bayerCode, parseDecodeProps } from "@src/viewer/decode";
 
 describe("decode conformance vs docs/schema/pixel-formats (C-P6)", () => {
   it("dtype.significantBits matches the schema for every format", () => {

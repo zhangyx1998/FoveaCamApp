@@ -30,7 +30,7 @@ Read in this order:
 3. [`stream-graph.md`](./stream-graph.md) — the typed stream node graph: pipes, bricks, composition.
 4. [`windows.md`](./windows.md) — window taxonomy, manager, stable window identity.
 5. [`metering.md`](./metering.md) — workload meters, native probes, the profiler.
-6. [`recorder.md`](./recorder.md) — the `.fovea` MCAP container, viewer, Python access.
+6. [`recorder.md`](./recorder.md) — the `.fcap` MCAP container (legacy `.fovea` readable), the standalone viewer, Python access.
 7. [`serial-protocol.md`](./serial-protocol.md) — MEMS controller protocol (v1 + v2 streams/frames).
 
 ## Invariant glossary

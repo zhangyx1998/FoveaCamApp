@@ -11,20 +11,18 @@
 // lands before the track's first message (mid-file channels).
 
 import { describe, expect, it } from "vitest";
-import { createPlayer, type PlayerClock } from "@orchestrator/viewer/player";
-import type { WorkloadHandle } from "@orchestrator/metering";
-import type { FoveaMessage, FoveaSource } from "@orchestrator/viewer/source";
+import { createPlayer, type PlayerClock, type PlayerMeter } from "@src/viewer/player";
+import type { FoveaMessage, FoveaSource } from "@src/viewer/source";
 
 const enc = new TextEncoder();
 
-const fakeWorkload = (): WorkloadHandle =>
-  ({
-    ingest: () => {},
-    emit: () => {},
-    drop: () => {},
-    measure: (fn: () => void) => fn(),
-    dispose: () => {},
-  }) as unknown as WorkloadHandle;
+const fakeWorkload = (): PlayerMeter => ({
+  ingest: () => {},
+  emit: () => {},
+  drop: () => {},
+  measure: (fn: () => void) => fn(),
+  dispose: () => {},
+});
 
 const instantClock: PlayerClock = {
   now: () => 0,

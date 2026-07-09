@@ -1,24 +1,27 @@
-// `viewer` session (C-8) — the .fovea playback data layer, tested end to end
-// against a REAL synthetic container generated in-test by the B-5 recorder
-// sink. Frames flow through the session's standard frame transport (the fake
-// transport captures them); decode is injected (no core native in vitest,
-// per house convention); the clock is virtual, so pacing math is asserted
-// deterministically instead of racing real timers.
+// STANDALONE viewer playback (standalone-viewer-and-fcap ruling 1; formerly
+// the C-8 `viewer` session, retired) — the container playback data layer,
+// tested end to end against a REAL synthetic container generated in-test by
+// the B-5 recorder sink. The PLAYER (src/viewer/player.ts — the exact engine
+// the viewer window's worker hosts) is driven directly through its hooks;
+// decode is injected (no core native in vitest, per house convention); the
+// clock is virtual, so pacing math is asserted deterministically instead of
+// racing real timers. One-window-per-file dedupe is a WINDOW concern now and
+// is covered by window-manager.test.ts.
 
 import { mkdtemp, open, readFile, rm, stat, writeFile, truncate } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Mat } from "core/Vision";
-import { Channel, topic } from "@lib/orchestrator/protocol";
-import type { ViewerFile, ViewerPosition } from "@lib/orchestrator/viewer-contract";
 import { createFoveaSink, FOVEA_EXTENSION } from "@orchestrator/recorder";
-import { viewerSession } from "@orchestrator/sessions/viewer";
-import { workloadsSnapshot } from "@orchestrator/metering";
-import type { PlayerClock } from "@orchestrator/viewer/player";
-import { openFovea } from "@orchestrator/viewer/source";
-import { createEndpointPair, flush } from "./fake-endpoint";
-import { installFakeFrameTransport, type FakeFrameTransport } from "./fake-frame-transport";
+import {
+  createPlayer,
+  type Player,
+  type PlayerClock,
+  type PlayerMeter,
+} from "@src/viewer/player";
+import { openFovea } from "@src/viewer/source";
+import type { PlaybackDoc } from "@src/viewer/protocol";
 
 const tmpRoots: string[] = [];
 
@@ -67,56 +70,73 @@ function virtualClock(): PlayerClock & { sleeps: number[]; t: number } {
 const fakeDecoderFor = async () => (bytes: Uint8Array) =>
   Object.assign(new Uint8Array(bytes), { shape: [2, 2], channels: 1 }) as Mat<Uint8Array>;
 
-interface Harness {
-  call<T = unknown>(command: string, arg?: unknown): Promise<T>;
-  files(): Record<string, ViewerFile>;
-  playbackDocs(): Record<string, Record<string, unknown> | null>;
-  positions(): Record<string, ViewerPosition | null>;
-  transports: FakeFrameTransport[];
-  clock: ReturnType<typeof virtualClock>;
-  /** Force-idle the session and await the file-close drain — keeps meters
-   *  from one test leaking into the next (fileIds restart at f1). */
-  dispose(): Promise<void>;
+/** Recording meter (the standalone player takes a `PlayerMeter`, no-op in
+ *  production — tests inject this recorder to assert accounting). */
+function recordingMeter(): PlayerMeter & {
+  ingests: string[];
+  emits: string[];
+  drops: string[];
+  disposed: boolean;
+} {
+  const meter = {
+    ingests: [] as string[],
+    emits: [] as string[],
+    drops: [] as string[],
+    disposed: false,
+    ingest: (input: string) => void meter.ingests.push(input),
+    emit: (output: string) => void meter.emits.push(output),
+    drop: (cause: string) => void meter.drops.push(cause),
+    measure: (fn: () => void) => fn(),
+    dispose: () => {
+      meter.disposed = true;
+    },
+  };
+  return meter;
 }
 
-function harness(): Harness {
-  const transports = installFakeFrameTransport();
+interface Harness {
+  player: Player;
+  clock: ReturnType<typeof virtualClock>;
+  meter: ReturnType<typeof recordingMeter>;
+  frames: Array<{ topic: string; bytes: Uint8Array }>;
+  telemetry: PlaybackDoc[];
+  positions: Array<{ positionNs: number; playing: boolean }>;
+  durationNs: number;
+  truncated: boolean;
+  close(): Promise<void>;
+}
+
+/** Open a real container and drive the player exactly like the worker does —
+ *  hooks captured locally instead of posted to a window. */
+async function harness(file: string): Promise<Harness> {
+  const source = await openFovea(file);
   const clock = virtualClock();
-  const session = viewerSession({ decoderFor: fakeDecoderFor, clock });
-  const [serverEp, clientEp] = createEndpointPair();
-  const server = new Channel(serverEp);
-  const client = new Channel(clientEp);
-  session.attach(server);
-  session.subscribe(server);
-
-  let files: Record<string, ViewerFile> = {};
-  let docs: Record<string, Record<string, unknown> | null> = {};
-  let positions: Record<string, ViewerPosition | null> = {};
-  client.on(topic.state("viewer"), (patch: { key: string; value: never }) => {
-    if (patch.key === "files") files = patch.value;
-  });
-  client.on(
-    topic.telemetry("viewer"),
-    (patch: {
-      playback?: Record<string, Record<string, unknown> | null>;
-      position?: Record<string, ViewerPosition | null>;
-    }) => {
-      if (patch.playback) docs = patch.playback;
-      if (patch.position) positions = patch.position;
+  const meter = recordingMeter();
+  const frames: Harness["frames"] = [];
+  const telemetry: PlaybackDoc[] = [];
+  const positions: Harness["positions"] = [];
+  const player = createPlayer(
+    source,
+    fakeDecoderFor,
+    meter,
+    {
+      publishFrame: (topic, mat) =>
+        void frames.push({ topic, bytes: new Uint8Array(mat) }),
+      emitTelemetry: (doc) => void telemetry.push(doc),
+      emitPosition: (positionNs, playing) => void positions.push({ positionNs, playing }),
     },
-  );
-
-  return {
-    call: (command, arg) => client.request(topic.command("viewer", command), arg),
-    files: () => files,
-    playbackDocs: () => docs,
-    positions: () => positions,
-    transports,
     clock,
-    dispose: () => {
-      session.dispose();
-      return session.drained();
-    },
+  );
+  return {
+    player,
+    clock,
+    meter,
+    frames,
+    telemetry,
+    positions,
+    durationNs: Number(source.endNs - source.startNs),
+    truncated: source.truncated,
+    close: () => player.close(),
   };
 }
 
@@ -127,76 +147,59 @@ async function until(cond: () => boolean, ms = 2000): Promise<void> {
   while (!cond()) {
     if (Date.now() > deadline) throw new Error("condition not reached");
     await new Promise((r) => setTimeout(r, 5));
-    await flush();
   }
 }
 
 const NS = 1e9;
 
-describe("viewer session (C-8)", () => {
-  beforeEach(() => {
-    vi.restoreAllMocks();
-  });
+describe("standalone viewer player (over a real container)", () => {
   afterEach(async () => {
     await Promise.all(tmpRoots.splice(0).map((d) => rm(d, { recursive: true, force: true })));
   });
 
-  it("open() exposes channels/metadata/duration in state and does not autoplay", async () => {
-    const h = harness();
+  it("exposes channels/duration through the source and does not autoplay", async () => {
     const file = await writeFixture(await tempRoot());
-    const { fileId } = await h.call<{ fileId: string }>("open", file);
-    await flush();
-
-    const f = h.files()[fileId];
-    expect(f).toBeDefined();
-    expect(f.path).toBe(file);
-    expect(f).not.toHaveProperty("playing");
-    expect(f).not.toHaveProperty("positionNs");
-    expect(h.positions()[fileId]).toEqual({ positionNs: 0, playing: false });
-    expect(f.truncated).toBe(false);
+    const source = await openFovea(file);
+    expect(source.truncated).toBe(false);
     // t = 0.1..0.6 s → 0.5 s span
-    expect(f.durationNs).toBe(0.5 * NS);
-    const names = f.channels.map((c) => c.name).sort();
+    expect(Number(source.endNs - source.startNs)).toBe(0.5 * NS);
+    const names = source.channels.map((c) => c.topic).sort();
     expect(names).toEqual(["aux", "cam", "telemetry"]);
-    const cam = f.channels.find((c) => c.name === "cam")!;
+    const cam = source.channels.find((c) => c.topic === "cam")!;
     expect(cam.metadata).toMatchObject({
       dtype: "U16",
       pixelFormat: "Mono12p",
       significantBits: "12",
       messageEncoding: "x-fovea-raw",
     });
-    expect(f.channels.find((c) => c.name === "telemetry")!.metadata.messageEncoding).toBe(
-      "json",
-    );
-    // meter registered per file
-    expect(workloadsSnapshot()[`viewer:${fileId}`]).toBeDefined();
-    await h.dispose();
+    expect(
+      source.channels.find((c) => c.topic === "telemetry")!.metadata.messageEncoding,
+    ).toBe("json");
+
+    const h = await harness(file);
+    expect(h.player.playing).toBe(false);
+    expect(h.player.positionNs).toBe(0);
+    expect(h.frames).toHaveLength(0); // opening never publishes
+    await h.close();
+    await source.close();
   });
 
-  it("plays timestamp-paced through the standard frame transport, then stops at the end", async () => {
-    const h = harness();
+  it("plays timestamp-paced through the hooks, then stops at the end", async () => {
     const file = await writeFixture(await tempRoot());
-    const { fileId } = await h.call<{ fileId: string }>("open", file);
+    const h = await harness(file);
 
-    await h.call("play", { fileId, rate: 1 });
-    await until(
-      () =>
-        h.positions()[fileId]?.playing === false &&
-        h.positions()[fileId]?.positionNs === 0.5 * NS,
-    );
+    h.player.play(1);
+    await until(() => !h.player.playing && h.player.positionNs === 0.5 * NS);
 
-    // Every cam frame published on the session's dynamic topic; aux too.
-    const writes = h.transports.flatMap((t) => t.writes);
-    const camWrites = writes.filter((w) => w.topic === `fr:viewer:${fileId}:cam`);
-    expect(camWrites).toHaveLength(6);
+    // Every cam frame decoded + published; aux too.
+    const camFrames = h.frames.filter((f) => f.topic === "cam");
+    expect(camFrames).toHaveLength(6);
     // Decoded payload carries the message bytes (fake decoder passthrough):
     // first cam frame was Uint16 [0,1,2,3].
-    expect(Array.from(new Uint16Array(camWrites[0].bytes.slice().buffer))).toEqual([
+    expect(Array.from(new Uint16Array(camFrames[0]!.bytes.slice().buffer))).toEqual([
       0, 1, 2, 3,
     ]);
-    expect(writes.some((w) => w.topic === `fr:viewer:${fileId}:aux`)).toBe(true);
-    // meta carries convertMs for the OSD/profiler timing path
-    expect(camWrites[0].payload.meta?.convertMs).toBeDefined();
+    expect(h.frames.some((f) => f.topic === "aux")).toBe(true);
 
     // Pacing: messages sit 100 ms apart (aux at 0.35 s splits one gap into
     // 50+50) — the virtual clock recorded (nearly) the whole 500 ms span.
@@ -204,74 +207,53 @@ describe("viewer session (C-8)", () => {
     expect(slept).toBeGreaterThan(450);
     expect(slept).toBeLessThanOrEqual(510);
 
-    // telemetry docs (2 extras) replayed onto session telemetry
-    expect(h.playbackDocs()[fileId]).toMatchObject({ stream: "cam", seq: 1 });
+    // telemetry docs (2 extras) replayed onto the telemetry hook
+    expect(h.telemetry).toHaveLength(2);
+    expect(h.telemetry[1]).toMatchObject({ stream: "cam", seq: 1 });
 
     // ended: position landed on the duration, playing false
-    expect(h.positions()[fileId]).toEqual({ positionNs: 0.5 * NS, playing: false });
+    expect(h.positions.at(-1)).toEqual({ positionNs: 0.5 * NS, playing: false });
 
     // meter counted ingest + emits
-    const meter = workloadsSnapshot()[`viewer:${fileId}`];
-    expect(meter.inputs["cam"].count).toBe(6);
-    expect(meter.outputs["frames"].count).toBe(7);
-    expect(meter.outputs["telemetry"].count).toBe(2);
-    await h.dispose();
+    expect(h.meter.ingests.filter((i) => i === "cam")).toHaveLength(6);
+    expect(h.meter.emits.filter((e) => e === "frames")).toHaveLength(7);
+    expect(h.meter.emits.filter((e) => e === "telemetry")).toHaveLength(2);
+    await h.close();
+    expect(h.meter.disposed).toBe(true);
   });
 
   it("rate scales the pacing schedule", async () => {
-    const h = harness();
     const file = await writeFixture(await tempRoot());
-    const { fileId } = await h.call<{ fileId: string }>("open", file);
-    await h.call("play", { fileId, rate: 2 });
-    await until(
-      () =>
-        h.positions()[fileId]?.playing === false &&
-        h.positions()[fileId]?.positionNs === 0.5 * NS,
-    );
+    const h = await harness(file);
+    h.player.play(2);
+    await until(() => !h.player.playing && h.player.positionNs === 0.5 * NS);
     const slept = h.clock.sleeps.reduce((a, b) => a + b, 0);
     // 500 ms of media at 2× ≈ 250 ms wall
     expect(slept).toBeGreaterThan(220);
     expect(slept).toBeLessThanOrEqual(260);
-    await h.dispose();
+    await h.close();
   });
 
   it("seek while paused republishes the latest frame at-or-before the target", async () => {
-    const h = harness();
     const file = await writeFixture(await tempRoot());
-    const { fileId } = await h.call<{ fileId: string }>("open", file);
+    const h = await harness(file);
 
     // tNs is RELATIVE to the first message (0.1 s absolute): 0.25 s relative
     // = 0.35 s absolute → cam's latest ≤ target is frame #2 (t=0.3 s abs,
     // bytes [2,3,4,5]); aux's is its only frame (exactly 0.35 s abs).
-    await h.call("seek", { fileId, tNs: 0.25 * NS });
-    await flush();
-    const writes = h.transports.flatMap((t) => t.writes);
-    const camWrites = writes.filter((w) => w.topic === `fr:viewer:${fileId}:cam`);
-    expect(camWrites).toHaveLength(1);
-    expect(Array.from(new Uint16Array(camWrites[0].bytes.slice().buffer))).toEqual([
+    await h.player.seek(0.25 * NS);
+    const camFrames = h.frames.filter((f) => f.topic === "cam");
+    expect(camFrames).toHaveLength(1);
+    expect(Array.from(new Uint16Array(camFrames[0]!.bytes.slice().buffer))).toEqual([
       2, 3, 4, 5,
     ]);
-    expect(writes.some((w) => w.topic === `fr:viewer:${fileId}:aux`)).toBe(true);
-    expect(h.positions()[fileId]).toEqual({ positionNs: 0.25 * NS, playing: false });
-    await h.dispose();
-  });
-
-  it("opens multiple files concurrently, keyed by fileId", async () => {
-    const h = harness();
-    const fileA = await writeFixture(await tempRoot());
-    const fileB = await writeFixture(await tempRoot());
-    const a = await h.call<{ fileId: string }>("open", fileA);
-    const b = await h.call<{ fileId: string }>("open", fileB);
-    await flush();
-    expect(a.fileId).not.toBe(b.fileId);
-    expect(Object.keys(h.files()).sort()).toEqual([a.fileId, b.fileId].sort());
-    expect(workloadsSnapshot()[`viewer:${a.fileId}`]).toBeDefined();
-    expect(workloadsSnapshot()[`viewer:${b.fileId}`]).toBeDefined();
-    await h.dispose();
+    expect(h.frames.some((f) => f.topic === "aux")).toBe(true);
+    expect(h.player.positionNs).toBe(0.25 * NS);
+    expect(h.player.playing).toBe(false);
+    await h.close();
   });
 
   it("footerless (crash-truncated) file: streaming fallback recovers, flags truncated", async () => {
-    const h = harness();
     const dir = await tempRoot();
     // Dedicated fixture with KB-scale frames so message chunks dominate the
     // byte layout — a 60% cut then provably lands mid-message-stream (the
@@ -292,86 +274,30 @@ describe("viewer session (C-8)", () => {
     const { size } = await stat(file);
     await truncate(file, Math.floor(size * 0.6));
 
-    const { fileId } = await h.call<{ fileId: string }>("open", file);
-    await flush();
-    const f = h.files()[fileId];
-    expect(f.truncated).toBe(true);
-    expect(f.channels.map((c) => c.name)).toContain("cam");
-    expect(f.durationNs).toBeGreaterThan(0);
+    const h = await harness(file);
+    expect(h.truncated).toBe(true);
+    expect(h.durationNs).toBeGreaterThan(0);
 
-    await h.call("play", { fileId, rate: 1 });
-    await until(
-      () =>
-        h.positions()[fileId]?.playing === false &&
-        (h.positions()[fileId]?.positionNs ?? 0) >= f.durationNs,
-    );
-    const camWrites = h.transports
-      .flatMap((t) => t.writes)
-      .filter((w) => w.topic === `fr:viewer:${fileId}:cam`);
-    expect(camWrites.length).toBeGreaterThan(0); // recovered flushed frames
-    expect(camWrites.length).toBeLessThan(6); // but not the truncated tail
-    await h.dispose();
+    h.player.play(1);
+    await until(() => !h.player.playing && h.player.positionNs >= h.durationNs);
+    const camFrames = h.frames.filter((f) => f.topic === "cam");
+    expect(camFrames.length).toBeGreaterThan(0); // recovered flushed frames
+    expect(camFrames.length).toBeLessThan(6); // but not the truncated tail
+    await h.close();
   });
 
-  it("open() dedupes by canonical path: same file → same fileId, one reader/meter (C-P11)", async () => {
-    const h = harness();
+  it("close() stops playback and disposes the meter (window teardown path)", async () => {
     const file = await writeFixture(await tempRoot());
-    const a = await h.call<{ fileId: string }>("open", file);
-    const b = await h.call<{ fileId: string }>("open", file);
-    await flush();
-    // Second open returns the existing fileId — no second file row/meter.
-    expect(b.fileId).toBe(a.fileId);
-    expect(Object.keys(h.files())).toEqual([a.fileId]);
-    expect(workloadsSnapshot()[`viewer:${a.fileId}`]).toBeDefined();
-    // A single close (by fileId) fully releases it — close semantics unchanged.
-    await h.call("close", a.fileId);
-    await flush();
-    expect(h.files()[a.fileId]).toBeUndefined();
-    expect(h.positions()[a.fileId]).toBeNull();
-    expect(workloadsSnapshot()[`viewer:${a.fileId}`]).toBeUndefined();
-    await h.dispose();
-  });
-
-  it("close() removes the file from state and disposes its workload meter", async () => {
-    const h = harness();
-    const file = await writeFixture(await tempRoot());
-    const { fileId } = await h.call<{ fileId: string }>("open", file);
-    expect(workloadsSnapshot()[`viewer:${fileId}`]).toBeDefined();
-    await h.call("close", fileId);
-    await flush();
-    expect(h.files()[fileId]).toBeUndefined();
-    expect(h.positions()[fileId]).toBeNull();
-    expect(workloadsSnapshot()[`viewer:${fileId}`]).toBeUndefined();
-    await h.dispose();
-  });
-
-  it("session idle closes every open file (last viewer window gone)", async () => {
-    installFakeFrameTransport();
-    const session = viewerSession({ decoderFor: fakeDecoderFor, clock: virtualClock() });
-    const [serverEp, clientEp] = createEndpointPair();
-    const server = new Channel(serverEp);
-    const client = new Channel(clientEp);
-    session.attach(server);
-    session.subscribe(server);
-
-    const file = await writeFixture(await tempRoot());
-    const { fileId } = await client.request<{ fileId: string }>(
-      topic.command("viewer", "open"),
-      file,
-    );
-    expect(workloadsSnapshot()[`viewer:${fileId}`]).toBeDefined();
-
-    session.dispose(); // force-idle: unsubscribes everyone, runs idle()
-    await session.drained();
-    expect(workloadsSnapshot()[`viewer:${fileId}`]).toBeUndefined();
-  });
-
-  it("commands on an unknown fileId reject instead of crashing the session", async () => {
-    const h = harness();
-    await expect(h.call("play", { fileId: "nope", rate: 1 })).rejects.toThrow(
-      /unknown fileId/,
-    );
-    await h.dispose();
+    const h = await harness(file);
+    h.player.play(1);
+    await h.close();
+    expect(h.player.playing).toBe(false);
+    expect(h.meter.disposed).toBe(true);
+    // Post-close commands are inert, never throw (the worker relays blindly).
+    h.player.play(1);
+    h.player.pause();
+    await h.player.seek(0);
+    expect(h.player.playing).toBe(false);
   });
 });
 
@@ -490,7 +416,7 @@ describe("openFovea source layer", () => {
 
   it("rejects a non-MCAP file cleanly (no zombie handle, clear error)", async () => {
     const dir = await tempRoot();
-    const bogus = join(dir, "not-a-container.fovea");
+    const bogus = join(dir, "not-a-container.fcap");
     await writeFile(bogus, "definitely not mcap");
     // Falls through to the streaming fallback, which recovers nothing:
     const source = await openFovea(bogus);

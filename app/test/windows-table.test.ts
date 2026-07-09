@@ -53,13 +53,17 @@ describe("WINDOWS taxonomy table", () => {
     }
   });
 
-  it("pairs the sandboxed preload with the profiler and the reader preload elsewhere", () => {
+  it("pairs each class with its preload kind (sandbox ⇔ profiler; viewer standalone)", () => {
     for (const cls of CLASSES) {
       const spec = WINDOWS[cls];
-      expect(["renderer", "profiler"]).toContain(spec.preload);
+      expect(["renderer", "profiler", "viewer"]).toContain(spec.preload);
       // profiler is the only sandboxed class; sandbox ⇔ bridge-only preload.
       expect(spec.sandbox).toBe(cls === "profiler");
       expect(spec.preload === "profiler").toBe(spec.sandbox);
+      // The viewer is the only standalone class (its preload spawns the
+      // in-window playback worker — standalone-viewer-and-fcap ruling 1);
+      // every other unsandboxed class loads the shm-reader preload.
+      expect(spec.preload === "viewer").toBe(cls === "viewer");
     }
   });
 

@@ -4,8 +4,11 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// `.fovea` read layer for the viewer session (C-8; docs/history/refactor/
-// recorder-container.md §2b). One interface, two implementations:
+// `.fcap`/`.fovea` read layer for the STANDALONE viewer (standalone-viewer-
+// and-fcap ruling 1): runs on the viewer window's own worker thread — never
+// in the orchestrator (the C-8 viewer session retired with the ruling).
+// Container format per docs/history/refactor/recorder-container.md §2b. One
+// interface, two implementations:
 //
 // - **Indexed** (the normal path): `McapIndexedReader` over chunked async
 //   `FileHandle` reads — seeks and time-range queries served by the chunk
@@ -18,8 +21,8 @@
 //   Sources opened this way report `truncated: true`.
 //
 // All file I/O is async `fs.FileHandle` reads in bounded chunks — nothing
-// here blocks the orchestrator loop (the C-8 "must not degrade live
-// workloads" requirement); CPU work is just MCAP record parsing.
+// here blocks the worker's event loop for long stretches (playback pacing
+// runs on the same thread); CPU work is just MCAP record parsing.
 //
 // Core-free and Vue-free: decode lives in `decode.ts`; this module moves
 // bytes.

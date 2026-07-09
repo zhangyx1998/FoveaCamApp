@@ -17,6 +17,11 @@
 // (U16 scaling / Bayer demosaic) — pure-U8 channels (Mono8/BGRA8 previews)
 // decode with zero native involvement. The factory is async for that reason;
 // the returned decoder is synchronous per frame (the player meters it).
+//
+// Runs on the viewer window's WORKER THREAD (standalone-viewer-and-fcap
+// ruling 1) — the explicit, scoped exception to the no-core-in-renderer rule:
+// the viewer is an offline utility over files, decoupled from the
+// orchestrator, and decode stays off the window's UI thread.
 
 import { inflateSync } from "node:zlib";
 import type { Mat } from "core/Vision";

@@ -76,6 +76,9 @@ if (!app.requestSingleInstanceLock()) {
 const preload = {
   renderer: path.join(DIR, "preload-renderer.cjs"),
   profiler: path.join(DIR, "preload-profiler.cjs"),
+  // Standalone viewer (standalone-viewer-and-fcap ruling 1): bridge + the
+  // in-window playback worker; no shm reader, no orchestrator port.
+  viewer: path.join(DIR, "preload-viewer.cjs"),
 };
 
 function customizeApp() {
@@ -310,9 +313,10 @@ function startOrchestrator() {
       return;
     }
     // Phase 5 auto-open (capture-recorder-nodes.md ruling 8): the recorder
-    // node finalized a `.fovea` file — surface it in a viewer window without
-    // user action (the viewer window + `viewer` session already exist; one
-    // per file, so a re-finalize just focuses it).
+    // node finalized a recording container — surface it in a STANDALONE
+    // viewer window without user action (one window per file via fileKey
+    // dedupe, so a re-finalize just focuses it; the window does its own
+    // playback — standalone-viewer-and-fcap ruling 1).
     //
     // ── SEAM (recorder wave, orchestrator-side; NOT in this wave's scope) ──
     // The SEND side belongs in `orchestrator/recorder-node.ts`'s stopRecording

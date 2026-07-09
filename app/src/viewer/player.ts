@@ -4,30 +4,53 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Per-file playback engine for the viewer session (C-8). Owns one open
-// `FoveaSource` and replays it with timestamp pacing: each message is due at
-// `(logTime - anchor) / rate` wall-clock after playback started, slept-to via
-// the injectable clock (tests inject a virtual clock, so pacing math is
-// asserted deterministically — no fake timers over real file I/O).
+// Per-file playback engine for the STANDALONE viewer (standalone-viewer-and-
+// fcap ruling 1 — hosted by the viewer window's worker thread, see worker.ts).
+// Owns one open `FoveaSource` and replays it with timestamp pacing: each
+// message is due at `(logTime - anchor) / rate` wall-clock after playback
+// started, slept-to via the injectable clock (tests inject a virtual clock,
+// so pacing math is asserted deterministically — no fake timers over real
+// file I/O).
 //
 // Frames that fall too far behind schedule (> LATE_SKIP_MS, e.g. decode or
 // consumer slower than the file's rate) are skipped and accounted as
-// `drop("late")` on the file's workload meter — pacing degrades by dropping,
-// never by silently stretching time. Everything is generation-guarded:
+// `drop("late")` on the injected meter — pacing degrades by dropping, never
+// by silently stretching time. Everything is generation-guarded:
 // pause/seek/play/close bump the generation, and an in-flight loop iteration
 // from a stale generation stops without touching state (the V5/V10/V13
 // stale-async-completion class).
 //
-// The player knows nothing about sessions or transports — it gets
-// `publishFrame` / `emitTelemetry` / `emitPosition` hooks and a
-// `WorkloadHandle` (`viewer:<fileId>`), keeping it unit-testable in isolation.
+// The player knows nothing about windows or transports — it gets
+// `publishFrame` / `emitTelemetry` / `emitPosition` hooks and a `PlayerMeter`
+// (a no-op by default; the orchestrator-era WorkloadHandle satisfied the same
+// structural shape), keeping it unit-testable in isolation.
 
 import type { Mat } from "core/Vision";
-import type { PlaybackDoc } from "@lib/orchestrator/viewer-contract";
-import type { WorkloadHandle } from "../metering.js";
+import type { PlaybackDoc } from "./protocol.js";
 import type { FrameDecoder } from "./decode.js";
 import type { FoveaChannel, FoveaMessage, FoveaSource } from "./source.js";
 import { TELEMETRY_TOPIC } from "../../../docs/schema/fovea.js";
+
+/** Playback accounting hooks (structurally a subset of the orchestrator's
+ *  `WorkloadHandle`, which the retired viewer session used to inject). The
+ *  standalone viewer has no workload registry — the default meter is a no-op;
+ *  tests inject a recorder to assert ingest/emit/drop accounting. */
+export interface PlayerMeter {
+  ingest(input: string): void;
+  emit(output: string): void;
+  drop(cause: string): void;
+  /** Wrap the synchronous decode+publish of one frame (utilization timing). */
+  measure(fn: () => void): void;
+  dispose(): void;
+}
+
+export const nullMeter: PlayerMeter = {
+  ingest: () => {},
+  emit: () => {},
+  drop: () => {},
+  measure: (fn) => fn(),
+  dispose: () => {},
+};
 
 export interface PlayerClock {
   /** Monotonic milliseconds. */
@@ -77,7 +100,7 @@ export interface Player {
 export function createPlayer(
   source: FoveaSource,
   decoderFor: (channel: FoveaChannel) => Promise<FrameDecoder>,
-  workload: WorkloadHandle,
+  workload: PlayerMeter,
   hooks: PlayerHooks,
   clock: PlayerClock = defaultClock,
 ): Player {

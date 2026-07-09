@@ -1,12 +1,13 @@
-# The `.fovea` recorder container and viewer
+# The `.fcap` recorder container and viewer
 
 > Source of truth: `app/orchestrator/recorder-node.ts` (the recorder THREAD
 > NODE — one worker: FIFO pipe consume + MCAP encode/write) +
 > `app/orchestrator/capture-node.ts` (its capture sibling),
 > `app/orchestrator/recorder/*` (the container/writer contract surface),
 > `app/modules/manual-control/recording.ts` (streams map + extras callback),
-> the `viewer` session + `app/src/windows/ViewerWindow.vue`,
-> `app/lib/orchestrator/viewer-contract.ts`. Design + rulings:
+> the STANDALONE viewer: `app/src/viewer/*` (worker + protocol + source/
+> player/decode) + `app/src/windows/ViewerWindow.vue` +
+> `app/electron/preload-viewer.ts`. Design + rulings:
 > `docs/proposals/capture-recorder-nodes.md` (SHIPPED 2026-07-09/10 — named
 > raw FIFO pipes, per-frame `onFrame(stream, seq, deviceTs)` extras callback,
 > capture `onCaptureStart` once per run, pull-based capture previews,
@@ -14,9 +15,12 @@
 > DELETED) + `docs/proposals/multi-fovea-recording.md` (SHIPPED 2026-07-09 —
 > raw12p packed sensor streams, `fovea.descriptor/v1` data channels, the
 > `fovea:wide-camera` singleton, `/codec` compressed pipes; see
-> `app/modules/multi-fovea/recording.ts` + `app/orchestrator/{raw-pipe,
-> compress-pipe,viewer/decode}.ts`) + `docs/proposals/pairing-nodes.md`
-> (SHIPPED 2026-07-09 — L/R exposure pairs feed the descriptor L/R pointers).
+> `app/modules/multi-fovea/recording.ts` + `app/orchestrator/raw-pipe.ts`,
+> `app/orchestrator/compress-pipe.ts`, `app/src/viewer/decode.ts`) +
+> `docs/proposals/pairing-nodes.md` (SHIPPED 2026-07-09 — L/R exposure pairs
+> feed the descriptor L/R pointers) +
+> `docs/proposals/standalone-viewer-and-fcap.md` (rulings 1–2: the viewer is
+> STANDALONE — orchestrator-free; the container renamed `.fcap`).
 
 ## 1. Container
 
@@ -92,15 +96,26 @@ blocking: a `recorder:<name>` workload meter (`metering.md`) counts
 throughput and reason-bucketed drops, so a recording that can't keep up is
 visible in the profiler instead of stalling the frame path.
 
-## 3. Viewer
+## 3. Viewer (STANDALONE)
 
-`.fovea` files open in a **viewer window** — 0..N windows, exactly one per
-file (`fileKey` dedupe, `windows.md`). A `viewer:<fileId>` orchestrator
-session replays the container (decode + seek) and serves frames/metadata over
-the standard session channel; the window is a normal passive client.
+`.fcap`/`.fovea` files open in a **viewer window** — 0..N windows, exactly one
+per file (`fileKey` dedupe, `windows.md`). The viewer is STANDALONE
+(standalone-viewer-and-fcap ruling 1): it never talks to the orchestrator.
+Its dedicated preload (`preload-viewer.cjs`) spawns a `worker_threads` worker
+(`viewer-worker.js`, source `app/src/viewer/worker.ts`) INSIDE the window's
+process that hosts the whole data layer — MCAP read (`source.ts`, indexed +
+footerless streaming fallback), frame decode (`decode.ts`, loads `core/Vision`
+lazily — the one ruled exception to the core-free-renderer boundary), and
+timestamp-paced playback (`player.ts`). Decoded Mats cross worker → preload →
+window over transferred buffers (zero copies) and render through FrameView's
+ImageData path; playback state (position/play/seek) is window-local. Playback
+therefore survives orchestrator restarts and never competes with live control
+loops. Auto-open on `recording:finished` and Cmd/Ctrl-O both route through
+main.ts's `manager.openViewer` (one window per file).
 
 ## 4. Python access
 
-Offline analysis reads `.fovea` directly with any MCAP library — the schema
+Offline analysis reads `.fcap` (or legacy `.fovea`) directly with any MCAP
+library — the schema
 contract in §1 is the stability promise. The bench tooling under
 `playground/bench-recorder/` exercises the container end-to-end.

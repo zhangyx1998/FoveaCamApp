@@ -17,8 +17,9 @@
 // utility; does not count toward the welcome rule), `projection` (0..N
 // single-stream viewers — passive subscribers, never exclusive, never
 // counted for the welcome rule, survive their source app's close),
-// `viewer` (0..N recorder playback windows, ONE PER `.fovea` file —
-// non-exclusive, never counted for the welcome rule;
+// `viewer` (0..N recorder playback windows, ONE PER `.fcap`/`.fovea` file —
+// non-exclusive, never counted for the welcome rule, STANDALONE: never
+// touches the orchestrator (standalone-viewer-and-fcap ruling 1);
 // docs/history/refactor/recorder-container.md §4).
 
 export type WindowClass =
@@ -134,8 +135,10 @@ export function appById(id: string): AppMeta | undefined {
 /** Preload bundle a window class loads — a pure key mapped to a concrete file
  *  main-side (main.ts's options adapter), so this module stays Node-free.
  *  `renderer` = bridge + shm reader (`sandbox: false`); `profiler` = sandboxed
- *  bridge only. */
-export type PreloadKind = "renderer" | "profiler";
+ *  bridge only; `viewer` = bridge + the standalone playback worker
+ *  (`sandbox: false`; NO shm reader/orchestrator port —
+ *  standalone-viewer-and-fcap ruling 1). */
+export type PreloadKind = "renderer" | "profiler" | "viewer";
 
 /** Constructor size + minimums for a window class — Electron-agnostic; main.ts
  *  merges these into `BrowserWindowConstructorOptions`. */
@@ -236,7 +239,9 @@ export const WINDOWS: Record<WindowClass, WindowSpec> = {
     onOwnerClose: "survive",
     dedupe: "fileKey",
     entry: "windows/viewer.html",
-    preload: "renderer",
+    // Standalone playback (ruling 1): the dedicated viewer preload spawns the
+    // in-window worker (MCAP read + decode) — no shm reader, no orchestrator.
+    preload: "viewer",
     sandbox: false,
     title: "FoveaCam Duo — Viewer",
     bounds: { width: 1100, height: 760, minWidth: 640, minHeight: 420 },

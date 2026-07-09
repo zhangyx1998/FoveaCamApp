@@ -19,8 +19,7 @@
 // read-only, never forked.
 //
 // Renderer- and orchestrator-safe, Vue-free — like every contract. Kept in its
-// own file (not `contracts.ts`, not the pinned `viewer-contract.ts`); the
-// planner arbitrates any later merge.
+// own file (not `contracts.ts`); the planner arbitrates any later merge.
 
 import { cmd, defineContract } from "./protocol.js";
 import type { Serializable } from "./protocol.js";
@@ -31,7 +30,7 @@ export type PipeDtype = import("./graph-contract.js").ContainerDtype;
 
 /** Static typing of one advertised pipe. Mirrors the C++ `Pipe::PipeSpec`.
  *  A `type` (not `interface`) so it satisfies the contract's `Serializable`
- *  state constraint — same pattern as `viewer-contract`'s `ViewerFile`. */
+ *  state constraint. */
 export type PipeSpec = {
   /** Stable pipe identifier the renderer selects by (e.g. `"preview:L"`). */
   id: string;
@@ -113,7 +112,7 @@ export const pipes = defineContract({
     /** Every advertised pipe, keyed by pipeId (C-20 dynamic discovery). Seeded
      *  to every subscriber (current set) + snapshot-replaced on each advertise/
      *  un-advertise (delta) — the renderer reacts to pipes appearing/vanishing
-     *  at runtime by diffing this Record, like viewer's `files`. */
+     *  at runtime by diffing this Record. */
     pipes: {} as Record<string, PipeAdvert>,
     /** Every COMPOSED node, keyed by node id (C-24 step 3) — the same
      *  epoch-diff discovery discipline as `pipes`. */

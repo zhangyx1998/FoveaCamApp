@@ -39,8 +39,8 @@ import {
 import type { CompressPipeSeam } from "@orchestrator/compress-pipe";
 import { createMultiFoveaRecording } from "../modules/multi-fovea/recording";
 import type { MultiFoveaDescriptor } from "../modules/multi-fovea/recording";
-import { openFovea } from "@orchestrator/viewer/source";
-import { createFrameDecoder, splitCodecs } from "@orchestrator/viewer/decode";
+import { openFovea } from "@src/viewer/source";
+import { createFrameDecoder, splitCodecs } from "@src/viewer/decode";
 
 const SOAK_MS = Number(process.env.SOAK_MS ?? 8_000);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));

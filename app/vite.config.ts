@@ -182,6 +182,13 @@ export default defineConfig(({ command }) => {
                         main: "electron/main.ts",
                         orchestrator: "orchestrator/index.ts",
                         "vision-worker": "orchestrator/vision-worker.ts",
+                        // Standalone viewer playback worker (standalone-
+                        // viewer-and-fcap ruling 1): spawned by
+                        // preload-viewer.cjs from the SAME output dir via
+                        // worker_threads — bundled like vision-worker
+                        // (external `core` / `@mcap/core` resolve from
+                        // node_modules at runtime).
+                        "viewer-worker": "src/viewer/worker.ts",
                         // Hardware-safety failsafe: forked by main whenever
                         // the orchestrator dies without confirming quiescence
                         // (MEMS disable + camera acquisition stop).
@@ -219,7 +226,7 @@ export default defineConfig(({ command }) => {
             // Output is CJS named .cjs: unsandboxed preloads load .mjs as
             // real ESM where bare `require` throws (V11b).
             electronPreload(
-                ["preload-renderer", "preload-profiler"].map((name) => ({
+                ["preload-renderer", "preload-profiler", "preload-viewer"].map((name) => ({
                     // Preload change → reload pages; never args.startup()
                     // here (the simple() plugin above owns the Electron
                     // process — a second startup would double-launch).

@@ -15,7 +15,7 @@
 | `app` | ≤ 1 via **exclusivity** | renderer / unsandboxed | Apps are mutually exclusive over camera leases + the controller; switching drains first |
 | `profiler` | singleton | profiler / **sandboxed** | Bridge-only (no SHM reader); passive over sessions (V12) |
 | `projection` | 0..N | renderer / unsandboxed | Single-stream viewers; survive their source app's close (frozen last frame) |
-| `viewer` | 0..N, one per file | renderer / unsandboxed | `.fovea` playback; `fileKey` dedupe |
+| `viewer` | 0..N, one per file | viewer / unsandboxed | STANDALONE `.fcap`/`.fovea` playback — its own preload spawns an in-window worker (MCAP read + decode); never touches the orchestrator (`recorder.md` §3); `fileKey` dedupe |
 | `debug` | 0..N, keyed toggle | renderer / unsandboxed | Owner-bound sub-window; the only `onOwnerClose: cascade` class |
 
 `owner` + `onOwnerClose` (cascade|survive) generalize sub-windows: apps own
