@@ -191,6 +191,10 @@ export const nodeId = {
    *  targets). One STABLE id regardless of cal mode — fused undistort is a
    *  brick PARAM, not identity. */
   kcfMulti: (serial: string): string => `camera/${serial}/kcf-multi`,
+  /** CHAINED KCF tracker on the camera's undistort brick (controller-node-
+   *  and-fifo-edges §3.5): tracks the undistorted view on its own native
+   *  thread — the id nests under /undistort/ because that IS its input. */
+  undistortKcf: (serial: string): string => `camera/${serial}/undistort/kcf`,
   /** Marker detector stream (non-pipe transport). */
   detect: (serial: string): string => `camera/${serial}/detect`,
   /** Dynamic fovea crop pipe (B-24 brick; slot reuse is epoch-guarded). The id
