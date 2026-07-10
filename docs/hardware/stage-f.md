@@ -686,8 +686,9 @@ Welcome. Verify on the rig:
   then Settings; dragging Settings' **Calibration marker size** moves the running
   calibrate window's marker-size slider (and readout) in real time, and the
   reverse (calibrate slider → Settings field) also tracks. Same for **ratio**.
-- [ ] **TeleCanvas URL live** — set/clear **TeleCanvas server URL** with a
-  RemoteCanvas overlay open; the PUT target changes without restart.
+- [ ] **TeleCanvas URL live (client mode)** — in **client** mode, set/clear the
+  **TeleCanvas server URL** while an app is running; the PUT target changes
+  without restart (the app windows push continuously now — no overlay needed).
 - [ ] **Default save directory** — set a writable base dir; a newly-opened
   capture/record destination defaults under it (invalid path shows the red
   underline and is ignored).
@@ -698,6 +699,36 @@ Welcome. Verify on the rig:
   connected rig's serials; delete an **Intrinsic**/**Extrinsic**/**Triple** entry
   (Confirm delete), re-run that calibration, and confirm the entry reappears with
   fresh metadata.
+
+### TeleCanvas host mode
+
+Code-complete (2026-07-09): TeleCanvas promoted to a standalone dual-mode module.
+**Client** mode PUTs the merged projection SVG to a remote server (unchanged);
+**host** mode spins up the app's OWN dependency-free node http server (a
+main-owned `telecanvas-host` utilityProcess) that serves a self-contained viewer
+page (SSE) and stays `PUT /`-wire-compatible. The push stays in the app windows;
+the TeleCanvas window previews via the host's own SSE stream. Verify on the rig
+(needs a second device — phone/tablet/TV — on the same LAN):
+
+- [ ] **Host serves a reachable viewer** — Settings (or the TeleCanvas window) →
+  **Host** mode; open one of the listed `http://<lan-ip>:<port>/` URLs in a
+  browser on a LAN device. The viewer page loads (dark, self-contained) and shows
+  the current projection (splash when idle).
+- [ ] **Markers move live** — with the LAN viewer open, run **Extrinsic**
+  calibration; the markers on the external display track the in-app overlay in
+  real time (the app window pushes to `127.0.0.1:<port>`, the host broadcasts to
+  the viewer over SSE). The TeleCanvas window's own preview matches.
+- [ ] **Mode switch client↔host live** — flip the mode in Settings while an app
+  runs; the host server starts/stops accordingly with no app restart, and the
+  app's push retargets.
+- [ ] **Port change re-listens** — change the **server port** in host mode; the
+  host re-spawns on the new port, the reachable-URL list updates, and the LAN
+  viewer reconnects at the new URL.
+- [ ] **App quit kills the server** — quit the app; the `telecanvas-host` process
+  exits (the LAN viewer's page shows "reconnecting…", never a stale live image).
+- [ ] **Port persists across restart** — set host mode + a custom port, quit,
+  relaunch: the host comes up on that port at startup (before any app window),
+  read from the persisted config.
 
 ## Blocked (hardware change required)
 

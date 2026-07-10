@@ -28,6 +28,8 @@ describe("configRef", () => {
     expect(configRef(config, "baseline_distance_mm").value).toBe(200);
     expect(configRef(config, "cal_marker_ratio").value).toBe(1.0);
     expect(configRef(config, "tele_canvas_url").value).toBe("");
+    expect(configRef(config, "tele_canvas_mode").value).toBe("client");
+    expect(configRef(config, "tele_canvas_port").value).toBe(8100);
     expect(configRef(config, "default_save_dir").value).toBe("");
   });
 

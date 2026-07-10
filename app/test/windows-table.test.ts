@@ -20,6 +20,7 @@ const CLASSES: WindowClass[] = [
   "viewer",
   "debug",
   "config",
+  "telecanvas",
 ];
 
 describe("WINDOWS taxonomy table", () => {
@@ -35,9 +36,11 @@ describe("WINDOWS taxonomy table", () => {
     }
   });
 
-  it("marks welcome + config as singletons (profiler is now 0..N, one per instance)", () => {
+  it("marks welcome + config + telecanvas as singletons (profiler is now 0..N, one per instance)", () => {
     for (const cls of CLASSES)
-      expect(WINDOWS[cls].singleton).toBe(cls === "welcome" || cls === "config");
+      expect(WINDOWS[cls].singleton).toBe(
+        cls === "welcome" || cls === "config" || cls === "telecanvas",
+      );
   });
 
   it("dedupes only the viewer, by fileKey", () => {
@@ -100,8 +103,8 @@ describe("WINDOWS taxonomy table", () => {
       if (spec.entry) expect(entries[cls]).toBe(spec.entry);
     }
     for (const app of APPS) expect(entries[app.id]).toBe(`windows/${app.id}.html`);
-    // 6 static class entries (all but app: welcome/profiler/projection/viewer/
-    // debug/config) + one per app, no extras.
-    expect(Object.keys(entries).length).toBe(6 + APPS.length);
+    // 7 static class entries (all but app: welcome/profiler/projection/viewer/
+    // debug/config/telecanvas) + one per app, no extras.
+    expect(Object.keys(entries).length).toBe(7 + APPS.length);
   });
 });

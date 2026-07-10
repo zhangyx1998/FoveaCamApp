@@ -21,8 +21,7 @@ import SessionStatus from "../components/SessionStatus.vue";
 import ProgressMonitor from "../components/ProgressMonitor.vue";
 import CrashReport from "../components/CrashReport.vue";
 import { useSessionStatus } from "@lib/orchestrator/client";
-import Overlay, { overlay } from "../components/Overlay.vue";
-import RemoteCanvas from "../components/RemoteCanvas.vue";
+import TeleCanvasPusher from "../components/telecanvas/Pusher.vue";
 import { FontAwesomeIcon as Icon } from "@fortawesome/vue-fontawesome";
 import { faCamera, faTelevision, faChartLine } from "./icons";
 import { current_capture } from "../capture";
@@ -71,6 +70,14 @@ function openProfiler() {
   window.foveaBridge.openProfilerWindow();
 }
 
+// TeleCanvas moved out of the title-bar overlay into its own window (standalone
+// dual-mode module): the TV icon now OPENS that window instead of flipping an
+// in-window overlay. The push itself stays here (TeleCanvasPusher, mounted
+// below) so this app window keeps pushing its projection in both modes.
+function openTeleCanvas() {
+  window.foveaBridge.openTeleCanvasWindow();
+}
+
 // Capture preview moved out of the title-bar overlay into its own `debug`-class
 // window (capture-recorder-nodes.md ruling 8): the camera icon now TOGGLES that
 // window (open-or-close) instead of flipping an in-window overlay. Gated on a
@@ -114,6 +121,8 @@ window.addEventListener("keydown", (e) => {
     />
     <!-- Orchestrator crash banner (lifecycle ruling 4) — self-hiding on clean. -->
     <CrashReport />
+    <!-- Always-on TeleCanvas push (renders nothing; async config → Suspense). -->
+    <Suspense><TeleCanvasPusher /></Suspense>
   </div>
   <TitleBar
     title="FoveaCam Duo"
@@ -131,9 +140,9 @@ window.addEventListener("keydown", (e) => {
     >
       <Icon :icon="faCamera" />
     </button>
-    <Overlay :overlay="RemoteCanvas">
+    <button class="icon-button" title="Open TeleCanvas window" @click="openTeleCanvas">
       <Icon :icon="faTelevision" />
-    </Overlay>
+    </button>
     <button class="icon-button" title="Open profiler window" @click="openProfiler">
       <Icon :icon="faChartLine" />
     </button>

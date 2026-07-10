@@ -22,8 +22,10 @@
 // payload is defined renderer-side (its primary consumer) and shared here.
 import type { OrchestratorDownReport } from "@lib/orchestrator/client";
 import type { ProbeCamera } from "@lib/orchestrator/probe";
+import type { TeleCanvasMode, TeleCanvasStatus } from "@lib/telecanvas";
 export type { OrchestratorDownReport };
 export type { ProbeCamera };
+export type { TeleCanvasMode, TeleCanvasStatus };
 
 export interface FoveaBridge {
   connectOrchestrator(): void;
@@ -41,6 +43,20 @@ export interface FoveaBridge {
    *  "Settings…" app-menu item / Cmd+, ). Singleton — a second call focuses the
    *  existing window. */
   openConfigWindow(): void;
+  /** Open (or focus) the TeleCanvas window (the title-bar TV icon). Singleton —
+   *  a second call focuses the existing window. */
+  openTeleCanvasWindow(): void;
+  /** Nudge main to reconcile the TeleCanvas HOST server to a desired
+   *  {mode, port} (the standalone module's live-apply path — main owns the host
+   *  process but has no live store watcher, so the config-editing windows nudge
+   *  it on change). Idempotent main-side. */
+  applyTeleCanvas(mode: TeleCanvasMode, port: number): void;
+  /** Current TeleCanvas host status (mode / listening / port / reachable URLs /
+   *  error) — for a freshly opened window/section to sync before the next push. */
+  getTeleCanvasStatus(): Promise<TeleCanvasStatus>;
+  /** Subscribe to TeleCanvas host status changes (spawn / listening / crash /
+   *  mode switch). Returns a disposer. */
+  onTeleCanvasStatus(cb: (status: TeleCanvasStatus) => void): () => void;
   /** Open (or switch to) an app window by catalog id (`@lib/windows`) — the
    *  main-process window manager enforces exclusivity + drain
    *  (docs/history/refactor/multi-window.md §3). */
@@ -136,6 +152,7 @@ export interface InvokeChannels {
   "perf-snapshot:open-folder": { args: []; ret: string };
   "perf-snapshot:reveal": { args: [file: string]; ret: void };
   "viewer:reveal": { args: [file: string]; ret: void };
+  "telecanvas:get-status": { args: []; ret: TeleCanvasStatus };
 }
 
 /** Fire-and-forget renderer→main signals (`ipcRenderer.send` ↔ `ipcMain.on`).
@@ -144,6 +161,9 @@ export interface SendChannels {
   "orchestrator:connect": [];
   "open-profiler-window": [];
   "window:open-config": [];
+  "window:open-telecanvas": [];
+  /** Nudge main to reconcile the TeleCanvas host to a desired {mode, port}. */
+  "telecanvas:apply": [mode: TeleCanvasMode, port: number];
   "window:open-app": [appId: string];
   "window:open-projection": [session: string, frame: string];
   "window:toggle-debug": [session: string, kind?: string];
@@ -166,4 +186,6 @@ export interface PushChannels {
   "viewer:engine-down": [message: string];
   /** Live camera list from the enumerate-only probe (ruling 3). */
   "probe:cameras": [cameras: ProbeCamera[]];
+  /** TeleCanvas host status changes (standalone dual-mode module). */
+  "telecanvas:status": [status: TeleCanvasStatus];
 }

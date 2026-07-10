@@ -55,7 +55,7 @@ On the right side of the bar are these controls (present in every app, though so
 
 - **Record** button — a circle outline. See [Recording](#recording).
 - **Capture** button (camera icon, tooltip **Capture preview**) — opens or closes the app's capture-preview sub-window. It is greyed out and unclickable in apps that do not offer single-shot capture. See [Capture](#capture).
-- **Projection** button (television icon) — opens an overlay for casting a stream to a secondary display or projector.
+- **TeleCanvas** button (television icon, tooltip **Open TeleCanvas window**) — opens the **TeleCanvas** window, which casts the app's projection overlay (calibration markers and the like) to a secondary display, tablet, or TV. See [Settings › TeleCanvas](settings.md#telecanvas) for the two ways it can send that image (push to a remote server, or serve its own).
 - **Profiler** button (chart icon, tooltip **Open profiler window**) — opens the performance diagnostics window.
 - **Controller** indicator — shows whether the MEMS controller unit is connected (red when not). Click it to open the connect/disconnect panel.
 

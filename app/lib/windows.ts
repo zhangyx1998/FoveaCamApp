@@ -31,7 +31,8 @@ export type WindowClass =
   | "projection"
   | "viewer"
   | "debug"
-  | "config";
+  | "config"
+  | "telecanvas";
 
 /** URL state params addressing a projection window's stream (multi-window.md
  *  req. 4 — the first state-in-URL consumer): the orchestrator session name
@@ -301,6 +302,25 @@ export const WINDOWS: Record<WindowClass, WindowSpec> = {
     sandbox: false,
     title: "FoveaCam Duo — Settings",
     bounds: { width: 760, height: 680, minWidth: 560, minHeight: 440 },
+  },
+  telecanvas: {
+    // TeleCanvas window (standalone dual-mode module) — the live projection
+    // preview + mode switch + client URL / host status. SINGLETON like config:
+    // a second open focuses the existing one. Not exclusive, not counted for
+    // welcome (a utility overlay, never a hardware holder). It reads/writes
+    // config through the store client, so it uses the standard renderer preload;
+    // its unbound connect routes to the live app instance (shared store-hub →
+    // live cross-window apply) or the non-hardware "settings" instance main forks
+    // (same store-backing path as the config window).
+    singleton: true,
+    exclusive: false,
+    countsForWelcome: false,
+    onOwnerClose: "survive",
+    entry: "windows/telecanvas.html",
+    preload: "renderer",
+    sandbox: false,
+    title: "FoveaCam Duo — TeleCanvas",
+    bounds: { width: 720, height: 640, minWidth: 480, minHeight: 360 },
   },
 };
 

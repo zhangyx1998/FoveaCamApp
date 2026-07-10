@@ -54,6 +54,7 @@ const windowRoots: Record<string, SpecialEntry> = {
     }),
   },
   config: { load: () => import("./ConfigWindow.vue") },
+  telecanvas: { load: () => import("./TeleCanvasWindow.vue") },
 };
 
 export async function bootEntry(key: string): Promise<void> {

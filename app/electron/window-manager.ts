@@ -289,6 +289,22 @@ export class WindowManager {
   }
 
   /**
+   * Open (or focus) the TeleCanvas window (title-bar TV icon). SINGLETON like
+   * the config window — a second open focuses the existing one. Unbound: its
+   * store connection routes to the live app instance when one is up (shared
+   * store-hub → live cross-window apply), else to the non-hardware settings
+   * instance main forks (same store-backing path as the config window).
+   */
+  openTeleCanvas(): ManagedWindow {
+    const existing = this.byClass("telecanvas")[0];
+    if (existing) {
+      existing.focus();
+      return existing;
+    }
+    return this.spawn({ class: "telecanvas", entry: entryFor("telecanvas") });
+  }
+
+  /**
    * Open (or focus) a profiler window pinned to ONE orchestrator instance
    * (orchestrator-lifecycle-and-exit §"Profiler per-instance binding"). No
    * longer a singleton: it keys by `instanceId` so re-clicking the chart icon

@@ -17,9 +17,14 @@ You may find the full license in project root directory.
        resolve against the currently-known cameras (Welcome probe list).
 -->
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import Store from "@lib/store";
 import { useConfigRef } from "@lib/config";
+import {
+  DEFAULT_TELECANVAS_PORT,
+  IDLE_TELECANVAS_STATUS,
+  type TeleCanvasStatus,
+} from "@lib/telecanvas";
 import {
   enumerateCalibrationData,
   deleteCalibrationEntry,
@@ -33,14 +38,52 @@ import {
 import type { ProbeCamera } from "@lib/orchestrator/probe";
 import { FontAwesomeIcon as Icon } from "@fortawesome/vue-fontawesome";
 import { faArrowsRotate, faChevronDown, faChevronUp } from "./icons";
-import { faTrash } from "@fortawesome/free-solid-svg-icons";
+import { faTrash, faCopy, faCheck } from "@fortawesome/free-solid-svg-icons";
 
 // ---- App-level config (live, writable refs over the shared document) --------
 const default_save_dir = await useConfigRef("default_save_dir");
+const tele_canvas_mode = await useConfigRef("tele_canvas_mode");
 const tele_canvas_url = await useConfigRef("tele_canvas_url");
+const tele_canvas_port = await useConfigRef("tele_canvas_port");
 const baseline_distance_mm = await useConfigRef("baseline_distance_mm");
 const cal_marker_size_mm = await useConfigRef("cal_marker_size_mm");
 const cal_marker_ratio = await useConfigRef("cal_marker_ratio");
+
+// ---- TeleCanvas host status (main-owned server; host mode) -----------------
+const teleIsHost = computed(() => (tele_canvas_mode.value ?? "client") === "host");
+// Presentation-only URL validity (client mode): empty = disabled (not invalid);
+// a non-empty unparseable string gets the `.invalid` underline. No push effect.
+const teleUrlInvalid = computed(() => {
+  const u = (tele_canvas_url.value ?? "").trim();
+  if (!u) return false;
+  try {
+    new URL(u);
+    return false;
+  } catch {
+    return true;
+  }
+});
+const teleStatus = ref<TeleCanvasStatus>(IDLE_TELECANVAS_STATUS);
+let disposeTele: (() => void) | null = null;
+const teleCopied = ref<string | null>(null);
+async function copyTeleUrl(u: string) {
+  try {
+    await navigator.clipboard.writeText(u);
+    teleCopied.value = u;
+    setTimeout(() => {
+      if (teleCopied.value === u) teleCopied.value = null;
+    }, 1200);
+  } catch {
+    /* clipboard unavailable */
+  }
+}
+// Nudge main to reconcile the host process on mode/port change (+ once on open).
+watch(
+  () =>
+    [tele_canvas_mode.value ?? "client", tele_canvas_port.value ?? DEFAULT_TELECANVAS_PORT] as const,
+  ([m, p]) => window.foveaBridge.applyTeleCanvas(m, p),
+  { immediate: true },
+);
 
 // Live writability check for the save dir (empty = auto, always OK).
 const saveDirValid = ref(true);
@@ -136,15 +179,24 @@ async function doDelete(e: CalEntry) {
   await refresh();
 }
 
-onMounted(() => {
+onMounted(async () => {
   disposeProbe = window.foveaBridge.onProbeCameras((list: ProbeCamera[]) => {
     cameras.value = list;
     // Re-resolve friendly names when the known cameras change.
     void refresh();
   });
+  try {
+    teleStatus.value = await window.foveaBridge.getTeleCanvasStatus();
+  } catch {
+    /* keep idle default */
+  }
+  disposeTele = window.foveaBridge.onTeleCanvasStatus((s) => (teleStatus.value = s));
   void refresh();
 });
-onUnmounted(() => disposeProbe?.());
+onUnmounted(() => {
+  disposeProbe?.();
+  disposeTele?.();
+});
 </script>
 
 <template>
@@ -169,10 +221,51 @@ onUnmounted(() => disposeProbe?.());
       </p>
 
       <label class="row">
-        <span class="label">TeleCanvas server URL</span>
-        <input type="text" v-model="tele_canvas_url" placeholder="empty = disabled" />
+        <span class="label">TeleCanvas mode</span>
+        <span class="field">
+          <select v-model="tele_canvas_mode">
+            <option value="client">Client (push to remote)</option>
+            <option value="host">Host (serve locally)</option>
+          </select>
+        </span>
       </label>
-      <p class="hint">The RemoteCanvas overlay PUTs its projection here. Applies live.</p>
+
+      <label v-if="!teleIsHost" class="row">
+        <span class="label">TeleCanvas server URL</span>
+        <input
+          type="text"
+          :class="{ invalid: teleUrlInvalid }"
+          v-model="tele_canvas_url"
+          placeholder="empty = disabled"
+        />
+      </label>
+      <p v-if="!teleIsHost" class="hint">
+        The app's windows PUT their projection here. Empty = disabled. Applies live.
+      </p>
+
+      <label v-else class="row">
+        <span class="label">TeleCanvas server port</span>
+        <span class="field">
+          <input type="number" step="1" min="1" max="65535" v-model.number="tele_canvas_port" />
+        </span>
+      </label>
+      <p v-if="teleIsHost" class="hint">
+        The app serves its own TeleCanvas viewer. Open a URL below on a TV or
+        tablet on the same network. Applies live.
+      </p>
+      <ul v-if="teleIsHost && teleStatus.listening && teleStatus.urls.length" class="tele-urls">
+        <li v-for="u in teleStatus.urls" :key="u">
+          <span class="u-text" :title="u">{{ u }}</span>
+          <button
+            class="icon-button"
+            :title="teleCopied === u ? 'Copied' : 'Copy'"
+            @click="copyTeleUrl(u)"
+          >
+            <Icon :icon="teleCopied === u ? faCheck : faCopy" />
+          </button>
+        </li>
+      </ul>
+      <p v-else-if="teleIsHost && teleStatus.error" class="hint err">{{ teleStatus.error }}</p>
 
       <label class="row">
         <span class="label">Baseline distance</span>
@@ -384,6 +477,55 @@ input {
   color: var(--text-faint);
   font-size: var(--fs-sm);
   margin: 0 0 0.6rem;
+  &.err {
+    color: var(--danger-text);
+  }
+}
+
+select {
+  font-family: inherit;
+  font-size: 1em;
+  color: var(--text);
+  background-color: var(--bg-chrome);
+  border: none;
+  border-bottom: 2px solid var(--border-muted);
+  outline: none;
+  padding: 0.3em 0.5em;
+  cursor: pointer;
+  &:hover {
+    border-bottom-color: var(--text-muted);
+  }
+  &:focus {
+    border-bottom-color: var(--accent-bright);
+  }
+}
+
+.tele-urls {
+  list-style: none;
+  margin: 0 0 0.6rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+
+  li {
+    display: flex;
+    align-items: center;
+    gap: 1ch;
+    padding: 0.35em 0.6em;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background-color: var(--bg-panel-alt);
+  }
+  .u-text {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-dim);
+    user-select: text;
+  }
 }
 
 .empty {

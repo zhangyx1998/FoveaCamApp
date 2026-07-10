@@ -201,6 +201,12 @@ export default defineConfig(({ command }) => {
                         // window a live camera list. Never opens a camera; a
                         // Node entry like the orchestrator (external `core`).
                         probe: "orchestrator/probe.ts",
+                        // TeleCanvas HOST server (standalone dual-mode module):
+                        // a dependency-free node http server main forks when
+                        // `tele_canvas_mode` is "host". Its own tiny entry (like
+                        // probe) — pulls in no session graph, just the server
+                        // core + node builtins.
+                        "telecanvas-host": "electron/telecanvas-host.ts",
                     },
                     vite: {
                         resolve: { alias },

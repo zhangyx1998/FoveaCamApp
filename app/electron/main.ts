@@ -24,10 +24,19 @@ import type { OrchestratorDownReport } from "./orchestrator-exit";
 import type { ProbeCamera } from "@lib/orchestrator/probe";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import os from "node:os";
 import { spawn } from "node:child_process";
-import { existsSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { ViewerEngineManager, type EngineHandle } from "./viewer-engine";
+import { TeleCanvasManager, type HostHandle } from "./telecanvas-manager";
+import {
+  DEFAULT_TELECANVAS_PORT,
+  type TeleCanvasMode,
+  type TeleCanvasStatus,
+} from "@lib/telecanvas";
+import { reviver } from "@lib/store-codec";
+import type { AppConfig } from "@lib/config";
 import { getIcon } from "./util";
 import { resolveDefaultSavePath, validateWritablePath } from "@lib/util/fs";
 import {
@@ -737,6 +746,74 @@ ipcMain.on("viewer:spawn" satisfies keyof SendChannels, (event, file) => {
   if (typeof file === "string" && file) void viewerEngines.spawn(event.sender.id, file);
 });
 
+// ---- TeleCanvas host server (standalone dual-mode module) -----------------
+// Main owns the host utilityProcess: spawn when `tele_canvas_mode` is "host",
+// kill on client/off or quit, respawn on crash (TeleCanvasManager). Main has no
+// live store watcher, so its knowledge of {mode, port} comes from (1) the
+// persisted config read once at startup and (2) an IPC nudge (`telecanvas:apply`)
+// the config-editing windows send on change — apply() is idempotent, so a nudge
+// from more than one window is harmless. Status is broadcast to every renderer.
+const TELECANVAS_HOST_ENTRY = path.join(DIR, "telecanvas-host.js");
+
+function createTeleCanvasHost(port: number): HostHandle {
+  const proc = utilityProcess.fork(TELECANVAS_HOST_ENTRY, [], {
+    stdio: "inherit",
+    env: { ...process.env, FOVEA_TELECANVAS_PORT: String(port) },
+  });
+  const handle: HostHandle = { kill: () => proc.kill() };
+  proc.on("message", (data: unknown) => {
+    const msg = data as { type?: string; port?: number; error?: string };
+    if (msg?.type === "telecanvas:listening")
+      telecanvas.onListening(handle, msg.port ?? port);
+    else if (msg?.type === "telecanvas:error")
+      telecanvas.onError(handle, msg.error ?? "host server failed to listen");
+  });
+  proc.on("exit", () => telecanvas.onExit(handle));
+  return handle;
+}
+
+function broadcastTeleCanvasStatus(status: TeleCanvasStatus): void {
+  for (const w of BrowserWindow.getAllWindows())
+    pushTo(w.webContents, "telecanvas:status", status);
+}
+
+const telecanvas = new TeleCanvasManager({
+  fork: createTeleCanvasHost,
+  interfaces: () => os.networkInterfaces(),
+  onStatus: broadcastTeleCanvasStatus,
+});
+
+onRenderer("telecanvas:apply", (mode, port) => {
+  telecanvas.apply(
+    mode === "host" ? "host" : "client",
+    Number(port) || DEFAULT_TELECANVAS_PORT,
+  );
+});
+handle("telecanvas:get-status", () => telecanvas.status());
+
+/** Read the persisted app config directly off disk (like the window manifest) —
+ *  main has no store-hub client, and this is only needed once at startup to
+ *  decide whether the host should come up before any window nudges it. */
+function readPersistedConfig(): Partial<AppConfig> {
+  try {
+    const file = path.join(DATA, "store", "config.json");
+    if (!existsSync(file)) return {};
+    const text = readFileSync(file, "utf8");
+    if (text.trim() === "") return {};
+    return JSON.parse(text, reviver) as Partial<AppConfig>;
+  } catch (e) {
+    console.error("[telecanvas] failed to read persisted config:", e);
+    return {};
+  }
+}
+
+function applyPersistedTeleCanvas(): void {
+  const cfg = readPersistedConfig();
+  const mode: TeleCanvasMode = cfg.tele_canvas_mode === "host" ? "host" : "client";
+  const port = Number(cfg.tele_canvas_port) || DEFAULT_TELECANVAS_PORT;
+  telecanvas.apply(mode, port);
+}
+
 // ---- Window manager (docs/history/refactor/multi-window.md §3) --------------------
 
 function entryURL(desc: WindowDescriptor): { url?: string; file?: string; search?: string } {
@@ -916,10 +993,13 @@ function spawnWindow(desc: WindowDescriptor): ManagedWindow {
     const engineKey = win.webContents.id;
     win.on("closed", () => void viewerEngines.close(engineKey));
   }
-  // Settings window closed: dispose the non-hardware "settings" instance main
-  // may have forked to back its store (no-op when the config window was instead
-  // sharing a live app instance's store-hub).
-  if (desc.class === "config") win.on("closed", () => disposeSettingsInstance());
+  // Settings / TeleCanvas window closed: release the shared non-hardware
+  // "settings" instance main may have forked to back the store (disposed only
+  // when the LAST store-window closes; a no-op when it was instead sharing a
+  // live app instance's store-hub).
+  if (desc.class === "config") win.on("closed", () => releaseSettingsInstance("config"));
+  if (desc.class === "telecanvas")
+    win.on("closed", () => releaseSettingsInstance("telecanvas"));
   win.on("closed", () => manager.onWindowClosed(managed));
   return managed;
 }
@@ -948,26 +1028,41 @@ const manager = new WindowManager({
 // (never pauses the probe, never blocks an app's hardware-clear) and is disposed
 // when the config window closes.
 let settingsInstanceId: string | null = null;
+// The config AND TeleCanvas windows both need the store (config docs) but hold
+// no hardware — they SHARE one non-hardware "settings" instance, refcounted by
+// window class so closing one while the other is open keeps the store alive.
+const settingsConsumers = new Set<WindowClass>();
 function ensureSettingsInstance(): void {
   // Still alive? nothing to do.
   if (settingsInstanceId && registry.live().some((i) => i.id === settingsInstanceId))
     return;
   settingsInstanceId = null;
-  // A live app instance already serves the store — the config window's unbound
-  // connect routes to it (shared store-hub → live cross-window apply).
+  // A live app instance already serves the store — the unbound connect routes
+  // to it (shared store-hub → live cross-window apply).
   if (registry.hardwareAlive()) return;
   settingsInstanceId = registry.open("non-hardware", "settings").id;
 }
-function disposeSettingsInstance(): void {
+function acquireSettingsInstance(consumer: WindowClass): void {
+  settingsConsumers.add(consumer);
+  ensureSettingsInstance();
+}
+function releaseSettingsInstance(consumer: WindowClass): void {
+  settingsConsumers.delete(consumer);
+  if (settingsConsumers.size > 0) return; // another store window still open
   if (!settingsInstanceId) return;
-  registry.teardown(settingsInstanceId, "settings window closed");
+  registry.teardown(settingsInstanceId, "settings/telecanvas window closed");
   settingsInstanceId = null;
 }
 function openConfigWindow(): void {
-  ensureSettingsInstance();
+  acquireSettingsInstance("config");
   manager.openConfig();
 }
+function openTeleCanvasWindow(): void {
+  acquireSettingsInstance("telecanvas");
+  manager.openTeleCanvas();
+}
 onRenderer("window:open-config", () => openConfigWindow());
+onRenderer("window:open-telecanvas", () => openTeleCanvasWindow());
 
 onRenderer("window:open-app", (appId) => {
   if (typeof appId === "string" && appById(appId)) void manager.openApp(appId);
@@ -1027,6 +1122,7 @@ async function devRestart(): Promise<void> {
   registry.teardownAll("dev restart");
   await waitUntil(() => !registry.anyAlive(), 3000);
   killProbe();
+  telecanvas.killAll();
   // The relaunched main spawns its own watchdog — stand this instance's down.
   standDownWatchdog();
   app.exit(0);
@@ -1071,6 +1167,9 @@ app
   // live camera list and the safety net is armed for the whole session.
   .then(spawnProbe)
   .then(spawnWatchdog)
+  // TeleCanvas host: if the persisted config selected host mode, bring the
+  // server up now so an external display can connect before any app opens.
+  .then(applyPersistedTeleCanvas)
   .then(createInitialWindows);
 
 // Quit = graceful hardware quiescence first (safety invariant): dispose EVERY
@@ -1107,6 +1206,8 @@ app.on("before-quit", (event) => {
       await waitUntil(() => !registry.anyAlive(), 6000);
     } finally {
       killProbe();
+      // Kill the TeleCanvas host (main-owned utilityProcess, no hardware).
+      telecanvas.killAll();
       // Clean shutdown reached — stand the crash watchdog down before we exit.
       standDownWatchdog();
       app.quit();

@@ -6,15 +6,20 @@
 import { computed, type WritableComputedRef } from "vue";
 import Store from "./store.js";
 import { useDefaults } from "./util/index.js";
+import { DEFAULT_TELECANVAS_PORT, type TeleCanvasMode } from "./telecanvas.js";
 
 export interface AppConfig {
-  // ---- TeleCanvas (RemoteCanvas.vue) -----------------------------------
-  // Destination URL the RemoteCanvas overlay PUTs its projection SVG to.
-  // There is NO separate mode flag — an empty/invalid URL simply disables the
-  // PUT (RemoteCanvas catches the failed fetch), so "empty = off" is the whole
-  // contract. Surfaced verbatim in the config window (the two edit the same
-  // `["config"]` document, so they observe each other's writes live).
+  // ---- TeleCanvas (standalone dual-mode module) ------------------------
+  // `client` (default) — PUT the merged projection SVG to a REMOTE TeleCanvas
+  // server (`tele_canvas_url`; empty/invalid = disabled, the app catches the
+  // failed PUT). `host` — the app spins up its OWN TeleCanvas server on
+  // `tele_canvas_port` and the push targets `http://127.0.0.1:<port>/`. The
+  // mode default preserves the historical "empty URL = off" behavior. All three
+  // are surfaced in the Settings window AND the TeleCanvas window; they edit the
+  // same `["config"]` document, so writes apply live across windows.
+  tele_canvas_mode?: TeleCanvasMode;
   tele_canvas_url?: string;
+  tele_canvas_port: number;
   // ---- Capture / recording destinations --------------------------------
   // Preferred BASE directory captures/recordings default into (a per-namespace
   // subfolder is appended by `SavePath`). Absent/empty = auto (external volume
@@ -46,7 +51,9 @@ export const APP_CONFIG_PATH = ["config"] as const;
  *  assertable without a live store (the config window / consumers read them
  *  through the `useDefaults` proxy below). */
 export const APP_CONFIG_DEFAULTS: Readonly<AppConfig> = {
+  tele_canvas_mode: "client",
   tele_canvas_url: "",
+  tele_canvas_port: DEFAULT_TELECANVAS_PORT,
   default_save_dir: "",
   baseline_distance_mm: 200.0,
   cal_marker_size_mm: 60.0,
