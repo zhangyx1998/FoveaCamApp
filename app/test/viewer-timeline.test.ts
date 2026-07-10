@@ -20,6 +20,7 @@ import {
   initialLayout,
   layoutMismatch,
   moveBlock,
+  nsAtClientX,
   reconcileLayout,
   sideOf,
   type ChannelBlock,
@@ -292,5 +293,30 @@ describe("reconcileLayout / layoutMismatch", () => {
   it("drops absent channels and appends present-but-missing ones", () => {
     const next = reconcileLayout([["center"], ["gone"]], ["center", "added"]);
     expect(next).toEqual([["center"], ["added"]]);
+  });
+});
+
+// ---- playhead ⟷ time mapping (UI round 2 ruling 1) ------------------------
+
+describe("nsAtClientX", () => {
+  // A 200px-wide track area at left=100 over a 10 s (10e9 ns) recording.
+  const L = 100;
+  const W = 200;
+  const D = 10e9;
+
+  it("maps the pointer fraction across the track width to ns", () => {
+    expect(nsAtClientX(100, L, W, D)).toBe(0); // left edge
+    expect(nsAtClientX(200, L, W, D)).toBe(5e9); // halfway → 5 s
+    expect(nsAtClientX(300, L, W, D)).toBe(10e9); // right edge → duration
+  });
+
+  it("clamps before the left edge to 0 and past the right edge to duration", () => {
+    expect(nsAtClientX(0, L, W, D)).toBe(0); // well left of the strip
+    expect(nsAtClientX(9999, L, W, D)).toBe(D); // well right of the strip
+  });
+
+  it("degenerate geometry (zero width / zero duration) → 0", () => {
+    expect(nsAtClientX(150, L, 0, D)).toBe(0);
+    expect(nsAtClientX(150, L, W, 0)).toBe(0);
   });
 });

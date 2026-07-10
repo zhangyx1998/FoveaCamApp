@@ -61,6 +61,65 @@ between views.
     worker the single writer; no other process/surface writes it, and a
     reopen must not spawn a second writer.
 
+## UI round 2 rulings (user, 2026-07-09)
+
+A second UI pass over the shipped viewer. **AS SHIPPED** (code-complete
+2026-07-09) — pure logic + tests landed; rig/UI pass still owed (stage-f
+§Standalone viewer + timeline).
+
+1. **Draggable playhead, no separate range input.** The scrub slider is
+   removed; the playhead line itself drags along the timeline. Its hit region
+   is a wide (~14 px) invisible strip around the 1 px line (`cursor:
+   ew-resize`). Clicking a track lane still seeks. *AS SHIPPED:* click-seek and
+   playhead drag share one pure mapping, `nsAtClientX` (clamped to
+   `[0, durationNs]`), unit-tested.
+2. **Playhead decorations.** Hourglass-half ornaments sit at the top
+   (downward ▽) and bottom (upward △) of the line — together an hourglass split
+   by the timeline. *AS SHIPPED:* CSS-triangle ornaments + line take a single
+   `--ph-color` custom prop — **solid red (`--danger`) while playing**,
+   idle-neutral (`--text-faint`) when paused. Snap color change, no transition.
+3. **The divider bar becomes the transport bar.** The draggable split divider
+   now hosts the transport: **LEFT** play/pause + rate; **CENTER** the current
+   timecode as `HH:MM:SS.sss` (monospace, fixed 13ch so ticking digits never
+   reflow); **RIGHT** the global **3D View** dropdown (moved from the preview
+   header) + a property-panel toggle + the collapse chevron. *AS SHIPPED:* the
+   bar is the resize drag handle; the left/right clusters are interactive
+   islands (`@pointerdown.stop`) — the TitleBar draggable-strips + no-drag-slot
+   pattern. The bar is **always present** when a file is open and stays
+   fully usable when the timeline is collapsed (it *is* the drawer edge — the
+   old `▲ timeline` drawer and separate `▼` button are gone; one chevron on the
+   bar folds the tracks away and back, and dragging the collapsed bar upward
+   re-expands it).
+4. **Property panel.** A toggleable right-side inspector of the *focused*
+   stream showing the popover's static + live stats (reused verbatim from
+   `stats.ts` + the `get-stats`→`stats` plumbing) **plus** channel id/topic,
+   encoding, absolute (wall-clock) + relative (in-recording) first/last
+   timestamps, span, message count, avg fps, format · bit-depth · codec,
+   resolution, live decode rate / frames-decoded / shown-frame-vs-playhead,
+   enabled state, track assignment, and pair side + 3D mode when paired. Empty
+   state: a dim centered "Select a stream to inspect". *AS SHIPPED:* placement
+   is the right edge of the preview area (an FCPX-style inspector — it doesn't
+   disturb the horizontally-scrolling tile strip and gives a tall column for
+   the detail list); it is resizable by its left edge. Visibility + width
+   persist in the sidecar (`panelOpen`, `panelWidth`) — tolerant read, no
+   version bump, absent → closed. The worker now forwards `startEpochMs` (the
+   recording's wall-clock start) in the `opened` payload for the absolute
+   timestamps.
+5. **Cross-highlighting.** Hovering OR focusing a track block highlights its
+   preview tile and vice versa — bidirectional, instant on/off. *AS SHIPPED:* a
+   shared highlight set keyed by stream id (`hoverChannels` ∪ `focused`); a
+   merged-pair tile highlights both member blocks and either block highlights
+   the tile. The treatment is a `box-shadow` ring (blocks + tiles) — never a
+   layout-changing border.
+6. **Everything else keeps working:** drag blocks between tracks, `v` disable,
+   the right-click stats popover (kept — the panel is the persistent surface,
+   the popover the quick one), reset/confirm flows, and the tile-width slider
+   (stays in the preview header).
+
+**Sidecar delta (no version bump):** `+panelOpen: boolean` (absent → false),
+`+panelWidth: number` (absent → `DEFAULT_PANEL_WIDTH`, clamped
+`[MIN_PANEL_WIDTH, MAX_PANEL_WIDTH]`).
+
 ## Design
 
 - **Master detection**: the channel matching the container's wide-camera

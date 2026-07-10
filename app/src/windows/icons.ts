@@ -24,4 +24,7 @@ export {
   faChartLine,
   faFolderOpen,
   faArrowsRotate,
+  faTableColumns,
+  faChevronUp,
+  faChevronDown,
 } from "@fortawesome/free-solid-svg-icons";

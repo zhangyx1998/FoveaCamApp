@@ -31,7 +31,18 @@ import {
   type ViewerEvent,
   type ViewerFileInfo,
 } from "../viewer/protocol";
-import { assembleStaticStats, clampPopover } from "../viewer/stats";
+import {
+  assembleEntityDetail,
+  assembleStaticStats,
+  clampPopover,
+  formatDuration,
+  formatFps,
+  formatLive,
+  formatPixelFormat,
+  formatResolution,
+  formatTimecode,
+  type EntityDetail,
+} from "../viewer/stats";
 import StatsPopover, { type StatsEntry } from "../viewer/StatsPopover.vue";
 import {
   activeChannels,
@@ -43,7 +54,9 @@ import {
   initialLayout,
   layoutMismatch,
   moveBlock,
+  nsAtClientX,
   reconcileLayout,
+  sideOf,
   THREE_D_MODES,
   type ChannelBlock,
   type ThreeDMode,
@@ -51,10 +64,13 @@ import {
 } from "../viewer/timeline";
 import {
   COLLAPSED_SPLIT,
+  DEFAULT_PANEL_WIDTH,
   DEFAULT_SPLIT,
   DEFAULT_TILE_WIDTH,
+  MAX_PANEL_WIDTH,
   MAX_SPLIT,
   MAX_TILE_WIDTH,
+  MIN_PANEL_WIDTH,
   MIN_SPLIT,
   MIN_TILE_WIDTH,
   type SidecarLoad,
@@ -63,7 +79,13 @@ import {
 import TitleBar from "../components/TitleBar.vue";
 import FrameView from "../components/FrameView.vue";
 import { FontAwesomeIcon as Icon } from "@fortawesome/vue-fontawesome";
-import { faFolderOpen, faArrowsRotate } from "../windows/icons";
+import {
+  faArrowsRotate,
+  faChevronDown,
+  faChevronUp,
+  faFolderOpen,
+  faTableColumns,
+} from "../windows/icons";
 
 const props = defineProps<{ path: string }>();
 
@@ -108,9 +130,12 @@ function onEngineEvent(ev: ViewerEvent): void {
       descriptors.value = { ...descriptors.value, [ev.topic]: ev.doc };
       break;
     case "stats":
-      // Accept only the reply to the in-flight request (a late reply for a
-      // since-closed/replaced popover is discarded).
-      if (ev.requestId === statsReqId) liveStats.value = ev.live;
+      // Route the reply to whichever surface issued it (both share one request
+      // counter so ids never collide). A late reply for a since-closed/replaced
+      // surface matches neither current id and is discarded.
+      if (ev.requestId === popoverReqId) liveStats.value = ev.live;
+      else if (ev.requestId === panelReqId)
+        panelLiveStats.value = { ...panelLiveStats.value, ...ev.live };
       break;
     case "frame": {
       const mat = Object.assign(new Uint8Array(ev.buffer, ev.byteOffset, ev.length), {
@@ -169,6 +194,7 @@ onUnmounted(() => {
   window.removeEventListener("pointerdown", onDocPointerDown, true);
   window.removeEventListener("message", onViewerPort);
   closeStats();
+  stopPanelPoll();
   disposeEngineDown?.();
 });
 
@@ -204,6 +230,9 @@ const disabled = ref<Set<string>>(new Set());
 const threeD = ref<ThreeDMode>("disabled");
 const split = ref<number>(DEFAULT_SPLIT); // preview height fraction
 const tileWidth = ref<number>(DEFAULT_TILE_WIDTH);
+// Property panel (UI round 2 ruling 4) — persisted visibility + width.
+const panelOpen = ref(false);
+const panelWidth = ref<number>(DEFAULT_PANEL_WIDTH);
 const initialized = ref(false);
 /** Non-null while a confirm dialog is up (ruling 10 — corrupt/mismatch). */
 const confirmReset = ref<null | { reason: "corrupt" | "mismatch" }>(null);
@@ -235,6 +264,8 @@ function currentSidecarState(): SidecarState {
     split: split.value,
     tileWidth: tileWidth.value,
     playheadNs: workerPositionNs.value,
+    panelOpen: panelOpen.value,
+    panelWidth: panelWidth.value,
   };
 }
 
@@ -251,6 +282,8 @@ function initializeLayout(persistIt: boolean): void {
   threeD.value = "disabled";
   split.value = DEFAULT_SPLIT;
   tileWidth.value = DEFAULT_TILE_WIDTH;
+  panelOpen.value = false;
+  panelWidth.value = DEFAULT_PANEL_WIDTH;
   initialized.value = true;
   if (persistIt) persist();
 }
@@ -273,6 +306,8 @@ function applySidecar(load: SidecarLoad): void {
   threeD.value = st.threeD; // global mode (sidecar already collapsed old maps)
   split.value = st.split;
   tileWidth.value = st.tileWidth;
+  panelOpen.value = st.panelOpen;
+  panelWidth.value = st.panelWidth;
   if (layoutMismatch(st.tracks, frameChannels.value)) {
     // Channels changed since last view: reconcile in-memory (don't discard),
     // and ask before overwriting (ruling 10).
@@ -339,28 +374,38 @@ function seekTo(tNs: number): void {
   descriptors.value = {}; // reset-on-seek: no future bbox left on screen
   send({ type: "seek", tNs: clamped });
 }
-function onScrub(event: Event): void {
-  seekTo(Number((event.target as HTMLInputElement).value));
-}
-function onScrubEnd(): void {
-  scrubbing.value = false;
-  persist();
-}
-/** Click-to-seek on the timeline ruler/track background (snap). */
+/** Click-to-seek on a timeline track lane (snap). Shares `nsAtClientX` with the
+ *  draggable playhead so both map pointer x → time identically. */
 function seekFromClientX(clientX: number, el: HTMLElement): void {
   const r = el.getBoundingClientRect();
-  if (r.width <= 0 || durationNs.value <= 0) return;
-  const frac = Math.min(1, Math.max(0, (clientX - r.left) / r.width));
-  seekTo(frac * durationNs.value);
+  seekTo(nsAtClientX(clientX, r.left, r.width, durationNs.value));
   scrubbing.value = false;
 }
 
-function fmtNs(ns: number): string {
-  const totalMs = Math.max(0, Math.round(ns / 1e6));
-  const minutes = Math.floor(totalMs / 60_000);
-  const seconds = Math.floor((totalMs % 60_000) / 1000);
-  const millis = totalMs % 1000;
-  return `${minutes}:${String(seconds).padStart(2, "0")}.${String(millis).padStart(3, "0")}`;
+// --- draggable playhead (UI round 2 ruling 1) -------------------------------
+// The playhead line itself drags along the timeline (no separate scrub input);
+// its hit strip is wider than the 1px line (see `.playhead` in the styles). We
+// map against the TRACKS element rect so the mapping matches lane click-seek.
+const tracksEl = ref<HTMLElement | null>(null);
+const playheadDrag = ref(false);
+function onPlayheadDown(e: PointerEvent): void {
+  if (e.button !== 0 || !tracksEl.value) return;
+  e.stopPropagation(); // don't let the lane under it also seek
+  (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  playheadDrag.value = true;
+  const r = tracksEl.value.getBoundingClientRect();
+  seekTo(nsAtClientX(e.clientX, r.left, r.width, durationNs.value));
+}
+function onPlayheadMove(e: PointerEvent): void {
+  if (!playheadDrag.value || !tracksEl.value) return;
+  const r = tracksEl.value.getBoundingClientRect();
+  seekTo(nsAtClientX(e.clientX, r.left, r.width, durationNs.value));
+}
+function onPlayheadUp(): void {
+  if (!playheadDrag.value) return;
+  playheadDrag.value = false;
+  scrubbing.value = false;
+  persist();
 }
 
 // --- preview tiles ----------------------------------------------------------
@@ -423,9 +468,18 @@ function tileLabel(tile: Tile): string {
 // instantly); the LIVE half rides a get-stats→stats request and refreshes while
 // the popover stays open. One popover at a time (design-language: instant,
 // snap, layout-stable — the box never resizes when the live reply lands).
-let statsReqId = 0;
+// One monotonic request counter shared by the popover and the property panel so
+// their reply ids never collide; each surface remembers the last id it issued
+// (the `stats` event routes on those — see onEngineEvent).
+let nextStatsReq = 0;
+let popoverReqId = -1;
+let panelReqId = -1;
 let statsPollTimer: ReturnType<typeof setInterval> | null = null;
 const liveStats = ref<Record<string, StreamLiveStats>>({});
+/** Live-stats for the property panel's focused channel (separate from the
+ *  popover's map so the two surfaces never clobber each other). */
+const panelLiveStats = ref<Record<string, StreamLiveStats>>({});
+let panelPollTimer: ReturnType<typeof setInterval> | null = null;
 const statsPopover = ref<null | {
   x: number;
   y: number;
@@ -465,7 +519,8 @@ const statsEnabled = computed(
 );
 
 function requestStats(channels: string[]): void {
-  send({ type: "get-stats", requestId: ++statsReqId, channels });
+  popoverReqId = ++nextStatsReq;
+  send({ type: "get-stats", requestId: popoverReqId, channels });
 }
 function openStats(channels: string[], labels: string[], is3D: boolean, cx: number, cy: number): void {
   liveStats.value = {}; // clear stale live rows → placeholders until the reply
@@ -553,6 +608,33 @@ const focused = ref<string | null>(null);
 function focusBlock(channel: string): void {
   focused.value = channel;
 }
+/** Focus a preview tile's stream (its primary channel) — a merged pair focuses
+ *  its left eye, which is what the property panel + `v` act on. */
+function focusTile(tile: Tile): void {
+  focused.value = tile.channels[0] ?? null;
+}
+
+// --- cross-highlighting (UI round 2 ruling 5) -------------------------------
+// Hovering OR focusing a track block highlights its preview tile, and vice
+// versa — one shared highlight set keyed by stream id. Instant on/off; the
+// treatment is outline/box-shadow only (never a layout-changing border).
+const hoverChannels = ref<Set<string>>(new Set());
+function setHover(channels: string[]): void {
+  hoverChannels.value = new Set(channels);
+}
+function clearHover(): void {
+  if (hoverChannels.value.size) hoverChannels.value = new Set();
+}
+const highlightChannels = computed<Set<string>>(() => {
+  const s = new Set(hoverChannels.value);
+  if (focused.value) s.add(focused.value);
+  return s;
+});
+const blockHighlighted = (channel: string): boolean => highlightChannels.value.has(channel);
+const tileHighlighted = (tile: Tile): boolean =>
+  tile.channels.some((c) => highlightChannels.value.has(c));
+const tileFocused = (tile: Tile): boolean =>
+  focused.value != null && tile.channels.includes(focused.value);
 function toggleDisabled(channel: string): void {
   const next = new Set(disabled.value);
   if (next.has(channel)) next.delete(channel);
@@ -659,6 +741,12 @@ function expandTimeline(): void {
   split.value = DEFAULT_SPLIT;
   persist();
 }
+/** The transport bar's collapse/expand chevron (UI round 2 ruling 3) — the bar
+ *  stays visible either way, so this just folds the tracks below it away. */
+function toggleCollapse(): void {
+  if (timelineCollapsed.value) expandTimeline();
+  else collapseTimeline();
+}
 const previewFlex = computed(() =>
   timelineCollapsed.value ? "1 1 auto" : `0 0 ${(split.value * 100).toFixed(2)}%`,
 );
@@ -670,6 +758,104 @@ function onTileWidth(e: Event): void {
 function onTileWidthCommit(): void {
   persist();
 }
+
+// --- property panel (UI round 2 ruling 4) -----------------------------------
+// A right-side inspector of the FOCUSED stream: the popover's static+live stats
+// (reused via stats.ts) PLUS timeline/topology context. Toggle + width persist
+// to the sidecar. When nothing is focused it shows a dim placeholder.
+function togglePanel(): void {
+  panelOpen.value = !panelOpen.value;
+  persist();
+}
+/** Row index (0 = master) the focused channel sits on, or null when unplaced. */
+function trackOf(channel: string): number | null {
+  const i = tracks.value.findIndex((r) => r.includes(channel));
+  return i >= 0 ? i : null;
+}
+/** Full inspector detail for the focused stream (null when nothing focused or
+ *  the channel isn't in the open container). Reuses the pure assembler. */
+const focusedDetail = computed<EntityDetail | null>(() => {
+  const ch = focused.value;
+  if (!ch) return null;
+  const info = channelInfoByName.value.get(ch);
+  if (!info) return null;
+  const s = sideOf(ch);
+  const paired = pairModeOf.value.get(ch);
+  return assembleEntityDetail(info, {
+    startEpochMs: file.value?.startEpochMs ?? null,
+    track: trackOf(ch),
+    isMaster: isMasterChannel(ch),
+    side: s?.side ?? null,
+    pairBase: paired?.pair.base ?? null,
+    enabled: !disabled.value.has(ch),
+  });
+});
+/** Latest live snapshot for the focused stream (panel half — separate poll). */
+const focusedLive = computed(() =>
+  focused.value ? (panelLiveStats.value[focused.value] ?? null) : null,
+);
+/** 3D mode shown in the panel only when the focused stream is paired. */
+const focusedThreeD = computed(() => (focusedDetail.value?.pairBase ? threeD.value : null));
+
+function requestPanelStats(channel: string): void {
+  panelReqId = ++nextStatsReq;
+  send({ type: "get-stats", requestId: panelReqId, channels: [channel] });
+}
+function stopPanelPoll(): void {
+  if (panelPollTimer) {
+    clearInterval(panelPollTimer);
+    panelPollTimer = null;
+  }
+}
+/** Keep the panel's live half fresh: (re)start a poll whenever the panel is
+ *  open with a focused stream; stop it otherwise. */
+watch(
+  [panelOpen, focused, file],
+  () => {
+    stopPanelPoll();
+    const ch = focused.value;
+    if (!panelOpen.value || !ch || !file.value) return;
+    panelLiveStats.value = {}; // placeholders until the reply lands
+    requestPanelStats(ch);
+    panelPollTimer = setInterval(() => requestPanelStats(ch), 500);
+  },
+  { flush: "post" },
+);
+
+/** Local wall-clock `HH:MM:SS.sss` for an absolute epoch ms (panel absolute
+ *  timestamps); "—" when unknown. */
+function fmtClock(epochMs: number | null): string {
+  if (epochMs == null) return "—";
+  const d = new Date(epochMs);
+  const p2 = (n: number) => String(n).padStart(2, "0");
+  return `${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}.${String(d.getMilliseconds()).padStart(3, "0")}`;
+}
+/** Signed offset of a file-relative ns from the current playhead ("+2.1 s"). */
+function fmtRelToPlayhead(ns: number | null): string {
+  if (ns == null) return "—";
+  const d = ns - positionNs.value;
+  return `${d >= 0 ? "+" : "−"}${formatDuration(Math.abs(d))}`;
+}
+
+// --- property panel resize (drag its left edge) -----------------------------
+const previewAreaEl = ref<HTMLElement | null>(null);
+const panelResizing = ref(false);
+function onPanelResizeDown(e: PointerEvent): void {
+  if (e.button !== 0) return;
+  e.preventDefault();
+  (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  panelResizing.value = true;
+}
+function onPanelResizeMove(e: PointerEvent): void {
+  if (!panelResizing.value || !previewAreaEl.value) return;
+  const r = previewAreaEl.value.getBoundingClientRect();
+  panelWidth.value = Math.min(MAX_PANEL_WIDTH, Math.max(MIN_PANEL_WIDTH, r.right - e.clientX));
+}
+function onPanelResizeUp(): void {
+  if (!panelResizing.value) return;
+  panelResizing.value = false;
+  persist();
+}
 </script>
 
 <template>
@@ -677,39 +863,43 @@ function onTileWidthCommit(): void {
     <div v-if="openError" class="notice">{{ openError }}</div>
     <div v-else-if="!file" class="notice">Opening {{ basename }}…</div>
     <template v-else>
-      <!-- ===== PREVIEW PANEL (tiles of active streams, Z order) ===== -->
-      <section class="preview" :style="{ flex: previewFlex }">
-        <header class="preview-head">
-          <span class="count">{{ tiles.length }} view{{ tiles.length === 1 ? "" : "s" }}</span>
-          <span v-if="!master.designated" class="hint" title="No wide/center stream designated by the recorder — master is the first frame channel">
-            no wide designation
-          </span>
-          <div class="head-controls">
-            <label v-if="hasPairs" class="threed-global" title="3D view mode — applies to every L/R pair">
-              <span>3D</span>
-              <select :value="threeD" @change="setThreeDMode">
-                <option v-for="m in THREE_D_MODES" :key="m" :value="m">{{ m }}</option>
-              </select>
-            </label>
-            <label class="tilew" title="Tile width">
-              <span>tile</span>
-              <input
-                type="range"
-                :min="MIN_TILE_WIDTH"
-                :max="MAX_TILE_WIDTH"
-                :value="tileWidth"
-                @input="onTileWidth"
-                @change="onTileWidthCommit"
-              />
-            </label>
-          </div>
-        </header>
+      <!-- ===== PREVIEW AREA: tile strip + optional property panel ===== -->
+      <div ref="previewAreaEl" class="preview-area" :style="{ flex: previewFlex }">
+        <section class="preview">
+          <header class="preview-head">
+            <span class="count">{{ tiles.length }} view{{ tiles.length === 1 ? "" : "s" }}</span>
+            <span v-if="!master.designated" class="hint" title="No wide/center stream designated by the recorder — master is the first frame channel">
+              no wide designation
+            </span>
+            <div class="head-controls">
+              <label class="tilew" title="Tile width">
+                <span>tile</span>
+                <input
+                  type="range"
+                  :min="MIN_TILE_WIDTH"
+                  :max="MAX_TILE_WIDTH"
+                  :value="tileWidth"
+                  @input="onTileWidth"
+                  @change="onTileWidthCommit"
+                />
+              </label>
+            </div>
+          </header>
         <div class="tiles">
           <div
             v-for="tile in tiles"
             :key="tileKey(tile)"
             class="tile"
+            :class="{
+              highlight: tileHighlighted(tile),
+              focused: tileFocused(tile),
+            }"
             :style="{ width: tileWidth + 'px' }"
+            tabindex="0"
+            @pointerenter="setHover(tile.channels)"
+            @pointerleave="clearHover"
+            @focus="focusTile(tile)"
+            @click="focusTile(tile)"
             @contextmenu="onTileContextMenu($event, tile)"
           >
             <div class="tile-head">
@@ -734,85 +924,165 @@ function onTileWidthCommit(): void {
           <div v-if="tiles.length === 0" class="notice">
             No enabled stream under the playhead — press play or scrub.
           </div>
-        </div>
-      </section>
-
-      <!-- ===== DIVIDER (snap drag) / collapsed drawer ===== -->
-      <div v-if="timelineCollapsed" class="drawer" @click="expandTimeline" title="Show timeline">
-        <span class="uparrow">▲</span> timeline
-      </div>
-      <template v-else>
-        <div
-          class="divider"
-          @pointerdown="onDividerDown"
-          @pointermove="onDividerMove"
-          @pointerup="onDividerUp"
-          @pointercancel="onDividerUp"
-        />
-
-        <!-- ===== TIMELINE PANEL ===== -->
-        <section class="timeline-panel">
-          <div class="transport">
-            <button class="play" @click="togglePlay">{{ playing ? "⏸" : "▶" }}</button>
-            <select :value="rate" @change="setRate" title="Playback rate">
-              <option v-for="r in RATES" :key="r" :value="r">{{ r }}×</option>
-            </select>
-            <span class="time">{{ fmtNs(positionNs) }}</span>
-            <input
-              class="scrub" type="range" :min="0" :max="durationNs" :value="positionNs"
-              @input="onScrub" @change="onScrubEnd" @pointerup="onScrubEnd"
-            />
-            <span class="time">{{ fmtNs(durationNs) }}</span>
-            <button class="collapse" @click="collapseTimeline" title="Collapse timeline">▼</button>
-          </div>
-
-          <div
-            class="tracks"
-            @pointermove="onBlockPointerMove"
-            @pointerup="onBlockPointerUp"
-            @pointercancel="onBlockPointerUp"
-          >
-            <div class="playhead" :style="{ left: playheadPct + '%' }" />
-            <div
-              v-for="(row, ri) in tracks"
-              :key="ri"
-              class="lane"
-              :class="{ 'drop-ok': drag && drag.targetRow === ri && !drag.colliding, 'drop-bad': drag && drag.targetRow === ri && drag.colliding }"
-              :ref="(el) => registerLane(el as Element | null, ri)"
-              @pointerdown="(e) => seekFromClientX(e.clientX, e.currentTarget as HTMLElement)"
-            >
-              <span class="lane-tag">{{ ri === 0 ? "master" : ri }}</span>
-              <div
-                v-for="channel in row"
-                :key="channel"
-                class="block"
-                :class="{
-                  focused: focused === channel,
-                  disabled: disabled.has(channel),
-                  master: isMasterChannel(channel),
-                  dragging: drag && drag.channel === channel,
-                }"
-                :style="blockStyle(channel)"
-                tabindex="0"
-                @pointerdown.stop="(e) => onBlockPointerDown(e, channel)"
-                @focus="focusBlock(channel)"
-                @click.stop="focusBlock(channel)"
-                @contextmenu="onBlockContextMenu($event, channel)"
-              >
-                <span class="block-name">{{ channel }}</span>
-              </div>
-            </div>
-            <!-- New-row drop zone (drag to the bottom to create a track). -->
-            <div
-              class="lane new-row"
-              :class="{ 'drop-ok': drag && drag.targetRow >= tracks.length && !drag.colliding }"
-              :ref="(el) => registerLane(el as Element | null, tracks.length)"
-            >
-              <span class="lane-tag">＋ new track</span>
-            </div>
           </div>
         </section>
-      </template>
+
+        <!-- ===== PROPERTY PANEL (focused-stream inspector, ruling 4) ===== -->
+        <aside v-if="panelOpen" class="property-panel" :style="{ width: panelWidth + 'px' }">
+          <div
+            class="panel-resize"
+            title="Resize panel"
+            @pointerdown="onPanelResizeDown"
+            @pointermove="onPanelResizeMove"
+            @pointerup="onPanelResizeUp"
+            @pointercancel="onPanelResizeUp"
+          />
+          <template v-if="focusedDetail">
+            <div class="panel-head">
+              <span class="panel-name">{{ focusedDetail.name }}</span>
+              <span class="panel-state" :class="{ off: !focusedDetail.enabled }">
+                {{ focusedDetail.enabled ? "enabled" : "disabled" }}
+              </span>
+            </div>
+            <dl class="panel-rows">
+              <div class="row"><dt>channel</dt><dd>{{ focusedDetail.name }}</dd></div>
+              <div class="row"><dt>encoding</dt><dd>{{ focusedDetail.encoding || "—" }}</dd></div>
+              <div class="row"><dt>format</dt><dd>{{ formatPixelFormat(focusedDetail.stat) }}</dd></div>
+              <div class="row">
+                <dt>resolution</dt>
+                <dd>{{ formatResolution(focusedDetail.stat.width, focusedDetail.stat.height) }}<span class="sub">×{{ focusedDetail.stat.channels }}ch</span></dd>
+              </div>
+              <div class="row"><dt>messages</dt><dd>{{ focusedDetail.stat.messageCount ?? "—" }}<span class="sub"> · {{ formatFps(focusedDetail.stat.avgFps) }} avg</span></dd></div>
+              <div class="row"><dt>span</dt><dd>{{ formatDuration(focusedDetail.spanNs) }}</dd></div>
+
+              <div class="group">timestamps</div>
+              <div class="row"><dt>first</dt><dd>{{ fmtClock(focusedDetail.firstEpochMs) }}<span class="sub"> · {{ formatTimecode(focusedDetail.firstNs ?? 0) }}</span></dd></div>
+              <div class="row"><dt></dt><dd class="sub">{{ fmtRelToPlayhead(focusedDetail.firstNs) }} vs playhead</dd></div>
+              <div class="row"><dt>last</dt><dd>{{ fmtClock(focusedDetail.lastEpochMs) }}<span class="sub"> · {{ formatTimecode(focusedDetail.lastNs ?? 0) }}</span></dd></div>
+              <div class="row"><dt></dt><dd class="sub">{{ fmtRelToPlayhead(focusedDetail.lastNs) }} vs playhead</dd></div>
+
+              <div class="group">live</div>
+              <div class="row live"><dt>decoded</dt><dd>{{ formatLive(focusedLive).decoded }}</dd></div>
+              <div class="row live"><dt>rate</dt><dd>{{ formatLive(focusedLive).rate }}</dd></div>
+              <div class="row live"><dt>frame</dt><dd>{{ formatLive(focusedLive).lastFrame }}<span class="sub"> · {{ fmtRelToPlayhead(focusedLive?.lastFrameNs ?? null) }}</span></dd></div>
+
+              <div class="group">layout</div>
+              <div class="row"><dt>track</dt><dd>{{ focusedDetail.track == null ? "—" : (focusedDetail.track === 0 ? "master" : focusedDetail.track) }}</dd></div>
+              <div class="row"><dt>enabled</dt><dd>{{ focusedDetail.enabled ? "yes" : "no" }}</dd></div>
+              <div v-if="focusedDetail.pairBase" class="row"><dt>pair</dt><dd>{{ focusedDetail.pairBase }}<span class="sub"> · {{ focusedDetail.side }}</span></dd></div>
+              <div v-if="focusedThreeD" class="row"><dt>3D mode</dt><dd>{{ focusedThreeD }}</dd></div>
+            </dl>
+          </template>
+          <div v-else class="panel-empty">Select a stream to inspect</div>
+        </aside>
+      </div>
+
+      <!-- ===== TRANSPORT BAR (the draggable divider, ruling 3) =====
+           The bar itself is the resize drag handle (pointer drag = split);
+           the LEFT / RIGHT control clusters are interactive islands
+           (`@pointerdown.stop`) so their buttons never start a drag — same
+           pattern as TitleBar's draggable strips + no-drag slot. -->
+      <div
+        class="transport-bar"
+        :class="{ dragging: dividerDrag }"
+        @pointerdown="onDividerDown"
+        @pointermove="onDividerMove"
+        @pointerup="onDividerUp"
+        @pointercancel="onDividerUp"
+      >
+        <div class="bar-group left" @pointerdown.stop>
+          <button class="play" @click="togglePlay" :title="playing ? 'Pause' : 'Play'">{{ playing ? "⏸" : "▶" }}</button>
+          <select :value="rate" @change="setRate" title="Playback rate">
+            <option v-for="r in RATES" :key="r" :value="r">{{ r }}×</option>
+          </select>
+        </div>
+        <div class="bar-group center">
+          <span class="timecode">{{ formatTimecode(positionNs) }}</span>
+        </div>
+        <div class="bar-group right" @pointerdown.stop>
+          <label v-if="hasPairs" class="threed-global" title="3D View — applies to every L/R pair">
+            <span>3D</span>
+            <select :value="threeD" @change="setThreeDMode">
+              <option v-for="m in THREE_D_MODES" :key="m" :value="m">{{ m }}</option>
+            </select>
+          </label>
+          <button class="bar-btn" :class="{ active: panelOpen }" @click="togglePanel" title="Toggle property panel">
+            <Icon :icon="faTableColumns" />
+          </button>
+          <button class="bar-btn" @click="toggleCollapse" :title="timelineCollapsed ? 'Show timeline' : 'Collapse timeline'">
+            <Icon :icon="timelineCollapsed ? faChevronUp : faChevronDown" />
+          </button>
+        </div>
+      </div>
+
+      <!-- ===== TIMELINE TRACKS (folded away when collapsed) ===== -->
+      <section v-if="!timelineCollapsed" class="timeline-panel">
+        <div
+          ref="tracksEl"
+          class="tracks"
+          @pointermove="onBlockPointerMove"
+          @pointerup="onBlockPointerUp"
+          @pointercancel="onBlockPointerUp"
+        >
+          <!-- Draggable playhead (ruling 1): a wide invisible hit strip around
+               the 1px line, split by hourglass-half ornaments (ruling 2) — solid
+               red while playing, idle-neutral when paused. -->
+          <div
+            class="playhead"
+            :class="{ playing }"
+            :style="{ left: playheadPct + '%' }"
+            title="Drag to scrub"
+            @pointerdown="onPlayheadDown"
+            @pointermove="onPlayheadMove"
+            @pointerup="onPlayheadUp"
+            @pointercancel="onPlayheadUp"
+          >
+            <span class="orn top" />
+            <span class="line" />
+            <span class="orn bottom" />
+          </div>
+          <div
+            v-for="(row, ri) in tracks"
+            :key="ri"
+            class="lane"
+            :class="{ 'drop-ok': drag && drag.targetRow === ri && !drag.colliding, 'drop-bad': drag && drag.targetRow === ri && drag.colliding }"
+            :ref="(el) => registerLane(el as Element | null, ri)"
+            @pointerdown="(e) => seekFromClientX(e.clientX, e.currentTarget as HTMLElement)"
+          >
+            <span class="lane-tag">{{ ri === 0 ? "master" : ri }}</span>
+            <div
+              v-for="channel in row"
+              :key="channel"
+              class="block"
+              :class="{
+                focused: focused === channel,
+                highlight: blockHighlighted(channel),
+                disabled: disabled.has(channel),
+                master: isMasterChannel(channel),
+                dragging: drag && drag.channel === channel,
+              }"
+              :style="blockStyle(channel)"
+              tabindex="0"
+              @pointerdown.stop="(e) => onBlockPointerDown(e, channel)"
+              @pointerenter="setHover([channel])"
+              @pointerleave="clearHover"
+              @focus="focusBlock(channel)"
+              @click.stop="focusBlock(channel)"
+              @contextmenu="onBlockContextMenu($event, channel)"
+            >
+              <span class="block-name">{{ channel }}</span>
+            </div>
+          </div>
+          <!-- New-row drop zone (drag to the bottom to create a track). -->
+          <div
+            class="lane new-row"
+            :class="{ 'drop-ok': drag && drag.targetRow >= tracks.length && !drag.colliding }"
+            :ref="(el) => registerLane(el as Element | null, tracks.length)"
+          >
+            <span class="lane-tag">＋ new track</span>
+          </div>
+        </div>
+      </section>
     </template>
 
     <!-- ===== right-click stream stats popover ===== -->
@@ -882,13 +1152,22 @@ function onTileWidthCommit(): void {
   flex-grow: 1;
 }
 
+// ---- preview area (tile strip + optional property panel) ----
+.preview-area {
+  display: flex;
+  flex-direction: row;
+  min-height: 0;
+  border-bottom: 1px solid var(--tint-2);
+}
+
 // ---- preview panel ----
 .preview {
   display: flex;
   flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
   min-height: 0;
   background: var(--bg-chrome);
-  border-bottom: 1px solid var(--tint-2);
 
   .preview-head {
     display: flex;
@@ -914,18 +1193,11 @@ function onTileWidthCommit(): void {
       align-items: center;
       gap: 1.4ch;
     }
-    .threed-global,
     .tilew {
       display: flex;
       align-items: center;
       gap: 0.6ch;
       color: var(--text-faint);
-    }
-    .threed-global select {
-      background: var(--bg-chrome);
-      color: var(--text-dim);
-      border: 1px solid var(--border-strong);
-      border-radius: 3px;
     }
     .tilew input {
       width: 12ch;
@@ -954,6 +1226,17 @@ function onTileWidthCommit(): void {
     border: 1px solid var(--tint-2);
     border-radius: 4px;
     overflow: hidden;
+    outline: none;
+    // Cross-highlight (ruling 5): box-shadow ring — visible, never reflows.
+    // SNAP: instant on/off, no transition on this feedback path.
+    &.highlight {
+      box-shadow: 0 0 0 2px var(--accent-bright);
+    }
+    // Focused tile gets the stronger accent outline (matches focused blocks).
+    &.focused {
+      outline: 2px solid var(--accent);
+      outline-offset: -2px;
+    }
 
     .tile-head {
       padding: 0.2em 0.6em;
@@ -984,32 +1267,190 @@ function onTileWidthCommit(): void {
   }
 }
 
-// ---- divider / drawer ----
-.divider {
-  height: 6px;
-  flex: 0 0 6px;
-  background: var(--bg-app);
-  cursor: row-resize;
-  // SNAP: no transition on the control path.
-  &:hover {
-    background: #0af6;
+// ---- property panel (focused-stream inspector, ruling 4) ----
+.property-panel {
+  position: relative;
+  flex: 0 0 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  padding: 0.6em 0.9em 0.9em;
+  background: var(--bg-panel-alt);
+  border-left: 1px solid var(--tint-2);
+  color: var(--text-dim);
+  font-size: 0.82em;
+
+  // Left-edge resize handle (wider than its 1px seam so it's easy to grab).
+  .panel-resize {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: -3px;
+    width: 8px;
+    cursor: col-resize;
+    z-index: 2;
+    &:hover {
+      background: #0af6;
+    }
+  }
+
+  .panel-empty {
+    margin: auto;
+    padding: 2em 1em;
+    text-align: center;
+    color: var(--text-disabled);
+  }
+
+  .panel-head {
+    display: flex;
+    align-items: baseline;
+    gap: 0.8ch;
+    padding-bottom: 0.4em;
+    margin-bottom: 0.5em;
+    border-bottom: 1px solid var(--tint-1);
+    .panel-name {
+      color: var(--text-bright);
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .panel-state {
+      margin-left: auto;
+      font-family: var(--font-mono);
+      color: var(--ok);
+      &.off {
+        color: var(--text-disabled);
+      }
+    }
+  }
+
+  .panel-rows {
+    margin: 0;
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    column-gap: 1.2ch;
+    row-gap: 0.16em;
+
+    .group {
+      grid-column: 1 / -1;
+      margin-top: 0.7em;
+      padding-top: 0.3em;
+      border-top: 1px solid var(--tint-1);
+      color: var(--text-faint);
+      font-size: 0.9em;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .row {
+      display: contents;
+      dt {
+        color: var(--text-faint);
+      }
+      dd {
+        margin: 0;
+        text-align: right;
+        font-family: var(--font-mono);
+        color: var(--text-dim);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      &.live dd {
+        color: var(--text-bright);
+      }
+      .sub {
+        color: var(--text-disabled);
+      }
+    }
   }
 }
-.drawer {
+
+// ---- transport bar (the draggable divider, ruling 3) ----
+.transport-bar {
   flex: 0 0 auto;
-  padding: 0.3em 1em;
-  background: var(--bg-panel-alt);
+  display: flex;
+  align-items: center;
+  gap: 1ch;
+  padding: 0.4em 1em;
+  background: var(--bg-app);
   border-top: 1px solid var(--tint-2);
-  color: var(--text-muted);
-  font-size: 0.85em;
-  cursor: pointer;
-  text-align: center;
-  &:hover {
-    color: var(--text);
-    background: var(--bg-panel-alt);
+  border-bottom: 1px solid var(--tint-1);
+  cursor: row-resize;
+  // SNAP: no transition on the control path.
+  &:hover,
+  &.dragging {
+    background: var(--bg-elevated);
   }
-  .uparrow {
-    color: var(--accent-bright);
+
+  .bar-group {
+    display: flex;
+    align-items: center;
+    gap: 1ch;
+    cursor: default; // the islands aren't drag handles
+    &.left {
+      flex: 1 1 0;
+      justify-content: flex-start;
+    }
+    &.center {
+      flex: 0 0 auto;
+      justify-content: center;
+    }
+    &.right {
+      flex: 1 1 0;
+      justify-content: flex-end;
+    }
+  }
+
+  .timecode {
+    font-family: var(--font-mono);
+    color: var(--text-bright);
+    // Fixed field so ticking digits never shift the layout (layout stability).
+    min-width: 13ch;
+    text-align: center;
+  }
+
+  .play {
+    background: var(--bg-app);
+    color: var(--text-strong);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0.3em 0;
+    width: 2.6em;
+    cursor: pointer;
+    &:hover {
+      background: var(--bg-elevated);
+    }
+  }
+  select {
+    background: var(--bg-chrome);
+    color: var(--text-dim);
+    border: 1px solid var(--border-strong);
+    border-radius: 3px;
+  }
+  .threed-global {
+    display: flex;
+    align-items: center;
+    gap: 0.6ch;
+    color: var(--text-faint);
+    font-size: 0.85em;
+  }
+  .bar-btn {
+    background: var(--bg-app);
+    color: var(--text-strong);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0.3em 0.55em;
+    cursor: pointer;
+    &:hover {
+      background: var(--bg-elevated);
+    }
+    // Active (panel open) — accent outline; instant, no transition.
+    &.active {
+      color: var(--accent-bright);
+      border-color: var(--accent);
+    }
   }
 }
 
@@ -1021,49 +1462,6 @@ function onTileWidthCommit(): void {
   flex-grow: 1;
   background: var(--bg-chrome);
 
-  .transport {
-    display: flex;
-    align-items: center;
-    gap: 1ch;
-    padding: 0.5em 1em;
-    border-bottom: 1px solid var(--tint-1);
-    background: var(--bg-panel-alt);
-    flex: 0 0 auto;
-
-    .play,
-    .collapse {
-      background: var(--bg-app);
-      color: var(--text-strong);
-      border: 1px solid var(--border);
-      border-radius: 4px;
-      padding: 0.3em 0;
-      width: 2.6em;
-      cursor: pointer;
-      &:hover {
-        background: var(--bg-elevated);
-      }
-    }
-    select {
-      background: var(--bg-chrome);
-      color: var(--text-dim);
-      border: 1px solid var(--border-strong);
-      border-radius: 3px;
-    }
-    .time {
-      color: var(--text-muted);
-      font-family: var(--font-mono);
-      font-size: 0.85em;
-      min-width: 9ch;
-      text-align: center;
-    }
-    .scrub {
-      flex-grow: 1;
-    }
-    .collapse {
-      margin-left: 0.5ch;
-    }
-  }
-
   .tracks {
     position: relative;
     flex-grow: 1;
@@ -1071,14 +1469,56 @@ function onTileWidthCommit(): void {
     padding: 0.4em 0;
     min-height: 0;
 
+    // Draggable playhead (ruling 1/2): a WIDE invisible hit strip (14px) around
+    // a 1px line, with hourglass-half ornaments at top + bottom. The strip is
+    // centered on the playhead position (translateX -50%). Idle-neutral by
+    // default; SOLID RED while playing — snap color change, no transition.
     .playhead {
       position: absolute;
       top: 0;
       bottom: 0;
-      width: 2px;
-      background: var(--accent-bright);
-      pointer-events: none;
+      width: 14px;
+      transform: translateX(-50%);
+      display: flex;
+      justify-content: center;
+      cursor: ew-resize;
+      pointer-events: auto;
       z-index: 5;
+      // idle color (paused)
+      --ph-color: var(--text-faint);
+      &.playing {
+        --ph-color: var(--danger);
+      }
+
+      .line {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 2px;
+        background: var(--ph-color);
+      }
+      // Top ornament: downward-pointing half (▽) at the top of the line.
+      // Bottom ornament: upward-pointing half (△) — together an hourglass split
+      // by the timeline. Pure CSS triangles so they take --ph-color.
+      .orn {
+        position: absolute;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 0;
+        height: 0;
+        border-left: 5px solid transparent;
+        border-right: 5px solid transparent;
+        &.top {
+          top: 0;
+          border-top: 8px solid var(--ph-color);
+        }
+        &.bottom {
+          bottom: 0;
+          border-bottom: 8px solid var(--ph-color);
+        }
+      }
     }
 
     .lane {
@@ -1139,6 +1579,10 @@ function onTileWidthCommit(): void {
       &.focused {
         outline: 2px solid var(--accent);
         outline-offset: 0;
+      }
+      // Cross-highlight (ruling 5): box-shadow ring — instant, no reflow.
+      &.highlight {
+        box-shadow: 0 0 0 2px var(--accent-bright);
       }
       &.disabled {
         opacity: 0.4;

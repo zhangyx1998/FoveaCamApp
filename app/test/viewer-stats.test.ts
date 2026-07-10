@@ -9,6 +9,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  assembleEntityDetail,
   assembleStaticStats,
   clampPopover,
   computeAvgFps,
@@ -16,6 +17,7 @@ import {
   formatFps,
   formatPixelFormat,
   formatResolution,
+  formatTimecode,
   splitBaseCodecs,
 } from "@src/viewer/stats";
 import type { ViewerChannelInfo } from "@src/viewer/protocol";
@@ -112,6 +114,102 @@ describe("formatters", () => {
         width: 1, height: 1, channels: 1, messageCount: 1, spanNs: 1, avgFps: null,
       }),
     ).toBe("Mono8 · 8-bit");
+  });
+});
+
+describe("formatTimecode (HH:MM:SS.sss, UI round 2 ruling 3)", () => {
+  it("zero-pads all fields", () => {
+    expect(formatTimecode(0)).toBe("00:00:00.000");
+    expect(formatTimecode(1.5 * NS)).toBe("00:00:01.500");
+    expect(formatTimecode(65.123 * NS)).toBe("00:01:05.123");
+  });
+  it("shows hours past one hour (and beyond)", () => {
+    expect(formatTimecode(3661.007 * NS)).toBe("01:01:01.007"); // 1h 1m 1.007s
+    expect(formatTimecode(36_000 * NS)).toBe("10:00:00.000"); // 10 h
+  });
+  it("rounds to the nearest millisecond and never goes negative", () => {
+    expect(formatTimecode(1_499_600)).toBe("00:00:00.001"); // 1.4996 ms → 1 ms
+    expect(formatTimecode(1_500_000)).toBe("00:00:00.002"); // 1.5 ms → 2 ms
+    expect(formatTimecode(-5)).toBe("00:00:00.000");
+  });
+});
+
+describe("assembleEntityDetail (property panel, UI round 2 ruling 4)", () => {
+  const info: ViewerChannelInfo = {
+    name: "left-cam",
+    metadata: {
+      shape: "[720, 1280]",
+      channels: "1",
+      pixelFormat: "BayerRG12p/zlib",
+      significantBits: "12",
+      messageEncoding: "x-fovea-raw",
+    },
+    startNs: 100 * 1e6, // 0.1 s file-relative
+    lastNs: 600 * 1e6, // 0.6 s
+    messageCount: 6,
+  };
+
+  it("reuses the static stats and folds in topology + timestamps", () => {
+    const startEpochMs = 1_700_000_000_000; // recording start (epoch ms)
+    const d = assembleEntityDetail(info, {
+      startEpochMs,
+      track: 2,
+      isMaster: false,
+      side: "left",
+      pairBase: "cam",
+      enabled: true,
+    });
+    // reused static half
+    expect(d.stat.pixelFormat).toBe("BayerRG12p");
+    expect(d.stat.significantBits).toBe(12);
+    expect(d.stat.avgFps).toBeCloseTo(10, 6);
+    // added context
+    expect(d.name).toBe("left-cam");
+    expect(d.encoding).toBe("x-fovea-raw");
+    expect(d.firstNs).toBe(100 * 1e6);
+    expect(d.lastNs).toBe(600 * 1e6);
+    expect(d.firstEpochMs).toBe(startEpochMs + 100); // +0.1 s = +100 ms
+    expect(d.lastEpochMs).toBe(startEpochMs + 600);
+    expect(d.spanNs).toBe(0.5 * NS);
+    expect(d.track).toBe(2);
+    expect(d.isMaster).toBe(false);
+    expect(d.side).toBe("left");
+    expect(d.pairBase).toBe("cam");
+    expect(d.enabled).toBe(true);
+  });
+
+  it("leaves epoch null when the file's start epoch is unknown", () => {
+    const d = assembleEntityDetail(info, {
+      startEpochMs: null,
+      track: null,
+      isMaster: false,
+      side: null,
+      pairBase: null,
+      enabled: false,
+    });
+    expect(d.firstEpochMs).toBeNull();
+    expect(d.lastEpochMs).toBeNull();
+    expect(d.track).toBeNull();
+    expect(d.side).toBeNull();
+    expect(d.pairBase).toBeNull();
+    expect(d.enabled).toBe(false);
+  });
+
+  it("tolerates a channel with no span (null first/last)", () => {
+    const bare: ViewerChannelInfo = { name: "x", metadata: { messageEncoding: "json" } };
+    const d = assembleEntityDetail(bare, {
+      startEpochMs: 1_000,
+      track: 0,
+      isMaster: true,
+      side: null,
+      pairBase: null,
+      enabled: true,
+    });
+    expect(d.firstNs).toBeNull();
+    expect(d.lastNs).toBeNull();
+    expect(d.firstEpochMs).toBeNull();
+    expect(d.encoding).toBe("json");
+    expect(d.isMaster).toBe(true);
   });
 });
 

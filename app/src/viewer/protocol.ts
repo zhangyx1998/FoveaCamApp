@@ -56,6 +56,12 @@ export type ViewerFileInfo = {
   path: string;
   channels: ViewerChannelInfo[];
   durationNs: number;
+  /** ABSOLUTE wall-clock epoch of the file's FIRST message, in milliseconds
+   *  (the recording's start time). Feeds the property panel's absolute
+   *  first/last message timestamps (UI round 2 ruling 4). Milliseconds — not
+   *  ns — so it stays a safe JS integer; absolute epoch ns (~1.75e18) exceeds
+   *  2^53. Optional: absent when the source can't supply it. */
+  startEpochMs?: number;
   /** True when the container had no MCAP footer (crash-truncated recording)
    *  and was opened through the streaming re-index fallback. */
   truncated: boolean;

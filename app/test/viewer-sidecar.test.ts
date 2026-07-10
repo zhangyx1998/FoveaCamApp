@@ -10,9 +10,12 @@
 import { describe, expect, it } from "vitest";
 import {
   classifySidecar,
+  DEFAULT_PANEL_WIDTH,
   DEFAULT_SPLIT,
   DEFAULT_TILE_WIDTH,
+  MAX_PANEL_WIDTH,
   MAX_TILE_WIDTH,
+  MIN_PANEL_WIDTH,
   MIN_TILE_WIDTH,
   defaultSidecar,
   parseSidecar,
@@ -29,6 +32,8 @@ const sample: SidecarState = {
   split: 0.42,
   tileWidth: 280,
   playheadNs: 123_456,
+  panelOpen: true,
+  panelWidth: 340,
 };
 
 describe("sidecar round-trip", () => {
@@ -64,6 +69,33 @@ describe("classifySidecar", () => {
     expect(load.state.split).toBe(DEFAULT_SPLIT);
     expect(load.state.tileWidth).toBe(DEFAULT_TILE_WIDTH);
     expect(load.state.disabled).toEqual([]);
+  });
+});
+
+describe("property panel state (UI round 2 ruling 4 — tolerant read)", () => {
+  it("absent panel fields default to CLOSED + default width", () => {
+    // An older sidecar (no panel keys) must not throw and must read closed.
+    const load = classifySidecar(JSON.stringify({ v: 1, tracks: [["a"]] }));
+    expect(load.status).toBe("ok");
+    if (load.status !== "ok") return;
+    expect(load.state.panelOpen).toBe(false);
+    expect(load.state.panelWidth).toBe(DEFAULT_PANEL_WIDTH);
+  });
+
+  it("panelOpen is strictly boolean-true (truthy non-true → closed)", () => {
+    const open = classifySidecar(JSON.stringify({ v: 1, panelOpen: true }));
+    const weird = classifySidecar(JSON.stringify({ v: 1, panelOpen: "yes" }));
+    expect(open.status === "ok" && open.state.panelOpen).toBe(true);
+    expect(weird.status === "ok" && weird.state.panelOpen).toBe(false);
+  });
+
+  it("panelWidth clamps to [MIN, MAX]; malformed → default", () => {
+    const hi = classifySidecar(JSON.stringify({ v: 1, panelWidth: 9_000 }));
+    const lo = classifySidecar(JSON.stringify({ v: 1, panelWidth: 10 }));
+    const bad = classifySidecar(JSON.stringify({ v: 1, panelWidth: "wide" }));
+    expect(hi.status === "ok" && hi.state.panelWidth).toBe(MAX_PANEL_WIDTH);
+    expect(lo.status === "ok" && lo.state.panelWidth).toBe(MIN_PANEL_WIDTH);
+    expect(bad.status === "ok" && bad.state.panelWidth).toBe(DEFAULT_PANEL_WIDTH);
   });
 });
 

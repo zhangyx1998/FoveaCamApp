@@ -46,6 +46,12 @@ export interface SidecarState {
   tileWidth: number;
   /** Last playhead position, ns file-relative (restored on reopen, ruling 8). */
   playheadNs: number;
+  /** Property panel visibility (UI round 2 ruling 4). Tolerant: an absent field
+   *  in an older sidecar defaults CLOSED (no version bump). */
+  panelOpen: boolean;
+  /** Property panel width, px (UI round 2 ruling 4) — persisted when the user
+   *  resizes it. Absent → DEFAULT_PANEL_WIDTH. */
+  panelWidth: number;
 }
 
 /** Panel-split bounds — the preview reserves a minimum height, the timeline can
@@ -57,6 +63,10 @@ export const DEFAULT_SPLIT = 0.5;
 export const MIN_TILE_WIDTH = 120;
 export const MAX_TILE_WIDTH = 900;
 export const DEFAULT_TILE_WIDTH = 320;
+/** Property-panel width bounds (UI round 2 ruling 4). */
+export const MIN_PANEL_WIDTH = 220;
+export const MAX_PANEL_WIDTH = 560;
+export const DEFAULT_PANEL_WIDTH = 300;
 
 export function defaultSidecar(): SidecarState {
   return {
@@ -67,7 +77,14 @@ export function defaultSidecar(): SidecarState {
     split: DEFAULT_SPLIT,
     tileWidth: DEFAULT_TILE_WIDTH,
     playheadNs: 0,
+    panelOpen: false,
+    panelWidth: DEFAULT_PANEL_WIDTH,
   };
+}
+
+function clampPanelWidth(n: unknown): number {
+  if (typeof n !== "number" || !Number.isFinite(n)) return DEFAULT_PANEL_WIDTH;
+  return Math.min(MAX_PANEL_WIDTH, Math.max(MIN_PANEL_WIDTH, Math.round(n)));
 }
 
 function clampSplit(n: unknown): number {
@@ -131,6 +148,9 @@ function coerceValid(o: Record<string, unknown>): SidecarState {
       typeof o.playheadNs === "number" && Number.isFinite(o.playheadNs)
         ? Math.max(0, o.playheadNs)
         : 0,
+    // Tolerant: absent → CLOSED / default width (no version bump, ruling 4).
+    panelOpen: o.panelOpen === true,
+    panelWidth: clampPanelWidth(o.panelWidth),
   };
 }
 

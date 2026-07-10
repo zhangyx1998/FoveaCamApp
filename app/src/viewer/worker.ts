@@ -158,6 +158,9 @@ async function open(path: string): Promise<void> {
           };
         }),
         durationNs: Number(s.endNs - s.startNs),
+        // Absolute wall-clock start (epoch ms) for the property panel's absolute
+        // timestamps — ns→ms keeps it a safe integer (epoch ns > 2^53).
+        startEpochMs: Number(s.startNs / 1_000_000n),
         truncated: s.truncated,
         wideCameraDeclared: s.wideCameraDeclared,
       },

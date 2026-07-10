@@ -89,7 +89,95 @@ export function assembleStaticStats(info: ViewerChannelInfo): StreamStaticStats 
   };
 }
 
+// ---- focused-entity detail (property panel, UI round 2 ruling 4) ----------
+
+/** The FULL inspector record for the focused stream — the static stats PLUS the
+ *  timeline/topology context the property panel shows beyond the popover. Pure:
+ *  everything here is derivable renderer-side from the channel info + the layout;
+ *  the LIVE half (decode rate / frames / shown-frame) still rides `get-stats`
+ *  and is merged in the component. Unit-tested in viewer-stats.test.ts. */
+export interface EntityDetail {
+  /** Channel id / topic. */
+  name: string;
+  /** MCAP message-encoding / schema name for the channel ("" when unknown). */
+  encoding: string;
+  /** The reused static container stats (format, resolution, span, avg fps…). */
+  stat: StreamStaticStats;
+  /** First / last message log-time, file-relative ns (null when no span). */
+  firstNs: number | null;
+  lastNs: number | null;
+  /** First / last message ABSOLUTE wall-clock epoch ms (null when the file's
+   *  epoch is unknown) — `startEpochMs + firstNs/1e6`. Component formats the
+   *  Date; kept numeric here so the assembly stays timezone-independent. */
+  firstEpochMs: number | null;
+  lastEpochMs: number | null;
+  /** This channel's block span in ns (0 when it carried nothing). */
+  spanNs: number;
+  /** Track row this stream sits on (0 = master), or null when unplaced. */
+  track: number | null;
+  /** True when this is the master/wide channel. */
+  isMaster: boolean;
+  /** L/R side when this channel is half of a detected pair, else null. */
+  side: "left" | "right" | null;
+  /** Shared base of the pair this channel belongs to, else null. */
+  pairBase: string | null;
+  /** Whether the stream is enabled (not v-toggled off). */
+  enabled: boolean;
+}
+
+/** Assemble the focused stream's full inspector detail from its channel info +
+ *  layout context. Reuses `assembleStaticStats` (no duplication) and folds in
+ *  the topic/encoding, absolute+relative first/last timestamps, track
+ *  assignment, master flag, pair side/base, and enabled state. */
+export function assembleEntityDetail(
+  info: ViewerChannelInfo,
+  ctx: {
+    startEpochMs?: number | null;
+    track: number | null;
+    isMaster: boolean;
+    side: "left" | "right" | null;
+    pairBase: string | null;
+    enabled: boolean;
+  },
+): EntityDetail {
+  const stat = assembleStaticStats(info);
+  const firstNs = info.startNs ?? null;
+  const lastNs = info.lastNs ?? null;
+  const epoch = ctx.startEpochMs;
+  const toEpochMs = (relNs: number | null): number | null =>
+    relNs != null && epoch != null && Number.isFinite(epoch) ? epoch + relNs / 1e6 : null;
+  return {
+    name: info.name,
+    encoding: info.metadata?.messageEncoding ?? "",
+    stat,
+    firstNs,
+    lastNs,
+    firstEpochMs: toEpochMs(firstNs),
+    lastEpochMs: toEpochMs(lastNs),
+    spanNs: stat.spanNs,
+    track: ctx.track,
+    isMaster: ctx.isMaster,
+    side: ctx.side,
+    pairBase: ctx.pairBase,
+    enabled: ctx.enabled,
+  };
+}
+
 // ---- formatters -----------------------------------------------------------
+
+/** Zero-padded `HH:MM:SS.sss` timecode for a file-relative ns position (UI
+ *  round 2 ruling 3 — the transport bar's center readout). Hours are shown and
+ *  grow past two digits for very long recordings; ms are rounded, so the digits
+ *  tick without ever changing the field width (monospace + fixed layout). */
+export function formatTimecode(ns: number): string {
+  const totalMs = Math.max(0, Math.round(ns / 1e6));
+  const h = Math.floor(totalMs / 3_600_000);
+  const m = Math.floor((totalMs % 3_600_000) / 60_000);
+  const s = Math.floor((totalMs % 60_000) / 1000);
+  const ms = totalMs % 1000;
+  const p2 = (n: number) => String(n).padStart(2, "0");
+  return `${p2(h)}:${p2(m)}:${p2(s)}.${String(ms).padStart(3, "0")}`;
+}
 
 /** Human duration for a ns span: "12.3 s" under 100 s, "M:SS" above. */
 export function formatDuration(ns: number): string {

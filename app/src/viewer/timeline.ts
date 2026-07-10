@@ -349,6 +349,24 @@ export function decodeSet(
   return [...out].sort((a, b) => a.localeCompare(b));
 }
 
+// ---- playhead ⟷ time geometry ---------------------------------------------
+
+/** Map a pointer `clientX` over the timeline track area to a file-relative ns,
+ *  CLAMPED to [0, durationNs]. Pure so the click-to-seek and the draggable
+ *  playhead (UI round 2 ruling 1) share one mapping and it is unit-tested:
+ *  before the left edge → 0, past the right edge → durationNs, degenerate
+ *  geometry (zero width / zero duration) → 0. */
+export function nsAtClientX(
+  clientX: number,
+  rectLeft: number,
+  rectWidth: number,
+  durationNs: number,
+): number {
+  if (!(rectWidth > 0) || !(durationNs > 0)) return 0;
+  const frac = Math.min(1, Math.max(0, (clientX - rectLeft) / rectWidth));
+  return frac * durationNs;
+}
+
 /** The channels active at `playheadNs` in Z order (master row first, then
  *  top→bottom), filtered to `enabled`. At most one block per row spans a given
  *  playhead (rows never overlap), so each row contributes ≤ 1 channel. */

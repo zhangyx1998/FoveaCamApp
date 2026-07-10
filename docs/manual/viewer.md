@@ -29,10 +29,12 @@ The title bar shows the file name and a compact path (your home folder shown as 
 
 The upper panel shows one **tile** per enabled stream whose block spans the current playhead time. Tiles are drawn in **Z-order** — the master track first, then top-to-bottom through the timeline tracks — so the arrangement of your tracks controls which view sits where.
 
-The panel header shows the number of views, an optional **no wide designation** warning (see below), and a **tile** width slider.
+The panel header shows the number of views, an optional **no wide designation** warning (see below), and a **tile** width slider. (The **3D View** control now lives on the transport bar — see [Playback controls](#playback-controls).)
 
 - If a tile's stream has no decoded frame yet at the playhead, the tile shows **no frame** until you play or scrub onto a frame.
 - If nothing is enabled under the playhead, the panel shows **No enabled stream under the playhead — press play or scrub.**
+- Click a tile to **focus** its stream (it gets an outline); its details appear in the [Property panel](#property-panel) and it can be toggled with **`v`**.
+- Hovering or focusing a tile **highlights** its block in the timeline, and hovering or focusing a block highlights its tile — so you can always see which tile matches which track.
 
 ### Master / wide stream
 
@@ -44,7 +46,7 @@ Drag the **tile** slider in the header to make all tiles wider or narrower. Tile
 
 ### 3D View (stereo pairs)
 
-When the recording contains a left/right pair, the pair's left block carries a **3D View** dropdown (also reachable on the block in the timeline). Choose:
+When the recording contains a left/right pair, a **3D View** dropdown appears on the transport bar and applies to **every** left/right pair at once. Choose:
 
 - **disabled** — show left and right as two separate tiles.
 - **left-only** / **right-only** — collapse the pair to a single eye.
@@ -52,20 +54,38 @@ When the recording contains a left/right pair, the pair's left block carries a *
 
 ---
 
+## Property panel
+
+Click the **property-panel** button on the transport bar (the columns icon on the right) to open a right-side inspector of the **focused** stream — the tile or block you last clicked. It shows the full details of that stream:
+
+- **channel** id / topic and **encoding** (schema) name.
+- **format** (pixel format · bit depth · codec), **resolution**, and message **count** with average fps.
+- **timestamps** — the **first** and **last** message as an absolute wall-clock time *and* its position within the recording, plus each one's offset from the current playhead, and the total **span**.
+- **live** playback figures — frames **decoded**, current decode **rate**, and the **frame** currently shown for the stream (with its offset from the playhead).
+- **layout** — which **track** the stream sits on, whether it is **enabled**, and — for a stereo stream — its **pair** and side and the active **3D mode**.
+
+When nothing is focused, the panel reads **Select a stream to inspect**. Drag the panel's left edge to resize it. The panel's open/closed state and width are saved in the layout sidecar, so it comes back the way you left it.
+
+The right-click stats popover (right-click a tile or a timeline block) still works as the quick, throwaway view; the property panel is the persistent one.
+
+---
+
 ## The timeline panel (bottom)
 
-The lower panel is a read-only editor of **tracks** (rows) and **blocks** (the time span each stream covers). Row 0 is labelled **master**; the rest are numbered. A vertical line marks the playhead.
+The lower panel is a read-only editor of **tracks** (rows) and **blocks** (the time span each stream covers). Row 0 is labelled **master**; the rest are numbered. A draggable **playhead** marks the current time.
 
 ### Playback controls
 
-The transport row at the top of the timeline has:
+The **transport bar** is the horizontal bar between the preview and the timeline (it is also the divider you drag to resize the split — see [Resizing the panels](#resizing-the-panels)). It carries, from left to right:
 
-- **▶ / ⏸** — play or pause.
-- A **rate** dropdown — `0.25×` to `4×`.
-- The current time and total duration, as `m:ss.mmm`.
-- A **scrub** slider spanning the whole recording.
+- **▶ / ⏸** — play or pause — and a **rate** dropdown (`0.25×` to `4×`).
+- The current timecode in the centre, as `HH:MM:SS.sss`.
+- On the right: the **3D View** dropdown (for stereo pairs), the **property-panel** toggle, and a chevron that **collapses / expands** the timeline.
 
-You can also click anywhere on a track lane to seek the playhead to that point.
+### Seeking
+
+- **Drag the playhead** — the vertical marker with the hourglass ornaments — left or right to scrub. Its grab area is wider than the line, so you don't have to be pixel-perfect. The playhead and its ornaments are **solid red while playing** and neutral when paused.
+- Or **click anywhere on a track lane** to jump the playhead to that point.
 
 ### Rearranging tracks
 
@@ -83,7 +103,9 @@ For a multi-fovea recording, the master/center tile draws colored target boxes o
 
 ## Resizing the panels
 
-A **divider** sits between the preview and timeline panels. Drag it up or down to change the split; the preview keeps a minimum height. Drag (or collapse) it all the way down and the timeline folds into a thin **▲ timeline** drawer at the bottom — click the drawer to bring the timeline back. Use the **▼** button in the transport row to collapse it directly.
+The **transport bar** doubles as the divider between the preview and timeline panels. Drag it up or down to change the split; the preview keeps a minimum height. (The play, rate, 3D, panel, and collapse controls on the bar are interactive — dragging anywhere else on the bar resizes.)
+
+Use the **collapse chevron** on the right of the bar to fold the timeline away: the tracks disappear and the transport bar stays put at the bottom, still fully usable for playback. The chevron flips to an up-arrow — click it (or just drag the bar upward) to bring the timeline back.
 
 ---
 
