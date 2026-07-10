@@ -30,6 +30,9 @@ Read in this order the first time:
    bar.
 7. **[Viewer](./viewer.md)** — play back `.fcap` recordings on a multi-track
    timeline, standalone (no cameras or running rig needed).
+8. **[Settings](./settings.md)** — app-wide preferences (save directory,
+   TeleCanvas, marker geometry) and the stored-calibration-data manager;
+   open with `Cmd/Ctrl-,` from anywhere.
 
 ## Quick reference
 
@@ -43,3 +46,4 @@ Read in this order the first time:
 | Tune the vergence loop | [Disparity Scope](./disparity-scope.md) |
 | Record a session / save a still | [Recording and Capture](./recording-and-capture.md) |
 | Review a recording | [Viewer](./viewer.md) (`Cmd/Ctrl-O` from anywhere) |
+| Change preferences / manage calibration data | [Settings](./settings.md) (`Cmd/Ctrl-,` from anywhere) |

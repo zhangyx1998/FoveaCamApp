@@ -669,6 +669,36 @@ preview — verify these together:
 - [ ] **NEW recording in viewer**: record after the fix, play it back — red-as-red,
   identical to the OLD recording (both decode through the corrected path).
 
+## Configuration window
+
+Code-complete (2026-07-09): app-wide Settings window (singleton `config` class,
+Cmd+, / "Settings…" menu), live app-config apply via `useConfigRef` on the shared
+`["config"]` store document, per-triple `zoom_override` storage, and a
+calibration-data enumerate/delete manager. Store backing routes to the live app
+instance (shared store-hub) or a forked non-hardware "settings" instance from
+Welcome. Verify on the rig:
+
+- [ ] **Open + store backing (both paths)** — Cmd+, from Welcome (no app) opens
+  Settings and reads/writes persist (a non-hardware "settings" instance backs
+  it); Cmd+, while an app is running opens the SAME window bound to the app's
+  store-hub.
+- [ ] **Live marker-size apply** — open **Extrinsic** (or **Drift**) calibration,
+  then Settings; dragging Settings' **Calibration marker size** moves the running
+  calibrate window's marker-size slider (and readout) in real time, and the
+  reverse (calibrate slider → Settings field) also tracks. Same for **ratio**.
+- [ ] **TeleCanvas URL live** — set/clear **TeleCanvas server URL** with a
+  RemoteCanvas overlay open; the PUT target changes without restart.
+- [ ] **Default save directory** — set a writable base dir; a newly-opened
+  capture/record destination defaults under it (invalid path shows the red
+  underline and is ignored).
+- [ ] **Triplet zoom_override persists** — expand a triple, set **Zoom override**,
+  restart the app, reopen Settings: the value survives AND the triple's
+  `drift_l`/`drift_r` are intact (no clobber).
+- [ ] **Calibration delete + re-calibrate** — friendly names resolve to the
+  connected rig's serials; delete an **Intrinsic**/**Extrinsic**/**Triple** entry
+  (Confirm delete), re-run that calibration, and confirm the entry reappears with
+  fresh metadata.
+
 ## Blocked (hardware change required)
 
 - [ ] **Center-camera hardware trigger** — needs the slimmer CAM0 cable

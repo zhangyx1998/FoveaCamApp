@@ -53,6 +53,7 @@ const windowRoots: Record<string, SpecialEntry> = {
       kind: readUrlParam("kind") ?? undefined,
     }),
   },
+  config: { load: () => import("./ConfigWindow.vue") },
 };
 
 export async function bootEntry(key: string): Promise<void> {

@@ -30,7 +30,8 @@ export type WindowClass =
   | "profiler"
   | "projection"
   | "viewer"
-  | "debug";
+  | "debug"
+  | "config";
 
 /** URL state params addressing a projection window's stream (multi-window.md
  *  req. 4 — the first state-in-URL consumer): the orchestrator session name
@@ -281,6 +282,25 @@ export const WINDOWS: Record<WindowClass, WindowSpec> = {
     sandbox: false,
     title: "FoveaCam Duo — Debugger",
     bounds: { width: 1080, height: 640, minWidth: 480, minHeight: 320 },
+  },
+  config: {
+    // App-wide Settings window (Cmd+, / "Settings…" menu). SINGLETON like
+    // welcome — a second open focuses the existing one. Not exclusive and not
+    // counted for welcome (it's a utility overlay, never a hardware holder). It
+    // reads/writes config through the store client, so it uses the standard
+    // renderer preload (bridge + orchestrator connect); its unbound connect
+    // routes to the live app instance when one exists — sharing that instance's
+    // store-hub so edits apply LIVE across windows — else to a lightweight
+    // non-hardware "settings" instance main forks to serve the store.
+    singleton: true,
+    exclusive: false,
+    countsForWelcome: false,
+    onOwnerClose: "survive",
+    entry: "windows/config.html",
+    preload: "renderer",
+    sandbox: false,
+    title: "FoveaCam Duo — Settings",
+    bounds: { width: 760, height: 680, minWidth: 560, minHeight: 440 },
   },
 };
 

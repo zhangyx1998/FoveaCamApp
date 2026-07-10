@@ -168,6 +168,15 @@ export function attachStore(ch: Channel): () => void {
 
   ch.handle("store:list", ({ path }: { path: string[] }) => list(...path));
 
+  // One-shot read (enumeration primitive) — like `store:read` but does NOT
+  // register this channel's interest, so the config window's calibration-data
+  // manager can read dozens of docs for metadata without leaving a listener on
+  // each. Shares the same in-memory cache + fs fallback.
+  ch.handle(
+    "store:read-once",
+    ({ path, fallback }: { path: string[]; fallback: unknown }) => read(path, fallback),
+  );
+
   return () => {
     for (const [key, listener] of listeners) docs.get(key)?.listeners.delete(listener);
     listeners.clear();

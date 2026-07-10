@@ -37,6 +37,10 @@ export interface FoveaBridge {
    *  delivered too but the surface hides it. */
   onOrchestratorDown(cb: (report: OrchestratorDownReport) => void): void;
   openProfilerWindow(): void;
+  /** Open (or focus) the app-wide Settings window (also reachable via the
+   *  "Settings…" app-menu item / Cmd+, ). Singleton — a second call focuses the
+   *  existing window. */
+  openConfigWindow(): void;
   /** Open (or switch to) an app window by catalog id (`@lib/windows`) — the
    *  main-process window manager enforces exclusivity + drain
    *  (docs/history/refactor/multi-window.md §3). */
@@ -71,9 +75,10 @@ export interface FoveaBridge {
    *  reachable from an isolated renderer — the polyfill plugin needs a real
    *  `require`, which only exists under `nodeIntegration: true`). */
   resolvePath(...segments: string[]): Promise<string>;
-  /** Preferred default save directory for a capture/recording namespace
-   *  (external volume if mounted, else `~/Downloads/<directory>`). */
-  resolveDefaultSavePath(directory: string): Promise<string>;
+  /** Preferred default save directory for a capture/recording namespace. When
+   *  `base` (the user's configured `default_save_dir`) is given and exists it
+   *  wins; otherwise external volume if mounted, else `~/Downloads/<directory>`. */
+  resolveDefaultSavePath(directory: string, base?: string): Promise<string>;
   pathExists(path: string): Promise<boolean>;
   validateWritablePath(path: string): Promise<boolean>;
   /** Writes a perf snapshot JSON blob under `<app data dir>/perf-snapshots/`
@@ -124,7 +129,7 @@ export interface FoveaBridge {
 /** Request→response channels (`ipcRenderer.invoke` ↔ `ipcMain.handle`). */
 export interface InvokeChannels {
   "save-path:resolve": { args: [segments: string[]]; ret: string };
-  "save-path:resolve-default": { args: [directory: string]; ret: string };
+  "save-path:resolve-default": { args: [directory: string, base?: string]; ret: string };
   "fs:exists": { args: [path: string]; ret: boolean };
   "fs:validate-writable": { args: [path: string]; ret: boolean };
   "perf-snapshot:write": { args: [content: string]; ret: string };
@@ -138,6 +143,7 @@ export interface InvokeChannels {
 export interface SendChannels {
   "orchestrator:connect": [];
   "open-profiler-window": [];
+  "window:open-config": [];
   "window:open-app": [appId: string];
   "window:open-projection": [session: string, frame: string];
   "window:toggle-debug": [session: string, kind?: string];

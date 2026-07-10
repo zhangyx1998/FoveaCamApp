@@ -118,9 +118,37 @@ function customizeApp() {
       ...launchable.filter((a) => a.group === "utility").map(appItem),
     ],
   };
+  const isMac = process.platform === "darwin";
+  // "Settings…" / Cmd+, — OS Preferences convention: on macOS it lives in the
+  // app menu (right after About); on Windows/Linux it lives in the File menu.
+  // Both route to the singleton config window (open-or-focus).
+  const settingsItem: Electron.MenuItemConstructorOptions = {
+    label: "Settings…",
+    accelerator: "CmdOrCtrl+,",
+    click: () => openConfigWindow(),
+  };
   const template: Electron.MenuItemConstructorOptions[] = [
-    ...(process.platform === "darwin"
-      ? [{ role: "appMenu" as const }]
+    // macOS app menu, hand-built (not `role: "appMenu"`) so the Settings item
+    // lands where the platform expects it.
+    ...(isMac
+      ? [
+          {
+            label: app.name,
+            submenu: [
+              { role: "about" as const },
+              { type: "separator" as const },
+              settingsItem,
+              { type: "separator" as const },
+              { role: "services" as const },
+              { type: "separator" as const },
+              { role: "hide" as const },
+              { role: "hideOthers" as const },
+              { role: "unhide" as const },
+              { type: "separator" as const },
+              { role: "quit" as const },
+            ],
+          } as Electron.MenuItemConstructorOptions,
+        ]
       : []),
     {
       label: "File",
@@ -131,6 +159,10 @@ function customizeApp() {
           accelerator: "CmdOrCtrl+O",
           click: () => void openRecordingDialog(),
         },
+        // Windows/Linux Preferences convention: Settings under File.
+        ...(!isMac
+          ? [{ type: "separator" as const }, settingsItem]
+          : []),
         { type: "separator" },
         // OS-standard close-window shortcut — the custom menu previously had
         // no Close item, so Cmd/Ctrl-W was dead. Routes through win.close()
@@ -207,7 +239,9 @@ function pushTo<K extends keyof PushChannels>(
 // `nodeIntegration: true`. These mirror that logic here so `foveaBridge`
 // (preload-bridge.ts) can forward to it over IPC instead.
 handle("save-path:resolve", (segments) => path.resolve(...segments));
-handle("save-path:resolve-default", (directory) => resolveDefaultSavePath(directory));
+handle("save-path:resolve-default", (directory, base) =>
+  resolveDefaultSavePath(directory, base),
+);
 handle("fs:exists", (p) => existsSync(p));
 handle("fs:validate-writable", (p) => validateWritablePath(p));
 handle("perf-snapshot:write", async (content) => {
@@ -882,6 +916,10 @@ function spawnWindow(desc: WindowDescriptor): ManagedWindow {
     const engineKey = win.webContents.id;
     win.on("closed", () => void viewerEngines.close(engineKey));
   }
+  // Settings window closed: dispose the non-hardware "settings" instance main
+  // may have forked to back its store (no-op when the config window was instead
+  // sharing a live app instance's store-hub).
+  if (desc.class === "config") win.on("closed", () => disposeSettingsInstance());
   win.on("closed", () => manager.onWindowClosed(managed));
   return managed;
 }
@@ -898,6 +936,38 @@ const manager = new WindowManager({
     });
   },
 });
+
+// ---- App-wide Settings window (Cmd+, / "Settings…") -----------------------
+// The config window is a SINGLETON, UNBOUND window. Its store connection routes
+// through the standard unbound-connect broker to the live app (hardware)
+// instance when one exists — sharing that instance's store-hub, so a config
+// edit applies LIVE across windows (e.g. calibrate-extrinsic's marker sliders)
+// via the existing `Store.open` broadcast. With NO app running (opened from
+// Welcome) there is no instance to serve the config store, so main forks a
+// lightweight NON-hardware "settings" instance to back it; it holds no hardware
+// (never pauses the probe, never blocks an app's hardware-clear) and is disposed
+// when the config window closes.
+let settingsInstanceId: string | null = null;
+function ensureSettingsInstance(): void {
+  // Still alive? nothing to do.
+  if (settingsInstanceId && registry.live().some((i) => i.id === settingsInstanceId))
+    return;
+  settingsInstanceId = null;
+  // A live app instance already serves the store — the config window's unbound
+  // connect routes to it (shared store-hub → live cross-window apply).
+  if (registry.hardwareAlive()) return;
+  settingsInstanceId = registry.open("non-hardware", "settings").id;
+}
+function disposeSettingsInstance(): void {
+  if (!settingsInstanceId) return;
+  registry.teardown(settingsInstanceId, "settings window closed");
+  settingsInstanceId = null;
+}
+function openConfigWindow(): void {
+  ensureSettingsInstance();
+  manager.openConfig();
+}
+onRenderer("window:open-config", () => openConfigWindow());
 
 onRenderer("window:open-app", (appId) => {
   if (typeof appId === "string" && appById(appId)) void manager.openApp(appId);

@@ -79,6 +79,9 @@ function open(appId: string) {
 function openProfiler() {
   window.foveaBridge.openProfilerWindow();
 }
+function openConfig() {
+  window.foveaBridge.openConfigWindow();
+}
 </script>
 
 <template>
@@ -137,6 +140,9 @@ function openProfiler() {
         </button>
         <button style="--color: #af0" @click="openProfiler">
           <Icon :icon="faChartLine" /> Profiler
+        </button>
+        <button style="--color: var(--text-muted)" @click="openConfig">
+          <Icon :icon="faGears" /> Settings
         </button>
       </div>
       <div style="flex-grow: 1"></div>

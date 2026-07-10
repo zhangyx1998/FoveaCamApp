@@ -57,6 +57,7 @@ export function installBridge(extra: Partial<FoveaBridge> = {}) {
     onOrchestratorDown: (cb) => listen("orchestrator:down", (report) => cb(report)),
     onProbeCameras: (cb) => listen("probe:cameras", (cameras) => cb(cameras)),
     openProfilerWindow: () => send("open-profiler-window"),
+    openConfigWindow: () => send("window:open-config"),
     openAppWindow: (appId) => send("window:open-app", appId),
     openProjectionWindow: (session, frame) => send("window:open-projection", session, frame),
     toggleDebugWindow: (session, kind) => send("window:toggle-debug", session, kind),
@@ -64,7 +65,8 @@ export function installBridge(extra: Partial<FoveaBridge> = {}) {
     onFullscreenChange: (cb) => listen("window:fullscreen", (fullscreen) => cb(fullscreen)),
     onRecorderTrigger: (cb) => listen("recorder:trigger", () => cb()),
     resolvePath: (...segments) => invoke("save-path:resolve", segments),
-    resolveDefaultSavePath: (directory) => invoke("save-path:resolve-default", directory),
+    resolveDefaultSavePath: (directory, base) =>
+      invoke("save-path:resolve-default", directory, base),
     pathExists: (path) => invoke("fs:exists", path),
     validateWritablePath: (path) => invoke("fs:validate-writable", path),
     writePerfSnapshot: (content) => invoke("perf-snapshot:write", content),

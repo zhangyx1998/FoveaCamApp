@@ -172,10 +172,17 @@ export class OrchestratorInstances {
     return null;
   }
 
-  /** Broker target for a fresh renderer connection (profiler/projection/app all
-   *  attach to the current live app instance; null while none is up). */
+  /** Broker target for a fresh UNBOUND renderer connection (projection / debug /
+   *  config). Prefers the current live app (hardware) instance so the window
+   *  shares its store-hub + stream graph. With no app instance, falls back to
+   *  the newest live NON-hardware instance — the settings window's store backend
+   *  (main forks one so Cmd+, works from Welcome). Null when nothing is up. */
   connectTarget(): InstanceProc | null {
-    return this.currentHardware()?.proc ?? null;
+    const hw = this.currentHardware();
+    if (hw) return hw.proc;
+    for (let i = this.instances.length - 1; i >= 0; i--)
+      if (this.instances[i].phase !== "dead") return this.instances[i].proc;
+    return null;
   }
 
   /** True while a hardware orchestrator process is alive (main pauses the probe

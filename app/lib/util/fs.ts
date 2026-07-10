@@ -37,9 +37,14 @@ export function validateWritablePath(path: string): boolean {
   }
 }
 
-/** Preferred default save directory for a capture/recording namespace: an
- *  external volume if mounted, else `~/Downloads/<directory>`. */
-export function resolveDefaultSavePath(directory: string): string {
+/** Preferred default save directory for a capture/recording namespace. When the
+ *  user has configured a base directory (`AppConfig.default_save_dir`, passed
+ *  through from the renderer) and it exists, that wins; otherwise an external
+ *  volume if mounted, else `~/Downloads`. The per-namespace `<directory>` is
+ *  always appended. */
+export function resolveDefaultSavePath(directory: string, base?: string): string {
+  if (base && base.trim() !== "" && existsSync(base))
+    return resolve(base, directory);
   if (existsSync("/Volumes/Yuxuan Mobile/"))
     return resolve("/Volumes/Yuxuan Mobile/", directory);
   return resolve(homedir(), "Downloads", directory);

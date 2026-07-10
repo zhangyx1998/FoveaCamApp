@@ -6,6 +6,7 @@
 
 import { ref } from "vue";
 import { getDateTimeString } from "./util/string";
+import { useAppConfig } from "./config.js";
 
 export class SavePath {
   readonly prefix = getDateTimeString();
@@ -52,8 +53,22 @@ export class SavePath {
   }
 
   constructor(public readonly namespace: string) {
-    void window.foveaBridge
-      .resolveDefaultSavePath(this.directory)
-      .then((p: string) => (this.__default_path.value = p));
+    // The default resolves through main (external volume / ~/Downloads), now
+    // honoring the user's configured base dir (`AppConfig.default_save_dir`)
+    // when set. Read once at construction — a later change applies to the next
+    // capture/record control that mounts (a fresh `SavePath`), not this live
+    // one. `useAppConfig` needs the store; degrade to no base if unavailable.
+    void (async () => {
+      let base: string | undefined;
+      try {
+        base = (await useAppConfig()).default_save_dir || undefined;
+      } catch {
+        base = undefined;
+      }
+      this.__default_path.value = await window.foveaBridge.resolveDefaultSavePath(
+        this.directory,
+        base,
+      );
+    })();
   }
 }

@@ -114,4 +114,14 @@ export default class Store {
     const ch = await connect();
     return ch.request<string[]>("store:list", { path: segments });
   }
+
+  /** One-shot read of a document WITHOUT subscribing to future writes — the
+   *  enumeration primitive (config window's calibration-data manager reads many
+   *  docs just for metadata, and must not leave a live listener on each). Unlike
+   *  `open()` this returns a plain snapshot, not a tracked reactive object. */
+  static async read<T>(segments: string | string[], fallback: T): Promise<T> {
+    const path = typeof segments === "string" ? [segments] : segments;
+    const ch = await connect();
+    return ch.request<T>("store:read-once", { path, fallback });
+  }
 }

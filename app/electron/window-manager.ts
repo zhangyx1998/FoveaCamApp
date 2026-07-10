@@ -273,6 +273,22 @@ export class WindowManager {
   }
 
   /**
+   * Open (or focus) the app-wide Settings window (Cmd+, / "Settings…" menu).
+   * SINGLETON — a second open focuses the existing one (like `ensureWelcome`).
+   * Unbound: its store connection routes to the live app instance when one is
+   * up (shared store-hub → live cross-window apply), else to the non-hardware
+   * settings instance main forks (see main.ts `ensureSettingsInstance`).
+   */
+  openConfig(): ManagedWindow {
+    const existing = this.byClass("config")[0];
+    if (existing) {
+      existing.focus();
+      return existing;
+    }
+    return this.spawn({ class: "config", entry: entryFor("config") });
+  }
+
+  /**
    * Open (or focus) a profiler window pinned to ONE orchestrator instance
    * (orchestrator-lifecycle-and-exit §"Profiler per-instance binding"). No
    * longer a singleton: it keys by `instanceId` so re-clicking the chart icon
