@@ -243,6 +243,11 @@ watch(
   },
   { immediate: true },
 );
+// Record multi-selection — declared BEFORE the immediate watcher below, which
+// clears it on triple switch (an immediate watcher runs at setup: referencing a
+// later `const` hits the temporal dead zone, rejects the async setup, and spins
+// the Suspense forever — rig find 2026-07-11).
+const selectedIds = ref<Set<string>>(new Set());
 // Open the selected triple's reactive doc so the per-triple fields bind to it.
 watch(
   selectedTripleKey,
@@ -371,7 +376,6 @@ const records = ref<CalibrationRecord[]>([]);
 // Per-triple nicknames for the selector dialog (read for every triple, not just
 // the selected one whose doc is opened reactively).
 const nicknames = ref<Record<string, string>>({});
-const selectedIds = ref<Set<string>>(new Set());
 const inspecting = ref<CalibrationRecord | null>(null);
 const message = ref<string | null>(null);
 const confirmDiscardId = ref<string | null>(null);
