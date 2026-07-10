@@ -46,10 +46,10 @@ namespace Arv {
 enum class CompositeMode { Anaglyph, Difference };
 
 // Anaglyph STYLE = "<left-eye color>/<right-eye color>" (user ruling
-// 2026-07-09): R = red, B = blue, C = cyan. Order MIRRORS
-// docs/schema/anaglyph.ts `ANAGLYPH_STYLES` (RB, RC, BR, BC); RC is the
-// back-compat default (red = LEFT, cyan = RIGHT).
-enum class AnaglyphStyle { RB, RC, BR, BC };
+// 2026-07-09, fourth option corrected to C/R 2026-07-10): R = red, B = blue,
+// C = cyan. Order MIRRORS docs/schema/anaglyph.ts `ANAGLYPH_STYLES`
+// (RB, RC, BR, CR); RC is the back-compat default (red = LEFT, cyan = RIGHT).
+enum class AnaglyphStyle { RB, RC, BR, CR };
 
 struct CompositeParams {
   CompositeMode mode = CompositeMode::Anaglyph;
@@ -62,13 +62,13 @@ struct CompositeParams {
 // RC + BR channel identity). Index [style][ch] where ch 0 = R (ch0), 1 = G
 // (ch1), 2 = B (ch2). Value: 0 = take the LEFT frame's SAME channel, 1 = the
 // RIGHT frame's, -1 = force 0. Derived under the conflict rule "left claims its
-// color's channels first, right fills only what's free" — so B/C is
-// {R:0-none, G:right, B:left} (left blue keeps ch2, right cyan keeps only ch1).
+// color's channels first, right fills only what's free" (none of the four
+// ruled styles actually conflict; the rule guards future styles).
 inline constexpr int kAnaglyphChannelSrc[4][3] = {
     /* RB */ {0, -1, 1}, // out.R←LEFT(red), out.G=0, out.B←RIGHT(blue)
     /* RC */ {0, 1, 1},  // out.R←LEFT(red), out.G←RIGHT, out.B←RIGHT (cyan)
     /* BR */ {1, -1, 0}, // out.R←RIGHT(red), out.G=0, out.B←LEFT(blue)
-    /* BC */ {-1, 1, 0}, // out.R=0, out.G←RIGHT(cyan G), out.B←LEFT(blue)
+    /* CR */ {1, 0, 0},  // out.R←RIGHT(red), out.G←LEFT, out.B←LEFT (cyan)
 };
 
 // A two-source variant modelled on StereoStream: it owns two TapChannels + two

@@ -42,18 +42,13 @@ beneath:
 | **R/B** | Red | Blue |
 | **R/C** | Red | Cyan *(default — the classic red/cyan glasses)* |
 | **B/R** | Blue | Red |
-| **B/C** | Blue | Green *(cyan minus the blue channel, which the left eye holds — the card and label show the green that actually renders)* |
+| **C/R** | Cyan | Red *(mirror of the classic)* |
 
 Click a card to select it — the chosen card gets an accent outline. The choice
 applies live: Disparity Scope's center **Anaglyph** view retunes without a
 restart and its option label updates to name the colors (e.g. *"Anaglyph (Blue
 = Left, Red = Right)"*), and the recording **Viewer**'s 3D view recomposes on
 its next frame. It is a view-time choice only — recordings are never changed.
-
-> **B/C** is unusual: blue and cyan both include the blue channel, so the two
-> eyes share it. The left (blue) eye keeps the blue channel and the right (cyan)
-> eye then shows only green — the cards render that exact result, so what you see
-> on the swatch is what the 3D view produces.
 
 The two marker fields are the same values the **Extrinsic** and **Drift**
 calibration windows expose on their own sliders. Editing either place updates

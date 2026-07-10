@@ -359,8 +359,8 @@ onUnmounted(() => {
             @click="selectAnaglyph(card.style)"
           >
             <!-- Swatch halves = the RESOLVED channel colors (content, not
-                 palette tokens) — what the compose actually paints, so B/C's
-                 right half shows green, not its nominal cyan. -->
+                 palette tokens) — what the compose actually paints, should a
+                 future style's eyes ever share a channel. -->
             <span class="swatch" aria-hidden="true">
               <span class="half" :style="{ backgroundColor: card.leftCss }">L</span>
               <span class="half" :style="{ backgroundColor: card.rightCss }">R</span>

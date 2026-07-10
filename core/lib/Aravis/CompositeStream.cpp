@@ -34,7 +34,7 @@ using namespace Napi;
 namespace Arv {
 
 // ---- params parse + validate (NAPI thread) --------------------------------
-// { mode: "anaglyph" | "difference", style?: "RB"|"RC"|"BR"|"BC" } — optional,
+// { mode: "anaglyph" | "difference", style?: "RB"|"RC"|"BR"|"CR" } — optional,
 // strings, validated here. `style` mirrors docs/schema/anaglyph.ts and defaults
 // to RC (back-compat) when absent.
 static CompositeParams parseCompositeParams(const Napi::Object &o) {
@@ -61,12 +61,12 @@ static CompositeParams parseCompositeParams(const Napi::Object &o) {
       p.style = AnaglyphStyle::RC;
     else if (style == "BR")
       p.style = AnaglyphStyle::BR;
-    else if (style == "BC")
-      p.style = AnaglyphStyle::BC;
+    else if (style == "CR")
+      p.style = AnaglyphStyle::CR;
     else
       throw std::invalid_argument(
           "composite params: `style` must be one of \"RB\", \"RC\", \"BR\", "
-          "\"BC\"");
+          "\"CR\"");
   }
   return p;
 }

@@ -19,18 +19,19 @@
 //
 // A STYLE is written "<left>/<right>" = the LEFT-eye color / the RIGHT-eye
 // color: R = red, B = blue, C = cyan (= green + blue). The four ruled options
-// are RB, RC (default — today's red-left / cyan-right), BR, BC.
+// are RB, RC (default — today's red-left / cyan-right), BR, CR (ruled
+// 2026-07-10: the user's original "B/C" was a typo for C/R, the mirror of the
+// classic R/C).
 //
-// The enum is deliberately trivial to extend/reorder (the planner has asked the
-// user whether the fourth option should be C/R rather than B/C — see the B/C
-// note below): add a row to `ANAGLYPH_COLORS`, list it in `ANAGLYPH_STYLES`,
-// regenerate nothing (the channel map + cards + labels all derive).
+// The enum is deliberately trivial to extend/reorder: add a row to
+// `ANAGLYPH_COLORS`, list it in `ANAGLYPH_STYLES`, regenerate nothing (the
+// channel map + cards + labels all derive).
 
 /** The four ruled anaglyph styles: "<left-eye color><right-eye color>". */
-export type AnaglyphStyle = "RB" | "RC" | "BR" | "BC";
+export type AnaglyphStyle = "RB" | "RC" | "BR" | "CR";
 
 /** Ordered option list (the Settings cards + any menus render in this order). */
-export const ANAGLYPH_STYLES: readonly AnaglyphStyle[] = ["RB", "RC", "BR", "BC"];
+export const ANAGLYPH_STYLES: readonly AnaglyphStyle[] = ["RB", "RC", "BR", "CR"];
 
 /** Default = the historical behavior (red = LEFT eye, cyan = RIGHT eye) — the
  *  disparity-scope "Anaglyph (Red = Left, Cyan = Right)" convention + the
@@ -52,7 +53,7 @@ export const ANAGLYPH_COLORS: Record<AnaglyphStyle, StyleColors> = {
   RB: { left: "red", right: "blue" },
   RC: { left: "red", right: "cyan" },
   BR: { left: "blue", right: "red" },
-  BC: { left: "blue", right: "cyan" },
+  CR: { left: "cyan", right: "red" },
 };
 
 /** The output channels each color occupies (honest RGBA8: r = ch0, g = ch1,
@@ -75,17 +76,14 @@ export interface AnaglyphChannelMap {
 }
 
 /**
- * Derive a style's channel routing under the CONFLICT RULE (user directive,
- * B/C note): the LEFT eye claims its color's channels FIRST; the RIGHT eye then
- * fills ONLY the channels the left eye did not claim — "the later-listed eye
- * never silently overwrites."
- *
- * This makes B/C (the odd one the user listed VERBATIM — left = blue shares the
- * blue channel with right = cyan) resolve TRUTHFULLY: left (blue) keeps B (ch2)
- * and the right (cyan) keeps only G (ch1); ch0 (red) is unused → 0. Every card
- * / compose renders that same truth, so B/C reads as "left blue, right green"
- * on screen — the honest consequence of the shared blue channel. (Flagged to
- * the user; if C/R was intended, edit `ANAGLYPH_COLORS.BC` — nothing else.)
+ * Derive a style's channel routing under the CONFLICT RULE: the LEFT eye
+ * claims its color's channels FIRST; the RIGHT eye then fills ONLY the
+ * channels the left eye did not claim — "the later-listed eye never silently
+ * overwrites." None of the four ruled styles conflict (each pairs a primary
+ * with its complement or the other primary), but the rule is load-bearing for
+ * any future style whose eyes share a channel: the resolved map — not the
+ * nominal eye colors — is what the compose paints, the swatch shows, and the
+ * label names (copy-honesty ruling; see resolvedSideCss/anaglyphEyeLabel).
  */
 export function channelMapFor(style: AnaglyphStyle): AnaglyphChannelMap {
   const { left, right } = ANAGLYPH_COLORS[style];
@@ -115,14 +113,15 @@ export const EYE_COLOR_CSS: Record<EyeColor, string> = {
 /** LITERAL display color for a RESOLVED channel set — the channels ONE eye
  *  actually drives after the conflict rule, keyed by the active channels in
  *  r,g,b order. CONTENT, not palette tokens (same rationale as EYE_COLOR_CSS).
- *  A swatch half must show the TRUTH the compose produces: B/C's right eye
+ *  A swatch half must show the TRUTH the compose produces: a conflicted eye
  *  (cyan) keeps only GREEN once the left (blue) eye takes the shared blue
  *  channel — so its right half is green, never the nominal cyan. The single-/
  *  paired-channel entries reuse the eye-color literals so RB/RC/BR are byte-
- *  identical to the nominal colors; only the "g"-alone case (B/C right) is new. */
+ *  identical to the nominal colors; the "g"-alone case is unused by the four
+ *  ruled styles but stays for any future style that shares a channel. */
 const CHANNEL_SET_CSS: Record<string, string> = {
   r: EYE_COLOR_CSS.red, // red alone
-  g: "rgb(46, 174, 92)", // green alone — B/C right eye (blue channel taken by left)
+  g: "rgb(46, 174, 92)", // green alone — a cyan eye whose blue channel was claimed
   b: EYE_COLOR_CSS.blue, // blue alone
   gb: EYE_COLOR_CSS.cyan, // green + blue = cyan
 };
@@ -145,7 +144,7 @@ export function anaglyphSlashLabel(style: AnaglyphStyle): string {
 /** Name of a RESOLVED channel set (mirrors CHANNEL_SET_CSS keys). */
 const CHANNEL_SET_NAME: Record<string, string> = {
   r: "Red",
-  g: "Green", // B/C right eye — cyan reduced to green (blue taken by left)
+  g: "Green", // a cyan eye reduced to green (blue channel claimed by the other)
   b: "Blue",
   gb: "Cyan",
 };
@@ -153,8 +152,8 @@ const CHANNEL_SET_NAME: Record<string, string> = {
 /** Long descriptive label, e.g. "Red = Left, Cyan = Right" — the disparity-
  *  scope center-view option text, now following the configured style. Named
  *  from the RESOLVED channels (copy-honesty ruling), not the nominal eye
- *  colors, so B/C truthfully reads "Blue = Left, Green = Right" — matching
- *  the swatch and what the compose actually paints. */
+ *  colors, so a conflicted style truthfully names the reduced color —
+ *  matching the swatch and what the compose actually paints. */
 export function anaglyphEyeLabel(style: AnaglyphStyle): string {
   const map = ANAGLYPH_CHANNELS[style];
   const name = (side: "left" | "right") =>
@@ -190,8 +189,8 @@ export function anaglyphCards(selected: string | null | undefined): AnaglyphCard
       leftColor: left,
       rightColor: right,
       // Swatch halves derive from the RESOLVED channels, not the nominal eye
-      // color, so B/C's right half truthfully shows green (its blue channel
-      // goes to the left eye) — the exact result the compose paints.
+      // color — the exact result the compose paints (identical for the four
+      // ruled styles; differs only if a future style's eyes share a channel).
       leftCss: resolvedSideCss(style, "left"),
       rightCss: resolvedSideCss(style, "right"),
       selected: style === active,

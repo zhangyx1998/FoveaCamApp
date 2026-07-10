@@ -1,13 +1,14 @@
 // Coverage for the SHARED anaglyph style → channel mapping (docs/schema/
 // anaglyph.ts) — the single source of truth every surface reads: the Settings
 // cards, the disparity-scope label, the viewer 3D compose, and (mirrored) the
-// native CompositeStream brick. Pins the derived channel table (incl. the B/C
+// native CompositeStream brick. Pins the derived channel table (incl. the
 // conflict resolution), the card selection/label model, coercion, and the
 // declared config default RC.
 
 import { describe, expect, it, vi } from "vitest";
 import {
   ANAGLYPH_CHANNELS,
+  ANAGLYPH_COLORS,
   ANAGLYPH_STYLES,
   DEFAULT_ANAGLYPH_STYLE,
   EYE_COLOR_CSS,
@@ -25,7 +26,7 @@ vi.mock("@lib/store", () => ({ default: class {} }));
 
 describe("anaglyph style table", () => {
   it("declares the four ruled styles with RC default", () => {
-    expect(ANAGLYPH_STYLES).toEqual(["RB", "RC", "BR", "BC"]);
+    expect(ANAGLYPH_STYLES).toEqual(["RB", "RC", "BR", "CR"]);
     expect(DEFAULT_ANAGLYPH_STYLE).toBe("RC");
   });
 
@@ -40,20 +41,24 @@ describe("anaglyph style table", () => {
       RC: { r: "left", g: "right", b: "right" },
       // B/R: left blue → B, right red → R, green unused.
       BR: { r: "right", g: null, b: "left" },
-      // B/C (VERBATIM, odd): left blue keeps B; right cyan would want G+B but B
-      // is taken → right keeps only G; red unused. Documents the conflict rule.
-      BC: { r: null, g: "right", b: "left" },
+      // C/R (ruled 2026-07-10, mirror of R/C): left cyan → G+B, right red → R.
+      CR: { r: "right", g: "left", b: "left" },
     };
     expect(ANAGLYPH_CHANNELS).toEqual(expected);
     // And the derivation function agrees for every style.
     for (const s of ANAGLYPH_STYLES) expect(channelMapFor(s)).toEqual(expected[s]);
   });
 
-  it("B/C shares the blue channel with the LEFT eye, never overwritten by right", () => {
-    const bc = ANAGLYPH_CHANNELS.BC;
-    expect(bc.b).toBe("left"); // left blue wins ch2
-    expect(bc.g).toBe("right"); // right cyan keeps only ch1
-    expect(bc.r).toBeNull(); // red unused
+  it("conflict rule: a shared channel goes to the LEFT eye, right keeps the rest", () => {
+    // No RULED style conflicts (C/R replaced the odd B/C, ruling 2026-07-10),
+    // but the derivation rule guards future styles — pin it with a synthetic
+    // blue/cyan row: they share ch2 → left wins, right reduces to green (ch1).
+    (ANAGLYPH_COLORS as Record<string, unknown>)["XX"] = { left: "blue", right: "cyan" };
+    try {
+      expect(channelMapFor("XX" as never)).toEqual({ r: null, g: "right", b: "left" });
+    } finally {
+      delete (ANAGLYPH_COLORS as Record<string, unknown>)["XX"];
+    }
   });
 });
 
@@ -77,16 +82,14 @@ describe("labels", () => {
   it("eye label names the RESOLVED colors (copy honesty), not nominal", () => {
     expect(anaglyphEyeLabel("RC")).toBe("Red = Left, Cyan = Right");
     expect(anaglyphEyeLabel("BR")).toBe("Blue = Left, Red = Right");
-    // B/C: right eye's cyan loses the shared blue channel to the left eye —
-    // the render is green, and the label must say so (matches the swatch).
-    expect(anaglyphEyeLabel("BC")).toBe("Blue = Left, Green = Right");
+    expect(anaglyphEyeLabel("CR")).toBe("Cyan = Left, Red = Right");
   });
 });
 
 describe("anaglyphCards", () => {
   it("builds one card per style, in order, with literal swatch colors", () => {
     const cards = anaglyphCards("RC");
-    expect(cards.map((c) => c.style)).toEqual(["RB", "RC", "BR", "BC"]);
+    expect(cards.map((c) => c.style)).toEqual(["RB", "RC", "BR", "CR"]);
     const rc = cards.find((c) => c.style === "RC")!;
     expect(rc.label).toBe("R/C");
     expect(rc.leftColor).toBe("red");

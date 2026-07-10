@@ -323,7 +323,7 @@ names the mechanism it gates.
   build under the same scene (Graphite-relevant: fewer per-frame
   putImageData/composite passes).
 
-### Anaglyph style (2026-07-09 user ruling — R/B, R/C, B/R, B/C cards)
+### Anaglyph style (2026-07-09 ruling; fourth option corrected to C/R 2026-07-10)
 
 The Anaglyph left/right colors are now the app-config `anaglyph_style`
 (default RC), surfaced as four selectable cards in **Settings → Application**
@@ -331,7 +331,7 @@ and shared across the disparity-scope center view + the recording viewer's 3D
 mode via the `docs/schema/anaglyph` mapping table (native `CompositeStream`
 mirrors it; core test 27 pins RC + BR).
 
-- [ ] **Four cards render truthfully** — Settings shows R/B, R/C, B/R, B/C as
+- [ ] **Four cards render truthfully** — Settings shows R/B, R/C, B/R, C/R as
   split swatches (left half = left-eye color, right half = right-eye color,
   with L/R glyphs); the selected card carries the accent outline and
   selecting another does NOT shift the layout.
@@ -339,10 +339,9 @@ mirrors it; core test 27 pins RC + BR).
   each style the red content appears in the eye the card names (e.g. under
   **B/R** the red object drives the RIGHT eye, blue the LEFT); the option
   label updates to match (e.g. "Anaglyph (Blue = Left, Red = Right)").
-- [ ] **B/C shared-blue truth** — under **B/C** the left (blue) eye owns the
-  blue channel and the right (cyan) eye shows only green — matches the card
-  swatch (flagged oddity: verify this is the intended arrangement, else the
-  user meant C/R).
+- [ ] **C/R mirror** — under **C/R** the left eye is cyan (green+blue) and the
+  right eye red — the exact mirror of the R/C default (swap glasses
+  orientation to verify).
 - [ ] **Live retune, no reconnect** — changing the style in Settings while the
   Anaglyph view is up retunes the `stereo/composite` brick on the next frame
   (no pipe reconnect, no frame gap, meters keep flowing).
