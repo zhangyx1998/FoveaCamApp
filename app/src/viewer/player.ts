@@ -128,6 +128,11 @@ export function createPlayer(
   const descriptorTopics = source.channels
     .filter((c) => c.messageEncoding === "json" && c.topic !== TELEMETRY_TOPIC)
     .map((c) => c.topic);
+  // The telemetry channel is republished on a paused scrub too (like
+  // descriptors) so the footprint overlay repaints at the scrubbed position.
+  const telemetryTopics = source.channels.some((c) => c.topic === TELEMETRY_TOPIC)
+    ? [TELEMETRY_TOPIC]
+    : [];
 
   const decoders = new Map<number, Promise<FrameDecoder | null>>();
   function decoder(channel: FoveaChannel): Promise<FrameDecoder | null> {
@@ -275,7 +280,11 @@ export function createPlayer(
    *  A channel with nothing at-or-before the position (mid-file appearance,
    *  seek before its first message) is simply absent — no frame, not a crash. */
   async function republishAt(tNs: number): Promise<void> {
-    const topics = [...frameTopics, ...descriptorTopics];
+    // Telemetry is ONE multiplexed channel, so `latestBefore` recovers only the
+    // single most-recent doc (one stream's footprint) on a scrub — full per-
+    // stream footprints repopulate as playback resumes; descriptors (one channel
+    // per target) each refresh independently.
+    const topics = [...frameTopics, ...descriptorTopics, ...telemetryTopics];
     if (topics.length === 0) return;
     const at = source.startNs + BigInt(Math.round(tNs));
     const latest = await source.latestBefore(at, topics);

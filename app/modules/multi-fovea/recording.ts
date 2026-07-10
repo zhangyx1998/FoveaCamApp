@@ -74,6 +74,8 @@ import {
 } from "@orchestrator/record-compression";
 import { ANCHOR_PAYLOAD } from "@orchestrator/anchor-node";
 import type { PairRecord } from "@orchestrator/pair-pipe";
+import type { MirrorAt } from "@orchestrator/mirror-history";
+import type { CoordinateConversions } from "@lib/coordinate-conversions";
 import type { MultiTrackBatch } from "./runtime";
 
 /** The recorded stream names — also the descriptor `frames` keys. */
@@ -123,6 +125,16 @@ export interface MultiFoveaRecordingDeps {
    *  START (default: `readRecordCompression()` over the store-hub `["config"]`
    *  doc). `"none"` gates every stream off regardless of the per-stream switches. */
   readMethod?: () => Promise<RecordCompression>;
+  /** Part A (free-run extras via interpolated actuation history): the mirror
+   *  position at a frame's exposure host-ns, LINEARLY INTERPOLATED from the
+   *  orchestrator's timestamped `mirror-history` ring (`mirrorAt`). Wired from
+   *  the orchestrator-wide `mirrorHistory` in session.ts. Absent → free-run
+   *  frames carry no extras (trigger-mode anchor extras are unaffected). */
+  mirrorAt?: (hostNs: bigint) => MirrorAt | null;
+  /** Part A: the calibrated triple's per-eye conversions (V2A + A2H), or null
+   *  on an uncalibrated triple. Free-run angle/affine are stamped ONLY when
+   *  calibrated (the existing rule); an uncalibrated triple keeps omitting them. */
+  conversions?: () => FreeRunConversions | null;
   /** Notify main a recording finished (auto-open viewer, ruling 7). */
   finished(foveaPath: string): void;
   telemetry(patch: {
@@ -203,6 +215,49 @@ export function anchorExtras(
   return extras;
 }
 
+/** The minimal calibrated-triple conversions the free-run extras stamp needs:
+ *  per-eye voltage→angle (V2A) and angle→homography (A2H). A structural subset
+ *  of {@link CoordinateConversions} so this file (and its tests) never build a
+ *  full triple. */
+export type FreeRunConversions = Pick<CoordinateConversions, "V2A" | "A2H">;
+
+/**
+ * Part A: the per-frame telemetry extras for a FREE-RUN fovea frame on a
+ * CALIBRATED triple, derived from the INTERPOLATED actuation history — the
+ * free-run analogue of {@link anchorExtras}. `mirror` is the mirror position at
+ * the frame's exposure host-ns (from `mirror-history.ts` `mirrorAt`), `conv` the
+ * triple's conversions:
+ *   - `volt`   = the interpolated mirror voltage for this eye
+ *                (`volt.source: "history-interpolated"` — NOT `"fin-averaged"`);
+ *   - `angle`  = `V2A[side](volt)`;
+ *   - `affine` = `A2H[side](angle)` — the same volt→angle→H chain the display /
+ *                homography-feeder path applies, so the recorded H matches.
+ *
+ * Returns null (frame carries NO extras — never a guess) when the history is
+ * empty / too old (`mirror === null`) OR the triple is uncalibrated
+ * (`conv === null`) — the existing "uncalibrated omits angle/affine" rule, here
+ * omitting the whole extras doc since there is no FIN volt either.
+ */
+export function historyExtras(
+  mirror: MirrorAt | null,
+  conv: FreeRunConversions | null,
+  side: "L" | "R",
+): Record<string, unknown> | null {
+  if (!mirror || !conv) return null;
+  const volt = side === "L" ? mirror.left : mirror.right;
+  const angle = side === "L" ? conv.V2A.L(volt) : conv.V2A.R(volt);
+  const H = side === "L" ? conv.A2H.L(angle) : conv.A2H.R(angle);
+  return {
+    volt: { x: volt.x, y: volt.y },
+    "volt.unit": "volt",
+    "volt.source": "history-interpolated",
+    angle: { x: angle.x, y: angle.y },
+    "angle.unit": "radian",
+    // `Mat<Float64Array>` IS a Float64Array (shape props tacked on); row-major 9.
+    affine: Array.from(H as unknown as ArrayLike<number>),
+  };
+}
+
 export function createMultiFoveaRecording(
   deps: MultiFoveaRecordingDeps,
 ): MultiFoveaRecordingController {
@@ -262,9 +317,15 @@ export function createMultiFoveaRecording(
     }
     if (stream !== "left" && stream !== "right") return null;
     boundedSet(seqByDts[stream], tNs, seq);
+    const side = stream === "left" ? "L" : "R";
+    // Trigger mode (preferred): the FIN-averaged anchor bound to this exposure.
     const payload = anchorByDts[stream].get(tNs);
-    if (!payload) return null; // free-run / unmatched — a frame without extras
-    return anchorExtras(payload, stream === "left" ? "L" : "R");
+    if (payload) return anchorExtras(payload, side);
+    // Part A — FREE-RUN: no anchor, so interpolate the actuation history at the
+    // frame's TRUSTED exposure host-ns (ruled invariant) and derive volt/angle/
+    // affine. Null (empty/too-old history OR uncalibrated) → no extras.
+    const mirror = deps.mirrorAt?.(tNs) ?? null;
+    return historyExtras(mirror, deps.conversions?.() ?? null, side);
   }
 
   /** Diff the live channel set against the enabled targets (ruling 3 churn).

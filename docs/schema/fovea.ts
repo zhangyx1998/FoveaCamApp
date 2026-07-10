@@ -20,7 +20,10 @@ export const SESSION_METADATA_NAME = "fovea:session";
 export const FINALIZE_METADATA_NAME = "fovea:finalize";
 /** Global singleton written once at start (multi-fovea-recording r2 ruling 2):
  *  the wide camera's intrinsics + distortion. The wide camera is static, so it
- *  applies to every wide frame and there are NO per-frame wide extras. */
+ *  applies to every wide frame and there are NO per-frame wide extras. Also
+ *  carries (additively) the triple's stereo `baseline_mm` when known — the
+ *  viewer's footprint-overlay vergence-plane depth readout reads it (absent on
+ *  older containers → the depth shows "—"). */
 export const WIDE_CAMERA_METADATA_NAME = "fovea:wide-camera";
 
 export const DEFAULT_CHUNK_BYTES = 256 * 1024;
@@ -39,6 +42,14 @@ export const TELEMETRY_SCHEMA_DATA = JSON.stringify({
   description:
     "Per-frame JSON metadata document: {stream, seq, t, ...extras} — " +
     "extras are the legacy .meta sidecar's `x` payload (volt/angle/affine). " +
+    "`volt.source` names the provenance: `fin-averaged` (TRIGGER mode — the " +
+    "exposure-averaged FIN voltage), `history-interpolated` (FREE-RUN — the " +
+    "mirror voltage at the frame's exposure host-ns, linearly interpolated " +
+    "from the orchestrator's actuation history), or `live-snapshot`. `affine` " +
+    "is the 3x3 row-major homography A2H(angle) for the stream (intended map: " +
+    "fovea frame corners into wide/undistorted pixels — the viewer footprint " +
+    "quad; the H-vs-inverse orientation shares the homography-feeder OPEN " +
+    "question and is rig-unverified — see fovea-footprint-overlay.md). " +
     "Correlate with the frame by stream+seq (or logTime).",
 });
 

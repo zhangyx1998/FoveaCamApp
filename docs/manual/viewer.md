@@ -131,6 +131,17 @@ Click a block to focus it (it gets an outline). With a block focused, press **`v
 
 For a multi-fovea recording, the master/center tile draws colored target boxes over the frame at each moment, one color per fovea target — the same targets you were tracking when you recorded.
 
+### Fovea footprint projections
+
+For a multi-fovea recording, each recorded fovea stream also knows **where its mirror was pointing** at every frame (recorded per-frame as the mirror angle and a projection homography). The Viewer draws that as a **projected box** on the master/center tile: the fovea sensor's frame outline mapped into the wide camera's view — the *footprint* of what that fovea was looking at.
+
+- **Color coding.** The left/right streams of a fovea **pair** share one color. Colors are reused between streams whose timeline blocks do not overlap in time, so distinct streams stay visually separable.
+- **Show all projections.** A checkbox in the preview header (default **off**). When **off**, only the stream you are **hovering or have focused** projects its box — hover a timeline block (or a box) to reveal it. When **on**, every stream active at the playhead projects at once.
+- **Hover = timeline hover.** Hovering a projected box is the same as hovering that stream's block in the timeline, and vice-versa — one shared highlight, both directions.
+- **Depth readout.** Each box is labelled with its **stream id**. Hover it and the label also shows the **depth of the vergence plane** for the pair — how far in front of the cameras the two eyes are converging, computed from the recorded angles and the recording's stereo baseline. It reads **—** when the recording carries no baseline (older recordings) or the partner eye has no data yet, and **∞** when the eyes are pointing parallel.
+
+Footprints are a **view-time** overlay computed from recorded metadata — the recording itself is never altered.
+
 ---
 
 ## Resizing the panels

@@ -32,6 +32,7 @@ import {
   conversionComputeH,
   startHomographyFeeder,
 } from "@orchestrator/homography-feeder";
+import { mirrorHistory } from "@orchestrator/mirror-history";
 import { pushHomography } from "core/Aravis";
 import { registerNativeProbe } from "@orchestrator/native-probes";
 import { registerGraphWiring } from "@orchestrator/graph-topology";
@@ -234,7 +235,7 @@ export default function multiFoveaSession(
       const und = triple?.undistort;
       if (!und) return null;
       const cal = und.calibration;
-      return {
+      const meta: Record<string, unknown> = {
         sensor_size: cal.sensor_size,
         camera_matrix: matToArray(cal.camera_matrix),
         dist_coeffs: matToArray(cal.dist_coeffs),
@@ -242,6 +243,12 @@ export default function multiFoveaSession(
         center: und.center,
         fov: und.fov,
       };
+      // Part B needs the stereo baseline for the vergence-plane depth readout.
+      // The per-triple baseline (mm) rides ALONGSIDE the wide-camera intrinsics
+      // (additive — old containers omit it → the viewer shows "—"). Null when
+      // the triple stores no baseline (the viewer then falls back / shows "—").
+      if (triple?.baselineMm != null) meta.baseline_mm = triple.baselineMm;
+      return meta;
     }
 
     // Multi-fovea RECORDING controller (multi-fovea-recording r2.1, wave I-2):
@@ -269,6 +276,13 @@ export default function multiFoveaSession(
       },
       compress: seams.compress,
       compressStreams: () => ({ ...s.state.record_compress }),
+      // Part A — free-run extras: the orchestrator-wide actuation history
+      // (already generic — written by the controller node, read in realtime by
+      // the homography feeder) sampled at each frame's exposure host-ns, and the
+      // ACTIVE triple's conversions (null while unleased/uncalibrated → free-run
+      // frames omit angle/affine per the existing rule).
+      mirrorAt: (hostNs) => mirrorHistory.mirrorAt(hostNs),
+      conversions: () => triple?.conv ?? null,
       finished: seams.finished ?? (() => {}),
       telemetry: (patch) => s.telemetry(patch),
     });

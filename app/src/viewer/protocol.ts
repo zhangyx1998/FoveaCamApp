@@ -80,6 +80,12 @@ export type ViewerFileInfo = {
    *  distortion — the undistort toggle is offerable for the WIDE/center stream
    *  only when true (viewer-export spec 4). */
   wideCalibrationAvailable: boolean;
+  /** The recorded stereo baseline (mm) from the `fovea:wide-camera` metadata
+   *  record's `baseline_mm` key (fovea-footprint-overlay). Feeds the footprint
+   *  overlay's vergence-plane depth readout. Absent (null) on containers
+   *  recorded before the baseline was written, or an uncalibrated rig — the
+   *  depth hover then shows "—". */
+  baselineMm: number | null;
 };
 
 /** One replayed json-channel document (parsed JSON — telemetry extras or a

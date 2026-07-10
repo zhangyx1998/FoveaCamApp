@@ -63,6 +63,17 @@ import {
   type Tile,
 } from "../viewer/timeline";
 import {
+  assignColors,
+  footprintSide,
+  groupByStream,
+  groupStreams,
+  projectQuad,
+  quadPoints,
+  vergencePlaneDepth,
+  formatDepth,
+  type FootprintGroup,
+} from "../viewer/footprints";
+import {
   COLLAPSED_SPLIT,
   DEFAULT_PANEL_WIDTH,
   DEFAULT_SPLIT,
@@ -120,6 +131,10 @@ const openError = ref<string | null>(null);
 const playing = ref(false);
 const workerPositionNs = ref(0);
 const descriptors = ref<Record<string, PlaybackDoc>>({});
+/** Latest-per-stream telemetry docs (`{stream, seq, t, volt, angle, affine}`) —
+ *  the fovea-footprint overlay's source. Keyed by the doc's `stream` field
+ *  (== the recorded frame channel name). Reset on seek like descriptors. */
+const telemetry = ref<Record<string, PlaybackDoc>>({});
 /** Latest decoded Mat per frame channel — plain Map + a tick (frames arrive at
  *  playback rate; the tiles that actually changed re-render off the tick). */
 const mats = new Map<string, Mat<Uint8Array>>();
@@ -146,8 +161,14 @@ function onEngineEvent(ev: ViewerEvent): void {
       workerPositionNs.value = ev.positionNs;
       playing.value = ev.playing;
       break;
-    case "telemetry":
-      break; // per-frame extras — not surfaced yet
+    case "telemetry": {
+      // Per-frame extras → the footprint overlay. Retain the LATEST doc per
+      // stream (latest-wins at playback rate, like descriptors).
+      const st = (ev.doc as { stream?: unknown }).stream;
+      if (typeof st === "string" && st)
+        telemetry.value = { ...telemetry.value, [st]: ev.doc };
+      break;
+    }
     case "descriptor":
       descriptors.value = { ...descriptors.value, [ev.topic]: ev.doc };
       break;
@@ -505,6 +526,7 @@ function seekTo(tNs: number): void {
   scrubbing.value = true;
   scrubNs.value = clamped;
   descriptors.value = {}; // reset-on-seek: no future bbox left on screen
+  telemetry.value = {}; // reset-on-seek: no future footprint left on screen
   send({ type: "seek", tNs: clamped });
 }
 /** Click-to-seek on a timeline track lane (snap). Shares `nsAtClientX` with the
@@ -745,6 +767,151 @@ function overlayBoxesFor(channel: string): OverlayBox[] {
   }
   return out;
 }
+
+// --- fovea footprint overlay (fovea-footprint-overlay) ----------------------
+// Projected boxes of each recorded fovea stream's frame corners (through its
+// per-frame `affine`) onto the WIDE/master tile, color-coded by fovea PAIR and
+// hover-linked to the timeline. Toggle DEFAULT OFF: only the hovered/focused
+// stream(s) draw; ON draws every stream active at the playhead.
+const showAllProjections = ref(false);
+
+/** True when the container carries a non-master, side-tagged frame stream that
+ *  could project a footprint — gates the toggle's visibility. */
+const footprintCapable = computed(() =>
+  frameChannels.value.some(
+    (c) => c !== master.value.channel && footprintSide(c) !== null,
+  ),
+);
+
+/** Color GROUPS over the container's frame channels: L/R of a pair share one. */
+const footprintGroups = computed<FootprintGroup[]>(() => groupStreams(frameChannels.value));
+const groupOfStream = computed(() => groupByStream(footprintGroups.value));
+/** group key → RAW color index (greedy interval-coloring over block ranges).
+ *  Disjoint groups reuse an index; overlapping ones get distinct indices. */
+const footprintColorIndex = computed(() =>
+  assignColors(
+    footprintGroups.value.map((g) => {
+      let startNs = Infinity;
+      let lastNs = -Infinity;
+      for (const s of g.streams) {
+        const b = blockByChannel.value.get(s);
+        if (!b) continue;
+        startNs = Math.min(startNs, b.startNs);
+        lastNs = Math.max(lastNs, b.lastNs);
+      }
+      return Number.isFinite(startNs)
+        ? { key: g.key, startNs, lastNs }
+        : { key: g.key, startNs: 0, lastNs: 0 };
+    }),
+  ),
+);
+
+// Footprints share TARGET_COLORS with the descriptor bboxes on the SAME center
+// tile — offset the footprint sub-range so a tracked-target rect and a fovea
+// footprint don't independently land on one color meaning two different things
+// (UI/UX review 2026-07-11 #3; descriptor indices start at 0 and are few).
+const FOOTPRINT_PALETTE_OFFSET = 4;
+function footprintColor(stream: string): string {
+  const g = groupOfStream.value.get(stream);
+  const idx = g ? footprintColorIndex.value.get(g.key) ?? 0 : 0;
+  return TARGET_COLORS[(FOOTPRINT_PALETTE_OFFSET + idx) % TARGET_COLORS.length]!;
+}
+
+/** The pair's vergence-plane depth (mm) from the two eyes' recorded angles +
+ *  the container baseline — null unless BOTH eyes have telemetry + a baseline. */
+function pairDepth(g: FootprintGroup | undefined): number | null {
+  if (!g || !g.left || !g.right) return null;
+  const aL = (telemetry.value[g.left] as { angle?: { x?: number } } | undefined)?.angle;
+  const aR = (telemetry.value[g.right] as { angle?: { x?: number } } | undefined)?.angle;
+  return vergencePlaneDepth(aL?.x, aR?.x, file.value?.baselineMm ?? null);
+}
+
+/** True iff `s`'s block spans the current playhead — the honesty gate: a
+ *  retained telemetry doc from an ENDED block must never project onto a frame
+ *  from a different time (UI/UX review 2026-07-11 #1: the hover branch was
+ *  missing this and drew a t=5s footprint over a t=10s frame). */
+function activeAtPlayhead(s: string): boolean {
+  const b = blockByChannel.value.get(s);
+  return !!b && positionNs.value >= b.startNs && positionNs.value <= b.lastNs;
+}
+
+/** Streams whose footprint should draw right now: ON → every affine-bearing
+ *  stream active at the playhead; OFF → only highlighted (hover/focus) ones —
+ *  ALSO playhead-gated (hovering an ended block reveals nothing). The master
+ *  (wide) stream carries no affine, so it never self-draws.
+ *
+ *  Partial-pair suppression (review #2): after a paused scrub only ONE stream
+ *  of a pair may have recovered telemetry (single multiplexed channel); a lone
+ *  box in the pair's shared color reads as a bug, so ALL mode draws a paired
+ *  stream only when BOTH sides carry telemetry (full state returns on play).
+ *  Explicit hover/focus still shows the recovered side alone — the user asked
+ *  for that specific stream. */
+function footprintStreams(): string[] {
+  const withAffine = Object.keys(telemetry.value).filter(
+    (s) =>
+      Array.isArray((telemetry.value[s] as { affine?: unknown }).affine) &&
+      activeAtPlayhead(s),
+  );
+  if (!showAllProjections.value)
+    return withAffine.filter((s) => highlightChannels.value.has(s));
+  return withAffine.filter((s) => {
+    const g = groupOfStream.value.get(s);
+    if (!g || !g.left || !g.right) return true; // unpaired: no partner to wait on
+    return g.left in telemetry.value && g.right in telemetry.value;
+  });
+}
+
+interface FootprintBox {
+  stream: string;
+  points: string;
+  color: string;
+  /** Corner to anchor the label at (first projected corner). */
+  label: { x: number; y: number };
+  depth: number | null;
+  highlighted: boolean;
+}
+
+/** Footprint boxes to draw on `channel` — only the DESIGNATED wide/master tile
+ *  (the affine maps into wide undistorted pixels, the tile's own space). */
+function footprintBoxesFor(channel: string): FootprintBox[] {
+  if (!master.value.designated || channel !== master.value.channel) return [];
+  const out: FootprintBox[] = [];
+  for (const stream of footprintStreams()) {
+    const doc = telemetry.value[stream] as { affine?: number[] } | undefined;
+    const info = channelInfoByName.value.get(stream);
+    const w = Number(info?.metadata.width);
+    const h = Number(info?.metadata.height);
+    const quad = projectQuad(doc?.affine, w, h);
+    if (!quad) continue;
+    const g = groupOfStream.value.get(stream);
+    out.push({
+      stream,
+      points: quadPoints(quad),
+      color: footprintColor(stream),
+      label: quad[0]!,
+      depth: pairDepth(g),
+      highlighted: highlightChannels.value.has(stream),
+    });
+  }
+  return out;
+}
+
+/** The hover label for a footprint box: stream id, plus the pair depth once the
+ *  box (or its stream) is highlighted. */
+function footprintLabel(box: FootprintBox): string {
+  if (!box.highlighted || box.depth === null) return box.stream;
+  return `${box.stream} · ${formatDepth(box.depth)}`;
+}
+
+/** The overlay SVG is in the master frame's PIXEL user-space (viewBox = its
+ *  dims), so label/stroke sizes are derived from the master image height to read
+ *  consistently at any sensor resolution. */
+const footprintFontSize = computed(() => {
+  const info = channelInfoByName.value.get(master.value.channel ?? "");
+  const h = Number(info?.metadata.height);
+  return Number.isFinite(h) && h > 0 ? Math.max(10, Math.round(h / 38)) : 14;
+});
+const footprintStroke = computed(() => Math.max(1.5, footprintFontSize.value * 0.22));
 
 // --- timeline geometry ------------------------------------------------------
 
@@ -1099,6 +1266,18 @@ function onPanelResizeUp(): void {
               no wide designation
             </span>
             <div class="head-controls">
+              <label
+                v-if="footprintCapable"
+                class="proj-toggle"
+                title="Show fovea footprint projections for every stream at the playhead. Off: only the hovered/focused stream projects."
+              >
+                <input
+                  type="checkbox"
+                  :checked="showAllProjections"
+                  @change="showAllProjections = ($event.target as HTMLInputElement).checked"
+                />
+                <span>show all projections</span>
+              </label>
               <label class="tilew" title="Tile width">
                 <span>tile</span>
                 <input
@@ -1143,6 +1322,37 @@ function onPanelResizeUp(): void {
                       :x="box.bbox.x" :y="box.bbox.y" :width="box.bbox.width" :height="box.bbox.height"
                       :stroke="TARGET_COLORS[box.index % TARGET_COLORS.length]" stroke-width="3" fill="none"
                     />
+                  </g>
+                  <!-- Fovea footprint projections (color-coded by pair; hover =
+                       timeline block hover; label carries stream id + pair depth). -->
+                  <!-- pointerleave RESTORES the containing tile's hover — the
+                       tile's own pointerenter doesn't re-fire when the pointer
+                       moves from a child back onto the parent, so a bare
+                       clearHover stranded the tile un-highlighted (UI/UX
+                       review 2026-07-11 #4). -->
+                  <g
+                    v-for="fp in footprintBoxesFor(tile.channel)"
+                    :key="'fp:' + fp.stream"
+                    class="footprint"
+                    :class="{ highlighted: fp.highlighted }"
+                    @pointerenter="setHover([fp.stream])"
+                    @pointerleave="setHover(tile.channels)"
+                  >
+                    <polygon
+                      :points="fp.points"
+                      :stroke="fp.color"
+                      :stroke-width="fp.highlighted ? footprintStroke * 1.7 : footprintStroke"
+                      :fill="fp.color"
+                      :fill-opacity="fp.highlighted ? 0.14 : 0.06"
+                    />
+                    <text
+                      :x="fp.label.x + footprintFontSize * 0.4"
+                      :y="fp.label.y - footprintFontSize * 0.4"
+                      class="footprint-label"
+                      :font-size="footprintFontSize"
+                      :stroke-width="footprintStroke"
+                      :fill="fp.color"
+                    >{{ footprintLabel(fp) }}</text>
                   </g>
                 </template>
               </FrameView>
@@ -1519,6 +1729,34 @@ function onPanelResizeUp(): void {
     .tilew input {
       width: 12ch;
     }
+    .proj-toggle {
+      display: flex;
+      align-items: center;
+      gap: 0.5ch;
+      color: var(--text-faint);
+      cursor: pointer;
+    }
+  }
+
+  // --- fovea footprint overlay (drawn in the master tile's annotations svg) ---
+  // The svg itself is pointer-events:none (FrameView); footprint groups opt back
+  // in so hover links to the timeline. Labels get a dark stroke HALO (paint-order
+  // stroke) so they stay legible over video. Instant, layout-stable (no anim).
+  .footprint {
+    pointer-events: auto;
+    cursor: pointer;
+    polygon {
+      stroke-linejoin: round;
+    }
+  }
+  .footprint-label {
+    font-family: var(--font-mono);
+    paint-order: stroke;
+    stroke: rgba(0, 0, 0, 0.85);
+    stroke-linejoin: round;
+    pointer-events: none;
+    user-select: none;
+    dominant-baseline: text-after-edge;
   }
 
   .tiles {

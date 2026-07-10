@@ -188,6 +188,14 @@ async function open(path: string): Promise<void> {
         wideCameraDeclared: s.wideCameraDeclared,
         ffmpegAvailable: ffmpegPath !== null,
         wideCalibrationAvailable: calibration !== null,
+        // Footprint overlay: the recorded stereo baseline (mm) from the
+        // wide-camera metadata's `baseline_mm` (JSON-encoded number). Positive
+        // finite → the depth readout; else null → "—".
+        baselineMm: (() => {
+          const raw = wideMeta?.baseline_mm;
+          const n = raw == null ? NaN : Number(raw);
+          return Number.isFinite(n) && n > 0 ? n : null;
+        })(),
       },
       sidecar,
     });

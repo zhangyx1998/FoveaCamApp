@@ -21,10 +21,18 @@ export type Volt = { x: number; y: number };
 /** Provenance of a recorded frame's `volt`:
  *  - `"fin-averaged"` — the B-12 EXPOSURE-AVERAGED voltage from the CMD_FRAME
  *    FIN (round-half-up mean of the strobe-rise and strobe-fall DAC targets),
- *    i.e. the voltage that actually produced this frame;
+ *    i.e. the voltage that actually produced this frame (TRIGGER mode, from the
+ *    pairing anchors);
+ *  - `"history-interpolated"` — the mirror voltage at the frame's exposure
+ *    host-time, LINEARLY INTERPOLATED from the orchestrator's timestamped
+ *    actuation history (`orchestrator/mirror-history.ts`). This is the FREE-RUN
+ *    provenance: there is no FIN pairing, so the recorder samples the mirror
+ *    trajectory at the frame's trusted host-ns instead. Commands (not a
+ *    measured exposure average), so it carries the actuation LPF group delay —
+ *    honest, and distinct from `"fin-averaged"`;
  *  - `"live-snapshot"` — a controller reading taken at frame arrival (the
  *    pre-4b behavior; not bracketed to the exposure window). */
-export type VoltSource = "fin-averaged" | "live-snapshot";
+export type VoltSource = "fin-averaged" | "history-interpolated" | "live-snapshot";
 
 /** Blessed keys of a recorded frame's per-frame telemetry extras (the payload
  *  of the `.fovea` `telemetry` channel doc, beyond `{stream, seq, t}`). All
