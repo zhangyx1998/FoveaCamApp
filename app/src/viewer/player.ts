@@ -147,6 +147,14 @@ export function createPlayer(
   let generation = 0;
   let closed = false;
   let lastUpdateAt = -Infinity;
+  // Paused-scrub coalescing (LATEST-WINS): a flood of scrub seeks (a playhead
+  // drag fires one per pointermove) must NOT queue a full latest-before+decode
+  // per message. `pendingSeekNs` holds the NEWEST paused-scrub target; a single
+  // running refresh loop (`seekRefreshing`) consumes the latest and drops the
+  // rest, and `republishAt` aborts as soon as a newer target lands — so the
+  // decode node follows the latest seek instead of trailing the backlog.
+  let pendingSeekNs: number | null = null;
+  let seekRefreshing = false;
   // Enabled frame-channel gate (ruling 3): null = decode every frame channel;
   // a Set restricts decode to those topics (others ingest + drop). json
   // (telemetry/descriptor) channels are never gated — they're cheap and feed
@@ -271,7 +279,16 @@ export function createPlayer(
     if (topics.length === 0) return;
     const at = source.startNs + BigInt(Math.round(tNs));
     const latest = await source.latestBefore(at, topics);
-    for (const msg of latest.values()) await handleMessage(msg, 0);
+    // Superseded while the (async) query ran: a newer scrub target landed, or
+    // playback/close took over. Drop this pass — the coalescing loop will run
+    // the newest target — so we never decode a stale scrub position.
+    if (pendingSeekNs !== null || closed || playing) return;
+    for (const msg of latest.values()) {
+      await handleMessage(msg, 0);
+      // Abort mid-refresh too: a many-topic redraw shouldn't finish decoding
+      // channels for a position the user has already scrubbed past.
+      if (pendingSeekNs !== null || closed || playing) return;
+    }
   }
 
   /** Republish the latest-before frame for a specific set of frame topics at
@@ -299,6 +316,7 @@ export function createPlayer(
       if (closed) return;
       if (!(newRate > 0)) throw new Error(`invalid playback rate ${newRate}`);
       rate = newRate;
+      pendingSeekNs = null; // a scrub-then-play cancels any pending paused refresh
       const myGeneration = ++generation; // re-pace: replaces any running loop
       if (positionNs >= durationNs) positionNs = 0; // replay from the top
       playing = true;
@@ -309,6 +327,7 @@ export function createPlayer(
     pause(): void {
       if (closed) return;
       generation++;
+      pendingSeekNs = null; // drop any queued scrub refresh
       if (!playing) return;
       playing = false;
       pushUpdate(true);
@@ -321,13 +340,29 @@ export function createPlayer(
       positionNs = Math.min(Math.max(0, tNs), durationNs);
       pushUpdate(true);
       if (wasPlaying) {
-        // Playing: resume from the new position at the current rate.
+        // Playing: resume from the new position at the current rate. (The
+        // running loop re-paces off the generation bump; nothing to coalesce —
+        // and a scrub-then-play must not leave a paused refresh queued.)
+        pendingSeekNs = null;
         startLoop(myGeneration);
         return;
       }
-      await republishAt(positionNs);
-      if (myGeneration !== generation) return;
-      pushUpdate(true);
+      // Paused scrub: LATEST-WINS. Stamp the newest target; if a refresh is
+      // already running it will consume this one (or `republishAt` aborts the
+      // in-flight pass early), so a drag's backlog collapses to the last seek.
+      pendingSeekNs = positionNs;
+      if (seekRefreshing) return;
+      seekRefreshing = true;
+      try {
+        while (pendingSeekNs !== null && !closed && !playing) {
+          const target = pendingSeekNs;
+          pendingSeekNs = null;
+          await republishAt(target);
+        }
+      } finally {
+        seekRefreshing = false;
+      }
+      if (!closed) pushUpdate(true);
     },
 
     setEnabled(channels: readonly string[] | null): void {
