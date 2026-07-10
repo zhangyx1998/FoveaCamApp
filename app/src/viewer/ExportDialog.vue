@@ -117,8 +117,8 @@ async function confirm(): Promise<void> {
 </script>
 
 <template>
-  <div class="scrim" @pointerdown.self="emit('close')">
-    <div class="dialog" role="dialog" aria-label="Export video">
+  <div class="modal-scrim" @pointerdown.self="emit('close')">
+    <div class="modal export-modal" role="dialog" aria-label="Export video">
       <header class="head">
         <span class="title">Export video</span>
         <span class="stream">{{ channel }}</span>
@@ -239,26 +239,32 @@ async function confirm(): Promise<void> {
 </template>
 
 <style scoped lang="scss">
-.scrim {
+// Unified with the viewer's confirm-dialog shell (ViewerWindow `.modal-scrim`/
+// `.modal`): same scrim + z-index 100 + surface tokens so the two never read as
+// different modal languages (UI/UX review 2026-07-10). The export form keeps its
+// wider form factor via `.export-modal`.
+.modal-scrim {
   position: fixed;
   inset: 0;
-  background: var(--shadow);
+  background: #000a;
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 50;
+  z-index: 100;
 }
-.dialog {
-  background: var(--bg-app);
-  border: 1px solid var(--border-strong);
-  border-radius: 0.6ch;
+.modal {
+  background: var(--bg-panel-alt);
+  border: 1px solid var(--tint-3);
+  border-radius: 8px;
   box-shadow: 0 8px 32px var(--shadow);
+  color: var(--text);
+  font-size: var(--fs-base);
+}
+.export-modal {
   width: 30rem;
   max-width: 92vw;
   max-height: 90vh;
   overflow: auto;
-  color: var(--text);
-  font-size: var(--fs-base);
 }
 .head {
   display: flex;
@@ -288,7 +294,9 @@ async function confirm(): Promise<void> {
   .lbl { color: var(--text-muted); }
   select,
   input[type="number"] {
-    background: var(--bg-panel-alt);
+    // Recessed against the panel-alt modal surface (kept darker for contrast
+    // after the shell unified onto the confirm-modal tokens).
+    background: var(--bg-chrome);
     color: var(--text);
     border: 1px solid var(--border-muted);
     border-radius: 0.3ch;

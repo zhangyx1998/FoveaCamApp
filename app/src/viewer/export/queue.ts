@@ -27,6 +27,11 @@ interface JobRecord {
   fps: number;
   etaSec: number | null;
   error?: string;
+  /** The export EPISODE this job belongs to — a run of work that begins when a
+   *  job enqueues into an otherwise-idle queue. Drives monotonic overall
+   *  progress: terminal jobs of the current episode stay in the denominator so
+   *  the headline % never dips as siblings finish. */
+  episode: number;
 }
 
 function toStatus(j: JobRecord): ExportJobStatus {
@@ -48,6 +53,10 @@ export class ExportQueue {
   private jobsById = new Map<number, JobRecord>();
   private order: number[] = [];
   private nextId = 1;
+  /** Current export episode (see JobRecord.episode). Bumped when a job enqueues
+   *  into an idle queue, so a fresh run's progress restarts at 0 rather than
+   *  inheriting last run's retained terminal jobs. */
+  private episode = 0;
 
   constructor(private parallel = false) {}
 
@@ -55,7 +64,11 @@ export class ExportQueue {
    *  policy). The new job is `queued` until it appears in `start`. */
   enqueue(request: ExportRequest): { id: number; start: number[] } {
     const id = this.nextId++;
-    const job: JobRecord = { id, request, state: "queued", progress: null, fps: 0, etaSec: null };
+    // A job arriving into an idle queue opens a new episode (fresh overall %).
+    if (this.activeCount() === 0) this.episode++;
+    const job: JobRecord = {
+      id, request, state: "queued", progress: null, fps: 0, etaSec: null, episode: this.episode,
+    };
     this.jobsById.set(id, job);
     this.order.push(id);
     return { id, start: this.dispatch() };
@@ -145,33 +158,60 @@ export class ExportQueue {
     return this.order.map((id) => toStatus(this.jobsById.get(id)!));
   }
 
-  /** Drop every TERMINAL job (done/failed/aborted) from the snapshot — the
-   *  tray's "Clear finished" affordance (UI/UX review 2026-07-10: results must
-   *  not pin the tray icon for the window's lifetime with no exit). Running/
-   *  queued jobs are untouched. */
+  /** Drop TERMINAL jobs (done/failed/aborted) from the snapshot — the tray's
+   *  "Clear finished" affordance (UI/UX review 2026-07-10: results must not pin
+   *  the tray icon for the window's lifetime with no exit). Running/queued jobs
+   *  are untouched — and while the CURRENT episode is still active, its own
+   *  terminal jobs are kept too: deleting them would pull 1.0-weight entries
+   *  out of `overallProgress`'s denominator and drop the headline % (the exact
+   *  non-monotonicity the episode model exists to prevent; review #1). They
+   *  become clearable the moment the episode settles. */
   clearFinished(): void {
+    const activeEpisode = this.activeCount() > 0 ? this.episode : -1;
     this.order = this.order.filter((id) => {
       const j = this.jobsById.get(id)!;
       if (j.state === "queued" || j.state === "running") return true;
+      if (j.episode === activeEpisode) return true; // holds the denominator
       this.jobsById.delete(id);
       return false;
     });
   }
 
-  /** Overall 0..1 progress across queued+running jobs (queued counts as 0),
-   *  or null when none are active. */
+  /** Overall 0..1 progress across the CURRENT episode, or null when the episode
+   *  is idle (no queued/running jobs — nothing was ever active, or the whole run
+   *  finished). MONOTONIC across completions: terminal jobs stay in the
+   *  denominator counting as fully done (1), so a finishing sibling can only
+   *  raise the headline %, never drop it (UI/UX review 2026-07-10 — the old
+   *  drop-done-from-denominator average jumped around, e.g. 50→25→50). Queued
+   *  jobs count as 0; running jobs count their live fraction. */
   overallProgress(): number | null {
     let sum = 0;
     let n = 0;
+    let anyActive = false;
     for (const j of this.jobsById.values()) {
-      if (j.state === "queued") {
-        n++;
-      } else if (j.state === "running") {
+      if (j.episode !== this.episode) continue; // ignore retained prior-run jobs
+      n++;
+      if (j.state === "aborted") {
+        // Cancelled ≠ work: an aborted job leaves BOTH numerator and
+        // denominator (counting it as 1.0 inflated the headline — abort a
+        // queued job and "progress" jumped; UI/UX review 2026-07-10 #2).
+        // Still monotonic: removing a 0-progress queued job from the
+        // denominator can only raise the %.
+        n--;
+        continue;
+      }
+      if (j.state === "running") {
         sum += j.progress ?? 0;
-        n++;
+        anyActive = true;
+      } else if (j.state === "queued") {
+        anyActive = true;
+        // contributes 0
+      } else {
+        sum += 1; // done/failed — resolved, holds the denominator
       }
     }
-    return n === 0 ? null : sum / n;
+    // Idle (all terminal, or empty) → null so the headline % clears.
+    return n === 0 || !anyActive ? null : sum / n;
   }
 
   /** The dispatch decision: transition `queued` jobs to `running` per policy,

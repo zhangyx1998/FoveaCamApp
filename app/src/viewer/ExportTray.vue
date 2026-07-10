@@ -128,10 +128,12 @@ const STATE_LABEL: Record<string, string> = {
   margin-top: 0.3rem;
   width: 20rem;
   max-width: 90vw;
-  background: var(--bg-chrome);
+  // One floating-panel language with the stats popover (elevated surface, 6px
+  // radius, matching shadow) — UI/UX review 2026-07-10.
+  background: var(--bg-elevated);
   border: 1px solid var(--border-strong);
-  border-radius: 0.5ch;
-  box-shadow: 0 6px 24px var(--shadow);
+  border-radius: 6px;
+  box-shadow: 0 6px 22px var(--shadow);
   padding: 0.6rem 0.7rem;
   z-index: 40;
   color: var(--text);

@@ -30,4 +30,6 @@ export {
   faFilm,
   faXmark,
   faFileExport,
+  faPlay,
+  faPause,
 } from "@fortawesome/free-solid-svg-icons";

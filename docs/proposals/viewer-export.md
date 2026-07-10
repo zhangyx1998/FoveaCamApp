@@ -154,6 +154,36 @@ in the renderer.
 - **Progress** is frame-count based (we control the input); ffmpeg's own
   `-progress` is emitted but not parsed.
 
+### UI/UX polish run 2026-07-10 (resolved the review's deferred items)
+
+- **Overall progress is now monotonic.** `ExportQueue.overallProgress()` used to
+  average only queued(0)+running jobs, dropping finished jobs from the
+  denominator, so the headline % dipped as siblings completed (e.g. 50→25→50).
+  Jobs now carry an **episode** id (bumped when a job enqueues into an idle
+  queue); overall progress spans the *current episode* with terminal jobs held
+  in the denominator at 1.0 — a finishing job can only raise the %. Returns
+  `null` once the whole episode is idle (all terminal), so the tray badge clears.
+  Retained prior-episode terminal rows (kept for the tray until *Clear finished*)
+  no longer inflate a fresh run. Pinned by `viewer-export.test.ts` (monotonic
+  across `complete()` + fresh-episode restart cases).
+- **Export dialog uses the shared modal shell.** It dropped its bespoke
+  `.scrim`/`.dialog` at z-index 50 for the viewer's `.modal-scrim`/`.modal`
+  pattern at z-index 100 (same surface tokens; inputs darkened to `--bg-chrome`
+  to stay recessed on the panel-alt surface). Wider form factor kept via
+  `.export-modal`.
+- **Escape dismisses every viewer overlay.** `ViewerWindow.onKeydown` resolves
+  Escape topmost-first: confirm modals → export dialog → stats popover, ahead of
+  the text-entry/modifier guards (so it fires from a focused field). Escape is
+  strictly non-destructive: on the "exports in progress" close prompt it *keeps
+  the window open* and never aborts a running export.
+- **Transport shortcuts + readout.** Space toggles play/pause; ←/→ step the
+  playhead (~1/30 s, Shift = 1 s). The play control is now a FontAwesome
+  play/pause icon (matching the rest of the chrome) and the centre timecode shows
+  **playhead / total**. Tooltips carry the shortcut hints; tiles/blocks gained
+  discoverability titles; the empty-tile placeholder explains the wait.
+- **Floating-panel language unified.** The export tray's hover report adopts the
+  stats popover's elevated surface + 6px radius + shadow.
+
 ## Files
 
 - Pure/testable: `app/src/viewer/export/{codecs,fps,undistort,queue,banner,ffmpeg-args,ffmpeg-detect,normalize,types}.ts`
@@ -164,5 +194,5 @@ in the renderer.
   `bridge.ts` + `preload-bridge.ts` (channels), `lib/config.ts` (`export_parallel`).
 - UI: `app/src/viewer/ExportDialog.vue`, `app/src/viewer/ExportTray.vue`,
   `ViewerWindow.vue` (banner + tray + dialog wiring), `windows/icons.ts`.
-- Tests: `app/test/viewer-export.test.ts` (37).
+- Tests: `app/test/viewer-export.test.ts` (40).
 - Manual: `docs/manual/viewer.md` (Exporting a stream to video).

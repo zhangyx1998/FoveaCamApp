@@ -192,19 +192,22 @@ describe("ExportQueue", () => {
     expect(r).toMatchObject({ aborted: true, wasRunning: false, start: [] });
   });
 
-  it("clearFinished drops terminal jobs only (tray 'Clear finished')", () => {
+  it("clearFinished drops terminal jobs once the episode settles", () => {
     const q = new ExportQueue(true);
     const a = q.enqueue(req());
     const b = q.enqueue(req());
     const c = q.enqueue(req());
     q.complete(a.id, true); // done
     q.complete(b.id, false, "boom"); // failed
+    // Episode still ACTIVE (c running): current-episode terminal rows are kept
+    // (they hold the monotonic denominator — see the mid-episode test).
     q.clearFinished();
-    // Only the running job survives; terminal rows are gone from the snapshot.
-    expect(q.snapshot().map((j) => j.id)).toEqual([c.id]);
-    expect(q.activeCount()).toBe(1);
-    q.clearFinished(); // no-op with nothing terminal
-    expect(q.snapshot().length).toBe(1);
+    expect(q.snapshot().map((j) => j.id)).toEqual([a.id, b.id, c.id]);
+    q.complete(c.id, true); // episode settles
+    q.clearFinished();
+    expect(q.snapshot()).toEqual([]);
+    q.clearFinished(); // no-op on empty
+    expect(q.snapshot()).toEqual([]);
   });
 
   it("abortAll reports the running ids for kill+unlink (spec 11)", () => {
@@ -216,16 +219,80 @@ describe("ExportQueue", () => {
     expect(q.activeCount()).toBe(0);
   });
 
-  it("overall progress averages queued(0)+running", () => {
+  it("overall progress averages queued(0)+running, terminal jobs hold at 1", () => {
     const q = new ExportQueue(true);
     const a = q.enqueue(req());
     const b = q.enqueue(req());
     q.progress(a.id, 0.5, 10, 5);
     q.progress(b.id, 0.1, 10, 20);
     expect(q.overallProgress()).toBeCloseTo(0.3, 5);
-    q.complete(a.id, true);
+    q.complete(a.id, true); // a resolved → (1 + 0.1) / 2
+    expect(q.overallProgress()).toBeCloseTo(0.55, 5);
     q.complete(b.id, true);
-    expect(q.overallProgress()).toBeNull(); // idle
+    expect(q.overallProgress()).toBeNull(); // whole episode done → idle
+  });
+
+  it("overall progress is MONOTONIC across a complete (never dips as a job finishes)", () => {
+    // Serial: a runs to near-done, b queued behind it. The old average dropped
+    // done jobs from the denominator, so finishing a made the headline jump
+    // DOWN (50%→queued-only 0%). It must only ever rise until the run ends.
+    const q = new ExportQueue(false);
+    const a = q.enqueue(req());
+    const b = q.enqueue(req());
+    q.progress(a.id, 0.9, 10, 1); // a running 0.9, b queued 0 → 0.45
+    const before = q.overallProgress()!;
+    expect(before).toBeCloseTo(0.45, 5);
+    q.complete(a.id, true); // a done(1), b now running(0) → 0.5, NOT a dip
+    const after = q.overallProgress()!;
+    expect(after).toBeGreaterThanOrEqual(before);
+    expect(after).toBeCloseTo(0.5, 5);
+  });
+
+  it("a fresh episode restarts overall % (retained terminal jobs don't inflate it)", () => {
+    const q = new ExportQueue(false);
+    const a = q.enqueue(req());
+    q.complete(a.id, true); // episode 1 fully done; a retained until clearFinished
+    expect(q.overallProgress()).toBeNull();
+    const b = q.enqueue(req()); // episode 2 opens — a must not count
+    q.progress(b.id, 0.2, 10, 5);
+    expect(q.overallProgress()).toBeCloseTo(0.2, 5);
+  });
+
+  it("clearFinished mid-episode keeps the episode's terminal jobs (monotonicity holds)", () => {
+    // Parallel: a done, b running, c queued → 0.5. Clearing finished MID-run
+    // must NOT delete a — pulling its 1.0 out of the denominator dropped the
+    // headline 50→25% (UI/UX review 2026-07-10 #1). Once the episode settles,
+    // clearFinished drops everything.
+    const q = new ExportQueue(true);
+    const a = q.enqueue(req());
+    const b = q.enqueue(req());
+    const c0 = q.enqueue(req());
+    q.complete(a.id, true);
+    q.progress(b.id, 0.5, 10, 5);
+    q.abort(c0.id); // aborted — out of the math entirely
+    const before = q.overallProgress()!;
+    expect(before).toBeCloseTo((1 + 0.5) / 2, 5);
+    q.clearFinished(); // mid-episode: a (and aborted c0) must survive the sweep
+    expect(q.overallProgress()!).toBeGreaterThanOrEqual(before);
+    expect(q.snapshot().some((j) => j.id === a.id)).toBe(true);
+    q.complete(b.id, true); // episode settles
+    q.clearFinished(); // now everything terminal clears
+    expect(q.snapshot()).toEqual([]);
+  });
+
+  it("aborted jobs leave both numerator and denominator (no phantom progress)", () => {
+    // a running 0.2, b queued → 0.1. Aborting b must NOT read as "60% done"
+    // (the old fold counted aborted as 1.0 — UI/UX review 2026-07-10 #2);
+    // cancelled work simply leaves the math.
+    const q = new ExportQueue(true);
+    const a = q.enqueue(req());
+    const b = q.enqueue(req());
+    q.progress(a.id, 0.2, 10, 5);
+    expect(q.overallProgress()).toBeCloseTo(0.1, 5);
+    q.abort(b.id);
+    expect(q.overallProgress()).toBeCloseTo(0.2, 5); // just a's own fraction
+    q.abort(a.id); // last active aborted → episode idle → headline clears
+    expect(q.overallProgress()).toBeNull();
   });
 
   it("complete/abort on unknown or terminal ids is a no-op", () => {

@@ -102,6 +102,8 @@ import {
   faTableColumns,
   faFileExport,
   faXmark,
+  faPlay,
+  faPause,
 } from "../windows/icons";
 
 const props = defineProps<{ path: string }>();
@@ -476,6 +478,11 @@ watch(
 // --- playhead / transport ---------------------------------------------------
 
 const RATES = [0.25, 0.5, 1, 2, 4];
+// Keyboard seek steps (arrow keys): a ~30fps frame nudge, or a 1 s jump with
+// Shift. Time-based (the viewer has no single canonical frame period across
+// multiplexed streams), which matches the scrub model.
+const NUDGE_STEP_NS = Math.round(1e9 / 30);
+const SEEK_STEP_NS = 1e9;
 const rate = ref(1);
 const scrubbing = ref(false);
 const scrubNs = ref(0);
@@ -800,10 +807,35 @@ function toggleDisabled(channel: string): void {
   persist();
 }
 function onKeydown(e: KeyboardEvent): void {
-  // Escape always dismisses an open stats popover (instant, before any guards).
-  if (e.key === "Escape" && statsPopover.value) {
-    e.preventDefault();
-    closeStats();
+  // --- Escape dismisses the TOPMOST dismissible surface (instant, and BEFORE the
+  // text-entry/modifier guards so it fires even from a focused field inside the
+  // export dialog). It never aborts a running export — the non-destructive
+  // choice ("Keep open"/"Keep mine"/"Not now") is what Escape resolves to.
+  // Priority: confirm modals > export dialog > stats popover. ---
+  if (e.key === "Escape") {
+    if (confirmClose.value) {
+      e.preventDefault();
+      cancelClose(); // keep the window (and its exports) open
+      return;
+    }
+    if (confirmReset.value) {
+      e.preventDefault();
+      // Non-destructive resolution: keep the reconciled layout on a mismatch,
+      // keep in-memory defaults (no overwrite) on a corrupt sidecar.
+      if (confirmReset.value.reason === "mismatch") keepLayout();
+      else dismissConfirm();
+      return;
+    }
+    if (exportDialogChannel.value) {
+      e.preventDefault();
+      exportDialogChannel.value = null;
+      return;
+    }
+    if (statsPopover.value) {
+      e.preventDefault();
+      closeStats();
+      return;
+    }
     return;
   }
   // Window-local; ignore modifier chords (Cmd+V etc.) and text-entry targets so
@@ -814,8 +846,40 @@ function onKeydown(e: KeyboardEvent): void {
   if (e.key === "v" && focused.value) {
     e.preventDefault();
     toggleDisabled(focused.value);
+    return;
+  }
+  // --- Transport shortcuts (only meaningful once a file is open). Space toggles
+  // play/pause; ←/→ frame-nudge the playhead, playing or paused (Shift = larger
+  // jump). These are the universal player conventions, previously
+  // undiscoverable here. ---
+  if (!file.value) return;
+  if (e.key === " ") {
+    // A focused button (e.g. the play control itself) already toggles on its
+    // own native space-activation — don't double-fire.
+    if (t?.tagName === "BUTTON") return;
+    e.preventDefault();
+    togglePlay();
+    return;
+  }
+  if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+    e.preventDefault();
+    const dir = e.key === "ArrowRight" ? 1 : -1;
+    // Accumulate across key-repeat: keep `scrubbing` LATCHED through the burst
+    // (positionNs then reads scrubNs, so each press steps from the previous
+    // press, not from a stale worker echo — rapid presses used to collapse to
+    // ~1 frame; UI/UX review 2026-07-10). Debounced release settles back onto
+    // the worker position and persists once per burst.
+    seekTo(positionNs.value + dir * (e.shiftKey ? SEEK_STEP_NS : NUDGE_STEP_NS));
+    if (nudgeSettle) clearTimeout(nudgeSettle);
+    nudgeSettle = setTimeout(() => {
+      nudgeSettle = null;
+      scrubbing.value = false;
+      persist();
+    }, 200);
   }
 }
+/** Pending debounced release of the arrow-nudge scrub latch. */
+let nudgeSettle: ReturnType<typeof setTimeout> | null = null;
 
 // --- block drag/drop (ruling 2/10: snap; collision refused) -----------------
 type DragState = {
@@ -1059,6 +1123,7 @@ function onPanelResizeUp(): void {
             }"
             :style="{ width: tileWidth + 'px' }"
             tabindex="0"
+            title="Click to focus · right-click for stream stats"
             @pointerenter="setHover(tile.channels)"
             @pointerleave="clearHover"
             @focus="focusTile(tile)"
@@ -1081,7 +1146,9 @@ function onPanelResizeUp(): void {
                   </g>
                 </template>
               </FrameView>
-              <div v-else class="tile-placeholder">no frame</div>
+              <div v-else class="tile-placeholder" title="This stream spans the playhead but no frame has decoded here yet — play or scrub">
+                waiting for frame…
+              </div>
             </div>
           </div>
           <div v-if="tiles.length === 0" class="notice">
@@ -1162,13 +1229,17 @@ function onPanelResizeUp(): void {
         @pointercancel="onDividerUp"
       >
         <div class="bar-group left" @pointerdown.stop>
-          <button class="play" @click="togglePlay" :title="playing ? 'Pause' : 'Play'">{{ playing ? "⏸" : "▶" }}</button>
+          <button class="play" @click="togglePlay" :title="playing ? 'Pause (Space)' : 'Play (Space)'" :aria-label="playing ? 'Pause' : 'Play'">
+            <Icon :icon="playing ? faPause : faPlay" />
+          </button>
           <select :value="rate" @change="setRate" title="Playback rate">
             <option v-for="r in RATES" :key="r" :value="r">{{ r }}×</option>
           </select>
         </div>
         <div class="bar-group center">
-          <span class="timecode">{{ formatTimecode(positionNs) }}</span>
+          <span class="timecode" title="Playhead · total (← → to step, Shift for 1 s)">
+            {{ formatTimecode(positionNs) }}<span class="sep"> / </span><span class="total">{{ formatTimecode(durationNs) }}</span>
+          </span>
         </div>
         <div class="bar-group right" @pointerdown.stop>
           <label v-if="hasPairs" class="threed-global" title="3D View — applies to every L/R pair">
@@ -1234,6 +1305,7 @@ function onPanelResizeUp(): void {
               }"
               :style="blockStyle(channel)"
               tabindex="0"
+              :title="`${channel}${disabled.has(channel) ? ' (disabled)' : ''} · drag to reorder · right-click for stats · V toggles when focused`"
               @pointerdown.stop="(e) => onBlockPointerDown(e, channel)"
               @pointerenter="setHover([channel])"
               @pointerleave="clearHover"
@@ -1652,11 +1724,21 @@ function onPanelResizeUp(): void {
     font-family: var(--font-mono);
     color: var(--text-bright);
     // Fixed field so ticking digits never shift the layout (layout stability).
-    min-width: 13ch;
+    min-width: 26ch;
     text-align: center;
+    // Playhead reads bright; the total duration is dimmed context.
+    .sep {
+      color: var(--text-faint);
+    }
+    .total {
+      color: var(--text-faint);
+    }
   }
 
   .play {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     background: var(--bg-app);
     color: var(--text-strong);
     border: 1px solid var(--border);

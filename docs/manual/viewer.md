@@ -102,14 +102,22 @@ The lower panel is a read-only editor of **tracks** (rows) and **blocks** (the t
 
 The **transport bar** is the horizontal bar between the preview and the timeline (it is also the divider you drag to resize the split — see [Resizing the panels](#resizing-the-panels)). It carries, from left to right:
 
-- **▶ / ⏸** — play or pause — and a **rate** dropdown (`0.25×` to `4×`).
-- The current timecode in the centre, as `HH:MM:SS.sss`.
+- **▶ / ⏸** — play or pause (or press **Space**) — and a **rate** dropdown (`0.25×` to `4×`).
+- The current timecode in the centre as **playhead / total**, each `HH:MM:SS.sss`.
 - On the right: the **3D View** dropdown (for stereo pairs), the **property-panel** toggle, and a chevron that **collapses / expands** the timeline.
 
 ### Seeking
 
 - **Drag the playhead** — the vertical marker with the hourglass ornaments — left or right to scrub. Its grab area is wider than the line, so you don't have to be pixel-perfect. The playhead and its ornaments are **solid red while playing** and neutral when paused.
 - Or **click anywhere on a track lane** to jump the playhead to that point.
+- Or use the **← / →** arrow keys to step the playhead (about one 30 fps frame per press; hold **Shift** for a 1-second jump).
+
+### Keyboard shortcuts
+
+- **Space** — play / pause.
+- **← / →** — step back / forward (**Shift** = 1 s).
+- **`v`** — with a stream focused, enable / disable it (see below).
+- **Esc** — dismiss the topmost open panel: a confirmation dialog, the export dialog, or the stats popover. Esc never aborts a running export — it resolves a "close exports?" prompt to *keep the window open*.
 
 ### Rearranging tracks
 
