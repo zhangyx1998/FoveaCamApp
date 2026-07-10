@@ -81,6 +81,14 @@ export interface AppConfig {
   // ("every setting shown must drive behavior"). Kept for back-compat / callers
   // that may adopt it later.
   cap_stack: number;
+  // Prediction rate (Hz) — GLOBAL setting driving the native IMM motion-
+  // predictor brick's free-running emit rate (docs/proposals/prediction-compose-
+  // node.md ruling 2). Default 600, clamped 60..1000. Edited from BOTH Settings
+  // → Global config AND the disparity-scope drawer slider (same key), and
+  // live-applied by the disparity-scope session via `imm.setParams({ rateHz })`
+  // — no reconnect. The orchestrator duplicates the default/clamp in the Vue-free
+  // `@orchestrator/prediction-rate`; keep the two in sync.
+  prediction_rate_hz?: number;
   // ---- Viewer video export (viewer-export.md spec 10) ------------------
   // Global PARALLEL-export toggle. false (default) = new exports QUEUE and
   // dispatch after the current one finishes; true = run concurrently. Persisted
@@ -105,6 +113,7 @@ export const APP_CONFIG_DEFAULTS: Readonly<AppConfig> = {
   cal_marker_ratio: 1.0,
   anaglyph_style: DEFAULT_ANAGLYPH_STYLE,
   cap_stack: 5,
+  prediction_rate_hz: 600,
   export_parallel: false,
 };
 

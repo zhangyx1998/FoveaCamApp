@@ -117,6 +117,10 @@ const cal_marker_ratio = await useConfigRef("cal_marker_ratio");
 // exact same truth the viewer/native brick compose. Clicking a card writes the
 // style — applies live (disparity-scope center Anaglyph view + viewer 3D).
 const anaglyph_style = await useConfigRef("anaglyph_style");
+// GLOBAL prediction rate (Hz) driving the native IMM brick's feed-forward emit
+// rate (prediction-compose-node.md ruling 2). Same doc key the disparity-scope
+// drawer slider binds — edits here apply live across windows.
+const prediction_rate_hz = await useConfigRef("prediction_rate_hz");
 const anaglyphCardList = computed(() => anaglyphCards(anaglyph_style.value));
 function selectAnaglyph(style: AnaglyphStyle): void {
   anaglyph_style.value = style;
@@ -874,6 +878,24 @@ onUnmounted(() => {
         Left-eye / right-eye colors for the anaglyph 3D view (R = red, B = blue,
         C = cyan). Applies live to Disparity Scope's center Anaglyph view and the
         recording viewer's 3D mode.
+      </p>
+
+      <label class="row">
+        <span class="label">Prediction rate</span>
+        <span class="field">
+          <input
+            type="number"
+            step="10"
+            min="60"
+            max="1000"
+            v-model.number="prediction_rate_hz"
+          />
+          <span class="unit">Hz</span>
+        </span>
+      </label>
+      <p class="hint">
+        Motion-predictor output rate driving the mirror feed-forward (60–1000 Hz).
+        Applies live to Disparity Scope; also adjustable from its drawer.
       </p>
       </section>
 

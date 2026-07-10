@@ -194,4 +194,97 @@ declare module "core/Tracker" {
     camera: Camera,
     options?: CreateMultiTrackerOptions,
   ): MultiKcfTracker;
+
+  // ---- IMM motion-predictor brick (prediction-compose-node.md) -------------
+
+  /** One prediction off the native IMM brick (or the zero-coast value returned
+   *  by {@link ImmPredictor.ingest}). Mirrors {@link TrackResult} plus the
+   *  free-running coasting flag. */
+  export interface ImmPrediction {
+    /** True when a center is present (a found measurement / a coasting found
+     *  emit); false on a predict-only miss. */
+    found: boolean;
+    /** True when the last measurement was an override (drag) — passthrough. */
+    overridden: boolean;
+    /** True for a free-running emit propagated BETWEEN measurements (coast > 0)
+     *  or a coasted miss. False for the zero-coast `ingest` return. */
+    coasting: boolean;
+    /** Predicted target center (propagated by coast + delay), or null on a
+     *  miss. */
+    center: Point2d | null;
+    /** Last measurement's bbox shifted by the same predicted delta (size
+     *  preserved), or null. */
+    bbox: Rect | null;
+    /** Last measurement's result counter. */
+    seq: number;
+    /** Last measurement's device-clock timestamp. */
+    deviceTimestamp: bigint;
+    /** deviceTimestamp + Δ·1e9 — the device-clock time this prediction is FOR
+     *  (informational). */
+    propagatedToNs: bigint;
+  }
+
+  /** A tracker measurement pushed into the brick — the {@link TrackResult}
+   *  shape (only the read fields are required). */
+  export interface ImmMeasurement {
+    found: boolean;
+    overridden?: boolean;
+    center: Point2d | null;
+    bbox?: Rect | null;
+    seq?: number;
+    deviceTimestamp?: bigint;
+  }
+
+  /** Live-tunable brick params (proposal ruling 2/4): the global prediction
+   *  rate + the signed per-triple delay offset. */
+  export interface ImmSetParams {
+    /** Prediction emit rate (Hz) — clamped 60..1000 on the brick. */
+    rateHz?: number;
+    /** Signed delay compensation (ms) — the prediction OFFSET. */
+    delayMs?: number;
+  }
+
+  /** Options for {@link createImmPredictor}. Tuning defaults match the TS
+   *  reference `ImmPredictorConfig` (R=4, cvAccelPsd=400, caJerkPsd=5000,
+   *  cpPosPsd=1, gate=30, maxGapMs=500). */
+  export interface CreateImmPredictorOptions {
+    /** Prediction emit rate (Hz), default 600, clamped 60..1000. */
+    rateHz?: number;
+    /** Signed delay offset (ms), default 0. */
+    delayMs?: number;
+    /** Graph node id / meter name (default `"imm"`). */
+    name?: string;
+    measurementVar?: number;
+    cvAccelPsd?: number;
+    caJerkPsd?: number;
+    cpPosPsd?: number;
+    gate?: number;
+    maxGapMs?: number;
+  }
+
+  /**
+   * The native IMM motion-predictor brick on its OWN free-running thread
+   * (prediction-compose-node.md): `ingest(result)` pushes a tracker measurement
+   * at ~60 Hz (runs the IMM measurement cycle, returns the zero-coast
+   * prediction); the async iterator emits high-rate coasting predictions
+   * (default 600 Hz). `setParams` live-applies rate/delay changes. `probe()`
+   * snapshots the thread meter (folds onto the profiler graph node).
+   */
+  export interface ImmPredictor
+    extends CoreObject<ImmPredictor>,
+      AsyncIterable<ImmPrediction> {
+    /** Push one tracker measurement; returns the reference-equivalent
+     *  (zero-coast) prediction. */
+    ingest(measurement: ImmMeasurement): ImmPrediction;
+    /** Live rate/delay change. */
+    setParams(params: ImmSetParams): void;
+    /** Snapshot the native thread meter (out-of-loop safe). */
+    probe(): TrackerMeter;
+  }
+
+  /** Create the native IMM predictor brick. The disparity-scope session creates
+   *  one on tracking activation and feeds it every tracker result. */
+  export function createImmPredictor(
+    options?: CreateImmPredictorOptions,
+  ): ImmPredictor;
 }

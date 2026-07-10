@@ -66,6 +66,12 @@ const KIND_COLORS: Record<string, string> = {
   convert: "#2b5d8a",
   undistort: "#3a5d9c",
   kcf: "#7a5da8",
+  // Control lane (prediction-compose-node.md): pid baseline → imm predictor
+  // brick → compose feed-forward → controller. Distinct violet/indigo family so
+  // the 60 Hz vs 600 Hz edges read as one pipeline.
+  imm: "#6a4fa8",
+  compose: "#4f5da8",
+  pid: "#4f7da8",
   detect: "#8a6d2b",
   fovea: "#2b8a83",
   composite: "#5a7d8a",

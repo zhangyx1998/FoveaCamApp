@@ -120,6 +120,29 @@ void useConfigRef("anaglyph_style").then((r) => {
   watch(r, (v) => (anaglyphStyle.value = v ?? DEFAULT_ANAGLYPH_STYLE));
 });
 
+// GLOBAL prediction rate (Hz) — the native IMM brick's feed-forward emit rate
+// (prediction-compose-node.md ruling 2). Binds the SAME `prediction_rate_hz`
+// config key the Settings → Global config field edits, so this drawer slider
+// live-applies through the shared config doc (the disparity-scope session
+// subscribes + calls `imm.setParams({ rateHz })`). Non-blocking (synchronous
+// setup) with the 600 default until the ref resolves; writes clamp 60..1000.
+const PREDICTION_RATE_DEFAULT = 600;
+const predictionRateLocal = ref<number>(PREDICTION_RATE_DEFAULT);
+let predictionRateCfg: { value: number | undefined } | null = null;
+void useConfigRef("prediction_rate_hz").then((r) => {
+  predictionRateLocal.value = r.value ?? PREDICTION_RATE_DEFAULT;
+  predictionRateCfg = r;
+  watch(r, (v) => (predictionRateLocal.value = v ?? PREDICTION_RATE_DEFAULT));
+});
+const prediction_rate = computed<number>({
+  get: () => predictionRateLocal.value,
+  set: (v) => {
+    const clamped = Math.min(1000, Math.max(60, Math.round(v)));
+    predictionRateLocal.value = clamped;
+    if (predictionRateCfg) predictionRateCfg.value = clamped;
+  },
+});
+
 // Center-view select options (one list, rendered into whichever branch's
 // title slot is live). The anaglyph label follows the configured style (e.g.
 // "Anaglyph (Blue = Left, Red = Right)" under BR).
@@ -450,6 +473,16 @@ function openDebugger(): void {
         <RangeSlider v-model="expand_y" :min="1.0" :max="4.0" :neutral="DEFAULT_TUNING.expand_y" :step="0.1">
           <span>Y Expansion</span>
           <span>{{ (expand_y * 100).toFixed(1) }}%</span>
+        </RangeSlider>
+        <RangeSlider
+          v-model="prediction_rate"
+          :min="60"
+          :max="1000"
+          :neutral="PREDICTION_RATE_DEFAULT"
+          :step="10"
+        >
+          <span>Prediction Rate</span>
+          <span>{{ prediction_rate }} Hz</span>
         </RangeSlider>
         <h4><span>Display</span></h4>
         <label

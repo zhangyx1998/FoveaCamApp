@@ -1405,6 +1405,11 @@ static FN(createMultiTracker) {
   JS_EXCEPT(env.Undefined())
 }
 
+// The native IMM motion-predictor brick (prediction-compose-node.md) lives in
+// its own TU (ImmPredictor.cpp) but JOINS the Tracker namespace — the brick is
+// logically a tracker post-stage (createImmPredictor + the ImmPredictor class).
+void exportImmNamespace(Napi::Env env, Napi::Object &exports);
+
 #define EXPORT(OBJ, F) OBJ.Set(#F, Function::New<F>(env, #F));
 void exportTrackerNamespace(Napi::Env env, Napi::Object &exports) {
   TrackerKCFObject::Export(env, exports);
@@ -1415,5 +1420,6 @@ void exportTrackerNamespace(Napi::Env env, Napi::Object &exports) {
   EXPORT(exports, createHybridTracker);
   EXPORT(exports, createChainedHybridTracker);
   EXPORT(exports, createMultiTracker);
+  exportImmNamespace(env, exports); // createImmPredictor + ImmPredictor class
 }
 #undef EXPORT

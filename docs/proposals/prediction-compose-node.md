@@ -1,8 +1,34 @@
 # Prediction compose node — native IMM brick + high-rate mirror stream
 
-Status: **PROPOSED (ruled 2026-07-10; supersedes the inline IMM wiring of
+Status: **SHIPPED (2026-07-10; rig pass owed — see AS SHIPPED below).
+Supersedes the inline IMM wiring of
 [`imm-delay-compensation.md`](./imm-delay-compensation.md) — the filter math,
-sign convention, and per-triple `delay_compensation_ms` key all remain).**
+sign convention, and per-triple `delay_compensation_ms` key all remain.**
+
+## AS SHIPPED (2026-07-10)
+
+Implemented as ruled, one worker wave. Deltas from the ruled design:
+
+- **No native `Topology.report()` self-registration** — follows the tracker-
+  brick precedent instead (session registers node + edges, folds the
+  `ThreadMeter` via `registerNativeProbe`). The row + stats appear identically.
+- **Delay 0 is not special-cased**: the brick always runs and coasts;
+  propagation Δ = coast + delay, which is what makes the high-rate ticks
+  meaningful even at zero configured delay.
+- **The 60 Hz pid push (`pushVolts`) still drives the position input** as the
+  baseline floor alongside the compose ticks — before the brick warms
+  (parked/uncalibrated/not tracking) compose emits nothing, so the pid path
+  remains the mirrors' guaranteed driver. `StreamUpdateGate` dedupes overlap.
+- Conformance: 22 shared vectors (`docs/schema/codec/imm-vectors.json`),
+  C++ matches the TS reference within 1e-6 px (`core/test/42-imm-predictor.ts`
+  + `app/test/imm-conformance.test.ts`).
+- Residual (out of scope, noted): `mirrorHistory.record` now runs at the
+  prediction rate (~600 Hz) — retention bound unreviewed for long sessions.
+
+RIG-GATED (bench session): imm + compose nodes on the profiler graph with
+~60 Hz in / ~600 Hz out edge rates; drawer ↔ Settings rate sync live-retunes
+without reconnect; feed-forward SIGN leads (not lags) a moving target; drag
+passes override volts untouched; lost holds the pid baseline.
 
 ## Problem (user-reported, 2026-07-10)
 

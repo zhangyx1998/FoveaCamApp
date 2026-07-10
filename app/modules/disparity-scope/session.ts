@@ -87,8 +87,15 @@ import {
   outputOf,
   type PidNodeHandle,
 } from "@orchestrator/pid-node";
-import { createImmNode, type ImmNodeHandle } from "@orchestrator/imm-node";
-import { delayIsActive } from "@lib/imm-predictor";
+import {
+  createComposeNode,
+  type ComposeNodeHandle,
+  type ComposeVolts,
+} from "@orchestrator/compose-node";
+import {
+  readPredictionRateHz,
+  subscribePredictionRateHz,
+} from "@orchestrator/prediction-rate";
 import type { PipeBroker } from "@orchestrator/pipe-session";
 import type { PipeInput, VisionResult } from "@orchestrator/vision-worker-protocol";
 import {
@@ -131,7 +138,14 @@ import type { Point2d, Rect, Size } from "core/Geometry";
 import type { Pos } from "@lib/controller-codec";
 // Direct core import in a session — an accepted precedent; all PURE logic lives
 // in tracker-feed.ts/vergence.ts so vitest never loads the native addon.
-import { createChainedHybridTracker, type KcfTracker, type TrackerMeter } from "core/Tracker";
+import {
+  createChainedHybridTracker,
+  createImmPredictor,
+  type ImmPredictor,
+  type ImmPrediction,
+  type KcfTracker,
+  type TrackerMeter,
+} from "core/Tracker";
 import { registerNativeProbe } from "@orchestrator/native-probes";
 import type { WorkloadSnapshot } from "@lib/orchestrator/stats";
 import { createRawRecording } from "@orchestrator/raw-recording";
@@ -301,10 +315,16 @@ export default function disparityScopeSession(
     // The graph-visible PID controller node (created on activate). Holds the
     // vergence controllers + the renderer-driven override slot.
     let pidNode: PidNodeHandle<VergenceVolts> | null = null;
-    // IMM motion predictor node chained AFTER the tracker (imm-delay-
-    // compensation): null unless the leased triple sets a non-zero
-    // `delay_compensation_ms` (0 = exact passthrough, so we don't even wire it).
-    let immNode: ImmNodeHandle | null = null;
+    // The native IMM motion-predictor BRICK (prediction-compose-node.md): its
+    // OWN free-running thread emits predictions at the global `prediction_rate_hz`
+    // (default 600). ALWAYS created while tracking is active (delay 0 no longer
+    // unwires it), so the imm node is always visible on the profiler graph. Fed
+    // every raw tracker result; the high-rate prediction stream drives `compose`.
+    let imm: ImmPredictor | null = null;
+    // The graph-visible COMPOSE node (prediction-compose-node.md ruling 1): joins
+    // the pid baseline (`V_pid`, ~60 Hz) with the IMM predictions (~600 Hz) into
+    // the mirror position input via `V = V_pid + J·(p_pred − p_meas)`.
+    let compose: ComposeNodeHandle | null = null;
 
     let windowStart = now();
     let lastStep = now();
@@ -789,8 +809,55 @@ export default function disparityScopeSession(
      *  the old loop's `onVolts` carried. */
     function pushVolts(): void {
       if (!posInput) return;
+      // REBASE the compose feed-forward from this pid command + the measured
+      // operating point it acted on (prediction-compose-node.md ruling 1):
+      // `followVolts` is the pixel→volt map the feed-forward differences, so the
+      // measured baseline volts = follow(p_meas). Then park the mirrors at the
+      // baseline (essential before the tracker warms, and the 60 Hz floor the
+      // compose ticks refine between).
+      compose?.rebase(
+        { l: commandedVolts.l, r: commandedVolts.r },
+        followVolts(s.state.target),
+      );
       const p = posInput.update({ left: commandedVolts.l, right: commandedVolts.r });
       onVolts({ L: p.left, R: p.right }, lastActuateMs);
+    }
+
+    /** Feed-forward is applied ONLY while control is healthy (proposal
+     *  §Orchestrator/app): actively tracking, not dragging, no generic override
+     *  pinned, and not frozen. Otherwise the compose node holds the `V_pid`
+     *  baseline (override → pass-through; lost-gate → hold). */
+    function composeHealthy(): boolean {
+      return (
+        trackerActive &&
+        !dragging &&
+        !(pidNode?.override.engaged ?? false) &&
+        !frozen()
+      );
+    }
+
+    /** One IMM prediction (~600 Hz): apply the feed-forward onto the pid
+     *  baseline and drive the position input at the prediction rate. A
+     *  coasted miss or an unhealthy control state holds the baseline. */
+    function onPrediction(p: ImmPrediction): void {
+      if (!posInput || !compose) return;
+      const predVolts: ComposeVolts | null =
+        composeHealthy() && p.found && p.center ? followVolts(p.center) : null;
+      const out = compose.tick(predVolts);
+      const applied = posInput.update({ left: out.l, right: out.r });
+      onVolts({ L: applied.left, R: applied.right }, lastActuateMs);
+    }
+
+    /** Drain the IMM brick's async prediction stream until it is released. */
+    async function consumeImm(
+      brick: ImmPredictor,
+      onPred: (p: ImmPrediction) => void,
+    ): Promise<void> {
+      try {
+        for await (const p of brick) onPred(p);
+      } catch {
+        // iterator closed on release / teardown — normal exit
+      }
     }
 
     function onVolts(vv: { L: Pos; R: Pos }, actuateMs: number): void {
@@ -1171,27 +1238,35 @@ export default function disparityScopeSession(
           trackerArmed = false;
           trackerActive = false;
         });
-        // Chain the IMM predictor node ONLY when a signed delay is configured
-        // (0 = exact passthrough → no node, zero behavior change). Each result
-        // passes through `immNode.process` BEFORE the reducer: the predicted
-        // center/bbox replaces the measurement, `found`/`seq`/`deviceTimestamp`/
-        // `overridden` preserved (the predictor self-resets on drag/gaps).
-        if (delayIsActive(t.delayCompensationMs)) {
-          immNode = createImmNode({
-            id: nodeId.imm(kcfId),
-            owner: "win/disparity-scope",
-            trackerId: kcfId,
-            port: "target",
-            config: { delayMs: t.delayCompensationMs },
-          });
-          disposers.add(() => {
-            immNode?.dispose();
-            immNode = null;
-          });
-        }
-        void consumeTracker(tk, (r) =>
-          trackerFeed(immNode ? immNode.process(r) : r),
+        // The native IMM predictor brick (prediction-compose-node.md): ALWAYS
+        // created while tracking is active — the signed per-triple
+        // `delay_compensation_ms` is now a prediction OFFSET param, not a wire
+        // gate, so the imm node is always on the profiler graph. The global
+        // `prediction_rate_hz` (default 600, clamp 60..1000) sets its free-run
+        // rate; live-applied below via a store subscription.
+        const immRate = await readPredictionRateHz();
+        imm = createImmPredictor({
+          rateHz: immRate,
+          delayMs: t.delayCompensationMs,
+          name: nodeId.imm(kcfId),
+        });
+        disposers.add(() => {
+          imm?.release(); // closes the prediction iterator → consumeImm exits
+          imm = null;
+        });
+        // Live rate changes (Settings → Global config OR the drawer slider —
+        // same `prediction_rate_hz` key) re-apply without reconnect.
+        disposers.add(
+          subscribePredictionRateHz((rateHz) => imm?.setParams({ rateHz }), immRate),
         );
+        // pid consumes RAW tracker results (reverting kcf → imm → pid): the
+        // feed-forward pairs `V_pid` with the measured center it acted on; a
+        // predicted pid input would double-count the motion. So the brick is fed
+        // in parallel with the reducer, and its PREDICTIONS drive `compose`.
+        void consumeTracker(tk, (r) => {
+          imm?.ingest(r); // measurement update (~60 Hz) — TrackResult ⇒ ImmMeasurement
+          trackerFeed(r); // raw → pid target + steer + telemetry (unchanged)
+        });
       }
 
       monitor.done("tracker");
@@ -1227,6 +1302,8 @@ export default function disparityScopeSession(
       for (const retire of retirers) disposers.add(retire);
 
       const pidId = nodeId.win("disparity-scope", "pid");
+      const immId = nodeId.imm(kcfId);
+      const composeId = nodeId.win("disparity-scope", "compose");
       const rgba = { kind: "frame", pixelFormat: "RGBA8", dtype: "U8" } as const; // honest RGBA8 (channel-order-fix.md)
       const analysis = { kind: "analysis", schema: "template-match" } as const;
       const matchIds = {
@@ -1263,15 +1340,28 @@ export default function disparityScopeSession(
               output: analysis,
               transport: "worker" as const,
             })),
-            // The chained tracker does NOT self-report topology (no row from
-            // native Topology.report() — unlike undistort bricks), so the
-            // session registers it: C source → kcf (frames, native tap); its
-            // kcf → pid target edge rides the pid node's inputs below.
+            // Neither the chained tracker NOR the IMM brick self-reports
+            // topology (no native Topology.report() row — unlike undistort
+            // bricks), so the session registers both: C source → kcf (frames,
+            // native tap), then kcf → imm (measurements, native tap). The
+            // kcf → pid `target` edge rides the pid node's inputs below; the
+            // imm → compose edge rides the compose node's wiring.
             ...(tk
               ? [
                   {
                     id: kcfId,
                     kind: "kcf",
+                    owner: "win/disparity-scope",
+                    output: { kind: "track" } as const,
+                    transport: "native" as const,
+                  },
+                ]
+              : []),
+            ...(imm
+              ? [
+                  {
+                    id: immId,
+                    kind: "imm",
                     owner: "win/disparity-scope",
                     output: { kind: "track" } as const,
                     transport: "native" as const,
@@ -1295,11 +1385,15 @@ export default function disparityScopeSession(
               },
             ]),
             ...(tk ? [{ from: cSourceId, to: kcfId, port: "C", type: rgba }] : []),
+            // kcf → imm: the brick taps every tracker result as a measurement.
+            ...(imm
+              ? [{ from: kcfId, to: immId, port: "measure", type: { kind: "track" } as const }]
+              : []),
           ],
         }),
       );
-      // The tracker self-meters under the kcf node id — probe it out-of-loop
-      // so utilization/rate/drops fold onto the node's badge.
+      // The tracker + imm brick self-meter under their node ids — probe both
+      // out-of-loop so utilization/rate/drops fold onto each node's badge.
       if (tk) {
         disposers.add(
           registerNativeProbe(
@@ -1308,10 +1402,19 @@ export default function disparityScopeSession(
           ),
         );
       }
+      if (imm) {
+        disposers.add(
+          registerNativeProbe(
+            (): Record<string, WorkloadSnapshot> =>
+              imm ? { [immId]: trackerWorkload(immId, imm.probe()) } : {},
+          ),
+        );
+      }
 
       // The PID controller node — the app-specific JOIN (split-disparity-
-      // nodes ruling 4): both match sides + the tracker's target feed
-      // converge here; pid → controller carries the position-stream output.
+      // nodes ruling 4): both match sides + the tracker's RAW target feed
+      // converge here. It produces `V_pid` (~60 Hz) INTO the compose node
+      // (prediction-compose-node.md): pid → compose, not pid → controller.
       // `createPidNode` owns its own graph registration; dispose retires it.
       pidNode = createPidNode<VergenceVolts>({
         id: pidId,
@@ -1320,14 +1423,12 @@ export default function disparityScopeSession(
         inputs: [
           { from: matchIds.L, port: "l" },
           { from: matchIds.R, port: "r" },
-          // kcf → pid, OR kcf → imm → pid when the predictor is active: the
-          // pid's `target` input then reads from the imm node (edge ownership
-          // by the consumer, same as the pid → controller edge).
-          ...(tk
-            ? [{ from: immNode ? immNode.id : kcfId, port: "target" }]
-            : []),
+          // kcf → pid: pid consumes RAW tracker results (reverting the
+          // kcf → imm → pid chain — the feed-forward pairs V_pid with the
+          // measured center it acted on; a predicted input would double-count).
+          ...(tk ? [{ from: kcfId, port: "target" }] : []),
         ],
-        outputs: [{ to: nodeId.controller(), port: "volt" }],
+        outputs: [{ to: composeId, port: "pid" }],
         controllers: { pan, verge, v_shift },
         seed: seedFromOverride,
       });
@@ -1336,11 +1437,29 @@ export default function disparityScopeSession(
         pidNode = null;
       });
 
+      // The COMPOSE node — joins V_pid (baseline) with the IMM predictions into
+      // the position input at the prediction rate. Its `imm → compose` +
+      // `compose → controller` edges are registered here (the pid → compose edge
+      // rides the pid node's `outputs`). dispose retires it.
+      compose = createComposeNode({
+        id: composeId,
+        owner: "win/disparity-scope",
+        pidId,
+        immId,
+        controllerId: nodeId.controller(),
+        initial: { l: commandedVolts.l, r: commandedVolts.r },
+      });
+      disposers.add(() => {
+        compose?.dispose();
+        compose = null;
+      });
+
       // Open the controller-node position input (was `startActuationLoop`).
-      // The PID node's `pid → controller` output edge above already covers the
-      // topology, so `from` is omitted (no duplicate edge). The immediate push
-      // reproduces the old loop's first tick: enable + drive to the current
-      // command (origin) so the mirrors are parked before the first projection.
+      // The compose node's `compose → controller` output edge above already
+      // covers the topology, so `from` is omitted (no duplicate edge). The
+      // immediate push reproduces the old loop's first tick: enable + drive to
+      // the current command (origin) so the mirrors are parked before the first
+      // projection.
       posInput = controllerNode().openPosition("disparity-scope", {
         initial: { left: commandedVolts.l, right: commandedVolts.r },
         onApplied: (_v, actuateMs) => {
@@ -1348,6 +1467,10 @@ export default function disparityScopeSession(
         },
       });
       pushVolts();
+      // Consume the IMM brick's high-rate prediction stream → compose → the
+      // position input (prediction rate). Started here, after compose + posInput
+      // exist; `imm.release()` (disposer) closes the iterator and exits.
+      if (imm) void consumeImm(imm, onPrediction);
       // Auto-follow was left on: arm the fresh tracker at the current target.
       if (s.state.tracker_enabled) armTracker(s.state.target);
 
