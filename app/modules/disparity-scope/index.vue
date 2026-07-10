@@ -135,7 +135,7 @@ function setTuning<K extends keyof Tuning>(key: K, value: Tuning[K]): void {
   state.tuning = { ...state.tuning, [key]: value };
 }
 
-const sensitivityScale = logScale(0.1, 10.0);
+const sensitivityScale = logScale(0.01, 1.0);
 const sensitivity_ratio = computed<number>({
   get: () => sensitivityScale.toRatio(state.tuning.sensitivity),
   set: (r) => setTuning("sensitivity", sensitivityScale.fromRatio(r)),

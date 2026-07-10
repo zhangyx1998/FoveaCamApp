@@ -61,7 +61,7 @@ export const DEFAULT_TUNING: Tuning = {
   pan: [0.02, 0.02, 0],
   depth: [1.0, 0.2, 0.5],
   v_shift: [0.02, 0.02, 0],
-  sensitivity: 1.0,
+  sensitivity: 0.1,
   scale: 0,
   min_score: 0.1,
   expand_x: 3.0,
