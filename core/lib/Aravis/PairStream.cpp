@@ -415,6 +415,23 @@ FN(pushPairTestFrame) {
                       : 8;
     auto cf = ConvertedFrame::create();
     cf->mat = cv::Mat(std::max(1, h), std::max(1, w), CV_8UC4, cv::Scalar(0));
+    // stereo-throughput.md bench hook: optional RGBA pixel BUFFER — the caller
+    // supplies the exact w*h*4 bytes (e.g. a JS-generated 2D noise texture with
+    // a known sub-window shift, richer than the 1D column profile below).
+    // Copied into the frame's own mat (the JS buffer may be reused). Test-only.
+    if (o.Has("buffer") && o.Get("buffer").IsTypedArray()) {
+      auto ta = o.Get("buffer").As<Napi::TypedArray>();
+      const size_t need = static_cast<size_t>(cf->mat.total()) * 4;
+      JS_ASSERT(ta.TypedArrayType() == napi_uint8_array &&
+                    ta.ByteLength() == need,
+                TypeError,
+                "pushPairTestFrame: `buffer` must be a Uint8Array of w*h*4 bytes",
+                env.Undefined());
+      std::memcpy(cf->mat.data,
+                  static_cast<const uint8_t *>(ta.ArrayBuffer().Data()) +
+                      ta.ByteOffset(),
+                  need);
+    }
     // stereo-paired-inputs test hook: optional deterministic column TEXTURE so
     // the paired-SGBM core test has matchable content. A feature at column `c`
     // in a shift-0 frame lands at column `c - shift` in a `shift` frame, so a

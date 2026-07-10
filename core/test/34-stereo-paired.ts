@@ -85,10 +85,12 @@ assert.throws(() => A.attachStereoPaired(stage, "stereo/none", {}), /unknown pip
 assert.throws(() => A.attachStereoPaired("pair/nope", pairedId, {}), /no pairing brick/, "unknown pair stage throws (named)");
 assert.throws(() => A.attachStereoPaired(stage, pairedId, { numDisparities: 0 }), /numDisparities/, "bad numDisparities throws");
 
-assert.equal(A.attachStereoPaired(stage, pairedId, { numDisparities: NDISP }), true, "paired stereo attaches on the pair brick");
+// matchScale 1: pins the FULL-RES legacy behavior for the parity oracle (the
+// brick DEFAULT is the scaled bench winner — stereo-throughput.md).
+assert.equal(A.attachStereoPaired(stage, pairedId, { numDisparities: NDISP, matchScale: 1 }), true, "paired stereo attaches on the pair brick");
 // The latest-wins reference brick over the SAME two synthetic sources (resolved
 // as test sources, same precedent as the pair brick) — the parity oracle.
-assert.equal(A.attachStereoPipe(L, R, lwId, { numDisparities: NDISP }), true, "latest-wins stereo attaches on the two sources");
+assert.equal(A.attachStereoPipe(L, R, lwId, { numDisparities: NDISP, matchScale: 1 }), true, "latest-wins stereo attaches on the two sources");
 
 // --- source drive ------------------------------------------------------------
 let round = 0;

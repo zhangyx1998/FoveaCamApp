@@ -35,7 +35,10 @@ namespace Arv {
 
 // ---- params parse + validate (NAPI thread) --------------------------------
 // numDisparities rounded UP to a multiple of 16 (min 16, default 128);
-// blockSize forced odd (min 1, default 5); minDisparity default 0.
+// blockSize forced odd (min 1, default 5); minDisparity default 0 (any signed
+// value — sgbm-signed-range.md). Throughput params (stereo-throughput.md):
+// algorithm "sgbm"|"bm"; mode "sgbm"|"3way"|"hh" (SGBM only); matchScale
+// 1|2|4; wls boolean (+ wlsLambda/wlsSigma). Defaults live in StereoParams.
 static StereoParams parseStereoParams(const Napi::Object &o) {
   StereoParams p;
   if (o.Has("numDisparities") && !o.Get("numDisparities").IsUndefined()) {
@@ -61,6 +64,54 @@ static StereoParams parseStereoParams(const Napi::Object &o) {
       throw std::invalid_argument("stereo params: `minDisparity` must be finite");
     p.minDisparity = static_cast<int>(std::lround(v));
   }
+  if (o.Has("algorithm") && !o.Get("algorithm").IsUndefined()) {
+    const auto v = o.Get("algorithm").As<Napi::String>().Utf8Value();
+    if (v == "sgbm")
+      p.algorithm = StereoAlgorithm::SGBM;
+    else if (v == "bm")
+      p.algorithm = StereoAlgorithm::BM;
+    else
+      throw std::invalid_argument(
+          "stereo params: `algorithm` must be \"sgbm\" or \"bm\"");
+  }
+  if (o.Has("mode") && !o.Get("mode").IsUndefined()) {
+    const auto v = o.Get("mode").As<Napi::String>().Utf8Value();
+    if (v == "sgbm")
+      p.mode = cv::StereoSGBM::MODE_SGBM;
+    else if (v == "3way")
+      p.mode = cv::StereoSGBM::MODE_SGBM_3WAY;
+    else if (v == "hh")
+      p.mode = cv::StereoSGBM::MODE_HH;
+    else
+      throw std::invalid_argument(
+          "stereo params: `mode` must be \"sgbm\", \"3way\" or \"hh\"");
+  }
+  if (o.Has("matchScale") && !o.Get("matchScale").IsUndefined()) {
+    const double v = o.Get("matchScale").As<Napi::Number>().DoubleValue();
+    const int s = static_cast<int>(std::lround(v));
+    if (!(s == 1 || s == 2 || s == 4))
+      throw std::invalid_argument("stereo params: `matchScale` must be 1, 2 or 4");
+    p.matchScale = s;
+  }
+  if (o.Has("wls") && !o.Get("wls").IsUndefined())
+    p.wls = o.Get("wls").ToBoolean().Value();
+  if (o.Has("wlsLambda") && !o.Get("wlsLambda").IsUndefined()) {
+    const double v = o.Get("wlsLambda").As<Napi::Number>().DoubleValue();
+    if (!(v > 0) || !std::isfinite(v))
+      throw std::invalid_argument("stereo params: `wlsLambda` must be > 0");
+    p.wlsLambda = v;
+  }
+  if (o.Has("wlsSigma") && !o.Get("wlsSigma").IsUndefined()) {
+    const double v = o.Get("wlsSigma").As<Napi::Number>().DoubleValue();
+    if (!(v > 0) || !std::isfinite(v))
+      throw std::invalid_argument("stereo params: `wlsSigma` must be > 0");
+    p.wlsSigma = v;
+  }
+#ifndef HAVE_OPENCV_XIMGPROC_WLS
+  // Portability (stereo-throughput.md ruling 2): a build without opencv_contrib
+  // (ximgproc) accepts `wls` but degrades it to the unfiltered map.
+  p.wls = false;
+#endif
   return p;
 }
 

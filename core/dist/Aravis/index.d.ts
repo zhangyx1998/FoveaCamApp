@@ -464,18 +464,38 @@ declare module "core/Aravis" {
   export function scaleProbeAll(): Record<string, ScaleProbeSnapshot>;
 
   /**
-   * Reactive SGBM spec for `attachStereoPipe`/`setStereoParams`
-   * (stereo-disparity-and-heatmap-nodes §"StereoStream"). All fields optional;
-   * validated NAPI-side and applied on the next frame (matcher rebuilt).
+   * Reactive matcher spec for `attachStereoPipe`/`setStereoParams`
+   * (stereo-disparity-and-heatmap-nodes §"StereoStream" + the
+   * stereo-throughput.md strategy params). All fields optional; validated
+   * NAPI-side and applied on the next frame (matcher rebuilt).
    *   - `numDisparities` — search range, rounded UP to a multiple of 16
    *                        (min 16; default 128).
    *   - `blockSize`      — matched block size, forced ODD (min 1; default 5).
-   *   - `minDisparity`   — smallest disparity (default 0).
+   *   - `minDisparity`   — smallest disparity (default 0; any SIGNED value —
+   *                        sgbm-signed-range.md).
+   *   - `algorithm`      — "sgbm" (default) | "bm" (classic StereoBM, faster,
+   *                        weaker on low texture).
+   *   - `mode`           — SGBM variant: "sgbm" | "3way" (default) | "hh".
+   *   - `matchScale`     — 1 | 2 | 4 (default 4): match at 1/scale resolution
+   *                        (window scaled alongside). Disparity VALUES stay in
+   *                        FULL-RES left-frame pixel units; the emitted MAP
+   *                        DIMENSIONS are at match scale (the reader carries
+   *                        actual dims — consumers must not assume full-res).
+   *   - `wls`            — cv::ximgproc WLS guided refine (+ `wlsLambda`,
+   *                        default 8000, and `wlsSigma`, default 1.5). Roughly
+   *                        doubles match cost (a second right-view match). On a
+   *                        build without opencv_contrib it degrades to a no-op.
    */
   export interface StereoParams {
     numDisparities?: number;
     blockSize?: number;
     minDisparity?: number;
+    algorithm?: "sgbm" | "bm";
+    mode?: "sgbm" | "3way" | "hh";
+    matchScale?: 1 | 2 | 4;
+    wls?: boolean;
+    wlsLambda?: number;
+    wlsSigma?: number;
   }
 
   /**

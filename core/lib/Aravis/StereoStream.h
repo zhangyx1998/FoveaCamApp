@@ -19,11 +19,16 @@
 // across ticks. No right frame yet → skip. Output timestamps/origin = the LEFT
 // frame's (trusted-time: forwarded, never re-stamped). Active out dims = left.
 //
-// Compute: BGRA→GRAY both sides, cv::StereoSGBM (MODE_SGBM) compute → CV_16S
-// fixed-point → convertTo(CV_32F, 1/16) full-res float disparity. Input dims
-// must match (unequal → drop + meter_.drop, the transient during steer/retune).
-// Reactive params (validated NAPI-side, applied on the brick thread): the SGBM
-// matcher is rebuilt when a pending param lands.
+// Compute (stereo-throughput.md, ruled 2026-07-10): BGRA→GRAY both sides, then
+// a SWAPPABLE matcher strategy — cv::StereoSGBM (mode selectable: SGBM / 3WAY /
+// HH) or cv::StereoBM — optionally matched at 1/matchScale resolution (window
+// scaled with it) and optionally WLS-refined (cv::ximgproc, compile-guarded).
+// Output stays CV_32F disparity with VALUES in full-res LEFT-frame pixel units
+// (scaled matching multiplies back by matchScale); map DIMENSIONS are emitted
+// at match scale (the advert/reader carry actual dims — consumers must not
+// assume full-res). Input dims must match (unequal → drop + meter_.drop, the
+// transient during steer/retune). Reactive params (validated NAPI-side, applied
+// on the brick thread): the matcher is rebuilt when a pending param lands.
 
 //
 // stereo-paired-inputs (ruled 2026-07-09): a SECOND input mode — the SGBM join
@@ -48,6 +53,15 @@
 
 #include <opencv2/opencv.hpp>
 
+// WLS guided disparity refinement (stereo-throughput.md candidate C) — an
+// OPTIONAL opencv_contrib module. Compile-guarded on the CMake-side link
+// decision (HAVE_OPENCV_XIMGPROC_WLS, set iff find_package resolved the
+// OPTIONAL ximgproc component): a build without contrib still compiles, and
+// `wls: true` degrades to the unfiltered map on it.
+#ifdef HAVE_OPENCV_XIMGPROC_WLS
+#include <opencv2/ximgproc/disparity_filter.hpp>
+#endif
+
 #include <Threading/Guard.h>
 
 #include "ConverterStream.h" // TapPublisher, TapChannel, ChannelKind, ...
@@ -55,13 +69,37 @@
 
 namespace Arv {
 
-// The reactive SGBM spec — validated on the NAPI thread (see StereoStream.cpp),
-// applied on the brick thread (rebuilds the matcher). numDisparities rounded up
-// to a multiple of 16 (min 16); blockSize forced odd (min 1); minDisparity any.
+/** Matcher strategy (stereo-throughput.md ruling 1: "the matcher is not
+ *  sacred") — selectable live like every other reactive param. */
+enum class StereoAlgorithm { SGBM = 0, BM = 1 };
+
+// The reactive matcher spec — validated on the NAPI thread (see
+// StereoStream.cpp), applied on the brick thread (rebuilds the matcher).
+// numDisparities rounded up to a multiple of 16 (min 16); blockSize forced odd
+// (min 1); minDisparity any (signed — sgbm-signed-range.md).
+//
+// Throughput params (stereo-throughput.md): `matchScale` (1|2|4) matches at
+// 1/scale resolution with the window scaled alongside (numDisparities/scale,
+// minDisparity/scale) and multiplies the disparity VALUES back to full-res
+// left-frame pixel units; the OUTPUT MAP is emitted at match scale. `mode`
+// picks the SGBM variant (MODE_SGBM / MODE_SGBM_3WAY / MODE_HH); `algorithm`
+// swaps SGBM for the faster classic StereoBM. `wls` enables the ximgproc
+// WLS guided refine (needs a second right-view match — roughly doubles match
+// cost; no-op on builds without opencv_contrib).
+//
+// DEFAULTS = the 43-stereo-throughput.ts bench winner on camera-res synthetic
+// frames with the ruled ±256 window (see the bench table in the proposal's
+// AS-SHIPPED note): scaled SGBM_3WAY at 1/4 — ~60 fps at quality parity.
 struct StereoParams {
   int numDisparities = 128;
   int blockSize = 5;
   int minDisparity = 0;
+  StereoAlgorithm algorithm = StereoAlgorithm::SGBM;
+  int mode = cv::StereoSGBM::MODE_SGBM_3WAY;
+  int matchScale = 4; // 1 | 2 | 4
+  bool wls = false;
+  double wlsLambda = 8000.0;
+  double wlsSigma = 1.5;
 };
 
 // A two-source variant modelled on ChainedStreamOf, but NOT templated into the
@@ -356,6 +394,10 @@ private:
     if (hasPending_.exchange(false, std::memory_order_acquire)) {
       params_ = *pending_.ref();
       matcher_.release(); // rebuilt lazily below with the new params
+#ifdef HAVE_OPENCV_XIMGPROC_WLS
+      rightMatcher_.release();
+      wlsFilter_.release();
+#endif
     }
 
     // Unequal L/R dims → drop (the transient during steering/retune).
@@ -374,16 +416,52 @@ private:
     const auto c0 = std::chrono::steady_clock::now();
     if (!matcher_)
       matcher_ = buildMatcher(params_);
-    // BGRA → GRAY both sides (SGBM wants single-channel 8-bit).
+    // BGRA → GRAY both sides (both matchers want single-channel 8-bit).
     toGray(left->mat, leftGray_);
     toGray(right->mat, rightGray_);
-    matcher_->compute(leftGray_, rightGray_, disp16_);   // CV_16S fixed-point
-    disp16_.convertTo(dispF32_, CV_32F, 1.0 / 16.0);     // full-res float
+    // Scaled matching (stereo-throughput.md): match at 1/matchScale — the
+    // window was already scaled in buildMatcher; values multiply back below.
+    const int s = std::max(1, params_.matchScale);
+    const cv::Mat *lg = &leftGray_, *rg = &rightGray_;
+    if (s > 1) {
+      cv::resize(leftGray_, leftSmall_, cv::Size(), 1.0 / s, 1.0 / s,
+                 cv::INTER_AREA);
+      cv::resize(rightGray_, rightSmall_, cv::Size(), 1.0 / s, 1.0 / s,
+                 cv::INTER_AREA);
+      lg = &leftSmall_;
+      rg = &rightSmall_;
+    }
+    matcher_->compute(*lg, *rg, disp16_); // CV_16S fixed-point (match scale)
+    const cv::Mat *disp = &disp16_;
+#ifdef HAVE_OPENCV_XIMGPROC_WLS
+    if (params_.wls) {
+      // WLS guided refine (candidate C): a second right-view match feeds the
+      // confidence path; the filter is guided by the (match-scale) left gray —
+      // guide dims must equal the disparity dims, and the map is EMITTED at
+      // match scale, so the scaled view is the honest guide.
+      if (!rightMatcher_)
+        rightMatcher_ = cv::ximgproc::createRightMatcher(matcher_);
+      if (!wlsFilter_) {
+        wlsFilter_ = cv::ximgproc::createDisparityWLSFilter(matcher_);
+        wlsFilter_->setLambda(params_.wlsLambda);
+        wlsFilter_->setSigmaColor(params_.wlsSigma);
+      }
+      rightMatcher_->compute(*rg, *lg, dispRight16_);
+      wlsFilter_->filter(disp16_, *lg, dispFiltered16_, dispRight16_);
+      disp = &dispFiltered16_;
+    }
+#endif
+    // Fixed-point → float, VALUES multiplied back to full-res left-frame pixel
+    // units (÷16 fixed-point, ×matchScale).
+    disp->convertTo(dispF32_, CV_32F, static_cast<double>(s) / 16.0);
     const double processMs = std::chrono::duration<double, std::milli>(
                                  std::chrono::steady_clock::now() - c0)
                                  .count();
     meter_.end(converterNowMs());
-    activePacked_.store(pack(left->originX, left->originY, iw, ih),
+    // Active out dims = the EMITTED map's (match-scale) dims; origin stays the
+    // LEFT frame's full-res crop origin (values are full-res units).
+    activePacked_.store(pack(left->originX, left->originY, dispF32_.cols,
+                             dispF32_.rows),
                         std::memory_order_release);
 
     auto cf = ConvertedFrame::create();
@@ -398,14 +476,36 @@ private:
     return cf;
   }
 
-  static cv::Ptr<cv::StereoSGBM> buildMatcher(const StereoParams &p) {
+  // Build the selected matcher with the window SCALED to the match resolution
+  // (numDisparities/scale rounded up to a multiple of 16, minDisparity/scale
+  // floored) — values are multiplied back in process().
+  static cv::Ptr<cv::StereoMatcher> buildMatcher(const StereoParams &p) {
+    const int s = std::max(1, p.matchScale);
+    const int nd =
+        std::max(16, (((std::max(1, p.numDisparities / s)) + 15) / 16) * 16);
+    // Floor division (C++ truncates toward zero) so a negative minDisparity
+    // window never loses its most-negative candidates.
+    const int minD = static_cast<int>(
+        std::floor(static_cast<double>(p.minDisparity) / s));
+    if (p.algorithm == StereoAlgorithm::BM) {
+      // StereoBM: blockSize must be ODD and >= 5.
+      const int bs = std::max(5, p.blockSize | 1);
+      auto bm = cv::StereoBM::create(nd, bs);
+      bm->setMinDisparity(minD);
+      bm->setPreFilterType(cv::StereoBM::PREFILTER_XSOBEL);
+      bm->setUniquenessRatio(5);
+      bm->setDisp12MaxDiff(1);
+      bm->setSpeckleWindowSize(50);
+      bm->setSpeckleRange(2);
+      return bm;
+    }
     const int cn = 1; // grayscale
     const int bs = p.blockSize;
     return cv::StereoSGBM::create(
-        p.minDisparity, p.numDisparities, bs,
+        minD, nd, bs,
         /*P1=*/8 * cn * bs * bs, /*P2=*/32 * cn * bs * bs,
         /*disp12MaxDiff=*/1, /*preFilterCap=*/0, /*uniquenessRatio=*/5,
-        /*speckleWindowSize=*/50, /*speckleRange=*/2, cv::StereoSGBM::MODE_SGBM);
+        /*speckleWindowSize=*/50, /*speckleRange=*/2, p.mode);
   }
   static void toGray(const cv::Mat &in, cv::Mat &out) {
     if (in.channels() == 4)
@@ -469,7 +569,13 @@ private:
 
   Meter::ThreadMeter meter_; // single writer = this brick's thread
   cv::Mat leftGray_, rightGray_, disp16_, dispF32_; // reused buffers (this thread)
-  cv::Ptr<cv::StereoSGBM> matcher_;                 // rebuilt on param change
+  cv::Mat leftSmall_, rightSmall_; // reused 1/matchScale buffers (this thread)
+  cv::Ptr<cv::StereoMatcher> matcher_;              // rebuilt on param change
+#ifdef HAVE_OPENCV_XIMGPROC_WLS
+  cv::Mat dispRight16_, dispFiltered16_; // WLS right-match + refined buffers
+  cv::Ptr<cv::StereoMatcher> rightMatcher_;             // WLS confidence path
+  cv::Ptr<cv::ximgproc::DisparityWLSFilter> wlsFilter_; // rebuilt on retune
+#endif
   StereoParams params_;                             // current spec (this thread)
   Threading::Guard<StereoParams> pending_ = {StereoParams{}};
   std::atomic<bool> hasPending_{false};

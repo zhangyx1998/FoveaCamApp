@@ -1,8 +1,39 @@
 # Stereo disparity throughput — algorithm selection toward ~60 fps
 
-Status: **PROPOSED (ruled 2026-07-10).** Companion to
-[`sgbm-signed-range.md`](./sgbm-signed-range.md) (the signed ±256 window
-ruling stands regardless of algorithm choice; both land in the same wave).
+Status: **SHIPPED (2026-07-10; rig pass owed — see AS SHIPPED below).**
+Companion to [`sgbm-signed-range.md`](./sgbm-signed-range.md) (the signed
+±256 window ruling stands regardless of algorithm choice; both landed in the
+same wave).
+
+## AS SHIPPED (2026-07-10)
+
+Benchmark (1440×1080, ±256 window, planar ground truth both signs, lab PC /
+OpenCV 4.6 — full table in the `core/test/43-stereo-throughput.ts` output):
+legacy full-res SGBM 1.0 fps → **default is scaled SGBM_3WAY at
+matchScale 4: ~170 fps, 100% of valid pixels within ±2 px** (identical
+quality to full-res legacy on this bench). `bm s=4` is faster (232 fps) but
+lower valid fraction; WLS fills invalids at ~40% fps cost with extrapolated
+borders — both stay selectable via the reactive params
+(`algorithm`/`mode`/`matchScale`/`wls`, all live-retunable).
+
+Deltas from the ruled sketch:
+- WLS guide is the match-scale left gray (not full-res) — the map is emitted
+  at match scale, so the scaled view is the honest guide, and full-res
+  filtering would forfeit the dims-at-match-scale win.
+- WLS is compile-guarded (`HAVE_OPENCV_XIMGPROC_WLS` via cmake
+  `OPTIONAL_COMPONENTS ximgproc`); a contrib-less build compiles and
+  `wls: true` degrades to a no-op. Ubuntu 4.6 has ximgproc (verified);
+  the M1 Homebrew build is expected to (ships contrib) — confirm the cmake
+  status line on the rig.
+- `core/test/{26,34}` pin `matchScale: 1` (they assert full-res legacy
+  parity semantics).
+- The ~35% invalid fraction on the bench is the inherent ±256 border band at
+  1440 wide, uniform across candidates.
+
+RIG-GATED (bench session): real-scene quality of the s=4 default vs `bm` /
+`wls` alternates (the param surface exists for exactly this); `stereo/scope`
+node tracking camera rate on the profiler; signed traversal of the heatmap
+across a gaze crossing; Mac cmake prints "ximgproc found".
 
 ## Problem (user-reported, 2026-07-10)
 

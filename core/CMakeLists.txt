@@ -51,7 +51,16 @@ find_package(OpenCV REQUIRED COMPONENTS
   imgproc     # cv::cvtColor and image processing
   aruco       # ArUco marker detection (future)
   tracking    # KCF tracker (future)
+  OPTIONAL_COMPONENTS
+  ximgproc    # WLS disparity refine (stereo-throughput.md) — a contrib module;
+              # a build without it still compiles, `wls` degrades to a no-op
 )
+if(";${OpenCV_LIBS};" MATCHES ";opencv_ximgproc;")
+  add_definitions(-DHAVE_OPENCV_XIMGPROC_WLS)
+  message(STATUS "OpenCV ximgproc found — stereo WLS refine enabled")
+else()
+  message(STATUS "OpenCV ximgproc NOT found — stereo WLS refine disabled")
+endif()
 # header files and libraries
 include_directories(
   ${INC_DIR}      # project local include directory

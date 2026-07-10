@@ -1,6 +1,14 @@
 # SGBM signed disparity range (foveated gaze)
 
-Status: **PROPOSED (ruled 2026-07-10).**
+Status: **SHIPPED (2026-07-10; rig pass owed).** Both attach sites now pass
+the shared `SIGNED_DISPARITY_WINDOW` constant (`app/orchestrator/
+stereo-pipe.ts`); the sign convention (`disparity = x_left − x_right`) is
+pinned on both signs by the `core/test/43-stereo-throughput.ts` bench — no
+H-vs-inverse contradiction surfaced synthetically, so a sign-flipped rig
+view now cleanly implicates the homography feeder, not the matcher.
+Residual (report-only): invalid pixels carry `minDisparity − 1` ≈ −257,
+which drags the heatmap's per-frame auto-min — see the heatmap-normalization
+follow-up.
 
 ## Problem (user-reported, 2026-07-10)
 

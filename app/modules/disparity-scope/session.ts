@@ -119,7 +119,12 @@ import {
 } from "./vergence";
 import { createSlicePipe, type SliceHandle, type SlicePipeSeam } from "@orchestrator/slice-pipe";
 import { createScalePipe, type ScaleHandle, type ScalePipeSeam } from "@orchestrator/scale-pipe";
-import { createStereoPipe, type StereoHandle, type StereoPipeSeam } from "@orchestrator/stereo-pipe";
+import {
+  createStereoPipe,
+  SIGNED_DISPARITY_WINDOW,
+  type StereoHandle,
+  type StereoPipeSeam,
+} from "@orchestrator/stereo-pipe";
 import { createHeatmapPipe, type HeatmapHandle, type HeatmapPipeSeam } from "@orchestrator/heatmap-pipe";
 import {
   createCompositePipe,
@@ -1144,8 +1149,9 @@ export default function disparityScopeSession(
       // center view's "SGBM Disparity" option. Chained on the L/R pre-warped
       // undistort sources; the renderer binds ONLY the heatmap pipe — until it
       // connects (view selected), the consumer gate keeps BOTH bricks parked
-      // and the SGBM cost is zero (ruling 2). Disparity is left-frame-sized;
-      // the heatmap ring matches it.
+      // and the SGBM cost is zero (ruling 2). The ring is left-frame-sized
+      // (max); the emitted map may be at the brick's match scale
+      // (stereo-throughput.md — reader carries actual dims).
       const camL = t.leases.L.camera;
       const stereoDims = {
         maxWidth: camL.getFeatureInt("Width"),
@@ -1156,7 +1162,15 @@ export default function disparityScopeSession(
         warpedSources.L,
         warpedSources.R,
         nodeId.stereo("scope"),
-        stereoDims,
+        {
+          ...stereoDims,
+          // sgbm-signed-range.md (ruled 2026-07-10): the fixed symmetric
+          // −256…+255 window — foveated gaze makes disparity SIGNED; the
+          // 0…+128 default searched one side and matched garbage. Static by
+          // ruling; the matcher strategy/scale defaults ride the brick's
+          // stereo-throughput.md bench winner and stay live-retunable.
+          params: SIGNED_DISPARITY_WINDOW,
+        },
       );
       stereoHeatmap = createHeatmapPipe(
         heatmapSeam,

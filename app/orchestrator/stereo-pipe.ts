@@ -24,12 +24,42 @@
 
 import type { PipeSpec } from "@lib/orchestrator/pipe-contract.js";
 
-/** Reactive SGBM tuning (all optional — native defaults: 128/5/0; the brick
- *  rounds numDisparities up to a multiple of 16 and forces blockSize odd). */
+/** Reactive matcher tuning (all optional — native defaults: 128/5/0 + the
+ *  stereo-throughput.md bench winner for the strategy params; the brick rounds
+ *  numDisparities up to a multiple of 16 and forces blockSize odd).
+ *
+ *  Throughput params (stereo-throughput.md, ruled 2026-07-10):
+ *  - `algorithm` — "sgbm" (default) or the faster classic "bm" (StereoBM).
+ *  - `mode`      — SGBM variant: "sgbm" | "3way" (default) | "hh".
+ *  - `matchScale`— 1 | 2 | 4 (default 4): match at 1/scale resolution with the
+ *                  window scaled alongside; disparity VALUES stay in FULL-RES
+ *                  left-frame pixel units, but the emitted MAP DIMENSIONS are
+ *                  at match scale (consumers must not assume full-res).
+ *  - `wls`       — cv::ximgproc WLS guided refine (+`wlsLambda`/`wlsSigma`);
+ *                  a build without opencv_contrib degrades it to a no-op. */
 export type StereoParams = {
   numDisparities?: number;
   blockSize?: number;
   minDisparity?: number;
+  algorithm?: "sgbm" | "bm";
+  mode?: "sgbm" | "3way" | "hh";
+  matchScale?: 1 | 2 | 4;
+  wls?: boolean;
+  wlsLambda?: number;
+  wlsSigma?: number;
+};
+
+/** The RULED fixed symmetric disparity window (sgbm-signed-range.md,
+ *  2026-07-10): foveated (independently steered) gaze makes the true L↔R
+ *  disparity SIGNED and gaze-dependent, −W…+W — the brick's one-sided 0…+128
+ *  default matched garbage. BOTH attach sites (disparity-scope's free-run node
+ *  and multi-fovea's paired node) pass this same window; it is deliberately
+ *  STATIC (gaze-centered dynamic retuning was ruled out). Covers gaze
+ *  divergence up to ±256 px; beyond that the view degrades again (known
+ *  limitation, revisit on the rig). */
+export const SIGNED_DISPARITY_WINDOW: StereoParams = {
+  numDisparities: 512,
+  minDisparity: -256,
 };
 
 export interface StereoPipeSeam {

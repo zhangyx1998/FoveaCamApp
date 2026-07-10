@@ -44,6 +44,7 @@ import type { CompressPipeSeam } from "@orchestrator/compress-pipe";
 import type { PairPipeSeam, PairHandle } from "@orchestrator/pair-pipe";
 import {
   createPairedStereoPipe,
+  SIGNED_DISPARITY_WINDOW,
   type StereoHandle,
   type StereoPipeSeam,
 } from "@orchestrator/stereo-pipe";
@@ -534,6 +535,11 @@ export default function multiFoveaSession(
                 {
                   maxWidth: camL.getFeatureInt("Width"),
                   maxHeight: camL.getFeatureInt("Height"),
+                  // sgbm-signed-range.md (ruled 2026-07-10): the same fixed
+                  // symmetric −256…+255 window as disparity-scope — foveated
+                  // gaze makes disparity SIGNED; the 0…+128 default matched
+                  // garbage. Static by ruling (no pose coupling).
+                  params: SIGNED_DISPARITY_WINDOW,
                 },
               );
               scope.defer(() => {

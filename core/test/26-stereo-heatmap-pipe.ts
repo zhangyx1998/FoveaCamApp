@@ -93,9 +93,12 @@ assert.throws(() => A.attachStereoPipe(slcLId, "camera/none/convert", stId, {}),
 assert.throws(() => A.attachStereoPipe(slcLId, slcRId, stId, { numDisparities: 0 }), /numDisparities/, "bad numDisparities throws");
 assert.throws(() => A.attachHeatmapPipe(stId, "stereo/none/heatmap/x", {}), /unknown pipe/, "heatmap unknown target throws");
 
+// matchScale 1: this test pins the FULL-RES legacy behavior (dims == slice
+// dims, values directly comparable) — the brick DEFAULT is the scaled bench
+// winner (stereo-throughput.md), so the scale is pinned explicitly here.
 // numDisparities 64: unambiguous within the fake pattern's period, and the
 // invalidated left margin stays a minority of the crop.
-assert.equal(A.attachStereoPipe(slcLId, slcRId, stId, { numDisparities: 64 }), true, "stereo attaches on the two slices");
+assert.equal(A.attachStereoPipe(slcLId, slcRId, stId, { numDisparities: 64, matchScale: 1 }), true, "stereo attaches on the two slices");
 assert.equal(A.attachHeatmapPipe(stId, hmId, {}), true, "heatmap attaches on the stereo pipe (findStereo)");
 
 type Src = { rh: object; dest: ArrayBuffer; lastSeq: bigint };
@@ -182,7 +185,7 @@ const st = open(stId, f32Bytes);
 {
   assert.equal(A.setStereoParams("stereo/none", { blockSize: 7 }), false, "unknown stereo pipe → false");
   assert.throws(() => A.setStereoParams(stId, { numDisparities: -4 }), /numDisparities/, "invalid retune throws");
-  assert.equal(A.setStereoParams(stId, { numDisparities: 32, blockSize: 7 }), true, "stereo retune accepted");
+  assert.equal(A.setStereoParams(stId, { numDisparities: 32, blockSize: 7, matchScale: 1 }), true, "stereo retune accepted");
   assert.equal(A.setHeatmapParams("stereo/none/heatmap/x", { min: 0 }), false, "unknown heatmap pipe → false");
   assert.equal(A.setHeatmapParams(hmId, { min: 0, max: 64 }), true, "heatmap retune accepted");
   let ok = 0;
