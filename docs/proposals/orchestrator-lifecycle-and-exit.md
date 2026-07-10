@@ -1,6 +1,6 @@
 # Orchestrator lifecycle + exit sequence — per-app-instance process, audited teardown
 
-Status: **SHIPPED (code-complete 2026-07-09, `60793fb`, per the AMENDED ruling 2 — one persistent process, five audit gaps closed; runtime checklist owed — stage-f §Lifecycle)**. Builds on the
+Status: **RE-OPENED (2026-07-09): ruling 2 RE-AMENDED to disposable-per-app-instance — see §RE-AMENDED below; the 60793fb singleton hardening (watchdog, ack, park, crash reports) carries forward as the per-instance building blocks**. Builds on the
 hardware-quiescence invariant (janitor + quiesced handshake, 4f8e016;
 exit-6 HandleScope fix 26871e4) — this program AUDITS and EXTENDS that
 work; it must never regress kill()-only teardown.
@@ -40,6 +40,48 @@ work; it must never regress kill()-only teardown.
    cleanup worker to enforce hardware quiescence (the janitor pattern;
    audit that the janitor covers the per-app-instance model and every
    crash path — signal, abort, native fault).
+
+## RE-AMENDED ruling 2 (user, 2026-07-09) — disposable orchestrator per app instance
+
+The singleton amendment is REVERSED. Rig experience with the persistent
+process: any error in teardown wedges the shared orchestrator and the
+Welcome window stops responding — no app can be entered. Process disposal
+is the only containment that covers the whole class of teardown faults
+(including ones not yet found — cf. the Stream close deadlock, fixed
+`ee6fc46`, which froze the app exactly this way).
+
+1. **One orchestrator instance per app activation.** Opening an app forks
+   a fresh instance; closing/switching the app ends that process:
+   bounded drain-and-quiesce → ACK or timeout → kill → janitor sweep.
+   Teardown errors die with the process; every app starts from a clean
+   slate (no cross-app thread/lease/memory residue).
+2. **Latency hiding**: the NEXT app's instance may fork (core load,
+   init) while the previous instance is still tearing down — only
+   CAMERA/MEMS ACQUISITION gates on the old instance's confirmed death +
+   janitor completion (Aravis is per-process exclusive). The spin-up
+   progress monitor absorbs the wait and names the gating step.
+3. **Welcome window is status-only** (user-ruled): live camera list +
+   connected state via an enumeration-only probe (never opens a camera,
+   holds nothing, no teardown on app entry); logo instead of live video.
+   Resolves ux-review E7. The probe may be a small persistent
+   enumerate-only process — it touches no hardware state, so it can
+   outlive app instances and never gates anything.
+4. **Typed instances** (user-ruled direction): instances declare
+   `hardware` (claims cameras/MEMS — at most one alive at a time) or
+   `non-hardware` (node-graph compute only — N may run alongside a
+   hardware instance). This is what makes the model pay twice over: the
+   VIEWER can spin up a non-hardware instance next to an active camera
+   session — running its own node graphs over a recording and dispatching
+   projector windows for its own session — and thereby stops importing
+   core outside the orchestrator entirely: the ruled no-core-exception
+   (standalone-viewer-and-fcap ruling 1) is RETIRED as a goal state; core
+   lives ONLY in orchestrator instances. (The viewer migration itself is
+   a follow-up wave, not part of the lifecycle wave; the instance typing
+   must land ready for it.)
+5. Rulings 1, 3, 4 above carry over unchanged, re-read per-instance:
+   clean-exit ack per instance, crash report scoped to the instance's
+   owned windows, janitor on every instance death path, watchdog covers
+   main-crash for whichever instances are alive.
 
 ## Audit checklist (the wave's first deliverable, before code)
 
