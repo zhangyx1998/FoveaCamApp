@@ -23,6 +23,13 @@ than polish.
    layout reflow — reserve space (fixed/min dimensions, `ch`-sized numeric
    fields, visibility over conditional mount) so live telemetry, state badges,
    toggling controls, and appearing overlays never shift their neighbors.
+4. **Icon-only title bars** (user, 2026-07-09): buttons in a window's title
+   bar NEVER use text labels — always icon only, with a clear `title=`
+   tooltip naming the action (the tooltip is the only label, so it must be
+   explicit). The shared idiom is AppWindow's `icon-button` + the
+   `app/src/windows/icons.ts` set — reuse/extend it; keep hit targets at
+   the established size. Labeled controls elsewhere (panel headers, drawers,
+   launcher) are unaffected.
 
 ---
 
