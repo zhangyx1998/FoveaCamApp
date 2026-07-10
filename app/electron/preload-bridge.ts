@@ -97,6 +97,11 @@ export function installBridge(extra: Partial<FoveaBridge> = {}) {
     clearStore: (path) => invoke("store:clear", path),
     listStore: (path) => invoke("store:list", path),
     onStoreChanged: (cb) => listen("store:changed", (path, value) => cb(path, value)),
+    trashStoreDoc: (path) => invoke("store:trash", path),
+    showJsonSaveDialog: (defaultName) => invoke("dialog:save-json", defaultName),
+    showJsonOpenDialog: () => invoke("dialog:open-json"),
+    writeTextFile: (path, content) => invoke("fs:write-text", path, content),
+    readTextFile: (path) => invoke("fs:read-text", path),
     ...extra,
   };
 

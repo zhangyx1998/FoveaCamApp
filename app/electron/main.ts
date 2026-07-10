@@ -36,7 +36,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, writeFile, readFile } from "node:fs/promises";
 import { LogRing, type TeeFn } from "./log-ring";
 import { enrichDownReport } from "./crash-report";
 import { ViewerEngineManager, type EngineHandle } from "./viewer-engine";
@@ -50,6 +50,7 @@ import {
 } from "@lib/telecanvas";
 import { reviver } from "@lib/store-codec";
 import { StoreMain } from "./store-main";
+import { migrateStoreOnBoot } from "./store-migrate";
 import type { StoreClientMessage } from "@lib/store-proxy";
 import type { AppConfig } from "@lib/config";
 import { getIcon } from "./util";
@@ -337,6 +338,56 @@ handleSender("store:patch", (wc, path, ops) =>
 );
 handleSender("store:clear", (wc, path) => storeMain.clear(wc, path));
 handle("store:list", (path) => storeMain.list(path));
+// Refcount-to-zero record delete (calibration-records-v2): move the backing
+// store file to the OS TRASH (recoverable), THEN clear the doc from the
+// authority cache + broadcast. The clear's `rm` no-ops on the already-trashed
+// file. Store docs live at `<DATA>/store/<...segments>.json`.
+handleSender("store:trash", async (wc, storePath) => {
+  const file = path.join(DATA, "store", ...storePath) + ".json";
+  if (existsSync(file)) {
+    try {
+      await shell.trashItem(file);
+    } catch (e) {
+      console.error(`[store] trashItem failed for ${file}: ${e}`);
+    }
+  }
+  await storeMain.clear(wc, storePath);
+});
+
+// ---- JSON import/export dialogs + files (calibration records) --------------
+handle("dialog:save-json", async (defaultName) => {
+  const focused = BrowserWindow.getFocusedWindow();
+  const options = {
+    defaultPath: `${defaultName}.json`,
+    filters: [{ name: "JSON", extensions: ["json"] }],
+  };
+  const result = focused
+    ? await dialog.showSaveDialog(focused, options)
+    : await dialog.showSaveDialog(options);
+  if (result.canceled || !result.filePath) return null;
+  return result.filePath.endsWith(".json") ? result.filePath : `${result.filePath}.json`;
+});
+handle("dialog:open-json", async () => {
+  const focused = BrowserWindow.getFocusedWindow();
+  const options = {
+    properties: ["openFile"] as const,
+    filters: [{ name: "JSON", extensions: ["json"] }],
+  };
+  const result = focused
+    ? await dialog.showOpenDialog(focused, options)
+    : await dialog.showOpenDialog(options);
+  return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0]!;
+});
+handle("fs:write-text", async (file, content) => {
+  await writeFile(file, content, "utf8");
+});
+handle("fs:read-text", async (file) => {
+  try {
+    return await readFile(file, "utf8");
+  } catch {
+    return null;
+  }
+});
 
 // ---- Renderer bridge handlers (docs/history/refactor/orchestrator.md §7.1 T5) -----
 // The renderer's `SavePath`/`SaveControls`/`RecordControls` used to call
@@ -1412,6 +1463,10 @@ app
   .whenReady()
   .then(sweepStaleWatchdogState)
   .then(customizeApp)
+  // Store-schema migrations (calibration-records-v2.md) run FIRST — before the
+  // probe or any window can read the store — so no client observes a
+  // half-migrated tree. Auto-snapshots the store git repo around the change.
+  .then(migrateStoreOnBoot)
   // Disposable model (ruling 2/3): no orchestrator is spawned at startup — app
   // instances fork on demand at app-window open. The enumerate-only PROBE and
   // the detached main-crash WATCHDOG come up now instead, so Welcome shows the

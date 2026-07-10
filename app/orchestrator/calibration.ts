@@ -25,8 +25,13 @@ import {
   type CoordinateConversions,
 } from "@lib/coordinate-conversions";
 import type { ExtrinsicDataset } from "@lib/camera-config";
+import {
+  RECORD_STORE,
+  resolveActiveDataset,
+  type CalibrationRecord,
+} from "@lib/calibration-records";
 import { cameraConfigPath } from "./camera.js";
-import { read } from "./store-hub.js";
+import { read, list } from "./store-hub.js";
 import { timeSpan } from "./diagnostics.js";
 import { matchTriple, retryUntil, type CameraLease } from "./registry.js";
 import type { ServerSession } from "./runtime.js";
@@ -102,14 +107,33 @@ export async function fitExtrinsicRegression(
   };
 }
 
+/**
+ * Resolve a camera's active extrinsic dataset under the calibration-records-v2
+ * model: the LATEST record (by `created`) associated with this camera's key
+ * (`resolveActiveDataset`). Falls back to the legacy flat doc
+ * (`["calibrate-extrinsic", <cameraKey>]`) when no record is bound — the safety
+ * net for an un-migrated dev store (the store-migration framework normally moves
+ * every legacy doc into a record at main boot). Reading all records per load is
+ * cheap (a rig holds a handful).
+ */
+async function loadExtrinsicDataset(camera: Camera): Promise<ExtrinsicDataset> {
+  const cameraKey = getCameraKey(camera);
+  const ids = await list(RECORD_STORE);
+  const records = await Promise.all(
+    ids.map((id) => read<CalibrationRecord | null>([RECORD_STORE, id], null)),
+  );
+  const valid = records.filter(
+    (r): r is CalibrationRecord => !!r && !!(r as CalibrationRecord).inner,
+  );
+  const ds = resolveActiveDataset(valid, cameraKey);
+  if (ds && ds.length) return ds;
+  return read<ExtrinsicDataset>(["calibrate-extrinsic", cameraKey], []);
+}
+
 async function loadExtrinsic(
   camera: Camera,
 ): Promise<ConversionInputs["LE"]> {
-  const ds = await read<ExtrinsicDataset>(
-    ["calibrate-extrinsic", getCameraKey(camera)],
-    [],
-  );
-  return fitExtrinsicRegression(ds);
+  return fitExtrinsicRegression(await loadExtrinsicDataset(camera));
 }
 
 // Exported for calibrate-drift's session (§7.1 S1b) — it reads/writes

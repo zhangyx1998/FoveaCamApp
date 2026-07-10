@@ -18,8 +18,11 @@ You may find the full license in project root directory.
   preview + annotation canvas are deleted.
 -->
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch, watchEffect } from "vue";
 import { sortedCameras, welcomeStatus, type ProbeCamera } from "@lib/orchestrator/probe";
+import Store from "@lib/store";
+import { connectedTripleHash } from "@lib/calibration-data";
+import { resolveNickname } from "@lib/calibration-records";
 import { launchableApps } from "./app-registry";
 import TitleBar from "../components/TitleBar.vue";
 import { FontAwesomeIcon as Icon } from "@fortawesome/vue-fontawesome";
@@ -53,6 +56,31 @@ onUnmounted(() => disposeProbe?.());
 const status = computed(() => welcomeStatus(cameras.value, probing.value));
 const connected = computed(() => probing.value && cameras.value.length > 0);
 const cameraList = computed(() => sortedCameras(cameras.value));
+
+// Per-triple NICKNAME (calibration-records-v2): when the connected rig forms a
+// complete L/C/R triple that has a nickname, show it. The store is main-backed,
+// so SUBSCRIBE to the triple doc (Store.open, not a one-shot read) — a Settings
+// nickname edit while Welcome is open must reflect live, not wait for the next
+// camera-list change (UI/UX review 2026-07-10).
+const rigNickname = ref<string | null>(null);
+let nicknameDoc: { nickname?: string } | null = null;
+watch(cameras, () => void refreshNickname(), { immediate: true });
+async function refreshNickname() {
+  const hash = await connectedTripleHash(cameras.value);
+  if (!hash) {
+    rigNickname.value = null;
+    nicknameDoc = null;
+    return;
+  }
+  // Subscribed reactive doc — cached per path, live-updated by main broadcasts.
+  nicknameDoc = await Store.open<{ nickname?: string }>(["triples", hash]);
+  const doc = nicknameDoc;
+  watchEffect(() => {
+    // Re-runs on any broadcast that touches the doc; guarded so a stale
+    // watcher from a previous hash stops writing once the rig changes.
+    if (nicknameDoc === doc) rigNickname.value = resolveNickname(hash, { [hash]: doc });
+  });
+}
 
 // Launcher entries — dev-only apps hidden in production builds.
 const applications = launchableApps.filter((a) => a.group === "application");
@@ -88,6 +116,7 @@ function openConfig() {
           <img src="/FoveaCam Duo Mini.png" style="max-width: 55%" />
         </div>
       </div>
+      <div class="rig-name" v-if="rigNickname">{{ rigNickname }}</div>
       <div class="camera-list" v-if="cameraList.length > 0">
         <div class="camera" v-for="c in cameraList" :key="c.serial">
           <Icon :icon="faCameraAlt" class="cam-icon" />
@@ -179,6 +208,18 @@ function openConfig() {
     flex-direction: column;
     align-items: center;
     gap: 2em;
+  }
+
+  .rig-name {
+    padding: 0.6em 1em 0;
+    color: var(--accent-bright);
+    font-weight: 700;
+    font-size: 1.05em;
+    border-top: 1px solid var(--tint-2);
+
+    & + .camera-list {
+      border-top: none; // avoid a double divider under the rig name
+    }
   }
 
   .camera-list {

@@ -45,6 +45,22 @@ PRV lets you check the fit before committing. It drives both mirrors from a targ
 3. Try several targets across the field to confirm the fit holds.
 4. When satisfied, click **Confirm and Save** to persist the calibration. Once saved the button reflects the completed write. Use **Back to Summarize** to return to FIN.
 
+## Where the calibration is stored
+
+**Confirm and Save** writes each eye's calibration as a **calibration record** —
+a content-addressed snapshot of the datapoints bound to that camera and this rig.
+The Left/Right eye each gets its own record. Re-running the calibration with the
+exact same datapoints just re-associates the existing record rather than
+duplicating it.
+
+You manage these records from **Settings → Device config → Calibration records**:
+inspect a record's observed-vs-projected fit in the visualizer, aggregate several
+records into one, export/import them as JSON, or discard them (see
+[Settings](./settings.md#calibration-records)). You can also toggle a record as a
+live **overlay** there — with this Extrinsic window open, the record's marks are
+drawn straight over the matching Left/Right stream so you can compare a stored
+calibration against the live scene.
+
 ## What can go wrong
 
 - **Capture is greyed out:** the controller is not connected, or at least one of the three cameras is not currently seeing its marker. Look for a **✗** on any marker input and re-acquire the lock before capturing.

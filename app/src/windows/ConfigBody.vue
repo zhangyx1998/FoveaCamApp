@@ -21,8 +21,9 @@ You may find the full license in project root directory.
        Friendly names resolve against the currently-known cameras (probe list).
 -->
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref, toRaw, watch } from "vue";
 import Store from "@lib/store";
+import { getCameraKey } from "@lib/camera-config";
 import { useConfigRef } from "@lib/config";
 import { anaglyphCards, type AnaglyphStyle } from "../../../docs/schema/anaglyph";
 import {
@@ -33,6 +34,10 @@ import {
 import {
   enumerateCalibrationData,
   deleteCalibrationEntry,
+  enumerateRecords,
+  recordsForTriple,
+  connectedEyeKeys,
+  recordRow,
   categoryTitle,
   resolveBaseline,
   connectedTripleHash,
@@ -44,10 +49,44 @@ import {
   type KnownCamera,
   type TripleConfig,
 } from "@lib/calibration-data";
+import {
+  RECORD_STORE,
+  addAssociation,
+  aggregateRecords,
+  buildDeviceExport,
+  buildRecordExport,
+  decideImport,
+  removeAssociations,
+  tripleAssociationMatcher,
+  makeRecord,
+  recordId,
+  type CalibrationRecord,
+  type DeviceExportFile,
+  type RecordExportFile,
+  DEVICE_EXPORT_SCHEMA,
+  RECORD_EXPORT_SCHEMA,
+} from "@lib/calibration-records";
+import {
+  OVERLAY_DOC,
+  OVERLAY_OFF,
+  overlayActiveFor,
+  type OverlayState,
+} from "@lib/calibration-overlay";
+import CalibrationVisualizer from "../components/CalibrationVisualizer.vue";
 import type { ProbeCamera } from "@lib/orchestrator/probe";
 import { FontAwesomeIcon as Icon } from "@fortawesome/vue-fontawesome";
 import { faArrowsRotate, faChevronDown } from "./icons";
-import { faTrash, faCopy, faCheck, faPlug } from "@fortawesome/free-solid-svg-icons";
+import {
+  faTrash,
+  faCopy,
+  faCheck,
+  faPlug,
+  faMagnifyingGlass,
+  faFileExport,
+  faFileImport,
+  faLayerGroup,
+  faEye,
+} from "@fortawesome/free-solid-svg-icons";
 
 // ---- Tabs (fixed header; only the content below scrolls) -------------------
 type Tab = "global" | "device";
@@ -153,6 +192,8 @@ async function refresh() {
   try {
     entries.value = await enumerateCalibrationData(calStore, cameras.value);
     connectedKey.value = await connectedTripleHash(cameras.value);
+    await refreshRecords();
+    await refreshNicknames();
   } finally {
     loading.value = false;
   }
@@ -206,6 +247,10 @@ watch(
 watch(
   selectedTripleKey,
   (key) => {
+    // A record selection never survives a triple switch — a stale set left the
+    // "Aggregate N" header button live while aggregateSelected() filtered to
+    // the NEW triple's records and silently no-opped (UI/UX review 2026-07-10).
+    selectedIds.value = new Set();
     if (key) void openTripleDoc(key);
   },
   { immediate: true },
@@ -301,6 +346,321 @@ async function doDelete(e: CalEntry) {
   if (e.category === "triples" && selectedTripleKey.value === e.key)
     selectedTripleKey.value = null;
   await refresh();
+}
+
+// ---- Per-triple NICKNAME (calibration-records-v2) --------------------------
+/** Read a triple's nickname (empty = none). Rides the reactive triple doc. */
+function nicknameOf(key: string): string {
+  const v = tripleDocs.value[key]?.nickname;
+  return typeof v === "string" ? v : "";
+}
+/** Write a triple's nickname: blank CLEARS it, else stores the trimmed value —
+ *  other fields ride along untouched on re-persist. Commit on @change so an
+ *  in-progress space isn't stored mid-type. */
+function setNickname(key: string, value: string): void {
+  const doc = tripleDocs.value[key];
+  if (!doc) return;
+  const t = value.trim();
+  if (!t) delete doc.nickname;
+  else doc.nickname = t;
+  nicknames.value = { ...nicknames.value, [key]: t };
+}
+
+// ---- Calibration records (list, aggregate, inspect, import/export) ---------
+const records = ref<CalibrationRecord[]>([]);
+// Per-triple nicknames for the selector dialog (read for every triple, not just
+// the selected one whose doc is opened reactively).
+const nicknames = ref<Record<string, string>>({});
+const selectedIds = ref<Set<string>>(new Set());
+const inspecting = ref<CalibrationRecord | null>(null);
+const message = ref<string | null>(null);
+const confirmDiscardId = ref<string | null>(null);
+const confirmClearDevice = ref(false);
+// Cross-window overlay toggle — a main-backed doc so the calibrate-extrinsic
+// view (or any StreamView) shows the overlay live when it targets its camera.
+const overlayState = await Store.open<OverlayState, OverlayState>(OVERLAY_DOC, {
+  ...OVERLAY_OFF,
+});
+// Pending device-config import awaiting a cross-triple nickname.
+const pendingDeviceImport = ref<{ bundle: DeviceExportFile; nickname: string } | null>(null);
+
+function notify(msg: string): void {
+  message.value = msg;
+  setTimeout(() => {
+    if (message.value === msg) message.value = null;
+  }, 3200);
+}
+
+/** The live L/R camera keys of the selected triple (only when it is the
+ *  connected rig — a disconnected triple can't resolve its camera keys, so
+ *  legacy cameraKey-bound records only surface on the connected rig). */
+const liveKeys = computed<string[]>(() =>
+  selectedTriple.value?.connected ? connectedEyeKeys(cameras.value) : [],
+);
+/** Records bound to the selected triple, latest-first. */
+const tripleRecords = computed<CalibrationRecord[]>(() =>
+  selectedTripleKey.value
+    ? recordsForTriple(records.value, selectedTripleKey.value, liveKeys.value)
+    : [],
+);
+const recordRows = computed(() => tripleRecords.value.map(recordRow));
+const selectedCount = computed(() => selectedIds.value.size);
+
+async function refreshRecords(): Promise<void> {
+  records.value = await enumerateRecords(calStore);
+  selectedIds.value = new Set(); // selection is index-fragile across a reload
+}
+
+/** Read every triple's nickname (for the selector dialog). */
+async function refreshNicknames(): Promise<void> {
+  const map: Record<string, string> = {};
+  for (const t of orderedTriples.value) {
+    const doc = await Store.read<TripleConfig>(["triples", t.key], {});
+    if (typeof doc.nickname === "string" && doc.nickname.trim())
+      map[t.key] = doc.nickname.trim();
+  }
+  nicknames.value = map;
+}
+
+/** Persist a full record doc (whole-doc replace through main). */
+function writeRecord(rec: CalibrationRecord): Promise<void> {
+  return window.foveaBridge.patchStore([RECORD_STORE, rec.id], [{ replace: rec }]);
+}
+
+function toggleSelect(id: string): void {
+  const next = new Set(selectedIds.value);
+  if (next.has(id)) next.delete(id);
+  else next.add(id);
+  selectedIds.value = next;
+}
+
+/** The camera key an association to the selected triple should use for `role`:
+ *  the live eye camera when connected, else a synthetic triple-scoped key (so a
+ *  disconnected-target import still binds + surfaces via the triple hash). */
+function eyeKeyForRole(role?: string): string {
+  if (role && selectedTriple.value?.connected) {
+    const cam = cameras.value.find((c) => c.role === role);
+    if (cam) return getCameraKey(cam);
+  }
+  return `${selectedTripleKey.value}:${role ?? "?"}`;
+}
+
+/** Would discarding this record from the selected triple orphan it (→ trash)? */
+function wouldOrphan(rec: CalibrationRecord): boolean {
+  if (!selectedTripleKey.value) return false;
+  return removeAssociations(
+    rec,
+    tripleAssociationMatcher(selectedTripleKey.value, liveKeys.value),
+  ).orphaned;
+}
+
+async function doDiscardRecord(rec: CalibrationRecord): Promise<void> {
+  confirmDiscardId.value = null;
+  if (!selectedTripleKey.value) return;
+  // A discarded record must not stay overlaid: the toggle row disappears from
+  // the list with it, leaving the live view stuck with no affordance to turn
+  // the marks off (UI/UX review 2026-07-10).
+  if (overlayState.recordId === rec.id) Object.assign(overlayState, OVERLAY_OFF);
+  const { record, orphaned } = removeAssociations(
+    rec,
+    tripleAssociationMatcher(selectedTripleKey.value, liveKeys.value),
+  );
+  if (orphaned) {
+    // Refcount hit 0 → move the file to the OS trash (recoverable).
+    await window.foveaBridge.trashStoreDoc([RECORD_STORE, rec.id]);
+  } else {
+    await writeRecord(record);
+  }
+  await refreshRecords();
+}
+
+async function aggregateSelected(): Promise<void> {
+  const sel = tripleRecords.value.filter((r) => selectedIds.value.has(r.id));
+  if (sel.length < 2 || !selectedTripleKey.value) return;
+  const first = sel[0]!.outer.associations[0];
+  const agg = await aggregateRecords(sel, {
+    created: new Date().toISOString(),
+    label: `Aggregate of ${sel.length}`,
+    association: {
+      cameraKey: first?.cameraKey ?? eyeKeyForRole(first?.role),
+      tripleHash: selectedTripleKey.value,
+      role: first?.role,
+    },
+  });
+  await writeRecord(agg);
+  await refreshRecords();
+}
+
+async function exportRecord(rec: CalibrationRecord): Promise<void> {
+  const path = await window.foveaBridge.showJsonSaveDialog(`calibration-${rec.id.slice(0, 8)}`);
+  if (!path) return;
+  const file = buildRecordExport(rec, new Date().toISOString());
+  await window.foveaBridge.writeTextFile(path, JSON.stringify(file, null, 2));
+  notify("Record exported.");
+}
+
+async function importRecordFile(): Promise<void> {
+  if (!selectedTripleKey.value) return;
+  const path = await window.foveaBridge.showJsonOpenDialog();
+  if (!path) return;
+  const text = await window.foveaBridge.readTextFile(path);
+  if (!text) return;
+  let file: RecordExportFile;
+  try {
+    file = JSON.parse(text);
+  } catch {
+    notify("Not valid JSON.");
+    return;
+  }
+  if (file.schema !== RECORD_EXPORT_SCHEMA || !file.record) {
+    notify("Not a calibration-record file.");
+    return;
+  }
+  const mismatch = await importOneRecord(file.record);
+  await refreshRecords();
+  notify(
+    mismatch
+      ? "Record imported — WARNING: an existing record shares this id but its data differs."
+      : "Record imported.",
+  );
+}
+
+/** Import one record (external file or device bundle) into the selected triple:
+ *  existing id → add an association; else create. Warns on an inner-data
+ *  mismatch (corrupt bundle). */
+async function importOneRecord(incoming: RecordExportFile["record"]): Promise<boolean> {
+  // Look up by the RECOMPUTED id (never trust the file's declared id) so a
+  // corrupt bundle can't clobber an unrelated record. Returns whether an
+  // inner-data mismatch was detected — the CALLER folds it into its toast (a
+  // notify here was overwritten by the bundle path's success toast and never
+  // seen; UI/UX review 2026-07-10).
+  const trueId = await recordId(incoming.inner);
+  const existing = await Store.read<CalibrationRecord | null>([RECORD_STORE, trueId], null);
+  const decision = await decideImport(incoming, existing?.inner ? existing : null);
+  const assoc = {
+    cameraKey: eyeKeyForRole(incoming.role),
+    tripleHash: selectedTripleKey.value ?? undefined,
+    role: incoming.role,
+  };
+  if (decision.action === "associate" && existing) {
+    await writeRecord(addAssociation(existing, assoc));
+  } else {
+    const rec = await makeRecord(incoming.inner, {
+      created: incoming.created ?? new Date().toISOString(),
+      label: incoming.label,
+      sources: incoming.sources,
+      associations: [assoc],
+    });
+    await writeRecord(rec);
+  }
+  return decision.dataMismatch === true;
+}
+
+// ---- Device-config import / export / clear ---------------------------------
+async function exportDevice(): Promise<void> {
+  if (!selectedTripleKey.value) return;
+  const doc = tripleDocs.value[selectedTripleKey.value];
+  const config = doc ? { ...toRaw(doc) } : {};
+  const bundle = buildDeviceExport(config, tripleRecords.value, {
+    now: new Date().toISOString(),
+    sourceTripleHash: selectedTripleKey.value,
+  });
+  const name = `device-${nicknames.value[selectedTripleKey.value] || selectedTripleKey.value.slice(0, 8)}`;
+  const path = await window.foveaBridge.showJsonSaveDialog(name.replace(/\s+/g, "-"));
+  if (!path) return;
+  await window.foveaBridge.writeTextFile(path, JSON.stringify(bundle, null, 2));
+  notify("Device config exported (with associated records).");
+}
+
+async function importDevice(): Promise<void> {
+  if (!selectedTripleKey.value) return;
+  const path = await window.foveaBridge.showJsonOpenDialog();
+  if (!path) return;
+  const text = await window.foveaBridge.readTextFile(path);
+  if (!text) return;
+  let bundle: DeviceExportFile;
+  try {
+    bundle = JSON.parse(text);
+  } catch {
+    notify("Not valid JSON.");
+    return;
+  }
+  if (bundle.schema !== DEVICE_EXPORT_SCHEMA) {
+    notify("Not a device-config file.");
+    return;
+  }
+  const crossTriple =
+    !!bundle.sourceTripleHash && bundle.sourceTripleHash !== selectedTripleKey.value;
+  if (crossTriple) {
+    // Importing another rig's config → prompt for a fresh nickname.
+    pendingDeviceImport.value = { bundle, nickname: "" };
+    return;
+  }
+  await applyDeviceImport(bundle, (bundle.config.nickname as string | undefined) ?? undefined);
+}
+
+async function confirmDeviceImport(): Promise<void> {
+  const p = pendingDeviceImport.value;
+  if (!p) return;
+  await applyDeviceImport(p.bundle, p.nickname.trim() || undefined);
+  pendingDeviceImport.value = null;
+}
+
+async function applyDeviceImport(
+  bundle: DeviceExportFile,
+  nickname: string | undefined,
+): Promise<void> {
+  const key = selectedTripleKey.value;
+  if (!key) return;
+  await openTripleDoc(key);
+  const doc = tripleDocs.value[key];
+  if (doc) {
+    const cfg: Record<string, unknown> = { ...bundle.config, nickname };
+    for (const [k, v] of Object.entries(cfg)) {
+      if (v === undefined || v === "") delete (doc as Record<string, unknown>)[k];
+      else (doc as Record<string, unknown>)[k] = v;
+    }
+  }
+  let mismatches = 0;
+  for (const r of bundle.records) if (await importOneRecord(r)) mismatches++;
+  await refresh();
+  // One toast carries everything — a per-record warning toast was overwritten
+  // by this success toast and never seen (UI/UX review 2026-07-10).
+  notify(
+    `Imported device config (${bundle.records.length} record${bundle.records.length === 1 ? "" : "s"})` +
+      (mismatches ? ` — WARNING: ${mismatches} with a data mismatch.` : "."),
+  );
+}
+
+async function doClearDevice(): Promise<void> {
+  confirmClearDevice.value = false;
+  const key = selectedTripleKey.value;
+  if (!key) return;
+  const doc = tripleDocs.value[key];
+  if (!doc) return;
+  for (const k of Object.keys(doc)) delete (doc as Record<string, unknown>)[k];
+  nicknames.value = { ...nicknames.value, [key]: "" };
+  notify("Device settings reset to defaults.");
+}
+
+// ---- Inspect + live overlay ------------------------------------------------
+function inspectRecord(rec: CalibrationRecord): void {
+  inspecting.value = rec;
+}
+function overlayOn(rec: CalibrationRecord): boolean {
+  return overlayActiveFor(overlayState, rec.outer.associations[0]?.cameraKey ?? "") &&
+    overlayState.recordId === rec.id;
+}
+function toggleOverlay(rec: CalibrationRecord): void {
+  if (overlayState.recordId === rec.id) {
+    overlayState.recordId = null;
+    overlayState.cameraKey = null;
+    overlayState.role = null;
+  } else {
+    overlayState.recordId = rec.id;
+    overlayState.cameraKey = rec.outer.associations[0]?.cameraKey ?? null;
+    overlayState.role = rec.outer.associations[0]?.role ?? null;
+  }
 }
 
 onMounted(async () => {
@@ -507,7 +867,9 @@ onUnmounted(() => {
               title="Connected rig"
             />
             <span class="sel-label">{{
-              selectedTriple ? selectedTriple.label : "No triples configured"
+              selectedTriple
+                ? nicknames[selectedTriple.key] || selectedTriple.label
+                : "No triples configured"
             }}</span>
             <span v-if="selectedTriple && !selectedTriple.connected" class="disc-chip"
               >not connected</span
@@ -524,6 +886,25 @@ onUnmounted(() => {
 
         <!-- Per-triple overrides for the SELECTED triple ------------------- -->
         <template v-if="selectedTripleKey">
+          <label class="row">
+            <span class="label">Nickname</span>
+            <input
+              type="text"
+              class="nickname-input"
+              placeholder="optional (shown in the picker &amp; Welcome)"
+              :value="nicknameOf(selectedTripleKey)"
+              @change="
+                (ev) =>
+                  setNickname(selectedTripleKey!, (ev.target as HTMLInputElement).value)
+              "
+            />
+          </label>
+          <p class="hint">
+            A friendly name for this rig. Appears in the triple picker above and
+            in the Welcome window when this rig is connected. Leave empty to fall
+            back to the camera serials.
+          </p>
+
           <label class="row">
             <span class="label">Zoom override</span>
             <span class="field">
@@ -639,11 +1020,158 @@ onUnmounted(() => {
             to offset tracking-chain latency), negative lags (retrodicts).
             Applies on the next Disparity Scope session start.
           </p>
+
+          <!-- Device settings import / export / clear ---------------------- -->
+          <div class="row device-actions">
+            <span class="label">Device settings</span>
+            <span class="field btn-group">
+              <button class="btn" title="Export this rig's settings + records to a JSON file" @click="exportDevice">
+                <Icon :icon="faFileExport" /> Export
+              </button>
+              <button class="btn" title="Import a device-config JSON file into this rig" @click="importDevice">
+                <Icon :icon="faFileImport" /> Import
+              </button>
+              <button class="btn danger" title="Reset this rig's settings to defaults" @click="confirmClearDevice = true">
+                Clear
+              </button>
+            </span>
+          </div>
+          <p class="hint">
+            <strong>Export</strong> writes this rig's settings (nickname,
+            baseline, zoom, settle, delay) <em>and</em> its associated
+            calibration records to one JSON file. <strong>Import</strong> reads
+            such a file back; importing another rig's config asks for a new
+            nickname first, and a record whose id already exists just gains an
+            association here. <strong>Clear</strong> resets the settings to
+            defaults (records are untouched).
+          </p>
+
+          <!-- Confirm device clear (in-place, layout-stable) --------------- -->
+          <div v-if="confirmClearDevice" class="confirm-inline" role="alert">
+            <span class="warn">Reset all settings for this rig to defaults?</span>
+            <span class="confirm-actions">
+              <button class="btn danger" @click="doClearDevice">Reset</button>
+              <button class="btn" @click="confirmClearDevice = false">Cancel</button>
+            </span>
+          </div>
         </template>
         <p v-else class="empty">
           No triples configured yet. Assign camera roles in Manage Cameras and
           calibrate a rig to create one.
         </p>
+
+        <!-- ===== Calibration records (selected triple) ===================== -->
+        <div v-if="selectedTripleKey" class="records">
+          <h3 class="rec-head">
+            Calibration records
+            <span class="count" v-if="recordRows.length">({{ recordRows.length }})</span>
+            <span class="head-actions">
+              <!-- Always rendered (disabled+hinted below 2 selections) — a
+                   v-if reflowed the header row AND hid the feature from anyone
+                   who hadn't selected two rows yet (UI/UX review 2026-07-10). -->
+              <button
+                class="btn"
+                :disabled="selectedCount < 2"
+                :title="
+                  selectedCount >= 2
+                    ? 'Aggregate the selected records into a new record (sources are kept)'
+                    : 'Select 2+ records to aggregate'
+                "
+                @click="aggregateSelected"
+              >
+                <Icon :icon="faLayerGroup" />
+                Aggregate{{ selectedCount >= 2 ? ` ${selectedCount}` : "" }}
+              </button>
+              <button
+                class="icon-button"
+                title="Import a calibration record from a JSON file"
+                @click="importRecordFile"
+              >
+                <Icon :icon="faFileImport" />
+              </button>
+            </span>
+          </h3>
+
+          <p v-if="recordRows.length === 0" class="empty small">
+            No calibration records for this rig yet. Run <em>Extrinsic</em>
+            calibration, or import a record with the button above.
+          </p>
+
+          <div v-for="row in recordRows" :key="row.id" class="rec-entry">
+            <div class="rec-row">
+              <input
+                type="checkbox"
+                class="rec-check"
+                :checked="selectedIds.has(row.id)"
+                :title="'Select for aggregation'"
+                @change="toggleSelect(row.id)"
+              />
+              <span class="rec-main">
+                <span class="rec-title">
+                  {{ row.count }} datapoint{{ row.count === 1 ? "" : "s" }}
+                  <span v-if="row.role" class="rec-role">{{ row.role }}</span>
+                  <span v-if="row.aggregated" class="rec-tag">aggregate</span>
+                </span>
+                <span class="rec-time">{{ row.localeTime }}</span>
+              </span>
+              <span class="rec-actions">
+                <button
+                  class="icon-button"
+                  :class="{ active: overlayOn(tripleRecords.find((r) => r.id === row.id)!) }"
+                  title="Toggle live overlay on the calibration view"
+                  @click="toggleOverlay(tripleRecords.find((r) => r.id === row.id)!)"
+                >
+                  <Icon :icon="faEye" />
+                </button>
+                <button
+                  class="icon-button"
+                  title="Inspect (observed vs projected)"
+                  @click="inspectRecord(tripleRecords.find((r) => r.id === row.id)!)"
+                >
+                  <Icon :icon="faMagnifyingGlass" />
+                </button>
+                <button
+                  class="icon-button"
+                  title="Export this record to a JSON file"
+                  @click="exportRecord(tripleRecords.find((r) => r.id === row.id)!)"
+                >
+                  <Icon :icon="faFileExport" />
+                </button>
+                <button
+                  class="icon-button"
+                  :class="{ arming: confirmDiscardId === row.id }"
+                  title="Discard this record's association with this rig"
+                  @click="confirmDiscardId = row.id"
+                >
+                  <Icon :icon="faTrash" />
+                </button>
+              </span>
+            </div>
+            <!-- The genuinely destructive zero-association case gets the danger
+                 border back (nested normally mutes it) — the wording alone
+                 didn't escalate visually (UI/UX review 2026-07-10). -->
+            <div
+              v-if="confirmDiscardId === row.id"
+              class="confirm-inline nested"
+              :class="{ orphan: wouldOrphan(tripleRecords.find((r) => r.id === row.id)!) }"
+              role="alert"
+            >
+              <span class="warn">
+                {{
+                  wouldOrphan(tripleRecords.find((r) => r.id === row.id)!)
+                    ? "Last association — the record file moves to the OS trash (recoverable)."
+                    : "Removes this rig's association only; the record stays for its other rigs."
+                }}
+              </span>
+              <span class="confirm-actions">
+                <button class="btn danger" @click="doDiscardRecord(tripleRecords.find((r) => r.id === row.id)!)">
+                  Discard
+                </button>
+                <button class="btn" @click="confirmDiscardId = null">Cancel</button>
+              </span>
+            </div>
+          </div>
+        </div>
 
         <!-- Full calibration-data inventory. Camera-bound intrinsic/extrinsic
              docs can't be reverse-mapped from a triple hash, so the WHOLE
@@ -729,7 +1257,10 @@ onUnmounted(() => {
                 title="Connected rig"
               />
               <span v-else class="conn-spacer"></span>
-              <span class="ti-label" :title="t.key">{{ t.label }}</span>
+              <span class="ti-label" :title="t.key">
+                {{ nicknames[t.key] || t.label }}
+                <span v-if="nicknames[t.key]" class="ti-sub">{{ t.label }}</span>
+              </span>
               <span class="ti-detail">{{ t.detail }}</span>
             </button>
           </li>
@@ -739,6 +1270,60 @@ onUnmounted(() => {
         </div>
       </div>
     </div>
+
+    <!-- Inspect: the observed-vs-projected visualizer (virtual stream). -->
+    <div v-if="inspecting" class="modal-scrim" @click.self="inspecting = null">
+      <div class="modal viz-dialog" role="dialog" aria-label="Calibration record inspector">
+        <h3>
+          Calibration record
+          <button
+            class="btn overlay-toggle"
+            :class="{ active: overlayOn(inspecting) }"
+            title="Toggle this record as a live overlay on the calibration view"
+            @click="toggleOverlay(inspecting)"
+          >
+            <Icon :icon="faEye" /> {{ overlayOn(inspecting) ? "Overlay on" : "Overlay off" }}
+          </button>
+        </h3>
+        <div class="viz-body">
+          <CalibrationVisualizer :dataset="inspecting.inner.dataset" />
+        </div>
+        <div class="modal-actions">
+          <button @click="inspecting = null">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Cross-triple device import → prompt for a new nickname. -->
+    <div
+      v-if="pendingDeviceImport"
+      class="modal-scrim"
+      @click.self="pendingDeviceImport = null"
+    >
+      <div class="modal prompt-dialog" role="dialog" aria-label="Name the imported rig">
+        <h3>Name this rig</h3>
+        <p class="hint">
+          This device config came from a different triple. Give the imported
+          settings a nickname for the currently-selected rig.
+        </p>
+        <!-- Enter-to-confirm implies typing-first: focus on mount. -->
+        <input
+          v-model="pendingDeviceImport.nickname"
+          type="text"
+          placeholder="Rig nickname"
+          autofocus
+          @vue:mounted="({ el }: any) => (el as HTMLInputElement).focus()"
+          @keyup.enter="confirmDeviceImport"
+        />
+        <div class="modal-actions">
+          <button @click="pendingDeviceImport = null">Cancel</button>
+          <button class="primary" @click="confirmDeviceImport">Import</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Transient status toast (import/export outcomes). -->
+    <div v-if="message" class="toast" role="status">{{ message }}</div>
   </div>
 </template>
 
@@ -1312,5 +1897,208 @@ select {
   &.arming {
     color: var(--danger-text);
   }
+  &.active {
+    color: var(--accent-bright);
+  }
+}
+
+// ---- Nickname + device-config actions --------------------------------------
+.nickname-input {
+  flex: 1;
+  min-width: 20ch;
+  max-width: 42ch;
+}
+.device-actions {
+  margin-top: 0.6rem;
+}
+.btn-group {
+  display: flex;
+  gap: 0.5ch;
+  flex-wrap: wrap;
+}
+.btn {
+  // (Base `.btn` already defined above.) Icon spacing inside a button.
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5ch;
+}
+.confirm-inline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1ch;
+  flex-wrap: wrap;
+  padding: 0.5em 0.7em;
+  margin: 0 0 0.6rem;
+  border: 1px solid var(--danger);
+  border-radius: 4px;
+  background: var(--bg-elevated);
+  &.nested {
+    margin: 0.2rem 0 0;
+    border-color: var(--border-muted);
+    // Zero-association discard = the file leaves the store (OS trash) — keep
+    // the danger chrome for that case only.
+    &.orphan {
+      border-color: var(--danger);
+    }
+  }
+}
+
+// ---- Calibration records list ----------------------------------------------
+.records {
+  margin-top: 2rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+.rec-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6ch;
+  font-size: var(--fs-md);
+  color: var(--text-dim);
+  font-weight: 600;
+  margin: 0 0 0.8rem;
+  .count {
+    color: var(--text-faint);
+    font-size: 0.8em;
+    font-weight: 400;
+  }
+  .head-actions {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 0.5ch;
+  }
+}
+.empty.small {
+  padding: 0.6rem 0;
+  font-size: var(--fs-sm);
+}
+.rec-entry {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  margin-bottom: 0.4rem;
+  background-color: var(--bg-panel-alt);
+  padding: 0.2rem 0.3rem;
+}
+.rec-row {
+  display: flex;
+  align-items: center;
+  gap: 1ch;
+  padding: 0.35em 0.4em;
+}
+.rec-check {
+  flex-shrink: 0;
+  cursor: pointer;
+}
+.rec-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1em;
+}
+.rec-title {
+  display: flex;
+  align-items: center;
+  gap: 0.8ch;
+  color: var(--text);
+  .rec-role {
+    font-weight: 700;
+    color: var(--accent-bright);
+  }
+  .rec-tag {
+    font-size: var(--fs-sm);
+    color: var(--text-faint);
+    border: 1px solid var(--border-muted);
+    border-radius: 999px;
+    padding: 0 0.6ch;
+  }
+}
+.rec-time {
+  color: var(--text-faint);
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+}
+.rec-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.2ch;
+  flex-shrink: 0;
+}
+
+// ---- Inspector / prompt modals + toast -------------------------------------
+.viz-dialog {
+  background: var(--bg-panel-alt);
+  border: 1px solid var(--tint-3);
+  border-radius: 8px;
+  padding: 1.2em 1.3em;
+  width: min(80ch, 92vw);
+  height: min(80vh, 720px);
+  display: flex;
+  flex-direction: column;
+  color: var(--text-strong);
+  box-shadow: 0 8px 30px var(--shadow);
+  h3 {
+    display: flex;
+    align-items: center;
+    gap: 1ch;
+    margin: 0 0 0.8em;
+    color: var(--text);
+  }
+  .overlay-toggle {
+    margin-left: auto;
+    &.active {
+      border-color: var(--accent-bright);
+      color: var(--accent-bright);
+    }
+  }
+}
+.viz-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.prompt-dialog {
+  background: var(--bg-panel-alt);
+  border: 1px solid var(--tint-3);
+  border-radius: 8px;
+  padding: 1.2em 1.3em;
+  width: min(48ch, 90vw);
+  display: flex;
+  flex-direction: column;
+  gap: 0.6em;
+  color: var(--text-strong);
+  box-shadow: 0 8px 30px var(--shadow);
+  h3 {
+    margin: 0;
+    color: var(--text);
+  }
+  input {
+    max-width: none;
+  }
+  .modal-actions .primary {
+    border-color: var(--accent-bright);
+    color: var(--accent-bright);
+  }
+}
+.ti-sub {
+  display: block;
+  font-size: var(--fs-sm);
+  color: var(--text-faint);
+}
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 1.5rem;
+  transform: translateX(-50%);
+  z-index: 200;
+  padding: 0.5em 1em;
+  border-radius: 6px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  color: var(--text-strong);
+  box-shadow: 0 4px 16px var(--shadow);
+  font-size: var(--fs-sm);
 }
 </style>

@@ -25,6 +25,13 @@
 
 import { getCameraKey, ROLE, type Role } from "./camera-config.js";
 import { sha256 } from "./util/hash.js";
+import {
+  RECORD_STORE,
+  datapointCount,
+  orderRecordsLatestFirst,
+  recordBelongsToTriple,
+  type CalibrationRecord,
+} from "./calibration-records.js";
 
 export type CalCategory = "calibrate-intrinsic" | "calibrate-extrinsic" | "triples";
 
@@ -39,6 +46,10 @@ export type CalCategory = "calibrate-intrinsic" | "calibrate-extrinsic" | "tripl
  * signature keeps any OTHER field (present or future) intact on write.
  */
 export interface TripleConfig {
+  /** Optional per-triple NICKNAME (calibration-records-v2). Shown in the
+   *  triple-selector dialog and in the Welcome window when the connected rig
+   *  matches this triple. Empty/absent = no nickname (fall back to serials). */
+  nickname?: string;
   drift_l?: number;
   drift_r?: number;
   zoom_override?: number;
@@ -328,13 +339,19 @@ export async function enumerateCalibrationData(
       detail: await intrinsicDetail(store, key),
     });
 
-  for (const key of extrinsicKeys)
+  for (const key of extrinsicKeys) {
+    // `.raw` docs are analysis artifacts (not schema documents) and are left in
+    // place by the calibration-records-v2 migration — never list them as
+    // calibration data. (Plain legacy extrinsic docs are moved into records at
+    // main boot, so this group is normally empty post-migration.)
+    if (key.endsWith(".raw")) continue;
     entries.push({
       category: "calibrate-extrinsic",
       key,
       label: cameraLabel(key, cameras),
       detail: await extrinsicDetail(store, key),
     });
+  }
 
   for (const key of tripleKeys)
     entries.push({
@@ -351,4 +368,72 @@ export async function enumerateCalibrationData(
  *  confirm step). A no-op if absent. */
 export function deleteCalibrationEntry(store: CalStore, entry: CalEntry): Promise<void> {
   return store.clear(entry.category, entry.key);
+}
+
+// ---- Calibration records (calibration-records-v2) --------------------------
+
+/** Read every calibration record from the store (config-window records list). */
+export async function enumerateRecords(store: CalStore): Promise<CalibrationRecord[]> {
+  const ids = await store.list(RECORD_STORE);
+  const recs = await Promise.all(
+    ids.map((id) => store.read<CalibrationRecord | null>([RECORD_STORE, id], null)),
+  );
+  return recs.filter(
+    (r): r is CalibrationRecord => !!r && !!(r as CalibrationRecord).inner,
+  );
+}
+
+/**
+ * The records bound to the selected triple, latest-first. `liveKeys` = the
+ * triple's live L/R camera keys (see {@link connectedEyeKeys}) — needed to
+ * surface LEGACY records bound only by `cameraKey` (no triple hash). Empty for a
+ * non-connected triple (only explicitly-hash-bound records then show).
+ */
+export function recordsForTriple(
+  records: CalibrationRecord[],
+  tripleHash: string,
+  liveKeys: readonly string[],
+): CalibrationRecord[] {
+  return orderRecordsLatestFirst(
+    records.filter((r) => recordBelongsToTriple(r, tripleHash, liveKeys)),
+  );
+}
+
+/** The L/R camera identity keys of the currently-connected rig (for matching
+ *  legacy cameraKey-bound records to the connected triple). */
+export function connectedEyeKeys(cameras: KnownCamera[]): string[] {
+  const keys: string[] = [];
+  for (const role of ["L", "R"] as const) {
+    const cam = cameras.find((c) => c.role === role);
+    if (cam) keys.push(getCameraKey(cam));
+  }
+  return keys;
+}
+
+/** A record's list-row summary (datapoint count + locale calibration time). */
+export interface RecordRow {
+  id: string;
+  count: number;
+  /** ISO timestamp (ordering key). */
+  created: string;
+  /** Locale-formatted calibration time (row label). */
+  localeTime: string;
+  label?: string;
+  /** True for an aggregated record (has source ids). */
+  aggregated: boolean;
+  /** Eye role from the first association, when known. */
+  role?: string;
+}
+
+export function recordRow(rec: CalibrationRecord): RecordRow {
+  const d = new Date(rec.outer.created);
+  return {
+    id: rec.id,
+    count: datapointCount(rec),
+    created: rec.outer.created,
+    localeTime: isNaN(d.getTime()) ? rec.outer.created : d.toLocaleString(),
+    label: rec.outer.label,
+    aggregated: !!rec.outer.sources?.length,
+    role: rec.outer.associations[0]?.role,
+  };
 }

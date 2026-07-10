@@ -49,6 +49,14 @@ import { nodeId } from "@lib/orchestrator/graph-contract";
 import type { RawPipeRegistry } from "@orchestrator/raw-pipe";
 import type { CompressPipeSeam } from "@orchestrator/compress-pipe";
 import { getCameraKey } from "@lib/camera-config";
+import {
+  RECORD_STORE,
+  addAssociation,
+  extrinsicInner,
+  makeRecord,
+  recordId,
+  type CalibrationRecord,
+} from "@lib/calibration-records";
 import { type Undistort } from "core/Vision";
 import type { Point2d } from "core/Geometry";
 import type { Pos } from "@lib/controller-codec";
@@ -59,6 +67,30 @@ import { createDataSet } from "./dataset";
 type Role = "L" | "C" | "R";
 const ORIGIN: Pos = { x: 0, y: 0 };
 const SCRATCH_PATH = ["tmp", "calibrate-extrinsic"];
+
+/** Persist one eye's finalized dataset as a calibration-records-v2 record
+ *  (content-hash id) bound to this camera + triple. An identical dataset (same
+ *  id) already on disk just gains the association (idempotent). */
+async function saveExtrinsicRecord(
+  role: "L" | "R",
+  camera: Pick<import("core/Aravis").Camera, "vendor" | "model" | "serial">,
+  dataset: import("@lib/camera-config").ExtrinsicDataset,
+  tripleHash: string,
+): Promise<void> {
+  const cameraKey = getCameraKey(camera);
+  const inner = extrinsicInner(dataset);
+  const id = await recordId(inner);
+  const existing = await read<CalibrationRecord | null>([RECORD_STORE, id], null);
+  const assoc = { cameraKey, tripleHash, role };
+  const record =
+    existing && existing.inner
+      ? addAssociation(existing, assoc)
+      : await makeRecord(inner, {
+          created: new Date().toISOString(),
+          associations: [assoc],
+        });
+  await write([RECORD_STORE, id], record);
+}
 
 // Config store path for the app-wide marker geometry (mirrors `useAppConfig`'s
 // `Store.open("config")`; read here through the orchestrator store-hub — NOT
@@ -396,8 +428,19 @@ export default function calibrateExtrinsicSession(
         },
         async confirm() {
           if (!leases) return;
-          await write(["calibrate-extrinsic", getCameraKey(leases.L.camera)], createDataSet(records, "L"));
-          await write(["calibrate-extrinsic", getCameraKey(leases.R.camera)], createDataSet(records, "R"));
+          // calibration-records-v2: persist each eye's dataset as a
+          // content-hashed RECORD associated with this camera + triple (was a
+          // flat `["calibrate-extrinsic", <cameraKey>]` write). loadExtrinsic
+          // resolves the latest record bound to the camera. An identical
+          // re-calibration (same datapoints → same id) just adds the
+          // association to the existing record.
+          const [, tripleHash] = await tripleConfigPath(
+            leases.L.camera,
+            leases.C.camera,
+            leases.R.camera,
+          );
+          await saveExtrinsicRecord("L", leases.L.camera, createDataSet(records, "L"), tripleHash);
+          await saveExtrinsicRecord("R", leases.R.camera, createDataSet(records, "R"), tripleHash);
           s.telemetry({ saved: true });
         },
         // Capture (ruling 3) — forward to the shared helper.

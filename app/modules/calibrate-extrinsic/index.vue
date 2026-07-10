@@ -27,6 +27,15 @@ import { calibrateExtrinsic } from "./contract";
 import Recording from "@src/record";
 import Capture from "@src/capture";
 import StreamView from "@src/components/StreamView.vue";
+import CalibrationMarks from "@src/components/CalibrationMarks.vue";
+import Store from "@lib/store";
+import { RECORD_STORE, type CalibrationRecord } from "@lib/calibration-records";
+import {
+  OVERLAY_DOC,
+  OVERLAY_OFF,
+  overlayActiveForRole,
+  type OverlayState,
+} from "@lib/calibration-overlay";
 import PosView, { type Pos } from "@src/components/PosView.vue";
 import MarkerTargetInputs from "@src/components/MarkerTargetInputs.vue";
 import Line2D from "@src/components/Line2D.vue";
@@ -73,6 +82,27 @@ const frameR = pipe("R");
 
 const marker_size = computed(() => app_config.cal_marker_size_mm);
 const marker_ratio = computed(() => app_config.cal_marker_ratio);
+
+// Live extrinsic OVERLAY (calibration-records-v2 §Overlay): a Settings-window
+// toggle rides a main-backed store doc; when it targets this L/R eye we draw the
+// record's observed-vs-projected marks over the raw stream using the SAME shared
+// marks component as the standalone visualizer. `img_points` are sensor pixels,
+// which is exactly the StreamView slot's coordinate space.
+const overlayState = await Store.open<OverlayState, OverlayState>(OVERLAY_DOC, {
+  ...OVERLAY_OFF,
+});
+const overlayRecord = ref<CalibrationRecord | null>(null);
+watchEffect(async () => {
+  const id = overlayState.recordId;
+  overlayRecord.value = id
+    ? await Store.read<CalibrationRecord | null>([RECORD_STORE, id], null)
+    : null;
+});
+function overlayFor(role: "L" | "R"): CalibrationRecord | null {
+  return overlayActiveForRole(overlayState, role) && overlayRecord.value
+    ? overlayRecord.value
+    : null;
+}
 const center_marker_size = computed(() => marker_size.value * marker_ratio.value);
 // LIVE per-triple baseline (Ruling A): the marker pair sits at ±baseline/2. The
 // session publishes the leased triple's config path; this resolves the doc's
@@ -141,6 +171,7 @@ function bbox(points: Point2d[]): string {
             r="4"
             :fill="THEME.L"
           />
+          <CalibrationMarks v-if="overlayFor('L')" :dataset="overlayFor('L')!.inner.dataset" />
         </StreamView>
         <MarkerTargetInputs :session="session" role="L" :detected="!!telemetry.detection.L" />
         <PosView
@@ -214,6 +245,7 @@ function bbox(points: Point2d[]): string {
             r="4"
             :fill="THEME.R"
           />
+          <CalibrationMarks v-if="overlayFor('R')" :dataset="overlayFor('R')!.inner.dataset" />
         </StreamView>
         <MarkerTargetInputs :session="session" role="R" :detected="!!telemetry.detection.R" />
         <PosView

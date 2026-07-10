@@ -188,6 +188,25 @@ export interface FoveaBridge {
    *  One process-wide listener; the `Store` client routes by path. Returns a
    *  disposer. */
   onStoreChanged(cb: (path: string[], value: unknown) => void): () => void;
+  /** Move a STORE document to the OS trash (recoverable) instead of a hard
+   *  delete — the calibration-records refcount-to-zero rule (never hard-delete;
+   *  recoverable from the trash). Main resolves the store path to its backing
+   *  file, `shell.trashItem`s it, then clears the doc from the authority cache +
+   *  broadcasts. A no-op when the file is already gone. */
+  trashStoreDoc(path: string[]): Promise<void>;
+  // ---- JSON import/export dialogs + files (calibration records) -------------
+  /** System save dialog for a JSON export (calibration record / device-config
+   *  bundle). `defaultName` is the suggested basename (no extension). Resolves
+   *  to the chosen absolute path (`.json` enforced), or null when cancelled. */
+  showJsonSaveDialog(defaultName: string): Promise<string | null>;
+  /** System open dialog for a JSON import. Resolves to the chosen absolute path,
+   *  or null when cancelled. */
+  showJsonOpenDialog(): Promise<string | null>;
+  /** Write UTF-8 text to an absolute path (the JSON export sink). */
+  writeTextFile(path: string, content: string): Promise<void>;
+  /** Read UTF-8 text from an absolute path, or null when absent/unreadable (the
+   *  JSON import source). */
+  readTextFile(path: string): Promise<string | null>;
 }
 
 // ---- Typed IPC channel registry -------------------------------------------
@@ -232,6 +251,17 @@ export interface InvokeChannels {
   "store:clear": { args: [path: string[]]; ret: void };
   /** List entry names under a store directory (`Store.list`). */
   "store:list": { args: [path: string[]]; ret: string[] };
+  /** Move a store doc's backing file to the OS trash + clear the cache. */
+  "store:trash": { args: [path: string[]]; ret: void };
+  // ---- JSON import/export (calibration records) ----------------------------
+  /** JSON export save dialog → chosen path (`.json`) or null (cancelled). */
+  "dialog:save-json": { args: [defaultName: string]; ret: string | null };
+  /** JSON import open dialog → chosen path or null (cancelled). */
+  "dialog:open-json": { args: []; ret: string | null };
+  /** Write UTF-8 text to an absolute path. */
+  "fs:write-text": { args: [path: string, content: string]; ret: void };
+  /** Read UTF-8 text from an absolute path (null when absent/unreadable). */
+  "fs:read-text": { args: [path: string]; ret: string | null };
 }
 
 /** Fire-and-forget renderer→main signals (`ipcRenderer.send` ↔ `ipcMain.on`).
