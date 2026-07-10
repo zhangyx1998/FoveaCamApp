@@ -23,7 +23,7 @@ Along the bottom is the status row:
 
 - **Applications** — the main working apps.
 - **Calibration** — the four calibration routines.
-- **Utilities** — **Manage Cameras** and a **Profiler** button (the Profiler opens a separate diagnostics window showing live performance stats).
+- **Utilities** — **Manage Cameras** and **Settings**. (The performance **Profiler** opens from inside a running app — see its button in the [title bar](#title-bar) — because it binds to that app's live session.)
 
 Click any button to open that app in its own window. The Welcome window reappears automatically whenever you close the working app window and no other app is open.
 

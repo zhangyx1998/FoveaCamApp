@@ -26,7 +26,6 @@ import { FontAwesomeIcon as Icon } from "@fortawesome/vue-fontawesome";
 import {
   faCameraAlt,
   faCameraRotate,
-  faChartLine,
   faCircleHalfStroke,
   faCompass,
   faFlagCheckered,
@@ -75,9 +74,6 @@ const iconOf: Record<string, object> = {
 
 function open(appId: string) {
   window.foveaBridge.openAppWindow(appId);
-}
-function openProfiler() {
-  window.foveaBridge.openProfilerWindow();
 }
 function openConfig() {
   window.foveaBridge.openConfigWindow();
@@ -137,9 +133,6 @@ function openConfig() {
           @click="open(a.id)"
         >
           <Icon :icon="iconOf[a.id]" /> {{ a.title }}
-        </button>
-        <button style="--color: #af0" @click="openProfiler">
-          <Icon :icon="faChartLine" /> Profiler
         </button>
         <button style="--color: var(--text-muted)" @click="openConfig">
           <Icon :icon="faGears" /> Settings
