@@ -306,7 +306,13 @@ function openDebugger(): void {
 </script>
 
 <template>
-  <div class="cameras">
+  <!-- --p reserves the drawer's height below the content (same idiom as
+       manual-control) so the fixed-position drawer never obscures the tail of
+       the scrollable page. -->
+  <div
+    class="cameras"
+    :style="{ '--p': (drawer_height ? drawer_height + 20 : 0) + 'px' }"
+  >
     <div class="view">
       <StreamView class="stream" :title="ROLE.L" :payload="frameL" :theme="THEME.L" />
       <PosView :pos="telemetry.volt.L" :color="THEME.L" style="width: 100%" />
@@ -574,6 +580,7 @@ function openDebugger(): void {
 
 <style scoped lang="scss">
 .cameras {
+  --p: 0; // drawer-height bottom reserve (bound inline from drawer_height)
   position: relative;
   display: flex;
   justify-content: space-evenly;
@@ -581,7 +588,7 @@ function openDebugger(): void {
   flex-wrap: wrap;
   flex-direction: row;
   width: 100%;
-  padding: 1em 0;
+  padding: 1em 0 calc(1em + var(--p)) 0;
   margin: 0;
 
   & > * {

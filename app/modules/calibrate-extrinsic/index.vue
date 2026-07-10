@@ -40,6 +40,7 @@ import { FontAwesomeIcon as Icon } from "@fortawesome/vue-fontawesome";
 import { faTrashCan } from "@fortawesome/free-regular-svg-icons";
 
 const app_config = await useAppConfig();
+const drawer_height = ref(0);
 const session = useSession(calibrateExtrinsic, "calibrate-extrinsic");
 const ctrl = useController();
 const { state, telemetry } = session;
@@ -124,7 +125,12 @@ function bbox(points: Point2d[]): string {
 
 <template>
   <template v-if="state.step === 'CAL'">
-    <div class="cameras">
+    <!-- --p reserves the drawer's height below the content (manual-control
+         idiom) so the fixed drawer never obscures the scrollable tail. -->
+    <div
+      class="cameras"
+      :style="{ '--p': (drawer_height ? drawer_height + 20 : 0) + 'px' }"
+    >
       <div class="view">
         <StreamView class="stream" :title="ROLE.L" :payload="frameL" :theme="THEME.L">
           <circle
@@ -227,7 +233,7 @@ function bbox(points: Point2d[]): string {
         </PosView>
       </div>
     </div>
-    <Drawer>
+    <Drawer v-model="drawer_height">
       <div class="options fill">
         <RangeSlider v-model="app_config.cal_marker_size_mm" :min="10" :max="120" :neutral="60" :step="1">
           <span>Marker Size</span>
@@ -339,13 +345,14 @@ function bbox(points: Point2d[]): string {
 
 <style scoped lang="scss">
 .cameras {
+  --p: 0; // drawer-height bottom reserve (bound inline from drawer_height)
   position: relative;
   display: flex;
   justify-content: space-evenly;
   flex-wrap: wrap;
   flex-direction: row;
   width: 100%;
-  padding: 0.5em 0;
+  padding: 0.5em 0 calc(0.5em + var(--p)) 0;
   margin: 0;
 
   & > * {

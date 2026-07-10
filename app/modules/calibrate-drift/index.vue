@@ -14,7 +14,7 @@ You may find the full license in project root directory.
   owned.
 -->
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import { ROLE, THEME } from "@lib/camera-config";
 import { useAppConfig } from "@lib/config";
 import { useTripleBaseline } from "@lib/triple-baseline";
@@ -36,6 +36,7 @@ import { driftUpdatable } from "./drift-gate";
 import type { Point2d } from "core/Geometry";
 
 const app_config = await useAppConfig();
+const drawer_height = ref(0);
 const session = useSession(calibrateDrift, "calibrate-drift");
 const ctrl = useController();
 const { state, telemetry } = session;
@@ -95,7 +96,12 @@ const overrideR = usePidOverride<typeof calibrateDrift, Pos>(session, {
 </script>
 
 <template>
-  <div class="cameras">
+  <!-- --p reserves the drawer's height below the content (manual-control
+       idiom) so the fixed drawer never obscures the scrollable tail. -->
+  <div
+    class="cameras"
+    :style="{ '--p': (drawer_height ? drawer_height + 20 : 0) + 'px' }"
+  >
     <div class="view">
       <StreamView class="stream" :title="ROLE.L" :payload="frameL" :theme="THEME.L">
         <circle
@@ -174,7 +180,7 @@ const overrideR = usePidOverride<typeof calibrateDrift, Pos>(session, {
       />
     </div>
   </div>
-  <Drawer>
+  <Drawer v-model="drawer_height">
     <div class="options fill">
       <RangeSlider v-model="app_config.cal_marker_size_mm" :min="10" :max="120" :neutral="60" :step="1">
         <span>Marker Size</span>
@@ -200,6 +206,7 @@ const overrideR = usePidOverride<typeof calibrateDrift, Pos>(session, {
 
 <style scoped lang="scss">
 .cameras {
+  --p: 0; // drawer-height bottom reserve (bound inline from drawer_height)
   position: relative;
   display: flex;
   justify-content: space-evenly;
@@ -207,7 +214,7 @@ const overrideR = usePidOverride<typeof calibrateDrift, Pos>(session, {
   flex-wrap: wrap;
   flex-direction: row;
   width: 100%;
-  padding: 1em 0;
+  padding: 1em 0 calc(1em + var(--p)) 0;
   margin: 0;
 
   & > * {
