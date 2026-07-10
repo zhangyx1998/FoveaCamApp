@@ -39,6 +39,9 @@ import { createFrameDecoder } from "./decode.js";
 import { createPlayer, nullMeter, type Player } from "./player.js";
 import { openFovea, type FoveaSource } from "./source.js";
 import type { StreamLiveStats, ViewerCommand, ViewerEvent } from "./protocol.js";
+import { resolveFfmpeg } from "./export/ffmpeg-detect.js";
+import { parseWideCalibration } from "./export/undistort.js";
+import { ExportRunner } from "./export/runner.js";
 import {
   classifySidecar,
   serializeSidecar,
@@ -84,6 +87,12 @@ let source: FoveaSource | null = null;
 let player: Player | null = null;
 let opening = false;
 let openedPath: string | null = null;
+
+// --- video export (viewer-export.md): ffmpeg is resolved ONCE at engine start
+// (PATH + common Homebrew/MacPorts locations — the launchd-PATH nuance, spec 1);
+// the runner is created at `open` when the source + calibration are known.
+const ffmpegPath: string | null = resolveFfmpeg();
+let exporter: ExportRunner | null = null;
 
 // --- sidecar (ruling 8): debounced write-through, worker is the ONLY writer.
 const SIDECAR_DEBOUNCE_MS = 400;
@@ -140,7 +149,21 @@ async function open(path: string): Promise<void> {
           post({ type: "position", positionNs, playing }),
       },
     );
-    const [spans, counts] = await Promise.all([s.channelSpans(), s.messageCounts()]);
+    const [spans, counts, wideMeta] = await Promise.all([
+      s.channelSpans(),
+      s.messageCounts(),
+      s.wideCameraMeta(),
+    ]);
+    // Export deps: resolve calibration once (the wide/center undistort maps),
+    // and stand up the runner sharing the player's decoder factory.
+    const calibration = parseWideCalibration(wideMeta);
+    exporter = new ExportRunner({
+      source: s,
+      decoderFor: (channel) => createFrameDecoder(channel.metadata),
+      ffmpegPath,
+      calibration,
+      onUpdate: (overview) => post({ type: "export-update", overview }),
+    });
     post({
       type: "opened",
       info: {
@@ -163,6 +186,8 @@ async function open(path: string): Promise<void> {
         startEpochMs: Number(s.startNs / 1_000_000n),
         truncated: s.truncated,
         wideCameraDeclared: s.wideCameraDeclared,
+        ffmpegAvailable: ffmpegPath !== null,
+        wideCalibrationAvailable: calibration !== null,
       },
       sidecar,
     });
@@ -195,6 +220,10 @@ async function close(): Promise<void> {
   const p = player;
   player = null;
   source = null;
+  // Kill + unlink any in-flight exports before the source closes (spec 11 —
+  // the window-close confirm already ran renderer-side; this is the backstop).
+  exporter?.abortAll();
+  exporter = null;
   await flushSidecar();
   openedPath = null;
   await p?.close(); // also closes the source
@@ -230,6 +259,21 @@ function handleCommand(msg: ViewerCommand): void {
         post({ type: "stats", requestId: msg.requestId, live });
         break;
       }
+      case "export-start":
+        exporter?.start(msg.request);
+        break;
+      case "export-abort":
+        exporter?.abort(msg.id);
+        break;
+      case "export-abort-all":
+        exporter?.abortAll();
+        break;
+      case "export-clear-finished":
+        exporter?.clearFinished();
+        break;
+      case "export-set-parallel":
+        exporter?.setParallel(msg.parallel);
+        break;
       case "close":
         void close();
         break;

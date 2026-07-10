@@ -78,6 +78,11 @@ export interface FoveaSource {
    *  absent. Computed once at open (cheap seeks on the indexed path; one extra
    *  scan on the truncated path — the crash-recovery edge case). */
   channelSpans(): Promise<Map<string, { startNs: bigint; endNs: bigint }>>;
+  /** The `fovea:wide-camera` metadata record's string→string map (intrinsics +
+   *  distortion for the wide/center camera, multi-fovea-recording ruling 2), or
+   *  null when the container carries no such record. The values are JSON-encoded
+   *  by the recorder; the export undistort path parses them. */
+  wideCameraMeta(): Promise<Record<string, string> | null>;
   /** Total message count per channel topic — the stats-popover message-count +
    *  average-fps stat. Cheap on the indexed path (the MCAP statistics summary's
    *  per-channel counts); one extra sequential scan on the truncated path. A
@@ -225,6 +230,14 @@ class IndexedSource implements FoveaSource {
     return out;
   }
 
+  async wideCameraMeta(): Promise<Record<string, string> | null> {
+    if (!this.wideCameraDeclared) return null;
+    // The metadata INDEX names the record; read its body on demand (no scan).
+    for await (const m of this.reader.readMetadata({ name: WIDE_CAMERA_METADATA_NAME }))
+      return Object.fromEntries(m.metadata);
+    return null;
+  }
+
   async messageCounts(): Promise<Map<string, number>> {
     // Per-channel counts ride the statistics summary (id-keyed) — no body read.
     const counts = this.reader.statistics?.channelMessageCounts;
@@ -287,6 +300,7 @@ class TruncatedSource implements FoveaSource {
     readonly startNs: bigint,
     readonly endNs: bigint,
     readonly wideCameraDeclared: boolean,
+    private readonly wideMeta: Record<string, string> | null,
   ) {}
 
   static async open(handle: FileHandle): Promise<TruncatedSource> {
@@ -294,6 +308,7 @@ class TruncatedSource implements FoveaSource {
     let startNs: bigint | null = null;
     let endNs: bigint | null = null;
     let wideCamera = false;
+    let wideMeta: Record<string, string> | null = null;
     // The initial index pass must see the whole recovered stream (it needs
     // full time bounds), but retains only channels + min/max — not messages.
     for await (const record of scanRecords(handle)) {
@@ -304,9 +319,14 @@ class TruncatedSource implements FoveaSource {
         if (endNs === null || record.logTime > endNs) endNs = record.logTime;
       } else if (record.type === "Metadata" && record.name === WIDE_CAMERA_METADATA_NAME) {
         wideCamera = true;
+        wideMeta = Object.fromEntries(record.metadata);
       }
     }
-    return new TruncatedSource(handle, channels, startNs ?? 0n, endNs ?? 0n, wideCamera);
+    return new TruncatedSource(handle, channels, startNs ?? 0n, endNs ?? 0n, wideCamera, wideMeta);
+  }
+
+  async wideCameraMeta(): Promise<Record<string, string> | null> {
+    return this.wideMeta;
   }
 
   async *messages(opts: {

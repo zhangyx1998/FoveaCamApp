@@ -84,6 +84,15 @@ import {
 } from "../../../docs/schema/anaglyph";
 import TitleBar from "../components/TitleBar.vue";
 import FrameView from "../components/FrameView.vue";
+import ExportDialog from "../viewer/ExportDialog.vue";
+import ExportTray from "../viewer/ExportTray.vue";
+import type { ExportRequest, ExportOverview } from "../viewer/export/types";
+import {
+  initialBannerState,
+  setActive as bannerSetActive,
+  dismiss as bannerDismiss,
+  bannerVisible,
+} from "../viewer/export/banner";
 import { FontAwesomeIcon as Icon } from "@fortawesome/vue-fontawesome";
 import {
   faArrowsRotate,
@@ -91,6 +100,8 @@ import {
   faChevronUp,
   faFolderOpen,
   faTableColumns,
+  faFileExport,
+  faXmark,
 } from "../windows/icons";
 
 const props = defineProps<{ path: string }>();
@@ -122,6 +133,9 @@ function onEngineEvent(ev: ViewerEvent): void {
     case "opened":
       file.value = ev.info;
       applySidecar(ev.sidecar);
+      // Seed the engine's parallel policy now the port is live (the config-load
+      // send can race ahead of the port arriving).
+      send({ type: "export-set-parallel", parallel: exportParallel.value });
       break;
     case "open-error":
       openError.value = ev.message;
@@ -152,11 +166,115 @@ function onEngineEvent(ev: ViewerEvent): void {
       frameTick.value++;
       break;
     }
+    case "export-update":
+      onExportUpdate(ev.overview);
+      break;
     case "error":
       console.error("[viewer]", ev.message);
       break;
   }
 }
+
+// --- video export (viewer-export.md) ---------------------------------------
+const exportOverview = ref<ExportOverview>({ jobs: [], active: 0, overall: null });
+const exportDialogChannel = ref<string | null>(null);
+const confirmClose = ref(false);
+// Global parallel-export policy (persisted; spec 10). Pushed to the engine on
+// change + once the engine is up.
+const exportParallel = ref(false);
+void useConfigRef("export_parallel").then((r) => {
+  exportParallel.value = !!r.value;
+  watch(r, (v) => {
+    exportParallel.value = !!v;
+    send({ type: "export-set-parallel", parallel: !!v });
+  });
+  // Seed the engine once it exists (and immediately if it already does).
+  send({ type: "export-set-parallel", parallel: !!r.value });
+});
+function setExportParallel(value: boolean): void {
+  void useConfigRef("export_parallel").then((r) => (r.value = value));
+}
+
+let lastExportsActive = false;
+function onExportUpdate(overview: ExportOverview): void {
+  exportOverview.value = overview;
+  // Tell main whether this window has queued/running exports (close-intercept),
+  // on every 0-crossing only.
+  const active = overview.active > 0;
+  if (active !== lastExportsActive) {
+    lastExportsActive = active;
+    window.foveaBridge?.setViewerExportsActive?.(active);
+  }
+}
+
+function openExportDialog(channel: string): void {
+  exportDialogChannel.value = channel;
+}
+function submitExport(request: ExportRequest): void {
+  send({ type: "export-start", request });
+}
+function abortExport(id: number): void {
+  send({ type: "export-abort", id });
+}
+
+// Close intercept (spec 11): main asks to confirm aborting exports.
+const disposeConfirmClose = window.foveaBridge?.onViewerConfirmClose?.(() => {
+  confirmClose.value = true;
+});
+function confirmAbortAndClose(): void {
+  send({ type: "export-abort-all" });
+  confirmClose.value = false;
+  window.foveaBridge?.confirmViewerClose?.();
+}
+function cancelClose(): void {
+  confirmClose.value = false;
+}
+
+// --- live-capture banner (addendum) ----------------------------------------
+const bannerState = ref(initialBannerState);
+const showBanner = computed(() => bannerVisible(bannerState.value));
+function dismissBanner(): void {
+  bannerState.value = bannerDismiss(bannerState.value);
+}
+// Subscribe BEFORE the seed await (telecanvas:target pattern) so a change
+// between seed + await isn't missed.
+const disposeSession = window.foveaBridge?.onAppSessionActive?.((active) => {
+  bannerState.value = bannerSetActive(bannerState.value, active);
+});
+void window.foveaBridge?.getAppSessionActive?.().then((active) => {
+  bannerState.value = bannerSetActive(bannerState.value, active);
+});
+
+// Export availability for the focused stream's dialog.
+const exportUndistortAvailable = computed(
+  () =>
+    !!file.value?.wideCalibrationAvailable &&
+    // A DESIGNATED wide/center only: detectMaster falls back to the first
+    // frame channel (designated:false) on recordings that never name one, and
+    // applying the wide-camera calibration to an arbitrary (possibly fovea)
+    // stream would silently mis-undistort it (UI/UX review 2026-07-10).
+    master.value.designated &&
+    exportDialogChannel.value != null &&
+    exportDialogChannel.value === master.value.channel,
+);
+const exportUndistortReason = computed(() => {
+  if (!file.value?.wideCalibrationAvailable)
+    return "This recording carries no camera calibration";
+  if (!master.value.designated)
+    return "This recording does not designate a wide/center stream to bind the calibration to";
+  return "Only the wide/center stream carries calibration (fovea streams use per-frame maps)";
+});
+const exportDialogStat = computed(() => {
+  const ch = exportDialogChannel.value;
+  if (!ch) return null;
+  const info = frameChannelInfos.value.find((c) => c.name === ch);
+  if (!info) return null;
+  const stat = assembleStaticStats(info);
+  // Default fps = the summary-derived rate (avgFps: (count-1)/span). The median-
+  // of-deltas detector is applied in the engine's resample path; a per-stream
+  // full timestamp scan at dialog-open is avoided (viewer-export AS-BUILT note).
+  return { width: stat.width, height: stat.height, fps: stat.avgFps ?? 30 };
+});
 
 // Receive the brokered engine port from main (relayed by preload-viewer into the
 // main world — a live port can't cross the bridge as a value). Mirrors the
@@ -202,6 +320,8 @@ onUnmounted(() => {
   closeStats();
   stopPanelPoll();
   disposeEngineDown?.();
+  disposeConfirmClose?.();
+  disposeSession?.();
 });
 
 const basename = computed(() => props.path.split(/[/\\]/).pop() ?? props.path);
@@ -897,6 +1017,12 @@ function onPanelResizeUp(): void {
 
 <template>
   <div ref="mainEl" class="main" :style="{ top: titleBarHeight + 'px' }">
+    <!-- Live-capture warning banner (viewer-export addendum): layout-stable
+         (pushes content down, no overlay), instant (no slide), dismissable. -->
+    <div v-if="showBanner" class="session-banner">
+      <span class="msg">A live capture session is running — viewer playback and export may be degraded.</span>
+      <button class="dismiss" title="Dismiss" @click="dismissBanner"><Icon :icon="faXmark" /></button>
+    </div>
     <div v-if="openError" class="notice">{{ openError }}</div>
     <div v-else-if="!file" class="notice">Opening {{ basename }}…</div>
     <template v-else>
@@ -980,6 +1106,14 @@ function onPanelResizeUp(): void {
               <span class="panel-state" :class="{ off: !focusedDetail.enabled }">
                 {{ focusedDetail.enabled ? "enabled" : "disabled" }}
               </span>
+              <button
+                v-if="frameChannels.includes(focusedDetail.name)"
+                class="panel-export"
+                :title="file?.ffmpegAvailable ? 'Export this stream to video' : 'ffmpeg not found — install ffmpeg to enable video export'"
+                @click="openExportDialog(focusedDetail.name)"
+              >
+                <Icon :icon="faFileExport" /> Export…
+              </button>
             </div>
             <dl class="panel-rows">
               <div class="row"><dt>channel</dt><dd>{{ focusedDetail.name }}</dd></div>
@@ -1157,6 +1291,12 @@ function onPanelResizeUp(): void {
   </div>
 
   <TitleBar title="Viewer" :subtitle="compactPath" @height="(h) => (titleBarHeight = h)">
+    <ExportTray
+      :overview="exportOverview"
+      :session-active="bannerState.active"
+      @abort="abortExport"
+      @clear="send({ type: 'export-clear-finished' })"
+    />
     <button v-if="file" class="icon-button" title="Reset UI state (re-run auto layout)" @click="resetUiState">
       <Icon :icon="faArrowsRotate" />
     </button>
@@ -1164,6 +1304,35 @@ function onPanelResizeUp(): void {
       <Icon :icon="faFolderOpen" />
     </button>
   </TitleBar>
+
+  <!-- Per-stream export dialog (spec 1–8). -->
+  <ExportDialog
+    v-if="exportDialogChannel && exportDialogStat"
+    :channel="exportDialogChannel"
+    :recording="basename"
+    :width="exportDialogStat.width"
+    :height="exportDialogStat.height"
+    :default-fps="exportDialogStat.fps"
+    :ffmpeg-available="!!file?.ffmpegAvailable"
+    :undistort-available="exportUndistortAvailable"
+    :undistort-reason="exportUndistortReason"
+    :parallel="exportParallel"
+    @submit="submitExport"
+    @set-parallel="setExportParallel"
+    @close="exportDialogChannel = null"
+  />
+
+  <!-- Abort-on-close confirm (spec 11). -->
+  <div v-if="confirmClose" class="modal-scrim">
+    <div class="modal">
+      <h3>Exports in progress</h3>
+      <p>This window has running video exports. Closing will abort them and delete the partial files. Close anyway?</p>
+      <div class="modal-actions">
+        <button class="danger" @click="confirmAbortAndClose">Abort &amp; close</button>
+        <button @click="cancelClose">Keep open</button>
+      </div>
+    </div>
+  </div>
 </template>
 
 <style scoped lang="scss">
@@ -1187,6 +1356,45 @@ function onPanelResizeUp(): void {
   text-align: center;
   padding: 2em;
   flex-grow: 1;
+}
+
+// Live-capture banner (addendum): a flex child at the top of `.main`, so it
+// pushes the preview area down (layout-stable, no overlay). Instant appearance.
+.session-banner {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 1ch;
+  padding: 0.4rem 0.9rem;
+  background: var(--danger-bg);
+  border-bottom: 1px solid var(--danger-strong);
+  color: var(--warn);
+  font-size: var(--fs-sm);
+  .msg { flex: 1; }
+  .dismiss {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 0 0.4ch;
+    &:hover { color: var(--text); }
+  }
+}
+
+.panel-export {
+  margin-left: auto;
+  align-self: center;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-muted);
+  color: var(--text-dim);
+  border-radius: 0.3ch;
+  padding: 0.15rem 0.6ch;
+  cursor: pointer;
+  font-size: var(--fs-sm);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4ch;
+  &:hover { color: var(--text-bright); border-color: var(--accent); }
 }
 
 // ---- preview area (tile strip + optional property panel) ----

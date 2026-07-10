@@ -68,6 +68,30 @@ When nothing is focused, the panel reads **Select a stream to inspect**. Drag th
 
 The right-click stats popover (right-click a tile or a timeline block) still works as the quick, throwaway view; the property panel is the persistent one.
 
+The property panel also carries the **Export…** button that opens the video-export dialog for the focused stream (see [Exporting a stream to video](#exporting-a-stream-to-video)).
+
+---
+
+## Exporting a stream to video
+
+Each frame stream can be exported to a standalone video file. Focus the stream (click its tile or block) and press **Export…** in the [property panel](#property-panel). Export is powered by **ffmpeg**, which must be installed on your machine — if the Viewer can't find it, the dialog explains how to install it and the controls stay disabled. (The Viewer looks for ffmpeg on your `PATH` and in the usual Homebrew/MacPorts locations, so a Homebrew install works even when the app is launched from Finder.)
+
+The dialog offers:
+
+- **Format** — ProRes (profiles **422**, **422 HQ**, **4444**), **H.264 (x264)**, **H.265 (x265)**, **VP9 (WebM)**, or **AV1 (WebM)**. The container is chosen for you (`.mov` for ProRes, `.mp4` for H.264/H.265, `.webm` for VP9/AV1).
+- **Pixel format** — the options depend on the format (e.g. ProRes 4:2:2 10-bit vs 4444 10-bit with alpha; x265 adds 10-bit variants).
+- **Frame rate** — defaults to the stream's detected rate; type a different number to override, or click **detected** to reset.
+- **Timing** — **As-is** (default; feeds the recorded frames in order at the target rate — best when frames are evenly spaced) or **More accurate** (resamples onto a uniform timeline, blending neighbouring frames — smoother when frame intervals vary).
+- **Undistort** — corrects lens distortion using the calibration embedded in the recording. This is **on by default** for the **wide/center** stream when the recording carries a wide-camera calibration. Fovea (left/right) streams use per-frame maps that aren't reconstructed here, so their toggle is disabled with a note; recordings without calibration disable it too.
+- **Transparency** — when Undistort is on and the chosen pixel format has an alpha channel (ProRes 4444, VP9 `yuva420p`), the regions that fall outside the original frame after undistortion become **transparent** instead of black. It's on by default when available and disabled (with a reason) otherwise.
+- **Run exports in parallel** — a global, remembered setting. Off (default) runs one export at a time and queues the rest; on runs them together.
+
+Press **Export…**, choose where to save (the filename defaults to `<recording>-<stream>`), and the export starts. Progress appears in the **film-strip tray** on the title bar: it shows overall progress across all exports, and hovering it expands a per-stream report with each export's percentage, encode rate, time remaining, and state (queued / running / done / failed). Each running or queued export has an **✕** to abort it.
+
+If you close a Viewer window while exports are still running, it asks you to confirm — confirming aborts the exports and deletes their partial files; cancelling keeps the window open.
+
+> If a live capture session is running in another window while you export, a banner warns that playback and export may be slower (they share the machine with live capture). It can be dismissed, and reappears if a new session starts later.
+
 ---
 
 ## The timeline panel (bottom)

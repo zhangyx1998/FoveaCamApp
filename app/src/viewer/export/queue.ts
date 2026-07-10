@@ -1,0 +1,195 @@
+// ------------------------------------------------------
+// Copyright (c) 2026 Yuxuan Zhang, dev@z-yx.cc
+// This source code is licensed under the MIT license.
+// You may find the full license in project root directory.
+// -------------------------------------------------------
+//
+// The viewer export QUEUE state machine (viewer-export.md spec 10/11). PURE and
+// side-effect-free: it owns job records + the serial/parallel dispatch policy
+// and RETURNS the ids that should now START — the engine layer (export-runner)
+// performs the actual ffmpeg spawn / abort. Kept off Electron + ffmpeg so the
+// dispatch + abort transitions are exhaustively unit-tested
+// (test/viewer-export.test.ts).
+//
+// Policy (spec 10): parallel OFF (default) ⇒ at most ONE running job; new
+// requests queue and dispatch when the running one finishes. Parallel ON ⇒ every
+// queued job dispatches immediately. Flipping the flag ON dispatches the backlog;
+// flipping OFF never pauses a running job (they run to completion, new ones
+// serialize behind them).
+
+import type { ExportRequest, ExportJobStatus, ExportState } from "./types.js";
+
+interface JobRecord {
+  id: number;
+  request: ExportRequest;
+  state: ExportState;
+  progress: number | null;
+  fps: number;
+  etaSec: number | null;
+  error?: string;
+}
+
+function toStatus(j: JobRecord): ExportJobStatus {
+  const stream = j.request.channel;
+  const name = j.request.outputPath.split(/[/\\]/).pop() ?? stream;
+  return {
+    id: j.id,
+    channel: stream,
+    name,
+    state: j.state,
+    progress: j.progress,
+    fps: j.fps,
+    etaSec: j.etaSec,
+    ...(j.error ? { error: j.error } : {}),
+  };
+}
+
+export class ExportQueue {
+  private jobsById = new Map<number, JobRecord>();
+  private order: number[] = [];
+  private nextId = 1;
+
+  constructor(private parallel = false) {}
+
+  /** Enqueue a request; returns the job id AND the ids to START now (dispatch
+   *  policy). The new job is `queued` until it appears in `start`. */
+  enqueue(request: ExportRequest): { id: number; start: number[] } {
+    const id = this.nextId++;
+    const job: JobRecord = { id, request, state: "queued", progress: null, fps: 0, etaSec: null };
+    this.jobsById.set(id, job);
+    this.order.push(id);
+    return { id, start: this.dispatch() };
+  }
+
+  /** Mark a running job finished (ok) or failed; returns the ids to START next
+   *  (serial mode advances here). Unknown/terminal ids are a no-op. */
+  complete(id: number, ok: boolean, error?: string): number[] {
+    const job = this.jobsById.get(id);
+    if (!job || job.state !== "running") return [];
+    job.state = ok ? "done" : "failed";
+    job.progress = ok ? 1 : job.progress;
+    job.fps = 0;
+    job.etaSec = null;
+    if (!ok && error) job.error = error;
+    return this.dispatch();
+  }
+
+  /** Abort a job. A RUNNING job → `aborted` (the caller SIGKILLs ffmpeg + unlinks
+   *  the partial file); a QUEUED job → `aborted` without ever starting. Returns
+   *  {aborted, wasRunning, start}: `wasRunning` tells the caller to kill the
+   *  process; `start` is the newly-dispatched backlog (serial mode). */
+  abort(id: number): { aborted: boolean; wasRunning: boolean; start: number[] } {
+    const job = this.jobsById.get(id);
+    if (!job || (job.state !== "queued" && job.state !== "running"))
+      return { aborted: false, wasRunning: false, start: [] };
+    const wasRunning = job.state === "running";
+    job.state = "aborted";
+    job.fps = 0;
+    job.etaSec = null;
+    return { aborted: true, wasRunning, start: this.dispatch() };
+  }
+
+  /** Abort every queued+running job (window close, spec 11). Returns the ids of
+   *  jobs that were RUNNING (the caller kills + unlinks each). */
+  abortAll(): number[] {
+    const running: number[] = [];
+    for (const id of this.order) {
+      const job = this.jobsById.get(id)!;
+      if (job.state === "running") running.push(id);
+      if (job.state === "queued" || job.state === "running") {
+        job.state = "aborted";
+        job.fps = 0;
+        job.etaSec = null;
+      }
+    }
+    return running;
+  }
+
+  /** Update live progress for a running job (from ffmpeg output parsing). No
+   *  dispatch — a no-op for non-running ids. */
+  progress(id: number, progress: number | null, fps: number, etaSec: number | null): void {
+    const job = this.jobsById.get(id);
+    if (!job || job.state !== "running") return;
+    job.progress = progress;
+    job.fps = fps;
+    job.etaSec = etaSec;
+  }
+
+  /** Flip the parallel flag (spec 10). Turning it ON dispatches the whole
+   *  backlog; OFF never pauses a running job. Returns the ids to START. */
+  setParallel(parallel: boolean): number[] {
+    this.parallel = parallel;
+    return this.dispatch();
+  }
+
+  isParallel(): boolean {
+    return this.parallel;
+  }
+
+  /** The request for a job (the engine reads it when it actually launches). */
+  request(id: number): ExportRequest | undefined {
+    return this.jobsById.get(id)?.request;
+  }
+
+  /** Count of queued+running jobs (drives the close-intercept + tray badge). */
+  activeCount(): number {
+    let n = 0;
+    for (const j of this.jobsById.values())
+      if (j.state === "queued" || j.state === "running") n++;
+    return n;
+  }
+
+  /** Snapshot for the renderer: terminal jobs are RETAINED (the tray shows
+   *  done/failed until cleared — see `clearFinished`) in enqueue order. */
+  snapshot(): ExportJobStatus[] {
+    return this.order.map((id) => toStatus(this.jobsById.get(id)!));
+  }
+
+  /** Drop every TERMINAL job (done/failed/aborted) from the snapshot — the
+   *  tray's "Clear finished" affordance (UI/UX review 2026-07-10: results must
+   *  not pin the tray icon for the window's lifetime with no exit). Running/
+   *  queued jobs are untouched. */
+  clearFinished(): void {
+    this.order = this.order.filter((id) => {
+      const j = this.jobsById.get(id)!;
+      if (j.state === "queued" || j.state === "running") return true;
+      this.jobsById.delete(id);
+      return false;
+    });
+  }
+
+  /** Overall 0..1 progress across queued+running jobs (queued counts as 0),
+   *  or null when none are active. */
+  overallProgress(): number | null {
+    let sum = 0;
+    let n = 0;
+    for (const j of this.jobsById.values()) {
+      if (j.state === "queued") {
+        n++;
+      } else if (j.state === "running") {
+        sum += j.progress ?? 0;
+        n++;
+      }
+    }
+    return n === 0 ? null : sum / n;
+  }
+
+  /** The dispatch decision: transition `queued` jobs to `running` per policy,
+   *  returning the ids that JUST started so the caller launches exactly those.
+   *  Serial ⇒ start one only when nothing runs; parallel ⇒ start all queued. */
+  private dispatch(): number[] {
+    const started: number[] = [];
+    let runningCount = 0;
+    for (const j of this.jobsById.values()) if (j.state === "running") runningCount++;
+    for (const id of this.order) {
+      const job = this.jobsById.get(id)!;
+      if (job.state !== "queued") continue;
+      if (!this.parallel && runningCount > 0) break;
+      job.state = "running";
+      runningCount++;
+      started.push(id);
+      if (!this.parallel) break;
+    }
+    return started;
+  }
+}

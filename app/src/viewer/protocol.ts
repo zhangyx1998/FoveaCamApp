@@ -27,6 +27,7 @@
 // Renderer-safe and Node-free: types + string constants only.
 
 import type { SidecarLoad, SidecarState } from "./sidecar.js";
+import type { ExportRequest, ExportOverview } from "./export/types.js";
 
 /** One channel of the open container, as shown in the viewer's track list.
  *  `metadata` is the channel's MCAP metadata (the §2b static decode props for
@@ -71,6 +72,14 @@ export type ViewerFileInfo = {
    *  container-level intrinsics with no channel pointer, so the master CHANNEL
    *  is chosen by naming convention, not this flag). */
   wideCameraDeclared: boolean;
+  /** ffmpeg was resolved (PATH + common Homebrew/MacPorts locations) by the
+   *  engine — the export entry point is enabled iff true, else it shows the
+   *  "ffmpeg not found" hint (viewer-export spec 1). */
+  ffmpegAvailable: boolean;
+  /** The `fovea:wide-camera` calibration parsed into a usable camera matrix +
+   *  distortion — the undistort toggle is offerable for the WIDE/center stream
+   *  only when true (viewer-export spec 4). */
+  wideCalibrationAvailable: boolean;
 };
 
 /** One replayed json-channel document (parsed JSON — telemetry extras or a
@@ -112,6 +121,20 @@ export type ViewerCommand =
    *  sends both L/R). The reply is a `stats` event echoing `requestId` so a
    *  late reply for a since-closed/replaced popover is discarded. */
   | { type: "get-stats"; requestId: number; channels: string[] }
+  /** Start a per-stream video export (viewer-export spec 8). The engine
+   *  enqueues + dispatches per the parallel policy and streams `export-update`. */
+  | { type: "export-start"; request: ExportRequest }
+  /** Abort ONE export (spec 11 / tray): SIGKILL its ffmpeg + unlink the partial
+   *  output if it was running; drop it from the queue if it was still queued. */
+  | { type: "export-abort"; id: number }
+  /** Abort EVERY queued+running export (window-close confirm, spec 11). */
+  | { type: "export-abort-all" }
+  /** Drop terminal (done/failed/aborted) jobs from the tray snapshot ("Clear
+   *  finished"). Running/queued jobs are untouched. */
+  | { type: "export-clear-finished" }
+  /** Global parallel-export policy (spec 10) — persisted renderer-side, pushed
+   *  to the engine on change (and once at spawn). */
+  | { type: "export-set-parallel"; parallel: boolean }
   | { type: "close" };
 
 /** One decoded display frame. `buffer` arrives as a fresh COPY (cross-process
@@ -138,5 +161,8 @@ export type ViewerEvent =
   | { type: "descriptor"; topic: string; doc: PlaybackDoc }
   /** Live-stats reply to a `get-stats` request (keyed by channel topic). */
   | { type: "stats"; requestId: number; live: Record<string, StreamLiveStats> }
+  /** Export queue snapshot for the title-bar tray (spec 9) — pushed on every
+   *  enqueue / progress tick / completion / abort. */
+  | { type: "export-update"; overview: ExportOverview }
   | ViewerFrameEvent
   | { type: "error"; message: string };

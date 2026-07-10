@@ -142,6 +142,31 @@ export interface FoveaBridge {
    *  the window surface an error state instead of waiting forever for frames.
    *  Returns a disposer. */
   onViewerEngineDown(cb: (message: string) => void): () => void;
+  /** System save dialog for a video export (viewer-export spec 8). `defaultName`
+   *  is the suggested basename (`<recording>-<stream>`), `ext` the container
+   *  extension (no dot). Resolves to the chosen absolute path, or null when the
+   *  user cancels. */
+  showExportSaveDialog(defaultName: string, ext: string): Promise<string | null>;
+  /** Is a live capture (hardware) app session currently running? The viewer
+   *  banner seeds off this (viewer-export addendum). Subscribe to
+   *  `onAppSessionActive` BEFORE awaiting this, so a change between seed + await
+   *  isn't missed (the telecanvas:target seed+push pattern). */
+  getAppSessionActive(): Promise<boolean>;
+  /** Live capture session started/stopped — main broadcasts to every window on
+   *  change (mirrors `onTeleCanvasTarget`). Returns a disposer. */
+  onAppSessionActive(cb: (active: boolean) => void): () => void;
+  /** Tell main whether THIS viewer window has queued/running exports — main uses
+   *  it to intercept the window CLOSE with an abort confirm (spec 11). Sent on
+   *  every 0-crossing of the active-export count. */
+  setViewerExportsActive(active: boolean): void;
+  /** Main asks THIS window to confirm a close while exports run (spec 11): show
+   *  the abort modal. On confirm the renderer aborts its exports then calls
+   *  `confirmViewerClose`; on cancel it does nothing (the window stays open).
+   *  Returns a disposer. */
+  onViewerConfirmClose(cb: () => void): () => void;
+  /** The user confirmed aborting exports — proceed with the intercepted close
+   *  (spec 11). Main destroys the window. */
+  confirmViewerClose(): void;
 }
 
 // ---- Typed IPC channel registry -------------------------------------------
@@ -170,6 +195,11 @@ export interface InvokeChannels {
   "crash:reveal": { args: [file: string]; ret: void };
   "telecanvas:get-status": { args: []; ret: TeleCanvasStatus };
   "telecanvas:get-target": { args: []; ret: TeleCanvasTarget };
+  /** Video-export save dialog (spec 8): [defaultBasename, containerExt] →
+   *  chosen absolute path or null (cancelled). */
+  "export:save-dialog": { args: [defaultName: string, ext: string]; ret: string | null };
+  /** Seed the viewer banner: is a hardware app session live (addendum)? */
+  "app-session:active": { args: []; ret: boolean };
 }
 
 /** Fire-and-forget renderer→main signals (`ipcRenderer.send` ↔ `ipcMain.on`).
@@ -190,6 +220,12 @@ export interface SendChannels {
   /** Sender-scoped: main forks (or re-forks) this viewer window's playback
    *  engine over `file` and brokers a `MessagePort` back via `viewer:port`. */
   "viewer:spawn": [file: string];
+  /** Sender-scoped: THIS viewer window's queued/running export count crossed 0
+   *  — main uses it to arm/disarm the close-abort intercept (spec 11). */
+  "viewer:exports-active": [active: boolean];
+  /** Sender-scoped: the user confirmed the export-abort close — proceed with
+   *  destroying this window (spec 11). */
+  "viewer:close-confirmed": [];
 }
 
 /** Main→renderer pushes (`webContents.send` ↔ `ipcRenderer.on`). Value is the
@@ -208,4 +244,10 @@ export interface PushChannels {
   "telecanvas:status": [status: TeleCanvasStatus];
   /** TeleCanvas push-target changes — main → EVERY window (cross-instance). */
   "telecanvas:target": [target: TeleCanvasTarget];
+  /** Live capture (hardware) app session started/stopped — main → EVERY window
+   *  (viewer banner, addendum). */
+  "app-session:active": [active: boolean];
+  /** Main → a viewer window: confirm aborting exports before the intercepted
+   *  close proceeds (spec 11). */
+  "viewer:confirm-close": [];
 }

@@ -27,4 +27,7 @@ export {
   faTableColumns,
   faChevronUp,
   faChevronDown,
+  faFilm,
+  faXmark,
+  faFileExport,
 } from "@fortawesome/free-solid-svg-icons";

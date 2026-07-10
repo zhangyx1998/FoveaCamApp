@@ -81,6 +81,12 @@ export interface AppConfig {
   // ("every setting shown must drive behavior"). Kept for back-compat / callers
   // that may adopt it later.
   cap_stack: number;
+  // ---- Viewer video export (viewer-export.md spec 10) ------------------
+  // Global PARALLEL-export toggle. false (default) = new exports QUEUE and
+  // dispatch after the current one finishes; true = run concurrently. Persisted
+  // like every other viewer/app option; the viewer window pushes it to its
+  // playback engine (the queue's dispatch policy) on change + at spawn.
+  export_parallel?: boolean;
 }
 
 export const APP_CONFIG_PATH = ["config"] as const;
@@ -99,6 +105,7 @@ export const APP_CONFIG_DEFAULTS: Readonly<AppConfig> = {
   cal_marker_ratio: 1.0,
   anaglyph_style: DEFAULT_ANAGLYPH_STYLE,
   cap_stack: 5,
+  export_parallel: false,
 };
 
 export async function useAppConfig() {

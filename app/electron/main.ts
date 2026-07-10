@@ -741,7 +741,12 @@ registry = new OrchestratorInstances({
   // Pause the enumerate-only probe while a hardware instance is alive (Aravis
   // is per-process exclusive — a background `Camera.list()` must not contend
   // with the app's exclusive acquisition); resume at the Welcome screen.
-  onHardwareAliveChange: (alive) => probe?.postMessage({ type: alive ? "probe:pause" : "probe:resume" }),
+  onHardwareAliveChange: (alive) => {
+    probe?.postMessage({ type: alive ? "probe:pause" : "probe:resume" });
+    // Viewer banner (viewer-export addendum): tell every window a live capture
+    // session started/stopped (function-declaration-hoisted; runs at edge time).
+    broadcastAppSessionActive(alive);
+  },
   // Keep the crash-watchdog state file tracking whichever instances are alive.
   onLivePidsChange: () => writeWatchdogState(),
   quiesceMs: 4000,
@@ -889,6 +894,52 @@ const viewerEngines = new ViewerEngineManager({ graceMs: 500, create: createView
 ipcMain.on("viewer:spawn" satisfies keyof SendChannels, (event, file) => {
   if (typeof file === "string" && file) void viewerEngines.spawn(event.sender.id, file);
 });
+
+// ---- Viewer video export (viewer-export.md) -------------------------------
+// Main owns the system save dialog (spec 8) + the window-close abort intercept
+// (spec 11). The ffmpeg pipeline itself lives in the viewer ENGINE (utility
+// process) — main only brokers the save path + the close handshake.
+
+// Sender (viewer webContents id) → does it have queued/running exports? The
+// renderer pushes on every 0-crossing; `close` reads it to decide whether to
+// intercept. A confirmed-abort close is recorded so the re-`close()` passes.
+const viewerExportsActive = new Map<number, boolean>();
+const viewerCloseConfirmed = new Set<number>();
+
+ipcMain.on("viewer:exports-active" satisfies keyof SendChannels, (event, active) => {
+  viewerExportsActive.set(event.sender.id, !!active);
+});
+ipcMain.on("viewer:close-confirmed" satisfies keyof SendChannels, (event) => {
+  const id = event.sender.id;
+  viewerCloseConfirmed.add(id); // let the next close() through the intercept
+  viewerExportsActive.set(id, false);
+  BrowserWindow.fromWebContents(event.sender)?.close();
+});
+
+// The video-export save dialog (spec 8): default filename `<recording>-<stream>`
+// with the codec's container extension, filtered to that extension.
+handle("export:save-dialog", async (defaultName, ext) => {
+  const focused = BrowserWindow.getFocusedWindow();
+  const options = {
+    defaultPath: `${defaultName}.${ext}`,
+    filters: [{ name: `${ext.toUpperCase()} video`, extensions: [ext] }],
+  };
+  const result = focused
+    ? await dialog.showSaveDialog(focused, options)
+    : await dialog.showSaveDialog(options);
+  return result.canceled || !result.filePath ? null : result.filePath;
+});
+
+// ---- Live-session banner broadcast (viewer-export addendum) ----------------
+// Main is the only process that knows BOTH a viewer window and the per-app
+// hardware instances (registry). Mirror the telecanvas:target seed+push pattern:
+// seed via invoke, push to EVERY window on the hardware-alive edge.
+handle("app-session:active", () => registry.hardwareAlive());
+
+function broadcastAppSessionActive(active: boolean): void {
+  for (const w of BrowserWindow.getAllWindows())
+    pushTo(w.webContents, "app-session:active", active);
+}
 
 // ---- TeleCanvas host server (standalone dual-mode module) -----------------
 // Main owns the host utilityProcess: spawn when `tele_canvas_mode` is "host",
@@ -1158,7 +1209,21 @@ function spawnWindow(desc: WindowDescriptor): ManagedWindow {
   // is gone by "closed".
   if (desc.class === "viewer") {
     const engineKey = win.webContents.id;
-    win.on("closed", () => void viewerEngines.close(engineKey));
+    // Export abort-on-close intercept (viewer-export spec 11): while this window
+    // has queued/running exports, the FIRST close is intercepted — ask the
+    // renderer to confirm the abort; it aborts + calls `confirmViewerClose`,
+    // which re-`close()`s with the confirmed flag set (letting this pass).
+    win.on("close", (e) => {
+      if (viewerCloseConfirmed.has(engineKey)) return; // confirmed → proceed
+      if (!viewerExportsActive.get(engineKey)) return; // no exports → proceed
+      e.preventDefault();
+      pushTo(win.webContents, "viewer:confirm-close");
+    });
+    win.on("closed", () => {
+      viewerExportsActive.delete(engineKey);
+      viewerCloseConfirmed.delete(engineKey);
+      void viewerEngines.close(engineKey); // engine also abortAll()s exports
+    });
   }
   // Settings / TeleCanvas window closed: release the shared non-hardware
   // "settings" instance main may have forked to back the store (disposed only

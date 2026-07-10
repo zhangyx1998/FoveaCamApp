@@ -83,6 +83,12 @@ export function installBridge(extra: Partial<FoveaBridge> = {}) {
     setWindowPinned: (pinned) => send("window:set-pinned", pinned),
     spawnViewerEngine: (file) => send("viewer:spawn", file),
     onViewerEngineDown: (cb) => listen("viewer:engine-down", (message) => cb(message)),
+    showExportSaveDialog: (defaultName, ext) => invoke("export:save-dialog", defaultName, ext),
+    getAppSessionActive: () => invoke("app-session:active"),
+    onAppSessionActive: (cb) => listen("app-session:active", (active) => cb(active)),
+    setViewerExportsActive: (active) => send("viewer:exports-active", active),
+    onViewerConfirmClose: (cb) => listen("viewer:confirm-close", () => cb()),
+    confirmViewerClose: () => send("viewer:close-confirmed"),
     ...extra,
   };
 
