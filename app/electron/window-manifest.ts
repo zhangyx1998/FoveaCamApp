@@ -19,8 +19,9 @@
 //
 // `planFromManifest` (pure, unit-tested) turns a loaded manifest into the
 // spawn plan, enforcing the same invariants the window manager enforces
-// live: at most one app window, welcome/profiler singletons, unknown
-// classes/apps dropped, and the welcome fallback when nothing valid remains.
+// live: at most one app window, the welcome singleton (profilers are 0..N —
+// one per instance), unknown classes/apps dropped, and the welcome fallback
+// when nothing valid remains.
 
 import { existsSync } from "node:fs";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
@@ -78,7 +79,7 @@ export function planFromManifest(
       if (w.class === "app" && (!w.appId || !appById(w.appId))) continue;
       haveExclusive = true;
     } else if (spec.singleton) {
-      if (seenSingleton.has(w.class)) continue; // welcome/profiler dedupe
+      if (seenSingleton.has(w.class)) continue; // welcome dedupe
       seenSingleton.add(w.class);
     }
     // 0..N classes (projection/viewer) fall through with no gate; per-FILE
@@ -89,7 +90,7 @@ export function planFromManifest(
     plan.push(w);
   }
   // Welcome rule at restore time: a welcome-counting (app) window suppresses
-  // welcome; a layout with none and no welcome persisted (projections/profiler
+  // welcome; a layout with none and no welcome persisted (projections/profilers
   // don't count) boots the default welcome.
   if (suppressWelcome) return plan.filter((w) => w.class !== "welcome");
   if (!haveWelcome) plan.unshift({ class: "welcome" });

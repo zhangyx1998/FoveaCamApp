@@ -124,16 +124,22 @@ describe("planFromManifest", () => {
     expect(plan[1]?.class).toBe("projection");
   });
 
-  it("dedupes welcome/profiler singletons and keeps profiler beside an app", () => {
+  it("dedupes the welcome singleton but keeps every profiler (0..N per instance)", () => {
+    // Profiler is no longer a singleton — each pins to its own (now-gone)
+    // instance, so a multi-profiler layout restores every one (they open
+    // straight into the frozen "session ended" state and never re-attach).
     const plan = planFromManifest({
       version: 1,
       windows: [
+        { class: "welcome" },
         { class: "profiler" },
         { class: "profiler" },
         { class: "app", appId: "disparity-scope" },
       ],
     });
+    // Welcome is suppressed by the app window; both profilers survive.
     expect(plan).toEqual([
+      { class: "profiler" },
       { class: "profiler" },
       { class: "app", appId: "disparity-scope" },
     ]);

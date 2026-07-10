@@ -603,6 +603,23 @@ source the RAW fovea CONVERT pipes (single ÷magnification, legacy
   headless with menu bar) — nothing energized (no instance exists), only the
   probe running; dock re-activate brings Welcome back and opening an app starts a
   fresh engine.
+- [ ] **Profiler survives its app frozen with data**: open an app, open its
+  Profiler (chart icon) — the title bar reads the session + short instance id
+  (e.g. `manual-control · #hw-1`) and graphs/meters/clocks fill live. Close the
+  app → Profiler STAYS open, shows the neutral **"Session ended"** banner, polling
+  stops (no console error spam), and all accumulated graphs/meters/clocks/spans
+  stay browsable; the snapshot-export button is disabled with a tooltip
+  (Reveal-folder still works).
+- [ ] **Two profilers, each pinned, titles distinguish**: with app A + its
+  profiler open, switch to app B and open B's profiler. TWO profiler windows
+  coexist — A's frozen (`Session ended`, A's title) and B's live (B's session +
+  its own `#hw-N`). Re-clicking B's chart icon re-focuses B's existing profiler
+  (one per instance), never a third. A's profiler NEVER re-attaches to B (no live
+  data resumes in it).
+- [ ] **Crashed vs clean end banners**: SIGKILL/SIGABRT an app's orchestrator
+  while its Profiler is open → the Profiler shows the RED **"Session crashed"**
+  banner (with the exit code) instead of the neutral "Session ended". A normal
+  app close shows the neutral banner. Both freeze the data; neither re-attaches.
 
 ## Channel-order fix (2026-07-09, proposal `channel-order-fix.md`)
 

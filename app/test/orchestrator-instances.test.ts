@@ -219,6 +219,56 @@ describe("OrchestratorInstances — window ownership", () => {
   });
 });
 
+describe("OrchestratorInstances — profiler per-instance binding", () => {
+  it("carries a human session name (the app id) on the instance view", () => {
+    const h = harness();
+    const a = h.reg.open("hardware", "manual-control");
+    expect(a.sessionName).toBe("manual-control");
+    // Defaults to the id when no name is supplied (unbound / non-hardware).
+    expect(h.reg.open("non-hardware").sessionName).toBe("nh-2");
+  });
+
+  it("attaches an observer window and resolves it via boundInstance (even dead)", () => {
+    const h = harness();
+    const a = h.reg.open("hardware", "manual-control");
+    h.reg.attachWindow(a.id, "profiler-1");
+    expect(h.reg.boundInstance("profiler-1")?.id).toBe("hw-1");
+    expect(h.reg.attachmentsOf(a.id)).toEqual(["profiler-1"]);
+    // instanceForWindow is OWNED-only: an attachment is not an owned window.
+    expect(h.reg.instanceForWindow("profiler-1")).toBeNull();
+
+    // Instance dies — boundInstance STILL resolves it (dead), so the connect
+    // broker can fail closed instead of routing to another instance (ruling 2).
+    h.reg.onExit(a.id, 6);
+    const bound = h.reg.boundInstance("profiler-1");
+    expect(bound?.id).toBe("hw-1");
+    expect(bound?.phase).toBe("dead");
+  });
+
+  it("resolves an OWNED app window via boundInstance too; unknown → null", () => {
+    const h = harness();
+    const a = h.reg.open("hardware");
+    h.reg.claimWindow(a.id, "app-1");
+    expect(h.reg.boundInstance("app-1")?.id).toBe("hw-1");
+    expect(h.reg.boundInstance("nope")).toBeNull();
+  });
+
+  it("an attached profiler NEVER gates teardown (it may outlive the instance)", () => {
+    const h = harness();
+    const a = h.reg.open("hardware");
+    h.reg.claimWindow(a.id, "app-1");
+    h.reg.attachWindow(a.id, "profiler-1");
+    h.events.length = 0;
+    // Closing the profiler leaves the app window owning the instance → no drain.
+    h.reg.onWindowClosed("profiler-1");
+    expect(h.events).toEqual([]);
+    expect(h.reg.boundInstance("profiler-1")).toBeNull(); // detached
+    // The owned app window still disposes it.
+    h.reg.onWindowClosed("app-1");
+    expect(h.events).toContain("shutdown:hw-1");
+  });
+});
+
 describe("OrchestratorInstances — liveness signals", () => {
   it("reports live pids and hardware-alive for the watchdog + probe", () => {
     const h = harness();

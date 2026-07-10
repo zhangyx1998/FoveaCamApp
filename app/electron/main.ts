@@ -20,6 +20,7 @@ import {
   type InstanceProc,
   type InstanceView,
 } from "./orchestrator-instances";
+import type { OrchestratorDownReport } from "./orchestrator-exit";
 import type { ProbeCamera } from "@lib/orchestrator/probe";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -263,6 +264,10 @@ const instanceDrains = new Map<string, Map<number, (r: { ok: boolean; reason?: s
 // windowId → its live webContents, so the registry's `notifyDown` can push a
 // crash report to a dying instance's OWNED windows only (ruling 4 scoping).
 const webContentsByWindowId = new Map<string, Electron.WebContents>();
+// instanceId → its last down report, so a profiler that connects AFTER its
+// bound instance already died still gets the typed frozen banner (the connect
+// broker replays it — the profiler never re-attaches to another instance).
+const lastDownReports = new Map<string, OrchestratorDownReport>();
 
 // ---- Hardware janitor (safety invariant, docs/hardware/stage-f.md) --------
 // An instance confirms `quiesced` (MEMS disabled + cameras released) before a
@@ -527,12 +532,21 @@ registry = new OrchestratorInstances({
   // sweep; it disarms ALL hardware in a fresh process regardless of instance.
   runJanitor: (inst, reason) => ensureJanitor(`${inst.id}: ${reason}`),
   notifyDown: (inst, report) => {
-    // Scope the down report to the DYING instance's OWNED windows (ruling 4):
-    // a NEW instance's app window must never react to the OLD instance's death.
-    // On a crash the app window is still open (its channel rejects in-flight
-    // calls + CrashReport.vue shows); on a clean switch/close its window is
-    // already gone, so this reaches nobody (correct — nothing to inform).
-    for (const windowId of registry.windowsOf(inst.id)) {
+    // Remember it so a profiler that attaches after this death still gets the
+    // frozen banner (the connect broker replays it below).
+    lastDownReports.set(inst.id, report);
+    // Scope the down report to the DYING instance's OWNED windows (ruling 4)
+    // PLUS its attached observer windows (the profiler, ruling 2 — it freezes
+    // with its accumulated data and shows "session ended/crashed"): a NEW
+    // instance's app window must never react to the OLD instance's death. On a
+    // crash the app window is still open (its channel rejects in-flight calls +
+    // CrashReport.vue shows); on a clean switch/close its app window is already
+    // gone, so only a surviving profiler is informed (correct).
+    const targets = new Set([
+      ...registry.windowsOf(inst.id),
+      ...registry.attachmentsOf(inst.id),
+    ]);
+    for (const windowId of targets) {
       const wc = webContentsByWindowId.get(windowId);
       if (wc && !wc.isDestroyed()) pushTo(wc, "orchestrator:down", report);
     }
@@ -593,14 +607,29 @@ const windowIdBySender = new Map<number, string>();
 // message carries the sender's stable windowId (A-34) so the Hub can tag the
 // channel; null for a sender the manager doesn't know (shouldn't happen).
 ipcMain.on("orchestrator:connect" satisfies keyof SendChannels, (event) => {
-  // Instance-scoped brokering (ruling 6): connect the renderer to the CURRENT
-  // live app instance (the one just forked for the app window, which profiler/
-  // projection surfaces also attach to). With no app instance up — the status-
-  // only Welcome window, which never connects — there is nothing to broker.
-  const target = registry.connectTarget();
+  const windowId = windowIdBySender.get(event.sender.id) ?? null;
+  // Instance-scoped brokering (ruling 6). A window BOUND to a specific instance
+  // — an app window (owns it) or a profiler (attached at open, per-instance
+  // binding) — routes to THAT instance and NOTHING else. If its instance is
+  // already dead, fail CLOSED: replay the typed down report (frozen "session
+  // ended/crashed" banner) and broker no port — a profiler must never connect
+  // to another session (ruling 2). An UNBOUND window (projection/debug) routes
+  // to the CURRENT live app instance. With no app instance at all — the
+  // status-only Welcome, which never connects — there is nothing to broker.
+  const bound = windowId ? registry.boundInstance(windowId) : null;
+  let target: InstanceProc | null;
+  if (bound) {
+    if (bound.phase === "dead") {
+      const report = lastDownReports.get(bound.id) ?? { reason: "killed", code: null };
+      pushTo(event.sender, "orchestrator:down", report);
+      return;
+    }
+    target = bound.proc;
+  } else {
+    target = registry.connectTarget();
+  }
   if (!target) return;
   const { port1, port2 } = new MessageChannelMain();
-  const windowId = windowIdBySender.get(event.sender.id) ?? null;
   target.postMessage({ type: "channel:connect", windowId }, [port1]);
   event.sender.postMessage("orchestrator:port", null, [port2]);
 });
@@ -818,7 +847,9 @@ function spawnWindow(desc: WindowDescriptor): ManagedWindow {
   // instance (registry.onWindowClosed → drain-and-quiesce → kill → janitor).
   // The renderer's `orchestrator:connect` (after load) then brokers to it.
   if (desc.class === "app" && desc.windowId) {
-    const inst = registry.open("hardware");
+    // Name the instance by its activating app id — a bound profiler titles
+    // itself with this session (e.g. "manual-control · #hw-1").
+    const inst = registry.open("hardware", desc.appId);
     registry.claimWindow(inst.id, desc.windowId);
   }
   // A-34: sender→windowId lookup for the orchestrator channel handshake (the
@@ -833,10 +864,14 @@ function spawnWindow(desc: WindowDescriptor): ManagedWindow {
       windowIdBySender.delete(senderId);
       webContentsByWindowId.delete(windowId);
       // Route the per-window teardown signal (C-24 compose `win/<id>` state) to
-      // the instance that owns/served this window, then let the registry
-      // dispose that instance when its last owned window is gone.
-      const owner = registry.instanceForWindow(windowId) ?? registry.currentHardware();
-      owner?.proc.postMessage({ type: "window:closed", windowId });
+      // the instance BOUND to this window (owned app, or an attached profiler),
+      // else the current instance (an unbound projection/debug). Skip a DEAD
+      // binding — a profiler that outlived its instance has nothing to notify
+      // (and its instance's process is gone). Then let the registry dispose the
+      // instance when its last OWNED window is gone (attachments never gate it).
+      const owner = registry.boundInstance(windowId) ?? registry.currentHardware();
+      if (owner && owner.phase !== "dead")
+        owner.proc.postMessage({ type: "window:closed", windowId });
       registry.onWindowClosed(windowId);
     });
   }
@@ -867,7 +902,19 @@ const manager = new WindowManager({
 onRenderer("window:open-app", (appId) => {
   if (typeof appId === "string" && appById(appId)) void manager.openApp(appId);
 });
-onRenderer("open-profiler-window", () => manager.openProfiler());
+// Open a profiler pinned to the CURRENT live app instance (per-instance
+// binding, orchestrator-lifecycle-and-exit §"Profiler per-instance binding").
+// The binding is stamped into the window URL + registered as an observer
+// ATTACHMENT (never an owned window, so closing the profiler can't dispose the
+// instance, and the instance's death can't close the profiler). Opened from the
+// status-only Welcome (no live instance) it's unbound — "no active session".
+onRenderer("open-profiler-window", () => {
+  const inst = registry.currentHardware();
+  const win = manager.openProfiler(
+    inst ? { instanceId: inst.id, sessionName: inst.sessionName } : {},
+  );
+  if (inst && win.windowId) registry.attachWindow(inst.id, win.windowId);
+});
 onRenderer("window:open-projection", (session, frame) => {
   if (typeof session === "string" && session && typeof frame === "string" && frame)
     manager.openProjection({ session, frame });

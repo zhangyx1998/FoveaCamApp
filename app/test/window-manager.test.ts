@@ -200,18 +200,39 @@ describe("WindowManager", () => {
     expect(spawned.filter((w) => w.class === "welcome").length).toBe(0);
   });
 
-  it("profiler is a singleton and does not count toward the welcome rule", async () => {
+  it("profiler pins per instance and does not count toward the welcome rule", async () => {
     const { manager, spawned, drain } = harness();
+    // Same instance → re-focuses the existing profiler (one per instance).
+    const first = manager.openProfiler({ instanceId: "hw-1", sessionName: "manual-control" });
+    const again = manager.openProfiler({ instanceId: "hw-1", sessionName: "manual-control" });
+    expect(again).toBe(first);
+    expect((first as FakeWindow).focused).toBe(1);
+    expect(spawned.filter((w) => w.class === "profiler").length).toBe(1);
+    // A NEW instance opens a SECOND profiler — the two coexist, each pinned.
+    manager.openProfiler({ instanceId: "hw-2", sessionName: "disparity-scope" });
+    expect(spawned.filter((w) => w.class === "profiler").length).toBe(2);
+    // The binding + session ride the URL query (title bar + connect broker).
+    expect(first.getURL()).toContain("instance=hw-1");
+    expect(first.getURL()).toContain("session=manual-control");
+    // Opening an app with only profilers open needs no drain (passive) — there
+    // are no camera-holding windows.
+    await manager.openApp("manage-cameras");
+    expect(drain).not.toHaveBeenCalled();
+    // Closing the app respawns welcome even though the profilers stay open.
+    manager.appWindow()!.close();
+    expect(manager.open().map((w) => w.class).sort()).toEqual([
+      "profiler",
+      "profiler",
+      "welcome",
+    ]);
+  });
+
+  it("unbound profilers (opened with no live instance) share one window", () => {
+    const { manager, spawned } = harness();
     manager.openProfiler();
     manager.openProfiler();
     expect(spawned.filter((w) => w.class === "profiler").length).toBe(1);
-    // Opening an app with only the profiler open needs no drain (profiler
-    // is passive) — there are no camera-holding windows.
-    await manager.openApp("manage-cameras");
-    expect(drain).not.toHaveBeenCalled();
-    // Closing the app respawns welcome even though the profiler stays open.
-    manager.appWindow()!.close();
-    expect(manager.open().map((w) => w.class).sort()).toEqual(["profiler", "welcome"]);
+    expect(spawned[0].getURL()).not.toContain("instance=");
   });
 
   it("suppresses the welcome rule while quitting", async () => {

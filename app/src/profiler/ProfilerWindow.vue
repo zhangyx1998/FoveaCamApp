@@ -12,7 +12,16 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
-import { useSession, rendererLoopLag, orchestratorSpans, dumpPerfSnapshot } from "@lib/orchestrator/client";
+import {
+  useSession,
+  rendererLoopLag,
+  orchestratorSpans,
+  dumpPerfSnapshot,
+  orchestratorDown,
+} from "@lib/orchestrator/client";
+import { readUrlParam } from "@lib/url-state";
+import { PROFILER_INSTANCE_PARAM, PROFILER_SESSION_PARAM } from "@lib/windows";
+import { profilerSubtitle, describeSessionEnd } from "./binding";
 import { system, controller, type PerfSnapshot, type Span } from "@lib/orchestrator/contracts";
 import { manualControl } from "@modules/manual-control/contract";
 import { workloadRows, utilizationLevel, UTILIZATION_HIGH, type WorkloadRow } from "./workload-view";
@@ -41,6 +50,25 @@ import {
 // Shared window chrome (A-7): the profiler BrowserWindow now uses the same
 // hidden-titlebar overlay as every other window class.
 const titleBarHeight = ref(0);
+
+// Per-instance binding (orchestrator-lifecycle-and-exit §"Profiler per-instance
+// binding"): this window pinned AT OPEN to exactly one orchestrator instance —
+// the ids ride the URL and are IMMUTABLE for the window's life. The connect
+// broker (main) routes us to that instance and NOTHING else; when it dies we
+// freeze here with everything already collected and never re-attach (ruling 2).
+const boundInstanceId = readUrlParam(PROFILER_INSTANCE_PARAM);
+const boundSession = readUrlParam(PROFILER_SESSION_PARAM);
+const subtitle = computed(() => profilerSubtitle(boundSession, boundInstanceId));
+
+// Frozen "session ended/crashed" state: `orchestratorDown` is set once main
+// pushes the typed down report for OUR instance (delivered whether it dies
+// while we watch or was already dead when we connected — the broker replays
+// it). Once set we stop polling entirely (no reconnect, no error spam) and keep
+// the accumulated graphs/meters/clocks/spans browsable.
+const sessionEnded = computed(() => orchestratorDown.value !== null);
+const endState = computed(() =>
+  orchestratorDown.value ? describeSessionEnd(orchestratorDown.value) : null,
+);
 
 const sys = useSession(system, "system");
 const ctrl = useSession(controller, "controller", { passive: true });
@@ -127,7 +155,19 @@ function computeRates(cur: PerfSnapshot): Rate[] {
 
 let timer: ReturnType<typeof setInterval> | null = null;
 
+function stopPolling(): void {
+  if (timer) clearInterval(timer);
+  timer = null;
+}
+
 async function tick(): Promise<void> {
+  // Session gone — freeze: keep the last-collected data on screen, poll no more
+  // (the channel is dead; retrying only spams the console). Idempotent guard so
+  // an in-flight tick that raced the down report also bails.
+  if (sessionEnded.value) {
+    stopPolling();
+    return;
+  }
   push(orchLoopLag, sys.telemetry.loopLag.mean);
   push(rendLoopLag, rendererLoopLag.stats.mean);
   push(mcActuateMs, mc.telemetry.perf.actuateMs.mean);
@@ -167,12 +207,17 @@ const reportIntervalMs = ref(
   parseReportInterval(localStorage.getItem(REPORT_INTERVAL_KEY)),
 );
 function restartTimer(): void {
-  if (timer) clearInterval(timer);
+  stopPolling();
+  if (sessionEnded.value) return; // frozen — never poll a dead session
   timer = setInterval(() => void tick(), reportIntervalMs.value);
 }
 watch(reportIntervalMs, (ms) => {
   localStorage.setItem(REPORT_INTERVAL_KEY, String(ms));
   restartTimer();
+});
+// The instant our instance goes down, freeze polling — no reconnect attempts.
+watch(sessionEnded, (ended) => {
+  if (ended) stopPolling();
 });
 
 onMounted(() => {
@@ -180,16 +225,17 @@ onMounted(() => {
   restartTimer();
   if (pinned.value) window.foveaBridge.setWindowPinned(true);
 });
-onUnmounted(() => {
-  if (timer) clearInterval(timer);
-});
+onUnmounted(stopPolling);
 
 // Export → result popup: the written path (or the failure) shows in a
 // title-bar overlay (SnapshotOverlay, same mechanism as the recorder's
 // RecordControls) instead of transient button-label states.
 const exporting = ref(false);
 async function exportSnapshot(): Promise<void> {
-  if (exporting.value) return;
+  // Capturing a NEW snapshot needs a live orchestrator (it fetches
+  // `system.perfSnapshot`); once the session ended the button is disabled — the
+  // already-collected data on screen stays browsable, it just can't grow.
+  if (exporting.value || sessionEnded.value) return;
   exporting.value = true;
   try {
     snapshotResult.value = { path: await dumpPerfSnapshot() };
@@ -230,7 +276,7 @@ const clockRows = computed(() => {
 </script>
 
 <template>
-  <TitleBar title="FoveaCam Duo" subtitle="Profiler" @height="(h) => (titleBarHeight = h)">
+  <TitleBar title="FoveaCam Duo" :subtitle="subtitle" @height="(h) => (titleBarHeight = h)">
     <!-- Snapshot controls live on the title bar (the old header's h1 was
          redundant with the bar's subtitle). Icon-only buttons (FontAwesome,
          matching the recorder's title-bar chrome) sized for the ~40px bar;
@@ -259,8 +305,10 @@ const clockRows = computed(() => {
       <button
         class="icon-btn"
         @click="exportSnapshot"
-        :disabled="exporting"
-        title="Write a perf snapshot JSON to disk"
+        :disabled="exporting || sessionEnded"
+        :title="sessionEnded
+          ? 'Session ended — cannot capture a new snapshot (the orchestrator is gone)'
+          : 'Write a perf snapshot JSON to disk'"
         aria-label="Export snapshot"
       >
         <Icon :icon="exporting ? faSpinner : faFileExport" :spin="exporting" />
@@ -276,6 +324,19 @@ const clockRows = computed(() => {
     </div>
   </TitleBar>
   <div class="profiler" :style="{ top: titleBarHeight + 'px' }">
+    <!-- Frozen session-end banner (ruling 2): layout-stable, always occupies
+         the top of the body so the panels below never shift when it appears.
+         Distinguishes a clean end from a crash off the typed down report. -->
+    <div
+      v-if="endState"
+      class="session-banner"
+      :class="{ crashed: endState.crashed }"
+      role="status"
+    >
+      <span class="banner-title">{{ endState.title }}</span>
+      <span class="banner-detail">{{ endState.detail }}</span>
+    </div>
+
     <section>
       <h2>Event-loop lag</h2>
       <div class="row">
@@ -725,6 +786,45 @@ const clockRows = computed(() => {
     color: var(--text-disabled);
     font-style: italic;
     font-size: 0.8rem;
+  }
+
+  // Frozen session-end banner (ruling 2). Layout-stable: reserves its own strip
+  // at the top of the body so nothing below jumps when it appears. Clean/killed
+  // end = neutral amber notice; a crash = the shared danger identity (tokens).
+  .session-banner {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    margin-bottom: 1.25rem;
+    padding: 0.6rem 0.85rem;
+    border-radius: 6px;
+    border: 1px solid var(--border-strong);
+    border-left: 3px solid var(--warn);
+    background: var(--bg-panel-alt);
+
+    .banner-title {
+      font-size: 0.85rem;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+      color: var(--warn);
+    }
+    .banner-detail {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+    }
+
+    &.crashed {
+      border-color: var(--danger-strong);
+      border-left-color: var(--danger-strong);
+      background: var(--danger-bg);
+      .banner-title {
+        color: var(--danger-text);
+      }
+      .banner-detail {
+        color: var(--danger-text);
+      }
+    }
   }
 
   table {

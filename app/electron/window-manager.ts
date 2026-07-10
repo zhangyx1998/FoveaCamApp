@@ -29,6 +29,8 @@
 
 import {
   entryFor,
+  PROFILER_INSTANCE_PARAM,
+  PROFILER_SESSION_PARAM,
   WINDOW_ID_PARAM,
   WINDOWS,
   type ProjectionParams,
@@ -270,13 +272,47 @@ export class WindowManager {
     return this.spawn({ class: "welcome", entry: entryFor("welcome"), ...opts });
   }
 
-  openProfiler(opts: { bounds?: WindowBounds; url?: string } = {}): ManagedWindow {
-    const existing = this.byClass("profiler")[0];
+  /**
+   * Open (or focus) a profiler window pinned to ONE orchestrator instance
+   * (orchestrator-lifecycle-and-exit §"Profiler per-instance binding"). No
+   * longer a singleton: it keys by `instanceId` so re-clicking the chart icon
+   * for the SAME live instance re-focuses its existing profiler, while a NEW
+   * app (a new instance) opens a SECOND profiler — the two coexist, each pinned
+   * (possibly to a dead instance) and each titled with its own session. The
+   * binding rides the URL (`instance` + `session` params) so it survives
+   * reload/restore and the connect broker can route fail-closed to it.
+   *
+   * With no live instance (opened from the status-only Welcome) `instanceId` is
+   * omitted — the window opens unbound and shows "no active session".
+   */
+  openProfiler(
+    opts: {
+      instanceId?: string;
+      sessionName?: string;
+      bounds?: WindowBounds;
+      url?: string;
+    } = {},
+  ): ManagedWindow {
+    const { instanceId, sessionName } = opts;
+    // Per-instance dedupe key (unbound profilers share the plain key).
+    const key = instanceId ? `profiler:${instanceId}` : "profiler";
+    const existing = this.open().find((w) => w.class === "profiler" && w.key === key);
     if (existing) {
       existing.focus();
       return existing;
     }
-    return this.spawn({ class: "profiler", entry: entryFor("profiler"), ...opts });
+    const params = new URLSearchParams();
+    if (instanceId) params.set(PROFILER_INSTANCE_PARAM, instanceId);
+    if (sessionName) params.set(PROFILER_SESSION_PARAM, sessionName);
+    const search = params.toString() ? "?" + params.toString() : undefined;
+    return this.spawn({
+      class: "profiler",
+      entry: entryFor("profiler"),
+      key,
+      search,
+      bounds: opts.bounds,
+      url: opts.url,
+    });
   }
 
   /**
@@ -475,9 +511,20 @@ export class WindowManager {
         case "welcome":
           this.ensureWelcome(opts);
           break;
-        case "profiler":
-          this.openProfiler(opts);
+        case "profiler": {
+          // Recover the per-instance binding from the persisted URL so a
+          // restored profiler keeps its pin + dedupe key. The instance itself is
+          // gone after a restart, so it opens straight into the frozen "session
+          // ended" state — correct (it must never re-attach, ruling 2).
+          const search = searchOf(w.url);
+          const q = search ? new URLSearchParams(search.slice(1)) : null;
+          this.openProfiler({
+            instanceId: q?.get(PROFILER_INSTANCE_PARAM) ?? undefined,
+            sessionName: q?.get(PROFILER_SESSION_PARAM) ?? undefined,
+            ...opts,
+          });
           break;
+        }
         case "app":
           if (w.appId) await this.openApp(w.appId, opts);
           break;

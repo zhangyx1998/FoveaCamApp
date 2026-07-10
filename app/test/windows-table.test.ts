@@ -34,9 +34,9 @@ describe("WINDOWS taxonomy table", () => {
     }
   });
 
-  it("marks welcome + profiler as the singletons, nothing else", () => {
+  it("marks only welcome as a singleton (profiler is now 0..N, one per instance)", () => {
     for (const cls of CLASSES)
-      expect(WINDOWS[cls].singleton).toBe(cls === "welcome" || cls === "profiler");
+      expect(WINDOWS[cls].singleton).toBe(cls === "welcome");
   });
 
   it("dedupes only the viewer, by fileKey", () => {

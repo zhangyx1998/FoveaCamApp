@@ -55,6 +55,10 @@ export interface InstanceView {
   readonly kind: InstanceKind;
   readonly proc: InstanceProc;
   readonly phase: InstancePhase;
+  /** Human session name (the activating app id, e.g. `manual-control`) — carried
+   *  so a bound observer window (the profiler) can title itself with the session
+   *  it pins to. Defaults to the instance id when no app id is supplied. */
+  readonly sessionName: string;
   /** Hardware instances: has main sent "hardware-clear" (acquisition allowed)?
    *  Non-hardware instances are cleared at fork (they never touch hardware). */
   readonly hardwareCleared: boolean;
@@ -100,6 +104,7 @@ interface InstanceRec {
   kind: InstanceKind;
   proc: InstanceProc;
   phase: InstancePhase;
+  sessionName: string;
   hardwareCleared: boolean;
   /** Clean-exit ack (`quiesced`) received before exit. */
   quiesced: boolean;
@@ -111,6 +116,11 @@ interface InstanceRec {
   /** Owned windows (A-34 windowIds). A hardware instance dies when its last
    *  owned window closes. */
   windows: Set<string>;
+  /** Attached observer windows (A-34 windowIds) — the profiler pins here at
+   *  open. Unlike owned `windows` these NEVER gate teardown (the profiler may
+   *  outlive its instance, ruling 2), but they DO receive the down report and
+   *  route their connect to this instance (never any other). */
+  attachments: Set<string>;
   /** Set once the instance has ever owned a window — so a just-forked instance
    *  awaiting its window isn't torn down as "no windows". */
   hadWindow: boolean;
@@ -123,6 +133,7 @@ function view(rec: InstanceRec): InstanceView {
     kind: rec.kind,
     proc: rec.proc,
     phase: rec.phase,
+    sessionName: rec.sessionName,
     hardwareCleared: rec.hardwareCleared,
   };
 }
@@ -197,7 +208,7 @@ export class OrchestratorInstances {
    * other hardware instance has fully released. Non-hardware instances are
    * cleared immediately (they never touch hardware).
    */
-  open(kind: InstanceKind): InstanceView {
+  open(kind: InstanceKind, sessionName?: string): InstanceView {
     const id = `${kind === "hardware" ? "hw" : "nh"}-${++this.idCounter}`;
     const proc = this.deps.fork(id, kind);
     const rec: InstanceRec = {
@@ -205,11 +216,13 @@ export class OrchestratorInstances {
       kind,
       proc,
       phase: "live",
+      sessionName: sessionName ?? id,
       hardwareCleared: false,
       quiesced: false,
       expected: false,
       janitorDone: false,
       windows: new Set(),
+      attachments: new Set(),
       hadWindow: false,
       drainTimer: null,
     };
@@ -240,6 +253,32 @@ export class OrchestratorInstances {
     return rec ? view(rec) : null;
   }
 
+  /** Attach an OBSERVER window (the profiler) to an instance at open — the
+   *  immutable per-instance binding (ruling 1/2). Unlike `claimWindow` this
+   *  never marks `hadWindow` and never gates teardown: the profiler may outlive
+   *  the instance. No-op if the instance is unknown. */
+  attachWindow(id: string, windowId: string): void {
+    this.byId(id)?.attachments.add(windowId);
+  }
+
+  /** The observer windowIds attached to an instance — a down report reaches
+   *  these in ADDITION to its owned windows (the profiler's frozen banner). */
+  attachmentsOf(id: string): string[] {
+    return [...(this.byId(id)?.attachments ?? [])];
+  }
+
+  /** The instance a window is BOUND to — owned (app) or attached (profiler) —
+   *  regardless of its phase, so the connect broker can fail CLOSED against a
+   *  DEAD binding instead of falling back to another instance (the profiler's
+   *  "never connect to another session" rule). Null only for an UNBOUND window
+   *  (projection/debug), which the broker routes to the current instance. */
+  boundInstance(windowId: string): InstanceView | null {
+    const rec = this.instances.find(
+      (r) => r.windows.has(windowId) || r.attachments.has(windowId),
+    );
+    return rec ? view(rec) : null;
+  }
+
   /** The windowIds an instance currently owns — the crash-report scope (ruling
    *  4): a down report reaches ONLY this instance's windows, so a NEW instance's
    *  app window never reacts to the OLD instance's death. */
@@ -250,6 +289,9 @@ export class OrchestratorInstances {
   /** A window closed: drop it, and dispose its instance once its LAST owned
    *  window is gone (app close → welcome, or the outgoing side of a switch). */
   onWindowClosed(windowId: string): void {
+    // Drop any observer binding first (profiler close) — this never affects an
+    // instance's lifecycle, so it can't tear anything down.
+    for (const r of this.instances) r.attachments.delete(windowId);
     const rec = this.instances.find((r) => r.windows.has(windowId));
     if (!rec) return;
     rec.windows.delete(windowId);

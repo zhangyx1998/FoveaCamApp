@@ -13,8 +13,10 @@
 //
 // Window taxonomy (multi-window.md §2): `welcome` (singleton, the fallback
 // when no app window is open), `app` (≤ 1 at a time — apps are mutually
-// exclusive over camera leases + the controller), `profiler` (singleton
-// utility; does not count toward the welcome rule), `projection` (0..N
+// exclusive over camera leases + the controller), `profiler` (0..N utility;
+// one per orchestrator instance — each pins to the app instance alive when it
+// was opened and outlives it frozen, orchestrator-lifecycle-and-exit §"Profiler
+// per-instance binding"; does not count toward the welcome rule), `projection` (0..N
 // single-stream viewers — passive subscribers, never exclusive, never
 // counted for the welcome rule, survive their source app's close),
 // `viewer` (0..N recorder playback windows, ONE PER `.fcap`/`.fovea` file —
@@ -42,6 +44,16 @@ export type ProjectionParams = { session: string; frame: string };
  *  manifest persists the full landing URL). C-24's composition protocol keys
  *  `win/<windowId>/...` node namespaces + close-teardown on it. */
 export const WINDOW_ID_PARAM = "win";
+
+/** URL query keys pinning a profiler window to ONE orchestrator instance
+ *  (orchestrator-lifecycle-and-exit §"Profiler per-instance binding"): the
+ *  instance id it profiles into (`instance`) and that instance's human session
+ *  name / app id (`session`, e.g. `manual-control`). Stamped at open by
+ *  `WindowManager.openProfiler`, read renderer-side for the title bar + the
+ *  connect broker's fail-closed routing. Immutable for the window's life — a
+ *  profiler NEVER re-binds to a newer instance (ruling 2). */
+export const PROFILER_INSTANCE_PARAM = "instance";
+export const PROFILER_SESSION_PARAM = "session";
 
 export interface AppMeta {
   /** Stable id — module directory name; also the entry HTML basename. */
@@ -210,9 +222,16 @@ export const WINDOWS: Record<WindowClass, WindowSpec> = {
     bounds: { width: 1200, height: 900, minWidth: 800, minHeight: 600 },
   },
   profiler: {
-    singleton: true,
+    // 0..N — one per orchestrator instance (not a singleton): a profiler pins to
+    // the app instance alive when it was opened; opening the chart icon for the
+    // same live instance re-focuses its existing profiler, a NEW app + a new
+    // profiler is a second window (WindowManager.openProfiler keys by instance).
+    singleton: false,
     exclusive: false,
     countsForWelcome: false,
+    // SURVIVE (ruling 2): the profiler outlives its instance's death — it stays
+    // open with its accumulated graphs/meters/logs frozen and inspectable, and
+    // is NEVER re-attached to a newer instance.
     onOwnerClose: "survive",
     entry: "windows/profiler.html",
     // Sandboxed, bridge-only — no shm reader (stats over the bridge).

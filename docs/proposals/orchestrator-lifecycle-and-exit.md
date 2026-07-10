@@ -394,6 +394,53 @@ a bug.
   (`FOVEA_FORK_TS` stamped per fork) still report spin-up timing — read them on
   the rig for the spawn-latency reading.
 
+### Profiler per-instance binding (2026-07-09 follow-up)
+
+The Profiler window is adapted to the disposable model (user ruling: "a profiler
+instance should be assigned a session id to profile into … may outlive the app
+for preservation of debug logs, but should not attempt to connect to another
+session … should have the session name and id in the title bar").
+
+- **Bind at open, immutable for life.** The profiler-open path
+  (`open-profiler-window`) resolves `registry.currentHardware()` and stamps
+  `{instance, session}` into the profiler window URL (`PROFILER_INSTANCE_PARAM` /
+  `PROFILER_SESSION_PARAM`, `@lib/windows`). Instances now carry a human
+  `sessionName` (the activating app id — `registry.open("hardware", appId)`). The
+  window is registered as an observer **attachment** on that instance
+  (`registry.attachWindow`) — NOT an owned window, so closing the profiler can't
+  dispose the instance and the instance's death can't close the profiler.
+- **Connect routing pins the instance; fails CLOSED.** `orchestrator:connect`
+  resolves the sender's `registry.boundInstance(windowId)` (owned app OR attached
+  profiler). A bound window routes to THAT instance only; if it is already dead
+  the broker replays the typed down report (`lastDownReports`) and brokers NO port
+  — it never falls back to another instance (the "never connect to another
+  session" rule). Unbound windows (projection/debug) still route to the current
+  instance. This supersedes the blanket `connectTarget()` routing noted above for
+  bound windows.
+- **Keying + survive policy.** Profiler is no longer a `singleton` — it is 0..N,
+  one per instance. `WindowManager.openProfiler` keys by `profiler:<instanceId>`:
+  re-clicking the chart icon for the same LIVE instance re-focuses its existing
+  profiler; a new app (new instance) opens a SECOND profiler. `onOwnerClose:
+  survive` (already set) keeps it open past its app; app-quit still closes it
+  (`closeAll`). Multiple profilers coexist, each pinned to its own (possibly dead)
+  instance; `planFromManifest` restores every one (each re-opens straight into the
+  frozen state — the instances are gone after a restart, and it must not
+  re-attach).
+- **Frozen session-ended UI.** When the bound instance goes down, the down report
+  reaches the profiler (attachments are notified alongside owned windows), sets
+  `orchestratorDown`, and the profiler STOPS polling (no reconnect, no console
+  spam) while keeping all accumulated graphs/meters/clocks/spans browsable. A
+  layout-stable banner distinguishes a clean/killed end ("Session ended", neutral)
+  from a `crash` ("Session crashed", danger tokens) off the SAME typed report.
+  Snapshot export needs a live orchestrator, so it is disabled with a tooltip when
+  dead (reveal-folder still works). The title bar shows `session · #shortId` (pure
+  helpers in `src/profiler/binding.ts`).
+- **Gates (follow-up).** `vue-tsc --noEmit` clean; `vitest` full suite green
+  (700, +13: registry attach/bound/sessionName, profiler per-instance keying,
+  `profiler-binding` formatting); `vite build` clean. Rig items in
+  stage-f.md §"Disposable orchestrator" (profiler survives frozen, two pinned
+  profilers, crashed-vs-clean banners).
+
 ### Gates
 
 `vue-tsc --noEmit` clean (for the files in scope). `vitest`: the 2 new suites
