@@ -24,3 +24,6 @@ workers implement against these files, and live-rig items accumulate in
 | [standalone-viewer-and-fcap](./standalone-viewer-and-fcap.md) | shipped; UI pass owed | viewer decouples from the orchestrator (core-import exception); BayerRG12p fix; `.fcap`/pyfcap rename |
 | [orchestrator-lifecycle-and-exit](./orchestrator-lifecycle-and-exit.md) | shipped (amended); runtime pass owed | audited exit sequence: watchdog for main-crash, darwin park, crash reports, ack-based clean/crash, window-first quit (persistent process per AMENDED ruling) |
 | [viewer-timeline](./viewer-timeline.md) | shipped; UI pass owed | multi-track timeline viewer: master wide track, packed blocks, playhead preview tiles, 3D dropdown, sidecar UI state |
+| [prediction-compose-node](./prediction-compose-node.md) | PROPOSED (in flight) | IMM predictor → native free-running brick (rate+offset, always wired); pid stays at camera rate; new compose node feed-forwards volt deltas at `prediction_rate_hz` (global, default 600) |
+| [sgbm-signed-range](./sgbm-signed-range.md) | PROPOSED (in flight) | foveated gaze ⇒ signed disparity: both stereo attach sites get a fixed symmetric ±256 window |
+| [stereo-throughput](./stereo-throughput.md) | PROPOSED (in flight) | stereo matcher becomes a benchmark-selected strategy (scaled SGBM_3WAY / BM / +WLS) targeting ~60 fps CPU-only |
