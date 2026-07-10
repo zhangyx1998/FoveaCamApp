@@ -118,11 +118,13 @@ const drawer_height = ref(0);
 const stroke = computed(() => Math.max(telemetry.size.width, telemetry.size.height, 1) * 0.003);
 
 // Per-eye pose markers on the (wide) C view: a fovea camera is magnified by the
-// app-config zoom ratio, so one fovea frame projects onto the wide view shrunk
-// by that ratio. The rects must therefore be the fovea FOOTPRINT (size / zoom),
-// not the full wide-frame size — same crop the sliced center view uses.
+// zoom ratio, so one fovea frame projects onto the wide view shrunk by that
+// ratio. The rects must therefore be the fovea FOOTPRINT (size / zoom), not the
+// full wide-frame size — same crop the sliced center view uses. Routed through
+// the RESOLVED `match_zoom` so Auto (zoom 0) frames the measured footprint
+// instead of the whole frame (`foveaFootprintOnWide` clamps to ≥ 1 internally).
 const foveaFootprint = computed(() =>
-  foveaFootprintOnWide(telemetry.size, state.zoom),
+  foveaFootprintOnWide(telemetry.size, match_zoom.value),
 );
 
 // --- tuning: every write replaces the whole `state.tuning` object (a nested
@@ -148,14 +150,22 @@ const scale_ratio = computed<number>({
   get: () => state.tuning.scale,
   set: (v) => setTuning("scale", v),
 });
-// The magnification actually driving the template match: the calibration-
-// measured fovea↔wide ratio when the session reports one, else the nominal
-// zoom knob (the session/kernel apply the exact same fallback) — keeps the
-// "Template Scale" readout honest now that the knob no longer influences the
-// match on calibrated rigs.
-const match_zoom = computed(
-  () => telemetry.match_magnification ?? Math.max(1, state.zoom),
+// The magnification actually driving the template match, under the RULED
+// precedence (2026-07-09), mirroring the session's `matchZoom()`: an explicit
+// `state.zoom > 0` is AUTHORITATIVE; `zoom === 0` is "Auto" → the calibration-
+// measured value (else 1). Keeps the "Template Scale" / footprint readouts
+// honest in both modes.
+const match_zoom = computed(() =>
+  state.zoom > 0 ? state.zoom : (telemetry.match_magnification ?? 1),
 );
+// Auto-mode readout for the Zoom-Ratio knob (shown only at zoom 0): surfaces the
+// RESOLVED magnification the match actually uses. A measured value reads
+// "Auto N×"; with NO calibrated magnification `match_zoom` degenerates to 1, so
+// the readout must flag that (an honest fallback, not a real measured 1×).
+const auto_hint = computed(() => {
+  const z = `Auto ${match_zoom.value.toFixed(1)}×`;
+  return telemetry.match_magnification !== null ? z : `${z} (no cal)`;
+});
 const min_score = computed<number>({
   get: () => state.tuning.min_score,
   set: (v) => setTuning("min_score", v),
@@ -410,14 +420,28 @@ function openDebugger(): void {
         <label
           class="entry"
           :title="
-            telemetry.match_magnification !== null
-              ? `Sliced-view crop only — template match uses the calibrated ` +
-                `magnification (${telemetry.match_magnification.toFixed(2)}x)`
-              : 'Sliced-view crop + template-match magnification (no calibrated value)'
+            state.zoom > 0
+              ? 'Explicit zoom drives both the sliced-view crop and the ' +
+                'template-match magnification (ruled authoritative)'
+              : telemetry.match_magnification !== null
+                ? `Auto — using the calibration-measured magnification ` +
+                  `(${telemetry.match_magnification.toFixed(2)}x); set a value to override`
+                : 'Auto — no calibrated magnification available (falls back to 1); set a value'
           "
         >
           <span>Zoom Ratio</span>
-          <input type="number" v-model.number="state.zoom" />
+          <!-- Right-side group (mirrors `.kernel-size`): the Auto hint expands
+               into free space to the LEFT of the input, which stays anchored at
+               the row edge — toggling zoom 0↔value never reflows a neighbor. -->
+          <span class="zoom-value">
+            <span
+              v-if="state.zoom === 0"
+              class="auto-hint"
+              :class="{ uncal: telemetry.match_magnification === null }"
+              >{{ auto_hint }}</span
+            >
+            <input type="number" min="0" step="0.1" v-model.number="state.zoom" />
+          </span>
         </label>
       </div>
       <!-- Columns 2-4: per-DOF gain PIDs (Pan / Depth / Vertical) -->
@@ -691,6 +715,23 @@ function openDebugger(): void {
 
       input[type="number"] {
         width: 6ch;
+      }
+    }
+
+    .zoom-value {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5ch;
+    }
+
+    .auto-hint {
+      font-size: var(--fs-sm);
+      color: var(--text-muted);
+      white-space: nowrap;
+      // Degenerate Auto (no calibrated magnification) is flagged, not silent —
+      // so a fallback 1× never reads as a genuine measured 1×.
+      &.uncal {
+        color: var(--warn);
       }
     }
   }

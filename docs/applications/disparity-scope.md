@@ -121,56 +121,63 @@ rectified frame, so the ÷`zoom` step is required and correct.
 template matching is not scale invariant, so a mis-set nominal zoom put the tile
 and strip at different pixel scales and degraded matching.
 
-## Decision taken (2026-07-08, coordinator-granted)
+## Match zoom — RULED precedence + measured magnification (2026-07-09)
 
-The calibration-MEASURED fovea↔wide magnification now drives the match:
+The 2026-07-08 attempt above (measured value wins unconditionally) was RETIRED:
+its measured value came from `foveaWideMagnification = scale·1000/focal`, whose
+"marker sat 1000 marker-side-lengths from the camera" assumption is **false on
+the rig** (the marker was ~62–69 side-lengths away), inflating the measured
+magnification to ~145–150 vs the true ~9 and commanding a ~16× too-small
+needle. The formula is unsalvageable (the dataset can't recover the true
+distance) and is **deleted**. The current design:
 
-1. **`app/lib/marker.ts` `findPinholeProjection`** returns
-   `{ A2H, scale, scale_std }` instead of discarding the measured scale
-   (fovea px per object-unit at the protocol's nominal 1000-unit marker
-   distance; previously `console.log`-only).
-2. **`app/lib/coordinate-conversions.ts`** — `ExtrinsicConversions` carries
-   optional `scale`/`scale_std`; new pure `foveaWideMagnification(scale, focal)
-   = scale·1000/mean(focal)`, null on missing/degenerate inputs. The derivation
-   is unit-independent but assumes extrinsic captures near the protocol's
-   nominal 1000-unit distance — the same assumption `findPinholeProjection`'s
-   hardcoded projection plane already bakes into A2H. RIG-GATED: check the
-   reported value lands near the known optics (~9x) on real calibration data.
-3. **`app/orchestrator/calibration.ts`** — `CalibratedTriple.magnification:
-   { L, R }` (per-eye measured ratio or null), built in
-   `leaseCalibratedTriple`.
-4. **`app/modules/disparity-scope/session.ts`** — ships `matchZoom` (mean of
-   the per-eye values; single eye's value if only one measured; null if none)
-   to the kernel; `effectiveScale()` folds `tuning.scale` against the measured
-   magnification. A single scalar is used because the match shares one guide
-   strip + one tile size for both eyes; the two foveas share optics so L/R
-   should agree (the mean absorbs measurement noise).
-5. **`app/modules/disparity-scope/vision.ts`** — new `matchZoom` param; the
-   tile size and `analyzeVergence` use `matchMagnification(matchZoom, zoom)`
-   (vergence.ts): measured when valid, else `max(1, zoom)`.
-6. **Telemetry `match_magnification`** (contract.ts) surfaces the active
-   measured value (null = fallback); the UI's "Template Scale" readout and the
-   Zoom-Ratio tooltip use it.
+**Precedence flip (ruling 1).** `matchMagnification(measured, nominalZoom)`
+(vergence.ts): an explicit `state.zoom > 0` is **authoritative** — it drives
+both the template match AND the sliced-view crop / KCF search sizing. A zoom of
+`0` is the new **"Auto"** state → use the calibration-MEASURED magnification
+when valid, else `1` (degenerate but honest; the operator then sets a zoom).
+The session's crop/KCF sites route through `Math.max(1, matchZoom())` so Auto
+crops at the measured magnification instead of degenerating to full-frame. The
+UI's `match_zoom` computed and the Zoom-Ratio input (which now accepts `0`,
+showing "Auto N×") mirror this exactly.
 
-**FALLBACK (zero regression on old data):** when no measured value exists —
-legacy extrinsic fits without `scale`, uncalibrated wide camera, degenerate
-values — `matchMagnification` falls back to `max(1, state.zoom)`, byte-for-byte
-the previous behavior.
+**New measured magnification — distance/size-free marker-quad ratio (rulings
+2 & 3).** Recorded at extrinsic CAPTURE, derived at fit with no distance term:
 
-**Knob semantics now (PROMINENT — user may veto, see Open questions):**
-`state.zoom` ("Zoom Ratio") drives ONLY the sliced-view crop size (and remains
-the match fallback on unmeasured rigs). On calibrated rigs the knob **no longer
-influences template matching at all** — the measured value wins unconditionally.
+- *Preferred (ruling 3):* `sqrt(area(foveaQuad) / area(wide_side_marker_quad))`
+  — the wide (C) camera usually also sees the SIDE markers the L/R foveae
+  track. Same physical marker in both cameras ⇒ its size and distance cancel;
+  the area ratio's square root is the linear magnification directly.
+- *Fallback (ruling 2):* `sqrt(area(foveaQuad) / area(wide_center_quad)) ×
+  (center_mm / side_mm)`. The center and side markers are sized independently
+  in the TeleCanvas (`cal_marker_size_mm` × `cal_marker_ratio`), so the
+  fallback must carry the marker sizes (recorded per capture). Skipped without
+  that metadata.
+- *Legacy datasets* (no wide-camera marker quads) → NO measured magnification;
+  Auto then falls back to 1.
 
-Selection + derivation are unit-tested (`app/test/vergence.test.ts`:
-`foveaWideMagnification`, `matchMagnification`, plus the tile/strip
-scale-consistency invariants).
+Plumbing: `calibrate-extrinsic` `capture()` records `C.side_pts` (the wide
+camera's side-marker quads, by id) + `C.marker` (sizes at capture);
+`createDataSet` threads `wide_img_points`/`wide_center_points`/`marker` per eye
+onto `ExtrinsicData`; `findPinholeProjection` computes `magnification` (mean)
+`magnification_std` (spread) via `fitMagnification`/`recordMagnification`
+(`app/lib/coordinate-conversions.ts`, pure — injected `area` for testability);
+`leaseCalibratedTriple` populates `triple.magnification.{L,R}` from the fit;
+`session.measuredMatchZoom()` means the two eyes; telemetry
+`match_magnification` surfaces it for the UI's Auto readout.
+
+Precedence + derivation are unit-tested (`app/test/vergence.test.ts`:
+`matchMagnification`, `recordMagnification`, `fitMagnification`, plus the
+tile/strip scale-consistency invariants; `app/test/extrinsic-dataset.test.ts`:
+`createDataSet` field threading).
 
 ## Known/suspected issues
-- **RESOLVED — bug (a):** match scale now comes from the calibration-measured
-  magnification (nominal-zoom fallback). RIG-GATED: verify match_left/right
-  quality improves (or at minimum, `match_magnification` telemetry reads a
-  plausible ~9x) on the calibrated rig.
+- **RESOLVED — bug (a) (amended 2026-07-09):** the `scale·1000/focal` measured
+  magnification was retired (false distance assumption inflated it ~16×).
+  Explicit `state.zoom` is now authoritative; `zoom=0` Auto uses the new
+  marker-quad-ratio magnification. RIG-GATED (stage-f §Match magnification
+  fix): with zoom=9 the size-trace shows needle dsize ≈160×120; zoom=0 Auto on
+  a fresh extrinsic calibration reads `match_magnification` ≈9.
 - **RESOLVED — secondary (was RIG-GATED, hit on the rig 2026-07-09 as
   "needles way too small"):** `foveaTileSize` sized the tile from the CENTER
   `width/height` while dividing by the MEASURED magnification (a
@@ -212,8 +219,10 @@ scale-consistency invariants).
    for the single match scale. If the two fovea paths ever diverge optically,
    the match/tile pipeline would need per-eye tile+strip sizing — worth it?
    (Current hardware: shared optics, expected to agree.)
-3. **Distance assumption.** `foveaWideMagnification` inherits the extrinsic
-   protocol's nominal-1000-unit capture-distance assumption (already baked into
-   A2H). If future calibration captures at varying distances, the measured
-   `scale` (and A2H) would both need a per-pose distance term — flag for the
-   calibration owner rather than this module.
+3. **Distance assumption — RESOLVED for magnification.** The retired
+   `foveaWideMagnification` inherited the protocol's nominal-1000-unit
+   capture-distance assumption; the new marker-quad ratio has **no** distance
+   term (same marker in both cameras, or explicit marker sizes). The A2H
+   homography still uses the `transformPoints(..., 1000)` projection plane —
+   unrelated to the magnification now, but flag for the calibration owner if
+   future captures vary distance.

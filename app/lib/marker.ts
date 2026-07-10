@@ -12,6 +12,7 @@ import {
 } from "core/Vision";
 import { area, type Point2d, type Point3d, type Size } from "core/Geometry";
 import type { ExtrinsicDataset } from "./camera-config.js";
+import { fitMagnification } from "./coordinate-conversions.js";
 import Regression, { RegressionConfig } from "core/Regression";
 
 export const CORNER_OBJ_POINTS: Point3d[] = [
@@ -165,14 +166,18 @@ export function transformPoints(
 /**
  * Fit the angle→homography regression for one fovea from its extrinsic dataset.
  *
- * Also returns the MEASURED fovea image scale (`scale`, with per-pose spread
- * `scale_std`): fovea pixels per object-unit at the protocol's nominal
- * 1000-object-unit marker distance (the hardcoded `transformPoints(..., 1000)`
- * projection plane below). Combined with the wide camera's focal length this
- * yields the true fovea↔wide magnification — `scale · 1000 / focal` — which
- * `useCoordinateConversions`' consumers need for scale-consistent template
- * matching (see `foveaWideMagnification` in @lib/coordinate-conversions).
- * Previously this value was computed and discarded (console.log only).
+ * Also returns the MEASURED fovea↔wide optical `magnification` (with per-record
+ * spread `magnification_std`): the distance-and-size-free ratio of the two
+ * cameras' views of the marker — preferred from the wide camera's view of the
+ * SAME side marker, else the center-marker fallback with marker-size metadata
+ * (RULED 2026-07-09; see `fitMagnification`/`recordMagnification` in
+ * @lib/coordinate-conversions). `null` when no record carries the wide quad
+ * (legacy dataset) → the template-match consumer falls back to nominal zoom.
+ *
+ * The legacy `scale` (fovea px per object-unit at the protocol's nominal
+ * 1000-unit distance) is still returned for continuity/diagnostics but NO
+ * LONGER feeds the magnification — the old `scale·1000/focal` derivation was
+ * retired (its 1000-side-length distance assumption is false on the rig).
  */
 export async function findPinholeProjection(ds: ExtrinsicDataset) {
   const relative = ds.map(({ obj_points, angle }) =>
@@ -186,7 +191,9 @@ export async function findPinholeProjection(ds: ExtrinsicDataset) {
   const scale_std = Math.sqrt(
     scales.reduce((a, b) => a + (b - scale) ** 2, 0) / scales.length,
   );
-  console.log({ scale, scale_std });
+  // Ruled magnification: same-side-marker ratio (else center-marker fallback).
+  const { magnification, magnification_std } = fitMagnification(ds, area);
+  console.log({ scale, scale_std, magnification, magnification_std });
   // Ger homography projection matrix H per angle
   const H = await Promise.all(
     relative.map((r, i) => {
@@ -215,5 +222,5 @@ export async function findPinholeProjection(ds: ExtrinsicDataset) {
     config,
   );
   const A = ds.map(({ angle }) => angle);
-  return { A2H: A2H.fit(A, H), scale, scale_std };
+  return { A2H: A2H.fit(A, H), scale, scale_std, magnification, magnification_std };
 }

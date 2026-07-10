@@ -29,38 +29,102 @@ export type ExtrinsicConversions = {
   /** Calibration-MEASURED fovea image scale: fovea px per object-unit at the
    *  extrinsic protocol's nominal 1000-object-unit marker distance (from
    *  `findPinholeProjection`, @lib/marker). Optional — absent on fits made
-   *  before this field existed; consumers must fall back gracefully. */
+   *  before this field existed. NOTE: no longer feeds the fovea↔wide
+   *  magnification (the ×1000/focal formula was RETIRED 2026-07-09 — it baked
+   *  in a false "marker at 1000 side-lengths" distance assumption); kept only
+   *  because it is persisted on old fits and is a harmless calibration signal. */
   scale?: number;
   /** Per-pose spread of `scale` (same units) — a calibration-quality signal. */
   scale_std?: number;
+  /** Calibration-MEASURED fovea↔wide optical magnification (mean over the
+   *  records that support it — see {@link fitMagnification}). Optional — null/
+   *  undefined when NO record carried the wide camera's view of the marker
+   *  (legacy dataset, uncalibrated wide camera). Consumers (disparity-scope's
+   *  template match) use this in Auto (zoom 0) and fall back to their nominal
+   *  zoom otherwise. */
+  magnification?: number | null;
+  /** Per-record spread of `magnification` — a calibration-quality signal. */
+  magnification_std?: number | null;
+};
+
+/** The marker-quad fields a per-record magnification is derived from — a
+ *  structural subset of `ExtrinsicData` (@lib/camera-config), declared here so
+ *  the pure derivation below stays independent of the dataset/native area. */
+export type MagnificationSample = {
+  /** The fovea camera's outer marker quad (first 4 of `img_points`). */
+  img_points: Point2d[];
+  /** Ruling 3 (preferred): the WIDE (C) camera's quad of the SAME side marker
+   *  this eye's fovea tracks — same physical marker, so size and distance
+   *  cancel exactly in the ratio. */
+  wide_img_points?: Point2d[];
+  /** Ruling 2 (fallback): the wide camera's own CENTER-marker quad; needs
+   *  `marker` sizes because the center marker is sized independently. */
+  wide_center_points?: Point2d[];
+  /** Ruling 2: marker sizes (mm) at capture — the center is adjusted freely
+   *  relative to the sides, so the fallback must carry both. */
+  marker?: { side_mm: number; center_mm: number };
 };
 
 /**
- * The measured fovea↔wide optical magnification for one eye.
+ * The measured fovea↔wide optical magnification for ONE calibration record —
+ * the distance-and-size-free ratio of the two cameras' views of a marker
+ * (RULED 2026-07-09; replaces the retired `scale·1000/focal` formula, which
+ * assumed the marker sat 1000 side-lengths away — false on the rig).
  *
- * Derivation: `scale` (from `findPinholeProjection`) is fovea px per
- * object-unit at the extrinsic protocol's nominal 1000-object-unit marker
- * distance. The wide camera sees one object-unit at that same distance as
- * `focal / 1000` px (small-angle: it subtends `1/1000` rad). The ratio —
- * `scale · 1000 / focal` — is unit-independent (the object-unit cancels) but
- * DOES assume the extrinsic captures were made near the protocol's nominal
- * distance, the same assumption `findPinholeProjection`'s hardcoded
- * `transformPoints(..., 1000)` projection plane already bakes into A2H.
- * RIG-GATED: verify the returned value against the known optics (~9x) on
- * real calibration data.
+ *  - Preferred (ruling 3): `sqrt(area(foveaQuad) / area(wide_img_points))` —
+ *    the fovea and the wide camera view the SAME physical side marker, so the
+ *    marker's size and its distance cancel; the area ratio's square root is
+ *    the linear px-per-px magnification directly.
+ *  - Fallback (ruling 2): `sqrt(area(foveaQuad) / area(wide_center_points)) ×
+ *    (center_mm / side_mm)` — the fovea sees the side marker, the wide camera
+ *    sees the (independently-sized) CENTER marker; fovea px/mm =
+ *    foveaSidePx/side_mm, wide px/mm = centerPx/center_mm, and the
+ *    magnification is their ratio. Needs `marker`; skipped without it.
  *
- * Returns `null` when the measurement isn't available (legacy extrinsic fit,
- * uncalibrated wide camera, degenerate values) — callers fall back to their
- * nominal zoom.
+ * `areaOf` is injected (core's `Geometry.area` is native) so this stays pure
+ * and unit-testable with a shoelace area. Returns `null` when neither wide
+ * quad is present (record excluded from the fit) or a quad is degenerate.
  */
-export function foveaWideMagnification(
-  scale: number | undefined,
-  focal: Point2d | null | undefined,
+export function recordMagnification(
+  d: MagnificationSample,
+  areaOf: (pts: Point2d[]) => number,
 ): number | null {
-  if (!scale || !Number.isFinite(scale) || scale <= 0 || !focal) return null;
-  const f = (focal.x + focal.y) / 2;
-  if (!Number.isFinite(f) || f <= 0) return null;
-  return (scale * 1000) / f;
+  const foveaArea = areaOf(d.img_points.slice(0, 4));
+  if (!(foveaArea > 0)) return null;
+  if (d.wide_img_points && d.wide_img_points.length >= 4) {
+    const wa = areaOf(d.wide_img_points.slice(0, 4));
+    if (wa > 0) return Math.sqrt(foveaArea / wa);
+  }
+  if (d.wide_center_points && d.wide_center_points.length >= 4 && d.marker) {
+    const wa = areaOf(d.wide_center_points.slice(0, 4));
+    const { side_mm, center_mm } = d.marker;
+    if (wa > 0 && side_mm > 0 && center_mm > 0)
+      return Math.sqrt(foveaArea / wa) * (center_mm / side_mm);
+  }
+  return null;
+}
+
+/**
+ * Fit the fovea↔wide magnification over a whole extrinsic dataset: the MEAN of
+ * every record's {@link recordMagnification} (spread as `magnification_std`).
+ * Both are `null` when NO record supports a measurement — the consumer then
+ * has no measured value and falls back to its nominal zoom.
+ */
+export function fitMagnification(
+  ds: MagnificationSample[],
+  areaOf: (pts: Point2d[]) => number,
+): { magnification: number | null; magnification_std: number | null } {
+  const mags: number[] = [];
+  for (const d of ds) {
+    const m = recordMagnification(d, areaOf);
+    if (m != null && Number.isFinite(m) && m > 0) mags.push(m);
+  }
+  if (mags.length === 0) return { magnification: null, magnification_std: null };
+  const magnification = mags.reduce((a, b) => a + b, 0) / mags.length;
+  const magnification_std = Math.sqrt(
+    mags.reduce((a, b) => a + (b - magnification) ** 2, 0) / mags.length,
+  );
+  return { magnification, magnification_std };
 }
 
 /** Everything the conversions read from a calibrated triple. */

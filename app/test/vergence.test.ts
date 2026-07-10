@@ -22,8 +22,10 @@ import {
 } from "@modules/disparity-scope/vergence";
 import type { Point2d } from "core/Geometry";
 import {
-  foveaWideMagnification,
+  fitMagnification,
+  recordMagnification,
   type CoordinateConversions,
+  type MagnificationSample,
 } from "@lib/coordinate-conversions";
 import { distanceToVerge } from "@lib/stereo";
 
@@ -117,67 +119,152 @@ describe("foveaTileSize (fovea↔wide match scale-consistency)", () => {
   });
 });
 
-// The measured-magnification plumbing (user-reported bug (a), decision taken
-// 2026-07-08): `foveaWideMagnification` derives the true fovea↔wide ratio from
-// the extrinsic fit's measured `scale` (fovea px per object-unit at the
-// protocol's nominal 1000-unit distance) and the wide focal length;
-// `matchMagnification` then selects measured-over-nominal with a legacy-exact
-// fallback. Session and kernel both route through `matchMagnification`, so
-// these pin the entire selection behavior.
-describe("foveaWideMagnification (measured ratio derivation)", () => {
-  it("derives scale·1000/mean(focal)", () => {
-    // scale = 9 fovea px per unit at 1000 units; wide focal 1000 px sees that
-    // unit as 1 px → magnification 9.
-    expect(foveaWideMagnification(9, { x: 1000, y: 1000 })).toBeCloseTo(9);
-    // Anisotropic focal uses the mean: (800+1200)/2 = 1000.
-    expect(foveaWideMagnification(9, { x: 800, y: 1200 })).toBeCloseTo(9);
-    expect(foveaWideMagnification(4.5, { x: 500, y: 500 })).toBeCloseTo(9);
+// The measured-magnification derivation (RULED 2026-07-09 — the old
+// `scale·1000/focal` formula was RETIRED: it assumed the marker sat 1000
+// side-lengths from the camera during extrinsic capture (false on the rig,
+// inflating the match zoom ~16×)). The replacement is a distance-and-size-free
+// ratio of the two cameras' marker quads: preferred from the wide camera's
+// view of the SAME side marker (ruling 3 — everything cancels), else the
+// center-marker fallback with the marker-size metadata (ruling 2). Injected
+// `area` keeps the math pure; here we use a shoelace area on synthetic quads.
+function shoelace(pts: Point2d[]): number {
+  let a = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const p = pts[i]!;
+    const q = pts[(i + 1) % pts.length]!;
+    a += p.x * q.y - q.x * p.y;
+  }
+  return Math.abs(a) / 2;
+}
+/** An axis-aligned square quad of the given side length (area = side²). */
+function square(side: number): Point2d[] {
+  return [
+    { x: 0, y: 0 },
+    { x: side, y: 0 },
+    { x: side, y: side },
+    { x: 0, y: side },
+  ];
+}
+
+describe("recordMagnification (marker-quad ratio, distance/size-free)", () => {
+  it("ruling 3 (preferred): sqrt(area(fovea) / area(wide side marker)) — 9× linear ⇒ 9", () => {
+    // Fovea sees the side marker 9× larger (linear) than the wide camera does.
+    const d: MagnificationSample = {
+      img_points: square(90),
+      wide_img_points: square(10),
+    };
+    expect(recordMagnification(d, shoelace)).toBeCloseTo(9);
   });
 
-  it("returns null for missing/degenerate inputs (legacy fits, uncalibrated wide)", () => {
-    expect(foveaWideMagnification(undefined, { x: 1000, y: 1000 })).toBeNull();
-    expect(foveaWideMagnification(0, { x: 1000, y: 1000 })).toBeNull();
-    expect(foveaWideMagnification(-3, { x: 1000, y: 1000 })).toBeNull();
-    expect(foveaWideMagnification(NaN, { x: 1000, y: 1000 })).toBeNull();
-    expect(foveaWideMagnification(9, null)).toBeNull();
-    expect(foveaWideMagnification(9, undefined)).toBeNull();
-    expect(foveaWideMagnification(9, { x: 0, y: 0 })).toBeNull();
-    expect(foveaWideMagnification(9, { x: NaN, y: NaN })).toBeNull();
+  it("ruling 2 (fallback): center-marker ratio scaled by center_mm/side_mm", () => {
+    // Fovea side-marker quad 90px; wide CENTER-marker quad 10px → sqrt ratio 9.
+    // The center marker is half the physical size of the side (10mm vs 20mm),
+    // so the true magnification is 9 × (center_mm/side_mm) = 9 × 0.5 = 4.5.
+    const d: MagnificationSample = {
+      img_points: square(90),
+      wide_center_points: square(10),
+      marker: { side_mm: 20, center_mm: 10 },
+    };
+    expect(recordMagnification(d, shoelace)).toBeCloseTo(4.5);
+  });
+
+  it("prefers the side-marker quad over the center-marker fallback when both exist", () => {
+    const d: MagnificationSample = {
+      img_points: square(90),
+      wide_img_points: square(10), // preferred → 9
+      wide_center_points: square(30), // fallback would give 3 × ratio
+      marker: { side_mm: 20, center_mm: 10 },
+    };
+    expect(recordMagnification(d, shoelace)).toBeCloseTo(9);
+  });
+
+  it("excludes a record with neither wide quad (→ null)", () => {
+    expect(recordMagnification({ img_points: square(90) }, shoelace)).toBeNull();
+    // Center quad present but NO marker metadata → fallback unusable → null.
+    expect(
+      recordMagnification(
+        { img_points: square(90), wide_center_points: square(10) },
+        shoelace,
+      ),
+    ).toBeNull();
   });
 });
 
-describe("matchMagnification (measured-vs-fallback selection)", () => {
-  it("prefers the measured magnification when present", () => {
-    expect(matchMagnification(8.7, 9)).toBe(8.7);
-    // Even when the nominal knob disagrees wildly — the knob must no longer
-    // influence the match on calibrated rigs.
-    expect(matchMagnification(8.7, 1)).toBe(8.7);
-    expect(matchMagnification(8.7, 42)).toBe(8.7);
+describe("fitMagnification (mean/std over supporting records)", () => {
+  it("averages the per-record magnifications and reports the spread", () => {
+    const ds: MagnificationSample[] = [
+      { img_points: square(80), wide_img_points: square(10) }, // 8
+      { img_points: square(100), wide_img_points: square(10) }, // 10
+    ];
+    const { magnification, magnification_std } = fitMagnification(ds, shoelace);
+    expect(magnification).toBeCloseTo(9); // (8 + 10) / 2
+    expect(magnification_std).toBeCloseTo(1); // |8-9| == |10-9| == 1
   });
 
-  it("falls back to the nominal zoom when unmeasured (legacy-exact)", () => {
-    expect(matchMagnification(null, 9)).toBe(9);
-    expect(matchMagnification(undefined, 9)).toBe(9);
-    // Degenerate measured values also fall back rather than poisoning the match.
-    expect(matchMagnification(0, 9)).toBe(9);
-    expect(matchMagnification(-1, 9)).toBe(9);
-    expect(matchMagnification(NaN, 9)).toBe(9);
-    expect(matchMagnification(Infinity, 9)).toBe(9);
+  it("skips records with no wide quad, keeping the supported ones", () => {
+    const ds: MagnificationSample[] = [
+      { img_points: square(90), wide_img_points: square(10) }, // 9
+      { img_points: square(90) }, // excluded
+    ];
+    expect(fitMagnification(ds, shoelace).magnification).toBeCloseTo(9);
   });
 
-  it("clamps the nominal fallback to >= 1, matching the session/kernel's old Math.max(1, zoom)", () => {
-    expect(matchMagnification(null, 0.5)).toBe(1);
+  it("returns null when NO record supports a measurement (legacy dataset)", () => {
+    const ds: MagnificationSample[] = [
+      { img_points: square(90) },
+      { img_points: square(120) },
+    ];
+    expect(fitMagnification(ds, shoelace)).toEqual({
+      magnification: null,
+      magnification_std: null,
+    });
+    expect(fitMagnification([], shoelace)).toEqual({
+      magnification: null,
+      magnification_std: null,
+    });
+  });
+});
+
+// RULED precedence flip (2026-07-09): an explicit nominal `zoom > 0` is now
+// AUTHORITATIVE over the measured magnification (the old measured-wins path was
+// retired with the false-distance formula). A zoom of 0 is the new "Auto"
+// state → use the measured value, else 1. Session and UI both mirror this.
+describe("matchMagnification (ruled precedence — explicit zoom wins, 0 = Auto)", () => {
+  it("an explicit zoom > 0 is authoritative, even over a measured value", () => {
+    expect(matchMagnification(8.7, 9)).toBe(9);
+    expect(matchMagnification(8.7, 1)).toBe(1);
+    expect(matchMagnification(8.7, 42)).toBe(42);
+    // No measured value at all — the explicit zoom still drives.
+    expect(matchMagnification(null, 12)).toBe(12);
+  });
+
+  it("zoom === 0 (Auto) falls back to the measured magnification", () => {
+    expect(matchMagnification(8.7, 0)).toBe(8.7);
+    expect(matchMagnification(9, 0)).toBe(9);
+  });
+
+  it("zoom === 0 with no valid measured value → 1 (degenerate but honest)", () => {
     expect(matchMagnification(null, 0)).toBe(1);
-    expect(matchMagnification(null, -2)).toBe(1);
+    expect(matchMagnification(undefined, 0)).toBe(1);
+    // Degenerate measured values are rejected in Auto too, → 1.
+    expect(matchMagnification(0, 0)).toBe(1);
+    expect(matchMagnification(-1, 0)).toBe(1);
+    expect(matchMagnification(NaN, 0)).toBe(1);
+    expect(matchMagnification(Infinity, 0)).toBe(1);
+  });
+
+  it("a non-finite/negative nominal zoom is treated as unset (→ measured/1)", () => {
+    expect(matchMagnification(8.7, -2)).toBe(8.7); // negative ⇒ Auto ⇒ measured
+    expect(matchMagnification(null, -2)).toBe(1); // and no measured ⇒ 1
+    expect(matchMagnification(8.7, NaN)).toBe(8.7);
   });
 
   it("feeds foveaTileSize consistently in both modes (tile:strip stays 1:1)", () => {
-    // Same invariant as the scale-consistency suite above, exercised through
-    // the selection: whichever magnification wins, BOTH the tile and the strip
-    // divide by it, so the pixel-scale agreement is preserved.
+    // Whichever magnification wins, BOTH the tile and the strip divide by it,
+    // so the pixel-scale agreement is preserved.
     for (const [measured, nominal] of [
-      [8.62, 9], // measured drives
-      [null, 9], // fallback drives
+      [8.62, 9], // explicit zoom drives
+      [8.62, 0], // Auto → measured drives
     ] as const) {
       const zoom = matchMagnification(measured, nominal);
       const tile = foveaTileSize({ width: 1440, height: 1080, zoom, scale: 3 });

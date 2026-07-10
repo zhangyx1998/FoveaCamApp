@@ -347,9 +347,13 @@ export default function disparityScopeSession(
       return L ?? R;
     }
 
-    /** Magnification driving the tile/strip match scale (measured, else the
-     *  nominal UI zoom). `state.zoom` itself now drives ONLY the sliced-view
-     *  crop + KCF search sizing — see docs/applications/disparity-scope.md. */
+    /** The resolved match magnification under the RULED precedence
+     *  (2026-07-09): an explicit `state.zoom > 0` is AUTHORITATIVE; `zoom === 0`
+     *  is "Auto" → the calibration-MEASURED value (else 1). This now drives
+     *  BOTH the tile/strip match scale AND — via `Math.max(1, matchZoom())` —
+     *  the sliced-view crop + KCF search sizing, so Auto crops at the measured
+     *  magnification instead of degenerating to full-frame. See
+     *  docs/applications/disparity-scope.md. */
     function matchZoom(): number {
       return matchMagnification(measuredMatchZoom(), s.state.zoom);
     }
@@ -399,7 +403,7 @@ export default function disparityScopeSession(
     /** The display center tile: `wide/zoom`, target-centered (the same crop
      *  the old kernel's "sliced" view cut). */
     function tileRect(): Rect {
-      const z = Math.max(1, s.state.zoom);
+      const z = Math.max(1, matchZoom()); // resolved zoom (Auto → measured)
       return clampToWide(
         RECT.fromCenter(s.state.target, {
           width: wide.width / z,
@@ -411,7 +415,7 @@ export default function disparityScopeSession(
     /** The match strip: the center tile expanded by `expand_x`/`expand_y`,
      *  target-centered (the guide strip `analyzeVergence` used to cut). */
     function computeStripRect(): Rect {
-      const z = Math.max(1, s.state.zoom);
+      const z = Math.max(1, matchZoom()); // resolved zoom (Auto → measured)
       const t = s.state.tuning;
       return clampToWide(
         RECT.fromCenter(s.state.target, {
@@ -608,7 +612,7 @@ export default function disparityScopeSession(
       if (!other || m.seq < other.seq) return; // pair incomplete — wait
       // Center-tile marker for the guide overlay (strip-local full-res px,
       // anchored to THIS strip frame's origin so it stays aligned mid-steer).
-      const z = Math.max(1, s.state.zoom);
+      const z = Math.max(1, matchZoom()); // resolved zoom (Auto → measured)
       s.telemetry({
         match_center: {
           rect: RECT.fromCenter(VEC.sub(s.state.target, v.origin), {

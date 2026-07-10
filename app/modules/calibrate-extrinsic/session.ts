@@ -51,24 +51,19 @@ import { getCameraKey } from "@lib/camera-config";
 import { type Undistort } from "core/Vision";
 import type { Point2d } from "core/Geometry";
 import type { Pos } from "@lib/controller-codec";
-import type { ExtrinsicDataset } from "@lib/camera-config";
 import type { ExtrinsicConversions } from "@lib/coordinate-conversions";
 import { calibrateExtrinsic, type ExtrinsicRecord } from "./contract";
+import { createDataSet } from "./dataset";
 
 type Role = "L" | "C" | "R";
 const ORIGIN: Pos = { x: 0, y: 0 };
 const SCRATCH_PATH = ["tmp", "calibrate-extrinsic"];
 
-/** Reshape captured records into the per-fovea dataset shape
- *  `loadExtrinsic`/`fitExtrinsicRegression` consume. */
-function createDataSet(records: ExtrinsicRecord[], key: "L" | "R"): ExtrinsicDataset {
-  return records.map((r) => ({
-    img_points: r[key].img_pts,
-    obj_points: r[key].obj_pts,
-    voltage: r[key].voltage,
-    angle: r.C.angle,
-  }));
-}
+// Config store path for the app-wide marker geometry (mirrors `useAppConfig`'s
+// `Store.open("config")`; read here through the orchestrator store-hub — NOT
+// `@lib/config`, which pulls Vue into this Vue-free session).
+const CONFIG_PATH = ["config"];
+type MarkerConfig = { cal_marker_size_mm?: number; cal_marker_ratio?: number };
 
 export default function calibrateExtrinsicSession(
   broker: PipeBroker,
@@ -317,11 +312,30 @@ export default function calibrateExtrinsicSession(
           const centerAbsolute = C.centerAbsolute;
           if (!L.target || !C.target || !R.target || !pos || !centerAbsolute) return;
           const angle = undistort.angular([centerAbsolute], true)[0];
+          // Ruling 3: the WIDE (C) camera's raw view of the SIDE markers (the
+          // SAME physical markers the L/R foveae track). `C.otherTargets` holds
+          // C's non-target detections this tick; match by the per-eye target id
+          // and record its outer 4-corner quad (absent when the wide camera
+          // didn't see that side marker → that eye's record has no preferred
+          // measurement, falls back to the center marker).
+          const sideQuad = (id: number): Point2d[] | undefined => {
+            const d = C.otherTargets.find((o) => o.id === id);
+            return d ? d.slice(0, 4).map((p) => ({ x: p.x, y: p.y })) : undefined;
+          };
+          const side_pts = {
+            L: sideQuad(s.state.targetId.L),
+            R: sideQuad(s.state.targetId.R),
+          };
+          // Ruling 2: the (independently-adjustable) marker sizes at capture,
+          // read from the store-hub-cached app config — side markers vs center.
+          const cfg = await read<MarkerConfig>(CONFIG_PATH, {});
+          const side_mm = cfg.cal_marker_size_mm ?? 60.0;
+          const marker = { side_mm, center_mm: side_mm * (cfg.cal_marker_ratio ?? 1.0) };
           records = [
             ...records,
             {
               L: { img_pts: L.target.img_pts, obj_pts: L.target.obj_pts, voltage: pos.left },
-              C: { img_pts: C.target.img_pts, obj_pts: C.target.obj_pts, angle },
+              C: { img_pts: C.target.img_pts, obj_pts: C.target.obj_pts, angle, side_pts, marker },
               R: { img_pts: R.target.img_pts, obj_pts: R.target.obj_pts, voltage: pos.right },
             },
           ];

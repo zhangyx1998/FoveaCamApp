@@ -73,20 +73,24 @@ export function foveaTileSize(opts: {
 export { foveaFootprintOnWide } from "./display-geometry";
 
 /**
- * The magnification that drives the fovea↔wide template match: the
- * calibration-MEASURED fovea/wide ratio when one is available (see
- * `foveaWideMagnification`, @lib/coordinate-conversions — CCOEFF template
- * matching is not scale invariant, so the true optical ratio matters), else
- * the nominal UI zoom clamped to ≥ 1 — exactly the pre-measurement behavior,
- * so legacy/uncalibrated rigs regress nowhere.
+ * The magnification that drives the fovea↔wide template match. RULED
+ * precedence (2026-07-09): an explicit nominal `zoom` is AUTHORITATIVE —
+ * when it is finite and > 0 it wins, even over a measured value. A zoom of 0
+ * is the "Auto" state: fall back to the calibration-MEASURED fovea/wide ratio
+ * (CCOEFF matching is not scale invariant, so the true optical ratio matters)
+ * when it is valid, else 1 (degenerate but honest — the operator then sets a
+ * zoom). This inverts the previous measured-wins behavior: the old
+ * measured path derived from `scale·1000/focal`, whose distance assumption
+ * was false on the rig and inflated the match zoom ~16×.
  */
 export function matchMagnification(
   measured: number | null | undefined,
   nominalZoom: number,
 ): number {
-  return measured != null && Number.isFinite(measured) && measured > 0
-    ? measured
-    : Math.max(1, nominalZoom);
+  if (Number.isFinite(nominalZoom) && nominalZoom > 0) return nominalZoom;
+  if (measured != null && Number.isFinite(measured) && measured > 0)
+    return measured;
+  return 1;
 }
 
 /** The minimal 2D controller shape {@link stepVergence} drives for the `pan`

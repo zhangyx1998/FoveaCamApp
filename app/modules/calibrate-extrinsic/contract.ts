@@ -27,7 +27,18 @@ import { captureCommands, captureTelemetry, recordingCommands, recordingTelemetr
 export type TrackerRecord = { img_pts: Point2d[]; obj_pts: Point3d[] };
 export type ExtrinsicRecord = {
   L: TrackerRecord & { voltage: Point2d };
-  C: TrackerRecord & { angle: Point2d };
+  C: TrackerRecord & {
+    angle: Point2d;
+    /** Ruled measured-magnification inputs (2026-07-09), captured on the WIDE
+     *  (C) camera. Both optional — old scratch records omit them and load fine.
+     *  `side_pts`: the wide camera's raw outer quad of the SAME side markers
+     *  the L/R foveae track (by id), when the wide camera also saw them this
+     *  tick — ruling 3's distance-free ratio (per eye, either may be absent).
+     *  `marker`: the (independently-adjustable) marker sizes at capture — mm,
+     *  for the center-marker fallback (ruling 2). */
+    side_pts?: { L?: Point2d[]; R?: Point2d[] };
+    marker?: { side_mm: number; center_mm: number };
+  };
   R: TrackerRecord & { voltage: Point2d };
 };
 

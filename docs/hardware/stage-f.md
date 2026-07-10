@@ -38,9 +38,9 @@ names the mechanism it gates.
   was deleted 2026-07-08 (role replaced by disparity-scope; commit 6f8097c).
   The arm-from-drag discipline now lives in disparity's chained tracker —
   covered by §"Disparity tracker → own thread".
-- [ ] **Disparity-scope magnification** — absolute magnification (~9×
-  expected) + match_left/right quality with the measured fovea↔wide scale
-  ratio; projection-plane bake-in check.
+- [ ] **Disparity-scope magnification** — see "### Match magnification fix"
+  below (ruled precedence + new marker-quad measured value, 2026-07-09; the
+  old `scale·1000/focal` ratio was retired).
 - [ ] **Calibrate-drift derived volt** — derived drift matches physical
   reality.
 - [ ] **12-bit readout A/B** — live capture in each listed 12-bit format
@@ -344,6 +344,26 @@ source the RAW fovea CONVERT pipes (single ÷magnification, legacy
   magnification), needle sizing matches the legacy `W_c/zoom` behavior.
 - [ ] **Stereo/composite unaffected** — SGBM + anaglyph/difference center
   views still consume the warped pipes (wide-registered imagery).
+
+### Match magnification fix (2026-07-09, ruled precedence + new measured value)
+
+The `scale·1000/focal` measured magnification was RETIRED (it assumed the
+marker sat 1000 side-lengths away — false on the rig, inflating it ~16×).
+Explicit `state.zoom > 0` is now authoritative; `zoom=0` is "Auto" → a new
+distance/size-free marker-quad-ratio magnification (wide camera's view of the
+side markers, else the center-marker fallback with recorded marker sizes).
+
+- [ ] **Zoom=9 needle size** — with `Zoom Ratio = 9`, the `[size-trace]`
+  console output shows the needle `dsize` ≈ **160×120** (not ~10×7); match
+  scores are healthy.
+- [ ] **Auto (zoom=0) measured value** — with a FRESH extrinsic calibration
+  (captures where the wide camera sees the side markers) and `Zoom Ratio = 0`,
+  the "Zoom Ratio" input shows **Auto N×** and `match_magnification` telemetry
+  reads ≈ **9** (sanity vs the known optics), not ~145.
+- [ ] **Legacy calibration + zoom=0** — an OLD extrinsic dataset (no wide-
+  camera marker quads) with `Zoom Ratio = 0` falls back to **1×** (degenerate
+  but honest — full-frame match); setting a nominal zoom restores a usable
+  match. No crash, no NaN.
 
 ## Capture/recorder nodes (2026-07-09/10 waves, 388454f→bee815c)
 

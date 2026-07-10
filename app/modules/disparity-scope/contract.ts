@@ -141,11 +141,12 @@ export const disparity = defineContract({
     match_left: null as MatchInfo | null,
     match_right: null as MatchInfo | null,
     match_center: null as { rect: Rect } | null,
-    /** Calibration-MEASURED fovea↔wide magnification driving the template
-     *  match (mean of the per-eye `foveaWideMagnification` values), or null
-     *  when unmeasured — the match then falls back to the nominal
-     *  `state.zoom` and the UI presents the zoom knob as the active match
-     *  scale. Set on activate; constant per activation. */
+    /** Calibration-MEASURED fovea↔wide magnification (mean of the per-eye
+     *  ruled marker-quad ratios), or null when unmeasured. RULED precedence
+     *  (2026-07-09): an explicit `state.zoom > 0` is AUTHORITATIVE for the
+     *  match; this measured value drives the match only in Auto (`zoom === 0`),
+     *  falling back to 1 when also null. The UI reads it back to show the
+     *  active Auto scale. Set on activate; constant per activation. */
     match_magnification: null as number | null,
     tracker_bbox: null as Rect | null,
     /** True while a pointer drag pins the target (the tracker's override is

@@ -208,6 +208,17 @@ export type ExtrinsicData = {
   voltage: Point2d;
   /** Angular position (x, y) from the wide camera, in radians. */
   angle: Point2d;
+  /** MEASURED-magnification inputs (ruled 2026-07-09). All optional — absent
+   *  on legacy datasets, which then carry NO measured magnification. See
+   *  `recordMagnification`/`fitMagnification` (@lib/coordinate-conversions). */
+  /** Ruling 3 (preferred): the WIDE (C) camera's outer quad of the SAME side
+   *  marker this eye's fovea tracks (`C.side_pts[key]` at capture). */
+  wide_img_points?: Point2d[];
+  /** Ruling 2 (fallback): the wide camera's own CENTER-marker outer quad
+   *  (`C.img_pts.slice(0, 4)` at capture). */
+  wide_center_points?: Point2d[];
+  /** Ruling 2: marker sizes (mm) at capture — center is sized independently. */
+  marker?: { side_mm: number; center_mm: number };
 };
 
 export type ExtrinsicDataset = ExtrinsicData[];
