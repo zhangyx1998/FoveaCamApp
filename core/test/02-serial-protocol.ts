@@ -267,6 +267,33 @@ async function smokeV2StreamApi(device: Device) {
   console.log("v2 stream API smoke test passed.");
 }
 
+// v2.0 CMD_FRAME settle_time (µs) — pure encode round-trip, NO hardware: the
+// packet factory both serializes the struct and echoes the decoded fields, so
+// a value that survives confirms the new field is read+echoed. Tolerant of an
+// un-rebuilt core binary (logs + skips) so this file runs green pre-rebuild;
+// strict (throws on mismatch) once core ships v2.0. Firmware behavior itself is
+// rig-gated.
+function checkFrameSettleEncoding() {
+  const probe = 2500;
+  const encoded = Protocol.Command.Frame({
+    stream: 0,
+    pulse: 500,
+    settle_time: probe,
+  }) as { settle_time?: number };
+  if (encoded.settle_time === undefined) {
+    console.warn(
+      "CMD_FRAME settle_time absent from this core build — rebuild core for protocol v2.0 (rig-gated).",
+    );
+    return;
+  }
+  if (encoded.settle_time !== probe)
+    throw new Error(
+      `CMD_FRAME settle_time round-trip mismatch: ${encoded.settle_time} != ${probe}`,
+    );
+  console.log("CMD_FRAME settle_time round-trips:", encoded.settle_time);
+}
+checkFrameSettleEncoding();
+
 const info = await getPort({ vendorId: "16c0", productId: "0483" });
 if (!info) {
   console.error("Device not found, did you plug it in?");

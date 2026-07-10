@@ -55,11 +55,15 @@ declare module "core/Controller" {
     // docs/history/refactor/synced-capture.md §2/§8.
     cameras?: CameraName[] | number;
     pulse?: number; // trigger pulse width, in microseconds
+    // v2.0 trigger settle HOLD (µs) — held only when this request SWITCHES the
+    // active stream (mirror moved). Omitted/0 = fire immediately (pre-v2.0).
+    settle_time?: number;
   };
   export type FrameDecoded = {
     stream: number;
     cameras: CameraName[];
     pulse: number;
+    settle_time: number;
   };
   /** CMD_FRAME ACK payload: position in the per-stream FIFO (0 = next). */
   export type FrameAccepted = { queue_position: number };

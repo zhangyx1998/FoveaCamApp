@@ -100,6 +100,39 @@ describe("MultiFoveaRuntime (batched multi-KCF)", () => {
     expect(armed[1]![1]).toEqual({ x: 25, y: 35, width: 10, height: 10 });
   });
 
+  it("preset target: NOT KCF-armed, but gets a stream + fovea rect at the projected pixel (demo)", async () => {
+    const s0 = stream(50);
+    const { deps, armed, schedulerTargets, rects } = makeDeps([s0]);
+    // Projection stub: the preset angle → a fixed wide pixel for the crop.
+    deps.projectAngle = vi.fn(() => ({ x: 60, y: 40 }));
+    const runtime = new MultiFoveaRuntime({ activeRequestCount: 0 }, deps);
+    runtime.setFrameSize({ width: 100, height: 100 });
+
+    runtime.setTargets([
+      target(0, {
+        preset: { pan: -5, tilt: -5 },
+        tracker: { ...defaultMultiFoveaTarget(0).tracker, width: 10, height: 10 },
+      }),
+    ]);
+    await flush();
+
+    // No KCF arm for a preset — it is a STATIC angle-space target.
+    expect(armed).toEqual([]);
+    // Still round-robined (a stream is created + scheduled).
+    expect(schedulerTargets.at(-1)).toEqual([{ stream: 50 }]);
+    // Fovea crop centered on the projected pixel (deps.projectAngle), clamped.
+    expect(deps.projectAngle).toHaveBeenCalled();
+    expect(rects.at(-1)).toEqual([0, { x: 55, y: 35, width: 10, height: 10 }]);
+
+    // A preset id never produces meaningful KCF results — a stray batch entry
+    // for it is ignored (armed=false), so no pose/stream churn from tracking.
+    s0.update.mockClear();
+    runtime.onTrackResults(
+      batch([{ id: "0", ok: true, bbox: { x: 0, y: 0, width: 4, height: 4 } }]),
+    );
+    expect(s0.update).not.toHaveBeenCalled();
+  });
+
   it("consumes a batch: bbox → pose → stream.update → fovea rect; publish", async () => {
     const s0 = stream(41);
     const { deps, rects } = makeDeps([s0]);

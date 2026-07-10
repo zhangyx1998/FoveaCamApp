@@ -343,7 +343,7 @@ HANDLE_GET_PAYLOAD(Command::Frame) {
   ::Packet::Command::FrameAccepted accepted;
   const char *reason = nullptr;
   if (!Capture::enqueue(seq, payload.stream, payload.cameras, payload.pulse,
-                       accepted, reason)) {
+                       payload.settle_time, accepted, reason)) {
     reject(seq, reason);
     return;
   }

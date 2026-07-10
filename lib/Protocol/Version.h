@@ -16,8 +16,14 @@ namespace Version {
 // CMD_ACTUATE/CMD_TRIGGER timing semantics (now two-phase ACK/FIN).
 // v1.1.0: SYS_TIMESTAMP clock-calibration property (GET = parse-time µs
 // stamp, SET = counter reset). Backward-compatible addition.
-constexpr uint8_t Major = 1;
-constexpr uint8_t Minor = 1;
+// v2.0.0: CMD_FRAME payload grows a trailing `settle_time` (µs) — a trigger
+// HOLD applied only on a stream SWITCH (see Packet.h Frame + Capture.cpp
+// startNext). BREAKING: the fixed-size CMD_FRAME payload changed length, and
+// FixedSizePacket::inflate is exact-size, so firmware/core/host must ship as a
+// matched set for this version. settle_time == 0 reproduces v1.x behavior
+// byte-for-byte on the wire once both ends are rebuilt.
+constexpr uint8_t Major = 2;
+constexpr uint8_t Minor = 0;
 constexpr uint8_t Patch = 0;
 
 } // namespace Version

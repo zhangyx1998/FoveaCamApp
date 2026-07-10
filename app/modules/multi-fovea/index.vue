@@ -9,10 +9,11 @@ import { useConfigRef } from "@lib/config";
 import { useSession, usePipeFrame } from "@lib/orchestrator/client";
 import { nodeId } from "@lib/orchestrator/graph-contract";
 import { pipes } from "@lib/orchestrator/pipe-contract";
-import { multiFovea, MAX_MULTI_FOVEA_TARGETS } from "./contract";
+import { multiFovea, MAX_MULTI_FOVEA_TARGETS, PRESET_ANGLE_LIMIT_DEG } from "./contract";
 import StreamView from "@src/components/StreamView.vue";
 import PosView from "@src/components/PosView.vue";
 import RangeSlider from "@src/inputs/range-slider.vue";
+import Drawer from "@src/components/Drawer.vue";
 import Recording from "@src/record";
 import Capture from "@src/capture";
 import type { Point2d, Rect, Size } from "core/Geometry";
@@ -42,6 +43,10 @@ const center = usePipeFrame(() =>
 );
 const selectedTarget = ref(0);
 const draftCenter = ref<Point2d | null>(null);
+// Bottom Drawer height (manual-control idiom) — its live height is reserved as
+// bottom padding on the scroll root (`--p`) so content is never hidden behind
+// the fixed drawer. Holds the settle slider + preset-location editors.
+const drawer_height = ref(0);
 
 // Per-stream RECORDING compression switches (multi-fovea-recording ruling 9).
 // They ENABLE the app-level `record_compression` method per stream: the label
@@ -58,6 +63,31 @@ function toggleCompress(stream: (typeof COMPRESS_STREAMS)[number], on: boolean):
 const stroke = computed(
   () => Math.max(telemetry.size.width, telemetry.size.height, 1) * 0.003,
 );
+
+// Trigger SETTLE hold. State is µs (protocol units); the slider edits ms with
+// sub-ms resolution (0–20 ms). Seeded server-side from the active triple at
+// activation; this override is LIVE for the running session (every CMD_FRAME
+// picks up the current value). See docs/proposals/trigger-settle-time.md.
+const settleMs = computed({
+  get: () => state.settle_time_us / 1000,
+  set: (ms: number) => {
+    state.settle_time_us = Math.max(0, Math.round(ms * 1000));
+  },
+});
+
+// Angle-space DEMO presets (mirror degrees). Editing pan/tilt re-parks the
+// mirror for that slot LIVE via `placePreset`; the round-robin keeps
+// interleaving. Only preset-bearing targets show here (the demo's two).
+function setPresetPan(index: number, pan: number): void {
+  const t = state.targets[index];
+  if (!t?.preset) return;
+  session.call("placePreset", { index, pan, tilt: t.preset.tilt });
+}
+function setPresetTilt(index: number, tilt: number): void {
+  const t = state.targets[index];
+  if (!t?.preset) return;
+  session.call("placePreset", { index, pan: t.preset.pan, tilt });
+}
 
 const TARGET_COLORS = [
   "#00aaff",
@@ -208,7 +238,10 @@ async function captureOnce(): Promise<void> {
 </script>
 
 <template>
-  <div class="multi-fovea">
+  <div
+    class="multi-fovea"
+    :style="{ '--p': (drawer_height ? drawer_height + 20 : 0) + 'px' }"
+  >
     <section class="overview">
       <StreamView
         class="center"
@@ -270,6 +303,13 @@ async function captureOnce(): Promise<void> {
           <span :class="{ live: telemetry.v2Capable }">v2</span>
           <span>{{ telemetry.captureRejected }}</span>
         </div>
+        <!-- Fail-closed explanation (UI/UX review 2026-07-10): on major-1
+             firmware the round-robin stream path returns null and the demo
+             would otherwise be a silent blank interleave. -->
+        <p v-if="!telemetry.v2Capable" class="fw-hint">
+          Requires v2.0 firmware — reflash the MCU to run the interleaved
+          demo (streams are disabled on this firmware).
+        </p>
         <label>
           Pulse
           <RangeSlider v-model="state.pulse_ns" :min="100000" :max="10000000" :step="100000" />
@@ -347,6 +387,54 @@ async function captureOnce(): Promise<void> {
       </article>
     </section>
   </div>
+
+  <Drawer v-model="drawer_height">
+    <div class="drawer-body">
+      <section class="drawer-section">
+        <label class="settle">
+          <span>Settle {{ settleMs.toFixed(1) }} ms</span>
+          <RangeSlider v-model="settleMs" :min="0" :max="20" :step="0.1" />
+        </label>
+        <p class="drawer-hint">
+          Trigger hold after a stream switch (mirror moved). Seeded from the
+          triple; overrides live. 0 = no hold.
+        </p>
+      </section>
+
+      <section class="drawer-section">
+        <span class="drawer-title">Preset locations (mirror °)</span>
+        <template v-for="(target, index) in state.targets" :key="index">
+          <div v-if="target.preset" class="preset-row">
+            <span class="preset-label" :style="{ color: targetColor(index) }">
+              {{ index + 1 }}
+            </span>
+            <label>
+              pan
+              <input
+                type="number"
+                step="0.5"
+                :min="-PRESET_ANGLE_LIMIT_DEG"
+                :max="PRESET_ANGLE_LIMIT_DEG"
+                :value="target.preset.pan"
+                @change="setPresetPan(index, Number(($event.target as HTMLInputElement).value))"
+              />
+            </label>
+            <label>
+              tilt
+              <input
+                type="number"
+                step="0.5"
+                :min="-PRESET_ANGLE_LIMIT_DEG"
+                :max="PRESET_ANGLE_LIMIT_DEG"
+                :value="target.preset.tilt"
+                @change="setPresetTilt(index, Number(($event.target as HTMLInputElement).value))"
+              />
+            </label>
+          </div>
+        </template>
+      </section>
+    </div>
+  </Drawer>
 </template>
 
 <style scoped lang="scss">
@@ -354,7 +442,10 @@ async function captureOnce(): Promise<void> {
   display: grid;
   grid-template-rows: minmax(20rem, 1fr) auto;
   gap: 1rem;
-  padding: 1rem;
+  /* Reserve the fixed Drawer's live height at the bottom (manual-control idiom)
+     so the targets grid is never obscured behind it. */
+  --p: 0;
+  padding: 1rem 1rem calc(1rem + var(--p)) 1rem;
   min-height: 100%;
   box-sizing: border-box;
   background: var(--bg-panel-alt);
@@ -400,6 +491,15 @@ async function captureOnce(): Promise<void> {
   }
 }
 
+.fw-hint {
+  margin: 0.4rem 0 0;
+  padding: 0.3rem 0.5rem;
+  border-radius: 4px;
+  border: 1px solid var(--warn);
+  color: var(--warn);
+  font-size: 0.85em;
+}
+
 button {
   border: 1px solid var(--border-muted);
   border-radius: 4px;
@@ -407,6 +507,71 @@ button {
   color: inherit;
   padding: 0.45rem 0.65rem;
   cursor: pointer;
+}
+
+.drawer-body {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.5rem;
+  padding: 1rem 1.25rem;
+  height: 100%;
+  box-sizing: border-box;
+  overflow: auto;
+  color: var(--text-strong);
+}
+
+.drawer-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  min-width: 16rem;
+
+  .drawer-title {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+  }
+  .settle {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    font-size: 0.9rem;
+  }
+  .drawer-hint {
+    margin: 0;
+    font-size: 0.75rem;
+    color: var(--text-faint);
+  }
+  .preset-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.85rem;
+  }
+  .preset-label {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.4rem;
+    height: 1.4rem;
+    border-radius: 4px;
+    background: var(--border);
+    font-weight: 700;
+    flex: none;
+  }
+  label {
+    display: flex;
+    align-items: center;
+    gap: 0.35ch;
+    color: var(--text-muted);
+  }
+  input[type="number"] {
+    width: 4rem;
+    padding: 0.2rem 0.3rem;
+    border: 1px solid var(--border-muted);
+    border-radius: 4px;
+    background: var(--bg-elevated);
+    color: inherit;
+  }
 }
 
 .record-compress {

@@ -41,6 +41,10 @@ export interface MultiFoveaRuntimeDeps {
   };
   updateScheduler(targets: Array<{ stream: number }>): void;
   publish(targets: MultiFoveaTargetTelemetry[]): void;
+  /** Project a mirror ANGLE (rad) to a wide-camera pixel — used to place a
+   *  fixed-angle PRESET target's fovea crop. null (no arg / uncalibrated) →
+   *  the caller falls back to the slot's `center`. */
+  projectAngle?(angle: Point2d): Point2d | null;
   /** Steer the slot's composed fovea crop node (C-24: `setFoveaRect` on the
    *  `camera/<serial>/undistort/fovea/<index>` pipe — a no-op when the window
    *  hasn't composed that node). */
@@ -87,6 +91,7 @@ export class MultiFoveaRuntime {
         existing.config = config;
         existing.steering = null;
         if (!config.enabled) this.releaseSlot(existing, index);
+        else if (config.preset) this.positionPreset(existing, index);
         else if (changed || !existing.armed) this.armSlot(existing, index);
         const pose = this.deps.targetPose(index, config.center);
         existing.angle = pose.angle;
@@ -106,7 +111,10 @@ export class MultiFoveaRuntime {
         lostCount: 0,
         lastFinAt: null,
       };
-      if (config.enabled) this.armSlot(slot, index);
+      if (config.enabled) {
+        if (config.preset) this.positionPreset(slot, index);
+        else this.armSlot(slot, index);
+      }
       return slot;
     });
     for (const [i, slot] of this.slots.slice(configs.length).entries())
@@ -200,6 +208,31 @@ export class MultiFoveaRuntime {
     this.deps.updateFoveaRect(index, roi);
   }
 
+  /** Position a fixed mirror-angle PRESET target (the demo's angle-space path):
+   *  NO KCF (`armed` stays false → excluded from `onTrackResults`); the pose is
+   *  the preset angle via `targetPose`, the fovea crop is centered on the
+   *  projected wide-camera pixel (falls back to the slot's `center` when
+   *  uncalibrated), and the controller stream is nudged to the preset volts.
+   *  The round-robin still interleaves it exactly like a KCF target — it just
+   *  never moves. */
+  private positionPreset(slot: Slot, index: number): void {
+    const pose = this.deps.targetPose(index, slot.config.center);
+    slot.armed = false;
+    slot.active = true;
+    slot.steering = null;
+    slot.angle = pose.angle;
+    slot.volt = pose.volt;
+    const px = this.deps.projectAngle?.(pose.angle) ?? slot.config.center;
+    slot.bbox = this.clampRect(
+      RECT.fromCenter(px, {
+        width: slot.config.tracker.width,
+        height: slot.config.tracker.height,
+      }),
+    );
+    slot.stream?.update({ left: pose.volt.L, right: pose.volt.R });
+    this.deps.updateFoveaRect(index, slot.bbox);
+  }
+
   private requestStreamSync(): void {
     if (this.streamSyncing) {
       this.streamSyncDirty = true;
@@ -285,12 +318,21 @@ export class MultiFoveaRuntime {
   }
 }
 
+function samePreset(
+  a: MultiFoveaTargetConfig["preset"],
+  b: MultiFoveaTargetConfig["preset"],
+): boolean {
+  if (!a || !b) return !a && !b;
+  return a.pan === b.pan && a.tilt === b.tilt;
+}
+
 function sameTargetConfig(
   a: MultiFoveaTargetConfig,
   b: MultiFoveaTargetConfig,
 ): boolean {
   return (
     a.enabled === b.enabled &&
+    samePreset(a.preset, b.preset) &&
     a.center.x === b.center.x &&
     a.center.y === b.center.y &&
     a.tracker.width === b.tracker.width &&

@@ -23,10 +23,19 @@ export type MultiFoveaTrackerParams = {
   lostTolerance: number;
 };
 
+/** A fixed MIRROR-ANGLE preset location (degrees, pan/tilt). When present on a
+ *  target, that target is a STATIC angle-space fovea — the mirror parks at this
+ *  angle and NO KCF tracking runs (the demo interleaves fixed locations). null/
+ *  absent = the normal image-space, KCF-followed target. */
+export type PresetLocation = { pan: number; tilt: number };
+
 export type MultiFoveaTargetConfig = {
   enabled: boolean;
   center: Point2d;
   tracker: MultiFoveaTrackerParams;
+  /** Fixed mirror-angle preset (deg). Present → static angle-space target (no
+   *  KCF); null/absent → image-space KCF target. */
+  preset?: PresetLocation | null;
 };
 
 export type MultiFoveaTargetTelemetry = {
@@ -59,6 +68,42 @@ export function defaultMultiFoveaTarget(index: number): MultiFoveaTargetConfig {
     enabled: index === 0,
     center: { x: 0, y: 0 },
     tracker: { ...trackerDefaults },
+    preset: null,
+  };
+}
+
+/** The demo's default PRESET LOCATIONS (mirror-angle space, degrees). Two
+ *  interleaved foveas: loc 1 = (-5°, -5°), loc 2 = (+5°, +5°). Editable in the
+ *  drawer; this is the seed the app opens with (see `demoPresetTarget`). */
+export const DEFAULT_PRESET_LOCATIONS: PresetLocation[] = [
+  { pan: -5, tilt: -5 },
+  { pan: 5, tilt: 5 },
+];
+
+/** Conservative preset-angle bound (deg, symmetric). The A2V polynomial has no
+ *  domain guard and the DAC assert THROWS rather than clamps, so unbounded UI
+ *  input could over-drive the mirror or error the frame — every preset entry
+ *  point clamps to this. RIG-TUNE: set to the mirror's real safe deflection
+ *  (calibration sweep domain) once confirmed; ±10° = 2x the demo pair. */
+export const PRESET_ANGLE_LIMIT_DEG = 10;
+
+/** Clamp one preset angle component into the safe symmetric range. */
+export function clampPresetAngle(deg: number): number {
+  if (!Number.isFinite(deg)) return 0;
+  return Math.max(-PRESET_ANGLE_LIMIT_DEG, Math.min(PRESET_ANGLE_LIMIT_DEG, deg));
+}
+
+/** The demo default for slot `index`: the first `DEFAULT_PRESET_LOCATIONS` are
+ *  enabled angle-space presets (interleaved by the round-robin trigger); the
+ *  rest are disabled plain targets. Opening the app needs NO manual setup —
+ *  two foveas immediately alternate at the two fixed angles. */
+export function demoPresetTarget(index: number): MultiFoveaTargetConfig {
+  const preset = DEFAULT_PRESET_LOCATIONS[index] ?? null;
+  return {
+    enabled: preset !== null,
+    center: { x: 0, y: 0 },
+    tracker: { ...trackerDefaults },
+    preset: preset ? { ...preset } : null,
   };
 }
 
@@ -71,8 +116,16 @@ export const multiFovea = defineContract({
      *  null when unadvertised (no calibration); renderer falls back to the raw
      *  `camera:<serial>` pipe. */
     undistortPipe: null as string | null,
-    targets: [0, 1, 2, 3].map(defaultMultiFoveaTarget) as MultiFoveaTargetConfig[],
+    // Demo default (user directive): two interleaved angle-space presets at
+    // ±5°. Round-robin trigger machinery interleaves them with no manual setup.
+    targets: [0, 1, 2, 3].map(demoPresetTarget) as MultiFoveaTargetConfig[],
     pulse_ns: 1000000,
+    /** Trigger SETTLE hold (µs, v2.0) — pushed into every CMD_FRAME; the
+     *  firmware holds the trigger this long after a stream SWITCH (mirror
+     *  moved), THEN runs the normal exposure (independent of pulse). Seeded
+     *  from the active triple's `settle_time_us` at activation; the drawer
+     *  slider overrides it LIVE for the running session. 0 = no hold. */
+    settle_time_us: 0,
     /** Per-stream RECORDING compression switches (multi-fovea-recording ruling
      *  9). As of the app-level `record_compression` setting (user directive
      *  2026-07-09) these are per-stream ENABLES of the CONFIGURED method — a
@@ -114,6 +167,9 @@ export const multiFovea = defineContract({
     setTargetEnabled: cmd<{ index: number; enabled: boolean }>(),
     steerTarget: cmd<{ index: number; center: Point2d }>(),
     placeTarget: cmd<{ index: number; center: Point2d }>(),
+    /** Set a target's fixed mirror-angle preset (deg, pan/tilt) — the demo's
+     *  angle-space path. Marks the target a static preset (no KCF). */
+    placePreset: cmd<{ index: number; pan: number; tilt: number }>(),
     resetTargets: cmd(),
     captureOnce: cmd<void, MultiFoveaCaptureResult>(),
     // Shared capture mixin (ruling 3): `captureShot`/`getCapturePreview`/

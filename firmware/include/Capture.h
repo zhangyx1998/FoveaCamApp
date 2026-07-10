@@ -25,9 +25,11 @@ using Packet::Command::Microseconds;
 // a REJ message (static storage, safe to send immediately) otherwise:
 // unknown/out-of-range stream, duplicate-stream in-flight/queued request,
 // queue full, invalid camera mask, or the unconnected center camera (C).
+// `settle_time` (µs, v2.0) holds the trigger that long after a stream SWITCH
+// (0 = fire immediately, the pre-v2.0 behavior); see Capture.cpp startNext().
 bool enqueue(Protocol::Sequence seq, uint8_t stream, uint8_t cameras,
-             Microseconds pulse, Packet::Command::FrameAccepted &accepted,
-             const char *&reason);
+             Microseconds pulse, Microseconds settle_time,
+             Packet::Command::FrameAccepted &accepted, const char *&reason);
 
 // Attaches strobe ISRs on the L/R camera `input` pins. Call once from
 // setup().

@@ -145,7 +145,21 @@ FIXED_SIZE_PACKET(Frame, CMD_FRAME) {
   uint8_t stream;        // stream the mirrors follow during this exposure
   uint8_t cameras;        // CameraMask bitmask; default CAM_L | CAM_R
   Microseconds pulse;    // trigger pulse width
+  // Trigger SETTLE HOLD (µs), v2.0. Applied ONLY when this request SWITCHES
+  // the active stream (the mirror is commanded to a new location): the
+  // firmware moves the mirror, waits settle_time, THEN asserts the trigger.
+  // Independent of `pulse` — it is NOT subtracted from the exposure window.
+  // 0 = no hold (byte-for-byte the pre-v2.0 behavior). Same 2-point mirror
+  // averaging + strobe machinery runs afterward, unchanged.
+  Microseconds settle_time;
 };
+
+// Compile-time lock on the v2.0 CMD_FRAME request layout (mirrors the
+// FrameAccepted/FrameResult asserts below): stream(1)+cameras(1)+pulse(4)+
+// settle_time(4). Enforced on BOTH host and MCU (shared header) so a field
+// reorder or a lost `__packed__` can never silently desync the request.
+static_assert(sizeof(Frame) == 10,
+              "Frame request = stream(1)+cameras(1)+pulse(4)+settle_time(4)");
 
 // ACK payload for Frame: position in the per-stream FIFO queue (0 = next).
 PACKED(FrameAccepted) { uint8_t queue_position; };

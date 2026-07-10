@@ -18,6 +18,10 @@ export type FrameRequest = {
   stream: number;
   cameras?: CameraName[] | number;
   pulse?: number;
+  /** v2.0 trigger settle HOLD (µs) — held by the firmware only on a stream
+   *  SWITCH. Threaded through untouched; the session's requester fills the
+   *  active value (see multi-fovea session). */
+  settle_time?: number;
 };
 
 export type ScheduledFrameTarget = FrameRequest & {
@@ -152,6 +156,7 @@ export class RoundRobinFrameScheduler {
       stream: target.stream,
       cameras: target.cameras,
       pulse: target.pulse,
+      settle_time: target.settle_time,
     };
     const minIntervalMs = target.minIntervalMs ?? this.defaultMinIntervalMs;
     const launchedAt = this.now();

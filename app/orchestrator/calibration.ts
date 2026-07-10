@@ -171,6 +171,12 @@ export type CalibratedTriple = {
    *  app-level value + a 200 default by `@lib/calibration-data`'s
    *  `resolveBaseline` at the consumer. */
   baselineMm: number | null;
+  /** The per-triple trigger SETTLE hold (µs, v2.0) — 0 when unset (no hold).
+   *  The multi-fovea session seeds its live `settle_time_us` state from this at
+   *  activation and pushes it into every CMD_FRAME (the drawer overrides live).
+   *  Unlike `zoomOverride`/`baselineMm`, 0 is a MEANINGFUL value (no hold), so
+   *  it resolves to a number, not null. */
+  settleTimeUs: number;
   /** The triple config's store path (`["triples", <hash>]`) — for sessions
    *  that read/write it directly beyond what `conv` bakes in (e.g.
    *  calibrate-drift's `drift_l`/`drift_r`). */
@@ -205,6 +211,13 @@ export async function leaseCalibratedTriple(): Promise<CalibratedTriple | null> 
     },
     zoomOverride: posFinite(inputs.config.zoom_override),
     baselineMm: posFinite(inputs.config.baseline_mm),
+    // Settle: 0 is meaningful (no hold), so accept any finite >= 0, default 0.
+    settleTimeUs:
+      typeof inputs.config.settle_time_us === "number" &&
+      Number.isFinite(inputs.config.settle_time_us) &&
+      inputs.config.settle_time_us >= 0
+        ? inputs.config.settle_time_us
+        : 0,
     configPath,
   };
 }

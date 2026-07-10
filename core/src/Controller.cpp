@@ -465,6 +465,13 @@ static FN(FramePacket) {
           obj.Has("pulse")
               ? convert<Packet::Command::Microseconds>(obj.Get("pulse"))
               : 0;
+      // v2.0 trigger settle hold (µs) — held only on a stream switch, MCU
+      // side (Capture.cpp). Absent/0 reproduces the pre-v2.0 wire byte-for-
+      // byte once both ends are rebuilt (mirrors ActuatePacket's settle_time).
+      command.settle_time =
+          obj.Has("settle_time")
+              ? convert<Packet::Command::Microseconds>(obj.Get("settle_time"))
+              : 0;
     }
     JS_EXCEPT(env.Undefined())
   } else {
@@ -475,6 +482,7 @@ static FN(FramePacket) {
   object.Set("stream", Number::New(env, command.stream));
   object.Set("cameras", cameraMaskToArray(env, command.cameras));
   object.Set("pulse", Number::New(env, command.pulse));
+  object.Set("settle_time", Number::New(env, command.settle_time));
   return inject(info, object, command);
 }
 

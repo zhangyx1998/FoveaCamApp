@@ -52,7 +52,7 @@ import {
 } from "@orchestrator/anchor-node";
 import { controllerNode } from "@orchestrator/controller-node";
 import { matToArray } from "@lib/mat";
-import { multiFovea, defaultMultiFoveaTarget, MAX_MULTI_FOVEA_TARGETS } from "./contract";
+import { multiFovea, demoPresetTarget, defaultMultiFoveaTarget, clampPresetAngle, MAX_MULTI_FOVEA_TARGETS } from "./contract";
 import { MultiFoveaRuntime, type MultiTrackBatch } from "./runtime";
 import { createMultiFoveaRecording, type RecordingCamera } from "./recording";
 import {
@@ -137,6 +137,10 @@ export default function multiFoveaSession(
           return controller.frame({
             ...request,
             pulse: request.pulse ?? s.state.pulse_ns,
+            // Push the live settle hold into EVERY CMD_FRAME (per-triple seed +
+            // drawer live-override). The firmware applies it only on a stream
+            // SWITCH; 0 = no hold. Independent of pulse (not subtracted).
+            settle_time: request.settle_time ?? s.state.settle_time_us,
           });
         },
       },
@@ -167,14 +171,15 @@ export default function multiFoveaSession(
       // level singleton; `tk` swaps per activation).
       arm: (id, roi) => tk?.arm(id, roi),
       disarm: (id) => tk?.disarm(id),
-      async createStream(_index: number, center: Point2d): Promise<StreamHandle | null> {
+      async createStream(index: number, center: Point2d): Promise<StreamHandle | null> {
         const controller = activeController();
         s.telemetry({ v2Capable: controller?.v2Capable ?? false });
         if (!controller?.v2Capable) return null;
-        const pose = targetPose(center);
+        const pose = targetPose(index, center);
         return controller.createStream({ left: pose.volt.L, right: pose.volt.R });
       },
-      targetPose: (_index, center) => targetPose(center),
+      targetPose: (index, center) => targetPose(index, center),
+      projectAngle: (angle) => projectAngle(angle),
       updateScheduler(targets) {
         scheduler.setTargets(
           targets.map((target) => ({
@@ -267,7 +272,24 @@ export default function multiFoveaSession(
       telemetry: (patch) => s.telemetry(patch),
     });
 
-    function targetPose(center: Point2d): { angle: Point2d; volt: { L: Pos; R: Pos } } {
+    function targetPose(
+      index: number,
+      center: Point2d,
+    ): { angle: Point2d; volt: { L: Pos; R: Pos } } {
+      // DEMO angle-space PRESET path: the mirror parks at the target's fixed
+      // (pan, tilt) degrees. Both eyes point at the SAME angle (vergence at
+      // infinity) through the EXISTING per-eye A2V mapping (the calibrate /
+      // manual-control MEMS conversion — no new math). Uncalibrated → origin
+      // volts, but the angle still surfaces in telemetry.
+      const preset = s.state.targets[index]?.preset;
+      if (preset) {
+        const angle: Point2d = { x: radians(preset.pan), y: radians(preset.tilt) };
+        if (!triple?.undistort) return { angle, volt: { L: ORIGIN, R: ORIGIN } };
+        return {
+          angle,
+          volt: { L: triple.conv.A2V.L(angle), R: triple.conv.A2V.R(angle) },
+        };
+      }
       if (!triple?.undistort) {
         return { angle: { x: 0, y: 0 }, volt: { L: ORIGIN, R: ORIGIN } };
       }
@@ -277,6 +299,13 @@ export default function multiFoveaSession(
         angle,
         volt: { L: triple.conv.A2V.L(A.l), R: triple.conv.A2V.R(A.r) },
       };
+    }
+
+    /** Project a mirror ANGLE (rad) to a wide-camera pixel for a preset's fovea
+     *  crop placement — the inverse of the image-space `undistort.angular`.
+     *  null when uncalibrated (the runtime falls back to the slot center). */
+    function projectAngle(angle: Point2d): Point2d | null {
+      return triple?.undistort ? triple.conv.A2P.C(angle, true) : null;
     }
 
     /** Consume the native batch stream (its own C++ thread) into the runtime's
@@ -368,6 +397,13 @@ export default function multiFoveaSession(
       monitor.done("lease");
       triple = t;
       serialC = t.leases.C.camera.serial;
+      // Seed the live settle hold from the ACTIVE triple's per-triple config
+      // (per-triple ruling). The drawer slider overrides this LIVE for the
+      // running session (same orchestrator instance). A Settings-page edit is
+      // picked up at the NEXT activation only — config-store docs are
+      // per-instance, so a cross-instance live push is intentionally out of
+      // scope (known gotcha); starting a fresh session re-reads it here.
+      s.setState("settle_time_us", t.settleTimeUs);
       scope.defer(() => {
         triple = null;
         serialC = null;
@@ -610,13 +646,25 @@ export default function multiFoveaSession(
           runtime.steerTarget(index, center);
         },
         async placeTarget({ index, center }) {
-          updateTarget(index, (target) => ({ ...target, center }));
+          // Placing an image-space point CLEARS any preset (KCF resumes).
+          updateTarget(index, (target) => ({ ...target, center, preset: null }));
+        },
+        async placePreset({ index, pan, tilt }) {
+          // Angle-space DEMO path: mark the target a fixed mirror-angle preset;
+          // the runtime parks it there (no KCF) and the round-robin interleaves
+          // it. Enabling it so an edit is immediately live. Clamped HERE (not
+          // just the UI) so no caller can over-drive the mirror — A2V has no
+          // domain guard and the DAC assert throws (rig-safety, UI/UX review
+          // 2026-07-10).
+          updateTarget(index, (target) => ({
+            ...target,
+            enabled: true,
+            preset: { pan: clampPresetAngle(pan), tilt: clampPresetAngle(tilt) },
+          }));
         },
         async resetTargets() {
-          s.setState(
-            "targets",
-            [0, 1, 2, 3].map(defaultMultiFoveaTarget),
-          );
+          // Reset to the DEMO preset pair (±5°) — the app's default shape.
+          s.setState("targets", [0, 1, 2, 3].map(demoPresetTarget));
           applyTargets();
         },
         async captureOnce() {

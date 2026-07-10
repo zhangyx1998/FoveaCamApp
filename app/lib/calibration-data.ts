@@ -43,6 +43,11 @@ export interface TripleConfig {
   drift_r?: number;
   zoom_override?: number;
   baseline_mm?: number;
+  /** Per-triple trigger SETTLE hold (µs, v2.0) — the multi-fovea session reads
+   *  this at activation and pushes it into every CMD_FRAME; the firmware holds
+   *  the trigger this long after a stream SWITCH (0/absent = no hold). Stored
+   *  in µs (protocol units); the settings UI edits it in ms. */
+  settle_time_us?: number;
   [key: string]: unknown;
 }
 
@@ -213,6 +218,8 @@ async function tripleDetail(store: CalStore, key: string): Promise<string> {
     flags.push(`zoom ${(doc.zoom_override as number).toFixed(2)}×`);
   if (typeof doc.baseline_mm === "number" && doc.baseline_mm > 0)
     flags.push(`baseline ${Math.round(doc.baseline_mm as number)} mm`);
+  if (typeof doc.settle_time_us === "number" && doc.settle_time_us > 0)
+    flags.push(`settle ${((doc.settle_time_us as number) / 1000).toFixed(1)} ms`);
   return flags.length ? flags.join(" · ") : "no overrides";
 }
 

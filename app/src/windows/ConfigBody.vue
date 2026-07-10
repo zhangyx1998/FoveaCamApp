@@ -206,6 +206,23 @@ const effectiveBaselineFallback = computed(() =>
   resolveBaseline(undefined, baseline_distance_mm.value),
 );
 
+/** Read a triple's trigger settle hold — stored in µs (protocol units), edited
+ *  here in ms (0 / absent = no hold). */
+function settleMsOf(key: string): number {
+  const v = tripleDocs.value[key]?.settle_time_us;
+  return typeof v === "number" ? v / 1000 : 0;
+}
+/** Write a triple's settle hold: 0/blank CLEARS the field (no hold), >0 stores
+ *  it in µs — other fields ride along untouched on re-persist. Applies at the
+ *  NEXT multi-fovea session start (config docs are per-instance; the drawer
+ *  slider is the live override for a running session). */
+function setSettleMs(key: string, ms: number) {
+  const doc = tripleDocs.value[key];
+  if (!doc) return;
+  if (!ms || ms <= 0) delete doc.settle_time_us;
+  else doc.settle_time_us = Math.round(ms * 1000);
+}
+
 // ---- Two-step delete confirm -----------------------------------------------
 const confirming = ref<string | null>(null);
 
@@ -489,6 +506,31 @@ onUnmounted(() => {
               default. Applies to Disparity Scope's verge limits and the
               Extrinsic / Drift / Distortion marker spacing (marker spacing
               updates live; the verge limit applies on the next session start).
+            </p>
+
+            <label class="row">
+              <span class="label">Settle time</span>
+              <span class="field">
+                <span v-if="settleMsOf(e.key) === 0" class="none-hint">none</span>
+                <input
+                  type="number"
+                  step="0.1"
+                  min="0"
+                  max="20"
+                  :value="settleMsOf(e.key)"
+                  @input="
+                    (ev) => setSettleMs(e.key, Number((ev.target as HTMLInputElement).value))
+                  "
+                />
+                <span class="unit">ms</span>
+              </span>
+            </label>
+            <p class="hint">
+              0 = no hold. Multi-Fovea holds the trigger this long after the
+              round-robin SWITCHES streams (mirror moved), then runs the normal
+              exposure — independent of exposure time. Applies on the next
+              Multi-Fovea session start; the app's drawer slider overrides it
+              live for a running session.
             </p>
           </div>
         </div>

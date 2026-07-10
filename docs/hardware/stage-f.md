@@ -915,6 +915,34 @@ soak. Take these to the rig:
   red outline fires on an existing `<seq>.fcap`, Cmd/Ctrl-R quick-start writes the
   same flat path, and the auto-opened viewer + Finder reveal point at the file.
 
+## Trigger settle time (2026-07-10 wave, proposal `trigger-settle-time.md`)
+
+Protocol **v2.0.0** (breaking: `CMD_FRAME` payload grew `settle_time` µs).
+REQUIRES a matched firmware flash + core rebuild before any of the below — the
+running pre-rebuild binary ignores the field. Switch-hold lives in
+`Capture.cpp` `startNext()` (switch = `Streams::active()` changed) + the `tick()`
+settle gate.
+
+- [ ] **Settle hold visible between stream switches** — scope/logic-analyzer on a
+  camera trigger line (or compare FIN `t_trigger − t_exposure` deltas): with a
+  per-triple/drawer settle of e.g. 5 ms, the trigger asserts ≈`settle_time`
+  AFTER the mirror is commanded on a stream SWITCH; on same-stream consecutive
+  frames there is NO added delay.
+- [ ] **Exposure unchanged by settle** — `pulse`/exposure width and the strobe
+  window are identical with settle 0 vs settle 5 ms; settle is NOT subtracted
+  from exposure (it only delays the trigger edge).
+- [ ] **0 = behavior identical** — with settle 0 the timing traces match a
+  pre-v2.0 build exactly (no added latency on any frame).
+- [ ] **Per-triple value honored** — a triple with `settle_time_us` set in
+  Settings is picked up at the NEXT Multi-Fovea session start (seeds the
+  drawer slider); a triple with none defaults to 0.
+- [ ] **Drawer live-override works** — moving the Multi-Fovea Settle slider on a
+  RUNNING session changes the hold on subsequent switches immediately (every
+  CMD_FRAME carries the current value).
+- [ ] **Demo presets interleave** — Multi-Fovea opens with two foveas alternating
+  at (−5°, −5°) and (+5°, +5°) mirror angles with no manual setup; editing the
+  drawer pan/tilt re-parks a location live; `Reset` returns to the ±5° pair.
+
 ## Blocked (hardware change required)
 
 - [ ] **Center-camera hardware trigger** — needs the slimmer CAM0 cable

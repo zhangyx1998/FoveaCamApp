@@ -435,6 +435,11 @@ export class Controller {
     stream: number;
     cameras?: CameraName[] | number;
     pulse?: number;
+    /** v2.0 trigger settle HOLD (µs) — the firmware holds the trigger this
+     *  long after a stream SWITCH (mirror moved to this stream's target), then
+     *  runs the normal exposure. Independent of `pulse` (NOT subtracted from
+     *  exposure). Omitted/0 = fire immediately (pre-v2.0 behavior). */
+    settle_time?: number;
   }): Promise<FrameOutcome> & { accepted: Promise<unknown> } {
     if (!this.device.connected) throw new Error("Controller not connected");
     if (!this.device.v2Capable)

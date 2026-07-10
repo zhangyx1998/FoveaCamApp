@@ -38,6 +38,7 @@ struct Request {
   uint8_t stream;
   uint8_t cameras;
   Microseconds pulse;
+  Microseconds settle_time; // v2.0 trigger hold, applied only on a switch
   uint32_t frame_id; // stable capture identity (see frameCounter)
 };
 
@@ -90,6 +91,13 @@ static bool busy = false;
 static Request active;
 static Timestamp triggerStart = 0;
 static bool triggerDropped = false;
+// v2.0 settle hold: set in startNext() when the popped request SWITCHES the
+// active stream and carries settle_time > 0. While true the mirror has already
+// moved but the trigger has NOT been asserted yet — tick() holds off every
+// strobe/exposure step and fires the trigger once `now >= triggerDueAt`. 0 =
+// current behavior (trigger fires immediately, awaitingSettle stays false).
+static bool awaitingSettle = false;
+static Timestamp triggerDueAt = 0;
 
 // exposureLatched: set once by the ISR (see onStrobeEdge) when the first
 // requested camera strobe-rises; only ever cleared by startNext() (main
@@ -209,6 +217,7 @@ static void finishActive(const char *rejectReason) {
   else
     sendResult(active);
   busy = false;
+  awaitingSettle = false; // never leave a stale hold across requests
 }
 
 static void startNext() {
@@ -229,16 +238,31 @@ static void startNext() {
   interrupts();
   awaitingFallMask = active.cameras;
 
+  // Stream SWITCH detection (v2.0 settle): the currently-active DAC stream,
+  // read BEFORE we re-point it, vs this request's stream. A change — including
+  // the first request after INVALID_ID — means the mirror is about to move to
+  // a new location. Same-stream consecutive frames are NOT a switch.
+  const bool isSwitch = Streams::active() != active.stream;
+
   Streams::activate(active.stream);
   Streams::tick(); // commit the target before the trigger fires
 
-  triggerStart = Global::time.now();
-  writeTrigger(active.cameras, HIGH);
+  if (isSwitch && active.settle_time > 0) {
+    // Mirror committed above; DEFER the trigger. tick() asserts it once the
+    // settle window elapses — pulse/exposure/timeout timing all start from the
+    // real trigger edge, so settle is never subtracted from the exposure.
+    awaitingSettle = true;
+    triggerDueAt = Global::time.now() + active.settle_time;
+  } else {
+    awaitingSettle = false;
+    triggerStart = Global::time.now();
+    writeTrigger(active.cameras, HIGH);
+  }
 }
 
 bool enqueue(Protocol::Sequence seq, uint8_t stream, uint8_t cameras,
-            Microseconds pulse, Packet::Command::FrameAccepted &accepted,
-            const char *&reason) {
+            Microseconds pulse, Microseconds settle_time,
+            Packet::Command::FrameAccepted &accepted, const char *&reason) {
   if (cameras == 0)
     cameras = SUPPORTED_CAMERAS;
   if (cameras & CAM_C) {
@@ -262,7 +286,7 @@ bool enqueue(Protocol::Sequence seq, uint8_t stream, uint8_t cameras,
     return false;
   }
   accepted.queue_position = queue.size();
-  queue.push(Request{seq, stream, cameras, pulse, ++frameCounter});
+  queue.push(Request{seq, stream, cameras, pulse, settle_time, ++frameCounter});
   Streams::setPendingFrame(stream, true);
   return true;
 }
@@ -274,6 +298,18 @@ void init() {
 
 void tick() {
   if (busy) {
+    if (awaitingSettle) {
+      // v2.0 settle hold: mirror already committed, trigger not yet asserted.
+      // Hold off ALL strobe/exposure/timeout logic until the window elapses,
+      // then fire the trigger — from here on the request behaves identically
+      // to the no-settle path (triggerStart is the real edge).
+      if (Global::time.now() >= triggerDueAt) {
+        awaitingSettle = false;
+        triggerStart = Global::time.now();
+        writeTrigger(active.cameras, HIGH);
+      }
+      return; // startNext() is a no-op while busy; nothing else to do
+    }
     if (!triggerDropped &&
         Global::time.now() - triggerStart >= active.pulse) {
       writeTrigger(active.cameras, LOW);

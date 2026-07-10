@@ -142,6 +142,9 @@ export interface ConversionInputs {
     drift_r?: Point2d;
     zoom_override?: number;
     baseline_mm?: number;
+    /** Per-triple trigger settle hold (µs, v2.0) — carried through for the
+     *  multi-fovea session; does NOT alter the conversion math here. */
+    settle_time_us?: number;
   };
 }
 
