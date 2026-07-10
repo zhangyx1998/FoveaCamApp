@@ -13,7 +13,12 @@ import {
   runMigrations,
   type MigrationFs,
 } from "../lib/store-migrations.js";
-import { RECORD_STORE, recordId, type CalibrationRecord } from "../lib/calibration-records.js";
+import {
+  RECORD_STORES,
+  isRecordId,
+  recordId,
+  type CalibrationRecord,
+} from "../lib/calibration-records.js";
 
 const ROOT = resolve(process.env.FOVEA_DATA_PATH ?? process.cwd(), "store");
 const pathOf = (segs: string[]) => resolve(ROOT, ...segs) + ".json";
@@ -73,19 +78,34 @@ async function main() {
   const res2 = await runMigrations(fs);
   console.log(`[migrate] run 2 (idempotency): applied=[${res2.applied.join(", ")}] (expect empty)`);
 
-  const ids = await fs.list(RECORD_STORE);
-  console.log(`[migrate] records: ${ids.length}`);
-  for (const id of ids) {
-    const rec = await fs.read<CalibrationRecord | null>([RECORD_STORE, id], null);
-    if (!rec) continue;
-    const recomputed = await recordId(rec.inner);
-    console.log(
-      `  ${id.slice(0, 12)}… dp=${rec.inner.dataset.length} idMatch=${recomputed === id} ` +
-        `created=${rec.outer.created} assoc=${JSON.stringify(rec.outer.associations)}`,
-    );
+  for (const dir of RECORD_STORES) {
+    const names = await fs.list(dir);
+    const recordNames = names.filter(isRecordId);
+    const nonRecord = names.filter((n) => !isRecordId(n));
+    console.log(`[migrate] ${dir}: ${recordNames.length} record(s); non-record=[${nonRecord.join(", ")}]`);
+    for (const id of recordNames) {
+      const rec = await fs.read<CalibrationRecord | null>([dir, id], null);
+      if (!rec) continue;
+      const recomputed = await recordId(rec.inner);
+      const count =
+        rec.inner.kind === "extrinsic"
+          ? rec.inner.dataset.length
+          : Array.isArray((rec.inner.calibration as { rvecs?: unknown }).rvecs)
+            ? ((rec.inner.calibration as { rvecs: unknown[] }).rvecs).length
+            : 0;
+      console.log(
+        `  ${dir}/${id} kind=${rec.inner.kind} n=${count} id32=${/^[0-9a-f]{32}$/.test(id)} ` +
+          `idMatch=${recomputed === id} created=${rec.outer.created} ` +
+          `assoc=${JSON.stringify(rec.outer.associations)}`,
+      );
+    }
   }
-  const leftover = await fs.list("calibrate-extrinsic");
-  console.log(`[migrate] remaining calibrate-extrinsic entries: [${leftover.join(", ")}]`);
+  const triples = await fs.list("triples");
+  console.log(
+    `[migrate] triples: ${triples.map((t) => `${t}(${/^[0-9a-f]{32}$/.test(t) ? "32" : /^[0-9a-f]{64}$/.test(t) ? "64" : "?"})`).join(", ")}`,
+  );
+  const legacyRecords = await fs.list("calibration-records");
+  console.log(`[migrate] remaining calibration-records entries: [${legacyRecords.join(", ")}]`);
 }
 
 void main();

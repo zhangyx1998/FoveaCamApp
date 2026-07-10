@@ -26,7 +26,17 @@ import { defineSession, type ServerSession } from "@orchestrator/runtime";
 import { cameraConfigPath, listCameraInfo } from "@orchestrator/camera";
 import { acquire, retryUntil, type CameraLease } from "@orchestrator/registry";
 import { loadIntrinsic } from "@orchestrator/calibration";
-import { read, write } from "@orchestrator/store-hub";
+import { read, write, clear, list } from "@orchestrator/store-hub";
+import {
+  INTRINSIC_STORE,
+  addAssociation,
+  intrinsicInner,
+  isRecordId,
+  makeRecord,
+  recordId,
+  removeAssociations,
+  type CalibrationRecord,
+} from "@lib/calibration-records";
 import { report } from "@orchestrator/diagnostics";
 import { getCameraKey } from "@lib/camera-config";
 import {
@@ -484,7 +494,22 @@ export default function calibrateIntrinsicSession(
           obj_points,
         );
         const key = getCameraKey(activeInfo);
-        await write(["calibrate-intrinsic", key], { ...result, date: new Date() });
+        // Persist as an intrinsic RECORD (calibration-records-v2): content-hash
+        // id over the solve payload, bound to this (center) camera. An identical
+        // solve already on disk just gains the association (idempotent); the
+        // Mats codec-encode through store-hub write, as they always have.
+        const inner = intrinsicInner({ ...result });
+        const id = await recordId(inner);
+        const existing = await read<CalibrationRecord | null>([INTRINSIC_STORE, id], null);
+        const assoc = { cameraKey: key, role: views[activeInfo.serial]?.role };
+        const record =
+          existing && existing.inner
+            ? addAssociation(existing, assoc)
+            : await makeRecord(inner, {
+                created: new Date().toISOString(),
+                associations: [assoc],
+              });
+        await write([INTRINSIC_STORE, id], record);
         const view = await buildView(activeInfo, views[activeInfo.serial]?.role);
         views = { ...views, [activeInfo.serial]: view };
         // item 5: report the solve's RMS re-projection error post-solve.
@@ -497,7 +522,22 @@ export default function calibrateIntrinsicSession(
     async function resetCalibration({ serial }: { serial: string }): Promise<void> {
       const info = known.get(serial);
       if (!info) return;
-      await write(["calibrate-intrinsic", getCameraKey(info)], {});
+      const cameraKey = getCameraKey(info);
+      // Records model: drop THIS camera's association from every intrinsic
+      // record; a record left with no associations is orphaned and cleared
+      // (hard delete — an explicit destructive reset, not the refcount trash
+      // path). Records shared with other cameras keep their remaining bindings.
+      const names = (await list(INTRINSIC_STORE)).filter(isRecordId);
+      for (const id of names) {
+        const rec = await read<CalibrationRecord | null>([INTRINSIC_STORE, id], null);
+        if (!rec || rec.inner?.kind !== "intrinsic") continue;
+        if (!rec.outer.associations.some((a) => a.cameraKey === cameraKey)) continue;
+        const { record, orphaned } = removeAssociations(rec, (a) => a.cameraKey === cameraKey);
+        if (orphaned) await clear([INTRINSIC_STORE, id]);
+        else await write([INTRINSIC_STORE, id], record);
+      }
+      // Also clear any un-migrated legacy per-camera doc (read-only fallback).
+      await clear(["calibrate-intrinsic", cameraKey]);
       const view = await buildView(info, views[serial]?.role);
       views = { ...views, [serial]: view };
       s.telemetry({ views });

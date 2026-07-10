@@ -158,15 +158,21 @@ the Disparity Scope tracking-chain lead/lag; both apply on the next session star
 ### Calibration records
 
 Below the settings is the **Calibration records** list for the selected rig —
-the extrinsic calibrations bound to it, **newest first**. Each row shows the
-**datapoint count** and the **calibration time** (your local time), plus an eye
-badge (**L** / **R**) and an *aggregate* tag for combined records.
+the calibrations bound to it, **newest first**. Each row carries a **kind badge**
+(**extrinsic** or **intrinsic**), a count (**datapoints** for extrinsic, **views**
+for intrinsic), the **calibration time** (your local time), a camera badge
+(**L** / **C** / **R**), and an *aggregate* tag for combined records. Extrinsic
+records are the per-eye calibrations; the **intrinsic** record is the center
+camera's lens solve.
 
 Each row's buttons, left to right:
 
 - **Overlay** (eye icon) — toggle this record as a live overlay on the
   calibration view (see [Visualizer & overlay](#visualizer-overlay)).
-- **Inspect** (magnifier) — open the visualizer for this record.
+  *Extrinsic only* — disabled on an intrinsic row.
+- **Inspect** (magnifier) — open the visualizer for this record. *Extrinsic
+  only* — the observed-vs-projected visualizer doesn't apply to an intrinsic
+  solve.
 - **Export** — write just this record to a JSON file.
 - **Discard** (trash) — remove this rig's association with the record.
 
@@ -174,10 +180,12 @@ The **Import** button at the right end of the list title reads a record JSON fil
 into the selected rig (existing data → a new association; new data → a new
 record).
 
-**Aggregate.** Tick the checkboxes on two or more records and an **Aggregate**
-button appears in the list title. It combines the selected records' datapoints
-into a **new** record (with a fresh identity that notes its sources); the
-originals are left as they are.
+**Aggregate.** Tick the checkboxes on two or more **extrinsic** records and an
+**Aggregate** button appears in the list title. It combines the selected records'
+datapoints into a **new** record (with a fresh identity that notes its sources);
+the originals are left as they are. Aggregation is extrinsic-only (an intrinsic
+solve isn't a combinable datapoint set), so the button stays disabled unless
+every ticked row is extrinsic.
 
 **Discard is refcounted — nothing is hard-deleted.** A record can be associated
 with several rigs. **Discard** removes only *this* rig's association; the record
@@ -206,10 +214,12 @@ calibration window immediately (and flips off the same way).
 
 ### Legacy calibration inventory
 
-The **Calibration data** inventory lower down still lists stored **Triple** and
-**Intrinsic** documents with a friendly name and one-line summary, and a trash
-button (with a **Confirm delete** / **Cancel** step) for removing an orphaned
-one. Use the refresh button in its header after calibrating in another window.
+The **Calibration data** inventory lower down lists stored **Triple** documents
+(and any leftover legacy per-camera doc an un-migrated store still carries) with
+a friendly name and one-line summary, and a trash button (with a **Confirm
+delete** / **Cancel** step) for removing an orphaned one. Intrinsic and extrinsic
+calibrations now live as records in the per-rig list above, not here. Use the
+refresh button in its header after calibrating in another window.
 
 For the design rationale and the on-disk record format, see the
 [calibration-records-v2 proposal](../proposals/calibration-records-v2.md) and its

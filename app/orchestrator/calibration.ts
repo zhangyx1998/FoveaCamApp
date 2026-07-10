@@ -18,7 +18,6 @@ import type { Camera } from "core/Aravis";
 import type { Point2d } from "core/Geometry";
 import { getCameraKey, type Role } from "@lib/camera-config";
 import { findPinholeProjection } from "@lib/marker";
-import { sha256 } from "@lib/util/hash";
 import {
   useCoordinateConversions,
   type ConversionInputs,
@@ -26,8 +25,12 @@ import {
 } from "@lib/coordinate-conversions";
 import type { ExtrinsicDataset } from "@lib/camera-config";
 import {
-  RECORD_STORE,
+  EXTRINSIC_STORE,
+  INTRINSIC_STORE,
+  isRecordId,
   resolveActiveDataset,
+  resolveActiveIntrinsic,
+  stableHash,
   type CalibrationRecord,
 } from "@lib/calibration-records";
 import { cameraConfigPath } from "./camera.js";
@@ -56,10 +59,7 @@ function validate(cal?: Partial<CameraCalibration>): cal is CameraCalibration {
 export async function loadIntrinsic(
   camera: Pick<Camera, "vendor" | "model" | "serial">,
 ): Promise<{ undistort: Undistort | null; date: Date | null; rms: number | null }> {
-  const cal = await read<Partial<CameraCalibration>>(
-    ["calibrate-intrinsic", getCameraKey(camera)],
-    {},
-  );
+  const cal = await loadIntrinsicCalibration(getCameraKey(camera));
   const date = cal.date instanceof Date ? cal.date : null;
   // Additive (proposal item 5): absent on calibrations solved before the core
   // returned it, so degrade to null rather than 0 (which would read as "perfect").
@@ -70,6 +70,32 @@ export async function loadIntrinsic(
     console.warn("[calibration] failed to build undistort:", e);
   }
   return { undistort: null, date, rms };
+}
+
+/**
+ * Resolve a camera's active intrinsic `CameraCalibration` under the records
+ * model (calibration-records-v2, schema v2): the LATEST intrinsic RECORD (by
+ * `created`) associated with this camera's key, reconstituted into a full
+ * `CameraCalibration` (`inner.calibration` payload + `date` from `outer.created`
+ * — the Mats revive through the store codec). Falls back to the LEGACY flat doc
+ * (`["calibrate-intrinsic", <cameraKey>]`) for an un-migrated dev store; the
+ * v1→v2 migration wraps every legacy doc as a record, so the fallback normally
+ * finds nothing. Read-only fallback (never re-written by the load path).
+ */
+async function loadIntrinsicCalibration(
+  cameraKey: string,
+): Promise<Partial<CameraCalibration>> {
+  const names = (await list(INTRINSIC_STORE)).filter(isRecordId);
+  const records = await Promise.all(
+    names.map((id) => read<CalibrationRecord | null>([INTRINSIC_STORE, id], null)),
+  );
+  const valid = records.filter(
+    (r): r is CalibrationRecord => !!r && r.inner?.kind === "intrinsic",
+  );
+  const active = resolveActiveIntrinsic(valid, cameraKey);
+  if (active)
+    return { ...active.calibration, date: new Date(active.created) } as Partial<CameraCalibration>;
+  return read<Partial<CameraCalibration>>(["calibrate-intrinsic", cameraKey], {});
 }
 
 // Exported for calibrate-extrinsic's session (§7.1 S1b) — its FIN wizard
@@ -118,9 +144,9 @@ export async function fitExtrinsicRegression(
  */
 async function loadExtrinsicDataset(camera: Camera): Promise<ExtrinsicDataset> {
   const cameraKey = getCameraKey(camera);
-  const ids = await list(RECORD_STORE);
+  const ids = (await list(EXTRINSIC_STORE)).filter(isRecordId);
   const records = await Promise.all(
-    ids.map((id) => read<CalibrationRecord | null>([RECORD_STORE, id], null)),
+    ids.map((id) => read<CalibrationRecord | null>([EXTRINSIC_STORE, id], null)),
   );
   const valid = records.filter(
     (r): r is CalibrationRecord => !!r && !!(r as CalibrationRecord).inner,
@@ -141,7 +167,7 @@ async function loadExtrinsic(
 // caching/broadcast behavior), so it needs the path without re-deriving the
 // hash independently.
 export async function tripleConfigPath(L: Camera, C: Camera, R: Camera): Promise<string[]> {
-  const key = await sha256(
+  const key = await stableHash(
     JSON.stringify({
       L: getCameraKey(L),
       C: getCameraKey(C),

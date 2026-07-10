@@ -4,23 +4,34 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Calibration-records data model (docs/proposals/calibration-records-v2.md).
+// Calibration-records data model (docs/proposals/calibration-records-v2.md +
+// its AS-BUILT addendum for store schema v2).
 //
-// A calibration RECORD is the store-v1 replacement for the flat per-camera
-// extrinsic dataset. It splits into:
+// A calibration RECORD is the per-camera replacement for the flat calibration
+// document. BOTH kinds — EXTRINSIC (per-fovea datapoint array) and INTRINSIC
+// (center-camera solve) — share one model:
 //
-//   • IMMUTABLE inner data (`ExtrinsicInner`) — the raw datapoint array plus
-//     whatever the solve consumes. This is the HASH PRE-IMAGE: the record `id`
-//     (its primary key AND store filename) is the SHA-256 of a canonical,
-//     key-sorted serialization of `inner`. Pure + deterministic → the same
-//     datapoints always yield the same id, across sessions/platforms, so a
-//     record imported from another rig collides with an identical local one
-//     (import then just ADDS an association).
+//   • IMMUTABLE inner data (`RecordInner`) — the raw payload the record is built
+//     from. This is the HASH PRE-IMAGE: the record `id` (its primary key AND
+//     store filename) is a TRUNCATED SHA-256 (32 hex digits — see
+//     {@link RECORD_ID_HEX}) of a canonical, key-sorted serialization of
+//     `inner`. Pure + deterministic → the same payload always yields the same
+//     id, across sessions/platforms, so a record imported from another rig
+//     collides with an identical local one (import then just ADDS an
+//     association).
 //
 //   • MUTABLE outer metadata (`RecordMeta`) — associations (camera-instance ⇄
 //     triple bindings), a creation timestamp (latest-first ordering key), an
 //     optional label, and (for aggregates) the source record ids. Editing the
 //     outer metadata NEVER changes the id (only the inner data does).
+//
+// Records live in PER-KIND store directories, keyed by their 32-hex id:
+//   • extrinsic → `["calibrate-extrinsic", <id>]`  ({@link EXTRINSIC_STORE})
+//   • intrinsic → `["calibrate-intrinsic", <id>]`  ({@link INTRINSIC_STORE})
+// (Schema v2 removed the flat `calibration-records/` directory; the v1→v2
+// migration moved every record into its per-kind directory and truncated the
+// id, and wrapped legacy `calibrate-intrinsic/<cameraKey>` CameraCalibration
+// docs as intrinsic records. See `store-migrations.ts`.)
 //
 // This module is PURE (no store IO, no Vue, no core/): the config window, the
 // orchestrator load path, and the store-migration framework all inject their
@@ -31,24 +42,40 @@
 import { sha256 } from "./util/hash.js";
 import type { ExtrinsicDataset } from "./camera-config.js";
 
-/** Store directory the record documents live under (`["calibration-records",
- *  <id>]`). One JSON file per record, named by its content-hash id. */
-export const RECORD_STORE = "calibration-records";
+/** The two record kinds. Also the per-kind store-directory discriminant. */
+export type RecordKind = "extrinsic" | "intrinsic";
 
-/** Inner-data schema tag — part of the hash pre-image, so bumping it re-keys
- *  every record (a deliberate, migration-gated event). v1 = the extrinsic
- *  datapoint array as captured by calibrate-extrinsic. */
-export const RECORD_INNER_KIND = "extrinsic" as const;
+/** Store directory for extrinsic records (`["calibrate-extrinsic", <id>]`). */
+export const EXTRINSIC_STORE = "calibrate-extrinsic";
+/** Store directory for intrinsic records (`["calibrate-intrinsic", <id>]`). */
+export const INTRINSIC_STORE = "calibrate-intrinsic";
+/** Both per-kind record directories (enumerate reads them all). */
+export const RECORD_STORES = [EXTRINSIC_STORE, INTRINSIC_STORE] as const;
+
+/** The per-kind store directory a record of this kind lives under. */
+export function recordStore(kind: RecordKind): string {
+  return kind === "intrinsic" ? INTRINSIC_STORE : EXTRINSIC_STORE;
+}
 
 /**
- * The IMMUTABLE inner data of an extrinsic record — the hash pre-image. Keep
+ * LEGACY store directory records lived under at schema v1 (a single flat dir).
+ * Retained ONLY for the shipped v0→v1 migration + its test; schema v2 moved
+ * every record into its per-kind directory ({@link recordStore}). New code must
+ * use {@link EXTRINSIC_STORE} / {@link INTRINSIC_STORE}.
+ */
+export const RECORD_STORE = "calibration-records";
+
+// ---- Inner data (the hash pre-image) ---------------------------------------
+
+/**
+ * The IMMUTABLE inner data of an EXTRINSIC record — the hash pre-image. Keep
  * this to raw, solve-relevant data only: anything volatile or fit-derived
  * (RMS, regressions, timestamps) would make the id unstable and must live in
  * the outer metadata instead.
  */
 export interface ExtrinsicInner {
   /** Discriminant + schema tag (hashed). */
-  kind: typeof RECORD_INNER_KIND;
+  kind: "extrinsic";
   /** The raw per-fovea datapoint array, verbatim from calibrate-extrinsic
    *  (`createDataSet`). The array ORDER is significant and preserved through
    *  the hash (arrays are not reordered by canonicalization). */
@@ -56,20 +83,40 @@ export interface ExtrinsicInner {
 }
 
 /**
+ * The IMMUTABLE inner data of an INTRINSIC record — the hash pre-image. Holds
+ * the `CameraCalibration` SOLVE PAYLOAD (`sensor_size`, `camera_matrix`,
+ * `dist_coeffs`, `rvecs`, `tvecs`, and optionally `rms`) MINUS the volatile
+ * `date` (which becomes `outer.created`). The Mats are `Float64Array`s carrying
+ * `shape`/`channels` expando props; `canonicalize` folds them into the same
+ * canonical form the store codec writes to disk, so the id is stable across the
+ * wire codec and the plain-JSON migration runner (see {@link canonicalize}).
+ * Typed as an opaque record to keep this module free of a `core/` dependency.
+ */
+export interface IntrinsicInner {
+  kind: "intrinsic";
+  /** The `CameraCalibration` payload without `date`. */
+  calibration: Record<string, unknown>;
+}
+
+/** A record's immutable inner data (discriminated by `kind`). */
+export type RecordInner = ExtrinsicInner | IntrinsicInner;
+
+/**
  * One binding of a record to a camera instance within a triple. A record may
  * carry MANY (multi-association across rigs). `tripleHash` is optional: legacy
  * migrations bind by `cameraKey` alone (no live triple hash was available),
- * and the UI then matches such a record to a triple whose live L/R camera key
+ * and the UI then matches such a record to a triple whose live L/C/R camera key
  * equals `cameraKey` — see {@link recordBelongsToTriple}.
  */
 export interface Association {
   /** Camera identity key (`vendor_model_serial`, `getCameraKey`) this binding
-   *  targets — the EYE the record calibrates in the bound triple. */
+   *  targets — the CAMERA the record calibrates in the bound triple (an eye for
+   *  extrinsic, the center for intrinsic). */
   cameraKey: string;
   /** The triple hash this binding was created under (`["triples", <hash>]`).
    *  Absent on legacy-migrated bindings (matched by `cameraKey` instead). */
   tripleHash?: string;
-  /** Advisory role within the triple at binding time (`"L"` / `"R"`). */
+  /** Advisory role within the triple at binding time (`"L"` / `"C"` / `"R"`). */
   role?: string;
 }
 
@@ -90,57 +137,143 @@ export interface RecordMeta {
   sources?: string[];
 }
 
-/** A full record document (`["calibration-records", <id>]`). */
+/** A full record document (`[recordStore(inner.kind), <id>]`). */
 export interface CalibrationRecord {
   /** Content-hash id (also the store filename). Equals `recordId(inner)`. */
   id: string;
-  inner: ExtrinsicInner;
+  inner: RecordInner;
   outer: RecordMeta;
 }
 
 // ---- Content-hash identity -------------------------------------------------
 
 /**
+ * Record-id length in hex digits. A full SHA-256 is 64 hex (256 bits) — too
+ * long for a filename/key; we TRUNCATE to the first 32 hex digits (128 bits).
+ * Collision odds are negligible: a birthday collision needs ~2^64 records, far
+ * beyond any rig's lifetime store (and an accidental collision on DIFFERENT
+ * data is caught on import by the inner-data compare, see {@link decideImport}).
+ * ALL record + triple ids use this width.
+ */
+export const RECORD_ID_HEX = 32;
+
+const RECORD_ID_RE = new RegExp(`^[0-9a-f]{${RECORD_ID_HEX}}$`);
+const FULL_HASH_RE = /^[0-9a-f]{64}$/;
+
+/** Whether a store-key name is a record/triple id (32 lowercase hex digits) —
+ *  distinguishes hash-keyed record files from legacy `<cameraKey>` docs (which
+ *  carry non-hex vendor/model prefixes) and `.raw` analysis artifacts. */
+export function isRecordId(name: string): boolean {
+  return RECORD_ID_RE.test(name);
+}
+
+/** Truncate a full SHA-256 hex digest to the stable {@link RECORD_ID_HEX}-hex
+ *  id. A pass-through if already ≤ the target width. */
+export function truncateHashHex(fullHex: string): string {
+  return fullHex.slice(0, RECORD_ID_HEX);
+}
+
+/** The stable 32-hex id for a canonical string (truncated SHA-256). The single
+ *  hashing primitive behind BOTH record ids and triple ids. */
+export async function stableHash(canonical: string): Promise<string> {
+  return truncateHashHex(await sha256(canonical));
+}
+
+/**
  * Canonical, deterministic serialization for hashing: object keys are sorted
  * recursively (so key insertion order never affects the id) while ARRAY order
  * is preserved (datapoint order is meaningful). `undefined` values and missing
- * optional fields are omitted identically (JSON semantics), so a datapoint that
- * lacks `wide_img_points` hashes the same whether the field is absent or
- * explicitly `undefined`. Pure; unit-tested for key-order / nesting / typed
- * values stability.
+ * optional fields are omitted identically (JSON semantics).
+ *
+ * TypedArrays / ArrayBuffers (an intrinsic record's Mats) fold into the SAME
+ * `{ type, buffer: <base64 of the whole buffer>, props }` shape the store codec
+ * (`store-codec.ts` replacer) writes to disk — so a live `Float64Array`-with-
+ * props and its on-disk `{type,buffer,props}` encoding canonicalize IDENTICALLY.
+ * That is the contract that lets the plain-JSON migration runner (which sees the
+ * encoded form) and the codec-reviving app (which sees real Mats) agree on an
+ * intrinsic record's id. Pure; unit-tested for key-order / nesting / typed
+ * values / typed-array stability.
  */
 export function canonicalize(value: unknown): string {
   return JSON.stringify(sortDeep(value));
 }
 
-function sortDeep(v: unknown): unknown {
-  if (Array.isArray(v)) return v.map(sortDeep);
-  if (v && typeof v === "object") {
-    const src = v as Record<string, unknown>;
-    const out: Record<string, unknown> = {};
-    for (const k of Object.keys(src).sort()) {
-      if (src[k] === undefined) continue; // match JSON's undefined-omission
-      out[k] = sortDeep(src[k]);
+/** Base64 of a buffer's WHOLE byte range (mirrors store-codec's `toBase64`, so
+ *  the canonical typed-array form byte-matches the on-disk encoding). */
+function bufferBase64(buffer: ArrayBufferLike): string {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]!);
+  return btoa(binary);
+}
+
+/** The writable+enumerable, non-index own props of a typed array (a Mat's
+ *  `shape`/`channels`) — mirrors store-codec's `ownProperties`. `undefined`
+ *  when there are none (so the `props` key is dropped, matching the codec). */
+function typedArrayProps(value: object): Record<string, unknown> | undefined {
+  const out: Record<string, unknown> = {};
+  let any = false;
+  for (const key of Object.getOwnPropertyNames(value)) {
+    if (/^\d+$/.test(key)) continue;
+    const d = Object.getOwnPropertyDescriptor(value, key);
+    if (d && d.writable && d.enumerable) {
+      out[key] = (value as Record<string, unknown>)[key];
+      any = true;
     }
-    return out;
   }
-  return v;
+  return any ? out : undefined;
+}
+
+function sortDeep(v: unknown): unknown {
+  if (v === null || typeof v !== "object") return v;
+  // Fold binary payloads into the codec's canonical `{type,buffer,props}` shape,
+  // then re-sort it as a plain object (so keys sort + props recurse, and a value
+  // ALREADY in that encoded form lands on the identical string).
+  if (v instanceof ArrayBuffer)
+    return sortDeep({ type: "ArrayBuffer", buffer: bufferBase64(v), props: typedArrayProps(v) });
+  if (ArrayBuffer.isView(v) && !(v instanceof DataView)) {
+    const ta = v as ArrayBufferView & { constructor: { name: string } };
+    return sortDeep({
+      type: ta.constructor.name,
+      buffer: bufferBase64(ta.buffer),
+      props: typedArrayProps(v),
+    });
+  }
+  if (Array.isArray(v)) return v.map(sortDeep);
+  const src = v as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const k of Object.keys(src).sort()) {
+    if (src[k] === undefined) continue; // match JSON's undefined-omission
+    out[k] = sortDeep(src[k]);
+  }
+  return out;
 }
 
 /** The content-hash id (primary key) for a piece of inner data. Same inner →
- *  same id, forever. */
-export function recordId(inner: ExtrinsicInner): Promise<string> {
-  return sha256(canonicalize(inner));
+ *  same 32-hex id, forever. */
+export function recordId(inner: RecordInner): Promise<string> {
+  return stableHash(canonicalize(inner));
 }
 
 /** Build the immutable inner data for an extrinsic datapoint array. */
 export function extrinsicInner(dataset: ExtrinsicDataset): ExtrinsicInner {
-  return { kind: RECORD_INNER_KIND, dataset };
+  return { kind: "extrinsic", dataset };
+}
+
+/**
+ * Build the immutable inner data for an intrinsic solve. Strips the volatile
+ * `date` (→ `outer.created`) so it never perturbs the id; everything else in
+ * the `CameraCalibration` payload (Mats + `rms`) is the hash pre-image.
+ */
+export function intrinsicInner(calibration: Record<string, unknown>): IntrinsicInner {
+  const rest: Record<string, unknown> = {};
+  for (const [k, val] of Object.entries(calibration)) if (k !== "date") rest[k] = val;
+  return { kind: "intrinsic", calibration: rest };
 }
 
 /** Assemble a fresh record from inner data + outer metadata (id derived). */
 export async function makeRecord(
-  inner: ExtrinsicInner,
+  inner: RecordInner,
   outer: RecordMeta,
 ): Promise<CalibrationRecord> {
   return { id: await recordId(inner), inner, outer };
@@ -149,18 +282,9 @@ export async function makeRecord(
 // ---- Legacy migration ------------------------------------------------------
 
 /**
- * Wrap a LEGACY flat extrinsic dataset (store v0: `["calibrate-extrinsic",
- * <cameraKey>]` = a bare `ExtrinsicData[]`) as a record with ZERO data loss:
- * the array becomes the inner data verbatim, the id is its content hash, and
- * the outer metadata synthesizes one association to the owning camera. The
- * `created` timestamp comes from the caller (existing metadata or the file
- * mtime — the migration passes the store file's mtime). `tripleHash`/`role`
- * are best-effort provenance; a legacy dataset alone carries neither, so the
- * migration usually binds by `cameraKey` only.
- *
- * Pure + idempotent by construction: the id is a function of the dataset only,
- * so re-wrapping the same dataset produces the same id (the migration framework
- * relies on this for its run-twice-is-a-no-op guarantee).
+ * Wrap a LEGACY flat extrinsic dataset (`["calibrate-extrinsic", <cameraKey>]`
+ * = a bare `ExtrinsicData[]`) as a record with ZERO data loss. Pure +
+ * idempotent by construction (the id is a function of the dataset only).
  */
 export async function migrateLegacyExtrinsic(
   cameraKey: string,
@@ -174,9 +298,31 @@ export async function migrateLegacyExtrinsic(
     outer: {
       created: meta.created,
       label: meta.label,
-      associations: [
-        { cameraKey, tripleHash: meta.tripleHash, role: meta.role },
-      ],
+      associations: [{ cameraKey, tripleHash: meta.tripleHash, role: meta.role }],
+    },
+  };
+}
+
+/**
+ * Wrap a LEGACY intrinsic `CameraCalibration` doc (`["calibrate-intrinsic",
+ * <cameraKey>]`) as an intrinsic record. `inner` is the solve payload minus the
+ * volatile `date`; `created` comes from the caller (the doc's `date`, else the
+ * file mtime). One synthesized association binds the record to the owning
+ * (center) camera. Pure + idempotent by construction.
+ */
+export async function migrateLegacyIntrinsic(
+  cameraKey: string,
+  calibration: Record<string, unknown>,
+  meta: { created: string; role?: string; label?: string },
+): Promise<CalibrationRecord> {
+  const inner = intrinsicInner(calibration);
+  return {
+    id: await recordId(inner),
+    inner,
+    outer: {
+      created: meta.created,
+      label: meta.label,
+      associations: [{ cameraKey, role: meta.role }],
     },
   };
 }
@@ -211,9 +357,7 @@ export function addAssociation(
 
 /**
  * Remove every binding that matches a predicate and report whether the record
- * is now ORPHANED (0 associations → the caller trashes the file). `match`
- * receives each association; the config window passes the "belongs to THIS
- * triple" test so a discard drops exactly the current triple's binding(s).
+ * is now ORPHANED (0 associations → the caller trashes the file).
  */
 export function removeAssociations(
   rec: CalibrationRecord,
@@ -230,9 +374,8 @@ export function removeAssociations(
  * The "does this record belong to triple T" test used by the Device tab's
  * record list AND by discard. A record belongs when it has a binding that
  * either (a) names `tripleHash` explicitly, or (b) is an unassigned/legacy
- * binding whose `cameraKey` is one of the triple's live L/R camera keys
- * (`liveKeys`). Legacy-migrated records — bound by cameraKey only — thus surface
- * under the connected rig with no triple-hash bookkeeping in the migration.
+ * binding whose `cameraKey` is one of the triple's live L/C/R camera keys
+ * (`liveKeys`).
  */
 export function recordBelongsToTriple(
   rec: CalibrationRecord,
@@ -240,9 +383,7 @@ export function recordBelongsToTriple(
   liveKeys: readonly string[],
 ): boolean {
   return rec.outer.associations.some((a) =>
-    a.tripleHash != null
-      ? a.tripleHash === tripleHash
-      : liveKeys.includes(a.cameraKey),
+    a.tripleHash != null ? a.tripleHash === tripleHash : liveKeys.includes(a.cameraKey),
   );
 }
 
@@ -256,20 +397,28 @@ export function tripleAssociationMatcher(
     a.tripleHash != null ? a.tripleHash === tripleHash : liveKeys.includes(a.cameraKey);
 }
 
-// ---- Aggregation -----------------------------------------------------------
+// ---- Aggregation (extrinsic only) ------------------------------------------
 
 /**
- * Aggregate N records into a NEW record whose inner dataset is the CONCATENATION
- * of the sources' datapoint arrays (in the given order). The new record gets a
- * fresh content-hash id, records the source ids in `outer.sources`, and takes
- * the caller-supplied association (typically the current triple) so it surfaces
- * immediately. The SOURCES ARE NOT MUTATED — aggregation is additive.
+ * Aggregate N EXTRINSIC records into a NEW record whose inner dataset is the
+ * CONCATENATION of the sources' datapoint arrays (in the given order). The new
+ * record gets a fresh content-hash id, records the source ids in `outer.sources`
+ * (provenance), and takes the caller-supplied association. The SOURCES ARE NOT
+ * MUTATED — aggregation is additive.
+ *
+ * Aggregation is meaningful only for extrinsic records (intrinsic records hold a
+ * solved calibration, not a concatenable capture array) — mixing kinds, or any
+ * intrinsic input, throws. The config UI guards against offering it cross-kind.
  */
 export async function aggregateRecords(
   records: readonly CalibrationRecord[],
   meta: { created: string; label?: string; association?: Association },
 ): Promise<CalibrationRecord> {
-  const dataset: ExtrinsicDataset = records.flatMap((r) => r.inner.dataset);
+  if (records.some((r) => r.inner.kind !== "extrinsic"))
+    throw new Error("aggregateRecords: only extrinsic records can be aggregated");
+  const dataset: ExtrinsicDataset = records.flatMap(
+    (r) => (r.inner as ExtrinsicInner).dataset,
+  );
   const inner = extrinsicInner(dataset);
   return {
     id: await recordId(inner),
@@ -283,9 +432,12 @@ export async function aggregateRecords(
   };
 }
 
-/** Total datapoint count across a record's inner dataset (list-row summary). */
+/** Total datapoint count for a record's inner data — the extrinsic datapoint
+ *  count, or the intrinsic view count (`rvecs.length`). (List-row summary.) */
 export function datapointCount(rec: CalibrationRecord): number {
-  return rec.inner.dataset.length;
+  if (rec.inner.kind === "extrinsic") return rec.inner.dataset.length;
+  const rvecs = (rec.inner.calibration as { rvecs?: unknown }).rvecs;
+  return Array.isArray(rvecs) ? rvecs.length : 0;
 }
 
 /** Latest-first ordering (newest `created` on top). Stable; pure. */
@@ -296,20 +448,44 @@ export function orderRecordsLatestFirst(
 }
 
 /**
- * Resolve the ACTIVE dataset a camera should calibrate with: the LATEST record
- * (by `created`) associated with `cameraKey`. Null when no record is bound —
- * the orchestrator loader then falls back to the legacy flat doc (pre-migration
- * safety). Pure; unit-tested.
+ * Resolve the ACTIVE extrinsic dataset a camera should calibrate with: the
+ * LATEST extrinsic record (by `created`) associated with `cameraKey`. Null when
+ * no extrinsic record is bound. Pure; unit-tested.
  */
 export function resolveActiveDataset(
   records: readonly CalibrationRecord[],
   cameraKey: string,
 ): ExtrinsicDataset | null {
-  const bound = records.filter((r) =>
-    r.outer.associations.some((a) => a.cameraKey === cameraKey),
+  const bound = records.filter(
+    (r) =>
+      r.inner.kind === "extrinsic" &&
+      r.outer.associations.some((a) => a.cameraKey === cameraKey),
   );
   if (bound.length === 0) return null;
-  return orderRecordsLatestFirst(bound)[0]!.inner.dataset;
+  return (orderRecordsLatestFirst(bound)[0]!.inner as ExtrinsicInner).dataset;
+}
+
+/**
+ * Resolve the ACTIVE intrinsic calibration a camera should use: the LATEST
+ * intrinsic record (by `created`) associated with `cameraKey`, as `{ calibration
+ * (solve payload, no date), created }`. Null when none is bound — the loader
+ * then falls back to the legacy flat doc. Pure; unit-tested.
+ */
+export function resolveActiveIntrinsic(
+  records: readonly CalibrationRecord[],
+  cameraKey: string,
+): { calibration: Record<string, unknown>; created: string } | null {
+  const bound = records.filter(
+    (r) =>
+      r.inner.kind === "intrinsic" &&
+      r.outer.associations.some((a) => a.cameraKey === cameraKey),
+  );
+  if (bound.length === 0) return null;
+  const latest = orderRecordsLatestFirst(bound)[0]!;
+  return {
+    calibration: (latest.inner as IntrinsicInner).calibration,
+    created: latest.outer.created,
+  };
 }
 
 // ---- Import / export bundles ----------------------------------------------
@@ -322,12 +498,11 @@ export const DEVICE_EXPORT_SCHEMA = "fovea-device-config@1";
 /**
  * A record as written to an EXTERNAL JSON file: the immutable inner data plus
  * the id and provenance, but WITHOUT associations (those are rig-local and are
- * re-created on import against the importing triple). `role` is advisory, so an
- * importer can re-bind the record to the correct eye.
+ * re-created on import against the importing triple). `role` is advisory.
  */
 export interface RecordExport {
   id: string;
-  inner: ExtrinsicInner;
+  inner: RecordInner;
   created: string;
   label?: string;
   sources?: string[];
@@ -379,8 +554,8 @@ export function buildRecordExport(
 
 /**
  * Build a device-config EXPORT bundle: the config doc plus every associated
- * record with associations stripped (requirement 2). The caller supplies the
- * records already filtered to this triple.
+ * record with associations stripped. The caller supplies the records already
+ * filtered to this triple.
  */
 export function buildDeviceExport(
   config: Record<string, unknown>,
@@ -398,20 +573,17 @@ export function buildDeviceExport(
 
 /** Verify an incoming record's inner data is byte-equal to an existing record's
  *  (canonical compare). Used on import when the id already exists, to WARN on a
- *  hash collision that isn't actually the same data (should never happen with
- *  SHA-256, but a corrupt/hand-edited bundle could carry a mismatched id). */
-export function innerMatches(a: ExtrinsicInner, b: ExtrinsicInner): boolean {
+ *  hash collision that isn't actually the same data. */
+export function innerMatches(a: RecordInner, b: RecordInner): boolean {
   return canonicalize(a) === canonicalize(b);
 }
 
 /**
- * Decide what importing one record (from an EXTERNAL file, or an INTERNAL
- * association to a target triple) should do against the current store. Pure —
+ * Decide what importing one record should do against the current store. Pure —
  * the caller performs the resulting store write. When a record with the
- * recomputed id already exists, the decision is `associate` (just add the
- * binding); otherwise `create`. `idMismatch`/`dataMismatch` flag a corrupt
- * bundle (recomputed id ≠ declared id, or existing inner ≠ incoming inner) so
- * the UI can warn without blocking.
+ * recomputed id already exists, the decision is `associate`; otherwise `create`.
+ * `idMismatch`/`dataMismatch` flag a corrupt bundle so the UI can warn without
+ * blocking.
  */
 export interface ImportDecision {
   action: "create" | "associate";
@@ -455,4 +627,18 @@ export function resolveNickname(
   if (!connectedHash) return null;
   const nn = tripleDocs[connectedHash]?.nickname;
   return typeof nn === "string" && nn.trim() ? nn.trim() : null;
+}
+
+// ---- Triple hash re-key (v1→v2 migration helper) ---------------------------
+
+/**
+ * Re-key a legacy FULL-64-hex triple hash to the stable 32-hex id (a plain
+ * truncation, since the id is a truncated SHA-256 of the same `{L,C,R}`
+ * pre-image). A value that is already 32-hex, or a non-hash string, passes
+ * through unchanged (idempotent). Used by the v1→v2 migration to re-key both
+ * `["triples", <hash>]` keys and `association.tripleHash` fields.
+ */
+export function reKeyTripleHash<T extends string | undefined>(hash: T): T {
+  if (hash != null && FULL_HASH_RE.test(hash)) return truncateHashHex(hash) as T;
+  return hash;
 }

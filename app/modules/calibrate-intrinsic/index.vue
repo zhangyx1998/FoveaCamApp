@@ -32,6 +32,8 @@ import { DictionaryTypeSelector } from "./dictionary-selector";
 import type { PreDefinedDictionary } from "core/Vision";
 
 const session = useSession(calibrateIntrinsic, "calibrate-intrinsic");
+// Serial whose Reset is awaiting the two-step confirm (null = none).
+const confirmingReset = ref<string | null>(null);
 const { state, telemetry } = session;
 // Recording context (capture-recorder-everywhere ruling 2): the title-bar
 // RecordButton + Cmd/Ctrl-R record the selected camera's raw sensor stream.
@@ -142,13 +144,34 @@ const pattern_h = computed<number>({
           >
             Calibrate (Marker)
           </button>
+          <!-- Two-step confirm (UI/UX review 2026-07-11): reset drops this
+               camera's association and HARD-DELETES an orphaned record — more
+               destructive than the Settings Discard (which trashes), so it
+               must not fire on one click, and the copy must say "permanently". -->
           <button
+            v-if="confirmingReset !== v.info.serial"
             :disabled="!v.fov"
             style="--theme: var(--danger)"
-            @click="session.call('resetCalibration', { serial: v.info.serial })"
+            @click="confirmingReset = v.info.serial"
           >
             Reset
           </button>
+          <template v-else>
+            <span class="reset-warn">
+              Permanently deletes this camera's calibration (cannot be undone;
+              records shared with other cameras keep their other bindings).
+            </span>
+            <button
+              style="--theme: var(--danger)"
+              @click="
+                ((confirmingReset = null),
+                session.call('resetCalibration', { serial: v.info.serial }))
+              "
+            >
+              Delete
+            </button>
+            <button @click="confirmingReset = null">Cancel</button>
+          </template>
         </div>
       </div>
     </template>
@@ -245,6 +268,12 @@ const pattern_h = computed<number>({
 </template>
 
 <style scoped lang="scss">
+.reset-warn {
+  color: var(--danger-text);
+  font-size: var(--fs-sm);
+  max-width: 22em;
+}
+
 .items {
   position: absolute;
   top: 0;

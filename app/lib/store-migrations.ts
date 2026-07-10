@@ -34,14 +34,23 @@
 // application, idempotency) is what the tests cover.
 
 import {
+  INTRINSIC_STORE,
+  RECORD_STORES,
+  RECORD_STORE,
   addAssociation,
+  isRecordId,
   migrateLegacyExtrinsic,
+  migrateLegacyIntrinsic,
+  reKeyTripleHash,
+  recordId,
+  recordStore,
   type CalibrationRecord,
+  type RecordKind,
 } from "./calibration-records.js";
 import type { ExtrinsicDataset } from "./camera-config.js";
 
 /** The version this build targets. Bump when appending a migration. */
-export const STORE_SCHEMA_VERSION = 1;
+export const STORE_SCHEMA_VERSION = 2;
 
 /** The reserved doc holding the on-disk schema version. */
 export const SCHEMA_DOC = ["schema"];
@@ -151,9 +160,194 @@ const migration0to1: Migration = {
   run: migrateExtrinsicToRecords,
 };
 
+// ---- Migration 1 → 2: per-kind record stores + 32-hex ids ------------------
+
+/** Whether a doc looks like a legacy `CameraCalibration` (a `camera_matrix`
+ *  present, however encoded), distinguishing it from a wrapped record. */
+function isCameraCalibration(v: unknown): v is Record<string, unknown> {
+  return (
+    !!v &&
+    typeof v === "object" &&
+    (v as Record<string, unknown>).camera_matrix != null &&
+    (v as Record<string, unknown>).inner == null
+  );
+}
+
+/** Best-effort ISO-8601 from a `date` value that may be a `Date`, an ISO string,
+ *  or the store codec's `{type:"Date", date}` shape (plain-JSON migration
+ *  runner). Null when unrecognized. */
+function isoFromDate(d: unknown): string | null {
+  if (d instanceof Date) return isNaN(d.getTime()) ? null : d.toISOString();
+  if (typeof d === "string") {
+    const dt = new Date(d);
+    return isNaN(dt.getTime()) ? null : dt.toISOString();
+  }
+  if (
+    d &&
+    typeof d === "object" &&
+    (d as { type?: unknown }).type === "Date" &&
+    typeof (d as { date?: unknown }).date === "string"
+  ) {
+    return (d as { date: string }).date;
+  }
+  return null;
+}
+
+/** Re-key any legacy 64-hex `association.tripleHash` to the 32-hex id. Returns a
+ *  NEW record only when something changed (else the same object). */
+function reKeyRecordAssociations(
+  rec: CalibrationRecord,
+): { record: CalibrationRecord; changed: boolean } {
+  let changed = false;
+  const associations = rec.outer.associations.map((a) => {
+    const th = reKeyTripleHash(a.tripleHash);
+    if (th !== a.tripleHash) changed = true;
+    return th === a.tripleHash ? a : { ...a, tripleHash: th };
+  });
+  if (!changed) return { record: rec, changed };
+  return { record: { ...rec, outer: { ...rec.outer, associations } }, changed };
+}
+
+/** Write a record into its per-kind directory under its recomputed 32-hex id,
+ *  UNIONING onto an existing record at that id (idempotent). Associations are
+ *  re-keyed to 32-hex on the way in. */
+async function placeRecord(
+  fs: MigrationFs,
+  rec: CalibrationRecord,
+  kind: RecordKind,
+): Promise<void> {
+  const dir = recordStore(kind);
+  const newId = await recordId(rec.inner);
+  const { record: reKeyed } = reKeyRecordAssociations({ ...rec, id: newId });
+  const existing = await fs.read<CalibrationRecord | null>([dir, newId], null);
+  if (existing && existing.inner) {
+    let merged = existing;
+    for (const a of reKeyed.outer.associations) merged = addAssociation(merged, a);
+    if (merged !== existing) await fs.write([dir, newId], merged);
+  } else {
+    await fs.write([dir, newId], reKeyed);
+  }
+}
+
+/**
+ * v1 → v2. Restructures calibration-record storage:
+ *
+ *   1. MOVE every flat `["calibration-records", <id64>]` record into its
+ *      per-kind directory (`["calibrate-extrinsic"|"calibrate-intrinsic",
+ *      <id32>]`), recomputing the id to 32 hex and re-keying any legacy 64-hex
+ *      association `tripleHash`; then clear the flat doc.
+ *   2. WRAP each legacy `["calibrate-intrinsic", <cameraKey>]` `CameraCalibration`
+ *      doc as an intrinsic record (inner = the solve payload minus `date`;
+ *      association = the center camera; `created` from `date`/mtime); then clear
+ *      the legacy doc. Camera keys carry non-hex vendor/model prefixes, so they
+ *      are distinguishable from 32-hex record ids (asserted).
+ *   3. RE-KEY any 64-hex `association.tripleHash` still on a per-kind record
+ *      (idempotency belt-and-braces on top of step 1).
+ *   4. RE-KEY `["triples", <hash64>]` docs to `["triples", <hash32>]` (a plain
+ *      truncation — the id is a truncated SHA-256 of the same `{L,C,R}`).
+ *
+ * `.raw` analysis artifacts in the per-kind directories are left VERBATIM.
+ * Idempotent: recomputed ids are pure over content, wrapped intrinsic docs
+ * become record-id-keyed (skipped on re-run), and re-keys converge.
+ */
+async function migrateToPerKindRecords(
+  fs: MigrationFs,
+  ctx: MigrationCtx,
+): Promise<MigrationReport> {
+  let extrinsicMoved = 0;
+  let intrinsicMoved = 0;
+  let intrinsicWrapped = 0;
+  let triplesReKeyed = 0;
+  let assocReKeyed = 0;
+  let skipped = 0;
+
+  // 1. Move flat calibration-records/* into the per-kind directories.
+  for (const name of await fs.list(RECORD_STORE)) {
+    const rec = await fs.read<CalibrationRecord | null>([RECORD_STORE, name], null);
+    if (!rec || !rec.inner) {
+      skipped++;
+      continue;
+    }
+    const kind: RecordKind = rec.inner.kind === "intrinsic" ? "intrinsic" : "extrinsic";
+    await placeRecord(fs, rec, kind);
+    await fs.clear([RECORD_STORE, name]);
+    if (kind === "intrinsic") intrinsicMoved++;
+    else extrinsicMoved++;
+  }
+
+  // 2. Wrap legacy intrinsic <cameraKey> docs as intrinsic records.
+  for (const name of await fs.list(INTRINSIC_STORE)) {
+    if (name.endsWith(".raw")) {
+      skipped++;
+      continue; // analysis artifact — leave verbatim
+    }
+    // Distinguishability invariant: 32-hex names are records (already migrated,
+    // or moved in step 1) — never legacy camera-key docs (which carry non-hex
+    // vendor/model prefixes). Skipping them keeps the step idempotent AND
+    // guarantees a camera key is never mistaken for a record id.
+    if (isRecordId(name)) continue;
+    const cal = await fs.read<Record<string, unknown> | null>(
+      [INTRINSIC_STORE, name],
+      null,
+    );
+    if (!isCameraCalibration(cal)) {
+      skipped++;
+      continue;
+    }
+    const mtime = fs.stat ? await fs.stat([INTRINSIC_STORE, name]) : null;
+    const created =
+      isoFromDate(cal.date) ??
+      (mtime ? new Date(mtime.mtimeMs).toISOString() : ctx.now());
+    const rec = await migrateLegacyIntrinsic(name, cal, { created });
+    await placeRecord(fs, rec, "intrinsic");
+    await fs.clear([INTRINSIC_STORE, name]);
+    intrinsicWrapped++;
+  }
+
+  // 3. Re-key any 64-hex association tripleHash still present (belt-and-braces).
+  for (const dir of RECORD_STORES) {
+    for (const id of (await fs.list(dir)).filter(isRecordId)) {
+      const rec = await fs.read<CalibrationRecord | null>([dir, id], null);
+      if (!rec || !rec.inner) continue;
+      const { record, changed } = reKeyRecordAssociations(rec);
+      if (changed) {
+        await fs.write([dir, id], record);
+        assocReKeyed++;
+      }
+    }
+  }
+
+  // 4. Re-key triple docs 64-hex → 32-hex.
+  for (const name of await fs.list("triples")) {
+    const newKey = reKeyTripleHash(name);
+    if (newKey === name) continue; // already 32-hex or non-hash
+    const doc = await fs.read<unknown>(["triples", name], null);
+    const existing = await fs.read<unknown>(["triples", newKey], null);
+    if (existing == null) await fs.write(["triples", newKey], doc);
+    await fs.clear(["triples", name]);
+    triplesReKeyed++;
+  }
+
+  return {
+    extrinsicMoved,
+    intrinsicMoved,
+    intrinsicWrapped,
+    triplesReKeyed,
+    assocReKeyed,
+    skipped,
+  };
+}
+
+const migration1to2: Migration = {
+  from: 1,
+  to: 2,
+  name: "per-kind-record-stores",
+  run: migrateToPerKindRecords,
+};
+
 /** The ORDERED migration registry. Append new steps here (see the header
  *  contract) — never edit a shipped one. */
-export const MIGRATIONS: readonly Migration[] = [migration0to1];
+export const MIGRATIONS: readonly Migration[] = [migration0to1, migration1to2];
 
 // ---- Runner ----------------------------------------------------------------
 

@@ -194,3 +194,54 @@ pairs OBSERVED corners (dots) with the pinhole solve's PROJECTED corners
 - Live overlay on the rig (toggle in Settings, see it on the calibrate-extrinsic
   L/R streams).
 - Confirm the boot migration ran once on the real store and is a no-op thereafter.
+
+---
+
+## AS-BUILT addendum — store schema v2 (per-kind stores + 32-hex ids)
+
+Ruled restructure on top of the v1 model (code + live-store migration landed
+together). Format spec: [`docs/schema/calibration-record.md`](../schema/calibration-record.md).
+
+- **Per-kind directories.** Records no longer live in a flat
+  `calibration-records/`; extrinsic records live under `calibrate-extrinsic/`
+  and intrinsic records under `calibrate-intrinsic/`, each keyed by their
+  content-hash id. Both directories may also hold `.raw` analysis artifacts,
+  which every reader skips (non-32-hex name). `RECORD_STORES` /
+  `recordStore(kind)` in `calibration-records.ts` are the single source of the
+  directory names.
+- **32-hex ids EVERYWHERE.** Record ids and triple hashes are the first 32 hex
+  digits of a SHA-256 (`RECORD_ID_HEX`, `stableHash`, `truncateHashHex`). 128
+  bits — collision-safe for any rig's store, and an accidental same-id/different-
+  data collision is still caught by the import inner-compare. The triple hash
+  (`calibration-data.tripleHash`, `orchestrator/calibration.tripleConfigPath`)
+  is the 32-hex hash of `{ L, C, R }` camera keys.
+- **Intrinsic records.** `calibrate-intrinsic` now persists each solve as a
+  record (inner = the `CameraCalibration` payload minus the volatile `date`,
+  which becomes `outer.created`; association = the center camera). `loadIntrinsic`
+  reads the latest intrinsic record for a camera (record model), falling back
+  READ-ONLY to a legacy `calibrate-intrinsic/<cameraKey>` doc for an un-migrated
+  dev store. Reset drops the camera's associations (orphan → cleared).
+- **Canonical form for Mats.** `canonicalize` folds TypedArrays/ArrayBuffers into
+  the SAME `{ type, buffer: base64(whole buffer), props }` shape the store codec
+  (`store-codec.ts`) writes to disk. Consequence: a live `Float64Array`-with-
+  props and its on-disk encoding hash identically, so the codec-reviving app and
+  the plain-JSON migration runner compute the SAME intrinsic id. Verified on the
+  real store (revived-form recompute matched the migration id).
+- **Aggregation is extrinsic-only** and never crosses kinds (`aggregateRecords`
+  throws on any intrinsic input; the Settings list gates the button to
+  all-extrinsic selections). The record inspector/overlay stay extrinsic-only
+  (disabled-with-hint on intrinsic rows); the record list badges each row's kind.
+- **Migration v1 → v2** (`store-migrations.ts`, `per-kind-record-stores`): moves
+  every flat record into its per-kind dir (recompute id → 32, re-key 64-hex
+  `tripleHash`), wraps legacy intrinsic camera-key docs as records, re-keys
+  `triples/<hash64>` → `<hash32>`, leaves `.raw` verbatim, and is idempotent. Ran
+  once on the live store (2 extrinsic moved, 1 intrinsic wrapped, 1 triple
+  re-keyed) and is a no-op on re-run; left UNCOMMITTED for user review.
+
+### Stage-F (additional)
+
+- Confirm `loadIntrinsic` builds an `Undistort` from a migrated intrinsic record
+  on the real rig (center camera FOV/date read sensibly in calibrate-intrinsic).
+- Re-solve intrinsic on the rig → a NEW intrinsic record appears + is picked up.
+- Records list shows both kinds under the connected triple; visualizer/overlay
+  disabled on the intrinsic row; aggregate refuses a mixed selection.

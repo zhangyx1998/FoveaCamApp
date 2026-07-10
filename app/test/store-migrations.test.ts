@@ -15,8 +15,12 @@ import {
 } from "@lib/store-migrations";
 import {
   RECORD_STORE,
+  EXTRINSIC_STORE,
+  INTRINSIC_STORE,
+  isRecordId,
   recordId,
   extrinsicInner,
+  intrinsicInner,
   type CalibrationRecord,
 } from "@lib/calibration-records";
 import type { ExtrinsicData } from "@lib/camera-config";
@@ -108,7 +112,7 @@ describe("migration 0 → 1 (calibration-records-v2)", () => {
     });
     fs.setMtime("calibrate-extrinsic/CAM_L", Date.parse("2026-06-01T00:00:00.000Z"));
 
-    const res = await runMigrations(fs, { ctx });
+    const res = await runMigrations(fs, { ctx, target: 1 });
     expect(res.from).toBe(0);
     expect(res.to).toBe(1);
     expect(res.applied).toEqual(["calibration-records-v2"]);
@@ -143,7 +147,7 @@ describe("migration 0 → 1 (calibration-records-v2)", () => {
 
     const res2 = await runMigrations(fs, { ctx });
     expect(res2.applied).toEqual([]); // already at target
-    expect(res2.from).toBe(1);
+    expect(res2.from).toBe(STORE_SCHEMA_VERSION);
     expect(JSON.stringify([...fs.disk.entries()].sort())).toBe(snapshot);
   });
 
@@ -162,6 +166,119 @@ describe("migration 0 → 1 (calibration-records-v2)", () => {
     expect(rec.outer.associations).toHaveLength(1);
     expect(fs.disk.has("calibrate-extrinsic/CAM_L")).toBe(false); // moved again
     void before;
+  });
+});
+
+describe("migration 1 → 2 (per-kind record stores + 32-hex ids)", () => {
+  const HASH64 = "a".repeat(64);
+  const HASH32 = "a".repeat(32);
+
+  const legacyIntrinsicDoc = () => ({
+    camera_matrix: [1, 0, 2, 0, 1, 3, 0, 0, 1],
+    dist_coeffs: [0, 0, 0, 0, 0],
+    rvecs: [[0], [0]], // 2 "views"
+    tvecs: [[0], [0]],
+    sensor_size: { width: 100, height: 80 },
+    date: new Date("2026-02-01T00:00:00.000Z"),
+  });
+
+  it("moves records to per-kind dirs, wraps intrinsic docs, re-keys triples + assocs", async () => {
+    const extRec: CalibrationRecord = {
+      id: "deadbeef".repeat(8),
+      inner: extrinsicInner(legacyDataset(3)),
+      outer: {
+        created: "2026-05-01T00:00:00.000Z",
+        associations: [{ cameraKey: "CAM_L", tripleHash: HASH64, role: "L" }],
+      },
+    };
+    const fs = fakeFs({
+      [SCHEMA_DOC.join("/")]: { version: 1 },
+      [`${RECORD_STORE}/deadbeefdeadbeef`]: extRec,
+      [`${INTRINSIC_STORE}/CENTER_CAM`]: legacyIntrinsicDoc(),
+      [`${INTRINSIC_STORE}/CENTER_CAM.raw`]: { some: "analysis artifact" },
+      [`triples/${HASH64}`]: { nickname: "Rig", zoom_override: 9 },
+    });
+
+    const res = await runMigrations(fs, { ctx });
+    expect(res.from).toBe(1);
+    expect(res.to).toBe(2);
+    expect(res.applied).toEqual(["per-kind-record-stores"]);
+    expect(res.reports["per-kind-record-stores"]).toMatchObject({
+      extrinsicMoved: 1,
+      intrinsicWrapped: 1,
+      triplesReKeyed: 1,
+    });
+
+    // Flat store emptied.
+    expect(fs.disk.has(`${RECORD_STORE}/deadbeefdeadbeef`)).toBe(false);
+
+    // Extrinsic record moved to its per-kind dir under a recomputed 32-hex id,
+    // with the assoc tripleHash re-keyed 64→32.
+    const extId = await recordId(extrinsicInner(legacyDataset(3)));
+    expect(isRecordId(extId)).toBe(true);
+    const movedExt = fs.disk.get(`${EXTRINSIC_STORE}/${extId}`) as CalibrationRecord;
+    expect(movedExt.id).toBe(extId);
+    expect(movedExt.outer.associations).toEqual([
+      { cameraKey: "CAM_L", tripleHash: HASH32, role: "L" },
+    ]);
+
+    // Legacy intrinsic doc wrapped as a record; camera-key doc gone; .raw kept.
+    const intrId = await recordId(intrinsicInner(legacyIntrinsicDoc()));
+    const wrapped = fs.disk.get(`${INTRINSIC_STORE}/${intrId}`) as CalibrationRecord;
+    expect(wrapped.inner.kind).toBe("intrinsic");
+    expect((wrapped.inner as { calibration: Record<string, unknown> }).calibration).not.toHaveProperty("date");
+    expect(wrapped.outer.created).toBe("2026-02-01T00:00:00.000Z"); // from the doc's date
+    expect(wrapped.outer.associations).toEqual([{ cameraKey: "CENTER_CAM", role: undefined }]);
+    expect(fs.disk.has(`${INTRINSIC_STORE}/CENTER_CAM`)).toBe(false);
+    expect(fs.disk.has(`${INTRINSIC_STORE}/CENTER_CAM.raw`)).toBe(true); // verbatim
+
+    // Triple re-keyed 64→32, contents preserved.
+    expect(fs.disk.has(`triples/${HASH64}`)).toBe(false);
+    expect(fs.disk.get(`triples/${HASH32}`)).toEqual({ nickname: "Rig", zoom_override: 9 });
+
+    expect(await readSchemaVersion(fs)).toBe(2);
+  });
+
+  it("intrinsic doc with no date falls back to the file mtime for created", async () => {
+    const doc = legacyIntrinsicDoc();
+    delete (doc as { date?: unknown }).date;
+    const fs = fakeFs({
+      [SCHEMA_DOC.join("/")]: { version: 1 },
+      [`${INTRINSIC_STORE}/CENTER_CAM`]: doc,
+    });
+    fs.setMtime(`${INTRINSIC_STORE}/CENTER_CAM`, Date.parse("2026-04-04T00:00:00.000Z"));
+    await runMigrations(fs, { ctx });
+    const intrId = await recordId(intrinsicInner(doc));
+    const wrapped = fs.disk.get(`${INTRINSIC_STORE}/${intrId}`) as CalibrationRecord;
+    expect(wrapped.outer.created).toBe("2026-04-04T00:00:00.000Z");
+  });
+
+  it("is idempotent — a second full run is a no-op", async () => {
+    const extRec: CalibrationRecord = {
+      id: "x".repeat(64),
+      inner: extrinsicInner(legacyDataset(2)),
+      outer: {
+        created: "2026-05-01T00:00:00.000Z",
+        associations: [{ cameraKey: "CAM_R", tripleHash: HASH64 }],
+      },
+    };
+    const fs = fakeFs({
+      [SCHEMA_DOC.join("/")]: { version: 1 },
+      [`${RECORD_STORE}/xxxx`]: extRec,
+      [`${INTRINSIC_STORE}/CENTER_CAM`]: legacyIntrinsicDoc(),
+      [`triples/${HASH64}`]: { nickname: "Rig" },
+    });
+    await runMigrations(fs, { ctx });
+    const snapshot = JSON.stringify([...fs.disk.entries()].sort());
+    const res2 = await runMigrations(fs, { ctx });
+    expect(res2.applied).toEqual([]);
+    expect(JSON.stringify([...fs.disk.entries()].sort())).toBe(snapshot);
+  });
+
+  it("a camera key is never mistaken for a record id (distinguishable)", () => {
+    expect(isRecordId("CENTER_CAM")).toBe(false);
+    expect(isRecordId("FLIR_Blackfly-S-BFS-U3-16S2C_22071833")).toBe(false);
+    expect(isRecordId("a".repeat(32))).toBe(true);
   });
 });
 

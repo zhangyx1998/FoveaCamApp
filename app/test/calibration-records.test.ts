@@ -16,16 +16,26 @@ import {
   extrinsicInner,
   hasAssociation,
   innerMatches,
+  intrinsicInner,
+  isRecordId,
   makeRecord,
   migrateLegacyExtrinsic,
+  migrateLegacyIntrinsic,
   orderRecordsLatestFirst,
+  reKeyTripleHash,
   recordBelongsToTriple,
   recordId,
   removeAssociations,
   resolveActiveDataset,
+  resolveActiveIntrinsic,
   resolveNickname,
   toRecordExport,
   tripleAssociationMatcher,
+  truncateHashHex,
+  RECORD_ID_HEX,
+  EXTRINSIC_STORE,
+  INTRINSIC_STORE,
+  recordStore,
   type Association,
   type CalibrationRecord,
 } from "@lib/calibration-records";
@@ -72,7 +82,25 @@ describe("content-hash identity", () => {
     const id1 = await recordId(extrinsicInner(dataset(3)));
     const id2 = await recordId(extrinsicInner(dataset(3)));
     expect(id1).toBe(id2);
-    expect(id1).toMatch(/^[0-9a-f]{64}$/); // SHA-256 hex
+    expect(id1).toMatch(/^[0-9a-f]{32}$/); // 32-hex truncated SHA-256
+    expect(id1).toHaveLength(RECORD_ID_HEX);
+    expect(isRecordId(id1)).toBe(true);
+  });
+
+  it("the 32-hex id is the truncation of the full SHA-256 (stable width)", async () => {
+    const inner = extrinsicInner(dataset(3));
+    const full = await import("@lib/util/hash").then((m) => m.sha256(canonicalize(inner)));
+    expect(await recordId(inner)).toBe(truncateHashHex(full));
+    expect(full).toHaveLength(64);
+    expect(truncateHashHex(full)).toHaveLength(32);
+  });
+
+  it("isRecordId distinguishes 32-hex ids from camera keys / .raw artifacts", () => {
+    expect(isRecordId("a".repeat(32))).toBe(true);
+    expect(isRecordId("FLIR_Blackfly-S-BFS-U3-16S2C_24044020")).toBe(false); // camera key
+    expect(isRecordId("a".repeat(64))).toBe(false); // full hash (legacy width)
+    expect(isRecordId(`${"a".repeat(32)}.raw`)).toBe(false); // artifact
+    expect(isRecordId("A".repeat(32))).toBe(false); // upper-case not an id
   });
 
   it("different data → different id", async () => {
@@ -83,6 +111,135 @@ describe("content-hash identity", () => {
 
   it("distinguishes numeric vs string typed values", () => {
     expect(canonicalize({ v: 1 })).not.toBe(canonicalize({ v: "1" }));
+  });
+});
+
+describe("typed-array canonicalization (intrinsic Mats)", () => {
+  /** A Float64Array carrying `shape`/`channels` expando props, like a Mat. */
+  function mat(values: number[], shape: number[], channels = 1) {
+    const a = new Float64Array(values) as Float64Array & {
+      shape: number[];
+      channels: number;
+    };
+    a.shape = shape;
+    a.channels = channels;
+    return a;
+  }
+
+  it("is deterministic + stable across independent Mats with equal content", () => {
+    const a = mat([1, 2, 3, 4], [2, 2]);
+    const b = mat([1, 2, 3, 4], [2, 2]);
+    expect(canonicalize({ m: a })).toBe(canonicalize({ m: b }));
+  });
+
+  it("differs on content, shape, or props", () => {
+    const base = mat([1, 2, 3, 4], [2, 2]);
+    expect(canonicalize({ m: base })).not.toBe(canonicalize({ m: mat([1, 2, 3, 5], [2, 2]) }));
+    expect(canonicalize({ m: base })).not.toBe(canonicalize({ m: mat([1, 2, 3, 4], [4, 1]) }));
+    expect(canonicalize({ m: base })).not.toBe(canonicalize({ m: mat([1, 2, 3, 4], [2, 2], 3) }));
+  });
+
+  it("a live Mat and its store-codec {type,buffer,props} encoding canonicalize identically", async () => {
+    // The contract that lets the codec-reviving app and the plain-JSON migration
+    // runner agree on an intrinsic record's id.
+    const { replacer } = await import("@lib/store-codec");
+    const live = mat([1.5, -2.25, 3, 4], [2, 2]);
+    const encoded = JSON.parse(JSON.stringify({ m: live }, replacer)); // {m:{type,buffer,props}}
+    expect(canonicalize({ m: live })).toBe(canonicalize(encoded));
+  });
+
+  it("an intrinsic record's id is stable across the codec encode round-trip", async () => {
+    const { replacer, reviver } = await import("@lib/store-codec");
+    const calibration = {
+      camera_matrix: mat([1000, 0, 640, 0, 1000, 480, 0, 0, 1], [3, 3]),
+      dist_coeffs: mat([0.1, -0.2, 0, 0, 0], [1, 5]),
+      sensor_size: { width: 1280, height: 960 },
+      rvecs: [mat([0.1, 0.2, 0.3], [3, 1])],
+      tvecs: [mat([1, 2, 3], [3, 1])],
+      date: new Date("2026-02-19T05:28:05.310Z"),
+    };
+    const inner = intrinsicInner(calibration);
+    expect(inner.kind).toBe("intrinsic");
+    expect(inner.calibration).not.toHaveProperty("date"); // volatile → outer.created
+    const idLive = await recordId(inner);
+    // Round-trip the inner through the store codec (what the app writes/reads).
+    const revived = JSON.parse(JSON.stringify(inner, replacer), reviver);
+    expect(await recordId(revived)).toBe(idLive);
+    expect(idLive).toMatch(/^[0-9a-f]{32}$/);
+  });
+});
+
+describe("intrinsic records", () => {
+  const calib = () => ({
+    camera_matrix: [1, 0, 2, 0, 1, 3, 0, 0, 1],
+    dist_coeffs: [0, 0, 0, 0, 0],
+    rvecs: [[0], [0], [0]], // 3 "views"
+    tvecs: [[0], [0], [0]],
+    sensor_size: { width: 100, height: 80 },
+    date: new Date("2026-02-01T00:00:00.000Z"),
+  });
+
+  it("wraps a legacy CameraCalibration doc, stripping date → created", async () => {
+    const rec = await migrateLegacyIntrinsic("CENTER_CAM", calib(), {
+      created: "2026-02-01T00:00:00.000Z",
+    });
+    expect(rec.inner.kind).toBe("intrinsic");
+    expect((rec.inner as { calibration: Record<string, unknown> }).calibration).not.toHaveProperty("date");
+    expect(rec.outer.associations).toEqual([{ cameraKey: "CENTER_CAM", role: undefined }]);
+    expect(rec.outer.created).toBe("2026-02-01T00:00:00.000Z");
+    expect(rec.id).toBe(await recordId(intrinsicInner(calib())));
+  });
+
+  it("resolveActiveIntrinsic returns the latest bound intrinsic calibration (else null)", async () => {
+    const older = await makeRecord(intrinsicInner({ ...calib(), rvecs: [[0]] }), {
+      created: "2026-02-01T00:00:00.000Z",
+      associations: [{ cameraKey: "C" }],
+    });
+    const newer = await makeRecord(intrinsicInner(calib()), {
+      created: "2026-03-01T00:00:00.000Z",
+      associations: [{ cameraKey: "C" }],
+    });
+    const active = resolveActiveIntrinsic([older, newer], "C");
+    expect(active?.created).toBe("2026-03-01T00:00:00.000Z");
+    expect(active?.calibration).toEqual((newer.inner as { calibration: unknown }).calibration);
+    expect(resolveActiveIntrinsic([older, newer], "OTHER")).toBeNull();
+    // An extrinsic record bound to the same key is ignored by the intrinsic resolver.
+    const ext = await makeRecord(extrinsicInner(dataset(2)), {
+      created: "2026-09-01T00:00:00.000Z",
+      associations: [{ cameraKey: "C" }],
+    });
+    expect(resolveActiveIntrinsic([ext], "C")).toBeNull();
+    expect(resolveActiveDataset([newer], "C")).toBeNull(); // intrinsic ignored by extrinsic resolver
+  });
+
+  it("aggregation refuses intrinsic records (never cross-kind)", async () => {
+    const intr = await makeRecord(intrinsicInner(calib()), {
+      created: "2026-02-01T00:00:00.000Z",
+      associations: [{ cameraKey: "C" }],
+    });
+    const extr = await makeRecord(extrinsicInner(dataset(2)), {
+      created: "2026-02-02T00:00:00.000Z",
+      associations: [{ cameraKey: "L" }],
+    });
+    await expect(aggregateRecords([intr, intr], { created: "x" })).rejects.toThrow(/extrinsic/);
+    await expect(aggregateRecords([extr, intr], { created: "x" })).rejects.toThrow(/extrinsic/);
+  });
+
+  it("recordStore maps each kind to its per-kind directory", () => {
+    expect(recordStore("extrinsic")).toBe(EXTRINSIC_STORE);
+    expect(recordStore("intrinsic")).toBe(INTRINSIC_STORE);
+    expect(EXTRINSIC_STORE).toBe("calibrate-extrinsic");
+    expect(INTRINSIC_STORE).toBe("calibrate-intrinsic");
+  });
+});
+
+describe("triple-hash re-key (v1→v2)", () => {
+  it("truncates a full 64-hex hash to 32, leaves 32-hex / non-hash untouched", () => {
+    const full = "a".repeat(32) + "b".repeat(32);
+    expect(reKeyTripleHash(full)).toBe("a".repeat(32));
+    expect(reKeyTripleHash("a".repeat(32))).toBe("a".repeat(32)); // already 32
+    expect(reKeyTripleHash(undefined)).toBeUndefined();
+    expect(reKeyTripleHash("not-a-hash")).toBe("not-a-hash");
   });
 });
 

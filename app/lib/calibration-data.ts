@@ -8,13 +8,15 @@
 // "Calibration data" manager. Every persisted calibration document lives under
 // one of three store directories, keyed as follows:
 //
-//   calibrate-intrinsic/<cameraKey>   — a `CameraCalibration` (center intrinsics)
-//   calibrate-extrinsic/<cameraKey>   — an `ExtrinsicDataset` (per-fovea samples)
-//   triples/<sha256>                  — a per-triple config doc (drift_l/drift_r,
+//   calibrate-intrinsic/<id>          — an intrinsic `CalibrationRecord`
+//   calibrate-extrinsic/<id>          — an extrinsic `CalibrationRecord`
+//   triples/<hash>                    — a per-triple config doc (drift_l/drift_r,
 //                                       zoom_override, baseline_mm, …)
 //
-// `<cameraKey>` is `getCameraKey` = `vendor_model_serial`; `<sha256>` is the
-// hash of the L/C/R camera keys (mirrors `orchestrator/calibration.ts`'s
+// (Schema v2: both `calibrate-*` directories hold hash-keyed RECORDS — see
+// `calibration-records.ts`. `.raw` analysis artifacts may also sit there and
+// are skipped.) `<id>`/`<hash>` are 32-hex truncated SHA-256; the triple hash is
+// of the L/C/R camera keys (mirrors `orchestrator/calibration.ts`'s
 // `tripleConfigPath` — kept in lockstep here because that module is Vue-free /
 // core-importing and must not be pulled into the renderer).
 //
@@ -24,12 +26,13 @@
 // a management view over many docs.
 
 import { getCameraKey, ROLE, type Role } from "./camera-config.js";
-import { sha256 } from "./util/hash.js";
 import {
-  RECORD_STORE,
+  RECORD_STORES,
   datapointCount,
+  isRecordId,
   orderRecordsLatestFirst,
   recordBelongsToTriple,
+  stableHash,
   type CalibrationRecord,
 } from "./calibration-records.js";
 
@@ -176,7 +179,7 @@ function formatDate(d: unknown): string | null {
  *  `orchestrator/calibration.ts`'s `tripleConfigPath` byte-for-byte (same JSON
  *  shape + key order) or friendly-name resolution silently misses. */
 export async function tripleHash(keys: { L: string; C: string; R: string }): Promise<string> {
-  return sha256(JSON.stringify({ L: keys.L, C: keys.C, R: keys.R }));
+  return stableHash(JSON.stringify({ L: keys.L, C: keys.C, R: keys.R }));
 }
 
 /**
@@ -331,20 +334,25 @@ export async function enumerateCalibrationData(
 
   const entries: CalEntry[] = [];
 
-  for (const key of intrinsicKeys)
+  // Post-v2 both `calibrate-*` directories hold hash-keyed RECORDS (surfaced in
+  // the per-triple records list, not here) plus `.raw` analysis artifacts. The
+  // inventory lists only NON-record, non-`.raw` docs — i.e. any legacy
+  // `<cameraKey>` doc an un-migrated dev store might still carry. Record files
+  // and `.raw` artifacts are skipped.
+  const legacyDoc = (key: string) => !isRecordId(key) && !key.endsWith(".raw");
+
+  for (const key of intrinsicKeys) {
+    if (!legacyDoc(key)) continue;
     entries.push({
       category: "calibrate-intrinsic",
       key,
       label: cameraLabel(key, cameras),
       detail: await intrinsicDetail(store, key),
     });
+  }
 
   for (const key of extrinsicKeys) {
-    // `.raw` docs are analysis artifacts (not schema documents) and are left in
-    // place by the calibration-records-v2 migration — never list them as
-    // calibration data. (Plain legacy extrinsic docs are moved into records at
-    // main boot, so this group is normally empty post-migration.)
-    if (key.endsWith(".raw")) continue;
+    if (!legacyDoc(key)) continue;
     entries.push({
       category: "calibrate-extrinsic",
       key,
@@ -372,12 +380,20 @@ export function deleteCalibrationEntry(store: CalStore, entry: CalEntry): Promis
 
 // ---- Calibration records (calibration-records-v2) --------------------------
 
-/** Read every calibration record from the store (config-window records list). */
+/** Read every calibration record from the store (config-window records list) —
+ *  BOTH per-kind directories. Non-record files (`.raw` artifacts, any leftover
+ *  legacy `<cameraKey>` doc) are filtered by the 32-hex id shape + an `inner`
+ *  presence check. */
 export async function enumerateRecords(store: CalStore): Promise<CalibrationRecord[]> {
-  const ids = await store.list(RECORD_STORE);
-  const recs = await Promise.all(
-    ids.map((id) => store.read<CalibrationRecord | null>([RECORD_STORE, id], null)),
-  );
+  const recs: (CalibrationRecord | null)[] = [];
+  for (const dir of RECORD_STORES) {
+    const ids = (await store.list(dir)).filter(isRecordId);
+    recs.push(
+      ...(await Promise.all(
+        ids.map((id) => store.read<CalibrationRecord | null>([dir, id], null)),
+      )),
+    );
+  }
   return recs.filter(
     (r): r is CalibrationRecord => !!r && !!(r as CalibrationRecord).inner,
   );
@@ -399,11 +415,13 @@ export function recordsForTriple(
   );
 }
 
-/** The L/R camera identity keys of the currently-connected rig (for matching
- *  legacy cameraKey-bound records to the connected triple). */
+/** The L/C/R camera identity keys of the currently-connected rig (for matching
+ *  cameraKey-bound records — legacy extrinsic and per-camera intrinsic — to the
+ *  connected triple). Includes the CENTER (C) so intrinsic records, which bind
+ *  to the center camera, surface in the connected rig's record list. */
 export function connectedEyeKeys(cameras: KnownCamera[]): string[] {
   const keys: string[] = [];
-  for (const role of ["L", "R"] as const) {
+  for (const role of ["L", "C", "R"] as const) {
     const cam = cameras.find((c) => c.role === role);
     if (cam) keys.push(getCameraKey(cam));
   }
@@ -413,6 +431,8 @@ export function connectedEyeKeys(cameras: KnownCamera[]): string[] {
 /** A record's list-row summary (datapoint count + locale calibration time). */
 export interface RecordRow {
   id: string;
+  /** Record kind — drives the list badge + the extrinsic-only visualizer gate. */
+  kind: "extrinsic" | "intrinsic";
   count: number;
   /** ISO timestamp (ordering key). */
   created: string;
@@ -429,6 +449,7 @@ export function recordRow(rec: CalibrationRecord): RecordRow {
   const d = new Date(rec.outer.created);
   return {
     id: rec.id,
+    kind: rec.inner.kind,
     count: datapointCount(rec),
     created: rec.outer.created,
     localeTime: isNaN(d.getTime()) ? rec.outer.created : d.toLocaleString(),

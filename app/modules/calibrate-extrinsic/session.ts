@@ -50,7 +50,7 @@ import type { RawPipeRegistry } from "@orchestrator/raw-pipe";
 import type { CompressPipeSeam } from "@orchestrator/compress-pipe";
 import { getCameraKey } from "@lib/camera-config";
 import {
-  RECORD_STORE,
+  EXTRINSIC_STORE,
   addAssociation,
   extrinsicInner,
   makeRecord,
@@ -80,7 +80,7 @@ async function saveExtrinsicRecord(
   const cameraKey = getCameraKey(camera);
   const inner = extrinsicInner(dataset);
   const id = await recordId(inner);
-  const existing = await read<CalibrationRecord | null>([RECORD_STORE, id], null);
+  const existing = await read<CalibrationRecord | null>([EXTRINSIC_STORE, id], null);
   const assoc = { cameraKey, tripleHash, role };
   const record =
     existing && existing.inner
@@ -89,7 +89,7 @@ async function saveExtrinsicRecord(
           created: new Date().toISOString(),
           associations: [assoc],
         });
-  await write([RECORD_STORE, id], record);
+  await write([EXTRINSIC_STORE, id], record);
 }
 
 // Config store path for the app-wide marker geometry (mirrors `useAppConfig`'s

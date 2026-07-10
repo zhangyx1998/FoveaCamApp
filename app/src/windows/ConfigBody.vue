@@ -51,7 +51,7 @@ import {
   type TripleConfig,
 } from "@lib/calibration-data";
 import {
-  RECORD_STORE,
+  recordStore,
   addAssociation,
   aggregateRecords,
   buildDeviceExport,
@@ -62,6 +62,7 @@ import {
   makeRecord,
   recordId,
   type CalibrationRecord,
+  type RecordInner,
   type DeviceExportFile,
   type RecordExportFile,
   DEVICE_EXPORT_SCHEMA,
@@ -410,6 +411,16 @@ const tripleRecords = computed<CalibrationRecord[]>(() =>
 );
 const recordRows = computed(() => tripleRecords.value.map(recordRow));
 const selectedCount = computed(() => selectedIds.value.size);
+// Aggregate is EXTRINSIC-only (intrinsic solves aren't concatenable) and never
+// crosses kinds — the header button gates on an all-extrinsic selection.
+const selectedAllExtrinsic = computed(() => {
+  const sel = tripleRecords.value.filter((r) => selectedIds.value.has(r.id));
+  return sel.length >= 2 && sel.every((r) => r.inner.kind === "extrinsic");
+});
+// The inspect visualizer is extrinsic-only — its dataset, or null for intrinsic.
+const inspectDataset = computed(() =>
+  inspecting.value?.inner.kind === "extrinsic" ? inspecting.value.inner.dataset : null,
+);
 
 async function refreshRecords(): Promise<void> {
   records.value = await enumerateRecords(calStore);
@@ -431,7 +442,10 @@ async function refreshNicknames(): Promise<void> {
  *  record datasets may carry Mats whose attached props structured clone
  *  strips, see store-codec wire framing). */
 function writeRecord(rec: CalibrationRecord): Promise<void> {
-  return window.foveaBridge.patchStore([RECORD_STORE, rec.id], wireEncode([{ replace: rec }]));
+  return window.foveaBridge.patchStore(
+    [recordStore(rec.inner.kind), rec.id],
+    wireEncode([{ replace: rec }]),
+  );
 }
 
 function toggleSelect(id: string): void {
@@ -474,7 +488,7 @@ async function doDiscardRecord(rec: CalibrationRecord): Promise<void> {
   );
   if (orphaned) {
     // Refcount hit 0 → move the file to the OS trash (recoverable).
-    await window.foveaBridge.trashStoreDoc([RECORD_STORE, rec.id]);
+    await window.foveaBridge.trashStoreDoc([recordStore(rec.inner.kind), rec.id]);
   } else {
     await writeRecord(record);
   }
@@ -484,6 +498,13 @@ async function doDiscardRecord(rec: CalibrationRecord): Promise<void> {
 async function aggregateSelected(): Promise<void> {
   const sel = tripleRecords.value.filter((r) => selectedIds.value.has(r.id));
   if (sel.length < 2 || !selectedTripleKey.value) return;
+  // Never aggregate across kinds — and only extrinsic records aggregate at all
+  // (intrinsic solves aren't a concatenable capture array). The header button is
+  // already gated to extrinsic-only selections; guard here too.
+  if (sel.some((r) => r.inner.kind !== "extrinsic")) {
+    notify("Only extrinsic records can be aggregated.");
+    return;
+  }
   const first = sel[0]!.outer.associations[0];
   const agg = await aggregateRecords(sel, {
     created: new Date().toISOString(),
@@ -542,7 +563,8 @@ async function importOneRecord(incoming: RecordExportFile["record"]): Promise<bo
   // notify here was overwritten by the bundle path's success toast and never
   // seen; UI/UX review 2026-07-10).
   const trueId = await recordId(incoming.inner);
-  const existing = await Store.read<CalibrationRecord | null>([RECORD_STORE, trueId], null);
+  const dir = recordStore((incoming.inner as RecordInner).kind);
+  const existing = await Store.read<CalibrationRecord | null>([dir, trueId], null);
   const decision = await decideImport(incoming, existing?.inner ? existing : null);
   const assoc = {
     cameraKey: eyeKeyForRole(incoming.role),
@@ -652,6 +674,8 @@ async function doClearDevice(): Promise<void> {
 
 // ---- Inspect + live overlay ------------------------------------------------
 function inspectRecord(rec: CalibrationRecord): void {
+  // The observed-vs-projected visualizer is extrinsic-only.
+  if (rec.inner.kind !== "extrinsic") return;
   inspecting.value = rec;
 }
 function overlayOn(rec: CalibrationRecord): boolean {
@@ -1078,11 +1102,13 @@ onUnmounted(() => {
                    who hadn't selected two rows yet (UI/UX review 2026-07-10). -->
               <button
                 class="btn"
-                :disabled="selectedCount < 2"
+                :disabled="!selectedAllExtrinsic"
                 :title="
-                  selectedCount >= 2
+                  selectedAllExtrinsic
                     ? 'Aggregate the selected records into a new record (sources are kept)'
-                    : 'Select 2+ records to aggregate'
+                    : selectedCount >= 2
+                      ? 'Only extrinsic records can be aggregated'
+                      : 'Select 2+ extrinsic records to aggregate'
                 "
                 @click="aggregateSelected"
               >
@@ -1115,7 +1141,17 @@ onUnmounted(() => {
               />
               <span class="rec-main">
                 <span class="rec-title">
-                  {{ row.count }} datapoint{{ row.count === 1 ? "" : "s" }}
+                  <span class="rec-kind" :class="row.kind">{{ row.kind }}</span>
+                  {{ row.count }}
+                  {{
+                    row.kind === "intrinsic"
+                      ? row.count === 1
+                        ? "view"
+                        : "views"
+                      : row.count === 1
+                        ? "datapoint"
+                        : "datapoints"
+                  }}
                   <span v-if="row.role" class="rec-role">{{ row.role }}</span>
                   <span v-if="row.aggregated" class="rec-tag">aggregate</span>
                 </span>
@@ -1125,14 +1161,24 @@ onUnmounted(() => {
                 <button
                   class="icon-button"
                   :class="{ active: overlayOn(tripleRecords.find((r) => r.id === row.id)!) }"
-                  title="Toggle live overlay on the calibration view"
+                  :disabled="row.kind !== 'extrinsic'"
+                  :title="
+                    row.kind === 'extrinsic'
+                      ? 'Toggle live overlay on the calibration view'
+                      : 'Overlay is available for extrinsic records only'
+                  "
                   @click="toggleOverlay(tripleRecords.find((r) => r.id === row.id)!)"
                 >
                   <Icon :icon="faEye" />
                 </button>
                 <button
                   class="icon-button"
-                  title="Inspect (observed vs projected)"
+                  :disabled="row.kind !== 'extrinsic'"
+                  :title="
+                    row.kind === 'extrinsic'
+                      ? 'Inspect (observed vs projected)'
+                      : 'The visualizer is available for extrinsic records only'
+                  "
                   @click="inspectRecord(tripleRecords.find((r) => r.id === row.id)!)"
                 >
                   <Icon :icon="faMagnifyingGlass" />
@@ -1293,7 +1339,7 @@ onUnmounted(() => {
           </button>
         </h3>
         <div class="viz-body">
-          <CalibrationVisualizer :dataset="inspecting.inner.dataset" />
+          <CalibrationVisualizer v-if="inspectDataset" :dataset="inspectDataset" />
         </div>
         <div class="modal-actions">
           <button @click="inspecting = null">Close</button>
@@ -2020,6 +2066,20 @@ select {
     border: 1px solid var(--border-muted);
     border-radius: 999px;
     padding: 0 0.6ch;
+  }
+  // Kind badge — reads which calibration a record holds at a glance. Extrinsic
+  // is the common case (muted); intrinsic is accented so it stands apart.
+  .rec-kind {
+    font-size: var(--fs-sm);
+    letter-spacing: 0.02em;
+    border-radius: 999px;
+    padding: 0 0.6ch;
+    border: 1px solid var(--border-muted);
+    color: var(--text-faint);
+    &.intrinsic {
+      color: var(--accent-bright);
+      border-color: var(--accent-bright);
+    }
   }
 }
 .rec-time {

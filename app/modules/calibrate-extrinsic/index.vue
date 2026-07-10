@@ -29,7 +29,8 @@ import Capture from "@src/capture";
 import StreamView from "@src/components/StreamView.vue";
 import CalibrationMarks from "@src/components/CalibrationMarks.vue";
 import Store from "@lib/store";
-import { RECORD_STORE, type CalibrationRecord } from "@lib/calibration-records";
+import { EXTRINSIC_STORE, type CalibrationRecord } from "@lib/calibration-records";
+import type { ExtrinsicDataset } from "@lib/camera-config";
 import {
   OVERLAY_DOC,
   OVERLAY_OFF,
@@ -95,13 +96,14 @@ const overlayRecord = ref<CalibrationRecord | null>(null);
 watchEffect(async () => {
   const id = overlayState.recordId;
   overlayRecord.value = id
-    ? await Store.read<CalibrationRecord | null>([RECORD_STORE, id], null)
+    ? await Store.read<CalibrationRecord | null>([EXTRINSIC_STORE, id], null)
     : null;
 });
-function overlayFor(role: "L" | "R"): CalibrationRecord | null {
-  return overlayActiveForRole(overlayState, role) && overlayRecord.value
-    ? overlayRecord.value
-    : null;
+/** The extrinsic dataset to overlay for this eye, or null. Extrinsic-only (the
+ *  overlay draws observed-vs-projected marks from an ExtrinsicDataset). */
+function overlayFor(role: "L" | "R"): ExtrinsicDataset | null {
+  const rec = overlayActiveForRole(overlayState, role) ? overlayRecord.value : null;
+  return rec && rec.inner.kind === "extrinsic" ? rec.inner.dataset : null;
 }
 const center_marker_size = computed(() => marker_size.value * marker_ratio.value);
 // LIVE per-triple baseline (Ruling A): the marker pair sits at ±baseline/2. The
@@ -171,7 +173,7 @@ function bbox(points: Point2d[]): string {
             r="4"
             :fill="THEME.L"
           />
-          <CalibrationMarks v-if="overlayFor('L')" :dataset="overlayFor('L')!.inner.dataset" />
+          <CalibrationMarks v-if="overlayFor('L')" :dataset="overlayFor('L')!" />
         </StreamView>
         <MarkerTargetInputs :session="session" role="L" :detected="!!telemetry.detection.L" />
         <PosView
@@ -245,7 +247,7 @@ function bbox(points: Point2d[]): string {
             r="4"
             :fill="THEME.R"
           />
-          <CalibrationMarks v-if="overlayFor('R')" :dataset="overlayFor('R')!.inner.dataset" />
+          <CalibrationMarks v-if="overlayFor('R')" :dataset="overlayFor('R')!" />
         </StreamView>
         <MarkerTargetInputs :session="session" role="R" :detected="!!telemetry.detection.R" />
         <PosView
