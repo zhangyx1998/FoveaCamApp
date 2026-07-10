@@ -23,6 +23,7 @@ import { nodeId } from "@lib/orchestrator/graph-contract.js";
 import { applyStoredConfig, cameraConfigPath, listCameraInfo } from "./camera.js";
 import { timeSpan } from "./diagnostics.js";
 import { read } from "./store-hub.js";
+import { awaitHardwareClear } from "./hardware-gate.js";
 
 // WS1 real-1c: the SHM PREVIEW write moved OFF this JS loop onto the native
 // per-camera converter thread (`ConverterStream`, via `Aravis.attachCameraPipe`
@@ -42,7 +43,7 @@ export function setRegistryPipeSeam(seam: RegistryPipeSeam | null): void {
   pipeSeam = seam;
 }
 
-/** Advertise a shared camera's `camera:<serial>` BGRA8 pipe + attach B's native
+/** Advertise a shared camera's `camera:<serial>` RGBA8 pipe + attach B's native
  *  producer (real-1c). Pure over the seam so it unit-tests without the native
  *  acquire chain. Camera resolution comes from GenICam (no `Camera` accessor). */
 export function advertiseCameraPipe(
@@ -58,7 +59,7 @@ export function advertiseCameraPipe(
   const channels = 4;
   seam.advertise({
     id: pipeId,
-    pixelFormat: "BGRA8",
+    pixelFormat: "RGBA8",
     dtype: "U8",
     width,
     height,
@@ -207,7 +208,7 @@ async function registerShared(camera: Camera): Promise<Shared> {
     closed: false,
   };
   shared.set(camera.serial, s);
-  // real-1c: advertise the `camera:<serial>` BGRA8 pipe + attach B's native
+  // real-1c: advertise the `camera:<serial>` RGBA8 pipe + attach B's native
   // `CaptureSink` (produce-while-leased, ruling Q2). Skipped when the seam
   // isn't wired (vitest / view-tap-only) — the JS vision path still works.
   if (pipeSeam) s.pipeId = advertiseCameraPipe(pipeSeam, camera);
@@ -221,6 +222,10 @@ async function registerShared(camera: Camera): Promise<Shared> {
 export async function acquire(serial: string): Promise<CameraLease | null> {
   let s = shared.get(serial);
   if (!s) {
+    // Disposable-orchestrator gate (ruling 2): defer opening the exclusive
+    // device until main confirms the previous hardware instance released it.
+    // No-op once cleared / while the gate is disarmed (unit tests).
+    await awaitHardwareClear();
     await awaitPendingClose(serial);
     const { Camera } = await import("core/Aravis");
     const cameras = await timeSpan("camera.enumerate", () => Camera.list(), { serial });
@@ -263,6 +268,8 @@ export async function acquireMany(
   serials: string[],
 ): Promise<Map<string, CameraLease>> {
   if (serials.some((serial) => !shared.has(serial))) {
+    // Disposable-orchestrator gate (ruling 2) — see `acquire`.
+    await awaitHardwareClear();
     // Let any mid-release previous handles settle before reopening (see
     // `closingBySerial`) — an in-process reopen doesn't fail like a
     // cross-process one, it "succeeds" onto a still-locked device.

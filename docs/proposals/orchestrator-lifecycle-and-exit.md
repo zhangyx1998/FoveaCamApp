@@ -267,3 +267,136 @@ the main-crash path (§1) — its spawner is dead.
   start.
 - `test/` — soak test: spawn/kill orchestrator repeatedly asserting no orphan
   windows/processes and quiescence held (per Execution).
+
+## AS SHIPPED (W2, 2026-07-09) — disposable orchestrator per app instance
+
+Implements RE-AMENDED ruling 2. The singleton orchestrator is GONE: opening an
+app forks a fresh orchestrator process; closing/switching disposes it. Teardown
+errors die with the process, so the Welcome launcher (which now depends on
+NOTHING in a dying instance) never wedges — the whole class of teardown-wedge
+faults is contained by process disposal.
+
+### Instance registry (as built)
+
+`app/electron/orchestrator-instances.ts` — a pure, Electron-free state machine
+(`OrchestratorInstances`), injected-wiring like `window-manager.ts` /
+`viewer-engine.ts`, unit-tested at `test/orchestrator-instances.test.ts`. Typed
+table of `{id, kind: "hardware" | "non-hardware", proc, phase, hardwareCleared,
+quiesced, expected, janitorDone, windows}`. This wave forks exactly one consumer
+— the per-app `hardware` instance — but the `non-hardware` type + the
+≤1-hardware-holder gate land ready for the viewer's future compute instance (the
+no-core-exception retirement is a later wave; the typing is here).
+
+- **Phases**: `live` → `draining` (shutdown sent, bounded quiesce armed) →
+  `dead`. A hardware instance also carries `hardwareCleared` (has main granted
+  acquisition?).
+- **Death classification** reuses `classifyOrchestratorExit` (ack-based, never
+  exit-code guessing) per instance; `shouldRunJanitor` fires the janitor on
+  every non-clean instance death.
+
+### hardware-clear gate sequencing
+
+1. Open app → `spawnWindow(app)` calls `registry.open("hardware")` immediately
+   (core load + graph build overlap the previous instance's teardown) and claims
+   the app window.
+2. The new hardware instance is forked with acquisition DEFERRED. The
+   orchestrator arms a module-level gate at boot (`orchestrator/hardware-gate.ts`,
+   `armHardwareGate()`); every device-opening chokepoint —
+   `registry.acquire`/`acquireMany` and `controller.connect` — awaits
+   `awaitHardwareClear()` before touching a camera / the MEMS serial. The gate is
+   disarmed by default so unit tests never block.
+3. Main grants hardware-clear (`sendHardwareClear` → the orchestrator's
+   `signalHardwareClear()`) only when **every other hardware instance is
+   confirmed dead AND released** — clean ack (released in-process) OR janitor
+   sweep complete (`hardwareReleased(rec) = dead && (quiesced || janitorDone)`).
+   The ≤1-holder gate: at most one hardware instance is ever cleared.
+4. While an acquisition is blocked on the gate, the orchestrator surfaces a named
+   **"waiting for previous session to release hardware…"** step on the `system`
+   session's spin-up progress; `AppWindow.vue` observes `system` status alongside
+   the app's own so the overlay shows why spin-up pauses. Cleared the instant
+   main grants hardware-clear.
+
+### Close / switch / crash / quit (per instance)
+
+- **Switch**: `drainSessions` (window-manager dep) busy-checks + best-effort
+  drains the outgoing instance (`window:drain`, refuses on mid-capture/recording)
+  then `registry.teardown` it (shutdown → ack → kill, ~4s bound → janitor). The
+  new instance forks separately and defers hardware until the outgoing one is
+  dead + swept. The Welcome window depends on neither, so it never blocks.
+- **Close app → Welcome**: the app window's close disposes its instance
+  (`registry.onWindowClosed` → teardown when the last owned window is gone).
+- **Crash mid-actuation**: non-clean exit → `classifyOrchestratorExit` = crash →
+  janitor sweep + a typed `orchestrator:down` **scoped to the dying instance's
+  owned windows** (`registry.windowsOf` → `webContentsByWindowId`), so a NEW
+  instance's app window never reacts to the OLD instance's death (the old
+  broadcast-to-all + client self-scope was insufficient once >1 instance exists).
+- **Full quit**: window-first teardown order preserved (`manager.closeAll` →
+  windows destroyed → `viewerEngines.killAll` → `registry.teardownAll` → await all
+  dead, bounded) → kill probe → watchdog stand-down → `app.quit`.
+- **darwin window-all-closed / PARK**: RETIRED. With no app window there is no
+  hardware instance at all (closing the app window already disposed it), so
+  nothing is held headless; `parkHardware` + the `park` message are removed.
+- **devRestart**: `registry.teardownAll` + bounded wait + kill probe → relaunch;
+  the probe respawns in the relaunched main.
+
+### Watchdog (main-hard-crash cover)
+
+Kept as ONE detached watchdog for main's lifetime; its state file now carries the
+CURRENT set of live instance pids (`orchestratorPids: number[]`, refreshed on
+every instance open/exit via `onLivePidsChange`). On a main crash it waits for
+EVERY listed orphan to be reaped before quiescing (`janitor.ts` watchdog reads
+the array; legacy single-`orchestratorPid` still accepted). One watchdog covers
+0..N instances because the janitor disarms ALL hardware in one fresh-process
+sweep — no need for one watchdog per instance.
+
+### Welcome window + probe
+
+Welcome is status-only. Deleted: the camera-holding `manage-cameras` session, the
+`usePipeFrame` live preview, the annotation canvas, and the camera picker. Added:
+the logo, a connection status row, and a live camera list fed by a new **probe**
+(`orchestrator/probe.ts`) — a small persistent utilityProcess main forks at
+startup (its OWN tiny Node entry, not the orchestrator binary in a flag-mode, so
+it pulls in none of the session graph — just `core/Aravis` + a cheap store-hub
+role read). It enumerates every ~2s (`Camera.list()` then releases every handle —
+never a lease/stream), posts `{cameras}` to main on a real change
+(`cameraListChanged`), and main forwards it over the `probe:cameras` bridge push.
+Roles come from saved config (store-hub read). The probe holds no hardware, gates
+nothing, outlives app instances, is restarted by main if it dies, killed at quit,
+and is **paused while a hardware instance is alive** (registry
+`onHardwareAliveChange`) so its background `Camera.list()` never contends with an
+app's exclusive acquisition; resumed back at Welcome. The pure list-diff + status
+derivation live in `app/lib/orchestrator/probe.ts` (Vue-free, shared by probe /
+main / renderer, unit-tested at `test/probe-camera.test.ts`).
+
+### Per-instance state re-derivation (confirmed correct)
+
+Each app instance starts from a clean slate — store-hub cache, controller holder
++ StreamIdPool, clock-calibration registry, and the pipe broker/registry all
+re-derive per instance (they are process-local). All re-derivable ⇒
+correctness-safe; the costs are latency (native addon reload + camera re-lease)
+and **clock re-convergence** (the owner threads re-calibrate init + 30s drift on
+each activation — the accumulated drift-ppm is thrown away). Clock
+re-convergence right after each switch is EXPECTED behavior under this model, not
+a bug.
+
+### Deltas from the ruling
+
+- `orchestrator:down` is scoped to the dying instance's OWNED (claimed app)
+  windows, not broadcast-to-all. Sub-windows/projections that connected to a dead
+  instance are not separately notified (they freeze — the existing survive
+  behavior); the app window, where `CrashReport.vue` mounts, is the guaranteed
+  target.
+- The connect handshake brokers to `registry.connectTarget()` (the current live
+  app instance). With no app instance up, `orchestrator:connect` is a no-op — the
+  status-only Welcome never connects; a profiler/projection opened with no app up
+  has nothing to attach to until an app opens.
+- No fork→ready span was newly added; the existing per-instance `boot.*` spans
+  (`FOVEA_FORK_TS` stamped per fork) still report spin-up timing — read them on
+  the rig for the spawn-latency reading.
+
+### Gates
+
+`vue-tsc --noEmit` clean (for the files in scope). `vitest`: the 2 new suites
+(`orchestrator-instances` 13, `probe-camera` 9) pass; full suite green for
+everything in scope. `vite build` clean — new Node entry `probe.js` (1.5 kB)
+alongside `orchestrator.js` / `janitor.js`.

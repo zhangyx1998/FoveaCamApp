@@ -12,12 +12,12 @@ Start FoveaCam Duo the way you launch any desktop application. On first open you
 
 The Welcome window has two panes.
 
-**Left — live preview and status.** A live, annotated preview of one camera fills the pane, labelled with that camera's description, resolution, frame rate, exposure, and gain. Before any camera is streaming you see the FoveaCam Duo logo instead.
+**Left — status.** The FoveaCam Duo logo fills the pane, with the live camera list and a status row below it. The Welcome window is **status-only** — it opens no cameras of its own, so entering an app is instant (there is nothing to release first). The camera list and status come from a small background process that only *enumerates* connected devices; it never opens a camera.
 
 Along the bottom is the status row:
 
-- A status dot and text. The text reads **connected — N cameras** (green dot) when cameras are found, **no cameras** when none are detected, or **orchestrator down** if the background engine has stopped.
-- When more than one camera is connected, a dropdown lets you choose which camera the preview shows. It defaults to **auto (center)** — the wide-angle (center) camera if one has that role, otherwise the first camera — and you can pick any serial from the list.
+- A status dot and text. The text reads **connected — N cameras** (green dot) when cameras are found, or **no cameras** when none are detected. (There is no longer an "orchestrator down" state — the launcher does not depend on the working engine, which only exists while an app is open.)
+- Above it, each detected camera is listed with its role (L / C / R, when assigned), vendor/model, and serial.
 
 **Right — the launcher.** Buttons are grouped under three headings:
 
@@ -109,13 +109,17 @@ The application menu bar carries:
 
 ## Switching apps
 
-Only one working app window is open at a time. Opening another app (from the Welcome launcher or the **Apps** menu) safely drains the current app — releasing its cameras and disarming the MEMS — before switching. You never need to close an app manually first.
+Only one working app window is open at a time, and **each app runs its own private engine** — opening an app starts a fresh engine for it; closing or switching away disposes that engine entirely. Opening another app (from the Welcome launcher or the **Apps** menu) safely drains the current app — releasing its cameras and disarming the MEMS — before switching. You never need to close an app manually first.
+
+Because the new app's engine is a brand-new process, it can begin loading immediately while the previous one shuts down; it only waits to *acquire the cameras and MEMS* until the previous app has fully released them (the cameras are exclusive to one process at a time). If that hand-off takes a moment, the new app shows a **"waiting for previous session to release hardware…"** step in its spin-up progress so you can see why it is pausing.
+
+The most important consequence: because a closing app is disposed with its whole process, **a teardown problem in one app can never wedge the launcher or the next app.** The Welcome window keeps responding no matter what the app you just left is doing on its way out.
 
 ## Quitting
 
-Closing an app window returns you to the Welcome launcher. Closing the last window behaves by platform:
+Closing an app window returns you to the Welcome launcher — and disposes that app's engine (draining its sessions, releasing its cameras, and disarming the MEMS). Closing the last window behaves by platform:
 
-- **On macOS**, the app stays running with its menu bar available. The hardware is parked (cameras released, MEMS disarmed) so nothing stays energized while no window is open. Re-activating the app (from the Dock) brings the launcher back and re-arms the hardware on demand.
+- **On macOS**, the app stays running with its menu bar available. With no app window open there is no engine at all, so nothing is energized (only the enumerate-only background process is running, and it holds no hardware). Re-activating the app (from the Dock) brings the launcher back; opening an app starts a fresh engine on demand.
 - **On Windows/Linux**, closing the last window quits the app.
 
-On a full quit, the app drains sessions, releases cameras, and confirms the hardware is safely parked before exiting — even after a crash, a cleanup worker guarantees the MEMS and cameras never stay armed.
+On a full quit, every live app engine drains its sessions, releases cameras, and confirms the hardware is safely disarmed before exiting — even after a crash, a cleanup worker guarantees the MEMS and cameras never stay armed.

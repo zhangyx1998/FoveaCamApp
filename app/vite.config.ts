@@ -195,6 +195,12 @@ export default defineConfig(({ command }) => {
                         // the orchestrator dies without confirming quiescence
                         // (MEMS disable + camera acquisition stop).
                         janitor: "orchestrator/janitor.ts",
+                        // Camera-enumeration PROBE (disposable-orchestrator
+                        // ruling 3): a small persistent enumerate-only process
+                        // main forks at startup to feed the status-only Welcome
+                        // window a live camera list. Never opens a camera; a
+                        // Node entry like the orchestrator (external `core`).
+                        probe: "orchestrator/probe.ts",
                     },
                     vite: {
                         resolve: { alias },

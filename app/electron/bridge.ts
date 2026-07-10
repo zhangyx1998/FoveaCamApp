@@ -21,10 +21,16 @@
 // never lands in the self-contained CJS preload bundle, V11). The crash-report
 // payload is defined renderer-side (its primary consumer) and shared here.
 import type { OrchestratorDownReport } from "@lib/orchestrator/client";
+import type { ProbeCamera } from "@lib/orchestrator/probe";
 export type { OrchestratorDownReport };
+export type { ProbeCamera };
 
 export interface FoveaBridge {
   connectOrchestrator(): void;
+  /** Live camera list from the enumerate-only PROBE (disposable-orchestrator
+   *  ruling 3) — the status-only Welcome window's sole data source. Fires on
+   *  every real change (device added/removed/role edit). Returns a disposer. */
+  onProbeCameras(cb: (cameras: ProbeCamera[]) => void): () => void;
   /** The orchestrator process went down. The callback receives a typed report
    *  (clean / killed / crash + exit code) so a window can surface a crash
    *  banner (orchestrator-lifecycle-and-exit ruling 3/4); a `clean` report is
@@ -152,4 +158,6 @@ export interface PushChannels {
   "recorder:trigger": [];
   /** The viewer engine (utilityProcess) crashed — carries a human message. */
   "viewer:engine-down": [message: string];
+  /** Live camera list from the enumerate-only probe (ruling 3). */
+  "probe:cameras": [cameras: ProbeCamera[]];
 }

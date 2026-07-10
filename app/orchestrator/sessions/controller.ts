@@ -18,6 +18,7 @@ import {
 import { controllerNode } from "../controller-node.js";
 import { report, timeSpan } from "../diagnostics.js";
 import { pingControllerOffset, setCalibration } from "../time-align.js";
+import { awaitHardwareClear } from "../hardware-gate.js";
 import { controller } from "@lib/orchestrator/contracts";
 
 const NEUTRAL = { left: { x: 0, y: 0 }, right: { x: 0, y: 0 } };
@@ -85,6 +86,9 @@ export function controllerSession(): ServerSession<typeof controller> {
       commands: {
         async connect() {
           if (ctrl()) return true;
+          // Disposable-orchestrator gate (ruling 2): defer opening the exclusive
+          // MEMS serial until main confirms the previous instance released it.
+          await awaitHardwareClear();
           s.telemetry({ pending: true });
           try {
             return await timeSpan("controller.connect", async () => {

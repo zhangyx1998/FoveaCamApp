@@ -46,16 +46,25 @@ const isCapAvailable = computed(() => current_capture.value !== null);
 // (progress transitions null → non-null), so dismissing a stale run never
 // suppresses the next activation's overlay.
 const sessionStatus = session ? useSessionStatus(session) : null;
+// Disposable-orchestrator ruling 2: the hardware-clear WAIT ("waiting for
+// previous session to release hardware…") rides the process-wide `system`
+// session, not the app's own — observe it too so a switch that defers
+// acquisition shows WHY spin-up pauses. The app session's own progress (graph
+// build) takes precedence; the system wait fills in when the app has none yet.
+const systemStatus = useSessionStatus("system");
+const activeProgress = computed(
+  () => sessionStatus?.progress ?? systemStatus.progress ?? null,
+);
 const progressDismissed = ref(false);
 watch(
-  () => sessionStatus?.progress ?? null,
+  () => activeProgress.value,
   (progress, prev) => {
     if (progress !== null && (prev === null || prev === undefined))
       progressDismissed.value = false;
   },
 );
 const showProgress = computed(
-  () => !!sessionStatus?.progress && !progressDismissed.value,
+  () => !!activeProgress.value && !progressDismissed.value,
 );
 
 function openProfiler() {
@@ -100,7 +109,7 @@ window.addEventListener("keydown", (e) => {
     <div v-else class="unknown-app">Unknown app: {{ appId }}</div>
     <ProgressMonitor
       v-if="showProgress"
-      :items="sessionStatus!.progress!"
+      :items="activeProgress!"
       @close="progressDismissed = true"
     />
     <!-- Orchestrator crash banner (lifecycle ruling 4) — self-hiding on clean. -->

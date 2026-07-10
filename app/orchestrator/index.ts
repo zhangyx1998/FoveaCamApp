@@ -23,6 +23,11 @@ import {
   type ShmApi,
 } from "./frame-transport.js";
 import { Hub, setFrameTransportFactory, type ServerSession } from "./runtime.js";
+import {
+  armHardwareGate,
+  signalHardwareClear,
+  onHardwareWaitChange,
+} from "./hardware-gate.js";
 import { releaseAll, setRegistryPipeSeam } from "./registry.js";
 import { pipeSession, asBroker, createFoveaMaterializer } from "./pipe-session.js";
 import { createRawPipeRegistry } from "./raw-pipe.js";
@@ -55,6 +60,13 @@ import calibrateExtrinsicSession from "@modules/calibrate-extrinsic/session";
 // for a measurement feature).
 const forkTs = Number(process.env.FOVEA_FORK_TS);
 if (Number.isFinite(forkTs)) span("boot.forkToLoad", Date.now() - forkTs);
+
+// Disposable-orchestrator gate (ruling 2): close the hardware-acquisition gate
+// at boot so no session opens a camera / the MEMS serial until main sends
+// `hardware-clear` (the previous hardware instance confirmed dead + swept).
+// Armed BEFORE any port attaches (subscriptions — hence activation — can only
+// arrive after the first `channel:connect` message below).
+armHardwareGate();
 
 const hub = new Hub();
 setFrameTransportFactory(() => createShmFrameTransport(Shm as ShmApi));
@@ -402,7 +414,7 @@ const cameraOwning: ServerSession<any>[] = [
 ];
 
 // --- system: process-wide concerns + camera handoff for non-migrated modules
-hub.add(
+const system = hub.add(
   systemSession(
     () => cameraOwning,
     () => hub.frameStatsSnapshot(),
@@ -419,6 +431,26 @@ hub.add(
       }),
   ),
 );
+
+// Disposable-orchestrator ruling 2: surface the hardware-clear WAIT as a named
+// spin-up step on the `system` session so a subscribed app window shows WHY
+// spin-up pauses (AppWindow observes system status alongside its own). The step
+// appears only while an acquisition is actually blocked on the gate and clears
+// the moment main grants hardware-clear.
+const HW_WAIT_STEP = {
+  id: "hardware-clear",
+  label: "Waiting for previous session to release hardware…",
+} as const;
+let hwWaitMonitor: ReturnType<ServerSession<any>["progressMonitor"]> | null = null;
+onHardwareWaitChange((waiting) => {
+  if (waiting && !hwWaitMonitor) {
+    hwWaitMonitor = system.progressMonitor([HW_WAIT_STEP]);
+    hwWaitMonitor.start(HW_WAIT_STEP.id);
+  } else if (!waiting && hwWaitMonitor) {
+    hwWaitMonitor.complete();
+    hwWaitMonitor = null;
+  }
+});
 
 if (Number.isFinite(forkTs)) span("boot.sessionsRegistered", Date.now() - forkTs);
 
@@ -466,7 +498,7 @@ async function quiesceHardware(): Promise<void> {
 }
 
 /** Drain camera-owning sessions best-effort, then disarm all hardware. Shared
- *  by the graceful, cold, and park paths. */
+ *  by the graceful (shutdown) and cold (crash/SIGTERM) paths. */
 async function drainAndQuiesce(): Promise<void> {
   const deadline = new Promise<void>((r) => setTimeout(r, 4000));
   try {
@@ -515,22 +547,10 @@ function quiesceAndExit(code: number): void {
   })();
 }
 
-// Headless PARK (darwin window-all-closed): drain + disarm hardware WITHOUT
-// exiting, so the macOS app can stay alive with no armed hardware and a dock
-// re-activate re-leases + re-arms on demand. Re-entrant (never latches the
-// terminal `quiescing`), so repeated close/reopen cycles keep working.
-let parking = false;
-function parkHardware(): void {
-  if (parking || quiescing) return;
-  parking = true;
-  void (async () => {
-    try {
-      await drainAndQuiesce();
-    } finally {
-      parking = false;
-    }
-  })();
-}
+// Headless PARK is RETIRED (disposable-orchestrator ruling 5): with no app
+// window there is no hardware instance at all — the process is disposed on the
+// last owned window's close, so there is nothing to park. The enumerate-only
+// probe (orchestrator/probe.ts) holds no hardware and feeds Welcome instead.
 
 // A JS-level CRASH must still leave the hardware safe — quiesce, then die
 // nonzero (main's janitor stays as the backstop for native aborts, which
@@ -559,8 +579,11 @@ process.parentPort.on("message", (e) => {
     quiesceAndAck();
     return;
   }
-  if (data?.type === "park") {
-    parkHardware();
+  // Disposable-orchestrator gate (ruling 2): main confirmed the previous
+  // hardware instance released the devices — open the acquisition gate. Deferred
+  // camera-owning activations + controller.connect proceed from here.
+  if (data?.type === "hardware-clear") {
+    signalHardwareClear();
     return;
   }
   if (data?.type === "window:drain") {

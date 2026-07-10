@@ -13,17 +13,19 @@ import {
   utilityProcess,
   webContents,
   MessageChannelMain,
-  type UtilityProcess,
 } from "electron";
+import {
+  OrchestratorInstances,
+  type InstanceKind,
+  type InstanceProc,
+  type InstanceView,
+} from "./orchestrator-instances";
+import type { ProbeCamera } from "@lib/orchestrator/probe";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { existsSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
-import {
-  classifyOrchestratorExit,
-  shouldRunJanitor,
-} from "./orchestrator-exit";
 import { ViewerEngineManager, type EngineHandle } from "./viewer-engine";
 import { getIcon } from "./util";
 import { resolveDefaultSavePath, validateWritablePath } from "@lib/util/fs";
@@ -243,54 +245,34 @@ handle("viewer:reveal", (file) => {
   if (typeof file === "string" && file) shell.showItemInFolder(file);
 });
 
-// ---- Orchestrator process -------------------------------------------------
-// A utilityProcess that owns `core` (cameras, vision, control, hardware I/O).
-// Its event loop is independent of any renderer's render loop. Main only brokers
-// a direct MessagePort between each renderer and the orchestrator; frames and
-// commands then flow point-to-point without routing through here. The only
-// main↔orchestrator control traffic is the window-switch drain handshake below.
-let orchestrator: UtilityProcess | null = null;
+// ---- Orchestrator instances (disposable per app, ruling 2) ----------------
+// Each app activation forks a FRESH orchestrator utilityProcess that owns `core`
+// (cameras, vision, control, hardware I/O); closing/switching the app disposes
+// it (bounded drain-and-quiesce → ack/timeout → kill → janitor). Teardown errors
+// die with the process, so the Welcome launcher never wedges. The instance
+// registry (`orchestrator-instances.ts`, Electron-free + unit-tested) owns the
+// typed table + the ≤1-hardware gate; the fork/port/janitor wiring is injected
+// below. Main brokers a direct MessagePort between each renderer and its
+// instance; frames/commands then flow point-to-point.
+let registry!: OrchestratorInstances;
 let drainSeq = 0;
-const pendingDrains = new Map<
-  number,
-  (result: { ok: boolean; reason?: string }) => void
->();
+// Per-instance window:drain resolvers (the switch busy-check) — keyed by
+// instance id then request seq, so a dying instance's pending drains can be
+// settled without touching another instance's.
+const instanceDrains = new Map<string, Map<number, (r: { ok: boolean; reason?: string }) => void>>();
+// windowId → its live webContents, so the registry's `notifyDown` can push a
+// crash report to a dying instance's OWNED windows only (ruling 4 scoping).
+const webContentsByWindowId = new Map<string, Electron.WebContents>();
 
 // ---- Hardware janitor (safety invariant, docs/hardware/stage-f.md) --------
-// The orchestrator confirms `quiesced` (MEMS disabled + cameras released)
-// before a graceful exit. If it EVER exits without that confirmation —
-// SIGABRT from native code, SIGSEGV, OOM kill — the armed hardware outlives
-// it, so main forks this one-shot cleanup process (orchestrator/janitor.ts):
-// fresh process, fresh device claims, disables the MEMS controller over
-// serial and stops every camera's acquisition (which also clears
-// TLParamsLocked, unblocking the next boot's config restore).
-// The `quiesced` clean-exit ACK (ruling 3/4): flipped when the orchestrator
-// confirms hardware is parked, BEFORE it stops. Authoritative for the
-// clean-vs-crash decision — never the exit code.
-let orchestratorQuiesced = false;
-// Did MAIN initiate this orchestrator's termination (quit / dev-restart)? Lets
-// a missing ack read as "killed" (expected) vs "crash" (unexpected). Reset in
-// startOrchestrator.
-let orchestratorExpectedExit = false;
-// Resolvers waiting on the next `quiesced` ack (the quit/dev-restart paths).
-let ackWaiters: Array<() => void> = [];
-/** Resolve `true` once the orchestrator posts `quiesced`, or `false` at the
- *  bounded deadline (a hung quiesce still lets the app quit → classified
- *  "killed"). */
-function waitForQuiesceAck(timeoutMs: number): Promise<boolean> {
-  if (orchestratorQuiesced) return Promise.resolve(true);
-  return new Promise<boolean>((resolve) => {
-    const timer = setTimeout(() => {
-      ackWaiters = ackWaiters.filter((w) => w !== onAck);
-      resolve(false);
-    }, timeoutMs);
-    const onAck = () => {
-      clearTimeout(timer);
-      resolve(true);
-    };
-    ackWaiters.push(onAck);
-  });
-}
+// An instance confirms `quiesced` (MEMS disabled + cameras released) before a
+// graceful exit. If one EVER exits without that confirmation — SIGABRT from
+// native code, SIGSEGV, OOM kill — the armed hardware outlives it, so main forks
+// this one-shot cleanup process (orchestrator/janitor.ts): fresh process, fresh
+// device claims, disables the MEMS controller over serial and stops every
+// camera's acquisition (which also clears TLParamsLocked, unblocking the next
+// instance's config restore). The registry decides clean-vs-crash from the
+// ack (never the exit code) and calls this on every non-clean instance death.
 
 // One janitor run covers everything armed by the dead orchestrator — dedupe
 // concurrent triggers (unexpected-exit handler racing the quit path).
@@ -346,15 +328,16 @@ const watchdogStatePath = path.join(DATA, `watchdog-${process.pid}.json`);
 let watchdogSpawned = false;
 
 /** (Re)write this main instance's watchdog state file — mainPid is fixed;
- *  orchestratorPid is refreshed on every (re)spawn so the watchdog can wait on
- *  the CURRENT orphan before quiescing. */
+ *  `orchestratorPids` is the CURRENT set of live instance pids (disposable
+ *  model, ruling 5: 0..N alive), refreshed whenever the set changes so the
+ *  watchdog waits on the right orphans before quiescing. */
 function writeWatchdogState(): void {
   try {
     writeFileSync(
       watchdogStatePath,
       JSON.stringify({
         mainPid: process.pid,
-        orchestratorPid: orchestrator?.pid ?? null,
+        orchestratorPids: registry?.livePids() ?? [],
       }),
     );
   } catch (e) {
@@ -431,26 +414,26 @@ async function waitUntil(pred: () => boolean, timeoutMs: number): Promise<void> 
   while (!pred() && Date.now() - start < timeoutMs) await delay(50);
 }
 
-function startOrchestrator() {
+/** Fork + wire ONE orchestrator instance (the registry's `fork` dep). Routes
+ *  the instance's ack / drain-result / recording-finished / exit back to the
+ *  registry + window manager. `id` scopes the per-instance drain map. */
+function forkInstance(id: string, kind: InstanceKind): InstanceProc {
   const entry = path.join(DIR, "orchestrator.js");
-  orchestratorQuiesced = false;
-  orchestratorExpectedExit = false;
-  orchestrator = utilityProcess.fork(entry, [], {
+  const proc = utilityProcess.fork(entry, [], {
     stdio: "inherit",
     env: {
       ...process.env,
-      // The orchestrator reads/writes the same config store as the renderer.
+      // Each instance reads/writes the same config store as the renderer.
       FOVEA_DATA_PATH: DATA,
-      // Boot-span baseline (docs/history/refactor/orchestrator.md §7.1 S5) — stamped
-      // as close to `fork()` as possible so `index.ts` can measure fork ->
-      // first-useful-work timing.
+      // Boot-span baseline (§7.1 S5) — stamped as close to `fork()` as possible
+      // so `index.ts` can measure fork -> first-useful-work timing per instance.
       FOVEA_FORK_TS: String(Date.now()),
+      FOVEA_INSTANCE_KIND: kind,
     },
   });
-  // The watchdog needs the CURRENT orchestrator pid to wait on the right orphan
-  // after a main crash. `pid` is populated once the child has spawned.
-  orchestrator.on("spawn", () => writeWatchdogState());
-  orchestrator.on("message", (data: unknown) => {
+  // The watchdog needs the CURRENT instance pids; `pid` is populated on spawn.
+  proc.on("spawn", () => writeWatchdogState());
+  proc.on("message", (data: unknown) => {
     const msg = data as {
       type?: string;
       id?: number;
@@ -459,83 +442,142 @@ function startOrchestrator() {
       path?: string;
     };
     if (msg?.type === "quiesced") {
-      // The authoritative clean-exit ack (ruling 3/4): record it and release
-      // any quit/dev-restart path waiting on it.
-      orchestratorQuiesced = true;
-      for (const w of ackWaiters.splice(0)) w();
+      // The authoritative clean-exit ack (ruling 3/4) — the registry reaps it.
+      registry.onAck(id);
       return;
     }
-    // Phase 5 auto-open (capture-recorder-nodes.md ruling 8): the recorder
-    // node finalized a recording container — surface it in a STANDALONE
-    // viewer window without user action (one window per file via fileKey
-    // dedupe, so a re-finalize just focuses it; the window does its own
-    // playback — standalone-viewer-and-fcap ruling 1).
-    //
-    // ── SEAM (recorder wave, orchestrator-side; NOT in this wave's scope) ──
-    // The SEND side belongs in `orchestrator/recorder-node.ts`'s stopRecording
-    // finalize path (Phase 2). One line, mirroring the `quiesced` /
-    // `window:drain-result` posts in `orchestrator/index.ts`:
-    //     process.parentPort.postMessage({ type: "recording:finished", path });
-    // where `path` is the just-closed container path. No renderer bridge is
-    // involved — recording runs orchestrator-side, so it flows
-    // orchestrator → MAIN directly (this handler), not renderer → main.
+    // Phase 5 auto-open (capture-recorder-nodes.md ruling 8): a recorder node
+    // finalized a container — surface it in a STANDALONE viewer window (one per
+    // file; the window does its own playback — standalone-viewer-and-fcap 1).
     if (msg?.type === "recording:finished") {
       if (typeof msg.path === "string" && msg.path) manager.openViewer(msg.path);
       return;
     }
     if (msg?.type !== "window:drain-result" || msg.id === undefined) return;
-    pendingDrains.get(msg.id)?.({ ok: !!msg.ok, reason: msg.reason });
-    pendingDrains.delete(msg.id);
+    const map = instanceDrains.get(id);
+    map?.get(msg.id)?.({ ok: !!msg.ok, reason: msg.reason });
+    map?.delete(msg.id);
   });
-  orchestrator.on("exit", (code) => {
-    console.warn("Orchestrator exited:", code);
-    orchestrator = null;
-    // Ack-based classification (ruling 4): ack present ⇒ clean (code ignored);
-    // absent + main-initiated ⇒ killed; absent + unexpected ⇒ crash.
-    const report = classifyOrchestratorExit({
-      acked: orchestratorQuiesced,
-      expected: orchestratorExpectedExit,
-      code: code ?? null,
-    });
-    // Safety invariant: any non-clean exit may have left the MEMS controller /
-    // cameras armed — quiesce out-of-process. (A clean exit already did so
-    // in-process and posted the ack.)
-    if (shouldRunJanitor(report))
-      void ensureJanitor(`orchestrator ${report.reason} (code ${code})`);
-    // A dead orchestrator has nothing left to drain — unblock any switch
-    // waiting on it rather than letting it time out.
-    for (const [id, resolve] of pendingDrains) {
-      resolve({ ok: true });
-      pendingDrains.delete(id);
+  proc.on("exit", (code) => {
+    console.warn(`Orchestrator instance ${id} exited:`, code);
+    // Registry classifies (ack-based), janitors non-clean paths, surfaces the
+    // down report to owned windows, and re-attempts the hardware-clear gate.
+    registry.onExit(id, code ?? null);
+    // A dead instance has nothing left to drain — unblock any switch waiting on
+    // it rather than letting it time out.
+    const map = instanceDrains.get(id);
+    if (map) {
+      for (const resolve of map.values()) resolve({ ok: true });
+      instanceDrains.delete(id);
     }
-    // Every renderer's pending orchestrator requests would otherwise hang
-    // forever (the crashed process can't reply) — notify them to reject
-    // in-flight calls AND surface the crash report to the associated windows
-    // (client.ts scopes it to windows that actually connected). See
-    // docs/history/refactor/orchestrator.md §12.1 C5.
-    for (const w of BrowserWindow.getAllWindows())
-      pushTo(w.webContents, "orchestrator:down", report);
   });
+  return {
+    postMessage: (message: unknown, transfer?: unknown[]) =>
+      proc.postMessage(message, transfer as Electron.MessagePortMain[] | undefined),
+    kill: () => proc.kill(),
+    get pid() {
+      return proc.pid;
+    },
+  };
 }
 
-/** Ask the orchestrator to idle every camera-owning session and wait for the
+// ---- Camera-enumeration probe (disposable-orchestrator ruling 3) ----------
+// A small persistent enumerate-only process that feeds the status-only Welcome
+// window a live camera list + connected state. It NEVER opens a camera, holds
+// no hardware, gates nothing, and outlives app instances; main restarts it if
+// it dies and kills it at quit. Paused while a hardware instance is alive (the
+// registry's `onHardwareAliveChange` dep below) so its `Camera.list()` never
+// contends with an app's exclusive acquisition; resumed back at Welcome.
+let probe: ReturnType<typeof utilityProcess.fork> | null = null;
+let probeQuitting = false;
+function spawnProbe(): void {
+  if (probe || probeQuitting) return;
+  probe = utilityProcess.fork(path.join(DIR, "probe.js"), [], {
+    stdio: "inherit",
+    env: { ...process.env, FOVEA_DATA_PATH: DATA },
+  });
+  probe.on("message", (data: unknown) => {
+    const msg = data as { type?: string; cameras?: ProbeCamera[] };
+    if (msg?.type === "probe:cameras")
+      for (const w of BrowserWindow.getAllWindows())
+        pushTo(w.webContents, "probe:cameras", msg.cameras ?? []);
+  });
+  probe.on("exit", (code) => {
+    probe = null;
+    if (probeQuitting) return;
+    console.warn("[probe] exited unexpectedly — restarting:", code);
+    setTimeout(spawnProbe, 500);
+  });
+  // If a hardware instance is already alive when the probe (re)spawns, it must
+  // start paused so it never contends with the app's exclusive acquisition.
+  if (registry?.hardwareAlive()) probe.postMessage({ type: "probe:pause" });
+}
+function killProbe(): void {
+  probeQuitting = true;
+  probe?.kill();
+  probe = null;
+}
+
+registry = new OrchestratorInstances({
+  fork: forkInstance,
+  sendHardwareClear: (inst) => inst.proc.postMessage({ type: "hardware-clear" }),
+  sendShutdown: (inst) => inst.proc.postMessage({ type: "shutdown" }),
+  kill: (inst) => inst.proc.kill(),
+  // Reuse the deduped hardware janitor as the per-instance non-clean-death
+  // sweep; it disarms ALL hardware in a fresh process regardless of instance.
+  runJanitor: (inst, reason) => ensureJanitor(`${inst.id}: ${reason}`),
+  notifyDown: (inst, report) => {
+    // Scope the down report to the DYING instance's OWNED windows (ruling 4):
+    // a NEW instance's app window must never react to the OLD instance's death.
+    // On a crash the app window is still open (its channel rejects in-flight
+    // calls + CrashReport.vue shows); on a clean switch/close its window is
+    // already gone, so this reaches nobody (correct — nothing to inform).
+    for (const windowId of registry.windowsOf(inst.id)) {
+      const wc = webContentsByWindowId.get(windowId);
+      if (wc && !wc.isDestroyed()) pushTo(wc, "orchestrator:down", report);
+    }
+  },
+  // Pause the enumerate-only probe while a hardware instance is alive (Aravis
+  // is per-process exclusive — a background `Camera.list()` must not contend
+  // with the app's exclusive acquisition); resume at the Welcome screen.
+  onHardwareAliveChange: (alive) => probe?.postMessage({ type: alive ? "probe:pause" : "probe:resume" }),
+  // Keep the crash-watchdog state file tracking whichever instances are alive.
+  onLivePidsChange: () => writeWatchdogState(),
+  quiesceMs: 4000,
+});
+
+/** Ask an instance to idle every camera-owning session and wait for the
  *  releases to settle (multi-window.md §3 — "closed" = session-idle-drained).
  *  `{ok: false}` = refused: a session is mid-capture/recording. */
-function drainSessions(): Promise<{ ok: boolean; reason?: string }> {
-  if (!orchestrator) return Promise.resolve({ ok: true }); // nothing to drain
-  const id = ++drainSeq;
+function drainInstance(inst: InstanceView): Promise<{ ok: boolean; reason?: string }> {
+  const seq = ++drainSeq;
+  let map = instanceDrains.get(inst.id);
+  if (!map) instanceDrains.set(inst.id, (map = new Map()));
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
-      // A wedged drain must not silently hand cameras to the next app —
-      // surface it as a refusal so the user can retry (or restart).
-      pendingDrains.delete(id);
+      map!.delete(seq);
       resolve({ ok: false, reason: "session drain timed out (10s)" });
     }, 10_000);
-    pendingDrains.set(id, (result) => {
+    map!.set(seq, (result) => {
       clearTimeout(timer);
       resolve(result);
     });
-    orchestrator!.postMessage({ type: "window:drain", id });
+    inst.proc.postMessage({ type: "window:drain", id: seq });
+  });
+}
+
+/** The switch drain (window-manager dep): busy-check + best-effort session
+ *  drain of the OUTGOING hardware instance, then dispose it (its process death
+ *  is the containment). `{ok:false}` keeps the current app (mid-capture/
+ *  recording). With no current instance (first app from Welcome) it's a no-op
+ *  pass. Note the new instance forks separately at app-window spawn and defers
+ *  hardware until this outgoing one is confirmed dead + swept. */
+function drainSessions(): Promise<{ ok: boolean; reason?: string }> {
+  const cur = registry.currentHardware();
+  if (!cur) return Promise.resolve({ ok: true });
+  return drainInstance(cur).then((result) => {
+    if (result.ok) registry.teardown(cur.id, "app switch");
+    return result;
   });
 }
 
@@ -551,10 +593,15 @@ const windowIdBySender = new Map<number, string>();
 // message carries the sender's stable windowId (A-34) so the Hub can tag the
 // channel; null for a sender the manager doesn't know (shouldn't happen).
 ipcMain.on("orchestrator:connect" satisfies keyof SendChannels, (event) => {
-  if (!orchestrator) startOrchestrator();
+  // Instance-scoped brokering (ruling 6): connect the renderer to the CURRENT
+  // live app instance (the one just forked for the app window, which profiler/
+  // projection surfaces also attach to). With no app instance up — the status-
+  // only Welcome window, which never connects — there is nothing to broker.
+  const target = registry.connectTarget();
+  if (!target) return;
   const { port1, port2 } = new MessageChannelMain();
   const windowId = windowIdBySender.get(event.sender.id) ?? null;
-  orchestrator!.postMessage({ type: "channel:connect", windowId }, [port1]);
+  target.postMessage({ type: "channel:connect", windowId }, [port1]);
   event.sender.postMessage("orchestrator:port", null, [port2]);
 });
 
@@ -766,6 +813,14 @@ function spawnWindow(desc: WindowDescriptor): ManagedWindow {
     isMaximized: () =>
       win.isDestroyed() ? lastDisplayState.maximized : win.isMaximized(),
   };
+  // Disposable-orchestrator (ruling 2): an APP window forks a FRESH hardware
+  // instance and owns it. The window is claimed now so its close disposes the
+  // instance (registry.onWindowClosed → drain-and-quiesce → kill → janitor).
+  // The renderer's `orchestrator:connect` (after load) then brokers to it.
+  if (desc.class === "app" && desc.windowId) {
+    const inst = registry.open("hardware");
+    registry.claimWindow(inst.id, desc.windowId);
+  }
   // A-34: sender→windowId lookup for the orchestrator channel handshake (the
   // connect IPC only knows `event.sender`), + the close-teardown signal C-24's
   // composition keys `win/<windowId>/...` namespaces on.
@@ -773,9 +828,16 @@ function spawnWindow(desc: WindowDescriptor): ManagedWindow {
     const windowId = desc.windowId;
     const senderId = win.webContents.id; // captured now — webContents is gone by "closed"
     windowIdBySender.set(senderId, windowId);
+    webContentsByWindowId.set(windowId, win.webContents);
     win.on("closed", () => {
       windowIdBySender.delete(senderId);
-      orchestrator?.postMessage({ type: "window:closed", windowId });
+      webContentsByWindowId.delete(windowId);
+      // Route the per-window teardown signal (C-24 compose `win/<id>` state) to
+      // the instance that owns/served this window, then let the registry
+      // dispose that instance when its last owned window is gone.
+      const owner = registry.instanceForWindow(windowId) ?? registry.currentHardware();
+      owner?.proc.postMessage({ type: "window:closed", windowId });
+      registry.onWindowClosed(windowId);
     });
   }
   // Viewer windows: flush + kill this window's playback engine on close
@@ -839,24 +901,15 @@ async function devRestart(): Promise<void> {
     console.error("Failed to persist window manifest:", error);
   }
   app.relaunch();
-  // `app.exit()` skips `before-quit`, so run the quiesce handshake here: give
-  // the orchestrator a beat to disable the MEMS controller + release cameras
-  // (async serial write — a bare kill() can't complete it) before the hard
-  // exit. Ack-based like the quit path; short deadline keeps dev restarts
-  // snappy. Unlike before, add the JANITOR FALLBACK the audit flagged as
-  // missing on this path (a wedged quiesce must not relaunch over armed
-  // hardware).
-  const proc = orchestrator;
-  if (proc) {
-    orchestratorExpectedExit = true;
-    const exited = new Promise<void>((r) => proc.once("exit", () => r()));
-    proc.postMessage({ type: "shutdown" });
-    await waitForQuiesceAck(2000);
-    proc.kill();
-    await Promise.race([exited, delay(500)]);
-  }
-  orchestrator = null;
-  if (!orchestratorQuiesced) await ensureJanitor("dev restart");
+  // `app.exit()` skips `before-quit`, so dispose the current instance(s) here:
+  // each drains + disarms hardware + acks (the registry kills + janitors any
+  // that wedge). Bounded so a hung quiesce can't stall the relaunch over armed
+  // hardware. The probe (utilityProcess child) dies with main; the relaunched
+  // main spawns fresh ones (ruling 5: instance killed → fresh on next open;
+  // probe survives via respawn).
+  registry.teardownAll("dev restart");
+  await waitUntil(() => !registry.anyAlive(), 3000);
+  killProbe();
   // The relaunched main spawns its own watchdog — stand this instance's down.
   standDownWatchdog();
   app.exit(0);
@@ -895,18 +948,19 @@ app
   .whenReady()
   .then(sweepStaleWatchdogState)
   .then(customizeApp)
-  .then(startOrchestrator)
-  // Detached main-crash watchdog (gap 1): spawned once, right after the
-  // orchestrator, so it is guarding energized hardware for the whole session.
+  // Disposable model (ruling 2/3): no orchestrator is spawned at startup — app
+  // instances fork on demand at app-window open. The enumerate-only PROBE and
+  // the detached main-crash WATCHDOG come up now instead, so Welcome shows the
+  // live camera list and the safety net is armed for the whole session.
+  .then(spawnProbe)
   .then(spawnWatchdog)
   .then(createInitialWindows);
 
-// Quit = graceful hardware quiescence first (safety invariant): ask the
-// orchestrator to shut down (it drains sessions, DISABLES the MEMS controller
-// over serial — an async write a bare SIGTERM can't complete — releases the
-// cameras, and confirms `quiesced`), then quit for real. If it wedges or dies
-// without confirming, the janitor cleans up out-of-process before we let
-// Electron reap everything.
+// Quit = graceful hardware quiescence first (safety invariant): dispose EVERY
+// live instance (each drains sessions, DISABLES the MEMS controller over serial
+// — an async write a bare SIGTERM can't complete — releases the cameras, and
+// confirms `quiesced`); the registry kills + janitors any that wedge. Then kill
+// the probe + stand the watchdog down, and quit for real.
 let quitting = false;
 app.on("before-quit", (event) => {
   manager.markQuitting();
@@ -915,36 +969,27 @@ app.on("before-quit", (event) => {
   event.preventDefault();
   void (async () => {
     try {
-      // Gap 5 — WINDOW-FIRST teardown order (ruling 1/3): close owned
-      // sub-windows (they cascade) then app/top windows, and let their teardown
-      // (pipe reads, `window:closed`) flush BEFORE the orchestrator handshake,
-      // so no renderer is mid pipe-read while the orchestrator disarms. Bounded
-      // so a stuck window can't hang quit.
+      // WINDOW-FIRST teardown order (ruling 1/3): close owned sub-windows (they
+      // cascade) then app/top windows, and let their teardown (pipe reads,
+      // `window:closed`) flush BEFORE the instance handshakes, so no renderer is
+      // mid pipe-read while an instance disarms. Bounded so a stuck window can't
+      // hang quit. (Closing an app window already begins its instance teardown.)
       manager.closeAll();
       await waitUntil(
         () => BrowserWindow.getAllWindows().every((w) => w.isDestroyed()),
         3000,
       );
       // Viewer engines are MAIN-owned utilityProcesses independent of the
-      // orchestrator/hardware — flush their sidecars (bounded) and reap them
-      // before we exit (window close already kicked most off; this bounds it).
+      // instances/hardware — flush their sidecars (bounded) and reap them.
       await viewerEngines.killAll();
-      // Orchestrator handshake (ruling 3/4): the orchestrator quiesces + posts
-      // `quiesced` and WAITS; we reap it once we have the ack (authoritative
-      // clean signal) or the deadline lapses (→ classified "killed").
-      const proc = orchestrator;
-      if (proc) {
-        orchestratorExpectedExit = true;
-        const exited = new Promise<void>((r) => proc.once("exit", () => r()));
-        proc.postMessage({ type: "shutdown" });
-        await waitForQuiesceAck(5000);
-        proc.kill();
-        await Promise.race([exited, delay(2000)]);
-      }
-      // Fallback if the ack never came (hung/killed quiesce).
-      if (!orchestratorQuiesced) await ensureJanitor("app quit");
+      // Instance handshakes (ruling 3/4): every live instance quiesces + acks;
+      // the registry reaps on the ack or kills + janitors at the bounded
+      // deadline. Await all deaths (bounded — the per-instance timers guarantee
+      // progress even if this outer wait lapses).
+      registry.teardownAll("app quit");
+      await waitUntil(() => !registry.anyAlive(), 6000);
     } finally {
-      orchestrator = null;
+      killProbe();
       // Clean shutdown reached — stand the crash watchdog down before we exit.
       standDownWatchdog();
       app.quit();
@@ -962,13 +1007,11 @@ app.on("window-all-closed", () => {
     app.quit();
     return;
   }
-  // Gap 2 — macOS keeps the app + menu bar alive with no windows, but it must
-  // NEVER hold energized MEMS / streaming cameras headless (safety invariant).
-  // Park the orchestrator (drain sessions, release cameras, DISABLE the MEMS
-  // controller) while keeping the process for a fast dock re-activate, which
-  // re-leases + re-arms on demand. Same disarm the app-switch drain performs,
-  // plus the MEMS-off the headless state requires.
-  orchestrator?.postMessage({ type: "park" });
+  // Disposable model (ruling 5): PARK is retired. With no app window there is no
+  // hardware instance at all — closing the app window already disposed its
+  // instance (drain → quiesce → kill → janitor), so nothing is held headless.
+  // The enumerate-only probe holds nothing; the macOS app idles safely with the
+  // menu bar until a dock re-activate re-opens Welcome.
 });
 
 app.on("second-instance", (_e, commandLine = []) => {

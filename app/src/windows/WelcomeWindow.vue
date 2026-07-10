@@ -4,35 +4,24 @@ This source code is licensed under the MIT license.
 You may find the full license in project root directory.
 --------------------------------------------------- -->
 <!--
-  Welcome window (docs/history/refactor/multi-window.md req. 1 + 5): the launcher
-  shown whenever no app window is open. One button per app (each opens its
-  own window via the main-process window manager), orchestrator connection
-  status, and a live camera preview annotated with basic camera params
-  (resolution / fps / gain / exposure) on an SVG canvas.
+  Welcome window — the launcher shown whenever no app window is open. One button
+  per app (each opens its own window via the main-process window manager) plus a
+  STATUS-ONLY panel: the logo, a connection status row, and the live camera list.
 
-  Data plumbing: everything shown is synced from the orchestrator — this
-  reuses the manage-cameras session's read surface (per-serial `views`
-  telemetry + per-serial preview frames) rather than inventing a second
-  source of truth (§4). The subscription is ACTIVE, not passive: previews
-  need the registry loop running, which makes welcome a camera-holding
-  window — the welcome→app transition rides the same drain path as
-  app→app switching (the window manager drains sessions before spawning).
-
-  Annotation geometry + labels live in `welcome-canvas.svg` (plain SVG, meant
-  to be HAND-EDITED / rearranged in an SVG editor — see the contract comment
-  at its top). This component only injects live values: elements with
-  `id="ann-*-value"` get their textContent set from the computeds below —
-  do not add layout logic on either side.
+  Disposable-orchestrator ruling 3: Welcome is status-only. It no longer holds a
+  camera-holding orchestrator session or a live preview — it opens/holds NO
+  hardware, so entering an app never has to drain it (the old welcome→app drain
+  is gone). Its data comes from the persistent enumerate-only PROBE process
+  (orchestrator/probe.ts), forwarded by main over the `probe:cameras` bridge
+  event. "orchestrator down" as a welcome state disappears — Welcome depends on
+  no orchestrator; the status reflects the probe. The camera picker + live
+  preview + annotation canvas are deleted.
 -->
 <script setup lang="ts">
-import { computed, onMounted, ref, watchEffect } from "vue";
-import { usePipeFrame, useSession } from "@lib/orchestrator/client";
-import { nodeId } from "@lib/orchestrator/graph-contract";
-import { manageCameras } from "@modules/manage-cameras/contract";
+import { computed, onMounted, onUnmounted, ref } from "vue";
+import { sortedCameras, welcomeStatus, type ProbeCamera } from "@lib/orchestrator/probe";
 import { launchableApps } from "./app-registry";
 import TitleBar from "../components/TitleBar.vue";
-import StreamView from "../components/StreamView.vue";
-import WelcomeCanvas from "./welcome-canvas.svg";
 import { FontAwesomeIcon as Icon } from "@fortawesome/vue-fontawesome";
 import {
   faCameraAlt,
@@ -49,72 +38,22 @@ import {
 
 const titleBarHeight = ref(0);
 
-const session = useSession(manageCameras, "manage-cameras");
-onMounted(() => session.call("refresh", undefined));
-
-// Orchestrator connection status: down-notice from main + list presence.
-const orchDown = ref(false);
-window.foveaBridge.onOrchestratorDown(() => (orchDown.value = true));
-const status = computed(() => {
-  if (orchDown.value) return "orchestrator down";
-  const n = session.telemetry.list.length;
-  return n > 0 ? `connected — ${n} camera${n > 1 ? "s" : ""}` : "no cameras";
+// Live camera list from the enumerate-only probe (main → onProbeCameras). No
+// orchestrator connection, no camera lease — just the plain enumerated list.
+const cameras = ref<ProbeCamera[]>([]);
+const probing = ref(false);
+let disposeProbe: (() => void) | null = null;
+onMounted(() => {
+  disposeProbe = window.foveaBridge.onProbeCameras((list) => {
+    cameras.value = list;
+    probing.value = true; // first snapshot arrived — the probe is answering
+  });
 });
+onUnmounted(() => disposeProbe?.());
 
-// Previewed camera: prefer the center (role C) camera, else the first one.
-const serialPick = ref<string | null>(null);
-const serial = computed(() => {
-  if (serialPick.value) return serialPick.value;
-  const views = session.telemetry.views;
-  for (const [s, v] of Object.entries(views)) if (v.role === "C") return s;
-  return session.telemetry.list[0]?.serial ?? null;
-});
-const view = computed(() =>
-  serial.value ? session.telemetry.views[serial.value] : undefined,
-);
-// real-1c: annotated preview off the selected camera's native pipe.
-const payload = usePipeFrame(() => (serial.value ? nodeId.convert(serial.value) : null));
-
-// Annotation values (all orchestrator-synced; resolution from the live frame).
-const fmt = (v: number | undefined, digits = 1) =>
-  v === undefined ? "—" : v.toFixed(digits);
-const resolution = computed(() => {
-  const shape = payload.value?.shape;
-  return shape ? `${shape[1]} × ${shape[0]}` : "—";
-});
-const frameRate = computed(() =>
-  view.value?.frame_rate_enable
-    ? `${fmt(view.value.frame_rate)} fps`
-    : `${fmt(view.value?.frame_rate)} fps (free-run)`,
-);
-const exposure = computed(() => `${fmt(view.value?.exposure, 0)} µs`);
-const gain = computed(() => `${fmt(view.value?.gain)} dB`);
-
-// Live-value injection into the externalized SVG canvas (welcome-canvas.svg):
-// one entry per annotation group; the target element is `<text id="ann-*
-// -value">`. The svg-loader build step suffixes ids with a scope hash, so we
-// match by PREFIX — the ids spelled in the .svg file stay the contract.
-const annotationLayer = ref<HTMLElement | null>(null);
-const annotationValues = computed<Record<string, string>>(() => ({
-  "ann-status": status.value,
-  "ann-camera": view.value?.description ?? serial.value ?? "—",
-  "ann-resolution": resolution.value,
-  "ann-frame-rate": frameRate.value,
-  "ann-exposure": exposure.value,
-  "ann-gain": gain.value,
-}));
-watchEffect(
-  () => {
-    const layer = annotationLayer.value;
-    if (!layer) return; // v-if="payload" not mounted yet
-    for (const [id, text] of Object.entries(annotationValues.value)) {
-      const el = layer.querySelector(`[id^="${id}-value"]`);
-      if (el) el.textContent = text;
-    }
-  },
-  // flush post: run after the v-if mounts/replaces the SVG subtree.
-  { flush: "post" },
-);
+const status = computed(() => welcomeStatus(cameras.value, probing.value));
+const connected = computed(() => probing.value && cameras.value.length > 0);
+const cameraList = computed(() => sortedCameras(cameras.value));
 
 // Launcher entries — dev-only apps hidden in production builds.
 const applications = launchableApps.filter((a) => a.group === "application");
@@ -147,31 +86,20 @@ function openProfiler() {
     <div class="preview-pane">
       <div class="preview">
         <div class="no-preview">
-          <img src="/FoveaCam Duo Mini.png" style="max-width: 75%" />
+          <img src="/FoveaCam Duo Mini.png" style="max-width: 55%" />
         </div>
-        <!-- Externalized annotation canvas: geometry/labels are hand-edited
-             in welcome-canvas.svg; live values are injected by id (see the
-             watchEffect above). -->
-        <div v-if="payload" ref="annotationLayer" class="annotation-layer">
-          <WelcomeCanvas class="annotation-canvas" />
+      </div>
+      <div class="camera-list" v-if="cameraList.length > 0">
+        <div class="camera" v-for="c in cameraList" :key="c.serial">
+          <Icon :icon="faCameraAlt" class="cam-icon" />
+          <span class="cam-role" v-if="c.role">{{ c.role }}</span>
+          <span class="cam-name">{{ c.vendor }} {{ c.model }}</span>
+          <span class="cam-serial">{{ c.serial }}</span>
         </div>
       </div>
       <div class="status-row">
-        <span
-          class="dot"
-          :class="{ ok: !orchDown && session.telemetry.list.length > 0 }"
-        ></span>
+        <span class="dot" :class="{ ok: connected }"></span>
         <span>{{ status }}</span>
-        <select v-if="session.telemetry.list.length > 1" v-model="serialPick">
-          <option :value="null">auto (center)</option>
-          <option
-            v-for="c in session.telemetry.list"
-            :key="c.serial"
-            :value="c.serial"
-          >
-            {{ c.serial }}
-          </option>
-        </select>
       </div>
     </div>
     <div class="modules">
@@ -247,30 +175,40 @@ function openProfiler() {
     overflow: hidden;
   }
 
-  .annotation-layer {
-    position: absolute;
-    inset: 0;
-    pointer-events: none;
-    overflow: visible;
-
-    .annotation-canvas {
-      position: absolute;
-      inset: 0;
-      width: 100%;
-      height: 100%;
-      overflow: visible;
-    }
-  }
-
   .no-preview {
     display: flex;
     flex-direction: column;
     align-items: center;
     gap: 2em;
-    h1 {
-      font-size: 2rem;
-      font-weight: normal;
+  }
+
+  .camera-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25em;
+    padding: 0.6em 1em;
+    border-top: 1px solid var(--tint-2);
+
+    .camera {
+      display: flex;
+      align-items: center;
+      gap: 1ch;
       color: var(--text-dim);
+      font-size: 0.9em;
+
+      .cam-icon {
+        color: var(--ok);
+      }
+      .cam-role {
+        font-weight: bold;
+        color: var(--accent-bright);
+        min-width: 1.5ch;
+      }
+      .cam-serial {
+        margin-left: auto;
+        color: var(--text-disabled);
+        font-variant-numeric: tabular-nums;
+      }
     }
   }
 
@@ -291,14 +229,6 @@ function openProfiler() {
       &.ok {
         background: var(--ok);
       }
-    }
-
-    select {
-      margin-left: auto;
-      background: var(--bg-chrome);
-      color: var(--text-dim);
-      border: 1px solid var(--border-strong);
-      border-radius: 3px;
     }
   }
 }

@@ -55,6 +55,7 @@ export function installBridge(extra: Partial<FoveaBridge> = {}) {
   const bridge: FoveaBridge = {
     connectOrchestrator: () => send("orchestrator:connect"),
     onOrchestratorDown: (cb) => listen("orchestrator:down", (report) => cb(report)),
+    onProbeCameras: (cb) => listen("probe:cameras", (cameras) => cb(cameras)),
     openProfilerWindow: () => send("open-profiler-window"),
     openAppWindow: (appId) => send("window:open-app", appId),
     openProjectionWindow: (session, frame) => send("window:open-projection", session, frame),

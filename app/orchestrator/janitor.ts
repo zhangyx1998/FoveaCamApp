@@ -150,7 +150,11 @@ function pidAlive(pid: number): boolean {
 
 interface WatchdogState {
   mainPid: number;
-  orchestratorPid: number | null;
+  /** Live orchestrator instance pids (disposable model, ruling 5: 0..N alive).
+   *  `orchestratorPid` is the legacy single-pid field, still read for
+   *  backward-compat with a state file written by an older main. */
+  orchestratorPids?: number[];
+  orchestratorPid?: number | null;
 }
 function readState(statePath: string): WatchdogState | null {
   try {
@@ -203,8 +207,13 @@ async function runWatchdog(): Promise<void> {
       }
       // CRASH: main died with the state file still present → enforce quiescence.
       log("watchdog: main crashed (state file present) — enforcing quiescence");
-      if (typeof state.orchestratorPid === "number")
-        await waitForOrphanGone(state.orchestratorPid);
+      // Wait for EVERY live orchestrator instance to be reaped so their
+      // per-process device claims free (disposable model: 0..N alive). Falls
+      // back to the legacy single-pid field for an older state file.
+      const pids =
+        state.orchestratorPids ??
+        (typeof state.orchestratorPid === "number" ? [state.orchestratorPid] : []);
+      for (const pid of pids) await waitForOrphanGone(pid);
       await quiesceAll();
       try {
         unlinkSync(statePath);
