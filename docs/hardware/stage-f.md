@@ -339,6 +339,22 @@ history has them). Cross-app platform checks live in the first two sections.
   (anaglyph red=L, styles match Settings); sidecar survives reopen; deleted
   ui.json re-inits; corrupt prompts before overwrite; `.fcap` mtime stable.
 
+### Footprint projections (7692e9d, proposal fovea-footprint-overlay.md)
+- [ ] **Free-run extras recorded** — a FREE-RUN multi-fovea recording on a
+  calibrated triple carries per-frame volt/angle/affine with
+  `volt.source: "history-interpolated"`; uncalibrated or controller-less
+  recordings omit them (no fake pose).
+- [ ] **Footprint lands on the physical fovea region** — the projected quad on
+  the wide tile matches where the fovea actually looked (⚠ shares the
+  H-vs-inverse OPEN question with the homography feeder — a mirrored/warped
+  quad means the recorded H direction is wrong AT THE SOURCE, fix there).
+- [ ] **Hover + toggle semantics** — default: hovering a timeline block (or a
+  box) shows that stream's box only, both directions highlight; "show all
+  projections" draws every active stream; boxes vanish past a stream's block
+  (no stale projections); pair shares one color; depth readout on hover reads
+  a plausible vergence-plane distance (needs a NEW recording — old containers
+  show "—", no baseline).
+
 ### Export (new, 32876c6)
 - [ ] **ffmpeg gating** — with ffmpeg installed the per-stream export entry
   opens the dialog; without it (or launched from Finder pre-PATH) the entry
