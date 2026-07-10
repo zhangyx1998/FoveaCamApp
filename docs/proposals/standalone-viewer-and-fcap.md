@@ -85,3 +85,45 @@ The pinned viewer contract retires with ruling 1 (the "pinned" arbitration
 note in viewer-contract.ts is void once both sides live in one process).
 Stage-f: §"Multi-fovea recording"'s viewer-playback item re-verifies under
 the standalone viewer; F3 fixture decode becomes a repo test, not a rig item.
+
+## AS SHIPPED (amended, 2026-07-09) — engine is a main-owned utilityProcess
+
+W1 shipped the engine as an in-**renderer** `worker_threads.Worker`, forked
+from `preload-viewer.ts`. **That never worked**: an Electron *renderer* process
+cannot construct a Node worker — `new Worker()` throws *"The V8 platform used by
+this instance of Node does not support creating Workers"* the moment a viewer
+window opens. The engine moved to a **main-owned `utilityProcess`, one per
+viewer window** — the same pattern main already uses for the orchestrator and
+the janitor. What changed, and what did NOT:
+
+- **Transport.** Main creates a `MessageChannelMain`, forks
+  `viewer-worker.js`, posts `{ type: "init", file }` + `port1` to the engine
+  over `process.parentPort`, and delivers `port2` to the window via
+  `webContents.postMessage("viewer:port", …)` (relayed into the page by
+  `preload-viewer.ts`, mirroring `orchestrator:port`). The renderer now talks
+  **directly** to the engine over ONE port pair — the old worker→preload→DOM
+  re-transfer relay is deleted. The engine reads `process.parentPort` instead
+  of `worker_threads.parentPort`; there is no more `open` command (main hands
+  the file in `init`; the engine opens eagerly).
+- **Frame buffers are COPIED across the process boundary.** Cross-process
+  `postMessage` is a structured-clone copy; a `MessagePortMain` transfer list
+  carries ports only, never `ArrayBuffer`s. The prior "zero copies end to end"
+  was a same-process property only — acceptable for file playback (no live
+  frame budget). The engine still `slice()`s a Mat that merely views a large
+  MCAP chunk so the clone copies just the frame, not the whole chunk.
+- **Lifecycle (main-owned).** Terminate-before-respawn (a dev full-reload's
+  second spawn flushes + kills the previous engine BEFORE forking the new one),
+  flush-before-close (window close → `close` over `parentPort` → engine flushes
+  the sidecar → `flushed` ack, bounded by a ~500 ms grace → kill), crash
+  notification (`viewer:engine-down` → the window shows an error instead of
+  waiting for frames), and kill-all on quit. Extracted as
+  `electron/viewer-engine.ts` (`ViewerEngineManager`), unit-tested in
+  `test/viewer-engine.test.ts`.
+- **Unchanged invariants.** Orchestrator-independence holds (main, not the
+  orchestrator, owns the engine — playback still survives orchestrator death);
+  the `.fcap` stays read-only; the sidecar keeps its SINGLE writer (one engine
+  per file via the window manager's one-window-per-file dedupe + one engine per
+  window); the renderer stays core-free (core loads only in the engine
+  process — the ruled viewer exception, wherever the engine runs). The
+  `viewer-worker` vite entry was already bundled as a Node entry like the
+  orchestrator, so no build-target change was needed.

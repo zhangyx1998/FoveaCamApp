@@ -88,6 +88,18 @@ export interface FoveaBridge {
    *  nav-bar pin toggle; the renderer persists the choice in localStorage
    *  and re-applies it on mount. */
   setWindowPinned(pinned: boolean): void;
+  /** Ask main to fork THIS window's viewer playback engine (a utilityProcess)
+   *  over `file` and broker a `MessagePort` back (standalone-viewer-and-fcap,
+   *  AS SHIPPED amendment). Renderer-initiated so the port arrives once the
+   *  window is loaded and listening; a re-call (dev full-reload) terminates the
+   *  previous engine first. The port lands on the DOM `message` event as
+   *  `"viewer:port"` (like `orchestrator:port`, outside the typed push table —
+   *  a live port can't cross a bridge call). */
+  spawnViewerEngine(file: string): void;
+  /** The viewer engine process died unexpectedly (crash) — the callback lets
+   *  the window surface an error state instead of waiting forever for frames.
+   *  Returns a disposer. */
+  onViewerEngineDown(cb: (message: string) => void): () => void;
 }
 
 // ---- Typed IPC channel registry -------------------------------------------
@@ -125,13 +137,19 @@ export interface SendChannels {
   "window:toggle-debug": [session: string, kind?: string];
   /** Sender-scoped: main resolves the window from `event.sender`. */
   "window:set-pinned": [pinned: boolean];
+  /** Sender-scoped: main forks (or re-forks) this viewer window's playback
+   *  engine over `file` and brokers a `MessagePort` back via `viewer:port`. */
+  "viewer:spawn": [file: string];
 }
 
 /** Main→renderer pushes (`webContents.send` ↔ `ipcRenderer.on`). Value is the
- *  arg tuple. `orchestrator:port` is deliberately absent — it transfers a
- *  MessagePort via `postMessage`'s transfer list, outside this typed table. */
+ *  arg tuple. `orchestrator:port` and `viewer:port` are deliberately absent —
+ *  they transfer a MessagePort via `postMessage`'s transfer list, outside this
+ *  typed table. */
 export interface PushChannels {
   "orchestrator:down": [report: OrchestratorDownReport];
   "window:fullscreen": [fullscreen: boolean];
   "recorder:trigger": [];
+  /** The viewer engine (utilityProcess) crashed — carries a human message. */
+  "viewer:engine-down": [message: string];
 }

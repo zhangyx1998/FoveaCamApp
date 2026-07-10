@@ -182,12 +182,14 @@ export default defineConfig(({ command }) => {
                         main: "electron/main.ts",
                         orchestrator: "orchestrator/index.ts",
                         "vision-worker": "orchestrator/vision-worker.ts",
-                        // Standalone viewer playback worker (standalone-
-                        // viewer-and-fcap ruling 1): spawned by
-                        // preload-viewer.cjs from the SAME output dir via
-                        // worker_threads — bundled like vision-worker
-                        // (external `core` / `@mcap/core` resolve from
-                        // node_modules at runtime).
+                        // Standalone viewer playback ENGINE (standalone-
+                        // viewer-and-fcap ruling 1, AS SHIPPED amendment):
+                        // forked by MAIN as a utilityProcess (one per viewer
+                        // window) — `utilityProcess.fork(DIR/viewer-worker.js)`
+                        // — NOT a renderer worker (Electron renderers can't
+                        // construct Node workers). Bundled as a Node entry like
+                        // the orchestrator: external `core` / `@mcap/core`
+                        // resolve from node_modules at runtime.
                         "viewer-worker": "src/viewer/worker.ts",
                         // Hardware-safety failsafe: forked by main whenever
                         // the orchestrator dies without confirming quiescence

@@ -24,7 +24,6 @@ You may find the full license in project root directory.
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import type { Mat } from "core/Vision";
 import {
-  VIEWER_INIT,
   type PlaybackDoc,
   type ViewerChannelInfo,
   type ViewerCommand,
@@ -65,7 +64,10 @@ const props = defineProps<{ path: string }>();
 
 const titleBarHeight = ref(0);
 
-// --- worker link (window-local playback state) ------------------------------
+// --- engine link (window-local playback state) ------------------------------
+// The playback engine is a MAIN-owned utilityProcess (standalone-viewer-and-fcap
+// AS SHIPPED amendment — a renderer can't host a Node worker). Main brokers a
+// MessagePort back over `viewer:port`; we talk to the engine directly over it.
 
 const file = ref<ViewerFileInfo | null>(null);
 const openError = ref<string | null>(null);
@@ -77,14 +79,12 @@ const descriptors = ref<Record<string, PlaybackDoc>>({});
 const mats = new Map<string, Mat<Uint8Array>>();
 const frameTick = ref(0);
 
-const link = new MessageChannel();
-const port = link.port1;
+let port: MessagePort | null = null;
 function send(cmd: ViewerCommand): void {
-  port.postMessage(cmd);
+  port?.postMessage(cmd);
 }
 
-port.onmessage = (e: MessageEvent) => {
-  const ev = e.data as ViewerEvent;
+function onEngineEvent(ev: ViewerEvent): void {
   switch (ev?.type) {
     case "opened":
       file.value = ev.info;
@@ -115,25 +115,48 @@ port.onmessage = (e: MessageEvent) => {
       console.error("[viewer]", ev.message);
       break;
   }
-};
-window.postMessage({ kind: VIEWER_INIT }, "*", [link.port2]);
+}
+
+// Receive the brokered engine port from main (relayed by preload-viewer into the
+// main world — a live port can't cross the bridge as a value). Mirrors the
+// orchestrator-client `orchestrator:port` handshake.
+function onViewerPort(e: MessageEvent): void {
+  if (e.data !== "viewer:port") return;
+  window.removeEventListener("message", onViewerPort);
+  const p = e.ports[0];
+  if (!p) return;
+  port = p;
+  p.onmessage = (m) => onEngineEvent(m.data as ViewerEvent);
+  p.start();
+}
+window.addEventListener("message", onViewerPort);
+
+// Engine crash (utilityProcess died) → surface an error instead of waiting for
+// frames forever.
+const disposeEngineDown = window.foveaBridge?.onViewerEngineDown?.((message) => {
+  openError.value = message;
+});
 
 onMounted(() => {
   if (!props.path) {
     openError.value = "Missing file path (?path=…)";
     return;
   }
-  send({ type: "open", path: props.path });
+  // Ask main to fork this window's engine over the file; it opens eagerly and
+  // the port arrives on `viewer:port`.
+  window.foveaBridge?.spawnViewerEngine?.(props.path);
 });
 
 function onPageHide(): void {
-  send({ type: "close" }); // flushes the pending sidecar write worker-side
+  send({ type: "close" }); // best-effort early sidecar flush (main also flushes)
 }
 window.addEventListener("pagehide", onPageHide);
 window.addEventListener("keydown", onKeydown);
 onUnmounted(() => {
   window.removeEventListener("pagehide", onPageHide);
   window.removeEventListener("keydown", onKeydown);
+  window.removeEventListener("message", onViewerPort);
+  disposeEngineDown?.();
 });
 
 const basename = computed(() => props.path.split(/[/\\]/).pop() ?? props.path);

@@ -5,30 +5,28 @@
 // -------------------------------------------------------
 //
 // STANDALONE viewer wire protocol (standalone-viewer-and-fcap ruling 1): the
-// message shapes between the viewer window (main world), its preload relay,
-// and the viewer worker thread. The viewer does NOT interface with the
-// orchestrator — this file replaces the retired pinned session contract
-// (`@lib/orchestrator/viewer-contract`); both sides now live in ONE window
-// process, so the protocol is window-local and free to evolve with the code.
+// message shapes between the viewer window (main world) and the viewer ENGINE.
+// The viewer does NOT interface with the orchestrator — this file replaces the
+// retired pinned session contract (`@lib/orchestrator/viewer-contract`); the
+// protocol is window-local and free to evolve with the code.
 //
-// Topology: ViewerWindow.vue creates a DOM `MessageChannel`, keeps port1 and
-// hands port2 to the preload via `window.postMessage({kind: VIEWER_INIT})`
-// (the established SHM_INIT pattern — a DOM port is the only channel that
-// crosses the isolated-world boundary with transferables). The preload spawns
-// the bundled worker (`viewer-worker.js`, a `worker_threads.Worker`) and
-// relays verbatim: commands renderer → worker, events worker → renderer,
-// transferring frame buffers on both hops (zero copies).
+// Topology (AS SHIPPED amendment): the engine is a MAIN-owned `utilityProcess`
+// (it can't be a renderer worker — Electron renderers can't construct Node
+// workers). Main creates a `MessageChannelMain`, forks the engine with `port1`,
+// and delivers `port2` to the window (`webContents.postMessage("viewer:port")`
+// → preload relay → DOM `MessagePort`). The renderer talks DIRECTLY to the
+// engine over that one port: commands renderer → engine, events engine →
+// renderer. Cross-process = structured-clone COPY (frame buffers are copied,
+// not transferred). Main hands the FILE to the engine in its `init` message, so
+// there is no `open` command — the engine opens eagerly.
 //
-// One window = one file = one worker; there is no fileId keying (the
-// one-window-per-file dedupe lives in main.ts's window manager).
+// One window = one file = one engine; there is no fileId keying (the
+// one-window-per-file dedupe lives in main.ts's window manager, and one engine
+// is keyed per window there).
 //
 // Renderer-safe and Node-free: types + string constants only.
 
 import type { SidecarLoad, SidecarState } from "./sidecar.js";
-
-/** `window.postMessage` handshake kind — carries the renderer's MessagePort
- *  to the preload (see preload-viewer.ts). */
-export const VIEWER_INIT = "fovea:viewer:init";
 
 /** One channel of the open container, as shown in the viewer's track list.
  *  `metadata` is the channel's MCAP metadata (the §2b static decode props for
@@ -67,9 +65,9 @@ export type ViewerFileInfo = {
  *  `fovea/<target>` descriptor). */
 export type PlaybackDoc = Record<string, unknown>;
 
-/** Renderer → worker commands. */
+/** Renderer → engine commands. (There is no `open` — main hands the file to
+ *  the engine in its `init` message and the engine opens eagerly.) */
 export type ViewerCommand =
-  | { type: "open"; path: string }
   | { type: "play"; rate: number }
   | { type: "pause" }
   | { type: "seek"; tNs: number }
@@ -85,8 +83,9 @@ export type ViewerCommand =
   | { type: "save-ui"; state: SidecarState }
   | { type: "close" };
 
-/** One decoded display frame. `buffer` is TRANSFERRED (never copied across
- *  the two hops); reconstruct the Mat as
+/** One decoded display frame. `buffer` arrives as a fresh COPY (cross-process
+ *  structured clone — no zero-copy transfer across the process boundary);
+ *  reconstruct the Mat as
  *  `Object.assign(new Uint8Array(buffer, byteOffset, length), {shape, channels})`. */
 export type ViewerFrameEvent = {
   type: "frame";

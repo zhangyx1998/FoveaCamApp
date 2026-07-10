@@ -11,6 +11,7 @@ import {
   shell,
   ipcMain,
   utilityProcess,
+  webContents,
   MessageChannelMain,
   type UtilityProcess,
 } from "electron";
@@ -23,6 +24,7 @@ import {
   classifyOrchestratorExit,
   shouldRunJanitor,
 } from "./orchestrator-exit";
+import { ViewerEngineManager, type EngineHandle } from "./viewer-engine";
 import { getIcon } from "./util";
 import { resolveDefaultSavePath, validateWritablePath } from "@lib/util/fs";
 import {
@@ -562,6 +564,69 @@ ipcMain.on("window:set-pinned" satisfies keyof SendChannels, (event, pinned) => 
   BrowserWindow.fromWebContents(event.sender)?.setAlwaysOnTop(!!pinned);
 });
 
+// ---- Viewer playback engines (standalone-viewer-and-fcap, AS SHIPPED) ------
+// One MAIN-owned utilityProcess per viewer window: the playback engine can't be
+// a renderer worker (Electron renderers can't construct Node workers), so main
+// forks it exactly like the orchestrator and brokers a MessagePort between the
+// window and its engine. Main owns the lifecycle invariants — single-writer
+// sidecar (one engine per file, keyed per window), terminate-before-respawn
+// (dev full-reload), and flush-before-close (bounded grace) — in
+// ViewerEngineManager; the Electron process/port wiring is injected here.
+const VIEWER_ENGINE_ENTRY = path.join(DIR, "viewer-worker.js");
+
+/** Fork + wire one viewer engine for the window `senderId`, over `file`. */
+function createViewerEngine(senderId: number, file: string): EngineHandle {
+  const wc = webContents.fromId(senderId) ?? null;
+  const proc = utilityProcess.fork(VIEWER_ENGINE_ENTRY, [], {
+    stdio: "inherit",
+    env: { ...process.env, FOVEA_DATA_PATH: DATA },
+  });
+  const { port1, port2 } = new MessageChannelMain();
+  // Hand port1 + the file to the engine (it opens eagerly), deliver port2 to the
+  // window. Posting before "spawn" is fine — utilityProcess queues until the
+  // child is up (same as the orchestrator connect handshake).
+  proc.postMessage({ type: "init", file }, [port1]);
+  if (wc && !wc.isDestroyed()) wc.postMessage("viewer:port", null, [port2]);
+
+  let killed = false;
+  const flushWaiters: Array<() => void> = [];
+  proc.on("message", (data: unknown) => {
+    if ((data as { type?: string })?.type === "flushed")
+      for (const w of flushWaiters.splice(0)) w();
+  });
+  proc.on("exit", (code) => {
+    if (killed) return; // expected teardown — the manager already dropped us
+    // Unexpected engine death: drop the handle + tell the window to stop
+    // waiting for frames (its crash surface).
+    viewerEngines.forget(senderId);
+    if (wc && !wc.isDestroyed())
+      pushTo(wc, "viewer:engine-down", `Viewer engine exited unexpectedly (code ${code}).`);
+  });
+
+  return {
+    requestFlush: () =>
+      new Promise<void>((resolve) => {
+        if (killed) return resolve();
+        flushWaiters.push(resolve);
+        proc.postMessage({ type: "close" }); // engine flushes sidecar → acks `flushed`
+      }),
+    kill: () => {
+      killed = true;
+      proc.kill();
+    },
+  };
+}
+
+const viewerEngines = new ViewerEngineManager({ graceMs: 500, create: createViewerEngine });
+
+// A viewer window asks main to (re)fork its engine over `file`. Sender-scoped:
+// the engine is keyed by the window's webContents id, and the window manager's
+// one-window-per-file dedupe makes that one-engine-per-file transitively. A
+// re-spawn (dev full-reload) terminates the previous engine first.
+ipcMain.on("viewer:spawn" satisfies keyof SendChannels, (event, file) => {
+  if (typeof file === "string" && file) void viewerEngines.spawn(event.sender.id, file);
+});
+
 // ---- Window manager (docs/history/refactor/multi-window.md §3) --------------------
 
 function entryURL(desc: WindowDescriptor): { url?: string; file?: string; search?: string } {
@@ -713,6 +778,13 @@ function spawnWindow(desc: WindowDescriptor): ManagedWindow {
       orchestrator?.postMessage({ type: "window:closed", windowId });
     });
   }
+  // Viewer windows: flush + kill this window's playback engine on close
+  // (flush-before-close single-writer sidecar). Captured now — the webContents
+  // is gone by "closed".
+  if (desc.class === "viewer") {
+    const engineKey = win.webContents.id;
+    win.on("closed", () => void viewerEngines.close(engineKey));
+  }
   win.on("closed", () => manager.onWindowClosed(managed));
   return managed;
 }
@@ -853,6 +925,10 @@ app.on("before-quit", (event) => {
         () => BrowserWindow.getAllWindows().every((w) => w.isDestroyed()),
         3000,
       );
+      // Viewer engines are MAIN-owned utilityProcesses independent of the
+      // orchestrator/hardware — flush their sidecars (bounded) and reap them
+      // before we exit (window close already kicked most off; this bounds it).
+      await viewerEngines.killAll();
       // Orchestrator handshake (ruling 3/4): the orchestrator quiesces + posts
       // `quiesced` and WAITS; we reap it once we have the ack (authoritative
       // clean signal) or the deadline lapses (→ classified "killed").
