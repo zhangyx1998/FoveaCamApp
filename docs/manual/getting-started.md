@@ -73,6 +73,8 @@ The overlay clears itself once start-up finishes. If it lingers, hover over it: 
 
 If the background engine stops unexpectedly, a red banner appears near the bottom of the window reading, for example, **Orchestrator crashed (code N) — hardware parked by cleanup worker.** This means the cameras and MEMS have been safely parked. Click **Reopen app** to reload the window and reconnect. A clean, intentional shutdown does not show the banner.
 
+The banner also carries a collapsed **Diagnostics** section (click to expand). It shows the last lines of the engine's output in a scrollable box and, when available, a **Log** and a **Dump** row — each a **Reveal in Finder** button that opens the saved crash log (or native minidump) in your file browser. These files live under the app's data folder (`crash-logs/` and `crash-dumps/`); attach them when reporting a problem.
+
 ### Recording
 
 The **Record** button is active only in apps that support recording (it is disabled in Single Capture and Manage Cameras). To record:

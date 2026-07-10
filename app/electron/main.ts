@@ -6,6 +6,7 @@
 import {
   app,
   BrowserWindow,
+  crashReporter,
   dialog,
   Menu,
   shell,
@@ -26,8 +27,18 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import os from "node:os";
 import { spawn } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
+import { LogRing, type TeeFn } from "./log-ring";
+import { enrichDownReport } from "./crash-report";
 import { ViewerEngineManager, type EngineHandle } from "./viewer-engine";
 import { TeleCanvasManager, type HostHandle } from "./telecanvas-manager";
 import {
@@ -86,6 +97,36 @@ if (process.platform === "win32") app.setAppUserModelId(app.getName());
 // stably. Must be appended BEFORE app ready. Revisit on Electron upgrades —
 // Graphite may stabilize, and this line then deserves an A/B on the rig.
 app.commandLine.appendSwitch("disable-features", "SkiaGraphite");
+
+// ---- Native-crash minidumps (orchestrator-lifecycle-and-exit §"Crash
+// diagnostics", AS SHIPPED) ------------------------------------------------
+// A long-running orchestrator once aborted with a C++ `mutex lock failed`
+// during a dev-restart teardown and macOS wrote NO .ips (crashpad was
+// intercepted while the parent restarted). Start Electron's own crashReporter
+// so native faults in the utilityProcess children (the orchestrator owns
+// `core`/Aravis/OpenCV) land a LOCAL minidump — never uploaded (no server).
+// `crashDumps` is redirected to a stable, human-findable dir under userData so
+// the instance registry can pair a fresh dump with the dying instance and cite
+// its path in the typed down report. Must run before app-ready and before any
+// child forks. NOTE: `crashDumps` is Chromium's own path key (distinct from our
+// `crash-logs` ring dir); redirect it FIRST so the reporter picks it up.
+const CRASH_DUMPS_DIR = path.join(DATA, "crash-dumps");
+const CRASH_LOGS_DIR = path.join(DATA, "crash-logs");
+try {
+  app.setPath("crashDumps", CRASH_DUMPS_DIR);
+} catch (e) {
+  console.warn("[crash] setPath(crashDumps) failed:", e);
+}
+crashReporter.start({
+  // Local-only: no collection endpoint, nothing leaves the machine.
+  uploadToServer: false,
+  submitURL: undefined,
+  productName: "FoveaCam",
+  // Keep OS crash reporting too (belt-and-suspenders) — crashpad still writes
+  // our minidump either way.
+  ignoreSystemCrashHandler: false,
+  compress: false,
+});
 
 if (!app.requestSingleInstanceLock()) {
   app.quit();
@@ -239,7 +280,23 @@ function pushTo<K extends keyof PushChannels>(
   channel: K,
   ...args: PushChannels[K]
 ): void {
-  wc.send(channel, ...args);
+  // A push to a dying window is correct to DROP, never fatal (incident
+  // 2026-07-09: `orchestrator:down` threw "Render frame was disposed before
+  // WebFrameMain could be accessed" here while the parent restarted). Guard the
+  // obvious destroyed case, and wrap `send` too — the render frame can be
+  // disposed in the window between this check and the actual send (webFrameMain
+  // race), which `isDestroyed()` won't catch. Log at debug; never throw.
+  if (wc.isDestroyed()) {
+    console.debug(`[push] drop "${String(channel)}" → destroyed webContents`);
+    return;
+  }
+  try {
+    wc.send(channel, ...args);
+  } catch (e) {
+    console.debug(
+      `[push] drop "${String(channel)}" → ${(e as Error).message}`,
+    );
+  }
 }
 
 // ---- Renderer bridge handlers (docs/history/refactor/orchestrator.md §7.1 T5) -----
@@ -289,6 +346,13 @@ handle("viewer:reveal", (file) => {
   if (typeof file === "string" && file) shell.showItemInFolder(file);
 });
 
+// Reveal a crash-diagnostics file (the flushed ring log or a native minidump)
+// in Finder/Explorer — the CrashReport banner's "Reveal in Finder" affordance.
+handle("crash:reveal", (file) => {
+  if (typeof file === "string" && file && existsSync(file))
+    shell.showItemInFolder(file);
+});
+
 // ---- Orchestrator instances (disposable per app, ruling 2) ----------------
 // Each app activation forks a FRESH orchestrator utilityProcess that owns `core`
 // (cameras, vision, control, hardware I/O); closing/switching the app disposes
@@ -311,6 +375,58 @@ const webContentsByWindowId = new Map<string, Electron.WebContents>();
 // bound instance already died still gets the typed frozen banner (the connect
 // broker replays it — the profiler never re-attaches to another instance).
 const lastDownReports = new Map<string, OrchestratorDownReport>();
+// instanceId → its stdout/stderr ring + fork timestamp (crash diagnostics). The
+// orchestrator (ONLY) is forked with piped stdio; every chunk is tee'd faithfully
+// to this parent's terminal while the ring keeps a bounded tail. On a non-clean
+// exit `enrichDownReport` flushes the ring to a file and pairs a fresh minidump.
+const instanceLogs = new Map<string, { ring: LogRing; spawnTs: number }>();
+
+/** Find the newest `.dmp` minidump under the crashDumps dir whose mtime is at
+ *  or after `sinceMs` (the instance's fork time) — best-effort: a minidump may
+ *  not be flushed by the time we observe the exit, and multiple instances share
+ *  the dir, so we can only attribute by "newer than this fork". */
+function findRecentDump(sinceMs: number): string | undefined {
+  try {
+    const entries = readdirSync(CRASH_DUMPS_DIR, {
+      recursive: true,
+      withFileTypes: true,
+    });
+    let best: { path: string; mtime: number } | undefined;
+    for (const e of entries) {
+      if (!e.isFile() || !e.name.endsWith(".dmp")) continue;
+      const full = path.join(e.parentPath, e.name);
+      let mtime: number;
+      try {
+        mtime = statSync(full).mtimeMs;
+      } catch {
+        continue;
+      }
+      // `- 1000` tolerance: fork-ts and file-mtime clocks aren't identical.
+      if (mtime >= sinceMs - 1000 && (!best || mtime > best.mtime))
+        best = { path: full, mtime };
+    }
+    return best?.path;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Flush an instance's ring text to `<userData>/crash-logs/<id>-<ts>.log`;
+ *  return the path written, or undefined on failure (best-effort — the injected
+ *  `writeLog` dep for the pure `enrichDownReport`). */
+function writeCrashLog(id: string, text: string): string | undefined {
+  try {
+    mkdirSync(CRASH_LOGS_DIR, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const file = path.join(CRASH_LOGS_DIR, `${id}-${stamp}.log`);
+    writeFileSync(file, text, "utf8");
+    console.warn(`[crash] ${id}: log written → ${file}`);
+    return file;
+  } catch (e) {
+    console.warn(`[crash] failed to write crash log for ${id}:`, e);
+    return undefined;
+  }
+}
 
 // ---- Hardware janitor (safety invariant, docs/hardware/stage-f.md) --------
 // An instance confirms `quiesced` (MEMS disabled + cameras released) before a
@@ -467,18 +583,33 @@ async function waitUntil(pred: () => boolean, timeoutMs: number): Promise<void> 
  *  registry + window manager. `id` scopes the per-instance drain map. */
 function forkInstance(id: string, kind: InstanceKind): InstanceProc {
   const entry = path.join(DIR, "orchestrator.js");
+  const forkTs = Date.now();
+  // The orchestrator (and ONLY the orchestrator — janitor/probe/viewer/
+  // telecanvas keep `inherit`) is forked with PIPED stdio so a per-instance ring
+  // buffer can keep its last output for the crash report. Every chunk is tee'd
+  // faithfully (unbuffered, in order) straight through to this parent's
+  // stdout/stderr, so the dev-terminal experience is unchanged.
   const proc = utilityProcess.fork(entry, [], {
-    stdio: "inherit",
+    stdio: ["ignore", "pipe", "pipe"],
     env: {
       ...process.env,
       // Each instance reads/writes the same config store as the renderer.
       FOVEA_DATA_PATH: DATA,
       // Boot-span baseline (§7.1 S5) — stamped as close to `fork()` as possible
       // so `index.ts` can measure fork -> first-useful-work timing per instance.
-      FOVEA_FORK_TS: String(Date.now()),
+      FOVEA_FORK_TS: String(forkTs),
       FOVEA_INSTANCE_KIND: kind,
     },
   });
+  // Per-instance ring: keep the last ~256 lines / 64 KiB of interleaved stdout+
+  // stderr (crash diagnostics). Tee each raw chunk to the matching parent stream
+  // FIRST so the terminal sees exactly the child's bytes.
+  const ring = new LogRing();
+  instanceLogs.set(id, { ring, spawnTs: forkTs });
+  const teeOut: TeeFn = (c) => process.stdout.write(c);
+  const teeErr: TeeFn = (c) => process.stderr.write(c);
+  proc.stdout?.on("data", (c: Buffer) => ring.push(c, teeOut));
+  proc.stderr?.on("data", (c: Buffer) => ring.push(c, teeErr));
   // The watchdog needs the CURRENT instance pids; `pid` is populated on spawn.
   proc.on("spawn", () => writeWatchdogState());
   proc.on("message", (data: unknown) => {
@@ -510,7 +641,10 @@ function forkInstance(id: string, kind: InstanceKind): InstanceProc {
     console.warn(`Orchestrator instance ${id} exited:`, code);
     // Registry classifies (ack-based), janitors non-clean paths, surfaces the
     // down report to owned windows, and re-attempts the hardware-clear gate.
+    // `notifyDown` runs synchronously inside this call and reads `instanceLogs`,
+    // so the ring must still be present here — drop it only AFTER onExit.
     registry.onExit(id, code ?? null);
+    instanceLogs.delete(id);
     // A dead instance has nothing left to drain — unblock any switch waiting on
     // it rather than letting it time out.
     const map = instanceDrains.get(id);
@@ -574,7 +708,15 @@ registry = new OrchestratorInstances({
   // Reuse the deduped hardware janitor as the per-instance non-clean-death
   // sweep; it disarms ALL hardware in a fresh process regardless of instance.
   runJanitor: (inst, reason) => ensureJanitor(`${inst.id}: ${reason}`),
-  notifyDown: (inst, report) => {
+  notifyDown: (inst, rawReport) => {
+    // Enrich a non-clean exit with crash diagnostics (flush the stdout/stderr
+    // ring to a file, inline a tail, pair a fresh minidump) BEFORE it is
+    // remembered/pushed, so both the live banner and a late-attaching profiler
+    // replay see the same enriched report. Clean exits pass through untouched.
+    const report = enrichDownReport(rawReport, instanceLogs.get(inst.id), {
+      writeLog: (text) => writeCrashLog(inst.id, text),
+      findDump: findRecentDump,
+    });
     // Remember it so a profiler that attaches after this death still gets the
     // frozen banner (the connect broker replays it below).
     lastDownReports.set(inst.id, report);

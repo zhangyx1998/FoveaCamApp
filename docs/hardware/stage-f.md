@@ -365,6 +365,40 @@ side markers, else the center-marker fallback with recorded marker sizes).
   but honest — full-frame match); setting a nominal zoom restores a usable
   match. No crash, no NaN.
 
+### Per-triplet settings (2026-07-09 wave — baseline per-triple + zoom_override wiring)
+
+The stereo **baseline** became a per-TRIPLE setting (`baseline_mm` in the
+`["triples", <hash>]` doc; the app-level `baseline_distance_mm` is now a legacy
+fallback only), and the previously stored-only `zoom_override` was wired into
+Disparity Scope's match-zoom resolution (knob > override > measured > 1). Both
+resolve at **session activate**; baseline marker spacing is **live** in the
+calibrate windows.
+
+- [ ] **Baseline → extrinsic marker spacing (live)** — in **Settings →
+  Calibration data**, expand the connected rig's triple and set **Baseline** to a
+  value clearly different from 200 (e.g. 120). With **Calibrate Extrinsic** open,
+  the L/R target markers on the TeleCanvas re-space **immediately** (no restart);
+  editing the field back to empty snaps them to the app-default spacing.
+- [ ] **Baseline → drift + distortion marker spacing (live)** — the same live
+  re-spacing holds in **Calibrate Drift** and **Calibrate Distortion** for that
+  triple.
+- [ ] **Empty per-triple baseline falls back to legacy** — a triple with the
+  **Baseline** field empty shows *app default: 200 mm* and places markers at the
+  200 mm spacing; no triple in the store behaves any differently than before this
+  wave (zero-migration).
+- [ ] **Baseline → Disparity Scope verge limits (next session)** — set a triple
+  **Baseline**, then start **Disparity Scope**: the Verge slider's max reflects
+  the new baseline (via `distanceToVerge(150, baseline)`); the realized/commanded
+  depth readouts are consistent with that baseline. A mid-session Settings edit
+  does NOT change the running verge limit (activate-time read — honest).
+- [ ] **zoom_override drives Auto match zoom (next start)** — set a triple's
+  **Zoom override** (e.g. 7), leave the window **Zoom Ratio = 0**, start
+  Disparity Scope: the Zoom-Ratio readout shows **Auto 7× (triple override)** and
+  the needle `[size-trace]` dsize reflects 7× (not the measured value).
+- [ ] **Knob still wins when > 0** — with a triple override set, typing a
+  **Zoom Ratio > 0** in the window immediately overrides it (the readout stops
+  showing "(triple override)" and the match uses the knob value).
+
 ## Capture/recorder nodes (2026-07-09/10 waves, 388454f→bee815c)
 
 > **Rig findings 2026-07-09 (user)** — three items below FAILED on the live
@@ -640,6 +674,32 @@ side markers, else the center-marker fallback with recorded marker sizes).
   while its Profiler is open → the Profiler shows the RED **"Session crashed"**
   banner (with the exit code) instead of the neutral "Session ended". A normal
   app close shows the neutral banner. Both freeze the data; neither re-attaches.
+
+### Crash diagnostics (2026-07-09, proposal `orchestrator-lifecycle-and-exit.md` §"Crash diagnostics")
+
+- [ ] **Induced abort → CrashReport shows tail + log path**: with a hardware app
+  live, `kill -ABRT <orchestrator-pid>` (get the pid from the profiler / Activity
+  Monitor). The app window's CrashReport banner appears with the exit code AND a
+  collapsed **"Diagnostics"** disclosure — expand it: the last ~30 lines of the
+  orchestrator's output show in a scrollable monospace box (fixed height, does NOT
+  grow the banner unbounded / shift page content), and a **"Log · Reveal in
+  Finder"** row opens `<userData>/crash-logs/` with the `.log` selected.
+- [ ] **crash-logs dir populated**: after the abort, `<userData>/crash-logs/`
+  contains `<instanceId>-<timestamp>.log` whose tail matches what the terminal
+  showed before death (the ring's last ~256 lines / 64 KiB).
+- [ ] **Dev terminal output UNCHANGED**: throughout normal operation the dev
+  terminal shows the orchestrator's stdout/stderr exactly as before the pipe/tee
+  change — no missing lines, no doubling, no reordered interleave, no added
+  buffering lag.
+- [ ] **Minidump appears + is cited**: the abort leaves a `.dmp` under
+  `<userData>/crash-dumps/` (crashpad), and when present the CrashReport shows a
+  **"Dump · Reveal in Finder"** row pointing at it. (Best-effort: on a very fast
+  exit the dump may not be flushed in time — the log tail is always present
+  regardless.)
+- [ ] **No pushTo throw on a disposed frame**: trigger the crash during a
+  dev-restart / window close race — main logs `[push] drop …` at debug and does
+  NOT throw the old "Render frame was disposed before WebFrameMain could be
+  accessed" error; Welcome/next app stay responsive.
 
 ## Channel-order fix (2026-07-09, proposal `channel-order-fix.md`)
 

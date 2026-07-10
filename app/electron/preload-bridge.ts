@@ -77,6 +77,7 @@ export function installBridge(extra: Partial<FoveaBridge> = {}) {
     openPerfSnapshotFolder: () => invoke("perf-snapshot:open-folder"),
     revealPerfSnapshot: (file) => invoke("perf-snapshot:reveal", file),
     revealRecording: (file) => invoke("viewer:reveal", file),
+    revealCrashFile: (file) => invoke("crash:reveal", file),
     setWindowPinned: (pinned) => send("window:set-pinned", pinned),
     spawnViewerEngine: (file) => send("viewer:spawn", file),
     onViewerEngineDown: (cb) => listen("viewer:engine-down", (message) => cb(message)),

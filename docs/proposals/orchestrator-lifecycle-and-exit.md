@@ -441,9 +441,62 @@ session … should have the session name and id in the title bar").
   stage-f.md §"Disposable orchestrator" (profiler survives frozen, two pinned
   profilers, crashed-vs-clean banners).
 
+### Crash diagnostics (2026-07-09 follow-up) — AS SHIPPED
+
+An `hw-2` instance once aborted with a C++ `mutex lock failed` during a
+dev-restart teardown (exit 6 → janitor, correct). Three diagnostics gaps that
+left almost nothing to debug with are now closed. All Electron-side; no core /
+orchestrator changes.
+
+- **Local minidumps for the utility processes.** `crashReporter.start({
+  uploadToServer: false, submitURL: undefined, productName: "FoveaCam" })` runs
+  in `main.ts` before app-ready and before any fork, with `app.setPath(
+  "crashDumps", <userData>/crash-dumps)`. Native faults in the orchestrator
+  utilityProcess (it owns `core`/Aravis/OpenCV) now land a **local-only**
+  minidump — nothing is ever uploaded (no server configured). On a non-clean
+  exit the registry's down path scans that dir for a `.dmp` newer than the
+  instance's fork time and cites its PATH in the report (we never parse the
+  minidump). Best-effort: a dump may not be flushed by the time the exit is
+  observed.
+- **Per-instance stdout/stderr ring + faithful tee.** The orchestrator instance
+  (and ONLY it — janitor/probe/viewer/telecanvas keep `stdio: "inherit"`) is
+  forked with `stdio: ["ignore","pipe","pipe"]`. Every chunk is tee'd
+  immediately and verbatim to the parent's `stdout`/`stderr` (the dev-terminal
+  experience is unchanged — no buffering, no reordering) while a pure
+  `LogRing` (`app/electron/log-ring.ts`) keeps the last ~256 lines / 64 KiB
+  (whichever binds first, line-oriented, partial-line-safe). On a non-clean exit
+  main flushes the ring to `<userData>/crash-logs/<instanceId>-<timestamp>.log`.
+- **Down-report enrichment.** `enrichDownReport` (`app/electron/crash-report.ts`,
+  pure/injected fs like the instance registry) threads three OPTIONAL fields into
+  the typed `orchestrator:down` report for a non-clean exit (a `clean` report is
+  untouched): `logPath` (the flushed ring file), `lastLines` (its ~30-line tail,
+  inlined so the banner needn't read the file), and `dumpPath?` (the paired
+  minidump). Enrichment happens in `notifyDown` BEFORE the report is remembered
+  (`lastDownReports`) or pushed, so both the live banner and a late-attaching
+  profiler's replay see the same enriched report.
+- **CrashReport UI.** `src/components/CrashReport.vue` gains a collapsed
+  **"Diagnostics"** `<details>` block (design-tokens only): the `lastLines` tail
+  in a fixed-height (180px), internally-scrolling monospace box (expanding never
+  grows the banner unbounded / shifts page content — the banner is
+  bottom-anchored and grows upward), plus **"Reveal in Finder"** rows for the log
+  and dump paths (new `revealCrashFile` bridge → `crash:reveal` →
+  `shell.showItemInFolder`, main-side).
+- **`pushTo` guard.** The `webContents.send` helper that threw *"Render frame was
+  disposed before WebFrameMain could be accessed"* now drops a push to a
+  destroyed `webContents` (early return, debug-logged) and wraps `send` in
+  try/catch (the render frame can be disposed between the check and the send).
+  Dropping a push to a dying window is correct — never throws.
+
+New pure modules `log-ring.ts` + `crash-report.ts` are unit-tested
+(`test/log-ring.test.ts` 18, `test/crash-report.test.ts` 8). Rig verification:
+stage-f.md §"Crash diagnostics".
+
 ### Gates
 
 `vue-tsc --noEmit` clean (for the files in scope). `vitest`: the 2 new suites
 (`orchestrator-instances` 13, `probe-camera` 9) pass; full suite green for
 everything in scope. `vite build` clean — new Node entry `probe.js` (1.5 kB)
 alongside `orchestrator.js` / `janitor.js`.
+
+The crash-diagnostics follow-up adds 2 more pure suites (`log-ring` 18,
+`crash-report` 8); `vue-tsc --noEmit` clean; full `vitest` green (771).

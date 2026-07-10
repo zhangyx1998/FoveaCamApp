@@ -160,6 +160,21 @@ export type OrchestratorDownReport = {
    *  (shown in the crash banner) — never the clean/crash discriminator. */
   code: number | null;
   message?: string;
+  // ---- Crash diagnostics (orchestrator-lifecycle-and-exit §"Crash
+  // diagnostics", AS SHIPPED). Present only on a NON-clean exit; main flushes
+  // the instance's stdout/stderr ring to a file and enriches the report before
+  // it reaches the window. All optional — a `clean` report never carries them.
+  /** Absolute path to the flushed per-instance stdout/stderr ring buffer
+   *  (`<userData>/crash-logs/<instanceId>-<timestamp>.log`). */
+  logPath?: string;
+  /** Tail (~30 lines) of that ring, inlined so the crash banner needn't read
+   *  the file to show recent output. Oldest → newest. */
+  lastLines?: string[];
+  /** Absolute path to a native minidump captured by Electron's crashReporter
+   *  for this instance's process, if one landed after it forked
+   *  (`<userData>/crash-dumps/…/*.dmp`). Best-effort — a minidump may not be
+   *  flushed by the time the exit is observed. */
+  dumpPath?: string;
 };
 
 /** Reactive last-seen orchestrator-down report for THIS window, or null while

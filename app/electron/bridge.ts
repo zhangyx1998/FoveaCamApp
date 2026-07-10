@@ -111,6 +111,11 @@ export interface FoveaBridge {
    *  (standalone-viewer-and-fcap UX 5). Any path the renderer holds is accepted
    *  (the bridge already trusts renderer-supplied paths). */
   revealRecording(file: string): Promise<void>;
+  /** Reveal a crash-diagnostics file (the flushed stdout/stderr ring log or a
+   *  native minidump) in the OS file browser, selecting it — the CrashReport
+   *  banner's "Reveal in Finder" affordance. Any path the down report carried
+   *  is accepted (the bridge already trusts renderer-supplied paths). */
+  revealCrashFile(file: string): Promise<void>;
   /** Pin THIS window above all others (`setAlwaysOnTop`) — the profiler's
    *  nav-bar pin toggle; the renderer persists the choice in localStorage
    *  and re-applies it on mount. */
@@ -152,6 +157,7 @@ export interface InvokeChannels {
   "perf-snapshot:open-folder": { args: []; ret: string };
   "perf-snapshot:reveal": { args: [file: string]; ret: void };
   "viewer:reveal": { args: [file: string]; ret: void };
+  "crash:reveal": { args: [file: string]; ret: void };
   "telecanvas:get-status": { args: []; ret: TeleCanvasStatus };
 }
 

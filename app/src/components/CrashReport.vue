@@ -31,6 +31,26 @@ const headline = computed(() => {
   return `Orchestrator ${verb} (code ${code}) — hardware parked by cleanup worker.`;
 });
 
+// Crash diagnostics (orchestrator-lifecycle-and-exit §"Crash diagnostics"):
+// present only on a non-clean exit that captured output / a minidump.
+const lastLines = computed(() => report.value?.lastLines ?? []);
+const logText = computed(() => lastLines.value.join("\n"));
+const logPath = computed(() => report.value?.logPath ?? "");
+const dumpPath = computed(() => report.value?.dumpPath ?? "");
+const hasDiagnostics = computed(
+  () => lastLines.value.length > 0 || !!logPath.value || !!dumpPath.value,
+);
+
+/** Basename for a compact, path-safe label (full path is the button title). */
+function baseName(p: string): string {
+  const parts = p.split(/[\\/]/);
+  return parts[parts.length - 1] || p;
+}
+
+function reveal(p: string): void {
+  if (p) window.foveaBridge.revealCrashFile(p);
+}
+
 function reopen(): void {
   // Fresh window → fresh orchestrator connect (main respawns it on demand).
   window.location.reload();
@@ -39,17 +59,54 @@ function reopen(): void {
 
 <template>
   <div v-if="show" class="crash-report" role="alert">
-    <div class="crash-body">
-      <span class="crash-dot" aria-hidden="true"></span>
-      <span class="crash-text">{{ headline }}</span>
+    <div class="crash-head">
+      <div class="crash-body">
+        <span class="crash-dot" aria-hidden="true"></span>
+        <span class="crash-text">{{ headline }}</span>
+      </div>
+      <button class="crash-reopen" type="button" @click="reopen">Reopen app</button>
     </div>
-    <button class="crash-reopen" type="button" @click="reopen">Reopen app</button>
+
+    <!-- Diagnostics: collapsed by default; the log tail scrolls WITHIN its own
+         fixed-height box so expanding never grows the banner unbounded. -->
+    <details v-if="hasDiagnostics" class="crash-diag">
+      <summary class="crash-diag-summary">Diagnostics</summary>
+      <div class="crash-diag-body">
+        <pre v-if="lastLines.length" class="crash-log"><code>{{ logText }}</code></pre>
+        <div v-if="logPath || dumpPath" class="crash-paths">
+          <div v-if="logPath" class="crash-path-row">
+            <span class="crash-path-label">Log</span>
+            <button
+              class="crash-reveal"
+              type="button"
+              :title="logPath"
+              @click="reveal(logPath)"
+            >
+              {{ baseName(logPath) }} · Reveal in Finder
+            </button>
+          </div>
+          <div v-if="dumpPath" class="crash-path-row">
+            <span class="crash-path-label">Dump</span>
+            <button
+              class="crash-reveal"
+              type="button"
+              :title="dumpPath"
+              @click="reveal(dumpPath)"
+            >
+              {{ baseName(dumpPath) }} · Reveal in Finder
+            </button>
+          </div>
+        </div>
+      </div>
+    </details>
   </div>
 </template>
 
 <style scoped lang="scss">
 /* One app error identity (P2): --danger family, --font-mono. A fixed overlay
-   banner (does not reflow content) that is instantly visible — no fade-in. */
+   banner (does not reflow page content) that is instantly visible — no fade-in.
+   Bottom-anchored, so the diagnostics block grows UPWARD on expand and its log
+   tail scrolls internally — the page never shifts. */
 .crash-report {
   position: fixed;
   z-index: 9999;
@@ -58,8 +115,8 @@ function reopen(): void {
   transform: translateX(-50%);
   max-width: min(560px, calc(100vw - 32px));
   display: flex;
-  align-items: center;
-  gap: 16px;
+  flex-direction: column;
+  gap: 10px;
   padding: 12px 16px;
   border-radius: 8px;
   background: var(--danger-bg);
@@ -71,11 +128,18 @@ function reopen(): void {
   box-shadow: 0 6px 24px var(--shadow);
 }
 
+.crash-head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
 .crash-body {
   display: flex;
   align-items: center;
   gap: 10px;
   min-width: 0;
+  flex: 1 1 auto;
 }
 
 .crash-dot {
@@ -99,6 +163,108 @@ function reopen(): void {
   background: transparent;
   color: var(--danger-text);
   font: inherit;
+
+  &:hover {
+    background: var(--tint-1);
+  }
+}
+
+/* Collapsed by default. Expanding reveals a fixed-height, internally-scrolling
+   log tail + reveal affordances — the banner never grows unbounded. */
+.crash-diag {
+  border-top: 1px solid var(--danger-strong);
+  padding-top: 8px;
+}
+
+.crash-diag-summary {
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  font-size: 12px;
+  opacity: 0.85;
+
+  &::-webkit-details-marker {
+    display: none;
+  }
+
+  &::before {
+    content: "▸";
+    display: inline-block;
+    width: 1em;
+  }
+
+  .crash-diag[open] &::before {
+    content: "▾";
+  }
+}
+
+.crash-diag-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.crash-log {
+  margin: 0;
+  max-height: 180px;
+  overflow: auto;
+  /* Keep wheel/trackpad momentum inside the log tail — never chain-scroll the
+     app behind this fixed banner (layout stability; no prior idiom exists). */
+  overscroll-behavior: contain;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--tint-1);
+  border: 1px solid var(--danger-strong);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre;
+  tab-size: 2;
+
+  code {
+    font: inherit;
+    color: inherit;
+  }
+}
+
+.crash-paths {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.crash-path-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.crash-path-label {
+  flex: none;
+  width: 3em;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.7;
+}
+
+.crash-reveal {
+  flex: 1 1 auto;
+  min-width: 0;
+  cursor: pointer;
+  text-align: left;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--danger-strong);
+  background: transparent;
+  color: var(--danger-text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 
   &:hover {
     background: var(--tint-1);
