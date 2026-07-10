@@ -268,7 +268,7 @@ function assertPattern(result: ReaderResultWithData): void {
 
   const handle = P.connect(pipeId);
   assert.equal(handle.ringDepth, ringDepth);
-  assert.equal(handle.headerLayout.layoutVersion, 4);
+  assert.equal(handle.headerLayout.layoutVersion, 5); // ring v5 (payloadBytes)
   assert.equal(P.consumers(pipeId), 1);
 
   const rh = reader.open(handle.shmName);

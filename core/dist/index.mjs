@@ -36,6 +36,7 @@ export const {
     Shm,
     Pipe,
     Topology,
+    Recorder,
     steadyNowNs,
     installCrashHandler,
     cleanup,

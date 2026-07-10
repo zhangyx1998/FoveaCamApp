@@ -147,6 +147,32 @@ void Publisher::offer(const void *data, const FrameInfo &info,
   meter_.addBusy(std::chrono::duration<double, std::milli>(
                      std::chrono::steady_clock::now() - writeStart)
                      .count());
+  // native-recorder taps: fire AFTER the ring write, on this (producer) thread,
+  // for exactly the frames the ring accepted — so a tap records byte-for-byte
+  // what a ring consumer would have read. Untapped pipes pay one relaxed load.
+  if (hasTaps_.load(std::memory_order_relaxed)) {
+    std::scoped_lock lock(tapMutex_);
+    for (auto &[token, tap] : taps_)
+      tap(data, info, meta);
+  }
+}
+
+void Publisher::addRecordTap(uintptr_t token, RecordTap tap) {
+  std::scoped_lock lock(tapMutex_);
+  taps_.emplace_back(token, std::move(tap));
+  hasTaps_.store(true, std::memory_order_release);
+}
+
+void Publisher::removeRecordTap(uintptr_t token) {
+  std::scoped_lock lock(tapMutex_);
+  for (auto it = taps_.begin(); it != taps_.end();) {
+    if (it->first == token)
+      it = taps_.erase(it);
+    else
+      ++it;
+  }
+  if (taps_.empty())
+    hasTaps_.store(false, std::memory_order_release);
 }
 
 uint32_t Publisher::connect() {

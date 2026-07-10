@@ -101,6 +101,20 @@ public:
  *  no pipe open" (the converter auto-parks once its subscriber detaches). */
 using ConsumerGate = std::function<void(bool active)>;
 
+/** native-recorder: an in-process tap at the publisher seam. Fired on the
+ *  PRODUCER'S thread for every frame the ring accepts (after validation, while
+ *  ≥1 consumer is connected and the pipe is open) with the producer's ORIGINAL
+ *  (possibly strided) buffer — exactly the payload the ring records, so a
+ *  recorder tapping here captures byte-for-byte what a ring consumer would have
+ *  read (advert-verbatim, v5 opaque payloads included). The callee must copy
+ *  synchronously (the buffer is reused) and must NEVER block (it runs on the
+ *  capture/convert/compress thread) — a bounded drop-oldest enqueue only.
+ *  This is a brick→brick handoff (SHM-pipe-architecture invariant: rings are
+ *  IPC/JS boundaries ONLY; the native recorder never reads the ring). */
+using RecordTap =
+    std::function<void(const void *data, const FrameInfo &info,
+                       const ShmRing::FrameMeta &meta)>;
+
 /** Source of frames feeding exactly one publisher (via its `FrameSink`).
  *  Scaffold/test: `SyntheticProducer`. 1c/1d: capture/CV producer threads. */
 class FrameProducer {
@@ -161,6 +175,14 @@ public:
    *  no-op). */
   void quiesceConsumers();
 
+  /** native-recorder: add/remove a record tap (keyed by `token`, any unique
+   *  pointer-sized id). `removeRecordTap` returns only after no in-flight tap
+   *  invocation can still be running (offer() holds the tap mutex across the
+   *  call), so the owner may free its capture state immediately after. Any
+   *  thread (serialized internally); taps fire on the producer thread. */
+  void addRecordTap(uintptr_t token, RecordTap tap);
+  void removeRecordTap(uintptr_t token);
+
   const PipeSpec &spec() const { return spec_; }
   const std::string &shmName() const { return shmName_; }
   /** Segment generation = the pipe's epoch (C-20 reuse-safe identity). */
@@ -188,6 +210,14 @@ private:
   std::atomic<bool> closed_{false};
   std::atomic<uint64_t> bytesTotal_{0}; // producer-thread writer, relaxed reads
   ConsumerGate gate_; // NAPI-thread only (connect/disconnect/setConsumerGate)
+
+  // native-recorder taps: fired under `tapMutex_` in offer() (producer thread);
+  // add/remove serialize on the same mutex, so removeRecordTap() returning
+  // proves no tap invocation is still in flight. `hasTaps_` gates the lock
+  // acquisition so untapped pipes pay one relaxed atomic load per frame.
+  std::mutex tapMutex_;
+  std::vector<std::pair<uintptr_t, RecordTap>> taps_;
+  std::atomic<bool> hasTaps_{false};
 };
 
 /** Scaffold producer: emits synthetic frames at ~`fps` (byte = seed + frame#)

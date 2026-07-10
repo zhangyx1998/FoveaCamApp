@@ -126,6 +126,12 @@ describe("multi-fovea recording e2e soak (raw12p registry + zlib + descriptor ch
         compress: compressSeam,
         // The LEFT stream routes through the REAL CompressStream brick.
         compressStreams: () => ({ left: true, center: false, right: false }),
+        // Force the app-level method (the per-stream switches are inert under
+        // "none"): the default reads the STORE-HUB config, which is
+        // machine-dependent — a box without record_compression=zlib silently
+        // recorded raw and failed the /zlib asserts below. The soak's claim is
+        // "the /zlib route works", so pin the method deterministically.
+        readMethod: async () => "zlib",
         finished: (p) => void finished.push(p),
         telemetry: (patch) => {
           if (patch.recordingStreams && Object.keys(patch.recordingStreams).length)

@@ -1,7 +1,11 @@
 # Native recorder — hand-rolled C++ MCAP writer + recorder brick
 
-Status: **Wave 1 SHIPPED (the C++ MCAP writer + conformance gate); Waves 2–3
-DESIGNED (recorder brick + orchestrator driver).** User-directed 2026-07-10.
+Status: **ALL THREE WAVES SHIPPED** (2026-07-10): Wave 1 — the C++ MCAP writer
++ byte-identical conformance gate (core/test/39); Wave 2 — the RecorderStream
+brick (producer-seam record taps + free-running writer thread, core/test/40);
+Wave 3 — recorder-node.ts as a thin native driver (the JS worker/FIFO machinery
+DELETED; churn soak + forced-zlib soak green). Rig pass owed (stage-f §Native
+recorder). User-directed 2026-07-10.
 
 ## Why — the live recorder drops frames the raw dump never did
 
@@ -126,62 +130,122 @@ test 39 drive the native writer from JS. The live recorder brick drives
 `Record::McapWriter` directly in C++ — **no NAPI per frame.** These are not in
 the public `.d.ts` (same pattern as `__streamTeardownRaceSelfTest`).
 
-## Wave 2 — `core/lib/Record/RecorderStream.{h,cpp}` (DESIGNED)
+## Wave 2 — `core/lib/Record/RecorderStream.{h,cpp}` (SHIPPED)
 
-A free-running native writer thread owning one `McapWriter`, fed by per-source
-bounded queues. Follows the `CompressStream`/`CompressRunner` precedent (a gated
-private thread that touches nothing NAPI/registry) and the SHM-pipe-architecture
-invariant (brick→brick = OwnedFrame/stream taps, never a ring read).
+A free-running native writer thread owning one `McapWriter`, fed brick→brick
+from **record taps at the `Publisher::offer` seam** (`Pipe.h` `RecordTap`,
+`Publisher::add/removeRecordTap`). NAPI surface: `core.Recorder.*`
+(`core/src/Record.cpp`, handle registry; typed in `core/dist/index.d.ts`).
 
-- **Sources subscribe brick→brick.** The brick taps the SAME streams whose SHM
-  pipes the JS recorder consumed: raw camera publisher sources (`openRaw12pTap`
-  precedent), `CompressStream` outputs (for `/zlib` recording — tap the compress
-  output STREAM, not its pipe; extend the broker surface minimally so the source
-  stream is reachable, mirroring how `attachCompressPipe` resolves a source
-  Publisher), derived bricks. Follow `StereoStream`'s `RecordSink` drop-oldest
-  tap.
-- **One copy max per frame.** Hold the `OwnedFrame::Ptr`/`ConvertedFrame` ref in
-  the queue slot and write straight from it into the writer thread's chunk
-  buffer (`McapWriter::addMessage(payload)` copies once, into `chunk_`). Zero
-  extra `ArrayBuffer`.
-- **Bounded per-channel queue.** Writer-busy overflow = queue-attributed drop;
-  tap-side drop-oldest overwrite = ring-attributed drop. Same
-  `droppedQueue`/`droppedRing` split as the JS path (`backpressured` flag).
-- **Metric block.** Each writer thread exposes the standard `Meter::ThreadMeter`
-  profiling block the orchestrator probes out-of-loop; cumulative per-stream
-  counters `{ingested, dropped, droppedQueue, droppedRing, written, bytes}` in
-  the SAME shape `recorder-node.ts`'s `StreamCounters` + `foldStreamStats`
-  expect, so the orchestrator folding + RecordButton hover attribution keep
-  working UNCHANGED.
-- **Per-frame telemetry/extras (ruling-3).** A NAPI `appendTelemetry(stream,
-  seq, logTimeNs, payloadJson)` enqueues a telemetry message onto the writer
-  queue, correlated by stream+seq exactly like today's `TELEMETRY_TOPIC`
-  messages. The JS-visible contract from `recorder-node.ts` (dispatch a frame
-  notice → session callback returns extras → post back) is preserved; only the
-  worker boundary becomes a native enqueue.
-- **Timestamps.** `logTime` = the frame's TRUSTED `deviceTimestamp` (device time
-  when the source stamps it) else the publish/monotonic time, computed exactly as
-  the JS path does — never re-stamped (trusted-time invariant).
-- **Lifecycle.** `start(filePath, sessionMeta)` / `finalize()` (drain queues to a
-  snapshot target, write summary, close — R-1 drain semantics) / `abort()`
-  (crash-shape file). MUST follow `Stream.h` teardown lifetime rules
-  (`eject_all_and_drain`, `closes_in_flight_`; tests 36/38 stay green). The
-  recorder holds no hardware, so janitor/quiescence is unaffected.
+### Design delta vs the original sketch — the offer-seam tap
 
-## Wave 3 — orchestrator driver (DESIGNED)
+The sketch proposed per-brick OwnedFrame/stream taps (openRaw12pTap-style per
+source kind, plus new plumbing for CompressStream outputs). Shipped instead:
+ONE tap point at `Publisher::offer` — the seam **every** recorded source (raw
+camera publishers, raw12p, CompressStream `/zlib` outputs, any derived brick)
+already funnels through with EXACTLY the bytes the ring records (v5 opaque
+payloads included). Rationale:
+- **advert-verbatim by construction**: the tap sees the same `(data, FrameInfo,
+  FrameMeta)` the seqlock write consumes, so a native-tapped recording is
+  byte-for-byte what the JS FIFO reader would have read — zero per-source-kind
+  plumbing, `/zlib` covered with NO broker extension;
+- **still brick→brick**: it is an in-process producer-thread callback, not a
+  ring read (the SHM-pipe-architecture invariant holds — rings remain IPC/JS
+  boundaries only);
+- **no Subscriber lifetime surface**: the recorder registers a plain callback
+  slot, never a `Subscriber` — the Stream.h teardown rules (eject_all_and_drain
+  / closes_in_flight_) are untouched by construction (tests 36/38 green), and
+  `removeRecordTap` returns only after no in-flight tap invocation remains
+  (the tap fires under the same mutex), so teardown is synchronous.
+- The recorder still `connect()`s each pipe (refcount++ → C-21 gate) — the
+  demand signal that runs the producer is unchanged; the ring write continues
+  (shared with previews). Untapped pipes pay one relaxed atomic load per frame.
 
-`recorder-node.ts`'s HOST becomes a thin native-brick driver with the SAME public
-surface (`createRecorderNode` → `addStream`/`removeStream`/`addDataStream`/
-`postData`/`stop`, `registerGraphWiring`, the stats-folding timer, the telemetry
-extras dispatch). `recording-service.ts` and every session composition stay
-UNCHANGED. The FIFO/worker machinery (`WORKER_SOURCE`, `runStreamConsumer`) is
-SUPERSEDED and DELETED (dead-code discipline) — the pure exported functions the
-vitest suites pin (`foldStreamStats`, `dispatchFrame`, `StreamCounters` shape)
-are KEPT (they still describe the native counter fold + the ruling-3 dispatch).
-`writer.ts` + `worker-source.ts` are KEPT as the `@mcap/core` reference the
-conformance bench/container-contract tests drive. `record_compression=zlib`
-routing keeps working: the brick taps the `CompressStream` output stream instead
-of its `/zlib` sibling pipe.
+### As shipped
+
+- **One recorder-added copy per frame**: the tap tight-packs the producer's
+  (possibly strided) buffer straight into a POOLED queue-slot buffer on the
+  producer thread (bounded, drop-oldest, never blocks capture; no per-frame
+  allocation at steady state). The writer thread encodes from that slot
+  (McapWriter's chunk assembly is the writer's own buffering — the role
+  @mcap/core's chunk builder played, now in C++ with zlib CRC).
+- **Drop contract**: per-stream bounded pending window (`maxQueuedFrames`,
+  default 8). Overflow sheds the OLDEST queued frame of that stream:
+  writer mid-encode → `droppedQueue`; writer between items → `droppedRing`.
+  Invariants (pinned by core/test/40): `written + dropped == ingested`,
+  `droppedQueue + droppedRing == dropped` — same shape `foldStreamStats` +
+  the RecordButton hover pin. The old "ring lapped the reader" failure mode is
+  structurally deleted (no ring read); `droppedRing` now names the
+  burst-outran-the-drain case.
+- **Timestamps (trusted-time)**: `logTime` = `Arv::steadyNowNs()` stamped on
+  the producer thread at tap arrival (the single container axis — THE host
+  time authority); `tNs` = the frame's TRUSTED `deviceTimestamp` forwarded
+  verbatim through `FrameMeta` when the source stamps it, else the axis time.
+  Never re-stamped. (The JS worker's clock had a different origin; the viewer
+  windows on min/max logTime, so the origin is immaterial.)
+- **Ruling-3 extras**: the brick buffers per-frame notices (bounded 4096,
+  drop-oldest — extras are best-effort by contract) for `wantsExtras` streams;
+  the host drains them via `takeNotices()` on its low-rate poll (out-of-loop —
+  no TSFN, no per-frame JS) and posts extras back via
+  `appendTelemetry(seq, logTimeNs, payloadJson)`, which rides the writer queue
+  correlated by stream+seq with the OWNING frame's logTime — the
+  `TELEMETRY_TOPIC` contract unchanged.
+- **Metric block**: the writer thread owns a `Meter::ThreadMeter`
+  (`Recorder.probe(handle)` → the standard brick snapshot); per-stream
+  cumulative counters are atomics (`Recorder.stats(handle)`).
+- **Lifecycle**: `create` (open container + session/wide-camera metadata +
+  telemetry channel, spawn writer) / `addStream`/`removeStream` (synchronous
+  tap attach/detach; an ENDED name re-added continues its channel + mcap
+  sequence) / data channels (registered on the writer thread — present in the
+  summary even with zero messages) / `finalize` = beginFinalize on the NAPI
+  thread (detach every tap — the queue content IS the R-1 drain snapshot,
+  enqueue the marker) + an AsyncTask awaiting the writer's completion /
+  `abort` (crash-shape) / `destroy` (join + free; only after the finalize
+  promise settles). All schema/metadata constants are passed IN from JS —
+  docs/schema stays the single source of truth; C++ carries no fovea strings.
+- **Gate**: `core/test/40-recorder-brick.ts` (out-of-process watchdog, tests
+  36/38 pattern): full-feature recording + indexed-reader verification
+  (channels incl. a zero-message data channel, counts == counters, verbatim
+  metadata, contiguous sequences, telemetry round-trip), counter invariants,
+  removeStream/re-add sequence continuity, abort crash-shape, 40× lifecycle
+  churn (finalize|abort alternating).
+
+## Wave 3 — orchestrator driver (SHIPPED)
+
+`recorder-node.ts` is a thin native-brick driver with the SAME public surface
+(`createRecorderNode` → `addStream`/`removeStream`/`addDataStream`/`postData`/
+`stop`, `registerGraphWiring` + the workload meter, the extras dispatch).
+`recording-service.ts` and every session composition are UNTOUCHED.
+
+- **Deleted** (dead-code discipline): `WORKER_SOURCE`, `runStreamConsumer`,
+  `StreamConsumerCfg`, `WorkerLike`, `WorkerStreamInit`, `RecorderNodeIn/Out`,
+  the spawn/readerPath seams — the whole in-JS consume+encode worker.
+- **Kept**: `foldStreamStats` + `StreamCounters` (the native brick exposes the
+  identical counter shape), `dispatchFrame`/`ExtrasMessage` (the ruling-3
+  dispatch, now posting to `appendTelemetry`), `SeqRead` (imported by
+  capture-node.ts, whose bounded JS FIFO consumer legitimately remains),
+  `channelMetadata` (NEW export: advert → verbatim channel metadata, the old
+  `buildStreamInit` fields). `writer.ts` + `worker-source.ts` are KEPT as the
+  `@mcap/core` reference the bench + `test/recorder.test.ts` container-contract
+  suite drive.
+- **Seams**: `native?: RecorderNative` (default: lazy `require("core").Recorder`
+  — vitest injects a fake and never loads core) replaces `spawn`/`readerPath`.
+- **Simplifications the brick buys**: `removeStream` releases its pipe
+  IMMEDIATELY (tap detach is synchronous — the async `stream-ended` dance is
+  gone); `stop()` = final notice drain → `native.finalize` raced against the
+  R-2 deadline (expiry → `native.abort`, truncated stats, crash-shape file) →
+  post-drain stats re-fold (so `stats()` counts the drain's tail frames) →
+  `destroy` → release connections → retire meter + wiring.
+- **/zlib**: zero new plumbing — the recorder connects the `/zlib` sibling pipe
+  exactly as before and the offer-seam tap captures the compressed v5 payloads
+  verbatim. Proven end-to-end by the multi-fovea soak (now pinned to
+  `readMethod: () => "zlib"` — it previously read the machine's store config
+  and silently degraded to raw on boxes without `record_compression=zlib`).
+- **Gates**: vitest recorder-node suite rewritten over a fake native seam
+  (794/794 total); `recorder-node-soak.ts` (real brick + fake-camera pipes,
+  churn + descriptors + extras + exact accounting) and
+  `multi-fovea-recording-soak.ts` (raw12p + REAL CompressStream + viewer-path
+  decode) both green.
 
 ## Perf expectation (rig test — `docs/hardware/stage-f.md`)
 

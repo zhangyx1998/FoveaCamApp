@@ -30,6 +30,100 @@ declare module "core" {
      */
     export function steadyNowNs(): bigint;
 
+    /**
+     * native-recorder Wave 2: the live RECORDER BRICK (hand-rolled C++ MCAP
+     * writer + free-running writer thread fed by producer-seam record taps).
+     * Driven by `@orchestrator/recorder-node` — nothing per-frame crosses this
+     * boundary. Handle-based; all fovea schema/metadata constants are passed IN
+     * (docs/schema stays the single source of truth).
+     */
+    export namespace Recorder {
+        /** Cumulative per-stream counters (recorder-node StreamCounters shape:
+         *  written + dropped == ingested; droppedQueue + droppedRing == dropped). */
+        interface StreamCounters {
+            ingested: number;
+            dropped: number;
+            droppedQueue: number;
+            droppedRing: number;
+            written: number;
+            bytes: number;
+        }
+        /** A per-frame write notice (ruling-3 extras dispatch), drained by the
+         *  host's low-rate poll and correlated by stream+seq. */
+        interface FrameNotice {
+            stream: string;
+            seq: number;
+            logTimeNs: bigint;
+            tNs: bigint;
+        }
+        interface CreateOptions {
+            id: string;
+            filePath: string;
+            chunkBytes: number;
+            maxQueuedFrames: number;
+            profile: string;
+            library: string;
+            sessionMetaName: string;
+            wideCameraMetaName: string;
+            finalizeMetaName: string;
+            session: Record<string, string>;
+            cameraMatrix?: Record<string, string>;
+            rawFrameSchemaName: string;
+            rawFrameSchemaData: string;
+            descriptorSchemaName: string;
+            descriptorSchemaData: string;
+            telemetrySchemaName: string;
+            telemetrySchemaData: string;
+            schemaEncoding: string;
+            rawFrameEncoding: string;
+            descriptorEncoding: string;
+            telemetryEncoding: string;
+            telemetryTopic: string;
+        }
+        /** Open the container (session/wide-camera metadata + telemetry channel
+         *  written up front), spawn the writer thread. Returns the handle. */
+        function create(opts: CreateOptions): number;
+        /** Tap `pipeId`'s publisher, record it as channel `name`. `metadata` is
+         *  copied VERBATIM into the MCAP channel (advert-verbatim, ruling 8).
+         *  Throws on unknown pipe / duplicate live name / after finalize. */
+        function addStream(
+            handle: number,
+            name: string,
+            pipeId: string,
+            metadata: Record<string, string>,
+            wantsExtras: boolean,
+        ): void;
+        /** Detach the tap; queued frames still write; the channel stays. */
+        function removeStream(handle: number, name: string): void;
+        function addDataStream(handle: number, name: string): void;
+        function removeDataStream(handle: number, name: string): void;
+        function postData(handle: number, name: string, payloadJson: string): void;
+        /** Ruling-3 telemetry extras: one doc on the telemetry channel with the
+         *  OWNING frame's seq + container-axis logTime. */
+        function appendTelemetry(
+            handle: number,
+            seq: number,
+            logTimeNs: bigint,
+            payloadJson: string,
+        ): void;
+        function takeNotices(handle: number): FrameNotice[];
+        function stats(handle: number): Record<string, StreamCounters>;
+        /** The writer thread's profiling metric block (same snapshot shape as
+         *  every other native brick probe). */
+        function probe(handle: number): unknown;
+        /** R-1 finalize: detach every tap, drain the queue snapshot, write the
+         *  summary/footer. Resolve AFTER the writer finished; call destroy()
+         *  only after this promise settles. */
+        function finalize(
+            handle: number,
+            durationSec: number,
+        ): Promise<{ messageCount: bigint; chunkCount: number; bytes: number }>;
+        /** Crash-shape stop (no footer); unblocks a pending finalize. */
+        function abort(handle: number): void;
+        /** Join + free. Only after the finalize promise settled. */
+        function destroy(handle: number): void;
+    }
+
     export * as Aravis from "core/Aravis";
     export * as Controller from "core/Controller";
     export * as Vision from "core/Vision";

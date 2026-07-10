@@ -4,10 +4,11 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// multi-fovea-recording Wave I-1a CHURN SOAK. Drives the ACTUAL recorder node
-// (its real worker thread + the real MCAP writer) over NATIVE fake-camera raw
-// pipes for ~10-20s while CHURNING streams the way multi-fovea does, then
-// finalizes and DECODES the `.fovea` to prove:
+// multi-fovea-recording Wave I-1a CHURN SOAK (native-recorder era: the node is
+// a thin driver over the NATIVE brick — producer-seam taps + the hand-rolled
+// C++ MCAP writer; no JS worker). Drives the ACTUAL recorder node over NATIVE
+// fake-camera raw pipes for ~10-20s while CHURNING streams the way multi-fovea
+// does, then finalizes and DECODES the `.fcap` to prove:
 //   (a) exact frame accounting on the STABLE (whole-recording) streams —
 //       decoded messages/channel == worker `written`, mcap sequences contiguous
 //       0..N-1 (zero unexplained write loss), written+drops >= published span;

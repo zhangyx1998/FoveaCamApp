@@ -873,11 +873,11 @@ the TeleCanvas window previews via the host's own SSE stream. Verify on the rig
 
 ### Native recorder
 
-The live recorder moves from a JS worker (`@mcap/core`) to a hand-rolled C++ MCAP
-writer + native brick (`docs/proposals/native-recorder.md`). Wave 1 (the writer +
-byte-identical conformance gate `core/test/39-mcap-writer.ts`) is software-green;
-the brick + orchestrator driver are the remaining waves. Take these to the rig
-once the brick lands:
+The live recorder moved from a JS worker (`@mcap/core`) to a hand-rolled C++
+MCAP writer + native brick (`docs/proposals/native-recorder.md`) — ALL THREE
+WAVES software-green: byte-identical conformance (`core/test/39`), brick
+lifecycle churn (`core/test/40`), recorder churn soak + forced-zlib multi-fovea
+soak. Take these to the rig:
 
 - [ ] **Full-rate 3-camera sustains** — record all three cameras at full rate; the
   original defect (`droppedQueue` under load) does NOT reproduce — the RecordButton

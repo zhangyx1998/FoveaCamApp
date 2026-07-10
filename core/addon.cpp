@@ -121,6 +121,10 @@ Napi::Value __mcapAddMessage(const Napi::CallbackInfo &info);
 Napi::Value __mcapAddMetadata(const Napi::CallbackInfo &info);
 Napi::Value __mcapEnd(const Napi::CallbackInfo &info);
 Napi::Value __mcapAbort(const Napi::CallbackInfo &info);
+// Wave 2: the live RECORDER BRICK surface (`core.Recorder.*`) — the
+// orchestrator's recorder-node host drives it; frames flow producer-tap →
+// writer thread entirely in C++ (core/lib/Record/RecorderStream.cpp).
+void exportRecorderNamespace(Napi::Env env, Napi::Object &exports);
 } // namespace Rec
 
 // Native crash-site tracing (teardown-hardening Task 3): std::set_terminate +
@@ -364,6 +368,8 @@ static Object init(Env env, Object exports) {
                 Function::New<Rec::__mcapAddMetadata>(env, "__mcapAddMetadata"));
     exports.Set("__mcapEnd", Function::New<Rec::__mcapEnd>(env, "__mcapEnd"));
     exports.Set("__mcapAbort", Function::New<Rec::__mcapAbort>(env, "__mcapAbort"));
+    // native-recorder Wave 2: the live recorder brick (`core.Recorder.*`).
+    Rec::exportRecorderNamespace(env, exports);
     // Native crash-site tracing — call once at orchestrator boot.
     exports.Set("installCrashHandler",
                 Function::New<installCrashHandler>(env, "installCrashHandler"));
