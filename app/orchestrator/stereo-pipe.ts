@@ -57,10 +57,29 @@ export type StereoParams = {
  *  STATIC (gaze-centered dynamic retuning was ruled out). Covers gaze
  *  divergence up to ±256 px; beyond that the view degrades again (known
  *  limitation, revisit on the rig). */
-export const SIGNED_DISPARITY_WINDOW: StereoParams = {
+export const SIGNED_DISPARITY_WINDOW: Required<
+  Pick<StereoParams, "numDisparities" | "minDisparity">
+> = {
   numDisparities: 512,
   minDisparity: -256,
 };
+
+/** Heatmap normalization PINNED to the ruled window (sgbm-signed-range.md):
+ *  min/max = the window's −256…+255, DERIVED from
+ *  {@link SIGNED_DISPARITY_WINDOW} so a future window change can't drift the
+ *  two apart. Pinning (vs the heatmap's per-frame auto min/max) matters
+ *  because the matcher marks invalid pixels `minDisparity − 1` (≈ −257) — the
+ *  auto-min locks onto that marker and washes the valid range out; pinned,
+ *  invalids CLAMP to the floor color and valid disparities get a stable,
+ *  frame-to-frame-consistent colormap (also kills the autoscale flicker).
+ *  Shape matches the heatmap brick's reactive `{ min, max }` params. */
+export const SIGNED_DISPARITY_HEATMAP_RANGE = {
+  min: SIGNED_DISPARITY_WINDOW.minDisparity,
+  max:
+    SIGNED_DISPARITY_WINDOW.minDisparity +
+    SIGNED_DISPARITY_WINDOW.numDisparities -
+    1,
+} as const;
 
 export interface StereoPipeSeam {
   advertise(spec: PipeSpec): number;

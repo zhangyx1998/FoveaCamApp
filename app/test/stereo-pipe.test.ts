@@ -13,6 +13,7 @@ import { describe, expect, it } from "vitest";
 import {
   createPairedStereoPipe,
   createStereoPipe,
+  SIGNED_DISPARITY_HEATMAP_RANGE,
   SIGNED_DISPARITY_WINDOW,
   type StereoParams,
   type StereoPipeSeam,
@@ -47,6 +48,21 @@ describe("SIGNED_DISPARITY_WINDOW (sgbm-signed-range.md ruling)", () => {
       numDisparities: 512,
       minDisparity: -256,
     });
+  });
+
+  it("derives the pinned heatmap normalization from the window (no drift)", () => {
+    // min = the window floor; max = its ceiling (minDisparity + num − 1) — so
+    // the invalid marker (minDisparity − 1) clamps to the floor color instead
+    // of dragging the per-frame auto-min (sgbm-signed-range.md §Downstream).
+    expect(SIGNED_DISPARITY_HEATMAP_RANGE).toEqual({ min: -256, max: 255 });
+    expect(SIGNED_DISPARITY_HEATMAP_RANGE.min).toBe(
+      SIGNED_DISPARITY_WINDOW.minDisparity,
+    );
+    expect(SIGNED_DISPARITY_HEATMAP_RANGE.max).toBe(
+      SIGNED_DISPARITY_WINDOW.minDisparity +
+        SIGNED_DISPARITY_WINDOW.numDisparities -
+        1,
+    );
   });
 });
 

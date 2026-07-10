@@ -7,8 +7,10 @@ pinned on both signs by the `core/test/43-stereo-throughput.ts` bench — no
 H-vs-inverse contradiction surfaced synthetically, so a sign-flipped rig
 view now cleanly implicates the homography feeder, not the matcher.
 Residual (report-only): invalid pixels carry `minDisparity − 1` ≈ −257,
-which drags the heatmap's per-frame auto-min — see the heatmap-normalization
-follow-up.
+which drags the heatmap's per-frame auto-min — RESOLVED same day: the
+disparity heatmap is pinned to `SIGNED_DISPARITY_HEATMAP_RANGE` (derived
+from the window constant), so invalids clamp to the floor color and the
+colormap is frame-to-frame stable.
 
 ## Problem (user-reported, 2026-07-10)
 

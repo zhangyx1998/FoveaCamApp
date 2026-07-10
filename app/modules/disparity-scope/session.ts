@@ -121,6 +121,7 @@ import { createSlicePipe, type SliceHandle, type SlicePipeSeam } from "@orchestr
 import { createScalePipe, type ScaleHandle, type ScalePipeSeam } from "@orchestrator/scale-pipe";
 import {
   createStereoPipe,
+  SIGNED_DISPARITY_HEATMAP_RANGE,
   SIGNED_DISPARITY_WINDOW,
   type StereoHandle,
   type StereoPipeSeam,
@@ -1176,7 +1177,15 @@ export default function disparityScopeSession(
         heatmapSeam,
         stereo.pipeId,
         nodeId.heatmap(stereo.pipeId, "view"),
-        stereoDims,
+        {
+          ...stereoDims,
+          // Normalization PINNED to the ruled −256…+255 window (derived from
+          // SIGNED_DISPARITY_WINDOW — sgbm-signed-range.md): per-frame auto
+          // min/max locked onto the matcher's invalid marker (minDisparity−1
+          // ≈ −257) and washed the SGBM view out; pinned, invalids clamp to
+          // the floor color and the colormap is frame-to-frame stable.
+          params: SIGNED_DISPARITY_HEATMAP_RANGE,
+        },
       );
 
       // COMPOSITE (composite-node-and-center-select-fix): the center view's
