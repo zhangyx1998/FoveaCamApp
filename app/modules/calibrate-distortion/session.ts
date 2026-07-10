@@ -22,6 +22,7 @@
 import { type ServerSession } from "@orchestrator/runtime";
 import { defineResourceSession, type ResourceScope } from "@orchestrator/resource-session";
 import { acquireTriple, type CalibratedTriple } from "@orchestrator/calibration";
+import { registerGraphWiring } from "@orchestrator/graph-topology";
 import { controllerNode, type PositionInput } from "@orchestrator/controller-node";
 import { findHomography } from "core/Vision";
 import { area, type Point2d } from "core/Geometry";
@@ -186,6 +187,19 @@ export default function calibrateDistortionSession(
       if (!t) return; // frozen at "Leasing cameras" (contention/fail)
       monitor.done("lease");
       triple = t;
+      // DISPLAY-ONLY: profiler labels this triple by role (L/C/R), ids stay
+      // serial-keyed — the one-liner every triple-holding session registers.
+      scope.defer(
+        registerGraphWiring({
+          roles: {
+            [t.leases.L.camera.serial]: "L",
+            [t.leases.C.camera.serial]: "C",
+            [t.leases.R.camera.serial]: "R",
+          },
+          nodes: [],
+          edges: [],
+        }),
+      );
       scope.defer(async () => void (await recording.stop())); // finalize before leases release (LIFO)
       scope.defer(() => {
         triple = null;

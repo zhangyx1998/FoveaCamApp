@@ -34,6 +34,7 @@ import {
 } from "@orchestrator/homography-feeder";
 import { pushHomography } from "core/Aravis";
 import { registerNativeProbe } from "@orchestrator/native-probes";
+import { registerGraphWiring } from "@orchestrator/graph-topology";
 import { nodeId } from "@lib/orchestrator/graph-contract";
 import type { PipeBroker } from "@orchestrator/pipe-session";
 import type { WorkloadSnapshot } from "@lib/orchestrator/stats";
@@ -404,6 +405,20 @@ export default function multiFoveaSession(
       // per-instance, so a cross-instance live push is intentionally out of
       // scope (known gotcha); starting a fresh session re-reads it here.
       s.setState("settle_time_us", t.settleTimeUs);
+      // DISPLAY-ONLY: the profiler labels this leased triple by role (L/C/R)
+      // instead of serial in the app context (ids stay serial-keyed) — the
+      // same one-liner every triple-holding session registers.
+      scope.defer(
+        registerGraphWiring({
+          roles: {
+            [t.leases.L.camera.serial]: "L",
+            [t.leases.C.camera.serial]: "C",
+            [t.leases.R.camera.serial]: "R",
+          },
+          nodes: [],
+          edges: [],
+        }),
+      );
       scope.defer(() => {
         triple = null;
         serialC = null;

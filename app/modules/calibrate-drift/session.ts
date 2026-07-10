@@ -14,6 +14,7 @@
 import { type ServerSession } from "@orchestrator/runtime";
 import { defineResourceSession, type ResourceScope } from "@orchestrator/resource-session";
 import { acquireTriple, type CalibratedTriple } from "@orchestrator/calibration";
+import { registerGraphWiring } from "@orchestrator/graph-topology";
 import { read, write } from "@orchestrator/store-hub";
 import { activeController } from "@orchestrator/controller";
 import { startServo, type MarkerTracker, type Servo } from "@orchestrator/marker-tracker";
@@ -131,6 +132,19 @@ export default function calibrateDriftSession(
       if (!t) return; // no cameras (acquireTriple published fail) or superseded
       monitor.done("lease");
       triple = t;
+      // DISPLAY-ONLY: profiler labels this triple by role (L/C/R), ids stay
+      // serial-keyed — the one-liner every triple-holding session registers.
+      scope.defer(
+        registerGraphWiring({
+          roles: {
+            [t.leases.L.camera.serial]: "L",
+            [t.leases.C.camera.serial]: "C",
+            [t.leases.R.camera.serial]: "R",
+          },
+          nodes: [],
+          edges: [],
+        }),
+      );
       // Finalize an in-flight recording before the lease releases (defer is LIFO
       // and leases release LAST via scope.use — this runs while cameras live).
       scope.defer(async () => void (await recording.stop()));
