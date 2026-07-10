@@ -255,3 +255,33 @@ in C++. Hover attribution (`droppedQueue` vs `droppedRing`) still resolves;
 `finalize` under load drains cleanly; a crash mid-record leaves a footer-less
 container the viewer's streaming reader recovers; `/zlib` streams record + decode;
 OLD `.fovea`/`.fcap` recordings still open.
+
+## Alternative considered — vendoring foxglove/mcap C++ (ruled: keep hand-rolled writer)
+
+Analyzed 2026-07-10 at the user's request, after waves 1–3 shipped. The official
+C++ implementation (github.com/foxglove/mcap, MIT) is header-only
+(`MCAP_IMPLEMENTATION` in one TU), vendorable, and its lz4/zstd deps are
+compile-time optional (`MCAP_COMPRESSION_NO_LZ4/ZSTD`) — we write
+`compression=""`, so integration would add zero dependencies. Technically easy;
+rejected for the WRITER on three grounds:
+
+1. **Byte-identity gate.** Test 39 pins our writer byte-for-byte against
+   `@mcap/core`; the foxglove writer's output is valid-but-different MCAP
+   (record ordering / statistics / chunk-builder policy), degrading the gate to
+   structural round-trip — strictly weaker than what we have.
+2. **The one-copy hot path.** `mcap::McapWriter`'s chunk builder buffers each
+   message into its own chunk buffer — a per-frame memcpy the RecorderStream
+   design specifically avoids (tap tight-packs once into a pooled slot; the
+   writer appends straight from it).
+3. **Footprint asymmetry on a frozen format.** ~8–10k vendored lines
+   (reader+writer+types) vs our 719-line proven subset; the MCAP 1.x wire
+   format is spec-stable, and the conformance gate catches drift regardless —
+   "maintained upstream" buys ~nothing for writing.
+
+**Earmarked for the future:** vendor the `McapReader` HALF when a native-read
+use case lands (C++ playback brick, the viewer's non-hardware compute instance,
+offline tooling) — it coexists with our writer by spec, and test 39 already
+proves our files are `@mcap/core`-shaped, so the foxglove reader accepts them by
+construction. Same trigger if in-container chunk compression (lz4/zstd:
+better ratio + seekable chunks vs our per-frame `/zlib` payloads) is ever
+wanted.
