@@ -55,10 +55,17 @@ function setMode(next: "client" | "host") {
   mode.value = next;
 }
 
-// Nudge main to reconcile the host process on mode/port change (+ once on open).
+// Nudge main with the full push target on any mode/port/url change (+ once on
+// open). Main reconciles the host process AND re-broadcasts {mode, url, port} to
+// every window so app-window pushers in OTHER orchestrator instances follow.
 watch(
-  () => [mode.value ?? "client", port.value ?? DEFAULT_TELECANVAS_PORT] as const,
-  ([m, p]) => window.foveaBridge.applyTeleCanvas(m, p),
+  () =>
+    [
+      mode.value ?? "client",
+      port.value ?? DEFAULT_TELECANVAS_PORT,
+      url.value ?? "",
+    ] as const,
+  ([m, p, u]) => window.foveaBridge.applyTeleCanvas(m, p, u),
   { immediate: true },
 );
 

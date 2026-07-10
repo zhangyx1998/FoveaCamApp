@@ -49,3 +49,37 @@ export const IDLE_TELECANVAS_STATUS: TeleCanvasStatus = {
   urls: [],
   error: null,
 };
+
+/** The full PUSH-TARGET config an app window's `Pusher` needs to know WHERE to
+ *  PUT its merged projection SVG — the {mode, url, port} triple. This is
+ *  broadcast by MAIN (the single always-alive process) to EVERY window on every
+ *  change, so an app window learns a settings edit made in a DIFFERENT
+ *  orchestrator instance (disposable-orchestrator: each app + the settings
+ *  window run their own instance, so the per-instance `["config"]` store-hub
+ *  broadcast does NOT cross instances — main is the cross-instance authority,
+ *  exactly as it already is for the host process lifecycle + status). */
+export interface TeleCanvasTarget {
+  mode: TeleCanvasMode;
+  /** The client-mode remote server URL (empty = disabled). */
+  url: string;
+  /** The host-mode server port. */
+  port: number;
+}
+
+/** The pre-nudge default push target (client mode, disabled). */
+export const IDLE_TELECANVAS_TARGET: TeleCanvasTarget = {
+  mode: "client",
+  url: "",
+  port: DEFAULT_TELECANVAS_PORT,
+};
+
+/** Resolve the active PUT target URL for a push-target config, or `""` when
+ *  disabled (client mode with no URL). Pure + shared so the app-window `Pusher`
+ *  and any test agree on the exact URL each mode targets:
+ *    • host   → this machine's own server at `http://127.0.0.1:<port>/`.
+ *    • client → the configured remote `url` (empty = disabled / "off"). */
+export function teleCanvasTarget(t: TeleCanvasTarget): string {
+  if ((t.mode ?? "client") === "host")
+    return `http://127.0.0.1:${t.port || DEFAULT_TELECANVAS_PORT}/`;
+  return t.url ?? "";
+}

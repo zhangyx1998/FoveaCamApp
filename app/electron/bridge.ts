@@ -22,7 +22,7 @@
 // payload is defined renderer-side (its primary consumer) and shared here.
 import type { OrchestratorDownReport } from "@lib/orchestrator/client";
 import type { ProbeCamera } from "@lib/orchestrator/probe";
-import type { TeleCanvasMode, TeleCanvasStatus } from "@lib/telecanvas";
+import type { TeleCanvasMode, TeleCanvasStatus, TeleCanvasTarget } from "@lib/telecanvas";
 export type { OrchestratorDownReport };
 export type { ProbeCamera };
 export type { TeleCanvasMode, TeleCanvasStatus };
@@ -46,17 +46,27 @@ export interface FoveaBridge {
   /** Open (or focus) the TeleCanvas window (the title-bar TV icon). Singleton —
    *  a second call focuses the existing window. */
   openTeleCanvasWindow(): void;
-  /** Nudge main to reconcile the TeleCanvas HOST server to a desired
-   *  {mode, port} (the standalone module's live-apply path — main owns the host
-   *  process but has no live store watcher, so the config-editing windows nudge
-   *  it on change). Idempotent main-side. */
-  applyTeleCanvas(mode: TeleCanvasMode, port: number): void;
+  /** Nudge main with the desired push-target config {mode, port, url}: main
+   *  reconciles the HOST server (mode/port) AND re-broadcasts the full target to
+   *  EVERY window (`onTeleCanvasTarget`). The config-editing windows send this on
+   *  change — main owns the host process AND is the single cross-instance
+   *  authority (the per-instance store-hub broadcast does not reach an app
+   *  window in a different orchestrator instance). Idempotent main-side. */
+  applyTeleCanvas(mode: TeleCanvasMode, port: number, url: string): void;
   /** Current TeleCanvas host status (mode / listening / port / reachable URLs /
    *  error) — for a freshly opened window/section to sync before the next push. */
   getTeleCanvasStatus(): Promise<TeleCanvasStatus>;
   /** Subscribe to TeleCanvas host status changes (spawn / listening / crash /
    *  mode switch). Returns a disposer. */
   onTeleCanvasStatus(cb: (status: TeleCanvasStatus) => void): () => void;
+  /** Main's current push-target config {mode, url, port} — the authoritative
+   *  WHERE-to-PUT an app-window `Pusher` reads at mount (before its first
+   *  broadcast), independent of which orchestrator instance the window is on. */
+  getTeleCanvasTarget(): Promise<TeleCanvasTarget>;
+  /** Subscribe to push-target changes (a settings edit in ANY window, or a host
+   *  (re)listen — the latter re-fires so the Pusher re-PUTs and refills a fresh
+   *  host's empty buffer after a respawn). Returns a disposer. */
+  onTeleCanvasTarget(cb: (target: TeleCanvasTarget) => void): () => void;
   /** Open (or switch to) an app window by catalog id (`@lib/windows`) — the
    *  main-process window manager enforces exclusivity + drain
    *  (docs/history/refactor/multi-window.md §3). */
@@ -159,6 +169,7 @@ export interface InvokeChannels {
   "viewer:reveal": { args: [file: string]; ret: void };
   "crash:reveal": { args: [file: string]; ret: void };
   "telecanvas:get-status": { args: []; ret: TeleCanvasStatus };
+  "telecanvas:get-target": { args: []; ret: TeleCanvasTarget };
 }
 
 /** Fire-and-forget renderer→main signals (`ipcRenderer.send` ↔ `ipcMain.on`).
@@ -168,8 +179,9 @@ export interface SendChannels {
   "open-profiler-window": [];
   "window:open-config": [];
   "window:open-telecanvas": [];
-  /** Nudge main to reconcile the TeleCanvas host to a desired {mode, port}. */
-  "telecanvas:apply": [mode: TeleCanvasMode, port: number];
+  /** Nudge main with the desired push-target {mode, port, url}: reconcile the
+   *  host + re-broadcast the target to every window. */
+  "telecanvas:apply": [mode: TeleCanvasMode, port: number, url: string];
   "window:open-app": [appId: string];
   "window:open-projection": [session: string, frame: string];
   "window:toggle-debug": [session: string, kind?: string];
@@ -194,4 +206,6 @@ export interface PushChannels {
   "probe:cameras": [cameras: ProbeCamera[]];
   /** TeleCanvas host status changes (standalone dual-mode module). */
   "telecanvas:status": [status: TeleCanvasStatus];
+  /** TeleCanvas push-target changes — main → EVERY window (cross-instance). */
+  "telecanvas:target": [target: TeleCanvasTarget];
 }

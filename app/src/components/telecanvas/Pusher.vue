@@ -12,25 +12,32 @@ You may find the full license in project root directory.
     • host   → this app's own server at http://127.0.0.1:<tele_canvas_port>/.
   Only the target URL differs between modes; the render/push path is identical.
 
-  This component owns the async config (`await useAppConfig()` in <script setup>,
-  which Vue's compiler transforms safely — see the old RemoteCanvas note), so
-  AppWindow mounts it inside a <Suspense>. Pushes are coalesced to one animation
-  frame so a burst of DOM mutations becomes a single PUT.
+  The push TARGET comes from MAIN (`getTeleCanvasTarget` + `onTeleCanvasTarget`),
+  NOT from this window's config store. Under the disposable-orchestrator refactor
+  every app and the settings window run their OWN orchestrator instance, and the
+  `["config"]` store-hub broadcast does NOT cross instances — so a settings edit
+  made in a different instance would never reach this app window's store. Main is
+  the single always-alive process and the cross-instance authority (it already
+  owns the host process + status), so it is the truthful source of WHERE to push.
+  A target broadcast ALSO re-fires on a host (re)listen so a freshly respawned
+  host gets its buffer refilled by the next PUT (content preservation).
+
+  Pushes are coalesced to one animation frame so a burst of DOM mutations becomes
+  a single PUT. AppWindow still mounts this under <Suspense> (harmless — the async
+  work is in onMounted now, not a top-level await).
 -->
 <script setup lang="ts">
-import { watch, onUnmounted } from "vue";
-import { useAppConfig } from "@lib/config";
+import { onMounted, onUnmounted, ref, watch } from "vue";
 import { content } from "./registry";
-import { DEFAULT_TELECANVAS_PORT } from "@lib/telecanvas";
+import {
+  IDLE_TELECANVAS_TARGET,
+  teleCanvasTarget,
+  type TeleCanvasTarget,
+} from "@lib/telecanvas";
 
-const appConfig = await useAppConfig();
-
-/** The active PUT target for the current mode, or "" when disabled. */
-function target(): string {
-  if ((appConfig.tele_canvas_mode ?? "client") === "host")
-    return `http://127.0.0.1:${appConfig.tele_canvas_port ?? DEFAULT_TELECANVAS_PORT}/`;
-  return appConfig.tele_canvas_url ?? "";
-}
+/** The active PUT target URL for the current mode, or "" when disabled. Seeded
+ *  from main at mount, then updated on every broadcast. */
+const target = ref<string>(teleCanvasTarget(IDLE_TELECANVAS_TARGET));
 
 async function put(urlString: string, body: string): Promise<void> {
   if (!urlString) return; // empty target = disabled (client-mode "off")
@@ -50,12 +57,34 @@ function schedule(): void {
   if (scheduled) return;
   scheduled = requestAnimationFrame(() => {
     scheduled = 0;
-    void put(target(), content.value);
+    void put(target.value, content.value);
   });
 }
 
-watch(() => [target(), content.value] as const, schedule, { immediate: true });
+// Apply a fresh target from main. Always schedule a push — even when the URL
+// string is UNCHANGED (a host respawn re-announces the same target) — so the
+// fresh server's empty buffer is refilled with the current content.
+function applyTarget(t: TeleCanvasTarget): void {
+  target.value = teleCanvasTarget(t);
+  schedule();
+}
+
+let disposeTarget: (() => void) | null = null;
+onMounted(async () => {
+  // Subscribe BEFORE the seed await — a broadcast landing in that gap would
+  // otherwise be missed (self-healing on the next one, but why race at all).
+  disposeTarget = window.foveaBridge.onTeleCanvasTarget(applyTarget);
+  try {
+    applyTarget(await window.foveaBridge.getTeleCanvasTarget());
+  } catch {
+    /* keep the idle default until the first broadcast */
+  }
+});
+
+// Push whenever the local provider content changes (markers moving, etc.).
+watch(content, schedule);
 onUnmounted(() => {
+  disposeTarget?.();
   if (scheduled) cancelAnimationFrame(scheduled);
 });
 </script>

@@ -95,11 +95,17 @@ async function copyTeleUrl(u: string) {
     /* clipboard unavailable */
   }
 }
-// Nudge main to reconcile the host process on mode/port change (+ once on open).
+// Nudge main with the full push target on any mode/port/url change (+ once on
+// open). Main reconciles the host process AND re-broadcasts {mode, url, port} to
+// every window so app-window pushers in OTHER orchestrator instances follow.
 watch(
   () =>
-    [tele_canvas_mode.value ?? "client", tele_canvas_port.value ?? DEFAULT_TELECANVAS_PORT] as const,
-  ([m, p]) => window.foveaBridge.applyTeleCanvas(m, p),
+    [
+      tele_canvas_mode.value ?? "client",
+      tele_canvas_port.value ?? DEFAULT_TELECANVAS_PORT,
+      tele_canvas_url.value ?? "",
+    ] as const,
+  ([m, p, u]) => window.foveaBridge.applyTeleCanvas(m, p, u),
   { immediate: true },
 );
 

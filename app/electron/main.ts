@@ -43,8 +43,10 @@ import { ViewerEngineManager, type EngineHandle } from "./viewer-engine";
 import { TeleCanvasManager, type HostHandle } from "./telecanvas-manager";
 import {
   DEFAULT_TELECANVAS_PORT,
+  IDLE_TELECANVAS_TARGET,
   type TeleCanvasMode,
   type TeleCanvasStatus,
+  type TeleCanvasTarget,
 } from "@lib/telecanvas";
 import { reviver } from "@lib/store-codec";
 import type { AppConfig } from "@lib/config";
@@ -914,9 +916,27 @@ function createTeleCanvasHost(port: number): HostHandle {
   return handle;
 }
 
+// The authoritative push-target config {mode, url, port} — main is the single
+// always-alive process, so an app-window `Pusher` in a DIFFERENT orchestrator
+// instance learns a settings edit here (the per-instance `["config"]` store-hub
+// broadcast does NOT cross instances). Seeded from persisted config at startup,
+// updated on every `telecanvas:apply` nudge, and re-broadcast on every host
+// status change (so a fresh host after a respawn gets its buffer refilled by the
+// next Pusher PUT).
+let telePushTarget: TeleCanvasTarget = { ...IDLE_TELECANVAS_TARGET };
+
+function broadcastTeleCanvasTarget(): void {
+  for (const w of BrowserWindow.getAllWindows())
+    pushTo(w.webContents, "telecanvas:target", telePushTarget);
+}
+
 function broadcastTeleCanvasStatus(status: TeleCanvasStatus): void {
   for (const w of BrowserWindow.getAllWindows())
     pushTo(w.webContents, "telecanvas:status", status);
+  // Re-announce the target alongside every status change: a host (re)listen
+  // (crash respawn / port change) then re-fires the Pusher so it re-PUTs the
+  // current content into the fresh server's empty buffer (content preservation).
+  broadcastTeleCanvasTarget();
 }
 
 const telecanvas = new TeleCanvasManager({
@@ -925,13 +945,15 @@ const telecanvas = new TeleCanvasManager({
   onStatus: broadcastTeleCanvasStatus,
 });
 
-onRenderer("telecanvas:apply", (mode, port) => {
-  telecanvas.apply(
-    mode === "host" ? "host" : "client",
-    Number(port) || DEFAULT_TELECANVAS_PORT,
-  );
+onRenderer("telecanvas:apply", (mode, port, url) => {
+  const m: TeleCanvasMode = mode === "host" ? "host" : "client";
+  const p = Number(port) || DEFAULT_TELECANVAS_PORT;
+  telePushTarget = { mode: m, port: p, url: typeof url === "string" ? url : "" };
+  telecanvas.apply(m, p); // host lifecycle (also re-broadcasts the target via onStatus)
+  broadcastTeleCanvasTarget(); // ensure a client-only change (no host status) still reaches app windows
 });
 handle("telecanvas:get-status", () => telecanvas.status());
+handle("telecanvas:get-target", () => telePushTarget);
 
 /** Read the persisted app config directly off disk (like the window manifest) —
  *  main has no store-hub client, and this is only needed once at startup to
@@ -953,6 +975,9 @@ function applyPersistedTeleCanvas(): void {
   const cfg = readPersistedConfig();
   const mode: TeleCanvasMode = cfg.tele_canvas_mode === "host" ? "host" : "client";
   const port = Number(cfg.tele_canvas_port) || DEFAULT_TELECANVAS_PORT;
+  // Seed the authoritative push target so a `getTeleCanvasTarget` at app-window
+  // mount reflects the persisted config before any settings-window nudge.
+  telePushTarget = { mode, port, url: cfg.tele_canvas_url ?? "" };
   telecanvas.apply(mode, port);
 }
 
