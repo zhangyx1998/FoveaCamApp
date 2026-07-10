@@ -4,44 +4,53 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Renderer-side config store client. Same public shape as the old direct-fs
-// `Store` (`open`/`clear`/`list`) so every existing consumer (camera.ts,
-// config.ts, calibrate-extrinsic) keeps working unchanged, but every read and
-// write now goes through the orchestrator's `store-hub` instead of touching
-// disk from the renderer directly. This retires the renderer/orchestrator
-// config dual-ownership hotspot (docs/history/refactor/orchestrator.md §4,
-// docs/history/refactor/async-reactive.md) — there is exactly one process writing
-// these files now, whichever window last edited it, and it's not this one.
+// Renderer-side config store client. Same public shape as before
+// (`open`/`clear`/`list`/`read`) so every existing consumer (camera.ts,
+// config.ts, calibrate-extrinsic) keeps working unchanged, but the transport now
+// targets MAIN — the single config authority (docs/proposals/config-store-main-
+// authority.md) — over `window.foveaBridge` (ipcRenderer), NOT the orchestrator
+// channel. Two consequences that fix real data-loss classes:
+//   • The connection never dies with an orchestrator instance (ipcRenderer is
+//     always up), so a Settings/TeleCanvas window that outlives its instance
+//     keeps persisting — the old one-shot `connect()` decay is gone by
+//     construction (this module no longer imports `connect`).
+//   • A local edit sends a key-level PATCH (a diff of the tracked doc against the
+//     last value main acked), not a whole-document write, so two windows editing
+//     DIFFERENT keys inside one round-trip both survive instead of clobbering.
 //
-// `open()` still returns a plain Vue-reactive object a module mutates
-// directly (`config.role = "L"`); any deep mutation queues a whole-document
-// write to the orchestrator on the next tick (same debounce as before). A
-// write from another window (or an orchestrator-internal session, e.g.
-// manage-cameras persisting a slider drag) applies onto the same object
-// reference via the `applying` guard below, so anything already depending on
-// it (templates, computed values) updates for free without a new subscribe.
-//
-// Values cross the wire via `Channel`'s structured-clone transport, not JSON
-// — bigint/Date/TypedArray survive natively, so unlike the old on-disk
-// format (`store-codec.ts`, still used orchestrator-side for the JSON file
-// itself) no codec is needed here.
+// `open()` still returns a plain Vue-reactive object a module mutates directly
+// (`config.role = "L"`); a deep mutation queues a patch on the next microtask
+// (same debounce as before). A change from another window (or an orchestrator-
+// internal session) arrives as `store:changed` and is applied onto the SAME
+// object reference via the `applying` guard, so templates/computed update for
+// free. Values cross via ipcRenderer's structured clone (bigint/Date/TypedArray
+// survive) — no codec needed here.
 
-import { reactive, watch } from "vue";
-import { connect } from "./orchestrator/client.js";
+import { reactive, toRaw, watch } from "vue";
+import { diffKeys, replaceInPlace, type PatchOp } from "./store-patch.js";
 
 const keyOf = (segments: string | string[]) =>
   (typeof segments === "string" ? [segments] : segments).join("/");
 
-/** Reconcile `target`'s keys/values to match `value` without replacing the
- *  object reference — callers hold onto `target` directly. */
-function replaceInPlace(target: any, value: any): void {
-  if (Array.isArray(target) && Array.isArray(value)) {
-    target.length = 0;
-    target.push(...value);
-    return;
-  }
-  for (const k of Object.keys(target)) if (!(k in value)) delete target[k];
-  Object.assign(target, value);
+/** Deep snapshot of a tracked doc — the "last value main acked" that future
+ *  diffs are computed against. `toRaw` first so `structuredClone` sees the plain
+ *  underlying object, not the Vue reactive Proxy (which `structuredClone` refuses
+ *  to clone). Config values are structured-clone-safe (bigint/Date/TypedArray
+ *  included), so no codec is needed. */
+function snapshot<T>(value: T): T {
+  return structuredClone(toRaw(value as object)) as T;
+}
+
+// One process-wide dispatcher for `store:changed` pushes: main sends (path,
+// value); we route to the per-key applier registered by `open()`. Registered
+// lazily on first `open()` so a renderer that never opens a store adds no
+// listener.
+const appliers = new Map<string, (value: unknown) => void>();
+let changedWired = false;
+function ensureChangedWired(): void {
+  if (changedWired) return;
+  changedWired = true;
+  window.foveaBridge.onStoreChanged((path, value) => appliers.get(keyOf(path))?.(value));
 }
 
 export default class Store {
@@ -61,31 +70,39 @@ export default class Store {
       this.registry.delete(key);
     }
 
-    const ch = await connect();
-    const initial = await ch.request<R>("store:read", { path, fallback });
+    ensureChangedWired();
+    const initial = await window.foveaBridge.readStore<R>(path, fallback);
     const tracked = reactive(initial) as R;
 
-    // Guards the server-echo path below from re-triggering the write queue
-    // it's applying — an echo isn't a new local edit.
+    // The last document value main has acknowledged — every local patch is a diff
+    // against this. Seeded with the initial read; advanced on each ack and on each
+    // incoming change from another window.
+    let acked = snapshot(initial) as R;
+
+    // Guards the incoming-change path from re-triggering the write queue it is
+    // applying — an echo isn't a new local edit.
     let applying = false;
     let writePending = false;
     const queueWrite = () => {
       if (applying || writePending) return;
       writePending = true;
-      // `queueMicrotask`, not `process.nextTick` — bare `process` isn't
-      // defined in an isolated renderer without `nodeIntegration`
-      // (docs/history/refactor/orchestrator.md §7.1 T5); microtask timing is
-      // equivalent for this debounce (both drain before the next macrotask).
+      // `queueMicrotask`, not `process.nextTick` — bare `process` isn't defined
+      // in an isolated renderer; microtask timing is equivalent for this debounce.
       queueMicrotask(() => {
         writePending = false;
-        void ch.request("store:write", { path, value: tracked });
+        const ops: PatchOp[] = diffKeys(tracked, acked);
+        if (ops.length === 0) return; // no-op edit → no patch
+        acked = snapshot(tracked) as R; // optimistic; a concurrent change reconciles below
+        void window.foveaBridge.patchStore(path, ops);
       });
     };
     watch(() => tracked, queueWrite, { deep: true });
-    ch.on(`store:${key}`, (value: R) => {
+
+    appliers.set(key, (value: unknown) => {
       applying = true;
       try {
         replaceInPlace(tracked, value);
+        acked = snapshot(tracked) as R;
       } finally {
         applying = false;
       }
@@ -106,13 +123,11 @@ export default class Store {
     }
     const entry = this.registry.get(keyOf(path))?.deref();
     if (entry) for (const k of Object.keys(entry)) delete (entry as any)[k];
-    const ch = await connect();
-    await ch.request("store:clear", { path });
+    await window.foveaBridge.clearStore(path);
   }
 
   static async list(...segments: string[]): Promise<string[]> {
-    const ch = await connect();
-    return ch.request<string[]>("store:list", { path: segments });
+    return window.foveaBridge.listStore(segments);
   }
 
   /** One-shot read of a document WITHOUT subscribing to future writes — the
@@ -121,7 +136,6 @@ export default class Store {
    *  `open()` this returns a plain snapshot, not a tracked reactive object. */
   static async read<T>(segments: string | string[], fallback: T): Promise<T> {
     const path = typeof segments === "string" ? [segments] : segments;
-    const ch = await connect();
-    return ch.request<T>("store:read-once", { path, fallback });
+    return window.foveaBridge.readStoreOnce<T>(path, fallback);
   }
 }

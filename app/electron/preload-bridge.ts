@@ -89,6 +89,14 @@ export function installBridge(extra: Partial<FoveaBridge> = {}) {
     setViewerExportsActive: (active) => send("viewer:exports-active", active),
     onViewerConfirmClose: (cb) => listen("viewer:confirm-close", () => cb()),
     confirmViewerClose: () => send("viewer:close-confirmed"),
+    readStore: <T>(path: string[], fallback: T) =>
+      invoke("store:read", path, fallback) as Promise<T>,
+    readStoreOnce: <T>(path: string[], fallback: T) =>
+      invoke("store:read-once", path, fallback) as Promise<T>,
+    patchStore: (path, ops) => invoke("store:patch", path, ops),
+    clearStore: (path) => invoke("store:clear", path),
+    listStore: (path) => invoke("store:list", path),
+    onStoreChanged: (cb) => listen("store:changed", (path, value) => cb(path, value)),
     ...extra,
   };
 

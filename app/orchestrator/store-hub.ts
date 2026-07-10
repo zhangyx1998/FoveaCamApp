@@ -4,197 +4,95 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Store hub: the single write/broadcast path for every persisted config
-// document, whether the write originates from an orchestrator-internal
-// session (manage-cameras persisting a slider drag) or a renderer `Store`
-// client (docs/history/refactor/async-reactive.md). Wraps the fs primitives in
-// `./store.ts` with a per-path in-memory cache and change notification, so
-// every reader — regardless of process or origin — sees the same value and
-// the same write order. This retires the config dual-ownership hotspot noted
-// in docs/history/refactor/orchestrator.md §4 (same bug class as the camera
-// registry: two independent writers racing the same on-disk file).
+// Orchestrator-side config-store client. The single authority now lives in MAIN
+// (docs/proposals/config-store-main-authority.md) — this module is a THIN PROXY
+// over the instance's `parentPort` that preserves the EXACT public API every
+// orchestrator-internal caller relied on (`read`/`write`/`update`/`clear`/
+// `list`/`subscribe`/`writeCounts`) and their reactive semantics: a `subscribe()`
+// listener still fires on ANY window's edit, now including a window on a DIFFERENT
+// orchestrator instance (the old per-process hub could not see across instances —
+// defect D1). `write`/`update`/`clear` forward to main and locally apply the
+// value main returns, so this process's own subscribers (anaglyph-style retune,
+// etc.) update without a double-echo (main skips the originator).
 //
-// `attachStore(ch)` wires one renderer `Channel` to this cache: `store:read`
-// both returns the current value and remembers this channel's interest in
-// that path (registering a listener that forwards future writes on
-// `store:${path}`); `store:write`/`store:clear` persist through here so
-// every other interested channel (and any internal session using `write`/
-// `update` directly) gets notified. Passing that channel's own listener as
-// `except` on its own writes mirrors `ServerSession.setState`'s originating-
-// channel echo-skip (§12.1 C8) — an optimistic local write shouldn't round-
-// trip back and risk clobbering a newer local edit.
+// `attachStore` is GONE: renderer `Store` clients now talk to main directly
+// (ipcRenderer), not through the orchestrator channel, so there is no renderer
+// store RPC to wire onto a `Channel` here anymore.
+//
+// Transport: this process shares its one `parentPort` with `index.ts`'s control-
+// message handler; the proxy adds its own `message` listener and filters for
+// `store:res`/`store:changed` only. When NO `parentPort` exists (unit tests /
+// non-utility contexts) it falls back to a LOCAL authority over `./store.ts`'s fs
+// primitives — production store-writing processes (orchestrator instances, the
+// probe) always have a `parentPort`, so that fallback never runs at runtime.
 
-import type { Channel } from "../lib/orchestrator/protocol.js";
+import {
+  createStoreProxy,
+  type StoreProxy,
+  type StoreProxyTransport,
+  type StoreServerMessage,
+} from "@lib/store-proxy";
+import { createStoreAuthority } from "@lib/store-authority";
 import * as fs from "./store.js";
 
-type Listener = (value: unknown) => void;
-type Path = string | string[];
+type ParentPort = {
+  postMessage(message: unknown): void;
+  on(event: "message", listener: (e: { data: unknown }) => void): void;
+};
 
-interface Doc {
-  value: unknown;
-  loaded: boolean;
-  op: Promise<void>;
-  readonly listeners: Set<Listener>;
-}
-
-const docs = new Map<string, Doc>();
-const keyOf = (segments: Path) =>
-  (typeof segments === "string" ? [segments] : segments).join("/");
-
-// Perf substrate (docs/history/refactor/orchestrator.md §7.3 item 4) — cumulative
-// counts for `system.perfSnapshot`, regardless of whether the write came
-// from a renderer's `Store` client or an internal session.
-const counts = { writes: 0, updates: 0, clears: 0 };
-export function writeCounts(): Readonly<typeof counts> {
-  return counts;
-}
-
-function docFor(segments: Path): Doc {
-  const key = keyOf(segments);
-  let doc = docs.get(key);
-  if (!doc)
-    docs.set(
-      key,
-      (doc = {
-        value: undefined,
-        loaded: false,
-        op: Promise.resolve(),
-        listeners: new Set(),
+/** Wrap the utilityProcess `parentPort` as a store-proxy transport. Filters the
+ *  shared message stream down to the two store server types. */
+function parentPortTransport(port: ParentPort): StoreProxyTransport {
+  return {
+    post: (msg) => port.postMessage(msg),
+    onMessage: (cb) =>
+      port.on("message", (e) => {
+        const data = e.data as { type?: string } | null;
+        if (data && (data.type === "store:res" || data.type === "store:changed"))
+          cb(data as StoreServerMessage);
       }),
-    );
-  return doc;
-}
-
-function notify(doc: Doc, value: unknown, except?: Listener): void {
-  for (const fn of doc.listeners) if (fn !== except) fn(value);
-}
-
-function enqueue<T>(doc: Doc, op: () => Promise<T>): Promise<T> {
-  const run = doc.op.then(op, op);
-  doc.op = run.then(
-    () => undefined,
-    () => undefined,
-  );
-  return run;
-}
-
-/** Read a document, populating the cache from disk on first access. */
-export async function read<T>(segments: Path, fallback: T): Promise<T> {
-  const doc = docFor(segments);
-  return enqueue(doc, async () => {
-    if (!doc.loaded) {
-      doc.value = await fs.read(segments, fallback);
-      doc.loaded = true;
-    }
-    return doc.value as T;
-  });
-}
-
-/** Replace a document, persist, and notify every listener but `except`. */
-export async function write(
-  segments: Path,
-  value: unknown,
-  except?: Listener,
-): Promise<void> {
-  const doc = docFor(segments);
-  await enqueue(doc, async () => {
-    doc.value = value;
-    doc.loaded = true;
-    await fs.write(segments, value);
-    counts.writes++;
-    notify(doc, value, except);
-  });
-}
-
-/** Merge a patch as a read-modify-write, persist, and notify (same
- *  echo-skip as `write`). */
-export async function update(
-  segments: Path,
-  patch: Record<string, unknown>,
-  except?: Listener,
-): Promise<void> {
-  const doc = docFor(segments);
-  await enqueue(doc, async () => {
-    if (!doc.loaded) {
-      doc.value = await fs.read(segments, {});
-      doc.loaded = true;
-    }
-    const value = { ...(doc.value as Record<string, unknown>), ...patch };
-    doc.value = value;
-    await fs.write(segments, value);
-    counts.updates++;
-    notify(doc, value, except);
-  });
-}
-
-export async function clear(segments: Path): Promise<void> {
-  const doc = docFor(segments);
-  await enqueue(doc, async () => {
-    doc.value = undefined;
-    doc.loaded = false;
-    await fs.clear(segments);
-    counts.clears++;
-    notify(doc, undefined);
-  });
-}
-
-export function list(...segments: string[]): Promise<string[]> {
-  return fs.list(...segments);
-}
-
-/** Subscribe an ORCHESTRATOR-INTERNAL listener to a document's writes (the same
- *  broadcast a renderer channel gets via `attachStore`, minus the RPC hop). The
- *  listener is invoked with the full new document value on every `write`/
- *  `update`/`clear` (a renderer edit lands here since only that channel's own
- *  listener is `except`-skipped). Returns an unsubscribe. Used by the Vue-free
- *  config readers (e.g. `anaglyph-style.ts`) to apply a Settings change LIVE
- *  without a re-read poll. Does NOT populate the cache — pair with `read` for
- *  the initial value. */
-export function subscribe(segments: Path, listener: Listener): () => void {
-  const doc = docFor(segments);
-  doc.listeners.add(listener);
-  return () => {
-    doc.listeners.delete(listener);
   };
 }
 
-/** Attach one renderer channel to the store RPC surface. Returns a detach
- *  callback (call on channel close) that unsubscribes every path this
- *  channel opened. */
-export function attachStore(ch: Channel): () => void {
-  // Per-path listener this channel registered — needed both to unsubscribe
-  // on detach and to pass as `except` on this channel's own writes.
-  const listeners = new Map<string, Listener>();
-
-  ch.handle("store:read", async ({ path, fallback }: { path: string[]; fallback: unknown }) => {
-    const key = keyOf(path);
-    if (!listeners.has(key)) {
-      const listener: Listener = (value) => ch.emit(`store:${key}`, value);
-      listeners.set(key, listener);
-      docFor(path).listeners.add(listener);
-    }
-    return read(path, fallback);
-  });
-
-  ch.handle("store:write", ({ path, value }: { path: string[]; value: unknown }) =>
-    write(path, value, listeners.get(keyOf(path))),
-  );
-
-  ch.handle("store:clear", ({ path }: { path: string[] }) => clear(path));
-
-  ch.handle("store:list", ({ path }: { path: string[] }) => list(...path));
-
-  // One-shot read (enumeration primitive) — like `store:read` but does NOT
-  // register this channel's interest, so the config window's calibration-data
-  // manager can read dozens of docs for metadata without leaving a listener on
-  // each. Shares the same in-memory cache + fs fallback.
-  ch.handle(
-    "store:read-once",
-    ({ path, fallback }: { path: string[]; fallback: unknown }) => read(path, fallback),
-  );
-
-  return () => {
-    for (const [key, listener] of listeners) docs.get(key)?.listeners.delete(listener);
-    listeners.clear();
+/** Local-authority fallback shaped as a `StoreProxy` (see the file header — unit
+ *  tests only). Discards the value the authority returns to match the proxy's
+ *  `Promise<void>` write/update/clear signatures. */
+function localBackend(): StoreProxy {
+  const auth = createStoreAuthority(fs);
+  return {
+    read: auth.read,
+    write: (s, v) => auth.write(s, v).then(() => undefined),
+    update: (s, p) => auth.update(s, p).then(() => undefined),
+    clear: (s) => auth.clear(s).then(() => undefined),
+    list: auth.list,
+    subscribe: auth.subscribe,
+    counts: auth.counts,
   };
+}
+
+const parentPort = (process as unknown as { parentPort?: ParentPort }).parentPort;
+const backend: StoreProxy = parentPort
+  ? createStoreProxy(parentPortTransport(parentPort))
+  : localBackend();
+
+/** Read a document (subscribing this process to future changes so the cache
+ *  stays fresh across cross-window edits). */
+export const read = backend.read;
+/** Replace a document (whole-doc), persist through main, notify local subscribers. */
+export const write = backend.write;
+/** Merge a set-patch into a document (read-modify-write in main), notify local. */
+export const update = backend.update;
+/** Delete a document, notify local subscribers with `undefined`. */
+export const clear = backend.clear;
+/** List entry names under a store directory. */
+export const list = backend.list;
+/** Subscribe an orchestrator-internal listener to a document's writes — fires on
+ *  every write/update/clear from ANY window or process (main broadcast), minus
+ *  this process's own origin skip. Does NOT populate the cache — pair with
+ *  `read` for the initial value. */
+export const subscribe = backend.subscribe;
+
+/** Cumulative write/update/clear counts for this process (perf substrate). */
+export function writeCounts(): Readonly<{ writes: number; updates: number; clears: number }> {
+  return backend.counts();
 }

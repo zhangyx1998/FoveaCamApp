@@ -22,6 +22,7 @@
 // payload is defined renderer-side (its primary consumer) and shared here.
 import type { OrchestratorDownReport } from "@lib/orchestrator/client";
 import type { ProbeCamera } from "@lib/orchestrator/probe";
+import type { PatchOp } from "@lib/store-patch";
 import type { TeleCanvasMode, TeleCanvasStatus, TeleCanvasTarget } from "@lib/telecanvas";
 export type { OrchestratorDownReport };
 export type { ProbeCamera };
@@ -167,6 +168,26 @@ export interface FoveaBridge {
   /** The user confirmed aborting exports — proceed with the intercepted close
    *  (spec 11). Main destroys the window. */
   confirmViewerClose(): void;
+  // ---- Config store (MAIN authority, config-store-main-authority.md) --------
+  /** Read a config document AND subscribe this window to future changes
+   *  (`Store.open`): every subsequent edit — this window's, another window's, or
+   *  an orchestrator-internal session's — arrives via `onStoreChanged`. */
+  readStore<T>(path: string[], fallback: T): Promise<T>;
+  /** One-shot read WITHOUT subscribing (`Store.read`) — the enumeration
+   *  primitive (calibration-data manager reads many docs for metadata). */
+  readStoreOnce<T>(path: string[], fallback: T): Promise<T>;
+  /** Apply a key-level PATCH (set/delete per top-level key, or a whole replace)
+   *  to a config document. Main merges + persists + broadcasts to every OTHER
+   *  subscriber, so concurrent writers to different keys both survive. */
+  patchStore(path: string[], ops: PatchOp[]): Promise<void>;
+  /** Delete a config document (`Store.clear`). */
+  clearStore(path: string[]): Promise<void>;
+  /** List entry names under a config store directory (`Store.list`). */
+  listStore(path: string[]): Promise<string[]>;
+  /** Subscribe to config-document changes main broadcasts (path + full value).
+   *  One process-wide listener; the `Store` client routes by path. Returns a
+   *  disposer. */
+  onStoreChanged(cb: (path: string[], value: unknown) => void): () => void;
 }
 
 // ---- Typed IPC channel registry -------------------------------------------
@@ -200,6 +221,17 @@ export interface InvokeChannels {
   "export:save-dialog": { args: [defaultName: string, ext: string]; ret: string | null };
   /** Seed the viewer banner: is a hardware app session live (addendum)? */
   "app-session:active": { args: []; ret: boolean };
+  // ---- Config store (MAIN authority) ---------------------------------------
+  /** Read a doc + subscribe this window (`Store.open`). */
+  "store:read": { args: [path: string[], fallback: unknown]; ret: unknown };
+  /** One-shot read, no subscribe (`Store.read`). */
+  "store:read-once": { args: [path: string[], fallback: unknown]; ret: unknown };
+  /** Key-level patch merge + broadcast-to-others (`Store.open` writes). */
+  "store:patch": { args: [path: string[], ops: PatchOp[]]; ret: void };
+  /** Delete a doc (`Store.clear`). */
+  "store:clear": { args: [path: string[]]; ret: void };
+  /** List entry names under a store directory (`Store.list`). */
+  "store:list": { args: [path: string[]]; ret: string[] };
 }
 
 /** Fire-and-forget renderer→main signals (`ipcRenderer.send` ↔ `ipcMain.on`).
@@ -250,4 +282,7 @@ export interface PushChannels {
   /** Main → a viewer window: confirm aborting exports before the intercepted
    *  close proceeds (spec 11). */
   "viewer:confirm-close": [];
+  /** A config document changed — main → each subscribed window (path + full
+   *  value). The `Store` client routes by path and applies in place. */
+  "store:changed": [path: string[], value: unknown];
 }

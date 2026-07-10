@@ -28,11 +28,16 @@ import {
 import { dirname, resolve } from "node:path";
 import { replacer, reviver } from "@lib/store-codec";
 
-const STORE = resolve(process.env.FOVEA_DATA_PATH ?? process.cwd(), "store");
+// Resolved LAZILY (per call), not at module eval: MAIN now hosts these fs
+// primitives (config-store-main-authority.md) and sets `FOVEA_DATA_PATH` at its
+// body top — AFTER this module is imported in main's static graph. A
+// module-eval capture would freeze the root to `process.cwd()` before main runs.
+// The env is stable for a process's life, so per-call `resolve` costs nothing.
+const storeRoot = (): string => resolve(process.env.FOVEA_DATA_PATH ?? process.cwd(), "store");
 
 function pathOf(segments: string | string[]): string {
   if (typeof segments === "string") segments = [segments];
-  return resolve(STORE, ...segments) + ".json";
+  return resolve(storeRoot(), ...segments) + ".json";
 }
 
 // Per-path FIFO so writes/updates to one file never overlap. One failed op does
@@ -112,7 +117,7 @@ export function clear(segments: string | string[]): Promise<void> {
 
 /** List entry names (without `.json`) under a store directory. */
 export async function list(...segments: string[]): Promise<string[]> {
-  const dir = resolve(STORE, ...segments);
+  const dir = resolve(storeRoot(), ...segments);
   if (!existsSync(dir) || !(await isDirectory(dir))) return [];
   const entries = await readdir(dir);
   const names = await Promise.all(

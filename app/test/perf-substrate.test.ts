@@ -12,7 +12,6 @@ vi.mock("@orchestrator/registry", () => ({
 
 vi.mock("@orchestrator/store-hub", () => ({
   writeCounts: vi.fn(() => ({ writes: 1, updates: 2, clears: 3 })),
-  attachStore: vi.fn(() => () => undefined),
 }));
 
 let activeController: any = null;

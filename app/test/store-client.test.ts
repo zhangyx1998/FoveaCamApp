@@ -1,0 +1,118 @@
+// The renderer `Store` client over the MAIN authority (config-store-main-
+// authority.md), driven through a fake `window.foveaBridge` backed by a real
+// `StoreMain` (in-memory fs). Covers: an edit sends a key-level PATCH (diff, not
+// whole-doc); an incoming change from ANOTHER window applies onto the SAME
+// reactive object (identity preserved) and the `applying`/acked guard prevents a
+// write loop; and the DECAY fix — the client works with ONLY `foveaBridge`
+// present (it never captures an orchestrator channel), so nothing dies with an
+// instance.
+
+import { beforeAll, describe, expect, it, vi } from "vitest";
+import { StoreMain } from "../electron/store-main";
+import type { StoreFsBackend } from "@lib/store-authority";
+import type { PatchOp } from "@lib/store-patch";
+
+const flush = () => new Promise((r) => setTimeout(r, 0));
+
+function memFs(): StoreFsBackend & { disk: Map<string, unknown> } {
+  const disk = new Map<string, unknown>();
+  const key = (s: string[]) => s.join("/");
+  return {
+    disk,
+    read: async <T>(s: string[], fb: T) =>
+      (disk.has(key(s)) ? structuredClone(disk.get(key(s))) : fb) as T,
+    write: async (s, v) => void disk.set(key(s), structuredClone(v)),
+    clear: async (s) => void disk.delete(key(s)),
+    list: async () => [],
+  };
+}
+
+// One shared main + client-window fixture (the `Store` module is a singleton
+// with a module-level registry + one-shot `onStoreChanged` wiring, so all cases
+// share it and use DISTINCT paths to stay isolated).
+const fs = memFs();
+let changedCb: ((path: string[], value: unknown) => void) | null = null;
+// The client window's fake webContents; a DIFFERENT id models "another window".
+const clientWc = { id: 1, once: () => {} } as any;
+const otherWc = { id: 2, once: () => {} } as any;
+const main = new StoreMain((wc, path, value) => {
+  if (wc === clientWc) changedCb?.(path, value);
+}, fs);
+
+const patchCalls: Array<{ path: string[]; ops: PatchOp[] }> = [];
+const foveaBridge = {
+  readStore: (path: string[], fb: unknown) => main.read(clientWc, path, fb),
+  readStoreOnce: (path: string[], fb: unknown) => main.readOnce(path, fb),
+  patchStore: (path: string[], ops: PatchOp[]) => {
+    patchCalls.push({ path, ops });
+    return main.patch(clientWc, path, ops).then(() => undefined);
+  },
+  clearStore: (path: string[]) => main.clear(clientWc, path),
+  listStore: (path: string[]) => main.list(path),
+  onStoreChanged: (cb: (path: string[], value: unknown) => void) => {
+    changedCb = cb;
+    return () => (changedCb = null);
+  },
+};
+
+let Store: typeof import("@lib/store").default;
+
+beforeAll(async () => {
+  (globalThis as any).window = { foveaBridge };
+  Store = (await import("@lib/store")).default;
+});
+
+describe("renderer Store client", () => {
+  it("open() reads the initial value and tracks it reactively", async () => {
+    await main.patch(otherWc, ["c-init"], [{ key: "a", value: 1 }]);
+    const doc = await Store.open<{ a: number }>(["c-init"], { a: 0 } as any);
+    expect(doc.a).toBe(1);
+  });
+
+  it("an edit sends a key-level PATCH diff, not a whole-doc write", async () => {
+    const doc = await Store.open<Record<string, unknown>>(["c-edit"], {} as any);
+    patchCalls.length = 0;
+    (doc as any).foo = "bar";
+    await flush();
+    expect(patchCalls).toHaveLength(1);
+    expect(patchCalls[0].path).toEqual(["c-edit"]);
+    expect(patchCalls[0].ops).toEqual([{ key: "foo", value: "bar" }]);
+    expect(fs.disk.get("c-edit")).toEqual({ foo: "bar" });
+  });
+
+  it("a second edit only diffs the CHANGED key (D4-safe granularity)", async () => {
+    const doc = await Store.open<Record<string, unknown>>(["c-diff"], { a: 1, b: 1 } as any);
+    await flush();
+    patchCalls.length = 0;
+    (doc as any).b = 2;
+    await flush();
+    expect(patchCalls.at(-1)?.ops).toEqual([{ key: "b", value: 2 }]);
+  });
+
+  it("applies an external change in place (identity preserved) with NO write loop", async () => {
+    const doc = await Store.open<Record<string, unknown>>(["c-ext"], { a: 1 } as any);
+    await flush();
+    const ref = doc;
+    patchCalls.length = 0;
+    // Another window patches a different key → main broadcasts to the client.
+    await main.patch(otherWc, ["c-ext"], [{ key: "b", value: 9 }]);
+    await flush();
+    expect(doc).toBe(ref); // same object reference
+    expect((doc as any).b).toBe(9);
+    expect(patchCalls).toHaveLength(0); // the applying/acked guard suppressed a redundant patch
+  });
+
+  it("read() is a one-shot snapshot that does not subscribe", async () => {
+    await main.patch(otherWc, ["c-once"], [{ key: "k", value: 3 }]);
+    expect(await Store.read(["c-once"], {})).toEqual({ k: 3 });
+  });
+
+  it("works with ONLY foveaBridge present — no orchestrator channel captured (decay fix)", async () => {
+    // This whole suite runs without any `connect()`/orchestrator port; a
+    // persisted edit proves the store client never depends on a dying channel.
+    const doc = await Store.open<Record<string, unknown>>(["c-decay"], {} as any);
+    (doc as any).persisted = true;
+    await flush();
+    expect(fs.disk.get("c-decay")).toEqual({ persisted: true });
+  });
+});

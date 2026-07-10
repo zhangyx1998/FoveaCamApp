@@ -172,11 +172,13 @@ export class OrchestratorInstances {
     return null;
   }
 
-  /** Broker target for a fresh UNBOUND renderer connection (projection / debug /
-   *  config). Prefers the current live app (hardware) instance so the window
-   *  shares its store-hub + stream graph. With no app instance, falls back to
-   *  the newest live NON-hardware instance — the settings window's store backend
-   *  (main forks one so Cmd+, works from Welcome). Null when nothing is up. */
+  /** Broker target for a fresh UNBOUND renderer connection (projection / debug).
+   *  Prefers the current live app (hardware) instance so the window shares its
+   *  stream graph. With no app instance, falls back to the newest live
+   *  NON-hardware instance (a future viewer compute instance). Null when nothing
+   *  is up. NOTE: the config store no longer routes here — it goes straight to
+   *  MAIN (config-store-main-authority.md), so config/TeleCanvas windows need no
+   *  instance and main no longer forks a "settings" one. */
   connectTarget(): InstanceProc | null {
     const hw = this.currentHardware();
     if (hw) return hw.proc;

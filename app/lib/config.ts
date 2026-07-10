@@ -118,10 +118,11 @@ export async function useAppConfig() {
  *
  * It is a thin `computed` over the SAME reactive `["config"]` document every
  * other consumer already reads through `useAppConfig()` (`Store.open("config")`
- * is cached per renderer + backed by the orchestrator store-hub). Writing the
- * ref mutates that document, which queues a `store:write`; the store-hub
- * persists it and broadcasts `store:config` to every OTHER window's channel,
- * whose `Store` client applies it onto its own copy in place. So:
+ * is cached per renderer + backed by MAIN, the single config authority —
+ * config-store-main-authority.md). Writing the ref mutates that document, which
+ * queues a key-level PATCH to main; main persists it and broadcasts the merged
+ * value to every OTHER window (and orchestrator instance), whose `Store` client
+ * applies it onto its own copy in place. So:
  *   - a write here updates consumers in this AND other windows live, and
  *   - a write elsewhere (e.g. calibrate-extrinsic's marker slider, which
  *     v-models the same document) flows back into this ref for free.

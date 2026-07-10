@@ -275,9 +275,9 @@ export class WindowManager {
   /**
    * Open (or focus) the app-wide Settings window (Cmd+, / "Settings…" menu).
    * SINGLETON — a second open focuses the existing one (like `ensureWelcome`).
-   * Unbound: its store connection routes to the live app instance when one is
-   * up (shared store-hub → live cross-window apply), else to the non-hardware
-   * settings instance main forks (see main.ts `ensureSettingsInstance`).
+   * Unbound + orchestrator-free: its store goes straight to MAIN (the single
+   * config authority, config-store-main-authority.md), so cross-window edits
+   * apply live with no orchestrator instance to back it.
    */
   openConfig(): ManagedWindow {
     const existing = this.byClass("config")[0];

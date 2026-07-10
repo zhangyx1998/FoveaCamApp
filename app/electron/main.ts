@@ -49,6 +49,8 @@ import {
   type TeleCanvasTarget,
 } from "@lib/telecanvas";
 import { reviver } from "@lib/store-codec";
+import { StoreMain } from "./store-main";
+import type { StoreClientMessage } from "@lib/store-proxy";
 import type { AppConfig } from "@lib/config";
 import { getIcon } from "./util";
 import { resolveDefaultSavePath, validateWritablePath } from "@lib/util/fs";
@@ -67,6 +69,12 @@ import type { InvokeChannels, PushChannels, SendChannels } from "./bridge";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const DATA = app.getPath("userData");
+// MAIN is the config-store authority (config-store-main-authority.md): its own fs
+// primitives (orchestrator/store.ts, reused) resolve the store root from
+// `FOVEA_DATA_PATH`, which main otherwise only sets for its CHILDREN. Set it for
+// main's own process too. Resolved lazily per call there, so this body-top
+// assignment (after the static import graph evaluated) is in time.
+process.env.FOVEA_DATA_PATH ??= DATA;
 
 // The built directory structure
 //
@@ -300,6 +308,35 @@ function pushTo<K extends keyof PushChannels>(
     );
   }
 }
+/** Like `handle` but the handler also receives the sending `WebContents` — the
+ *  config-store needs it to track per-window subscriptions + push `store:changed`
+ *  back to the right window. */
+function handleSender<K extends keyof InvokeChannels>(
+  channel: K,
+  fn: (
+    wc: Electron.WebContents,
+    ...args: InvokeChannels[K]["args"]
+  ) => InvokeChannels[K]["ret"] | Promise<InvokeChannels[K]["ret"]>,
+): void {
+  ipcMain.handle(channel, (e, ...args) =>
+    fn(e.sender, ...(args as InvokeChannels[K]["args"])),
+  );
+}
+
+// ---- Config store: MAIN is the single authority --------------------------
+// (docs/proposals/config-store-main-authority.md). One `StoreMain` owns the
+// cache + fs + broadcast; renderer windows talk to it over these IPC channels,
+// orchestrator instances + the probe over their parentPort (wired in
+// `forkInstance` / `spawnProbe`). This retires the per-instance store-hub that
+// couldn't see across instances.
+const storeMain = new StoreMain((wc, path, value) => pushTo(wc, "store:changed", path, value));
+handleSender("store:read", (wc, path, fallback) => storeMain.read(wc, path, fallback));
+handle("store:read-once", (path, fallback) => storeMain.readOnce(path, fallback));
+handleSender("store:patch", (wc, path, ops) =>
+  storeMain.patch(wc, path, ops).then(() => undefined),
+);
+handleSender("store:clear", (wc, path) => storeMain.clear(wc, path));
+handle("store:list", (path) => storeMain.list(path));
 
 // ---- Renderer bridge handlers (docs/history/refactor/orchestrator.md §7.1 T5) -----
 // The renderer's `SavePath`/`SaveControls`/`RecordControls` used to call
@@ -614,6 +651,9 @@ function forkInstance(id: string, kind: InstanceKind): InstanceProc {
   proc.stderr?.on("data", (c: Buffer) => ring.push(c, teeErr));
   // The watchdog needs the CURRENT instance pids; `pid` is populated on spawn.
   proc.on("spawn", () => writeWatchdogState());
+  // Config-store client: route this instance's `store:*` parentPort messages to
+  // the MAIN authority (config-store-main-authority.md); detach on exit.
+  const store = storeMain.attachProcess((m) => proc.postMessage(m));
   proc.on("message", (data: unknown) => {
     const msg = data as {
       type?: string;
@@ -622,6 +662,10 @@ function forkInstance(id: string, kind: InstanceKind): InstanceProc {
       reason?: string;
       path?: string;
     };
+    if (msg?.type === "store:req" || msg?.type === "store:subscribe") {
+      store.handleMessage(data as StoreClientMessage);
+      return;
+    }
     if (msg?.type === "quiesced") {
       // The authoritative clean-exit ack (ruling 3/4) — the registry reaps it.
       registry.onAck(id);
@@ -641,6 +685,7 @@ function forkInstance(id: string, kind: InstanceKind): InstanceProc {
   });
   proc.on("exit", (code) => {
     console.warn(`Orchestrator instance ${id} exited:`, code);
+    store.detach();
     // Registry classifies (ack-based), janitors non-clean paths, surfaces the
     // down report to owned windows, and re-attempts the hardware-clear gate.
     // `notifyDown` runs synchronously inside this call and reads `instanceLogs`,
@@ -676,18 +721,27 @@ let probe: ReturnType<typeof utilityProcess.fork> | null = null;
 let probeQuitting = false;
 function spawnProbe(): void {
   if (probe || probeQuitting) return;
-  probe = utilityProcess.fork(path.join(DIR, "probe.js"), [], {
+  const probeProc = utilityProcess.fork(path.join(DIR, "probe.js"), [], {
     stdio: "inherit",
     env: { ...process.env, FOVEA_DATA_PATH: DATA },
   });
+  probe = probeProc;
+  // The probe reads config (camera roles) through store-hub → the MAIN authority
+  // over its parentPort, same as an orchestrator instance.
+  const probeStore = storeMain.attachProcess((m) => probeProc.postMessage(m));
   probe.on("message", (data: unknown) => {
     const msg = data as { type?: string; cameras?: ProbeCamera[] };
+    if (msg?.type === "store:req" || msg?.type === "store:subscribe") {
+      probeStore.handleMessage(data as StoreClientMessage);
+      return;
+    }
     if (msg?.type === "probe:cameras")
       for (const w of BrowserWindow.getAllWindows())
         pushTo(w.webContents, "probe:cameras", msg.cameras ?? []);
   });
   probe.on("exit", (code) => {
     probe = null;
+    probeStore.detach();
     if (probeQuitting) return;
     console.warn("[probe] exited unexpectedly — restarting:", code);
     setTimeout(spawnProbe, 500);
@@ -1225,13 +1279,9 @@ function spawnWindow(desc: WindowDescriptor): ManagedWindow {
       void viewerEngines.close(engineKey); // engine also abortAll()s exports
     });
   }
-  // Settings / TeleCanvas window closed: release the shared non-hardware
-  // "settings" instance main may have forked to back the store (disposed only
-  // when the LAST store-window closes; a no-op when it was instead sharing a
-  // live app instance's store-hub).
-  if (desc.class === "config") win.on("closed", () => releaseSettingsInstance("config"));
-  if (desc.class === "telecanvas")
-    win.on("closed", () => releaseSettingsInstance("telecanvas"));
+  // Settings / TeleCanvas windows need no orchestrator instance anymore — their
+  // store goes straight to MAIN (config-store-main-authority.md), which retired
+  // the non-hardware "settings" instance (and its close-release plumbing).
   win.on("closed", () => manager.onWindowClosed(managed));
   return managed;
 }
@@ -1250,47 +1300,16 @@ const manager = new WindowManager({
 });
 
 // ---- App-wide Settings window (Cmd+, / "Settings…") -----------------------
-// The config window is a SINGLETON, UNBOUND window. Its store connection routes
-// through the standard unbound-connect broker to the live app (hardware)
-// instance when one exists — sharing that instance's store-hub, so a config
-// edit applies LIVE across windows (e.g. calibrate-extrinsic's marker sliders)
-// via the existing `Store.open` broadcast. With NO app running (opened from
-// Welcome) there is no instance to serve the config store, so main forks a
-// lightweight NON-hardware "settings" instance to back it; it holds no hardware
-// (never pauses the probe, never blocks an app's hardware-clear) and is disposed
-// when the config window closes.
-let settingsInstanceId: string | null = null;
-// The config AND TeleCanvas windows both need the store (config docs) but hold
-// no hardware — they SHARE one non-hardware "settings" instance, refcounted by
-// window class so closing one while the other is open keeps the store alive.
-const settingsConsumers = new Set<WindowClass>();
-function ensureSettingsInstance(): void {
-  // Still alive? nothing to do.
-  if (settingsInstanceId && registry.live().some((i) => i.id === settingsInstanceId))
-    return;
-  settingsInstanceId = null;
-  // A live app instance already serves the store — the unbound connect routes
-  // to it (shared store-hub → live cross-window apply).
-  if (registry.hardwareAlive()) return;
-  settingsInstanceId = registry.open("non-hardware", "settings").id;
-}
-function acquireSettingsInstance(consumer: WindowClass): void {
-  settingsConsumers.add(consumer);
-  ensureSettingsInstance();
-}
-function releaseSettingsInstance(consumer: WindowClass): void {
-  settingsConsumers.delete(consumer);
-  if (settingsConsumers.size > 0) return; // another store window still open
-  if (!settingsInstanceId) return;
-  registry.teardown(settingsInstanceId, "settings/telecanvas window closed");
-  settingsInstanceId = null;
-}
+// The config + TeleCanvas windows are SINGLETON, UNBOUND windows that consume
+// ONLY the config store (now MAIN-backed, config-store-main-authority.md) plus
+// main-brokered bridge data (probe cameras, TeleCanvas host status). They never
+// connect to an orchestrator instance, so — unlike before — main forks NO
+// lightweight "settings" instance to back their store from Welcome. A config
+// edit applies live across every window via main's authority broadcast.
 function openConfigWindow(): void {
-  acquireSettingsInstance("config");
   manager.openConfig();
 }
 function openTeleCanvasWindow(): void {
-  acquireSettingsInstance("telecanvas");
   manager.openTeleCanvas();
 }
 onRenderer("window:open-config", () => openConfigWindow());

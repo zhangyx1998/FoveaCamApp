@@ -367,8 +367,27 @@ history has them). Cross-app platform checks live in the first two sections.
 
 ## Settings window
 
-- [ ] **Open + backing (both paths)** — Cmd+, from Welcome (settings instance)
-  and while an app runs (app's store-hub); reads/writes persist in both.
+- [ ] **Open + backing (both paths)** — Cmd+, from Welcome AND while an app
+  runs; reads/writes persist in both. (Main is the config authority now — no
+  settings instance is forked; verify none appears in Activity Monitor.)
+
+### Config sync matrix (main-authority rework, config-store-main-authority.md)
+- [ ] **Settings + hardware app simultaneously (previously broken)** — edit
+  marker size / anaglyph style in Settings → a running calibrate window
+  updates live, and the reverse direction tracks too.
+- [ ] **Different-key concurrent writes both survive** — two windows edit two
+  DIFFERENT config keys within a moment; restart; both values persisted (no
+  whole-doc clobber).
+- [ ] **Instance churn doesn't kill sync** — with Settings open, open then
+  close an app; keep editing Settings; edits still persist and still
+  broadcast (the store connection no longer dies with an instance).
+- [ ] **TeleCanvas ↔ Settings live** — both windows open; mode/url/port edits
+  in one reflect in the other immediately.
+- [ ] **Orchestrator-internal subscriber** — change anaglyph style from
+  Settings while disparity-scope runs: the composite brick retunes live
+  (cross-instance broadcast reaches the orchestrator).
+- [ ] **Probe path** — with no app open, edit a camera role; Welcome's camera
+  list reflects it (the probe reads config through main).
 - [ ] **Two tabs, fixed header** — Global / Device tabs switch instantly (no
   fade); the tab header stays pinned while the content scrolls; horizontal
   layout never shifts on switch.

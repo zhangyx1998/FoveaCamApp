@@ -37,7 +37,6 @@ import type {
   FrameTransport,
   SessionFrameSource,
 } from "./frame-transport.js";
-import { attachStore } from "./store-hub.js";
 
 function mainEndpoint(port: MessagePortMain): Endpoint {
   return {
@@ -503,7 +502,8 @@ export class Hub {
     this.channels.add(ch);
     if (meta?.windowId) this.channelWindows.set(ch, meta.windowId);
     for (const s of this.sessions) s.attach(ch);
-    const detachStore = attachStore(ch);
+    // Config-store RPC no longer rides the orchestrator channel — renderer
+    // `Store` clients talk to MAIN directly (config-store-main-authority.md).
     // Per-session interest: route subscribe/unsubscribe to the named session.
     ch.on(topic.subscribe, (payload: SessionSubscriptionPayload) => {
       const { name, passive } = parseSubscriptionPayload(payload);
@@ -515,7 +515,6 @@ export class Hub {
     });
     port.on("close", () => {
       for (const s of this.sessions) s.detach(ch);
-      detachStore();
       this.channels.delete(ch);
       this.channelWindows.delete(ch);
       ch.close(); // rejects any pending outbound requests, clears frame gate state
