@@ -97,6 +97,10 @@ process.parentPort.on("message", (e) => {
   }
 });
 
+// Teardown-hardening (Task 3): install the native crash tracer as soon as core
+// resolves (idempotent; the probe loads core/Aravis on the first tick anyway).
+void import("core").then((c) => c.installCrashHandler());
+
 // Fire once at startup, then on the interval.
 void tick();
 setInterval(() => void tick(), INTERVAL_MS);

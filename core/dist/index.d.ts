@@ -11,6 +11,16 @@ declare module "core" {
     export function cleanup(): void;
 
     /**
+     * Install native crash-site tracing (teardown-hardening): a
+     * `std::set_terminate` hook plus SIGABRT/SIGSEGV/SIGBUS handlers that print
+     * a symbolicatable native backtrace (and, for terminate, the uncaught
+     * exception message) to stderr, then RE-RAISE so the process still dies with
+     * the same signal / exit code (exit 6 still triggers the janitor). Idempotent
+     * — call once at orchestrator-process boot.
+     */
+    export function installCrashHandler(): void;
+
+    /**
      * THE native host time authority (unified-time §1): libc++
      * `std::chrono::steady_clock` as integer nanoseconds (bigint). Every
      * clock-calibration offset the native layer computes/stores — and every

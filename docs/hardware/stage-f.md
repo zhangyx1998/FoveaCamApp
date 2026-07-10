@@ -487,6 +487,37 @@ calibrate windows.
   rate and the refcounted registry releases producers (probe shows no
   attached taps).
 
+### Recording compression setting (2026-07-10, `record_compression` app setting)
+
+> App-level `record_compression: "none" | "zlib"` (default `"none"`), Settings →
+> Application. Read at RECORDING START via store-hub. `"none"` = today's raw
+> streams for every app. `"zlib"` = the generic recording facility
+> (`@orchestrator/raw-recording`: disparity-scope + the four calibrate wizards)
+> routes ALL its raw streams through the per-frame /zlib CompressStream brick;
+> multi-fovea keeps its own composition and its per-stream toggles gate WHICH
+> streams use the method. **Behavior change:** multi-fovea's per-stream toggles
+> were previously hardwired to zlib — they are now ENABLES of the configured
+> method and are DISABLED under `"none"`. (Manual-control uses its own recording
+> controller and is NOT wired to this setting — see the split-of-work note.)
+
+- [ ] **zlib generic recording sustains or drops honestly** — with
+  `record_compression = "zlib"`, record disparity-scope (and each calibrate
+  wizard) for ≥ 60 s: every stream is written through its `camera/<serial>/raw/zlib`
+  sibling (recorder rows show the `/zlib` pipe ids), and the drop attribution
+  (record-button hover `q…/r…`) is honest if the codec can't hold full rate.
+- [ ] **`"none"` is byte-for-byte today's behavior** — with the default, every
+  app records exactly the raw uncompressed streams it did before (no `/zlib`
+  pipe advertised); multi-fovea's per-stream checkboxes are DISABLED with the
+  "compression off — enable in Settings" hint and nothing compresses even if a
+  box was left checked before switching to `"none"`.
+- [ ] **Multi-fovea toggles gate the configured method** — under `"zlib"`, only
+  the checked streams route through `/zlib`; unchecked streams stay raw.
+- [ ] **Old + new recordings both decode** — a `"none"` recording, a `"zlib"`
+  recording, and a pre-setting recording all open in the Viewer/pyfcap
+  identically (the `/zlib` suffix drives decode; on-disk contract unchanged).
+- [ ] **Applies at start, not mid-recording** — changing the setting while a
+  recording runs does NOT change that recording; the next recording picks it up.
+
 ## Pairing nodes (2026-07-09 wave, 426eb05 + ac6ee85; proposal
 `pairing-nodes.md`)
 
@@ -619,6 +650,31 @@ calibrate windows.
 - [ ] Viewer same-file dedupe still focuses the existing window; dev
   full-reload doesn't duplicate engines or corrupt ui.json.
 - [ ] Viewer survives orchestrator kill/restart mid-playback.
+
+### Teardown hardening (2026-07-10, proposal `teardown-hardening.md`)
+Follow-up to the 2026-07-09 exit-6 abort (`mutex lock failed: Invalid argument`
+during a dev-watch SIGTERM of a long-running disparity-scope orchestrator).
+- [ ] **Long-run disparity-scope + hard kill mid-session** — leave disparity-scope
+  running with tracker + stereo/heatmap/composite views live for several minutes,
+  then hard-kill the app mid-session (dev-watch restart / `kill` the orchestrator).
+  The orchestrator exits WITHOUT an abort, OR — if it does die on a native fault —
+  prints a `=== FoveaCam native crash handler ===` banner + symbolicatable
+  backtrace to the orchestrator log first. Either way it does NOT hang.
+- [ ] **Janitor still parks hardware on that kill** — after the above, cameras +
+  MEMS are parked (next app opens clean, no USB3Vision access-denied; MEMS
+  disabled). Exit-code semantics preserved: the crash handler re-raises, so exit 6
+  still triggers the janitor.
+- [ ] **Repeated open/close of every brick-heavy module** (disparity-scope,
+  multi-fovea, stereo) ≥20 cycles — no `Stream … destroyed without calling
+  shutdown()` abort, no destroyed-mutex EINVAL, no teardown hang (the lost-wakeup
+  path: a stream parks exactly as its owner tears down).
+- [ ] **Guard tests on the rig machine** — `core/test/36-stream-close-deadlock.ts`
+  (churn completes; the ClockCalibrator/fake-camera flake is enumeration-only, see
+  proposal Audit) and `core/test/38-stream-teardown-race.ts` (30k teardown
+  iterations clean) both pass.
+- [ ] **Crash handler smoke** — confirm the orchestrator log shows the crash
+  banner + `atos`-symbolicatable module base on a deliberately induced native
+  fault (or during any real fault seen on the rig).
 
 ### Disposable orchestrator (per-app-instance lifecycle, 2026-07-09 wave)
 

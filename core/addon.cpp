@@ -102,6 +102,18 @@ namespace Topology {
 Napi::Value report(const Napi::CallbackInfo &info);
 }
 
+// Hardware-free teardown-race self-test (core/test/38). Churns Stream
+// destruction against concurrent Subscriber closes; a crash mid-run is the
+// pre-fix proof, a clean return is the post-fix soak. Defined in
+// core/lib/Stream/StreamSelfTest.cpp. Not part of the public d.ts.
+Napi::Value streamTeardownRaceSelfTest(const Napi::CallbackInfo &info);
+
+// Native crash-site tracing (teardown-hardening Task 3): std::set_terminate +
+// SIGABRT/SIGSEGV/SIGBUS handlers that print a symbolicatable backtrace before
+// re-raising (exit-code semantics preserved -> janitor still parks hardware).
+// Called once at orchestrator boot. Defined in core/lib/CrashHandler.cpp.
+Napi::Value installCrashHandler(const Napi::CallbackInfo &info);
+
 using namespace Napi;
 
 bool DEBUGGER_CONNECTED = false;
@@ -321,6 +333,13 @@ static Object init(Env env, Object exports) {
     // clock domain — one authority only).
     exports.Set("steadyNowNs",
                 Function::New<Arv::steadyNowNsJs>(env, "steadyNowNs"));
+    // Test-only (core/test/38): hardware-free Stream teardown-race soak.
+    exports.Set("__streamTeardownRaceSelfTest",
+                Function::New<streamTeardownRaceSelfTest>(
+                    env, "__streamTeardownRaceSelfTest"));
+    // Native crash-site tracing — call once at orchestrator boot.
+    exports.Set("installCrashHandler",
+                Function::New<installCrashHandler>(env, "installCrashHandler"));
     exports.Set("cleanup", Function::New(env, cleanup));
     VERBOSE("Core module initialized");
     if (std::getenv("WAIT_DEBUGGER")) {

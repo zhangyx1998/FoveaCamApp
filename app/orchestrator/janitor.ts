@@ -228,6 +228,9 @@ async function runWatchdog(): Promise<void> {
 }
 
 void (async () => {
+  // Teardown-hardening (Task 3): trace a native crash in the janitor itself —
+  // the last line of hardware-quiescence defense — before it dies.
+  (await import("core")).installCrashHandler();
   if (process.env.FOVEA_JANITOR_MODE === "watchdog") {
     await runWatchdog();
   } else {

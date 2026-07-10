@@ -14,7 +14,7 @@
 // list, plus the two cross-cutting sessions (`system`, `controller`) that have
 // no single owning UI module. See docs/history/refactor/orchestrator.md §12.3 R1.
 
-import { Shm, Pipe, Aravis, Topology, steadyNowNs, cleanup } from "core";
+import { Shm, Pipe, Aravis, Topology, steadyNowNs, cleanup, installCrashHandler } from "core";
 import { onClockMetrics } from "core/Aravis";
 import { setHostClock } from "./time-align.js";
 import { wireClockMetrics } from "./clock-calibration.js";
@@ -58,6 +58,12 @@ import calibrateExtrinsicSession from "@modules/calibrate-extrinsic/session";
 // eval as a single leg (there's no way to isolate "core import" alone
 // without switching the whole graph to dynamic imports, not worth the risk
 // for a measurement feature).
+// Teardown-hardening (Task 3): trace any native crash to stderr with a
+// symbolicatable backtrace before the process dies, WITHOUT changing exit-code
+// semantics (exit 6 still triggers the janitor). Earliest core-loading point —
+// `core` is already resolved by the static import above.
+installCrashHandler();
+
 const forkTs = Number(process.env.FOVEA_FORK_TS);
 if (Number.isFinite(forkTs)) span("boot.forkToLoad", Date.now() - forkTs);
 
@@ -379,20 +385,29 @@ const disparityScope = hub.add(
     heatmapSeam,
     compositeSeam,
     rawPipes,
+    // record_compression="zlib": route ALL recorded raw streams through the
+    // per-frame zlib brick (the recorder consumes the /zlib sibling).
+    compressSeam,
   ),
 );
 
 // --- calibrate-intrinsic: per-camera checkerboard/marker calibration (§7.1 S1b)
-const calibrateIntrinsic = hub.add(calibrateIntrinsicSession(asBroker(Pipe), rawPipes));
+const calibrateIntrinsic = hub.add(
+  calibrateIntrinsicSession(asBroker(Pipe), rawPipes, compressSeam),
+);
 
 // --- calibrate-drift: per-fovea drift measurement (§7.1 S1b) --------------
-const calibrateDrift = hub.add(calibrateDriftSession(asBroker(Pipe), rawPipes));
+const calibrateDrift = hub.add(calibrateDriftSession(asBroker(Pipe), rawPipes, compressSeam));
 
 // --- calibrate-distortion: projector-alignment/homography check (§7.1 S1b)
-const calibrateDistortion = hub.add(calibrateDistortionSession(asBroker(Pipe), rawPipes));
+const calibrateDistortion = hub.add(
+  calibrateDistortionSession(asBroker(Pipe), rawPipes, compressSeam),
+);
 
 // --- calibrate-extrinsic: extrinsic calibration wizard (§7.1 S1b) --------
-const calibrateExtrinsic = hub.add(calibrateExtrinsicSession(asBroker(Pipe), rawPipes));
+const calibrateExtrinsic = hub.add(
+  calibrateExtrinsicSession(asBroker(Pipe), rawPipes, compressSeam),
+);
 
 // The former `viewer` session (C-8) is RETIRED (standalone-viewer-and-fcap
 // ruling 1): container playback now lives entirely inside the viewer window

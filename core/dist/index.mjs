@@ -37,6 +37,7 @@ export const {
     Pipe,
     Topology,
     steadyNowNs,
+    installCrashHandler,
     cleanup,
     __origin__,
 } = Module;
