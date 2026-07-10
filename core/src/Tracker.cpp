@@ -223,14 +223,28 @@ Napi::Value convert(Napi::Env env, const Napi::Value &, const TrackResult::Ptr &
   return convert(env, r);
 }
 
+// Per-frame engine verdict the state machine wraps into a TrackResult. `center`
+// is authoritative when `found` (sub-pixel for the hybrid NCC engine; the
+// bbox-center for KCF). Empty/unset when not found.
+struct EngineResult {
+  bool found = false;
+  cv::Rect bbox;
+  cv::Point2d center{0, 0};
+};
+
 // The tracking + override state machine, SHARED by the raw (camera-frame) and
-// chained (OwnedFrame tap) KCF variants — the only difference between them is
-// how each obtains a single-channel `gray` mat; the arm/override/produce logic
-// is identical and lives here ONCE. All state is touched only on the owning
-// stream's transform thread, except the atomic-flagged JS handoffs (arm /
-// override / release), same discipline as the original `arm()`.
-class KcfCore {
+// chained (OwnedFrame tap) variants AND by every tracking ENGINE (KCF, hybrid
+// NCC): the arm/override/re-arm/produce logic lives here ONCE — an engine
+// supplies only (re-)init + per-frame update via the two virtual hooks. All
+// state is touched only on the owning stream's transform thread, except the
+// atomic-flagged JS handoffs (arm / override / release), same discipline as the
+// original `arm()`. NOTE (2026-07-10): extracted from the former monolithic
+// `KcfCore` so the higher-fps hybrid tracker reuses the EXACT same state
+// machine; KCF's observable behavior is unchanged (guarded by tests 12/21).
+class TrackerCore {
 public:
+  virtual ~TrackerCore() = default;
+
   // Default roi size used when releasing an override with no prior arm.
   static constexpr int kDefaultOverrideRoi = 64;
 
@@ -249,15 +263,14 @@ public:
       wantRearm_.store(true, std::memory_order_release);
   }
 
-  // Run one step on `src` (8-bit, 1/3/4 channel); transform-thread only. KCF is
-  // fed a 3-channel BGR view (channel-normalized — see `asColor8`/`makeKcf`).
-  // Returns a result, or null for a frame that yields none (the KCF (re-)init
-  // frame). `meter` gets begin/end (busy) around KCF work + emit("track") per
+  // Run one step on `src` (8-bit, 1/3/4 channel); transform-thread only. The
+  // engine channel-normalizes `src` itself (KCF wants 3ch BGR, NCC wants 1ch
+  // gray). Returns a result, or null for a frame that yields none (the (re-)init
+  // frame). `meter` gets begin/end (busy) around engine work + emit("track") per
   // produced result; ingest/drop stay with the caller (they differ per variant).
   TrackResult::Ptr step(const cv::Mat &src, uint64_t deviceTimestamp,
                         Meter::ThreadMeter &meter, double stallMs) {
-    const cv::Mat &frame = asColor8(src, colorBuf_);
-    const cv::Rect frameRect(0, 0, frame.cols, frame.rows);
+    const cv::Rect frameRect(0, 0, src.cols, src.rows);
 
     // Override RELEASE → schedule a re-arm at the last override center, sized
     // to the last armed roi (or the documented default if never armed).
@@ -270,22 +283,18 @@ public:
       hasPending_.store(true, std::memory_order_release);
     }
 
-    // Explicit (re-)arm request → KCF init on this frame, no result emitted.
+    // Explicit (re-)arm request → engine init on this frame, no result emitted.
     if (hasPending_.exchange(false, std::memory_order_acq_rel)) {
       const cv::Rect roi = *pending_.ref() & frameRect; // frame-bound clamp
       if (roi.width >= 4 && roi.height >= 4) {
-        try {
-          tracker_->init(frame, roi);
-          armed_ = true;
+        armed_ = engineInit(src, roi); // engine reports (re-)init success
+        if (armed_)
           armedSize_ = roi.size();
-        } catch (const std::exception &) {
-          armed_ = false; // degenerate init — stay idle until re-armed
-        }
       }
       return nullptr;
     }
 
-    // Override ENGAGED → emit the override center, DO NOT touch KCF state.
+    // Override ENGAGED → emit the override center, DO NOT touch engine state.
     if (overriding_.load(std::memory_order_acquire)) {
       const cv::Point2d c = *override_.ref();
       auto result = TrackResult::create();
@@ -306,38 +315,38 @@ public:
 
     const int64_t t = nowMs();
     meter.begin(t);
-    cv::Rect bbox;
-    bool ok = false;
-    try {
-      ok = tracker_->update(frame, bbox);
-    } catch (const std::exception &) {
-      ok = false; // lost: KCF throws on a degenerate (edge-drifted) patch
-    }
+    const EngineResult er = engineUpdate(src);
     if (stallMs > 0)
       std::this_thread::sleep_for(
           std::chrono::duration<double, std::milli>(stallMs));
     meter.end(nowMs());
 
     auto result = TrackResult::create();
-    result->found = ok;
+    result->found = er.found;
     result->overridden = false;
-    result->bbox = bbox;
-    if (ok)
-      result->center = cv::Point2d(bbox.x + bbox.width / 2.0,
-                                   bbox.y + bbox.height / 2.0);
+    result->bbox = er.bbox;
+    if (er.found)
+      result->center = er.center;
     result->seq = ++produced_;
     result->deviceTimestamp = deviceTimestamp;
     meter.emit("track", nowMs());
     return result;
   }
 
-private:
+protected:
   static cv::Rect centeredRect(const cv::Point2d &c, const cv::Size &sz) {
     return cv::Rect(cvRound(c.x - sz.width / 2.0), cvRound(c.y - sz.height / 2.0),
                     sz.width, sz.height);
   }
 
-  cv::Ptr<cv::TrackerKCF> tracker_ = makeKcf(); // default color-feature KCF; xform thread
+  // Engine hooks (transform-thread only). `engineInit` (re-)initializes on the
+  // armed `roi` (already frame-bound-clamped, ≥4px) and returns false on a
+  // degenerate init (state machine stays idle until re-armed). `engineUpdate`
+  // runs one tracking step, returning the per-frame verdict.
+  virtual bool engineInit(const cv::Mat &src, const cv::Rect &roi) = 0;
+  virtual EngineResult engineUpdate(const cv::Mat &src) = 0;
+
+private:
   Threading::Guard<cv::Rect> pending_ = {cv::Rect()};
   std::atomic<bool> hasPending_{false};
   Threading::Guard<cv::Point2d> override_ = {cv::Point2d(0, 0)};
@@ -346,7 +355,41 @@ private:
   bool armed_ = false;           // transform-thread only
   cv::Size armedSize_{0, 0};     // last armed roi size (0 = never armed)
   uint64_t produced_ = 0;        // transform-thread only
-  cv::Mat colorBuf_;             // reused 3-channel BGR view for KCF (this thread)
+};
+
+// KCF engine: preserves the EXACT prior behavior (GRAY-features cv::TrackerKCF
+// on a 3-channel BGR view; a throw on a degenerate patch is treated as lost /
+// failed-init). Bbox center is the reported center.
+class KcfCore : public TrackerCore {
+protected:
+  bool engineInit(const cv::Mat &src, const cv::Rect &roi) override {
+    const cv::Mat &frame = asColor8(src, colorBuf_);
+    try {
+      tracker_->init(frame, roi);
+      return true;
+    } catch (const std::exception &) {
+      return false; // degenerate init — stay idle until re-armed
+    }
+  }
+  EngineResult engineUpdate(const cv::Mat &src) override {
+    const cv::Mat &frame = asColor8(src, colorBuf_);
+    EngineResult er;
+    cv::Rect bbox;
+    try {
+      er.found = tracker_->update(frame, bbox);
+    } catch (const std::exception &) {
+      er.found = false; // lost: KCF throws on a degenerate (edge-drifted) patch
+    }
+    er.bbox = bbox;
+    if (er.found)
+      er.center = cv::Point2d(bbox.x + bbox.width / 2.0,
+                              bbox.y + bbox.height / 2.0);
+    return er;
+  }
+
+private:
+  cv::Ptr<cv::TrackerKCF> tracker_ = makeKcf(); // GRAY-feature KCF; xform thread
+  cv::Mat colorBuf_; // reused 3-channel BGR view for KCF (this thread)
 };
 
 // Abstract handle the JS CoreObject holds: BOTH tracker variants (raw camera
@@ -467,6 +510,312 @@ protected:
 private:
   Meter::ThreadMeter meter_; // single writer = this brick's thread
   KcfCore core_;             // tracking + override state machine (owns color buf)
+  std::atomic<double> stallMs_{0}; // test-only induced slowness
+};
+
+// =====================================================================
+// Higher-FPS HYBRID tracker (2026-07-10, user request): a drop-in replacement
+// for the KCF tracker node that holds lock on this rig's hard MONO content (the
+// needle/blob + low-texture scenes where GRAY-KCF collapses to a single-frame
+// hit) AND runs faster. Engine = windowed NCC (cv::matchTemplate CCOEFF_NORMED,
+// the SAME correlation the disparity matcher already trusts on these scenes),
+// with a dual anchor/adaptive template (drift-proof) and an expanding-window
+// ANCHOR re-detection ladder (KCF is silent-forever-lost; this RE-ACQUIRES).
+// Single-scale (rig target scale is fovea-controlled); scale robustness is
+// future work. Thresholds/rationale + the KCF-vs-hybrid bench live in
+// docs/proposals/hybrid-tracker.md. Reuses TrackerCore's arm/override/re-arm
+// state machine verbatim — only the two engine hooks differ.
+// =====================================================================
+class HybridCore : public TrackerCore {
+public:
+  // Tunables — validated in the C++ probe, locked in the proposal doc.
+  // CCOEFF_NORMED scores are in [-1, 1].
+  static constexpr double kTrackThresh = 0.45; // per-frame found gate
+  static constexpr double kReacqThresh = 0.60; // recovery re-lock gate (> track: hysteresis)
+  static constexpr double kAdaptAlpha = 0.05;  // adaptive template EMA rate
+  static constexpr double kMotionMult = 3.0;   // search radius ≈ 3× recent per-frame motion
+  static constexpr int kFullFrameLostStreak = 6; // escalate recovery to full frame
+  static constexpr int kMaxRadius = 256;         // search radius cap (px)
+
+protected:
+  bool engineInit(const cv::Mat &src, const cv::Rect &roi) override {
+    const cv::Mat &gray = toGray(src, grayBuf_);
+    const cv::Rect r = roi & cv::Rect(0, 0, gray.cols, gray.rows);
+    if (r.width < 4 || r.height < 4)
+      return false;
+    gray(r).copyTo(anchor_); // deep copy — owns memory (survives Frame release)
+    anchor_.copyTo(adaptive_);
+    tmpl_ = r.size();
+    last_ = cv::Point2d(r.x + r.width / 2.0, r.y + r.height / 2.0);
+    recentDisp_ = 0.0;
+    lost_ = 0;
+    return true;
+  }
+
+  EngineResult engineUpdate(const cv::Mat &src) override {
+    const cv::Mat &gray = toGray(src, grayBuf_);
+    EngineResult er;
+    if (anchor_.empty())
+      return er;
+
+    // FAST PATH: dual-template NCC in a motion-adaptive window around `last_`.
+    const cv::Rect win = windowAround(last_, searchRadius(), gray.size());
+    if (win.width >= tmpl_.width && win.height >= tmpl_.height) {
+      cv::matchTemplate(gray(win), adaptive_, mapAd_, cv::TM_CCOEFF_NORMED);
+      cv::matchTemplate(gray(win), anchor_, mapAnc_, cv::TM_CCOEFF_NORMED);
+      double adMax, ancMax;
+      cv::Point adLoc, ancLoc;
+      cv::minMaxLoc(mapAd_, nullptr, &adMax, nullptr, &adLoc);
+      cv::minMaxLoc(mapAnc_, nullptr, &ancMax, nullptr, &ancLoc);
+      // Report the argmax of max(anchor, adaptive) — the adaptive template
+      // follows appearance change, the anchor guards against drift-onto-nothing.
+      cv::Point loc;
+      const cv::Mat *chosen;
+      double score;
+      if (adMax >= ancMax) { loc = adLoc; score = adMax; chosen = &mapAd_; }
+      else { loc = ancLoc; score = ancMax; chosen = &mapAnc_; }
+      if (score >= kTrackThresh) {
+        const double dx = subpixel(*chosen, loc, true);
+        const double dy = subpixel(*chosen, loc, false);
+        const cv::Point2d c(win.x + loc.x + tmpl_.width / 2.0 + dx,
+                            win.y + loc.y + tmpl_.height / 2.0 + dy);
+        recentDisp_ = 0.7 * recentDisp_ + 0.3 * cv::norm(c - last_);
+        last_ = c;
+        lost_ = 0;
+        er.found = true;
+        er.center = c;
+        er.bbox = centeredRect(c, tmpl_);
+        // Drift-proof adaptive update: blend the fresh patch into the adaptive
+        // template ONLY while the invariant ANCHOR still confirms this location
+        // (its score at the chosen loc ≥ track threshold). If the anchor
+        // disagrees we are likely drifting → freeze the adaptive template.
+        if (mapAnc_.at<float>(loc) >= kTrackThresh) {
+          const cv::Rect pr = centeredRect(c, tmpl_);
+          if ((pr & cv::Rect(0, 0, gray.cols, gray.rows)) == pr)
+            cv::addWeighted(adaptive_, 1.0 - kAdaptAlpha, gray(pr), kAdaptAlpha,
+                            0.0, adaptive_);
+        }
+        return er;
+      }
+    }
+
+    // RECOVERY: the "detection" half. Progressively widen an ANCHOR-only search
+    // as the lost streak grows; at the top of the ladder scan the FULL frame at
+    // half resolution (pyrDown) to bound cost. Re-lock only above the (higher)
+    // re-acquire threshold — hysteresis so a marginal frame can't thrash lock.
+    lost_++;
+    cv::Point2d c;
+    double score = 0;
+    bool got = false;
+    if (lost_ < kFullFrameLostStreak) {
+      const int radius = tmpl_.width * (1 << std::min(lost_, 4)); // 2×,4×,8×…
+      const cv::Rect w2 = windowAround(last_, radius, gray.size());
+      if (w2.width >= tmpl_.width && w2.height >= tmpl_.height)
+        got = peak(gray(w2), anchor_, w2.tl(), 1.0, c, score);
+    } else {
+      cv::pyrDown(gray, pyr_);
+      cv::pyrDown(anchor_, anchorHalf_);
+      got = peak(pyr_, anchorHalf_, cv::Point(0, 0), 2.0, c, score);
+    }
+    if (got && score >= kReacqThresh) {
+      anchor_.copyTo(adaptive_); // reset the (possibly drifted) adaptive copy
+      last_ = c;
+      recentDisp_ = 0.0;
+      lost_ = 0;
+      er.found = true;
+      er.center = c;
+      er.bbox = centeredRect(c, tmpl_);
+      return er;
+    }
+
+    // Still lost: report found:false, box parked on the last known center.
+    er.found = false;
+    er.center = last_;
+    er.bbox = centeredRect(last_, tmpl_);
+    return er;
+  }
+
+private:
+  // Normalize any tracker source frame to 8-bit single-channel gray (NCC wants
+  // one channel — matchTemplate would otherwise sum correlation over the
+  // gray-replicated BGR/RGBA channels for no gain). Raw camera is Mono8
+  // (passthrough); the chained tap is RGBA8. Reuses `buf`.
+  static const cv::Mat &toGray(const cv::Mat &src, cv::Mat &buf) {
+    switch (src.channels()) {
+    case 1:
+      return src; // Mono8 passthrough
+    case 4:
+      cv::cvtColor(src, buf, cv::COLOR_RGBA2GRAY);
+      return buf;
+    default:
+      cv::cvtColor(src, buf, cv::COLOR_BGR2GRAY);
+      return buf;
+    }
+  }
+
+  // Search radius (px beyond the template half-extent): ≈ kMotionMult × recent
+  // per-frame displacement, floored so the window is ≥ ~2× the template and
+  // capped at kMaxRadius.
+  int searchRadius() const {
+    const int floorR = std::max(8, tmpl_.width / 2);
+    int r = static_cast<int>(std::lround(kMotionMult * recentDisp_));
+    return std::min(std::max(floorR, r), kMaxRadius);
+  }
+
+  // Frame-clamped search rect centered on `c`, half-extent = template/2 +
+  // radius. May clamp smaller than the template near a border — the caller
+  // guards (falls through to full-frame recovery).
+  cv::Rect windowAround(const cv::Point2d &c, int radius,
+                        const cv::Size &fs) const {
+    const int hw = tmpl_.width / 2 + radius, hh = tmpl_.height / 2 + radius;
+    cv::Rect w(cv::Point(static_cast<int>(std::lround(c.x)) - hw,
+                         static_cast<int>(std::lround(c.y)) - hh),
+               cv::Point(static_cast<int>(std::lround(c.x)) + hw,
+                         static_cast<int>(std::lround(c.y)) + hh));
+    return w & cv::Rect(0, 0, fs.width, fs.height);
+  }
+
+  // Parabolic sub-pixel peak offset (±1px, clamped) along one axis at `p` in the
+  // CCOEFF_NORMED score map — smooth centers between integer correlation cells.
+  static double subpixel(const cv::Mat &m, const cv::Point &p, bool horiz) {
+    const int x = p.x, y = p.y;
+    if (horiz) {
+      if (x <= 0 || x >= m.cols - 1)
+        return 0.0;
+      const double l = m.at<float>(y, x - 1), c = m.at<float>(y, x),
+                   r = m.at<float>(y, x + 1);
+      const double d = l - 2 * c + r;
+      if (std::abs(d) < 1e-9)
+        return 0.0;
+      return std::max(-1.0, std::min(1.0, 0.5 * (l - r) / d));
+    }
+    if (y <= 0 || y >= m.rows - 1)
+      return 0.0;
+    const double u = m.at<float>(y - 1, x), c = m.at<float>(y, x),
+                 dn = m.at<float>(y + 1, x);
+    const double d = u - 2 * c + dn;
+    if (std::abs(d) < 1e-9)
+      return 0.0;
+    return std::max(-1.0, std::min(1.0, 0.5 * (u - dn) / d));
+  }
+
+  // Match `tmpl` in `sub`, returning the best center in FULL-frame coords via
+  // `origin + scale` (scale > 1 maps a pyrDown sub-image back to full res).
+  bool peak(const cv::Mat &sub, const cv::Mat &tmpl, const cv::Point &origin,
+            double scale, cv::Point2d &center, double &score) {
+    if (sub.cols < tmpl.cols || sub.rows < tmpl.rows)
+      return false;
+    cv::matchTemplate(sub, tmpl, mapRec_, cv::TM_CCOEFF_NORMED);
+    double mx;
+    cv::Point loc;
+    cv::minMaxLoc(mapRec_, nullptr, &mx, nullptr, &loc);
+    const double dx = subpixel(mapRec_, loc, true);
+    const double dy = subpixel(mapRec_, loc, false);
+    center.x = origin.x + (loc.x + tmpl.cols / 2.0 + dx) * scale;
+    center.y = origin.y + (loc.y + tmpl.rows / 2.0 + dy) * scale;
+    score = mx;
+    return true;
+  }
+
+  cv::Mat anchor_;   // pristine template captured at arm (8UC1, owns memory)
+  cv::Mat adaptive_; // slow-EMA template (anchor-confirmed updates only)
+  cv::Size tmpl_{0, 0};        // template size (= armed roi size)
+  cv::Point2d last_{0, 0};     // last known center (frame coords)
+  double recentDisp_ = 0.0;    // EMA of per-frame displacement (adaptive window)
+  int lost_ = 0;               // consecutive lost frames (recovery ladder)
+  // Reused per-thread buffers (transform-thread only).
+  cv::Mat grayBuf_, mapAd_, mapAnc_, mapRec_, pyr_, anchorHalf_;
+};
+
+// Raw HYBRID tracker on a camera's shared Arv::Stream — the drop-in twin of
+// KcfTrackerStream (latest-wins Sub::Latest, same meter schema {frame}/{track},
+// same TrackerHandle surface). Only the engine differs (HybridCore).
+class HybridTrackerStream
+    : public TransformStream<Arv::Frame::Ptr, TrackResult::Ptr>,
+      public TrackerHandle {
+public:
+  using Ptr = std::shared_ptr<HybridTrackerStream>;
+  static Ptr create(Arv::Stream::Ptr upstream,
+                    std::string name = "tracker:center") {
+    return std::make_shared<HybridTrackerStream>(std::move(upstream),
+                                                 std::move(name));
+  }
+  explicit HybridTrackerStream(Arv::Stream::Ptr upstream,
+                               std::string name = "tracker:center")
+      : upstream_(std::move(upstream)),
+        meter_(std::move(name), {"frame"}, {"track"}, nowMs()) {}
+  ~HybridTrackerStream() override { shutdown(); }
+
+  void arm(const cv::Rect &roi) override { core_.arm(roi); }
+  void overrideCenter(const cv::Point2d &c) override { core_.overrideCenter(c); }
+  void releaseOverride() override { core_.releaseOverride(); }
+  Meter::Snapshot probe() const override { return meter_.probe(nowMs()); }
+  void stall(double ms) override { stallMs_.store(ms, std::memory_order_release); }
+  Stream<TrackResult::Ptr> *stream() override { return this; }
+
+protected:
+  Stream<Arv::Frame::Ptr> *upstream() override { return upstream_.get(); }
+
+  TrackResult::Ptr transform(const Arv::Frame::Ptr &frame) override {
+    const int64_t t = nowMs();
+    const uint64_t drops = upstreamDrops();
+    if (drops > lastDrops_) {
+      meter_.drop(drops - lastDrops_);
+      lastDrops_ = drops;
+    }
+    meter_.ingest("frame", t);
+    return core_.step(frame->raw, frame->device_timestamp, meter_,
+                      stallMs_.load(std::memory_order_acquire));
+  }
+
+private:
+  Arv::Stream::Ptr upstream_;
+  Meter::ThreadMeter meter_; // single writer = transform thread
+  HybridCore core_;          // NCC tracking + override state machine
+  std::atomic<double> stallMs_{0}; // test-only induced slowness
+  uint64_t lastDrops_ = 0;   // transform-thread only
+};
+
+// CHAINED HYBRID tracker on another brick's OwnedFrame tap — the drop-in twin
+// of ChainedKcfTrackerStream. Teardown shape copied EXACTLY (closeChain() then
+// shutdown() in the dtor; Leaky latest-wins input) — tests 36/38 guard it.
+class ChainedHybridTrackerStream
+    : public Arv::ChainedStreamOf<TrackResult::Ptr>,
+      public TrackerHandle {
+public:
+  using Ptr = std::shared_ptr<ChainedHybridTrackerStream>;
+  static Ptr create(Source source, std::string name) {
+    return std::make_shared<ChainedHybridTrackerStream>(std::move(source),
+                                                        std::move(name));
+  }
+  ChainedHybridTrackerStream(Source source, std::string name)
+      : Arv::ChainedStreamOf<TrackResult::Ptr>(std::move(source)), // Leaky
+        meter_(std::move(name), {"frame"}, {"track"}, nowMs()) {}
+  ~ChainedHybridTrackerStream() override {
+    closeChain(); // wake a blocked tap read (ChainedStream contract)
+    shutdown();
+  }
+
+  void arm(const cv::Rect &roi) override { core_.arm(roi); }
+  void overrideCenter(const cv::Point2d &c) override { core_.overrideCenter(c); }
+  void releaseOverride() override { core_.releaseOverride(); }
+  Meter::Snapshot probe() const override { return meter_.probe(nowMs()); }
+  void stall(double ms) override { stallMs_.store(ms, std::memory_order_release); }
+  Stream<TrackResult::Ptr> *stream() override { return this; }
+
+protected:
+  TrackResult::Ptr process(const Arv::OwnedFrame::Ptr &in) override {
+    const int64_t t = nowMs();
+    if (const uint64_t gap = seqGap(in)) // tap outran us (latest-wins)
+      meter_.drop(gap);
+    meter_.ingest("frame", t);
+    return core_.step(in->mat, in->deviceTimestamp, meter_,
+                      stallMs_.load(std::memory_order_acquire));
+  }
+
+private:
+  Meter::ThreadMeter meter_; // single writer = this brick's thread
+  HybridCore core_;          // NCC tracking + override state machine
   std::atomic<double> stallMs_{0}; // test-only induced slowness
 };
 
@@ -627,6 +976,55 @@ static FN(createChainedTracker) {
                            : srcId + "/kcf";
     auto stream = ChainedKcfTrackerStream::create(std::move(source),
                                                   std::move(name));
+    TrackerHandle::Ptr handle = std::move(stream);
+    return KcfTrackerObject::Create(env, handle);
+  }
+  JS_EXCEPT(env.Undefined())
+}
+
+// Factory: `createHybridTracker(camera, name?)` — the higher-fps hybrid NCC
+// tracker on a camera's shared Arv::Stream. Byte-for-byte the same object
+// surface / meter schema / async-iterated TrackResult as createTracker (it
+// wraps the SAME KcfTrackerObject over the SAME TrackerHandle) — a pure
+// drop-in; only the engine differs. `name` = the graph node id / meter name
+// (default legacy-safe "tracker:center", so it replaces the same node).
+static FN(createHybridTracker) {
+  auto env = info.Env();
+  try {
+    auto camera = convert<Arv::Camera::Ptr>(info[0]);
+    auto stream = info.Length() >= 2 && info[1].IsString()
+                      ? HybridTrackerStream::create(
+                            Arv::Stream::get(camera),
+                            info[1].As<Napi::String>().Utf8Value())
+                      : HybridTrackerStream::create(Arv::Stream::get(camera));
+    TrackerHandle::Ptr handle = std::move(stream);
+    return KcfTrackerObject::Create(env, handle);
+  }
+  JS_EXCEPT(env.Undefined())
+}
+
+// Factory: `createChainedHybridTracker(sourcePipeId, name?)` — the hybrid NCC
+// twin of createChainedTracker (tracks a convert/undistort brick's OwnedFrame
+// tap). Same object surface; `name` defaults to `<src>/hybrid`.
+static FN(createChainedHybridTracker) {
+  auto env = info.Env();
+  try {
+    const auto srcId = info[0].As<Napi::String>().Utf8Value();
+    ChainedHybridTrackerStream::Source source;
+    if (auto conv = Arv::findConverter(srcId))
+      source = conv;
+    else if (auto und = Arv::findUndistort(srcId))
+      source = und;
+    JS_ASSERT(source != nullptr, Error,
+              "createChainedHybridTracker: no convert/undistort brick attached "
+              "to pipe " +
+                  srcId,
+              env.Undefined());
+    std::string name = info.Length() >= 2 && info[1].IsString()
+                           ? info[1].As<Napi::String>().Utf8Value()
+                           : srcId + "/hybrid";
+    auto stream = ChainedHybridTrackerStream::create(std::move(source),
+                                                     std::move(name));
     TrackerHandle::Ptr handle = std::move(stream);
     return KcfTrackerObject::Create(env, handle);
   }
@@ -1014,6 +1412,8 @@ void exportTrackerNamespace(Napi::Env env, Napi::Object &exports) {
   MultiKcfObject::Export(env, exports);   // register the class for Create()
   EXPORT(exports, createTracker);
   EXPORT(exports, createChainedTracker);
+  EXPORT(exports, createHybridTracker);
+  EXPORT(exports, createChainedHybridTracker);
   EXPORT(exports, createMultiTracker);
 }
 #undef EXPORT

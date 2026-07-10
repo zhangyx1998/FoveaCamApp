@@ -92,6 +92,26 @@ declare module "core/Tracker" {
     name?: string,
   ): KcfTracker;
 
+  /** Create a higher-fps HYBRID tracker thread bound to `camera`'s shared
+   *  stream — a DROP-IN replacement for {@link createTracker}. Engine =
+   *  windowed NCC (matchTemplate CCOEFF_NORMED) + dual anchor/adaptive template
+   *  + expanding-window ANCHOR re-detection; holds lock on mono needle/blob +
+   *  low-texture scenes where GRAY-KCF collapses, and re-acquires after
+   *  occlusion/fast motion (KCF is silent-forever-lost). Same object surface /
+   *  {@link TrackResult} schema / meter schema as `createTracker`. Optional
+   *  `name` = the graph node id (default `"tracker:center"`). See
+   *  docs/proposals/hybrid-tracker.md. */
+  export function createHybridTracker(camera: Camera, name?: string): KcfTracker;
+
+  /** Create a CHAINED HYBRID tracker on another brick's OwnedFrame tap — the
+   *  hybrid twin of {@link createChainedTracker} (same object surface). `name` =
+   *  the graph node id / meter name (default `"<sourcePipeId>/hybrid"`). Throws
+   *  if no convert/undistort brick is attached to the pipe. */
+  export function createChainedHybridTracker(
+    sourcePipeId: string,
+    name?: string,
+  ): KcfTracker;
+
   /** One target's verdict inside a `MultiTrackResult` batch (real-2, B-25). */
   export interface MultiTrackTarget {
     /** Opaque target id, as passed to `arm()` (multi-fovea slot ids). */
