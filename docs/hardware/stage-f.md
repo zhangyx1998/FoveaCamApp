@@ -879,10 +879,9 @@ WAVES software-green: byte-identical conformance (`core/test/39`), brick
 lifecycle churn (`core/test/40`), recorder churn soak + forced-zlib multi-fovea
 soak. Take these to the rig:
 
-- [ ] **Full-rate 3-camera sustains** — record all three cameras at full rate; the
-  original defect (`droppedQueue` under load) does NOT reproduce — the RecordButton
-  hover shows zero queue-attributed drops.
-  ⚠ REBUILD CORE FIRST (2026-07-10): the 07-10 rig run that still dropped
+- [x] **Full-rate 3-camera sustains** — VERIFIED on rig 2026-07-10 (user: "frame
+  drop verified fixed" after the -O2 core rebuild, 756a899).
+  Background: the 07-10 rig run that still dropped
   (27 written/s, 151 q-drops/s) was root-caused to the native core compiling at
   -O0 since 2025-10-11 (`CMakeLists.txt` hardcoded Debug, no `-O`). Now `-O2 -g`;
   synthetic 3×60fps bench post-fix: zero drops. Expect LOWER convert/undistort/KCF
