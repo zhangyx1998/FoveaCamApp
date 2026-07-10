@@ -7,9 +7,21 @@
 #include <cstring>
 
 #include <napi.h>
-#include <opencv2/aruco.hpp>
 #include <opencv2/core.hpp>
+#include <opencv2/core/version.hpp>
+
+// The ArUco module was refactored in OpenCV 4.7: Dictionary moved into the
+// objdetect module, the enum was renamed PREDEFINED_DICTIONARY_NAME ->
+// PredefinedDictionaryType, DICT_ARUCO_MIP_36h12 was added, and
+// getPredefinedDictionary() now returns a Dictionary by value instead of a
+// Ptr<Dictionary>. Ubuntu 24.04 ships 4.6; macOS/Homebrew ships >= 4.7.
+#define CV_ARUCO_OBJDETECT                                                     \
+  (CV_VERSION_MAJOR > 4 || (CV_VERSION_MAJOR == 4 && CV_VERSION_MINOR >= 7))
+
+#include <opencv2/aruco.hpp>
+#if CV_ARUCO_OBJDETECT
 #include <opencv2/objdetect/aruco_dictionary.hpp>
+#endif
 
 #include <Aravis/Frame.h>
 #include <Aravis/PixelFormat.h>
@@ -30,7 +42,11 @@ Napi::Value meterSnapshotToJs(Napi::Env env, const Meter::Snapshot &s);
 
 using namespace Napi;
 using namespace cv;
+#if CV_ARUCO_OBJDETECT
 using DictType = aruco::PredefinedDictionaryType;
+#else
+using DictType = aruco::PREDEFINED_DICTIONARY_NAME;
+#endif
 
 template <> std::string convert(const DictType &type) {
 #define CASE(NAME)                                                             \
@@ -58,7 +74,9 @@ template <> std::string convert(const DictType &type) {
     CASE(APRILTAG_25h9);
     CASE(APRILTAG_36h10);
     CASE(APRILTAG_36h11);
-    CASE(ARUCO_MIP_36h12);
+#if CV_ARUCO_OBJDETECT
+    CASE(ARUCO_MIP_36h12); // added in OpenCV 4.7
+#endif
   default:
     throw std::invalid_argument("Invalid marker dictionary type: " +
                                 std::to_string(type));
@@ -91,7 +109,9 @@ template <> DictType convert(const std::string &type) {
   CASE(APRILTAG_25h9);
   CASE(APRILTAG_36h10);
   CASE(APRILTAG_36h11);
-  CASE(ARUCO_MIP_36h12);
+#if CV_ARUCO_OBJDETECT
+  CASE(ARUCO_MIP_36h12); // added in OpenCV 4.7
+#endif
   throw std::invalid_argument("Invalid marker dictionary type: " + type);
 #undef CASE
 }
@@ -250,7 +270,13 @@ public:
     auto env = info.Env();
     try {
       const auto type = convert<DictType>(info[0]);
+#if CV_ARUCO_OBJDETECT
+      // >= 4.7: getPredefinedDictionary returns a Dictionary by value.
       dict = makePtr<aruco::Dictionary>(aruco::getPredefinedDictionary(type));
+#else
+      // <= 4.6: getPredefinedDictionary already returns a Ptr<Dictionary>.
+      dict = aruco::getPredefinedDictionary(type);
+#endif
     }
     JS_EXCEPT()
   }

@@ -10,6 +10,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <exception>
+#include <functional>
 #include <iostream>
 #include <mutex>
 #include <thread>
@@ -17,6 +18,7 @@
 #include <pointer.h>
 #include <type_name.h>
 #include <utils/debug.h>
+#include <utils/thread.h>
 #include <utils/map-set.h>
 #include <utils/stacktrace.h>
 
@@ -239,9 +241,9 @@ protected:
     unfreeze.wait(lock, [this] { return __activate__(); });
   }
   void thread_main() {
-    pthread_setname_np(("Stream<" + type_name<T>() + "> @ " +
-                        std::to_string(reinterpret_cast<uintptr_t>(this)))
-                           .c_str());
+    set_thread_name(("Stream<" + type_name<T>() + "> @ " +
+                     std::to_string(reinterpret_cast<uintptr_t>(this)))
+                        .c_str());
     while (true) {
       VERBOSE("Stream<%s> [%p] waiting", type_name<T>().c_str(), this);
       wait_activate();

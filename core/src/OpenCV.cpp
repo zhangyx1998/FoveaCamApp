@@ -107,8 +107,8 @@ CVT(cv::Rect_, double, 4, x, y, width, height)
     MATCH_MAT_TYPE_CASE(CV_16U, uint16_t, RET, SIZE, AB, OFFSET);              \
     MATCH_MAT_TYPE_CASE(CV_16S, int16_t, RET, SIZE, AB, OFFSET);               \
     MATCH_MAT_TYPE_CASE(CV_32S, int32_t, RET, SIZE, AB, OFFSET);               \
-    MATCH_MAT_TYPE_CASE(CV_32F, float32_t, RET, SIZE, AB, OFFSET);             \
-    MATCH_MAT_TYPE_CASE(CV_64F, float64_t, RET, SIZE, AB, OFFSET);             \
+    MATCH_MAT_TYPE_CASE(CV_32F, float, RET, SIZE, AB, OFFSET);                 \
+    MATCH_MAT_TYPE_CASE(CV_64F, double, RET, SIZE, AB, OFFSET);                \
   default:                                                                     \
     throw JS::TypeError(env, "Unsupported Mat type " +                         \
                                  std::to_string(MAT.type()) +                  \

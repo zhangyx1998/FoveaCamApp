@@ -16,6 +16,7 @@
 #include <mutex>
 
 #include <CallbackSlot.h>
+#include <utils/thread.h>
 #include <napi-helper.h>
 
 #include "Camera.h"
@@ -148,7 +149,7 @@ ClockCalibrator::~ClockCalibrator() {
 }
 
 void ClockCalibrator::run() {
-  pthread_setname_np("ClockCalibrator");
+  set_thread_name("ClockCalibrator");
   // INITIAL pass (global-mutex-serialized bus-wide). Latch-unsupported (or
   // init-transient) → mark uncalibrated (no row, dt stays 0) and EXIT — no
   // retry spin; the manual `calibrateClock` NAPI can retry on demand.

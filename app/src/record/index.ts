@@ -66,7 +66,10 @@ export default class Recording<C extends RecordableContract> extends SavePath {
     // cast (C extends RecordableContract; the button only touches the shared
     // surface).
     current_recording.value = this as unknown as Recording<RecordableContract>;
-    this.active = toRef(this.session.telemetry, "recording_active");
+    // `recording_active` is a boolean on the contract, but over the open type
+    // parameter `TelemetryOf<C>` newer `toRef` typings (Vue 3.5) can't narrow
+    // the generic value back to `boolean` — same generic-erasure cast as above.
+    this.active = toRef(this.session.telemetry, "recording_active") as Ref<boolean>;
     watch(
       () => this.session.telemetry.recordingStreams,
       (obj) => {

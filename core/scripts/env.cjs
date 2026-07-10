@@ -5,6 +5,9 @@ const { resolve } = require("path");
 function findOpenCVOptions() {
     if (process.env.OpenCV_DIR) return { OpenCV_DIR: process.env.OpenCV_DIR };
 
+    // Explicit cmake config directories (checked directly for OpenCVConfig.cmake).
+    const cmakeDirs = [];
+    // Install prefixes under which lib/cmake/opencv4 is probed.
     const prefixes = [];
     try {
         prefixes.push(
@@ -15,11 +18,28 @@ function findOpenCVOptions() {
     } catch (_) {
         // Homebrew is optional; fall back to common install locations below.
     }
+    // macOS (Homebrew) prefixes.
     prefixes.push("/opt/homebrew/opt/opencv", "/usr/local/opt/opencv");
+    // Linux: ask pkg-config for the install prefix, then add common locations.
+    try {
+        const prefix = execSync("pkg-config --variable=prefix opencv4", {
+            stdio: ["ignore", "pipe", "ignore"],
+        })
+            .toString()
+            .trim();
+        if (prefix) prefixes.push(prefix);
+    } catch (_) {
+        // pkg-config or opencv4.pc may be absent; keep probing known paths.
+    }
+    prefixes.push("/usr", "/usr/local");
+    // Debian/Ubuntu multiarch cmake location doesn't sit under lib/cmake/opencv4.
+    cmakeDirs.push("/usr/lib/x86_64-linux-gnu/cmake/opencv4");
 
     for (const prefix of prefixes) {
-        if (!prefix) continue;
-        const dir = resolve(prefix, "lib", "cmake", "opencv4");
+        if (prefix) cmakeDirs.push(resolve(prefix, "lib", "cmake", "opencv4"));
+    }
+
+    for (const dir of cmakeDirs) {
         if (existsSync(resolve(dir, "OpenCVConfig.cmake"))) return { OpenCV_DIR: dir };
     }
 

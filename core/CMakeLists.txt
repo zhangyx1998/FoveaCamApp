@@ -82,7 +82,7 @@ file(GLOB SHARED_LIB_SRCS ${PROJECT_HOME}/../lib/**/*.cpp)
 
 # Build Targets
 add_library(core SHARED
-  Addon.cpp
+  addon.cpp
   ${SRCS}
   ${LIB_SRCS}
   ${SHARED_LIB_SRCS}
@@ -97,21 +97,28 @@ add_library(fovea_shm_reader SHARED
 set_target_properties(core PROPERTIES
   PREFIX ""
   SUFFIX ".node"
-  # macOS: embed run paths so Electron can resolve ARAVIS/GenICam deps
-  MACOSX_RPATH ON
-  BUILD_RPATH "@loader_path;/usr/local/lib"
-  INSTALL_RPATH "@loader_path;/usr/local/lib"
-  INSTALL_NAME_DIR "@rpath"
 )
 
 set_target_properties(fovea_shm_reader PROPERTIES
   PREFIX ""
   SUFFIX ".node"
-  MACOSX_RPATH ON
-  BUILD_RPATH "@loader_path;/usr/local/lib"
-  INSTALL_RPATH "@loader_path;/usr/local/lib"
-  INSTALL_NAME_DIR "@rpath"
 )
+
+# Embed run paths so Electron can resolve ARAVIS/GenICam deps. The rpath tokens
+# are platform-specific: macOS uses @loader_path, ELF (Linux) uses $ORIGIN.
+if(APPLE)
+  set_target_properties(core fovea_shm_reader PROPERTIES
+    MACOSX_RPATH ON
+    BUILD_RPATH "@loader_path;/usr/local/lib"
+    INSTALL_RPATH "@loader_path;/usr/local/lib"
+    INSTALL_NAME_DIR "@rpath"
+  )
+elseif(UNIX)
+  set_target_properties(core fovea_shm_reader PROPERTIES
+    BUILD_RPATH "$ORIGIN;/usr/local/lib"
+    INSTALL_RPATH "$ORIGIN;/usr/local/lib"
+  )
+endif()
 
 # Link with libraries
 target_link_libraries(core PRIVATE

@@ -21,6 +21,7 @@
 
 #include <Aravis/ClockCalibration.h> // Arv::steadyNowNs — THE host time authority
 #include <utils/debug.h>
+#include <utils/thread.h>
 
 namespace Record {
 
@@ -370,7 +371,7 @@ void RecorderStream::writeItem(Item &item) {
 }
 
 void RecorderStream::writerMain() {
-  pthread_setname_np("RecorderStream");
+  set_thread_name("RecorderStream");
   for (;;) {
     Item item;
     {

@@ -146,7 +146,19 @@ public:
   ARV_CAMERA_SET(int64_t, frame_count, frame_count);
   ARV_CAMERA_BOUNDS(int64_t, frame_count, frame_count);
 
+#if ARAVIS_CHECK_VERSION(0, 8, 31)
   ARV_CAMERA_GET(bool, frame_rate_enable, frame_rate_enable);
+#else
+  // arv_camera_get_frame_rate_enable() was added after 0.8.30 (Ubuntu 24.04
+  // ships 0.8.30, which has only the setter). Read the underlying GenICam
+  // feature directly — the same feature the setter and the native getter drive.
+  inline bool get_frame_rate_enable() const {
+    auto ret =
+        arv_camera_get_boolean(get(), "AcquisitionFrameRateEnable", &Error::error);
+    Error::check("arv_camera_get_boolean(AcquisitionFrameRateEnable)");
+    return ret;
+  }
+#endif
   ARV_CAMERA_SET(bool, frame_rate_enable, frame_rate_enable);
   inline bool get_frame_rate_available() const {
     auto ret = arv_camera_is_frame_rate_available(get(), &Error::error);
