@@ -15,8 +15,12 @@ import {
   tripleHash,
   mergeTripleConfig,
   resolveBaseline,
+  connectedTripleHash,
+  orderTriples,
+  defaultTripleSelection,
   DEFAULT_BASELINE_MM,
   type CalStore,
+  type CalEntry,
   type KnownCamera,
 } from "@lib/calibration-data";
 
@@ -97,6 +101,18 @@ describe("enumerateCalibrationData", () => {
     expect(tri.label).toBe("L001 / C002 / R003");
     expect(tri.detail).toContain("drift");
     expect(tri.detail).toContain("zoom 3.50×");
+
+    // Signed delay-compensation flag renders with an explicit +/- sign.
+    const withDelay = await enumerateCalibrationData(
+      fakeStore({ [`triples/${hash}`]: { delay_compensation_ms: -8 } }),
+      [camL, camC, camR],
+    );
+    expect(withDelay[0].detail).toContain("delay -8.0 ms");
+    const withLead = await enumerateCalibrationData(
+      fakeStore({ [`triples/${hash}`]: { delay_compensation_ms: 12.5 } }),
+      [camL, camC, camR],
+    );
+    expect(withLead[0].detail).toContain("delay +12.5 ms");
 
     const intr = entries.find((e) => e.category === "calibrate-intrinsic")!;
     expect(intr.label).toBe("FLIR BFS (C002) · Center Wide");
@@ -205,5 +221,66 @@ describe("resolveBaseline (ruled order — triple > legacy app > 200)", () => {
 
   it("existing rigs (legacy 200, no triple field) keep the 200 baseline", () => {
     expect(resolveBaseline(undefined, 200)).toBe(200);
+  });
+});
+
+// ---- Device-config triple selector (connected-first ordering + default) -----
+
+const triEntry = (key: string, label = key): CalEntry => ({
+  category: "triples",
+  key,
+  label,
+  detail: "no overrides",
+});
+
+describe("connectedTripleHash", () => {
+  it("hashes the connected L/C/R rig (matches tripleHash)", async () => {
+    const expected = await tripleHash({
+      L: getCameraKey(camL),
+      C: getCameraKey(camC),
+      R: getCameraKey(camR),
+    });
+    expect(await connectedTripleHash([camL, camC, camR])).toBe(expected);
+  });
+  it("is null when the role set is incomplete (no rig / partial)", async () => {
+    expect(await connectedTripleHash([camL, camC])).toBeNull();
+    expect(await connectedTripleHash([])).toBeNull();
+  });
+});
+
+describe("orderTriples (connected first, else enumeration order)", () => {
+  it("floats the connected triple to the front, preserving the rest", () => {
+    const entries = [
+      triEntry("aaa"),
+      triEntry("bbb"),
+      triEntry("ccc"),
+      { category: "calibrate-intrinsic", key: "x", label: "x", detail: "" } as CalEntry,
+    ];
+    const ordered = orderTriples(entries, "ccc");
+    expect(ordered.map((t) => t.key)).toEqual(["ccc", "aaa", "bbb"]);
+    expect(ordered[0].connected).toBe(true);
+    expect(ordered[1].connected).toBe(false);
+  });
+  it("keeps the enumeration order when nothing is connected", () => {
+    const ordered = orderTriples([triEntry("aaa"), triEntry("bbb")], null);
+    expect(ordered.map((t) => t.key)).toEqual(["aaa", "bbb"]);
+    expect(ordered.every((t) => !t.connected)).toBe(true);
+  });
+});
+
+describe("defaultTripleSelection", () => {
+  it("selects the connected triple when present", () => {
+    const ordered = orderTriples([triEntry("aaa"), triEntry("bbb")], "bbb");
+    expect(defaultTripleSelection(ordered)?.key).toBe("bbb");
+    expect(defaultTripleSelection(ordered)?.connected).toBe(true);
+  });
+  it("falls back to the first triple (not connected) when no rig matches", () => {
+    const ordered = orderTriples([triEntry("aaa"), triEntry("bbb")], null);
+    const sel = defaultTripleSelection(ordered);
+    expect(sel?.key).toBe("aaa");
+    expect(sel?.connected).toBe(false); // UI shows a "not connected" state
+  });
+  it("is null when no triples are configured", () => {
+    expect(defaultTripleSelection(orderTriples([], null))).toBeNull();
   });
 });

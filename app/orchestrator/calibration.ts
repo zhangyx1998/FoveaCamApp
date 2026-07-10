@@ -177,6 +177,12 @@ export type CalibratedTriple = {
    *  Unlike `zoomOverride`/`baselineMm`, 0 is a MEANINGFUL value (no hold), so
    *  it resolves to a number, not null. */
   settleTimeUs: number;
+  /** The per-triple tracking-chain DELAY COMPENSATION (ms, SIGNED; 0 = off).
+   *  Disparity-scope reads this at activation and chains an IMM motion
+   *  predictor after the tracker (imm-delay-compensation.md). Like
+   *  `settleTimeUs` it resolves to a number (0 is meaningful = off), but here
+   *  the value is SIGNED (a positive value leads, negative lags). */
+  delayCompensationMs: number;
   /** The triple config's store path (`["triples", <hash>]`) — for sessions
    *  that read/write it directly beyond what `conv` bakes in (e.g.
    *  calibrate-drift's `drift_l`/`drift_r`). */
@@ -217,6 +223,13 @@ export async function leaseCalibratedTriple(): Promise<CalibratedTriple | null> 
       Number.isFinite(inputs.config.settle_time_us) &&
       inputs.config.settle_time_us >= 0
         ? inputs.config.settle_time_us
+        : 0,
+    // Delay compensation: SIGNED, 0 = off. Accept any finite number (negative
+    // is a valid retrodiction); non-finite / absent ⇒ 0.
+    delayCompensationMs:
+      typeof inputs.config.delay_compensation_ms === "number" &&
+      Number.isFinite(inputs.config.delay_compensation_ms)
+        ? inputs.config.delay_compensation_ms
         : 0,
     configPath,
   };

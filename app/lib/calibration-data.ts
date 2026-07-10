@@ -48,6 +48,12 @@ export interface TripleConfig {
    *  the trigger this long after a stream SWITCH (0/absent = no hold). Stored
    *  in µs (protocol units); the settings UI edits it in ms. */
   settle_time_us?: number;
+  /** Per-triple tracking-chain DELAY COMPENSATION (ms, SIGNED; 0/absent = off).
+   *  Disparity-scope reads this at activation and chains an IMM motion predictor
+   *  after the tracker: the downstream PID/mirrors consume the target's
+   *  ESTIMATED position at `t_result + delay`. Positive = predict into the
+   *  future (lead), negative = retrodict (lag). Stored + edited in ms. */
+  delay_compensation_ms?: number;
   [key: string]: unknown;
 }
 
@@ -185,6 +191,76 @@ export async function tripleLabel(hash: string, cameras: KnownCamera[]): Promise
   return shortHash(hash);
 }
 
+/**
+ * The hash of the CURRENTLY-CONNECTED triple — the one formed by the known
+ * cameras with roles L/C/R assigned (manage-cameras). Null when the connected
+ * cameras don't form a complete role set (no rig, or a partial one). This is
+ * the SAME source of truth `tripleLabel` uses to resolve friendly names, so the
+ * Device-config tab's default selection matches the labels the user sees.
+ */
+export async function connectedTripleHash(
+  cameras: KnownCamera[],
+): Promise<string | null> {
+  const byRole = (role: Role) => cameras.find((c) => c.role === role);
+  const L = byRole("L");
+  const C = byRole("C");
+  const R = byRole("R");
+  if (!L || !C || !R) return null;
+  return tripleHash({
+    L: getCameraKey(L),
+    C: getCameraKey(C),
+    R: getCameraKey(R),
+  });
+}
+
+/** One configured triple, ordered for the Device-config selector. */
+export interface TripleListItem {
+  /** Store hash key (`["triples", key]`). */
+  key: string;
+  label: string;
+  detail: string;
+  /** True when this is the currently-connected rig. */
+  connected: boolean;
+}
+
+/**
+ * Order the configured triples for the Device-config selector: the CONNECTED
+ * triple first, then the rest in the enumeration order they arrived in (which
+ * `enumerateCalibrationData` already sorts by friendly label). Pure + stable
+ * (a stable sort preserves the incoming order within each connected/not group),
+ * so the "connected first, then by name" contract is unit-testable.
+ */
+export function orderTriples(
+  entries: CalEntry[],
+  connectedKey: string | null,
+): TripleListItem[] {
+  const items = entries
+    .filter((e) => e.category === "triples")
+    .map((e) => ({
+      key: e.key,
+      label: e.label,
+      detail: e.detail,
+      connected: e.key === connectedKey,
+    }));
+  return items.sort((a, b) =>
+    a.connected === b.connected ? 0 : a.connected ? -1 : 1,
+  );
+}
+
+/**
+ * Resolve the Device tab's DEFAULT-selected triple: the connected triple when
+ * one is configured, else the FIRST configured triple (most-recent/first by the
+ * ordering) so the tab is never empty when triples exist. The returned item's
+ * `connected` flag lets the UI show a "not connected" state on the fallback.
+ * Null only when no triples are configured at all.
+ */
+export function defaultTripleSelection(
+  ordered: TripleListItem[],
+): TripleListItem | null {
+  if (ordered.length === 0) return null;
+  return ordered.find((t) => t.connected) ?? ordered[0];
+}
+
 /** Read an intrinsic doc's summary metadata (views · RMS · date). */
 async function intrinsicDetail(store: CalStore, key: string): Promise<string> {
   const cal = await store.read<Record<string, unknown>>(
@@ -220,6 +296,13 @@ async function tripleDetail(store: CalStore, key: string): Promise<string> {
     flags.push(`baseline ${Math.round(doc.baseline_mm as number)} mm`);
   if (typeof doc.settle_time_us === "number" && doc.settle_time_us > 0)
     flags.push(`settle ${((doc.settle_time_us as number) / 1000).toFixed(1)} ms`);
+  if (
+    typeof doc.delay_compensation_ms === "number" &&
+    doc.delay_compensation_ms !== 0
+  )
+    flags.push(
+      `delay ${(doc.delay_compensation_ms as number) > 0 ? "+" : ""}${(doc.delay_compensation_ms as number).toFixed(1)} ms`,
+    );
   return flags.length ? flags.join(" · ") : "no overrides";
 }
 

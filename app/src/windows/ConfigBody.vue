@@ -4,19 +4,21 @@ This source code is licensed under the MIT license.
 You may find the full license in project root directory.
 --------------------------------------------------- -->
 <!--
-  Settings window body (async; mounted under ConfigWindow's <Suspense>). Two
-  sections:
-    1. Application — app-level config bound to the shared `["config"]` document
+  Settings window body (async; mounted under ConfigWindow's <Suspense>). A fixed
+  tab header (never scrolls out of view — only the tab content scrolls) switches
+  between two tabs:
+    1. GLOBAL config — app-wide config bound to the shared `["config"]` document
        through `useConfigRef`, so an edit here applies LIVE across windows (the
        store-hub broadcasts to every open window's `Store` client). Marker
        size/ratio + the TeleCanvas URL apply live to a running calibrate-* /
-       RemoteCanvas; the default save dir applies next session (hint says). The
-       baseline is NO LONGER here — Ruling A moved it to a per-TRIPLE setting.
-    2. Calibration data — enumerate every stored intrinsic / extrinsic / triple
-       document (`@lib/calibration-data`), inspect metadata, edit a triple's
-       `zoom_override` + `baseline_mm`, and DELETE entries (two-step confirm).
-       Friendly names resolve against the currently-known cameras (Welcome
-       probe list).
+       RemoteCanvas; the default save dir applies next session (hint says).
+    2. DEVICE config (per-triple) — everything scoped to ONE selected triple:
+       the per-triple overrides (baseline, zoom, settle, delay compensation)
+       PLUS the full calibration-data inventory (intrinsic / extrinsic / every
+       triple doc) so orphaned entries for disconnected rigs stay reachable. A
+       selector (first item) switches triples via a centered modal list; the
+       CONNECTED rig is selected by default and badged with a plug icon.
+       Friendly names resolve against the currently-known cameras (probe list).
 -->
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
@@ -33,6 +35,9 @@ import {
   deleteCalibrationEntry,
   categoryTitle,
   resolveBaseline,
+  connectedTripleHash,
+  orderTriples,
+  defaultTripleSelection,
   type CalStore,
   type CalEntry,
   type CalCategory,
@@ -41,8 +46,17 @@ import {
 } from "@lib/calibration-data";
 import type { ProbeCamera } from "@lib/orchestrator/probe";
 import { FontAwesomeIcon as Icon } from "@fortawesome/vue-fontawesome";
-import { faArrowsRotate, faChevronDown, faChevronUp } from "./icons";
-import { faTrash, faCopy, faCheck } from "@fortawesome/free-solid-svg-icons";
+import { faArrowsRotate, faChevronDown } from "./icons";
+import { faTrash, faCopy, faCheck, faPlug } from "@fortawesome/free-solid-svg-icons";
+
+// ---- Tabs (fixed header; only the content below scrolls) -------------------
+type Tab = "global" | "device";
+const activeTab = ref<Tab>("global");
+// One shared scroller hosts both v-show sections (preserves expanded/transient
+// state across switches) — reset it on tab change so Device doesn't open
+// pre-scrolled to Global's offset (UI/UX review 2026-07-10).
+const tabContent = ref<HTMLElement | null>(null);
+watch(activeTab, () => tabContent.value?.scrollTo({ top: 0 }));
 
 // ---- App-level config (live, writable refs over the shared document) --------
 const default_save_dir = await useConfigRef("default_save_dir");
@@ -130,11 +144,15 @@ const calStore: CalStore = {
 
 const entries = ref<CalEntry[]>([]);
 const loading = ref(false);
+// The hash of the currently-connected rig (one camera each of role L/C/R), or
+// null when no complete rig is plugged in — the Device tab's default selection.
+const connectedKey = ref<string | null>(null);
 
 async function refresh() {
   loading.value = true;
   try {
     entries.value = await enumerateCalibrationData(calStore, cameras.value);
+    connectedKey.value = await connectedTripleHash(cameras.value);
   } finally {
     loading.value = false;
   }
@@ -153,23 +171,49 @@ const grouped = computed(() => {
 
 const entryId = (e: CalEntry) => `${e.category}/${e.key}`;
 
-// ---- Per-triple zoom_override editing (expandable) -------------------------
-const expanded = ref<Set<string>>(new Set());
-// Reactive triple docs, opened lazily on first expand. `Store.open` returns a
-// reactive object; mutating `zoom_override` re-persists the WHOLE document, so
+// ---- Device-config triple selection ----------------------------------------
+// The configured triples, connected-first (pure ordering — see
+// `@lib/calibration-data`). The selector + default resolution consume this.
+const orderedTriples = computed(() => orderTriples(entries.value, connectedKey.value));
+const selectedTripleKey = ref<string | null>(null);
+const selectedTriple = computed(
+  () => orderedTriples.value.find((t) => t.key === selectedTripleKey.value) ?? null,
+);
+const tripleDialogOpen = ref(false);
+
+// Reactive triple docs, opened lazily on selection. `Store.open` returns a
+// reactive object; mutating one field re-persists the WHOLE document, so
 // drift_l/drift_r (and any other field) are preserved.
 const tripleDocs = ref<Record<string, TripleConfig>>({});
 
-async function toggleExpand(e: CalEntry) {
-  const id = entryId(e);
-  const next = new Set(expanded.value);
-  if (next.has(id)) next.delete(id);
-  else {
-    next.add(id);
-    if (e.category === "triples" && !(e.key in tripleDocs.value))
-      tripleDocs.value[e.key] = await Store.open<TripleConfig>(["triples", e.key]);
-  }
-  expanded.value = next;
+async function openTripleDoc(key: string) {
+  if (!(key in tripleDocs.value))
+    tripleDocs.value[key] = await Store.open<TripleConfig>(["triples", key]);
+}
+
+// Keep the selection valid: default to the connected rig (else the first
+// triple) whenever the current selection disappears or was never made.
+watch(
+  orderedTriples,
+  (list) => {
+    if (selectedTripleKey.value && list.some((t) => t.key === selectedTripleKey.value))
+      return;
+    selectedTripleKey.value = defaultTripleSelection(list)?.key ?? null;
+  },
+  { immediate: true },
+);
+// Open the selected triple's reactive doc so the per-triple fields bind to it.
+watch(
+  selectedTripleKey,
+  (key) => {
+    if (key) void openTripleDoc(key);
+  },
+  { immediate: true },
+);
+
+function selectTriple(key: string) {
+  selectedTripleKey.value = key;
+  tripleDialogOpen.value = false; // instant close (no fade) — snap ruling
 }
 
 /** Read a triple's current zoom_override (0 / absent = none). */
@@ -223,6 +267,23 @@ function setSettleMs(key: string, ms: number) {
   else doc.settle_time_us = Math.round(ms * 1000);
 }
 
+/** Read a triple's tracking-chain delay compensation (ms, SIGNED; 0/absent =
+ *  off). Unlike the others this may be negative (a retrodiction). */
+function delayOf(key: string): number {
+  const v = tripleDocs.value[key]?.delay_compensation_ms;
+  return typeof v === "number" ? v : 0;
+}
+/** Write a triple's delay compensation: 0/blank CLEARS the field (off), any
+ *  other finite value (incl. negative) stores it — other fields ride along on
+ *  re-persist. Applies at the NEXT Disparity Scope session start (config docs
+ *  are per-instance). */
+function setDelay(key: string, ms: number) {
+  const doc = tripleDocs.value[key];
+  if (!doc) return;
+  if (!ms || !Number.isFinite(ms)) delete doc.delay_compensation_ms;
+  else doc.delay_compensation_ms = ms;
+}
+
 // ---- Two-step delete confirm -----------------------------------------------
 const confirming = ref<string | null>(null);
 
@@ -235,8 +296,10 @@ function cancelDelete() {
 async function doDelete(e: CalEntry) {
   await deleteCalibrationEntry(calStore, e);
   confirming.value = null;
-  expanded.value.delete(entryId(e));
   delete tripleDocs.value[e.key];
+  // Dropping the selected triple's doc → let the watcher re-resolve a default.
+  if (e.category === "triples" && selectedTripleKey.value === e.key)
+    selectedTripleKey.value = null;
   await refresh();
 }
 
@@ -261,9 +324,33 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="scroll">
-    <!-- ============ Application ============ -->
-    <section>
+  <div class="config-root">
+    <!-- Fixed tab header — never scrolls out of view (only .tab-content does).
+         Tab switch is instant (no fade/slide) per the snap ruling. -->
+    <div class="tabs" role="tablist" aria-label="Settings sections">
+      <button
+        role="tab"
+        :aria-selected="activeTab === 'global'"
+        class="tab"
+        :class="{ active: activeTab === 'global' }"
+        @click="activeTab = 'global'"
+      >
+        Global config
+      </button>
+      <button
+        role="tab"
+        :aria-selected="activeTab === 'device'"
+        class="tab"
+        :class="{ active: activeTab === 'device' }"
+        @click="activeTab = 'device'"
+      >
+        Device config
+      </button>
+    </div>
+
+    <div class="tab-content" ref="tabContent">
+      <!-- ============ GLOBAL config ============ -->
+      <section v-show="activeTab === 'global'">
       <h2>Application</h2>
 
       <label class="row">
@@ -397,151 +484,311 @@ onUnmounted(() => {
         C = cyan). Applies live to Disparity Scope's center Anaglyph view and the
         recording viewer's 3D mode.
       </p>
-    </section>
+      </section>
 
-    <!-- ============ Calibration data ============ -->
-    <section>
-      <h2>
-        Calibration data
-        <span class="count" v-if="entries.length">({{ entries.length }})</span>
-        <button class="icon-button" title="Refresh calibration data" @click="refresh">
-          <Icon :icon="faArrowsRotate" />
-        </button>
-      </h2>
+      <!-- ============ DEVICE config (per-triple) ============ -->
+      <section v-show="activeTab === 'device'">
+        <h2>Device configuration</h2>
 
-      <p v-if="!loading && entries.length === 0" class="empty">
-        No stored calibration data.
-      </p>
-
-      <div v-for="g in grouped" :key="g.category" class="group">
-        <h3>{{ g.title }}</h3>
-        <div v-for="e in g.items" :key="entryId(e)" class="entry">
-          <div class="entry-head">
-            <button
-              v-if="e.category === 'triples'"
-              class="expander"
-              :title="expanded.has(entryId(e)) ? 'Collapse' : 'Expand'"
-              @click="toggleExpand(e)"
+        <!-- Triple selector: the FIRST item. Opens a centered modal list of
+             every configured triple; the connected rig is badged + default. -->
+        <div class="row selector-row">
+          <span class="label">Triple</span>
+          <button
+            class="triple-select"
+            :disabled="orderedTriples.length === 0"
+            :title="orderedTriples.length === 0 ? 'No triples configured' : 'Choose a triple'"
+            @click="tripleDialogOpen = true"
+          >
+            <Icon
+              v-if="selectedTriple?.connected"
+              :icon="faPlug"
+              class="conn-icon"
+              title="Connected rig"
+            />
+            <span class="sel-label">{{
+              selectedTriple ? selectedTriple.label : "No triples configured"
+            }}</span>
+            <span v-if="selectedTriple && !selectedTriple.connected" class="disc-chip"
+              >not connected</span
             >
-              <Icon :icon="expanded.has(entryId(e)) ? faChevronUp : faChevronDown" />
-            </button>
-            <span v-else class="expander-spacer"></span>
-            <span class="entry-label" :title="e.key">{{ e.label }}</span>
-            <span class="entry-detail">{{ e.detail }}</span>
-            <button
-              class="icon-button"
-              :class="{ arming: confirming === entryId(e) }"
-              title="Delete this calibration data"
-              @click="askDelete(e)"
-            >
-              <Icon :icon="faTrash" />
-            </button>
-          </div>
+            <Icon :icon="faChevronDown" class="caret" />
+          </button>
+        </div>
+        <p class="hint">
+          Pick the rig (L / C / R triple) to configure. The connected rig
+          <Icon :icon="faPlug" class="inline-icon" /> is selected by default; you
+          can also edit a rig that isn't plugged in — its changes save to its own
+          stored config.
+        </p>
 
-          <!-- Two-step confirm as an in-place OVERLAY (absolute, anchored under
-               the row) so revealing it never reflows the entries below it. -->
-          <div v-if="confirming === entryId(e)" class="confirm-pop" role="alert">
-            <p class="warn">
-              Deletes stored data permanently. If an app is running it keeps the
-              copy it loaded at activation; the deletion takes effect on the next
-              session.
-            </p>
-            <div class="confirm-actions">
-              <button class="btn danger" @click="doDelete(e)">Confirm delete</button>
-              <button class="btn" @click="cancelDelete">Cancel</button>
+        <!-- Per-triple overrides for the SELECTED triple ------------------- -->
+        <template v-if="selectedTripleKey">
+          <label class="row">
+            <span class="label">Zoom override</span>
+            <span class="field">
+              <span v-if="zoomOf(selectedTripleKey) === 0" class="none-hint">none</span>
+              <input
+                type="number"
+                step="0.1"
+                min="0"
+                :value="zoomOf(selectedTripleKey)"
+                @input="
+                  (ev) =>
+                    setZoom(selectedTripleKey!, Number((ev.target as HTMLInputElement).value))
+                "
+              />
+              <span class="unit">×</span>
+            </span>
+          </label>
+          <p class="hint">
+            0 = none (use the calibration-measured magnification). Drives
+            Disparity Scope's Auto match zoom on the next session start; the
+            window's own zoom knob still overrides when set.
+          </p>
+
+          <label class="row">
+            <span class="label">Baseline</span>
+            <span class="field">
+              <span v-if="baselineOf(selectedTripleKey) === 0" class="none-hint"
+                >app default: {{ effectiveBaselineFallback }} mm</span
+              >
+              <input
+                type="number"
+                step="1"
+                min="0"
+                :value="baselineOf(selectedTripleKey)"
+                @input="
+                  (ev) =>
+                    setBaseline(
+                      selectedTripleKey!,
+                      Number((ev.target as HTMLInputElement).value),
+                    )
+                "
+              />
+              <span class="unit">mm</span>
+            </span>
+          </label>
+          <p class="hint">
+            Physical stereo baseline for this triple. Empty = use the app
+            default. Applies to Disparity Scope's verge limits and the Extrinsic
+            / Drift / Distortion marker spacing (marker spacing updates live; the
+            verge limit applies on the next session start).
+          </p>
+
+          <label class="row">
+            <span class="label">Settle time</span>
+            <span class="field">
+              <span v-if="settleMsOf(selectedTripleKey) === 0" class="none-hint"
+                >none</span
+              >
+              <input
+                type="number"
+                step="0.1"
+                min="0"
+                max="20"
+                :value="settleMsOf(selectedTripleKey)"
+                @input="
+                  (ev) =>
+                    setSettleMs(
+                      selectedTripleKey!,
+                      Number((ev.target as HTMLInputElement).value),
+                    )
+                "
+              />
+              <span class="unit">ms</span>
+            </span>
+          </label>
+          <p class="hint">
+            0 = no hold. Multi-Fovea holds the trigger this long after the
+            round-robin SWITCHES streams (mirror moved), then runs the normal
+            exposure — independent of exposure time. Applies on the next
+            Multi-Fovea session start; the app's drawer slider overrides it live
+            for a running session.
+          </p>
+
+          <label class="row">
+            <span class="label">Delay compensation</span>
+            <span class="field">
+              <!-- 0 is legible as "none" inline; the input stays anchored so
+                   toggling never reflows the row. SIGNED (negative = lag). -->
+              <span v-if="delayOf(selectedTripleKey) === 0" class="none-hint">none</span>
+              <!-- SIGNED field: commit on @change (blur/Enter), NOT @input —
+                   a live @input turns the intermediate "-" of "-5" into
+                   Number("") === 0, clears the doc field, and Vue stamps "0"
+                   back over the minus the user just typed (UI/UX review
+                   2026-07-10). The unsigned siblings keep live @input. -->
+              <input
+                type="number"
+                step="1"
+                min="-50"
+                max="50"
+                :value="delayOf(selectedTripleKey)"
+                @change="
+                  (ev) =>
+                    setDelay(selectedTripleKey!, Number((ev.target as HTMLInputElement).value))
+                "
+              />
+              <span class="unit">ms</span>
+            </span>
+          </label>
+          <p class="hint">
+            0 = off (tracker output used as-is). Disparity Scope chains an IMM
+            motion predictor after the tracker so the mirrors act on the target's
+            ESTIMATED position at t + this delay: POSITIVE leads (predicts ahead,
+            to offset tracking-chain latency), negative lags (retrodicts).
+            Applies on the next Disparity Scope session start.
+          </p>
+        </template>
+        <p v-else class="empty">
+          No triples configured yet. Assign camera roles in Manage Cameras and
+          calibrate a rig to create one.
+        </p>
+
+        <!-- Full calibration-data inventory. Camera-bound intrinsic/extrinsic
+             docs can't be reverse-mapped from a triple hash, so the WHOLE
+             inventory stays reachable here (orphaned entries for disconnected
+             rigs included); the per-triple fields above scope the editable
+             overrides to the selected rig. -->
+        <div class="inventory">
+          <h3 class="inv-head">
+            Calibration data
+            <span class="count" v-if="entries.length">({{ entries.length }})</span>
+            <button class="icon-button" title="Refresh calibration data" @click="refresh">
+              <Icon :icon="faArrowsRotate" />
+            </button>
+          </h3>
+
+          <p v-if="!loading && entries.length === 0" class="empty">
+            No stored calibration data.
+          </p>
+
+          <div v-for="g in grouped" :key="g.category" class="group">
+            <h3>{{ g.title }}</h3>
+            <div v-for="e in g.items" :key="entryId(e)" class="entry">
+              <div class="entry-head">
+                <Icon
+                  v-if="e.category === 'triples' && e.key === connectedKey"
+                  :icon="faPlug"
+                  class="conn-icon"
+                  title="Connected rig"
+                />
+                <span v-else class="expander-spacer"></span>
+                <span class="entry-label" :title="e.key">{{ e.label }}</span>
+                <span class="entry-detail">{{ e.detail }}</span>
+                <button
+                  class="icon-button"
+                  :class="{ arming: confirming === entryId(e) }"
+                  title="Delete this calibration data"
+                  @click="askDelete(e)"
+                >
+                  <Icon :icon="faTrash" />
+                </button>
+              </div>
+
+              <!-- Two-step confirm as an in-place OVERLAY (absolute, anchored
+                   under the row) so revealing it never reflows the rows below. -->
+              <div v-if="confirming === entryId(e)" class="confirm-pop" role="alert">
+                <p class="warn">
+                  Deletes stored data permanently. If an app is running it keeps
+                  the copy it loaded at activation; the deletion takes effect on
+                  the next session.
+                </p>
+                <div class="confirm-actions">
+                  <button class="btn danger" @click="doDelete(e)">Confirm delete</button>
+                  <button class="btn" @click="cancelDelete">Cancel</button>
+                </div>
+              </div>
             </div>
           </div>
+        </div>
+      </section>
+    </div>
 
-          <div
-            v-if="e.category === 'triples' && expanded.has(entryId(e))"
-            class="triple-body"
-          >
-            <label class="row">
-              <span class="label">Zoom override</span>
-              <span class="field">
-                <!-- Mirrors disparity-scope's zoom "Auto" hint: 0 is legible as
-                     "none" inline; the input stays anchored so toggling never
-                     reflows the row. -->
-                <span v-if="zoomOf(e.key) === 0" class="none-hint">none</span>
-                <input
-                  type="number"
-                  step="0.1"
-                  min="0"
-                  :value="zoomOf(e.key)"
-                  @input="
-                    (ev) => setZoom(e.key, Number((ev.target as HTMLInputElement).value))
-                  "
-                />
-                <span class="unit">×</span>
-              </span>
-            </label>
-            <p class="hint">
-              0 = none (use the calibration-measured magnification). Drives
-              Disparity Scope's Auto match zoom on the next session start; the
-              window's own zoom knob still overrides when set.
-            </p>
-
-            <label class="row">
-              <span class="label">Baseline</span>
-              <span class="field">
-                <!-- Empty (0) shows the effective app-default fallback inline;
-                     the input stays anchored so toggling never reflows. -->
-                <span v-if="baselineOf(e.key) === 0" class="none-hint"
-                  >app default: {{ effectiveBaselineFallback }} mm</span
-                >
-                <input
-                  type="number"
-                  step="1"
-                  min="0"
-                  :value="baselineOf(e.key)"
-                  @input="
-                    (ev) => setBaseline(e.key, Number((ev.target as HTMLInputElement).value))
-                  "
-                />
-                <span class="unit">mm</span>
-              </span>
-            </label>
-            <p class="hint">
-              Physical stereo baseline for this triple. Empty = use the app
-              default. Applies to Disparity Scope's verge limits and the
-              Extrinsic / Drift / Distortion marker spacing (marker spacing
-              updates live; the verge limit applies on the next session start).
-            </p>
-
-            <label class="row">
-              <span class="label">Settle time</span>
-              <span class="field">
-                <span v-if="settleMsOf(e.key) === 0" class="none-hint">none</span>
-                <input
-                  type="number"
-                  step="0.1"
-                  min="0"
-                  max="20"
-                  :value="settleMsOf(e.key)"
-                  @input="
-                    (ev) => setSettleMs(e.key, Number((ev.target as HTMLInputElement).value))
-                  "
-                />
-                <span class="unit">ms</span>
-              </span>
-            </label>
-            <p class="hint">
-              0 = no hold. Multi-Fovea holds the trigger this long after the
-              round-robin SWITCHES streams (mirror moved), then runs the normal
-              exposure — independent of exposure time. Applies on the next
-              Multi-Fovea session start; the app's drawer slider overrides it
-              live for a running session.
-            </p>
-          </div>
+    <!-- Triple picker modal (same DOM, centered floating scrollable list —
+         reuses the app's .modal-scrim/.modal shell). Opening it does not shift
+         the underlying layout (fixed scrim); no fade/slide (snap ruling). -->
+    <div
+      v-if="tripleDialogOpen"
+      class="modal-scrim"
+      @click.self="tripleDialogOpen = false"
+    >
+      <div class="modal triple-dialog" role="dialog" aria-label="Select a triple">
+        <h3>Select a triple</h3>
+        <ul class="triple-list">
+          <li v-for="t in orderedTriples" :key="t.key">
+            <button
+              class="triple-item"
+              :class="{ active: t.key === selectedTripleKey }"
+              @click="selectTriple(t.key)"
+            >
+              <Icon
+                v-if="t.connected"
+                :icon="faPlug"
+                class="conn-icon"
+                title="Connected rig"
+              />
+              <span v-else class="conn-spacer"></span>
+              <span class="ti-label" :title="t.key">{{ t.label }}</span>
+              <span class="ti-detail">{{ t.detail }}</span>
+            </button>
+          </li>
+        </ul>
+        <div class="modal-actions">
+          <button @click="tripleDialogOpen = false">Close</button>
         </div>
       </div>
-    </section>
+    </div>
   </div>
 </template>
 
 <style scoped lang="scss">
-.scroll {
+// Fixed tab header + independently-scrolling content: the header never leaves
+// the viewport (flex-shrink:0), only `.tab-content` scrolls.
+.config-root {
   height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.tabs {
+  flex-shrink: 0;
+  display: flex;
+  gap: 0.4ch;
+  padding: 0.6rem 1.5rem 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-app);
+}
+
+.tab {
+  font-family: inherit;
+  font-size: var(--fs-md);
+  color: var(--text-muted);
+  background: none;
+  border: none;
+  // 2px bottom border always present (transparent) so selecting only recolors
+  // it — no layout shift; the switch snaps (no transition, instant ruling).
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  padding: 0.5em 1em;
+  cursor: pointer;
+  outline: none;
+  &:hover {
+    color: var(--text);
+  }
+  &:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  &.active {
+    color: var(--text);
+    border-bottom-color: var(--accent-bright);
+  }
+}
+
+.tab-content {
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   padding: 1rem 1.5rem 3rem;
 }
@@ -807,30 +1054,195 @@ select {
   }
 }
 
-.expander,
 .expander-spacer {
   width: 1.6em;
   flex-shrink: 0;
 }
-.expander {
-  background: none;
-  border: none;
+
+// Inline "none" hint shared by the per-triple number fields (Device tab).
+.none-hint {
+  font-size: var(--fs-sm);
   color: var(--text-muted);
+  white-space: nowrap;
+}
+
+// ---- Device-config triple selector -----------------------------------------
+.selector-row {
+  min-height: 2.4em;
+}
+
+.triple-select {
+  display: flex;
+  align-items: center;
+  gap: 0.8ch;
+  flex: 1;
+  min-width: 24ch;
+  max-width: 42ch;
+  font-family: inherit;
+  font-size: 1em;
+  color: var(--text);
+  background: var(--bg-chrome);
+  border: none;
+  border-bottom: 2px solid var(--border-muted);
+  outline: none;
+  padding: 0.35em 0.6em;
   cursor: pointer;
-  padding: 0.2em;
-  &:hover {
-    color: var(--text);
+  text-align: left;
+  &:hover:not(:disabled) {
+    border-bottom-color: var(--text-muted);
+  }
+  &:focus-visible {
+    border-bottom-color: var(--accent-bright);
+  }
+  &:disabled {
+    color: var(--text-faint);
+    cursor: default;
+  }
+  .sel-label {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .caret {
+    color: var(--text-faint);
+    flex-shrink: 0;
   }
 }
 
-.triple-body {
-  padding: 0.2em 0.9em 0.6em;
-  border-top: 1px solid var(--border);
+.conn-icon {
+  color: var(--accent-bright);
+  flex-shrink: 0;
+}
+.inline-icon {
+  color: var(--accent-bright);
+}
+.conn-spacer {
+  width: 1em;
+  flex-shrink: 0;
+}
+.disc-chip {
+  font-size: var(--fs-sm);
+  color: var(--text-faint);
+  white-space: nowrap;
+  padding: 0.05em 0.5em;
+  border: 1px solid var(--border-muted);
+  border-radius: 999px;
+  flex-shrink: 0;
+}
 
-  .none-hint {
-    font-size: var(--fs-sm);
-    color: var(--text-muted);
+// ---- Calibration-data inventory (Device tab, below the per-triple fields) ---
+.inventory {
+  margin-top: 2rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+.inv-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6ch;
+  font-size: var(--fs-md);
+  color: var(--text-dim);
+  font-weight: 600;
+  margin: 0 0 0.8rem;
+  .count {
+    color: var(--text-faint);
+    font-size: 0.8em;
+    font-weight: 400;
+  }
+  .icon-button {
+    margin-left: auto;
+  }
+}
+
+// ---- Triple picker modal (reuses the app .modal-scrim / .modal shell) -------
+.modal-scrim {
+  position: fixed;
+  inset: 0;
+  background: #000a;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+.triple-dialog {
+  background: var(--bg-panel-alt);
+  border: 1px solid var(--tint-3);
+  border-radius: 8px;
+  padding: 1.2em 1.3em;
+  width: min(52ch, 90vw);
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  color: var(--text-strong);
+  box-shadow: 0 8px 30px var(--shadow);
+  h3 {
+    margin: 0 0 0.8em;
+    color: var(--text);
+  }
+}
+.triple-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto; // the list scrolls; the dialog shell stays put
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.triple-item {
+  display: flex;
+  align-items: center;
+  gap: 1ch;
+  width: 100%;
+  font-family: inherit;
+  font-size: 1em;
+  color: var(--text);
+  background: var(--bg-panel-alt);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.5em 0.7em;
+  cursor: pointer;
+  text-align: left;
+  outline: none;
+  &:hover {
+    background: var(--tint-1);
+    border-color: var(--border-muted);
+  }
+  &:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+  &.active {
+    border-color: var(--accent-bright);
+  }
+  .ti-label {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  .ti-detail {
+    color: var(--text-faint);
+    font-size: var(--fs-sm);
+    white-space: nowrap;
+  }
+}
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 1ch;
+  margin-top: 1em;
+  button {
+    background: var(--bg-app);
+    color: var(--text-strong);
+    border: 1px solid var(--border-strong);
+    border-radius: 4px;
+    padding: 0.35em 1.1em;
+    cursor: pointer;
+    &:hover {
+      background: var(--bg-elevated);
+    }
   }
 }
 

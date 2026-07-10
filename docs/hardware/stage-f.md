@@ -171,6 +171,24 @@ history has them). Cross-app platform checks live in the first two sections.
 - [ ] **Lost policy** — ~10 consecutive misses drop the auto-follow gate
   (status back to armed-off, target holds last-good).
 
+### Delay compensation (IMM predictor, imm-delay-compensation.md)
+- [ ] **Sign flips lead ↔ lag** — set a triple's Delay Compensation (Settings →
+  Device config) to +30 ms: on a smoothly moving target the mirrors lead
+  (foveas run ahead of the tracker bbox); flip to −30 ms → they lag behind by
+  the same visible amount. Magnitude scales with target speed.
+- [ ] **0 = identical behavior** — Delay Compensation 0 (or blank) is an EXACT
+  passthrough: tracking/steering is byte-for-byte the pre-feature behavior, and
+  the graph shows the plain `kcf → pid` edge (no imm node).
+- [ ] **Graph reads kcf → imm → pid** — with a non-zero delay the
+  `…/undistort/kcf/imm` node appears between the tracker and pid with truthful
+  rates on BOTH edges (rx ≈ tracker rate, tx ≈ pid target rate; no 0 Hz).
+- [ ] **Override/drag unaffected** — dragging during compensation: the drag
+  point drives the mirrors untouched (predictor passes overridden results
+  through + resets); on release no lurch from stale predicted velocity.
+- [ ] **Lost streak unchanged** — misses still propagate (found=false rides
+  through); the ~10-miss lost-latch fires exactly as without compensation; a
+  re-acquire snaps back with no teleport spike (innovation gate).
+
 ### Matching pipeline
 - [ ] **Split-node graph** — slice/scale/match-L/match-R/pid nodes all render
   with individual meters; no orphan monolithic kernel row.
@@ -351,12 +369,22 @@ history has them). Cross-app platform checks live in the first two sections.
 
 - [ ] **Open + backing (both paths)** — Cmd+, from Welcome (settings instance)
   and while an app runs (app's store-hub); reads/writes persist in both.
+- [ ] **Two tabs, fixed header** — Global / Device tabs switch instantly (no
+  fade); the tab header stays pinned while the content scrolls; horizontal
+  layout never shifts on switch.
+- [ ] **Device tab default = connected rig** — with a rig plugged in, Device
+  config opens on that triple with a plug badge; the selector modal opens
+  centered + scrollable (doesn't shift the page), lists every configured triple
+  connected-first, and lets you pick a DISCONNECTED triple (shows "not
+  connected", still editable/saves).
 - [ ] **Live apply** — marker size/ratio sliders track bidirectionally with a
   running calibrate window; TeleCanvas client URL retargets pushes without
   restart.
-- [ ] **Per-triple fields persist** — zoom_override, Baseline, and Settle
-  (ms, "none" at 0) survive restart without clobbering drift_l/drift_r;
-  friendly names resolve to the rig's serials.
+- [ ] **Per-triple fields persist** — zoom_override, Baseline, Settle
+  (ms, "none" at 0), and Delay Compensation (ms, signed, "none" at 0) survive
+  restart without clobbering drift_l/drift_r; friendly names resolve to the
+  rig's serials. Full calibration inventory (incl. disconnected-rig orphans)
+  stays reachable + deletable under the Device tab.
 - [ ] **Calibration manager** — delete an Intrinsic/Extrinsic/Triple entry,
   re-run that calibration, entry reappears with fresh metadata.
 - [ ] **Anaglyph style cards** — four split-swatch cards render truthfully,

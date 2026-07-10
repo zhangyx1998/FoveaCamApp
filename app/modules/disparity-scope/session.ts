@@ -87,6 +87,8 @@ import {
   outputOf,
   type PidNodeHandle,
 } from "@orchestrator/pid-node";
+import { createImmNode, type ImmNodeHandle } from "@orchestrator/imm-node";
+import { delayIsActive } from "@lib/imm-predictor";
 import type { PipeBroker } from "@orchestrator/pipe-session";
 import type { PipeInput, VisionResult } from "@orchestrator/vision-worker-protocol";
 import {
@@ -299,6 +301,10 @@ export default function disparityScopeSession(
     // The graph-visible PID controller node (created on activate). Holds the
     // vergence controllers + the renderer-driven override slot.
     let pidNode: PidNodeHandle<VergenceVolts> | null = null;
+    // IMM motion predictor node chained AFTER the tracker (imm-delay-
+    // compensation): null unless the leased triple sets a non-zero
+    // `delay_compensation_ms` (0 = exact passthrough, so we don't even wire it).
+    let immNode: ImmNodeHandle | null = null;
 
     let windowStart = now();
     let lastStep = now();
@@ -1161,7 +1167,27 @@ export default function disparityScopeSession(
           trackerArmed = false;
           trackerActive = false;
         });
-        void consumeTracker(tk, trackerFeed);
+        // Chain the IMM predictor node ONLY when a signed delay is configured
+        // (0 = exact passthrough → no node, zero behavior change). Each result
+        // passes through `immNode.process` BEFORE the reducer: the predicted
+        // center/bbox replaces the measurement, `found`/`seq`/`deviceTimestamp`/
+        // `overridden` preserved (the predictor self-resets on drag/gaps).
+        if (delayIsActive(t.delayCompensationMs)) {
+          immNode = createImmNode({
+            id: nodeId.imm(kcfId),
+            owner: "win/disparity-scope",
+            trackerId: kcfId,
+            port: "target",
+            config: { delayMs: t.delayCompensationMs },
+          });
+          disposers.add(() => {
+            immNode?.dispose();
+            immNode = null;
+          });
+        }
+        void consumeTracker(tk, (r) =>
+          trackerFeed(immNode ? immNode.process(r) : r),
+        );
       }
 
       monitor.done("tracker");
@@ -1290,7 +1316,12 @@ export default function disparityScopeSession(
         inputs: [
           { from: matchIds.L, port: "l" },
           { from: matchIds.R, port: "r" },
-          ...(tk ? [{ from: kcfId, port: "target" }] : []),
+          // kcf → pid, OR kcf → imm → pid when the predictor is active: the
+          // pid's `target` input then reads from the imm node (edge ownership
+          // by the consumer, same as the pid → controller edge).
+          ...(tk
+            ? [{ from: immNode ? immNode.id : kcfId, port: "target" }]
+            : []),
         ],
         outputs: [{ to: nodeId.controller(), port: "volt" }],
         controllers: { pan, verge, v_shift },

@@ -145,6 +145,10 @@ export interface ConversionInputs {
     /** Per-triple trigger settle hold (µs, v2.0) — carried through for the
      *  multi-fovea session; does NOT alter the conversion math here. */
     settle_time_us?: number;
+    /** Per-triple tracking-chain delay compensation (ms, signed) — carried
+     *  through for the disparity-scope IMM predictor; does NOT alter the
+     *  conversion math here. */
+    delay_compensation_ms?: number;
   };
 }
 

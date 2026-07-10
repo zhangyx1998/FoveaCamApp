@@ -213,6 +213,10 @@ export const nodeId = {
    *  and-fifo-edges §3.5): tracks the undistorted view on its own native
    *  thread — the id nests under /undistort/ because that IS its input. */
   undistortKcf: (serial: string): string => `camera/${serial}/undistort/kcf`,
+  /** IMM motion-predictor node chained after a tracker (imm-delay-
+   *  compensation): nests under its SOURCE tracker id — that IS its input, same
+   *  rule as scale/heatmap. Reads `…/undistort/kcf/imm` in the LR graph. */
+  imm: (trackerId: string): string => `${trackerId}/imm`,
   /** Marker detector stream (non-pipe transport). */
   detect: (serial: string): string => `camera/${serial}/detect`,
   /** Dynamic fovea crop pipe (B-24 brick; slot reuse is epoch-guarded). The id
