@@ -181,18 +181,26 @@ async function runStress(): Promise<void> {
     }
   };
   await Promise.all(Array.from({ length: WORKERS }, () => churn()));
+  console.error("\n  [phase] churn workers joined — closing background subscribers");
 
   stopBg = true;
+  let bgClosed = 0;
   for (const it of background) {
     try {
       await it.return?.();
     } catch {
       /* ignore */
     }
+    if ((++bgClosed & 127) === 0)
+      process.stderr.write(`\r  [phase] background closed ${bgClosed}/${BG}`);
   }
+  console.error(`\n  [phase] background closed ${bgClosed}/${BG} — settling pumps`);
   await Promise.allSettled(pumps);
+  console.error("  [phase] pumps settled — releasing tracker");
   tracker.release();
+  console.error("  [phase] tracker released — releasing camera");
   camera.release?.();
+  console.error("  [phase] camera released — cleanup");
   cleanup();
   console.log(
     `\n36-stream-close-deadlock: PASS — churned ${closed} ` +

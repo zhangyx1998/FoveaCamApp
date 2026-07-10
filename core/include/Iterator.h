@@ -124,7 +124,13 @@ public:
   };
   FN(stop) {
     VERBOSE("%s::stop([From JS])", NAME.c_str());
-    Subscriber<T>::close();
+    // VIRTUAL close — must reach Queue::close so pending futures are drained
+    // ({done} resolution). The old `Subscriber<T>::close()` was a QUALIFIED
+    // (static) call that bypassed the override: a consumer parked on a pending
+    // next() when JS called return() was never resolved — its await leaked
+    // forever. Timing-masked at -O0 (data_queue usually non-empty, so next()
+    // rarely parked); deterministic wedge at -O2 (test 36's pump drain).
+    close(true, nullptr);
     auto env = info.Env();
     auto deferred = Napi::Promise::Deferred::New(env);
     deferred.Resolve(IterNext(env));
@@ -218,7 +224,9 @@ public:
   FN(stop) {
     VERBOSE("%s::stop()", NAME.c_str());
     auto env = info.Env();
-    Subscriber<T>::close();
+    // Virtual close (same fix as Queue::stop): reach Latest::close so the
+    // native `wait()` blockers are notified, not just the base state flip.
+    close(true, nullptr);
     return IterNext(env);
   };
   GET(current) {

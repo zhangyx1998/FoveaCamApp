@@ -256,6 +256,28 @@ in C++. Hover attribution (`droppedQueue` vs `droppedRing`) still resolves;
 container the viewer's streaming reader recovers; `/zlib` streams record + decode;
 OLD `.fovea`/`.fcap` recordings still open.
 
+## Rig follow-up 2026-07-10 — drops persisted; root cause was the BUILD, not the writer
+
+The first rig recording after waves 1–3 still dropped hard (perf snapshot:
+3×60 fps offered, 27.4 written/s, ~151 drops/s all `queue-overflow`, 85 MB/s to
+disk against a measured 1.3 GB/s disk). Diagnosis chain: disk exonerated (dd at
+frame-sized blocks), CRC exonerated (system libz, hardware crc32 at 15 GB/s), a
+standalone -O2 emulation of the exact writer loop hit ~1,485 frames/s — then a
+`sample` of the live writer showed the hot leaves were **per-byte
+`std::vector` construct/destroy frames**. `core/CMakeLists.txt` had hardcoded
+`set(CMAKE_BUILD_TYPE Debug)` with `-g` and NO `-O` since 2025-10-11: the entire
+native core (this writer, every brick) had been compiling at -O0.
+
+Fix: `CMAKE_CXX_FLAGS_DEBUG = "-O2 -g -DDEBUG"` (symbols kept for the crash
+handler's backtraces; `DEBUG` kept — it only gates VERBOSE logging). Bench after:
+**zero drops** at the same synthetic 3-stream load (~195 MB/s sustained, writer
+idle-waiting). The optimization also exposed one REAL latent bug (timing-masked
+at -O0): `Sub::Queue`/`Sub::Latest` `stop()` called `Subscriber<T>::close()` — a
+QUALIFIED (static) call that bypassed the virtual `Queue::close` override, so a
+consumer parked on a pending `next()` when JS called `return()` leaked its await
+forever (deterministic test-36 wedge at -O2). Fixed by virtual dispatch
+(`close(true, nullptr)`); test 36 now passes 3/3 in ~1 s (was ~30 s of churn).
+
 ## Alternative considered — vendoring foxglove/mcap C++ (ruled: keep hand-rolled writer)
 
 Analyzed 2026-07-10 at the user's request, after waves 1–3 shipped. The official

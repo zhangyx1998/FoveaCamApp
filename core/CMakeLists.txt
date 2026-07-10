@@ -13,6 +13,11 @@ list(APPEND CMAKE_MODULE_PATH ${PROJECT_HOME}/scripts)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+# Optimized-with-symbols, ALWAYS. This line was `Debug` (-g only, NO -O) from
+# 2025-10-11 until 2026-07-10 — every native brick ran at -O0; the recorder's
+# vector copies executed BYTE-BY-BYTE (~82 fps writer vs ~1500 fps at -O2, the
+# frame-drop root cause). `-g` stays: the crash handler's backtraces need
+# symbols. `-DDEBUG` stays: it only gates the env-controlled VERBOSE logging.
 set(CMAKE_BUILD_TYPE Debug)
 
 set(SRC_DIR ${PROJECT_HOME}/src)
@@ -21,7 +26,7 @@ set(INC_DIR ${PROJECT_HOME}/include)
 file(GLOB SRCS ${SRC_DIR}/*.cpp ${SRC_DIR}/**/*.cpp)
 
 # set(CMAKE_CXX_FLAGS "-Wall -Wno-ignored-qualifiers")
-set(CMAKE_CXX_FLAGS_DEBUG "-g -DDEBUG")
+set(CMAKE_CXX_FLAGS_DEBUG "-O2 -g -DDEBUG")
 set(CMAKE_CXX_FLAGS_RELEASE "-O3")
 add_definitions(${CXX_FLAGS})
 # When a Napi::Error can't be rethrown into JS (env terminating, or an

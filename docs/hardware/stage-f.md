@@ -882,6 +882,11 @@ soak. Take these to the rig:
 - [ ] **Full-rate 3-camera sustains** — record all three cameras at full rate; the
   original defect (`droppedQueue` under load) does NOT reproduce — the RecordButton
   hover shows zero queue-attributed drops.
+  ⚠ REBUILD CORE FIRST (2026-07-10): the 07-10 rig run that still dropped
+  (27 written/s, 151 q-drops/s) was root-caused to the native core compiling at
+  -O0 since 2025-10-11 (`CMakeLists.txt` hardcoded Debug, no `-O`). Now `-O2 -g`;
+  synthetic 3×60fps bench post-fix: zero drops. Expect LOWER convert/undistort/KCF
+  utilization across the board on this rig pass — prior HIL numbers were -O0.
 - [ ] **Hover attribution still works** — force a drop (throttle disk); the hover
   splits `droppedQueue` (writer-busy) vs `droppedRing` (read loop lagged) correctly.
 - [ ] **Finalize under load** — stop while recording at full rate; the container
