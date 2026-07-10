@@ -243,18 +243,51 @@ protected:
   virtual void push(const T &item) = 0;
 
 public:
-  // NOTE: All calls from Stream must specify `unsubscribe = false` to avoid
-  //       calling back to Stream::unsubscribe, which will cause deadlock.
   // Overrides of the function must first call the base class close().
   // This ensures the state is frozen before executing additional close code.
+  //
+  // LOCK ORDER: the state guard must NOT be held across the call into
+  // Stream::unsubscribe (which takes the stream's `mutex`). The publisher-side
+  // fan-out in Stream::loop() holds the stream `mutex` first, then takes each
+  // subscriber's state guard — so holding state here while reaching for the
+  // stream mutex is the opposite order and deadlocks (a TransformStream thread
+  // exiting → ~Latest → ~Subscriber → close(true) racing its upstream fan-out
+  // wedged the whole app: the fan-out stuck wanting a state guard, this
+  // unsubscribe stuck wanting the stream mutex). Therefore: freeze the state
+  // under the guard (capture + null the stream pointer, set the error), RELEASE
+  // the guard, and only then unsubscribe.
+  //
+  // This reorder is safe:
+  //  1. push() is still never called on a closed subscriber: the fan-out checks
+  //     ref->isActive() under the state guard, and once we have nulled the
+  //     stream (under that same guard) a concurrent fan-out skips this sub.
+  //  2. No use-after-free: unsubscribe() blocks on the stream mutex, which the
+  //     fan-out holds for its entire iteration; so this subscriber cannot be
+  //     erased (and thus ~Subscriber cannot complete) while the loop might
+  //     still dereference it. Once unsubscribe returns, we are out of the set
+  //     and the loop can never touch us again.
+  //  3. Double-close stays idempotent: a second call sees stream==nullptr and
+  //     returns early.
+  //  4. Derived overrides (Sub::Queue / Sub::Latest / TapPublisher /
+  //     RecordSink) call this base FIRST, then drain on a *different* guard —
+  //     they only rely on the state being frozen (stream nulled + error set)
+  //     before we return, which still holds.
+  //
+  // Historical NOTE: calls originating from Stream itself pass
+  // `unsubscribe = false` (they already hold the stream mutex / are erasing us
+  // directly), so they never reach the unsubscribe path regardless.
   virtual void close(bool unsubscribe = true, TracedError::Ptr err = nullptr) {
-    auto ref = state.ref();
-    if (!ref->stream) // Already closed, do nothing
-      return;
-    if (ref->stream && unsubscribe)
-      ref->stream->unsubscribe(this);
-    ref->stream = nullptr;
-    ref->error = err;
+    Stream<T> *stream;
+    {
+      auto ref = state.ref();
+      if (!ref->stream) // Already closed, do nothing
+        return;
+      stream = ref->stream;
+      ref->stream = nullptr;
+      ref->error = err;
+    } // release the state guard BEFORE reaching for the stream mutex
+    if (stream && unsubscribe)
+      stream->unsubscribe(this);
   }
 
 public:
