@@ -55,6 +55,7 @@ import {
   type CaptureHelper,
 } from "@orchestrator/capture-helper";
 import type { RawPipeRegistry } from "@orchestrator/raw-pipe";
+import type { CompressPipeSeam } from "@orchestrator/compress-pipe";
 import type { PipeInput, VisionResult } from "@orchestrator/vision-worker-protocol";
 import type { CheckerValues } from "./vision";
 import { makeMat } from "@lib/mat";
@@ -99,6 +100,7 @@ function checkerObjPoints(pattern: { width: number; height: number }): Point3d[]
 export default function calibrateIntrinsicSession(
   broker: PipeBroker,
   rawPipes: RawPipeRegistry,
+  compress?: CompressPipeSeam,
 ): ServerSession<typeof calibrateIntrinsic> {
   return defineSession("calibrate-intrinsic", calibrateIntrinsic, (s) => {
     const known = new Map<string, CameraInfo>();
@@ -117,6 +119,7 @@ export default function calibrateIntrinsicSession(
       id: "recorder/calibrate-intrinsic",
       broker,
       rawPipes,
+      compress,
       streams: () => (activeLease ? { camera: activeLease.camera } : null),
       finished: (foveaPath) =>
         process.parentPort?.postMessage({ type: "recording:finished", path: foveaPath }),

@@ -24,6 +24,7 @@ import {
   type RawPipeSeam,
 } from "@orchestrator/raw-pipe";
 import type { CompressPipeSeam } from "@orchestrator/compress-pipe";
+import type { RecordCompression } from "@orchestrator/record-compression";
 import { ANCHOR_PAYLOAD } from "@orchestrator/anchor-node";
 import type {
   RecorderNodeOptions,
@@ -136,6 +137,10 @@ function makeDeps(overrides: Partial<MultiFoveaRecordingDeps> = {}) {
       release: () => {},
     }),
     compressStreams: () => ({ left: false, center: false, right: false }),
+    // Deterministic method (no store-hub/fs read): the compression tests override
+    // it. Default "zlib" so the per-stream switches drive routing on their own —
+    // the historical (pre-app-setting) behavior these tests were written against.
+    readMethod: async (): Promise<RecordCompression> => "zlib",
     finished: (p) => void finished.push(p),
     telemetry: (patch) => void telemetry.push(patch),
     createNode,
@@ -320,6 +325,27 @@ describe("multi-fovea recording controller", () => {
     // Teardown order: brick detached + sibling unadvertised on stop.
     expect(compress.log).toContain("detach:camera/SL/raw12p/zlib");
     expect(compress.log).toContain("unadvertise:camera/SL/raw12p/zlib");
+  });
+
+  it("method 'none' gates every switch off — an ON stream still records raw (no /zlib)", async () => {
+    // The deliberate behavior change (app-level record_compression): the per-stream
+    // switches are ENABLES of the CONFIGURED method. Under "none" NOTHING
+    // compresses even with a switch on (the server-side half of the disabled UI).
+    const compress = fakeCompress();
+    const { deps, nodes } = makeDeps({
+      compress: compress.seam,
+      compressStreams: () => ({ left: true, center: true, right: true }),
+      readMethod: async () => "none",
+    });
+    const rec = createMultiFoveaRecording(deps);
+    await rec.start(tmp());
+    const node = nodes[0]!;
+    expect(node.options.streams.left!.pipeId).toBe("camera/SL/raw12p");
+    expect(node.options.streams.center!.pipeId).toBe("camera/SC/raw12p");
+    expect(node.options.streams.right!.pipeId).toBe("camera/SR/raw12p");
+    // No brick was ever advertised/attached.
+    expect(compress.log).toEqual([]);
+    await rec.stop();
   });
 
   it("stop finalizes, releases, and notifies finished with the container path", async () => {

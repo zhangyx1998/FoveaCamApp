@@ -8,6 +8,13 @@ import Store from "./store.js";
 import { useDefaults } from "./util/index.js";
 import { DEFAULT_TELECANVAS_PORT, type TeleCanvasMode } from "./telecanvas.js";
 
+/** Recording compression method (extensible union — more methods may come;
+ *  none besides zlib now). Consumed at RECORDING START by the orchestrator
+ *  recording facilities. The orchestrator duplicates this union in the Vue-free
+ *  `@orchestrator/record-compression` (it must not import this Vue-touching
+ *  module); keep the two in sync. */
+export type RecordCompression = "none" | "zlib";
+
 export interface AppConfig {
   // ---- TeleCanvas (standalone dual-mode module) ------------------------
   // `client` (default) — PUT the merged projection SVG to a REMOTE TeleCanvas
@@ -26,6 +33,20 @@ export interface AppConfig {
   // if mounted, else ~/Downloads). Consumed by `@lib/save-path`'s default
   // resolution via `foveaBridge.resolveDefaultSavePath(dir, base)`.
   default_save_dir?: string;
+  // Recording compression method (default "none"). Read at RECORDING START by
+  // the orchestrator recording facilities (store-hub, same pattern as the
+  // calibrate-extrinsic marker sizes) → applies to recordings STARTED after the
+  // change; running recordings keep the method they started with. "none" =
+  // today's raw uncompressed streams for every app. "zlib" = the generic
+  // recording facility (@orchestrator/raw-recording — disparity-scope + the four
+  // calibrate wizards) routes ALL its raw streams through the per-frame zlib
+  // CompressStream brick (the recorder consumes the `/zlib` sibling); multi-fovea
+  // keeps its own composition and its per-stream toggles gate WHICH streams use
+  // this method (disabled under "none"). On-disk contract unchanged: compressed
+  // streams carry the `/zlib` pixelFormat suffix, so the viewer/pyfcap decode is
+  // untouched. NOTE (rig-gated, stage-f): lossless zlib may not hold full-rate
+  // 12p on all three cameras — drops attribute honestly in the RecordButton hover.
+  record_compression?: RecordCompression;
   // ---- Camera layout / calibration geometry ----------------------------
   // Stereo baseline (mm) — LEGACY FALLBACK ONLY (2026-07-09 per-triplet-settings
   // wave). The baseline is now a per-TRIPLE setting (`baseline_mm` in the
@@ -59,6 +80,7 @@ export const APP_CONFIG_DEFAULTS: Readonly<AppConfig> = {
   tele_canvas_url: "",
   tele_canvas_port: DEFAULT_TELECANVAS_PORT,
   default_save_dir: "",
+  record_compression: "none",
   baseline_distance_mm: 200.0,
   cal_marker_size_mm: 60.0,
   cal_marker_ratio: 1.0,

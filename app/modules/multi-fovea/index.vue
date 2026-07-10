@@ -5,6 +5,7 @@ You may find the full license in project root directory.
 --------------------------------------------------- -->
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from "vue";
+import { useConfigRef } from "@lib/config";
 import { useSession, usePipeFrame } from "@lib/orchestrator/client";
 import { nodeId } from "@lib/orchestrator/graph-contract";
 import { pipes } from "@lib/orchestrator/pipe-contract";
@@ -41,6 +42,19 @@ const center = usePipeFrame(() =>
 );
 const selectedTarget = ref(0);
 const draftCenter = ref<Point2d | null>(null);
+
+// Per-stream RECORDING compression switches (multi-fovea-recording ruling 9).
+// They ENABLE the app-level `record_compression` method per stream: the label
+// follows the CONFIGURED method (read reactively from the shared config doc),
+// and under "none" the switches are DISABLED (nothing compresses; the server
+// gate holds too). Writing a nested state key needs a WHOLE-object reassign to
+// trip the reactive push (customRef fires on the top-level key only).
+const record_compression = await useConfigRef("record_compression");
+const compressionOn = computed(() => record_compression.value === "zlib");
+const COMPRESS_STREAMS = ["left", "center", "right"] as const;
+function toggleCompress(stream: (typeof COMPRESS_STREAMS)[number], on: boolean): void {
+  state.record_compress = { ...state.record_compress, [stream]: on };
+}
 const stroke = computed(
   () => Math.max(telemetry.size.width, telemetry.size.height, 1) * 0.003,
 );
@@ -262,6 +276,34 @@ async function captureOnce(): Promise<void> {
         </label>
         <button @click="captureOnce">Capture</button>
         <button @click="session.call('resetTargets', undefined)">Reset</button>
+
+        <div class="record-compress" :class="{ off: !compressionOn }">
+          <span class="rc-title">
+            Record compression
+            <span v-if="compressionOn" class="rc-method">{{ record_compression }}</span>
+          </span>
+          <div class="rc-streams">
+            <label
+              v-for="s in COMPRESS_STREAMS"
+              :key="s"
+              class="rc-toggle"
+              :title="
+                compressionOn ? undefined : 'Compression is off — enable it in Settings (⌘,)'
+              "
+            >
+              <input
+                type="checkbox"
+                :checked="state.record_compress[s]"
+                :disabled="!compressionOn"
+                @change="toggleCompress(s, ($event.target as HTMLInputElement).checked)"
+              />
+              {{ s }}
+            </label>
+          </div>
+          <p class="rc-hint">
+            {{ compressionOn ? "" : "compression off — enable in Settings (⌘,)" }}
+          </p>
+        </div>
       </div>
     </section>
 
@@ -365,6 +407,55 @@ button {
   color: inherit;
   padding: 0.45rem 0.65rem;
   cursor: pointer;
+}
+
+.record-compress {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border);
+
+  &.off {
+    color: var(--text-muted);
+  }
+
+  .rc-title {
+    display: flex;
+    align-items: center;
+    gap: 0.5ch;
+    /* Reserve the badge's height so it appearing/disappearing never nudges the
+       checkbox row below (layout-stable across the live Settings toggle). */
+    min-height: 1.25rem;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+  }
+  .rc-method {
+    padding: 0.05rem 0.35rem;
+    border-radius: 4px;
+    background: var(--accent);
+    color: var(--text);
+    font-size: 0.75rem;
+  }
+  .rc-streams {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+  }
+  .rc-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.35ch;
+    font-size: 0.85rem;
+  }
+  .rc-hint {
+    margin: 0;
+    /* Always rendered (text swaps to empty when compression is on) so the block
+       height is identical in both states — no reflow of the controls panel. */
+    min-height: 1rem;
+    font-size: 0.75rem;
+    color: var(--text-faint);
+  }
 }
 
 .targets {

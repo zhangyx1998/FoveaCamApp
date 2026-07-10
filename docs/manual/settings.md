@@ -24,6 +24,7 @@ starts, the hint says so.
 | Setting | What it does | When it applies |
 |---|---|---|
 | **Default save directory** | Base folder new captures and recordings default into (each app appends its own sub-folder). Leave it empty for automatic (an external drive if mounted, else `~/Downloads`). A red underline means the path isn't writable. | New save/record destinations opened after the change |
+| **Recording compression** | How recordings store their raw camera streams: **None (raw)** writes the full uncompressed sensor data (the default), or **zlib (lossless)** compresses each frame with lossless zlib. zlib recordings play back in the Viewer exactly like raw ones — no format change on your side. | Recordings started after the change (running recordings keep their method) |
 | **TeleCanvas mode / URL / port** | How the app casts its projection overlay to an external display — see [TeleCanvas](#telecanvas) below. | Live |
 | **Calibration marker size** | Physical marker size, in millimetres, used by the calibration tools. | Live — a running **Extrinsic** or **Drift** window's marker-size slider moves with it |
 | **Calibration marker ratio** | Inner/outer marker ratio for calibration. | Live |
@@ -31,6 +32,15 @@ starts, the hint says so.
 The two marker fields are the same values the **Extrinsic** and **Drift**
 calibration windows expose on their own sliders. Editing either place updates
 the other while both are open — they share one setting.
+
+> **Recording compression** applies to every app's record button. With **zlib**
+> selected, recordings shrink losslessly. Note that lossless zlib may not keep up
+> with full-rate 12-bit capture on all three cameras at once — if it can't, the
+> recorder drops frames rather than stall, and those drops are reported in the
+> record button's hover. Prefer **None** when you need every frame guaranteed.
+> In **Tracking - Multi**, the per-stream compression checkboxes choose *which*
+> of the three camera streams use the configured method; they are disabled while
+> compression is set to **None**.
 
 > The **stereo baseline** used to live here as an app-wide field. It is now a
 > **per-triple** setting — expand a triple under **Calibration data** below.

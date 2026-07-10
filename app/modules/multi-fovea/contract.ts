@@ -74,10 +74,14 @@ export const multiFovea = defineContract({
     targets: [0, 1, 2, 3].map(defaultMultiFoveaTarget) as MultiFoveaTargetConfig[],
     pulse_ns: 1000000,
     /** Per-stream RECORDING compression switches (multi-fovea-recording ruling
-     *  9): a flagged stream routes through the zlib CompressStream brick and
-     *  the recorder consumes the `/zlib` sibling pipe instead. Default all off
-     *  — lossless zlib may not hold full-rate 12p on all three cameras
-     *  (rig-gated). A session contract option, deliberately not UI polish. */
+     *  9). As of the app-level `record_compression` setting (user directive
+     *  2026-07-09) these are per-stream ENABLES of the CONFIGURED method — a
+     *  flagged stream routes through the compression brick (zlib today) and the
+     *  recorder consumes the `/zlib` sibling pipe INSTEAD; under method `"none"`
+     *  the renderer disables the switches and NOTHING compresses (the gate also
+     *  holds server-side at recording start). No longer hardwired to zlib.
+     *  Default all off — lossless zlib may not hold full-rate 12p on all three
+     *  cameras (rig-gated). */
     record_compress: { left: false, center: false, right: false } as Record<
       "left" | "center" | "right",
       boolean

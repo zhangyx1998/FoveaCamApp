@@ -47,6 +47,7 @@ import {
 } from "@orchestrator/capture-helper";
 import { nodeId } from "@lib/orchestrator/graph-contract";
 import type { RawPipeRegistry } from "@orchestrator/raw-pipe";
+import type { CompressPipeSeam } from "@orchestrator/compress-pipe";
 import { getCameraKey } from "@lib/camera-config";
 import { type Undistort } from "core/Vision";
 import type { Point2d } from "core/Geometry";
@@ -68,6 +69,7 @@ type MarkerConfig = { cal_marker_size_mm?: number; cal_marker_ratio?: number };
 export default function calibrateExtrinsicSession(
   broker: PipeBroker,
   rawPipes: RawPipeRegistry,
+  compress?: CompressPipeSeam,
 ): ServerSession<typeof calibrateExtrinsic> {
   return defineResourceSession("calibrate-extrinsic", calibrateExtrinsic, (s) => {
     let leases: Record<Role, CameraLease> | null = null;
@@ -84,6 +86,7 @@ export default function calibrateExtrinsicSession(
       id: "recorder/calibrate-extrinsic",
       broker,
       rawPipes,
+      compress,
       streams: () =>
         leases
           ? {

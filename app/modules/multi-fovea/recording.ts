@@ -68,6 +68,10 @@ import {
   type CompressPipeSeam,
   type CompressHandle,
 } from "@orchestrator/compress-pipe";
+import {
+  readRecordCompression,
+  type RecordCompression,
+} from "@orchestrator/record-compression";
 import { ANCHOR_PAYLOAD } from "@orchestrator/anchor-node";
 import type { PairRecord } from "@orchestrator/pair-pipe";
 import type { MultiTrackBatch } from "./runtime";
@@ -75,8 +79,10 @@ import type { MultiTrackBatch } from "./runtime";
 /** The recorded stream names — also the descriptor `frames` keys. */
 export type RecordedStream = "left" | "center" | "right";
 
-/** Per-stream compression switches (session contract option, default all off —
- *  lossless zlib may not hold full-rate 12p on all three cameras; rig-gated). */
+/** Per-stream compression switches (session contract option, default all off).
+ *  Per-stream ENABLES of the app-level `record_compression` method: a stream
+ *  compresses iff the method is `"zlib"` AND its switch is on (`"none"` gates all
+ *  off). Lossless zlib may not hold full-rate 12p on all three cameras; rig-gated. */
 export type CompressConfig = Record<RecordedStream, boolean>;
 
 /** One leased camera the recording taps: the geometry source (serial /
@@ -108,8 +114,15 @@ export interface MultiFoveaRecordingDeps {
   connect: RecorderConnect;
   /** Compression brick seam; absent → the compress switches are ignored. */
   compress?: CompressPipeSeam;
-  /** Live per-stream compression switches (read at `start`). */
+  /** Live per-stream compression switches (read at `start`). Under the app-level
+   *  `record_compression` method these are per-stream ENABLES of the CONFIGURED
+   *  method: a stream compresses iff the method is `"zlib"` AND its switch is on.
+   *  Under `"none"` the renderer disables the switches and nothing compresses. */
   compressStreams(): CompressConfig;
+  /** Test seam: read the configured app-level compression method at RECORDING
+   *  START (default: `readRecordCompression()` over the store-hub `["config"]`
+   *  doc). `"none"` gates every stream off regardless of the per-stream switches. */
+  readMethod?: () => Promise<RecordCompression>;
   /** Notify main a recording finished (auto-open viewer, ruling 7). */
   finished(foveaPath: string): void;
   telemetry(patch: {
@@ -274,6 +287,12 @@ export function createMultiFoveaRecording(
       }
   }
 
+  const readMethod = deps.readMethod ?? readRecordCompression;
+  // The app-level compression method, read at RECORDING START (`prepare`). The
+  // per-stream switches are ENABLES of THIS method: a stream compresses iff the
+  // method is "zlib" AND its switch is on. "none" gates every stream off.
+  let method: RecordCompression = "none";
+
   // Thin config over the shared facility (capture-recorder-everywhere ruling 1):
   // the raw12p streams + optional /zlib compression routing + the descriptor
   // `onFrame`. The facility owns start/stop/poll/telemetry + the acquire-then-
@@ -285,6 +304,9 @@ export function createMultiFoveaRecording(
     ready: () => deps.cameras() !== null,
     telemetry: deps.telemetry,
     finished: deps.finished,
+    async prepare() {
+      method = await readMethod();
+    },
     // Channels for targets already armed at start (ruling 3).
     onStarted: () => syncChannels(),
     onStopped: () => clearMaps(),
@@ -310,15 +332,18 @@ export function createMultiFoveaRecording(
 
       // Optional per-stream compression (ruling 9): route the flagged streams
       // through the CompressStream brick and record the `/zlib` sibling pipe
-      // INSTEAD — the recorder needs zero extra config (advert-verbatim).
+      // INSTEAD — the recorder needs zero extra config (advert-verbatim). Gated
+      // by the app-level method: under "none" the per-stream switches are inert
+      // (nothing compresses, matching the disabled renderer switches).
       const compressCfg = deps.compressStreams();
+      const methodOn = method === "zlib";
       const streams: Record<string, { pipeId: string }> = {};
       const significantBitsOf = new Map<string, number>();
       const compressed: CompressHandle[] = [];
       order.forEach(([name], i) => {
         const acq = acquisitions[i]!;
         significantBitsOf.set(acq.pipeId, acq.spec.significantBits);
-        if (compressCfg[name] && deps.compress) {
+        if (methodOn && compressCfg[name] && deps.compress) {
           const handle = createCompressPipe(deps.compress, acq.spec);
           compressed.push(handle);
           significantBitsOf.set(handle.pipeId, handle.spec.significantBits);

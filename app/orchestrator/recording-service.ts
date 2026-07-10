@@ -62,6 +62,12 @@ export interface RecordingServiceConfig {
    *  (calibrated triple / leased cameras). Checked BEFORE mkdir + acquire, so a
    *  refusal leaves no stray directory and no advertised pipe. */
   ready(): boolean;
+  /** Optional async setup run AFTER `ready()` passes and BEFORE mkdir + acquire
+   *  — the seam for a "read the config at RECORDING START" step (the app-level
+   *  compression method: `@orchestrator/record-compression`). Its result is
+   *  stashed by the config for `acquire` to read synchronously. Runs before the
+   *  directory exists, so a throw aborts the start leaving no stray dir/advert. */
+  prepare?(): Promise<void>;
   /** Acquire the recordable resources + assemble the node options. Runs only
    *  after `ready()` passed and the directory exists. MAY throw for an internal
    *  acquire fault — it must unwind its OWN partial state then (the facility's
@@ -121,6 +127,9 @@ export function createRecordingService(config: RecordingServiceConfig): Recordin
       if (path === "") return false;
       // Guard BEFORE mkdir/acquire (refusal leaves no stray dir/advert).
       if (!config.ready()) return false;
+      // Read-at-start seam (compression method): before mkdir, so a config-read
+      // throw aborts with no stray dir/advert.
+      await config.prepare?.();
       mkdirSync(path, { recursive: true });
 
       const acq = config.acquire(path);

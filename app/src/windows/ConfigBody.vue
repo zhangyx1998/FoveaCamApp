@@ -45,6 +45,7 @@ import { faTrash, faCopy, faCheck } from "@fortawesome/free-solid-svg-icons";
 
 // ---- App-level config (live, writable refs over the shared document) --------
 const default_save_dir = await useConfigRef("default_save_dir");
+const record_compression = await useConfigRef("record_compression");
 const tele_canvas_mode = await useConfigRef("tele_canvas_mode");
 const tele_canvas_url = await useConfigRef("tele_canvas_url");
 const tele_canvas_port = await useConfigRef("tele_canvas_port");
@@ -244,6 +245,22 @@ onUnmounted(() => {
       <p class="hint">
         Base folder for captures &amp; recordings. Leave empty for auto. Applies
         to save/record destinations opened after the change.
+      </p>
+
+      <label class="row">
+        <span class="label">Recording compression</span>
+        <span class="field">
+          <select v-model="record_compression">
+            <option value="none">None (raw)</option>
+            <option value="zlib">zlib (lossless)</option>
+          </select>
+        </span>
+      </label>
+      <p class="hint">
+        Applies to recordings started after the change; running recordings keep
+        their method. zlib is lossless and decodes in the viewer like raw
+        recordings. Note: lossless zlib may not hold full-rate 12-bit on all
+        three cameras — drops are attributed in the record button's hover.
       </p>
 
       <label class="row">

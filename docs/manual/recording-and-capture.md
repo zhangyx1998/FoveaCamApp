@@ -50,6 +50,16 @@ A wide, full-rate, high-bit-depth stream can drop frames on purpose when the dis
 
 Recordings are `.fcap` files. Unless you change the path, they go into a dated per-app folder under your default save location, named for the date-time and the app. The `.fcap` file is what the [Viewer](./viewer.md) opens.
 
+### Compression
+
+By default recordings store the raw sensor data uncompressed. The **Recording compression** setting (in [Settings](./settings.md)) can switch this to **zlib (lossless)**, which compresses every recorded camera stream losslessly — the file is smaller and the [Viewer](./viewer.md) opens it exactly the same way, with no quality loss and nothing extra to do on playback.
+
+The method is read **when a recording starts**, so changing it applies to your *next* recording; a recording already running keeps the method it began with. Old recordings made before you changed the setting still open normally.
+
+Lossless zlib is not free: at full-rate 12-bit capture on all three cameras it may not keep up, in which case the recorder drops frames rather than stall — watch the **drops** column in the record-button hover (see [Reading the recording stats](#reading-the-recording-stats)). When you need every frame guaranteed, record with compression set to **None**.
+
+In [Tracking - Multi](./multi-fovea.md) you additionally get per-stream checkboxes (left / center / right) that pick *which* of the three camera streams use the configured method. They are disabled while **Recording compression** is **None** (nothing compresses); set it to **zlib** in Settings to enable them.
+
 ---
 
 ## Capture

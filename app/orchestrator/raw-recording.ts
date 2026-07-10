@@ -31,6 +31,15 @@ import {
   type RawPipeRegistry,
   type RawPipeAcquisition,
 } from "@orchestrator/raw-pipe";
+import {
+  createCompressPipe,
+  type CompressPipeSeam,
+  type CompressHandle,
+} from "@orchestrator/compress-pipe";
+import {
+  readRecordCompression,
+  type RecordCompression,
+} from "@orchestrator/record-compression";
 
 /** A camera the recording taps: the native handle + the geometry the raw spec
  *  needs (serial / pixel_format / dims). Matches the leased `camera` object. */
@@ -58,6 +67,13 @@ export interface RawRecordingDeps {
     recording_active?: boolean;
     recordingStreams?: Record<string, RecorderStreamStats>;
   }): void;
+  /** The zlib CompressStream brick seam (injected from index.ts, process-wide
+   *  singleton). Absent → the `"zlib"` method degrades to raw (no brick) — a
+   *  vitest without native core records uncompressed. */
+  compress?: CompressPipeSeam;
+  /** Test seam: read the configured compression method at RECORDING START
+   *  (default: `readRecordCompression()` over the store-hub `["config"]` doc). */
+  readMethod?: () => Promise<RecordCompression>;
   /** Test seam: recorder node factory (default: the real one). */
   createNode?: RecordingServiceConfigCreateNode;
 }
@@ -69,20 +85,11 @@ type RecordingServiceConfigCreateNode = NonNullable<
 
 /** Build a recording controller that writes the app's raw camera streams. */
 export function createRawRecording(deps: RawRecordingDeps): RecordingService {
-  // Ruling-8 significantBits injection (the native spec round-trip drops it —
-  // the advertiser's job): wrap the plain broker connect to re-attach the
-  // JS-side significantBits the raw registry recorded for each advertised id.
-  const connect: RecorderConnect = (pipeId) => {
-    const handle = deps.broker.connect(pipeId);
-    const injected = deps.rawPipes.specOf(pipeId);
-    return {
-      shmName: handle.shmName,
-      spec: injected
-        ? { ...handle.spec, significantBits: injected.significantBits }
-        : handle.spec,
-      release: () => void deps.broker.disconnect(pipeId),
-    };
-  };
+  const readMethod = deps.readMethod ?? readRecordCompression;
+  // The configured compression method, read at RECORDING START (`prepare`) so
+  // `acquire` (synchronous) sees a fresh value. Applies to NEW recordings; a
+  // running recording keeps the method it started with.
+  let method: RecordCompression = "none";
 
   return createRecordingService({
     id: deps.id,
@@ -90,11 +97,23 @@ export function createRawRecording(deps: RawRecordingDeps): RecordingService {
     ready: () => deps.streams() !== null,
     telemetry: deps.telemetry,
     finished: deps.finished,
+    async prepare() {
+      method = await readMethod();
+    },
     acquire() {
       const cams = deps.streams()!; // `ready()` guaranteed non-null
       const entries = Object.entries(cams);
+
+      // Route ALL recorded raw streams through the zlib CompressStream brick when
+      // the app-level method is "zlib" (the recorder consumes the `/zlib` sibling
+      // pipe INSTEAD — advert-verbatim, zero extra config, on-disk contract
+      // unchanged). Absent brick seam → degrade to raw (vitest without core).
+      const useCompress = method === "zlib" && !!deps.compress;
+
       const acquisitions: RawPipeAcquisition[] = [];
       const streams: Record<string, { pipeId: string }> = {};
+      const significantBitsOf = new Map<string, number>();
+      const compressed: CompressHandle[] = [];
       for (const [name, camera] of entries) {
         const pipeId = `camera/${camera.serial}/raw`;
         const acq = deps.rawPipes.acquire({
@@ -104,11 +123,36 @@ export function createRawRecording(deps: RawRecordingDeps): RecordingService {
           spec: rawPipeSpec(camera, pipeId, DEFAULT_RAW_RING_DEPTH),
         });
         acquisitions.push(acq);
-        streams[name] = { pipeId: acq.pipeId };
+        significantBitsOf.set(acq.pipeId, acq.spec.significantBits);
+        if (useCompress) {
+          const handle = createCompressPipe(deps.compress!, acq.spec);
+          compressed.push(handle);
+          significantBitsOf.set(handle.pipeId, handle.spec.significantBits);
+          streams[name] = { pipeId: handle.pipeId };
+        } else {
+          streams[name] = { pipeId: acq.pipeId };
+        }
       }
+
+      // Ruling-8 significantBits injection (the native spec round-trip drops it
+      // — the advertiser's job): wrap the plain broker connect to re-attach the
+      // JS-side significantBits recorded for each advertised id (raw AND /zlib).
+      const connect: RecorderConnect = (pipeId) => {
+        const handle = deps.broker.connect(pipeId);
+        const sb = significantBitsOf.get(pipeId);
+        return {
+          shmName: handle.shmName,
+          spec: sb === undefined ? handle.spec : { ...handle.spec, significantBits: sb },
+          release: () => void deps.broker.disconnect(pipeId),
+        };
+      };
+
       return {
         nodeOptions: { streams, connect },
+        // Retire compress bricks first (they consume the raw pipes), then release
+        // ALL acquisitions in reverse (last release retires + unadvertises).
         release: () => {
+          for (const c of compressed) c.retire();
           for (const a of [...acquisitions].reverse()) a.release();
         },
       };

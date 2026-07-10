@@ -131,6 +131,7 @@ import {
   type CaptureHelper,
 } from "@orchestrator/capture-helper";
 import type { RawPipeRegistry } from "@orchestrator/raw-pipe";
+import type { CompressPipeSeam } from "@orchestrator/compress-pipe";
 
 const ZERO: Point2d = { x: 0, y: 0 };
 const now = () => performance.now();
@@ -193,6 +194,7 @@ export default function disparityScopeSession(
   heatmapSeam: HeatmapPipeSeam,
   compositeSeam: CompositePipeSeam,
   rawPipes: RawPipeRegistry,
+  compress?: CompressPipeSeam,
 ): ServerSession<typeof disparity> {
   return defineSession("disparity-scope", disparity, (s) => {
     let triple: CalibratedTriple | null = null;
@@ -214,6 +216,7 @@ export default function disparityScopeSession(
       id: "recorder/disparity-scope",
       broker,
       rawPipes,
+      compress,
       streams: () =>
         triple
           ? {

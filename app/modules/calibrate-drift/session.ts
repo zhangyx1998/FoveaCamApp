@@ -36,6 +36,7 @@ import {
 } from "@orchestrator/capture-helper";
 import { nodeId } from "@lib/orchestrator/graph-contract";
 import type { RawPipeRegistry } from "@orchestrator/raw-pipe";
+import type { CompressPipeSeam } from "@orchestrator/compress-pipe";
 import { calibrateDrift } from "./contract";
 import { gateOnLock } from "./drift-gate";
 
@@ -53,6 +54,7 @@ type DriftPair = { L: Point2d | null; R: Point2d | null };
 export default function calibrateDriftSession(
   broker: PipeBroker,
   rawPipes: RawPipeRegistry,
+  compress?: CompressPipeSeam,
 ): ServerSession<typeof calibrateDrift> {
   return defineResourceSession("calibrate-drift", calibrateDrift, (s) => {
     let triple: CalibratedTriple | null = null;
@@ -70,6 +72,7 @@ export default function calibrateDriftSession(
       id: "recorder/calibrate-drift",
       broker,
       rawPipes,
+      compress,
       streams: () =>
         triple
           ? {

@@ -31,6 +31,7 @@ describe("configRef", () => {
     expect(configRef(config, "tele_canvas_mode").value).toBe("client");
     expect(configRef(config, "tele_canvas_port").value).toBe(8100);
     expect(configRef(config, "default_save_dir").value).toBe("");
+    expect(configRef(config, "record_compression").value).toBe("none");
   });
 
   it("write → read round-trips through the shared document", () => {

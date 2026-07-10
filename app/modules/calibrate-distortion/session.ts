@@ -38,6 +38,7 @@ import {
   type CaptureHelper,
 } from "@orchestrator/capture-helper";
 import type { RawPipeRegistry } from "@orchestrator/raw-pipe";
+import type { CompressPipeSeam } from "@orchestrator/compress-pipe";
 import type { PipeInput, VisionResult } from "@orchestrator/vision-worker-protocol";
 import {
   bilinearInterpolate,
@@ -56,6 +57,7 @@ const ORIGIN: Pos = { x: 0, y: 0 };
 export default function calibrateDistortionSession(
   broker: PipeBroker,
   rawPipes: RawPipeRegistry,
+  compress?: CompressPipeSeam,
 ): ServerSession<typeof calibrateDistortion> {
   return defineResourceSession("calibrate-distortion", calibrateDistortion, (s) => {
     let triple: CalibratedTriple | null = null;
@@ -75,6 +77,7 @@ export default function calibrateDistortionSession(
       id: "recorder/calibrate-distortion",
       broker,
       rawPipes,
+      compress,
       streams: () =>
         triple
           ? {
