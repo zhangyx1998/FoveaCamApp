@@ -1,5 +1,5 @@
 // WS1 real-1c: the registry's camera-pipe seam — on shared-camera acquire it
-// advertises a `camera:<serial>` BGRA8 pipe + attaches B's native producer; on
+// advertises a `camera:<serial>` RGBA8 pipe + attaches B's native producer; on
 // last release it detaches + un-advertises. The full `acquire()` path is native
 // (camera enumeration) and not unit-testable, so the pure seam helpers carry the
 // spec construction + advertise/attach/detach that this test pins.
@@ -33,7 +33,7 @@ const fakeCamera = (serial: string, w: number, h: number) =>
   }) as unknown as Pick<Camera, "serial" | "getFeatureInt">;
 
 describe("registry camera-pipe seam (real-1c)", () => {
-  it("advertises a BGRA8 camera:<serial> pipe with the camera's geometry + attaches", () => {
+  it("advertises a RGBA8 camera:<serial> pipe with the camera's geometry + attaches", () => {
     const seam = fakeSeam();
     const pipeId = advertiseCameraPipe(seam, fakeCamera("SN1", 640, 480));
     expect(pipeId).toBe("camera/SN1/convert");
@@ -41,7 +41,7 @@ describe("registry camera-pipe seam (real-1c)", () => {
     expect(seam.advertise).toHaveBeenCalledWith(
       expect.objectContaining({
         id: "camera/SN1/convert",
-        pixelFormat: "BGRA8",
+        pixelFormat: "RGBA8",
         dtype: "U8",
         width: 640,
         height: 480,

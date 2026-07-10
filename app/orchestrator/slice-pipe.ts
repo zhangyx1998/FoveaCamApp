@@ -67,7 +67,7 @@ export function createSlicePipe(
   const channels = 4;
   seam.advertise({
     id: pipeId,
-    pixelFormat: "BGRA8",
+    pixelFormat: "RGBA8",
     dtype: "U8",
     width: Math.round(rect.width),
     height: Math.round(rect.height),

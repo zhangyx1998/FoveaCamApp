@@ -6,7 +6,7 @@
 //
 // Stereo SGBM + heatmap bricks (stereo-disparity-and-heatmap-nodes): the FIRST
 // two-input chained brick (cv::StereoSGBM → CV_32F disparity pipe) + the
-// colormap brick (F32/U8 1-channel → BGRA8 TURBO). NO hardware (fake camera).
+// colormap brick (F32/U8 1-channel → RGBA8 TURBO). NO hardware (fake camera).
 //
 // The stereo pair is SYNTHESIZED with two slice (fovea) crops of the SAME
 // convert source, offset horizontally by D px: a feature at source x appears at
@@ -22,7 +22,7 @@
 //      PARKED (zero produced frames). Connecting the HEATMAP pipe (the only
 //      consumer, two bricks downstream) wakes the WHOLE chain — heatmap tap →
 //      stereo → two slice taps → convert → camera; disconnecting parks it again.
-//   3. HEATMAP OUTPUT — BGRA8 at the disparity's active dims, alpha 255.
+//   3. HEATMAP OUTPUT — RGBA8 at the disparity's active dims, alpha 255.
 //   4. DISPARITY VALUES — reading the F32 pipe directly: ≥5% valid pixels and
 //      a per-frame median within [D/2, 3D/2] (SGBM is approximate; the pair
 //      may be one frame skewed).
@@ -56,7 +56,7 @@ const [H, W] = probe0.raw.shape as [number, number];
 probe0.release?.();
 const serial = String(camera.serial ?? "0");
 
-const CH = 4; // BGRA8
+const CH = 4; // RGBA8
 const D = 24; // injected horizontal shift = ground-truth disparity (px)
 // Slice crops of the same source, right offset by +D → disparity ≈ D.
 const SW = Math.min(256, W - 96 - D);
@@ -72,15 +72,15 @@ const stId = `stereo/test`;
 const hmId = `${stId}/heatmap/view`;
 
 const fullBytes = W * H * CH;
-P.advertise({ id: rawId, pixelFormat: "BGRA8", dtype: "U8", width: W, height: H, channels: CH, stride: W * CH, bytesPerFrame: fullBytes, ringDepth: 4 });
+P.advertise({ id: rawId, pixelFormat: "RGBA8", dtype: "U8", width: W, height: H, channels: CH, stride: W * CH, bytesPerFrame: fullBytes, ringDepth: 4 });
 const advertiseSlice = (id: string, r: { width: number; height: number }) =>
-  P.advertise({ id, pixelFormat: "BGRA8", dtype: "U8", width: r.width, height: r.height, channels: CH, stride: r.width * CH, bytesPerFrame: r.width * r.height * CH, ringDepth: 4, maxWidth: SW, maxHeight: SH, maxBytes: SW * SH * CH });
+  P.advertise({ id, pixelFormat: "RGBA8", dtype: "U8", width: r.width, height: r.height, channels: CH, stride: r.width * CH, bytesPerFrame: r.width * r.height * CH, ringDepth: 4, maxWidth: SW, maxHeight: SH, maxBytes: SW * SH * CH });
 advertiseSlice(slcLId, RL);
 advertiseSlice(slcRId, RR);
-// F32 disparity pipe (4 bytes/px, 1 channel) + BGRA8 heatmap, both slice-sized.
+// F32 disparity pipe (4 bytes/px, 1 channel) + RGBA8 heatmap, both slice-sized.
 const f32Bytes = SW * SH * 4;
 P.advertise({ id: stId, pixelFormat: "Disparity32F", dtype: "F32", width: SW, height: SH, channels: 1, stride: SW * 4, bytesPerFrame: f32Bytes, ringDepth: 4, maxWidth: SW, maxHeight: SH, maxBytes: f32Bytes });
-P.advertise({ id: hmId, pixelFormat: "BGRA8", dtype: "U8", width: SW, height: SH, channels: CH, stride: SW * CH, bytesPerFrame: SW * SH * CH, ringDepth: 4, maxWidth: SW, maxHeight: SH, maxBytes: SW * SH * CH });
+P.advertise({ id: hmId, pixelFormat: "RGBA8", dtype: "U8", width: SW, height: SH, channels: CH, stride: SW * CH, bytesPerFrame: SW * SH * CH, ringDepth: 4, maxWidth: SW, maxHeight: SH, maxBytes: SW * SH * CH });
 
 assert.equal(A.attachCameraPipe(camera, rawId), true, "converter attaches");
 assert.equal(A.attachFoveaPipe(rawId, slcLId, { rect: RL }), true, "left slice attaches");
@@ -126,7 +126,7 @@ const hm = open(hmId, SW * SH * CH);
       assert.equal(r.width, SW, "heatmap active width = disparity width");
       assert.equal(r.height, SH, "heatmap active height");
       const px = new Uint8Array(hm.dest, 0, SW * SH * CH);
-      assert.equal(px[3], 255, "BGRA alpha = 255");
+      assert.equal(px[3], 255, "RGBA alpha = 255");
       ok++;
     } else await sleep(5);
   }
@@ -136,7 +136,7 @@ const hm = open(hmId, SW * SH * CH);
   assert(p.inputs.left.count >= 3 && p.inputs.right.count >= 1, "both stereo inputs metered");
   const hp = A.heatmapProbeAll()[hmId];
   assert(hp.outputs.heatmap ? hp.outputs.heatmap.count >= 3 : Object.values(hp.outputs).some((o: any) => o.count >= 3), "heatmap outputs metered");
-  console.log("26-stereo-heatmap: on-demand wake through the 2-brick chain + BGRA8 heatmap OK.");
+  console.log("26-stereo-heatmap: on-demand wake through the 2-brick chain + RGBA8 heatmap OK.");
 }
 
 // --- 2c: disconnecting parks the chain again ----------------------------------

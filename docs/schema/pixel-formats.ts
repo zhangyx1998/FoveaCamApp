@@ -85,3 +85,27 @@ const BY_NAME = new Map(PIXEL_FORMATS.map((f) => [f.name, f]));
 export function pixelFormatSpec(name: string): PixelFormatSpec | undefined {
   return BY_NAME.get(name);
 }
+
+// ---- Bayer → OpenCV demosaic-constant prefix -------------------------------
+// OpenCV's `COLOR_BayerXX2*` enum naming is OFF-BY-ONE vs the GenICam/PFNC
+// sensor naming: the physically correct OpenCV constant for a GenICam BayerYY
+// mosaic has R and B swapped (greens stay on the same diagonal — a PURE R/B
+// swap, NO demosaic phase shift). Empirically proven in
+// docs/proposals/channel-order-fix.md (a synthetic pure-red RGGB mosaic through
+// both constants). THIS is the single place the swap is encoded: the C++
+// `cvtColorCode` table (via the generated FOVEA_BAYER_CV_FORMATS macro), the
+// viewer's `decode.ts`, and the capture save path all derive their demosaic
+// constant from here so the three sites can NEVER drift.
+const BAYER_RB_SWAP: Readonly<Record<BayerPattern, BayerPattern>> = {
+  BayerGR: "BayerGB",
+  BayerRG: "BayerBG",
+  BayerGB: "BayerGR",
+  BayerBG: "BayerRG",
+};
+
+/** The OpenCV Bayer constant prefix (`cv::COLOR_<prefix>2*`) that correctly
+ *  demosaics a GenICam `bayer` mosaic, carrying the OpenCV↔PFNC R/B off-by-one
+ *  correction. */
+export function cvBayerPrefix(bayer: BayerPattern): BayerPattern {
+  return BAYER_RB_SWAP[bayer];
+}

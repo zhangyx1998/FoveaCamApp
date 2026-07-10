@@ -127,90 +127,31 @@ cv::ColorConversionCodes Arv::cvtColorCode(PixelFormat src, PixelFormat dst) {
       CASE(Mono8, BGRA2GRAY);
       DEFAULT;
     }
-  case BayerGR8:
-    switch (dst) {
-      CASE(RGB8, BayerGR2RGB);
-      CASE(BGR8, BayerGR2BGR);
-      CASE(RGBA8, BayerGR2RGBA);
-      CASE(BGRA8, BayerGR2BGRA);
-      CASE(Mono8, BayerGR2GRAY);
-      CASE(Mono16, BayerGR2GRAY);
-      DEFAULT;
+  // Bayer families: the OpenCV demosaic constant carries the OpenCV↔PFNC
+  // off-by-one R/B-swap correction (channel-order-fix.md) — e.g. a GenICam
+  // BayerRG (RGGB) sensor demosaics with cv::COLOR_BayerBG2*, NOT BayerRG2*.
+  // The cv prefix is GENERATED from the shared registry (FOVEA_BAYER_CV_FORMATS,
+  // docs/schema/pixel-formats.ts) so this table can't drift from the viewer /
+  // capture JS mirrors. Greens are unchanged — a PURE R/B swap, NO demosaic
+  // phase shift. 16/12p reuse their 8-bit family's demosaic.
+#define FOVEA_BAYER_CVT(SrcFmt, CvPfx)                                         \
+  case SrcFmt:                                                                 \
+    switch (dst) {                                                             \
+    case RGB8:                                                                 \
+      return cv::COLOR_##CvPfx##2RGB;                                          \
+    case BGR8:                                                                 \
+      return cv::COLOR_##CvPfx##2BGR;                                          \
+    case RGBA8:                                                                \
+      return cv::COLOR_##CvPfx##2RGBA;                                         \
+    case BGRA8:                                                                \
+      return cv::COLOR_##CvPfx##2BGRA;                                         \
+    case Mono8:                                                                \
+    case Mono16:                                                               \
+      return cv::COLOR_##CvPfx##2GRAY;                                         \
+      DEFAULT;                                                                 \
     }
-  case BayerRG8:
-    switch (dst) {
-      CASE(RGB8, BayerRG2RGB);
-      CASE(BGR8, BayerRG2BGR);
-      CASE(RGBA8, BayerRG2RGBA);
-      CASE(BGRA8, BayerRG2BGRA);
-      CASE(Mono8, BayerRG2GRAY);
-      CASE(Mono16, BayerRG2GRAY);
-      DEFAULT;
-    }
-  case BayerGB8:
-    switch (dst) {
-      CASE(RGB8, BayerGB2RGB);
-      CASE(BGR8, BayerGB2BGR);
-      CASE(RGBA8, BayerGB2RGBA);
-      CASE(BGRA8, BayerGB2BGRA);
-      CASE(Mono8, BayerGB2GRAY);
-      CASE(Mono16, BayerGB2GRAY);
-      DEFAULT;
-    }
-  case BayerBG8:
-    switch (dst) {
-      CASE(RGB8, BayerBG2RGB);
-      CASE(BGR8, BayerBG2BGR);
-      CASE(RGBA8, BayerBG2RGBA);
-      CASE(BGRA8, BayerBG2BGRA);
-      CASE(Mono8, BayerBG2GRAY);
-      CASE(Mono16, BayerBG2GRAY);
-      DEFAULT;
-    }
-  case BayerGR16:
-  case BayerGR12p:
-    switch (dst) {
-      CASE(RGB8, BayerGR2RGB);
-      CASE(BGR8, BayerGR2BGR);
-      CASE(RGBA8, BayerGR2RGBA);
-      CASE(BGRA8, BayerGR2BGRA);
-      CASE(Mono8, BayerGR2GRAY);
-      CASE(Mono16, BayerGR2GRAY);
-      DEFAULT;
-    }
-  case BayerRG16:
-  case BayerRG12p:
-    switch (dst) {
-      CASE(RGB8, BayerRG2RGB);
-      CASE(BGR8, BayerRG2BGR);
-      CASE(RGBA8, BayerRG2RGBA);
-      CASE(BGRA8, BayerRG2BGRA);
-      CASE(Mono8, BayerRG2GRAY);
-      CASE(Mono16, BayerRG2GRAY);
-      DEFAULT;
-    }
-  case BayerGB16:
-  case BayerGB12p:
-    switch (dst) {
-      CASE(RGB8, BayerGB2RGB);
-      CASE(BGR8, BayerGB2BGR);
-      CASE(RGBA8, BayerGB2RGBA);
-      CASE(BGRA8, BayerGB2BGRA);
-      CASE(Mono8, BayerGB2GRAY);
-      CASE(Mono16, BayerGB2GRAY);
-      DEFAULT;
-    }
-  case BayerBG16:
-  case BayerBG12p:
-    switch (dst) {
-      CASE(RGB8, BayerBG2RGB);
-      CASE(BGR8, BayerBG2BGR);
-      CASE(RGBA8, BayerBG2RGBA);
-      CASE(BGRA8, BayerBG2BGRA);
-      CASE(Mono8, BayerBG2GRAY);
-      CASE(Mono16, BayerBG2GRAY);
-      DEFAULT;
-    }
+    FOVEA_BAYER_CV_FORMATS(FOVEA_BAYER_CVT)
+#undef FOVEA_BAYER_CVT
     DEFAULT;
   }
 }

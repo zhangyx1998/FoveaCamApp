@@ -212,11 +212,11 @@ void appendCompositeReports(Napi::Env env, Napi::Array &rows,
       continue;
     auto row = Topology::node(env, pipeId, "composite", "native");
     Topology::addInput(env, row, b.stream->leftId(), "left",
-                       Topology::frameType(env, "BGRA8", "U8"));
+                       Topology::frameType(env, "RGBA8", "U8"));
     Topology::addInput(env, row, b.stream->rightId(), "right",
-                       Topology::frameType(env, "BGRA8", "U8"));
+                       Topology::frameType(env, "RGBA8", "U8"));
     if (!Topology::decoratePipe(env, row, pipeId))
-      row.Set("output", Topology::frameType(env, "BGRA8", "U8"));
+      row.Set("output", Topology::frameType(env, "RGBA8", "U8"));
     row.Set("stats", meterSnapshotToJs(env, b.stream->probe()));
     rows.Set(rows.Length(), row);
     seen.insert(pipeId);

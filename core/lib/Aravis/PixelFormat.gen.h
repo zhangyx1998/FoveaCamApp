@@ -27,3 +27,19 @@
   X(BayerGB12p, ARV_PIXEL_FORMAT_BAYER_GB_12P, U16C1, 12, true) \
   X(BayerBG12p, ARV_PIXEL_FORMAT_BAYER_BG_12P, U16C1, 12, true) \
 
+// Bayer mosaic → OpenCV demosaic-constant prefix (cv::COLOR_<prefix>2*),
+// carrying the OpenCV↔PFNC off-by-one R/B-swap correction. X(Name, CvPrefix).
+#define FOVEA_BAYER_CV_FORMATS(X) \
+  X(BayerGR8, BayerGB) \
+  X(BayerRG8, BayerBG) \
+  X(BayerGB8, BayerGR) \
+  X(BayerBG8, BayerRG) \
+  X(BayerGR16, BayerGB) \
+  X(BayerRG16, BayerBG) \
+  X(BayerGB16, BayerGR) \
+  X(BayerBG16, BayerRG) \
+  X(BayerGR12p, BayerGB) \
+  X(BayerRG12p, BayerBG) \
+  X(BayerGB12p, BayerGR) \
+  X(BayerBG12p, BayerRG) \
+

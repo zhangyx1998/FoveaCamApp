@@ -1,9 +1,9 @@
 # Channel-order fix — kill the B/R flip at the source
 
-Status: **DIAGNOSED (2026-07-09, empirically proven); fix wave queued
-behind the in-flight viewer lane (shares decode.ts).** Supersedes the
-prior "preview pipe is BGRA8, don't relabel" ruling — the user ruled the
-view-layer compensation must become unnecessary.
+Status: **CODE-COMPLETE (2026-07-09) — landed as ONE lockstep wave; rig
+pass owed (stage-f §Channel-order fix).** Supersedes the prior "preview
+pipe is BGRA8, don't relabel" ruling — the view-layer compensation is now
+unnecessary; display pipes are honest `RGBA8` end to end.
 
 ## Root cause (single, proven)
 
@@ -63,3 +63,42 @@ double-compensation exists twice more:
 
 Old recordings: raw-Bayer payloads are label-only (demosaic happens at
 decode) — the fixed viewer decodes them CORRECTLY; no data migration.
+
+## AS-SHIPPED (2026-07-09)
+
+Single-source the swap: `docs/schema/pixel-formats.ts` gained `cvBayerPrefix`
+(the OpenCV↔PFNC R/B correction) + a generated `FOVEA_BAYER_CV_FORMATS(X)` macro
+(`generate-pixel-formats.ts` → `PixelFormat.gen.h`). All THREE demosaic sites
+now derive from it and can't drift: C++ `cvtColorCode` (Bayer families expand the
+macro), viewer `decode.ts` `bayerCode`, and capture `makeRGBA` (map injected into
+the eval'd worker at build time). `pixel_formats.py` regenerated (identical — no
+`cvBayer` column added to python; the schema.py wrapping-guard still blocks a full
+generator run, so schema.py was NOT re-emitted — unrelated to this change).
+
+Physical byte order: `ConverterStream` target = the advert `pixelFormat`, so
+flipping every display advert `BGRA8 → RGBA8` (registry / undistort / slice /
+scale / heatmap / composite / fovea) makes the converter emit HONEST RGBA; the
+enum fix makes `cvtColorCode(Bayer, RGBA8)` land red in ch0. Consumers, one wave:
+CompositeStream anaglyph red → ch0; HeatmapStream `BGR2RGBA`; StereoStream +
+Tracker gray taps `RGBA2GRAY` (template-match already was); calibrate-intrinsic
+checker tap `RGBA2GRAY`; PairStream + all core `frameType`/output tags `RGBA8`;
+`canViewAs` probe `RGBA8`. Capture: deleted `makeBGR` off-by-one + the
+compensating `RGBA2BGRA`, replaced with honest `makeRGBA` (held resource) + one
+`toSaveBGR` (`RGBA→BGR`) at imwrite. FrameView UNCHANGED (RGBA-native canvas,
+verified no-op for 4-channel).
+
+Untouched (as ruled): recorder raw 12p wire payloads, `Frame.save` (raw mosaic),
+`Frame.view()` default (explicit-format API, production callers pass Mono8).
+Left as latent (out of scope, flagged): `app/lib/imgproc.ts` `makeBGR/makeBGRA`
+carry the OLD off-by-one but are DEAD (no importers) — a follow-up sweep should
+delete or fix them. pyfcap does NOT demosaic Bayer, so no python decode change.
+
+Tests: `37-bayer-channel-order.ts` (core) demosaics a synthetic pure-red RGGB
+mosaic and pins that the registry constant lands red in ch0 while the literal
+PFNC name lands it in ch2; `pixel-formats-codegen.test.ts` pins the generated
+macro == `cvBayerPrefix`; `decode-conformance.test.ts` pins `bayerCode` applies
+the swap; core 26/27 updated to the honest RGBA channel semantics; all display
+adverts in the app/core tests flipped to `RGBA8`.
+
+Gates: `core && make` clean; core tests 11/12/15/18/20/22/23/25/26/27/34 + new
+37 pass; `vue-tsc` clean; `vitest` 687 pass / 0 fail; `vite build` clean.

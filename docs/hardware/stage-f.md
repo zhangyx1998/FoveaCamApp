@@ -566,6 +566,72 @@ source the RAW fovea CONVERT pipes (single ÷magnification, legacy
   full-reload doesn't duplicate engines or corrupt ui.json.
 - [ ] Viewer survives orchestrator kill/restart mid-playback.
 
+### Disposable orchestrator (per-app-instance lifecycle, 2026-07-09 wave)
+
+- [ ] **App open/close/switch cycling** (≥10 cycles across manual-control ↔
+  disparity-scope ↔ multi-fovea): each open acquires L/R + MEMS, each
+  close/switch releases them; Welcome always comes back; cameras never end up
+  held by a dead process (next app opens clean, no USB3Vision access-denied).
+- [ ] **Spawn latency reading**: note the per-instance `boot.*` spans (perf
+  snapshot / profiler) for a hardware app — fork → first-useful-work → first
+  frame. Confirm the new app's core load/graph build overlaps the old instance's
+  teardown (spin-up is NOT serialized behind the full quiesce).
+- [ ] **Hardware-clear gate**: on a switch, the new app briefly shows the
+  **"waiting for previous session to release hardware…"** progress step, then
+  acquires once the previous instance is dead + swept. No double-lease, no black
+  stream, no access-denied.
+- [ ] **INDUCED teardown wedge → Welcome stays responsive**: force a teardown
+  error in the outgoing app (e.g. a wedged stream close / hung quiesce), then
+  open another app. The wedged process is killed at the ~4s bound + janitor
+  sweeps; the Welcome window and the next app both stay fully responsive (the
+  whole point of process disposal — the shared-orchestrator wedge is gone).
+- [ ] **Crash mid-actuation** (SIGKILL/SIGABRT the app's orchestrator while the
+  MEMS is steering): mirrors PARK (janitor disarms), cameras released, the crash
+  report shows in THAT app window only (a second app window, if any, is
+  unaffected), and Welcome remains usable.
+- [ ] **Quit paths**: Cmd-Q / last-window (Win/Linux) with an app live — every
+  instance drains + acks (or is killed + swept), probe killed, watchdog stands
+  down, no orphan orchestrator/probe/janitor processes, hardware disarmed.
+- [ ] **Main hard-crash** (SIGKILL main with an app live): the detached watchdog
+  waits for the orphaned instance(s) to be reaped, then disarms MEMS + cameras
+  (state file now carries the live-pid SET).
+- [ ] **Probe survives app churn**: Welcome's camera list + status update live
+  from the enumerate-only probe; the probe pauses while a hardware app is open
+  (no `Camera.list()` contention with the app) and resumes at Welcome; killing
+  the probe process mid-session → main respawns it and the list recovers.
+- [ ] **darwin no-park**: close the app window, then close Welcome (app goes
+  headless with menu bar) — nothing energized (no instance exists), only the
+  probe running; dock re-activate brings Welcome back and opening an app starts a
+  fresh engine.
+
+## Channel-order fix (2026-07-09, proposal `channel-order-fix.md`)
+
+Killed the B/R flip at the source: `cvtColorCode` now applies the OpenCV↔PFNC
+off-by-one Bayer correction (registry-generated `FOVEA_BAYER_CV_FORMATS`) and the
+display-bound pipes are canonicalized to HONEST `RGBA8` (converter target, all
+brick outputs, every advert). Consumers updated in ONE wave: composite anaglyph
+red→ch0, heatmap `BGR2RGBA`, KCF/Stereo gray taps `RGBA2GRAY`, capture demosaic
+`makeRGBA` + one honest `RGBA→BGR` at imwrite, viewer decode honest end-to-end.
+FrameView unchanged (RGBA-native canvas). A partial land INVERTS the live
+preview — verify these together:
+
+- [ ] **Live preview color truth**: a KNOWN-RED object reads RED (not blue) on
+  every live preview tile (center + L/R foveae); a blue object reads blue. (Two
+  wrongs used to cancel; verify the source is honest now, not that it "still
+  looks right".)
+- [ ] **Anaglyph left-eye = RED**: disparity-scope "Anaglyph" center view shows
+  the LEFT image in the red channel, RIGHT in cyan (put something only the left
+  eye sees → it appears red). SGBM/heatmap disparity unaffected.
+- [ ] **Heatmap colors**: the disparity heatmap renders TURBO with correct hue
+  order (was R/B-swapped before — low disparity blue→ high red, not reversed).
+- [ ] **Saved PNG**: capture → save; open the written `.png` in an external
+  viewer — a red object is red (imwrite BGR order is honest, not double-swapped).
+- [ ] **OLD recording in viewer**: open a raw-Bayer recording made BEFORE this
+  fix — it now decodes red-as-red (the fixed viewer decode corrects the same
+  off-by-one; NO data migration, raw payloads are label-only).
+- [ ] **NEW recording in viewer**: record after the fix, play it back — red-as-red,
+  identical to the OLD recording (both decode through the corrected path).
+
 ## Blocked (hardware change required)
 
 - [ ] **Center-camera hardware trigger** — needs the slimmer CAM0 cable

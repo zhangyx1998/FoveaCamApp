@@ -10,7 +10,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { PIXEL_FORMATS } from "../../docs/schema/pixel-formats.js";
+import { PIXEL_FORMATS, cvBayerPrefix } from "../../docs/schema/pixel-formats.js";
 
 const repoFile = (rel: string) =>
   readFileSync(fileURLToPath(new URL(`../../${rel}`, import.meta.url)), "utf8");
@@ -27,6 +27,15 @@ function cppRows() {
     significantBits: Number(m[4]),
     isPacked: m[5] === "true",
   }));
+}
+
+/** Rows of the C++ `FOVEA_BAYER_CV_FORMATS(X)` macro: `X(FormatName, CvPrefix)`
+ *  — the OpenCV demosaic prefix carrying the off-by-one R/B correction. */
+function cppBayerCvRows() {
+  const text = repoFile("core/lib/Aravis/PixelFormat.gen.h");
+  const macro = text.slice(text.indexOf("#define FOVEA_BAYER_CV_FORMATS"));
+  const re = /^\s+X\(\s*(Bayer[^,\s]+),\s*(Bayer[^,\s)]+)\s*\)/gm;
+  return [...macro.matchAll(re)].map((m) => ({ name: m[1], cvPrefix: m[2] }));
 }
 
 /** Rows of the Python mirror's `PixelFormatSpec(...)` tuple. */
@@ -57,6 +66,18 @@ describe("pixel-format registry codegen conformance (TS source ↔ generated C++
         cv: spec.cv,
         significantBits: spec.significantBits,
         isPacked: spec.isPacked,
+      });
+    });
+  });
+
+  it("generated FOVEA_BAYER_CV_FORMATS macro applies cvBayerPrefix for every Bayer format", () => {
+    const rows = cppBayerCvRows();
+    const bayerFormats = PIXEL_FORMATS.filter((f) => f.bayer !== null);
+    expect(rows).toHaveLength(bayerFormats.length);
+    bayerFormats.forEach((spec, i) => {
+      expect(rows[i], spec.name).toEqual({
+        name: spec.name,
+        cvPrefix: cvBayerPrefix(spec.bayer!),
       });
     });
   });

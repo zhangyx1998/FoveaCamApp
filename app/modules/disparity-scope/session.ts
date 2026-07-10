@@ -1104,7 +1104,7 @@ export default function disparityScopeSession(
       for (const retire of retirers) disposers.add(retire);
 
       const pidId = nodeId.win("disparity-scope", "pid");
-      const bgra = { kind: "frame", pixelFormat: "BGRA8", dtype: "U8" } as const;
+      const rgba = { kind: "frame", pixelFormat: "RGBA8", dtype: "U8" } as const; // honest RGBA8 (channel-order-fix.md)
       const analysis = { kind: "analysis", schema: "template-match" } as const;
       const matchIds = {
         L: nodeId.win("disparity-scope", "match", "L"),
@@ -1155,16 +1155,16 @@ export default function disparityScopeSession(
                 from: needleScales[side]!.pipeId,
                 to: matchIds[side],
                 port: "needle",
-                type: bgra,
+                type: rgba,
               },
               {
                 from: stripScale!.pipeId,
                 to: matchIds[side],
                 port: "haystack",
-                type: bgra,
+                type: rgba,
               },
             ]),
-            ...(tk ? [{ from: cSourceId, to: kcfId, port: "C", type: bgra }] : []),
+            ...(tk ? [{ from: cSourceId, to: kcfId, port: "C", type: rgba }] : []),
           ],
         }),
       );

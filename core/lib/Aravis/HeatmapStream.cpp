@@ -209,7 +209,7 @@ void appendHeatmapReports(Napi::Env env, Napi::Array &rows,
     Topology::addInput(env, row, b.stream->sourceId(), "frame",
                        Topology::frameType(env, "Disparity32F", "F32"));
     if (!Topology::decoratePipe(env, row, pipeId))
-      row.Set("output", Topology::frameType(env, "BGRA8", "U8"));
+      row.Set("output", Topology::frameType(env, "RGBA8", "U8"));
     row.Set("stats", meterSnapshotToJs(env, b.stream->probe()));
     rows.Set(rows.Length(), row);
     seen.insert(pipeId);

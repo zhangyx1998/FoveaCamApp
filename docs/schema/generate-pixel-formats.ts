@@ -16,7 +16,7 @@ import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { PIXEL_FORMATS, BAYER_PATTERNS } from "./pixel-formats.ts";
+import { PIXEL_FORMATS, BAYER_PATTERNS, cvBayerPrefix } from "./pixel-formats.ts";
 import {
   DEFAULT_CHUNK_BYTES,
   DEFAULT_MAX_QUEUED_FRAMES,
@@ -46,6 +46,13 @@ const cppRows = PIXEL_FORMATS.map(
   (f) =>
     `  X(${f.name}, ${f.aravis}, ${f.cv}, ${f.significantBits}, ${f.isPacked}) \\`,
 );
+// Bayer → OpenCV demosaic-constant prefix, carrying the OpenCV↔PFNC off-by-one
+// R/B-swap correction (channel-order-fix.md). X(FormatName, CvBayerPrefix) —
+// emitted for the Bayer formats only. `cvtColorCode` expands this so the C++
+// demosaic table derives from the SAME source as the viewer/capture JS.
+const cppBayerRows = PIXEL_FORMATS.filter((f) => f.bayer !== null).map(
+  (f) => `  X(${f.name}, ${cvBayerPrefix(f.bayer!)}) \\`,
+);
 const cpp = [
   "// GENERATED from docs/schema/pixel-formats.ts by",
   "// docs/schema/generate-pixel-formats.ts — DO NOT EDIT BY HAND.",
@@ -57,6 +64,11 @@ const cpp = [
   "// container and unpack to CV_16UC1; display scaling uses 4095, not 65535.",
   "#define FOVEA_PIXEL_FORMATS(X) \\",
   ...cppRows,
+  "",
+  "// Bayer mosaic → OpenCV demosaic-constant prefix (cv::COLOR_<prefix>2*),",
+  "// carrying the OpenCV↔PFNC off-by-one R/B-swap correction. X(Name, CvPrefix).",
+  "#define FOVEA_BAYER_CV_FORMATS(X) \\",
+  ...cppBayerRows,
   "",
   "",
 ].join("\n");

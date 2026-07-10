@@ -187,7 +187,7 @@ export type GraphTopology = {
 export const nodeId = {
   /** Raw camera source (native Arv stream — not an SHM pipe). */
   camera: (serial: string): string => `camera/${serial}`,
-  /** BGRA8 converted preview pipe (formerly `camera:<serial>`). */
+  /** RGBA8 converted preview pipe (formerly `camera:<serial>`). */
   convert: (serial: string): string => `camera/${serial}/convert`,
   /** Undistorted stream pipe (formerly `undistort:<serial>`). */
   undistort: (serial: string): string => `camera/${serial}/undistort`,
@@ -227,7 +227,7 @@ export const nodeId = {
    *  honestly belongs to neither camera; its left/right edges carry the
    *  wiring (self-reported via Topology.report()). */
   stereo: (name: string): string => `stereo/${name}`,
-  /** HEATMAP colormap node (F32/U8 1-channel → BGRA8): nests under its
+  /** HEATMAP colormap node (F32/U8 1-channel → RGBA8): nests under its
    *  SOURCE pipe id — that IS its input, same rule as scale. */
   heatmap: (sourceId: string, name: string): string =>
     `${sourceId}/heatmap/${name}`,

@@ -126,7 +126,7 @@ public:
       for (size_t i = 0; i < count; ++i) {
         try {
           const auto format = convert<PixelFormat>(std::string(list[i]));
-          if (canViewAs(format, BGRA8))
+          if (canViewAs(format, RGBA8))
             ret.emplace_back(convert<std::string>(format));
         } catch (const UnknownPixelFormat &) {
           // Keep selection limited to formats the Frame preview path supports.

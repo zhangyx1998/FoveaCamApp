@@ -10,7 +10,7 @@
 // connected cameras (like manage-cameras) and leases only the one currently
 // selected for live detection.
 //
-// Checkerboard detection runs on the registry's shared BGRA8 preview (via
+// Checkerboard detection runs on the registry's shared RGBA8 preview (via
 // `onView`, converted to grayscale with `cvtColor` — the same "derive
 // whatever the vision op needs from the one shared preview format" pattern
 // disparity-scope already uses, rather than opening a second

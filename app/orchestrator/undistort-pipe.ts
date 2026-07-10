@@ -25,7 +25,7 @@
 //    through untouched (metered as `passthrough` — honest).
 //
 // Encoding (ruled once): id `camera/<serial>/undistort` exactly parallel to
-// `camera/<serial>/convert`; pixel format lives in `spec.pixelFormat` (BGRA8
+// `camera/<serial>/convert`; pixel format lives in `spec.pixelFormat` (RGBA8
 // first), NOT in the id. A future second format of the same stream is a
 // separate pipe id with an `@<format>` suffix.
 
@@ -59,7 +59,7 @@ export interface UndistortPipeSeam {
 // spelling lives in `nodeId` (graph-contract); this alias keeps call-site naming.
 export const undistortPipeId = nodeId.undistort;
 
-/** Shared advertise half: the ruled BGRA8 spec at camera dims (both variants
+/** Shared advertise half: the ruled RGBA8 spec at camera dims (both variants
  *  are 1:1 warps). Advertise BEFORE attach — the producer must find its pipe. */
 function advertisePipe(
   seam: UndistortPipeSeam,
@@ -73,7 +73,7 @@ function advertisePipe(
   const channels = 4;
   seam.advertise({
     id: pipeId,
-    pixelFormat: "BGRA8",
+    pixelFormat: "RGBA8",
     dtype: "U8",
     width,
     height,

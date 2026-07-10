@@ -7,7 +7,7 @@
 // GENERAL-PURPOSE session-owned COMPOSITE node (composite-node-and-center-
 // select-fix §B, ruled 2026-07-09): a two-input native brick
 // (`CompositeStream`) — a per-pixel BGRA op (anaglyph / L-vs-R difference)
-// over a left/right pair of frame pipes, publishing a BGRA8 pipe.
+// over a left/right pair of frame pipes, publishing a RGBA8 pipe.
 //
 // Ticks on every LEFT arrival paired with the LATEST RIGHT frame (latest-wins
 // on both taps — no cross-camera seq comparison); the output is in LEFT-frame
@@ -57,7 +57,7 @@ export interface CompositeHandle {
   retire(): void;
 }
 
-/** Advertise the BGRA8 composite pipe + attach the composite brick chained on
+/** Advertise the RGBA8 composite pipe + attach the composite brick chained on
  *  the two source pipes. Advertise BEFORE attach. */
 export function createCompositePipe(
   seam: CompositePipeSeam,
@@ -70,7 +70,7 @@ export function createCompositePipe(
   const channels = 4;
   seam.advertise({
     id: pipeId,
-    pixelFormat: "BGRA8",
+    pixelFormat: "RGBA8",
     dtype: "U8",
     width: maxWidth,
     height: maxHeight,

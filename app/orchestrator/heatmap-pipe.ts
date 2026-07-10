@@ -7,7 +7,7 @@
 // GENERAL-PURPOSE session-owned HEATMAP node (stereo-disparity-and-heatmap-
 // nodes, ruled 2026-07-09): a native chained brick (`HeatmapStream`) that
 // colormaps a 1-channel source pipe (CV_32F or CV_8U — the stereo brick's
-// disparity map is the flagship input) to a BGRA8 pipe (COLORMAP_TURBO).
+// disparity map is the flagship input) to a RGBA8 pipe (COLORMAP_TURBO).
 //
 // Normalization is REACTIVE (`retune`): explicit `{min, max}` bounds, or
 // absent → per-frame min/max auto-normalize. Active dims + origin +
@@ -52,7 +52,7 @@ export interface HeatmapHandle {
   retire(): void;
 }
 
-/** Advertise the BGRA8 pipe + attach the heatmap brick chained on
+/** Advertise the RGBA8 pipe + attach the heatmap brick chained on
  *  `sourcePipeId`. Advertise BEFORE attach. */
 export function createHeatmapPipe(
   seam: HeatmapPipeSeam,
@@ -64,7 +64,7 @@ export function createHeatmapPipe(
   const channels = 4;
   seam.advertise({
     id: pipeId,
-    pixelFormat: "BGRA8",
+    pixelFormat: "RGBA8",
     dtype: "U8",
     width: maxWidth,
     height: maxHeight,

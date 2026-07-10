@@ -442,7 +442,7 @@ FN(pushPairTestFrame) {
         }
       }
     }
-    cf->format = BGRA8;
+    cf->format = RGBA8;
     cf->deviceTimestamp = deviceTimestamp;
     cf->systemTimestamp = deviceTimestamp;
     cf->originX = o.Has("originX") && o.Get("originX").IsNumber()
@@ -480,11 +480,11 @@ void appendPairReports(Napi::Env env, Napi::Array &rows,
       continue;
     auto row = Topology::node(env, stage, "pair", "native");
     Topology::addInput(env, row, stream->leftId(), "left",
-                       Topology::frameType(env, "BGRA8", "U8"));
+                       Topology::frameType(env, "RGBA8", "U8"));
     Topology::addInput(env, row, stream->rightId(), "right",
-                       Topology::frameType(env, "BGRA8", "U8"));
+                       Topology::frameType(env, "RGBA8", "U8"));
     Topology::addInput(env, row, stream->anchorFrom(), "anchor",
-                       Topology::frameType(env, "BGRA8", "U8"));
+                       Topology::frameType(env, "RGBA8", "U8"));
     row.Set("output", env.Null());
     row.Set("stats", meterSnapshotToJs(env, stream->probe()));
     rows.Set(rows.Length(), row);

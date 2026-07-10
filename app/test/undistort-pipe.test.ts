@@ -7,7 +7,7 @@
 // `undistort-pipe` (C-23, real-1g; §5 re-chain): the session-scoped
 // `camera/<serial>/undistort` advertise/retire helper, unit-tested over an
 // injected fake seam (never loads native core / the pipe session). Encoding is
-// RULED: id `camera/<serial>/undistort`, format in `spec.pixelFormat` (BGRA8),
+// RULED: id `camera/<serial>/undistort`, format in `spec.pixelFormat` (RGBA8),
 // same dims as the camera. Since unified-time-and-topology §5 the brick CHAINS
 // ON THE SHARED CONVERTER — attach's source is `camera/<serial>/convert`, not
 // the Camera object — in one of two variants: intrinsic `{cal}` (center) or
@@ -42,14 +42,14 @@ const fakeCamera = () =>
   }) as never;
 
 describe("undistort-pipe (C-23, §5 re-chain)", () => {
-  it("advertises the ruled id + BGRA8 spec at camera dims, then attaches CHAINED on the convert pipe", () => {
+  it("advertises the ruled id + RGBA8 spec at camera dims, then attaches CHAINED on the convert pipe", () => {
     const { seam, calls } = fakeSeam();
     const id = advertiseUndistortPipe(seam, fakeCamera(), CAL);
     expect(id).toBe("camera/SN42/undistort");
     expect(undistortPipeId("SN42")).toBe(id);
     expect(seam.advertise).toHaveBeenCalledWith({
       id: "camera/SN42/undistort",
-      pixelFormat: "BGRA8",
+      pixelFormat: "RGBA8",
       dtype: "U8",
       width: 640,
       height: 480,
@@ -77,7 +77,7 @@ describe("undistort-pipe (C-23, §5 re-chain)", () => {
     const advertise = seam.advertise as ReturnType<typeof vi.fn>;
     expect(advertise.mock.calls[0]![0]).toMatchObject({
       id: "camera/SN42/undistort",
-      pixelFormat: "BGRA8",
+      pixelFormat: "RGBA8",
       width: 640,
       height: 480,
     });

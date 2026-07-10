@@ -409,9 +409,9 @@ private:
   }
   static void toGray(const cv::Mat &in, cv::Mat &out) {
     if (in.channels() == 4)
-      cv::cvtColor(in, out, cv::COLOR_BGRA2GRAY);
+      cv::cvtColor(in, out, cv::COLOR_RGBA2GRAY); // pipes are honest RGBA8
     else if (in.channels() == 3)
-      cv::cvtColor(in, out, cv::COLOR_BGR2GRAY);
+      cv::cvtColor(in, out, cv::COLOR_RGB2GRAY);
     else
       out = in; // already single-channel
   }

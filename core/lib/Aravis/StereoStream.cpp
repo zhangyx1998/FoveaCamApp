@@ -298,12 +298,12 @@ void appendStereoReports(Napi::Env env, Napi::Array &rows,
       // stereo-paired-inputs: ONE edge from the pair node (`pair/<stage>` →
       // `stereo/<name>`); the pair record carries the matched L/R frames.
       Topology::addInput(env, row, b.stream->pairFrom(), "pair",
-                         Topology::frameType(env, "BGRA8", "U8"));
+                         Topology::frameType(env, "RGBA8", "U8"));
     } else {
       Topology::addInput(env, row, b.stream->leftId(), "left",
-                         Topology::frameType(env, "BGRA8", "U8"));
+                         Topology::frameType(env, "RGBA8", "U8"));
       Topology::addInput(env, row, b.stream->rightId(), "right",
-                         Topology::frameType(env, "BGRA8", "U8"));
+                         Topology::frameType(env, "RGBA8", "U8"));
     }
     if (!Topology::decoratePipe(env, row, pipeId))
       row.Set("output", Topology::frameType(env, "Disparity32F", "F32"));

@@ -42,7 +42,7 @@ function advert(pipeId: string, epoch = 1): PipeAdvert {
     epoch,
     spec: {
       id: pipeId,
-      pixelFormat: "BGRA8",
+      pixelFormat: "RGBA8",
       dtype: "U8",
       width: 640,
       height: 480,
@@ -71,7 +71,7 @@ describe("deriveTopology — Stage 1", () => {
     const convert = t.nodes.find((n) => n.id === "camera/123/convert")!;
     expect(convert.kind).toBe("convert");
     expect(convert.transport).toBe("pipe");
-    expect(convert.output).toEqual({ kind: "frame", pixelFormat: "BGRA8", dtype: "U8" });
+    expect(convert.output).toEqual({ kind: "frame", pixelFormat: "RGBA8", dtype: "U8" });
   });
 
   it("attaches pipe-meter stats to the owning brick and flags saturation", () => {
@@ -192,7 +192,7 @@ describe("Stage-2 source selection + served-shape rendering (A-36)", () => {
       {
         id: "camera/123/convert",
         kind: "convert",
-        output: { kind: "frame", pixelFormat: "BGRA8", dtype: "U8" },
+        output: { kind: "frame", pixelFormat: "RGBA8", dtype: "U8" },
         transport: "pipe",
         epoch: 2,
         stats: { utilization: 0.35, ratePerSec: 55, saturated: false },
@@ -219,7 +219,7 @@ describe("Stage-2 source selection + served-shape rendering (A-36)", () => {
         from: "camera/123/convert",
         to: "camera/123/convert/consumers",
         port: "in",
-        type: { kind: "frame", pixelFormat: "BGRA8", dtype: "U8" },
+        type: { kind: "frame", pixelFormat: "RGBA8", dtype: "U8" },
         consumers: 2,
         ratePerSec: 55,
         bytesPerSec: 55_000_000,
@@ -277,7 +277,7 @@ describe("edge flow labels (tx/rx/drop — 4732f64 contract)", () => {
     from: "camera/123/convert",
     to: "win/t-1/kcf",
     port: "in",
-    type: { kind: "frame", pixelFormat: "BGRA8", dtype: "U8" },
+    type: { kind: "frame", pixelFormat: "RGBA8", dtype: "U8" },
   };
 
   it("labels the EFFECTIVE rate only: min(tx, rx), single direction when one is metered", () => {
@@ -363,7 +363,7 @@ describe("FIFO queue edges (controller-node-and-fifo-edges §2)", () => {
     from: "camera/123/convert",
     to: "camera/123/undistort",
     port: "in",
-    type: { kind: "frame", pixelFormat: "BGRA8", dtype: "U8" },
+    type: { kind: "frame", pixelFormat: "RGBA8", dtype: "U8" },
     tx: { hz: 60, maxIntervalMs: 20 },
     rx: { hz: 60 },
     queue: { highWater: 6, capacity: 8, depth: 3 },

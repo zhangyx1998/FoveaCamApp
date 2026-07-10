@@ -209,9 +209,10 @@ private:
       // so force alpha back to 255.
       cv::absdiff(left->mat, right->mat, buf_);
     } else {
-      // anaglyph: B,G from RIGHT (copy the whole frame), R from LEFT.
+      // anaglyph: G,B from RIGHT (copy the whole frame), R from LEFT. Pipes are
+      // honest RGBA8 (channel-order-fix.md) so RED is channel 0.
       right->mat.copyTo(buf_);
-      const int fromToR[] = {2, 2}; // LEFT channel 2 (R) → buf channel 2 (R)
+      const int fromToR[] = {0, 0}; // LEFT channel 0 (R) → buf channel 0 (R)
       cv::mixChannels(&left->mat, 1, &buf_, 1, fromToR, 1);
     }
     setAlpha255(buf_);
@@ -224,7 +225,7 @@ private:
 
     auto cf = ConvertedFrame::create();
     cf->mat = buf_; // header over the reused buffer (ConvertedFrame contract)
-    cf->format = BGRA8;
+    cf->format = RGBA8;
     cf->deviceTimestamp = left->deviceTimestamp; // trusted-time: never restamp
     cf->systemTimestamp = left->systemTimestamp;
     cf->convertMs = processMs;

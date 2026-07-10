@@ -94,7 +94,7 @@ export const disparity = defineContract({
     zoom: 9.0,
     /** Which center view the renderer SHOWS (every option is pipe-backed now:
      *  "sliced" = the scope-tile slice pipe, "disparity"/"anaglyph" = the
-     *  `stereo/composite` brick's BGRA8 pipe (ONE pipe, mode retuned server-
+     *  `stereo/composite` brick's RGBA8 pipe (ONE pipe, mode retuned server-
      *  side from this field — composite-node-and-center-select-fix), "sgbm" =
      *  the stereo brick's heatmap pipe. Selecting a view is what CONNECTS its
      *  pipe — unselected views' producers park (no subscriber → no compute,

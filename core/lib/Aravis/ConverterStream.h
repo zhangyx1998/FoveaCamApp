@@ -49,7 +49,7 @@ struct ConvertedFrame : Shared<ConvertedFrame> {
   // Pixel format of `mat` (the producing brick's target/passthrough format) —
   // stamped so in-process taps (unified-time-and-topology §5) can carry the
   // frame's typing without consulting the producer.
-  PixelFormat format = BGRA8;
+  PixelFormat format = RGBA8;
   uint64_t deviceTimestamp = 0;
   uint64_t systemTimestamp = 0;
   double convertMs = 0;
@@ -71,7 +71,7 @@ struct ConvertedFrame : Shared<ConvertedFrame> {
 // otherwise — no TapPublisher, no copy).
 struct OwnedFrame : Shared<OwnedFrame> {
   cv::Mat mat; // OWNS its data (deep copy); width/height/stride/type live here
-  PixelFormat format = BGRA8;
+  PixelFormat format = RGBA8;
   uint64_t deviceTimestamp = 0;
   uint64_t systemTimestamp = 0;
   // Monotonic per-tap sequence — downstream meters latest-wins drops from the

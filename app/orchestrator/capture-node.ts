@@ -7,7 +7,7 @@
 // capture-recorder-nodes Phase 3 (Wave I-3): the CAPTURE NODE. A worker thread
 // (vision-worker host pattern — the worker runs `core/Vision`) that performs the
 // bursty stack/wrap/diff/slice capture math at FULL BIT DEPTH off the
-// orchestrator main JS loop. The held `pending` resources (16-bit BGRA foveae,
+// orchestrator main JS loop. The held `pending` resources (16-bit RGBA foveae,
 // sliced center, diff) live IN-WORKER until `save()`/`discard()`.
 //
 // ON-DEMAND PIPES (report): unlike the recorder (one long-lived connection), the
@@ -24,7 +24,7 @@
 // state machine, the downconvert selection, the center rect clamp) are exported
 // and unit-tested with fakes; the worker embeds them verbatim via `.toString()`
 // (zero drift), exactly like recorder-node.ts's `runStreamConsumer`. The image
-// math (stack/makeBGRA/wrapPerspective/diff/slice) is ported FAITHFULLY from the
+// math (stack/makeRGBA/wrapPerspective/diff/slice) is ported FAITHFULLY from the
 // deleted `manual-control/capture.ts` and runs against the worker's required
 // `core/Vision` — same call sequence, so the saved bytes match the pre-wave
 // implementation (full-depth parity is the Wave R-3 audit item).
@@ -38,8 +38,21 @@ import { report } from "./diagnostics.js";
 import type { SeqRead } from "./recorder-node.js";
 import type { Serializable } from "@lib/orchestrator/protocol.js";
 import type { FramePayload } from "@lib/orchestrator/protocol.js";
+import { PIXEL_FORMATS, cvBayerPrefix } from "../../docs/schema/pixel-formats.js";
 
 const requireFromHere = createRequire(import.meta.url);
+
+/** GenICam sensor format → the honest OpenCV RGB demosaic code, derived from the
+ *  shared registry (`cvBayerPrefix`, docs/schema) so the capture demosaic can't
+ *  drift from the core `cvtColorCode` table or the viewer decode — all three
+ *  carry the OpenCV↔PFNC off-by-one R/B-swap (channel-order-fix.md). Injected
+ *  verbatim into the eval'd worker source below. */
+const BAYER_RGB_CODES: Record<string, string> = Object.fromEntries(
+  PIXEL_FORMATS.filter((f) => f.bayer !== null).map((f) => [
+    f.name,
+    `${cvBayerPrefix(f.bayer!)}2RGB`,
+  ]),
+);
 
 /** F1 default burst read timeout (ms). Overridable per shot via
  *  `CaptureShot.burstTimeoutMs`. Generous vs a healthy burst (5 fresh frames at
@@ -210,7 +223,7 @@ export interface CaptureStreamInit {
   bytesPerElement: number;
   /** The sensor format's true bit depth — the stack alpha is 1/(2^bits − 1). */
   significantBits: number;
-  /** Sensor format label (the demosaic branch in `makeBGRA`). */
+  /** Sensor format label (the demosaic branch in `makeRGBA`). */
   pixelFormat: string;
 }
 
@@ -599,37 +612,41 @@ function reportErr(fields, error) {
 // --- Mat helpers (makeMat = the @lib/mat shape/channels tag) -----------------
 function makeMat(arr, shape, channels) { arr.shape = shape; arr.channels = channels; return arr; }
 
-// makeBGR ported verbatim from @lib/imgproc (demosaic by sensor format).
-function makeBGR(mat, format) {
-  switch (format) {
-    case "BayerBG8": case "BayerBG16": case "BayerBG12p": return V.cvtColor(mat, "BayerBG2BGR");
-    case "BayerGB8": case "BayerGB16": case "BayerGB12p": return V.cvtColor(mat, "BayerGB2BGR");
-    case "BayerRG8": case "BayerRG16": case "BayerRG12p": return V.cvtColor(mat, "BayerRG2BGR");
-    case "BayerGR8": case "BayerGR16": case "BayerGR12p": return V.cvtColor(mat, "BayerGR2BGR");
-  }
+// GenICam format -> honest OpenCV RGB demosaic code (registry-derived, injected
+// from the main thread — see BAYER_RGB_CODES). The three demosaic sites (core
+// cvtColorCode, viewer decode, this) share ONE source so the OpenCV off-by-one
+// R/B-swap can't drift (channel-order-fix.md).
+const BAYER_RGB_CODES = ${JSON.stringify(BAYER_RGB_CODES)};
+
+// Demosaic / expand to HONEST physically-RGBA (red = channel 0). OpenCV exposes
+// no BayerXX2RGBA, so Bayer demosaics to RGB then RGB2RGBA.
+function makeRGBA(mat, format) {
+  const code = BAYER_RGB_CODES[format];
+  if (code) return V.cvtColor(V.cvtColor(mat, code), "RGB2RGBA");
   switch (mat.channels) {
-    case 1: return V.cvtColor(mat, "GRAY2BGR");
-    case 3: return mat;
-    case 4: return V.cvtColor(mat, "BGRA2BGR");
+    case 1: return V.cvtColor(mat, "GRAY2RGBA");
+    case 3: return V.cvtColor(mat, "RGB2RGBA");
+    case 4: return mat; // already RGBA
     default: throw new Error("Unsupported format: " + format + " with " + mat.channels + " channels");
   }
 }
-function makeBGRA(mat, format) { return V.cvtColor(makeBGR(mat, format), "BGR2BGRA"); }
 
-// RGB2BGR ported verbatim from capture.ts (save-pipeline BGR order).
-function RGB2BGR(image) {
+// Held resources are honest RGBA; cv::imwrite wants BGR channel order. ONE
+// honest swap at save — the old makeBGR off-by-one + compensating RGBA2BGRA are
+// gone (two cancelling bugs; channel-order-fix.md).
+function toSaveBGR(image) {
   switch (image.channels) {
-    case 4: return V.cvtColor(image, "RGBA2BGRA");
+    case 4: return V.cvtColor(image, "RGBA2BGR");
     case 3: return V.cvtColor(image, "RGB2BGR");
-    default: return image;
+    default: return image; // mono → save as-is
   }
 }
 
 // The saved L/R foveae are ALWAYS perspective-wrapped into alignment (the wrap
-// toggle was retired with the view re-plumb). Ported verbatim from capture.ts.
+// toggle was retired with the view re-plumb). Ported from capture.ts.
 function normalizeFovea(image, H) {
-  const bgra = makeBGRA(V.convertType(image, "16U"), H.format);
-  return V.wrapPerspective(bgra, H.mat);
+  const rgba = makeRGBA(V.convertType(image, "16U"), H.format);
+  return V.wrapPerspective(rgba, H.mat);
 }
 
 // The held resources (name -> Entry | Entry[]); Entry = { meta?, image? }.
@@ -859,9 +876,9 @@ async function runSingleCapture(m) {
       store.clear();
       if (shot.meta.wide !== undefined) accumulate(store, "wide", { meta: shot.meta.wide }, false);
     }
-    // The one stacked burst → full-depth (16-bit) BGRA, held UNWRAPPED (same
-    // makeBGRA call as normalizeFovea, minus the wrapPerspective).
-    const image = makeBGRA(V.convertType(sStack.image, "16U"), streams.single.pixelFormat);
+    // The one stacked burst → full-depth (16-bit) RGBA, held UNWRAPPED (same
+    // makeRGBA call as normalizeFovea, minus the wrapPerspective).
+    const image = makeRGBA(V.convertType(sStack.image, "16U"), streams.single.pixelFormat);
     accumulate(store, shot.resource, { image, meta: shot.meta.single }, indexed);
     const manifest = manifestOf(store, (e) => (e && e.meta !== undefined ? e.meta : null));
     post({ type: "captured", runId, manifest, bursts, stackMs: now() - t0 });
@@ -910,14 +927,14 @@ async function save(m) {
           if (meta !== undefined)
             tasks.push(fs.writeFile(resolvePath(directory, sequence + ".json"), JSON.stringify(meta, null, 2)));
           if (image)
-            tasks.push(V.save(RGB2BGR(image), resolvePath(directory, sequence + "." + format)));
+            tasks.push(V.save(toSaveBGR(image), resolvePath(directory, sequence + "." + format)));
         }
       } else {
         const { meta, image } = items;
         if (meta !== undefined)
           tasks.push(fs.writeFile(resolvePath(path, name + ".json"), JSON.stringify(meta, null, 2)));
         if (image)
-          tasks.push(V.save(RGB2BGR(image), resolvePath(path, name + "." + format)));
+          tasks.push(V.save(toSaveBGR(image), resolvePath(path, name + "." + format)));
       }
     }
     await Promise.all(tasks);

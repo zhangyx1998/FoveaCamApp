@@ -283,9 +283,9 @@ void appendUndistortReports(Napi::Env env, Napi::Array &rows,
     // F's fold does not default it to lossy from the convert producer's pipe
     // transport (the queue high-water replaces the drop rate on this edge).
     Topology::addInput(env, row, b.stream->sourceId(), "frame",
-                       Topology::frameType(env, "BGRA8", "U8"), /*lossy=*/0);
+                       Topology::frameType(env, "RGBA8", "U8"), /*lossy=*/0);
     if (!Topology::decoratePipe(env, row, pipeId))
-      row.Set("output", Topology::frameType(env, "BGRA8", "U8"));
+      row.Set("output", Topology::frameType(env, "RGBA8", "U8"));
     row.Set("stats", meterSnapshotToJs(env, b.stream->probe()));
     rows.Set(rows.Length(), row);
     seen.insert(pipeId);

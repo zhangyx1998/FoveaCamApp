@@ -13,6 +13,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   PIXEL_FORMATS,
   PIXEL_FORMAT_NAMES,
+  cvBayerPrefix,
   pixelFormatSpec,
 } from "../../docs/schema/pixel-formats.js";
 import {
@@ -37,11 +38,21 @@ describe("decode conformance vs docs/schema/pixel-formats (C-P6)", () => {
     }
   });
 
-  it("decode.bayerCode matches the schema's bayer field for every format", () => {
+  it("decode.bayerCode applies the OpenCV↔PFNC R/B-swap for every format", () => {
     for (const spec of PIXEL_FORMATS) {
-      const expected = spec.bayer ? `${spec.bayer}2RGB` : null;
+      // The demosaic constant carries the off-by-one correction: a GenICam
+      // BayerRG mosaic decodes with COLOR_BayerBG2RGB (channel-order-fix.md).
+      const expected = spec.bayer ? `${cvBayerPrefix(spec.bayer)}2RGB` : null;
       expect(bayerCode(spec.name)).toBe(expected);
     }
+  });
+
+  it("bayerCode picks the R/B-swapped OpenCV prefix, not the literal PFNC name", () => {
+    // Pin the actual correction so a regression back to the literal name fails.
+    expect(bayerCode("BayerRG8")).toBe("BayerBG2RGB");
+    expect(bayerCode("BayerBG12p")).toBe("BayerRG2RGB");
+    expect(bayerCode("BayerGR16")).toBe("BayerGB2RGB");
+    expect(bayerCode("BayerGB8")).toBe("BayerGR2RGB");
   });
 
   it("non-Bayer / unknown formats produce no demosaic code", () => {

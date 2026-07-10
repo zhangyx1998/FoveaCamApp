@@ -54,7 +54,8 @@ export function createCheckerKernel(initial: Record<string, unknown>): VisionKer
         height = h;
         values.size = { width: w, height: h };
       }
-      const gray: Mat<Uint8Array> = cvtColor(raw, "BGRA2GRAY");
+      // The shared preview is honest RGBA8 (channel-order-fix.md).
+      const gray: Mat<Uint8Array> = cvtColor(raw, "RGBA2GRAY");
       const corners = await findChessboardCorners(gray, {
         width: p.patternWidth,
         height: p.patternHeight,

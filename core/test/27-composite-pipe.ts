@@ -5,7 +5,7 @@
 // -------------------------------------------------------
 //
 // Composite (anaglyph / L-vs-R difference) brick (composite-node-and-center-
-// select-fix §B): a two-input BGRA op modelled on StereoStream. NO hardware
+// select-fix §B): a two-input RGBA op modelled on StereoStream. NO hardware
 // (fake camera).
 //
 // The stereo pair is SYNTHESIZED with two slice (fovea) crops of the SAME
@@ -19,7 +19,7 @@
 //   1. ATTACH GUARDS — unknown target / unknown source / bad mode throw named.
 //   2. PARKED before a consumer (ruling C-21) — connecting the composite pipe
 //      wakes the whole chain (composite → two slice taps → convert → camera);
-//      both input ports metered; output BGRA8 with alpha 255.
+//      both input ports metered; output RGBA8 with alpha 255.
 //   3. ANAGLYPH channel identity — output R == LEFT crop R, G/B == RIGHT crop.
 //   4. DIFFERENCE sanity — zero-offset crops ⇒ color planes all zero.
 //   5. REACTIVE mode retune — setCompositeParams applies live; invalid mode
@@ -52,7 +52,7 @@ const [H, W] = probe0.raw.shape as [number, number];
 probe0.release?.();
 const serial = String(camera.serial ?? "0");
 
-const CH = 4; // BGRA8
+const CH = 4; // RGBA8
 const D = 24; // horizontal shift for the anaglyph identity crops
 const SW = Math.min(256, W - 96 - D);
 const SH = Math.min(192, H - 96);
@@ -73,14 +73,14 @@ const cmpDiffId = `stereo/composite-diff`; // zero-offset pair → difference ==
 const cmpAnaId = `stereo/composite-ana`;   // shifted pair → anaglyph identity
 
 const fullBytes = W * H * CH;
-P.advertise({ id: rawId, pixelFormat: "BGRA8", dtype: "U8", width: W, height: H, channels: CH, stride: W * CH, bytesPerFrame: fullBytes, ringDepth: 4 });
+P.advertise({ id: rawId, pixelFormat: "RGBA8", dtype: "U8", width: W, height: H, channels: CH, stride: W * CH, bytesPerFrame: fullBytes, ringDepth: 4 });
 const advertiseSlice = (id: string, r: { width: number; height: number }) =>
-  P.advertise({ id, pixelFormat: "BGRA8", dtype: "U8", width: r.width, height: r.height, channels: CH, stride: r.width * CH, bytesPerFrame: r.width * r.height * CH, ringDepth: 4, maxWidth: SW, maxHeight: SH, maxBytes: SW * SH * CH });
+  P.advertise({ id, pixelFormat: "RGBA8", dtype: "U8", width: r.width, height: r.height, channels: CH, stride: r.width * CH, bytesPerFrame: r.width * r.height * CH, ringDepth: 4, maxWidth: SW, maxHeight: SH, maxBytes: SW * SH * CH });
 advertiseSlice(slcLId, RL);
 advertiseSlice(slcR0Id, RR0);
 advertiseSlice(slcRDId, RRD);
 const bgraOut = (id: string) =>
-  P.advertise({ id, pixelFormat: "BGRA8", dtype: "U8", width: SW, height: SH, channels: CH, stride: SW * CH, bytesPerFrame: SW * SH * CH, ringDepth: 4, maxWidth: SW, maxHeight: SH, maxBytes: SW * SH * CH });
+  P.advertise({ id, pixelFormat: "RGBA8", dtype: "U8", width: SW, height: SH, channels: CH, stride: SW * CH, bytesPerFrame: SW * SH * CH, ringDepth: 4, maxWidth: SW, maxHeight: SH, maxBytes: SW * SH * CH });
 bgraOut(cmpDiffId);
 bgraOut(cmpAnaId);
 
@@ -135,7 +135,7 @@ const diff = open(cmpDiffId, SW * SH * CH);
         maxColor = Math.max(maxColor, px[i * 4], px[i * 4 + 1], px[i * 4 + 2]);
         if (px[i * 4 + 3] !== 255) alphaOk = false;
       }
-      assert.equal(alphaOk, true, "BGRA alpha = 255 on every pixel");
+      assert.equal(alphaOk, true, "RGBA alpha = 255 on every pixel");
       assert.equal(maxColor, 0, `difference of identical crops is zero (max color ${maxColor})`);
       ok++;
     } else await sleep(5);
@@ -166,15 +166,15 @@ const srcR = open(slcRDId, SW * SH * CH);
     const out = new Uint8Array(ana.dest, 0, SW * SH * CH);
     const L = new Uint8Array(srcL.dest, 0, SW * SH * CH);
     const R = new Uint8Array(srcR.dest, 0, SW * SH * CH);
-    // BGRA: channel 0 = B, 1 = G, 2 = R, 3 = A. Anaglyph: out.R = L.R,
-    // out.B = R.B, out.G = R.G. The moving fake pattern may skew L/R/out by a
-    // frame; count matching pixels and require a strong majority.
+    // Honest RGBA8: channel 0 = R, 1 = G, 2 = B, 3 = A. Anaglyph: out.R = L.R
+    // (channel 0 from LEFT), out.G = R.G, out.B = R.B. The moving fake pattern
+    // may skew L/R/out by a frame; count matching pixels and require a majority.
     let rMatch = 0, gMatch = 0, bMatch = 0, alphaOk = 0;
     const n = SW * SH;
     for (let i = 0; i < n; i++) {
-      if (out[i * 4 + 2] === L[i * 4 + 2]) rMatch++;   // R == LEFT R
-      if (out[i * 4 + 1] === R[i * 4 + 1]) gMatch++;   // G == RIGHT G
-      if (out[i * 4 + 0] === R[i * 4 + 0]) bMatch++;   // B == RIGHT B
+      if (out[i * 4 + 0] === L[i * 4 + 0]) rMatch++;   // R (ch0) == LEFT R
+      if (out[i * 4 + 1] === R[i * 4 + 1]) gMatch++;   // G (ch1) == RIGHT G
+      if (out[i * 4 + 2] === R[i * 4 + 2]) bMatch++;   // B (ch2) == RIGHT B
       if (out[i * 4 + 3] === 255) alphaOk++;
     }
     assert.equal(alphaOk, n, "anaglyph alpha = 255 on every pixel");
@@ -206,7 +206,7 @@ reader.close(srcR.rh); P.disconnect(slcRDId);
   assert(ok >= 2, `frames keep flowing after the live retune (${ok})`);
   // After the retune to anaglyph on the zero-offset pair, R==L and G/B==R are
   // the SAME pixels, so the output equals the (identical) source — still valid
-  // BGRA with alpha 255; just confirm flow (done above).
+  // RGBA with alpha 255; just confirm flow (done above).
   console.log("27-composite: reactive setCompositeParams OK.");
 }
 

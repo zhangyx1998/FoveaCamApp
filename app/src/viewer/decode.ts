@@ -26,7 +26,7 @@
 import { inflateSync } from "node:zlib";
 import type { Mat } from "core/Vision";
 import { type Dtype } from "@lib/util/dtype";
-import { pixelFormatSpec } from "../../../docs/schema/pixel-formats.js";
+import { pixelFormatSpec, cvBayerPrefix } from "../../../docs/schema/pixel-formats.js";
 
 export type FrameDecoder = (bytes: Uint8Array) => Mat<Uint8Array>;
 
@@ -171,12 +171,16 @@ function warnOnSchemaDrift(props: DecodeProps): void {
 type BayerCode = `Bayer${"GR" | "RG" | "GB" | "BG"}2RGB`;
 
 /** OpenCV demosaic code for a pixel format, or null if it's not Bayer — driven
- *  by the shared registry's `bayer` field (docs/schema, B-P1), NOT a private
- *  regex, so viewer demosaic can't drift from the format facts. Exported for
- *  the C-P6 conformance test. */
+ *  by the shared registry (docs/schema, B-P1), NOT a private regex, so viewer
+ *  demosaic can't drift from the format facts. The cv constant carries the
+ *  OpenCV↔PFNC off-by-one R/B-swap correction (`cvBayerPrefix`,
+ *  channel-order-fix.md): a GenICam BayerRG mosaic demosaics with
+ *  `COLOR_BayerBG2RGB`, so an old raw-Bayer recording renders red-as-red.
+ *  Output is honest RGB (FrameView pours R,G,B into an RGBA-native canvas).
+ *  Exported for the C-P6 conformance test. */
 export const bayerCode = (pixelFormat: string): BayerCode | null => {
   const bayer = pixelFormatSpec(pixelFormat)?.bayer;
-  return bayer ? (`${bayer}2RGB` as BayerCode) : null;
+  return bayer ? (`${cvBayerPrefix(bayer)}2RGB` as BayerCode) : null;
 };
 
 function frameBuffer(bytes: Uint8Array, dtype: Dtype): ArrayBuffer {

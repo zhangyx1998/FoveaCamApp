@@ -406,15 +406,15 @@ protected:
     if (const uint64_t gap = seqGap(in)) // tap outran us (latest-wins)
       meter_.drop(gap);
     meter_.ingest("frame", t);
-    // KCF needs a single-channel 8-bit mat; the tap carries BGRA8 (converted)
-    // or undistorted BGRA — convert once into a reused buffer.
+    // KCF needs a single-channel 8-bit mat; the tap carries honest RGBA8
+    // (converted) or undistorted RGBA — convert once into a reused buffer.
     const cv::Mat &m = in->mat;
     const cv::Mat *gray = &m;
     if (m.channels() == 4) {
-      cv::cvtColor(m, gray_, cv::COLOR_BGRA2GRAY);
+      cv::cvtColor(m, gray_, cv::COLOR_RGBA2GRAY);
       gray = &gray_;
     } else if (m.channels() == 3) {
-      cv::cvtColor(m, gray_, cv::COLOR_BGR2GRAY);
+      cv::cvtColor(m, gray_, cv::COLOR_RGB2GRAY);
       gray = &gray_;
     }
     return core_.step(*gray, in->deviceTimestamp, meter_,

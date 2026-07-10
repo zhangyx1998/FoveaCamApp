@@ -190,7 +190,7 @@ describe("createFoveaMaterializer (§5 chained fovea brick)", () => {
     const advert = await h.materializer.materialize(req());
     expect(advert).toEqual({
       kind: "fovea",
-      output: { kind: "frame", pixelFormat: "BGRA8", dtype: "U8" },
+      output: { kind: "frame", pixelFormat: "RGBA8", dtype: "U8" },
     });
     expect(h.brick.attach).toHaveBeenCalledWith("camera/SN1/undistort", ID, {
       rect: { x: 0, y: 0, width: 256, height: 256 },
@@ -220,7 +220,7 @@ describe("createFoveaMaterializer (§5 chained fovea brick)", () => {
     await h.materializer.materialize(req({ rect, maxWidth: 512, maxHeight: 256 }));
     expect(h.specs[0]).toEqual({
       id: ID,
-      pixelFormat: "BGRA8",
+      pixelFormat: "RGBA8",
       dtype: "U8",
       width: 128,
       height: 64,

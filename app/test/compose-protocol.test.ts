@@ -25,7 +25,7 @@ import { buildTopology } from "@orchestrator/graph-topology";
 function spec(id: string): PipeSpec {
   return {
     id,
-    pixelFormat: "BGRA8",
+    pixelFormat: "RGBA8",
     dtype: "U8",
     width: 4,
     height: 4,
@@ -83,7 +83,7 @@ function foveaMaterializer() {
   const materializer: NodeMaterializer = {
     materialize: vi.fn((req) => ({
       kind: req.kind,
-      output: { kind: "frame", pixelFormat: "BGRA8", dtype: "U8" },
+      output: { kind: "frame", pixelFormat: "RGBA8", dtype: "U8" },
     })),
     teardown: vi.fn((id) => torn.push(id)),
   };
@@ -138,7 +138,7 @@ describe("compose protocol (C-24 step 3)", () => {
     const h = harness({ specs: [spec("camera/1/convert")] });
     const w = h.client("viewer-1");
     const advert = await w.compose("camera/1/convert", "convert");
-    expect(advert.output).toMatchObject({ kind: "frame", pixelFormat: "BGRA8" });
+    expect(advert.output).toMatchObject({ kind: "frame", pixelFormat: "RGBA8" });
     // Unknown kind with no materializer AND no advertised pipe → rejected.
     await expect(w.compose("camera/1/undistort/fovea/9", "fovea")).rejects.toThrow(/materializer/);
   });
@@ -175,7 +175,7 @@ describe("compose protocol (C-24 step 3)", () => {
     const id = "camera/1/undistort/fovea/3";
     const pipeRow = (epoch: number) => ({
       id,
-      spec: { pixelFormat: "BGRA8", dtype: "U8" },
+      spec: { pixelFormat: "RGBA8", dtype: "U8" },
       epoch,
       consumers: 1,
       closed: false,

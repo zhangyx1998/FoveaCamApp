@@ -102,7 +102,7 @@ protected:
     const double scale = span > 0 ? 255.0 / span : 0.0;
     in->mat.convertTo(u8_, CV_8U, scale, -lo * scale);
     cv::applyColorMap(u8_, bgr_, cv::COLORMAP_TURBO);   // BGR CV_8UC3
-    cv::cvtColor(bgr_, buf_, cv::COLOR_BGR2BGRA);        // BGRA8, alpha 255
+    cv::cvtColor(bgr_, buf_, cv::COLOR_BGR2RGBA);        // honest RGBA8, alpha 255
     const double processMs = std::chrono::duration<double, std::milli>(
                                  std::chrono::steady_clock::now() - c0)
                                  .count();
@@ -113,7 +113,7 @@ protected:
 
     auto cf = ConvertedFrame::create();
     cf->mat = buf_; // header over the reused buffer (ConvertedFrame contract)
-    cf->format = BGRA8;
+    cf->format = RGBA8;
     cf->deviceTimestamp = in->deviceTimestamp; // trusted-time: never restamp
     cf->systemTimestamp = in->systemTimestamp;
     cf->convertMs = processMs;

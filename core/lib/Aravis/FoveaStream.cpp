@@ -238,16 +238,16 @@ void appendFoveaReports(Napi::Env env, Napi::Array &rows,
       auto row = Topology::node(env, b.privateUndistort->name(), "undistort",
                                 "native");
       Topology::addInput(env, row, b.privateUndistort->sourceId(), "frame",
-                         Topology::frameType(env, "BGRA8", "U8"));
-      row.Set("output", Topology::frameType(env, "BGRA8", "U8"));
+                         Topology::frameType(env, "RGBA8", "U8"));
+      row.Set("output", Topology::frameType(env, "RGBA8", "U8"));
       row.Set("stats", meterSnapshotToJs(env, b.privateUndistort->probe()));
       rows.Set(rows.Length(), row);
     }
     auto row = Topology::node(env, pipeId, "fovea", "native");
     Topology::addInput(env, row, b.stream->sourceId(), "frame",
-                       Topology::frameType(env, "BGRA8", "U8"));
+                       Topology::frameType(env, "RGBA8", "U8"));
     if (!Topology::decoratePipe(env, row, pipeId))
-      row.Set("output", Topology::frameType(env, "BGRA8", "U8"));
+      row.Set("output", Topology::frameType(env, "RGBA8", "U8"));
     row.Set("stats", meterSnapshotToJs(env, b.stream->probe()));
     rows.Set(rows.Length(), row);
     seen.insert(pipeId);

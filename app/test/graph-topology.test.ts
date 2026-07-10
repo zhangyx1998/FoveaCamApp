@@ -26,7 +26,7 @@ const row = (
   over: Partial<PipeListRow> = {},
 ): PipeListRow => ({
   id,
-  spec: { pixelFormat: "BGRA8", dtype: "U8" },
+  spec: { pixelFormat: "RGBA8", dtype: "U8" },
   epoch: 1,
   consumers: 0,
   closed: false,
@@ -185,7 +185,7 @@ describe("buildTopology", () => {
           kind: "convert",
           transport: "pipe",
           inputs: [],
-          output: { kind: "frame", pixelFormat: "BGRA8", dtype: "U8" },
+          output: { kind: "frame", pixelFormat: "RGBA8", dtype: "U8" },
           pipe: { consumers: 0, bytesTotal: 0 },
           stats: load("camera/1/convert", 0.3, 60), // outputs 60Hz, maxInterval 50
         },
@@ -197,7 +197,7 @@ describe("buildTopology", () => {
             {
               from: "camera/1/convert",
               port: "frame", // matches the consumer meter's input key
-              type: { kind: "frame", pixelFormat: "BGRA8", dtype: "U8" },
+              type: { kind: "frame", pixelFormat: "RGBA8", dtype: "U8" },
               lossy: true,
             },
           ],
@@ -263,7 +263,7 @@ describe("buildTopology", () => {
               lossy: false, // explicit lossless link
             },
           ],
-          output: { kind: "frame", pixelFormat: "BGRA8", dtype: "U8" } as const,
+          output: { kind: "frame", pixelFormat: "RGBA8", dtype: "U8" } as const,
           pipe: { consumers: 1, bytesTotal },
           stats: load("camera/1/convert", 0.3, 60),
         },
@@ -290,7 +290,7 @@ describe("buildTopology", () => {
       kind: "convert",
       transport: "pipe",
       inputs: [],
-      output: { kind: "frame", pixelFormat: "BGRA8", dtype: "U8" },
+      output: { kind: "frame", pixelFormat: "RGBA8", dtype: "U8" },
       pipe: { consumers: 0, bytesTotal: 0 },
       stats: load("camera/1/convert", 0.3, 60), // outputs 60Hz
     });
@@ -306,11 +306,11 @@ describe("buildTopology", () => {
             {
               from: "camera/1/convert", // pipe producer → default would be lossy
               port: "frame",
-              type: { kind: "frame", pixelFormat: "BGRA8", dtype: "U8" },
+              type: { kind: "frame", pixelFormat: "RGBA8", dtype: "U8" },
               lossy: false, // FIFO input — explicit flag must win
             },
           ],
-          output: { kind: "frame", pixelFormat: "BGRA8", dtype: "U8" },
+          output: { kind: "frame", pixelFormat: "RGBA8", dtype: "U8" },
           stats: {
             ...load("camera/1/undistort", 0.7, 60),
             queue: { depth: 3, highWater: 6, capacity: 8 },
@@ -335,7 +335,7 @@ describe("buildTopology", () => {
             {
               from: "camera/1/convert",
               port: "frame",
-              type: { kind: "frame", pixelFormat: "BGRA8", dtype: "U8" },
+              type: { kind: "frame", pixelFormat: "RGBA8", dtype: "U8" },
               lossy: true,
             },
           ],
@@ -364,11 +364,11 @@ describe("buildTopology", () => {
             {
               from: "camera/1/convert",
               port: "frame",
-              type: { kind: "frame", pixelFormat: "BGRA8", dtype: "U8" },
+              type: { kind: "frame", pixelFormat: "RGBA8", dtype: "U8" },
               lossy: false,
             },
           ],
-          output: { kind: "frame", pixelFormat: "BGRA8", dtype: "U8" },
+          output: { kind: "frame", pixelFormat: "RGBA8", dtype: "U8" },
           stats: {
             ...load("camera/1/undistort", 0.7, 60),
             queue: { highWater: 6 } as unknown as WorkloadSnapshot["queue"],
@@ -447,7 +447,7 @@ describe("buildTopologyFromReports", () => {
       kind: "convert",
       transport: "pipe",
       inputs: [],
-      output: { kind: "frame", pixelFormat: "BGRA8", dtype: "U8" },
+      output: { kind: "frame", pixelFormat: "RGBA8", dtype: "U8" },
       epoch: 1,
       pipe: { consumers: 2, bytesTotal },
     });
@@ -496,7 +496,7 @@ describe("buildTopology with real reports (deps.reports)", () => {
           kind: "convert",
           transport: "native", // post-P3: the brick reports itself
           inputs: [{ from: "camera/1", port: "raw", type: { kind: "frame", pixelFormat: "BayerRG12p", dtype: "U16" } }],
-          output: { kind: "frame", pixelFormat: "BGRA8", dtype: "U8" },
+          output: { kind: "frame", pixelFormat: "RGBA8", dtype: "U8" },
           epoch: 7,
         },
       ],

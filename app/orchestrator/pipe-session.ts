@@ -325,7 +325,7 @@ export function createFoveaMaterializer(deps: FoveaMaterializerDeps): NodeMateri
       const channels = 4;
       pipes.advertise({
         id: req.id,
-        pixelFormat: "BGRA8",
+        pixelFormat: "RGBA8",
         dtype: "U8",
         width: rect.width,
         height: rect.height,
@@ -338,7 +338,7 @@ export function createFoveaMaterializer(deps: FoveaMaterializerDeps): NodeMateri
         maxBytes: maxWidth * maxHeight * channels,
       });
       deps.brick.attach(source, req.id, { rect });
-      return { kind: "fovea", output: { kind: "frame", pixelFormat: "BGRA8", dtype: "U8" } };
+      return { kind: "fovea", output: { kind: "frame", pixelFormat: "RGBA8", dtype: "U8" } };
     },
     teardown(id: string): void {
       deps.brick.detach(id);
