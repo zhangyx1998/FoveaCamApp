@@ -18,6 +18,7 @@ Along the bottom is the status row:
 
 - A status dot and text. The text reads **connected — N cameras** (green dot) when cameras are found, or **no cameras** when none are detected. (There is no longer an "orchestrator down" state — the launcher does not depend on the working engine, which only exists while an app is open.)
 - Above it, each detected camera is listed with its role (L / C / R, when assigned), vendor/model, and serial.
+- When the connected cameras form a complete L / C / R triple that has a **nickname** set (in [Settings → Device config](settings.md#nickname)), that nickname is shown above the camera list — a quick confirmation of which bench you're on. It updates live if you edit the nickname while Welcome is open.
 
 **Right — the launcher.** Buttons are grouped under three headings:
 

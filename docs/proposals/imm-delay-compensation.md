@@ -1,6 +1,6 @@
 # IMM delay compensation (motion predictor after the tracker)
 
-Status: **CODE-COMPLETE (2026-07-10; rig pass owed — `hardware/stage-f.md`
+Status: **CODE-COMPLETE (2026-07-10, `9fc4f0c`; rig pass owed — `hardware/stage-f.md`
 §Disparity Scope → "Delay compensation")**.
 
 User directive: chain an **Interacting Multiple Model (IMM) Kalman-filter

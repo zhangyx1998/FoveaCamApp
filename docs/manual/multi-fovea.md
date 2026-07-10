@@ -4,13 +4,25 @@ Tracking - Multi lets you place several targets on the wide (center) view at
 once and have each one tracked independently. You mark a target, the app locks a
 KCF tracker onto it, and a live fovea crop follows it around the wide frame.
 Because there are still only two physical mirrors, the rig time-shares them
-across your targets — this app is where you set up and monitor a multi-target
-session and record it.
+across your targets (a round-robin trigger interleaves the streams) — this app is
+where you set up and monitor a multi-target session and record it.
+
+Each target can be one of two kinds:
+
+- a **tracked target** — you place it by dragging on the overview and a KCF
+  tracker follows the content around the wide frame (below);
+- a **fixed preset** — a static mirror-angle location (pan/tilt in degrees),
+  edited in the bottom drawer. The app **opens on a two-preset demo**: targets 1
+  and 2 come pre-enabled at fixed angles of **(-5°, -5°)** and **(+5°, +5°)**, so
+  the round-robin has something to interleave with no manual setup.
 
 **Prerequisites:** a full calibration present (see
 [Calibration](./calibration.md)) and all three cameras connected (see
 [Manage Cameras](./manage-cameras.md)). On an uncalibrated rig the overview
-falls back to the raw wide image and placements land in distorted pixels.
+falls back to the raw wide image and placements land in distorted pixels. The
+interleaved multi-target streams also require **v2.0 firmware** on the MCU — on
+older firmware the streams are disabled and a hint says so (see
+[Session status](#session-status)).
 
 ## The layout
 
@@ -21,6 +33,9 @@ falls back to the raw wide image and placements land in distorted pixels.
   **Capture** and **Reset** buttons.
 - **Target cards** — a row of cards below the overview, one per target slot. Each
   card carries the target's live fovea crop and its telemetry.
+- **Bottom drawer** — a pull-up drawer along the bottom edge holds the **Settle**
+  slider and the **Preset locations** editor (see [The drawer](#the-drawer)). The
+  content grid reserves space for it so nothing is hidden behind it.
 
 Each target has its own color (blue, amber, green, pink, and so on) that is used
 for its overview box and number so you can tell them apart at a glance.
@@ -72,6 +87,21 @@ Each card shows:
 If a target's box disappears and its **lost** count climbs, the tracker has lost
 the content — drag on the overview to re-place it.
 
+## The drawer
+
+Drag the handle at the bottom edge up to open the drawer. It holds two sections:
+
+- **Settle** — a slider (**0–20 ms**, sub-millisecond steps) setting the trigger
+  hold applied after the round-robin **switches** streams (i.e. after the mirror
+  has just moved) and before the exposure runs. It is seeded from the selected
+  triple's **Settle time** setting ([Settings → Device config](./settings.md#per-triple-settings))
+  at session start and this slider overrides it **live** for the running session.
+  **0** means no hold.
+- **Preset locations (mirror °)** — one row per preset-bearing target, with **pan**
+  and **tilt** number fields in mirror degrees (clamped to a safe ±10° range).
+  Editing a field re-parks that target's mirror **live**; the round-robin keeps
+  interleaving. Only targets that carry a preset appear here (the demo's two).
+
 ## Session status
 
 The status chips in the controls panel light up when their condition holds:
@@ -80,6 +110,11 @@ The status chips in the controls panel light up when their condition holds:
 - **v2** — the connected hardware supports the synchronized multi-target frame
   scheduler.
 - The third chip shows the current capture-reject reason.
+
+If the connected MCU is **not** on v2 firmware, a hint appears under the chips:
+**"Requires v2.0 firmware — reflash the MCU to run the interleaved demo (streams
+are disabled on this firmware)."** On such firmware the interleaved streams stay
+blank.
 
 The **Pulse** slider sets the capture exposure pulse width.
 

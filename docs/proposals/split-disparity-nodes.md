@@ -152,6 +152,11 @@ join.
   `globalCompositeOperation: "difference"` of the two fovea undistort pipes
   the window already binds). The kernels can no longer diff (neither sees
   both foveas) — and never should have: it is a pure display composite.
+  **SUPERSEDED 2026-07-09 (`composite-node-and-center-select-fix.md`,
+  `59ad332`): `DiffView.vue` is DELETED — the difference AND anaglyph views
+  are now the two-input native `CompositeStream` brick (`stereo/composite`).
+  The "pure display composite" framing held; only the mechanism moved from a
+  renderer canvas to a graph node.**
 - `match_left` / `match_right` heatmaps stay session frame channels (one per
   match worker).
 

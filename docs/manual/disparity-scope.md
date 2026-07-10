@@ -72,13 +72,18 @@ it converge.
 
 In the **Tracker** column of the drawer:
 
-- The **on** / **off** toggle arms the wide-view KCF tracker.
+- The **on** / **off** toggle arms the wide-view auto-follow tracker. It is a
+  **hybrid** node — an NCC (normalized cross-correlation) template match with a
+  re-detect stage — so when the target is momentarily lost it can **recover** by
+  re-detecting the template rather than staying dropped. (It runs on its own
+  native thread as a drop-in successor to the older KCF tracker.)
 - **Kernel** sets the template width × height (applied on the next re-arm).
 - **Status** reads **tracking** (locked), **armed** (enabled, not yet locked),
   or **off**.
 
-When armed, the tracker follows the target and steers the match crop; a drag
-overrides it as described above.
+When armed, the tracker follows the target and steers the match crop, recovering
+its lock if the content briefly drops out; a drag overrides it as described
+above.
 
 ## Tuning the control loop
 
@@ -101,6 +106,13 @@ The drawer's columns, left to right:
 If corrections stop applying, check **Min Match Score** against the live match
 quality: when the score drops below it the loop holds rather than trusting a bad
 match. A steady scene should hold steady Vergence and Depth numbers.
+
+> **Delay compensation.** A per-triple **Delay compensation** value (set in
+> [Settings → Device config](./settings.md#per-triple-settings)) chains a motion
+> predictor after the tracker so the mirrors act on the target's *estimated*
+> position a few milliseconds ahead (positive **leads**, to offset tracking-chain
+> latency) or behind (negative **lags**). It is read at session start, so change
+> it in Settings and re-enter Disparity Scope to apply it.
 
 ## The Debugger sub-window
 

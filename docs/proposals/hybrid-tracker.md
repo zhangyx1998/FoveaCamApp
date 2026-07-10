@@ -1,8 +1,13 @@
 # Higher-FPS hybrid object tracker (drop-in KCF replacement)
 
-**Status:** CODE-COMPLETE (2026-07-10) — new core node + test + bench + docs.
-Rig pass owed (stage-f section below). Session swap wiring is the planner's,
-listed at the end (one line per session).
+**Status:** CODE-COMPLETE (2026-07-10) — new core node + test + bench + docs
+(`50f1d75`). Rig pass owed (stage-f section below). **First session swap
+LANDED**: disparity-scope's chained auto-follow tracker now runs
+`createChainedHybridTracker` (`bc20269`, drop-in — node id `undistortKcf`
+kept), superseding the chained-KCF path in
+[controller-node-and-fifo-edges.md §3.5](./controller-node-and-fifo-edges.md).
+Remaining session swaps (center-cam tracker) are the planner's, listed at the
+end. Multi-target (`createMultiTracker`) stays on GRAY-KCF for now.
 
 **User request (verbatim intent):** "Deliver a solution for higher FPS object
 tracking. Consider using a hybrid approach of detection + matching, or propose a

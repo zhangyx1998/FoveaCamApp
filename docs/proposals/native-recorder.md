@@ -43,6 +43,14 @@ options** (the ones the JS recorder uses): `useChunks`, `useStatistics`,
 `useSummaryOffsets`, `repeatSchemas`, `repeatChannels`, `useMessageIndex`,
 `useChunkIndex`, `useMetadataIndex` all true; chunk `compression = ""`.
 
+**AS-SHIPPED — flat destination path (`5b539e9`, user ruling 2026-07-10):**
+The container is now a single file named after the sequence directly inside
+the save directory (`<seq>.fcap`), NOT `<seq>/recording.fcap`. The
+recorder-node `path` option is the container path (`.fcap` appended unless
+present); recording-service mkdirs the container's PARENT only — no
+per-recording directory is created. Container layout above is unchanged;
+this is purely the on-disk destination naming.
+
 ## Wave 1 — `core/lib/Record/McapWriter.{h,cpp}` (SHIPPED)
 
 A hand-rolled, dependency-free (zlib only, already linked) MCAP writer. Byte

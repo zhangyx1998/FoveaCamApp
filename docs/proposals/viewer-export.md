@@ -1,6 +1,6 @@
 # Viewer video export (per-stream, ffmpeg-driven)
 
-**Status: CODE-COMPLETE (2026-07-10).** Per-stream video export for the
+**Status: CODE-COMPLETE (2026-07-10, `32876c6`; UI/UX polish `2c11f2d`).** Per-stream video export for the
 standalone `.fcap` viewer, driven by ffmpeg. Pure logic unit-tested; the ffmpeg
 pipeline (incl. the undistort remap path) smoke-tested end-to-end against a real
 `ffmpeg 8.1.2`. No rig needed — the viewer is orchestrator-free. UI paths land

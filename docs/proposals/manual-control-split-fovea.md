@@ -1,6 +1,6 @@
 # Manual-control split fovea (per-eye independent steering) — AS-BUILT
 
-Status: CODE-COMPLETE (2026-07-10). User direct request. Pure precedence logic
+Status: CODE-COMPLETE (2026-07-10, `a45dd89`). User direct request. Pure precedence logic
 unit-tested; gates green (vue-tsc + full vitest, 977 tests). UI/UX review + rig
 pass owed (stage-f §Manual Control "Split fovea" / "Split reunify").
 

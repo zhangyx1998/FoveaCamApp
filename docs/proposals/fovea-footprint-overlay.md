@@ -1,6 +1,6 @@
 # Fovea footprint overlay + free-run recorded extras (proposal)
 
-Status: CODE-COMPLETE (2026-07-10). Two coupled deliverables (user direct
+Status: CODE-COMPLETE (2026-07-10, `7692e9d`). Two coupled deliverables (user direct
 request); pure parts unit-tested, gates green (vue-tsc + vitest). Rig pass owed
 (the recorded homography direction is the same open question flagged in
 `homography-feeder.ts` — see below).

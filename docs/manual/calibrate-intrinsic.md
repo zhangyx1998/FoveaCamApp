@@ -11,7 +11,9 @@ The app opens on a list titled **Select a camera to calibrate**. Each connected 
 - If the camera is calibrated, you see **Calibrated @** with a timestamp, **FOV: X …°, Y …°**, and **RMS: … px** (the reprojection error of the stored solve — lower is better).
 - If not, it reads **Camera not calibrated.**
 
-Each row has three buttons: **Calibrate (Checker)**, **Calibrate (Marker)**, and **Reset**. The **Reset** button clears that camera's stored calibration and is disabled when there is nothing to clear. Pick **Calibrate (Checker)** for a printed checkerboard or **Calibrate (Marker)** for ArUco/AprilTag targets; both open the same live calibration view in the matching mode.
+Each row has three buttons: **Calibrate (Checker)**, **Calibrate (Marker)**, and **Reset**. Pick **Calibrate (Checker)** for a printed checkerboard or **Calibrate (Marker)** for ArUco/AprilTag targets; both open the same live calibration view in the matching mode.
+
+**Reset** clears that camera's stored calibration and is disabled when there is nothing to clear. It is a **two-step confirm**, because it is more destructive than the Settings *Discard* (which only moves an orphaned record to the trash): the first click swaps the button for a warning — *"Permanently deletes this camera's calibration (cannot be undone; records shared with other cameras keep their other bindings)."* — and a **Delete** / **Cancel** pair. Only **Delete** actually removes it. If the intrinsic record isn't shared with any other camera, this is a permanent hard delete.
 
 ### To calibrate a camera with a checkerboard
 
@@ -23,7 +25,7 @@ Each row has three buttons: **Calibrate (Checker)**, **Calibrate (Marker)**, and
 6. Click **Capture** to freeze the current detection into a sample. **Capture** is disabled until a detection exists. Each capture appears as a thumbnail tile in the **Captured Records** panel on the right, with a running count in its heading.
 7. Repeat across a spread of positions — tilt the board, move it to the corners of the frame, vary distance. More varied samples give a better solve.
 8. When you have enough samples, click **Calibrate**. It is disabled until you have at least one record, and reads **Calibrating…** while it works.
-9. After the solve, the left panel shows the new **FOV** and **Last Solve RMS … px**. Check the RMS is low (see below). The result is saved automatically to the camera's configuration.
+9. After the solve, the left panel shows the new **FOV** and **Last Solve RMS … px**. Check the RMS is low (see below). The result is saved automatically to the camera's configuration and as an **intrinsic calibration record** (visible under the camera's rig in [Settings → Device config → Calibration records](./settings.md#calibration-records), where it can be exported or discarded).
 
 ### To calibrate a camera with markers
 

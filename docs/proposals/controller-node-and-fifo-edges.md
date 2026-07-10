@@ -196,6 +196,21 @@ the active `Controller` as it connects/disconnects.
 
 ## §3.5 Disparity-scope tracker → its own native thread (worker E native half; disparity worker integration half)
 
+> **SUPERSEDED (2026-07-10, `bc20269`) — chained-KCF details below are
+> HISTORICAL.** The disparity-scope auto-follow thread now runs the HYBRID
+> NCC match+re-detect tracker (`createChainedHybridTracker`,
+> `session.ts:1160`), NOT chained KCF — see
+> [hybrid-tracker.md](./hybrid-tracker.md) (the live doc, `50f1d75`+`bc20269`).
+> The swap is a pure drop-in: same `KcfTrackerObject`/`TrackResult` shapes,
+> same `nodeId.undistortKcf(serialC)` node id, same override/drag/PID
+> plumbing — so everything in this section about the tracker *seam*
+> (override interface, `TrackResult.center`/`overridden`, drag semantics,
+> result routing via `tracker-feed.ts`, graph wiring) remains AS-BUILT; only
+> the underlying tracking ALGORITHM changed from GRAY-KCF to windowed NCC.
+> GRAY-pinned KCF still ships for the multi-fovea multi-KCF path
+> (`createMultiTracker`, unchanged). KCF is one factory line away for a rig
+> A/B.
+
 Current: `app/modules/disparity-scope/vision.ts` runs a synchronous `KCF`
 primitive INSIDE the disparity kernel's worker thread (the "async-kcf
 dissolved into the loop" shortcut) — tracking latency rides the matching

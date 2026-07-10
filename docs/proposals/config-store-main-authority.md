@@ -1,7 +1,9 @@
 # Config store: MAIN as the single authority
 
-Status: **CODE-COMPLETE (2026-07-10) — proposal + implementation + tests
-landed in one wave; rig/live multi-window pass owed (stage-f §Settings).**
+Status: **CODE-COMPLETE (2026-07-10, `692f0e3`; AMENDED `1a24cac` —
+wire-codec on every hop, see AS-BUILT amendment) — proposal + implementation
++ tests landed in one wave; rig/live multi-window pass owed (stage-f
+§Settings).**
 
 Fixes the four config-store synchronization defects a review (2026-07-10)
 found in the per-instance store-hub: the hub's cache + listeners were
@@ -153,8 +155,12 @@ loses the settings reference.
   migration.
 - Public API of `Store` and `store-hub` unchanged — no call-site edits in
   modules/renderer beyond the internal rewrites listed above.
-- Electron IPC is structured-clone, so bigint/Date/TypedArray survive like
-  the old `Channel` transport.
+- ~~Electron IPC is structured-clone, so bigint/Date/TypedArray survive like
+  the old `Channel` transport.~~ **CORRECTED (see AS-BUILT amendment
+  `1a24cac`): structured clone survives TypedArrays but STRIPS their expando
+  props** (the calibration codec attaches `shape`/`channels` to
+  `Float64Array` Mats), so store values now cross every wire codec-encoded,
+  not raw. Details below.
 
 ## AS-BUILT deltas
 
@@ -168,3 +174,25 @@ loses the settings reference.
   re-merge drift).
 - `StoreMain` self-manages renderer cleanup via `webContents.once("destroyed")`
   — no window-close plumbing added to main's window manager.
+
+### AS-BUILT amendment — wire codec on every hop (`1a24cac`, 2026-07-10)
+
+The original "structured clone survives TypedArray" assumption above was
+wrong in one specific way that a rig crash exposed. Structured clone
+preserves the `Float64Array` bytes of a calibration Mat but DROPS the
+expando `shape`/`channels` props the codec reviver attaches with
+`Object.assign`. After the main-authority move (`692f0e3`) put orchestrator
+store reads onto the `parentPort` structured-clone hop, `camera_matrix.shape`
+arrived `undefined`, native `Undistort` threw "Mat.shape must be an array of
+integers", and `loadIntrinsic` silently degraded undistort to null →
+disparity-scope crash on entry.
+
+Fix (as shipped): store values now cross EVERY wire **codec-encoded**
+(`wireEncode`/`wireDecode` in `app/lib/store-codec.ts`) — both directions on
+both transports (the ipc bridge AND the `parentPort` proxy: read fallbacks,
+write/patch values, `store:res` values, and `store:changed` pushes). A
+regression test pins a shape-carrying `Float64Array` across the full
+client↔authority round trip. (Same commit also hardened an unrelated
+uncalibrated-volts path and wrapped `ConfigWindow`/`TeleCanvasWindow` in the
+existing `ErrorBoundary` so a rejecting async setup is observable instead of
+spinning the fallback forever.)
