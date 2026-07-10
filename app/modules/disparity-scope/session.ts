@@ -31,8 +31,9 @@
 //    side COMPLETES a pair (seq-gated, order-agnostic, ~once per strip
 //    frame). `stepVergence` → `{ l, r }` volts → the controller NODE's
 //    position input (push model; the MCU stream holds between updates).
-//  - the KCF auto-follow runs on its OWN native thread (§3.5):
-//    `createChainedTracker` on the C undistort brick. Its output drives the
+//  - the auto-follow tracker runs on its OWN native thread (§3.5):
+//    `createChainedHybridTracker` (NCC match+re-detect, hybrid-tracker.md;
+//    KCF's drop-in successor) on the C undistort brick. Its output drives the
 //    session's target state (which steers the slice crops); the `overridden`
 //    flag is SESSION-LOCAL now (`dragging`) — nothing app-specific rides the
 //    reusable nodes.
@@ -128,7 +129,7 @@ import type { Point2d, Rect, Size } from "core/Geometry";
 import type { Pos } from "@lib/controller-codec";
 // Direct core import in a session — an accepted precedent; all PURE logic lives
 // in tracker-feed.ts/vergence.ts so vitest never loads the native addon.
-import { createChainedTracker, type KcfTracker, type TrackerMeter } from "core/Tracker";
+import { createChainedHybridTracker, type KcfTracker, type TrackerMeter } from "core/Tracker";
 import { registerNativeProbe } from "@orchestrator/native-probes";
 import type { WorkloadSnapshot } from "@lib/orchestrator/stats";
 import { createRawRecording } from "@orchestrator/raw-recording";
@@ -1142,7 +1143,11 @@ export default function disparityScopeSession(
       // (DisposerBag is FIFO) — so the tap detaches before the brick dies.
       const kcfId = nodeId.undistortKcf(serialC);
       try {
-        tk = createChainedTracker(cSourceId, kcfId);
+        // Hybrid NCC match+re-detect (hybrid-tracker.md, 2026-07-10): pure
+        // drop-in for the chained KCF — same handle/result/meter surface, node
+        // id kept so graph labels/positions don't churn. KCF stays one line
+        // away (createChainedTracker) if the rig A/B prefers it.
+        tk = createChainedHybridTracker(cSourceId, kcfId);
       } catch (e) {
         // No brick on the pipe (shouldn't happen post-advertise) — degrade to
         // pointer-only targeting, same UX as tracker-disabled.
