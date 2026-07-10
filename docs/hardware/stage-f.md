@@ -175,12 +175,19 @@ names the mechanism it gates.
 
 ## Disparity tracker → own thread (§3.5, 2026-07-08 D2 wave)
 
-- [ ] **KCF green box SUSTAINS (2026-07-10 fix)** — enable the tracker on a
+- [ ] **KCF green box SUSTAINS (2026-07-10 fix, r2)** — enable the tracker on a
   textured target: the green box stays locked and FOLLOWS across many frames
-  (no flash-then-disappear). Root cause was OpenCV 4.13 KCF (default CN color
-  features) losing track after one frame on GRAYSCALE input — all tracker
-  variants now normalize to 3-channel BGR (`asColor8`, Tracker.cpp). Spot-check
-  multi-fovea KCF auto-follow sustains likewise (same latent bug fixed).
+  (no flash-then-disappear, no parking on "armed"). TWO stacked OpenCV 4.13
+  regressions fixed: (1) KCF's default CN color features break on
+  single-channel input — all variants now channel-normalize (`asColor8`);
+  (2) CN features are DEGENERATE on gray-replicated low-texture patches (mono
+  cameras are all this rig has), so after fix 1 the failure became "never
+  locks / stays armed" — `makeKcf` now pins GRAY features
+  (desc_pca=desc_npca=GRAY, compressed_size=1; the obvious GRAY-only configs
+  throw in 4.13). Spot-check multi-fovea KCF auto-follow sustains likewise.
+  If the rig STILL won't lock: probed fallback is cv::TrackerCSRT (19/19 on
+  every synthetic content incl. the needle-like blob that defeats every KCF
+  config; ~2-5 ms/update vs ~1 ms, fine on the dedicated tracker thread).
 - [ ] **Tracker off the matching thread** — with auto-follow ON, the
   disparity kernel node's meter no longer includes KCF work; a new
   `camera/<serialC>/undistort/kcf` node renders in the graph (edges

@@ -42,28 +42,40 @@ struct TrackerUpdateResult {
   cv::Rect bbox;
 };
 
-// cv::TrackerKCF's DEFAULT feature set includes CN (Color Names), which REQUIRES
-// a 3-channel color image: its per-pixel CN lookup indexes the BGR triple, and
-// its PCA compression asserts `compressed_size(2) <= channels`. Fed a SINGLE-
-// channel gray frame, OpenCV 4.13.0's KCF yields a valid result on the FIRST
-// update() then produces an EMPTY response matrix on every subsequent frame —
-// update() returns null / throws "Matrix operand is an empty matrix". Symptom on
-// the rig: the tracker arms, draws its box for one frame, then reports lost
-// forever ("the green box flashes then disappears"). This whole pipeline used to
-// feed KCF grayscale (raw center cam Mono8, chained tap converted to gray,
-// MultiKcf Mono8); the fix is to feed a 3-CHANNEL 8-bit image instead (see
-// `KcfCore::asColor8` / the MultiKcf loop). Gray sources are replicated to BGR
-// (GRAY2BGR) — verified to track indefinitely under the default params. The
-// GRAY-only descriptor alternative can't be used: desc_pca must stay non-empty
-// for KCF's model to be well-formed, but PCA needs >1 channel. Create default.
+// cv::TrackerKCF feature-set choice — BOTH knobs below are load-bearing on
+// OpenCV 4.13.0; probes for each claim live in the 2026-07-10 fix commits.
+//
+// 1. GRAY features, not the default CN (Color Names): every camera here is
+//    monochrome, so KCF only ever sees gray-replicated pixels. CN maps those
+//    into a handful of achromatic color-name bins — on low-texture patches
+//    (the rig's needle/target scenes, or ANY smooth gradient at the disparity
+//    kernel's 64x64 arm size) the compressed CN response is degenerate: KCF
+//    finds the target once (frame 2's patch still equals the model) and then
+//    NEVER again. Symptom: box flashes once or never locks, UI parks on
+//    "armed". GRAY features tracked these scenes for months pre-4.13.
+// 2. desc_pca = GRAY **plus** desc_npca = GRAY, compressed_size = 1: the
+//    obvious GRAY-only configs are BROKEN in 4.13.0 — {pca=GRAY, npca=0} and
+//    {pca=0, npca=GRAY} both throw "Matrix operand is an empty matrix" on the
+//    second update() (same empty-response bug family as CN-on-1ch). Listing
+//    GRAY on BOTH descriptor slots with compressed_size=1 is the config that
+//    survives; verified 29/29 sustained on 1ch AND 3ch input.
+//
+// Input depth/channels are normalized by `asColor8` (KCF's gray extractor
+// only accepts 1- or 3-channel; the chained tap is 4-channel RGBA8).
 static cv::Ptr<cv::TrackerKCF> makeKcf() {
-  return cv::TrackerKCF::create();
+  cv::TrackerKCF::Params p;
+  p.desc_pca = cv::TrackerKCF::GRAY;
+  p.desc_npca = cv::TrackerKCF::GRAY;
+  p.compressed_size = 1;
+  return cv::TrackerKCF::create(p);
 }
 
-// Normalize any tracker source frame to the 8-bit 3-channel BGR that
-// cv::TrackerKCF's default (CN) features require, reusing `buf`. 1ch → GRAY2BGR,
-// 4ch → RGBA2BGR (the honest-RGBA8 chained tap), 3ch passthrough. Callers feed
-// 8-bit frames (center cam is Mono8; the chained tap is RGBA8).
+// Normalize any tracker source frame to the 1-or-3-channel 8-bit layout
+// cv::TrackerKCF accepts, reusing `buf`. 1ch passthrough would suffice for the
+// GRAY features `makeKcf` pins, but the 4-channel chained tap MUST be reduced
+// (KCF's gray extractor mishandles 4ch), and replicating 1ch → BGR keeps every
+// variant on one proven path. Callers feed 8-bit frames (center cam is Mono8;
+// the chained tap is RGBA8).
 static const cv::Mat &asColor8(const cv::Mat &src, cv::Mat &buf) {
   switch (src.channels()) {
   case 1:
@@ -238,7 +250,7 @@ public:
   }
 
   // Run one step on `src` (8-bit, 1/3/4 channel); transform-thread only. KCF is
-  // fed a 3-channel BGR view (its CN features need color — see `asColor8`).
+  // fed a 3-channel BGR view (channel-normalized — see `asColor8`/`makeKcf`).
   // Returns a result, or null for a frame that yields none (the KCF (re-)init
   // frame). `meter` gets begin/end (busy) around KCF work + emit("track") per
   // produced result; ingest/drop stay with the caller (they differ per variant).
@@ -396,8 +408,8 @@ protected:
       lastDrops_ = drops;
     }
     meter_.ingest("frame", t);
-    // Center camera is Mono8; KcfCore replicates it to the 3-channel BGR
-    // cv::TrackerKCF's CN features require (gray input loses after one frame).
+    // Center camera is Mono8; KcfCore channel-normalizes it for
+    // cv::TrackerKCF (see makeKcf/asColor8 for the 4.13 constraints).
     return core_.step(frame->raw, frame->device_timestamp, meter_,
                       stallMs_.load(std::memory_order_acquire));
   }
@@ -446,8 +458,8 @@ protected:
       meter_.drop(gap);
     meter_.ingest("frame", t);
     // The tap carries honest RGBA8 (converted) or undistorted RGBA; KcfCore
-    // normalizes it to the 3-channel BGR cv::TrackerKCF's CN features require
-    // (feeding gray makes KCF lose after one frame — see makeKcf).
+    // channel-normalizes it for cv::TrackerKCF — its gray extractor mishandles
+    // 4-channel input (see makeKcf/asColor8 for the 4.13 constraints).
     return core_.step(in->mat, in->deviceTimestamp, meter_,
                       stallMs_.load(std::memory_order_acquire));
   }
@@ -786,9 +798,8 @@ protected:
       cv::remap(tmp_, und_, map1_, map2_, cv::INTER_LINEAR);
       mat = &und_;
     }
-    // cv::TrackerKCF's default CN features need 3-channel color: feeding the
-    // single-channel Mono8 source makes every target lose after one frame
-    // (OpenCV 4.13.0 — see makeKcf). Replicate to BGR once for all targets.
+    // Channel-normalize once for all targets (see makeKcf/asColor8 for the
+    // OpenCV 4.13 constraints on what cv::TrackerKCF accepts).
     const cv::Mat &colorFrame = asColor8(*mat, color_);
 
     auto result = MultiTrackResult::create();
