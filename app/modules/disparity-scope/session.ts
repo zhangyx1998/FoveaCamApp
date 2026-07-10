@@ -550,6 +550,7 @@ export default function disparityScopeSession(
           // The pointer handler already pushed it synchronously; this keeps
           // target+crops+follow coherent at FRAME rate even if a pointer move
           // was coalesced away (the match-rate join path is slower).
+          pidNode?.ingest("target"); // meter the kcf → pid target edge
           lastGood = center;
           s.setState("target", center);
           steerCrops();
@@ -561,6 +562,11 @@ export default function disparityScopeSession(
           }
         },
         onTrack(center, bbox) {
+          // Meter the kcf → pid target edge: this is the ACCEPTED-result rate
+          // (armed + found). The declared `target` input port was never
+          // ingested before, so the graph edge read a false 0 Hz even while
+          // the tracker was locked and steering (2026-07-10).
+          pidNode?.ingest("target");
           trackerActive = true;
           lastGood = center;
           s.setState("target", center);
