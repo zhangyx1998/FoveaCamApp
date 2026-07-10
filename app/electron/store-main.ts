@@ -28,6 +28,7 @@ import {
   type StoreFsBackend,
   type StoreListener,
 } from "@lib/store-authority";
+import { wireDecode, wireEncode } from "@lib/store-codec";
 import type { PatchOp } from "@lib/store-patch";
 import type {
   StoreClientMessage,
@@ -58,22 +59,24 @@ export class StoreMain {
   // ---- Renderer (ipcMain) surface -----------------------------------------
 
   /** Read a doc AND subscribe this window to future changes (the `Store.open`
-   *  primitive). */
-  read(wc: WebContents, path: string[], fallback: unknown): Promise<unknown> {
+   *  primitive). Values cross ipc WIRE-ENCODED (see store-codec's wire-framing
+   *  note — structured clone strips a Mat's attached `shape`). */
+  async read(wc: WebContents, path: string[], fallback: string): Promise<string> {
     this.rendererListener(wc, path); // registers interest
-    return this.authority.read(path, fallback);
+    return wireEncode(await this.authority.read(path, wireDecode(fallback)));
   }
 
   /** One-shot read WITHOUT subscribing (the enumeration primitive). */
-  readOnce(path: string[], fallback: unknown): Promise<unknown> {
-    return this.authority.read(path, fallback);
+  async readOnce(path: string[], fallback: string): Promise<string> {
+    return wireEncode(await this.authority.read(path, wireDecode(fallback)));
   }
 
   /** Merge a key-level patch and broadcast to every OTHER subscriber. Returns
    *  the merged document (the origin window reconciles its last-acked snapshot
    *  against it). */
-  patch(wc: WebContents, path: string[], ops: readonly PatchOp[]): Promise<unknown> {
-    return this.authority.patch(path, ops, this.rendererListener(wc, path));
+  async patch(wc: WebContents, path: string[], ops: string): Promise<string> {
+    const decoded = wireDecode<readonly PatchOp[]>(ops);
+    return wireEncode(await this.authority.patch(path, decoded, this.rendererListener(wc, path)));
   }
 
   clear(wc: WebContents, path: string[]): Promise<void> {
@@ -105,7 +108,8 @@ export class StoreMain {
     const key = keyOf(path);
     let entry = client.subs.get(key);
     if (!entry) {
-      const listener: StoreListener = (value) => this.sendChanged(wc, path, value);
+      // Pushes cross ipc wire-encoded too (symmetric with read/patch).
+      const listener: StoreListener = (value) => this.sendChanged(wc, path, wireEncode(value));
       entry = { listener, unsub: this.authority.subscribe(path, listener) };
       client.subs.set(key, entry);
     }
@@ -134,7 +138,7 @@ export class StoreMain {
       let entry = subs.get(key);
       if (!entry) {
         const listener: StoreListener = (value) =>
-          send({ type: "store:changed", path, value });
+          send({ type: "store:changed", path, value: wireEncode(value) });
         entry = { listener, unsub: this.authority.subscribe(path, listener) };
         subs.set(key, entry);
       }
@@ -155,13 +159,17 @@ export class StoreMain {
         switch (op) {
           case "read":
             ensureSub(path);
-            return this.authority.read(path, msg.fallback);
+            return this.authority.read(path, wireDecode(msg.fallback));
           case "read-once":
-            return this.authority.read(path, msg.fallback);
+            return this.authority.read(path, wireDecode(msg.fallback));
           case "write":
-            return this.authority.write(path, msg.value, except);
+            return this.authority.write(path, wireDecode(msg.value), except);
           case "update":
-            return this.authority.update(path, msg.patch ?? {}, except);
+            return this.authority.update(
+              path,
+              wireDecode<Record<string, unknown>>(msg.patch) ?? {},
+              except,
+            );
           case "clear":
             return this.authority.clear(path, except);
           case "list":
@@ -171,7 +179,7 @@ export class StoreMain {
         }
       };
       run().then(
-        (value) => send({ type: "store:res", reqId, ok: true, value }),
+        (value) => send({ type: "store:res", reqId, ok: true, value: wireEncode(value) }),
         (error) => send({ type: "store:res", reqId, ok: false, error: String(error) }),
       );
     };

@@ -803,9 +803,13 @@ export default function disparityScopeSession(
       const commanded_distance = vergeToDistance(verge.value, s.state.baseline);
       // The per-eye pose overlay draws over the UNDISTORTED wide view now, so
       // project to undistorted pixels (distort=false), matching every other
-      // overlay's space (target/tracker/match all undistorted).
+      // overlay's space (target/tracker/match all undistorted). Guard the
+      // UNDISTORT too, not just the triple — A2P.C throws "Wide camera not
+      // calibrated" without it, this fires on EVERY volts push, and the
+      // uncaught throw killed the orchestrator on an uncalibrated rig (crash
+      // log hw-1 2026-07-10T19-31; degrade like every other uncalibrated path).
       const PX = (role: "L" | "R"): Point2d =>
-        triple ? triple.conv.A2P.C(triple.conv.V2A[role](vv[role]), false) : ZERO;
+        triple?.undistort ? triple.conv.A2P.C(triple.conv.V2A[role](vv[role]), false) : ZERO;
       const readout: PidReadout = {
         verge: verge.value,
         panX: pan.value.x,

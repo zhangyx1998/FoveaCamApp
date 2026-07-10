@@ -13,6 +13,7 @@ You may find the full license in project root directory.
 import { ref } from "vue";
 import TitleBar from "../components/TitleBar.vue";
 import Loading from "../components/Loading.vue";
+import ErrorBoundary from "../components/ErrorBoundary.vue";
 import TeleCanvasBody from "./TeleCanvasBody.vue";
 
 const titleBarHeight = ref(0);
@@ -20,10 +21,14 @@ const titleBarHeight = ref(0);
 
 <template>
   <div class="main" :style="{ top: titleBarHeight + 'px' }">
-    <Suspense>
-      <TeleCanvasBody />
-      <template #fallback><Loading /></template>
-    </Suspense>
+    <!-- Async-setup rejections must be observable, not an infinite spinner
+         (rig find 2026-07-11) — same boundary as ConfigWindow/AppWindow. -->
+    <ErrorBoundary>
+      <Suspense>
+        <TeleCanvasBody />
+        <template #fallback><Loading /></template>
+      </Suspense>
+    </ErrorBoundary>
   </div>
   <TitleBar title="TeleCanvas" @height="(h) => (titleBarHeight = h)" />
 </template>

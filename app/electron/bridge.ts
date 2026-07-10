@@ -171,15 +171,19 @@ export interface FoveaBridge {
   // ---- Config store (MAIN authority, config-store-main-authority.md) --------
   /** Read a config document AND subscribe this window to future changes
    *  (`Store.open`): every subsequent edit — this window's, another window's, or
-   *  an orchestrator-internal session's — arrives via `onStoreChanged`. */
-  readStore<T>(path: string[], fallback: T): Promise<T>;
+   *  an orchestrator-internal session's — arrives via `onStoreChanged`.
+   *  Values cross the wire CODEC-ENCODED (wireEncode/wireDecode strings —
+   *  structured clone strips a Mat's attached `shape`; store-codec framing). */
+  readStore<T>(path: string[], fallback: string): Promise<T>;
   /** One-shot read WITHOUT subscribing (`Store.read`) — the enumeration
-   *  primitive (calibration-data manager reads many docs for metadata). */
-  readStoreOnce<T>(path: string[], fallback: T): Promise<T>;
+   *  primitive (calibration-data manager reads many docs for metadata).
+   *  Wire-encoded like `readStore`. */
+  readStoreOnce<T>(path: string[], fallback: string): Promise<T>;
   /** Apply a key-level PATCH (set/delete per top-level key, or a whole replace)
    *  to a config document. Main merges + persists + broadcasts to every OTHER
-   *  subscriber, so concurrent writers to different keys both survive. */
-  patchStore(path: string[], ops: PatchOp[]): Promise<void>;
+   *  subscriber, so concurrent writers to different keys both survive. `ops` is
+   *  a wire-encoded PatchOp[]. */
+  patchStore(path: string[], ops: string): Promise<void>;
   /** Delete a config document (`Store.clear`). */
   clearStore(path: string[]): Promise<void>;
   /** List entry names under a config store directory (`Store.list`). */
@@ -241,12 +245,13 @@ export interface InvokeChannels {
   /** Seed the viewer banner: is a hardware app session live (addendum)? */
   "app-session:active": { args: []; ret: boolean };
   // ---- Config store (MAIN authority) ---------------------------------------
-  /** Read a doc + subscribe this window (`Store.open`). */
-  "store:read": { args: [path: string[], fallback: unknown]; ret: unknown };
-  /** One-shot read, no subscribe (`Store.read`). */
-  "store:read-once": { args: [path: string[], fallback: unknown]; ret: unknown };
-  /** Key-level patch merge + broadcast-to-others (`Store.open` writes). */
-  "store:patch": { args: [path: string[], ops: PatchOp[]]; ret: void };
+  /** Read a doc + subscribe this window (`Store.open`). Wire-encoded values. */
+  "store:read": { args: [path: string[], fallback: string]; ret: string };
+  /** One-shot read, no subscribe (`Store.read`). Wire-encoded values. */
+  "store:read-once": { args: [path: string[], fallback: string]; ret: string };
+  /** Key-level patch merge + broadcast-to-others (`Store.open` writes).
+   *  `ops` is a wire-encoded PatchOp[]. */
+  "store:patch": { args: [path: string[], ops: string]; ret: string };
   /** Delete a doc (`Store.clear`). */
   "store:clear": { args: [path: string[]]; ret: void };
   /** List entry names under a store directory (`Store.list`). */

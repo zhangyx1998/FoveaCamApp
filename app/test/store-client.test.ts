@@ -11,6 +11,7 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import { StoreMain } from "../electron/store-main";
 import type { StoreFsBackend } from "@lib/store-authority";
 import type { PatchOp } from "@lib/store-patch";
+import { wireDecode, wireEncode } from "@lib/store-codec";
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
@@ -41,10 +42,11 @@ const main = new StoreMain((wc, path, value) => {
 
 const patchCalls: Array<{ path: string[]; ops: PatchOp[] }> = [];
 const foveaBridge = {
-  readStore: (path: string[], fb: unknown) => main.read(clientWc, path, fb),
-  readStoreOnce: (path: string[], fb: unknown) => main.readOnce(path, fb),
-  patchStore: (path: string[], ops: PatchOp[]) => {
-    patchCalls.push({ path, ops });
+  // Faithful stand-in for preload: opaque pass-through of WIRE-ENCODED strings.
+  readStore: (path: string[], fb: string) => main.read(clientWc, path, fb),
+  readStoreOnce: (path: string[], fb: string) => main.readOnce(path, fb),
+  patchStore: (path: string[], ops: string) => {
+    patchCalls.push({ path, ops: wireDecode<PatchOp[]>(ops) });
     return main.patch(clientWc, path, ops).then(() => undefined);
   },
   clearStore: (path: string[]) => main.clear(clientWc, path),
@@ -64,7 +66,7 @@ beforeAll(async () => {
 
 describe("renderer Store client", () => {
   it("open() reads the initial value and tracks it reactively", async () => {
-    await main.patch(otherWc, ["c-init"], [{ key: "a", value: 1 }]);
+    await main.patch(otherWc, ["c-init"], wireEncode([{ key: "a", value: 1 }]));
     const doc = await Store.open<{ a: number }>(["c-init"], { a: 0 } as any);
     expect(doc.a).toBe(1);
   });
@@ -95,7 +97,7 @@ describe("renderer Store client", () => {
     const ref = doc;
     patchCalls.length = 0;
     // Another window patches a different key → main broadcasts to the client.
-    await main.patch(otherWc, ["c-ext"], [{ key: "b", value: 9 }]);
+    await main.patch(otherWc, ["c-ext"], wireEncode([{ key: "b", value: 9 }]));
     await flush();
     expect(doc).toBe(ref); // same object reference
     expect((doc as any).b).toBe(9);
@@ -103,7 +105,7 @@ describe("renderer Store client", () => {
   });
 
   it("read() is a one-shot snapshot that does not subscribe", async () => {
-    await main.patch(otherWc, ["c-once"], [{ key: "k", value: 3 }]);
+    await main.patch(otherWc, ["c-once"], wireEncode([{ key: "k", value: 3 }]));
     expect(await Store.read(["c-once"], {})).toEqual({ k: 3 });
   });
 
@@ -114,5 +116,26 @@ describe("renderer Store client", () => {
     (doc as any).persisted = true;
     await flush();
     expect(fs.disk.get("c-decay")).toEqual({ persisted: true });
+  });
+
+  it("a Mat-shaped TypedArray keeps its attached shape across the wire (undistort crash regression)", async () => {
+    // The 2026-07-11 rig crash: calibration Mats are Float64Arrays with EXPANDO
+    // props (`shape`, `channels`) the codec re-attaches; bare structured clone
+    // strips them, so loadIntrinsic fed the native Undistort a shapeless Mat
+    // ("Mat.shape must be an array of integers") and the session died. The
+    // wire framing (codec-JSON both directions) must round-trip them.
+    const mat = Object.assign(new Float64Array([1, 0, 0, 0, 1, 0, 0, 0, 1]), {
+      shape: [3, 3],
+      channels: 1,
+    });
+    await main.patch(otherWc, ["c-mat"], wireEncode([{ key: "camera_matrix", value: mat }]));
+    const doc = await Store.read<{ camera_matrix?: Float64Array & { shape?: number[] } }>(
+      ["c-mat"],
+      {},
+    );
+    expect(doc.camera_matrix).toBeInstanceOf(Float64Array);
+    expect(Array.from(doc.camera_matrix!)).toEqual([1, 0, 0, 0, 1, 0, 0, 0, 1]);
+    expect(doc.camera_matrix!.shape).toEqual([3, 3]); // the prop structured clone strips
+    expect((doc.camera_matrix as any).channels).toBe(1);
   });
 });

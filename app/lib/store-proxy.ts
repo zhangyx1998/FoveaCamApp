@@ -18,19 +18,26 @@
 // and main skips echoing a change back to its originator, so this process's own
 // write both persists and updates its local subscribers with no double-fire.
 
+import { wireDecode, wireEncode } from "./store-codec.js";
+
 export type Path = string | string[];
 export type StoreProxyListener = (value: unknown) => void;
 export type StoreReqOp = "read" | "read-once" | "write" | "update" | "clear" | "list";
 
-/** child → main */
+/** child → main. Value-bearing fields are WIRE-ENCODED codec-JSON strings
+ *  (`wireEncode`) — bare structured clone strips TypedArray expando props
+ *  (a Mat's `shape`); see store-codec's wire-framing note. */
 export interface StoreReqMessage {
   type: "store:req";
   reqId: number;
   op: StoreReqOp;
   path: string[];
-  fallback?: unknown;
-  value?: unknown;
-  patch?: Record<string, unknown>;
+  /** wire-encoded */
+  fallback?: string;
+  /** wire-encoded */
+  value?: string;
+  /** wire-encoded Record<string, unknown> */
+  patch?: string;
 }
 export interface StoreSubscribeMessage {
   type: "store:subscribe";
@@ -43,13 +50,15 @@ export interface StoreResMessage {
   type: "store:res";
   reqId: number;
   ok: boolean;
-  value?: unknown;
+  /** wire-encoded */
+  value?: string;
   error?: string;
 }
 export interface StoreChangedMessage {
   type: "store:changed";
   path: string[];
-  value: unknown;
+  /** wire-encoded */
+  value: string;
 }
 export type StoreServerMessage = StoreResMessage | StoreChangedMessage;
 
@@ -93,14 +102,15 @@ export function createStoreProxy(transport: StoreProxyTransport): StoreProxy {
       const w = pending.get(msg.reqId);
       if (!w) return;
       pending.delete(msg.reqId);
-      if (msg.ok) w.resolve(msg.value);
+      if (msg.ok) w.resolve(wireDecode(msg.value));
       else w.reject(new Error(msg.error ?? "store authority error"));
     } else if (msg.type === "store:changed") {
       const doc = docs.get(keyOf(msg.path));
       if (!doc) return;
-      doc.value = msg.value;
+      const value = wireDecode(msg.value);
+      doc.value = value;
       doc.loaded = true;
-      for (const fn of doc.listeners) fn(msg.value);
+      for (const fn of doc.listeners) fn(value);
     }
   });
 
@@ -139,14 +149,20 @@ export function createStoreProxy(transport: StoreProxyTransport): StoreProxy {
   return {
     async read<T>(segments: Path, fallback: T): Promise<T> {
       const doc = ensureSubscribed(segments);
-      const value = (await request("read", { path: asArray(segments), fallback })) as T;
+      const value = (await request("read", {
+        path: asArray(segments),
+        fallback: wireEncode(fallback),
+      })) as T;
       doc.value = value;
       doc.loaded = true;
       return value;
     },
     async write(segments: Path, value: unknown): Promise<void> {
       const doc = docFor(segments);
-      const result = await request("write", { path: asArray(segments), value });
+      const result = await request("write", {
+        path: asArray(segments),
+        value: wireEncode(value),
+      });
       doc.value = result;
       doc.loaded = true;
       counts.writes++;
@@ -154,7 +170,10 @@ export function createStoreProxy(transport: StoreProxyTransport): StoreProxy {
     },
     async update(segments: Path, patch: Record<string, unknown>): Promise<void> {
       const doc = docFor(segments);
-      const result = await request("update", { path: asArray(segments), patch });
+      const result = await request("update", {
+        path: asArray(segments),
+        patch: wireEncode(patch),
+      });
       doc.value = result;
       doc.loaded = true;
       counts.updates++;

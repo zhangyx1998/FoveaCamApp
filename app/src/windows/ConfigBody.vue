@@ -23,6 +23,7 @@ You may find the full license in project root directory.
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, toRaw, watch } from "vue";
 import Store from "@lib/store";
+import { wireEncode } from "@lib/store-codec";
 import { getCameraKey } from "@lib/camera-config";
 import { useConfigRef } from "@lib/config";
 import { anaglyphCards, type AnaglyphStyle } from "../../../docs/schema/anaglyph";
@@ -426,9 +427,11 @@ async function refreshNicknames(): Promise<void> {
   nicknames.value = map;
 }
 
-/** Persist a full record doc (whole-doc replace through main). */
+/** Persist a full record doc (whole-doc replace through main; wire-encoded —
+ *  record datasets may carry Mats whose attached props structured clone
+ *  strips, see store-codec wire framing). */
 function writeRecord(rec: CalibrationRecord): Promise<void> {
-  return window.foveaBridge.patchStore([RECORD_STORE, rec.id], [{ replace: rec }]);
+  return window.foveaBridge.patchStore([RECORD_STORE, rec.id], wireEncode([{ replace: rec }]));
 }
 
 function toggleSelect(id: string): void {

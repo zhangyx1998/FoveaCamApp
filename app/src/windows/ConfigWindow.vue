@@ -13,6 +13,7 @@ You may find the full license in project root directory.
 import { ref } from "vue";
 import TitleBar from "../components/TitleBar.vue";
 import Loading from "../components/Loading.vue";
+import ErrorBoundary from "../components/ErrorBoundary.vue";
 import ConfigBody from "./ConfigBody.vue";
 
 const titleBarHeight = ref(0);
@@ -20,10 +21,16 @@ const titleBarHeight = ref(0);
 
 <template>
   <div class="main" :style="{ top: titleBarHeight + 'px' }">
-    <Suspense>
-      <ConfigBody />
-      <template #fallback><Loading /></template>
-    </Suspense>
+    <!-- ErrorBoundary makes an async-setup REJECTION observable — without it a
+         throwing setup leaves the Suspense fallback spinning forever with the
+         error only in the console (rig find 2026-07-11; user ruling: async
+         setup failures must be observable). -->
+    <ErrorBoundary>
+      <Suspense>
+        <ConfigBody />
+        <template #fallback><Loading /></template>
+      </Suspense>
+    </ErrorBoundary>
   </div>
   <TitleBar title="Settings" @height="(h) => (titleBarHeight = h)" />
 </template>

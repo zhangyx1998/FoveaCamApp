@@ -124,3 +124,23 @@ export function reviver(key: string, value: any) {
   }
   return value;
 }
+
+// ---- Wire framing (config-store-main-authority) -----------------------------
+// Store values must cross process boundaries as CODEC-JSON, never as bare
+// structured clone: structured clone preserves a TypedArray's CONTENTS but
+// silently STRIPS expando properties attached to it — a stored Mat's
+// `shape`/`channels` (see the reviver's `Object.assign(arr, props)`), which the
+// native Undistort constructor requires ("Mat.shape must be an array of
+// integers" crash, rig find 2026-07-11). Encode at the sending edge, revive at
+// the receiving edge, on BOTH transports (ipcRenderer and parentPort).
+
+/** Encode one store value for an IPC/parentPort hop. `undefined` → "null". */
+export function wireEncode(value: unknown): string {
+  return JSON.stringify(value === undefined ? null : value, replacer);
+}
+
+/** Decode one wire-encoded store value. `undefined` passes through (absent
+ *  optional fields). */
+export function wireDecode<T>(text: string | undefined): T {
+  return (text === undefined ? undefined : JSON.parse(text, reviver)) as T;
+}

@@ -28,6 +28,7 @@
 
 import { reactive, toRaw, watch } from "vue";
 import { diffKeys, replaceInPlace, type PatchOp } from "./store-patch.js";
+import { wireDecode, wireEncode } from "./store-codec.js";
 
 const keyOf = (segments: string | string[]) =>
   (typeof segments === "string" ? [segments] : segments).join("/");
@@ -50,7 +51,11 @@ let changedWired = false;
 function ensureChangedWired(): void {
   if (changedWired) return;
   changedWired = true;
-  window.foveaBridge.onStoreChanged((path, value) => appliers.get(keyOf(path))?.(value));
+  // Values arrive WIRE-ENCODED (codec-JSON): bare structured clone strips
+  // TypedArray expando props (a Mat's `shape`) — see store-codec wire framing.
+  window.foveaBridge.onStoreChanged((path, value) =>
+    appliers.get(keyOf(path))?.(wireDecode(value as string)),
+  );
 }
 
 export default class Store {
@@ -71,7 +76,9 @@ export default class Store {
     }
 
     ensureChangedWired();
-    const initial = await window.foveaBridge.readStore<R>(path, fallback);
+    const initial = wireDecode<R>(
+      await window.foveaBridge.readStore<string>(path, wireEncode(fallback)),
+    );
     const tracked = reactive(initial) as R;
 
     // The last document value main has acknowledged — every local patch is a diff
@@ -93,7 +100,7 @@ export default class Store {
         const ops: PatchOp[] = diffKeys(tracked, acked);
         if (ops.length === 0) return; // no-op edit → no patch
         acked = snapshot(tracked) as R; // optimistic; a concurrent change reconciles below
-        void window.foveaBridge.patchStore(path, ops);
+        void window.foveaBridge.patchStore(path, wireEncode(ops));
       });
     };
     watch(() => tracked, queueWrite, { deep: true });
@@ -136,6 +143,8 @@ export default class Store {
    *  `open()` this returns a plain snapshot, not a tracked reactive object. */
   static async read<T>(segments: string | string[], fallback: T): Promise<T> {
     const path = typeof segments === "string" ? [segments] : segments;
-    return window.foveaBridge.readStoreOnce<T>(path, fallback);
+    return wireDecode<T>(
+      await window.foveaBridge.readStoreOnce<string>(path, wireEncode(fallback)),
+    );
   }
 }
