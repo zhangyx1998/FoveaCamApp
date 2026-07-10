@@ -28,6 +28,32 @@ starts, the hint says so.
 | **TeleCanvas mode / URL / port** | How the app casts its projection overlay to an external display — see [TeleCanvas](#telecanvas) below. | Live |
 | **Calibration marker size** | Physical marker size, in millimetres, used by the calibration tools. | Live — a running **Extrinsic** or **Drift** window's marker-size slider moves with it |
 | **Calibration marker ratio** | Inner/outer marker ratio for calibration. | Live |
+| **Anaglyph style** | The left-eye / right-eye colors used for anaglyph 3D — pick one of four cards, see below. | Live — Disparity Scope's Anaglyph view and the recording Viewer's 3D mode |
+
+### Anaglyph style
+
+The **Anaglyph style** row shows four cards, each a split rectangle whose left
+half is the color sent to the **left** eye and right half the color sent to the
+**right** eye (the letters **L** / **R** mark the halves), with the option name
+beneath:
+
+| Card | Left eye | Right eye |
+|---|---|---|
+| **R/B** | Red | Blue |
+| **R/C** | Red | Cyan *(default — the classic red/cyan glasses)* |
+| **B/R** | Blue | Red |
+| **B/C** | Blue | Green *(cyan minus the blue channel, which the left eye holds — the card and label show the green that actually renders)* |
+
+Click a card to select it — the chosen card gets an accent outline. The choice
+applies live: Disparity Scope's center **Anaglyph** view retunes without a
+restart and its option label updates to name the colors (e.g. *"Anaglyph (Blue
+= Left, Red = Right)"*), and the recording **Viewer**'s 3D view recomposes on
+its next frame. It is a view-time choice only — recordings are never changed.
+
+> **B/C** is unusual: blue and cyan both include the blue channel, so the two
+> eyes share it. The left (blue) eye keeps the blue channel and the right (cyan)
+> eye then shows only green — the cards render that exact result, so what you see
+> on the swatch is what the 3D view produces.
 
 The two marker fields are the same values the **Extrinsic** and **Drift**
 calibration windows expose on their own sliders. Editing either place updates

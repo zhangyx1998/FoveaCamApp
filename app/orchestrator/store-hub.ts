@@ -142,6 +142,22 @@ export function list(...segments: string[]): Promise<string[]> {
   return fs.list(...segments);
 }
 
+/** Subscribe an ORCHESTRATOR-INTERNAL listener to a document's writes (the same
+ *  broadcast a renderer channel gets via `attachStore`, minus the RPC hop). The
+ *  listener is invoked with the full new document value on every `write`/
+ *  `update`/`clear` (a renderer edit lands here since only that channel's own
+ *  listener is `except`-skipped). Returns an unsubscribe. Used by the Vue-free
+ *  config readers (e.g. `anaglyph-style.ts`) to apply a Settings change LIVE
+ *  without a re-read poll. Does NOT populate the cache — pair with `read` for
+ *  the initial value. */
+export function subscribe(segments: Path, listener: Listener): () => void {
+  const doc = docFor(segments);
+  doc.listeners.add(listener);
+  return () => {
+    doc.listeners.delete(listener);
+  };
+}
+
 /** Attach one renderer channel to the store RPC surface. Returns a detach
  *  callback (call on channel close) that unsubscribes every path this
  *  channel opened. */

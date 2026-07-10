@@ -50,7 +50,7 @@ When the recording contains a left/right pair, a **3D View** dropdown appears on
 
 - **disabled** — show left and right as two separate tiles.
 - **left-only** / **right-only** — collapse the pair to a single eye.
-- **anaglyph** — merge the pair into one red/cyan 3D tile (view through red/cyan glasses).
+- **anaglyph** — merge the pair into one colored 3D tile (view through anaglyph glasses). The left/right colors follow the **Anaglyph style** in **Settings → Application** (default red = left, cyan = right); changing it recomposes the open tile. It is a view-time choice — the recording is never altered.
 
 ---
 

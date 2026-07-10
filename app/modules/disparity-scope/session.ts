@@ -60,6 +60,8 @@
 import { defineSession, type ServerSession } from "@orchestrator/runtime";
 import { acquireTriple, type CalibratedTriple } from "@orchestrator/calibration";
 import { read } from "@orchestrator/store-hub";
+import { readAnaglyphStyle, subscribeAnaglyphStyle } from "@orchestrator/anaglyph-style";
+import { DEFAULT_ANAGLYPH_STYLE, type AnaglyphStyle } from "../../../docs/schema/anaglyph.js";
 import { resolveBaseline } from "@lib/calibration-data";
 import { controllerNode, type PositionInput } from "@orchestrator/controller-node";
 import { DisposerBag, publishSerials, releaseLeases } from "@orchestrator/session-resources";
@@ -109,7 +111,12 @@ import { createSlicePipe, type SliceHandle, type SlicePipeSeam } from "@orchestr
 import { createScalePipe, type ScaleHandle, type ScalePipeSeam } from "@orchestrator/scale-pipe";
 import { createStereoPipe, type StereoHandle, type StereoPipeSeam } from "@orchestrator/stereo-pipe";
 import { createHeatmapPipe, type HeatmapHandle, type HeatmapPipeSeam } from "@orchestrator/heatmap-pipe";
-import { createCompositePipe, type CompositeHandle, type CompositePipeSeam } from "@orchestrator/composite-pipe";
+import {
+  createCompositePipe,
+  type CompositeHandle,
+  type CompositeParams,
+  type CompositePipeSeam,
+} from "@orchestrator/composite-pipe";
 import type { TemplateMatchValues } from "@orchestrator/template-match-kernel";
 import { consumeTracker, createDisparityTrackerFeed } from "./tracker-feed";
 import { makeMat } from "@lib/mat";
@@ -262,6 +269,11 @@ export default function disparityScopeSession(
     // retuned from `state.view` (`disparity` → difference, `anaglyph` →
     // anaglyph). One connected pipe replaces three per-frame canvas passes.
     let composite: CompositeHandle | null = null;
+    // The configured anaglyph left/right color arrangement (app config
+    // `anaglyph_style`, user ruling 2026-07-09). Read at activate + watched
+    // live: a Settings change retunes the composite brick's `style` without a
+    // reconnect. Default RC (red-left/cyan-right) until the read resolves.
+    let anaglyphStyle: AnaglyphStyle = DEFAULT_ANAGLYPH_STYLE;
     // Wide (C) frame dims — the crop/scale geometry base (camera features,
     // read once on activate; the old kernel derived them from frames).
     let wide: Size = { width: 0, height: 0 };
@@ -482,12 +494,25 @@ export default function disparityScopeSession(
       needleScales.R?.retune({ dsize });
     }
 
-    /** Retune the composite brick's mode from the selected center view:
-     *  `disparity` → the L-vs-R difference, `anaglyph` → the anaglyph. Other
-     *  views leave the mode alone (the node is parked anyway — no consumer). */
+    /** The composite params for a center view: `disparity` → the L-vs-R
+     *  difference, everything else → the anaglyph at the CONFIGURED style.
+     *  `style` always rides along (the native brick's `setParams` REPLACES the
+     *  whole spec, so a mode-only retune would clobber the style back to RC —
+     *  difference ignores it). */
+    function compositeParamsFor(view: string): CompositeParams {
+      return {
+        mode: view === "disparity" ? "difference" : "anaglyph",
+        style: anaglyphStyle,
+      };
+    }
+
+    /** Retune the composite brick from the selected center view + the current
+     *  style. Only the two composite views retune; `sliced`/`sgbm` leave it
+     *  alone (parked anyway — no consumer). Called on a view change AND on a
+     *  live `anaglyph_style` change (re-affirms mode + new style). */
     function syncCompositeMode(view: string): void {
-      if (view === "disparity") composite?.retune({ mode: "difference" });
-      else if (view === "anaglyph") composite?.retune({ mode: "anaglyph" });
+      if (view === "disparity" || view === "anaglyph")
+        composite?.retune(compositeParamsFor(view));
     }
 
     // --- chained tracker (§3.5): arm + result feed -------------------------
@@ -1063,14 +1088,27 @@ export default function disparityScopeSession(
       // (`warpedSources`). Parked until the renderer connects it (view
       // selected); the mode is retuned from `state.view` below (initial sync
       // covers activate on an already-selected disparity/anaglyph view).
+      // Anaglyph style (user ruling 2026-07-09): read the configured left/right
+      // color arrangement so the initial attach carries it, then watch the
+      // config doc so a Settings change retunes the composite LIVE (no
+      // reconnect). The subscription dedupes from the value just read (an
+      // unrelated config write won't fire a redundant retune) and is disposed
+      // on idle via `disposers`.
+      anaglyphStyle = await readAnaglyphStyle();
       composite = createCompositePipe(
         compositeSeam,
         warpedSources.L,
         warpedSources.R,
         nodeId.stereo("composite"),
-        stereoDims,
+        { ...stereoDims, params: compositeParamsFor(s.state.view) },
       );
       syncCompositeMode(s.state.view);
+      disposers.add(
+        subscribeAnaglyphStyle((style) => {
+          anaglyphStyle = style;
+          syncCompositeMode(s.state.view); // live retune iff a composite view is up
+        }, anaglyphStyle),
+      );
 
       // Worker inputs: each match worker reads its pre-sized needle + the
       // SHARED pre-sized strip (refcount++ per connect — demand propagation

@@ -34,7 +34,9 @@ using namespace Napi;
 namespace Arv {
 
 // ---- params parse + validate (NAPI thread) --------------------------------
-// { mode: "anaglyph" | "difference" } — required, string, validated here.
+// { mode: "anaglyph" | "difference", style?: "RB"|"RC"|"BR"|"BC" } — optional,
+// strings, validated here. `style` mirrors docs/schema/anaglyph.ts and defaults
+// to RC (back-compat) when absent.
 static CompositeParams parseCompositeParams(const Napi::Object &o) {
   CompositeParams p;
   if (o.Has("mode") && !o.Get("mode").IsUndefined()) {
@@ -48,6 +50,23 @@ static CompositeParams parseCompositeParams(const Napi::Object &o) {
     else
       throw std::invalid_argument(
           "composite params: `mode` must be \"anaglyph\" or \"difference\"");
+  }
+  if (o.Has("style") && !o.Get("style").IsUndefined()) {
+    if (!o.Get("style").IsString())
+      throw std::invalid_argument("composite params: `style` must be a string");
+    const std::string style = o.Get("style").As<Napi::String>().Utf8Value();
+    if (style == "RB")
+      p.style = AnaglyphStyle::RB;
+    else if (style == "RC")
+      p.style = AnaglyphStyle::RC;
+    else if (style == "BR")
+      p.style = AnaglyphStyle::BR;
+    else if (style == "BC")
+      p.style = AnaglyphStyle::BC;
+    else
+      throw std::invalid_argument(
+          "composite params: `style` must be one of \"RB\", \"RC\", \"BR\", "
+          "\"BC\"");
   }
   return p;
 }

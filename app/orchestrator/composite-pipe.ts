@@ -22,11 +22,15 @@
 // `Aravis.attachCompositePipe`/`setCompositeParams`/`detachCompositePipe`.
 
 import type { PipeSpec } from "@lib/orchestrator/pipe-contract.js";
+import type { AnaglyphStyle } from "../../docs/schema/anaglyph.js";
 
-/** Reactive composite mode — `anaglyph` (red = LEFT eye, cyan = RIGHT) or
- *  `difference` (|L − R| per color channel). */
+/** Reactive composite params — `mode` = `anaglyph` (left/right split by color)
+ *  or `difference` (|L − R| per color channel); `style` = the anaglyph left/
+ *  right color arrangement (default `RC` = red-left/cyan-right; ignored by
+ *  `difference`). Both are applied on the next tick with no re-attach. */
 export type CompositeParams = {
   mode?: "anaglyph" | "difference";
+  style?: AnaglyphStyle;
 };
 
 export interface CompositePipeSeam {

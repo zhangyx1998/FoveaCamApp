@@ -69,10 +69,20 @@ subscriber. The CENTER view is ONE pipe-backed StreamView with a four-way
 title-slot select (composite-node-and-center-select-fix) — **Wide Angle
 Sliced** (the scope-tile slice pipe), **Disparity L-vs-R** and **Anaglyph**
 (BOTH the `stereo/composite` CompositeStream brick's pipe; the session
-retunes its mode from `state.view` — red = LEFT / cyan = RIGHT), and **SGBM
-Disparity** (the stereo heatmap pipe). Only the selected view's pipe is
-connected, so unwatched producers park; disparity↔anaglyph flips retune the
-same connected pipe (no reconnect).
+retunes its mode from `state.view`), and **SGBM Disparity** (the stereo
+heatmap pipe). Only the selected view's pipe is connected, so unwatched
+producers park; disparity↔anaglyph flips retune the same connected pipe (no
+reconnect).
+
+The Anaglyph left/right colors follow the app-config **`anaglyph_style`**
+setting (user ruling 2026-07-09; default **RC** = red = LEFT / cyan = RIGHT).
+The session reads it at activate and *watches* the config doc, so a Settings
+change retunes the composite brick's `style` LIVE (still no reconnect); the
+option label follows too (e.g. "Anaglyph (Blue = Left, Red = Right)" under
+BR). The style → channel mapping is the shared `docs/schema/anaglyph` table —
+the one source of truth the Settings cards, this view, and the standalone
+viewer's 3D compose all read (the native `CompositeStream` brick mirrors it,
+drift-guarded by core test 27).
 Verge/baseline/shift parameters; PID tuning; target select (tracker
 auto-follow). Dragging on the C view calls the **tracker's override** with the
 dragged point (NOT the PID slot) and the foveas **follow the cursor directly**

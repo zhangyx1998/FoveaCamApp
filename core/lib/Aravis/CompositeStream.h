@@ -19,13 +19,17 @@
 // across ticks. No right frame yet → skip. Output timestamps/origin = the LEFT
 // frame's (trusted-time: forwarded, never re-stamped). Active out dims = left.
 //
-// Compute (BGRA8 in ×2 → BGRA8 out, alpha 255), reactive param { mode }:
-//   - anaglyph:   out.R = LEFT.R; out.G = RIGHT.G; out.B = RIGHT.B (red = LEFT
-//                 eye, cyan = RIGHT — same parity as the retired DiffView mode).
+// Compute (RGBA8 in ×2 → RGBA8 out, alpha 255), reactive params { mode, style }:
+//   - anaglyph:   per-output-channel routing from the STYLE map (see
+//                 kAnaglyphChannelSrc) — the LEFT frame drives its eye-color's
+//                 channels, the RIGHT frame the other eye's, unused = 0. Default
+//                 style RC = out.R←LEFT, out.G/B←RIGHT (red = LEFT eye, cyan =
+//                 RIGHT — same parity as the retired DiffView mode + back-compat
+//                 when `style` is absent).
 //   - difference: cv::absdiff(L, R) on the color channels (alpha forced 255).
 // Input dims must match AND both must be 4-channel (unequal / non-BGRA → drop +
 // meter_.drop, the transient during steer/retune). The retune rebuilds nothing
-// (the mode enum is applied directly on the next tick).
+// (the mode + style enums are applied directly on the next tick).
 
 #include <atomic>
 
@@ -38,10 +42,33 @@
 namespace Arv {
 
 // The reactive composite spec — validated on the NAPI thread (see
-// CompositeStream.cpp), applied on the brick thread (just the mode enum).
+// CompositeStream.cpp), applied on the brick thread (just the enums).
 enum class CompositeMode { Anaglyph, Difference };
+
+// Anaglyph STYLE = "<left-eye color>/<right-eye color>" (user ruling
+// 2026-07-09): R = red, B = blue, C = cyan. Order MIRRORS
+// docs/schema/anaglyph.ts `ANAGLYPH_STYLES` (RB, RC, BR, BC); RC is the
+// back-compat default (red = LEFT, cyan = RIGHT).
+enum class AnaglyphStyle { RB, RC, BR, BC };
+
 struct CompositeParams {
   CompositeMode mode = CompositeMode::Anaglyph;
+  AnaglyphStyle style = AnaglyphStyle::RC;
+};
+
+// Per-output-channel SOURCE for each style — HAND-MIRRORS the derived
+// docs/schema/anaglyph.ts `ANAGLYPH_CHANNELS` (single source of truth; the
+// drift guard is the pinned test core/test/27-composite-pipe.ts, which asserts
+// RC + BR channel identity). Index [style][ch] where ch 0 = R (ch0), 1 = G
+// (ch1), 2 = B (ch2). Value: 0 = take the LEFT frame's SAME channel, 1 = the
+// RIGHT frame's, -1 = force 0. Derived under the conflict rule "left claims its
+// color's channels first, right fills only what's free" — so B/C is
+// {R:0-none, G:right, B:left} (left blue keeps ch2, right cyan keeps only ch1).
+inline constexpr int kAnaglyphChannelSrc[4][3] = {
+    /* RB */ {0, -1, 1}, // out.R←LEFT(red), out.G=0, out.B←RIGHT(blue)
+    /* RC */ {0, 1, 1},  // out.R←LEFT(red), out.G←RIGHT, out.B←RIGHT (cyan)
+    /* BR */ {1, -1, 0}, // out.R←RIGHT(red), out.G=0, out.B←LEFT(blue)
+    /* BC */ {-1, 1, 0}, // out.R=0, out.G←RIGHT(cyan G), out.B←LEFT(blue)
 };
 
 // A two-source variant modelled on StereoStream: it owns two TapChannels + two
@@ -208,14 +235,34 @@ private:
       // |L − R| per channel; absdiff diffs ALL 4 channels (alpha 255−255 = 0),
       // so force alpha back to 255.
       cv::absdiff(left->mat, right->mat, buf_);
+      setAlpha255(buf_);
     } else {
-      // anaglyph: G,B from RIGHT (copy the whole frame), R from LEFT. Pipes are
-      // honest RGBA8 (channel-order-fix.md) so RED is channel 0.
-      right->mat.copyTo(buf_);
-      const int fromToR[] = {0, 0}; // LEFT channel 0 (R) → buf channel 0 (R)
-      cv::mixChannels(&left->mat, 1, &buf_, 1, fromToR, 1);
+      // anaglyph: assemble each color channel from the STYLE map (0 = LEFT frame,
+      // 1 = RIGHT frame, -1 = 0). Pipes are honest RGBA8 (channel-order-fix.md):
+      // ch0 = R, ch1 = G, ch2 = B, ch3 = A. Zero the color planes + set alpha 255
+      // up front (channels neither eye claims stay 0), then blit each eye's owned
+      // channels FROM ITS OWN FRAME's SAME channel index.
+      buf_.create(ih, iw, CV_8UC4);
+      buf_.setTo(cv::Scalar(0, 0, 0, 255));
+      const int(&src)[3] = kAnaglyphChannelSrc[static_cast<int>(params_.style)];
+      int leftPairs[6], rightPairs[6];
+      int nL = 0, nR = 0;
+      for (int ch = 0; ch < 3; ++ch) {
+        if (src[ch] == 0) {
+          leftPairs[nL * 2] = ch;
+          leftPairs[nL * 2 + 1] = ch;
+          ++nL;
+        } else if (src[ch] == 1) {
+          rightPairs[nR * 2] = ch;
+          rightPairs[nR * 2 + 1] = ch;
+          ++nR;
+        }
+      }
+      if (nL)
+        cv::mixChannels(&left->mat, 1, &buf_, 1, leftPairs, nL);
+      if (nR)
+        cv::mixChannels(&right->mat, 1, &buf_, 1, rightPairs, nR);
     }
-    setAlpha255(buf_);
     const double processMs = std::chrono::duration<double, std::milli>(
                                  std::chrono::steady_clock::now() - c0)
                                  .count();

@@ -7,6 +7,10 @@ import { computed, type WritableComputedRef } from "vue";
 import Store from "./store.js";
 import { useDefaults } from "./util/index.js";
 import { DEFAULT_TELECANVAS_PORT, type TeleCanvasMode } from "./telecanvas.js";
+import {
+  DEFAULT_ANAGLYPH_STYLE,
+  type AnaglyphStyle,
+} from "../../docs/schema/anaglyph.js";
 
 /** Recording compression method (extensible union — more methods may come;
  *  none besides zlib now). Consumed at RECORDING START by the orchestrator
@@ -62,6 +66,15 @@ export interface AppConfig {
   // immediately (store-hub broadcast), and vice-versa.
   cal_marker_size_mm: number;
   cal_marker_ratio: number;
+  // Anaglyph style (user ruling 2026-07-09) — the left-eye/right-eye color
+  // arrangement for EVERY anaglyph surface: the disparity-scope center "Anaglyph"
+  // view AND the standalone viewer's 3D mode. Written as "<left><right>": R = red,
+  // B = blue, C = cyan. Default "RC" = the historical red-left / cyan-right. The
+  // style→channel mapping is the shared `docs/schema/anaglyph` table (one source
+  // of truth for the cards, the viewer compose, and the native CompositeStream
+  // brick). Applies LIVE: the disparity session watches this doc and retunes the
+  // composite brick without reconnect; the viewer recomposes on the next frame.
+  anaglyph_style?: AnaglyphStyle;
   // Capture stack depth. NOTE (2026-07-09): this AppConfig key is currently
   // UNUSED — manual-control keeps its own session-local `cap_stack` state, so a
   // value here drives nothing. Deliberately NOT surfaced in the config window
@@ -84,6 +97,7 @@ export const APP_CONFIG_DEFAULTS: Readonly<AppConfig> = {
   baseline_distance_mm: 200.0,
   cal_marker_size_mm: 60.0,
   cal_marker_ratio: 1.0,
+  anaglyph_style: DEFAULT_ANAGLYPH_STYLE,
   cap_stack: 5,
 };
 

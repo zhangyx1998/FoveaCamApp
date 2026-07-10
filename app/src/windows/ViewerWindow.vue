@@ -76,6 +76,12 @@ import {
   type SidecarLoad,
   type SidecarState,
 } from "../viewer/sidecar";
+import { useConfigRef } from "@lib/config";
+import {
+  ANAGLYPH_CHANNELS,
+  DEFAULT_ANAGLYPH_STYLE,
+  type AnaglyphStyle,
+} from "../../../docs/schema/anaglyph";
 import TitleBar from "../components/TitleBar.vue";
 import FrameView from "../components/FrameView.vue";
 import { FontAwesomeIcon as Icon } from "@fortawesome/vue-fontawesome";
@@ -415,11 +421,30 @@ const orderedActive = computed(() =>
 );
 const tiles = computed<Tile[]>(() => composeTiles(orderedActive.value, pairModeOf.value));
 
-/** Standard red/cyan anaglyph: RED channel from the LEFT eye, GREEN+BLUE from
- *  the RIGHT eye, merged renderer-side into a fresh 3-channel RGB Mat (no core
- *  dependency, ruling 4). Channel 0 is treated as R in RGB order; grayscale
- *  (1ch) broadcasts. Uses the min of the two frames' dims when they differ. */
-function anaglyph(l: Mat<Uint8Array>, r: Mat<Uint8Array>): Mat<Uint8Array> {
+/** The configured anaglyph style (app config `anaglyph_style`) — drives the 3D
+ *  compose below. Live: a Settings change flows through the shared config doc.
+ *  Non-blocking with the RC default until it resolves; if this window is opened
+ *  without an orchestrator (fully standalone), the read never resolves and the
+ *  default stands (view-time choice — no file-format impact). */
+const anaglyphStyle = ref<AnaglyphStyle>(DEFAULT_ANAGLYPH_STYLE);
+void useConfigRef("anaglyph_style").then((r) => {
+  anaglyphStyle.value = r.value ?? DEFAULT_ANAGLYPH_STYLE;
+  watch(r, (v) => (anaglyphStyle.value = v ?? DEFAULT_ANAGLYPH_STYLE));
+});
+
+/** Anaglyph compose per the configured STYLE (docs/schema/anaglyph — the same
+ *  channel table the native CompositeStream brick + the Settings cards read, so
+ *  live disparity-scope and viewer playback match). Each output RGB channel is
+ *  sourced from the LEFT frame, the RIGHT frame, or forced 0 per the style map;
+ *  grayscale (1ch) sources broadcast. Merged renderer-side into a fresh
+ *  3-channel RGB Mat (no core dependency, ruling 4). Uses the min of the two
+ *  frames' dims when they differ. */
+function anaglyph(
+  l: Mat<Uint8Array>,
+  r: Mat<Uint8Array>,
+  style: AnaglyphStyle,
+): Mat<Uint8Array> {
+  const map = ANAGLYPH_CHANNELS[style];
   const H = Math.min(l.shape[0] ?? 0, r.shape[0] ?? 0);
   const W = Math.min(l.shape[1] ?? 0, r.shape[1] ?? 0);
   const lw = l.shape[1] ?? W;
@@ -432,9 +457,21 @@ function anaglyph(l: Mat<Uint8Array>, r: Mat<Uint8Array>): Mat<Uint8Array> {
       const li = (y * lw + x) * lc;
       const ri = (y * rw + x) * rc;
       const oi = (y * W + x) * 3;
-      out[oi] = l[li]!; // R ← left
-      out[oi + 1] = rc === 1 ? r[ri]! : r[ri + 1]!; // G ← right
-      out[oi + 2] = rc === 1 ? r[ri]! : r[ri + 2]!; // B ← right
+      // Per output channel (0 = R, 1 = G, 2 = B): the style names which eye
+      // sources it; grayscale sources broadcast their single channel.
+      for (let ch = 0; ch < 3; ch++) {
+        const src = ch === 0 ? map.r : ch === 1 ? map.g : map.b;
+        out[oi + ch] =
+          src === "left"
+            ? lc === 1
+              ? l[li]!
+              : l[li + ch]!
+            : src === "right"
+              ? rc === 1
+                ? r[ri]!
+                : r[ri + ch]!
+              : 0;
+      }
     }
   }
   return Object.assign(out, { shape: [H, W, 3], channels: 3 }) as Mat<Uint8Array>;
@@ -451,7 +488,7 @@ function tileMat(tile: Tile): Mat<Uint8Array> | null {
   const l = mats.get(pair.left);
   const r = mats.get(pair.right);
   if (!l || !r) return l ?? r ?? null; // one side missing → show what we have
-  return anaglyph(l, r);
+  return anaglyph(l, r, anaglyphStyle.value); // .value tracked → recompose on style change
 }
 function tileKey(tile: Tile): string {
   return tile.kind === "single" ? tile.channel : `pair:${tile.pair.base}`;

@@ -13,9 +13,15 @@ You may find the full license in project root directory.
   state/commands — no `core`, camera, or calibration access.
 -->
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import type { Point2d, Size } from "core/Geometry";
 import { ROLE, THEME } from "@lib/camera-config";
+import { useConfigRef } from "@lib/config";
+import {
+  anaglyphEyeLabel,
+  DEFAULT_ANAGLYPH_STYLE,
+  type AnaglyphStyle,
+} from "../../../docs/schema/anaglyph";
 import { useSession, usePipeFrame } from "@lib/orchestrator/client";
 import { nodeId } from "@lib/orchestrator/graph-contract";
 import { degrees, clamp } from "@lib/util";
@@ -104,14 +110,28 @@ const centerFrame = usePipeFrame(() => {
   }
 });
 
+// The configured anaglyph style (app config `anaglyph_style`) — drives the
+// "Anaglyph" option label so it names the ACTUAL left/right colors. Live: a
+// Settings change flows through the shared config doc into this ref. Non-
+// blocking (this setup is synchronous) with the RC default until it resolves.
+const anaglyphStyle = ref<AnaglyphStyle>(DEFAULT_ANAGLYPH_STYLE);
+void useConfigRef("anaglyph_style").then((r) => {
+  anaglyphStyle.value = r.value ?? DEFAULT_ANAGLYPH_STYLE;
+  watch(r, (v) => (anaglyphStyle.value = v ?? DEFAULT_ANAGLYPH_STYLE));
+});
+
 // Center-view select options (one list, rendered into whichever branch's
-// title slot is live).
-const VIEW_OPTIONS = [
-  { value: "sliced", label: "Wide Angle Sliced" },
-  { value: "disparity", label: "Disparity (Left v.s. Right)" },
-  { value: "anaglyph", label: "Anaglyph (Red = Left, Cyan = Right)" },
-  { value: "sgbm", label: "SGBM Disparity" },
-] as const;
+// title slot is live). The anaglyph label follows the configured style (e.g.
+// "Anaglyph (Blue = Left, Red = Right)" under BR).
+const VIEW_OPTIONS = computed(
+  () =>
+    [
+      { value: "sliced", label: "Wide Angle Sliced" },
+      { value: "disparity", label: "Disparity (Left v.s. Right)" },
+      { value: "anaglyph", label: `Anaglyph (${anaglyphEyeLabel(anaglyphStyle.value)})` },
+      { value: "sgbm", label: "SGBM Disparity" },
+    ] as const,
+);
 
 const drawer_height = ref(0);
 const stroke = computed(() => Math.max(telemetry.size.width, telemetry.size.height, 1) * 0.003);

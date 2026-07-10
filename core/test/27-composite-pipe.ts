@@ -94,6 +94,7 @@ assert.throws(() => A.attachCompositePipe(slcLId, slcR0Id, "stereo/none", { mode
 assert.throws(() => A.attachCompositePipe("camera/none/convert", slcR0Id, cmpDiffId, { mode: "difference" }), /LEFT/, "unknown LEFT source throws (named)");
 assert.throws(() => A.attachCompositePipe(slcLId, "camera/none/convert", cmpDiffId, { mode: "difference" }), /RIGHT/, "unknown RIGHT source throws (named)");
 assert.throws(() => A.attachCompositePipe(slcLId, slcR0Id, cmpDiffId, { mode: "bogus" }), /mode/, "bad mode throws");
+assert.throws(() => A.attachCompositePipe(slcLId, slcR0Id, cmpDiffId, { mode: "anaglyph", style: "XX" }), /style/, "bad anaglyph style throws (named)");
 
 assert.equal(A.attachCompositePipe(slcLId, slcR0Id, cmpDiffId, { mode: "difference" }), true, "difference composite attaches (zero-offset pair)");
 assert.equal(A.attachCompositePipe(slcLId, slcRDId, cmpAnaId, { mode: "anaglyph" }), true, "anaglyph composite attaches (shifted pair)");
@@ -186,7 +187,44 @@ const srcR = open(slcRDId, SW * SH * CH);
         `G=${((gMatch / n) * 100).toFixed(1)}% B=${((bMatch / n) * 100).toFixed(1)}%).`);
     }
   }
-  assert(proven, "anaglyph R==LEFT, G/B==RIGHT channel identity held on a frame");
+  assert(proven, "anaglyph R==LEFT, G/B==RIGHT channel identity held on a frame (default style RC)");
+}
+
+// --- 3b: BR style swap (live retune) — out.R==RIGHT, out.B==LEFT, out.G==0 ----
+// Pins a SECOND row of the style→channel table (docs/schema/anaglyph.ts): BR =
+// left-eye BLUE (ch2 ← LEFT), right-eye RED (ch0 ← RIGHT), green forced 0. The
+// map is applied live via setCompositeParams — no re-attach — proving the style
+// enum retunes like `mode` does.
+assert.equal(A.setCompositeParams(cmpAnaId, { mode: "anaglyph", style: "BR" }), true, "retune to BR style accepted");
+{
+  let proven = false;
+  const deadline = Date.now() + 15_000;
+  while (!proven && Date.now() < deadline) {
+    const ro = pull(ana);
+    if (!ro) { await sleep(5); continue; }
+    let lr = pull(srcL); for (let g = pull(srcL); g; g = pull(srcL)) lr = g;
+    let rr = pull(srcR); for (let g = pull(srcR); g; g = pull(srcR)) rr = g;
+    if (!lr || !rr) { await sleep(5); continue; }
+    const out = new Uint8Array(ana.dest, 0, SW * SH * CH);
+    const L = new Uint8Array(srcL.dest, 0, SW * SH * CH);
+    const R = new Uint8Array(srcR.dest, 0, SW * SH * CH);
+    let rMatch = 0, gZero = 0, bMatch = 0, alphaOk = 0;
+    const n = SW * SH;
+    for (let i = 0; i < n; i++) {
+      if (out[i * 4 + 0] === R[i * 4 + 0]) rMatch++;   // R (ch0) ← RIGHT red
+      if (out[i * 4 + 1] === 0) gZero++;               // G (ch1) forced 0
+      if (out[i * 4 + 2] === L[i * 4 + 2]) bMatch++;   // B (ch2) ← LEFT blue
+      if (out[i * 4 + 3] === 255) alphaOk++;
+    }
+    assert.equal(alphaOk, n, "BR anaglyph alpha = 255 on every pixel");
+    assert.equal(gZero, n, "BR anaglyph green plane forced 0 on every pixel");
+    if (rMatch >= 0.9 * n && bMatch >= 0.9 * n) {
+      proven = true;
+      console.log(`27-composite: BR style channel identity OK (R=${((rMatch / n) * 100).toFixed(1)}% ` +
+        `B=${((bMatch / n) * 100).toFixed(1)}%, G=0).`);
+    }
+  }
+  assert(proven, "BR anaglyph out.R==RIGHT, out.B==LEFT, out.G==0 channel identity held on a frame");
 }
 reader.close(srcL.rh); P.disconnect(slcLId);
 reader.close(srcR.rh); P.disconnect(slcRDId);

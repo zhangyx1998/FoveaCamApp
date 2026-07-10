@@ -47,7 +47,7 @@ view is computed, so switching parks the others.
 
 - **Wide Angle Sliced** — a magnified crop around the target.
 - **Disparity (Left v.s. Right)** — the left-vs-right difference image.
-- **Anaglyph (Red = Left, Cyan = Right)** — the two eyes overlaid in red/cyan.
+- **Anaglyph (Red = Left, Cyan = Right)** — the two eyes overlaid in colored 3D. The label names the colors for the current **Anaglyph style** (set in **Settings → Application**; the default is red = left, cyan = right) and the view follows a change live.
 - **SGBM Disparity** — a colored depth heatmap from block matching.
 
 ## Steering by dragging (tracker override)

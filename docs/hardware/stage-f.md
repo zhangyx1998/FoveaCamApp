@@ -323,6 +323,32 @@ names the mechanism it gates.
   build under the same scene (Graphite-relevant: fewer per-frame
   putImageData/composite passes).
 
+### Anaglyph style (2026-07-09 user ruling — R/B, R/C, B/R, B/C cards)
+
+The Anaglyph left/right colors are now the app-config `anaglyph_style`
+(default RC), surfaced as four selectable cards in **Settings → Application**
+and shared across the disparity-scope center view + the recording viewer's 3D
+mode via the `docs/schema/anaglyph` mapping table (native `CompositeStream`
+mirrors it; core test 27 pins RC + BR).
+
+- [ ] **Four cards render truthfully** — Settings shows R/B, R/C, B/R, B/C as
+  split swatches (left half = left-eye color, right half = right-eye color,
+  with L/R glyphs); the selected card carries the accent outline and
+  selecting another does NOT shift the layout.
+- [ ] **Center view follows each style** — with a red/blue test object, for
+  each style the red content appears in the eye the card names (e.g. under
+  **B/R** the red object drives the RIGHT eye, blue the LEFT); the option
+  label updates to match (e.g. "Anaglyph (Blue = Left, Red = Right)").
+- [ ] **B/C shared-blue truth** — under **B/C** the left (blue) eye owns the
+  blue channel and the right (cyan) eye shows only green — matches the card
+  swatch (flagged oddity: verify this is the intended arrangement, else the
+  user meant C/R).
+- [ ] **Live retune, no reconnect** — changing the style in Settings while the
+  Anaglyph view is up retunes the `stereo/composite` brick on the next frame
+  (no pipe reconnect, no frame gap, meters keep flowing).
+- [ ] **Viewer playback matches** — open a stereo recording, set 3D = anaglyph;
+  each style composes the same left/right colors as the live scope view.
+
 ## Needle sizing fix (2026-07-09, user rig find "needles way too small", 2 rounds)
 
 Round 1 (8bdd5b6) paired the tile dims with the zoom source; round 2 (the

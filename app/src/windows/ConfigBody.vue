@@ -22,6 +22,7 @@ You may find the full license in project root directory.
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import Store from "@lib/store";
 import { useConfigRef } from "@lib/config";
+import { anaglyphCards, type AnaglyphStyle } from "../../../docs/schema/anaglyph";
 import {
   DEFAULT_TELECANVAS_PORT,
   IDLE_TELECANVAS_STATUS,
@@ -55,6 +56,16 @@ const tele_canvas_port = await useConfigRef("tele_canvas_port");
 const baseline_distance_mm = await useConfigRef("baseline_distance_mm");
 const cal_marker_size_mm = await useConfigRef("cal_marker_size_mm");
 const cal_marker_ratio = await useConfigRef("cal_marker_ratio");
+// Anaglyph style (user ruling 2026-07-09): live-writable ref over the shared
+// config doc. The card view-models (label + literal swatch colors + selection)
+// come from the SHARED `docs/schema/anaglyph` helper so the cards render the
+// exact same truth the viewer/native brick compose. Clicking a card writes the
+// style — applies live (disparity-scope center Anaglyph view + viewer 3D).
+const anaglyph_style = await useConfigRef("anaglyph_style");
+const anaglyphCardList = computed(() => anaglyphCards(anaglyph_style.value));
+function selectAnaglyph(style: AnaglyphStyle): void {
+  anaglyph_style.value = style;
+}
 
 // ---- TeleCanvas host status (main-owned server; host mode) -----------------
 const teleIsHost = computed(() => (tele_canvas_mode.value ?? "client") === "host");
@@ -333,6 +344,36 @@ onUnmounted(() => {
         </span>
       </label>
       <p class="hint">Inner/outer marker ratio. Applies live.</p>
+
+      <div class="stacked-row">
+        <span class="label">Anaglyph style</span>
+        <div class="anaglyph-cards" role="group" aria-label="Anaglyph style">
+          <button
+            v-for="card in anaglyphCardList"
+            :key="card.style"
+            type="button"
+            class="anaglyph-card"
+            :class="{ selected: card.selected }"
+            :aria-pressed="card.selected"
+            :title="`Left ${card.leftColor}, right ${card.rightColor}`"
+            @click="selectAnaglyph(card.style)"
+          >
+            <!-- Swatch halves = the RESOLVED channel colors (content, not
+                 palette tokens) — what the compose actually paints, so B/C's
+                 right half shows green, not its nominal cyan. -->
+            <span class="swatch" aria-hidden="true">
+              <span class="half" :style="{ backgroundColor: card.leftCss }">L</span>
+              <span class="half" :style="{ backgroundColor: card.rightCss }">R</span>
+            </span>
+            <span class="card-name">{{ card.label }}</span>
+          </button>
+        </div>
+      </div>
+      <p class="hint">
+        Left-eye / right-eye colors for the anaglyph 3D view (R = red, B = blue,
+        C = cyan). Applies live to Disparity Scope's center Anaglyph view and the
+        recording viewer's 3D mode.
+      </p>
     </section>
 
     <!-- ============ Calibration data ============ -->
@@ -542,6 +583,90 @@ input {
   &.err {
     color: var(--danger-text);
   }
+}
+
+// Label-above-content row (for controls too wide for the inline `.row`).
+.stacked-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.3rem 0;
+
+  .label {
+    color: var(--text-muted);
+  }
+}
+
+.anaglyph-cards {
+  display: flex;
+  flex-wrap: wrap; // wrap on narrow
+  gap: 0.6rem;
+}
+
+.anaglyph-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.5rem;
+  background: var(--bg-chrome);
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-family: inherit;
+  // 2px border always present (transparent) so selecting only recolors it —
+  // no layout shift (design-language: layout-stable, instant cue). No
+  // transition: control-path feedback snaps (instant/snap ruling), and the
+  // selected state never relies on animation (prefers-reduced-motion safe).
+  border: 2px solid transparent;
+  outline: none;
+
+  &:hover {
+    border-color: var(--border-muted);
+    color: var(--text);
+  }
+  // Focus ring is DISTINCT from selection: an offset outline (the app's focus
+  // convention) rather than the selection border, so a keyboard-focused card
+  // reads apart from the accent-bordered selected one.
+  &:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  &.selected {
+    border-color: var(--accent-bright);
+    color: var(--text);
+  }
+}
+
+.swatch {
+  display: flex;
+  width: 72px;
+  height: 46px;
+  border-radius: 4px;
+  overflow: hidden;
+
+  .half {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    // White glyph on every half — a surrounding dark halo (not just a drop
+    // shadow) keeps it legible on the lighter halves too (resolved cyan/green
+    // sit ~0.4 luminance, where flat white alone is marginal). Per-half text
+    // treatment only; the swatch color itself is never tinted (stays truthful).
+    color: #fff;
+    font-weight: 700;
+    font-size: var(--fs-sm);
+    text-shadow:
+      0 0 3px rgba(0, 0, 0, 0.7),
+      0 1px 2px rgba(0, 0, 0, 0.6);
+  }
+}
+
+.card-name {
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.03em;
 }
 
 select {
