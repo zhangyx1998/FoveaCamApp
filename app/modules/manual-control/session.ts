@@ -52,6 +52,7 @@ import { createCaptureHelper, type CaptureHelper } from "@orchestrator/capture-h
 import type { PipeInput, VisionResult } from "@orchestrator/vision-worker-protocol";
 import { manualControl } from "./contract";
 import { createRecording } from "./recording";
+import { type SplitVolts, unifiedSplit, resolveVolts, splitFlags } from "./split";
 import { makeMat, matToArray } from "@lib/mat";
 import {
   createQMatrix,
@@ -88,6 +89,20 @@ export default function manualControlSession(
     // Latest commanded voltages, mirrored locally for the fovea-wrap homography.
     const volts: { L: Pos; R: Pos } = { L: { ...ORIGIN_POS }, R: { ...ORIGIN_POS } };
 
+    // Per-eye "split" volt overrides (session-local, NOT persisted — re-entry
+    // starts unified). null = that eye follows the unified target solution; a
+    // `PosView` drag pins it (override > unified). Any steer reunifies.
+    const splitVolts: SplitVolts = unifiedSplit();
+
+    function reunify(): void {
+      splitVolts.l = null;
+      splitVolts.r = null;
+    }
+
+    function publishSplit(): void {
+      s.telemetry({ split: splitFlags(splitVolts) });
+    }
+
     // --- targeting ---------------------------------------------------------
 
     function baseDistance(): number {
@@ -100,10 +115,16 @@ export default function manualControlSession(
     function targetVolts(): { l: Pos; r: Pos } {
       if (!triple) return { l: ORIGIN_POS, r: ORIGIN_POS };
       const A = inverseTriangulate(targetAngle, s.state.baseline, distance(), radians(shiftDeg()));
-      return { l: triple.conv.A2V.L(A.l), r: triple.conv.A2V.R(A.r) };
+      const unified = { l: triple.conv.A2V.L(A.l), r: triple.conv.A2V.R(A.r) };
+      // Split override WINS per eye; a null eye keeps the shared solution.
+      return resolveVolts(unified, splitVolts);
     }
 
     function setTargetFromPixel(px: Point2d): void {
+      // Any wide-view drag / programmatic target set REUNIFIES (one rule, no
+      // special cases) — both eyes return to the shared solution.
+      reunify();
+      publishSplit();
       target = px;
       distanceOverride = null;
       shiftOverride = null;
@@ -113,6 +134,8 @@ export default function manualControlSession(
     }
 
     function setTargetFromAngle(angle: Point2d, distance_mm?: number, shift_deg?: number): void {
+      reunify(); // programmatic target set reunifies (same rule as a wide drag)
+      publishSplit();
       targetAngle = angle;
       distanceOverride = distance_mm ?? null;
       shiftOverride = shift_deg ?? null;
@@ -466,8 +489,17 @@ export default function manualControlSession(
         }
         if (now - lastVoltEmit >= VOLT_TELEMETRY_INTERVAL_MS) {
           lastVoltEmit = now;
+          // Per-eye pose footprint on the wide view: project the ACTUAL
+          // commanded volts (V2A → A2P.C), so the two boxes physically diverge
+          // while split. DEGRADE on uncalibrated rigs — A2P.C throws without an
+          // undistort (the disparity-scope hw-1 crash lesson); return {0,0} and
+          // let the renderer hide the boxes.
+          const PX = (role: "L" | "R"): Point2d =>
+            triple?.undistort ? triple.conv.A2P.C(triple.conv.V2A[role](v[role]), false) : { x: 0, y: 0 };
           s.telemetry({
             volt: v,
+            L_PX: PX("L"),
+            R_PX: PX("R"),
             perf: { actuateMs: { mean: actuateMsStats.mean, max: actuateMsStats.max } },
           });
           actuateMsStats.resetMax();
@@ -514,6 +546,12 @@ export default function manualControlSession(
       activate: (scope) => activateSession(scope),
       idle() {
         width = height = 0; // after the full drain (leases already released)
+        reunify(); // split is session-local — re-entry starts unified
+        // The runtime keeps the telemetry snapshot across activate/idle and
+        // seeds it to new subscribers — without this reset a re-entry lights
+        // the ⟂ badge + split title for a session that is actually unified
+        // (UI/UX review 2026-07-11; same pattern as every sibling session).
+        s.resetTelemetry(["split", "L_PX", "R_PX"]);
       },
       watch: {
         zoom() {
@@ -536,6 +574,14 @@ export default function manualControlSession(
         async steer(t) {
           if (t.mode === "pixel") setTargetFromPixel(t.value);
           else setTargetFromAngle(t.value, t.distance_mm, t.shift_deg);
+        },
+        async splitEye({ side, volt }) {
+          // Pin one eye to the dragged volt (input-rate through the pacer's
+          // dedupe/actuate path). Volt-space, so it works uncalibrated. Held
+          // until any `steer` reunifies (a PosView release keeps the pin — the
+          // renderer emits no clear on release).
+          splitVolts[side] = { ...volt };
+          publishSplit();
         },
         async previewVolts(queries) {
           if (!triple) return queries.map(() => ({ l: ORIGIN_POS, r: ORIGIN_POS }));

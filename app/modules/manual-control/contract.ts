@@ -75,6 +75,16 @@ export const manualControl = defineContract({
     target: { x: 0, y: 0 } as Point2d, // current steered target (center px)
     target_angle: { x: 0, y: 0 } as Point2d, // ...and in radians (angular)
     volt: { L: { x: 0, y: 0 }, R: { x: 0, y: 0 } } as { L: Pos; R: Pos },
+    // Per-eye projection of the CURRENT commanded volts into wide-frame
+    // (undistorted center) pixels — `A2P.C(V2A(volts))`, {0,0} on uncalibrated
+    // rigs. The renderer draws the fovea-footprint boxes here; deriving from
+    // the actual per-eye volts (not the unified target) is what lets the two
+    // boxes physically separate while split.
+    L_PX: { x: 0, y: 0 } as Point2d,
+    R_PX: { x: 0, y: 0 } as Point2d,
+    // Which eyes are steered independently (a `PosView` drag). Both false =
+    // unified (the shared target solution). Session-local, reset on re-entry.
+    split: { l: false, r: false } as { l: boolean; r: boolean },
     // Control-path latency (perf substrate, docs/history/refactor/orchestrator.md
     // §7.3 item 2) — `c.actuate()` round-trip, published at the same
     // throttle as `volt`.
@@ -98,8 +108,14 @@ export const manualControl = defineContract({
   // `getPreview` (ruling 7), not streamed on frame channels.
   frames: ["center"] as const,
   commands: {
-    /** Steer the target (pixel drag or a selected set-point's angle). */
+    /** Steer the target (pixel drag or a selected set-point's angle). Any steer
+     *  REUNIFIES: it clears both per-eye overrides so both eyes return to the
+     *  shared solution. */
     steer: cmd<SteerTarget>(),
+    /** Pin ONE eye to a directly-chosen volt-space position (a `PosView` drag),
+     *  steering that fovea independently. The other eye keeps its unified
+     *  command. Cleared by any `steer` (wide-view drag or set-point). */
+    splitEye: cmd<{ side: "l" | "r"; volt: Pos }>(),
     /** Resolve a batch of set-point angles to volts, for the trace overlay —
      *  does not steer or change any state. */
     previewVolts: cmd<VoltPreviewQuery[], VoltPair[]>(),

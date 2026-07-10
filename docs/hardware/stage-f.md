@@ -129,6 +129,16 @@ history has them). Cross-app platform checks live in the first two sections.
   camera matrix (`mtx`), not an alternate.
 - [ ] **Push-model actuation feel** — drag/servo feel unchanged vs the old
   1ms loop.
+- [ ] **Split fovea (per-eye drag)** — drag an L/R **voltage bar** (`PosView`):
+  that eye's mirror follows the drag at pointer rate, the OTHER eye holds its
+  command, the `⟂ independent` badge lights, and the two per-eye footprint
+  boxes on the Center Wide view (cyan L / greenyellow R) physically separate.
+  Both bars can be dragged at once. Volt-space, so it also works uncalibrated
+  (footprint boxes hidden without a center calibration; drag still steers).
+- [ ] **Split reunify** — a Center Wide drag OR a set-point selection clears the
+  split (both eyes back on the shared solution, boxes converge, badges clear);
+  releasing a voltage-bar drag does NOT reunify (the eye holds); re-entering
+  Manual Control starts unified (session-local, not persisted).
 - [ ] **Capture wrap default** — captures always save WRAPPED foveae; confirm
   downstream consumers expect this.
 - [ ] **Cmd-R** — toggles recording here; no-op in apps without it; only the

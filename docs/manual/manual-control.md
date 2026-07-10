@@ -50,6 +50,30 @@ the drag — dragging only chooses the direction. Steering is open-loop and
 immediate: there is no match gate or tracker to lose, so the foveas never
 "drop" the target.
 
+### To steer one fovea independently (split)
+
+You can aim the left and right foveas at *different* points instead of one
+shared target:
+
+1. Press and drag on a **voltage bar** (the L or R `PosView` beneath a fovea).
+   The pointer is a crosshair — that bar is directly draggable.
+2. That eye's mirror follows the drag in volt space. The other eye keeps its
+   current command (it does not move). An **⟂ independent** badge lights under
+   the bar you are steering, and the two per-eye footprint boxes on the Center
+   Wide view separate — cyan for L, greenyellow for R.
+3. You can drag the other bar too; then both eyes are steered independently.
+
+To **reunify** (return both eyes to one shared target), drag anywhere on the
+**Center Wide** view, or pick / snap to a set-point — any target command clears
+the split. Releasing a voltage-bar drag does *not* reunify; the eye stays where
+you left it. The split is session-local: it is never saved, and re-opening
+Manual Control starts unified.
+
+This works even on an uncalibrated rig, because the voltage bars steer directly
+in volt space. (Without a full calibration the wide-view footprint boxes are
+hidden, since projecting a pose onto the wide view needs the center camera's
+calibration — the drag itself still moves the mirror.)
+
 ### To aim with saved set-points
 
 The left half of the drawer is the set-points list. Each set-point is an angle
@@ -86,9 +110,14 @@ The right half of the drawer holds:
 
 - The **voltage bars** under the L and R views show each mirror's current
   commanded position inside its travel limits, plus the faint set-point preview
-  traces.
+  traces. They are draggable (crosshair cursor) to steer that eye independently
+  — see *To steer one fovea independently* above; an **⟂ independent** badge
+  under a bar means that eye is split off the shared target.
 - The **target dot and angle readout** on the clickable center view show where
-  you are steering, in undistorted wide-frame pixels and in degrees.
+  you are steering, in undistorted wide-frame pixels and in degrees. The two
+  outlined **footprint boxes** (cyan L, greenyellow R) mark where each fovea is
+  actually aimed on the wide view; while unified they sit together on the
+  target, and they separate when you steer an eye independently.
 - The **Verge Distance** and **Depth Window** sliders read out the live distance
   in metres.
 

@@ -19,6 +19,7 @@ You may find the full license in project root directory.
 <script setup lang="ts">
 import { computed, ref, shallowRef, watch } from "vue";
 import type { Point2d, Rect } from "core/Geometry";
+import type { Pos } from "@lib/controller-codec";
 import { ROLE, THEME } from "@lib/camera-config";
 import { useFrames, useSession, usePipeFrame } from "@lib/orchestrator/client";
 import { nodeId } from "@lib/orchestrator/graph-contract";
@@ -162,6 +163,28 @@ const stroke = computed(
   () => Math.max(telemetry.size.width, telemetry.size.height, 1) * 0.003,
 );
 
+// --- split fovea (per-eye independent steering) -----------------------------
+// A drag on the L/R voltage `PosView` pins THAT eye to the dragged volt (an
+// `@select` Pos during the drag; `null` on release). Release KEEPS the pin —
+// the eye stays where dragged; only a wide-view drag (or a set-point) reunifies.
+function dragEye(side: "l" | "r", p: Pos | null): void {
+  if (!p) return; // release: hold the pinned pose (no reunify on release)
+  // NOTE: deliberately do NOT clear a selected set-point here. Doing so fires
+  // the `setpoint_item` watcher's "revert to last drag" `steer`, which
+  // reunifies and would wipe the pin we are setting. The pin overlays on top of
+  // whatever drives the unified target (drag or set-point); the un-pinned eye
+  // keeps following it.
+  void session.call("splitEye", { side, volt: p });
+}
+const isSplit = computed(() => telemetry.split.l || telemetry.split.r);
+// Wide-view footprint of one fovea frame (a fovea is magnified `zoom×`, so it
+// projects onto the wide view shrunk by `zoom`). Drawn from the per-eye L_PX/
+// R_PX volt projections, so the two boxes separate physically while split.
+const footprint = computed(() => {
+  const z = Math.max(1, state.zoom);
+  return { width: telemetry.size.width / z, height: telemetry.size.height / z };
+});
+
 // --- capture / recording ----------------------------------------------
 
 const capture = new Capture(session, "manual-control");
@@ -244,6 +267,7 @@ window.addEventListener("keydown", (e) => {
         :lim="controller?.dv ?? 200"
         :color="THEME.L"
         style="width: 100%"
+        @select="(p) => dragEye('l', p)"
       >
         <Line2D
           style="opacity: 0.5"
@@ -252,6 +276,9 @@ window.addEventListener("keydown", (e) => {
           :focus="setpoint_select"
         />
       </PosView>
+      <div class="split-tag" :class="{ on: telemetry.split.l }" :style="{ '--color': THEME.L }">
+        independent
+      </div>
     </div>
     <div class="view">
       <StreamView
@@ -262,7 +289,7 @@ window.addEventListener("keydown", (e) => {
       />
       <StreamView
         class="stream"
-        :title="ROLE.C"
+        :title="isSplit ? ROLE.C + ' — split (drag to reunify)' : ROLE.C"
         :payload="frameC"
         :theme="THEME.C"
         v-model="cursor"
@@ -273,6 +300,30 @@ window.addEventListener("keydown", (e) => {
           :r="stroke * 3"
           :fill="THEME.C"
         />
+        <!-- Per-eye pose footprints, projected from the ACTUAL commanded volts
+             (A2P.C∘V2A). When unified both boxes converge on the target; while
+             split they separate. Hidden on uncalibrated rigs (no undistort →
+             L_PX/R_PX are {0,0}). -->
+        <template v-if="state.undistortPipe">
+          <rect
+            :x="telemetry.L_PX.x - footprint.width / 2"
+            :y="telemetry.L_PX.y - footprint.height / 2"
+            :width="footprint.width"
+            :height="footprint.height"
+            :stroke="THEME.L"
+            fill="none"
+            :stroke-width="stroke"
+          />
+          <rect
+            :x="telemetry.R_PX.x - footprint.width / 2"
+            :y="telemetry.R_PX.y - footprint.height / 2"
+            :width="footprint.width"
+            :height="footprint.height"
+            :stroke="THEME.R"
+            fill="none"
+            :stroke-width="stroke"
+          />
+        </template>
         <FrameCursor
           :cursor="{ ...telemetry.target, width: telemetry.size.width, height: telemetry.size.height }"
           :angle="telemetry.target_angle"
@@ -308,6 +359,7 @@ window.addEventListener("keydown", (e) => {
         :lim="controller?.dv ?? 200"
         :color="THEME.R"
         style="width: 100%"
+        @select="(p) => dragEye('r', p)"
       >
         <Line2D
           style="opacity: 0.5"
@@ -316,6 +368,9 @@ window.addEventListener("keydown", (e) => {
           :focus="setpoint_select"
         />
       </PosView>
+      <div class="split-tag" :class="{ on: telemetry.split.r }" :style="{ '--color': THEME.R }">
+        independent
+      </div>
     </div>
   </div>
   <Drawer v-model="drawer_height">
@@ -489,6 +544,28 @@ window.addEventListener("keydown", (e) => {
 .fill {
   width: 100%;
   height: 100%;
+}
+
+// Per-eye "independent" badge under the L/R PosViews. Always occupies its row
+// (layout-stable: no shift when it appears) — visible only while that eye is
+// split, in the eye's THEME color.
+.split-tag {
+  height: 1.4em;
+  line-height: 1.4em;
+  font-size: 0.75em;
+  font-family: var(--font-mono);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--color);
+  opacity: 0;
+  transition: opacity 0.08s;
+  pointer-events: none;
+  &.on {
+    opacity: 1;
+  }
+  &::before {
+    content: "⟂ ";
+  }
 }
 
 .options {

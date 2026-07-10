@@ -5,11 +5,20 @@
  --------------------------------------------------------- -->
 
 <script setup lang="ts">
-import { ref, computed, useTemplateRef } from "vue";
+import { ref, computed, getCurrentInstance, useTemplateRef } from "vue";
 
 export type Pos = { x: number; y: number };
 const emit = defineEmits<{ (e: "select", v: Pos | null): void }>();
 const canvas = useTemplateRef("canvas");
+
+// INTERACTIVE only when a parent actually listens for `select` — four
+// consumers use PosView as a pure display (disparity-scope, multi-fovea,
+// profiler, extrinsic PRV), and an unconditional crosshair + mousedown-track
+// there was a false affordance / phantom drag (UI/UX review 2026-07-11).
+// Declared emits don't appear in useAttrs(), so read the vnode props.
+const interactive = computed(
+  () => !!(getCurrentInstance()?.vnode.props as { onSelect?: unknown } | null)?.onSelect,
+);
 
 const props = defineProps<{
   pos: Pos;
@@ -112,6 +121,7 @@ function untrack() {
 }
 
 function track(e: MouseEvent) {
+  if (!interactive.value) return; // display-only consumer: no phantom drag
   drag.value = true;
   window.addEventListener("mousemove", trackUntilRelease);
   window.addEventListener("mouseup", trackUntilRelease);
@@ -136,7 +146,7 @@ function track(e: MouseEvent) {
       stroke="gray"
       :stroke-width="T"
       @mousedown="track"
-      style="pointer-events: all"
+      :style="{ pointerEvents: 'all', cursor: interactive ? 'crosshair' : 'default' }"
     />
     <!-- Decorations -->
     <circle
