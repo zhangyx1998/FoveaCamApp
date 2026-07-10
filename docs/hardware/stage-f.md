@@ -892,6 +892,11 @@ soak. Take these to the rig:
   the container's `/zlib`-suffixed channels decode in the viewer + pyfcap.
 - [ ] **Old recordings still open** — a pre-native `.fovea`/`.fcap` container opens
   unchanged.
+- [ ] **Flat container path (2026-07-10 ruling)** — a recording lands as
+  `<save dir>/<seq>.fcap` (NO per-recording `<seq>/recording.fcap` directory); the
+  destination popup shows the `.fcap` suffix after the sequence, the already-exists
+  red outline fires on an existing `<seq>.fcap`, Cmd/Ctrl-R quick-start writes the
+  same flat path, and the auto-opened viewer + Finder reveal point at the file.
 
 ## Blocked (hardware change required)
 

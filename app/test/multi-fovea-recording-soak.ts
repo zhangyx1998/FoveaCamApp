@@ -143,7 +143,9 @@ describe("multi-fovea recording e2e soak (raw12p registry + zlib + descriptor ch
       // --- record with descriptor churn --------------------------------------
       const dir = await mkdtemp(join(tmpdir(), "mf-recording-soak-"));
       rec.onTargets([{ index: 0, enabled: true, streamId: null }]);
-      expect(await rec.start(dir)).toBe(true);
+      // `start` takes the container path now (`<path>.fcap`) — keep it inside
+      // the cleanup dir, mirroring the app's `<save dir>/<seq>` default.
+      expect(await rec.start(join(dir, "0001"))).toBe(true);
 
       // Synthetic free-run tracker batches at ~25 Hz; target 1 arms mid-run
       // (mid-file descriptor channel) and target 0 disarms later.

@@ -38,6 +38,10 @@ const path_valid = useAsyncComputed(
   false,
 );
 
+// The recording is a single `<dir>/<seq>.fcap` file (no per-recording
+// directory) — mirrors FOVEA_EXTENSION in @orchestrator/recorder/schema.
+const FCAP_SUFFIX = ".fcap";
+
 const resolved_seq_path = useAsyncComputed(
   () => window.foveaBridge.resolvePath(save_path.value, sequence.value),
   "",
@@ -45,7 +49,7 @@ const resolved_seq_path = useAsyncComputed(
 const seq_valid = useAsyncComputed(
   async () =>
     resolved_seq_path.value !== "" &&
-    !(await window.foveaBridge.pathExists(resolved_seq_path.value)),
+    !(await window.foveaBridge.pathExists(resolved_seq_path.value + FCAP_SUFFIX)),
   true,
 );
 
@@ -80,6 +84,7 @@ async function start() {
           :style="{ width: Math.max(sequence.length, 6) + 'ch' }"
         />
       </div>
+      <div class="suffix">{{ FCAP_SUFFIX }}</div>
     </div>
     <div class="buttons">
       <button
@@ -140,9 +145,16 @@ async function start() {
     flex: 1;
     min-width: 0;
   }
-  .separator {
+  .separator,
+  .suffix {
     padding: 0 0.3ch;
     color: var(--text-disabled);
+  }
+  .suffix {
+    flex-shrink: 0;
+    user-select: none;
+    // Flush against the sequence — the real filename is contiguous `0001.fcap`.
+    padding-left: 0;
   }
   .sequence {
     flex-shrink: 0;

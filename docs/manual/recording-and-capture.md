@@ -13,11 +13,11 @@ The **Record** button is the hollow circle in the title bar, next to the camera 
 ### To start a recording
 
 1. Click the **Record** button. A **Select Recording Destination** panel drops down from the top-right.
-2. The panel shows a path as two fields separated by `/`: a **Save directory...** on the left and a short **sequence** name on the right. Both are pre-filled with a dated default; edit either.
+2. The panel shows a path as two fields separated by `/`: a **Save directory...** on the left and a short **sequence** name on the right, followed by the fixed `.fcap` extension. Both fields are pre-filled with a dated default; edit either.
 3. If the directory is not writable, or a recording with that sequence name already exists, the path row outlines in red and **Start** is disabled. Change the directory or the sequence name until the red clears.
 4. Click **Start** (green), or press `Enter`. The panel closes and the **Record** button turns red and blinks for the whole recording.
 
-The sequence name auto-increments after each recording, so repeated takes land as `0001`, `0002`, and so on inside the same directory.
+Each recording is a single file named after the sequence — `<directory>/0001.fcap`. The sequence name auto-increments after each recording, so repeated takes land as `0001.fcap`, `0002.fcap`, and so on inside the same directory.
 
 ### To start or stop without the dialog
 

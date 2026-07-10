@@ -165,7 +165,9 @@ describe("recorder node churn soak (dynamic streams + descriptors + camera matri
     };
     const node = createRecorderNode({
       id: "recorder/churn-soak",
-      path: dir,
+      // `path` is the container path now (`<path>.fcap`) — keep it inside the
+      // cleanup dir, mirroring the app's `<save dir>/<seq>` default.
+      path: join(dir, "0001"),
       streams,
       connect,
       timestamp: new Date().toISOString(),

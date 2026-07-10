@@ -320,7 +320,8 @@ describe("createRecorderNode (thin native driver)", () => {
     expect(o.rawFrameEncoding).toBe("x-fovea-raw");
     expect(o.telemetryTopic).toBe("telemetry");
     expect(o.schemaEncoding).toBe("jsonschema");
-    expect(o.filePath.endsWith("recording.fcap")).toBe(true);
+    // One `<path>.fcap` file per recording — no per-recording directory.
+    expect(o.filePath).toBe("/tmp/rec-create.fcap");
     expect(o.cameraMatrix).toBeUndefined();
   });
 

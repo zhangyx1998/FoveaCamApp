@@ -381,7 +381,8 @@ export type RecorderConnect = (pipeId: string) => RecorderPipeConnection;
 export interface RecorderNodeOptions {
   /** Graph node id — `recorder/<session>`. */
   id: string;
-  /** Recording directory; the container is `<path>/recording.fcap`. */
+  /** Container path: `<path>.fcap` (extension appended unless already present)
+   *  — one file per recording, no per-recording directory. */
   path: string;
   /** name → pipe. Names are the container channel names. */
   streams: Record<string, { pipeId: string }>;
@@ -502,7 +503,9 @@ export function createRecorderNode(options: RecorderNodeOptions): RecorderNodeHa
   const wantsExtras = (name: string): boolean =>
     extrasStreams === undefined || extrasStreams.includes(name);
 
-  const filePath = resolve(path, `recording${FOVEA_EXTENSION}`);
+  const filePath = path.endsWith(FOVEA_EXTENSION)
+    ? resolve(path)
+    : resolve(`${path}${FOVEA_EXTENSION}`);
 
   // --- connect every INITIAL named pipe (refcount++ → gate → producer runs) --
   // `connections` is keyed by stream name so churn (add/remove) can release
