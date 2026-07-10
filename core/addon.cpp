@@ -108,6 +108,21 @@ Napi::Value report(const Napi::CallbackInfo &info);
 // core/lib/Stream/StreamSelfTest.cpp. Not part of the public d.ts.
 Napi::Value streamTeardownRaceSelfTest(const Napi::CallbackInfo &info);
 
+// native-recorder: hand-rolled C++ MCAP writer conformance surface (core/test/
+// 39). Test-only `__mcap*` root exports that drive Record::McapWriter with the
+// same inputs fed to @mcap/core for a byte-for-byte comparison. The live
+// recorder brick drives McapWriter in C++ (no NAPI per frame). Defined in
+// core/src/Record.cpp. Not part of the public d.ts.
+namespace Rec {
+Napi::Value __mcapOpen(const Napi::CallbackInfo &info);
+Napi::Value __mcapRegisterSchema(const Napi::CallbackInfo &info);
+Napi::Value __mcapRegisterChannel(const Napi::CallbackInfo &info);
+Napi::Value __mcapAddMessage(const Napi::CallbackInfo &info);
+Napi::Value __mcapAddMetadata(const Napi::CallbackInfo &info);
+Napi::Value __mcapEnd(const Napi::CallbackInfo &info);
+Napi::Value __mcapAbort(const Napi::CallbackInfo &info);
+} // namespace Rec
+
 // Native crash-site tracing (teardown-hardening Task 3): std::set_terminate +
 // SIGABRT/SIGSEGV/SIGBUS handlers that print a symbolicatable backtrace before
 // re-raising (exit-code semantics preserved -> janitor still parks hardware).
@@ -337,6 +352,18 @@ static Object init(Env env, Object exports) {
     exports.Set("__streamTeardownRaceSelfTest",
                 Function::New<streamTeardownRaceSelfTest>(
                     env, "__streamTeardownRaceSelfTest"));
+    // Test-only (core/test/39): hand-rolled MCAP writer conformance surface.
+    exports.Set("__mcapOpen", Function::New<Rec::__mcapOpen>(env, "__mcapOpen"));
+    exports.Set("__mcapRegisterSchema",
+                Function::New<Rec::__mcapRegisterSchema>(env, "__mcapRegisterSchema"));
+    exports.Set("__mcapRegisterChannel",
+                Function::New<Rec::__mcapRegisterChannel>(env, "__mcapRegisterChannel"));
+    exports.Set("__mcapAddMessage",
+                Function::New<Rec::__mcapAddMessage>(env, "__mcapAddMessage"));
+    exports.Set("__mcapAddMetadata",
+                Function::New<Rec::__mcapAddMetadata>(env, "__mcapAddMetadata"));
+    exports.Set("__mcapEnd", Function::New<Rec::__mcapEnd>(env, "__mcapEnd"));
+    exports.Set("__mcapAbort", Function::New<Rec::__mcapAbort>(env, "__mcapAbort"));
     // Native crash-site tracing — call once at orchestrator boot.
     exports.Set("installCrashHandler",
                 Function::New<installCrashHandler>(env, "installCrashHandler"));

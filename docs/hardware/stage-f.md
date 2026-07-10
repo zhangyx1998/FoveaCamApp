@@ -871,6 +871,28 @@ the TeleCanvas window previews via the host's own SSE stream. Verify on the rig
   relaunch: the host comes up on that port at startup (before any app window),
   read from the persisted config.
 
+### Native recorder
+
+The live recorder moves from a JS worker (`@mcap/core`) to a hand-rolled C++ MCAP
+writer + native brick (`docs/proposals/native-recorder.md`). Wave 1 (the writer +
+byte-identical conformance gate `core/test/39-mcap-writer.ts`) is software-green;
+the brick + orchestrator driver are the remaining waves. Take these to the rig
+once the brick lands:
+
+- [ ] **Full-rate 3-camera sustains** — record all three cameras at full rate; the
+  original defect (`droppedQueue` under load) does NOT reproduce — the RecordButton
+  hover shows zero queue-attributed drops.
+- [ ] **Hover attribution still works** — force a drop (throttle disk); the hover
+  splits `droppedQueue` (writer-busy) vs `droppedRing` (read loop lagged) correctly.
+- [ ] **Finalize under load** — stop while recording at full rate; the container
+  finalizes (summary/footer written) and opens in the viewer with all frames.
+- [ ] **Crash-shape recovery** — kill the orchestrator mid-record; the footer-less
+  container still opens via the viewer's streaming/re-index reader.
+- [ ] **/zlib streams record + decode** — record with `record_compression=zlib`;
+  the container's `/zlib`-suffixed channels decode in the viewer + pyfcap.
+- [ ] **Old recordings still open** — a pre-native `.fovea`/`.fcap` container opens
+  unchanged.
+
 ## Blocked (hardware change required)
 
 - [ ] **Center-camera hardware trigger** — needs the slimmer CAM0 cable
