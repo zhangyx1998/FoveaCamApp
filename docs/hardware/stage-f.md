@@ -552,6 +552,20 @@ source the RAW fovea CONVERT pipes (single ÷magnification, legacy
   banner instantly visible, no layout shift; ProgressMonitor × visible
   dim at rest.
 
+### Stream close deadlock fix (ee6fc46) + viewer engine (51cda07)
+- [ ] Open/close disparity-scope repeatedly (≥10 cycles, tracker armed,
+  views live) — no freeze, no runaway CPU on the orchestrator helper, no
+  `dropped stale queued frame` flood after close (pre-fix signature).
+- [ ] App-switch away from disparity-scope mid-tracking (drain path) —
+  same checks.
+- [ ] Viewer: Cmd/Ctrl-O opens and PLAYS a .fcap (was: hard error at
+  preload-viewer.cjs:53); scrub/rate/pause work.
+- [ ] Viewer sidecar: rearrange tracks, close window, reopen — layout
+  persisted (flush-before-kill grace path).
+- [ ] Viewer same-file dedupe still focuses the existing window; dev
+  full-reload doesn't duplicate engines or corrupt ui.json.
+- [ ] Viewer survives orchestrator kill/restart mid-playback.
+
 ## Blocked (hardware change required)
 
 - [ ] **Center-camera hardware trigger** — needs the slimmer CAM0 cable
