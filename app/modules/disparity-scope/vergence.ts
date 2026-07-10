@@ -74,20 +74,29 @@ export { foveaFootprintOnWide } from "./display-geometry";
 
 /**
  * The magnification that drives the fovea↔wide template match. RULED
- * precedence (2026-07-09): an explicit nominal `zoom` is AUTHORITATIVE —
- * when it is finite and > 0 it wins, even over a measured value. A zoom of 0
- * is the "Auto" state: fall back to the calibration-MEASURED fovea/wide ratio
- * (CCOEFF matching is not scale invariant, so the true optical ratio matters)
- * when it is valid, else 1 (degenerate but honest — the operator then sets a
- * zoom). This inverts the previous measured-wins behavior: the old
- * measured path derived from `scale·1000/focal`, whose distance assumption
- * was false on the rig and inflated the match zoom ~16×.
+ * resolution order (2026-07-09, per-triplet-settings wave):
+ *
+ *   app-window zoom knob (`nominalZoom` > 0)   — AUTHORITATIVE
+ *     > per-triple `zoom_override` (> 0)        — the rig's stored optical zoom
+ *       > calibration-MEASURED fovea↔wide ratio — the extrinsic marker-quad ratio
+ *         > 1                                    — degenerate but honest
+ *
+ * A knob zoom of 0 is the "Auto" state: it defers to the per-triple override
+ * (a rig-nominal FOV-ratio value the operator set for THIS triple), else the
+ * measured ratio (CCOEFF matching is not scale invariant, so the true optical
+ * ratio matters), else 1. Each tier must be finite and > 0 to be accepted; a
+ * degenerate value at any tier falls through to the next. The knob still wins
+ * over everything when set, so a live override on the window is never blocked
+ * by a stored triple value.
  */
 export function matchMagnification(
   measured: number | null | undefined,
   nominalZoom: number,
+  tripleOverride?: number | null,
 ): number {
   if (Number.isFinite(nominalZoom) && nominalZoom > 0) return nominalZoom;
+  if (tripleOverride != null && Number.isFinite(tripleOverride) && tripleOverride > 0)
+    return tripleOverride;
   if (measured != null && Number.isFinite(measured) && measured > 0)
     return measured;
   return 1;

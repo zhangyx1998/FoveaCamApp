@@ -244,6 +244,11 @@ export default function calibrateDistortionSession(
         }),
       );
       publishSerials(t.leases, taps, s);
+      // Publish the leased triple's config store path so the renderer opens the
+      // `["triples", <hash>]` doc reactively for LIVE per-triple baseline marker
+      // spacing (per-triplet-settings wave, Ruling A).
+      s.setState("configPath", t.configPath);
+      scope.defer(() => s.setState("configPath", []));
       scope.defer(() => taps.dispose());
 
       // Controller-node position input (was `startActuationLoop`): the

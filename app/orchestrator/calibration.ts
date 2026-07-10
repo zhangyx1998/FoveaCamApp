@@ -162,6 +162,15 @@ export type CalibratedTriple = {
    *  zoom (e.g. disparity-scope's template match) use this in Auto (zoom 0)
    *  and fall back to their nominal UI zoom on null. */
   magnification: { L: number | null; R: number | null };
+  /** The per-triple zoom override (>0), else null — the rig's stored optical
+   *  fovea↔wide zoom. Feeds disparity-scope's match magnification under the
+   *  ruled order knob > override > measured > 1 (see
+   *  `vergence.matchMagnification`); null = no override stored. */
+  zoomOverride: number | null;
+  /** The per-triple baseline (mm, >0), else null — resolved against the legacy
+   *  app-level value + a 200 default by `@lib/calibration-data`'s
+   *  `resolveBaseline` at the consumer. */
+  baselineMm: number | null;
   /** The triple config's store path (`["triples", <hash>]`) — for sessions
    *  that read/write it directly beyond what `conv` bakes in (e.g.
    *  calibrate-drift's `drift_l`/`drift_r`). */
@@ -181,6 +190,11 @@ export async function leaseCalibratedTriple(): Promise<CalibratedTriple | null> 
   if (!leases) return null;
   const inputs = await loadConversions(leases.L.camera, leases.C.camera, leases.R.camera);
   const configPath = await tripleConfigPath(leases.L.camera, leases.C.camera, leases.R.camera);
+  // Accept a stored per-triple override/baseline only when it is a finite
+  // positive number (0 / NaN / negative ⇒ unset ⇒ null → the consumer falls
+  // back per the ruled resolution order).
+  const posFinite = (v: unknown): number | null =>
+    typeof v === "number" && Number.isFinite(v) && v > 0 ? v : null;
   return {
     leases,
     conv: useCoordinateConversions(inputs),
@@ -189,6 +203,8 @@ export async function leaseCalibratedTriple(): Promise<CalibratedTriple | null> 
       L: inputs.LE.magnification ?? null,
       R: inputs.RE.magnification ?? null,
     },
+    zoomOverride: posFinite(inputs.config.zoom_override),
+    baselineMm: posFinite(inputs.config.baseline_mm),
     configPath,
   };
 }

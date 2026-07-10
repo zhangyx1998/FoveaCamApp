@@ -59,6 +59,8 @@
 
 import { defineSession, type ServerSession } from "@orchestrator/runtime";
 import { acquireTriple, type CalibratedTriple } from "@orchestrator/calibration";
+import { read } from "@orchestrator/store-hub";
+import { resolveBaseline } from "@lib/calibration-data";
 import { controllerNode, type PositionInput } from "@orchestrator/controller-node";
 import { DisposerBag, publishSerials, releaseLeases } from "@orchestrator/session-resources";
 import { ORIGIN_POS, radians, VOLT_TELEMETRY_INTERVAL_MS } from "@orchestrator/fovea-pipeline";
@@ -347,28 +349,49 @@ export default function disparityScopeSession(
       return L ?? R;
     }
 
-    /** The resolved match magnification under the RULED precedence
-     *  (2026-07-09): an explicit `state.zoom > 0` is AUTHORITATIVE; `zoom === 0`
-     *  is "Auto" → the calibration-MEASURED value (else 1). This now drives
-     *  BOTH the tile/strip match scale AND — via `Math.max(1, matchZoom())` —
-     *  the sliced-view crop + KCF search sizing, so Auto crops at the measured
+    /** The per-triple stored optical zoom override (>0), else null — the middle
+     *  tier of the ruled match-magnification order (knob > override > measured
+     *  > 1). Constant per activation (read when the triple was leased). */
+    function tripleZoomOverride(): number | null {
+      return triple?.zoomOverride ?? null;
+    }
+
+    /** The resolved match magnification under the RULED order (2026-07-09,
+     *  per-triplet-settings wave): the app-window zoom knob (`state.zoom > 0`)
+     *  is AUTHORITATIVE; `zoom === 0` is "Auto" → the per-triple `zoom_override`
+     *  (>0), else the calibration-MEASURED value, else 1. This now drives BOTH
+     *  the tile/strip match scale AND — via `Math.max(1, matchZoom())` — the
+     *  sliced-view crop + KCF search sizing, so Auto crops at the resolved
      *  magnification instead of degenerating to full-frame. See
      *  docs/applications/disparity-scope.md. */
     function matchZoom(): number {
-      return matchMagnification(measuredMatchZoom(), s.state.zoom);
+      return matchMagnification(measuredMatchZoom(), s.state.zoom, tripleZoomOverride());
     }
 
     /** The needle scaler's zoom + BASE DIMS, paired by the zoom's units: the
      *  MEASURED magnification is a fovea-px-per-center-px ratio → divide the
-     *  FOVEA source dims; the nominal fallback is a pure FOV ratio → divide
-     *  the CENTER dims (the legacy `W_c/z`). Pairing either zoom with the
-     *  other width injects an uncorrected foveaRes/centerRes factor (the
-     *  too-small-needle defect). `matchMagnification` returns the measured
-     *  value VERBATIM when it accepts it, so identity picks the branch. */
+     *  FOVEA source dims; a NOMINAL zoom (the app-window knob OR the per-triple
+     *  `zoom_override` — both rig-nominal FOV ratios) → divide the CENTER dims
+     *  (the legacy `W_c/z`). Pairing either zoom with the other width injects
+     *  an uncorrected foveaRes/centerRes factor (the too-small-needle defect).
+     *  The FOVEA branch is taken ONLY when the measured tier actually WINS the
+     *  resolution order (decided by tier, not numeric identity — so an override
+     *  or knob that happens to equal the measured value still pairs WIDE). */
     function needleGeometry(): { zoom: number; base: Size } {
+      const knob = s.state.zoom;
+      const override = tripleZoomOverride();
       const measured = measuredMatchZoom();
-      const zoom = matchMagnification(measured, s.state.zoom);
-      return { zoom, base: zoom === measured ? fovea : wide };
+      const zoom = matchMagnification(measured, knob, override);
+      const knobWins = Number.isFinite(knob) && knob > 0;
+      const overrideWins =
+        !knobWins && override != null && Number.isFinite(override) && override > 0;
+      const measuredWins =
+        !knobWins &&
+        !overrideWins &&
+        measured != null &&
+        Number.isFinite(measured) &&
+        measured > 0;
+      return { zoom, base: measuredWins ? fovea : wide };
     }
 
     function effectiveScale(): number {
@@ -809,6 +832,20 @@ export default function disparityScopeSession(
       monitor.done("lease");
       triple = t;
       publishSerials(t.leases, disposers, s);
+
+      // Per-triple baseline (Ruling A, 2026-07-09): resolve the physical stereo
+      // baseline from the leased triple's `baseline_mm`, falling back to the
+      // legacy app-level `baseline_distance_mm`, else 200 — the SHARED rule
+      // (`resolveBaseline`). Activate-time read (honest: the verge limit is not
+      // live-updated mid-session — a Settings edit applies on the next start,
+      // as the Settings hint says). Set the contract state (so the renderer's
+      // verge-limit slider follows) AND the verge PID's limits directly, since
+      // the `baseline` watch is not guaranteed to fire on a server-side write.
+      const legacyCfg = await read<{ baseline_distance_mm?: number }>(["config"], {});
+      const resolvedBaseline = resolveBaseline(t.baselineMm, legacyCfg.baseline_distance_mm);
+      s.setState("baseline", resolvedBaseline);
+      verge.limits = [0, distanceToVerge(VERGE_MIN_DISTANCE_MM, resolvedBaseline)];
+
       monitor.start("undistort");
 
       // §5 view re-plumb: advertise the three undistort pipes the views + the
@@ -1259,10 +1296,15 @@ export default function disparityScopeSession(
       });
       captureHelper.build();
 
-      // Surface the measured magnification (null = nominal-zoom fallback) so
-      // the UI can display the actual match scale instead of guessing from
-      // the (now crop-only) zoom knob.
-      s.telemetry({ ready: true, match_magnification: measuredMatchZoom() });
+      // Surface the measured magnification (null = fallback) AND the per-triple
+      // zoom override (null = none) so the UI can display the actual match
+      // scale + name its source, instead of guessing from the (now crop-only)
+      // zoom knob. Both constant per activation.
+      s.telemetry({
+        ready: true,
+        match_magnification: measuredMatchZoom(),
+        zoom_override: tripleZoomOverride(),
+      });
       monitor.done("controller");
       monitor.complete(); // spin-up finished — clear the overlay
     }
@@ -1308,6 +1350,7 @@ export default function disparityScopeSession(
         "status",
         "tracker_bbox",
         "match_magnification",
+        "zoom_override",
         "overridden",
       ]);
     }

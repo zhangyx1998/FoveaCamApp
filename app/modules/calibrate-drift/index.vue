@@ -17,6 +17,7 @@ You may find the full license in project root directory.
 import { computed } from "vue";
 import { ROLE, THEME } from "@lib/camera-config";
 import { useAppConfig } from "@lib/config";
+import { useTripleBaseline } from "@lib/triple-baseline";
 import { useController, useSession, usePipeFrame, usePidOverride } from "@lib/orchestrator/client";
 import { nodeId } from "@lib/orchestrator/graph-contract";
 import { calibrateDrift } from "./contract";
@@ -74,6 +75,10 @@ function stroke(): number {
 const marker_size = computed(() => app_config.cal_marker_size_mm);
 const marker_ratio = computed(() => app_config.cal_marker_ratio);
 const center_marker_size = computed(() => marker_size.value * marker_ratio.value);
+// LIVE per-triple baseline (Ruling A): the marker pair sits at ±baseline/2,
+// resolved from the leased triple's `baseline_mm` (legacy app value, else 200)
+// reactively — Settings edits reflect without a restart.
+const baseline = useTripleBaseline(() => state.configPath, app_config);
 
 // Per-eye PID-node override proxies (reusable `pidOverride` fragment). Dragging
 // a `PosView` sets that eye's `value` (engage/pin the servo output); releasing
@@ -183,12 +188,12 @@ const overrideR = usePidOverride<typeof calibrateDrift, Pos>(session, {
   </Drawer>
   <RemoteCanvasTeleport>
     <CrossHair
-      :cx="app_config.baseline_distance_mm / 2 + marker_size"
+      :cx="baseline / 2 + marker_size"
       :cy="center_marker_size"
       weight="2"
     />
-    <Marker :id="state.targetId.L" :size="marker_size" :cx="-app_config.baseline_distance_mm / 2" />
-    <Marker :id="state.targetId.R" :size="marker_size" :cx="app_config.baseline_distance_mm / 2" />
+    <Marker :id="state.targetId.L" :size="marker_size" :cx="-baseline / 2" />
+    <Marker :id="state.targetId.R" :size="marker_size" :cx="baseline / 2" />
     <Marker :id="state.targetId.C" :size="center_marker_size" />
   </RemoteCanvasTeleport>
 </template>

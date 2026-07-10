@@ -141,6 +141,37 @@ crops at the measured magnification instead of degenerating to full-frame. The
 UI's `match_zoom` computed and the Zoom-Ratio input (which now accepts `0`,
 showing "Auto N×") mirror this exactly.
 
+**Per-triple zoom override (2026-07-09, per-triplet-settings wave).** The
+resolution now has a THIRD, middle tier — a rig-nominal value stored on the
+triple. `matchMagnification(measured, nominalZoom, tripleOverride)` (vergence.ts)
+resolves in this exact order, each tier accepted only when finite and `> 0`,
+otherwise falling through:
+
+```
+app-window zoom knob (state.zoom > 0)     ← authoritative
+  > per-triple zoom_override (> 0)         ← the rig's stored optical zoom
+    > calibration-MEASURED fovea↔wide ratio
+      > 1                                  ← degenerate but honest
+```
+
+The override is the `zoom_override` field in the `["triples", <hash>]` doc,
+edited in **Settings → Calibration data** (expand a Triple row). It is carried
+onto `CalibratedTriple.zoomOverride` by `leaseCalibratedTriple` (from the triple
+doc `loadConfig` already reads) and read at **session activate** — a Settings
+edit therefore applies on the NEXT Disparity Scope session, not live (same as the
+measured magnification; the window's own knob is the live control). Telemetry
+`zoom_override` surfaces it so the Zoom-Ratio Auto readout names the source:
+`Auto N× (triple override)` when the override wins, `Auto N×` for measured,
+`Auto N× (no cal)` for the degenerate 1× floor.
+
+**Base-dims pairing (load-bearing).** `needleGeometry` divides the MEASURED ratio
+into the FOVEA source dims (it is a fovea-px-per-center-px ratio) but a NOMINAL
+zoom — the knob AND the override, both pure FOV ratios — into the WIDE (center)
+dims (the legacy `W_c/z`). The FOVEA branch is taken only when the measured tier
+actually WINS the order (decided by tier, not numeric identity), so an override
+that happens to equal the measured value still pairs WIDE. Mispairing injects an
+uncorrected foveaRes/centerRes factor (the too-small-needle defect).
+
 **New measured magnification — distance/size-free marker-quad ratio (rulings
 2 & 3).** Recorded at extrinsic CAPTURE, derived at fit with no distance term:
 

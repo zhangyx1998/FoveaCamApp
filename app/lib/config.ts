@@ -27,9 +27,13 @@ export interface AppConfig {
   // resolution via `foveaBridge.resolveDefaultSavePath(dir, base)`.
   default_save_dir?: string;
   // ---- Camera layout / calibration geometry ----------------------------
-  // Stereo baseline (mm) — disparity-scope seeds its vergence baseline from this
-  // at session activate (read-once, so it applies on the NEXT disparity-scope
-  // session, not live).
+  // Stereo baseline (mm) — LEGACY FALLBACK ONLY (2026-07-09 per-triplet-settings
+  // wave). The baseline is now a per-TRIPLE setting (`baseline_mm` in the
+  // `["triples", <hash>]` doc); this app-level value is only consumed as the
+  // fallback when a triple has no `baseline_mm` (see `@lib/calibration-data`'s
+  // `resolveBaseline`). NOT surfaced in the Settings App section anymore — the
+  // baseline field lives in the per-triple section. Kept (with its 200 default)
+  // so existing rigs keep behavior with zero migration.
   baseline_distance_mm: number;
   // Calibration marker geometry — LIVE-driving: calibrate-extrinsic and
   // calibrate-drift bind their marker-size / ratio sliders to this same

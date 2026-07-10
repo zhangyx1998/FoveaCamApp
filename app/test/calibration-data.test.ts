@@ -14,6 +14,8 @@ import {
   tripleLabel,
   tripleHash,
   mergeTripleConfig,
+  resolveBaseline,
+  DEFAULT_BASELINE_MM,
   type CalStore,
   type KnownCamera,
 } from "@lib/calibration-data";
@@ -148,5 +150,60 @@ describe("mergeTripleConfig", () => {
     );
     expect(merged).toEqual({ drift_l: 1 });
     expect("zoom_override" in merged).toBe(false);
+  });
+
+  it("round-trips ALL fields, preserving baseline_mm alongside drift + zoom", () => {
+    const existing = {
+      drift_l: 0.1,
+      drift_r: -0.2,
+      zoom_override: 3,
+      baseline_mm: 175,
+      some_future_field: 7,
+    };
+    // A no-op-shaped patch (re-writing baseline) must keep everything else.
+    const merged = mergeTripleConfig(existing, { baseline_mm: 250 });
+    expect(merged).toEqual({
+      drift_l: 0.1,
+      drift_r: -0.2,
+      zoom_override: 3,
+      baseline_mm: 250,
+      some_future_field: 7,
+    });
+    // Clearing baseline leaves the rest intact.
+    const cleared = mergeTripleConfig(merged, { baseline_mm: undefined });
+    expect("baseline_mm" in cleared).toBe(false);
+    expect(cleared).toMatchObject({ drift_l: 0.1, zoom_override: 3, some_future_field: 7 });
+  });
+});
+
+describe("resolveBaseline (ruled order — triple > legacy app > 200)", () => {
+  it("prefers the per-triple baseline when it is finite and > 0", () => {
+    expect(resolveBaseline(175, 200)).toBe(175);
+    expect(resolveBaseline(300, undefined)).toBe(300);
+    // Triple wins even over a different legacy value.
+    expect(resolveBaseline(120, 200)).toBe(120);
+  });
+
+  it("falls back to the legacy app value when the triple has none", () => {
+    expect(resolveBaseline(undefined, 200)).toBe(200);
+    expect(resolveBaseline(null, 240)).toBe(240);
+    // A degenerate triple value (0 / NaN / negative) is rejected → legacy.
+    expect(resolveBaseline(0, 220)).toBe(220);
+    expect(resolveBaseline(-5, 220)).toBe(220);
+    expect(resolveBaseline(NaN, 220)).toBe(220);
+    expect(resolveBaseline(Infinity, 220)).toBe(220);
+  });
+
+  it("falls back to 200 when neither tier supplies a valid value", () => {
+    expect(resolveBaseline(undefined, undefined)).toBe(DEFAULT_BASELINE_MM);
+    expect(resolveBaseline(undefined, undefined)).toBe(200);
+    // A degenerate legacy value is rejected too → the 200 default.
+    expect(resolveBaseline(undefined, 0)).toBe(200);
+    expect(resolveBaseline(0, -1)).toBe(200);
+    expect(resolveBaseline(NaN, NaN)).toBe(200);
+  });
+
+  it("existing rigs (legacy 200, no triple field) keep the 200 baseline", () => {
+    expect(resolveBaseline(undefined, 200)).toBe(200);
   });
 });

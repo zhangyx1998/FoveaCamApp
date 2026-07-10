@@ -259,6 +259,32 @@ describe("matchMagnification (ruled precedence — explicit zoom wins, 0 = Auto)
     expect(matchMagnification(8.7, NaN)).toBe(8.7);
   });
 
+  it("full chain: knob > per-triple override > measured > 1", () => {
+    // The knob (nominal zoom > 0) is authoritative — wins over BOTH the
+    // override and the measured value.
+    expect(matchMagnification(8.7, 9, 5)).toBe(9);
+    // Auto (knob 0): the per-triple override wins over the measured value.
+    expect(matchMagnification(8.7, 0, 5)).toBe(5);
+    // Auto with no override: the measured value drives.
+    expect(matchMagnification(8.7, 0, null)).toBe(8.7);
+    expect(matchMagnification(8.7, 0, undefined)).toBe(8.7);
+    // Auto with no override AND no measured: the honest 1× floor.
+    expect(matchMagnification(null, 0, null)).toBe(1);
+    // Override wins even when there is no measured value at all.
+    expect(matchMagnification(null, 0, 6)).toBe(6);
+  });
+
+  it("rejects a degenerate override at its tier (falls through to measured/1)", () => {
+    expect(matchMagnification(8.7, 0, 0)).toBe(8.7); // 0 override ⇒ measured
+    expect(matchMagnification(8.7, 0, -3)).toBe(8.7); // negative ⇒ measured
+    expect(matchMagnification(8.7, 0, NaN)).toBe(8.7); // NaN ⇒ measured
+    expect(matchMagnification(8.7, 0, Infinity)).toBe(8.7); // ∞ ⇒ measured
+    expect(matchMagnification(null, 0, 0)).toBe(1); // 0 override, no measured ⇒ 1
+    // The old 2-arg call is the override-absent case (unchanged behavior).
+    expect(matchMagnification(8.7, 0)).toBe(8.7);
+    expect(matchMagnification(8.7, 9)).toBe(9);
+  });
+
   it("feeds foveaTileSize consistently in both modes (tile:strip stays 1:1)", () => {
     // Whichever magnification wins, BOTH the tile and the strip divide by it,
     // so the pixel-scale agreement is preserved.

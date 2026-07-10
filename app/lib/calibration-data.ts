@@ -11,7 +11,7 @@
 //   calibrate-intrinsic/<cameraKey>   — a `CameraCalibration` (center intrinsics)
 //   calibrate-extrinsic/<cameraKey>   — an `ExtrinsicDataset` (per-fovea samples)
 //   triples/<sha256>                  — a per-triple config doc (drift_l/drift_r,
-//                                       zoom_override, …)
+//                                       zoom_override, baseline_mm, …)
 //
 // `<cameraKey>` is `getCameraKey` = `vendor_model_serial`; `<sha256>` is the
 // hash of the L/C/R camera keys (mirrors `orchestrator/calibration.ts`'s
@@ -30,16 +30,46 @@ export type CalCategory = "calibrate-intrinsic" | "calibrate-extrinsic" | "tripl
 
 /**
  * The per-triple config document (`["triples", <hash>]`). `drift_l`/`drift_r`
- * are owned by calibrate-drift; `zoom_override` is added by the config window
- * (0/absent = none; >0 = the rig's known optical fovea↔wide zoom for this
- * triple — STORAGE + UI only this wave, disparity-scope wiring is fenced). The
- * index signature keeps any OTHER field (present or future) intact on write.
+ * are owned by calibrate-drift; `zoom_override` (0/absent = none; >0 = the
+ * rig's known optical fovea↔wide zoom for this triple) feeds disparity-scope's
+ * match-magnification resolution (see `vergence.matchMagnification`);
+ * `baseline_mm` (>0 = this rig's physical stereo baseline) supersedes the
+ * legacy app-level `baseline_distance_mm` for the disparity-scope verge limits
+ * and the calibrate-* marker spacing (see {@link resolveBaseline}). The index
+ * signature keeps any OTHER field (present or future) intact on write.
  */
 export interface TripleConfig {
   drift_l?: number;
   drift_r?: number;
   zoom_override?: number;
+  baseline_mm?: number;
   [key: string]: unknown;
+}
+
+/** The baseline (mm) used when neither the triple nor the legacy app config
+ *  supplies one — the historical `baseline_distance_mm` default. */
+export const DEFAULT_BASELINE_MM = 200;
+
+/**
+ * Resolve the physical stereo baseline (mm) for a triple under the RULED order
+ * (2026-07-09): the per-triple `baseline_mm` wins, else the legacy app-level
+ * `baseline_distance_mm`, else {@link DEFAULT_BASELINE_MM}. Each tier must be a
+ * finite number > 0 to be accepted (a stored 0 / NaN / negative is treated as
+ * unset and falls through), so existing rigs — which only ever set the legacy
+ * app value — keep their exact behavior with zero migration steps. Pure +
+ * unit-tested; the SINGLE place this precedence lives, shared by the
+ * disparity-scope session (verge-limit derivation) and the calibrate-*
+ * renderers (marker spacing).
+ */
+export function resolveBaseline(
+  tripleBaseline?: number | null,
+  legacyAppBaseline?: number | null,
+): number {
+  const ok = (v: number | null | undefined): v is number =>
+    typeof v === "number" && Number.isFinite(v) && v > 0;
+  if (ok(tripleBaseline)) return tripleBaseline;
+  if (ok(legacyAppBaseline)) return legacyAppBaseline;
+  return DEFAULT_BASELINE_MM;
 }
 
 /**
@@ -181,6 +211,8 @@ async function tripleDetail(store: CalStore, key: string): Promise<string> {
     flags.push("drift");
   if (typeof doc.zoom_override === "number" && doc.zoom_override > 0)
     flags.push(`zoom ${(doc.zoom_override as number).toFixed(2)}×`);
+  if (typeof doc.baseline_mm === "number" && doc.baseline_mm > 0)
+    flags.push(`baseline ${Math.round(doc.baseline_mm as number)} mm`);
   return flags.length ? flags.join(" · ") : "no overrides";
 }
 

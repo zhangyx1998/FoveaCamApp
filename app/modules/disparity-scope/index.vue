@@ -13,10 +13,9 @@ You may find the full license in project root directory.
   state/commands — no `core`, camera, or calibration access.
 -->
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, ref } from "vue";
 import type { Point2d, Size } from "core/Geometry";
 import { ROLE, THEME } from "@lib/camera-config";
-import { useAppConfig } from "@lib/config";
 import { useSession, usePipeFrame } from "@lib/orchestrator/client";
 import { nodeId } from "@lib/orchestrator/graph-contract";
 import { degrees, clamp } from "@lib/util";
@@ -42,7 +41,6 @@ import InlineSelect from "@src/components/InlineSelect.vue";
 import Drawer from "@src/components/Drawer.vue";
 import RangeSlider from "@src/inputs/range-slider.vue";
 
-const app_config = await useAppConfig();
 const session = useSession(disparity, "disparity-scope");
 const { state, telemetry } = session;
 // Recording context (capture-recorder-everywhere ruling 2): registers this
@@ -57,9 +55,10 @@ new Recording(session, "disparity-scope");
 // disposed on unmount by the facade.
 new Capture(session, "disparity-scope");
 
-onMounted(() => {
-  if (app_config.baseline_distance_mm) state.baseline = app_config.baseline_distance_mm;
-});
+// Baseline is RESOLVED SERVER-SIDE now (Ruling A, per-triplet-settings wave):
+// the session reads the leased triple's `baseline_mm` (falling back to the
+// legacy app-level value, else 200) at activate and pushes it into
+// `state.baseline`. The renderer no longer seeds it from app config.
 
 // View re-plumb (pid-nodes-and-view-replumb.md §Renderer): the L/C/R main views
 // source their per-camera `undistort` pipes DIRECTLY via `usePipeFrame` (off the
@@ -150,20 +149,30 @@ const scale_ratio = computed<number>({
   get: () => state.tuning.scale,
   set: (v) => setTuning("scale", v),
 });
-// The magnification actually driving the template match, under the RULED
-// precedence (2026-07-09), mirroring the session's `matchZoom()`: an explicit
-// `state.zoom > 0` is AUTHORITATIVE; `zoom === 0` is "Auto" → the calibration-
-// measured value (else 1). Keeps the "Template Scale" / footprint readouts
-// honest in both modes.
+// The per-triple zoom override (>0), or null — the middle resolution tier.
+const triple_override = computed(() =>
+  telemetry.zoom_override != null && telemetry.zoom_override > 0
+    ? telemetry.zoom_override
+    : null,
+);
+// The magnification actually driving the template match, under the RULED order
+// (2026-07-09, per-triplet-settings wave), mirroring the session's
+// `matchZoom()`: the knob (`state.zoom > 0`) is AUTHORITATIVE; `zoom === 0` is
+// "Auto" → the per-triple override, else the calibration-measured value, else 1.
+// Keeps the "Template Scale" / footprint readouts honest in every mode.
 const match_zoom = computed(() =>
-  state.zoom > 0 ? state.zoom : (telemetry.match_magnification ?? 1),
+  state.zoom > 0
+    ? state.zoom
+    : (triple_override.value ?? telemetry.match_magnification ?? 1),
 );
 // Auto-mode readout for the Zoom-Ratio knob (shown only at zoom 0): surfaces the
-// RESOLVED magnification the match actually uses. A measured value reads
-// "Auto N×"; with NO calibrated magnification `match_zoom` degenerates to 1, so
-// the readout must flag that (an honest fallback, not a real measured 1×).
+// RESOLVED magnification AND its source. A per-triple override reads "Auto N×
+// (triple override)"; a measured value reads "Auto N×"; with NEITHER,
+// `match_zoom` degenerates to 1 and the readout flags "(no cal)" (an honest
+// fallback, not a real measured 1×).
 const auto_hint = computed(() => {
   const z = `Auto ${match_zoom.value.toFixed(1)}×`;
+  if (triple_override.value !== null) return `${z} (triple override)`;
   return telemetry.match_magnification !== null ? z : `${z} (no cal)`;
 });
 const min_score = computed<number>({
@@ -422,11 +431,15 @@ function openDebugger(): void {
           :title="
             state.zoom > 0
               ? 'Explicit zoom drives both the sliced-view crop and the ' +
-                'template-match magnification (ruled authoritative)'
-              : telemetry.match_magnification !== null
-                ? `Auto — using the calibration-measured magnification ` +
-                  `(${telemetry.match_magnification.toFixed(2)}x); set a value to override`
-                : 'Auto — no calibrated magnification available (falls back to 1); set a value'
+                'template-match magnification (ruled authoritative — wins over ' +
+                'the per-triple override and the measured value)'
+              : triple_override !== null
+                ? `Auto — using this triple's stored zoom override ` +
+                  `(${triple_override.toFixed(2)}x); set a value here to override it`
+                : telemetry.match_magnification !== null
+                  ? `Auto — using the calibration-measured magnification ` +
+                    `(${telemetry.match_magnification.toFixed(2)}x); set a value to override`
+                  : 'Auto — no override or calibrated magnification available (falls back to 1); set a value'
           "
         >
           <span>Zoom Ratio</span>
@@ -437,7 +450,9 @@ function openDebugger(): void {
             <span
               v-if="state.zoom === 0"
               class="auto-hint"
-              :class="{ uncal: telemetry.match_magnification === null }"
+              :class="{
+                uncal: triple_override === null && telemetry.match_magnification === null,
+              }"
               >{{ auto_hint }}</span
             >
             <input type="number" min="0" step="0.1" v-model.number="state.zoom" />

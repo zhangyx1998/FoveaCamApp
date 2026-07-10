@@ -17,6 +17,7 @@ You may find the full license in project root directory.
 import { computed, ref, watchEffect } from "vue";
 import { ROLE, THEME } from "@lib/camera-config";
 import { useAppConfig } from "@lib/config";
+import { useTripleBaseline } from "@lib/triple-baseline";
 import { useController, useSession, usePipeFrame, usePidOverride } from "@lib/orchestrator/client";
 import { nodeId } from "@lib/orchestrator/graph-contract";
 import { readUrlParam, writeUrlState } from "@lib/url-state";
@@ -72,6 +73,11 @@ const frameR = pipe("R");
 const marker_size = computed(() => app_config.cal_marker_size_mm);
 const marker_ratio = computed(() => app_config.cal_marker_ratio);
 const center_marker_size = computed(() => marker_size.value * marker_ratio.value);
+// LIVE per-triple baseline (Ruling A): the marker pair sits at ±baseline/2. The
+// session publishes the leased triple's config path; this resolves the doc's
+// `baseline_mm` (falling back to the legacy app value, else 200) reactively, so
+// a Settings edit reflects in marker spacing without a restart.
+const baseline = useTripleBaseline(() => state.configPath, app_config);
 
 const canRecord = computed(
   () => ctrl.telemetry.connected && telemetry.detection.L && telemetry.detection.C && telemetry.detection.R,
@@ -234,9 +240,9 @@ function bbox(points: Point2d[]): string {
       </div>
     </Drawer>
     <RemoteCanvasTeleport>
-      <CrossHair :cx="app_config.baseline_distance_mm / 2 + marker_size" :cy="center_marker_size" weight="2" />
-      <Marker :id="state.targetId.L" :size="marker_size" :cx="-app_config.baseline_distance_mm / 2" />
-      <Marker :id="state.targetId.R" :size="marker_size" :cx="app_config.baseline_distance_mm / 2" />
+      <CrossHair :cx="baseline / 2 + marker_size" :cy="center_marker_size" weight="2" />
+      <Marker :id="state.targetId.L" :size="marker_size" :cx="-baseline / 2" />
+      <Marker :id="state.targetId.R" :size="marker_size" :cx="baseline / 2" />
       <Marker :id="state.targetId.C" :size="center_marker_size" />
     </RemoteCanvasTeleport>
   </template>

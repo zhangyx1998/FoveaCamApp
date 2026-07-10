@@ -25,13 +25,16 @@ starts, the hint says so.
 |---|---|---|
 | **Default save directory** | Base folder new captures and recordings default into (each app appends its own sub-folder). Leave it empty for automatic (an external drive if mounted, else `~/Downloads`). A red underline means the path isn't writable. | New save/record destinations opened after the change |
 | **TeleCanvas mode / URL / port** | How the app casts its projection overlay to an external display — see [TeleCanvas](#telecanvas) below. | Live |
-| **Baseline distance** | The stereo baseline, in millimetres, that Disparity Scope seeds its vergence from. | Next Disparity Scope session |
 | **Calibration marker size** | Physical marker size, in millimetres, used by the calibration tools. | Live — a running **Extrinsic** or **Drift** window's marker-size slider moves with it |
 | **Calibration marker ratio** | Inner/outer marker ratio for calibration. | Live |
 
 The two marker fields are the same values the **Extrinsic** and **Drift**
 calibration windows expose on their own sliders. Editing either place updates
 the other while both are open — they share one setting.
+
+> The **stereo baseline** used to live here as an app-wide field. It is now a
+> **per-triple** setting — expand a triple under **Calibration data** below.
+> Rigs that never set it keep the previous 200 mm behaviour with no migration.
 
 ## TeleCanvas
 
@@ -76,15 +79,23 @@ currently connected — a triple recorded on the connected rig shows its three
 serials; one from a different or absent rig falls back to a short hash. Use the
 refresh button in the section header if you've just calibrated in another window.
 
-### Per-triple zoom override
+### Per-triple settings
 
-Expand a **Triple** row (the chevron on its left) to reveal its **Zoom
-override**. Set it to the rig's known optical fovea↔wide zoom for that triple, or
-leave it at **0** to use the value measured during calibration. This is stored
-per triple; editing it does not disturb that triple's drift correction.
+Expand a **Triple** row (the chevron on its left) to reveal its per-triple
+settings. Editing either field does not disturb that triple's drift correction.
 
-> Note: the zoom override is **stored** here but not yet consumed by Disparity
-> Scope's zoom resolution — that wiring lands in a later update.
+**Zoom override.** Set it to the rig's known optical fovea↔wide zoom for that
+triple, or leave it at **0** to use the value measured during calibration.
+Disparity Scope resolves its **Auto** match zoom in the order *window zoom knob →
+this override → measured magnification → 1*, so this value drives Auto matching
+**on the next Disparity Scope session start** — the window's own zoom knob still
+overrides it live whenever the knob is set above 0.
+
+**Baseline.** The physical stereo baseline for this triple, in millimetres.
+Leave it empty to use the app default (shown inline as *app default: N mm*).
+It applies to Disparity Scope's vergence limits **on the next session start**,
+and to the **Extrinsic / Drift / Distortion** marker spacing **live** — a
+running calibration window's marker pair re-spaces as you edit this value.
 
 ### Deleting
 

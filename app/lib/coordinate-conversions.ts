@@ -132,7 +132,17 @@ export interface ConversionInputs {
   LE: ExtrinsicConversions;
   RE: ExtrinsicConversions;
   CI: { undistort: Undistort | null };
-  config: { drift_l?: Point2d; drift_r?: Point2d };
+  /** The per-triple config doc (`["triples", <hash>]`). `drift_l`/`drift_r`
+   *  feed the conversion drift; `zoom_override`/`baseline_mm` are carried
+   *  through (loadConfig reads the whole doc) for the disparity-scope session's
+   *  match-magnification + verge-limit resolution — they do NOT alter the
+   *  conversion math here. */
+  config: {
+    drift_l?: Point2d;
+    drift_r?: Point2d;
+    zoom_override?: number;
+    baseline_mm?: number;
+  };
 }
 
 export function useCoordinateConversions({

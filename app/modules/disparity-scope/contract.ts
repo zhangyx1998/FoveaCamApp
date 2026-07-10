@@ -80,11 +80,13 @@ export const disparity = defineContract({
     serials: {} as Partial<Record<"L" | "C" | "R", string>>,
     /** Target center within the wide frame (pixels). */
     target: ZERO,
-    // Physical stereo baseline (mm) — same field/default as manual-control
-    // (docs/history/refactor/orchestrator.md §7.1 S1a); the old
-    // renderer-only `useAppConfig().baseline_distance_mm` isn't reachable
-    // from the orchestrator, and those two modules already established the
-    // simpler per-module-state precedent instead of a shared app config.
+    // Physical stereo baseline (mm) — RESOLVED SERVER-SIDE at activate now
+    // (Ruling A, 2026-07-09 per-triplet-settings wave): the session reads the
+    // leased triple's `baseline_mm`, falling back to the legacy app-level
+    // `baseline_distance_mm`, else 200 (`@lib/calibration-data.resolveBaseline`),
+    // and pushes it here. The renderer no longer seeds it from app config. This
+    // 200 is only the pre-activate placeholder; the verge-limit slider reads it
+    // back. Not live: a Settings edit applies on the next session start.
     baseline: 200,
     /** Nominal FOV(wide) / FOV(fovea). Drives the sliced-view crop size, and
      *  is the template-match magnification FALLBACK only — when the extrinsic
@@ -148,6 +150,12 @@ export const disparity = defineContract({
      *  falling back to 1 when also null. The UI reads it back to show the
      *  active Auto scale. Set on activate; constant per activation. */
     match_magnification: null as number | null,
+    /** The leased triple's stored optical zoom override (>0), or null when
+     *  none is set — the MIDDLE tier of the ruled match-magnification order
+     *  (knob > override > measured > 1). The UI reads it to show "Auto N×
+     *  (triple override)" and to keep the degenerate-1× warning honest. Set on
+     *  activate; constant per activation. */
+    zoom_override: null as number | null,
     tracker_bbox: null as Rect | null,
     /** True while a pointer drag pins the target (the tracker's override is
      *  engaged; SESSION-LOCAL flag since the node split — nothing rides the

@@ -15,6 +15,7 @@ You may find the full license in project root directory.
 import { computed, ref } from "vue";
 import { ROLE, THEME } from "@lib/camera-config";
 import { useAppConfig } from "@lib/config";
+import { useTripleBaseline } from "@lib/triple-baseline";
 import { useController, useFrames, useSession, usePipeFrame } from "@lib/orchestrator/client";
 import { nodeId } from "@lib/orchestrator/graph-contract";
 import { formatNumber, type FormatNumberOptions } from "@lib/util";
@@ -56,6 +57,10 @@ const frameR = usePipeFrame(() =>
 );
 
 const marker_zoom = ref(1.0);
+// LIVE per-triple baseline (Ruling A): the L/R marker pair sits at ±baseline/2,
+// resolved from the leased triple's `baseline_mm` (legacy app value, else 200)
+// reactively — Settings edits reflect without a restart.
+const baseline = useTripleBaseline(() => state.configPath, app_config);
 
 function formatPos(pos?: Point2d): string {
   if (!pos) return "X ---, Y ---";
@@ -154,8 +159,8 @@ function toMat(H: number[]) {
     </div>
   </div>
   <RemoteCanvasTeleport>
-    <Marker :id="state.targetId.L" :size="app_config.cal_marker_size_mm * marker_zoom" :cx="-app_config.baseline_distance_mm / 2" />
-    <Marker :id="state.targetId.R" :size="app_config.cal_marker_size_mm * marker_zoom" :cx="app_config.baseline_distance_mm / 2" />
+    <Marker :id="state.targetId.L" :size="app_config.cal_marker_size_mm * marker_zoom" :cx="-baseline / 2" />
+    <Marker :id="state.targetId.R" :size="app_config.cal_marker_size_mm * marker_zoom" :cx="baseline / 2" />
     <Marker :id="state.targetId.C" :size="app_config.cal_marker_size_mm / marker_zoom" />
   </RemoteCanvasTeleport>
 </template>

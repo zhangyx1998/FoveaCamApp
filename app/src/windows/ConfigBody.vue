@@ -10,11 +10,13 @@ You may find the full license in project root directory.
        through `useConfigRef`, so an edit here applies LIVE across windows (the
        store-hub broadcasts to every open window's `Store` client). Marker
        size/ratio + the TeleCanvas URL apply live to a running calibrate-* /
-       RemoteCanvas; baseline + default save dir apply next session (hint says).
+       RemoteCanvas; the default save dir applies next session (hint says). The
+       baseline is NO LONGER here — Ruling A moved it to a per-TRIPLE setting.
     2. Calibration data — enumerate every stored intrinsic / extrinsic / triple
        document (`@lib/calibration-data`), inspect metadata, edit a triple's
-       `zoom_override`, and DELETE entries (two-step confirm). Friendly names
-       resolve against the currently-known cameras (Welcome probe list).
+       `zoom_override` + `baseline_mm`, and DELETE entries (two-step confirm).
+       Friendly names resolve against the currently-known cameras (Welcome
+       probe list).
 -->
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
@@ -29,6 +31,7 @@ import {
   enumerateCalibrationData,
   deleteCalibrationEntry,
   categoryTitle,
+  resolveBaseline,
   type CalStore,
   type CalEntry,
   type CalCategory,
@@ -45,6 +48,9 @@ const default_save_dir = await useConfigRef("default_save_dir");
 const tele_canvas_mode = await useConfigRef("tele_canvas_mode");
 const tele_canvas_url = await useConfigRef("tele_canvas_url");
 const tele_canvas_port = await useConfigRef("tele_canvas_port");
+// LEGACY app-level baseline — no longer an App-section field (Ruling A moved
+// the baseline to a per-TRIPLE setting). Kept here only to show the effective
+// FALLBACK value in a triple's baseline hint when that triple has no override.
 const baseline_distance_mm = await useConfigRef("baseline_distance_mm");
 const cal_marker_size_mm = await useConfigRef("cal_marker_size_mm");
 const cal_marker_ratio = await useConfigRef("cal_marker_ratio");
@@ -162,6 +168,26 @@ function setZoom(key: string, value: number) {
   else doc.zoom_override = value;
 }
 
+/** Read a triple's baseline_mm override (0 / absent = none → use app default). */
+function baselineOf(key: string): number {
+  const v = tripleDocs.value[key]?.baseline_mm;
+  return typeof v === "number" ? v : 0;
+}
+/** Write a triple's baseline_mm: 0/blank CLEARS the field (fall back to the app
+ *  default), >0 stores it — other fields ride along untouched on re-persist. */
+function setBaseline(key: string, value: number) {
+  const doc = tripleDocs.value[key];
+  if (!doc) return;
+  if (!value || value <= 0) delete doc.baseline_mm;
+  else doc.baseline_mm = value;
+}
+/** The effective baseline (mm) a triple with NO override falls back to — the
+ *  legacy app value, else 200 (the SHARED `resolveBaseline` rule). Shown in the
+ *  empty-field hint so the operator sees the number the rig will actually use. */
+const effectiveBaselineFallback = computed(() =>
+  resolveBaseline(undefined, baseline_distance_mm.value),
+);
+
 // ---- Two-step delete confirm -----------------------------------------------
 const confirming = ref<string | null>(null);
 
@@ -268,15 +294,6 @@ onUnmounted(() => {
       <p v-else-if="teleIsHost && teleStatus.error" class="hint err">{{ teleStatus.error }}</p>
 
       <label class="row">
-        <span class="label">Baseline distance</span>
-        <span class="field">
-          <input type="number" step="1" min="0" v-model.number="baseline_distance_mm" />
-          <span class="unit">mm</span>
-        </span>
-      </label>
-      <p class="hint">Stereo baseline. Applies on the next Disparity Scope session.</p>
-
-      <label class="row">
         <span class="label">Calibration marker size</span>
         <span class="field">
           <input type="number" step="1" min="1" v-model.number="cal_marker_size_mm" />
@@ -378,8 +395,36 @@ onUnmounted(() => {
               </span>
             </label>
             <p class="hint">
-              0 = none (use measured magnification). Stored per triple; wiring
-              into Disparity Scope's zoom resolution lands in a later wave.
+              0 = none (use the calibration-measured magnification). Drives
+              Disparity Scope's Auto match zoom on the next session start; the
+              window's own zoom knob still overrides when set.
+            </p>
+
+            <label class="row">
+              <span class="label">Baseline</span>
+              <span class="field">
+                <!-- Empty (0) shows the effective app-default fallback inline;
+                     the input stays anchored so toggling never reflows. -->
+                <span v-if="baselineOf(e.key) === 0" class="none-hint"
+                  >app default: {{ effectiveBaselineFallback }} mm</span
+                >
+                <input
+                  type="number"
+                  step="1"
+                  min="0"
+                  :value="baselineOf(e.key)"
+                  @input="
+                    (ev) => setBaseline(e.key, Number((ev.target as HTMLInputElement).value))
+                  "
+                />
+                <span class="unit">mm</span>
+              </span>
+            </label>
+            <p class="hint">
+              Physical stereo baseline for this triple. Empty = use the app
+              default. Applies to Disparity Scope's verge limits and the
+              Extrinsic / Drift / Distortion marker spacing (marker spacing
+              updates live; the verge limit applies on the next session start).
             </p>
           </div>
         </div>

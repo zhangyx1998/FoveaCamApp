@@ -41,6 +41,11 @@ export const calibrateDrift = defineContract({
     /** Leased camera serials per role (C-22) — the renderer binds raw previews
      *  to the `camera:<serial>` pipe via `usePipeFrame`. Set on acquire. */
     serials: {} as Partial<Record<"L" | "C" | "R", string>>,
+    /** The leased triple's config store path (`["triples", <hash>]`), or []
+     *  pre-lease — the renderer opens this doc reactively to read the per-triple
+     *  `baseline_mm` for LIVE marker spacing (per-triplet-settings wave,
+     *  `useTripleBaseline`). Set on acquire. */
+    configPath: [] as string[],
   },
   telemetry: {
     ready: false as boolean,

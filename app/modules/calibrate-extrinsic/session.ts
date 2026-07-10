@@ -24,7 +24,7 @@
 import { type ServerSession } from "@orchestrator/runtime";
 import { defineResourceSession, type ResourceScope } from "@orchestrator/resource-session";
 import { matchTriple, retryUntil, type CameraLease } from "@orchestrator/registry";
-import { loadIntrinsic, fitExtrinsicRegression } from "@orchestrator/calibration";
+import { loadIntrinsic, fitExtrinsicRegression, tripleConfigPath } from "@orchestrator/calibration";
 import { controllerNode, startPacer, type PositionInput } from "@orchestrator/controller-node";
 import { startServo, type MarkerTracker, type Servo } from "@orchestrator/marker-tracker";
 import { applyPidOverride } from "@orchestrator/pid-node";
@@ -227,6 +227,14 @@ export default function calibrateExtrinsicSession(
       // (A-31, real-1f step 3). Marker detection stays off-loop on
       // `detector.stream`, so this session no longer taps `onView` at all.
       publishSerials(leases, taps, s);
+      // Publish the leased triple's config store path so the renderer can open
+      // the `["triples", <hash>]` doc reactively for LIVE per-triple baseline
+      // marker spacing (per-triplet-settings wave, Ruling A).
+      s.setState(
+        "configPath",
+        await tripleConfigPath(leases.L.camera, leases.C.camera, leases.R.camera),
+      );
+      scope.defer(() => s.setState("configPath", []));
       scope.defer(() => taps.dispose());
       // Drains FIRST: stop whichever actuation `enterStep` currently has active.
       scope.defer(() => {
