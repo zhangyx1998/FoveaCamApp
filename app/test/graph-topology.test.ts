@@ -173,6 +173,19 @@ describe("buildTopology", () => {
     expect(buildTopology(deps).seq).toBeLessThan(buildTopology(deps).seq);
   });
 
+  it("folds a wiring's serial→role map onto GraphTopology.roles (display-only)", () => {
+    const deps = { listPipes: () => [], workloads: () => ({}) };
+    expect(buildTopology(deps).roles).toBeUndefined(); // manage-cameras: no roles
+    const dispose = registerGraphWiring({
+      nodes: [],
+      edges: [],
+      roles: { "111": "L", "222": "C", "333": "R" },
+    });
+    expect(buildTopology(deps).roles).toEqual({ "111": "L", "222": "C", "333": "R" });
+    dispose();
+    expect(buildTopology(deps).roles).toBeUndefined(); // drain removes it
+  });
+
   // Edge-flow spec (user 2026-07-08): every edge reports TX (producer output
   // Hz + bytes/s + maxInterval), RX (consumer per-port input Hz +
   // maxInterval), and a drop rate ONLY on lossy links (tx−rx when both

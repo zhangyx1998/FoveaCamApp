@@ -120,6 +120,12 @@ export type GraphNode = {
    *  bumps epoch — treat (id, epoch) as the stable layout key. */
   epoch?: number;
   stats?: NodeStats;
+  /** Pipe-transport extras mirrored from `NodeReport.pipe` — the live SHM
+   *  consumer refcount is the POSITIVE "no downstream demand" signal the
+   *  profiler uses to mark a parked pipe idle (a 0-consumer pipe emits no
+   *  consumer edge, so the node must carry the count). Only meaningful when
+   *  `transport === "pipe"`. */
+  pipe?: { consumers: number; bytesTotal: number };
 };
 
 /** One direction of an edge's measured flow. Raw numbers in JSON (snapshot
@@ -178,6 +184,12 @@ export type GraphTopology = {
   at: number;
   nodes: GraphNode[];
   edges: GraphEdge[];
+  /** DISPLAY-ONLY serial→role map ("L"/"C"/"R") published by the session that
+   *  leases the camera triple, so the profiler labels leased cameras by role
+   *  instead of serial in an application context. ABSENT (→ serial labels) for
+   *  manage-cameras, where the serial IS the identity. Never keyed onto node
+   *  ids — labeling is a pure view concern (`nodeLabel`). */
+  roles?: Record<string, string>;
 };
 
 /** THE single source of node-id spelling (C-24 step 1: the former

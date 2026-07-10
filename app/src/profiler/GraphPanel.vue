@@ -33,7 +33,8 @@ import {
 } from "@fortawesome/free-solid-svg-icons";
 import type { GraphTopology } from "@lib/orchestrator/graph-contract";
 import {
-  focusSet,
+  effectiveOpacity,
+  hoverDistances,
   membershipKey,
   toElements,
   type GraphElement,
@@ -69,11 +70,15 @@ const KIND_COLORS: Record<string, string> = {
   fovea: "#2b8a83",
   composite: "#5a7d8a",
   view: "#555c66",
+  renderer: "#48566a",
   record: "#8a2b4f",
   controller: "#a8742f",
 };
 
-const STYLE: cytoscape.StylesheetJson = [
+// Cast-through like LAYOUT below: cytoscape's bundled d.ts under-types several
+// runtime-valid values (string `transition-duration` "0.2s", `z-index-compare`,
+// unbundled-bezier endpoint strings) — the runtime accepts them, the types lag.
+const STYLE = [
   {
     selector: "node",
     style: {
@@ -92,12 +97,27 @@ const STYLE: cytoscape.StylesheetJson = [
       "font-family": "monospace",
       color: "#d8dde3",
       "text-max-width": "160px",
+      // Resting z (nodes above edges) + manual compare so the hover gradient's
+      // per-element z-index (nearest on top) can order nodes vs edges freely.
+      "z-index": 10,
+      "z-index-compare": "manual",
+      // ONLY opacity animates (ruled instant/snap interaction; the user carved
+      // out opacity for the hover fade) — positions/colors stay instant.
+      "transition-property": "opacity",
+      "transition-duration": "0.2s",
     },
   },
   ...Object.entries(KIND_COLORS).map(([kind, color]) => ({
     selector: `node[kind = "${kind}"]`,
     style: { "background-color": color },
   })),
+  {
+    // L/C/R role identity (tokens --role-l/-c/-r, mirrored in graph-view's
+    // ROLE_COLORS): border tint on role-labeled camera-chain nodes. Placed
+    // BEFORE saturated/idle so those states still override the border.
+    selector: "node[roleColor]",
+    style: { "border-color": "data(roleColor)" },
+  },
   {
     // SATURATED — the same ≥0.9 semantics + red as the workload table.
     selector: "node.saturated",
@@ -109,13 +129,37 @@ const STYLE: cytoscape.StylesheetJson = [
     },
   },
   {
+    // IDLE (user 2026-07-10): a consumer-gated producer parked because nothing
+    // downstream demands it (C-21 gate) — an EXPECTED state, NOT the red stall.
+    // Desaturated slate + resting opacity so it recedes without vanishing; wins
+    // over the kind fills but never competes with the SATURATED red (mutually
+    // exclusive). The hover gradient overrides `opacity` inline while hovering.
+    selector: "node.idle",
+    style: {
+      "background-color": "#2a2e33",
+      "border-color": "#3a3f46",
+      // --text-faint (tokens.css idle tier): the element opacity already halves
+      // this — darker greys pushed the caption toward illegible.
+      color: "#888",
+      opacity: 0.5,
+    },
+  },
+  {
     selector: "edge",
     style: {
       width: 1.5,
       "line-color": "#4a525c",
       "target-arrow-color": "#4a525c",
       "target-arrow-shape": "triangle",
-      "curve-style": "bezier",
+      // Curved stems (user request) leaving the producer's RIGHT-middle and
+      // entering the consumer's LEFT-middle — matches the LR dagre flow.
+      // `control-point-distances` (data(cpd), from graph-view) bows every edge
+      // and fans parallels apart so they never overlap.
+      "curve-style": "unbundled-bezier",
+      "source-endpoint": "50% 0%",
+      "target-endpoint": "-50% 0%",
+      "control-point-distances": "data(cpd)",
+      "control-point-weights": 0.5,
       "arrow-scale": 0.8,
       label: "data(label)",
       "text-wrap": "wrap",
@@ -125,6 +169,10 @@ const STYLE: cytoscape.StylesheetJson = [
       "text-background-color": "#16181b",
       "text-background-opacity": 0.85,
       "text-background-padding": "2px",
+      "z-index": 1,
+      "z-index-compare": "manual",
+      "transition-property": "opacity",
+      "transition-duration": "0.2s",
     },
   },
   {
@@ -140,9 +188,25 @@ const STYLE: cytoscape.StylesheetJson = [
     },
   },
   {
+    // IDLE link: no downstream demand — dashed + desaturated + resting-dimmed,
+    // caption reads "idle" (set in toElements), distinct from the red
+    // `.dropping` warn (a real loss under live demand). Hover overrides opacity.
+    selector: "edge.idle",
+    style: {
+      "line-color": "#33383f",
+      "target-arrow-color": "#33383f",
+      // --text-faint (tokens.css idle tier) — see node.idle color rationale.
+      color: "#888",
+      "line-style": "dashed",
+      opacity: 0.5,
+    },
+  },
+  {
     // Hover feedback (nodes + edges): a soft overlay halo instead of color
-    // overrides, so semantic tints (kind fills, saturated red, dropping red)
-    // stay untouched under the highlight.
+    // overrides, so semantic tints (kind fills, saturated red, dropping red,
+    // idle slate) stay untouched under the highlight. The distance-graded
+    // opacity gradient + z-order are applied as INLINE styles (`applyHover`),
+    // not classes, since they are per-element continuous values.
     selector: ".hover",
     style: {
       "overlay-color": "#ffffff",
@@ -150,24 +214,16 @@ const STYLE: cytoscape.StylesheetJson = [
       "overlay-padding": 4,
     },
   },
-  {
-    // Hover FOCUS dim: everything OUTSIDE the hovered element's focus set
-    // (graph-view's focusSet) recedes. Opacity ONLY — element opacity covers
-    // body/line + label without clobbering the semantic tints or the .hover
-    // overlay-halo (deliberately orthogonal channels). 0.2 clearly recedes
-    // while the dimmed labels stay legible for orientation.
-    selector: ".dimmed",
-    style: {
-      opacity: 0.2,
-    },
-  },
-];
+] as unknown as cytoscape.StylesheetJson;
 
 const LAYOUT = {
   name: "dagre",
   rankDir: "LR",
-  nodeSep: 24,
-  rankSep: 56,
+  // Roomier than the pre-curve straight-edge layout: the bezier bow + the
+  // fixed left/right endpoints need clearance so labels and stems don't collide.
+  nodeSep: 30,
+  rankSep: 72,
+  edgeSep: 14,
   padding: 12,
   animate: false,
   fit: true,
@@ -211,47 +267,61 @@ function apply(t: GraphTopology): void {
       if (node.nonempty()) node.position({ ...pos });
     }
   }
-  // Hover/dim reconciliation: the diff above rewrites classes wholesale
-  // (`existing.classes(...)`) and adds fresh elements without dim state — a
-  // dimmed class must neither leak onto re-created elements nor vanish from
-  // surviving ones mid-hover. If the hovered element itself churned away,
-  // drop the whole hover state (its mouseout never fires); otherwise restore
-  // the halo + re-derive the focus dim from the new element set.
+  // Hover reconciliation: the diff above rewrites classes wholesale
+  // (`existing.classes(...)`) and adds fresh elements — the inline hover
+  // opacity/z-index must be re-derived over the NEW element set so it neither
+  // strands on re-created elements nor drops from survivors mid-hover. If the
+  // hovered element itself churned away, drop the whole hover state (its
+  // mouseout never fires); otherwise restore the halo + re-run the gradient.
   if (hoveredId && !wanted.has(hoveredId)) {
     hoveredId = null;
     hover.value = null;
     overNode = overEdge = false;
     settleCursor();
+    clearHover();
   }
   if (hoveredId) {
     cy.getElementById(hoveredId).addClass("hover");
-    applyFocus();
+    applyHover();
   }
 }
 
-// --- Hover focus dim (user 2026-07-08) ----------------------------------------
+// --- Distance-graded hover (user 2026-07-10) ----------------------------------
 
-// The elements last applied to the canvas — the pure `focusSet` computes the
-// focus set from these (same ids as the live cytoscape elements).
+// The elements last applied to the canvas — the pure `hoverDistances` BFS runs
+// over these (same ids as the live cytoscape elements).
 let lastEls: GraphElement[] = [];
 let hoveredId: string | null = null;
 
-/** Dim everything outside the hovered element's focus set (batched — one
- *  style recalc per hover, not N). An unknown/absent hovered id degrades to
- *  clearing all dimming — never a fully-dimmed graph. */
-function applyFocus(): void {
-  if (!cy) return;
-  const keep = hoveredId ? focusSet(lastEls, hoveredId) : new Set<string>();
-  if (keep.size === 0) return clearFocus();
+/** Distance-graded hover (user 2026-07-10): fade every element by its BFS hop
+ *  distance from the hovered one (nearest opaque, far → floor) and z-order so
+ *  the nearest draws on top. Opacity + z-index are set INLINE (highest style
+ *  priority) so the `.idle` resting styling composes via `effectiveOpacity`
+ *  (min of idle-resting and the hover gradient). One batch per hover.
+ *
+ *  An unknown/absent hovered id (element churned away) yields an EMPTY distance
+ *  map → clear the hover styling, never fade the whole graph to the floor. */
+function applyHover(): void {
+  if (!cy || !hoveredId) return clearHover();
+  const dist = hoverDistances(lastEls, hoveredId);
+  if (dist.size === 0) return clearHover();
   cy.batch(() => {
-    for (const el of cy!.elements().toArray())
-      if (keep.has(el.id())) el.removeClass("dimmed");
-      else el.addClass("dimmed");
+    for (const el of cy!.elements().toArray()) {
+      const d = dist.get(el.id());
+      el.style("opacity", effectiveOpacity(d ?? Infinity, el.hasClass("idle")));
+      // Nearest on top; unreachable elements sink to the back.
+      el.style("z-index", d === undefined ? 0 : Math.max(0, 100 - d));
+    }
   });
 }
 
-function clearFocus(): void {
-  cy?.batch(() => cy!.elements().removeClass("dimmed"));
+function clearHover(): void {
+  cy?.batch(() =>
+    cy!.elements().forEach((el) => {
+      el.removeStyle("opacity");
+      el.removeStyle("z-index");
+    }),
+  );
 }
 
 // --- Vertical resize (persisted) ---------------------------------------------
@@ -270,6 +340,22 @@ function resizeAnchored(): void {
 }
 
 watch(height, () => requestAnimationFrame(resizeAnchored));
+
+// Window resize is the path that DRIFTS without this: the canvas is width:100%,
+// so a window resize changes its CSS box while cytoscape keeps rendering at the
+// stale size (and the next height-drag/fullscreen anchor computes its delta
+// from that stale width). Re-anchor on every window resize (rAF-coalesced;
+// re-runs are no-ops once cy.width() already matches the container). Height
+// drag + fullscreen already route through resizeAnchored.
+let resizeQueued = false;
+function onWindowResize(): void {
+  if (resizeQueued) return; // one rAF per burst — actually coalesced
+  resizeQueued = true;
+  requestAnimationFrame(() => {
+    resizeQueued = false;
+    resizeAnchored();
+  });
+}
 
 function persistHeight(): void {
   localStorage.setItem(GRAPH_HEIGHT_KEY, String(height.value));
@@ -389,7 +475,7 @@ onMounted(() => {
     overNode = true;
     settleCursor();
     hoveredId = evt.target.id();
-    applyFocus();
+    applyHover();
     const detail = evt.target.data("detail") as HoverDetail | undefined;
     if (!detail) return;
     const bb = evt.target.renderedBoundingBox();
@@ -400,7 +486,7 @@ onMounted(() => {
     overNode = false;
     settleCursor();
     hoveredId = null;
-    clearFocus();
+    clearHover();
     hover.value = null;
   });
   cy.on("mouseover", "edge", (evt) => {
@@ -408,7 +494,7 @@ onMounted(() => {
     overEdge = true;
     settleCursor();
     hoveredId = evt.target.id();
-    applyFocus();
+    applyHover();
     const detail = evt.target.data("detail") as HoverDetail | undefined;
     if (!detail) return;
     const p = evt.target.renderedMidpoint();
@@ -419,15 +505,25 @@ onMounted(() => {
     overEdge = false;
     settleCursor();
     hoveredId = null;
-    clearFocus();
+    clearHover();
     hover.value = null;
   });
   // The card's anchor goes stale the moment the scene moves under it.
   cy.on("viewport", () => (hover.value = null));
   cy.on("grab", "node", () => (hover.value = null));
+  // `z-index-compare: manual` disables cytoscape's auto-raise of grabbed
+  // nodes — without this a dragged node can slide BEHIND its neighbors.
+  // Raise above the hover gradient's 100-band while grabbed; on release,
+  // re-derive (applyHover re-stamps every element) or clear the override.
+  cy.on("grab", "node", (evt) => evt.target.style("z-index", 200));
+  cy.on("free", "node", (evt) => {
+    if (hoveredId) applyHover();
+    else evt.target.removeStyle("z-index");
+  });
   container.value?.addEventListener("wheel", onWheel, { passive: false });
   container.value?.addEventListener("pointerdown", onPointerDown);
   window.addEventListener("pointerup", onPointerUp);
+  window.addEventListener("resize", onWindowResize);
   document.addEventListener("fullscreenchange", onFullscreenChange);
   if (props.topology) apply(props.topology);
 });
@@ -442,6 +538,7 @@ watch(
 onBeforeUnmount(() => {
   container.value?.removeEventListener("wheel", onWheel);
   window.removeEventListener("pointerup", onPointerUp);
+  window.removeEventListener("resize", onWindowResize);
   document.removeEventListener("fullscreenchange", onFullscreenChange);
   cy?.destroy();
   cy = null;

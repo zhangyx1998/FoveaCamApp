@@ -207,11 +207,51 @@ export type GraphElement = {
 const fmtRate = (v: number): string =>
   v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(2);
 
-/** Node caption — the short name ONLY (2 tail segments). Metrics moved to
- *  the hover card (`nodeDetail`); the saturated red styling stays always-on
- *  so the bottleneck still screams without hovering. */
-export function nodeLabel(node: GraphNode): string {
+/** Serial→role abbreviation map ("L"/"C"/"R") published by the session that
+ *  leases the camera triple (rides `GraphTopology.roles`). manage-cameras
+ *  publishes none → serials stay (they ARE the identity there). */
+export type RoleMap = Record<string, string>;
+
+/** The action tail of a camera-rooted id: the LAST meaningful action segment
+ *  plus any trailing numeric slot, with the structural breadcrumb dropped
+ *  (`undistort/fovea/2` → `fovea/2`, `undistort/kcf` → `kcf`). The graph EDGES
+ *  already carry the chain, so labels stay short (no `undistort/…` prefix). */
+function actionTail(tail: string): string {
+  const segs = tail.split("/");
+  let i = segs.length - 1;
+  while (i > 0 && /^\d+$/.test(segs[i]!)) i--; // keep trailing numeric slot(s)
+  const slot = segs.slice(i + 1).join("/");
+  return slot ? `${segs[i]}/${slot}` : segs[i]!;
+}
+
+/** Node caption. In an application context a leased camera shows its ROLE
+ *  (L/C/R) instead of its serial — `camera/<serial>` → `C`, middleware →
+ *  `<role>/<action>` (e.g. `C/undistort`, `C/fovea/2`) with NO upstream
+ *  breadcrumb. Unknown serials + non-camera nodes fall back to the 2-segment
+ *  tail. Metrics live in the hover card (`nodeDetail`, keyed on the full id);
+ *  the saturated red styling stays always-on so the bottleneck screams. */
+export function nodeLabel(node: GraphNode, roles?: RoleMap): string {
+  const cam = /^camera\/([^/]+)(?:\/(.+))?$/.exec(node.id);
+  const role = cam ? roles?.[cam[1]!] : undefined;
+  if (cam && role) return cam[2] ? `${role}/${actionTail(cam[2])}` : role;
   return node.id.split("/").slice(-2).join("/");
+}
+
+/** The app-wide L/C/R color identity (tokens.css --role-l/-c/-r; cytoscape's
+ *  JS stylesheet can't read CSS custom properties, so the values are mirrored
+ *  here like KIND_COLORS). Border tint only — fills stay kind-colored. */
+const ROLE_COLORS: Record<string, string> = {
+  L: "cyan",
+  C: "orange",
+  R: "greenyellow",
+};
+
+/** Border tint for role-labeled camera-chain nodes; undefined when the node
+ *  has no known role (falls back to the default border). */
+export function roleColor(node: GraphNode, roles?: RoleMap): string | undefined {
+  const cam = /^camera\/([^/]+)/.exec(node.id);
+  const role = cam ? roles?.[cam[1]!] : undefined;
+  return role ? ROLE_COLORS[role] : undefined;
 }
 
 /** Structured hover card (title + label/value rows) — rendered as a small
@@ -321,13 +361,173 @@ export function edgeDetail(e: GraphEdge): HoverDetail {
   return { title: `${e.from} → ${e.to}`, rows };
 }
 
+// --- Renderer consumer-sink collapse (user 2026-07-10) ----------------------
+
+/** The single collapsed renderer node id (see `collapseConsumerSinks`). */
+export const RENDERER_ID = "renderer";
+const CONSUMER_SINK_RE = /\/consumers$/;
+
+/** Collapse the anonymous per-pipe SHM consumer sinks (`<pipeId>/consumers`,
+ *  kind "view"/transport "sink" — emitted by `graph-topology.ts`) into ONE
+ *  shared `renderer` node: every consuming pipe keeps its OWN fan-in edge (rate
+ *  + consumer refcount preserved in the edge/hover detail), so the graph loses
+ *  N anonymous sinks without losing any flow information. Real orchestrator-side
+ *  consumers (workers, recorder, capture, win/ nodes) are NOT sinks matching
+ *  this pattern and pass through untouched. Idempotent + reference-stable when
+ *  there is nothing to collapse (no re-layout churn). */
+export function collapseConsumerSinks(t: GraphTopology): GraphTopology {
+  const sinks = new Set(
+    t.nodes.filter((n) => n.transport === "sink" && CONSUMER_SINK_RE.test(n.id)).map((n) => n.id),
+  );
+  if (sinks.size === 0) return t;
+  const nodes: GraphNode[] = t.nodes.filter((n) => !sinks.has(n.id));
+  nodes.push({ id: RENDERER_ID, kind: "renderer", output: null, transport: "sink" });
+  const edges: GraphEdge[] = t.edges.map((e) =>
+    sinks.has(e.to) ? { ...e, to: RENDERER_ID } : e,
+  );
+  return { ...t, nodes, edges };
+}
+
+// --- Idle derivation (user 2026-07-10) --------------------------------------
+
+/** IDLE = not running because nothing downstream DEMANDS the output — a
+ *  consumer-gated producer parked by design (C-21 gate), an EXPECTED state that
+ *  renders desaturated + dimmed with an "idle" caption, NOT the red stalled
+ *  accent. Positive no-demand evidence, propagated UPSTREAM over the topology:
+ *   - a pipe node whose `pipe.consumers === 0` — zero SHM subscribers (the
+ *     production signal: a 0-consumer pipe emits NO consumer edge, so the count
+ *     rides the node) — and no live native/worker consumer either;
+ *   - an explicit `consumers === 0` on a consumer edge (the aggregate sink);
+ *   - a node every one of whose downstream consumers is ITSELF idle (hollow
+ *     demand — a parked subscriber is no demand).
+ *  Conversely a pipe with `pipe.consumers > 0` is DEMANDED (live SHM readers).
+ *  A node with a positive rate is NEVER idle (demonstrably spinning). A
+ *  zero-rate node with ANY live downstream is STALLED (kept red), not idle.
+ *  Demand that cannot be positively DISPROVEN (an unmetered terminal producer
+ *  with no pipe count, a non-pipe edge with no consumer count) defaults to
+ *  LIVE — never invent idle, a false "idle" would hide a real stall. */
+export interface IdleSet {
+  nodes: Set<string>;
+  edges: Set<string>;
+}
+
+export function deriveIdle(t: GraphTopology): IdleSet {
+  const out = new Map<string, GraphEdge[]>();
+  const inc = new Map<string, GraphEdge[]>();
+  const push = (m: Map<string, GraphEdge[]>, k: string, e: GraphEdge): void => {
+    const arr = m.get(k);
+    if (arr) arr.push(e);
+    else m.set(k, [e]);
+  };
+  for (const e of t.edges) {
+    push(out, e.from, e);
+    push(inc, e.to, e);
+  }
+  const byId = new Map(t.nodes.map((n) => [n.id, n]));
+  const memo = new Map<string, boolean>();
+  const onStack = new Set<string>();
+
+  // Mutually recursive over the DAG; function declarations so the forward
+  // reference resolves and the cycle guard (PID feedback loops) can't hang.
+  function nodeIdle(id: string): boolean {
+    const cached = memo.get(id);
+    if (cached !== undefined) return cached;
+    if (onStack.has(id)) return false; // cycle → treat as demanded, never false-idle
+    onStack.add(id);
+    const node = byId.get(id);
+    let idle: boolean;
+    const pipe = node?.pipe;
+    const stats = node?.stats;
+    if ((stats?.ratePerSec ?? 0) > 0 || (stats?.utilization ?? 0) > 0 || stats?.saturated) {
+      // Demonstrably spinning (rate) OR burning CPU (util/saturated): a pegged
+      // node that emits nothing is a STALL and must never paint as parked —
+      // the saturated red stays the loudest thing. Parked C-21 producers have
+      // ~0 util, so util > 0 is a safe not-parked gate.
+      idle = false;
+    } else if (pipe && (pipe.consumers ?? 0) > 0) {
+      idle = false; // live SHM subscribers = real demand
+    } else {
+      const outs = out.get(id) ?? [];
+      if (outs.length > 0) {
+        idle = outs.every(edgeIdle); // demand only via live downstream edges
+      } else if (pipe) {
+        idle = true; // a metered pipe with 0 consumers and no consumer edge = parked
+      } else {
+        // Terminal, no pipe count: a consumer/sink is idle ONLY with positive
+        // no-demand evidence (every feeding edge reports zero subscribers); an
+        // unmetered producer defaults to live (never invent idle).
+        const ins = inc.get(id) ?? [];
+        idle = ins.length > 0 && ins.every((e) => e.consumers === 0);
+      }
+    }
+    onStack.delete(id);
+    memo.set(id, idle);
+    return idle;
+  }
+  function edgeIdle(e: GraphEdge): boolean {
+    // Explicit zero-subscriber pipe → idle; otherwise idle iff the CONSUMER is
+    // idle (a `consumers > 0` link into a parked consumer is still hollow).
+    return e.consumers === 0 || nodeIdle(e.to);
+  }
+
+  const nodes = new Set<string>();
+  for (const n of t.nodes) if (nodeIdle(n.id)) nodes.add(n.id);
+  const edges = new Set<string>();
+  for (const e of t.edges) if (edgeIdle(e)) edges.add(edgeId(e));
+  return { nodes, edges };
+}
+
+// --- Curved-edge control points (user 2026-07-10) ---------------------------
+
+/** A gentle single-edge bow (px, perpendicular to the endpoints) so every stem
+ *  reads as a curve, not a straight line. */
+const SINGLE_BOW = 16;
+/** Symmetric spread for edges between the SAME node pair so parallels (incl.
+ *  bidirectional A→B / B→A) never overlap. */
+const PARALLEL_SPREAD = 26;
+
+/** Per-edge `control-point-distances` for `unbundled-bezier`, keyed by edgeId:
+ *  a single edge bows by `SINGLE_BOW`; parallels between one undirected node
+ *  pair fan out symmetrically. */
+function controlPointDistances(edges: GraphEdge[]): Map<string, number> {
+  const groups = new Map<string, GraphEdge[]>();
+  for (const e of edges) {
+    const key = e.from < e.to ? `${e.from}\0${e.to}` : `${e.to}\0${e.from}`;
+    const g = groups.get(key);
+    if (g) g.push(e);
+    else groups.set(key, [e]);
+  }
+  const cpd = new Map<string, number>();
+  for (const g of groups.values()) {
+    if (g.length === 1) cpd.set(edgeId(g[0]!), SINGLE_BOW);
+    else g.forEach((e, i) => cpd.set(edgeId(e), PARALLEL_SPREAD * (i - (g.length - 1) / 2)));
+  }
+  return cpd;
+}
+
 /** Reduce a topology to cytoscape element definitions. Pure data — the panel
- *  component diffs these against the live graph by element id. */
-export function toElements(t: GraphTopology): GraphElement[] {
+ *  component diffs these against the live graph by element id. Applies the two
+ *  display normalizations (both here so `membershipKey` sees the SAME graph):
+ *  SHM consumer-sink collapse, then per-element idle derivation. */
+export function toElements(t0: GraphTopology): GraphElement[] {
+  const t = collapseConsumerSinks(t0);
+  const idle = deriveIdle(t);
+  const cpd = controlPointDistances(t.edges);
   const els: GraphElement[] = t.nodes.map((n) => ({
     group: "nodes",
-    data: { id: n.id, kind: n.kind, label: nodeLabel(n), detail: nodeDetail(n) },
-    classes: n.stats?.saturated ? "saturated" : "",
+    data: {
+      id: n.id,
+      kind: n.kind,
+      label: nodeLabel(n, t.roles),
+      detail: nodeDetail(n),
+      ...(() => {
+        const c = roleColor(n, t.roles);
+        return c ? { roleColor: c } : {};
+      })(),
+    },
+    // Mutually exclusive BY CONSTRUCTION: deriveIdle vetoes idle on any
+    // saturated/util>0 node, so a pegged node always keeps its red accent.
+    classes: idle.nodes.has(n.id) ? "idle" : n.stats?.saturated ? "saturated" : "",
   }));
   const known = new Set(t.nodes.map((n) => n.id));
   for (const e of t.edges) {
@@ -335,57 +535,102 @@ export function toElements(t: GraphTopology): GraphElement[] {
     // Stage-1 derivation never emits one; a real snapshot glitch must not
     // take the panel down).
     if (!known.has(e.from) || !known.has(e.to)) continue;
+    const id = edgeId(e);
+    const isIdle = idle.edges.has(id);
     els.push({
       group: "edges",
       data: {
-        id: edgeId(e),
+        id,
         source: e.from,
         target: e.to,
-        label: edgeLabel(e),
+        // No downstream demand reads "idle" (muted), NOT a red 0 Hz — the
+        // stalled accent is reserved for a stall under live demand.
+        label: isIdle ? "idle" : edgeLabel(e),
         detail: edgeDetail(e),
+        cpd: cpd.get(id) ?? SINGLE_BOW,
       },
-      classes: edgeWarns(e) ? "dropping" : "",
+      classes: isIdle ? "idle" : edgeWarns(e) ? "dropping" : "",
     });
   }
   return els;
 }
 
-/** Hover FOCUS SET (user 2026-07-08): the element ids that stay at full
- *  opacity while everything else dims. Pure — the panel applies it as a
- *  `dimmed` class inside one cytoscape batch.
+/** Hover DISTANCE (user 2026-07-10): BFS hop distance from the hovered element
+ *  over the INCIDENCE graph — a node is adjacent to its incident edges and an
+ *  edge to its two endpoint nodes, so from a hovered node its edges are 1 and
+ *  their far endpoints 2; from a hovered edge its endpoints are 1. Distance
+ *  drives the hover opacity gradient + z-order (nearest on top). Pure — the
+ *  panel maps it to per-element opacity/z-index in one batch.
  *
- *  - Hovered NODE → the node + every edge touching it + the nodes at the
- *    other end of those edges. Including the neighbor nodes is a deliberate
- *    refinement over "node and all its edges": an edge kept bright while its
- *    far endpoint fades reads as a dangling arrow — the one-hop neighborhood
- *    is the unit the user is inspecting.
- *  - Hovered EDGE → the edge + its producer and consumer nodes.
- *  - Unknown id (element churned away mid-hover) → EMPTY set; the panel
- *    treats that as "clear all dimming", never dims the whole graph. */
-export function focusSet(els: GraphElement[], hoveredId: string): Set<string> {
-  const hovered = els.find((e) => e.data.id === hoveredId);
-  if (!hovered) return new Set();
-  const keep = new Set<string>([hoveredId]);
-  if (hovered.group === "nodes") {
-    for (const e of els) {
-      if (e.group !== "edges") continue;
-      if (e.data.source === hoveredId || e.data.target === hoveredId) {
-        keep.add(e.data.id);
-        keep.add(String(e.data.source));
-        keep.add(String(e.data.target));
-      }
-    }
-  } else {
-    keep.add(String(hovered.data.source));
-    keep.add(String(hovered.data.target));
+ *  Elements unreachable from the hovered one (a disconnected component) are
+ *  ABSENT from the map; the caller floors them. An unknown hovered id (element
+ *  churned away mid-hover) → EMPTY map; the panel treats that as "clear hover",
+ *  never fades the whole graph to the floor. */
+export function hoverDistances(els: GraphElement[], hoveredId: string): Map<string, number> {
+  const adj = new Map<string, string[]>();
+  const link = (a: string, b: string): void => {
+    const l = adj.get(a);
+    if (l) l.push(b);
+    else adj.set(a, [b]);
+  };
+  const ids = new Set(els.map((e) => e.data.id));
+  for (const el of els) {
+    if (el.group !== "edges") continue;
+    const eid = el.data.id;
+    const s = String(el.data.source);
+    const t = String(el.data.target);
+    link(eid, s);
+    link(eid, t);
+    link(s, eid);
+    link(t, eid);
   }
-  return keep;
+  const dist = new Map<string, number>();
+  if (!ids.has(hoveredId)) return dist;
+  dist.set(hoveredId, 0);
+  const queue = [hoveredId];
+  for (let i = 0; i < queue.length; i++) {
+    const cur = queue[i]!;
+    const d = dist.get(cur)!;
+    for (const nb of adj.get(cur) ?? [])
+      if (!dist.has(nb)) {
+        dist.set(nb, d + 1);
+        queue.push(nb);
+      }
+  }
+  return dist;
 }
 
-/** Stable membership key — layout re-runs ONLY when this changes. Nodes are
- *  keyed by (id, epoch) per the contract (an epoch bump = a re-created node =
- *  worth a re-layout); stats are deliberately excluded. */
-export function membershipKey(t: GraphTopology): string {
+/** Resting opacity of an idle (parked) element — desaturated AND dimmed. Kept
+ *  ≤ the hover floor's ceiling so the min() composition below is well-ordered. */
+export const IDLE_OPACITY = 0.5;
+/** The far/unreachable opacity floor — the graph stays faintly visible on
+ *  hover, never fully invisible. */
+export const HOVER_OPACITY_FLOOR = 0.16;
+const HOVER_OPACITY_STEP = 0.24;
+
+/** Opacity from hover distance: 1.0 at the hovered element, fading linearly and
+ *  MONOTONICALLY, clamped to `HOVER_OPACITY_FLOOR` (unreachable = Infinity =
+ *  the floor). Distance 0–1 stays clearly readable. */
+export function hoverOpacity(dist: number): number {
+  if (!Number.isFinite(dist)) return HOVER_OPACITY_FLOOR;
+  return Math.max(HOVER_OPACITY_FLOOR, 1 - dist * HOVER_OPACITY_STEP);
+}
+
+/** Effective element opacity = MIN(idle-resting, hover-distance) — idle stays
+ *  capped at `IDLE_OPACITY` no matter how near the hover, and the hover
+ *  gradient can only fade it further. When not hovering the panel skips this
+ *  and lets the `.idle` class own the resting opacity. */
+export function effectiveOpacity(dist: number, idle: boolean): number {
+  return Math.min(idle ? IDLE_OPACITY : 1, hoverOpacity(dist));
+}
+
+/** Stable membership key — layout re-runs ONLY when this changes. Normalizes
+ *  through `collapseConsumerSinks` so it sees the SAME node/edge set the panel
+ *  renders (a stats-only refresh whose consumer count wiggles must not churn
+ *  the layout). Nodes are keyed by (id, epoch) per the contract (an epoch bump =
+ *  a re-created node = worth a re-layout); stats are deliberately excluded. */
+export function membershipKey(t0: GraphTopology): string {
+  const t = collapseConsumerSinks(t0);
   const nodes = t.nodes.map((n) => `${n.id}#${n.epoch ?? 0}`).sort();
   const edges = t.edges.map(edgeId).sort();
   return `${nodes.join("|")}//${edges.join("|")}`;

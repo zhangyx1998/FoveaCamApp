@@ -1213,6 +1213,13 @@ export default function disparityScopeSession(
       }
       disposers.add(
         registerGraphWiring({
+          // DISPLAY-ONLY: the profiler labels this leased triple by role
+          // (L/C/R) instead of serial in the app context (ids stay serial-keyed).
+          roles: {
+            [t.leases.L.camera.serial]: "L",
+            [t.leases.C.camera.serial]: "C",
+            [t.leases.R.camera.serial]: "R",
+          },
           nodes: [
             ...(["L", "R"] as const).map((side) => ({
               id: matchIds[side],

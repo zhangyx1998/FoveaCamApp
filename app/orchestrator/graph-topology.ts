@@ -79,6 +79,10 @@ export type WiredNode = GraphNode & { statsKey?: string };
 export interface GraphWiring {
   nodes: WiredNode[];
   edges: GraphEdge[];
+  /** DISPLAY-ONLY serial→role map ("L"/"C"/"R") for the leased camera triple —
+   *  folded onto the served `GraphTopology.roles` so the profiler can label
+   *  cameras by role. ABSENT for manage-cameras (serials are its identity). */
+  roles?: Record<string, string>;
 }
 
 /** Adapter-internal report flavor: may carry an ALREADY-REDUCED badge (a
@@ -283,6 +287,10 @@ export function buildTopologyFromReports(
       transport: r.transport ?? "native",
       ...(r.owner !== undefined ? { owner: r.owner } : {}),
       ...(r.epoch !== undefined ? { epoch: r.epoch } : {}),
+      // Mirror the pipe's live consumer refcount onto the node — the profiler's
+      // positive "no downstream demand" (idle) signal for a parked pipe that
+      // emits no consumer edge at 0 consumers.
+      ...(r.transport === "pipe" && r.pipe ? { pipe: r.pipe } : {}),
       stats: (r as AdapterReport).badge ?? statsFrom(snap),
     });
 
@@ -486,7 +494,22 @@ export function buildTopology(deps: TopologyDeps): GraphTopology {
     [...pipeListToReports(deps.listPipes()), ...wiringToReports(wirings, workloads)],
     real,
   ]);
-  return buildTopologyFromReports(reports, { workloads, at });
+  const topo = buildTopologyFromReports(reports, { workloads, at });
+  const roles = collectRoles(wirings);
+  return roles ? { ...topo, roles } : topo;
+}
+
+/** Union the DISPLAY-ONLY serial→role maps across all registered wirings (a
+ *  camera-owning app session publishes one; manage-cameras publishes none).
+ *  Defensive — non-string entries are skipped, never thrown on. */
+function collectRoles(entries: Iterable<GraphWiring>): Record<string, string> | undefined {
+  let roles: Record<string, string> | undefined;
+  for (const w of entries) {
+    if (!w?.roles) continue;
+    for (const [serial, role] of Object.entries(w.roles))
+      if (typeof serial === "string" && typeof role === "string") (roles ??= {})[serial] = role;
+  }
+  return roles;
 }
 
 function inputRate(w: WorkloadSnapshot | undefined): number | undefined {
