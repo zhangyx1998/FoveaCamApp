@@ -214,6 +214,26 @@ describe("decodeSet (enabled-set worker protocol shape)", () => {
     const modes = pairModes(pairs, { cam: "anaglyph" });
     expect(decodeSet(["left-cam", "right-cam"], modes)).toEqual(["left-cam", "right-cam"]);
   });
+
+  // Ruling 4 amendment (user 2026-07-09): 3D mode is GLOBAL — one mode applies
+  // to EVERY pair. The pairModeOf map the UI feeds decodeSet is built by
+  // stamping the single mode onto all pairs; the hidden-side skip then derives
+  // from that one mode uniformly.
+  it("global mode: one mode drops the hidden side of every pair at once", () => {
+    const many = detectPairs(["left-cam", "right-cam", "left-eye", "right-eye"]);
+    const global = (mode: ThreeDMode) => {
+      const m = new Map<string, { pair: ChannelPair; mode: ThreeDMode }>();
+      for (const p of many) {
+        m.set(p.left, { pair: p, mode });
+        m.set(p.right, { pair: p, mode });
+      }
+      return m;
+    };
+    const chans = ["left-cam", "right-cam", "left-eye", "right-eye"];
+    expect(decodeSet(chans, global("left-only"))).toEqual(["left-cam", "left-eye"]);
+    expect(decodeSet(chans, global("right-only"))).toEqual(["right-cam", "right-eye"]);
+    expect(decodeSet(chans, global("anaglyph"))).toEqual(chans.slice().sort());
+  });
 });
 
 // ---- active channels ------------------------------------------------------

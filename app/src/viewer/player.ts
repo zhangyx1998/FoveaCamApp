@@ -26,7 +26,7 @@
 // structural shape), keeping it unit-testable in isolation.
 
 import type { Mat } from "core/Vision";
-import type { PlaybackDoc } from "./protocol.js";
+import type { PlaybackDoc, StreamLiveStats } from "./protocol.js";
 import type { FrameDecoder } from "./decode.js";
 import type { FoveaChannel, FoveaMessage, FoveaSource } from "./source.js";
 import { TELEMETRY_TOPIC } from "../../../docs/schema/fovea.js";
@@ -70,6 +70,10 @@ const LATE_SKIP_MS = 200;
 /** Playback position/`playing` are pushed through `emitPosition` at most this
  *  often mid-playback (plus immediately on play/pause/seek/end). */
 const POSITION_UPDATE_MS = 250;
+
+/** Sliding window for the live decode-rate stat (stats popover): decode
+ *  timestamps older than this are dropped before the rate is computed. */
+const RATE_WINDOW_MS = 2000;
 const telemetryDecoder = new TextDecoder();
 
 export interface PlayerHooks {
@@ -99,6 +103,10 @@ export interface Player {
    *  = decode all frame channels (the default). Newly-enabled channels get a
    *  seek-refresh at the current position while paused so they repaint. */
   setEnabled(channels: readonly string[] | null): void;
+  /** LIVE per-channel stats for the right-click stats popover: frames decoded,
+   *  recent decode rate, and the log-time of the frame currently shown for the
+   *  channel. A never-decoded channel reports zeros / null. */
+  liveStats(topic: string): StreamLiveStats;
   close(): Promise<void>;
 }
 
@@ -145,6 +153,22 @@ export function createPlayer(
   // overlays regardless of which tiles are shown.
   let enabled: Set<string> | null = null;
   const frameTopicSet = new Set(frameTopics);
+  // Live per-channel decode stats for the stats popover (out-of-band from the
+  // coarse PlayerMeter accounting): frames decoded, a sliding window of recent
+  // decode wall-times (→ rate), and the log-time of the frame last shown.
+  const live = new Map<string, { decoded: number; lastFrameNs: number | null; recent: number[] }>();
+  function noteDecode(topic: string, relNs: number): void {
+    let s = live.get(topic);
+    if (!s) {
+      s = { decoded: 0, lastFrameNs: null, recent: [] };
+      live.set(topic, s);
+    }
+    s.decoded++;
+    s.lastFrameNs = relNs;
+    const now = clock.now();
+    s.recent.push(now);
+    while (s.recent.length > 0 && now - s.recent[0]! > RATE_WINDOW_MS) s.recent.shift();
+  }
 
   function startLoop(myGeneration: number): void {
     void runLoop(myGeneration, rate).catch((e) => {
@@ -202,6 +226,7 @@ export function createPlayer(
       const mat = decode(msg.data);
       hooks.publishFrame(channel.topic, mat, clock.now() - t0);
     });
+    noteDecode(channel.topic, Number(msg.logTime - source.startNs));
     workload.emit("frames");
   }
 
@@ -321,6 +346,17 @@ export function createPlayer(
         workload.drop("error");
         console.error("[viewer] enable-refresh failed:", error);
       });
+    },
+
+    liveStats(topic: string): StreamLiveStats {
+      const s = live.get(topic);
+      if (!s) return { decoded: 0, rateHz: 0, lastFrameNs: null };
+      // Rate over the retained window: (n-1) intervals across their wall-span.
+      const now = clock.now();
+      const recent = s.recent.filter((t) => now - t <= RATE_WINDOW_MS);
+      const spanMs = recent.length >= 2 ? recent[recent.length - 1]! - recent[0]! : 0;
+      const rateHz = spanMs > 0 ? ((recent.length - 1) / spanMs) * 1000 : 0;
+      return { decoded: s.decoded, rateHz, lastFrameNs: s.lastFrameNs };
     },
 
     async close(): Promise<void> {

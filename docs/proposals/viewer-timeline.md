@@ -26,6 +26,15 @@ between views.
    into a 3D view. Options today: `disabled | left-only | right-only |
    anaglyph`. The enum is extensible — 3D DLP projectors and other 3D tech
    may follow.
+   - **Amendment (user, 2026-07-09): 3D mode is GLOBAL, not per pair.** One
+     "3D View" control in the preview-panel header applies the chosen mode to
+     EVERY L/R pair at once (unpaired streams are unaffected); the per-pair
+     block dropdowns are removed. The sidecar's `threeD` changes from a
+     per-pair `Record<base, mode>` map to a single mode value; an OLD per-pair
+     sidecar is collapsed on read (first non-`disabled` value wins, else
+     `disabled`) and rewritten in the new shape on the next save — no version
+     bump and no confirm prompt (a lossless-enough upgrade, not corruption; the
+     ruling-10 corrupt/mismatch flows are unchanged).
 5. **Disable via "v"**: focusing a stream block and pressing `v` toggles
    the stream disabled (FCPX idiom). Disabled streams are hidden from
    previews (and rendered dimmed in the timeline).
@@ -68,7 +77,8 @@ between views.
   dependency); `left-only`/`right-only` shows that side alone;
   `disabled` = two independent tiles.
 - **Sidecar**: `<recording>.fcap.ui.json` (versioned `{ v: 1, ... }`):
-  track overrides, disabled set, 3D mode per pair, panel split, tile
+  track overrides, disabled set, GLOBAL 3D mode (ruling 4 amendment — a
+  single value, old per-pair maps collapsed on read), panel split, tile
   width, last playhead. Debounced write-through from the window's worker
   (the only writer). Absent → silent init; corrupt/mismatched → user
   confirmation before overwrite (ruling 10 governs). The MCAP reader path

@@ -22,4 +22,6 @@ export {
   faRulerCombined,
   faCircleHalfStroke,
   faChartLine,
+  faFolderOpen,
+  faArrowsRotate,
 } from "@fortawesome/free-solid-svg-icons";

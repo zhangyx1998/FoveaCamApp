@@ -78,6 +78,12 @@ export interface FoveaSource {
    *  absent. Computed once at open (cheap seeks on the indexed path; one extra
    *  scan on the truncated path — the crash-recovery edge case). */
   channelSpans(): Promise<Map<string, { startNs: bigint; endNs: bigint }>>;
+  /** Total message count per channel topic — the stats-popover message-count +
+   *  average-fps stat. Cheap on the indexed path (the MCAP statistics summary's
+   *  per-channel counts); one extra sequential scan on the truncated path. A
+   *  topic absent from the result had no counted messages (or no statistics
+   *  summary at all → the whole map is empty, and the UI shows "—"). */
+  messageCounts(): Promise<Map<string, number>>;
   close(): Promise<void>;
 }
 
@@ -215,6 +221,19 @@ class IndexedSource implements FoveaSource {
         break;
       }
       out.set(c.topic, { startNs: first, endNs: last ?? first });
+    }
+    return out;
+  }
+
+  async messageCounts(): Promise<Map<string, number>> {
+    // Per-channel counts ride the statistics summary (id-keyed) — no body read.
+    const counts = this.reader.statistics?.channelMessageCounts;
+    const out = new Map<string, number>();
+    if (!counts) return out; // no statistics summary → counts omitted (UI: "—")
+    const topicById = new Map(this.channels.map((c) => [c.id, c.topic]));
+    for (const [id, n] of counts) {
+      const topic = topicById.get(id);
+      if (topic) out.set(topic, Number(n));
     }
     return out;
   }
@@ -358,6 +377,22 @@ class TruncatedSource implements FoveaSource {
     for (const [id, span] of byId) {
       const topic = topicById.get(id);
       if (topic) out.set(topic, span);
+    }
+    return out;
+  }
+
+  async messageCounts(): Promise<Map<string, number>> {
+    const topicById = new Map(this.channels.map((c) => [c.id, c.topic]));
+    const byId = new Map<number, number>();
+    // One extra sequential scan (crash-recovery edge case), tally per channel.
+    for await (const record of scanRecords(this.handle)) {
+      if (record.type !== "Message") continue;
+      byId.set(record.channelId, (byId.get(record.channelId) ?? 0) + 1);
+    }
+    const out = new Map<string, number>();
+    for (const [id, n] of byId) {
+      const topic = topicById.get(id);
+      if (topic) out.set(topic, n);
     }
     return out;
   }

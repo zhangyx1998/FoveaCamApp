@@ -25,7 +25,7 @@ const sample: SidecarState = {
   v: 1,
   tracks: [["center"], ["left", "aux"], ["right"]],
   disabled: ["aux"],
-  threeD: { cam: "anaglyph" },
+  threeD: "anaglyph", // GLOBAL mode (ruling 4 amendment)
   split: 0.42,
   tileWidth: 280,
   playheadNs: 123_456,
@@ -76,7 +76,7 @@ describe("field coercion / clamping", () => {
         tileWidth: 5_000,
         split: -3,
         playheadNs: -10,
-        threeD: { cam: "bogus", eye: "left-only" },
+        threeD: "left-only",
         disabled: ["x", "x", 7],
       }),
     );
@@ -86,13 +86,41 @@ describe("field coercion / clamping", () => {
     expect(load.state.tileWidth).toBe(MAX_TILE_WIDTH);
     expect(load.state.split).toBe(0); // <=0 clamps to the collapsed sentinel
     expect(load.state.playheadNs).toBe(0);
-    expect(load.state.threeD).toEqual({ eye: "left-only" }); // bogus mode dropped
+    expect(load.state.threeD).toBe("left-only");
     expect(load.state.disabled).toEqual(["x"]); // deduped, non-strings dropped
   });
 
   it("MIN_TILE_WIDTH floor holds", () => {
     const load = classifySidecar(JSON.stringify({ v: 1, tileWidth: 1 }));
     expect(load.status === "ok" && load.state.tileWidth).toBe(MIN_TILE_WIDTH);
+  });
+});
+
+describe("threeD global-mode migration (ruling 4 amendment)", () => {
+  const mode = (json: object): string => {
+    const load = classifySidecar(JSON.stringify({ v: 1, ...json }));
+    return load.status === "ok" ? load.state.threeD : "<corrupt>";
+  };
+
+  it("new shape: a bare mode string round-trips", () => {
+    expect(mode({ threeD: "anaglyph" })).toBe("anaglyph");
+    expect(mode({ threeD: "disabled" })).toBe("disabled");
+  });
+
+  it("new shape: an unknown mode string falls back to disabled", () => {
+    expect(mode({ threeD: "hologram" })).toBe("disabled");
+  });
+
+  it("OLD per-pair map collapses to the first non-disabled value", () => {
+    expect(mode({ threeD: { camA: "disabled", camB: "anaglyph" } })).toBe("anaglyph");
+    expect(mode({ threeD: { left: "right-only" } })).toBe("right-only");
+  });
+
+  it("OLD map of all-disabled (or empty / invalid) collapses to disabled", () => {
+    expect(mode({ threeD: { a: "disabled", b: "disabled" } })).toBe("disabled");
+    expect(mode({ threeD: {} })).toBe("disabled");
+    expect(mode({ threeD: { a: "bogus" } })).toBe("disabled");
+    expect(mode({})).toBe("disabled"); // absent field
   });
 });
 

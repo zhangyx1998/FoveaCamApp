@@ -38,7 +38,7 @@ import type { Mat } from "core/Vision";
 import { createFrameDecoder } from "./decode.js";
 import { createPlayer, nullMeter, type Player } from "./player.js";
 import { openFovea, type FoveaSource } from "./source.js";
-import type { ViewerCommand, ViewerEvent } from "./protocol.js";
+import type { StreamLiveStats, ViewerCommand, ViewerEvent } from "./protocol.js";
 import {
   classifySidecar,
   serializeSidecar,
@@ -140,19 +140,21 @@ async function open(path: string): Promise<void> {
           post({ type: "position", positionNs, playing }),
       },
     );
-    const spans = await s.channelSpans();
+    const [spans, counts] = await Promise.all([s.channelSpans(), s.messageCounts()]);
     post({
       type: "opened",
       info: {
         path,
         channels: s.channels.map((c) => {
           const span = spans.get(c.topic);
+          const count = counts.get(c.topic);
           return {
             name: c.topic,
             metadata: c.metadata,
             // File-relative ns: absolute span minus the file's first message.
             startNs: span ? Number(span.startNs - s.startNs) : undefined,
             lastNs: span ? Number(span.endNs - s.startNs) : undefined,
+            messageCount: count,
           };
         }),
         durationNs: Number(s.endNs - s.startNs),
@@ -217,6 +219,14 @@ function handleCommand(msg: ViewerCommand): void {
       case "save-ui":
         scheduleSidecarWrite(msg.state);
         break;
+      case "get-stats": {
+        // LIVE stats snapshot for the popover's requested channel(s). The STATIC
+        // half already rode the `opened` payload — this is engine-only state.
+        const live: Record<string, StreamLiveStats> = {};
+        if (player) for (const ch of msg.channels) live[ch] = player.liveStats(ch);
+        post({ type: "stats", requestId: msg.requestId, live });
+        break;
+      }
       case "close":
         void close();
         break;

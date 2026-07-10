@@ -34,8 +34,11 @@ export interface SidecarState {
   tracks: string[][];
   /** v-toggled OFF frame channels (ruling 5) — hidden from preview. */
   disabled: string[];
-  /** pair base → 3D mode (ruling 4). */
-  threeD: Record<string, ThreeDMode>;
+  /** GLOBAL 3D view mode (ruling 4, amended user 2026-07-09: one mode applies
+   *  to EVERY L/R pair, not per pair). Old sidecars stored a `Record<base,mode>`
+   *  map; `cleanThreeMode` collapses that to a single mode on read (no version
+   *  bump — the migration is lossless-tolerant, not a corruption). */
+  threeD: ThreeDMode;
   /** Preview panel height fraction of the window (0.15..0.9); the timeline
    *  panel gets the rest (ruling 6). 0 ⇒ timeline collapsed to the drawer. */
   split: number;
@@ -60,7 +63,7 @@ export function defaultSidecar(): SidecarState {
     v: SIDECAR_VERSION,
     tracks: [],
     disabled: [],
-    threeD: {},
+    threeD: "disabled",
     split: DEFAULT_SPLIT,
     tileWidth: DEFAULT_TILE_WIDTH,
     playheadNs: 0,
@@ -89,14 +92,24 @@ function cleanTracks(v: unknown): string[][] {
   return out;
 }
 
-function cleanThreeD(v: unknown): Record<string, ThreeDMode> {
-  const out: Record<string, ThreeDMode> = {};
+const isMode = (m: unknown): m is ThreeDMode =>
+  typeof m === "string" && THREE_D_MODES.includes(m as ThreeDMode);
+
+/** Coerce the stored `threeD` into the single GLOBAL mode (ruling 4 amendment).
+ *  Accepts BOTH shapes tolerantly:
+ *   - NEW: a bare mode string → itself (unknown string → "disabled").
+ *   - OLD (per-pair map `{ base: mode }`): collapse to the first non-"disabled"
+ *     value, else "disabled". Lossy-by-design (global mode replaces per-pair)
+ *     and lossless-enough (the user re-picks once) — written back in the new
+ *     shape on the next save, no confirm prompt (ruling 10 governs only
+ *     corrupt/mismatch, not this upgrade). */
+function cleanThreeMode(v: unknown): ThreeDMode {
+  if (isMode(v)) return v;
   if (v && typeof v === "object" && !Array.isArray(v)) {
-    for (const [k, m] of Object.entries(v as Record<string, unknown>))
-      if (typeof m === "string" && THREE_D_MODES.includes(m as ThreeDMode))
-        out[k] = m as ThreeDMode;
+    for (const m of Object.values(v as Record<string, unknown>))
+      if (isMode(m) && m !== "disabled") return m;
   }
-  return out;
+  return "disabled";
 }
 
 function cleanDisabled(v: unknown): string[] {
@@ -111,7 +124,7 @@ function coerceValid(o: Record<string, unknown>): SidecarState {
     v: SIDECAR_VERSION,
     tracks: cleanTracks(o.tracks),
     disabled: cleanDisabled(o.disabled),
-    threeD: cleanThreeD(o.threeD),
+    threeD: cleanThreeMode(o.threeD),
     split: clampSplit(o.split),
     tileWidth: clampTileWidth(o.tileWidth),
     playheadNs:

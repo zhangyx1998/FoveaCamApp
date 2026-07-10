@@ -25,11 +25,14 @@ import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import type { Mat } from "core/Vision";
 import {
   type PlaybackDoc,
+  type StreamLiveStats,
   type ViewerChannelInfo,
   type ViewerCommand,
   type ViewerEvent,
   type ViewerFileInfo,
 } from "../viewer/protocol";
+import { assembleStaticStats, clampPopover } from "../viewer/stats";
+import StatsPopover, { type StatsEntry } from "../viewer/StatsPopover.vue";
 import {
   activeChannels,
   composeTiles,
@@ -59,6 +62,8 @@ import {
 } from "../viewer/sidecar";
 import TitleBar from "../components/TitleBar.vue";
 import FrameView from "../components/FrameView.vue";
+import { FontAwesomeIcon as Icon } from "@fortawesome/vue-fontawesome";
+import { faFolderOpen, faArrowsRotate } from "../windows/icons";
 
 const props = defineProps<{ path: string }>();
 
@@ -101,6 +106,11 @@ function onEngineEvent(ev: ViewerEvent): void {
       break; // per-frame extras — not surfaced yet
     case "descriptor":
       descriptors.value = { ...descriptors.value, [ev.topic]: ev.doc };
+      break;
+    case "stats":
+      // Accept only the reply to the in-flight request (a late reply for a
+      // since-closed/replaced popover is discarded).
+      if (ev.requestId === statsReqId) liveStats.value = ev.live;
       break;
     case "frame": {
       const mat = Object.assign(new Uint8Array(ev.buffer, ev.byteOffset, ev.length), {
@@ -152,10 +162,13 @@ function onPageHide(): void {
 }
 window.addEventListener("pagehide", onPageHide);
 window.addEventListener("keydown", onKeydown);
+window.addEventListener("pointerdown", onDocPointerDown, true);
 onUnmounted(() => {
   window.removeEventListener("pagehide", onPageHide);
   window.removeEventListener("keydown", onKeydown);
+  window.removeEventListener("pointerdown", onDocPointerDown, true);
   window.removeEventListener("message", onViewerPort);
+  closeStats();
   disposeEngineDown?.();
 });
 
@@ -186,23 +199,29 @@ const pairs = computed(() => detectPairs(frameChannels.value));
 
 const tracks = ref<string[][]>([]); // full layout, row 0 = master track
 const disabled = ref<Set<string>>(new Set());
-const threeD = ref<Record<string, ThreeDMode>>({}); // pair base → mode
+// GLOBAL 3D view mode (ruling 4, amended user 2026-07-09): one mode for EVERY
+// L/R pair, chosen in the preview header — no longer per pair.
+const threeD = ref<ThreeDMode>("disabled");
 const split = ref<number>(DEFAULT_SPLIT); // preview height fraction
 const tileWidth = ref<number>(DEFAULT_TILE_WIDTH);
 const initialized = ref(false);
 /** Non-null while a confirm dialog is up (ruling 10 — corrupt/mismatch). */
 const confirmReset = ref<null | { reason: "corrupt" | "mismatch" }>(null);
 
-/** pair-membership lookup: channel → {pair, mode}. */
+/** pair-membership lookup: channel → {pair, mode}. Every pair takes the SINGLE
+ *  global mode (ruling 4 amendment); the tile/decode-set derivation is unchanged
+ *  downstream — it just reads one mode for all pairs now. */
 const pairModeOf = computed(() => {
   const m = new Map<string, { pair: (typeof pairs.value)[number]; mode: ThreeDMode }>();
+  const mode = threeD.value;
   for (const p of pairs.value) {
-    const mode = threeD.value[p.base] ?? "disabled";
     m.set(p.left, { pair: p, mode });
     m.set(p.right, { pair: p, mode });
   }
   return m;
 });
+/** True when the container has any L/R pair — gates the global 3D control. */
+const hasPairs = computed(() => pairs.value.length > 0);
 
 const enabledFrameChannels = computed(() => frameChannels.value.filter((c) => !disabled.value.has(c)));
 const enabledSet = computed(() => new Set(enabledFrameChannels.value));
@@ -229,7 +248,7 @@ function persist(): void {
 function initializeLayout(persistIt: boolean): void {
   tracks.value = initialLayout(blocks.value, master.value.channel);
   disabled.value = new Set();
-  threeD.value = {};
+  threeD.value = "disabled";
   split.value = DEFAULT_SPLIT;
   tileWidth.value = DEFAULT_TILE_WIDTH;
   initialized.value = true;
@@ -251,7 +270,7 @@ function applySidecar(load: SidecarLoad): void {
   // status === "ok": restore. threeD/disabled/split/tileWidth apply regardless.
   const st = load.state;
   disabled.value = new Set(st.disabled);
-  threeD.value = { ...st.threeD };
+  threeD.value = st.threeD; // global mode (sidecar already collapsed old maps)
   split.value = st.split;
   tileWidth.value = st.tileWidth;
   if (layoutMismatch(st.tracks, frameChannels.value)) {
@@ -398,6 +417,98 @@ function tileLabel(tile: Tile): string {
   return `${tile.pair.base} (${m})`;
 }
 
+// --- stream stats popover (right-click a tile / timeline block) -------------
+// Right-click opens a compact in-window popover of stream stats. The STATIC
+// half is assembled renderer-side from the already-open channel info (shows
+// instantly); the LIVE half rides a get-stats→stats request and refreshes while
+// the popover stays open. One popover at a time (design-language: instant,
+// snap, layout-stable — the box never resizes when the live reply lands).
+let statsReqId = 0;
+let statsPollTimer: ReturnType<typeof setInterval> | null = null;
+const liveStats = ref<Record<string, StreamLiveStats>>({});
+const statsPopover = ref<null | {
+  x: number;
+  y: number;
+  channels: string[]; // one (single tile) or [left, right] (merged pair)
+  labels: string[]; // "" for a single; "L"/"R" for a pair
+  is3D: boolean;
+}>(null);
+
+/** name → channel info, for the popover's static-stat assembly. */
+const channelInfoByName = computed(
+  () => new Map((file.value?.channels ?? []).map((c) => [c.name, c])),
+);
+
+/** The popover sections (static stats + latest live snapshot per side). */
+const statsEntries = computed<StatsEntry[]>(() => {
+  const pop = statsPopover.value;
+  if (!pop) return [];
+  return pop.channels.map((ch, i) => {
+    const info = channelInfoByName.value.get(ch);
+    return {
+      label: pop.labels[i] ?? "",
+      stat: info
+        ? assembleStaticStats(info)
+        : {
+            name: ch, pixelFormat: "", significantBits: 0, codec: null,
+            width: 0, height: 0, channels: 1, messageCount: null, spanNs: 0, avgFps: null,
+          },
+      live: liveStats.value[ch] ?? null,
+    };
+  });
+});
+/** Global 3D mode label, shown only when the popover targets a merged pair. */
+const statsThreeDLabel = computed(() => (statsPopover.value?.is3D ? threeD.value : null));
+/** Enabled-state of the popover's stream (any side enabled → enabled). */
+const statsEnabled = computed(
+  () => statsPopover.value?.channels.some((c) => !disabled.value.has(c)) ?? false,
+);
+
+function requestStats(channels: string[]): void {
+  send({ type: "get-stats", requestId: ++statsReqId, channels });
+}
+function openStats(channels: string[], labels: string[], is3D: boolean, cx: number, cy: number): void {
+  liveStats.value = {}; // clear stale live rows → placeholders until the reply
+  // Clamp against the window with a nominal size so the box never spills off.
+  const { x, y } = clampPopover(
+    cx, cy, 280, 150 + channels.length * 130, window.innerWidth, window.innerHeight,
+  );
+  statsPopover.value = { x, y, channels, labels, is3D };
+  requestStats(channels);
+  if (statsPollTimer) clearInterval(statsPollTimer);
+  statsPollTimer = setInterval(() => requestStats(channels), 500);
+}
+function onTileContextMenu(e: MouseEvent, tile: Tile): void {
+  e.preventDefault();
+  if (tile.kind === "single") openStats([tile.channel], [""], false, e.clientX, e.clientY);
+  else openStats([tile.pair.left, tile.pair.right], ["L", "R"], true, e.clientX, e.clientY);
+}
+/** Right-click a timeline block → the SAME popover for that stream (a paired
+ *  member under a non-disabled 3D mode opens the merged L/R view). */
+function onBlockContextMenu(e: MouseEvent, channel: string): void {
+  e.preventDefault();
+  const info = pairModeOf.value.get(channel);
+  if (info && info.mode !== "disabled")
+    openStats([info.pair.left, info.pair.right], ["L", "R"], true, e.clientX, e.clientY);
+  else openStats([channel], [""], false, e.clientX, e.clientY);
+}
+function closeStats(): void {
+  if (!statsPopover.value) return;
+  statsPopover.value = null;
+  if (statsPollTimer) {
+    clearInterval(statsPollTimer);
+    statsPollTimer = null;
+  }
+}
+/** Dismiss on any pointerdown outside the popover (a right-click on another
+ *  tile fires pointerdown → close → its contextmenu reopens for that tile). */
+function onDocPointerDown(e: PointerEvent): void {
+  if (!statsPopover.value) return;
+  const t = e.target as HTMLElement | null;
+  if (t && t.closest(".stats-popover")) return;
+  closeStats();
+}
+
 // --- descriptor overlay (multi-fovea, drawn on the master/center tile) -------
 const TARGET_COLORS = [
   "#00aaff", "#ffb000", "#36d16f", "#ff5b8a",
@@ -431,12 +542,9 @@ const playheadPct = computed(() => {
   return d > 0 ? (positionNs.value / d) * 100 : 0;
 });
 const isMasterChannel = (channel: string) => channel === master.value.channel;
-const modeForChannel = (channel: string) => pairModeOf.value.get(channel)?.mode ?? "disabled";
-function pairBaseForChannel(channel: string): string | null {
-  return pairModeOf.value.get(channel)?.pair.base ?? null;
-}
-function set3DMode(base: string, mode: ThreeDMode): void {
-  threeD.value = { ...threeD.value, [base]: mode };
+/** Set the single GLOBAL 3D mode (ruling 4 amendment) — applies to every pair. */
+function setThreeDMode(event: Event): void {
+  threeD.value = (event.target as HTMLSelectElement).value as ThreeDMode;
   persist();
 }
 
@@ -453,6 +561,12 @@ function toggleDisabled(channel: string): void {
   persist();
 }
 function onKeydown(e: KeyboardEvent): void {
+  // Escape always dismisses an open stats popover (instant, before any guards).
+  if (e.key === "Escape" && statsPopover.value) {
+    e.preventDefault();
+    closeStats();
+    return;
+  }
   // Window-local; ignore modifier chords (Cmd+V etc.) and text-entry targets so
   // we don't collide with menu accelerators or the rate <select>.
   if (e.metaKey || e.ctrlKey || e.altKey) return;
@@ -570,17 +684,25 @@ function onTileWidthCommit(): void {
           <span v-if="!master.designated" class="hint" title="No wide/center stream designated by the recorder — master is the first frame channel">
             no wide designation
           </span>
-          <label class="tilew" title="Tile width">
-            <span>tile</span>
-            <input
-              type="range"
-              :min="MIN_TILE_WIDTH"
-              :max="MAX_TILE_WIDTH"
-              :value="tileWidth"
-              @input="onTileWidth"
-              @change="onTileWidthCommit"
-            />
-          </label>
+          <div class="head-controls">
+            <label v-if="hasPairs" class="threed-global" title="3D view mode — applies to every L/R pair">
+              <span>3D</span>
+              <select :value="threeD" @change="setThreeDMode">
+                <option v-for="m in THREE_D_MODES" :key="m" :value="m">{{ m }}</option>
+              </select>
+            </label>
+            <label class="tilew" title="Tile width">
+              <span>tile</span>
+              <input
+                type="range"
+                :min="MIN_TILE_WIDTH"
+                :max="MAX_TILE_WIDTH"
+                :value="tileWidth"
+                @input="onTileWidth"
+                @change="onTileWidthCommit"
+              />
+            </label>
+          </div>
         </header>
         <div class="tiles">
           <div
@@ -588,6 +710,7 @@ function onTileWidthCommit(): void {
             :key="tileKey(tile)"
             class="tile"
             :style="{ width: tileWidth + 'px' }"
+            @contextmenu="onTileContextMenu($event, tile)"
           >
             <div class="tile-head">
               <span class="tile-name" :class="{ master: tile.kind === 'single' && isMasterChannel(tile.channel) }">
@@ -674,19 +797,9 @@ function onTileWidthCommit(): void {
                 @pointerdown.stop="(e) => onBlockPointerDown(e, channel)"
                 @focus="focusBlock(channel)"
                 @click.stop="focusBlock(channel)"
+                @contextmenu="onBlockContextMenu($event, channel)"
               >
                 <span class="block-name">{{ channel }}</span>
-                <select
-                  v-if="pairBaseForChannel(channel) && (!pairModeOf.get(channel) || pairModeOf.get(channel)!.pair.left === channel)"
-                  class="threed"
-                  :value="modeForChannel(channel)"
-                  title="3D View"
-                  @pointerdown.stop
-                  @click.stop
-                  @change="(e) => set3DMode(pairBaseForChannel(channel)!, (e.target as HTMLSelectElement).value as ThreeDMode)"
-                >
-                  <option v-for="m in THREE_D_MODES" :key="m" :value="m">{{ m }}</option>
-                </select>
               </div>
             </div>
             <!-- New-row drop zone (drag to the bottom to create a track). -->
@@ -701,6 +814,17 @@ function onTileWidthCommit(): void {
         </section>
       </template>
     </template>
+
+    <!-- ===== right-click stream stats popover ===== -->
+    <StatsPopover
+      v-if="statsPopover"
+      :x="statsPopover.x"
+      :y="statsPopover.y"
+      :entries="statsEntries"
+      :playhead-ns="positionNs"
+      :enabled="statsEnabled"
+      :three-d-mode="statsThreeDLabel"
+    />
 
     <!-- ===== confirm dialog (ruling 10: corrupt / mismatch) ===== -->
     <div v-if="confirmReset" class="modal-scrim">
@@ -726,11 +850,11 @@ function onTileWidthCommit(): void {
   </div>
 
   <TitleBar title="Viewer" :subtitle="compactPath" @height="(h) => (titleBarHeight = h)">
-    <button v-if="file" class="tb-btn" title="Re-initialize the view layout (re-run auto-pack)" @click="resetUiState">
-      Reset UI state
+    <button v-if="file" class="icon-button" title="Reset UI state (re-run auto layout)" @click="resetUiState">
+      <Icon :icon="faArrowsRotate" />
     </button>
-    <button v-if="file" class="tb-btn" title="Reveal this recording in Finder/Explorer" @click="openFolder">
-      Open folder
+    <button v-if="file" class="icon-button" title="Reveal in Finder/Explorer" @click="openFolder">
+      <Icon :icon="faFolderOpen" />
     </button>
   </TitleBar>
 </template>
@@ -784,15 +908,27 @@ function onTileWidthCommit(): void {
       border-radius: 3px;
       padding: 0 0.5em;
     }
-    .tilew {
+    .head-controls {
       margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 1.4ch;
+    }
+    .threed-global,
+    .tilew {
       display: flex;
       align-items: center;
       gap: 0.6ch;
       color: var(--text-faint);
-      input {
-        width: 12ch;
-      }
+    }
+    .threed-global select {
+      background: var(--bg-chrome);
+      color: var(--text-dim);
+      border: 1px solid var(--border-strong);
+      border-radius: 3px;
+    }
+    .tilew input {
+      width: 12ch;
     }
   }
 
@@ -1019,14 +1155,6 @@ function onTileWidthCommit(): void {
         overflow: hidden;
         text-overflow: ellipsis;
       }
-      .threed {
-        background: #111a;
-        color: #cde;
-        border: 1px solid #4a6a8a;
-        border-radius: 3px;
-        font-size: 0.9em;
-        cursor: pointer;
-      }
     }
   }
 }
@@ -1087,20 +1215,21 @@ function onTileWidthCommit(): void {
   }
 }
 
-// ---- title-bar buttons ----
-.tb-btn {
-  background: var(--bg-app);
-  color: var(--text-dim);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 0.25em 0.9em;
-  font-size: 0.85em;
+// ---- title-bar buttons (icon-only, per the app-wide ruling) ----
+// Mirrors AppWindow.vue's `.icon-button` so viewer chrome matches the app.
+.icon-button {
+  background: none;
+  border: none;
+  padding: 0.4em;
+  margin: 0 0 0 0.2ch;
   cursor: pointer;
-  white-space: nowrap;
-  margin-left: 0.5ch;
-  &:hover {
-    background: var(--bg-elevated);
-    color: var(--text);
+  color: inherit;
+  border-radius: 4px;
+  outline: 1px solid transparent;
+  // SNAP: no transition on the control path.
+  &:not(:disabled):hover {
+    background: var(--tint-1);
+    outline: 1px solid var(--border-muted);
   }
 }
 </style>

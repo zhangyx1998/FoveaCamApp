@@ -222,6 +222,26 @@ describe("standalone viewer player (over a real container)", () => {
     expect(h.meter.disposed).toBe(true);
   });
 
+  it("tracks live per-channel decode stats (stats popover)", async () => {
+    const file = await writeFixture(await tempRoot());
+    const h = await harness(file);
+
+    // Before any decode: zeros / null (a never-seen channel too).
+    expect(h.player.liveStats("cam")).toEqual({ decoded: 0, rateHz: 0, lastFrameNs: null });
+    expect(h.player.liveStats("nope")).toEqual({ decoded: 0, rateHz: 0, lastFrameNs: null });
+
+    h.player.play(1);
+    await until(() => !h.player.playing && h.player.positionNs === 0.5 * NS);
+
+    const cam = h.player.liveStats("cam");
+    expect(cam.decoded).toBe(6); // all six cam frames decoded + counted
+    // Last shown cam frame = the final one at 0.6 s abs → 0.5 s file-relative.
+    expect(cam.lastFrameNs).toBe(0.5 * NS);
+    expect(cam.rateHz).toBeGreaterThanOrEqual(0);
+    expect(h.player.liveStats("aux").decoded).toBe(1);
+    await h.close();
+  });
+
   it("rate scales the pacing schedule", async () => {
     const file = await writeFixture(await tempRoot());
     const h = await harness(file);
