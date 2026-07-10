@@ -85,6 +85,15 @@ if (!port) throw new Error("vision-worker must run as a worker_thread");
 
 let running = false;
 let kernel: VisionKernel | null = null;
+// TEMP size-trace (debug — remove): the kernel kind (gates the runtime frame
+// trace to the disparity template-match worker) + a first-sight/on-change cache.
+let traceKind = "";
+const __sizeTraceSeen = new Map<string, string>();
+function __sizeTrace(key: string, line: string): void {
+  if (__sizeTraceSeen.get(key) === line) return;
+  __sizeTraceSeen.set(key, line);
+  console.log(`[size-trace] ${line}`);
+}
 let addon: ReaderAddon | null = null;
 let pipes: OpenPipe[] = [];
 
@@ -162,12 +171,16 @@ function start(init: VisionInit): void {
     return;
   }
   const kind = String((init.params as { kind?: unknown }).kind ?? "");
+  traceKind = kind; // TEMP size-trace (debug — remove)
   const factory = KERNELS[kind];
   if (!factory) {
     fail(`unknown vision kernel: ${kind}`);
     return;
   }
-  kernel = factory(init.params);
+  // TEMP size-trace (debug — remove): pass meterName in so the kernel can label
+  // its matchTemplate trace per side (win/disparity-scope/match/L|R). Unknown
+  // params are ignored by every kernel's setParams.
+  kernel = factory({ ...init.params, __traceMeter: init.meterName });
   pipes = init.pipes.map((input) => ({
     input,
     handle: addon!.open(input.shmName),
@@ -195,6 +208,16 @@ function readFrames(): FrameSet | "closed" {
       meter.dropsTotal += Number(r.seq - pipe.lastSeq - 1n);
     pipe.lastSeq = r.seq;
     const len = r.width * r.height * pipe.input.channels;
+    // TEMP size-trace (debug — remove): the RUNTIME frame arriving at the match
+    // worker per role (needle / haystack) — origin excluded (it moves with the
+    // crop; only size changes reprint). Gated to the disparity template-match.
+    if (traceKind === "template-match") {
+      const ch = pipe.input.channels;
+      __sizeTrace(
+        `read/${meterName}/${role}`,
+        `worker-in[${meterName}] ${role} ${r.width}x${r.height} ch=${ch} stride=${r.width * ch}`,
+      );
+    }
     const view = new Uint8Array(pipe.buffer.buffer, pipe.buffer.byteOffset, len);
     frames[pipe.input.role] = {
       mat: makeMat(view, [r.height, r.width], pipe.input.channels),

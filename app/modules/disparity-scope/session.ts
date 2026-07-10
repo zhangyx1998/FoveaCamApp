@@ -133,6 +133,16 @@ import type { RawPipeRegistry } from "@orchestrator/raw-pipe";
 const ZERO: Point2d = { x: 0, y: 0 };
 const now = () => performance.now();
 
+// TEMP size-trace (debug — remove): print a pipeline stage's dims only on first
+// sight and when they change (sizes are near-static; per-frame spam at 38fps
+// would drown the signal). Runtime frames are traced in the vision worker.
+const __sizeTraceSeen = new Map<string, string>();
+function __sizeTrace(key: string, line: string): void {
+  if (__sizeTraceSeen.get(key) === line) return;
+  __sizeTraceSeen.set(key, line);
+  console.log(`[size-trace] ${line}`);
+}
+
 const SHIFT_LIMIT = radians(SHIFT_LIMIT_DEG);
 const VSHIFT_LIMIT = radians(VSHIFT_LIMIT_DEG);
 const DT_MAX_FRAMES = 10;
@@ -758,6 +768,14 @@ export default function disparityScopeSession(
       const handle = broker.connect(pipeId);
       disposers.add(() => broker.disconnect(pipeId));
       const { width, height, channels, bytesPerFrame, maxBytes } = handle.spec;
+      // TEMP size-trace (debug — remove): the ADVERTISED pipe dims the match
+      // worker will read for this role (needle / haystack / cap-center).
+      __sizeTrace(
+        `advert/pipe/${role}/${pipeId}`,
+        `advert pipe ${role} ${pipeId} ${width}x${height} ch=${channels} ` +
+          `stride=${handle.spec.stride} fmt=${handle.spec.pixelFormat} dtype=${handle.spec.dtype} ` +
+          `bytes=${bytesPerFrame} max=${handle.spec.maxWidth ?? width}x${handle.spec.maxHeight ?? height}`,
+      );
       return {
         role,
         shmName: handle.shmName,
@@ -930,6 +948,33 @@ export default function disparityScopeSession(
           },
         );
       }
+
+      // TEMP size-trace (debug — remove): composition-time (advertised) geometry
+      // the session commands the C++ bricks to produce — from the raw camera
+      // sources down to the pre-sized match inputs. GUIDE path: raw C →
+      // undistort → strip-slice → strip-scale → haystack. NEEDLE path: raw L/R
+      // convert → needle-scale → needle. Runtime frames are traced in the worker.
+      __sizeTrace(
+        "advert/wide",
+        `advert C-source raw-wide ${wide.width}x${wide.height} fmt=${camC.pixel_format}`,
+      );
+      __sizeTrace(
+        "advert/fovea",
+        `advert L/R-source raw-fovea(needle src) ${fovea.width}x${fovea.height} fmt=${t.leases.L.camera.pixel_format}`,
+      );
+      __sizeTrace(
+        "advert/strip-slice",
+        `advert strip-slice guide-crop ${stripRect.width}x${stripRect.height} @${stripRect.x},${stripRect.y}`,
+      );
+      __sizeTrace(
+        "advert/strip-scale",
+        `advert strip-scale guide ratio=${stripScaleFactor.toFixed(4)} ` +
+          `~${Math.round(stripRect.width * stripScaleFactor)}x${Math.round(stripRect.height * stripScaleFactor)}`,
+      );
+      __sizeTrace(
+        "advert/needle-scale",
+        `advert needle-scale L&R dsize ${dsize0.width}x${dsize0.height}`,
+      );
 
       // The L/R HOMOGRAPHY-warped undistort pipes — the wide-aligned,
       // pre-warped sources the STEREO (SGBM) + COMPOSITE (anaglyph/difference)
