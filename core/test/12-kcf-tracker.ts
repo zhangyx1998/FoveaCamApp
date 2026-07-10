@@ -82,7 +82,7 @@ async function take(tr: Tracker, n: number, ms = 8000): Promise<Result[]> {
   const deadline = Date.now() + 8000;
   for await (const r of tracker as AsyncIterable<Result>) {
     results.push(r);
-    if (results.length >= 5 || Date.now() > deadline) break;
+    if (results.length >= 25 || Date.now() > deadline) break;
   }
 
   // The KCF thread produced a result STREAM (off the JS loop, via the async
@@ -98,6 +98,18 @@ async function take(tr: Tracker, n: number, ms = 8000): Promise<Result[]> {
       assert(b.x >= 0 && b.y >= 0 && b.x < width && b.y < height, "bbox in-bounds");
     }
   }
+  // SUSTAINED tracking (regression guard, 2026-07-10): cv::TrackerKCF's default
+  // CN features need a 3-CHANNEL image. When the tracker was fed grayscale it
+  // returned a hit on the FIRST update() then lost EVERY subsequent frame
+  // (OpenCV 4.13.0), so the rig saw the box "flash then disappear". The raw
+  // (Mono8) variant now replicates gray → BGR in KcfCore; assert the tracker
+  // KEEPS finding the target across the window, not just on the arm frame.
+  const rawFound = results.filter((r) => r.found).length;
+  assert(
+    rawFound >= results.length - 3,
+    `raw tracker sustains tracking across frames (found ${rawFound}/${results.length}; ` +
+      `pre-fix this was ~1 — KCF lost after the first update on grayscale input)`,
+  );
 
   // Meter recorded the workload: frames ingested, tracks emitted, and frame
   // INTERVALS (maxIntervalMs > 0). Drops = camera frames the KCF thread couldn't
@@ -184,6 +196,13 @@ async function take(tr: Tracker, n: number, ms = 8000): Promise<Result[]> {
   chained.arm({ x: Math.floor(width / 3), y: Math.floor(height / 3), width: 96, height: 96 });
 
   // Normal tracking off the tap: results stream with a center + overridden:false.
+  // (SUSTAINED tracking — the actual "flash then disappears" regression guard —
+  // is asserted on the RAW tracker above: it is the FIRST tracker in this
+  // process, so it runs before the fake camera's stream-lifecycle degradation
+  // that starves later trackers. Both variants funnel through the identical
+  // KcfCore::step → asColor8 3-channel normalization the fix added, so the raw
+  // assertion covers the chained path; here we only check the tap streams +
+  // override/release re-arm still work.)
   const normal = await take(chained, 5);
   assert(normal.length >= 5, `chained tracker streamed results (${normal.length})`);
   let lastSeq = 0;

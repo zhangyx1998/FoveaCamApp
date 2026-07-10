@@ -175,6 +175,12 @@ names the mechanism it gates.
 
 ## Disparity tracker → own thread (§3.5, 2026-07-08 D2 wave)
 
+- [ ] **KCF green box SUSTAINS (2026-07-10 fix)** — enable the tracker on a
+  textured target: the green box stays locked and FOLLOWS across many frames
+  (no flash-then-disappear). Root cause was OpenCV 4.13 KCF (default CN color
+  features) losing track after one frame on GRAYSCALE input — all tracker
+  variants now normalize to 3-channel BGR (`asColor8`, Tracker.cpp). Spot-check
+  multi-fovea KCF auto-follow sustains likewise (same latent bug fixed).
 - [ ] **Tracker off the matching thread** — with auto-follow ON, the
   disparity kernel node's meter no longer includes KCF work; a new
   `camera/<serialC>/undistort/kcf` node renders in the graph (edges

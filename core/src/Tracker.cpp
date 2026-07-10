@@ -42,6 +42,41 @@ struct TrackerUpdateResult {
   cv::Rect bbox;
 };
 
+// cv::TrackerKCF's DEFAULT feature set includes CN (Color Names), which REQUIRES
+// a 3-channel color image: its per-pixel CN lookup indexes the BGR triple, and
+// its PCA compression asserts `compressed_size(2) <= channels`. Fed a SINGLE-
+// channel gray frame, OpenCV 4.13.0's KCF yields a valid result on the FIRST
+// update() then produces an EMPTY response matrix on every subsequent frame —
+// update() returns null / throws "Matrix operand is an empty matrix". Symptom on
+// the rig: the tracker arms, draws its box for one frame, then reports lost
+// forever ("the green box flashes then disappears"). This whole pipeline used to
+// feed KCF grayscale (raw center cam Mono8, chained tap converted to gray,
+// MultiKcf Mono8); the fix is to feed a 3-CHANNEL 8-bit image instead (see
+// `KcfCore::asColor8` / the MultiKcf loop). Gray sources are replicated to BGR
+// (GRAY2BGR) — verified to track indefinitely under the default params. The
+// GRAY-only descriptor alternative can't be used: desc_pca must stay non-empty
+// for KCF's model to be well-formed, but PCA needs >1 channel. Create default.
+static cv::Ptr<cv::TrackerKCF> makeKcf() {
+  return cv::TrackerKCF::create();
+}
+
+// Normalize any tracker source frame to the 8-bit 3-channel BGR that
+// cv::TrackerKCF's default (CN) features require, reusing `buf`. 1ch → GRAY2BGR,
+// 4ch → RGBA2BGR (the honest-RGBA8 chained tap), 3ch passthrough. Callers feed
+// 8-bit frames (center cam is Mono8; the chained tap is RGBA8).
+static const cv::Mat &asColor8(const cv::Mat &src, cv::Mat &buf) {
+  switch (src.channels()) {
+  case 1:
+    cv::cvtColor(src, buf, cv::COLOR_GRAY2BGR);
+    return buf;
+  case 4:
+    cv::cvtColor(src, buf, cv::COLOR_RGBA2BGR);
+    return buf;
+  default:
+    return src; // already 3-channel
+  }
+}
+
 template <>
 Napi::Value convert(Napi::Env env,
                     const TrackerUpdateResult &result) noexcept {
@@ -64,7 +99,7 @@ public:
   static std::string describe(const TrackerKCFObject *) { return "KCF"; }
 
   static Core ConstructFromJS(const Napi::CallbackInfo &info) {
-    return cv::TrackerKCF::create();
+    return makeKcf();
   }
 
   static Napi::Function Init(Napi::Env env) {
@@ -202,13 +237,15 @@ public:
       wantRearm_.store(true, std::memory_order_release);
   }
 
-  // Run one step on `gray` (single-channel 8-bit); transform-thread only.
+  // Run one step on `src` (8-bit, 1/3/4 channel); transform-thread only. KCF is
+  // fed a 3-channel BGR view (its CN features need color — see `asColor8`).
   // Returns a result, or null for a frame that yields none (the KCF (re-)init
   // frame). `meter` gets begin/end (busy) around KCF work + emit("track") per
   // produced result; ingest/drop stay with the caller (they differ per variant).
-  TrackResult::Ptr step(const cv::Mat &gray, uint64_t deviceTimestamp,
+  TrackResult::Ptr step(const cv::Mat &src, uint64_t deviceTimestamp,
                         Meter::ThreadMeter &meter, double stallMs) {
-    const cv::Rect frameRect(0, 0, gray.cols, gray.rows);
+    const cv::Mat &frame = asColor8(src, colorBuf_);
+    const cv::Rect frameRect(0, 0, frame.cols, frame.rows);
 
     // Override RELEASE → schedule a re-arm at the last override center, sized
     // to the last armed roi (or the documented default if never armed).
@@ -226,7 +263,7 @@ public:
       const cv::Rect roi = *pending_.ref() & frameRect; // frame-bound clamp
       if (roi.width >= 4 && roi.height >= 4) {
         try {
-          tracker_->init(gray, roi);
+          tracker_->init(frame, roi);
           armed_ = true;
           armedSize_ = roi.size();
         } catch (const std::exception &) {
@@ -260,7 +297,7 @@ public:
     cv::Rect bbox;
     bool ok = false;
     try {
-      ok = tracker_->update(gray, bbox);
+      ok = tracker_->update(frame, bbox);
     } catch (const std::exception &) {
       ok = false; // lost: KCF throws on a degenerate (edge-drifted) patch
     }
@@ -288,7 +325,7 @@ private:
                     sz.width, sz.height);
   }
 
-  cv::Ptr<cv::TrackerKCF> tracker_ = cv::TrackerKCF::create(); // xform thread
+  cv::Ptr<cv::TrackerKCF> tracker_ = makeKcf(); // default color-feature KCF; xform thread
   Threading::Guard<cv::Rect> pending_ = {cv::Rect()};
   std::atomic<bool> hasPending_{false};
   Threading::Guard<cv::Point2d> override_ = {cv::Point2d(0, 0)};
@@ -297,6 +334,7 @@ private:
   bool armed_ = false;           // transform-thread only
   cv::Size armedSize_{0, 0};     // last armed roi size (0 = never armed)
   uint64_t produced_ = 0;        // transform-thread only
+  cv::Mat colorBuf_;             // reused 3-channel BGR view for KCF (this thread)
 };
 
 // Abstract handle the JS CoreObject holds: BOTH tracker variants (raw camera
@@ -358,7 +396,8 @@ protected:
       lastDrops_ = drops;
     }
     meter_.ingest("frame", t);
-    // Center camera is Mono8 — track the raw single-channel frame directly.
+    // Center camera is Mono8; KcfCore replicates it to the 3-channel BGR
+    // cv::TrackerKCF's CN features require (gray input loses after one frame).
     return core_.step(frame->raw, frame->device_timestamp, meter_,
                       stallMs_.load(std::memory_order_acquire));
   }
@@ -406,25 +445,16 @@ protected:
     if (const uint64_t gap = seqGap(in)) // tap outran us (latest-wins)
       meter_.drop(gap);
     meter_.ingest("frame", t);
-    // KCF needs a single-channel 8-bit mat; the tap carries honest RGBA8
-    // (converted) or undistorted RGBA — convert once into a reused buffer.
-    const cv::Mat &m = in->mat;
-    const cv::Mat *gray = &m;
-    if (m.channels() == 4) {
-      cv::cvtColor(m, gray_, cv::COLOR_RGBA2GRAY);
-      gray = &gray_;
-    } else if (m.channels() == 3) {
-      cv::cvtColor(m, gray_, cv::COLOR_RGB2GRAY);
-      gray = &gray_;
-    }
-    return core_.step(*gray, in->deviceTimestamp, meter_,
+    // The tap carries honest RGBA8 (converted) or undistorted RGBA; KcfCore
+    // normalizes it to the 3-channel BGR cv::TrackerKCF's CN features require
+    // (feeding gray makes KCF lose after one frame — see makeKcf).
+    return core_.step(in->mat, in->deviceTimestamp, meter_,
                       stallMs_.load(std::memory_order_acquire));
   }
 
 private:
   Meter::ThreadMeter meter_; // single writer = this brick's thread
-  KcfCore core_;             // tracking + override state machine
-  cv::Mat gray_;             // reused gray buffer (this thread only)
+  KcfCore core_;             // tracking + override state machine (owns color buf)
   std::atomic<double> stallMs_{0}; // test-only induced slowness
 };
 
@@ -727,7 +757,7 @@ protected:
             slots_.push_back(Slot{op.id});
             it = std::prev(slots_.end());
           }
-          it->tracker = cv::TrackerKCF::create(); // (re-)init on this frame
+          it->tracker = makeKcf(); // (re-)init on this frame
           it->initRoi = op.roi;
           it->needsInit = true;
           it->armedAtMs = t;
@@ -756,10 +786,14 @@ protected:
       cv::remap(tmp_, und_, map1_, map2_, cv::INTER_LINEAR);
       mat = &und_;
     }
+    // cv::TrackerKCF's default CN features need 3-channel color: feeding the
+    // single-channel Mono8 source makes every target lose after one frame
+    // (OpenCV 4.13.0 — see makeKcf). Replicate to BGR once for all targets.
+    const cv::Mat &colorFrame = asColor8(*mat, color_);
 
     auto result = MultiTrackResult::create();
     result->targets.reserve(slots_.size());
-    const cv::Rect frameRect(0, 0, mat->cols, mat->rows);
+    const cv::Rect frameRect(0, 0, colorFrame.cols, colorFrame.rows);
     for (auto &s : slots_) {
       const auto u0 = std::chrono::steady_clock::now();
       MultiTrackTarget out;
@@ -773,13 +807,13 @@ protected:
           const cv::Rect roi = s.initRoi & frameRect; // frame-bound clamp
           if (roi.width < 4 || roi.height < 4)
             throw std::invalid_argument("roi outside frame");
-          s.tracker->init(*mat, roi);
+          s.tracker->init(colorFrame, roi);
           s.needsInit = false;
           out.ok = true; // the init frame reports the armed roi itself
           out.bbox = roi;
         } else {
           cv::Rect bbox;
-          out.ok = s.tracker->update(*mat, bbox);
+          out.ok = s.tracker->update(colorFrame, bbox);
           out.bbox = bbox;
         }
       } catch (const std::exception &) {
@@ -832,6 +866,7 @@ private:
   Meter::ThreadMeter meter_; // single writer = transform thread
   cv::Mat map1_, map2_;      // full maps (empty ⇒ raw mode)
   cv::Mat tmp_, und_;        // reused convert/remap buffers (transform thread)
+  cv::Mat color_;            // reused 3-channel BGR view for KCF (transform thread)
   std::vector<Slot> slots_;  // transform-thread only (≤ MAX_TARGETS)
   Threading::Guard<std::vector<PendingOp>> pending_;
   std::atomic<bool> hasPending_{false};
