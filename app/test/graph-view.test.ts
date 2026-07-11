@@ -5,6 +5,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  busyRing,
   collapseConsumerSinks,
   deriveIdle,
   deriveTopology,
@@ -677,6 +678,58 @@ describe("hover distance + opacity — distance-graded hover (user 2026-07-10)",
     // …and the far graph floors regardless of idle
     expect(effectiveOpacity(Infinity, false)).toBe(HOVER_OPACITY_FLOOR);
     expect(effectiveOpacity(Infinity, true)).toBe(HOVER_OPACITY_FLOOR);
+  });
+});
+
+describe("busyRing — in-graph utilization indicator (user 2026-07-10, ruling 3)", () => {
+  // The visible arc is the FIRST stroke-dasharray number (the filled length);
+  // it must grow monotonically with utilization.
+  const dash = (uri: string): number =>
+    Number(/stroke-dasharray="([\d.]+)/.exec(decodeURIComponent(uri))![1]);
+
+  it("emits an SVG data-URI whose arc grows with utilization", () => {
+    expect(busyRing(0, false).startsWith("data:image/svg+xml,")).toBe(true);
+    expect(dash(busyRing(0, false))).toBe(0);
+    expect(dash(busyRing(0.5, false))).toBeGreaterThan(0);
+    expect(dash(busyRing(1, false))).toBeGreaterThan(dash(busyRing(0.5, false)));
+  });
+
+  it("clamps out-of-range utilization and tiers the color (ok/warn/high + saturated)", () => {
+    const stroke = (uri: string): string =>
+      /stroke="(#[0-9a-f]{3,6})" stroke-width="3" stroke-linecap/.exec(decodeURIComponent(uri))![1];
+    expect(stroke(busyRing(0.2, false))).toBe("#0af"); // ok → accent blue
+    expect(stroke(busyRing(0.8, false))).toBe("#fa0"); // warn → amber
+    expect(stroke(busyRing(0.95, false))).toBe("#f56"); // high → coral
+    expect(stroke(busyRing(0.1, true))).toBe("#f56"); // saturated flag forces coral
+    // clamps: >1 never exceeds the full ring, <0 reads as empty
+    expect(dash(busyRing(-1, false))).toBe(0);
+    expect(dash(busyRing(2, false))).toBe(dash(busyRing(1, false)));
+  });
+
+  it("toElements attaches a ring to metered nodes only, and fans parallel edges by lane", () => {
+    const t = deriveTopology([row("camera/123/convert", { utilization: 0.6 })], PIPES, 1, 0);
+    const els = toElements(t);
+    const convert = els.find((e) => e.data.id === "camera/123/convert")!;
+    expect(typeof convert.data.ring).toBe("string"); // metered → has a ring
+    const camera = els.find((e) => e.data.id === "camera/123")!;
+    expect(camera.data.ring).toBeUndefined(); // unmetered → no ring
+    // Every rendered edge carries lane/lanes (singletons = lane 0 of 1).
+    const edges = els.filter((e) => e.group === "edges");
+    expect(edges.every((e) => e.data.lanes === 1 && e.data.lane === 0)).toBe(true);
+  });
+
+  it("assigns distinct lanes to same-direction parallel edges", () => {
+    const t = deriveTopology([], PIPES, 1, 0);
+    // two edges A→B differing only by port (a rare multi-port join)
+    t.edges.push(
+      { from: "camera/123", to: "camera/123/convert", port: "L", type: { kind: "track" } },
+    );
+    const edges = toElements(t).filter(
+      (e) => e.data.source === "camera/123" && e.data.target === "camera/123/convert",
+    );
+    expect(edges).toHaveLength(2);
+    expect(edges.map((e) => e.data.lanes)).toEqual([2, 2]);
+    expect(new Set(edges.map((e) => e.data.lane))).toEqual(new Set([0, 1]));
   });
 });
 

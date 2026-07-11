@@ -48,6 +48,8 @@ import {
   isZoomGesture,
   nextZoomLevel,
   reconcileDraggedPositions,
+  perpendicularControlPoints,
+  laneOffset,
   type NodePosition,
 } from "./graph-interactions";
 
@@ -113,6 +115,25 @@ const STYLE = [
       "transition-duration": "0.2s",
     },
   },
+  {
+    // In-graph busy ring (ruling 3): a compact circular utilization indicator
+    // (SVG data-URI in `data(ring)`, built in graph-view) pinned to the node's
+    // top-right corner. ADDITIVE — it overlays the kind/saturated fill without
+    // recoloring it, updates in place from each 1 Hz snapshot (no relayout),
+    // and only metered nodes carry `ring` (unmetered nodes match neither).
+    selector: "node[ring]",
+    style: {
+      "background-image": "data(ring)",
+      "background-image-containment": "over", // let the badge overhang the pill
+      "background-clip": "none",
+      "background-width": "14px",
+      "background-height": "14px",
+      "background-position-x": "100%",
+      "background-position-y": "0%",
+      "background-offset-x": "5px",
+      "background-offset-y": "-5px",
+    },
+  },
   ...Object.entries(KIND_COLORS).map(([kind, color]) => ({
     selector: `node[kind = "${kind}"]`,
     style: { "background-color": color },
@@ -157,15 +178,19 @@ const STYLE = [
       "line-color": "#4a525c",
       "target-arrow-color": "#4a525c",
       "target-arrow-shape": "triangle",
-      // Curved stems (user request) leaving the producer's RIGHT-middle and
-      // entering the consumer's LEFT-middle — matches the LR dagre flow.
-      // `control-point-distances` (data(cpd), from graph-view) bows every edge
-      // and fans parallels apart so they never overlap.
+      // Perpendicular cubic stems (user ruling 1): the curve leaves the
+      // producer's RIGHT face and enters the consumer's LEFT face HORIZONTALLY
+      // (no oblique stubs). The two control points are recomputed from live
+      // node positions in `applyEdgeCurvature` (via graph-interactions'
+      // `perpendicularControlPoints`) and set inline per edge; the source/
+      // target endpoints below are the resting defaults (face midpoints), also
+      // overridden inline to fan same-direction parallels. `edge-distances:
+      // endpoints` makes cytoscape measure the control points from these manual
+      // endpoints — the basis the perpendicular math assumes.
       "curve-style": "unbundled-bezier",
+      "edge-distances": "endpoints",
       "source-endpoint": "50% 0%",
       "target-endpoint": "-50% 0%",
-      "control-point-distances": "data(cpd)",
-      "control-point-weights": 0.5,
       "arrow-scale": 0.8,
       label: "data(label)",
       "text-wrap": "wrap",
@@ -272,6 +297,7 @@ function apply(t: GraphTopology): void {
       const node = cy.getElementById(id);
       if (node.nonempty()) node.position({ ...pos });
     }
+    applyEdgeCurvature(); // positions are final — lay the perpendicular stems
   }
   // Hover reconciliation: the diff above rewrites classes wholesale
   // (`existing.classes(...)`) and adds fresh elements — the inline hover
@@ -330,6 +356,41 @@ function clearHover(): void {
   );
 }
 
+// --- Perpendicular-stem geometry (user 2026-07-10, ruling 1) ------------------
+
+/** Recompute each edge's cubic control points + attachment endpoints from the
+ *  CURRENT node positions and set them inline so every stem leaves the source's
+ *  right face and enters the target's left face perpendicular (the math lives in
+ *  graph-interactions' `perpendicularControlPoints`). Runs ONLY when positions
+ *  actually change — after a membership re-layout and on drag-release — never on
+ *  the 1 Hz stats refresh (positions unchanged; inline styles persist across the
+ *  `data()` diff), so it stays off the per-frame path. */
+function applyEdgeCurvature(): void {
+  if (!cy) return;
+  cy.batch(() => {
+    for (const edge of cy!.edges().toArray()) {
+      const s = edge.source();
+      const t = edge.target();
+      const sp = s.position();
+      const tp = t.position();
+      const off = laneOffset(Number(edge.data("lane") ?? 0), Number(edge.data("lanes") ?? 1));
+      // Attachment points: source RIGHT face / target LEFT face midpoints,
+      // shifted vertically by the parallel-lane offset so stems never overlap.
+      const cp = perpendicularControlPoints(
+        { x: sp.x + s.width() / 2, y: sp.y + off },
+        { x: tp.x - t.width() / 2, y: tp.y + off },
+      );
+      if (!cp) continue;
+      // Pin the (lane-shifted) attachment points so they match the endpoints the
+      // control-point math used, then the two computed cubic control points.
+      edge.style("source-endpoint", `50% ${off}px`);
+      edge.style("target-endpoint", `-50% ${off}px`);
+      edge.style("control-point-weights", cp.weights.join(" "));
+      edge.style("control-point-distances", cp.distances.join(" "));
+    }
+  });
+}
+
 // --- Vertical resize (persisted) ---------------------------------------------
 
 const height = ref(parseGraphHeight(localStorage.getItem(GRAPH_HEIGHT_KEY)));
@@ -362,6 +423,26 @@ function onWindowResize(): void {
     resizeAnchored();
   });
 }
+
+// The graph lives inside a tab (v-show): it can mount at 0×0 (a hidden tab) and
+// only gain its real box when the user reveals it. A ResizeObserver on the
+// canvas catches that reveal (and window/fullscreen/height changes) — the FIRST
+// time it has a non-zero box we fit the whole graph into view; thereafter we
+// just re-anchor around the center. Fitting on a 0×0 box would compute a
+// garbage zoom, so the guard matters.
+let sizedOnce = false;
+function onContainerResize(): void {
+  if (!cy || !container.value) return;
+  if (container.value.clientWidth === 0 || container.value.clientHeight === 0) return;
+  if (!sizedOnce) {
+    sizedOnce = true;
+    cy.resize();
+    cy.fit(undefined, 12);
+    return;
+  }
+  onWindowResize();
+}
+let resizeObserver: ResizeObserver | null = null;
 
 function persistHeight(): void {
   localStorage.setItem(GRAPH_HEIGHT_KEY, String(height.value));
@@ -472,6 +553,7 @@ onMounted(() => {
   });
   cy.on("dragfree", "node", (evt) => {
     dragged.set(evt.target.id(), { ...evt.target.position() });
+    applyEdgeCurvature(); // the node moved — re-lay its (and neighbors') stems
   });
   // Hover feedback: the .hover overlay halo (see STYLE) on both element
   // kinds + the detail card (node metrics / edge flow breakdown) + the focus
@@ -529,7 +611,11 @@ onMounted(() => {
   container.value?.addEventListener("wheel", onWheel, { passive: false });
   container.value?.addEventListener("pointerdown", onPointerDown);
   window.addEventListener("pointerup", onPointerUp);
-  window.addEventListener("resize", onWindowResize);
+  // A ResizeObserver on the canvas supersedes a window 'resize' listener: the
+  // canvas is width:100% so it catches window resizes too, PLUS the tab-reveal
+  // (0×0 → real box) and fullscreen/height transitions the window event misses.
+  resizeObserver = new ResizeObserver(onContainerResize);
+  if (container.value) resizeObserver.observe(container.value);
   document.addEventListener("fullscreenchange", onFullscreenChange);
   if (props.topology) apply(props.topology);
 });
@@ -544,7 +630,8 @@ watch(
 onBeforeUnmount(() => {
   container.value?.removeEventListener("wheel", onWheel);
   window.removeEventListener("pointerup", onPointerUp);
-  window.removeEventListener("resize", onWindowResize);
+  resizeObserver?.disconnect();
+  resizeObserver = null;
   document.removeEventListener("fullscreenchange", onFullscreenChange);
   cy?.destroy();
   cy = null;

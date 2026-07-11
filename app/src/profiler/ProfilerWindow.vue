@@ -273,6 +273,32 @@ const clockRows = computed(() => {
     samples: c.samples,
   }));
 });
+
+// Tabs (proposal §2 — the ~12-section scroll splits into a fixed tab strip
+// behind the title bar; the Settings two-tab shell is the precedent). The graph
+// is primary, so it is the default. Active tab persists across reloads via raw
+// localStorage — the profiler already leans on it for the pin / report-rate /
+// graph-height choices (@lib/local + url-state are for reactive session state;
+// these are plain window prefs), so a fourth `profiler:*` key keeps that idiom.
+const TAB_KEY = "profiler:tab";
+type ProfilerTab = "graph" | "workloads" | "control" | "transport" | "system";
+const TABS: { id: ProfilerTab; label: string }[] = [
+  { id: "graph", label: "Graph" },
+  { id: "workloads", label: "Workloads" },
+  { id: "control", label: "Control" },
+  { id: "transport", label: "Transport" },
+  { id: "system", label: "System" },
+];
+function parseTab(raw: string | null): ProfilerTab {
+  return TABS.some((t) => t.id === raw) ? (raw as ProfilerTab) : "graph";
+}
+const activeTab = ref<ProfilerTab>(parseTab(localStorage.getItem(TAB_KEY)));
+const tabContent = ref<HTMLElement | null>(null);
+watch(activeTab, (t) => {
+  localStorage.setItem(TAB_KEY, t);
+  // Reset scroll on switch so a tab never opens mid-scroll (Settings precedent).
+  tabContent.value?.scrollTo({ top: 0 });
+});
 </script>
 
 <template>
@@ -337,39 +363,37 @@ const clockRows = computed(() => {
       <span class="banner-detail">{{ endState.detail }}</span>
     </div>
 
-    <section>
-      <h2>Event-loop lag</h2>
-      <div class="row">
-        <div class="stat">
-          <label>Orchestrator (mean {{ fmt(sys.telemetry.loopLag.mean) }}ms / max {{ fmt(sys.telemetry.loopLag.max) }}ms)</label>
-          <Sparkline :values="orchLoopLag" color="#0af" />
-        </div>
-        <div class="stat">
-          <label>This window (mean {{ fmt(rendererLoopLag.stats.mean) }}ms / max {{ fmt(rendererLoopLag.stats.max) }}ms)</label>
-          <Sparkline :values="rendLoopLag" color="#fa0" />
-        </div>
-      </div>
-    </section>
+    <!-- Fixed tab strip behind the title bar (proposal §2; the Settings two-tab
+         shell is the precedent) — never scrolls out of view, only .tab-content
+         scrolls. The switch snaps (no transition, per the design language). -->
+    <div class="tabs" role="tablist" aria-label="Profiler sections">
+      <button
+        v-for="t in TABS"
+        :key="t.id"
+        role="tab"
+        :aria-selected="activeTab === t.id"
+        class="tab"
+        :class="{ active: activeTab === t.id }"
+        @click="activeTab = t.id"
+      >
+        {{ t.label }}
+      </button>
+    </div>
 
-    <section v-if="clockRows.length > 0">
-      <h2>Clocks</h2>
-      <table>
-        <thead>
-          <tr><th>clock</th><th>method</th><th>offset</th><th>jitter</th><th>n</th></tr>
-        </thead>
-        <tbody>
-          <tr v-for="c in clockRows" :key="c.id">
-            <td class="mono">{{ c.id }}</td>
-            <td>{{ c.method }}</td>
-            <td class="mono">{{ c.offsetMs }} ms</td>
-            <td class="mono" :class="{ saturated: c.jitterUs > 500 }">{{ c.jitterUs }} µs</td>
-            <td>{{ c.samples }}</td>
-          </tr>
-        </tbody>
-      </table>
-    </section>
+    <div class="tab-content" ref="tabContent">
+      <!-- ============ GRAPH (primary — gets the freed vertical space) ====== -->
+      <section v-show="activeTab === 'graph'" class="graph-section">
+        <h2>Pipeline graph</h2>
+        <p class="hint">
+          Live pipeline topology — each node's corner ring tracks its busy % (saturated ≥90% turns
+          coral); hover a node or edge for its full metrics (util% · rate · worst gap · drops/queue).
+          Dropping/backpressured edges and saturated nodes are flagged red.
+        </p>
+        <GraphPanel :topology="graphTopology" />
+      </section>
 
-    <section>
+      <!-- ============ WORKLOADS ============ -->
+      <section v-show="activeTab === 'workloads'">
       <h2>Workloads ({{ workloads.length }})</h2>
       <p class="hint" v-if="workloads.length === 0">
         No workload meters registered yet — camera preview loops, processing gates, and recorders appear here while live.
@@ -442,16 +466,22 @@ const clockRows = computed(() => {
       </div>
     </section>
 
-    <section>
-      <h2>Pipeline graph</h2>
-      <p class="hint">
-        Live pipeline topology — hover a node or edge for its full metrics (util% · rate · worst
-        gap · drops/queue); saturated (≥90%) nodes and dropping/backpressured edges are flagged red.
-      </p>
-      <GraphPanel :topology="graphTopology" />
-    </section>
+      <section v-show="activeTab === 'workloads'">
+        <h2>Event-loop lag</h2>
+        <div class="row">
+          <div class="stat">
+            <label>Orchestrator (mean {{ fmt(sys.telemetry.loopLag.mean) }}ms / max {{ fmt(sys.telemetry.loopLag.max) }}ms)</label>
+            <Sparkline :values="orchLoopLag" color="#0af" />
+          </div>
+          <div class="stat">
+            <label>This window (mean {{ fmt(rendererLoopLag.stats.mean) }}ms / max {{ fmt(rendererLoopLag.stats.max) }}ms)</label>
+            <Sparkline :values="rendLoopLag" color="#fa0" />
+          </div>
+        </div>
+      </section>
 
-    <section>
+      <!-- ============ CONTROL ============ -->
+      <section v-show="activeTab === 'control'">
       <h2>Control-path latency</h2>
       <p class="hint" v-if="!mc.telemetry.ready">
         Manual-control is not active in any window — these read zero until it is.
@@ -464,7 +494,7 @@ const clockRows = computed(() => {
       </div>
     </section>
 
-    <section>
+    <section v-show="activeTab === 'control'">
       <h2>Volt telemetry</h2>
       <div class="row">
         <div class="stat">
@@ -484,7 +514,7 @@ const clockRows = computed(() => {
       </div>
     </section>
 
-    <section>
+    <section v-show="activeTab === 'control'">
       <h2>Serial data rate</h2>
       <p class="hint" v-if="!ctrl.telemetry.connected">Controller not connected — rates read zero until it is.</p>
       <div class="mono">
@@ -495,7 +525,8 @@ const clockRows = computed(() => {
       </div>
     </section>
 
-    <section>
+    <!-- ============ TRANSPORT ============ -->
+      <section v-show="activeTab === 'transport'">
       <h2>Live streams ({{ sortedStreams.length }})</h2>
       <p class="hint" v-if="sortedStreams.length === 0">No CMD_STREAM targets active.</p>
       <div class="row">
@@ -513,7 +544,7 @@ const clockRows = computed(() => {
       </div>
     </section>
 
-    <section>
+    <section v-show="activeTab === 'transport'">
       <h2>Per-topic channel rates</h2>
       <table>
         <thead>
@@ -531,14 +562,33 @@ const clockRows = computed(() => {
       </table>
     </section>
 
-    <section>
+    <section v-show="activeTab === 'transport'">
       <h2>Store-hub writes</h2>
       <div class="mono" v-if="snapshot">
         writes {{ snapshot.storeHub.writes }} · updates {{ snapshot.storeHub.updates }} · clears {{ snapshot.storeHub.clears }}
       </div>
     </section>
 
-    <section>
+    <!-- ============ SYSTEM ============ -->
+      <section v-show="activeTab === 'system' && clockRows.length > 0">
+        <h2>Clocks</h2>
+        <table>
+          <thead>
+            <tr><th>clock</th><th>method</th><th>offset</th><th>jitter</th><th>n</th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="c in clockRows" :key="c.id">
+              <td class="mono">{{ c.id }}</td>
+              <td>{{ c.method }}</td>
+              <td class="mono">{{ c.offsetMs }} ms</td>
+              <td class="mono" :class="{ saturated: c.jitterUs > 500 }">{{ c.jitterUs }} µs</td>
+              <td>{{ c.samples }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section v-show="activeTab === 'system'">
       <h2>Boot / activation timeline</h2>
       <table>
         <thead>
@@ -555,6 +605,7 @@ const clockRows = computed(() => {
         </tbody>
       </table>
     </section>
+    </div>
   </div>
 </template>
 
@@ -617,13 +668,67 @@ const clockRows = computed(() => {
   left: 0;
   right: 0;
   bottom: 0;
-  overflow: auto;
+  // Fixed tab strip + independently-scrolling content (proposal §2): the
+  // profiler itself no longer scrolls — it is a flex column whose header
+  // (banner + tab strip) stays put while only .tab-content scrolls.
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   /* profiler panel is intentionally darker than app chrome (its own sub-theme) */
   background: #0b0b0d;
   color: var(--text-strong);
   font-family: var(--font-mono);
-  padding: 1rem 1.5rem 3rem;
   box-sizing: border-box;
+
+  // Tab strip — mirrors the Settings shell (ConfigBody): a 2px transparent
+  // bottom border on every tab so selecting only recolors it (no layout shift),
+  // and the switch snaps (no transition) per the design language.
+  .tabs {
+    flex-shrink: 0;
+    display: flex;
+    gap: 0.4ch;
+    padding: 0.5rem 1.5rem 0;
+    border-bottom: 1px solid var(--bg-app);
+  }
+
+  .tab {
+    font-family: inherit;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    padding: 0.4em 0.9em;
+    cursor: pointer;
+    outline: none;
+    &:hover {
+      color: var(--text-strong);
+    }
+    &:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+    &.active {
+      color: var(--text-strong);
+      border-bottom-color: var(--accent-bright);
+    }
+  }
+
+  .tab-content {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    padding: 1rem 1.5rem 3rem;
+  }
+
+  // The graph section fills the tab (the graph is primary and gets the freed
+  // vertical space); its own canvas stays user-resizable within.
+  .graph-section {
+    margin-bottom: 0;
+  }
 
   section {
     margin-bottom: 1.5rem;
@@ -792,10 +897,14 @@ const clockRows = computed(() => {
   // at the top of the body so nothing below jumps when it appears. Clean/killed
   // end = neutral amber notice; a crash = the shared danger identity (tokens).
   .session-banner {
+    // Fixed header element (above the tab strip): its own margins now that
+    // .profiler carries no padding, so it stays inset from the window edges and
+    // is visible on every tab (a frozen session must never be tab-hidden).
+    flex-shrink: 0;
     display: flex;
     flex-direction: column;
     gap: 0.15rem;
-    margin-bottom: 1.25rem;
+    margin: 0.85rem 1.5rem 0.35rem;
     padding: 0.6rem 0.85rem;
     border-radius: 6px;
     border: 1px solid var(--border-strong);

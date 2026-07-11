@@ -477,32 +477,61 @@ export function deriveIdle(t: GraphTopology): IdleSet {
   return { nodes, edges };
 }
 
-// --- Curved-edge control points (user 2026-07-10) ---------------------------
+// --- Per-node busy ring (user 2026-07-10, ruling 3) -------------------------
 
-/** A gentle single-edge bow (px, perpendicular to the endpoints) so every stem
- *  reads as a curve, not a straight line. */
-const SINGLE_BOW = 16;
-/** Symmetric spread for edges between the SAME node pair so parallels (incl.
- *  bidirectional A→B / B→A) never overlap. */
-const PARALLEL_SPREAD = 26;
+/** Ring badge colors — mirror the Workloads table's tint tiers (tokens
+ *  `--accent-bright` / `--warn` + the profiler's coral `#f56`). Cytoscape's JS
+ *  stylesheet and data-URI SVGs can't read CSS custom properties, so the values
+ *  are mirrored here like `KIND_COLORS` / `ROLE_COLORS` above. */
+const RING_TRACK = "#2a2f36"; // unfilled arc (matches the graph chip border)
+const RING_OK = "#0af";
+const RING_WARN = "#fa0";
+const RING_HIGH = "#f56";
+const RING_RADIUS = 9;
+const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
 
-/** Per-edge `control-point-distances` for `unbundled-bezier`, keyed by edgeId:
- *  a single edge bows by `SINGLE_BOW`; parallels between one undirected node
- *  pair fan out symmetrically. */
-function controlPointDistances(edges: GraphEdge[]): Map<string, number> {
+/** Compact circular busy indicator (ruling 3): a thin arc that fills clockwise
+ *  from 12 o'clock to `utilization` of a full turn, color-tiered by the SAME
+ *  ok/warn/high thresholds the Workloads table uses (SATURATED ≥ 0.9 → coral).
+ *  Returned as an SVG `data:` URI for a cytoscape corner `background-image` —
+ *  ADDITIVE over the node's kind/saturated fill, so it never competes with the
+ *  semantic colors. Fed live from the folded stats via `data(ring)`, so it
+ *  tracks each 1 Hz snapshot in place with no relayout. */
+export function busyRing(utilization: number, saturated: boolean): string {
+  const u = Math.min(1, Math.max(0, utilization));
+  const arc = u * RING_CIRCUMFERENCE;
+  const level = utilizationLevel(u);
+  const color =
+    saturated || level === "high" ? RING_HIGH : level === "warn" ? RING_WARN : RING_OK;
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">` +
+    `<circle cx="12" cy="12" r="${RING_RADIUS}" fill="none" stroke="${RING_TRACK}" stroke-width="3"/>` +
+    `<circle cx="12" cy="12" r="${RING_RADIUS}" fill="none" stroke="${color}" stroke-width="3" ` +
+    `stroke-linecap="round" stroke-dasharray="${arc.toFixed(2)} ${(RING_CIRCUMFERENCE - arc).toFixed(2)}" ` +
+    `transform="rotate(-90 12 12)"/></svg>`;
+  return `data:image/svg+xml,${encodeURIComponent(svg)}`;
+}
+
+// --- Parallel-edge lanes (user 2026-07-10) ----------------------------------
+
+/** Lane index + count for SAME-DIRECTION parallel edges (identical `from`→`to`,
+ *  distinct port). Bidirectional pairs (A→B / B→A) already separate via their
+ *  opposite L/R attachment faces under the perpendicular-stem geometry, so only
+ *  same-direction parallels need fanning; the panel maps `lane` to a small
+ *  vertical attachment offset on both faces so the perpendicular stems stay
+ *  parallel instead of overlapping. Pure — keyed by edgeId. */
+function edgeLanes(edges: GraphEdge[]): Map<string, { lane: number; lanes: number }> {
   const groups = new Map<string, GraphEdge[]>();
   for (const e of edges) {
-    const key = e.from < e.to ? `${e.from}\0${e.to}` : `${e.to}\0${e.from}`;
+    const key = `${e.from}\0${e.to}`;
     const g = groups.get(key);
     if (g) g.push(e);
     else groups.set(key, [e]);
   }
-  const cpd = new Map<string, number>();
-  for (const g of groups.values()) {
-    if (g.length === 1) cpd.set(edgeId(g[0]!), SINGLE_BOW);
-    else g.forEach((e, i) => cpd.set(edgeId(e), PARALLEL_SPREAD * (i - (g.length - 1) / 2)));
-  }
-  return cpd;
+  const out = new Map<string, { lane: number; lanes: number }>();
+  for (const g of groups.values())
+    g.forEach((e, i) => out.set(edgeId(e), { lane: i, lanes: g.length }));
+  return out;
 }
 
 /** Reduce a topology to cytoscape element definitions. Pure data — the panel
@@ -512,7 +541,7 @@ function controlPointDistances(edges: GraphEdge[]): Map<string, number> {
 export function toElements(t0: GraphTopology): GraphElement[] {
   const t = collapseConsumerSinks(t0);
   const idle = deriveIdle(t);
-  const cpd = controlPointDistances(t.edges);
+  const lanes = edgeLanes(t.edges);
   const els: GraphElement[] = t.nodes.map((n) => ({
     group: "nodes",
     data: {
@@ -520,6 +549,11 @@ export function toElements(t0: GraphTopology): GraphElement[] {
       kind: n.kind,
       label: nodeLabel(n, t.roles),
       detail: nodeDetail(n),
+      // In-graph busy indicator (ruling 3): metered nodes carry a live ring
+      // data-URI; unmetered nodes omit it (the `node[ring]` selector skips them).
+      ...(n.stats?.utilization !== undefined
+        ? { ring: busyRing(n.stats.utilization, !!n.stats.saturated) }
+        : {}),
       ...(() => {
         const c = roleColor(n, t.roles);
         return c ? { roleColor: c } : {};
@@ -537,6 +571,7 @@ export function toElements(t0: GraphTopology): GraphElement[] {
     if (!known.has(e.from) || !known.has(e.to)) continue;
     const id = edgeId(e);
     const isIdle = idle.edges.has(id);
+    const lane = lanes.get(id) ?? { lane: 0, lanes: 1 };
     els.push({
       group: "edges",
       data: {
@@ -547,7 +582,10 @@ export function toElements(t0: GraphTopology): GraphElement[] {
         // stalled accent is reserved for a stall under live demand.
         label: isIdle ? "idle" : edgeLabel(e),
         detail: edgeDetail(e),
-        cpd: cpd.get(id) ?? SINGLE_BOW,
+        // Same-direction parallel fanning (the perpendicular stems are laid out
+        // by the panel from live node positions — `graph-interactions.ts`).
+        lane: lane.lane,
+        lanes: lane.lanes,
       },
       classes: isIdle ? "idle" : edgeWarns(e) ? "dropping" : "",
     });

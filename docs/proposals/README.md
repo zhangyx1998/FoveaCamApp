@@ -27,3 +27,4 @@ workers implement against these files, and live-rig items accumulate in
 | [prediction-compose-node](./prediction-compose-node.md) | shipped; rig owed | IMM predictor → native free-running brick (rate+offset, always wired); pid stays at camera rate; new compose node feed-forwards volt deltas at `prediction_rate_hz` (global, default 600) |
 | [sgbm-signed-range](./sgbm-signed-range.md) | shipped; rig owed | foveated gaze ⇒ signed disparity: both stereo attach sites get a fixed symmetric ±256 window |
 | [stereo-throughput](./stereo-throughput.md) | shipped; rig owed | stereo matcher becomes a benchmark-selected strategy (scaled SGBM_3WAY / BM / +WLS) targeting ~60 fps CPU-only |
+| [profiler-tabs-and-graph-polish](./profiler-tabs-and-graph-polish.md) | shipped; rig visual pass owed | profiler splits into 5 tabs; graph edges become face-normal cubic béziers; per-node busy rings + hover-popup detail |

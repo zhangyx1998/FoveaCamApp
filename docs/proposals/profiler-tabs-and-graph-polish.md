@@ -1,7 +1,37 @@
 # Profiler tabs + node-graph polish
 
-Status: **PROPOSED (ruled 2026-07-10).** Renderer-only (`app/src/profiler/**`
-— the sandboxed profiler window); no orchestrator/wire changes.
+Status: **SHIPPED (2026-07-10; rig visual pass owed).** Renderer-only
+(`app/src/profiler/**` — the sandboxed profiler window); no orchestrator/wire
+changes.
+
+## AS SHIPPED (2026-07-10)
+
+Tab grouping adopted exactly as proposed (Graph default · Workloads ·
+Control · Transport · System); every old section preserved, only reparented.
+Perpendicular stems: endpoints pinned to the LR faces
+(`edge-distances: endpoints`), control points `C = endpoint ± off·(1,0)`
+projected into cytoscape's endpoint basis (weights/distances), `off =
+clamp(0.35·l, 22, 90)` px — recomputed only on relayout/drag-release, never
+on the 1 Hz stats refresh; a reconstruction unit test pins the face-normal
+property for forward/diagonal/back edges. Busy ring: 24×24 SVG data-URI
+corner badge over the kind fill, arc = utilization, color-tiered like the
+Workloads table (SATURATED ≥ 0.9 coral), updated in place per snapshot.
+
+Deltas from the ruled sketch: node labels stay name-only (the ring carries
+utilization; rate lives in the hover card); tab persistence is a raw
+`localStorage["profiler:tab"]` key matching the profiler's existing
+`profiler:*` pref idiom (url-state is reserved for the immutable instance
+binding); node/edge hover popups already existed and already carried the
+full detail — confirmed sufficient, not rebuilt. A canvas `ResizeObserver`
+replaces the window resize listener and fixes the graph-in-a-hidden-tab
+0×0 first-reveal fit.
+
+RIG-GATED (bench session, visual): perpendicular stems at every node incl.
+C-shaped back-edges and re-squaring after drag; rings matching the
+Workloads busy % live without jitter; parallel edges fanning into lanes;
+popups matching table values and hiding on leave/pan/zoom; tab state
+surviving reload; graph fitting when first revealed from a hidden tab;
+60 fps pan/zoom/drag.
 
 ## User rulings (2026-07-10)
 

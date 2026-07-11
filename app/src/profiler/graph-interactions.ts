@@ -94,3 +94,63 @@ export function parseReportInterval(raw: string | null): number {
     ? n
     : DEFAULT_REPORT_INTERVAL_MS;
 }
+
+// --- Perpendicular-stem edge geometry (user 2026-07-10, ruling 1) ------------
+//
+// The graph is dagre LR: every edge attaches the SOURCE's right face and the
+// TARGET's left face (pinned via `source-endpoint`/`target-endpoint`). The user
+// ruling is that the stem must leave/enter PERPENDICULAR to that face — i.e.
+// horizontally — instead of the old `unbundled-bezier`'s oblique tangents.
+//
+// With cytoscape's `edge-distances: endpoints`, an unbundled-bezier control
+// point is `S + w·(T−S) + d·n`, where S/T are the manual attachment points and
+// `n = (−dy, dx)/l` is cytoscape's endpoint normal (`recalcVectorNormInverse`,
+// cytoscape 3.34 renderer). We want the two cubic control points on the face
+// normals: C1 = S + off·(+1,0) (source right-face outward normal) and
+// C2 = T + off·(−1,0) (target left-face outward normal). Decomposing each onto
+// the {L, n} basis gives the (weight, distance) pair below — exact, so the
+// tangents are horizontal regardless of how the nodes are dragged.
+
+/** Stem length as a fraction of the attachment-point separation… */
+export const STEM_FRACTION = 0.35;
+/** …clamped so short edges still read as a curve and long ones don't balloon. */
+export const STEM_MIN_PX = 22;
+export const STEM_MAX_PX = 90;
+/** Vertical spread (px) between same-direction parallel edges' attachment
+ *  points, so their perpendicular stems stay parallel instead of overlapping. */
+export const LANE_STEP_PX = 12;
+
+/** Perpendicular stem offset for an attachment-point separation `length`. */
+export function stemOffset(length: number): number {
+  return Math.min(STEM_MAX_PX, Math.max(STEM_MIN_PX, length * STEM_FRACTION));
+}
+
+/** Signed vertical offset (px) for lane `lane` of `lanes` same-direction
+ *  parallels — 0-centered so the fan is symmetric about the face midpoint. */
+export function laneOffset(lane: number, lanes: number): number {
+  return lanes > 1 ? (lane - (lanes - 1) / 2) * LANE_STEP_PX : 0;
+}
+
+/** cytoscape `unbundled-bezier` (edge-distances: endpoints) control points that
+ *  make a cubic stem leave the source's RIGHT face and enter the target's LEFT
+ *  face HORIZONTALLY (perpendicular to the LR attachment faces). `s`/`t` are the
+ *  manual attachment points in model px. Returns the two-element weight +
+ *  distance arrays, or null when the endpoints coincide (degenerate — the panel
+ *  keeps cytoscape's straight fallback). */
+export function perpendicularControlPoints(
+  s: NodePosition,
+  t: NodePosition,
+): { weights: [number, number]; distances: [number, number] } | null {
+  const dx = t.x - s.x;
+  const dy = t.y - s.y;
+  const l2 = dx * dx + dy * dy;
+  if (l2 < 1e-6) return null;
+  const l = Math.sqrt(l2);
+  const off = stemOffset(l);
+  // C1 = s + off·(+1,0): w = off·dx/l², d = −off·dy/l (project onto {L, n}).
+  // C2 = t + off·(−1,0): w = 1 − off·dx/l², d = +off·dy/l.
+  return {
+    weights: [(off * dx) / l2, 1 - (off * dx) / l2],
+    distances: [(-off * dy) / l, (off * dy) / l],
+  };
+}
