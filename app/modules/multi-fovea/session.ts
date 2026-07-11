@@ -4,17 +4,9 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Multi-fovea session (C-24 step 4 — the composition-round flagship).
-// Tracking runs on B-25's native multi-KCF thread (`createMultiTracker`: one
-// free-running thread, batched per-frame results, fused undistort — results in
-// UNDISTORTED coordinates when calibrated). The session consumes the batch
-// iterator into the runtime's policy half (arm/disarm churn, lost tolerance,
-// steering, controller streams) and drives each slot's composed fovea crop
-// node (`setFoveaRect` per tick — frame-bound origin rides the pipe, v4).
-// The renderer COMPOSES the per-target fovea nodes itself (camera-rooted,
-// refcounted, auto-unref on window close) and binds them via `usePipeFrame`.
-// The C-22b relay worker is GONE — nothing multi-fovea does touches the JS
-// event loop per frame anymore.
+// Multi-fovea session — N interleaved foveas over one shared center stream, a
+// thin coordinator over the native multi-KCF thread + the `MultiFoveaRuntime`
+// policy half. Behavior spec: docs/spec/multi-fovea.md.
 
 import { type ServerSession } from "@orchestrator/runtime";
 import { defineResourceSession, type ResourceScope } from "@orchestrator/resource-session";
@@ -75,8 +67,8 @@ function radians(deg: number): number {
   return (deg * Math.PI) / 180;
 }
 
-/** B-25's multi-KCF surface (d.ts pending — B-owned; cast like the Aravis pipe
- *  NAPIs). `arm` on a live id RE-INITS that target (ruled steer-while-armed). */
+/** Native multi-KCF surface (d.ts pending; cast like the Aravis NAPIs). `arm`
+ *  on a live id RE-INITS that target (ruled steer-while-armed). */
 interface MultiKcfTracker extends AsyncIterable<MultiTrackBatch> {
   arm(id: string, roi: Rect): void;
   disarm(id: string): void;
@@ -97,18 +89,15 @@ const createMultiTracker = (
  *  pipe isn't composed/attached — callers steer blindly, that's fine. */
 export type FoveaRectSeam = (pipeId: string, rect: Rect) => boolean;
 
-/** Wave I-2 seams (all injected — the session stays core-free in vitest):
- *  the refcounted raw-pipe registry (recording), the pairing brick factory
- *  (trigger-mode L/R pairs; absent → pairing unwired), the compression brick
- *  (optional per-stream zlib), and the `recording:finished` notifier. */
+/** Injected seams (keep the session core-free in vitest): the raw-pipe registry
+ *  (recording), the pairing brick factory, the compression brick, and the
+ *  `recording:finished` notifier. See spec §pairing, §recording. */
 export interface MultiFoveaSessionSeams {
   rawPipes: RawPipeRegistry;
   pair?: PairPipeSeam;
   compress?: CompressPipeSeam;
-  /** stereo-paired-inputs (ruling 2): the paired-SGBM disparity brick. Composed
-   *  over the `pair/undistort` stage when the trigger pairing topology is live
-   *  (absent → no paired disparity node; free-run keeps the latest-wins node in
-   *  disparity-scope). */
+  /** The paired-SGBM disparity brick over the `pair/undistort` stage (spec
+   *  §pairing); absent → no paired disparity node. */
   stereo?: StereoPipeSeam;
   finished?: (foveaPath: string) => void;
 }
@@ -121,7 +110,7 @@ export default function multiFoveaSession(
 ): ServerSession<typeof multiFovea> {
   return defineResourceSession("multi-fovea", multiFovea, (s) => {
     let triple: CalibratedTriple | null = null;
-    // Capture (ruling 3): degraded raw-stack capture over the leased triple.
+    // Capture: degraded raw-stack capture over the leased triple (spec §capture).
     let captureHelper: CaptureHelper | null = null;
     let captureCenter: { shmName: string; maxBytes: number; channels: number } | null = null;
     let tk: MultiKcfTracker | null = null;
@@ -140,10 +129,7 @@ export default function multiFoveaSession(
           return controller.frame({
             ...request,
             pulse: request.pulse ?? s.state.pulse_ns,
-            // Push the live settle hold into EVERY CMD_FRAME (per-triple seed +
-            // drawer live-override). The firmware applies it only on a stream
-            // SWITCH; 0 = no hold. Independent of pulse (not subtracted).
-            settle_time: request.settle_time ?? s.state.settle_time_us,
+            settle_time: request.settle_time ?? s.state.settle_time_us, // spec §settle
           });
         },
       },
@@ -202,8 +188,7 @@ export default function multiFoveaSession(
             streamHz: target.streamId === null ? 0 : hz.get(target.streamId) ?? 0,
           })),
         });
-        // Descriptor channels churn with target arm/disarm (recording ruling
-        // 3) + the slot→controller-stream map the pair binding keys on.
+        // Descriptor channels + the slot→stream map churn with arm/disarm (spec §recording).
         recording.onTargets(
           targets.map((t) => ({
             index: t.index,
@@ -212,8 +197,8 @@ export default function multiFoveaSession(
           })),
         );
       },
-      // Steer the slot's composed crop node — blind (false when the renderer
-      // hasn't composed that fovea; the node follows as soon as it exists).
+      // Steer the slot's composed crop node — blind (false while the renderer
+      // hasn't composed that fovea; it follows once the node exists).
       updateFoveaRect(index, rect) {
         if (serialC) setFoveaRect(nodeId.fovea(serialC, index), rect);
       },
@@ -230,8 +215,8 @@ export default function multiFoveaSession(
       });
     }
 
-    /** Wide camera singleton metadata (multi-fovea-recording ruling 2) — the
-     *  calibration triple's center intrinsics + distortion; null uncalibrated. */
+    /** Wide camera singleton metadata (spec §recording) — the triple's center
+     *  intrinsics + distortion (+ per-triple baseline_mm); null uncalibrated. */
     function wideCameraMeta(): Record<string, unknown> | null {
       const und = triple?.undistort;
       if (!und) return null;
@@ -244,18 +229,13 @@ export default function multiFoveaSession(
         center: und.center,
         fov: und.fov,
       };
-      // Part B needs the stereo baseline for the vergence-plane depth readout.
-      // The per-triple baseline (mm) rides ALONGSIDE the wide-camera intrinsics
-      // (additive — old containers omit it → the viewer shows "—"). Null when
-      // the triple stores no baseline (the viewer then falls back / shows "—").
+      // Per-triple baseline (mm) rides alongside the intrinsics for Part B's
+      // depth readout (additive; old containers → viewer shows "—").
       if (triple?.baselineMm != null) meta.baseline_mm = triple.baselineMm;
       return meta;
     }
 
-    // Multi-fovea RECORDING controller (multi-fovea-recording r2.1, wave I-2):
-    // raw12p streams via the refcounted registry, optional per-stream zlib,
-    // descriptor channels churned from the runtime's publish flow, extras from
-    // matched pair anchors. Session-level singleton like manual-control's.
+    // Multi-fovea RECORDING controller (spec §recording) — session-level singleton.
     const recording = createMultiFoveaRecording({
       cameras: () => {
         if (!triple) return null;
@@ -277,11 +257,8 @@ export default function multiFoveaSession(
       },
       compress: seams.compress,
       compressStreams: () => ({ ...s.state.record_compress }),
-      // Part A — free-run extras: the orchestrator-wide actuation history
-      // (already generic — written by the controller node, read in realtime by
-      // the homography feeder) sampled at each frame's exposure host-ns, and the
-      // ACTIVE triple's conversions (null while unleased/uncalibrated → free-run
-      // frames omit angle/affine per the existing rule).
+      // Free-run extras (spec §recording): the actuation history at each frame's
+      // exposure host-ns + the active triple's conversions (null uncalibrated).
       mirrorAt: (hostNs) => mirrorHistory.mirrorAt(hostNs),
       conversions: () => triple?.conv ?? null,
       finished: seams.finished ?? (() => {}),
@@ -292,11 +269,9 @@ export default function multiFoveaSession(
       index: number,
       center: Point2d,
     ): { angle: Point2d; volt: { L: Pos; R: Pos } } {
-      // DEMO angle-space PRESET path: the mirror parks at the target's fixed
-      // (pan, tilt) degrees. Both eyes point at the SAME angle (vergence at
-      // infinity) through the EXISTING per-eye A2V mapping (the calibrate /
-      // manual-control MEMS conversion — no new math). Uncalibrated → origin
-      // volts, but the angle still surfaces in telemetry.
+      // Angle-space PRESET path (spec §targets): park at the fixed (pan, tilt);
+      // both eyes at the same angle through the per-eye A2V. Uncalibrated →
+      // origin volts, angle still surfaces in telemetry.
       const preset = s.state.targets[index]?.preset;
       if (preset) {
         const angle: Point2d = { x: radians(preset.pan), y: radians(preset.tilt) };
@@ -347,11 +322,9 @@ export default function multiFoveaSession(
       }
     }
 
-    /** Consume the ROOT pair brick's batched records (FIN rate — low, loop-
-     *  safe): forward each as a RESOLVED anchor to the downstream exact brick
-     *  (pairing-nodes ruling 2 / R-1) and into the recording controller
-     *  (descriptor L/R re-keying + extras anchors). Ends when the brick is
-     *  released on drain. */
+    /** Consume the ROOT pair brick's batched records (FIN rate): forward each as
+     *  a RESOLVED anchor to the downstream exact brick + into the recording
+     *  controller (spec §pairing, §recording). Ends on drain release. */
     async function consumePairs(
       root: PairHandle,
       downstream: PairHandle | null,
@@ -390,16 +363,11 @@ export default function multiFoveaSession(
       applyTargets();
     }
 
-    // Resource-scoped activation (A-P1). `scheduler`/`runtime` are session-level
-    // singletons; per activation we lease the triple + spin the multi-KCF
-    // thread, and the drain releases the tracker (closing its iterator) +
-    // stops the scheduler + disposes the runtime. Lease releases LAST.
+    // Resource-scoped activation (spec §topology): lease + spin the multi-KCF
+    // thread; the drain releases tracker → scheduler → runtime, lease LAST.
     async function activateSession(scope: ResourceScope): Promise<void> {
-      // Spin-up progress (ruling 2026-07-09): declare the activation steps
-      // upfront so the window shows this sequence instead of blanking while the
-      // graph builds. A failure/early-return path leaves the list FROZEN at the
-      // step it died on (never `done`/`complete`) — the error surfaces
-      // separately; the scope's idle teardown clears it on a cancelled spin-up.
+      // Progress monitor: an early-return leaves the list FROZEN at its step;
+      // the scope's idle teardown clears it.
       const monitor = s.progressMonitor([
         { id: "lease", label: "Leasing cameras" },
         { id: "calibration", label: "Loading calibration" },
@@ -413,16 +381,10 @@ export default function multiFoveaSession(
       monitor.done("lease");
       triple = t;
       serialC = t.leases.C.camera.serial;
-      // Seed the live settle hold from the ACTIVE triple's per-triple config
-      // (per-triple ruling). The drawer slider overrides this LIVE for the
-      // running session (same orchestrator instance). A Settings-page edit is
-      // picked up at the NEXT activation only — config-store docs are
-      // per-instance, so a cross-instance live push is intentionally out of
-      // scope (known gotcha); starting a fresh session re-reads it here.
+      // Seed the live settle hold from the active triple; the drawer overrides it
+      // live, a Settings edit applies next activation only (spec §settle).
       s.setState("settle_time_us", t.settleTimeUs);
-      // DISPLAY-ONLY: the profiler labels this leased triple by role (L/C/R)
-      // instead of serial in the app context (ids stay serial-keyed) — the
-      // same one-liner every triple-holding session registers.
+      // DISPLAY-ONLY: label the leased triple by role (L/C/R) in the profiler.
       scope.defer(
         registerGraphWiring({
           roles: {
@@ -445,8 +407,7 @@ export default function multiFoveaSession(
       scope.defer(() => {
         if (recording.active) void recording.stop();
       });
-      // real-1g (C-23): advertise the first-class `undistort:<serial>` center
-      // pipe — the renderer binds it directly for the wide view.
+      // Advertise the center `undistort:<serial>` pipe (renderer binds the wide view).
       monitor.start("calibration");
       let undistortC: string | null = null;
       if (t.undistort) {
@@ -464,13 +425,9 @@ export default function multiFoveaSession(
 
       monitor.done("calibration");
 
-      // Unified-topology §5: L/R mirror-steered HOMOGRAPHY undistort bricks,
-      // chained on the shared converters + fed H(mirrorAt(t)) at ~200 Hz
-      // (the same wiring the other steered sessions use — see homography-feeder
-      // for the v1 A2H∘V2A derivation + its open direction question). The renderer-
-      // composed fovea crop slots chain on the CENTER camera's intrinsic
-      // undistort (advertised above) when calibrated, else its converter —
-      // `createFoveaMaterializer` resolves that per camera.
+      // L/R mirror-steered HOMOGRAPHY undistort bricks, fed H(mirrorAt(t)) at
+      // ~200 Hz (spec §topology). The renderer-composed fovea slots chain on the
+      // center's intrinsic undistort (or its converter, uncalibrated).
       monitor.start("pipes");
       const computeH = conversionComputeH(t.conv);
       const undistortIds: Partial<Record<"L" | "R", string>> = {};
@@ -492,14 +449,10 @@ export default function multiFoveaSession(
         });
       }
 
-      // --- pairing wiring (pairing-nodes, wave I-2) -------------------------
-      // ALWAYS-RUNNING with the trigger topology (ruling 5): the ROOT pair
-      // brick joins the L/R CONVERT taps against FIN anchors (tolerance-match
-      // ONCE, ruling 2); the DOWNSTREAM exact brick joins the two homography-
-      // undistort outputs on the carried deviceTimestamps, fed RESOLVED
-      // anchors from the root's records (R-1 key delivery). Trigger mode ONLY
-      // (ruling 1): in free-run the pool is empty and both bricks idle;
-      // recording still works (descriptors without pair provenance).
+      // --- pairing wiring (spec §pairing) -----------------------------------
+      // Root brick joins the L/R convert taps against FIN anchors; the downstream
+      // exact brick joins the undistort outputs on the resolved anchors. Active
+      // in trigger mode only (free-run idles; recording still works).
       if (seams.pair) {
         try {
           const root = seams.pair(
@@ -518,14 +471,9 @@ export default function multiFoveaSession(
               anchorFrom: "pair/convert",
             });
             scope.defer(() => downstream!.release());
-            // stereo-paired-inputs (ruling 1/2): the paired-SGBM disparity node,
-            // composed over the `pair/undistort` stage with the trigger pairing
-            // topology (RECOMPOSE-on-trigger, at the granularity the runtime
-            // exposes — the pairing topology is the trigger topology). ON-DEMAND
-            // (ruling 5): parked with no consumer, it taps nothing; the pair
-            // brick's keep-alive is unaffected. Output advert + timestamps are
-            // identical to the free-run latest-wins node (ruling 4). Degrades
-            // silently if the seam is absent (vitest / no-stereo builds).
+            // The paired-SGBM disparity node over the `pair/undistort` stage,
+            // ON-DEMAND (parked with no consumer; spec §pairing). Degrades
+            // silently if the seam is absent.
             if (seams.stereo) {
               const camL = t.leases.L.camera;
               let stereo: StereoHandle | null = createPairedStereoPipe(
@@ -535,10 +483,8 @@ export default function multiFoveaSession(
                 {
                   maxWidth: camL.getFeatureInt("Width"),
                   maxHeight: camL.getFeatureInt("Height"),
-                  // sgbm-signed-range.md (ruled 2026-07-10): the same fixed
-                  // symmetric −256…+255 window as disparity-scope — foveated
-                  // gaze makes disparity SIGNED; the 0…+128 default matched
-                  // garbage. Static by ruling (no pose coupling).
+                  // Fixed symmetric −256…+255 window (sgbm-signed-range.md;
+                  // foveated gaze makes disparity SIGNED).
                   params: SIGNED_DISPARITY_WINDOW,
                 },
               );
@@ -548,8 +494,8 @@ export default function multiFoveaSession(
               });
             }
           }
-          // ONE enrichment source (ruling 4): conversions bound per activation
-          // (volts→angle→H attachments); the controller's FIN outcomes fan in.
+          // ONE enrichment source (spec §pairing): conversions per activation;
+          // the controller's FIN outcomes fan in.
           const an = anchorNode();
           an.setConversions(t.conv);
           scope.defer(() => an.setConversions(undefined));
@@ -566,17 +512,14 @@ export default function multiFoveaSession(
           );
           void consumePairs(root, downstream);
         } catch (e) {
-          // A missing source brick (e.g. converters not live on this rig
-          // shape) degrades to unpaired recording — never fails activation.
+          // A missing source brick degrades to unpaired recording (spec §pairing).
           console.warn("[multi-fovea] pairing wiring unavailable:", e);
         }
       }
       monitor.done("pipes");
 
-      // B-25: the multi-target KCF thread, bound to the shared center stream,
-      // batched results OFF the JS loop; fused undistort when calibrated (so
-      // bboxes land in the same undistorted space targetPose expects). Probe
-      // key = node id (B-24 convention) → folds into the topology for free.
+      // The multi-target KCF thread on the shared center stream, batched OFF the
+      // JS loop; fused undistort when calibrated. Probe key = node id.
       monitor.start("trackers");
       tk = createMultiTracker(t.leases.C.camera, {
         cal: t.undistort?.calibration,
@@ -604,19 +547,14 @@ export default function multiFoveaSession(
         height: t.leases.C.camera.getFeatureInt("Height"),
       });
       publishSerials(t.leases, scope, s);
-      // Run the round-robin frame scheduler for this activation (paired with the
-      // `scheduler.stop()` drain above). Without this the scheduler's `running`
-      // flag never flips and `pump()` early-returns, so no CMD_FRAME is ever
-      // issued once v2 hardware lands. Inert on the current rig: `createStream`
-      // returns null when !v2Capable → empty targets → pump has nothing to issue.
+      // Start the round-robin scheduler (spec §topology): must run or `pump()`
+      // early-returns; inert on the current rig (empty targets while !v2Capable).
       scheduler.start();
       applyTargets();
 
-      // --- capture (ruling 3) ------------------------------------------------
-      // Stacked L/R + center-slice capture over the leased triple (distinct from
-      // `captureOnce`, the stage-f hardware-synchronized MEMS shot). Degraded
-      // shot (`rawTripleShot`): no per-shot mirror pose → no fovea wrap. Center
-      // rides the undistort pipe (or convert fallback) connected here.
+      // --- capture (spec §capture) -------------------------------------------
+      // Degraded raw-stack capture over the leased triple; center rides the
+      // undistort pipe (or convert fallback) connected here.
       const capCenterId = undistortC ?? nodeId.convert(serialC);
       const capCenter = broker.connect(capCenterId);
       scope.defer(() => void broker.disconnect(capCenterId));
@@ -685,12 +623,8 @@ export default function multiFoveaSession(
           updateTarget(index, (target) => ({ ...target, center, preset: null }));
         },
         async placePreset({ index, pan, tilt }) {
-          // Angle-space DEMO path: mark the target a fixed mirror-angle preset;
-          // the runtime parks it there (no KCF) and the round-robin interleaves
-          // it. Enabling it so an edit is immediately live. Clamped HERE (not
-          // just the UI) so no caller can over-drive the mirror — A2V has no
-          // domain guard and the DAC assert throws (rig-safety, UI/UX review
-          // 2026-07-10).
+          // Mark the target a fixed mirror-angle preset (spec §targets); enable
+          // it so an edit is live. Clamped HERE, not just the UI (rig-safety).
           updateTarget(index, (target) => ({
             ...target,
             enabled: true,
@@ -698,7 +632,7 @@ export default function multiFoveaSession(
           }));
         },
         async resetTargets() {
-          // Reset to the DEMO preset pair (±5°) — the app's default shape.
+          // Reset to the demo preset pair (±5°) — the app's default shape.
           s.setState("targets", [0, 1, 2, 3].map(demoPresetTarget));
           applyTargets();
         },
@@ -737,8 +671,7 @@ export default function multiFoveaSession(
         pulse_ns: () => applyTargets(),
       },
       busy() {
-        // Drain refusal (manual-control pattern): the multi-window switch path
-        // must not force-drain mid-recording or mid-capture.
+        // Drain refusal: never force-drain mid-recording or mid-capture.
         if (captureHelper?.capturing) return "capture in progress";
         if (recording.active) return "recording in progress";
         return null;
@@ -747,8 +680,7 @@ export default function multiFoveaSession(
   });
 }
 
-/** Adapt the native meter to the `WorkloadSnapshot` shape (the same adapter
- *  the disparity tracker uses, one thread for N targets). */
+/** Adapt the native meter to the `WorkloadSnapshot` shape (one thread, N targets). */
 function multiWorkload(m: Tracker.TrackerMeter): WorkloadSnapshot {
   const t = Date.now();
   return {

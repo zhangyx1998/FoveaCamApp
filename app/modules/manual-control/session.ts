@@ -5,22 +5,9 @@
 // -------------------------------------------------------
 //
 // Manual-control session — a calibrated L/C/R triple + timer-paced actuation
-// with no KCF tracker: the target is
-// always whatever `steer` last set, either a mouse-drag pixel (converted
-// server-side via `undistort.angular`) or a locally-held set-point's angle.
-// Capture and recording (docs/history/refactor/orchestrator.md roadmap item 6) are
-// wired in separately — see `capture.ts`/`recording.ts`.
-//
-// C-22b step 2: the PROCESSED DISPLAY views (magnified slice, perspective-
-// wrapped foveae, combined diff/depth) run OFF the JS event loop in the shared
-// `display` vision worker kernel — the registry `onView` taps + per-view
-// `frame-worker`s are gone. real-1g (C-23): the session advertises the
-// first-class `undistort:<serial>` center pipe (B's native remap producer);
-// the renderer binds it for the wide view, the worker consumes it as its C
-// input (calibration-free — main ships fovea homographies / depth Q-matrix /
-// slice-center, recomputed on each throttled volt/target update), and
-// capture's center reads it as a one-shot on-demand SHM read (ruled Q2).
-// Recording is UNCHANGED — it reads `leases.L/C/R.camera.stream` directly.
+// with NO KCF tracker; the target is always whatever `steer` last set. A thin
+// coordinator over the shared display worker + controller node. Behavior spec:
+// docs/spec/manual-control.md.
 
 import { type ServerSession } from "@orchestrator/runtime";
 import { defineResourceSession, type ResourceScope } from "@orchestrator/resource-session";
@@ -90,9 +77,8 @@ export default function manualControlSession(
     // Latest commanded voltages, mirrored locally for the fovea-wrap homography.
     const volts: { L: Pos; R: Pos } = { L: { ...ORIGIN_POS }, R: { ...ORIGIN_POS } };
 
-    // Per-eye "split" volt overrides (session-local, NOT persisted — re-entry
-    // starts unified). null = that eye follows the unified target solution; a
-    // `PosView` drag pins it (override > unified). Any steer reunifies.
+    // Per-eye "split" volt overrides (spec §split): null = follows the unified
+    // solution; a PosView drag pins it (override > unified). Any steer reunifies.
     const splitVolts: SplitVolts = unifiedSplit();
 
     function reunify(): void {
@@ -117,14 +103,11 @@ export default function manualControlSession(
       if (!triple) return { l: ORIGIN_POS, r: ORIGIN_POS };
       const A = inverseTriangulate(targetAngle, s.state.baseline, distance(), radians(shiftDeg()));
       const unified = { l: triple.conv.A2V.L(A.l), r: triple.conv.A2V.R(A.r) };
-      // Split override WINS per eye; a null eye keeps the shared solution.
-      return resolveVolts(unified, splitVolts);
+      return resolveVolts(unified, splitVolts); // override > unified (spec §split)
     }
 
     function setTargetFromPixel(px: Point2d): void {
-      // Any wide-view drag / programmatic target set REUNIFIES (one rule, no
-      // special cases) — both eyes return to the shared solution.
-      reunify();
+      reunify(); // any target set reunifies (spec §targeting)
       publishSplit();
       target = px;
       distanceOverride = null;
@@ -203,24 +186,16 @@ export default function manualControlSession(
 
     // --- capture (docs/history/refactor/orchestrator.md roadmap item 6) ----------
 
-    // The center pipe the vision worker consumes (undistort:<serial>, or the
-    // raw fallback) — capture's one-shot read rides this segment; it stays
-    // connected for the session's whole active span, so the producer is live.
+    // The center pipe the vision worker consumes — capture's one-shot read rides
+    // it; stays connected the whole active span so the producer is live.
     let centerPipe: { shmName: string; maxBytes: number; channels: number } | null = null;
 
-    // --- capture NODE via the shared helper (capture-recorder-everywhere R-3) --
-    // The createCaptureNode wiring + the ON-DEMAND per-shot raw L/R advertise/
-    // connect + the captureBusy/capture_meta telemetry + the recording-vs-
-    // capture exclusivity guard were lifted VERBATIM into
-    // `@orchestrator/capture-helper` (behavior pinned). manual-control is now a
-    // CONSUMER: it supplies its calibrated-triple snapshot below; the helper owns
-    // everything else. Built during activation (once the triple + center pipe +
-    // undistort id are known), so `captureHelper` is null until then.
+    // Capture NODE via the shared helper (spec §capture) — manual-control is a
+    // CONSUMER supplying its triple snapshot; built during activation (null until then).
     let captureHelper: CaptureHelper | null = null;
 
-    /** Ruling-3 `onCaptureStart` snapshot: the calibration-derived transforms +
-     *  per-resource metadata for the WHOLE shot (regardless of stack depth).
-     *  Ported faithfully from the deleted `capture.ts` captureOnce/runInner. */
+    /** The capture shot's calibration-derived transforms + per-resource metadata
+     *  (spec §capture). */
     function captureSnapshot(reset: boolean, indexed: boolean): CaptureShot {
       const und = triple!.undistort!;
       const { conv } = triple!;
@@ -276,9 +251,8 @@ export default function manualControlSession(
       getTriple: () => triple,
       volts: () => volts,
       rawPipes,
-      // Connect a raw pipe for the recorder node (refcount++ → C-21 gate →
-      // producer runs); the node releases it on stop. Inject the JS-side
-      // significantBits the native spec drops (ruling 8 — the advertiser's job).
+      // Connect a raw pipe for the recorder node (refcount++ → C-21 gate);
+      // inject the JS-side significantBits the native spec drops (ruling 8).
       connect: (pipeId) => {
         const handle = broker.connect(pipeId);
         const injected = rawPipes.specOf(pipeId);
@@ -323,17 +297,12 @@ export default function manualControlSession(
       return { role, shmName: handle.shmName, width: w, height: h, channels, bytesPerFrame: maxBytes ?? bytesPerFrame };
     }
 
-    // Resource-scoped activation (A-P1). Trickiest teardown in the fleet: a
-    // capture/recording pass may still be reading a stream (or awaiting a
-    // one-shot center-pipe read) when the last subscriber leaves — it MUST
-    // fully drain BEFORE the worker terminates + the pipes disconnect + the
-    // leases release. Registration order below is reverse of the drain.
+    // Resource-scoped activation (spec §teardown): an in-flight capture/recording
+    // MUST drain before the worker terminates + pipes disconnect + leases release,
+    // so defers below are registered in REVERSE of the drain (LIFO).
     async function activateSession(scope: ResourceScope): Promise<void> {
-      // Spin-up progress (ruling 2026-07-09): declare the activation steps
-      // upfront so the window renders this sequence instead of blanking while
-      // the graph builds. A failure/early-return leaves the list FROZEN at its
-      // step (never `done`/`complete`); idle teardown clears a cancelled
-      // spin-up. This is the heaviest activation in the fleet.
+      // Progress monitor: an early-return leaves the list FROZEN at its step;
+      // idle teardown clears a cancelled spin-up.
       const monitor = s.progressMonitor([
         { id: "lease", label: "Leasing cameras" },
         { id: "pipes", label: "Building undistort pipes" },
@@ -346,8 +315,7 @@ export default function manualControlSession(
       if (!t) return; // frozen at "Leasing cameras" (contention/fail)
       monitor.done("lease");
       triple = t;
-      // DISPLAY-ONLY: profiler labels this triple by role (L/C/R), ids stay
-      // serial-keyed — the one-liner every triple-holding session registers.
+      // DISPLAY-ONLY: label the leased triple by role (L/C/R) in the profiler.
       scope.defer(
         registerGraphWiring({
           roles: {
@@ -360,10 +328,8 @@ export default function manualControlSession(
         }),
       );
 
-      // real-1g (C-23): advertise the first-class `undistort:<serial>` center
-      // pipe; the renderer binds it for the wide view, the worker consumes it
-      // for slice, and capture's one-shot read rides it. Registered before the
-      // worker's defer → retires AFTER consumers disconnect (LIFO).
+      // Advertise the center `undistort:<serial>` pipe (spec §views). Registered
+      // before the worker's defer → retires AFTER consumers disconnect (LIFO).
       monitor.start("pipes");
       let undistortC: string | null = null;
       if (t.undistort) {
@@ -379,15 +345,9 @@ export default function manualControlSession(
         });
       }
 
-      // Unified-topology §5 (real-2b): the mirror-steered L/R cameras get
-      // HOMOGRAPHY undistort bricks chained on their shared converters, each fed
-      // H(mirrorAt(t)) at ~200 Hz from the actuation loop's mirror history
-      // (v1 derivation: the display path's A2H∘V2A — see homography-feeder). The
-      // RENDERER binds these for the L/R main views (always undistorted — the
-      // retired `wrap` toggle's warp, now native + pose-tracked). Consumer-gated
-      // like every pipe; an empty ring passes frames through untouched. The
-      // kernel keeps consuming the raw CONVERT L/R inputs (below) — its
-      // diff/depth `aligned` composite still wraps them via the pushed H.
+      // L/R mirror-steered HOMOGRAPHY undistort bricks, fed H(mirrorAt(t)) at
+      // ~200 Hz — the renderer binds these for the L/R main views (spec §views).
+      // The kernel keeps consuming the raw CONVERT L/R inputs below.
       const computeH = conversionComputeH(t.conv);
       for (const side of ["L", "R"] as const) {
         const pipeId = advertiseHomographyUndistortPipe(undistortSeam, t.leases[side].camera);
@@ -427,19 +387,15 @@ export default function manualControlSession(
       const taps = new DisposerBag();
       publishSerials(t.leases, taps, s);
       worker = createVisionWorker(
-        // meterName: the display kernel shows up in perfSnapshot.workloads
-        // (worker self-meter) even before this app gets full graph wiring.
+        // meterName: the display kernel self-meters into perfSnapshot.workloads.
         { pipes, params: initParams(), meterName: nodeId.win("manual-control", "display") },
         onResult,
       );
       monitor.done("worker");
 
       monitor.start("capture");
-      // Capture node via the shared helper (idle until `captureShot()`): graph
-      // row + worker; the raw L/R producers are advertised/connected ON DEMAND
-      // per shot. manual-control supplies its calibrated-triple snapshot; the
-      // helper owns the on-demand acquire + telemetry + the exclusivity guard
-      // against the recording service's `active`.
+      // Capture node via the shared helper, idle until `captureShot()` (spec
+      // §capture): raw L/R producers advertised/connected ON DEMAND per shot.
       captureHelper = createCaptureHelper({
         id: nodeId.win("manual-control", "capture"),
         broker,
@@ -452,8 +408,7 @@ export default function manualControlSession(
         cameras: () =>
           triple ? { left: triple.leases.L.camera, right: triple.leases.R.camera } : null,
         centerPipe: () => centerPipe,
-        // Full fovea snapshot (undistort required) — null degrades the command
-        // to "Capture not ready" exactly as the old `!triple?.undistort` guard.
+        // Full fovea snapshot (undistort required) — null → "Capture not ready".
         snapshot: (reset, indexed) =>
           triple?.undistort ? captureSnapshot(reset, indexed) : null,
         recordingActive: () => recording.active,
@@ -463,11 +418,9 @@ export default function manualControlSession(
       monitor.done("capture");
 
       monitor.start("controller");
-      // Push model (controller-node-and-fifo-edges §3): the SESSION owns the
-      // 1 ms cadence; each tick pushes the current target and uses the node's
-      // synchronous predicted-volts return for the local mirror + telemetry
-      // (was `onVolts`). `onApplied` supplies the awaited round-trip ms on the v1
-      // fallback (~0 on the v2 streaming path).
+      // Push model (spec §actuation): the SESSION owns the 1 ms cadence; each
+      // tick pushes the current target, using the node's synchronous
+      // predicted-volts return for the local mirror + telemetry.
       let lastActuateMs = 0;
       posInput = controllerNode().openPosition("manual-control", {
         from: nodeId.win("manual-control", "display"),
@@ -476,14 +429,8 @@ export default function manualControlSession(
           lastActuateMs = actuateMs;
         },
       });
-      // Drag SLEW (value-sweep addendum 2026-07-11): instead of re-pushing
-      // the raw latest target every 1 ms tick (identical between pointer
-      // samples → dedupe-dropped → the wire idles at the pointer rate), keep
-      // the previously COMMANDED pose and slew it toward the target
-      // (first-order, τ = SLEW_TAU_MS). During motion every tick is a
-      // DISTINCT pose the gate passes — the serial link runs at its governed
-      // capacity with real intermediate points; settled, the exact target is
-      // emitted once and dedupe keeps the wire quiet (see slew.ts).
+      // Drag slew (spec §drag-slew): slew the commanded pose toward the target so
+      // each tick is a distinct pose the gate passes, then epsilon-snap + go quiet.
       let commanded: SlewPair | null = null;
       let lastPaceAt = 0;
       stopActuation = startPacer(1, () => {
@@ -491,8 +438,7 @@ export default function manualControlSession(
         const now = performance.now();
         const dt = lastPaceAt > 0 ? now - lastPaceAt : 1;
         lastPaceAt = now;
-        // First tick (or post-reset): command the target directly — never
-        // swoop in from a stale origin.
+        // First tick (or post-reset): command the target directly (no swoop).
         const t = commanded
           ? slewStep(commanded, target, dt).pose
           : { l: { ...target.l }, r: { ...target.r } };
@@ -508,11 +454,8 @@ export default function manualControlSession(
         }
         if (now - lastVoltEmit >= VOLT_TELEMETRY_INTERVAL_MS) {
           lastVoltEmit = now;
-          // Per-eye pose footprint on the wide view: project the ACTUAL
-          // commanded volts (V2A → A2P.C), so the two boxes physically diverge
-          // while split. DEGRADE on uncalibrated rigs — A2P.C throws without an
-          // undistort (the disparity-scope hw-1 crash lesson); return {0,0} and
-          // let the renderer hide the boxes.
+          // Per-eye pose footprint from the ACTUAL commanded volts so the boxes
+          // diverge while split; DEGRADE {0,0} uncalibrated (A2P.C throws — spec §split).
           const PX = (role: "L" | "R"): Point2d =>
             triple?.undistort ? triple.conv.A2P.C(triple.conv.V2A[role](v[role]), false) : { x: 0, y: 0 };
           s.telemetry({
@@ -525,20 +468,17 @@ export default function manualControlSession(
         }
       });
 
-      // --- teardown (registered reverse of drain; LIFO) -----------------
-      // The worker + pipes drain AFTER the awaited capture/recording drain, so a
-      // capture waiting on the next processed-center tick still receives it (the
-      // worker keeps posting — it holds its own Undistort, independent of main's
-      // `triple`). Terminate worker BEFORE dropping the gate.
+      // --- teardown (LIFO — reverse of drain; spec §teardown) -----------
+      // Worker + pipes drain AFTER the awaited capture/recording drain. Terminate
+      // the worker BEFORE dropping the gate.
       scope.defer(() => {
         worker?.terminate();
         worker = null;
         for (const id of pipeIds) broker.disconnect(id);
         taps.dispose();
       });
-      // The awaited async drain: a capture in flight must finish (its raw pipes
-      // release) before the vision worker + pipes tear down; then stop the
-      // capture node's own worker.
+      // Awaited async drain: an in-flight capture must finish (raw pipes release)
+      // before the worker + pipes tear down, then stop the capture node's worker.
       scope.defer(async () => {
         await Promise.all([recording.stop(), captureHelper?.activeCapture ?? Promise.resolve()]);
         await captureHelper?.stop();
@@ -566,10 +506,8 @@ export default function manualControlSession(
       idle() {
         width = height = 0; // after the full drain (leases already released)
         reunify(); // split is session-local — re-entry starts unified
-        // The runtime keeps the telemetry snapshot across activate/idle and
-        // seeds it to new subscribers — without this reset a re-entry lights
-        // the ⟂ badge + split title for a session that is actually unified
-        // (UI/UX review 2026-07-11; same pattern as every sibling session).
+        // Reset stale split/pose telemetry so a re-entry doesn't light the ⟂
+        // badge for an actually-unified session.
         s.resetTelemetry(["split", "L_PX", "R_PX"]);
       },
       watch: {
@@ -595,10 +533,8 @@ export default function manualControlSession(
           else setTargetFromAngle(t.value, t.distance_mm, t.shift_deg);
         },
         async splitEye({ side, volt }) {
-          // Pin one eye to the dragged volt (input-rate through the pacer's
-          // dedupe/actuate path). Volt-space, so it works uncalibrated. Held
-          // until any `steer` reunifies (a PosView release keeps the pin — the
-          // renderer emits no clear on release).
+          // Pin one eye to the dragged volt, held until any `steer` reunifies
+          // (spec §split; the release keeps the pin).
           splitVolts[side] = { ...volt };
           publishSplit();
         },
@@ -614,10 +550,8 @@ export default function manualControlSession(
             return { l: triple!.conv.A2V.L(A.l), r: triple!.conv.A2V.R(A.r) };
           });
         },
-        // Legacy `capture`/`getPreview` names (backward compat for index.vue) +
-        // the mixin `captureShot`/`getCapturePreview` (shared preview window) —
-        // both forward to the helper (the exclusivity guard + "Capture not
-        // ready" degradation live inside `captureShot`).
+        // Legacy `capture`/`getPreview` + the mixin `captureShot`/
+        // `getCapturePreview` all forward to the helper (guards live inside it).
         async capture({ tag }) {
           if (!captureHelper) throw new Error("Capture not ready");
           await captureHelper.captureShot(tag);
@@ -639,12 +573,8 @@ export default function manualControlSession(
           await captureHelper?.discard();
         },
         async startRecording({ path }) {
-          // EXCLUSIVITY (ruling 6): a capture shot in flight holds the raw L/R
-          // pipes; starting a recording would re-advertise the same ids and the
-          // shot's release would then retire the recording's producers. Refuse
-          // cleanly (false). Between raster shots `capturing` is false, so a
-          // recording CAN start there — the next capture shot is then refused by
-          // the helper's guard (no clobber either way).
+          // Exclusivity (spec §capture): refuse a recording while a capture shot
+          // holds the raw L/R pipes.
           if (captureHelper?.capturing) return false;
           return recording.start(path);
         },

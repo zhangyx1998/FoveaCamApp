@@ -4,16 +4,10 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Typed boundary for the calibrate-drift session (docs/history/refactor/
-// orchestrator.md §7.1 S1b): measures and persists the small angular offset
-// between "where the extrinsic regression predicts the wide camera should
-// see the marker" and "where it actually appears," per fovea. Continuous
-// live-tracking view, no wizard steps — three simultaneous marker trackers
-// (`@orchestrator/marker-tracker`) plus a background visual-servo loop that
-// keeps the mirrors pointed at the tracked markers so an operator can watch
-// convergence. The renderer also reads the `controller` session directly for
-// `pos`/`dv` (same pattern the old renderer's `getController()` had) — this
-// contract only owns the tracking/drift-specific state.
+// Typed boundary for the calibrate-drift session — measures + persists the small
+// per-fovea angular offset between the regression's predicted marker position and
+// the observed one. Continuous live tracking; the renderer also reads the
+// `controller` session directly for `pos`/`dv`.
 
 import { cmd, defineContract } from "@lib/orchestrator/protocol";
 import {

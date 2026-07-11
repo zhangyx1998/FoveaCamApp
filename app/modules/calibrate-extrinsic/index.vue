@@ -4,14 +4,9 @@ This source code is licensed under the MIT license.
 You may find the full license in project root directory.
 --------------------------------------------------- -->
 <!--
-  Extrinsic calibration wizard, migrated to the orchestrator (docs/history/refactor/
-  orchestrator.md §7.1 S1b — the largest migration in the roadmap). Thin
-  client over the `calibrate-extrinsic` session: three marker trackers, a
-  step-dependent actuation mode (CAL visual-servo / FIN static / PRV
-  drag-test), and a captured-records list that persists across steps and
-  restarts (server-side scratch store). `records` are plain point data, so
-  the FIN review renders SVG-only overlays — no per-record images, same as
-  the original.
+  Extrinsic calibration wizard — a thin client over the `calibrate-extrinsic`
+  session (three marker trackers, step-dependent actuation, a persisted records
+  list; FIN review is SVG-only). Behavior spec: docs/spec/calibrate-extrinsic.md.
 -->
 <script setup lang="ts">
 import { computed, ref, watchEffect } from "vue";
@@ -54,18 +49,12 @@ const drawer_height = ref(0);
 const session = useSession(calibrateExtrinsic, "calibrate-extrinsic");
 const ctrl = useController();
 const { state, telemetry } = session;
-// Recording context (capture-recorder-everywhere ruling 2).
+// Title-bar RecordButton + camera-icon Capture toggle (shared facades).
 new Recording(session, "calibrate-extrinsic");
-// Capture context (capture-recorder-everywhere ruling 3): lights this window's
-// camera icon (AppWindow) → the shared CapturePreview window (its in-window
-// button drives the shot). Per-window singleton, disposed on unmount.
 new Capture(session, "calibrate-extrinsic");
 
-// State-in-URL (multi-window.md req. 7): the wizard step is addressable —
-// `?step=FIN` seeds the session once on load (the session/scratch store
-// stays authoritative; the URL is just the address of that state), then the
-// URL tracks every step change via history.replaceState, so a dev restart /
-// manifest restore lands back on the same screen.
+// State-in-URL: `?step=FIN` seeds the session once on load, then the URL tracks
+// every step change (replaceState) so a restart lands on the same screen.
 {
   const seed = readUrlParam("step");
   if (seed === "CAL" || seed === "FIN" || seed === "PRV")
@@ -73,8 +62,8 @@ new Capture(session, "calibrate-extrinsic");
 }
 watchEffect(() => writeUrlState({ step: state.step }));
 
-// C-22: raw L/C/R previews ride the native camera:<serial> pipe (off the JS
-// view-tap loop); marker overlays draw client-side from telemetry.detection.
+// Raw L/C/R previews ride the native camera:<serial> pipe; marker overlays draw
+// client-side from telemetry.detection.
 const pipe = (role: "L" | "C" | "R") =>
   usePipeFrame(() => (state.serials?.[role] ? nodeId.convert(state.serials[role]) : null));
 const frameL = pipe("L");
@@ -84,11 +73,9 @@ const frameR = pipe("R");
 const marker_size = computed(() => app_config.cal_marker_size_mm);
 const marker_ratio = computed(() => app_config.cal_marker_ratio);
 
-// Live extrinsic OVERLAY (calibration-records-v2 §Overlay): a Settings-window
-// toggle rides a main-backed store doc; when it targets this L/R eye we draw the
-// record's observed-vs-projected marks over the raw stream using the SAME shared
-// marks component as the standalone visualizer. `img_points` are sensor pixels,
-// which is exactly the StreamView slot's coordinate space.
+// Live extrinsic OVERLAY: a Settings toggle (main-backed store doc) draws a
+// record's observed-vs-projected marks over the raw stream when it targets this
+// eye. `img_points` are sensor pixels — the StreamView slot's coordinate space.
 const overlayState = await Store.open<OverlayState, OverlayState>(OVERLAY_DOC, {
   ...OVERLAY_OFF,
 });
@@ -106,10 +93,8 @@ function overlayFor(role: "L" | "R"): ExtrinsicDataset | null {
   return rec && rec.inner.kind === "extrinsic" ? rec.inner.dataset : null;
 }
 const center_marker_size = computed(() => marker_size.value * marker_ratio.value);
-// LIVE per-triple baseline (Ruling A): the marker pair sits at ±baseline/2. The
-// session publishes the leased triple's config path; this resolves the doc's
-// `baseline_mm` (falling back to the legacy app value, else 200) reactively, so
-// a Settings edit reflects in marker spacing without a restart.
+// Live per-triple baseline: the marker pair sits at ±baseline/2, resolved
+// reactively from the triple's `baseline_mm` (legacy app value, else 200).
 const baseline = useTripleBaseline(() => state.configPath, app_config);
 
 const canRecord = computed(
@@ -117,10 +102,8 @@ const canRecord = computed(
 );
 const hover_record = ref<number | null>(null);
 
-// Per-eye PID-node override proxies (reusable `pidOverride` fragment), active in
-// the CAL step's visual servo. Dragging a `PosView` sets that eye's `value`
-// (engage/pin the servo output); releasing the drag emits null → the proxy
-// releases (control resumes from the released pose via the servo node's `seed`).
+// Per-eye PID-node override proxies (CAL visual servo): dragging a PosView pins
+// that eye's servo output; release emits null → the proxy releases (seeded resume).
 const overrideL = usePidOverride<typeof calibrateExtrinsic, Pos>(session, {
   stateKey: "pidOverrideL",
   command: "pidOverrideL",
@@ -138,10 +121,8 @@ function onPrvCursor(c: (Point2d & { buttons: number }) | null) {
   if (c && (c.buttons & 1) !== 0) session.call("setPreviewTarget", { p: { x: c.x, y: c.y } });
 }
 
-// FIN review: records carry marker corner points but no frame image (same
-// as the original — this screen is SVG-only). A fixed/normalized viewBox
-// doesn't work since points are in absolute sensor pixels; fit the viewBox
-// to each polygon's own bounding box (with padding) instead.
+// FIN review is SVG-only (records carry points, no image). Points are absolute
+// sensor px, so fit the viewBox to each polygon's own bounding box + padding.
 function bbox(points: Point2d[]): string {
   if (points.length === 0) return "0 0 1 1";
   const xs = points.map((p) => p.x);

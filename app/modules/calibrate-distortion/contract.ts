@@ -4,52 +4,42 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Typed boundary for the calibrate-distortion session (docs/history/refactor/
-// orchestrator.md §7.1 S1b) — despite the module name this is a projector-
-// alignment/homography validation tool, not lens-distortion calibration: it
-// visually verifies that a marker projected on a remote canvas re-projects
-// via a live-fit homography back onto each fovea camera image. Continuous
-// live view, no persistence — same shape as calibrate-drift minus the drift
-// commit, plus two per-fovea homography/warp preview frames.
+// Typed boundary for the calibrate-distortion session — despite the name this is
+// a projector-alignment/homography validation tool (not lens distortion): it
+// verifies a projected marker re-projects via a live-fit homography onto each
+// fovea image. Continuous live view, no persistence.
 
 import { cmd, defineContract } from "@lib/orchestrator/protocol";
 import type { Point2d } from "core/Geometry";
 import { captureCommands, captureTelemetry, recordingCommands, recordingTelemetry } from "@lib/orchestrator/contracts";
 
 export type DetectionView = { points: Point2d[] } | null;
-/** Live homography-warped preview + the marker footprint it targeted —
- *  `H` crosses as a flat row-major 3x3 (9 numbers), not a `Mat`, since
- *  telemetry only carries plain serializable data (frames carry the actual
- *  warped image separately). */
+/** Live homography-warped preview + its target footprint — `H` is a flat
+ *  row-major 3×3 (telemetry carries only serializable data; the warped image
+ *  rides frames). */
 export type ProjectionView = { H: number[]; points: Point2d[] } | null;
 
 export const calibrateDistortion = defineContract({
   state: {
     targetId: { L: 1, C: 0, R: 2 },
-    /** Leased camera serials per role (C-22) — raw center preview binds to the
-     *  `camera:<serial>` pipe via `usePipeFrame`. Set on acquire. */
+    /** Leased camera serials per role; the preview binds `camera:<serial>` via usePipeFrame. */
     serials: {} as Partial<Record<"L" | "C" | "R", string>>,
-    /** The leased triple's config store path (`["triples", <hash>]`), or []
-     *  pre-lease — the renderer opens this doc reactively to read the per-triple
-     *  `baseline_mm` for LIVE marker spacing (per-triplet-settings wave,
-     *  `useTripleBaseline`). Set on acquire. */
+    /** The triple's config path (`["triples", <hash>]`), [] pre-lease — the
+     *  renderer opens it for the per-triple `baseline_mm` (live marker spacing). */
     configPath: [] as string[],
   },
   telemetry: {
     ready: false as boolean,
     detection: { L: null, C: null, R: null } as Record<"L" | "C" | "R", DetectionView>,
     projection: { L: null, R: null } as Record<"L" | "R", ProjectionView>,
-    // Recording (capture-recorder-everywhere ruling 2).
     ...captureTelemetry(),
     ...recordingTelemetry(),
   },
-  // C-2c: raw fovea previews (L/C/R) ride the native `camera:<serial>` convert
-  // pipe via `usePipeFrame`; only the worker-derived homography overlays remain
-  // as session frames.
+  // Raw fovea previews ride `camera:<serial>` via usePipeFrame; only the warped
+  // homography overlays remain session frames.
   frames: ["proj_L", "proj_R"] as const,
   commands: {
     setTargetId: cmd<{ role: "L" | "C" | "R"; id: number }>(),
-    // Recording (capture-recorder-everywhere ruling 2): the raw L/C/R streams.
     ...captureCommands(),
     ...recordingCommands(),
   },

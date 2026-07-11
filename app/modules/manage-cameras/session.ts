@@ -4,10 +4,9 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// manage-cameras session. The orchestrator opens every connected camera,
-// streams a preview per serial (dynamic frame channel), polls a live property
-// snapshot into telemetry, and applies edits / the pixel-format reconfigure flow
-// as commands — persisting changes to the shared config store.
+// manage-cameras session. Opens every connected camera, polls a live property
+// snapshot (~1 Hz) into telemetry, and applies edits + the pixel-format
+// reconfigure flow as commands, persisting to the shared config store.
 
 import { defineSession, type ServerSession } from "@orchestrator/runtime";
 import { cameraConfigPath, cameraInfo, listCameraInfo } from "@orchestrator/camera";
@@ -47,13 +46,9 @@ export default function manageCamerasSession(): ServerSession<typeof manageCamer
     function readView(e: Entry): CameraView {
       const c = e.lease.camera;
       return {
-        // `describeCamera`/`pixel_format` touch the native handle same as
-        // every other getter here — guard them too. A camera can be
-        // force-released (§12.1 C2, `system.releaseCameras`) while this 1 Hz
-        // poll is scheduled; an unguarded read on a released `CoreObject`
-        // throws and, uncaught inside `setInterval`, would crash the
-        // orchestrator process. The tunable-control fields are read the same
-        // guarded way via the shared `CAMERA_CONTROLS` schema (A-P11).
+        // MUST guard every native-handle read: a camera can be force-released
+        // mid-poll, and an unguarded read on a released CoreObject throws
+        // uncaught inside `setInterval` → orchestrator crash.
         description: safe(() => describeCamera(c), "Camera Not Connected"),
         role: e.role as CameraView["role"],
         pixel_format: safe(() => c.pixel_format, ""),
@@ -65,9 +60,8 @@ export default function manageCamerasSession(): ServerSession<typeof manageCamer
     function publishViews(): void {
       const views: Record<string, CameraView> = {};
       for (const [serial, e] of entries) {
-        // Defense in depth on top of the per-getter guards in `readView`: one
-        // bad entry (e.g. closed mid-poll) drops from this tick's snapshot
-        // instead of killing the poll for every other camera.
+        // Defense in depth: one bad entry drops from this tick instead of
+        // killing the poll for every other camera.
         try {
           views[serial] = readView(e);
         } catch (err) {
@@ -86,19 +80,15 @@ export default function manageCamerasSession(): ServerSession<typeof manageCamer
         {},
       );
       entries.set(serial, { lease, serial, role: config.role });
-      // real-1c: the raw preview now rides the `camera:<serial>` native pipe;
-      // the renderer reads it via `usePipeFrame`, not `s.frame(serial)`.
+      // The raw preview rides the `camera:<serial>` native pipe (renderer usePipeFrame).
     }
 
     async function openCamera(serial: string): Promise<void> {
-      // The registry opens + applies stored config; we just lease and view.
-      // Retry with backoff: this serial was just seen in `listCameraInfo()`,
-      // so a failure here is a still-settling handoff race (RT1), not an
-      // absent camera.
+      // Retry with backoff — a failure here is a still-settling handoff race
+      // (RT1), not an absent camera (it was just listed).
       const lease = await retryUntil(() => acquire(serial));
       if (lease) await registerEntry(serial, lease);
-      // A camera we just listed but can't lease is held by another process
-      // (exclusivity, §12.3) — surface it instead of leaving stderr-only (A-P13).
+      // Can't lease a just-listed camera → held by another process; surface it.
       else s.fail(`Camera ${serial} is in use by another process.`);
     }
 
@@ -113,16 +103,14 @@ export default function manageCamerasSession(): ServerSession<typeof manageCamer
       update(cameraConfigPath(camera), patch);
 
     async function refresh(): Promise<CameraInfo[]> {
-      // Fresh scan: clear any prior contention error; a still-contended camera
-      // re-raises it via `openCamera` below (A-P13 retry-clear).
+      // Clear any prior contention error; a still-contended camera re-raises it.
       s.clearError();
       const found = await listCameraInfo();
       const present = new Set(found.map((c) => c.serial));
       const toOpen = found.map((c) => c.serial).filter((s) => !entries.has(s));
       if (toOpen.length > 0) {
-        // One bulk discovery pass for every new camera (RT1 F3) instead of
-        // one `Camera.list()` per serial; only fall back to a per-serial
-        // retry for whichever ones a still-settling handoff race dropped.
+        // One bulk discovery pass for the new cameras; per-serial retry only for
+        // whichever ones a handoff race dropped.
         const leased = await acquireMany(toOpen);
         for (const [serial, lease] of leased) await registerEntry(serial, lease);
         for (const serial of toOpen)
@@ -148,8 +136,7 @@ export default function manageCamerasSession(): ServerSession<typeof manageCamer
             e.role = value as string | undefined;
           } else {
             try {
-              // Inputs send correctly-typed values (RangeSlider → number,
-              // selects → string/boolean); assign straight through.
+              // Inputs send correctly-typed values — assign straight through.
               (c as any)[key] = value;
             } catch (err) {
               console.error(`[manage-cameras] set ${key}:`, err);
@@ -163,9 +150,9 @@ export default function manageCamerasSession(): ServerSession<typeof manageCamer
           const e = entries.get(serial);
           if (!e || format === e.lease.camera.pixel_format) return;
           const c = e.lease.camera;
-          // The registry stops the shared loop before `mutate` and restarts
-          // it after (fresh reuse buffer for the new payload size); we retry
-          // the set to absorb the cross-thread acquisition stop.
+          // `reconfigure` stops the shared loop before the mutate and restarts it
+          // after (fresh buffer for the new payload size); retry the set to
+          // absorb the cross-thread acquisition stop.
           await e.lease.reconfigure(async () => {
             let lastErr: unknown = null;
             for (let i = 0; i < 30; i++) {
@@ -190,10 +177,8 @@ export default function manageCamerasSession(): ServerSession<typeof manageCamer
           const c = e.lease.camera;
           const cam = c as unknown as Record<string, any>;
           try {
-            // Schema-driven reset (A-P11): frame rate back to auto (enable
-            // off), each auto control to a one-shot "Once", black level only
-            // when its availability probe says so — same effect + order as the
-            // hand-written version this replaces.
+            // Schema-driven reset: frame rate to auto (enable off), each auto
+            // control to a one-shot "Once", black level only when available.
             for (const ctrl of CAMERA_CONTROLS) {
               if (ctrl.enableKey) cam[ctrl.enableKey] = false;
               if (ctrl.autoKey) {
@@ -209,9 +194,7 @@ export default function manageCamerasSession(): ServerSession<typeof manageCamer
           publishViews();
         },
       },
-      // No window viewing manage-cameras: stop the property poll and release
-      // every opened camera. A later `refresh` (on remount) re-opens and
-      // restarts polling.
+      // Idle: stop the poll + release every camera; a later `refresh` re-opens.
       idle() {
         if (poll) {
           clearInterval(poll);

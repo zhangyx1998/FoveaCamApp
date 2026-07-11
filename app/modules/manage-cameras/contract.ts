@@ -4,10 +4,9 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Typed boundary for the manage-cameras session. The orchestrator owns every
-// camera; it publishes a live property snapshot per camera (`telemetry.views`,
-// keyed by serial) and a preview frame channel per serial (dynamic name).
-// Edits and the pixel-format reconfigure flow are commands.
+// Typed boundary for the manage-cameras session — a live property snapshot per
+// camera (`telemetry.views`, keyed by serial); edits + the pixel-format
+// reconfigure flow are commands.
 
 import { cmd, defineContract } from "@lib/orchestrator/protocol";
 import type { AutoMode, CameraControlsView, Range, Role } from "@lib/camera-config";
@@ -18,12 +17,9 @@ export type { CameraInfo };
 // re-exported here so existing `./contract` importers keep working.
 export type { Range, AutoMode };
 
-/** Live, UI-bound property snapshot for one camera (polled by the orchestrator).
- *  Kept a flat `type` literal (not `& CameraControlsView`) so it carries an
- *  implicit index signature and stays assignable to the wire `Serializable`
- *  constraint. The tunable-control half is guarded against the shared
- *  `CAMERA_CONTROLS`/`CameraControlsView` schema below (A-P11) so it can't
- *  drift; field set is byte-identical to before — non-breaking. */
+/** Live UI-bound property snapshot for one camera. A flat `type` literal (not
+ *  `& CameraControlsView`) so it keeps an implicit index signature assignable to
+ *  the wire `Serializable` constraint; the tunable half is schema-guarded below. */
 export type CameraView = {
   description: string;
   role?: Role;

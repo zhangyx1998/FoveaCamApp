@@ -4,16 +4,9 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Typed boundary for the calibrate-extrinsic session (docs/history/refactor/
-// orchestrator.md §7.1 S1b) — the largest/highest-risk migration in the
-// roadmap: a 3-step wizard (CAL capture → FIN review/regression-fit → PRV
-// interactive test) building the per-fovea extrinsic dataset (marker
-// img/obj points + mirror voltage + wide-camera angle) that
-// `orchestrator/calibration.ts`'s `loadExtrinsic`/`leaseCalibratedTriple`
-// consume. `records` are plain serializable data (point arrays + voltages),
-// so they ride telemetry directly — no per-record frame channels needed
-// (the original's FIN/finalize screen doesn't even show live images, just
-// SVG overlays from the recorded points).
+// Typed boundary for the calibrate-extrinsic session — a 3-step wizard building
+// the per-fovea extrinsic dataset. `records` are plain serializable data, so
+// they ride telemetry directly. Behavior spec: docs/spec/calibrate-extrinsic.md.
 
 import { cmd, defineContract } from "@lib/orchestrator/protocol";
 import {
@@ -29,13 +22,9 @@ export type ExtrinsicRecord = {
   L: TrackerRecord & { voltage: Point2d };
   C: TrackerRecord & {
     angle: Point2d;
-    /** Ruled measured-magnification inputs (2026-07-09), captured on the WIDE
-     *  (C) camera. Both optional — old scratch records omit them and load fine.
-     *  `side_pts`: the wide camera's raw outer quad of the SAME side markers
-     *  the L/R foveae track (by id), when the wide camera also saw them this
-     *  tick — ruling 3's distance-free ratio (per eye, either may be absent).
-     *  `marker`: the (independently-adjustable) marker sizes at capture — mm,
-     *  for the center-marker fallback (ruling 2). */
+    /** Measured-magnification inputs on the wide camera (both optional; spec
+     *  §capture-measurements). `side_pts`: the wide view of the side markers
+     *  (ruling 3); `marker`: the marker sizes at capture (ruling 2 fallback). */
     side_pts?: { L?: Point2d[]; R?: Point2d[] };
     marker?: { side_mm: number; center_mm: number };
   };

@@ -20,40 +20,25 @@ import type { Point2d, Rect, Size } from "core/Geometry";
 
 const session = useSession(multiFovea, "multi-fovea");
 const { state, telemetry } = session;
-// Recording context (multi-fovea-recording ruling 7): registers this window's
-// title-bar RecordButton (AppWindow) + its Cmd/Ctrl-R `onRecorderTrigger`
-// consumer against the session's startRecording/stopRecording — the exact
-// manual-control facade, reused not forked. Per-window singleton (each app
-// window is its own renderer), so no double-registration across apps; the
-// RecordButton's onBeforeUnmount disposer drops the trigger hook with the
-// window.
+// Title-bar RecordButton + camera-icon Capture toggle — the shared facades
+// (per-window singletons, disposed on unmount). See docs/spec/multi-fovea.md.
 new Recording(session, "multi-fovea");
-// Capture context (capture-recorder-everywhere ruling 3): lights this window's
-// camera icon (AppWindow) → the shared CapturePreview window (its in-window
-// button drives the shot). Per-window singleton, disposed on unmount.
 new Capture(session, "multi-fovea");
 const pipesSession = useSession(pipes, "pipes");
-// real-1g (C-23): the wide view binds the first-class UNDISTORTED pipe when the
-// session advertises it (target overlays are in undistorted pixel space); falls
-// back to raw on uncalibrated rigs. Per-fovea processed crops bind their node
-// pipes via `usePipeFrame` too (see `foveaFrames` below — the old
-// `session.frame("fovea:<i>")` producers are gone).
+// The wide view binds the UNDISTORTED pipe when advertised (overlays are in
+// undistorted space), falling back to raw uncalibrated.
 const center = usePipeFrame(() =>
   state.undistortPipe ?? (state.serials?.C ? nodeId.convert(state.serials.C) : null),
 );
 const selectedTarget = ref(0);
 const draftCenter = ref<Point2d | null>(null);
-// Bottom Drawer height (manual-control idiom) — its live height is reserved as
-// bottom padding on the scroll root (`--p`) so content is never hidden behind
-// the fixed drawer. Holds the settle slider + preset-location editors.
+// Bottom Drawer height reserved as scroll-root padding (`--p`) so content is
+// never hidden behind the fixed drawer.
 const drawer_height = ref(0);
 
-// Per-stream RECORDING compression switches (multi-fovea-recording ruling 9).
-// They ENABLE the app-level `record_compression` method per stream: the label
-// follows the CONFIGURED method (read reactively from the shared config doc),
-// and under "none" the switches are DISABLED (nothing compresses; the server
-// gate holds too). Writing a nested state key needs a WHOLE-object reassign to
-// trip the reactive push (customRef fires on the top-level key only).
+// Per-stream RECORDING compression switches — ENABLES of the app-level
+// `record_compression` method (spec §recording; disabled under "none"). The
+// nested write reassigns the whole object (customRef fires on the top key only).
 const record_compression = await useConfigRef("record_compression");
 const compressionOn = computed(() => record_compression.value === "zlib");
 const COMPRESS_STREAMS = ["left", "center", "right"] as const;
@@ -64,10 +49,8 @@ const stroke = computed(
   () => Math.max(telemetry.size.width, telemetry.size.height, 1) * 0.003,
 );
 
-// Trigger SETTLE hold. State is µs (protocol units); the slider edits ms with
-// sub-ms resolution (0–20 ms). Seeded server-side from the active triple at
-// activation; this override is LIVE for the running session (every CMD_FRAME
-// picks up the current value). See docs/proposals/trigger-settle-time.md.
+// Trigger SETTLE hold — state is µs, the slider edits ms (0–20 ms). Live for the
+// running session (spec §settle).
 const settleMs = computed({
   get: () => state.settle_time_us / 1000,
   set: (ms: number) => {
@@ -75,9 +58,8 @@ const settleMs = computed({
   },
 });
 
-// Angle-space DEMO presets (mirror degrees). Editing pan/tilt re-parks the
-// mirror for that slot LIVE via `placePreset`; the round-robin keeps
-// interleaving. Only preset-bearing targets show here (the demo's two).
+// Angle-space presets (deg): editing pan/tilt re-parks the mirror LIVE via
+// `placePreset` (spec §targets). Only preset-bearing targets show here.
 function setPresetPan(index: number, pan: number): void {
   const t = state.targets[index];
   if (!t?.preset) return;
@@ -157,15 +139,10 @@ function onCursor(c: (Point2d & Size & { buttons: number }) | null): void {
   }
 }
 
-// C-24 step 4: THE RENDERER COMPOSES the per-target fovea crop nodes (the
-// composition directive's flagship). Each enabled target demands its
-// camera-rooted `camera/<serial>/undistort/fovea/<slot>` brick via `compose`
-// (refcounted — another window composing the same slot shares one brick;
-// window close auto-unrefs server-side); disabling decomposes. The preview
-// binds the node's pipe via `usePipeFrame` — these tiles get REAL pixels for
-// the first time (the old `session.frame("fovea:<i>")` had no producer). The
-// SESSION steers the crop rect per tracker tick; v4 frame-bound origin keeps
-// overlays exact.
+// THE RENDERER COMPOSES the per-target fovea crop nodes (spec §topology): each
+// enabled target demands its `camera/<serial>/undistort/fovea/<slot>` brick via
+// `compose` (refcounted, auto-unref on window close); disabling decomposes. The
+// session steers the crop rect per tracker tick.
 const composed = new Set<string>();
 
 function foveaParams(index: number) {
@@ -303,9 +280,8 @@ async function captureOnce(): Promise<void> {
           <span :class="{ live: telemetry.v2Capable }">v2</span>
           <span>{{ telemetry.captureRejected }}</span>
         </div>
-        <!-- Fail-closed explanation (UI/UX review 2026-07-10): on major-1
-             firmware the round-robin stream path returns null and the demo
-             would otherwise be a silent blank interleave. -->
+        <!-- Fail-closed: on major-1 firmware the stream path returns null; without
+             this the demo would be a silent blank interleave. -->
         <p v-if="!telemetry.v2Capable" class="fw-hint">
           Requires v2.0 firmware — reflash the MCU to run the interleaved
           demo (streams are disabled on this firmware).

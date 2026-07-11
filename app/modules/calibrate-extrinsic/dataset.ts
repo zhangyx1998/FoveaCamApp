@@ -5,25 +5,17 @@
 // -------------------------------------------------------
 //
 // Pure reshape of captured `ExtrinsicRecord`s into the per-fovea
-// `ExtrinsicDataset` that `loadExtrinsic`/`fitExtrinsicRegression` consume.
-// Extracted from `session.ts` so it is unit-testable without pulling the
-// orchestrator's runtime graph (types only here). Carries the ruled
-// measured-magnification fields (2026-07-09) through per eye, tolerating their
-// absence on legacy scratch records.
+// `ExtrinsicDataset` that `loadExtrinsic`/`fitExtrinsicRegression` consume —
+// types-only so it is unit-testable without the runtime graph. Behavior spec:
+// docs/spec/calibrate-extrinsic.md §capture-measurements.
 
 import type { ExtrinsicDataset } from "@lib/camera-config";
 import type { ExtrinsicRecord } from "./contract";
 
-/** Reshape captured records into the per-fovea dataset shape
- *  `loadExtrinsic`/`fitExtrinsicRegression` consume. `key` selects the eye.
- *
- *  The measured-magnification inputs come off the CENTER record (`r.C`): the
- *  wide camera's view of THIS eye's side marker (`side_pts[key]`, ruling 3 —
- *  preferred), the wide camera's own center-marker quad (`img_pts.slice(0,4)`,
- *  ruling 2 fallback), and the marker sizes. All optional — a record captured
- *  before these fields existed (or where the wide camera couldn't see the side
- *  marker) simply omits them, and the fit degrades to "no measured
- *  magnification" for that record. */
+/** Reshape captured records into the per-fovea dataset; `key` selects the eye.
+ *  The measured-magnification inputs come off the center record (side_pts ruling
+ *  3, center quad ruling 2 fallback, marker sizes) — all optional, degrading to
+ *  "no measured magnification" when absent (spec §capture-measurements). */
 export function createDataSet(
   records: ExtrinsicRecord[],
   key: "L" | "R",

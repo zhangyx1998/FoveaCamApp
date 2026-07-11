@@ -4,14 +4,10 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// calibrate-distortion VISION KERNEL (C-22b step 3) — the L/R projection warp
-// moved off the JS event loop. Main runs the `MarkerTracker`s (native streams)
-// and, on each fovea detection, computes the projection homography (a cheap
-// 4-point `findHomography`) and ships it as a param; this kernel does the heavy
-// `wrapPerspective` on the fovea frame it reads from the pipe, posting only the
-// warped alignment-check overlay. (C-2c: the raw fovea preview is no longer
-// relayed here — the renderer reads the native `camera:<serial>` convert pipe
-// directly, so this kernel no longer passthrough-gates the L/R view fps.)
+// calibrate-distortion VISION KERNEL — the L/R projection warp off the JS loop.
+// Main computes the projection homography per fovea detection and ships it as a
+// param; this kernel does the heavy `wrapPerspective` on the fovea frame,
+// posting only the warped alignment-check overlay.
 
 import { makeMat } from "@lib/mat";
 import { wrapPerspective, type Mat } from "core/Vision";

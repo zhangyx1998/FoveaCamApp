@@ -4,21 +4,11 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Drag-target SLEW for the manual-control pacer (value-sweep addendum
-// 2026-07-11, manual-control-drag-slew). The 1 ms pacer used to re-push the
-// RAW latest pointer target every tick; between pointer samples the pose is
-// IDENTICAL, the StreamUpdateGate/MirrorSink dedupes it, and the serial link
-// idles at the pointer sample rate (60 Hz mousemove / device-rate rawupdate)
-// despite ~600–1000 Hz of governed capacity. Instead the pacer keeps the
-// previously COMMANDED pose and slews it toward the latest pointer target
-// with a first-order smoother — during motion every tick yields a DISTINCT
-// intermediate pose, so the gate passes it and the wire runs at its governed
-// capacity with meaningful interpolation (smoother MEMS motion, less step
-// excitation). Once within EPSILON the exact target is emitted once and the
-// output goes quiet (identical poses → gate dedupe) — no manufactured noise.
-//
-// Pure + Vue-free (orchestrator-reachable; unit-tested in
-// app/test/manual-control-slew.test.ts).
+// Drag-target SLEW for the manual-control pacer — slew the commanded pose toward
+// the latest pointer target so each 1 ms tick is a DISTINCT pose the
+// StreamUpdateGate passes (else the raw re-push dedupes to the pointer rate),
+// then epsilon-snap and go quiet. Pure + Vue-free (unit-tested). Behavior spec:
+// docs/spec/manual-control.md §drag-slew.
 
 export type SlewPos = { x: number; y: number };
 export type SlewPair = { l: SlewPos; r: SlewPos };

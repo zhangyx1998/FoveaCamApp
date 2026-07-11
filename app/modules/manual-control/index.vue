@@ -4,17 +4,10 @@ This source code is licensed under the MIT license.
 You may find the full license in project root directory.
 --------------------------------------------------- -->
 <!--
-  Manual-control, migrated to the orchestrator. Thin client over the
-  `manual-control` session: the orchestrator leases the calibrated L/C/R
-  triple, runs the actuation loop against the shared controller, does the
-  capture (stack/wrap/diff at full bit depth, held server-side until saved)
-  and recording (raw L/C/R streams to disk) — see `docs/history/refactor/
-  orchestrator.md` roadmap items 5/6. The renderer only renders frames,
-  overlays telemetry, drives parameters via state, and steers via commands —
-  no `core`, camera, or calibration access.
-
-  Set-points (`@src/set-points`) and the remote-canvas checker overlay stay
-  100% renderer-local — pure client-side data / drawing, no hardware access.
+  Manual-control — a thin client over the `manual-control` session (renders
+  frames, overlays telemetry, drives state, steers via commands; no core /
+  camera / calibration access). Set-points + the remote-canvas checker overlay
+  stay 100% renderer-local. Behavior spec: docs/spec/manual-control.md.
 -->
 <script setup lang="ts">
 import { computed, ref, shallowRef, watch } from "vue";
@@ -49,13 +42,9 @@ const session = useSession(manualControl, "manual-control");
 const { state, telemetry } = session;
 const controller = computed(getController);
 
-// real-2b: every main view sources its undistort pipe DIRECTLY (at pipe rate,
-// independent of the kernel). The wide view binds the first-class INTRINSIC
-// undistort pipe when advertised (target overlay is in undistorted pixel space —
-// its correct backdrop), falling back to raw on uncalibrated rigs. The L/R
-// foveae bind their HOMOGRAPHY undistort pipes (mirror-pose-tracked warp — what
-// the retired `wrap` toggle used to do in the kernel). Only the derived center
-// composite (sliced/diff/depth) still rides session.frame.
+// Each main view binds its undistort pipe DIRECTLY (spec §views): C intrinsic
+// (raw fallback uncalibrated), L/R homography. Only the center composite
+// (sliced/diff/depth) still rides session.frame.
 const { center: frameCenter } = useFrames(session, ["center"]);
 const frameC = usePipeFrame(() =>
   state.undistortPipe ?? (state.serials?.C ? nodeId.convert(state.serials.C) : null),
@@ -66,10 +55,9 @@ const frameR = usePipeFrame(() => (state.serials?.R ? nodeId.undistort(state.ser
 const points = new SetPoints(local("manual-control.set-points", ""));
 const drawer_height = ref(0);
 
-// --- targeting: mouse drag (pixel) vs. a selected/hovered set-point (angle).
-// `target_loc` is renderer-local memory of "where the last drag left off" —
-// this session holds no server-side tracker state to fall back to, so this is
-// what re-activates when a set-point selection clears.
+// Targeting: mouse drag (pixel) vs. a selected set-point (angle). `target_loc`
+// is renderer-local memory of the last drag, re-activated when a set-point
+// selection clears (spec §targeting — no server-side tracker to fall back to).
 const target_loc = shallowRef<Point2d>({ x: 0, y: 0 });
 const cursor = shallowRef<(Rect & { buttons: number }) | null>(null);
 const is_drag = computed(() => cursor.value !== null);
@@ -102,9 +90,8 @@ watch(cursor, (c) => {
   }
 });
 
-// Verge/shift only deselect a set-point if it doesn't already override that
-// axis itself (matches the original: adjusting the global slider shouldn't
-// fight a set-point that's already pinned its own distance/shift).
+// Verge/shift deselect a set-point only if it doesn't already override that axis
+// (the global slider shouldn't fight a set-point's own pinned distance/shift).
 watch(
   () => state.verge,
   () => interactOverride(!isEmpty(setpoint_item.value?.d)),
@@ -131,8 +118,7 @@ watch(setpoint_item, (item) => {
 });
 
 // Batch volt preview for every set-point (the `Line2D` trace) — resolved
-// server-side (needs calibration), so this is async-refreshed rather than a
-// synchronous computed.
+// server-side (needs calibration), so async-refreshed, not a computed.
 const setpoint_volts = ref<VoltPair[]>([]);
 watch(
   () => [points.output, state.verge, state.shift, state.baseline] as const,
@@ -163,23 +149,17 @@ const stroke = computed(
   () => Math.max(telemetry.size.width, telemetry.size.height, 1) * 0.003,
 );
 
-// --- split fovea (per-eye independent steering) -----------------------------
-// A drag on the L/R voltage `PosView` pins THAT eye to the dragged volt (an
-// `@select` Pos during the drag; `null` on release). Release KEEPS the pin —
-// the eye stays where dragged; only a wide-view drag (or a set-point) reunifies.
+// --- split fovea (per-eye independent steering; spec §split) ----------------
+// A PosView drag pins THAT eye to the dragged volt; release keeps the pin.
 function dragEye(side: "l" | "r", p: Pos | null): void {
-  if (!p) return; // release: hold the pinned pose (no reunify on release)
-  // NOTE: deliberately do NOT clear a selected set-point here. Doing so fires
-  // the `setpoint_item` watcher's "revert to last drag" `steer`, which
-  // reunifies and would wipe the pin we are setting. The pin overlays on top of
-  // whatever drives the unified target (drag or set-point); the un-pinned eye
-  // keeps following it.
+  if (!p) return; // release: hold the pinned pose (no reunify)
+  // Do NOT clear a selected set-point here — that fires the `setpoint_item`
+  // watcher's revert `steer`, which reunifies and wipes the pin being set.
   void session.call("splitEye", { side, volt: p });
 }
 const isSplit = computed(() => telemetry.split.l || telemetry.split.r);
-// Wide-view footprint of one fovea frame (a fovea is magnified `zoom×`, so it
-// projects onto the wide view shrunk by `zoom`). Drawn from the per-eye L_PX/
-// R_PX volt projections, so the two boxes separate physically while split.
+// Wide-view fovea footprint (size / zoom), drawn from the per-eye L_PX/R_PX
+// projections so the boxes separate while split (spec §split).
 const footprint = computed(() => {
   const z = Math.max(1, state.zoom);
   return { width: telemetry.size.width / z, height: telemetry.size.height / z };
@@ -190,11 +170,9 @@ const footprint = computed(() => {
 const capture = new Capture(session, "manual-control");
 const recording = new Recording(session, "manual-control");
 
-// --- capture driving (capture-recorder-nodes Phase 4, ruling 4) ----------
-// The renderer sequences the raster: it owns the set-points + steer, so the
-// per-shot `capture({ tag })` command replaces the old server-side setpoints
-// sweep. The capture NODE holds the resources; the capture-preview window (a
-// passive viewer) pulls them via `getPreview`.
+// --- capture driving (spec §capture) ----------
+// The renderer sequences the raster via per-shot `capture({ tag })`; the capture
+// node holds the resources, the preview window pulls them via `getPreview`.
 const capturing = ref(false);
 let abort = false;
 

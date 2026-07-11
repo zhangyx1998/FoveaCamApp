@@ -4,29 +4,10 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Disparity-scope's JS-side consumer of the CHAINED KCF tracker thread
-// (controller-node-and-fifo-edges §3.5). The tracker runs on its OWN native
-// thread, chained on the C undistort brick's OwnedFrame tap (latest-wins), so
-// tracking latency no longer rides the disparity-matching budget; the session
-// forwards each scalar result to the disparity kernel as the target center
-// (params-style push at result rate — thin-coordinator compliant).
-//
-// Pure per-result REDUCER (types-only imports → no native load), extracted
-// from the session closure so the routing is unit-testable with synthetic
-// `TrackResult`s.
-//
-// Routing semantics (mirrors the RULED drag flow):
-//  - OVERRIDDEN results (a pointer drag pinned the tracker) are ALWAYS
-//    processed — the drag is the user; the `armed()` gate does not apply.
-//    `onDrag(center)` fires with the drag point every frame, and the override
-//    flag rides downstream (session → kernel target → projection → PID).
-//  - Normal results are gated by `armed()` (the JS-side "auto-follow engaged"
-//    flag — native has NO disarm: released targets keep emitting results, the
-//    gate ignores them until re-armed).
-//  - Found → `onTrack(center, bbox)`; miss → counted, and after
-//    `lostTolerance` CONSECUTIVE misses `onLost()` fires ONCE (the counter
-//    resets so a still-armed caller isn't spammed). Lost POLICY (disarm,
-//    target fallback) is the caller's, matching the old in-kernel tolerance.
+// Disparity-scope's JS-side consumer of the chained tracker thread — a pure
+// per-result REDUCER (types-only, unit-testable with synthetic `TrackResult`s).
+// Routing semantics (overridden always processed, armed-gated normals, lost
+// after N consecutive misses): docs/spec/disparity-scope.md §tracker.
 
 import type { TrackResult } from "core/Tracker";
 import type { Point2d, Rect } from "core/Geometry";

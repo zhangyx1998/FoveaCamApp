@@ -4,15 +4,9 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Manual-control "split fovea" state — pure, session-local, NOT persisted.
-//
-// In MANUAL CONTROL the two eyes normally share one target: `targetVolts()`
-// solves L/R from the single steered angle (`inverseTriangulate → A2V`). A drag
-// on the L (or R) `PosView` pins THAT eye to a directly-chosen volt-space
-// position — the other eye keeps following the unified solution ("holds its
-// current command" since nothing else moves it). Any wide-view drag or
-// programmatic target set REUNIFIES (clears both overrides). This module holds
-// only the tiny precedence rule so it is unit-testable without a live session.
+// Manual-control "split fovea" state — pure, session-local, NOT persisted: the
+// tiny per-eye override precedence rule (override > unified), unit-testable
+// without a live session. Behavior spec: docs/spec/manual-control.md §split.
 
 import type { Pos } from "@lib/controller-codec";
 

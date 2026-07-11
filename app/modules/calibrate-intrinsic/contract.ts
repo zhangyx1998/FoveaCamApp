@@ -4,12 +4,9 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Typed boundary for the calibrate-intrinsic session (docs/history/refactor/
-// orchestrator.md §7.1 S1b): per-camera intrinsic calibration (checkerboard
-// or ArUco/AprilTag marker), moved off the renderer. Unlike the fixed-triple
-// sessions (manual-control/disparity-scope), this session manages an arbitrary set of
-// connected cameras (like manage-cameras) rather than one fixed leased
-// triple — the renderer selects one at a time to calibrate.
+// Typed boundary for the calibrate-intrinsic session — per-camera intrinsic
+// calibration (checkerboard or marker), one camera selected at a time. Behavior
+// spec: docs/spec/calibrate-intrinsic.md.
 
 import { cmd, defineContract } from "@lib/orchestrator/protocol";
 import {
@@ -36,8 +33,7 @@ export type CalibrationView = {
   rms: number | null;
 };
 
-/** A captured record's downscaled grayscale preview (proposal item 4): a small
- *  Mono8 image (~160 px wide) so the records list shows what's being removed.
+/** A captured record's downscaled Mono8 preview (~160 px) for the records list;
  *  `id` is a stable per-capture key (survives sibling removal). */
 export type RecordThumb = {
   id: number;
@@ -47,10 +43,8 @@ export type RecordThumb = {
   data: Uint8Array;
 };
 
-/** Live per-frame detection overlay — a generic point list (checkerboard
- *  corners, or every detected marker's corners flattened together). Losing
- *  the original's per-marker outline grouping is a deliberate simplification
- *  (§7.1 S1b) — a dot per point is enough to see "is it detecting." */
+/** Live per-frame detection overlay — a flat point list (checkerboard corners or
+ *  every marker's corners flattened; a dot per point is enough to see detection). */
 export type DetectionView = { points: Point2d[] };
 
 export const calibrateIntrinsic = defineContract({
@@ -60,35 +54,27 @@ export const calibrateIntrinsic = defineContract({
     method: "CHECKER" as "CHECKER" | "MARKER",
     pattern_size: { width: 6, height: 6 } as PatternSize,
     dictionary: "4X4_50",
-    /** Marker detector downscale (1 = full res); matches the original
-     *  renderer's `1/scale.value` convention (the slider stores `scale`). */
+    /** Marker detector downscale (1 = full res; the slider stores `scale`). */
     scale: 4,
   },
   telemetry: {
     views: {} as Record<string, CalibrationView>,
-    /** Live sensor size of the active camera (clears records on change,
-     *  same as the original per-sub-view renderer implementation). */
+    /** Live sensor size of the active camera (clears records on change). */
     size: { width: 0, height: 0 },
     detection: null as DetectionView | null,
     recordCount: 0,
-    /** Per-record downscaled previews, parallel to `recordCount` (item 4). */
+    /** Per-record previews, parallel to `recordCount`. */
     records: [] as RecordThumb[],
     busy: false as boolean,
-    /** RMS re-projection error of the most recent solve (item 5), or null. */
+    /** RMS re-projection error of the most recent solve, or null. */
     lastRms: null as number | null,
-    /** Detector throughput in Hz, republished ~1×/s while a camera is open
-     *  (item 6) — surfaced in the StreamView footnote. */
+    /** Detector throughput (Hz), republished ~1×/s — StreamView footnote. */
     detectRate: 0,
-    // Recording (capture-recorder-everywhere ruling 2): degenerate single-stream
-    // capture of the selected camera's raw sensor stream.
     ...recordingTelemetry(),
-    // Capture (capture-recorder-everywhere ruling 3, item 4): single-stream still
-    // capture (burst-stacked full-depth) of the selected camera's raw sensor.
     ...captureTelemetry(),
   },
-  // No session frames: the raw preview binds the active camera's
-  // `camera:<serial>` pipe via `usePipeFrame` (real-1c); detection overlays ride
-  // the `detection` telemetry.
+  // No session frames: the raw preview binds `camera:<serial>` via usePipeFrame;
+  // detection overlays ride the `detection` telemetry.
   frames: [] as const,
   commands: {
     /** Enumerate connected cameras + their calibration status. */
@@ -104,12 +90,9 @@ export const calibrateIntrinsic = defineContract({
     calibrateNow: cmd(),
     /** Clear a camera's stored intrinsic calibration (no need to select it). */
     resetCalibration: cmd<{ serial: string }>(),
-    // Recording (capture-recorder-everywhere ruling 2): the selected camera's
-    // raw sensor stream (advert-verbatim, degenerate single-stream default).
     ...recordingCommands(),
-    // Capture (capture-recorder-everywhere ruling 3, item 4): the single-stream
-    // capture mixin (captureShot / getCapturePreview / saveCapture / discardCapture).
-    // Distinct from the app-local `capture` command (calibration records) above.
+    // Single-stream capture mixin — distinct from the app-local `capture` command
+    // (calibration records) above.
     ...captureCommands(),
   },
 });

@@ -4,19 +4,11 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Runtime-selectable OBJECT TRACKER type for disparity-scope (the drop-in
-// replacement nodes, user request 2026-07-11). Two chained tracker factories
-// with an IDENTICAL handle surface — `createChainedHybridTracker` (NCC match +
-// re-detect; the default since bc20269) and `createChainedTracker` (GRAY-pinned
-// KCF) — are hot-swappable on the SAME source pipe + graph node id: same
-// `TrackResult` schema, same `arm/override/probe/release` API, same meter shape.
-// That equivalence is what lets the session release one and spin the other
-// up mid-session without a graph churn or a session restart.
-//
-// This module is PURE (no core / native imports): it holds the tracker-type
-// enum + its default and the release→create→resume→re-arm SEQUENCING as an
-// injected-op reducer, so vitest exercises the decision path without loading
-// the native addon (same pattern as tracker-feed.ts / vergence.ts).
+// Runtime-selectable OBJECT TRACKER type for disparity-scope — two chained
+// factories with an IDENTICAL handle surface, hot-swappable on the same source
+// pipe + node id. PURE: the tracker-type enum + the release→create→resume→re-arm
+// sequencing as an injected-op reducer (unit-testable without the native addon).
+// Hot-swap semantics + degrade path: docs/spec/disparity-scope.md §tracker.
 
 /** Which object-tracker engine the session runs. Both factories are drop-in
  *  (identical `KcfTracker` surface). Session-local, not persisted. */
@@ -56,22 +48,11 @@ export interface SwapTrackerResult<T> {
   ok: boolean;
 }
 
-/**
- * Swap the running tracker to `requested`, preserving steering:
- *   1. release the old tracker (its consume loop exits, native link drops);
- *   2. create the requested type on the same source + node id;
- *   3. resume consumption with the shared feed;
- *   4. re-arm at the current target IFF `wasArmed`.
- *
- * DEGRADE (requirement 4): if step 2 throws (no brick), fall back to
- * `fallback` — the type that WAS running — so a working tracker keeps running
- * and the caller can pin the select to the real type (`ok:false`,
- * `type:fallback`). If the fallback create ALSO throws, returns a null tracker.
- *
- * Pure sequencing: every side effect goes through `ops`, so a test asserts the
- * order (release-before-create, consume-before-rearm) and the arm-only-if-armed
- * gate with plain spy fns.
- */
+/** Swap the running tracker to `requested`, preserving steering (spec §tracker):
+ *  release → create on the same source/node → resume consume → re-arm iff
+ *  `wasArmed`. DEGRADE: a create throw falls back to `fallback` (the running
+ *  type; `ok:false`), a fallback throw too → null tracker. Pure sequencing via
+ *  `ops` so a test asserts the order with plain spies. */
 export function swapTracker<T>(
   old: T | null,
   requested: TrackerType,

@@ -5,10 +5,8 @@
 // -------------------------------------------------------
 //
 // Pure display-space geometry shared by the RENDERER overlays (index.vue) and
-// the vision/control side. Deliberately core-free (type-only imports): the
-// renderer must never pull `vergence.ts` — that module runtime-imports
-// `core/Vision` — so the shared marker/crop math lives here and vergence.ts
-// re-exports it for its own callers/tests.
+// the vision/control side. Deliberately core-free (type-only) so the renderer
+// never pulls vergence.ts's runtime core/Vision import; vergence.ts re-exports it.
 
 import type { Size } from "core/Geometry";
 

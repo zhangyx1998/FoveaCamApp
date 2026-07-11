@@ -5,9 +5,8 @@
 // -------------------------------------------------------
 //
 // Pure gating/threshold helpers for calibrate-drift, shared by the session
-// (per-eye fovea-lock gate) and the renderer (delta readout + Update-button
-// noise floor). Vue-free so both sides — and the unit test — import the same
-// rules (proposal findings 1 + 7).
+// (per-eye fovea-lock gate) and the renderer (delta readout + Update noise
+// floor). Vue-free so both sides + the unit test share the same rules.
 
 import type { Point2d } from "core/Geometry";
 

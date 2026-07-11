@@ -4,20 +4,11 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// calibrate-distortion session (docs/history/refactor/orchestrator.md §7.1 S1b):
-// projector-alignment/homography validation. Three `MarkerTracker`s (L/R with
-// subpixel `internal` refinement); the center tracker's observed angle points
-// both mirrors there — pushed to the controller NODE's position input on each
-// center-detection tick (controller-node-and-fifo-edges §3; the MCU stream
-// holds position between detections, origin when the marker is lost).
-//
-// C-22b step 3: the per-fovea projection warp moved OFF the JS event loop. The
-// marker trackers run on their own native streams; on each fovea detection main
-// computes the projection homography (a cheap 4-point `findHomography`) and
-// ships it to the `distortion` vision worker, which reads the fovea pipe and
-// does the heavy `wrapPerspective`, posting the warped overlay. The registry
-// `onView` tap is gone; the raw L/R previews ride the native `camera:<serial>`
-// convert pipe (C-2c) — no worker passthrough relay gating view fps.
+// calibrate-distortion session — projector-alignment/homography validation.
+// Three MarkerTrackers; the center's observed angle points both mirrors (pushed
+// to the controller node per detection tick). Per-fovea projection: main
+// computes a 4-point homography per detection and ships it to the `distortion`
+// vision worker, which does the heavy `wrapPerspective` off the JS loop.
 
 import { type ServerSession } from "@orchestrator/runtime";
 import { defineResourceSession, type ResourceScope } from "@orchestrator/resource-session";
@@ -62,8 +53,7 @@ export default function calibrateDistortionSession(
 ): ServerSession<typeof calibrateDistortion> {
   return defineResourceSession("calibrate-distortion", calibrateDistortion, (s) => {
     let triple: CalibratedTriple | null = null;
-    // Capture (ruling 3): degraded raw-stack capture over the leased triple (no
-    // per-shot mirror pose → no fovea wrap; stated in `capture_meta`).
+    // Capture: degraded raw-stack over the leased triple (no per-shot mirror pose → no wrap).
     let captureHelper: CaptureHelper | null = null;
     let captureCenter: { shmName: string; maxBytes: number; channels: number } | null = null;
     let trackers: Record<Role, MarkerTracker> | null = null;
@@ -72,8 +62,7 @@ export default function calibrateDistortionSession(
     let centerAngle: Point2d | null = null;
     const projBusy: Record<"L" | "R", boolean> = { L: false, R: false };
 
-    // Recording (capture-recorder-everywhere ruling 2): the raw L/C/R sensor
-    // streams (advert-verbatim, the OBVIOUS default set) via the shared facility.
+    // Recording — the raw L/C/R sensor streams (advert-verbatim).
     const recording = createRawRecording({
       id: "recorder/calibrate-distortion",
       broker,
@@ -109,11 +98,9 @@ export default function calibrateDistortionSession(
       publishDetections();
     }
 
-    /** Push the mirror target derived from the center marker (origin when the
-     *  marker is lost — the old loop's `targetVolts` fallback). Cadence = the
-     *  center tracker's detection tick, the ONLY place `centerAngle` changes;
-     *  the MCU stream holds position between pushes. No volt telemetry — the
-     *  trackers already publish everything this app shows. */
+    /** Push the mirror target from the center marker (origin when lost). Cadence =
+     *  the center detection tick (the only place `centerAngle` changes); the MCU
+     *  stream holds position between pushes. */
     function pushTarget(): void {
       if (!posInput || !triple) return;
       posInput.update(
@@ -123,10 +110,8 @@ export default function calibrateDistortionSession(
       );
     }
 
-    // Compute the projection homography for one fovea (main, off the camera
-    // loop — driven by the tracker's own detection tick) and ship it to the
-    // worker, which warps the fovea frame through it. `wrapPerspective` (the
-    // heavy full-frame remap) now lives in the worker, not here.
+    // Compute one fovea's projection homography (per detection tick) and ship it
+    // to the worker, which does the heavy `wrapPerspective`.
     async function computeProjection(role: "L" | "R"): Promise<void> {
       if (!trackers || projBusy[role]) return;
       const target = trackers[role].target;
@@ -153,8 +138,7 @@ export default function calibrateDistortionSession(
       }
     }
 
-    // The worker posts only the warped overlays ("proj_L"/"proj_R"); publish
-    // each to the renderer. (Raw L/R previews ride the convert pipe now — C-2c.)
+    // The worker posts only the warped overlays ("proj_L"/"proj_R").
     function onResult(r: VisionResult): void {
       for (const f of r.frames) {
         s.frame(f.name, makeMat(new Uint8Array(f.buffer), [f.height, f.width], f.channels));
@@ -169,13 +153,9 @@ export default function calibrateDistortionSession(
       return { role, shmName: handle.shmName, width, height, channels, bytesPerFrame: maxBytes ?? bytesPerFrame };
     }
 
-    // Resource-scoped activation (A-P1): cleanups drain LIFO on idle; leases go
-    // through `scope.use` so they release LAST.
+    // Resource-scoped activation: cleanups drain LIFO on idle; leases release LAST.
     async function activateSession(scope: ResourceScope): Promise<void> {
-      // Spin-up progress (ruling 2026-07-09): declared steps ride the status
-      // channel so the window shows this sequence instead of blanking while the
-      // graph builds. A failure/early-return leaves the list FROZEN at its step
-      // (never `done`/`complete`); idle teardown clears a cancelled spin-up.
+      // The progress monitor freezes at the step an early-return died on.
       const monitor = s.progressMonitor([
         { id: "lease", label: "Leasing cameras" },
         { id: "trackers", label: "Starting trackers" },
@@ -187,8 +167,7 @@ export default function calibrateDistortionSession(
       if (!t) return; // frozen at "Leasing cameras" (contention/fail)
       monitor.done("lease");
       triple = t;
-      // DISPLAY-ONLY: profiler labels this triple by role (L/C/R), ids stay
-      // serial-keyed — the one-liner every triple-holding session registers.
+      // DISPLAY-ONLY: label the leased triple by role (L/C/R) in the profiler.
       scope.defer(
         registerGraphWiring({
           roles: {
@@ -222,11 +201,10 @@ export default function calibrateDistortionSession(
         connectPipe("R", t.leases.R.camera.serial, pipeIds),
       ];
       worker = createVisionWorker(
-        // meterName: kernel visible in perfSnapshot.workloads (worker self-meter).
         {
           pipes,
           params: { kind: "distortion" },
-          meterName: nodeId.win("calibrate-distortion", "distortion"),
+          meterName: nodeId.win("calibrate-distortion", "distortion"), // kernel self-meter
         },
         onResult,
       );
@@ -261,16 +239,14 @@ export default function calibrateDistortionSession(
         }),
       );
       publishSerials(t.leases, taps, s);
-      // Publish the leased triple's config store path so the renderer opens the
-      // `["triples", <hash>]` doc reactively for LIVE per-triple baseline marker
-      // spacing (per-triplet-settings wave, Ruling A).
+      // Publish the triple's config path so the renderer opens the per-triple doc
+      // for live marker spacing.
       s.setState("configPath", t.configPath);
       scope.defer(() => s.setState("configPath", []));
       scope.defer(() => taps.dispose());
 
-      // Controller-node position input (was `startActuationLoop`): the
-      // immediate push reproduces the old loop's first tick — enable + park at
-      // origin until the first center detection retargets the mirrors.
+      // Controller-node position input: park at origin until the first center
+      // detection retargets the mirrors.
       posInput = controllerNode().openPosition("calibrate-distortion", {
         from: nodeId.detect(t.leases.C.camera.serial),
         initial: { left: ORIGIN, right: ORIGIN },
@@ -281,9 +257,8 @@ export default function calibrateDistortionSession(
         posInput = null;
       });
 
-      // --- capture (ruling 3) ------------------------------------------------
-      // Connect the C convert pipe as the persistent capture-center source
-      // (one-shot BGRA read; disconnect deferred), then build the (idle) node.
+      // --- capture -----------------------------------------------------------
+      // Persistent capture-center pipe (C convert; one-shot read), then the idle node.
       const capCenterId = nodeId.convert(t.leases.C.camera.serial);
       const capCenter = broker.connect(capCenterId);
       scope.defer(() => void broker.disconnect(capCenterId));
@@ -320,8 +295,8 @@ export default function calibrateDistortionSession(
         telemetry: (patch) => s.telemetry(patch),
       });
       captureHelper.build();
-      // Drain an in-flight shot then stop the node — deferred so it runs while
-      // the center pipe + cameras are still live (before leases release).
+      // Drain an in-flight shot + stop the node while the center pipe + cameras
+      // are still live (before leases release).
       scope.defer(async () => {
         await captureHelper?.activeCapture;
         await captureHelper?.stop();
@@ -345,7 +320,7 @@ export default function calibrateDistortionSession(
           s.setState("targetId", { ...s.state.targetId, [role]: id });
           retarget(trackers, role, id);
         },
-        // Capture (ruling 3) — forward to the shared helper.
+        // Capture — forward to the shared helper.
         async captureShot({ tag }) {
           if (!captureHelper) throw new Error("Capture not ready");
           await captureHelper.captureShot(tag);
@@ -360,7 +335,8 @@ export default function calibrateDistortionSession(
           await captureHelper?.discard();
         },
         async startRecording({ path }) {
-          if (captureHelper?.capturing) return false; // exclusivity (ruling 6)
+          if (captureHelper?.capturing) return false; // exclusivity
+
           return recording.start(path);
         },
         async stopRecording() {

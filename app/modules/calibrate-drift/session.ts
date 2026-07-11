@@ -4,12 +4,10 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// calibrate-drift session (docs/history/refactor/orchestrator.md §7.1 S1b): three
-// simultaneous `MarkerTracker`s (one per fovea + the wide camera) plus a
-// background visual-servo (`@orchestrator/marker-tracker`'s `startServo`)
-// that keeps the mirrors pointed at the tracked markers, drift-corrected.
-// No wizard steps — continuous live tracking, same as the original renderer
-// implementation, just moved off it.
+// calibrate-drift session — measures + persists the small angular offset between
+// where the extrinsic regression predicts the wide camera should see each
+// marker and where it actually does. Three MarkerTrackers + a background
+// visual-servo keeping the mirrors on the markers. Continuous, no wizard steps.
 
 import { type ServerSession } from "@orchestrator/runtime";
 import { defineResourceSession, type ResourceScope } from "@orchestrator/resource-session";
@@ -41,9 +39,8 @@ import type { CompressPipeSeam } from "@orchestrator/compress-pipe";
 import { calibrateDrift } from "./contract";
 import { gateOnLock } from "./drift-gate";
 
-// Mirror position is owned by the shared controller holder, not this
-// session — under the controller node's streaming transport the holder's
-// `pos` stays live via `applyStreamedPos` (controller-node.ts).
+// Mirror position is owned by the shared controller holder, not this session
+// (its `pos` stays live under the streaming transport).
 function activeControllerPos(): { left: Point2d; right: Point2d } | null {
   const c = activeController();
   return c ? c.pos : null;
@@ -59,16 +56,14 @@ export default function calibrateDriftSession(
 ): ServerSession<typeof calibrateDrift> {
   return defineResourceSession("calibrate-drift", calibrateDrift, (s) => {
     let triple: CalibratedTriple | null = null;
-    // Capture (ruling 3): degraded raw-stack capture over the leased triple.
+    // Capture: degraded raw-stack over the leased triple.
     let captureHelper: CaptureHelper | null = null;
     let captureCenter: { shmName: string; maxBytes: number; channels: number } | null = null;
     let trackers: Record<Role, MarkerTracker> | null = null;
     let servo: Servo | null = null;
     let saved: DriftPair = { L: null, R: null };
 
-    // Recording (capture-recorder-everywhere ruling 2): records the app's raw
-    // L/C/R sensor streams (advert-verbatim, the OBVIOUS default set) via the
-    // shared facility. Thin config over the leased triple's cameras.
+    // Recording — the raw L/C/R sensor streams (advert-verbatim).
     const recording = createRawRecording({
       id: "recorder/calibrate-drift",
       broker,
@@ -111,16 +106,10 @@ export default function calibrateDriftSession(
       });
     }
 
-    // Resource-scoped activation (A-P1): every resource registers a cleanup on
-    // `scope`, drained LIFO on idle (and immediately if a slow activation is
-    // superseded). Leases go through `scope.use` so they release LAST, after
-    // the servo/trackers/taps that read them have stopped.
+    // Resource-scoped activation: cleanups drain LIFO on idle; leases release
+    // LAST (via scope.use), after the servo/trackers/taps that read them stop.
     async function activateSession(scope: ResourceScope): Promise<void> {
-      // Spin-up progress (ruling 2026-07-09): declare the activation steps
-      // upfront so the window renders this sequence instead of blanking while
-      // the graph builds. A failure/early-return leaves the list FROZEN at the
-      // step it died on (never `done`/`complete`); idle teardown clears a
-      // cancelled spin-up.
+      // The progress monitor freezes at the step an early-return died on.
       const monitor = s.progressMonitor([
         { id: "lease", label: "Leasing cameras" },
         { id: "config", label: "Loading drift config" },
@@ -132,8 +121,7 @@ export default function calibrateDriftSession(
       if (!t) return; // no cameras (acquireTriple published fail) or superseded
       monitor.done("lease");
       triple = t;
-      // DISPLAY-ONLY: profiler labels this triple by role (L/C/R), ids stay
-      // serial-keyed — the one-liner every triple-holding session registers.
+      // DISPLAY-ONLY: label the leased triple by role (L/C/R) in the profiler.
       scope.defer(
         registerGraphWiring({
           roles: {
@@ -145,8 +133,7 @@ export default function calibrateDriftSession(
           edges: [],
         }),
       );
-      // Finalize an in-flight recording before the lease releases (defer is LIFO
-      // and leases release LAST via scope.use — this runs while cameras live).
+      // Finalize an in-flight recording while cameras are still leased (LIFO).
       scope.defer(async () => void (await recording.stop()));
       scope.defer(() => {
         triple = null;
@@ -167,14 +154,10 @@ export default function calibrateDriftSession(
       });
       const taps = new DisposerBag();
       bindDetections(trackers, taps, publishDetections);
-      // Raw L/C/R previews ride the native `camera:<serial>` pipe (usePipeFrame
-      // in index.vue, discovered via publishSerials) — no JS `onView` view-tap
-      // (A-31, real-1f step 3). Marker detection stays off-loop on
-      // `detector.stream`, so this session no longer taps `onView` at all.
+      // Raw L/C/R previews ride the native `camera:<serial>` pipe (usePipeFrame).
       publishSerials(t.leases, taps, s);
-      // Publish the leased triple's config store path so the renderer opens the
-      // `["triples", <hash>]` doc reactively for LIVE per-triple baseline marker
-      // spacing (per-triplet-settings wave, Ruling A).
+      // Publish the triple's config path so the renderer opens the per-triple doc
+      // for live marker spacing.
       s.setState("configPath", t.configPath);
       scope.defer(() => s.setState("configPath", []));
       scope.defer(() => taps.dispose());
@@ -193,8 +176,8 @@ export default function calibrateDriftSession(
           return r ? triple!.conv.A2V.R(applyDrift(r, saved.R)) : { x: 0, y: 0 };
         },
       });
-      // A fresh servo's per-eye override slots start released — mirror that into
-      // contract state so a stale engaged echo can't survive a reactivation.
+      // Mirror the fresh servo's released override slots into state so a stale
+      // engaged echo can't survive a reactivation.
       s.setState("pidOverrideL", { engaged: false, value: null });
       s.setState("pidOverrideR", { engaged: false, value: null });
       scope.defer(() => {
@@ -248,14 +231,12 @@ export default function calibrateDriftSession(
 
       s.telemetry({ ready: true });
 
-      // Publish live derived drift at a modest rate (tracker ticks don't
-      // otherwise recompute it — `derived` needs the *actuated* mirror
+      // Publish live derived drift at a modest rate (it needs the actuated mirror
       // position, which only changes on the servo's own tick).
       const timer = setInterval(() => {
         if (!triple) return;
         const c = activeControllerPos();
-        // Gate each eye on that fovea tracker's live lock (proposal finding 1):
-        // an unlocked eye's derived drift is meaningless, so publish null.
+        // Gate each eye on its tracker's live lock — unlocked → meaningless → null.
         s.telemetry({
           derived: {
             L: gateOnLock(c ? deriveDrift(triple.conv.V2A.L(c.left)) : null, trackers?.L),
@@ -289,8 +270,7 @@ export default function calibrateDriftSession(
           if (!triple) return;
           const c = activeControllerPos();
           if (!c) return;
-          // Defense in depth (proposal finding 1): only commit an eye whose fovea
-          // tracker is currently locked — otherwise keep the saved value untouched.
+          // Commit only an eye whose tracker is locked; else keep the saved value.
           const canL = !!trackers?.L.target;
           const canR = !!trackers?.R.target;
           const nextL = role !== "R" && canL ? deriveDrift(triple.conv.V2A.L(c.left)) : saved.L;
@@ -316,7 +296,7 @@ export default function calibrateDriftSession(
           });
           s.telemetry({ saved });
         },
-        // Capture (ruling 3) — forward to the shared helper.
+        // Capture — forward to the shared helper.
         async captureShot({ tag }) {
           if (!captureHelper) throw new Error("Capture not ready");
           await captureHelper.captureShot(tag);
@@ -331,7 +311,7 @@ export default function calibrateDriftSession(
           await captureHelper?.discard();
         },
         async startRecording({ path }) {
-          if (captureHelper?.capturing) return false; // exclusivity (ruling 6)
+          if (captureHelper?.capturing) return false; // exclusivity
           return recording.start(path);
         },
         async stopRecording() {
@@ -339,7 +319,7 @@ export default function calibrateDriftSession(
         },
       },
       busy() {
-        // Drain refusal (manual-control pattern): don't force-drain mid-record/capture.
+        // Drain refusal: don't force-drain mid-record/capture.
         if (captureHelper?.capturing) return "capture in progress";
         if (recording.active) return "recording in progress";
         return null;

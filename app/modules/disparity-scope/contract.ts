@@ -4,11 +4,10 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Typed boundary for the disparity-scope session — the single source of truth
-// shared by the renderer view and the orchestrator session. Only plain,
-// serializable data crosses here: display Mats ride the `frames` transport
-// (never telemetry), so a `MatchResult`'s heatmap stays a frame while its
-// `{rect, score}` rides telemetry.
+// Typed boundary for the disparity-scope session — the source of truth shared by
+// the renderer and the orchestrator. Only serializable data crosses: display
+// Mats ride the `frames` transport, their `{rect, score}` rides telemetry.
+// Behavior spec: docs/spec/disparity-scope.md.
 
 import { cmd, defineContract } from "@lib/orchestrator/protocol";
 import type { Point2d, Rect } from "core/Geometry";
@@ -50,10 +49,8 @@ export type Tuning = {
   timeout: number;
 };
 
-// Physical saturation limits, shared by the session (PID construction) and
-// the renderer (slider ranges — the PID objects themselves are server-side
-// now, so the UI recomputes the same bounds instead of reading them off a
-// live object like the original single-process implementation did).
+// Physical saturation limits, shared by the session (PID construction) and the
+// renderer (slider ranges — the PIDs are server-side, so the UI recomputes them).
 export const VERGE_MIN_DISTANCE_MM = 150;
 export const SHIFT_LIMIT_DEG = 5;
 export const VSHIFT_LIMIT_DEG = 2;
@@ -81,53 +78,27 @@ export const disparity = defineContract({
     serials: {} as Partial<Record<"L" | "C" | "R", string>>,
     /** Target center within the wide frame (pixels). */
     target: ZERO,
-    // Physical stereo baseline (mm) — RESOLVED SERVER-SIDE at activate now
-    // (Ruling A, 2026-07-09 per-triplet-settings wave): the session reads the
-    // leased triple's `baseline_mm`, falling back to the legacy app-level
-    // `baseline_distance_mm`, else 200 (`@lib/calibration-data.resolveBaseline`),
-    // and pushes it here. The renderer no longer seeds it from app config. This
-    // 200 is only the pre-activate placeholder; the verge-limit slider reads it
-    // back. Not live: a Settings edit applies on the next session start.
+    /** Physical stereo baseline (mm), resolved SERVER-SIDE at activate (spec
+     *  §magnification, Ruling A). 200 here is only the pre-activate placeholder
+     *  the verge-limit slider reads back; not live. */
     baseline: 200,
-    /** Nominal FOV(wide) / FOV(fovea). Drives the sliced-view crop size, and
-     *  is the template-match magnification FALLBACK only — when the extrinsic
-     *  calibration carries a measured magnification, the match uses that
-     *  instead (telemetry `match_magnification`); this knob then no longer
-     *  influences matching. See docs/applications/disparity-scope.md. */
+    /** Nominal FOV(wide) / FOV(fovea) — drives the sliced-view crop, and is the
+     *  match magnification FALLBACK only (spec §magnification). */
     zoom: 9.0,
-    /** Which center view the renderer SHOWS (every option is pipe-backed now:
-     *  "sliced" = the scope-tile slice pipe, "disparity"/"anaglyph" = the
-     *  `stereo/composite` brick's RGBA8 pipe (ONE pipe, mode retuned server-
-     *  side from this field — composite-node-and-center-select-fix), "sgbm" =
-     *  the stereo brick's heatmap pipe. Selecting a view is what CONNECTS its
-     *  pipe — unselected views' producers park (no subscriber → no compute,
-     *  stereo-disparity-and-heatmap-nodes ruling 2); the disparity↔anaglyph
-     *  flip retunes the SAME connected composite pipe (no reconnect). Kept in
-     *  contract state so the choice survives window reloads). */
+    /** Which center view the renderer SHOWS — every option is pipe-backed;
+     *  selecting a view CONNECTS its pipe (unselected producers park), the
+     *  disparity↔anaglyph flip retunes the same composite pipe (spec §topology). */
     view: "sliced" as "sliced" | "disparity" | "anaglyph" | "sgbm",
     tuning: DEFAULT_TUNING,
     tracker_enabled: false as boolean,
-    /** Which OBJECT-TRACKER engine the auto-follow node runs — hot-swappable
-     *  mid-session (the drop-in replacement nodes, user request 2026-07-11):
-     *  `"hybrid"` = chained NCC match + re-detect (default, robust on mono
-     *  needles + recovery), `"kcf"` = chained GRAY-pinned KCF. Both share the
-     *  `KcfTracker` surface, so the session releases one and spins the other on
-     *  the SAME source pipe + graph node id (no restart, no graph churn). The
-     *  drawer's "Tracker" SingleSelect drives this; session-local, not
-     *  persisted. See tracker-swap.ts. */
+    /** Which auto-follow tracker engine runs — hot-swappable mid-session (spec
+     *  §tracker). Session-local, not persisted. See tracker-swap.ts. */
     tracker_type: DEFAULT_TRACKER_TYPE as TrackerType,
-    /** KCF template size (pixels) — the arm ROI of the session-owned CHAINED
-     *  tracker thread (controller-node-and-fifo-edges §3.5). Applied on the
-     *  next (re-)arm, not live: the kernel no longer runs any KCF. */
+    /** Tracker template size (px) — the arm ROI; applied on the next (re-)arm. */
     kernel: { w: 64, h: 64 },
-    /** PID-node OVERRIDE slot (reusable fragment,
-     *  `@lib/orchestrator/pid-override-contract`): server-authoritative
-     *  `{ engaged, value }`, driven ONLY by the generic `pidOverride` command
-     *  now (a programmatic caller that already has volts — output pinned,
-     *  control law held reset, seeded release). Since §3.5 the scope UI's
-     *  pointer DRAGS no longer touch this slot: they ride the TRACKER's
-     *  override, with the PID node RUNNING throughout (see telemetry
-     *  `overridden`). Kept for the module-agnostic `usePidOverride` proxy. */
+    /** PID-node OVERRIDE slot — server-authoritative `{engaged, value}`, driven
+     *  ONLY by the generic `pidOverride` command (pointer drags ride the tracker
+     *  override instead; spec §drag). Kept for the `usePidOverride` proxy. */
     pidOverride: pidOverrideState<VergenceVolts>(),
   },
   telemetry: {
@@ -153,51 +124,29 @@ export const disparity = defineContract({
     match_left: null as MatchInfo | null,
     match_right: null as MatchInfo | null,
     match_center: null as { rect: Rect } | null,
-    /** Calibration-MEASURED fovea↔wide magnification (mean of the per-eye
-     *  ruled marker-quad ratios), or null when unmeasured. RULED precedence
-     *  (2026-07-09): an explicit `state.zoom > 0` is AUTHORITATIVE for the
-     *  match; this measured value drives the match only in Auto (`zoom === 0`),
-     *  falling back to 1 when also null. The UI reads it back to show the
-     *  active Auto scale. Set on activate; constant per activation. */
+    /** Calibration-MEASURED fovea↔wide magnification, or null when unmeasured —
+     *  drives the match only in Auto (spec §magnification). Constant per activation. */
     match_magnification: null as number | null,
-    /** The leased triple's stored optical zoom override (>0), or null when
-     *  none is set — the MIDDLE tier of the ruled match-magnification order
-     *  (knob > override > measured > 1). The UI reads it to show "Auto N×
-     *  (triple override)" and to keep the degenerate-1× warning honest. Set on
-     *  activate; constant per activation. */
+    /** The leased triple's stored optical zoom override (>0), or null — the
+     *  middle tier of the ruled order (spec §magnification). The UI shows "Auto
+     *  N× (triple override)". Constant per activation. */
     zoom_override: null as number | null,
     tracker_bbox: null as Rect | null,
-    /** The auto-follow gate hit the lost-latch (~10 consecutive misses) and
-     *  released while the toggle stays on — the drawer Status reads "lost"
-     *  instead of a stale "armed", and the convergence timeout resumes
-     *  (frozen() keys on the REAL gate; UI/UX review 2026-07-11). Cleared on
-     *  every (re-)arm. */
+    /** The auto-follow gate hit the lost-latch and released while the toggle
+     *  stays on — the drawer Status reads "lost" (spec §tracker). Cleared on (re-)arm. */
     tracker_lost: false as boolean,
-    /** True while a pointer drag pins the target (the tracker's override is
-     *  engaged; SESSION-LOCAL flag since the node split — nothing rides the
-     *  reusable match nodes). Drives the UI's override badge (which does not
-     *  read the PID slot). */
+    /** True while a pointer drag pins the target (session-local; spec §drag).
+     *  Drives the UI override badge (not the PID slot). */
     overridden: false as boolean,
-    /** Live PID integrator values (debug readout, matches the original
-     *  renderer's "PID Debug" fieldset). */
+    /** Live PID integrator values (debug readout). */
     pids: { verge: 0, panX: 0, panY: 0, v_shift: 0 } as PidReadout,
-    // Control-path latency (perf substrate, docs/history/refactor/orchestrator.md
-    // §7.3 item 2), same shape/throttle as manual-control.
+    /** Control-path latency (same shape/throttle as manual-control). */
     perf: { actuateMs: { mean: 0, max: 0 } as Stat },
-    // Recording (capture-recorder-everywhere ruling 2): the shared mixin shape
-    // the renderer's `Recording` facade + title-bar RecordButton read.
     ...captureTelemetry(),
     ...recordingTelemetry(),
   },
-  // Only the per-side correlation HEATMAPS remain session frames (split-
-  // disparity-nodes, 2026-07-09): the sliced center view and the guide strip
-  // ARE the session's slice pipes now (`camera/<serialC>/undistort/slice/
-  // scope-tile` / `scope-strip`, renderer binds via `usePipeFrame`), the
-  // L-vs-R difference AND anaglyph views are the `stereo/composite` brick's
-  // pipe (composite-node-and-center-select-fix — no longer a renderer
-  // composite), and the L/C/R views source their own undistort pipes as
-  // before. The heatmaps' `{rect, score}` rides telemetry as `MatchInfo`,
-  // per this file's header comment.
+  // Only the per-side correlation HEATMAPS remain session frames; every other
+  // view is a pipe now (spec §topology). Their `{rect, score}` rides telemetry.
   frames: ["match_left", "match_right"] as const,
   commands: {
     /** Pointer interaction on the wide view, in wide-frame pixels. */
@@ -207,19 +156,12 @@ export const disparity = defineContract({
     resetTuning: cmd(),
     /** Clear the PID integrators so the foveas re-converge fresh. */
     reset_vergence: cmd(),
-    /** Manually nudge one PID's integrator (debug slider) — same effect as
-     *  the original renderer's direct `pids.verge.value = x` mutation. Now
-     *  routed to the PID node's controllers (`pan`/`verge`/`v_shift`). */
+    /** Manually nudge one PID's integrator (debug slider). */
     setPid: cmd<{ dof: keyof PidReadout; value: number }>(),
-    /** Engage/update/release the vergence PID node's output override (reusable
-     *  fragment). `{ value }` pins the output at those volts (engage/update);
-     *  `{ release: true }` resumes control (the node's `seed` keeps it
-     *  continuous). PROGRAMMATIC path only since §3.5 — pointer drags ride the
-     *  TRACKER override via `pointer` instead (PID keeps running, no pinning);
-     *  this command remains the module-agnostic volts proxy (`usePidOverride`). */
+    /** Engage/update/release the vergence PID node's output override. `{value}`
+     *  pins the output; `{release:true}` resumes control (seeded continuous).
+     *  Programmatic path only — pointer drags ride the tracker override (spec §drag). */
     pidOverride: pidOverrideCmd<VergenceVolts>(),
-    // Recording (capture-recorder-everywhere ruling 2): records the app's raw
-    // L/C/R sensor streams (advert-verbatim; the OBVIOUS default set).
     ...captureCommands(),
     ...recordingCommands(),
   },

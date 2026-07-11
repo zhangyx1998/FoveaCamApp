@@ -4,13 +4,9 @@ This source code is licensed under the MIT license.
 You may find the full license in project root directory.
 --------------------------------------------------- -->
 <!--
-  Per-camera intrinsic calibration, migrated to the orchestrator (docs/
-  refactor/orchestrator.md §7.1 S1b). Thin client over the
-  `calibrate-intrinsic` session: the orchestrator enumerates cameras, leases
-  the one selected for live detection (checkerboard or ArUco/AprilTag
-  marker), and runs the actual `calibrateCamera` solve. Checker and marker
-  sub-views are unified into one component here since the server-side state
-  machine is unified too (`state.method` switches which detector runs).
+  Per-camera intrinsic calibration — a thin client over the `calibrate-intrinsic`
+  session (checker + marker unified, `state.method` switches the detector).
+  Behavior spec: docs/spec/calibrate-intrinsic.md.
 -->
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue";
@@ -38,19 +34,16 @@ const { state, telemetry } = session;
 // Recording context (capture-recorder-everywhere ruling 2): the title-bar
 // RecordButton + Cmd/Ctrl-R record the selected camera's raw sensor stream.
 new Recording(session, "calibrate-intrinsic");
-// Capture facade (capture-recorder-everywhere ruling 3, item 4): registers
-// `current_capture` so AppWindow's camera icon lights + toggles the shared
-// capture-preview window (single-stream still capture of the selected camera).
+// Capture facade — camera-icon toggle of the shared preview window.
 new Capture(session, "calibrate-intrinsic");
 
-// Wrap a record's downscaled Mono8 preview in a Mat for FrameView (item 4).
+// Wrap a record's downscaled Mono8 preview in a Mat for FrameView.
 function thumbMat(t: RecordThumb) {
   return makeMat(t.data, [t.height, t.width], 1);
 }
 
-// CHECKER projection (item 2, ported from master's calibrate-checker.vue). The
-// physical square size is renderer-local — it only scales the projected board,
-// never the corner-count math the session solves on.
+// CHECKER projection: the physical square size is renderer-local — it scales the
+// projected board only, never the corner-count math the session solves on.
 const pattern_size_mm = ref(10.0);
 const pattern = computed(() => {
   const mm = pattern_size_mm.value;
@@ -64,8 +57,7 @@ const pattern = computed(() => {
         blacks.push({ x: x0 + x * mm, y: y0 + y * mm, width: mm + "px", height: mm + "px" });
   return blacks;
 });
-// real-1c: raw preview off the active camera's native pipe (marker-detection
-// overlay still rides telemetry).
+// Raw preview off the active camera's native pipe (overlay rides telemetry).
 const preview = usePipeFrame(() =>
   state.activeSerial ? nodeId.convert(state.activeSerial) : null,
 );
@@ -88,9 +80,8 @@ function stroke(): number {
   return Math.max(telemetry.size.width, telemetry.size.height, 1) * 0.006;
 }
 
-// `state.pattern_size` is a single customRef holding a plain object —
-// mutating `state.pattern_size.width` in place would neither reach the
-// server nor re-render locally (same pitfall as disparity-scope's `tuning`).
+// Whole-object replace — `state.pattern_size` is a single customRef, so a nested
+// `.width = v` reaches neither server nor render.
 const pattern_w = computed<number>({
   get: () => state.pattern_size.width,
   set: (v) => (state.pattern_size = { ...state.pattern_size, width: v }),

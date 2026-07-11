@@ -4,25 +4,11 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Auto-vergence: drive both fovea cameras to fixate the same physical point.
-//
-// PURE geometry + control math since the node split (docs/proposals/
-// split-disparity-nodes.md, 2026-07-09) — the template-match MECHANISM lives
-// in the generic worker kernel (@orchestrator/template-match-kernel) fed by
-// slice/scale bricks; this module keeps what the SESSION and the PID node
-// need:
-//
-//   - the sizing math the scale nodes are tuned with (`foveaTileSize`,
-//     `matchMagnification`);
-//   - stepVergence() — constrained control on {pan, verge, v_shift},
-//     reconstructing both fovea poses symmetrically about the gaze ray;
-//   - followTarget() — the drag path's direct parallel follow;
-//   - seedVergence() — the generic pidOverride release seed.
-//
-// The loop feeds back on the image-matched position rather than the
-// calibration-predicted one, so a constant extrinsic-calibration offset is
-// absorbed by the loop instead of biasing convergence. Core-free (types
-// only): the control law and its tests never load the native addon.
+// Auto-vergence PURE geometry + control math (the SESSION/PID-node side of the
+// split): sizing (`foveaTileSize`, `matchMagnification`), `stepVergence`,
+// `followTarget`, `seedVergence`. Core-free (types only) so the control law +
+// its tests never load the native addon. Behavior spec: docs/spec/disparity-scope.md
+// (§control-law, §seed-space, §magnification, §needle-geometry).
 
 import type { Point2d, Size } from "core/Geometry";
 import { VEC } from "@lib/util/geometry";
@@ -30,29 +16,11 @@ import { PID } from "@lib/pid";
 import { distanceToVerge, inverseTriangulate, vergeToDistance } from "@lib/stereo";
 import type { CoordinateConversions } from "@lib/coordinate-conversions";
 
-/** Fovea tile size for the template match — since the node split this is the
- *  `dsize` the session tunes the NEEDLE SCALE nodes with. `zoom` here is the
- *  MATCH MAGNIFICATION (measured fovea↔wide ratio, else nominal) — NOT the
- *  display crop zoom.
- *
- *  The needle scaler's SOURCE is the RAW fovea CONVERT pipe — the full fovea
- *  FOV filling the frame at fovea-native resolution (NOT the homography-
- *  undistort pipe, which lands the fovea at wide density and would divide by
- *  the magnification a SECOND time → the 81× too-small-needle defect; the
- *  session's `needleSources` owns that choice). Resizing that whole frame to
- *  this size lands the fovea view at `scale` px per wide px — the single,
- *  correct ÷magnification (legacy `getFoveaTile` semantics).
- *
- *  `width`/`height` must be PAIRED with `zoom`'s units (the session's
- *  `needleGeometry` owns the pairing): a MEASURED magnification is a
- *  fovea-px-per-center-px ratio → pass the FOVEA SOURCE frame dims (the
- *  convert pipe's native dims); the nominal-zoom fallback is a pure FOV ratio
- *  → pass the CENTER dims (the legacy `W_c/z`). Either way `width/zoom` is the
- *  frame's footprint in WIDE (center) pixels of world; at strip scale `scale`
- *  that footprint is `(width*scale)/zoom` tile pixels, landing the tile at
- *  `scale` px per wide px — the SAME scale the strip's `{ratio: scale}` node
- *  produces (CCOEFF matching is not scale-invariant). Mismatched pairing
- *  injects an uncorrected foveaRes/centerRes factor. */
+/** Fovea tile `dsize` for the needle SCALE node = `(width*scale)/zoom` per axis,
+ *  landing the fovea view at `scale` px per wide px (CCOEFF is not scale-
+ *  invariant, so it must meet the strip). `zoom` is the MATCH MAGNIFICATION (not
+ *  the display crop zoom); `width`/`height` MUST be paired with `zoom`'s units —
+ *  the session's `needleGeometry` owns the pairing (spec §needle-geometry). */
 export function foveaTileSize(opts: {
   /** Frame width paired with `zoom` (fovea dims for measured, center for nominal). */
   width: number;
@@ -66,29 +34,14 @@ export function foveaTileSize(opts: {
   return { width: (width * s) / z, height: (height * s) / z };
 }
 
-// The fovea-footprint display math lives in the core-free `display-geometry.ts`
-// (the RENDERER draws the pose markers with it and must not pull this module's
-// runtime `core/Vision` imports); re-exported here so the vision/control side
-// and the tests keep one import surface.
+// Re-export the fovea-footprint display math from the core-free
+// display-geometry.ts (the renderer uses it and must not pull core/Vision) so
+// the vision/control side keeps one import surface.
 export { foveaFootprintOnWide } from "./display-geometry";
 
-/**
- * The magnification that drives the fovea↔wide template match. RULED
- * resolution order (2026-07-09, per-triplet-settings wave):
- *
- *   app-window zoom knob (`nominalZoom` > 0)   — AUTHORITATIVE
- *     > per-triple `zoom_override` (> 0)        — the rig's stored optical zoom
- *       > calibration-MEASURED fovea↔wide ratio — the extrinsic marker-quad ratio
- *         > 1                                    — degenerate but honest
- *
- * A knob zoom of 0 is the "Auto" state: it defers to the per-triple override
- * (a rig-nominal FOV-ratio value the operator set for THIS triple), else the
- * measured ratio (CCOEFF matching is not scale invariant, so the true optical
- * ratio matters), else 1. Each tier must be finite and > 0 to be accepted; a
- * degenerate value at any tier falls through to the next. The knob still wins
- * over everything when set, so a live override on the window is never blocked
- * by a stored triple value.
- */
+/** The fovea↔wide template-match magnification under the ruled resolution order
+ *  (spec §magnification): knob > per-triple override > measured > 1; each tier
+ *  must be finite and > 0 or it falls through. `nominalZoom === 0` is "Auto". */
 export function matchMagnification(
   measured: number | null | undefined,
   nominalZoom: number,
@@ -102,26 +55,17 @@ export function matchMagnification(
   return 1;
 }
 
-/** The minimal 2D controller shape {@link stepVergence} drives for the `pan`
- *  DOF — worker A's `PID2D` (@lib/pid) satisfies it structurally. Declared here
- *  (rather than importing `PID2D`) so the vergence math + its unit test stay
- *  independent of the 2D class: a `Point2d` error in, the saturated `Point2d`
- *  command out, plus the integrator value for telemetry/seed. */
+/** The minimal 2D controller shape {@link stepVergence} drives for `pan` —
+ *  structurally satisfied by @lib/pid's `PID2D`, declared here (not imported) so
+ *  the vergence math + its test stay independent of the 2D class. */
 export interface Vec2Controller {
   step(error: Point2d, dt?: number): Point2d;
   readonly value: Point2d;
 }
 
-/**
- * The named DOF controllers the vergence step integrates. Rather than
- * commanding the four fovea pixel DOF (L.x, L.y, R.x, R.y) independently —
- * which lets the foveas drift apart on noisy frames — the loop integrates
- * these physically-meaningful DOF and reconstructs both fovea poses
- * symmetrically about the gaze ray. Post-replumb these live inside the
- * disparity-scope PID node (`createPidNode`): `pan` is a `PID2D`, `verge` and
- * `v_shift` are scalar {@link PID}s (all with the same {@link PID} guarantees:
- * velocity-form integrator = command, anti-windup clamp, dt-scaling).
- */
+/** The named DOF controllers the vergence step integrates (spec §control-law) —
+ *  physically-meaningful DOF reconstructed symmetrically about the gaze ray,
+ *  not four independent fovea pixel DOF. Live inside the PID node post-replumb. */
 export type VergenceControllers = {
   /** Common-mode ray correction, x/y (rad) — a 2D controller. */
   pan: Vec2Controller;
@@ -131,25 +75,16 @@ export type VergenceControllers = {
   v_shift: PID;
 };
 
-/**
- * The scope's control INPUT: the matched fovea centers + the target on the
- * UNDISTORTED wide frame in full-resolution wide pixels, plus the per-eye
- * match confidence. Since the node split the SESSION's join composes this
- * from the two template-match nodes' results (each side's `origin +
- * rectCenter / stripScale`) — the pure lift is three additions, done at the
- * join (session.ts `onMatch`).
- */
+/** The scope's control INPUT: matched fovea centers + target on the UNDISTORTED
+ *  wide frame (full-res px) + per-eye match confidence. Composed by the session's
+ *  join from the two template-match results (spec §match-join). */
 export type ScopeProjection = {
   l: Point2d;
   r: Point2d;
   target: Point2d;
   scores: { l: number; r: number };
-  /** True while a pointer drag pins the target (SESSION-LOCAL since the node
-   *  split — the join stamps `dragging` here; nothing rides the reusable
-   *  nodes). The control step acts on it: DIRECT follow ({@link followTarget}
-   *  — both eyes parallel on the cursor ray, vergence at infinity; no PID
-   *  stepping, no match-score gate) while the session holds its freeze window
-   *  open and reports "manual" status. */
+  /** True while a pointer drag pins the target (session-local; the join stamps
+   *  it) → DIRECT follow, not a PID step (spec §drag). */
   overridden: boolean;
 };
 
@@ -161,41 +96,18 @@ export type VergenceControl = {
 };
 
 /**
- * Constrained vergence step.
+ * Constrained vergence step (spec §control-law): lift matched centers + target
+ * to center-camera angles (`P2A.C(px, false)` — undistorted input), decompose
+ * into {pan, verge, v_shift} errors, integrate through the per-DOF PIDs
+ * (velocity form; caller-supplied `dt` normalizes the rate), reconstruct both
+ * fovea voltages via {@link inverseTriangulate}. Returns `null` (hold,
+ * controllers untouched) when either match is below `minScore`.
  *
- * The matched fovea centers and the target are lifted into center-camera angle
- * space, decomposed into {pan, verge, v_shift} errors, fed through the per-DOF
- * {@link PID} controllers (which integrate, dt-scale, and saturate), and the
- * resulting commands are turned back into both fovea voltages via
- * {@link inverseTriangulate} — guaranteeing the two foveas stay symmetric about
- * the gaze ray.
- *
- * Error decomposition (with `dL = aT - aL`, `dR = aT - aR`):
- *   pan     = (dL + dR) / 2          — common-mode mis-centering (calibration)
- *   verge   = aR.x - aL.x = 2b(1/Z - 1/z)  — horizontal disparity ⇒ depth
- *   v_shift = (aR.y - aL.y) / 2      — residual vertical disparity
- *
- * The `v_shift` sign is opposite the common-vertical (`pan.y`) one: `v_shift`
- * drives the two foveas in *opposite* vertical directions
- * (`out.l.y = ray.y + v_shift`, `out.r.y = ray.y - v_shift`), so given a stable
- * common-vertical loop, nulling the differential disparity needs the negated
- * error — otherwise `v_shift` slowly winds away to its limit.
- *
- * The PID integration is incremental (velocity) form, so its effect scales with
- * the call rate; `dt` (a rate-normalized step supplied by the caller) keeps
- * convergence wall-clock consistent across the variable pipeline throughput.
- *
- * Returns `null` (hold) when either match is too weak to trust — the
- * controllers are left untouched so a low-confidence frame neither integrates
- * nor winds down.
- *
- * INPUT SPACE (post-replumb): the projected centres arrive as UNDISTORTED
- * wide-frame pixels (the scope reads the center camera's undistort pipe), so
- * they lift to angles via `P2A.C(px, false)` — treated as already-undistorted,
- * the linear pinhole map, not the raw-pixel default the pre-replumb kernel
- * used (`undistort=true`). The math
- * is otherwise byte-for-byte the old control law; it is packaged inside the PID
- * node's control fn (the caller runs it via `node.step`).
+ * Error decomposition (`dL = aT − aL`, `dR = aT − aR`):
+ *   pan     = (dL + dR) / 2                — common-mode mis-centering
+ *   verge   = aR.x − aL.x = 2b(1/Z − 1/z)  — horizontal disparity ⇒ depth
+ *   v_shift = (aR.y − aL.y) / 2            — residual vertical disparity (sign
+ *             opposite pan.y: the foveas move OPPOSITE vertically — spec §control-law)
  */
 export function stepVergence(
   projection: ScopeProjection,
@@ -214,7 +126,7 @@ export function stepVergence(
   const aL = toAngle(projection.l);
   const aR = toAngle(projection.r);
   const aT = toAngle(projection.target); // == target ray
-  // Constrained errors (see header).
+  // Constrained errors (see JSDoc).
   const dL = VEC.sub(aT, aL);
   const dR = VEC.sub(aT, aR);
   const ePan = VEC.mul(VEC.add(dL, dR), 0.5);
@@ -238,26 +150,10 @@ export function stepVergence(
  *  the resumed command continuous (velocity-form integrator = command). */
 export type VergenceSeed = { pan: Point2d; verge: number; v_shift: number };
 
-/**
- * DIRECT target follow (the drag path, user ruling 2026-07-08): reconstruct
- * both fovea poses for `target` from the given controller values — the exact
- * forward map of {@link stepVergence}'s tail (`ray = aT + pan`, then
- * `inverseTriangulate` at the verge-implied distance) with NO PID stepping and
- * NO match-score gate. Dragging must move the foveas even where the template
- * match fails; the match-gated loop deadlocked there (the strip recenters on
- * the dragged target, the foveas' actual gaze leaves the strip, both scores
- * drop below `minScore`, control holds, the foveas never move).
- *
- * The DRAG resets pan/verge/v_shift at pointer-down (session, user rulings
- * 2026-07-08/09) and passes the (now all-zero) controller state — both eyes
- * exactly ON the raw cursor ray: PARALLEL, vergence at INFINITY, no residual
- * corrections. Controllers == command throughout, so releasing the drag
- * resumes {@link stepVergence} from the same values + the same target ⇒ the
- * first resumed output equals the last follow output (velocity-form
- * integrator = command) — continuity without any seeding; every DOF then
- * re-converges from scratch. The function itself is generic over `held`
- * (the map is the control law's reconstruction for ANY controller state).
- */
+/** DIRECT target follow — the drag path (spec §drag): the forward map of
+ *  {@link stepVergence}'s tail (`ray = aT + pan`, then `inverseTriangulate`)
+ *  with NO PID stepping and NO match-score gate, so a drag moves the foveas even
+ *  where the template match fails. Generic over `held`. */
 export function followTarget(
   target: Point2d,
   held: VergenceSeed,
@@ -270,32 +166,14 @@ export function followTarget(
   return { left: conv.A2V.L(A.l), right: conv.A2V.R(A.r) };
 }
 
-/**
- * Reconstruct the `{ pan, verge, v_shift }` controller state whose forward
- * reconstruction (`inverseTriangulate` + `ray = aT + pan`, see
- * {@link stepVergence}) reproduces a pair of per-eye gaze ANGLES `gL`/`gR`
- * (center-camera rad) about the target ray `aT`. This is the exact algebraic
- * inverse of that forward map, so seeding a released PID node with it gives
- * output continuity — the "resume from the released pose, no jump" contract.
+/** Reconstruct the `{pan, verge, v_shift}` state whose forward map reproduces a
+ *  pair of per-eye gaze ANGLES `gL`/`gR` about the target ray `aT` — the exact
+ *  inverse of {@link stepVergence}'s reconstruction, seeding a released PID node
+ *  for output continuity. Inputs are ANGLES, not volts: the V2A round-trip is
+ *  lossy and a parallel-ray caller MUST pass `gL = gR = ray` (spec §seed-space).
  *
- * SPACE CONTRACT — the drag-release seam (this was the release-jump bug):
- * the inputs here are ANGLES, not volts. The forward law commands VOLTS via
- * `A2V(reconstruct(...))`; recovering the angles from an override *volt* pair
- * by inverting through `V2A` is LOSSY — `A2V` and `V2A` are independently
- * fitted PER-EYE regressions, so `V2A.L∘A2V.L ≠ V2A.R∘A2V.R`. A *parallel*
- * drag (both eyes commanded to the SAME ray) round-trips back as two slightly
- * DIFFERENT angles, which this reconstruction reads as a genuine toe-in ⇒ a
- * FABRICATED `verge`/`v_shift` the drag never intended ⇒ the mirrors converge
- * to "another location" the instant control resumes. So a caller that KNOWS the
- * commanded ray (the disparity drag path) must pass it directly as
- * `gL = gR = ray`: `tanDiff` is then exactly 0, `verge`/`v_shift` come out 0,
- * and the forward `A2V(ray)` reproduces the pinned volts exactly. Only the
- * generic volts-only override path (a caller that pinned arbitrary per-eye
- * volts, which genuinely encode a vergence) round-trips through `V2A`.
- *
- * @param parallelEps `|tan gL.x − tan gR.x|` below this ⇒ treated as parallel
- *   (verge 0), guarding the `z = baseline/tanDiff` divide.
- */
+ *  @param parallelEps `|tan gL.x − tan gR.x|` below this ⇒ parallel (verge 0),
+ *    guarding the `z = baseline/tanDiff` divide. */
 export function seedVergence(
   gL: Point2d,
   gR: Point2d,

@@ -4,19 +4,11 @@ This source code is licensed under the MIT license.
 You may find the full license in project root directory.
 --------------------------------------------------- -->
 <!--
-  Disparity-scope DEBUGGER (WS2 2b — the debug window's first real user). Moved
-  off the main UI (disparity-debugger-window.md): a vertical, pixel-COLUMN
-  cross-reference stack — top row is the template-match guide strip (full-res),
-  rows 2/3 are the per-side correlation heatmaps (each strip pixel's score
-  against the left/right needle). The match kernel pads its heatmap back to the
-  strip's dims (template-match-kernel §emitHeatmap), so rendering all three at
-  the same CSS width aligns columns exactly — a feature at strip column x shows
-  its score peak at the same display column in rows 2/3.
-
-  PASSIVE subscriber: the opener app owns the `disparity-scope` session; this
-  window only observes it (never activates/drains). The three views are
-  `:projectable="false"` (no projection/fullscreen button — they ride pipe/
-  session frames with no stand-alone address).
+  Disparity-scope DEBUGGER: a pixel-COLUMN cross-reference stack — guide strip
+  (row 1) over the two per-side correlation heatmaps (rows 2/3). The match kernel
+  pads its heatmap back to the strip's dims, so rendering all three at the same
+  CSS width aligns columns exactly. PASSIVE subscriber: only observes the
+  app-owned session (never activates/drains); views are `:projectable="false"`.
 -->
 <script setup lang="ts">
 import { THEME } from "@lib/camera-config";

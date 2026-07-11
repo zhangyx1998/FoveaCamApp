@@ -4,14 +4,10 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Multi-fovea target runtime (C-24 step 4). Tracking runs on B-25's native
-// multi-KCF thread (`createMultiTracker` — one thread, batched per-frame
-// results, fused undistort); this runtime is the SESSION-SIDE POLICY half:
-// slot bookkeeping, arm/disarm churn (slot index = tracker target id),
-// lost-tolerance (the thread emits `ok:false` liberally — tolerance absorbs
-// it, per the B-25 ruling), steering, pose math via deps, controller-stream
-// sync, and telemetry. The old per-slot JS KCF (busy-drop + generation
-// staleness guards) is GONE — staleness is intrinsic to the native thread.
+// Multi-fovea target runtime — the SESSION-SIDE POLICY half over the native
+// multi-KCF thread: slot bookkeeping, arm/disarm churn, lost-tolerance,
+// steering, pose math, controller-stream sync, telemetry. Behavior spec:
+// docs/spec/multi-fovea.md §runtime, §targets.
 
 import type { Point2d, Rect, Size } from "core/Geometry";
 import type { StreamHandle } from "@orchestrator/controller";
@@ -178,12 +174,8 @@ export class MultiFoveaRuntime {
         slot.lostCount = 0;
       } else if (++slot.lostCount >= slot.config.tracker.lostTolerance) {
         this.releaseSlot(slot, index);
-        // value-sweep 2026-07-11 `multifovea-lost-release-stale-scheduler`:
-        // the release just TERMINATEd this slot's MCU stream, but the
-        // round-robin scheduler still had its stream id in rotation — every
-        // pass issued a CMD_FRAME against a DEAD stream (firmware REJ /
-        // wasted round-robin turn) until the next full setTargets. Resync
-        // the scheduler to the surviving live streams immediately.
+        // Release TERMINATEd this slot's MCU stream — resync the scheduler NOW so
+        // it stops issuing CMD_FRAMEs against the dead stream (spec §runtime).
         this.syncSchedulerTargets();
         continue;
       }
@@ -215,13 +207,9 @@ export class MultiFoveaRuntime {
     this.deps.updateFoveaRect(index, roi);
   }
 
-  /** Position a fixed mirror-angle PRESET target (the demo's angle-space path):
-   *  NO KCF (`armed` stays false → excluded from `onTrackResults`); the pose is
-   *  the preset angle via `targetPose`, the fovea crop is centered on the
-   *  projected wide-camera pixel (falls back to the slot's `center` when
-   *  uncalibrated), and the controller stream is nudged to the preset volts.
-   *  The round-robin still interleaves it exactly like a KCF target — it just
-   *  never moves. */
+  /** Position a fixed mirror-angle PRESET target (spec §targets): NO KCF
+   *  (`armed` stays false), pose from `targetPose`, crop on the projected pixel
+   *  (or the slot center uncalibrated), stream nudged to the preset volts. */
   private positionPreset(slot: Slot, index: number): void {
     const pose = this.deps.targetPose(index, slot.config.center);
     slot.armed = false;

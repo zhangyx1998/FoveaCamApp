@@ -4,22 +4,9 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// calibrate-extrinsic session (docs/history/refactor/orchestrator.md §7.1 S1b) —
-// the largest/highest-risk migration in the roadmap: a 3-step wizard
-// (CAL capture -> FIN review/regression-fit -> PRV interactive test)
-// building the per-fovea extrinsic dataset that `orchestrator/
-// calibration.ts`'s `loadExtrinsic`/`leaseCalibratedTriple` consume.
-//
-// Deliberately does NOT use `leaseCalibratedTriple()` — that requires
-// *existing* extrinsic data, which is exactly what this tool produces.
-// Matches the original renderer's own dependency shape: role-matched
-// cameras (`matchTriple`) + the center camera's intrinsic calibration only
-// (`loadIntrinsic`, exported from `calibration.ts`).
-//
-// Actuation mode switches with the wizard step: CAL runs `startServo`
-// (tracker-driven visual servo, manual override via drag); PRV pushes a
-// drag-computed target to the controller NODE via a paced position input
-// (testing the just-fitted regressions); FIN has no actuation (static review).
+// calibrate-extrinsic session — a 3-step wizard (CAL capture → FIN
+// review/regression-fit → PRV interactive test) building the per-fovea extrinsic
+// dataset. Behavior spec: docs/spec/calibrate-extrinsic.md.
 
 import { type ServerSession } from "@orchestrator/runtime";
 import { defineResourceSession, type ResourceScope } from "@orchestrator/resource-session";
@@ -68,9 +55,8 @@ type Role = "L" | "C" | "R";
 const ORIGIN: Pos = { x: 0, y: 0 };
 const SCRATCH_PATH = ["tmp", "calibrate-extrinsic"];
 
-/** Persist one eye's finalized dataset as a calibration-records-v2 record
- *  (content-hash id) bound to this camera + triple. An identical dataset (same
- *  id) already on disk just gains the association (idempotent). */
+/** Persist one eye's finalized dataset as a content-hashed record bound to this
+ *  camera + triple; identical datasets just gain the association (spec §persistence). */
 async function saveExtrinsicRecord(
   role: "L" | "R",
   camera: Pick<import("core/Aravis").Camera, "vendor" | "model" | "serial">,
@@ -105,15 +91,12 @@ export default function calibrateExtrinsicSession(
 ): ServerSession<typeof calibrateExtrinsic> {
   return defineResourceSession("calibrate-extrinsic", calibrateExtrinsic, (s) => {
     let leases: Record<Role, CameraLease> | null = null;
-    // Capture (ruling 3): DEGRADED raw-stack capture — this tool holds no
-    // undistort (it PRODUCES the extrinsic data), so the L/R foveae stack raw
-    // WITHOUT the fovea homography wrap (stated in `capture_meta`).
+    // Capture: DEGRADED raw-stack (no undistort — this tool produces it; spec §capture).
     let captureHelper: CaptureHelper | null = null;
     let captureCenter: { shmName: string; maxBytes: number; channels: number } | null = null;
     let undistort: Undistort | null = null;
 
-    // Recording (capture-recorder-everywhere ruling 2): the raw L/C/R sensor
-    // streams (advert-verbatim, the OBVIOUS default set) via the shared facility.
+    // Recording — the raw L/C/R sensor streams (spec §capture).
     const recording = createRawRecording({
       id: "recorder/calibrate-extrinsic",
       broker,
@@ -156,26 +139,21 @@ export default function calibrateExtrinsicSession(
       previewInput = null;
     }
 
-    /** Switch the active actuation mode to match the wizard step. Called
-     *  both at activation (for the initial step) and whenever `step`
-     *  changes — `s.setState()` doesn't fire `watch` hooks for server-
-     *  initiated changes (only client-initiated ones), so command handlers
-     *  that change `step` call this directly too. */
+    /** Switch actuation to match the wizard step (spec §wizard). Called at
+     *  activation and on every `step` change — command handlers that change
+     *  `step` call it directly since `s.setState` doesn't fire `watch` server-side. */
     function enterStep(step: "CAL" | "FIN" | "PRV"): void {
       stopServo();
       stopPreview();
       if (!trackers) return;
       if (step === "CAL") {
         servo = startServo(trackers.L, trackers.R, { owner: "calibrate-extrinsic" });
-        // A fresh servo's per-eye override slots start released — mirror that
-        // into contract state so a stale engaged echo can't survive a step
-        // round-trip (CAL → FIN/PRV → CAL recreates the servo).
+        // Mirror the fresh servo's released override slots into state so a stale
+        // engaged echo can't survive a step round-trip (spec §wizard).
         s.setState("pidOverrideL", { engaged: false, value: null });
         s.setState("pidOverrideR", { engaged: false, value: null });
       } else if (step === "PRV") {
-        // Push model: a paced timer pushes the drag-computed `previewVolt` to the
-        // controller node (was `startActuationLoop`). No telemetry body — the PRV
-        // step tests the just-fitted regressions, it doesn't mirror volts.
+        // Push the drag-computed `previewVolt` to the controller node (spec §wizard).
         previewInput = controllerNode().openPosition("calibrate-extrinsic-preview", {
           initial: { left: previewVolt.l, right: previewVolt.r },
         });
@@ -190,18 +168,10 @@ export default function calibrateExtrinsicSession(
       s.telemetry({ records, saved: false });
     }
 
-    // Resource-scoped activation (A-P1). Two-stage acquire (matchTriple then
-    // center-intrinsic load) releases IMMEDIATELY on either failure — the lease
-    // only becomes scope-owned (deferred release) once both succeed. servo/
-    // preview toggle per wizard step via `enterStep`; the scope's drain stops
-    // whichever is active. Lease releases LAST.
+    // Resource-scoped activation (spec §teardown): two-stage acquire releases
+    // immediately on either failure; the lease is scope-owned only once both
+    // succeed. The progress monitor freezes at the step an early-return died on.
     async function activateSession(scope: ResourceScope): Promise<void> {
-      // Spin-up progress (ruling 2026-07-09): declared steps ride the status
-      // channel so the window shows this sequence instead of blanking while the
-      // graph builds. A failure/early-return leaves the list FROZEN at its step
-      // (never `done`/`complete`) — the two-stage acquire freezes at "Leasing
-      // cameras" on match failure, at "Loading center intrinsics" if the center
-      // intrinsic is missing; idle teardown clears a cancelled spin-up.
       const monitor = s.progressMonitor([
         { id: "lease", label: "Leasing cameras" },
         { id: "intrinsic", label: "Loading center intrinsics" },
@@ -257,14 +227,10 @@ export default function calibrateExtrinsicSession(
       });
       const taps = new DisposerBag();
       bindDetections(trackers, taps, publishDetections);
-      // Raw L/C/R previews ride the native `camera:<serial>` pipe (usePipeFrame
-      // in index.vue, discovered via publishSerials) — no JS `onView` view-tap
-      // (A-31, real-1f step 3). Marker detection stays off-loop on
-      // `detector.stream`, so this session no longer taps `onView` at all.
+      // Raw L/C/R previews ride the native `camera:<serial>` pipe (usePipeFrame).
       publishSerials(leases, taps, s);
-      // Publish the leased triple's config store path so the renderer can open
-      // the `["triples", <hash>]` doc reactively for LIVE per-triple baseline
-      // marker spacing (per-triplet-settings wave, Ruling A).
+      // Publish the triple's config path so the renderer opens the per-triple doc
+      // for live marker spacing.
       s.setState(
         "configPath",
         await tripleConfigPath(leases.L.camera, leases.C.camera, leases.R.camera),
@@ -355,12 +321,8 @@ export default function calibrateExtrinsicSession(
           const centerAbsolute = C.centerAbsolute;
           if (!L.target || !C.target || !R.target || !pos || !centerAbsolute) return;
           const angle = undistort.angular([centerAbsolute], true)[0];
-          // Ruling 3: the WIDE (C) camera's raw view of the SIDE markers (the
-          // SAME physical markers the L/R foveae track). `C.otherTargets` holds
-          // C's non-target detections this tick; match by the per-eye target id
-          // and record its outer 4-corner quad (absent when the wide camera
-          // didn't see that side marker → that eye's record has no preferred
-          // measurement, falls back to the center marker).
+          // Ruling 3 (spec §capture-measurements): the wide camera's view of the
+          // side markers, matched by per-eye target id; absent → center fallback.
           const sideQuad = (id: number): Point2d[] | undefined => {
             const d = C.otherTargets.find((o) => o.id === id);
             return d ? d.slice(0, 4).map((p) => ({ x: p.x, y: p.y })) : undefined;
@@ -369,8 +331,7 @@ export default function calibrateExtrinsicSession(
             L: sideQuad(s.state.targetId.L),
             R: sideQuad(s.state.targetId.R),
           };
-          // Ruling 2: the (independently-adjustable) marker sizes at capture,
-          // read from the store-hub-cached app config — side markers vs center.
+          // Ruling 2: the independently-adjustable marker sizes at capture.
           const cfg = await read<MarkerConfig>(CONFIG_PATH, {});
           const side_mm = cfg.cal_marker_size_mm ?? 60.0;
           const marker = { side_mm, center_mm: side_mm * (cfg.cal_marker_ratio ?? 1.0) };
@@ -413,27 +374,18 @@ export default function calibrateExtrinsicSession(
         async setPreviewTarget({ p }) {
           if (!undistort || !fittedL || !fittedR) return;
           const [angle] = undistort.angular([p], true);
-          // Angle -> volt (A2V), not the reverse — the original renderer's
-          // preview.vue had this call backwards (`V2A.predict` on an angle
-          // input); found while porting, fixed here. See docs/history/refactor/
-          // orchestrator.md §7.1 S1b for the full note.
+          // angle → volt (A2V), NOT the reverse (spec §capture-measurements).
           const l = fittedL.A2V.predict(angle);
           const r = fittedR.A2V.predict(angle);
           previewVolt = { l, r };
-          // Round-trip each predicted volt back through V2A -> angle -> pixel,
-          // for the "does this look right on the wide view" overlay.
+          // Round-trip each volt back through V2A → angle → pixel for the overlay.
           const cursor_l = undistort.position([fittedL.V2A.predict(l)], true)[0];
           const cursor_r = undistort.position([fittedR.V2A.predict(r)], true)[0];
           s.telemetry({ preview: { pos: { L: l, R: r }, cursor_l, cursor_r } });
         },
         async confirm() {
           if (!leases) return;
-          // calibration-records-v2: persist each eye's dataset as a
-          // content-hashed RECORD associated with this camera + triple (was a
-          // flat `["calibrate-extrinsic", <cameraKey>]` write). loadExtrinsic
-          // resolves the latest record bound to the camera. An identical
-          // re-calibration (same datapoints → same id) just adds the
-          // association to the existing record.
+          // Persist each eye's dataset as a content-hashed record (spec §persistence).
           const [, tripleHash] = await tripleConfigPath(
             leases.L.camera,
             leases.C.camera,
@@ -443,7 +395,7 @@ export default function calibrateExtrinsicSession(
           await saveExtrinsicRecord("R", leases.R.camera, createDataSet(records, "R"), tripleHash);
           s.telemetry({ saved: true });
         },
-        // Capture (ruling 3) — forward to the shared helper.
+        // Capture — forward to the shared helper.
         async captureShot({ tag }) {
           if (!captureHelper) throw new Error("Capture not ready");
           await captureHelper.captureShot(tag);
@@ -458,7 +410,7 @@ export default function calibrateExtrinsicSession(
           await captureHelper?.discard();
         },
         async startRecording({ path }) {
-          if (captureHelper?.capturing) return false; // exclusivity (ruling 6)
+          if (captureHelper?.capturing) return false; // exclusivity (spec §capture)
           return recording.start(path);
         },
         async stopRecording() {

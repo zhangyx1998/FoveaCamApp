@@ -4,12 +4,9 @@ This source code is licensed under the MIT license.
 You may find the full license in project root directory.
 --------------------------------------------------- -->
 <!--
-  Projector-alignment/homography validation, migrated to the orchestrator
-  (docs/history/refactor/orchestrator.md §7.1 S1b). Thin client over the
-  `calibrate-distortion` session: three marker trackers, a continuous
-  "point mirrors at the tracked wide-angle marker" actuation loop, and a
-  live per-fovea homography preview. `controller` session read directly for
-  the position readout in the stream titles.
+  Projector-alignment/homography validation — a thin client over the
+  `calibrate-distortion` session (three marker trackers, a continuous mirror
+  point-at-marker loop, live per-fovea homography previews).
 -->
 <script setup lang="ts">
 import { computed, ref } from "vue";
@@ -35,15 +32,11 @@ const app_config = await useAppConfig();
 const session = useSession(calibrateDistortion, "calibrate-distortion");
 const ctrl = useController();
 const { state, telemetry } = session;
-// Recording context (capture-recorder-everywhere ruling 2).
+// Title-bar RecordButton + camera-icon Capture toggle (shared facades).
 new Recording(session, "calibrate-distortion");
-// Capture context (capture-recorder-everywhere ruling 3): lights this window's
-// camera icon (AppWindow) → the shared CapturePreview window (its in-window
-// button drives the shot). Per-window singleton, disposed on unmount.
 new Capture(session, "calibrate-distortion");
 
-// C-2c: raw fovea previews (L/C/R) all ride their native camera:<serial>
-// convert pipe directly (off the JS view-tap relay loop); only the
+// Raw L/C/R previews ride their native camera:<serial> pipe; only the
 // worker-derived homography overlays (proj_*) stay on session.frame.
 const { proj_L: frameProjL, proj_R: frameProjR } = useFrames(session, ["proj_L", "proj_R"]);
 const frameL = usePipeFrame(() =>
@@ -57,9 +50,8 @@ const frameR = usePipeFrame(() =>
 );
 
 const marker_zoom = ref(1.0);
-// LIVE per-triple baseline (Ruling A): the L/R marker pair sits at ±baseline/2,
-// resolved from the leased triple's `baseline_mm` (legacy app value, else 200)
-// reactively — Settings edits reflect without a restart.
+// Live per-triple baseline: the L/R marker pair sits at ±baseline/2, resolved
+// reactively from the triple's `baseline_mm` (legacy app value, else 200).
 const baseline = useTripleBaseline(() => state.configPath, app_config);
 
 function formatPos(pos?: Point2d): string {

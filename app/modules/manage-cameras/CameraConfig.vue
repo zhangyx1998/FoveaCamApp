@@ -19,7 +19,7 @@ import type { CameraView, ManageCamerasContract } from "./contract";
 
 type NumericCameraKey = "frame_rate" | "gain" | "black_level";
 
-// Readout formatters from the shared control schema (A-P11) — same source the
+// Readout formatters from the shared control schema — the same source the
 // orchestrator snapshot uses, so the displayed value can't drift from the wire.
 const controlFmt: Record<string, (v: number) => string> = Object.fromEntries(
   CAMERA_CONTROLS.map((c) => [c.key, c.format]),
@@ -34,7 +34,7 @@ const view = computed<CameraView | undefined>(
   () => session.telemetry.views[serial],
 );
 
-// real-1c: raw preview off the native `camera:<serial>` pipe (not `session.frame`).
+// Raw preview off the native `camera:<serial>` pipe.
 const framePayload = usePipeFrame(nodeId.convert(serial));
 
 const field = <K extends keyof CameraView>(key: K) =>

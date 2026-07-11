@@ -4,9 +4,8 @@ This source code is licensed under the MIT license.
 You may find the full license in project root directory.
 --------------------------------------------------- -->
 <!--
-  Single-capture, migrated to the orchestrator. Thin client over the `liveview`
-  session: pick a camera, the orchestrator opens it (restoring its persisted
-  config) and streams frames here. No `core`/hardware access in the renderer.
+  Single-capture — a thin client over the `liveview` session: pick a camera, the
+  orchestrator opens it and streams frames here. No core/hardware in the renderer.
 -->
 <script setup lang="ts">
 import { computed, onMounted } from "vue";
@@ -17,7 +16,7 @@ import FrameView from "@src/components/FrameView.vue";
 
 const session = useSession(liveview, "liveview");
 const { state, telemetry } = session;
-// real-1c: live view off the selected camera's native pipe (not `session.frame`).
+// Live view off the selected camera's native pipe.
 const frame = usePipeFrame(() => (state.serial ? nodeId.convert(state.serial) : null));
 const mat = computed(() => payloadToMat(frame.value));
 

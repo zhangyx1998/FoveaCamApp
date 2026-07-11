@@ -4,13 +4,9 @@ This source code is licensed under the MIT license.
 You may find the full license in project root directory.
 --------------------------------------------------- -->
 <!--
-  Auto-vergence, migrated to the orchestrator (docs/history/refactor/orchestrator.md
-  §7.1 S1a — the §1 flagship). This module is now a thin client over the
-  `disparity-scope` session: the orchestrator leases the calibrated L/C/R
-  triple, runs the template-match vergence PID and the actuation loop, and
-  streams L/C/R + combined-fovea + template-match previews here. The renderer
-  only renders frames, overlays telemetry, and drives tuning/target via
-  state/commands — no `core`, camera, or calibration access.
+  Auto-vergence — a thin client over the `disparity-scope` session (renders
+  frames, overlays telemetry, drives tuning/target via state/commands; no core /
+  camera / calibration access). Behavior spec: docs/spec/disparity-scope.md.
 -->
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
@@ -54,30 +50,14 @@ import type { TrackerType } from "./tracker-swap";
 
 const session = useSession(disparity, "disparity-scope");
 const { state, telemetry } = session;
-// Recording context (capture-recorder-everywhere ruling 2): registers this
-// window's title-bar RecordButton (AppWindow) + its Cmd/Ctrl-R trigger against
-// the session's startRecording/stopRecording — the shared manual-control facade,
-// reused not forked. Per-window singleton; disposed on unmount by the facade.
+// Title-bar RecordButton + camera-icon Capture toggle — the shared facades
+// (per-window singletons, disposed on unmount). See docs/spec/disparity-scope.md §capture.
 new Recording(session, "disparity-scope");
-// Capture context (capture-recorder-everywhere ruling 3): registers this
-// window's camera icon (AppWindow) which toggles the shared CapturePreview
-// window. Capture DRIVING (the shot trigger) lives in that preview window's
-// in-window button — this app needs no bespoke capture UI. Per-window singleton;
-// disposed on unmount by the facade.
 new Capture(session, "disparity-scope");
 
-// Baseline is RESOLVED SERVER-SIDE now (Ruling A, per-triplet-settings wave):
-// the session reads the leased triple's `baseline_mm` (falling back to the
-// legacy app-level value, else 200) at activate and pushes it into
-// `state.baseline`. The renderer no longer seeds it from app config.
-
-// View re-plumb (pid-nodes-and-view-replumb.md §Renderer): the L/C/R main views
-// source their per-camera `undistort` pipes DIRECTLY via `usePipeFrame` (off the
-// JS view-tap loop AND independent of the scope kernel), so a busy kernel can no
-// longer cap their fps. Serials come from the same published lease state the
-// raw-C view already read. C binds `undistort` too (was `convert`): the overlays
-// on that view (target dot, per-eye pose rects, tracker bbox, match rects) are
-// now in UNDISTORTED wide pixels, so the frame must share that space to align.
+// L/C/R main views source their per-camera `undistort` pipes DIRECTLY (off the
+// scope kernel, so a busy kernel can't cap their fps). C binds `undistort` (not
+// `convert`) so its overlays share the undistorted-wide space they draw in.
 const frameL = usePipeFrame(() =>
   state.serials?.L ? nodeId.undistort(state.serials.L) : null,
 );
@@ -87,18 +67,10 @@ const frameC = usePipeFrame(() =>
 const frameR = usePipeFrame(() =>
   state.serials?.R ? nodeId.undistort(state.serials.R) : null,
 );
-// Center view is ONE pipe-backed StreamView over a computed pipe id (composite-
-// node-and-center-select-fix §D): every option is a pipe now —
-//   sliced    → the scope-tile slice pipe (live-steered server-side),
-//   disparity → the `stereo/composite` brick's pipe (mode = difference),
-//   anaglyph  → the SAME `stereo/composite` pipe (session retunes mode = anaglyph),
-//   sgbm      → the stereo brick's heatmap pipe.
-// `usePipeFrame` binds ONLY the selected view's pipe — the C-21 consumer gate
-// parks the unwatched producer chain (no subscriber → no compute, stereo-
-// disparity-and-heatmap-nodes ruling 2). disparity↔anaglyph flips retune the
-// SAME connected composite pipe server-side (no reconnect churn). (The guide
-// strip + per-side match heatmaps moved to the module's Debugger.vue sub-window
-// — disparity-debugger-window.md.)
+// Center view = ONE pipe-backed StreamView over a computed pipe id (spec
+// §topology): sliced → scope-tile slice, disparity/anaglyph → the composite
+// brick (one pipe, mode retuned server-side), sgbm → the stereo heatmap.
+// Binding only the selected pipe parks the rest (C-21 consumer gate).
 const centerFrame = usePipeFrame(() => {
   const c = state.serials?.C;
   if (!c) return null;
@@ -115,24 +87,17 @@ const centerFrame = usePipeFrame(() => {
   }
 });
 
-// The configured anaglyph style (app config `anaglyph_style`) — drives the
-// "Anaglyph" option label so it names the ACTUAL left/right colors. Live: a
-// Settings change flows through the shared config doc into this ref. Non-
-// blocking (this setup is synchronous) with the RC default until it resolves.
+// Configured anaglyph style — labels the "Anaglyph" option with the actual
+// L/R colors; live via the shared config doc, RC default until it resolves.
 const anaglyphStyle = ref<AnaglyphStyle>(DEFAULT_ANAGLYPH_STYLE);
 void useConfigRef("anaglyph_style").then((r) => {
   anaglyphStyle.value = r.value ?? DEFAULT_ANAGLYPH_STYLE;
   watch(r, (v) => (anaglyphStyle.value = v ?? DEFAULT_ANAGLYPH_STYLE));
 });
 
-// GLOBAL prediction rate (Hz) — the native IMM brick's feed-forward emit rate
-// (prediction-compose-node.md ruling 2). Binds the SAME `prediction_rate_hz`
-// config key the Settings → Global config field edits, so this drawer slider
-// live-applies through the shared config doc (the disparity-scope session
-// subscribes + calls `imm.setParams({ rateHz })`). Non-blocking (synchronous
-// setup) with the shared default until the ref resolves; writes clamp 60..1000.
-// The default is the SINGLE `@lib/config-schema` constant the Settings field and
-// the orchestrator prediction-rate reader both use (was inlined `600` here).
+// GLOBAL prediction rate (Hz) — the IMM brick's emit rate (spec §actuation).
+// Binds the same `prediction_rate_hz` config key Settings edits, so this drawer
+// slider live-applies through the shared config doc; writes clamp 60..1000.
 const PREDICTION_RATE_DEFAULT = DEFAULT_PREDICTION_RATE_HZ;
 const predictionRateLocal = ref<number>(PREDICTION_RATE_DEFAULT);
 let predictionRateCfg: { value: number | undefined } | null = null;
@@ -150,9 +115,7 @@ const prediction_rate = computed<number>({
   },
 });
 
-// Center-view select options (one list, rendered into whichever branch's
-// title slot is live). The anaglyph label follows the configured style (e.g.
-// "Anaglyph (Blue = Left, Red = Right)" under BR).
+// Center-view select options; the anaglyph label follows the configured style.
 const VIEW_OPTIONS = computed(
   () =>
     [
@@ -163,11 +126,8 @@ const VIEW_OPTIONS = computed(
     ] as const,
 );
 
-// Object-tracker engine choices for the drawer SingleSelect — the drop-in
-// replacement nodes (user request 2026-07-11). Bound to `state.tracker_type`;
-// the session hot-swaps the tracker on the fly (tracker-swap.ts). The session
-// pins this back on a degraded swap, so the control always shows the ACTIVE
-// engine.
+// Object-tracker engine choices — bound to `state.tracker_type`; the session
+// hot-swaps on the fly and pins this back on a degraded swap (spec §tracker).
 const TRACKER_OPTIONS: readonly SingleSelectOption<TrackerType>[] = [
   {
     value: "hybrid",
@@ -184,20 +144,15 @@ const TRACKER_OPTIONS: readonly SingleSelectOption<TrackerType>[] = [
 const drawer_height = ref(0);
 const stroke = computed(() => Math.max(telemetry.size.width, telemetry.size.height, 1) * 0.003);
 
-// Per-eye pose markers on the (wide) C view: a fovea camera is magnified by the
-// zoom ratio, so one fovea frame projects onto the wide view shrunk by that
-// ratio. The rects must therefore be the fovea FOOTPRINT (size / zoom), not the
-// full wide-frame size — same crop the sliced center view uses. Routed through
-// the RESOLVED `match_zoom` so Auto (zoom 0) frames the measured footprint
-// instead of the whole frame (`foveaFootprintOnWide` clamps to ≥ 1 internally).
+// Per-eye pose markers = the fovea FOOTPRINT (size / zoom), not the full wide
+// frame — routed through the resolved `match_zoom` so Auto frames the measured
+// footprint (spec §magnification).
 const foveaFootprint = computed(() =>
   foveaFootprintOnWide(telemetry.size, match_zoom.value),
 );
 
-// --- tuning: every write replaces the whole `state.tuning` object (a nested
-// mutation like `state.tuning.x = v` would neither reach the server nor
-// re-render locally — `state.tuning` is a single customRef, not a deep-
-// reactive proxy). See docs/history/refactor/orchestrator.md §7.1 S1a.
+// Every tuning write replaces the whole `state.tuning` object — it's a single
+// customRef, so a nested `state.tuning.x = v` reaches neither server nor render.
 function setTuning<K extends keyof Tuning>(key: K, value: Tuning[K]): void {
   state.tuning = { ...state.tuning, [key]: value };
 }
@@ -223,21 +178,15 @@ const triple_override = computed(() =>
     ? telemetry.zoom_override
     : null,
 );
-// The magnification actually driving the template match, under the RULED order
-// (2026-07-09, per-triplet-settings wave), mirroring the session's
-// `matchZoom()`: the knob (`state.zoom > 0`) is AUTHORITATIVE; `zoom === 0` is
-// "Auto" → the per-triple override, else the calibration-measured value, else 1.
-// Keeps the "Template Scale" / footprint readouts honest in every mode.
+// The magnification actually driving the match, mirroring the session's
+// `matchZoom()` under the ruled order (spec §magnification) — keeps the readouts honest.
 const match_zoom = computed(() =>
   state.zoom > 0
     ? state.zoom
     : (triple_override.value ?? telemetry.match_magnification ?? 1),
 );
-// Auto-mode readout for the Zoom-Ratio knob (shown only at zoom 0): surfaces the
-// RESOLVED magnification AND its source. A per-triple override reads "Auto N×
-// (triple override)"; a measured value reads "Auto N×"; with NEITHER,
-// `match_zoom` degenerates to 1 and the readout flags "(no cal)" (an honest
-// fallback, not a real measured 1×).
+// Auto-mode readout (zoom 0 only): the resolved magnification + its source —
+// "(triple override)", plain "Auto N×", or "(no cal)" when it degenerates to 1×.
 const auto_hint = computed(() => {
   const z = `Auto ${match_zoom.value.toFixed(1)}×`;
   if (triple_override.value !== null) return `${z} (triple override)`;
@@ -318,8 +267,8 @@ const pidPanY = pidRef("panY");
 const pidVshift = pidRef("v_shift");
 const resetVergence = () => session.call("reset_vergence", undefined);
 
-// Same whole-object-replace requirement as `tuning` — `state.kernel.w = v`
-// would neither reach the server nor re-render locally.
+// Whole-object replace (like `tuning`) — a nested `state.kernel.w = v` reaches
+// neither server nor render.
 const kernel_w = computed<number>({
   get: () => state.kernel.w,
   set: (v) => (state.kernel = { ...state.kernel, w: v }),
@@ -329,8 +278,7 @@ const kernel_h = computed<number>({
   set: (v) => (state.kernel = { ...state.kernel, h: v }),
 });
 
-// --- pointer: down/move/up phases synthesized from StreamView's mouse event
-// (a plain `(Point & Size & {buttons}) | null` stream, not phase-tagged) --
+// Synthesize down/move/up phases from StreamView's plain (un-phased) mouse stream.
 let wasDown = false;
 let lastP: Point2d = { x: 0, y: 0 };
 function onCursor(c: (Point2d & Size & { buttons: number }) | null): void {
@@ -361,9 +309,8 @@ function onCursor(c: (Point2d & Size & { buttons: number }) | null): void {
       <PosView :pos="telemetry.volt.L" :color="THEME.L" style="width: 100%" />
     </div>
     <div class="view">
-      <!-- Single pipe-backed center view (composite-node-and-center-select-fix
-           §D): the computed `centerFrame` picks the pipe per `state.view`; the
-           InlineSelect rides the (now-forwarded) #title slot once. -->
+      <!-- Single pipe-backed center view: `centerFrame` picks the pipe per
+           `state.view` (spec §topology); the InlineSelect rides the #title slot. -->
       <StreamView class="stream" :payload="centerFrame" :theme="THEME.C">
         <template #title>
           <InlineSelect v-model="state.view">
@@ -412,11 +359,8 @@ function onCursor(c: (Point2d & Size & { buttons: number }) | null): void {
           telemetry.realized_distance === Infinity ? "&#x221E;" : telemetry.realized_distance.toFixed(4)
         }}</span>m
         | <span class="value">{{ telemetry.status }}</span>
-        <!-- §3.5: drags ride the TRACKER override (both eyes parallel on the
-             cursor ray, vergence at infinity — direct-follow ruling
-             2026-07-08) — the badge mirrors the flag the tracker propagates
-             downstream, NOT the PID slot (that slot is programmatic-only
-             now, via the pidOverride command). -->
+        <!-- Drags ride the tracker override (spec §drag); this badge mirrors
+             the propagated flag, NOT the programmatic-only PID slot. -->
         <span
           v-if="telemetry.overridden"
           class="value override"
@@ -424,8 +368,7 @@ function onCursor(c: (Point2d & Size & { buttons: number }) | null): void {
           >override</span
         >
       </div>
-      <!-- The Debugger sub-window toggle moved to the TITLE BAR (AppWindow's
-           catalog-driven bug icon, AppMeta.debugWindow — user 2026-07-11). -->
+      <!-- The Debugger sub-window toggle lives in the title bar (AppMeta.debugWindow). -->
     </div>
     <div class="view">
       <StreamView class="stream" :title="ROLE.R" :payload="frameR" :theme="THEME.R" />
@@ -514,9 +457,8 @@ function onCursor(c: (Point2d & Size & { buttons: number }) | null): void {
           "
         >
           <span>Zoom Ratio</span>
-          <!-- Right-side group (mirrors `.kernel-size`): the Auto hint expands
-               into free space to the LEFT of the input, which stays anchored at
-               the row edge — toggling zoom 0↔value never reflows a neighbor. -->
+          <!-- Auto hint expands to the LEFT; the input stays anchored so
+               toggling zoom 0↔value never reflows a neighbor. -->
           <span class="zoom-value">
             <span
               v-if="state.zoom === 0"
@@ -606,14 +548,12 @@ function onCursor(c: (Point2d & Size & { buttons: number }) | null): void {
             {{ state.tracker_enabled ? "on" : "off" }}
           </button>
         </h4>
-        <!-- A bare <label> with no control was inert + misassociated for a11y
-             (UI/UX review 2026-07-11); plain row + aria-label on the select. -->
+        <!-- Plain row + aria-label on the select (a bare <label> with no
+             control was inert + misassociated for a11y). -->
         <div class="entry">
           <span>Type</span>
         </div>
-        <!-- Object-tracker engine — swaps on the fly (drop-in nodes). Binds
-             state, so it always shows the ACTIVE engine (the session pins it
-             back on a degraded swap). -->
+        <!-- Tracker engine — swaps on the fly; always shows the ACTIVE engine (spec §tracker). -->
         <SingleSelect
           v-model="state.tracker_type"
           :options="TRACKER_OPTIONS"
@@ -629,9 +569,8 @@ function onCursor(c: (Point2d & Size & { buttons: number }) | null): void {
         </label>
         <div class="entry">
           <span>Status</span>
-          <!-- "lost" = the auto-follow gate hit the lost-latch while the
-               toggle stays on (re-enable or drag to re-arm) — a stale "armed"
-               here contradicted a "frozen" vergence status. -->
+          <!-- "lost" = the auto-follow gate hit the lost-latch (spec §tracker);
+               re-enable or drag to re-arm. -->
           <span>{{
             telemetry.tracker_bbox
               ? "tracking"
@@ -818,8 +757,7 @@ function onCursor(c: (Point2d & Size & { buttons: number }) | null): void {
       font-size: var(--fs-sm);
       color: var(--text-muted);
       white-space: nowrap;
-      // Degenerate Auto (no calibrated magnification) is flagged, not silent —
-      // so a fallback 1× never reads as a genuine measured 1×.
+      // Degenerate Auto (no calibrated magnification) is warn-colored, not silent.
       &.uncal {
         color: var(--warn);
       }

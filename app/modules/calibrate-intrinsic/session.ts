@@ -4,23 +4,9 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// calibrate-intrinsic session (docs/history/refactor/orchestrator.md §7.1 S1b): per-
-// camera intrinsic calibration, moved off the renderer. Unlike the fixed-
-// triple control-loop sessions, this one manages an arbitrary set of
-// connected cameras (like manage-cameras) and leases only the one currently
-// selected for live detection.
-//
-// Checkerboard detection runs on the registry's shared RGBA8 preview (via
-// `onView`, converted to grayscale with `cvtColor` — the same "derive
-// whatever the vision op needs from the one shared preview format" pattern
-// disparity-scope already uses, rather than opening a second
-// pixel format). Marker detection can't do that: `MarkerDetector` only
-// consumes a raw `Frame`/`Stream<Frame>`, not a `Mat`. Following the
-// concurrent-raw-stream precedent manual-control's capture/recording already
-// proved safe ("core's Sub::Queue gives each iterator its own bounded
-// backlog"), marker detection runs its own independent
-// `detector.stream(lease.camera.stream, ...)` consumer alongside the
-// registry's own preview loop on the same camera.
+// calibrate-intrinsic session — per-camera intrinsic calibration, leasing only
+// the currently-selected camera for live checker/marker detection. Behavior
+// spec: docs/spec/calibrate-intrinsic.md.
 
 import { defineSession, type ServerSession } from "@orchestrator/runtime";
 import { cameraConfigPath, listCameraInfo } from "@orchestrator/camera";
@@ -122,9 +108,7 @@ export default function calibrateIntrinsicSession(
     let activeLease: CameraLease | null = null;
     let previewDisposer: (() => void) | null = null;
 
-    // Recording (capture-recorder-everywhere ruling 2): the DEGENERATE single-
-    // stream case — record the selected camera's raw full-depth sensor stream
-    // (advert-verbatim) via the shared facility, same UI, one resource.
+    // Recording — the degenerate single-stream case (spec §capture).
     const recording = createRawRecording({
       id: "recorder/calibrate-intrinsic",
       broker,
@@ -136,13 +120,8 @@ export default function calibrateIntrinsicSession(
       telemetry: (patch) => s.telemetry(patch),
     });
 
-    // Capture (capture-recorder-everywhere ruling 3, item 4): the DEGENERATE
-    // single-stream case — burst-stack the selected camera's raw full-depth
-    // sensor into ONE held resource (no wrap / center / diff). Built per
-    // `select` (the lease is per-camera, unlike the fixed-triple sessions) and
-    // stopped on `deselect`. The capture REUSES the session's `select` lease —
-    // it never acquires its own camera — and refuses while a recording is active
-    // (ruling 6, shared raw pipe ids).
+    // Capture — the degenerate single-stream case, built per `select`, reusing
+    // the select lease (spec §capture).
     let captureHelper: CaptureHelper | null = null;
     let width = 0;
     let height = 0;
@@ -150,8 +129,7 @@ export default function calibrateIntrinsicSession(
     // Stable per-capture id (item 4) — survives sibling removal reindexing.
     let recordSeq = 0;
 
-    // Detector throughput (item 6): every detection tick bumps `detectCount`;
-    // a ~1 Hz timer converts the delta to Hz for the StreamView footnote.
+    // Detector throughput: a ~1 Hz timer converts the tick delta to Hz.
     let detectCount = 0;
     let rateTimer: ReturnType<typeof setInterval> | null = null;
     let rateAnchor = 0;
@@ -163,9 +141,8 @@ export default function calibrateIntrinsicSession(
       });
     }
 
-    // CHECKER mode — detection runs in the `checker` vision worker (C-22b step 3,
-    // off the JS event loop). It posts the corner points + the gray frame; main
-    // retains the gray for `cornerSubPix`/`calibrateCamera` at capture time.
+    // CHECKER mode — detection in the `checker` vision worker (spec §detection);
+    // main retains the posted gray for capture-time solve.
     let checkerWorker: VisionWorkerHandle | null = null;
     let checkerPipeId: string | null = null;
     let latestChecker: { gray: Mat<Uint8Array>; img_points: Point2d[] } | null = null;
@@ -255,15 +232,15 @@ export default function calibrateIntrinsicSession(
             patternWidth: s.state.pattern_size.width,
             patternHeight: s.state.pattern_size.height,
           },
-          // meterName: kernel visible in perfSnapshot.workloads (self-meter).
-          meterName: nodeId.win("calibrate-intrinsic", "checker"),
+          meterName: nodeId.win("calibrate-intrinsic", "checker"), // kernel self-meter
+
         },
         onCheckerResult,
       );
     }
 
     function onCheckerResult(r: VisionResult): void {
-      detectCount++; // item 6: one processed frame (matched or not)
+      detectCount++; // one processed frame (matched or not)
       const v = r.values as CheckerValues;
       if (v.size) {
         width = v.size.width;
@@ -292,9 +269,7 @@ export default function calibrateIntrinsicSession(
       markerTask?.abort();
       markerTask = null;
       markerDetector = null;
-      // The held detection's Frame is never released by the loop below once
-      // the loop itself stops running — release it here instead of leaking
-      // the native buffer.
+      // Release the held frame here — the stopped loop never will (spec §frame-lifetime).
       latestMarker?.frame.release();
       latestMarker = null;
     }
@@ -315,25 +290,17 @@ export default function calibrateIntrinsicSession(
             s.telemetry({ size: { width, height } });
             clearRecords();
           }
-          // The previous detection's frame is no longer "current" — release
-          // it now (mirrors the original's `watch(detection, (_,prev) =>
-          // prev?.frame.release())`). `capture()` retains the *current* one
-          // via `.ref()` before it would otherwise be released here.
+          // Release the previous (no-longer-current) detection's frame; capture()
+          // retains the current one via `.ref()` first (spec §frame-lifetime).
           if (latestMarker && latestMarker !== result) latestMarker.frame.release();
           latestMarker = result;
-          detectCount++; // item 6: one processed frame
+          detectCount++; // one processed frame
           const points = result.flatMap((r: Point2d[]) => [...r]);
           s.telemetry({ detection: points.length > 0 ? { points } : null });
         }
       });
-      // `ctx.iter(stream)`'s wrapped iterator throws `AbortedError` from its
-      // *next* `next()` call once `.abort()` is triggered — that's the
-      // cooperative-cancellation contract, not a real failure, so it's
-      // expected to reject this task's promise on every stop. Nothing else
-      // observes `markerTask` (it's a fire-and-forget background loop, same
-      // as every other session's activation loop) — swallow the expected
-      // case, report anything else the same way the registry's own preview
-      // loop would.
+      // AbortedError on every stop is the cooperative-cancellation contract, not
+      // a failure (spec §detection) — swallow it, report anything else.
       markerTask.catch((e) => {
         if (e instanceof abortableNext.AbortedError) return;
         report("calibrate-intrinsic", e instanceof Error ? e.message : String(e));
@@ -357,11 +324,8 @@ export default function calibrateIntrinsicSession(
 
     async function select({ serial }: { serial: string }): Promise<void> {
       await deselect();
-      // Spin-up progress (ruling 2026-07-09): this session has no `activate`
-      // hook — a camera is leased per `select`, so the monitor is declared here
-      // (after the previous camera's teardown). A failed lease leaves the list
-      // FROZEN at "Leasing camera"; the next `select` supersedes it and window-
-      // close idle (runIdle) clears it. `complete` fires once detection is live.
+      // No `activate` hook — a camera is leased per `select`, so the monitor is
+      // declared here. A failed lease leaves the list FROZEN at "Leasing camera".
       const monitor = s.progressMonitor([
         { id: "lease", label: "Leasing camera" },
         { id: "detection", label: "Starting detection" },
@@ -372,15 +336,12 @@ export default function calibrateIntrinsicSession(
       monitor.done("lease");
       activeLease = lease;
       activeInfo = known.get(serial) ?? null;
-      // real-1c: the raw preview now rides the `camera:<serial>` native pipe;
-      // the renderer reads it via `usePipeFrame`, not `s.frame("preview")`.
-      // (The marker-detection view-tap below stays on the JS loop.)
+      // Raw preview rides the `camera:<serial>` native pipe (renderer usePipeFrame).
       s.setState("activeSerial", serial);
       monitor.start("detection");
       restartDetection();
       startRateTimer();
-      // Capture (ruling 3, item 4): single-stream capture over this camera's raw
-      // sensor pipe. Built here (per-lease) — stopped in `deselect`.
+      // Single-stream capture over this camera's raw sensor pipe (spec §capture).
       captureHelper = createCaptureHelper({
         id: nodeId.win("calibrate-intrinsic", "capture"),
         broker,
@@ -452,13 +413,8 @@ export default function calibrateIntrinsicSession(
         const d = latestMarker;
         const detector = markerDetector;
         if (!d || !detector) return;
-        // Nulling `latestMarker` here means the detection loop's own
-        // "supersede the previous one" check (which normally releases its
-        // implicit per-yield ref once a newer result arrives) will never see
-        // this result again — its cleanup responsibility transfers to us:
-        // `.ref()` for our own temporary hold across the awaited `view()`
-        // call, then release *both* that temporary hold and the loop's
-        // implicit ref once we're done extracting data from it.
+        // Capture owns cleanup now (spec §frame-lifetime): ref for our hold
+        // across the awaited view(), then release both it + the loop's ref.
         latestMarker = null;
         s.telemetry({ detection: null });
         const frame = d.frame.ref();
@@ -494,10 +450,7 @@ export default function calibrateIntrinsicSession(
           obj_points,
         );
         const key = getCameraKey(activeInfo);
-        // Persist as an intrinsic RECORD (calibration-records-v2): content-hash
-        // id over the solve payload, bound to this (center) camera. An identical
-        // solve already on disk just gains the association (idempotent); the
-        // Mats codec-encode through store-hub write, as they always have.
+        // Persist as an intrinsic RECORD, idempotent by content-hash id (spec §records).
         const inner = intrinsicInner({ ...result });
         const id = await recordId(inner);
         const existing = await read<CalibrationRecord | null>([INTRINSIC_STORE, id], null);
@@ -512,7 +465,6 @@ export default function calibrateIntrinsicSession(
         await write([INTRINSIC_STORE, id], record);
         const view = await buildView(activeInfo, views[activeInfo.serial]?.role);
         views = { ...views, [activeInfo.serial]: view };
-        // item 5: report the solve's RMS re-projection error post-solve.
         s.telemetry({ views, lastRms: typeof result.rms === "number" ? result.rms : null });
       } finally {
         s.telemetry({ busy: false });
@@ -523,10 +475,8 @@ export default function calibrateIntrinsicSession(
       const info = known.get(serial);
       if (!info) return;
       const cameraKey = getCameraKey(info);
-      // Records model: drop THIS camera's association from every intrinsic
-      // record; a record left with no associations is orphaned and cleared
-      // (hard delete — an explicit destructive reset, not the refcount trash
-      // path). Records shared with other cameras keep their remaining bindings.
+      // Drop THIS camera's association from every intrinsic record; an orphaned
+      // record is hard-cleared (spec §records).
       const names = (await list(INTRINSIC_STORE)).filter(isRecordId);
       for (const id of names) {
         const rec = await read<CalibrationRecord | null>([INTRINSIC_STORE, id], null);
@@ -553,14 +503,14 @@ export default function calibrateIntrinsicSession(
         calibrateNow,
         resetCalibration,
         async startRecording({ path }) {
-          if (captureHelper?.capturing) return false; // exclusivity (ruling 6)
+          if (captureHelper?.capturing) return false; // exclusivity (spec §capture)
           return recording.start(path);
         },
         async stopRecording() {
           await recording.stop();
         },
-        // Capture (ruling 3, item 4) — forward to the shared single-stream helper
-        // (distinct from the `capture` calibration-record command above).
+        // Forward to the shared single-stream capture helper (distinct from the
+        // `capture` calibration-record command above).
         async captureShot({ tag }) {
           if (!captureHelper) throw new Error("Capture not ready");
           await captureHelper.captureShot(tag);

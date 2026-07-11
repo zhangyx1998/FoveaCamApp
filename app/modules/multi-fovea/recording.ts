@@ -4,49 +4,11 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Multi-fovea session RECORDING controller (multi-fovea-recording r2.1, wave
-// I-2). A multi-fovea recording contains ONLY:
-//   1. the three PACKED `camera/<serial>/raw12p` sensor streams (left/center/
-//      right — verbatim wire payload, ruling 1), acquired through the
-//      refcounted raw-pipe registry (ruling 5) with optional per-stream zlib
-//      compression routed through the CompressStream brick (ruling 9 — the
-//      recorder consumes the `/zlib` sibling pipe instead, zero extra config);
-//   2. the wide camera's singleton metadata record (ruling 2);
-//   3. per-target DESCRIPTOR channels (`fovea/<slot>`, ruling 3) — JSON
-//      observations `{tNs, bbox, frames:{left,center,right}}` where the frame
-//      pointers are per-stream recorder sequences; fovea imagery is
-//      reconstructed OFFLINE, never re-encoded.
-//
-// DESCRIPTOR EMISSION (one path, both modes): every tracker-batch observation
-// of an armed target emits one descriptor — bbox comes from the batch (wide,
-// undistorted coords). The L/R pointers are enriched from PAIR RECORDS
-// (pairing-nodes): the root PairStream's completed pairs carry the two matched
-// frames' deviceTimestamps; the recorder's per-frame notices build dts→seq
-// maps for the recorded raw12p streams (the tap stamps identically to the
-// Frame path), so a fresh pair for the target's controller stream re-keys to
-// recorded sequences. In FREE-RUN there are no pairs (trigger-only anchors,
-// ruling 1) so descriptors carry `left: null, right: null` — bbox + center
-// pointer only (the documented shape; see docs/schema/fovea.ts). The center
-// pointer is the NEAREST recorded center frame by timestamp and is explicitly
-// UNSYNCHRONIZED (CAM0 GPIO is uncabled — no hardware trigger on the wide
-// camera).
-//
-// PER-FRAME EXTRAS (ruling 4): the L/R fovea streams answer `onFrame` with the
-// matched anchor's payload (volts / V2A angles / H, unpacked from the opaque
-// doubles the enrichment node packed) — exact dts→anchor binding, null when no
-// anchor matched (free-run). The wide stream posts none (its camera matrix is
-// the §2 singleton) but still notices: its dts→seq map is what the descriptor
-// center pointer is built from.
-//
-// Injection-seamed like manual-control's controller: no native imports, the
-// recorder node factory is injectable, so vitest drives the whole thing with
-// fakes.
-//
-// capture-recorder-everywhere ruling 1: the start/stop/poll/telemetry/error-
-// unwind skeleton lifted into the composable `@orchestrator/recording-service`
-// facility — this file keeps ONLY multi-fovea's semantics (raw12p streams,
-// optional /zlib compression routing, descriptor channels, extras/dts maps).
-// Observable behavior is unchanged (see multi-fovea-recording.test.ts).
+// Multi-fovea session RECORDING controller — raw12p streams + optional /zlib +
+// wide-camera singleton + per-target descriptor channels, over the shared
+// `@orchestrator/recording-service`. Injection-seamed (no native imports) so
+// vitest drives it with fakes. Container shape, descriptor emission, and
+// per-frame extras: docs/spec/multi-fovea.md §recording.
 
 import type { Rect } from "core/Geometry";
 import {
@@ -81,10 +43,8 @@ import type { MultiTrackBatch } from "./runtime";
 /** The recorded stream names — also the descriptor `frames` keys. */
 export type RecordedStream = "left" | "center" | "right";
 
-/** Per-stream compression switches (session contract option, default all off).
- *  Per-stream ENABLES of the app-level `record_compression` method: a stream
- *  compresses iff the method is `"zlib"` AND its switch is on (`"none"` gates all
- *  off). Lossless zlib may not hold full-rate 12p on all three cameras; rig-gated. */
+/** Per-stream compression switches (default all off) — ENABLES of the app-level
+ *  `record_compression` method (spec §recording). */
 export type CompressConfig = Record<RecordedStream, boolean>;
 
 /** One leased camera the recording taps: the geometry source (serial /
@@ -110,30 +70,20 @@ export interface MultiFoveaRecordingDeps {
   wideCamera(): Record<string, unknown> | null;
   /** Refcounted raw-pipe registry (ruling 5). Injected from index.ts. */
   rawPipes: RawPipeRegistry;
-  /** Plain broker connect (refcount++ → C-21 gate → producer runs). The
-   *  controller wraps it to inject each advert's JS-side `significantBits`
-   *  (the native PipeSpec drops it; ruling 8 — the advertiser's job). */
+  /** Plain broker connect (refcount++ → C-21 gate). Wrapped to inject each
+   *  advert's JS-side `significantBits` the native PipeSpec drops (ruling 8). */
   connect: RecorderConnect;
   /** Compression brick seam; absent → the compress switches are ignored. */
   compress?: CompressPipeSeam;
-  /** Live per-stream compression switches (read at `start`). Under the app-level
-   *  `record_compression` method these are per-stream ENABLES of the CONFIGURED
-   *  method: a stream compresses iff the method is `"zlib"` AND its switch is on.
-   *  Under `"none"` the renderer disables the switches and nothing compresses. */
+  /** Live per-stream compression switches, read at `start` (spec §recording). */
   compressStreams(): CompressConfig;
-  /** Test seam: read the configured app-level compression method at RECORDING
-   *  START (default: `readRecordCompression()` over the store-hub `["config"]`
-   *  doc). `"none"` gates every stream off regardless of the per-stream switches. */
+  /** Test seam: read the app-level compression method at recording START
+   *  (default `readRecordCompression()`). `"none"` gates every stream off. */
   readMethod?: () => Promise<RecordCompression>;
-  /** Part A (free-run extras via interpolated actuation history): the mirror
-   *  position at a frame's exposure host-ns, LINEARLY INTERPOLATED from the
-   *  orchestrator's timestamped `mirror-history` ring (`mirrorAt`). Wired from
-   *  the orchestrator-wide `mirrorHistory` in session.ts. Absent → free-run
-   *  frames carry no extras (trigger-mode anchor extras are unaffected). */
+  /** Free-run extras: the mirror position at a frame's exposure host-ns, from
+   *  the `mirror-history` ring (spec §recording). Absent → no free-run extras. */
   mirrorAt?: (hostNs: bigint) => MirrorAt | null;
-  /** Part A: the calibrated triple's per-eye conversions (V2A + A2H), or null
-   *  on an uncalibrated triple. Free-run angle/affine are stamped ONLY when
-   *  calibrated (the existing rule); an uncalibrated triple keeps omitting them. */
+  /** Free-run extras: the triple's per-eye V2A + A2H, or null uncalibrated. */
   conversions?: () => FreeRunConversions | null;
   /** Notify main a recording finished (auto-open viewer, ruling 7). */
   finished(foveaPath: string): void;
@@ -188,10 +138,8 @@ export interface MultiFoveaDescriptor {
 }
 
 /** Unpack the anchor payload's per-side extras (the enrichment node's opaque
- *  doubles — anchor-node.ts ANCHOR_PAYLOAD layout) into the telemetry-channel
- *  extras shape (manual-control's key spelling, `volt.source: fin-averaged` —
- *  anchor volts ARE the FIN's exposure-averaged reading). Volts-only payloads
- *  (uncalibrated) omit angle/affine. */
+ *  doubles, ANCHOR_PAYLOAD layout) into the extras shape — `volt.source:
+ *  fin-averaged`. Volts-only (uncalibrated) payloads omit angle/affine. */
 export function anchorExtras(
   payload: Float64Array,
   side: "L" | "R",
@@ -221,23 +169,11 @@ export function anchorExtras(
  *  full triple. */
 export type FreeRunConversions = Pick<CoordinateConversions, "V2A" | "A2H">;
 
-/**
- * Part A: the per-frame telemetry extras for a FREE-RUN fovea frame on a
- * CALIBRATED triple, derived from the INTERPOLATED actuation history — the
- * free-run analogue of {@link anchorExtras}. `mirror` is the mirror position at
- * the frame's exposure host-ns (from `mirror-history.ts` `mirrorAt`), `conv` the
- * triple's conversions:
- *   - `volt`   = the interpolated mirror voltage for this eye
- *                (`volt.source: "history-interpolated"` — NOT `"fin-averaged"`);
- *   - `angle`  = `V2A[side](volt)`;
- *   - `affine` = `A2H[side](angle)` — the same volt→angle→H chain the display /
- *                homography-feeder path applies, so the recorded H matches.
- *
- * Returns null (frame carries NO extras — never a guess) when the history is
- * empty / too old (`mirror === null`) OR the triple is uncalibrated
- * (`conv === null`) — the existing "uncalibrated omits angle/affine" rule, here
- * omitting the whole extras doc since there is no FIN volt either.
- */
+/** Free-run analogue of {@link anchorExtras} (spec §recording): per-frame extras
+ *  for a CALIBRATED triple from the interpolated actuation history —
+ *  `volt` (`volt.source: history-interpolated`), `angle` = V2A(volt), `affine` =
+ *  A2H(angle) (the same volt→angle→H chain the display path uses). Null (no
+ *  extras, never a guess) when history is empty/too-old OR uncalibrated. */
 export function historyExtras(
   mirror: MirrorAt | null,
   conv: FreeRunConversions | null,
@@ -306,9 +242,9 @@ export function createMultiFoveaRecording(
     return best;
   }
 
-  /** Ruling-3/4 per-frame callback: L/R answer with the matched anchor's
-   *  extras (exact dts binding); center records its dts→seq sample and posts
-   *  none (extras gating — the wide camera matrix is the §2 singleton). */
+  /** Per-frame callback (spec §recording): L/R answer with the matched anchor's
+   *  extras (exact dts binding) or free-run history extras; center records its
+   *  dts→seq sample and posts none. */
   function onFrame(stream: string, seq: number, tNs: bigint): Record<string, unknown> | null {
     if (stream === "center") {
       centerFrames.push({ tNs, seq });
@@ -321,9 +257,7 @@ export function createMultiFoveaRecording(
     // Trigger mode (preferred): the FIN-averaged anchor bound to this exposure.
     const payload = anchorByDts[stream].get(tNs);
     if (payload) return anchorExtras(payload, side);
-    // Part A — FREE-RUN: no anchor, so interpolate the actuation history at the
-    // frame's TRUSTED exposure host-ns (ruled invariant) and derive volt/angle/
-    // affine. Null (empty/too-old history OR uncalibrated) → no extras.
+    // Free-run: interpolate the actuation history at the trusted exposure host-ns.
     const mirror = deps.mirrorAt?.(tNs) ?? null;
     return historyExtras(mirror, deps.conversions?.() ?? null, side);
   }
@@ -349,16 +283,12 @@ export function createMultiFoveaRecording(
   }
 
   const readMethod = deps.readMethod ?? readRecordCompression;
-  // The app-level compression method, read at RECORDING START (`prepare`). The
-  // per-stream switches are ENABLES of THIS method: a stream compresses iff the
-  // method is "zlib" AND its switch is on. "none" gates every stream off.
+  /** App-level compression method, read at recording START (spec §recording). */
   let method: RecordCompression = "none";
 
-  // Thin config over the shared facility (capture-recorder-everywhere ruling 1):
-  // the raw12p streams + optional /zlib compression routing + the descriptor
-  // `onFrame`. The facility owns start/stop/poll/telemetry + the acquire-then-
-  // build error unwind (compress bricks retired, raw acquisitions released in
-  // reverse — symmetric with the documented discipline).
+  // Thin config over the shared facility (spec §recording): raw12p streams +
+  // /zlib routing + the descriptor `onFrame`. The facility owns
+  // start/stop/poll/telemetry + the acquire-then-build error unwind.
   const service = createRecordingService({
     id: "recorder/multi-fovea",
     createNode: deps.createNode,
@@ -374,9 +304,8 @@ export function createMultiFoveaRecording(
     acquire() {
       const cams = deps.cameras()!; // `ready()` guaranteed non-null
 
-      // Refcounted raw12p acquire (rulings 1/5): the PACKED verbatim wire
-      // payload per camera, deep recorder ring (default 48), ONE advertise per
-      // id ever — shared with any concurrent acquirer.
+      // Refcounted raw12p acquire (spec §recording): the packed verbatim payload
+      // per camera, ONE advertise per id ever — shared with any concurrent acquirer.
       const acquire = (cam: RecordingCamera): RawPipeAcquisition =>
         deps.rawPipes.acquire({
           kind: "raw12p",
@@ -391,11 +320,8 @@ export function createMultiFoveaRecording(
       ];
       const acquisitions = order.map(([, cam]) => acquire(cam));
 
-      // Optional per-stream compression (ruling 9): route the flagged streams
-      // through the CompressStream brick and record the `/zlib` sibling pipe
-      // INSTEAD — the recorder needs zero extra config (advert-verbatim). Gated
-      // by the app-level method: under "none" the per-stream switches are inert
-      // (nothing compresses, matching the disabled renderer switches).
+      // Optional per-stream compression (spec §recording): route flagged streams
+      // through the CompressStream brick, record the `/zlib` sibling instead.
       const compressCfg = deps.compressStreams();
       const methodOn = method === "zlib";
       const streams: Record<string, { pipeId: string }> = {};
@@ -414,8 +340,7 @@ export function createMultiFoveaRecording(
         }
       });
 
-      // Ruling 8: the advertiser injects the JS-side significantBits the native
-      // spec round-trip drops — for raw AND compressed pipes.
+      // Ruling 8: inject the JS-side significantBits the native spec drops (raw + compressed).
       const connect: RecorderConnect = (pipeId) => {
         const conn = deps.connect(pipeId);
         const sb = significantBitsOf.get(pipeId);
@@ -428,16 +353,14 @@ export function createMultiFoveaRecording(
         nodeOptions: {
           streams,
           connect,
-          // Ruling 2: the wide camera's singleton metadata record (omitted on an
-          // uncalibrated rig).
+          // Wide camera singleton metadata (omitted uncalibrated; spec §recording).
           cameraMatrix: deps.wideCamera() ?? undefined,
-          // Every stream posts notices: L/R for extras + dts→seq re-keying,
-          // center for the descriptor nearest-pointer map (it still POSTS no
-          // extras — onFrame returns null for it, so nothing rides telemetry).
+          // Every stream posts notices (L/R for extras + dts→seq, center for the
+          // nearest-pointer map); center's `onFrame` returns null → no extras.
           onFrame,
         },
         // Retire compress bricks first (they consume the raw pipes), then release
-        // ALL acquisitions in reverse order (last release retires + unadvertises).
+        // acquisitions in reverse (last release unadvertises).
         release: () => {
           for (const c of compressed) c.retire();
           for (const a of [...acquisitions].reverse()) a.release();
@@ -467,9 +390,8 @@ export function createMultiFoveaRecording(
     onTrackBatch(batch: MultiTrackBatch): void {
       const node = service.node;
       if (!node || !service.active) return;
-      // The batch IS a center-camera observation; when the source doesn't
-      // stamp device time, the latest recorded center frame is the nearest
-      // sample by construction.
+      // The batch IS a center-camera observation; without a device timestamp the
+      // latest recorded center frame is the nearest sample by construction.
       const tNs =
         batch.deviceTimestamp ?? centerFrames[centerFrames.length - 1]?.tNs ?? 0n;
       const now = performance.now();
@@ -478,8 +400,7 @@ export function createMultiFoveaRecording(
         const slot = Number(t.id);
         const channel = `fovea/${slot}`;
         if (!liveChannels.has(channel)) continue;
-        // Trigger mode: a FRESH pair for this target's controller stream
-        // re-keys to recorded L/R sequences; free-run/stale → explicit nulls.
+        // A FRESH pair re-keys to recorded L/R seqs; free-run/stale → nulls (spec §recording).
         const streamId = streamBySlot.get(slot);
         const pair = streamId !== undefined ? pairByStream.get(streamId) : undefined;
         const fresh = pair !== undefined && now - pair.at < PAIR_FRESH_MS;

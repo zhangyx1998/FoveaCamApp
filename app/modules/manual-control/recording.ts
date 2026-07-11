@@ -4,25 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Server-side recording (capture-recorder-nodes Phase 2, Wave I-2). The
-// per-frame consume/copy/transfer that used to run on the orchestrator MAIN JS
-// loop (three `lease.camera.stream` taps → bytes → transfer to the mcap worker)
-// is GONE: recording now flows entirely through the RECORDER NODE
-// (`@orchestrator/recorder-node`) — one worker thread that FIFO-consumes the
-// full-bit-depth `camera/<serial>/raw` pipes and hosts the mcap writer
-// in-worker. Main only advertises the raw pipes, creates/retires the node, and
-// answers the ruling-3 per-frame metadata callback (volt/angle/homography). The
-// container contract is UNCHANGED (see recorder/schema.ts).
-//
-// capture-recorder-everywhere ruling 1: the start/stop/poll/telemetry/error-
-// unwind skeleton lifted into the composable `@orchestrator/recording-service`
-// facility — this file is now THIN CONFIG (the L/C/R fovea streams + the ruling-3
-// fovea-binding `onFrame`). Observable behavior is unchanged (advert-verbatim raw
-// pipes, extras gating, the ruling-3 per-frame metadata).
-//
-// On finalize we notify main (`recording:finished`) so the viewer window
-// auto-opens the finished `.fovea` (rulings 8/9; the receive side lives in
-// electron/main.ts).
+// Server-side recording — thin config over the shared
+// `@orchestrator/recording-service`: the L/C/R fovea streams (full-bit-depth
+// `camera/<serial>/raw` pipes) + the ruling-3 fovea-binding `onFrame`. Recording
+// flows through the RECORDER NODE (its own worker thread); main only advertises,
+// creates/retires, and answers per-frame metadata. Behavior spec:
+// docs/spec/manual-control.md §capture.
 
 import type { Point2d } from "core/Geometry";
 import type { Mat } from "core/Vision";
@@ -45,11 +32,9 @@ import { matToArray } from "@lib/mat";
 import type { Pos } from "@lib/controller-codec";
 import type { CalibratedTriple } from "@orchestrator/calibration";
 
-/** A recorded fovea frame's voltage provenance (WS4 4b):
- *  - `fin`  — bind the FIN's exposure-AVERAGED voltage (B-12) for the exact
- *    capture that produced this frame (`volt.source: "fin-averaged"`);
- *  - `live` — a controller reading at frame arrival (`"live-snapshot"`), the
- *    pre-4b free-run behavior. */
+/** A recorded fovea frame's voltage provenance (spec §capture): `fin` = the
+ *  FIN's exposure-averaged voltage (`fin-averaged`), `live` = a controller
+ *  reading at frame arrival (`live-snapshot`, the free-run default). */
 export type FoveaBinding = { A: Point2d; H: Mat<Float64Array> } & (
   | { source: "fin"; frameId: number; volt: Pos }
   | { source: "live"; volt: Pos }
@@ -67,10 +52,8 @@ export interface RecordingDeps {
   /** Notify main a recording finished so the viewer auto-opens it (rulings
    *  8/9). Injected (production: `process.parentPort` post). */
   finished(foveaPath: string): void;
-  /** Optional (WS4 4b): the FIN outcome matched to the frame currently being
-   *  recorded on this fovea mirror (by `frame_id`/`t_exposure`), or null when
-   *  no triggered capture is bound → the free-run live snapshot is used. Left
-   *  unimplemented until the live FIN↔frame pairing lands (Stage F). */
+  /** The FIN outcome matched to the frame being recorded on this fovea mirror,
+   *  else null → free-run live snapshot (spec §capture). Stage-F-gated. */
   foveaBinding?(mirror: "L" | "R"): { frameId: number; volt: Pos } | null;
   telemetry(patch: {
     recording_active?: boolean;
@@ -134,9 +117,8 @@ const STREAM_MIRROR: Record<string, "L" | "R" | null> = {
 };
 
 export function createRecording(deps: RecordingDeps): RecordingController {
-  // Thin config over the shared facility (capture-recorder-everywhere ruling 1):
-  // the L/C/R fovea streams + the ruling-3 fovea-binding `onFrame`. The facility
-  // owns start/stop/poll/telemetry + the acquire-then-build error unwind.
+  // Thin config over the shared facility (spec §capture): the L/C/R streams +
+  // the fovea-binding `onFrame`; the facility owns start/stop/poll/telemetry.
   const service = createRecordingService({
     id: "recorder/manual-control",
     ready: () => deps.getTriple() !== null,
@@ -147,10 +129,8 @@ export function createRecording(deps: RecordingDeps): RecordingController {
       const { L, C, R } = triple.leases;
       const { conv } = triple;
 
-      // Refcounted acquire (ruling 5): advertise+attach the full-bit-depth raw
-      // producers ONCE, shared with any concurrent acquirer (capture) instead of
-      // a clobbering second advertise. Consumer-gated: the node's connect below
-      // spins them up; deep recorder ring (48).
+      // Refcounted acquire (spec §capture): advertise+attach the raw producers
+      // ONCE, shared with any concurrent acquirer instead of clobbering.
       const rawFor = (camera: {
         serial: string;
         pixel_format: string;

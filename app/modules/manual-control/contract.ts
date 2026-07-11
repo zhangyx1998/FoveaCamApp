@@ -4,26 +4,17 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Typed boundary for the manual-control session: a calibrated L/C/R triple
-// steering the controller node, driven off the renderer's UI loop with no
-// tracker state machine — the target here is always whatever the renderer
-// last steered to,
-// either a mouse-drag pixel or a locally-held "set-point" (pure client-side
-// data, no camera access — see `steer`'s tagged union). Also owns capture
-// (stack/wrap/diff raw frames server-side, preview to the renderer, save on
-// confirm) and recording (write raw L/C/R streams to disk), since neither can
-// run without the raw camera access this session already holds — see
-// docs/history/refactor/orchestrator.md roadmap items 5/6.
+// Typed boundary for the manual-control session — a calibrated L/C/R triple
+// steering the controller node with NO tracker; also owns capture + recording
+// (the raw camera access lives here). Behavior spec: docs/spec/manual-control.md.
 
 import { cmd, defineContract, type FramePayload } from "@lib/orchestrator/protocol";
 import type { Point2d, Size } from "core/Geometry";
 import type { Pos } from "@lib/controller-codec";
 import { captureCommands, captureTelemetry, type Stat } from "@lib/orchestrator/contracts";
 
-/** Where to steer the target. Pixel mode needs server-side `undistort` (the
- *  renderer no longer holds calibration); angle mode is radians the renderer
- *  already computes locally from a selected set-point (pure client-side
- *  data), with optional per-point distance/shift overrides. */
+/** Where to steer. Pixel mode needs server-side `undistort`; angle mode is
+ *  radians the renderer computes locally, with optional distance/shift overrides. */
 export type SteerTarget =
   | { mode: "pixel"; value: Point2d }
   | {
@@ -75,24 +66,15 @@ export const manualControl = defineContract({
     target: { x: 0, y: 0 } as Point2d, // current steered target (center px)
     target_angle: { x: 0, y: 0 } as Point2d, // ...and in radians (angular)
     volt: { L: { x: 0, y: 0 }, R: { x: 0, y: 0 } } as { L: Pos; R: Pos },
-    // Per-eye projection of the CURRENT commanded volts into wide-frame
-    // (undistorted center) pixels — `A2P.C(V2A(volts))`, {0,0} on uncalibrated
-    // rigs. The renderer draws the fovea-footprint boxes here; deriving from
-    // the actual per-eye volts (not the unified target) is what lets the two
-    // boxes physically separate while split.
+    // Per-eye projection of the commanded volts into wide-frame px ({0,0}
+    // uncalibrated) — the fovea-footprint boxes, which separate while split.
     L_PX: { x: 0, y: 0 } as Point2d,
     R_PX: { x: 0, y: 0 } as Point2d,
-    // Which eyes are steered independently (a `PosView` drag). Both false =
-    // unified (the shared target solution). Session-local, reset on re-entry.
+    // Which eyes are steered independently (spec §split). Both false = unified.
     split: { l: false, r: false } as { l: boolean; r: boolean },
-    // Control-path latency (perf substrate, docs/history/refactor/orchestrator.md
-    // §7.3 item 2) — `c.actuate()` round-trip, published at the same
-    // throttle as `volt`.
+    // Control-path latency — `c.actuate()` round-trip, throttled like `volt`.
     perf: { actuateMs: { mean: 0, max: 0 } as Stat },
-    // Capture: `captureBusy` + `capture_meta` (the capture NODE's manifest,
-    // republished after each shot) — the shared capture mixin (ruling 3). The
-    // renderer reads `capture_meta` for the resource list; image data is PULLED
-    // per resource via `getCapturePreview`/`getPreview` (ruling 7).
+    // Capture manifest telemetry (spec §capture); image data pulled via getPreview.
     ...captureTelemetry(),
     // Recording.
     recording_active: false as boolean,
@@ -101,44 +83,27 @@ export const manualControl = defineContract({
       { frames: number; dropped: number; fps: number; bytes: number }
     >,
   },
-  // `center` is the magnified fovea crop around the target (sliced/diff/depth) —
-  // the only session-frame view now (real-2b). The L/C/R main views bind their
-  // `camera/<serial>/undistort` pipes directly (C intrinsic, L/R homography), so
-  // they no longer ride session.frame. Capture previews are PULLED via
-  // `getPreview` (ruling 7), not streamed on frame channels.
+  // `center` (the magnified fovea crop, sliced/diff/depth) is the only
+  // session-frame view; the L/C/R main views bind their undistort pipes directly
+  // and capture previews are PULLED via `getPreview` (spec §views, §capture).
   frames: ["center"] as const,
   commands: {
-    /** Steer the target (pixel drag or a selected set-point's angle). Any steer
-     *  REUNIFIES: it clears both per-eye overrides so both eyes return to the
-     *  shared solution. */
+    /** Steer the target (pixel drag or a set-point's angle); any steer REUNIFIES
+     *  the split (spec §targeting). */
     steer: cmd<SteerTarget>(),
-    /** Pin ONE eye to a directly-chosen volt-space position (a `PosView` drag),
-     *  steering that fovea independently. The other eye keeps its unified
-     *  command. Cleared by any `steer` (wide-view drag or set-point). */
+    /** Pin ONE eye to a directly-chosen volt (a PosView drag), the other eye
+     *  unified; cleared by any `steer` (spec §split). */
     splitEye: cmd<{ side: "l" | "r"; volt: Pos }>(),
-    /** Resolve a batch of set-point angles to volts, for the trace overlay —
-     *  does not steer or change any state. */
+    /** Resolve set-point angles to volts for the trace overlay — no state change. */
     previewVolts: cmd<VoltPreviewQuery[], VoltPair[]>(),
-    /** Run ONE capture shot (capture-recorder-nodes Phase 3/4, ruling 4):
-     *  fires the ruling-3 `onCaptureStart` metadata snapshot, then drains +
-     *  stacks the raw L/R foveae + slices the center in the capture worker,
-     *  holding the full-depth resources. AWAITABLE (resolves once THIS shot is
-     *  stacked + held). `tag` present ⇒ a raster shot that ACCUMULATES an
-     *  indexed resource (the renderer sequences volts between shots); `tag === 0`
-     *  (or absent) starts a fresh accumulation. The resource → metadata manifest
-     *  arrives on the `capture_meta` telemetry; images are pulled via
-     *  `getPreview` (ruling 7). */
+    /** Run ONE capture shot (spec §capture): snapshot metadata, stack the raw
+     *  foveae + slice the center. AWAITABLE. `tag` present ⇒ a raster shot that
+     *  accumulates an indexed resource; `tag === 0`/absent starts fresh. */
     capture: cmd<{ tag?: number }>(),
-    /** Pull one held capture resource's ACTUAL data (ruling 7) downconverted to
-     *  8-bit BGRA — the byte-source of what will be saved. `index` selects an
-     *  entry of an indexed (raster) resource (default: the latest). Null for a
-     *  meta-only resource. Legacy name kept for index.vue; `getCapturePreview`
-     *  (the mixin name, spread below) is its alias for the shared preview. */
+    /** Pull one held capture resource's data as 8-bit BGRA (spec §capture);
+     *  `index` selects a raster entry. Legacy name; `getCapturePreview` aliases it. */
     getPreview: cmd<{ resource: string; index?: number }, FramePayload | null>(),
-    // Shared capture mixin (ruling 3): `captureShot` / `getCapturePreview` /
-    // `saveCapture` / `discardCapture` — the collision-free names the generic
-    // `Capture` facade + the shared CapturePreview window use. `saveCapture` /
-    // `discardCapture` were previously inline here; they now ride the mixin.
+    // Shared capture mixin: `captureShot`/`getCapturePreview`/`saveCapture`/`discardCapture`.
     ...captureCommands(),
     /** Start writing raw L/C/R streams to disk at `path`. */
     startRecording: cmd<{ path: string }, boolean>(),

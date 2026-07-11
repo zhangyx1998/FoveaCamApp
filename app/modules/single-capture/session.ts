@@ -4,10 +4,8 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Live camera view session — validates the end-to-end frame path
-// (utilityProcess → core acquisition → native Stream → frame transport →
-// renderer). Opens the camera named by `state.serial` and republishes each
-// frame on the `frame` channel. Switching serial tears down the previous loop.
+// Live camera view session — validates the end-to-end frame path. Opens the
+// camera named by `state.serial`; switching serial tears down the previous lease.
 
 import { defineSession, type ServerSession } from "@orchestrator/runtime";
 import { listCameraInfo } from "@orchestrator/camera";
@@ -22,11 +20,8 @@ export default function liveViewSession(): ServerSession<typeof liveview> {
       lease?.release();
       lease = null;
       if (!serial) return;
-      // Lease the shared camera; the registry opens + configures it once and
-      // fans its preview to every viewer (this window, manage-cameras, the
-      // projector). Retry with backoff: a camera mid-release by a
-      // renderer-bound module briefly fails to open (RT1) even though it
-      // becomes available again within a few seconds.
+      // Lease the shared camera (the registry fans its preview to every viewer).
+      // Retry with backoff — a camera mid-release briefly fails to open (RT1).
       const held = await retryUntil(() => acquire(serial));
       if (!held) return;
       // A newer serial may have superseded us while opening — honor it.
@@ -35,8 +30,7 @@ export default function liveViewSession(): ServerSession<typeof liveview> {
         return;
       }
       lease = held;
-      // real-1c: the live view now rides the `camera:<serial>` native pipe;
-      // the renderer reads it via `usePipeFrame`, not `s.frame("frame")`.
+      // The live view rides the `camera:<serial>` native pipe (renderer usePipeFrame).
     }
 
     return {
@@ -50,9 +44,7 @@ export default function liveViewSession(): ServerSession<typeof liveview> {
       watch: {
         serial: (value) => void stream(value),
       },
-      // Resume the previously-selected stream when a window re-opens; release
-      // the lease (the registry closes the camera if nobody else holds it)
-      // when idle.
+      // Resume the selected stream on re-open; release the lease when idle.
       activate() {
         if (s.state.serial) void stream(s.state.serial);
       },

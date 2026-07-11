@@ -4,12 +4,9 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// calibrate-intrinsic CHECKER VISION KERNEL (C-22b step 3) — checkerboard
-// detection moved off the JS event loop. Reads the active camera's pipe,
-// converts to grayscale, and runs `findChessboardCorners`. It posts the corner
-// points (values) AND the gray frame (so main can retain the exact detected
-// frame for `cornerSubPix`/`calibrateCamera` at capture time). MARKER mode is
-// unchanged — it runs `detector.stream` on its own, already off the loop.
+// calibrate-intrinsic CHECKER vision kernel — grayscale + `findChessboardCorners`
+// off the JS loop, posting the corner points AND the gray frame (main retains it
+// for the capture-time solve). See docs/spec/calibrate-intrinsic.md §detection.
 
 import { cvtColor, findChessboardCorners, type Mat } from "core/Vision";
 import type {

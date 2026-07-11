@@ -4,25 +4,16 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// PURE first-order drag SLEW (value-sweep 2026-07-11 addendum
-// `disparity-drag-slew`). During a drag the mirror pose used to STEP to each
-// pointer sample and then sit still — the serial link idled between pointer
-// events while the governed stream had ~600–1000 Hz capacity (the compose
-// floor re-emits an IDENTICAL pose, which the MirrorSink gate dedupes away by
-// design). Slewing the commanded pose toward the latest pointer target with a
-// short time constant makes successive control ticks emit DIFFERING poses
-// while the target moves — the gate passes them through at capacity — and
-// SNAPS to the exact target once within epsilon, going quiet on a static
-// target (never manufacturing noise).
-//
-// τ default 8 ms: perceived drag latency ≈ one pointer interval; convergence
-// to epsilon after motion stops takes a few τ (~86% within 2 pointer
-// intervals at 120 Hz sampling). NOTE (Lane C parity): manual-control applies
-// the same spec with a duplicated copy of this ~15-line function — keep the
-// constant/shape consistent; a later dedup can hoist both into @lib.
+// PURE first-order drag SLEW (spec §drag-slew): slew the commanded pose toward
+// the latest pointer target so successive control ticks emit DIFFERING poses the
+// MirrorSink gate passes at capacity, then epsilon-snap and go quiet.
+// NOTE (Lane C parity): manual-control duplicates this ~15-line function — keep
+// the constant/shape consistent; a later dedup can hoist both into @lib.
 
 import type { Pos } from "@lib/controller-codec";
 
+/** Slew time constant (ms): perceived drag latency ≈ one pointer interval;
+ *  epsilon convergence after motion stops takes a few τ. */
 export const DRAG_SLEW_TAU_MS = 8;
 /** Per-axis snap threshold (volts) — below this on EVERY axis the slew
  *  returns the exact target (converged; subsequent ticks dedupe to quiet). */

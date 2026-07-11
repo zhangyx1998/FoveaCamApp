@@ -4,14 +4,9 @@ This source code is licensed under the MIT license.
 You may find the full license in project root directory.
 --------------------------------------------------- -->
 <!--
-  Per-fovea drift measurement, migrated to the orchestrator (docs/history/refactor/
-  orchestrator.md §7.1 S1b). Thin client over the `calibrate-drift` session:
-  the orchestrator runs three simultaneous marker trackers and a background
-  visual servo; this view renders the three streams + derived/saved drift
-  readouts and drives target-id/override/commit via commands. The
-  `controller` session is read directly for `pos`/`dv` (`PosView`), same as
-  every other control-loop module now that the serial device is orchestrator-
-  owned.
+  Per-fovea drift measurement — a thin client over the `calibrate-drift` session
+  (renders the three streams + derived/saved drift readouts, drives
+  target-id/override/commit). The `controller` session is read directly for pos/dv.
 -->
 <script setup lang="ts">
 import { computed, ref } from "vue";
@@ -40,17 +35,12 @@ const drawer_height = ref(0);
 const session = useSession(calibrateDrift, "calibrate-drift");
 const ctrl = useController();
 const { state, telemetry } = session;
-// Recording context (capture-recorder-everywhere ruling 2): title-bar
-// RecordButton + Cmd/Ctrl-R over the session's startRecording/stopRecording.
+// Title-bar RecordButton + camera-icon Capture toggle (shared facades).
 new Recording(session, "calibrate-drift");
-// Capture context (capture-recorder-everywhere ruling 3): lights this window's
-// camera icon (AppWindow) → the shared CapturePreview window (its in-window
-// button drives the shot). Per-window singleton, disposed on unmount.
 new Capture(session, "calibrate-drift");
 
-// Derived-vs-saved delta per eye (proposal finding 7). `updatable*` also gates
-// the Update buttons: a derived drift within the tracker's measurement-noise
-// floor of what's saved is churn, not signal (see drift-gate.ts).
+// Derived-vs-saved delta per eye; `updatable*` gates the Update buttons — a delta
+// within the tracker's measurement-noise floor is churn, not signal (drift-gate.ts).
 function delta(derived: Point2d | null, saved: Point2d | null): Point2d | null {
   if (!derived) return null;
   return { x: derived.x - (saved?.x ?? 0), y: derived.y - (saved?.y ?? 0) };
@@ -60,9 +50,8 @@ const deltaR = computed(() => delta(telemetry.derived.R, telemetry.saved.R));
 const updatableL = computed(() => driftUpdatable(telemetry.derived.L, telemetry.saved.L));
 const updatableR = computed(() => driftUpdatable(telemetry.derived.R, telemetry.saved.R));
 
-// C-22: raw L/C/R previews now ride the native `camera:<serial>` pipe (off the
-// JS view-tap loop) via `usePipeFrame`; the marker-detection overlays are drawn
-// client-side from `telemetry.detection`, unchanged.
+// Raw L/C/R previews ride the native `camera:<serial>` pipe; marker overlays draw
+// client-side from `telemetry.detection`.
 const pipe = (role: "L" | "C" | "R") =>
   usePipeFrame(() => (state.serials?.[role] ? nodeId.convert(state.serials[role]) : null));
 const frameL = pipe("L");
@@ -76,15 +65,12 @@ function stroke(): number {
 const marker_size = computed(() => app_config.cal_marker_size_mm);
 const marker_ratio = computed(() => app_config.cal_marker_ratio);
 const center_marker_size = computed(() => marker_size.value * marker_ratio.value);
-// LIVE per-triple baseline (Ruling A): the marker pair sits at ±baseline/2,
-// resolved from the leased triple's `baseline_mm` (legacy app value, else 200)
-// reactively — Settings edits reflect without a restart.
+// Live per-triple baseline: the marker pair sits at ±baseline/2, resolved
+// reactively from the triple's `baseline_mm` (legacy app value, else 200).
 const baseline = useTripleBaseline(() => state.configPath, app_config);
 
-// Per-eye PID-node override proxies (reusable `pidOverride` fragment). Dragging
-// a `PosView` sets that eye's `value` (engage/pin the servo output); releasing
-// the drag emits null → the proxy releases (control resumes from the released
-// pose via the servo node's `seed`).
+// Per-eye PID-node override proxies: dragging a PosView pins that eye's servo
+// output; release emits null → the proxy releases (seeded resume).
 const overrideL = usePidOverride<typeof calibrateDrift, Pos>(session, {
   stateKey: "pidOverrideL",
   command: "pidOverrideL",
