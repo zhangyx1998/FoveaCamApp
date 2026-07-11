@@ -124,6 +124,28 @@ describe("enumerateCalibrationData", () => {
     expect(extr.detail).toBe("4 samples");
   });
 
+  it("drift flag shows for the REAL Point2d shape calibrate-drift writes (review 2026-07-11 #16)", async () => {
+    const hash = await tripleHash({
+      L: getCameraKey(camL),
+      C: getCameraKey(camC),
+      R: getCameraKey(camR),
+    });
+    // The doc's drift values are `Point2d | null` (calibrate-drift's `saved.L/R`)
+    // — the old `typeof === "number"` check never matched, so the flag NEVER
+    // showed on any real rig.
+    const real = await enumerateCalibrationData(
+      fakeStore({ [`triples/${hash}`]: { drift_l: { x: 0.01, y: -0.02 }, drift_r: null } }),
+      [camL, camC, camR],
+    );
+    expect(real[0].detail).toContain("drift");
+    // A null-only doc (drift cleared) shows no flag.
+    const cleared = await enumerateCalibrationData(
+      fakeStore({ [`triples/${hash}`]: { drift_l: null, drift_r: null } }),
+      [camL, camC, camR],
+    );
+    expect(cleared[0].detail).toBe("no overrides");
+  });
+
   it("delete removes exactly the targeted document", async () => {
     const store = fakeStore({
       [`calibrate-intrinsic/${getCameraKey(camC)}`]: { rvecs: [] },

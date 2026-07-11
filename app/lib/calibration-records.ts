@@ -170,10 +170,11 @@ export function canonicalize(value: unknown): string {
   return JSON.stringify(sortDeep(value));
 }
 
-/** Base64 of a buffer's WHOLE byte range (mirrors store-codec's `toBase64`, so
- *  the canonical typed-array form byte-matches the on-disk encoding). */
-function bufferBase64(buffer: ArrayBufferLike): string {
-  const bytes = new Uint8Array(buffer);
+/** Base64 of a byte range (mirrors store-codec's `toBase64`, so the canonical
+ *  typed-array form byte-matches the on-disk encoding). For a typed-array VIEW
+ *  the caller passes the view-bounded bytes — matching the codec's
+ *  byteOffset/byteLength fix (calibration-review-2026-07-11, latent). */
+function bufferBase64(bytes: Uint8Array): string {
   let binary = "";
   for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]!);
   return btoa(binary);
@@ -202,12 +203,18 @@ function sortDeep(v: unknown): unknown {
   // then re-sort it as a plain object (so keys sort + props recurse, and a value
   // ALREADY in that encoded form lands on the identical string).
   if (v instanceof ArrayBuffer)
-    return sortDeep({ type: "ArrayBuffer", buffer: bufferBase64(v), props: typedArrayProps(v) });
+    return sortDeep({
+      type: "ArrayBuffer",
+      buffer: bufferBase64(new Uint8Array(v)),
+      props: typedArrayProps(v),
+    });
   if (ArrayBuffer.isView(v) && !(v instanceof DataView)) {
     const ta = v as ArrayBufferView & { constructor: { name: string } };
     return sortDeep({
       type: ta.constructor.name,
-      buffer: bufferBase64(ta.buffer),
+      // View-bounded bytes (byteOffset/byteLength honored) — must stay
+      // byte-identical to the store codec's replacer output for the id contract.
+      buffer: bufferBase64(new Uint8Array(ta.buffer, ta.byteOffset, ta.byteLength)),
       props: typedArrayProps(v),
     });
   }
@@ -421,8 +428,11 @@ export function orderRecordsLatestFirst(
 
 /**
  * Resolve the ACTIVE extrinsic dataset a camera should calibrate with: the
- * LATEST extrinsic record (by `created`) associated with `cameraKey`. Null when
- * no extrinsic record is bound. Pure; unit-tested.
+ * LATEST *non-empty* extrinsic record (by `created`) associated with
+ * `cameraKey`. An EMPTY dataset never shadows an older good one
+ * (calibration-review-2026-07-11 #6): the resolver falls through to the
+ * next-newest non-empty record; only when NO bound record has data does it
+ * return null (the loader then applies its legacy fallback). Pure; unit-tested.
  */
 export function resolveActiveDataset(
   records: readonly CalibrationRecord[],
@@ -433,8 +443,11 @@ export function resolveActiveDataset(
       r.inner.kind === "extrinsic" &&
       r.outer.associations.some((a) => a.cameraKey === cameraKey),
   );
-  if (bound.length === 0) return null;
-  return (orderRecordsLatestFirst(bound)[0]!.inner as ExtrinsicInner).dataset;
+  for (const rec of orderRecordsLatestFirst(bound)) {
+    const ds = (rec.inner as ExtrinsicInner).dataset;
+    if (Array.isArray(ds) && ds.length > 0) return ds;
+  }
+  return null;
 }
 
 /**

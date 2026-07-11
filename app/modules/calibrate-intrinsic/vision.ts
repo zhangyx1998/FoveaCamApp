@@ -57,7 +57,12 @@ export function createCheckerKernel(initial: Record<string, unknown>): VisionKer
         width: p.patternWidth,
         height: p.patternHeight,
       });
-      if (corners.length > 0) {
+      // COMPLETE-board gate (calibration-review-2026-07-11 #11): the native
+      // seam discards `findChessboardCorners`' found-boolean, whose contract is
+      // "all W×H corners located, in order". A partial detection used to be
+      // capturable and then rejected the WHOLE solve with an opaque
+      // count-mismatch — treat anything but exactly W×H corners as no detection.
+      if (corners.length === p.patternWidth * p.patternHeight) {
         values.points = corners;
         return { values, frames: [{ name: "gray", mat: gray }] };
       }

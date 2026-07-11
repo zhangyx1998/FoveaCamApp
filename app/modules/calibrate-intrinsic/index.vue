@@ -12,7 +12,7 @@ You may find the full license in project root directory.
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { useSession, usePipeFrame } from "@lib/orchestrator/client";
 import { nodeId } from "@lib/orchestrator/graph-contract";
-import { calibrateIntrinsic, type RecordThumb } from "./contract";
+import { calibrateIntrinsic, MIN_SOLVE_SAMPLES, type RecordThumb } from "./contract";
 import Recording from "@src/record";
 import Capture from "@src/capture";
 import StreamView from "@src/components/StreamView.vue";
@@ -94,7 +94,14 @@ const pattern_h = computed<number>({
 
 <template>
   <div v-if="!state.activeSerial" class="items">
-    <h1 style="margin: 0; padding: 0">Select a camera to calibrate</h1>
+    <div class="picker-head">
+      <h1 style="margin: 0; padding: 0">Select a camera to calibrate</h1>
+      <!-- Re-enumerate on demand (review #16): the list was populated once on
+           mount — a camera plugged in afterwards never appeared. -->
+      <button class="refresh" title="Re-scan connected cameras" @click="session.call('refresh', undefined)">
+        Refresh
+      </button>
+    </div>
     <template v-for="v in views" :key="v.info.serial">
       <div class="divider"></div>
       <div class="list-item">
@@ -139,9 +146,13 @@ const pattern_h = computed<number>({
                camera's association and HARD-DELETES an orphaned record — more
                destructive than the Settings Discard (which trashes), so it
                must not fire on one click, and the copy must say "permanently". -->
+          <!-- Enabled whenever ANY stored calibration exists — including a
+               CORRUPT record (calibrated_at set, fov null because the Undistort
+               rebuild failed), which is exactly the record one most needs to
+               reset (review #16). -->
           <button
             v-if="confirmingReset !== v.info.serial"
-            :disabled="!v.fov"
+            :disabled="!v.fov && !v.calibrated_at"
             style="--theme: var(--danger)"
             @click="confirmingReset = v.info.serial"
           >
@@ -233,19 +244,35 @@ const pattern_h = computed<number>({
       <h2>Captured Records ({{ telemetry.recordCount }})</h2>
       <div class="records">
         <div
-          v-for="(rec, i) in telemetry.records"
+          v-for="rec in telemetry.records"
           :key="rec.id"
           class="record-chip"
           title="Click to remove"
-          @click="session.call('removeRecord', { index: i })"
+          @click="session.call('removeRecord', { id: rec.id })"
         >
           <FrameView :mat="thumbMat(rec)" width="100%" />
         </div>
       </div>
       <div class="buttons">
         <button @click="session.call('capture', undefined)" :disabled="!telemetry.detection">Capture</button>
-        <button @click="session.call('calibrateNow', undefined)" :disabled="!telemetry.recordCount || telemetry.busy">
-          {{ telemetry.busy ? "Calibrating…" : "Calibrate" }}
+        <!-- Gated on the shared minimum-sample floor (review #13): a 1–2 view
+             solve persists plausible garbage. The tooltip names the shortfall. -->
+        <button
+          @click="session.call('calibrateNow', undefined)"
+          :disabled="telemetry.sampleCount < MIN_SOLVE_SAMPLES || telemetry.busy"
+          :title="
+            telemetry.sampleCount < MIN_SOLVE_SAMPLES
+              ? `Need ${MIN_SOLVE_SAMPLES} samples (${telemetry.sampleCount} captured)`
+              : 'Solve and persist the intrinsic calibration'
+          "
+        >
+          {{
+            telemetry.busy
+              ? "Calibrating…"
+              : telemetry.sampleCount < MIN_SOLVE_SAMPLES
+                ? `Calibrate (${telemetry.sampleCount}/${MIN_SOLVE_SAMPLES})`
+                : "Calibrate"
+          }}
         </button>
       </div>
     </div>
@@ -259,6 +286,28 @@ const pattern_h = computed<number>({
 </template>
 
 <style scoped lang="scss">
+.picker-head {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 2ch;
+
+  .refresh {
+    padding: 0.4em 1em;
+    border-radius: 0.5em;
+    background: transparent;
+    color: var(--text-dim);
+    border: 1px solid var(--border-muted);
+    cursor: pointer;
+    &:hover {
+      color: var(--text);
+      border-color: var(--accent);
+      background: var(--tint-1);
+    }
+  }
+}
+
 .reset-warn {
   color: var(--danger-text);
   font-size: var(--fs-sm);

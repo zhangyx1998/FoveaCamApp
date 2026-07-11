@@ -42,7 +42,10 @@ import {
   type PreDefinedDictionary,
 } from "core/Vision";
 import { createVisionWorker, type VisionWorkerHandle } from "@orchestrator/vision-worker-host";
+import { registerGraphWiring } from "@orchestrator/graph-topology";
+import { registerNativeProbe } from "@orchestrator/native-probes";
 import { nodeId } from "@lib/orchestrator/graph-contract";
+import type { WorkloadSnapshot } from "@lib/orchestrator/stats";
 import type { PipeBroker } from "@orchestrator/pipe-session";
 import { createRawRecording } from "@orchestrator/raw-recording";
 import {
@@ -57,10 +60,40 @@ import type { CheckerValues } from "./vision";
 import { makeMat } from "@lib/mat";
 import type { CameraInfo } from "@lib/orchestrator/contracts";
 import type { Point2d, Point3d } from "core/Geometry";
-import { calibrateIntrinsic, type CalibrationView, type RecordThumb } from "./contract";
+import {
+  calibrateIntrinsic,
+  MIN_SOLVE_SAMPLES,
+  type CalibrationView,
+  type RecordThumb,
+} from "./contract";
 
 type Sample = { img_points: Point2d[]; obj_points: Point3d[] };
 type Record_ = { gray: Mat<Uint8Array>; samples: Sample[]; thumb: RecordThumb };
+
+const CAMERA_UNAVAILABLE =
+  "Camera unavailable — held by another app or not connected";
+
+/** Map the common OpenCV `calibrateCamera` rejection strings to remediation
+ *  hints (calibration-review-2026-07-11 #13) — the raw assertion text tells an
+ *  operator nothing actionable. */
+const SOLVE_HINTS: ReadonlyArray<readonly [RegExp, string]> = [
+  [
+    /nimages|objectPoints|imagePoints|incorrect size|count/i,
+    "sample/point-count mismatch — remove partial or corrupt records and re-capture full-board detections",
+  ],
+  [
+    /colinear|collinear|coplanar|singular|ill.?conditioned/i,
+    "degenerate geometry — capture more varied board poses (tilt and translate across the frame)",
+  ],
+];
+
+function explainSolveError(e: unknown): string {
+  const msg = e instanceof Error ? e.message : String(e);
+  const hint =
+    SOLVE_HINTS.find(([re]) => re.test(msg))?.[1] ??
+    "solve failed — remove blurry or mis-detected records, capture more varied poses, then retry";
+  return `calibrateCamera: ${msg} (${hint})`;
+}
 
 /** Longest edge (px) of a record preview thumbnail (proposal item 4 — keep the
  *  telemetry payload small). */
@@ -107,6 +140,14 @@ export default function calibrateIntrinsicSession(
     let activeInfo: CameraInfo | null = null;
     let activeLease: CameraLease | null = null;
     let previewDisposer: (() => void) | null = null;
+    // Selection GENERATION (review #5, single-capture's supersede pattern):
+    // bumped by every select AND every deselect, so any code holding a captured
+    // `gen` across an await can detect it was superseded (a second select won,
+    // or the session idled) and unwind instead of installing stale resources.
+    let selectGen = 0;
+    // One solve at a time (review #4/#16): re-entry guard + busy() coverage so
+    // the drain path refuses to force-idle mid-solve.
+    let calibrating = false;
 
     // Recording — the degenerate single-stream case (spec §capture).
     const recording = createRawRecording({
@@ -137,6 +178,9 @@ export default function calibrateIntrinsicSession(
     function publishRecords(): void {
       s.telemetry({
         recordCount: records.length,
+        // Total SAMPLES (marker records carry several) — the renderer gates
+        // Calibrate on `sampleCount >= MIN_SOLVE_SAMPLES` (review #13).
+        sampleCount: records.reduce((n, r) => n + r.samples.length, 0),
         records: records.map((r) => r.thumb),
       });
     }
@@ -145,12 +189,21 @@ export default function calibrateIntrinsicSession(
     // main retains the posted gray for capture-time solve.
     let checkerWorker: VisionWorkerHandle | null = null;
     let checkerPipeId: string | null = null;
+    let checkerWiring: (() => void) | null = null;
     let latestChecker: { gray: Mat<Uint8Array>; img_points: Point2d[] } | null = null;
 
     // MARKER mode.
     let markerDetector: MarkerDetector | null = null;
     let markerTask: ReturnType<typeof abortableNext> | null = null;
+    let markerWiring: (() => void) | null = null;
     let latestMarker: MarkerDetectResults | null = null;
+    // Marker-detector profiler stats (intrinsic half of the profiler gap): the
+    // native MarkerDetector stream exposes no probe() in the d.ts, so the node
+    // badge is fed from the session's own observed throughput (see the rate
+    // timer) — cumulative count + the last published Hz.
+    let detectTotal = 0;
+    let lastDetectRate = 0;
+    let markerStartedAt = 0;
 
     function clearRecords(): void {
       records = [];
@@ -174,7 +227,8 @@ export default function calibrateIntrinsicSession(
       rateTimer ??= setInterval(() => {
         const now = performance.now();
         const dt = (now - rateAnchor) / 1000;
-        s.telemetry({ detectRate: dt > 0 ? detectCount / dt : 0 });
+        lastDetectRate = dt > 0 ? detectCount / dt : 0;
+        s.telemetry({ detectRate: lastDetectRate });
         detectCount = 0;
         rateAnchor = now;
       }, 1000);
@@ -184,6 +238,7 @@ export default function calibrateIntrinsicSession(
       if (rateTimer) clearInterval(rateTimer);
       rateTimer = null;
       detectCount = 0;
+      lastDetectRate = 0;
       s.telemetry({ detectRate: 0 });
     }
 
@@ -205,6 +260,8 @@ export default function calibrateIntrinsicSession(
     function stopCheckerWorker(): void {
       checkerWorker?.terminate();
       checkerWorker = null;
+      checkerWiring?.();
+      checkerWiring = null;
       if (checkerPipeId) {
         broker.disconnect(checkerPipeId);
         checkerPipeId = null;
@@ -224,6 +281,9 @@ export default function calibrateIntrinsicSession(
         channels,
         bytesPerFrame: maxBytes ?? bytesPerFrame,
       };
+      // Meter name == node id (B-24 convergence): the worker's self-meter stats
+      // fold straight onto the graph node registered below.
+      const checkerId = nodeId.win("calibrate-intrinsic", "checker");
       checkerWorker = createVisionWorker(
         {
           pipes: [pipe],
@@ -232,11 +292,33 @@ export default function calibrateIntrinsicSession(
             patternWidth: s.state.pattern_size.width,
             patternHeight: s.state.pattern_size.height,
           },
-          meterName: nodeId.win("calibrate-intrinsic", "checker"), // kernel self-meter
-
+          meterName: checkerId, // kernel self-meter
         },
         onCheckerResult,
       );
+      // Profiler visibility (calibration-review-2026-07-11 #15/Q1): the checker
+      // kernel was metered but graph-INVISIBLE. Register its node + the convert
+      // pipe edge, the disparity-scope precedent.
+      checkerWiring = registerGraphWiring({
+        nodes: [
+          {
+            id: checkerId,
+            kind: "checker",
+            owner: "win/calibrate-intrinsic",
+            output: { kind: "analysis", schema: "checker" },
+            transport: "worker",
+          },
+        ],
+        edges: [
+          {
+            from: pipeId,
+            to: checkerId,
+            port: "C",
+            // Honest RGBA8 — the shared convert pipe (channel-order-fix.md).
+            type: { kind: "frame", pixelFormat: "RGBA8", dtype: "U8" },
+          },
+        ],
+      });
     }
 
     function onCheckerResult(r: VisionResult): void {
@@ -269,6 +351,8 @@ export default function calibrateIntrinsicSession(
       markerTask?.abort();
       markerTask = null;
       markerDetector = null;
+      markerWiring?.();
+      markerWiring = null;
       // Release the held frame here — the stopped loop never will (spec §frame-lifetime).
       latestMarker?.frame.release();
       latestMarker = null;
@@ -277,7 +361,65 @@ export default function calibrateIntrinsicSession(
     function startMarkerTask(lease: CameraLease): void {
       const detector = new MarkerDetector(s.state.dictionary as PreDefinedDictionary);
       markerDetector = detector;
-      const stream = detector.stream(lease.camera.stream, 1 / Math.max(1, s.state.scale));
+      const serial = lease.camera.serial;
+      const detectId = nodeId.detect(serial);
+      // Profiler visibility (calibration-review-2026-07-11 #15/Q1): register
+      // the detector's node + camera edge, with the NATIVE thread meter —
+      // `detector.stream` takes the B-24 meter name and the returned stream
+      // exposes `probe()` (landed with the same wave), so the badge shows real
+      // utilization/busy time; the session-side observed-throughput probe is
+      // the fallback while the stream hasn't produced a snapshot yet.
+      const stream = detector.stream(
+        lease.camera.stream,
+        1 / Math.max(1, s.state.scale),
+        detectId,
+      );
+      detectTotal = 0;
+      markerStartedAt = Date.now();
+      const unregisterWiring = registerGraphWiring({
+        nodes: [
+          {
+            id: detectId,
+            kind: "detect",
+            owner: "win/calibrate-intrinsic",
+            output: { kind: "detect" },
+            transport: "native",
+          },
+        ],
+        edges: [
+          {
+            from: nodeId.camera(serial),
+            to: detectId,
+            port: "C",
+            type: { kind: "frame", pixelFormat: lease.camera.pixel_format, dtype: "U8" },
+            lossy: true, // latest-wins detector stream
+          },
+        ],
+      });
+      const unregisterProbe = registerNativeProbe(
+        (): Record<string, WorkloadSnapshot> => {
+          const native = stream.probe();
+          if (native) return { [detectId]: native };
+          // Cold-start fallback: the session's own observed throughput.
+          const now = Date.now();
+          const uptimeMs = Math.max(1, now - markerStartedAt);
+          return {
+            [detectId]: {
+              name: detectId,
+              window: { startedAt: markerStartedAt, snapshotAt: now, uptimeMs },
+              utilization: 0,
+              busyMs: 0,
+              inputs: { frames: { count: detectTotal, ratePerSec: lastDetectRate } },
+              outputs: { detections: { count: detectTotal, ratePerSec: lastDetectRate } },
+              drops: { total: 0, ratePerSec: 0, byReason: {} },
+            },
+          };
+        },
+      );
+      markerWiring = () => {
+        unregisterProbe();
+        unregisterWiring();
+      };
       markerTask = abortableNext(async (ctx) => {
         for (const result of ctx.iter(stream)) {
           if (!result) {
@@ -295,6 +437,7 @@ export default function calibrateIntrinsicSession(
           if (latestMarker && latestMarker !== result) latestMarker.frame.release();
           latestMarker = result;
           detectCount++; // one processed frame
+          detectTotal++;
           const points = result.flatMap((r: Point2d[]) => [...r]);
           s.telemetry({ detection: points.length > 0 ? { points } : null });
         }
@@ -309,11 +452,18 @@ export default function calibrateIntrinsicSession(
 
     // --- lifecycle for the active camera ------------------------------
 
-    function restartDetection(): void {
+    /** Restart the active detector. `keepRecords` (the scale slider) preserves
+     *  captured records: marker corners are rescaled to FULL-RES in native, so a
+     *  downscale change never invalidates existing samples — only a pattern or
+     *  sensor-size change does (review #16; the manual documents exactly those
+     *  two wipe triggers). Always drops any stale `latestChecker`/`latestMarker`
+     *  so a detection from the OLD pattern/detector can't be captured. */
+    function restartDetection(keepRecords = false): void {
       if (!activeLease) return;
       stopCheckerWorker();
-      stopMarkerTask();
-      clearRecords();
+      stopMarkerTask(); // also clears latestMarker (frame released)
+      latestChecker = null; // stale corners from the old worker are not capturable
+      if (!keepRecords) clearRecords();
       s.telemetry({ detection: null });
       if (s.state.method === "CHECKER") {
         startCheckerWorker(activeLease);
@@ -324,16 +474,35 @@ export default function calibrateIntrinsicSession(
 
     async function select({ serial }: { serial: string }): Promise<void> {
       await deselect();
+      // Claim the selection AFTER the teardown (which bumps the generation).
+      const gen = ++selectGen;
       // No `activate` hook — a camera is leased per `select`, so the monitor is
-      // declared here. A failed lease leaves the list FROZEN at "Leasing camera".
+      // declared here.
       const monitor = s.progressMonitor([
         { id: "lease", label: "Leasing camera" },
         { id: "detection", label: "Starting detection" },
       ]);
       monitor.start("lease");
       const lease = await retryUntil(() => acquire(serial));
-      if (!lease) return; // frozen at "Leasing camera"
+      // Supersede guard (review #5, single-capture's pattern): a second select
+      // or a deselect/idle won while the bounded lease retry ran — release the
+      // late lease instead of installing it (a stray lease wedges the camera
+      // until restart). `monitor.complete()` clears a still-owned overlay; a
+      // newer select's monitor made ours inert already.
+      if (gen !== selectGen) {
+        lease?.release();
+        monitor.complete();
+        return;
+      }
+      // Failed lease is a USER-VISIBLE failure (review #15, the
+      // TRIPLE_UNAVAILABLE precedent) — not a forever-frozen "Leasing camera"
+      // overlay. The frozen step list shows WHERE it died; fail() adds the why.
+      if (!lease) {
+        s.fail(CAMERA_UNAVAILABLE);
+        return;
+      }
       monitor.done("lease");
+      s.clearError(); // a retry after a failed lease succeeded — drop the banner
       activeLease = lease;
       activeInfo = known.get(serial) ?? null;
       // Raw preview rides the `camera:<serial>` native pipe (renderer usePipeFrame).
@@ -367,6 +536,9 @@ export default function calibrateIntrinsicSession(
     }
 
     async function deselect(): Promise<void> {
+      // Supersede any in-flight select (review #5): its post-await guard sees
+      // the bump and releases the lease it was still acquiring.
+      selectGen++;
       // Finalize an in-flight recording before the lease releases (the recorder
       // drains + releases its raw pipe while the camera is still leased).
       await recording.stop();
@@ -428,33 +600,68 @@ export default function calibrateIntrinsicSession(
           const img_points = [...(r as unknown as Point2d[]), ...bilinearInterpolate(r, internal)];
           samples.push({ img_points, obj_points });
         }
+        // Refuse a ZERO-SAMPLE record (review #13): an empty detection set would
+        // commit a thumbnail that contributes nothing and later trips the solve.
+        if (samples.length === 0) return;
         await pushRecord(gray, samples);
       }
     }
 
-    function removeRecord({ index }: { index: number }): void {
-      records.splice(index, 1);
+    function removeRecord({ id }: { id: number }): void {
+      // By STABLE thumb id, not list index (review #16): an index raced a
+      // concurrent removal / auto-clear and deleted the wrong record.
+      const i = records.findIndex((r) => r.thumb.id === id);
+      if (i < 0) return;
+      records.splice(i, 1);
       publishRecords();
     }
 
     async function calibrateNow(): Promise<void> {
+      // In-flight guard (review #16): a double-click must not start a second
+      // concurrent solve.
+      if (calibrating) return;
       if (!activeInfo || records.length === 0) return;
+      // SNAPSHOT everything the multi-second solve reads BEFORE the first await
+      // (review #4): re-reading `activeInfo`/`width`/`height` after an await let
+      // a mid-solve camera switch persist camera A's intrinsics AS CAMERA B's
+      // record — store corruption. `gen` detects the switch at each await.
+      const info = activeInfo;
+      const role = views[info.serial]?.role;
+      const size = { width, height };
+      const snapshot = records.slice();
+      const gen = selectGen;
+      const sampleTotal = snapshot.reduce((n, r) => n + r.samples.length, 0);
+      // Minimum-sample gate (review #13): 1–2 views solve to plausible garbage.
+      if (sampleTotal < MIN_SOLVE_SAMPLES) {
+        report(
+          "calibrate-intrinsic",
+          `refusing to solve with ${sampleTotal} sample${sampleTotal === 1 ? "" : "s"} — ` +
+            `capture at least ${MIN_SOLVE_SAMPLES} varied board poses first`,
+        );
+        return;
+      }
+      const superseded = (): boolean => gen !== selectGen;
+      const discard = (): void =>
+        report(
+          "calibrate-intrinsic",
+          `camera changed mid-solve — the solve for ${info.serial} was discarded (recapture and calibrate again)`,
+        );
+      calibrating = true;
       s.telemetry({ busy: true });
       try {
-        const flat = records.flatMap((r) => r.samples.map((sm) => ({ ...sm, gray: r.gray })));
+        const flat = snapshot.flatMap((r) => r.samples.map((sm) => ({ ...sm, gray: r.gray })));
         const img_points = await Promise.all(flat.map((sm) => cornerSubPix(sm.gray, sm.img_points)));
+        if (superseded()) return discard();
         const obj_points = flat.map((sm) => sm.obj_points);
-        const result: CameraCalibration = await calibrateCamera(
-          { width, height },
-          img_points,
-          obj_points,
-        );
-        const key = getCameraKey(activeInfo);
+        const result: CameraCalibration = await calibrateCamera(size, img_points, obj_points);
+        if (superseded()) return discard();
+        const key = getCameraKey(info);
         // Persist as an intrinsic RECORD, idempotent by content-hash id (spec §records).
         const inner = intrinsicInner({ ...result });
         const id = await recordId(inner);
         const existing = await read<CalibrationRecord | null>([INTRINSIC_STORE, id], null);
-        const assoc = { cameraKey: key, role: views[activeInfo.serial]?.role };
+        if (superseded()) return discard();
+        const assoc = { cameraKey: key, role };
         const record =
           existing && existing.inner
             ? addAssociation(existing, assoc)
@@ -463,10 +670,17 @@ export default function calibrateIntrinsicSession(
                 associations: [assoc],
               });
         await write([INTRINSIC_STORE, id], record);
-        const view = await buildView(activeInfo, views[activeInfo.serial]?.role);
-        views = { ...views, [activeInfo.serial]: view };
+        const view = await buildView(info, role);
+        views = { ...views, [info.serial]: view };
         s.telemetry({ views, lastRms: typeof result.rms === "number" ? result.rms : null });
+        s.clearError(); // a successful solve clears a previous solve-failure banner
+      } catch (e) {
+        // Map the raw OpenCV assertion to an actionable message (review #13) —
+        // banner (fail) + tray (report inside fail), instead of an opaque
+        // command rejection.
+        s.fail(explainSolveError(e));
       } finally {
+        calibrating = false;
         s.telemetry({ busy: false });
       }
     }
@@ -526,15 +740,20 @@ export default function calibrateIntrinsicSession(
         },
       },
       watch: {
-        method: restartDetection,
-        pattern_size: restartDetection,
-        dictionary: restartDetection,
-        scale: restartDetection,
+        // Explicit closures — the watch handler's first arg is the VALUE, which
+        // must not leak into `restartDetection(keepRecords)`.
+        method: () => restartDetection(),
+        pattern_size: () => restartDetection(),
+        dictionary: () => restartDetection(),
+        // Scale keeps records (review #16): marker corners are rescaled to
+        // full-res in native, so a downscale change never invalidates samples.
+        scale: () => restartDetection(true),
       },
       idle() {
         void deselect();
       },
       busy() {
+        if (calibrating) return "calibration solve in progress"; // review #4
         if (captureHelper?.capturing) return "capture in progress";
         if (recording.active) return "recording in progress";
         return null;

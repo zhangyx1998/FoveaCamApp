@@ -11,6 +11,7 @@
 // that module is core-importing and must stay out of the renderer). Store injected.
 // spec: docs/spec/calibration.md#calibration-data
 
+import type { Point2d } from "core/Geometry";
 import { getCameraKey, ROLE, type Role } from "./camera-config.js";
 import {
   RECORD_STORES,
@@ -39,8 +40,12 @@ export interface TripleConfig {
    *  triple-selector dialog and in the Welcome window when the connected rig
    *  matches this triple. Empty/absent = no nickname (fall back to serials). */
   nickname?: string;
-  drift_l?: number;
-  drift_r?: number;
+  /** Per-eye drift offsets (angle-space `Point2d`) written by calibrate-drift
+   *  (`saved.L`/`saved.R`, nullable). The type previously LIED (`number`) —
+   *  calibration-review-2026-07-11 #16 — so the Device tab's `typeof === "number"`
+   *  check never matched a real doc and the drift flag never showed. */
+  drift_l?: Point2d | null;
+  drift_r?: Point2d | null;
   zoom_override?: number;
   baseline_mm?: number;
   /** Per-triple trigger SETTLE hold (µs, v2.0) — the multi-fovea session reads
@@ -284,12 +289,24 @@ async function extrinsicDetail(store: CalStore, key: string): Promise<string> {
   return `${n} sample${n === 1 ? "" : "s"}`;
 }
 
+/** True when a stored drift value is actually set: the real shape is a
+ *  `Point2d` (calibrate-drift writes `{x, y}`, possibly null); a legacy plain
+ *  number is still accepted. */
+function driftSet(v: unknown): boolean {
+  if (typeof v === "number") return true; // legacy scalar form
+  return (
+    !!v &&
+    typeof v === "object" &&
+    typeof (v as Point2d).x === "number" &&
+    typeof (v as Point2d).y === "number"
+  );
+}
+
 /** Read a triple doc's summary metadata (which fields are set). */
 async function tripleDetail(store: CalStore, key: string): Promise<string> {
   const doc = await store.read<Record<string, unknown>>(["triples", key], {});
   const flags: string[] = [];
-  if (typeof doc.drift_l === "number" || typeof doc.drift_r === "number")
-    flags.push("drift");
+  if (driftSet(doc.drift_l) || driftSet(doc.drift_r)) flags.push("drift");
   if (typeof doc.zoom_override === "number" && doc.zoom_override > 0)
     flags.push(`zoom ${(doc.zoom_override as number).toFixed(2)}×`);
   if (typeof doc.baseline_mm === "number" && doc.baseline_mm > 0)

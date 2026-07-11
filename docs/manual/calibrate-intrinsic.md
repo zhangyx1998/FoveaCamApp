@@ -24,7 +24,7 @@ Each row has three buttons: **Calibrate (Checker)**, **Calibrate (Marker)**, and
 5. When the board is fully detected, green dots overlay every corner on the preview. Move the board to a new angle or distance and watch the dots track it.
 6. Click **Capture** to freeze the current detection into a sample. **Capture** is disabled until a detection exists. Each capture appears as a thumbnail tile in the **Captured Records** panel on the right, with a running count in its heading.
 7. Repeat across a spread of positions — tilt the board, move it to the corners of the frame, vary distance. More varied samples give a better solve.
-8. When you have enough samples, click **Calibrate**. It is disabled until you have at least one record, and reads **Calibrating…** while it works.
+8. When you have enough samples, click **Calibrate**. It is disabled until you have at least **3 samples** (fewer views solve to a plausible-looking but unusable model) — the button reads **Calibrate (n/3)** until then — and reads **Calibrating…** while it works.
 9. After the solve, the left panel shows the new **FOV** and **Last Solve RMS … px**. Check the RMS is low (see below). The result is saved automatically to the camera's configuration and as an **intrinsic calibration record** (visible under the camera's rig in [Settings → Device config → Calibration records](./settings.md#calibration-records), where it can be exported or discarded).
 
 ### To calibrate a camera with markers
@@ -49,7 +49,7 @@ The titlebar record and capture controls work here too. `Cmd/Ctrl-R` (or the tit
 ## What can go wrong
 
 - **Capture is greyed out:** no pattern is currently detected. Check lighting, the pattern-size fields, and that the target is fully in frame — the corner/marker dots must be showing.
-- **Calibrate is greyed out:** you have no captured records yet, or a solve is already running (**Calibrating…**).
+- **Calibrate is greyed out:** you have fewer than 3 captured samples (the button shows the shortfall as **Calibrate (n/3)**), or a solve is already running (**Calibrating…**).
 - **High RMS after a solve:** samples are too few or too similar, or some are mis-detected. Remove suspect thumbnails and add more varied poses.
 
 Next: [Extrinsic Calibration](./calibrate-extrinsic.md), which needs the Center camera's intrinsic calibration in place.

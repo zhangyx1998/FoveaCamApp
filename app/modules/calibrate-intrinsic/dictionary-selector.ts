@@ -37,12 +37,29 @@ const options = [
   "ARUCO_MIP_36h12",
 ] as const;
 
-export const DictionaryTypeSelector: FunctionalComponent<{
-  modelValue: PreDefinedDictionary;
-}> = (props, ctx) => {
+// v-model-capable (calibration-review-2026-07-11 #1): the previous render bound
+// neither the select's value nor a change handler, so the picker was INERT —
+// the dictionary stayed pinned to the contract default (4X4_50) and the
+// manual's AprilTag workflow silently detected nothing. A functional component
+// must declare `props`/`emits` for `ctx.emit` to dispatch, and a native
+// <select> needs the `value` DOM prop + a `change` listener wired by hand.
+export const DictionaryTypeSelector: FunctionalComponent<
+  { modelValue: PreDefinedDictionary },
+  { "update:modelValue": (value: PreDefinedDictionary) => void }
+> = (props, ctx) => {
   return h(
     "select",
-    ctx.attrs,
-    options.map((k) => h("option", { value: k }, k)),
+    {
+      ...ctx.attrs,
+      value: props.modelValue,
+      onChange: (e: Event) =>
+        ctx.emit(
+          "update:modelValue",
+          (e.target as HTMLSelectElement).value as PreDefinedDictionary,
+        ),
+    },
+    options.map((k) => h("option", { value: k, selected: k === props.modelValue }, k)),
   );
 };
+DictionaryTypeSelector.props = ["modelValue"];
+DictionaryTypeSelector.emits = ["update:modelValue"];

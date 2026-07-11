@@ -138,4 +138,20 @@ describe("renderer Store client", () => {
     expect(doc.camera_matrix!.shape).toEqual([3, 3]); // the prop structured clone strips
     expect((doc.camera_matrix as any).channels).toBe(1);
   });
+
+  it("a SUBARRAY TypedArray view round-trips by its own bytes (review 2026-07-11, latent)", () => {
+    // The codec used to serialize `view.buffer` WHOLE — a view with a non-zero
+    // byteOffset (or shorter length) revived as a full-buffer array: wrong
+    // values AND wrong length. byteOffset/byteLength must be honored.
+    const backing = new Float64Array([9, 9, 1.5, -2.25, 3, 4, 9]);
+    const view = Object.assign(backing.subarray(2, 6), { shape: [2, 2], channels: 1 });
+    const revived = wireDecode<Float64Array & { shape: number[]; channels: number }>(
+      wireEncode(view),
+    );
+    expect(revived).toBeInstanceOf(Float64Array);
+    expect(revived.length).toBe(4); // the view's length, not the backing buffer's 7
+    expect(Array.from(revived)).toEqual([1.5, -2.25, 3, 4]);
+    expect(revived.shape).toEqual([2, 2]);
+    expect(revived.channels).toBe(1);
+  });
 });

@@ -98,6 +98,19 @@ async function loadIntrinsicCalibration(
   return read<Partial<CameraCalibration>>(["calibrate-intrinsic", cameraKey], {});
 }
 
+/** Minimum extrinsic poses for the cubic fit (calibration-review-2026-07-11
+ *  #14): the per-axis cubic design matrix has 10 terms, so fewer than 10
+ *  samples is underdetermined — the SVD returns a minimum-norm solution that
+ *  LOOKS plausible while steering garbage. Shared threshold: the extrinsic
+ *  wizard gates its FIN step on the same constant. */
+export const MIN_EXTRINSIC_SAMPLES = 10;
+
+/** NAMED error for an underdetermined extrinsic fit — consumers' banners can
+ *  match on `name` and the message is actionable as-is. */
+export class ExtrinsicFitError extends Error {
+  override readonly name = "ExtrinsicFitError";
+}
+
 // Exported for calibrate-extrinsic's session (§7.1 S1b) — its FIN wizard
 // step fits a live preview regression from the *in-progress* (not yet
 // persisted) dataset, same math as loading a saved one.
@@ -106,6 +119,11 @@ export async function fitExtrinsicRegression(
 ): Promise<ConversionInputs["LE"]> {
   if (!Array.isArray(ds) || ds.length === 0)
     throw new Error("No extrinsic data for regression");
+  if (ds.length < MIN_EXTRINSIC_SAMPLES)
+    throw new ExtrinsicFitError(
+      `extrinsic dataset has ${ds.length} pose${ds.length === 1 ? "" : "s"}; ` +
+        `>= ${MIN_EXTRINSIC_SAMPLES} required for the cubic fit`,
+    );
   const keys: (keyof Point2d)[] = ["x", "y"];
   const A: Point2d[] = [];
   const V: Point2d[] = [];
@@ -250,39 +268,49 @@ export type CalibratedTriple = {
 export async function leaseCalibratedTriple(): Promise<CalibratedTriple | null> {
   const leases = await timeSpan("calibration.matchTriple", () => retryUntil(matchTriple));
   if (!leases) return null;
-  const inputs = await loadConversions(leases.L.camera, leases.C.camera, leases.R.camera);
-  const configPath = await tripleConfigPath(leases.L.camera, leases.C.camera, leases.R.camera);
-  // Accept a stored per-triple override/baseline only when it is a finite
-  // positive number (0 / NaN / negative ⇒ unset ⇒ null → the consumer falls
-  // back per the ruled resolution order).
-  const posFinite = (v: unknown): number | null =>
-    typeof v === "number" && Number.isFinite(v) && v > 0 ? v : null;
-  return {
-    leases,
-    conv: useCoordinateConversions(inputs),
-    undistort: inputs.CI.undistort,
-    magnification: {
-      L: inputs.LE.magnification ?? null,
-      R: inputs.RE.magnification ?? null,
-    },
-    zoomOverride: posFinite(inputs.config.zoom_override),
-    baselineMm: posFinite(inputs.config.baseline_mm),
-    // Settle: 0 is meaningful (no hold), so accept any finite >= 0, default 0.
-    settleTimeUs:
-      typeof inputs.config.settle_time_us === "number" &&
-      Number.isFinite(inputs.config.settle_time_us) &&
-      inputs.config.settle_time_us >= 0
-        ? inputs.config.settle_time_us
-        : 0,
-    // Delay compensation: SIGNED, 0 = off. Accept any finite number (negative
-    // is a valid retrodiction); non-finite / absent ⇒ 0.
-    delayCompensationMs:
-      typeof inputs.config.delay_compensation_ms === "number" &&
-      Number.isFinite(inputs.config.delay_compensation_ms)
-        ? inputs.config.delay_compensation_ms
-        : 0,
-    configPath,
-  };
+  // Release-on-throw (calibration-review-2026-07-11 #2): anything after the
+  // acquire can throw — and a fresh/uncalibrated rig ALWAYS throws in
+  // `loadConversions` (no extrinsic data). Without the unwind all three leases
+  // leaked until force-release/restart, wedging every camera-owning module.
+  // The throw still propagates (the caller's `s.fail` keeps its error surface).
+  try {
+    const inputs = await loadConversions(leases.L.camera, leases.C.camera, leases.R.camera);
+    const configPath = await tripleConfigPath(leases.L.camera, leases.C.camera, leases.R.camera);
+    // Accept a stored per-triple override/baseline only when it is a finite
+    // positive number (0 / NaN / negative ⇒ unset ⇒ null → the consumer falls
+    // back per the ruled resolution order).
+    const posFinite = (v: unknown): number | null =>
+      typeof v === "number" && Number.isFinite(v) && v > 0 ? v : null;
+    return {
+      leases,
+      conv: useCoordinateConversions(inputs),
+      undistort: inputs.CI.undistort,
+      magnification: {
+        L: inputs.LE.magnification ?? null,
+        R: inputs.RE.magnification ?? null,
+      },
+      zoomOverride: posFinite(inputs.config.zoom_override),
+      baselineMm: posFinite(inputs.config.baseline_mm),
+      // Settle: 0 is meaningful (no hold), so accept any finite >= 0, default 0.
+      settleTimeUs:
+        typeof inputs.config.settle_time_us === "number" &&
+        Number.isFinite(inputs.config.settle_time_us) &&
+        inputs.config.settle_time_us >= 0
+          ? inputs.config.settle_time_us
+          : 0,
+      // Delay compensation: SIGNED, 0 = off. Accept any finite number (negative
+      // is a valid retrodiction); non-finite / absent ⇒ 0.
+      delayCompensationMs:
+        typeof inputs.config.delay_compensation_ms === "number" &&
+        Number.isFinite(inputs.config.delay_compensation_ms)
+          ? inputs.config.delay_compensation_ms
+          : 0,
+      configPath,
+    };
+  } catch (e) {
+    for (const lease of Object.values(leases)) lease.release();
+    throw e;
+  }
 }
 
 const TRIPLE_UNAVAILABLE =

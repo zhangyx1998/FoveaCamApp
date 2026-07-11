@@ -42,8 +42,7 @@ function ownProperties(value: any) {
   return flag ? result : undefined;
 }
 
-function toBase64(buffer: ArrayBufferLike): string {
-  const bytes = new Uint8Array(buffer);
+function toBase64(bytes: Uint8Array): string {
   let binary = "";
   for (let i = 0; i < bytes.byteLength; i++) {
     binary += String.fromCharCode(bytes[i]);
@@ -82,15 +81,23 @@ export function replacer(key: string, value: any) {
   if (value instanceof ArrayBuffer) {
     return {
       type: "ArrayBuffer",
-      buffer: toBase64(value),
+      buffer: toBase64(new Uint8Array(value)),
       props: ownProperties(value),
     };
   }
   for (const [k, c] of Object.entries(TypedArrayConstructors)) {
     if (value instanceof c) {
+      // Honor the VIEW's byteOffset/byteLength (calibration-review-2026-07-11,
+      // latent): a subarray view used to serialize its WHOLE backing buffer —
+      // wrong values AND wrong length after revive. Encode exactly the bytes
+      // the view covers; the reviver's `new ctor(buffer)` then reconstructs a
+      // same-length view over the sliced copy. Full-buffer views (byteOffset 0,
+      // full length — every Mat the app stores today) produce byte-identical
+      // output, so existing files and content-hash record ids are unaffected.
+      const ta = value as TypedArray;
       return {
         type: k,
-        buffer: toBase64((value as TypedArray).buffer),
+        buffer: toBase64(new Uint8Array(ta.buffer, ta.byteOffset, ta.byteLength)),
         props: ownProperties(value),
       };
     }
