@@ -4,34 +4,13 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// capture-recorder-nodes Phase 1: RAW camera pipes. The `PipeOfferSubscriber`
-// pattern (see ConverterStream.h) applied to the camera SOURCE stream instead
-// of a converted-frame producer — the recorder/capture nodes need full-bit-
-// depth sensor bytes, NOT the 8-bit down-scaled BGRA8 preview pipes.
-//
-//   attachRawPipe(camera, pipeId)  — subscribe a gated raw producer to the
-//                                    camera's Arv::Stream; offer `frame->raw`.
-//   detachRawPipe(pipeId)          — idempotent (unregister gate + drop binding).
-//   rawProbeAll()                  — per-pipe ingest/offer meter rows.
-//
-// The subscriber runs on the camera CAPTURE thread, in the Stream base's
-// synchronous fan-out: it extracts `frame->raw` and copies it into the ring
-// (`sink->offer`) BEFORE the Frame is released — the hard "extract before
-// release" invariant is satisfied by the synchronous dispatch (the Frame::Ptr
-// is alive for the whole push). CONSUMER-GATED (C-21): no recorder/capture
-// attached → the subscriber does not exist → zero capture-thread cost.
-//
-// NOTE (12p): `Arv::Frame` UNPACKS packed 12p into a 16-bit (CV_16UC1)
-// container at construction (Frame.h `fromArvBuffer`), then Stream.cpp
-// immediately recycles the ArvBuffer — so by the time ANY Frame::Ptr
-// subscriber runs, the literally-packed bytes are already gone. The raw pipe
-// therefore carries `frame->raw` = the FULL-BIT-DEPTH container (16-bit for
-// 12p/Mono16, 8-bit for Mono8), which is exactly what the recorder needs
-// (full depth, not the preview). `pixelFormat` = the sensor format string;
-// `dtype` (U8/U16) follows the container width. Truly-packed preservation lives
-// in the SECOND half of this file (multi-fovea-recording ruling 1): the raw12p
-// pipes tap the ArvBuffer BEFORE Frame construction via `Arv::Stream::BufferTap`
-// and publish the verbatim packed wire payload.
+// RAW camera pipes (capture-recorder-nodes Phase 1): the ConverterStream
+// PipeOfferSubscriber pattern applied to the camera SOURCE stream — recorders
+// need full-bit-depth sensor bytes, not the 8-bit BGRA8 preview. Two load-bearing
+// invariants: EXTRACT-BEFORE-RELEASE (the sync fan-out copies frame->raw before
+// the Frame is released) and the 12p CONTAINER rule (frame->raw is the unpacked
+// 16-bit container; truly-packed bytes come from the raw12p BufferTap half of
+// this file). spec: docs/spec/core-frame-bricks.md#raw-pipe
 
 #include <algorithm>
 #include <atomic>

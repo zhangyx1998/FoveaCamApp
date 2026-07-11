@@ -5,42 +5,10 @@
 // -------------------------------------------------------
 #pragma once
 
-// Generic native PORT/PIPE substrate (docs/proposals/native-port-pipe.md,
-// ruled 2026-07-10): bricks expose named TYPED ports as JS handles
-// (`<name>_out` / `<name>_in` accessor properties → cached Port CoreObjects);
-// `outPort.pipe(inPort, opts?)` connects them THREAD-TO-THREAD natively and
-// returns a Link CoreObject with `probe()` + `release()`. The async-iterator
-// pattern is eliminated wherever BOTH endpoints are native C++ threads
-// (ruling 1) — the iterator remains only where JS is a genuine consumer.
-//
-// Link types (opts.type, default "latest"):
-//   latest — latest-wins, slow consumer sheds stale items (Threading::Leaky).
-//   fifo   — lossless bounded blocking queue, producer BACKPRESSURE +
-//            high-water metering (Threading::FIFO; opts.depth).
-//   ring   — bounded drop-OLDEST, non-blocking producer (Threading::Ring —
-//            the StereoStream PairRecord ring generalized; opts.size).
-//
-// TYPE ERASURE: payloads are all Shared<T>::Ptr-shaped. The erased surface is
-// deliberately small — a tag string + a std::type_index + one type-erased sink
-// / connect-factory per instantiated payload type (the typed knowledge lives
-// in `makeOutPort<P>` / `makeInPort<P>` where the brick knows P). Tag equality
-// AND payload-type equality are checked at pipe() time (JS::TypeError on a
-// mismatch) — never in the hot loop. `Stream<T>` itself is NOT refactored:
-// the link subscribes with a plain `Subscriber<P>` (multiple subscribers are
-// native to the stream), so teardown rides the existing eject/drain
-// discipline (`closes_in_flight_`).
-//
-// DELIVERY: producer thread → channel → the link's OWN delivery thread →
-// consumer sink. The extra thread keeps consumer bricks' loop structures
-// untouched (a paced brick like the IMM predictor cannot block on a channel)
-// and gives every link type one uniform shape. Probe counters are plain
-// atomics probed out-of-loop (the never-gate rule).
-//
-// TOPOLOGY: each live link self-registers and `appendLinkReports` emits an
-// EDGES-ONLY NodeReport row (kind "", `edgesOnly: true`) carrying the one
-// `from → to` input — the JS fold unions it into the consumer's node, so
-// native-piped edges show on the profiler graph (with fifo hwm / lossy flags)
-// WITHOUT any session-side registerGraphWiring shim.
+// Generic native PORT/PIPE substrate: bricks expose named TYPED ports as JS
+// handles; `outPort.pipe(inPort, opts?)` connects two native C++ threads and
+// returns a Link with probe()/release(). Link types: latest / fifo / ring.
+// spec: docs/spec/core-port-pipe.md (design: docs/proposals/native-port-pipe.md)
 
 #include <atomic>
 #include <functional>
@@ -75,10 +43,9 @@ struct LinkStats {
   uint64_t dropped = 0;
   size_t highWater = 0;
   bool open = false;
-  // Latest links only: whether the channel slot currently pins a payload.
-  // With `take` semantics this is true only between a write and its readout —
-  // a drained link on a stalled upstream reads false (the Leaky retention
-  // fix's regression surface, 2026-07-11).
+  // Latest links only: does the channel slot currently pin a payload? True only
+  // between a write and its readout.
+  // spec: docs/spec/core-port-pipe.md#leaky-retention
   bool held = false;
 };
 
@@ -226,9 +193,8 @@ public:
       return;
     unregisterLink(this); // topology edge retires FIRST (probe-safe)
     open_.store(false, std::memory_order_release);
-    // Close the channel BEFORE unsubscribing: wakes a backpressure-blocked
-    // producer push (FIFO) and the delivery read, so neither can deadlock the
-    // unsubscribe/join below (the ChainedStream close-first discipline).
+    // Close the channel BEFORE unsubscribing (close-first discipline).
+    // spec: docs/spec/core-port-pipe.md#teardown
     closeChannel();
     sub_.reset(); // Subscriber::close → eject/drain discipline
     if (thread_.joinable())
@@ -238,13 +204,10 @@ public:
   }
 
 private:
-  /** Close the channel (idempotent — the Threading channels tolerate repeat
-   *  close). Shared by release() and EVERY deliver() exit path: if the
-   *  delivery thread dies with the channel open, a FIFO link keeps
-   *  backpressure-blocking the producer's fan-out INSIDE the stream mutex
-   *  (whole-pipeline freeze + shutdown deadlock) and latest/ring become
-   *  silent black holes with pinned payloads. Closed, the producer's next
-   *  push sees EOS → the Stream fan-out ejects this subscriber. */
+  /** Close the channel (idempotent). Shared by release() and EVERY deliver()
+   *  exit path — a channel left open on a dead delivery thread deadlocks the
+   *  producer (FIFO backpressure inside the stream mutex) or black-holes it
+   *  (latest/ring). spec: docs/spec/core-port-pipe.md#teardown */
   void closeChannel() {
     switch (type) {
     case LinkOptions::Type::Latest:
@@ -264,9 +227,8 @@ private:
     try {
       switch (type) {
       case LinkOptions::Type::Latest: {
-        // `take` moves the slot out and the local is reset after delivery —
-        // neither the channel nor this thread pins the last payload while
-        // blocked on a stalled upstream (Leaky retention fix, 2026-07-11).
+        // `take` moves the slot out; reset after delivery so nothing pins the
+        // last payload. spec: docs/spec/core-port-pipe.md#leaky-retention
         P dst = nullptr;
         while (true)
           if (leaky_->take(dst, /*wait=*/true) && dst) {

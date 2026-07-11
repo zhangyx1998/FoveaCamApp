@@ -17,9 +17,8 @@
 #include "convert.h"
 
 void Protocol::send(Protocol::RawPacket &packet) {
-  // seq == 0 fire-and-forget: firmware performs the action but stays silent
-  // (see Protocol::Sequence doc comment). Only applies to responses sent
-  // through this helper — LOG SYN pushes bypass it entirely.
+  // seq == 0 fire-and-forget: perform the action, stay silent.
+  // spec: docs/spec/serial-protocol.md#fire-and-forget
   if (packet.header().sequence == 0)
     return;
   if (COBS::tx.encode(packet.finalize()))
@@ -63,13 +62,9 @@ void Protocol::reject(const Sequence &seq, Property p,
   void Packet::PACKET::Prototype::SYN(const Protocol::Sequence &seq,           \
                                       Inflated payload)
 
-// --- Non-blocking Actuate/Trigger completion (Protocol v2 §3.3) ---
-// Both commands are now two-phase (ACK immediate, FIN after a timed delay)
-// instead of blocking in delayMicroseconds(). Only one of each may be
-// in-flight at a time — matches the pre-v2 blocking behavior, where a second
-// request simply couldn't arrive until the first's delay elapsed; here it is
-// REJected instead of silently queued (callers wanting overlap should move
-// to CMD_STREAM, which is exactly what this refactor is for).
+// Non-blocking Actuate/Trigger completion: two-phase (ACK now, FIN after a timed
+// delay via tick()); one of each in-flight, overlap REJected.
+// spec: docs/spec/serial-protocol.md#two-phase
 namespace {
 
 template <typename Payload> struct PendingAction {
@@ -179,20 +174,12 @@ HANDLE_SET(System::Enable) {
     MEMS::enable();
     Board::low_pass_filter.tone();
     Global::system_enabled = true;
-    // v1.1: Enable NO LONGER resets Global::time. The unified-time ruling
-    // makes every clock mutation EXPLICIT (System::Timestamp SET is the
-    // reset) — an implicit reset here silently invalidated the host's
-    // controller clock calibration on every enable, breaking the
-    // "timestamps between nodes are always trusted" invariant.
+    // v1.1: enable does NOT reset Global::time (only System::Timestamp SET does).
+    // spec: docs/spec/serial-protocol.md#clock
   } else if (!payload.enable && Global::system_enabled) {
-    // Disable system
     VERB("Disabling system");
-    // Open question (docs/history/refactor/synced-capture.md §8.3), resolved: streams
-    // do NOT survive disable. The MCU clock resets on the next enable (see
-    // above), invalidating any host-side clock-delta calibration anyway, so
-    // keeping stale stream targets around buys nothing; REJect in-flight and
-    // queued frame requests too, since their mirror targets are about to be
-    // wiped and MEMS is about to be powered down.
+    // Streams do NOT survive disable; cancel everything and power down MEMS.
+    // spec: docs/spec/serial-protocol.md#disable
     Capture::cancelAll("System disabled");
     Streams::clear();
     cancelPendingActuate("System disabled");
@@ -209,12 +196,9 @@ HANDLE_SET(System::Enable) {
 }
 
 HANDLE_GET(System::Timestamp) {
-  // Calibration ping (unified-time proposal, Rulings 4): stamp the clock
-  // FIRST, at packet parse/handle time — handle() dispatches here
-  // synchronously as the request leaves the COBS decoder — never at
-  // reply-serialization time, so the reading's jitter stays at the
-  // serial-latency floor. Same Global::time (wraparound-corrected uint64 µs)
-  // that stamps FrameResult t_trigger/t_exposure.
+  // Calibration ping: stamp the clock FIRST, at packet parse/handle time (not at
+  // reply-serialization), so jitter stays at the serial-latency floor.
+  // spec: docs/spec/serial-protocol.md#clock
   const auto now = Global::time.now();
   auto packet = Create::ACK(seq);
   deflate({.microseconds = now}, packet);
@@ -222,9 +206,8 @@ HANDLE_GET(System::Timestamp) {
 }
 
 HANDLE_SET(System::Timestamp) {
-  // Reset the MCU clock counter to the payload value (normally 0). Note
-  // System::Enable also resets the clock on enable — either way, any
-  // host-side offset calibration is invalidated and must be re-run.
+  // The ONLY MCU clock reset (payload normally 0); invalidates host offset cal.
+  // spec: docs/spec/serial-protocol.md#clock
   Global::time.reset(payload.microseconds);
   VERB("Clock counter reset");
   GET(seq);

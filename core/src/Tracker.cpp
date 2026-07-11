@@ -44,26 +44,10 @@ struct TrackerUpdateResult {
   cv::Rect bbox;
 };
 
-// cv::TrackerKCF feature-set choice — BOTH knobs below are load-bearing on
-// OpenCV 4.13.0; probes for each claim live in the 2026-07-10 fix commits.
-//
-// 1. GRAY features, not the default CN (Color Names): every camera here is
-//    monochrome, so KCF only ever sees gray-replicated pixels. CN maps those
-//    into a handful of achromatic color-name bins — on low-texture patches
-//    (the rig's needle/target scenes, or ANY smooth gradient at the disparity
-//    kernel's 64x64 arm size) the compressed CN response is degenerate: KCF
-//    finds the target once (frame 2's patch still equals the model) and then
-//    NEVER again. Symptom: box flashes once or never locks, UI parks on
-//    "armed". GRAY features tracked these scenes for months pre-4.13.
-// 2. desc_pca = GRAY **plus** desc_npca = GRAY, compressed_size = 1: the
-//    obvious GRAY-only configs are BROKEN in 4.13.0 — {pca=GRAY, npca=0} and
-//    {pca=0, npca=GRAY} both throw "Matrix operand is an empty matrix" on the
-//    second update() (same empty-response bug family as CN-on-1ch). Listing
-//    GRAY on BOTH descriptor slots with compressed_size=1 is the config that
-//    survives; verified 29/29 sustained on 1ch AND 3ch input.
-//
-// Input depth/channels are normalized by `asColor8` (KCF's gray extractor
-// only accepts 1- or 3-channel; the chained tap is 4-channel RGBA8).
+// KCF feature-set: GRAY on BOTH desc slots with compressed_size=1 — the ONLY
+// config that survives OpenCV 4.13.0 (default CN goes degenerate on our mono
+// low-texture scenes; single-slot GRAY throws on the 2nd update()). Do not
+// "simplify". spec: docs/spec/core-trackers.md#kcf-gray
 static cv::Ptr<cv::TrackerKCF> makeKcf() {
   cv::TrackerKCF::Params p;
   p.desc_pca = cv::TrackerKCF::GRAY;
@@ -72,12 +56,9 @@ static cv::Ptr<cv::TrackerKCF> makeKcf() {
   return cv::TrackerKCF::create(p);
 }
 
-// Normalize any tracker source frame to the 1-or-3-channel 8-bit layout
-// cv::TrackerKCF accepts, reusing `buf`. 1ch passthrough would suffice for the
-// GRAY features `makeKcf` pins, but the 4-channel chained tap MUST be reduced
-// (KCF's gray extractor mishandles 4ch), and replicating 1ch → BGR keeps every
-// variant on one proven path. Callers feed 8-bit frames (center cam is Mono8;
-// the chained tap is RGBA8).
+// Normalize any tracker source frame to the 1-or-3-channel 8-bit layout KCF
+// accepts, reusing `buf` (the 4ch chained tap MUST be reduced).
+// spec: docs/spec/core-trackers.md#ascolor8
 static const cv::Mat &asColor8(const cv::Mat &src, cv::Mat &buf) {
   switch (src.channels()) {
   case 1:

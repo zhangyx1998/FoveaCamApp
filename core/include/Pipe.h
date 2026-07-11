@@ -5,14 +5,10 @@
 // -------------------------------------------------------
 #pragma once
 
-// WS1 producer/publisher SHM pipe architecture (C-16 scaffold). A *pipe* is one
-// typed producer output. Its `Publisher` owns a `ShmRing` segment and a single
-// publisher thread that seqlock-writes the latest producer frame off the JS
-// loop; N consumers read it via the reader addon. A `FrameProducer` feeds one
-// publisher 1:1 through a latest-wins handoff. The scaffold ships a
-// `SyntheticProducer`; 1c/1d swap it for the camera/CV producer threads with no
-// change to this seam. The orchestrator brokers a ONE-TIME connect handshake —
-// nothing per-frame crosses JS.
+// Producer/publisher SHM pipe architecture. A *pipe* is one typed producer
+// output: a `Publisher` owns a `ShmRing` segment that N consumers read via the
+// reader addon; producers seqlock-write off the JS loop. The orchestrator
+// brokers a ONE-TIME connect handshake. spec: docs/spec/core-pipe.md
 
 #include <atomic>
 #include <cstdint>
@@ -42,41 +38,26 @@ struct PipeSpec {
   uint32_t stride = 0;
   uint64_t bytesPerFrame = 0;
   uint32_t ringDepth = ShmRing::SLOT_COUNT;
-  // C-20: the ring is sized to a tunable per-FOVEA max (NOT the camera
-  // resolution — a fovea is a small hi-res crop, so N max rings stay bounded);
-  // each frame carries its own active w/h ≤ max. Camera pipes: max == fixed.
+  // Ring is sized to a per-FOVEA max, not the camera resolution; each frame
+  // carries its own active w/h ≤ max. spec: docs/spec/core-pipe.md#sizing
   uint32_t maxWidth = 0;  // ring capacity (defaults to width if 0)
   uint32_t maxHeight = 0; // ring capacity (defaults to height if 0)
   uint64_t maxBytes = 0;  // slot size (defaults to bytesPerFrame if 0)
 };
 
 /** Geometry of one already-converted frame (in the pipe's advertised format).
- *  `stride` = bytes per row of `data` (`cv::Mat::step`); may exceed
- *  `width*channels` (the publisher copies row-by-row into the tight slot).
- *  `originX/originY` (v4, C-24/B-24): a crop's FRAME-BOUND position within its
- *  parent stream (fovea nodes) — published into the slot header alongside the
- *  active size; uncropped producers leave the defaults (0/0). */
+ *  Field semantics (stride, origin, bytesPerElement, payloadBytes):
+ *  spec: docs/spec/core-pipe.md#sizing */
 struct FrameInfo {
   uint32_t width = 0;
   uint32_t height = 0;
   uint32_t channels = 0;
-  uint32_t stride = 0;
+  uint32_t stride = 0; // bytes per row of `data` (cv::Mat::step); may exceed w*ch
   size_t bytes = 0;
-  uint32_t originX = 0;
+  uint32_t originX = 0; // crop position within the parent stream (fovea nodes)
   uint32_t originY = 0;
-  // Bytes per CHANNEL element (`cv::Mat::elemSize1()`): 1 for U8 frames
-  // (default — every existing BGRA8/U8 pipe), 4 for a CV_32FC1 disparity map.
-  // The publisher's tight-packed row/active-byte math multiplies by this so a
-  // non-U8 mat (stereo Disparity32F) publishes without truncation. Additive:
-  // defaulting to 1 keeps every U8 producer byte-for-byte unchanged.
-  uint32_t bytesPerElement = 1;
-  // v5 (multi-fovea-recording ruling 10): an OPAQUE variable-length payload
-  // (compression bricks). When nonzero, `offer()` copies exactly `payloadBytes`
-  // contiguous bytes from `data` (ignoring stride/rows) and records the length
-  // in the slot header — `width/height/origin` still carry the SOURCE frame's
-  // identity. 0 = a normal dim-derived frame (every existing producer — the copy
-  // and slot are byte-for-byte unchanged).
-  size_t payloadBytes = 0;
+  uint32_t bytesPerElement = 1; // cv::Mat::elemSize1(); 4 for CV_32FC1 disparity
+  size_t payloadBytes = 0; // >0 = opaque variable-length payload (compression)
 };
 
 /** THE producer→publisher seam (C-19). Every producer plugs in here: B's Aravis
@@ -101,16 +82,10 @@ public:
  *  no pipe open" (the converter auto-parks once its subscriber detaches). */
 using ConsumerGate = std::function<void(bool active)>;
 
-/** native-recorder: an in-process tap at the publisher seam. Fired on the
- *  PRODUCER'S thread for every frame the ring accepts (after validation, while
- *  ≥1 consumer is connected and the pipe is open) with the producer's ORIGINAL
- *  (possibly strided) buffer — exactly the payload the ring records, so a
- *  recorder tapping here captures byte-for-byte what a ring consumer would have
- *  read (advert-verbatim, v5 opaque payloads included). The callee must copy
- *  synchronously (the buffer is reused) and must NEVER block (it runs on the
- *  capture/convert/compress thread) — a bounded drop-oldest enqueue only.
- *  This is a brick→brick handoff (SHM-pipe-architecture invariant: rings are
- *  IPC/JS boundaries ONLY; the native recorder never reads the ring). */
+/** native-recorder: an in-process tap at the publisher seam, fired on the
+ *  producer thread for every accepted frame with the producer's ORIGINAL
+ *  buffer. The callee must copy synchronously and NEVER block (drop-oldest
+ *  enqueue only). spec: docs/spec/core-pipe.md#record-tap */
 using RecordTap =
     std::function<void(const void *data, const FrameInfo &info,
                        const ShmRing::FrameMeta &meta)>;
@@ -124,11 +99,9 @@ public:
   virtual void stop() = 0;
 };
 
-/** One publisher per pipe, multi-consumer. Owns the pipe's ring
- *  (`ShmRing::Segment`). COLLAPSED (C-19): there is NO separate publisher
- *  thread — `offer()` seqlock-writes the frame directly ON THE PRODUCER'S
- *  thread (B's per-camera capture subscriber, or the test driver), which is
- *  already off the JS loop. Single writer to the ring (1:1 producer↔pipe). */
+/** One publisher per pipe, multi-consumer. Owns the pipe's `ShmRing::Segment`.
+ *  No separate publisher thread — `offer()` seqlock-writes on the producer's
+ *  thread (single writer, 1:1). spec: docs/spec/core-pipe.md#seam */
 class Publisher : public FrameSink {
 public:
   /** `epoch` = the segment generation (bumped on re-advertise of an id). */
@@ -145,41 +118,31 @@ public:
              const ShmRing::FrameMeta &meta) override;
 
   /** Consumer refcount (broker). At zero the ring write pauses (segment stays
-   *  mapped/advertised — reconnectable). The 0→1 / →0 edges fire the consumer
-   *  gate (C-21), which drives the converter subscribe/unsubscribe. */
+   *  reconnectable). The 0↔1 edges fire the consumer gate.
+   *  spec: docs/spec/core-pipe.md#refcount-gate */
   uint32_t connect();
   uint32_t disconnect();
   uint32_t consumers() const { return refcount_.load(std::memory_order_acquire); }
 
-  /** Register the consumer-presence gate (C-21). Fires `gate(refcount>0)`
-   *  IMMEDIATELY on registration (reconciles a consumer that connected before
-   *  the gate was set), then on each 0→1 / →0 edge. `nullptr` unregisters (no
-   *  fire). NAPI-thread only (single-threaded with connect/disconnect). */
+  /** Register the consumer-presence gate. Fires `gate(refcount>0)` IMMEDIATELY
+   *  on registration, then on each edge. `nullptr` unregisters. NAPI-thread
+   *  only. spec: docs/spec/core-pipe.md#refcount-gate */
   void setConsumerGate(ConsumerGate gate);
 
   /** Producer-side close: set `state=CLOSED` (release) so consumers observe the
    *  explicit signal after the final frame; further offers are dropped. */
   void close();
 
-  /** Defense-in-depth teardown backstop (S-1a), fired by `PipeHub::drop` BEFORE
-   *  the Publisher (segment unmap) is destroyed. Producer bindings in SEPARATE
-   *  registries (RawPipe/Converter/Compress) cache this Publisher's raw
-   *  `FrameSink*` and only release their gated subscriber on a consumer-gate→0
-   *  edge or an explicit detach — so a `drop()` BEFORE detach would otherwise
-   *  leave a live subscriber offering into freed memory on the capture/convert
-   *  thread. This synchronously fires the consumer gate OFF (tearing those
-   *  subscribers down), making the guarantee STRUCTURAL rather than reliant on
-   *  the detach-before-unadvertise JS convention. No-op if no gate is
-   *  registered. NAPI-thread only (serialized with connect/disconnect/
-   *  setConsumerGate); idempotent (gate(false) with no live subscriber is a
-   *  no-op). */
+  /** Defense-in-depth teardown backstop (S-1a): fired by `PipeHub::drop` BEFORE
+   *  segment unmap, synchronously firing the consumer gate OFF so cached-sink
+   *  producers (RawPipe/Converter/Compress) tear down instead of offering into
+   *  freed memory. NAPI-thread only; idempotent.
+   *  spec: docs/spec/core-pipe.md#quiesce */
   void quiesceConsumers();
 
-  /** native-recorder: add/remove a record tap (keyed by `token`, any unique
-   *  pointer-sized id). `removeRecordTap` returns only after no in-flight tap
-   *  invocation can still be running (offer() holds the tap mutex across the
-   *  call), so the owner may free its capture state immediately after. Any
-   *  thread (serialized internally); taps fire on the producer thread. */
+  /** native-recorder: add/remove a record tap keyed by `token`. `removeRecordTap`
+   *  returns only after no in-flight tap can still run (owner may then free
+   *  capture state). spec: docs/spec/core-pipe.md#record-tap */
   void addRecordTap(uintptr_t token, RecordTap tap);
   void removeRecordTap(uintptr_t token);
 
@@ -191,11 +154,9 @@ public:
   /** Out-of-loop probe of the native producer meter (orchestrator thread). */
   Meter::Snapshot probe() const;
 
-  /** Total ACTIVE bytes ring-written since advertise (C-24 item 3) — one add
-   *  per successful offer, so the topology's per-edge MB/s is exact even for
-   *  variable-size fovea frames (rate × nominal would lie). Monotonic; the
-   *  reader diffs snapshots. Relaxed atomic: single writer (producer thread),
-   *  any-thread reads. */
+  /** Total ACTIVE bytes ring-written since advertise — one add per offer, so
+   *  per-edge MB/s is exact even for variable-size fovea frames. Monotonic,
+   *  relaxed atomic. spec: docs/spec/core-pipe.md#epoch */
   uint64_t bytesTotal() const { return bytesTotal_.load(std::memory_order_relaxed); }
 
   bool isClosed() const { return closed_.load(std::memory_order_acquire); }
@@ -254,10 +215,9 @@ struct PipeEntry {
 class PipeHub {
 public:
   static PipeHub &instance();
-  /** Advertise (idempotent for a LIVE id → returns its current epoch). A first
-   *  advertise, or one after `drop`, bumps a per-id epoch → a NEW segment name
-   *  (`/fv.p<hash>.g<epoch>`), so a stale consumer on the old segment sees
-   *  CLOSED and never binds the reused id. Returns the epoch. */
+  /** Advertise (idempotent for a LIVE id). A first advertise, or one after
+   *  `drop`, bumps a per-id epoch → a NEW segment name, so stale consumers on
+   *  the old segment see CLOSED. spec: docs/spec/core-pipe.md#epoch */
   uint32_t advertise(const PipeSpec &spec);
   Publisher &publisher(const std::string &id);   // throws if unknown
   FrameSink *sink(const std::string &id);        // nullptr if unknown

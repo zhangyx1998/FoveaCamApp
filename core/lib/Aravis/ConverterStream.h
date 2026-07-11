@@ -5,12 +5,10 @@
 // -------------------------------------------------------
 #pragma once
 
-// WS1 real-1e (B-18): the per-stream format converter thread. Replaces the
-// inline-convert `CaptureSink`. A dedicated thread per (camera × target format)
-// runs the SHARED `convertFrame` (raw→display, incl. the >8-bit down-scale) OFF
-// the capture thread; a thin B-owned `Subscriber` offers the converted bytes to
-// C's pipe `FrameSink`. Both auto-park when the pipe's consumers drain (the
-// `Stream` base parks on empty subscribers — no lifecycle code).
+// The per-stream format converter thread (B-18): one thread per (camera × target
+// format) runs the shared convertFrame OFF the capture thread and offers the
+// converted bytes to C's pipe FrameSink; auto-parks when consumers drain.
+// spec: docs/spec/core-frame-bricks.md#converter
 
 #include <atomic>
 #include <chrono>
@@ -39,36 +37,24 @@ inline int64_t converterNowMs() {
 }
 
 // Post-convert product of a ConverterStream. `mat` IS the ConverterStream's
-// REUSED buffer (a header over it), valid ONLY during the synchronous dispatch
-// to subscribers — exactly the existing onView view-tap contract ("the Mat is
-// the reused buffer; copy out to retain"). The single pipe subscriber's
-// `offer()` copies it into the ring inline, before the next frame overwrites
-// the buffer. Any future BUFFERING consumer of a ConverterStream must copy.
+// REUSED buffer, valid ONLY during synchronous dispatch — a buffering consumer
+// MUST copy. spec: docs/spec/core-frame-bricks.md#reuse-contract
 struct ConvertedFrame : Shared<ConvertedFrame> {
   cv::Mat mat;
-  // Pixel format of `mat` (the producing brick's target/passthrough format) —
-  // stamped so in-process taps (unified-time-and-topology §5) can carry the
-  // frame's typing without consulting the producer.
-  PixelFormat format = RGBA8;
+  PixelFormat format = RGBA8; // stamped so in-process taps carry the frame typing
   uint64_t deviceTimestamp = 0;
   uint64_t systemTimestamp = 0;
   double convertMs = 0;
-  // B-24 fovea crops: the crop origin in SOURCE coordinates, FRAME-BOUND to
-  // this product (a JS rect echo races). 0/0 for full-frame producers. Flows
-  // through FrameInfo into the v4 slot header (C-24 substrate) — the reader
-  // surfaces it per-frame alongside the C-20 active w/h.
+  // Fovea crop origin in SOURCE coords, frame-bound (a JS rect echo races); 0/0
+  // for full-frame. Flows through FrameInfo into the v4 slot header.
   uint32_t originX = 0;
   uint32_t originY = 0;
 };
 
-// unified-time-and-topology §5 (B, native re-plumb): the OWNED element type of
-// the in-process brick→brick Leaky tap. Unlike `ConvertedFrame` (a header over
-// the producer's REUSED buffer, valid only during synchronous dispatch), an
-// OwnedFrame's `mat` OWNS its heap buffer — the tap publisher deep-copies at
-// publish time, so ownership transfer (shared_ptr) retires the reuse-contract
-// hazard: a downstream brick may retain/consume it on its own thread at its
-// own pace. Allocated ONLY while ≥1 downstream tap is subscribed (zero cost
-// otherwise — no TapPublisher, no copy).
+// The OWNED element of the in-process brick→brick Leaky tap: `mat` OWNS its heap
+// buffer (deep-copied at publish), so a downstream brick may retain/consume it at
+// its own pace. Allocated ONLY while ≥1 tap is subscribed.
+// spec: docs/spec/core-frame-bricks.md#owned-frame
 struct OwnedFrame : Shared<OwnedFrame> {
   cv::Mat mat; // OWNS its data (deep copy); width/height/stride/type live here
   PixelFormat format = RGBA8;
@@ -77,11 +63,9 @@ struct OwnedFrame : Shared<OwnedFrame> {
   // Monotonic per-tap sequence — downstream meters latest-wins drops from the
   // gaps (`seq - lastSeq - 1` frames were overwritten unconsumed).
   uint64_t seq = 0;
-  // Frame-bound crop origin (fovea semantics), forwarded from ConvertedFrame.
-  uint32_t originX = 0;
+  uint32_t originX = 0; // frame-bound crop origin, forwarded from ConvertedFrame
   uint32_t originY = 0;
-  // Upstream processing ms for this frame (convert / convert+remap so far).
-  double upstreamMs = 0;
+  double upstreamMs = 0; // upstream processing ms so far (convert / convert+remap)
 
   uint32_t width() const { return static_cast<uint32_t>(mat.cols); }
   uint32_t height() const { return static_cast<uint32_t>(mat.rows); }

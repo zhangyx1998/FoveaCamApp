@@ -5,45 +5,11 @@
 // -------------------------------------------------------
 #pragma once
 
-// stereo-disparity-and-heatmap-nodes §"StereoStream (pinned)": the FIRST
-// two-input chained brick. Both inputs are OwnedFrame taps (Leaky/latest-wins)
-// on any frame brick (undistort / convert / fovea / scale — same source
-// resolution as ScaleStream). Unlike the single-source ChainedStreamOf, this
-// brick opens TWO TapPublishers in start() (closed in stop()) so demand
-// propagates to BOTH sources; either source terminating ends the brick.
-//
-// Pairing: tick on every LEFT arrival, matched with the LATEST RIGHT frame
-// (latest-wins; no seq comparison across cameras — different owner clocks pace
-// them). iterate() BLOCKS on the left channel, then drains the right channel
-// non-blocking keeping only the newest, retaining the last-seen right frame
-// across ticks. No right frame yet → skip. Output timestamps/origin = the LEFT
-// frame's (trusted-time: forwarded, never re-stamped). Active out dims = left.
-//
-// Compute (stereo-throughput.md, ruled 2026-07-10): BGRA→GRAY both sides, then
-// a SWAPPABLE matcher strategy — cv::StereoSGBM (mode selectable: SGBM / 3WAY /
-// HH) or cv::StereoBM — optionally matched at 1/matchScale resolution (window
-// scaled with it) and optionally WLS-refined (cv::ximgproc, compile-guarded).
-// Output stays CV_32F disparity with VALUES in full-res LEFT-frame pixel units
-// (scaled matching multiplies back by matchScale); map DIMENSIONS are emitted
-// at match scale (the advert/reader carry actual dims — consumers must not
-// assume full-res). Input dims must match (unequal → drop + meter_.drop, the
-// transient during steer/retune). Reactive params (validated NAPI-side, applied
-// on the brick thread): the matcher is rebuilt when a pending param lands.
-
-//
-// stereo-paired-inputs (ruled 2026-07-09): a SECOND input mode — the SGBM join
-// over EXPOSURE PAIRS. Instead of two latest-wins OwnedFrame taps, the paired
-// variant chains on the always-running `PairStream` brick with ONE record tap
-// (pairing-nodes: `PairStream` is a `Stream<PairBatch::Ptr>`), running SGBM per
-// PairRecord — L/R matched by construction (anchored on the FIN), no in-brick
-// anchor matching (tolerance-once ruling). The `process(left,right)` compute
-// path, reactive params, F32 left-coords output, and meter surface are the SAME
-// (REUSED, not rewritten); only the input side differs. Mode is chosen at
-// CONSTRUCTION (session recompose on trigger start/stop), never a runtime
-// switch. On-demand like the latest-wins brick (parks with no consumers → the
-// record tap unsubscribes; the pair brick's keep-alive is unaffected). Output
-// advert + timestamps (LEFT frame's, never re-stamped) are identical in both
-// modes.
+// The FIRST two-input chained brick: SGBM/BM disparity over an L/R frame pair.
+// Two input modes chosen at CONSTRUCTION (latest-wins OwnedFrame taps, or a
+// PairStream record tap over exposure pairs); output is CV_32F disparity in
+// full-res LEFT-frame pixel units, timestamps forwarded from the LEFT frame
+// (never re-stamped). spec: docs/spec/core-frame-bricks.md#stereo
 
 #include <atomic>
 #include <cmath>
