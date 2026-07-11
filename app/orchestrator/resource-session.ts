@@ -27,7 +27,6 @@
 import { defineSession, type ServerSession, type SessionDefinition } from "./runtime.js";
 import type { Contract } from "@lib/orchestrator/protocol";
 import type { Disposer } from "./session-resources.js";
-import { report } from "./diagnostics.js";
 
 /** One activation's resource scope — see the module header. Passed to
  *  `activate`; the session registers every cleanup on it. */
@@ -152,7 +151,14 @@ export function defineResourceSession<C extends Contract>(
         try {
           await def.activate(sc, s);
         } catch (e) {
-          report(name, `activate: ${e instanceof Error ? e.message : String(e)}`);
+          // value-sweep-2026-07-11 (`activate-errors-bypass-banner`): route the
+          // failure to `s.fail()` (which also logs via `report`) instead of a
+          // bare `report()`. `fail()` sets the session's user-visible status
+          // error and broadcasts it, so an activation failure shows the A-P13
+          // banner (+ the tray) rather than a dead black view. The runtime
+          // clears the error on the next activation (subscribe → clearError),
+          // preserving retry-on-reactivate.
+          s.fail(`activate: ${e instanceof Error ? e.message : String(e)}`);
         }
         // Superseded mid-activate → drain whatever we set up (V5/V10). If idle
         // already drained this scope, `drain()` is a no-op.

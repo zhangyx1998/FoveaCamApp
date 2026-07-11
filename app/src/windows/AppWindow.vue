@@ -20,6 +20,7 @@ import ErrorBoundary from "../components/ErrorBoundary.vue";
 import SessionStatus from "../components/SessionStatus.vue";
 import ProgressMonitor from "../components/ProgressMonitor.vue";
 import CrashReport from "../components/CrashReport.vue";
+import ErrorTray from "../components/ErrorTray.vue";
 import { useSessionStatus } from "@lib/orchestrator/client";
 import TeleCanvasPusher from "../components/telecanvas/Pusher.vue";
 import { FontAwesomeIcon as Icon } from "@fortawesome/vue-fontawesome";
@@ -146,6 +147,9 @@ window.addEventListener("keydown", (e) => {
     <button class="icon-button" title="Open profiler window" @click="openProfiler">
       <Icon :icon="faChartLine" />
     </button>
+    <!-- Dismissible error tray (value-sweep-2026-07-11): process-wide reports,
+         command rejections, and recorder truncations, no longer console-only. -->
+    <ErrorTray />
     <Controller />
   </TitleBar>
 </template>

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { Mat } from "core/Vision";
 import type { Size, Point } from "core/Geometry";
-import { computed, ref, watch } from "vue";
+import { computed, onUnmounted, ref, watch } from "vue";
 
 import { FreqMeter, inspectorMode, RollingAverage } from "@lib/util/perf";
 import FrameView, { TransformFunction } from "./FrameView.vue";
@@ -97,6 +97,27 @@ const mat = ref<Mat | null>(null);
 const fps = new FreqMeter();
 const inspectorOn = computed(() => props.inspector || inspectorMode.value);
 
+// Staleness detection (value-sweep-2026-07-11 `streamview-stalled-reads-healthy`):
+// the meters only update on a payload change, so a dead stream shows the last
+// frame and its last healthy FPS forever. A 1 Hz ticker feeds the overlay
+// `computed` an independent clock so it can render a STALLED badge once the gap
+// since the last frame exceeds a threshold scaled to the recent rate.
+let lastFrameAt = 0;
+const now = ref(Date.now());
+const staleTimer = setInterval(() => (now.value = Date.now()), 1000);
+onUnmounted(() => clearInterval(staleTimer));
+
+// Seconds the stream has been stalled, or null when live. The threshold scales
+// to the recent rate (a 60 Hz stream is "stalled" far sooner than a 2 Hz one),
+// floored at 1.5 s so a genuinely slow stream never false-positives.
+const stallSeconds = computed<number | null>(() => {
+  if (!props.payload || !lastFrameAt) return null;
+  const since = now.value - lastFrameAt;
+  const hz = fps.value;
+  const threshold = Math.max(1500, (hz > 0 ? 1000 / hz : 0) * 5);
+  return since > threshold ? since / 1000 : null;
+});
+
 // Profiling meters, fed from `FramePayload.meta` (docs/history/refactor/
 // orchestrator.md roadmap item 3). `seq`/timestamps arrive only when the
 // producer/transport stamped them, so every reading here degrades gracefully
@@ -114,6 +135,7 @@ watch(
     if (!p) return;
     mat.value = payloadToMat(p);
     fps.tick();
+    lastFrameAt = Date.now();
     const m = p.meta;
     if (!m) return;
     const captureRef = m.tCapture ?? m.tPublish;
@@ -171,7 +193,12 @@ const overlay = computed(() => {
         `${rendererLoopLag.stats.mean.toFixed(2)} ms (max ${rendererLoopLag.stats.max.toFixed(2)})`;
     }
   }
-  result["Frame Rate"] = fps.toString();
+  // Stall badge: reuse the Frame Rate row (layout stability §3 — no new row to
+  // shift neighbors) so a frozen stream reads "STALLED n.n s" instead of a stale,
+  // healthy-looking FPS.
+  const stalled = stallSeconds.value;
+  result["Frame Rate"] =
+    stalled !== null ? `STALLED ${stalled.toFixed(1)} s` : fps.toString();
   return result;
 });
 

@@ -33,6 +33,7 @@ import {
   type RecorderNodeOptions,
   type RecorderStreamStats,
 } from "@orchestrator/recorder-node";
+import { report } from "./diagnostics.js";
 
 /** The telemetry patch a recording session publishes (the exact shape both
  *  existing controllers already emit — F2 drop split rides `RecorderStreamStats`
@@ -174,7 +175,7 @@ export function createRecordingService(config: RecordingServiceConfig): Recordin
       // Finalize the container (drains to the producers' latest, writes the mcap
       // summary/index, terminates the worker, disconnects the pipes) BEFORE
       // retiring producers.
-      await node?.stop();
+      const stats = await node?.stop();
       node = null;
       // Release the acquisition AFTER the node released its connections (retire
       // bricks then release raw pipes — last release retires + unadvertises).
@@ -182,8 +183,21 @@ export function createRecordingService(config: RecordingServiceConfig): Recordin
       acquisition = null;
       config.onStopped?.();
       config.telemetry({ recording_active: false, recordingStreams: {} });
-      // Auto-open the finished recording in the viewer window.
-      if (finished) config.finished(finished.filePath);
+      // value-sweep-2026-07-11 (`recording-finalize-truncation-reads-as-success`):
+      // a wedged/failed finalize left a crash-shape container on disk. Surface it
+      // through the process-wide error path (→ renderer error tray) and DO NOT
+      // auto-open the viewer on a truncated file — the operator learned about it
+      // at playback before, after the rig was torn down. A clean finalize
+      // auto-opens the viewer exactly as before.
+      if (finished && stats?.truncated) {
+        report(
+          config.id,
+          `recording finalize did not complete — "${finished.filePath}" is truncated ` +
+            `(not auto-opened; the container may be incomplete)`,
+        );
+      } else if (finished) {
+        config.finished(finished.filePath);
+      }
       return true;
     },
   };

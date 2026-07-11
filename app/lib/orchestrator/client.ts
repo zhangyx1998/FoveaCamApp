@@ -110,6 +110,59 @@ function domEndpoint(port: MessagePort): Endpoint {
   };
 }
 
+// ---- Renderer error tray (value-sweep-2026-07-11) -------------------------
+// Process-wide diagnostics (`topic.error`), fire-and-forget command rejections,
+// and orchestrator-side `report()`s used to dead-end at `console.error` —
+// invisible in a packaged app. They now ALSO land in a bounded, dismissible
+// ring the `ErrorTray.vue` chrome renders. Reactive + module-scope singleton
+// (one tray per renderer window), same pattern as `orchestratorSpans` below.
+export type ErrorReport = {
+  scope: string;
+  message: string;
+  /** Consecutive-duplicate coalescing count (retry storms don't flood). */
+  count: number;
+  /** First + most-recent occurrence (`Date.now()`). */
+  firstAt: number;
+  lastAt: number;
+};
+const ERROR_TRAY_CAPACITY = 50;
+/** Newest-first ring of recent error reports. Read by `ErrorTray.vue`. */
+export const errorTray = reactive<ErrorReport[]>([]);
+
+/** Push a report into the tray, coalescing an exact scope+message repeat into a
+ *  count bump (moved to the front) so a retrying failure counts up instead of
+ *  spamming the ring. Bounded to `ERROR_TRAY_CAPACITY`. */
+export function reportToTray(scope: string, message: string): void {
+  const at = Date.now();
+  const existing = errorTray.findIndex(
+    (r) => r.scope === scope && r.message === message,
+  );
+  if (existing >= 0) {
+    const [r] = errorTray.splice(existing, 1);
+    r.count++;
+    r.lastAt = at;
+    errorTray.unshift(r);
+    return;
+  }
+  errorTray.unshift({ scope, message, count: 1, firstAt: at, lastAt: at });
+  if (errorTray.length > ERROR_TRAY_CAPACITY) errorTray.pop();
+}
+
+/** Remove one report from the tray (the `×` on a row). */
+export function dismissError(report: ErrorReport): void {
+  const i = errorTray.indexOf(report);
+  if (i >= 0) errorTray.splice(i, 1);
+}
+
+/** Clear the whole tray (the header "Clear" action). */
+export function clearErrors(): void {
+  errorTray.splice(0);
+}
+
+function errMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
 let channel: Promise<Channel> | null = null;
 
 // Live boot/activation/connect timing feed (§7.1 S5) — bounded ring, module-
@@ -132,10 +185,14 @@ export function connect(): Promise<Channel> {
       port.start();
       const ch = new Channel(domEndpoint(port));
       // Process-wide diagnostics (e.g. a camera-registry sink throw with no
-      // single owning session) — always surface to the renderer console.
-      ch.on(topic.error, ({ scope, message }: { scope: string; message: string }) =>
-        console.error(`[orchestrator:${scope}]`, message),
-      );
+      // single owning session, a recorder finalize truncation, capture-worker
+      // death) — surface to the console AND the dismissible error tray so the
+      // report doesn't dead-end in a packaged app (value-sweep-2026-07-11
+      // `error-broadcast-dead-ends-in-console`).
+      ch.on(topic.error, ({ scope, message }: { scope: string; message: string }) => {
+        console.error(`[orchestrator:${scope}]`, message);
+        reportToTray(scope, message);
+      });
       ch.on(topic.span, (s: Span) => {
         orchestratorSpans.push(s);
         if (orchestratorSpans.length > SPAN_RING_CAPACITY) orchestratorSpans.shift();
@@ -378,7 +435,12 @@ export function usePipeFrame(
   function teardown(): void {
     consumer?.stop();
     consumer = null;
-    if (boundId) void session.call("disconnectPipe", { pipeId: boundId }).catch(() => {});
+    // Un-swallowed (value-sweep-2026-07-11): the balancing disconnect no longer
+    // hides its rejection behind `.catch(() => {})`. `session.call` surfaces a
+    // failed disconnect (a dead channel — the very leak this fix reconciles) to
+    // the error tray instead of vanishing, and its detached default handler
+    // keeps a dead-channel reject from becoming an unhandled rejection.
+    if (boundId) void session.call("disconnectPipe", { pipeId: boundId });
     boundId = null;
     boundEpoch = null;
     frame.value = null;
@@ -395,9 +457,20 @@ export function usePipeFrame(
     }
     // A newer bind superseded us while connecting — abort this one.
     if (boundId !== id || boundEpoch !== epoch) return;
-    consumer = createPipeConsumer(handle, pipeReaderIO, (p) => {
-      frame.value = p; // p === null on CLOSED → clears the display
-    });
+    consumer = createPipeConsumer(
+      handle,
+      pipeReaderIO,
+      (p) => {
+        frame.value = p; // p === null on CLOSED → clears the display
+      },
+      // value-sweep-2026-07-11 (`pipe-consumer-swallows-read-errors`): after a
+      // streak of failed reads (a dead/stalled pipe), surface once to the tray.
+      ({ consecutive, error }) =>
+        reportToTray(
+          "pipe",
+          `${id}: ${consecutive} consecutive read failures — ${errMessage(error)}`,
+        ),
+    );
     consumer.start();
   }
 
@@ -590,9 +663,11 @@ export function useSession<C extends Contract>(
       let latest: FramePayload | null = null;
       let scheduled = false;
       let token = 0;
+      let rafId = 0; // pending flush handle — cancelled on scope dispose
       const frameTopic = topic.frame(name, k);
       const flush = () => {
         scheduled = false;
+        rafId = 0;
         const pending = latest;
         latest = null;
         const myToken = ++token;
@@ -616,7 +691,7 @@ export function useSession<C extends Contract>(
           r.value = payload;
           if (latest && !scheduled) {
             scheduled = true;
-            requestAnimationFrame(flush);
+            rafId = requestAnimationFrame(flush);
           }
         });
       };
@@ -638,11 +713,27 @@ export function useSession<C extends Contract>(
             latest = payload;
             if (!scheduled) {
               scheduled = true;
-              requestAnimationFrame(flush);
+              rafId = requestAnimationFrame(flush);
             }
           });
         }),
       );
+      // value-sweep-2026-07-11 (`frame-ref-dispose-strands-pool-buffer`): on
+      // scope dispose, RELEASE the last displayed shm buffer back to the pool
+      // and CANCEL any pending flush. Without this the final materialized
+      // payload was stranded (pool `outstanding` ratcheted, buckets became
+      // unevictable, the hwm never decayed) and an in-flight rAF could paint
+      // after teardown. Bumping `token` also makes any in-flight `shm.read`
+      // resolve into the release-and-drop branch instead of assigning.
+      disposers.push(() => {
+        if (rafId) cancelAnimationFrame(rafId);
+        rafId = 0;
+        scheduled = false;
+        token++;
+        latest = null;
+        shm.release(r.value);
+        r.value = null;
+      });
       return fref;
     }
   }
@@ -653,9 +744,22 @@ export function useSession<C extends Contract>(
     status,
     frame,
     call(cname, arg) {
-      return ready.then((ch) =>
+      const p = ready.then((ch) =>
         ch.request(topic.command(name, String(cname)), arg),
       );
+      // Default rejection surface (value-sweep-2026-07-11
+      // `fire-and-forget-command-calls-drop-rejections`): 93 bare
+      // `session.call()` sites dropped command rejections — the "clicked and
+      // nothing happened" class. Route EVERY rejection to the error tray at this
+      // ONE chokepoint. DOUBLE-SURFACE semantics (documented): the tray entry
+      // ALWAYS lands, on a DETACHED `.catch` branch, so `p` itself still rejects
+      // — a caller that adds its own `.catch(...)` runs additionally (for local
+      // UI / control flow) and does NOT suppress the tray. The detached branch
+      // also means `void session.call(...)` never becomes an unhandled
+      // rejection. `bindField`/`usePidOverride` (`void session.call`) inherit
+      // this for free.
+      p.catch((err) => reportToTray(name, `${String(cname)}: ${errMessage(err)}`));
+      return p;
     },
   };
 }

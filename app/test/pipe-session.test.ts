@@ -153,6 +153,60 @@ describe("pipe session (C-17/C-20)", () => {
   });
 });
 
+// --- connect-refcount reconciliation (value-sweep-2026-07-11) --------------
+
+describe("pipe session connect-ledger reconciliation", () => {
+  function ledgerHarness() {
+    const { broker, consumers } = fakeBroker();
+    let fireChannelClosed: ((ch: Channel) => void) | null = null;
+    const { session } = pipeSession({
+      specs: [spec("camera/1/convert")],
+      broker,
+      onChannelClosed: (fn) => {
+        fireChannelClosed = fn;
+        return () => {};
+      },
+    });
+    const [serverEp, clientEp] = createEndpointPair();
+    const server = new Channel(serverEp);
+    const client = new Channel(clientEp);
+    session.attach(server);
+    session.subscribe(server);
+    const call = <T = unknown>(cmd: string, arg?: unknown) =>
+      client.request<T>(topic.command("pipes", cmd), arg);
+    return { consumers, server, call, close: () => fireChannelClosed!(server) };
+  }
+
+  it("reconciles leaked connect refcounts when the channel closes (reload/crash)", async () => {
+    const h = ledgerHarness();
+    // Two connects, no balancing disconnect — the renderer reloaded / crashed
+    // before `usePipeFrame` teardown ran.
+    await h.call("connectPipe", { pipeId: "camera/1/convert" });
+    await h.call("connectPipe", { pipeId: "camera/1/convert" });
+    expect(h.consumers.get("camera/1/convert")).toBe(2);
+    // Channel close (reload/crash/window-close) → both leaked connects undone,
+    // so the C-21 consumer gate parks instead of wedging ON forever.
+    h.close();
+    expect(h.consumers.get("camera/1/convert")).toBe(0);
+  });
+
+  it("a double disconnect never over-decrements another window's refcount", async () => {
+    const h = ledgerHarness();
+    await h.call("connectPipe", { pipeId: "camera/1/convert" });
+    await h.call("connectPipe", { pipeId: "camera/1/convert" });
+    await h.call("disconnectPipe", { pipeId: "camera/1/convert" });
+    await h.call("disconnectPipe", { pipeId: "camera/1/convert" });
+    expect(h.consumers.get("camera/1/convert")).toBe(0);
+    // A third (buggy/duplicate) disconnect is an idempotent no-op — the native
+    // refcount stays put (it would otherwise steal a peer window's consumer).
+    await h.call("disconnectPipe", { pipeId: "camera/1/convert" });
+    expect(h.consumers.get("camera/1/convert")).toBe(0);
+    // Nothing left to reconcile on close.
+    h.close();
+    expect(h.consumers.get("camera/1/convert")).toBe(0);
+  });
+});
+
 // --- fovea materializer (§5 re-chain: chained pipe-id source) --------------
 
 function materializerHarness(advertisedIds: string[]) {

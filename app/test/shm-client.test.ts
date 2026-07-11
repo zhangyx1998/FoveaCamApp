@@ -259,6 +259,45 @@ describe("shm-client transfer pool", () => {
     await readOne(sizeA);
     expect(client.stats().allocations).toBe(allocsAfterA + 2); // +1 for B, +1 re-alloc A
   });
+
+  it("the retention cap is WINDOWED — decays after the working set shrinks (value-sweep)", async () => {
+    // A one-off spike used to pin the free-list retention cap forever (peak
+    // EVER), so the pool never released those buffers. The cap is now a sliding
+    // window max: once the working set shrinks past a couple of windows, the cap
+    // decays and surplus buffers are let go.
+    const port = fakePort();
+    let t = 1000;
+    const WINDOW = 5000; // must match RETENTION_WINDOW_MS
+    const client = createShmClient(() => port as unknown as MessagePort, () => t);
+
+    async function acquire(count: number): Promise<FramePayload[]> {
+      const base = port.posted.length;
+      const reads = Array.from({ length: count }, () => client.read(shmPayload()));
+      for (let i = base; i < base + count; i++) {
+        const req = port.posted[i];
+        reply(port, { id: req.id, payload: { ...shmPayload(), data: req.buffer } });
+      }
+      return Promise.all(reads) as Promise<FramePayload[]>;
+    }
+
+    // A peak of 2 concurrent same-size buffers → cap 2, both retained.
+    (await acquire(2)).forEach((p) => client.release(p));
+    expect(client.stats().allocations).toBe(2);
+
+    // Single-buffer reads for > 2 full windows: the working set is now 1, so the
+    // windowed peak decays to 1 and the pool sheds the surplus buffer.
+    for (let r = 0; r < 6; r++) {
+      t += WINDOW;
+      (await acquire(1)).forEach((p) => client.release(p));
+    }
+    expect(client.stats().allocations).toBe(2); // the loop only ever reused
+
+    // A fresh 2-concurrent burst now needs 2 buffers but the pool retains only 1
+    // (the decayed cap) → exactly ONE re-allocation. Under the old peak-EVER cap
+    // this retained 2 and allocated nothing.
+    (await acquire(2)).forEach((p) => client.release(p));
+    expect(client.stats().allocations).toBe(3);
+  });
 });
 
 // capture-recorder-nodes Phase 0: the FIFO `readPipeSeq` round-trip. Same pool

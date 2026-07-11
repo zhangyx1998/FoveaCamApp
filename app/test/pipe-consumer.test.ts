@@ -166,6 +166,40 @@ describe("pipe consumer (C-17)", () => {
     expect(released).toEqual([buf]); // fresh buffer returned to the pool, not stranded
   });
 
+  it("counts read errors and surfaces ONCE per streak, re-arming on recovery (value-sweep)", async () => {
+    // Read errors used to retry forever with zero signal. Count them, expose on
+    // the consumer, and surface once after a threshold of CONSECUTIVE failures
+    // (not per-retry spam); a successful read re-arms the signal.
+    let mode: "throw" | "frame" = "throw";
+    const io: PipeReaderIO = {
+      readPipe: vi.fn(async () => {
+        if (mode === "throw") throw new Error("pipe read timed out");
+        return { data: new ArrayBuffer(12), seq: 1n };
+      }),
+      releaseBuffer: vi.fn(),
+    };
+    const surfaced: Array<{ consecutive: number; total: number }> = [];
+    const c = createPipeConsumer(handle(), io, () => {}, (info) =>
+      surfaced.push({ consecutive: info.consecutive, total: info.total }),
+    );
+    for (let i = 0; i < 15; i++) await c.poll();
+    expect(surfaced).toHaveLength(1); // once, at the threshold — not 15 times
+    expect(surfaced[0]).toEqual({ consecutive: 10, total: 10 });
+    expect(c.consecutiveReadErrors).toBe(15);
+    expect(c.readErrors).toBe(15);
+
+    // A successful read resets the streak (transport recovered).
+    mode = "frame";
+    await c.poll();
+    expect(c.consecutiveReadErrors).toBe(0);
+    expect(c.readErrors).toBe(15); // cumulative total is untouched
+
+    // A fresh streak surfaces again (the signal re-armed).
+    mode = "throw";
+    for (let i = 0; i < 10; i++) await c.poll();
+    expect(surfaced).toHaveLength(2);
+  });
+
   it("stop() releases the displayed buffer", async () => {
     const buf = new ArrayBuffer(12);
     const released: ArrayBuffer[] = [];

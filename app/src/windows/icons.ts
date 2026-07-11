@@ -32,4 +32,6 @@ export {
   faFileExport,
   faPlay,
   faPause,
+  faTriangleExclamation,
+  faTrashCan,
 } from "@fortawesome/free-solid-svg-icons";

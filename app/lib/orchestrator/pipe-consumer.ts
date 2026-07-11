@@ -30,6 +30,22 @@ export interface PipeReaderIO {
 /** Emits the latest frame (or `null` when the pipe closes) to the display. */
 export type PipeFrameSink = (frame: FramePayload | null) => void;
 
+/** One-shot notice raised after `ERROR_SURFACE_THRESHOLD` CONSECUTIVE read
+ *  failures (value-sweep-2026-07-11 `pipe-consumer-swallows-read-errors`) — read
+ *  errors used to retry forever with zero signal. Fired once per streak (not
+ *  per retry); re-arms after any successful read. */
+export type PipeErrorSink = (info: {
+  /** Consecutive failures at the moment of surfacing. */
+  consecutive: number;
+  /** Cumulative read failures over the consumer's life. */
+  total: number;
+  /** The most recent read error. */
+  error: unknown;
+}) => void;
+
+/** Consecutive read failures before the loop surfaces once through `onError`. */
+const ERROR_SURFACE_THRESHOLD = 10;
+
 export interface PipeConsumer {
   /** Run one read cycle (exposed for deterministic tests + manual pacing). */
   poll(): Promise<void>;
@@ -38,6 +54,10 @@ export interface PipeConsumer {
   /** Stop polling and release the displayed buffer. Idempotent. */
   stop(): void;
   readonly closed: boolean;
+  /** Cumulative read failures (timeouts / transport errors). */
+  readonly readErrors: number;
+  /** Read failures since the last successful read (0 = healthy). */
+  readonly consecutiveReadErrors: number;
 }
 
 const raf =
@@ -53,6 +73,7 @@ export function createPipeConsumer(
   handle: PipeHandle,
   io: PipeReaderIO,
   sink: PipeFrameSink,
+  onError?: PipeErrorSink,
 ): PipeConsumer {
   const { shmName, spec } = handle;
   let lastSeq = 0n;
@@ -60,6 +81,11 @@ export function createPipeConsumer(
   let closed = false;
   let running = false;
   let handle_ = 0;
+  // value-sweep-2026-07-11 (`pipe-consumer-swallows-read-errors`): count read
+  // failures and surface ONCE per streak (a dead pipe no longer retries
+  // silently forever).
+  let readErrors = 0;
+  let consecutiveReadErrors = 0;
   // Bumped by stop(): an in-flight poll compares its captured value after the
   // await and, on a mismatch, RECYCLES the fresh frame instead of displaying it.
   let generation = 0;
@@ -76,9 +102,17 @@ export function createPipeConsumer(
       // which this catch silently retried forever ("No Frame"). Same rule the
       // worker path already applies (session `connectPipe`).
       r = await io.readPipe(shmName, lastSeq, spec.maxBytes ?? spec.bytesPerFrame);
-    } catch {
+    } catch (err) {
+      readErrors++;
+      consecutiveReadErrors++;
+      // Surface once when the streak crosses the threshold — not per retry. A
+      // later successful read resets the streak, re-arming the signal.
+      if (consecutiveReadErrors === ERROR_SURFACE_THRESHOLD)
+        onError?.({ consecutive: consecutiveReadErrors, total: readErrors, error: err });
       return; // transport hiccup (timeout/error) — retry next tick
     }
+    // A read completed (frame / null / closed) — the transport is healthy.
+    consecutiveReadErrors = 0;
     // Liveness recheck: a stop() (or a close) landed while this read was in
     // flight. The sink is torn down and any `displayed` buffer was already
     // recycled by stop(), so displaying now would strand this FRESH pool buffer
@@ -132,6 +166,12 @@ export function createPipeConsumer(
   return {
     get closed() {
       return closed;
+    },
+    get readErrors() {
+      return readErrors;
+    },
+    get consecutiveReadErrors() {
+      return consecutiveReadErrors;
     },
     poll,
     start() {

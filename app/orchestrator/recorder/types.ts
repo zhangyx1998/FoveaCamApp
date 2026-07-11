@@ -67,6 +67,13 @@ export interface FinalizeStats {
   chunkCount: number;
   /** Bytes written to the container file. */
   bytes: number;
+  /** Finalize did NOT complete cleanly (value-sweep-2026-07-11 finding
+   *  `recording-finalize-truncation-reads-as-success`): the writer wedged past
+   *  the deadline or the native finalize threw, so `abort()` left a crash-shape
+   *  container on disk. Absent/false = a clean finalize. The recording service
+   *  reads this to surface a banner and SKIP the viewer auto-open (a truncated
+   *  container reads as a normal stop otherwise). */
+  truncated?: boolean;
 }
 
 // ---- main-thread → worker protocol -------------------------------------

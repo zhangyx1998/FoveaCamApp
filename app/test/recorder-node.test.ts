@@ -580,7 +580,9 @@ describe("createRecorderNode stop() + ruling-3 round-trip", () => {
     });
     const stats = await node.stop();
     // Deadline path → truncated stats, native aborted, container left on disk.
-    expect(stats).toEqual({ messageCount: "0", chunkCount: 0, bytes: 0 });
+    // value-sweep-2026-07-11: the sentinel now carries `truncated: true` so the
+    // recording service can surface it instead of publishing a clean stop.
+    expect(stats).toEqual({ messageCount: "0", chunkCount: 0, bytes: 0, truncated: true });
     expect(state.aborted).toBe(true);
     // Ordering preserved: pipes released only AFTER the (forced) stop.
     expect(released).toEqual(["pipe/center"]);

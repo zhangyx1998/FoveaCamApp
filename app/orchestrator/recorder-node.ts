@@ -698,7 +698,15 @@ export function createRecorderNode(options: RecorderNodeOptions): RecorderNodeHa
       finalizing = true;
       clearInterval(pollTimer);
       const durationSec = (performance.now() - startedAt) / 1000;
-      const truncated: FinalizeStats = { messageCount: "0", chunkCount: 0, bytes: 0 };
+      // value-sweep-2026-07-11 (`recording-finalize-truncation-reads-as-success`):
+      // the deadline/failure sentinel now carries `truncated: true` so the
+      // recording service can surface it instead of publishing a clean stop.
+      const truncated: FinalizeStats = {
+        messageCount: "0",
+        chunkCount: 0,
+        bytes: 0,
+        truncated: true,
+      };
       // One final drain BEFORE finalize so extras for the last written frames
       // still ride along (the brick refuses admissions after beginFinalize).
       try {

@@ -8,7 +8,7 @@ import {
   defineResourceSession,
   type ResourceScope,
 } from "@orchestrator/resource-session";
-import { Channel, defineContract } from "@lib/orchestrator/protocol";
+import { Channel, defineContract, topic, type SessionStatus } from "@lib/orchestrator/protocol";
 import { createEndpointPair, flush } from "./fake-endpoint";
 
 const contract = defineContract({
@@ -151,6 +151,37 @@ describe("resource-session lifecycle (A-P1)", () => {
     session.unsubscribe(ch);
     await session.drained();
     expect(cleaned).toEqual(["before-throw"]); // registered cleanup still drained
+  });
+
+  it("routes an activate() throw to the status banner, cleared on re-subscribe (value-sweep)", async () => {
+    // A failing `activate()` used to console-`report()` only, leaving a dead
+    // black view. It must now set the session's user-visible status error (the
+    // A-P13 banner) and clear it on the next activation (retry-on-reactivate).
+    let shouldFail = true;
+    const session = defineResourceSession("res", contract, () => ({
+      activate: () => {
+        if (shouldFail) throw new Error("no camera");
+      },
+      commands: {},
+    }));
+    const [serverEp, clientEp] = createEndpointPair();
+    const server = new Channel(serverEp);
+    const client = new Channel(clientEp);
+    session.attach(server);
+    let status: SessionStatus = { error: null, progress: null };
+    client.on(topic.status("res"), (s: SessionStatus) => (status = s));
+
+    session.subscribe(server);
+    await settle();
+    expect(status.error).toMatch(/no camera/);
+
+    // Re-subscribe (the retry): clearError fires before the next activate.
+    session.unsubscribe(server);
+    await session.drained();
+    shouldFail = false;
+    session.subscribe(server);
+    await settle();
+    expect(status.error).toBeNull();
   });
 
   it("defer after supersession runs the cleanup immediately (no leak window)", async () => {

@@ -200,6 +200,32 @@ describe("recording service facility", () => {
     await svc.stop();
   });
 
+  it("does NOT auto-open the viewer on a truncated finalize (value-sweep)", async () => {
+    // A wedged/failed finalize returns `truncated: true`; the service must skip
+    // the viewer auto-open (a truncated container reads as a clean stop
+    // otherwise — the operator learns at playback, after teardown).
+    const { config, finished, released } = makeConfig();
+    const svc = createRecordingService({
+      ...config,
+      createNode: (options): RecorderNodeHandle => ({
+        id: options.id,
+        filePath: join(options.path, "recording.fovea"),
+        stats: () => ({}),
+        addStream: () => {},
+        removeStream: () => {},
+        addDataStream: () => {},
+        removeDataStream: () => {},
+        postData: () => {},
+        stop: async () => ({ messageCount: "0", chunkCount: 0, bytes: 0, truncated: true }),
+      }),
+    });
+    await svc.start(tmp());
+    expect(await svc.stop()).toBe(true);
+    expect(finished).toEqual([]); // truncated container NOT auto-opened
+    expect(released).toEqual(["raw:1", "raw:0"]); // resources still released in reverse
+    expect(svc.active).toBe(false);
+  });
+
   it("polls the node's stats into recordingStreams", async () => {
     vi.useFakeTimers();
     try {

@@ -196,6 +196,9 @@ function defaultPortOpener(): MessagePort | null {
 
 export function createShmClient(
   openPort: ShmPortOpener = defaultPortOpener,
+  /** Monotonic clock (ms) — injectable so the windowed retention decay is
+   *  deterministically testable; defaults to the module `now()`. */
+  clock: () => number = now,
 ): ShmClient {
   const createdAt = Date.now();
   // Free-list of recyclable buffers, bucketed by byte length (C-15). Instead of
@@ -206,22 +209,51 @@ export function createShmClient(
   // auto-grows to retain exactly that and steady state never re-allocates. The
   // old fixed `MAX_POOLED_PER_SIZE = 3` overflowed at N≥2 → a fresh multi-MB
   // ArrayBuffer per frame → major GC → the manage-cameras ~1–2 s freeze.
+  //
+  // value-sweep-2026-07-11 (`frame-ref-dispose-strands-pool-buffer`): the cap is
+  // a WINDOWED max, not peak-EVER. A one-off spike (e.g. a transient burst of
+  // previews, or a since-fixed leak) used to pin the retention cap forever, so
+  // the pool never released those buffers back. Tracking the max over a trailing
+  // couple of windows lets the cap DECAY once the working set shrinks, while a
+  // steady stream keeps its cap (the peak recurs every window) and never
+  // re-allocates.
+  const RETENTION_WINDOW_MS = 5_000;
   interface SizeBucket {
     free: ArrayBuffer[];
     /** Buffers of this size currently checked out (not yet recycled). */
     outstanding: number;
-    /** Peak `outstanding` ever seen — the free-list retention cap. */
-    hwm: number;
+    /** Max `outstanding` within the CURRENT trailing window. */
+    windowPeak: number;
+    /** Max `outstanding` within the PREVIOUS window (so the effective cap is a
+     *  sliding max over [1, 2) windows — it never drops below a peak seen in the
+     *  last `RETENTION_WINDOW_MS`, then decays). */
+    prevWindowPeak: number;
+    /** Start (`now()`) of the current window. */
+    windowStart: number;
   }
   const pools = new Map<number, SizeBucket>();
 
   function bucketFor(bytes: number): SizeBucket {
     let b = pools.get(bytes);
     if (!b) {
-      b = { free: [], outstanding: 0, hwm: 0 };
+      b = { free: [], outstanding: 0, windowPeak: 0, prevWindowPeak: 0, windowStart: clock() };
       pools.set(bytes, b);
     }
     return b;
+  }
+
+  /** The free-list retention cap: the sliding-window max of `outstanding`.
+   *  Rotates the window lazily (on access) — after a full idle window the
+   *  previous peak ages out and the cap decays toward the live working set. */
+  function retentionCap(b: SizeBucket): number {
+    const elapsed = clock() - b.windowStart;
+    if (elapsed >= RETENTION_WINDOW_MS) {
+      // >= 2 full windows idle → even the previous peak is stale; decay to live.
+      b.prevWindowPeak = elapsed >= 2 * RETENTION_WINDOW_MS ? 0 : b.windowPeak;
+      b.windowPeak = b.outstanding;
+      b.windowStart = clock();
+    }
+    return Math.max(b.windowPeak, b.prevWindowPeak);
   }
 
   /** Drop the free-list of any size that is fully idle (no outstanding, no
@@ -279,7 +311,7 @@ export function createShmClient(
   let latMax = 0;
 
   function recordLatency(startedAt: number): void {
-    const dt = now() - startedAt;
+    const dt = clock() - startedAt;
     latSum += dt;
     latCount++;
     if (dt > latMax) latMax = dt;
@@ -291,18 +323,19 @@ export function createShmClient(
   function recycle(buffer: ArrayBuffer): void {
     const b = bucketFor(buffer.byteLength);
     b.outstanding = Math.max(0, b.outstanding - 1);
-    // Retain up to the working-set high-water mark. `free.length < hwm` holds
-    // whenever `outstanding > 0` (total buffers of a size never exceed its hwm,
-    // since we only allocate on a miss = an empty free-list = all outstanding),
-    // so this never drops a buffer the steady state will need again.
-    if (b.free.length < b.hwm) b.free.push(buffer);
+    // Retain up to the windowed working-set cap. A steady stream keeps its cap
+    // (the peak recurs each window), so this never drops a buffer the steady
+    // state needs; once the working set shrinks past a window, the cap decays
+    // and surplus buffers are let go (the retention leak this fixes).
+    if (b.free.length < retentionCap(b)) b.free.push(buffer);
   }
 
   function checkout(bytes: number): ArrayBuffer {
     evictIdleSizesExcept(bytes);
     const b = bucketFor(bytes);
     b.outstanding++;
-    if (b.outstanding > b.hwm) b.hwm = b.outstanding;
+    retentionCap(b); // rotate the window if it elapsed before recording the peak
+    if (b.outstanding > b.windowPeak) b.windowPeak = b.outstanding;
     const pooled = b.free.pop();
     if (pooled) {
       counts.poolHits++;
@@ -453,7 +486,7 @@ export function createShmClient(
       );
     const id = ++seq;
     const buffer = checkout(frameByteLength(payload));
-    const startedAt = now();
+    const startedAt = clock();
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         pending.delete(id);

@@ -83,6 +83,13 @@ export interface PipeSessionDeps {
   /** Window-destroy signal (A-34: `hub.onWindowClosed`) — drives the auto
    *  unref/teardown. Returns a disposer. */
   onWindowClosed?(fn: (windowId: string) => void): () => void;
+  /** Channel-close signal (value-sweep-2026-07-11: `hub.onChannelClosed`) —
+   *  fires on every client port close (reload / crash / window close), which
+   *  `onWindowClosed` does NOT (it's DESTROY-only, and reload keeps the
+   *  windowId). Drives reconciliation of the per-channel `connectPipe` ledger
+   *  so a leaked refcount can't wedge the C-21 consumer gate ON forever.
+   *  Returns a disposer. */
+  onChannelClosed?(fn: (ch: Channel) => void): () => void;
 }
 
 /** The pipe session + its dynamic-lifecycle controls (C-20). Sessions/tests
@@ -112,7 +119,26 @@ export function pipeSession(deps: PipeSessionDeps): PipeSessionHandle {
   const advertised: Record<string, PipeAdvert> = {};
   const composed = new Map<string, ComposedNode>();
   const nodeEpochs = new Map<string, number>(); // persists across teardown
+  // value-sweep-2026-07-11 (`pipe-consumer-refcount-no-reconciliation`): raw
+  // connect refcounts per channel, so a renderer that took `connectPipe` counts
+  // and then went away (reload / crash / abrupt close) has them RECONCILED —
+  // mirroring the composed-node ledger's window bookkeeping. Keyed by the
+  // authoritative calling channel (from the command ctx). `channel → pipeId →
+  // count`. A channel with no ctx (legacy path) isn't tracked (nothing to
+  // reconcile — it never had a stable owner).
+  const connectLedger = new Map<Channel, Map<string, number>>();
   let srv: ServerSession<typeof pipes>;
+
+  /** Undo every outstanding raw connect a closing channel still holds — the
+   *  balancing disconnect its `usePipeFrame` teardown never got to run. */
+  function reconcileChannel(ch: Channel): void {
+    const held = connectLedger.get(ch);
+    if (!held) return;
+    connectLedger.delete(ch);
+    for (const [pipeId, count] of held)
+      for (let i = 0; i < count; i++) broker.disconnect(pipeId);
+  }
+  deps.onChannelClosed?.(reconcileChannel);
 
   const push = () => srv.setState("pipes", { ...advertised });
   const pushNodes = () =>
@@ -175,12 +201,40 @@ export function pipeSession(deps: PipeSessionDeps): PipeSessionHandle {
     s.setState("nodes", {});
     return {
       commands: {
-        async connectPipe({ pipeId }: { pipeId: string }): Promise<PipeHandle> {
+        async connectPipe(
+          { pipeId }: { pipeId: string },
+          ctx?: { channel: Channel },
+        ): Promise<PipeHandle> {
           if (!advertised[pipeId])
             throw new Error(`pipes: unknown pipeId "${pipeId}"`);
-          return broker.connect(pipeId);
+          const handle = broker.connect(pipeId);
+          // Record the connect against the caller so a channel close reconciles
+          // it (the leak fix). No channel ctx = legacy/untracked — connect as
+          // before, but it won't be auto-reconciled.
+          const ch = ctx?.channel;
+          if (ch) {
+            let held = connectLedger.get(ch);
+            if (!held) connectLedger.set(ch, (held = new Map()));
+            held.set(pipeId, (held.get(pipeId) ?? 0) + 1);
+          }
+          return handle;
         },
-        async disconnectPipe({ pipeId }: { pipeId: string }): Promise<void> {
+        async disconnectPipe(
+          { pipeId }: { pipeId: string },
+          ctx?: { channel: Channel },
+        ): Promise<void> {
+          const ch = ctx?.channel;
+          if (ch) {
+            // Only release a count this channel actually holds — a double
+            // disconnect (idempotent) must NOT decrement the native refcount
+            // another window still relies on.
+            const held = connectLedger.get(ch);
+            const have = held?.get(pipeId) ?? 0;
+            if (have <= 0) return;
+            if (have <= 1) held!.delete(pipeId);
+            else held!.set(pipeId, have - 1);
+            if (held!.size === 0) connectLedger.delete(ch);
+          }
           broker.disconnect(pipeId);
         },
 
