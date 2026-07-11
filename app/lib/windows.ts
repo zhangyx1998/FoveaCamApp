@@ -4,25 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Window/app catalog — the single source of truth for the multi-window
-// foundation (Stage 5, docs/history/refactor/multi-window.md). Imported by the
-// renderer (welcome launcher, per-app window shell), the Electron main
-// process (window manager entry wiring), vite.config.ts (multi-entry
-// renderer build), and the window-manager unit tests. Must stay Vue-free
-// and Node-free (pure data + string helpers) so every consumer can load it.
-//
-// Window taxonomy (multi-window.md §2): `welcome` (singleton, the fallback
-// when no app window is open), `app` (≤ 1 at a time — apps are mutually
-// exclusive over camera leases + the controller), `profiler` (0..N utility;
-// one per orchestrator instance — each pins to the app instance alive when it
-// was opened and outlives it frozen, orchestrator-lifecycle-and-exit §"Profiler
-// per-instance binding"; does not count toward the welcome rule), `projection` (0..N
-// single-stream viewers — passive subscribers, never exclusive, never
-// counted for the welcome rule, survive their source app's close),
-// `viewer` (0..N recorder playback windows, ONE PER `.fcap`/`.fovea` file —
-// non-exclusive, never counted for the welcome rule, STANDALONE: never
-// touches the orchestrator (standalone-viewer-and-fcap ruling 1);
-// docs/history/refactor/recorder-container.md §4).
+// Window/app catalog — the single source of truth for the multi-window foundation,
+// imported by the renderer, Electron main, vite.config.ts, and the window-manager
+// tests. Must stay Vue-free and Node-free (pure data + string helpers). Window classes:
+// welcome, app (exclusive), profiler, projection, viewer — taxonomy + exclusivity /
+// welcome-count / lifecycle rules in the spec.
+// spec: docs/spec/orchestrator-runtime.md#windows
 
 export type WindowClass =
   | "welcome"

@@ -4,33 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Graph-visible PID controller NODE (docs/proposals/pid-nodes-and-view-replumb.md
-// §"PID node design (worker A)"). The control math a module already ran inline
-// (e.g. disparity-scope's `stepVergence`) becomes a first-class node in the
-// stream topology: it consumes an upstream analysis result (the scope's
-// projected fovea centers) and produces a command for a downstream node (the
-// MEMS `controller/<port>`). This is NOT per-frame JS work — it runs scalar
-// controllers at the upstream RESULT rate, so the thin-coordinator rule
-// (MEMORY: "orchestrator = thin coordinator") holds: the node forwards a final
-// result, it does not micro-manage frames.
-//
-// Two responsibilities beyond "hold some PIDs":
-//
-//  1. TOPOLOGY — on creation it registers a `registerGraphWiring` entry (the
-//     C-24 stage-1 shim, same mechanism disparity-scope uses for its kernel) so
-//     the node + its scope→pid and pid→controller edges show in the profiler
-//     graph; `dispose()` retires it. `report()` returns the equivalent
-//     `NodeReport` (the direct self-report path the shim migrates to).
-//
-//  2. OVERRIDE — a renderer-driven slot (`usePidOverride` proxy → a module
-//     command → here) that PINS the output. The ruled semantics are exact:
-//     while engaged, `step()` SKIPS the control fn and RESETS every named
-//     controller each tick (state held at zero, so windup can't accumulate
-//     behind the override); the output IS the override value. On `release()`
-//     the caller-supplied `seed(lastOverride)` reseeds the controllers from the
-//     last override — with the velocity-form integrator that gives output
-//     CONTINUITY (no jump), reproducing "resume control from where the drag
-//     left the mirrors".
+// Graph-visible PID controller node: control math a module ran inline becomes a
+// first-class topology node, consuming an upstream analysis result and producing a
+// downstream command at the upstream RESULT rate (never per-frame). Registers its
+// own graph wiring and owns the renderer-driven override slot (pin output, reset
+// controllers while engaged, velocity-form reseed for jump-free release).
+// spec: docs/spec/controller.md#pid-node
 
 import type { PID, PID2D } from "@lib/pid.js";
 import {

@@ -4,20 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// RENDERER-ONLY composable: the LIVE per-triple stereo baseline (mm) for the
-// calibrate-* marker overlays (Ruling A, 2026-07-09 per-triplet-settings wave).
-//
-// The session publishes the leased triple's config store path (`configPath`);
-// this opens that same `["triples", <hash>]` document reactively via the store
-// client (`Store.open`) — so a Settings-window edit to the triple's
-// `baseline_mm` broadcasts through the store-hub and reflects in the open
-// calibration window's marker spacing live, and app-level `baseline_distance_mm`
-// edits reflect too (the app config is reactive). The resolution order itself
-// lives in the SHARED, Vue-free `resolveBaseline` (triple > legacy app > 200),
-// so the renderers and the orchestrator agree on the number by construction.
-//
-// Vue-importing → renderer-only. Do NOT import from a `session.ts` (that would
-// bundle Vue into the utility process).
+// RENDERER-ONLY composable: the LIVE per-triple stereo baseline (mm) for the calibrate-*
+// marker overlays. Opens the leased triple's ["triples", <hash>] doc reactively via
+// Store.open, so a Settings edit to baseline_mm (or app baseline_distance_mm) reflects in
+// the open window's marker spacing live. The resolution order lives in the shared Vue-free
+// resolveBaseline (triple > legacy app > 200). Vue-importing → do NOT import from a session.
+// spec: docs/spec/calibration.md#triple-baseline
 
 import { computed, ref, watch, type ComputedRef } from "vue";
 import Store from "./store.js";

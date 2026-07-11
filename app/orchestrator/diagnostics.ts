@@ -4,19 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Process-wide error reporting for orchestrator code with no single owning
-// session (the camera registry is shared across sessions) or that would
-// otherwise fail silently into the utility process's stdio. `report()` always
-// logs locally; `onReport()` lets `index.ts` forward reports to every
-// connected renderer once, at boot, so failures are visible without watching
-// the orchestrator console. See docs/history/refactor/orchestrator.md §12.1 C7.
-//
-// `span()` is the S5 sibling: structured timing measurements (boot phases,
-// per-activation camera/calibration work, controller connect) instead of
-// failures. Same shape as `report`/`onReport` — always recorded locally
-// (bounded ring, cheap enough to be always-on), forwarded to renderers via
-// `onSpan()` so a future profiler window (§7.1 S4) can render a live
-// timeline without polling.
+// Process-wide error reporting + timing for orchestrator code with no single owning
+// session. report() always logs locally; onReport() lets index.ts forward reports to
+// every connected renderer (visible without watching the console). span() is the timing
+// sibling: structured measurements recorded to a bounded local ring, forwarded via
+// onSpan() so a profiler window can render a live timeline without polling.
+// spec: docs/spec/orchestrator-runtime.md#diagnostics
 
 type Reporter = (scope: string, message: string) => void;
 let forward: Reporter | null = null;

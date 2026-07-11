@@ -4,30 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Undistorted-stream pipe helper (C-23, real-1g; re-chained per
-// docs/proposals/unified-time-and-topology.md §5): sessions advertise a
-// first-class `camera/<serial>/undistort` SHM pipe alongside the registry's
-// `camera/<serial>/convert` one. SESSION-scoped (not registry-scoped) because
-// the producer needs the center calibration, which only the session loads
-// (`triple.undistort.calibration`). The native undistort brick CHAINS ON THE
-// SHARED CONVERTER (source = the convert brick's pipeId — BGRA in, never raw
-// Bayer; demand propagates: the undistort running keeps the converter awake)
-// and is gated by the pipe's own connectPipe refcount (C-21) — the remap runs
-// only while someone reads.
-//
-// Two variants (proposal §5 semantics per camera):
-//  - CENTER: classic intrinsic undistort (`{ cal }` — cached remap maps built
-//    natively from the plain persisted calibration JSON).
-//  - L/R (mirror-steered fovea cams): `{ homography: true }` — per-frame
-//    `warpPerspective` with H looked up from the brick's native ParamRing by
-//    the frame's host-ns time; H samples are pushed by a session-owned
-//    `homography-feeder` (Aravis.pushHomography). An empty ring passes frames
-//    through untouched (metered as `passthrough` — honest).
-//
-// Encoding (ruled once): id `camera/<serial>/undistort` exactly parallel to
-// `camera/<serial>/convert`; pixel format lives in `spec.pixelFormat` (RGBA8
-// first), NOT in the id. A future second format of the same stream is a
-// separate pipe id with an `@<format>` suffix.
+// Undistorted-stream pipe helper: sessions advertise a first-class
+// `camera/<serial>/undistort` SHM pipe (session-scoped — needs the session's center
+// calibration). The native brick chains on the shared converter and is C-21 gated.
+// Two variants: CENTER intrinsic undistort ({ cal }) and L/R per-frame homography
+// warp ({ homography: true }, H from a time-indexed ParamRing fed by homography-feeder).
+// spec: docs/spec/pipes.md#undistort-pipe
 
 import type { Camera } from "core/Aravis";
 import type { CameraCalibration } from "core/Vision";

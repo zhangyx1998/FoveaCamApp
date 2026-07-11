@@ -4,27 +4,11 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Orchestrator-side config-store client. The single authority now lives in MAIN
-// (docs/proposals/config-store-main-authority.md) — this module is a THIN PROXY
-// over the instance's `parentPort` that preserves the EXACT public API every
-// orchestrator-internal caller relied on (`read`/`write`/`update`/`clear`/
-// `list`/`subscribe`/`writeCounts`) and their reactive semantics: a `subscribe()`
-// listener still fires on ANY window's edit, now including a window on a DIFFERENT
-// orchestrator instance (the old per-process hub could not see across instances —
-// defect D1). `write`/`update`/`clear` forward to main and locally apply the
-// value main returns, so this process's own subscribers (anaglyph-style retune,
-// etc.) update without a double-echo (main skips the originator).
-//
-// `attachStore` is GONE: renderer `Store` clients now talk to main directly
-// (ipcRenderer), not through the orchestrator channel, so there is no renderer
-// store RPC to wire onto a `Channel` here anymore.
-//
-// Transport: this process shares its one `parentPort` with `index.ts`'s control-
-// message handler; the proxy adds its own `message` listener and filters for
-// `store:res`/`store:changed` only. When NO `parentPort` exists (unit tests /
-// non-utility contexts) it falls back to a LOCAL authority over `./store.ts`'s fs
-// primitives — production store-writing processes (orchestrator instances, the
-// probe) always have a `parentPort`, so that fallback never runs at runtime.
+// Orchestrator-side config-store client: a thin proxy over the instance's parentPort
+// to the single MAIN authority, preserving the exact prior public API and reactive
+// semantics (subscribe now fires cross-instance; local-apply avoids double-echo).
+// Falls back to a local fs authority only when no parentPort exists (unit tests).
+// spec: docs/spec/store.md#store-hub
 
 import {
   createStoreProxy,

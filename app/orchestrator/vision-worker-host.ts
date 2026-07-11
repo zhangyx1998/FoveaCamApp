@@ -4,16 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Main-side spawner for the per-session vision worker (C-22b, WS1 real-1f). A
-// vision session, on acquire, `connectPipe`s its camera pipes (bumping the C-21
-// gate so the converter runs), then `createVisionWorker(...)` spawns the
-// bundled worker (`.dist/electron/vision-worker.js`, an A-owned vite entry),
-// hands it the `shmName`s + reader-addon path, and pumps params/results over a
-// MessagePort. On release, `terminate()` (tied to the session's ResourceScope).
-//
-// The worker is READ-ONLY SHM: this host owns the broker/gate (connect/
-// disconnect) and passes only shmNames — the worker never touches the broker.
-// Orchestrator-side, Vue-free.
+// Main-side spawner for the per-session vision worker: a session on acquire connectPipes
+// its camera pipes (bumping the C-21 gate), then createVisionWorker spawns the bundled
+// worker with the shmNames + reader-addon path and pumps params/results over a MessagePort;
+// on release terminate() (tied to the ResourceScope). This host owns the broker/gate and
+// passes only shmNames — the worker is READ-ONLY SHM. Orchestrator-side, Vue-free.
+// spec: docs/spec/vision.md#vision-worker
 
 import { Worker } from "node:worker_threads";
 import { createRequire } from "node:module";

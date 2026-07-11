@@ -4,17 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Unified time (docs/proposals/unified-time-and-topology.md §1–§3, RULED).
-// THE time origin is the orchestrator's steady clock (`process.hrtime.bigint`,
-// integer ns, monotonic). Every other clock — camera tick counters, the MCU's
-// uint64 micros, Aravis wall stamps — maps INTO host-ns via a calibrated
-// offset estimated with the MIN-FILTER (ruling 1: latency noise is one-sided;
-// the minimum over N samples converges on the true offset, the mean absorbs
-// tail latency — PTP's trick). Consumers never see raw device time: they call
-// `toHostNs(clock, ts)` after boot calibration (hidden in camera acquisition).
-//
-// Caveat owned here: hrtime PAUSES during system sleep — `sleepDetected()`
-// compares wall-vs-steady progress; a jump invalidates every calibration.
+// Unified time: THE time origin is the orchestrator's steady clock (process.hrtime.bigint,
+// integer ns, monotonic). Every other clock maps INTO host-ns via a calibrated offset
+// estimated with the MIN-FILTER (one-sided latency noise → the min over N converges on the
+// true offset, PTP's trick). Consumers call toHostNs(clock, ts), never raw device time.
+// Caveat: hrtime PAUSES during system sleep — sleepDetected() invalidates calibration on a jump.
+// spec: docs/spec/orchestrator-runtime.md#time-align
 
 import type { Camera } from "core/Aravis";
 

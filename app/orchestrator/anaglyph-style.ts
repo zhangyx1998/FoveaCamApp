@@ -4,19 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// The app-level ANAGLYPH STYLE setting, orchestrator side (user ruling
-// 2026-07-09). Reads the configured left-eye/right-eye color arrangement from
-// the shared `["config"]` document — the same store-hub read pattern
-// `record-compression.ts` uses (NOT `@lib/config`, which pulls Vue into this
-// Vue-free process). Unlike the recording method (read once at RECORDING
-// START), the style is LIVE: `subscribeAnaglyphStyle` rides the store-hub's
-// in-process broadcast so a Settings change retunes the composite brick without
-// a reconnect (disparity-scope session).
-//
-// The style union + validation live in `docs/schema/anaglyph.ts` — the SINGLE
-// SOURCE OF TRUTH shared by every surface (cards, viewer, native brick). It is
-// Vue-free, so — unlike the RecordCompression union `record-compression.ts` had
-// to duplicate — this module imports it directly and cannot drift.
+// The app-level anaglyph style setting, orchestrator side: reads the L/R color
+// arrangement from the shared ["config"] doc via store-hub (NOT @lib/config, which
+// pulls Vue into this Vue-free process). LIVE — subscribeAnaglyphStyle rides the
+// store-hub broadcast so a Settings change retunes the composite brick without a
+// reconnect. The style union lives in docs/schema/anaglyph.ts (single source, imported).
+// spec: docs/spec/pipes.md#anaglyph-style
 
 import { read, subscribe } from "./store-hub.js";
 import { APP_CONFIG_PATH } from "@lib/config-schema";

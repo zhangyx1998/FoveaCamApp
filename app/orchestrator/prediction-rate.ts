@@ -4,18 +4,13 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// The GLOBAL prediction-rate setting, orchestrator side (docs/proposals/
-// prediction-compose-node.md — ruling 2). ONE app-wide key `prediction_rate_hz`
-// (default 600, clamped 60..1000) that drives the native IMM brick's free-
-// running emit rate. Edited from BOTH Settings → Global config AND the
-// disparity-scope drawer slider — they write the SAME `["config"]` document, so
-// the session subscribes here and live-applies via `imm.setParams({ rateHz })`.
-//
-// Vue-free (store-hub read/subscribe), mirroring `anaglyph-style.ts` — this
-// module is imported by a session, so it must not pull `@lib/config` (which
-// touches Vue). The doc path, default, and clamp bounds are the SHARED Vue-free
-// `@lib/config-schema` constants — the SAME ones `@lib/config`'s AppConfig
-// defaults consume, so the renderer and this reader can never drift.
+// The GLOBAL prediction-rate setting, orchestrator side: one app-wide key
+// prediction_rate_hz (default 600, clamped 60..1000) driving the native IMM brick's
+// free-running emit rate. Edited from both Settings and the disparity-scope slider (same
+// ["config"] doc); the session subscribes here and live-applies imm.setParams({ rateHz }).
+// Vue-free (store-hub, mirroring anaglyph-style); path/default/clamp come from the shared
+// @lib/config-schema constants so renderer and this reader can't drift.
+// spec: docs/spec/controller.md#prediction-rate
 
 import { read, subscribe } from "./store-hub.js";
 import {

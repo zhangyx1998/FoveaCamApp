@@ -4,17 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Shared DISPLAY vision kernel (C-22b step 2; calibration-free since C-23) —
-// runs INSIDE the vision worker, producing tracking-single + manual-control's
-// processed views (magnified slice, perspective-wrapped foveae, combined
-// diff/depth) plus multi-fovea's center relay, off the JS event loop. Each
-// session computes its calibration-derived matrices on the main thread and
-// ships them as params (fovea homographies, depth Q-matrix, slice center).
-//
-// real-1g: the C input is the `undistort:<serial>` pipe — frames arrive ALREADY
-// undistorted from B's native remap producer, so the in-worker `new
-// Undistort(cal)` + `apply` (and the whole cal transport) are gone. All display
-// ops are synchronous, so `process` is sync.
+// Shared DISPLAY vision kernel (calibration-free since C-23): runs INSIDE the vision
+// worker, producing the processed views (magnified slice, perspective-wrapped foveae,
+// combined diff/depth) + multi-fovea's center relay off the JS event loop. Each session
+// ships its calibration-derived matrices as params. real-1g: the C input is the
+// undistort:<serial> pipe (already-undistorted), so no in-worker Undistort; process is sync.
+// spec: docs/spec/vision.md#display-kernel
 
 import { RECT } from "@lib/util/geometry";
 import { makeMat } from "@lib/mat";

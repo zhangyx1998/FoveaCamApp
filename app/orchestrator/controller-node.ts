@@ -4,50 +4,13 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// The MEMS controller THREAD NODE (docs/proposals/controller-node-and-fifo-
-// edges.md §3). ONE long-lived singleton — the graph node id `nodeId.controller()`
-// ("controller") — created at orchestrator startup. It binds/unbinds the active
-// `Controller` (serial device) as the controller session connects/disconnects,
-// so PID-node edges registered before the device connects stay stable.
-//
-// It ABSORBS `startActuationLoop` (actuation.ts) as a PUSH model:
-//
-//  - `openPosition(name, { from, initial })` → a position-stream input. Sessions
-//    push a pose at their OWN natural cadence (kernel result / pointer / servo
-//    tick / a paced timer); the node transports it to the device:
-//      * v2 firmware — each input maps 1:1 to an MCU CMD_STREAM (created lazily
-//        on first update against a live controller, `StreamUpdateGate`-gated
-//        fire-and-forget updates, terminated on close, recreated on a controller
-//        swap). Free-run DAC-follow is firmware-defined (CREATE drives).
-//      * v1 firmware — ONE node-level paced loop awaits `actuate()` over the
-//        most-recent pushed pose (single-input assumption holds via app
-//        exclusivity today).
-//    `update()` runs `predictVolts` + `mirrorHistory.record` (the ONE place for
-//    the trusted-time trajectory) and returns the predicted volts SYNCHRONOUSLY
-//    — sessions use the return for telemetry / homography feeders. Optional
-//    `onApplied(volts, actuateMs)` delivers the v1 awaited readback.
-//
-//  - Enable lifecycle absorbed from the loop: enable on first update against a
-//    live disabled controller (tracked `enabledByUs`), disable on last close IFF
-//    we enabled it (never disable a controller the user enabled via the title
-//    bar). A reconnect drops the streams and lazily recreates them; it NEVER
-//    calls disable on a vanished/​swapped controller — the hardware-quiescence
-//    invariant (disable-on-disconnect in sessions/controller.ts + the janitor)
-//    is the sole owner of that path, and this node must not bypass it.
-//
-//  - `startTriggerCapture` schedules round-robin CMD_FRAME (the pure, tested
-//    `RoundRobinFrameScheduler`, scheduler.ts) and FORWARDS each FIN outcome to
-//    the registered FIN sinks (`onFin`) — the anchor enrichment node
-//    (anchor-node.ts). The per-frame L/R pair matching that used to live here
-//    (`matchAndEmit` + `DescriptorRing` + `onPair` + `bindFoveaCameras`) is
-//    SUPERSEDED by the native root PairStream (docs/proposals/pairing-nodes.md
-//    ruling 6): the brick tolerance-matches raw camera arrivals against the FIN
-//    anchor on its own thread. `sync.ts` `matchPair`/`matchesExposure` stay as
-//    the ruled pure-JS reference (unit tests keep them).
-//
-// NATIVE-FREE by construction: it takes injected FIN-sink seams and type-only
-// `Controller`/`FrameOutcome` imports, so sessions and vitest never pull the
-// addon (same idiom as UndistortPipeSeam / the scheduler's requester).
+// The MEMS controller thread node: one long-lived singleton ("controller") created
+// at orchestrator startup, binding/unbinding the active serial Controller as the
+// controller session connects/disconnects. Absorbs the actuation loop as a push
+// model (openPosition inputs → MCU CMD_STREAM v2 / paced loop v1), owns the
+// enable-iff-we-enabled lifecycle, and schedules round-robin trigger capture
+// forwarding FINs to sink nodes. Native-free by construction (injected seams).
+// spec: docs/spec/controller.md#controller-node
 
 import type { Pos } from "@lib/controller-codec";
 import type {
@@ -106,15 +69,11 @@ export interface PositionInput {
   close(): Promise<void>;
 }
 
-/** The native position input (native-compose-controller.md): a session pipes
- *  a native volts producer (the compose brick's `volt_out`) into the sink's
- *  `pos_in` whenever one ATTACHES. Attach requires a bound v2 controller —
- *  the node creates the MCU stream (ACK-backed) + native sink lazily on open
- *  or on a later `bindController`, and DETACHES (sink released + stream
- *  TERMINATEd best-effort) on unbind/close. Enable/disable lifecycle is the
- *  same as the JS inputs (enable on attach, disable iff we enabled when the
- *  LAST input — JS or native — closes), so FW5 + hardware quiescence hold
- *  identically. */
+/** Native position input: a session pipes a native volts producer (compose brick
+ *  `volt_out`) into the sink's `pos_in`; needs a bound v2 controller (stream +
+ *  sink created lazily, detached on unbind/close). Shares the JS-input
+ *  enable/disable lifecycle.
+ *  @remarks spec: docs/spec/controller.md#native-position-input */
 export interface OpenNativePositionOptions {
   initial: PositionPair;
   /** Graph node id for the sink's incoming link edge (default "controller"). */

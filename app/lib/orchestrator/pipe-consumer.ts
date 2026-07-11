@@ -4,15 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Renderer-side pipe consumer loop (C-17, WS1 1c-PREP). Given a `PipeHandle`
-// (from `connectPipe`), it polls the segment through the preload reader addon
-// (`io.readPipe` — reuses the C-15 buffer pool), tracks `lastSeq` itself, and
-// emits `FramePayload`s to a display sink. On the explicit CLOSED signal it
-// stops and releases its buffers. Nothing per-frame crosses the Channel — the
-// JS handshake happened once at connect.
-//
-// Vue-free (the display ref/binding lives in `client.ts`); `io` is injected so
-// tests drive it with a scripted reader.
+// Renderer-side pipe consumer loop: given a PipeHandle (from connectPipe), it polls the
+// segment through the preload reader addon (io.readPipe — reuses the C-15 buffer pool),
+// tracks lastSeq itself, and emits FramePayloads to a display sink; on CLOSED it stops and
+// releases its buffers. Nothing per-frame crosses the Channel. Vue-free; io is injected so
+// tests drive a scripted reader.
+// spec: docs/spec/orchestrator-protocol.md#pipe-consumer
 
 import type { FrameMeta, FramePayload } from "./protocol.js";
 import type { PipeHandle } from "./pipe-contract.js";

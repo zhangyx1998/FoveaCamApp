@@ -4,16 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Transport-agnostic RPC duplex shared by the orchestrator process and the
-// renderer client. It knows nothing about Electron or Vue — it speaks over an
-// `Endpoint` (a minimal postMessage/onmessage pair), so the same `Channel`
-// runs on a DOM `MessagePort` (renderer) and an Electron `MessagePortMain`
-// (orchestrator).
-//
-// Three message shapes ride one channel:
-//   - request / response  (commands, queries)   — correlated by id
-//   - event               (state + telemetry)   — fire-and-forget, by topic
-//   - frame               (display payloads)     — by topic, carries a buffer
+// Transport-agnostic RPC duplex shared by the orchestrator process and the renderer
+// client. Knows nothing about Electron or Vue — it speaks over an Endpoint (a minimal
+// postMessage/onmessage pair), so the same Channel runs on a DOM MessagePort (renderer)
+// and an Electron MessagePortMain (orchestrator). Three message shapes ride one channel:
+// request/response (by id), event (state + telemetry, by topic), frame (payloads, by topic).
+// spec: docs/spec/orchestrator-protocol.md#protocol
 
 import { RollingStats } from "../util/rolling.js";
 import { ratePerSec, snapshotWindow, type SampleStats } from "./stats.js";

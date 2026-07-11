@@ -4,15 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Transport types for the shared DISPLAY vision kernel (C-22b step 2) —
-// tracking-single / manual-control / multi-fovea's processed views, off the JS
-// event loop. Fork-independent + worker-safe: numbers only.
-//
-// real-1g (C-23): the calibration (de)serialization that used to live here is
-// GONE — the kernel's C input is the `undistort:<serial>` pipe (B's native
-// remap producer), so no kernel reconstructs `Undistort` anymore. Everything
-// the display path needs (fovea homographies, the depth Q-matrix, the slice
-// center) main computes from calibration and ships as flat matrices/points.
+// Transport types for the shared DISPLAY vision kernel — the processed views' params +
+// results. Fork-independent + worker-safe (numbers only). real-1g (C-23): the calibration
+// (de)serialization is GONE (the kernel's C input is the already-undistorted
+// undistort:<serial> pipe); main ships the fovea homographies / depth Q-matrix / slice
+// center as flat matrices/points instead.
+// spec: docs/spec/vision.md#display-kernel
 
 import type { Point2d, Size } from "core/Geometry";
 

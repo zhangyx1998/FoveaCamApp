@@ -4,15 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Per-frame recorder metadata schema (WS4 4b). The `.fovea` `telemetry`
-// channel carries one JSON document per frame that has extras — `{stream, seq,
-// t, ...extras}`, correlated to its raw frame by (stream, seq). This module
-// pins the DECODER-FACING shape of those extras (pyfovea/viewer read them) and
-// the builder for the B-12 frame↔voltage binding.
-//
-// `RecordingSink.write(extra)` stays generic (`Record<string, unknown>`) so
-// unknown keys still pass through — this schema documents the BLESSED keys, it
-// does not gate them.
+// Per-frame recorder metadata schema: the .fovea telemetry channel carries one JSON doc
+// per frame with extras ({stream, seq, t, ...extras}, correlated by (stream, seq)). This
+// module pins the DECODER-FACING shape of those extras (pyfovea/viewer read them) + the
+// frame↔voltage binding builder. RecordingSink.write(extra) stays generic (unknown keys
+// pass through) — this schema documents the BLESSED keys, it does not gate them.
+// spec: docs/spec/capture-recording.md#recorder-metadata
 
 /** MEMS mirror voltage {x, y} in volts. Structural (Pos-shaped) so the
  *  recorder does not couple to `@lib/controller-codec`. */

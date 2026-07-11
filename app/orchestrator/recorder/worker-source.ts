@@ -4,23 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Source string for the recorder sink's worker_threads worker — eval'd CJS
-// (the recorder-node worker uses the same technique): the orchestrator is
-// bundled to a single file, so a separate worker source file would not exist
-// at runtime. `@mcap/core` cannot be require()d by bare name from an eval
-// worker (its `require` resolves against the process cwd, which is not the
-// app directory in packaged builds) — the parent resolves the real entry
-// path via `createRequire(import.meta.url)` and passes it in `workerData`.
-//
-// One McapWriter per worker, multiplexing every registered channel into one
-// file. McapWriter is documented non-reentrant ("wait on any method call to
-// complete before calling another"), so every operation — init, channel
-// registration, frame/meta writes, finalize — is serialized through a single
-// promise chain (`chain = chain.then(...)`).
-// Message order on the port is preserved, so a "channel" registration posted
-// before that channel's first "frame" is guaranteed to run first.
-//
-// Protocol: see `types.ts` (RecorderWorkerIn / RecorderWorkerOut).
+// Source string for the recorder sink's worker (eval'd CJS; the parent resolves the
+// @mcap/core entry via createRequire and passes it in workerData). One McapWriter per
+// worker, all channels into one file. Load-bearing: McapWriter is non-reentrant, so
+// EVERY op is serialized through a single promise chain (chain = chain.then(...)); port
+// message order is preserved so a channel registration runs before its first frame.
+// spec: docs/spec/capture-recording.md#recorder-worker-source
 
 import {
   FINALIZE_METADATA_NAME,

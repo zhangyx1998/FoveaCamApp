@@ -4,19 +4,13 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Workload metering core (Stage 5, docs/history/refactor/workload-metering.md).
-// A common perf-reporting abstraction any loop-like unit in the orchestrator
-// registers once, so the native tracker/pipe threads' probes and the recorder
-// worker all become instances of the same schema instead of hand-grown
-// counters. Vue-free — `rolling.ts`
-// lineage (`RollingStats`/`allFrameStats`'s T10-style window bookkeeping),
-// never `perf.ts` (Vue-tainted, renderer-only).
-//
-// Hard rule: meters observe, never gate. Every method on a `WorkloadHandle`
-// is a safe no-op once `dispose()`d (or, for `measure()`, still always
-// invokes the wrapped function) — a bug in wiring or a caller reusing a
-// handle after teardown must never throw into, or change the outcome of,
-// the metered path.
+// Workload metering core: one perf-reporting schema every loop-like unit registers
+// once (native probes + recorder worker + JS loops), so nothing hand-grows counters.
+// Vue-free (rolling.ts lineage, never renderer-only perf.ts).
+// HARD RULE: meters observe, never gate — every WorkloadHandle method is a safe no-op
+// after dispose() (measure() still invokes the wrapped fn), so a wiring bug or a stale
+// handle can never throw into or change the outcome of the metered path.
+// spec: docs/spec/graph.md#metering
 
 import {
   counterRate,

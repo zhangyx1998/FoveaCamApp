@@ -4,27 +4,13 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// WS1 pipe broker session (C-17) + the COMPOSITION protocol (C-24 step 3).
-// Advertises typed SHM pipes, brokers the one-time `connectPipe`/
-// `disconnectPipe` handshake to the native `core.Pipe` publisher (refcount
-// consumers), and materializes/tears down COMPOSED nodes on renderer demand.
-// Nothing per-frame passes through here.
-//
-// Compose is TWO-MODE (ruled):
-//  - `camera/`-rooted ids: REFCOUNT semantics — compose = ensure-materialized
-//    + ref (idempotent across windows; two windows composing the same fovea
-//    share one brick); decompose = unref; refs→0 = teardown via the brick's
-//    materializer (fovea: detach+drop; convert/undistort have no materializer
-//    — pre-advertised, refs are bookkeeping and the C-21 consumer gate parks
-//    them naturally).
-//  - `win/<windowId>/`-rooted ids: window-OWNED, exclusive — the id must sit
-//    under the CALLER's authoritative windowId (`hub.windowIdOf(channel)`,
-//    A-34; a renderer cannot spoof it) and is torn down with the window.
-// Window close (`hub.onWindowClosed` — fires on DESTROY, not reload) auto-
-// UNREFS everything that window composed and tears down its win/ nodes.
-//
-// The broker + materializers + window hooks are INJECTED, so vitest drives the
-// whole protocol with fakes and never loads native core.
+// WS1 pipe broker session (C-17) + the composition protocol (C-24 step 3). Advertises
+// typed SHM pipes, brokers the one-time connectPipe/disconnectPipe handshake to the
+// native publisher (refcount consumers), and materializes/tears down composed nodes on
+// renderer demand. Nothing per-frame passes through here. Compose is two-mode:
+// camera/-rooted (refcount, shared across windows) vs win/<windowId>/-rooted (window-
+// owned, exclusive). Broker + materializers + window hooks are injected.
+// spec: docs/spec/pipes.md#pipe-session
 
 import { defineSession, type ServerSession } from "./runtime.js";
 import type { Channel } from "@lib/orchestrator/protocol.js";

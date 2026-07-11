@@ -4,17 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Per-session VISION WORKER entry (C-22b, WS1 real-1f). Bundled as its own
-// electron build entry (A-28) → `.dist/electron/vision-worker.js`, spawned by
-// `vision-worker-host.ts` (`new Worker(".../vision-worker.js")`). This is the
-// session-agnostic host: it owns SHM I/O (the reader addon), framing, and the
-// MessagePort transport; the actual pixel work is a `VisionKernel` it dispatches
-// to by `params.kind`.
-//
-// READ-ONLY SHM: it `reader.open`s the parent-brokered `shmName`s and never
-// touches the broker/gate (main owns connect/disconnect — keeps the C-21 gate a
-// main-thread-only, race-free single writer). One frame at a time, awaited
-// sequentially, so a kernel step is naturally non-reentrant.
+// Per-session vision worker entry (its own electron build entry, spawned by
+// vision-worker-host.ts): the session-agnostic host owning SHM I/O (reader addon),
+// framing, and the MessagePort transport; the pixel work is a VisionKernel dispatched by
+// params.kind. READ-ONLY SHM (reader.open only, never touches the broker/gate); one frame
+// at a time, awaited sequentially, so a kernel step is naturally non-reentrant.
+// spec: docs/spec/vision.md#vision-worker
 
 import { parentPort } from "node:worker_threads";
 import { createRequire } from "node:module";

@@ -4,22 +4,13 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Hardware-acquisition GATE (disposable-orchestrator ruling 2). A fresh
-// orchestrator instance forks and builds its node graph IMMEDIATELY, but must
-// not touch the exclusive hardware (Aravis cameras, MEMS serial) until the
-// PREVIOUS hardware instance is confirmed dead + swept — main signals this with
-// a "hardware-clear" message. Aravis is per-process exclusive, so acquisition
-// serializes even while spin-up overlaps the old instance's teardown.
-//
-// Every hardware chokepoint (`registry.acquire`/`acquireMany`,
-// `controller.connect`) awaits `awaitHardwareClear()` before opening a device,
-// so the deferral is ONE gate, not scattered per-session. While something
-// waits, the gate reports a "waiting" state so the orchestrator surfaces a
-// named progress step (the user sees WHY spin-up pauses). Vue-free.
-//
-// The gate is DISARMED by default so unit tests that exercise acquire/connect
-// never block; the orchestrator process `arm()`s it at boot (closed until
-// main's message), then `signalHardwareClear()` opens it exactly once.
+// Hardware-acquisition gate: a fresh orchestrator instance builds its graph
+// immediately but must not touch exclusive hardware until the previous instance is
+// confirmed dead + swept (main's "hardware-clear" message). Every chokepoint
+// (registry.acquire/acquireMany, controller.connect) awaits awaitHardwareClear() — ONE
+// gate, not per-session. Disarmed by default (tests never block); arm()ed at boot,
+// opened exactly once by signalHardwareClear(). Vue-free.
+// spec: docs/spec/orchestrator-runtime.md#hardware-gate
 
 let armed = false;
 let cleared = false;

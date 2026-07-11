@@ -4,19 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// TeleCanvas shared contract (standalone dual-mode module, user directive
-// 2026-07-09). Pure data — Vue-free AND Node-free — so every consumer can load
-// it: the renderer (config refs, the TeleCanvas window, the settings section),
-// the typed IPC bridge (`electron/bridge.ts`), and the main-side host manager
-// (`electron/telecanvas-manager.ts`).
-//
-// Two modes (config `tele_canvas_mode`):
-//   • client — the app PUTs its merged projection SVG to a configured REMOTE
-//     TeleCanvas server URL (`tele_canvas_url`). Current behavior, the default.
-//   • host   — the app spins up its OWN TeleCanvas-compatible server (a
-//     dependency-free node http server in a utilityProcess) on
-//     `tele_canvas_port`; external displays open the served viewer page. The
-//     push path is unchanged — it just targets `http://127.0.0.1:<port>/`.
+// TeleCanvas shared contract. Pure data — Vue-free AND Node-free — so every consumer can
+// load it (renderer, the typed IPC bridge, the main-side host manager). Two modes
+// (config tele_canvas_mode): `client` (default — PUT the merged projection SVG to a remote
+// TeleCanvas server URL) and `host` (spin up an own dependency-free http server in a
+// utilityProcess; the push path just targets 127.0.0.1:<port>).
+// spec: docs/spec/orchestrator-runtime.md#telecanvas
 
 export type TeleCanvasMode = "client" | "host";
 

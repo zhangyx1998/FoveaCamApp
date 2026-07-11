@@ -4,21 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// COMPRESSION brick seam (multi-fovea-recording rulings 9/10, wave I-2). A
-// core-free wrapper over `Aravis.attachCompressPipe`: the native thread
-// FIFO-reads an ALREADY-ADVERTISED source pipe (raw12p / raw / convert / …)
-// and republishes each frame as an INDEPENDENT zlib blob (per-frame, so the
-// container stays seekable) into a sibling output pipe advertised here.
-//
-// The output advert carries the source format with the `/zlib` suffix baked
-// into `pixelFormat` (ruling 9 — offline readers split on "/" and decompress
-// right-to-left), the SAME dims/significantBits as the source, and `maxBytes`
-// sized to the zlib worst case. The recorder consumes the output pipe with
-// ZERO extra config (advert-verbatim socket, ruling 8).
-//
-// Consumer-gated like every pipe: the output pipe's 0→1 connect edge spins the
-// native runner up (connects the source); →0 parks it. Seam-injected so the
-// session and vitest run without the addon.
+// Compression brick seam: a core-free wrapper over Aravis.attachCompressPipe. The
+// native thread FIFO-reads an already-advertised source pipe and republishes each
+// frame as an INDEPENDENT per-frame zlib blob (keeps the container seekable) into a
+// sibling output pipe whose advert bakes the `/zlib` suffix into pixelFormat (ruling
+// 9); the recorder consumes it verbatim (ruling 8). Consumer-gated; never imports core.
+// spec: docs/spec/pipes.md#compress-pipe
 
 import type { PipeSpec } from "@lib/orchestrator/pipe-contract.js";
 import type { RawPipeAdvertSpec } from "./raw-pipe.js";

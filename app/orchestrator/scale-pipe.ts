@@ -4,28 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// GENERAL-PURPOSE session-owned SCALE/RESIZE node (split-disparity-nodes
-// ruling 5, 2026-07-09): a native chained brick (`ScaleStream`) that resizes
-// a source pipe's frames and publishes them as its own C-20 variable-size
-// pipe. The param is REACTIVE (`retune`, applied on the next frame, no
-// re-attach) and is exactly ONE of:
-//
-//   { ratio }   — out = in × ratio
-//   { dwidth }  — fixed output width, height follows the input aspect
-//   { dheight } — fixed output height, width follows the input aspect
-//   { dsize }   — exact output width × height
-//
-// Output dims are recomputed PER FRAME from the params + that frame's ACTIVE
-// input dims (variable-size sources — e.g. a slice pipe — just work). The
-// source frame's crop ORIGIN is forwarded UNSCALED (source full-res
-// coordinates): consumers un-scale their local coords with the ratio they
-// commanded, then add the origin.
-//
-// disparity-scope puts one in front of each template-match input (the match
-// guide strip and the fovea needle), so the match kernel does no resizing.
-//
-// Seam-injected (never imports native core) — index.ts wires
-// `Aravis.attachScalePipe`/`setScaleParams`/`detachScalePipe`.
+// General-purpose session-owned scale/resize node: a native chained brick
+// (`ScaleStream`) that resizes a source pipe's frames into its own C-20
+// variable-size pipe. One reactive sizing param (ratio/dwidth/dheight/dsize),
+// output dims recomputed per frame from the active input dims; the crop origin is
+// forwarded unscaled. Seam-injected (never imports core).
+// spec: docs/spec/pipes.md#scale-pipe
 
 import type { PipeSpec } from "@lib/orchestrator/pipe-contract.js";
 

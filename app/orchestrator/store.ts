@@ -4,16 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Internal filesystem primitives for `store-hub.ts`. Do not import this from
-// sessions or orchestrator helpers; route reads/writes through store-hub so the
-// in-memory cache, write counts, and renderer notifications stay authoritative.
-// Reads/writes the same on-disk JSON files as the renderer `Store` (same path
-// layout + codec), but without Vue reactivity or `ipcRenderer`. The userData
-// path is handed down by the main process via `FOVEA_DATA_PATH`.
-//
-// Writes are atomic (temp file + rename) and operations on the same file are
-// serialized, so rapid edits (e.g. dragging the exposure slider) can never tear
-// a concurrent read or lose a read-modify-write.
+// Internal filesystem primitives for store-hub.ts. Do NOT import from sessions/helpers;
+// route through store-hub so the cache, write counts, and notifications stay
+// authoritative. Same on-disk JSON as the renderer Store (path layout + codec), without
+// Vue/ipcRenderer; userData path from FOVEA_DATA_PATH. Writes are atomic (temp + rename)
+// and per-file serialized, so rapid edits can't tear a read or lose a read-modify-write.
+// spec: docs/spec/store.md#store-fs
 
 import { existsSync } from "node:fs";
 import {

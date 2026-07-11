@@ -4,26 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Calibration-data enumeration + friendly-naming for the config window's
-// "Calibration data" manager. Every persisted calibration document lives under
-// one of three store directories, keyed as follows:
-//
-//   calibrate-intrinsic/<id>          — an intrinsic `CalibrationRecord`
-//   calibrate-extrinsic/<id>          — an extrinsic `CalibrationRecord`
-//   triples/<hash>                    — a per-triple config doc (drift_l/drift_r,
-//                                       zoom_override, baseline_mm, …)
-//
-// (Schema v2: both `calibrate-*` directories hold hash-keyed RECORDS — see
-// `calibration-records.ts`. `.raw` analysis artifacts may also sit there and
-// are skipped.) `<id>`/`<hash>` are 32-hex truncated SHA-256; the triple hash is
-// of the L/C/R camera keys (mirrors `orchestrator/calibration.ts`'s
-// `tripleConfigPath` — kept in lockstep here because that module is Vue-free /
-// core-importing and must not be pulled into the renderer).
-//
-// The store is injected (`CalStore`) so this is unit-testable with an in-memory
-// fake; the config window passes the renderer `Store` client (`list`/`read`/
-// `clear`). Reads use the one-shot `Store.read` (no subscription) since this is
-// a management view over many docs.
+// Calibration-data enumeration + friendly-naming for the config window's "Calibration
+// data" manager. Enumerates the three store dirs (calibrate-intrinsic/<id>,
+// calibrate-extrinsic/<id>, triples/<hash>), skipping `.raw` artifacts. The triple
+// hash mirrors orchestrator/calibration.ts's tripleConfigPath (kept in lockstep since
+// that module is core-importing and must stay out of the renderer). Store injected.
+// spec: docs/spec/calibration.md#calibration-data
 
 import { getCameraKey, ROLE, type Role } from "./camera-config.js";
 import {

@@ -4,22 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// WS1 pipe contract (C-16). The orchestrator ADVERTISES typed SHM pipes; a
-// renderer selects one by id, `connectPipe`s ONCE to get a `PipeHandle`, then
-// reads pixels per-frame straight from the shared segment via the reader addon
-// (`reader.readInto(handle, dest, lastSeq)`, dest reused — C-15). Nothing rides
-// the Channel per-frame: `frames: []`, no per-frame descriptor. The publisher
-// (a C++ thread, `core.Pipe`) owns the segment the JS registry loop used to
-// write.
-//
-// `PipeSpec` IS the explicit frame typing C-P12 called for: `bytesPerFrame` /
-// `dtype` / `pixelFormat` are declared up front, so raw/16-bit/packed pipes are
-// sized and decoded correctly instead of inferred from shape. `pixelFormat` /
-// `dtype` are the canonical values from the single schema (B-owned) — imported
-// read-only, never forked.
-//
-// Renderer- and orchestrator-safe, Vue-free — like every contract. Kept in its
-// own file (not `contracts.ts`); the planner arbitrates any later merge.
+// WS1 pipe contract (C-16). The orchestrator ADVERTISES typed SHM pipes; a renderer
+// selects one by id, connectPipes ONCE to a PipeHandle, then reads pixels per-frame
+// straight from the shared segment via the reader addon (nothing rides the Channel
+// per-frame). PipeSpec IS the explicit frame typing (bytesPerFrame/dtype/pixelFormat
+// declared up front, from the single schema, imported read-only). Vue-free.
+// spec: docs/spec/orchestrator-protocol.md#pipe-contract
 
 import { cmd, defineContract } from "./protocol.js";
 import type { Serializable } from "./protocol.js";

@@ -4,19 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// The prediction-compose FEED-FORWARD math — the JS CONFORMANCE REFERENCE
-// (docs/proposals/native-compose-controller.md). The wave-1 graph node that
-// lived here (`createComposeNode`) is RETIRED: the compose is now the NATIVE
-// `ComposeStream` brick (core/src/ComposeStream.cpp) piped imm → compose →
-// controller, and its per-tick math must reproduce THIS function on the
-// shared vectors (docs/schema/codec/compose-vectors.json) — the same
-// TS-reference pattern as `@lib/imm-predictor` for the IMM brick.
-//
-// The ruled form is `V(t) = V_pid + J·(p_pred(t) − p_meas(t_pid))`. This
-// reference expresses `J·Δp` as the difference of a pixel→volt map evaluated
-// at both points (`predVolts − measVolts`) — for the LINEAR map the native
-// brick receives (the session's finite-difference Jacobian at `p_meas`), the
-// two forms are identical, which is exactly what the fixture pins.
+// The prediction-compose feed-forward math — the JS CONFORMANCE REFERENCE for the
+// native ComposeStream brick (imm → compose → controller). The ruled form is
+// V(t) = V_pid + J·(p_pred(t) − p_meas(t_pid)), expressed here as predVolts − measVolts
+// over a pixel→volt map (identical to J·Δp for the linear Jacobian the brick receives);
+// the fixture (docs/schema/codec/compose-vectors.json) pins the two forms equal.
+// spec: docs/spec/controller.md#compose-reference
 
 import type { Pos } from "@lib/controller-codec";
 

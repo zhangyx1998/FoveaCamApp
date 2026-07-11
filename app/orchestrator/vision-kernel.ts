@@ -4,13 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Vision-kernel seam (C-22b, WS1 real-1f). The vision worker
-// (`vision-worker.ts`) owns SHM I/O + framing + MessagePort transport and is
-// session-agnostic; each session's actual pixel work lives in a `VisionKernel`
-// it dispatches to by `params.kind` (disparity-scope now; manual-control /
-// tracking-single next). Kernels run INSIDE the worker thread — they may use
-// core/Vision + core/Tracker synchronously (single-threaded loop, no busy-drop
-// dance), and the worker converts their output Mats into transferred buffers.
+// Vision-kernel seam: the session-agnostic vision worker owns SHM I/O + framing +
+// transport and dispatches each session's pixel work to a VisionKernel by params.kind.
+// Kernels run INSIDE the worker thread — they may use core/Vision + core/Tracker
+// synchronously (single-threaded loop, no busy-drop dance); the worker converts their
+// output Mats into transferred buffers.
+// spec: docs/spec/vision.md#vision-worker
 
 import type { Mat } from "core/Vision";
 import type { Role } from "./vision-worker-protocol.js";

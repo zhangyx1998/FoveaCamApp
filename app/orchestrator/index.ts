@@ -4,15 +4,10 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Orchestrator process entry. Runs in an Electron `utilityProcess` — its event
-// loop is NOT bound to any UI render loop, so `core` (acquisition, vision,
-// control, hardware I/O) runs here with full async throughput. The main process
-// hands us one `MessagePortMain` per renderer connection.
-//
-// Each feature session is co-located with its module (`modules/X/session.ts` +
-// `contract.ts`, next to `index.vue`) — this file is just the registration
-// list, plus the two cross-cutting sessions (`system`, `controller`) that have
-// no single owning UI module. See docs/history/refactor/orchestrator.md §12.3 R1.
+// Orchestrator process entry. Runs in an Electron `utilityProcess` (event loop not
+// bound to any UI render loop), so `core` runs here with full async throughput; main
+// hands us one `MessagePortMain` per renderer connection. This file is the session
+// registration list plus the two cross-cutting sessions (`system`, `controller`).
 
 import { Shm, Pipe, Aravis, Topology, steadyNowNs, cleanup, installCrashHandler } from "core";
 import { onClockMetrics } from "core/Aravis";

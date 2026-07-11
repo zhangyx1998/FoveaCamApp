@@ -4,32 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// GENERAL-PURPOSE template-match vision kernel (split-disparity-nodes
-// proposal, ruled 2026-07-09). One `needle` pipe correlated into one
-// `haystack` pipe — nothing app-specific inside:
-//
-//  - Both inputs arrive PRE-SIZED (ruling 5): a scale node in front of each
-//    input owns all geometry, so this kernel does NO resizing — the caller
-//    computes tile/strip sizing (e.g. disparity's foveaTileSize /
-//    matchMagnification) and retunes the scalers.
-//  - Each HAYSTACK arrival drives one match tick (the needle is retained
-//    across ticks, refreshed whenever its pipe produces).
-//  - Output is haystack-LOCAL: `rect` (the matched needle footprint in the
-//    haystack frame's pixels) + `score` (CCOEFF_NORMED peak) + `origin` (the
-//    haystack frame's frame-bound crop origin, forwarded by the slice/scale
-//    chain in the v4 slot header). `origin + rect-center / <caller's
-//    downsample>` lifts a match to ABSOLUTE source-frame coordinates — the
-//    kernel never needs a target, and no app state rides its params.
-//  - The emitted `match` heatmap is PADDED back to the haystack's exact dims
-//    (see `emitHeatmap`): the correlation map is only (sh-th+1)×(sw-tw+1)
-//    placement-space pixels, but the sole consumer (the debugger's stacked
-//    pixel-column cross-reference) needs each heatmap pixel (x,y) to be the
-//    score of the needle CENTERED at haystack pixel (x,y), so it aligns
-//    column-for-column with the full-res strip above it. The scalar `values`
-//    (peak/rect/score) stay computed on the UNPADDED map (placement space).
-//
-// Used by disparity-scope twice (match/L, match/R); reusable by anything
-// that needs "where does this tile sit in that stream".
+// General-purpose template-match vision kernel: one `needle` pipe correlated into
+// one `haystack` pipe, nothing app-specific inside. Inputs arrive pre-sized (scale
+// nodes own geometry); output is haystack-local rect/score/origin that lifts to
+// absolute source coords; the emitted heatmap is padded back to haystack dims for
+// the debugger's column cross-reference. Used by disparity-scope (match/L, match/R).
+// spec: docs/spec/vision.md#template-match
 
 import type { Rect } from "core/Geometry";
 import { cvtColor, gaussian, heatmap, matchTemplate, minMaxLoc, slice, type Mat } from "core/Vision";

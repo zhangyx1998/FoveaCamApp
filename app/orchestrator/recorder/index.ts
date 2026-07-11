@@ -4,35 +4,11 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Recorder sink facade (B-5; docs/history/refactor/recorder-container.md §2
-// decision + §3). Writes a single `.fovea` container — standard MCAP inside —
-// through one worker_threads writer per topology key (`singleFileTopology`
-// today: exactly one worker, one file). The legacy `.stream`/`.meta`/manifest
-// backend + its `RECORDER_BACKEND` selector were DROPPED (capture-recorder-nodes
-// ruling 6); this MCAP sink is the only backend.
-//
-// NOTE (capture-recorder-nodes Phase 2): live manual-control recording no longer
-// goes through this sink — it flows through the RECORDER NODE
-// (`@orchestrator/recorder-node`), one worker that FIFO-consumes the raw pipes
-// and hosts the mcap writer in-worker. This sink + `McapWriterWorker` remain as
-// the container-writing surface the recorder bench + tests drive directly.
-//
-// Container layout (documented in the per-dump README):
-// - one channel per recorded stream, `messageEncoding: "x-fovea-raw"` —
-//   message bytes are the frame exactly as captured (12p stays packed);
-//   channel metadata carries the static decode props (dtype/shape/
-//   pixelFormat/significantBits/channels), taken from the stream's first
-//   frame;
-// - one `telemetry` channel (JSON): per-frame extras — volt/angle/
-//   homography, the legacy sidecar's `x` payload — sent only for frames
-//   that have extras, correlated by stream+seq (or logTime);
-// - MCAP metadata records `fovea:session` (ISO timestamp) and
-//   `fovea:finalize` (durationSec).
-//
-// Timestamps: logTime/publishTime are nanoseconds on the same clock the
-// legacy writer used (`performance.now()/1000` seconds) — relative to
-// process start, monotonic across every channel of a session; the absolute
-// wall-clock anchor is the `fovea:session` metadata record.
+// Recorder sink facade: writes a single `.fovea` container (standard MCAP inside)
+// through one worker_threads writer per topology key. Live recording flows through
+// recorder-node.ts (native brick) instead; this sink + McapWriterWorker remain the
+// container surface the recorder bench + tests drive directly.
+// spec: docs/spec/capture-recording.md#recorder-sink
 
 import fs from "node:fs/promises";
 import { resolve } from "node:path";

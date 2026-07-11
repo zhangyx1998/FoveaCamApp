@@ -4,20 +4,13 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Shared "record the app's raw camera streams" config over the recording
-// facility (capture-recorder-everywhere ruling 2). Most apps that gain
-// recording (disparity-scope + the four calibrate wizards) have no per-frame
-// fovea binding to inject — they just want the OBVIOUS default recordable set:
-// the full-bit-depth `camera/<serial>/raw` sensor stream(s) the app's cameras
-// produce, advert-verbatim. This helper wraps that case so each app opts in with
-// a `cameras()` accessor and a `finished` notifier instead of re-deriving the
-// raw-pipe acquire + connect + error-unwind config.
-//
-// It reuses manual-control's exact raw-pipe acquire (the UNPACKED 16-bit
-// container, deep recorder ring) + the ruling-8 significantBits connect
-// injection. No `onFrame`: these recordings carry no per-frame extras (the app
-// holds no controller pose bound to the frame) — the container is the raw
-// sensor stream only, honest and reconstructable.
+// Shared "record the app's raw camera streams" config over the recording facility: for
+// apps with no per-frame fovea binding (disparity-scope + the four calibrate wizards)
+// that just want the default recordable set — the full-bit-depth camera/<serial>/raw
+// stream(s), advert-verbatim. Each app opts in with a cameras() accessor + finished
+// notifier; reuses manual-control's raw-pipe acquire + ruling-8 significantBits inject.
+// No onFrame (no per-frame extras): the container is the raw sensor stream only.
+// spec: docs/spec/capture-recording.md#raw-recording
 
 import {
   createRecordingService,

@@ -4,17 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// The app-level RECORDING COMPRESSION setting, orchestrator side (user directive
-// 2026-07-09). Reads the configured method from the shared `["config"]` document
-// at RECORDING START — the same store-hub read pattern the calibrate-extrinsic
-// capture uses for the marker sizes (NOT `@lib/config`, which pulls Vue into
-// this Vue-free process). Applies to NEW recordings; a running recording keeps
-// the method it started with.
-//
-// The union + default + validation live in the SHARED Vue-free `@lib/config-schema`
-// (the SAME source `@lib/config`'s renderer half consumes for Settings), so the
-// orchestrator never imports the Vue-touching `@lib/config` and the two can never
-// drift (extensible: more methods may come, none now).
+// The app-level recording-compression setting, orchestrator side: reads the method from
+// the shared ["config"] doc at RECORDING START via store-hub (NOT @lib/config, which pulls
+// Vue into this Vue-free process). Applies to NEW recordings; a running one keeps its
+// method. The union/default/validation live in the shared Vue-free @lib/config-schema so
+// the two halves can't drift.
+// spec: docs/spec/capture-recording.md#record-compression
 
 import { read } from "./store-hub.js";
 import {

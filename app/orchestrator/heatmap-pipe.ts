@@ -4,21 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// GENERAL-PURPOSE session-owned HEATMAP node (stereo-disparity-and-heatmap-
-// nodes, ruled 2026-07-09): a native chained brick (`HeatmapStream`) that
-// colormaps a 1-channel source pipe (CV_32F or CV_8U — the stereo brick's
-// disparity map is the flagship input) to a RGBA8 pipe (COLORMAP_TURBO).
-//
-// Normalization is REACTIVE (`retune`): explicit `{min, max}` bounds, or
-// absent → per-frame min/max auto-normalize. Active dims + origin +
-// timestamps are forwarded from the source frame (trusted-time).
-//
-// ON-DEMAND (ruling 2): the brick runs iff its pipe has consumers; while it
-// runs, its tap keeps the upstream (stereo) brick awake — the renderer
-// connecting/disconnecting this one pipe starts/stops the whole SGBM chain.
-//
-// Seam-injected (never imports native core) — index.ts wires
-// `Aravis.attachHeatmapPipe`/`setHeatmapParams`/`detachHeatmapPipe`.
+// General-purpose session-owned HEATMAP node: a native chained brick (HeatmapStream)
+// that colormaps a 1-channel source pipe (CV_32F or CV_8U — the stereo disparity map
+// is the flagship input) to an RGBA8 pipe (COLORMAP_TURBO). Normalization reactive
+// (explicit {min,max} or per-frame auto). On-demand: its tap keeps the upstream SGBM
+// chain awake, so connecting/disconnecting this pipe starts/stops it. Never imports core.
+// spec: docs/spec/pipes.md#heatmap-pipe
 
 import type { PipeSpec } from "@lib/orchestrator/pipe-contract.js";
 

@@ -4,25 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Projection split-view — per-pane termination / rebind state machine (docs/
-// proposals/projection-split-view.md §"Termination/rebind", deliverable 5).
-//
-// Orchestrators are disposable per-app, so every app switch KILLS all projected
-// sources. Auto-close-on-default would then erase projections on every switch —
-// so a pane that loses its source does NOT terminate immediately. It:
-//   live  --sourceLost-->  frozen(cover)   (freeze the last frame, show a
-//                                            dismissible "source has closed" cover)
-//   frozen  --sourceReturned-->  live      (rebind: the next orchestrator
-//                                            instance connected, or the pipe
-//                                            advert reappeared with a new epoch)
-//   frozen  --grace elapses-->  terminated (the source did NOT come back within
-//                                            ~GRACE_MS)
-// Only when EVERY pane is `terminated` and `projection_auto_close` is on does
-// the window close itself. Dismissing the cover keeps the frozen frame (status
-// stays `frozen`, the timer keeps running) — it only hides the note.
-//
-// Pure + timer-injectable so it unit-tests under fake timers. Vue-free; the
-// pane component owns a machine instance and mirrors `snapshot()` into refs.
+// Projection split-view — per-pane termination / rebind state machine. Orchestrators
+// are disposable per-app, so a pane whose source is lost freezes (dismissible cover)
+// rather than terminating: live→frozen→(live on rebind | terminated after ~GRACE_MS).
+// The window auto-closes only when EVERY pane is terminated and projection_auto_close
+// is on. Pure + timer-injectable (fake-timer tests); Vue-free.
+// spec: docs/spec/projection.md#termination
 
 /** Grace window (ms) a lost source has to reappear before the pane is counted
  *  TERMINATED (for auto-close). ~10 s per the planner decision — long enough to

@@ -4,25 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Homography feeder (docs/proposals/unified-time-and-topology.md §3+§5): while
-// a triple session is active, each L/R HOMOGRAPHY undistort brick needs a
-// steady stream of `{hostNs, H}` samples in its native ParamRing so the
-// undistort thread can warp every frame with `H(mirrorAt(frameHostNs))`. This
-// helper runs a modest fixed-rate timer (~200 Hz — well under the ring's
-// ~1 kHz design ceiling, dense enough that the ring's linear interpolation
-// between neighbors tracks the ~1 kHz actuation trajectory) that:
-//
-//   1. reads the NEWEST mirror sample from the orchestrator-wide
-//      `mirrorHistory` (written by the controller node's update path),
-//   2. derives H for its side via the injected `computeH` seam,
-//   3. pushes it via `Aravis.pushHomography(pipeId, hostNs, h9)` with
-//      hostNs = the SAMPLE's time (not push time) — the brick matches frames
-//      against when the mirror was actually there.
-//
-// `computeH` returning null = no push (empty history, uncalibrated rig, or a
-// deliberately-unwired v1 seam) — the brick meters `passthrough`, honest.
-// Everything is injected (history/clock/push) so vitest drives the cadence
-// with fake timers and never loads native core.
+// Homography feeder: while a triple session is active, a ~200 Hz timer reads the
+// newest mirror sample from the orchestrator-wide mirrorHistory, derives H per side
+// via the injected computeH seam, and pushes `{hostNs=sample time, H}` into each L/R
+// undistort brick's native ParamRing so its thread warps every frame with
+// H(mirrorAt(frameHostNs)). computeH → null = no push (brick meters passthrough).
+// spec: docs/spec/controller.md#homography-feeder
 
 import { mirrorHistory, type MirrorAt } from "./mirror-history.js";
 import { hostNowNs } from "./time-align.js";

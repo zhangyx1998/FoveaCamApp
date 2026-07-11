@@ -4,36 +4,13 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// native-recorder Wave 3: the RECORDER NODE is now a THIN DRIVER over the
-// native recorder brick (`core.Recorder.*` — core/lib/Record/RecorderStream).
-// The brick owns the WHOLE write path in C++: producer-seam record taps on the
-// SAME pipes this node used to FIFO-read (raw camera publishers, CompressStream
-// /zlib outputs, derived bricks — advert-verbatim, byte-for-byte what the ring
-// carried), bounded drop-oldest queues, a free-running writer thread hosting
-// the hand-rolled McapWriter (docs/proposals/native-recorder.md). The one-JS-
-// worker consume+encode chain this file used to embed is DELETED: nothing
-// per-frame crosses JS in either direction — the host polls stats + ruling-3
-// frame notices on a low-rate timer and forwards extras back as native
-// enqueues.
-//
-// What this host still owns (the JS-visible surface is UNCHANGED — recording-
-// service.ts and every session composition are untouched):
-//   - the broker pipe connects (refcount++ → C-21 gate → producer runs) and
-//     their release ordering (the tap detach is synchronous, so removeStream
-//     releases its pipe immediately — no async stream-ended dance);
-//   - the `recorder/<session>` graph row + workload meter, fed by
-//     `foldStreamStats` over the brick's cumulative counters (same
-//     StreamCounters shape, same F2 drop attribution);
-//   - the ruling-3 extras round-trip (`dispatchFrame` over drained notices →
-//     `appendTelemetry`);
-//   - the container layout INPUTS (schema.ts constants + advert-verbatim
-//     channel metadata) — passed INTO the brick so docs/schema stays the single
-//     source of truth.
-//
-// The pure parts (stats folding, extras dispatch) remain exported and
-// unit-tested with fakes; the NATIVE seam is injected so vitest never loads
-// native core. `SeqRead` stays exported for capture-node.ts (its bounded FIFO
-// consumer still reads pipes in a JS worker — a legitimate SHM/JS boundary).
+// Recorder node: a thin driver over the native recorder brick (`core.Recorder.*`).
+// The brick owns the whole C++ write path (producer-seam taps, drop-oldest queues,
+// a writer thread hosting McapWriter); the host only connects pipes, registers the
+// graph row + meter, and polls stats + ruling-3 frame notices on a low-rate timer.
+// Pure parts (stats fold, extras dispatch) are exported + unit-tested; the native
+// seam is injected so vitest never loads core.
+// spec: docs/spec/capture-recording.md#recorder-node
 
 import { createRequire } from "node:module";
 import { resolve } from "node:path";
@@ -67,10 +44,8 @@ import {
 
 const requireFromHere = createRequire(import.meta.url);
 
-// ============================================================================
-// KEPT for capture-node.ts (its bounded FIFO consumer classifies reads with
-// this exact shape — core/test/29-raw-pipe.ts is canonical).
-// ============================================================================
+// Exported for capture-node.ts's bounded FIFO consumer (core/test/29-raw-pipe.ts
+// is the canonical read-classification contract).
 
 /** The `readSeqInto` classification: a frame (`seq`), NotYet (not published —
  *  retry), Gone (slot recycled — jump + drop-account), Closed (pipe retired —
@@ -90,11 +65,7 @@ export type SeqRead =
       meta?: { deviceTimestamp?: bigint; systemTimestamp?: bigint };
     };
 
-// ============================================================================
-// PURE PART 1 — native counters → meter stats folding (low-rate, never per
-// frame). UNCHANGED from the worker era: the native brick exposes the SAME
-// cumulative counter shape, so the fold (and its tests) carry over verbatim.
-// ============================================================================
+// Pure: native counters → meter stats folding (low-rate, never per frame).
 
 /** Cumulative per-stream counters the native brick exposes (monotonic totals;
  *  `written + dropped == ingested`, `droppedQueue + droppedRing == dropped`). */
@@ -169,10 +140,7 @@ export function foldStreamStats(
   return out;
 }
 
-// ============================================================================
-// PURE PART 2 — ruling-3 per-frame metadata dispatch (extras correlation).
-// UNCHANGED: only the post target moved (worker postMessage → native enqueue).
-// ============================================================================
+// Pure: ruling-3 per-frame metadata dispatch (extras correlation).
 
 /** The session's ruling-3 handler: given a NEW frame's stream + seq + TRUSTED
  *  capture time (`tNs`, ns — device time when the source stamps it, else the
@@ -247,10 +215,8 @@ export function dispatchFrame(
   return message;
 }
 
-// ============================================================================
-// The native seam — the exact `core.Recorder.*` surface the host drives,
-// INJECTED so vitest exercises the host with a fake and never loads core.
-// ============================================================================
+// Native seam — the `core.Recorder.*` surface the host drives, injected so vitest
+// exercises the host with a fake and never loads core.
 
 /** Finalize result as the native promise resolves it. */
 export interface NativeFinalizeStats {
@@ -311,9 +277,7 @@ function defaultNative(): RecorderNative {
   return core.Recorder;
 }
 
-// ============================================================================
-// The node host — broker connects, graph row + meter, low-rate poll, lifecycle.
-// ============================================================================
+// Node host — broker connects, graph row + meter, low-rate poll, lifecycle.
 
 /** A connected pipe segment the recorder taps: its shm name + decode geometry
  *  (from the broker's `PipeHandle.spec`) + a release (disconnect) disposer. */

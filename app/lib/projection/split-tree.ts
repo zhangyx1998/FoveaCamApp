@@ -4,26 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Projection split-view — recursive split-tree model + pure reducer (docs/
-// proposals/projection-split-view.md §"Layout model", deliverable 2).
-//
-// The layout of a projection window is a recursive tree:
-//   Leaf(pane) | Split{ dir: row|col, children, ratios }
-// serialized into the window's URL (`?win`/state-in-URL precedent) so reload +
-// manifest restore replay the exact layout. Every operation here is PURE and
-// returns a NEW tree (structural sharing not required at this scale) so the
-// reducer is fully unit-testable; the Vue shell stays a thin renderer over it.
-//
-// Invariants held on every returned tree:
-//   - a `split` always has >= 2 children (a 1-child split collapses to its
-//     child; a 0-child split collapses to null);
-//   - `ratios.length === children.length` and `sum(ratios) === 1` (normalized);
-//   - a `split`'s children are never directly-nested same-`dir` splits — they
-//     are flattened, so a row-of-rows reads as one row (VSCode behavior).
-//
-// Renderer- and main-safe, Vue-free (pure data + math). Addresses splits by a
-// numeric PATH (indices from the root) for divider resize; addresses panes by
-// id for insert/remove/swap/find (a pane id is stable across a reload).
+// Projection split-view — recursive split-tree model + pure reducer. The layout is a
+// recursive tree (Leaf(pane) | Split{dir,children,ratios}) serialized into the window
+// URL; every op is PURE and returns a NEW tree (fully unit-testable). Splits addressed
+// by numeric PATH (divider resize), panes by stable id. Vue-free.
+// Tree invariants (≥2 children, normalized ratios, no nested same-dir splits): see spec.
+// spec: docs/spec/projection.md#split-tree
 
 import { freshPaneId, type Pane } from "./descriptor.js";
 

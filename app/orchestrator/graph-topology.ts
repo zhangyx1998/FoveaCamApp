@@ -4,41 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// graphTopology() v2 — the UNIVERSAL node-reporting fold (unified-time-and-
-// topology §6). Assembles the live stream node graph the profiler renders,
-// served inside `system.perfSnapshot` (ruled Q2: A's existing 1 Hz poll).
-//
-// ONE shape, every node type: nodes self-report as `NodeReport` (contract in
-// `@lib/orchestrator/graph-contract`) and `buildTopologyFromReports` is a
-// mechanical fold — nodes = reports (stats folded BY ID from the workloads
-// map when a report carries none), edges = flatten(report.inputs). A node
-// missing from the graph means it isn't reporting, never that derivation
-// guessed wrong.
-//
-// MIGRATION STORY (proposal §6/§7): today only part of the pipeline
-// self-reports, so two ADAPTERS synthesize reports from the legacy surfaces:
-//
-//  - `pipeListToReports` wraps `Pipe.list()` rows — reproduces the C-24
-//    camera-root synthesis (implicit `camera/<serial>` node + the PHYSICAL
-//    camera→brick input; B's convert/undistort/fovea bricks all tap the raw
-//    camera stream inside their fused native pipelines, so a fovea does NOT
-//    read the undistort pipe even though its id nests under /undistort/).
-//    DIES when the native `Topology.report()` NAPI lands (P3) and every brick
-//    reports its actual inputs.
-//  - `wiringToReports` wraps the `registerGraphWiring` stage-1 shim (sessions
-//    register fixed compositions on activate, dispose on drain) — edges move
-//    into the TARGET node's `inputs`, legacy `statsKey` folding preserved.
-//    DIES when sessions/workers post `NodeReport`s directly (the vision-worker
-//    meterName machinery generalizes to the same shape).
-//
-// `buildTopology(deps)` keeps its exact pre-v2 signature/behavior as a thin
-// composition: adapters → (optional) real reports from `deps.reports` (merged
-// AFTER the adapters — a real report REPLACES an adapter-synthesized node of
-// the same id) → `buildTopologyFromReports`. `system.ts` needs no changes.
-//
-// Defensive-read guarantee (rig 2026-07-08 regression class): a malformed
-// report / probe row degrades to a partial node, NEVER throws — one bad row
-// must not blank the graph or break snapshot export.
+// graphTopology() v2 — the universal node-reporting fold. Nodes self-report as
+// `NodeReport` and `buildTopologyFromReports` folds them (+ two legacy adapters,
+// `pipeListToReports` / `wiringToReports`, that synthesize reports until every
+// brick self-reports). Feeds `system.perfSnapshot`. A malformed row degrades to a
+// partial node, never throws.
+// spec: docs/spec/graph.md#graph-topology
 
 import type {
   GraphEdge,

@@ -4,27 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// real-2 GRAPH TOPOLOGY CONTRACT (C-24, DRAFT pending planner ruling — shape
-// published EARLY for A-33's profiler graph panel; types only, zero runtime).
-//
-// The orchestrator's stream node graph: every producing endpoint (camera
-// source, converter, undistort, KCF, detector, fovea crop, vision kernels) and
-// every consuming endpoint (renderer views, worker inputs, recorder) is a NODE
-// with a unique PATH-LIKE id (= its output stream id); connections are EDGES
-// carrying the stream's type + measured flow. Stats fold from the existing
-// meters (native ThreadMeter probes, pipe meters, JS WorkloadSnapshot) — same
-// numbers the profiler tables already show, keyed onto the graph.
-//
-// Id scheme (C-24 §1): `/`-separated paths, two roots —
-//   camera/<serial>[/...]   shared resource bricks, broker-owned, refcounted
-//                           (e.g. camera/123, camera/123/convert,
-//                            camera/123/undistort, camera/123/kcf,
-//                            camera/123/undistort/fovea/2)
-//   win/<windowId>/[...]    window-composed nodes (renderer-demanded, lifetime
-//                           = the composition; e.g. win/tracking-1/display)
-// A format ACCESS MODIFIER stays in the last segment as `@<PixelFormat>` only
-// when a SECOND simultaneous format of the same stream exists (C-23 ruling
-// carried forward); the default format is unsuffixed and lives in the type.
+// Graph topology contract (C-24; types only, zero runtime). The orchestrator's
+// stream node graph: producing/consuming endpoints are NODES keyed by a path-like id
+// (= their output stream id), connections are EDGES carrying stream type + flow.
+// Two id roots (camera/<serial> refcounted bricks, win/<windowId> composed nodes),
+// optional @<PixelFormat> modifier for a simultaneous second format.
+// spec: docs/spec/orchestrator-protocol.md#graph-contract
 
 import type { Dtype } from "../../../docs/schema/pixel-formats.js";
 import type { WorkloadSnapshot } from "./stats.js";

@@ -4,13 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Live cross-window state for the extrinsic-calibration OVERLAY toggle
-// (calibration-records-v2.md §Overlay). Rides a single store doc — MAIN is the
-// config authority now (692f0e3), so a toggle in the Settings window is visible
-// LIVE in a running calibrate-extrinsic view (or any StreamView for the target
-// camera) with no bespoke IPC. The overlay renderer is the SAME component as the
-// standalone visualizer; this doc only says WHICH record to draw and for WHICH
-// camera.
+// Live cross-window state for the extrinsic-calibration overlay toggle. Rides a single
+// store doc (["ui", "cal-overlay"]) — MAIN is the config authority, so a Settings-window
+// toggle is visible LIVE in a running calibrate-extrinsic view (or any StreamView for the
+// target camera) with no bespoke IPC. The overlay renderer is the same component as the
+// standalone visualizer; this doc only says WHICH record to draw and for WHICH camera.
+// spec: docs/spec/calibration.md#calibration-overlay
 
 /** The store doc backing the overlay toggle (`["ui", "cal-overlay"]`). */
 export const OVERLAY_DOC = ["ui", "cal-overlay"];

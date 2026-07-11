@@ -4,21 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Orchestrator-side port of the renderer's `calibrate-extrinsic/tracker.ts`
-// (`Tracker` class + `actuate()`), shared by calibrate-extrinsic,
-// calibrate-distortion, and calibrate-drift (docs/history/refactor/orchestrator.md
-// §7.1 S1b) — the original was cross-module-imported by all three, so it
-// lives here as orchestrator infra (like `actuation.ts`/`calibration.ts`)
-// rather than co-located in one of the three consumer modules.
-//
-// Vue-free port: the original class used `ref`/`shallowRef`/`computed` for
-// its public getters and `EventTarget`/`dispatchEvent` for the "new
-// detection" signal — replaced with plain fields and a callback-list
-// (`onDetection`), matching every other session's style (`registry.ts`'s
-// `onFrame`/`onView`). Runs its own `detector.stream(camera.stream, scale)`
-// consumer, same concurrent-raw-stream pattern calibrate-intrinsic's marker
-// mode already established for this exact "MarkerDetector only takes a raw
-// Frame/Stream<Frame>, not a Mat" constraint.
+// Orchestrator-side Vue-free port of the renderer's calibrate-extrinsic/tracker.ts
+// (Tracker class + actuate()), shared by calibrate-extrinsic/-distortion/-drift, so it
+// lives here as orchestrator infra rather than in one consumer module. Runs its own
+// detector.stream(camera.stream, scale) consumer (MarkerDetector needs a raw
+// Frame/Stream, not a Mat) and signals via a callback-list (onDetection).
+// spec: docs/spec/calibration.md#marker-tracker
 
 import {
   MarkerDetector,

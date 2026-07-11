@@ -4,17 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Camera/stream registry. Centralizes camera ownership *by resource* (one native
-// `Camera` per serial) instead of by session: live-view, manage-cameras, and the
-// (future) control loops lease the same handle through `acquire(serial)`, so they
-// never open the same camera twice or fight over its pixel format/config.
-//
-// Each shared camera advertises one native `camera:<serial>` SHM pipe (the
-// native converter producer, C's pipe broker) — so N windows viewing one camera cost
-// one acquisition and one native producer, delivering the shared-stream half of
-// the multi-window/projector goal (§2 secondary). No camera frames touch the JS
-// event loop: C-22b step 3 retired the in-process view-tap loop (`onView` +
-// `registry:<serial>` meter) entirely — all vision runs in worker threads now.
+// Camera/stream registry. Centralizes camera ownership BY RESOURCE (one native
+// `Camera` per serial, leased via `acquire(serial)`) so consumers never open a camera
+// twice or fight over its config. Each shared camera advertises one native
+// `camera:<serial>` SHM pipe (the native converter producer) — N windows cost one
+// acquisition. INVARIANT: no camera frames touch the JS event loop (all vision runs in
+// worker threads; the in-process view-tap loop was retired at C-22b step 3).
 
 import type { Camera } from "core/Aravis";
 import type { Role } from "@lib/camera-config";

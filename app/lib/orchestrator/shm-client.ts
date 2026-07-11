@@ -4,31 +4,13 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Renderer-side SHM transfer pool (C-P2, factored out of `client.ts`).
-//
-// The canonical preview transport hands the renderer an `shm` descriptor, not
-// pixels: the actual read runs in the unsandboxed main-window preload (which
-// alone can load the native reader addon), and the bytes come back over a
-// dedicated `MessagePort` as a TRANSFERRED `ArrayBuffer`. This module owns that
-// port handshake, the ping-pong buffer pool that recycles transferred buffers
-// (so a steady stream doesn't churn allocations), the per-read timeout, and the
-// message protocol with the preload. `client.ts` just calls `read()` in its
-// frame flush and `release()` when a materialized frame is replaced/dropped.
-//
-// Buffer-ownership is the whole ballgame (MessagePort transfer moves ownership
-// away and back). The invariants, mirrored by shm-client.test.ts:
-//   - success  → buffer becomes `payload.data`; caller returns it via release()
-//                once the frame is displaced.
-//   - null     → no new frame this read; buffer is reclaimed to the pool here.
-//   - error    → buffer reclaimed to the pool here; read rejects (→ null).
-//   - timeout  → read rejects; the buffer is still in the preload's hands, so
-//                it is reclaimed by the STALE-response path when the late
-//                read-done arrives with no matching pending entry.
-//   - stale    → read-done with no pending entry (already timed out / disposed)
-//                → buffer reclaimed to the pool.
-//
-// Renderer-safe, Vue-free, core-free (type-only imports) like the rest of
-// `@lib/orchestrator`.
+// Renderer-side SHM transfer pool: the preview transport hands the renderer an `shm`
+// descriptor; the actual read runs in the main-window preload and the bytes come back
+// over a dedicated MessagePort as a transferred ArrayBuffer. Owns the port handshake,
+// the ping-pong buffer pool, the per-read timeout, and the preload message protocol.
+// Buffer ownership (success/null/error/timeout/stale reclaim rules) is the whole
+// ballgame — see the spec; invariants mirrored by shm-client.test.ts.
+// spec: docs/spec/orchestrator-protocol.md#shm-client
 
 import { frameByteLength } from "./frame-payload.js";
 import type { FramePayload } from "./protocol.js";

@@ -4,21 +4,13 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// The ANCHOR ENRICHMENT node (docs/proposals/pairing-nodes.md ruling 4): a JS,
-// FIN-rate (low, loop-safe) middle node. Each completed controller exposure
-// (FIN `FrameOutcome`) becomes ONE stage-independent anchor — its exposure time
-// + stream + the enrichment attachments (exposure-averaged volts, the V2A
-// angles, and the per-side homography H) — pushed to EVERY registered pairing
-// brick. ONE anchor source feeds all stages (the anchor is stage-independent);
-// the native brick treats the attachments as an OPAQUE `Float64Array` payload
-// and echoes it back in the pair record, so the RECORDER (a downstream consumer)
-// unpacks them JS-side.
-//
-// NATIVE-FREE by construction (same idiom as controller-node.ts): the pairing
-// bricks are injected as a small `PairAnchorSink` seam and the volts→angle→H
-// math via the triple's `CoordinateConversions` (the exact chain the display
-// path + `conversionComputeH` already use), so vitest drives it with a fake
-// calibration and never loads the addon.
+// The anchor enrichment node: a JS, FIN-rate (loop-safe) middle node. Each completed
+// controller exposure (FIN FrameOutcome) becomes ONE stage-independent anchor (exposure
+// time + stream + enrichment attachments: exposure-averaged volts, V2A angles, per-side
+// H) pushed to EVERY registered pairing brick, which echoes the opaque Float64Array back
+// in the pair record for the recorder to unpack. Native-free (injected PairAnchorSink
+// seam + the triple's CoordinateConversions).
+// spec: docs/spec/controller.md#anchor-node
 
 import type { CoordinateConversions } from "@lib/coordinate-conversions";
 import type { Pos } from "@lib/controller-codec";

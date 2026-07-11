@@ -4,27 +4,13 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Renderer-side config store client. Same public shape as before
-// (`open`/`clear`/`list`/`read`) so every existing consumer (camera.ts,
-// config.ts, calibrate-extrinsic) keeps working unchanged, but the transport now
-// targets MAIN — the single config authority (docs/proposals/config-store-main-
-// authority.md) — over `window.foveaBridge` (ipcRenderer), NOT the orchestrator
-// channel. Two consequences that fix real data-loss classes:
-//   • The connection never dies with an orchestrator instance (ipcRenderer is
-//     always up), so a Settings/TeleCanvas window that outlives its instance
-//     keeps persisting — the old one-shot `connect()` decay is gone by
-//     construction (this module no longer imports `connect`).
-//   • A local edit sends a key-level PATCH (a diff of the tracked doc against the
-//     last value main acked), not a whole-document write, so two windows editing
-//     DIFFERENT keys inside one round-trip both survive instead of clobbering.
-//
-// `open()` still returns a plain Vue-reactive object a module mutates directly
-// (`config.role = "L"`); a deep mutation queues a patch on the next microtask
-// (same debounce as before). A change from another window (or an orchestrator-
-// internal session) arrives as `store:changed` and is applied onto the SAME
-// object reference via the `applying` guard, so templates/computed update for
-// free. Values cross via ipcRenderer's structured clone (bigint/Date/TypedArray
-// survive) — no codec needed here.
+// Renderer-side config store client. Same public shape (open/clear/list/read) but the
+// transport targets MAIN (the single config authority) over window.foveaBridge
+// (ipcRenderer), not the orchestrator channel — so it outlives any orchestrator
+// instance and sends key-level PATCHes (concurrent edits to different keys don't
+// clobber). open() returns a Vue-reactive object; cross-window edits arrive as
+// store:changed and apply onto the same reference under the `applying` guard.
+// spec: docs/spec/store.md#store-client
 
 import { reactive, toRaw, watch } from "vue";
 import { diffKeys, replaceInPlace, type PatchOp } from "./store-patch.js";

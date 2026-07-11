@@ -4,23 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// GENERAL-PURPOSE session-owned STEREO DISPARITY node (stereo-disparity-and-
-// heatmap-nodes, ruled 2026-07-09): the first TWO-INPUT chained brick
-// (`StereoStream`) — SGBM over a left/right pair of frame pipes, publishing a
-// single-channel CV_32F disparity map as its own C-20 pipe
-// (`pixelFormat: "Disparity32F"`, `dtype: "F32"`).
-//
-// Ticks on every LEFT arrival paired with the LATEST RIGHT frame (latest-wins
-// on both taps — no cross-camera seq comparison); disparity is in LEFT-frame
-// coordinates and the left frame's timestamps/origin are forwarded. Params
-// are REACTIVE (`retune`, applied on the next tick, no re-attach).
-//
-// ON-DEMAND (ruling 2) is the ChainedStream contract: the brick runs iff its
-// pipe has consumers (or a downstream tap — the heatmap brick — subscribes);
-// parked, its SGBM cost is exactly zero.
-//
-// Seam-injected (never imports native core) — index.ts wires
-// `Aravis.attachStereoPipe`/`setStereoParams`/`detachStereoPipe`.
+// General-purpose session-owned STEREO DISPARITY node: the first two-input chained
+// brick (StereoStream) — SGBM over an L/R pair, publishing a 1-channel CV_32F
+// disparity map ("Disparity32F"/F32). Ticks on each LEFT arrival paired with the
+// latest RIGHT (latest-wins); output in left-frame coords, params reactive; on-demand
+// (zero SGBM cost while parked). Seam-injected (never imports core).
+// spec: docs/spec/pipes.md#stereo-pipe
 
 import type { PipeSpec } from "@lib/orchestrator/pipe-contract.js";
 

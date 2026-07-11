@@ -4,15 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Coordinate conversions for a calibrated fovea triple — angle ⇄ voltage (per
-// fovea, drift-corrected), angle ⇄ wide pixel (intrinsic undistort), and
-// angle → homography. Pure math over the loaded calibration objects, shared by
-// the renderer and the orchestrator control loops.
-//
-// Inputs are described structurally (`ConversionInputs`) so both the renderer's
-// `CalibratedTriple` (`camera.ts`) and the orchestrator's loaded triple
-// (`orchestrator/calibration.ts`) satisfy it — neither side is coupled to the
-// other's loader types.
+// Coordinate conversions for a calibrated fovea triple — angle ⇄ voltage (per fovea,
+// drift-corrected), angle ⇄ wide pixel (intrinsic undistort), angle → homography. Pure
+// math over the loaded calibration objects, shared by the renderer and orchestrator control
+// loops. Inputs are structural (ConversionInputs) so both loaders satisfy it — neither side
+// is coupled to the other's types.
+// spec: docs/spec/calibration.md#coordinate-conversions
 
 import type { Point2d } from "core/Geometry";
 import type { Undistort, Mat } from "core/Vision";

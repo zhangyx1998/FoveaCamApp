@@ -4,36 +4,13 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// IMM (Interacting Multiple Model) Kalman motion PREDICTOR chained after the
-// disparity-scope tracker (docs/proposals/imm-delay-compensation.md). The
-// tracker emits target centers stamped with a TRUSTED device timestamp; by the
-// time the PID/mirrors act on a result the target has moved. This module wraps
-// each `TrackResult`: it estimates the target's dynamics from the timestamped
-// centers, then outputs the target's ESTIMATED position at
-// `t_result + delayMs` — positive ms predicts INTO THE FUTURE (lead), negative
-// RETRODICTS into the past (lag). `delayMs === 0` is an EXACT PASSTHROUGH (the
-// same object flows through — zero behavior change until configured).
-//
-// PURE per-result scalar math (types-only core imports → no native addon
-// loads), mirroring `@orchestrator/pid-node`'s "run scalar controllers at the
-// upstream RESULT rate" precedent. Unit-tested in `imm-predictor.test.ts`.
-//
-// Model set (3 models over a SHARED augmented per-axis state [pos, vel, acc];
-// the models differ only by their transition F(dt) and process-noise Q(dt), so
-// mixing across them needs no dimension bookkeeping):
-//   - CP  constant position   — F zeros vel+acc; random-walk position noise.
-//   - CV  constant velocity    — F zeros acc; white-noise-acceleration Q.
-//   - CA  constant acceleration — full kinematic F; white-noise-jerk Q.
-// Standard IMM cycle per step: mixing → per-model KF predict/update →
-// likelihood → model-probability update → combination.
-//
-// Axes are filtered INDEPENDENTLY (two decoupled scalar-position IMMs). The
-// tracker's per-axis measurement noise is independent and image-plane motion
-// carries no dynamic cross-axis coupling, so decoupling keeps every matrix at
-// most 3×3 and explicit; a 2D maneuver is still captured because each axis
-// detects its own acceleration. The innovation GATE (teleport / re-arm reset)
-// is evaluated JOINTLY across both axes so a discontinuity in either resets
-// both — a target teleport moves both filters together.
+// IMM (Interacting Multiple Model) Kalman motion predictor chained after the
+// disparity-scope tracker: wraps each TrackResult to output the target's estimated
+// position at `t_result + delayMs` (lead > 0, lag < 0, passthrough at 0). Three
+// dynamics models (CP/CV/CA) over a shared per-axis [pos,vel,acc] state; axes
+// filtered independently but the teleport/re-arm gate fires jointly. Pure scalar
+// math (types-only core imports); unit-tested.
+// spec: docs/spec/vision.md#imm-predictor
 
 import type { TrackResult } from "core/Tracker";
 import type { Point2d, Rect } from "core/Geometry";

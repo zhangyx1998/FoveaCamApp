@@ -4,30 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// capture-recorder-nodes Phase 3 (Wave I-3): the CAPTURE NODE. A worker thread
-// (vision-worker host pattern — the worker runs `core/Vision`) that performs the
-// bursty stack/wrap/diff/slice capture math at FULL BIT DEPTH off the
-// orchestrator main JS loop. The held `pending` resources (16-bit RGBA foveae,
-// sliced center, diff) live IN-WORKER until `save()`/`discard()`.
-//
-// ON-DEMAND PIPES (report): unlike the recorder (one long-lived connection), the
-// capture node is IDLE between captures — it holds NO pipe consumer connection
-// while parked. `capture()` connects the raw L/R producers on demand (the
-// injected `acquireStreams` seam: advertise+attach the `camera/<serial>/raw`
-// producer, refcount++ the broker → the C-21 gate fires → the capture-thread
-// subscriber is created — see core/lib/Aravis/RawPipe.cpp), drains the burst,
-// then releases (refcount-- → gate parks → the subscriber destructs → zero
-// capture-thread cost). The center view rides the session's already-connected
-// `undistort:<serial>` pipe (a fresh latest-wins read).
-//
-// The pure parts (the burst-grab seq loop, the indexed-resource accumulation
-// state machine, the downconvert selection, the center rect clamp) are exported
-// and unit-tested with fakes; the worker embeds them verbatim via `.toString()`
-// (zero drift), exactly like recorder-node.ts's `runStreamConsumer`. The image
-// math (stack/makeRGBA/wrapPerspective/diff/slice) is ported FAITHFULLY from the
-// deleted `manual-control/capture.ts` and runs against the worker's required
-// `core/Vision` — same call sequence, so the saved bytes match the pre-wave
-// implementation (full-depth parity is the Wave R-3 audit item).
+// Capture node: a worker thread (vision-worker host pattern, runs `core/Vision`)
+// that does the bursty stack/wrap/diff/slice capture math at full bit depth off
+// the orchestrator main loop, holding resources in-worker until save/discard.
+// Pipes connect on demand per shot. Pure helpers are exported + unit-tested and
+// embedded verbatim in the worker via `.toString()`.
+// spec: docs/spec/capture-recording.md#capture-node
 
 import { Worker, type TransferListItem } from "node:worker_threads";
 import { createRequire } from "node:module";
@@ -101,18 +83,11 @@ export interface BurstCfg {
   expired?(): boolean;
 }
 
-/**
- * Grab up to `count` consecutive fresh frames in FIFO order, returning the
- * number actually delivered (`< count` iff the pipe closed early). The state
- * machine reuses recorder-node's loss contract, bounded to the burst:
- *  - `null` (torn read)  → retry the SAME seq
- *  - Closed              → stop (producer retired mid-burst — return short)
- *  - NotYet              → back off (waiting for the next fresh frame)
- *  - Gone                → account `oldest − want` drops, JUMP to `oldest`
- *  - Ok                  → deliver, `want = seq + 1`, until `count` delivered
- * Pure over `cfg`; drives production and the unit tests identically (the worker
- * embeds this exact function via `.toString()`).
- */
+/** Grab up to `count` consecutive fresh frames in FIFO order; returns the number
+ *  actually delivered (`< count` iff the pipe closed early or the deadline
+ *  passed). Pure over `cfg`, shared by production and unit tests.
+ *  @remarks Loss contract (torn/Closed/NotYet/Gone/Ok): spec
+ *  docs/spec/capture-recording.md#grabburst */
 export async function grabBurst(cfg: BurstCfg): Promise<number> {
   let want = cfg.startSeq;
   let got = 0;
@@ -569,15 +544,9 @@ function defaultSpawn(): WorkerLike {
   }) as unknown as WorkerLike;
 }
 
-// ============================================================================
-// The worker source (eval'd CJS — same reason recorder-node.ts eval's its own:
-// the orchestrator bundles to a single file, so a sibling worker file would not
-// exist at runtime; the `core/Vision` + reader-addon entry paths are resolved by
-// the PARENT and handed in `workerData`). The pure burst/accumulate/manifest/
-// clamp helpers are embedded verbatim via `.toString()` so the unit-tested logic
-// and the production worker can never drift. The image math is ported FAITHFULLY
-// from the deleted capture.ts (same `core/Vision` call sequence).
-// ============================================================================
+// Worker source (eval'd CJS; entry paths resolved by the parent via workerData).
+// Pure helpers are embedded verbatim so tested logic and the worker can't drift.
+// spec: docs/spec/capture-recording.md#capture-node
 
 const WORKER_SOURCE = String.raw`
 const { parentPort, workerData } = require("node:worker_threads");

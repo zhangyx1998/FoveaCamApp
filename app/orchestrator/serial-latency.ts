@@ -4,21 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Serial-latency compensation for the motion predictor (docs/proposals/
-// serial-rate-governor.md Part 4, ruling addendum 2026-07-10). The per-triple
-// `delay_compensation_ms` is a FIXED lookahead; the serial hop's contribution
-// varies with queue depth / host load — with the wave-6 pressure sensors it
-// becomes adaptive: `serialLatencyMs = EMA(ackRttMs.p50) / 2` (one-way ≈ half
-// the ACK round trip; EMA smoothing so RTT jitter never whips the predictor).
-// The disparity-scope session polls the estimate at its stats throttle and
-// pushes `imm.setParams({ delayMs: fixed + (enabled ? latency : 0) })`.
-//
-// Gated by the GLOBAL `serial_latency_comp` config key (default OFF, Settings
-// → Global config only — no drawer control, per ruling). Off / no controller
-// / no RTT samples yet = byte-identical fixed behavior.
-//
-// Vue-free (store-hub read/subscribe — the anaglyph-style/prediction-rate
-// precedent); the EMA is a pure class, unit-tested in vitest.
+// Serial-latency compensation for the motion predictor: adds an adaptive one-way
+// estimate serialLatencyMs = EMA(ackRttMs.p50)/2 to the fixed delay_compensation_ms
+// lookahead; the disparity-scope session polls it and pushes imm.setParams({ delayMs }).
+// Gated by the GLOBAL serial_latency_comp key (default OFF); off / no controller / no
+// RTT samples = byte-identical fixed behavior. Vue-free; EMA is a pure unit-tested class.
+// spec: docs/spec/controller.md#serial-latency
 
 import { read, subscribe } from "./store-hub.js";
 import { APP_CONFIG_PATH, DEFAULT_SERIAL_LATENCY_COMP } from "@lib/config-schema";

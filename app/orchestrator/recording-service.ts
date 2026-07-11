@@ -4,26 +4,13 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Composable RECORDING facility (capture-recorder-everywhere ruling 1).
-//
-// The per-app recording controllers (manual-control/recording.ts,
-// multi-fovea/recording.ts) were ~90% the same shape: a `start`/`stop` around
-// the recorder NODE lifecycle, a 250 ms stats poll, the `recording_active` /
-// `recordingStreams` telemetry (INCLUDING the F2 drop-cause split landed at
-// 5c7c9d4 — carried verbatim in `RecorderStreamStats`), and the acquire-then-
-// build error-path unwind discipline (20e8834). That skeleton lives here ONCE;
-// each app passes CONFIG (guard, resource acquisition + node options, optional
-// start/stop hooks) and keeps only its own semantics (fovea binding, descriptor
-// channels, compression routing, path policy).
-//
-// The recorder is an advert-verbatim socket, so the facility never interprets a
-// pipe — the app's `acquire` decides WHICH pipes to record (advert-verbatim,
-// /zlib siblings, extras streams) and returns the assembled node options plus a
-// `release` closure that unwinds EVERY acquired resource in reverse
-// (bricks-before-raw). The facility owns exactly one throw path: if the native
-// recorder-node build throws AFTER a successful acquire (worker spawn / broker
-// connect), it releases via that closure and rethrows — never leaving an
-// orphaned refcount (camera-exclusivity hazard) with the controller idle.
+// Composable recording facility: the ~90%-shared skeleton the per-app recording
+// controllers ran (start/stop around the recorder node, a 250ms stats poll, the
+// recording_active/recordingStreams telemetry incl. the F2 drop split, and the
+// acquire-then-build unwind discipline). Each app passes config; the app's `acquire`
+// decides which pipes to record and returns a reverse-order `release` closure. The
+// facility owns one throw path: build-after-acquire failure releases and rethrows.
+// spec: docs/spec/capture-recording.md#recording-service
 
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";

@@ -4,19 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// PAIRING brick seam (pairing-nodes P-1 / wave I-2). A core-free typed surface
-// over `Aravis.createPairStream` — the per-stage L/R pairing brick (two
-// in-process FIFO taps joined against FIN-derived anchors on the brick's own
-// thread; record output via a batched async iterator, MultiKcf pattern).
-//
-// ALWAYS-RUNNING lifecycle (pairing-nodes ruling 5): a session creates its
-// stage bricks with the trigger topology and releases them with it — the brick
-// is NOT consumer-gated and keeps consuming (+ dropping) with zero subscribers.
-// Trigger mode ONLY (ruling 1): anchors are real FIN outcomes; in free-run the
-// pool is empty and the brick idles.
-//
-// Seam-injected (never imports native core) so the session and vitest drive a
-// fake; index.ts wires the real `Aravis.createPairStream`.
+// Pairing brick seam: a core-free typed surface over Aravis.createPairStream — the
+// per-stage L/R pairing brick (two in-process FIFO taps joined against FIN-derived
+// anchors on the brick's own thread; batched async-iterator record output). Always-
+// running (ruling 5, NOT consumer-gated), trigger mode only (ruling 1: free-run idles
+// with an empty anchor pool). Seam-injected (never imports core).
+// spec: docs/spec/pipes.md#pair-pipe
 
 import type { WorkloadSnapshot } from "@lib/orchestrator/stats.js";
 import type {

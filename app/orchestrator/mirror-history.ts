@@ -4,19 +4,13 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Short memory of mirror positions vs host time
-// (docs/proposals/unified-time-and-topology.md §4). The fovea/L-R undistort
-// homography needs the mirror position AT THE FRAME'S (past) exposure time —
-// commands are issued up to ~1 kHz while frames arrive at ~60 fps, so the
-// orchestrator keeps a small ring of {hostNs, left, right} and answers
-// `mirrorAt(hostNs)` with linear interpolation between the two neighbors.
-//
-// Writers (see controller-node.ts — the ONE trajectory place): every SENT
-// position update records its `predictVolts` result; the v1 awaited
-// `actuate()` path records the readback. Honesty
-// note (proposal §4): these are COMMANDS — the physical mirror follows with
-// LPF group delay (~1.3 ms at the 120 Hz LPF) + settle; triggered captures
-// should prefer the FIN exposure-averaged voltage when present (P4).
+// Short memory of mirror positions vs host time: a small ring of {hostNs, left, right}
+// answering mirrorAt(hostNs) by linear interpolation, so the L/R undistort homography can
+// use the mirror position at a frame's (past) exposure time (commands ~1 kHz, frames
+// ~60 fps). Written ONLY by controller-node.ts (the one trajectory place). Honesty note:
+// these are COMMANDS (physical mirror lags by LPF group delay + settle) — triggered
+// captures should prefer the FIN exposure-averaged voltage when present.
+// spec: docs/spec/controller.md#mirror-history
 
 import type { Pos } from "@lib/controller-codec";
 

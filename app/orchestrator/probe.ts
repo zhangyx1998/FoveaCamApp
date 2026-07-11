@@ -4,21 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Camera-enumeration PROBE (disposable-orchestrator ruling 3). A small
-// persistent utilityProcess main forks ONCE at startup — separate from any app
-// instance — whose ONLY job is to load `core`, enumerate connected devices on
-// an interval (~2s), and post the plain list to main, which forwards it to the
-// status-only Welcome window. It NEVER opens a camera (only `Camera.list()`,
-// which constructs + immediately releases handles), so it holds no hardware,
-// gates nothing, outlives every app instance, and is restarted by main if it
-// dies / killed at quit.
-//
-// It is its OWN tiny entry (not the orchestrator binary in a flag-mode) so it
-// pulls in none of the session graph / Hub / pipe broker — just `core/Aravis`
-// plus a cheap store-hub read for saved roles. Main PAUSES it while a hardware
-// app instance is alive (Aravis is per-process exclusive — a background
-// `Camera.list()` must not contend with the app's exclusive acquisition), and
-// RESUMES it back at the Welcome screen.
+// Camera-enumeration probe: a small persistent utilityProcess (its own tiny entry, no
+// session graph) that loads core, enumerates devices every ~2s via Camera.list(), and
+// posts the list to main for the status-only Welcome window. It NEVER opens a camera, so
+// it holds no hardware and gates nothing. Main PAUSES it while a hardware app instance is
+// alive (Aravis is per-process exclusive) and RESUMES it at Welcome.
+// spec: docs/spec/orchestrator-runtime.md#probe
 
 import { getCameraKey } from "@lib/camera-config";
 import { read } from "./store-hub.js";

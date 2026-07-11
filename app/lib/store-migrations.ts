@@ -4,34 +4,13 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Store-schema migration framework (docs/proposals/calibration-records-v2.md
-// §Migration framework). MAIN owns the config store (692f0e3), so migrations
-// run in MAIN at `StoreMain` construction — BEFORE any renderer or orchestrator
-// client is served, so no client ever observes a half-migrated tree.
-//
-// ── The durable contract (read before adding a migration) ───────────────────
-// The store carries a SCHEMA VERSION in the reserved doc `["schema"]`
-// (`store/schema.json` → `{ version }`). An unversioned/legacy tree = version 0.
-// `MIGRATIONS` is an ORDERED registry of `(from → to)` steps. On boot:
-//
-//   1. read the on-disk version;
-//   2. if it is behind `STORE_SCHEMA_VERSION`, SNAPSHOT the store repo (a git
-//      commit; push is best-effort — offline must not block boot), then
-//   3. apply each pending migration in order (each idempotent + pure over the
-//      injected fs surface), then
-//   4. write the new version and SNAPSHOT the migrated result.
-//
-// To evolve the schema, APPEND a migration `{ from: N, to: N+1, … }` and bump
-// `STORE_SCHEMA_VERSION` — never mutate a shipped migration (a user's tree may
-// already have run it). Each migration MUST be safe to re-run: the framework
-// won't re-run a step once the version advances, but tests assert run-twice is a
-// no-op regardless, so write the step to converge (check-before-write / derive
-// ids from content).
-//
-// The git snapshot boundary is INJECTED (`SnapshotHook`) so this module stays
-// pure + unit-testable — the real git shell lives in main (store-main.ts) and is
-// exercised only in production; the decision logic (when to snapshot, ordered
-// application, idempotency) is what the tests cover.
+// Store-schema migration framework: MAIN runs migrations at StoreMain construction,
+// before any client is served. An ordered `MIGRATIONS` registry advances the reserved
+// `["schema"]` version, snapshotting the store repo (injected git hook) before and
+// after. To evolve: APPEND a `{from,to}` step + bump STORE_SCHEMA_VERSION; NEVER mutate
+// a shipped migration, and keep every step idempotent (converge / derive ids from
+// content) — tests assert run-twice is a no-op.
+// spec: docs/spec/store.md#store-migrations
 
 import {
   INTRINSIC_STORE,

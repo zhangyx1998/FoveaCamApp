@@ -4,15 +4,13 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// WS1 real-1c/1d instrumentation seam (A-24 Stage 3). The free-running C++
-// threads — C's SHM pipe producers (`Pipe.probeAll()`) and B's 1d KCF tracker
-// (`tk.probe()`) — expose native meters in the `WorkloadSnapshot` shape, probed
-// OUT-OF-LOOP. This tiny registry folds those probes into
-// `system.perfSnapshot.workloads` alongside the JS meters, WITHOUT `system.ts`
-// touching `core`: the orchestrator index injects `Pipe.probeAll`, the tracking
-// session injects its tracker's probe, and `system.ts` just merges them. Keeps
-// the snapshot builder native-free (so its vitest keeps running) and lets the
-// profiler render a native producer/tracker stream identically to a JS one.
+// Native instrumentation seam: the free-running C++ threads (SHM pipe producers via
+// Pipe.probeAll(), the KCF tracker via tk.probe()) expose native meters in the
+// WorkloadSnapshot shape, probed OUT-OF-LOOP. This tiny registry folds them into
+// system.perfSnapshot.workloads WITHOUT system.ts touching core (index injects
+// Pipe.probeAll, the tracking session injects its tracker's probe, system.ts merges) —
+// keeping the snapshot builder native-free and rendering native streams like JS ones.
+// spec: docs/spec/orchestrator-runtime.md#native-probes
 
 import type { NodeReport } from "@lib/orchestrator/graph-contract.js";
 import type { QueueStat, WorkloadSnapshot } from "@lib/orchestrator/stats.js";

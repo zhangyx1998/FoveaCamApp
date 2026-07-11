@@ -4,19 +4,13 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// JS side of the clock-metrics channel (unified-time FINAL ruling 0). The
-// hardware owner THREADS own calibration — initial at device init +
-// incremental drift every 30 s, entirely native (ClockCalibration.cpp).
-// There is NO JS calibration driver anymore (a second latch driver would
-// race the owner thread on the TimestampLatch device register), and no
-// per-brick offset push (owner-applied dt makes every surfaced timestamp
-// trusted at the source).
-//
-// This module just BRIDGES the owner's pushed metrics into the JS-side
-// registry (`time-align.ts`) that feeds perfSnapshot.clocks / telemetry:
-// `Aravis.onClockMetrics` is the CallbackSlot channel — a lock-free armed
-// flag native-side means the owner threads skip the uv dispatch entirely
-// until this registration happens.
+// JS side of the clock-metrics channel: the hardware owner THREADS own all calibration
+// natively (initial + 30s drift). INVARIANT: no JS calibration driver (a second latch
+// driver would race the owner on the TimestampLatch register) and no per-brick offset
+// push (owner-applied dt makes every timestamp trusted at the source). This module only
+// BRIDGES the owner's pushed metrics into time-align.ts via the Aravis.onClockMetrics
+// CallbackSlot (a lock-free armed flag skips the uv dispatch until registration).
+// spec: docs/spec/controller.md#clock-calibration
 
 import type { ClockMetricsRow } from "core/Aravis";
 import { setCalibration } from "./time-align.js";

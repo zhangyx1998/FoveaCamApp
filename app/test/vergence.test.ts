@@ -82,7 +82,7 @@ function projectionFor(
 // `zoom` STATE (default 9.0), not the calibration-measured fovea/wide ratio
 // (`findPinholeProjection` measures it as `scale` but discards it). The math is
 // self-consistent for any `zoom`; correctness of the *absolute* scale still
-// hinges on `zoom` matching the real optics — see docs/applications/
+// hinges on `zoom` matching the real optics — see docs/spec/
 // disparity-scope.md.
 describe("foveaTileSize (fovea↔wide match scale-consistency)", () => {
   const stripFootprintPx = (width: number, zoom: number, scale: number) =>

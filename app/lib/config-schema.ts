@@ -4,23 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// SINGLE SOURCE OF TRUTH for the shared `["config"]` document's cross-process
-// SCHEMA — the doc path, value unions, defaults, and clamp bounds that BOTH the
-// renderer (`@lib/config`, Vue-bound) and the orchestrator readers
-// (`@orchestrator/{prediction-rate,serial-latency,record-compression,
-// anaglyph-style}`, which must stay Vue-free) need to agree on.
-//
-// It exists because `@lib/config` imports Vue (writable computed refs), so a
-// session-reachable orchestrator reader cannot pull it in without bundling all
-// of Vue into the utility process. Before this module the readers HAND-MIRRORED
-// the path / union / default / clamp with "keep in sync" comments, and the
-// 600 Hz prediction default was inlined in three places. Now every one of those
-// literals is defined ONCE, here, and imported by both sides.
-//
-// Vue-free AND Node-free by construction: types + plain data only, zero imports.
-// Follows the `docs/schema/anaglyph.ts` precedent (that table owns the anaglyph
-// style union + default; this module owns the rest of the config schema). Keep
-// it dependency-free so any process can load it.
+// SINGLE SOURCE OF TRUTH for the shared ["config"] document's cross-process schema —
+// the doc path, value unions, defaults, and clamp bounds both the renderer (@lib/config,
+// Vue-bound) and the Vue-free orchestrator readers must agree on. Exists because
+// @lib/config imports Vue, so a session-reachable reader can't pull it in. Vue-free AND
+// Node-free (types + plain data, zero imports) so any process can load it.
+// spec: docs/spec/store.md#config-schema
 
 /** The shared app-config document path. Every reader (renderer `useAppConfig`,
  *  each orchestrator store-hub reader) targets this ONE document, so a Settings

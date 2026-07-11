@@ -4,18 +4,13 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Pure marker-projection geometry, extracted from `@lib/marker` so it can be
-// shared by CORE-FREE contexts (the renderer's calibration visualizer) as well
-// as the core-importing `marker.ts` (which re-exports these). `marker.ts` also
-// holds the core-backed solves (`Projector.solve`, `findHomography`,
-// `findPinholeProjection`); everything HERE is plain arithmetic over `Point2d`/
-// `Point3d` (type-only imports, erased at build → no `core/` at runtime), so a
-// renderer bundle can import it without pulling native code.
-//
-// The single source of truth for the pinhole marker model: obj-space corners,
-// bilinear corner interpolation, relative→absolute placement, and the
-// rotate-and-perspective-project used to synthesize the calibration solve's
-// projected corners. Do NOT duplicate these — import from here.
+// Pure marker-projection geometry, extracted from @lib/marker so CORE-FREE contexts (the
+// renderer's calibration visualizer) can share it alongside the core-importing marker.ts
+// (which re-exports these + holds the core-backed solves). Plain arithmetic over
+// Point2d/Point3d (type-only imports, no core/ at runtime): the single source of truth for
+// the pinhole marker model (obj-space corners, bilinear interpolation, relative→absolute
+// placement, rotate-and-perspective-project). Do NOT duplicate these — import from here.
+// spec: docs/spec/calibration.md#projection-geom
 
 import type { Point2d, Point3d, Size } from "core/Geometry";
 

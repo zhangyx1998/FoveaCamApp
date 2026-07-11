@@ -4,22 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Pure projection math for the extrinsic-calibration visualizer (docs/proposals/
-// calibration-records-v2.md §Visualizer). For each recorded datapoint it pairs
-// the OBSERVED marker corners (as detected in the fovea image) with the
-// PROJECTED corners the calibration solve expects — the pinhole model's take on
-// where those object-space corners should land. The gap between the two is the
-// reprojection residual the visualizer draws (observed dots vs projected
-// crosses + connecting error segments).
-//
-// The projection reuses the EXISTING calibration math from `findPinholeProjection`
-// (@lib/marker) — `transformPoints` (rotate + perspective to the canonical
-// projected frame) and `relativeToAbsolute` (place into image space at the
-// fitted scale) — via the core-free `projection-geom` module, so this runs in a
-// renderer without pulling native code. It does NOT re-derive camera math: it is
-// the same construction `findPinholeProjection` fits its per-pose homography to,
-// stopped one step earlier (observed vs the projected target, before the
-// homography regression smooths across poses).
+// Pure projection math for the extrinsic-calibration visualizer: for each datapoint it
+// pairs the OBSERVED marker corners with the PROJECTED corners the pinhole solve expects;
+// the gap is the reprojection residual the visualizer draws. Reuses findPinholeProjection's
+// math via the core-free projection-geom module (runs in a renderer, no native code) — the
+// same construction, stopped one step before the homography regression smooths across poses.
+// spec: docs/spec/calibration.md#calibration-visualizer
 
 import type { Point2d } from "core/Geometry";
 import type { ExtrinsicDataset } from "./camera-config.js";

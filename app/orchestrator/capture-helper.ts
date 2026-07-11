@@ -4,30 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Composable CAPTURE facility (capture-recorder-everywhere ruling 3).
-//
-// Capture was reachable only from manual-control: the createCaptureNode wiring,
-// the ON-DEMAND per-shot raw L/R advertise+connect (center rides the session's
-// already-connected undistort pipe), the captureBusy/capture_meta telemetry, the
-// captureShot/getPreview/save/discard command surface, AND the recording-vs-
-// capture exclusivity guard all lived inline in manual-control/session.ts
-// (5c7c9d4 state). This helper lifts that machinery ONCE so any triple-holding
-// session opts in with CONFIG (its held L/R cameras, its live center pipe, an
-// app-specific per-shot snapshot, and its recording service's `active` flag).
-//
-// The extraction is FAITHFUL to manual-control: same on-demand acquire sequence
-// with the reverse-order error unwind (a mid-sequence throw never orphans a
-// refcount → camera-exclusivity hazard), the same F1 burst-timeout semantics
-// (owned by the capture NODE — the helper just forwards `snapshot()`'s optional
-// `burstTimeoutMs`), and the same exclusivity refusal (capture refused while a
-// recording holds the shared `camera/<serial>/raw` ids). manual-control becomes
-// a consumer with its existing triple snapshot; behavior is pinned unchanged.
-//
-// Naming (planner ruling): the CONTRACT MIXIN names are `captureShot` /
-// `getCapturePreview` / `saveCapture` / `discardCapture` (+ `captureBusy` /
-// `capture_meta` telemetry) — collision-free with app-local commands (calibrate-
-// intrinsic already has a `capture`). manual-control's contract keeps its legacy
-// `capture`/`getPreview` names aliased to this same helper for backward compat.
+// Composable capture facility: lifts the capture machinery that used to live inline
+// in manual-control (node wiring, on-demand per-shot raw L/R acquire, telemetry,
+// the command surface, and the recording-vs-capture exclusivity guard) so any
+// triple-holding session opts in with config. Faithful to manual-control including
+// the reverse-order acquire unwind and the F1 burst-timeout forwarding.
+// spec: docs/spec/capture-recording.md#capture-helper
 
 import {
   createCaptureNode,

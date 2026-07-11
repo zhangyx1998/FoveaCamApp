@@ -4,21 +4,13 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// The single config-store authority core (docs/proposals/config-store-main-
-// authority.md). This is the OLD `orchestrator/store-hub` cache/serialize/notify
-// engine, lifted out of the orchestrator process and made transport-free: a
-// per-path in-memory cache, a per-document serialized op queue (so a broadcast
-// never reflects an uncommitted value and concurrent writes never tear), and
-// notify-except-origin so an originator is never echoed its own change. The fs
-// backend is INJECTED (`StoreFsBackend`) so this is unit-testable with an
-// in-memory map, and so the one real instance can live in MAIN over
-// `orchestrator/store.ts`'s fs primitives (same on-disk codec, zero migration).
-//
-// `patch` is the new key-level merge the renderer client drives (set/delete per
-// top-level key); `write`/`update`/`clear` keep the exact semantics the
-// orchestrator-internal callers relied on. Every mutating op returns the
-// RESULTING document value so a proxy can cache + notify exactly what was
-// persisted.
+// The single config-store authority core: a transport-free cache/serialize/notify engine
+// (per-path in-memory cache, per-document serialized op queue so broadcasts never reflect
+// uncommitted values and concurrent writes never tear, notify-except-origin). The fs
+// backend is INJECTED so it's unit-testable and the one real instance lives in MAIN. Every
+// mutating op returns the RESULTING document value so a proxy caches/notifies exactly what
+// was persisted; `patch` is the key-level merge the renderer client drives.
+// spec: docs/spec/store.md#store-authority
 
 import { applyOps, type PatchOp } from "./store-patch.js";
 

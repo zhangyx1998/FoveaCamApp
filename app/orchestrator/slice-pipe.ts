@@ -4,22 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// GENERAL-PURPOSE session-owned SLICE node (split-disparity-nodes, ruled
-// 2026-07-09): a named reuse of the native fovea crop brick — a live-steered
-// ROI copy of a source pipe's frames, published as its own C-20 variable-size
-// pipe (every frame carries its ACTIVE dims + FRAME-BOUND crop origin in the
-// v4 slot header — the property downstream consumers use to lift local
-// coordinates back to the source frame).
-//
-// This is the SESSION-owned sibling of `createFoveaMaterializer`
-// (pipe-session.ts): same advertise + attach + steer + retire mechanics, but
-// named ids (`nodeId.slice(serial, name)`) outside the renderer-composed
-// numbered slot space — a session's crops (disparity's match strip / display
-// tile) never churn through the compose protocol.
-//
-// Seam-injected (never imports native core) so sessions and their vitest run
-// without the addon; index.ts wires `Aravis.attachFoveaPipe`/`setFoveaRect`/
-// `detachFoveaPipe`.
+// General-purpose session-owned SLICE node: a named reuse of the native fovea crop
+// brick — a live-steered ROI copy of a source pipe published as its own C-20
+// variable-size pipe (each frame carries active dims + frame-bound crop origin).
+// The session-owned sibling of createFoveaMaterializer, with named ids outside the
+// renderer-composed slot space. Seam-injected (never imports core).
+// spec: docs/spec/pipes.md#slice-pipe
 
 import type { Rect } from "core/Geometry";
 import type { PipeSpec } from "@lib/orchestrator/pipe-contract.js";

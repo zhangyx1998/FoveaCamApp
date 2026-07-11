@@ -4,16 +4,11 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Camera-enumeration PROBE contract + pure helpers (disposable-orchestrator
-// ruling 3). The probe is a small persistent enumerate-only process
-// (orchestrator/probe.ts) that loads `core`, lists devices on an interval, and
-// NEVER opens a camera. It outlives app instances and feeds the status-only
-// Welcome window a live camera list + connected state.
-//
-// This module is renderer-SAFE and Vue-FREE: the probe process, main, and the
-// Welcome renderer all share these types + the pure list-diff / status
-// derivation so there is one source of truth and they can be unit-tested
-// without Electron or a camera (test/probe-camera.test.ts).
+// Camera-enumeration probe contract + pure helpers: the probe process, main, and the
+// Welcome renderer all share these types + the pure list-diff / status derivation so
+// there is one source of truth, unit-testable without Electron or a camera. Renderer-safe
+// and Vue-free. (The probe process itself is orchestrator/probe.ts.)
+// spec: docs/spec/orchestrator-protocol.md#probe-contract
 
 /** One enumerated device, plain data. `role` is filled from saved config when
  *  the probe can read it cheaply (store-hub read); omitted otherwise. */

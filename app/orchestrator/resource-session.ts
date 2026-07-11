@@ -4,25 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Resource-scoped session lifecycle (A-P1). Each activation gets a
-// `ResourceScope` that OWNS the cleanups registered during `activate` and
-// drains them LIFO on idle. The scope also enforces the two lifecycle
-// invariants that produced a recurring bug class in the hand-rolled sessions:
-//
-//   1. **Ordered async drain** (V1/RT1): `idle()` returns a promise that
-//      resolves only after every registered cleanup — including camera-lease
-//      releases and async drains — has run, LIFO. The runtime's `drained()`
-//      awaits it, so a window switch waits for the real teardown.
-//   2. **Stale-async-completion safety** (V5/V10): if the session idles (or
-//      re-activates) while a slow `activate` is still running, that activation
-//      is SUPERSEDED — every resource it acquires from then on is released
-//      immediately instead of leaking, and a re-activation serializes behind
-//      the prior drain so two activations never hold the leases at once.
-//
-// Built on the A-R2-P1 `session-resources` primitives (DisposerBag/releaseLeases
-// are still used inside `activate`); this adds the generation/drain machinery
-// around them. Additive: `defineResourceSession` sits alongside `defineSession`,
-// so sessions migrate one at a time.
+// Resource-scoped session lifecycle: each activation gets a `ResourceScope` owning
+// the cleanups registered during `activate`, drained LIFO on idle. Enforces ordered
+// async drain (idle() resolves only after every cleanup ran) and stale-async safety
+// (a superseded activation releases everything it acquires; a re-activation
+// serializes behind the prior drain). Built on the session-resources primitives.
+// spec: docs/spec/orchestrator-runtime.md#resource-session
 
 import { defineSession, type ServerSession, type SessionDefinition } from "./runtime.js";
 import type { Contract } from "@lib/orchestrator/protocol";

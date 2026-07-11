@@ -4,23 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Projection split-view — pane descriptor codec (docs/proposals/
-// projection-split-view.md §"Sources", deliverable 3).
-//
-// A projectable pane binds ONE of two source kinds:
-//   - {kind:"frame", session, frame} — a Channel frame ref (today's projection
-//     path, driven passively by `useSession().frame(name)`).
-//   - {kind:"pipe", id}              — an advertised SHM pipe, driven by
-//     `usePipeFrame(id)` over the pipes session (epoch-aware). This is what
-//     makes raw camera previews/undistorts — the feeds most worth projecting —
-//     actually projectable (today only low-rate Channel frames are).
-//
-// This module is the VERSIONED serialize/parse boundary for those descriptors:
-//   - a single pane (the bridge single-pane open + the DnD transfer payload),
-//   - the whole layout tree (see `split-tree.ts`, which re-uses `parsePane`).
-// Every decode is defensive — a malformed / future-version string parses to
-// `null` rather than throwing, so a stale URL or a foreign drag never crashes a
-// window. Renderer- and main-safe (pure data + JSON); NO Vue, NO DOM.
+// Projection split-view — pane descriptor codec: the VERSIONED serialize/parse
+// boundary for a projectable pane's source ({kind:"frame",…} Channel ref or
+// {kind:"pipe",id} advertised SHM pipe). Every decode is defensive (malformed /
+// future-version → null, never throws) so a stale URL or foreign drag can't crash a
+// window. Renderer- and main-safe (pure data + JSON); no Vue, no DOM.
+// spec: docs/spec/projection.md#descriptor
 
 /** Codec schema version. Bump on an incompatible shape change; `parsePane`
  *  rejects any other version (forward-incompatible by design — an old window

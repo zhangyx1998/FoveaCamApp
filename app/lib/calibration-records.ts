@@ -4,40 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Calibration-records data model (docs/proposals/calibration-records-v2.md +
-// its AS-BUILT addendum for store schema v2).
-//
-// A calibration RECORD is the per-camera replacement for the flat calibration
-// document. BOTH kinds — EXTRINSIC (per-fovea datapoint array) and INTRINSIC
-// (center-camera solve) — share one model:
-//
-//   • IMMUTABLE inner data (`RecordInner`) — the raw payload the record is built
-//     from. This is the HASH PRE-IMAGE: the record `id` (its primary key AND
-//     store filename) is a TRUNCATED SHA-256 (32 hex digits — see
-//     {@link RECORD_ID_HEX}) of a canonical, key-sorted serialization of
-//     `inner`. Pure + deterministic → the same payload always yields the same
-//     id, across sessions/platforms, so a record imported from another rig
-//     collides with an identical local one (import then just ADDS an
-//     association).
-//
-//   • MUTABLE outer metadata (`RecordMeta`) — associations (camera-instance ⇄
-//     triple bindings), a creation timestamp (latest-first ordering key), an
-//     optional label, and (for aggregates) the source record ids. Editing the
-//     outer metadata NEVER changes the id (only the inner data does).
-//
-// Records live in PER-KIND store directories, keyed by their 32-hex id:
-//   • extrinsic → `["calibrate-extrinsic", <id>]`  ({@link EXTRINSIC_STORE})
-//   • intrinsic → `["calibrate-intrinsic", <id>]`  ({@link INTRINSIC_STORE})
-// (Schema v2 removed the flat `calibration-records/` directory; the v1→v2
-// migration moved every record into its per-kind directory and truncated the
-// id, and wrapped legacy `calibrate-intrinsic/<cameraKey>` CameraCalibration
-// docs as intrinsic records. See `store-migrations.ts`.)
-//
-// This module is PURE (no store IO, no Vue, no core/): the config window, the
-// orchestrator load path, and the store-migration framework all inject their
-// own IO around these functions, and every function here is unit-testable with
-// plain objects. `sha256` is the only async dependency (WebCrypto, available in
-// both the renderer and the node/main contexts).
+// Calibration-records data model: a per-camera record (extrinsic or intrinsic)
+// with an IMMUTABLE inner payload whose content hash (32-hex truncated SHA-256) is
+// the record id + filename — so identical payloads collide across rigs — and MUTABLE
+// outer metadata (associations/timestamp/label) that never changes the id. Records
+// live in per-kind store dirs. Pure (no IO/Vue/core); IO is injected by callers.
+// spec: docs/spec/calibration.md#calibration-records
 
 import { sha256 } from "./util/hash.js";
 import type { ExtrinsicDataset } from "./camera-config.js";

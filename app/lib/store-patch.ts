@@ -4,14 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Pure diff/merge helpers for the config-store patch protocol
-// (docs/proposals/config-store-main-authority.md). The renderer `Store` client
-// diffs its tracked reactive document against the last value it knows main has
-// (`diffKeys`) and sends the resulting top-level-key ops; main merges them into
-// the authoritative document (`applyOps`). Both halves are transport-free and
-// unit-tested — no Vue, no Electron, no fs. `deepEqual` handles the value shapes
-// that cross the structured-clone / store-codec boundary (bigint, Date,
-// TypedArray) so a no-op edit produces NO patch.
+// Pure diff/merge helpers for the config-store patch protocol: the renderer Store client
+// diffs its tracked doc against the last value it knows main has (diffKeys) and sends the
+// top-level-key ops; main merges them (applyOps). Transport-free and unit-tested (no Vue /
+// Electron / fs). deepEqual handles the structured-clone shapes (bigint, Date, TypedArray)
+// so a no-op edit produces NO patch.
+// spec: docs/spec/store.md#store-patch
 
 /** One top-level-key patch operation, or a whole-document replace. A nested
  *  change is expressed as a whole `{ key, value }` replace of that top-level

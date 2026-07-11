@@ -4,21 +4,13 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Reusable PID-override contract FRAGMENT (docs/proposals/pid-nodes-and-view-
-// replumb.md §"Renderer reactive proxy"). A PID controller node can be
-// externally OVERRIDDEN from the renderer (a pointer drag pins the output while
-// the control law is held reset); this file is the single, module-agnostic
-// definition of the state field + command that expose that slot across the
-// orchestrator↔renderer boundary — the same role the per-module `contract.ts`
-// files play, factored out so ANY module gets the identical shape.
-//
-// STRICTLY Vue-free (imports only `@lib/orchestrator/protocol`): module
-// contracts are imported by the ORCHESTRATOR bundle too, so pulling `vue` in
-// here would break the Vue-free-orchestrator rule the same way it did for
-// `@lib/pid` (see that file's header). The renderer-side reactive proxy that
-// CONSUMES this fragment (`usePidOverride`) lives in the client lib, where Vue
-// already ships. The orchestrator-side mapping (`applyPidOverride`) lives in
-// `@orchestrator/pid-node`, next to the override slot it drives.
+// Reusable PID-override contract FRAGMENT: the single, module-agnostic definition of the
+// state field + command exposing a PID node's override slot across the
+// orchestrator↔renderer boundary, factored out so any module gets the identical shape.
+// Strictly Vue-free (imports only @lib/orchestrator/protocol) since module contracts are
+// imported by the orchestrator bundle too. Consumer usePidOverride lives in the client
+// lib; the orchestrator mapping applyPidOverride lives in @orchestrator/pid-node.
+// spec: docs/spec/orchestrator-protocol.md#pid-override-contract
 
 import { cmd, type Command } from "./protocol.js";
 

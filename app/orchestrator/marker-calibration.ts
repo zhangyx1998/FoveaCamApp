@@ -4,19 +4,13 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Small, Vue-free primitives shared by the marker-calibration sessions
-// (calibrate-extrinsic, calibrate-drift, calibrate-distortion). Each of the
-// three independently stood up an identical L/C/R `MarkerTracker` triple,
-// the same `target ? { points } : null` detection overlay, the same
-// per-tracker `onDetection` wiring, teardown, and `setTargetId` retarget —
-// with the tracker scale/dictionary/`internal` constants copy-pasted three
-// ways (drift dropping subpixel refinement being the only real difference).
-//
-// Kept as a toolkit, not a session framework (same discipline as
-// `fovea-pipeline.ts`): each session still owns its own intrinsic/extrinsic
-// data, actuation mode, view taps, and extra telemetry — these helpers only
-// remove the triple + detection-publish + target-id boilerplate so the three
-// can't drift on marker id, detector dictionary, or fovea scale.
+// Small, Vue-free primitives shared by the marker-calibration sessions (calibrate-
+// extrinsic, -drift, -distortion): the L/C/R MarkerTracker triple, the detection overlay,
+// onDetection wiring, teardown, and setTargetId retarget. A toolkit, not a session
+// framework (fovea-pipeline.ts discipline) — each session still owns its own data /
+// actuation / taps; these helpers only remove the boilerplate that could drift on marker
+// id, detector dictionary, or fovea scale.
+// spec: docs/spec/calibration.md#marker-calibration
 
 import { MarkerDetector } from "core/Vision";
 import type { Camera } from "core/Aravis";

@@ -4,22 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// GENERAL-PURPOSE session-owned COMPOSITE node (composite-node-and-center-
-// select-fix §B, ruled 2026-07-09): a two-input native brick
-// (`CompositeStream`) — a per-pixel BGRA op (anaglyph / L-vs-R difference)
-// over a left/right pair of frame pipes, publishing a RGBA8 pipe.
-//
-// Ticks on every LEFT arrival paired with the LATEST RIGHT frame (latest-wins
-// on both taps — no cross-camera seq comparison); the output is in LEFT-frame
-// coordinates and the left frame's timestamps/origin are forwarded. The mode
-// is REACTIVE (`retune`, applied on the next tick, no re-attach).
-//
-// ON-DEMAND (ruling 2) is the ChainedStream contract: the brick runs iff its
-// pipe has consumers; parked, its cost is exactly zero — selecting the center
-// view IS the demand.
-//
-// Seam-injected (never imports native core) — index.ts wires
-// `Aravis.attachCompositePipe`/`setCompositeParams`/`detachCompositePipe`.
+// General-purpose session-owned COMPOSITE node: a two-input native brick
+// (CompositeStream) — a per-pixel BGRA op (anaglyph / L-vs-R difference) over an L/R
+// pair, publishing an RGBA8 pipe. Ticks on each LEFT arrival paired with the latest
+// RIGHT (latest-wins); output in left-frame coords, mode reactive; on-demand
+// (selecting the center view IS the demand). Seam-injected (never imports core).
+// spec: docs/spec/pipes.md#composite-pipe
 
 import type { PipeSpec } from "@lib/orchestrator/pipe-contract.js";
 import type { AnaglyphStyle } from "../../docs/schema/anaglyph.js";

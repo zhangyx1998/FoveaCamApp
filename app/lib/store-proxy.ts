@@ -4,19 +4,13 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Client-side proxy over the MAIN config-store authority (docs/proposals/
-// config-store-main-authority.md), used by the orchestrator + probe processes
-// via their `parentPort`. Exposes the exact `store-hub` internal API
-// (read/write/update/clear/list/subscribe) but every op is a `store:req` to
-// main, correlated by id to a `store:res`; main pushes `store:changed` for every
-// subscribed path so this process's live `subscribe()` listeners (anaglyph-style
-// retune, etc.) fire on ANY window's edit — regardless of which orchestrator
-// instance that window is on. Transport-agnostic + Electron-free so it unit-tests
-// against a fake link to `StoreMain.attachProcess`.
-//
-// A mutating op caches + notifies the VALUE main returns (not a local re-merge),
-// and main skips echoing a change back to its originator, so this process's own
-// write both persists and updates its local subscribers with no double-fire.
+// Client-side proxy over the MAIN config-store authority, used by the orchestrator + probe
+// processes via their parentPort. Exposes the exact store-hub API but every op is a
+// store:req to main (correlated by id to a store:res); main pushes store:changed for every
+// subscribed path so this process's subscribe() listeners fire on ANY window's edit, cross-
+// instance. A mutating op caches + notifies the VALUE main returns (main skips echoing to
+// the originator, so an own write persists + updates local subscribers with no double-fire).
+// spec: docs/spec/store.md#store-proxy
 
 import { wireDecode, wireEncode } from "./store-codec.js";
 

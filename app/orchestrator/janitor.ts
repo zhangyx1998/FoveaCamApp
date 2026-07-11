@@ -4,32 +4,13 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Hardware janitor — the single hardware-safety codebase, run in TWO modes:
-//
-//  1. ONE-SHOT (default): a utilityProcess the MAIN process forks whenever the
-//     orchestrator dies without confirming quiescence (crash, abort, kill) and
-//     on final app quit. In-process handlers cannot cover a SIGABRT/SIGSEGV —
-//     this runs in a fresh process, so it works no matter how the orchestrator
-//     died (devices are claimed per-process; a dead owner's claims are already
-//     released by the OS).
-//
-//  2. WATCHDOG (FOVEA_JANITOR_MODE=watchdog): a DETACHED process main spawns
-//     early (via ELECTRON_RUN_AS_NODE so it outlives main) to cover main's OWN
-//     hard crash — the one path mode 1 cannot, since its spawner would be dead.
-//     It polls main's liveness against a per-main-pid state file
-//     (FOVEA_WATCHDOG_STATE). Clean shutdown ⇒ main deletes the file first
-//     (stand-down). Main gone with the file still present ⇒ crash: wait for the
-//     orphaned orchestrator to be reaped (kill it if it lingers so its device
-//     claims free), then run the SAME quiescence as mode 1. See main.ts's
-//     "Main-crash watchdog" header for the process tree.
-//
-// Its whole job is the hardware-safety invariant: the MEMS controller must
-// never stay energized and no camera may stay streaming/locked after the
-// process that armed them is gone.
-//
-// Deliberately minimal and forgiving: every step is best-effort with its own
-// try/catch, the process always exits 0 (main only logs the outcome), and a
-// global deadline guards against a wedged serial port or camera enumeration.
+// Hardware janitor — the single hardware-safety codebase, run in two modes:
+// one-shot (a utilityProcess forked when the orchestrator dies without confirming
+// quiescence) and watchdog (a detached process covering main's own hard crash).
+// Enforces the hardware-safety invariant: MEMS never energized and no camera
+// streaming/locked after the process that armed them is gone. Every step is
+// best-effort, always exits 0, guarded by a global deadline.
+// spec: docs/spec/orchestrator-runtime.md#janitor
 
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { SerialPort } from "serialport";

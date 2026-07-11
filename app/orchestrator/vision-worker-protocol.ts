@@ -4,15 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// MessagePort protocol for the per-session vision worker (C-22b, WS1 real-1f).
-// The worker is READ-ONLY SHM: main brokers `connectPipe`/`disconnectPipe` (the
-// C-21 gate), hands the worker the `shmName`(s), and the worker `reader.open`/
-// `readInto`s them, runs core/Vision off the main loop, and posts RESULTS +
-// derived DISPLAY frames back. The worker NEVER touches the broker/gate.
-//
-// Fork-independent (shared by main + worker regardless of worker packaging).
-// Numbers only + transferred `ArrayBuffer`s — nothing here imports core or the
+// MessagePort protocol for the per-session vision worker: main brokers connect/disconnect
+// and hands the worker shmName(s); the worker reads them, runs core/Vision off the main
+// loop, and posts RESULTS + derived DISPLAY frames back (never touching the broker/gate).
+// Fork-independent — numbers only + transferred ArrayBuffers, imports neither core nor the
 // frame transport, so it compiles into both the main bundle and the worker.
+// spec: docs/spec/vision.md#vision-worker
 
 import type { WorkloadSnapshot } from "@lib/orchestrator/stats.js";
 

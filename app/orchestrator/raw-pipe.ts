@@ -4,29 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// REFCOUNTED raw-pipe acquisition (multi-fovea-recording ruling 5). A single
-// process-wide owner for the full-bit-depth `camera/<serial>/raw` (UNPACKED
-// 16-bit container) and `camera/<serial>/raw12p` (PACKED verbatim wire) pipes:
-//
-//   - ONE advertise per pipe id EVER (kills the R-3 double-advertise class — a
-//     second advertise of a live id would clobber the segment out from under an
-//     already-connected consumer).
-//   - Refcounted attach: the FIRST acquirer advertises + attaches the native
-//     producer; later acquirers of the SAME id just bump the count and share it.
-//   - Refcounted release: the LAST release detaches the producer + unadvertises.
-//     Idle (no acquirers) = the id is fully retired and can be re-advertised
-//     with fresh geometry on the next acquire.
-//
-// Both payload kinds are DISTINCT ids (`.../raw` vs `.../raw12p`), each owning
-// its own refcount + native attach/detach fn (kind-routed through the seam).
-// Multiple sessions (manual-control recording + capture; multi-fovea recording)
-// share ONE registry so their independent capture-vs-recording policy guards
-// STILL apply, but a clobber is now structurally impossible: two acquirers of a
-// live id share the same segment instead of racing two advertises.
-//
-// Seam-injected (never imports native core): the native `Aravis.attachRawPipe`/
-// `attachRaw12pPipe` (+ detach siblings) and the broker advertise/unadvertise
-// are wired in `index.ts`; vitest drives a fake seam and never loads the addon.
+// Refcounted raw-pipe acquisition: a single process-wide owner for the full-bit-depth
+// `camera/<serial>/raw` (unpacked 16-bit) and `camera/<serial>/raw12p` (packed wire)
+// pipes. One advertise per id ever (kills the double-advertise clobber class); the
+// first acquirer advertises+attaches, later acquirers share; the last release detaches
+// + unadvertises. Distinct ids per payload kind. Seam-injected (never imports core).
+// spec: docs/spec/pipes.md#raw-pipe
 
 import type { PipeSpec } from "@lib/orchestrator/pipe-contract.js";
 import { pixelFormatSpec } from "../../docs/schema/pixel-formats.js";

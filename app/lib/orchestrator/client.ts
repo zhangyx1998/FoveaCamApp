@@ -4,22 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Renderer-side orchestrator client. Wraps the RPC `Channel` in Vue's reactive
-// shape so modules read/write authoritative orchestrator state as if it were
-// local — the same shape the server session sees (§12.3 R3):
-//   - state      → reactive, mutable object (property set = command; value
-//                  tracks the server echo)
-//   - telemetry  → reactive, readonly object (driven by subscription)
-//   - frame(name)→ readonly Ref (dynamic keys, e.g. one per camera serial,
-//                  don't fit a fixed reactive object — stays a lazy accessor,
-//                  latest-wins, coalesced to one rAF)
-//   - call(name, arg) → Promise of the command result
-//
-// All authoritative state lives in the orchestrator; the renderer holds only
-// echoes, so multiple windows stay consistent for free. `state`/`telemetry`
-// keys are enumerated once from the contract's default POJOs at `useSession()`
-// time (both are small, fixed shapes), so every key is live immediately —
-// no per-key lazy registration to forget.
+// Renderer-side orchestrator client. Wraps the RPC Channel in Vue's reactive shape so
+// modules read/write authoritative orchestrator state as if it were local: state
+// (reactive mutable, set = command, tracks the server echo), telemetry (reactive
+// readonly), frame(name) (readonly Ref, latest-wins, coalesced to one rAF), call(name,
+// arg) (Promise). The renderer holds only echoes, so windows stay consistent for free.
+// spec: docs/spec/orchestrator-protocol.md#client
 
 import {
   computed,

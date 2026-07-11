@@ -4,22 +4,13 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// State-in-URL helper (docs/history/refactor/multi-window.md req. 7 / §4): stateful
-// windows expose internal state in their URL so a dev restart / manifest
-// restore lands back in the same internal state, not just the same window.
-// The orchestrator session stays authoritative — the URL is the *address* of
-// that state, not a second copy: components sync state → URL with
-// `history.replaceState` (no navigation, no history spam) and read the URL
-// exactly once on load to seed the session.
-//
-// State rides the QUERY STRING, not a path subpath: packaged windows load
-// via `loadFile(file, { search })`, where a path subpath would break file://
-// resolution — the query string is the one URL slot that rides both the dev
-// server URL and the packaged file URL unchanged (req. 7's "subpath" is
-// satisfied in spirit: the state lives in the window's URL).
-//
-// Renderer-only (history/location APIs). Deliberately framework-free — Vue
-// callers just wrap `writeUrlState` in a `watchEffect`.
+// State-in-URL helper: stateful windows expose internal state in their URL (the
+// ADDRESS of the authoritative orchestrator state, not a second copy) so a dev restart /
+// manifest restore lands back in the same internal state. Syncs state → URL via
+// history.replaceState (no navigation) and reads it once on load to seed the session.
+// State rides the QUERY STRING (survives both dev-server and packaged file:// URLs).
+// Renderer-only; framework-free (Vue callers wrap writeUrlState in a watchEffect).
+// spec: docs/spec/orchestrator-runtime.md#url-state
 
 import { WINDOW_ID_PARAM } from "./windows.js";
 

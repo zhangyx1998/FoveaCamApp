@@ -4,20 +4,11 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Projection split-view — cross-window drag intent + drop-zone geometry (docs/
-// proposals/projection-split-view.md §"DnD", deliverable 4).
-//
-// HTML5 drag carries a pane descriptor under a custom MIME so a drag works
-// across Electron windows of ONE app. This module is the PURE decision layer
-// the Vue drag handlers call:
-//   - the effectAllowed/dropEffect + move/copy matrix (default MOVE; Alt/Option
-//     ⇒ COPY; a drag that ORIGINATES in an app window is copy-only, because an
-//     app window's layout is rigid and its pane must not be torn out), and
-//   - the VSCode-style drop-zone geometry (edge quadrants split, center
-//     moves/swaps).
-// The tree mutation itself lives in `split-tree.ts`; the window-identity
-// branching (same-window move vs cross-window insert) lives in the component —
-// this file stays a set of pure, table-tested functions.
+// Projection split-view — cross-window drag intent + drop-zone geometry: the PURE
+// decision layer the Vue drag handlers call (the effectAllowed/dropEffect move/copy
+// matrix + the VSCode-style drop-zone geometry). Tree mutation lives in split-tree.ts;
+// window-identity branching lives in the component — this file stays pure, table-tested.
+// spec: docs/spec/projection.md#dnd
 
 import type { DropZone } from "./split-tree.js";
 

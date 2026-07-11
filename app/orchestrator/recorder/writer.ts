@@ -4,26 +4,13 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Main-thread host for one recorder worker (one McapWriter, one container
-// file): a worker_threads worker fed by transferred ArrayBuffers, bounded
-// queue, fail-fast on worker error, multiplexing N channels into a single
-// file and metered from day one (docs/history/refactor/workload-metering.md).
-// NOTE: the live recording path is the RECORDER NODE
-// (`@orchestrator/recorder-node`, one worker: FIFO consume + mcap encode);
-// this sink writer remains as the container surface the recorder bench + the
-// `test/recorder.test.ts` container-contract tests drive directly.
-//
-// Backpressure contract (recorder-container.md §3): the orchestrator loop
-// must never block on the recorder. `writeFrame` is synchronous and never
-// awaits — when a channel's in-flight window is full the frame is REFUSED
-// (returns false) and accounted as a drop; the payload thunk is not even
-// invoked, so no copy is wasted on a frame that won't ship. Drops are data,
-// not silent: they land in the workload meter (`byReason` backpressure/
-// failed) and in the caller's per-stream stats.
-//
-// This class is deliberately core-free (bytes in, bytes out) — Mat/
-// PixelFormat handling lives in the sink layer (`index.ts`); the recorder-node
-// worker embeds the equivalent mcap chain in-thread.
+// Main-thread host for one recorder worker (one McapWriter, one container file): a
+// worker fed by transferred ArrayBuffers, bounded queue, fail-fast, N channels into
+// one file, metered. Core-free (bytes in, bytes out). Load-bearing backpressure
+// contract: writeFrame is synchronous and REFUSES (returns false, accounts a drop, no
+// wasted copy) when a channel's in-flight window is full — the orchestrator loop must
+// never block on the recorder.
+// spec: docs/spec/capture-recording.md#recorder-writer
 
 import { Worker, type TransferListItem } from "node:worker_threads";
 import { createRequire } from "node:module";
