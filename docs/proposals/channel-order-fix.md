@@ -5,8 +5,7 @@ pass owed (stage-f §Channel-order fix).** Supersedes the prior "preview
 pipe is BGRA8, don't relabel" ruling — the view-layer compensation is now
 unnecessary; display pipes are honest `RGBA8` end to end.
 
-## Root cause (single, proven)
-
+::: details Root cause: OpenCV Bayer enum off-by-one vs PFNC, and the two-wrongs-cancel display path
 `Arv::cvtColorCode` (core/lib/Aravis/PixelFormat.cpp:130-213) maps each
 GenICam Bayer format to the SAME-LETTERED OpenCV `COLOR_BayerXX2*`
 constant. OpenCV's Bayer enum naming is off-by-one vs the GenICam/PFNC
@@ -32,8 +31,9 @@ double-compensation exists twice more:
 - viewer decode.ts:177 `${bayer}2RGB` — the SAME off-by-one, so recorded
   raw-Bayer channels show R/B swapped vs live previews (latent
   inconsistency visible today).
+:::
 
-## Ruled fix (planner-recommended, matches the user's intent)
+::: details Ruled fix plan (pre-ship — see AS-SHIPPED below for what actually landed)
 
 1. **Fix the enum mapping once**: swap the R↔B letters in `cvtColorCode`
    for all four output families (`2RGB/2BGR/2RGBA/2BGRA`; `2GRAY`
@@ -63,6 +63,7 @@ double-compensation exists twice more:
 
 Old recordings: raw-Bayer payloads are label-only (demosaic happens at
 decode) — the fixed viewer decodes them CORRECTLY; no data migration.
+:::
 
 ## AS-SHIPPED (2026-07-09)
 

@@ -12,8 +12,7 @@ disparity heatmap is pinned to `SIGNED_DISPARITY_HEATMAP_RANGE` (derived
 from the window constant), so invalids clamp to the floor color and the
 colormap is frame-to-frame stable.
 
-## Problem (user-reported, 2026-07-10)
-
+::: details Problem: the default 0…128 one-sided window vs signed foveated disparity
 The SGBM brick produces nothing meaningful. Both attach sites
 (`app/modules/disparity-scope/session.ts` free-run node,
 `app/modules/multi-fovea/session.ts` paired node) pass **no params**, so the
@@ -21,6 +20,7 @@ brick runs at its defaults: `minDisparity = 0`, `numDisparities = 128` — a
 0…+128 px one-sided search. With foveated (independently steered) gaze the
 true L↔R disparity is SIGNED and gaze-dependent, ranging −W…+W; almost the
 entire scene falls outside the searched window and matches as garbage.
+:::
 
 ## Ruling (2026-07-10)
 

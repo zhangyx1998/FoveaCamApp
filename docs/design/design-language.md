@@ -351,5 +351,3 @@ recognizable "error" identity.
 
 **Code-adjacent bug (report only):**
 13. `app/lib/swatch.ts:24` malformed `hsl()` string (§2).
-</content>
-</invoke>

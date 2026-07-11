@@ -267,7 +267,7 @@ type NodeReport = {
 - **P4**: triggered-path calibration (L/R via controller), drift model,
   FIN-voltage preference in mirror history.
 
-## Open questions (for the user)
+::: details Open questions (resolved — the rulings above answered all four)
 
 1. Min-filter (recommended) vs the directive's mean for offset estimation?
 2. TimestampLatch-first with frame-pull fallback (recommended), or
@@ -275,3 +275,4 @@ type NodeReport = {
 3. Pipe-chained bricks (recommended, §5) vs in-process stream chaining?
 4. Controller↔host via direct command ping (recommended) vs always through
    triggered frames?
+:::

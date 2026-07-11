@@ -3,7 +3,9 @@
 Status: **AS-SHIPPED (2026-07-10)**. Owner lane: core (Stream family) + one
 orchestrator boot hook. Follows the ee6fc46 stream-close-deadlock fix.
 
-## Incident (2026-07-09 22:47)
+::: details Incident + root-cause diagnosis: the `mutex lock failed` abort and the lost-wakeup hang
+
+**Incident (2026-07-09 22:47)**
 
 A long-running disparity-scope orchestrator (`hw-2`) was SIGTERM'd by an Electron
 dev-watch restart mid-session. During the forced teardown, core aborted:
@@ -24,9 +26,9 @@ Three deliverables: (1) root-cause + fix the destroyed-mutex teardown race,
 (2) audit the same class across core, (3) add native crash-site tracing so the
 next fault is never a bare one-liner.
 
-## Root cause (proven)
+**Root cause (proven)**
 
-### The destroyed-mutex race — `Subscriber::close` vs `~Stream`
+**The destroyed-mutex race — `Subscriber::close` vs `~Stream`**
 
 `core/lib/Stream/Stream.h`. Streams are the base of every brick (Converter,
 Undistort, Fovea, KCF, Stereo, Composite, …); subscribers are the JS iterators
@@ -63,7 +65,7 @@ Thread B (JS finalizer / other brick):       ~Subscriber → close(true)
 pre-fix (HEAD) header: `std::terminate … mutex lock failed: Invalid argument`,
 frame 0 = `~Subscriber`.
 
-### A second teardown bug surfaced by the same test: lost-wakeup hang
+**A second teardown bug surfaced by the same test: lost-wakeup hang**
 
 With the destroyed-mutex race closed, the soak then wedged. `sample` of the hung
 process:
@@ -82,6 +84,7 @@ before it blocked — a classic lost wakeup. The producer sleeps forever and the
 one**: the orchestrator never exits, so hardware stays armed (violates the
 hardware-quiescence invariant). Pre-existing; the fan-out iterate path rarely
 parks, so it hid until test 38's park storm exposed it.
+:::
 
 ## The ownership / lifetime rule shipped
 
@@ -122,7 +125,7 @@ calls `unsubscribe`, then decrements. `shutdown()`'s drain refuses to return
   `mutex`**, serializing against `wait_activate()`'s predicate check, so the
   subsequent `notify_all` can never be lost.
 
-## Audit (Task 2) — destroyed-sync-primitive-race class
+::: details Audit (Task 2): destroyed-sync-primitive-race class sweep — 2 fixed, 4 safe, 2 documented-suspect
 
 Swept `core/lib` + `core/src` for every mutex/CV/thread owned by an object
 destructed while other threads can still reach it.
@@ -143,7 +146,7 @@ destructed while other threads can still reach it.
 Counts: **2 FIXED** (the incident + the lost-wakeup), **1 FIXED transitively**
 (all bricks), **4 SAFE**, **1 SAFE-prior**, **2 SUSPECT documented** (#4, #10).
 
-### SUSPECT #4 — ClockCalibrator vs contended fake camera
+**SUSPECT #4 — ClockCalibrator vs contended fake camera**
 
 `core/test/36` (and previously `core/test/27`) intermittently SIGSEGVs in a
 `ClockCalibrator` thread — `ClockCalibrator::run → calibrateCameraClock →
@@ -159,6 +162,7 @@ one of the app's own mutexes destroyed-under-use** (memory-documented for test
 Stream fix (mine is ~1/5). **Not fixed** (out of the Stream family, would be a
 broad refactor of the calibration/enumeration path). **Mitigated** by the crash
 handler (Task 3): these are now printed native stacks instead of silent SIGSEGVs.
+:::
 
 ## Native crash-site tracing (Task 3)
 

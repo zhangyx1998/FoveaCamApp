@@ -29,7 +29,7 @@ viewer's orchestrator-session architecture (viewer-contract.ts +
    user-gated), `import fcap`.** Today's `pyfovea` renames wholesale (its
    pyproject already marks the name a placeholder).
 
-## Rig finding F3 — BayerRG12p striped decode
+::: details Rig finding F3: BayerRG12p striped-decode diagnosis (fixed with ruling 1's move)
 
 User (live rig): the viewer cannot decode a recorded BayerRG12p channel
 (metadata `dtype=U16, significantBits=12, stride=2880`); frame views render
@@ -62,6 +62,7 @@ make decode stride-aware, and add a conformance test decoding a REAL rig
 fixture (ask the user for one striped `.fovea`/`.fcap` sample — synthetic
 data proved bit order already; this failure is only reachable with the real
 advert chain). This lane lands WITH ruling 1's move (same code), not before.
+:::
 
 ## UX items (same program)
 

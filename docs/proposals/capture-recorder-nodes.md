@@ -45,7 +45,7 @@ bottom; rig pass owed, stage-f §"Capture/recorder nodes").
    drawer + an **async `capture()` callback exposed to the renderer**, so the
    renderer can set up fovea positions between each capture.
 
-## Where the code is today (facts)
+::: details Where the code was before this wave (starting-point facts)
 
 - `modules/manual-control/recording.ts`: three JS taps on the raw L/C/R
   camera streams (main loop) → bytes extracted → transferred to the MCAP
@@ -64,6 +64,7 @@ bottom; rig pass owed, stage-f §"Capture/recorder nodes").
 - The FIN-averaged voltage binding (stage-F, `FoveaBinding.source: "fin"`) is
   typed but unimplemented — ruling 3's per-frame callback is exactly its
   future injection point.
+:::
 
 ## Design (pinned)
 
@@ -202,14 +203,15 @@ this is a regression check + fixes if drift is found); (b) **auto-open**: when
 calls the existing `openViewer(path)` — the finished recording's preview
 appears without user action.
 
-## Veto points — ANSWERED (user, round 2)
+::: details Veto points — ANSWERED (user, round 2)
 
 1. Loss contract → **FIFO pipes, implemented first** (Phase 0).
 2. Raster grid → renderer-defined loop (unchallenged — stays pinned).
 3. Legacy backend → **dropped entirely** (ruling 6).
 4. Preview channel → **pull actual data from the node** (ruling 7).
+:::
 
-## Execution (ruled): interleave refactor and review/optimization waves
+::: details Execution plan: interleaved impl + review/optimization waves
 
 Waves alternate: each implementation wave is followed by a REVIEW +
 OPTIMIZATION wave (fresh-eyes worker audit of the just-landed code against
@@ -229,6 +231,7 @@ implementation wave dispatches. Planned order:
    raster UI.
 6. **Wave R-3** (review/opt): capture parity audit (full-depth math vs the
    deleted in-session implementation), UI review, plan-drain check.
+:::
 
 ## Rig items (stage-f, accumulated at dispatch)
 

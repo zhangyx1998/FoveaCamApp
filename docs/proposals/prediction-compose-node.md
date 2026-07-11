@@ -30,7 +30,7 @@ RIG-GATED (bench session): imm + compose nodes on the profiler graph with
 without reconnect; feed-forward SIGN leads (not lags) a moving target; drag
 passes override volts untouched; lost holds the pid baseline.
 
-## Problem (user-reported, 2026-07-10)
+::: details Problem (user-reported): IMM node missing from the graph + wrong topology
 
 1. The IMM motion-predictor node does not show up on the profiler node graph.
    Root cause: it is only constructed when `delay_compensation_ms ≠ 0` (delay
@@ -42,6 +42,7 @@ passes override volts untouched; lost holds the pid baseline.
    compose those ~60 Hz control signals with high-rate predicted motion,
    yielding a high-rate (default **600 Hz**) update stream to the mirror
    position input.
+:::
 
 ## User rulings (2026-07-10)
 

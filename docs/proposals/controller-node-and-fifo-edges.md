@@ -211,6 +211,8 @@ the active `Controller` as it connects/disconnects.
 > (`createMultiTracker`, unchanged). KCF is one factory line away for a rig
 > A/B.
 
+::: details Chained-KCF tracker design + drag-semantics decision-log (SUPERSEDED by the hybrid tracker; the algorithm changed, the seam did not)
+
 Current: `app/modules/disparity-scope/vision.ts` runs a synchronous `KCF`
 primitive INSIDE the disparity kernel's worker thread (the "async-kcf
 dissolved into the loop" shortcut) — tracking latency rides the matching
@@ -276,6 +278,7 @@ wave lands + E's API is committed):
     every DOF re-converges from scratch. Everything else in this ruling
     (tracker override transport, flag plumbing, re-arm on release, PID
     slot = programmatic only) is unchanged.
+:::
 
 **AS SHIPPED (integration half, 2026-07-08 — disparity worker D2):**
 

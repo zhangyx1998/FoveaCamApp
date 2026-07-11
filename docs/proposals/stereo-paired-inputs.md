@@ -6,13 +6,14 @@ Status: **SHIPPED (code-complete 2026-07-09, `5537745`; rig pass owed —
 `pairing-nodes.md` ruling 8's open item: StereoStream was the last
 unanchored two-input join in the graph. See **AS SHIPPED** at the end.
 
-## Problem
+::: details Problem: latest-L/latest-R join mixes epochs under motion
 
 `StereoStream` joins latest-L/latest-R: it ticks on every left arrival and
 pairs it with the newest right frame seen so far (no cross-camera key — the
 two sides are paced by different owner clocks). Under motion the two frames
 can be one-plus frames apart, so the disparity map mixes epochs — exactly the
 temporal misalignment the pairing nodes were built to eliminate.
+:::
 
 ## Design (ruled)
 

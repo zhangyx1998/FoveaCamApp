@@ -108,6 +108,8 @@ name)` → `<sourceId>/heatmap/<name>` (nests under its input, scale rule).
 > (`stereo/composite`, CompositeStream) with a node-graph row; DiffView is
 > deleted. The section below records the original (retired) design.
 
+::: details Retired anaglyph design (renderer DiffView `mode` prop)
+
 A pure display composite of the two fovea undistort pipes the window
 already binds — same class as the difference view, so **DiffView gains a
 `mode` prop**: `"difference"` (as shipped) | `"anaglyph"` (red = LEFT eye,
@@ -116,6 +118,7 @@ No orchestrator involvement; computes only while mounted (ruling 2 holds
 trivially). Also fixes the non-reactive "No Frame" overlay (the template
 read plain `offA.width`, which never re-renders — a painted-state ref now
 drives it).
+:::
 
 ### Center select (disparity-scope)
 

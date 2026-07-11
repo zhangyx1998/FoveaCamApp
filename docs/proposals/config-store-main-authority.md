@@ -12,7 +12,7 @@ hardware instance) each shadowed the same disk file and never saw each
 other's edits, and every renderer write was a whole-document clobber from a
 possibly-stale per-process cache.
 
-## Current topology (the four defects)
+::: details The four defects in the old per-process store-hub (D1–D4)
 
 Before this change the authority lived in `app/orchestrator/store-hub.ts`,
 one copy PER orchestrator process:
@@ -33,6 +33,7 @@ one copy PER orchestrator process:
 - **D4 — last-write-wins cross-key races.** Two windows on ONE instance
   writing DIFFERENT keys inside one RTT clobbered each other, because both
   sent whole-document writes.
+:::
 
 ## Target topology
 

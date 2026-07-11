@@ -83,7 +83,9 @@ is the only containment that covers the whole class of teardown faults
    owned windows, janitor on every instance death path, watchdog covers
    main-crash for whichever instances are alive.
 
-## Audit checklist (the wave's first deliverable, before code)
+::: details Pre-code planning: audit checklist · interactions · execution
+
+**Audit checklist (the wave's first deliverable, before code)**
 
 - Enumerate every exit path in `main.ts` (menu quit, Cmd-Q,
   window-all-closed, second-instance handoff, macOS dock quit, updater
@@ -96,7 +98,7 @@ is the only containment that covers the whole class of teardown faults
 - Verify the janitor runs on EVERY non-clean path and is itself
   crash-safe (spawn-early or spawn-on-demand — audit which).
 
-## Interactions
+**Interactions**
 
 - Per-app-instance recreation (ruling 2) changes broker/registry
   assumptions ONLY if any state was assumed process-persistent across app
@@ -107,7 +109,7 @@ is the only containment that covers the whole class of teardown faults
   orchestrator-down notification path (`client.ts onOrchestratorDown`) as
   the transport seed.
 
-## Execution
+**Execution**
 
 W1 audit (read-only matrix + gaps list, planner-reviewed) → W2 per-app
 lifecycle + handshake + crash report + janitor extension, with soak-style
@@ -115,13 +117,14 @@ tests (spawn/kill orchestrator repeatedly, assert no orphan windows/
 processes, quiescence held). Rig: stage-f §"Hardware quiescence" gains
 re-verify items under the per-app-instance model (crash mid-actuation →
 mirrors parked, cameras released, crash report shown).
+:::
 
-## Audit (W1, 2026-07-09)
+::: details Audit (W1, 2026-07-09): the singleton process model + the five teardown gaps — superseded by AS SHIPPED below
 
 Read-only audit of the CURRENT committed state. VERIFIED = code read;
 INFERRED = reasoned from code + Electron semantics, not exercised.
 
-### Process model TODAY (the headline finding)
+**Process model TODAY (the headline finding)**
 
 There is exactly ONE long-lived orchestrator `utilityProcess`, NOT one per
 app instance. `startOrchestrator()` is called only twice:
@@ -135,7 +138,7 @@ registry, and the pipe broker/registry all PERSIST across activations.
 => Ruling 2 ("recreated per app instance") is NOT the shipped model. This is
 the single largest gap of the wave.
 
-### 1. Exit paths (main.ts)
+**1. Exit paths (main.ts)**
 
 | Path | Trigger | windows | sub-windows (cascade) | orchestrator | hardware |
 |---|---|---|---|---|---|
@@ -167,7 +170,7 @@ Notable exit-path gaps:
   main exits. Both are cleared, but not in the audited order; a window still
   holding a live pipe read during orchestrator teardown is possible.
 
-### 2. Orchestrator death paths
+**2. Orchestrator death paths**
 
 Detection: `orchestrator.on("exit", code)` (`main.ts:316`).
 
@@ -179,7 +182,7 @@ Detection: `orchestrator.on("exit", code)` (`main.ts:316`).
 | JS uncaughtException | `quiesceAndExit(1)` `index.ts:502` → clean quiesce, exit 1 | `orchestrator:down` | quiesced in-process; `code≠0` so janitor ALSO runs (redundant but safe) | nothing |
 | hang | bounded: 5s quit `:660`, 4s quiesce deadline `index.ts:473`, 10s drain `:350` | drains resolved `ok:true` `:328` | janitor after kill | nothing |
 
-### 3. The matrix (rows × {win / orch / hw / main-notified / user-informed})
+**3. The matrix (rows × {win / orch / hw / main-notified / user-informed})**
 
 Legend: V=verified file:line, G=gap, N/A.
 
@@ -194,7 +197,7 @@ Legend: V=verified file:line, G=gap, N/A.
 | orch native crash | V (survive) | V `:316` | V janitor `:324` | V `:335` | **G — no report surface** |
 | orch hang | V | V kill `:665` | V janitor | V | G |
 
-### 4. Gaps vs the 4 rulings
+**4. Gaps vs the 4 rulings**
 
 **Ruling 1 (clear all windows + orchestrator before terminating):** MOSTLY
 met on the quit path (`before-quit` clears both + janitor backstop), but (a)
@@ -241,7 +244,7 @@ renderer handler closes the channel (`client.ts:157-159`) — no toast/dialog, n
 scoping to the task's owner-associated windows. Also the janitor does NOT cover
 the main-crash path (§1) — its spawner is dead.
 
-### 5. W2 file map
+**5. W2 file map**
 
 - `app/electron/main.ts` — lifecycle rework: tie orchestrator lifetime to app
   activation (spawn on `openApp`, dispose on last app-window close) OR
@@ -267,6 +270,7 @@ the main-crash path (§1) — its spawner is dead.
   start.
 - `test/` — soak test: spawn/kill orchestrator repeatedly asserting no orphan
   windows/processes and quiescence held (per Execution).
+:::
 
 ## AS SHIPPED (W2, 2026-07-09) — disposable orchestrator per app instance
 

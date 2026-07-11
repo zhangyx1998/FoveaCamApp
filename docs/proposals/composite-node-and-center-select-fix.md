@@ -12,7 +12,7 @@ node-graph row — the "renderer canvas composite" design is retired.
 > center tile of the disparity scope to switch between sliced center view /
 > anaglyph view and SGBM heatmap view.
 
-## Root causes (diagnosed, planner)
+::: details Root causes: why the dropdown never rendered and anaglyph had no node
 
 1. **Dropdown never rendered.** `index.vue` passes the view `InlineSelect`
    through `<template #title>` on **StreamView** — but StreamView does NOT
@@ -31,6 +31,7 @@ node-graph row — the "renderer canvas composite" design is retired.
    per-frame canvas compositing OFF the renderer (the Graphite GPU crash came
    from sustained many-canvas `putImageData` load; one composed BGRA pipe is
    strictly cheaper than three mask/composite canvas passes per frame).
+:::
 
 ## Design (pinned)
 

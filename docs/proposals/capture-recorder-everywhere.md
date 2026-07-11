@@ -11,7 +11,7 @@ Capture and recording are today reachable only from manual-control (capture
 + recording) and multi-fovea (recording). **They should be available
 everywhere** — any app.
 
-## Rig findings (fix lanes, same program)
+::: details Rig findings F1 (capture hang) + F2 (recording drops) — diagnosis lanes
 
 - **F1 — capture preview window waits forever** (user, live rig): after
   triggering a capture, the preview window shows its waiting state
@@ -43,6 +43,7 @@ everywhere** — any app.
   measured bottleneck. The documented compress-only ring-decoupling
   optimization (gate = ring-consumers OR fanout-open) is in scope if the
   snapshot blames the source ring.
+:::
 
 ## Design (planner recommendation, for ruling at dispatch)
 

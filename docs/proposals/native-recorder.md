@@ -7,7 +7,7 @@ Wave 3 — recorder-node.ts as a thin native driver (the JS worker/FIFO machiner
 DELETED; churn soak + forced-zlib soak green). Rig pass owed (stage-f §Native
 recorder). User-directed 2026-07-10.
 
-## Why — the live recorder drops frames the raw dump never did
+::: details Why the JS recorder dropped frames — the four structural costs (motivation)
 
 The live recorder (`app/orchestrator/recorder-node.ts`) is ONE JS worker that
 FIFO-consumes the named SHM pipes and hosts `@mcap/core` in-thread. It drops
@@ -25,6 +25,7 @@ structural costs, all on a single JS thread:
 4. **One JS thread for all streams** — consume + copy + encode + CRC + write for
    every camera serialize behind one libuv thread; backpressure surfaces as ring
    `Gone` drops (`droppedQueue`).
+:::
 
 Ruling (user, 2026-07-10): **implement hand-rolled MCAP I/O in C++.** A native
 recorder path deletes the SHM-ring hop and the JS worker from recording: sources
@@ -264,7 +265,7 @@ in C++. Hover attribution (`droppedQueue` vs `droppedRing`) still resolves;
 container the viewer's streaming reader recovers; `/zlib` streams record + decode;
 OLD `.fovea`/`.fcap` recordings still open.
 
-## Rig follow-up 2026-07-10 — drops persisted; root cause was the BUILD, not the writer
+::: details Rig follow-up (2026-07-10): the real drop cause was the -O0 build, not the writer
 
 The first rig recording after waves 1–3 still dropped hard (perf snapshot:
 3×60 fps offered, 27.4 written/s, ~151 drops/s all `queue-overflow`, 85 MB/s to
@@ -285,8 +286,9 @@ QUALIFIED (static) call that bypassed the virtual `Queue::close` override, so a
 consumer parked on a pending `next()` when JS called `return()` leaked its await
 forever (deterministic test-36 wedge at -O2). Fixed by virtual dispatch
 (`close(true, nullptr)`); test 36 now passes 3/3 in ~1 s (was ~30 s of churn).
+:::
 
-## Alternative considered — vendoring foxglove/mcap C++ (ruled: keep hand-rolled writer)
+::: details Alternative considered: vendoring foxglove/mcap C++ (rejected for the writer; reader half earmarked)
 
 Analyzed 2026-07-10 at the user's request, after waves 1–3 shipped. The official
 C++ implementation (github.com/foxglove/mcap, MIT) is header-only
@@ -315,3 +317,4 @@ proves our files are `@mcap/core`-shaped, so the foxglove reader accepts them by
 construction. Same trigger if in-container chunk compression (lz4/zstd:
 better ratio + seekable chunks vs our per-frame `/zlib` payloads) is ever
 wanted.
+:::

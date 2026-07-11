@@ -14,8 +14,7 @@ tracking. Consider using a hybrid approach of detection + matching, or propose a
 better alternative if you know any. The resulting node should be able to drop-in
 replace KCF tracker node."
 
-## Why (the problem with GRAY-KCF on this rig)
-
+::: details Why GRAY-KCF fails on this rig — OpenCV 4.13 fragility, no recovery
 Every camera here is monochrome, and the target scenes are the fovea-controlled
 needle / small-blob targets on low-texture backgrounds. On OpenCV 4.13.0,
 `cv::TrackerKCF` needed two successive pins just to survive at all (GRAY
@@ -24,6 +23,7 @@ even pinned it is **fragile on exactly the rig's hard content**: it locks on the
 arm frame and then loses the target for good on a smooth blob / low-texture
 patch. It also has **no recovery** — once lost it is silent-forever-lost. And it
 is not cheap (~1.0–1.4 ms/update at 48–64 px).
+:::
 
 ## Chosen algorithm — hybrid MATCH + RE-DETECT (windowed NCC)
 
