@@ -72,14 +72,25 @@ it converge.
 
 In the **Tracker** column of the drawer:
 
-- The **on** / **off** toggle arms the wide-view auto-follow tracker. It is a
-  **hybrid** node — an NCC (normalized cross-correlation) template match with a
-  re-detect stage — so when the target is momentarily lost it can **recover** by
-  re-detecting the template rather than staying dropped. (It runs on its own
-  native thread as a drop-in successor to the older KCF tracker.)
+- The **on** / **off** toggle arms the wide-view auto-follow tracker.
+- **Tracker** selects the engine, switchable **on the fly** (the two nodes are
+  drop-in replacements running on their own native threads):
+  - **Hybrid (NCC + re-detect)** — the default: a normalized-cross-correlation
+    template match with a re-detect stage, so a momentarily lost target can
+    **recover** rather than staying dropped.
+  - **KCF (GRAY)** — the classic kernelized correlation filter.
+  Switching mid-tracking re-arms the new engine at the current target and
+  keeps steering; if the requested engine is unavailable the selector snaps
+  back to the one actually running. A switch requested mid-drag applies when
+  the drag ends.
 - **Kernel** sets the template width × height (applied on the next re-arm).
 - **Status** reads **tracking** (locked), **armed** (enabled, not yet locked),
-  or **off**.
+  **lost** (the toggle is on but ~10 consecutive misses released the
+  auto-follow gate — re-enable or drag to re-arm), or **off**. While the
+  tracker is **armed or tracking** the vergence **convergence timeout never
+  fires** — tracking counts as activity, including the armed-but-hunting
+  phase. After a **lost** latch the timeout resumes (from that moment, not a
+  stale window).
 
 When armed, the tracker follows the target and steers the match crop, recovering
 its lock if the content briefly drops out; a drag overrides it as described

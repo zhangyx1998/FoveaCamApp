@@ -17,6 +17,7 @@ import {
   pidOverrideCmd,
   pidOverrideState,
 } from "@lib/orchestrator/pid-override-contract";
+import { DEFAULT_TRACKER_TYPE, type TrackerType } from "./tracker-swap";
 
 /** The disparity-scope PID node's value type — per-eye mirror volts (the
  *  `{ l, r }` command pushed to the controller node). The override slot pins
@@ -106,6 +107,15 @@ export const disparity = defineContract({
     view: "sliced" as "sliced" | "disparity" | "anaglyph" | "sgbm",
     tuning: DEFAULT_TUNING,
     tracker_enabled: false as boolean,
+    /** Which OBJECT-TRACKER engine the auto-follow node runs — hot-swappable
+     *  mid-session (the drop-in replacement nodes, user request 2026-07-11):
+     *  `"hybrid"` = chained NCC match + re-detect (default, robust on mono
+     *  needles + recovery), `"kcf"` = chained GRAY-pinned KCF. Both share the
+     *  `KcfTracker` surface, so the session releases one and spins the other on
+     *  the SAME source pipe + graph node id (no restart, no graph churn). The
+     *  drawer's "Tracker" SingleSelect drives this; session-local, not
+     *  persisted. See tracker-swap.ts. */
+    tracker_type: DEFAULT_TRACKER_TYPE as TrackerType,
     /** KCF template size (pixels) — the arm ROI of the session-owned CHAINED
      *  tracker thread (controller-node-and-fifo-edges §3.5). Applied on the
      *  next (re-)arm, not live: the kernel no longer runs any KCF. */
@@ -157,6 +167,12 @@ export const disparity = defineContract({
      *  activate; constant per activation. */
     zoom_override: null as number | null,
     tracker_bbox: null as Rect | null,
+    /** The auto-follow gate hit the lost-latch (~10 consecutive misses) and
+     *  released while the toggle stays on — the drawer Status reads "lost"
+     *  instead of a stale "armed", and the convergence timeout resumes
+     *  (frozen() keys on the REAL gate; UI/UX review 2026-07-11). Cleared on
+     *  every (re-)arm. */
+    tracker_lost: false as boolean,
     /** True while a pointer drag pins the target (the tracker's override is
      *  engaged; SESSION-LOCAL flag since the node split — nothing rides the
      *  reusable match nodes). Drives the UI's override badge (which does not

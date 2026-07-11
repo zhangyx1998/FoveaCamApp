@@ -150,6 +150,7 @@ import type { Pos } from "@lib/controller-codec";
 // in tracker-feed.ts/vergence.ts so vitest never loads the native addon.
 import {
   createChainedHybridTracker,
+  createChainedTracker,
   createComposeStream,
   createImmPredictor,
   type Compose,
@@ -157,6 +158,7 @@ import {
   type KcfTracker,
   type TrackerMeter,
 } from "core/Tracker";
+import { swapTracker, type TrackerType } from "./tracker-swap";
 import type { MirrorSink } from "core/Controller";
 import type { PortLink } from "../../../core/dist/types";
 import { registerNativeProbe } from "@orchestrator/native-probes";
@@ -356,9 +358,31 @@ export default function disparityScopeSession(
     let lastGood: Point2d = ZERO;
 
     // --- chained tracker state (§3.5) ---
-    // The session-owned KCF thread on the C undistort chain (created on
-    // activate, released on drain).
+    // The session-owned tracker thread on the C undistort chain (created on
+    // activate, released on drain). The ENGINE is runtime-selectable
+    // (`state.tracker_type`): hybrid NCC + re-detect or GRAY-KCF, both drop-in
+    // (identical `KcfTracker` surface — see tracker-swap.ts).
     let tk: KcfTracker | null = null;
+    // The tracker source pipe id + graph node id — CONSTANT across a swap (no
+    // graph churn). Copied from the activate-local ids so the hot-swap path can
+    // re-create on the same source/node id; both null while idle.
+    const trackerSrc: { pipe: string | null; node: string | null } = {
+      pipe: null,
+      node: null,
+    };
+    // The tracker ENGINE actually running — the swap's degrade fallback + the
+    // pending-swap dedupe. Tracks `state.tracker_type` except on a degraded
+    // swap (factory threw → we keep the previous type running and pin state).
+    let runningTrackerType: TrackerType = "hybrid";
+    // A tracker_type change requested WHILE a pointer drag is in flight is
+    // DEFERRED to drag end (ruled-safe: never re-plumb the tracker mid-gesture;
+    // the swap re-arms cleanly at the settled pose on pointer-up). Null = none.
+    let pendingTrackerType: TrackerType | null = null;
+    // The native kcf → imm measurement port link — re-established on every swap
+    // (a fresh tracker's `track_out` must re-pipe into the SAME imm brick, or
+    // the predictor stops seeing measurements). Its disposer releases whatever
+    // is current.
+    let measureLink: PortLink | null = null;
     // JS-side auto-follow gate: native has NO disarm, so a "released" tracker
     // keeps emitting results and this gate ignores them until the next arm.
     let trackerArmed = false;
@@ -472,7 +496,12 @@ export default function disparityScopeSession(
     }
 
     function frozen(): boolean {
-      if (trackerActive) return false; // actively tracking: never freeze
+      // Tracking = engaged, ALWAYS (user ruling 2026-07-11): while the
+      // auto-follow gate is armed — including the armed-but-hunting window
+      // before the first lock and the hybrid's re-detect recovery — or found
+      // results flow, the convergence timeout does not apply. The timeout
+      // exists for unattended pointer-set targets, not an active tracker.
+      if (trackerArmed || trackerActive) return false;
       const t = s.state.tuning.timeout;
       const timeoutMs = t > 0 ? t : Infinity;
       return timeoutMs !== Infinity && now() - windowStart > timeoutMs;
@@ -593,6 +622,67 @@ export default function disparityScopeSession(
         }),
       );
       trackerArmed = true;
+      s.telemetry({ tracker_lost: false }); // (re-)armed — the latch cleared
+    }
+
+    /** Create a chained tracker of the given ENGINE on the current source pipe +
+     *  graph node id (both drop-in — identical `KcfTracker` surface). THROWS
+     *  when no brick is attached to the pipe (degradation path). Node id is
+     *  kept constant so graph labels/positions never churn on a swap. */
+    function createTrackerOfType(type: TrackerType): KcfTracker {
+      const { pipe, node } = trackerSrc;
+      if (!pipe || !node) throw new Error("tracker source not ready");
+      return type === "kcf"
+        ? createChainedTracker(pipe, node)
+        : createChainedHybridTracker(pipe, node);
+    }
+
+    /** HOT-SWAP the object-tracker engine mid-session (user request
+     *  2026-07-11): release the old tracker, create `type` on the SAME source +
+     *  node id, resume consumption with the shared feed, re-pipe kcf → imm, and
+     *  re-arm at the current target IFF auto-follow was armed. No graph churn
+     *  (constant node id), no session restart, no frame-pipeline interruption —
+     *  only a brief tracker-results gap. Degrades per requirement 4: on a
+     *  factory throw, falls back to the previous engine and pins state to the
+     *  actually-running type. The sequencing lives in the pure `swapTracker`. */
+    function performTrackerSwap(type: TrackerType): void {
+      // Only meaningful while a tracker source exists (session active). Before
+      // activate the state write just sits in state; `activateSession` reads
+      // `state.tracker_type` to pick the initial engine.
+      if (!trackerSrc.pipe || !trackerSrc.node) return;
+      const wasArmed = trackerArmed;
+      const res = swapTracker(tk, type, runningTrackerType, wasArmed, {
+        release: (old) => {
+          measureLink?.release(); // drop the old kcf → imm link first
+          measureLink = null;
+          old.release(); // closes the async iterator → consumeTracker exits
+          trackerActive = false;
+        },
+        create: (t) => createTrackerOfType(t),
+        consume: (nt) => {
+          // Re-establish the native measurement link into the SAME imm brick.
+          if (imm) measureLink = nt.track_out.pipe(imm.measure_in);
+          void consumeTracker(nt, trackerFeed);
+        },
+        rearm: (nt) => {
+          nt.arm(
+            RECT.fromCenter(s.state.target, {
+              width: s.state.kernel.w,
+              height: s.state.kernel.h,
+            }),
+          );
+          trackerArmed = true;
+        },
+      });
+      tk = res.tracker;
+      runningTrackerType = res.type;
+      if (!res.ok) {
+        console.error(
+          `[disparity-scope] tracker '${type}' unavailable; kept '${res.type}'`,
+        );
+        // Never advertise a type that isn't running: pin the select to reality.
+        if (res.type !== type) s.setState("tracker_type", res.type);
+      }
     }
 
     // Per-result routing off the tracker thread (pure reducer — see
@@ -625,6 +715,10 @@ export default function disparityScopeSession(
           // the tracker was locked and steering (2026-07-10).
           pidNode?.ingest("target");
           trackerActive = true;
+          // Tracking = activity: keep the convergence window fresh so the
+          // MOMENT tracking ends the timeout restarts from now, never from a
+          // stale pre-tracking window (same semantics as drag activity).
+          windowStart = now();
           lastGood = center;
           s.setState("target", center);
           steerCrops();
@@ -636,8 +730,12 @@ export default function disparityScopeSession(
           // good target — the same policy the old in-kernel tracker had.
           trackerArmed = false;
           trackerActive = false;
+          windowStart = now(); // loss restarts the convergence window
           s.setState("target", lastGood);
-          s.telemetry({ tracker_bbox: null });
+          // tracker_lost drives the drawer Status "lost" (the toggle stays on
+          // but the gate released — a stale "armed" beside a "frozen" vergence
+          // status read as a contradiction; UI/UX review 2026-07-11).
+          s.telemetry({ tracker_bbox: null, tracker_lost: true });
         },
       },
       TRACKER_LOST_TOLERANCE,
@@ -1120,6 +1218,7 @@ export default function disparityScopeSession(
       // same degradation as before).
       const serialC = t.leases.C.camera.serial;
       const cSourceId = undistortIds.C ?? nodeId.convert(serialC);
+      trackerSrc.pipe = cSourceId; // hot-swap re-creates on this same source
       const camC = t.leases.C.camera;
       wide = {
         width: camC.getFeatureInt("Width"),
@@ -1344,12 +1443,14 @@ export default function disparityScopeSession(
       // added HERE — after the pipe disconnects, BEFORE the producer retirers
       // (DisposerBag is FIFO) — so the tap detaches before the brick dies.
       const kcfId = nodeId.undistortKcf(serialC);
+      trackerSrc.node = kcfId; // hot-swap re-creates on this same node id
       try {
-        // Hybrid NCC match+re-detect (hybrid-tracker.md, 2026-07-10): pure
-        // drop-in for the chained KCF — same handle/result/meter surface, node
-        // id kept so graph labels/positions don't churn. KCF stays one line
-        // away (createChainedTracker) if the rig A/B prefers it.
-        tk = createChainedHybridTracker(cSourceId, kcfId);
+        // The RUNTIME-SELECTED engine (`state.tracker_type`): hybrid NCC
+        // match+re-detect (default) or GRAY-KCF — both drop-in (same
+        // handle/result/meter surface), node id kept so graph labels/positions
+        // don't churn across a hot-swap (tracker-swap.ts).
+        tk = createTrackerOfType(s.state.tracker_type);
+        runningTrackerType = s.state.tracker_type;
       } catch (e) {
         // No brick on the pipe (shouldn't happen post-advertise) — degrade to
         // pointer-only targeting, same UX as tracker-disabled.
@@ -1400,8 +1501,13 @@ export default function disparityScopeSession(
         // measurement semantics the JS relay had); the link self-registers its
         // profiler edge and retires it on release. The link pins both bricks,
         // so its disposer runs FIRST (FIFO — added after the brick disposers).
-        const measureLink = tk.track_out.pipe(imm.measure_in);
-        disposers.add(() => measureLink.release());
+        // Module-scoped so the hot-swap can release + re-pipe it (a fresh
+        // tracker's track_out must re-enter the SAME imm brick).
+        measureLink = tk.track_out.pipe(imm.measure_in);
+        disposers.add(() => {
+          measureLink?.release();
+          measureLink = null;
+        });
         // pid consumes RAW tracker results (reverting kcf → imm → pid): the
         // feed-forward pairs `V_pid` with the measured center it acted on; a
         // predicted pid input would double-count the motion. JS KEEPS its own
@@ -1809,6 +1915,11 @@ export default function disparityScopeSession(
       trackerActive = false;
       dragging = false;
       overriddenTele = false;
+      // Tracker source/link cleared (the tracker + its measureLink disposer run
+      // in `disposers.dispose()`); a pending swap is dropped.
+      trackerSrc.pipe = trackerSrc.node = null;
+      measureLink = null;
+      pendingTrackerType = null;
       // Disconnect pipes, release tracker, retire scalers → slices →
       // undistort bricks, dispose pid node (FIFO — see activate).
       disposers.dispose();
@@ -1891,6 +2002,14 @@ export default function disparityScopeSession(
               trackerArmed = s.state.tracker_enabled;
               trackerActive = false;
             }
+            // Apply a tracker-type swap that was DEFERRED during the drag
+            // (see the `tracker_type` watch) — now that the drag has ended and
+            // `trackerArmed` reflects the post-drag gate, the swap re-arms
+            // cleanly at the settled target.
+            if (pendingTrackerType && pendingTrackerType !== runningTrackerType) {
+              performTrackerSwap(pendingTrackerType);
+            }
+            pendingTrackerType = null;
           }
         },
         async resetTuning() {
@@ -1997,6 +2116,24 @@ export default function disparityScopeSession(
           }
           // While dragging, the pointer-up releaseOverride re-arms and
           // `trackerArmed` follows the (fresh) tracker_enabled state there.
+        },
+        // HOT-SWAP the object-tracker engine (user request 2026-07-11). Applies
+        // immediately unless a pointer drag is in flight — then it DEFERS to
+        // drag end (ruled-safe: never re-plumb the tracker mid-gesture; the
+        // pointer-up path applies the pending swap and re-arms at the settled
+        // pose). Pre-activate writes just sit in state; `activateSession` reads
+        // `tracker_type` to pick the initial engine.
+        tracker_type(type) {
+          if (!trackerSrc.pipe) return; // idle — activate will read state
+          if (type === runningTrackerType) {
+            pendingTrackerType = null; // a stray re-select of the live type
+            return;
+          }
+          if (dragging) {
+            pendingTrackerType = type; // apply on pointer-up
+            return;
+          }
+          performTrackerSwap(type);
         },
       },
       activate() {

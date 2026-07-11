@@ -159,6 +159,17 @@ CMake glob picks it up).
 - Core build: `cd core && PATH="/opt/homebrew/bin:$PATH" make` — clean for both
   node and electron runtimes.
 
+## AS-BUILT addendum — runtime-selectable engine (2026-07-11)
+
+The drop-in equivalence is now a USER-FACING control: disparity-scope's drawer
+carries a Tracker SingleSelect (`state.tracker_type`, default hybrid) that
+hot-swaps engines mid-session — release → create on the same source pipe +
+node id → resume the shared feed → re-pipe `track_out` into the SAME imm
+brick → re-arm iff auto-follow was armed. Degrade: a throwing factory falls
+back to the previously-running engine and pins the select to reality.
+Mid-drag requests defer to drag end. Sequencing is pure + unit-tested
+(`app/modules/disparity-scope/tracker-swap.ts`, `app/test/tracker-swap.test.ts`).
+
 ## Session swap plan (planner, later — one line per session)
 
 The hybrid is a pure drop-in; each swap is replacing one factory call and

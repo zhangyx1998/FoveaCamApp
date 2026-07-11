@@ -68,6 +68,10 @@ export interface AppMeta {
   group: "application" | "calibration" | "utility";
   /** Dev-only app (excluded from production launcher + registry). */
   dev?: true;
+  /** This app owns a `debug`-class sub-window (Debugger.vue) — AppWindow shows
+   *  a title-bar toggle for it (moved off the page body, user 2026-07-11).
+   *  Value = the tooltip label for the toggle. */
+  debugWindow?: string;
 }
 
 type AppSpec = Omit<AppMeta, "id">;
@@ -78,6 +82,7 @@ export const APP_REGISTRY = {
     title: "Disparity Scope",
     session: "disparity-scope",
     group: "application",
+    debugWindow: "Toggle template-match debugger",
   },
   "multi-fovea": {
     title: "Tracking - Multi",

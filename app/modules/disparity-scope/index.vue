@@ -47,6 +47,10 @@ import PosView from "@src/components/PosView.vue";
 import InlineSelect from "@src/components/InlineSelect.vue";
 import Drawer from "@src/components/Drawer.vue";
 import RangeSlider from "@src/inputs/range-slider.vue";
+import SingleSelect, {
+  type SingleSelectOption,
+} from "@src/inputs/single-select.vue";
+import type { TrackerType } from "./tracker-swap";
 
 const session = useSession(disparity, "disparity-scope");
 const { state, telemetry } = session;
@@ -158,6 +162,24 @@ const VIEW_OPTIONS = computed(
       { value: "sgbm", label: "SGBM Disparity" },
     ] as const,
 );
+
+// Object-tracker engine choices for the drawer SingleSelect — the drop-in
+// replacement nodes (user request 2026-07-11). Bound to `state.tracker_type`;
+// the session hot-swaps the tracker on the fly (tracker-swap.ts). The session
+// pins this back on a degraded swap, so the control always shows the ACTIVE
+// engine.
+const TRACKER_OPTIONS: readonly SingleSelectOption<TrackerType>[] = [
+  {
+    value: "hybrid",
+    label: "Hybrid (NCC + re-detect)",
+    hint: "Locks mono needles / low-texture; re-acquires after occlusion.",
+  },
+  {
+    value: "kcf",
+    label: "KCF (GRAY)",
+    hint: "Classic correlation filter; fast, but silent-forever once lost.",
+  },
+];
 
 const drawer_height = ref(0);
 const stroke = computed(() => Math.max(telemetry.size.width, telemetry.size.height, 1) * 0.003);
@@ -324,11 +346,6 @@ function onCursor(c: (Point2d & Size & { buttons: number }) | null): void {
   wasDown = down;
 }
 
-// Toggle the module's Debugger sub-window (disparity-debugger-window.md) — the
-// guide strip + per-side match heatmaps moved off this main UI.
-function openDebugger(): void {
-  window.foveaBridge.toggleDebugWindow("disparity-scope");
-}
 </script>
 
 <template>
@@ -407,16 +424,8 @@ function openDebugger(): void {
           >override</span
         >
       </div>
-      <!-- Debugger sub-window toggle (disparity-debugger-window.md): opens the
-           module's Debugger.vue — the guide strip + per-side match heatmaps
-           that used to inline below the cameras. -->
-      <button
-        class="debugger-toggle"
-        title="Open the template-match debugger window"
-        @click="openDebugger"
-      >
-        Debugger
-      </button>
+      <!-- The Debugger sub-window toggle moved to the TITLE BAR (AppWindow's
+           catalog-driven bug icon, AppMeta.debugWindow — user 2026-07-11). -->
     </div>
     <div class="view">
       <StreamView class="stream" :title="ROLE.R" :payload="frameR" :theme="THEME.R" />
@@ -597,6 +606,19 @@ function openDebugger(): void {
             {{ state.tracker_enabled ? "on" : "off" }}
           </button>
         </h4>
+        <!-- A bare <label> with no control was inert + misassociated for a11y
+             (UI/UX review 2026-07-11); plain row + aria-label on the select. -->
+        <div class="entry">
+          <span>Type</span>
+        </div>
+        <!-- Object-tracker engine — swaps on the fly (drop-in nodes). Binds
+             state, so it always shows the ACTIVE engine (the session pins it
+             back on a degraded swap). -->
+        <SingleSelect
+          v-model="state.tracker_type"
+          :options="TRACKER_OPTIONS"
+          aria-label="Tracker type"
+        />
         <label class="entry">
           <span>Kernel</span>
           <span class="kernel-size">
@@ -607,7 +629,18 @@ function openDebugger(): void {
         </label>
         <div class="entry">
           <span>Status</span>
-          <span>{{ telemetry.tracker_bbox ? "tracking" : state.tracker_enabled ? "armed" : "off" }}</span>
+          <!-- "lost" = the auto-follow gate hit the lost-latch while the
+               toggle stays on (re-enable or drag to re-arm) — a stale "armed"
+               here contradicted a "frozen" vergence status. -->
+          <span>{{
+            telemetry.tracker_bbox
+              ? "tracking"
+              : state.tracker_enabled
+                ? telemetry.tracker_lost
+                  ? "lost"
+                  : "armed"
+                : "off"
+          }}</span>
         </div>
       </div>
     </div>
@@ -638,27 +671,6 @@ function openDebugger(): void {
   .stream {
     width: 30vw;
     height: 22.5vw;
-  }
-}
-
-.debugger-toggle {
-  cursor: pointer;
-  margin-top: 0.5em;
-  border: 1px solid var(--tint-4);
-  border-radius: 4px;
-  background: var(--tint-1);
-  color: inherit;
-  font: inherit;
-  padding: 0.3em 1.2em;
-  opacity: 0.8;
-
-  &:hover {
-    opacity: 1;
-    background: var(--tint-3);
-  }
-
-  &:active {
-    background: var(--tint-2);
   }
 }
 

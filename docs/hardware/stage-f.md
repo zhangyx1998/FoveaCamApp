@@ -156,11 +156,22 @@ history has them). Cross-app platform checks live in the first two sections.
 
 ## Disparity Scope
 
-### Tracker (hybrid NCC — swapped in bc20269)
+### Tracker (hybrid NCC — swapped in bc20269; runtime-selectable 2026-07-11)
 - [ ] **Locks and follows** — enable tracker on a textured target: box locks,
   stays locked, follows motion. No flash-then-disappear, no parking on
   "armed". (History: two OpenCV 4.13 KCF regressions fixed, then the hybrid
   NCC node replaced KCF entirely; KCF remains one line away for A/B.)
+- [ ] **Engine hot-swap mid-tracking** — with the tracker locked, flip the
+  drawer Tracker select Hybrid ↔ KCF: steering continues, the new engine
+  re-arms at the current target within a frame or two, the graph node
+  persists (same id, no re-layout), and the kcf → imm prediction chain keeps
+  flowing. A swap mid-drag applies at drag end. If a factory is unavailable
+  the select snaps back to the running engine.
+- [ ] **Tracking never freezes vergence** — with the tracker ARMED or
+  TRACKING (including armed-but-hunting, before first lock), the convergence
+  timeout never fires (status never "frozen"). After a lost-latch the drawer
+  Status reads "lost" (not a stale "armed") and the timeout resumes from that
+  moment; disabling the tracker likewise restarts the window.
 - [ ] **Re-acquires after loss** — occlude or jerk the target out of the
   search window: the recovery ladder re-locks within a few frames (KCF never
   did — this is new behavior).

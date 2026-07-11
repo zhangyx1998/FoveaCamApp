@@ -24,7 +24,7 @@ import ErrorTray from "../components/ErrorTray.vue";
 import { useSessionStatus } from "@lib/orchestrator/client";
 import TeleCanvasPusher from "../components/telecanvas/Pusher.vue";
 import { FontAwesomeIcon as Icon } from "@fortawesome/vue-fontawesome";
-import { faCamera, faTelevision, faChartLine } from "./icons";
+import { faBug, faCamera, faTelevision, faChartLine } from "./icons";
 import { current_capture } from "../capture";
 import RecordButton from "../record/RecordButton.vue";
 import { appRegistry } from "./app-registry";
@@ -69,6 +69,13 @@ const showProgress = computed(
 
 function openProfiler() {
   window.foveaBridge.openProfilerWindow();
+}
+
+// Module debug sub-window toggle (catalog-declared via AppMeta.debugWindow;
+// moved off the page body per user 2026-07-11). Same open-or-close semantics
+// the old in-page button had.
+function toggleDebug() {
+  if (meta?.session) window.foveaBridge.toggleDebugWindow(meta.session);
 }
 
 // TeleCanvas moved out of the title-bar overlay into its own window (standalone
@@ -140,6 +147,17 @@ window.addEventListener("keydown", (e) => {
       @click="toggleCapture"
     >
       <Icon :icon="faCamera" />
+    </button>
+    <!-- Module debug sub-window toggle (catalog-declared; moved off the page
+         body per user 2026-07-11). Toggle semantics match the old in-page
+         button: open-or-close via toggleDebugWindow. -->
+    <button
+      v-if="meta?.debugWindow && meta.session"
+      class="icon-button"
+      :title="meta.debugWindow"
+      @click="toggleDebug"
+    >
+      <Icon :icon="faBug" />
     </button>
     <button class="icon-button" title="Open TeleCanvas window" @click="openTeleCanvas">
       <Icon :icon="faTelevision" />

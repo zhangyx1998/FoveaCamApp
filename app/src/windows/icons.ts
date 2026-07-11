@@ -34,4 +34,5 @@ export {
   faPause,
   faTriangleExclamation,
   faTrashCan,
+  faBug,
 } from "@fortawesome/free-solid-svg-icons";
