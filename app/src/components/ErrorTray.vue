@@ -11,7 +11,9 @@ You may find the full license in project root directory.
   used to terminate at renderer `console.error`, invisible in a packaged app.
   This title-bar chrome renders the bounded, coalesced ring `client.ts` keeps
   (`errorTray`): a badge with the live count, a dropdown of recent reports
-  (scope · message · ×count · age), per-row dismiss, and clear-all.
+  (scope · message · ×count · age), per-row copy + dismiss, and clear-all. An
+  empty ring flips the panel to the `--ok` green identity (all-clear at a
+  glance); any report restores the danger identity.
 
   Dark-lab operator language (docs/design/design-language.md): monospace, the
   one `--danger` error identity, tokens over raw hex, icon-only title-bar button
@@ -21,7 +23,13 @@ You may find the full license in project root directory.
 <script setup lang="ts">
 import { computed, onUnmounted, ref } from "vue";
 import { FontAwesomeIcon as Icon } from "@fortawesome/vue-fontawesome";
-import { faTriangleExclamation, faTrashCan, faXmark } from "../windows/icons";
+import {
+  faTriangleExclamation,
+  faTrashCan,
+  faXmark,
+  faCopy,
+  faCheck,
+} from "../windows/icons";
 import {
   errorTray,
   dismissError,
@@ -55,6 +63,31 @@ function dismiss(report: ErrorReport): void {
   if (errorTray.length === 0) open.value = false;
 }
 
+// Per-row copy: the full report details as one plain-text line — ISO time of
+// the most recent occurrence, scope, message, and the coalesce count.
+function reportText(report: ErrorReport): string {
+  const times = report.count > 1 ? ` (×${report.count})` : "";
+  return `${new Date(report.lastAt).toISOString()} [${report.scope}] ${report.message}${times}`;
+}
+
+const copiedKey = ref<string | null>(null);
+// Row identity: coalescing guarantees firstAt+scope+message uniqueness (a count
+// bump keeps the object; scope alone can collide within one millisecond).
+const rowKey = (report: ErrorReport) =>
+  `${report.firstAt}|${report.scope}|${report.message}`;
+async function copy(report: ErrorReport): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(reportText(report));
+    const key = rowKey(report);
+    copiedKey.value = key;
+    setTimeout(() => {
+      if (copiedKey.value === key) copiedKey.value = null;
+    }, 1200);
+  } catch {
+    /* clipboard unavailable */
+  }
+}
+
 function clearAll(): void {
   clearErrors();
   open.value = false;
@@ -73,9 +106,9 @@ function clearAll(): void {
       <span v-if="count > 0" class="badge">{{ count > 99 ? "99+" : count }}</span>
     </button>
 
-    <div v-if="open" class="panel">
+    <div v-if="open" class="panel" :class="{ ok: count === 0 }">
       <div class="panel-head">
-        <span class="panel-title">Errors</span>
+        <span class="panel-title">{{ count === 0 ? "All clear" : "Errors" }}</span>
         <button
           class="clear"
           :disabled="count === 0"
@@ -87,13 +120,20 @@ function clearAll(): void {
       </div>
       <div v-if="count === 0" class="empty">No recent errors.</div>
       <ul v-else class="list">
-        <li v-for="report in errorTray" :key="report.firstAt + report.scope" class="row">
+        <li v-for="report in errorTray" :key="rowKey(report)" class="row">
           <div class="row-main">
             <span class="scope">{{ report.scope }}</span>
             <span v-if="report.count > 1" class="times">×{{ report.count }}</span>
             <span class="age">{{ ago(report.lastAt) }}</span>
             <button
-              class="dismiss"
+              class="row-action"
+              :title="copiedKey === rowKey(report) ? 'Copied' : 'Copy error details'"
+              @click="copy(report)"
+            >
+              <Icon :icon="copiedKey === rowKey(report) ? faCheck : faCopy" />
+            </button>
+            <button
+              class="row-action"
               title="Dismiss"
               @click="dismiss(report)"
             >
@@ -166,6 +206,16 @@ function clearAll(): void {
   box-shadow: 0 0.4em 1.2em rgba(0, 0, 0, 0.6);
   overflow: hidden;
   font-size: 0.8em;
+
+  // Empty ring = all-clear: the one `--ok` green identity replaces the danger
+  // frame (snap, no transition — glanceable state, ruled principle).
+  &.ok {
+    border-color: var(--ok);
+
+    .panel-title {
+      color: var(--ok);
+    }
+  }
 }
 
 .panel-head {
@@ -245,10 +295,12 @@ function clearAll(): void {
   white-space: nowrap;
 }
 
-.dismiss {
+.row-action {
   background: none;
   border: none;
-  padding: 0 0.2em;
+  // Matches `.clear` — two adjacent targets (one destructive) need real
+  // hit area, not the old single-dismiss sliver.
+  padding: 0.2em 0.4em;
   cursor: pointer;
   color: var(--text-faint);
   border-radius: 3px;
