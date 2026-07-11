@@ -5,7 +5,7 @@ HEAD (post-pull, incl. the clarity-sweep session — diff-verified comment-only
 on all audited files). Four reviewers: intrinsic subsystem, extrinsic
 subsystem, architecture/store alignment, math/precision. 156+132+103 related
 tests all pass; every finding below carries file:line evidence personally
-confirmed by its reviewer. Status: **AWAITING RULING** on the fix wave.
+confirmed by its reviewer. Status: **ALL FINDINGS + the four user-reported UX issues SHIPPED** (2026-07-11, lanes F/G/H: 89e462c, 08f2f08, abc758b + the extrinsic commit; rig checklists in the lane reports/commit messages).
 
 ## Answers to the four questions
 

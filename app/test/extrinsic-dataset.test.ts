@@ -7,7 +7,12 @@
 
 import { describe, expect, it } from "vitest";
 
-import { createDataSet } from "@modules/calibrate-extrinsic/dataset";
+import {
+  computeFinStats,
+  createDataSet,
+  MIN_FIT_SAMPLES,
+  type A2VPredict,
+} from "@modules/calibrate-extrinsic/dataset";
 import type { ExtrinsicRecord } from "@modules/calibrate-extrinsic/contract";
 import type { Point2d, Point3d } from "core/Geometry";
 
@@ -82,5 +87,61 @@ describe("createDataSet (measured-magnification field threading)", () => {
     r.C.side_pts = { L: quad(11) }; // R side marker not seen this capture
     expect(createDataSet([r], "L")[0]!.wide_img_points).toEqual(quad(11));
     expect(createDataSet([r], "R")[0]!.wide_img_points).toBeUndefined();
+  });
+
+  // Review L3: pin the per-eye field THREADING no earlier test asserted — a
+  // swapped eye (R dataset carrying L's voltage/obj_points) would fit a
+  // plausible-looking but crossed regression.
+  it("threads obj_points per eye (L3)", () => {
+    const rec = fullRecord();
+    const objR: Point3d[] = obj.map((p) => ({ ...p, z: 9 })); // distinguishable
+    rec.R.obj_pts = objR;
+    const [dsL] = createDataSet([rec], "L");
+    const [dsR] = createDataSet([rec], "R");
+    expect(dsL!.obj_points).toEqual(obj);
+    expect(dsR!.obj_points).toEqual(objR); // R's own obj points — never L's
+  });
+
+  it("maps the R record's voltage into the R dataset (L3 — never the L voltage)", () => {
+    const [dsR] = createDataSet([fullRecord()], "R");
+    expect(dsR!.voltage).toEqual({ x: 3, y: 4 }); // R.voltage
+    expect(dsR!.img_points).toEqual(quad(80)); // R's own quad
+    // Both eyes share the CENTER angle (the regression input) by design.
+    expect(dsR!.angle).toEqual({ x: 0.1, y: 0.2 });
+  });
+});
+
+describe("computeFinStats (review #14 residual surfacing)", () => {
+  // A linear predictor whose error vs the recorded voltage is exactly known.
+  const exact: A2VPredict = { predict: () => ({ x: 1, y: 2 }) }; // == L.voltage
+  const off: A2VPredict = { predict: () => ({ x: 3, y: 8 }) }; // R.voltage + (0,4)
+
+  it("computes per-record volt-space residuals + per-eye RMS", () => {
+    const fin = computeFinStats([fullRecord(), fullRecord()], { L: exact, R: off });
+    expect(fin.samples).toBe(2);
+    expect(fin.minSamples).toBe(MIN_FIT_SAMPLES);
+    expect(fin.residuals).toHaveLength(2);
+    expect(fin.residuals[0]!.L).toBeCloseTo(0, 12); // exact fit
+    expect(fin.residuals[0]!.R).toBeCloseTo(4, 12); // |(3,8)-(3,4)| = 4
+    expect(fin.rmsL).toBeCloseTo(0, 12);
+    expect(fin.rmsR).toBeCloseTo(4, 12);
+  });
+
+  it("a missing fit (gated / failed) yields null residuals + null RMS", () => {
+    const fin = computeFinStats([fullRecord()], { L: null, R: null });
+    expect(fin.residuals[0]).toEqual({ L: null, R: null });
+    expect(fin.rmsL).toBeNull();
+    expect(fin.rmsR).toBeNull();
+  });
+
+  it("a non-finite prediction degrades that record to null (never NaN telemetry)", () => {
+    const bad: A2VPredict = { predict: () => ({ x: NaN, y: 0 }) };
+    const fin = computeFinStats([fullRecord()], { L: bad, R: exact });
+    expect(fin.residuals[0]!.L).toBeNull();
+    expect(fin.rmsL).toBeNull();
+  });
+
+  it("MIN_FIT_SAMPLES matches the ruled fit gate", () => {
+    expect(MIN_FIT_SAMPLES).toBe(10);
   });
 });

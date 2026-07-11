@@ -33,6 +33,17 @@ export type ExtrinsicRecord = {
 
 export type DetectionView = { points: Point2d[] } | null;
 
+/** FIN-step fit-quality stats (review #14, session-computable half): sample
+ *  count vs the fit-gate minimum + per-record volt-space residuals (predicted
+ *  vs recorded voltage at each record's angle) + per-eye RMS. */
+export type FinStats = {
+  samples: number;
+  minSamples: number;
+  residuals: Array<{ L: number | null; R: number | null }>;
+  rmsL: number | null;
+  rmsR: number | null;
+};
+
 export const calibrateExtrinsic = defineContract({
   state: {
     step: "CAL" as "CAL" | "FIN" | "PRV",
@@ -52,10 +63,25 @@ export const calibrateExtrinsic = defineContract({
      *  `baseline_mm` for LIVE marker spacing (per-triplet-settings wave,
      *  `useTripleBaseline`). Set on acquire. */
     configPath: [] as string[],
+    /** CAL visual-servo gain (velocity-form: `startServo`'s single `kp`, which
+     *  maps to `ki` internally — kp/kd are structurally 0 in this control law).
+     *  Drawer-tunable; the session restarts the servo (debounced) on change —
+     *  the servo re-seeds from the live pose, so retuning never snaps. */
+    servoGain: 16,
   },
   telemetry: {
     ready: false as boolean,
     detection: { L: null, C: null, R: null } as Record<"L" | "C" | "R", DetectionView>,
+    /** Per-role detection FRESHNESS (review #12, session half): false once a
+     *  role's last detection is older than the staleness bound — a frozen
+     *  tracker (camera loss) must not stay capturable. */
+    detectionFresh: { L: false, C: false, R: false } as Record<"L" | "C" | "R", boolean>,
+    /** LIVE mirror pose during CAL (the PosView record head) — fed at a fixed
+     *  throttle from the controller's applied pose, so the head tracks servo
+     *  motion + drags in realtime. Null = no controller bound. */
+    mirror: null as { left: Pos; right: Pos } | null,
+    /** FIN fit-quality stats (review #14) — null until a finalize ran. */
+    fin: null as FinStats | null,
     records: [] as ExtrinsicRecord[],
     /** Both L/R regressions fit successfully (gates "Preview Results"). */
     finalized: false as boolean,
