@@ -151,7 +151,14 @@ HANDLE_SET(System::Reset) {
     VERB("Soft reset requested");
     send(packet);
     delay(100);
+#ifdef FOVEA_HOST_SIM
+    // Host sim (docs/proposals/firmware-sim-harness.md): "bkpt" is an ARM32
+    // instruction and cannot assemble on an x86/arm64 host — route through the
+    // same reboot shim the HARD path uses. Never defined by PlatformIO.
+    _reboot_Teensyduino_();
+#else
     asm volatile("bkpt"); // Breakpoint instruction causes reset
+#endif
     crash("Reboot failed");
   }
   reject(seq, "Unknown reset type");

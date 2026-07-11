@@ -1,6 +1,35 @@
 # Firmware-in-the-loop simulator — real firmware logic on the host
 
-Status: **PROPOSED (ruled 2026-07-11 — "go ahead and implement it").**
+Status: **SHIPPED (2026-07-11; Mac build pass owed).**
+
+## AS SHIPPED (2026-07-11)
+
+Landed as ruled: `test/fw-sim/` (Arduino/SPI HAL shim + pty pump mirroring
+`Firmware.cpp`'s loop verbatim, scriptable strobe injection, `--loop-us`
+saturation knob), `test/fw-sim-check.cpp` (core-free wire self-check, all 8
+sections), `core/test/47-firmware-sim.ts` (Device-driven, all 9 sections —
+including the v2.0.0 `settle_time` deferral's first behavioral test
+anywhere, exposure-averaged FIN positions pinned with a mid-exposure UPDATE,
+and the full Enable(false) teardown wire-order). ONE `#ifdef FOVEA_HOST_SIM`
+guard in `firmware/src/Protocol.cpp` (the ARM `bkpt` reset instruction —
+cannot assemble on a host; `#else` branch byte-identical); `lib/` untouched;
+MEMS.cpp compiled as the fifth real TU so the DAC-train assertions exercise
+the real enable sequence. Exceptions ON host-side (crash.h throws, matching
+core).
+
+**Immediate payoff — two real core bugs on its first run** (fixed in
+`b5b1f30`): the wave-6 rx-thread self-deadlock on pending retire (would have
+broken the rig connect sequence outright), and CMD_TRIGGER registered as
+uint16 since inception against a uint32 wire field (never worked through the
+NAPI factory). Report-only firmware observation: `cancelPendingTrigger()` at
+Enable(false) REJs without lowering a raised trigger pin (visible in the
+sim's pin log).
+
+RIG/MAC-GATED: `cd test && make build` + `fw-sim-check` green on macOS
+(openpty/`_NSGetExecutablePath` paths guarded but unverified here);
+firmware `.hex` byte-identity via `pio run` diff; sim-vs-rig fidelity
+numbers (strobe latency, STROBE_MARGIN_US, settle t_trigger deltas from
+real FINs).
 
 ## Problem
 
