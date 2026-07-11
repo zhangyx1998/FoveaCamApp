@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license.
 // You may find the full license in project root directory.
 // -------------------------------------------------------
-import type { BufferLike } from "../types";
+import type { BufferLike, CoreObject, InPort, MirrorVolts } from "../types";
 
 declare module "core/Controller" {
   /** Path to the resolved native module injected by JS loader */
@@ -209,4 +209,70 @@ declare module "core/Controller" {
   export type ResetType = "SOFT" | "HARD";
   export type LogLevel = "OFF" | "ERR" | "WARN" | "INFO" | "VERB";
   export type AnalogChannels = [number, number, number, number];
+  // ---- Native mirror position sink (native-compose-controller.md) ----------
+
+  /** One native-history sample: the PREDICTED volts (DAC round-trip —
+   *  predictVolts parity) at a host-steady-ns stamp. */
+  export interface MirrorHistorySample {
+    tNs: bigint;
+    left: { x: number; y: number };
+    right: { x: number; y: number };
+  }
+
+  /** `historyAt` result — the JS `mirrorAt` shape (mirror-history.ts), so the
+   *  homography feeder's injectable `history` seam is a passthrough. */
+  export interface MirrorHistoryAt {
+    left: { x: number; y: number };
+    right: { x: number; y: number };
+    ageNs: bigint;
+    interpolated: boolean;
+  }
+
+  /**
+   * The controller's NATIVE position in-port (native-compose-controller.md
+   * planner decision 2/3): accepts FINAL volts off a port link's delivery
+   * thread and natively replicates the JS StreamHandle.update path — the
+   * stream-update GATE (1 ms min interval + dedupe), the channels() volt→DAC
+   * conversion, and the CMD_STREAM UPDATE fire-and-forget write through the
+   * device's shared write seam (one mutex — never interleaves with NAPI
+   * writes; the seam closes BEFORE the fd on device release, so post-
+   * disconnect writes are counted no-ops). Each accepted write records into
+   * a fixed 4096-sample native history ring (the mirror-history authority
+   * for NATIVELY-driven inputs). Stream lifecycle stays JS: create/TERMINATE
+   * ride `Controller.createStream` (FW5 + quiesce ownership unchanged).
+   */
+  export interface MirrorSink extends CoreObject<MirrorSink> {
+    /** Typed volts IN port — runtime tag `"volts"`. */
+    readonly pos_in: InPort<MirrorVolts>;
+    probe(): {
+      received: number;
+      written: number;
+      deduped: number;
+      throttled: number;
+      errors: number;
+      /** False once the device's write seam closed (release/disconnect). */
+      open: boolean;
+    };
+    historyLatest(): MirrorHistorySample | null;
+    historyAt(tNs: bigint): MirrorHistoryAt | null;
+    historyQuery(fromNs: bigint, toNs: bigint): MirrorHistorySample[];
+  }
+
+  /** Attach a native pos_in sink to a live Device's write seam. The MCU
+   *  stream (`streamId`) must already exist (JS `createStream`, ACK-backed)
+   *  and is TERMINATED by JS on close — the sink only fires UPDATEs. */
+  export function createMirrorSink(
+    device: Device,
+    options: {
+      streamId: number;
+      bias?: number;
+      dv?: number;
+      /** Graph node id for the link edge (default "controller"). */
+      nodeId?: string;
+    },
+  ): MirrorSink;
+
+  /** TEST-ONLY (core/test/45): a raw pty pair — a Device opens the slave
+   *  `path`; the test reads the master `fd` (fs.readSync) to assert frames. */
+  export function __serialTestPty(): { fd: number; path: string };
 }

@@ -1440,6 +1440,8 @@ static FN(createMultiTracker) {
 // its own TU (ImmPredictor.cpp) but JOINS the Tracker namespace — the brick is
 // logically a tracker post-stage (createImmPredictor + the ImmPredictor class).
 void exportImmNamespace(Napi::Env env, Napi::Object &exports);
+// The native compose brick (native-compose-controller.md) — same joining rule.
+void exportComposeNamespace(Napi::Env env, Napi::Object &exports);
 
 #define EXPORT(OBJ, F) OBJ.Set(#F, Function::New<F>(env, #F));
 void exportTrackerNamespace(Napi::Env env, Napi::Object &exports) {
@@ -1452,5 +1454,6 @@ void exportTrackerNamespace(Napi::Env env, Napi::Object &exports) {
   EXPORT(exports, createChainedHybridTracker);
   EXPORT(exports, createMultiTracker);
   exportImmNamespace(env, exports); // createImmPredictor + ImmPredictor class
+  exportComposeNamespace(env, exports); // createComposeStream + Compose class
 }
 #undef EXPORT

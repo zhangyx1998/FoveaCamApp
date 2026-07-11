@@ -50,7 +50,8 @@
 
 #include "CoreObject.h"
 #include "Iterator.h"    // TransformStream seam: Sub::Queue / Sub::Iterator
-#include "PortPipe.h"    // measure_in port (native-port-pipe.md)
+#include "ImmResult.h"   // shared prediction payload (imm -> compose link)
+#include "PortPipe.h"    // measure_in / predict_out ports (native-port-pipe.md)
 #include "Stream/Stream.h"
 #include "ThreadMeter.h"
 #include "TrackResult.h" // the measure_in payload (tracker link)
@@ -387,19 +388,8 @@ struct ImmMeasurement {
   uint64_t deviceTimestamp = 0;
 };
 
-// One prediction emitted by the brick (or returned by ingest at zero coast).
-struct ImmResult : Shared<ImmResult> {
-  bool found = false;
-  bool overridden = false;
-  bool coasting = false; // emitted between measurements / on a predict-only miss
-  bool hasCenter = false;
-  double cx = 0, cy = 0;
-  bool hasBbox = false;
-  double bx = 0, by = 0, bw = 0, bh = 0;
-  uint64_t seq = 0;
-  uint64_t deviceTimestamp = 0;
-  int64_t propagatedToNs = 0; // deviceTimestamp + Δ·1e9 (informational)
-};
+// ImmResult now lives in core/include/ImmResult.h (native-compose-controller):
+// the prediction payload crosses TUs on the imm → compose native link.
 
 class ImmCore {
 public:
@@ -812,6 +802,12 @@ public:
             Napi::InstanceWrap<ImmPredictorObject>::template InstanceAccessor<
                 &ImmPredictorObject::get_measure_in>("measure_in",
                                                      napi_enumerable),
+            // native-compose-controller.md: the typed prediction OUT port —
+            // pipe it into the native compose brick's pred_in (the session's
+            // JS iterator consumption of predictions is retired).
+            Napi::InstanceWrap<ImmPredictorObject>::template InstanceAccessor<
+                &ImmPredictorObject::get_predict_out>("predict_out",
+                                                      napi_enumerable),
         });
   }
 
@@ -898,8 +894,27 @@ public:
     JS_EXCEPT(env.Undefined())
   }
 
+  // `predict_out` — the brick's typed prediction OUT port (tag "prediction").
+  // The OutPort captures the ImmStream::Ptr, so a live link keeps the brick
+  // alive even past a JS release of this wrapper.
+  GET(predict_out) {
+    auto env = info.Env();
+    try {
+      if (predictOut_.IsEmpty()) {
+        auto stream = core();
+        auto port = PortPipe::makeOutPort<ImmResult::Ptr>(
+            stream->name(), "predict", "prediction", stream, stream.get());
+        auto js = PortPipe::createOutPortJs(env, port);
+        predictOut_ = Napi::Persistent(js.As<Napi::Object>());
+      }
+      return predictOut_.Value();
+    }
+    JS_EXCEPT(env.Undefined())
+  }
+
 private:
-  Napi::ObjectReference measureIn_; // cached port wrapper (accessor contract)
+  Napi::ObjectReference measureIn_;  // cached port wrapper (accessor contract)
+  Napi::ObjectReference predictOut_; // cached port wrapper (accessor contract)
 };
 
 CORE_OBJECT(ImmPredictorObject)

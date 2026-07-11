@@ -14,11 +14,13 @@
 // time must agree).
 
 import type {
+  Compose,
   ImmPrediction,
   ImmPredictor,
   KcfTracker,
   TrackResult,
 } from "core/Tracker";
+import type { MirrorSink } from "core/Controller";
 import type { InPort, OutPort, PortLink } from "../../core/dist/types";
 
 declare const tracker: KcfTracker;
@@ -64,6 +66,24 @@ tracker.track_out.pipe(imm.measure_in, { type: "unbounded" });
 tracker.track_out.pipe(tracker.track_out);
 // @ts-expect-error — an in-port has no pipe()
 imm.measure_in.pipe(tracker.track_out);
+
+// --- wave-5 lanes (native-compose-controller.md) ---------------------------------
+
+declare const compose: Compose;
+declare const sink: MirrorSink;
+
+// Legal: imm → compose (prediction brand) and compose → controller (volts).
+compose.pred_in satisfies InPort<ImmPrediction> | void;
+imm.predict_out.pipe(compose.pred_in);
+compose.volt_out.pipe(sink.pos_in, { type: "latest" });
+
+// Illegal cross-lane pipes: brands must not unify.
+// @ts-expect-error — a volts out-port cannot feed a prediction in-port
+compose.volt_out.pipe(compose.pred_in);
+// @ts-expect-error — a prediction out-port cannot feed the controller pos_in
+imm.predict_out.pipe(sink.pos_in);
+// @ts-expect-error — a track out-port cannot feed the compose pred_in
+tracker.track_out.pipe(compose.pred_in);
 
 // The prediction stream stays a separate shape from the ports.
 declare const pred: ImmPrediction;

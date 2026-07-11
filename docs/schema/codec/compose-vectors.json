@@ -1,0 +1,297 @@
+{
+  "description": "Native compose brick conformance vectors (native-compose-controller.md). Generated from the wave-1 JS composeVolts reference with a linear pixel→volt map per eye — expected = baseline + J·(p_pred − p_meas), or the held baseline when feedForward is false / the prediction is a miss. Consumed by app/test/compose-node.test.ts (JS reference) and core/test/45-native-compose.ts (native brick).",
+  "tolerance": 1e-9,
+  "vectors": [
+    {
+      "seq": 1,
+      "rebase": {
+        "vPid": {
+          "l": {
+            "x": 1,
+            "y": 2
+          },
+          "r": {
+            "x": 3,
+            "y": 4
+          }
+        },
+        "pMeas": {
+          "x": 100,
+          "y": 200
+        },
+        "jL": [
+          0.02,
+          -0.005,
+          0.001,
+          0.03
+        ],
+        "jR": [
+          -0.015,
+          0.002,
+          0.004,
+          -0.025
+        ],
+        "feedForward": true
+      },
+      "pred": {
+        "found": true,
+        "center": {
+          "x": 112.5,
+          "y": 193.25
+        }
+      },
+      "expected": {
+        "l": {
+          "x": 1.28375,
+          "y": 1.8099999999999996
+        },
+        "r": {
+          "x": 2.7990000000000004,
+          "y": 4.218749999999999
+        }
+      }
+    },
+    {
+      "seq": 2,
+      "rebase": {
+        "vPid": {
+          "l": {
+            "x": -5,
+            "y": 0.5
+          },
+          "r": {
+            "x": 7,
+            "y": -2
+          }
+        },
+        "pMeas": {
+          "x": 640.25,
+          "y": 480.75
+        },
+        "jL": [
+          0.01,
+          0.02,
+          0.03,
+          0.04
+        ],
+        "jR": [
+          0.05,
+          -0.06,
+          0.07,
+          -0.08
+        ],
+        "feedForward": true
+      },
+      "pred": {
+        "found": true,
+        "center": {
+          "x": 600,
+          "y": 500
+        }
+      },
+      "expected": {
+        "l": {
+          "x": -5.017499999999998,
+          "y": 0.0625
+        },
+        "r": {
+          "x": 3.832499999999996,
+          "y": -6.357499999999995
+        }
+      }
+    },
+    {
+      "seq": 3,
+      "rebase": {
+        "vPid": {
+          "l": {
+            "x": 11,
+            "y": 12
+          },
+          "r": {
+            "x": 13,
+            "y": 14
+          }
+        },
+        "pMeas": {
+          "x": 55,
+          "y": 66
+        },
+        "jL": [
+          0.9,
+          0.1,
+          0.2,
+          0.8
+        ],
+        "jR": [
+          0.7,
+          0.3,
+          0.4,
+          0.6
+        ],
+        "feedForward": true
+      },
+      "pred": {
+        "found": true,
+        "center": {
+          "x": 55,
+          "y": 66
+        }
+      },
+      "expected": {
+        "l": {
+          "x": 11,
+          "y": 12
+        },
+        "r": {
+          "x": 13,
+          "y": 14
+        }
+      }
+    },
+    {
+      "seq": 4,
+      "rebase": {
+        "vPid": {
+          "l": {
+            "x": 21,
+            "y": 22
+          },
+          "r": {
+            "x": 23,
+            "y": 24
+          }
+        },
+        "pMeas": {
+          "x": 10,
+          "y": 10
+        },
+        "jL": [
+          1,
+          0,
+          0,
+          1
+        ],
+        "jR": [
+          1,
+          0,
+          0,
+          1
+        ],
+        "feedForward": false
+      },
+      "pred": {
+        "found": true,
+        "center": {
+          "x": 500,
+          "y": 500
+        }
+      },
+      "expected": {
+        "l": {
+          "x": 21,
+          "y": 22
+        },
+        "r": {
+          "x": 23,
+          "y": 24
+        }
+      }
+    },
+    {
+      "seq": 5,
+      "rebase": {
+        "vPid": {
+          "l": {
+            "x": 31,
+            "y": 32
+          },
+          "r": {
+            "x": 33,
+            "y": 34
+          }
+        },
+        "pMeas": {
+          "x": 20,
+          "y": 20
+        },
+        "jL": [
+          0.5,
+          0,
+          0,
+          0.5
+        ],
+        "jR": [
+          0.25,
+          0,
+          0,
+          0.25
+        ],
+        "feedForward": true
+      },
+      "pred": {
+        "found": false,
+        "center": null
+      },
+      "expected": {
+        "l": {
+          "x": 31,
+          "y": 32
+        },
+        "r": {
+          "x": 33,
+          "y": 34
+        }
+      }
+    },
+    {
+      "seq": 6,
+      "rebase": {
+        "vPid": {
+          "l": {
+            "x": 0.001,
+            "y": -0.002
+          },
+          "r": {
+            "x": 0.003,
+            "y": -0.004
+          }
+        },
+        "pMeas": {
+          "x": 1439.5,
+          "y": 1079.5
+        },
+        "jL": [
+          0.0001,
+          0.0002,
+          -0.0003,
+          0.0004
+        ],
+        "jR": [
+          -0.0005,
+          0.0006,
+          0.0007,
+          -0.0008
+        ],
+        "feedForward": true
+      },
+      "pred": {
+        "found": true,
+        "center": {
+          "x": 0.5,
+          "y": 0.5
+        }
+      },
+      "expected": {
+        "l": {
+          "x": -0.3587,
+          "y": -0.001900000000000061
+        },
+        "r": {
+          "x": 0.07510000000000006,
+          "y": -0.1480999999999999
+        }
+      }
+    }
+  ]
+}

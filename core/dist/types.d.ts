@@ -114,6 +114,18 @@ export interface InPort<T> extends CoreObject<InPort<T>> {
     /** Port name — becomes the consumer-side edge port on the graph. */
     readonly port: string;
     readonly streamTag: string;
-    /** Phantom payload brand only — never materialized at runtime. */
-    readonly __payload: T;
+    /** Phantom payload brand only — never materialized at runtime. Function-
+     *  typed so `T` sits in BOTH variance positions (invariant): structurally
+     *  overlapping payloads (e.g. ImmPrediction ⊃ TrackResult) must not
+     *  unify across lanes — the runtime tags would reject what a covariant
+     *  brand would let compile. */
+    readonly __payload: (payload: T) => T;
+}
+
+/** The `compose.volt_out → controller.pos_in` link payload (native-compose-
+ *  controller.md): a commanded per-eye mirror pose in FINAL volts. Phantom
+ *  brand for the port harness; runtime tag "volts". */
+export interface MirrorVolts {
+    left: { x: number; y: number };
+    right: { x: number; y: number };
 }

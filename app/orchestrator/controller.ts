@@ -8,8 +8,8 @@
 // in the renderer `Controller.vue` (state is plain fields; the session reads and
 // broadcasts it). Owns the serial `Device`; reuses the shared DAC math.
 
-import { Protocol, Device, type LogLevel } from "core/Controller";
-import type { CameraName, FrameArg } from "core/Controller";
+import { createMirrorSink, Protocol, Device, type LogLevel } from "core/Controller";
+import type { CameraName, FrameArg, MirrorSink } from "core/Controller";
 import { SerialPort } from "serialport";
 import {
   channels,
@@ -96,6 +96,14 @@ export class StreamUpdateGate {
 export interface StreamHandle {
   readonly id: number;
   update(pos: { left: Pos; right: Pos }): void;
+  close(): Promise<void>;
+}
+
+/** A native mirror sink bound to a live MCU stream (native-compose-
+ *  controller.md): `sink` exposes `pos_in` + the native history queries;
+ *  `close()` releases the sink then TERMINATEs the stream (idempotent). */
+export interface NativeMirrorSinkHandle {
+  readonly sink: MirrorSink;
   close(): Promise<void>;
 }
 
@@ -420,6 +428,37 @@ export class Controller {
           this.streamIds.release(id);
           this.streamStats.delete(id);
         }
+      },
+    };
+  }
+
+  /**
+   * native-compose-controller.md: create the MCU stream (ACK-backed, same
+   * guards as {@link createStream}) and attach a NATIVE pos_in sink to the
+   * device's write seam — the UPDATE path (gate + channels() + fire-and-
+   * forget + history) then runs entirely native off a port link's delivery
+   * thread. JS KEEPS stream lifecycle ownership: `close()` releases the sink
+   * (writes stop) and TERMINATEs the stream (FW5 + quiesce unchanged).
+   */
+  async createNativeMirrorSink(
+    pos: { left: Pos; right: Pos },
+    nodeId = "controller",
+  ): Promise<NativeMirrorSinkHandle> {
+    const stream = await this.createStream(pos);
+    const sink = createMirrorSink(this.device, {
+      streamId: stream.id,
+      bias: this.bias,
+      dv: this.dv,
+      nodeId,
+    });
+    let closed = false;
+    return {
+      sink,
+      close: async () => {
+        if (closed) return;
+        closed = true;
+        sink.release(); // stop native writes FIRST
+        await stream.close(); // then TERMINATE (best-effort on a dead device)
       },
     };
   }

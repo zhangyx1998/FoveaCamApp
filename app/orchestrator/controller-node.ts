@@ -50,7 +50,12 @@
 // addon (same idiom as UndistortPipeSeam / the scheduler's requester).
 
 import type { Pos } from "@lib/controller-codec";
-import type { Controller, FrameOutcome, StreamHandle } from "./controller.js";
+import type {
+  Controller,
+  FrameOutcome,
+  NativeMirrorSinkHandle,
+  StreamHandle,
+} from "./controller.js";
 import type { StreamType } from "@lib/orchestrator/graph-contract.js";
 import { nodeId } from "@lib/orchestrator/graph-contract.js";
 import {
@@ -101,6 +106,32 @@ export interface PositionInput {
   close(): Promise<void>;
 }
 
+/** The native position input (native-compose-controller.md): a session pipes
+ *  a native volts producer (the compose brick's `volt_out`) into the sink's
+ *  `pos_in` whenever one ATTACHES. Attach requires a bound v2 controller —
+ *  the node creates the MCU stream (ACK-backed) + native sink lazily on open
+ *  or on a later `bindController`, and DETACHES (sink released + stream
+ *  TERMINATEd best-effort) on unbind/close. Enable/disable lifecycle is the
+ *  same as the JS inputs (enable on attach, disable iff we enabled when the
+ *  LAST input — JS or native — closes), so FW5 + hardware quiescence hold
+ *  identically. */
+export interface OpenNativePositionOptions {
+  initial: PositionPair;
+  /** Graph node id for the sink's incoming link edge (default "controller"). */
+  nodeId?: string;
+  /** A native sink is live — pipe into `sink.pos_in` now. */
+  onAttach(sink: NativeMirrorSinkHandle["sink"]): void;
+  /** The sink is going away (unbind/close) — release the link now. */
+  onDetach(): void;
+}
+
+export interface NativePositionInput {
+  /** The live native sink (null while no v2 controller is bound). */
+  readonly sink: NativeMirrorSinkHandle["sink"] | null;
+  /** Detach + TERMINATE + retire (disable iff we enabled and last one out). */
+  close(): Promise<void>;
+}
+
 /** An injected FIN-outcome sink (no native imports): the anchor enrichment
  *  node registers one, and `startTriggerCapture` forwards every completed
  *  exposure to it (pairing-nodes ruling 6). */
@@ -130,6 +161,9 @@ export class ControllerNode {
   // Position inputs, and the node-level "latest pose / last input" the v1 loop
   // actuates (single-input assumption — app exclusivity).
   private readonly inputs = new Set<PositionInputImpl>();
+  // Native position inputs (native-compose-controller.md) — attach/detach with
+  // the controller bind lifecycle; counted with `inputs` for disable-on-last.
+  private readonly nativeInputs = new Set<NativePositionInputImpl>();
   private latestPose: PositionPair;
   private lastInput: PositionInputImpl | null = null;
 
@@ -167,6 +201,8 @@ export class ControllerNode {
     this.controller = c;
     this.wiringNode.statsKey = `controller:${c.port}`;
     if (this.inputs.size > 0 && !c.v2Capable) this.ensureV1Loop();
+    // Native inputs attach lazily against the fresh controller (v2 only).
+    for (const input of this.nativeInputs) input.sync();
   }
 
   /** Unbind on disconnect: drop every MCU stream (best-effort — the device may
@@ -178,7 +214,12 @@ export class ControllerNode {
     delete this.wiringNode.statsKey;
     this.enabledByUs = false;
     this.v1Running = false;
-    if (gone) for (const input of this.inputs) await input.dropStream();
+    if (gone) {
+      for (const input of this.inputs) await input.dropStream();
+      // Native inputs detach (link released via onDetach, sink dropped;
+      // TERMINATE is best-effort — the device may already be gone).
+      for (const input of this.nativeInputs) await input.drop();
+    }
   }
 
   get connected(): boolean {
@@ -186,6 +227,19 @@ export class ControllerNode {
   }
 
   // --- position inputs -------------------------------------------------------
+
+  /** Open a NATIVE position input (native-compose-controller.md). The sink
+   *  attaches asynchronously (needs a bound v2 controller — now or on a later
+   *  bind); the session reacts via `onAttach`/`onDetach`. */
+  openNativePosition(
+    name: string,
+    opts: OpenNativePositionOptions,
+  ): NativePositionInput {
+    const input = new NativePositionInputImpl(this, name, opts);
+    this.nativeInputs.add(input);
+    input.sync();
+    return input;
+  }
 
   openPosition(name: string, opts: OpenPositionOptions): PositionInput {
     const input = new PositionInputImpl(this, name, opts);
@@ -273,17 +327,27 @@ export class ControllerNode {
       (e) => e.to === nodeId.controller() && e.port === input.name && e.from === input.from,
     );
     if (idx >= 0) this.wiring.edges.splice(idx, 1);
-    if (this.inputs.size === 0) {
-      this.v1Running = false;
-      const c = this.controller;
-      if (this.enabledByUs && c) {
-        try {
-          await c.disable();
-        } catch {
-          // best-effort — a dropped controller may already be gone
-        } finally {
-          this.enabledByUs = false;
-        }
+    if (this.inputs.size === 0 && this.nativeInputs.size === 0)
+      await this.disableIfLast();
+  }
+
+  /** @internal — native-input retire: same disable-iff-last discipline. */
+  async retireNativeInput(input: NativePositionInputImpl): Promise<void> {
+    this.nativeInputs.delete(input);
+    if (this.inputs.size === 0 && this.nativeInputs.size === 0)
+      await this.disableIfLast();
+  }
+
+  private async disableIfLast(): Promise<void> {
+    this.v1Running = false;
+    const c = this.controller;
+    if (this.enabledByUs && c) {
+      try {
+        await c.disable();
+      } catch {
+        // best-effort — a dropped controller may already be gone
+      } finally {
+        this.enabledByUs = false;
       }
     }
   }
@@ -411,6 +475,87 @@ class PositionInputImpl implements PositionInput {
     this.closed = true;
     await this.dropStream();
     await this.node.retireInput(this);
+  }
+}
+
+/** The native position input (native-compose-controller.md) — see
+ *  {@link OpenNativePositionOptions}. All async transitions reconcile against
+ *  controller swaps mid-await (the PositionInputImpl.ensureStream idiom). */
+class NativePositionInputImpl implements NativePositionInput {
+  private handle: NativeMirrorSinkHandle | null = null;
+  private creating = false;
+  private closed = false;
+
+  constructor(
+    private readonly node: ControllerNode,
+    readonly name: string,
+    private readonly opts: OpenNativePositionOptions,
+  ) {}
+
+  get sink(): NativeMirrorSinkHandle["sink"] | null {
+    return this.handle?.sink ?? null;
+  }
+
+  /** @internal — attach against the current controller if possible (open +
+   *  bindController). v1 / unbound controllers simply never attach; the
+   *  session's fallback path owns those. */
+  sync(): void {
+    const c = this.node.liveController;
+    if (this.closed || this.handle || this.creating || !c || !c.v2Capable)
+      return;
+    this.creating = true;
+    void (async () => {
+      try {
+        await this.node.ensureEnabled(c);
+        const h = await c.createNativeMirrorSink(
+          this.opts.initial,
+          this.opts.nodeId ?? nodeId.controller(),
+        );
+        // The node may have unbound / swapped / closed while awaiting.
+        if (this.closed || this.node.liveController !== c) {
+          try {
+            await h.close();
+          } catch {
+            // best-effort — the device may already be gone
+          }
+          return;
+        }
+        this.handle = h;
+        try {
+          this.opts.onAttach(h.sink);
+        } catch {
+          // a session attach fault must not wedge the node
+        }
+      } catch {
+        // enable / create failed — a later bind retries via sync()
+      } finally {
+        this.creating = false;
+      }
+    })();
+  }
+
+  /** @internal — detach on unbind (sink released; TERMINATE best-effort). */
+  async drop(): Promise<void> {
+    const h = this.handle;
+    this.handle = null;
+    if (!h) return;
+    try {
+      this.opts.onDetach();
+    } catch {
+      // session detach fault — keep tearing down
+    }
+    try {
+      await h.close();
+    } catch {
+      // best-effort — the device may already be gone
+    }
+  }
+
+  async close(): Promise<void> {
+    if (this.closed) return;
+    this.closed = true;
+    await this.drop();
+    await this.node.retireNativeInput(this);
   }
 }
 

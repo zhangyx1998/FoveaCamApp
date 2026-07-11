@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license.
 // You may find the full license in project root directory.
 // -------------------------------------------------------
-import type { CoreObject, InPort, OutPort } from "../types";
+import type { CoreObject, InPort, MirrorVolts, OutPort } from "../types";
 import type { CameraCalibration, Mat } from "core/Vision";
 import type { Point2d, Rect } from "core/Geometry";
 import type { Camera } from "core/Aravis";
@@ -295,6 +295,11 @@ declare module "core/Tracker" {
      *  `track_out` here (the JS measurement relay is gone). Lazily created,
      *  cached; the sink runs on the link's delivery thread. */
     readonly measure_in: InPort<TrackResult>;
+    /** The brick's typed prediction OUT port (native-compose-controller.md) —
+     *  runtime tag `"prediction"`. Pipe it into the native compose brick's
+     *  `pred_in`; the session's JS iterator consumption of predictions is
+     *  retired (the iterator remains for tests/tooling). */
+    readonly predict_out: OutPort<ImmPrediction>;
   }
 
   /** Create the native IMM predictor brick. The disparity-scope session creates
@@ -302,4 +307,56 @@ declare module "core/Tracker" {
   export function createImmPredictor(
     options?: CreateImmPredictorOptions,
   ): ImmPredictor;
+
+  // ---- Native compose brick (native-compose-controller.md) -----------------
+
+  /** The ~60 Hz rebase linearization the SESSION pushes per pid step: the
+   *  absolute pid volts, the measured target it acted on, and the per-eye
+   *  2×2 pixel→volt Jacobian (row-major [dVx/dpx, dVx/dpy, dVy/dpx, dVy/dpy],
+   *  the finite-difference of followVolts around pMeas — JS owns calibration).
+   *  `feedForward: false` (drag override / lost-gate / no calibration) makes
+   *  every tick hold the baseline (the wave-1 `predVolts = null` semantics);
+   *  pMeas/jL/jR may then be omitted. */
+  export interface ComposeRebase {
+    vPid: { l: { x: number; y: number }; r: { x: number; y: number } };
+    pMeas?: { x: number; y: number };
+    jL?: number[];
+    jR?: number[];
+    feedForward?: boolean;
+  }
+
+  /**
+   * The NATIVE prediction compose brick (native-compose-controller.md —
+   * supersedes the JS compose node; `composeVolts` stays the JS conformance
+   * reference). Emits final volts `V = V_pid + J·(p_pred − p_meas)` on every
+   * prediction tick off `pred_in` AND the baseline floor on every `rebase`
+   * (planner decision 4). `volt_out` pipes into the controller's native
+   * `pos_in`; the asyncIterator is the JS FALLBACK consumer (v1 firmware /
+   * no controller — JS is then a genuine consumer).
+   */
+  export interface Compose extends CoreObject<Compose>, AsyncIterable<MirrorVolts> {
+    rebase(params: ComposeRebase): void;
+    /** Snapshot the brick's thread meter (inputs pred/rebase, output volt). */
+    probe(): TrackerMeter;
+    /** Typed prediction IN port — runtime tag `"prediction"`. */
+    readonly pred_in: InPort<ImmPrediction>;
+    /** Typed final-volts OUT port — runtime tag `"volts"`. */
+    readonly volt_out: OutPort<MirrorVolts>;
+  }
+
+  /** Create the native compose brick. `initial` seeds the pre-rebase baseline
+   *  (the parked pose). */
+  export function createComposeStream(options?: {
+    name?: string;
+    initial?: { l: { x: number; y: number }; r: { x: number; y: number } };
+  }): Compose;
+
+  /** TEST-ONLY (core/test/45): a push-driven prediction source with a
+   *  `predict_out` port — drives the compose brick with exact synthetic
+   *  predictions. */
+  export function createTestPredictionSource(nodeId: string): {
+    readonly predict_out: OutPort<ImmPrediction>;
+    push(p: { found: boolean; center: { x: number; y: number } | null; seq?: number }): void;
+    release(): void;
+  };
 }

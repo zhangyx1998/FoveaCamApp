@@ -7,12 +7,10 @@
 // Prediction compose node (prediction-compose-node.md) — the PURE feed-forward
 // delta math + the node's rebase/tick/hold semantics.
 
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import {
-  composeVolts,
-  createComposeNode,
-  type ComposeVolts,
-} from "../orchestrator/compose-node";
+import { composeVolts, type ComposeVolts } from "../orchestrator/compose-node";
 
 const V = (lx: number, ly: number, rx: number, ry: number): ComposeVolts => ({
   l: { x: lx, y: ly },
@@ -44,40 +42,47 @@ describe("composeVolts (feed-forward delta in volt space)", () => {
   });
 });
 
-describe("createComposeNode", () => {
-  it("rebases the baseline and applies / holds the feed-forward on tick", () => {
-    const node = createComposeNode({
-      id: "win/test/compose",
-      pidId: "win/test/pid",
-      immId: "camera/1/undistort/kcf/imm",
-      controllerId: "controller",
-      initial: V(0, 0, 0, 0),
+describe("compose conformance vectors (native brick reference)", () => {
+  it("pins composeVolts to the shared vectors the native ComposeStream must match", async () => {
+    interface Fixture {
+      tolerance: number;
+      vectors: Array<{
+        seq: number;
+        rebase: {
+          vPid: { l: { x: number; y: number }; r: { x: number; y: number } };
+          pMeas: { x: number; y: number };
+          jL: number[];
+          jR: number[];
+          feedForward: boolean;
+        };
+        pred: { found: boolean; center: { x: number; y: number } | null };
+        expected: { l: { x: number; y: number }; r: { x: number; y: number } };
+      }>;
+    }
+    const fixture = JSON.parse(
+      await readFile(
+        resolve(process.cwd(), "../docs/schema/codec/compose-vectors.json"),
+        "utf8",
+      ),
+    ) as Fixture;
+    const lin = (j: number[], p: { x: number; y: number }) => ({
+      x: j[0]! * p.x + j[1]! * p.y,
+      y: j[2]! * p.x + j[3]! * p.y,
     });
-    try {
-      // Rebase from a pid result at measured operating point follow(p_meas).
-      node.rebase(V(100, 100, 200, 200), V(50, 50, 60, 60));
-      expect(node.baseline).toEqual(V(100, 100, 200, 200));
-
-      // A healthy tick with a prediction volt applies the delta.
-      expect(node.tick(V(55, 52, 66, 61))).toEqual(
-        V(100 + 5, 100 + 2, 200 + 6, 200 + 1),
-      );
-
-      // An unhealthy / coasted-miss tick (null pred) holds the baseline.
-      expect(node.tick(null)).toEqual(V(100, 100, 200, 200));
-
-      // A fresh rebase with no measured volts (no calibration) → hold baseline.
-      node.rebase(V(7, 7, 7, 7), null);
-      expect(node.tick(V(99, 99, 99, 99))).toEqual(V(7, 7, 7, 7));
-
-      // report() carries both incoming edges (pid + imm).
-      const r = node.report();
-      expect(r.kind).toBe("compose");
-      expect(r.inputs.map((i) => i.from).sort()).toEqual(
-        ["camera/1/undistort/kcf/imm", "win/test/pid"].sort(),
-      );
-    } finally {
-      node.dispose();
+    for (const v of fixture.vectors) {
+      const { rebase, pred, expected } = v;
+      const out =
+        rebase.feedForward && pred.found && pred.center
+          ? composeVolts(
+              rebase.vPid,
+              { l: lin(rebase.jL, pred.center), r: lin(rebase.jR, pred.center) },
+              { l: lin(rebase.jL, rebase.pMeas), r: lin(rebase.jR, rebase.pMeas) },
+            )
+          : composeVolts(rebase.vPid, null, null);
+      expect(out.l.x, `vector ${v.seq} l.x`).toBeCloseTo(expected.l.x, 9);
+      expect(out.l.y, `vector ${v.seq} l.y`).toBeCloseTo(expected.l.y, 9);
+      expect(out.r.x, `vector ${v.seq} r.x`).toBeCloseTo(expected.r.x, 9);
+      expect(out.r.y, `vector ${v.seq} r.y`).toBeCloseTo(expected.r.y, 9);
     }
   });
 });

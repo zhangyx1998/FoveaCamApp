@@ -17,6 +17,11 @@
 #include <sys/ioctl.h>
 #include <termios.h>
 #include <unistd.h>
+#if defined(__APPLE__)
+#include <util.h> // openpty (test-only __serialTestPty)
+#else
+#include <pty.h>
+#endif
 
 #include <Aravis/Camera.h>
 #include <Aravis/Frame.h>
@@ -29,7 +34,10 @@
 #include <pointer.h>
 
 #include "Cleanup.h"
+#include "CoreObject.h" // MirrorSink CoreObject (native pos_in)
 #include "Dispatcher.h"
+#include "PortPipe.h"  // native pos_in sink (native-compose-controller.md)
+#include "VoltPair.h"  // the compose -> pos_in payload
 #include "Protocol/Protocol.h"
 #include "Protocol/Version.h"
 #include "napi-helper.h"
@@ -722,6 +730,44 @@ public:
 
 extern int SerialOpen(const Napi::CallbackInfo &info) noexcept;
 
+// Shared serial WRITE seam (native-compose-controller.md): the fd + ONE write
+// mutex shared between the DeviceObject (NAPI thread: send / fireAndForget /
+// destroy) and native mirror sinks (port-link delivery threads). Every
+// ::write on the fd holds `mtx`, so frames from the two writers can never
+// interleave. `open` flips false in DeviceObject::destroy BEFORE the fd
+// closes — a sink write after disconnect is a counted no-op, never a race.
+struct SerialWriteSeam : Shared<SerialWriteSeam> {
+  explicit SerialWriteSeam(int fd) : fd(fd) {}
+  const int fd;
+  std::mutex mtx;
+  std::atomic<bool> open{true};
+  COBS::TX tx; // sink-side encoder (guarded by mtx; Device keeps its own)
+
+  // Encode + write one CMD_STREAM UPDATE (seq 0, fire-and-forget). Returns
+  // false when the seam is closed or the write failed (counted by the sink).
+  bool writeMirrorUpdate(uint8_t id, const uint16_t chL[4],
+                         const uint16_t chR[4]) {
+    ::Packet::Command::MirrorStream cmd{};
+    cmd.op = ::Packet::Command::MirrorStream::UPDATE;
+    cmd.id = id;
+    for (int i = 0; i < 4; i++) {
+      cmd.left.ch[i] = chL[i];
+      cmd.right.ch[i] = chR[i];
+    }
+    Protocol::RawPacket packet(Method::SET, Property::CMD_STREAM, 0);
+    packet.setData(reinterpret_cast<const uint8_t *>(&cmd), sizeof(cmd));
+    std::scoped_lock lk(mtx);
+    if (!open.load(std::memory_order_acquire))
+      return false;
+    if (!tx.encode(packet.finalize()))
+      return false;
+    const ssize_t written = ::write(fd, tx.data(), tx.size());
+    return written == static_cast<ssize_t>(tx.size());
+  }
+
+  void close() { open.store(false, std::memory_order_release); }
+};
+
 class DeviceObject : public ObjectWrap<DeviceObject> {
 public:
   static Function Init(Napi::Env env) {
@@ -740,7 +786,11 @@ public:
 
   DeviceObject(const CallbackInfo &info)
       : ObjectWrap<DeviceObject>(info), env(info.Env()), fd(SerialOpen(info)),
-        tx(), rx(), rx_thread(&DeviceObject::rxLoop, this) {}
+        seam_(SerialWriteSeam::create(fd)), tx(), rx(),
+        rx_thread(&DeviceObject::rxLoop, this) {}
+
+  /** The shared write seam (fd + write mutex) native mirror sinks attach to. */
+  SerialWriteSeam::Ptr writeSeam() const { return seam_; }
 
   ~DeviceObject() {
     Cleanup::remove(env, cleanup_hook);
@@ -750,11 +800,17 @@ public:
   void destroy() noexcept {
     if (flag_term)
       return;
+    // Close the write seam FIRST: any native mirror sink still piped in stops
+    // writing before the fd goes away (native-compose-controller.md — the
+    // quiesce/disconnect invariant). Holding the mutex for our own disable
+    // write below serializes against an in-flight sink write.
+    seam_->close();
     if (fd >= 0) {
       // Write disable command
       Protocol::RawPacket packet(Method::SET, Property::SYS_ENABLE, 0);
       uint8_t enable = 0;
       packet.setData(&enable, sizeof(enable));
+      std::scoped_lock lk(seam_->mtx);
       tx.encode(packet.finalize());
       ::write(fd, tx.data(), tx.size());
       // Wait a moment for the device to respond
@@ -778,6 +834,7 @@ private:
       Cleanup::add(env, [this] { this->destroy(); }, "DeviceObject");
   bool flag_term = false;
   const int fd;
+  const SerialWriteSeam::Ptr seam_; // shared write mutex (native sinks attach)
   COBS::TX tx;
   COBS::RX rx;
   Threading::Guard<Map<uint16_t, PendingRequest::Ptr>> pending;
@@ -984,8 +1041,13 @@ private:
                 v2_capable ? 1 : 0, tx.size());
         VERBOSE("send %u bytes: %s", tx.size(),
                 hexFormat(tx.data(), tx.size()).c_str());
-        // Write buffer to serial fd
-        auto written = ::write(fd, tx.data(), tx.size());
+        // Write buffer to serial fd (seam mutex: never interleave with a
+        // native mirror sink's fire-and-forget frames)
+        ssize_t written;
+        {
+          std::scoped_lock lk(seam_->mtx);
+          written = ::write(fd, tx.data(), tx.size());
+        }
         VERBOSE("wrote %zd bytes to fd %d", written, fd);
         if (written < 0) {
           pending.ref()->erase(sequence);
@@ -1076,7 +1138,11 @@ private:
       VERBOSE("trace tx seq=0 SET:%s two_phase=0 v2_capable=%d bytes=%u",
               convert<std::string>(property).c_str(), v2_capable ? 1 : 0,
               tx.size());
-      auto written = ::write(fd, tx.data(), tx.size());
+      ssize_t written;
+      {
+        std::scoped_lock lk(seam_->mtx); // never interleave with a sink write
+        written = ::write(fd, tx.data(), tx.size());
+      }
       if (written < 0)
         JS_THROW(Error,
                  "Failed to write to serial port: " +
@@ -1141,6 +1207,405 @@ private:
   }
 };
 
+
+// =====================================================================
+// Native mirror POSITION SINK (native-compose-controller.md planner decision
+// 2/3): the controller's `pos_in` port. Accepts FINAL volts off a port link's
+// delivery thread and performs, natively, exactly what the JS
+// StreamHandle.update path did: the stream-update GATE (1 ms min interval +
+// dedupe on the input volts), volt→DAC conversion (the @lib/controller-codec
+// `channels()` math, ported verbatim), and the CMD_STREAM UPDATE
+// fire-and-forget write through the shared SerialWriteSeam. Each ACCEPTED
+// write also records the PREDICTED volts (the same DAC round-trip
+// `predictVolts` applies) into a fixed-size history ring — the native
+// mirror-history for natively-driven inputs, with `mirrorAt`-parity
+// interpolation (historyAt) + latest/range queries for JS consumers
+// (homography feeder, volt telemetry).
+//
+// Stream lifecycle stays JS: the session/controller-node CREATEs the MCU
+// stream (ACK-backed) and TERMINATEs it on close/unbind — this sink only
+// fires UPDATEs, so FW5 and the quiesce order hold identically. A closed
+// seam (device destroyed / disconnected) turns writes into counted no-ops.
+// =====================================================================
+
+namespace MirrorSinkMath {
+// @lib/controller-codec ports — keep byte-for-byte with the JS reference
+// (JS `|0` truncates toward zero; inputs are clamped non-negative first).
+inline uint16_t volt2dac(double volt) {
+  double d = 65535.0 * volt / 200.0;
+  if (d < 0)
+    d = 0;
+  if (d > 65535)
+    d = 65535;
+  return static_cast<uint16_t>(d);
+}
+inline double dac2volt(double dac) { return 200.0 * dac / 65535.0; }
+inline void chPair(double volt, double bias, double dv, uint16_t out[2]) {
+  double v = volt / 2.0;
+  if (v < -dv)
+    v = -dv;
+  if (v > dv)
+    v = dv;
+  out[0] = volt2dac(bias + v);
+  out[1] = volt2dac(bias - v);
+}
+// channels(pos, bias, dv) — NOTE the JS passes dv/2 into each pair.
+inline void channels(double x, double y, double bias, double dv,
+                     uint16_t out[4]) {
+  chPair(x, bias, dv / 2.0, out);
+  chPair(y, bias, dv / 2.0, out + 2);
+}
+} // namespace MirrorSinkMath
+
+static int64_t sinkSteadyNs() {
+  using namespace std::chrono;
+  return duration_cast<nanoseconds>(steady_clock::now().time_since_epoch())
+      .count();
+}
+
+struct MirrorSink : Shared<MirrorSink> {
+  static constexpr int64_t kMinIntervalNs = 1'000'000; // 1 ms (JS gate parity)
+  static constexpr size_t kHistoryCapacity = 4096;     // ≈4 s at the 1 kHz cap
+
+  SerialWriteSeam::Ptr seam;
+  uint8_t streamId = 0;
+  double bias = 90.0, dv = 170.0;
+  std::string nodeId;
+  PortPipe::InPort::Ptr port; // pos_in (created lazily by the NAPI accessor)
+
+  // Counters (plain atomics — probed out-of-loop, never gate the write path).
+  std::atomic<uint64_t> received{0}; // items off the link
+  std::atomic<uint64_t> written{0};  // UPDATEs actually written
+  std::atomic<uint64_t> deduped{0};  // gate: same pose
+  std::atomic<uint64_t> throttled{0}; // gate: min-interval
+  std::atomic<uint64_t> errors{0};   // seam closed / write failure
+
+  // One history sample: predicted volts (DAC round-trip) at a steady-ns stamp.
+  struct Sample {
+    int64_t tNs = 0;
+    double lx = 0, ly = 0, rx = 0, ry = 0;
+  };
+
+  // Gate + history state (one mutex — the write path is ≤1 kHz).
+  std::mutex mtx;
+  bool hasLast = false;
+  double lastLx = 0, lastLy = 0, lastRx = 0, lastRy = 0; // input volts (dedupe)
+  int64_t lastSentNs = 0;
+  std::vector<Sample> ring{kHistoryCapacity};
+  size_t head = 0, count = 0;
+
+  // The pos_in sink body — runs on the port link's delivery thread.
+  void push(const VoltPair::Ptr &v) {
+    if (!v)
+      return;
+    received.fetch_add(1, std::memory_order_relaxed);
+    const int64_t now = sinkSteadyNs();
+    uint16_t chL[4], chR[4];
+    {
+      std::scoped_lock lk(mtx);
+      if (hasLast && v->lx == lastLx && v->ly == lastLy && v->rx == lastRx &&
+          v->ry == lastRy) {
+        deduped.fetch_add(1, std::memory_order_relaxed);
+        return;
+      }
+      if (hasLast && now - lastSentNs < kMinIntervalNs) {
+        throttled.fetch_add(1, std::memory_order_relaxed);
+        return;
+      }
+      lastLx = v->lx;
+      lastLy = v->ly;
+      lastRx = v->rx;
+      lastRy = v->ry;
+      lastSentNs = now;
+      hasLast = true;
+    }
+    MirrorSinkMath::channels(v->lx, v->ly, bias, dv, chL);
+    MirrorSinkMath::channels(v->rx, v->ry, bias, dv, chR);
+    // The serial write happens OUTSIDE the gate mutex (only the seam mutex
+    // serializes the fd) — a slow write never blocks a probe.
+    if (!seam->writeMirrorUpdate(streamId, chL, chR)) {
+      errors.fetch_add(1, std::memory_order_relaxed);
+      return;
+    }
+    written.fetch_add(1, std::memory_order_relaxed);
+    // Record the PREDICTED volts (DAC round-trip — predictVolts parity).
+    Sample smp;
+    smp.tNs = now;
+    smp.lx = MirrorSinkMath::dac2volt(static_cast<double>(chL[0]) - chL[1]);
+    smp.ly = MirrorSinkMath::dac2volt(static_cast<double>(chL[2]) - chL[3]);
+    smp.rx = MirrorSinkMath::dac2volt(static_cast<double>(chR[0]) - chR[1]);
+    smp.ry = MirrorSinkMath::dac2volt(static_cast<double>(chR[2]) - chR[3]);
+    std::scoped_lock lk(mtx);
+    ring[head] = smp;
+    head = (head + 1) % kHistoryCapacity;
+    if (count < kHistoryCapacity)
+      count++;
+  }
+
+  // i = 0 oldest … count-1 newest (call with mtx held).
+  const Sample &at(size_t i) const {
+    const size_t start = (head + kHistoryCapacity - count) % kHistoryCapacity;
+    return ring[(start + i) % kHistoryCapacity];
+  }
+
+  // mirrorAt parity (app/orchestrator/mirror-history.ts): lerp between the
+  // bracketing samples; clamped (interpolated=false) outside the span; no
+  // sample → found=false.
+  struct At {
+    bool found = false;
+    bool interpolated = false;
+    int64_t ageNs = 0;
+    double lx = 0, ly = 0, rx = 0, ry = 0;
+  };
+  At historyAt(int64_t tNs) {
+    std::scoped_lock lk(mtx);
+    At out;
+    if (count == 0)
+      return out;
+    const Sample &oldest = at(0);
+    const Sample &newest = at(count - 1);
+    auto fill = [&](const Sample &s, int64_t age, bool interp) {
+      out.found = true;
+      out.interpolated = interp;
+      out.ageNs = age;
+      out.lx = s.lx;
+      out.ly = s.ly;
+      out.rx = s.rx;
+      out.ry = s.ry;
+    };
+    if (tNs <= oldest.tNs)
+      return fill(oldest, oldest.tNs - tNs, tNs == oldest.tNs), out;
+    if (tNs >= newest.tNs)
+      return fill(newest, tNs - newest.tNs, tNs == newest.tNs), out;
+    // Binary search for the first sample with t > tNs.
+    size_t lo = 0, hi = count - 1;
+    while (lo < hi) {
+      const size_t mid = (lo + hi) >> 1;
+      if (at(mid).tNs <= tNs)
+        lo = mid + 1;
+      else
+        hi = mid;
+    }
+    const Sample &after = at(lo);
+    const Sample &before = at(lo - 1);
+    const double span = static_cast<double>(after.tNs - before.tNs);
+    const double t = span == 0 ? 0 : static_cast<double>(tNs - before.tNs) / span;
+    Sample lerped;
+    lerped.lx = before.lx + (after.lx - before.lx) * t;
+    lerped.ly = before.ly + (after.ly - before.ly) * t;
+    lerped.rx = before.rx + (after.rx - before.rx) * t;
+    lerped.ry = before.ry + (after.ry - before.ry) * t;
+    const int64_t ageBefore = tNs - before.tNs;
+    const int64_t ageAfter = after.tNs - tNs;
+    fill(lerped, ageBefore < ageAfter ? ageBefore : ageAfter, true);
+    return out;
+  }
+
+  bool historyLatest(Sample &out) {
+    std::scoped_lock lk(mtx);
+    if (count == 0)
+      return false;
+    out = at(count - 1);
+    return true;
+  }
+
+  std::vector<Sample> historyQuery(int64_t fromNs, int64_t toNs) {
+    std::scoped_lock lk(mtx);
+    std::vector<Sample> out;
+    for (size_t i = 0; i < count; i++) {
+      const Sample &smp = at(i);
+      if (smp.tNs >= fromNs && smp.tNs <= toNs)
+        out.push_back(smp);
+    }
+    return out;
+  }
+};
+
+static Napi::Object sampleToJs(Napi::Env env, const MirrorSink::Sample &s) {
+  auto o = Napi::Object::New(env);
+  o.Set("tNs", Napi::BigInt::New(env, s.tNs));
+  auto l = Napi::Object::New(env);
+  l.Set("x", Napi::Number::New(env, s.lx));
+  l.Set("y", Napi::Number::New(env, s.ly));
+  auto r = Napi::Object::New(env);
+  r.Set("x", Napi::Number::New(env, s.rx));
+  r.Set("y", Napi::Number::New(env, s.ry));
+  o.Set("left", l);
+  o.Set("right", r);
+  return o;
+}
+
+class MirrorSinkObject : public CoreObject<MirrorSinkObject, MirrorSink::Ptr> {
+public:
+  static inline const std::string name = "MirrorSink";
+  static std::string describe(const MirrorSinkObject *) { return "MirrorSink"; }
+
+  static Napi::Function Init(Napi::Env env) {
+    return DefineClass(
+        env, name.c_str(),
+        {
+            CORE_OBJECT_REGISTER(MirrorSinkObject, env),
+            INSTANCE_METHOD(MirrorSinkObject, probe),
+            INSTANCE_METHOD(MirrorSinkObject, historyLatest),
+            INSTANCE_METHOD(MirrorSinkObject, historyAt),
+            INSTANCE_METHOD(MirrorSinkObject, historyQuery),
+            Napi::InstanceWrap<MirrorSinkObject>::template InstanceAccessor<
+                &MirrorSinkObject::get_pos_in>("pos_in", napi_enumerable),
+        });
+  }
+
+  CORE_OBJECT_DECL(MirrorSinkObject)
+
+  MirrorSinkObject(const Napi::CallbackInfo &info) : CoreObject(info) {}
+
+  FN(probe) {
+    auto env = info.Env();
+    try {
+      const auto &c = core();
+      auto o = Napi::Object::New(env);
+      o.Set("received", Napi::Number::New(env, double(c->received.load())));
+      o.Set("written", Napi::Number::New(env, double(c->written.load())));
+      o.Set("deduped", Napi::Number::New(env, double(c->deduped.load())));
+      o.Set("throttled", Napi::Number::New(env, double(c->throttled.load())));
+      o.Set("errors", Napi::Number::New(env, double(c->errors.load())));
+      o.Set("open", Napi::Boolean::New(
+                        env, c->seam->open.load(std::memory_order_acquire)));
+      return o;
+    }
+    JS_EXCEPT(env.Undefined())
+  }
+
+  FN(historyLatest) {
+    auto env = info.Env();
+    try {
+      MirrorSink::Sample s;
+      if (!core()->historyLatest(s))
+        return env.Null();
+      return sampleToJs(env, s);
+    }
+    JS_EXCEPT(env.Undefined())
+  }
+
+  // historyAt(tNs: bigint) → { left, right, ageNs, interpolated } | null —
+  // the JS mirrorAt shape, so the homography feeder's seam is a passthrough.
+  FN(historyAt) {
+    auto env = info.Env();
+    try {
+      const int64_t t = convert<int64_t>(info[0]);
+      const auto at = core()->historyAt(t);
+      if (!at.found)
+        return env.Null();
+      auto o = Napi::Object::New(env);
+      auto l = Napi::Object::New(env);
+      l.Set("x", Napi::Number::New(env, at.lx));
+      l.Set("y", Napi::Number::New(env, at.ly));
+      auto r = Napi::Object::New(env);
+      r.Set("x", Napi::Number::New(env, at.rx));
+      r.Set("y", Napi::Number::New(env, at.ry));
+      o.Set("left", l);
+      o.Set("right", r);
+      o.Set("ageNs", Napi::BigInt::New(env, at.ageNs));
+      o.Set("interpolated", Napi::Boolean::New(env, at.interpolated));
+      return o;
+    }
+    JS_EXCEPT(env.Undefined())
+  }
+
+  FN(historyQuery) {
+    auto env = info.Env();
+    try {
+      const int64_t from = convert<int64_t>(info[0]);
+      const int64_t to = convert<int64_t>(info[1]);
+      const auto rows = core()->historyQuery(from, to);
+      auto arr = Napi::Array::New(env, rows.size());
+      for (size_t i = 0; i < rows.size(); i++)
+        arr.Set(static_cast<uint32_t>(i), sampleToJs(env, rows[i]));
+      return arr;
+    }
+    JS_EXCEPT(env.Undefined())
+  }
+
+  GET(pos_in) {
+    auto env = info.Env();
+    try {
+      auto c = core();
+      if (posIn_.IsEmpty()) {
+        if (!c->port) {
+          auto sink = c; // the port sink pins the MirrorSink
+          c->port = PortPipe::makeInPort<VoltPair::Ptr>(
+              c->nodeId, "pos", "volts",
+              [sink](const VoltPair::Ptr &v) { sink->push(v); });
+        }
+        auto js = PortPipe::createInPortJs(env, c->port);
+        posIn_ = Napi::Persistent(js.As<Napi::Object>());
+      }
+      return posIn_.Value();
+    }
+    JS_EXCEPT(env.Undefined())
+  }
+
+private:
+  Napi::ObjectReference posIn_;
+};
+
+CORE_OBJECT(MirrorSinkObject)
+
+// createMirrorSink(device, { streamId, bias, dv, nodeId }) — attach a native
+// pos_in sink to a live Device's write seam. The MCU stream (streamId) must
+// already exist (JS createStream, ACK-backed) and is TERMINATED by JS on
+// close — this sink only fires UPDATEs (FW5/quiesce ownership stays JS).
+static FN(createMirrorSink) {
+  auto env = info.Env();
+  try {
+    JS_ASSERT(info[0].IsObject(), TypeError,
+              "createMirrorSink: device required", env.Undefined());
+    auto *dev = Napi::ObjectWrap<DeviceObject>::Unwrap(info[0].As<Napi::Object>());
+    JS_ASSERT(dev != nullptr, TypeError,
+              "createMirrorSink: first argument must be a Device",
+              env.Undefined());
+    JS_ASSERT(info[1].IsObject(), TypeError,
+              "createMirrorSink: options object required", env.Undefined());
+    auto o = info[1].As<Napi::Object>();
+    auto sink = MirrorSink::create();
+    sink->seam = dev->writeSeam();
+    const double sid = o.Get("streamId").ToNumber().DoubleValue();
+    if (!(sid >= 0 && sid < 256) || sid != std::floor(sid))
+      throw std::invalid_argument(
+          "createMirrorSink: `streamId` must be an integer 0..255");
+    sink->streamId = static_cast<uint8_t>(sid);
+    if (o.Has("bias") && o.Get("bias").IsNumber())
+      sink->bias = o.Get("bias").As<Napi::Number>().DoubleValue();
+    if (o.Has("dv") && o.Get("dv").IsNumber())
+      sink->dv = o.Get("dv").As<Napi::Number>().DoubleValue();
+    sink->nodeId = o.Has("nodeId") && o.Get("nodeId").IsString()
+                       ? o.Get("nodeId").As<Napi::String>().Utf8Value()
+                       : "controller";
+    return MirrorSinkObject::Create(env, sink);
+  }
+  JS_EXCEPT(env.Undefined())
+}
+
+// Test-only (__serialTestPty): openpty() → { fd: master, path: slave }. The
+// Device opens the slave by path (SerialOpen's normal tty setup works on a
+// pty); the test reads the master fd from JS (`fs.readSync(fd, ...)`) to
+// assert the exact frames a native sink wrote. Hardware-free FW5 coverage.
+static FN(__serialTestPty) {
+  auto env = info.Env();
+  try {
+    int master = -1, slave = -1;
+    char path[128] = {0};
+    JS_ASSERT(openpty(&master, &slave, path, nullptr, nullptr) == 0, Error,
+              "openpty failed: " + std::string(std::strerror(errno)),
+              env.Undefined());
+    ::close(slave); // the Device re-opens the slave by path
+    auto o = Napi::Object::New(env);
+    o.Set("fd", Napi::Number::New(env, master));
+    o.Set("path", Napi::String::New(env, path));
+    return o;
+  }
+  JS_EXCEPT(env.Undefined())
+}
+
 void exportControllerModule(Napi::Env env, Napi::Object &exports) {
   bufferAccessor.get(env) = Napi::Persistent(Napi::Symbol::New(env, "Buffer"));
   propNameAccessor.get(env) =
@@ -1153,4 +1618,12 @@ void exportControllerModule(Napi::Env env, Napi::Object &exports) {
   Protocol.Set("Command", Command::Init(env));
   Protocol.Freeze();
   exports.Set("Protocol", Protocol);
+  // Native mirror position sink (native-compose-controller.md).
+  MirrorSinkObject::Export(env, exports);
+  exports.Set("createMirrorSink",
+              Napi::Function::New<createMirrorSink>(env, "createMirrorSink"));
+  // Test-only (core/test/45): a raw pty pair — Device opens the slave path,
+  // the test reads the master fd via fs.readSync (openpty precedent).
+  exports.Set("__serialTestPty",
+              Napi::Function::New<__serialTestPty>(env, "__serialTestPty"));
 }

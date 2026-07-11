@@ -87,11 +87,7 @@ import {
   outputOf,
   type PidNodeHandle,
 } from "@orchestrator/pid-node";
-import {
-  createComposeNode,
-  type ComposeNodeHandle,
-  type ComposeVolts,
-} from "@orchestrator/compose-node";
+import { mirrorHistory } from "@orchestrator/mirror-history";
 import {
   readPredictionRateHz,
   subscribePredictionRateHz,
@@ -146,12 +142,15 @@ import type { Pos } from "@lib/controller-codec";
 // in tracker-feed.ts/vergence.ts so vitest never loads the native addon.
 import {
   createChainedHybridTracker,
+  createComposeStream,
   createImmPredictor,
+  type Compose,
   type ImmPredictor,
-  type ImmPrediction,
   type KcfTracker,
   type TrackerMeter,
 } from "core/Tracker";
+import type { MirrorSink } from "core/Controller";
+import type { PortLink } from "../../../core/dist/types";
 import { registerNativeProbe } from "@orchestrator/native-probes";
 import type { WorkloadSnapshot } from "@lib/orchestrator/stats";
 import { createRawRecording } from "@orchestrator/raw-recording";
@@ -327,10 +326,17 @@ export default function disparityScopeSession(
     // unwires it), so the imm node is always visible on the profiler graph. Fed
     // every raw tracker result; the high-rate prediction stream drives `compose`.
     let imm: ImmPredictor | null = null;
-    // The graph-visible COMPOSE node (prediction-compose-node.md ruling 1): joins
-    // the pid baseline (`V_pid`, ~60 Hz) with the IMM predictions (~600 Hz) into
-    // the mirror position input via `V = V_pid + J·(p_pred − p_meas)`.
-    let compose: ComposeNodeHandle | null = null;
+    // The NATIVE compose brick (native-compose-controller.md — supersedes the
+    // wave-1 JS compose node): joins the pid baseline (`V_pid`, ~60 Hz rebase)
+    // with the IMM predictions (~600 Hz, native pipe) into final volts via
+    // `V = V_pid + J·(p_pred − p_meas)`; its volt_out pipes NATIVELY into the
+    // controller's pos_in when a v2 controller is bound.
+    let compose: Compose | null = null;
+    // The live native mirror sink (null while no v2 controller is bound —
+    // the JS fallback loop then drives `posInput` from compose's iterator).
+    let nativeSink: MirrorSink | null = null;
+    let voltLink: PortLink | null = null;
+    let nativePos: import("@orchestrator/controller-node").NativePositionInput | null = null;
 
     let windowStart = now();
     let lastStep = now();
@@ -808,25 +814,50 @@ export default function disparityScopeSession(
 
     // --- actuation (push-model: at the projection/PID result rate) --------
 
-    /** Push the current command to the controller node's position input; the
-     *  MCU stream holds it between pushes (a hold path returning the last
-     *  volts re-pushes the same value — the `StreamUpdateGate` dedupes it).
-     *  `update()`'s synchronous predicted-volt return feeds the volt telemetry
-     *  the old loop's `onVolts` carried. */
+    /** REBASE the native compose brick from this pid command (~60 Hz):
+     *  `{V_pid, p_meas, J}` with `J` = the per-eye 2×2 finite-difference of
+     *  `followVolts` around the measured target (native-compose-controller.md
+     *  planner decision 1 — JS owns calibration, the brick owns the per-tick
+     *  math). The brick emits the baseline FLOOR on every rebase (decision 4 —
+     *  the wave-1 JS `posInput.update` floor is retired): natively piped into
+     *  the controller when attached, else drained by the JS fallback loop. */
+    const J_EPS_PX = 1; // finite-difference step (px)
     function pushVolts(): void {
-      if (!posInput) return;
-      // REBASE the compose feed-forward from this pid command + the measured
-      // operating point it acted on (prediction-compose-node.md ruling 1):
-      // `followVolts` is the pixel→volt map the feed-forward differences, so the
-      // measured baseline volts = follow(p_meas). Then park the mirrors at the
-      // baseline (essential before the tracker warms, and the 60 Hz floor the
-      // compose ticks refine between).
-      compose?.rebase(
-        { l: commandedVolts.l, r: commandedVolts.r },
-        followVolts(s.state.target),
-      );
-      const p = posInput.update({ left: commandedVolts.l, right: commandedVolts.r });
-      onVolts({ L: p.left, R: p.right }, lastActuateMs);
+      if (!compose) return;
+      const target = s.state.target;
+      const vPid = { l: commandedVolts.l, r: commandedVolts.r };
+      let feedForward = composeHealthy();
+      let jL: number[] = [0, 0, 0, 0];
+      let jR: number[] = [0, 0, 0, 0];
+      if (feedForward) {
+        const f0 = followVolts(target);
+        const fx = followVolts({ x: target.x + J_EPS_PX, y: target.y });
+        const fy = followVolts({ x: target.x, y: target.y + J_EPS_PX });
+        if (f0 && fx && fy) {
+          // Row-major 2×2 per eye: [dVx/dpx, dVx/dpy, dVy/dpx, dVy/dpy].
+          jL = [
+            (fx.l.x - f0.l.x) / J_EPS_PX,
+            (fy.l.x - f0.l.x) / J_EPS_PX,
+            (fx.l.y - f0.l.y) / J_EPS_PX,
+            (fy.l.y - f0.l.y) / J_EPS_PX,
+          ];
+          jR = [
+            (fx.r.x - f0.r.x) / J_EPS_PX,
+            (fy.r.x - f0.r.x) / J_EPS_PX,
+            (fx.r.y - f0.r.y) / J_EPS_PX,
+            (fy.r.y - f0.r.y) / J_EPS_PX,
+          ];
+        } else {
+          feedForward = false; // no calibration — hold the baseline
+        }
+      }
+      compose.rebase({
+        vPid,
+        pMeas: { x: target.x, y: target.y },
+        jL,
+        jR,
+        feedForward,
+      });
     }
 
     /** Feed-forward is applied ONLY while control is healthy (proposal
@@ -842,25 +873,19 @@ export default function disparityScopeSession(
       );
     }
 
-    /** One IMM prediction (~600 Hz): apply the feed-forward onto the pid
-     *  baseline and drive the position input at the prediction rate. A
-     *  coasted miss or an unhealthy control state holds the baseline. */
-    function onPrediction(p: ImmPrediction): void {
-      if (!posInput || !compose) return;
-      const predVolts: ComposeVolts | null =
-        composeHealthy() && p.found && p.center ? followVolts(p.center) : null;
-      const out = compose.tick(predVolts);
-      const applied = posInput.update({ left: out.l, right: out.r });
-      onVolts({ L: applied.left, R: applied.right }, lastActuateMs);
-    }
-
-    /** Drain the IMM brick's async prediction stream until it is released. */
-    async function consumeImm(
-      brick: ImmPredictor,
-      onPred: (p: ImmPrediction) => void,
-    ): Promise<void> {
+    /** JS FALLBACK volt consumer (native-compose-controller.md ruling 1: JS is
+     *  a genuine consumer only when both endpoints can't be native — a v1
+     *  controller, or none bound). Drains the compose brick's volt iterator
+     *  and drives the legacy JS posInput ONLY while no native sink is
+     *  attached; when one attaches (compose.volt_out ══ pos_in) this loop
+     *  idles as a cheap flag check. compose.release() ends it. */
+    async function consumeComposeFallback(brick: Compose): Promise<void> {
       try {
-        for await (const p of brick) onPred(p);
+        for await (const v of brick) {
+          if (nativeSink || !posInput) continue; // native path owns the wire
+          const applied = posInput.update({ left: v.left, right: v.right });
+          onVolts({ L: applied.left, R: applied.right }, lastActuateMs);
+        }
       } catch {
         // iterator closed on release / teardown — normal exit
       }
@@ -1001,6 +1026,15 @@ export default function disparityScopeSession(
           side,
           computeH,
           push: pushHomography,
+          // Mirror-history provenance (native-compose-controller.md planner
+          // decision 3): while the native sink drives the mirrors, the JS
+          // mirrorHistory no longer sees this session's trajectory — read the
+          // sink's NATIVE ring (mirrorAt-parity historyAt); fall back to the
+          // JS authority whenever the JS posInput path is driving.
+          history: {
+            mirrorAt: (t) =>
+              nativeSink ? nativeSink.historyAt(t) : mirrorHistory.mirrorAt(t),
+          },
         });
         retirers.push(() => {
           stopFeeder(); // stop pushing BEFORE the brick detaches
@@ -1274,7 +1308,7 @@ export default function disparityScopeSession(
           name: nodeId.imm(kcfId),
         });
         disposers.add(() => {
-          imm?.release(); // closes the prediction iterator → consumeImm exits
+          imm?.release(); // ends the predict_out link deliveries
           imm = null;
         });
         // Live rate changes (Settings → Global config OR the drawer slider —
@@ -1397,6 +1431,15 @@ export default function disparityScopeSession(
                   },
                 ]
               : []),
+            // The native compose brick's NODE row (native-compose-controller):
+            // its in/out edges ride the port links (self-registered rows).
+            {
+              id: composeId,
+              kind: "compose",
+              owner: "win/disparity-scope",
+              output: { kind: "analysis", schema: "pid" } as const,
+              transport: "native" as const,
+            },
           ],
           edges: [
             ...(["L", "R"] as const).flatMap((side) => [
@@ -1435,6 +1478,14 @@ export default function disparityScopeSession(
           ),
         );
       }
+      disposers.add(
+        registerNativeProbe(
+          (): Record<string, WorkloadSnapshot> =>
+            compose
+              ? { [composeId]: trackerWorkload(composeId, compose.probe()) }
+              : {},
+        ),
+      );
 
       // The PID controller node — the app-specific JOIN (split-disparity-
       // nodes ruling 4): both match sides + the tracker's RAW target feed
@@ -1462,40 +1513,70 @@ export default function disparityScopeSession(
         pidNode = null;
       });
 
-      // The COMPOSE node — joins V_pid (baseline) with the IMM predictions into
-      // the position input at the prediction rate. Its `imm → compose` +
-      // `compose → controller` edges are registered here (the pid → compose edge
-      // rides the pid node's `outputs`). dispose retires it.
-      compose = createComposeNode({
-        id: composeId,
-        owner: "win/disparity-scope",
-        pidId,
-        immId,
-        controllerId: nodeId.controller(),
+      // The NATIVE compose brick (native-compose-controller.md — supersedes
+      // the JS compose node; `composeVolts` stays the conformance reference).
+      // Its imm → compose and compose → controller edges ride the PORT LINKS
+      // (self-registered); the pid → compose edge rides the pid node's
+      // `outputs`; the NODE row + meter probe are registered with the session
+      // wiring above (the imm-brick pattern).
+      compose = createComposeStream({
+        name: composeId,
         initial: { l: commandedVolts.l, r: commandedVolts.r },
       });
       disposers.add(() => {
-        compose?.dispose();
+        compose?.release(); // closes the volt iterator → fallback loop exits
         compose = null;
       });
+      // imm → compose: the high-rate prediction pipe (latest — the per-tick
+      // semantics the wave-1 JS loop had).
+      if (imm) {
+        const predLink = imm.predict_out.pipe(compose.pred_in);
+        disposers.add(() => predLink.release());
+      }
 
-      // Open the controller-node position input (was `startActuationLoop`).
-      // The compose node's `compose → controller` output edge above already
-      // covers the topology, so `from` is omitted (no duplicate edge). The
-      // immediate push reproduces the old loop's first tick: enable + drive to
-      // the current command (origin) so the mirrors are parked before the first
-      // projection.
+      // The legacy JS position input stays open as the FALLBACK transport
+      // (v1 firmware / no controller — `consumeComposeFallback` drives it
+      // only while no native sink is attached; a v2 controller streams
+      // natively and this input carries nothing).
       posInput = controllerNode().openPosition("disparity-scope", {
         initial: { left: commandedVolts.l, right: commandedVolts.r },
         onApplied: (_v, actuateMs) => {
           lastActuateMs = actuateMs;
         },
       });
-      pushVolts();
-      // Consume the IMM brick's high-rate prediction stream → compose → the
-      // position input (prediction rate). Started here, after compose + posInput
-      // exist; `imm.release()` (disposer) closes the iterator and exits.
-      if (imm) void consumeImm(imm, onPrediction);
+      // The NATIVE position input: attaches a native mirror sink whenever a
+      // v2 controller is bound (now or later); the session then pipes
+      // compose.volt_out ══ sink.pos_in and the whole 600 Hz path is native.
+      nativePos = controllerNode().openNativePosition("disparity-scope", {
+        initial: { left: commandedVolts.l, right: commandedVolts.r },
+        onAttach: (sink) => {
+          nativeSink = sink;
+          voltLink = compose ? compose.volt_out.pipe(sink.pos_in) : null;
+        },
+        onDetach: () => {
+          voltLink?.release();
+          voltLink = null;
+          nativeSink = null;
+        },
+      });
+      disposers.add(() => {
+        void nativePos?.close(); // detach + TERMINATE + disable-iff-last
+        nativePos = null;
+      });
+      // Volt TELEMETRY under the native path: no per-push JS callback exists
+      // anymore, so poll the sink's native history at the telemetry throttle
+      // (the fallback loop still reports through posInput.update's return).
+      {
+        const timer = setInterval(() => {
+          if (!nativeSink) return;
+          const latest = nativeSink.historyLatest();
+          if (latest) onVolts({ L: latest.left, R: latest.right }, 0);
+        }, VOLT_TELEMETRY_INTERVAL_MS);
+        disposers.add(() => clearInterval(timer));
+      }
+      pushVolts(); // park the mirrors at the current command (floor emit)
+      // JS FALLBACK volt consumer (idles while the native sink is attached).
+      void consumeComposeFallback(compose);
       // Auto-follow was left on: arm the fresh tracker at the current target.
       if (s.state.tracker_enabled) armTracker(s.state.target);
 
@@ -1564,9 +1645,13 @@ export default function disparityScopeSession(
       captureHelper = null;
       captureCenter = null;
       // Stop actuating (as the old loop stop did): terminate the MCU stream +
-      // disable iff the node enabled for us (fire-and-forget close).
+      // disable iff the node enabled for us (fire-and-forget close). The
+      // NATIVE input's detach/TERMINATE rode `disposers` (voltLink released
+      // there too); just drop the local refs.
       void posInput?.close();
       posInput = null;
+      nativeSink = null;
+      voltLink = null;
       // Terminate both match workers before disconnect: no reads after the
       // gate drops.
       workers.L?.terminate();
