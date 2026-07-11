@@ -30,7 +30,6 @@ export const {
     Tracker,
     Port,
     Controller,
-    Compression,
     Regression,
     Geometry,
     Log,

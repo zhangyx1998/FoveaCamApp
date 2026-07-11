@@ -26,11 +26,6 @@
       "require": "./dist/Vision/index.cjs",
       "types": "./dist/Vision/index.d.ts"
     },
-    "./Compression": {
-      "import": "./dist/Compression/index.mjs",
-      "require": "./dist/Compression/index.cjs",
-      "types": "./dist/Compression/index.d.ts"
-    },
     "./Regression": {
       "import": "./dist/Regression/index.mjs",
       "require": "./dist/Regression/index.cjs",

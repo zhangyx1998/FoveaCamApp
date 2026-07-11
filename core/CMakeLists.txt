@@ -41,7 +41,6 @@ find_package(NodeApiHeaders REQUIRED)
 find_package(NodeAddonApi REQUIRED)
 find_package(LibUSB REQUIRED)
 find_package(Aravis REQUIRED)
-find_package(LZ4 REQUIRED)
 # multi-fovea-recording ruling 9: the compression brick uses system zlib (libz)
 # for per-frame intra-frame compression — no new dependency (CMake ships
 # FindZLIB; libz is present on every target platform).
@@ -73,7 +72,6 @@ include_directories(
   ${OpenCV_INCLUDE_DIRS}
   ${ARAVIS_INCLUDE_DIRS}
   ${LibUSB_INCLUDE_DIRS}
-  ${LZ4_INCLUDE_DIRS}
   ${ZLIB_INCLUDE_DIRS}
 )
 
@@ -82,7 +80,6 @@ link_directories(
   ${OpenCV_LIBRARY_DIRS}
   ${ARAVIS_LIBRARY_DIRS}
   ${LibUSB_LIBRARY_DIRS}
-  ${LZ4_LIBRARY_DIRS}
 )
 
 # Project Local Library
@@ -135,7 +132,6 @@ target_link_libraries(core PRIVATE
   ${OpenCV_LIBS}
   ${ARAVIS_LIBRARIES}
   ${LibUSB_LIBRARIES}
-  ${LZ4_LIBRARIES}
   ${ZLIB_LIBRARIES}
 )
 

@@ -78,7 +78,7 @@ After making a code change, always state two things before moving on:
 ## Architecture
 
 ### Monorepo Layout
-- **`core/`** — C++ Node-API addon wrapping OpenCV, Aravis (GigE Vision cameras), libusb, and serial I/O. Built with cmake-js for both Node.js and Electron runtimes. Exports submodules: Aravis, Controller, Vision, Tracker, Regression, Geometry, Compression, Log, Shm, Pipe, Topology, Recorder. C++ helpers live in `core/include/` (CoreObject, AsyncTask, Dispatcher, etc.) and `core/lib/` (Aravis, Stream, Threading, utils); native sources in `core/src/`.
+- **`core/`** — C++ Node-API addon wrapping OpenCV, Aravis (GigE Vision cameras), libusb, and serial I/O. Built with cmake-js for both Node.js and Electron runtimes. Exports submodules: Aravis, Controller, Vision, Tracker, Regression, Geometry, Log, Shm, Pipe, Topology, Recorder. C++ helpers live in `core/include/` (CoreObject, AsyncTask, Dispatcher, etc.) and `core/lib/` (Aravis, Stream, Threading, utils); native sources in `core/src/`.
 - **`app/`** — Electron main/preload/renderer with Vue 3 + Vite. Feature modules live in `app/modules/` (calibrate-intrinsic, calibrate-extrinsic, calibrate-distortion, calibrate-drift, disparity-scope, single-capture, multi-fovea, manage-cameras, manage-data, manual-control, playground). Shared UI components in `app/src/components/`, utility libraries in `app/lib/`. Electron main/preload/util in `app/electron/`. The **orchestrator** (a separate Electron `utilityProcess`) owns `core`/hardware and runs in `app/orchestrator/`; its renderer-shared contracts/transport are in `app/lib/orchestrator/`. See the Orchestrator subsection below.
 - **`firmware/`** — Arduino/C++ for Teensy 4.0 microcontroller (MEMS sensors, serial protocol); sources in `firmware/src/`.
 - **`lib/`** — Shared C++ libraries used by both `core` and `firmware` (Protocol, COBS, Buffer, Timer). Changes here require `make clean` in `firmware/` because PlatformIO copies rather than references these files.
@@ -180,7 +180,7 @@ Standard pattern: `try { ... } JS_EXCEPT(env.Undefined())`
 `Shared<Derived>` provides `using Ptr = shared_ptr<Derived>` and `static Ptr create(Args...)`.
 
 #### Exporting an Object or Namespace
-Addon.cpp registers a root `core` object with submodules: `core.Aravis`, `core.Controller`, `core.Vision`, `core.Tracker`, `core.Regression`, `core.Geometry`, `core.Compression`, `core.Log`, `core.Shm`, `core.Pipe`, `core.Topology`, `core.Recorder` (plus a top-level `cleanup`). All but `Recorder` also have a `core/<Module>` subpath in `core/package.json`'s `exports` map (`Recorder` is root-object-only today). On js side, core/dist/index.mjs re-exports named exports from each submodule index.mjs, which in turn re-exports from the root loader. This allows both `import { Vision } from "core"` and `import Vision from "core/Vision"` patterns. When adding a new submodule or namespace, update `Addon.cpp`, the root loader (`core/dist/index.{cjs,mjs}`), and `core/package.json`'s `exports` map accordingly.
+Addon.cpp registers a root `core` object with submodules: `core.Aravis`, `core.Controller`, `core.Vision`, `core.Tracker`, `core.Regression`, `core.Geometry`, `core.Log`, `core.Shm`, `core.Pipe`, `core.Topology`, `core.Recorder` (plus a top-level `cleanup`). All but `Recorder` also have a `core/<Module>` subpath in `core/package.json`'s `exports` map (`Recorder` is root-object-only today). On js side, core/dist/index.mjs re-exports named exports from each submodule index.mjs, which in turn re-exports from the root loader. This allows both `import { Vision } from "core"` and `import Vision from "core/Vision"` patterns. When adding a new submodule or namespace, update `Addon.cpp`, the root loader (`core/dist/index.{cjs,mjs}`), and `core/package.json`'s `exports` map accordingly.
 
 #### Build & Distribution
 - Multi-target: `core/scripts/make.cjs` builds `.node` for both Node.js and Electron → `core/dist/.bin/{runtime}-{version}-{arch}.node`
@@ -213,7 +213,7 @@ Addon.cpp registers a root `core` object with submodules: `core.Aravis`, `core.C
 - **OpenCV** (core, imgproc, aruco, tracking) — vision processing
 - **Aravis** — GigE Vision camera acquisition
 - **libusb** — USB device I/O
-- **LZ4** — frame compression (Compression module)
+- **zlib** — recording compression (CompressStream brick + MCAP writer). The old LZ4-backed `core.Compression` module was dead code and is removed (2026-07-11)
 - **C++20** standard for all native code
 - **Node-API 8** — stable ABI for native addon
 </content>

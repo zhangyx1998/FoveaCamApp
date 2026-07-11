@@ -229,6 +229,23 @@ public:
     // Close the channel BEFORE unsubscribing: wakes a backpressure-blocked
     // producer push (FIFO) and the delivery read, so neither can deadlock the
     // unsubscribe/join below (the ChainedStream close-first discipline).
+    closeChannel();
+    sub_.reset(); // Subscriber::close → eject/drain discipline
+    if (thread_.joinable())
+      thread_.join();
+    keepProducer_.reset();
+    in_.reset();
+  }
+
+private:
+  /** Close the channel (idempotent — the Threading channels tolerate repeat
+   *  close). Shared by release() and EVERY deliver() exit path: if the
+   *  delivery thread dies with the channel open, a FIFO link keeps
+   *  backpressure-blocking the producer's fan-out INSIDE the stream mutex
+   *  (whole-pipeline freeze + shutdown deadlock) and latest/ring become
+   *  silent black holes with pinned payloads. Closed, the producer's next
+   *  push sees EOS → the Stream fan-out ejects this subscriber. */
+  void closeChannel() {
     switch (type) {
     case LinkOptions::Type::Latest:
       leaky_->close();
@@ -240,14 +257,8 @@ public:
       ring_->close();
       break;
     }
-    sub_.reset(); // Subscriber::close → eject/drain discipline
-    if (thread_.joinable())
-      thread_.join();
-    keepProducer_.reset();
-    in_.reset();
   }
 
-private:
   void deliver() {
     set_thread_name("port-link"); // ≤15 chars (glibc)
     try {
@@ -288,6 +299,10 @@ private:
     } catch (...) {
       // a throwing sink must not take the process down (never-gate rule)
     }
+    // The delivery thread is exiting — for ANY reason (EOS, throwing sink,
+    // ring drain). Close the channel so the producer side ejects instead of
+    // blocking/black-holing against a dead consumer (see closeChannel()).
+    closeChannel();
     open_.store(false, std::memory_order_release);
   }
 

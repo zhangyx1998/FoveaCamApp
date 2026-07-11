@@ -324,10 +324,6 @@ static Object init(Env env, Object exports) {
     auto Geometry = Object::New(env);
     CORE_OBJECT_EXPORT(GeometryModule, env, Geometry);
     exports.Set("Geometry", Geometry);
-    // Compression Module
-    auto Compression = Object::New(env);
-    CORE_OBJECT_EXPORT(CompressionNamespace, env, Compression);
-    exports.Set("Compression", Compression);
     // Log Module
     auto Log = Object::New(env);
     CORE_OBJECT_EXPORT(LogModule, env, Log);

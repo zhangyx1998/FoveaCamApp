@@ -226,6 +226,10 @@ declare module "core/Vision" {
     right: T,
     numDisparities?: number, // default: 0
     blockSize?: number, // default: 21
+    // Signed search window floor (depth-view-legacy-stereobm, 2026-07-11):
+    // foveated gaze makes true disparity signed — pass a negative floor
+    // (sgbm-signed-range.md window) to search −W…+W. Default 0 = legacy.
+    minDisparity?: number,
   ): Mat<TypedArray>;
 
   export function reprojectImageTo3D<T extends Mat>(

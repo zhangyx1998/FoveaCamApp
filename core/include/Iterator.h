@@ -289,8 +289,16 @@ public:
 
 private:
   Sub::Latest<I>::Ptr sub = nullptr;
+
+protected:
+  // start/stop are overridable (call the base!) so a brick can release its
+  // reused full-frame buffers on the active→parked edge (idle-retention fix,
+  // value-sweep 2026-07-11) — both run on the stream thread, so the
+  // single-writer rule over transform-owned state holds.
   void start() override { sub = Sub::Latest<I>::create(upstream()); }
   void stop() override { sub = nullptr; }
+
+private:
   O iterate() override {
     auto sub = this->sub;
     if (!sub)

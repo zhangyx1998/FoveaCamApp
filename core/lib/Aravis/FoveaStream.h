@@ -78,6 +78,14 @@ public:
   const std::string &sourceId() const { return sourceId_; }
 
 protected:
+  void stop() override {
+    ChainedStream::stop();
+    // Parked (stream thread — single-writer over buf_): drop the reused
+    // output buffer instead of retaining it for the lease lifetime
+    // (value-sweep 2026-07-11 idle-retention); unpark reallocates it.
+    buf_.release();
+  }
+
   ConvertedFrame::Ptr process(const OwnedFrame::Ptr &in) override {
     const int64_t t = converterNowMs();
     if (const uint64_t gap = seqGap(in)) // tap outran this brick (latest-wins)

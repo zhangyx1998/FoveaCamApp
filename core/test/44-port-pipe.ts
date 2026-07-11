@@ -81,6 +81,7 @@ type Sink = {
   count(): number;
   seqs(): number[];
   stall(ms: number): void;
+  throwAfter(n: number): void;
   release(): void;
 };
 
@@ -298,6 +299,52 @@ async function waitFor(pred: () => boolean, ms = 8000): Promise<void> {
   sink.release();
   src.release();
   console.log("44-port-pipe: connect/release under producer load (25 cycles) OK.");
+}
+
+// --- 8: THROWING SINK closes the channel (value-sweep 2026-07-11) ----------------
+// A sink exception exits the delivery thread; before the fix the channel stayed
+// OPEN — a FIFO link then backpressure-blocked the producer's fan-out INSIDE
+// the stream mutex (whole-pipeline freeze; this section would hang), and
+// latest/ring links became silent black holes. Now every deliver() exit closes
+// the channel, so the producer's next push sees EOS and the fan-out ejects the
+// subscriber — pushes keep flowing, probe reads open:false, release() joins.
+for (const [type, opts] of [
+  ["fifo", { type: "fifo", depth: 4 }],
+  ["latest", { type: "latest" }],
+  ["ring", { type: "ring", size: 4 }],
+] as const) {
+  const src = P.createTestTrackSource(`test/44/throw-src-${type}`);
+  const sink = P.createTestTrackSink(`test/44/throw-sink-${type}`);
+  sink.throwAfter(3); // deliveries 1..3 land; the 4th throws in the sink
+  const link = src.track_out.pipe(sink.track_in, opts);
+  // Feed until the sink has consumed its 3 then thrown: paced pushes so a
+  // latest link can't shed the poison item before delivery.
+  for (let i = 0; i < 24 && link.probe().open; i++) {
+    pushN(src, 1);
+    await sleep(10);
+  }
+  await waitFor(() => !link.probe().open, 4000);
+  assert.equal(sink.count(), 3, `${type}: exactly the pre-throw deliveries landed`);
+
+  // The producer must NOT be wedged: a burst of pushes (the fifo case would
+  // block the fan-out inside the stream mutex if the channel were still open)
+  // completes immediately and the source keeps serving OTHER consumers.
+  const t0 = Date.now();
+  pushN(src, 20);
+  assert(Date.now() - t0 < 1000, `${type}: pushes after sink death don't block`);
+  const fresh = P.createTestTrackSink(`test/44/throw-fresh-${type}`);
+  const link2 = src.track_out.pipe(fresh.track_in, { type: "fifo", depth: 8 });
+  const before = fresh.count();
+  pushN(src, 5);
+  await waitFor(() => fresh.count() >= before + 5);
+  assert(fresh.count() >= 5, `${type}: source stream survived the sink throw`);
+
+  link2.release();
+  link.release(); // idempotent; joins the already-exited delivery thread
+  fresh.release();
+  sink.release();
+  src.release();
+  console.log(`44-port-pipe: throwing sink closes the ${type} channel OK.`);
 }
 
 cleanup();

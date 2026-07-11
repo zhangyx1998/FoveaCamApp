@@ -5,7 +5,7 @@ Six dimension-scoped finders + six adversarial verifiers swept the tree at
 throughput headroom, silent failures, retired-pattern residue). 40 findings,
 39 confirmed after refutation attempts, 1 refuted. Full per-finding evidence
 lives in the planner transcript; this file records the FILTERED, planner-ranked
-set. Status: **AWAITING RULING** on which tiers enter the work queue.
+set. Status: **ALL FOUR TIERS RULED AND SHIPPED** (2026-07-11, lanes A-D: 53ba728, 0fc29e0, 0c16849 + the Lane C core commit; projection split view = separate proposal, Lane E).
 
 ## Tier 1 — correctness defects (fix first; several are recent-wave fallout)
 

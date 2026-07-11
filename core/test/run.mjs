@@ -46,7 +46,7 @@ const RIG_GATED = new Set([
 // the "all" sweep so one known-broken test can't wedge the whole run. Run it
 // explicitly by number when working the fix. (47 is blocked by the core Device
 // rx-thread deadlock noted in its own header.)
-const KNOWN_BLOCKED = new Set(["47-firmware-sim"]);
+const KNOWN_BLOCKED = new Set(); // 47 unblocked: rx deadlock fixed in b5b1f30
 
 const PER_TEST_TIMEOUT_MS = 180_000;
 

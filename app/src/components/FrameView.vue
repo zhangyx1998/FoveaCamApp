@@ -18,6 +18,7 @@ import { faExpand } from "@fortawesome/free-solid-svg-icons";
 
 import ElementSize from "@lib/element-size";
 import { NoCheck } from "@lib/util/vue";
+import { pointerObscured } from "@lib/pointer-obscured";
 import FrameOverlay from "./FrameOverlay.vue";
 import { clamp } from "@lib/util";
 
@@ -112,12 +113,35 @@ const canvasStyle = computed(() => {
   };
 });
 
-watch(canvas, (canvas) => {
-  if (!canvas) return;
-  const ctx = canvas.getContext("2d");
-  if (ctx && image.value) {
-    ctx.putImageData(image.value, 0, 0);
+// --- paint path (value-sweep 2026-07-11, frameview-putimagedata-main-thread) --
+// putImageData is a SYNCHRONOUS full-res raster on the Vue main thread — per
+// frame per view (~9 MB for a 1920×1200 RGBA frame, even in a 300 px tile).
+// createImageBitmap decodes ASYNC (off the main thread) and drawImage blits
+// the GPU-resident bitmap; the canvas backing store keeps the image's native
+// dimensions (template :width/:height), so sizing/inspector/annotation
+// semantics are unchanged — only the raster cost moves off the loop.
+// putImageData remains the fallback where bitmap creation fails.
+let paintSeq = 0; // stale-frame guard across the async decode
+async function paint(img: ImageData): Promise<void> {
+  const seq = ++paintSeq;
+  try {
+    const bitmap = await createImageBitmap(img);
+    // A newer frame finished decoding (or the frame changed) while we awaited.
+    if (seq !== paintSeq || image.value !== img) return bitmap.close();
+    const ctx = canvas.value?.getContext("2d");
+    if (ctx) ctx.drawImage(bitmap, 0, 0);
+    bitmap.close(); // release the GPU/decoder copy eagerly
+  } catch {
+    // Bitmap creation unavailable/failed — synchronous fallback.
+    if (seq !== paintSeq || image.value !== img) return;
+    const ctx = canvas.value?.getContext("2d");
+    if (ctx) ctx.putImageData(img, 0, 0);
   }
+}
+
+watch(canvas, (canvas) => {
+  // (Re)mount: repaint the last frame onto the fresh canvas.
+  if (canvas && image.value) void paint(image.value);
 });
 
 const mat = computed(() => {
@@ -188,8 +212,7 @@ watch(
       width,
       height,
     );
-    const ctx = canvas.value?.getContext("2d");
-    if (ctx) ctx.putImageData(image.value, 0, 0);
+    void paint(image.value);
   },
   { immediate: true },
 );
@@ -263,6 +286,13 @@ const drag = ref(false);
 const MOVE_EVENT = "onpointerrawupdate" in window ? "pointerrawupdate" : "mousemove";
 function trackUntilRelease(e: MouseEvent) {
   if (!(e.buttons & 1)) return untrack();
+  // Obscuration gate (value-sweep addendum 2026-07-11): a drag that wanders
+  // over an overlaying element (the drawer) must stop STEERING while covered —
+  // skip the emit, do NOT end the drag (mouseup above still ends it globally,
+  // so releasing over the drawer never wedges the drag state). Steering
+  // resumes the moment the pointer re-emerges. Off-edge drags (outside the
+  // container box) are NOT obscured — the clamped-steer gesture keeps working.
+  if (pointerObscured(container.value, e)) return;
   return emit("update:modelValue", translatePos(e));
 }
 
@@ -278,6 +308,14 @@ function track(e: MouseEvent) {
   window.addEventListener(MOVE_EVENT, trackUntilRelease as EventListener);
   window.addEventListener("mouseup", trackUntilRelease);
   trackUntilRelease(e);
+}
+
+// Hover/cursor ('mouse') emits, obscuration-gated (value-sweep addendum
+// 2026-07-11): while a foreign element tops the pointer inside our box, the
+// cursor handler must read "not over the frame" — emit null (the mouseleave
+// shape), never a translated position through the drawer.
+function gatedMouse(e: MouseEvent) {
+  emit("mouse", pointerObscured(container.value, e) ? null : translatePos(e));
 }
 
 function mix<T, P>(t: T, p: P): T & P {
@@ -321,11 +359,11 @@ function mix<T, P>(t: T, p: P): T & P {
         :width="image?.width"
         :height="image?.height"
         :style="canvasStyle"
-        @mousedown="(e) => [track(e), emit('mouse', translatePos(e))]"
-        @mousemove="(e) => emit('mouse', translatePos(e))"
+        @mousedown="(e) => [track(e), gatedMouse(e)]"
+        @mousemove="gatedMouse"
         @mouseleave="() => emit('mouse', null)"
-        @mouseenter="(e) => emit('mouse', translatePos(e))"
-        @mouseup="(e) => emit('mouse', translatePos(e))"
+        @mouseenter="gatedMouse"
+        @mouseup="gatedMouse"
       ></canvas>
       <FrameOverlay
         v-if="overlay && overlayToggle"

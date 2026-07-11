@@ -230,17 +230,36 @@ function readFrames(): FrameSet | "closed" {
   return frames;
 }
 
-/** Copy kernel output frames into fresh transferable buffers and post. */
+// OWNERSHIP RULE for postResult's zero-copy transfer (value-sweep 2026-07-11,
+// vision-worker-postresult-redundant-slice): every frame a kernel emits is a
+// FRESH Vision-call output (slice/diff/heatmap/wrapPerspective/cvtColor —
+// audited across all four kernels), uniquely owned by this worker and never a
+// view over a reused pipe read buffer. On the electron (V8_MEMORY_CAGE) build
+// those are ordinary process-owned ArrayBuffers → transfer them directly. On
+// a plain-node run (vitest) the non-cage Mat converter returns EXTERNALIZED
+// (native-owned) ArrayBuffers, which postMessage cannot detach — keep the
+// copying fallback there. The alias/shape guards below keep the rule safe if
+// a future kernel ever emits a passthrough view.
+const canTransferNative = !!process.versions.electron;
+
+/** Post kernel output frames: zero-copy transfer where ownership is provable
+ *  (see rule above), copying fallback otherwise. */
 function postResult(values: Record<string, unknown>, mats: { name: string; mat: Mat<Uint8Array> }[]): void {
   const transfer: ArrayBuffer[] = [];
   const derived: DerivedFrame[] = mats.map(({ name, mat }) => {
     const [h = 0, w = 0] = mat.shape;
-    // Fresh, transferable copy (transfer neuters it) — the read buffers are
-    // always plain `ArrayBuffer`s (`new Uint8Array(bytesPerFrame)`).
-    const buffer = mat.buffer.slice(
-      mat.byteOffset,
-      mat.byteOffset + mat.byteLength,
-    ) as ArrayBuffer;
+    // Direct transfer requires: electron (cage) build, the mat spans its
+    // WHOLE buffer (consumers assume offset 0), the buffer is not a reused
+    // pipe read buffer, and it isn't already queued for transfer (two mats
+    // sharing one buffer must fall back to a copy for the second).
+    const whole = mat.byteOffset === 0 && mat.byteLength === mat.buffer.byteLength;
+    const aliasesRead = pipes.some((p) => p.buffer.buffer === mat.buffer);
+    const owned =
+      canTransferNative && whole && !aliasesRead &&
+      !transfer.includes(mat.buffer as ArrayBuffer);
+    const buffer = owned
+      ? (mat.buffer as ArrayBuffer)
+      : (mat.buffer.slice(mat.byteOffset, mat.byteOffset + mat.byteLength) as ArrayBuffer);
     transfer.push(buffer);
     return { name, buffer, width: w, height: h, channels: mat.channels };
   });

@@ -128,6 +128,15 @@ public:
   void stall(double ms) { stallMs_.store(ms, std::memory_order_release); }
 
 protected:
+  void stop() override {
+    ChainedStream::stop();
+    // Parked (stream thread — single-writer over buf_): drop the reused
+    // full-frame output (value-sweep 2026-07-11 idle-retention). map1_/map2_
+    // are deliberately KEPT: initUndistortRectifyMap at sensor size is an
+    // expensive rebuild, not worth the park-time savings.
+    buf_.release();
+  }
+
   // FIFO metering (single-writer rule preserved — this brick's own thread):
   // the peak input-queue occupancy since the last dequeue + the FIFO capacity,
   // per-bin MAX over the meter's 10s/1s window. Surfaced as `queue:{depth,

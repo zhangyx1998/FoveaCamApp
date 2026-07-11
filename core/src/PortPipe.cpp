@@ -451,6 +451,10 @@ struct TestTrackSinkCore : Shared<TestTrackSinkCore> {
   std::string nodeId, portName, tag;
   std::atomic<uint64_t> count{0};
   std::atomic<double> stallMs{0};
+  // Test seam (44's throwing-sink case): deliveries BEYOND this count throw
+  // out of the sink — proving a sink exception closes the channel (producer
+  // ejects via EOS) instead of leaving a dead link open. 0 = never throw.
+  std::atomic<uint64_t> throwAfter{0};
   Threading::Guard<std::vector<uint64_t>> seqs = {std::vector<uint64_t>()};
   InPort::Ptr port;
 };
@@ -471,6 +475,7 @@ public:
             INSTANCE_METHOD(TestTrackSinkObject, count),
             INSTANCE_METHOD(TestTrackSinkObject, seqs),
             INSTANCE_METHOD(TestTrackSinkObject, stall),
+            INSTANCE_METHOD(TestTrackSinkObject, throwAfter),
             Napi::InstanceWrap<TestTrackSinkObject>::template InstanceAccessor<
                 &TestTrackSinkObject::get_track_in>("track_in",
                                                     napi_enumerable),
@@ -506,6 +511,16 @@ public:
     }
     JS_EXCEPT(env.Undefined())
   }
+  FN(throwAfter) {
+    auto env = info.Env();
+    try {
+      core()->throwAfter.store(
+          static_cast<uint64_t>(info[0].As<Napi::Number>().DoubleValue()),
+          std::memory_order_release);
+      return env.Undefined();
+    }
+    JS_EXCEPT(env.Undefined())
+  }
 
   GET(track_in) {
     auto env = info.Env();
@@ -522,6 +537,13 @@ public:
                 if (ms > 0)
                   std::this_thread::sleep_for(
                       std::chrono::duration<double, std::milli>(ms));
+                // Throwing-sink seam (test 44): consume `throwAfter`
+                // successful deliveries, then throw — exercising the
+                // deliver() exit path that must close the channel.
+                const uint64_t limit =
+                    weakless->throwAfter.load(std::memory_order_acquire);
+                if (limit > 0 && weakless->count.load() >= limit)
+                  throw std::runtime_error("TestTrackSink: injected throw");
                 if (r) {
                   auto ref = weakless->seqs.ref();
                   ref->push_back(r->seq);

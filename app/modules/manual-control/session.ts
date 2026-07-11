@@ -52,6 +52,7 @@ import { createCaptureHelper, type CaptureHelper } from "@orchestrator/capture-h
 import type { PipeInput, VisionResult } from "@orchestrator/vision-worker-protocol";
 import { manualControl } from "./contract";
 import { createRecording } from "./recording";
+import { slewStep, type SlewPair } from "./slew";
 import { type SplitVolts, unifiedSplit, resolveVolts, splitFlags } from "./split";
 import { makeMat, matToArray } from "@lib/mat";
 import {
@@ -475,14 +476,32 @@ export default function manualControlSession(
           lastActuateMs = actuateMs;
         },
       });
+      // Drag SLEW (value-sweep addendum 2026-07-11): instead of re-pushing
+      // the raw latest target every 1 ms tick (identical between pointer
+      // samples → dedupe-dropped → the wire idles at the pointer rate), keep
+      // the previously COMMANDED pose and slew it toward the target
+      // (first-order, τ = SLEW_TAU_MS). During motion every tick is a
+      // DISTINCT pose the gate passes — the serial link runs at its governed
+      // capacity with real intermediate points; settled, the exact target is
+      // emitted once and dedupe keeps the wire quiet (see slew.ts).
+      let commanded: SlewPair | null = null;
+      let lastPaceAt = 0;
       stopActuation = startPacer(1, () => {
-        const t = targetVolts();
+        const target = targetVolts();
+        const now = performance.now();
+        const dt = lastPaceAt > 0 ? now - lastPaceAt : 1;
+        lastPaceAt = now;
+        // First tick (or post-reset): command the target directly — never
+        // swoop in from a stale origin.
+        const t = commanded
+          ? slewStep(commanded, target, dt).pose
+          : { l: { ...target.l }, r: { ...target.r } };
+        commanded = t;
         const p = posInput!.update({ left: t.l, right: t.r });
         const v = { L: p.left, R: p.right };
         volts.L = p.left;
         volts.R = p.right;
         actuateMsStats.push(lastActuateMs);
-        const now = performance.now();
         if (now - lastParamPush >= VOLT_TELEMETRY_INTERVAL_MS) {
           lastParamPush = now;
           pushParams(voltParams());

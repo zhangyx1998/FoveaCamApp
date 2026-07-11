@@ -118,10 +118,22 @@ static FN(convertType) {
   JS_EXCEPT(env.Undefined())
 }
 
+// MatView adoption (value-sweep 2026-07-11, mat-convert-full-copy-per-vision-
+// call): the hot READ-ONLY kernels below take `convert<cv::MatView>` — a
+// zero-copy Mat header over the caller's TypedArray (the JS ref is pinned for
+// the view's lifetime) — instead of memcpy'ing the full input into a fresh
+// Mat. Each adopted kernel was AUDITED for in-place aliasing: none may write
+// through the view (a kernel that mutates its input keeps the copying
+// converter). Sync kernels drop the view before returning; the async ones
+// (matchTemplate) ride shared_ptr<MatView> captured into the AsyncTask —
+// AsyncWorker destroys the lambda on the JS thread, so the pinned ref is
+// released where NAPI requires. Conformance + micro-bench: core/test/48.
+
 static FN(cvtColor) {
   auto env = info.Env();
   try {
-    auto mat = convert<cv::Mat>(info[0]);
+    // READ-ONLY: cvtColor(src → dst), dst distinct — never writes the view.
+    const auto mat = convert<cv::MatView>(info[0]);
     const auto code = convert<CvtColorCode>(info[1]);
     cv::Mat converted;
     cv::cvtColor(mat, converted, code);
@@ -133,7 +145,8 @@ static FN(cvtColor) {
 static FN(slice) {
   auto env = info.Env();
   try {
-    auto mat = convert<cv::Mat>(info[0]);
+    // READ-ONLY: the ROI is copyTo'd into the fresh zero-filled output.
+    const auto mat = convert<cv::MatView>(info[0]);
     auto rect = convert<cv::Rect>(info[1]);
     if (rect.width <= 0 || rect.height <= 0)
       throw JS::Error(env, "Invalid slice size " + to_string(rect.width) + "x" +
@@ -198,34 +211,53 @@ static FN(resize) {
 static FN(heatmap) {
   const auto env = info.Env();
   try {
-    auto mat = convert<cv::Mat>(info[0]);
+    // READ-ONLY via restructure: the old code normalize/convertTo'd IN PLACE
+    // on its private copy; with a zero-copy view every step now lands in a
+    // distinct working Mat so the caller's buffer is never written. The
+    // no-op 8U/no-norm path shares the view's header (read-only below).
+    const auto view = convert<cv::MatView>(info[0]);
     auto norm = optionalArgument<bool>(info[1], false);
-    if (mat.channels() != 1)
+    if (view.channels() != 1)
       throw JS::Error(env, "Heatmap input must be single channel matrix");
-    switch (mat.type()) {
+    cv::Mat mat; // the 8U mono working image
+    switch (view.type()) {
     case CV_8UC1:
       if (norm)
-        cv::normalize(mat, mat, 0xff, 0, NORM_MINMAX);
+        cv::normalize(view, mat, 0xff, 0, NORM_MINMAX);
+      else
+        mat = view; // header share — strictly read from here on
       break;
     case CV_16UC1:
-      if (norm)
-        cv::normalize(mat, mat, 0xffff, 0, NORM_MINMAX);
-      mat.convertTo(mat, CV_8UC1, 255.0 / 65535.0);
+      if (norm) {
+        cv::Mat n;
+        cv::normalize(view, n, 0xffff, 0, NORM_MINMAX);
+        n.convertTo(mat, CV_8UC1, 255.0 / 65535.0);
+      } else {
+        view.convertTo(mat, CV_8UC1, 255.0 / 65535.0);
+      }
       break;
     case CV_16SC1:
-      if (norm)
-        cv::normalize(mat, mat, static_cast<double>(INT32_MAX), 0, NORM_MINMAX);
-      mat.convertTo(mat, CV_8UC1, 255.0 / static_cast<double>(INT32_MAX));
+      if (norm) {
+        cv::Mat n;
+        cv::normalize(view, n, static_cast<double>(INT32_MAX), 0, NORM_MINMAX);
+        n.convertTo(mat, CV_8UC1, 255.0 / static_cast<double>(INT32_MAX));
+      } else {
+        view.convertTo(mat, CV_8UC1, 255.0 / static_cast<double>(INT32_MAX));
+      }
       break;
     case CV_16FC1:
     case CV_32FC1:
     case CV_64FC1:
-      if (norm)
-        cv::normalize(mat, mat, 1.0, 0, NORM_MINMAX);
-      mat.convertTo(mat, CV_8UC1, 255.0);
+      if (norm) {
+        cv::Mat n;
+        cv::normalize(view, n, 1.0, 0, NORM_MINMAX);
+        n.convertTo(mat, CV_8UC1, 255.0);
+      } else {
+        view.convertTo(mat, CV_8UC1, 255.0);
+      }
       break;
     default:
-      throw JS::Error(env, "Unsupported matrix type " + to_string(mat.type()) +
+      throw JS::Error(env, "Unsupported matrix type " + to_string(view.type()) +
                                " for heatmap conversion");
     }
     cv::Mat channels[4];                             // RGBA8
@@ -252,12 +284,16 @@ inline Size2i toSize(const Napi::Value &value) {
 static FN(gaussian) {
   const auto env = info.Env();
   try {
-    auto mat = convert<cv::Mat>(info[0]);
+    // AUDITED: the old code blurred IN PLACE on its private copy; a zero-copy
+    // view must blur src → dst (distinct) so the caller's buffer stays
+    // unwritten. Same observable result: a fresh blurred output array.
+    const auto mat = convert<cv::MatView>(info[0]);
     const auto ksize = toSize(info[1]); // Ensure odd size
     const auto sigmaX = optionalArgument<double>(info[2], 2);
     const auto sigmaY = optionalArgument<double>(info[3], sigmaX);
-    cv::GaussianBlur(mat, mat, ksize, sigmaX, sigmaY);
-    return convert(env, mat);
+    cv::Mat blurred;
+    cv::GaussianBlur(mat, blurred, ksize, sigmaX, sigmaY);
+    return convert(env, blurred);
   }
   JS_EXCEPT(env.Undefined())
 }
@@ -284,18 +320,25 @@ inline cv::Mat mono(const cv::Mat &mat) {
 static FN(diff) {
   const auto env = info.Env();
   try {
-    auto a = convert<cv::Mat>(info[0]);
-    auto b = convert<cv::Mat>(info[1]);
+    // AUDITED: mono() returns a SHARING header when the input is already
+    // grayscale, so the CLAHE stage below must write into a DISTINCT mat —
+    // the old in-place apply would have mutated the caller's buffer through
+    // the view. Everything else only reads a/b (merge inputs).
+    const auto va = convert<cv::MatView>(info[0]);
+    const auto vb = convert<cv::MatView>(info[1]);
     auto norm = optionalArgument(info[2], false);
-    if (a.cols != b.cols || a.rows != b.rows || a.type() != b.type())
+    if (va.cols != vb.cols || va.rows != vb.rows || va.type() != vb.type())
       throw JS::Error(env, "Frame size or type mismatch for image diff");
     // Ensure a and b are grayscale
-    a = mono(a);
-    b = mono(b);
+    cv::Mat a = mono(va);
+    cv::Mat b = mono(vb);
     if (norm) {
       cv::Ptr<cv::CLAHE> clahe = cv::createCLAHE(2.0, cv::Size(8, 8));
-      clahe->apply(a, a);
-      clahe->apply(b, b);
+      cv::Mat an, bn;
+      clahe->apply(a, an);
+      clahe->apply(b, bn);
+      a = an;
+      b = bn;
     }
     // Red v.s. Blue, green = min of both
     // Use OpenCV's vectorized operations for efficiency
@@ -316,7 +359,8 @@ static FN(diff) {
 static FN(minMaxLoc) {
   auto env = info.Env();
   try {
-    auto mat = convert<cv::Mat>(info[0]);
+    // READ-ONLY: pure reduction over the view.
+    const auto mat = convert<cv::MatView>(info[0]);
     double minVal, maxVal;
     cv::Point minLoc, maxLoc;
     cv::minMaxLoc(mat, &minVal, &maxVal, &minLoc, &maxLoc);
@@ -341,22 +385,27 @@ static FN(minMaxLoc) {
 static FN(matchTemplate) {
   auto env = info.Env();
   try {
-    auto haystack = convert<cv::Mat>(info[0]);
-    auto needle = convert<cv::Mat>(info[1]);
+    // READ-ONLY + ASYNC: matchTemplate(src, tmpl → result) never writes its
+    // inputs. The views ride shared_ptr into the AsyncTask lambda (MatView is
+    // move-only; std::function needs copyable) — the AsyncWorker destroys the
+    // lambda on the JS thread, releasing the pinned refs where NAPI requires.
+    // Caveat (same as any zero-copy async read): the caller must not MUTATE
+    // the input TypedArrays while the promise is pending — the worker thread
+    // reads them live, not a snapshot.
+    auto haystack =
+        std::make_shared<cv::MatView>(convert<cv::MatView>(info[0]));
+    auto needle = std::make_shared<cv::MatView>(convert<cv::MatView>(info[1]));
     const auto method =
         optionalArgument<TemplateMatchModes>(info[2], TM_SQDIFF_NORMED);
     auto task = [haystack, needle, method] {
       cv::Mat result;
-      cv::matchTemplate(haystack, needle, result, method);
+      cv::matchTemplate(*haystack, *needle, result, method);
       return result;
     };
-    const auto action = "matchTemplate(" + tag(haystack) + ", " + tag(needle) +
-                        ", " + convert<std::string>(method) + ")";
     return AsyncTask<cv::Mat>::run(env, task,
-                                   "matchTemplate(" + tag(haystack) + ", " +
-                                       tag(needle) + ", " +
+                                   "matchTemplate(" + tag(*haystack) + ", " +
+                                       tag(*needle) + ", " +
                                        convert<std::string>(method) + ")");
-    return env.Undefined();
   }
   JS_EXCEPT(env.Undefined())
 }
@@ -456,7 +505,9 @@ static FN(projectHomography) {
 static FN(wrapPerspective) {
   const auto env = info.Env();
   try {
-    auto src = convert<cv::Mat>(info[0]);
+    // READ-ONLY src: warpPerspective(src → dst), dst distinct. The 3×3
+    // homography stays on the copying converter (trivial size).
+    const auto src = convert<cv::MatView>(info[0]);
     auto homography = convert<cv::Mat>(info[1]);
     const auto flags =
         optionalArgument<InterpolationFlags>(info[2], cv::INTER_LINEAR);
@@ -473,13 +524,26 @@ static FN(wrapPerspective) {
 static FN(disparity) {
   const auto env = info.Env();
   try {
-    auto left = mono(convert<cv::Mat>(info[0]));
-    auto right = mono(convert<cv::Mat>(info[1]));
+    // READ-ONLY: StereoBM reads both inputs, writes a fresh disparity map.
+    // mono() shares the view's header when the input is already grayscale
+    // (no copy); the returned local Mats keep the JS buffers alive for the
+    // synchronous compute only.
+    const auto vl = convert<cv::MatView>(info[0]);
+    const auto vr = convert<cv::MatView>(info[1]);
+    cv::Mat left = mono(vl);
+    cv::Mat right = mono(vr);
     const auto numDisparities = optionalArgument<int>(info[2], 0);
     const auto blockSize = optionalArgument<int>(info[3], 21);
+    // v2 (depth-view-legacy-stereobm, 2026-07-11): a signed search window —
+    // foveated (independently steered) gaze makes the true L↔R disparity
+    // SIGNED (sgbm-signed-range.md); the unsigned 0…N default matched
+    // garbage. Default 0 preserves the legacy behavior byte-for-byte.
+    const auto minDisparity = optionalArgument<int>(info[4], 0);
     cv::Mat disparity;
     cv::Ptr<cv::StereoBM> stereo =
         cv::StereoBM::create(numDisparities, blockSize);
+    if (minDisparity != 0)
+      stereo->setMinDisparity(minDisparity);
     stereo->compute(left, right, disparity);
     return convert(env, disparity);
   }

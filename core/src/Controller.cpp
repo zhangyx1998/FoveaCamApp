@@ -12,11 +12,13 @@
 #include <optional>
 
 #include <napi.h>
+#include <poll.h>
 #include <stdexcept>
 #include <sys/fcntl.h>
 #include <sys/ioctl.h>
 #include <termios.h>
 #include <unistd.h>
+#include <vector>
 #if defined(__APPLE__)
 #include <util.h> // openpty (test-only __serialTestPty)
 #else
@@ -1253,13 +1255,87 @@ private:
     }
   }
 
+  // rx poll cadence: bounds shutdown latency (destroy() joins within one
+  // timeout) and paces the idle-tick work below. The fd is O_NONBLOCK — the
+  // old read→EAGAIN→continue loop burned ~100% of a core whenever a
+  // controller was connected (value-sweep 2026-07-11 / wave-6 task #11).
+  static constexpr int RX_POLL_TIMEOUT_MS = 50;
+  // Pending-map sweep: entries whose response never came (device wedged /
+  // unplugged mid-request) would otherwise pin their PendingRequest (+ JS
+  // refs) forever. Every JS-side timeout (scheduler accepted/completion
+  // timers, session guards) fires far below this, so a swept promise has
+  // long been abandoned by its caller; rejecting matches the REJ path.
+  static constexpr int64_t PENDING_SWEEP_TTL_NS = 30ll * 1000 * 1000 * 1000;
+  static constexpr int64_t PENDING_SWEEP_PERIOD_NS = 1ll * 1000 * 1000 * 1000;
+  int64_t lastSweepNs_ = 0; // rx thread only
+
+  /** Reject + erase pending entries older than the TTL. Runs on the rx
+   *  thread's idle (poll-timeout) tick, at most once per sweep period. The
+   *  guard is NEVER held across notePendingChanged()/Dispatcher (the b5b1f30
+   *  retire-deadlock rule); rejection is dispatched to the JS thread so the
+   *  PendingRequest's futures (and destructor) only ever settle there. */
+  void sweepPending() {
+    const int64_t now = seamSteadyNs();
+    if (now - lastSweepNs_ < PENDING_SWEEP_PERIOD_NS)
+      return;
+    lastSweepNs_ = now;
+    std::vector<PendingRequest::Ptr> expired;
+    {
+      auto p = pending.ref();
+      for (auto it = p->begin(); it != p->end();) {
+        const auto &pr = it->second;
+        if (pr->sentNs > 0 && now - pr->sentNs > PENDING_SWEEP_TTL_NS) {
+          expired.push_back(pr);
+          it = p->erase(it);
+        } else {
+          ++it;
+        }
+      }
+    }
+    if (expired.empty())
+      return;
+    notePendingChanged();
+    for (auto &pr : expired) {
+      WARN("Sweeping pending request seq=%u (%s) — no response in 30 s",
+           pr->sequence, convert<std::string>(pr->property).c_str());
+      Dispatcher::dispatch(env, [pr](napi_env) {
+        pr->Reject(
+            Napi::Error::New(pr->env, "Request timeout (no device response)")
+                .Value());
+      });
+    }
+  }
+
   void rxLoop() {
     VERBOSE("Device::rxLoop started for fd %d", fd);
     std::array<char, 256> bytes;
     while (!flag_term) {
+      // Sleep in poll(2) until bytes (or error/hangup) arrive — the loop no
+      // longer spins on the O_NONBLOCK fd. A timeout wake doubles as the
+      // idle tick for the pending-map sweep.
+      pollfd pfd{fd, POLLIN, 0};
+      const int ready = ::poll(&pfd, 1, RX_POLL_TIMEOUT_MS);
+      if (flag_term)
+        break;
+      if (ready == 0) {
+        sweepPending();
+        continue;
+      }
+      if (ready < 0) {
+        if (errno == EINTR)
+          continue;
+        ERROR("poll on serial port failed: %s", std::strerror(errno));
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        continue;
+      }
       auto count = ::read(fd, bytes.data(), bytes.size());
       if (count < 0) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
+          continue; // raced the poll wake — just poll again
         ERROR("Failed to read from serial port: %s", std::strerror(errno));
+        // Persistent error (EIO on unplug, …): don't spin/spam — the poll
+        // above returns immediately on POLLERR/POLLHUP, so pace the retries.
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
         continue;
       } else if (count == 0) {
         std::this_thread::yield();

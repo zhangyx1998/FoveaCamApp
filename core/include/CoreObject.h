@@ -16,14 +16,6 @@
 #include "Cleanup.h"
 #include "napi-helper.h"
 
-// TODO: Strict equality for CoreObjects pointing to the same native object
-#define CORE_OBJECT_FEAT_STRICT_EQ 0
-#if defined(CORE_OBJECT_FEAT_STRICT_EQ) && CORE_OBJECT_FEAT_STRICT_EQ
-#define FEAT_STRICT_EQ(...) __VA_ARGS__
-#else
-#define FEAT_STRICT_EQ(...)
-#endif
-
 #define CORE_OBJECT_CONVERSIONS(OBJECT)                                        \
   /* Conversion from CoreObject pointer to JS object */                        \
   template <>                                                                  \
@@ -67,9 +59,10 @@
  * object (Core). CoreObjects can only be constructed from C++ side using
  * CoreObject::Create(). It expects exactly one argument of type External<Core>
  *
- * When creating multiple JS objects that corresponds to the same native
- * object, CoreObject::Create() will always return the same JS object - thus
- * ensuring strict equality (===) for the same native object.
+ * Each Create() call returns a NEW JS wrapper over the (shared) native object
+ * — JS `===` does NOT hold across wrappers of the same native object. (A
+ * strict-equality instance cache existed behind CORE_OBJECT_FEAT_STRICT_EQ,
+ * hardcoded off since inception; removed 2026-07-11, value-sweep Tier 4.)
  */
 template <class Obj, SmartPtrLike _Core>
 class CoreObject : public Napi::ObjectWrap<Obj> {
@@ -81,9 +74,7 @@ protected:
   class Local : public Shared<Local> {
   public:
     Napi::FunctionReference constructor;
-    FEAT_STRICT_EQ(Map<uintptr_t, Napi::Reference<Napi::Value>> instances);
-    Local(Napi::Function &fn)
-        : constructor(Napi::Persistent(fn)) FEAT_STRICT_EQ(, instances()) {}
+    Local(Napi::Function &fn) : constructor(Napi::Persistent(fn)) {}
     ~Local() { constructor.Reset(); }
   };
   /** Packed by Napi::External and passed to object constructor */
@@ -142,25 +133,13 @@ private:
   static inline Napi::Value CoreObjectCreate(Napi::Env env, Local::Ptr &local,
                                              Payload *p) {
     auto ext = Napi::External<Payload>::New(env, p);
-    auto obj = local->constructor.New({ext});
-    FEAT_STRICT_EQ(local->instances.set(uintptr(p->core), obj));
-    return obj;
+    return local->constructor.New({ext});
   }
 
 public:
-#define TRY_REUSE(INSTANCES, KEY)                                              \
-  if (INSTANCES.has(KEY)) {                                                    \
-    auto &ref = INSTANCES.get(KEY);                                            \
-    if (!ref.IsEmpty())                                                        \
-      return ref.Value();                                                      \
-    else                                                                       \
-      INSTANCES.erase(KEY);                                                    \
-  }
-
   static Napi::Value inline Create(Napi::Env env, Core &core) noexcept {
     try {
       auto local = getLocal(env);
-      FEAT_STRICT_EQ(TRY_REUSE(local->instances, uintptr(core)));
       return CoreObjectCreate(env, local,
                               new Payload{.local = local, .core = core});
     }
@@ -172,7 +151,6 @@ public:
     try {
       Core core(std::forward<Args>(args)...);
       auto local = getLocal(env);
-      FEAT_STRICT_EQ(TRY_REUSE(local->instances, uintptr(core)));
       return CoreObjectCreate(
           env, local, new Payload{.local = local, .core = std::move(core)});
     }
@@ -186,7 +164,6 @@ public:
       return Create(env, core);
     try {
       auto local = getLocal(env);
-      FEAT_STRICT_EQ(TRY_REUSE(local->instances, uintptr(core)));
       return CoreObjectCreate(env, local,
                               new Payload{.local = local, .core = core});
     }
@@ -202,7 +179,6 @@ public:
     try {
       Core core(std::forward<Args>(args)...);
       auto local = getLocal(env);
-      FEAT_STRICT_EQ(TRY_REUSE(local->instances, uintptr(core)));
       return CoreObjectCreate(
           env, local, new Payload{.local = local, .core = std::move(core)});
     }
@@ -280,7 +256,6 @@ protected:
       return;
     auto tag = str(static_cast<Obj *>(this));
     Obj::destruct(static_cast<Obj *>(this));
-    FEAT_STRICT_EQ(payload->local->instances.erase(address()));
     payload.reset();
     VERBOSE("Released: %s", tag.c_str());
   };
@@ -325,8 +300,6 @@ public:
       }
       JS_EXCEPT()
     }
-    FEAT_STRICT_EQ(auto ref = Napi::Weak(info.This());
-                   payload->local->instances.set(address(), ref);)
     try {
       Obj::construct(info, static_cast<Obj *>(this));
     }

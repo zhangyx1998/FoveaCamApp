@@ -406,6 +406,16 @@ public:
 protected:
   Stream<Frame::Ptr> *upstream() override { return upstream_.get(); }
 
+  void stop() override {
+    TransformStream::stop();
+    // Parked (active→parked edge, stream thread — the single-writer rule over
+    // buf_ holds): drop the reused full-frame conversion target instead of
+    // retaining it for the lease lifetime (value-sweep 2026-07-11
+    // idle-retention). Any in-flight ConvertedFrame still holds its own
+    // header ref on the data; the next unpark reallocates via convertFrame().
+    buf_.release();
+  }
+
   ConvertedFrame::Ptr transform(const Frame::Ptr &frame) override {
     const int64_t t = converterNowMs();
     const uint64_t d = upstreamDrops();
