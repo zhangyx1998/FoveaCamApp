@@ -5,6 +5,7 @@
 // -------------------------------------------------------
 import type { Awaitable, TypedArray, CoreObject } from "../types";
 import type { Size, Point2d, Point3d, Rect } from "core/Geometry";
+import type { ProbeSnapshot } from "core/Pipe";
 
 declare module "core/Vision" {
   /** Path to the resolved native module injected by JS loader */
@@ -142,6 +143,16 @@ declare module "core/Vision" {
     sigmaY?: number, // default: sigmaX
   ): T;
 
+  /** Async `gaussian` (calibration review 2026-07-11 #7): identical math, the
+   *  blur runs off the JS loop. Zero-copy input — do not mutate `mat` while
+   *  the promise is pending. */
+  export function gaussianAsync<T extends Mat>(
+    mat: T,
+    ksize: Size | number,
+    sigmaX?: number, // default: 2
+    sigmaY?: number, // default: sigmaX
+  ): Promise<T>;
+
   export function diff<T extends Mat>(
     a: T,
     b: T,
@@ -197,6 +208,17 @@ declare module "core/Vision" {
     confidence?: number, // default: 0.995
   ): Mat<Float64Array>;
 
+  /** Async `findHomography` (calibration review 2026-07-11 #7): identical
+   *  math/defaults, the RANSAC fit runs off the JS loop (inputs are copied). */
+  export function findHomographyAsync(
+    src_points: Point2d[],
+    dst_points: Point2d[],
+    method?: HomographyMethod, // default: "RANSAC"
+    ransacReprojThreshold?: number, // default: 3.0
+    maxIters?: number, // default: 2000
+    confidence?: number, // default: 0.995
+  ): Promise<Mat<Float64Array>>;
+
   /**
    * Performs the perspective transformation of 2D points using a homography matrix.
    * @param homography 3x3 homography matrix
@@ -251,10 +273,16 @@ declare module "core/Vision" {
       frame: Frame,
       scale?: number, // default 1.0
     ): Promise<MarkerDetectResults>;
+    /** Detection stream over a camera stream. `name` (B-24: graph node ids
+     *  ARE meter names — pass `nodeId.detect(serial)`) names the native
+     *  ThreadMeter so the detect node's stats fold into `perfSnapshot`; the
+     *  returned stream's `probe()` reads that meter out-of-loop (null once
+     *  the stream is released — weak capture, never extends its lifetime). */
     stream(
       stream: Stream<Frame>,
       scale?: number, // default 1.0
-    ): Stream<MarkerDetectResults>;
+      name?: string,
+    ): Stream<MarkerDetectResults> & { probe(): ProbeSnapshot | null };
     pattern(id: number): (0 | 1)[][] & Size;
   }
 

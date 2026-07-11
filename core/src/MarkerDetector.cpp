@@ -184,11 +184,18 @@ inline Result::Ptr detect(const Arv::Frame::Ptr &frame,
                           double scale = 1.0) {
   auto gray = frame->view(Arv::PixelFormat::Mono8);
   cv::Mat mat;
-  if (scale != 1.0)
+  if (scale != 1.0) {
+    // The resize output is a private buffer — in-place normalize is safe.
     cv::resize(gray, mat, {}, scale, scale, cv::INTER_AREA);
-  else
-    mat = gray;
-  cv::normalize(mat, mat, 0, 255, cv::NORM_MINMAX);
+    cv::normalize(mat, mat, 0, 255, cv::NORM_MINMAX);
+  } else {
+    // At scale 1.0 `gray` is a HEADER OVER THE LIVE SHARED Mono8 frame
+    // buffer — the old in-place normalize contrast-stretched the frame under
+    // concurrent preview/recording/capture consumers (data race + visible
+    // corruption; calibration review 2026-07-11 #8). Normalize into a
+    // DISTINCT mat (the heatmap-brick restructure precedent).
+    cv::normalize(gray, mat, 0, 255, cv::NORM_MINMAX);
+  }
   std::vector<int> ids;
   std::vector<std::vector<cv::Point2f>> corners;
   aruco::detectMarkers(mat, dict, corners, ids);

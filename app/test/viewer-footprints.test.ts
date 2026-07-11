@@ -142,11 +142,14 @@ describe("assignColors", () => {
 
 describe("vergencePlaneDepth / formatDepth", () => {
   it("computes a positive depth from a toe-in vergence + baseline", () => {
-    // aL.x - aR.x = vergence; d = baseline / sin(vergence).
+    // aL.x - aR.x = vergence; d = (baseline/2) / tan(vergence/2) — the EXACT
+    // symmetric-fixation inverse (calibration review 2026-07-11 #16 replaced
+    // the small-angle baseline/sin form; round-trip pinned in
+    // app/test/stereo-q.test.ts).
     const baseline = 200; // mm
     const vergence = 0.1; // rad toe-in
     const d = vergencePlaneDepth(vergence, 0, baseline)!;
-    expect(d).toBeCloseTo(baseline / Math.sin(vergence), 3);
+    expect(d).toBeCloseTo(baseline / 2 / Math.tan(vergence / 2), 3);
     expect(d).toBeGreaterThan(0);
   });
 

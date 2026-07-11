@@ -14,12 +14,13 @@
 import {
   MarkerDetector,
   cornerSubPix,
-  findHomography,
-  gaussian,
+  findHomographyAsync,
+  gaussianAsync,
   projectHomography,
   type MarkerDetectResult,
   type MarkerDetectResults,
 } from "core/Vision";
+import type { ProbeSnapshot } from "core/Pipe";
 import type { Camera, Frame } from "core/Aravis";
 import type { Point2d, Point3d } from "core/Geometry";
 import type { Pos } from "@lib/controller-codec";
@@ -102,10 +103,28 @@ export class MarkerTracker {
     targetId = 0,
     private readonly scale = 1.0,
     private readonly internal = false,
+    // B-24 meter name for the native detection thread (graph node ids ARE
+    // meter names). Defaults to `nodeId.detect(serial)` — exactly the id the
+    // sessions' registerGraphWiring rows use (calibrate-extrinsic 2026-07-11),
+    // so the folded stats key onto the registered detect nodes with no
+    // caller changes. Overridable for callers with a different node scheme.
+    private readonly meterName: string = nodeId.detect(camera.serial),
   ) {
     this.targetId = targetId;
     this.start();
   }
+
+  /** Out-of-loop probe of the native detection thread's meter (the shared
+   *  ProbeSnapshot shape — folds into `perfSnapshot.workloads` via
+   *  `registerNativeProbe`). Null before start and after stop (the native
+   *  closure weak-captures the stream). Sessions that register this tracker's
+   *  detect node feed it as `{ [nodeId.detect(serial)]: tracker.probe }`. */
+  get probe(): ProbeSnapshot | null {
+    return this.stream?.probe() ?? null;
+  }
+
+  /** The live native detection stream (held for `probe`); null once stopped. */
+  private stream: ReturnType<MarkerDetector["stream"]> | null = null;
 
   private async fitSubPix(
     frame: Frame,
@@ -120,8 +139,16 @@ export class MarkerTracker {
     if (this.internal) {
       // The blur feeds ONLY this refinement branch — the wide (external)
       // tracker computed and discarded it every tick (review 2026-07-11).
+      // ASYNC variants (review #7, the finding's remaining half): the
+      // full-frame blur and the up-to-3× RANSAC fits below used to run
+      // SYNCHRONOUSLY on the orchestrator loop every detection tick — they
+      // now run on the AsyncTask worker (gaussianAsync/findHomographyAsync,
+      // same math), leaving only O(points) JS arithmetic on the loop. The
+      // 89e462c bounds/degrade semantics are unchanged. (`gray` is the
+      // view's OWNED copy on the electron/cage build, so the async blur
+      // never reads freed frame memory.)
       const gray = await frame.view("Mono8");
-      const blurred = gaussian(gray, 11, 2.0);
+      const blurred = await gaussianAsync(gray, 11, 2.0);
       const [rows, cols] = blurred.shape;
       // Projected interior points EXTRAPOLATE and can land outside the
       // frame for an edge/tilted marker; cv::cornerSubPix ASSERTS on any
@@ -132,7 +159,7 @@ export class MarkerTracker {
       let fitObj = obj_pts;
       let fitImg = img_pts;
       for (let i = 0; i < iterations; i++) {
-        const H = findHomography(fitObj, fitImg);
+        const H = await findHomographyAsync(fitObj, fitImg);
         const proj = projectHomography(H, obj_pts);
         const inb: number[] = [];
         for (let j = 0; j < proj.length; j++) {
@@ -197,7 +224,11 @@ export class MarkerTracker {
   }
 
   private start(): void {
-    const stream = this.detector.stream(this.camera.stream, this.scale);
+    // Named meter (calibration review 2026-07-11, Lane F handoff): the native
+    // detector thread meters under the detect NODE id, so the session-
+    // registered graph rows stop rendering unmetered.
+    const stream = this.detector.stream(this.camera.stream, this.scale, this.meterName);
+    this.stream = stream;
     this.task = abortableNext(async (ctx) => {
       for (const detections of ctx.iter(stream)) {
         if (!detections) {
@@ -221,6 +252,7 @@ export class MarkerTracker {
   stop(): void {
     this.task?.abort();
     this.task = null;
+    this.stream = null; // probe reads null from here (native weak capture)
     this.lastFrame?.release();
     this.lastFrame = null;
   }

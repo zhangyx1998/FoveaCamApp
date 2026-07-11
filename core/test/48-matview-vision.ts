@@ -32,6 +32,13 @@ const V = Vision as unknown as {
   slice(m: Mat, r: { x: number; y: number; width: number; height: number }): Mat;
   cvtColor(m: Mat, code: string): Mat;
   gaussian(m: Mat, k: number, sigmaX?: number): Mat;
+  gaussianAsync(m: Mat, k: number, sigmaX?: number): Promise<Mat>;
+  findHomography(src: { x: number; y: number }[], dst: { x: number; y: number }[]): MatF32;
+  findHomographyAsync(
+    src: { x: number; y: number }[],
+    dst: { x: number; y: number }[],
+  ): Promise<MatF32>;
+  projectHomography(h: MatF32, pts: { x: number; y: number }[]): { x: number; y: number }[];
   diff(a: Mat, b: Mat, norm?: boolean): Mat;
   minMaxLoc(m: Mat): { min: { x: number; y: number; value: number }; max: { x: number; y: number; value: number } };
   matchTemplate(h: Mat, n: Mat, method?: string): Promise<MatF32>;
@@ -276,6 +283,79 @@ const W = 320, H = 240;
   // The zero-copy path must actually be cheaper than paying the input copy.
   assert(zeroCopy < withCopy, "zero-copy cvtColor beats copy-per-call");
   assert(zeroSlice < copySlice, "zero-copy slice beats copy-per-call");
+}
+
+// --- 11: async variants (calibration review 2026-07-11 #7) ---------------------
+// gaussianAsync / findHomographyAsync power marker-tracker's fitSubPix off the
+// orchestrator loop: conformance (same output as the sync forms) + a
+// loop-impact measurement (JS-thread-blocking ms per call, sync vs async).
+{
+  const src = mat(1440, 1080, 1, (x, y) => ((x * 13) ^ (y * 7)) % 256);
+  const syncBlur = V.gaussian(src, 11, 2.0);
+  const asyncBlur = await assertNoMutation(src, "gaussianAsync", () =>
+    V.gaussianAsync(src, 11, 2.0),
+  );
+  assert.equal(
+    Buffer.compare(Buffer.from(asyncBlur.buffer), Buffer.from(syncBlur.buffer)),
+    0,
+    "gaussianAsync output == gaussian output",
+  );
+
+  // A known homography, recovered from noise-free correspondences: both forms
+  // must agree (and reproject the source points exactly).
+  const srcPts = [
+    { x: 10, y: 12 }, { x: 400, y: 30 }, { x: 380, y: 300 }, { x: 20, y: 280 },
+    { x: 200, y: 150 }, { x: 105, y: 222 },
+  ];
+  const H0 = [1.02, 0.03, 5, -0.02, 0.98, -3, 1e-5, -2e-5, 1];
+  const apply = (p: { x: number; y: number }) => {
+    const w = H0[6]! * p.x + H0[7]! * p.y + H0[8]!;
+    return {
+      x: (H0[0]! * p.x + H0[1]! * p.y + H0[2]!) / w,
+      y: (H0[3]! * p.x + H0[4]! * p.y + H0[5]!) / w,
+    };
+  };
+  const dstPts = srcPts.map(apply);
+  const Hs = V.findHomography(srcPts, dstPts);
+  const Ha = await V.findHomographyAsync(srcPts, dstPts);
+  const projS = V.projectHomography(Hs, srcPts);
+  const projA = V.projectHomography(Ha, srcPts);
+  // Points cross the wire as float32 (Points2D = vector<Point2f>) — pixel
+  // coords ~400 px carry ~5e-5 px of quantization; bound at 1e-2 px.
+  for (let i = 0; i < srcPts.length; i++) {
+    assert(Math.abs(projA[i]!.x - dstPts[i]!.x) < 1e-2, "async H reprojects the fixture");
+    assert(Math.abs(projA[i]!.y - dstPts[i]!.y) < 1e-2, "async H reprojects the fixture");
+    assert(Math.abs(projA[i]!.x - projS[i]!.x) < 1e-3, "async ≈ sync homography");
+    assert(Math.abs(projA[i]!.y - projS[i]!.y) < 1e-3, "async ≈ sync homography");
+  }
+  console.log("48-matview-vision: async gaussian/findHomography conformance OK.");
+
+  // Loop-impact: ms the JS THREAD is blocked per call. The sync forms block
+  // for the full compute; the async forms block only for argument conversion
+  // (the compute runs on the AsyncTask worker).
+  const ITERS = 20;
+  const blockMs = async (fn: () => unknown | Promise<unknown>): Promise<number> => {
+    await fn(); // warm
+    let blocked = 0;
+    for (let i = 0; i < ITERS; i++) {
+      const t0 = performance.now();
+      const r = fn(); // sync call OR async call's synchronous prefix
+      blocked += performance.now() - t0;
+      await r;
+    }
+    return blocked / ITERS;
+  };
+  const syncG = await blockMs(() => V.gaussian(src, 11, 2.0));
+  const asyncG = await blockMs(() => V.gaussianAsync(src, 11, 2.0));
+  const syncH = await blockMs(() => V.findHomography(srcPts, dstPts));
+  const asyncH = await blockMs(() => V.findHomographyAsync(srcPts, dstPts));
+  console.log(
+    `48-matview-vision: BENCH loop-blocking per fitSubPix-shaped call — ` +
+      `gaussian(1440x1080) sync ${syncG.toFixed(2)} ms vs async ${asyncG.toFixed(3)} ms; ` +
+      `findHomography(RANSAC) sync ${syncH.toFixed(3)} ms vs async ${asyncH.toFixed(3)} ms ` +
+      `(per tracker tick: 1 blur + up to 3 fits moved off the loop)`,
+  );
+  assert(asyncG < syncG, "gaussianAsync blocks the loop less than gaussian");
 }
 
 console.log("48-matview-vision: MatView vision kernels passed.");

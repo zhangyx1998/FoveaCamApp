@@ -298,6 +298,29 @@ static FN(gaussian) {
   JS_EXCEPT(env.Undefined())
 }
 
+// ASYNC gaussian (calibration review 2026-07-11 #7): the marker tracker's
+// fitSubPix ran the full-frame blur SYNCHRONOUSLY on the orchestrator loop
+// every detection tick. Same math/args as `gaussian`; the work runs on the
+// AsyncTask worker, with the input riding a shared_ptr<MatView> (the
+// matchTemplate pattern — read-only, ref released on the JS thread by the
+// AsyncWorker; the caller must not mutate the input while pending).
+static FN(gaussianAsync) {
+  const auto env = info.Env();
+  try {
+    auto mat = std::make_shared<cv::MatView>(convert<cv::MatView>(info[0]));
+    const auto ksize = toSize(info[1]); // Ensure odd size
+    const auto sigmaX = optionalArgument<double>(info[2], 2);
+    const auto sigmaY = optionalArgument<double>(info[3], sigmaX);
+    auto task = [mat, ksize, sigmaX, sigmaY] {
+      cv::Mat blurred;
+      cv::GaussianBlur(*mat, blurred, ksize, sigmaX, sigmaY);
+      return blurred;
+    };
+    return AsyncTask<cv::Mat>::run(env, task, "gaussianAsync(" + tag(*mat) + ")");
+  }
+  JS_EXCEPT(env.Undefined())
+}
+
 inline cv::Mat mono(const cv::Mat &mat) {
   if (mat.channels() == 1)
     return mat;
@@ -455,12 +478,23 @@ static FN(calibrateCamera) {
     auto sensor_size = convert<cv::Size2i>(info[0]);
     auto img_points = convert<vector<Points2D>>(info[1]);
     auto obj_points = convert<vector<Points3D>>(info[2]);
+    // Termination (calibration review 2026-07-11 #13): the old default
+    // epsilon 0.01 (vs OpenCV's own DBL_EPSILON) could freeze the distortion
+    // coefficients after the first LM steps on well-posed sets. 1e-9 lets the
+    // solve actually converge; iterations bumped 30 → 50 so a tight epsilon
+    // has headroom to be the terminating condition (a solve this size is
+    // milliseconds per iteration — the AsyncTask keeps it off the loop).
     auto criteria = optionalArgument<cv::TermCriteria>(
         info[3],
-        {cv::TermCriteria::EPS + cv::TermCriteria::MAX_ITER, 30, 0.01});
+        {cv::TermCriteria::EPS + cv::TermCriteria::MAX_ITER, 50, 1e-9});
     auto task = [env, sensor_size, img_points, obj_points, criteria] {
       auto ret = CameraCalibration::create();
       ret->sensor_size = sensor_size;
+      // flags = 0 keeps k3 FREE. CALIB_FIX_K3 was considered (k3 is poorly
+      // constrained by few boards and can go wild) and DEFERRED: few-board
+      // solves are gated by the min-record count upstream (review wave,
+      // Lane G) instead of biasing well-sampled solves, and the persisted
+      // record format carries all 5 coefficients either way.
       ret->rms = cv::calibrateCamera(obj_points, img_points, sensor_size,
                                      ret->camera_matrix, ret->dist_coeffs,
                                      ret->rvecs, ret->tvecs, 0, criteria);
@@ -486,6 +520,30 @@ static FN(findHomography) {
                                             ransacReprojThreshold, noArray(),
                                             maxIters, confidence);
     return convert(env, homography);
+  }
+  JS_EXCEPT(env.Undefined());
+}
+
+// ASYNC findHomography (calibration review 2026-07-11 #7): fitSubPix ran up
+// to 3× RANSAC per tick on the orchestrator loop. Same args/defaults as the
+// sync form; inputs are plain point vectors (copied — no buffer aliasing).
+static FN(findHomographyAsync) {
+  const auto env = info.Env();
+  try {
+    auto src_points = convert<Points2D>(info[0]);
+    auto dst_points = convert<Points2D>(info[1]);
+    const auto method =
+        optionalArgument<EstimationMethod>(info[2], EstimationMethod::RANSAC);
+    const auto ransacReprojThreshold = optionalArgument<double>(info[3], 3.0);
+    const auto maxIters = optionalArgument<int>(info[4], 2000);
+    const auto confidence = optionalArgument<double>(info[5], 0.995);
+    auto task = [src_points, dst_points, method, ransacReprojThreshold,
+                 maxIters, confidence] {
+      return cv::findHomography(src_points, dst_points, method,
+                                ransacReprojThreshold, noArray(), maxIters,
+                                confidence);
+    };
+    return AsyncTask<cv::Mat>::run(env, task, "findHomographyAsync");
   }
   JS_EXCEPT(env.Undefined());
 }
@@ -573,33 +631,45 @@ static FN(depthFromProjection) {
     // Check if projected has 3 channels
     if (projected.channels() != 3)
       throw JS::Error(env, "Input to depthFromProjection must have 3 channels");
-    // Extract Z channel
+    // Extract Z channel. Edge handling (calibration review 2026-07-11 #16):
+    // pass 1 clamps FINITE Z into [near, far] and accumulates min/max over
+    // finite values ONLY (an Inf reaching min/max — possible with the default
+    // ±Inf clamp bounds — used to poison the normalization); pass 2 maps
+    // non-finite pixels into the DISPLAY range (NaN/−Inf → 0 = near end,
+    // +Inf → 255 = far end) instead of writing raw mm into a 0-255 image,
+    // and a zero span (flat scene / single depth) renders mid-scale instead
+    // of dividing 0/0 into NaN pixels. The finite path with finite bounds is
+    // byte-identical to the old behavior.
     cv::Mat z = cv::Mat(projected.rows, projected.cols, CV_32FC1);
-    // Clamp Z values to [near, far]
     double z_min = INFINITY, z_max = -INFINITY;
     for (int y = 0; y < projected.rows; ++y) {
       for (int x = 0; x < projected.cols; ++x) {
         float z_val = projected.at<cv::Vec3f>(y, x)[2];
-        if (z_val < near) {
-          z.at<float>(y, x) = near;
-        } else if (z_val > far) {
-          z.at<float>(y, x) = far;
-        } else {
-          z.at<float>(y, x) = z_val;
+        if (std::isfinite(z_val)) {
+          if (z_val < near)
+            z_val = static_cast<float>(near);
+          else if (z_val > far)
+            z_val = static_cast<float>(far);
+          // near/far may themselves be ±Inf (defaults) — only fold FINITE
+          // results into the normalization range.
+          if (std::isfinite(z_val)) {
+            z_min = std::min(z_min, static_cast<double>(z_val));
+            z_max = std::max(z_max, static_cast<double>(z_val));
+          }
         }
-        z_min = std::min(z_min, static_cast<double>(z.at<float>(y, x)));
-        z_max = std::max(z_max, static_cast<double>(z.at<float>(y, x)));
+        z.at<float>(y, x) = z_val;
       }
     }
+    const double span = z_max - z_min;
     for (int y = 0; y < z.rows; ++y) {
       for (int x = 0; x < z.cols; ++x) {
         float &z_val = z.at<float>(y, x);
-        if (std::isinf(z_val)) {
-          z_val = far;
-        } else if (std::isnan(z_val)) {
-          z_val = near;
+        if (std::isnan(z_val) || z_val == -INFINITY) {
+          z_val = 0; // near end of the display range
+        } else if (z_val == INFINITY) {
+          z_val = 255; // far end of the display range
         } else {
-          z_val = 255.0 * (z_val - z_min) / (z_max - z_min);
+          z_val = span > 0 ? 255.0 * (z_val - z_min) / span : 128;
         }
       }
     }
@@ -961,6 +1031,7 @@ void exportVisionNamespace(Napi::Env env, Napi::Object &exports) {
   EXPORT(exports, resize);
   EXPORT(exports, heatmap);
   EXPORT(exports, gaussian);
+  EXPORT(exports, gaussianAsync);
   EXPORT(exports, diff);
   EXPORT(exports, minMaxLoc);
   EXPORT(exports, matchTemplate);
@@ -968,6 +1039,7 @@ void exportVisionNamespace(Napi::Env env, Napi::Object &exports) {
   EXPORT(exports, cornerSubPix);
   EXPORT(exports, calibrateCamera);
   EXPORT(exports, findHomography);
+  EXPORT(exports, findHomographyAsync);
   EXPORT(exports, projectHomography);
   EXPORT(exports, wrapPerspective);
   EXPORT(exports, disparity);

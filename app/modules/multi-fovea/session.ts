@@ -63,6 +63,11 @@ import { RollingStats } from "@lib/util/rolling";
 
 const ORIGIN: Pos = { x: 0, y: 0 };
 
+/** Convergence distance for the center-steer toe-in (mm). A fixed, deliberate
+ *  mid-range default — the steer targets a wide-view pixel, not a measured
+ *  depth (calibration review 2026-07-11 #16 named the old inline literal). */
+const CENTER_STEER_CONVERGE_MM = 1000;
+
 function radians(deg: number): number {
   return (deg * Math.PI) / 180;
 }
@@ -285,7 +290,14 @@ export default function multiFoveaSession(
         return { angle: { x: 0, y: 0 }, volt: { L: ORIGIN, R: ORIGIN } };
       }
       const angle = triple.undistort.angular([center], false)[0];
-      const A = inverseTriangulate(angle, 200, 1000, radians(0));
+      // Per-triple PHYSICAL baseline (review #16 — was a hardcoded 200 mm);
+      // 200 stays as the no-stored-baseline fallback (the app-wide default).
+      const A = inverseTriangulate(
+        angle,
+        triple.baselineMm ?? 200,
+        CENTER_STEER_CONVERGE_MM,
+        radians(0),
+      );
       return {
         angle,
         volt: { L: triple.conv.A2V.L(A.l), R: triple.conv.A2V.R(A.r) },

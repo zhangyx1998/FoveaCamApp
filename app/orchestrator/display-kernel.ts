@@ -14,6 +14,7 @@
 import { RECT } from "@lib/util/geometry";
 import { makeMat } from "@lib/mat";
 import {
+  convertType,
   diff,
   disparity,
   depthFromProjection,
@@ -145,7 +146,16 @@ export function createDisplayKernel(initial: Record<string, unknown>): VisionKer
         DEPTH_BLOCK_SIZE,
         DEPTH_WINDOW.minDisparity,
       );
-      const proj = reprojectImageTo3D(d, scaledQ()!);
+      // StereoBM emits CV_16S FIXED-POINT disparity (4 fractional bits);
+      // reprojectImageTo3D does NOT divide — feed it raw and every depth is
+      // 16× compressed (calibration review 2026-07-11 #3). Convert to float
+      // ÷16 like the native brick's own convertTo (StereoStream.h). VALUES
+      // deliberately stay in MATCH-SPACE pixel units — u, v and Q's affine
+      // column are match-space too (scaledQ), so no ×DEPTH_MATCH_SCALE here;
+      // the brick multiplies by matchScale only because it PUBLISHES
+      // full-res-unit values to external consumers.
+      const df = convertType(d, "32F", 1 / 16);
+      const proj = reprojectImageTo3D(df, scaledQ()!);
       const z = depthFromProjection(proj, p.depthNear, p.depthFar);
       out.push({ name: "center", mat: heatmap(z) });
     }
