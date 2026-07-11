@@ -195,11 +195,20 @@ inline Result::Ptr detect(const Arv::Frame::Ptr &frame,
   if (ids.size() != corners.size())
     throw std::runtime_error("Detected ids and corners size mismatch");
   auto n = ids.size();
-  // Scale corners back to original size
-  if (scale != 1.0)
+  // Scale corners back to original size. CLAMP into the full-res rect: the
+  // sub-pixel corner of an edge-touching marker can rescale marginally past
+  // cols-1/rows-1, and downstream cornerSubPix ASSERTS on any out-of-rect
+  // point (rig crash 2026-07-11, cornersubpix.cpp:99).
+  if (scale != 1.0) {
+    const float xMax = static_cast<float>(gray.cols - 1);
+    const float yMax = static_cast<float>(gray.rows - 1);
     for (auto &corner_set : corners)
-      for (auto &pt : corner_set)
+      for (auto &pt : corner_set) {
         pt /= scale;
+        pt.x = std::min(std::max(pt.x, 0.0f), xMax);
+        pt.y = std::min(std::max(pt.y, 0.0f), yMax);
+      }
+  }
   // Save results
   auto results = Result::create(frame);
   results->detections.reserve(n);

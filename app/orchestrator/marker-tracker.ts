@@ -47,6 +47,8 @@ type CenterAbsolute = { x: number; y: number; width: number; height: number };
 export class MarkerTracker {
   targetId: number;
   private lostCount = 0;
+  /** First-failure latch for the fitSubPix degradation report (per tracker). */
+  private fitFailed = false;
   private _target: TrackerTarget | null = null;
   private _otherTargets: MarkerDetectResult[] = [];
   // Implicit per-yield ref, released when superseded or on `stop()` — same
@@ -110,19 +112,47 @@ export class MarkerTracker {
     result: MarkerDetectResult,
     iterations = 3,
   ): Promise<TrackerTarget> {
-    const gray = await frame.view("Mono8");
-    const blurred = gaussian(gray, 11, 2.0);
     const obj_pts = [...CORNER_OBJ_POINTS];
     if (this.internal)
       for (const { x, y } of getInternalObjectPoints(this.detector.pattern(result.id)))
         obj_pts.push({ x, y, z: 0.0 });
     let img_pts = bilinearInterpolate(result, obj_pts);
-    if (this.internal)
+    if (this.internal) {
+      // The blur feeds ONLY this refinement branch — the wide (external)
+      // tracker computed and discarded it every tick (review 2026-07-11).
+      const gray = await frame.view("Mono8");
+      const blurred = gaussian(gray, 11, 2.0);
+      const [rows, cols] = blurred.shape;
+      // Projected interior points EXTRAPOLATE and can land outside the
+      // frame for an edge/tilted marker; cv::cornerSubPix ASSERTS on any
+      // out-of-rect point (rig crash 2026-07-11, cornersubpix.cpp:99).
+      // Refine only the in-bounds subset, keep raw projections for the
+      // rest, and fit the next H from the refined pairs alone (exact-fit
+      // extrapolations would only anchor the fit to its previous estimate).
+      let fitObj = obj_pts;
+      let fitImg = img_pts;
       for (let i = 0; i < iterations; i++) {
-        const H = findHomography(obj_pts, img_pts);
+        const H = findHomography(fitObj, fitImg);
         const proj = projectHomography(H, obj_pts);
-        img_pts = await cornerSubPix(blurred, proj);
+        const inb: number[] = [];
+        for (let j = 0; j < proj.length; j++) {
+          const p = proj[j]!;
+          if (p.x >= 0 && p.x <= cols - 1 && p.y >= 0 && p.y <= rows - 1)
+            inb.push(j);
+        }
+        // findHomography needs >= 4 correspondences; fewer usable points
+        // means the marker is leaving the frame — keep the current fit.
+        if (inb.length < 4) break;
+        const refined = await cornerSubPix(
+          blurred,
+          inb.map((j) => proj[j]!),
+        );
+        img_pts = proj.slice();
+        inb.forEach((j, k) => (img_pts[j] = refined[k]!));
+        fitObj = inb.map((j) => obj_pts[j]!);
+        fitImg = refined;
       }
+    }
     return Object.assign(img_pts.slice(0, 4), {
       id: result.id,
       width: result.width,
@@ -136,8 +166,25 @@ export class MarkerTracker {
     let target: TrackerTarget | null = null;
     const others: MarkerDetectResult[] = [];
     for (const d of detections) {
-      if (target === null && d.id === this.targetId) target = await this.fitSubPix(detections.frame, d);
-      else others.push(d);
+      if (target === null && d.id === this.targetId) {
+        // A refinement failure must DEGRADE, not kill the tracker loop —
+        // pre-fix, one cv assertion rejected `this.task` and the tracker
+        // silently died for the rest of the session (rig crash 2026-07-11).
+        // Treat it as a lost tick; surface the first failure per tracker.
+        try {
+          target = await this.fitSubPix(detections.frame, d);
+        } catch (e) {
+          if (!this.fitFailed) {
+            this.fitFailed = true;
+            report(
+              "marker-tracker",
+              `subpix refinement failed (degrading to detection corners): ${
+                e instanceof Error ? e.message : String(e)
+              }`,
+            );
+          }
+        }
+      } else others.push(d);
     }
     if (target !== null) {
       this._target = target;
