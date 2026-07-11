@@ -73,6 +73,11 @@ export interface LinkProbe {
     highWater: number;
     /** False once released or the producer stream terminated. */
     open: boolean;
+    /** Latest links only: the channel slot currently pins an undelivered
+     *  payload. With take-semantics this is true only between a write and
+     *  its readout — a drained link on a stalled upstream reads false
+     *  (Leaky retention fix, 2026-07-11). Always false for fifo/ring. */
+    held: boolean;
 }
 
 /**

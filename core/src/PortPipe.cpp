@@ -198,6 +198,7 @@ public:
       o.Set("dropped", Number::New(env, static_cast<double>(s.dropped)));
       o.Set("highWater", Number::New(env, static_cast<double>(s.highWater)));
       o.Set("open", Boolean::New(env, s.open));
+      o.Set("held", Boolean::New(env, s.held));
       return o;
     }
     JS_EXCEPT(env.Undefined())

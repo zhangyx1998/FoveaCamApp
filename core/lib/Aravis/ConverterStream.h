@@ -129,16 +129,18 @@ class LeakyTapChannel : public TapChannel {
 public:
   void write(OwnedFrame::Ptr &frame) override { leaky_.write(frame); }
   bool poll(OwnedFrame::Ptr &out, bool wait) override {
-    if (!leaky_.next(cursor_, wait)) // latest-wins: only a NEW ptr counts
-      return false;
-    out = cursor_;
-    return out != nullptr;
+    // `take` MOVES the slot out — this channel is single-consumer, and the
+    // old cursor+`next` readout left the last frame pinned in BOTH the slot
+    // and the cursor until the next write: an upstream stall held a full
+    // OwnedFrame (deep-copied Mat, MBs) indefinitely (Leaky retention fix,
+    // 2026-07-11). Latest-wins dedupe needs no cursor — the slot is null
+    // after readout.
+    return leaky_.take(out, wait);
   }
   void close() override { leaky_.close(); }
 
 private:
   Threading::Leaky<OwnedFrame> leaky_;
-  OwnedFrame::Ptr cursor_; // consumer-thread latest-wins cursor
 };
 
 class FifoTapChannel : public TapChannel {

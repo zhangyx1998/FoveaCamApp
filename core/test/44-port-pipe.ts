@@ -197,10 +197,16 @@ async function waitFor(pred: () => boolean, ms = 8000): Promise<void> {
   const seqs = sink.seqs();
   for (let i = 1; i < seqs.length; i++)
     assert(seqs[i]! > seqs[i - 1]!, "latest delivery is monotonic (stale shed, never reordered)");
+  // Leaky retention fix (2026-07-11): with take-semantics the channel slot is
+  // MOVED out on readout, so a drained link over a STALLED upstream must not
+  // pin the last payload — `held` reads false once delivery caught up (the
+  // pre-fix cursor+`next` readout kept it true until the next write).
+  await waitFor(() => !link.probe().held);
+  assert.equal(link.probe().held, false, "drained latest link pins no payload on upstream stall");
   link.release();
   sink.release();
   src.release();
-  console.log(`44-port-pipe: latest sheds (delivered ${p.delivered}/40, newest landed) OK.`);
+  console.log(`44-port-pipe: latest sheds (delivered ${p.delivered}/40, newest landed), drained slot unpinned OK.`);
 }
 
 // --- 4: RING — drop-oldest accounting -------------------------------------------

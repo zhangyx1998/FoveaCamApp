@@ -75,6 +75,11 @@ struct LinkStats {
   uint64_t dropped = 0;
   size_t highWater = 0;
   bool open = false;
+  // Latest links only: whether the channel slot currently pins a payload.
+  // With `take` semantics this is true only between a write and its readout —
+  // a drained link on a stalled upstream reads false (the Leaky retention
+  // fix's regression surface, 2026-07-11).
+  bool held = false;
 };
 
 /** The erased link — owns the channel, the producer subscription and the
@@ -200,6 +205,7 @@ public:
       // Latest-wins: anything written but never delivered was superseded.
       s.dropped = s.written > s.delivered ? s.written - s.delivered : 0;
       s.highWater = 1;
+      s.held = leaky_->holds(); // lock-free probe (retention regression)
       break;
     case LinkOptions::Type::Fifo:
       s.type = "fifo";
@@ -247,11 +253,15 @@ private:
     try {
       switch (type) {
       case LinkOptions::Type::Latest: {
+        // `take` moves the slot out and the local is reset after delivery —
+        // neither the channel nor this thread pins the last payload while
+        // blocked on a stalled upstream (Leaky retention fix, 2026-07-11).
         P dst = nullptr;
         while (true)
-          if (leaky_->next(dst, /*wait=*/true) && dst) {
+          if (leaky_->take(dst, /*wait=*/true) && dst) {
             delivered_.fetch_add(1, std::memory_order_relaxed);
             (*sink_)(dst);
+            dst.reset();
           }
         break;
       }
@@ -263,8 +273,10 @@ private:
         }
         break;
       case LinkOptions::Type::Ring: {
-        P item;
-        while (ring_->read(item)) {
+        while (true) {
+          P item; // per-iteration scope — released while blocked on read
+          if (!ring_->read(item))
+            break;
           delivered_.fetch_add(1, std::memory_order_relaxed);
           (*sink_)(item);
         }
