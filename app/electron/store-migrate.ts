@@ -4,20 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Main-side driver for the store-schema migration framework
-// (@lib/store-migrations). Runs at boot, BEFORE any store client is served, so
-// no renderer/orchestrator observes a half-migrated tree. Wires the pure
-// framework to (a) the real store fs primitives (`orchestrator/store.ts`, same
-// on-disk codec/layout) plus a file-mtime `stat`, and (b) a GIT snapshot
-// boundary over the store repo (`<DATA>/store` — its OWN git repo, gitignored
-// from the code repo).
-//
-// The store repo is auto-snapshotted around a migration: a commit BEFORE (the
-// pre-migration state, verbatim) and a commit AFTER (the migrated result). Push
-// is best-effort — offline must NEVER block boot (log + continue). A store that
-// is not a git repo skips snapshots with a warning but still migrates. A
-// migration FAILURE is logged and does not crash boot (the pre-migration
-// snapshot is the safety net).
+// Main-side driver for the store-schema migration framework. Runs at boot BEFORE
+// any store client is served (no client observes a half-migrated tree), wiring
+// the pure framework to the real store fs + a GIT snapshot boundary over the
+// store repo (a commit before + after each migration — the pre-migration commit
+// is the safety net). Push is best-effort; offline / non-repo / migration
+// failure all log + continue, never crash boot.
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";

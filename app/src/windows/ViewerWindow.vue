@@ -4,21 +4,11 @@ This source code is licensed under the MIT license.
 You may find the full license in project root directory.
 --------------------------------------------------- -->
 <!--
-  STANDALONE recorder viewer window — multi-track correlation UI
-  (viewer-timeline.md, built on standalone-viewer-and-fcap). Playback data
-  (MCAP read + core-Vision decode + timestamp-paced playback) runs on a worker
-  thread INSIDE this window's process (src/viewer/worker.ts); the orchestrator
-  is never involved.
-
-  Layout (rulings 3/6/9): an UPPER preview panel of tiles — every ENABLED
-  stream whose block spans the playhead, in Z order (master track first, then
-  top→bottom) — over a LOWER timeline panel of tracks/blocks (a read-only
-  video-editor). A draggable divider splits them; the timeline collapses to an
-  up-arrow drawer. Blocks drag between tracks (snap; collision refused), focus +
-  `v` toggles a stream, a per-pair "3D View" dropdown merges L/R. ALL UI state
-  persists to `<file>.fcap.ui.json` (worker-side, ruling 8/10/11); the `.fcap`
-  is read-only. Pure model + algorithms live in src/viewer/timeline.ts and
-  src/viewer/sidecar.ts (unit-tested); this component is the wiring + DOM.
+  STANDALONE recorder viewer window — the wiring + DOM for the multi-track
+  correlation UI: an upper preview panel of playhead-spanning tiles over a lower
+  read-only timeline of tracks/blocks. Pure model + algorithms live in
+  src/viewer/timeline.ts + sidecar.ts; playback runs in the engine.
+  spec: docs/spec/viewer.md#timeline (engine topology: #topology)
 -->
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";

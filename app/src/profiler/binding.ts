@@ -4,17 +4,9 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Pure presentation helpers for the profiler's per-instance binding
-// (orchestrator-lifecycle-and-exit §"Profiler per-instance binding"). A
-// profiler window pins AT OPEN to exactly one orchestrator instance (the app
-// instance alive then) — the binding rides the URL (`instance` + `session`
-// params, @lib/windows) and is immutable for the window's life: when its
-// instance dies the profiler freezes with its accumulated data and NEVER
-// re-attaches to a newer instance (ruling 2).
-//
-// Kept Vue-free + side-effect-free (type-only report import) so the title/
-// subtitle + session-end formatting is unit-testable without a renderer
-// (test/profiler-binding.test.ts).
+// PURE presentation helpers for the profiler's per-instance binding (Vue-free,
+// side-effect-free, unit-tested): title/subtitle + session-end formatting.
+// spec: docs/spec/profiler-graph.md#binding (lifecycle: windows.md#profiler-binding)
 
 import type { OrchestratorDownReport } from "@lib/orchestrator/client";
 

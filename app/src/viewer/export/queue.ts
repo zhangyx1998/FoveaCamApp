@@ -4,18 +4,10 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// The viewer export QUEUE state machine (viewer-export.md spec 10/11). PURE and
-// side-effect-free: it owns job records + the serial/parallel dispatch policy
-// and RETURNS the ids that should now START — the engine layer (export-runner)
-// performs the actual ffmpeg spawn / abort. Kept off Electron + ffmpeg so the
-// dispatch + abort transitions are exhaustively unit-tested
-// (test/viewer-export.test.ts).
-//
-// Policy (spec 10): parallel OFF (default) ⇒ at most ONE running job; new
-// requests queue and dispatch when the running one finishes. Parallel ON ⇒ every
-// queued job dispatches immediately. Flipping the flag ON dispatches the backlog;
-// flipping OFF never pauses a running job (they run to completion, new ones
-// serialize behind them).
+// PURE viewer export QUEUE state machine (Electron/ffmpeg-free, unit-tested):
+// owns job records + the serial/parallel dispatch policy, RETURNS the ids to
+// start; the runner performs the ffmpeg spawn/abort.
+// spec: docs/spec/viewer.md#export
 
 import type { ExportRequest, ExportJobStatus, ExportState } from "./types.js";
 

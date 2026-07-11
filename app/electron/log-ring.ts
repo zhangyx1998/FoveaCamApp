@@ -4,18 +4,10 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Crash-diagnostics ring buffer (orchestrator-lifecycle-and-exit §"Crash
-// diagnostics"). The orchestrator instance is forked with piped stdio (main.ts
-// `forkInstance`); every chunk is TEE'd faithfully to the parent's
-// stdout/stderr (so the dev-terminal experience is unchanged) while this ring
-// keeps a bounded, line-oriented tail of the last output. On a non-clean exit
-// main flushes the ring to `<userData>/crash-logs/…` and inlines a short tail
-// into the typed `orchestrator:down` report.
-//
-// Deliberately PURE (no Electron, no fs, no `process`): the tee is an injected
-// callback and the ring only accounts lines/bytes, so the whole thing is
-// unit-testable (test/log-ring.test.ts) — chunk→line splitting incl. partial
-// lines, cap eviction by both lines and bytes, and faithful tee passthrough.
+// PURE crash-diagnostics ring buffer (no Electron/fs/process — the tee is an
+// injected callback, unit-tested): keeps a bounded line-oriented tail of the
+// orchestrator's piped stdio while tee'ing each raw chunk to the parent stream.
+// spec: docs/spec/windows.md#crash-diagnostics
 
 /** A faithful passthrough sink — receives the RAW chunk (never a reassembled
  *  copy) so the parent terminal sees exactly the child's bytes, unbuffered. */

@@ -4,24 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Window manifest for the dev-mode full-restart refresh (docs/history/refactor/
-// multi-window.md req. 6 / §4): Ctrl/Cmd-Shift-R persists {class, landing
-// URL, bounds} for every open window, relaunches the whole app (main +
-// orchestrator), and startup consumes the manifest to restore the exact
-// pre-refresh layout.
-//
-// Persistence rides the store's file layout (`<userData>/store/
-// window-manifest.json`, atomic temp+rename, same `store-codec`), but is
-// read/written by the MAIN process directly rather than through the
-// orchestrator store-hub: at persist time the orchestrator is about to be
-// killed, and at consume time it may not have booted yet — the store-hub
-// round-trip doesn't exist at either end of the restart.
-//
-// `planFromManifest` (pure, unit-tested) turns a loaded manifest into the
-// spawn plan, enforcing the same invariants the window manager enforces
-// live: at most one app window, the welcome singleton (profilers are 0..N —
-// one per instance), unknown classes/apps dropped, and the welcome fallback
-// when nothing valid remains.
+// Window manifest for the dev full-restart refresh: persists {class, URL,
+// bounds} per window, then restores the layout after relaunch. Read/written by
+// MAIN directly (not the store-hub — the orchestrator is dead at persist time
+// and unborn at consume time). `planFromManifest` (pure, unit-tested) enforces
+// the same invariants as the live window manager.
+// spec: docs/spec/windows.md#manifest
 
 import { existsSync } from "node:fs";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";

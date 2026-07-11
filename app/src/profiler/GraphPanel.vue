@@ -4,21 +4,13 @@
  * You may find the full license in project root directory.
  --------------------------------------------------------- -->
 
-<!-- Profiler pipeline graph (A-33, real-2 objective 1). Renders a
-     `GraphTopology` (C-24 contract) as a live node graph via cytoscape +
-     dagre (external lib granted; fully local, bundled by vite). Updates are
-     INCREMENTAL: elements are diffed by id — a stats-only refresh mutates
-     `data()` in place (labels/classes update, positions untouched); dagre
-     re-layout runs ONLY when the (id, epoch)/edge membership actually
-     changes, so the periodic poll never re-scrambles the layout.
-
-     Interactions (D-item-3): nodes are user-draggable and re-layouts NEVER
-     stomp a dragged node (dragfree positions are captured and re-applied —
-     pure logic in graph-interactions.ts); zoom is ctrl+wheel ONLY (macOS
-     pinch = ctrl+wheel; plain scroll keeps scrolling the page); whitespace
-     drag pans; the canvas is vertically resizable (persisted) and can go
-     fullscreen; hovering an edge shows its full flow detail (tx/rx/worst
-     gap). -->
+<!-- Profiler pipeline graph — renders a `GraphTopology` as a live cytoscape +
+     dagre node graph (both bundled by vite). Elements diff by id; dagre
+     re-layout runs only on membership change so the periodic poll never
+     re-scrambles positions. Draggable nodes, ctrl+wheel zoom, pan, resize,
+     fullscreen, edge-hover detail — the pure logic is in graph-view.ts +
+     graph-interactions.ts; this is the cytoscape wiring.
+     spec: docs/spec/profiler-graph.md -->
 
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref, watch } from "vue";

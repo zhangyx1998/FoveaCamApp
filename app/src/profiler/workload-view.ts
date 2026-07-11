@@ -4,23 +4,11 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Pure snapshot→view-model transform for the profiler's uniform workload
-// sections (docs/history/refactor/workload-metering.md §4). Takes the current and
-// previous `perfSnapshot.workloads` records (the profiler already polls
-// `system.perfSnapshot` at 1 Hz and keeps the previous one for its channel
-// rate table — same inputs, no new wire messages) and derives *interval*
-// utilization/rates by diffing the two, falling back to the meter's own
-// cumulative numbers when there is nothing to diff against.
-//
-// Why diff at all: `metering.ts`'s snapshot rates are cumulative since
-// registration (T10-style — honest, but slow-moving: a registry loop that ran
-// all night averages the night in). A live profiler wants "what happened in
-// the last poll tick." Both derive from the same counters; this transform
-// just chooses the window.
-//
-// Pure and Vue-free by design (the DoD's testability requirement): time comes
-// from each snapshot's own `window.snapshotAt`, never `Date.now()`; inputs
-// are plain data; output is plain data. Vue only renders the result.
+// PURE snapshot→view-model transform for the profiler's workload sections
+// (Vue-free, unit-tested): interval utilization/rates by diffing the current +
+// previous `perfSnapshot.workloads`, falling back to cumulative when there is
+// nothing to diff. Time comes from each snapshot's `snapshotAt`, never Date.now.
+// spec: docs/spec/profiler-graph.md#workloads
 
 import type { WorkloadSnapshot } from "@lib/orchestrator/contracts";
 

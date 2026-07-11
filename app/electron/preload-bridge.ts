@@ -4,18 +4,14 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Shared `foveaBridge` installer for every preload entry. Preloads run in
-// their own isolated JS context regardless of the window's contextIsolation
-// setting; the orchestrator MessagePort can't cross `contextBridge` as a
-// function argument (structured-clone limits on the bridge itself), so it's
-// handed into the main world via `window.postMessage` —
-// `lib/orchestrator/client.ts` listens for it on the DOM `message` event.
-//
-// Sharing this module across preload entries is safe ONLY because each entry
-// is bundled by its own build pass (vite.config.ts `preloadBuild()` — one
-// low-level vite-plugin-electron item per entry), so it gets inlined into
-// each output. A single multi-entry rollup pass would split this file into a
-// sibling chunk, and sandboxed preloads cannot require sibling chunks (V11).
+// Shared `foveaBridge` installer for every preload entry. The orchestrator
+// MessagePort can't cross `contextBridge` as an argument (structured-clone
+// limits), so it's handed to the main world via `window.postMessage`
+// (client.ts listens on the DOM `message` event).
+// V11: sharing this module works ONLY because each preload entry is bundled by
+// its OWN build pass (vite `preloadBuild()`) so it inlines here — a multi-entry
+// rollup pass would split it into a sibling chunk, and sandboxed preloads cannot
+// require sibling chunks.
 import { contextBridge, ipcRenderer } from "electron";
 import type {
   FoveaBridge,

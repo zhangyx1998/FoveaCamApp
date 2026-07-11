@@ -4,22 +4,11 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// UNDISTORT remap-map generation for the viewer video export (viewer-export.md
-// spec 4). The viewer cannot use core (the no-core exception is decode only), so
-// undistortion is computed as PURE TS math from the recording's embedded camera
-// matrix + distortion coefficients (the `fovea:wide-camera` metadata singleton,
-// multi-fovea-recording ruling 2 — only the WIDE/center stream carries it; fovea
-// streams have per-frame dynamic maps and get the disabled-with-hint path).
-//
-// The maps are the standard OpenCV `initUndistortRectifyMap` (identity
-// rectification, same K as the new camera matrix): for each DEST pixel we apply
-// the Brown-Conrady FORWARD distortion model to find the SOURCE pixel to sample.
-// ffmpeg's `remap` filter then samples the recorded (distorted) frame through
-// two 16-bit PGM maps (one X, one Y); out-of-bounds samples are FILLED (→ alpha
-// 0 when transparency is on, black otherwise — spec 5).
-//
-// Node-free (Float32Array + a byte writer); the PGM bytes are a plain Uint8Array
-// so this stays unit-testable off Electron.
+// PURE TS undistort remap-map generation for the viewer export (Node-free,
+// unit-tested; the viewer has no core): standard OpenCV `initUndistortRectifyMap`
+// from the recording's embedded camera matrix, emitted as two 16-bit PGM maps
+// for ffmpeg's `remap`.
+// spec: docs/spec/viewer.md#export
 
 /** A 3×3 pinhole camera matrix, row-major. */
 export type CameraMatrix = readonly [

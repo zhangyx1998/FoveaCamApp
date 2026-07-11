@@ -4,20 +4,11 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Viewer UI-state SIDECAR (viewer-timeline.md ruling 8). ALL viewer UI state
-// persists to `<recording>.fcap.ui.json` NEXT TO the container — the `.fcap`
-// itself is opened READ-ONLY (source.ts uses fs flag "r"); the sidecar is the
-// only file the viewer writes. This module is PURE (node-free: types + JSON +
-// validation) so the round-trip and corrupt-file fallback are unit-tested with
-// no fs; the worker owns the debounced read/write (worker.ts, node fs).
-//
-// Robustness (ruling 10 amendment): ABSENT → silently initialize (nothing to
-// lose). PRESENT-but-corrupt or channel-MISMATCHED → the caller CONFIRMS with
-// the user before reinitializing/overwriting (never silently discard a layout).
-// `classifySidecar` distinguishes absent / ok / corrupt at the file level;
-// channel-mismatch is decided in the UI (it needs the container's channels).
-// Unknown keys are dropped and every field is type-checked + clamped so a
-// hand-edited or version-skewed-but-parseable file can't wedge the UI.
+// PURE viewer UI-state sidecar (node-free: types + JSON + validation,
+// unit-tested): all viewer UI state persists to `<recording>.fcap.ui.json`, the
+// only file the viewer writes (the `.fcap` is read-only). `classifySidecar`
+// distinguishes absent/ok/corrupt; every field is type-checked + clamped.
+// spec: docs/spec/viewer.md#sidecar
 
 import type { ThreeDMode } from "./timeline.js";
 import { THREE_D_MODES } from "./timeline.js";

@@ -4,22 +4,13 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// The renderer's entire main-process surface once `contextIsolation: true` /
-// `nodeIntegration: false` land (docs/history/refactor/orchestrator.md §7.1 T5 —
-// T2's spike). Every method here is a thin `ipcRenderer` wrapper exposed via
-// `contextBridge.exposeInMainWorld("foveaBridge", ...)` in `preload.ts`; the
-// orchestrator `MessagePort` itself can't cross a bridge function call
-// (structured-clone limits), so it's handed off separately via
-// `window.postMessage` — see `preload.ts`'s `orchestrator:port` listener and
-// `lib/orchestrator/client.ts`'s `connect()`.
-//
-// Kept intentionally narrow (path-string joins + existence/writability
-// checks, not a general fs passthrough) even though none of it is a real
-// security boundary today (the orchestrator process still trusts whatever
-// path the renderer sends) — smaller surface is just less to keep in sync.
-// TYPE-ONLY import (erased at build — keeps this module runtime-value-free so it
-// never lands in the self-contained CJS preload bundle, V11). The crash-report
-// payload is defined renderer-side (its primary consumer) and shared here.
+// The renderer's entire main-process surface (contextIsolation): each method is
+// a thin `ipcRenderer` wrapper exposed as `foveaBridge` in preload. The
+// orchestrator `MessagePort` can't cross a bridge call (structured-clone limits)
+// — it's handed off separately via `window.postMessage` (preload's
+// `orchestrator:port` listener + client.ts `connect()`). Kept narrow on purpose.
+// TYPE-ONLY imports below stay erased at build so this module contributes no
+// runtime value to the self-contained CJS preload bundle (V11).
 import type { OrchestratorDownReport } from "@lib/orchestrator/client";
 import type { ProbeCamera } from "@lib/orchestrator/probe";
 import type { PatchOp } from "@lib/store-patch";

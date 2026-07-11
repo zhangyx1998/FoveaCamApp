@@ -4,28 +4,13 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Disposable orchestrator instances — the per-app-instance lifecycle state
-// machine (docs/proposals/orchestrator-lifecycle-and-exit.md §"RE-AMENDED
-// ruling 2"). REPLACES the old singleton orchestrator: opening an app forks a
-// FRESH orchestrator process; closing/switching the app disposes it (bounded
-// drain-and-quiesce → ack/timeout → kill → janitor). Teardown errors die with
-// the process, so the Welcome launcher — which depends on NOTHING in a dying
-// instance — never wedges.
-//
-// This module is deliberately Electron-free: the real fork/port/janitor wiring
-// is INJECTED (main.ts) exactly like `window-manager.ts` and `viewer-engine.ts`
-// so the transitions are unit-testable with fakes (test/orchestrator-
-// instances.test.ts). It owns:
-//   • a typed instance table {id, kind, proc, owned windows, phase} — this wave
-//     only CONSUMES `hardware`, but `non-hardware` (the viewer's future compute
-//     instance) types + the ≤1-hardware-holder GATE land ready here.
-//   • the hardware-clear GATE: a fresh hardware instance forks immediately, but
-//     main withholds "hardware-clear" until the PREVIOUS hardware instance is
-//     confirmed dead AND its janitor sweep (if any) completed — Aravis is
-//     per-process exclusive, so acquisition must serialize even while spin-up
-//     (core load + init) overlaps the old instance's teardown.
-//   • death classification (reused `classifyOrchestratorExit`) + janitor on
-//     every non-clean path (hardware-quiescence invariant, per instance).
+// Disposable per-app-instance lifecycle state machine (Electron-free — the
+// fork/port/janitor wiring is INJECTED from main.ts, unit-tested with fakes).
+// Owns: the typed instance table + ≤1-hardware gate; the hardware-clear GATE
+// (withhold "hardware-clear" until the previous hardware instance is confirmed
+// dead + swept, since Aravis acquisition must serialize even as spin-up overlaps
+// the old teardown); death classification + janitor on every non-clean path.
+// spec: docs/spec/windows.md#instances
 
 import {
   classifyOrchestratorExit,

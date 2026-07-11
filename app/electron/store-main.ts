@@ -4,22 +4,13 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// MAIN is the single config-store authority (docs/proposals/config-store-main-
-// authority.md). This wires the transport-free `StoreAuthority` core to the two
-// client transports:
-//   • renderer windows  — over ipcMain (structured clone; bigint/Date/TypedArray
-//     survive). `Store` (app/lib/store.ts) reads (subscribing), patches, clears,
-//     lists, and read-onces. Each interested webContents gets ONE authority
-//     listener per path that pushes `store:changed`; the originator of a patch is
-//     never echoed its own change. Subscriptions self-clean on `destroyed`.
-//   • orchestrator instances + the probe — over each child's `parentPort`, via
-//     the `store:req`/`store:res` + `store:changed` protocol in
-//     `@lib/store-proxy`. `attachProcess` returns a message handler main routes
-//     the child's `store:*` messages into, and a `detach` for process exit.
-//
-// The fs backend is `app/orchestrator/store.ts` reused verbatim (same on-disk
-// JSON codec + layout — zero migration); its store root reads `FOVEA_DATA_PATH`
-// lazily, which main sets at body top.
+// Wires the transport-free `StoreAuthority` core to its two client transports:
+// renderer windows over ipcMain (each webContents gets one listener per path
+// pushing `store:changed`; a patch originator is never echoed; subscriptions
+// self-clean on `destroyed`), and orchestrator instances + probe over each
+// child's `parentPort` (`@lib/store-proxy`). Fs backend is `orchestrator/store.ts`
+// reused verbatim.
+// spec: docs/spec/windows.md#config-store
 
 import type { WebContents } from "electron";
 import {

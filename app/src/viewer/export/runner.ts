@@ -4,18 +4,10 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// The viewer export RUNNER (viewer-export.md pipeline) — hosted by the viewer
-// ENGINE utilityProcess (worker.ts), the ONE process that already random-
-// accesses `.fcap` frames + owns the core-backed decoders (the no-core exception
-// is the engine, never the renderer). It drives the pure `ExportQueue`'s
-// dispatch decisions with real ffmpeg child processes: decode → normalize to raw
-// `rgba` → pipe into the resolved ffmpeg binary (optionally through a remap
-// filter for undistort) → parse progress from the frames it feeds → SIGKILL +
-// unlink on abort.
-//
-// The queue / codec-table / arg-builder / fps / undistort / normalize logic is
-// all pure + unit-tested; THIS module is the impure edge (child_process, fs) and
-// is exercised by the ffmpeg smoke test.
+// The viewer export RUNNER — the impure edge (child_process, fs), hosted by the
+// engine: drives the pure ExportQueue with real ffmpeg processes (decode →
+// normalize → pipe → parse progress → SIGKILL+unlink on abort).
+// spec: docs/spec/viewer.md#export
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtemp, writeFile, rm, unlink } from "node:fs/promises";

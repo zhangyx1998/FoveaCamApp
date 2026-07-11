@@ -4,28 +4,9 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// `.fcap`/`.fovea` read layer for the STANDALONE viewer (standalone-viewer-
-// and-fcap ruling 1): runs on the viewer window's own worker thread — never
-// in the orchestrator (the C-8 viewer session retired with the ruling).
-// Container format per docs/history/refactor/recorder-container.md §2b. One
-// interface, two implementations:
-//
-// - **Indexed** (the normal path): `McapIndexedReader` over chunked async
-//   `FileHandle` reads — seeks and time-range queries served by the chunk
-//   index, no full-file scan.
-// - **Streaming fallback** (footerless/crash-truncated files — the B-4
-//   finding says readers MUST carry this): a sequential `McapStreamReader`
-//   scan recovers every complete record that was flushed; the initial scan
-//   collects channels + time bounds, and each `messages()`/`latestBefore()`
-//   call rescans (O(file), acceptable for the crash-recovery edge case).
-//   Sources opened this way report `truncated: true`.
-//
-// All file I/O is async `fs.FileHandle` reads in bounded chunks — nothing
-// here blocks the worker's event loop for long stretches (playback pacing
-// runs on the same thread); CPU work is just MCAP record parsing.
-//
-// Core-free and Vue-free: decode lives in `decode.ts`; this module moves
-// bytes.
+// `.fcap`/`.fovea` read layer (engine thread, core/Vue-free — moves bytes,
+// decode lives in decode.ts): indexed reader + streaming crash-recovery fallback.
+// spec: docs/spec/viewer.md#source
 
 import { open, type FileHandle } from "node:fs/promises";
 import {

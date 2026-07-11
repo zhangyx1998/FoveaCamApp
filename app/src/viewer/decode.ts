@@ -4,24 +4,9 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// `x-fovea-raw` → displayable Mat, driven entirely by the §2b channel
-// metadata (dtype / shape / channels / pixelFormat / significantBits) —
-// never by sniffing bytes. Mirrors what the live paths do: 16-bit data is
-// scaled to 8-bit by its significant bit depth (12p data lives 0..4095 in a
-// 16-bit container — see the `significantBits` schema + the 12-bit readout
-// project), Bayer mosaics are demosaiced to RGB via core Vision's
-// `cvtColor`, and the result is a 1/3/4-channel Uint8Array Mat, exactly what
-// `FrameView`'s ImageData path renders.
-//
-// core Vision is imported lazily and only when a channel actually needs it
-// (U16 scaling / Bayer demosaic) — pure-U8 channels (Mono8/BGRA8 previews)
-// decode with zero native involvement. The factory is async for that reason;
-// the returned decoder is synchronous per frame (the player meters it).
-//
-// Runs on the viewer window's WORKER THREAD (standalone-viewer-and-fcap
-// ruling 1) — the explicit, scoped exception to the no-core-in-renderer rule:
-// the viewer is an offline utility over files, decoupled from the
-// orchestrator, and decode stays off the window's UI thread.
+// `x-fovea-raw` → displayable Mat, driven by §2b channel metadata (never byte
+// sniffing). core Vision imported lazily, only for U16 scaling / Bayer demosaic.
+// spec: docs/spec/viewer.md#decode
 
 import { inflateSync } from "node:zlib";
 import type { Mat } from "core/Vision";

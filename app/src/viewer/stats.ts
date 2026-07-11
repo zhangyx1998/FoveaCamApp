@@ -4,16 +4,10 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// PURE stream-statistics model for the standalone viewer's right-click stats
-// popover. No Vue, no Node, no core — just the assembly of a channel's STATIC
-// container stats out of the already-open `ViewerChannelInfo` (metadata + block
-// span + per-channel message count shipped in the `opened` payload) plus the
-// number/time formatting helpers and the popover clamp math, so every piece is
-// unit-tested in isolation (app/test/viewer-stats.test.ts).
-//
-// LIVE stats (decode rate / frames decoded / last-shown frame timestamp) are the
-// engine's — they come back over the `get-stats`→`stats` request as
-// `StreamLiveStats` (protocol.ts); this module only FORMATS them.
+// PURE static-stats assembly + formatting for the right-click stats popover
+// (Vue/Node/core-free, unit-tested). LIVE stats are the engine's; this only
+// formats them.
+// spec: docs/spec/viewer.md#stats
 
 import type { StreamLiveStats, ViewerChannelInfo } from "./protocol.js";
 

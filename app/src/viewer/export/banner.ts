@@ -4,14 +4,10 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// The viewer "live capture session active" BANNER state machine (viewer-export
-// addendum). PURE + unit-tested (test/viewer-export.test.ts): main tells the
-// viewer window whether a hardware app session is running (mirrors the
-// telecanvas:target seed+push pattern); the banner warns that decode/export
-// competes with live capture. Dismiss is PER-WINDOW and PER-CONDITION-EPISODE:
-// once dismissed the banner stays hidden WHILE the condition remains true, but
-// re-arms when the condition CLEARS (app closes) so a later session shows it
-// again.
+// PURE "live capture session active" banner state machine (unit-tested): warns
+// that decode/export competes with a live hardware session. Dismiss is
+// per-window, per-episode — re-arms when the session clears.
+// spec: docs/spec/viewer.md#export
 
 export interface BannerState {
   /** Is a live capture (hardware) app session currently active? */

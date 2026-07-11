@@ -4,31 +4,10 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// PURE fovea-footprint model for the standalone viewer (fovea-footprint-overlay).
-// No Vue, no Node, no core — the geometry + coloring + depth the wide-tile
-// projection overlay derives from, unit-tested in isolation
-// (app/test/viewer-footprints.test.ts).
-//
-// A footprint is the projection of a recorded fovea stream's frame rectangle
-// onto the WIDE (master) tile: the four frame corners mapped through the frame's
-// recorded per-frame `affine` (the 3×3 row-major homography the telemetry
-// channel carries — `A2H(angle)` at that frame's exposure), landing in the same
-// wide (undistorted) pixel space the tracker bbox lives in.
-//
-// Concepts:
-//  - PAIRING (color grouping): the L/R streams of a fovea PAIR share one color.
-//    Pairs derive from CHANNEL NAMING — a side token (`left`/`right`/`l`/`r`) is
-//    stripped and the remaining BASE is the pair key. Multi-fovea names its two
-//    fovea sensor streams exactly `left`/`right` (an EMPTY base — the sole
-//    stereo pair), so unlike the timeline's 3D `detectPairs` (which needs a
-//    non-empty base) an empty base still pairs here. A base is a pair only when
-//    exactly one left and one right claim it; anything else is a solo group.
-//  - COLORING: greedy interval-coloring over each group's [startNs,lastNs] block
-//    range — groups whose blocks OVERLAP get distinct color indices; groups
-//    whose blocks are DISJOINT may reuse a color. The component maps the index
-//    into the TARGET_COLORS palette (mod length).
-//  - DEPTH: the vergence-plane distance for a pair, from the two eyes' recorded
-//    horizontal angles + the container baseline, via the shared stereo lib.
+// PURE fovea-footprint model (Vue/Node/core-free, unit-tested): a fovea stream's
+// frame rectangle projected onto the wide tile via its per-frame `affine`, plus
+// pair color-grouping and vergence-plane depth.
+// spec: docs/spec/viewer.md#footprints
 
 import { vergenceToDistance } from "@lib/stereo";
 

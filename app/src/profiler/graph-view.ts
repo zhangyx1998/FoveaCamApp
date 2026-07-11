@@ -4,23 +4,10 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Profiler graph panel — pure view-model layer (A-33, real-2 objective 1).
-// Vue-free and cytoscape-free by design (unit-tested in vitest like
-// `workload-view.ts`): two pure transforms —
-//
-//  1. `deriveTopology(...)` — STAGE 1 data source: reconstructs a
-//     `GraphTopology` (C-24's contract, `@lib/orchestrator/graph-contract`)
-//     from what the profiler already polls today: the interval-diffed
-//     `WorkloadRow`s + the pipes session's advertised `PipeAdvert` record +
-//     static wiring knowledge (camera→convert→pipe, camera→undistort→pipe).
-//     When C-24's real `graphTopology()` lands orchestrator-side, the panel
-//     swaps this derivation for the served snapshot — SAME type, zero panel
-//     changes (the whole point of building against the contract).
-//
-//  2. `toElements(...)` / `membershipKey(...)` — reduce a `GraphTopology` to
-//     cytoscape element definitions + a stable membership key, so the panel
-//     re-runs layout ONLY when the (id, epoch) node set / edge set actually
-//     changes — stats-only refreshes at 1 Hz must never move nodes.
+// Profiler graph panel — pure view-model layer (Vue/cytoscape-free, unit-tested):
+// topology source selection + Stage-1 derivation, cytoscape reduction, idle/busy
+// semantics, edge/hover math, membership-key relayout gating.
+// spec: docs/spec/profiler-graph.md
 
 import type {
   EdgeFlow,

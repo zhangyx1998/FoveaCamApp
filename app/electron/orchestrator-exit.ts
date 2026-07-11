@@ -4,18 +4,13 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Pure orchestrator-exit classification (orchestrator-lifecycle-and-exit
-// ruling 3/4). Extracted from main.ts so the clean/crash decision is unit-
-// testable without the Electron runtime (test/orchestrator-exit.test.ts).
-//
-// THE RULE (deterministic, not exit-code guessing): the graceful path posts a
-// `quiesced` ACK to main BEFORE it stops. Main records whether that ack
-// arrived; on the orchestrator's exit the decision is:
-//   - ack present            → "clean"   (a graceful, hardware-safe shutdown)
-//   - no ack, main asked it to stop → "killed"  (quit / hung-quiesce timeout)
-//   - no ack, unexpected     → "crash"   (native fault, signal, OOM)
-// The exit CODE is informational only — never the discriminator. This replaces
-// the old `code === 0` fallback + 100ms flush hack the W1 audit flagged.
+// PURE orchestrator-exit classification (Electron-free, unit-tested). The
+// deterministic RULE — the exit CODE is informational only, never the
+// discriminator:
+//   - ack present                   → "clean"  (graceful, hardware-safe)
+//   - no ack, main asked it to stop → "killed" (quit / hung-quiesce timeout)
+//   - no ack, unexpected            → "crash"  (native fault, signal, OOM)
+// spec: docs/spec/windows.md#instances
 
 import type { OrchestratorDownReport } from "@lib/orchestrator/client";
 

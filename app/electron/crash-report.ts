@@ -4,12 +4,10 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Crash-diagnostics enrichment (orchestrator-lifecycle-and-exit §"Crash
-// diagnostics"). Threads the per-instance stdout/stderr ring + any native
-// minidump into the typed `orchestrator:down` report main pushes to the
-// window. Kept PURE (no fs, no Electron) exactly like `orchestrator-
-// instances.ts`: the file write + minidump scan are INJECTED, so the field
-// threading is unit-testable with fakes (test/crash-report.test.ts).
+// PURE crash-diagnostics enrichment (no fs/Electron — write + minidump scan are
+// INJECTED, unit-tested): threads the per-instance output ring + any native
+// minidump into the typed `orchestrator:down` report.
+// spec: docs/spec/windows.md#crash-diagnostics
 
 import type { OrchestratorDownReport } from "@lib/orchestrator/client";
 import type { LogRing } from "./log-ring";

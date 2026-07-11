@@ -4,15 +4,11 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// ffmpeg DISCOVERY for the viewer export (viewer-export.md spec 1). The IMPORTANT
-// nuance: an Electron app launched from Finder inherits launchd's minimal PATH
-// (no /opt/homebrew/bin), so a PATH-only probe misses a Homebrew/MacPorts ffmpeg.
-// We therefore search PATH *plus* the well-known install locations and remember
-// the resolved ABSOLUTE path for spawning. Detection runs in the utility process
-// (the viewer engine), never the renderer.
-//
-// The resolver core is pure (injected `exists` + PATH string) so it is unit-
-// tested (test/viewer-export.test.ts); `resolveFfmpeg` binds it to the real fs.
+// ffmpeg discovery (engine process, not renderer). Pure resolver core (injected
+// `exists` + PATH, unit-tested); `resolveFfmpeg` binds the real fs.
+// GOTCHA: a Finder-launched Electron app inherits launchd's minimal PATH (no
+// /opt/homebrew/bin), so we search PATH *plus* the well-known install locations.
+// spec: docs/spec/viewer.md#export
 
 import { existsSync } from "node:fs";
 

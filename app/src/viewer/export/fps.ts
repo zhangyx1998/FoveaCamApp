@@ -4,17 +4,9 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// FPS detection + frame-blend math for the viewer video export (viewer-export.md
-// spec 6/7). Pure and unit-tested (test/viewer-export.test.ts):
-//   • `detectFps` — the DEFAULT export fps, the MEDIAN of a stream's frame
-//     intervals (robust to a few dropped frames, unlike a mean).
-//   • `uniformTimeline` — the "more-accurate" normalization target: an evenly
-//     spaced sample grid at the export fps.
-//   • `blendWeights` / `blendFrames` — the temporal blend of the two source
-//     frames straddling a sample time (done in TS on decoded RGBA, so it works
-//     identically for every codec — spec 7).
-//
-// Renderer-safe + Node-free.
+// PURE fps detection (median interval) + temporal frame-blend math for the
+// viewer export (renderer-safe, Node-free, unit-tested).
+// spec: docs/spec/viewer.md#export
 
 /** Median of a numeric array (returns 0 for an empty array). Copies + sorts. */
 function median(values: number[]): number {

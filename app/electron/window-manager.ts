@@ -4,28 +4,11 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Main-process window state machine (docs/history/refactor/multi-window.md §3):
-// registry of open windows by class, the welcome rule, app exclusivity with
-// drain-aware switching, and manifest collection for the dev restart flow.
-// Subsumes the old ad-hoc `openProfilerWindow` handler.
-//
-// Deliberately Electron-free: every platform effect goes through injected
-// deps (`spawn` creates the real BrowserWindow in main.ts; `drainSessions`
-// asks the orchestrator to idle every camera-owning session and waits for
-// settlement; `notifyRefusal` surfaces a busy refusal). This keeps the
-// state machine unit-testable with fakes (`test/window-manager.test.ts`).
-//
-// Adopted defaults (multi-window.md §5, user-vetoable):
-//   1. Welcome CLOSES on app open (respawns when the last app window closes).
-//   2. Opening app B while A is open = SWITCH: drain A's session first, then
-//      spawn B — "closed" means session-idle-drained, not window-destroyed.
-//      Refuse (keeping A) only if A is mid-capture/recording.
-//
-// Drain ordering note: the drain happens BEFORE the old windows close — the
-// busy check must be able to refuse while A is still intact, and a drained
-// session makes the subsequent window close's own unsubscribe a no-op. The
-// welcome window is camera-holding (live previews, §4), so welcome→app rides
-// the exact same path as app→app.
+// Main-process window state machine, deliberately Electron-free (injected deps,
+// unit-tested with fakes): open-window registry by class, the welcome rule, app
+// exclusivity with drain-aware switching, switch inheritance, and manifest
+// collection for dev restart.
+// spec: docs/spec/windows.md#window-manager
 
 import {
   entryFor,

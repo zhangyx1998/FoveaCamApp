@@ -4,10 +4,9 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Shared value types for the viewer video export (viewer-export.md). Crosses
-// three surfaces — the export dialog (renderer), the viewer protocol
-// (renderer ↔ engine), and the engine's export runner — so it lives in one
-// Node-free module.
+// Shared Node-free value types for the viewer export, crossing the dialog,
+// protocol, and runner surfaces.
+// spec: docs/spec/viewer.md#export
 
 import type { CodecId } from "./codecs.js";
 

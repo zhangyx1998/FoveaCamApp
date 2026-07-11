@@ -4,12 +4,10 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Profiler UI interaction helpers — the PURE logic behind GraphPanel's canvas
-// interactions (vertical resize persistence, ctrl-wheel zoom gating,
-// dragged-position preservation) and ProfilerWindow's configurable report
-// rate. Vue-free, DOM-free, cytoscape-free by design so the decision logic is
-// unit-testable (app/test/graph-interactions.test.ts); the components keep
-// only the thin event wiring.
+// PURE logic behind GraphPanel's canvas interactions (resize persistence,
+// ctrl-wheel zoom gating, dragged-position preservation) + the report rate.
+// Vue/DOM/cytoscape-free, unit-tested.
+// spec: docs/spec/profiler-graph.md#interactions
 
 // --- Graph canvas height (vertical resize, persisted) -----------------------
 

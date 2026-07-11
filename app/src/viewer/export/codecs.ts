@@ -4,14 +4,10 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// The viewer VIDEO-EXPORT option matrix (viewer-export.md), modeled as a PURE
-// data table so the whole codec → container / pixfmt / alpha / profile web is
-// unit-testable without ffmpeg or Electron (test/viewer-export.test.ts). The
-// engine's ffmpeg-arg builder (`ffmpeg-args.ts`) and the export dialog both
-// read this ONE table — the UI never invents an encoder/pixfmt the args builder
-// can't produce, and vice-versa.
-//
-// Renderer-safe + Node-free: types + const data + pure selectors only.
+// The viewer export option matrix (codec → container/pixfmt/alpha/profile) as
+// ONE pure data table read by both the args builder and the dialog, so the UI
+// never offers what the args builder can't produce. Renderer-safe + Node-free.
+// spec: docs/spec/viewer.md#export
 
 /** One selectable pixel format for a codec. `alpha` = the format carries an
  *  alpha plane (transparency is only offerable when the chosen pixfmt supports

@@ -4,33 +4,11 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// The STANDALONE viewer's playback ENGINE (standalone-viewer-and-fcap ruling 1,
-// AS SHIPPED amendment). A MAIN-owned `utilityProcess` — one per viewer window,
-// one open container per process. It USED to be a `worker_threads.Worker`
-// spawned from the viewer window's preload, but Electron renderer processes
-// cannot construct Node workers ("The V8 platform used by this instance of Node
-// does not support creating Workers"), so main forks it exactly like the
-// orchestrator/janitor. Hosts the whole data layer OUT of the window process:
-// MCAP reading (source.ts), frame decode (decode.ts — loads `core/Vision`
-// lazily under the explicit no-core-in-renderer exception), and timestamp-paced
-// playback (player.ts). The orchestrator is never involved — it's MAIN that
-// owns this engine — so playback keeps working while the orchestrator is down,
-// busy, or restarting: the point of the ruling.
-//
-// PORT TOPOLOGY: main creates a `MessageChannelMain`, forks this engine, and
-// posts `{ type: "init", file }` over `process.parentPort` WITH `port1`
-// transferred; `port2` goes to the window via `webContents.postMessage`. This
-// engine drives the viewer protocol over that transferred port (a
-// MessagePortMain). Cross-process `postMessage` SERIALIZES (structured-clone
-// COPY) — a MessagePortMain transfer list carries ports only, never
-// ArrayBuffers, so frame buffers are COPIED to the renderer (fine for
-// playback; zero-copy was only ever available same-process).
-//
-// Bundled as its own vite entry (`viewer-worker.js`, next to main in
-// `.dist/electron/`) exactly like the orchestrator: main forks it via
-// `utilityProcess.fork(path.join(DIR, "viewer-worker.js"))`. `core` and
-// `@mcap/core` stay external and resolve from node_modules like the
-// orchestrator bundle's own runtime requires.
+// The standalone viewer's playback ENGINE: a MAIN-owned `utilityProcess` (one
+// per viewer window) hosting the data layer (source/decode/player/export) out of
+// the window process, driving the viewer protocol over a transferred port.
+// Own vite entry `viewer-worker.js`; `core`/`@mcap/core` stay external.
+// spec: docs/spec/viewer.md#topology
 
 import { readFile, writeFile } from "node:fs/promises";
 import type { MessagePortMain } from "electron";

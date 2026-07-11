@@ -4,30 +4,9 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// PURE timeline model for the standalone viewer (viewer-timeline.md). No Vue,
-// no Node, no core — just the geometry the multi-track UI and the worker's
-// enabled-set derive from, so every decision below is unit-tested in isolation
-// (app/test/viewer-timeline.test.ts).
-//
-// Concepts:
-//  - A `ChannelBlock` is one frame channel's span [startNs,lastNs] in file-
-//    relative log time. Telemetry/descriptor (json) channels are NOT blocks —
-//    they bind to their frame streams as overlays (proposal Design §Blocks).
-//  - MASTER detection: the wide/center channel (ruling 1). `fovea:wide-camera`
-//    is a CONTAINER-level metadata record (intrinsics only — no channel
-//    pointer), so the master CHANNEL is selected by the recorder's naming
-//    convention: manual-control names its wide stream "center"; multi-fovea
-//    names it "wide". `wideCameraDeclared` (the metadata record's presence) is
-//    forwarded only to drive the "no wide designation" UI hint.
-//  - INITIAL LAYOUT: greedy min-track interval scheduling (ruling 2) — master
-//    on row 0, the rest first-fit onto the fewest non-overlapping rows below.
-//    Per ruling 10 (amendment) this runs ONLY at sidecar initialization (first
-//    open / reset); thereafter the sidecar's stored `tracks` layout is the
-//    source of truth and `moveBlock` mutates it directly — auto-pack is NEVER
-//    re-applied over user placement.
-//  - 3D PAIRING (ruling 4): L/R of the same stream by side-tagged naming.
-//  - TILE ORDER (ruling 9): Z order = master row first, then top→bottom; a
-//    non-`disabled` 3D pair collapses to ONE tile at its higher (earlier) row.
+// PURE multi-track timeline geometry (Vue/Node/core-free, unit-tested):
+// blocks, master detection, layout packing, 3D pairing, tile order, decode set.
+// spec: docs/spec/viewer.md#timeline
 
 /** One frame channel's block on the timeline. Times are file-relative ns
  *  (0..durationNs), matching the scrub domain. `startNs`/`lastNs` are the

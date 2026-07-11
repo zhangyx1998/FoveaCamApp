@@ -4,26 +4,9 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Per-file playback engine for the STANDALONE viewer (standalone-viewer-and-
-// fcap ruling 1 — hosted by the viewer window's worker thread, see worker.ts).
-// Owns one open `FoveaSource` and replays it with timestamp pacing: each
-// message is due at `(logTime - anchor) / rate` wall-clock after playback
-// started, slept-to via the injectable clock (tests inject a virtual clock,
-// so pacing math is asserted deterministically — no fake timers over real
-// file I/O).
-//
-// Frames that fall too far behind schedule (> LATE_SKIP_MS, e.g. decode or
-// consumer slower than the file's rate) are skipped and accounted as
-// `drop("late")` on the injected meter — pacing degrades by dropping, never
-// by silently stretching time. Everything is generation-guarded:
-// pause/seek/play/close bump the generation, and an in-flight loop iteration
-// from a stale generation stops without touching state (the V5/V10/V13
-// stale-async-completion class).
-//
-// The player knows nothing about windows or transports — it gets
-// `publishFrame` / `emitTelemetry` / `emitPosition` hooks and a `PlayerMeter`
-// (a no-op by default; the orchestrator-era WorkloadHandle satisfied the same
-// structural shape), keeping it unit-testable in isolation.
+// Per-file playback engine: timestamp-paced replay of one open `FoveaSource`,
+// generation-guarded, transport-agnostic (hooks + injectable clock/meter).
+// spec: docs/spec/viewer.md#player
 
 import type { Mat } from "core/Vision";
 import type { PlaybackDoc, StreamLiveStats } from "./protocol.js";

@@ -4,18 +4,12 @@ This source code is licensed under the MIT license.
 You may find the full license in project root directory.
 --------------------------------------------------- -->
 <!--
-  Welcome window — the launcher shown whenever no app window is open. One button
-  per app (each opens its own window via the main-process window manager) plus a
-  STATUS-ONLY panel: the logo, a connection status row, and the live camera list.
-
-  Disposable-orchestrator ruling 3: Welcome is status-only. It no longer holds a
-  camera-holding orchestrator session or a live preview — it opens/holds NO
-  hardware, so entering an app never has to drain it (the old welcome→app drain
-  is gone). Its data comes from the persistent enumerate-only PROBE process
-  (orchestrator/probe.ts), forwarded by main over the `probe:cameras` bridge
-  event. "orchestrator down" as a welcome state disappears — Welcome depends on
-  no orchestrator; the status reflects the probe. The camera picker + live
-  preview + annotation canvas are deleted.
+  Welcome window — the launcher shown whenever no app window is open: one button
+  per app (each opens via the main-process window manager) plus a STATUS-ONLY
+  panel (logo, connection status, live camera list). It holds NO hardware — its
+  data comes from the persistent enumerate-only PROBE process, forwarded by main
+  over the `probe:cameras` bridge event — so entering an app never drains it.
+  spec: docs/spec/windows.md#window-manager
 -->
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch, watchEffect } from "vue";

@@ -4,12 +4,11 @@ This source code is licensed under the MIT license.
 You may find the full license in project root directory.
 --------------------------------------------------- -->
 <!--
-  Per-app window shell (docs/history/refactor/multi-window.md req. 2): one app per
-  window, identity derived from the entry URL by app-window.ts and passed in
-  as a prop. Replaces the old single-window App.vue module switcher — the
-  title-bar chrome (RecordButton / capture overlay / RemoteCanvas / profiler
-  / Controller) is ported from it unchanged; "Back to Home" now closes this
-  window, which lets the main-process welcome rule respawn the launcher.
+  Per-app window shell: one app per window, identity derived from the entry URL
+  and passed in as a prop; hosts the title-bar chrome (RecordButton / capture
+  overlay / RemoteCanvas / profiler / Controller). "Back to Home" closes this
+  window, letting the main-process welcome rule respawn the launcher.
+  spec: docs/spec/windows.md#window-manager
 -->
 <script setup lang="ts">
 import { computed, defineAsyncComponent, ref, watch } from "vue";

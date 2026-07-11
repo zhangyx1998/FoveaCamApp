@@ -4,12 +4,9 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Decoded-Mat → RAW `rgba` normalization for the export pipe (viewer-export.md
-// pipeline). Mirrors `FrameView.vue`'s `expandToRGBA` EXACTLY so an exported
-// frame matches what the viewer shows: 1ch → gray replicated, 3ch → RGB + opaque
-// alpha, 4ch → passed through (the decode path yields RGBA-ordered bytes — the
-// preview-pipe channel-order note). The result is what we pipe to ffmpeg's
-// rawvideo `rgba` input. Pure + unit-tested.
+// PURE decoded-Mat → raw `rgba` normalization for the export pipe (unit-tested);
+// mirrors FrameView.vue's `expandToRGBA` exactly so exports match the preview.
+// spec: docs/spec/viewer.md#export
 
 /** Expand a decoded frame (row-major, `channels` interleaved) to a tightly
  *  packed WxH·4 RGBA byte buffer, opaque alpha for 1/3-channel sources. A

@@ -4,21 +4,11 @@ This source code is licensed under the MIT license.
 You may find the full license in project root directory.
 --------------------------------------------------- -->
 <!--
-  Settings window body (async; mounted under ConfigWindow's <Suspense>). A fixed
-  tab header (never scrolls out of view — only the tab content scrolls) switches
-  between two tabs:
-    1. GLOBAL config — app-wide config bound to the shared `["config"]` document
-       through `useConfigRef`, so an edit here applies LIVE across windows (the
-       store-hub broadcasts to every open window's `Store` client). Marker
-       size/ratio + the TeleCanvas URL apply live to a running calibrate-* /
-       RemoteCanvas; the default save dir applies next session (hint says).
-    2. DEVICE config (per-triple) — everything scoped to ONE selected triple:
-       the per-triple overrides (baseline, zoom, settle, delay compensation)
-       PLUS the full calibration-data inventory (intrinsic / extrinsic / every
-       triple doc) so orphaned entries for disconnected rigs stay reachable. A
-       selector (first item) switches triples via a centered modal list; the
-       CONNECTED rig is selected by default and badged with a plug icon.
-       Friendly names resolve against the currently-known cameras (probe list).
+  Settings window body (async; mounted under ConfigWindow's <Suspense>). Fixed
+  tab header + two tabs: GLOBAL config (bound to the shared `["config"]` doc via
+  `useConfigRef` so edits apply live across windows) and per-triple DEVICE config
+  (overrides + the full calibration-data inventory, so orphaned entries for
+  disconnected rigs stay reachable; the connected rig is selected by default).
 -->
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, toRaw, watch } from "vue";

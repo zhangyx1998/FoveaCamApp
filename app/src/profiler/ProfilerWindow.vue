@@ -4,11 +4,10 @@
  * You may find the full license in project root directory.
  --------------------------------------------------------- -->
 
-<!-- The profiler window (docs/history/refactor/orchestrator.md §7.1 S4/V12) — a
-     second `BrowserWindow`, read-only over existing telemetry. `system` is the
-     always-on session and stays active; controller/manual-control are
-     passive observers so opening the profiler never starts actuation loops or
-     camera taps. -->
+<!-- The profiler window — read-only over existing telemetry. `system` is the
+     always-on session; controller/manual-control are passive observers so
+     opening the profiler never starts actuation loops or camera taps.
+     spec: docs/spec/profiler-graph.md (per-instance binding: #binding) -->
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";

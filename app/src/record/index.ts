@@ -4,14 +4,10 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Thin renderer facade over the manual-control session's recording commands
-// (docs/history/refactor/orchestrator.md roadmap item 6) — the orchestrator now owns
-// the raw stream writers (see `orchestrator/stream-writer.ts`,
-// `modules/manual-control/recording.ts`); this class just forwards
-// `start`/`stop` and mirrors `recording_active`/`recordingStreams` telemetry
-// into the same `active`/`streams` shape `RecordButton.vue`/`RecordControls.vue`
-// already read, plus keeps the save-path UI state (`SavePath`), a pure
-// renderer concern independent of where the frames are written.
+// Thin renderer facade over a session's recording commands (the orchestrator
+// owns the raw stream writers): forwards `start`/`stop`, mirrors
+// `recording_active`/`recordingStreams` telemetry into the `active`/`streams`
+// shape RecordButton/RecordControls read, and keeps the save-path UI state.
 
 import { onScopeDispose, reactive, shallowRef, toRef, watch, type Ref } from "vue";
 import { SavePath } from "@lib/save-path";

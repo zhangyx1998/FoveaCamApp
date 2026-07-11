@@ -4,11 +4,9 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Main-window preload: the shared bridge + the shm frame reader. The shm
-// path is canonical for transport previews, so this window always runs
-// `sandbox: false` (required to load the native reader addon; the profiler
-// window stays sandboxed with `preload-profiler.ts`). Bundled self-contained
-// by its own build pass (see preload-bridge.ts header / V11).
+// Main-window preload: shared bridge + shm frame reader. Runs `sandbox: false`
+// (required to load the native reader addon); the frame-only profiler window
+// stays sandboxed. Self-contained per its own build pass (V11).
 import path from "node:path";
 import { installBridge } from "./preload-bridge";
 import type { FramePayload } from "@lib/orchestrator/protocol";

@@ -4,27 +4,9 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// STANDALONE viewer wire protocol (standalone-viewer-and-fcap ruling 1): the
-// message shapes between the viewer window (main world) and the viewer ENGINE.
-// The viewer does NOT interface with the orchestrator — this file replaces the
-// retired pinned session contract (`@lib/orchestrator/viewer-contract`); the
-// protocol is window-local and free to evolve with the code.
-//
-// Topology (AS SHIPPED amendment): the engine is a MAIN-owned `utilityProcess`
-// (it can't be a renderer worker — Electron renderers can't construct Node
-// workers). Main creates a `MessageChannelMain`, forks the engine with `port1`,
-// and delivers `port2` to the window (`webContents.postMessage("viewer:port")`
-// → preload relay → DOM `MessagePort`). The renderer talks DIRECTLY to the
-// engine over that one port: commands renderer → engine, events engine →
-// renderer. Cross-process = structured-clone COPY (frame buffers are copied,
-// not transferred). Main hands the FILE to the engine in its `init` message, so
-// there is no `open` command — the engine opens eagerly.
-//
-// One window = one file = one engine; there is no fileId keying (the
-// one-window-per-file dedupe lives in main.ts's window manager, and one engine
-// is keyed per window there).
-//
-// Renderer-safe and Node-free: types + string constants only.
+// Renderer↔engine wire protocol for the standalone viewer — window-local,
+// renderer-safe, Node-free (types + string constants only).
+// spec: docs/spec/viewer.md#protocol (topology: #topology)
 
 import type { SidecarLoad, SidecarState } from "./sidecar.js";
 import type { ExportRequest, ExportOverview } from "./export/types.js";

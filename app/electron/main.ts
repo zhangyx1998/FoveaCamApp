@@ -109,18 +109,12 @@ if (process.platform === "win32") app.setAppUserModelId(app.getName());
 // Graphite may stabilize, and this line then deserves an A/B on the rig.
 app.commandLine.appendSwitch("disable-features", "SkiaGraphite");
 
-// ---- Native-crash minidumps (orchestrator-lifecycle-and-exit §"Crash
-// diagnostics", AS SHIPPED) ------------------------------------------------
-// A long-running orchestrator once aborted with a C++ `mutex lock failed`
-// during a dev-restart teardown and macOS wrote NO .ips (crashpad was
-// intercepted while the parent restarted). Start Electron's own crashReporter
-// so native faults in the utilityProcess children (the orchestrator owns
-// `core`/Aravis/OpenCV) land a LOCAL minidump — never uploaded (no server).
-// `crashDumps` is redirected to a stable, human-findable dir under userData so
-// the instance registry can pair a fresh dump with the dying instance and cite
-// its path in the typed down report. Must run before app-ready and before any
-// child forks. NOTE: `crashDumps` is Chromium's own path key (distinct from our
-// `crash-logs` ring dir); redirect it FIRST so the reporter picks it up.
+// ---- Native-crash minidumps -----------------------------------------------
+// LOCAL-only minidumps for native faults in the utilityProcess children (the
+// orchestrator owns core/Aravis/OpenCV). Must run before app-ready + any child
+// fork; redirect Chromium's own `crashDumps` key FIRST (distinct from our
+// `crash-logs` ring dir) so the reporter picks up the stable userData path.
+// spec: docs/spec/windows.md#crash-diagnostics
 const CRASH_DUMPS_DIR = path.join(DATA, "crash-dumps");
 const CRASH_LOGS_DIR = path.join(DATA, "crash-logs");
 try {
@@ -325,11 +319,10 @@ function handleSender<K extends keyof InvokeChannels>(
 }
 
 // ---- Config store: MAIN is the single authority --------------------------
-// (docs/proposals/config-store-main-authority.md). One `StoreMain` owns the
-// cache + fs + broadcast; renderer windows talk to it over these IPC channels,
-// orchestrator instances + the probe over their parentPort (wired in
-// `forkInstance` / `spawnProbe`). This retires the per-instance store-hub that
-// couldn't see across instances.
+// One `StoreMain` owns the cache + fs + broadcast; renderer windows reach it via
+// these IPC channels, instances + probe via their parentPort (wired in
+// `forkInstance` / `spawnProbe`).
+// spec: docs/spec/windows.md#config-store
 const storeMain = new StoreMain((wc, path, value) => pushTo(wc, "store:changed", path, value));
 handleSender("store:read", (wc, path, fallback) => storeMain.read(wc, path, fallback));
 handle("store:read-once", (path, fallback) => storeMain.readOnce(path, fallback));
@@ -444,14 +437,10 @@ handle("crash:reveal", (file) => {
 });
 
 // ---- Orchestrator instances (disposable per app, ruling 2) ----------------
-// Each app activation forks a FRESH orchestrator utilityProcess that owns `core`
-// (cameras, vision, control, hardware I/O); closing/switching the app disposes
-// it (bounded drain-and-quiesce → ack/timeout → kill → janitor). Teardown errors
-// die with the process, so the Welcome launcher never wedges. The instance
-// registry (`orchestrator-instances.ts`, Electron-free + unit-tested) owns the
-// typed table + the ≤1-hardware gate; the fork/port/janitor wiring is injected
-// below. Main brokers a direct MessagePort between each renderer and its
-// instance; frames/commands then flow point-to-point.
+// The registry (`orchestrator-instances.ts`, Electron-free + unit-tested) owns
+// the typed table + ≤1-hardware gate; the fork/port/janitor wiring is injected
+// below. Main brokers a direct MessagePort renderer↔instance.
+// spec: docs/spec/windows.md#instances
 let registry!: OrchestratorInstances;
 let drainSeq = 0;
 // Per-instance window:drain resolvers (the switch busy-check) — keyed by
@@ -518,18 +507,13 @@ function writeCrashLog(id: string, text: string): string | undefined {
   }
 }
 
-// ---- Hardware janitor (safety invariant, docs/hardware/stage-f.md) --------
-// An instance confirms `quiesced` (MEMS disabled + cameras released) before a
-// graceful exit. If one EVER exits without that confirmation — SIGABRT from
-// native code, SIGSEGV, OOM kill — the armed hardware outlives it, so main forks
-// this one-shot cleanup process (orchestrator/janitor.ts): fresh process, fresh
-// device claims, disables the MEMS controller over serial and stops every
-// camera's acquisition (which also clears TLParamsLocked, unblocking the next
-// instance's config restore). The registry decides clean-vs-crash from the
-// ack (never the exit code) and calls this on every non-clean instance death.
-
-// One janitor run covers everything armed by the dead orchestrator — dedupe
-// concurrent triggers (unexpected-exit handler racing the quit path).
+// ---- Hardware janitor (safety invariant) ----------------------------------
+// One-shot cleanup process forked on ANY non-clean instance death (decided by
+// the `quiesced` ack, never the exit code): fresh device claims, disable the
+// MEMS controller, stop every camera (also clearing TLParamsLocked). One run
+// covers everything armed by the dead orchestrator — dedupe concurrent triggers
+// (unexpected-exit racing the quit path).
+// spec: docs/spec/windows.md#quiescence
 let janitorRun: Promise<void> | null = null;
 function ensureJanitor(reason: string): Promise<void> {
   janitorRun ??= runJanitor(reason).finally(() => {
@@ -556,7 +540,10 @@ function runJanitor(reason: string): Promise<void> {
 }
 
 // ---- Main-crash watchdog (safety invariant gap 1) -------------------------
-// PROCESS TREE (why a detached process, not a utilityProcess child):
+// Closes the hole where main's OWN hard crash (SIGKILL/SIGSEGV) reaps the
+// orchestrator with nothing left to disarm the mirrors. A DETACHED sibling (not
+// a utilityProcess child — those die with main), `janitor.js` in
+// FOVEA_JANITOR_MODE=watchdog so there is ONE quiescence codebase.
 //
 //   OS
 //   ├─ main (Electron)            spawns ↓ once, detached, at startup
@@ -564,20 +551,7 @@ function runJanitor(reason: string): Promise<void> {
 //   │   └─ janitor       (utilityProcess.fork — one-shot, on orch death)
 //   └─ watchdog (detached, ELECTRON_RUN_AS_NODE — OUTLIVES main)
 //
-// The janitor above is forked BY main, so main's OWN hard crash (SIGKILL /
-// SIGSEGV) reaps the orchestrator with NOTHING left to disarm the MEMS mirrors
-// (releasing a serial port does not de-energize them). The watchdog closes that
-// hole: a detached sibling that reads a per-main-pid state file and polls
-// main's liveness. On a CLEAN shutdown main deletes the file first (stand-down
-// = the file is gone). If main dies while the file still exists, the watchdog
-// waits for the orphaned orchestrator to be reaped (killing it if it lingers so
-// its device claims free), then runs the SAME quiescence as the janitor, and
-// exits. It never keeps the app open (detached + unref'd), never fights the
-// normal janitor path (that path only runs while main is ALIVE; the watchdog
-// acts only after main is GONE), and exits quietly on stand-down.
-//
-// Implemented as janitor.js in FOVEA_JANITOR_MODE=watchdog so there is exactly
-// one hardware-quiescence codebase.
+// spec: docs/spec/windows.md#quiescence
 const watchdogStatePath = path.join(DATA, `watchdog-${process.pid}.json`);
 let watchdogSpawned = false;
 

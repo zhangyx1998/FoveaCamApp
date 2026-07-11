@@ -4,18 +4,9 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// PURE ffmpeg argv builder for the viewer video export (viewer-export.md
-// pipeline). Given a resolved `ExportRequest` + frame geometry (+ the remap
-// PGM16 map paths when undistort is on) it produces the argument vector for the
-// resolved ffmpeg binary — no spawning, no fs, so the exact command line is
-// unit-tested (test/viewer-export.test.ts). The engine's export-runner passes
-// the result straight to `spawn(ffmpegPath, args)`.
-//
-// Shape (spec pipeline): decoded frames are normalized to RAW `rgba` and piped
-// on stdin; `-f rawvideo -pix_fmt rgba -s WxH -r FPS -i -`. Undistort adds the
-// two map inputs + a `remap` filter whose FILL is transparent (alpha on) or
-// black (alpha off / unsupported). Output codec/pixfmt/container come from the
-// codec table.
+// PURE ffmpeg argv builder for the viewer export (no spawn/fs, unit-tested):
+// raw `rgba` on stdin, optional undistort `remap`, output codec from the table.
+// spec: docs/spec/viewer.md#export
 
 import { codec, type CodecId } from "./codecs.js";
 import type { ExportRequest } from "./types.js";

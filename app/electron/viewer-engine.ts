@@ -4,27 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Viewer-engine LIFECYCLE bookkeeping (standalone-viewer-and-fcap, AS SHIPPED
-// amendment). The viewer's playback engine moved from an in-renderer
-// `worker_threads.Worker` (which NEVER worked — Electron renderer processes
-// cannot construct Node workers) to a MAIN-owned `utilityProcess` per viewer
-// window. This module owns the per-window map + the ordering invariants around
-// it; the Electron-specific fork/port wiring is INJECTED (`create`) so the
-// sequencing is unit-testable without the Electron runtime
-// (test/viewer-engine.test.ts).
-//
-// INVARIANTS (from the viewer rulings):
-//   • Single-writer sidecar: exactly ONE engine may own a given `.fcap`'s
-//     `ui.json` at a time. The window manager already dedupes one-window-
-//     per-file, so keying an engine per window (its `webContents.id`) gives
-//     one-engine-per-file transitively.
-//   • Terminate-before-respawn: a re-spawn for the same window (dev full-
-//     reload) FLUSHES + KILLS the previous engine BEFORE forking the new one,
-//     so two writers never briefly share the file.
-//   • Flush-before-close: a window close asks the engine to flush its pending
-//     sidecar write and waits a BOUNDED grace (the engine's `flushed` ack, or
-//     `graceMs`) before killing it — the write must land, but a wedged engine
-//     must not hang teardown/quit.
+// Viewer-engine lifecycle bookkeeping (per-window utilityProcess map; the
+// Electron fork/port wiring is INJECTED via `create`, unit-tested). Invariants:
+// single-writer sidecar (one engine per `.fcap`, keyed per window),
+// terminate-before-respawn (flush+kill the old engine before forking the new),
+// flush-before-close (bounded grace on the `flushed` ack so quit never hangs).
+// spec: docs/spec/viewer.md#topology
 
 /** A live viewer engine, as the manager sees it — the Electron process wiring
  *  (fork, MessageChannelMain, port delivery, crash push) is hidden behind this
