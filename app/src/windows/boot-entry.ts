@@ -37,7 +37,13 @@ const windowRoots: Record<string, SpecialEntry> = {
   profiler: { load: () => import("../profiler/ProfilerWindow.vue") },
   projection: {
     load: () => import("./ProjectionWindow.vue"),
+    // Split-view (projection-split-view.md): the layout rides `?layout=` (the
+    // live split tree, written back on every change). Seeds fall back to a
+    // single-pane `?pane=` descriptor, then the legacy `?session=&frame=` pair
+    // — the window resolves the precedence.
     props: () => ({
+      layout: readUrlParam("layout") ?? "",
+      pane: readUrlParam("pane") ?? "",
       session: readUrlParam("session") ?? "",
       frame: readUrlParam("frame") ?? "",
     }),

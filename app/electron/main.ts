@@ -1382,9 +1382,10 @@ onRenderer("open-profiler-window", () => {
   );
   if (inst && win.windowId) registry.attachWindow(inst.id, win.windowId);
 });
-onRenderer("window:open-projection", (session, frame) => {
-  if (typeof session === "string" && session && typeof frame === "string" && frame)
-    manager.openProjection({ session, frame });
+onRenderer("window:open-projection", (pane) => {
+  // `pane` is a serialized pane descriptor (projection-split-view.md) — the
+  // window seeds a single-leaf layout from it, then owns its own split tree.
+  if (typeof pane === "string" && pane) manager.openProjection({ pane });
 });
 // WS2 2b: toggle a module's `debug`-class sub-window. Owner = the current app
 // window (apps are exclusive, so it's the opener); cascade tears it down on

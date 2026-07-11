@@ -1,0 +1,187 @@
+// ------------------------------------------------------
+// Copyright (c) 2026 Yuxuan Zhang, dev@z-yx.cc
+// This source code is licensed under the MIT license.
+// You may find the full license in project root directory.
+// -------------------------------------------------------
+//
+// Projection split-view — pane descriptor codec (docs/proposals/
+// projection-split-view.md §"Sources", deliverable 3).
+//
+// A projectable pane binds ONE of two source kinds:
+//   - {kind:"frame", session, frame} — a Channel frame ref (today's projection
+//     path, driven passively by `useSession().frame(name)`).
+//   - {kind:"pipe", id}              — an advertised SHM pipe, driven by
+//     `usePipeFrame(id)` over the pipes session (epoch-aware). This is what
+//     makes raw camera previews/undistorts — the feeds most worth projecting —
+//     actually projectable (today only low-rate Channel frames are).
+//
+// This module is the VERSIONED serialize/parse boundary for those descriptors:
+//   - a single pane (the bridge single-pane open + the DnD transfer payload),
+//   - the whole layout tree (see `split-tree.ts`, which re-uses `parsePane`).
+// Every decode is defensive — a malformed / future-version string parses to
+// `null` rather than throwing, so a stale URL or a foreign drag never crashes a
+// window. Renderer- and main-safe (pure data + JSON); NO Vue, NO DOM.
+
+/** Codec schema version. Bump on an incompatible shape change; `parsePane`
+ *  rejects any other version (forward-incompatible by design — an old window
+ *  must not misread a newer descriptor). */
+export const PANE_CODEC_VERSION = 1 as const;
+
+/** A Channel frame source — the classic projection path (passive `useSession`). */
+export type FramePaneSource = { kind: "frame"; session: string; frame: string };
+/** An advertised SHM pipe source — `usePipeFrame` over the pipes session. */
+export type PipePaneSource = { kind: "pipe"; id: string };
+export type PaneSource = FramePaneSource | PipePaneSource;
+
+/** One projectable pane: a stable id (unique within a window), its bound
+ *  source, and optional presentation hints carried across a drag/reload. */
+export type Pane = {
+  id: string;
+  source: PaneSource;
+  /** Slim-header title (falls back to a source-derived label when absent). */
+  title?: string;
+  /** Accent color forwarded to the frame view outline (`--theme`). */
+  theme?: string;
+};
+
+/** An id-less pane spec — what a StreamView/FrameView advertises for its
+ *  projectable feed. The concrete `Pane` id is minted at open/drag time
+ *  (`paneFromDescriptor`), so the source component never has to track one. */
+export type PaneDescriptor = { source: PaneSource; title?: string; theme?: string };
+
+/** Promote a descriptor to a full `Pane`, minting a fresh id. */
+export function paneFromDescriptor(desc: PaneDescriptor): Pane {
+  const pane: Pane = { id: freshPaneId(), source: desc.source };
+  if (desc.title) pane.title = desc.title;
+  if (desc.theme) pane.theme = desc.theme;
+  return pane;
+}
+
+/** The transfer payload carried on a cross-window drag (custom MIME, see
+ *  `dnd.ts`). Beyond the pane itself it records WHERE the drag started so the
+ *  destination can tell a within-window move (→ tree move/swap) from a
+ *  cross-window one (→ insert a fresh copy; the source removes its pane on a
+ *  `move` dragend) and whether the origin is copy-only (an app window). */
+export type PaneDragPayload = {
+  pane: Pane;
+  /** `?win=` id of the originating window (null for a pre-manager window). */
+  srcWindowId: string | null;
+  /** Origin class — an `app` window advertises copy-only (rigid layout). */
+  origin: "app" | "projection";
+};
+
+function isObj(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null;
+}
+
+/** Validate + normalize an unknown value into a `PaneSource`, or null. */
+export function parsePaneSource(v: unknown): PaneSource | null {
+  if (!isObj(v)) return null;
+  if (v.kind === "frame") {
+    if (typeof v.session === "string" && typeof v.frame === "string" && v.session && v.frame)
+      return { kind: "frame", session: v.session, frame: v.frame };
+    return null;
+  }
+  if (v.kind === "pipe") {
+    if (typeof v.id === "string" && v.id) return { kind: "pipe", id: v.id };
+    return null;
+  }
+  return null;
+}
+
+/** Validate an unknown value into a `Pane` (source required, id defaulted when
+ *  absent — a decoded pane without one still gets a stable local id). */
+export function parsePaneObject(v: unknown): Pane | null {
+  if (!isObj(v)) return null;
+  const source = parsePaneSource(v.source);
+  if (!source) return null;
+  const pane: Pane = {
+    id: typeof v.id === "string" && v.id ? v.id : freshPaneId(),
+    source,
+  };
+  if (typeof v.title === "string") pane.title = v.title;
+  if (typeof v.theme === "string") pane.theme = v.theme;
+  return pane;
+}
+
+/** Serialize a single pane to a compact, URL-safe JSON string (the bridge
+ *  single-pane open param). Versioned. */
+export function serializePane(pane: Pane): string {
+  return JSON.stringify({ v: PANE_CODEC_VERSION, pane: toWire(pane) });
+}
+
+/** Parse a `serializePane` string, or null on malformed / wrong-version input. */
+export function parsePane(s: string | null | undefined): Pane | null {
+  if (!s) return null;
+  let doc: unknown;
+  try {
+    doc = JSON.parse(s);
+  } catch {
+    return null;
+  }
+  if (!isObj(doc) || doc.v !== PANE_CODEC_VERSION) return null;
+  return parsePaneObject(doc.pane);
+}
+
+/** Serialize a drag payload to the custom-MIME string (see `dnd.ts`). */
+export function serializeDragPayload(payload: PaneDragPayload): string {
+  return JSON.stringify({
+    v: PANE_CODEC_VERSION,
+    pane: toWire(payload.pane),
+    srcWindowId: payload.srcWindowId,
+    origin: payload.origin,
+  });
+}
+
+/** Parse a drag-payload string, or null on malformed / wrong-version input. */
+export function parseDragPayload(s: string | null | undefined): PaneDragPayload | null {
+  if (!s) return null;
+  let doc: unknown;
+  try {
+    doc = JSON.parse(s);
+  } catch {
+    return null;
+  }
+  if (!isObj(doc) || doc.v !== PANE_CODEC_VERSION) return null;
+  const pane = parsePaneObject(doc.pane);
+  if (!pane) return null;
+  const origin = doc.origin === "app" ? "app" : "projection";
+  const srcWindowId = typeof doc.srcWindowId === "string" ? doc.srcWindowId : null;
+  return { pane, srcWindowId, origin };
+}
+
+/** Drop the runtime-only fields; keep the wire shape minimal + stable. */
+function toWire(pane: Pane): Record<string, unknown> {
+  const w: Record<string, unknown> = { id: pane.id, source: pane.source };
+  if (pane.title !== undefined) w.title = pane.title;
+  if (pane.theme !== undefined) w.theme = pane.theme;
+  return w;
+}
+
+let paneIdCounter = 0;
+/** Mint a process-unique pane id (destination mints a fresh one on a
+ *  cross-window insert so two windows' ids never collide). Not cryptographic —
+ *  uniqueness within one renderer's lifetime is all a pane id needs. */
+export function freshPaneId(): string {
+  paneIdCounter += 1;
+  return `pane-${Date.now().toString(36)}-${paneIdCounter.toString(36)}`;
+}
+
+/** A human label for a pane when it carries no explicit title — the source
+ *  address, so an untitled pane header still names its feed. */
+export function paneLabel(pane: Pane): string {
+  if (pane.title) return pane.title;
+  return pane.source.kind === "frame"
+    ? `${pane.source.session} / ${pane.source.frame}`
+    : pane.source.id;
+}
+
+/** Structural identity of a pane's SOURCE (ignores id/title/theme) — used to
+ *  detect a drop that would just re-bind the same feed. */
+export function sameSource(a: PaneSource, b: PaneSource): boolean {
+  if (a.kind !== b.kind) return false;
+  if (a.kind === "frame" && b.kind === "frame")
+    return a.session === b.session && a.frame === b.frame;
+  if (a.kind === "pipe" && b.kind === "pipe") return a.id === b.id;
+  return false;
+}

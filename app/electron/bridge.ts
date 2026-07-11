@@ -72,11 +72,13 @@ export interface FoveaBridge {
    *  main-process window manager enforces exclusivity + drain
    *  (docs/history/refactor/multi-window.md §3). */
   openAppWindow(appId: string): void;
-  /** Open a projection window (single-stream viewer, multi-window.md req. 4)
-   *  for one session's frame channel. 0..N instances; passive subscriber —
-   *  never activates the source session, never counted for the welcome
-   *  rule, survives its source app's close. */
-  openProjectionWindow(session: string, frame: string): void;
+  /** Open a projection window (split-pane viewer, projection-split-view.md)
+   *  seeded with ONE pane. `pane` is a serialized pane descriptor
+   *  (`@lib/projection/descriptor` `serializePane`) — a `{kind:"frame",…}` or
+   *  `{kind:"pipe",…}` source. 0..N instances; passive subscriber — never
+   *  activates the source session, never counted for the welcome rule, survives
+   *  its source app's close. The window then owns its own split layout in-URL. */
+  openProjectionWindow(pane: string): void;
   /** Toggle a module's `debug`-class sub-window (WS2 2b): open-or-close a
    *  module-owned window for `session`. Owner-bound to the app that requested
    *  it (cascade-closes on app close/switch). `kind` (default `debugger`)
@@ -280,7 +282,7 @@ export interface SendChannels {
    *  host + re-broadcast the target to every window. */
   "telecanvas:apply": [mode: TeleCanvasMode, port: number, url: string];
   "window:open-app": [appId: string];
-  "window:open-projection": [session: string, frame: string];
+  "window:open-projection": [pane: string];
   "window:toggle-debug": [session: string, kind?: string];
   /** Sender-scoped: main resolves the window from `event.sender`. */
   "window:set-pinned": [pinned: boolean];

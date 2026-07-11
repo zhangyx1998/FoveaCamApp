@@ -125,6 +125,10 @@ const prediction_rate_hz = await useConfigRef("prediction_rate_hz");
 // measured one-way serial latency to the predictor's fixed lookahead.
 // Default OFF; Settings-only (no drawer control, per ruling).
 const serial_latency_comp = await useConfigRef("serial_latency_comp");
+// Auto-close a projection window once ALL its panes have terminated
+// (projection-split-view.md deliverable 6). Default ON. INTEGRATION NOTE:
+// the config-schema lane migrates this key at integration.
+const projection_auto_close = await useConfigRef("projection_auto_close");
 const anaglyphCardList = computed(() => anaglyphCards(anaglyph_style.value));
 function selectAnaglyph(style: AnaglyphStyle): void {
   anaglyph_style.value = style;
@@ -912,6 +916,19 @@ onUnmounted(() => {
         Adds the measured one-way serial latency (half the ACK round-trip) to
         the motion predictor's fixed lookahead. Applies live; off = fixed
         lookahead only.
+      </p>
+
+      <label class="row">
+        <span class="label">Auto-close empty projections</span>
+        <span class="field">
+          <input type="checkbox" v-model="projection_auto_close" />
+        </span>
+      </label>
+      <p class="hint">
+        Close a projection window automatically once every stream it shows has
+        terminated (the source didn't return within the ~10&nbsp;s rebind
+        grace). A brief app switch rebinds and never triggers this; off = keep
+        the window open with its frozen last frames.
       </p>
       </section>
 

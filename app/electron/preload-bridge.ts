@@ -65,7 +65,7 @@ export function installBridge(extra: Partial<FoveaBridge> = {}) {
     getTeleCanvasTarget: () => invoke("telecanvas:get-target"),
     onTeleCanvasTarget: (cb) => listen("telecanvas:target", (target) => cb(target)),
     openAppWindow: (appId) => send("window:open-app", appId),
-    openProjectionWindow: (session, frame) => send("window:open-projection", session, frame),
+    openProjectionWindow: (pane) => send("window:open-projection", pane),
     toggleDebugWindow: (session, kind) => send("window:toggle-debug", session, kind),
     openDebugWindow: (session, kind) => send("window:open-debug", session, kind),
     onFullscreenChange: (cb) => listen("window:fullscreen", (fullscreen) => cb(fullscreen)),

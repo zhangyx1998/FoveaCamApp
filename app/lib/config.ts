@@ -14,6 +14,7 @@ import {
 import {
   APP_CONFIG_PATH,
   DEFAULT_PREDICTION_RATE_HZ,
+  DEFAULT_PROJECTION_AUTO_CLOSE,
   DEFAULT_RECORD_COMPRESSION,
   DEFAULT_SERIAL_LATENCY_COMP,
   type RecordCompression,
@@ -112,6 +113,13 @@ export interface AppConfig {
   // like every other viewer/app option; the viewer window pushes it to its
   // playback engine (the queue's dispatch policy) on change + at spawn.
   export_parallel?: boolean;
+  // ---- Projection split view (projection-split-view.md deliverable 6) ---
+  // Auto-close a projection window when ALL its panes have TERMINATED (their
+  // sources didn't reappear within the rebind grace, ~10 s). Default TRUE.
+  // A pane frozen by a mere app-switch handoff rebinds and never counts, so a
+  // default-on auto-close doesn't erase projections on every switch — only a
+  // window whose every source is truly gone closes itself.
+  projection_auto_close?: boolean;
 }
 
 /** The declared defaults for every AppConfig key — exported so the values are
@@ -131,6 +139,7 @@ export const APP_CONFIG_DEFAULTS: Readonly<AppConfig> = {
   prediction_rate_hz: DEFAULT_PREDICTION_RATE_HZ,
   serial_latency_comp: DEFAULT_SERIAL_LATENCY_COMP,
   export_parallel: false,
+  projection_auto_close: DEFAULT_PROJECTION_AUTO_CLOSE,
 };
 
 export async function useAppConfig() {

@@ -8,6 +8,7 @@ import FrameView, { TransformFunction } from "./FrameView.vue";
 import { payloadToMat, rendererLoopLag, shmReadStats, type FrameSource } from "@lib/orchestrator/client";
 import { formatCounterRate, formatSampleStats } from "@lib/orchestrator/stats";
 import type { FramePayload } from "@lib/orchestrator/protocol";
+import type { PaneDescriptor } from "@lib/projection/descriptor";
 import { NoCheck } from "@lib/util/vue";
 
 // Payload-only (docs/history/refactor/orchestrator.md §7.1 S1c): every camera/stream
@@ -81,15 +82,24 @@ const props = defineProps({
     required: false,
     default: false,
   },
-  // Multi-window.md req. 4: the expand button opens a projection window for
-  // this stream. The address (session + frame channel) is auto-derived from
-  // the payload's client-side `meta.source` stamp — no prop threading. Set
-  // false to keep the legacy element-fullscreen behavior (used by the
-  // projection window itself, so it doesn't offer projecting a projection).
+  // Multi-window.md req. 4: the project-to-window button opens a projection
+  // window for this stream. The frame address comes from `source`; for a
+  // PIPE-backed preview (no Channel frame source) pass `pipe` instead so the
+  // preview is projectable too (projection-split-view.md §"Sources"). Set
+  // `projectable` false to hide the button entirely (used by the projection
+  // window itself, so it doesn't offer projecting a projection).
   projectable: {
     type: Boolean,
     required: false,
     default: true,
+  },
+  // Pipe id for a pipe-backed preview (projection-split-view.md deliverable 3):
+  // makes camera previews/undistorts — the feeds most worth projecting —
+  // actually projectable. Takes precedence over `source` when both are present.
+  pipe: {
+    type: String,
+    required: false,
+    default: null,
   },
 });
 
@@ -202,11 +212,22 @@ const overlay = computed(() => {
   return result;
 });
 
-// Stream address for the projection button — from the `FrameRef.source` passed
-// alongside the payload (A-P12; no longer folded into the wire `meta.source`).
-const projection = computed(() =>
-  props.projectable ? (props.source ?? null) : null,
-);
+// Projectable pane descriptor for the project-to-window button — a pipe source
+// when `pipe` is bound, else the frame `source` (A-P12; the `FrameRef.source`
+// passed alongside the payload). Null keeps only the fullscreen icon.
+const projection = computed<PaneDescriptor | null>(() => {
+  if (!props.projectable) return null;
+  const theme = props.theme !== "gray" ? props.theme : undefined;
+  if (props.pipe)
+    return { source: { kind: "pipe", id: props.pipe }, title: props.title ?? undefined, theme };
+  if (props.source)
+    return {
+      source: { kind: "frame", session: props.source.session, frame: props.source.frame },
+      title: props.title ?? undefined,
+      theme,
+    };
+  return null;
+});
 </script>
 
 <template>

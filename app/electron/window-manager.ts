@@ -453,12 +453,18 @@ export class WindowManager {
    * frame; the stream resumes if the topic comes back).
    */
   openProjection(
-    params: ProjectionParams,
+    seed: ProjectionParams | { pane: string },
     opts: { bounds?: WindowBounds; url?: string } = {},
   ): ManagedWindow {
-    const search =
-      "?" +
-      new URLSearchParams({ session: params.session, frame: params.frame }).toString();
+    // Two seed shapes: the split-view path passes a serialized pane descriptor
+    // (`?pane=…`, projection-split-view.md); the legacy single-stream path
+    // passes `{session, frame}` (`?session=…&frame=…`). The window reads either
+    // and then serializes its live split tree into `?layout=…` itself.
+    const query =
+      "pane" in seed
+        ? { pane: seed.pane }
+        : { session: seed.session, frame: seed.frame };
+    const search = "?" + new URLSearchParams(query).toString();
     return this.spawn({
       class: "projection",
       entry: entryFor("projection"),

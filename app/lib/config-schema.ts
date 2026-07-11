@@ -67,3 +67,7 @@ export const DEFAULT_PREDICTION_RATE_HZ = 600;
 /** Serial-latency compensation toggle default = OFF (byte-identical fixed
  *  lookahead behavior until the operator opts in). */
 export const DEFAULT_SERIAL_LATENCY_COMP = false;
+
+/** Auto-close a projection window when ALL panes have terminated
+ *  (projection-split-view.md deliverable 6; renderer-only consumer). */
+export const DEFAULT_PROJECTION_AUTO_CLOSE = true;

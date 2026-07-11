@@ -14,13 +14,21 @@ import {
   watch,
 } from "vue";
 import { FontAwesomeIcon as Icon } from "@fortawesome/vue-fontawesome";
-import { faExpand } from "@fortawesome/free-solid-svg-icons";
+import { faExpand, faUpRightFromSquare } from "@fortawesome/free-solid-svg-icons";
 
 import ElementSize from "@lib/element-size";
 import { NoCheck } from "@lib/util/vue";
 import { pointerObscured } from "@lib/pointer-obscured";
 import FrameOverlay from "./FrameOverlay.vue";
 import { clamp } from "@lib/util";
+import { windowId } from "@lib/url-state";
+import {
+  paneFromDescriptor,
+  serializeDragPayload,
+  serializePane,
+  type PaneDescriptor,
+} from "@lib/projection/descriptor";
+import { effectAllowedFor, PANE_MIME } from "@lib/projection/dnd";
 
 const props = defineProps({
   title: {
@@ -63,12 +71,15 @@ const props = defineProps({
     required: false,
     default: null,
   },
-  // Stream address for the expand button (multi-window.md req. 4): when set,
-  // the button opens a projection window for this session+frame channel
-  // instead of element-fullscreening the container (the pre-Stage-5
-  // behavior, kept as the fallback for local/unaddressed frames).
+  // Projectable source for the DEDICATED project-to-window button
+  // (projection-split-view.md deliverable 1): a `{kind:"frame",…}` or
+  // `{kind:"pipe",…}` pane descriptor. When set, a SECOND title-bar icon
+  // appears next to the element-fullscreen one — click opens a projection
+  // window seeded with this pane; in an app window the same icon is the drag
+  // handle (drag → carries the descriptor over the custom MIME). null = the
+  // feed isn't addressable, so only the fullscreen icon shows.
   projection: {
-    type: NoCheck<{ session: string; frame: string } | null>(),
+    type: NoCheck<PaneDescriptor | null>(),
     required: false,
     default: null,
   },
@@ -85,15 +96,42 @@ const emit = defineEmits<{
 const container = useTemplateRef<HTMLDivElement>("container");
 const canvas = useTemplateRef<HTMLCanvasElement>("canvas");
 
-// Expand button: projection window when the stream is addressable (session +
-// frame channel known), legacy element-fullscreen otherwise.
+// Element-fullscreen button (kept, deliverable 1): ALWAYS DOM-fullscreens the
+// container — no longer overloaded with projection (that split off to its own
+// icon so the two actions are never confused, user ruling 1).
 function expand(): void {
-  if (props.projection)
-    window.foveaBridge.openProjectionWindow(
-      props.projection.session,
-      props.projection.frame,
-    );
-  else container.value?.requestFullscreen();
+  container.value?.requestFullscreen();
+}
+
+// Origin of a projection drag from THIS window: only a projection window is a
+// "move" source; every other host (app windows, welcome previews) has a rigid
+// layout, so its drags advertise copy-only (DnD matrix, deliverable 4).
+const dragOrigin: "app" | "projection" =
+  typeof location !== "undefined" && location.pathname.endsWith("projection.html")
+    ? "projection"
+    : "app";
+
+// Dedicated project-to-window button: open a NEW projection window seeded with
+// this pane (the click path — "opens a new projection window as today").
+function project(): void {
+  if (!props.projection) return;
+  window.foveaBridge.openProjectionWindow(
+    serializePane(paneFromDescriptor(props.projection)),
+  );
+}
+
+// The same icon is a DnD source (in app windows it is the ONLY drag handle —
+// canvas drags are steering gestures and must not be hijacked). Carries the
+// pane descriptor under the custom MIME so a drop lands it in a projection
+// window's split tree.
+function onProjectDragStart(e: DragEvent): void {
+  if (!props.projection || !e.dataTransfer) return;
+  const pane = paneFromDescriptor(props.projection);
+  e.dataTransfer.setData(
+    PANE_MIME,
+    serializeDragPayload({ pane, srcWindowId: windowId(), origin: dragOrigin }),
+  );
+  e.dataTransfer.effectAllowed = effectAllowedFor(dragOrigin);
 }
 const size = new ElementSize(container);
 const canvasSize = new ElementSize(canvas);
@@ -339,9 +377,22 @@ function mix<T, P>(t: T, p: P): T & P {
       <div class="title-slot">
         <slot name="title"></slot>
       </div>
+      <!-- Deliverable 1: TWO distinct title-bar icons. The project-to-window
+           icon shows only for an addressable feed and doubles as the drag
+           handle; element-fullscreen is always present. -->
       <button
-        class="fullscreen"
-        :title="projection ? 'Open projection window' : 'Toggle Fullscreen'"
+        v-if="projection"
+        class="titlebar-icon project"
+        :draggable="true"
+        title="Project to window (drag to a projection window)"
+        @click="project"
+        @dragstart="onProjectDragStart"
+      >
+        <Icon :icon="faUpRightFromSquare" />
+      </button>
+      <button
+        class="titlebar-icon fullscreen"
+        title="Toggle fullscreen"
         @click="expand"
       >
         <Icon :icon="faExpand" />
@@ -436,7 +487,7 @@ function mix<T, P>(t: T, p: P): T & P {
       justify-content: flex-start;
     }
 
-    .fullscreen {
+    .titlebar-icon {
       background: none;
       border: none;
       color: inherit;
@@ -445,6 +496,14 @@ function mix<T, P>(t: T, p: P): T & P {
       opacity: 0.5;
       &:hover {
         opacity: 1;
+      }
+      // The project icon is a drag handle in app windows — hint it (canvas
+      // drags stay steering gestures; only this icon initiates a pane drag).
+      &.project {
+        cursor: grab;
+      }
+      &.project:active {
+        cursor: grabbing;
       }
     }
   }
