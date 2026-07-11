@@ -229,6 +229,29 @@ static FN(Uint16Packet) {
   return inject(info, Number::New(env, value), value);
 }
 
+// uint32 payloads — Command::Trigger's wire shape is `Microseconds duration`
+// (uint32, lib/Protocol/Packet.h:94/110). It was registered through
+// Uint16Packet since inception: any duration > 65535 µs threw JS-side, and a
+// value that fit produced a 2-byte payload the firmware's exact-size
+// FixedSizePacket::inflate REJects — CMD_TRIGGER never worked through the
+// NAPI factory (caught by the fw-sim harness, core/test/47 §6, 2026-07-11).
+static FN(Uint32Packet) {
+  EXPECT_EXACTLY_ONE_ARGUMENT("Packet<Uint32>");
+  uint32_t value;
+  if (arg.IsNumber()) {
+    const auto v = arg.As<Napi::Number>().DoubleValue();
+    JS_ASSERT(v >= 0 && v <= 0xFFFFFFFF && v == std::floor(v), RangeError,
+              "Number out of range for uint32 value", env.Undefined());
+    value = static_cast<uint32_t>(v);
+  } else if (isBufferLike(arg)) {
+    bufferView(arg) >> value;
+  } else {
+    JS_THROW(TypeError, "Argument must be a number or buffer like",
+             env.Undefined());
+  }
+  return inject(info, Number::New(env, value), value);
+}
+
 // uint64 payloads decode/encode as JS BigInt (a Number or BigInt is accepted
 // on input — convert<uint64_t> handles both). Used by System::Timestamp: the
 // MCU's µs clock is a wire uint64 that must round-trip losslessly, like
@@ -557,7 +580,7 @@ static Napi::Object Init(Napi::Env env) {
   auto obj = Napi::Object::New(env);
   obj.Set("Actuate", factory<Property::CMD_ACTUATE, ActuatePacket>(
                          env, "Command::Actuate"));
-  obj.Set("Trigger", factory<Property::CMD_TRIGGER, Uint16Packet>(
+  obj.Set("Trigger", factory<Property::CMD_TRIGGER, Uint32Packet>(
                          env, "Command::Trigger"));
   obj.Set("MirrorStream", factory<Property::CMD_STREAM, MirrorStreamPacket>(
                               env, "Command::MirrorStream"));
@@ -1203,6 +1226,12 @@ private:
         });
         if (retire) {
           p->erase(sequence);
+          // Release the pending guard BEFORE the bookkeeping —
+          // notePendingChanged() re-acquires the same non-recursive mutex;
+          // calling it under `p` self-deadlocked the rx thread after the
+          // first retired response (caught by the fw-sim harness, test 47:
+          // every subsequent get()/set() then blocked the JS main thread).
+          p.release();
           notePendingChanged(); // fairness reserve bookkeeping (Part 2)
         }
       } else if (method == Method::SYN && property == Property::LOG) {
