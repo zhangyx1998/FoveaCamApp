@@ -137,6 +137,8 @@ import {
 } from "@orchestrator/composite-pipe";
 import type { TemplateMatchValues } from "@orchestrator/template-match-kernel";
 import { consumeTracker, createDisparityTrackerFeed } from "./tracker-feed";
+import { matchPartnerStale } from "./match-join";
+import { DRAG_SLEW_TAU_MS, slewStep, type SlewPose } from "./drag-slew";
 import { makeMat } from "@lib/mat";
 import { PID, PID2D, type PidParams } from "@lib/pid";
 import { distanceToVerge, vergeToDistance, vergenceToDistance } from "@lib/stereo";
@@ -371,6 +373,13 @@ export default function disparityScopeSession(
     // Commanded volts — the PID node's output (control result or pinned
     // override), pushed to the controller node on every result (`pushVolts`).
     let commandedVolts: VergenceVolts = { l: ORIGIN_POS, r: ORIGIN_POS };
+    // Drag SLEW state (value-sweep addendum `disparity-drag-slew`): while a
+    // drag is in flight the commanded pose approaches the pointer target with
+    // a first-order smoother instead of stepping — successive control ticks
+    // then emit DIFFERING poses (the sink gate passes them at capacity) and
+    // epsilon-snap to the exact target once settled (quiet on static). Null
+    // outside a drag; seeded from the pre-drag pose at the first drag apply.
+    let dragSlew: { pose: SlewPose; at: number } | null = null;
     const actuateMsStats = new RollingStats(0.9, 2, "ms");
 
     // The named DOF controllers (owned by the PID node once created). `pan` is a
@@ -675,7 +684,7 @@ export default function disparityScopeSession(
     // --- per-side match results → the pid JOIN (split-disparity-nodes) -----
 
     type SideKey = "L" | "R";
-    type SideMatch = { center: Point2d; score: number; seq: number };
+    type SideMatch = { center: Point2d; score: number; seq: number; at: number };
     // Latest result per side; the vergence step runs when the ARRIVING side
     // completes a pair (its seq >= the other side's latest) — order-agnostic,
     // ~once per strip frame, degrades gracefully to the slower side's rate.
@@ -706,6 +715,7 @@ export default function disparityScopeSession(
         center: { x: v.origin.x + c.x, y: v.origin.y + c.y },
         score: v.score,
         seq: v.seq ?? 0,
+        at: now(),
       };
       latestMatch[side] = m;
       s.telemetry(
@@ -715,6 +725,17 @@ export default function disparityScopeSession(
       );
       const other = latestMatch[side === "L" ? "R" : "L"];
       if (!other || m.seq < other.seq) return; // pair incomplete — wait
+      // value-sweep `match-pair-join-no-staleness-bound`: a stalled partner
+      // (dead worker / starved pipe) used to freeze ONE eye's center into the
+      // vergence law indefinitely while status read "tracking". A partner
+      // beyond the age/seq bound is treated as LOST: hold the pose (skip the
+      // control step — the existing hold semantics) and say so.
+      if (
+        matchPartnerStale({ ageMs: now() - other.at, seqGap: m.seq - other.seq })
+      ) {
+        status = "match stale";
+        return;
+      }
       // Center-tile marker for the guide overlay (strip-local full-res px,
       // anchored to THIS strip frame's origin so it stays aligned mid-steer).
       const z = Math.max(1, matchZoom()); // resolved zoom (Auto → measured)
@@ -739,6 +760,29 @@ export default function disparityScopeSession(
         // the old one-kernel-tick flag lag is gone too.
         overridden: dragging,
       });
+    }
+
+    /** One drag-slew step toward the follow target (finding `disparity-drag-
+     *  slew`): seeds from the CURRENT commanded pose on the first apply of a
+     *  drag, then advances with dt = time since the previous apply (pointer
+     *  events + match ticks both drive it — whatever cadence is live). Rides
+     *  the VALUE only: the transport underneath (native compose path or JS
+     *  fallback) is untouched, so it cannot resurrect a suppressed JS stream
+     *  (`dual-cmd-stream-handoff-race` interaction). */
+    function slewToward(target: VergenceVolts): VergenceVolts {
+      const t = now();
+      if (!dragSlew) {
+        dragSlew = {
+          pose: {
+            l: { x: commandedVolts.l.x, y: commandedVolts.l.y },
+            r: { x: commandedVolts.r.x, y: commandedVolts.r.y },
+          },
+          at: t,
+        };
+      }
+      const r = slewStep(dragSlew.pose, target, t - dragSlew.at, DRAG_SLEW_TAU_MS);
+      dragSlew = { pose: r.pose, at: t };
+      return { l: r.pose.l, r: r.pose.r };
     }
 
     /** Direct-follow volts for `target` (the drag path — see
@@ -790,7 +834,10 @@ export default function disparityScopeSession(
         // Kernel-rate re-affirmation of the drag follow (the pointer handler
         // already pushed synchronously; this keeps the output tracking a
         // coalesced-away pointer move and any target clamp the kernel applied).
-        return followVolts(projection.target) ?? commandedVolts;
+        // SLEWED like the pointer path — both drag cadences drive the same
+        // smoother toward the same target.
+        const follow = followVolts(projection.target);
+        return follow ? slewToward(follow) : commandedVolts;
       }
       if (frozen()) {
         status = "frozen";
@@ -971,6 +1018,14 @@ export default function disparityScopeSession(
       // split-node graph builds. A failure/early-return leaves the list FROZEN
       // at the step it died on (never `done`/`complete`); `idleSession`'s
       // `disposers.dispose()` path clears it via the runtime's idle reset.
+      // value-sweep `freeze-window-not-reset-on-activate`: these clocks were
+      // initialized at SESSION CREATION (orchestrator start), so a window
+      // (re-)entering disparity-scope long after boot began already past the
+      // convergence timeout — frozen before the first projection. Reset the
+      // activity window + control-step clock per activation.
+      windowStart = now();
+      lastStep = now();
+      dragSlew = null;
       const monitor = s.progressMonitor([
         { id: "lease", label: "Leasing cameras" },
         { id: "undistort", label: "Loading calibration" },
@@ -996,7 +1051,11 @@ export default function disparityScopeSession(
       const legacyCfg = await read<{ baseline_distance_mm?: number }>(["config"], {});
       const resolvedBaseline = resolveBaseline(t.baselineMm, legacyCfg.baseline_distance_mm);
       s.setState("baseline", resolvedBaseline);
-      verge.limits = [0, distanceToVerge(VERGE_MIN_DISTANCE_MM, resolvedBaseline)];
+      // setLimits, NOT a bare `.limits =` (value-sweep `verge-integral-clamp-
+      // stale`): the integral clamp aliased the construction-time array, so
+      // replacing `limits` alone left the velocity-form COMMAND clamped to the
+      // default-200 mm baseline range on any other rig.
+      verge.setLimits([0, distanceToVerge(VERGE_MIN_DISTANCE_MM, resolvedBaseline)]);
 
       monitor.start("undistort");
 
@@ -1395,16 +1454,33 @@ export default function disparityScopeSession(
       // Two GENERIC match workers — meterName = the node id, so each worker's
       // self-meter folds onto its own graph node badge (per-side match cost
       // is now individually visible; the monolithic kernel hid the split).
+      // value-sweep `ungated-diagnostic-heatmap`: the correlation heatmap is a
+      // DIAGNOSTIC (the Debugger sub-window's match_left/match_right views) —
+      // computing + copying + transferring it EVERY tick with no debugger open
+      // was pure waste. The kernel starts with emitHeatmap OFF; real demand
+      // (a subscriber declaring frame interest — the C10 machinery) flips it
+      // live via sendParams, and a departing debugger flips it back off.
+      const HEATMAP_FRAMES = ["match_left", "match_right"] as const;
+      let heatmapEmitting = false;
+      const syncHeatmapInterest = (): void => {
+        const want = HEATMAP_FRAMES.some((f) => s.frameInterested(f));
+        if (want === heatmapEmitting) return;
+        heatmapEmitting = want;
+        workers.L?.sendParams({ emitHeatmap: want });
+        workers.R?.sendParams({ emitHeatmap: want });
+      };
       for (const side of ["L", "R"] as const) {
         workers[side] = createVisionWorker(
           {
             pipes: matchInputs[side],
-            params: { kind: "template-match" },
+            params: { kind: "template-match", emitHeatmap: false },
             meterName: matchIds[side],
           },
           (r) => onMatch(side, r),
         );
       }
+      disposers.add(s.onFrameInterestChange(syncHeatmapInterest));
+      syncHeatmapInterest(); // a debugger already open declared interest early
       disposers.add(
         registerGraphWiring({
           // DISPLAY-ONLY: the profiler labels this leased triple by role
@@ -1796,11 +1872,12 @@ export default function disparityScopeSession(
             // slot outranks the drag, matching `node.step`'s semantics.
             const v = followVolts(p);
             if (v && !pidNode?.override.engaged) {
-              commandedVolts = v;
+              commandedVolts = slewToward(v); // drag slew (see slewToward)
               pushVolts();
             }
           } else {
             dragging = false;
+            dragSlew = null; // next drag re-seeds from the settled pose
             windowStart = now(); // drag end restarts the convergence window
             publishOverridden(false);
             if (tk) {
@@ -1887,7 +1964,8 @@ export default function disparityScopeSession(
           retuneScalers();
         },
         baseline(v) {
-          verge.limits = [0, distanceToVerge(VERGE_MIN_DISTANCE_MM, v)];
+          // setLimits (not `.limits =`) — see the activate-time note.
+          verge.setLimits([0, distanceToVerge(VERGE_MIN_DISTANCE_MM, v)]);
         },
         zoom() {
           // Zoom re-shapes both crops AND the tile/strip scale geometry.

@@ -103,6 +103,27 @@ export class PID {
   }
 
   /**
+   * Re-bound a LIVE controller (value-sweep 2026-07-11
+   * `verge-integral-clamp-stale`). A bare `pid.limits = [...]` assignment is a
+   * TRAP: the constructor aliases `integralLimits` to the SAME array when no
+   * explicit integral clamp was given, so replacing `limits` with a new array
+   * leaves the integrator clamped to the CONSTRUCTION-time bound — and in
+   * velocity-form loops the integrator IS the command (the disparity verge
+   * DOF stayed clamped to the default-200 mm baseline range on any other
+   * rig). This setter updates BOTH bounds (mirroring `setParams`' "limits
+   * without integralLimits re-derives the integral clamp") and re-clamps the
+   * live integrator so a narrowed range can't strand an out-of-range command.
+   */
+  setLimits(
+    limits: [number, number],
+    integralLimits: [number, number] = limits,
+  ): void {
+    this.limits = limits;
+    this.integralLimits = integralLimits;
+    this.integral = clamp(this.integral, this.integralLimits);
+  }
+
+  /**
    * Re-parameterize a LIVE controller from the uniform {@link PidParams} shape
    * (gain retune, e.g. a tuning-slider write) WITHOUT disturbing the integrator
    * or derivative memory — the loop keeps running through the change. Mirrors

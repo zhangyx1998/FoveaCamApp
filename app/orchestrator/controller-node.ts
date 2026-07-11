@@ -331,6 +331,27 @@ export class ControllerNode {
       await this.disableIfLast();
   }
 
+  /** @internal — TRUE while any native input is attached OR attaching
+   *  (value-sweep 2026-07-11 `dual-cmd-stream-handoff-race`): the JS inputs
+   *  must not create/hold their own CMD_STREAM in that window — the firmware
+   *  DAC is first-CREATE-wins and never re-arbitrates, so a second stream
+   *  either parks the mirrors dead (native stream lost the race) or leaves
+   *  an FW5-violating orphan (JS stream lost). `creating` is set
+   *  SYNCHRONOUSLY in sync(), so the suppression is active from
+   *  `openNativePosition()`'s return — before the fallback's first update. */
+  nativeEngaged(): boolean {
+    for (const n of this.nativeInputs) if (n.engagedOrPending) return true;
+    return false;
+  }
+
+  /** @internal — the explicit fallback→native HANDOFF: TERMINATE any stream
+   *  a JS input still holds (created before the native attach began, e.g.
+   *  when the controller bound after activation). Called by the native input
+   *  the moment its sink attaches, BEFORE the session pipes volts into it. */
+  async handoffToNative(): Promise<void> {
+    for (const input of this.inputs) await input.dropStream();
+  }
+
   /** @internal — native-input retire: same disable-iff-last discipline. */
   async retireNativeInput(input: NativePositionInputImpl): Promise<void> {
     this.nativeInputs.delete(input);
@@ -369,8 +390,13 @@ export class ControllerNode {
             performance.now() - t0,
           );
         } catch {
-          // controller dropped / not enabled — retry next tick
-          this.enabledByUs = false;
+          // Transient v1 failure (a dropped packet, a mid-swap actuate) —
+          // retry next tick. Do NOT clear `enabledByUs` here (value-sweep
+          // 2026-07-11 `v1-transient-error-clears-enabledByUs`): the device
+          // stays enabled, and clearing the ownership flag silently broke
+          // disable-on-last-close. The flag is cleared only where the enable
+          // state actually changes: disableIfLast (we disabled) and
+          // unbindController (the device is gone).
         }
         await new Promise((r) => setTimeout(r, V1_INTERVAL_MS));
       }
@@ -428,6 +454,14 @@ class PositionInputImpl implements PositionInput {
       // capture / drift derivation read the applied pose, as they did on the
       // pre-node awaited path (guarded — partial fakes may omit it).
       c.applyStreamedPos?.(predicted);
+      // value-sweep `dual-cmd-stream-handoff-race`: while a native input is
+      // attached or attaching, this JS input must not create/hold its own
+      // CMD_STREAM (see ControllerNode.nativeEngaged). Drop anything still
+      // held from before the attach began; the native path owns the wire.
+      if (this.node.nativeEngaged()) {
+        if (this.stream) void this.dropStream();
+        return predicted;
+      }
       if (this.streamOwner && this.streamOwner !== c) void this.dropStream();
       if (this.stream && this.streamOwner === c) this.stream.update(pos);
       else this.ensureStream(c);
@@ -445,8 +479,9 @@ class PositionInputImpl implements PositionInput {
       try {
         await this.node.ensureEnabled(c);
         const s = await c.createStream(this.latest);
-        // The node may have unbound / swapped / closed while awaiting — reconcile.
-        if (this.closed || this.node.liveController !== c) {
+        // The node may have unbound / swapped / closed — or a NATIVE input may
+        // have engaged (dual-cmd-stream-handoff-race) — while awaiting.
+        if (this.closed || this.node.liveController !== c || this.node.nativeEngaged()) {
           await safeClose(s);
           return;
         }
@@ -496,6 +531,12 @@ class NativePositionInputImpl implements NativePositionInput {
     return this.handle?.sink ?? null;
   }
 
+  /** @internal — attached OR attach in flight (the JS-stream suppression
+   *  window; see ControllerNode.nativeEngaged). */
+  get engagedOrPending(): boolean {
+    return !this.closed && (this.creating || this.handle !== null);
+  }
+
   /** @internal — attach against the current controller if possible (open +
    *  bindController). v1 / unbound controllers simply never attach; the
    *  session's fallback path owns those. */
@@ -521,6 +562,11 @@ class NativePositionInputImpl implements NativePositionInput {
           return;
         }
         this.handle = h;
+        // Explicit fallback→native HANDOFF (dual-cmd-stream-handoff-race):
+        // TERMINATE any CMD_STREAM a JS input created before this attach —
+        // BEFORE the session pipes volts in, so the firmware never holds two
+        // live streams for the same DAC.
+        await this.node.handoffToNative();
         try {
           this.opts.onAttach(h.sink);
         } catch {

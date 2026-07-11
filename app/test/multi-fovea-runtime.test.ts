@@ -237,4 +237,27 @@ describe("MultiFoveaRuntime (batched multi-KCF)", () => {
     expect(stale.close).toHaveBeenCalledTimes(1);
     expect(schedulerTargets.at(-1)).toEqual([{ stream: 22 }, { stream: 23 }]);
   });
+
+  it("lost-tolerance release RESYNCS the scheduler off the dead stream (multifovea-lost-release-stale-scheduler)", async () => {
+    const s0 = stream(40);
+    const s1 = stream(41);
+    const { deps, schedulerTargets } = makeDeps([s0, s1]);
+    const runtime = new MultiFoveaRuntime({ activeRequestCount: 0 }, deps);
+    runtime.setFrameSize({ width: 200, height: 200 });
+    const t0 = target(0, { tracker: { ...target(0).tracker, lostTolerance: 2 } });
+    const t1 = target(1, { tracker: { ...target(1).tracker, lostTolerance: 2 } });
+    runtime.setTargets([t0, t1]);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(schedulerTargets.at(-1)).toEqual([{ stream: 40 }, { stream: 41 }]);
+
+    // Slot 0 exceeds its lost tolerance → its MCU stream TERMINATEs...
+    runtime.onTrackResults(batch([{ id: "0", ok: false, bbox: null }]));
+    runtime.onTrackResults(batch([{ id: "0", ok: false, bbox: null }]));
+    expect(s0.close).toHaveBeenCalled();
+    // ...and the round-robin must immediately drop the DEAD stream id —
+    // pre-fix it kept rotating stream 40 into CMD_FRAMEs until the next
+    // full setTargets.
+    expect(schedulerTargets.at(-1)).toEqual([{ stream: 41 }]);
+  });
 });

@@ -304,6 +304,32 @@ export class ServerSession<C extends Contract> {
     for (const ch of this.subscribers) if (ch.hasFrameInterest(t)) ch.sendFrame(t, payload);
   }
 
+  // value-sweep 2026-07-11 `ungated-diagnostic-heatmap`: sessions gating an
+  // EXPENSIVE producer (the template-match diagnostic heatmap) on real demand
+  // need the aggregate per-topic interest the C10 machinery already tracks
+  // per channel. Coarse change notifications — listeners re-derive via
+  // `frameInterested` (interest is only ever gained per channel and lost by
+  // channel departure, so "something changed" is enough signal).
+  private readonly frameInterestListeners = new Set<() => void>();
+
+  /** Whether ANY current subscriber declared interest in the named frame. */
+  frameInterested(name: FrameOf<C> | (string & {})): boolean {
+    const t = topic.frame(this.name, String(name));
+    for (const ch of this.subscribers) if (ch.hasFrameInterest(t)) return true;
+    return false;
+  }
+
+  /** Fires when the interest set MAY have changed (a channel declared a new
+   *  frame interest, or a subscriber departed). Returns an unsubscribe. */
+  onFrameInterestChange(cb: () => void): () => void {
+    this.frameInterestListeners.add(cb);
+    return () => this.frameInterestListeners.delete(cb);
+  }
+
+  private notifyFrameInterestChange(): void {
+    for (const cb of this.frameInterestListeners) cb();
+  }
+
   /** Wire one client connection to this session (commands + state writes). */
   attach(ch: Channel): void {
     this.channels.add(ch);
@@ -318,6 +344,7 @@ export class ServerSession<C extends Contract> {
     ch.onFrameInterest((t) => {
       const cached = this.frameCache.get(t);
       if (cached) ch.sendFrame(t, cached);
+      this.notifyFrameInterestChange(); // demand-gated producers re-derive
     });
     // setState is a fire-and-forget event from the client (the value echoes
     // back via the `state` topic), so listen with `on`, not `handle`.
@@ -368,7 +395,8 @@ export class ServerSession<C extends Contract> {
   unsubscribe(ch: Channel, options: { passive?: boolean } = {}): void {
     if (options.passive && this.activeSubscribers.has(ch)) return;
     const wasActive = this.activeSubscribers.delete(ch);
-    this.subscribers.delete(ch);
+    const wasSubscriber = this.subscribers.delete(ch);
+    if (wasSubscriber) this.notifyFrameInterestChange(); // interest may have shrunk
     if (wasActive && this.activeSubscribers.size === 0) {
       this.runIdle();
       this.clearFrameCache(); // V4: bound memory — stale previews from this activation are gone anyway
@@ -468,6 +496,13 @@ export class Hub {
   // C-24's composition validation keys `win/<windowId>/...` requests on it.
   private readonly channelWindows = new Map<Channel, string>();
   private readonly windowClosedHooks = new Set<(windowId: string) => void>();
+  // value-sweep-2026-07-11 (`pipe-consumer-refcount-no-reconciliation`):
+  // per-CHANNEL teardown hooks. Unlike `windowClosed` (DESTROY only), these
+  // fire on every port close — reload, renderer crash, and window close alike —
+  // so a session holding per-channel native refcounts (the pipe broker's
+  // connect ledger) can reconcile them when the renderer that took them goes
+  // away, instead of wedging the C-21 consumer gate ON forever.
+  private readonly channelClosedHooks = new Set<(ch: Channel) => void>();
 
   add<C extends Contract>(session: ServerSession<C>): ServerSession<C> {
     this.sessions.push(session);
@@ -496,6 +531,15 @@ export class Hub {
     for (const fn of this.windowClosedHooks) fn(windowId);
   }
 
+  /** Register a channel-close hook (value-sweep-2026-07-11): fires with the
+   *  Channel whenever its client port closes — reload, crash, or window close.
+   *  The authoritative signal for reconciling per-channel native state (e.g.
+   *  the pipe broker's connect refcounts). Returns an unregister disposer. */
+  onChannelClosed(fn: (ch: Channel) => void): () => void {
+    this.channelClosedHooks.add(fn);
+    return () => this.channelClosedHooks.delete(fn);
+  }
+
   attach(port: MessagePortMain, meta?: { windowId?: string | null }): void {
     port.start();
     const ch = new Channel(mainEndpoint(port));
@@ -514,6 +558,9 @@ export class Hub {
       this.byName.get(name)?.unsubscribe(ch, { passive });
     });
     port.on("close", () => {
+      // Reconcile per-channel native state (pipe connect refcounts) BEFORE the
+      // sessions detach — the hooks still need to look the channel up.
+      for (const fn of this.channelClosedHooks) fn(ch);
       for (const s of this.sessions) s.detach(ch);
       this.channels.delete(ch);
       this.channelWindows.delete(ch);

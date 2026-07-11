@@ -122,6 +122,29 @@ describe("ControllerNode — position stream lifecycle (v2)", () => {
     expect(c.disable).toHaveBeenCalledTimes(1); // last close disabled (we enabled it)
   });
 
+  it("a TRANSIENT v1 actuate failure does not break disable-on-last-close (v1-transient-error-clears-enabledByUs)", async () => {
+    node = new ControllerNode();
+    const c = makeV1Controller();
+    // First actuate THROWS (a dropped packet), later ones succeed — the node's
+    // paced loop must retry AND keep the enable-ownership bookkeeping intact.
+    let failures = 1;
+    c.actuate = vi.fn(async (p: { left: Pos; right: Pos }) => {
+      if (failures-- > 0) throw new Error("transient serial hiccup");
+      c.pos = PAIR({ ...p.left }, { ...p.right });
+      return { ...c.pos };
+    }) as never;
+    node.bindController(c as never);
+    const input = node.openPosition("scope", { initial: ORIGIN });
+    input.update(PAIR(P(1, 2), P(3, 4)));
+    await wait(30); // let the paced loop hit the failure AND a later success
+    expect(c.enable).toHaveBeenCalled();
+    expect(c.actuate.mock.calls.length).toBeGreaterThan(1); // retried past the hiccup
+    await input.close();
+    // The defect: the transient error cleared `enabledByUs`, so this disable
+    // never happened and the mirrors stayed silently enabled.
+    expect(c.disable).toHaveBeenCalledTimes(1);
+  });
+
   it("does NOT disable a controller the caller pre-enabled (enable-iff-we-enabled)", async () => {
     node = new ControllerNode();
     const c = makeV2Controller();

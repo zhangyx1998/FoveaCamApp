@@ -62,6 +62,9 @@ export function controllerSession(): ServerSession<typeof controller> {
     }
 
     let probeTimer: ReturnType<typeof setInterval> | null = null;
+    // One-shot unplug latch (reset per probe start) — the ping rejects every
+    // 500 ms while unplugged; the banner must fire once, not spam.
+    let unplugReported = false;
     let prevStats: { txBytes: number; rxBytes: number; txPackets: number; rxPackets: number } | null = null;
 
     function stopProbe(): void {
@@ -73,6 +76,7 @@ export function controllerSession(): ServerSession<typeof controller> {
 
     function startProbe(): void {
       stopProbe();
+      unplugReported = false;
       const dtSec = PROBE_INTERVAL_MS / 1000;
       probeTimer = setInterval(() => {
         const c = ctrl();
@@ -107,13 +111,30 @@ export function controllerSession(): ServerSession<typeof controller> {
           ackRttMs: cur.ackRttMs ?? ZERO_PRESSURE.ackRttMs,
           appliedLookaheadMs: currentAppliedLookahead(),
         };
-        s.telemetry({ serialRate, serialPressure, streams: c.streamSnapshot(dtSec) });
+        // value-sweep 2026-07-11 `controller-unplug-invisible`: re-read the
+        // LIVE connection state every probe tick — a USB unplug flips
+        // `c.connected` but nothing re-published it, so the title-bar
+        // indicator stayed green while the mirrors silently stopped steering.
+        s.telemetry({
+          connected: !!c.connected,
+          serialRate,
+          serialPressure,
+          streams: c.streamSnapshot(dtSec),
+        });
         // PROBE PING (Part 1): keep ackRttMs live even when no user traffic
         // flows — the device-loop-saturation proxy. A SYS_TIMESTAMP GET (the
         // clock-ping machinery) is NOT Actuate, so FW5 holds and it coexists
-        // with an active stream (asserted in core/test/46). Fire-and-forget
-        // race semantics: a lost ping must never wedge the probe timer.
-        void c.readTimestamp?.().catch(() => {});
+        // with an active stream (asserted in core/test/46). A rejection is
+        // ALSO the unplug signal (`controller-unplug-invisible`): when the
+        // device reports disconnected, flip the telemetry + banner ONCE
+        // instead of discarding the exact rejection that carries the news.
+        void c.readTimestamp?.().catch(() => {
+          if (!c.connected && !unplugReported) {
+            unplugReported = true;
+            s.telemetry({ connected: false, enabled: false });
+            s.fail("Controller disconnected (USB unplugged?)");
+          }
+        });
       }, PROBE_INTERVAL_MS);
     }
 
@@ -185,7 +206,10 @@ export function controllerSession(): ServerSession<typeof controller> {
             // invariant, docs/hardware/stage-f.md).
             if (c?.connected && c.enabled) await c.disable();
           } catch (e) {
-            console.warn("[controller] disable-on-disconnect failed:", e);
+            // value-sweep 2026-07-11 (error-broadcast finding tail): a failed
+            // disable-on-disconnect is a safety-relevant event — surface it in
+            // the renderer error tray, not just an unwatched console.
+            report("controller", `disable-on-disconnect failed: ${(e as Error).message}`);
           }
           c?.release();
           stopProbe();

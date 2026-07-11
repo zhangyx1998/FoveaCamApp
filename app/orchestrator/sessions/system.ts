@@ -19,7 +19,7 @@ import { nativeProbes } from "../native-probes.js";
 import { releaseAll } from "../registry.js";
 import { writeCounts } from "../store-hub.js";
 import { calibrationsSnapshot } from "../time-align.js";
-import { spans } from "../diagnostics.js";
+import { report, spans } from "../diagnostics.js";
 import { startLoopLagProbe } from "@lib/util/rolling";
 
 const LOOP_LAG_PUBLISH_INTERVAL_MS = 1000; // ≤ 1 Hz per the perf-substrate constraint
@@ -79,7 +79,10 @@ export function systemSession(
           try {
             topology = graph?.(workloads);
           } catch (e) {
-            console.error("[system] graph topology fold failed:", e);
+            // value-sweep 2026-07-11 (error-broadcast finding tail): route
+            // through report() so the failure reaches the renderer error tray
+            // instead of dying in an unwatched orchestrator console.
+            report("system", `graph topology fold failed: ${(e as Error).message}`);
           }
           return {
             timestamp: new Date().toISOString(),

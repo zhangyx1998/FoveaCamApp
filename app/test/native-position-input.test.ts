@@ -170,6 +170,77 @@ describe("openNativePosition", () => {
     await input.close();
   });
 
+  it("suppresses the JS input's CMD_STREAM while a native attach is PENDING (dual-cmd-stream-handoff-race)", async () => {
+    node = new ControllerNode();
+    const c = makeV2Controller();
+    c.createStream = vi.fn(async () => ({
+      id: 0,
+      update: vi.fn(),
+      close: vi.fn(async () => {}),
+    })) as never;
+    // A SLOW native attach: the sink promise stays pending until we resolve it
+    // — the exact window the JS fallback used to race a second CREATE into.
+    let resolveAttach!: (h: ReturnType<typeof makeSinkHandle>) => void;
+    c.createNativeMirrorSink = vi.fn(
+      () => new Promise<ReturnType<typeof makeSinkHandle>>((r) => (resolveAttach = r)),
+    ) as never;
+    node.bindController(c as never);
+    const native = node.openNativePosition("native", {
+      initial: ORIGIN,
+      onAttach: vi.fn(),
+      onDetach: vi.fn(),
+    });
+    const js = node.openPosition("js-fallback", { initial: ORIGIN });
+    // The fallback pumps updates DURING the pending attach (wave-5 fallback
+    // loop shape) — the JS input must NOT lazily create its own stream.
+    js.update(PAIR(P(1, 1), P(1, 1)));
+    js.update(PAIR(P(2, 2), P(2, 2)));
+    await tick();
+    expect(c.createStream).not.toHaveBeenCalled();
+    // Attach completes → still suppressed (native owns the wire).
+    resolveAttach(makeSinkHandle());
+    await tick();
+    js.update(PAIR(P(3, 3), P(3, 3)));
+    await tick();
+    expect(c.createStream).not.toHaveBeenCalled();
+    await native.close();
+    await js.close();
+  });
+
+  it("TERMINATEs a pre-existing JS stream on native attach (explicit handoff)", async () => {
+    node = new ControllerNode();
+    const c = makeV2Controller();
+    const jsStream = { id: 7, update: vi.fn(), close: vi.fn(async () => {}) };
+    c.createStream = vi.fn(async () => jsStream) as never;
+    node.bindController(c as never);
+    // The JS input creates its stream FIRST (controller bound before any
+    // native input existed — e.g. a pre-wave-5 style session, or the fallback
+    // engaged while the controller was v2 but the native open came later).
+    const js = node.openPosition("js-first", { initial: ORIGIN });
+    js.update(PAIR(P(1, 1), P(1, 1)));
+    await tick();
+    expect(c.createStream).toHaveBeenCalledTimes(1);
+    // Now the native input attaches → the node must hand off: the JS stream
+    // is TERMINATEd BEFORE onAttach fires (never two live streams).
+    const events: string[] = [];
+    jsStream.close.mockImplementation(async () => {
+      events.push("js-terminated");
+    });
+    const input = node.openNativePosition("native", {
+      initial: ORIGIN,
+      onAttach: () => events.push("attached"),
+      onDetach: vi.fn(),
+    });
+    await tick();
+    expect(events).toEqual(["js-terminated", "attached"]);
+    // Post-handoff updates on the JS input stay streamless.
+    js.update(PAIR(P(9, 9), P(9, 9)));
+    await tick();
+    expect(c.createStream).toHaveBeenCalledTimes(1);
+    await input.close();
+    await js.close();
+  });
+
   it("disable waits for the LAST input across JS + native (quiesce parity)", async () => {
     node = new ControllerNode();
     const c = makeV2Controller();

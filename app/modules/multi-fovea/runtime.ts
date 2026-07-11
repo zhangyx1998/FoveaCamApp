@@ -178,6 +178,13 @@ export class MultiFoveaRuntime {
         slot.lostCount = 0;
       } else if (++slot.lostCount >= slot.config.tracker.lostTolerance) {
         this.releaseSlot(slot, index);
+        // value-sweep 2026-07-11 `multifovea-lost-release-stale-scheduler`:
+        // the release just TERMINATEd this slot's MCU stream, but the
+        // round-robin scheduler still had its stream id in rotation — every
+        // pass issued a CMD_FRAME against a DEAD stream (firmware REJ /
+        // wasted round-robin turn) until the next full setTargets. Resync
+        // the scheduler to the surviving live streams immediately.
+        this.syncSchedulerTargets();
         continue;
       }
       const center = slot.bbox ? RECT.getCenter(slot.bbox) : slot.config.center;
@@ -269,17 +276,23 @@ export class MultiFoveaRuntime {
           }
           slot.stream = stream;
         }
-        if (!stale && generation === this.generation)
-          this.deps.updateScheduler(
-            this.slots
-              .filter((slot) => slot.config.enabled && slot.stream)
-              .map((slot) => ({ stream: slot.stream!.id })),
-          );
+        if (!stale && generation === this.generation) this.syncSchedulerTargets();
       } while (this.streamSyncDirty);
     } finally {
       this.streamSyncing = false;
       if (this.streamSyncDirty) this.requestStreamSync();
     }
+  }
+
+  /** Push the CURRENT set of live (enabled + streamed) slots into the
+   *  round-robin scheduler — the single spelling of the target list (the
+   *  stream-sync path and the lost-release path both converge here). */
+  private syncSchedulerTargets(): void {
+    this.deps.updateScheduler(
+      this.slots
+        .filter((slot) => slot.config.enabled && slot.stream)
+        .map((slot) => ({ stream: slot.stream!.id })),
+    );
   }
 
   private releaseSlot(slot: Slot, index: number): void {
