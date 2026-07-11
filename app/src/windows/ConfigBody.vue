@@ -121,6 +121,10 @@ const anaglyph_style = await useConfigRef("anaglyph_style");
 // rate (prediction-compose-node.md ruling 2). Same doc key the disparity-scope
 // drawer slider binds — edits here apply live across windows.
 const prediction_rate_hz = await useConfigRef("prediction_rate_hz");
+// Serial-latency compensation (serial-rate-governor.md Part 4): adds the
+// measured one-way serial latency to the predictor's fixed lookahead.
+// Default OFF; Settings-only (no drawer control, per ruling).
+const serial_latency_comp = await useConfigRef("serial_latency_comp");
 const anaglyphCardList = computed(() => anaglyphCards(anaglyph_style.value));
 function selectAnaglyph(style: AnaglyphStyle): void {
   anaglyph_style.value = style;
@@ -896,6 +900,18 @@ onUnmounted(() => {
       <p class="hint">
         Motion-predictor output rate driving the mirror feed-forward (60–1000 Hz).
         Applies live to Disparity Scope; also adjustable from its drawer.
+      </p>
+
+      <label class="row">
+        <span class="label">Serial latency compensation</span>
+        <span class="field">
+          <input type="checkbox" v-model="serial_latency_comp" />
+        </span>
+      </label>
+      <p class="hint">
+        Adds the measured one-way serial latency (half the ACK round-trip) to
+        the motion predictor's fixed lookahead. Applies live; off = fixed
+        lookahead only.
       </p>
       </section>
 

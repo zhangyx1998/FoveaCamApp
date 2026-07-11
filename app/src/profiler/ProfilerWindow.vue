@@ -525,6 +525,56 @@ watch(activeTab, (t) => {
       </div>
     </section>
 
+    <!-- Serial PRESSURE (serial-rate-governor.md Part 3 — every new stat
+         surfaces in the profiler, user ruling): governor rate vs requested,
+         outq gauges, soft-fail counter, ACK-RTT percentiles, and the
+         predictor's applied lookahead (Part 4). -->
+    <section v-show="activeTab === 'control'">
+      <h2>Serial pressure</h2>
+      <p class="hint" v-if="!ctrl.telemetry.connected">Controller not connected — pressure reads zero until it is.</p>
+      <div class="row">
+        <div class="stat">
+          <label>Stream rate (governor)</label>
+          <div class="mono">
+            {{ fmt(ctrl.telemetry.serialPressure.effectiveRateHz, 0) }} Hz
+            / {{ fmt(ctrl.telemetry.serialPressure.ceilingHz, 0) }} Hz requested
+            · {{ ctrl.telemetry.serialPressure.governorState }}
+          </div>
+        </div>
+        <div class="stat">
+          <label>Output queue</label>
+          <div class="mono">
+            <template v-if="ctrl.telemetry.serialPressure.outqSupported">
+              {{ ctrl.telemetry.serialPressure.outqBytes }} B
+              (hwm {{ ctrl.telemetry.serialPressure.outqHighWater }} B)
+            </template>
+            <template v-else>unsupported on this platform</template>
+            · soft-fail {{ ctrl.telemetry.serialPressure.txSoftFail }}
+          </div>
+        </div>
+      </div>
+      <div class="row">
+        <div class="stat">
+          <label>ACK RTT (p50 / p95 / max over {{ ctrl.telemetry.serialPressure.ackRttMs.count }} samples)</label>
+          <div class="mono">
+            {{ fmt(ctrl.telemetry.serialPressure.ackRttMs.p50, 2) }} /
+            {{ fmt(ctrl.telemetry.serialPressure.ackRttMs.p95, 2) }} /
+            {{ fmt(ctrl.telemetry.serialPressure.ackRttMs.max, 2) }} ms
+            (baseline {{ fmt(ctrl.telemetry.serialPressure.ackRttMs.baselineP50, 2) }} ms)
+          </div>
+        </div>
+        <div class="stat">
+          <label>Predictor lookahead (applied)</label>
+          <div class="mono">
+            <template v-if="ctrl.telemetry.serialPressure.appliedLookaheadMs !== null">
+              {{ fmt(ctrl.telemetry.serialPressure.appliedLookaheadMs, 2) }} ms
+            </template>
+            <template v-else>— (no predictor active)</template>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <!-- ============ TRANSPORT ============ -->
       <section v-show="activeTab === 'transport'">
       <h2>Live streams ({{ sortedStreams.length }})</h2>

@@ -1,9 +1,46 @@
 # Serial rate governor — maximum sync rate without jamming or overload
 
-Status: **PROPOSED (ruled 2026-07-10).** Builds on
-[`native-compose-controller.md`](./native-compose-controller.md) (wave 5 —
-the native controller `pos_in` gate is where the governor lives); sequenced
-after it.
+Status: **SHIPPED (2026-07-11; rig pass owed — see AS SHIPPED below).**
+Builds on [`native-compose-controller.md`](./native-compose-controller.md)
+(wave 5 — the native controller `pos_in` gate is where the governor lives).
+
+## AS SHIPPED (2026-07-11)
+
+All four parts landed. **Audit catch (fixed in-wave): the O_NONBLOCK serial
+fd's short writes corrupted COBS framing** — a partial `::write` left a
+truncated frame that concatenated with the next (silent 2-packet loss).
+All writers now go through `SerialWriteSeam::writeBytes`: an in-flight
+frame's remainder is tailed and flushed before any new frame starts; a
+frame that cannot start is dropped WHOLE. Proven with real EAGAIN on an
+undrained pty: 847/847 on-wire frames clean, soft-fails counted.
+
+Deltas from the ruled sketch: the governor starts AT the ceiling (clean
+link = wave-5 behavior from the first tick; climb engages after a backoff);
+fairness tracks both pending-window ends (a zombie never-ACKed request must
+not mask a fresh one — the native pending map is swept only on resolution);
+the applied-lookahead value bridges disparity → controller telemetry over a
+small process-local JS bus. Instrumentation: TIOCOUTQ gauge/high-water
+(ifdef-guarded, degrades to unsupported-flag), txSoftFail, 128-sample
+ACK-RTT ring (p50/p95/max + connect baseline), ~2 Hz SYS_TIMESTAMP probe
+ping (not Actuate — FW5 coexistence asserted in test 46). Part 4:
+`SerialLatencyEstimator` (EMA(p50)/2, α=0.25) feeds
+`imm.setParams({delayMs: fixed + latency})` behind the new global
+`serial_latency_comp` (default OFF; Settings → Global config toggle);
+OFF/no-sink/no-samples = exactly the fixed lookahead. Profiler Control tab
+gained the "Serial pressure" block (governor rate/state, outq, soft-fails,
+RTT percentiles, applied lookahead).
+
+Out-of-scope findings logged for follow-up: the Device RX thread
+busy-spins ~100% CPU on an idle O_NONBLOCK fd (pre-existing — needs
+poll(2)); native pending-map entries are never swept on timeout (bounded,
+but worth a sweep pass).
+
+RIG-GATED (bench session): RTT baseline settles within seconds; governor
+steady at requested rate on an idle link; discovered steady-state rate
+recorded in stage-f (JS-driven and native paths); CMD_FRAME ACKs prompt
+under full-rate streaming (fairness); latency-comp toggle visibly tightens
+feed-forward lead and snaps back OFF; saturated-link stress shows soft-fail
+climb with zero COBS desync symptoms.
 
 ## User ruling (2026-07-10)
 

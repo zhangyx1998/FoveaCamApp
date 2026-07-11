@@ -89,6 +89,14 @@ export interface AppConfig {
   // — no reconnect. The orchestrator duplicates the default/clamp in the Vue-free
   // `@orchestrator/prediction-rate`; keep the two in sync.
   prediction_rate_hz?: number;
+  // Serial-latency compensation in the motion predictor (serial-rate-
+  // governor.md Part 4, ruled 2026-07-10). ON: the disparity-scope session
+  // adds a MEASURED one-way serial latency (EMA of the ACK-RTT p50 / 2) to
+  // the per-triple fixed `delay_compensation_ms` lookahead, live-applied via
+  // `imm.setParams`. OFF (default) / no controller / no RTT samples =
+  // byte-identical fixed behavior. Settings → Global config only (no drawer
+  // control, per ruling). Orchestrator-side twin: `@orchestrator/serial-latency`.
+  serial_latency_comp?: boolean;
   // ---- Viewer video export (viewer-export.md spec 10) ------------------
   // Global PARALLEL-export toggle. false (default) = new exports QUEUE and
   // dispatch after the current one finishes; true = run concurrently. Persisted
@@ -114,6 +122,7 @@ export const APP_CONFIG_DEFAULTS: Readonly<AppConfig> = {
   anaglyph_style: DEFAULT_ANAGLYPH_STYLE,
   cap_stack: 5,
   prediction_rate_hz: 600,
+  serial_latency_comp: false,
   export_parallel: false,
 };
 

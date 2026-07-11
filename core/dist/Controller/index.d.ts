@@ -149,6 +149,27 @@ declare module "core/Controller" {
       rxBytes: number;
       txPackets: number;
       rxPackets: number;
+      // ---- Serial pressure (serial-rate-governor.md Part 1; poll-on-read
+      // at the caller's stats cadence) --------------------------------------
+      /** Kernel tty output-queue depth (TIOCOUTQ) — where CDC-ACM NAK
+       *  backpressure materializes. 0 when `outqSupported` is false. */
+      outqBytes: number;
+      outqHighWater: number;
+      /** False when the platform/ioctl doesn't support the gauge (degraded,
+       *  never failing). */
+      outqSupported: boolean;
+      /** EAGAIN / short-write events on the O_NONBLOCK fd — each a discrete
+       *  overflow event. Short writes are framing-safe (the remainder is
+       *  tailed and completes before any new frame starts). */
+      txSoftFail: number;
+      /** ACK round-trip rolling stats over the trailing window, from the
+       *  existing two-phase request timing (+ the ~2 Hz probe ping).
+       *  `baselineP50` = the connect-time baseline the governor's inflation
+       *  gate compares against. */
+      ackRttMs: { p50: number; p95: number; max: number; count: number; baselineP50: number };
+      /** The active MirrorSink governor's mirror (state "off" = no governed
+       *  sink attached / governor disabled). */
+      governor: { effectiveRateHz: number; ceilingHz: number; state: "off" | "steady" | "seeking" | "backoff" };
     };
 
     // Two-phase overloads — see TwoPhase above. Must precede the
@@ -183,6 +204,11 @@ declare module "core/Controller" {
      * synchronously on a transport/encode failure.
      */
     fireAndForget<T>(fn: PacketFactory<T>, arg: T | BufferLike): void;
+
+    /** TEST-ONLY (core/test/46): deterministic pressure scripting — force
+     *  the outq gauge (`outq`, <0 restores the real ioctl), inject synthetic
+     *  ACK-RTT samples, bump the soft-fail counter. */
+    __testPressure(p: { outq?: number; rttMs?: number; rttCount?: number; softFail?: number }): void;
 
     /**
      * Fetches System.Version and sets v2Capable = (firmware.major >=
@@ -250,9 +276,38 @@ declare module "core/Controller" {
       deduped: number;
       throttled: number;
       errors: number;
+      /** Fairness-reserve deferrals (coalesced UPDATEs behind a pending
+       *  two-phase request — serial-rate-governor.md Part 2). */
+      deferred: number;
+      /** Governor multiplicative decreases. */
+      backoffs: number;
       /** False once the device's write seam closed (release/disconnect). */
       open: boolean;
+      /** The governed emission rate (0 when the governor is off). */
+      effectiveRateHz: number;
+      ceilingHz: number;
+      governorState: "off" | "steady" | "seeking" | "backoff";
+      /** ACK-RTT view — the session's serial-latency estimate (Part 4) reads
+       *  p50 here at its stats throttle. */
+      ackRttP50: number;
+      ackRttP95: number;
+      ackRttCount: number;
     };
+    /** Live-retune the AIMD governor (partial update; named errors on bad
+     *  ranges). `enabled: false` pins the wave-5 fixed 1 ms gate exactly.
+     *  The session sets `ceilingHz` = the global prediction_rate_hz. */
+    setGovernor(params: {
+      enabled?: boolean;
+      ceilingHz?: number;
+      floorHz?: number;
+      stepHz?: number;
+      evalMs?: number;
+      outqLow?: number;
+      outqHigh?: number;
+      rttInflation?: number;
+      fairnessMs?: number;
+      maxDeferMs?: number;
+    }): void;
     historyLatest(): MirrorHistorySample | null;
     historyAt(tNs: bigint): MirrorHistoryAt | null;
     historyQuery(fromNs: bigint, toNs: bigint): MirrorHistorySample[];
@@ -275,4 +330,6 @@ declare module "core/Controller" {
   /** TEST-ONLY (core/test/45): a raw pty pair — a Device opens the slave
    *  `path`; the test reads the master `fd` (fs.readSync) to assert frames. */
   export function __serialTestPty(): { fd: number; path: string };
+
+
 }

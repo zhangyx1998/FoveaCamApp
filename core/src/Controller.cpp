@@ -612,6 +612,10 @@ public:
   const uint16_t sequence;
   const Property property;
   const bool two_phase;
+  // ACK-RTT sample (serial-rate-governor.md Part 1): send time (steady ns) +
+  // a first-response latch (rx thread only — single reader thread).
+  int64_t sentNs = 0;
+  bool rttRecorded = false;
   // Decodes the ACK payload; for everything except CMD_FRAME this is the
   // same function as fin_factory (the request shape IS the response shape —
   // see Command::ActuatePacket/MirrorStreamPacket). CMD_FRAME's ACK
@@ -743,8 +747,159 @@ struct SerialWriteSeam : Shared<SerialWriteSeam> {
   std::atomic<bool> open{true};
   COBS::TX tx; // sink-side encoder (guarded by mtx; Device keeps its own)
 
+  // ---- Part 1 pressure instrumentation (serial-rate-governor.md) ----------
+  // EAGAIN / short-write events on the O_NONBLOCK fd — each is a discrete
+  // overflow event (the governor's hard backoff signal).
+  std::atomic<uint64_t> txSoftFail{0};
+  std::atomic<uint32_t> outqHighWater{0};
+  std::atomic<bool> outqSupported{true};
+  // Fairness reserve: send times (steady ns) of the OLDEST and NEWEST pending
+  // requests (0 = none) + count — maintained by DeviceObject's send/rx paths.
+  // BOTH ends are tracked so a zombie entry (a request that never resolved —
+  // the pending map is only swept on resolution) outside the defer window
+  // can't mask a FRESH request inside it, and vice versa.
+  std::atomic<int64_t> oldestPendingNs{0};
+  std::atomic<int64_t> newestPendingNs{0};
+  std::atomic<uint32_t> pendingCount{0};
+  // Governor mirror (written by the active MirrorSink's evaluation, read by
+  // Device.stats → controller telemetry → the profiler "Serial pressure"
+  // block — every new stat surfaces in the profiler, user ruling).
+  std::atomic<double> govEffectiveRateHz{0};
+  std::atomic<double> govCeilingHz{0};
+  std::atomic<int> govState{-1}; // -1 none/off, 0 steady, 1 seeking, 2 backoff
+
+  // TEST overrides (core/test/46 — deterministic pressure scripting).
+  std::atomic<int32_t> testOutqOverride{-1}; // <0 = disabled
+
+  // ACK-RTT rolling window (rx thread writes; probes copy) + the connect-time
+  // baseline (median of the first samples) the inflation gate compares against.
+  static constexpr size_t kRttWindow = 128;
+  static constexpr size_t kRttBaselineSamples = 8;
+  std::mutex rttMtx;
+  double rttRing[kRttWindow] = {};
+  size_t rttHead = 0, rttCount = 0;
+  double rttBaselineP50 = 0;
+  std::vector<double> rttFirst;
+
+  void recordRtt(double ms) {
+    std::scoped_lock lk(rttMtx);
+    rttRing[rttHead] = ms;
+    rttHead = (rttHead + 1) % kRttWindow;
+    if (rttCount < kRttWindow)
+      rttCount++;
+    if (rttBaselineP50 <= 0) {
+      rttFirst.push_back(ms);
+      if (rttFirst.size() >= kRttBaselineSamples) {
+        auto v = rttFirst;
+        std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end());
+        rttBaselineP50 = v[v.size() / 2];
+        rttFirst.clear();
+        rttFirst.shrink_to_fit();
+      }
+    }
+  }
+
+  struct RttStats {
+    double p50 = 0, p95 = 0, max = 0, baselineP50 = 0;
+    uint64_t count = 0;
+  };
+  RttStats rttStats() {
+    RttStats out;
+    std::vector<double> v;
+    {
+      std::scoped_lock lk(rttMtx);
+      out.count = rttCount;
+      out.baselineP50 = rttBaselineP50;
+      if (rttCount == 0)
+        return out;
+      v.assign(rttRing, rttRing + rttCount);
+    }
+    std::sort(v.begin(), v.end());
+    out.p50 = v[v.size() / 2];
+    out.p95 = v[std::min(v.size() - 1, (v.size() * 95) / 100)];
+    out.max = v.back();
+    return out;
+  }
+
+  /** Kernel tty output-queue depth (TIOCOUTQ — where CDC-ACM NAK
+   *  backpressure materializes). Platform-guarded; degrades to 0 with
+   *  `outqSupported=false` rather than failing. Test override wins. */
+  int readOutq() {
+    const int32_t t = testOutqOverride.load(std::memory_order_acquire);
+    if (t >= 0) {
+      noteOutq(static_cast<uint32_t>(t));
+      return t;
+    }
+#ifdef TIOCOUTQ
+    int q = 0;
+    if (::ioctl(fd, TIOCOUTQ, &q) == 0) {
+      noteOutq(static_cast<uint32_t>(q < 0 ? 0 : q));
+      return q < 0 ? 0 : q;
+    }
+    outqSupported.store(false, std::memory_order_release);
+#else
+    outqSupported.store(false, std::memory_order_release);
+#endif
+    return 0;
+  }
+  void noteOutq(uint32_t q) {
+    uint32_t hw = outqHighWater.load(std::memory_order_relaxed);
+    while (q > hw &&
+           !outqHighWater.compare_exchange_weak(hw, q, std::memory_order_relaxed))
+      ;
+  }
+
+  // ---- framing-safe writes (the wave-6 AUDIT FIX) ---------------------------
+  // The fd is O_NONBLOCK: a PARTIAL ::write used to leave a truncated COBS
+  // frame on the wire — the next frame's bytes then concatenate into it and
+  // BOTH are lost to the checksum (silent 2-packet corruption). Now every
+  // writer goes through writeBytes(): a short write saves the unwritten
+  // REMAINDER, and the next write attempt flushes that tail FIRST — the
+  // in-flight frame always COMPLETES (framing integrity) before any new frame
+  // starts; a frame that cannot even start (EAGAIN at byte 0 / stuck tail) is
+  // dropped whole. Every EAGAIN/short-write bumps `txSoftFail`. Bounded,
+  // non-blocking — never stalls a link delivery thread on drain.
+  std::vector<uint8_t> tail_; // unwritten remainder of the last frame (mtx)
+
+  /** Flush the pending tail (mtx held). True = tail empty. */
+  bool flushTailLocked() {
+    while (!tail_.empty()) {
+      const ssize_t n = ::write(fd, tail_.data(), tail_.size());
+      if (n <= 0)
+        return false; // EAGAIN / error — retry on the next write attempt
+      tail_.erase(tail_.begin(), tail_.begin() + n);
+    }
+    return true;
+  }
+
+  enum class WriteResult { Written, Queued, Dropped, Closed };
+
+  /** Write one complete COBS frame. `Written` = fully on the wire; `Queued` =
+   *  partially written, remainder tailed (WILL complete — framing intact);
+   *  `Dropped` = frame never started (no corruption). (mtx taken here.) */
+  WriteResult writeBytes(const uint8_t *data, size_t len) {
+    std::scoped_lock lk(mtx);
+    if (!open.load(std::memory_order_acquire))
+      return WriteResult::Closed;
+    if (!flushTailLocked()) {
+      txSoftFail.fetch_add(1, std::memory_order_relaxed);
+      return WriteResult::Dropped; // old frame still stuck — coalesce this one
+    }
+    const ssize_t n = ::write(fd, data, len);
+    if (n == static_cast<ssize_t>(len))
+      return WriteResult::Written;
+    if (n <= 0) {
+      txSoftFail.fetch_add(1, std::memory_order_relaxed);
+      return WriteResult::Dropped; // frame never started — framing intact
+    }
+    // Partial: tail the remainder so the frame completes on the next attempt.
+    tail_.assign(data + n, data + len);
+    txSoftFail.fetch_add(1, std::memory_order_relaxed);
+    return WriteResult::Queued;
+  }
+
   // Encode + write one CMD_STREAM UPDATE (seq 0, fire-and-forget). Returns
-  // false when the seam is closed or the write failed (counted by the sink).
+  // false when the seam is closed or the frame was dropped (counted).
   bool writeMirrorUpdate(uint8_t id, const uint16_t chL[4],
                          const uint16_t chR[4]) {
     ::Packet::Command::MirrorStream cmd{};
@@ -756,13 +911,17 @@ struct SerialWriteSeam : Shared<SerialWriteSeam> {
     }
     Protocol::RawPacket packet(Method::SET, Property::CMD_STREAM, 0);
     packet.setData(reinterpret_cast<const uint8_t *>(&cmd), sizeof(cmd));
-    std::scoped_lock lk(mtx);
-    if (!open.load(std::memory_order_acquire))
-      return false;
-    if (!tx.encode(packet.finalize()))
-      return false;
-    const ssize_t written = ::write(fd, tx.data(), tx.size());
-    return written == static_cast<ssize_t>(tx.size());
+    std::vector<uint8_t> frame;
+    {
+      std::scoped_lock lk(mtx);
+      if (!open.load(std::memory_order_acquire))
+        return false;
+      if (!tx.encode(packet.finalize()))
+        return false;
+      frame.assign(tx.data(), tx.data() + tx.size());
+    }
+    const WriteResult r = writeBytes(frame.data(), frame.size());
+    return r == WriteResult::Written || r == WriteResult::Queued;
   }
 
   void close() { open.store(false, std::memory_order_release); }
@@ -780,6 +939,7 @@ public:
                            INSTANCE_METHOD(DeviceObject, set),           //
                            INSTANCE_METHOD(DeviceObject, fireAndForget), //
                            INSTANCE_METHOD(DeviceObject, verifyVersion), //
+                           INSTANCE_METHOD(DeviceObject, __testPressure), //
                            INSTANCE_METHOD(DeviceObject, release),       //
                        });
   }
@@ -791,6 +951,32 @@ public:
 
   /** The shared write seam (fd + write mutex) native mirror sinks attach to. */
   SerialWriteSeam::Ptr writeSeam() const { return seam_; }
+
+  static int64_t seamSteadyNs() {
+    using namespace std::chrono;
+    return duration_cast<nanoseconds>(steady_clock::now().time_since_epoch())
+        .count();
+  }
+
+  /** Recompute the fairness-reserve view of the pending map (oldest send time
+   *  + count) into the seam atomics. Called after every pending add/retire —
+   *  the map is tiny (in-flight requests), the scan is O(n). */
+  void notePendingChanged() {
+    auto p = pending.ref();
+    int64_t oldest = 0, newest = 0;
+    uint32_t n = 0;
+    for (const auto &[seq, pr] : *p) {
+      (void)seq;
+      n++;
+      if (pr->sentNs > 0 && (oldest == 0 || pr->sentNs < oldest))
+        oldest = pr->sentNs;
+      if (pr->sentNs > newest)
+        newest = pr->sentNs;
+    }
+    seam_->pendingCount.store(n, std::memory_order_release);
+    seam_->oldestPendingNs.store(oldest, std::memory_order_release);
+    seam_->newestPendingNs.store(newest, std::memory_order_release);
+  }
 
   ~DeviceObject() {
     Cleanup::remove(env, cleanup_hook);
@@ -869,7 +1055,64 @@ private:
     obj.Set("rxBytes", Napi::Number::New(env, counters.rxBytes.load()));
     obj.Set("txPackets", Napi::Number::New(env, counters.txPackets.load()));
     obj.Set("rxPackets", Napi::Number::New(env, counters.rxPackets.load()));
+    // ---- Part 1 pressure block (serial-rate-governor.md; poll-on-read at
+    // the caller's stats cadence — the controller session's probe) ----------
+    obj.Set("outqBytes", Napi::Number::New(env, seam_->readOutq()));
+    obj.Set("outqHighWater",
+            Napi::Number::New(env, seam_->outqHighWater.load()));
+    obj.Set("outqSupported",
+            Napi::Boolean::New(env, seam_->outqSupported.load()));
+    obj.Set("txSoftFail",
+            Napi::Number::New(
+                env, static_cast<double>(seam_->txSoftFail.load())));
+    const auto rtt = seam_->rttStats();
+    auto r = Napi::Object::New(env);
+    r.Set("p50", Napi::Number::New(env, rtt.p50));
+    r.Set("p95", Napi::Number::New(env, rtt.p95));
+    r.Set("max", Napi::Number::New(env, rtt.max));
+    r.Set("count", Napi::Number::New(env, static_cast<double>(rtt.count)));
+    r.Set("baselineP50", Napi::Number::New(env, rtt.baselineP50));
+    obj.Set("ackRttMs", r);
+    // Governor mirror (the active MirrorSink evaluation publishes these —
+    // state "off" = no governed sink attached / governor disabled).
+    const int gs = seam_->govState.load(std::memory_order_acquire);
+    auto g = Napi::Object::New(env);
+    g.Set("effectiveRateHz",
+          Napi::Number::New(env, seam_->govEffectiveRateHz.load()));
+    g.Set("ceilingHz", Napi::Number::New(env, seam_->govCeilingHz.load()));
+    g.Set("state", Napi::String::New(env, gs == 0   ? "steady"
+                                          : gs == 1 ? "seeking"
+                                          : gs == 2 ? "backoff"
+                                                    : "off"));
+    obj.Set("governor", g);
     return obj;
+  }
+
+  // TEST-ONLY (core/test/46): deterministic pressure scripting — force the
+  // outq gauge, inject synthetic RTT samples, bump the soft-fail counter.
+  FN(__testPressure) {
+    try {
+      auto o = info[0].As<Napi::Object>();
+      if (o.Has("outq") && o.Get("outq").IsNumber())
+        seam_->testOutqOverride.store(
+            o.Get("outq").As<Napi::Number>().Int32Value(),
+            std::memory_order_release);
+      if (o.Has("rttMs") && o.Get("rttMs").IsNumber()) {
+        const double ms = o.Get("rttMs").As<Napi::Number>().DoubleValue();
+        const int n = o.Has("rttCount") && o.Get("rttCount").IsNumber()
+                          ? o.Get("rttCount").As<Napi::Number>().Int32Value()
+                          : 1;
+        for (int i = 0; i < n; i++)
+          seam_->recordRtt(ms);
+      }
+      if (o.Has("softFail") && o.Get("softFail").IsNumber())
+        seam_->txSoftFail.fetch_add(
+            static_cast<uint64_t>(
+                o.Get("softFail").As<Napi::Number>().DoubleValue()),
+            std::memory_order_relaxed);
+      return env.Undefined();
+    }
+    JS_EXCEPT(env.Undefined())
   }
 
   void recordTx(ssize_t bytes) {
@@ -900,6 +1143,13 @@ private:
         // docs/history/refactor/synced-capture.md §3.1/§5).
         bool retire = !(pr->two_phase && method == Method::ACK &&
                         property == pr->property);
+        // ACK-RTT sample (Part 1): the FIRST response for this request —
+        // queue pressure inflates this before anything drops. rx thread only.
+        if (!pr->rttRecorded && pr->sentNs > 0) {
+          pr->rttRecorded = true;
+          seam_->recordRtt(
+              static_cast<double>(seamSteadyNs() - pr->sentNs) / 1e6);
+        }
         VERBOSE("trace rx seq=%u %s:%s matched=1 retire=%d pending=%s",
                 sequence, convert<std::string>(method).c_str(),
                 convert<std::string>(property).c_str(), retire ? 1 : 0,
@@ -951,8 +1201,10 @@ private:
                            .Value());
           }
         });
-        if (retire)
+        if (retire) {
           p->erase(sequence);
+          notePendingChanged(); // fairness reserve bookkeeping (Part 2)
+        }
       } else if (method == Method::SYN && property == Property::LOG) {
         // Unsolicited log packet
         std::string log_msg((char *)packet.data(), packet.dataSize());
@@ -1032,7 +1284,9 @@ private:
           accepted.Get("catch").As<Napi::Function>().Call(accepted, {noop});
           completed.Set("accepted", accepted);
         }
+        pr->sentNs = seamSteadyNs(); // ACK-RTT sample start (Part 1)
         pending.ref()->set(sequence, pr);
+        notePendingChanged(); // fairness reserve bookkeeping (Part 2)
         VERBOSE("trace tx seq=%u %s:%s two_phase=%d v2_capable=%d bytes=%u",
                 sequence,
                 convert<std::string>(Protocol::method(packet.header().header))
@@ -1041,26 +1295,20 @@ private:
                 v2_capable ? 1 : 0, tx.size());
         VERBOSE("send %u bytes: %s", tx.size(),
                 hexFormat(tx.data(), tx.size()).c_str());
-        // Write buffer to serial fd (seam mutex: never interleave with a
-        // native mirror sink's fire-and-forget frames)
-        ssize_t written;
-        {
-          std::scoped_lock lk(seam_->mtx);
-          written = ::write(fd, tx.data(), tx.size());
-        }
-        VERBOSE("wrote %zd bytes to fd %d", written, fd);
-        if (written < 0) {
+        // Framing-safe seam write (wave-6 audit fix): a short write TAILS the
+        // remainder (the frame still completes — keep the request pending); a
+        // frame that never started is a clean drop → the old throw semantics.
+        const auto wr = seam_->writeBytes(tx.data(), tx.size());
+        if (wr == SerialWriteSeam::WriteResult::Dropped ||
+            wr == SerialWriteSeam::WriteResult::Closed) {
           pending.ref()->erase(sequence);
+          notePendingChanged();
           JS_THROW(Error,
                    "Failed to write to serial port: " +
                        std::string(std::strerror(errno)),
                    env.Undefined());
         }
-        if (written != static_cast<ssize_t>(tx.size())) {
-          pending.ref()->erase(sequence);
-          JS_THROW(Error, "Incomplete write to serial port", env.Undefined());
-        }
-        recordTx(written);
+        recordTx(static_cast<ssize_t>(tx.size()));
         return completed;
       } else {
         throw JS::Error(env, "Failed to encode packet");
@@ -1138,19 +1386,17 @@ private:
       VERBOSE("trace tx seq=0 SET:%s two_phase=0 v2_capable=%d bytes=%u",
               convert<std::string>(property).c_str(), v2_capable ? 1 : 0,
               tx.size());
-      ssize_t written;
-      {
-        std::scoped_lock lk(seam_->mtx); // never interleave with a sink write
-        written = ::write(fd, tx.data(), tx.size());
-      }
-      if (written < 0)
+      // Framing-safe seam write (wave-6 audit fix): Dropped = the frame never
+      // started (framing intact) → the old throw semantics; Queued = tailed,
+      // completes on the next write attempt (fire-and-forget: success).
+      const auto wr = seam_->writeBytes(tx.data(), tx.size());
+      if (wr == SerialWriteSeam::WriteResult::Dropped ||
+          wr == SerialWriteSeam::WriteResult::Closed)
         JS_THROW(Error,
                  "Failed to write to serial port: " +
                      std::string(std::strerror(errno)),
                  env.Undefined());
-      if (written != static_cast<ssize_t>(tx.size()))
-        JS_THROW(Error, "Incomplete write to serial port", env.Undefined());
-      recordTx(written);
+      recordTx(static_cast<ssize_t>(tx.size()));
     }
     JS_EXCEPT(env.Undefined())
     return env.Undefined();
@@ -1263,6 +1509,23 @@ static int64_t sinkSteadyNs() {
       .count();
 }
 
+// AIMD governor knobs (serial-rate-governor.md Part 2). All NAPI-settable via
+// MirrorSink.setGovernor; `enabled: false` pins the wave-5 fixed-gate
+// behavior exactly. Defaults per the ruling.
+struct GovernorParams {
+  bool enabled = true;
+  double ceilingHz = 1000; // = the wave-5 fixed 1 ms gate; session sets the
+                           // prediction_rate_hz REQUESTED rate here
+  double floorHz = 60;
+  double stepHz = 25;       // additive climb per evaluation
+  int64_t evalMs = 100;     // control-loop cadence (orders slower than emit)
+  uint32_t outqLow = 256;   // bytes — climb only while under this
+  uint32_t outqHigh = 1024; // bytes — backoff above this
+  double rttInflation = 2.0; // p95 gate vs the connect-time baseline
+  int64_t fairnessMs = 5;    // defer UPDATEs behind a pending request this old
+  int64_t maxDeferMs = 100;  // deferral cap (a timed-out request can't starve)
+};
+
 struct MirrorSink : Shared<MirrorSink> {
   static constexpr int64_t kMinIntervalNs = 1'000'000; // 1 ms (JS gate parity)
   static constexpr size_t kHistoryCapacity = 4096;     // ≈4 s at the 1 kHz cap
@@ -1277,8 +1540,81 @@ struct MirrorSink : Shared<MirrorSink> {
   std::atomic<uint64_t> received{0}; // items off the link
   std::atomic<uint64_t> written{0};  // UPDATEs actually written
   std::atomic<uint64_t> deduped{0};  // gate: same pose
-  std::atomic<uint64_t> throttled{0}; // gate: min-interval
+  std::atomic<uint64_t> throttled{0}; // gate: min-interval / governor rate
   std::atomic<uint64_t> errors{0};   // seam closed / write failure
+  std::atomic<uint64_t> deferred{0}; // fairness reserve deferrals (Part 2)
+  std::atomic<uint64_t> backoffs{0}; // governor multiplicative decreases
+
+  // ---- AIMD governor (Part 2 — lives HERE, in the wave-5 gate) -------------
+  // `effRateHz_` starts AT the ceiling (optimistic start): a clean link is
+  // byte-identical to wave 5 from the first tick; the additive climb engages
+  // only after a backoff. Guarded by `mtx` (evaluated lazily on the write
+  // path at `evalMs` cadence — the ruled lock-free-ish emission: one branch +
+  // rare O(window) percentile copy every ~100 ms).
+  GovernorParams gov;             // mtx
+  double effRateHz_ = 1000;       // mtx
+  int govState_ = -1;             // -1 off, 0 steady, 1 seeking, 2 backoff (mtx)
+  int64_t lastEvalNs_ = 0;        // mtx
+  uint64_t lastSoftFail_ = 0;     // mtx — delta detection per evaluation
+
+  void setGovernor(const GovernorParams &p) {
+    std::scoped_lock lk(mtx);
+    gov = p;
+    if (effRateHz_ > gov.ceilingHz)
+      effRateHz_ = gov.ceilingHz; // a lowered ceiling clamps immediately
+    if (effRateHz_ < gov.floorHz)
+      effRateHz_ = gov.floorHz;
+    publishGovernor();
+  }
+
+  /** Mirror the governor view into the seam atomics (Device.stats → the
+   *  profiler "Serial pressure" block — every new stat surfaces, ruling). */
+  void publishGovernor() { // mtx held
+    if (!gov.enabled) {
+      govState_ = -1;
+      seam->govState.store(-1, std::memory_order_release);
+      seam->govEffectiveRateHz.store(0, std::memory_order_release);
+      seam->govCeilingHz.store(gov.ceilingHz, std::memory_order_release);
+      return;
+    }
+    seam->govState.store(govState_ < 0 ? 0 : govState_,
+                         std::memory_order_release);
+    seam->govEffectiveRateHz.store(effRateHz_, std::memory_order_release);
+    seam->govCeilingHz.store(gov.ceilingHz, std::memory_order_release);
+  }
+
+  /** One AIMD evaluation (mtx held; `evalMs` cadence). Backoff signals:
+   *  a txSoftFail delta, outq above HIGH, or p95 RTT beyond the inflation
+   *  gate vs the connect-time baseline → halve (floor-clamped). Otherwise
+   *  climb by stepHz toward the ceiling while outq stays under LOW. */
+  void evalGovernor(int64_t now) {
+    if (!gov.enabled)
+      return;
+    if (lastEvalNs_ != 0 && now - lastEvalNs_ < gov.evalMs * 1'000'000)
+      return;
+    lastEvalNs_ = now;
+    const uint64_t sf = seam->txSoftFail.load(std::memory_order_relaxed);
+    const uint64_t sfDelta = sf - lastSoftFail_;
+    lastSoftFail_ = sf;
+    const int outq = seam->readOutq();
+    const auto rtt = seam->rttStats();
+    const bool rttBad = rtt.baselineP50 > 0 && rtt.count >= 4 &&
+                        rtt.p95 > gov.rttInflation * rtt.baselineP50;
+    const bool pressure = sfDelta > 0 ||
+                          outq > static_cast<int>(gov.outqHigh) || rttBad;
+    if (pressure) {
+      effRateHz_ = std::max(gov.floorHz, effRateHz_ / 2);
+      govState_ = 2; // backoff
+      backoffs.fetch_add(1, std::memory_order_relaxed);
+    } else if (effRateHz_ < gov.ceilingHz &&
+               outq < static_cast<int>(gov.outqLow) && !rttBad) {
+      effRateHz_ = std::min(gov.ceilingHz, effRateHz_ + gov.stepHz);
+      govState_ = effRateHz_ >= gov.ceilingHz ? 0 : 1; // steady : seeking
+    } else {
+      govState_ = effRateHz_ >= gov.ceilingHz ? 0 : govState_ == 2 ? 1 : 0;
+    }
+    publishGovernor();
+  }
 
   // One history sample: predicted volts (DAC round-trip) at a steady-ns stamp.
   struct Sample {
@@ -1300,15 +1636,50 @@ struct MirrorSink : Shared<MirrorSink> {
       return;
     received.fetch_add(1, std::memory_order_relaxed);
     const int64_t now = sinkSteadyNs();
+    // FAIRNESS RESERVE (Part 2): while a two-phase request has been pending
+    // longer than fairnessMs, UPDATEs are DEFERRED (coalesced, never queued —
+    // the next tick carries a fresher pose anyway) so requests never sit
+    // behind a stream burst. maxDeferMs caps the deferral so a timed-out /
+    // lost request can't starve the stream.
+    {
+      const int64_t oldest =
+          seam->oldestPendingNs.load(std::memory_order_acquire);
+      const int64_t newest =
+          seam->newestPendingNs.load(std::memory_order_acquire);
+      if (oldest > 0) {
+        std::scoped_lock lk(mtx);
+        if (gov.enabled) {
+          const int64_t lo = gov.fairnessMs * 1'000'000;
+          const int64_t hi = gov.maxDeferMs * 1'000'000;
+          const int64_t ageOld = now - oldest;
+          const int64_t ageNew = now - newest;
+          // Defer if EITHER tracked pending sits in the window — a zombie
+          // outside it must not mask a fresh request inside it (see the seam
+          // comment; realistic pending depth is <=2, both ends suffice).
+          if ((ageOld >= lo && ageOld <= hi) || (ageNew >= lo && ageNew <= hi)) {
+            deferred.fetch_add(1, std::memory_order_relaxed);
+            return;
+          }
+        }
+      }
+    }
     uint16_t chL[4], chR[4];
     {
       std::scoped_lock lk(mtx);
+      evalGovernor(now); // lazy AIMD evaluation at the stats cadence
       if (hasLast && v->lx == lastLx && v->ly == lastLy && v->rx == lastRx &&
           v->ry == lastRy) {
         deduped.fetch_add(1, std::memory_order_relaxed);
         return;
       }
-      if (hasLast && now - lastSentNs < kMinIntervalNs) {
+      // Effective emission interval: the wave-5 1 ms floor, opened up to the
+      // governor's discovered rate (governor off = exactly the fixed gate).
+      const int64_t minIntervalNs =
+          gov.enabled
+              ? std::max(kMinIntervalNs,
+                         static_cast<int64_t>(1e9 / std::max(1.0, effRateHz_)))
+              : kMinIntervalNs;
+      if (hasLast && now - lastSentNs < minIntervalNs) {
         throttled.fetch_add(1, std::memory_order_relaxed);
         return;
       }
@@ -1446,6 +1817,7 @@ public:
         {
             CORE_OBJECT_REGISTER(MirrorSinkObject, env),
             INSTANCE_METHOD(MirrorSinkObject, probe),
+            INSTANCE_METHOD(MirrorSinkObject, setGovernor),
             INSTANCE_METHOD(MirrorSinkObject, historyLatest),
             INSTANCE_METHOD(MirrorSinkObject, historyAt),
             INSTANCE_METHOD(MirrorSinkObject, historyQuery),
@@ -1458,6 +1830,17 @@ public:
 
   MirrorSinkObject(const Napi::CallbackInfo &info) : CoreObject(info) {}
 
+  static void destruct(MirrorSinkObject *self) {
+    // Retire the seam's governor mirror — the profiler must not show a stale
+    // effective rate after the sink is gone.
+    try {
+      const auto &c = self->core();
+      c->seam->govState.store(-1, std::memory_order_release);
+      c->seam->govEffectiveRateHz.store(0, std::memory_order_release);
+    } catch (...) {
+    }
+  }
+
   FN(probe) {
     auto env = info.Env();
     try {
@@ -1468,9 +1851,92 @@ public:
       o.Set("deduped", Napi::Number::New(env, double(c->deduped.load())));
       o.Set("throttled", Napi::Number::New(env, double(c->throttled.load())));
       o.Set("errors", Napi::Number::New(env, double(c->errors.load())));
+      o.Set("deferred", Napi::Number::New(env, double(c->deferred.load())));
+      o.Set("backoffs", Napi::Number::New(env, double(c->backoffs.load())));
       o.Set("open", Napi::Boolean::New(
                         env, c->seam->open.load(std::memory_order_acquire)));
+      // Governor view (serial-rate-governor.md Part 2/3).
+      {
+        std::scoped_lock lk(c->mtx);
+        o.Set("effectiveRateHz",
+              Napi::Number::New(env, c->gov.enabled ? c->effRateHz_ : 0));
+        o.Set("ceilingHz", Napi::Number::New(env, c->gov.ceilingHz));
+        const int gs = c->gov.enabled ? (c->govState_ < 0 ? 0 : c->govState_)
+                                      : -1;
+        o.Set("governorState",
+              Napi::String::New(env, gs == 0   ? "steady"
+                                     : gs == 1 ? "seeking"
+                                     : gs == 2 ? "backoff"
+                                               : "off"));
+      }
+      // ACK-RTT view (Part 4 — the session's serial-latency estimate reads
+      // p50 here at its stats throttle).
+      const auto rtt = c->seam->rttStats();
+      o.Set("ackRttP50", Napi::Number::New(env, rtt.p50));
+      o.Set("ackRttP95", Napi::Number::New(env, rtt.p95));
+      o.Set("ackRttCount",
+            Napi::Number::New(env, static_cast<double>(rtt.count)));
       return o;
+    }
+    JS_EXCEPT(env.Undefined())
+  }
+
+  // setGovernor(partial GovernorParams) — live retune; named invalid_arguments
+  // (the stereo-params precedent). `enabled: false` pins wave-5 fixed-gate
+  // behavior byte-for-byte.
+  FN(setGovernor) {
+    auto env = info.Env();
+    try {
+      JS_ASSERT(info[0].IsObject(), TypeError,
+                "setGovernor: params object required", env.Undefined());
+      auto o = info[0].As<Napi::Object>();
+      GovernorParams p;
+      {
+        std::scoped_lock lk(core()->mtx);
+        p = core()->gov; // partial update over the current params
+      }
+      auto num = [&](const char *k, double &dst, double lo, double hi) {
+        if (!o.Has(k) || o.Get(k).IsUndefined())
+          return;
+        const double v = o.Get(k).As<Napi::Number>().DoubleValue();
+        if (!std::isfinite(v) || v < lo || v > hi)
+          throw std::invalid_argument(
+              std::string("setGovernor: `") + k + "` out of range");
+        dst = v;
+      };
+      if (o.Has("enabled") && !o.Get("enabled").IsUndefined())
+        p.enabled = o.Get("enabled").ToBoolean().Value();
+      num("ceilingHz", p.ceilingHz, 1, 100000);
+      num("floorHz", p.floorHz, 1, 100000);
+      num("stepHz", p.stepHz, 1, 10000);
+      double tmp;
+      tmp = static_cast<double>(p.evalMs);
+      num("evalMs", tmp, 1, 60000);
+      p.evalMs = static_cast<int64_t>(tmp);
+      tmp = static_cast<double>(p.outqLow);
+      num("outqLow", tmp, 0, 1e9);
+      p.outqLow = static_cast<uint32_t>(tmp);
+      tmp = static_cast<double>(p.outqHigh);
+      num("outqHigh", tmp, 0, 1e9);
+      p.outqHigh = static_cast<uint32_t>(tmp);
+      num("rttInflation", p.rttInflation, 1, 1000);
+      tmp = static_cast<double>(p.fairnessMs);
+      num("fairnessMs", tmp, 0, 10000);
+      p.fairnessMs = static_cast<int64_t>(tmp);
+      tmp = static_cast<double>(p.maxDeferMs);
+      num("maxDeferMs", tmp, 1, 60000);
+      p.maxDeferMs = static_cast<int64_t>(tmp);
+      if (p.floorHz > p.ceilingHz)
+        throw std::invalid_argument(
+            "setGovernor: `floorHz` must be <= `ceilingHz`");
+      if (p.outqLow > p.outqHigh)
+        throw std::invalid_argument(
+            "setGovernor: `outqLow` must be <= `outqHigh`");
+      if (p.fairnessMs > p.maxDeferMs)
+        throw std::invalid_argument(
+            "setGovernor: `fairnessMs` must be <= `maxDeferMs`");
+      core()->setGovernor(p);
+      return env.Undefined();
     }
     JS_EXCEPT(env.Undefined())
   }
@@ -1580,6 +2046,7 @@ static FN(createMirrorSink) {
     sink->nodeId = o.Has("nodeId") && o.Get("nodeId").IsString()
                        ? o.Get("nodeId").As<Napi::String>().Utf8Value()
                        : "controller";
+    sink->setGovernor(GovernorParams{}); // publish the baked defaults' mirror
     return MirrorSinkObject::Create(env, sink);
   }
   JS_EXCEPT(env.Undefined())
@@ -1598,6 +2065,10 @@ static FN(__serialTestPty) {
               "openpty failed: " + std::string(std::strerror(errno)),
               env.Undefined());
     ::close(slave); // the Device re-opens the slave by path
+    // NON-BLOCKING master: tests poll it with fs.readSync — a BLOCKING read
+    // on an empty pty would freeze the whole JS thread (hit by test 46's
+    // drain timer; test 45 only ever read after writes, so it never blocked).
+    ::fcntl(master, F_SETFL, ::fcntl(master, F_GETFL) | O_NONBLOCK);
     auto o = Napi::Object::New(env);
     o.Set("fd", Napi::Number::New(env, master));
     o.Set("path", Napi::String::New(env, path));

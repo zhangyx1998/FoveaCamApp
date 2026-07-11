@@ -18,6 +18,7 @@ import {
 import { controllerNode } from "../controller-node.js";
 import { report, timeSpan } from "../diagnostics.js";
 import { pingControllerOffset, setCalibration } from "../time-align.js";
+import { currentAppliedLookahead } from "../serial-latency.js";
 import { awaitHardwareClear } from "../hardware-gate.js";
 import { controller } from "@lib/orchestrator/contracts";
 
@@ -27,6 +28,17 @@ const ZERO_RATE = {
   rxBytesPerSec: 0,
   txPacketsPerSec: 0,
   rxPacketsPerSec: 0,
+};
+const ZERO_PRESSURE = {
+  effectiveRateHz: 0,
+  ceilingHz: 0,
+  governorState: "off" as const,
+  outqBytes: 0,
+  outqHighWater: 0,
+  outqSupported: true,
+  txSoftFail: 0,
+  ackRttMs: { p50: 0, p95: 0, max: 0, count: 0, baselineP50: 0 },
+  appliedLookaheadMs: null,
 };
 // Serial + per-stream probes (docs/history/refactor/orchestrator.md §7.1 S4 added
 // scope) — 2 Hz matches the doc's own throttle note ("wire cost is a few
@@ -56,7 +68,7 @@ export function controllerSession(): ServerSession<typeof controller> {
       if (probeTimer) clearInterval(probeTimer);
       probeTimer = null;
       prevStats = null;
-      s.telemetry({ serialRate: ZERO_RATE, streams: [] });
+      s.telemetry({ serialRate: ZERO_RATE, serialPressure: ZERO_PRESSURE, streams: [] });
     }
 
     function startProbe(): void {
@@ -78,7 +90,30 @@ export function controllerSession(): ServerSession<typeof controller> {
             }
           : ZERO_RATE;
         prevStats = cur;
-        s.telemetry({ serialRate, streams: c.streamSnapshot(dtSec) });
+        // Serial PRESSURE block (serial-rate-governor.md Part 3): the wave-6
+        // Device.stats sensors + governor mirror; applied lookahead bridged
+        // from the disparity session (Part 4 bus).
+        // Defensive over PARTIAL stats (test fakes / an older core build):
+        // a missing pressure block degrades to zeros, never a throw — the
+        // probe timer must survive any stats shape (observe, never gate).
+        const serialPressure = {
+          effectiveRateHz: cur.governor?.effectiveRateHz ?? 0,
+          ceilingHz: cur.governor?.ceilingHz ?? 0,
+          governorState: cur.governor?.state ?? ("off" as const),
+          outqBytes: cur.outqBytes ?? 0,
+          outqHighWater: cur.outqHighWater ?? 0,
+          outqSupported: cur.outqSupported ?? true,
+          txSoftFail: cur.txSoftFail ?? 0,
+          ackRttMs: cur.ackRttMs ?? ZERO_PRESSURE.ackRttMs,
+          appliedLookaheadMs: currentAppliedLookahead(),
+        };
+        s.telemetry({ serialRate, serialPressure, streams: c.streamSnapshot(dtSec) });
+        // PROBE PING (Part 1): keep ackRttMs live even when no user traffic
+        // flows — the device-loop-saturation proxy. A SYS_TIMESTAMP GET (the
+        // clock-ping machinery) is NOT Actuate, so FW5 holds and it coexists
+        // with an active stream (asserted in core/test/46). Fire-and-forget
+        // race semantics: a lost ping must never wedge the probe timer.
+        void c.readTimestamp?.().catch(() => {});
       }, PROBE_INTERVAL_MS);
     }
 

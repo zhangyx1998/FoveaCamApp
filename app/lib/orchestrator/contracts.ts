@@ -248,6 +248,21 @@ export const controller = defineContract({
       txPacketsPerSec: 0,
       rxPacketsPerSec: 0,
     },
+    // Serial PRESSURE block (serial-rate-governor.md Part 3 — every new stat
+    // surfaces in the profiler, user ruling): the wave-6 Device.stats sensors
+    // + the AIMD governor's view + the predictor's applied lookahead (Part 4;
+    // null = no predictor session active). Sampled by the same probe timer.
+    serialPressure: {
+      effectiveRateHz: 0,
+      ceilingHz: 0,
+      governorState: "off" as "off" | "steady" | "seeking" | "backoff",
+      outqBytes: 0,
+      outqHighWater: 0,
+      outqSupported: true as boolean,
+      txSoftFail: 0,
+      ackRttMs: { p50: 0, p95: 0, max: 0, count: 0, baselineP50: 0 },
+      appliedLookaheadMs: null as number | null,
+    },
     streams: [] as StreamStat[],
   },
   frames: [] as const,

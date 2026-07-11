@@ -92,6 +92,12 @@ import {
   readPredictionRateHz,
   subscribePredictionRateHz,
 } from "@orchestrator/prediction-rate";
+import {
+  publishAppliedLookahead,
+  readSerialLatencyComp,
+  SerialLatencyEstimator,
+  subscribeSerialLatencyComp,
+} from "@orchestrator/serial-latency";
 import type { PipeBroker } from "@orchestrator/pipe-session";
 import type { PipeInput, VisionResult } from "@orchestrator/vision-worker-protocol";
 import {
@@ -337,6 +343,9 @@ export default function disparityScopeSession(
     let nativeSink: MirrorSink | null = null;
     let voltLink: PortLink | null = null;
     let nativePos: import("@orchestrator/controller-node").NativePositionInput | null = null;
+    // The REQUESTED prediction rate (global config) — the imm brick's emit
+    // rate AND the governor's ceiling (serial-rate-governor.md Part 2).
+    let currentRateHz = 600;
 
     let windowStart = now();
     let lastStep = now();
@@ -1302,6 +1311,7 @@ export default function disparityScopeSession(
         // `prediction_rate_hz` (default 600, clamp 60..1000) sets its free-run
         // rate; live-applied below via a store subscription.
         const immRate = await readPredictionRateHz();
+        currentRateHz = immRate;
         imm = createImmPredictor({
           rateHz: immRate,
           delayMs: t.delayCompensationMs,
@@ -1312,9 +1322,19 @@ export default function disparityScopeSession(
           imm = null;
         });
         // Live rate changes (Settings → Global config OR the drawer slider —
-        // same `prediction_rate_hz` key) re-apply without reconnect.
+        // same `prediction_rate_hz` key) re-apply without reconnect. The rate
+        // is the governor's REQUESTED ceiling too (serial-rate-governor.md:
+        // set the slider high, the governor finds the sustainable point).
         disposers.add(
-          subscribePredictionRateHz((rateHz) => imm?.setParams({ rateHz }), immRate),
+          subscribePredictionRateHz((rateHz) => {
+            currentRateHz = rateHz;
+            imm?.setParams({ rateHz });
+            try {
+              nativeSink?.setGovernor({ ceilingHz: rateHz });
+            } catch {
+              // a detached sink mid-update — the next attach re-applies
+            }
+          }, immRate),
         );
         // kcf → imm is now a NATIVE PORT LINK (native-port-pipe.md ruling 1:
         // both endpoints are native threads — no JS relay). Latest-wins (the
@@ -1551,6 +1571,13 @@ export default function disparityScopeSession(
         initial: { left: commandedVolts.l, right: commandedVolts.r },
         onAttach: (sink) => {
           nativeSink = sink;
+          // Governor ceiling = the requested prediction rate (Part 2); the
+          // AIMD loop discovers the sustainable emission rate under it.
+          try {
+            sink.setGovernor({ ceilingHz: currentRateHz });
+          } catch {
+            // governor params rejected — the baked defaults still apply
+          }
           voltLink = compose ? compose.volt_out.pipe(sink.pos_in) : null;
         },
         onDetach: () => {
@@ -1566,13 +1593,58 @@ export default function disparityScopeSession(
       // Volt TELEMETRY under the native path: no per-push JS callback exists
       // anymore, so poll the sink's native history at the telemetry throttle
       // (the fallback loop still reports through posInput.update's return).
+      // The same timer drives Part 4 SERIAL-LATENCY COMPENSATION (serial-rate-
+      // governor.md): while `serial_latency_comp` is ON and RTT samples exist,
+      // the predictor's delay gains a measured one-way term —
+      // `imm.setParams({ delayMs: fixed + EMA(ackRttP50)/2 })` — re-applied
+      // only when it moves by >0.05 ms (the live-retune path, no new native
+      // plumbing). OFF / no sink / no samples = the fixed lookahead exactly.
       {
+        const fixedDelayMs = t.delayCompensationMs;
+        const estimator = new SerialLatencyEstimator();
+        let latencyEnabled = await readSerialLatencyComp();
+        let appliedDelayMs = fixedDelayMs;
+        publishAppliedLookahead(fixedDelayMs);
+        const applyDelay = (totalMs: number): void => {
+          if (Math.abs(totalMs - appliedDelayMs) <= 0.05) return;
+          appliedDelayMs = totalMs;
+          imm?.setParams({ delayMs: totalMs });
+        };
+        disposers.add(
+          subscribeSerialLatencyComp((enabled) => {
+            latencyEnabled = enabled;
+            if (!enabled) {
+              estimator.reset();
+              applyDelay(fixedDelayMs); // byte-identical fixed behavior
+              publishAppliedLookahead(fixedDelayMs);
+            }
+          }, latencyEnabled),
+        );
         const timer = setInterval(() => {
-          if (!nativeSink) return;
+          if (!nativeSink) {
+            // No controller → fixed behavior; the estimate resets so a stale
+            // link's RTTs never leak into a fresh connection.
+            if (latencyEnabled && appliedDelayMs !== fixedDelayMs) {
+              estimator.reset();
+              applyDelay(fixedDelayMs);
+              publishAppliedLookahead(fixedDelayMs);
+            }
+            return;
+          }
+          const probe = nativeSink.probe();
+          if (latencyEnabled && probe.ackRttCount > 0) {
+            estimator.push(probe.ackRttP50);
+            const total = fixedDelayMs + (estimator.latencyMs ?? 0);
+            applyDelay(total);
+            publishAppliedLookahead(appliedDelayMs);
+          }
           const latest = nativeSink.historyLatest();
           if (latest) onVolts({ L: latest.left, R: latest.right }, 0);
         }, VOLT_TELEMETRY_INTERVAL_MS);
-        disposers.add(() => clearInterval(timer));
+        disposers.add(() => {
+          clearInterval(timer);
+          publishAppliedLookahead(null); // no predictor session active
+        });
       }
       pushVolts(); // park the mirrors at the current command (floor emit)
       // JS FALLBACK volt consumer (idles while the native sink is attached).
