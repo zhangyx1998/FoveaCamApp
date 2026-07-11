@@ -32,6 +32,7 @@
 #include <cstring>
 #include <fcntl.h>
 #include <poll.h>
+#include <signal.h> // ::kill — leaks in via sys/wait.h on glibc, NOT on macOS
 #include <stdexcept>
 #include <string>
 #include <sys/wait.h>

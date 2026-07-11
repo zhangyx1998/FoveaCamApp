@@ -310,7 +310,13 @@ const drainTimer = setInterval(drainPty, 10); // keep the pty buffer empty
       start = i + 1;
     }
   }
-  assert(frames > 100, `flood produced frames (${frames})`);
+  // Volume floor is PLATFORM-dependent: the flood runs until the kernel tty
+  // buffer fills (real EAGAIN), and that buffer is ~64 KB on Linux (thousands
+  // of ~23-byte frames) but only ~1 KB on macOS (≈40 frames — measured 42 on
+  // the darwin/arm64 pass, 2026-07-11). The floor only proves the flood
+  // actually pushed data; the INTEGRITY assertions below (bad === 0, soft
+  // fails counted) are the real checks and are platform-independent.
+  assert(frames > 30, `flood produced frames (${frames})`);
   assert.equal(bad, 0, `every on-wire frame decodes cleanly (${bad}/${frames} bad) — framing survived EAGAIN`);
   assert(dev.stats.txSoftFail > sf0, "soft-fail events counted");
   console.log(
