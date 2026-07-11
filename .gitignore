@@ -45,3 +45,6 @@ app/windows/*.html
 # VitePress build output + dev cache (generated; never committed)
 docs/.vitepress/dist/
 docs/.vitepress/cache/
+
+# Claude Code session machinery (worktrees, local settings)
+.claude/
