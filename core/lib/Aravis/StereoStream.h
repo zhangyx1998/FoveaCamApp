@@ -63,6 +63,7 @@
 #endif
 
 #include <Threading/Guard.h>
+#include <Threading/Ring.h> // RecordChannel (drop-oldest paired-record tap)
 
 #include "ConverterStream.h" // TapPublisher, TapChannel, ChannelKind, ...
 #include "PairStream.h"      // PairBatch, PairRecord, Stream<PairBatch::Ptr>
@@ -262,49 +263,10 @@ private:
   // thread reads (blocking). `close()` wakes a blocked reader (teardown / pair
   // brick death). Records are cheap (2 frame pins + a small anchor), bounded by
   // `cap`; under SGBM overload the OLDEST record is shed (metered as `drops`),
-  // never backpressured upstream.
-  class RecordChannel {
-  public:
-    explicit RecordChannel(size_t cap) : cap_(cap) {}
-    void write(PairRecord rec) { // producer (pair brick thread) — non-blocking
-      {
-        std::scoped_lock lk(m_);
-        if (closed_)
-          return;
-        q_.push_back(std::move(rec));
-        while (q_.size() > cap_) {
-          q_.pop_front();
-          drops_.fetch_add(1, std::memory_order_relaxed);
-        }
-      }
-      cv_.notify_one();
-    }
-    bool read(PairRecord &out) { // consumer (SGBM thread) — blocks; false=closed
-      std::unique_lock lk(m_);
-      cv_.wait(lk, [&] { return closed_ || !q_.empty(); });
-      if (q_.empty())
-        return false; // closed + drained
-      out = std::move(q_.front());
-      q_.pop_front();
-      return true;
-    }
-    void close() {
-      {
-        std::scoped_lock lk(m_);
-        closed_ = true;
-      }
-      cv_.notify_all();
-    }
-    uint64_t drops() const { return drops_.load(std::memory_order_relaxed); }
-
-  private:
-    std::mutex m_;
-    std::condition_variable cv_;
-    std::deque<PairRecord> q_;
-    const size_t cap_;
-    bool closed_ = false;
-    std::atomic<uint64_t> drops_{0};
-  };
+  // never backpressured upstream. GENERALIZED (native-port-pipe.md) into the
+  // reusable `Threading::Ring` channel — this alias keeps the local naming; the
+  // semantics are byte-for-byte the ring's (test 34 pins the behavior).
+  using RecordChannel = Threading::Ring<PairRecord>;
 
   // The record tap: a Subscriber on the always-running PairStream that fans each
   // completed batch's records into the RecordChannel. Its EXISTENCE is the

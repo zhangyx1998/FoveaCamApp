@@ -345,6 +345,15 @@ static Object init(Env env, Object exports) {
     auto TopologyNs = Object::New(env);
     TopologyNs.Set("report", Function::New<Topology::report>(env, "report"));
     exports.Set("Topology", TopologyNs);
+    // Native port/pipe substrate (native-port-pipe.md): registers the
+    // OutPort/InPort/PipeLink CoreObjects + the hardware-free test hooks.
+    // Root-object-only namespace (the Recorder precedent).
+    {
+      void exportPortNamespace(Napi::Env, Napi::Object &);
+      auto PortNs = Object::New(env);
+      exportPortNamespace(env, PortNs);
+      exports.Set("Port", PortNs);
+    }
     // Finalize
     // THE native host time authority (unified-time §1): libc++ steady_clock
     // integer ns. Every clock-calibration offset is in THIS domain; JS

@@ -537,6 +537,89 @@ describe("buildTopology with real reports (deps.reports)", () => {
     expect(t.nodes.some((n) => n.id === "camera/1/convert")).toBe(true);
   });
 
+  it("edges-only reports union into the owning node without replacing it (native-port-pipe.md)", () => {
+    // The session registers the imm NODE (kind/owner) via the wiring shim; the
+    // native port link self-reports the kcf → imm EDGE as an edges-only row in
+    // the REAL layer. The edge must land on the node WITHOUT the real-layer
+    // row replacing the wiring node's fields (the plain across-layer rule).
+    const dispose = registerGraphWiring({
+      nodes: [
+        {
+          id: "camera/1/undistort/kcf/imm",
+          kind: "imm",
+          owner: "win/disparity-scope",
+          output: { kind: "track" },
+          transport: "native",
+        },
+      ],
+      edges: [],
+    });
+    try {
+      const t = buildTopology({
+        listPipes: () => [],
+        workloads: () => ({}),
+        reports: () => [
+          {
+            id: "camera/1/undistort/kcf/imm",
+            kind: "",
+            transport: "native",
+            edgesOnly: true,
+            inputs: [
+              {
+                from: "camera/1/undistort/kcf",
+                port: "measure",
+                type: { kind: "track" },
+                lossy: true,
+              },
+            ],
+            output: null,
+          },
+        ],
+      });
+      const imm = t.nodes.find((n) => n.id === "camera/1/undistort/kcf/imm")!;
+      expect(imm.kind).toBe("imm"); // wiring node fields SURVIVE the edge row
+      expect(imm.owner).toBe("win/disparity-scope");
+      const edge = t.edges.find(
+        (e) => e.from === "camera/1/undistort/kcf" && e.to === imm.id,
+      )!;
+      expect(edge.port).toBe("measure");
+      expect(edge.lossy).toBe(true);
+    } finally {
+      dispose();
+    }
+  });
+
+  it("an orphan edges-only report degrades to a placeholder node (kind from the id path)", () => {
+    const t = buildTopology({
+      listPipes: () => [],
+      workloads: () => ({}),
+      reports: () => [
+        {
+          id: "camera/9/undistort/kcf/imm",
+          kind: "",
+          transport: "native",
+          edgesOnly: true,
+          inputs: [
+            {
+              from: "camera/9/undistort/kcf",
+              port: "measure",
+              type: { kind: "track" },
+              lossy: false,
+              queue: { highWater: 3, capacity: 8 },
+            },
+          ],
+          output: null,
+        },
+      ],
+    });
+    const node = t.nodes.find((n) => n.id === "camera/9/undistort/kcf/imm")!;
+    expect(node.kind).toBe("imm"); // kindOfPipeId fallback
+    // A fifo link's own per-edge queue stats ride the edge (hwm treatment).
+    const edge = t.edges.find((e) => e.to === node.id)!;
+    expect(edge.queue).toEqual({ highWater: 3, capacity: 8 });
+    expect(edge.lossy).toBeUndefined();
+  });
+
   it("wiring edges into pipe-derived nodes union in (same-layer merge)", () => {
     const dispose = registerGraphWiring({
       nodes: [],

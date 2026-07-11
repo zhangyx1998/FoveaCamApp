@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license.
 // You may find the full license in project root directory.
 // -------------------------------------------------------
-import type { CoreObject } from "../types";
+import type { CoreObject, InPort, OutPort } from "../types";
 import type { CameraCalibration, Mat } from "core/Vision";
 import type { Point2d, Rect } from "core/Geometry";
 import type { Camera } from "core/Aravis";
@@ -73,6 +73,11 @@ declare module "core/Tracker" {
     probe(): TrackerMeter;
     /** Test-only: add `ms` of artificial per-frame work (drives the drop path). */
     stall(ms: number): void;
+    /** The tracker's typed track OUT port (native-port-pipe.md) — runtime tag
+     *  `"track"`. Pipe it into a matching in-port (e.g. the IMM brick's
+     *  `measure_in`) to move results thread-to-thread natively; the returned
+     *  link self-registers its profiler edge. Lazily created, cached. */
+    readonly track_out: OutPort<TrackResult>;
   }
 
   /** Create a KCF tracker thread bound to `camera`'s shared stream (WS1 1d).
@@ -274,12 +279,22 @@ declare module "core/Tracker" {
     extends CoreObject<ImmPredictor>,
       AsyncIterable<ImmPrediction> {
     /** Push one tracker measurement; returns the reference-equivalent
-     *  (zero-coast) prediction. */
+     *  (zero-coast) prediction. KEPT alongside the `measure_in` port for the
+     *  conformance tests; production feeds the port. */
     ingest(measurement: ImmMeasurement): ImmPrediction;
+    /** The most recent zero-coast ingest result (NAPI ingest OR the
+     *  `measure_in` port — same path), or null before the first measurement.
+     *  The piped-conformance observation point (test 42). */
+    lastIngest(): ImmPrediction | null;
     /** Live rate/delay change. */
     setParams(params: ImmSetParams): void;
     /** Snapshot the native thread meter (out-of-loop safe). */
     probe(): TrackerMeter;
+    /** The brick's typed measurement IN port (native-port-pipe.md) — runtime
+     *  tag `"track"`. The disparity-scope session pipes the tracker's
+     *  `track_out` here (the JS measurement relay is gone). Lazily created,
+     *  cached; the sink runs on the link's delivery thread. */
+    readonly measure_in: InPort<TrackResult>;
   }
 
   /** Create the native IMM predictor brick. The disparity-scope session creates

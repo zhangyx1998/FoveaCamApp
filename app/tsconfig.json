@@ -40,6 +40,7 @@
     "modules",
     "orchestrator",
     "scripts",
+    "test/port-pipe.types.ts",
     "*.d.ts"
   ]
 }

@@ -1282,14 +1282,19 @@ export default function disparityScopeSession(
         disposers.add(
           subscribePredictionRateHz((rateHz) => imm?.setParams({ rateHz }), immRate),
         );
+        // kcf → imm is now a NATIVE PORT LINK (native-port-pipe.md ruling 1:
+        // both endpoints are native threads — no JS relay). Latest-wins (the
+        // measurement semantics the JS relay had); the link self-registers its
+        // profiler edge and retires it on release. The link pins both bricks,
+        // so its disposer runs FIRST (FIFO — added after the brick disposers).
+        const measureLink = tk.track_out.pipe(imm.measure_in);
+        disposers.add(() => measureLink.release());
         // pid consumes RAW tracker results (reverting kcf → imm → pid): the
         // feed-forward pairs `V_pid` with the measured center it acted on; a
-        // predicted pid input would double-count the motion. So the brick is fed
-        // in parallel with the reducer, and its PREDICTIONS drive `compose`.
-        void consumeTracker(tk, (r) => {
-          imm?.ingest(r); // measurement update (~60 Hz) — TrackResult ⇒ ImmMeasurement
-          trackerFeed(r); // raw → pid target + steer + telemetry (unchanged)
-        });
+        // predicted pid input would double-count the motion. JS KEEPS its own
+        // iterator consumption — it is a genuine consumer here (pid target +
+        // steer + telemetry; multiple subscribers are native to Stream<T>).
+        void consumeTracker(tk, trackerFeed);
       }
 
       monitor.done("tracker");
@@ -1363,12 +1368,13 @@ export default function disparityScopeSession(
               output: analysis,
               transport: "worker" as const,
             })),
-            // Neither the chained tracker NOR the IMM brick self-reports
-            // topology (no native Topology.report() row — unlike undistort
-            // bricks), so the session registers both: C source → kcf (frames,
-            // native tap), then kcf → imm (measurements, native tap). The
-            // kcf → pid `target` edge rides the pid node's inputs below; the
-            // imm → compose edge rides the compose node's wiring.
+            // Neither the chained tracker NOR the IMM brick self-reports its
+            // NODE row (unlike undistort bricks), so the session registers
+            // both: C source → kcf (frames, native tap). The kcf → imm edge is
+            // NO LONGER registered here — the native port link self-registers
+            // it via Topology.report() (native-port-pipe.md; edges-only row).
+            // The kcf → pid `target` edge rides the pid node's inputs below;
+            // the imm → compose edge rides the compose node's wiring.
             ...(tk
               ? [
                   {
@@ -1408,10 +1414,6 @@ export default function disparityScopeSession(
               },
             ]),
             ...(tk ? [{ from: cSourceId, to: kcfId, port: "C", type: rgba }] : []),
-            // kcf → imm: the brick taps every tracker result as a measurement.
-            ...(imm
-              ? [{ from: kcfId, to: immId, port: "measure", type: { kind: "track" } as const }]
-              : []),
           ],
         }),
       );

@@ -20,13 +20,17 @@
 //     center EXTRAPOLATING between measurements.
 //  3. METER + setParams — the thread meter records measure/predict counts
 //     (folds onto the profiler node), and a live rate change applies.
+//  4. PIPED CONFORMANCE (native-port-pipe.md) — the SAME vectors through the
+//     brick's `measure_in` NATIVE PORT (a lossless fifo link off a synthetic
+//     track source) reproduce the NAPI-ingest results exactly: the port path
+//     and the ingest path are one code path (`lastIngest` observes it).
 //
 // Run UNSANDBOXED: node core/test/42-imm-predictor.ts
 
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { Tracker, cleanup } from "core";
+import { Port, Tracker, cleanup } from "core";
 
 type Prediction = {
   found: boolean;
@@ -40,6 +44,8 @@ type Prediction = {
 };
 type Brick = {
   ingest(m: unknown): Prediction;
+  lastIngest(): Prediction | null;
+  measure_in: { streamTag: string; port: string };
   setParams(p: { rateHz?: number; delayMs?: number }): void;
   probe(): {
     name: string;
@@ -214,6 +220,70 @@ const fixture = JSON.parse(readFileSync(fixturePath, "utf8")) as Fixture;
     `42-imm-predictor: setParams live rate/delay change applied (${collected.length} emits after).`,
   );
   brick.release();
+}
+
+// --- 4. PIPED conformance (native-port-pipe.md) ------------------------------
+{
+  const PT = Port as unknown as {
+    createTestTrackSource(nodeId: string): {
+      track_out: { streamTag: string; pipe(t: unknown, o?: unknown): { probe(): { delivered: number }; release(): void } };
+      push(r: unknown): void;
+      release(): void;
+    };
+  };
+  const brick = T.createImmPredictor({ rateHz: 600, ...fixture.config });
+  const src = PT.createTestTrackSource("test/42/kcf");
+
+  // Runtime tags match the d.ts documentation (steering ruling 4): both ends
+  // carry "track" — the compile-time OutPort<TrackResult>/InPort<TrackResult>
+  // brand and the runtime tag agree.
+  assert.equal(src.track_out.streamTag, "track", "source out tag is \"track\"");
+  assert.equal(brick.measure_in.streamTag, "track", "imm measure_in tag is \"track\"");
+  assert.equal(brick.measure_in.port, "measure", "imm in-port name is \"measure\"");
+
+  // Lossless fifo: EVERY vector must arrive, in order (conformance needs the
+  // full sequence — latest-wins shedding would skip filter steps).
+  const link = src.track_out.pipe(brick.measure_in, { type: "fifo", depth: 64 });
+  const tol = fixture.tolerancePx;
+  for (let i = 0; i < fixture.inputs.length; i++) {
+    const m = fixture.inputs[i]!;
+    src.push({
+      found: m.found,
+      overridden: m.overridden,
+      center: m.center,
+      bbox: m.bbox,
+      seq: m.seq,
+      deviceTimestamp: BigInt(m.deviceTimestamp),
+    });
+    // Wait until THIS vector's measurement landed (seq observes the delivery).
+    const deadline = Date.now() + 8000;
+    let out: Prediction | null = null;
+    for (;;) {
+      out = brick.lastIngest();
+      if (out && out.seq === m.seq) break;
+      assert(Date.now() < deadline, `piped vector ${i} delivered`);
+      await new Promise((r) => setTimeout(r, 2));
+    }
+    const exp = fixture.expected[i]!;
+    assert.equal(out!.found, exp.found, `piped vector ${i} found`);
+    if (exp.center === null) {
+      assert.equal(out!.center, null, `piped vector ${i} center null`);
+    } else {
+      assert(out!.center, `piped vector ${i} center present`);
+      assert(
+        Math.abs(out!.center!.x - exp.center.x) <= tol &&
+          Math.abs(out!.center!.y - exp.center.y) <= tol,
+        `piped vector ${i} matches the NAPI-ingest reference within ${tol}px`,
+      );
+    }
+  }
+  assert.equal(link.probe().delivered, fixture.inputs.length, "fifo delivered every vector");
+  link.release();
+  src.release();
+  brick.release();
+  console.log(
+    `42-imm-predictor: piped conformance OK — ${fixture.inputs.length} vectors through the measure_in port match the reference.`,
+  );
 }
 
 cleanup();

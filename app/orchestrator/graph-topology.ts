@@ -321,7 +321,7 @@ export function buildTopologyFromReports(
       // snapshot carries a well-formed `queue`; explicit `input.lossy === false`
       // already defeats the pipe-producer default above so a FIFO input off a
       // pipe producer still lands here. Malformed queue → attribute absent.
-      const queue = !lossy ? queueEdgeStat(snap) : undefined;
+      const queue = !lossy ? (inputQueueStat(input) ?? queueEdgeStat(snap)) : undefined;
       edges.push({
         from: input.from,
         to: r.id,
@@ -394,6 +394,23 @@ export function buildTopologyFromReports(
   return { seq: ++seq, at, nodes: [...nodes.values()], edges };
 }
 
+/** A FIFO port link's OWN per-edge queue stats (native-port-pipe.md) — carried
+ *  on the report INPUT entry and preferred over the consumer-snapshot fallback
+ *  below (the snapshot aggregates the whole node; the link knows THIS edge).
+ *  Defensive like {@link queueEdgeStat}. */
+function inputQueueStat(
+  input: NodeReport["inputs"][number],
+): GraphEdge["queue"] | undefined {
+  const q = input?.queue;
+  if (!q || typeof q.highWater !== "number" || typeof q.capacity !== "number")
+    return undefined;
+  return {
+    highWater: q.highWater,
+    capacity: q.capacity,
+    ...(typeof q.depth === "number" ? { depth: q.depth } : {}),
+  };
+}
+
 /** Consumer-side FIFO queue stats for a NON-lossy edge (§2): the trailing-10s
  *  high-water mark + capacity (+ last-sampled depth). Defensive — a partial or
  *  non-numeric `queue` degrades to `undefined`, never throws. */
@@ -447,10 +464,19 @@ function inputMaxIntervalMs(w: WorkloadSnapshot | undefined): number | undefined
  *  edges survive next to it). */
 function mergeReportLayers(layers: NodeReport[][]): NodeReport[] {
   const merged = new Map<string, AdapterReport>();
+  // EDGES-ONLY rows (native-port-pipe.md: a native port link's self-registered
+  // edge) are collected across ALL layers and applied LAST: they union their
+  // inputs into whichever layer really owns the node — never replacing node
+  // fields, never being replaced by a later full report of the same id.
+  const edgeOnly: NodeReport[] = [];
   for (const layer of layers) {
     const seenThisLayer = new Set<string>();
     for (const r of Array.isArray(layer) ? layer : []) {
       if (!r || typeof r.id !== "string") continue;
+      if (r.edgesOnly) {
+        edgeOnly.push(r);
+        continue;
+      }
       if (seenThisLayer.has(r.id)) {
         unionInputs(merged.get(r.id)!, r); // same-layer dup: first wins fields
         continue;
@@ -458,6 +484,13 @@ function mergeReportLayers(layers: NodeReport[][]): NodeReport[] {
       seenThisLayer.add(r.id);
       merged.set(r.id, { ...r, inputs: [...inputsOf(r)] }); // later layer replaces
     }
+  }
+  for (const r of edgeOnly) {
+    const target = merged.get(r.id);
+    if (target) unionInputs(target, r);
+    // No owning report: degrade to a placeholder whose kind derives from the
+    // id path in the fold (`kind: ""` → kindOfPipeId).
+    else merged.set(r.id, { ...r, edgesOnly: undefined, inputs: [...inputsOf(r)] });
   }
   return [...merged.values()];
 }

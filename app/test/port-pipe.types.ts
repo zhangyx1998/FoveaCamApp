@@ -1,0 +1,72 @@
+// ------------------------------------------------------
+// Copyright (c) 2026 Yuxuan Zhang, dev@z-yx.cc
+// This source code is licensed under the MIT license.
+// You may find the full license in project root directory.
+// -------------------------------------------------------
+//
+// COMPILE-TIME harness for the native port/pipe d.ts (native-port-pipe.md
+// §"TS harness", ruling addendum 2026-07-10). Type-only — never imported at
+// runtime; compiled by the vue-tsc gate via an explicit tsconfig `include`
+// entry. Every `@ts-expect-error` line FAILS the gate if a future d.ts
+// regression makes the illegal call compile (TS flags an unused directive),
+// and the legal calls fail it if the surface breaks. Runtime tags are pinned
+// to these same payloads by core/test/42 + 44 (ruling: runtime and compile
+// time must agree).
+
+import type {
+  ImmPrediction,
+  ImmPredictor,
+  KcfTracker,
+  TrackResult,
+} from "core/Tracker";
+import type { InPort, OutPort, PortLink } from "../../core/dist/types";
+
+declare const tracker: KcfTracker;
+declare const imm: ImmPredictor;
+declare const detectIn: InPort<{ marker: number }>; // a DIFFERENT payload brand
+
+// --- legal surface -------------------------------------------------------------
+
+// The proving case: kcf.track_out.pipe(imm.measure_in) — payloads agree.
+const link: PortLink = tracker.track_out.pipe(imm.measure_in);
+void link.probe().highWater;
+link.release();
+
+// Per-type params on their own type.
+tracker.track_out.pipe(imm.measure_in, { type: "latest" });
+tracker.track_out.pipe(imm.measure_in, { type: "fifo", depth: 16 });
+tracker.track_out.pipe(imm.measure_in, { type: "ring", size: 4 });
+
+// Ports carry their identity + tag (runtime strings pinned by test 42/44).
+const outPort: OutPort<TrackResult> = tracker.track_out;
+const inPort: InPort<TrackResult> = imm.measure_in;
+void outPort.streamTag satisfies string | void;
+void inPort.port satisfies string | void;
+
+// --- illegal surface (each line MUST stay an error) ------------------------------
+
+// Payload mismatch: a track out-port cannot pipe into a differently-branded in.
+// @ts-expect-error — payload brand mismatch (TrackResult vs marker payload)
+tracker.track_out.pipe(detectIn);
+
+// Per-type params cannot cross the discriminated union.
+// @ts-expect-error — `depth` is a fifo param, not a latest one
+tracker.track_out.pipe(imm.measure_in, { type: "latest", depth: 8 });
+// @ts-expect-error — `size` is a ring param, not a fifo one
+tracker.track_out.pipe(imm.measure_in, { type: "fifo", size: 8 });
+// @ts-expect-error — `depth` is a fifo param, not a ring one
+tracker.track_out.pipe(imm.measure_in, { type: "ring", depth: 8 });
+// @ts-expect-error — unknown link type
+tracker.track_out.pipe(imm.measure_in, { type: "unbounded" });
+
+// Direction: out→out and in→in do not connect.
+// @ts-expect-error — cannot pipe an out-port into another OUT-port
+tracker.track_out.pipe(tracker.track_out);
+// @ts-expect-error — an in-port has no pipe()
+imm.measure_in.pipe(tracker.track_out);
+
+// The prediction stream stays a separate shape from the ports.
+declare const pred: ImmPrediction;
+void pred;
+
+export {};

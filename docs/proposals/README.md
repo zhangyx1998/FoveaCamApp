@@ -28,3 +28,4 @@ workers implement against these files, and live-rig items accumulate in
 | [sgbm-signed-range](./sgbm-signed-range.md) | shipped; rig owed | foveated gaze ⇒ signed disparity: both stereo attach sites get a fixed symmetric ±256 window |
 | [stereo-throughput](./stereo-throughput.md) | shipped; rig owed | stereo matcher becomes a benchmark-selected strategy (scaled SGBM_3WAY / BM / +WLS) targeting ~60 fps CPU-only |
 | [profiler-tabs-and-graph-polish](./profiler-tabs-and-graph-polish.md) | shipped; rig visual pass owed | profiler splits into 5 tabs; graph edges become face-normal cubic béziers; per-node busy rings + hover-popup detail |
+| [native-port-pipe](./native-port-pipe.md) | shipped; rig owed | typed native ports + `out.pipe(in, {latest\|fifo\|ring})` → probeable Link; topology self-registration; kcf→imm off the JS boundary; compile-time TS harness |

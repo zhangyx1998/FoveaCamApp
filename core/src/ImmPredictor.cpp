@@ -50,8 +50,10 @@
 
 #include "CoreObject.h"
 #include "Iterator.h"    // TransformStream seam: Sub::Queue / Sub::Iterator
+#include "PortPipe.h"    // measure_in port (native-port-pipe.md)
 #include "Stream/Stream.h"
 #include "ThreadMeter.h"
+#include "TrackResult.h" // the measure_in payload (tracker link)
 #include "napi-helper.h"
 #include "utils/thread.h" // set_thread_name (glibc: ≤15 chars)
 
@@ -609,18 +611,52 @@ public:
     return std::make_shared<ImmStream>(t, delaySec, rateHz, std::move(name));
   }
   ImmStream(const Tuning &t, double delaySec, double rateHz, std::string name)
-      : core_(t, delaySec),
+      : core_(t, delaySec), name_(name),
         meter_(std::move(name), {"measure"}, {"predict"}, nowMs()) {
     setPeriodNs(rateHz);
   }
   ~ImmStream() { shutdown(); }
 
-  // NAPI-thread: push one measurement, return the zero-coast prediction. Meters
-  // one input arrival.
+  /** The graph node id (= meter name) — the `to` of a measure_in link edge. */
+  const std::string &name() const { return name_; }
+
+  // Push one measurement, return the zero-coast prediction. Meters one input
+  // arrival and remembers the result (`lastIngest` — the piped-conformance
+  // observation point). Called from the NAPI thread (ingest) OR a port link's
+  // delivery thread (measure_in) — both serialize on `mutex_`.
   ImmResult::Ptr ingest(const ImmMeasurement &m) {
     std::scoped_lock lock(mutex_);
     meter_.ingest("measure", nowMs());
-    return core_.ingest(m);
+    auto out = core_.ingest(m);
+    lastIngest_ = out;
+    return out;
+  }
+
+  // measure_in sink (native-port-pipe.md): adapt a TrackResult off the link's
+  // delivery thread into the measurement update. Same path as `ingest`.
+  void ingestFromPort(const TrackResult &r) {
+    ImmMeasurement m;
+    m.found = r.found;
+    m.overridden = r.overridden;
+    m.cx = r.center.x;
+    m.cy = r.center.y;
+    if (r.bbox.width > 0 && r.bbox.height > 0) {
+      m.hasBbox = true;
+      m.bx = r.bbox.x;
+      m.by = r.bbox.y;
+      m.bw = r.bbox.width;
+      m.bh = r.bbox.height;
+    }
+    m.seq = r.seq;
+    m.deviceTimestamp = r.deviceTimestamp;
+    ingest(m);
+  }
+
+  /** The most recent zero-coast ingest result (piped-conformance observation +
+   *  debugging). Null before the first measurement. */
+  ImmResult::Ptr lastIngest() {
+    std::scoped_lock lock(mutex_);
+    return lastIngest_;
   }
 
   // Live rate / delay change (Settings or drawer slider).
@@ -662,9 +698,11 @@ private:
                     std::memory_order_release);
   }
 
-  std::mutex mutex_;        // guards core_ + meter_ writes across the two threads
+  std::mutex mutex_;        // guards core_ + meter_ writes across the threads
   ImmCore core_;
+  std::string name_;         // graph node id (declared BEFORE meter_ — init order)
   Meter::ThreadMeter meter_; // single logical writer per side, mutex-serialized
+  ImmResult::Ptr lastIngest_; // most recent zero-coast result (mutex_)
   std::atomic<int64_t> periodNs_{1666666}; // ~600 Hz default
 };
 
@@ -763,10 +801,17 @@ public:
         {
             CORE_OBJECT_REGISTER(ImmPredictorObject, env),
             INSTANCE_METHOD(ImmPredictorObject, ingest),
+            INSTANCE_METHOD(ImmPredictorObject, lastIngest),
             INSTANCE_METHOD(ImmPredictorObject, setParams),
             INSTANCE_METHOD(ImmPredictorObject, probe),
             Napi::InstanceWrap<ImmPredictorObject>::template InstanceMethod<
                 &ImmPredictorObject::asyncIterator>(asyncIterator),
+            // native-port-pipe.md: the typed measurement IN port (lazily
+            // created, cached). The disparity-scope session pipes the
+            // tracker's track_out here — the JS measurement relay is gone.
+            Napi::InstanceWrap<ImmPredictorObject>::template InstanceAccessor<
+                &ImmPredictorObject::get_measure_in>("measure_in",
+                                                     napi_enumerable),
         });
   }
 
@@ -778,6 +823,40 @@ public:
     auto env = info.Env();
     try {
       return convert(env, core()->ingest(parseMeasurement(info[0])));
+    }
+    JS_EXCEPT(env.Undefined())
+  }
+
+  // The most recent zero-coast ingest result (NAPI ingest OR the measure_in
+  // port — same path), or null before the first measurement. Test 42 compares
+  // the piped conformance vectors through this observation point.
+  FN(lastIngest) {
+    auto env = info.Env();
+    try {
+      return convert(env, core()->lastIngest());
+    }
+    JS_EXCEPT(env.Undefined())
+  }
+
+  // `measure_in` — the typed measurement IN port (native-port-pipe.md). The
+  // sink captures the ImmStream::Ptr, so a live link keeps the brick alive
+  // even past a JS release of this wrapper; it runs on the LINK's delivery
+  // thread and serializes on the brick's ingest mutex.
+  GET(measure_in) {
+    auto env = info.Env();
+    try {
+      if (measureIn_.IsEmpty()) {
+        auto stream = core();
+        auto port = PortPipe::makeInPort<TrackResult::Ptr>(
+            stream->name(), "measure", "track",
+            [stream](const TrackResult::Ptr &r) {
+              if (r)
+                stream->ingestFromPort(*r);
+            });
+        auto js = PortPipe::createInPortJs(env, port);
+        measureIn_ = Napi::Persistent(js.As<Napi::Object>());
+      }
+      return measureIn_.Value();
     }
     JS_EXCEPT(env.Undefined())
   }
@@ -818,6 +897,9 @@ public:
     }
     JS_EXCEPT(env.Undefined())
   }
+
+private:
+  Napi::ObjectReference measureIn_; // cached port wrapper (accessor contract)
 };
 
 CORE_OBJECT(ImmPredictorObject)

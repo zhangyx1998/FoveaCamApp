@@ -148,24 +148,31 @@ function pushPair(d: number): void {
 }
 
 /** Push pairs until the emitted map SETTLES on the new plane/params, then
- *  return metrics vs ground truth `d`. Frames straddling a retune report the
- *  OLD scale/content (the ring's newest frame lags one push), so: skip frames
- *  whose dims don't match the expected match scale, and require TWO consecutive
- *  reads with medians within 1 px of each other before trusting one. A
- *  persistent sign contradiction settles too — the caller's assert reports it. */
+ *  return metrics vs ground truth `d`. Two stale hazards straddle a switch:
+ *  frames computed with the OLD params (dims mismatch → skipped), and MIXED
+ *  pairs — the two synthetic sources are independent threads, so the first
+ *  tick(s) after a plane switch can pair the new LEFT with the previous
+ *  plane's RIGHT (the left texture is plane-invariant, so such a map reads as
+ *  a stable, plausible OLD-plane value). Discipline: skip a minimum number of
+ *  fresh frames after the switch, then require THREE consecutive reads with
+ *  medians within 1 px. A brick whose SIGN CONVENTION is genuinely flipped
+ *  still settles (consistently at −d) — the caller's assert reports it. */
 async function measureQuality(d: number, expectScale: number): Promise<{
   validFrac: number; within2: number; median: number;
 }> {
   const deadline = Date.now() + 60_000;
   const expectW = Math.floor(W / expectScale);
-  let prev: { validFrac: number; within2: number; median: number } | null = null;
+  const MIN_FRESH = 4;   // frames to discard after the switch (mixed pairs)
+  const STABLE_RUN = 3;  // consecutive stable medians required
+  let fresh = 0;
+  let run: { validFrac: number; within2: number; median: number }[] = [];
   while (Date.now() < deadline) {
     pushPair(d);
     await sleep(10);
     const r = pull();
     if (!r) continue;
     const w = r.width, h = r.height;
-    if (w !== expectW) { prev = null; continue; } // stale pre-retune frame
+    if (w !== expectW) { fresh = 0; run = []; continue; } // stale pre-retune frame
     const view = new Float32Array(dest, 0, w * h);
     let valid = 0, within = 0;
     const vals: number[] = [];
@@ -176,12 +183,15 @@ async function measureQuality(d: number, expectScale: number): Promise<{
       vals.push(v);
       if (Math.abs(v - d) <= 2) within++;
     }
-    if (valid < 0.02 * view.length) { prev = null; continue; } // warmup
+    if (valid < 0.02 * view.length) { fresh = 0; run = []; continue; } // warmup
+    if (++fresh <= MIN_FRESH) { run = []; continue; } // possible mixed pair
     vals.sort((a, b) => a - b);
     const median = vals[Math.floor(vals.length / 2)]!;
     const cur = { validFrac: valid / view.length, within2: within / valid, median };
-    if (prev && Math.abs(prev.median - cur.median) <= 1) return cur; // settled
-    prev = cur;
+    if (run.length > 0 && Math.abs(run[run.length - 1]!.median - cur.median) > 1)
+      run = []; // discontinuity — restart the stability run
+    run.push(cur);
+    if (run.length >= STABLE_RUN) return cur; // settled
   }
   throw new Error(`no settled disparity frame for d=${d} within the deadline`);
 }

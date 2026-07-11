@@ -37,6 +37,48 @@ declare module "core" {
      * boundary. Handle-based; all fovea schema/metadata constants are passed IN
      * (docs/schema stays the single source of truth).
      */
+    /**
+     * Native port/pipe substrate (docs/proposals/native-port-pipe.md) —
+     * root-object-only namespace (the Recorder precedent). Production ports
+     * hang off brick objects (`tracker.track_out`, `imm.measure_in`); this
+     * namespace carries the class registrations + the HARDWARE-FREE test
+     * hooks core/test/44 and 42 drive.
+     */
+    export namespace Port {
+        /** Push-driven TrackResult source with a `track_out` port (tag
+         *  "track"). Test-only. */
+        function createTestTrackSource(nodeId: string): {
+            readonly track_out: import("./types").OutPort<
+                import("core/Tracker").TrackResult
+            >;
+            push(result: {
+                found: boolean;
+                overridden?: boolean;
+                center: { x: number; y: number } | null;
+                bbox?: { x: number; y: number; width: number; height: number } | null;
+                seq?: number;
+                deviceTimestamp?: bigint;
+            }): void;
+            release(): void;
+        };
+        /** Counting TrackResult sink with a `track_in` port. `tag` overrides
+         *  the runtime tag (mismatch tests); `port` names the edge port
+         *  (default "measure"). Test-only. */
+        function createTestTrackSink(
+            nodeId: string,
+            tag?: string,
+            port?: string,
+        ): {
+            readonly track_in: import("./types").InPort<
+                import("core/Tracker").TrackResult
+            >;
+            count(): number;
+            seqs(): number[];
+            stall(ms: number): void;
+            release(): void;
+        };
+    }
+
     export namespace Recorder {
         /** Cumulative per-stream counters (recorder-node StreamCounters shape:
          *  written + dropped == ingested; droppedQueue + droppedRing == dropped). */

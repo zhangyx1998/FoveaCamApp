@@ -20,6 +20,8 @@
 #include "Aravis/ConverterStream.h" // OwnedFrame, ChainedStreamOf, findConverter
 #include "Aravis/UndistortStream.h" // findUndistort (chained-tracker source)
 #include "AsyncTask.h"
+#include "PortPipe.h"   // track_out port (native-port-pipe.md)
+#include "TrackResult.h" // shared payload (crosses to the imm brick on a link)
 #include "CoreObject.h"
 #include "Iterator.h"    // TransformStream, Sub::Queue/Iterator (async-generator seam)
 #include "ThreadMeter.h" // C's standalone native meter (reused, not forked)
@@ -191,20 +193,8 @@ static int64_t nowMs() {
       .count();
 }
 
-struct TrackResult : Shared<TrackResult> {
-  bool found = false;
-  cv::Rect bbox;
-  // Bbox center (computed once in native — the value every consumer wants).
-  // For an OVERRIDDEN result this is the override point (bbox may be a centered
-  // box of the last armed size, or empty if never armed). Valid iff `found`.
-  cv::Point2d center{0, 0};
-  // True while the tracker is under a JS override (drag): KCF is NOT updated;
-  // `center` is the override value. Flows downstream (matcher → PID) so each
-  // stage acts correspondingly (controller-node-and-fifo-edges §3.5).
-  bool overridden = false;
-  uint64_t seq = 0;             // result counter (transform thread)
-  uint64_t deviceTimestamp = 0; // source frame's camera-clock stamp (correlation)
-};
+// TrackResult now lives in core/include/TrackResult.h (native-port-pipe.md):
+// the payload crosses TUs on the kcf → imm native link. Shape unchanged.
 
 template <> Napi::Value convert(Napi::Env env, const TrackResult::Ptr &r) noexcept {
   if (!r)
@@ -406,6 +396,8 @@ struct TrackerHandle {
   virtual Meter::Snapshot probe() const = 0;
   virtual void stall(double ms) = 0;
   virtual Stream<TrackResult::Ptr> *stream() = 0;
+  /** The graph node id (= meter name) — the `from` of a track_out link edge. */
+  virtual const std::string &name() const = 0;
 };
 
 class KcfTrackerStream
@@ -423,6 +415,7 @@ public:
   explicit KcfTrackerStream(Arv::Stream::Ptr upstream,
                             std::string name = "tracker:center")
       : upstream_(std::move(upstream)),
+        name_(name),
         meter_(std::move(name), {"frame"}, {"track"}, nowMs()) {}
   // Stream requires shutdown() before the base is destroyed (joins the thread
   // before the derived vtable/core_ go away).
@@ -437,6 +430,7 @@ public:
   // transform, exercising the latest-wins drop counter / meter.drop path.
   void stall(double ms) override { stallMs_.store(ms, std::memory_order_release); }
   Stream<TrackResult::Ptr> *stream() override { return this; }
+  const std::string &name() const override { return name_; }
 
 protected:
   Stream<Arv::Frame::Ptr> *upstream() override { return upstream_.get(); }
@@ -459,6 +453,7 @@ protected:
 
 private:
   Arv::Stream::Ptr upstream_;
+  std::string name_;         // graph node id (declared BEFORE meter_ — init order)
   Meter::ThreadMeter meter_; // single writer = transform thread
   KcfCore core_;             // tracking + override state machine
   std::atomic<double> stallMs_{0}; // test-only induced slowness
@@ -481,6 +476,7 @@ public:
   }
   ChainedKcfTrackerStream(Source source, std::string name)
       : Arv::ChainedStreamOf<TrackResult::Ptr>(std::move(source)), // Leaky
+        name_(name),
         meter_(std::move(name), {"frame"}, {"track"}, nowMs()) {}
   ~ChainedKcfTrackerStream() override {
     closeChain(); // wake a blocked tap read (ChainedStream contract)
@@ -493,6 +489,7 @@ public:
   Meter::Snapshot probe() const override { return meter_.probe(nowMs()); }
   void stall(double ms) override { stallMs_.store(ms, std::memory_order_release); }
   Stream<TrackResult::Ptr> *stream() override { return this; }
+  const std::string &name() const override { return name_; }
 
 protected:
   TrackResult::Ptr process(const Arv::OwnedFrame::Ptr &in) override {
@@ -508,6 +505,7 @@ protected:
   }
 
 private:
+  std::string name_;         // graph node id (declared BEFORE meter_ — init order)
   Meter::ThreadMeter meter_; // single writer = this brick's thread
   KcfCore core_;             // tracking + override state machine (owns color buf)
   std::atomic<double> stallMs_{0}; // test-only induced slowness
@@ -743,6 +741,7 @@ public:
   explicit HybridTrackerStream(Arv::Stream::Ptr upstream,
                                std::string name = "tracker:center")
       : upstream_(std::move(upstream)),
+        name_(name),
         meter_(std::move(name), {"frame"}, {"track"}, nowMs()) {}
   ~HybridTrackerStream() override { shutdown(); }
 
@@ -752,6 +751,7 @@ public:
   Meter::Snapshot probe() const override { return meter_.probe(nowMs()); }
   void stall(double ms) override { stallMs_.store(ms, std::memory_order_release); }
   Stream<TrackResult::Ptr> *stream() override { return this; }
+  const std::string &name() const override { return name_; }
 
 protected:
   Stream<Arv::Frame::Ptr> *upstream() override { return upstream_.get(); }
@@ -770,6 +770,7 @@ protected:
 
 private:
   Arv::Stream::Ptr upstream_;
+  std::string name_;         // graph node id (declared BEFORE meter_ — init order)
   Meter::ThreadMeter meter_; // single writer = transform thread
   HybridCore core_;          // NCC tracking + override state machine
   std::atomic<double> stallMs_{0}; // test-only induced slowness
@@ -790,6 +791,7 @@ public:
   }
   ChainedHybridTrackerStream(Source source, std::string name)
       : Arv::ChainedStreamOf<TrackResult::Ptr>(std::move(source)), // Leaky
+        name_(name),
         meter_(std::move(name), {"frame"}, {"track"}, nowMs()) {}
   ~ChainedHybridTrackerStream() override {
     closeChain(); // wake a blocked tap read (ChainedStream contract)
@@ -802,6 +804,7 @@ public:
   Meter::Snapshot probe() const override { return meter_.probe(nowMs()); }
   void stall(double ms) override { stallMs_.store(ms, std::memory_order_release); }
   Stream<TrackResult::Ptr> *stream() override { return this; }
+  const std::string &name() const override { return name_; }
 
 protected:
   TrackResult::Ptr process(const Arv::OwnedFrame::Ptr &in) override {
@@ -814,6 +817,7 @@ protected:
   }
 
 private:
+  std::string name_;         // graph node id (declared BEFORE meter_ — init order)
   Meter::ThreadMeter meter_; // single writer = this brick's thread
   HybridCore core_;          // NCC tracking + override state machine
   std::atomic<double> stallMs_{0}; // test-only induced slowness
@@ -863,6 +867,12 @@ public:
                 &KcfTrackerObject::overrideCenter>("override"),
             Napi::InstanceWrap<KcfTrackerObject>::template InstanceMethod<
                 &KcfTrackerObject::asyncIterator>(asyncIterator),
+            // native-port-pipe.md: the typed track OUT port (lazily created,
+            // cached — the accessor contract). `pipe()` on it connects this
+            // tracker's result stream to another brick's in-port natively.
+            Napi::InstanceWrap<KcfTrackerObject>::template InstanceAccessor<
+                &KcfTrackerObject::get_track_out>("track_out",
+                                                  napi_enumerable),
         });
   }
 
@@ -926,6 +936,27 @@ public:
     }
     JS_EXCEPT(env.Undefined())
   }
+
+  // `track_out` — the tracker's typed OUT port (native-port-pipe.md). The
+  // OutPort captures the TrackerHandle::Ptr, so a live link keeps the tracker
+  // stream alive even past a JS release of this wrapper.
+  GET(track_out) {
+    auto env = info.Env();
+    try {
+      if (trackOut_.IsEmpty()) {
+        auto handle = core();
+        auto port = PortPipe::makeOutPort<TrackResult::Ptr>(
+            handle->name(), "track", "track", handle, handle->stream());
+        auto js = PortPipe::createOutPortJs(env, port);
+        trackOut_ = Napi::Persistent(js.As<Napi::Object>());
+      }
+      return trackOut_.Value();
+    }
+    JS_EXCEPT(env.Undefined())
+  }
+
+private:
+  Napi::ObjectReference trackOut_; // cached port wrapper (accessor contract)
 };
 
 CORE_OBJECT(KcfTrackerObject)

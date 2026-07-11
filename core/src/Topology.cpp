@@ -87,6 +87,7 @@ Value report(const CallbackInfo &info) {
     Arv::appendRaw12pReports(env, rows, seen);
     Arv::appendCompressReports(env, rows, seen);
     Arv::appendPairReports(env, rows, seen);
+    PortPipe::appendLinkReports(env, rows); // native port links (edges-only)
     auto &hub = Pipe::PipeHub::instance();
     auto probes = hub.probeAll(); // publisher (offer-side) meters, keyed by id
     for (const auto &entry : hub.list()) {

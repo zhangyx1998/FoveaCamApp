@@ -97,3 +97,13 @@ void appendPairReports(Napi::Env env, Napi::Array &rows,
                        std::set<std::string> &seen);
 
 } // namespace Arv
+
+namespace PortPipe {
+
+// native-port-pipe.md: one EDGES-ONLY row ({id: toId, kind: "", edgesOnly:
+// true, inputs: [the link edge]}) per live native port link - the JS fold
+// unions the edge into the consumer's node, so piped edges show on the
+// profiler graph without any session-side registerGraphWiring shim.
+void appendLinkReports(Napi::Env env, Napi::Array &rows);
+
+} // namespace PortPipe

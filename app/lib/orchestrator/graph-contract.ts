@@ -74,8 +74,16 @@ export type NodeReport = {
   transport: NodeTransport;
   /** ACTUAL live input connections — the graph's only edge source. `lossy`
    *  marks latest-wins subscriptions (SHM seqlock reads, Leaky channels) so
-   *  the derived edge reports a drop rate; FIFO/lossless links omit it. */
-  inputs: { from: string; port: string; type: StreamType; lossy?: boolean }[];
+   *  the derived edge reports a drop rate; FIFO/lossless links omit it.
+   *  `queue` (native-port-pipe.md): a FIFO port link's own hwm/capacity —
+   *  preferred over the consumer snapshot's queue for THIS edge. */
+  inputs: {
+    from: string;
+    port: string;
+    type: StreamType;
+    lossy?: boolean;
+    queue?: { highWater: number; capacity: number; depth?: number };
+  }[];
   output: StreamType | null;
   /** Full meter snapshot (one schema, already converged). Absent = the
    *  topology builder folds stats BY ID from the perfSnapshot workloads map. */
@@ -89,6 +97,12 @@ export type NodeReport = {
    *  EXACT `bytesTotal` accumulator (diffed across snapshots for MB/s). Only
    *  meaningful when `transport === "pipe"`. */
   pipe?: { consumers: number; bytesTotal: number };
+  /** EDGES-ONLY report (native-port-pipe.md): the row contributes ONLY its
+   *  `inputs` — the fold unions them into whichever layer really owns the
+   *  node (a native port link registers its edge without claiming the
+   *  consumer's node fields). A row with no other report of the same id
+   *  degrades to a placeholder node (kind derived from the id path). */
+  edgesOnly?: boolean;
 };
 
 /** Per-node meter badge — the SAME numbers the profiler's workload table shows
