@@ -11,13 +11,21 @@ import {
   DEFAULT_ANAGLYPH_STYLE,
   type AnaglyphStyle,
 } from "../../docs/schema/anaglyph.js";
+import {
+  APP_CONFIG_PATH,
+  DEFAULT_PREDICTION_RATE_HZ,
+  DEFAULT_RECORD_COMPRESSION,
+  DEFAULT_SERIAL_LATENCY_COMP,
+  type RecordCompression,
+} from "./config-schema.js";
 
-/** Recording compression method (extensible union — more methods may come;
- *  none besides zlib now). Consumed at RECORDING START by the orchestrator
- *  recording facilities. The orchestrator duplicates this union in the Vue-free
- *  `@orchestrator/record-compression` (it must not import this Vue-touching
- *  module); keep the two in sync. */
-export type RecordCompression = "none" | "zlib";
+// The cross-process config SCHEMA — doc path, value unions, defaults, clamp
+// bounds — now lives in the Vue-free `./config-schema` so the orchestrator
+// readers can share it without importing this Vue-touching module (they used to
+// hand-mirror every literal). Re-exported here so existing `@lib/config`
+// consumers keep the same import surface.
+export { APP_CONFIG_PATH };
+export type { RecordCompression };
 
 export interface AppConfig {
   // ---- TeleCanvas (standalone dual-mode module) ------------------------
@@ -86,8 +94,9 @@ export interface AppConfig {
   // node.md ruling 2). Default 600, clamped 60..1000. Edited from BOTH Settings
   // → Global config AND the disparity-scope drawer slider (same key), and
   // live-applied by the disparity-scope session via `imm.setParams({ rateHz })`
-  // — no reconnect. The orchestrator duplicates the default/clamp in the Vue-free
-  // `@orchestrator/prediction-rate`; keep the two in sync.
+  // — no reconnect. The default + clamp bounds are the shared `@lib/config-schema`
+  // constants (`DEFAULT_PREDICTION_RATE_HZ`, `PREDICTION_RATE_MIN/MAX`), which the
+  // Vue-free `@orchestrator/prediction-rate` reader imports too (single source).
   prediction_rate_hz?: number;
   // Serial-latency compensation in the motion predictor (serial-rate-
   // governor.md Part 4, ruled 2026-07-10). ON: the disparity-scope session
@@ -105,8 +114,6 @@ export interface AppConfig {
   export_parallel?: boolean;
 }
 
-export const APP_CONFIG_PATH = ["config"] as const;
-
 /** The declared defaults for every AppConfig key — exported so the values are
  *  assertable without a live store (the config window / consumers read them
  *  through the `useDefaults` proxy below). */
@@ -115,14 +122,14 @@ export const APP_CONFIG_DEFAULTS: Readonly<AppConfig> = {
   tele_canvas_url: "",
   tele_canvas_port: DEFAULT_TELECANVAS_PORT,
   default_save_dir: "",
-  record_compression: "none",
+  record_compression: DEFAULT_RECORD_COMPRESSION,
   baseline_distance_mm: 200.0,
   cal_marker_size_mm: 60.0,
   cal_marker_ratio: 1.0,
   anaglyph_style: DEFAULT_ANAGLYPH_STYLE,
   cap_stack: 5,
-  prediction_rate_hz: 600,
-  serial_latency_comp: false,
+  prediction_rate_hz: DEFAULT_PREDICTION_RATE_HZ,
+  serial_latency_comp: DEFAULT_SERIAL_LATENCY_COMP,
   export_parallel: false,
 };
 

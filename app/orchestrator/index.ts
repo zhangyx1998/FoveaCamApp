@@ -106,18 +106,14 @@ onSpan((s) => hub.reportSpan(s));
 // the LEASED handle only (a fovea is composable only while its camera lives —
 // unleased compose fails loudly, never acquires). `pipeBroker` is referenced
 // lazily (materialize runs long after module init — no TDZ).
-const aravisFovea = Aravis as unknown as {
-  attachFoveaPipe(
-    sourcePipeId: string,
-    pipeId: string,
-    opts: { rect: { x: number; y: number; width: number; height: number } },
-  ): void;
-  setFoveaRect(
-    pipeId: string,
-    rect: { x: number; y: number; width: number; height: number },
-  ): boolean;
-  detachFoveaPipe(pipeId: string): void;
-};
+// The fovea crop brick's native surface. These NAPIs are declared in
+// `core/Aravis`'s d.ts, so we take the REAL types via a `typeof Aravis` Pick
+// instead of a hand-mirrored `as unknown as {…}` shadow interface — a d.ts
+// drift now fails vue-tsc here rather than passing silently.
+const aravisFovea: Pick<
+  typeof Aravis,
+  "attachFoveaPipe" | "setFoveaRect" | "detachFoveaPipe"
+> = Aravis;
 // Unified-topology §5: fovea slots CHAIN on the camera's shared undistort
 // brick (else the shared converter — uncalibrated degrade). No per-fovea cal
 // loading: undistortion happens ONCE upstream; the fused map-ROI path and
@@ -136,6 +132,9 @@ const pipeBroker = pipeSession({
   // signal from A-34 window tagging.
   windowIdOf: (ch) => hub.windowIdOf(ch),
   onWindowClosed: (fn) => hub.onWindowClosed(fn),
+  // value-sweep-2026-07-11 (`pipe-consumer-refcount-no-reconciliation`):
+  // reconcile leaked raw connect refcounts when a renderer port closes.
+  onChannelClosed: (fn) => hub.onChannelClosed(fn),
   materializers: { fovea: foveaMaterializer },
 });
 hub.add(pipeBroker.session);
@@ -204,12 +203,13 @@ hub.add(controllerSession());
 // pipes the recorder node FIFO-consumes (Aravis.attachRawPipe publishes
 // `frame->raw` verbatim; consumer-gated like every pipe). Seam types the camera
 // as `unknown` so the session/recorder unit-test without native core.
-const aravisRaw = Aravis as unknown as {
-  attachRawPipe(camera: unknown, pipeId: string): boolean;
-  detachRawPipe(pipeId: string): boolean;
-  attachRaw12pPipe(camera: unknown, pipeId: string): boolean;
-  detachRaw12pPipe(pipeId: string): boolean;
-};
+// Real d.ts types (both attach fns already type `camera` as `unknown` there,
+// so the seam's opaque camera survives) — a `typeof Aravis` Pick, not a
+// hand-mirrored shadow interface.
+const aravisRaw: Pick<
+  typeof Aravis,
+  "attachRawPipe" | "detachRawPipe" | "attachRaw12pPipe" | "detachRaw12pPipe"
+> = Aravis;
 // Kind-routed seam: `"raw"` → the UNPACKED 16-bit container; `"raw12p"` → the
 // VERBATIM packed wire payload (multi-fovea-recording ruling 1).
 const rawSeam: import("./raw-pipe.js").RawPipeSeam = {
@@ -271,12 +271,12 @@ registerNativeProbe(
 // The session composes GENERAL-PURPOSE bricks: slice (the fovea crop brick
 // under session-owned ids) + scale (the ScaleStream brick) + template-match
 // workers. Seams injected so the session unit-tests without native core.
-const aravisScale = Aravis as unknown as {
-  attachScalePipe(sourcePipeId: string, pipeId: string, params: unknown): void;
-  setScaleParams(pipeId: string, params: unknown): boolean;
-  detachScalePipe(pipeId: string): void;
-  scaleProbeAll(): Record<string, unknown>;
-};
+// Real d.ts types (`ScaleParams` matches the seam's own union) via a `typeof
+// Aravis` Pick — no hand-mirrored shadow interface.
+const aravisScale: Pick<
+  typeof Aravis,
+  "attachScalePipe" | "setScaleParams" | "detachScalePipe" | "scaleProbeAll"
+> = Aravis;
 const sliceSeam: import("./slice-pipe.js").SlicePipeSeam = {
   advertise: pipeBroker.advertise,
   unadvertise: pipeBroker.unadvertise,

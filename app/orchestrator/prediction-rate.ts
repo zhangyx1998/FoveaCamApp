@@ -13,18 +13,23 @@
 //
 // Vue-free (store-hub read/subscribe), mirroring `anaglyph-style.ts` — this
 // module is imported by a session, so it must not pull `@lib/config` (which
-// touches Vue). The default + clamp bounds are duplicated in `@lib/config`'s
-// AppConfig defaults for the renderer; keep the two in sync.
+// touches Vue). The doc path, default, and clamp bounds are the SHARED Vue-free
+// `@lib/config-schema` constants — the SAME ones `@lib/config`'s AppConfig
+// defaults consume, so the renderer and this reader can never drift.
 
 import { read, subscribe } from "./store-hub.js";
+import {
+  APP_CONFIG_PATH,
+  DEFAULT_PREDICTION_RATE_HZ,
+  PREDICTION_RATE_MAX,
+  PREDICTION_RATE_MIN,
+} from "@lib/config-schema";
 
-/** The shared app config doc path (mirrors `APP_CONFIG_PATH` in `@lib/config`). */
-export const PREDICTION_RATE_CONFIG_PATH = ["config"];
+export { APP_CONFIG_PATH, DEFAULT_PREDICTION_RATE_HZ, PREDICTION_RATE_MAX, PREDICTION_RATE_MIN };
 
-/** Prediction-rate window (proposal ruling 2). */
-export const PREDICTION_RATE_MIN = 60;
-export const PREDICTION_RATE_MAX = 1000;
-export const DEFAULT_PREDICTION_RATE_HZ = 600;
+/** The shared app config doc path (re-export of `@lib/config-schema`'s
+ *  `APP_CONFIG_PATH` under this reader's historical name). */
+export const PREDICTION_RATE_CONFIG_PATH = APP_CONFIG_PATH;
 
 /** Clamp any value to the ruled window; a non-finite/unset value falls back to
  *  the default (a config hiccup must never wedge the predictor). */

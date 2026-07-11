@@ -13,11 +13,23 @@
 // production bundle — the renderer stays zero-core.
 
 import type { Component } from "vue";
-import { APPS, type AppId, type AppMeta } from "@lib/windows";
+import { APPS, APP_REGISTRY, type AppId, type AppMeta } from "@lib/windows";
 
 type Loader = () => Promise<{ default: Component }>;
 
-const appLoaders: Partial<Record<AppId, Loader>> = {
+// The dev-gated app ids (marked `dev: true` in APP_REGISTRY) — derived from the
+// registry so this can't drift if the dev set changes. These are spread in only
+// under `import.meta.env.DEV` below; every OTHER (production) app MUST supply a
+// loader, enforced at COMPILE TIME by the `satisfies` on `baseLoaders`.
+type DevAppId = {
+  [K in AppId]: (typeof APP_REGISTRY)[K] extends { dev: true } ? K : never;
+}[AppId];
+
+// EXHAUSTIVE loader map for every non-dev app: `satisfies Record<…, Loader>`
+// makes a new app added to `APP_REGISTRY` without a loader here a vue-tsc error,
+// instead of the silent RUNTIME "Missing app component loader" crash the window
+// shell throws (line below) the first time that app's window opens.
+const baseLoaders = {
   "disparity-scope": () => import("@modules/disparity-scope/index.vue"),
   "multi-fovea": () => import("@modules/multi-fovea/index.vue"),
   "manual-control": () => import("@modules/manual-control/index.vue"),
@@ -27,6 +39,10 @@ const appLoaders: Partial<Record<AppId, Loader>> = {
   "calibrate-extrinsic": () => import("@modules/calibrate-extrinsic/index.vue"),
   "calibrate-distortion": () => import("@modules/calibrate-distortion/index.vue"),
   "calibrate-drift": () => import("@modules/calibrate-drift/index.vue"),
+} satisfies Record<Exclude<AppId, DevAppId>, Loader>;
+
+const appLoaders: Partial<Record<AppId, Loader>> = {
+  ...baseLoaders,
   ...(import.meta.env.DEV
     ? { playground: () => import("@modules/playground/index.vue") }
     : {}),

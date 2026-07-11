@@ -517,6 +517,23 @@ declare module "core/Aravis" {
     params: StereoParams,
   ): boolean;
 
+  /**
+   * Attach the TRIGGER-MODE stereo brick (stereo-paired-inputs): a `cv::StereoSGBM`
+   * disparity producer driven by a live PAIRING brick (`pairStage`, e.g.
+   * `"pair/undistort"`) whose records carry matched L/R frames per exposure pair
+   * (a missing pairing brick throws). Output is the SAME CV_32F disparity pipe
+   * (`Disparity32F` / `F32`, channels 1, LEFT-sized) as `attachStereoPipe` —
+   * advertise it with `maxWidth`/`maxHeight`/`maxBytes` (F32 ⇒ 4 bytes/px).
+   * deviceTimestamp/systemTimestamp/origin forwarded from the LEFT frame
+   * (trusted-time). On-demand: parks with no consumer. Retune live via
+   * `setStereoParams`. Throws for an unknown pipe id.
+   */
+  export function attachStereoPaired(
+    pairStage: string,
+    pipeId: string,
+    params: StereoParams,
+  ): boolean;
+
   /** Live-retune a stereo pipe (SGBM matcher rebuilt on the NEXT frame). No
    *  re-attach. Returns false for an unknown pipe id. */
   export function setStereoParams(pipeId: string, params: StereoParams): boolean;

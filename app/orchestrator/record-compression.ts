@@ -11,18 +11,24 @@
 // this Vue-free process). Applies to NEW recordings; a running recording keeps
 // the method it started with.
 //
-// The union is DUPLICATED from `@lib/config`'s `RecordCompression` (the renderer
-// half surfaces it in Settings) so the orchestrator never imports the Vue-touching
-// module — keep the two in sync (extensible: more methods may come, none now).
+// The union + default + validation live in the SHARED Vue-free `@lib/config-schema`
+// (the SAME source `@lib/config`'s renderer half consumes for Settings), so the
+// orchestrator never imports the Vue-touching `@lib/config` and the two can never
+// drift (extensible: more methods may come, none now).
 
 import { read } from "./store-hub.js";
+import {
+  APP_CONFIG_PATH,
+  coerceRecordCompression,
+  DEFAULT_RECORD_COMPRESSION,
+  type RecordCompression,
+} from "@lib/config-schema";
 
-/** Recording compression method (extensible union). Mirrors
- *  `AppConfig.record_compression` in `@lib/config`. */
-export type RecordCompression = "none" | "zlib";
+export type { RecordCompression };
 
-/** The shared app config doc path (mirrors `APP_CONFIG_PATH` in `@lib/config`). */
-export const RECORD_COMPRESSION_CONFIG_PATH = ["config"];
+/** The shared app config doc path (re-export of `@lib/config-schema`'s
+ *  `APP_CONFIG_PATH` under this reader's historical name). */
+export const RECORD_COMPRESSION_CONFIG_PATH = APP_CONFIG_PATH;
 
 /** Read the configured recording compression method (store-hub cache). Called at
  *  RECORDING START. Defaults to `"none"` on an unset key, an unknown value, or a
@@ -30,12 +36,12 @@ export const RECORD_COMPRESSION_CONFIG_PATH = ["config"];
  *  historical uncompressed behavior). */
 export async function readRecordCompression(): Promise<RecordCompression> {
   try {
-    const cfg = await read<{ record_compression?: RecordCompression }>(
+    const cfg = await read<{ record_compression?: unknown }>(
       RECORD_COMPRESSION_CONFIG_PATH,
       {},
     );
-    return cfg.record_compression === "zlib" ? "zlib" : "none";
+    return coerceRecordCompression(cfg.record_compression);
   } catch {
-    return "none";
+    return DEFAULT_RECORD_COMPRESSION;
   }
 }

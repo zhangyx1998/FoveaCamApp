@@ -17,6 +17,7 @@ import { computed, ref, watch } from "vue";
 import type { Point2d, Size } from "core/Geometry";
 import { ROLE, THEME } from "@lib/camera-config";
 import { useConfigRef } from "@lib/config";
+import { DEFAULT_PREDICTION_RATE_HZ } from "@lib/config-schema";
 import {
   anaglyphEyeLabel,
   DEFAULT_ANAGLYPH_STYLE,
@@ -125,8 +126,10 @@ void useConfigRef("anaglyph_style").then((r) => {
 // config key the Settings → Global config field edits, so this drawer slider
 // live-applies through the shared config doc (the disparity-scope session
 // subscribes + calls `imm.setParams({ rateHz })`). Non-blocking (synchronous
-// setup) with the 600 default until the ref resolves; writes clamp 60..1000.
-const PREDICTION_RATE_DEFAULT = 600;
+// setup) with the shared default until the ref resolves; writes clamp 60..1000.
+// The default is the SINGLE `@lib/config-schema` constant the Settings field and
+// the orchestrator prediction-rate reader both use (was inlined `600` here).
+const PREDICTION_RATE_DEFAULT = DEFAULT_PREDICTION_RATE_HZ;
 const predictionRateLocal = ref<number>(PREDICTION_RATE_DEFAULT);
 let predictionRateCfg: { value: number | undefined } | null = null;
 void useConfigRef("prediction_rate_hz").then((r) => {

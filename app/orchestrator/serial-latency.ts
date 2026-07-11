@@ -21,9 +21,11 @@
 // precedent); the EMA is a pure class, unit-tested in vitest.
 
 import { read, subscribe } from "./store-hub.js";
+import { APP_CONFIG_PATH, DEFAULT_SERIAL_LATENCY_COMP } from "@lib/config-schema";
 
-/** The shared app config doc path (mirrors `APP_CONFIG_PATH` in `@lib/config`). */
-export const SERIAL_LATENCY_CONFIG_PATH = ["config"];
+/** The shared app config doc path (re-export of `@lib/config-schema`'s
+ *  `APP_CONFIG_PATH` under this reader's historical name). */
+export const SERIAL_LATENCY_CONFIG_PATH = APP_CONFIG_PATH;
 
 /** EMA smoothing factor per sample (stats-cadence samples, ~2 Hz): ~0.25
  *  reaches ~63% of a step in ~4 samples (~2 s) — fast enough to track queue
@@ -59,19 +61,19 @@ export class SerialLatencyEstimator {
 }
 
 function coerce(value: unknown): boolean {
-  return (
-    (value as { serial_latency_comp?: unknown } | undefined)
-      ?.serial_latency_comp === true
-  );
+  const v = (value as { serial_latency_comp?: unknown } | undefined)
+    ?.serial_latency_comp;
+  return typeof v === "boolean" ? v : DEFAULT_SERIAL_LATENCY_COMP;
 }
 
 /** Read the `serial_latency_comp` toggle (default OFF; a read fault degrades
- *  to OFF — the fixed lookahead must never break on a config hiccup). */
+ *  to the schema default — the fixed lookahead must never break on a config
+ *  hiccup). */
 export async function readSerialLatencyComp(): Promise<boolean> {
   try {
     return coerce(await read<Record<string, unknown>>(SERIAL_LATENCY_CONFIG_PATH, {}));
   } catch {
-    return false;
+    return DEFAULT_SERIAL_LATENCY_COMP;
   }
 }
 

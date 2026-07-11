@@ -19,8 +19,9 @@ worker (slice/wrap/diff/depth; C pre-undistorted). Targeting math on main:
 `inverseTriangulate` → volts → controller node position input
 (`controllerNode().openPosition`, push model; the shared 1 ms actuation loop is
 deleted). Capture uses
-`readNextPipeFrame` one-shot SHM reads (pinned to call-time `latestSeq` so a
-steer-then-capture never grabs a pre-steer frame). Recording consumes its own
+the composable capture facility (`capture-helper.ts` → the `capture-node` worker)
+for one-shot SHM reads (pinned to call-time `latestSeq` so a steer-then-capture
+never grabs a pre-steer frame). Recording consumes its own
 `leases.L/C/R.camera.stream` (untouched by real-1f/1g). Wide/clickable view binds
 `undistort:<serial>` with raw `camera:<serial>` fallback.
 
@@ -58,9 +59,9 @@ frames; recording FIN metadata binds voltages to frames.
   `getOptimalNewCameraMatrix` alpha≠0) as its new camera matrix; by spec it
   replicates `apply`, but only a live rig proves the pixel registration.
 - **Capture-timeout failure does NOT surface in the UI — CONFIRMED gap (fix is
-  out-of-lane).** On a 2s `readNextPipeFrame` timeout, `requestCenterView`
-  throws "capture: no center frame (undistort pipe timeout)"; the pass aborts
-  and the `runCapture` RPC rejects (correct, loud, server-side). But the renderer
+  out-of-lane).** On a capture-worker one-shot-read timeout (the `capture-node`
+  center read), the pass aborts and the `runCapture` RPC rejects (correct, loud,
+  server-side). But the renderer
   overlay `app/src/capture/index.vue` does `onMounted(async () => { await
   capture.run(); data_ready.value = true })` with **no `try/catch`** — a
   rejection leaves `data_ready` false forever (overlay stuck "loading") and only

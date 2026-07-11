@@ -19,14 +19,16 @@
 // to duplicate — this module imports it directly and cannot drift.
 
 import { read, subscribe } from "./store-hub.js";
+import { APP_CONFIG_PATH } from "@lib/config-schema";
 import {
   coerceAnaglyphStyle,
   DEFAULT_ANAGLYPH_STYLE,
   type AnaglyphStyle,
 } from "../../docs/schema/anaglyph.js";
 
-/** The shared app config doc path (mirrors `APP_CONFIG_PATH` in `@lib/config`). */
-export const ANAGLYPH_STYLE_CONFIG_PATH = ["config"];
+/** The shared app config doc path (re-export of `@lib/config-schema`'s
+ *  `APP_CONFIG_PATH` under this reader's historical name). */
+export const ANAGLYPH_STYLE_CONFIG_PATH = APP_CONFIG_PATH;
 
 /** Read the configured anaglyph style (store-hub cache). Defaults to `"RC"` on
  *  an unset key, an unknown value, or a read fault (a config hiccup must never

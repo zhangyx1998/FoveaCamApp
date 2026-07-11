@@ -116,9 +116,12 @@ receive segment names.
   frames via the preload's SHM reader addon into pooled buffers; reconnects
   on epoch bumps, clears on close. The advertised set is a keyed Record —
   pipes appear/disappear at runtime and views react by diffing it.
-- **One-shot:** `readNextPipeFrame` (pinned to latest seq at call time, so a
-  steer-then-capture pass can never grab a pre-steer frame; throws on
-  timeout so the pass fails loudly).
+- **One-shot:** the composable capture facility (`capture-helper.ts` →
+  `capture-node.ts`'s capture worker) reads a held pipe's latest SHM slot
+  on demand — pinned to the latest seq at read time, so a steer-then-capture
+  pass can never grab a pre-steer frame; a read timeout fails the pass loudly.
+  (The old standalone `readNextPipeFrame`/`pipe-read-once.ts` one-shot reader
+  it replaced has been removed.)
 - **Workers:** vision workers SHM-read pipes directly (reader addon path
   passed by the host) — read-only; the broker/gate stays orchestrator-side.
 
