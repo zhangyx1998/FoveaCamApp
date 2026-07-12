@@ -10,7 +10,7 @@ The app is a three-step wizard: **CAL** (collect poses), **FIN** (review and fit
 
 ### Step 1 — CAL: collect marker poses
 
-The CAL screen shows all three camera previews side by side (**L**, **C**, **R**), each with green marker-detection dots overlaid. Below each preview a marker input reads **✓ Marker ID to Track:** (or **✗** when that camera currently sees nothing) with the marker ID to lock onto. The rig projects the physical target markers and a crosshair for you.
+The CAL screen shows all three camera previews side by side (**L**, **C**, **R**), each with green marker-detection dots overlaid. While the center marker is locked, the wide (**C**) preview draws a crosshair through it with the marker's wide-camera **angle readout** in degrees (computed through the undistort mapping). Below each preview a marker input reads **✓ Marker ID to Track:** (or **✗** when that camera currently sees nothing) with the marker ID to lock onto. The rig projects the physical target markers and a crosshair for you.
 
 While CAL is active, a continuous visual servo keeps both mirrors pointed at their tracked markers, so the previews stay locked on as you move the target. Under each of the Left and Right previews is a position pad (**PosView**) showing that mirror's current drive voltage, with a trail of the voltages you have already recorded.
 
@@ -20,7 +20,7 @@ While CAL is active, a continuous visual servo keeps both mirrors pointed at the
 4. Each capture is added to the records list in the center column, labelled with an index and the center camera's measured angle, for example `[03] X 1.20°, Y -0.45°`.
 5. Move the target (and let the mirrors re-track, or drag them) to a new pose and capture again. Spread the poses across the mirrors' working range — the wider the spread, the better the fit.
 6. To drop a record, click the trash icon on its row. **Clear** removes all records and is disabled when the list is empty.
-7. Adjust marker sizing if needed in the drawer at the bottom: **Marker Size** (mm) and **Center Marker** (its size as a percentage of the others). You may set these freely — the side and center marker sizes are recorded with every capture, so shrinking the center while growing the sides is fine.
+7. Adjust marker sizing if needed in the drawer at the bottom: **Marker Size** (mm), **Center Marker** (its size as a percentage of the others), and the live **Servo Gain** (the centering servo restarts seamlessly on change). You may set these freely — the side and center marker sizes are recorded with every capture, so shrinking the center while growing the sides is fine.
 
 > **Tip — measured fovea↔wide zoom.** Each capture also measures the fovea↔wide magnification the [Disparity Scope](./disparity-scope.md)'s "Auto" zoom uses. It is taken from the **wide (Center) camera's view of the side markers** — the same physical markers the Left/Right foveae track — so captures where the Center camera can also see both side markers give the best measurement. When the Center camera can't see a side marker, the app falls back to its view of the center marker (which is why the recorded marker sizes matter). Calibrations captured before this feature simply carry no measured zoom, and the scope's Auto mode falls back to 1× until you set a zoom manually.
 

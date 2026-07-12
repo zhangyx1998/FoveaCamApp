@@ -83,7 +83,7 @@ const a = computed(() => {
         :font-size="r * 3"
         :text-anchor="x < w / 2 ? 'start' : 'end'"
         dominant-baseline="hanging"
-        >{{ a.x.toFixed(2) }} deg</text
+        >{{ a.x.toFixed(2) }}°</text
       >
       <text
         :x="r"
@@ -92,7 +92,7 @@ const a = computed(() => {
         :font-size="r * 3"
         text-anchor="start"
         :dominant-baseline="y < h / 2 ? 'hanging' : 'bottom'"
-        >{{ a.y.toFixed(2) }} deg</text
+        >{{ a.y.toFixed(2) }}°</text
       >
     </template>
     <rect

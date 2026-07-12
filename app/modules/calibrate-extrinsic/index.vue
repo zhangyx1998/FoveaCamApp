@@ -40,6 +40,7 @@ import NavBack from "@src/components/NavBack.vue";
 import RemoteCanvasTeleport from "@src/components/RemoteCanvasTeleport.vue";
 import Marker from "@src/graphics/Marker.vue";
 import CrossHair from "@src/graphics/CrossHair.vue";
+import FrameCursor from "@src/components/FrameCursor.vue";
 import RangeSlider from "@src/inputs/range-slider.vue";
 import Drawer from "@src/components/Drawer.vue";
 import { FontAwesomeIcon as Icon } from "@fortawesome/vue-fontawesome";
@@ -113,17 +114,6 @@ const canRecord = computed(
 // controller session's last-published pose when the CAL feed isn't running.
 const livePos = computed(() => telemetry.mirror ?? ctrl.telemetry.pos);
 
-// User issue 1: the center marker's LOCKED-state crosshair anchors at the C
-// detection's centroid (sensor px) — visible iff the tracker holds a target.
-const centerLock = computed(() => {
-  const d = telemetry.detection.C;
-  if (!d || d.points.length === 0) return null;
-  const q = d.points.slice(0, 4);
-  return {
-    x: q.reduce((a, p) => a + p.x, 0) / q.length,
-    y: q.reduce((a, p) => a + p.y, 0) / q.length,
-  };
-});
 const hover_record = ref<number | null>(null);
 
 // Per-eye PID-node override proxies (CAL visual servo): dragging a PosView pins
@@ -203,11 +193,15 @@ function bbox(points: Point2d[]): string {
             :id="state.targetId.C"
             :color="THEME.C"
           />
-          <!-- LOCKED-state crosshair (user issue 1): full-view cross through
-               the tracked center marker — unmistakable lock feedback. -->
-          <g v-if="centerLock" :transform="`translate(${centerLock.x}, ${centerLock.y})`">
-            <CrossHair :cx="24" :cy="24" weight="2" :color="THEME.C" />
-          </g>
+          <!-- LOCKED-state crosshair (user issue 1, master-aligned): edge-to-
+               cursor cross through the tracked center marker with the wide-
+               camera angle readout (undistort mapping, session-published). -->
+          <FrameCursor
+            :cursor="telemetry.detectionFresh.C ? telemetry.center_cursor : null"
+            :angle="telemetry.center_angle"
+            box="rect"
+            :color="THEME.C"
+          />
         </StreamView>
         <MarkerTargetInputs :session="session" role="C" :detected="!!telemetry.detection.C" />
         <div class="actions">

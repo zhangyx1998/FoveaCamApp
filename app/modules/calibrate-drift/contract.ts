@@ -40,6 +40,12 @@ export const calibrateDrift = defineContract({
      *  `baseline_mm` for LIVE marker spacing (per-triplet-settings wave,
      *  `useTripleBaseline`). Set on acquire. */
     configPath: [] as string[],
+    /** Centering visual-servo gain (velocity-form: `startServo`'s single `kp`,
+     *  which maps to `ki` internally — kp/kd are structurally 0 in this control
+     *  law). Drawer-tunable; the session restarts the servo (debounced) on
+     *  change — the servo re-seeds from the live pose, so retuning never snaps.
+     *  Default = drift's historical hardcoded gain (extrinsic's drawer pattern). */
+    servoGain: 10,
   },
   telemetry: {
     ready: false as boolean,

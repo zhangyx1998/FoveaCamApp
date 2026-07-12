@@ -313,8 +313,9 @@ export interface Servo {
  * on the first tick. This is bit-identical to the original read of
  * `c.pos.left/right` (A-30: `predictVolts` equals the actuate readback) AND
  * correct on the streaming path, where `c.pos` is static because updates never
- * round-trip. The default `kp` (16.0) and the per-caller value (calibrate-drift
- * passes 10.0) carry through unchanged as `ki`.
+ * round-trip. The default `kp` (16.0) and the per-caller value (both calibrate
+ * apps pass their drawer-tunable `state.servoGain`; drift defaults 10) carry
+ * through unchanged as `ki`.
  *
  * OVERRIDE. Each eye's PID node exposes a RULED override slot
  * (`servo.override.left`/`right`); the owning module drives it from its

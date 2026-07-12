@@ -106,6 +106,53 @@ export default function calibrateDriftSession(
       });
     }
 
+    /** (Re)start the centering servo with the CURRENT `state.servoGain`. Safe
+     *  mid-run: `startServo` re-seeds from the live applied pose, so a retune
+     *  never snaps the mirrors. An ENGAGED drag override is carried across the
+     *  restart (the operator may be holding a PosView pin while the gain
+     *  retunes — silently unpinning would let the fresh servo drive the mirror
+     *  away under a held drag); released slots are mirrored to state so a
+     *  stale engaged echo can't survive a restart. */
+    function startDriftServo(): void {
+      const prevL = servo?.override.left?.engaged ? servo.override.left.value : null;
+      const prevR = servo?.override.right?.engaged ? servo.override.right.value : null;
+      servo?.stop();
+      servo = null;
+      if (!trackers) return;
+      servo = startServo(trackers.L, trackers.R, {
+        kp: s.state.servoGain,
+        owner: "calibrate-drift",
+        originLeft: () => {
+          const r = angularFromCenter();
+          return r ? triple!.conv.A2V.L(applyDrift(r, saved.L)) : { x: 0, y: 0 };
+        },
+        originRight: () => {
+          const r = angularFromCenter();
+          return r ? triple!.conv.A2V.R(applyDrift(r, saved.R)) : { x: 0, y: 0 };
+        },
+      });
+      const restoredL = prevL !== null && !!servo.override.left;
+      const restoredR = prevR !== null && !!servo.override.right;
+      if (restoredL) servo.override.left!.engage(prevL!);
+      if (restoredR) servo.override.right!.engage(prevR!);
+      s.setState("pidOverrideL", { engaged: restoredL, value: restoredL ? prevL : null });
+      s.setState("pidOverrideR", { engaged: restoredR, value: restoredR ? prevR : null });
+    }
+
+    // Drawer gain retune (extrinsic's pattern): the servo's gain is fixed at
+    // construction, so a LIVE retune restarts it. Debounced — a slider drag
+    // writes state per tick, and each restart churns the MCU stream. The
+    // activation defers a timer clear so a fire can't land mid-drain.
+    let servoRetuneTimer: ReturnType<typeof setTimeout> | null = null;
+    function retuneServo(): void {
+      if (servoRetuneTimer) clearTimeout(servoRetuneTimer);
+      servoRetuneTimer = setTimeout(() => {
+        servoRetuneTimer = null;
+        if (!servo || !trackers) return;
+        startDriftServo();
+      }, 200);
+    }
+
     // Resource-scoped activation: cleanups drain LIFO on idle; leases release
     // LAST (via scope.use), after the servo/trackers/taps that read them stop.
     async function activateSession(scope: ResourceScope): Promise<void> {
@@ -164,22 +211,7 @@ export default function calibrateDriftSession(
       monitor.done("trackers");
 
       monitor.start("servo");
-      servo = startServo(trackers.L, trackers.R, {
-        kp: 10.0,
-        owner: "calibrate-drift",
-        originLeft: () => {
-          const r = angularFromCenter();
-          return r ? triple!.conv.A2V.L(applyDrift(r, saved.L)) : { x: 0, y: 0 };
-        },
-        originRight: () => {
-          const r = angularFromCenter();
-          return r ? triple!.conv.A2V.R(applyDrift(r, saved.R)) : { x: 0, y: 0 };
-        },
-      });
-      // Mirror the fresh servo's released override slots into state so a stale
-      // engaged echo can't survive a reactivation.
-      s.setState("pidOverrideL", { engaged: false, value: null });
-      s.setState("pidOverrideR", { engaged: false, value: null });
+      startDriftServo();
       scope.defer(() => {
         servo?.stop();
         servo = null;
@@ -245,6 +277,14 @@ export default function calibrateDriftSession(
         });
       }, 200);
       scope.defer(() => clearInterval(timer));
+
+      // LAST defer = FIRST in the LIFO drain: kill a pending gain retune before
+      // anything else — the capture defer awaits mid-drain, and a timer firing
+      // in that window would restart the servo on a session being torn down.
+      scope.defer(() => {
+        if (servoRetuneTimer) clearTimeout(servoRetuneTimer);
+        servoRetuneTimer = null;
+      });
       monitor.complete(); // spin-up finished — clear the overlay
     }
 
@@ -316,6 +356,11 @@ export default function calibrateDriftSession(
         },
         async stopRecording() {
           await recording.stop();
+        },
+      },
+      watch: {
+        servoGain() {
+          retuneServo(); // debounced live restart (extrinsic's drawer pattern)
         },
       },
       busy() {

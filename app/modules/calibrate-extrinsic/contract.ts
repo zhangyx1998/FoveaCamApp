@@ -13,7 +13,7 @@ import {
   pidOverrideCmd,
   pidOverrideState,
 } from "@lib/orchestrator/pid-override-contract";
-import type { Point2d, Point3d } from "core/Geometry";
+import type { Point2d, Point3d, Size } from "core/Geometry";
 import type { Pos } from "@lib/controller-codec";
 import { captureCommands, captureTelemetry, recordingCommands, recordingTelemetry } from "@lib/orchestrator/contracts";
 
@@ -76,6 +76,15 @@ export const calibrateExtrinsic = defineContract({
      *  role's last detection is older than the staleness bound — a frozen
      *  tracker (camera loss) must not stay capturable. */
     detectionFresh: { L: false, C: false, R: false } as Record<"L" | "C" | "R", boolean>,
+    /** Tracked center-marker centroid in WIDE sensor px, with the frame size
+     *  riding along (the FrameCursor overlay's coordinate frame). Null while
+     *  the center tracker holds no target. */
+    center_cursor: null as (Point2d & Size) | null,
+    /** That centroid's wide-camera angle via the undistort mapping (radians) —
+     *  the crosshair's degree readout (master parity). Null while the center
+     *  tracker holds no target (intrinsics are guaranteed loaded while the
+     *  session runs — activation fails closed without them). */
+    center_angle: null as Point2d | null,
     /** LIVE mirror pose during CAL (the PosView record head) — fed at a fixed
      *  throttle from the controller's applied pose, so the head tracks servo
      *  motion + drags in realtime. Null = no controller bound. */

@@ -176,6 +176,12 @@ const overrideR = usePidOverride<typeof calibrateDrift, Pos>(session, {
         <span>Center Marker</span>
         <span>{{ (app_config.cal_marker_ratio * 100).toFixed(0) }}%</span>
       </RangeSlider>
+      <!-- Centering-servo gain, live (the session restarts the servo debounced;
+           velocity-form — one real gain; see contract). Extrinsic's pattern. -->
+      <RangeSlider v-model="state.servoGain" :min="1" :max="64" :neutral="10" :step="1">
+        <span>Servo Gain</span>
+        <span>{{ state.servoGain.toFixed(0) }}</span>
+      </RangeSlider>
     </div>
   </Drawer>
   <RemoteCanvasTeleport>

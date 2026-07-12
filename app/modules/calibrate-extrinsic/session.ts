@@ -150,7 +150,15 @@ export default function calibrateExtrinsicSession(
       const t = Date.now();
       for (const role of ["L", "C", "R"] as const)
         if (views[role]) lastDetectionAt[role] = t;
-      s.telemetry({ detection: views });
+      // Center crosshair feed (master parity): the tracked centroid (+ frame
+      // size) and its undistort-mapped wide-camera angle for the deg readout.
+      const centerAbs = trackers.C.centerAbsolute;
+      s.telemetry({
+        detection: views,
+        center_cursor: centerAbs,
+        center_angle:
+          centerAbs && undistort ? undistort.angular([centerAbs], true)[0] : null,
+      });
     }
 
     function stopServo(): void {
@@ -202,7 +210,22 @@ export default function calibrateExtrinsicSession(
       servoRetuneTimer = setTimeout(() => {
         servoRetuneTimer = null;
         if (s.state.step !== "CAL" || !servo || !trackers) return;
+        // Carry an ENGAGED drag override across the retune restart (drift
+        // review 2026-07-12): the operator may be holding a PosView pin while
+        // the gain retunes. enterStep's released reset is only correct for
+        // real step round-trips.
+        const prevL = servo.override.left?.engaged ? servo.override.left.value : null;
+        const prevR = servo.override.right?.engaged ? servo.override.right.value : null;
         enterStep("CAL"); // stop + restart with the current state.servoGain
+        if (!servo) return;
+        if (prevL !== null && servo.override.left) {
+          servo.override.left.engage(prevL);
+          s.setState("pidOverrideL", { engaged: true, value: prevL });
+        }
+        if (prevR !== null && servo.override.right) {
+          servo.override.right.engage(prevR);
+          s.setState("pidOverrideR", { engaged: true, value: prevR });
+        }
       }, 200);
     }
 
@@ -416,6 +439,14 @@ export default function calibrateExtrinsicSession(
       });
 
       s.telemetry({ ready: true });
+
+      // LAST defer = FIRST in the LIFO drain: kill a pending gain retune before
+      // anything else — the capture defer awaits mid-drain, and a timer firing
+      // in that window would restart the servo on a session being torn down.
+      scope.defer(() => {
+        if (servoRetuneTimer) clearTimeout(servoRetuneTimer);
+        servoRetuneTimer = null;
+      });
       monitor.complete(); // spin-up finished — clear the overlay
     }
 
@@ -423,7 +454,16 @@ export default function calibrateExtrinsicSession(
       activate: (scope) => activateSession(scope),
       idle() {
         fittedL = fittedR = null;
-        s.resetTelemetry(["ready", "detection", "detectionFresh", "mirror", "finalized", "fin"]);
+        s.resetTelemetry([
+          "ready",
+          "detection",
+          "detectionFresh",
+          "center_cursor",
+          "center_angle",
+          "mirror",
+          "finalized",
+          "fin",
+        ]);
       },
       commands: {
         async setTargetId({ role, id }) {

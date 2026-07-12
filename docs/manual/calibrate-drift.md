@@ -6,7 +6,7 @@ Over a session the rig can develop a small, steady angular offset — the mirror
 
 ## Continuous mode
 
-Unlike extrinsic calibration there is no wizard — the app runs one continuous mode. Three camera previews (**L**, **C**, **R**) show live marker detection with green dots and a **✓ / ✗ Marker ID to Track:** input each. In the background a visual servo continuously aims each mirror at the center-observed marker direction *plus* the currently-saved drift, so you watch the mirrors converge on the corrected target in real time. The rig projects the target markers and a crosshair for you; a drawer at the bottom exposes **Marker Size** and **Center Marker** sizing.
+Unlike extrinsic calibration there is no wizard — the app runs one continuous mode. Three camera previews (**L**, **C**, **R**) show live marker detection with green dots and a **✓ / ✗ Marker ID to Track:** input each. In the background a visual servo continuously aims each mirror at the center-observed marker direction *plus* the currently-saved drift, so you watch the mirrors converge on the corrected target in real time. The rig projects the target markers and a crosshair for you; a drawer at the bottom exposes **Marker Size** and **Center Marker** sizing plus the live **Servo Gain** (the centering servo restarts seamlessly on change — same knob as extrinsic calibration).
 
 Under the Left and Right previews are the live readouts:
 
