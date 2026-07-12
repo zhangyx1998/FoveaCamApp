@@ -150,16 +150,50 @@ export function readControlFields(
   safe: <T>(get: () => T, fallback: T) => T,
 ): CameraControlsView {
   const out: Record<string, unknown> = {};
-  for (const ctrl of CAMERA_CONTROLS) {
-    out[ctrl.key] = safe(() => camera[ctrl.key] as number, 0);
-    out[ctrl.rangeKey] = safe(() => camera[ctrl.rangeKey] as Range, ZERO_RANGE);
-    out[ctrl.availableKey] = safe(() => camera[ctrl.availableKey] as boolean, false);
-    if (ctrl.autoKey) out[ctrl.autoKey] = safe(() => camera[ctrl.autoKey!] as AutoMode, "Off");
-    if (ctrl.autoAvailableKey)
-      out[ctrl.autoAvailableKey] = safe(() => camera[ctrl.autoAvailableKey!] as boolean, false);
-    if (ctrl.enableKey) out[ctrl.enableKey] = safe(() => camera[ctrl.enableKey!] as boolean, false);
-  }
+  for (const ctrl of CAMERA_CONTROLS)
+    Object.assign(out, readControlGroup(ctrl, camera, safe));
   return out as unknown as CameraControlsView;
+}
+
+function readControlGroup(
+  ctrl: CameraControl,
+  camera: Record<string, any>,
+  safe: <T>(get: () => T, fallback: T) => T,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  out[ctrl.key] = safe(() => camera[ctrl.key] as number, 0);
+  out[ctrl.rangeKey] = safe(() => camera[ctrl.rangeKey] as Range, ZERO_RANGE);
+  out[ctrl.availableKey] = safe(() => camera[ctrl.availableKey] as boolean, false);
+  if (ctrl.autoKey) out[ctrl.autoKey] = safe(() => camera[ctrl.autoKey!] as AutoMode, "Off");
+  if (ctrl.autoAvailableKey)
+    out[ctrl.autoAvailableKey] = safe(() => camera[ctrl.autoAvailableKey!] as boolean, false);
+  if (ctrl.enableKey) out[ctrl.enableKey] = safe(() => camera[ctrl.enableKey!] as boolean, false);
+  return out;
+}
+
+/**
+ * Targeted read-back after a single-control write: re-read ONLY the field
+ * family of the control that owns `key` (any of its value/range/auto/enable/
+ * availability keys), so the achieved value and related readouts refresh
+ * without a full every-camera snapshot. Same injected-`safe` guard semantics
+ * as `readControlFields`. Returns `undefined` for keys outside the schema —
+ * the caller falls back to a full snapshot.
+ */
+export function readControlPatch(
+  camera: Record<string, any>,
+  key: string,
+  safe: <T>(get: () => T, fallback: T) => T,
+): Partial<CameraControlsView> | undefined {
+  const ctrl = CAMERA_CONTROLS.find(
+    (c) =>
+      key === c.key ||
+      key === c.rangeKey ||
+      key === c.availableKey ||
+      key === c.autoKey ||
+      key === c.autoAvailableKey ||
+      key === c.enableKey,
+  );
+  return ctrl && (readControlGroup(ctrl, camera, safe) as Partial<CameraControlsView>);
 }
 
 export function describeCamera(camera: Camera | Empty) {
