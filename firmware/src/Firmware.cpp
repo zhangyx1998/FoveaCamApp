@@ -29,6 +29,7 @@ void tick(); // Non-blocking Actuate/Trigger completion (Protocol.cpp)
 
 void loop() {
   Global::time.update();
+  Streams::housekeeping(); // M1 periodic MEMS config re-assertion (~1 Hz)
   Streams::tick();
   Capture::tick();
   Protocol::tick();

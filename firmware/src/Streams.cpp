@@ -5,6 +5,7 @@
 // -------------------------------------------------------
 #include <Arduino.h>
 
+#include "Global.h"
 #include "MEMS.h"
 #include "Streams.h"
 
@@ -22,6 +23,11 @@ struct Entry {
 Entry table[CAPACITY];
 uint8_t activeId = INVALID_ID;
 bool dirty = false; // active stream's target not yet written to the DAC
+
+// M1 housekeeping cadence (docs/dev/right-dac-freeze-2026-07-12.md).
+constexpr uint64_t REFRESH_PERIOD_US = 1'000'000; // ~1 Hz
+uint64_t lastRefreshUs = 0;
+bool refreshPrimed = false; // cadence clock started on the enable edge
 
 } // namespace
 
@@ -98,6 +104,39 @@ void snapshot(MirrorPosition &left, MirrorPosition &right) {
   }
   left = table[activeId].left;
   right = table[activeId].right;
+}
+
+void touch() {
+  // Force the active stream's target to be re-committed on the next tick(),
+  // even if it hasn't changed. Used after a MEMS re-init (Protocol.cpp MEMS
+  // recovery) or a periodic refresh so the DAC is re-loaded with live targets.
+  if (activeId != INVALID_ID)
+    dirty = true;
+}
+
+void housekeeping() {
+  // M1 periodic config re-assertion (docs/dev/right-dac-freeze-2026-07-12.md).
+  // Called every loop() but acts only while the system is enabled and >= 1 s
+  // since the last refresh. MEMS::refresh() re-sends config-only words (no
+  // RESET, no value write), so the mirror never moves — safe mid-capture; the
+  // subsequent touch() re-commits the current targets within one tick.
+  if (!Global::system_enabled) {
+    refreshPrimed = false;
+    return;
+  }
+  const uint64_t now = Global::time.now();
+  if (!refreshPrimed) {
+    // Enable just ran the full MEMS::enable() (these words included) — start the
+    // 1 Hz clock here so the first re-assertion lands ~1 s later.
+    refreshPrimed = true;
+    lastRefreshUs = now;
+    return;
+  }
+  if (now - lastRefreshUs < REFRESH_PERIOD_US)
+    return;
+  lastRefreshUs = now;
+  MEMS::refresh();
+  touch();
 }
 
 void tick() {

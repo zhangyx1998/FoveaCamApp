@@ -45,6 +45,34 @@ ruling every clock mutation is EXPLICIT:
   reply-serialization time, so the reading's jitter stays at the serial-latency
   floor.
 
+## reset / DAC recovery {#reset}
+
+`System::Reset` (`SYS_RESET`) carries a one-byte `Type`:
+
+- `SOFT` (0) / `HARD` (1): reboot the MCU. Single-phase — ACK, a 100 ms grace
+  delay, then the reset (breakpoint / `_reboot_Teensyduino_`). No FIN.
+- `MEMS` (2), **v2.1.0**: targeted DAC recovery for the right-fovea freeze
+  (`docs/dev/right-dac-freeze-2026-07-12.md`, mitigation M2). Re-runs the full
+  `MEMS::enable()` re-init — **intentionally including the AD5664R software
+  RESET** — to unwedge a DAC latched into power-down, but does NOT cycle the
+  `Board::enable` rail or clear the stream table, so the live session survives.
+  Afterwards `Streams::touch()` marks the active stream dirty and the next
+  `Streams::tick()` re-commits the current targets. Single-phase ACK (echoes
+  the type). **REJects** if the system is not enabled. Unknown types REJ, so an
+  older firmware safely rejects `MEMS`.
+
+## periodic MEMS config re-assertion {#mems-refresh}
+
+M1 (same diagnosis doc). While the system is enabled, `loop()` calls
+`Streams::housekeeping()` which — at ~1 Hz, cadenced off `Global::time` —
+re-sends the three IDEMPOTENT AD5664R setup words (`DAC_POWER 0b1111`,
+`INT_REF_SETUP 1`, `LDAC_SETUP 0`) to BOTH mirrors via `MEMS::refresh()`. It
+NEVER sends a RESET (that would zero the outputs) and NEVER a value/bias write,
+so the mirror does not move — safe mid-capture. Each refresh `touch()`es the
+active stream so targets re-commit within one tick. This converts a
+corrupted-word DAC wedge from permanent into a ≤1 s glitch. No re-assertion
+happens while disabled.
+
 ## disable {#disable}
 
 `System::Disable` does NOT let streams survive (resolved open question, synced-

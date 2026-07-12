@@ -9,7 +9,7 @@
 // broadcasts it). Owns the serial `Device`; reuses the shared DAC math.
 
 import { createMirrorSink, Protocol, Device, type LogLevel } from "core/Controller";
-import type { CameraName, FrameArg, MirrorSink } from "core/Controller";
+import type { CameraName, FirmwareVersion, FrameArg, MirrorSink } from "core/Controller";
 import { SerialPort } from "serialport";
 import {
   channels,
@@ -25,6 +25,23 @@ type PortInfo = Awaited<ReturnType<typeof SerialPort.list>>[number];
 // Streams::CAPACITY, firmware/include/Streams.h — fixed-size table on the MCU.
 export const STREAM_CAPACITY = 64;
 export const STREAM_MIN_UPDATE_INTERVAL_MS = 1;
+
+// Minimum firmware/protocol version exposing the targeted MEMS-recovery reset
+// (System::Reset MEMS type — right-dac-freeze M2,
+// docs/dev/right-dac-freeze-2026-07-12.md). Older firmware REJects the unknown
+// enum, so `recoverMems()`/`v21Capable` gate on this — the v2Capable
+// major-only version gate taken one level finer (major.minor.patch).
+export const RECOVER_MEMS_MIN_VERSION = { major: 2, minor: 1, patch: 0 } as const;
+
+/** `a >= b` over (major, minor, patch) firmware versions. */
+function versionAtLeast(
+  a: FirmwareVersion,
+  b: { major: number; minor: number; patch: number },
+): boolean {
+  if (a.major !== b.major) return a.major > b.major;
+  if (a.minor !== b.minor) return a.minor > b.minor;
+  return a.patch >= b.patch;
+}
 
 function samePos(a: Pos, b: Pos): boolean {
   return a.x === b.x && a.y === b.y;
@@ -157,6 +174,11 @@ export class Controller {
     this.clockOffsetNs = offsetNs;
   }
   private _enabled = false;
+  // Firmware version resolved by verifyVersion() during `ready` — retained so
+  // version-gated surfaces finer than v2Capable (e.g. recoverMems, >= 2.1.0)
+  // can compare minor/patch. null until `ready` resolves, or if verifyVersion
+  // yields nothing (a v1 device / a test fake).
+  private firmwareVersion: FirmwareVersion | null = null;
   private _pos: { left: Pos; right: Pos } = origin;
   private readonly streamIds = new StreamIdPool();
   // Live-stream telemetry (docs/history/refactor/orchestrator.md §7.1 S4 added
@@ -199,7 +221,9 @@ export class Controller {
       // docs/history/refactor/synced-capture.md §9.3. Never throws on a version
       // *mismatch* (only on a transport failure): old firmware just keeps
       // device.v2Capable false (v1-compat).
-      await device.verifyVersion();
+      // Retain the resolved version for the finer-grained recover gate
+      // (v21Capable). `?? null` tolerates a device/fake that resolves nothing.
+      this.firmwareVersion = (await device.verifyVersion()) ?? null;
       await this.disable();
       await this.setBias(bias);
       await this.setLPF(lpf);
@@ -221,6 +245,16 @@ export class Controller {
    *  actuate/trigger's v1-compat fallback — so they hard-require this. */
   get v2Capable() {
     return this.device.v2Capable;
+  }
+  /** True once `ready` has confirmed firmware >= 2.1.0 — the version that adds
+   *  the System::Reset MEMS recovery type (right-dac-freeze M2). Finer-grained
+   *  sibling of `v2Capable` (which gates on the major number only); gates
+   *  `recoverMems()` and the renderer's "Recover mirror" affordance. */
+  get v21Capable() {
+    return (
+      this.firmwareVersion != null &&
+      versionAtLeast(this.firmwareVersion, RECOVER_MEMS_MIN_VERSION)
+    );
   }
   /** Cumulative serial byte/packet counters (docs/history/refactor/orchestrator.md
    *  §7.1 S4 added scope) — the caller derives rates by diffing successive
@@ -282,6 +316,27 @@ export class Controller {
     this._pos = origin;
     await this.set(Protocol.System.Enable, false);
     this._enabled = false;
+  }
+
+  /** Re-initialize the MEMS DACs WITHOUT dropping the session: the host half of
+   *  right-dac-freeze mitigation M2 (docs/dev/right-dac-freeze-2026-07-12.md).
+   *  Sends System::Reset(MEMS = 2), which runs the MEMS::enable() re-init
+   *  (AD5664R software reset + reference/DAC power-on + neutral bias) WITHOUT
+   *  cycling the driver rail or clearing the stream table — the app-side
+   *  "recover mirror" action and the H1 bench discriminator. Single-phase:
+   *  resolves on ACK, propagates the firmware REJ as a rejection (the firmware
+   *  REJs when the system is disabled). Requires firmware >= 2.1.0 (older
+   *  firmware REJects the unknown enum), guarded locally like createStream()'s
+   *  v2 gate. `"MEMS"` is the EnumPacket name the firmware maps to wire value
+   *  2 (Reset::Type::MEMS). Deliberately does NOT touch `_pos`/`_enabled`: the
+   *  session stays enabled and its target unchanged across the recovery. */
+  async recoverMems(): Promise<void> {
+    if (!this.device.connected) throw new Error("Controller not connected");
+    if (!this.v21Capable)
+      throw new Error(
+        "recoverMems requires firmware >= 2.1.0 (System::Reset MEMS type unavailable)",
+      );
+    await this.set(Protocol.System.Reset, "MEMS");
   }
 
   /** Clock-calibration ping (unified-time proposal §2, Rulings 4): the MCU's

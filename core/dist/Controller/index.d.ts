@@ -232,7 +232,7 @@ declare module "core/Controller" {
     minor: number;
     patch: number;
   };
-  export type ResetType = "SOFT" | "HARD";
+  export type ResetType = "SOFT" | "HARD" | "MEMS";
   export type LogLevel = "OFF" | "ERR" | "WARN" | "INFO" | "VERB";
   export type AnalogChannels = [number, number, number, number];
   // ---- Native mirror position sink (native-compose-controller.md) ----------

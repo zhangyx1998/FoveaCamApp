@@ -58,7 +58,7 @@ On the right side of the bar are these controls (present in every app, though so
 - **Capture** button (camera icon, tooltip **Capture preview**) — opens or closes the app's capture-preview sub-window. It is greyed out and unclickable in apps that do not offer single-shot capture. See [Capture](#capture).
 - **TeleCanvas** button (television icon, tooltip **Open TeleCanvas window**) — opens the **TeleCanvas** window, which casts the app's projection overlay (calibration markers and the like) to a secondary display, tablet, or TV. See [Settings › TeleCanvas](settings.md#telecanvas) for the two ways it can send that image (push to a remote server, or serve its own).
 - **Profiler** button (chart icon, tooltip **Open profiler window**) — opens the performance diagnostics window.
-- **Controller** indicator — shows whether the MEMS controller unit is connected (red when not). Click it to open the connect/disconnect panel.
+- **Controller** indicator — shows whether the MEMS controller unit is connected (red when not). Click it to open the connect/disconnect panel. While connected, the panel also offers **Recover mirror** — if a MEMS mirror freezes mid-session (a known driver fault), this re-initializes the mirror DACs in place without dropping the session or losing your targets. It is greyed out until the controller is enabled, and requires controller firmware 2.1.0 or newer (a tooltip explains when it is unavailable).
 
 ### Spin-up Progress Monitor
 

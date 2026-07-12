@@ -156,6 +156,24 @@ HANDLE_SET(System::Reset) {
 #endif
     crash("Reboot failed");
   }
+  if (payload.type == Payload::MEMS) {
+    // M2 targeted DAC recovery (docs/dev/right-dac-freeze-2026-07-12.md): a full
+    // MEMS re-init (intentionally INCLUDING the AD5664R RESET) to unwedge a
+    // latched-off DAC — WITHOUT cycling the Board::enable rail or clearing the
+    // stream table, so the live session survives. Streams::touch() marks the
+    // active stream dirty so the next Streams::tick() re-commits current
+    // targets. Single-phase ACK (like the reboot branches, but this one returns).
+    if (!Global::system_enabled) {
+      reject(seq, "Cannot recover MEMS: system is not enabled");
+      return;
+    }
+    VERB("MEMS recovery requested");
+    MEMS::enable();
+    Streams::touch();
+    deflate(payload, packet);
+    send(packet);
+    return;
+  }
   reject(seq, "Unknown reset type");
 }
 

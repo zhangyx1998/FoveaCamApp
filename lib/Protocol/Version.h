@@ -22,8 +22,14 @@ namespace Version {
 // FixedSizePacket::inflate is exact-size, so firmware/core/host must ship as a
 // matched set for this version. settle_time == 0 reproduces v1.x behavior
 // byte-for-byte on the wire once both ends are rebuilt.
+// v2.1.0: SYS_RESET gains a `MEMS` type (2) — a targeted DAC recovery that
+// re-inits the AD5664R DACs in place (full re-init incl. RESET) without a
+// reboot or a Board::enable rail cycle, then re-commits the active stream's
+// targets (firmware Protocol.cpp HANDLE_SET(System::Reset); mitigation M2 in
+// docs/dev/right-dac-freeze-2026-07-12.md). Backward-compatible addition: the
+// wire layout is unchanged, and older firmware REJects the unknown reset type.
 constexpr uint8_t Major = 2;
-constexpr uint8_t Minor = 0;
+constexpr uint8_t Minor = 1;
 constexpr uint8_t Patch = 0;
 
 } // namespace Version

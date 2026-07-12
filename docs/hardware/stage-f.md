@@ -104,6 +104,31 @@ history has them). Cross-app platform checks live in the first two sections.
   exposure-AVERAGED voltage bound to its frame (currently initial reading;
   `volt.source: "fin-averaged"` labels the source, not the algorithm).
 
+### MEMS DAC recovery (v2.1.0 — flash first; right-dac-freeze M1–M3)
+
+Diagnosis + hypothesis ranking: `docs/dev/right-dac-freeze-2026-07-12.md`.
+Firmware v2.1.0 ships the mitigations; the discriminator below settles H1
+(latched DAC power-down) vs H2 (driver latch-up) vs H3 (host wedge).
+
+- [ ] **Discriminator (run when the right mirror next freezes, WITHOUT
+  restarting the app)** — in order: (1) CMD_ACTUATE a new right position —
+  moves ⇒ host-side after all (H3); (2) title-bar Controller dropdown →
+  **Recover mirror** (System::Reset MEMS, no rail cycle) — recovers ⇒ **H1
+  confirmed**; (3) disable→enable (rail cycle) — recovers only here ⇒ H2;
+  (4) scope SCLK + right SYNC at the right driver connector vs left.
+- [ ] **M1 auto-refresh efficacy** — with v2.1.0's 1 Hz config re-assertion,
+  the freeze should self-heal within ~1 s (or stop recurring entirely).
+  Soak a 600 Hz stream ≥ 1 h; log any residual freeze longer than 2 s.
+- [ ] **M1 no-motion invariant** — refresh words never move the mirror:
+  parked beam stays put across refresh ticks (scope/camera, 10 min).
+- [ ] **M2 in-session recovery** — Recover mirror preserves the session:
+  stream keeps updating, targets re-committed within one tick, no
+  re-enable needed; REJ path (disabled system / old firmware) surfaces in
+  the error tray instead of wedging.
+- [ ] **M3 SPI clock** — scope the actual SCLK after the divider (2 MHz
+  requested; the retired comment claimed 20→10 MHz measured). Confirm
+  mirror steering latency is unaffected at 600 Hz streaming.
+
 ### Trigger settle time (v2.0.0)
 - [ ] **Settle hold on switch only** — scope a trigger line (or FIN
   `t_trigger − t_exposure` deltas): with settle = 5ms the trigger asserts

@@ -56,6 +56,9 @@ export function controllerSession(): ServerSession<typeof controller> {
       s.telemetry({
         connected: !!c?.connected,
         enabled: !!c?.enabled,
+        // Fixed at connect (firmware version) — republished here so the
+        // renderer can gate the "Recover mirror" button; false when idle.
+        canRecoverMems: !!c?.v21Capable,
         dv: c?.dv ?? 0,
         pos: c?.pos ?? NEUTRAL,
       });
@@ -222,6 +225,13 @@ export function controllerSession(): ServerSession<typeof controller> {
         async disable() {
           await ctrl()?.disable();
           publish();
+        },
+        async recoverMems() {
+          const c = ctrl();
+          if (!c) throw new Error("Controller not connected");
+          // Propagates the firmware ACK/REJ to the caller (the renderer
+          // surfaces failure in the error tray).
+          await c.recoverMems();
         },
         async actuate(arg) {
           const c = ctrl();

@@ -35,6 +35,7 @@ export function useControllerClient() {
   const { telemetry } = session;
   const connected = toRef(telemetry, "connected");
   const enabled = toRef(telemetry, "enabled");
+  const canRecoverMems = toRef(telemetry, "canRecoverMems");
   const pending = toRef(telemetry, "pending");
   const dv = toRef(telemetry, "dv");
   const pos = toRef(telemetry, "pos");
@@ -63,6 +64,8 @@ export function useControllerClient() {
   return {
     controller: facade,
     connected,
+    enabled,
+    canRecoverMems,
     pending,
     vendorId: toRef(session.state, "vendorId"),
     productId: toRef(session.state, "productId"),
@@ -70,5 +73,7 @@ export function useControllerClient() {
     disconnect: () => session.call("disconnect", undefined),
     setBias: (v: number) => session.call("setBias", v),
     setLPF: (v: number) => session.call("setLPF", v),
+    // Host half of right-dac-freeze M2 — re-init the MEMS DACs in place.
+    recoverMems: () => session.call("recoverMems", undefined),
   };
 }

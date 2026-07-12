@@ -42,7 +42,12 @@ FIXED_SIZE_PACKET(Version, SYS_VERSION) {
 };
 
 FIXED_SIZE_PACKET(Reset, SYS_RESET) {
-  typedef enum Type : uint8_t { SOFT = 0, HARD = 1 } Type;
+  // SOFT/HARD reboot the MCU (single-phase ACK, then reset). MEMS (v2.1.0) is a
+  // targeted DAC recovery: re-init the AD5664R DACs in place without rebooting
+  // or dropping the session — see firmware Protocol.cpp HANDLE_SET(System::Reset)
+  // and docs/dev/right-dac-freeze-2026-07-12.md (mitigation M2). Wire layout is
+  // unchanged (one uint8_t); an unknown type on older firmware is REJected.
+  typedef enum Type : uint8_t { SOFT = 0, HARD = 1, MEMS = 2 } Type;
   Type type;
 };
 

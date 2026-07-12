@@ -12,7 +12,7 @@
 // level; core/test/47-firmware-sim.ts drives the same behaviors through
 // core's Device.
 //
-//   1. v2.0.0 GET version handshake.
+//   1. v2.1.0 GET version handshake.
 //   2. Bias staged while disabled; Enable ACK; Bias REJ while enabled.
 //   3. CMD_STREAM CREATE ACK; seq=0 UPDATE silence (no response bytes);
 //      UPDATE unknown id REJ.
@@ -368,7 +368,7 @@ int main() {
       CHECK(v.major == Protocol::Version::Major &&
                 v.minor == Protocol::Version::Minor &&
                 v.patch == Protocol::Version::Patch,
-            "firmware reports the shared Protocol::Version (2.0.0)");
+            "firmware reports the shared Protocol::Version (2.1.0)");
       std::printf("fw-sim-check: 1 version %u.%u.%u OK\n", v.major, v.minor,
                   v.patch);
     }

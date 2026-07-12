@@ -22,7 +22,17 @@ Every serial write is metered (`controller:<port>` → `packets`,
 
 Request/ACK commands: `Enable`, config (`Bias`/`LPF`/`Log`), `Actuate`
 (4-channel DAC vector per mirror; the ACK echoes the actuated channels,
-decoded back to volts via `dac2volt`), `Trigger`.
+decoded back to volts via `dac2volt`), `Trigger`, `Reset`.
+
+`Reset` (`SYS_RESET`) types: `SOFT`/`HARD` reboot the MCU. **`MEMS`
+(protocol v2.1.0)** is a targeted DAC recovery — re-inits the AD5664R DACs in
+place (full re-init incl. RESET) without a reboot or an enable-rail cycle, then
+re-commits the active stream's targets, so a wedged right-fovea mirror
+(`docs/dev/right-dac-freeze-2026-07-12.md`) recovers without dropping the
+session — the host's "recover mirror" button. REJects while disabled. The
+firmware ALSO re-asserts the idempotent MEMS config words at ~1 Hz on its own
+while enabled (mitigation M1), turning a corrupted-word DAC wedge into a ≤1 s
+glitch.
 
 ## 3. v2 surface — streams and synced frames
 

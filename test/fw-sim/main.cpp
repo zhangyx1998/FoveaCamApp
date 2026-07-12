@@ -347,6 +347,7 @@ int main(int argc, char **argv) {
     pumpStrobes();
 
     Global::time.update();
+    Streams::housekeeping(); // M1 periodic MEMS config re-assertion (~1 Hz)
     Streams::tick();
     Capture::tick();
     Protocol::tick();

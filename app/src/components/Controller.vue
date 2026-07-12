@@ -37,12 +37,49 @@ export function getController(): ControllerFacade | null {
 </script>
 
 <script setup lang="ts">
-import { computed, onMounted, useTemplateRef } from "vue";
+import { computed, onMounted, ref, useTemplateRef } from "vue";
 import ElementSize from "@lib/element-size";
+import { reportToTray } from "@lib/orchestrator/client";
 
 const client = getClient();
-const { connected, pending, vendorId, productId, connect, disconnect } = client;
+const {
+  connected,
+  pending,
+  vendorId,
+  productId,
+  connect,
+  disconnect,
+  canRecoverMems,
+  recoverMems,
+} = client;
 const enabled = computed(() => client.controller.value?.enabled ?? false);
+
+// "Recover mirror" (right-dac-freeze M2): re-init the MEMS DACs in place when a
+// driver freezes, without dropping the session. Disabled with a tooltip when
+// the system is not enabled or the firmware predates the recovery command.
+const recoverState = ref<"idle" | "busy" | "ok">("idle");
+const recoverDisabledReason = computed(() => {
+  if (!enabled.value) return "Enable the controller first";
+  if (!canRecoverMems.value) return "Requires controller firmware ≥ 2.1.0";
+  return "";
+});
+async function onRecoverMirror() {
+  if (recoverState.value === "busy" || recoverDisabledReason.value) return;
+  recoverState.value = "busy";
+  try {
+    await recoverMems();
+    recoverState.value = "ok";
+    setTimeout(() => {
+      if (recoverState.value === "ok") recoverState.value = "idle";
+    }, 2000);
+  } catch (e) {
+    recoverState.value = "idle";
+    reportToTray(
+      "controller",
+      `Recover mirror failed: ${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
+}
 
 const icon_style = computed(() => {
   if (pending.value) return { "--color": "gray" };
@@ -114,9 +151,30 @@ onMounted(connect);
                 <button v-if="!connected" @click="connect" :disabled="pending">
                     Connect
                 </button>
-                <button v-else @click="disconnect" :disabled="pending">
-                    Disconnect
-                </button>
+                <template v-else>
+                    <button
+                        class="recover"
+                        @click="onRecoverMirror"
+                        :disabled="
+                            !!recoverDisabledReason || recoverState === 'busy'
+                        "
+                        :title="
+                            recoverDisabledReason ||
+                            'Re-initialize the MEMS mirrors without dropping the session'
+                        "
+                    >
+                        <template v-if="recoverState === 'busy'"
+                            >Recovering…</template
+                        >
+                        <template v-else-if="recoverState === 'ok'"
+                            >Recovered ✓</template
+                        >
+                        <template v-else>Recover mirror</template>
+                    </button>
+                    <button @click="disconnect" :disabled="pending">
+                        Disconnect
+                    </button>
+                </template>
             </div>
         </div>
     </div>
@@ -213,6 +271,12 @@ div.indicator {
         .button {
             width: 100%;
             text-align: center;
+            margin-top: 0.5em;
+        }
+
+        button.recover {
+            display: block;
+            width: 100%;
             margin-top: 0.5em;
         }
     }

@@ -233,6 +233,10 @@ export const controller = defineContract({
     connected: false as boolean,
     pending: false as boolean,
     enabled: false as boolean,
+    // Firmware exposes the System::Reset MEMS recovery type (>= 2.1.0,
+    // right-dac-freeze M2) — gates the title-bar "Recover mirror" button.
+    // False while disconnected or on older firmware.
+    canRecoverMems: false as boolean,
     dv: 0,
     pos: { left: { x: 0, y: 0 }, right: { x: 0, y: 0 } } as {
       left: Pos;
@@ -271,6 +275,10 @@ export const controller = defineContract({
     disconnect: cmd(),
     enable: cmd(),
     disable: cmd(),
+    /** Re-initialize the MEMS DACs without dropping the session (right-dac-freeze
+     *  M2) — sends System::Reset(MEMS). Resolves on ACK, rejects on REJ
+     *  (firmware REJs when disabled / below v2.1.0). */
+    recoverMems: cmd(),
     actuate: cmd<
       { left?: Pos; right?: Pos; settleTime?: number },
       { left: Pos; right: Pos; completeTime: number }

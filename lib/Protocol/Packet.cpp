@@ -47,6 +47,38 @@ template <> Packet::Config::Log::Level convert(const std::string &level) {
 #endif
 }
 
+template <> std::string convert(const Packet::System::Reset::Type &type) {
+  switch (type) {
+  case Packet::System::Reset::Type::SOFT:
+    return "SOFT";
+  case Packet::System::Reset::Type::HARD:
+    return "HARD";
+  case Packet::System::Reset::Type::MEMS:
+    return "MEMS";
+  default:
+#if defined(__EXCEPTIONS) || defined(__cpp_exceptions)
+    throw std::invalid_argument("Unknown Packet::System::Reset::Type: " +
+                                std::to_string(static_cast<uint8_t>(type)));
+#else
+    return "SOFT";
+#endif
+  }
+}
+
+template <> Packet::System::Reset::Type convert(const std::string &type) {
+  if (type == "SOFT")
+    return Packet::System::Reset::Type::SOFT;
+  if (type == "HARD")
+    return Packet::System::Reset::Type::HARD;
+  if (type == "MEMS")
+    return Packet::System::Reset::Type::MEMS;
+#if defined(__EXCEPTIONS) || defined(__cpp_exceptions)
+  throw std::invalid_argument("Unknown reset type: " + type);
+#else
+  return Packet::System::Reset::Type::SOFT;
+#endif
+}
+
 template <> std::string convert(const Packet::Command::MirrorStream::Op &op) {
   switch (op) {
   case Packet::Command::MirrorStream::Op::CREATE:

@@ -46,6 +46,19 @@ uint8_t active();
 // into the FrameResult at strobe rise.
 void snapshot(MirrorPosition &left, MirrorPosition &right);
 
+// Marks the active stream dirty so tick() re-commits its (possibly unchanged)
+// target to the DAC on the next loop. Used after a MEMS re-init/refresh
+// (SYS_RESET MEMS recovery, periodic housekeeping) so the mirror reloads the
+// live targets. No-op when no stream is active.
+void touch();
+
+// Call every loop() tick, BEFORE tick(): M1 periodic config re-assertion
+// (docs/dev/right-dac-freeze-2026-07-12.md). While the system is enabled,
+// re-sends the idempotent MEMS setup words at ~1 Hz (never a RESET or a value
+// write, so the mirror never moves) and touch()es the active stream so the
+// next tick() re-commits live targets. Cadence is off Global::time.
+void housekeeping();
+
 // Call every loop() tick: writes the active stream's target to the MEMS DAC,
 // skipping the SPI write when the target hasn't changed since the last tick.
 void tick();

@@ -5,9 +5,9 @@ stops responding and the mirror freezes at its current location. Survives
 across PCB swaps, firmware versions, protocol versions, and applications.
 Exiting and re-entering the app recovers it for another few minutes.
 
-Status: **DIAGNOSIS ONLY** — code-level analysis on the hardware-less Lab PC.
-Ranked hypotheses + a discriminating bench procedure below. No fix dispatched
-(pending ruling).
+Status: **MITIGATIONS M1–M3 SHIPPED** (2026-07-12, two-worker wave — see AS
+SHIPPED below). Root-cause confirmation is rig-gated: run the discriminating
+bench procedure (mirrored in `docs/hardware/stage-f.md` → "MEMS DAC recovery").
 
 ## What the symptom fingerprint tells us
 
@@ -119,3 +119,43 @@ cannot be detected in firmware — only prevented (M1/M3) or recovered
 (M1/M2). Host-side detection would have to infer from camera feedback
 (commanded delta produces no image motion), which is app-layer and not
 proposed here.
+
+## AS SHIPPED (2026-07-12)
+
+M1–M3 landed as **protocol v2.1.0** (`lib/Protocol/Version.h`; backward
+compatible — wire layout unchanged, old firmware REJects the unknown reset
+type). M4 remains a rig item (procedure step 4 feeds it).
+
+- **M1** — `MEMS::refresh()` (MEMS.cpp): DAC_POWER 0x20000F + INT_REF
+  0x380001 + LDAC 0x300000 to both mirrors, no RESET / no value write.
+  Cadenced by `Streams::housekeeping()` at ~1 Hz off `Global::time`, only
+  while enabled, primed on the enable edge; each refresh `touch()`es the
+  active stream so `tick()` re-commits live targets. Called from `loop()`
+  (Firmware.cpp) and the fw-sim loop.
+- **M2** — `Reset::Type::MEMS = 2` (Packet.h) + firmware branch
+  (Protocol.cpp `HANDLE_SET(System::Reset)`): full `MEMS::enable()` re-init
+  (intentionally incl. RESET) with NO rail cycle and NO stream-table clear,
+  then `Streams::touch()`; ACK when enabled, REJ otherwise. Host:
+  `Controller.recoverMems()` (orchestrator/controller.ts) gated by
+  `v21Capable` (version retained from `verifyVersion()`), exposed through
+  the controller session contract to a **Recover mirror** button in the
+  title-bar Controller dropdown (Controller.vue) — disabled with tooltip
+  when not enabled / firmware < 2.1.0; REJ lands in the error tray.
+  `convert<Reset::Type>` string mappings added in lib/Protocol/Packet.cpp
+  (were missing for SOFT/HARD too — string-typed Reset would have hit an
+  undefined symbol at runtime).
+- **M3** — requested SPI clock 20 MHz → **2 MHz** (`SPI_CLOCK_HZ`,
+  MEMS.cpp). Actual on-wire clock after the Teensy divider is RIG-GATED.
+- **Tests** — core/test/49-firmware-recovery.ts (fw-sim word-level: refresh
+  triple + cadence + disabled-silence; MEMS reset train + ACK/REJ +
+  re-commit; version 2.1.0), 47 updated for the version bump,
+  app/test/controller-recover.test.ts (enum on the wire, version boundary
+  sweep, REJ propagation). Full gates green: core build, fw-sim build +
+  fw-sim-check, `pio run` (teensy40), numbered tests 24/46/47/48/49,
+  vue-tsc, vitest 1196/1196, vite build, check-boundaries. (Numbered tests
+  12 and 36 fail identically at clean HEAD — pre-existing, unrelated: 12 =
+  OpenCV KCF env on the Lab PC, 36 = `Subscriber::close()` lock-order
+  deadlock, tracked separately.)
+- **Docs** — docs/spec/serial-protocol.md + docs/architecture/serial-protocol.md
+  (v2.1.0, MEMS reset semantics, auto-refresh), docs/manual/getting-started.md
+  (button), stage-f "MEMS DAC recovery" checklist (flash v2.1.0 first).
