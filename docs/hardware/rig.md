@@ -14,6 +14,14 @@ exclusive — `architecture/processes.md`).
   center camera's CAM0 port is reserved on the controller board but no cable
   currently fits (camera-side connector size constraint) — recoverable with a
   slimmer cable. Until then C free-runs.
+- **GPIO wiring (L/R):** ONLY the opto-isolated pins + opto-GND are
+  physically cabled — the non-isolated lines float. On the FLIR line map
+  that is **Line0** (opto input — the trigger) and **Line1** (opto output —
+  the ExposureActive strobe), which is exactly what
+  `@orchestrator/camera-trigger` programs by default; a non-isolated line
+  name can never work on this rig. Note the opto input wants the MCU pulse
+  within its voltage spec and adds µs-scale edge lag — irrelevant at the
+  ms-scale pulse widths `pairTriggerBudget` derives.
 - 12-bit readout formats are supported end-to-end in code (preview-safe
   option filtering); live A/B on the rig is a Stage-F item.
 

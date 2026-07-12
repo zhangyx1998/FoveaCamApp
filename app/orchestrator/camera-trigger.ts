@@ -12,10 +12,12 @@
 import type { CameraLease } from "./registry.js";
 
 /** GenICam names for a lease's trigger input + strobe output — camera-model
- *  specific. The defaults below are UNVERIFIED placeholders (bench work is
- *  RIG-GATED, docs/hardware/stage-f.md); confirm against
- *  `lease.camera.trigger_source_options` before relying on them, and prefer
- *  passing explicit values once the real L/R wiring is known. */
+ *  specific. Defaults follow the FLIR line map AND the rig's physical
+ *  wiring: ONLY the opto-isolated pins + opto-GND are cabled
+ *  (docs/hardware/rig.md §Cameras) — Line0 = opto input (trigger),
+ *  Line1 = opto output (strobe); a non-isolated line can never work on
+ *  this rig. Verify against `lease.camera.trigger_source_options` on a
+ *  new camera model. */
 export interface TriggerLines {
   triggerSource?: string;
   lineSelector?: string;
