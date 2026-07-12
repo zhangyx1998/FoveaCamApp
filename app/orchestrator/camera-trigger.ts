@@ -22,11 +22,16 @@ export interface TriggerLines {
 }
 
 /**
- * Switches `lease`'s camera into hardware-triggered mode (TriggerMode=On via
- * `setTrigger`, TriggerSource=`triggerSource`) and configures `lineSelector`
- * as an ExposureActive output (strobe) via the generic feature accessors.
- * Runs through `lease.reconfigure()` so shared-handle mutation stays on the
- * lease's safe path — pipe consumers ride the transient.
+ * Switches `lease`'s camera into hardware-triggered mode and configures
+ * `lineSelector` as an ExposureActive output (strobe) via the generic
+ * feature accessors. `setTrigger` wraps `arv_camera_set_trigger(source)`,
+ * whose argument is the trigger SOURCE — Aravis itself sets TriggerMode=On,
+ * TriggerSelector=FrameStart, and TriggerActivation=RisingEdge. (Passing
+ * "FrameStart" here fails with "[TriggerSource] 'FrameStart' not an entry"
+ * — rig-caught 2026-07-12; the deleted sync.ts original had the same
+ * never-run bug.) Runs through `lease.reconfigure()` so shared-handle
+ * mutation stays on the lease's safe path — pipe consumers ride the
+ * transient.
  */
 export async function enableHardwareTrigger(
   lease: CameraLease,
@@ -34,8 +39,7 @@ export async function enableHardwareTrigger(
 ): Promise<void> {
   await lease.reconfigure(() => {
     const { camera } = lease;
-    camera.setTrigger("FrameStart");
-    camera.trigger_source = triggerSource;
+    camera.setTrigger(triggerSource);
     camera.setFeature("LineSelector", lineSelector);
     camera.setFeature("LineMode", "Output");
     camera.setFeature("LineSource", "ExposureActive");

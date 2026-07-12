@@ -5,8 +5,8 @@
 // -------------------------------------------------------
 //
 // Camera hardware-trigger config (spec disparity-scope §trigger-sync): both
-// directions ride `lease.reconfigure()`, enable programs FrameStart + the
-// strobe line, disable clears — driven with a fake lease (no native core).
+// directions ride `lease.reconfigure()`, enable programs the trigger source
+// + the strobe line, disable clears — driven with a fake lease (no native core).
 
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -18,7 +18,6 @@ import type { CameraLease } from "@orchestrator/registry";
 function makeFakeLease() {
   const features: Record<string, string> = {};
   const camera = {
-    trigger_source: "",
     setTrigger: vi.fn(),
     clearTriggers: vi.fn(),
     setFeature: vi.fn((name: string, value: string) => {
@@ -36,12 +35,14 @@ function makeFakeLease() {
 }
 
 describe("enableHardwareTrigger", () => {
-  it("programs FrameStart trigger + ExposureActive strobe through reconfigure", async () => {
+  it("programs the trigger SOURCE + ExposureActive strobe through reconfigure", async () => {
     const { lease, raw, camera, features } = makeFakeLease();
     await enableHardwareTrigger(lease);
     expect(raw.reconfigure).toHaveBeenCalledTimes(1);
-    expect(camera.setTrigger).toHaveBeenCalledWith("FrameStart");
-    expect(camera.trigger_source).toBe("Line0");
+    // setTrigger takes the SOURCE (arv_camera_set_trigger semantics — Aravis
+    // sets TriggerMode/TriggerSelector itself). Passing "FrameStart" was the
+    // rig-caught 2026-07-12 failure; pin the argument.
+    expect(camera.setTrigger).toHaveBeenCalledWith("Line0");
     expect(features).toEqual({
       LineSelector: "Line1",
       LineMode: "Output",
@@ -56,7 +57,7 @@ describe("enableHardwareTrigger", () => {
       triggerSource: "Line2",
       lineSelector: "Line3",
     });
-    expect(camera.trigger_source).toBe("Line2");
+    expect(camera.setTrigger).toHaveBeenCalledWith("Line2");
     expect(features.LineSelector).toBe("Line3");
   });
 
