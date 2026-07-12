@@ -11,6 +11,7 @@
 import { describe, expect, it } from "vitest";
 import {
   matchPartnerStale,
+  pairEpochSkewed,
   MATCH_STALE_MS,
   MATCH_STALE_SEQ_GAP,
 } from "@modules/disparity-scope/match-join";
@@ -43,5 +44,34 @@ describe("matchPartnerStale", () => {
   it("custom horizons apply", () => {
     expect(matchPartnerStale({ ageMs: 100, seqGap: 0 }, 80)).toBe(true);
     expect(matchPartnerStale({ ageMs: 100, seqGap: 5 }, 200, 4)).toBe(true);
+  });
+});
+
+describe("pairEpochSkewed (trigger-sync pair window)", () => {
+  // window = half a 20 ms trigger interval, in ns.
+  const WINDOW_NS = (20 * 1e6) / 2;
+  const T0 = 5_000_000_000; // arbitrary trusted-time host-ns base
+
+  it("equal epochs (same trigger slot) pair", () => {
+    expect(pairEpochSkewed(T0, T0, WINDOW_NS)).toBe(false);
+  });
+
+  it("jitter inside the window pairs, either sign", () => {
+    expect(pairEpochSkewed(T0, T0 + 1_000_000, WINDOW_NS)).toBe(false);
+    expect(pairEpochSkewed(T0 + 1_000_000, T0, WINDOW_NS)).toBe(false);
+  });
+
+  it("EXACTLY the window still pairs (inclusive bound — pinned)", () => {
+    expect(pairEpochSkewed(T0, T0 + WINDOW_NS, WINDOW_NS)).toBe(false);
+    expect(pairEpochSkewed(T0, T0 + WINDOW_NS + 1, WINDOW_NS)).toBe(true);
+  });
+
+  it("adjacent-slot epochs (one full trigger interval apart) do not pair", () => {
+    expect(pairEpochSkewed(T0, T0 + 2 * WINDOW_NS, WINDOW_NS)).toBe(true);
+  });
+
+  it("a non-finite epoch is unjudgeable — do not pair", () => {
+    expect(pairEpochSkewed(NaN, T0, WINDOW_NS)).toBe(true);
+    expect(pairEpochSkewed(T0, Infinity, WINDOW_NS)).toBe(true);
   });
 });

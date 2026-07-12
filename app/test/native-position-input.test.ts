@@ -24,10 +24,11 @@ const ORIGIN = PAIR(P(0, 0), P(0, 0));
 const tick = () => new Promise<void>((r) => setTimeout(r, 0));
 
 /** A fake sink shaped like the native MirrorSink handle surface. */
-function makeSinkHandle() {
+function makeSinkHandle(streamId = 7) {
   const sink = { pos_in: { streamTag: "volts" }, released: false };
   return {
     sink,
+    streamId,
     close: vi.fn(async () => {
       sink.released = true;
     }),
@@ -86,9 +87,12 @@ describe("openNativePosition", () => {
     expect(c.createNativeMirrorSink).toHaveBeenCalledWith(ORIGIN, "controller");
     expect(onAttach).toHaveBeenCalledWith(c.sinkHandles[0]!.sink);
     expect(input.sink).toBe(c.sinkHandles[0]!.sink);
+    // The attached sink's MCU stream id is exposed (trigger-sync's CMD_FRAME target).
+    expect(input.streamId).toBe(7);
 
     // Close: detach → TERMINATE (handle.close) → disable (we enabled, last out).
     await input.close();
+    expect(input.streamId).toBeNull(); // detached — no stream to target
     expect(onDetach).toHaveBeenCalled();
     expect(c.sinkHandles[0]!.close).toHaveBeenCalled();
     expect(c.disable).toHaveBeenCalled();
@@ -105,6 +109,7 @@ describe("openNativePosition", () => {
     await tick();
     expect(onAttach).not.toHaveBeenCalled(); // nothing bound yet
     expect(input.sink).toBeNull();
+    expect(input.streamId).toBeNull(); // attach is lazy — no stream id yet
 
     const c = makeV2Controller();
     node.bindController(c as never);

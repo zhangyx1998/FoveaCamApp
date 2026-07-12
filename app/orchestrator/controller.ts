@@ -121,6 +121,9 @@ export interface StreamHandle {
  *  `close()` releases the sink then TERMINATEs the stream (idempotent). */
 export interface NativeMirrorSinkHandle {
   readonly sink: MirrorSink;
+  /** The bound MCU stream's id — the CMD_FRAME target for trigger-sync capture
+   *  on this sink's stream (spec disparity-scope §trigger-sync). */
+  readonly streamId: number;
   close(): Promise<void>;
 }
 
@@ -509,6 +512,7 @@ export class Controller {
     let closed = false;
     return {
       sink,
+      streamId: stream.id,
       close: async () => {
         if (closed) return;
         closed = true;

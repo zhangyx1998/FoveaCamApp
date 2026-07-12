@@ -73,6 +73,20 @@ export const DEFAULT_TUNING: Tuning = {
  *  the payload shape for `setPid`'s manual nudge. */
 export type PidReadout = { verge: number; panX: number; panY: number; v_shift: number };
 
+/** Live trigger-sync readout while ENGAGED (spec §trigger-sync): achieved FIN
+ *  rate, the derived pulse width, and cumulative scheduler outcome counters
+ *  for this engagement (counters update at the publish throttle). */
+export type TriggerTelemetry = {
+  /** Achieved FIN rate, computed over ≥1 s maturity windows and HELD between
+   *  rolls (a per-publish 33 ms window would quantize the rate to 0 or ~30);
+   *  null until the first window matures after (re-)engage. */
+  hz: number | null;
+  pulseMs: number;
+  frames: number;
+  rejects: number;
+  timeouts: number;
+};
+
 export const disparity = defineContract({
   state: {
     /** Leased camera serials per role (C-22) — raw center preview binds to the
@@ -98,6 +112,11 @@ export const disparity = defineContract({
     tracker_type: DEFAULT_TRACKER_TYPE as TrackerType,
     /** Tracker template size (px) — the arm ROI; applied on the next (re-)arm. */
     kernel: { w: 64, h: 64 },
+    /** Trigger-sync capture INTENT (spec §trigger-sync): the user asks for
+     *  hardware-triggered L/R pairs; the intent latches and the session
+     *  engages when preconditions permit (v2 controller + native stream +
+     *  leased triple), surfacing `trigger_blocked` while it waits. RIG-GATED. */
+    trigger_sync: false as boolean,
     /** PID-node OVERRIDE slot — server-authoritative `{engaged, value}`, driven
      *  ONLY by the generic `pidOverride` command (pointer drags ride the tracker
      *  override instead; spec §drag). Kept for the `usePidOverride` proxy. */
@@ -149,6 +168,13 @@ export const disparity = defineContract({
     /** Auto-tune progress/result stream (null = no run yet this activation).
      *  Spec: docs/spec/disparity-scope.md#autotune. RIG-GATED experiments. */
     autotune: null as AutotuneProgress | null,
+    /** Trigger-sync readout — non-null exactly while ENGAGED (spec
+     *  §trigger-sync); published at the volt-telemetry throttle. */
+    trigger: null as TriggerTelemetry | null,
+    /** Human-readable reason trigger-sync engagement is WAITING (intent on,
+     *  preconditions unmet, or the last engage attempt failed); null when
+     *  engaged or when `trigger_sync` is off. */
+    trigger_blocked: null as string | null,
     /** Control-path latency (same shape/throttle as manual-control). */
     perf: { actuateMs: { mean: 0, max: 0 } as Stat },
     ...captureTelemetry(),

@@ -187,6 +187,14 @@ export async function retryUntil<T>(
  *  entry (stored config applied). Shared by `acquire()`'s first-lease path
  *  and `acquireMany()`'s bulk-discovery path so both agree on setup. */
 async function registerShared(camera: Camera): Promise<Shared> {
+  // Crash backstop (spec disparity-scope §trigger-sync): a session that died
+  // with this camera hardware-triggered must never strand the next one with a
+  // frozen free-run feed — clear trigger mode best-effort on every fresh open.
+  try {
+    camera.clearTriggers();
+  } catch {
+    // trigger features unavailable — the camera is free-run already
+  }
   await timeSpan("camera.applyStoredConfig", () => applyStoredConfig(camera), {
     serial: camera.serial,
   });

@@ -12,7 +12,15 @@
 
 import { defineSession, type ServerSession } from "@orchestrator/runtime";
 import { acquireTriple, type CalibratedTriple } from "@orchestrator/calibration";
-import { read } from "@orchestrator/store-hub";
+import { read, subscribe } from "@orchestrator/store-hub";
+import { activeController } from "@orchestrator/controller";
+import { RoundRobinFrameScheduler } from "@orchestrator/scheduler";
+import {
+  disableHardwareTrigger,
+  enableHardwareTrigger,
+} from "@orchestrator/camera-trigger";
+import { cameraConfigPath } from "@orchestrator/camera";
+import { pairTriggerBudget, type PairTriggerBudget } from "@lib/camera-config";
 import { readAnaglyphStyle, subscribeAnaglyphStyle } from "@orchestrator/anaglyph-style";
 import { DEFAULT_ANAGLYPH_STYLE, type AnaglyphStyle } from "../../../docs/schema/anaglyph.js";
 import { resolveBaseline } from "@lib/calibration-data";
@@ -100,6 +108,14 @@ import {
   trackerResultStale,
 } from "./tracker-feed";
 import { matchPartnerStale } from "./match-join";
+import {
+  createTriggerOpChain,
+  engageFailureReason,
+  matchStaleMsFor,
+  pairEpochGateTrips,
+  triggerBlockReason,
+  TriggerRateWindow,
+} from "./trigger-sync";
 import {
   AutotuneRun,
   type AutotuneStage,
@@ -957,7 +973,15 @@ export default function disparityScopeSession(
     // --- per-side match results → the pid JOIN (spec §match-join) ----------
 
     type SideKey = "L" | "R";
-    type SideMatch = { center: Point2d; score: number; seq: number; at: number };
+    type SideMatch = {
+      center: Point2d;
+      score: number;
+      seq: number;
+      at: number;
+      /** Trusted-time capture epoch (host-ns, the frame's `deviceTimestamp`;
+       *  0 = unstamped) — the trigger-sync pair window keys on it. */
+      epoch: number;
+    };
     /** Latest result per side; the step runs when the arriving side completes a
      *  pair (seq ≥ the other's) — order-agnostic, ~once per strip frame. */
     const latestMatch: { L: SideMatch | null; R: SideMatch | null } = {
@@ -991,6 +1015,7 @@ export default function disparityScopeSession(
         score: v.score,
         seq: v.seq ?? 0,
         at: now(),
+        epoch: v.deviceTimestamp ?? 0,
       };
       latestMatch[side] = m;
       s.telemetry(
@@ -1000,9 +1025,28 @@ export default function disparityScopeSession(
       );
       const other = latestMatch[side === "L" ? "R" : "L"];
       if (!other || m.seq < other.seq) return; // pair incomplete — wait
-      // A stale partner (spec §match-join) is treated as LOST: hold the pose.
+      // Trigger-sync pair window (spec §trigger-sync): while ENGAGED, capture
+      // epochs from different trigger slots must not pair — latest-wins
+      // recovers on the next arrival (a one-sided drop self-heals). Free-run
+      // (not engaged) never consults epochs.
       if (
-        matchPartnerStale({ ageMs: now() - other.at, seqGap: m.seq - other.seq })
+        pairEpochGateTrips(
+          triggerEngaged,
+          triggerBudget?.minIntervalMs ?? null,
+          m.epoch,
+          other.epoch,
+        )
+      ) {
+        status = "pair skew";
+        return;
+      }
+      // A stale partner (spec §match-join) is treated as LOST: hold the pose.
+      // The AGE bound scales to the trigger cadence while engaged.
+      if (
+        matchPartnerStale(
+          { ageMs: now() - other.at, seqGap: m.seq - other.seq },
+          matchStaleMsFor(triggerEngaged, triggerBudget?.minIntervalMs ?? null),
+        )
       ) {
         status = "match stale";
         return;
@@ -1229,6 +1273,221 @@ export default function disparityScopeSession(
       actuateMsStats.resetMax();
     }
 
+    // --- trigger-sync capture (spec §trigger-sync) --------------------------
+    // Intent (`state.trigger_sync`) latches; ENGAGEMENT is a live state machine:
+    // hardware-trigger both foveas, then round-robin CMD_FRAME on the native
+    // mirror sink's stream. Every engaged-only behavior gates on
+    // `triggerEngaged` — free-run stays byte-identical while disengaged.
+
+    let triggerEngaged = false;
+    /** False from idle start until the next activate: the retry tick keeps
+     *  firing while teardown awaits, and a re-engage there would strand the
+     *  cameras in trigger mode past `releaseLeases`. */
+    let triggerEngageAllowed = false;
+    /** Bumped on every disengage — an engage that awaited across it reverts. */
+    let triggerEpochCounter = 0;
+    let triggerBudget: PairTriggerBudget | null = null;
+    let triggerScheduler: RoundRobinFrameScheduler | null = null;
+    const triggerUnsubs: (() => void)[] = [];
+    let triggerFrames = 0;
+    let triggerRejects = 0;
+    let triggerTimeouts = 0;
+    /** Achieved-hz maturity window (≥1 s rolls; held between; null till first). */
+    const triggerRate = new TriggerRateWindow();
+    let lastTriggerBlocked: string | null = null;
+    /** FIFO mutex over the lease trigger config: an engage always awaits any
+     *  in-flight disengage (and vice versa) before touching leases. */
+    const queueTriggerOp = createTriggerOpChain((e) =>
+      console.error("[disparity-scope] trigger-sync op failed:", e),
+    );
+
+    /** `trigger_blocked` on TRANSITIONS only (the retry tick re-evaluates
+     *  every interval; the UI needs edges, not spam). */
+    function publishTriggerBlocked(reason: string | null): void {
+      if (reason === lastTriggerBlocked) return;
+      lastTriggerBlocked = reason;
+      s.telemetry({ trigger_blocked: reason });
+    }
+
+    /** Exposure-authoritative budget over both fovea config docs (P6 —
+     *  multi-fovea's `deriveBudget` shape; the flip point stays inside
+     *  `pairTriggerBudget`). Settle hold comes from the leased triple. */
+    function deriveTriggerBudget(): PairTriggerBudget | null {
+      if (!triple) return null;
+      const safe = <T,>(fn: () => T, fallback: T): T => {
+        try {
+          return fn();
+        } catch {
+          return fallback;
+        }
+      };
+      const camL = triple.leases.L.camera;
+      const camR = triple.leases.R.camera;
+      return pairTriggerBudget({
+        exposureUsL: safe(() => camL.exposure, 0),
+        exposureUsR: safe(() => camR.exposure, 0),
+        settleUs: triple.settleTimeUs,
+        maxRateHzL: safe(() => camL.frame_rate_range.max, 0),
+        maxRateHzR: safe(() => camR.frame_rate_range.max, 0),
+      });
+    }
+
+    /** (Re-)push the ONE scheduler target from the live budget. */
+    function applyTriggerTarget(streamId: number): void {
+      if (!triggerScheduler || !triggerBudget || !triple) return;
+      triggerScheduler.setTargets([
+        {
+          stream: streamId,
+          cameras: ["L", "R"],
+          pulse: triggerBudget.pulseNs,
+          settle_time: triple.settleTimeUs,
+          minIntervalMs: triggerBudget.minIntervalMs,
+        },
+      ]);
+    }
+
+    function publishTriggerTelemetry(): void {
+      if (!triggerEngaged || !triggerBudget) return;
+      s.telemetry({
+        trigger: {
+          // hz rolls on ≥1 s maturity windows, held between rolls, null until
+          // the first matures (TriggerRateWindow) — a per-publish 33 ms window
+          // quantized it to 0 or ~30 and flapped the status line.
+          hz: triggerRate.sample(now()),
+          pulseMs: triggerBudget.pulseNs / 1e6,
+          frames: triggerFrames,
+          rejects: triggerRejects,
+          timeouts: triggerTimeouts,
+        },
+      });
+    }
+
+    /** Serialized via `queueTriggerOp` — see {@link engageTrigger}. */
+    async function engageTriggerNow(): Promise<void> {
+      if (triggerEngaged || !s.state.trigger_sync) return;
+      if (!triggerEngageAllowed) {
+        // An ON-flip while idle/tearing-down: name the wait instead of
+        // leaving the UI on its generic fallback forever.
+        publishTriggerBlocked("session is not active");
+        return;
+      }
+      // Preconditions re-checked HERE, after any queued disengage completed —
+      // the pre-queue world may be gone.
+      const reason = triggerBlockReason({
+        tripleLeased: triple !== null,
+        controller: activeController(),
+        streamId: nativePos?.streamId ?? null,
+      });
+      if (reason) {
+        publishTriggerBlocked(reason);
+        return;
+      }
+      const t = triple!;
+      const streamId = nativePos!.streamId!;
+      const epoch = triggerEpochCounter;
+      const revert = async (): Promise<void> => {
+        for (const side of ["L", "R"] as const)
+          try {
+            await disableHardwareTrigger(t.leases[side]);
+          } catch {
+            // best-effort — the lease may already be releasing
+          }
+      };
+      try {
+        await enableHardwareTrigger(t.leases.L);
+        await enableHardwareTrigger(t.leases.R);
+      } catch (e) {
+        await revert();
+        publishTriggerBlocked(engageFailureReason(e));
+        return;
+      }
+      // Disengaged / idled / re-leased while awaiting — undo, stay out.
+      if (
+        epoch !== triggerEpochCounter ||
+        !triggerEngageAllowed ||
+        !s.state.trigger_sync ||
+        triple !== t
+      ) {
+        await revert();
+        return;
+      }
+      triggerBudget = deriveTriggerBudget();
+      triggerFrames = triggerRejects = triggerTimeouts = 0;
+      triggerRate.reset(now());
+      triggerScheduler = new RoundRobinFrameScheduler({
+        requester: {
+          frame(request) {
+            const controller = activeController();
+            if (!controller) throw new Error("No controller connected");
+            return controller.frame(request);
+          },
+        },
+        onFrame() {
+          triggerFrames++;
+          triggerRate.onFin();
+        },
+        onReject() {
+          triggerRejects++;
+        },
+        onTimeout() {
+          triggerTimeouts++;
+        },
+      });
+      applyTriggerTarget(streamId);
+      triggerScheduler.start();
+      // Live budget re-derivation on either fovea's config-doc change
+      // (multi-fovea's subscription shape) — new exposure, new pacing.
+      for (const side of ["L", "R"] as const)
+        triggerUnsubs.push(
+          subscribe(cameraConfigPath(t.leases[side].camera), () => {
+            triggerBudget = deriveTriggerBudget();
+            applyTriggerTarget(streamId);
+          }),
+        );
+      triggerEngaged = true;
+      publishTriggerBlocked(null);
+      publishTriggerTelemetry(); // announce engagement (trigger non-null)
+    }
+
+    /** Serialized via `queueTriggerOp` — see {@link engageTrigger}. */
+    async function disengageTriggerNow(blockedReason: string | null): Promise<void> {
+      triggerEpochCounter++; // any in-flight engage reverts itself
+      const wasEngaged = triggerEngaged;
+      triggerEngaged = false;
+      triggerScheduler?.stop();
+      triggerScheduler = null;
+      for (const u of triggerUnsubs.splice(0)) u();
+      triggerBudget = null;
+      if (wasEngaged && triple) {
+        for (const side of ["L", "R"] as const)
+          try {
+            await disableHardwareTrigger(triple.leases[side]);
+          } catch {
+            // best-effort — the lease may already be releasing
+          }
+      }
+      if (wasEngaged) s.telemetry({ trigger: null });
+      publishTriggerBlocked(s.state.trigger_sync ? blockedReason : null);
+    }
+
+    /** Engage/disengage BOTH ride the FIFO op chain: a fast OFF→ON toggle
+     *  otherwise interleaved enables with in-flight disables (a disable
+     *  landing last leaves a camera untriggered while the session reports
+     *  engaged — permanent 0 Hz + climbing timeouts). */
+    function engageTrigger(): Promise<void> {
+      return queueTriggerOp(engageTriggerNow);
+    }
+
+    /** Disengage (intent off / controller detach / idle). MUST run while the
+     *  leases are live — `disableHardwareTrigger` rides `lease.reconfigure`
+     *  (spec §trigger-sync teardown invariant); the idle path awaits this
+     *  BEFORE `releaseLeases`, which also drains any queued engage ahead of
+     *  it on the chain. `blockedReason` publishes only while the intent stays
+     *  latched (detach path). */
+    function disengageTrigger(blockedReason: string | null = null): Promise<void> {
+      return queueTriggerOp(() => disengageTriggerNow(blockedReason));
+    }
+
     // --- lifecycle --------------------------------------------------------
 
     /** Connect a pipe by id (refcount++ → C-21 gate) and return its worker
@@ -1262,6 +1521,7 @@ export default function disparityScopeSession(
       windowStart = now();
       lastStep = now();
       lastSteppedSeq = -1;
+      triggerEngageAllowed = true; // latched intent re-engages via the retry tick
       dragSlew.reset();
       // Seed the capture-epoch ring so frames captured before the first target
       // write still resolve to the target in effect at activation (R1).
@@ -1813,6 +2073,10 @@ export default function disparityScopeSession(
           voltLink?.release();
           voltLink = null;
           nativeSink = null;
+          // Trigger-sync loses its CMD_FRAME stream with the sink: disengage
+          // (cameras back to free-run) but keep the INTENT latched — the retry
+          // tick re-engages when a v2 controller re-attaches (spec §trigger-sync).
+          if (triggerEngaged) void disengageTrigger("controller detached");
         },
       });
       disposers.add(() => {
@@ -1861,6 +2125,12 @@ export default function disparityScopeSession(
           // A failure, not an abort: "aborted" means user action everywhere.
           if (autotuneRun && autotuneRun.starved(tuneNow()))
             autotuneRun.fail("no match samples (match feed stalled; pre-tune gains restored)");
+          // Trigger-sync (spec §trigger-sync): the latched intent retries
+          // engagement on this tick (preconditions are lazy/async — the native
+          // sink attach, a controller reconnect); once engaged, the achieved-
+          // rate readout publishes at the same throttle.
+          if (s.state.trigger_sync && !triggerEngaged) void engageTrigger();
+          else if (triggerEngaged) publishTriggerTelemetry();
           if (!nativeSink) {
             // No controller → fixed behavior; the estimate resets so a stale
             // link's RTTs never leak into a fresh connection.
@@ -1960,7 +2230,14 @@ export default function disparityScopeSession(
         preTune = null;
         syncGains(s.state.tuning);
       }
-      // Finalize an in-flight recording FIRST, while the cameras are still leased
+      // Trigger-sync back to free-run FIRST — `disableHardwareTrigger` rides
+      // `lease.reconfigure`, so it MUST complete before `releaseLeases` below
+      // (spec §trigger-sync). Intent stays latched for the next activation;
+      // the engage gate closes so the still-armed retry timer can't re-engage
+      // mid-teardown.
+      triggerEngageAllowed = false;
+      await disengageTrigger();
+      // Finalize an in-flight recording next, while the cameras are still leased
       // (spec §teardown); covers the forced dispose busy() refuses.
       await recording.stop();
       // Drain any in-flight capture shot before the center pipe/leases release.
@@ -2007,6 +2284,8 @@ export default function disparityScopeSession(
         "zoom_override",
         "overridden",
         "autotune",
+        "trigger",
+        "trigger_blocked",
       ]);
     }
 
@@ -2199,6 +2478,13 @@ export default function disparityScopeSession(
         },
         // HOT-SWAP the tracker engine (spec §tracker) — immediate, or DEFERRED to
         // drag end during a gesture. Pre-activate writes just sit in state.
+        // Trigger-sync INTENT (spec §trigger-sync): on → engage now if
+        // preconditions permit (else `trigger_blocked` + the retry tick);
+        // off → back to free-run.
+        trigger_sync(on) {
+          if (on) void engageTrigger();
+          else void disengageTrigger();
+        },
         tracker_type(type) {
           if (!trackerSrc.pipe) return; // idle — activate will read state
           if (type === runningTrackerType) {

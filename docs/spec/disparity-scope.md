@@ -400,6 +400,83 @@ Load-bearing constraints kept at the code:
   not calibrated" without it, fires on EVERY volts push, and the uncaught throw killed the
   orchestrator on an uncalibrated rig (crash log hw-1 2026-07-10T19-31).
 
+## Trigger-sync mode {#trigger-sync}
+
+> **RIG-GATED.** Requires protocol-v2 firmware AND the pending MEMS flash for CMD_FRAME;
+> the GenICam trigger/strobe line names are unverified placeholders. Code-complete +
+> unit-tested only — first live run owed at `docs/hardware/stage-f.md`.
+
+Hardware-triggered L/R pair capture for the scope: both foveas switch to
+FrameStart-triggered mode and a one-target `RoundRobinFrameScheduler` round-robins
+CMD_FRAME on the session's native mirror-sink stream, so each L/R pair exposes
+simultaneously at a settled mirror pose. Pure decisions live in
+`trigger-sync.ts` + `match-join.ts` (`pairEpochSkewed`); camera config in
+`@orchestrator/camera-trigger` (rides `lease.reconfigure()`).
+
+**Intent vs engagement.** `state.trigger_sync` is USER INTENT — persisted,
+renderer-writable, latched. The session ENGAGES only when preconditions permit and
+re-tries from the volt-telemetry tick (the preconditions are lazy/async), so a flip
+before the controller connects, a controller detach mid-session, or a re-activation all
+converge without user action. While intent is on but disengaged, telemetry
+`trigger_blocked` carries the specific reason (`triggerBlockReason`, most-fundamental
+first): no camera triple leased → no controller connected → controller firmware is not
+v2-capable → native mirror stream not attached yet. Two more reasons come from outside
+the precondition chain: "session is not active" (an ON-flip while the session is idle /
+tearing down) and "engage failed: …" (`engageFailureReason` — the enable error's first
+line, truncated, never the raw multi-line message). `trigger` (the engaged readout) is
+non-null exactly while engaged; `trigger_blocked` is null when engaged or when intent
+is off.
+
+**Engage sequence** (each step gates the next; a disengage/idle racing an in-flight
+engage reverts it via an epoch counter):
+
+1. `enableHardwareTrigger(leases.L)` then `.R` — any failure best-effort disables BOTH
+   sides, publishes `trigger_blocked: "engage failed: …"`, and stays disengaged.
+2. Budget = `pairTriggerBudget` over both fovea config docs (exposure-authoritative, P6)
+   + camera-reported readout floor + the triple's `settleTimeUs` — identical to
+   multi-fovea's `deriveBudget`.
+3. One-target scheduler `{stream: nativePos.streamId, cameras: [L,R], pulse:
+   budget.pulseNs, settle_time, minIntervalMs: budget.minIntervalMs}`, requester = the
+   active controller's `frame()`. FIN/reject/timeout counts feed the `trigger`
+   telemetry at the volt-telemetry throttle; `hz` rolls on ≥1 s maturity windows
+   (`TriggerRateWindow`) — held between rolls, null until the first window matures
+   after (re-)engage, since a per-publish 33 ms window quantizes the rate to 0 or ~30;
+   `pulseMs` = `pulseNs / 1e6`.
+4. Both fovea config docs are subscribed — an exposure edit re-derives the budget and
+   re-pushes the scheduler target live.
+
+**Disengage** (intent off / controller detach / session idle): scheduler stop →
+config-doc unsubscribe → best-effort `disableHardwareTrigger` on both leases →
+telemetry `trigger: null`. On CONTROLLER DETACH the intent stays latched: cameras
+return to free-run, `trigger_blocked` reads "controller detached", and the retry tick
+re-engages when a v2 controller re-attaches.
+
+**Teardown invariant.** `disableHardwareTrigger` rides `lease.reconfigure()`, so the
+idle-path disengage is AWAITED at the top of `idleSession`, strictly BEFORE
+`releaseLeases` — a released lease has no live handle to reconfigure, and a camera left
+in trigger mode has a frozen free-run feed. The engage gate (`triggerEngageAllowed`)
+closes at idle start and reopens on activate: the retry timer keeps ticking through the
+teardown awaits, and a re-engage there would re-arm the triggers past the disengage.
+ORDERING: engage and disengage both ride one FIFO op chain (`createTriggerOpChain`),
+so their lease trigger reconfigures never interleave — a fast OFF→ON toggle otherwise
+raced enables against in-flight disables (a disable landing last leaves a camera
+untriggered while the session reports engaged), and the idle-path awaited disengage
+also drains any engage queued ahead of it; preconditions are re-checked after the
+chain is acquired. Backstop for the crash case (no idle ran):
+`registry.ts registerShared` best-effort `clearTriggers()` on every fresh camera open,
+so the next session never inherits trigger mode.
+
+**Pair window + staleness while engaged** (free-run pairing is byte-identical — every
+check gates on the engaged flag): before the once-per-pair seq gate, the join rejects
+epoch-skewed pairs (`pairEpochSkewed`, status "pair skew"): both sides of a triggered
+pair expose simultaneously, so their trusted-time `deviceTimestamp`s differ only by
+trigger jitter, and HALF the trigger interval (`windowNs = minIntervalMs × 1e6 / 2`)
+separates adjacent trigger slots unambiguously. Exactly-window pairs (inclusive bound);
+latest-wins recovers a one-sided frame drop on the next arrival. The partner-staleness
+AGE bound scales to the trigger cadence — `max(MATCH_STALE_MS, 4 × minIntervalMs)` —
+since triggered pairs arrive at the scheduler interval, not the free-run frame rate;
+the seq-gap bound is unchanged.
+
 ## Capture & recording {#capture}
 
 capture-recorder-everywhere ruling 2/3/6. Recording captures the raw L/C/R sensor streams

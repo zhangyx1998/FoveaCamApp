@@ -87,6 +87,9 @@ export interface OpenNativePositionOptions {
 export interface NativePositionInput {
   /** The live native sink (null while no v2 controller is bound). */
   readonly sink: NativeMirrorSinkHandle["sink"] | null;
+  /** The attached sink's MCU stream id (null until the lazy/async native
+   *  attach lands) — the CMD_FRAME target for trigger-sync capture. */
+  readonly streamId: number | null;
   /** Detach + TERMINATE + retire (disable iff we enabled and last one out). */
   close(): Promise<void>;
 }
@@ -488,6 +491,10 @@ class NativePositionInputImpl implements NativePositionInput {
 
   get sink(): NativeMirrorSinkHandle["sink"] | null {
     return this.handle?.sink ?? null;
+  }
+
+  get streamId(): number | null {
+    return this.handle?.streamId ?? null;
   }
 
   /** @internal — attached OR attach in flight (the JS-stream suppression
