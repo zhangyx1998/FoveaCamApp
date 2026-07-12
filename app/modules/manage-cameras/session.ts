@@ -8,6 +8,14 @@
 // snapshot (~1 Hz) into telemetry, and applies edits + the pixel-format
 // reconfigure flow as commands, persisting to the shared config store.
 //
+// Fovea Pair (P5): while exactly one camera holds role L and one holds role R,
+// telemetry carries a `pair` link and the `setPair`/`setPairPixelFormat`
+// commands apply one edit to BOTH cameras (each through its own writer /
+// reconfigure flow), persisting into BOTH cameras' existing config docs — no
+// separate pair doc, so calibration and every other config reader stay
+// untouched. A divergent pair is edit-locked until `unifyPair` copies one
+// side's config onto the other (the explicit user choice).
+//
 // Control edits (`set`) arrive per renderer input event — per MOUSEMOVE during
 // a slider drag — so they go through a per-camera `CoalescedWriter`: one
 // native write in flight per camera, intermediates dropped (final value always
@@ -28,12 +36,15 @@ import { read, update, write } from "@orchestrator/store-hub";
 import { report } from "@orchestrator/diagnostics";
 import {
   CAMERA_CONTROLS,
+  PAIR_LINKED_CONTROLS,
   describeCamera,
+  pairDivergence,
+  pairTriggerBudget,
   readControlFields,
   readControlPatch,
 } from "@lib/camera-config";
 import { CoalescedWriter } from "@lib/coalesced-writer";
-import { manageCameras, type CameraView } from "./contract";
+import { manageCameras, type CameraView, type FoveaPairView } from "./contract";
 import type { CameraInfo } from "@lib/orchestrator/contracts";
 import type { Camera } from "core/Aravis";
 
@@ -73,6 +84,52 @@ export default function manageCamerasSession(): ServerSession<typeof manageCamer
       };
     }
 
+    // The L/R fovea-pair link (P5): exactly one camera per role, both views
+    // present. Duplicate role claims break the link (which serial would the
+    // pair edit?) until the user resolves the roles.
+    function pairEntries(): { left: Entry; right: Entry } | null {
+      const byRole: Record<"L" | "R", Entry[]> = { L: [], R: [] };
+      for (const e of entries.values())
+        if (e.role === "L" || e.role === "R") byRole[e.role].push(e);
+      if (byRole.L.length !== 1 || byRole.R.length !== 1) return null;
+      return { left: byRole.L[0], right: byRole.R[0] };
+    }
+
+    /** Why the pair link is BLOCKED despite fovea roles being claimed — the
+     *  duplicate-role case must be actionable in the UI, not a silent
+     *  panel-vanish (UI/UX review #10). Null = linked or simply unclaimed. */
+    function pairBlockReason(): string | null {
+      const byRole: Record<"L" | "R", number> = { L: 0, R: 0 };
+      for (const e of entries.values())
+        if (e.role === "L" || e.role === "R") byRole[e.role]++;
+      if (byRole.L > 1)
+        return "Two cameras claim Fovea Left — resolve Roles to link the pair.";
+      if (byRole.R > 1)
+        return "Two cameras claim Fovea Right — resolve Roles to link the pair.";
+      return null;
+    }
+
+    function pairView(): FoveaPairView | null {
+      const pair = pairEntries();
+      if (!pair) return null;
+      const l = views[pair.left.serial];
+      const r = views[pair.right.serial];
+      if (!l || !r) return null;
+      // Budget without settle (per-triple, added by the tracking apps).
+      const budget = pairTriggerBudget({
+        exposureUsL: l.exposure,
+        exposureUsR: r.exposure,
+        maxRateHzL: l.frame_rate_range.max,
+        maxRateHzR: r.frame_rate_range.max,
+      });
+      return {
+        left: pair.left.serial,
+        right: pair.right.serial,
+        divergent: pairDivergence(l, r),
+        budget: { ...budget, exposureUsL: l.exposure, exposureUsR: r.exposure },
+      };
+    }
+
     function publishViews(): void {
       const next: Record<string, CameraView> = {};
       for (const [serial, e] of entries) {
@@ -88,7 +145,26 @@ export default function manageCamerasSession(): ServerSession<typeof manageCamer
         }
       }
       views = next;
-      s.telemetry({ views });
+      s.telemetry({ views, pair: gatedPair(false), pair_blocked: pairBlockReason() });
+    }
+
+    /** Last divergence list actually published. `setPair` writes land on the
+     *  two cameras in separate microtasks, so a patch-path recompute between
+     *  the two read-backs sees a HALF-APPLIED pair — publishing that flashes
+     *  the unify prompt mid-drag and unmounts the slider being dragged (UI/UX
+     *  review #5). New divergence therefore surfaces only via the 1 Hz poll /
+     *  structural publishes; the patch path may only CLEAR or carry it. */
+    let publishedDivergent: string[] = [];
+    function gatedPair(patch: boolean): FoveaPairView | null {
+      const p = pairView();
+      if (!p) {
+        publishedDivergent = [];
+        return p;
+      }
+      if (patch && publishedDivergent.length === 0 && p.divergent.length > 0)
+        return { ...p, divergent: [] };
+      publishedDivergent = p.divergent;
+      return p;
     }
 
     // Targeted read-back after one control write: re-read only that control's
@@ -99,7 +175,9 @@ export default function manageCamerasSession(): ServerSession<typeof manageCamer
       const view = views[serial];
       if (!patch || !view) return publishViews();
       views[serial] = { ...view, ...patch };
-      s.telemetry({ views });
+      // Pair rides along: divergence (gated) + the exposure-derived budget
+      // both move with single-control edits.
+      s.telemetry({ views, pair: gatedPair(true) });
     }
 
     async function registerEntry(serial: string, lease: CameraLease): Promise<void> {
@@ -153,6 +231,29 @@ export default function manageCamerasSession(): ServerSession<typeof manageCamer
     const persist = (camera: Camera, patch: Record<string, unknown>) =>
       update(cameraConfigPath(camera), patch);
 
+    async function applyPixelFormat(e: Entry, format: string): Promise<void> {
+      const c = e.lease.camera;
+      if (format === safe(() => c.pixel_format, format)) return;
+      // `reconfigure` stops the shared loop before the mutate and restarts it
+      // after (fresh buffer for the new payload size); retry the set to
+      // absorb the cross-thread acquisition stop.
+      await e.lease.reconfigure(async () => {
+        let lastErr: unknown = null;
+        for (let i = 0; i < 30; i++) {
+          try {
+            c.pixel_format = format as typeof c.pixel_format;
+            lastErr = null;
+            break;
+          } catch (err) {
+            lastErr = err;
+            await new Promise((r) => setTimeout(r, 100));
+          }
+        }
+        if (lastErr) console.error("[manage-cameras] set pixel format:", lastErr);
+        else await persist(c, { pixel_format: format });
+      });
+    }
+
     async function refresh(): Promise<CameraInfo[]> {
       // Clear any prior contention error; a still-contended camera re-raises it.
       s.clearError();
@@ -195,27 +296,72 @@ export default function manageCamerasSession(): ServerSession<typeof manageCamer
         },
         async setPixelFormat({ serial, format }) {
           const e = entries.get(serial);
-          if (!e || format === e.lease.camera.pixel_format) return;
-          const c = e.lease.camera;
-          // `reconfigure` stops the shared loop before the mutate and restarts it
-          // after (fresh buffer for the new payload size); retry the set to
-          // absorb the cross-thread acquisition stop.
-          await e.lease.reconfigure(async () => {
-            let lastErr: unknown = null;
-            for (let i = 0; i < 30; i++) {
-              try {
-                c.pixel_format = format as typeof c.pixel_format;
-                lastErr = null;
-                break;
-              } catch (err) {
-                lastErr = err;
-                await new Promise((r) => setTimeout(r, 100));
+          if (!e) return;
+          await applyPixelFormat(e, format);
+          publishViews();
+        },
+        // --- Fovea Pair (P5) — one panel, both cameras, atomically ----------
+        async setPair({ key, value }) {
+          const pair = pairEntries();
+          if (!pair) return;
+          // Never converge-by-overwrite: a divergent pair edits only through
+          // the explicit unify choice. Keyed off the PUBLISHED divergence (the
+          // one the UI shows) — a raw recompute here races the two read-backs
+          // of the PREVIOUS setPair and would refuse legit mid-drag writes.
+          if (publishedDivergent.length) return;
+          pair.left.writer.submit(key, value);
+          pair.right.writer.submit(key, value);
+        },
+        async setPairPixelFormat({ format }) {
+          const pair = pairEntries();
+          if (!pair) return;
+          // Sequential on purpose: each reconfigure stops/restarts that
+          // camera's shared acquisition loop — never overlap the two.
+          await applyPixelFormat(pair.left, format);
+          await applyPixelFormat(pair.right, format);
+          publishViews();
+        },
+        async unifyPair({ source }) {
+          const pair = pairEntries();
+          if (!pair) return;
+          const from =
+            source === pair.left.serial
+              ? pair.left
+              : source === pair.right.serial
+                ? pair.right
+                : null;
+          if (!from) return;
+          const to = from === pair.left ? pair.right : pair.left;
+          const src = from.lease.camera as unknown as Record<string, any>;
+          const dst = to.lease.camera as unknown as Record<string, any>;
+          // A queued drag value (or its debounced persist) on the target must
+          // not land on top of the unify.
+          to.writer.clear();
+          const patch: Record<string, unknown> = {};
+          for (const ctrl of PAIR_LINKED_CONTROLS) {
+            // Per-control guard: one refused write skips that control, the
+            // rest of the unify still lands.
+            try {
+              if (!src[ctrl.availableKey] || !dst[ctrl.availableKey]) continue;
+              if (ctrl.autoKey && (!ctrl.autoAvailableKey || dst[ctrl.autoAvailableKey])) {
+                dst[ctrl.autoKey] = src[ctrl.autoKey];
+                patch[ctrl.autoKey] = src[ctrl.autoKey];
               }
+              if (!ctrl.autoKey || src[ctrl.autoKey] === "Off") {
+                dst[ctrl.key] = src[ctrl.key];
+                // Persist the read-back truth — the camera may clamp/quantize.
+                patch[ctrl.key] = dst[ctrl.key];
+              }
+            } catch (err) {
+              report(
+                "manage-cameras",
+                `unifyPair ${ctrl.key}: ${err instanceof Error ? err.message : err}`,
+              );
             }
-            if (lastErr)
-              console.error("[manage-cameras] set pixel format:", lastErr);
-            else await persist(c, { pixel_format: format });
-          });
+          }
+          await persist(to.lease.camera, patch);
+          const format = safe(() => from.lease.camera.pixel_format, "");
+          if (format) await applyPixelFormat(to, format);
           publishViews();
         },
         async reset({ serial }) {

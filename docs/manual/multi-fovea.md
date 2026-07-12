@@ -116,7 +116,19 @@ If the connected MCU is **not** on v2 firmware, a hint appears under the chips:
 are disabled on this firmware)."** On such firmware the interleaved streams stay
 blank.
 
-The **Pulse** slider sets the capture exposure pulse width.
+The **Pulse** row sets the trigger pulse width, with an **Auto / Manual**
+selector and a live ms readout. Under **Auto** the value is **derived** from
+the fovea pair's configured exposure (the pulse covers the slower eye's
+exposure — set exposure in [Manage Cameras](./manage-cameras.md#fovea-pair)
+and the pulse follows, even mid-session) and the slider is dimmed. Switching
+to **Manual** pins the current value and enables the slider; switching back to
+**Auto** resumes the derivation immediately.
+
+The same exposure settings also pace the round-robin itself: the scheduler
+never triggers a target pair faster than its exposure + readout (plus the
+settle hold and a small fixed margin) allows, so the per-camera **Frame Rate**
+setting plays no part here — in trigger mode the camera exposes when told to.
+The achievable rate is shown in Manage Cameras' **Trigger Budget** row.
 
 ## Capturing and recording
 

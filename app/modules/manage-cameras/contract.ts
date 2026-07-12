@@ -6,7 +6,8 @@
 //
 // Typed boundary for the manage-cameras session — a live property snapshot per
 // camera (`telemetry.views`, keyed by serial); edits + the pixel-format
-// reconfigure flow are commands.
+// reconfigure flow are commands. The L/R fovea-pair link (P5) rides telemetry
+// as `pair` with its own paired write commands.
 
 import { cmd, defineContract } from "@lib/orchestrator/protocol";
 import type { AutoMode, CameraControlsView, Range, Role } from "@lib/camera-config";
@@ -55,12 +56,41 @@ type _BA = ControlHalf extends CameraControlsView ? true : never;
 const _controlsConform: [_AB, _BA] = [true, true];
 void _controlsConform;
 
+/** Trigger budget derived from the pair's exposure config (`pairTriggerBudget`,
+ *  P6) — the pair panel's readout row. Settle hold is NOT included here (it is
+ *  per-triple and added by the tracking apps that drive the trigger). */
+export type PairBudgetView = {
+  pulseNs: number;
+  maxRateHz: number;
+  minIntervalMs: number;
+  exposureUsL: number;
+  exposureUsR: number;
+};
+
+/** Fovea Pair link (P5): present while exactly one camera holds role L and one
+ *  holds role R. Pair values persist into BOTH cameras' existing config docs
+ *  (no new store doc — every other config reader stays untouched). */
+export type FoveaPairView = {
+  left: string;
+  right: string;
+  /** Divergent pair-linked keys — non-empty gates the pair panel behind the
+   *  explicit unify prompt (`unifyPair`); never silently overwrite either side. */
+  divergent: string[];
+  budget: PairBudgetView;
+};
+
 export const manageCameras = defineContract({
   state: {},
   telemetry: {
     list: [] as CameraInfo[],
     /** Per-camera live snapshot, keyed by serial. */
     views: {} as Record<string, CameraView>,
+    /** The L/R fovea-pair link, or null while unlinked (P5). */
+    pair: null as FoveaPairView | null,
+    /** Why the link is BLOCKED despite fovea roles being claimed (duplicate
+     *  role claims), or null — an actionable hint; the pair panel silently
+     *  vanishing reads as a bug (UI/UX review #10). */
+    pair_blocked: null as string | null,
   },
   // Preview channels are dynamic, one per serial (e.g. `frame(serial)`).
   frames: [] as const,
@@ -71,6 +101,14 @@ export const manageCameras = defineContract({
     set: cmd<{ serial: string; key: string; value: unknown }>(),
     /** Change pixel format (pauses/reconfigures acquisition) and persist it. */
     setPixelFormat: cmd<{ serial: string; format: string }>(),
+    /** Set a pair-linked property on BOTH fovea cameras (refused while the
+     *  pair is divergent — unify first). */
+    setPair: cmd<{ key: string; value: unknown }>(),
+    /** Change BOTH fovea cameras' pixel format (two sequential reconfigures). */
+    setPairPixelFormat: cmd<{ format: string }>(),
+    /** Copy the pair-linked config of `source` (one of the pair's serials)
+     *  onto the other camera — the explicit divergence resolution. */
+    unifyPair: cmd<{ source: string }>(),
     /** Reset a camera to auto defaults and clear its stored config. */
     reset: cmd<{ serial: string }>(),
   },

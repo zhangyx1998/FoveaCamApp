@@ -31,6 +31,19 @@ The **Role** dropdown (in the group's header row) tells the rest of the app what
 
 Roles are how the stereo and tracking apps know which camera is which, so assign them before using those apps.
 
+### Fovea Pair
+
+The moment one camera holds **Fovea Left** and another holds **Fovea Right**, the two are **linked** and a shared **Fovea Pair** panel appears as the first column. The left and right fovea cameras are hardware-triggered together — one trigger pulse exposes both — so their imaging settings must match; the pair panel makes that structural instead of something you maintain by hand:
+
+- **One set of controls for both cameras.** Exposure, Gain, Black Level (with their auto modes), and Pixel Format move to the pair panel; every edit there is applied to **both** cameras together and saved into **both** cameras' configurations (there is no separate "pair" config — each camera's saved config stays complete on its own, so calibration and the other apps read exactly what they always did).
+- **The L/R columns collapse.** While linked, each fovea camera's own column shows its live preview, its **Role** dropdown, and read-only value rows. **Changing either camera's Role is how you unlink** — set it to [ NONE ] (or another role) and the full per-camera controls come back.
+- **Frame Rate is not part of the pair panel.** A per-camera frame-rate setting is meaningless for a hardware-triggered camera — the trigger decides when frames happen. The linked columns still show the current readout.
+- **One camera per role.** If two cameras claim the same fovea role, the link cannot form — a warning above the columns says which role is duplicated; fix the Roles and the pair panel appears.
+
+**If the two configs differ when the link forms**, the pair panel does not guess: it lists what differs and asks — **Use Left's** or **Use Right's**. Nothing is overwritten until you choose; picking a side copies that camera's exposure/gain/black-level/pixel-format settings onto the other, after which the shared controls appear.
+
+**Trigger Budget.** At the bottom of the pair panel, a readout row shows what the current exposure settings imply for the trigger: **"Max trigger rate ≈ N Hz (exposure X ms + margins)"** — or "readout floor X ms" when the camera's readout, not the exposure, is what binds the rate. The trigger pulse must cover the slower eye's exposure, and the interval between triggers adds the camera-reported readout floor plus a small fixed overhead margin (hover the row for the exact terms). The tracking apps derive their trigger pulse and pacing from these same settings — exposure is authoritative; lengthen the pair's exposure and the achievable trigger rate drops accordingly. The per-triple settle hold ([Settings](./settings.md#per-triple-settings)) adds on top when a tracking app drives the trigger.
+
 ### Pixel Format
 
 When a camera exposes format options, the **Pixel Format** dropdown lets you choose its sensor readout format. As the hint under it explains: changing format briefly pauses the preview to reconfigure the camera, and 12-bit packed formats (for example `BayerRG12p`) read full sensor depth to cut debayer quantization noise. The dropdown is momentarily disabled while the switch is applied.
@@ -57,7 +70,7 @@ Where supported, the **Black Level** group offers the same **Manual** / **Auto (
 
 ### Reset Config
 
-The red-outlined **Reset Config** button at the bottom of the column returns the camera to automatic defaults — frame rate back to auto, each auto control set to run once, the role cleared — and erases that camera's saved configuration.
+The red-outlined **Reset Config** button at the bottom of the column returns the camera to automatic defaults — frame rate back to auto, each auto control set to run once, the role cleared — and erases that camera's saved configuration. It lives only on the full per-camera panel, so to reset a linked fovea camera, unlink first (change its Role), reset, then re-assign the role.
 
 ## Typical tasks
 
@@ -72,6 +85,15 @@ The red-outlined **Reset Config** button at the bottom of the column returns the
 1. In each camera's column, open the **Role** dropdown.
 2. Choose **Fovea Left**, **Wide Angle**, or **Fovea Right** to match the physical camera.
 3. Give the remaining cameras their roles. The choice is saved immediately and reused by the other apps.
+
+Assigning both fovea roles links the two cameras into the [Fovea Pair](#fovea-pair) — if their settings differ at that moment, the pair panel asks which camera's settings to keep before anything is shared.
+
+### To tune the fovea pair
+
+1. Assign **Fovea Left** and **Fovea Right** so the **Fovea Pair** panel appears.
+2. If prompted that the configs differ, pick **Use Left's** or **Use Right's**.
+3. Edit **Exposure**, **Gain**, **Black Level**, or **Pixel Format** in the pair panel — both cameras follow together, and both linked columns' readouts confirm it.
+4. Check the **Trigger Budget** row: it shows the maximum trigger rate the chosen exposure allows.
 
 ### To tune exposure, gain, or frame rate
 

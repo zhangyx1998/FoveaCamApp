@@ -286,9 +286,26 @@ async function captureOnce(): Promise<void> {
           Requires v2.0 firmware — reflash the MCU to run the interleaved
           demo (streams are disabled on this firmware).
         </p>
-        <label>
+        <!-- One identity per state (UI/UX review #9): Auto = derived from the
+             fovea pair's exposure (slider disabled, tracks it live); Manual =
+             pinned. The mode select is the only way in/out of manual. -->
+        <label
+          class="pulse"
+          title="CMD_FRAME trigger pulse width. Auto derives it from the fovea pair's configured exposure (Manage Cameras) and follows exposure edits live; Manual pins the value."
+        >
           Pulse
-          <RangeSlider v-model="state.pulse_ns" :min="100000" :max="10000000" :step="100000" />
+          <select v-model="state.pulse_auto" class="pulse-mode">
+            <option :value="true">Auto</option>
+            <option :value="false">Manual</option>
+          </select>
+          <span class="pulse-ms">{{ (state.pulse_ns / 1e6).toFixed(1) }} ms</span>
+          <RangeSlider
+            v-model="state.pulse_ns"
+            :min="100000"
+            :max="10000000"
+            :step="100000"
+            :disabled="state.pulse_auto"
+          />
         </label>
         <button @click="captureOnce">Capture</button>
         <button @click="session.call('resetTargets', undefined)">Reset</button>
@@ -447,6 +464,32 @@ async function captureOnce(): Promise<void> {
   background: var(--bg-app);
   border: 1px solid var(--border);
   border-radius: 6px;
+}
+
+.pulse {
+  display: flex;
+  align-items: center;
+  gap: 0.75ch;
+
+  .pulse-mode {
+    font: inherit;
+    color: inherit;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-muted);
+    border-radius: 4px;
+    padding: 0.1em 0.4em;
+    cursor: pointer;
+  }
+  .pulse-ms {
+    min-width: 7ch;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-muted);
+  }
+  .range-slider {
+    flex: 1;
+    margin: 0; // inline row — the slider's own stacked margins don't apply
+  }
 }
 
 .status {

@@ -8,6 +8,15 @@ You may find the full license in project root directory.
   manage-cameras session telemetry and routes every edit through a command; the
   orchestrator owns the camera and persists changes. No `core` access here.
 
+  Three variants (P5):
+  - "single"  — full per-camera panel (the original view);
+  - "linked"  — an L/R camera while the Fovea Pair link holds: preview + Role
+                (editing Role is how you unlink) + read-only value rows;
+  - "pair"    — the Fovea Pair panel: one set of controls writing to BOTH
+                cameras (`setPair`/`setPairPixelFormat`), bound to the LEFT
+                camera's snapshot as the representative readback, gated behind
+                the unify prompt while the two configs diverge.
+
   Slider writes go through a local echo + rAF throttle (the disparity-scope
   `pidRef` pattern): at most one `set` per animation frame, latest value wins,
   and the knob follows the last written value instead of the ~1 Hz snapshot so
@@ -18,13 +27,14 @@ import {
   computed,
   onScopeDispose,
   ref,
+  shallowRef,
   watch,
   type Directive,
   type WritableComputedRef,
 } from "vue";
 import StreamView from "@src/components/StreamView.vue";
 import RangeSlider from "@src/inputs/range-slider.vue";
-import { CAMERA_CONTROLS } from "@lib/camera-config";
+import { CAMERA_CONTROLS, TRIGGER_FRAME_MARGIN_US } from "@lib/camera-config";
 import { bindField, usePipeFrame, type Session } from "@lib/orchestrator/client";
 import { nodeId } from "@lib/orchestrator/graph-contract";
 import type { CameraView, ManageCamerasContract, Range } from "./contract";
@@ -35,23 +45,49 @@ const controlFmt: Record<string, (v: number) => string> = Object.fromEntries(
   CAMERA_CONTROLS.map((c) => [c.key, c.format]),
 );
 
-const { serial, session } = defineProps<{
-  serial: string;
+const {
+  serial = "",
+  session,
+  variant = "single",
+} = defineProps<{
+  /** Camera serial ("single"/"linked" variants; the "pair" panel derives its
+   *  representative serial from telemetry). */
+  serial?: string;
   session: Session<ManageCamerasContract>;
+  variant?: "single" | "linked" | "pair";
 }>();
 
+const pair = computed(() => (variant === "pair" ? session.telemetry.pair : null));
+// The pair panel binds the LEFT camera's snapshot as its readback; both
+// cameras receive every write and both linked columns show their own truth.
+const camSerial = computed(() => pair.value?.left ?? serial);
+
 const view = computed<CameraView | undefined>(
-  () => session.telemetry.views[serial],
+  () => session.telemetry.views[camSerial.value],
 );
 
-// Raw preview off the native `camera:<serial>` pipe.
-const framePayload = usePipeFrame(nodeId.convert(serial));
+// Raw preview off the native `camera:<serial>` pipe. The pair panel has no
+// preview (both live in the linked columns) — safe to decide at setup: a pair
+// instance is a dedicated element (v-if), its variant never changes.
+const framePayload =
+  variant === "pair" ? shallowRef(null) : usePipeFrame(nodeId.convert(serial));
 
 const field = <K extends keyof CameraView>(key: K) =>
-  bindField(session, view, key, "set", (key, value) => ({ serial, key, value }));
+  variant === "pair"
+    ? bindField(session, view, key, "setPair", (key, value) => ({
+        key: key as string,
+        value,
+      }))
+    : bindField(session, view, key, "set", (key, value) => ({
+        serial: camSerial.value,
+        key,
+        value,
+      }));
 
 const send = (key: string, value: number) =>
-  void session.call("set", { serial, key, value });
+  variant === "pair"
+    ? void session.call("setPair", { key, value })
+    : void session.call("set", { serial: camSerial.value, key, value });
 
 // Echo releases on CONFIRMATION — the readout within EPS (0.5% of the slider
 // span, below a visible knob jump) of the write; the hard cap only covers a
@@ -257,6 +293,13 @@ const controls: Control[] = [
   dbControl("black_level", "Black Level", "black_level_available"),
 ];
 
+// The pair panel edits everything EXCEPT frame rate: per-camera frame_rate is
+// meaningless for the hardware-triggered foveas — the trigger cadence derives
+// from exposure (see the Trigger Budget row).
+const editControls = computed<Control[]>(() =>
+  variant === "pair" ? controls.filter((c) => c.key !== "frame_rate") : controls,
+);
+
 const role = field("role");
 
 const formatBusy = ref(false);
@@ -264,15 +307,66 @@ async function changePixelFormat(format: string) {
   if (formatBusy.value || format === view.value?.pixel_format) return;
   formatBusy.value = true;
   try {
-    await session.call("setPixelFormat", { serial, format });
+    if (variant === "pair") await session.call("setPairPixelFormat", { format });
+    else await session.call("setPixelFormat", { serial: camSerial.value, format });
   } finally {
     formatBusy.value = false;
   }
 }
 
 function reset() {
-  void session.call("reset", { serial });
+  void session.call("reset", { serial: camSerial.value });
 }
+
+// --- Fovea Pair extras (P5/P6) ----------------------------------------------
+
+const divergent = computed(() => pair.value?.divergent ?? []);
+
+const KEY_LABELS: Record<string, string> = { pixel_format: "Pixel Format" };
+for (const c of CAMERA_CONTROLS) {
+  KEY_LABELS[c.key] = c.label;
+  if (c.autoKey) KEY_LABELS[c.autoKey] = `${c.label} mode`;
+}
+const divergentLabels = computed(() =>
+  divergent.value.map((k) => KEY_LABELS[k] ?? k).join(", "),
+);
+
+// Unify runs seconds when pixel formats differ (two sequential reconfigure
+// flows) — the buttons must show it and refuse re-entry (UI/UX review #2).
+const unifyBusy = ref(false);
+async function unify(source: string) {
+  if (unifyBusy.value) return;
+  unifyBusy.value = true;
+  try {
+    await session.call("unifyPair", { source });
+  } finally {
+    unifyBusy.value = false;
+  }
+}
+
+const budgetText = computed(() => {
+  const b = pair.value?.budget;
+  if (!b) return "";
+  const expUs = Math.max(b.exposureUsL, b.exposureUsR);
+  // Name the BINDING term inline (review #8): the frame period is
+  // max(exposure, camera readout floor) — attribute the rate honestly.
+  const frameUs = b.minIntervalMs * 1000 - TRIGGER_FRAME_MARGIN_US;
+  const term =
+    frameUs > expUs + 1
+      ? `readout floor ${(frameUs / 1000).toFixed(2)} ms`
+      : `exposure ${(expUs / 1000).toFixed(2)} ms`;
+  return `Max trigger rate ≈ ${b.maxRateHz.toFixed(1)} Hz (${term} + margins)`;
+});
+const budgetTitle = computed(() => {
+  const b = pair.value?.budget;
+  if (!b) return "";
+  return (
+    `Trigger pulse covers the slower eye's exposure (${(b.pulseNs / 1e6).toFixed(2)} ms). ` +
+    `The minimum interval between triggers (${b.minIntervalMs.toFixed(2)} ms) adds the camera-reported ` +
+    `readout floor and a fixed ${(TRIGGER_FRAME_MARGIN_US / 1000).toFixed(1)} ms overhead margin. ` +
+    `The per-triple settle hold (Settings) adds on top when a tracking app drives the trigger.`
+  );
+});
 
 // Click-to-type readout: the input replaces the value span in the same box
 // (layout-stable). Enter/blur commit, Escape cancels.
@@ -312,19 +406,31 @@ function cancelEdit(e?: Event) {
 <template>
   <div class="view">
     <StreamView
+      v-if="variant !== 'pair'"
       class="stream"
       :title="view?.description"
       :payload="framePayload"
       width="100%"
       theme="white"
     />
-    <div v-if="view" class="options">
+    <header v-if="variant === 'pair'" class="pair-heading">
+      <h3>Fovea Pair</h3>
+      <p
+        class="hint"
+        title="Both fovea cameras share one config: every edit here applies to the left and right camera together, and is saved into both cameras' configs. Change either camera's Role to unlink."
+      >
+        L {{ pair?.left }} · R {{ pair?.right }} — edits apply to both cameras
+      </p>
+    </header>
+
+    <!-- Linked L/R column: read-only values + Role (editing Role unlinks). -->
+    <div v-if="variant === 'linked' && view" class="options">
       <h4>
         <span>Role</span>
         <select
           v-model="role"
           class="inline"
-          title="Tell the stereo and tracking apps which position this camera occupies"
+          title="Tell the stereo and tracking apps which position this camera occupies; changing it unlinks the Fovea Pair"
         >
           <option :value="undefined">[ NONE ]</option>
           <option value="L">Fovea Left</option>
@@ -332,6 +438,63 @@ function cancelEdit(e?: Event) {
           <option value="R">Fovea Right</option>
         </select>
       </h4>
+      <dl class="readouts">
+        <template v-if="view.pixel_format">
+          <dt>Pixel Format</dt>
+          <dd>{{ view.pixel_format }}</dd>
+        </template>
+        <template v-for="c in controls" :key="c.key">
+          <template v-if="c.available()">
+            <dt>{{ c.label }}</dt>
+            <dd>{{ c.readout() }}{{ c.manual() ? "" : " (auto)" }}</dd>
+          </template>
+        </template>
+      </dl>
+      <p class="hint">
+        Linked as a Fovea Pair — exposure, gain, black level, and pixel format
+        are edited in the Fovea Pair panel. Change Role to unlink.
+      </p>
+    </div>
+
+    <div v-else-if="view" class="options">
+      <h4 v-if="variant !== 'pair'">
+        <span>Role</span>
+        <select
+          v-model="role"
+          class="inline"
+          title="Tell the stereo and tracking apps which position this camera occupies. Assigning both Fovea Left and Fovea Right links those two cameras into the Fovea Pair panel."
+        >
+          <option :value="undefined">[ NONE ]</option>
+          <option value="L">Fovea Left</option>
+          <option value="C">Wide Angle</option>
+          <option value="R">Fovea Right</option>
+        </select>
+      </h4>
+      <!-- Divergent pair: explicit unify choice before any linked edit. -->
+      <template v-if="variant === 'pair' && divergent.length">
+        <p class="hint diverge">Configs differ: {{ divergentLabels }}.</p>
+        <p class="hint">
+          Pick which camera's settings the pair should use — nothing is
+          overwritten until you choose.
+        </p>
+        <div class="unify">
+          <button
+            :disabled="unifyBusy"
+            title="Copy the left camera's settings onto the right camera"
+            @click="unify(pair!.left)"
+          >
+            {{ unifyBusy ? "Unifying…" : "Use Left's" }}
+          </button>
+          <button
+            :disabled="unifyBusy"
+            title="Copy the right camera's settings onto the left camera"
+            @click="unify(pair!.right)"
+          >
+            {{ unifyBusy ? "Unifying…" : "Use Right's" }}
+          </button>
+        </div>
+      </template>
+      <template v-else>
       <template v-if="view.pixel_format_options?.length">
         <h4>
           <span>Pixel Format</span>
@@ -359,7 +522,7 @@ function cancelEdit(e?: Event) {
           debayer quantization noise.
         </p>
       </template>
-      <template v-for="c in controls" :key="c.key">
+      <template v-for="c in editControls" :key="c.key">
         <template v-if="c.available()">
           <h4>
             <span>{{ c.label }}</span>
@@ -415,13 +578,19 @@ function cancelEdit(e?: Event) {
           </RangeSlider>
         </template>
       </template>
+      <template v-if="variant === 'pair' && pair?.budget">
+        <h4><span>Trigger Budget</span></h4>
+        <p class="hint budget" :title="budgetTitle">{{ budgetText }}</p>
+      </template>
       <button
+        v-if="variant === 'single'"
         class="reset-config"
         title="Reset this camera to auto (run once), clear its role, and erase its saved configuration"
         @click="reset"
       >
         Reset Config
       </button>
+      </template>
     </div>
   </div>
 </template>
@@ -525,6 +694,72 @@ input.value {
 .hint {
   margin: 0.5em 0 0;
   font-size: 0.8em;
+  opacity: 0.6;
+}
+
+.pair-heading {
+  h3 {
+    margin: 0;
+    font-size: 1em;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .hint {
+    margin-top: 0.25em;
+  }
+}
+
+// Linked-column read-only rows: same visual weight as a slider readout.
+.readouts {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.35em 1ch;
+  margin: 0;
+
+  dt {
+    opacity: 0.7;
+  }
+  dd {
+    margin: 0;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+.hint.diverge {
+  color: var(--danger-text);
+  opacity: 0.9;
+}
+
+.unify {
+  display: flex;
+  gap: 1ch;
+  margin-top: 0.5em;
+
+  button {
+    flex: 1;
+    cursor: pointer;
+    font: inherit;
+    font-size: 0.8em;
+    padding: 0.3em 1ch;
+    border-radius: 4px;
+    color: inherit;
+    border: 1px solid var(--tint-4);
+    background: var(--tint-1);
+
+    &:hover {
+      background: var(--tint-3);
+    }
+  }
+}
+
+.hint.budget {
+  cursor: help;
+  font-variant-numeric: tabular-nums;
+}
+
+.unify button:disabled {
+  cursor: wait;
   opacity: 0.6;
 }
 </style>

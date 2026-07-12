@@ -47,6 +47,9 @@ import {
 } from "@orchestrator/anchor-node";
 import { controllerNode } from "@orchestrator/controller-node";
 import { matToArray } from "@lib/mat";
+import { pairTriggerBudget, type PairTriggerBudget } from "@lib/camera-config";
+import { cameraConfigPath } from "@orchestrator/camera";
+import { subscribe } from "@orchestrator/store-hub";
 import { multiFovea, demoPresetTarget, defaultMultiFoveaTarget, clampPresetAngle, MAX_MULTI_FOVEA_TARGETS } from "./contract";
 import { MultiFoveaRuntime, type MultiTrackBatch } from "./runtime";
 import { createMultiFoveaRecording, type RecordingCamera } from "./recording";
@@ -120,6 +123,9 @@ export default function multiFoveaSession(
     let captureCenter: { shmName: string; maxBytes: number; channels: number } | null = null;
     let tk: MultiKcfTracker | null = null;
     let serialC: string | null = null;
+    // Exposure-derived trigger budget (P6) — the scheduler's per-target pacing
+    // floor; null until a triple is leased. See `deriveBudget`.
+    let budget: PairTriggerBudget | null = null;
     const trackMs = new RollingStats(0.9, 2, "ms");
     let lastTrackEmit = 0;
     let schedulerFrames = 0;
@@ -180,6 +186,9 @@ export default function multiFoveaSession(
             ...target,
             pulse: s.state.pulse_ns,
             cameras: ["L", "R"],
+            // Exposure-derived pacing (P6): never trigger a pair faster than
+            // it can expose + read out. Undefined pre-lease → scheduler default.
+            minIntervalMs: budget?.minIntervalMs,
           })),
         );
         publishScheduler();
@@ -356,6 +365,43 @@ export default function multiFoveaSession(
       runtime.setTargets(s.state.targets.slice(0, MAX_MULTI_FOVEA_TARGETS));
     }
 
+    /** Derive the trigger budget from the leased pair's CONFIGURED exposure
+     *  (P6 ruled default: exposure config is authoritative; the pulse and the
+     *  scheduler pacing follow it). The AUTHORITY FLIP POINT lives inside
+     *  `pairTriggerBudget` (@lib/camera-config) — this is its only multi-fovea
+     *  call site. Re-run on activate, on a settle edit, and whenever either
+     *  fovea's config doc changes (manage-cameras edits are observable through
+     *  the store; the shared registry lease means the live handle already
+     *  carries the new value). */
+    function deriveBudget(): void {
+      if (!triple) return;
+      const safe = <T,>(fn: () => T, fallback: T): T => {
+        try {
+          return fn();
+        } catch {
+          return fallback;
+        }
+      };
+      const camL = triple.leases.L.camera;
+      const camR = triple.leases.R.camera;
+      const exposureUsL = safe(() => camL.exposure, 0);
+      const exposureUsR = safe(() => camR.exposure, 0);
+      budget = pairTriggerBudget({
+        exposureUsL,
+        exposureUsR,
+        settleUs: s.state.settle_time_us,
+        maxRateHzL: safe(() => camL.frame_rate_range.max, 0),
+        maxRateHzR: safe(() => camR.frame_rate_range.max, 0),
+      });
+      s.telemetry({
+        budget: { ...budget, exposureUsL, exposureUsR, settleUs: s.state.settle_time_us },
+      });
+      // Server-side setState does NOT fire the state watchers, so this never
+      // trips the pulse_ns watch's manual-override latch.
+      if (s.state.pulse_auto) s.setState("pulse_ns", budget.pulseNs);
+      applyTargets(); // re-push pulse + minIntervalMs into the scheduler
+    }
+
     function updateTarget(
       index: number,
       update: (
@@ -411,7 +457,15 @@ export default function multiFoveaSession(
       scope.defer(() => {
         triple = null;
         serialC = null;
+        budget = null;
       });
+      // Re-derive the trigger budget on either fovea's config-doc change
+      // (manage-cameras edits are observable via the store broadcast; the
+      // shared registry lease means the live camera already holds the value).
+      for (const side of ["L", "R"] as const)
+        scope.defer(
+          subscribe(cameraConfigPath(t.leases[side].camera), () => deriveBudget()),
+        );
       scope.defer(() => runtime.dispose());
       scope.defer(() => scheduler.stop());
       // Best-effort: a FORCED drain mid-recording (busy() normally refuses the
@@ -559,6 +613,9 @@ export default function multiFoveaSession(
         height: t.leases.C.camera.getFeatureInt("Height"),
       });
       publishSerials(t.leases, scope, s);
+      // Exposure-derived pulse + pacing (P6) — before the scheduler starts so
+      // the first CMD_FRAMEs already carry the derived values.
+      deriveBudget();
       // Start the round-robin scheduler (spec §topology): must run or `pump()`
       // early-returns; inert on the current rig (empty targets while !v2Capable).
       scheduler.start();
@@ -621,7 +678,7 @@ export default function multiFoveaSession(
     return {
       activate: (scope) => activateSession(scope),
       idle() {
-        s.resetTelemetry(["ready", "v2Capable"]);
+        s.resetTelemetry(["ready", "v2Capable", "budget"]);
       },
       commands: {
         async setTargetEnabled({ index, enabled }) {
@@ -680,7 +737,17 @@ export default function multiFoveaSession(
       },
       watch: {
         targets: () => applyTargets(),
-        pulse_ns: () => applyTargets(),
+        pulse_ns: () => {
+          // A client write (the Pulse slider) takes MANUAL override: stop
+          // deriving until pulse_auto is turned back on. The session's own
+          // derived setState bypasses watchers, so it never lands here.
+          if (s.state.pulse_auto) s.setState("pulse_auto", false);
+          applyTargets();
+        },
+        pulse_auto: (on) => {
+          if (on) deriveBudget();
+        },
+        settle_time_us: () => deriveBudget(),
       },
       busy() {
         // Drain refusal: never force-drain mid-recording or mid-capture.

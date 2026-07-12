@@ -137,6 +137,114 @@ export type CameraControlsView = {
 
 const ZERO_RANGE: Range = { min: 0, max: 0 };
 
+// ---- Fovea-pair linked config (P5) -----------------------------------------
+// When two cameras hold roles L and R, manage-cameras edits them as ONE
+// "Fovea Pair" group. Pair values persist into BOTH cameras' existing config
+// docs (no new store doc — calibration and every other config reader keep
+// working unchanged).
+
+/** Controls the pair edits as one panel: everything EXCEPT frame rate —
+ *  per-camera `frame_rate` is meaningless for the hardware-triggered foveas
+ *  (the trigger cadence derives from exposure; see `pairTriggerBudget`). */
+export const PAIR_LINKED_CONTROLS: readonly CameraControl[] =
+  CAMERA_CONTROLS.filter((c) => c.key !== "frame_rate");
+
+/** Value-compare tolerance as a fraction of the control's range span (cameras
+ *  quantize writes, so exact equality would flag matched pairs as divergent). */
+export const PAIR_EPS_SPAN = 0.005;
+
+/** The pair-comparable half of a camera snapshot (structurally satisfied by
+ *  the manage-cameras wire `CameraView`). */
+export type PairSideView = CameraControlsView & { pixel_format: string };
+
+/**
+ * Divergent pair-linked keys between the L and R snapshots — non-empty gates
+ * the pair panel behind the explicit unify prompt (never silently overwrite
+ * either side). Rules:
+ * - `pixel_format` and each auto mode compare exactly;
+ * - a control's VALUE counts only when both sides hold it manually (`Off`) —
+ *   under an auto mode the camera meters it live, which is not a config
+ *   divergence — and only past `PAIR_EPS_SPAN` of the range span;
+ * - controls unavailable on either side are skipped (nothing to link).
+ */
+export function pairDivergence(left: PairSideView, right: PairSideView): string[] {
+  const l = left as Record<string, any>;
+  const r = right as Record<string, any>;
+  const diffs: string[] = [];
+  if (left.pixel_format !== right.pixel_format) diffs.push("pixel_format");
+  for (const ctrl of PAIR_LINKED_CONTROLS) {
+    if (!l[ctrl.availableKey] || !r[ctrl.availableKey]) continue;
+    if (ctrl.autoKey && l[ctrl.autoKey] !== r[ctrl.autoKey]) {
+      diffs.push(ctrl.autoKey);
+      continue;
+    }
+    if (ctrl.autoKey && l[ctrl.autoKey] !== "Off") continue;
+    const spanOf = (range?: Range) => (range ? range.max - range.min : 0);
+    const span = Math.max(spanOf(l[ctrl.rangeKey]), spanOf(r[ctrl.rangeKey]));
+    if (Math.abs(l[ctrl.key] - r[ctrl.key]) > span * PAIR_EPS_SPAN)
+      diffs.push(ctrl.key);
+  }
+  return diffs;
+}
+
+// ---- Fovea-pair trigger budget (P6) ----------------------------------------
+//
+// AUTHORITY (ruled default): the cameras' EXPOSURE CONFIG is authoritative and
+// the trigger pulse DERIVES from it — `pulseNs` covers the slower eye's
+// exposure. FLIP POINT: to make the trigger width authoritative instead,
+// invert exactly this function (take `pulseNs` as the input and return the
+// exposure to program into both cameras); every consumer (multi-fovea's
+// budget derivation, manage-cameras' pair readout) reaches the budget only
+// through here, so the flip stays a one-function change.
+
+/** Fixed per-frame overhead margin (µs). A stated MARGIN, not a measured
+ *  number: it stands in for trigger dispatch latency plus whatever readout/
+ *  transfer tail the camera does not report (the only queryable readout bound
+ *  is `frame_rate_range.max`, folded in separately below). */
+export const TRIGGER_FRAME_MARGIN_US = 500;
+
+export type PairTriggerBudgetInput = {
+  exposureUsL: number;
+  exposureUsR: number;
+  /** Trigger settle hold (µs), budgeted on EVERY frame — worst case, since the
+   *  round-robin switches streams (mirror moves) on nearly every frame. */
+  settleUs?: number;
+  /** Camera-reported max acquisition rate (Hz) at the current config
+   *  (`frame_rate_range.max`) — the only readout/transfer bound the camera
+   *  exposes. Absent/0 → the fixed margin alone stands in for readout. */
+  maxRateHzL?: number;
+  maxRateHzR?: number;
+};
+
+export type PairTriggerBudget = {
+  /** CMD_FRAME trigger pulse width (ns): covers max(exposureL, exposureR). */
+  pulseNs: number;
+  /** Floor between CMD_FRAMEs to one L+R pair (ms): settle + the slower
+   *  camera's frame floor (max of exposure and its reported readout period,
+   *  which overlap on-sensor — never their sum) + `TRIGGER_FRAME_MARGIN_US`. */
+  minIntervalMs: number;
+  /** 1000 / `minIntervalMs` — the achievable trigger rate. */
+  maxRateHz: number;
+};
+
+export function pairTriggerBudget(input: PairTriggerBudgetInput): PairTriggerBudget {
+  const pos = (v: number | undefined) =>
+    typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0;
+  const cameraFloorUs = (exposureUs: number, maxRateHz: number | undefined) =>
+    Math.max(exposureUs, pos(maxRateHz) > 0 ? 1e6 / pos(maxRateHz) : 0);
+  const exposureUs = Math.max(pos(input.exposureUsL), pos(input.exposureUsR));
+  const frameUs = Math.max(
+    cameraFloorUs(pos(input.exposureUsL), input.maxRateHzL),
+    cameraFloorUs(pos(input.exposureUsR), input.maxRateHzR),
+  );
+  const intervalUs = pos(input.settleUs) + frameUs + TRIGGER_FRAME_MARGIN_US;
+  return {
+    pulseNs: Math.round(exposureUs * 1000),
+    minIntervalMs: intervalUs / 1000,
+    maxRateHz: 1e6 / intervalUs,
+  };
+}
+
 /**
  * Read every control's snapshot fields off a live camera through the caller's
  * throw-guard (`safe`), preserving the exact per-field fallbacks the 1 Hz poll
