@@ -331,7 +331,8 @@ const tuneBlocked = computed<string | null>(() => {
   if (!telemetry.ready) return "session is not ready";
   if (!telemetry.calibrated) return "no calibration on this triple";
   if (telemetry.overridden) return "release the drag first";
-  if (state.tracker_enabled) return "tracker is on — disable it first";
+  // An enabled tracker no longer blocks — starting a tune disengages it
+  // (the slider-write takeover semantics; session autotuneRefusal matches).
   if (state.pidOverride.engaged) return "release the PID override first";
   return null;
 });
@@ -367,8 +368,8 @@ const TUNE_TITLE =
   "Relay auto-tune, per DOF: small (2–10% of range) square-wave experiments " +
   "about the held pose measure each DOF's ultimate gain/period, then apply " +
   "conservative Tyreus-Luyben gains. RIG experiment — needs a calibrated " +
-  "triple, a static matchable target and the tracker off; unverified on " +
-  "hardware until the rig pass.";
+  "triple and a static matchable target; starting a tune disengages the " +
+  "tracker. Unverified on hardware until the rig pass.";
 const POLISH_TITLE =
   "Relay tune, then CMA-ES joint polish: scripted target steps scored by " +
   "ITAE + overshoot + actuation effort, budget-capped (takes minutes). " +
@@ -391,15 +392,32 @@ const abortTune = () => session.call("autotuneAbort", undefined);
 // `tracker_type` pattern; the server never refuses the write). Engagement is
 // the session's: `telemetry.trigger` is non-null exactly while engaged, and
 // `trigger_blocked` names why it's still waiting.
-const CAPTURE_TITLE =
-  "Trigger sync exposes both foveas simultaneously off one hardware trigger " +
-  "pulse, paced by the fovea pair's exposure budget — every measurement is a " +
-  "true stereo pair at a uniform rate. Free-run lets each camera stream at " +
-  "its own configured rate. The paired rate is usually lower than free-run, " +
-  "and the per-camera Frame Rate setting no longer applies — exposure sets " +
-  "the pace.";
-// Intent ≠ effect while waiting: the select tints warn and the status line
-// says the frames are STILL free-running (plus why).
+// Segmented control (the Tracker Type idiom) over the boolean state key —
+// SingleSelect is string/number-generic, so a tiny computed proxy maps it.
+const CAPTURE_OPTIONS: readonly SingleSelectOption<"freerun" | "trigger">[] = [
+  {
+    value: "freerun",
+    label: "Free-run",
+    hint: "each camera streams at its configured rate",
+  },
+  {
+    value: "trigger",
+    label: "Trigger sync",
+    hint: "one pulse exposes both foveas — exposure sets the pace",
+    title:
+      "Every measurement becomes a true stereo pair at a uniform rate, paced " +
+      "by the fovea pair's exposure budget. The paired rate is usually lower " +
+      "than free-run, and the per-camera Frame Rate setting no longer " +
+      "applies — shorten the pair's exposure to raise it.",
+  },
+];
+const captureMode = computed<"freerun" | "trigger">({
+  get: () => (state.trigger_sync ? "trigger" : "freerun"),
+  set: (v) => (state.trigger_sync = v === "trigger"),
+});
+// Intent ≠ effect while waiting: the ACTIVE option tints warn; the status line
+// stays compact — the blocked DETAIL goes to the title-bar tray as a warning
+// (published by the session on each reason transition).
 const capturePending = computed(
   () => state.trigger_sync && telemetry.trigger === null,
 );
@@ -419,7 +437,7 @@ const captureStatus = computed<{ text: string; tone: string; title?: string }>(
           };
     }
     const reason = telemetry.trigger_blocked ?? "waiting to engage";
-    return { text: `free-run — ${reason}`, tone: "warn", title: reason };
+    return { text: "free-run — waiting", tone: "warn", title: reason };
   },
 );
 
@@ -623,18 +641,19 @@ function onCursor(c: (Point2d & Size & { buttons: number }) | null): void {
           </span>
         </label>
         <h4><span>Capture Mode</span></h4>
-        <!-- Intent select — ALWAYS enabled (the session gates engagement) —
-             plus an always-rendered Status row: engaged rate, blocked reason
-             (warn), or muted free-run. Text swaps only; the line never
-             appears/disappears (layout-stable). While intent is on but not
-             engaged the select itself tints warn (intent ≠ effect cue). -->
-        <label class="entry" :title="CAPTURE_TITLE">
-          <span>Mode</span>
-          <select v-model="state.trigger_sync" :class="{ pending: capturePending }">
-            <option :value="false">Free-run</option>
-            <option :value="true">Trigger sync</option>
-          </select>
-        </label>
+        <!-- Intent selector — ALWAYS enabled (the session gates engagement) —
+             the Tracker Type segmented idiom. While intent is on but not
+             engaged the ACTIVE option tints warn (intent ≠ effect cue) and
+             the blocked DETAIL rides the title-bar tray as a warning; the
+             always-rendered Status row stays compact (text swaps only,
+             layout-stable). -->
+        <SingleSelect
+          v-model="captureMode"
+          :options="CAPTURE_OPTIONS"
+          class="capture-select"
+          :class="{ pending: capturePending }"
+          aria-label="Capture mode"
+        />
         <div class="entry">
           <span>Status</span>
           <span
@@ -773,10 +792,10 @@ function onCursor(c: (Point2d & Size & { buttons: number }) | null): void {
           >abort</button>
         </h4>
         <div class="entry tune-actions">
-          <button class="reset" :disabled="!tuneRunnable" :title="tuneTitle" @click="startTune('relay')">
+          <button class="tune" :disabled="!tuneRunnable" :title="tuneTitle" @click="startTune('relay')">
             tune
           </button>
-          <button class="reset" :disabled="!tuneRunnable" :title="polishTitle" @click="startTune('full')">
+          <button class="tune" :disabled="!tuneRunnable" :title="polishTitle" @click="startTune('full')">
             tune + polish
           </button>
         </div>
@@ -928,6 +947,17 @@ function onCursor(c: (Point2d & Size & { buttons: number }) | null): void {
     }
   }
 
+  .capture-select {
+    margin: 0.35em 0;
+
+    // Intent on, not engaged — the selected option itself shows intent ≠
+    // effect (warn outline; the blocked detail rides the title-bar tray).
+    &.pending :deep(.option.active) {
+      border-color: var(--warn);
+      background: color-mix(in srgb, var(--warn) 14%, transparent);
+    }
+  }
+
   .entry {
     display: flex;
     align-items: center;
@@ -958,11 +988,6 @@ function onCursor(c: (Point2d & Size & { buttons: number }) | null): void {
       border-radius: 4px;
       padding: 0.1em 0.4em;
       cursor: pointer;
-
-      // Intent on, not engaged — the control itself shows intent ≠ effect.
-      &.pending {
-        border-color: var(--warn);
-      }
     }
 
     .capture-status {
@@ -995,7 +1020,30 @@ function onCursor(c: (Point2d & Size & { buttons: number }) | null): void {
     }
 
     &.tune-actions {
-      justify-content: flex-start; // buttons share the .reset identity
+      gap: 1ch;
+
+      // First-class actions, not reset-sized links (the buried-buttons
+      // finding): the SingleSelect option identity, sharing the column width.
+      .tune {
+        flex: 1;
+        padding: 0.4em 0.6em;
+        font: inherit;
+        color: inherit;
+        background: var(--tint-1);
+        border: 1px solid var(--tint-3);
+        border-radius: 4px;
+        cursor: pointer;
+
+        &:hover:not(:disabled) {
+          background: var(--tint-2);
+          border-color: var(--accent);
+        }
+
+        &:disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
+        }
+      }
     }
 
     .tune-status {

@@ -86,6 +86,38 @@ describe("error tray ring (value-sweep)", () => {
     expect(client.errorTray.length).toBeLessThanOrEqual(50);
     expect(client.errorTray[0].message).toBe("m59");
   });
+
+  it("defaults to level error and never coalesces across levels", () => {
+    client.reportToTray("cam", "boom");
+    expect(client.errorTray[0].level).toBe("error");
+    client.reportToTray("trigger-sync", "waiting", "warning");
+    expect(client.errorTray[0].level).toBe("warning");
+    // Same scope+message at the other level is a DISTINCT row, not a bump.
+    client.reportToTray("trigger-sync", "waiting", "error");
+    expect(client.errorTray).toHaveLength(3);
+    expect(client.errorTray[0].level).toBe("error");
+    // A repeat at the matching level coalesces as before.
+    client.reportToTray("trigger-sync", "waiting", "warning");
+    const warn = client.errorTray.find((r) => r.level === "warning")!;
+    expect(warn.count).toBe(2);
+  });
+
+  it("coalesces warnings by SCOPE — a flapping reason updates one row in place", () => {
+    // The failing-rig scenario: serialized engage retries with a varying
+    // message ("engage failed: CMD timeout after N ms") must never fill the
+    // ring — warnings are STATE, one row per scope tracking the latest.
+    client.reportToTray("trigger-sync", "engage failed: CMD timeout after 3012 ms", "warning");
+    client.reportToTray("trigger-sync", "engage failed: CMD timeout after 2987 ms", "warning");
+    client.reportToTray("trigger-sync", "no controller connected", "warning");
+    expect(client.errorTray).toHaveLength(1);
+    expect(client.errorTray[0].message).toBe("no controller connected");
+    expect(client.errorTray[0].count).toBe(3);
+    // ERRORS on the same scope stay exact-match events — distinct messages
+    // are distinct rows.
+    client.reportToTray("trigger-sync", "boom A");
+    client.reportToTray("trigger-sync", "boom B");
+    expect(client.errorTray).toHaveLength(3);
+  });
 });
 
 describe("useSession().call() default rejection surface (value-sweep)", () => {

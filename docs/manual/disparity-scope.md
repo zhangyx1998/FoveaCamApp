@@ -147,16 +147,20 @@ the two foveas capture frames:
 The selector is **intent**: it remembers what you asked for (persisted), and
 the app engages the trigger when the preconditions permit — and keeps trying
 without further action from you. While intent is on but not yet engaged the
-selector's border tints to the warning color, and the **Status** line under it
-always tells you where things stand:
+selected option's outline tints to the warning color, and the reason —
+**no controller connected**, **controller firmware is not v2-capable
+(CMD_FRAME unavailable)**, and so on — lands in the title-bar **error tray**
+as a warning: one row whose message always shows the latest reason (the
+count ticks up as the reason changes, and real errors always sort above
+warnings in the panel). The **Status** line under the selector stays
+compact:
 
 - **engaged · measuring…** — the trigger just engaged; the first rate
   measurement is still maturing.
 - **≈ 12.5 Hz · pulse 5.0 ms** — engaged, showing the live trigger rate and
   pulse width (hover for the frame/reject/timeout counters).
-- **free-run — no controller connected** (or **free-run — controller firmware
-  is not v2-capable (CMD_FRAME unavailable)**) — waiting: the cameras are
-  still free-running, and the text names why.
+- **free-run — waiting** — not yet engaged: the cameras are still
+  free-running; hover for the reason, or open the error tray for the detail.
 
 Flipping the selector before the controller connects — or a controller detach
 mid-session — needs no re-toggle; the mode engages (or re-engages) by itself
@@ -179,10 +183,13 @@ verified on hardware.*
 The **Auto-Tune** group (in the Tracker column) can derive the PID gains
 experimentally instead of hand-tuning the nine sliders. These are **real
 experiments on the rig** — the mirrors move — so the buttons only enable with a
-calibrated triple, the tracker **off**, and no drag in flight; run them on a
-static, well-matched target (for the depth gains, converge on a **near**
-target first — a parallel/infinity pose gives the depth axis nothing to push
-against). *This feature is code-complete but not yet verified on hardware.*
+calibrated triple and no drag in flight; run them on a static, well-matched
+target (for the depth gains, converge on a **near** target first — a
+parallel/infinity pose gives the depth axis nothing to push against).
+Starting a tune while the tracker is following **disengages the tracker**
+(the toggle turns off, like dragging a Vergence Angles slider does) and runs
+from the held pose. *This feature is code-complete but not yet verified on
+hardware.*
 
 - **tune** — the relay stage: each axis in turn is wiggled with a small square
   wave (2–10 % of its range, hard-bounded) until a steady oscillation appears,

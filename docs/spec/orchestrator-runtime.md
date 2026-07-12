@@ -110,6 +110,12 @@ Process-wide error reporting for orchestrator code with no single owning session
 registry is shared) or that would otherwise fail silently into the utility process's stdio.
 `report()` always logs locally; `onReport()` lets `index.ts` forward reports to every connected
 renderer once, at boot, so failures are visible without watching the orchestrator console.
+`report(scope, message, level)` carries a `ReportLevel` — `"error"` (default; a failure EVENT,
+console.error, danger identity in the renderer tray, exact scope+message coalescing) or
+`"warning"` (a degraded STATE, console.warn, warn identity, coalesced BY SCOPE renderer-side:
+one row per scope whose message tracks the latest report, so a flapping condition never floods
+the tray ring). Every report reaches every connected window by design — use a fine-grained
+scope label (e.g. "trigger-sync") so cross-window reports stay interpretable.
 `span()` is the S5 sibling: structured timing measurements (boot phases, per-activation
 camera/calibration work, controller connect) instead of failures — same shape, always recorded
 locally (bounded ring), forwarded via `onSpan()` so a future profiler window renders a live

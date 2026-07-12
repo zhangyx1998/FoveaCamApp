@@ -11,7 +11,11 @@
 // onSpan() so a profiler window can render a live timeline without polling.
 // spec: docs/spec/orchestrator-runtime.md#diagnostics
 
-type Reporter = (scope: string, message: string) => void;
+/** Tray severity: "error" = failure (danger identity), "warning" = degraded
+ *  state the operator should notice but nothing broke. */
+export type ReportLevel = "error" | "warning";
+
+type Reporter = (scope: string, message: string, level: ReportLevel) => void;
 let forward: Reporter | null = null;
 
 /** Register the sink that forwards reports to renderers (set once, by index.ts). */
@@ -19,9 +23,14 @@ export function onReport(fn: Reporter): void {
   forward = fn;
 }
 
-export function report(scope: string, message: string): void {
-  console.error(`[${scope}]`, message);
-  forward?.(scope, message);
+export function report(
+  scope: string,
+  message: string,
+  level: ReportLevel = "error",
+): void {
+  if (level === "warning") console.warn(`[${scope}]`, message);
+  else console.error(`[${scope}]`, message);
+  forward?.(scope, message, level);
 }
 
 /** Run `fn`, reporting (and swallowing) any throw instead of propagating it. */

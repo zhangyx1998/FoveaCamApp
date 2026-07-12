@@ -281,9 +281,12 @@ never cross into the session; every failure is a verdict/callback).
 
 - **Entry** (`autotune` command, `{stage: "relay" | "full"}`): requires a
   calibrated triple (the `calibrated` telemetry flag — `ready` alone also
-  covers the uncalibrated convert-fallback path), tracker DISARMED, no drag,
-  no generic override — refusals surface as a `failed` progress record, never
-  an error. EXCEPTION: a start while a run is LIVE is ignored SILENTLY — a
+  covers the uncalibrated convert-fallback path), no drag, no generic
+  override — refusals surface as a `failed` progress record, never an error.
+  An armed/enabled tracker is NOT a refusal (buried-buttons ruling
+  2026-07-12): starting a tune DISENGAGES it via `disengageAutoVergence`
+  (toggle flips off honestly), the same takeover semantics as a Vergence
+  Angles slider write. EXCEPTION: a start while a run is LIVE is ignored SILENTLY — a
   refusal record must never overwrite a non-terminal progress record (the
   double-click would flip the UI to "failed", re-enabling the buttons and
   hiding abort while the mirrors still wiggle). Starting enters the
@@ -426,6 +429,18 @@ tearing down) and "engage failed: …" (`engageFailureReason` — the enable err
 line, truncated, never the raw multi-line message). `trigger` (the engaged readout) is
 non-null exactly while engaged; `trigger_blocked` is null when engaged or when intent
 is off.
+
+`trigger_blocked` publishes on TRANSITIONS only (the retry tick re-evaluates every
+interval; the UI needs edges, not spam), and each new non-null reason is ALSO reported
+to the title-bar error tray at the "warning" level (`report("trigger-sync", reason,
+"warning")` — the diagnostics `ReportLevel` added for this): the drawer keeps only the
+warn-tinted mode selector + a compact "free-run — waiting" status, the tray carries the
+detail. Tray warnings coalesce BY SCOPE (one "trigger-sync" row tracking the latest
+reason) — a flapping precondition or a varying engage-failure message must never flood
+the 50-row ring, which is exactly the failing-rig case the tray exists for; errors keep
+exact-match event coalescing and sort above warnings. The transition latch resets at
+idle alongside the telemetry, so an identical reason after re-activation re-publishes
+(and re-reports) instead of being suppressed.
 
 **Engage sequence** (each step gates the next; a disengage/idle racing an in-flight
 engage reverts it via an epoch counter):

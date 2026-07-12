@@ -32,7 +32,7 @@ import {
   type ProgressMonitor,
   type ProgressStep,
 } from "../lib/orchestrator/progress.js";
-import { report, span, type Span } from "./diagnostics.js";
+import { report, span, type ReportLevel, type Span } from "./diagnostics.js";
 import type {
   FrameTransport,
   SessionFrameSource,
@@ -576,8 +576,8 @@ export class Hub {
   /** Broadcast a diagnostic error to every connected renderer, regardless of
    *  session subscription — for failures with no single owning session (e.g.
    *  the shared camera registry). See §12.1 C7. */
-  reportError(scope: string, message: string): void {
-    for (const ch of this.channels) ch.emit(topic.error, { scope, message });
+  reportError(scope: string, message: string, level: ReportLevel = "error"): void {
+    for (const ch of this.channels) ch.emit(topic.error, { scope, message, level });
   }
 
   /** Broadcast a `Span` (§7.1 S5) to every connected renderer, live, the same

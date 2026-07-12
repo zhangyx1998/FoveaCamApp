@@ -39,6 +39,22 @@ import {
 
 const open = ref(false);
 const count = computed(() => errorTray.length);
+// Worst level present drives the badge/panel identity: any error = danger;
+// only warnings = warn; empty = the --ok all-clear.
+const hasError = computed(() => errorTray.some((r) => r.level === "error"));
+const hasWarning = computed(() => errorTray.some((r) => r.level === "warning"));
+const panelTitle = computed(() => {
+  if (count.value === 0) return "All clear";
+  if (!hasError.value) return "Warnings";
+  return hasWarning.value ? "Errors & warnings" : "Errors";
+});
+// Errors above warnings (a busy warning must never bury a failure); the ring
+// is newest-first, and the stable sort keeps that recency within each level.
+const rows = computed(() =>
+  [...errorTray].sort((a, b) =>
+    a.level === b.level ? 0 : a.level === "error" ? -1 : 1,
+  ),
+);
 
 // Live "age" clock — a 1 Hz tick so the relative timestamps stay current while
 // the panel is open, without a per-row timer.
@@ -67,14 +83,15 @@ function dismiss(report: ErrorReport): void {
 // the most recent occurrence, scope, message, and the coalesce count.
 function reportText(report: ErrorReport): string {
   const times = report.count > 1 ? ` (×${report.count})` : "";
-  return `${new Date(report.lastAt).toISOString()} [${report.scope}] ${report.message}${times}`;
+  return `${new Date(report.lastAt).toISOString()} ${report.level.toUpperCase()} [${report.scope}] ${report.message}${times}`;
 }
 
 const copiedKey = ref<string | null>(null);
-// Row identity: coalescing guarantees firstAt+scope+message uniqueness (a count
-// bump keeps the object; scope alone can collide within one millisecond).
+// Row identity: coalescing guarantees firstAt+scope+level+message uniqueness
+// (a count bump keeps the object; scope alone can collide within one
+// millisecond, and the same scope+message can exist at both levels).
 const rowKey = (report: ErrorReport) =>
-  `${report.firstAt}|${report.scope}|${report.message}`;
+  `${report.firstAt}|${report.scope}|${report.level}|${report.message}`;
 async function copy(report: ErrorReport): Promise<void> {
   try {
     await navigator.clipboard.writeText(reportText(report));
@@ -98,17 +115,21 @@ function clearAll(): void {
   <div class="error-tray">
     <button
       class="icon-button"
-      :class="{ active: count > 0, open }"
-      :title="count > 0 ? `${count} error report(s)` : 'No recent errors'"
+      :class="{ active: count > 0, open, warn: count > 0 && !hasError }"
+      :title="count > 0 ? `${count} report(s)` : 'No recent errors'"
       @click="toggle"
     >
       <Icon :icon="faTriangleExclamation" />
-      <span v-if="count > 0" class="badge">{{ count > 99 ? "99+" : count }}</span>
+      <span
+        v-if="count > 0"
+        class="badge"
+        :class="{ warn: !hasError }"
+      >{{ count > 99 ? "99+" : count }}</span>
     </button>
 
-    <div v-if="open" class="panel" :class="{ ok: count === 0 }">
+    <div v-if="open" class="panel" :class="{ ok: count === 0, warn: count > 0 && !hasError }">
       <div class="panel-head">
-        <span class="panel-title">{{ count === 0 ? "All clear" : "Errors" }}</span>
+        <span class="panel-title">{{ panelTitle }}</span>
         <button
           class="clear"
           :disabled="count === 0"
@@ -120,14 +141,19 @@ function clearAll(): void {
       </div>
       <div v-if="count === 0" class="empty">No recent errors.</div>
       <ul v-else class="list">
-        <li v-for="report in errorTray" :key="rowKey(report)" class="row">
+        <li
+          v-for="report in rows"
+          :key="rowKey(report)"
+          class="row"
+          :class="report.level"
+        >
           <div class="row-main">
             <span class="scope">{{ report.scope }}</span>
             <span v-if="report.count > 1" class="times">×{{ report.count }}</span>
             <span class="age">{{ ago(report.lastAt) }}</span>
             <button
               class="row-action"
-              :title="copiedKey === rowKey(report) ? 'Copied' : 'Copy error details'"
+              :title="copiedKey === rowKey(report) ? 'Copied' : 'Copy report details'"
               @click="copy(report)"
             >
               <Icon :icon="copiedKey === rowKey(report) ? faCheck : faCopy" />
@@ -170,6 +196,11 @@ function clearAll(): void {
     color: var(--danger-text);
   }
 
+  // Only warnings present — warn identity instead of danger.
+  &.active.warn {
+    color: var(--warn);
+  }
+
   &:hover,
   &.open {
     background: var(--tint-1);
@@ -189,6 +220,11 @@ function clearAll(): void {
   color: var(--text);
   background: var(--danger);
   border-radius: 0.8em;
+
+  &.warn {
+    background: var(--warn);
+    color: var(--bg-chrome);
+  }
 }
 
 .panel {
@@ -214,6 +250,15 @@ function clearAll(): void {
 
     .panel-title {
       color: var(--ok);
+    }
+  }
+
+  // Only warnings — warn frame, danger reserved for real failures.
+  &.warn {
+    border-color: var(--warn);
+
+    .panel-title {
+      color: var(--warn);
     }
   }
 }
@@ -267,6 +312,13 @@ function clearAll(): void {
 .row {
   padding: 0.4em 1ch;
   border-bottom: 1px solid var(--border);
+  // Per-row level identity: a slim left rail (danger/warn), glanceable
+  // without reflowing the row content.
+  border-left: 2px solid var(--danger);
+
+  &.warning {
+    border-left-color: var(--warn);
+  }
 
   &:last-child {
     border-bottom: none;

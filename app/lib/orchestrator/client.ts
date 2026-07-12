@@ -110,7 +110,13 @@ function domEndpoint(port: MessagePort): Endpoint {
 export type ErrorReport = {
   scope: string;
   message: string;
-  /** Consecutive-duplicate coalescing count (retry storms don't flood). */
+  /** "error" = a failure EVENT (danger identity; rows coalesce on exact
+   *  scope+message). "warning" = a degraded STATE (warn identity; ONE row per
+   *  scope whose message tracks the latest report — a flapping condition,
+   *  e.g. trigger-sync retrying with varying reasons, updates in place
+   *  instead of flooding the ring). */
+  level: "error" | "warning";
+  /** Coalescing count (retry storms don't flood). */
   count: number;
   /** First + most-recent occurrence (`Date.now()`). */
   firstAt: number;
@@ -123,19 +129,28 @@ export const errorTray = reactive<ErrorReport[]>([]);
 /** Push a report into the tray, coalescing an exact scope+message repeat into a
  *  count bump (moved to the front) so a retrying failure counts up instead of
  *  spamming the ring. Bounded to `ERROR_TRAY_CAPACITY`. */
-export function reportToTray(scope: string, message: string): void {
+export function reportToTray(
+  scope: string,
+  message: string,
+  level: ErrorReport["level"] = "error",
+): void {
   const at = Date.now();
-  const existing = errorTray.findIndex(
-    (r) => r.scope === scope && r.message === message,
+  // Warnings coalesce by SCOPE (state — the message updates in place); errors
+  // coalesce on the exact scope+message (events). See `ErrorReport.level`.
+  const existing = errorTray.findIndex((r) =>
+    level === "warning"
+      ? r.scope === scope && r.level === "warning"
+      : r.scope === scope && r.message === message && r.level === "error",
   );
   if (existing >= 0) {
     const [r] = errorTray.splice(existing, 1);
+    r.message = message;
     r.count++;
     r.lastAt = at;
     errorTray.unshift(r);
     return;
   }
-  errorTray.unshift({ scope, message, count: 1, firstAt: at, lastAt: at });
+  errorTray.unshift({ scope, message, level, count: 1, firstAt: at, lastAt: at });
   if (errorTray.length > ERROR_TRAY_CAPACITY) errorTray.pop();
 }
 
@@ -180,10 +195,14 @@ export function connect(): Promise<Channel> {
       // death) — surface to the console AND the dismissible error tray so the
       // report doesn't dead-end in a packaged app (value-sweep-2026-07-11
       // `error-broadcast-dead-ends-in-console`).
-      ch.on(topic.error, ({ scope, message }: { scope: string; message: string }) => {
-        console.error(`[orchestrator:${scope}]`, message);
-        reportToTray(scope, message);
-      });
+      ch.on(
+        topic.error,
+        ({ scope, message, level }: { scope: string; message: string; level?: ErrorReport["level"] }) => {
+          if (level === "warning") console.warn(`[orchestrator:${scope}]`, message);
+          else console.error(`[orchestrator:${scope}]`, message);
+          reportToTray(scope, message, level ?? "error");
+        },
+      );
       ch.on(topic.span, (s: Span) => {
         orchestratorSpans.push(s);
         if (orchestratorSpans.length > SPAN_RING_CAPACITY) orchestratorSpans.shift();

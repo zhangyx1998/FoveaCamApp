@@ -84,7 +84,7 @@ wireClockMetrics(onClockMetrics);
 // Forward process-wide diagnostics (registry sink-throw isolation, etc.) to
 // every connected renderer, so failures are visible without watching the
 // orchestrator console. See docs/history/refactor/orchestrator.md §12.1 C7.
-onReport((scope, message) => hub.reportError(scope, message));
+onReport((scope, message, level) => hub.reportError(scope, message, level));
 // Same pattern for structured timing spans (§7.1 S5) — live broadcast so a
 // future profiler window can render a timeline without polling.
 onSpan((s) => hub.reportSpan(s));

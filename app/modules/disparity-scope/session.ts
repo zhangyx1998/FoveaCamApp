@@ -14,6 +14,7 @@ import { defineSession, type ServerSession } from "@orchestrator/runtime";
 import { acquireTriple, type CalibratedTriple } from "@orchestrator/calibration";
 import { read, subscribe } from "@orchestrator/store-hub";
 import { activeController } from "@orchestrator/controller";
+import { report } from "@orchestrator/diagnostics";
 import { RoundRobinFrameScheduler } from "@orchestrator/scheduler";
 import {
   disableHardwareTrigger,
@@ -778,7 +779,9 @@ export default function disparityScopeSession(
     function autotuneRefusal(): string | null {
       if (!triple || !triple.undistort) return "no calibration";
       if (dragging) return "release the drag first";
-      if (s.state.tracker_enabled || trackerArmed) return "disable the tracker first";
+      // An armed/enabled tracker is NOT a refusal: startAutotune's
+      // disengageAutoVergence() turns it off honestly (toggle included) —
+      // a tune click takes over the same way a slider write does.
       if (pidNode?.override.engaged) return "release the PID override first";
       return null;
     }
@@ -1302,11 +1305,14 @@ export default function disparityScopeSession(
     );
 
     /** `trigger_blocked` on TRANSITIONS only (the retry tick re-evaluates
-     *  every interval; the UI needs edges, not spam). */
+     *  every interval; the UI needs edges, not spam). Each new reason ALSO
+     *  lands in the title-bar tray as a WARNING — the drawer keeps only the
+     *  warn-tinted mode select, the tray carries the detail. */
     function publishTriggerBlocked(reason: string | null): void {
       if (reason === lastTriggerBlocked) return;
       lastTriggerBlocked = reason;
       s.telemetry({ trigger_blocked: reason });
+      if (reason !== null) report("trigger-sync", reason, "warning");
     }
 
     /** Exposure-authoritative budget over both fovea config docs (P6 —
@@ -2275,6 +2281,9 @@ export default function disparityScopeSession(
       fovea = { width: 0, height: 0 };
       stripScaleFactor = 1;
       commandedVolts = { l: ORIGIN_POS, r: ORIGIN_POS };
+      // The transition latch must reset with the telemetry, or an identical
+      // blocked reason after re-activation would be suppressed forever.
+      lastTriggerBlocked = null;
       s.resetTelemetry([
         "ready",
         "calibrated",
