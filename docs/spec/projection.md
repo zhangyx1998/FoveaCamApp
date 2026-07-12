@@ -63,6 +63,28 @@ via split-tree.ts's `parsePane`). Every decode is defensive — a malformed / fu
 string parses to `null` rather than throwing, so a stale URL or foreign drag never crashes a
 window. Renderer- and main-safe (pure data + JSON); no Vue, no DOM.
 
+## Implicit projection button {#implicit-button}
+
+Source: `app/lib/orchestrator/client.ts` (`StreamPayload`),
+`app/src/components/StreamView.vue`
+
+The project-to-window button requires NO wiring at a call site. The renderer client
+stamps the stream address onto every DISPLAYED payload (`StreamPayload.source`, a
+`PaneSource`) at its two ref chokepoints — `useSession().frame(name)` (`{kind:"frame"}`)
+and `usePipeFrame(id)` (`{kind:"pipe"}`, re-stamped per bind so a switched selection
+projects the currently-shown pipe). `StreamView` derives the `PaneDescriptor` from
+`payload.source` alone, so ANY surface bound to one of these refs offers the button once
+its first frame arrives.
+
+A-P12 still holds: the stamp is client-side only, applied after receive/materialize —
+the wire types (`FramePayload`/`FrameMeta` in `protocol.ts`) stay transport-only and the
+address never crosses a process boundary.
+
+Opt-out is `:projectable="false"`, used where the button must NOT appear:
+- `ProjectionPane.vue` — a projection window must not offer re-projecting itself;
+- `disparity-scope/Debugger.vue` — debug views whose meaning rides SVG overlays that a
+  projected pane would not carry (ruled in `disparity-debugger-window.md`).
+
 ## Cross-window drag & drop {#dnd}
 
 Source: `app/lib/projection/dnd.ts` (`docs/proposals/projection-split-view.md` §"DnD")

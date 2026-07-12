@@ -87,7 +87,7 @@ function toMat(H: number[]) {
         />
       </StreamView>
       <MarkerTargetInputs :session="session" role="L" :detected="!!telemetry.detection.L" width="8ch" />
-      <StreamView class="stream" title="Homography Projection" :payload="frameProjL.payload.value" :source="frameProjL.source" :theme="THEME.L">
+      <StreamView class="stream" title="Homography Projection" :payload="frameProjL.payload.value" :theme="THEME.L">
         <circle
           v-for="(p, i) in telemetry.projection.L?.points ?? []"
           :key="i"
@@ -137,7 +137,7 @@ function toMat(H: number[]) {
         />
       </StreamView>
       <MarkerTargetInputs :session="session" role="R" :detected="!!telemetry.detection.R" width="8ch" />
-      <StreamView class="stream" title="Homography Projection" :payload="frameProjR.payload.value" :source="frameProjR.source" :theme="THEME.R">
+      <StreamView class="stream" title="Homography Projection" :payload="frameProjR.payload.value" :theme="THEME.R">
         <circle
           v-for="(p, i) in telemetry.projection.R?.points ?? []"
           :key="i"

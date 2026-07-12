@@ -185,8 +185,12 @@ const pattern_h = computed<number>({
         <span>{{ activeView?.info.vendor }} {{ activeView?.info.model }}</span>
         <CameraRole v-if="activeView?.role" :role="(activeView.role as any)" />
       </NavBack>
+      <!-- Title required: FrameView hides the whole title bar (fullscreen +
+           project icons) on a null title — untitled, this was the one stream
+           view with no projection affordance at all (UI/UX review). -->
       <StreamView
         class="stream"
+        title="Preview"
         :payload="preview"
         height="min(60vh, 80vw)"
         :footnote="`Detector @ ${telemetry.detectRate.toFixed(1)} Hz`"

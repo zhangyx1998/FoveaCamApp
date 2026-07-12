@@ -262,7 +262,7 @@ window.addEventListener("keydown", (e) => {
       <StreamView
         class="stream"
         :title="ROLE.C + ' (' + state.view + ')'"
-        :payload="frameCenter.payload.value" :source="frameCenter.source"
+        :payload="frameCenter.payload.value"
         :theme="THEME.C"
       />
       <StreamView

@@ -5,9 +5,8 @@ import { computed, onUnmounted, ref, watch } from "vue";
 
 import { FreqMeter, inspectorMode, RollingAverage } from "@lib/util/perf";
 import FrameView, { TransformFunction } from "./FrameView.vue";
-import { payloadToMat, rendererLoopLag, shmReadStats, type FrameSource } from "@lib/orchestrator/client";
+import { payloadToMat, rendererLoopLag, shmReadStats, type StreamPayload } from "@lib/orchestrator/client";
 import { formatCounterRate, formatSampleStats } from "@lib/orchestrator/stats";
-import type { FramePayload } from "@lib/orchestrator/protocol";
 import type { PaneDescriptor } from "@lib/projection/descriptor";
 import { NoCheck } from "@lib/util/vue";
 
@@ -37,16 +36,12 @@ const props = defineProps({
     required: false,
     default: null,
   },
-  // Orchestrator frame payload: bind a `FrameRef`'s `.payload` ref.
+  // Orchestrator frame payload: bind a `session.frame(...)` / `usePipeFrame(...)`
+  // ref. Displayed payloads arrive with their client-stamped stream address
+  // (`StreamPayload.source`, A-P12), which alone drives the projection button —
+  // no separate address prop to wire at call sites.
   payload: {
-    type: NoCheck<FramePayload | null | undefined>(),
-    required: false,
-    default: undefined,
-  },
-  // Stream address for the projection button (A-P12): bind the `FrameRef`'s
-  // `.source`. Carried out-of-band now that it no longer rides `meta.source`.
-  source: {
-    type: NoCheck<FrameSource | null | undefined>(),
+    type: NoCheck<StreamPayload | null | undefined>(),
     required: false,
     default: undefined,
   },
@@ -83,23 +78,14 @@ const props = defineProps({
     default: false,
   },
   // Multi-window.md req. 4: the project-to-window button opens a projection
-  // window for this stream. The frame address comes from `source`; for a
-  // PIPE-backed preview (no Channel frame source) pass `pipe` instead so the
-  // preview is projectable too (projection-split-view.md §"Sources"). Set
-  // `projectable` false to hide the button entirely (used by the projection
-  // window itself, so it doesn't offer projecting a projection).
+  // window for this stream; the address rides the displayed payload itself.
+  // Set `projectable` false to hide the button entirely (used by the projection
+  // window itself, so it doesn't offer projecting a projection, and by debug
+  // views whose SVG overlays would not ride along).
   projectable: {
     type: Boolean,
     required: false,
     default: true,
-  },
-  // Pipe id for a pipe-backed preview (projection-split-view.md deliverable 3):
-  // makes camera previews/undistorts — the feeds most worth projecting —
-  // actually projectable. Takes precedence over `source` when both are present.
-  pipe: {
-    type: String,
-    required: false,
-    default: null,
   },
 });
 
@@ -212,21 +198,30 @@ const overlay = computed(() => {
   return result;
 });
 
-// Projectable pane descriptor for the project-to-window button — a pipe source
-// when `pipe` is bound, else the frame `source` (A-P12; the `FrameRef.source`
-// passed alongside the payload). Null keeps only the fullscreen icon.
+// Projectable pane descriptor for the project-to-window button — implicit: the
+// displayed payload carries its client-stamped stream address (A-P12), so any
+// frame- or pipe-backed view is projectable with no extra wiring. Null (no
+// frame yet / no address / `projectable` false) keeps only the fullscreen icon.
+// The address is RETAINED past a payload null (pipe close nulls the payload but
+// `mat` keeps showing the last frame — UI/UX review: the affordance must live
+// exactly as long as the pixels; a rebind's first frame re-stamps it).
+const lastSource = ref<StreamPayload["source"]>(undefined);
+watch(
+  () => props.payload?.source,
+  (s) => {
+    if (s) lastSource.value = s;
+  },
+  { immediate: true },
+);
 const projection = computed<PaneDescriptor | null>(() => {
   if (!props.projectable) return null;
-  const theme = props.theme !== "gray" ? props.theme : undefined;
-  if (props.pipe)
-    return { source: { kind: "pipe", id: props.pipe }, title: props.title ?? undefined, theme };
-  if (props.source)
-    return {
-      source: { kind: "frame", session: props.source.session, frame: props.source.frame },
-      title: props.title ?? undefined,
-      theme,
-    };
-  return null;
+  const source = props.payload?.source ?? lastSource.value;
+  if (!source) return null;
+  return {
+    source,
+    title: props.title ?? undefined,
+    theme: props.theme !== "gray" ? props.theme : undefined,
+  };
 });
 </script>
 

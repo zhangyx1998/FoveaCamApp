@@ -207,7 +207,7 @@ Reusable set under `app/src/components/**` (+ inputs/layouts/record/capture). "T
 
 | Component | Role | Props / slots | Theming hook | Notes / duplication |
 |---|---|---|---|---|
-| `StreamView` | live payload → canvas + overlay + expand | `payload, source, theme, title, footnote, overlay, inspector, projectable` | `theme`→`--theme` outline | wraps `FrameView`; forwards all slots |
+| `StreamView` | live payload → canvas + overlay + expand | `payload, theme, title, footnote, overlay, inspector, projectable` | `theme`→`--theme` outline | wraps `FrameView`; forwards all slots; projection button implicit — the displayed payload carries its stream address (`StreamPayload.source`) |
 | `FrameView` | Mat → canvas render, drag/mouse, projection btn | `mat, theme, title, footnote, projection` | `theme`→`--theme` | **carries orphaned `.no-stream`/`.stream-info` CSS** that StreamView also duplicates (dead in both) |
 | `FrameOverlay` / `Overlay` | glass overlay panel + title-bar overlay host | slot; `Overlay` exports an `overlay` singleton ref | — | overlay-toggle button styling mirrored ad hoc |
 | `ConfigEntry` | labeled form row | slot; deep-styles input/select/button | `#08c` focus | the de-facto form primitive |

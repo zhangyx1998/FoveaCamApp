@@ -344,7 +344,7 @@ async function captureOnce(): Promise<void> {
         </header>
         <div class="target-body">
           <StreamView
-            title="Fovea"
+            :title="`Fovea ${index + 1}`"
             :payload="foveaFrames[index]?.value ?? null"
             theme="#fa0"
             height="14rem"

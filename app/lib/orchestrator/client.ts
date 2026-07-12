@@ -27,6 +27,7 @@ import {
 import type { Mat } from "core/Vision";
 import { RollingStats, startLoopLagProbe } from "@lib/util/rolling";
 import { inspectorMode } from "@lib/util/perf";
+import type { PaneSource } from "@lib/projection/descriptor";
 import {
   Channel,
   topic,
@@ -342,16 +343,19 @@ export async function dumpPerfSnapshot(): Promise<string> {
   return file;
 }
 
-/** A frame channel's stream address (session + frame-channel name). Static per
- *  `frame(name)` — the client half of what A-P12 lifted out of wire `FrameMeta`. */
-export type FrameSource = { session: string; frame: string };
+/** What the renderer DISPLAYS: the wire `FramePayload` plus the stream address,
+ *  stamped CLIENT-SIDE at the two ref chokepoints (`useSession().frame()`,
+ *  `usePipeFrame()`) — the client half of what A-P12 lifted out of wire
+ *  `FrameMeta`. The wire types stay transport-only; `source` never crosses a
+ *  process boundary. Carrying the address on the displayed payload is what
+ *  makes `StreamView`'s projection button implicit — any surface bound to one
+ *  of these refs is projectable with zero extra wiring. */
+export type StreamPayload = FramePayload & { source?: PaneSource };
 
-/** What `useSession().frame(name)` returns (A-P12): the reactive `payload` ref
- *  plus the stream `source`, carried out-of-band instead of folded into the
- *  wire payload's `meta`. `source` is constant for the channel. */
+/** What `useSession().frame(name)` returns: the reactive `payload` ref (each
+ *  displayed payload carries its client-stamped `source` address, A-P12). */
 export type FrameRef = {
-  payload: Readonly<Ref<FramePayload | null>>;
-  source: FrameSource;
+  payload: Readonly<Ref<StreamPayload | null>>;
 };
 
 export type Session<C extends Contract> = {
@@ -387,7 +391,7 @@ export function useFrames<C extends Contract, K extends string>(
 export function useDynamicFrame<C extends Contract>(
   session: Session<C>,
   name: Ref<string | null | undefined> | (() => string | null | undefined),
-): Readonly<Ref<FramePayload | null>> {
+): Readonly<Ref<StreamPayload | null>> {
   const read = typeof name === "function" ? name : () => name.value;
   return computed(() => {
     const key = read();
@@ -411,13 +415,15 @@ const pipeReaderIO: PipeReaderIO = {
  * RECONNECTS on an epoch bump (C-20 reuse-safe id), and CLEARS on
  * un-advertise / CLOSED. `pipeId` may be static or a ref/getter (e.g. the
  * currently-selected `camera:<serial>`); pass null to bind nothing. Returns a
- * readonly ref for `StreamView :payload`.
+ * readonly ref for `StreamView :payload`; each displayed payload carries its
+ * client-stamped `{kind:"pipe"}` address (A-P12), so the bound view is
+ * projectable implicitly.
  */
 export function usePipeFrame(
   pipeId: MaybeRefOrGetter<string | null | undefined>,
-): Readonly<Ref<FramePayload | null>> {
+): Readonly<Ref<StreamPayload | null>> {
   const session = useSession(pipes, "pipes");
-  const frame = shallowRef<FramePayload | null>(null);
+  const frame = shallowRef<StreamPayload | null>(null);
   let consumer: PipeConsumer | null = null;
   let boundId: string | null = null;
   let boundEpoch: number | null = null;
@@ -447,11 +453,16 @@ export function usePipeFrame(
     }
     // A newer bind superseded us while connecting — abort this one.
     if (boundId !== id || boundEpoch !== epoch) return;
+    // A-P12 client-side stamp: one address object per bind, applied to every
+    // displayed payload so `StreamView` derives projectability implicitly.
+    const address: PaneSource = { kind: "pipe", id };
     consumer = createPipeConsumer(
       handle,
       pipeReaderIO,
       (p) => {
-        frame.value = p; // p === null on CLOSED → clears the display
+        const stamped: StreamPayload | null = p;
+        if (stamped) stamped.source = address;
+        frame.value = stamped; // p === null on CLOSED → clears the display
       },
       // value-sweep-2026-07-11 (`pipe-consumer-swallows-read-errors`): after a
       // streak of failed reads (a dead/stalled pipe), surface once to the tray.
@@ -488,7 +499,7 @@ export function usePipeFrame(
   );
 
   onScopeDispose(teardown);
-  return readonly(frame) as Readonly<Ref<FramePayload | null>>;
+  return readonly(frame) as Readonly<Ref<StreamPayload | null>>;
 }
 
 function readSource<T>(source: Ref<T> | (() => T)): T {
@@ -643,10 +654,12 @@ export function useSession<C extends Contract>(
     const cached = frameRefs.get(k);
     if (cached) return cached;
     {
-      const r = shallowRef<FramePayload | null>(null);
+      const r = shallowRef<StreamPayload | null>(null);
+      // A-P12: the stream address is client-only — stamped onto each DISPLAYED
+      // payload below (after the shm materialize), never onto the wire types.
+      const address: PaneSource = { kind: "frame", session: name, frame: k };
       const fref: FrameRef = {
-        payload: readonly(r) as Readonly<Ref<FramePayload | null>>,
-        source: { session: name, frame: k },
+        payload: readonly(r) as Readonly<Ref<StreamPayload | null>>,
       };
       frameRefs.set(k, fref);
       // Coalesce bursts to one paint: keep only the latest until the next rAF.
@@ -677,8 +690,10 @@ export function useSession<C extends Contract>(
                 payload.meta.tDisplay - payload.meta.tReceive,
               );
           }
+          const stamped: StreamPayload | null = payload;
+          if (stamped) stamped.source = address;
           shm.release(r.value);
-          r.value = payload;
+          r.value = stamped;
           if (latest && !scheduled) {
             scheduled = true;
             rafId = requestAnimationFrame(flush);
@@ -698,8 +713,8 @@ export function useSession<C extends Contract>(
                   payload.meta.tReceive - payload.meta.tPublish,
                 );
             }
-            // A-P12: the stream address is carried by the returned `FrameRef`
-            // (static `source`), not stamped onto each payload's meta anymore.
+            // A-P12: the stream address is stamped client-side in `flush` (on
+            // the DISPLAYED payload), not carried on the wire `meta` anymore.
             latest = payload;
             if (!scheduled) {
               scheduled = true;

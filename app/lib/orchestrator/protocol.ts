@@ -70,8 +70,8 @@ export type FrameMeta = {
    *  coalescing race never gets this stamp). */
   tDisplay?: number;
   // A-P12: the client-only `source` stream address was removed from this WIRE
-  // type — it never crossed the wire and is now carried out-of-band by the
-  // renderer's `FrameRef` (`useSession().frame()` → `{ payload, source }`),
+  // type — it never crossed the wire; the renderer stamps it onto each
+  // DISPLAYED payload at its ref chokepoints (`StreamPayload` in client.ts),
   // keeping `FrameMeta` transport-only.
 };
 
