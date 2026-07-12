@@ -1,7 +1,10 @@
 # Vergence loop tuning: PID auto-tune + tracker↔PID coupling
 
-> STATUS: §1 PROPOSAL — awaiting ruling. §2 R1 + R2 IMPLEMENTED 2026-07-12
-> (spec [disparity-scope](../spec/disparity-scope.md#capture-epoch-target));
+> STATUS: §1 IMPLEMENTED 2026-07-12 (spec
+> [disparity-scope](../spec/disparity-scope.md#autotune)) — RIG-GATED,
+> unverified on hardware until the owed rig pass. §2 R1 + R2 IMPLEMENTED
+> 2026-07-12 (spec
+> [disparity-scope](../spec/disparity-scope.md#capture-epoch-target));
 > R3 (rig verification) OPEN. Companion to the 2026-07-12 kd-explosion fix
 > (once-per-pair join gate + filtered derivative, spec
 > [disparity-scope](../spec/disparity-scope.md#match-join)).
@@ -41,6 +44,34 @@ Both stages are RIG experiments (real optics in the loop) — gate behind a
 drawer action, never automatic. A simulation-only tune is possible against
 `stepVergence` + a delay model, but it would miss the MEMS/optics dynamics that
 dominate; use simulation only to smoke-test the optimizer itself.
+
+::: details Implementation (2026-07-12) — behavior spec at [disparity-scope §autotune](../spec/disparity-scope.md#autotune); RIG-GATED, unverified until the rig pass
+- **Pure core** (`app/modules/disparity-scope/`, each heavily unit-tested):
+  `relay-tune.ts` (relay state machine: settle-reference, hysteresis relay,
+  N-consistent-cycle detection, bounded amplitude escalation 2 % → ≤ 10 % of
+  the DOF range, verdicts never throws, `tyreusLuyben`), `cma-es.ts` (minimal
+  dependency-free (μ/μ_w, λ)-CMA-ES: ask/tell contract, box bounds, seeded
+  xorshift RNG, log-space helpers), `step-cost.ts` (ITAE + quadratic
+  overshoot + command total-variation, peak-normalized so the pipeline-delay
+  lead-in is harmless), `autotune.ts` (the phase state machine over injected
+  hooks — the session owns pose/gain application).
+- **Session integration**: an `autotune` command (`{stage: "relay"|"full"}`)
+  requires a calibrated triple + tracker disarmed, enters the manual-hold
+  latch (feed-forward down), and `runControl` feeds a live run the SAME
+  match-join projections; `autotuneAbort` restores the pre-tune tuning +
+  pose. Time rides in loop-dt units (`elapsed-ms × sensitivity` captured at
+  start), so relay Tu and the TL gains land directly in the loop's dt frame.
+- **Optimizer smoke test** (`app/test/autotune-sim.test.ts`, NOT a rig
+  claim): toy plant = first-order mirror lag behind a miscalibrated (0.85×)
+  actuation gain, matched centers via a frontal scene plane, 3-tick transport
+  delay, driven through the real `stepVergence`/`followTarget`. Combined sim
+  step-cost: DEFAULT_TUNING 4.33 → relay-only 0.42 → relay + 24-eval CMA-ES
+  polish 0.11; in-run eval baseline 2.32 → best 0.097. Deterministic per seed.
+- The gain-mismatch plant matters: with a PERFECT actuation map the target
+  step feeds through the reconstruction (`ray = aT + pan`) and gains barely
+  move the cost — on the rig the residual the PID owns comes from exactly
+  this calibration mismatch.
+:::
 
 ## 2. Tracker↔PID coupling during follow (user request 2026-07-12)
 

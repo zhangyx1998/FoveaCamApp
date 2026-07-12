@@ -17,6 +17,7 @@ import {
   pidOverrideState,
 } from "@lib/orchestrator/pid-override-contract";
 import { DEFAULT_TRACKER_TYPE, type TrackerType } from "./tracker-swap";
+import type { AutotuneProgress, AutotuneStage } from "./autotune";
 
 /** The disparity-scope PID node's value type — per-eye mirror volts (the
  *  `{ l, r }` command pushed to the controller node). The override slot pins
@@ -106,6 +107,10 @@ export const disparity = defineContract({
     /** Calibrated triple leased + conversions loaded (§12.1-style pattern —
      *  see manual-control's own `ready`). */
     ready: false as boolean,
+    /** The leased triple actually carries an undistort calibration. `ready`
+     *  publishes even on the uncalibrated convert-fallback path (control then
+     *  holds "no calibration") — auto-tune runnability gates on THIS. */
+    calibrated: false as boolean,
     status: "initializing" as string,
     /** Wide (center) frame size (renderer clamps overlays to it). */
     size: { width: 0, height: 0 },
@@ -141,6 +146,9 @@ export const disparity = defineContract({
     overridden: false as boolean,
     /** Live PID integrator values (debug readout). */
     pids: { verge: 0, panX: 0, panY: 0, v_shift: 0 } as PidReadout,
+    /** Auto-tune progress/result stream (null = no run yet this activation).
+     *  Spec: docs/spec/disparity-scope.md#autotune. RIG-GATED experiments. */
+    autotune: null as AutotuneProgress | null,
     /** Control-path latency (same shape/throttle as manual-control). */
     perf: { actuateMs: { mean: 0, max: 0 } as Stat },
     ...captureTelemetry(),
@@ -159,6 +167,12 @@ export const disparity = defineContract({
     reset_vergence: cmd(),
     /** Manually nudge one PID's integrator (debug slider). */
     setPid: cmd<{ dof: keyof PidReadout; value: number }>(),
+    /** Start a two-stage gain auto-tune (spec §autotune): `relay` = per-DOF
+     *  relay experiments only; `full` = relay + CMA-ES joint polish. Requires
+     *  a calibrated session, tracker disarmed, no drag/override. RIG-GATED. */
+    autotune: cmd<{ stage: AutotuneStage }>(),
+    /** Abort a running auto-tune — restores the pre-tune tuning + pose. */
+    autotuneAbort: cmd(),
     /** Engage/update/release the vergence PID node's output override. `{value}`
      *  pins the output; `{release:true}` resumes control (seeded continuous).
      *  Programmatic path only — pointer drags ride the tracker override (spec §drag). */

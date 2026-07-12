@@ -100,6 +100,12 @@ import {
   trackerResultStale,
 } from "./tracker-feed";
 import { matchPartnerStale } from "./match-join";
+import {
+  AutotuneRun,
+  type AutotuneStage,
+  type DofErrors,
+  type GainSet,
+} from "./autotune";
 import { DragSlew, type SlewPose } from "./drag-slew";
 import { makeMat } from "@lib/mat";
 import { PID, PID2D, type PidParams } from "@lib/pid";
@@ -694,6 +700,260 @@ export default function disparityScopeSession(
       v_shift.value = seed.v_shift; // PID setter clamps to its limits
     }
 
+    // --- two-stage auto-tune (spec §autotune; vergence-loop-tuning.md §1) ---
+    // Session-driven, drawer-gated, RIG-GATED experiments. The run rides the
+    // existing manual-hold machinery (normal stepping already held, feed-
+    // forward down via `frozen()`), drives DOFs through the same controller
+    // `.value` + follow-map push path the sliders use, and samples the SAME
+    // match-join projections the loop consumes (`runControl` branches to
+    // `autotuneStep` while a run is live — the normal path is untouched).
+    let autotuneRun: AutotuneRun | null = null;
+    /** Bumped on every run start AND the idle silent-discard — stale run
+     *  callbacks (progress/finished after teardown) become no-ops. */
+    let tuneEpoch = 0;
+    let tuneT0 = 0;
+    /** Sensitivity captured at run start: the tune clock's ms → loop-dt-unit
+     *  factor (gains are defined against loop-dt; a mid-run slider write must
+     *  not warp the clock or the derived Tu). */
+    let tuneSensitivity = DEFAULT_TUNING.sensitivity;
+    /** Restore-on-terminal snapshot (abort restores tuning + pose + target). */
+    let preTune: {
+      tuning: Tuning;
+      pose: { panX: number; panY: number; verge: number; v_shift: number };
+      target: Point2d;
+    } | null = null;
+    /** A user tuning write triggered the cancel — keep THEIR tuning, only
+     *  resync the live controllers (see the `tuning` watch). */
+    let tuneKeepTuning = false;
+
+    const tuneNow = (): number => (now() - tuneT0) * tuneSensitivity;
+
+    /** Per-DOF `setpoint − measurement` errors — the same decomposition
+     *  `stepVergence` integrates (spec §control-law), lifted here so the tune
+     *  observes exactly what the loop would. */
+    function decomposeDofErrors(p: ScopeProjection): DofErrors | null {
+      if (!triple || !triple.undistort) return null;
+      const toAngle = (q: Point2d): Point2d => triple!.conv.P2A.C(q, false);
+      const aL = toAngle(p.l);
+      const aR = toAngle(p.r);
+      const aT = toAngle(p.target);
+      return {
+        panX: (aT.x - aL.x + (aT.x - aR.x)) / 2,
+        panY: (aT.y - aL.y + (aT.y - aR.y)) / 2,
+        verge: aR.x - aL.x,
+        v_shift: (aR.y - aL.y) / 2,
+      };
+    }
+
+    function tuningWith(g: GainSet): Tuning {
+      return {
+        ...cloneTuning(s.state.tuning),
+        pan: [...g.pan],
+        depth: [...g.depth],
+        v_shift: [...g.v_shift],
+      };
+    }
+
+    function currentGainSet(): GainSet {
+      const t = s.state.tuning;
+      return { pan: [...t.pan], depth: [...t.depth], v_shift: [...t.v_shift] };
+    }
+
+    function autotuneRefusal(): string | null {
+      if (!triple || !triple.undistort) return "no calibration";
+      if (dragging) return "release the drag first";
+      if (s.state.tracker_enabled || trackerArmed) return "disable the tracker first";
+      if (pidNode?.override.engaged) return "release the PID override first";
+      return null;
+    }
+
+    function publishAutotuneRefusal(stage: AutotuneStage, message: string): void {
+      s.telemetry({
+        autotune: {
+          phase: "failed",
+          stage,
+          dof: null,
+          dofsDone: 0,
+          cycles: 0,
+          evals: 0,
+          budget: 0,
+          bestCost: null,
+          baselineCost: null,
+          message,
+          gains: null,
+        },
+      });
+    }
+
+    /** Terminal handler (the run's `finished` hook): persist the resulting
+     *  gains (done) or restore the pre-tune tuning (abort/failure), return to
+     *  the HELD state at the pre-tune pose + target — the user resumes control
+     *  explicitly. Server-side setState does NOT fire the `tuning` watch, so
+     *  the controllers are re-synced explicitly on every path. */
+    function finishAutotune(o: { phase: "done" | "failed" | "aborted"; gains: GainSet | null }): void {
+      autotuneRun = null;
+      if (o.phase === "done" && o.gains) {
+        const next = tuningWith(o.gains);
+        s.setState("tuning", next);
+        syncGains(next);
+      } else if (tuneKeepTuning) {
+        syncGains(s.state.tuning); // drop candidate gains, keep the user's write
+      } else if (preTune) {
+        s.setState("tuning", preTune.tuning);
+        syncGains(preTune.tuning);
+      }
+      if (preTune) {
+        pan.x.value = preTune.pose.panX;
+        pan.y.value = preTune.pose.panY;
+        verge.value = preTune.pose.verge;
+        v_shift.value = preTune.pose.v_shift;
+        writeTarget(preTune.target);
+        steerCrops();
+      }
+      preTune = null;
+      status = "held"; // the disengage latch persists (windowStart -Infinity)
+      const v = followVolts(s.state.target);
+      if (v && !pidNode?.override.engaged) {
+        commandedVolts = v;
+        pushVolts();
+      }
+    }
+
+    /** Abort a live run (user command, or any interaction that must win —
+     *  drag, slider write, tracker re-enable). The reason carries the gains
+     *  OUTCOME, so the status line never claims a restore that didn't happen
+     *  (a tuning-write cancel keeps the USER's gains, not the pre-tune ones). */
+    function cancelAutotune(reason: string, keepTuning = false): void {
+      if (!autotuneRun) return;
+      tuneKeepTuning = keepTuning;
+      autotuneRun.abort(
+        keepTuning
+          ? `${reason} (your gains kept, pose restored)`
+          : `${reason} (pre-tune gains restored)`,
+      ); // → finished → finishAutotune
+      tuneKeepTuning = false;
+    }
+
+    function startAutotune(stage: AutotuneStage): void {
+      // SILENT while a run is live (UI/UX review blocker): a double-click's
+      // second command must never overwrite the live progress record with a
+      // "failed" one — that would re-enable the tune buttons and hide abort
+      // while the mirrors are still wiggling.
+      if (autotuneRun) return;
+      const refusal = autotuneRefusal();
+      if (refusal) {
+        publishAutotuneRefusal(stage, refusal);
+        return;
+      }
+      // Enter the manual-hold machinery: the latch keeps normal stepping out
+      // while the run drives, and feed-forward stays down (spec §freeze-window).
+      disengageAutoVergence();
+      status = "autotune";
+      preTune = {
+        tuning: cloneTuning(s.state.tuning),
+        pose: {
+          panX: pan.x.value,
+          panY: pan.y.value,
+          verge: verge.value,
+          v_shift: v_shift.value,
+        },
+        target: { ...s.state.target },
+      };
+      tuneT0 = now();
+      tuneSensitivity = s.state.tuning.sensitivity;
+      const epoch = ++tuneEpoch;
+      const baseTarget = { ...s.state.target };
+      autotuneRun = new AutotuneRun(
+        stage,
+        {
+          // DOF value setters clamp via each PID's integral limits — a relay
+          // command can never leave the physical range (relay-tune clamps too).
+          dof: {
+            panX: {
+              get: () => pan.x.value,
+              set: (v) => {
+                pan.x.value = v;
+              },
+              range: [shiftLim[0], shiftLim[1]],
+            },
+            panY: {
+              get: () => pan.y.value,
+              set: (v) => {
+                pan.y.value = v;
+              },
+              range: [shiftLim[0], shiftLim[1]],
+            },
+            verge: {
+              get: () => verge.value,
+              set: (v) => {
+                verge.value = v;
+              },
+              range: [verge.limits[0], verge.limits[1]],
+            },
+            v_shift: {
+              get: () => v_shift.value,
+              set: (v) => {
+                v_shift.value = v;
+              },
+              range: [-VSHIFT_LIMIT, VSHIFT_LIMIT],
+            },
+          },
+          applyGains: (g) => {
+            if (epoch === tuneEpoch) syncGains(tuningWith(g)); // live, not persisted
+          },
+          setTargetOffset: (px) => {
+            if (epoch !== tuneEpoch) return;
+            writeTarget({ x: baseTarget.x + px, y: baseTarget.y });
+            steerCrops();
+          },
+          progress: (p) => {
+            if (epoch === tuneEpoch) s.telemetry({ autotune: p });
+          },
+          finished: (o) => {
+            if (epoch === tuneEpoch) finishAutotune(o);
+          },
+        },
+        { initialGains: currentGainSet(), startT: 0, seed: (Date.now() % 0xffff) | 1 },
+      );
+    }
+
+    /** One tune control tick (replaces `controlStep` while a run is live):
+     *  feed the run, then either hold, reposition after a relay command (the
+     *  follow map at the live target — the setPid push path), or step the real
+     *  law at the candidate gains (the CMA-ES eval window). */
+    function autotuneStep(projection: ScopeProjection): VergenceVolts {
+      const run = autotuneRun!;
+      status = "autotune";
+      const errors = decomposeDofErrors(projection);
+      if (!errors) return commandedVolts;
+      const minScore = s.state.tuning.min_score;
+      const d = run.feed({
+        t: tuneNow(),
+        errors,
+        scoreOk:
+          projection.scores.l >= minScore && projection.scores.r >= minScore,
+      });
+      if (d.mode === "step" && triple) {
+        const t = now();
+        const dt = Math.min((t - lastStep) * tuneSensitivity, DT_MAX_FRAMES);
+        const result = stepVergence(
+          projection,
+          controllers,
+          { P2A: triple.conv.P2A, A2V: triple.conv.A2V },
+          { baseline: s.state.baseline, minScore },
+          dt,
+        );
+        lastStep = t;
+        if (result) return { l: result.left, r: result.right };
+        return commandedVolts;
+      }
+      if (d.mode === "drive") {
+        const v = followVolts(s.state.target);
+        if (v) return v;
+      }
+      return commandedVolts;
+    }
+
     // --- per-side match results → the pid JOIN (spec §match-join) ----------
 
     type SideKey = "L" | "R";
@@ -854,7 +1114,14 @@ export default function disparityScopeSession(
 
     function runControl(projection: ScopeProjection): void {
       if (!pidNode) return;
-      commandedVolts = outputOf(pidNode.step(() => controlStep(projection)));
+      // A live auto-tune run consumes the projection instead of the normal
+      // step (spec §autotune); a drag still wins (`overridden` → controlStep's
+      // direct follow — pointer-down already cancelled the run).
+      const step =
+        autotuneRun && !projection.overridden
+          ? () => autotuneStep(projection)
+          : () => controlStep(projection);
+      commandedVolts = outputOf(pidNode.step(step));
       if (pidNode.override.engaged) status = "manual";
       pushVolts();
     }
@@ -1588,6 +1855,12 @@ export default function disparityScopeSession(
             markTrackerLost();
             status = "tracker stalled";
           }
+          // Auto-tune starvation watchdog (spec §autotune): the run only
+          // advances on delivered match pairs — a dead feed must FAIL the
+          // tune closed (restore + held) instead of wedging it forever.
+          // A failure, not an abort: "aborted" means user action everywhere.
+          if (autotuneRun && autotuneRun.starved(tuneNow()))
+            autotuneRun.fail("no match samples (match feed stalled; pre-tune gains restored)");
           if (!nativeSink) {
             // No controller → fixed behavior; the estimate resets so a stale
             // link's RTTs never leak into a fresh connection.
@@ -1665,6 +1938,10 @@ export default function disparityScopeSession(
       // null-able, constant per activation) so the UI names the actual match scale.
       s.telemetry({
         ready: true,
+        // `ready` alone is NOT a calibration signal — an uncalibrated triple
+        // completes setup on the convert fallback (control holds "no
+        // calibration"). Auto-tune gates on THIS instead.
+        calibrated: !!t.undistort,
         match_magnification: measuredMatchZoom(),
         zoom_override: tripleZoomOverride(),
       });
@@ -1673,6 +1950,16 @@ export default function disparityScopeSession(
     }
 
     async function idleSession(): Promise<void> {
+      // Silent auto-tune discard (spec §autotune): the graph is going away, so
+      // skip the restore/push path (transports may already be closing) but
+      // resync the live controllers from persisted tuning — temp candidate
+      // gains must never leak into the next activation.
+      if (autotuneRun) {
+        tuneEpoch++; // stale run callbacks become no-ops
+        autotuneRun = null;
+        preTune = null;
+        syncGains(s.state.tuning);
+      }
       // Finalize an in-flight recording FIRST, while the cameras are still leased
       // (spec §teardown); covers the forced dispose busy() refuses.
       await recording.stop();
@@ -1713,11 +2000,13 @@ export default function disparityScopeSession(
       commandedVolts = { l: ORIGIN_POS, r: ORIGIN_POS };
       s.resetTelemetry([
         "ready",
+        "calibrated",
         "status",
         "tracker_bbox",
         "match_magnification",
         "zoom_override",
         "overridden",
+        "autotune",
       ]);
     }
 
@@ -1728,6 +2017,7 @@ export default function disparityScopeSession(
           // override AND directly drive the foveas to the cursor ray.
           if (phase !== "up") {
             if (phase === "down") {
+              cancelAutotune("drag started"); // user interaction wins
               dragging = true;
               trackerActive = false;
               s.telemetry({ tracker_bbox: null });
@@ -1772,9 +2062,11 @@ export default function disparityScopeSession(
           }
         },
         async resetTuning() {
+          cancelAutotune("tuning reset", true);
           s.setState("tuning", cloneTuning(DEFAULT_TUNING));
         },
         async reset_vergence() {
+          cancelAutotune("vergence reset");
           pan.reset();
           verge.reset();
           v_shift.reset();
@@ -1794,6 +2086,7 @@ export default function disparityScopeSession(
           // Bidirectional slider write: disengage auto-vergence FIRST (even
           // mid-track — the ruling), so the next match pair can't fight the
           // manual value, then apply + actuate from the new DOF state.
+          cancelAutotune("manual DOF write"); // slider takeover wins
           disengageAutoVergence();
           switch (dof) {
             case "verge":
@@ -1818,6 +2111,15 @@ export default function disparityScopeSession(
             commandedVolts = v;
             pushVolts();
           }
+        },
+        // Two-stage auto-tune (spec §autotune): relay per DOF, optionally
+        // followed by the CMA-ES joint polish. Drawer-gated, never automatic;
+        // RIG-GATED — unverified on hardware until the owed rig pass.
+        async autotune({ stage }) {
+          startAutotune(stage);
+        },
+        async autotuneAbort() {
+          cancelAutotune("stopped by user");
         },
         async pidOverride(command) {
           if (!pidNode) return;
@@ -1857,6 +2159,9 @@ export default function disparityScopeSession(
       },
       watch: {
         tuning(t) {
+          // A client gain write mid-run cancels the tune but KEEPS the user's
+          // tuning (only the live controllers resync; spec §autotune).
+          cancelAutotune("tuning changed", true);
           syncGains(t);
           // Expansion re-shapes the strip crop; scale retunes the scalers.
           steerCrops();
@@ -1887,6 +2192,7 @@ export default function disparityScopeSession(
             trackerActive = false;
             s.telemetry({ tracker_bbox: null });
           } else if (!dragging) {
+            cancelAutotune("tracker re-enabled"); // restore before re-arming
             armTracker(s.state.target);
           }
           // While dragging, the pointer-up releaseOverride re-arms.

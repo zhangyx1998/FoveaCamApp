@@ -127,6 +127,36 @@ If corrections stop applying, check **Min Match Score** against the live match
 quality: when the score drops below it the loop holds rather than trusting a bad
 match. A steady scene should hold steady Vergence and Depth numbers.
 
+### Auto-tuning the gains
+
+The **Auto-Tune** group (in the Tracker column) can derive the PID gains
+experimentally instead of hand-tuning the nine sliders. These are **real
+experiments on the rig** — the mirrors move — so the buttons only enable with a
+calibrated triple, the tracker **off**, and no drag in flight; run them on a
+static, well-matched target (for the depth gains, converge on a **near**
+target first — a parallel/infinity pose gives the depth axis nothing to push
+against). *This feature is code-complete but not yet verified on hardware.*
+
+- **tune** — the relay stage: each axis in turn is wiggled with a small square
+  wave (2–10 % of its range, hard-bounded) until a steady oscillation appears,
+  and conservative Tyreus–Luyben gains are computed from it. Seconds per axis.
+  An axis that will not oscillate keeps its previous gains (the status line
+  names it).
+- **tune + polish** — relay first, then a joint optimization (CMA-ES): the
+  target is stepped sideways repeatedly and each candidate gain set is scored
+  on tracking error, overshoot, and actuation effort. Budget-capped; takes
+  minutes.
+- **abort** (shown while running) — stops the experiment and restores the
+  pre-tune gains and pose. Any takeover (dragging the view, moving a Vergence
+  Angles slider, re-enabling the tracker, editing a gain) also aborts — except
+  that editing a gain keeps **your** edited value rather than restoring the
+  pre-tune gains (only the pose is restored).
+
+The status line tracks progress (axis and cycles during relay, evaluations and
+best cost during polish). On completion the new gains land in the PID columns,
+and the loop stays **held** at the pre-tune pose — drag on the view or re-enable
+the tracker to resume closed-loop control with the new gains.
+
 > **Delay compensation.** A per-triple **Delay compensation** value (set in
 > [Settings → Device config](./settings.md#per-triple-settings)) chains a motion
 > predictor after the tracker so the mirrors act on the target's *estimated*

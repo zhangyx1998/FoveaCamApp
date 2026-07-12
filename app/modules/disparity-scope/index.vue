@@ -294,10 +294,14 @@ const pidPanY = pidRef("panY");
 const pidVshift = pidRef("v_shift");
 const resetVergence = () => session.call("reset_vergence", undefined);
 // Takeover cue (review #5): the four sliders shift to the accent while manual
-// control holds the loop ("held" latch / Timeout hard-left), restoring one
-// visual identity per state — color only, no reflow, no transition.
+// control holds the loop ("held" latch / Timeout hard-left / a live auto-tune
+// run wiggling them), restoring one visual identity per state — color only,
+// no reflow, no transition.
 const vergenceHeld = computed(
-  () => telemetry.status === "held" || telemetry.status === "auto off",
+  () =>
+    telemetry.status === "held" ||
+    telemetry.status === "auto off" ||
+    telemetry.status === "autotune",
 );
 const vergenceSliderColor = computed(() =>
   vergenceHeld.value ? "var(--accent-bright)" : "currentColor",
@@ -313,6 +317,74 @@ const kernel_h = computed<number>({
   get: () => state.kernel.h,
   set: (v) => (state.kernel = { ...state.kernel, h: v }),
 });
+
+// --- auto-tune (spec §autotune) — drawer-gated RIG experiments --------------
+const tuneActive = computed(() => {
+  const p = telemetry.autotune;
+  return p !== null && (p.phase === "relay" || p.phase === "eval");
+});
+// The condition currently blocking a run, mirroring the session's
+// `autotuneRefusal()` order — null means runnable. Feeds both the :disabled
+// gate and the state-dependent titles (Timeout-slider precedent).
+const tuneBlocked = computed<string | null>(() => {
+  if (tuneActive.value) return "a run is in progress";
+  if (!telemetry.ready) return "session is not ready";
+  if (!telemetry.calibrated) return "no calibration on this triple";
+  if (telemetry.overridden) return "release the drag first";
+  if (state.tracker_enabled) return "tracker is on — disable it first";
+  if (state.pidOverride.engaged) return "release the PID override first";
+  return null;
+});
+const tuneRunnable = computed(() => tuneBlocked.value === null);
+const tuneLine = computed(() => {
+  const p = telemetry.autotune;
+  if (!p) return "idle";
+  const costs =
+    p.bestCost !== null && p.baselineCost !== null
+      ? ` best ${p.bestCost.toFixed(3)} (base ${p.baselineCost.toFixed(3)})`
+      : "";
+  switch (p.phase) {
+    case "relay":
+      // {dof: null, dofsDone: 4} is the completing transient — no cycle count.
+      return p.dof
+        ? `relay ${p.dof} ${p.cycles} cyc (${p.dofsDone}/4)`
+        : `relay — ${p.dofsDone}/4`;
+    case "eval":
+      return `eval ${p.evals}/${p.budget}${costs}`;
+    case "done":
+      return (
+        `done${costs}${p.message ? ` — ${p.message}` : ""}` +
+        " — gains applied (loop held; drag or tracker to resume)"
+      );
+    case "failed":
+      return `failed — ${p.message ?? ""}`;
+    case "aborted":
+      // Session-built messages carry the gains outcome (kept vs restored).
+      return p.message ? `aborted — ${p.message}` : "aborted (gains restored)";
+  }
+});
+const TUNE_TITLE =
+  "Relay auto-tune, per DOF: small (2–10% of range) square-wave experiments " +
+  "about the held pose measure each DOF's ultimate gain/period, then apply " +
+  "conservative Tyreus-Luyben gains. RIG experiment — needs a calibrated " +
+  "triple, a static matchable target and the tracker off; unverified on " +
+  "hardware until the rig pass.";
+const POLISH_TITLE =
+  "Relay tune, then CMA-ES joint polish: scripted target steps scored by " +
+  "ITAE + overshoot + actuation effort, budget-capped (takes minutes). " +
+  "Same rig requirements as tune.";
+// State-dependent titles: name WHY the button is disabled right now.
+const tuneTitle = computed(() =>
+  tuneBlocked.value ? `Disabled: ${tuneBlocked.value}. ${TUNE_TITLE}` : TUNE_TITLE,
+);
+const polishTitle = computed(() =>
+  tuneBlocked.value
+    ? `Disabled: ${tuneBlocked.value}. ${POLISH_TITLE}`
+    : POLISH_TITLE,
+);
+const startTune = (stage: "relay" | "full") =>
+  session.call("autotune", { stage });
+const abortTune = () => session.call("autotuneAbort", undefined);
 
 // Synthesize down/move/up phases from StreamView's plain (un-phased) mouse stream.
 let wasDown = false;
@@ -629,6 +701,33 @@ function onCursor(c: (Point2d & Size & { buttons: number }) | null): void {
                 : "off"
           }}</span>
         </div>
+        <!-- Auto-tune (spec §autotune): drawer-gated RIG experiments, never
+             automatic. Buttons disable while not runnable (title names the
+             blocking condition); abort is ALWAYS rendered — visibility only —
+             so the header slot is truly reserved (no line-height shift). -->
+        <h4>
+          <span>Auto-Tune</span>
+          <button
+            class="reset"
+            :style="{ visibility: tuneActive ? 'visible' : 'hidden' }"
+            title="Abort the running auto-tune — restores the pre-tune gains and pose"
+            @click="abortTune"
+          >abort</button>
+        </h4>
+        <div class="entry tune-actions">
+          <button class="reset" :disabled="!tuneRunnable" :title="tuneTitle" @click="startTune('relay')">
+            tune
+          </button>
+          <button class="reset" :disabled="!tuneRunnable" :title="polishTitle" @click="startTune('full')">
+            tune + polish
+          </button>
+        </div>
+        <div class="entry">
+          <span>Status</span>
+          <!-- title mirrors the line: the narrow column ellipsizes long
+               failure/done messages, hover recovers the full text. -->
+          <span class="tune-status" :title="tuneLine">{{ tuneLine }}</span>
+        </div>
       </div>
     </div>
   </Drawer>
@@ -721,43 +820,51 @@ function onCursor(c: (Point2d & Size & { buttons: number }) | null): void {
     &:first-child {
       margin-top: 0;
     }
+  }
 
-    .reset {
-      cursor: pointer;
-      border: 1px solid var(--tint-4);
-      border-radius: 4px;
-      background: var(--tint-1);
-      color: inherit;
-      font: inherit;
-      text-transform: none;
-      letter-spacing: 0;
-      padding: 0.1em 0.6em;
-      opacity: 0.8;
+  // Shared by the h4 header buttons AND the Auto-Tune action row (one button
+  // identity across the drawer). `text-transform`/`letter-spacing` undo the
+  // h4 header styling; harmless outside it.
+  .reset {
+    cursor: pointer;
+    border: 1px solid var(--tint-4);
+    border-radius: 4px;
+    background: var(--tint-1);
+    color: inherit;
+    font: inherit;
+    text-transform: none;
+    letter-spacing: 0;
+    padding: 0.1em 0.6em;
+    opacity: 0.8;
 
-      &:hover {
+    &:hover:not(:disabled) {
+      opacity: 1;
+      background: var(--tint-3);
+    }
+
+    &:active:not(:disabled) {
+      background: var(--tint-2);
+    }
+
+    &:disabled {
+      opacity: 0.4;
+      cursor: default;
+    }
+
+    &.toggle {
+      min-width: 3ch;
+      text-align: center;
+      text-transform: uppercase;
+      font-size: 0.9em;
+
+      &.active {
+        border-color: #0f08;
+        background: #0f02;
+        color: #6f6;
         opacity: 1;
-        background: var(--tint-3);
-      }
 
-      &:active {
-        background: var(--tint-2);
-      }
-
-      &.toggle {
-        min-width: 3ch;
-        text-align: center;
-        text-transform: uppercase;
-        font-size: 0.9em;
-
-        &.active {
-          border-color: #0f08;
-          background: #0f02;
-          color: #6f6;
-          opacity: 1;
-
-          &:hover {
-            background: #0f03;
-          }
+        &:hover {
+          background: #0f03;
         }
       }
     }
@@ -799,6 +906,17 @@ function onCursor(c: (Point2d & Size & { buttons: number }) | null): void {
       display: inline-flex;
       align-items: center;
       gap: 0.5ch;
+    }
+
+    &.tune-actions {
+      justify-content: flex-start; // buttons share the .reset identity
+    }
+
+    .tune-status {
+      text-align: right;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     .auto-hint {

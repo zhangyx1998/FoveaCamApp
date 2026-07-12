@@ -269,6 +269,78 @@ reproduces the pinned volts exactly. Only the generic volts-only override path (
 per-eye volts that genuinely encode a vergence) round-trips through `V2A`. `SEED_PARALLEL_EPS`
 (1e-9) guards the `z = baseline/tanDiff` divide on the parallel case.
 
+## Auto-tune {#autotune}
+
+Two-stage gain auto-tune (`vergence-loop-tuning.md` §1, ruled: relay first
+stage + CMA-ES joint polish, session-driven, drawer-gated, NEVER automatic).
+**RIG-GATED**: both stages are physical experiments (real optics in the loop);
+everything below is code-complete + unit/simulation-tested but UNVERIFIED on
+hardware until the owed rig pass. Pure core: `relay-tune.ts`, `cma-es.ts`,
+`step-cost.ts`, `autotune.ts` (the phase machine over injected hooks — throws
+never cross into the session; every failure is a verdict/callback).
+
+- **Entry** (`autotune` command, `{stage: "relay" | "full"}`): requires a
+  calibrated triple (the `calibrated` telemetry flag — `ready` alone also
+  covers the uncalibrated convert-fallback path), tracker DISARMED, no drag,
+  no generic override — refusals surface as a `failed` progress record, never
+  an error. EXCEPTION: a start while a run is LIVE is ignored SILENTLY — a
+  refusal record must never overwrite a non-terminal progress record (the
+  double-click would flip the UI to "failed", re-enabling the buttons and
+  hiding abort while the mirrors still wiggle). Starting enters the
+  MANUAL-HOLD machinery (`disengageAutoVergence` — the `-Infinity` window
+  latch), so normal stepping is out and compose feed-forward is down
+  (`frozen()`); status reads "autotune".
+- **Sampling** — the run consumes the SAME match-join projections the loop
+  does: `runControl` routes each once-per-pair projection to `autotuneStep`
+  instead of `controlStep` while a run is live (the normal path is untouched
+  when no tune runs — the hold already stops stepping). Per-DOF errors are the
+  `stepVergence` decomposition re-derived at the join output; samples below
+  `min_score` are skipped (a persistent low-score stream FAILS the run closed,
+  and an out-of-loop watchdog on the volt-telemetry timer FAILS a run whose
+  feed died entirely — both are failures, not aborts: "aborted" is reserved
+  for user action).
+- **Clock**: tune time = `elapsed-ms × sensitivity` (captured at start), the
+  loop's dt frame — relay Tu and the Tyreus–Luyben gains land in the same
+  units the controllers integrate, and tuning durations scale with the loop's
+  own timescale.
+- **Relay stage** (per DOF: panX, panY, verge, v_shift): square wave about the
+  current DOF value through the controller `.value` + follow-map push path
+  (the setPid precedent). Safety envelope: start half-amplitude = 2 % of the
+  DOF's physical range, escalation ×2 bounded ≤ 10 %, every command clamped to
+  the range (the PID value setters clamp again), and the relay center is
+  BIASED just inside a hard limit (the verge-at-∞ case) so the wave stays
+  two-sided; a settle window per amplitude level re-references the error mean.
+  Conclusion needs N consistent cycles (period + amplitude spread ≤ 35 %);
+  Ku = 4d/(πa), Tu → Tyreus–Luyben. Per-DOF failure verdicts (no-oscillation /
+  timeout / under-resolved period) keep that DOF's prior gains — pan takes the
+  elementwise MIN of its two axes' triples (conservative).
+- **Polish stage** (`full` only): CMA-ES over the 9-D gain vector in log10
+  space, box-bounded ±1 decade around the relay seed, budget-capped. Each
+  candidate: apply gains live (NOT persisted) → settle → scripted target step
+  (alternating ±`stepPx` from the pre-tune target, through the normal
+  `writeTarget` path so R1 epoch semantics hold) → record the trace → cost =
+  `stepCost(panX)` (ITAE + overshoot² + command total-variation, normalized by
+  the observed peak — the transport-delay lead-in is harmless) + the other
+  DOFs' regulation cost. The PRE-TUNE gains are evaluated first (the
+  telemetry `baselineCost` anchor), then the relay seed, then CMA candidates;
+  the final gains are the best MEASURED set (seed fallback).
+- **Terminal** (done/failed/aborted): done persists the gains into
+  `state.tuning` (server-side setState does NOT fire the watch — the session
+  re-syncs the controllers explicitly); failure/abort restores the pre-tune
+  tuning. Every path restores the pre-tune DOF pose + target, pushes the
+  reconstructed pose, and stays in the HELD state ("held") — the user resumes
+  control explicitly (drag / tracker re-enable), exactly the manual-hold
+  contract above.
+- **Interaction precedence** — any user takeover CANCELS the run (restore +
+  held): pointer-down, a `setPid` slider write, `reset_vergence`, re-enabling
+  the tracker, and a tuning write (which keeps the USER's tuning, only
+  resyncing the live controllers). Idle teardown discards silently (epoch
+  guard inerts stale callbacks; controllers resync from persisted tuning so
+  candidate gains never leak into the next activation).
+- **Telemetry**: one `autotune` progress record (phase relay/eval/done/
+  failed/aborted, DOF + cycles, evals/budget, best + baseline cost, message,
+  resulting gains) drives the drawer's Auto-Tune group; reset on idle.
+
 ## Actuation / native compose path {#actuation}
 
 Push-model at the projection/PID result rate. `native-compose-controller.md` (supersedes
