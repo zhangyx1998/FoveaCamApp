@@ -1,506 +1,674 @@
 {
-  "description": "IMM motion-predictor conformance vectors. Generated from the TS reference app/lib/imm-predictor.ts; the native brick (core ImmPredictor.ingest) must reproduce `expected` within `tolerancePx`. See prediction-compose-node.md.",
-  "config": {
-    "delayMs": 12.5
+ "description": "IMM motion-predictor conformance vectors. Generated from the TS reference app/lib/imm-predictor.ts; the native brick (core ImmPredictor.ingest) must reproduce `expected` within `tolerancePx`. See prediction-compose-node.md.",
+ "config": {
+  "delayMs": 12.5
+ },
+ "tolerancePx": 1e-06,
+ "inputs": [
+  {
+   "found": true,
+   "overridden": false,
+   "center": {
+    "x": 100,
+    "y": 200
+   },
+   "bbox": {
+    "x": 68,
+    "y": 168,
+    "width": 64,
+    "height": 64
+   },
+   "seq": 1,
+   "deviceTimestamp": "1000000000"
   },
-  "tolerancePx": 0.000001,
-  "inputs": [
-    {
-      "found": true,
-      "overridden": false,
-      "center": {
-        "x": 100,
-        "y": 200
-      },
-      "bbox": {
-        "x": 68,
-        "y": 168,
-        "width": 64,
-        "height": 64
-      },
-      "seq": 1,
-      "deviceTimestamp": "1000000000"
+  {
+   "found": true,
+   "overridden": false,
+   "center": {
+    "x": 100.566666678,
+    "y": 199.8249999965
+   },
+   "bbox": {
+    "x": 68.566666678,
+    "y": 167.8249999965,
+    "width": 64,
+    "height": 64
+   },
+   "seq": 2,
+   "deviceTimestamp": "1016666667"
+  },
+  {
+   "found": true,
+   "overridden": false,
+   "center": {
+    "x": 101.200000024,
+    "y": 199.6749999935
+   },
+   "bbox": {
+    "x": 69.200000024,
+    "y": 167.6749999935,
+    "width": 64,
+    "height": 64
+   },
+   "seq": 3,
+   "deviceTimestamp": "1033333334"
+  },
+  {
+   "found": true,
+   "overridden": false,
+   "center": {
+    "x": 101.900000038,
+    "y": 199.549999991
+   },
+   "bbox": {
+    "x": 69.900000038,
+    "y": 167.549999991,
+    "width": 64,
+    "height": 64
+   },
+   "seq": 4,
+   "deviceTimestamp": "1050000001"
+  },
+  {
+   "found": true,
+   "overridden": false,
+   "center": {
+    "x": 102.66666672,
+    "y": 199.449999989
+   },
+   "bbox": {
+    "x": 70.66666672,
+    "y": 167.449999989,
+    "width": 64,
+    "height": 64
+   },
+   "seq": 5,
+   "deviceTimestamp": "1066666668"
+  },
+  {
+   "found": true,
+   "overridden": false,
+   "center": {
+    "x": 103.50000007,
+    "y": 199.3749999875
+   },
+   "bbox": {
+    "x": 71.50000007,
+    "y": 167.3749999875,
+    "width": 64,
+    "height": 64
+   },
+   "seq": 6,
+   "deviceTimestamp": "1083333335"
+  },
+  {
+   "found": true,
+   "overridden": false,
+   "center": {
+    "x": 104.400000088,
+    "y": 199.3249999865
+   },
+   "bbox": {
+    "x": 72.400000088,
+    "y": 167.3249999865,
+    "width": 64,
+    "height": 64
+   },
+   "seq": 7,
+   "deviceTimestamp": "1100000002"
+  },
+  {
+   "found": true,
+   "overridden": false,
+   "center": {
+    "x": 105.366666774,
+    "y": 199.299999986
+   },
+   "bbox": {
+    "x": 73.366666774,
+    "y": 167.299999986,
+    "width": 64,
+    "height": 64
+   },
+   "seq": 8,
+   "deviceTimestamp": "1116666669"
+  },
+  {
+   "found": true,
+   "overridden": false,
+   "center": {
+    "x": 106.400000128,
+    "y": 199.299999986
+   },
+   "bbox": {
+    "x": 74.400000128,
+    "y": 167.299999986,
+    "width": 64,
+    "height": 64
+   },
+   "seq": 9,
+   "deviceTimestamp": "1133333336"
+  },
+  {
+   "found": true,
+   "overridden": false,
+   "center": {
+    "x": 107.50000015,
+    "y": 199.3249999865
+   },
+   "bbox": {
+    "x": 75.50000015,
+    "y": 167.3249999865,
+    "width": 64,
+    "height": 64
+   },
+   "seq": 10,
+   "deviceTimestamp": "1150000003"
+  },
+  {
+   "found": true,
+   "overridden": false,
+   "center": {
+    "x": 108.66666684,
+    "y": 199.3749999875
+   },
+   "bbox": {
+    "x": 76.66666684,
+    "y": 167.3749999875,
+    "width": 64,
+    "height": 64
+   },
+   "seq": 11,
+   "deviceTimestamp": "1166666670"
+  },
+  {
+   "found": true,
+   "overridden": false,
+   "center": {
+    "x": 109.900000198,
+    "y": 199.449999989
+   },
+   "bbox": {
+    "x": 77.900000198,
+    "y": 167.449999989,
+    "width": 64,
+    "height": 64
+   },
+   "seq": 12,
+   "deviceTimestamp": "1183333337"
+  },
+  {
+   "found": false,
+   "overridden": false,
+   "center": null,
+   "bbox": null,
+   "seq": 13,
+   "deviceTimestamp": "1200000004"
+  },
+  {
+   "found": true,
+   "overridden": false,
+   "center": {
+    "x": 111.20000022400001,
+    "y": 199.549999991
+   },
+   "bbox": {
+    "x": 79.20000022400001,
+    "y": 167.549999991,
+    "width": 64,
+    "height": 64
+   },
+   "seq": 14,
+   "deviceTimestamp": "1216666671"
+  },
+  {
+   "found": true,
+   "overridden": false,
+   "center": {
+    "x": 112.50000025000001,
+    "y": 199.649999993
+   },
+   "bbox": {
+    "x": 80.50000025000001,
+    "y": 167.649999993,
+    "width": 64,
+    "height": 64
+   },
+   "seq": 15,
+   "deviceTimestamp": "1233333338"
+  },
+  {
+   "found": true,
+   "overridden": false,
+   "center": {
+    "x": 113.80000027600002,
+    "y": 199.749999995
+   },
+   "bbox": {
+    "x": 81.80000027600002,
+    "y": 167.749999995,
+    "width": 64,
+    "height": 64
+   },
+   "seq": 16,
+   "deviceTimestamp": "1250000005"
+  },
+  {
+   "found": true,
+   "overridden": false,
+   "center": {
+    "x": 900,
+    "y": 50
+   },
+   "bbox": {
+    "x": 868,
+    "y": 18,
+    "width": 64,
+    "height": 64
+   },
+   "seq": 17,
+   "deviceTimestamp": "1266666672"
+  },
+  {
+   "found": true,
+   "overridden": false,
+   "center": {
+    "x": 899.66666666,
+    "y": 50.100000002
+   },
+   "bbox": {
+    "x": 867.66666666,
+    "y": 18.100000002,
+    "width": 64,
+    "height": 64
+   },
+   "seq": 18,
+   "deviceTimestamp": "1283333339"
+  },
+  {
+   "found": true,
+   "overridden": false,
+   "center": {
+    "x": 899.3333333200001,
+    "y": 50.200000004
+   },
+   "bbox": {
+    "x": 867.3333333200001,
+    "y": 18.200000004000003,
+    "width": 64,
+    "height": 64
+   },
+   "seq": 19,
+   "deviceTimestamp": "1300000006"
+  },
+  {
+   "found": true,
+   "overridden": false,
+   "center": {
+    "x": 898.9999999800001,
+    "y": 50.300000006000005
+   },
+   "bbox": {
+    "x": 866.9999999800001,
+    "y": 18.300000006000005,
+    "width": 64,
+    "height": 64
+   },
+   "seq": 20,
+   "deviceTimestamp": "1316666673"
+  },
+  {
+   "found": true,
+   "overridden": false,
+   "center": {
+    "x": 898.6666666400001,
+    "y": 50.400000008000006
+   },
+   "bbox": {
+    "x": 866.6666666400001,
+    "y": 18.400000008000006,
+    "width": 64,
+    "height": 64
+   },
+   "seq": 21,
+   "deviceTimestamp": "1333333340"
+  },
+  {
+   "found": true,
+   "overridden": false,
+   "center": {
+    "x": 898.3333333000002,
+    "y": 50.50000001000001
+   },
+   "bbox": {
+    "x": 866.3333333000002,
+    "y": 18.500000010000008,
+    "width": 64,
+    "height": 64
+   },
+   "seq": 22,
+   "deviceTimestamp": "1350000007"
+  }
+ ],
+ "expected": [
+  {
+   "found": true,
+   "center": {
+    "x": 100,
+    "y": 200
+   }
+  },
+  {
+   "found": true,
+   "center": {
+    "x": 100.4217009376613,
+    "y": 199.86981745351133
+   }
+  },
+  {
+   "found": true,
+   "center": {
+    "x": 101.01445616750635,
+    "y": 199.71967742010565
+   }
+  },
+  {
+   "found": true,
+   "center": {
+    "x": 101.64666133176465,
+    "y": 199.59940310633257
+   }
+  },
+  {
+   "found": true,
+   "center": {
+    "x": 102.32542837749334,
+    "y": 199.5118425639004
+   }
+  },
+  {
+   "found": true,
+   "center": {
+    "x": 103.11528774592655,
+    "y": 199.44778659230627
+   }
+  },
+  {
+   "found": true,
+   "center": {
+    "x": 104.06564874478565,
+    "y": 199.4015088051523
+   }
+  },
+  {
+   "found": true,
+   "center": {
+    "x": 105.1691797954966,
+    "y": 199.37026225818138
+   }
+  },
+  {
+   "found": true,
+   "center": {
+    "x": 106.35725747093261,
+    "y": 199.3527319942589
+   }
+  },
+  {
+   "found": true,
+   "center": {
+    "x": 107.57072618489474,
+    "y": 199.34832005433543
+   }
+  },
+  {
+   "found": true,
+   "center": {
+    "x": 108.80430406973007,
+    "y": 199.35687632070292
+   }
+  },
+  {
+   "found": true,
+   "center": {
+    "x": 110.07742217945248,
+    "y": 199.37856579221219
+   }
+  },
+  {
+   "found": false,
+   "center": null
+  },
+  {
+   "found": true,
+   "center": {
+    "x": 111.86225294404268,
+    "y": 199.41715745144197
+   }
+  },
+  {
+   "found": true,
+   "center": {
+    "x": 112.94379471807866,
+    "y": 199.46601370823748
+   }
+  },
+  {
+   "found": true,
+   "center": {
+    "x": 114.13243471824667,
+    "y": 199.51978609980495
+   }
+  },
+  {
+   "found": true,
+   "center": {
+    "x": 900,
+    "y": 50
+   }
+  },
+  {
+   "found": true,
+   "center": {
+    "x": 899.7520075603313,
+    "y": 50.07438805122067
+   }
+  },
+  {
+   "found": true,
+   "center": {
+    "x": 899.4326829973675,
+    "y": 50.16989590875877
+   }
+  },
+  {
+   "found": true,
+   "center": {
+    "x": 899.1323288986187,
+    "y": 50.25854153220379
+   }
+  },
+  {
+   "found": true,
+   "center": {
+    "x": 898.8604850236139,
+    "y": 50.336534336492846
+   }
+  },
+  {
+   "found": true,
+   "center": {
+    "x": 898.5999645273837,
+    "y": 50.40838204455761
+   }
+  }
+ ],
+ "coastCap": {
+  "description": "R1 coast-cap vectors (docs/dev/mirror-flicker-2026-07-12.md addendum): a stalled measurement source must NOT extrapolate forever \u2014 predictAfter(coastMs) emits found=true coasting predictions only while coastMs <= maxGapMs; past the cap it degrades to the miss-coast shape (found=false, coasting=true, center=null). Warmup = constant-velocity track (8 px/frame @ ~60 Hz); probes are independent reads after the warmup. Expected values generated from the native brick (core/test/42); the TS reference (ImmPredictor.predictAfter) must reproduce them within tolerancePx.",
+  "config": {
+   "delayMs": 12.5,
+   "maxGapMs": 500
+  },
+  "tolerancePx": 1e-06,
+  "warmup": [
+   {
+    "found": true,
+    "overridden": false,
+    "center": {
+     "x": 100,
+     "y": 240
     },
-    {
-      "found": true,
-      "overridden": false,
-      "center": {
-        "x": 100.566666678,
-        "y": 199.8249999965
-      },
-      "bbox": {
-        "x": 68.566666678,
-        "y": 167.8249999965,
-        "width": 64,
-        "height": 64
-      },
-      "seq": 2,
-      "deviceTimestamp": "1016666667"
+    "bbox": {
+     "x": 68,
+     "y": 208,
+     "width": 64,
+     "height": 64
     },
-    {
-      "found": true,
-      "overridden": false,
-      "center": {
-        "x": 101.200000024,
-        "y": 199.6749999935
-      },
-      "bbox": {
-        "x": 69.200000024,
-        "y": 167.6749999935,
-        "width": 64,
-        "height": 64
-      },
-      "seq": 3,
-      "deviceTimestamp": "1033333334"
+    "seq": 1,
+    "deviceTimestamp": "1000000000"
+   },
+   {
+    "found": true,
+    "overridden": false,
+    "center": {
+     "x": 108,
+     "y": 240
     },
-    {
-      "found": true,
-      "overridden": false,
-      "center": {
-        "x": 101.900000038,
-        "y": 199.549999991
-      },
-      "bbox": {
-        "x": 69.900000038,
-        "y": 167.549999991,
-        "width": 64,
-        "height": 64
-      },
-      "seq": 4,
-      "deviceTimestamp": "1050000001"
+    "bbox": {
+     "x": 76,
+     "y": 208,
+     "width": 64,
+     "height": 64
     },
-    {
-      "found": true,
-      "overridden": false,
-      "center": {
-        "x": 102.66666672,
-        "y": 199.449999989
-      },
-      "bbox": {
-        "x": 70.66666672,
-        "y": 167.449999989,
-        "width": 64,
-        "height": 64
-      },
-      "seq": 5,
-      "deviceTimestamp": "1066666668"
+    "seq": 2,
+    "deviceTimestamp": "1016666667"
+   },
+   {
+    "found": true,
+    "overridden": false,
+    "center": {
+     "x": 116,
+     "y": 240
     },
-    {
-      "found": true,
-      "overridden": false,
-      "center": {
-        "x": 103.50000007,
-        "y": 199.3749999875
-      },
-      "bbox": {
-        "x": 71.50000007,
-        "y": 167.3749999875,
-        "width": 64,
-        "height": 64
-      },
-      "seq": 6,
-      "deviceTimestamp": "1083333335"
+    "bbox": {
+     "x": 84,
+     "y": 208,
+     "width": 64,
+     "height": 64
     },
-    {
-      "found": true,
-      "overridden": false,
-      "center": {
-        "x": 104.400000088,
-        "y": 199.3249999865
-      },
-      "bbox": {
-        "x": 72.400000088,
-        "y": 167.3249999865,
-        "width": 64,
-        "height": 64
-      },
-      "seq": 7,
-      "deviceTimestamp": "1100000002"
+    "seq": 3,
+    "deviceTimestamp": "1033333334"
+   },
+   {
+    "found": true,
+    "overridden": false,
+    "center": {
+     "x": 124,
+     "y": 240
     },
-    {
-      "found": true,
-      "overridden": false,
-      "center": {
-        "x": 105.366666774,
-        "y": 199.299999986
-      },
-      "bbox": {
-        "x": 73.366666774,
-        "y": 167.299999986,
-        "width": 64,
-        "height": 64
-      },
-      "seq": 8,
-      "deviceTimestamp": "1116666669"
+    "bbox": {
+     "x": 92,
+     "y": 208,
+     "width": 64,
+     "height": 64
     },
-    {
-      "found": true,
-      "overridden": false,
-      "center": {
-        "x": 106.400000128,
-        "y": 199.299999986
-      },
-      "bbox": {
-        "x": 74.400000128,
-        "y": 167.299999986,
-        "width": 64,
-        "height": 64
-      },
-      "seq": 9,
-      "deviceTimestamp": "1133333336"
+    "seq": 4,
+    "deviceTimestamp": "1050000001"
+   },
+   {
+    "found": true,
+    "overridden": false,
+    "center": {
+     "x": 132,
+     "y": 240
     },
-    {
-      "found": true,
-      "overridden": false,
-      "center": {
-        "x": 107.50000015,
-        "y": 199.3249999865
-      },
-      "bbox": {
-        "x": 75.50000015,
-        "y": 167.3249999865,
-        "width": 64,
-        "height": 64
-      },
-      "seq": 10,
-      "deviceTimestamp": "1150000003"
+    "bbox": {
+     "x": 100,
+     "y": 208,
+     "width": 64,
+     "height": 64
     },
-    {
-      "found": true,
-      "overridden": false,
-      "center": {
-        "x": 108.66666684,
-        "y": 199.3749999875
-      },
-      "bbox": {
-        "x": 76.66666684,
-        "y": 167.3749999875,
-        "width": 64,
-        "height": 64
-      },
-      "seq": 11,
-      "deviceTimestamp": "1166666670"
+    "seq": 5,
+    "deviceTimestamp": "1066666668"
+   },
+   {
+    "found": true,
+    "overridden": false,
+    "center": {
+     "x": 140,
+     "y": 240
     },
-    {
-      "found": true,
-      "overridden": false,
-      "center": {
-        "x": 109.900000198,
-        "y": 199.449999989
-      },
-      "bbox": {
-        "x": 77.900000198,
-        "y": 167.449999989,
-        "width": 64,
-        "height": 64
-      },
-      "seq": 12,
-      "deviceTimestamp": "1183333337"
+    "bbox": {
+     "x": 108,
+     "y": 208,
+     "width": 64,
+     "height": 64
     },
-    {
-      "found": false,
-      "overridden": false,
-      "center": null,
-      "bbox": null,
-      "seq": 13,
-      "deviceTimestamp": "1200000004"
-    },
-    {
-      "found": true,
-      "overridden": false,
-      "center": {
-        "x": 111.20000022400001,
-        "y": 199.549999991
-      },
-      "bbox": {
-        "x": 79.20000022400001,
-        "y": 167.549999991,
-        "width": 64,
-        "height": 64
-      },
-      "seq": 14,
-      "deviceTimestamp": "1216666671"
-    },
-    {
-      "found": true,
-      "overridden": false,
-      "center": {
-        "x": 112.50000025000001,
-        "y": 199.649999993
-      },
-      "bbox": {
-        "x": 80.50000025000001,
-        "y": 167.649999993,
-        "width": 64,
-        "height": 64
-      },
-      "seq": 15,
-      "deviceTimestamp": "1233333338"
-    },
-    {
-      "found": true,
-      "overridden": false,
-      "center": {
-        "x": 113.80000027600002,
-        "y": 199.749999995
-      },
-      "bbox": {
-        "x": 81.80000027600002,
-        "y": 167.749999995,
-        "width": 64,
-        "height": 64
-      },
-      "seq": 16,
-      "deviceTimestamp": "1250000005"
-    },
-    {
-      "found": true,
-      "overridden": false,
-      "center": {
-        "x": 900,
-        "y": 50
-      },
-      "bbox": {
-        "x": 868,
-        "y": 18,
-        "width": 64,
-        "height": 64
-      },
-      "seq": 17,
-      "deviceTimestamp": "1266666672"
-    },
-    {
-      "found": true,
-      "overridden": false,
-      "center": {
-        "x": 899.66666666,
-        "y": 50.100000002
-      },
-      "bbox": {
-        "x": 867.66666666,
-        "y": 18.100000002,
-        "width": 64,
-        "height": 64
-      },
-      "seq": 18,
-      "deviceTimestamp": "1283333339"
-    },
-    {
-      "found": true,
-      "overridden": false,
-      "center": {
-        "x": 899.3333333200001,
-        "y": 50.200000004
-      },
-      "bbox": {
-        "x": 867.3333333200001,
-        "y": 18.200000004000003,
-        "width": 64,
-        "height": 64
-      },
-      "seq": 19,
-      "deviceTimestamp": "1300000006"
-    },
-    {
-      "found": true,
-      "overridden": false,
-      "center": {
-        "x": 898.9999999800001,
-        "y": 50.300000006000005
-      },
-      "bbox": {
-        "x": 866.9999999800001,
-        "y": 18.300000006000005,
-        "width": 64,
-        "height": 64
-      },
-      "seq": 20,
-      "deviceTimestamp": "1316666673"
-    },
-    {
-      "found": true,
-      "overridden": false,
-      "center": {
-        "x": 898.6666666400001,
-        "y": 50.400000008000006
-      },
-      "bbox": {
-        "x": 866.6666666400001,
-        "y": 18.400000008000006,
-        "width": 64,
-        "height": 64
-      },
-      "seq": 21,
-      "deviceTimestamp": "1333333340"
-    },
-    {
-      "found": true,
-      "overridden": false,
-      "center": {
-        "x": 898.3333333000002,
-        "y": 50.50000001000001
-      },
-      "bbox": {
-        "x": 866.3333333000002,
-        "y": 18.500000010000008,
-        "width": 64,
-        "height": 64
-      },
-      "seq": 22,
-      "deviceTimestamp": "1350000007"
-    }
+    "seq": 6,
+    "deviceTimestamp": "1083333335"
+   }
   ],
-  "expected": [
-    {
-      "found": true,
-      "center": {
-        "x": 100,
-        "y": 200
-      }
-    },
-    {
-      "found": true,
-      "center": {
-        "x": 100.4217009376613,
-        "y": 199.86981745351133
-      }
-    },
-    {
-      "found": true,
-      "center": {
-        "x": 101.01445616750635,
-        "y": 199.71967742010565
-      }
-    },
-    {
-      "found": true,
-      "center": {
-        "x": 101.64666133176465,
-        "y": 199.59940310633257
-      }
-    },
-    {
-      "found": true,
-      "center": {
-        "x": 102.32542837749334,
-        "y": 199.5118425639004
-      }
-    },
-    {
-      "found": true,
-      "center": {
-        "x": 103.11528774592655,
-        "y": 199.44778659230627
-      }
-    },
-    {
-      "found": true,
-      "center": {
-        "x": 104.06564874478565,
-        "y": 199.4015088051523
-      }
-    },
-    {
-      "found": true,
-      "center": {
-        "x": 105.1691797954966,
-        "y": 199.37026225818138
-      }
-    },
-    {
-      "found": true,
-      "center": {
-        "x": 106.35725747093261,
-        "y": 199.3527319942589
-      }
-    },
-    {
-      "found": true,
-      "center": {
-        "x": 107.57072618489474,
-        "y": 199.34832005433543
-      }
-    },
-    {
-      "found": true,
-      "center": {
-        "x": 108.80430406973007,
-        "y": 199.35687632070292
-      }
-    },
-    {
-      "found": true,
-      "center": {
-        "x": 110.07742217945248,
-        "y": 199.37856579221219
-      }
-    },
-    {
-      "found": false,
-      "center": null
-    },
-    {
-      "found": true,
-      "center": {
-        "x": 111.86225294404268,
-        "y": 199.41715745144197
-      }
-    },
-    {
-      "found": true,
-      "center": {
-        "x": 112.94379471807866,
-        "y": 199.46601370823748
-      }
-    },
-    {
-      "found": true,
-      "center": {
-        "x": 114.13243471824667,
-        "y": 199.51978609980495
-      }
-    },
-    {
-      "found": true,
-      "center": {
-        "x": 900,
-        "y": 50
-      }
-    },
-    {
-      "found": true,
-      "center": {
-        "x": 899.7520075603313,
-        "y": 50.07438805122067
-      }
-    },
-    {
-      "found": true,
-      "center": {
-        "x": 899.4326829973675,
-        "y": 50.16989590875877
-      }
-    },
-    {
-      "found": true,
-      "center": {
-        "x": 899.1323288986187,
-        "y": 50.25854153220379
-      }
-    },
-    {
-      "found": true,
-      "center": {
-        "x": 898.8604850236139,
-        "y": 50.336534336492846
-      }
-    },
-    {
-      "found": true,
-      "center": {
-        "x": 898.5999645273837,
-        "y": 50.40838204455761
-      }
+  "probes": [
+   {
+    "coastMs": 0,
+    "expected": {
+     "found": true,
+     "coasting": false,
+     "center": {
+      "x": 144.74026536226822,
+      "y": 240
+     }
     }
+   },
+   {
+    "coastMs": 8,
+    "expected": {
+     "found": true,
+     "coasting": true,
+     "center": {
+      "x": 148.55958268850281,
+      "y": 240
+     }
+    }
+   },
+   {
+    "coastMs": 100,
+    "expected": {
+     "found": true,
+     "coasting": true,
+     "center": {
+      "x": 194.82861913465678,
+      "y": 240
+     }
+    }
+   },
+   {
+    "coastMs": 499,
+    "expected": {
+     "found": true,
+     "coasting": true,
+     "center": {
+      "x": 445.4711058281574,
+      "y": 239.99999999999994
+     }
+    }
+   },
+   {
+    "coastMs": 501,
+    "expected": {
+     "found": false,
+     "coasting": true,
+     "center": null
+    }
+   },
+   {
+    "coastMs": 5000,
+    "expected": {
+     "found": false,
+     "coasting": true,
+     "center": null
+    }
+   }
   ]
+ }
 }

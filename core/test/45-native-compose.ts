@@ -53,7 +53,7 @@ type Compose = {
 type Link = { probe(): { written: number; delivered: number }; release(): void };
 type PredSource = {
   predict_out: { streamTag: string; pipe(t: unknown, o?: unknown): Link };
-  push(p: { found: boolean; center: XY | null; seq?: number }): void;
+  push(p: { found: boolean; center: XY | null; seq?: number; ageMs?: number }): void;
   release(): void;
 };
 type Sink = {
@@ -69,7 +69,7 @@ type Sink = {
 };
 
 const T = Tracker as unknown as {
-  createComposeStream(o: { name: string; initial: { l: XY; r: XY } }): Compose;
+  createComposeStream(o: { name: string; initial: { l: XY; r: XY }; staleAfterMs?: number; maxDeltaV?: number }): Compose;
   createTestPredictionSource(id: string): PredSource;
 };
 const C = Controller as unknown as {
@@ -78,20 +78,31 @@ const C = Controller as unknown as {
   __serialTestPty(): { fd: number; path: string };
 };
 
+type FixtureRebase = {
+  vPid: { l: XY; r: XY };
+  pMeas?: XY;
+  jL?: number[];
+  jR?: number[];
+  feedForward: boolean;
+};
 interface Fixture {
   tolerance: number;
   vectors: Array<{
     seq: number;
-    rebase: {
-      vPid: { l: XY; r: XY };
-      pMeas: XY;
-      jL: number[];
-      jR: number[];
-      feedForward: boolean;
-    };
+    rebase: FixtureRebase;
     pred: { found: boolean; center: XY | null };
     expected: { l: XY; r: XY };
   }>;
+  floorPolicy: {
+    tolerance: number;
+    steps: Array<{
+      op: "rebase" | "pred";
+      note: string;
+      rebase?: FixtureRebase;
+      pred?: { found: boolean; center: XY | null };
+      expected: { l: XY; r: XY };
+    }>;
+  };
 }
 const fixture = JSON.parse(
   readFileSync(
@@ -105,6 +116,11 @@ const fixture = JSON.parse(
   const compose = T.createComposeStream({
     name: "win/45/compose",
     initial: { l: { x: 0, y: 0 }, r: { x: 0, y: 0 } },
+    // Algebra pin only — the staleness bound and the guard-5 delta clamp
+    // each have their OWN sections (§6c/§6d); the fixture's cross-vector
+    // floor deltas legitimately exceed the default 50 V clamp.
+    staleAfterMs: 0,
+    maxDeltaV: 0,
   });
   const src = T.createTestPredictionSource("test/45/imm");
   assert.equal(src.predict_out.streamTag, "prediction", "predict_out tag");
@@ -126,14 +142,37 @@ const fixture = JSON.parse(
   const close = (a: number, b: number, what: string) =>
     assert(Math.abs(a - b) <= tol, `${what}: ${a} vs ${b}`);
 
+  // Expected FLOOR emission under the D2 policy (mirror-flicker 2026-07-12):
+  // the newest cached prediction applied against the NEW linearization; a cold
+  // brick (no prediction yet) or an unhealthy rebase floors the raw baseline.
+  const floorExpect = (r: Fixture["vectors"][number]["rebase"], lastPred: XY | null): { l: XY; r: XY } => {
+    if (!lastPred || !r.feedForward || !r.pMeas || !r.jL || !r.jR)
+      return { l: r.vPid.l, r: r.vPid.r };
+    const dx = lastPred.x - r.pMeas.x;
+    const dy = lastPred.y - r.pMeas.y;
+    return {
+      l: { x: r.vPid.l.x + r.jL[0]! * dx + r.jL[1]! * dy, y: r.vPid.l.y + r.jL[2]! * dx + r.jL[3]! * dy },
+      r: { x: r.vPid.r.x + r.jR[0]! * dx + r.jR[1]! * dy, y: r.vPid.r.y + r.jR[2]! * dx + r.jR[3]! * dy },
+    };
+  };
+
   let seq = 0;
+  let lastPred: XY | null = null;
   for (const v of fixture.vectors) {
     compose.rebase(v.rebase);
     const floor = await next();
-    // Planner decision 4: EVERY rebase emits the baseline floor.
-    close(floor.left.x, v.rebase.vPid.l.x, `vector ${v.seq} floor l.x`);
-    close(floor.right.y, v.rebase.vPid.r.y, `vector ${v.seq} floor r.y`);
+    // Planner decision 4 (amended by HIL D2): every rebase emits a floor, but
+    // the floor no longer RESCINDS a healthy feed-forward — it re-applies the
+    // cached prediction against the new linearization (raw only while cold).
+    const fexp = floorExpect(v.rebase, lastPred);
+    close(floor.left.x, fexp.l.x, `vector ${v.seq} floor l.x`);
+    close(floor.left.y, fexp.l.y, `vector ${v.seq} floor l.y`);
+    close(floor.right.x, fexp.r.x, `vector ${v.seq} floor r.x`);
+    close(floor.right.y, fexp.r.y, `vector ${v.seq} floor r.y`);
     src.push({ found: v.pred.found, center: v.pred.center, seq: ++seq });
+    // Mirror the brick's cache: the LATEST prediction wins — a found=false
+    // pred overwrites the cache and the next floor degrades to raw.
+    lastPred = v.pred.found && v.pred.center ? v.pred.center : null;
     const tick = await next();
     close(tick.left.x, v.expected.l.x, `vector ${v.seq} tick l.x`);
     close(tick.left.y, v.expected.l.y, `vector ${v.seq} tick l.y`);
@@ -351,6 +390,222 @@ function channels(p: XY, bias: number, dv: number): number[] {
   compose.release();
   sink.release();
   console.log("45-native-compose: teardown under load + FW5 seam close (no writes after disconnect) OK.");
+}
+
+// --- 6: HIL D2 floor policy + runaway guards (mirror-flicker 2026-07-12) --------
+// (a) the shared floorPolicy sequence vector: a rebase BETWEEN predictions
+//     emits NO baseline dip (pre-fix, every rebase floored RAW vPid — the
+//     60 Hz sawtooth); (b) cold brick still floor-emits; (c) a stalled imm
+//     degrades to the raw floor within the staleness bound; (d) guard 5
+//     clamps the composed |J·Δp| per axis.
+{
+  const mkCompose = (name: string, opts: { staleAfterMs?: number; maxDeltaV?: number } = {}) =>
+    T.createComposeStream({ name, initial: { l: { x: 0, y: 0 }, r: { x: 0, y: 0 } }, ...opts } as never);
+  const reader = (compose: Compose) => {
+    const it = compose[Symbol.asyncIterator]();
+    return {
+      next: async (): Promise<Volts> => {
+        const r = await Promise.race([
+          it.next(),
+          sleep(8000).then(() => {
+            throw new Error("compose emit timed out");
+          }),
+        ]);
+        return (r as IteratorResult<Volts>).value;
+      },
+      done: () => it.return?.(),
+    };
+  };
+  const closeTo = (a: number, b: number, tol: number, what: string) =>
+    assert(Math.abs(a - b) <= tol, `${what}: ${a} vs ${b}`);
+
+  // (a) the floorPolicy sequence vector — both implementations pin these numbers.
+  {
+    const fp = fixture.floorPolicy;
+    const compose = mkCompose("win/45/floor-policy", { staleAfterMs: 0 });
+    const src = T.createTestPredictionSource("test/45/floor-imm");
+    const link = src.predict_out.pipe(compose.pred_in, { type: "fifo", depth: 16 });
+    const r = reader(compose);
+    let seq = 100;
+    for (const [i, step] of fp.steps.entries()) {
+      if (step.op === "rebase") compose.rebase(step.rebase!);
+      else src.push({ found: step.pred!.found, center: step.pred!.center, seq: ++seq });
+      const out = await r.next();
+      closeTo(out.left.x, step.expected.l.x, fp.tolerance, `floorPolicy[${i}] l.x (${step.note})`);
+      closeTo(out.left.y, step.expected.l.y, fp.tolerance, `floorPolicy[${i}] l.y`);
+      closeTo(out.right.x, step.expected.r.x, fp.tolerance, `floorPolicy[${i}] r.x`);
+      closeTo(out.right.y, step.expected.r.y, fp.tolerance, `floorPolicy[${i}] r.y`);
+    }
+    await r.done();
+    link.release();
+    src.release();
+    compose.release();
+    console.log(`45-native-compose: floorPolicy vector OK — ${fp.steps.length} steps (rebase between predictions emits NO baseline dip).`);
+  }
+
+  // (a′) sawtooth regression: predictions at ~600 Hz with a CONSTANT lead +
+  // rebases at ~60 Hz with feedForward=true → EVERY emitted pose includes the
+  // delta (pre-fix this failed on every rebase: 21/21 raw floors measured).
+  {
+    const compose = mkCompose("win/45/sawtooth", { staleAfterMs: 0 });
+    const src = T.createTestPredictionSource("test/45/sawtooth-imm");
+    const link = src.predict_out.pipe(compose.pred_in, { type: "fifo", depth: 64 });
+    const J = [0.02, 0, 0, 0.02];
+    const rb = {
+      vPid: { l: { x: 1, y: 1 }, r: { x: 1, y: 1 } },
+      pMeas: { x: 100, y: 100 },
+      jL: J,
+      jR: J,
+      feedForward: true,
+    };
+    const PRED = { x: 150, y: 100 }; // constant lead: +50 px → +1.0 V on x
+    const out: Volts[] = [];
+    const it = compose[Symbol.asyncIterator]();
+    const pump = (async () => {
+      for (;;) {
+        const r = await it.next();
+        if (r.done) break;
+        out.push(r.value as Volts);
+      }
+    })().catch(() => {});
+    compose.rebase(rb);
+    await sleep(5);
+    src.push({ found: true, center: PRED, seq: 1 }); // warm the cache
+    // Deterministic warm-up: wait until the first LEAD emission lands (the
+    // link delivery + compose thread hop is asynchronous — a fixed sleep
+    // flakes under load, and a rebase issued before the cache warms would
+    // legitimately floor raw).
+    {
+      const deadline = Date.now() + 5000;
+      while (!out.some((v) => Math.abs(v.left.x - 2.0) < 1e-9)) {
+        assert(Date.now() < deadline, "warm-up prediction never emitted");
+        await sleep(2);
+      }
+    }
+    let seq = 1;
+    for (let i = 0; i < 20; i++) {
+      for (let k = 0; k < 5; k++) {
+        src.push({ found: true, center: PRED, seq: ++seq });
+        await sleep(1);
+      }
+      compose.rebase(rb); // the pre-fix dip point
+      await sleep(2);
+    }
+    await sleep(20);
+    await it.return?.();
+    await pump;
+    // Everything from the FIRST lead emission onward must carry the delta —
+    // cold floors before the first prediction are expected (decision 4); the
+    // D2 bug was raw floors AFTER predictions.
+    const firstLead = out.findIndex((v) => Math.abs(v.left.x - 2.0) < 1e-9);
+    assert(firstLead >= 0, "a lead emission exists");
+    const warm = out.slice(firstLead);
+    assert(warm.length > 80, `enough emissions collected (${warm.length})`);
+    // The lead is x-only (PRED shifts +50 px in x; J is diagonal): every warm
+    // emission must carry l.x = vPid + 1.0 V while l.y holds the baseline.
+    let maxDev = 0;
+    for (const v of warm) maxDev = Math.max(maxDev, Math.abs(v.left.x - 2.0), Math.abs(v.left.y - 1.0));
+    assert(maxDev < 1e-9, `every warm emission includes the feed-forward delta (max dev ${maxDev})`);
+    link.release();
+    src.release();
+    compose.release();
+    console.log(`45-native-compose: sawtooth regression OK — ${warm.length} emissions, zero baseline dips (pre-fix: every rebase dipped).`);
+  }
+
+  // (b) cold brick: zero predictions ever → floors emit the RAW baseline
+  // (planner decision 4 preserved).
+  {
+    const compose = mkCompose("win/45/cold");
+    const r = reader(compose);
+    const rb = {
+      vPid: { l: { x: 3, y: 4 }, r: { x: 5, y: 6 } },
+      pMeas: { x: 0, y: 0 },
+      jL: [1, 0, 0, 1],
+      jR: [1, 0, 0, 1],
+      feedForward: true,
+    };
+    compose.rebase(rb);
+    const f1 = await r.next();
+    assert.equal(f1.left.x, 3, "cold floor l.x = raw vPid");
+    assert.equal(f1.right.y, 6, "cold floor r.y = raw vPid");
+    compose.rebase(rb);
+    const f2 = await r.next();
+    assert.equal(f2.left.x, 3, "cold floor stays raw across rebases");
+    await r.done();
+    compose.release();
+    console.log("45-native-compose: cold brick floor-emits the raw baseline OK.");
+  }
+
+  // (c) STALLED imm: predictions stop, rebases keep coming → once the cached
+  // prediction exceeds the staleness bound, floors degrade to the RAW
+  // baseline (value-sweep staleness discipline). Also: an already-stale push
+  // (ageMs) is never applied.
+  {
+    const compose = mkCompose("win/45/stale", { staleAfterMs: 40 });
+    const src = T.createTestPredictionSource("test/45/stale-imm");
+    const link = src.predict_out.pipe(compose.pred_in, { type: "fifo", depth: 16 });
+    const r = reader(compose);
+    const J = [0.02, 0, 0, 0.02];
+    const rb = {
+      vPid: { l: { x: 1, y: 1 }, r: { x: 1, y: 1 } },
+      pMeas: { x: 100, y: 100 },
+      jL: J,
+      jR: J,
+      feedForward: true,
+    };
+    compose.rebase(rb);
+    await r.next(); // cold floor
+    src.push({ found: true, center: { x: 150, y: 100 }, seq: 1 });
+    const tick = await r.next();
+    closeTo(tick.left.x, 2.0, 1e-9, "fresh prediction applies");
+    compose.rebase(rb);
+    const floorFresh = await r.next();
+    closeTo(floorFresh.left.x, 2.0, 1e-9, "floor within the bound keeps the lead");
+    await sleep(80); // exceed staleAfterMs=40 with NO new predictions
+    compose.rebase(rb);
+    const floorStale = await r.next();
+    closeTo(floorStale.left.x, 1.0, 1e-9, "stale floor degrades to the raw baseline");
+    // A prediction tick that is ITSELF stale (ageMs) must not apply either.
+    src.push({ found: true, center: { x: 150, y: 100 }, seq: 2, ageMs: 500 });
+    const tickStale = await r.next();
+    closeTo(tickStale.left.x, 1.0, 1e-9, "stale prediction tick holds the baseline");
+    await r.done();
+    link.release();
+    src.release();
+    compose.release();
+    console.log("45-native-compose: stalled-imm staleness degrade (floor AND tick) OK.");
+  }
+
+  // (d) guard 5: the composed |J·Δp| clamps per axis to maxDeltaV.
+  {
+    const compose = mkCompose("win/45/clamp", { staleAfterMs: 0, maxDeltaV: 0.5 });
+    const src = T.createTestPredictionSource("test/45/clamp-imm");
+    const link = src.predict_out.pipe(compose.pred_in, { type: "fifo", depth: 16 });
+    const r = reader(compose);
+    compose.rebase({
+      vPid: { l: { x: 1, y: 1 }, r: { x: 1, y: 1 } },
+      pMeas: { x: 0, y: 0 },
+      // Row-major [dVx/dpx, dVx/dpy, dVy/dpx, dVy/dpy]: dx drives BOTH left
+      // axes (+1 into x, −1 into y) so both clamp rails are exercised.
+      jL: [1, 0, -1, 0],
+      jR: [0.001, 0, 0, 0.001],
+      feedForward: true,
+    });
+    await r.next(); // cold floor
+    // Runaway-sized delta: 300 px → J·Δp = +300 V on l.x and −300 V on l.y —
+    // both clamp to ±maxDeltaV (0.5); the right eye's small legitimate delta
+    // (0.001·300 = 0.3 V) passes through unclamped.
+    src.push({ found: true, center: { x: 300, y: 0 }, seq: 1 });
+    const t = await r.next();
+    assert.equal(t.left.x, 1 + 0.5, "l.x delta clamped to +maxDeltaV");
+    assert.equal(t.left.y, 1 - 0.5, "l.y delta clamped to −maxDeltaV");
+    closeTo(t.right.x, 1 + 0.3, 1e-9, "legitimate small delta passes unclamped");
+    await r.done();
+    link.release();
+    src.release();
+    compose.release();
+    console.log("45-native-compose: guard-5 volt-space delta clamp OK.");
+  }
 }
 
 cleanup();

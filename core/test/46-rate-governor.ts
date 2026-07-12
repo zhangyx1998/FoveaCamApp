@@ -244,9 +244,17 @@ const drainTimer = setInterval(drainPty, 10); // keep the pty buffer empty
   // Fixed 1 ms gate still applies (wave-5): a 3 ms-spaced pair of distinct
   // poses both write; pressure signals change NOTHING while off.
   dev.__testPressure({ outq: 100000, softFail: 5 });
+  // PRE-EXISTING 1-in-6 flake (seen on the pre-J binary too): §3's flood can
+  // finish <1 ms before this pose, so the wave-5 fixed gate THROTTLES pose 1
+  // (dropped — latest-wins has no retry) and only pose 2 writes. Clear the
+  // min-interval first, then confirm each pose actually lands before the
+  // next. The assertion's meaning is unchanged: with the governor off, both
+  // DISTINCT spaced poses write through the fixed 1 ms gate.
+  await sleep(5); // clear the fixed 1 ms min-interval after §3's flood
   const w0 = sink.probe().written;
   compose.rebase({ vPid: { l: { x: 500, y: 1 }, r: { x: 0, y: 0 } }, feedForward: false });
-  await sleep(5);
+  await waitFor(() => sink.probe().written - w0 >= 1, "first off-switch pose written");
+  await sleep(3); // clear the min-interval again for pose 2
   compose.rebase({ vPid: { l: { x: 501, y: 1 }, r: { x: 0, y: 0 } }, feedForward: false });
   await sleep(50);
   const p = sink.probe();

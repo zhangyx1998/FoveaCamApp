@@ -508,7 +508,14 @@ public:
     if (!warm_) return nullptr;
     const double coastSec =
         static_cast<double>(wallNs - lastMeasWallNs_) / NS_PER_SEC;
-    if (lastWasMiss_) {
+    // R1 COAST CAP (mirror-flicker 2026-07-12 addendum): every other guard is
+    // EVENT-driven (maxGapMs acts inside ingest; the JS lost policy needs
+    // found=false results DELIVERED) — a source that stalls outright used to
+    // extrapolate the CA state quadratically forever with found=true, bounded
+    // only by the wire clamp. Past maxGapMs of wall-clock coast (the same
+    // bound ingest applies to measurement gaps) degrade to the miss-coast
+    // shape instead of extrapolating.
+    if (lastWasMiss_ || coastSec > t_.maxGapMs / 1000.0) {
       // Coast a miss: still no center (the JS lost-gate owns policy) but keep
       // the stream alive so the graph edge reads a truthful rate.
       auto r = ImmResult::create();
@@ -517,9 +524,18 @@ public:
       r->seq = lastMeas_.seq;
       r->deviceTimestamp = lastMeas_.deviceTimestamp;
       r->propagatedToNs = static_cast<int64_t>(lastMeas_.deviceTimestamp);
+      r->measuredAtNs = lastMeasWallNs_;
       return r;
     }
     return propagate(coastSec > 0 ? coastSec : 0.0);
+  }
+
+  // TEST hook (coast-cap conformance vectors): predictAt at a CONTROLLED
+  // offset after the last ingest — `coastMs` maps onto the real anchor, so
+  // the cap transition is deterministic without touching the clock. Same
+  // code path as the free-run.
+  ImmResult::Ptr predictAfter(double coastMs) {
+    return predictAt(lastMeasWallNs_ + static_cast<int64_t>(coastMs * 1e6));
   }
 
 private:
@@ -540,6 +556,7 @@ private:
     r->seq = m.seq;
     r->deviceTimestamp = m.deviceTimestamp;
     r->propagatedToNs = static_cast<int64_t>(m.deviceTimestamp);
+    r->measuredAtNs = lastMeasWallNs_;
     return r;
   }
 
@@ -575,6 +592,7 @@ private:
     r->propagatedToNs =
         static_cast<int64_t>(lastMeas_.deviceTimestamp) +
         static_cast<int64_t>(delta * NS_PER_SEC);
+    r->measuredAtNs = lastMeasWallNs_;
     return r;
   }
 
@@ -640,6 +658,13 @@ public:
     m.seq = r.seq;
     m.deviceTimestamp = r.deviceTimestamp;
     ingest(m);
+  }
+
+  // TEST hook (coast-cap conformance): deterministic predictAt at a fixed
+  // offset after the last ingest — see ImmCore::predictAfter. Mutex-held.
+  ImmResult::Ptr predictAfter(double coastMs) {
+    std::scoped_lock lock(mutex_);
+    return core_.predictAfter(coastMs);
   }
 
   /** The most recent zero-coast ingest result (piped-conformance observation +
@@ -725,6 +750,7 @@ template <> Napi::Value convert(Napi::Env env, const ImmResult::Ptr &r) noexcept
   o.Set("seq", Napi::Number::New(env, static_cast<double>(r->seq)));
   o.Set("deviceTimestamp", convert(env, r->deviceTimestamp));
   o.Set("propagatedToNs", convert(env, r->propagatedToNs));
+  o.Set("measuredAtNs", convert(env, r->measuredAtNs));
   return o;
 }
 template <>
@@ -792,6 +818,7 @@ public:
             CORE_OBJECT_REGISTER(ImmPredictorObject, env),
             INSTANCE_METHOD(ImmPredictorObject, ingest),
             INSTANCE_METHOD(ImmPredictorObject, lastIngest),
+            INSTANCE_METHOD(ImmPredictorObject, predictAfter),
             INSTANCE_METHOD(ImmPredictorObject, setParams),
             INSTANCE_METHOD(ImmPredictorObject, probe),
             Napi::InstanceWrap<ImmPredictorObject>::template InstanceMethod<
@@ -830,6 +857,17 @@ public:
     auto env = info.Env();
     try {
       return convert(env, core()->lastIngest());
+    }
+    JS_EXCEPT(env.Undefined())
+  }
+
+  // TEST-ONLY (coast-cap conformance vectors, core/test/42): the free-run
+  // prediction at `coastMs` after the last ingest — deterministic (no clock).
+  FN(predictAfter) {
+    auto env = info.Env();
+    try {
+      const double coastMs = info[0].ToNumber().DoubleValue();
+      return convert(env, core()->predictAfter(coastMs));
     }
     JS_EXCEPT(env.Undefined())
   }

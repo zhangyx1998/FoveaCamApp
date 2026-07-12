@@ -24,4 +24,10 @@ struct ImmResult : Shared<ImmResult> {
   uint64_t seq = 0;
   uint64_t deviceTimestamp = 0;
   int64_t propagatedToNs = 0; // deviceTimestamp + Δ·1e9 (informational)
+  // HOST steady-clock ns of the measurement INGEST this prediction is based
+  // on (mirror-flicker 2026-07-12, refinement 1 / guard 2): the compose
+  // brick's staleness gate compares this against its own steady clock and
+  // skips feed-forward when the underlying measurement is too old. 0 = unset
+  // (a producer that predates the stamp) — consumers treat that as stale.
+  int64_t measuredAtNs = 0;
 };

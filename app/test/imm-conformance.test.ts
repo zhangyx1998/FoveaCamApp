@@ -27,6 +27,26 @@ interface ImmFixture {
     deviceTimestamp: string;
   }>;
   expected: Array<{ found: boolean; center: { x: number; y: number } | null }>;
+  coastCap: {
+    config: { delayMs: number; maxGapMs: number };
+    tolerancePx: number;
+    warmup: Array<{
+      found: boolean;
+      overridden: boolean;
+      center: { x: number; y: number };
+      bbox: { x: number; y: number; width: number; height: number };
+      seq: number;
+      deviceTimestamp: string;
+    }>;
+    probes: Array<{
+      coastMs: number;
+      expected: {
+        found: boolean;
+        coasting: boolean;
+        center: { x: number; y: number } | null;
+      };
+    }>;
+  };
 }
 
 describe("IMM predictor conformance vectors", () => {
@@ -58,5 +78,53 @@ describe("IMM predictor conformance vectors", () => {
         expect(out.center!.y, `vector ${i} y`).toBeCloseTo(exp.center.y, 6);
       }
     });
+  });
+
+  it("pins the R1 coast cap (mirror-flicker 2026-07-12) to the shared vectors", async () => {
+    // predictAfter(coastMs): found=true coasting predictions only while
+    // coastMs <= maxGapMs; past the cap the miss-coast shape (found=false,
+    // coasting=true, center=null) — a stalled source must never extrapolate
+    // quadratically forever. Same numbers pinned on the native brick by
+    // core/test/42-imm-predictor.ts §6.
+    const fixture = JSON.parse(
+      await readFile(
+        resolve(process.cwd(), "../docs/schema/codec/imm-vectors.json"),
+        "utf8",
+      ),
+    ) as ImmFixture;
+    const cc = fixture.coastCap;
+
+    const predictor = new ImmPredictor(cc.config);
+    for (const m of cc.warmup)
+      predictor.process({
+        found: m.found,
+        overridden: m.overridden,
+        center: m.center,
+        bbox: m.bbox,
+        seq: m.seq,
+        deviceTimestamp: BigInt(m.deviceTimestamp),
+      });
+    for (const probe of cc.probes) {
+      const out = predictor.predictAfter(probe.coastMs);
+      expect(out, `coast ${probe.coastMs}ms present`).not.toBeNull();
+      expect(out!.found, `coast ${probe.coastMs}ms found`).toBe(probe.expected.found);
+      expect(out!.coasting, `coast ${probe.coastMs}ms coasting`).toBe(
+        probe.expected.coasting,
+      );
+      if (probe.expected.center === null) {
+        expect(out!.center, `coast ${probe.coastMs}ms center null (capped)`).toBeNull();
+      } else {
+        expect(out!.center!.x, `coast ${probe.coastMs}ms x`).toBeCloseTo(
+          probe.expected.center.x,
+          6,
+        );
+        expect(out!.center!.y, `coast ${probe.coastMs}ms y`).toBeCloseTo(
+          probe.expected.center.y,
+          6,
+        );
+      }
+    }
+    // Cold predictor: no measurement ever → null (never a fabricated pose).
+    expect(new ImmPredictor(cc.config).predictAfter(0)).toBeNull();
   });
 });

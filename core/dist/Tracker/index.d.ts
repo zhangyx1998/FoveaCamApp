@@ -227,6 +227,11 @@ declare module "core/Tracker" {
     /** deviceTimestamp + Δ·1e9 — the device-clock time this prediction is FOR
      *  (informational). */
     propagatedToNs: bigint;
+    /** HOST steady-clock ns of the measurement ingest this prediction is
+     *  based on (mirror-flicker 2026-07-12): the compose brick's staleness
+     *  gate skips feed-forward when this is too old. 0 = unset (treated as
+     *  stale by consumers). */
+    measuredAtNs: bigint;
   }
 
   /** A tracker measurement pushed into the brick — the {@link TrackResult}
@@ -286,6 +291,12 @@ declare module "core/Tracker" {
      *  `measure_in` port — same path), or null before the first measurement.
      *  The piped-conformance observation point (test 42). */
     lastIngest(): ImmPrediction | null;
+    /** TEST-ONLY (coast-cap conformance, test 42): the free-run prediction at
+     *  `coastMs` after the last ingest — deterministic (no clock read). Null
+     *  while cold. Past `maxGapMs` of coast the result degrades to the
+     *  miss-coast shape (found=false, coasting=true) instead of extrapolating
+     *  (mirror-flicker 2026-07-12 R1 cap). */
+    predictAfter(coastMs: number): ImmPrediction | null;
     /** Live rate/delay change. */
     setParams(params: ImmSetParams): void;
     /** Snapshot the native thread meter (out-of-loop safe). */
@@ -345,10 +356,19 @@ declare module "core/Tracker" {
   }
 
   /** Create the native compose brick. `initial` seeds the pre-rebase baseline
-   *  (the parked pose). */
+   *  (the parked pose). Guards (mirror-flicker 2026-07-12; non-positive
+   *  disables):
+   *  - `staleAfterMs` — feed-forward staleness bound on the prediction's
+   *    `measuredAtNs` (default 50 ms ≈ 3 periods at the slowest ruled rate;
+   *    sessions that know the live prediction rate should pass ~2–3 periods).
+   *  - `maxDeltaV` — per-axis clamp on the composed |J·Δp| contribution
+   *    (default 50 V; sessions that know the live `dv` should pass a
+   *    fraction of it). */
   export function createComposeStream(options?: {
     name?: string;
     initial?: { l: { x: number; y: number }; r: { x: number; y: number } };
+    staleAfterMs?: number;
+    maxDeltaV?: number;
   }): Compose;
 
   /** TEST-ONLY (core/test/45): a push-driven prediction source with a
@@ -356,7 +376,14 @@ declare module "core/Tracker" {
    *  predictions. */
   export function createTestPredictionSource(nodeId: string): {
     readonly predict_out: OutPort<ImmPrediction>;
-    push(p: { found: boolean; center: { x: number; y: number } | null; seq?: number }): void;
+    /** `ageMs`: stamp the result as measured that long AGO (drives the
+     *  compose staleness gate); default 0 = fresh (now). */
+    push(p: {
+      found: boolean;
+      center: { x: number; y: number } | null;
+      seq?: number;
+      ageMs?: number;
+    }): void;
     release(): void;
   };
 }

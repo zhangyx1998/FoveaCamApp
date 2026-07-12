@@ -41,10 +41,12 @@ type Prediction = {
   seq: number;
   deviceTimestamp: bigint;
   propagatedToNs: bigint;
+  measuredAtNs: bigint;
 };
 type Brick = {
   ingest(m: unknown): Prediction;
   lastIngest(): Prediction | null;
+  predictAfter(coastMs: number): Prediction | null;
   measure_in: { streamTag: string; port: string };
   setParams(p: { rateHz?: number; delayMs?: number }): void;
   probe(): {
@@ -72,6 +74,22 @@ interface Fixture {
     deviceTimestamp: string;
   }>;
   expected: Array<{ found: boolean; center: { x: number; y: number } | null }>;
+  coastCap: {
+    config: { delayMs: number; maxGapMs: number };
+    tolerancePx: number;
+    warmup: Array<{
+      found: boolean;
+      overridden: boolean;
+      center: { x: number; y: number };
+      bbox: { x: number; y: number; width: number; height: number };
+      seq: number;
+      deviceTimestamp: string;
+    }>;
+    probes: Array<{
+      coastMs: number;
+      expected: { found: boolean; coasting: boolean; center: { x: number; y: number } | null };
+    }>;
+  };
 }
 
 const fixturePath = fileURLToPath(
@@ -283,6 +301,42 @@ const fixture = JSON.parse(readFileSync(fixturePath, "utf8")) as Fixture;
   brick.release();
   console.log(
     `42-imm-predictor: piped conformance OK — ${fixture.inputs.length} vectors through the measure_in port match the reference.`,
+  );
+}
+
+// --- 6. R1 coast cap (mirror-flicker 2026-07-12 addendum) -----------------------
+// A stalled measurement source must degrade to the miss-coast shape instead of
+// extrapolating the CA state quadratically forever: `predictAfter(coastMs)`
+// (deterministic — offsets against the last ingest anchor, no clock) stays
+// found=true while coastMs <= maxGapMs and flips to found=false, coasting=true
+// past the cap. Shared vectors (imm-vectors.json coastCap) — the TS reference
+// is pinned to the SAME numbers by app/test/imm-conformance.test.ts.
+{
+  const cc = fixture.coastCap;
+  const brick = T.createImmPredictor({ rateHz: 600, ...cc.config });
+  for (const m of cc.warmup)
+    brick.ingest({ ...m, deviceTimestamp: BigInt(m.deviceTimestamp) });
+  for (const probe of cc.probes) {
+    const out = brick.predictAfter(probe.coastMs);
+    assert(out, `coast ${probe.coastMs}ms: prediction present`);
+    assert.equal(out!.found, probe.expected.found, `coast ${probe.coastMs}ms found`);
+    assert.equal(out!.coasting, probe.expected.coasting, `coast ${probe.coastMs}ms coasting`);
+    if (probe.expected.center === null) {
+      assert.equal(out!.center, null, `coast ${probe.coastMs}ms center null (capped)`);
+    } else {
+      assert(out!.center, `coast ${probe.coastMs}ms center present`);
+      assert(
+        Math.abs(out!.center!.x - probe.expected.center.x) <= cc.tolerancePx &&
+          Math.abs(out!.center!.y - probe.expected.center.y) <= cc.tolerancePx,
+        `coast ${probe.coastMs}ms center (${out!.center!.x}, ${out!.center!.y})`,
+      );
+    }
+    // measuredAtNs (compose staleness stamp) rides every emit.
+    assert(out!.measuredAtNs > 0n, `coast ${probe.coastMs}ms carries measuredAtNs`);
+  }
+  brick.release();
+  console.log(
+    `42-imm-predictor: R1 coast cap OK — ${cc.probes.length} probes (found=false past ${cc.config.maxGapMs} ms; measuredAtNs stamped).`,
   );
 }
 

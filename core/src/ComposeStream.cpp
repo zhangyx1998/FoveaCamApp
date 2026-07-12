@@ -30,6 +30,7 @@
 // pos_in; an asyncIterator remains for the JS FALLBACK consumer (v1 firmware
 // / no controller — JS is then a genuine consumer, ruling 1 holds).
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -63,6 +64,11 @@ static int64_t composeNowMs() {
   return duration_cast<milliseconds>(steady_clock::now().time_since_epoch())
       .count();
 }
+static int64_t composeNowNs() {
+  using namespace std::chrono;
+  return duration_cast<nanoseconds>(steady_clock::now().time_since_epoch())
+      .count();
+}
 
 // The rebase linearization (guarded — NAPI thread writes, brick thread reads).
 struct ComposeRebase {
@@ -75,15 +81,43 @@ struct ComposeRebase {
   bool warm = false; // false until the first rebase (emit the initial pose)
 };
 
+// Feed-forward STALENESS bound (mirror-flicker 2026-07-12, refinement 1 +
+// runaway guard 2): predictions whose underlying MEASUREMENT (`measuredAtNs`)
+// is older than this are not applied — floor AND prediction ticks degrade to
+// the raw baseline (the value-sweep staleness discipline). Default sized as
+// ~3 prediction periods at the SLOWEST allowed rate (60 Hz → 50 ms), so it
+// stays permissive across the ruled 60–1000 Hz window; sessions that know the
+// live rate pass a tighter bound via `staleAfterMs`.
+static constexpr double kDefaultStaleAfterMs = 50.0;
+
+// Volt-space delta clamp (mirror-flicker guard 5, planner-ruled IN): the
+// composed |J·Δp| contribution is clamped PER AXIS before it is added to the
+// baseline. Belt-and-suspenders ABOVE the wire's hard floor (chPair ±dv/2 +
+// volt2dac 0..65535 — verified, untouched): a legitimate feed-forward lead is
+// a few volts; a runaway estimate would otherwise slam the pose to the range
+// edge. The default is a quarter of the codec's 200 V full scale — far above
+// any real lead, far below slam-to-edge; sessions that know the live `dv`
+// pass a tighter fraction via `maxDeltaV`. The clamp lives HERE (not the
+// MirrorSink) because only the brick sees the delta separately from the
+// baseline — the sink only ever sees final composed volts.
+static constexpr double kDefaultMaxDeltaV = 50.0;
+
 class ComposeStream : public ::Stream<VoltPair::Ptr> {
 public:
   using Ptr = std::shared_ptr<ComposeStream>;
-  static Ptr create(std::string name, const VoltPair &initial) {
-    return std::make_shared<ComposeStream>(std::move(name), initial);
+  static Ptr create(std::string name, const VoltPair &initial,
+                    double staleAfterMs = kDefaultStaleAfterMs,
+                    double maxDeltaV = kDefaultMaxDeltaV) {
+    return std::make_shared<ComposeStream>(std::move(name), initial,
+                                           staleAfterMs, maxDeltaV);
   }
-  ComposeStream(std::string name, const VoltPair &initial)
+  ComposeStream(std::string name, const VoltPair &initial,
+                double staleAfterMs = kDefaultStaleAfterMs,
+                double maxDeltaV = kDefaultMaxDeltaV)
       : name_(name),
-        meter_(std::move(name), {"pred", "rebase"}, {"volt"}, composeNowMs()) {
+        meter_(std::move(name), {"pred", "rebase"}, {"volt"}, composeNowMs()),
+        staleAfterNs_(static_cast<int64_t>(staleAfterMs * 1e6)),
+        maxDeltaV_(maxDeltaV) {
     ComposeRebase r;
     r.vPidLx = initial.lx;
     r.vPidLy = initial.ly;
@@ -129,34 +163,66 @@ protected:
     ImmResult::Ptr ev;
     if (!events_.read(ev))
       throw StopIteration(); // ring closed — teardown
+    // HIL D2 fix (mirror-flicker 2026-07-12): cache the newest prediction on
+    // the brick thread; a FLOOR tick reuses it against the NEW linearization,
+    // so a rebase no longer rescinds the feed-forward lead (the old raw-vPid
+    // floor emitted a 60 Hz sawtooth of amplitude J·(pred − pMeas) that the
+    // MirrorSink dedupe could never suppress). A brick that has NEVER seen a
+    // prediction still emits the raw baseline — planner decision 4's
+    // cold-start intent ("mirrors always driven, warm or cold") is preserved;
+    // only the dip is gone.
+    if (ev)
+      lastPred_ = ev;
+    const ImmResult::Ptr &p = ev ? ev : lastPred_;
     const ComposeRebase r = *rebase_.ref();
     auto out = VoltPair::create();
     out->lx = r.vPidLx;
     out->ly = r.vPidLy;
     out->rx = r.vPidRx;
     out->ry = r.vPidRy;
-    // A prediction tick with feed-forward healthy applies the ruled Jacobian
-    // delta; a floor tick (ev == nullptr), an unhealthy rebase, or a coasted
-    // miss (no center) holds the baseline.
-    if (ev && r.warm && r.feedForward && ev->found && ev->hasCenter) {
-      const double dx = ev->cx - r.pMeasX;
-      const double dy = ev->cy - r.pMeasY;
-      out->lx += r.jL[0] * dx + r.jL[1] * dy;
-      out->ly += r.jL[2] * dx + r.jL[3] * dy;
-      out->rx += r.jR[0] * dx + r.jR[1] * dy;
-      out->ry += r.jR[2] * dx + r.jR[3] * dy;
+    // Apply the ruled Jacobian delta when the LATEST prediction is usable —
+    // healthy rebase + found + center + WITHIN the staleness bound (both tick
+    // kinds; see fresh()). An unhealthy rebase, a coasted miss, a stale/absent
+    // prediction, or a cold brick holds the baseline.
+    if (p && r.warm && r.feedForward && p->found && p->hasCenter && fresh(p)) {
+      const double dx = p->cx - r.pMeasX;
+      const double dy = p->cy - r.pMeasY;
+      // Guard 5: clamp the composed contribution per axis (see kDefaultMaxDeltaV).
+      out->lx += clampDelta(r.jL[0] * dx + r.jL[1] * dy);
+      out->ly += clampDelta(r.jL[2] * dx + r.jL[3] * dy);
+      out->rx += clampDelta(r.jR[0] * dx + r.jR[1] * dy);
+      out->ry += clampDelta(r.jR[2] * dx + r.jR[3] * dy);
     }
     meter_.emit("volt", composeNowMs());
     return out;
   }
 
 private:
+  // Staleness gate (refinement 1 / runaway guard 2): a prediction is usable
+  // only while its underlying measurement is younger than the bound. An unset
+  // stamp (measuredAtNs == 0 — a producer predating the field) counts as
+  // stale; a non-positive bound disables the gate (test escape hatch).
+  bool fresh(const ImmResult::Ptr &p) const {
+    if (staleAfterNs_ <= 0)
+      return true;
+    return p->measuredAtNs > 0 &&
+           composeNowNs() - p->measuredAtNs <= staleAfterNs_;
+  }
+  double clampDelta(double d) const {
+    if (maxDeltaV_ <= 0)
+      return d; // non-positive disables the clamp
+    return std::min(maxDeltaV_, std::max(-maxDeltaV_, d));
+  }
+
   const std::string name_;
   Meter::ThreadMeter meter_; // writer threads serialize per side (counters)
   Threading::Guard<ComposeRebase> rebase_ = {ComposeRebase{}};
   // Event ring: predictions + floor ticks. Drop-oldest, non-blocking producer
   // (a stalled emit path degrades the compose rate, never the link/NAPI).
   Threading::Ring<ImmResult::Ptr> events_{16};
+  ImmResult::Ptr lastPred_;      // brick thread only (D2 floor reuse)
+  const int64_t staleAfterNs_;   // feed-forward staleness bound
+  const double maxDeltaV_;       // guard-5 per-axis |J·Δp| clamp (volts)
 };
 
 // --- convert: VoltPair → JS {left:{x,y}, right:{x,y}} -------------------------
@@ -329,12 +395,17 @@ private:
 
 CORE_OBJECT(ComposeObject)
 
-// Factory: createComposeStream({ name, initial: {l:{x,y}, r:{x,y}} }).
+// Factory: createComposeStream({ name, initial: {l:{x,y}, r:{x,y}},
+//   staleAfterMs?, maxDeltaV? }) — the two optional guards default per the
+//   constants above (see kDefaultStaleAfterMs / kDefaultMaxDeltaV); a
+//   non-positive value disables the respective guard (tests).
 static FN(createComposeStream) {
   auto env = info.Env();
   try {
     std::string streamName = "compose";
     VoltPair initial;
+    double staleAfterMs = kDefaultStaleAfterMs;
+    double maxDeltaV = kDefaultMaxDeltaV;
     if (info.Length() >= 1 && info[0].IsObject()) {
       auto o = info[0].As<Napi::Object>();
       if (o.Has("name") && o.Get("name").IsString())
@@ -344,8 +415,13 @@ static FN(createComposeStream) {
         parseXY(i.Get("l"), initial.lx, initial.ly);
         parseXY(i.Get("r"), initial.rx, initial.ry);
       }
+      if (o.Has("staleAfterMs") && o.Get("staleAfterMs").IsNumber())
+        staleAfterMs = o.Get("staleAfterMs").ToNumber().DoubleValue();
+      if (o.Has("maxDeltaV") && o.Get("maxDeltaV").IsNumber())
+        maxDeltaV = o.Get("maxDeltaV").ToNumber().DoubleValue();
     }
-    auto stream = ComposeStream::create(std::move(streamName), initial);
+    auto stream = ComposeStream::create(std::move(streamName), initial,
+                                        staleAfterMs, maxDeltaV);
     return ComposeObject::Create(env, stream);
   }
   JS_EXCEPT(env.Undefined())
@@ -432,6 +508,13 @@ public:
       }
       if (o.Has("seq"))
         p->seq = static_cast<uint64_t>(o.Get("seq").ToNumber().DoubleValue());
+      // Freshness stamp: default = NOW (a live prediction, like the real imm
+      // brick's ingest anchor). Tests drive the compose staleness gate with
+      // `ageMs` (result measured that long AGO — positive = past).
+      p->measuredAtNs = composeNowNs();
+      if (o.Has("ageMs") && o.Get("ageMs").IsNumber())
+        p->measuredAtNs -= static_cast<int64_t>(
+            o.Get("ageMs").ToNumber().DoubleValue() * 1e6);
       core()->push(p);
       return env.Undefined();
     }

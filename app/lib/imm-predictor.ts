@@ -404,6 +404,20 @@ function propagatePos(state: Vec, dt: number): number {
 
 // --- the predictor -----------------------------------------------------------
 
+/** A free-run (coasting) prediction off {@link ImmPredictor.predictAfter} —
+ *  the TS mirror of the native brick's `ImmResult` emit shape (minus the
+ *  wall-clock `measuredAtNs` stamp, which is native-side metadata; the pure
+ *  reference is driven by explicit coast offsets instead of a clock). */
+export interface ImmCoastPrediction {
+  found: boolean;
+  overridden: boolean;
+  coasting: boolean;
+  center: Point2d | null;
+  bbox: Rect | null;
+  seq: number;
+  deviceTimestamp: bigint;
+}
+
 export class ImmPredictor {
   private readonly delaySec: number;
   private readonly gate: number;
@@ -414,6 +428,11 @@ export class ImmPredictor {
   private ay!: AxisImm;
   private lastTs: bigint | null = null;
   private warm = false;
+  // Free-run mirror state (mirror-flicker 2026-07-12 R1): the native brick's
+  // lastWasMiss_/lastMeas_ pair, tracked so `predictAfter` reproduces the
+  // brick's coast-cap semantics exactly.
+  private lastWasMiss = false;
+  private lastMeas: TrackResult | null = null;
 
   constructor(cfg: ImmPredictorConfig) {
     this.delaySec = cfg.delayMs / 1000;
@@ -457,6 +476,70 @@ export class ImmPredictor {
     this.ay = this.makeAxis();
     this.lastTs = null;
     this.warm = false;
+    this.lastWasMiss = false;
+  }
+
+  /**
+   * Free-run prediction `coastMs` after the last processed result — the TS
+   * mirror of the native brick's `predictAt`/`predictAfter` (mirror-flicker
+   * 2026-07-12 R1). Null while cold. A miss-coast (last result was a miss) OR
+   * a coast past `maxGapMs` — the R1 CAP: a stalled source must degrade to
+   * the miss-coast shape (found=false, coasting=true) instead of
+   * extrapolating the CA state quadratically forever — returns no center;
+   * otherwise the combined estimate propagates by `coast + delay`.
+   */
+  predictAfter(coastMs: number): ImmCoastPrediction | null {
+    if (!this.warm) return null;
+    const coastSec = coastMs / 1000;
+    const m = this.lastMeas;
+    if (this.lastWasMiss || coastSec > this.maxGapSec) {
+      return {
+        found: false,
+        overridden: false,
+        coasting: true,
+        center: null,
+        bbox: null,
+        seq: m?.seq ?? 0,
+        deviceTimestamp: m?.deviceTimestamp ?? 0n,
+      };
+    }
+    const delta = (coastSec > 0 ? coastSec : 0) + this.delaySec;
+    const px = propagatePos(this.ax.combinedState(), delta);
+    const py = propagatePos(this.ay.combinedState(), delta);
+    if (!Number.isFinite(px) || !Number.isFinite(py)) {
+      // Mirror the native non-finite escape: reset + passthrough of the last
+      // measurement (never emit a poisoned center).
+      this.reset();
+      return m
+        ? {
+            found: m.found,
+            overridden: m.overridden,
+            coasting: false,
+            center: m.center,
+            bbox: m.bbox,
+            seq: m.seq,
+            deviceTimestamp: m.deviceTimestamp,
+          }
+        : null;
+    }
+    const shiftX = m?.center ? px - m.center.x : 0;
+    const shiftY = m?.center ? py - m.center.y : 0;
+    return {
+      found: true,
+      overridden: false,
+      coasting: coastSec > 0,
+      center: { x: px, y: py },
+      bbox: m?.bbox
+        ? {
+            x: m.bbox.x + shiftX,
+            y: m.bbox.y + shiftY,
+            width: m.bbox.width,
+            height: m.bbox.height,
+          }
+        : null,
+      seq: m?.seq ?? 0,
+      deviceTimestamp: m?.deviceTimestamp ?? 0n,
+    };
   }
 
   /**
@@ -480,6 +563,7 @@ export class ImmPredictor {
 
     if (r.overridden) {
       this.reset();
+      this.lastMeas = r; // native storeMeas parity (predictAfter shape source)
       return r;
     }
 
@@ -488,6 +572,8 @@ export class ImmPredictor {
     // Miss: no measurement — advance predict-only to grow uncertainty, keep the
     // filter's clock, and pass the (found=false, center=null) result through.
     if (!r.found || !r.center) {
+      this.lastWasMiss = true; // native parity: predictAfter miss-coasts
+      this.lastMeas = r;
       if (this.lastTs !== null && this.warm) {
         const dt = Number(ts - this.lastTs) / NS_PER_SEC;
         if (dt > 0 && dt <= this.maxGapSec) {
@@ -503,6 +589,7 @@ export class ImmPredictor {
     }
 
     const z = r.center;
+    this.lastMeas = r; // native storeMeas parity
 
     // First result (cold) or after a reset: (re)init at the measurement.
     if (this.lastTs === null) {
@@ -510,6 +597,7 @@ export class ImmPredictor {
       this.ay.reset(z.y, this.mu0);
       this.lastTs = ts;
       this.warm = true;
+      this.lastWasMiss = false;
       return r;
     }
 
@@ -523,6 +611,7 @@ export class ImmPredictor {
       this.ay.reset(z.y, this.mu0);
       this.lastTs = ts;
       this.warm = true;
+      this.lastWasMiss = false;
       return r;
     }
 
@@ -541,10 +630,12 @@ export class ImmPredictor {
       this.ay.reset(z.y, this.mu0);
       this.lastTs = ts;
       this.warm = true;
+      this.lastWasMiss = false;
       return r;
     }
 
     this.lastTs = ts;
+    this.lastWasMiss = false;
 
     // Any NaN escape → reset + passthrough (never emit a poisoned center).
     if (this.ax.degenerate() || this.ay.degenerate()) {
