@@ -1,21 +1,4 @@
 <svg viewBox="-240 -135 480 270" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <linearGradient id="gradient" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%">
-        <animate attributeName="stop-color" 
-          values="#F00;#0F0;#00F;#F00" 
-          dur="10s"
-          repeatCount="indefinite" />
-      </stop>
-      <stop offset="100%">
-        <animate attributeName="stop-color" 
-          values="#0F0;#00F;#F00;#0F0" 
-          dur="10s"
-          repeatCount="indefinite" />
-      </stop>
-    </linearGradient>
-  </defs>
-  
   <style>
     text {
       font-family: 'Cascadia Code', monospace;
@@ -32,7 +15,6 @@
        y: calc(var(--size) * -0.5);
        width: var(--size);
        height: var(--size);
-       fill: url(#gradient);
        animation: rotate 10s linear infinite;
     }
     @keyframes rotate {
@@ -46,17 +28,15 @@
     .circle {
       fill: #0008;
       stroke: #FFF8;
-      stroke-width: 2;
+      stroke-width: 8;
     }
   </style>
-  
-  
-  <!-- Animated radial gradient beams -->
+
   <g class="animated">
     <rect />
   </g>
   <g class="vert-lines">
-      <animate attributeName="stroke" 
+      <animate attributeName="stroke"
         values="#00F;#F00;#0F0;#00F"
         dur="10s"
         repeatCount="indefinite" />

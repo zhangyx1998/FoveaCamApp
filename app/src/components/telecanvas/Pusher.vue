@@ -22,12 +22,15 @@ You may find the full license in project root directory.
   A target broadcast ALSO re-fires on a host (re)listen so a freshly respawned
   host gets its buffer refilled by the next PUT (content preservation).
 
-  Pushes are coalesced to one animation frame so a burst of DOM mutations becomes
-  a single PUT. AppWindow still mounts this under <Suspense> (harmless — the async
-  work is in onMounted now, not a top-level await).
+  Pushes go through the package's `TeleCanvasClient` (telecanvas/view): at most
+  one PUT in flight, newer frames overwrite queued ones — a burst of DOM
+  mutations coalesces to the newest frame. AppWindow still mounts this under
+  <Suspense> (harmless — the async work is in onMounted now, not a top-level
+  await).
 -->
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, watch } from "vue";
+import { onMounted, onUnmounted, watch } from "vue";
+import { TeleCanvasClient } from "telecanvas/view";
 import { content } from "./registry";
 import {
   IDLE_TELECANVAS_TARGET,
@@ -35,38 +38,28 @@ import {
   type TeleCanvasTarget,
 } from "@lib/telecanvas";
 
-/** The active PUT target URL for the current mode, or "" when disabled. Seeded
- *  from main at mount, then updated on every broadcast. */
-const target = ref<string>(teleCanvasTarget(IDLE_TELECANVAS_TARGET));
+/** Coalescing PUT client for the active target, or null when disabled (client
+ *  mode with an empty URL). Seeded from main at mount, swapped on every target
+ *  broadcast. */
+let client: TeleCanvasClient | null = null;
+let targetUrl = "";
 
-async function put(urlString: string, body: string): Promise<void> {
-  if (!urlString) return; // empty target = disabled (client-mode "off")
-  try {
-    const url = new URL(urlString);
-    const res = await fetch(url.href, { method: "PUT", body });
-    if (!res.ok) console.warn("TeleCanvas push failed:", res.status);
-  } catch (e) {
-    console.warn("TeleCanvas push error (invalid URL / unreachable):", e);
-  }
+function push(): void {
+  void client
+    ?.push(content.value)
+    .catch((e) => console.warn("TeleCanvas push error (invalid URL / unreachable):", e));
 }
 
-// Coalesce a burst of provider mutations (every DOM change currently re-PUTs)
-// into ONE PUT per animation frame — minimal debounce, no behavioral surprise.
-let scheduled = 0;
-function schedule(): void {
-  if (scheduled) return;
-  scheduled = requestAnimationFrame(() => {
-    scheduled = 0;
-    void put(target.value, content.value);
-  });
-}
-
-// Apply a fresh target from main. Always schedule a push — even when the URL
-// string is UNCHANGED (a host respawn re-announces the same target) — so the
-// fresh server's empty buffer is refilled with the current content.
+// Apply a fresh target from main. Always push — even when the URL string is
+// UNCHANGED (a host respawn re-announces the same target) — so the fresh
+// server's empty buffer is refilled with the current content.
 function applyTarget(t: TeleCanvasTarget): void {
-  target.value = teleCanvasTarget(t);
-  schedule();
+  const url = teleCanvasTarget(t);
+  if (url !== targetUrl) {
+    targetUrl = url;
+    client = url ? new TeleCanvasClient(url) : null;
+  }
+  push();
 }
 
 let disposeTarget: (() => void) | null = null;
@@ -77,15 +70,15 @@ onMounted(async () => {
   try {
     applyTarget(await window.foveaBridge.getTeleCanvasTarget());
   } catch {
-    /* keep the idle default until the first broadcast */
+    applyTarget(IDLE_TELECANVAS_TARGET); // idle default until the first broadcast
   }
 });
 
 // Push whenever the local provider content changes (markers moving, etc.).
-watch(content, schedule);
+watch(content, push);
 onUnmounted(() => {
   disposeTarget?.();
-  if (scheduled) cancelAnimationFrame(scheduled);
+  client = null;
 });
 </script>
 

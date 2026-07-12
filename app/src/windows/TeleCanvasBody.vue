@@ -9,9 +9,10 @@ You may find the full license in project root directory.
     • client — the remote TeleCanvas server URL + a note that the running app's
       windows push the content there. Preview mirrors THIS window's local
       providers (none here → the splash).
-    • host — this app's own server: listening state, reachable viewer URLs (each
-      with a copy button), and a live preview taken from the server's OWN SSE
-      stream (truthful — it renders exactly what an external display renders).
+    • host — this app's own server (the published `telecanvas` package): listening
+      state, reachable viewer URLs (each with a copy button), and a live preview
+      (`telecanvas/view` mountView) subscribed to the server itself (truthful —
+      it renders exactly what an external display renders).
 
   mode/url/port bind to the shared `["config"]` document via `useConfigRef`, so
   edits apply live across windows (the push watchers pick up the new target). On
@@ -20,6 +21,7 @@ You may find the full license in project root directory.
 -->
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { mountView, type ViewHandle } from "telecanvas/view";
 import { useConfigRef } from "@lib/config";
 import { content, hasProviders } from "../components/telecanvas/registry";
 import {
@@ -55,16 +57,19 @@ function setMode(next: "client" | "host") {
   mode.value = next;
 }
 
+// The port input commits lazily (change/blur) and is normalized before it
+// reaches main — a half-typed or cleared field must never respawn the host on
+// a bogus port (declared before the immediate watcher below — TDZ).
+const normalizedPort = computed(() => {
+  const p = Number(port.value);
+  return Number.isInteger(p) && p >= 1 && p <= 65535 ? p : DEFAULT_TELECANVAS_PORT;
+});
+
 // Nudge main with the full push target on any mode/port/url change (+ once on
 // open). Main reconciles the host process AND re-broadcasts {mode, url, port} to
 // every window so app-window pushers in OTHER orchestrator instances follow.
 watch(
-  () =>
-    [
-      mode.value ?? "client",
-      port.value ?? DEFAULT_TELECANVAS_PORT,
-      url.value ?? "",
-    ] as const,
+  () => [mode.value ?? "client", normalizedPort.value, url.value ?? ""] as const,
   ([m, p, u]) => window.foveaBridge.applyTeleCanvas(m, p, u),
   { immediate: true },
 );
@@ -82,45 +87,34 @@ onMounted(async () => {
 });
 
 // ---- Preview ---------------------------------------------------------------
-// host: subscribe to the server's own SSE stream (truthful preview). client:
-// mirror this window's local providers (splash when none).
-const preview = ref<string>(content.value);
-let es: EventSource | null = null;
-function closeStream() {
-  es?.close();
-  es = null;
-}
-function openStream(p: number) {
-  closeStream();
-  es = new EventSource(`http://127.0.0.1:${p}/events`);
-  es.onmessage = (e) => {
-    try {
-      preview.value = JSON.parse(e.data);
-    } catch {
-      /* ignore malformed frame */
-    }
-  };
-  // EventSource auto-reconnects on error; nothing more to do.
-}
-
-// (Re)connect the preview stream whenever host mode / port / listening changes.
+// host + listening: a live package viewer (`telecanvas/view` mountView) inside
+// the app-owned fixed-16:9 `.preview` box, subscribed to the server itself
+// (truthful — the same WebSocket wire an external display uses). Otherwise: the
+// v-if mirror of this window's local providers (splash when none). The 480×270
+// mm emulated display exactly reproduces the projection viewBox the app windows
+// push in, with zero letterbox in the 16:9 box.
+const hostPreview = computed(() => isHost.value && status.value.listening);
+const hostUrl = computed(
+  () => `http://127.0.0.1:${status.value.port ?? normalizedPort.value}/`,
+);
+const previewBox = ref<HTMLElement | null>(null);
+let view: ViewHandle | null = null;
 watch(
-  () => [isHost.value, status.value.listening, port.value ?? DEFAULT_TELECANVAS_PORT] as const,
-  ([host, , p]) => {
-    if (host) openStream(p);
-    else {
-      closeStream();
-      preview.value = content.value; // back to local providers / splash
+  () => [hostPreview.value, hostUrl.value, previewBox.value] as const,
+  ([show, src, el]) => {
+    if (show && el) {
+      if (view) view.update({ src });
+      else view = mountView(el, { src, width: 480, height: 270 });
+    } else {
+      view?.unmount();
+      view = null;
     }
   },
   { immediate: true },
 );
-// In client mode the preview tracks local providers live.
-watch(content, (c) => {
-  if (!isHost.value) preview.value = c;
-});
 onUnmounted(() => {
-  closeStream();
+  view?.unmount();
+  view = null;
   disposeStatus?.();
 });
 
@@ -141,8 +135,11 @@ async function copy(u: string) {
 
 <template>
   <div class="scroll">
-    <!-- Live preview -->
-    <svg class="preview" viewBox="-240 -135 480 270" v-html="preview"></svg>
+    <!-- Live preview (the div is the fixed 16:9 box; mountView appends its own
+         svg for the host stream, the v-if svg is the local-provider mirror) -->
+    <div class="preview" ref="previewBox">
+      <svg v-if="!hostPreview" viewBox="-240 -135 480 270" v-html="content"></svg>
+    </div>
 
     <!-- Mode switch -->
     <div class="mode">
@@ -168,7 +165,7 @@ async function copy(u: string) {
       <label class="row">
         <span class="label">Server port</span>
         <span class="field">
-          <input type="number" step="1" min="1" max="65535" v-model.number="port" />
+          <input type="number" step="1" min="1" max="65535" v-model.lazy.number="port" />
         </span>
       </label>
       <div class="status-row">
@@ -179,7 +176,7 @@ async function copy(u: string) {
       </div>
       <p class="hint">
         Open one of these URLs in a browser on a TV or tablet on the same network.
-        The preview above is taken from the server's own live stream.
+        Once serving, the preview above is taken from the server's own live stream.
       </p>
       <ul class="urls" v-if="status.urls.length">
         <li v-for="u in status.urls" :key="u">
@@ -210,6 +207,13 @@ async function copy(u: string) {
   background-color: var(--bg-canvas);
   border: 2px solid var(--border-muted);
   border-radius: 4px;
+  overflow: hidden;
+  // Both the Vue-owned mirror svg and the mountView-appended svg fill the box.
+  :deep(svg) {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
   :deep(text) {
     fill: white;
     dominant-baseline: middle;

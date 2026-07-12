@@ -15,8 +15,9 @@
 // IMPORTANT — the registry is PER RENDERER: each window (app window, TeleCanvas
 // window) has its own `registry`/`content`. The TeleCanvas window therefore
 // cannot see an app window's providers directly; in host mode it takes its
-// preview from the server's own SSE stream instead (truthful — it renders what
-// the rig display renders). No cross-window provider relay exists by design.
+// preview from the server's own live WebSocket stream instead (`telecanvas/view`
+// mountView — truthful: it renders what the rig display renders). No
+// cross-window provider relay exists by design.
 
 import { computed, shallowReactive, type Ref } from "vue";
 

@@ -23,6 +23,7 @@
     "dependencies": {
         "@mcap/core": "^2.2.1",
         "serialport": "^13.0.0",
+        "telecanvas": "^0.1.0",
         "usb": "^2.16.0"
     },
     "scripts": {

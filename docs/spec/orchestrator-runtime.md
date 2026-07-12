@@ -138,10 +138,16 @@ load it: the renderer (config refs, the TeleCanvas window, the settings section)
 IPC bridge (`electron/bridge.ts`), and the main-side host manager
 (`electron/telecanvas-manager.ts`). Two modes (config `tele_canvas_mode`): `client` — the app
 PUTs its merged projection SVG to a configured REMOTE TeleCanvas server URL
-(`tele_canvas_url`); the default. `host` — the app spins up its OWN TeleCanvas-compatible
-server (a dependency-free node http server in a utilityProcess) on `tele_canvas_port`;
-external displays open the served viewer page. The push path is unchanged — it just targets
-`http://127.0.0.1:<port>/`.
+(`tele_canvas_url`); the default. `host` — the app spins up the published **`telecanvas`
+npm package's server** (`createServer`, in a utilityProcess via `electron/telecanvas-host.ts`)
+on `tele_canvas_port`; external displays open the served viewer page (the package's client,
+with on-screen scale calibration). The push path is unchanged — it just targets
+`http://127.0.0.1:<port>/`, and app-window pushes go through the package's coalescing
+`TeleCanvasClient` (`telecanvas/view`, the browser-safe entry — the root entry pulls in
+express and is for the host process only). Deliberately NO `persist` option: a fresh app
+start has fresh providers, the next PUT refills the canvas. The TeleCanvas window's
+host-mode preview mounts `telecanvas/view`'s `mountView` inside the app-owned 16:9 preview
+box (the same WebSocket wire an external display uses).
 
 ## Unified time (time-align) {#time-align}
 

@@ -202,10 +202,10 @@ export default defineConfig(({ command }) => {
                         // Node entry like the orchestrator (external `core`).
                         probe: "orchestrator/probe.ts",
                         // TeleCanvas HOST server (standalone dual-mode module):
-                        // a dependency-free node http server main forks when
-                        // `tele_canvas_mode` is "host". Its own tiny entry (like
-                        // probe) — pulls in no session graph, just the server
-                        // core + node builtins.
+                        // the published `telecanvas` package's server, forked by
+                        // main when `tele_canvas_mode` is "host". Its own tiny
+                        // entry (like probe) — pulls in no session graph; the
+                        // `telecanvas` dep is externalized like `core`.
                         "telecanvas-host": "electron/telecanvas-host.ts",
                     },
                     vite: {

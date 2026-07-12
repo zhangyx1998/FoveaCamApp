@@ -7,14 +7,14 @@
 // TeleCanvas shared contract. Pure data — Vue-free AND Node-free — so every consumer can
 // load it (renderer, the typed IPC bridge, the main-side host manager). Two modes
 // (config tele_canvas_mode): `client` (default — PUT the merged projection SVG to a remote
-// TeleCanvas server URL) and `host` (spin up an own dependency-free http server in a
+// TeleCanvas server URL) and `host` (spin up the published `telecanvas` package server in a
 // utilityProcess; the push path just targets 127.0.0.1:<port>).
 // spec: docs/spec/orchestrator-runtime.md#telecanvas
 
 export type TeleCanvasMode = "client" | "host";
 
-/** Unprivileged default host port. The reference project defaults to 80, which
- *  needs root; 8100 avoids that and stays out of the common dev-server range. */
+/** Unprivileged default host port — matches the published `telecanvas`
+ *  package's own DEFAULT_PORT. */
 export const DEFAULT_TELECANVAS_PORT = 8100;
 
 /** Host-server status the main-side manager pushes to every renderer (and

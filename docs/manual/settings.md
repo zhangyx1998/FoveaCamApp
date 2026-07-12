@@ -88,13 +88,20 @@ It has two **modes**:
   server you run elsewhere. Enter that server's address in **TeleCanvas server
   URL**; leave it empty to disable pushing. This is the default and matches the
   previous behaviour.
-- **Host** — the app **serves its own** TeleCanvas viewer. Set a **TeleCanvas
-  server port** (default **8100** — the reference project's default of 80 needs
-  administrator rights, so a higher port is used). When it is running, one or
-  more **reachable URLs** appear: `http://localhost:<port>/` plus one for each
-  network address of this machine. Open any of them in a browser on a TV or
-  tablet on the **same network** to see the live projection. Each URL has a copy
-  button.
+- **Host** — the app **serves its own** TeleCanvas viewer (the published
+  [`telecanvas`](https://github.com/zhangyx1998/TeleCanvas) package). Set a
+  **TeleCanvas server port** (default **8100**, the package's own default). When
+  it is running, one or more **reachable URLs** appear: `http://localhost:<port>/`
+  plus one for each network address of this machine. Open any of them in a
+  browser on a TV or tablet on the **same network** to see the live projection.
+  Each URL has a copy button.
+
+  On a display that has not been calibrated yet, the served page first opens its
+  **scale-calibration overlay** — measure the on-screen ruler (or match a credit
+  card / enter the display diagonal) so a millimetre on the canvas is a real
+  millimetre on the glass. Do this once per display: markers are drawn at
+  physical sizes, so projection accuracy depends on it. The overlay can be
+  reopened any time (fold button, `c` key, or `?calibrate` in the URL).
 
 Whichever mode is active, the running app's windows keep pushing their
 projection — switching mode only changes where that image goes. The **TeleCanvas
@@ -103,9 +110,10 @@ mirrors the served image; in client mode it shows this window's local content
 (the splash, since the live markers come from the app windows).
 
 > The host server keeps only the most recent image in memory — a fresh app start
-> begins from the splash. Any TeleCanvas-style pusher can also push to the host
-> (an HTTP `PUT /` with the image as the body), so the host is a drop-in target
-> for the same tools that push to a remote server.
+> begins from a blank canvas until an app window pushes (the splash appears once
+> one does). Any TeleCanvas-style pusher can also push to the host (an HTTP
+> `PUT /` with the image as the body), so the host is a drop-in target for the
+> same tools that push to a remote server.
 
 ## Device config
 
