@@ -1,7 +1,9 @@
 # Vergence loop tuning: PID auto-tune + tracker↔PID coupling
 
-> STATUS: PROPOSAL — awaiting ruling. Companion to the 2026-07-12 kd-explosion
-> fix (once-per-pair join gate + filtered derivative, spec
+> STATUS: §1 PROPOSAL — awaiting ruling. §2 R1 + R2 IMPLEMENTED 2026-07-12
+> (spec [disparity-scope](../spec/disparity-scope.md#capture-epoch-target));
+> R3 (rig verification) OPEN. Companion to the 2026-07-12 kd-explosion fix
+> (once-per-pair join gate + filtered derivative, spec
 > [disparity-scope](../spec/disparity-scope.md#match-join)).
 
 ## 1. PID auto-tune (user request 2026-07-12)
@@ -61,18 +63,41 @@ also implicated in the kd explosion:**
    through channel 1, so target velocity is corrected twice — the faster the
    target, the hotter the effective gains.
 
-**Suggested improvements (rulable items):**
+**Improvements (R1/R2 IMPLEMENTED 2026-07-12; R3 open):**
 
 - **R1 — error against the capture-epoch target.** Keep a short ring of
-  `{t, target}` from `onTrack`/drag; in `onMatch`, look up the target at the
-  strip frame's capture timestamp and feed THAT as `projection.target`. The
-  PID then regulates only the true residual; motion since capture is entirely
-  feed-forward's job (which the IMM already leads). Kills channels 1 + 3.
+  `{t, target}` from every target write; in `onMatch`, look up the target at
+  the strip frame's capture timestamp and feed THAT as `projection.target`.
+  The PID then regulates only the true residual; motion since capture is
+  entirely feed-forward's job (which the IMM already leads). Kills
+  channels 1 + 3.
 - **R2 — derivative on measurement.** `PID.step` learns an optional
   measurement-derivative form (`d(−measurement)/dt` instead of `de/dt`):
   standard anti-setpoint-kick. Kills channel 2 for all consumers; the vergence
   law passes the decomposed measurement per DOF.
 - **R3 — verify with the follow experiment** from §1's cost harness (scripted
   moving target), before/after traces into `docs/dev/`.
+
+::: details R1 + R2 implementation (2026-07-12) — behavior spec at [disparity-scope §control-law](../spec/disparity-scope.md#capture-epoch-target)
+- **No protocol change was needed for R1.** The strip frame's capture epoch was
+  already carried end to end: `Frame` stamps `device_timestamp` PRE-CALIBRATED
+  into the host `steadyNowNs` domain at creation (the trusted-time choke
+  point), every brick (convert → undistort → slice → scale) forwards it
+  un-restamped, the shm slot header carries it, and the template-match kernel
+  already surfaced it as `TemplateMatchValues.deviceTimestamp` /
+  `VisionResult.deviceTimestamp`.
+- **Ring** = `recordTarget`/`targetAtEpoch` (pure, `vergence.ts`, unit-tested):
+  host-ns `{t, target}` samples via the session's single `writeTarget` path
+  (tracker `onTrack`/`onDrag`, pointer handler, lost-hold), nearest-not-after
+  lookup, live-target fallback for empty/missing/pre-coverage epochs (the
+  uncalibrated-clock degrade = exactly the pre-R1 behavior).
+- **Boundary kept:** `pushVolts`' `pMeas` and the drag re-affirm stay on the
+  LIVE target — only the PID error decomposition moved to the epoch.
+- **R2** = `derivativeOn: "error" | "measurement"` on `@lib/pid` (default
+  `"error"`, zero change for existing consumers; PID2D forwards a per-axis
+  measurement point). All three vergence controllers run measurement mode.
+  Only PAN actually changes behavior — verge/v_shift regulate to a constant
+  0-disparity setpoint, where measurement mode is numerically identical.
+:::
 
 R1 is the high-value one; R2 is small and general; both are independent.

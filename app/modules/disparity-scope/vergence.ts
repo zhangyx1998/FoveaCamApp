@@ -6,7 +6,8 @@
 //
 // Auto-vergence PURE geometry + control math (the SESSION/PID-node side of the
 // split): sizing (`foveaTileSize`, `matchMagnification`), `stepVergence`,
-// `followTarget`, `seedVergence`. Core-free (types only) so the control law +
+// `followTarget`, `seedVergence`, and the capture-epoch target ring
+// (`recordTarget`/`targetAtEpoch`). Core-free (types only) so the control law +
 // its tests never load the native addon. Behavior spec: docs/spec/disparity-scope.md
 // (§control-law, §seed-space, §magnification, §needle-geometry).
 
@@ -59,8 +60,48 @@ export function matchMagnification(
  *  structurally satisfied by @lib/pid's `PID2D`, declared here (not imported) so
  *  the vergence math + its test stay independent of the 2D class. */
 export interface Vec2Controller {
-  step(error: Point2d, dt?: number): Point2d;
+  step(error: Point2d, dt?: number, measurement?: Point2d): Point2d;
   readonly value: Point2d;
+}
+
+// --- capture-epoch target ring (R1, spec §control-law) ----------------------
+
+/** One target write: `t` = host steady-clock ns (the trusted-time domain every
+ *  pipe frame's `deviceTimestamp` is calibrated into), `target` = the value
+ *  written. The session appends one at EVERY `state.target` write. */
+export type TargetSample = { t: number; target: Point2d };
+
+/** Append a target write to the ring: monotonic-`t` (an out-of-order stamp is
+ *  dropped so {@link targetAtEpoch}'s scan stays ordered), capped to
+ *  `capacity` oldest-first. */
+export function recordTarget(
+  ring: TargetSample[],
+  sample: TargetSample,
+  capacity: number,
+): void {
+  const newest = ring[ring.length - 1];
+  if (newest && sample.t < newest.t) return;
+  ring.push(sample);
+  if (ring.length > capacity) ring.splice(0, ring.length - capacity);
+}
+
+/** The target in effect at `epoch`: the NEWEST sample with `t ≤ epoch` (a
+ *  write applies from its stamp onward). `fallback` (the live target) when the
+ *  ring is empty, the epoch is missing/non-finite, or every sample is newer
+ *  than the epoch — the out-of-coverage epoch an UNCALIBRATED camera clock
+ *  produces lands here, degrading exactly to the pre-R1 behavior instead of
+ *  resolving an arbitrarily stale entry. */
+export function targetAtEpoch(
+  ring: readonly TargetSample[],
+  epoch: number | undefined,
+  fallback: Point2d,
+): Point2d {
+  if (epoch === undefined || !Number.isFinite(epoch)) return fallback;
+  for (let i = ring.length - 1; i >= 0; i--) {
+    const s = ring[i]!;
+    if (s.t <= epoch) return s.target;
+  }
+  return fallback;
 }
 
 /** The named DOF controllers the vergence step integrates (spec §control-law) —
@@ -81,6 +122,9 @@ export type VergenceControllers = {
 export type ScopeProjection = {
   l: Point2d;
   r: Point2d;
+  /** The target AS OF THE MATCHED FRAME'S CAPTURE EPOCH (R1, spec
+   *  §control-law) — resolved by the join via {@link targetAtEpoch}, so the
+   *  error pairs setpoint and measurement at the same instant. */
   target: Point2d;
   scores: { l: number; r: number };
   /** True while a pointer drag pins the target (session-local; the join stamps
@@ -108,6 +152,10 @@ export type VergenceControl = {
  *   verge   = aR.x − aL.x = 2b(1/Z − 1/z)  — horizontal disparity ⇒ depth
  *   v_shift = (aR.y − aL.y) / 2            — residual vertical disparity (sign
  *             opposite pan.y: the foveas move OPPOSITE vertically — spec §control-law)
+ *
+ * Each PID also receives the DOF's measurement point (error = setpoint −
+ * measurement), so measurement-derivative controllers (R2) never differentiate
+ * target motion — see the inline decomposition table.
  */
 export function stepVergence(
   projection: ScopeProjection,
@@ -132,12 +180,21 @@ export function stepVergence(
   const ePan = VEC.mul(VEC.add(dL, dR), 0.5);
   const eVerge = aR.x - aL.x;
   const eVshift = (aR.y - aL.y) / 2;
+  // Per-DOF MEASUREMENT points (R2, spec §control-law), decomposed so
+  // error = setpoint − measurement holds:
+  //   pan     setpoint aT,  measurement (aL+aR)/2 — the ONLY DOF whose
+  //           setpoint moves; measurement-derivative kills the target kick
+  //   verge   setpoint 0 (disparity nulled), measurement aL.x − aR.x
+  //   v_shift setpoint 0,                    measurement (aL.y − aR.y)/2
+  // For verge/v_shift the constant-0 setpoint makes measurement mode
+  // numerically identical to error mode — passed for uniformity.
+  const mPan = VEC.mul(VEC.add(aL, aR), 0.5);
   // Each controller integrates its error, dt-scales it, and saturates to a
   // physical range so a bad estimate can at worst rest at a limit — never fling
   // a fovea. `pan` is a 2D controller (separate x/y integrators).
-  const shift = ctl.pan.step(ePan, dt);
-  const verge = ctl.verge.step(eVerge, dt);
-  const v_shift = ctl.v_shift.step(eVshift, dt);
+  const shift = ctl.pan.step(ePan, dt, mPan);
+  const verge = ctl.verge.step(eVerge, dt, aL.x - aR.x);
+  const v_shift = ctl.v_shift.step(eVshift, dt, (aL.y - aR.y) / 2);
   // Reconstruct both poses symmetrically about the (shift-corrected) ray.
   const ray = VEC.add(aT, shift);
   const distance = vergeToDistance(verge, ctrl.baseline);

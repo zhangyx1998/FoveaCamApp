@@ -160,7 +160,8 @@ Per-side match results land keyed L/R at the PID node. The vergence step runs wh
 ARRIVING side COMPLETES a pair (its seq ≥ the other side's latest) — order-agnostic,
 degrades to the slower side's rate. Each result is lifted out of scaled-strip space
 (`/s` → full-res strip-local px) + the frame's forwarded crop origin → ABSOLUTE
-undistorted-wide px.
+undistorted-wide px. The projection's target is resolved at the strip frame's CAPTURE
+epoch, not now — see [capture-epoch target](#capture-epoch-target).
 
 **Once per pair** (kd explosion, 2026-07-12): the control step is gated on the PAIR seq
 (the OLDER side's) advancing past the last stepped one. Un-gated, the law ran TWICE per
@@ -203,6 +204,52 @@ drift apart on noisy frames).
 - **dt.** Velocity (incremental) form, so effect scales with call rate; the caller
   supplies a rate-normalized `dt` to keep convergence wall-clock consistent across
   variable pipeline throughput.
+
+### Capture-epoch target (R1) {#capture-epoch-target}
+
+Tracker↔PID coupling fix 1 of 2 (`vergence-loop-tuning.md` §2, ruled 2026-07-12). The
+matched centers `aL/aR` come from a strip captured 2–4 frames ago; stepping against the
+target AS OF NOW put phantom error ∝ target velocity × pipeline delay into the PID
+during follow — motion the loop hadn't had time to act on AND that compose feed-forward
+already leads (double-count). The join now feeds `projection.target` = the target **as
+of the matched frame's capture epoch**:
+
+- **Ring.** The session keeps a `{t, target}` ring (`recordTarget`, host steady-clock
+  ns, 256 entries ≈ >1 s) appended at EVERY `state.target` write — one `writeTarget`
+  path covers tracker `onTrack`/`onDrag`, the pointer handler, and the lost-hold —
+  seeded with the current target on activate, cleared on idle.
+- **Epoch.** The strip frame's `deviceTimestamp` rides `TemplateMatchValues` verbatim
+  (trusted-time: the camera owner stamps it pre-calibrated into the host `steadyNowNs`
+  domain at `Frame` creation; every brick forwards it un-restamped), so the join needs
+  no clock conversion.
+- **Lookup** (`targetAtEpoch`, pure): the NEWEST sample with `t ≤ epoch` (a write
+  applies from its stamp onward). Empty ring / missing epoch / epoch before coverage →
+  the LIVE target — the out-of-range epoch an uncalibrated camera clock produces
+  degrades exactly to the pre-R1 behavior, never to an arbitrarily stale entry.
+- **Scope.** ONLY the PID error decomposition moves to the epoch target. `pushVolts`'
+  compose rebase keeps `pMeas` = the LIVE target (feed-forward leads from the live
+  measurement paired with the imm predictions), and the drag re-affirm in `controlStep`'s
+  overridden branch follows the LIVE target (a drag chases the pointer).
+
+### Derivative on measurement (R2) {#derivative-on-measurement}
+
+Coupling fix 2 of 2: with the derivative on `de/dt`, every tracker target update rode
+`d(aT)/dt` straight into the output at tracker rate (setpoint kick — the low-pass
+bounds it, doesn't remove it). `@lib/pid` gains `derivativeOn: "error" | "measurement"`
+(default `"error"`, zero change for existing consumers): in measurement mode `step(e,
+dt, m)` differentiates `−m` through the SAME low-pass filter, so Δe = −Δm dynamics are
+identical at constant setpoint but a setpoint step contributes nothing. All three
+vergence controllers run measurement mode; `stepVergence` decomposes the per-DOF
+measurement so `error = setpoint − measurement` holds:
+
+| DOF | setpoint | measurement | behavior change |
+| --- | --- | --- | --- |
+| pan | `aT` (moves during follow) | `(aL + aR)/2` | YES — target motion no longer kicks kd |
+| verge | 0 (disparity nulled, constant) | `aL.x − aR.x` | none (constant setpoint ⇒ identical) |
+| v_shift | 0 (constant) | `(aL.y − aR.y)/2` | none |
+
+The once-per-pair gate, the filtered derivative, and the hold/disabled semantics above
+are unchanged — R1/R2 layer on top of them.
 
 ### Seed space contract — the drag-release seam {#seed-space}
 

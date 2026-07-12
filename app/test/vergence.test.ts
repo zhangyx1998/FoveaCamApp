@@ -15,9 +15,12 @@ import {
   foveaFootprintOnWide,
   foveaTileSize,
   matchMagnification,
+  recordTarget,
   seedVergence,
   stepVergence,
+  targetAtEpoch,
   type ScopeProjection,
+  type TargetSample,
   type VergenceControllers,
 } from "@modules/disparity-scope/vergence";
 import type { Point2d } from "core/Geometry";
@@ -651,5 +654,137 @@ describe("stepVergence", () => {
     const proj = projectionFor({ x: 0, y: 0 }, { x: -5, y: 0 }, { x: 5, y: 0 }, 1);
     stepVergence(proj, ctl, identityConv, { baseline: 200, minScore: 0.1 }, 0);
     expect(ctl.verge.value).toBeCloseTo(0);
+  });
+});
+
+// R2 (vergence-loop-tuning §2): the vergence controllers run derivative-on-
+// measurement, and stepVergence supplies each DOF's measurement point. Only
+// PAN actually changes behavior — its setpoint (the target ray) moves during
+// follow; verge/v_shift regulate to a CONSTANT 0-disparity setpoint, so their
+// measurement-mode derivative is numerically identical to error mode.
+describe("stepVergence derivative-on-measurement (R2 — no target kick)", () => {
+  const kdAxis = {
+    kp: 0,
+    ki: 0,
+    kd: 1,
+    dTau: 0,
+    limits: [-10, 10] as [number, number],
+  };
+  function kdControllers(derivativeOn: "error" | "measurement"): VergenceControllers {
+    const opts = { ...kdAxis, derivativeOn };
+    return {
+      pan: new PID2D({ x: opts, y: opts }),
+      verge: new PID(opts),
+      v_shift: new PID(opts),
+    };
+  }
+  const step = (ctl: VergenceControllers, target: Point2d, l: Point2d, r: Point2d) =>
+    stepVergence(
+      projectionFor(target, l, r, 1),
+      ctl,
+      identityConv,
+      { baseline: 200, minScore: 0.1 },
+      1,
+    );
+
+  it("a target jump with matched centers HELD kicks pan kd in error mode, NOT in measurement mode", () => {
+    const eyes = { x: 0, y: 0 };
+    const onError = kdControllers("error");
+    const onMeas = kdControllers("measurement");
+    step(onError, { x: 0, y: 0 }, eyes, eyes); // prime derivative memory
+    step(onMeas, { x: 0, y: 0 }, eyes, eyes);
+    const target = { x: 5, y: -3 }; // the tracker moved the setpoint
+    const outError = step(onError, target, eyes, eyes)!;
+    const outMeas = step(onMeas, target, eyes, eyes)!;
+    // Error mode: d(ePan)/dt = target velocity rides kd into the ray
+    // (output ≠ target even though ki = 0 integrated nothing).
+    expect(Math.abs(outError.left.x - target.x)).toBeGreaterThan(1);
+    // Measurement mode: gaze unchanged → zero derivative → ray == target.
+    expect(outMeas.left.x).toBeCloseTo(target.x);
+    expect(outMeas.left.y).toBeCloseTo(target.y);
+  });
+
+  it("gaze (measurement) motion drives the pan derivative identically in both modes", () => {
+    const target = { x: 0, y: 0 };
+    const onError = kdControllers("error");
+    const onMeas = kdControllers("measurement");
+    step(onError, target, { x: 1, y: 0 }, { x: 1, y: 0 });
+    step(onMeas, target, { x: 1, y: 0 }, { x: 1, y: 0 });
+    const outError = step(onError, target, { x: 3, y: 0 }, { x: 3, y: 0 })!;
+    const outMeas = step(onMeas, target, { x: 3, y: 0 }, { x: 3, y: 0 })!;
+    expect(outMeas.left.x).toBeCloseTo(outError.left.x);
+    expect(outMeas.right.x).toBeCloseTo(outError.right.x);
+  });
+
+  it("verge/v_shift commands are UNCHANGED by the mode (constant 0-disparity setpoint)", () => {
+    const target = { x: 0, y: 0 };
+    const onError = kdControllers("error");
+    const onMeas = kdControllers("measurement");
+    // A growing disparity (both axes) — pure measurement motion; with ki = 0
+    // the commanded pose is ALL derivative, so any mode divergence shows.
+    step(onError, target, { x: -1, y: -1 }, { x: 1, y: 1 });
+    step(onMeas, target, { x: -1, y: -1 }, { x: 1, y: 1 });
+    const outError = step(onError, target, { x: -2, y: -2 }, { x: 2, y: 2 })!;
+    const outMeas = step(onMeas, target, { x: -2, y: -2 }, { x: 2, y: 2 })!;
+    expect(outMeas.left).toEqual(outError.left);
+    expect(outMeas.right).toEqual(outError.right);
+    // And the derivative genuinely acted (toe-in + vertical split ≠ 0).
+    expect(outMeas.left.x).not.toBeCloseTo(outMeas.right.x);
+    expect(outMeas.left.y).not.toBeCloseTo(outMeas.right.y);
+  });
+});
+
+// R1 (vergence-loop-tuning §2): the capture-epoch target ring. The join
+// resolves the target AS OF the matched frame's capture timestamp (trusted
+// host-ns deviceTimestamp) so the PID error never contains phantom
+// target-motion the matches haven't seen yet.
+describe("targetAtEpoch / recordTarget (capture-epoch target ring, R1)", () => {
+  const FALLBACK = { x: 999, y: 999 };
+  function ringOf(...ts: [number, number][]): TargetSample[] {
+    const ring: TargetSample[] = [];
+    for (const [t, x] of ts) recordTarget(ring, { t, target: { x, y: -x } }, 16);
+    return ring;
+  }
+
+  it("resolves an exact epoch to that sample", () => {
+    const ring = ringOf([100, 1], [200, 2], [300, 3]);
+    expect(targetAtEpoch(ring, 200, FALLBACK)).toEqual({ x: 2, y: -2 });
+  });
+
+  it("between entries → nearest-not-after (the write in effect at the epoch)", () => {
+    const ring = ringOf([100, 1], [200, 2], [300, 3]);
+    expect(targetAtEpoch(ring, 250, FALLBACK)).toEqual({ x: 2, y: -2 });
+    expect(targetAtEpoch(ring, 299.9, FALLBACK)).toEqual({ x: 2, y: -2 });
+  });
+
+  it("after the last entry → the newest write (target unchanged since)", () => {
+    const ring = ringOf([100, 1], [200, 2]);
+    expect(targetAtEpoch(ring, 5000, FALLBACK)).toEqual({ x: 2, y: -2 });
+  });
+
+  it("before the first entry → fallback (out of coverage is untrusted — the uncalibrated-clock degrade)", () => {
+    const ring = ringOf([100, 1], [200, 2]);
+    expect(targetAtEpoch(ring, 50, FALLBACK)).toBe(FALLBACK);
+  });
+
+  it("empty ring / missing / non-finite epoch → fallback (the live target)", () => {
+    expect(targetAtEpoch([], 100, FALLBACK)).toBe(FALLBACK);
+    const ring = ringOf([100, 1]);
+    expect(targetAtEpoch(ring, undefined, FALLBACK)).toBe(FALLBACK);
+    expect(targetAtEpoch(ring, NaN, FALLBACK)).toBe(FALLBACK);
+    expect(targetAtEpoch(ring, Infinity, FALLBACK)).toBe(FALLBACK);
+  });
+
+  it("recordTarget caps the ring oldest-first and drops out-of-order stamps", () => {
+    const ring: TargetSample[] = [];
+    for (let t = 1; t <= 20; t++) recordTarget(ring, { t, target: { x: t, y: 0 } }, 8);
+    expect(ring.length).toBe(8);
+    expect(ring[0]!.t).toBe(13); // oldest evicted
+    recordTarget(ring, { t: 5, target: { x: -1, y: 0 } }, 8); // clock hiccup
+    expect(ring.length).toBe(8);
+    expect(ring[ring.length - 1]!.t).toBe(20); // dropped, order intact
+    // Equal stamps are kept (same-instant rewrite wins as the newer entry).
+    recordTarget(ring, { t: 20, target: { x: 42, y: 0 } }, 8);
+    expect(targetAtEpoch(ring, 20, FALLBACK)).toEqual({ x: 42, y: 0 });
   });
 });

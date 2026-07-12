@@ -67,11 +67,15 @@ import {
   followTarget,
   foveaTileSize,
   matchMagnification,
+  recordTarget,
   seedVergence,
   stepVergence,
+  targetAtEpoch,
   type ScopeProjection,
+  type TargetSample,
   type VergenceControllers,
 } from "./vergence";
+import { hostNowNs } from "@orchestrator/time-align";
 import { createSlicePipe, type SliceHandle, type SlicePipeSeam } from "@orchestrator/slice-pipe";
 import { createScalePipe, type ScaleHandle, type ScalePipeSeam } from "@orchestrator/scale-pipe";
 import {
@@ -309,11 +313,16 @@ export default function disparityScopeSession(
 
     // The named DOF controllers (owned by the PID node once created). `pan` is a
     // PID2D (separate x/y integrators); `verge`/`v_shift` are scalar PIDs.
-    const pan = new PID2D();
+    // All in MEASUREMENT-derivative mode (R2, spec §control-law): tracker
+    // target motion must never kick kd; stepVergence supplies each DOF's
+    // measurement point.
+    const MEAS_D = { derivativeOn: "measurement" } as const;
+    const pan = new PID2D({ x: MEAS_D, y: MEAS_D });
     const verge = new PID({
       limits: [0, distanceToVerge(VERGE_MIN_DISTANCE_MM, s.state.baseline)],
+      ...MEAS_D,
     });
-    const v_shift = new PID({ limits: [-VSHIFT_LIMIT, VSHIFT_LIMIT] });
+    const v_shift = new PID({ limits: [-VSHIFT_LIMIT, VSHIFT_LIMIT], ...MEAS_D });
     const controllers: VergenceControllers = { pan, verge, v_shift };
 
     const shiftLim: [number, number] = [-SHIFT_LIMIT, SHIFT_LIMIT];
@@ -563,6 +572,21 @@ export default function disparityScopeSession(
       }
     }
 
+    // R1 (spec §control-law): {t, target} ring in host steady-clock ns — the
+    // trusted-time domain every pipe frame's deviceTimestamp is calibrated
+    // into — appended at EVERY target write, so the join can resolve the
+    // target AS OF a matched frame's capture epoch. 256 entries cover >1 s at
+    // the combined tracker + pointer write rate; capture→match lag is ~100 ms.
+    const TARGET_RING_CAP = 256;
+    const targetRing: TargetSample[] = [];
+
+    /** The ONE target write path: ring append + state write, so no
+     *  `state.target` change can escape the capture-epoch history. */
+    function writeTarget(p: Point2d): void {
+      recordTarget(targetRing, { t: Number(hostNowNs()), target: p }, TARGET_RING_CAP);
+      s.setState("target", p);
+    }
+
     // Per-result routing off the tracker thread (spec §tracker; gating in
     // tracker-feed.ts).
     const trackerFeed = createDisparityTrackerFeed(
@@ -583,7 +607,7 @@ export default function disparityScopeSession(
           // every drag writer is slewed BY CONSTRUCTION.
           pidNode?.ingest("target"); // meter the kcf → pid target edge
           lastGood = center;
-          s.setState("target", center);
+          writeTarget(center);
           steerCrops();
           publishOverridden(true);
         },
@@ -592,7 +616,7 @@ export default function disparityScopeSession(
           trackerActive = true;
           windowStart = now(); // tracking = activity: keep the freeze window fresh
           lastGood = center;
-          s.setState("target", center);
+          writeTarget(center);
           steerCrops();
           s.telemetry({ tracker_bbox: bbox });
           publishOverridden(false);
@@ -615,7 +639,7 @@ export default function disparityScopeSession(
       trackerArmed = false;
       trackerActive = false;
       windowStart = now();
-      s.setState("target", lastGood);
+      writeTarget(lastGood);
       s.telemetry({ tracker_bbox: null, tracker_lost: true });
     }
 
@@ -744,7 +768,11 @@ export default function disparityScopeSession(
       runControl({
         l: (side === "L" ? m : other).center,
         r: (side === "R" ? m : other).center,
-        target: s.state.target,
+        // R1 (spec §control-law): the error pairs the matched centers with the
+        // target AS OF the strip frame's capture epoch (its trusted
+        // deviceTimestamp), not the target as of now — a moving target no
+        // longer injects phantom error ∝ velocity × pipeline delay.
+        target: targetAtEpoch(targetRing, v.deviceTimestamp, s.state.target),
         scores: {
           l: (side === "L" ? m : other).score,
           r: (side === "R" ? m : other).score,
@@ -789,8 +817,10 @@ export default function disparityScopeSession(
       if (projection.overridden) {
         windowStart = now(); // drag = activity
         status = "manual";
-        // Match-rate re-affirm of the drag follow, slewed like the pointer path.
-        const follow = followVolts(projection.target);
+        // Match-rate re-affirm of the drag follow, slewed like the pointer
+        // path — toward the LIVE target (the drag chases the pointer, not the
+        // capture-epoch target the PID error uses).
+        const follow = followVolts(s.state.target);
         return follow ? slewToward(follow) : commandedVolts;
       }
       if (autoVergenceDisabled()) {
@@ -966,6 +996,14 @@ export default function disparityScopeSession(
       lastStep = now();
       lastSteppedSeq = -1;
       dragSlew.reset();
+      // Seed the capture-epoch ring so frames captured before the first target
+      // write still resolve to the target in effect at activation (R1).
+      targetRing.length = 0;
+      recordTarget(
+        targetRing,
+        { t: Number(hostNowNs()), target: s.state.target },
+        TARGET_RING_CAP,
+      );
       const monitor = s.progressMonitor([
         { id: "lease", label: "Leasing cameras" },
         { id: "undistort", label: "Loading calibration" },
@@ -1655,6 +1693,7 @@ export default function disparityScopeSession(
       workers.L = workers.R = null;
       latestMatch.L = latestMatch.R = null;
       lastSteppedSeq = -1; // fresh workers restart their seq counters
+      targetRing.length = 0; // re-seeded on the next activate
       trackerActive = false;
       dragging = false;
       overriddenTele = false;
@@ -1701,7 +1740,7 @@ export default function disparityScopeSession(
             tk?.override(p);
             // Steer synchronously (don't wait one tracker frame).
             lastGood = p;
-            s.setState("target", p);
+            writeTarget(p);
             steerCrops();
             publishOverridden(true);
             status = "manual";

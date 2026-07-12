@@ -11,7 +11,7 @@
 // bound. `setLimits` updates both and re-clamps the live integrator.
 
 import { describe, expect, it } from "vitest";
-import { DERIVATIVE_TAU, PID } from "@lib/pid";
+import { DERIVATIVE_TAU, PID, PID2D } from "@lib/pid";
 
 /** The disparity verge shape: velocity-form (kp = kd = 0, integrator = the
  *  command), constructed against the DEFAULT 200 mm baseline bound. */
@@ -94,5 +94,59 @@ describe("PID derivative filter (kd-explosion regression)", () => {
     pid.reset();
     pid.step(0, 1); // re-prime prevError
     expect(pid.step(0, 1)).toBe(0); // zero slope → zero output, no residue
+  });
+});
+
+// R2 (vergence-loop-tuning §2): derivative-on-measurement — the standard
+// anti-setpoint-kick form. `d(−measurement)/dt` replaces `de/dt` (same
+// low-pass state), so a moving setpoint (the tracker's target during follow)
+// never excites kd, while measurement motion responds identically to error
+// mode (Δe = −Δm at constant setpoint). Default stays "error" — zero behavior
+// change for every existing consumer.
+describe("PID derivative on measurement (R2)", () => {
+  it("error mode (the default): a setpoint step DOES kick the derivative — the contrast baseline", () => {
+    const pid = new PID({ kd: 1, dTau: 0 });
+    pid.step(0 - 5, 1, 5); // setpoint 0, measurement 5
+    // Setpoint jumps to 10, measurement unchanged → error jumps by 10.
+    const out = pid.step(10 - 5, 1, 5);
+    expect(out).toBe(10); // raw slope Δe/dt = 10 — the setpoint kick
+  });
+
+  it("measurement mode: the same setpoint step produces NO derivative kick", () => {
+    const pid = new PID({ kd: 1, dTau: 0, derivativeOn: "measurement" });
+    pid.step(0 - 5, 1, 5);
+    const out = pid.step(10 - 5, 1, 5); // setpoint step, measurement constant
+    expect(out).toBe(0); // kp = ki = 0 and d(−m)/dt = 0 — nothing kicks
+  });
+
+  it("a measurement step produces the SAME response in both modes (constant setpoint)", () => {
+    const onError = new PID({ kp: 0.5, ki: 0.1, kd: 1 });
+    const onMeas = new PID({ kp: 0.5, ki: 0.1, kd: 1, derivativeOn: "measurement" });
+    const setpoint = 3;
+    for (let i = 0; i < 20; i++) {
+      const m = Math.sin(i / 3) * 4; // an arbitrary measurement trajectory
+      const a = onError.step(setpoint - m, 1, m);
+      const b = onMeas.step(setpoint - m, 1, m);
+      expect(b).toBeCloseTo(a, 12); // Δe = −Δm — identical dynamics
+    }
+  });
+
+  it("a step with no measurement supplied contributes no derivative and keeps the memory intact", () => {
+    const pid = new PID({ kd: 1, dTau: 0, derivativeOn: "measurement" });
+    pid.step(-5, 1, 5);
+    expect(pid.step(-5, 1)).toBe(0); // no measurement → derivative 0
+    // Memory untouched: the next measured step differentiates against the
+    // LAST measurement (5 → 7 over dt 1), not a poisoned intermediate.
+    expect(pid.step(-7, 1, 7)).toBe(-2);
+  });
+
+  it("PID2D forwards the per-axis measurement point", () => {
+    const opts = { kd: 1, dTau: 0, derivativeOn: "measurement" } as const;
+    const pid = new PID2D({ x: opts, y: opts });
+    pid.step({ x: -1, y: -2 }, 1, { x: 1, y: 2 });
+    // Setpoint stays 0; measurement moves by {+2, −3} → d(−m)/dt = {−2, +3}.
+    const out = pid.step({ x: -3, y: 1 }, 1, { x: 3, y: -1 });
+    expect(out.x).toBe(-2);
+    expect(out.y).toBe(3);
   });
 });

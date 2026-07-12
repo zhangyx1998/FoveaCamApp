@@ -39,6 +39,14 @@ export interface PidParams {
   integralLimits?: [number, number];
 }
 
+/** What the derivative term differentiates (see {@link PID.step}):
+ *  - `"error"` (default) — the classic `de/dt`; a setpoint step rides straight
+ *    into the output (setpoint kick).
+ *  - `"measurement"` — `d(−measurement)/dt`, the standard anti-setpoint-kick
+ *    form: identical to `"error"` while the setpoint is constant (e = sp − m ⇒
+ *    Δe = −Δm), but a moving setpoint no longer excites kd at all. */
+export type DerivativeSource = "error" | "measurement";
+
 export interface PIDOptions {
   /** Proportional gain. */
   kp?: number;
@@ -55,6 +63,9 @@ export interface PIDOptions {
   /** Derivative low-pass time constant in `dt` units (default
    *  {@link DERIVATIVE_TAU}; 0 = raw, unfiltered slope). See {@link PID.step}. */
   dTau?: number;
+  /** Derivative source (default `"error"` — zero behavior change for callers
+   *  that never pass a measurement). See {@link DerivativeSource}. */
+  derivativeOn?: DerivativeSource;
 }
 
 /** Default derivative-filter time constant (in `dt` units — frames for the
@@ -87,9 +98,12 @@ export class PID {
   integralLimits: [number, number];
   /** Derivative-filter time constant ({@link PIDOptions.dTau}). */
   dTau: number;
+  /** Derivative source ({@link PIDOptions.derivativeOn}). */
+  readonly derivativeOn: DerivativeSource;
   private integral: number;
-  private prevError: number | null = null;
-  /** Low-passed error slope — the derivative term's state (see `step`). */
+  /** Previous derivative-source value (error, or −measurement). */
+  private prevD: number | null = null;
+  /** Low-passed source slope — the derivative term's state (see `step`). */
   private dFiltered = 0;
 
   constructor(opts: PIDOptions = {}) {
@@ -99,6 +113,7 @@ export class PID {
     this.limits = opts.limits ?? UNBOUNDED;
     this.integralLimits = opts.integralLimits ?? this.limits;
     this.dTau = opts.dTau ?? DERIVATIVE_TAU;
+    this.derivativeOn = opts.derivativeOn ?? "error";
     this.integral = clamp(opts.initial ?? 0, this.integralLimits);
   }
 
@@ -113,7 +128,7 @@ export class PID {
   /** Reset the integrator (default 0) and derivative memory. */
   reset(value = 0) {
     this.integral = clamp(value, this.integralLimits);
-    this.prevError = null;
+    this.prevD = null;
     this.dFiltered = 0;
   }
 
@@ -169,23 +184,39 @@ export class PID {
    * near-zero-dt step contributes almost nothing, a long gap re-converges in
    * ~dTau. `dTau = 0` degenerates to the raw slope.
    *
+   * Under `derivativeOn: "measurement"` the filtered slope is taken over
+   * `−measurement` instead of the error (same filter state): a setpoint step
+   * never kicks the derivative, while measurement motion responds identically
+   * to error mode (Δe = −Δm at constant setpoint). A step with no
+   * `measurement` supplied contributes no derivative and leaves the filter
+   * memory untouched.
+   *
    * @param error setpoint − measurement
    * @param dt normalized time step (default 1)
+   * @param measurement the raw measurement (only read in `"measurement"` mode)
    * @returns the saturated control output
    */
-  step(error: number, dt = 1): number {
+  step(error: number, dt = 1, measurement?: number): number {
     this.integral = clamp(
       this.integral + this.ki * error * dt,
       this.integralLimits,
     );
+    const source =
+      this.derivativeOn === "measurement"
+        ? measurement !== undefined
+          ? -measurement
+          : null
+        : error;
     let derivative = 0;
-    if (this.kd !== 0 && this.prevError !== null && dt > 0) {
-      const raw = (error - this.prevError) / dt;
-      const alpha = this.dTau > 0 ? dt / (dt + this.dTau) : 1;
-      this.dFiltered += alpha * (raw - this.dFiltered);
-      derivative = this.dFiltered;
+    if (source !== null) {
+      if (this.kd !== 0 && this.prevD !== null && dt > 0) {
+        const raw = (source - this.prevD) / dt;
+        const alpha = this.dTau > 0 ? dt / (dt + this.dTau) : 1;
+        this.dFiltered += alpha * (raw - this.dFiltered);
+        derivative = this.dFiltered;
+      }
+      this.prevD = source;
     }
-    this.prevError = error;
     return clamp(
       this.kp * error + this.integral + this.kd * derivative,
       this.limits,
@@ -215,7 +246,10 @@ export class PID2D {
   readonly x: PID;
   readonly y: PID;
 
-  constructor(p?: Partial<Pid2dParams>) {
+  /** Accepts the full per-axis {@link PIDOptions} (a {@link Pid2dParams} is
+   *  structurally assignable), so construction-time knobs like `derivativeOn`
+   *  reach each axis. */
+  constructor(p?: { x?: PIDOptions; y?: PIDOptions }) {
     this.x = new PID(p?.x);
     this.y = new PID(p?.y);
   }
@@ -228,9 +262,13 @@ export class PID2D {
   }
 
   /** Advance both axes one step. `dt` is shared (both channels are driven at
-   *  the same call rate). */
-  step(error: Point2d, dt = 1): Point2d {
-    return { x: this.x.step(error.x, dt), y: this.y.step(error.y, dt) };
+   *  the same call rate); `measurement` forwards per axis (see
+   *  {@link PID.step}'s `derivativeOn: "measurement"` form). */
+  step(error: Point2d, dt = 1, measurement?: Point2d): Point2d {
+    return {
+      x: this.x.step(error.x, dt, measurement?.x),
+      y: this.y.step(error.y, dt, measurement?.y),
+    };
   }
 
   /** Current per-axis integrator values as a point (the 2D command). */
