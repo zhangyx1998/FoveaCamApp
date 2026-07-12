@@ -1,15 +1,13 @@
-// D-item-3 profiler graph interactions — the PURE decision logic behind
-// GraphPanel's canvas interactions (graph-interactions.ts): height
-// clamp/persist round-trip, ctrl-wheel zoom gating + zoom math, the
-// dragged-position preservation merge, and the profiler report-rate parsing.
-// DOM/fullscreen/cytoscape wiring stays thin and untested by design.
+// D-item-3 profiler graph interactions — the PURE decision logic behind the
+// node-graph canvas interactions (graph-interactions.ts): ctrl-wheel zoom
+// gating + zoom math, the dragged-position preservation merge, edge-path
+// geometry, and the profiler report-rate parsing. DOM/fullscreen wiring stays
+// thin and untested by design. (The resizable-height block died with ruling 3;
+// the cytoscape control-point decomposition died with the library — the graph
+// now emits `edgePath` SVG cubics directly.)
 
 import { describe, expect, it } from "vitest";
 import {
-  DEFAULT_GRAPH_HEIGHT,
-  MIN_GRAPH_HEIGHT,
-  clampGraphHeight,
-  parseGraphHeight,
   isZoomGesture,
   nextZoomLevel,
   ZOOM_MIN,
@@ -20,34 +18,11 @@ import {
   REPORT_INTERVAL_OPTIONS,
   stemOffset,
   laneOffset,
-  perpendicularControlPoints,
+  edgePath,
   STEM_MIN_PX,
   STEM_MAX_PX,
   LANE_STEP_PX,
 } from "@src/profiler/graph-interactions";
-
-describe("graph height clamp + persist round-trip", () => {
-  it("clamps below the minimum and rounds fractional drag deltas", () => {
-    expect(clampGraphHeight(120)).toBe(MIN_GRAPH_HEIGHT);
-    expect(clampGraphHeight(MIN_GRAPH_HEIGHT)).toBe(MIN_GRAPH_HEIGHT);
-    expect(clampGraphHeight(512.6)).toBe(513);
-    expect(clampGraphHeight(NaN)).toBe(DEFAULT_GRAPH_HEIGHT);
-    expect(clampGraphHeight(Infinity)).toBe(DEFAULT_GRAPH_HEIGHT);
-  });
-
-  it("round-trips through the localStorage string representation", () => {
-    const h = clampGraphHeight(457.2);
-    expect(parseGraphHeight(String(h))).toBe(h);
-  });
-
-  it("falls back to the default on absent or garbage persisted values", () => {
-    expect(parseGraphHeight(null)).toBe(DEFAULT_GRAPH_HEIGHT);
-    expect(parseGraphHeight("")).toBe(DEFAULT_GRAPH_HEIGHT);
-    expect(parseGraphHeight("not-a-number")).toBe(DEFAULT_GRAPH_HEIGHT);
-    // A persisted value below today's minimum is clamped up, not trusted.
-    expect(parseGraphHeight("50")).toBe(MIN_GRAPH_HEIGHT);
-  });
-});
 
 describe("wheel-event zoom gating (ctrl vs plain)", () => {
   it("zooms only with ctrlKey (macOS pinch arrives as ctrl+wheel)", () => {
@@ -123,48 +98,55 @@ describe("perpendicular-stem edge geometry (user ruling 1)", () => {
     expect(laneOffset(0, 3)).toBeCloseTo(-LANE_STEP_PX);
   });
 
-  // Reconstruct cytoscape's own control-point placement (edge-distances:
-  // endpoints): P = S + w·(T−S) + d·n, with n = (−dy, dx)/l. The returned
-  // (weight, distance) pairs must land C1 horizontally off S and C2 horizontally
-  // off T — i.e. the stems leave/enter the LR faces perpendicular.
-  function reconstruct(s: { x: number; y: number }, t: { x: number; y: number }) {
-    const cp = perpendicularControlPoints(s, t)!;
-    const dx = t.x - s.x;
-    const dy = t.y - s.y;
-    const l = Math.hypot(dx, dy);
-    const n = { x: -dy / l, y: dx / l };
-    const at = (w: number, d: number) => ({
-      x: s.x + w * dx + d * n.x,
-      y: s.y + w * dy + d * n.y,
-    });
-    return { c1: at(cp.weights[0], cp.distances[0]), c2: at(cp.weights[1], cp.distances[1]) };
+  // edgePath emits "M sx sy C c1x c1y, c2x c2y, tx ty" — a cubic whose control
+  // points sit `off` px horizontally off each endpoint (stems leave/enter the
+  // LR faces perpendicular). Parse the six numbers back out and check them.
+  const NUM = "(-?[\\d.]+)";
+  const CUBIC = new RegExp(
+    `^M ${NUM} ${NUM} C ${NUM} ${NUM}, ${NUM} ${NUM}, ${NUM} ${NUM}$`,
+  );
+  function parse(d: string) {
+    const m = CUBIC.exec(d)!;
+    const n = m.slice(1).map(Number);
+    return {
+      s: { x: n[0]!, y: n[1]! },
+      c1: { x: n[2]!, y: n[3]! },
+      c2: { x: n[4]!, y: n[5]! },
+      t: { x: n[6]!, y: n[7]! },
+    };
   }
 
   it("places both control points on the horizontal face normals (diagonal edge)", () => {
     const s = { x: 0, y: 0 };
     const t = { x: 200, y: 120 };
     const off = stemOffset(Math.hypot(200, 120));
-    const { c1, c2 } = reconstruct(s, t);
-    // C1 sits `off` to the RIGHT of the source at the source's height (stem
-    // leaves horizontally); C2 sits `off` to the LEFT of the target at its height.
-    expect(c1.x).toBeCloseTo(s.x + off);
-    expect(c1.y).toBeCloseTo(s.y);
-    expect(c2.x).toBeCloseTo(t.x - off);
-    expect(c2.y).toBeCloseTo(t.y);
+    const p = parse(edgePath(s, t));
+    // Endpoints round-trip; C1 sits `off` RIGHT of the source at the source's
+    // height (stem leaves horizontally); C2 sits `off` LEFT of the target.
+    expect(p.s).toEqual(s);
+    expect(p.t).toEqual(t);
+    expect(p.c1.x).toBeCloseTo(s.x + off);
+    expect(p.c1.y).toBeCloseTo(s.y);
+    expect(p.c2.x).toBeCloseTo(t.x - off);
+    expect(p.c2.y).toBeCloseTo(t.y);
   });
 
   it("keeps stems horizontal on a back-edge (target left of source)", () => {
     const s = { x: 300, y: 40 };
     const t = { x: 60, y: 90 }; // feedback loop — target to the LEFT
     const off = stemOffset(Math.hypot(-240, 50));
-    const { c1, c2 } = reconstruct(s, t);
-    expect(c1.x).toBeCloseTo(s.x + off); // still leaves the source's RIGHT face
-    expect(c1.y).toBeCloseTo(s.y);
-    expect(c2.x).toBeCloseTo(t.x - off); // still enters the target's LEFT face
-    expect(c2.y).toBeCloseTo(t.y);
+    const p = parse(edgePath(s, t));
+    expect(p.c1.x).toBeCloseTo(s.x + off); // still leaves the source's RIGHT face
+    expect(p.c1.y).toBeCloseTo(s.y);
+    expect(p.c2.x).toBeCloseTo(t.x - off); // still enters the target's LEFT face
+    expect(p.c2.y).toBeCloseTo(t.y);
   });
 
-  it("returns null for coincident endpoints (degenerate)", () => {
-    expect(perpendicularControlPoints({ x: 5, y: 5 }, { x: 5, y: 5 })).toBeNull();
+  it("collapses coincident endpoints to a straight no-op segment (degenerate)", () => {
+    // Truly identical points → zero-length "M s L t"; the panel never divides
+    // by a zero-length stem.
+    expect(edgePath({ x: 5, y: 5 }, { x: 5, y: 5 })).toBe("M 5 5 L 5 5");
+    // Sub-epsilon separation also degrades to the straight fallback.
+    expect(edgePath({ x: 0, y: 0 }, { x: 1e-9, y: 0 })).toMatch(/^M 0 0 L /);
   });
 });

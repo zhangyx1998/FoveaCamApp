@@ -379,7 +379,7 @@ watch(activeTab, (t) => {
       </button>
     </div>
 
-    <div class="tab-content" ref="tabContent">
+    <div class="tab-content" :class="{ 'no-scroll': activeTab === 'graph' }" ref="tabContent">
       <!-- ============ GRAPH (primary — gets the freed vertical space) ====== -->
       <section v-show="activeTab === 'graph'" class="graph-section">
         <h2>Pipeline graph</h2>
@@ -388,7 +388,9 @@ watch(activeTab, (t) => {
           coral); hover a node or edge for its full metrics (util% · rate · worst gap · drops/queue).
           Dropping/backpressured edges and saturated nodes are flagged red.
         </p>
-        <GraphPanel :topology="graphTopology" />
+        <div class="graph-host">
+          <GraphPanel :topology="graphTopology" />
+        </div>
       </section>
 
       <!-- ============ WORKLOADS ============ -->
@@ -771,12 +773,32 @@ watch(activeTab, (t) => {
     min-height: 0;
     overflow: auto;
     padding: 1rem 1.5rem 3rem;
+
+    // Graph tab (ruling 3): the graph fills the tab container and never scrolls;
+    // every OTHER tab keeps its normal vertical scroll.
+    &.no-scroll {
+      overflow: hidden;
+      padding-bottom: 1.5rem;
+      display: flex;
+      flex-direction: column;
+    }
   }
 
   // The graph section fills the tab (the graph is primary and gets the freed
-  // vertical space); its own canvas stays user-resizable within.
+  // vertical space); the SVG node graph auto-scales with the profiler window
+  // (no in-panel resize handle anymore — ruling 3).
   .graph-section {
     margin-bottom: 0;
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+
+    // The heading + hint stay their natural size; the graph host takes the rest.
+    .graph-host {
+      flex: 1;
+      min-height: 0;
+    }
   }
 
   section {

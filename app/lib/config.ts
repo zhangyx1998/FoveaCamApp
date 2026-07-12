@@ -14,9 +14,11 @@ import {
 import {
   APP_CONFIG_PATH,
   DEFAULT_PREDICTION_RATE_HZ,
+  DEFAULT_PROFILER_HOVER_CARD_MODE,
   DEFAULT_PROJECTION_AUTO_CLOSE,
   DEFAULT_RECORD_COMPRESSION,
   DEFAULT_SERIAL_LATENCY_COMP,
+  type ProfilerHoverCardMode,
   type RecordCompression,
 } from "./config-schema.js";
 
@@ -120,6 +122,13 @@ export interface AppConfig {
   // default-on auto-close doesn't erase projections on every switch — only a
   // window whose every source is truly gone closes itself.
   projection_auto_close?: boolean;
+  // ---- Profiler node graph (profiler-graph-handrolled.md ruling 8) ------
+  // Hover-detail card behavior for the profiler's pipeline graph. "follow"
+  // (default) — the card tracks the cursor, quadrant-flipped so it never
+  // overflows the graph container. "corner" — the card snaps to a container
+  // corner that does not cover the hovered node/edge. Renderer-only; the
+  // profiler window (its own BrowserWindow) reads it live over this shared doc.
+  profiler_hover_card?: ProfilerHoverCardMode;
 }
 
 /** The declared defaults for every AppConfig key — exported so the values are
@@ -140,6 +149,7 @@ export const APP_CONFIG_DEFAULTS: Readonly<AppConfig> = {
   serial_latency_comp: DEFAULT_SERIAL_LATENCY_COMP,
   export_parallel: false,
   projection_auto_close: DEFAULT_PROJECTION_AUTO_CLOSE,
+  profiler_hover_card: DEFAULT_PROFILER_HOVER_CARD_MODE,
 };
 
 export async function useAppConfig() {

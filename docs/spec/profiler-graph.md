@@ -3,10 +3,14 @@
 Behavior contracts for the profiler window's view-model layer
 (`app/src/profiler/**`). Source files carry `// spec:` pointers here. Governing
 docs: `docs/history/refactor/workload-metering.md`,
-`docs/proposals/orchestrator-lifecycle-and-exit.md`, and C-24's
-`@lib/orchestrator/graph-contract`. The whole view-model layer is Vue-free,
-DOM-free, and cytoscape-free by design so the decision logic is unit-tested; the
-Vue components keep only thin event wiring + rendering.
+`docs/proposals/orchestrator-lifecycle-and-exit.md`,
+`docs/proposals/profiler-graph-handrolled.md`, and C-24's
+`@lib/orchestrator/graph-contract`. The pipeline graph is a HANDROLLED SVG
+component (`app/src/components/NodeGraph.vue`) — cytoscape + dagre are gone; the
+layered layout (`graph-layout.ts`) and viewport algebra (`graph-viewport.ts`)
+are pure, unit-tested modules. The whole view-model + geometry layer is Vue-free
+and DOM-free by design so the decision logic is unit-tested; the Vue components
+keep only thin event wiring + rendering.
 
 ## Topology source selection {#topology-source}
 
@@ -30,26 +34,29 @@ segment. Meter names containing `/` (and not `:`) are path-like node ids attache
 directly; names with `:` are legacy families (`controller:*`, `recorder:*`,
 `viewer:*` → sinks) until their nodes migrate.
 
-## Cytoscape reduction {#elements}
+## Element reduction {#elements}
 
-`toElements` reduces a topology to cytoscape element definitions (pure data — the
-panel diffs by element id). It applies two display normalizations, BOTH here so
+`toElements` reduces a topology to `GraphElement[]` (pure data — the component
+diffs by element id). It applies two display normalizations, BOTH here so
 `membershipKey` sees the same graph: SHM consumer-sink collapse, then idle
-derivation. Dangling edges are skipped defensively.
+derivation. Dangling edges are skipped defensively. Node data carries `id`,
+`kind`, `label`, `detail`, optional `util` (0..1) and `roleColor`; edge data
+carries `source`, `target`, `label`, `lane`, `lanes`; the `classes` string
+carries `idle` / `saturated` / `dropping`.
 
 - **Labels** — `nodeLabel`: in an application context a leased camera shows its
   ROLE (L/C/R from `GraphTopology.roles`) instead of its serial; middleware shows
   `<role>/<action>` with no upstream breadcrumb (the edges already carry the chain).
   Metrics live in the hover card (`nodeDetail`/`edgeDetail`), keyed on the full id.
 - **Role color** — `ROLE_COLORS` (L cyan / C orange / R greenyellow) mirrors
-  `tokens.css --role-*`; a border tint only (fills stay kind-colored). Cytoscape's
-  JS stylesheet can't read CSS custom properties, so values are mirrored in JS (same
-  reason for `KIND_COLORS` and the ring colors).
-- **Busy ring** (ruling 3) — `busyRing`: a thin arc filling clockwise to
-  `utilization`, tiered by the SAME ok/warn/high thresholds as the Workloads table
-  (saturated ≥ 0.9 → coral). Returned as an SVG `data:` URI for a corner
-  `background-image` — ADDITIVE over the kind/saturated fill; fed live via
-  `data(ring)` so it tracks each 1 Hz snapshot with no relayout.
+  `tokens.css --role-*`; a border tint only (fills stay kind-colored). Passed
+  through element data (`roleColor`) and bound to a CSS custom property on the
+  node; `KIND_COLORS` likewise seeds the `--kind` fill.
+- **Busy ring** (ruling 3) — metered nodes carry their raw `util` (0..1); the
+  component draws a NATIVE SVG arc (`<circle>` with `stroke-dasharray`) pinned to
+  the node's top-right corner, filling clockwise to `util` and tiered by the SAME
+  ok/warn/high thresholds as the Workloads table (saturated ≥ 0.9 → coral). The
+  old `busyRing` data-URI is gone. Fed live from each 1 Hz snapshot with no relayout.
 
 ## Membership key (relayout gating) {#membership}
 
@@ -130,14 +137,72 @@ it stays testable. `maxIntervalMs` (C-18) is the largest inter-arrival interval
 over the trailing 10 s; `stalled` = it exceeds `STALL_FACTOR` × the stream's
 nominal period — the "obvious bad value" highlight.
 
+## Rendering + interactions {#rendering}
+
+`NodeGraph.vue` renders the reduced `GraphElement[]` as native SVG and owns every
+interaction; `GraphPanel.vue` is a thin adapter (topology → `toElements`, reads
+the hover-card config, hosts `<NodeGraph>`). The container fills its parent
+100%/100% and never scrolls (ruling 3 — the in-panel resize handle + height
+persistence are gone). One `<g transform="translate(pan) scale(zoom)">` applies
+the viewport (screen = model · zoom + pan), so everything below is drawn in model
+space.
+
+- **Nodes** — `<rect rx>` + multiline `<text>`; kind fill (`--kind`), role border
+  tint (`--role`), saturated red, idle desaturation as CSS; the busy-ring arc
+  overhangs the top-right corner. Node sizes are ESTIMATED pre-render from label
+  metrics (monospace ~9px, ~5.4px/char + padding, clamped to a max width) to seed
+  the layout and draw the pill.
+- **Edges** — `<path>` from `graph-interactions.edgePath` (cubic with horizontal
+  tangents; source right face → target left face, `laneOffset` fanning for
+  same-direction parallels), an arrowhead marker (`context-stroke` so warn/idle
+  edges match), and a rate label with a background rect. `.dropping` = warn red,
+  `.idle` = static dashed + desaturated.
+- **Layout** (`graph-layout.layoutDag`, LR Sugiyama-lite) re-runs ONLY on
+  membership change (node/edge id set) — the 1 Hz stats refresh never re-scrambles
+  a placed node. `reconcileDraggedPositions` re-applies surviving user-dragged
+  positions over the fresh auto-layout (auto owns every untouched node).
+- **Drag** — pointer events move a node's model position LIVE; edge paths recompute
+  every pointermove (ruling 2), positions being reactive.
+- **Pan / zoom** (`graph-viewport`) — plain wheel = X/Y pan via `panBy` (clamped so
+  the canvas-center model point stays inside the graph bbox, ruling 4; macOS
+  two-finger trackpad pan works natively). `ctrl+wheel` (= macOS pinch, gated by
+  `isZoomGesture`) = `zoomAt` centered on the pointer (ruling 6, `nextZoomLevel`).
+  No whitespace-drag panning.
+- **Viewport resize** (ruling 5) — a `ResizeObserver` drives `resizeViewport`
+  (`viewportContent` refit + `clampPan`) on window resize, fullscreen enter/exit,
+  and the tab reveal; the FIRST non-zero box fits the whole graph.
+- **Marching dash** (ruling 7) — hover-highlighted (BFS distance ≤ 1) NON-idle
+  edges get a `stroke-dashoffset` keyframe marching source → target; idle edges
+  keep their static dash (no flow to animate).
+- **Chips** — fit / reset layout (also clears dragged + refits; NO height reset) /
+  fullscreen (Fullscreen API on the component root).
+
+## Hover card + config {#hover-card}
+
+The hover-detail card (structured `HoverDetail` title + label/value rows) is
+positioned by the pure `hover-card-placement.ts` module, chosen by the app-wide
+`profiler_hover_card` config entry (`config-schema.ts`:
+`PROFILER_HOVER_CARD_MODES` / `coerceProfilerHoverCardMode`, default `follow`;
+surfaced in Settings → Global; the profiler window reads it live over the shared
+config doc):
+
+- `followPlacement` (`follow`) — the card tracks the cursor, preferring
+  below-right, flipping horizontally/vertically whenever it would overflow the
+  container (four-quadrant flip), updated on every pointermove.
+- `cornerPlacement` (`corner`) — the card snaps to the container corner (+ margin)
+  whose rect covers the hovered element LEAST (ties → farthest from the cursor).
+
+Both clamp gracefully in a degenerate tiny container.
+
 ## Interaction helpers {#interactions}
 
-`graph-interactions.ts` — pure logic behind GraphPanel's canvas interactions:
-persisted vertical resize (`clampGraphHeight`/`parseGraphHeight` — clamp to MIN,
-integral, NaN/Infinity-safe), ctrl-wheel zoom gating (`isZoomGesture` — macOS
-trackpad pinch arrives as a wheel event with `ctrlKey: true`, same path; plain
-scroll falls through so the page scrolls), dragged-position preservation, and
-ProfilerWindow's configurable report rate.
+`graph-interactions.ts` — pure geometry + gating shared by the graph component:
+ctrl-wheel zoom gating (`isZoomGesture` — macOS trackpad pinch arrives as a wheel
+event with `ctrlKey: true`, same path; plain wheel pans), `nextZoomLevel`
+(multiplicative, clamped), the perpendicular-stem `edgePath` + `stemOffset` /
+`laneOffset` geometry, `reconcileDraggedPositions`, and ProfilerWindow's
+configurable report rate. Canonical `ZOOM_MIN` / `ZOOM_MAX` live in
+`graph-viewport.ts` (re-exported here).
 
 ## Per-instance binding {#binding}
 

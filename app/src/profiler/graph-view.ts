@@ -4,9 +4,10 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Profiler graph panel — pure view-model layer (Vue/cytoscape-free, unit-tested):
-// topology source selection + Stage-1 derivation, cytoscape reduction, idle/busy
-// semantics, edge/hover math, membership-key relayout gating.
+// Profiler graph panel — pure view-model layer (Vue/DOM-free, unit-tested):
+// topology source selection + Stage-1 derivation, GraphElement reduction (the
+// renderer-agnostic shape NodeGraph.vue draws), idle/busy semantics, edge/hover
+// math, membership-key relayout gating.
 // spec: docs/spec/profiler-graph.md
 
 import type {
@@ -224,9 +225,9 @@ export function nodeLabel(node: GraphNode, roles?: RoleMap): string {
   return node.id.split("/").slice(-2).join("/");
 }
 
-/** The app-wide L/C/R color identity (tokens.css --role-l/-c/-r; cytoscape's
- *  JS stylesheet can't read CSS custom properties, so the values are mirrored
- *  here like KIND_COLORS). Border tint only — fills stay kind-colored. */
+/** The app-wide L/C/R color identity (tokens.css --role-l/-c/-r, mirrored
+ *  here like KIND_COLORS so the pure layer stays DOM-free). Border tint only —
+ *  fills stay kind-colored. */
 const ROLE_COLORS: Record<string, string> = {
   L: "cyan",
   C: "orange",
@@ -464,41 +465,6 @@ export function deriveIdle(t: GraphTopology): IdleSet {
   return { nodes, edges };
 }
 
-// --- Per-node busy ring (user 2026-07-10, ruling 3) -------------------------
-
-/** Ring badge colors — mirror the Workloads table's tint tiers (tokens
- *  `--accent-bright` / `--warn` + the profiler's coral `#f56`). Cytoscape's JS
- *  stylesheet and data-URI SVGs can't read CSS custom properties, so the values
- *  are mirrored here like `KIND_COLORS` / `ROLE_COLORS` above. */
-const RING_TRACK = "#2a2f36"; // unfilled arc (matches the graph chip border)
-const RING_OK = "#0af";
-const RING_WARN = "#fa0";
-const RING_HIGH = "#f56";
-const RING_RADIUS = 9;
-const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
-
-/** Compact circular busy indicator (ruling 3): a thin arc that fills clockwise
- *  from 12 o'clock to `utilization` of a full turn, color-tiered by the SAME
- *  ok/warn/high thresholds the Workloads table uses (SATURATED ≥ 0.9 → coral).
- *  Returned as an SVG `data:` URI for a cytoscape corner `background-image` —
- *  ADDITIVE over the node's kind/saturated fill, so it never competes with the
- *  semantic colors. Fed live from the folded stats via `data(ring)`, so it
- *  tracks each 1 Hz snapshot in place with no relayout. */
-export function busyRing(utilization: number, saturated: boolean): string {
-  const u = Math.min(1, Math.max(0, utilization));
-  const arc = u * RING_CIRCUMFERENCE;
-  const level = utilizationLevel(u);
-  const color =
-    saturated || level === "high" ? RING_HIGH : level === "warn" ? RING_WARN : RING_OK;
-  const svg =
-    `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">` +
-    `<circle cx="12" cy="12" r="${RING_RADIUS}" fill="none" stroke="${RING_TRACK}" stroke-width="3"/>` +
-    `<circle cx="12" cy="12" r="${RING_RADIUS}" fill="none" stroke="${color}" stroke-width="3" ` +
-    `stroke-linecap="round" stroke-dasharray="${arc.toFixed(2)} ${(RING_CIRCUMFERENCE - arc).toFixed(2)}" ` +
-    `transform="rotate(-90 12 12)"/></svg>`;
-  return `data:image/svg+xml,${encodeURIComponent(svg)}`;
-}
-
 // --- Parallel-edge lanes (user 2026-07-10) ----------------------------------
 
 /** Lane index + count for SAME-DIRECTION parallel edges (identical `from`→`to`,
@@ -521,7 +487,7 @@ function edgeLanes(edges: GraphEdge[]): Map<string, { lane: number; lanes: numbe
   return out;
 }
 
-/** Reduce a topology to cytoscape element definitions. Pure data — the panel
+/** Reduce a topology to GraphElement definitions. Pure data — the panel
  *  component diffs these against the live graph by element id. Applies the two
  *  display normalizations (both here so `membershipKey` sees the SAME graph):
  *  SHM consumer-sink collapse, then per-element idle derivation. */
@@ -536,11 +502,11 @@ export function toElements(t0: GraphTopology): GraphElement[] {
       kind: n.kind,
       label: nodeLabel(n, t.roles),
       detail: nodeDetail(n),
-      // In-graph busy indicator (ruling 3): metered nodes carry a live ring
-      // data-URI; unmetered nodes omit it (the `node[ring]` selector skips them).
-      ...(n.stats?.utilization !== undefined
-        ? { ring: busyRing(n.stats.utilization, !!n.stats.saturated) }
-        : {}),
+      // In-graph busy indicator (ruling 3): metered nodes carry their raw
+      // utilization (0..1); the component draws the native SVG arc from it
+      // (color-tiered by `saturated` + the util thresholds). Unmetered nodes
+      // omit it, so the component skips the arc.
+      ...(n.stats?.utilization !== undefined ? { util: n.stats.utilization } : {}),
       ...(() => {
         const c = roleColor(n, t.roles);
         return c ? { roleColor: c } : {};
@@ -552,7 +518,7 @@ export function toElements(t0: GraphTopology): GraphElement[] {
   }));
   const known = new Set(t.nodes.map((n) => n.id));
   for (const e of t.edges) {
-    // A dangling edge would throw inside cytoscape — skip defensively (the
+    // A dangling edge would draw from (0,0) in the SVG — skip defensively (the
     // Stage-1 derivation never emits one; a real snapshot glitch must not
     // take the panel down).
     if (!known.has(e.from) || !known.has(e.to)) continue;

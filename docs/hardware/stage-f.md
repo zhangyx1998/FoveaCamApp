@@ -508,10 +508,37 @@ Firmware v2.1.0 ships the mitigations; the discriminator below settles H1
   far dim-but-visible), nearest on top, 0.2s opacity ease; dragging a node
   keeps it on top; idle nodes stay capped at their dim level when hovered
   (gut-check: is the halo enough feedback?).
-- [ ] **Resize centering** — panel drag, window resize, and fullscreen all
-  keep the graph's center point fixed.
+- [ ] ~~Resize centering~~ SUPERSEDED by the 2026-07-12 handrolled rework
+  below (the panel is no longer height-resizable; resize now refits
+  `viewportContent`).
 - [ ] **Stats-only refresh stability** — nodes never move or flash on the 1Hz
   poll; dragged positions survive.
+
+### Graph rework (2026-07-12 handrolled SVG — eyeball pass)
+
+Proposal: `docs/proposals/profiler-graph-handrolled.md` (cytoscape+dagre
+replaced by the NodeGraph SVG component + Sugiyama-lite layout).
+
+- [ ] **Layout quality vs dagre** — the real rig graph (3 camera chains +
+  control lane + recorder/renderer fan-in) lays out with no node overlap,
+  sensible ranks, and the PID feedback edge readable. This is the one spot
+  the handrolled layout could regress vs dagre — judge on the DENSEST live
+  graph (disparity-scope with recording active).
+- [ ] **Trackpad feel (macOS)** — two-finger scroll pans X/Y naturally;
+  pinch zooms centered on the pointer; pan stops exactly when the canvas
+  center hits the graph bbox edge (never lose the graph off-screen).
+- [ ] **Live drag** — arrows re-lay smoothly on every drag frame on the
+  dense graph (no visible lag at 60 Hz with ~40 nodes).
+- [ ] **Tab fill** — graph fills the tab with no scrollbar at any window
+  size; other tabs still scroll; fullscreen enter/exit refits the previously
+  visible content (viewportContent), not the whole graph.
+- [ ] **Marching dash** — hovering a node/edge marches the active
+  neighborhood edges source→target; idle edges keep the static dash; warn-red
+  edges march in red.
+- [ ] **Hover card modes** — Settings → `profiler_hover_card`: `follow`
+  tracks the cursor with quadrant flips at all four container edges;
+  `corner` snaps to a corner that never covers the hovered element; switching
+  the setting applies live without reopening the profiler.
 
 ### Profiler platform
 - [ ] **V12 live check** — opening the profiler mid-tracking: mirrors keep

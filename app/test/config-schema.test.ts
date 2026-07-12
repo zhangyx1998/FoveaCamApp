@@ -17,6 +17,9 @@ import {
   PREDICTION_RATE_MIN,
   RECORD_COMPRESSIONS,
   coerceRecordCompression,
+  DEFAULT_PROFILER_HOVER_CARD_MODE,
+  PROFILER_HOVER_CARD_MODES,
+  coerceProfilerHoverCardMode,
 } from "@lib/config-schema";
 
 // `@lib/config` pulls the renderer `Store` client, which touches `window` at
@@ -38,6 +41,7 @@ describe("config-schema ↔ @lib/config defaults", () => {
     expect(APP_CONFIG_DEFAULTS.prediction_rate_hz).toBe(DEFAULT_PREDICTION_RATE_HZ);
     expect(APP_CONFIG_DEFAULTS.serial_latency_comp).toBe(DEFAULT_SERIAL_LATENCY_COMP);
     expect(APP_CONFIG_DEFAULTS.record_compression).toBe(DEFAULT_RECORD_COMPRESSION);
+    expect(APP_CONFIG_DEFAULTS.profiler_hover_card).toBe(DEFAULT_PROFILER_HOVER_CARD_MODE);
   });
 
   it("pins the ruled prediction-rate window and record-compression union", () => {
@@ -54,5 +58,15 @@ describe("config-schema ↔ @lib/config defaults", () => {
     expect(coerceRecordCompression("gzip")).toBe("none");
     expect(coerceRecordCompression(undefined)).toBe("none");
     expect(coerceRecordCompression(42)).toBe("none");
+  });
+
+  it("pins the ruled profiler hover-card union + coerces untrusted values", () => {
+    expect(PROFILER_HOVER_CARD_MODES).toEqual(["follow", "corner"]);
+    expect(DEFAULT_PROFILER_HOVER_CARD_MODE).toBe("follow");
+    expect(coerceProfilerHoverCardMode("corner")).toBe("corner");
+    expect(coerceProfilerHoverCardMode("follow")).toBe("follow");
+    expect(coerceProfilerHoverCardMode("elsewhere")).toBe("follow");
+    expect(coerceProfilerHoverCardMode(undefined)).toBe("follow");
+    expect(coerceProfilerHoverCardMode(7)).toBe("follow");
   });
 });

@@ -119,6 +119,9 @@ const serial_latency_comp = await useConfigRef("serial_latency_comp");
 // (projection-split-view.md deliverable 6). Default ON. INTEGRATION NOTE:
 // the config-schema lane migrates this key at integration.
 const projection_auto_close = await useConfigRef("projection_auto_close");
+// Profiler node-graph hover-card behavior (profiler-graph-handrolled.md ruling
+// 8). Same doc key the profiler window reads live over the shared config doc.
+const profiler_hover_card = await useConfigRef("profiler_hover_card");
 const anaglyphCardList = computed(() => anaglyphCards(anaglyph_style.value));
 function selectAnaglyph(style: AnaglyphStyle): void {
   anaglyph_style.value = style;
@@ -919,6 +922,22 @@ onUnmounted(() => {
         terminated (the source didn't return within the ~10&nbsp;s rebind
         grace). A brief app switch rebinds and never triggers this; off = keep
         the window open with its frozen last frames.
+      </p>
+
+      <label class="row">
+        <span class="label">Profiler hover card</span>
+        <span class="field">
+          <select v-model="profiler_hover_card">
+            <option value="follow">Follow cursor</option>
+            <option value="corner">Snap to corner</option>
+          </select>
+        </span>
+      </label>
+      <p class="hint">
+        The pipeline graph's hover-detail card behavior. "Follow cursor" tracks
+        the pointer (flipping to stay in view); "Snap to corner" pins the card
+        to a container corner that does not cover the hovered node or edge.
+        Applies live to an open Profiler window.
       </p>
       </section>
 

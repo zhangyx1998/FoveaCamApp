@@ -60,3 +60,25 @@ export const DEFAULT_SERIAL_LATENCY_COMP = false;
 /** Auto-close a projection window when ALL panes have terminated
  *  (projection-split-view.md deliverable 6; renderer-only consumer). */
 export const DEFAULT_PROJECTION_AUTO_CLOSE = true;
+
+// --- profiler hover-card mode (GLOBAL; renderer-only, profiler graph panel) ---
+// docs/proposals/profiler-graph-handrolled.md ruling 8 — the profiler node
+// graph's hover-detail card behavior.
+
+/** The ruled profiler hover-card behaviors (extensible union). "follow" = the
+ *  card follows the cursor (quadrant-flipped to stay in view); "corner" = the
+ *  card snaps to a container corner that does not cover the hovered element. */
+export const PROFILER_HOVER_CARD_MODES = ["follow", "corner"] as const;
+
+/** Profiler hover-card mode. Read LIVE by the profiler graph panel over the
+ *  shared config doc (same broadcast path as every other entry). */
+export type ProfilerHoverCardMode = (typeof PROFILER_HOVER_CARD_MODES)[number];
+
+/** Default hover-card mode = "follow" (the cursor-tracking behavior). */
+export const DEFAULT_PROFILER_HOVER_CARD_MODE: ProfilerHoverCardMode = "follow";
+
+/** Coerce an untrusted value (config read, wire) to a valid mode, falling back
+ *  to {@link DEFAULT_PROFILER_HOVER_CARD_MODE}. */
+export function coerceProfilerHoverCardMode(value: unknown): ProfilerHoverCardMode {
+  return value === "corner" ? "corner" : "follow";
+}
