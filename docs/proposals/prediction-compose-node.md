@@ -25,6 +25,23 @@ Implemented as ruled, one worker wave. Deltas from the ruled design:
 - Residual (out of scope, noted): `mirrorHistory.record` now runs at the
   prediction rate (~600 Hz) — retention bound unreviewed for long sessions.
 
+## HIL AMENDMENT (2026-07-12 — mirror flicker, docs/dev/mirror-flicker-2026-07-12.md)
+
+The rig pass found the AS-SHIPPED floor policy defective (D2): emitting the
+RAW baseline on every rebase rescinds the feed-forward lead 60x/s — a
+sawtooth the MirrorSink dedupe can never suppress (alternating poses are
+never identical), gross under governor throttling. RULED FIX: the brick
+caches the last prediction; floor ticks apply the same feed-forward math
+against the NEW linearization (staleness-bounded); a cold brick still emits
+the raw baseline — planner decision 4's intent (mirrors always driven)
+survives, the dip does not. Companion session defect (D1): one drag writer
+(trackerFeed.onDrag) pushed UN-slewed poses among slewed writers. Runaway
+addendum: coast is CAPPED in the predictor (a stalled source degrades to
+miss-coast instead of quadratic extrapolation), prediction age gates
+feed-forward, the session gains a deadline-based lost watchdog, and the
+adaptive lookahead clamps. Wire-clamp floor (chPair/volt2dac) verified as
+the hard physical bound throughout.
+
 RIG-GATED (bench session): imm + compose nodes on the profiler graph with
 ~60 Hz in / ~600 Hz out edge rates; drawer ↔ Settings rate sync live-retunes
 without reconnect; feed-forward SIGN leads (not lags) a moving target; drag
