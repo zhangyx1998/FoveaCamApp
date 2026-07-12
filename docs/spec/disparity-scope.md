@@ -412,8 +412,10 @@ Load-bearing constraints kept at the code:
 Hardware-triggered L/R pair capture for the scope: both foveas switch to
 FrameStart-triggered mode and a one-target `RoundRobinFrameScheduler` round-robins
 CMD_FRAME on the session's native mirror-sink stream, so each L/R pair exposes
-simultaneously at a settled mirror pose. Pure decisions live in
-`trigger-sync.ts` + `match-join.ts` (`pairEpochSkewed`); camera config in
+simultaneously at a settled mirror pose. Pure decisions live in the shared
+`@lib/trigger-sync.ts` core (preconditions, rate window, failure line, op chain
+— shared with manual-control) + the module's `trigger-sync.ts` (match-join pair
+window/staleness) + `match-join.ts` (`pairEpochSkewed`); camera config in
 `@orchestrator/camera-trigger` (rides `lease.reconfigure()`).
 
 **Intent vs engagement.** `state.trigger_sync` is USER INTENT — persisted,

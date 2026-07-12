@@ -20,12 +20,11 @@ Three live columns sit across the top:
 - **Left Fovea** (cyan) — the left fovea view, with a voltage bar beneath it
   showing the mirror's commanded position. A faint trace on the bar previews
   where each saved set-point would drive this mirror.
-- **Center Wide** (orange) — two stacked views. The upper one is the derived
-  center composite, titled **Center Wide (sliced)** / **(diff)** / **(depth)**
-  after the current view mode. The lower one is the clickable wide view you
-  steer on; it carries the target overlay (a dot at the current target, with a
-  small angle readout). Below the two views are the **Zoom** field and the
-  **View** selector.
+- **Center Wide** (orange) — two stacked views. The upper one is the selected
+  center view, titled after the current **View** mode. The lower one is the
+  clickable wide view you steer on; it carries the target overlay (a dot at the
+  current target, with a small angle readout). Below the two views are the
+  **Zoom** field and the **View** selector.
 - **Right Fovea** (greenyellow) — the right fovea view and its voltage bar, the
   mirror image of the left column.
 
@@ -98,13 +97,15 @@ The right half of the drawer holds:
 - **Verge Distance** — the depth both eyes converge on, shown in metres, or
   `∞` when the slider is at its far end (parallel gaze).
 - **Vertical Shift** — a vertical toe adjustment in degrees, shown with a sign.
-- **Depth Window** — the near/far clamp for the **Depth** center view, in
-  metres (or `∞`).
 - **Capture Stack** — how many frames are averaged into each capture shot.
+- **Capture Mode** — **Free-run** (each camera streams at its own rate) or
+  **Trigger sync** (one hardware pulse exposes both foveas as a true stereo
+  pair, paced by the pair's exposure budget). See *Capturing and recording*.
 - **Zoom** (field above the drawer) — magnification of the sliced center crop.
-- **View** — the center composite content: **Sliced** (a magnified crop around
-  the target), **Diff** (the left-vs-right difference of the aligned foveas), or
-  **Depth** (a depth heatmap clamped to the Depth Window).
+- **View** — the center view content: **Wide Angle Sliced** (a magnified crop
+  around the target), **Disparity (Left v.s. Right)** (the left-vs-right
+  difference of the aligned foveas), **Anaglyph** (the two foveas overlaid in
+  the configured red/cyan style), or **SGBM Disparity** (a stereo depth heatmap).
 
 ## Telemetry you can read
 
@@ -118,8 +119,7 @@ The right half of the drawer holds:
   outlined **footprint boxes** (cyan L, greenyellow R) mark where each fovea is
   actually aimed on the wide view; while unified they sit together on the
   target, and they separate when you steer an eye independently.
-- The **Verge Distance** and **Depth Window** sliders read out the live distance
-  in metres.
+- The **Verge Distance** slider reads out the live convergence distance in metres.
 
 ## Capturing and recording
 
@@ -130,6 +130,14 @@ The right half of the drawer holds:
   set-points list, **Raster Capture** falls back to a single shot.
 - If the capture preview stays on "loading" and never shows images, the shot
   timed out reading a frame; abort and retry.
+- **Capture Mode** (drawer) switches the foveas between **Free-run** and
+  **Trigger sync**. In trigger sync a single hardware pulse exposes both foveas
+  together, so every frame pair is a true simultaneous stereo pair at a uniform
+  rate set by the pair's exposure — the per-camera frame-rate setting no longer
+  applies (shorten the exposure to go faster). The selector is always available;
+  while it is waiting to engage the active option tints amber and the **Status**
+  line reads *free-run — waiting*, with the reason in the title-bar warning tray.
+  Once engaged the Status line shows the achieved rate and pulse width.
 - The title-bar record button (or `Cmd/Ctrl-R`) writes raw left/center/right
   streams to disk. See [Recording and Capture](./recording-and-capture.md)
   for both.

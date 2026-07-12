@@ -225,7 +225,9 @@ const rawSeam: import("./raw-pipe.js").RawPipeSeam = {
 const rawPipes = createRawPipeRegistry(rawSeam);
 
 // --- manual-control: manual steering + capture + recording ----------------
-const manualControl = hub.add(manualControlSession(asBroker(Pipe), undistortSeam, rawPipes));
+// Constructed AFTER the stereo/heatmap/composite seams (below) so it can build
+// its center-tile native views (disparity/anaglyph/sgbm; spec §views) — see its
+// `hub.add` after the stereo seams are defined.
 
 // --- multi-fovea: protocol-v2 multi-target logic skeleton ------------------
 // Wave I-2 seams: the PAIRING brick factory (pairing-nodes P-1 — always-running
@@ -348,6 +350,19 @@ registerNativeProbe(
 );
 registerNativeProbe(
   () => aravisStereo.compositeProbeAll() as unknown as Record<string, WorkloadSnapshot>,
+);
+
+// --- manual-control: manual steering + capture + recording ----------------
+// Center-tile native views (spec §views) share the disparity-scope seams.
+const manualControl = hub.add(
+  manualControlSession(
+    asBroker(Pipe),
+    undistortSeam,
+    rawPipes,
+    stereoSeam,
+    heatmapSeam,
+    compositeSeam,
+  ),
 );
 
 // --- multi-fovea: protocol-v2 multi-target logic skeleton ------------------

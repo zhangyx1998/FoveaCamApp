@@ -14,8 +14,17 @@ import { computed, ref, shallowRef, watch } from "vue";
 import type { Point2d, Rect } from "core/Geometry";
 import type { Pos } from "@lib/controller-codec";
 import { ROLE, THEME } from "@lib/camera-config";
+import { useConfigRef } from "@lib/config";
+import {
+  anaglyphEyeLabel,
+  DEFAULT_ANAGLYPH_STYLE,
+  type AnaglyphStyle,
+} from "../../../docs/schema/anaglyph";
 import { useFrames, useSession, usePipeFrame } from "@lib/orchestrator/client";
 import { nodeId } from "@lib/orchestrator/graph-contract";
+import SingleSelect, {
+  type SingleSelectOption,
+} from "@src/inputs/single-select.vue";
 import { getController } from "@src/components/Controller.vue";
 import { isEmpty, radians } from "@lib/util";
 import Capture from "@src/capture";
@@ -43,14 +52,50 @@ const { state, telemetry } = session;
 const controller = computed(getController);
 
 // Each main view binds its undistort pipe DIRECTLY (spec §views): C intrinsic
-// (raw fallback uncalibrated), L/R homography. Only the center composite
-// (sliced/diff/depth) still rides session.frame.
+// (raw fallback uncalibrated), L/R homography.
 const { center: frameCenter } = useFrames(session, ["center"]);
 const frameC = usePipeFrame(() =>
   state.undistortPipe ?? (state.serials?.C ? nodeId.convert(state.serials.C) : null),
 );
 const frameL = usePipeFrame(() => (state.serials?.L ? nodeId.undistort(state.serials.L) : null));
 const frameR = usePipeFrame(() => (state.serials?.R ? nodeId.undistort(state.serials.R) : null));
+
+// Center TILE (spec §views): `sliced` keeps the magnified `session.frame`
+// path; disparity/anaglyph bind the COMPOSITE pipe, sgbm the STEREO heatmap
+// (native, SHM-bound). Binding only the selected pipe parks the rest (C-21
+// consumer gate) — the session ids these under the "manual" scope.
+const centerPipeFrame = usePipeFrame(() => {
+  switch (state.view) {
+    case "disparity":
+    case "anaglyph":
+      return nodeId.stereo("manual-composite");
+    case "sgbm":
+      return nodeId.heatmap(nodeId.stereo("manual"), "view");
+    default:
+      return null; // sliced → session.frame
+  }
+});
+const centerPayload = computed(() =>
+  state.view === "sliced" ? frameCenter.payload.value : centerPipeFrame.value,
+);
+
+// Configured anaglyph style — labels the "Anaglyph" option with the actual L/R
+// colors; live via the shared config doc, RC default until it resolves.
+const anaglyphStyle = ref<AnaglyphStyle>(DEFAULT_ANAGLYPH_STYLE);
+void useConfigRef("anaglyph_style").then((r) => {
+  anaglyphStyle.value = r.value ?? DEFAULT_ANAGLYPH_STYLE;
+  watch(r, (v) => (anaglyphStyle.value = v ?? DEFAULT_ANAGLYPH_STYLE));
+});
+// Center-view select options; the anaglyph label follows the configured style.
+const VIEW_OPTIONS = computed(
+  () =>
+    [
+      { value: "sliced", label: "Wide Angle Sliced" },
+      { value: "disparity", label: "Disparity (Left v.s. Right)" },
+      { value: "anaglyph", label: `Anaglyph (${anaglyphEyeLabel(anaglyphStyle.value)})` },
+      { value: "sgbm", label: "SGBM Disparity" },
+    ] as const,
+);
 
 const points = new SetPoints(local("manual-control.set-points", ""));
 const drawer_height = ref(0);
@@ -141,10 +186,58 @@ watch(
 const distance = computed(() =>
   state.verge <= 0 ? Infinity : state.baseline / Math.pow(state.verge, 2),
 );
-const depth_window = computed(() =>
-  state.depthWindowInv <= 0 ? Infinity : 1 / Math.pow(state.depthWindowInv, 2),
-);
 const plusSign = (v: string) => (v.startsWith("-") ? v : "+" + v);
+
+// --- trigger-sync capture (spec §trigger-sync) ------------------------------
+// `state.trigger_sync` is USER INTENT — a plain state binding (the server never
+// refuses the write). Engagement is the session's: `telemetry.trigger` is
+// non-null exactly while engaged, and `trigger_blocked` names why it waits.
+// Segmented control over the boolean, via a tiny computed proxy.
+const CAPTURE_OPTIONS: readonly SingleSelectOption<"freerun" | "trigger">[] = [
+  {
+    value: "freerun",
+    label: "Free-run",
+    hint: "each camera streams at its configured rate",
+  },
+  {
+    value: "trigger",
+    label: "Trigger sync",
+    hint: "one pulse exposes both foveas — exposure sets the pace",
+    title:
+      "Every capture becomes a true stereo pair at a uniform rate, paced by " +
+      "the fovea pair's exposure budget. The paired rate is usually lower than " +
+      "free-run, and the per-camera Frame Rate setting no longer applies — " +
+      "shorten the pair's exposure to raise it.",
+  },
+];
+const captureMode = computed<"freerun" | "trigger">({
+  get: () => (state.trigger_sync ? "trigger" : "freerun"),
+  set: (v) => (state.trigger_sync = v === "trigger"),
+});
+// Intent ≠ effect while waiting: the ACTIVE option tints warn; the status line
+// stays compact — the blocked DETAIL rides the title-bar tray as a warning.
+const capturePending = computed(
+  () => state.trigger_sync && telemetry.trigger === null,
+);
+const captureStatus = computed<{ text: string; tone: string; title?: string }>(
+  () => {
+    if (!state.trigger_sync) return { text: "free-run", tone: "muted" };
+    const t = telemetry.trigger;
+    if (t) {
+      const title = `${t.frames} frames, ${t.rejects} rejects, ${t.timeouts} timeouts`;
+      // hz null = the ≥1 s measurement window hasn't matured yet.
+      return t.hz === null
+        ? { text: "engaged · measuring…", tone: "", title }
+        : {
+            text: `≈ ${t.hz.toFixed(1)} Hz · pulse ${t.pulseMs.toFixed(1)} ms`,
+            tone: "",
+            title,
+          };
+    }
+    const reason = telemetry.trigger_blocked ?? "waiting to engage";
+    return { text: "free-run — waiting", tone: "warn", title: reason };
+  },
+);
 const stroke = computed(
   () => Math.max(telemetry.size.width, telemetry.size.height, 1) * 0.003,
 );
@@ -262,7 +355,7 @@ window.addEventListener("keydown", (e) => {
       <StreamView
         class="stream"
         :title="ROLE.C + ' (' + state.view + ')'"
-        :payload="frameCenter.payload.value"
+        :payload="centerPayload"
         :theme="THEME.C"
       />
       <StreamView
@@ -318,9 +411,9 @@ window.addEventListener("keydown", (e) => {
         <label>
           <span>View</span>
           <select v-model="state.view">
-            <option value="sliced">Sliced</option>
-            <option value="diff">Diff</option>
-            <option value="depth">Depth</option>
+            <option v-for="o in VIEW_OPTIONS" :key="o.value" :value="o.value">
+              {{ o.label }}
+            </option>
           </select>
         </label>
       </ConfigEntry>
@@ -406,21 +499,6 @@ window.addEventListener("keydown", (e) => {
             <span> {{ plusSign(state.shift.toFixed(4)) }}&deg; </span>
           </RangeSlider>
           <RangeSlider
-            v-model="state.depthWindowInv"
-            :min="1"
-            :max="0"
-            :neutral="0"
-            :step="0.01"
-          >
-            <span>Depth Window</span>
-            <span>
-              <template v-if="depth_window !== Infinity">
-                {{ (depth_window / 1000).toFixed(4) }} m
-              </template>
-              <template v-else> &#x221E; </template>
-            </span>
-          </RangeSlider>
-          <RangeSlider
             v-model="state.cap_stack"
             :min="1"
             :max="200"
@@ -439,6 +517,29 @@ window.addEventListener("keydown", (e) => {
               {{ capturing ? "Abort" : "Raster Capture" }}
             </button>
           </ConfigEntry>
+          <!-- Capture Mode (spec §trigger-sync): intent selector — ALWAYS
+               enabled (the session gates engagement). While intent is on but not
+               engaged the ACTIVE option tints warn (intent ≠ effect cue) and the
+               blocked DETAIL rides the title-bar tray as a warning; the
+               always-rendered Status row stays compact (text swaps only). -->
+          <div class="capture-mode">
+            <span class="label">Capture Mode</span>
+            <SingleSelect
+              v-model="captureMode"
+              :options="CAPTURE_OPTIONS"
+              class="capture-select"
+              :class="{ pending: capturePending }"
+              aria-label="Capture mode"
+            />
+            <div class="status-row">
+              <span>Status</span>
+              <span
+                class="capture-status"
+                :class="captureStatus.tone"
+                :title="captureStatus.title"
+              >{{ captureStatus.text }}</span>
+            </div>
+          </div>
           <ConfigEntry>
             <label>
               <span>Remote Display</span>
@@ -552,6 +653,55 @@ window.addEventListener("keydown", (e) => {
   overflow-y: scroll;
   & > * {
     height: 2em;
+  }
+}
+
+// Capture Mode block (spec §trigger-sync) — mirrors the disparity-scope drawer
+// idiom (8979b44): a segmented Free-run/Trigger-sync select that tints warn
+// while intent ≠ engaged, plus a compact always-rendered Status row.
+.capture-mode {
+  height: auto !important; // opt out of the .options 2em row cap
+  display: flex;
+  flex-direction: column;
+  gap: 0.35em;
+  margin-top: 0.5em;
+
+  .label {
+    font-size: 0.8em;
+    font-weight: 600;
+    opacity: 0.7;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+  }
+
+  .capture-select {
+    // Intent on, not engaged — the selected option shows intent ≠ effect
+    // (warn outline; the blocked detail rides the title-bar tray).
+    &.pending :deep(.option.active) {
+      border-color: var(--warn);
+      background: color-mix(in srgb, var(--warn) 14%, transparent);
+    }
+  }
+
+  .status-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1ch;
+    font-size: 0.9em;
+
+    .capture-status {
+      text-align: right;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      &.muted {
+        color: var(--text-muted);
+      }
+      &.warn {
+        color: var(--warn);
+      }
+    }
   }
 }
 </style>

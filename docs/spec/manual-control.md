@@ -49,21 +49,56 @@ both into @lib.
 
 ## Display worker & views {#views}
 
-The PROCESSED DISPLAY views (magnified slice, perspective-wrapped foveae, combined
-diff/depth) run OFF the JS event loop in the shared `display` vision-worker kernel. Main
-computes the calibration-derived matrices and pushes them as worker params on each throttled
-volt/target update (cheap; the worker uses the latest):
+The center tile offers four views: `sliced | disparity | anaglyph | sgbm` (the legacy
+display-kernel `diff`/`depth` modes are RETIRED — `coerceView` maps a persisted `diff →
+disparity`, `depth → sgbm` at the boundary). Only `sliced` still rides the shared `display`
+vision-worker kernel; the other three are native pipes (the same bricks disparity-scope
+introduced), consumer-gated — the renderer connects the SELECTED pipe and the rest park.
 
-- `voltParams`: the fovea homographies (`A2H∘V2A(volts)`) + the depth Q-matrix at the
-  current pose.
-- `sliceAtParam`: the undistorted center pixel the magnified "sliced" view crops around.
-- `depthParams`: the depth-heatmap clamp range for the "depth" combined view.
+- **sliced** — the magnified center crop, off the JS event loop in the `display` kernel. Main
+  pushes `voltParams` (the fovea homographies `A2H∘V2A(volts)` + the depth Q-matrix at the
+  current pose) + `sliceAtParam` (the undistorted center pixel the crop centers on) on each
+  throttled volt/target update. The kernel now ONLY serves this view (no `view`/depth params —
+  it defaults to `sliced` and stays there).
+- **disparity / anaglyph** — the COMPOSITE brick (`nodeId.stereo("manual-composite")`) over the
+  L/R undistorted (homography-warped) sources: `disparity → difference`, `anaglyph → anaglyph`
+  at the configured `anaglyph_style`. `syncCompositeMode(state.view)` retunes the mode on the
+  `view` watch; the style is read at activate (`readAnaglyphStyle`) and live-subscribed
+  (`subscribeAnaglyphStyle`), retuning iff a composite view is up.
+- **sgbm** — the STEREO SGBM brick (`nodeId.stereo("manual")`, pinned `SIGNED_DISPARITY_WINDOW`)
+  feeding a HEATMAP (`nodeId.heatmap(…, "view")`, pinned `SIGNED_DISPARITY_HEATMAP_RANGE`), over
+  the same warped L/R sources.
 
 The renderer binds each L/C/R main view to its own `camera/<serial>/undistort` pipe DIRECTLY
-(C intrinsic, L/R homography — the mirror-pose-tracked warp the retired `wrap` toggle did in
-the kernel), at pipe rate independent of the kernel. Only the derived center composite
-(sliced/diff/depth) still rides `session.frame`. The kernel keeps consuming the raw CONVERT
-L/R inputs — its diff/depth `aligned` composite wraps them via the pushed H.
+(C intrinsic, L/R homography — the mirror-pose-tracked warp), at pipe rate independent of the
+kernel. The center-view bricks + the composite-style subscription are torn down on idle, before
+the undistort producers they read retire (LIFO).
+
+## Trigger-sync capture {#trigger-sync}
+
+RIG-GATED — unverified on hardware; the Linux box has no cameras/controller.
+
+Optional hardware-triggered L/R stereo pairs, ported from disparity-scope MINUS all pairing /
+staleness (manual-control has no match-join). `state.trigger_sync` is USER INTENT (a plain
+state binding; the server never refuses the write); ENGAGEMENT is a live state machine:
+
+- **Preconditions** (`triggerBlockReason`, `@lib/trigger-sync`): a leased triple, a v2-capable
+  controller, and the MCU position stream id (`posInput.streamId` — the JS `openPosition`
+  input's lazily-created CMD_STREAM, null until the first v2 update lands). Any unmet reason
+  surfaces on `telemetry.trigger_blocked`.
+- **Engage** serializes on a FIFO op chain (`createTriggerOpChain`) so a fast OFF→ON toggle can't
+  interleave enables with in-flight disables: `enableHardwareTrigger` L then R (revert-on-failure),
+  an epoch guard against disengage-during-await, then a `RoundRobinFrameScheduler` with ONE target
+  (`stream = posInput.streamId`, `cameras: ["L","R"]`, `pulse`/`settle_time`/`minIntervalMs` from
+  `pairTriggerBudget` over the L/R exposure + settle + max-rate). Scheduler FIN/REJ/timeout feed the
+  counters; a `TriggerRateWindow` gives the achieved Hz on ≥1 s maturity windows.
+- **Telemetry** (`telemetry.trigger`, non-null exactly while engaged) publishes at the volt
+  throttle. `trigger_blocked` is published on TRANSITIONS only + duplicated to the title-bar tray
+  as a warning (`report("trigger-sync", …, "warning")`).
+- **Retry & teardown**: while intent is on but not engaged, the pacer's throttled block retries
+  engagement (preconditions are lazy). On idle / `trigger_sync` flip-off, the session fully
+  disengages and reverts the hardware trigger — the disengage defer drains AFTER the pacer stops
+  but BEFORE `triple` clears + `releaseLeases` (`disableHardwareTrigger` rides `lease.reconfigure`).
 
 ## Actuation {#actuation}
 

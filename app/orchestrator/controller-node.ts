@@ -58,6 +58,12 @@ export interface OpenPositionOptions {
 }
 
 export interface PositionInput {
+  /** The lazily-created CMD_STREAM's MCU stream id (v2 controller), or null
+   *  until the first update against a v2 controller creates it (and again
+   *  while a native input owns the wire / on a v1 controller). The CMD_FRAME
+   *  target for trigger-sync capture on this JS input's stream (spec
+   *  manual-control §trigger-sync — the openNativePosition `streamId` analog). */
+  readonly streamId: number | null;
   /** Push a target pose. Records `predictVolts` into the mirror-history
    *  trajectory (ONE place) and returns the predicted volts synchronously; the
    *  MCU stream (v2) / paced loop (v1) applies it. When no controller is bound
@@ -396,6 +402,10 @@ class PositionInputImpl implements PositionInput {
 
   get from(): string | undefined {
     return this.opts.from;
+  }
+
+  get streamId(): number | null {
+    return this.stream?.id ?? null;
   }
 
   update(pos: PositionPair): PositionPair {

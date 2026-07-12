@@ -12,6 +12,32 @@ import { cmd, defineContract, type FramePayload } from "@lib/orchestrator/protoc
 import type { Point2d, Size } from "core/Geometry";
 import type { Pos } from "@lib/controller-codec";
 import { captureCommands, captureTelemetry, type Stat } from "@lib/orchestrator/contracts";
+import type { TriggerTelemetry } from "@lib/trigger-sync";
+
+/** The center-tile view (spec §views). `sliced` rides the display worker's
+ *  magnified `session.frame`; `disparity`/`anaglyph` bind the COMPOSITE pipe,
+ *  `sgbm` the STEREO heatmap pipe (all native, renderer-bound via SHM). */
+export type CenterView = "sliced" | "disparity" | "anaglyph" | "sgbm";
+
+/** Coerce a persisted/legacy `view` value onto the current union: the retired
+ *  display-kernel modes map onto their native successors (diff → the composite
+ *  difference view, depth → the SGBM heatmap). Anything else falls back to
+ *  `sliced`. Applied at the boundary wherever an untyped value can arrive. */
+export function coerceView(view: unknown): CenterView {
+  switch (view) {
+    case "disparity":
+    case "anaglyph":
+    case "sgbm":
+    case "sliced":
+      return view;
+    case "diff": // legacy kernel difference
+      return "disparity";
+    case "depth": // legacy depth-from-projection
+      return "sgbm";
+    default:
+      return "sliced";
+  }
+}
 
 /** Where to steer. Pixel mode needs server-side `undistort`; angle mode is
  *  radians the renderer computes locally, with optional distance/shift overrides. */
@@ -50,8 +76,17 @@ export const manualControl = defineContract({
     shift: 0, // vertical shift (deg)
     // Display parameters.
     zoom: 9, // fovea (sliced center) magnification
-    view: "sliced" as "sliced" | "diff" | "depth", // `center` frame content
-    depthWindowInv: 0, // depth-view near/far window (0 → ∞)
+    /** Which center view the renderer SHOWS (spec §views) — `sliced` rides the
+     *  display worker; the disparity/anaglyph/sgbm options bind native pipes
+     *  (consumer-gated — selecting one connects its pipe, the rest park). */
+    view: "sliced" as CenterView,
+    /** Trigger-sync capture INTENT (spec §trigger-sync): the user asks for
+     *  hardware-triggered L/R pairs on the MCU position stream; the intent
+     *  latches and the session engages when preconditions permit (v2 controller
+     *  + native stream + leased triple), surfacing `trigger_blocked` while it
+     *  waits. No pairing/staleness here (manual-control has no match-join).
+     *  RIG-GATED. */
+    trigger_sync: false as boolean,
     // Capture parameters.
     cap_stack: 5, // frames averaged per capture
     // Remote (projector) display parameters — renderer-only concerns, but
@@ -74,6 +109,13 @@ export const manualControl = defineContract({
     split: { l: false, r: false } as { l: boolean; r: boolean },
     // Control-path latency — `c.actuate()` round-trip, throttled like `volt`.
     perf: { actuateMs: { mean: 0, max: 0 } as Stat },
+    /** Trigger-sync readout — non-null exactly while ENGAGED (spec
+     *  §trigger-sync); published at the volt-telemetry throttle. RIG-GATED. */
+    trigger: null as TriggerTelemetry | null,
+    /** Human-readable reason trigger-sync engagement is WAITING (intent on,
+     *  preconditions unmet, or the last engage attempt failed); null when
+     *  engaged or when `trigger_sync` is off. */
+    trigger_blocked: null as string | null,
     // Capture manifest telemetry (spec §capture); image data pulled via getPreview.
     ...captureTelemetry(),
     // Recording.
@@ -83,9 +125,10 @@ export const manualControl = defineContract({
       { frames: number; dropped: number; fps: number; bytes: number }
     >,
   },
-  // `center` (the magnified fovea crop, sliced/diff/depth) is the only
-  // session-frame view; the L/C/R main views bind their undistort pipes directly
-  // and capture previews are PULLED via `getPreview` (spec §views, §capture).
+  // `center` (the magnified fovea crop) is the only session-frame view — it
+  // backs `sliced`; disparity/anaglyph/sgbm bind native pipes instead. The
+  // L/C/R main views bind their undistort pipes directly and capture previews
+  // are PULLED via `getPreview` (spec §views, §capture).
   frames: ["center"] as const,
   commands: {
     /** Steer the target (pixel drag or a set-point's angle); any steer REUNIFIES

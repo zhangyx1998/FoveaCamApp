@@ -148,6 +148,27 @@ Firmware v2.1.0 ships the mitigations; the discriminator below settles H1
 
 ## Manual Control
 
+### Trigger sync + native center views (2026-07-12 port — flash v2.x firmware)
+
+Proposal: `docs/proposals/manual-control-trigger-and-views.md`. All
+RIG-GATED — no hardware on the authoring box.
+
+- [ ] **Capture Mode engage** — Trigger sync engages with a leased triple +
+  v2 controller + live position stream; the status row flips to engaged and
+  `trigger` telemetry reads an achieved rate ≈ the exposure-budget pace;
+  Free-run flip cleanly reverts both cameras to free streaming.
+- [ ] **Blocked reasons** — engaging without a controller / on v1 firmware /
+  before the stream attaches names the actual missing piece in the tray and
+  auto-engages once it appears (intent latch + retry tick).
+- [ ] **Trigger + steering coexistence** — drag steering keeps working while
+  engaged (stream UPDATEs between CMD_FRAMEs); no REJ storm, mirror follows.
+- [ ] **Center views** — disparity (difference), anaglyph (style follows
+  `anaglyph_style`, live retune), and SGBM heatmap render correctly on the
+  center tile; selecting each connects only its pipe (others park in the
+  profiler graph); `sliced` still rides the magnified session frame.
+- [ ] **Legacy coercion** — a session persisted with the old diff/depth view
+  values lands on disparity/sgbm respectively, no crash, no blank tile.
+
 - [ ] **Views at camera rate** — L/R + center render at camera rate while the
   display kernel meters lower; undistort nodes visible in the graph.
 - [ ] **Undistort calibration source** — B's native remap uses the intended

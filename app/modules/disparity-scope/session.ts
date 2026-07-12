@@ -109,14 +109,13 @@ import {
   trackerResultStale,
 } from "./tracker-feed";
 import { matchPartnerStale } from "./match-join";
+import { matchStaleMsFor, pairEpochGateTrips } from "./trigger-sync";
 import {
   createTriggerOpChain,
   engageFailureReason,
-  matchStaleMsFor,
-  pairEpochGateTrips,
   triggerBlockReason,
   TriggerRateWindow,
-} from "./trigger-sync";
+} from "@lib/trigger-sync";
 import {
   AutotuneRun,
   type AutotuneStage,

@@ -18,6 +18,7 @@ import {
 } from "@lib/orchestrator/pid-override-contract";
 import { DEFAULT_TRACKER_TYPE, type TrackerType } from "./tracker-swap";
 import type { AutotuneProgress, AutotuneStage } from "./autotune";
+import type { TriggerTelemetry } from "@lib/trigger-sync";
 
 /** The disparity-scope PID node's value type — per-eye mirror volts (the
  *  `{ l, r }` command pushed to the controller node). The override slot pins
@@ -72,20 +73,6 @@ export const DEFAULT_TUNING: Tuning = {
 /** Current value of each constrained-DOF PID integrator — debug readout +
  *  the payload shape for `setPid`'s manual nudge. */
 export type PidReadout = { verge: number; panX: number; panY: number; v_shift: number };
-
-/** Live trigger-sync readout while ENGAGED (spec §trigger-sync): achieved FIN
- *  rate, the derived pulse width, and cumulative scheduler outcome counters
- *  for this engagement (counters update at the publish throttle). */
-export type TriggerTelemetry = {
-  /** Achieved FIN rate, computed over ≥1 s maturity windows and HELD between
-   *  rolls (a per-publish 33 ms window would quantize the rate to 0 or ~30);
-   *  null until the first window matures after (re-)engage. */
-  hz: number | null;
-  pulseMs: number;
-  frames: number;
-  rejects: number;
-  timeouts: number;
-};
 
 export const disparity = defineContract({
   state: {

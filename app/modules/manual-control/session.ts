@@ -16,11 +16,48 @@ import { registerGraphWiring } from "@orchestrator/graph-topology";
 import { controllerNode, startPacer, type PositionInput } from "@orchestrator/controller-node";
 import { DisposerBag, publishSerials, releaseLeases } from "@orchestrator/session-resources";
 import {
-  depthFromInverse,
   ORIGIN_POS,
   radians,
   VOLT_TELEMETRY_INTERVAL_MS,
 } from "@orchestrator/fovea-pipeline";
+// --- trigger-sync capture (spec §trigger-sync) ---
+import { activeController } from "@orchestrator/controller";
+import { report } from "@orchestrator/diagnostics";
+import { subscribe } from "@orchestrator/store-hub";
+import { RoundRobinFrameScheduler } from "@orchestrator/scheduler";
+import {
+  disableHardwareTrigger,
+  enableHardwareTrigger,
+} from "@orchestrator/camera-trigger";
+import { cameraConfigPath } from "@orchestrator/camera";
+import { pairTriggerBudget, type PairTriggerBudget } from "@lib/camera-config";
+import {
+  createTriggerOpChain,
+  engageFailureReason,
+  triggerBlockReason,
+  TriggerRateWindow,
+} from "@lib/trigger-sync";
+// --- center-tile native views (spec §views) ---
+import {
+  createStereoPipe,
+  SIGNED_DISPARITY_HEATMAP_RANGE,
+  SIGNED_DISPARITY_WINDOW,
+  type StereoHandle,
+  type StereoPipeSeam,
+} from "@orchestrator/stereo-pipe";
+import {
+  createHeatmapPipe,
+  type HeatmapHandle,
+  type HeatmapPipeSeam,
+} from "@orchestrator/heatmap-pipe";
+import {
+  createCompositePipe,
+  type CompositeHandle,
+  type CompositeParams,
+  type CompositePipeSeam,
+} from "@orchestrator/composite-pipe";
+import { readAnaglyphStyle, subscribeAnaglyphStyle } from "@orchestrator/anaglyph-style";
+import { DEFAULT_ANAGLYPH_STYLE, type AnaglyphStyle } from "../../../docs/schema/anaglyph.js";
 import { createVisionWorker, type VisionWorkerHandle } from "@orchestrator/vision-worker-host";
 import type { DisplayParams, DisplayValues } from "@orchestrator/display-transport";
 import {
@@ -37,7 +74,7 @@ import { type RawPipeRegistry } from "@orchestrator/raw-pipe";
 import { type CaptureShot } from "@orchestrator/capture-node";
 import { createCaptureHelper, type CaptureHelper } from "@orchestrator/capture-helper";
 import type { PipeInput, VisionResult } from "@orchestrator/vision-worker-protocol";
-import { manualControl } from "./contract";
+import { manualControl, coerceView, type CenterView } from "./contract";
 import { createRecording } from "./recording";
 import { slewStep, type SlewPair } from "./slew";
 import { type SplitVolts, unifiedSplit, resolveVolts, splitFlags } from "./split";
@@ -57,12 +94,30 @@ export default function manualControlSession(
   broker: PipeBroker,
   undistortSeam: UndistortPipeSeam,
   rawPipes: RawPipeRegistry,
+  // Center-tile native view seams (spec §views): the COMPOSITE brick
+  // (disparity/anaglyph) + the STEREO SGBM chain (heatmap). Injected so the
+  // session unit-tests without native core — same pattern as disparity-scope.
+  stereoSeam: StereoPipeSeam,
+  heatmapSeam: HeatmapPipeSeam,
+  compositeSeam: CompositePipeSeam,
 ): ServerSession<typeof manualControl> {
   return defineResourceSession("manual-control", manualControl, (s) => {
     let triple: CalibratedTriple | null = null;
     let posInput: PositionInput | null = null;
     let stopActuation: (() => void) | null = null;
     let worker: VisionWorkerHandle | null = null;
+
+    const now = () => performance.now();
+
+    // --- center-tile native view pipes (spec §views) ---------------------
+    // Created at activate over the L/R undistorted sources; parked until the
+    // renderer connects the selected pipe (C-21 consumer gate). The COMPOSITE
+    // brick backs disparity/anaglyph (mode retuned from `state.view`), the
+    // STEREO SGBM + heatmap back the sgbm view.
+    let stereo: StereoHandle | null = null;
+    let stereoHeatmap: HeatmapHandle | null = null;
+    let composite: CompositeHandle | null = null;
+    let anaglyphStyle: AnaglyphStyle = DEFAULT_ANAGLYPH_STYLE;
 
     // Center-frame geometry, learned from the worker's processed center.
     let width = 0;
@@ -125,7 +180,7 @@ export default function manualControlSession(
       shiftOverride = shift_deg ?? null;
       target = triple?.undistort ? triple.undistort.position([angle], false)[0] : { x: 0, y: 0 };
       s.telemetry({ target, target_angle: targetAngle });
-      pushParams({ ...sliceAtParam(), ...depthParams() });
+      pushParams(sliceAtParam());
     }
 
     // --- worker params (main computes calibration-derived matrices) -------
@@ -159,15 +214,28 @@ export default function manualControlSession(
       return { sliceAt: at };
     }
 
-    /** Depth-heatmap clamp range for the "depth" combined view. */
-    function depthParams(): DisplayParams {
-      const dw = depthFromInverse(s.state.depthWindowInv) / 2;
-      const d = distance();
-      return { depthNear: d - dw, depthFar: d + dw };
-    }
-
     function pushParams(params: DisplayParams): void {
       worker?.sendParams(params as Record<string, unknown>);
+    }
+
+    // --- center-tile composite mode (spec §views) ------------------------
+
+    /** Composite params for a center view: `disparity` → difference, else
+     *  anaglyph at the configured style. `style` always rides along — the native
+     *  `setParams` REPLACES the whole spec, so a mode-only retune would clobber
+     *  it (disparity-scope's idiom). */
+    function compositeParamsFor(view: CenterView): CompositeParams {
+      return {
+        mode: view === "disparity" ? "difference" : "anaglyph",
+        style: anaglyphStyle,
+      };
+    }
+
+    /** Retune the composite brick from the selected view + current style. Only
+     *  the two composite views retune; `sliced`/`sgbm` leave it parked. */
+    function syncCompositeMode(view: CenterView): void {
+      if (view === "disparity" || view === "anaglyph")
+        composite?.retune(compositeParamsFor(view));
     }
 
     // --- worker results (publish frames + re-source capture + learn geo) --
@@ -276,16 +344,232 @@ export default function manualControlSession(
     let lastParamPush = 0;
     const actuateMsStats = new RollingStats(0.9, 2, "ms");
 
+    // --- trigger-sync capture (spec §trigger-sync) --------------------------
+    // Intent (`state.trigger_sync`) latches; ENGAGEMENT is a live state machine:
+    // hardware-trigger both foveas, then round-robin CMD_FRAME on the MCU
+    // position stream. Manual-control has NO match-join, so the pairing/
+    // staleness parts of disparity-scope's machine are dropped — free-run stays
+    // byte-identical while disengaged. RIG-GATED (no hardware on this box).
+
+    let triggerEngaged = false;
+    /** False from idle start until the next activate: the retry tick keeps
+     *  firing while teardown drains, and a re-engage there would strand the
+     *  cameras in trigger mode past `releaseLeases`. */
+    let triggerEngageAllowed = false;
+    /** Bumped on every disengage — an engage that awaited across it reverts. */
+    let triggerEpochCounter = 0;
+    let triggerBudget: PairTriggerBudget | null = null;
+    let triggerScheduler: RoundRobinFrameScheduler | null = null;
+    const triggerUnsubs: (() => void)[] = [];
+    let triggerFrames = 0;
+    let triggerRejects = 0;
+    let triggerTimeouts = 0;
+    /** Achieved-hz maturity window (≥1 s rolls; held between; null till first). */
+    const triggerRate = new TriggerRateWindow();
+    let lastTriggerBlocked: string | null = null;
+    /** FIFO mutex over the lease trigger config: an engage always awaits any
+     *  in-flight disengage (and vice versa) before touching leases. */
+    const queueTriggerOp = createTriggerOpChain((e) =>
+      console.error("[manual-control] trigger-sync op failed:", e),
+    );
+
+    /** `trigger_blocked` on TRANSITIONS only (the retry tick re-evaluates every
+     *  interval; the UI needs edges, not spam). Each new reason ALSO lands in
+     *  the title-bar tray as a WARNING — the drawer keeps only the warn-tinted
+     *  mode select, the tray carries the detail. */
+    function publishTriggerBlocked(reason: string | null): void {
+      if (reason === lastTriggerBlocked) return;
+      lastTriggerBlocked = reason;
+      s.telemetry({ trigger_blocked: reason });
+      if (reason !== null) report("trigger-sync", reason, "warning");
+    }
+
+    /** Exposure-authoritative budget over both fovea config docs. Settle hold
+     *  comes from the leased triple's `settleTimeUs`. */
+    function deriveTriggerBudget(): PairTriggerBudget | null {
+      if (!triple) return null;
+      const safe = <T,>(fn: () => T, fallback: T): T => {
+        try {
+          return fn();
+        } catch {
+          return fallback;
+        }
+      };
+      const camL = triple.leases.L.camera;
+      const camR = triple.leases.R.camera;
+      return pairTriggerBudget({
+        exposureUsL: safe(() => camL.exposure, 0),
+        exposureUsR: safe(() => camR.exposure, 0),
+        settleUs: triple.settleTimeUs,
+        maxRateHzL: safe(() => camL.frame_rate_range.max, 0),
+        maxRateHzR: safe(() => camR.frame_rate_range.max, 0),
+      });
+    }
+
+    /** (Re-)push the ONE scheduler target from the live budget. */
+    function applyTriggerTarget(streamId: number): void {
+      if (!triggerScheduler || !triggerBudget || !triple) return;
+      triggerScheduler.setTargets([
+        {
+          stream: streamId,
+          cameras: ["L", "R"],
+          pulse: triggerBudget.pulseNs,
+          settle_time: triple.settleTimeUs,
+          minIntervalMs: triggerBudget.minIntervalMs,
+        },
+      ]);
+    }
+
+    function publishTriggerTelemetry(): void {
+      if (!triggerEngaged || !triggerBudget) return;
+      s.telemetry({
+        trigger: {
+          // hz rolls on ≥1 s maturity windows, held between rolls, null until
+          // the first matures (TriggerRateWindow).
+          hz: triggerRate.sample(now()),
+          pulseMs: triggerBudget.pulseNs / 1e6,
+          frames: triggerFrames,
+          rejects: triggerRejects,
+          timeouts: triggerTimeouts,
+        },
+      });
+    }
+
+    /** Serialized via `queueTriggerOp` — see {@link engageTrigger}. */
+    async function engageTriggerNow(): Promise<void> {
+      if (triggerEngaged || !s.state.trigger_sync) return;
+      if (!triggerEngageAllowed) {
+        // An ON-flip while idle/tearing-down: name the wait instead of leaving
+        // the UI on its generic fallback forever.
+        publishTriggerBlocked("session is not active");
+        return;
+      }
+      // Preconditions re-checked HERE, after any queued disengage completed —
+      // the pre-queue world may be gone.
+      const reason = triggerBlockReason({
+        tripleLeased: triple !== null,
+        controller: activeController(),
+        streamId: posInput?.streamId ?? null,
+      });
+      if (reason) {
+        publishTriggerBlocked(reason);
+        return;
+      }
+      const t = triple!;
+      const streamId = posInput!.streamId!;
+      const epoch = triggerEpochCounter;
+      const revert = async (): Promise<void> => {
+        for (const side of ["L", "R"] as const)
+          try {
+            await disableHardwareTrigger(t.leases[side]);
+          } catch {
+            // best-effort — the lease may already be releasing
+          }
+      };
+      try {
+        await enableHardwareTrigger(t.leases.L);
+        await enableHardwareTrigger(t.leases.R);
+      } catch (e) {
+        await revert();
+        publishTriggerBlocked(engageFailureReason(e));
+        return;
+      }
+      // Disengaged / idled / re-leased while awaiting — undo, stay out.
+      if (
+        epoch !== triggerEpochCounter ||
+        !triggerEngageAllowed ||
+        !s.state.trigger_sync ||
+        triple !== t
+      ) {
+        await revert();
+        return;
+      }
+      triggerBudget = deriveTriggerBudget();
+      triggerFrames = triggerRejects = triggerTimeouts = 0;
+      triggerRate.reset(now());
+      triggerScheduler = new RoundRobinFrameScheduler({
+        requester: {
+          frame(request) {
+            const controller = activeController();
+            if (!controller) throw new Error("No controller connected");
+            return controller.frame(request);
+          },
+        },
+        onFrame() {
+          triggerFrames++;
+          triggerRate.onFin();
+        },
+        onReject() {
+          triggerRejects++;
+        },
+        onTimeout() {
+          triggerTimeouts++;
+        },
+      });
+      applyTriggerTarget(streamId);
+      triggerScheduler.start();
+      // Live budget re-derivation on either fovea's config-doc change — new
+      // exposure, new pacing.
+      for (const side of ["L", "R"] as const)
+        triggerUnsubs.push(
+          subscribe(cameraConfigPath(t.leases[side].camera), () => {
+            triggerBudget = deriveTriggerBudget();
+            applyTriggerTarget(streamId);
+          }),
+        );
+      triggerEngaged = true;
+      publishTriggerBlocked(null);
+      publishTriggerTelemetry(); // announce engagement (trigger non-null)
+    }
+
+    /** Serialized via `queueTriggerOp` — see {@link engageTrigger}. */
+    async function disengageTriggerNow(blockedReason: string | null): Promise<void> {
+      triggerEpochCounter++; // any in-flight engage reverts itself
+      const wasEngaged = triggerEngaged;
+      triggerEngaged = false;
+      triggerScheduler?.stop();
+      triggerScheduler = null;
+      for (const u of triggerUnsubs.splice(0)) u();
+      triggerBudget = null;
+      if (wasEngaged && triple) {
+        for (const side of ["L", "R"] as const)
+          try {
+            await disableHardwareTrigger(triple.leases[side]);
+          } catch {
+            // best-effort — the lease may already be releasing
+          }
+      }
+      if (wasEngaged) s.telemetry({ trigger: null });
+      publishTriggerBlocked(s.state.trigger_sync ? blockedReason : null);
+    }
+
+    /** Engage/disengage BOTH ride the FIFO op chain: a fast OFF→ON toggle
+     *  otherwise interleaves enables with in-flight disables (a disable landing
+     *  last leaves a camera untriggered while the session reports engaged). */
+    function engageTrigger(): Promise<void> {
+      return queueTriggerOp(engageTriggerNow);
+    }
+
+    /** Disengage (intent off / idle). MUST run while the leases are live —
+     *  `disableHardwareTrigger` rides `lease.reconfigure`; the idle path awaits
+     *  this BEFORE `releaseLeases` (which also drains any queued engage ahead of
+     *  it on the chain). */
+    function disengageTrigger(blockedReason: string | null = null): Promise<void> {
+      return queueTriggerOp(() => disengageTriggerNow(blockedReason));
+    }
+
     // --- lifecycle -------------------------------------------------------
 
     function initParams(): Record<string, unknown> {
+      // The display worker only serves the `sliced` center now (legacy
+      // diff/depth kernel views retired — disparity/anaglyph/sgbm are native
+      // pipes; spec §views). No `view`/depth params: the kernel defaults to
+      // sliced and stays there.
       return {
         kind: "display",
         zoom: Math.max(1, s.state.zoom),
-        view: s.state.view,
         ...voltParams(),
         ...sliceAtParam(),
-        ...depthParams(),
       };
     }
 
@@ -315,6 +599,7 @@ export default function manualControlSession(
       if (!t) return; // frozen at "Leasing cameras" (contention/fail)
       monitor.done("lease");
       triple = t;
+      triggerEngageAllowed = true; // latched intent re-engages via the retry tick
       // DISPLAY-ONLY: label the leased triple by role (L/C/R) in the profiler.
       scope.defer(
         registerGraphWiring({
@@ -349,8 +634,10 @@ export default function manualControlSession(
       // ~200 Hz — the renderer binds these for the L/R main views (spec §views).
       // The kernel keeps consuming the raw CONVERT L/R inputs below.
       const computeH = conversionComputeH(t.conv);
+      const homographyIds: Record<"L" | "R", string> = { L: "", R: "" };
       for (const side of ["L", "R"] as const) {
         const pipeId = advertiseHomographyUndistortPipe(undistortSeam, t.leases[side].camera);
+        homographyIds[side] = pipeId;
         const stopFeeder = startHomographyFeeder({
           pipeId,
           side,
@@ -362,6 +649,67 @@ export default function manualControlSession(
           retireUndistortPipe(undistortSeam, pipeId);
         });
       }
+      // The L/R UNDISTORTED (homography-warped) sources the STEREO + COMPOSITE
+      // center-view bricks want (spec §views); convert fallback on an
+      // uncalibrated fovea cam.
+      const warpedSources: Record<"L" | "R", string> = {
+        L: t.undistort ? homographyIds.L : nodeId.convert(t.leases.L.camera.serial),
+        R: t.undistort ? homographyIds.R : nodeId.convert(t.leases.R.camera.serial),
+      };
+
+      // STEREO SGBM + HEATMAP + COMPOSITE bricks (spec §views): the center
+      // tile's disparity/anaglyph/sgbm options, parked until the renderer
+      // connects the selected pipe (C-21 consumer gate). Node ids under a
+      // "manual"/"manual-composite" scope. Dims from the L camera.
+      const camL = t.leases.L.camera;
+      const stereoDims = {
+        maxWidth: camL.getFeatureInt("Width"),
+        maxHeight: camL.getFeatureInt("Height"),
+      };
+      stereo = createStereoPipe(
+        stereoSeam,
+        warpedSources.L,
+        warpedSources.R,
+        nodeId.stereo("manual"),
+        // Fixed symmetric −256…+255 window (sgbm-signed-range.md): foveated gaze
+        // makes disparity SIGNED.
+        { ...stereoDims, params: SIGNED_DISPARITY_WINDOW },
+      );
+      stereoHeatmap = createHeatmapPipe(
+        heatmapSeam,
+        stereo.pipeId,
+        nodeId.heatmap(stereo.pipeId, "view"),
+        // Normalization PINNED to the −256…+255 window (sgbm-signed-range.md).
+        { ...stereoDims, params: SIGNED_DISPARITY_HEATMAP_RANGE },
+      );
+      // COMPOSITE (disparity/anaglyph): read the configured anaglyph style for
+      // the initial attach, then watch it for LIVE retunes (disposed on idle).
+      anaglyphStyle = await readAnaglyphStyle();
+      const view0 = coerceView(s.state.view);
+      composite = createCompositePipe(
+        compositeSeam,
+        warpedSources.L,
+        warpedSources.R,
+        nodeId.stereo("manual-composite"),
+        { ...stereoDims, params: compositeParamsFor(view0) },
+      );
+      syncCompositeMode(view0);
+      scope.defer(
+        subscribeAnaglyphStyle((style) => {
+          anaglyphStyle = style;
+          syncCompositeMode(coerceView(s.state.view)); // retune iff a composite view is up
+        }, anaglyphStyle),
+      );
+      // Retire the center-view bricks before the undistort retirers above
+      // (registered later → drains earlier; LIFO).
+      scope.defer(() => {
+        stereoHeatmap?.retire();
+        stereoHeatmap = null;
+        stereo?.retire();
+        stereo = null;
+        composite?.retire();
+        composite = null;
+      });
       monitor.done("pipes");
 
       monitor.start("worker");
@@ -465,6 +813,12 @@ export default function manualControlSession(
             perf: { actuateMs: { mean: actuateMsStats.mean, max: actuateMsStats.max } },
           });
           actuateMsStats.resetMax();
+          // Trigger-sync (spec §trigger-sync): the latched intent retries
+          // engagement on this throttle — preconditions are lazy (the MCU
+          // stream id lands only after the first v2 update, a controller
+          // reconnect). Once engaged, the achieved-rate readout publishes here.
+          if (s.state.trigger_sync && !triggerEngaged) void engageTrigger();
+          else if (triggerEngaged) publishTriggerTelemetry();
         }
       });
 
@@ -489,6 +843,14 @@ export default function manualControlSession(
         triple = null;
         s.telemetry({ ready: false });
       });
+      // Trigger-sync back to free-run (spec §trigger-sync): drains AFTER the
+      // pacer stops (no re-engage race) but BEFORE `triple` clears +
+      // `releaseLeases` — `disableHardwareTrigger` rides `lease.reconfigure` and
+      // needs the live lease. The engage gate closes first so nothing re-arms.
+      scope.defer(async () => {
+        triggerEngageAllowed = false;
+        await disengageTrigger();
+      });
       scope.defer(() => {
         stopActuation?.(); // drains FIRST — stop pushing immediately
         stopActuation = null;
@@ -507,24 +869,30 @@ export default function manualControlSession(
         width = height = 0; // after the full drain (leases already released)
         reunify(); // split is session-local — re-entry starts unified
         // Reset stale split/pose telemetry so a re-entry doesn't light the ⟂
-        // badge for an actually-unified session.
-        s.resetTelemetry(["split", "L_PX", "R_PX"]);
+        // badge for an actually-unified session. Trigger-sync readouts clear too
+        // (disengage already ran in the drain; intent stays latched in state).
+        lastTriggerBlocked = null;
+        s.resetTelemetry(["split", "L_PX", "R_PX", "trigger", "trigger_blocked"]);
       },
       watch: {
         zoom() {
           pushParams({ zoom: Math.max(1, s.state.zoom), ...voltParams(), ...sliceAtParam() });
         },
+        // `view` drives the composite brick's MODE server-side (spec §views):
+        // disparity → difference, anaglyph → anaglyph; sliced/sgbm leave it
+        // parked (the renderer connects the selected pipe).
         view(view) {
-          pushParams({ view });
+          syncCompositeMode(coerceView(view));
         },
         baseline() {
-          pushParams({ ...voltParams(), ...depthParams() });
+          pushParams(voltParams());
         },
-        verge() {
-          pushParams(depthParams());
-        },
-        depthWindowInv() {
-          pushParams(depthParams());
+        // Trigger-sync INTENT (spec §trigger-sync): on → engage now if
+        // preconditions permit (else `trigger_blocked` + the retry tick);
+        // off → back to free-run.
+        trigger_sync(on) {
+          if (on) void engageTrigger();
+          else void disengageTrigger();
         },
       },
       commands: {
