@@ -45,7 +45,8 @@ export type Tuning = {
   /** Guide-strip expansion around the target tile. */
   expand_x: number;
   expand_y: number;
-  /** Convergence window (ms); 0 = no timeout (iterate forever). */
+  /** Convergence window (ms); 0 = no timeout (iterate forever, slider max);
+   *  -1 = auto-vergence DISABLED entirely (slider min — manual control only). */
   timeout: number;
 };
 

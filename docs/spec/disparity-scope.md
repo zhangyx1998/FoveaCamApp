@@ -109,7 +109,20 @@ manual-control duplicates the same ~15-line function — keep constant/shape con
 before the first lock and the hybrid's re-detect recovery) OR found results flow, the
 convergence timeout does NOT apply (user ruling 2026-07-11). The timeout exists for
 unattended pointer-set targets, not an active tracker. Otherwise `now() - windowStart >
-timeout` (timeout ≤ 0 = never). `windowStart` is refreshed on drag/track activity and
+timeout` (timeout 0 = never, the slider-MAX sentinel).
+
+**Auto-vergence DISABLED** (user ruling 2026-07-12, `autoVergenceDisabled()`): `timeout
+= -1` (the slider-MIN sentinel, label "disabled") turns the auto loop OFF entirely —
+overriding even an active tracker — status "auto off"; pointer drags and the manual DOF
+sliders still steer (manual control, not auto). The same predicate carries the MANUAL
+HOLD latch, status "held": a `setPid` slider write disengages auto-follow (flipping
+`tracker_enabled` OFF for real — UI/UX review #4, the toggle must never read "on" while
+the feed gate drops every result) and sets `windowStart = -Infinity` (covers timeout 0,
+which a plain expiry can't); every activity path that restarts the window (drag,
+override release, a re-armed tracker's first found result) clears the latch by
+construction. Under either state `reset_vergence` also PUSHES the reconstructed
+all-zero pose (review #7 — nothing would ever step, so the zeroed readout would desync
+from the held mirrors). `windowStart` is refreshed on drag/track activity and
 reset per activation (value-sweep `freeze-window-not-reset-on-activate`: the clocks were
 initialized at session CREATION, so a window re-entering long after boot was already
 past the timeout — frozen before the first projection).
@@ -145,9 +158,20 @@ runs on its OWN native thread, chained on the C undistort brick's OwnedFrame tap
 
 Per-side match results land keyed L/R at the PID node. The vergence step runs when the
 ARRIVING side COMPLETES a pair (its seq ≥ the other side's latest) — order-agnostic,
-~once per strip frame, degrades to the slower side's rate. Each result is lifted out of
-scaled-strip space (`/s` → full-res strip-local px) + the frame's forwarded crop origin
-→ ABSOLUTE undistorted-wide px.
+degrades to the slower side's rate. Each result is lifted out of scaled-strip space
+(`/s` → full-res strip-local px) + the frame's forwarded crop origin → ABSOLUTE
+undistorted-wide px.
+
+**Once per pair** (kd explosion, 2026-07-12): the control step is gated on the PAIR seq
+(the OLDER side's) advancing past the last stepped one. Un-gated, the law ran TWICE per
+strip frame — each side's arrival re-paired with the other's held result — and the
+second run's near-zero `dt` (worker-completion skew × sensitivity) turned the raw
+derivative `Δe/dt` into an unbounded kick for ANY kd ≠ 0 (the un-slewed intra-frame
+zigzag then fed back through compose feed-forward into real mirror motion). In steady
+state the gate lands on the completing (second) arrival — both sides fresh; a genuinely
+lagging partner still steers at the laggard's rate within the staleness bounds below.
+The derivative itself is additionally LOW-PASSED in `@lib/pid` (α = dt/(dt + dTau),
+default τ = 2 dt-units), which is time-consistent: a tiny-dt step contributes ~nothing.
 
 **Partner staleness** (`match-join.ts`, value-sweep `match-pair-join-no-staleness-bound`):
 a stalled partner (dead worker / starved pipe) used to freeze ONE eye's center into the

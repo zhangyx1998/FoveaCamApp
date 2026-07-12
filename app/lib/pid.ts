@@ -52,7 +52,16 @@ export interface PIDOptions {
   integralLimits?: [number, number];
   /** Initial integrator value (default 0). */
   initial?: number;
+  /** Derivative low-pass time constant in `dt` units (default
+   *  {@link DERIVATIVE_TAU}; 0 = raw, unfiltered slope). See {@link PID.step}. */
+  dTau?: number;
 }
+
+/** Default derivative-filter time constant (in `dt` units — frames for the
+ *  vergence loop). Chosen a couple of nominal steps wide: enough to flatten
+ *  measurement-quantization staircase + the near-zero-dt spikes an uneven step
+ *  cadence produces, while keeping the derivative's phase lead useful. */
+export const DERIVATIVE_TAU = 2;
 
 const UNBOUNDED: [number, number] = [-Infinity, Infinity];
 
@@ -76,8 +85,12 @@ export class PID {
   kd: number;
   limits: [number, number];
   integralLimits: [number, number];
+  /** Derivative-filter time constant ({@link PIDOptions.dTau}). */
+  dTau: number;
   private integral: number;
   private prevError: number | null = null;
+  /** Low-passed error slope — the derivative term's state (see `step`). */
+  private dFiltered = 0;
 
   constructor(opts: PIDOptions = {}) {
     this.kp = opts.kp ?? 0;
@@ -85,6 +98,7 @@ export class PID {
     this.kd = opts.kd ?? 0;
     this.limits = opts.limits ?? UNBOUNDED;
     this.integralLimits = opts.integralLimits ?? this.limits;
+    this.dTau = opts.dTau ?? DERIVATIVE_TAU;
     this.integral = clamp(opts.initial ?? 0, this.integralLimits);
   }
 
@@ -100,6 +114,7 @@ export class PID {
   reset(value = 0) {
     this.integral = clamp(value, this.integralLimits);
     this.prevError = null;
+    this.dFiltered = 0;
   }
 
   /**
@@ -145,6 +160,15 @@ export class PID {
 
   /**
    * Advance one control step.
+   *
+   * The derivative term is LOW-PASSED (first-order, time constant `dTau`):
+   * `dState += α·(Δe/dt − dState)` with `α = dt/(dt + dTau)`. The raw slope
+   * `Δe/dt` is the one PID term that DIVIDES by dt, so an irregular step
+   * cadence (e.g. two steps landing microseconds apart) turns any kd ≠ 0 into
+   * an unbounded kick — α → 0 as dt → 0 makes the filter time-consistent: a
+   * near-zero-dt step contributes almost nothing, a long gap re-converges in
+   * ~dTau. `dTau = 0` degenerates to the raw slope.
+   *
    * @param error setpoint − measurement
    * @param dt normalized time step (default 1)
    * @returns the saturated control output
@@ -155,8 +179,12 @@ export class PID {
       this.integralLimits,
     );
     let derivative = 0;
-    if (this.kd !== 0 && this.prevError !== null && dt > 0)
-      derivative = (error - this.prevError) / dt;
+    if (this.kd !== 0 && this.prevError !== null && dt > 0) {
+      const raw = (error - this.prevError) / dt;
+      const alpha = this.dTau > 0 ? dt / (dt + this.dTau) : 1;
+      this.dFiltered += alpha * (raw - this.dFiltered);
+      derivative = this.dFiltered;
+    }
     this.prevError = error;
     return clamp(
       this.kp * error + this.integral + this.kd * derivative,

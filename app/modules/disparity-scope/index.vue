@@ -163,10 +163,14 @@ const sensitivity_ratio = computed<number>({
   set: (r) => setTuning("sensitivity", sensitivityScale.fromRatio(r)),
 });
 const timeoutScale = logScale(100, 10000, { infinityAt: 0, round: true });
+// Ratio 0 (hard left) is the -1 "auto-vergence disabled" sentinel — the log
+// scale proper starts one step in. Ratio 1 stays the 0 = ∞ sentinel (forever).
 const timeout_ratio = computed<number>({
-  get: () => timeoutScale.toRatio(state.tuning.timeout),
-  set: (r) => setTuning("timeout", timeoutScale.fromRatio(r)),
+  get: () =>
+    state.tuning.timeout < 0 ? 0 : Math.max(timeoutScale.toRatio(state.tuning.timeout), 0.001),
+  set: (r) => setTuning("timeout", r <= 0 ? -1 : timeoutScale.fromRatio(r)),
 });
+const timeout_disabled = computed(() => state.tuning.timeout < 0);
 const timeout_ms = computed(() => (state.tuning.timeout > 0 ? state.tuning.timeout : Infinity));
 const scale_ratio = computed<number>({
   get: () => state.tuning.scale,
@@ -255,10 +259,33 @@ const vergeLimits = computed<[number, number]>(() => [
   0,
   distanceToVerge(VERGE_MIN_DISTANCE_MM, state.baseline),
 ]);
+// Two-way sliders (manual vergence override): a write disengages auto-vergence
+// server-side and actuates immediately. The knob follows a LOCAL ECHO of the
+// last write instead of the ~30 Hz `pids` readout, so a drag isn't yanked
+// around by in-flight telemetry. The echo releases on CONFIRMATION — the
+// readout matching the written value — not on a timer (UI/UX review #3: a
+// loaded IPC lane could outlive any fixed window and snap the knob back); the
+// hard cap only covers a write the server clamped and will never echo back.
+const PID_ECHO_EPS = 1e-6;
+const PID_ECHO_MAX_MS = 1000;
 function pidRef(dof: Dof) {
+  const echo = ref<{ v: number; at: number } | null>(null);
+  watch(
+    () => telemetry.pids[dof],
+    (live) => {
+      const e = echo.value;
+      if (!e) return;
+      const confirmed = Math.abs(live - e.v) < PID_ECHO_EPS;
+      if (confirmed || performance.now() - e.at > PID_ECHO_MAX_MS)
+        echo.value = null;
+    },
+  );
   return computed<number>({
-    get: () => telemetry.pids[dof],
-    set: (v) => session.call("setPid", { dof, value: v }),
+    get: () => echo.value?.v ?? telemetry.pids[dof],
+    set: (v) => {
+      echo.value = { v, at: performance.now() };
+      session.call("setPid", { dof, value: v });
+    },
   });
 }
 const pidVerge = pidRef("verge");
@@ -266,6 +293,15 @@ const pidPanX = pidRef("panX");
 const pidPanY = pidRef("panY");
 const pidVshift = pidRef("v_shift");
 const resetVergence = () => session.call("reset_vergence", undefined);
+// Takeover cue (review #5): the four sliders shift to the accent while manual
+// control holds the loop ("held" latch / Timeout hard-left), restoring one
+// visual identity per state — color only, no reflow, no transition.
+const vergenceHeld = computed(
+  () => telemetry.status === "held" || telemetry.status === "auto off",
+);
+const vergenceSliderColor = computed(() =>
+  vergenceHeld.value ? "var(--accent-bright)" : "currentColor",
+);
 
 // Whole-object replace (like `tuning`) — a nested `state.kernel.w = v` reaches
 // neither server nor render.
@@ -414,10 +450,16 @@ function onCursor(c: (Point2d & Size & { buttons: number }) | null): void {
           :max="1"
           :neutral="timeoutScale.toRatio(DEFAULT_TUNING.timeout)"
           :step="0.01"
+          title="Convergence window after the last activity. Hard left disables auto-vergence entirely (manual control only); hard right never times out."
         >
           <span>Timeout</span>
           <span>
-            <template v-if="timeout_ms !== Infinity">{{ timeout_ms }} ms</template>
+            <!-- Tinted (review #1): the hard-left knob sits ~0 px from the
+                 ~100 ms position, so the label is the disambiguator. -->
+            <template v-if="timeout_disabled"
+              ><span :style="{ color: 'var(--warn)' }">disabled</span></template
+            >
+            <template v-else-if="timeout_ms !== Infinity">{{ timeout_ms }} ms</template>
             <template v-else> &#x221E; </template>
           </span>
         </RangeSlider>
@@ -494,23 +536,29 @@ function onCursor(c: (Point2d & Size & { buttons: number }) | null): void {
       </div>
       <!-- Column 5: Vergence Angles -->
       <div class="options">
-        <h4>
+        <h4
+          title="Live loop readout — dragging a slider takes over: auto-vergence disengages (tracker turns off) and the mirrors follow the dragged value. Drag on the view or re-enable the tracker to hand control back."
+        >
           <span>Vergence Angles</span>
-          <button class="reset" title="Reset to defaults" @click="resetVergence">reset</button>
+          <button
+            class="reset"
+            title="Zero the loop state — auto re-converges; under a manual hold this recenters the eyes"
+            @click="resetVergence"
+          >reset</button>
         </h4>
-        <RangeSlider v-model="pidVerge" :min="vergeLimits[0]" :max="vergeLimits[1]" :neutral="0" :step="0.01">
+        <RangeSlider v-model="pidVerge" :min="vergeLimits[0]" :max="vergeLimits[1]" :neutral="0" :step="0.01" :color="vergenceSliderColor">
           <span>Verge</span>
           <span>{{ degrees(pidVerge).toFixed(2) }}&deg;</span>
         </RangeSlider>
-        <RangeSlider v-model="pidPanX" :min="-shiftLimit" :max="shiftLimit" :neutral="0" :step="0.01">
+        <RangeSlider v-model="pidPanX" :min="-shiftLimit" :max="shiftLimit" :neutral="0" :step="0.01" :color="vergenceSliderColor">
           <span>Pan X</span>
           <span>{{ degrees(pidPanX).toFixed(2) }}&deg;</span>
         </RangeSlider>
-        <RangeSlider v-model="pidPanY" :min="-shiftLimit" :max="shiftLimit" :neutral="0" :step="0.01">
+        <RangeSlider v-model="pidPanY" :min="-shiftLimit" :max="shiftLimit" :neutral="0" :step="0.01" :color="vergenceSliderColor">
           <span>Pan Y</span>
           <span>{{ degrees(pidPanY).toFixed(2) }}&deg;</span>
         </RangeSlider>
-        <RangeSlider v-model="pidVshift" :min="-vShiftLimit" :max="vShiftLimit" :neutral="0" :step="0.01">
+        <RangeSlider v-model="pidVshift" :min="-vShiftLimit" :max="vShiftLimit" :neutral="0" :step="0.01" :color="vergenceSliderColor">
           <span>V-Shift</span>
           <span>{{ degrees(pidVshift).toFixed(2) }}&deg;</span>
         </RangeSlider>

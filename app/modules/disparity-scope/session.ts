@@ -381,7 +381,16 @@ export default function disparityScopeSession(
       return 1 + (matchZoom() - 1) * ratio;
     }
 
+    /** Auto-vergence is OFF (`timeout` at the slider-min `-1` sentinel, or a
+     *  manual DOF write latched the hold — see `disengageAutoVergence`): the
+     *  control law never steps and feed-forward stays down. Pointer drags and
+     *  the manual sliders still steer — they're manual control, not auto. */
+    function autoVergenceDisabled(): boolean {
+      return s.state.tuning.timeout < 0 || windowStart === -Infinity;
+    }
+
     function frozen(): boolean {
+      if (autoVergenceDisabled()) return true;
       // Active tracker (armed OR found results flowing) suspends the convergence
       // timeout, always — spec §freeze-window.
       if (trackerArmed || trackerActive) return false;
@@ -610,6 +619,23 @@ export default function disparityScopeSession(
       s.telemetry({ tracker_bbox: null, tracker_lost: true });
     }
 
+    /** Manual DOF write (`setPid` slider drag) disengages auto-vergence
+     *  IMMEDIATELY — even mid-track: drop the auto-follow AND latch the hold by
+     *  expiring the convergence window (`-Infinity` ⇒ `autoVergenceDisabled`,
+     *  covering the `timeout = 0` no-timeout mode a plain expiry can't). Every
+     *  activity path that restarts the window (drag, override release, the
+     *  re-armed tracker's first found result) clears the latch by construction.
+     *  `tracker_enabled` flips OFF for real (UI/UX review #4: the toggle must
+     *  not read "on"/"armed" while the feed gate drops every result — one
+     *  honest click re-engages, and the manual's wording stays true). */
+    function disengageAutoVergence(): void {
+      trackerArmed = false;
+      trackerActive = false;
+      windowStart = -Infinity;
+      s.setState("tracker_enabled", false);
+      s.telemetry({ tracker_bbox: null });
+    }
+
     // R3 watchdog state: stamped on EVERY delivered tracker result (found or
     // miss — delivery is what the count-based tolerance already covers);
     // checked on the telemetry cadence below.
@@ -654,6 +680,12 @@ export default function disparityScopeSession(
       L: null,
       R: null,
     };
+    /** Highest PAIR seq (the older side's) already steered on — gates the
+     *  control step to ONCE per pair. Without it the law ran twice per strip
+     *  frame (each side's arrival re-paired with the other's held result), and
+     *  the second run's near-zero dt turned any kd ≠ 0 into an unbounded
+     *  `Δe/dt` kick (the auto-vergence kd explosion). */
+    let lastSteppedSeq = -1;
 
     function onMatch(side: SideKey, r: VisionResult): void {
       const v = r.values as unknown as TemplateMatchValues;
@@ -702,6 +734,13 @@ export default function disparityScopeSession(
           }),
         },
       });
+      // One control step per PAIR (keyed by the older side's seq): in steady
+      // state that lands on the completing arrival (both sides fresh) and skips
+      // the half-updated re-pair the NEXT side's arrival would form. A lagging
+      // partner still steers at the laggard's rate within the staleness bounds.
+      const pairSeq = Math.min(m.seq, other.seq);
+      if (pairSeq <= lastSteppedSeq) return;
+      lastSteppedSeq = pairSeq;
       runControl({
         l: (side === "L" ? m : other).center,
         r: (side === "R" ? m : other).center,
@@ -753,6 +792,13 @@ export default function disparityScopeSession(
         // Match-rate re-affirm of the drag follow, slewed like the pointer path.
         const follow = followVolts(projection.target);
         return follow ? slewToward(follow) : commandedVolts;
+      }
+      if (autoVergenceDisabled()) {
+        // Distinct from "frozen" (a timeout that a drag restarts) AND from the
+        // transient drag "manual" (review #8): the sentinel needs the Timeout
+        // slider moved, the "held" latch a new drag / tracker re-enable.
+        status = s.state.tuning.timeout < 0 ? "auto off" : "held";
+        return commandedVolts;
       }
       if (frozen()) {
         status = "frozen";
@@ -918,6 +964,7 @@ export default function disparityScopeSession(
       // died on; idle's `disposers.dispose()` clears them.
       windowStart = now();
       lastStep = now();
+      lastSteppedSeq = -1;
       dragSlew.reset();
       const monitor = s.progressMonitor([
         { id: "lease", label: "Leasing cameras" },
@@ -1607,6 +1654,7 @@ export default function disparityScopeSession(
       workers.R?.terminate();
       workers.L = workers.R = null;
       latestMatch.L = latestMatch.R = null;
+      lastSteppedSeq = -1; // fresh workers restart their seq counters
       trackerActive = false;
       dragging = false;
       overriddenTele = false;
@@ -1691,8 +1739,23 @@ export default function disparityScopeSession(
           pan.reset();
           verge.reset();
           v_shift.reset();
+          // Under a manual hold (review #7) nothing would ever step, leaving
+          // the zeroed readout desynced from the mirrors — reset then also
+          // means "recenter": push the reconstructed (all-zero) pose. While
+          // auto runs, keep the no-push behavior (the loop re-converges).
+          if (autoVergenceDisabled()) {
+            const v = followVolts(s.state.target);
+            if (v && !pidNode?.override.engaged) {
+              commandedVolts = v;
+              pushVolts();
+            }
+          }
         },
         async setPid({ dof, value }) {
+          // Bidirectional slider write: disengage auto-vergence FIRST (even
+          // mid-track — the ruling), so the next match pair can't fight the
+          // manual value, then apply + actuate from the new DOF state.
+          disengageAutoVergence();
           switch (dof) {
             case "verge":
               verge.value = value;
@@ -1706,6 +1769,15 @@ export default function disparityScopeSession(
             case "panY":
               pan.y.value = value;
               break;
+          }
+          status = "held";
+          // Reconstruct + push NOW (pidOverride precedent) — the held DOF state
+          // is the command, so the write moves the mirrors immediately. A
+          // generic volts override outranks manual DOF writes, same as drags.
+          const v = followVolts(s.state.target);
+          if (v && !pidNode?.override.engaged) {
+            commandedVolts = v;
+            pushVolts();
           }
         },
         async pidOverride(command) {
