@@ -23,6 +23,29 @@ export const SERIAL_LATENCY_CONFIG_PATH = APP_CONFIG_PATH;
  *  pressure, slow enough that RTT jitter never whips the predictor. */
 export const SERIAL_LATENCY_EMA_ALPHA = 0.25;
 
+/** RTT samples above this are TRANSPORT HICCUPS, not steady-state latency
+ *  (mirror-flicker addendum R4): a single multi-hundred-ms p50 (USB
+ *  re-enumeration, a wedged read) would take many EMA steps to wash out and
+ *  meanwhile inflate the predictor's lookahead. Discarded like the existing
+ *  non-finite hiccup guard. */
+export const RTT_SAMPLE_CEILING_MS = 250;
+
+/** Hard cap on the TOTAL applied lookahead (fixed + adaptive), ms — the
+ *  runaway-lookahead guard (addendum R4): congestion grows RTT, an uncapped
+ *  lookahead grows per-tick deltas, which defeat the sink dedupe and feed the
+ *  congestion back. 50 ms ≈ 3 camera frames of lead — beyond that the
+ *  extrapolation is doing more harm than the latency it hides. */
+export const MAX_TOTAL_LOOKAHEAD_MS = 50;
+
+/** Clamp the total lookahead the session pushes into `imm.setParams` —
+ *  pure, unit-tested; the fixed (per-triple) component passes through
+ *  untouched below the cap. Non-finite degrades to 0 (never poison the
+ *  predictor's delay). */
+export function clampLookaheadMs(totalMs: number): number {
+  if (!Number.isFinite(totalMs)) return 0;
+  return Math.min(totalMs, MAX_TOTAL_LOOKAHEAD_MS);
+}
+
 /** Pure EMA over ACK-RTT p50 samples → the one-way serial latency estimate.
  *  `value` is null until the first sample (no samples = fixed behavior). */
 export class SerialLatencyEstimator {
@@ -31,9 +54,12 @@ export class SerialLatencyEstimator {
   constructor(private readonly alpha = SERIAL_LATENCY_EMA_ALPHA) {}
 
   /** Feed one ackRttMs.p50 sample (ms). Non-finite/negative samples are
-   *  ignored (a probe hiccup must never poison the estimate). */
+   *  ignored (a probe hiccup must never poison the estimate), and so are
+   *  samples above {@link RTT_SAMPLE_CEILING_MS} — a transport hiccup is a
+   *  discrete event, not a latency to lead by (addendum R4). */
   push(rttP50Ms: number): void {
     if (!Number.isFinite(rttP50Ms) || rttP50Ms < 0) return;
+    if (rttP50Ms > RTT_SAMPLE_CEILING_MS) return;
     this.ema =
       this.ema === null
         ? rttP50Ms

@@ -64,3 +64,40 @@ export function slewStep(
     converged: false,
   };
 }
+
+/**
+ * The drag-slew STATE MACHINE the session drives (extracted so the D1
+ * regression test exercises the production state, not a model — docs/dev/
+ * mirror-flicker-2026-07-12.md). ALL drag-path volts writers must route
+ * through ONE instance: the flicker was one writer pushing the RAW target
+ * among slewed writers, alternating the compose floor between two
+ * trajectories separated by the slew lag. Seeded from the caller-supplied
+ * pose on the first `toward` of a drag; `reset()` on drag end / activate.
+ */
+export class DragSlew {
+  private state: { pose: SlewPose; at: number } | null = null;
+
+  constructor(
+    private readonly nowMs: () => number,
+    private readonly tauMs = DRAG_SLEW_TAU_MS,
+  ) {}
+
+  /** One slewed step toward `target`; seeds from `seed` on the first call of
+   *  a drag. dt = time since the previous call (whatever cadence is live). */
+  toward(seed: SlewPose, target: SlewPose): SlewPose {
+    const t = this.nowMs();
+    if (!this.state) {
+      this.state = {
+        pose: { l: { ...seed.l }, r: { ...seed.r } },
+        at: t,
+      };
+    }
+    const r = slewStep(this.state.pose, target, t - this.state.at, this.tauMs);
+    this.state = { pose: r.pose, at: t };
+    return r.pose;
+  }
+
+  reset(): void {
+    this.state = null;
+  }
+}

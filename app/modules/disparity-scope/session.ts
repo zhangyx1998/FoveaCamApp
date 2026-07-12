@@ -45,6 +45,7 @@ import {
   subscribePredictionRateHz,
 } from "@orchestrator/prediction-rate";
 import {
+  clampLookaheadMs,
   publishAppliedLookahead,
   readSerialLatencyComp,
   SerialLatencyEstimator,
@@ -88,9 +89,14 @@ import {
   type CompositePipeSeam,
 } from "@orchestrator/composite-pipe";
 import type { TemplateMatchValues } from "@orchestrator/template-match-kernel";
-import { consumeTracker, createDisparityTrackerFeed } from "./tracker-feed";
+import {
+  consumeTracker,
+  createDisparityTrackerFeed,
+  TRACKER_STALL_DEADLINE_MS,
+  trackerResultStale,
+} from "./tracker-feed";
 import { matchPartnerStale } from "./match-join";
-import { DRAG_SLEW_TAU_MS, slewStep, type SlewPose } from "./drag-slew";
+import { DragSlew, type SlewPose } from "./drag-slew";
 import { makeMat } from "@lib/mat";
 import { PID, PID2D, type PidParams } from "@lib/pid";
 import { distanceToVerge, vergeToDistance, vergenceToDistance } from "@lib/stereo";
@@ -298,7 +304,7 @@ export default function disparityScopeSession(
     let commandedVolts: VergenceVolts = { l: ORIGIN_POS, r: ORIGIN_POS };
     /** Drag slew state (spec §drag-slew): first-order smoother toward the pointer
      *  target while dragging. Null outside a drag; seeded at the first apply. */
-    let dragSlew: { pose: SlewPose; at: number } | null = null;
+    const dragSlew = new DragSlew(now);
     const actuateMsStats = new RollingStats(0.9, 2, "ms");
 
     // The named DOF controllers (owned by the PID node once created). `pan` is a
@@ -554,18 +560,23 @@ export default function disparityScopeSession(
       {
         armed: () => trackerArmed,
         onDrag(center) {
-          // Frame-rate re-affirm of the drag point (the pointer handler already
-          // pushed synchronously; covers a coalesced-away pointer move).
+          // D1 (docs/dev/mirror-flicker-2026-07-12.md): this path used to
+          // ALSO push volts — with the RAW (un-slewed) followVolts pose,
+          // alternating the compose floor between two trajectories against
+          // the slewed pointer/match writers at a combined ~120-240 Hz (the
+          // drag flicker). The volts push is DELETED, not slewed: the pointer
+          // handler pushes synchronously, and the match-path re-affirm
+          // (controlStep's overridden branch) slews toward `state.target` —
+          // which this handler still UPDATES below — at match rate, off the
+          // same camera-frame cadence as this callback. A coalesced-away
+          // pointer move is therefore still steered-to within one match tick
+          // (the old comment's concern), with strictly fewer volts writers:
+          // every drag writer is slewed BY CONSTRUCTION.
           pidNode?.ingest("target"); // meter the kcf → pid target edge
           lastGood = center;
           s.setState("target", center);
           steerCrops();
           publishOverridden(true);
-          const v = followVolts(center);
-          if (v && !pidNode?.override.engaged) {
-            commandedVolts = v;
-            pushVolts();
-          }
         },
         onTrack(center, bbox) {
           pidNode?.ingest("target"); // meter the kcf → pid target edge (accepted rate)
@@ -578,17 +589,31 @@ export default function disparityScopeSession(
           publishOverridden(false);
         },
         onLost() {
-          // Lost policy (spec §tracker): release auto-follow, hold the last good
-          // target, restart the freeze window, latch `tracker_lost`.
-          trackerArmed = false;
-          trackerActive = false;
-          windowStart = now();
-          s.setState("target", lastGood);
-          s.telemetry({ tracker_bbox: null, tracker_lost: true });
+          markTrackerLost();
         },
       },
       TRACKER_LOST_TOLERANCE,
     );
+
+    /** The ONE lost policy — the count-based `onLost` (delivered misses) and
+     *  the R3 stall WATCHDOG (nothing delivered at all) both land here (spec
+     *  §tracker; docs/dev/mirror-flicker-2026-07-12.md addendum): release
+     *  auto-follow, hold the last good target, restart the freeze window,
+     *  latch `tracker_lost`. `composeHealthy` then flips feed-forward off at
+     *  the next rebase — a dead source can never keep driving the mirrors
+     *  through the predictor's coast. */
+    function markTrackerLost(): void {
+      trackerArmed = false;
+      trackerActive = false;
+      windowStart = now();
+      s.setState("target", lastGood);
+      s.telemetry({ tracker_bbox: null, tracker_lost: true });
+    }
+
+    // R3 watchdog state: stamped on EVERY delivered tracker result (found or
+    // miss — delivery is what the count-based tolerance already covers);
+    // checked on the telemetry cadence below.
+    let lastTrackerResultAt = 0;
 
     // --- PID-node override slot (generic volts path ONLY since §3.5) --------
 
@@ -693,19 +718,11 @@ export default function disparityScopeSession(
      *  the current commanded pose on the first apply, then advances with dt =
      *  time since the previous apply. Rides the VALUE only. */
     function slewToward(target: VergenceVolts): VergenceVolts {
-      const t = now();
-      if (!dragSlew) {
-        dragSlew = {
-          pose: {
-            l: { x: commandedVolts.l.x, y: commandedVolts.l.y },
-            r: { x: commandedVolts.r.x, y: commandedVolts.r.y },
-          },
-          at: t,
-        };
-      }
-      const r = slewStep(dragSlew.pose, target, t - dragSlew.at, DRAG_SLEW_TAU_MS);
-      dragSlew = { pose: r.pose, at: t };
-      return { l: r.pose.l, r: r.pose.r };
+      const pose: SlewPose = dragSlew.toward(
+        { l: commandedVolts.l, r: commandedVolts.r },
+        target,
+      );
+      return { l: pose.l, r: pose.r };
     }
 
     /** Direct-follow volts for `target` (the drag path; spec §drag,
@@ -901,7 +918,7 @@ export default function disparityScopeSession(
       // died on; idle's `disposers.dispose()` clears them.
       windowStart = now();
       lastStep = now();
-      dragSlew = null;
+      dragSlew.reset();
       const monitor = s.progressMonitor([
         { id: "lease", label: "Leasing cameras" },
         { id: "undistort", label: "Loading calibration" },
@@ -1214,7 +1231,10 @@ export default function disparityScopeSession(
         });
         // JS keeps its own tracker consumption (pid target + steer + telemetry);
         // pid reads RAW results, not imm predictions (spec §actuation).
-        void consumeTracker(tk, trackerFeed);
+        void consumeTracker(tk, (r) => {
+          lastTrackerResultAt = now(); // R3 watchdog: delivery heartbeat
+          trackerFeed(r);
+        });
       }
 
       monitor.done("tracker");
@@ -1471,6 +1491,18 @@ export default function disparityScopeSession(
           }, latencyEnabled),
         );
         const timer = setInterval(() => {
+          // R3 stall watchdog (mirror-flicker addendum): while auto-follow is
+          // live, NO delivered result within the deadline ⇒ the source is
+          // stalled — same policy as the count-based lost tolerance. The
+          // status names the distinct cause for the operator.
+          if (
+            trackerActive &&
+            lastTrackerResultAt > 0 &&
+            trackerResultStale(now() - lastTrackerResultAt, TRACKER_STALL_DEADLINE_MS)
+          ) {
+            markTrackerLost();
+            status = "tracker stalled";
+          }
           if (!nativeSink) {
             // No controller → fixed behavior; the estimate resets so a stale
             // link's RTTs never leak into a fresh connection.
@@ -1484,7 +1516,11 @@ export default function disparityScopeSession(
           const probe = nativeSink.probe();
           if (latencyEnabled && probe.ackRttCount > 0) {
             estimator.push(probe.ackRttP50);
-            const total = fixedDelayMs + (estimator.latencyMs ?? 0);
+            // R4 (mirror-flicker addendum): the TOTAL lookahead is clamped —
+            // congestion-inflated RTT must never grow the extrapolation
+            // without bound (larger deltas defeat the sink dedupe and feed
+            // the congestion back). MAX_TOTAL_LOOKAHEAD_MS documents the cap.
+            const total = clampLookaheadMs(fixedDelayMs + (estimator.latencyMs ?? 0));
             applyDelay(total);
             publishAppliedLookahead(appliedDelayMs);
           }
@@ -1630,7 +1666,7 @@ export default function disparityScopeSession(
             }
           } else {
             dragging = false;
-            dragSlew = null; // next drag re-seeds from the settled pose
+            dragSlew.reset(); // next drag re-seeds from the settled pose
             windowStart = now(); // drag end restarts the convergence window
             publishOverridden(false);
             if (tk) {

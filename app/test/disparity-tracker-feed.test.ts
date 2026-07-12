@@ -13,6 +13,8 @@ import {
   createDisparityTrackerFeed,
   consumeTracker,
   type DisparityTrackerHandlers,
+  TRACKER_STALL_DEADLINE_MS,
+  trackerResultStale,
 } from "@modules/disparity-scope/tracker-feed";
 import type { TrackResult } from "core/Tracker";
 import type { Point2d, Rect } from "core/Geometry";
@@ -180,5 +182,28 @@ describe("consumeTracker (iteration driver)", () => {
     const onResult = vi.fn();
     await expect(consumeTracker(results(), onResult)).resolves.toBeUndefined();
     expect(onResult).toHaveBeenCalledTimes(1);
+  });
+
+});
+
+// ---- R3 stall watchdog predicate (mirror-flicker addendum) --------------------
+// The count-based lostTolerance above only covers DELIVERED misses; a stalled
+// source delivers nothing — the session's watchdog uses this predicate on the
+// delivery-heartbeat age (the match-staleness precedent's pure-helper shape).
+describe("trackerResultStale", () => {
+  it("fresh within the deadline", () => {
+    expect(trackerResultStale(0)).toBe(false);
+    expect(trackerResultStale(TRACKER_STALL_DEADLINE_MS)).toBe(false); // boundary
+  });
+  it("stale past the deadline (~5 tracker periods)", () => {
+    expect(trackerResultStale(TRACKER_STALL_DEADLINE_MS + 1)).toBe(true);
+  });
+  it("custom deadline is honored (param'd for the rig)", () => {
+    expect(trackerResultStale(90, 80)).toBe(true);
+    expect(trackerResultStale(70, 80)).toBe(false);
+  });
+  it("a corrupt clock reads as stalled (hold, never steer)", () => {
+    expect(trackerResultStale(-1)).toBe(true);
+    expect(trackerResultStale(NaN)).toBe(true);
   });
 });

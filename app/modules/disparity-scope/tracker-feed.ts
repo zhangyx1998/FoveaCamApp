@@ -65,3 +65,22 @@ export async function consumeTracker(
     // Iterator closed (release/teardown) — normal exit.
   }
 }
+
+/** Deadline for the tracker-stall WATCHDOG (mirror-flicker addendum R3):
+ *  ~5 tracker periods at the ~30 fps floor. The count-based lost tolerance
+ *  above only covers DELIVERED misses — a stalled source (wedged tracker
+ *  thread, stalled camera pipe, dropped kcf→imm link mid-swap) delivers
+ *  NOTHING, so `trackerActive` froze true and rebases kept feed-forward on
+ *  while the predictor coasted. Param'd for the rig. */
+export const TRACKER_STALL_DEADLINE_MS = 150;
+
+/** True when no tracker result has arrived within the deadline — the session
+ *  treats it exactly like `onLost` (the match-staleness precedent's shape:
+ *  a pure predicate, wiring in the session). Corrupt clock ⇒ stalled. */
+export function trackerResultStale(
+  ageMs: number,
+  deadlineMs = TRACKER_STALL_DEADLINE_MS,
+): boolean {
+  if (!Number.isFinite(ageMs) || ageMs < 0) return true;
+  return ageMs > deadlineMs;
+}

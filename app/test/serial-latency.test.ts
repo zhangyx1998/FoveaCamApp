@@ -11,8 +11,11 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  clampLookaheadMs,
   currentAppliedLookahead,
+  MAX_TOTAL_LOOKAHEAD_MS,
   publishAppliedLookahead,
+  RTT_SAMPLE_CEILING_MS,
   SerialLatencyEstimator,
   SERIAL_LATENCY_EMA_ALPHA,
 } from "@orchestrator/serial-latency";
@@ -63,5 +66,32 @@ describe("applied-lookahead bus", () => {
     expect(currentAppliedLookahead()).toBe(14.5);
     publishAppliedLookahead(null); // predictor session gone
     expect(currentAppliedLookahead()).toBeNull();
+  });
+
+});
+
+// ---- mirror-flicker addendum R4 (docs/dev/mirror-flicker-2026-07-12.md) -------
+describe("R4 lookahead guards", () => {
+  it("discards RTT samples above the transport-hiccup ceiling", () => {
+    const e = new SerialLatencyEstimator();
+    e.push(6);
+    e.push(RTT_SAMPLE_CEILING_MS + 1); // a USB re-enumeration blip — ignored
+    e.push(10_000);
+    expect(e.latencyMs).toBeCloseTo(3, 9); // untouched by the hiccups
+    // Boundary: exactly the ceiling is still a valid sample.
+    const f = new SerialLatencyEstimator();
+    f.push(RTT_SAMPLE_CEILING_MS);
+    expect(f.latencyMs).toBeCloseTo(RTT_SAMPLE_CEILING_MS / 2, 9);
+  });
+
+  it("clamps the TOTAL applied lookahead to the documented cap", () => {
+    expect(clampLookaheadMs(12.5)).toBe(12.5); // under: passthrough
+    expect(clampLookaheadMs(MAX_TOTAL_LOOKAHEAD_MS)).toBe(MAX_TOTAL_LOOKAHEAD_MS);
+    expect(clampLookaheadMs(180)).toBe(MAX_TOTAL_LOOKAHEAD_MS); // congestion spiral capped
+    expect(clampLookaheadMs(NaN)).toBe(0); // never poison the predictor delay
+  });
+
+  it("the cap is the ruled 50 ms", () => {
+    expect(MAX_TOTAL_LOOKAHEAD_MS).toBe(50);
   });
 });
