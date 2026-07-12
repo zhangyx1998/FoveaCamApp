@@ -127,6 +127,53 @@ If corrections stop applying, check **Min Match Score** against the live match
 quality: when the score drops below it the loop holds rather than trusting a bad
 match. A steady scene should hold steady Vergence and Depth numbers.
 
+### Capture mode: trigger sync
+
+The **Capture Mode** group at the bottom of the Parameters column selects how
+the two foveas capture frames:
+
+- **Free-run** (the default) — each fovea streams at its own configured frame
+  rate, and the loop pairs each new match with the freshest result from the
+  other eye, within a staleness bound.
+- **Trigger sync** — both foveas expose **simultaneously**, each pair off one
+  hardware trigger pulse, so every measurement is a true stereo pair at a
+  uniform rate. The rate derives from the fovea pair's exposure — the same
+  budget the **Trigger Budget** row in
+  [Manage Cameras](./manage-cameras.md#fovea-pair) reads out. While the
+  trigger is engaged the per-camera **Frame Rate** setting has no effect (the
+  trigger decides when frames happen); to raise the rate, shorten the pair's
+  exposure. The wide camera always free-runs.
+
+The selector is **intent**: it remembers what you asked for (persisted), and
+the app engages the trigger when the preconditions permit — and keeps trying
+without further action from you. While intent is on but not yet engaged the
+selector's border tints to the warning color, and the **Status** line under it
+always tells you where things stand:
+
+- **engaged · measuring…** — the trigger just engaged; the first rate
+  measurement is still maturing.
+- **≈ 12.5 Hz · pulse 5.0 ms** — engaged, showing the live trigger rate and
+  pulse width (hover for the frame/reject/timeout counters).
+- **free-run — no controller connected** (or **free-run — controller firmware
+  is not v2-capable (CMD_FRAME unavailable)**) — waiting: the cameras are
+  still free-running, and the text names why.
+
+Flipping the selector before the controller connects — or a controller detach
+mid-session — needs no re-toggle; the mode engages (or re-engages) by itself
+once it can. If the firmware predates v2 the mode waits indefinitely — flash
+v2 firmware, or flip back to **Free-run** to clear the notice.
+
+While engaged, a transient **pair skew** status word means an L/R pair
+straddled two trigger slots and was discarded; persistent skew shows up as
+rejects and timeouts in the Status hover.
+
+Prefer **Trigger sync** for depth accuracy on moving targets and a uniform
+control cadence: simultaneous exposures remove the left/right timing skew that
+a moving target would otherwise turn into false disparity — note the paired
+rate is usually lower than free-run's. Prefer **Free-run** when you want each
+fovea's maximum frame rate. *This feature is code-complete but not yet
+verified on hardware.*
+
 ### Auto-tuning the gains
 
 The **Auto-Tune** group (in the Tracker column) can derive the PID gains

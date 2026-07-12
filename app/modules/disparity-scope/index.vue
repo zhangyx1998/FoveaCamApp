@@ -386,6 +386,43 @@ const startTune = (stage: "relay" | "full") =>
   session.call("autotune", { stage });
 const abortTune = () => session.call("autotuneAbort", undefined);
 
+// --- trigger-sync capture (spec §trigger-sync) ------------------------------
+// `state.trigger_sync` is USER INTENT — a plain state binding (the `view` /
+// `tracker_type` pattern; the server never refuses the write). Engagement is
+// the session's: `telemetry.trigger` is non-null exactly while engaged, and
+// `trigger_blocked` names why it's still waiting.
+const CAPTURE_TITLE =
+  "Trigger sync exposes both foveas simultaneously off one hardware trigger " +
+  "pulse, paced by the fovea pair's exposure budget — every measurement is a " +
+  "true stereo pair at a uniform rate. Free-run lets each camera stream at " +
+  "its own configured rate. The paired rate is usually lower than free-run, " +
+  "and the per-camera Frame Rate setting no longer applies — exposure sets " +
+  "the pace.";
+// Intent ≠ effect while waiting: the select tints warn and the status line
+// says the frames are STILL free-running (plus why).
+const capturePending = computed(
+  () => state.trigger_sync && telemetry.trigger === null,
+);
+const captureStatus = computed<{ text: string; tone: string; title?: string }>(
+  () => {
+    if (!state.trigger_sync) return { text: "free-run", tone: "muted" };
+    const t = telemetry.trigger;
+    if (t) {
+      const title = `${t.frames} frames, ${t.rejects} rejects, ${t.timeouts} timeouts`;
+      // hz null = the ≥1 s measurement window hasn't matured yet.
+      return t.hz === null
+        ? { text: "engaged · measuring…", tone: "", title }
+        : {
+            text: `≈ ${t.hz.toFixed(1)} Hz · pulse ${t.pulseMs.toFixed(1)} ms`,
+            tone: "",
+            title,
+          };
+    }
+    const reason = telemetry.trigger_blocked ?? "waiting to engage";
+    return { text: `free-run — ${reason}`, tone: "warn", title: reason };
+  },
+);
+
 // Synthesize down/move/up phases from StreamView's plain (un-phased) mouse stream.
 let wasDown = false;
 let lastP: Point2d = { x: 0, y: 0 };
@@ -585,6 +622,27 @@ function onCursor(c: (Point2d & Size & { buttons: number }) | null): void {
             <input type="number" min="0" step="0.1" v-model.number="state.zoom" />
           </span>
         </label>
+        <h4><span>Capture Mode</span></h4>
+        <!-- Intent select — ALWAYS enabled (the session gates engagement) —
+             plus an always-rendered Status row: engaged rate, blocked reason
+             (warn), or muted free-run. Text swaps only; the line never
+             appears/disappears (layout-stable). While intent is on but not
+             engaged the select itself tints warn (intent ≠ effect cue). -->
+        <label class="entry" :title="CAPTURE_TITLE">
+          <span>Mode</span>
+          <select v-model="state.trigger_sync" :class="{ pending: capturePending }">
+            <option :value="false">Free-run</option>
+            <option :value="true">Trigger sync</option>
+          </select>
+        </label>
+        <div class="entry">
+          <span>Status</span>
+          <span
+            class="capture-status"
+            :class="captureStatus.tone"
+            :title="captureStatus.title"
+          >{{ captureStatus.text }}</span>
+        </div>
       </div>
       <!-- Columns 2-4: per-DOF gain PIDs (Pan / Depth / Vertical) -->
       <div class="options" v-for="g in gainGroups" :key="g.key">
@@ -890,6 +948,34 @@ function onCursor(c: (Point2d & Size & { buttons: number }) | null): void {
 
     input[type="checkbox"] {
       margin: 0;
+    }
+
+    select {
+      font: inherit;
+      color: inherit;
+      background: var(--tint-1);
+      border: 1px solid var(--tint-3);
+      border-radius: 4px;
+      padding: 0.1em 0.4em;
+      cursor: pointer;
+
+      // Intent on, not engaged — the control itself shows intent ≠ effect.
+      &.pending {
+        border-color: var(--warn);
+      }
+    }
+
+    .capture-status {
+      text-align: right;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      &.muted {
+        color: var(--text-muted);
+      }
+      &.warn {
+        color: var(--warn);
+      }
     }
 
     .kernel-size {
