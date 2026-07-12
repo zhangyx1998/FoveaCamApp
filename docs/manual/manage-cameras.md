@@ -6,19 +6,23 @@ Manage Cameras is the utility where you set up the rig's cameras: see what is co
 
 ## What you see
 
-Open **Manage Cameras** from the Welcome launcher (Utilities) or the **Apps** menu. The window shows one column per connected camera, side by side. Each column has a live preview at the top and, below it, the camera's controls. Cameras are discovered automatically when the app opens; the previews and readouts refresh continuously (about once a second).
+Open **Manage Cameras** from the Welcome launcher (Utilities) or the **Apps** menu. The window shows one column per connected camera, side by side. Each column has a live preview at the top and, below it, the camera's controls in compact groups: each group is a small uppercase header row with the group's name on the left and its mode dropdown (or selector) on the right, and the group's slider directly below — no boxes around anything.
 
 If a camera is listed but held by another process, the app shows an error — **Camera <serial> is in use by another process.** Make sure no other app or tool is holding that camera, then reopen Manage Cameras to rescan.
 
-Each control has a live readout next to its label, and its slider is disabled whenever the corresponding "auto" mode is on, so you always edit the value that is actually in effect.
+Each slider has a live readout on its right, and the slider is disabled (dimmed) whenever the corresponding "auto" mode is on, so you always edit the value that is actually in effect. While you drag, the knob follows your hand; the readout settles on the value the camera actually applied (the camera may clamp or quantize slightly).
+
+**Click-to-type.** On any manual slider, click the readout value itself: it turns into a small input in the same spot. Type an exact number in the readout's units (FPS, ms, or dB) and press **Enter** (or click away) to apply; **Esc** cancels.
+
+**Snap points.** Some sliders show small tick marks at their edges. While dragging with the mouse, the knob snaps exactly onto a tick when you get close (within about 0.5% of the slider's width); keyboard arrows are never snapped, so you can still fine-step past a tick.
 
 ## Controls
 
 Every camera column offers the following, from top to bottom. Sliders that a given camera does not support are simply hidden.
 
-### Role Assignment
+### Role
 
-The **Role Assignment** dropdown tells the rest of the app what this camera is:
+The **Role** dropdown (in the group's header row) tells the rest of the app what this camera is:
 
 - **[ NONE ]** — unassigned.
 - **Fovea Left** — the left fovea camera.
@@ -33,23 +37,27 @@ When a camera exposes format options, the **Pixel Format** dropdown lets you cho
 
 ### Frame Rate
 
-The **Frame Rate** fieldset has a mode dropdown — **Manual** or **Auto** — and a slider. In **Manual** mode the slider sets the frame rate (with the live value shown beside it); in **Auto** the camera free-runs and the slider is disabled.
+The **Frame Rate** group has a mode dropdown — **Manual** or **Auto** — and a slider. In **Manual** mode the slider sets the frame rate (with the live value shown beside it); in **Auto** the camera free-runs and the slider is disabled.
+
+The slider carries snap ticks at **50, 60, 100, and 120 FPS** (those within the camera's range), so the common video and anti-flicker rates land exactly.
 
 ### Exposure
 
-The **Exposure** fieldset has a mode dropdown — **Manual**, **Auto (once)**, or **Auto (cont.)** — and a slider (scaled logarithmically, in microseconds). The slider is active only in **Manual**; the two auto modes let the camera set exposure itself (once, or continuously).
+The **Exposure** group has a mode dropdown — **Manual**, **Auto (once)**, or **Auto (cont.)** — and a logarithmic slider (readout in ms). The slider is active only in **Manual**; the two auto modes let the camera set exposure itself (once, or continuously).
+
+Snap ticks sit at the anti-flicker exposures — **1/50 s (20 ms), 1/60 s (≈16.67 ms), 1/100 s (10 ms), 1/120 s (≈8.33 ms)** — and at each round decade (0.1 ms, 1 ms, 10 ms, …) inside the camera's range. Exposing for exactly one mains half-period is what kills the rolling brightness bands under 50/60 Hz artificial light, and the ticks make those values land precisely. Click-to-type takes the value in **milliseconds**.
 
 ### Gain
 
-The **Gain** fieldset works the same way: **Manual** / **Auto (once)** / **Auto (cont.)** and a slider (in dB), active only in **Manual**.
+The **Gain** group works the same way: **Manual** / **Auto (once)** / **Auto (cont.)** and a slider (in dB), active only in **Manual**.
 
 ### Black Level
 
-Where supported, the **Black Level** fieldset offers the same **Manual** / **Auto (once)** / **Auto (cont.)** modes and a slider.
+Where supported, the **Black Level** group offers the same **Manual** / **Auto (once)** / **Auto (cont.)** modes and a slider.
 
 ### Reset Config
 
-**Reset Config** returns the camera to automatic defaults — frame rate back to auto, each auto control set to run once, the role cleared — and erases that camera's saved configuration.
+The red-outlined **Reset Config** button at the bottom of the column returns the camera to automatic defaults — frame rate back to auto, each auto control set to run once, the role cleared — and erases that camera's saved configuration.
 
 ## Typical tasks
 
@@ -61,15 +69,21 @@ Where supported, the **Black Level** fieldset offers the same **Manual** / **Aut
 
 ### To assign camera roles
 
-1. In each camera's column, open the **Role Assignment** dropdown.
+1. In each camera's column, open the **Role** dropdown.
 2. Choose **Fovea Left**, **Wide Angle**, or **Fovea Right** to match the physical camera.
 3. Give the remaining cameras their roles. The choice is saved immediately and reused by the other apps.
 
 ### To tune exposure, gain, or frame rate
 
-1. Set the control's mode dropdown to **Manual**.
-2. Drag the slider until the preview and readout look right.
+1. Set the group's mode dropdown to **Manual**.
+2. Drag the slider until the preview and readout look right, or click the readout and type an exact value.
 3. Repeat for other controls. Values are saved as you change them.
+
+### To eliminate light flicker
+
+1. Set **Exposure** to **Manual**.
+2. Drag the slider onto the tick matching your mains frequency: **20 ms (1/50 s)** or **16.67 ms (1/60 s)** for full rejection, **10 ms (1/100 s)** or **8.33 ms (1/120 s)** if you need a shorter exposure. The knob snaps onto the tick exactly.
+3. If the frame rate also beats against the lighting, set **Frame Rate** to **Manual** and snap it to 50/60/100/120 FPS.
 
 ### To read full sensor bit depth
 
