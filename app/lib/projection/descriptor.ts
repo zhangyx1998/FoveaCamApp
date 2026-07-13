@@ -11,16 +11,31 @@
 // window. Renderer- and main-safe (pure data + JSON); no Vue, no DOM.
 // spec: docs/spec/projection.md#descriptor
 
-/** Codec schema version. Bump on an incompatible shape change; `parsePane`
- *  rejects any other version (forward-incompatible by design — an old window
- *  must not misread a newer descriptor). */
-export const PANE_CODEC_VERSION = 1 as const;
+/** Codec schema version. Bump on an incompatible shape change. The bump to 2
+ *  ADDED the `viewer` source kind — a purely additive change: a v1 document's
+ *  `frame`/`pipe` shapes are unchanged, so parsing ACCEPTS any version in
+ *  `[1, PANE_CODEC_VERSION]` (`acceptsCodecVersion`). Still forward-incompatible
+ *  by design — an OLD (v1-only) window must not misread a NEWER descriptor, and
+ *  a future `> PANE_CODEC_VERSION` document is rejected here for the same reason. */
+export const PANE_CODEC_VERSION = 2 as const;
+
+/** Accept a serialized codec version: any known version up to the current one
+ *  (additive kinds only, so an older document still decodes cleanly). */
+function acceptsCodecVersion(v: unknown): boolean {
+  return typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= PANE_CODEC_VERSION;
+}
 
 /** A Channel frame source — the classic projection path (passive `useSession`). */
 export type FramePaneSource = { kind: "frame"; session: string; frame: string };
 /** An advertised SHM pipe source — `usePipeFrame` over the pipes session. */
 export type PipePaneSource = { kind: "pipe"; id: string };
-export type PaneSource = FramePaneSource | PipePaneSource;
+/** A viewer TILE mirror source (viewer-tiles-split-and-project.md): the viewer
+ *  re-broadcasts the Mat a tile currently displays over a `BroadcastChannel`,
+ *  keyed by (`recording`, `tileKey`). `tileKey` is the viewer's stable per-tile
+ *  key — a single channel name, or `pair:<base>` for a collapsed 3D tile — so
+ *  the broadcast key tracks tile identity across scrub/reorder. */
+export type ViewerPaneSource = { kind: "viewer"; recording: string; tileKey: string };
+export type PaneSource = FramePaneSource | PipePaneSource | ViewerPaneSource;
 
 /** One projectable pane: a stable id (unique within a window), its bound
  *  source, and optional presentation hints carried across a drag/reload. */
@@ -75,6 +90,14 @@ export function parsePaneSource(v: unknown): PaneSource | null {
     if (typeof v.id === "string" && v.id) return { kind: "pipe", id: v.id };
     return null;
   }
+  if (v.kind === "viewer") {
+    if (
+      typeof v.recording === "string" && v.recording &&
+      typeof v.tileKey === "string" && v.tileKey
+    )
+      return { kind: "viewer", recording: v.recording, tileKey: v.tileKey };
+    return null;
+  }
   return null;
 }
 
@@ -108,7 +131,7 @@ export function parsePane(s: string | null | undefined): Pane | null {
   } catch {
     return null;
   }
-  if (!isObj(doc) || doc.v !== PANE_CODEC_VERSION) return null;
+  if (!isObj(doc) || !acceptsCodecVersion(doc.v)) return null;
   return parsePaneObject(doc.pane);
 }
 
@@ -131,7 +154,7 @@ export function parseDragPayload(s: string | null | undefined): PaneDragPayload 
   } catch {
     return null;
   }
-  if (!isObj(doc) || doc.v !== PANE_CODEC_VERSION) return null;
+  if (!isObj(doc) || !acceptsCodecVersion(doc.v)) return null;
   const pane = parsePaneObject(doc.pane);
   if (!pane) return null;
   const origin = doc.origin === "app" ? "app" : "projection";
@@ -160,9 +183,10 @@ export function freshPaneId(): string {
  *  address, so an untitled pane header still names its feed. */
 export function paneLabel(pane: Pane): string {
   if (pane.title) return pane.title;
-  return pane.source.kind === "frame"
-    ? `${pane.source.session} / ${pane.source.frame}`
-    : pane.source.id;
+  const s = pane.source;
+  if (s.kind === "frame") return `${s.session} / ${s.frame}`;
+  if (s.kind === "viewer") return `${s.recording} / ${s.tileKey}`;
+  return s.id;
 }
 
 /** Structural identity of a pane's SOURCE (ignores id/title/theme) — used to
@@ -172,5 +196,7 @@ export function sameSource(a: PaneSource, b: PaneSource): boolean {
   if (a.kind === "frame" && b.kind === "frame")
     return a.session === b.session && a.frame === b.frame;
   if (a.kind === "pipe" && b.kind === "pipe") return a.id === b.id;
+  if (a.kind === "viewer" && b.kind === "viewer")
+    return a.recording === b.recording && a.tileKey === b.tileKey;
   return false;
 }

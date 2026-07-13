@@ -410,6 +410,24 @@ Proposal: `docs/proposals/viewer-timeline-touchup.md`.
 - [ ] **Ruling-7 sweep** — inline controls read as flat until hover (faint
   bg), active state slightly stronger; keyboard focus outlines intact.
 
+### Tiles split + projection (2026-07-13 — eyeball pass)
+
+Proposal: `docs/proposals/viewer-tiles-split-and-project.md`.
+
+- [ ] **Full-width split** — tiles always fill the panel width, never scroll,
+  at any track count; dividers resize adjacent tiles by percentage down to
+  the min-fraction floor; sizes persist across reopen.
+- [ ] **Instant bounce** — overscrolling the timeline snaps back immediately
+  on release (no glide); the drag itself still rubber-band-resists.
+- [ ] **Theme color** — track hue lands on the tile chip + a faint outline
+  that raises on focus/highlight; saturated/disabled/master still read.
+- [ ] **Project a tile** — the project-to-window button opens a projection
+  that MIRRORS the tile (playhead + 3D mode follow live); dragging the tile's
+  project icon into an existing projection window lands it; closing the
+  viewer (or scrubbing off the tile's span) shows "source has closed"; two
+  projections of one tile share the feed with no extra decode cost; with no
+  projection open the viewer's frame path is untouched (ref-count gate).
+
 ### Playback core
 - [ ] **Standalone** — plays with the orchestrator DOWN; survives app
   switches and orchestrator kill/restart mid-playback.

@@ -151,7 +151,27 @@ descriptor tracks refresh independently.
   live track count) that the user pointer-drags to rearrange; placeholders are
   drop targets only. `trackRole`/`trackColor` give each track a theme hue (L/C/R
   role colors via `sideOf`/wide names, else a deterministic muted cycle) applied
-  as a lane + block tint and the matching tile-slot header chip (ruling 4).
+  as a lane + block tint, the tile-slot header chip, AND — tiles-split-and-project
+  ruling 2 — a borderless-at-rest tile outline that raises to the track hue on
+  highlight/focus plus the projected pane's `theme` (below).
+- **Tile split layout** (tiles-split-and-project ruling 3): the tiles row is a
+  `display:flex` strip that ALWAYS fills 100% of the panel and NEVER scrolls. Tile
+  widths are FRACTIONS (persisted `tileSizes`, `reconcileFractions` against the
+  slot count → equal by default), rendered as `flex:<fraction> 1 0` so the tiles
+  share the row proportionally regardless of divider/padding px. A thin divider
+  handle between adjacent tiles pointer-drags to resize that pair via
+  `resizeAtDivider(sizes, i, deltaPx/rowWidthPx)` (sum preserved, each side floored
+  at `MIN_TILE_FRACTION`), live during the drag and persisted on release. The old
+  px `tileWidth` slider + horizontal scroll are retired.
+- **Projectable tiles** (tiles-split-and-project ruling 4): each REAL tile's
+  `FrameView` carries a `:projection` descriptor `{ source:{kind:"viewer",
+  recording:<basename>, tileKey}, title, theme }` so its project-to-window button /
+  drag opens a projection that MIRRORS the tile. `tileKeyOf(tile)` (== `tileKey`:
+  single→channel, pair→`pair:<base>`) is the stable broadcast/descriptor key. A
+  window-lifetime `createViewerFramePublisher(basename, …)` re-broadcasts the tile's
+  CURRENT displayed Mat (post pair-collapse / 3D resolve) on each `frameTick`, but
+  only for keys a projection has actively subscribed to (`wanted`) — ref-counted, so
+  the hot path is free with no projection open. Placeholders aren't projectable.
 - **Decode set** (ruling 3): the frame channels the engine must decode — every
   enabled channel minus the hidden side of any left-/right-only pair; sorted +
   de-duplicated for a stable wire payload.
@@ -169,10 +189,11 @@ wave): it resets to `fullViewport(duration)` when a file loads.
   keeping the cursor time fixed (span clamped to `[MIN_SPAN_NS, duration+2·bleed]`);
   plain horizontal wheel → `panSoft(deltaNs)` with rubber-band softening past
   `[−bleed, duration+bleed]`; vertical wheel falls through to native track-list
-  scroll. On gesture idle (~150 ms) an out-of-bounds viewport rAF-animates back to
-  `settleTarget` (critically-damped feel). `bleedNs`/`BLEED_FRACTION` size the
-  rubber-band allowance; the UI draws the out-of-`[0,duration]` regions as dimmed
-  hatched **bleed strips**.
+  scroll. On gesture idle (~150 ms) an out-of-bounds viewport SNAPS back to
+  `settleTarget` INSTANTLY (tiles-split-and-project ruling 1 — the rubber-band
+  RESISTANCE during the drag stays in `panSoft`; only the settle is immediate, no
+  rAF ease). `bleedNs`/`BLEED_FRACTION` size the rubber-band allowance; the UI
+  draws the out-of-`[0,duration]` regions as dimmed hatched **bleed strips**.
 - **Ruler** (ruling 3): `rulerTicks(vp, widthPx)` yields nice-number ticks
   (1/2/5·10^k ns ladder, s/ms boundaries) targeting ~a fixed px spacing, major
   ticks labeled (mm:ss.SSS adapting to the step). Rendered as an absolute overlay
@@ -240,7 +261,11 @@ hand-edited/version-skewed file can't wedge the UI. `SIDECAR_VERSION` bump ⇒ o
 added an OPTIONAL `tileOrder?: number[]` (ruling 2 — the persisted tile-slot
 permutation): absent in older files (no version bump), conservatively cleaned
 (finite non-negative integers, de-duplicated) and only surfaced when present, so
-an older sidecar still round-trips byte-identically.
+an older sidecar still round-trips byte-identically. Tiles-split-and-project
+ruling 3 adds an OPTIONAL `tileSizes?: number[]` (the persisted tile-width
+fraction list, defensively parsed) and RETIRES the px `tileWidth` from the
+written shape — old sidecars carrying `tileWidth` still parse without error (the
+field is ignored).
 
 ## Video export {#export}
 

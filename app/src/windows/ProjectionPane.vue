@@ -31,6 +31,10 @@ import { useSession, usePipeFrame, orchestratorDown } from "@lib/orchestrator/cl
 import { defineContract } from "@lib/orchestrator/protocol";
 import type { FramePayload } from "@lib/orchestrator/protocol";
 import StreamView from "../components/StreamView.vue";
+import FrameView from "../components/FrameView.vue";
+import { makeMat } from "@lib/mat";
+import type { Mat } from "core/Vision";
+import { subscribeViewerFrame, type ViewerFrameMsg } from "@src/viewer/viewer-frame-bridge";
 import { paneLabel, parseDragPayload, serializeDragPayload, type Pane } from "@lib/projection/descriptor";
 import { dropZoneAt, PANE_MIME } from "@lib/projection/dnd";
 import type { DropZone } from "@lib/projection/split-tree";
@@ -52,6 +56,9 @@ const frameContract = defineContract({
 
 // ---- Source binding (one of the two existing payload paths) ----------------
 const isPipe = computed(() => props.pane.source.kind === "pipe");
+// A viewer TILE-mirror source (viewer-tiles-split-and-project.md): frames arrive
+// over the BroadcastChannel bridge, NOT the orchestrator payload paths below.
+const isViewer = computed(() => props.pane.source.kind === "viewer");
 const frameSession =
   props.pane.source.kind === "frame"
     ? useSession(frameContract, props.pane.source.session, { passive: true })
@@ -101,11 +108,41 @@ watch(
   },
   { immediate: true },
 );
-// Channel death (orchestratorDown) freezes every pane; the grace timer then
-// waits for a new instance's frames to resume (→ rebind) before terminating.
+// Channel death (orchestratorDown) freezes every frame/pipe pane; the grace
+// timer then waits for a new instance's frames to resume (→ rebind) before
+// terminating. A viewer-mirror pane is NOT orchestrator-bound — its liveness is
+// the BroadcastChannel watchdog below, so the channel death must not freeze it.
 watch(orchestratorDown, (down) => {
-  if (down) machine.sourceLost();
+  if (down && !isViewer.value) machine.sourceLost();
 });
+
+// ---- Viewer tile-mirror path -----------------------------------------------
+// Subscribe to the viewer's re-broadcast of the tile's resolved Mat; rebuild a
+// Mat<Uint8Array> from each message and feed FrameView. Prolonged no-frame
+// drives the same freeze/cover machine (sourceLost); a fresh frame rebinds
+// (sourceReturned) — mirroring the frame/pipe lifecycle without touching it.
+const viewerMat = shallowRef<Mat<Uint8Array> | null>(null);
+// A tile that stops mirroring (viewer closed / tile removed) is treated as a
+// lost source after this quiet window (well above the viewer frameTick cadence).
+const VIEWER_NO_FRAME_MS = 2000;
+let frameWatchdog: ReturnType<typeof setTimeout> | null = null;
+function armWatchdog(): void {
+  if (frameWatchdog) clearTimeout(frameWatchdog);
+  frameWatchdog = setTimeout(() => machine.sourceLost(), VIEWER_NO_FRAME_MS);
+}
+function onViewerFrame(m: ViewerFrameMsg): void {
+  viewerMat.value = makeMat(new Uint8Array(m.buffer), [m.height, m.width], m.channels);
+  if (status.value !== "live") machine.sourceReturned();
+  armWatchdog();
+}
+if (props.pane.source.kind === "viewer") {
+  const src = props.pane.source;
+  const sub = subscribeViewerFrame(src.recording, src.tileKey, onViewerFrame);
+  onScopeDispose(() => {
+    sub.close();
+    if (frameWatchdog) clearTimeout(frameWatchdog);
+  });
+}
 
 // Idle note (frame panes only): the source session paused but the channel is
 // alive — distinct from the "source has closed" cover.
@@ -114,6 +151,16 @@ const idle = computed(
 );
 
 const title = computed(() => paneLabel(props.pane));
+
+// Is there a frame on screen? (`shown` for frame/pipe, the mirrored Mat for a
+// viewer source.) Drives the "Waiting…" notice uniformly across source kinds.
+const hasFrame = computed(() => (isViewer.value ? !!viewerMat.value : !!shown.value));
+
+// FrameView's own title bar is redundant here — the pane header already owns the
+// title, and the bar would be clipped by the body's overflow regardless. Pass
+// null to suppress it (FrameView treats null title as "no bar"; StreamView
+// relies on the same), laundered to string to satisfy the `type: String` prop.
+const noFrameTitle = null as unknown as string;
 
 // ---- Header drag (the drag surface) ----------------------------------------
 function onHeaderDragStart(e: DragEvent): void {
@@ -202,6 +249,7 @@ function onDrop(e: DragEvent): void {
       @drop="onDrop"
     >
       <StreamView
+        v-if="!isViewer"
         class="pane-stream"
         :payload="shown"
         :projectable="false"
@@ -209,8 +257,20 @@ function onDrop(e: DragEvent): void {
         width="100%"
         height="100%"
       />
+      <!-- Viewer tile mirror: the Mat rides the BroadcastChannel bridge, so it
+           feeds FrameView directly (no orchestrator payload). No project button
+           on a projection of a projection (`:title` null hides the icon bar). -->
+      <FrameView
+        v-else
+        class="pane-stream"
+        :mat="viewerMat"
+        :title="noFrameTitle"
+        :theme="pane.theme ?? 'gray'"
+        width="100%"
+        height="100%"
+      />
 
-      <div v-if="!shown" class="notice">Waiting for {{ title }}…</div>
+      <div v-if="!hasFrame" class="notice">Waiting for {{ title }}…</div>
       <div v-else-if="idle" class="idle-note">source idle — last frame</div>
 
       <!-- Frozen cover — dismissible, distinct from the idle note. -->

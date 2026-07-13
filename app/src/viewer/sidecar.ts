@@ -33,8 +33,6 @@ export interface SidecarState {
   /** Preview panel height fraction of the window (0.15..0.9); the timeline
    *  panel gets the rest (ruling 6). 0 ⇒ timeline collapsed to the drawer. */
   split: number;
-  /** Preview tile width, px (ruling 7). */
-  tileWidth: number;
   /** Last playhead position, ns file-relative (restored on reopen, ruling 8). */
   playheadNs: number;
   /** Property panel visibility (UI round 2 ruling 4). Tolerant: an absent field
@@ -49,6 +47,14 @@ export interface SidecarState {
    *  the live track count on read (`reconcileTileOrder`). Optional so the field
    *  only appears once the user has dragged tiles. */
   tileOrder?: number[];
+  /** Preview TILE SIZES (viewer-tiles-split-and-project.md ruling 3): per-slot
+   *  width FRACTIONS of the full-width tiles row (left→right, summing to ~1).
+   *  Absent (older sidecars, or before the user drags a divider) → an equal
+   *  split. Parsed CONSERVATIVELY here (finite numbers, else dropped) — sum
+   *  normalization + reconciliation against the live tile count is `tile-split`'s
+   *  job on read, NOT the parser's. Optional so the field only appears once the
+   *  user has resized a divider. Replaces the retired px `tileWidth` slider. */
+  tileSizes?: number[];
 }
 
 /** Panel-split bounds — the preview reserves a minimum height, the timeline can
@@ -57,6 +63,10 @@ export const MIN_SPLIT = 0.15;
 export const MAX_SPLIT = 0.92;
 export const COLLAPSED_SPLIT = 0; // sentinel: timeline drawer collapsed
 export const DEFAULT_SPLIT = 0.5;
+/** Retired px tile-width bounds (ruling 7 → superseded by the fraction-based
+ *  split in `tile-split.ts`, ruling 3). No longer written to the sidecar and no
+ *  longer read, but kept EXPORTED while the viewer UI lane finishes dropping the
+ *  slider (removing the exports mid-flight would break that lane's imports). */
 export const MIN_TILE_WIDTH = 120;
 export const MAX_TILE_WIDTH = 900;
 export const DEFAULT_TILE_WIDTH = 320;
@@ -72,7 +82,6 @@ export function defaultSidecar(): SidecarState {
     disabled: [],
     threeD: "disabled",
     split: DEFAULT_SPLIT,
-    tileWidth: DEFAULT_TILE_WIDTH,
     playheadNs: 0,
     panelOpen: false,
     panelWidth: DEFAULT_PANEL_WIDTH,
@@ -88,11 +97,6 @@ function clampSplit(n: unknown): number {
   if (typeof n !== "number" || !Number.isFinite(n)) return DEFAULT_SPLIT;
   if (n <= COLLAPSED_SPLIT) return COLLAPSED_SPLIT;
   return Math.min(MAX_SPLIT, Math.max(MIN_SPLIT, n));
-}
-
-function clampTileWidth(n: unknown): number {
-  if (typeof n !== "number" || !Number.isFinite(n)) return DEFAULT_TILE_WIDTH;
-  return Math.min(MAX_TILE_WIDTH, Math.max(MIN_TILE_WIDTH, Math.round(n)));
 }
 
 function cleanTracks(v: unknown): string[][] {
@@ -149,6 +153,21 @@ function cleanTileOrder(v: unknown): number[] | undefined {
   return out;
 }
 
+/** Coerce a stored tile-size list into finite numbers, or `undefined` when the
+ *  field is absent/not an array (conservative, matching `cleanTileOrder`). Only
+ *  *cleaned* here (drop non-finite entries) — the parser deliberately does NOT
+ *  normalize the sum or reconcile length against the live tile count; that's
+ *  `tile-split`'s `reconcileFractions` on read. */
+function cleanTileSizes(v: unknown): number[] | undefined {
+  if (!Array.isArray(v)) return undefined;
+  const out: number[] = [];
+  for (const n of v) {
+    if (typeof n !== "number" || !Number.isFinite(n)) continue;
+    out.push(n);
+  }
+  return out;
+}
+
 /** Coerce a parsed object that already passed the version check into a valid
  *  `SidecarState`, filling missing/invalid FIELDS from defaults. */
 function coerceValid(o: Record<string, unknown>): SidecarState {
@@ -158,7 +177,6 @@ function coerceValid(o: Record<string, unknown>): SidecarState {
     disabled: cleanDisabled(o.disabled),
     threeD: cleanThreeMode(o.threeD),
     split: clampSplit(o.split),
-    tileWidth: clampTileWidth(o.tileWidth),
     playheadNs:
       typeof o.playheadNs === "number" && Number.isFinite(o.playheadNs)
         ? Math.max(0, o.playheadNs)
@@ -171,6 +189,12 @@ function coerceValid(o: Record<string, unknown>): SidecarState {
   // older sidecar round-trips byte-identically (no spurious empty array).
   const tileOrder = cleanTileOrder(o.tileOrder);
   if (tileOrder) state.tileOrder = tileOrder;
+  // Optional: mirror `tileOrder` — only surface `tileSizes` when the file
+  // carried one, so an older sidecar round-trips byte-identically. `tileWidth`
+  // (retired) is deliberately NOT read — an old sidecar's field is tolerated
+  // (ignored) rather than parsed.
+  const tileSizes = cleanTileSizes(o.tileSizes);
+  if (tileSizes) state.tileSizes = tileSizes;
   return state;
 }
 

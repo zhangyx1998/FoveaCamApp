@@ -12,11 +12,8 @@ import {
   classifySidecar,
   DEFAULT_PANEL_WIDTH,
   DEFAULT_SPLIT,
-  DEFAULT_TILE_WIDTH,
   MAX_PANEL_WIDTH,
-  MAX_TILE_WIDTH,
   MIN_PANEL_WIDTH,
-  MIN_TILE_WIDTH,
   defaultSidecar,
   parseSidecar,
   serializeSidecar,
@@ -30,7 +27,6 @@ const sample: SidecarState = {
   disabled: ["aux"],
   threeD: "anaglyph", // GLOBAL mode (ruling 4 amendment)
   split: 0.42,
-  tileWidth: 280,
   playheadNs: 123_456,
   panelOpen: true,
   panelWidth: 340,
@@ -67,7 +63,6 @@ describe("classifySidecar", () => {
     if (load.status !== "ok") return;
     expect(load.state.tracks).toEqual([["a"]]);
     expect(load.state.split).toBe(DEFAULT_SPLIT);
-    expect(load.state.tileWidth).toBe(DEFAULT_TILE_WIDTH);
     expect(load.state.disabled).toEqual([]);
   });
 });
@@ -100,12 +95,11 @@ describe("property panel state (UI round 2 ruling 4 — tolerant read)", () => {
 });
 
 describe("field coercion / clamping", () => {
-  it("clamps tileWidth and drops malformed rows / non-string channels", () => {
+  it("drops malformed rows / non-string channels and clamps scalars", () => {
     const load = classifySidecar(
       JSON.stringify({
         v: 1,
         tracks: [["ok"], "nope", [1, "keep", null]],
-        tileWidth: 5_000,
         split: -3,
         playheadNs: -10,
         threeD: "left-only",
@@ -115,16 +109,10 @@ describe("field coercion / clamping", () => {
     expect(load.status).toBe("ok");
     if (load.status !== "ok") return;
     expect(load.state.tracks).toEqual([["ok"], ["keep"]]);
-    expect(load.state.tileWidth).toBe(MAX_TILE_WIDTH);
     expect(load.state.split).toBe(0); // <=0 clamps to the collapsed sentinel
     expect(load.state.playheadNs).toBe(0);
     expect(load.state.threeD).toBe("left-only");
     expect(load.state.disabled).toEqual(["x"]); // deduped, non-strings dropped
-  });
-
-  it("MIN_TILE_WIDTH floor holds", () => {
-    const load = classifySidecar(JSON.stringify({ v: 1, tileWidth: 1 }));
-    expect(load.status === "ok" && load.state.tileWidth).toBe(MIN_TILE_WIDTH);
   });
 });
 
@@ -186,6 +174,59 @@ describe("tile order (timeline touch-up ruling 2 — optional, conservative pars
     const withOrder: SidecarState = { ...sample, tileOrder: [1, 2, 0] };
     const load = classifySidecar(serializeSidecar(withOrder));
     expect(load.status === "ok" && load.state).toEqual(withOrder);
+  });
+});
+
+describe("tile sizes (split ruling 3 — optional, conservative parse; no sum normalization)", () => {
+  it("absent tileSizes stays absent (older sidecar round-trips unchanged)", () => {
+    const load = classifySidecar(JSON.stringify({ v: 1, tracks: [["a"]] }));
+    expect(load.status).toBe("ok");
+    if (load.status !== "ok") return;
+    expect("tileSizes" in load.state).toBe(false);
+  });
+
+  it("a present tileSizes round-trips, keeping finite entries WITHOUT renormalizing", () => {
+    const load = classifySidecar(
+      JSON.stringify({ v: 1, tracks: [["a"], ["b"]], tileSizes: [0.3, 0.7] }),
+    );
+    expect(load.status === "ok" && load.state.tileSizes).toEqual([0.3, 0.7]);
+    // Parser must NOT force sum-to-1: an off-sum list survives verbatim.
+    const off = classifySidecar(JSON.stringify({ v: 1, tileSizes: [0.2, 0.2, 0.2] }));
+    expect(off.status === "ok" && off.state.tileSizes).toEqual([0.2, 0.2, 0.2]);
+  });
+
+  it("drops non-finite entries; a non-array drops to absent", () => {
+    const dirty = classifySidecar(
+      JSON.stringify({ v: 1, tileSizes: [0.5, "x", null, 0.5] }),
+    );
+    // NaN/Infinity can't survive JSON, so exercise the finite filter via strings/null.
+    expect(dirty.status === "ok" && dirty.state.tileSizes).toEqual([0.5, 0.5]);
+    const notArr = classifySidecar(JSON.stringify({ v: 1, tileSizes: "nope" }));
+    expect(notArr.status).toBe("ok");
+    if (notArr.status !== "ok") return;
+    expect("tileSizes" in notArr.state).toBe(false);
+  });
+
+  it("serialize → classify preserves a tileSizes exactly", () => {
+    const withSizes: SidecarState = { ...sample, tileSizes: [0.25, 0.25, 0.5] };
+    const load = classifySidecar(serializeSidecar(withSizes));
+    expect(load.status === "ok" && load.state).toEqual(withSizes);
+  });
+});
+
+describe("retired tileWidth (write dropped, read tolerated)", () => {
+  it("serialized sidecar no longer carries a tileWidth key", () => {
+    expect(serializeSidecar(sample)).not.toContain("tileWidth");
+  });
+
+  it("an old sidecar's tileWidth is tolerated (ignored, never corrupts the parse)", () => {
+    const load = classifySidecar(
+      JSON.stringify({ v: 1, tracks: [["a"]], tileWidth: 320 }),
+    );
+    expect(load.status).toBe("ok");
+    if (load.status !== "ok") return;
+    // The unknown/retired field must not surface on the parsed state.
+    expect("tileWidth" in load.state).toBe(false);
   });
 });
 

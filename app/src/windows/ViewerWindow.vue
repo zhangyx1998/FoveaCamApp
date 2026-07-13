@@ -82,16 +82,19 @@ import {
   COLLAPSED_SPLIT,
   DEFAULT_PANEL_WIDTH,
   DEFAULT_SPLIT,
-  DEFAULT_TILE_WIDTH,
   MAX_PANEL_WIDTH,
   MAX_SPLIT,
-  MAX_TILE_WIDTH,
   MIN_PANEL_WIDTH,
   MIN_SPLIT,
-  MIN_TILE_WIDTH,
   type SidecarLoad,
   type SidecarState,
 } from "../viewer/sidecar";
+import {
+  equalFractions,
+  reconcileFractions,
+  resizeAtDivider,
+} from "../viewer/tile-split";
+import { createViewerFramePublisher } from "../viewer/viewer-frame-bridge";
 import { useConfigRef } from "@lib/config";
 import {
   ANAGLYPH_CHANNELS,
@@ -350,8 +353,9 @@ onUnmounted(() => {
   window.removeEventListener("message", onViewerPort);
   closeStats();
   stopPanelPoll();
+  framePub?.dispose();
+  framePub = null;
   if (playheadRaf !== null) cancelAnimationFrame(playheadRaf);
-  if (settleRaf !== null) cancelAnimationFrame(settleRaf);
   if (settleTimer) clearTimeout(settleTimer);
   tracksRO?.disconnect();
   disposeEngineDown?.();
@@ -393,7 +397,11 @@ const tileOrder = ref<number[]>([]);
 // L/R pair, chosen in the preview header — no longer per pair.
 const threeD = ref<ThreeDMode>("disabled");
 const split = ref<number>(DEFAULT_SPLIT); // preview height fraction
-const tileWidth = ref<number>(DEFAULT_TILE_WIDTH);
+// Preview tile widths (ruling 3): persisted FRACTIONS (sum 1) — the tiles row
+// always fills 100% and never scrolls. Reconciled to the live slot count on use
+// (`effectiveTileSizes`); an empty list defaults to equal fractions. Divider
+// drags between adjacent tiles rewrite this pair-wise.
+const tileSizes = ref<number[]>([]);
 // Property panel (UI round 2 ruling 4) — persisted visibility + width.
 const panelOpen = ref(false);
 const panelWidth = ref<number>(DEFAULT_PANEL_WIDTH);
@@ -426,11 +434,11 @@ function currentSidecarState(): SidecarState {
     disabled: [...disabled.value],
     threeD: threeD.value,
     split: split.value,
-    tileWidth: tileWidth.value,
     playheadNs: workerPositionNs.value,
     panelOpen: panelOpen.value,
     panelWidth: panelWidth.value,
     tileOrder: tileOrder.value,
+    tileSizes: tileSizes.value,
   };
 }
 
@@ -445,9 +453,9 @@ function initializeLayout(persistIt: boolean): void {
   tracks.value = initialLayout(blocks.value, master.value.channel);
   disabled.value = new Set();
   tileOrder.value = []; // natural track order until the user drags tiles
+  tileSizes.value = []; // equal fractions until the user drags a divider
   threeD.value = "disabled";
   split.value = DEFAULT_SPLIT;
-  tileWidth.value = DEFAULT_TILE_WIDTH;
   panelOpen.value = false;
   panelWidth.value = DEFAULT_PANEL_WIDTH;
   initialized.value = true;
@@ -475,13 +483,13 @@ function applySidecar(load: SidecarLoad): void {
     confirmReset.value = { reason: "corrupt" };
     return;
   }
-  // status === "ok": restore. threeD/disabled/split/tileWidth apply regardless.
+  // status === "ok": restore. threeD/disabled/split/tileSizes apply regardless.
   const st = load.state;
   disabled.value = new Set(st.disabled);
   tileOrder.value = st.tileOrder ? [...st.tileOrder] : [];
+  tileSizes.value = st.tileSizes ? [...st.tileSizes] : [];
   threeD.value = st.threeD; // global mode (sidecar already collapsed old maps)
   split.value = st.split;
-  tileWidth.value = st.tileWidth;
   panelOpen.value = st.panelOpen;
   panelWidth.value = st.panelWidth;
   if (layoutMismatch(st.tracks, frameChannels.value)) {
@@ -665,6 +673,18 @@ const orderedSlots = computed<TileSlot[]>(() => {
 /** How many slots actually render a view (placeholders excluded) — the header
  *  count keeps its "N views" meaning. */
 const tileViewCount = computed(() => orderedSlots.value.filter((s) => s.kind === "tile").length);
+/** Persisted tile FRACTIONS reconciled to the live slot count (ruling 3): drops
+ *  stale entries, appends missing, renormalizes to sum 1; equal fractions when
+ *  none persisted. The width source of truth for the flex row. */
+const effectiveTileSizes = computed(() =>
+  reconcileFractions(tileSizes.value, orderedSlots.value.length),
+);
+/** Per-slot `flex` shorthand: `<grow> 1 0` so grow == fraction. Dividers are
+ *  fixed-px flex items; the tiles share the REMAINING width proportionally, so
+ *  the row always fills 100% exactly regardless of divider/padding pixels. */
+function tileFlex(si: number): string {
+  return `${effectiveTileSizes.value[si] ?? equalFractions(orderedSlots.value.length)[si] ?? 1} 1 0`;
+}
 /** Stable per-slot key: real tiles key on their content, placeholders on track. */
 function slotKey(slot: TileSlot): string {
   return slot.kind === "tile" ? `t:${tileKey(slot.tile)}` : `p:${slot.track}:${slot.reason}`;
@@ -769,11 +789,52 @@ function tileMat(tile: Tile): Mat<Uint8Array> | null {
 function tileKey(tile: Tile): string {
   return tile.kind === "single" ? tile.channel : `pair:${tile.pair.base}`;
 }
+/** Stable per-tile broadcast/descriptor key (ruling 4). == `tileKey`: single →
+ *  channel name, pair → `pair:<base>`. MUST equal the projection descriptor's
+ *  `tileKey` and the frame-bridge broadcast key so a projection subscribes to
+ *  the exact tile it mirrors. */
+const tileKeyOf = tileKey;
 function tileLabel(tile: Tile): string {
   if (tile.kind === "single") return tile.channel;
   const m = tile.mode === "anaglyph" ? "3D" : tile.mode === "left-only" ? "L" : "R";
   return `${tile.pair.base} (${m})`;
 }
+
+// --- projectable tiles (ruling 4) -------------------------------------------
+// A tile can be projected to a standalone projection window; the projection
+// MIRRORS the tile by subscribing to a same-origin frame broadcast keyed by
+// (recording, tileKey). We publish a tile's CURRENT displayed Mat only while a
+// projection has actively subscribed to its key (`wanted`) — ref-counted, so
+// the hot path is untouched with no projection open. Frames ride the existing
+// `frameTick` cadence (no new timer).
+let framePub: ReturnType<typeof createViewerFramePublisher> | null = null;
+/** Post every displayed real tile whose key a projection wants, at the current
+ *  playhead. Called on each new decoded frame AND when demand changes (so a
+ *  projection opened while paused mirrors the current frame immediately). */
+function publishWantedTiles(): void {
+  if (!framePub) return;
+  for (const slot of orderedSlots.value) {
+    if (slot.kind !== "tile") continue;
+    const key = tileKeyOf(slot.tile);
+    if (!framePub.wanted(key)) continue;
+    const mat = tileMat(slot.tile);
+    if (mat) framePub.post(key, { data: mat, shape: mat.shape });
+  }
+}
+// Stand up the publisher once a file is open (recording id = `basename`). The
+// viewer window binds one path for its lifetime, so this creates once; the
+// file-change guard is defensive (dispose + rebuild on a new recording id).
+watch(
+  [file, basename],
+  () => {
+    if (file.value && !framePub)
+      framePub = createViewerFramePublisher(basename.value, publishWantedTiles);
+  },
+  { flush: "post" },
+);
+// New decoded frame → mirror it to any subscribed projection (skips instantly
+// when nothing is subscribed via `wanted`).
+watch(frameTick, publishWantedTiles);
 
 // --- stream stats popover (right-click a tile / timeline block) -------------
 // Right-click opens a compact in-window popover of stream stats. The STATIC
@@ -1106,7 +1167,6 @@ function onRulerUp(): void {
 // --- wheel: pan / zoom + spring-back settle (ruling 5) ----------------------
 const ZOOM_RATE = 0.0025; // per wheel deltaY unit (multiplicative span factor)
 let settleTimer: ReturnType<typeof setTimeout> | null = null;
-let settleRaf: number | null = null;
 function onTracksWheel(e: WheelEvent): void {
   if (durationNs.value <= 0 || !tracksEl.value) return;
   const r = tracksEl.value.getBoundingClientRect();
@@ -1129,8 +1189,11 @@ function onTracksWheel(e: WheelEvent): void {
     scheduleSettle();
   }
 }
-/** After the wheel gesture goes idle (~150 ms), animate any out-of-bounds
- *  viewport back to its legal `settleTarget` (critically-damped feel). */
+/** After the wheel gesture goes idle (~150 ms), SNAP any out-of-bounds viewport
+ *  back to its legal `settleTarget` (ruling 1: instantaneous bounce — the
+ *  rubber-band RESISTANCE during the drag stays in `panSoft`; only the settle is
+ *  instant). Idle-debounced (not synchronous per-wheel) so the snap fires once
+ *  the gesture stops rather than fighting a continuing scroll. */
 function scheduleSettle(): void {
   if (settleTimer) clearTimeout(settleTimer);
   settleTimer = setTimeout(() => {
@@ -1139,22 +1202,9 @@ function scheduleSettle(): void {
   }, 150);
 }
 function animateSettle(): void {
-  const from = viewport.value;
-  const target = settleTarget(from, durationNs.value);
-  if (from.t0 === target.t0 && from.t1 === target.t1) return; // already legal
-  const start = performance.now();
-  const DUR = 200;
-  const step = (): void => {
-    const t = Math.min(1, (performance.now() - start) / DUR);
-    const e = 1 - (1 - t) ** 3; // ease-out cubic ≈ critically damped
-    viewport.value = {
-      t0: from.t0 + (target.t0 - from.t0) * e,
-      t1: from.t1 + (target.t1 - from.t1) * e,
-    };
-    settleRaf = t < 1 ? requestAnimationFrame(step) : null;
-  };
-  if (settleRaf) cancelAnimationFrame(settleRaf);
-  settleRaf = requestAnimationFrame(step);
+  const target = settleTarget(viewport.value, durationNs.value);
+  if (viewport.value.t0 === target.t0 && viewport.value.t1 === target.t1) return; // already legal
+  viewport.value = target; // immediate snap — no rAF ease
 }
 
 // Track the `.tracks` width for the ruler (re-render ticks on resize). The
@@ -1464,11 +1514,38 @@ const previewFlex = computed(() =>
   timelineCollapsed.value ? "1 1 auto" : `0 0 ${(split.value * 100).toFixed(2)}%`,
 );
 
-// --- tile width (ruling 7) --------------------------------------------------
-function onTileWidth(e: Event): void {
-  tileWidth.value = Math.min(MAX_TILE_WIDTH, Math.max(MIN_TILE_WIDTH, Number((e.target as HTMLInputElement).value)));
+// --- tile divider resize (ruling 3) -----------------------------------------
+// A thin handle between adjacent tiles; dragging it moves the shared edge of
+// that pair (sum preserved, both floored at MIN_TILE_FRACTION). deltaFrac maps
+// px → fraction against the tiles-row width; live during the drag, persisted on
+// release. Pointer capture on the handle keeps events flowing while tile widths
+// (flex-grow) shift underneath.
+const tilesEl = ref<HTMLElement | null>(null);
+type TileDividerDrag = { index: number; pointerId: number; startX: number; startSizes: number[] };
+const tileDividerDrag = ref<TileDividerDrag | null>(null);
+function onTileDividerDown(e: PointerEvent, index: number): void {
+  if (e.button !== 0) return;
+  e.stopPropagation(); // don't let the tiles row read this as a reorder
+  (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  tileDividerDrag.value = {
+    index,
+    pointerId: e.pointerId,
+    startX: e.clientX,
+    startSizes: [...effectiveTileSizes.value],
+  };
 }
-function onTileWidthCommit(): void {
+function onTileDividerMove(e: PointerEvent): void {
+  const d = tileDividerDrag.value;
+  if (!d || e.pointerId !== d.pointerId || !tilesEl.value) return;
+  const w = tilesEl.value.clientWidth;
+  if (w <= 0) return;
+  const deltaFrac = (e.clientX - d.startX) / w;
+  tileSizes.value = resizeAtDivider(d.startSizes, d.index, deltaFrac);
+}
+function onTileDividerUp(e: PointerEvent): void {
+  const d = tileDividerDrag.value;
+  if (!d || e.pointerId !== d.pointerId) return;
+  tileDividerDrag.value = null;
   persist();
 }
 
@@ -1603,20 +1680,10 @@ function onPanelResizeUp(): void {
                 />
                 <span>show all projections</span>
               </label>
-              <label class="tilew" title="Tile width">
-                <span>tile</span>
-                <input
-                  type="range"
-                  :min="MIN_TILE_WIDTH"
-                  :max="MAX_TILE_WIDTH"
-                  :value="tileWidth"
-                  @input="onTileWidth"
-                  @change="onTileWidthCommit"
-                />
-              </label>
             </div>
           </header>
         <div
+          ref="tilesEl"
           class="tiles"
           :class="{ reordering: tileDrag && tileDrag.moved }"
           @pointermove="onTileDragMove"
@@ -1626,6 +1693,19 @@ function onPanelResizeUp(): void {
           <template v-for="(slot, si) in orderedSlots" :key="slotKey(slot)">
             <!-- Drop indicator BEFORE the slot the drag currently targets. -->
             <div v-if="tileDrag && tileDrag.moved && tileDrag.overIndex === si" class="tile-drop-indicator" />
+
+            <!-- Divider between adjacent tiles (ruling 3): drag to resize the
+                 pair. Faint at rest (borderless idiom), accent on hover; inert
+                 during a reorder so it never clashes with the drop indicator. -->
+            <div
+              v-if="si > 0"
+              class="tile-divider"
+              title="Drag to resize"
+              @pointerdown="onTileDividerDown($event, si - 1)"
+              @pointermove="onTileDividerMove"
+              @pointerup="onTileDividerUp"
+              @pointercancel="onTileDividerUp"
+            />
 
             <!-- Real tile (a track's active view). -->
             <div
@@ -1637,7 +1717,7 @@ function onPanelResizeUp(): void {
                 focused: tileFocused(slot.tile),
                 dragging: tileDrag && tileDrag.moved && tileDrag.fromIndex === si,
               }"
-              :style="{ width: tileWidth + 'px' }"
+              :style="{ flex: tileFlex(si), '--track-color': slotColor(slot) }"
               tabindex="0"
               title="Click to focus · drag the header to reorder · right-click for stream stats"
               @pointerenter="setHover(slot.tile.channels)"
@@ -1658,7 +1738,18 @@ function onPanelResizeUp(): void {
                 </span>
               </div>
               <div class="tile-body">
-                <FrameView v-if="tileMat(slot.tile)" :mat="tileMat(slot.tile)!" width="100%" height="100%">
+                <FrameView
+                  v-if="tileMat(slot.tile)"
+                  :mat="tileMat(slot.tile)!"
+                  width="100%"
+                  height="100%"
+                  :theme="slotColor(slot)"
+                  :projection="{
+                    source: { kind: 'viewer', recording: basename, tileKey: tileKeyOf(slot.tile) },
+                    title: tileLabel(slot.tile),
+                    theme: slotColor(slot),
+                  }"
+                >
                   <template v-if="slot.tile.kind === 'single'">
                     <g v-for="box in overlayBoxesFor(slot.tile.channel)" :key="box.topic">
                       <rect
@@ -1711,7 +1802,7 @@ function onPanelResizeUp(): void {
               v-else
               :ref="(el) => registerTileEl(el as Element | null, si)"
               class="tile placeholder"
-              :style="{ width: tileWidth + 'px' }"
+              :style="{ flex: tileFlex(si), '--track-color': slotColor(slot) }"
             >
               <div class="tile-head" :style="{ '--track-color': slotColor(slot) }">
                 <span class="chip" />
@@ -2119,15 +2210,6 @@ function onPanelResizeUp(): void {
       align-items: center;
       gap: 1.4ch;
     }
-    .tilew {
-      display: flex;
-      align-items: center;
-      gap: 0.6ch;
-      color: var(--text-faint);
-    }
-    .tilew input {
-      width: 12ch;
-    }
     .proj-toggle {
       display: flex;
       align-items: center;
@@ -2162,14 +2244,38 @@ function onPanelResizeUp(): void {
     flex-grow: 1;
     display: flex;
     flex-direction: row;
-    gap: 0.5em;
+    width: 100%;
     padding: 0.5em;
-    overflow-x: auto;
-    overflow-y: hidden;
+    // Ruling 3: the tiles row ALWAYS fills 100% and never scrolls — widths are
+    // flex-grow fractions, dividers carve the pairs.
+    overflow: hidden;
     min-height: 0;
     // While a tile reorder is in progress, the grabbed header reads as grabbing.
     &.reordering .tile.dragging {
       opacity: 0.55;
+    }
+    // Dividers are inert mid-reorder so they never clash with the drop indicator.
+    &.reordering .tile-divider {
+      pointer-events: none;
+    }
+  }
+
+  // Divider handle between two adjacent tiles (ruling 3): a few px, faint at
+  // rest per the borderless idiom, accent + grab cursor on hover/drag.
+  .tile-divider {
+    flex: 0 0 6px;
+    align-self: stretch;
+    margin: 0.2em 0;
+    border-radius: 3px;
+    cursor: col-resize;
+    touch-action: none;
+    background: var(--tint-1);
+    opacity: 0.4;
+    transition: none; // SNAP feedback, no animated width
+    &:hover,
+    &:active {
+      background: var(--accent-bright);
+      opacity: 1;
     }
   }
 
@@ -2184,25 +2290,28 @@ function onPanelResizeUp(): void {
   }
 
   .tile {
-    // Fixed width (ruling 7) — reserves space; content changes never reflow
-    // neighbors (layout stability).
-    flex: 0 0 auto;
+    // Width = flex-grow fraction (ruling 3); the flex shorthand is bound inline
+    // (`tileFlex`). min-width:0 lets a tile shrink below its content on resize.
+    min-width: 0;
     display: flex;
     flex-direction: column;
     min-height: 0;
     background: var(--bg-canvas);
-    border: 1px solid var(--tint-2);
+    // Borderless at rest (ruling 2 / ruling-7 idiom): a faint track-hue outline
+    // that RAISES on highlight/focus rather than a loud constant border.
+    border: 1px solid transparent;
     border-radius: 4px;
     overflow: hidden;
     outline: none;
-    // Cross-highlight (ruling 5): box-shadow ring — visible, never reflows.
-    // SNAP: instant on/off, no transition on this feedback path.
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--track-color, var(--tint-2)) 22%, transparent);
+    // Cross-highlight (ruling 5): track-hue box-shadow ring — visible, never
+    // reflows. SNAP: instant on/off, no transition on this feedback path.
     &.highlight {
-      box-shadow: 0 0 0 2px var(--accent-bright);
+      box-shadow: 0 0 0 2px var(--track-color, var(--accent-bright));
     }
-    // Focused tile gets the stronger accent outline (matches focused blocks).
+    // Focused tile gets the stronger track-hue outline (matches focused blocks).
     &.focused {
-      outline: 2px solid var(--accent);
+      outline: 2px solid var(--track-color, var(--accent));
       outline-offset: -2px;
     }
     // Placeholder slot (empty/disabled/pair-collapsed track): subdued, no video.

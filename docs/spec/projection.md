@@ -54,14 +54,23 @@ dead window auto-closes promptly. Pure + timer-injectable (unit-tests under fake
 Source: `app/lib/projection/descriptor.ts`
 (`docs/proposals/projection-split-view.md` §"Sources")
 
-A projectable pane binds ONE of two source kinds: `{kind:"frame", session, frame}` (a
-Channel frame ref, driven passively by `useSession().frame(name)`) or `{kind:"pipe", id}`
+A projectable pane binds ONE of three source kinds: `{kind:"frame", session, frame}` (a
+Channel frame ref, driven passively by `useSession().frame(name)`), `{kind:"pipe", id}`
 (an advertised SHM pipe, driven by `usePipeFrame(id)`, epoch-aware — this is what makes raw
-camera previews/undistorts projectable). This module is the VERSIONED serialize/parse
-boundary for those descriptors (a single pane for the DnD payload; the whole layout tree
-via split-tree.ts's `parsePane`). Every decode is defensive — a malformed / future-version
-string parses to `null` rather than throwing, so a stale URL or foreign drag never crashes a
-window. Renderer- and main-safe (pure data + JSON); no Vue, no DOM.
+camera previews/undistorts projectable), or `{kind:"viewer", recording, tileKey}` (a fcap
+VIEWER tile — the viewer decodes in its own window, so there is no live session/pipe: the
+pane MIRRORS the tile via a ref-counted same-origin `BroadcastChannel`
+(`app/src/viewer/viewer-frame-bridge.ts`, `VIEWER_FRAME_CHANNEL`). The viewer re-broadcasts
+the Mat a tile currently displays — playhead/3D already resolved — only for `tileKey`s a
+projection has subscribed to; posts stop → the pane's freeze machine shows "source has
+closed". `tileKey` is the tile identity: a channel name, or `pair:<base>` for a 3D pair.
+See `docs/proposals/viewer-tiles-split-and-project.md`). This module is the VERSIONED
+serialize/parse boundary for those descriptors (a single pane for the DnD payload; the whole
+layout tree via split-tree.ts's `parsePane`) — `PANE_CODEC_VERSION` is 2 (v1 frame/pipe
+descriptors still parse; the viewer kind is additive). Every decode is defensive — a
+malformed / future-version string parses to `null` rather than throwing, so a stale URL or
+foreign drag never crashes a window. Renderer- and main-safe (pure data + JSON); no Vue, no
+DOM.
 
 ## Implicit projection button {#implicit-button}
 

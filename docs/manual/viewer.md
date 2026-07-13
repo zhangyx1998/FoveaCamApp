@@ -29,15 +29,16 @@ The title bar shows the file name and a compact path (your home folder shown as 
 
 The upper panel shows one **tile** per enabled stream whose block spans the current playhead time. Tiles are drawn in **Z-order** — the master track first, then top-to-bottom through the timeline tracks — so the arrangement of your tracks controls which view sits where.
 
-The panel header shows the number of views, an optional **no wide designation** warning (see below), and a **tile** width slider. (The **3D View** control now lives on the transport bar — see [Playback controls](#playback-controls).)
+The panel header shows the number of views and an optional **no wide designation** warning (see below). (The **3D View** control now lives on the transport bar — see [Playback controls](#playback-controls).)
 
 There is **one tile slot per track**. A slot with no view right now — an empty or disabled track, or the second track of a stereo pair that is merged into one tile — shows a subdued **placeholder** naming the track and why it is empty, so the tile row always lines up with the tracks below.
 
 - If a tile's stream has no decoded frame yet at the playhead, the tile shows **no frame** until you play or scrub onto a frame.
 - If nothing is enabled under the playhead, the tiles are all placeholders.
 - Click a tile to **focus** its stream (it gets an outline); its details appear in the [Property panel](#property-panel) and it can be toggled with **`v`**.
-- Hovering or focusing a tile **highlights** its block in the timeline, and hovering or focusing a block highlights its tile — so you can always see which tile matches which track. Each tile's header also carries a small **color chip** matching its track's color in the timeline.
+- Hovering or focusing a tile **highlights** its block in the timeline, and hovering or focusing a block highlights its tile — so you can always see which tile matches which track. Tiles are borderless at rest; on highlight or focus the outline raises in the track's color. Each tile's header also carries a small **color chip** matching its track's color in the timeline.
 - **Rearrange tiles** by dragging a tile's **header** left or right; a drop line shows where it will land. The order is saved in the layout sidecar. (Because there is one slot per track, this reorders the previews without touching the tracks themselves.)
+- **Project a tile to its own window.** Each stream tile has the **project-to-window** button (top-right of the tile, the same one every live view has) — click it to open a projection window that **mirrors** that tile, or drag it onto an existing projection window. The projection follows the tile exactly — its playhead, its 3D mode, everything — because it shows the very frame the tile is showing. Close the tile's recording (or the tile stops having a frame) and the projection freezes, then reports the source has closed.
 
 When you open a recording, the playhead starts on the **first recorded frame** (the earliest block), not at time zero — so you always see content immediately instead of a blank panel. If you had a saved playhead position from last time, that is restored instead.
 
@@ -45,9 +46,9 @@ When you open a recording, the playhead starts on the **first recorded frame** (
 
 If the recorder marked a wide/center stream, it becomes the **master** and its tile leads. If none was designated, the Viewer uses the first stream as master and shows a **no wide designation** hint in the header — playback is unaffected, only the ordering is a best guess.
 
-### Tile width
+### Tile widths
 
-Drag the **tile** slider in the header to make all tiles wider or narrower. Tiles keep a fixed width and scroll horizontally rather than reflowing, so changing frame content never shifts your layout.
+The tiles always fill the width of the panel in one row — they never scroll sideways. To make one tile wider (and its neighbor narrower), **drag the thin divider** between them; the pair resizes and the rest stay put. Each tile keeps a minimum width so nothing collapses to nothing. Your sizes are saved in the layout sidecar.
 
 ### 3D View (stereo pairs)
 
@@ -169,7 +170,7 @@ Use the **collapse chevron** on the right of the bar to fold the timeline away: 
 
 ## Layout persistence
 
-Everything about how you arranged the Viewer — track layout, tile order, disabled streams, 3D View modes, the preview/timeline split, tile width, and the playhead position — is saved to a **layout sidecar** (`<recording>.fcap.ui.json`) right next to the recording. Reopen the file later and your arrangement comes back. The recording file itself is never touched.
+Everything about how you arranged the Viewer — track layout, tile order, disabled streams, 3D View modes, the preview/timeline split, tile sizes, and the playhead position — is saved to a **layout sidecar** (`<recording>.fcap.ui.json`) right next to the recording. Reopen the file later and your arrangement comes back. The recording file itself is never touched.
 
 Two situations prompt you before anything is overwritten:
 
