@@ -92,11 +92,30 @@ watch(() => session.telemetry.capture_meta, () => void refreshPreviews(), {
   immediate: true,
 });
 
+// Flattened tiles: an indexed (raster) resource fans out to one tile per
+// set-point in ASCENDING set-point order, each titled to match its on-disk
+// path (`left/03`, same pad rule as capture-node save()). Resource GROUPS keep
+// the newest-first ordering; the fan-out is ascending within a group.
 const image_entries = computed(() =>
   [...entries()]
     .map(({ name }) => [name, previews.value[name] ?? null] as const)
     .filter(([, image]) => !isEmpty(image))
-    .toReversed(),
+    .toReversed()
+    .flatMap(([name, image]) => {
+      if (!Array.isArray(image)) return [{ key: name, title: name, image }];
+      const pad = Math.max(2, image.length.toString().length);
+      return image.flatMap((payload, i) =>
+        isEmpty(payload)
+          ? []
+          : [
+              {
+                key: `${name}:${i}`,
+                title: `${name}/${i.toString().padStart(pad, "0")}`,
+                image: payload,
+              },
+            ],
+      );
+    }),
 );
 // ── END DATA-SOURCE SEAM ───────────────────────────────────────────────────
 
@@ -168,10 +187,10 @@ function save(path: string, img_format: string) {
       <template #right>
         <div class="frame-container">
           <PreviewImage
-            v-for="[name, image] of image_entries"
-            :key="name"
-            :name="name"
-            :image="image"
+            v-for="tile of image_entries"
+            :key="tile.key"
+            :name="tile.title"
+            :image="tile.image"
           />
         </div>
       </template>
