@@ -167,7 +167,14 @@ async function paint(img: ImageData): Promise<void> {
     // A newer frame finished decoding (or the frame changed) while we awaited.
     if (seq !== paintSeq || image.value !== img) return bitmap.close();
     const ctx = canvas.value?.getContext("2d");
-    if (ctx) ctx.drawImage(bitmap, 0, 0);
+    if (ctx) {
+      // REPLACE semantics, matching putImageData: the default source-over
+      // drawImage BLENDS, so a frame's transparent pixels pass the previous
+      // frame's leftovers through instead of showing the element behind the
+      // canvas (rig-caught 2026-07-12 on alpha-carrying views).
+      ctx.globalCompositeOperation = "copy";
+      ctx.drawImage(bitmap, 0, 0);
+    }
     bitmap.close(); // release the GPU/decoder copy eagerly
   } catch {
     // Bitmap creation unavailable/failed — synchronous fallback.
