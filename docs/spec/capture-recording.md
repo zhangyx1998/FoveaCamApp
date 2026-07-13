@@ -71,7 +71,9 @@ sees which port stalls before the timeout.
 (one entry per shot, in call order); an unindexed resource is a single entry that
 replaces. `manifestOf` builds the resource → metadata manifest the renderer reads
 (`capture_meta`), preserving insertion order (wide, fovea, center, left, right,
-diff).
+diff). `wide` rides the reset shot only and carries the FULL undistorted center
+frame as its image (plus the wide intrinsics meta); `center` is the per-shot
+crop around the target.
 
 ### Degenerate single-stream mode
 

@@ -256,7 +256,8 @@ export interface CaptureShot {
   /** Center crop rect around the target (undistorted pixel space). */
   rect: { x: number; y: number; width: number; height: number };
   /** Per-resource metadata written as `<name>.json` on save. `wide` only
-   *  rides the reset shot. */
+   *  rides the reset shot; when present, the worker stores the reset shot's
+   *  FULL undistorted center frame as the wide image alongside it. */
   meta: {
     wide?: Serializable;
     fovea: Serializable;
@@ -766,7 +767,9 @@ async function runCapture(m) {
     const { reset, indexed } = shot;
     if (reset) {
       store.clear();
-      if (shot.meta.wide !== undefined) accumulate(store, "wide", { meta: shot.meta.wide }, false);
+      // wide: the FULL undistorted center frame + the wide intrinsics meta.
+      if (shot.meta.wide !== undefined)
+        accumulate(store, "wide", { image: centerRaw, meta: shot.meta.wide }, false);
     }
     // fovea: meta only (Q / baseline computed on main).
     accumulate(store, "fovea", { meta: shot.meta.fovea }, indexed);
