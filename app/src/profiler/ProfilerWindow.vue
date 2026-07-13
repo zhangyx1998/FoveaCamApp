@@ -382,12 +382,7 @@ watch(activeTab, (t) => {
     <div class="tab-content" :class="{ 'no-scroll': activeTab === 'graph' }" ref="tabContent">
       <!-- ============ GRAPH (primary — gets the freed vertical space) ====== -->
       <section v-show="activeTab === 'graph'" class="graph-section">
-        <h2>Pipeline graph</h2>
-        <p class="hint">
-          Live pipeline topology — each node's corner ring tracks its busy % (saturated ≥90% turns
-          coral); hover a node or edge for its full metrics (util% · rate · worst gap · drops/queue).
-          Dropping/backpressured edges and saturated nodes are flagged red.
-        </p>
+        <h2 title="Node ring = busy % (coral ≥90%). Red = dropping or backpressured. Hover a node or edge for full metrics (util% · rate · worst gap · drops/queue).">Pipeline graph</h2>
         <div class="graph-host">
           <GraphPanel :topology="graphTopology" />
         </div>

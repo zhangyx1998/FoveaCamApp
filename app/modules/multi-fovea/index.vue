@@ -384,14 +384,10 @@ async function captureOnce(): Promise<void> {
   <Drawer v-model="drawer_height">
     <div class="drawer-body">
       <section class="drawer-section">
-        <label class="settle">
+        <label class="settle" title="Trigger hold after a stream switch (mirror moved), before exposure. Seeded from the triple; 0 = no hold.">
           <span>Settle {{ settleMs.toFixed(1) }} ms</span>
           <RangeSlider v-model="settleMs" :min="0" :max="20" :step="0.1" />
         </label>
-        <p class="drawer-hint">
-          Trigger hold after a stream switch (mirror moved). Seeded from the
-          triple; overrides live. 0 = no hold.
-        </p>
       </section>
 
       <section class="drawer-section">
@@ -554,11 +550,6 @@ button {
     flex-direction: column;
     gap: 0.2rem;
     font-size: 0.9rem;
-  }
-  .drawer-hint {
-    margin: 0;
-    font-size: 0.75rem;
-    color: var(--text-faint);
   }
   .preset-row {
     display: flex;

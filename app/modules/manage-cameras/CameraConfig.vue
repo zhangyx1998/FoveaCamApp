@@ -419,7 +419,7 @@ function cancelEdit(e?: Event) {
         class="hint"
         title="Both fovea cameras share one config: every edit here applies to the left and right camera together, and is saved into both cameras' configs. Change either camera's Role to unlink."
       >
-        L {{ pair?.left }} · R {{ pair?.right }} — edits apply to both cameras
+        L {{ pair?.left }} · R {{ pair?.right }}
       </p>
     </header>
 
@@ -438,7 +438,7 @@ function cancelEdit(e?: Event) {
           <option value="R">Fovea Right</option>
         </select>
       </h4>
-      <dl class="readouts">
+      <dl class="readouts" title="Read-only — edit exposure, gain, black level, and pixel format in the Fovea Pair panel. Change Role to unlink.">
         <template v-if="view.pixel_format">
           <dt>Pixel Format</dt>
           <dd>{{ view.pixel_format }}</dd>
@@ -450,10 +450,6 @@ function cancelEdit(e?: Event) {
           </template>
         </template>
       </dl>
-      <p class="hint">
-        Linked as a Fovea Pair — exposure, gain, black level, and pixel format
-        are edited in the Fovea Pair panel. Change Role to unlink.
-      </p>
     </div>
 
     <div v-else-if="view" class="options">
@@ -472,11 +468,7 @@ function cancelEdit(e?: Event) {
       </h4>
       <!-- Divergent pair: explicit unify choice before any linked edit. -->
       <template v-if="variant === 'pair' && divergent.length">
-        <p class="hint diverge">Configs differ: {{ divergentLabels }}.</p>
-        <p class="hint">
-          Pick which camera's settings the pair should use — nothing is
-          overwritten until you choose.
-        </p>
+        <p class="hint diverge" title="Nothing is overwritten until you pick a side.">Configs differ: {{ divergentLabels }}.</p>
         <div class="unify">
           <button
             :disabled="unifyBusy"
@@ -502,7 +494,7 @@ function cancelEdit(e?: Event) {
             class="inline"
             :value="view.pixel_format"
             :disabled="formatBusy"
-            title="Sensor readout format; changing it briefly pauses the preview"
+            title="Sensor readout format; changing it briefly pauses the preview. 12-bit packed (e.g. BayerRG12p) reads full sensor depth to cut debayer quantization noise."
             @change="
               changePixelFormat(($event.target as HTMLSelectElement).value)
             "
@@ -516,11 +508,6 @@ function cancelEdit(e?: Event) {
             </option>
           </select>
         </h4>
-        <p class="hint">
-          Changing format briefly pauses the preview to reconfigure the camera.
-          12-bit packed formats (e.g. BayerRG12p) read full sensor depth to cut
-          debayer quantization noise.
-        </p>
       </template>
       <template v-for="c in editControls" :key="c.key">
         <template v-if="c.available()">

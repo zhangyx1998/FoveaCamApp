@@ -749,7 +749,7 @@ onUnmounted(() => {
       <section v-show="activeTab === 'global'">
       <h2>Application</h2>
 
-      <label class="row">
+      <label class="row" title="Base folder for captures & recordings. Empty = auto (external drive, else ~/Downloads). Red underline = not writable. New destinations only.">
         <span class="label">Default save directory</span>
         <input
           type="text"
@@ -759,12 +759,8 @@ onUnmounted(() => {
           @input="checkSaveDir"
         />
       </label>
-      <p class="hint">
-        Base folder for captures &amp; recordings. Leave empty for auto. Applies
-        to save/record destinations opened after the change.
-      </p>
 
-      <label class="row">
+      <label class="row" title="zlib is lossless and plays back like raw, but may drop frames at full-rate 12-bit on all three cameras (drops shown in the record button's hover). New recordings only; running ones keep their method.">
         <span class="label">Recording compression</span>
         <span class="field">
           <select v-model="record_compression">
@@ -773,12 +769,6 @@ onUnmounted(() => {
           </select>
         </span>
       </label>
-      <p class="hint">
-        Applies to recordings started after the change; running recordings keep
-        their method. zlib is lossless and decodes in the viewer like raw
-        recordings. Note: lossless zlib may not hold full-rate 12-bit on all
-        three cameras — drops are attributed in the record button's hover.
-      </p>
 
       <label class="row">
         <span class="label">TeleCanvas mode</span>
@@ -790,7 +780,7 @@ onUnmounted(() => {
         </span>
       </label>
 
-      <label v-if="!teleIsHost" class="row">
+      <label v-if="!teleIsHost" class="row" title="The app's windows push their projection here. Empty = disabled. Applies live.">
         <span class="label">TeleCanvas server URL</span>
         <input
           type="text"
@@ -799,20 +789,13 @@ onUnmounted(() => {
           placeholder="empty = disabled"
         />
       </label>
-      <p v-if="!teleIsHost" class="hint">
-        The app's windows PUT their projection here. Empty = disabled. Applies live.
-      </p>
 
-      <label v-else class="row">
+      <label v-else class="row" title="Open a listed URL on a TV or tablet on the same network to see the live projection. Applies live.">
         <span class="label">TeleCanvas server port</span>
         <span class="field">
           <input type="number" step="1" min="1" max="65535" v-model.number="tele_canvas_port" />
         </span>
       </label>
-      <p v-if="teleIsHost" class="hint">
-        The app serves its own TeleCanvas viewer. Open a URL below on a TV or
-        tablet on the same network. Applies live.
-      </p>
       <ul v-if="teleIsHost && teleStatus.listening && teleStatus.urls.length" class="tele-urls">
         <li v-for="u in teleStatus.urls" :key="u">
           <span class="u-text" :title="u">{{ u }}</span>
@@ -827,16 +810,15 @@ onUnmounted(() => {
       </ul>
       <p v-else-if="teleIsHost && teleStatus.error" class="hint err">{{ teleStatus.error }}</p>
 
-      <label class="row">
+      <label class="row" title="Applies live to open Extrinsic / Drift calibration windows.">
         <span class="label">Calibration marker size</span>
         <span class="field">
           <input type="number" step="1" min="1" v-model.number="cal_marker_size_mm" />
           <span class="unit">mm</span>
         </span>
       </label>
-      <p class="hint">Applies live to open Extrinsic / Drift calibration windows.</p>
 
-      <label class="row">
+      <label class="row" title="Inner/outer marker diameter ratio. Applies live.">
         <span class="label">Calibration marker ratio</span>
         <span class="field">
           <input
@@ -849,10 +831,9 @@ onUnmounted(() => {
           <span class="unit">×</span>
         </span>
       </label>
-      <p class="hint">Inner/outer marker ratio. Applies live.</p>
 
       <div class="stacked-row">
-        <span class="label">Anaglyph style</span>
+        <span class="label" title="Left/right eye colors for the anaglyph 3D view. Applies live to Disparity Scope's Anaglyph view and the viewer's 3D mode.">Anaglyph style</span>
         <div class="anaglyph-cards" role="group" aria-label="Anaglyph style">
           <button
             v-for="card in anaglyphCardList"
@@ -875,13 +856,8 @@ onUnmounted(() => {
           </button>
         </div>
       </div>
-      <p class="hint">
-        Left-eye / right-eye colors for the anaglyph 3D view (R = red, B = blue,
-        C = cyan). Applies live to Disparity Scope's center Anaglyph view and the
-        recording viewer's 3D mode.
-      </p>
 
-      <label class="row">
+      <label class="row" title="Motion-predictor output rate for the mirror feed-forward. Applies live to Disparity Scope; also on its drawer.">
         <span class="label">Prediction rate</span>
         <span class="field">
           <input
@@ -894,37 +870,22 @@ onUnmounted(() => {
           <span class="unit">Hz</span>
         </span>
       </label>
-      <p class="hint">
-        Motion-predictor output rate driving the mirror feed-forward (60–1000 Hz).
-        Applies live to Disparity Scope; also adjustable from its drawer.
-      </p>
 
-      <label class="row">
+      <label class="row" title="Adds the measured one-way serial latency to the predictor's lookahead. Off = fixed lookahead only. Applies live.">
         <span class="label">Serial latency compensation</span>
         <span class="field">
           <input type="checkbox" v-model="serial_latency_comp" />
         </span>
       </label>
-      <p class="hint">
-        Adds the measured one-way serial latency (half the ACK round-trip) to
-        the motion predictor's fixed lookahead. Applies live; off = fixed
-        lookahead only.
-      </p>
 
-      <label class="row">
+      <label class="row" title="Closes a projection window once all its streams end (after the ~10 s rebind grace). Off keeps it open with frozen last frames. Applies live.">
         <span class="label">Auto-close empty projections</span>
         <span class="field">
           <input type="checkbox" v-model="projection_auto_close" />
         </span>
       </label>
-      <p class="hint">
-        Close a projection window automatically once every stream it shows has
-        terminated (the source didn't return within the ~10&nbsp;s rebind
-        grace). A brief app switch rebinds and never triggers this; off = keep
-        the window open with its frozen last frames.
-      </p>
 
-      <label class="row">
+      <label class="row" title="Where the pipeline-graph hover card sits. Applies live to an open Profiler.">
         <span class="label">Profiler hover card</span>
         <span class="field">
           <select v-model="profiler_hover_card">
@@ -933,12 +894,6 @@ onUnmounted(() => {
           </select>
         </span>
       </label>
-      <p class="hint">
-        The pipeline graph's hover-detail card behavior. "Follow cursor" tracks
-        the pointer (flipping to stay in view); "Snap to corner" pins the card
-        to a container corner that does not cover the hovered node or edge.
-        Applies live to an open Profiler window.
-      </p>
       </section>
 
       <!-- ============ DEVICE config (per-triple) ============ -->
@@ -952,7 +907,7 @@ onUnmounted(() => {
           <button
             class="triple-select"
             :disabled="orderedTriples.length === 0"
-            :title="orderedTriples.length === 0 ? 'No triples configured' : 'Choose a triple'"
+            :title="orderedTriples.length === 0 ? 'No triples configured' : 'Editing an unplugged rig saves to its stored config'"
             @click="tripleDialogOpen = true"
           >
             <Icon
@@ -972,16 +927,10 @@ onUnmounted(() => {
             <Icon :icon="faChevronDown" class="caret" />
           </button>
         </div>
-        <p class="hint">
-          Pick the rig (L / C / R triple) to configure. The connected rig
-          <Icon :icon="faPlug" class="inline-icon" /> is selected by default; you
-          can also edit a rig that isn't plugged in — its changes save to its own
-          stored config.
-        </p>
 
         <!-- Per-triple overrides for the SELECTED triple ------------------- -->
         <template v-if="selectedTripleKey">
-          <label class="row">
+          <label class="row" title="Shown in the triple picker and in Welcome when this rig is connected. Empty falls back to the camera serials. Applies live.">
             <span class="label">Nickname</span>
             <input
               type="text"
@@ -994,13 +943,8 @@ onUnmounted(() => {
               "
             />
           </label>
-          <p class="hint">
-            A friendly name for this rig. Appears in the triple picker above and
-            in the Welcome window when this rig is connected. Leave empty to fall
-            back to the camera serials.
-          </p>
 
-          <label class="row">
+          <label class="row" title="0 uses the calibration-measured magnification. Drives Disparity Scope's Auto match zoom at the next session start.">
             <span class="label">Zoom override</span>
             <span class="field">
               <span v-if="zoomOf(selectedTripleKey) === 0" class="none-hint">none</span>
@@ -1017,13 +961,8 @@ onUnmounted(() => {
               <span class="unit">×</span>
             </span>
           </label>
-          <p class="hint">
-            0 = none (use the calibration-measured magnification). Drives
-            Disparity Scope's Auto match zoom on the next session start; the
-            window's own zoom knob still overrides when set.
-          </p>
 
-          <label class="row">
+          <label class="row" title="Physical stereo baseline. Empty uses the app default. Sets Disparity Scope verge limits (next session) and calibration marker spacing (live).">
             <span class="label">Baseline</span>
             <span class="field">
               <span v-if="baselineOf(selectedTripleKey) === 0" class="none-hint"
@@ -1045,14 +984,8 @@ onUnmounted(() => {
               <span class="unit">mm</span>
             </span>
           </label>
-          <p class="hint">
-            Physical stereo baseline for this triple. Empty = use the app
-            default. Applies to Disparity Scope's verge limits and the Extrinsic
-            / Drift / Distortion marker spacing (marker spacing updates live; the
-            verge limit applies on the next session start).
-          </p>
 
-          <label class="row">
+          <label class="row" title="Trigger hold after the round-robin switches streams, before exposure. Applies at the next Multi-Fovea session; the drawer slider overrides live.">
             <span class="label">Settle time</span>
             <span class="field">
               <span v-if="settleMsOf(selectedTripleKey) === 0" class="none-hint"
@@ -1075,15 +1008,8 @@ onUnmounted(() => {
               <span class="unit">ms</span>
             </span>
           </label>
-          <p class="hint">
-            0 = no hold. Multi-Fovea holds the trigger this long after the
-            round-robin SWITCHES streams (mirror moved), then runs the normal
-            exposure — independent of exposure time. Applies on the next
-            Multi-Fovea session start; the app's drawer slider overrides it live
-            for a running session.
-          </p>
 
-          <label class="row">
+          <label class="row" title="Positive predicts the target's position ahead to offset tracking-chain latency; negative retrodicts. Applies at the next Disparity Scope session.">
             <span class="label">Delay compensation</span>
             <span class="field">
               <!-- 0 is legible as "none" inline; the input stays anchored so
@@ -1108,13 +1034,6 @@ onUnmounted(() => {
               <span class="unit">ms</span>
             </span>
           </label>
-          <p class="hint">
-            0 = off (tracker output used as-is). Disparity Scope chains an IMM
-            motion predictor after the tracker so the mirrors act on the target's
-            ESTIMATED position at t + this delay: POSITIVE leads (predicts ahead,
-            to offset tracking-chain latency), negative lags (retrodicts).
-            Applies on the next Disparity Scope session start.
-          </p>
 
           <!-- Device settings import / export / clear ---------------------- -->
           <div class="row device-actions">
@@ -1126,24 +1045,15 @@ onUnmounted(() => {
               <button class="btn" title="Import a device-config JSON file into this rig" @click="importDevice">
                 <Icon :icon="faFileImport" /> Import
               </button>
-              <button class="btn danger" title="Reset this rig's settings to defaults" @click="confirmClearDevice = true">
+              <button class="btn danger" title="Reset this rig's settings to defaults — calibration records are kept" @click="confirmClearDevice = true">
                 Clear
               </button>
             </span>
           </div>
-          <p class="hint">
-            <strong>Export</strong> writes this rig's settings (nickname,
-            baseline, zoom, settle, delay) <em>and</em> its associated
-            calibration records to one JSON file. <strong>Import</strong> reads
-            such a file back; importing another rig's config asks for a new
-            nickname first, and a record whose id already exists just gains an
-            association here. <strong>Clear</strong> resets the settings to
-            defaults (records are untouched).
-          </p>
 
           <!-- Confirm device clear (in-place, layout-stable) --------------- -->
           <div v-if="confirmClearDevice" class="confirm-inline" role="alert">
-            <span class="warn">Reset all settings for this rig to defaults?</span>
+            <span class="warn">Reset all settings for this rig to defaults? Calibration records are kept.</span>
             <span class="confirm-actions">
               <button class="btn danger" @click="doClearDevice">Reset</button>
               <button class="btn" @click="confirmClearDevice = false">Cancel</button>
@@ -1335,9 +1245,8 @@ onUnmounted(() => {
                    under the row) so revealing it never reflows the rows below. -->
               <div v-if="confirming === entryId(e)" class="confirm-pop" role="alert">
                 <p class="warn">
-                  Deletes stored data permanently. If an app is running it keeps
-                  the copy it loaded at activation; the deletion takes effect on
-                  the next session.
+                  Deletes this data permanently. A running app keeps its loaded
+                  copy until its next session.
                 </p>
                 <div class="confirm-actions">
                   <button class="btn danger" @click="doDelete(e)">Confirm delete</button>
@@ -1419,10 +1328,7 @@ onUnmounted(() => {
     >
       <div class="modal prompt-dialog" role="dialog" aria-label="Name the imported rig">
         <h3>Name this rig</h3>
-        <p class="hint">
-          This device config came from a different triple. Give the imported
-          settings a nickname for the currently-selected rig.
-        </p>
+        <p class="hint">Imported from a different rig — name it for the selected one.</p>
         <!-- Enter-to-confirm implies typing-first: focus on mount. -->
         <input
           v-model="pendingDeviceImport.nickname"

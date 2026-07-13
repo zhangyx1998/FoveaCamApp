@@ -197,12 +197,11 @@ const CAPTURE_OPTIONS: readonly SingleSelectOption<"freerun" | "trigger">[] = [
   {
     value: "freerun",
     label: "Free-run",
-    hint: "each camera streams at its configured rate",
+    title: "Each camera streams independently at its configured Frame Rate.",
   },
   {
     value: "trigger",
     label: "Trigger sync",
-    hint: "one pulse exposes both foveas — exposure sets the pace",
     title:
       "Every capture becomes a true stereo pair at a uniform rate, paced by " +
       "the fovea pair's exposure budget. The paired rate is usually lower than " +

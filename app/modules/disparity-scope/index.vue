@@ -139,12 +139,12 @@ const TRACKER_OPTIONS: readonly SingleSelectOption<TrackerType>[] = [
   {
     value: "hybrid",
     label: "Hybrid (NCC + re-detect)",
-    hint: "Locks mono needles / low-texture; re-acquires after occlusion.",
+    title: "Locks mono needles / low-texture; re-acquires after occlusion.",
   },
   {
     value: "kcf",
     label: "KCF (GRAY)",
-    hint: "Classic correlation filter; fast, but silent-forever once lost.",
+    title: "Classic correlation filter; fast, but silent-forever once lost.",
   },
 ];
 
@@ -424,12 +424,11 @@ const CAPTURE_OPTIONS: readonly SingleSelectOption<"freerun" | "trigger">[] = [
   {
     value: "freerun",
     label: "Free-run",
-    hint: "each camera streams at its configured rate",
+    title: "Each camera streams independently at its configured Frame Rate.",
   },
   {
     value: "trigger",
     label: "Trigger sync",
-    hint: "one pulse exposes both foveas — exposure sets the pace",
     title:
       "Every measurement becomes a true stereo pair at a uniform rate, paced " +
       "by the fovea pair's exposure budget. The paired rate is usually lower " +

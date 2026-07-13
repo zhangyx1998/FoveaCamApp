@@ -46,7 +46,7 @@ The moment one camera holds **Fovea Left** and another holds **Fovea Right**, th
 
 ### Pixel Format
 
-When a camera exposes format options, the **Pixel Format** dropdown lets you choose its sensor readout format. As the hint under it explains: changing format briefly pauses the preview to reconfigure the camera, and 12-bit packed formats (for example `BayerRG12p`) read full sensor depth to cut debayer quantization noise. The dropdown is momentarily disabled while the switch is applied.
+When a camera exposes format options, the **Pixel Format** dropdown lets you choose its sensor readout format. Changing format briefly pauses the preview to reconfigure the camera, and 12-bit packed formats (for example `BayerRG12p`) read full sensor depth to cut debayer quantization noise (hover the dropdown for these terms). The dropdown is momentarily disabled while the switch is applied.
 
 ### Frame Rate
 

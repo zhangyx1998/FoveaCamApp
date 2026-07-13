@@ -24,9 +24,8 @@ A second open just focuses the window already up.
 ## Application settings
 
 These write to the app's shared configuration, so an edit here shows up in every
-open window that reads the same value. Where a setting takes effect immediately,
-the hint under it says **Applies live**; where it is read once when an app
-starts, the hint says so.
+open window that reads the same value. Hover a setting for a tip noting when it
+takes effect — **live**, or read once when an app starts.
 
 | Setting | What it does | When it applies |
 |---|---|---|
@@ -146,8 +145,7 @@ vergence limits **on the next session start**, and to the **Extrinsic / Drift /
 Distortion** marker spacing **live**.
 
 **Settle time** and **Delay compensation** are the Multi-Fovea trigger hold and
-the Disparity Scope tracking-chain lead/lag; both apply on the next session start
-(see their inline hints).
+the Disparity Scope tracking-chain lead/lag; both apply on the next session start.
 
 ### Device settings: Export / Import / Clear
 

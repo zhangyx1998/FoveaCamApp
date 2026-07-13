@@ -137,7 +137,11 @@ async function copy(u: string) {
   <div class="scroll">
     <!-- Live preview (the div is the fixed 16:9 box; mountView appends its own
          svg for the host stream, the v-if svg is the local-provider mirror) -->
-    <div class="preview" ref="previewBox">
+    <div
+      class="preview"
+      ref="previewBox"
+      title="Shows the splash until an app window pushes its live markers; in host mode it mirrors the server's own stream."
+    >
       <svg v-if="!hostPreview" viewBox="-240 -135 480 270" v-html="content"></svg>
     </div>
 
@@ -149,20 +153,15 @@ async function copy(u: string) {
 
     <!-- Client mode -->
     <section v-if="!isHost">
-      <label class="row">
+      <label class="row" title="The app's windows push their projection to this remote TeleCanvas server. Empty = disabled.">
         <span class="label">Server URL</span>
         <input type="text" v-model="url" :class="{ invalid: urlInvalid }" placeholder="empty = disabled" />
       </label>
-      <p class="hint">
-        This app's windows PUT their projection to this remote TeleCanvas server.
-        Leave empty to disable. Preview above shows this window's own content
-        <span v-if="!hasProviders">(the splash — live markers are pushed by the app windows)</span>.
-      </p>
     </section>
 
     <!-- Host mode -->
     <section v-else>
-      <label class="row">
+      <label class="row" title="Open a listed URL in a browser on a TV or tablet on the same network to see the live projection.">
         <span class="label">Server port</span>
         <span class="field">
           <input type="number" step="1" min="1" max="65535" v-model.lazy.number="port" />
@@ -174,10 +173,6 @@ async function copy(u: string) {
         <span v-else-if="status.error" class="err">{{ status.error }}</span>
         <span v-else>Starting…</span>
       </div>
-      <p class="hint">
-        Open one of these URLs in a browser on a TV or tablet on the same network.
-        Once serving, the preview above is taken from the server's own live stream.
-      </p>
       <ul class="urls" v-if="status.urls.length">
         <li v-for="u in status.urls" :key="u">
           <Icon :icon="faTelevision" class="u-icon" />
@@ -321,12 +316,6 @@ input {
   .err {
     color: var(--danger-text);
   }
-}
-
-.hint {
-  color: var(--text-faint);
-  font-size: var(--fs-sm);
-  margin: 0;
 }
 
 .urls {
