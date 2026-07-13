@@ -21,9 +21,19 @@ import {
 import { readUrlParam } from "@lib/url-state";
 import { PROFILER_INSTANCE_PARAM, PROFILER_SESSION_PARAM } from "@lib/windows";
 import { profilerSubtitle, describeSessionEnd } from "./binding";
-import { system, controller, type PerfSnapshot, type Span } from "@lib/orchestrator/contracts";
+import {
+  system,
+  controller,
+  type PerfSnapshot,
+  type Span,
+} from "@lib/orchestrator/contracts";
 import { manualControl } from "@modules/manual-control/contract";
-import { workloadRows, utilizationLevel, UTILIZATION_HIGH, type WorkloadRow } from "./workload-view";
+import {
+  workloadRows,
+  utilizationLevel,
+  UTILIZATION_HIGH,
+  type WorkloadRow,
+} from "./workload-view";
 import { pipes } from "@lib/orchestrator/pipe-contract";
 import type { GraphTopology } from "@lib/orchestrator/graph-contract";
 import { deriveTopology, selectTopology } from "./graph-view";
@@ -57,7 +67,9 @@ const titleBarHeight = ref(0);
 // freeze here with everything already collected and never re-attach (ruling 2).
 const boundInstanceId = readUrlParam(PROFILER_INSTANCE_PARAM);
 const boundSession = readUrlParam(PROFILER_SESSION_PARAM);
-const subtitle = computed(() => profilerSubtitle(boundSession, boundInstanceId));
+const subtitle = computed(() =>
+  profilerSubtitle(boundSession, boundInstanceId),
+);
 
 // Frozen "session ended/crashed" state: `orchestratorDown` is set once main
 // pushes the typed down report for OUR instance (delivered whether it dies
@@ -78,10 +90,18 @@ const mc = useSession(manualControl, "manual-control", { passive: true });
 // don't build a wall of rows once stream capacity grows (ST-64, synced-
 // capture thread).
 const VISIBLE_STREAM_ROWS = 8;
-const sortedStreams = computed(() => [...ctrl.telemetry.streams].sort((a, b) => b.hz - a.hz));
-const visibleStreams = computed(() => sortedStreams.value.slice(0, VISIBLE_STREAM_ROWS));
-const hiddenStreams = computed(() => sortedStreams.value.slice(VISIBLE_STREAM_ROWS));
-const hiddenHzTotal = computed(() => hiddenStreams.value.reduce((a, s) => a + s.hz, 0));
+const sortedStreams = computed(() =>
+  [...ctrl.telemetry.streams].sort((a, b) => b.hz - a.hz),
+);
+const visibleStreams = computed(() =>
+  sortedStreams.value.slice(0, VISIBLE_STREAM_ROWS),
+);
+const hiddenStreams = computed(() =>
+  sortedStreams.value.slice(VISIBLE_STREAM_ROWS),
+);
+const hiddenHzTotal = computed(() =>
+  hiddenStreams.value.reduce((a, s) => a + s.hz, 0),
+);
 
 const HISTORY = 60; // ~60 samples at the 1s poll tick below = 1 min window
 
@@ -101,7 +121,12 @@ const snapshot = ref<PerfSnapshot | null>(null);
 const spans = ref<Span[]>([]);
 const prev = { snapshot: null as PerfSnapshot | null, t: 0 };
 
-type Rate = { topic: string; hz: number; coalescePct: number; bytesPerSec: number };
+type Rate = {
+  topic: string;
+  hz: number;
+  coalescePct: number;
+  bytesPerSec: number;
+};
 const rates = ref<Rate[]>([]);
 
 // Uniform per-workload sections (workload-metering.md §4) — the transform is
@@ -119,7 +144,8 @@ const workloads = ref<WorkloadRow[]>([]);
 const sortedWorkloads = computed(() =>
   [...workloads.value].sort((a, b) => b.utilization - a.utilization),
 );
-const isSaturated = (utilization: number): boolean => utilization >= UTILIZATION_HIGH;
+const isSaturated = (utilization: number): boolean =>
+  utilization >= UTILIZATION_HIGH;
 
 // Pipeline graph (A-33/A-36, real-2 objective 1). STAGE 2: the orchestrator
 // SERVES the topology (C-24's `graphTopology()`, riding `PerfSnapshot.graph` —
@@ -174,13 +200,24 @@ async function tick(): Promise<void> {
   try {
     const s = await sys.call("perfSnapshot", undefined);
     rates.value = computeRates(s);
-    workloads.value = workloadRows(s.workloads ?? {}, prev.snapshot?.workloads ?? null);
+    workloads.value = workloadRows(
+      s.workloads ?? {},
+      prev.snapshot?.workloads ?? null,
+    );
     graphTopology.value = selectTopology(s.graph, () =>
-      deriveTopology(workloads.value, pipesSession.state.pipes, ++graphSeq.value, Date.now()),
+      deriveTopology(
+        workloads.value,
+        pipesSession.state.pipes,
+        ++graphSeq.value,
+        Date.now(),
+      ),
     );
     prev.snapshot = s;
     prev.t = Date.now();
     snapshot.value = s;
+    // Server ring is the superset — covers spans that fired before this
+    // window opened (the live topic.span feed cannot back-fill).
+    if (s.spans?.length) spans.value = [...s.spans].slice(-50).reverse();
   } catch {
     // Orchestrator not reachable yet (e.g. this window opened before the
     // channel connected) — next tick retries.
@@ -301,7 +338,11 @@ watch(activeTab, (t) => {
 </script>
 
 <template>
-  <TitleBar title="FoveaCam Duo" :subtitle="subtitle" @height="(h) => (titleBarHeight = h)">
+  <TitleBar
+    title="FoveaCam Duo"
+    :subtitle="subtitle"
+    @height="(h) => (titleBarHeight = h)"
+  >
     <!-- Snapshot controls live on the title bar (the old header's h1 was
          redundant with the bar's subtitle). Icon-only buttons (FontAwesome,
          matching the recorder's title-bar chrome) sized for the ~40px bar;
@@ -322,7 +363,11 @@ watch(activeTab, (t) => {
         class="icon-btn pin"
         :class="{ active: pinned }"
         @click="togglePinned"
-        :title="pinned ? 'Unpin — stop keeping this window on top' : 'Pin — keep this window on top'"
+        :title="
+          pinned
+            ? 'Unpin — stop keeping this window on top'
+            : 'Pin — keep this window on top'
+        "
         :aria-label="pinned ? 'Unpin window' : 'Pin window on top'"
       >
         <Icon :icon="faThumbtack" />
@@ -331,9 +376,11 @@ watch(activeTab, (t) => {
         class="icon-btn"
         @click="exportSnapshot"
         :disabled="exporting || sessionEnded"
-        :title="sessionEnded
-          ? 'Session ended — cannot capture a new snapshot (the orchestrator is gone)'
-          : 'Write a perf snapshot JSON to disk'"
+        :title="
+          sessionEnded
+            ? 'Session ended — cannot capture a new snapshot (the orchestrator is gone)'
+            : 'Write a perf snapshot JSON to disk'
+        "
         aria-label="Export snapshot"
       >
         <Icon :icon="exporting ? faSpinner : faFileExport" :spin="exporting" />
@@ -379,10 +426,13 @@ watch(activeTab, (t) => {
       </button>
     </div>
 
-    <div class="tab-content" :class="{ 'no-scroll': activeTab === 'graph' }" ref="tabContent">
+    <div
+      class="tab-content"
+      :class="{ immersive: activeTab === 'graph' }"
+      ref="tabContent"
+    >
       <!-- ============ GRAPH (primary — gets the freed vertical space) ====== -->
       <section v-show="activeTab === 'graph'" class="graph-section">
-        <h2 title="Node ring = busy % (coral ≥90%). Red = dropping or backpressured. Hover a node or edge for full metrics (util% · rate · worst gap · drops/queue).">Pipeline graph</h2>
         <div class="graph-host">
           <GraphPanel :topology="graphTopology" />
         </div>
@@ -390,87 +440,104 @@ watch(activeTab, (t) => {
 
       <!-- ============ WORKLOADS ============ -->
       <section v-show="activeTab === 'workloads'">
-      <h2>Workloads ({{ workloads.length }})</h2>
-      <p class="hint" v-if="workloads.length === 0">
-        No workload meters registered yet — camera preview loops, processing gates, and recorders appear here while live.
-      </p>
-      <div
-        class="workload"
-        :class="{ saturated: isSaturated(w.utilization) }"
-        v-for="w in sortedWorkloads"
-        :key="w.name"
-      >
-        <div class="workload-head">
-          <span class="mono name">{{ w.name }}</span>
-          <span v-if="isSaturated(w.utilization)" class="saturated-badge">SATURATED</span>
-          <div
-            class="util-track"
-            role="meter"
-            :aria-valuenow="Math.round(w.utilization * 100)"
-            aria-valuemin="0"
-            aria-valuemax="100"
-            :aria-label="w.name + ' utilization'"
-          >
+        <h2>Workloads ({{ workloads.length }})</h2>
+        <p class="hint" v-if="workloads.length === 0">
+          No workload meters registered yet — camera preview loops, processing
+          gates, and recorders appear here while live.
+        </p>
+        <div
+          class="workload"
+          :class="{ saturated: isSaturated(w.utilization) }"
+          v-for="w in sortedWorkloads"
+          :key="w.name"
+        >
+          <div class="workload-head">
+            <span class="mono name">{{ w.name }}</span>
+            <span v-if="isSaturated(w.utilization)" class="saturated-badge"
+              >SATURATED</span
+            >
             <div
-              class="util-fill"
-              :class="utilizationLevel(w.utilization)"
-              :style="{ width: (w.utilization * 100).toFixed(1) + '%' }"
-            />
+              class="util-track"
+              role="meter"
+              :aria-valuenow="Math.round(w.utilization * 100)"
+              aria-valuemin="0"
+              aria-valuemax="100"
+              :aria-label="w.name + ' utilization'"
+            >
+              <div
+                class="util-fill"
+                :class="utilizationLevel(w.utilization)"
+                :style="{ width: (w.utilization * 100).toFixed(1) + '%' }"
+              />
+            </div>
+            <span class="util-label">
+              {{ fmt(w.utilization * 100) }}% busy
+              <span class="dim"
+                >· {{ w.interval ? "last tick" : "since start" }}</span
+              >
+            </span>
           </div>
-          <span class="util-label">
-            {{ fmt(w.utilization * 100) }}% busy
-            <span class="dim">· {{ w.interval ? "last tick" : "since start" }}</span>
-          </span>
+          <table class="io-table">
+            <tbody>
+              <tr v-for="i in w.inputs" :key="'in:' + i.name">
+                <td class="dir">in</td>
+                <td class="mono">{{ i.name }}</td>
+                <td class="num">{{ i.count.toLocaleString() }}</td>
+                <td class="num">{{ fmt(i.ratePerSec) }}/s</td>
+                <td
+                  class="num interval"
+                  :class="{ stall: i.stalled }"
+                  title="max inter-arrival interval over the trailing 10 s"
+                >
+                  {{ fmt(i.maxIntervalMs) }} ms
+                </td>
+              </tr>
+              <tr v-for="o in w.outputs" :key="'out:' + o.name">
+                <td class="dir">out</td>
+                <td class="mono">{{ o.name }}</td>
+                <td class="num">{{ o.count.toLocaleString() }}</td>
+                <td class="num">{{ fmt(o.ratePerSec) }}/s</td>
+                <td
+                  class="num interval"
+                  :class="{ stall: o.stalled }"
+                  title="max inter-arrival interval over the trailing 10 s"
+                >
+                  {{ fmt(o.maxIntervalMs) }} ms
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="drops mono" v-if="w.drops.total > 0">
+            drops {{ w.drops.total.toLocaleString() }} ({{
+              fmt(w.drops.ratePerSec)
+            }}/s):
+            <span
+              v-for="d in w.drops.byReason"
+              :key="d.reason"
+              class="drop-reason"
+            >
+              {{ d.reason }} × {{ d.count.toLocaleString() }}
+            </span>
+          </div>
+          <div class="drops mono dim" v-else>no drops</div>
         </div>
-        <table class="io-table">
-          <tbody>
-            <tr v-for="i in w.inputs" :key="'in:' + i.name">
-              <td class="dir">in</td>
-              <td class="mono">{{ i.name }}</td>
-              <td class="num">{{ i.count.toLocaleString() }}</td>
-              <td class="num">{{ fmt(i.ratePerSec) }}/s</td>
-              <td
-                class="num interval"
-                :class="{ stall: i.stalled }"
-                title="max inter-arrival interval over the trailing 10 s"
-              >
-                {{ fmt(i.maxIntervalMs) }} ms
-              </td>
-            </tr>
-            <tr v-for="o in w.outputs" :key="'out:' + o.name">
-              <td class="dir">out</td>
-              <td class="mono">{{ o.name }}</td>
-              <td class="num">{{ o.count.toLocaleString() }}</td>
-              <td class="num">{{ fmt(o.ratePerSec) }}/s</td>
-              <td
-                class="num interval"
-                :class="{ stall: o.stalled }"
-                title="max inter-arrival interval over the trailing 10 s"
-              >
-                {{ fmt(o.maxIntervalMs) }} ms
-              </td>
-            </tr>
-          </tbody>
-        </table>
-        <div class="drops mono" v-if="w.drops.total > 0">
-          drops {{ w.drops.total.toLocaleString() }} ({{ fmt(w.drops.ratePerSec) }}/s):
-          <span v-for="d in w.drops.byReason" :key="d.reason" class="drop-reason">
-            {{ d.reason }} × {{ d.count.toLocaleString() }}
-          </span>
-        </div>
-        <div class="drops mono dim" v-else>no drops</div>
-      </div>
-    </section>
+      </section>
 
       <section v-show="activeTab === 'workloads'">
         <h2>Event-loop lag</h2>
         <div class="row">
           <div class="stat">
-            <label>Orchestrator (mean {{ fmt(sys.telemetry.loopLag.mean) }}ms / max {{ fmt(sys.telemetry.loopLag.max) }}ms)</label>
+            <label
+              >Orchestrator (mean {{ fmt(sys.telemetry.loopLag.mean) }}ms / max
+              {{ fmt(sys.telemetry.loopLag.max) }}ms)</label
+            >
             <Sparkline :values="orchLoopLag" color="#0af" />
           </div>
           <div class="stat">
-            <label>This window (mean {{ fmt(rendererLoopLag.stats.mean) }}ms / max {{ fmt(rendererLoopLag.stats.max) }}ms)</label>
+            <label
+              >This window (mean {{ fmt(rendererLoopLag.stats.mean) }}ms / max
+              {{ fmt(rendererLoopLag.stats.max) }}ms)</label
+            >
             <Sparkline :values="rendLoopLag" color="#fa0" />
           </div>
         </div>
@@ -478,156 +545,224 @@ watch(activeTab, (t) => {
 
       <!-- ============ CONTROL ============ -->
       <section v-show="activeTab === 'control'">
-      <h2>Control-path latency</h2>
-      <p class="hint" v-if="!mc.telemetry.ready">
-        Manual-control is not active in any window — these read zero until it is.
-      </p>
-      <div class="row">
-        <div class="stat">
-          <label>manual-control.actuateMs (mean {{ fmt(mc.telemetry.perf.actuateMs.mean, 2) }}ms)</label>
-          <Sparkline :values="mcActuateMs" color="#af0" />
-        </div>
-      </div>
-    </section>
-
-    <section v-show="activeTab === 'control'">
-      <h2>Volt telemetry</h2>
-      <div class="row">
-        <div class="stat">
-          <label>manual-control.volt</label>
-          <div class="mono">
-            L ({{ fmt(mc.telemetry.volt.L.x) }}, {{ fmt(mc.telemetry.volt.L.y) }})
-            R ({{ fmt(mc.telemetry.volt.R.x) }}, {{ fmt(mc.telemetry.volt.R.y) }})
+        <h2>Control-path latency</h2>
+        <p class="hint" v-if="!mc.telemetry.ready">
+          Manual-control is not active in any window — these read zero until it
+          is.
+        </p>
+        <div class="row">
+          <div class="stat">
+            <label
+              >manual-control.actuateMs (mean
+              {{ fmt(mc.telemetry.perf.actuateMs.mean, 2) }}ms)</label
+            >
+            <Sparkline :values="mcActuateMs" color="#af0" />
           </div>
         </div>
-        <div class="stat">
-          <label>controller</label>
-          <div class="mono">
-            {{ ctrl.telemetry.connected ? (ctrl.telemetry.enabled ? "enabled" : "connected") : "disconnected" }}
-            dv={{ fmt(ctrl.telemetry.dv) }}
+      </section>
+
+      <section v-show="activeTab === 'control'">
+        <h2>Volt telemetry</h2>
+        <div class="row">
+          <div class="stat">
+            <label>manual-control.volt</label>
+            <div class="mono">
+              L ({{ fmt(mc.telemetry.volt.L.x) }},
+              {{ fmt(mc.telemetry.volt.L.y) }}) R ({{
+                fmt(mc.telemetry.volt.R.x)
+              }}, {{ fmt(mc.telemetry.volt.R.y) }})
+            </div>
+          </div>
+          <div class="stat">
+            <label>controller</label>
+            <div class="mono">
+              {{
+                ctrl.telemetry.connected
+                  ? ctrl.telemetry.enabled
+                    ? "enabled"
+                    : "connected"
+                  : "disconnected"
+              }}
+              dv={{ fmt(ctrl.telemetry.dv) }}
+            </div>
           </div>
         </div>
-      </div>
-    </section>
+      </section>
 
-    <section v-show="activeTab === 'control'">
-      <h2>Serial data rate</h2>
-      <p class="hint" v-if="!ctrl.telemetry.connected">Controller not connected — rates read zero until it is.</p>
-      <div class="mono">
-        tx {{ Math.round(ctrl.telemetry.serialRate.txBytesPerSec).toLocaleString() }} B/s
-        ({{ fmt(ctrl.telemetry.serialRate.txPacketsPerSec) }} pkt/s) ·
-        rx {{ Math.round(ctrl.telemetry.serialRate.rxBytesPerSec).toLocaleString() }} B/s
-        ({{ fmt(ctrl.telemetry.serialRate.rxPacketsPerSec) }} pkt/s)
-      </div>
-    </section>
+      <section v-show="activeTab === 'control'">
+        <h2>Serial data rate</h2>
+        <p class="hint" v-if="!ctrl.telemetry.connected">
+          Controller not connected — rates read zero until it is.
+        </p>
+        <div class="mono">
+          tx
+          {{
+            Math.round(ctrl.telemetry.serialRate.txBytesPerSec).toLocaleString()
+          }}
+          B/s ({{ fmt(ctrl.telemetry.serialRate.txPacketsPerSec) }} pkt/s) · rx
+          {{
+            Math.round(ctrl.telemetry.serialRate.rxBytesPerSec).toLocaleString()
+          }}
+          B/s ({{ fmt(ctrl.telemetry.serialRate.rxPacketsPerSec) }} pkt/s)
+        </div>
+      </section>
 
-    <!-- Serial PRESSURE (serial-rate-governor.md Part 3 — every new stat
+      <!-- Serial PRESSURE (serial-rate-governor.md Part 3 — every new stat
          surfaces in the profiler, user ruling): governor rate vs requested,
          outq gauges, soft-fail counter, ACK-RTT percentiles, and the
          predictor's applied lookahead (Part 4). -->
-    <section v-show="activeTab === 'control'">
-      <h2>Serial pressure</h2>
-      <p class="hint" v-if="!ctrl.telemetry.connected">Controller not connected — pressure reads zero until it is.</p>
-      <div class="row">
-        <div class="stat">
-          <label>Stream rate (governor)</label>
-          <div class="mono">
-            {{ fmt(ctrl.telemetry.serialPressure.effectiveRateHz, 0) }} Hz
-            / {{ fmt(ctrl.telemetry.serialPressure.ceilingHz, 0) }} Hz requested
-            · {{ ctrl.telemetry.serialPressure.governorState }}
+      <section v-show="activeTab === 'control'">
+        <h2>Serial pressure</h2>
+        <p class="hint" v-if="!ctrl.telemetry.connected">
+          Controller not connected — pressure reads zero until it is.
+        </p>
+        <div class="row">
+          <div class="stat">
+            <label>Stream rate (governor)</label>
+            <div class="mono">
+              {{ fmt(ctrl.telemetry.serialPressure.effectiveRateHz, 0) }} Hz /
+              {{ fmt(ctrl.telemetry.serialPressure.ceilingHz, 0) }} Hz requested
+              · {{ ctrl.telemetry.serialPressure.governorState }}
+            </div>
+          </div>
+          <div class="stat">
+            <label>Output queue</label>
+            <div class="mono">
+              <template v-if="ctrl.telemetry.serialPressure.outqSupported">
+                {{ ctrl.telemetry.serialPressure.outqBytes }} B (hwm
+                {{ ctrl.telemetry.serialPressure.outqHighWater }} B)
+              </template>
+              <template v-else>unsupported on this platform</template>
+              · soft-fail {{ ctrl.telemetry.serialPressure.txSoftFail }}
+            </div>
           </div>
         </div>
-        <div class="stat">
-          <label>Output queue</label>
-          <div class="mono">
-            <template v-if="ctrl.telemetry.serialPressure.outqSupported">
-              {{ ctrl.telemetry.serialPressure.outqBytes }} B
-              (hwm {{ ctrl.telemetry.serialPressure.outqHighWater }} B)
-            </template>
-            <template v-else>unsupported on this platform</template>
-            · soft-fail {{ ctrl.telemetry.serialPressure.txSoftFail }}
+        <div class="row">
+          <div class="stat">
+            <label
+              >ACK RTT (p50 / p95 / max over
+              {{ ctrl.telemetry.serialPressure.ackRttMs.count }} samples)</label
+            >
+            <div class="mono">
+              {{ fmt(ctrl.telemetry.serialPressure.ackRttMs.p50, 2) }} /
+              {{ fmt(ctrl.telemetry.serialPressure.ackRttMs.p95, 2) }} /
+              {{ fmt(ctrl.telemetry.serialPressure.ackRttMs.max, 2) }} ms
+              (baseline
+              {{
+                fmt(ctrl.telemetry.serialPressure.ackRttMs.baselineP50, 2)
+              }}
+              ms)
+            </div>
+          </div>
+          <div class="stat">
+            <label>Predictor lookahead (applied)</label>
+            <div class="mono">
+              <template
+                v-if="ctrl.telemetry.serialPressure.appliedLookaheadMs !== null"
+              >
+                {{
+                  fmt(ctrl.telemetry.serialPressure.appliedLookaheadMs, 2)
+                }}
+                ms
+              </template>
+              <template v-else>— (no predictor active)</template>
+            </div>
           </div>
         </div>
-      </div>
-      <div class="row">
-        <div class="stat">
-          <label>ACK RTT (p50 / p95 / max over {{ ctrl.telemetry.serialPressure.ackRttMs.count }} samples)</label>
-          <div class="mono">
-            {{ fmt(ctrl.telemetry.serialPressure.ackRttMs.p50, 2) }} /
-            {{ fmt(ctrl.telemetry.serialPressure.ackRttMs.p95, 2) }} /
-            {{ fmt(ctrl.telemetry.serialPressure.ackRttMs.max, 2) }} ms
-            (baseline {{ fmt(ctrl.telemetry.serialPressure.ackRttMs.baselineP50, 2) }} ms)
-          </div>
-        </div>
-        <div class="stat">
-          <label>Predictor lookahead (applied)</label>
-          <div class="mono">
-            <template v-if="ctrl.telemetry.serialPressure.appliedLookaheadMs !== null">
-              {{ fmt(ctrl.telemetry.serialPressure.appliedLookaheadMs, 2) }} ms
-            </template>
-            <template v-else>— (no predictor active)</template>
-          </div>
-        </div>
-      </div>
-    </section>
+      </section>
 
-    <!-- ============ TRANSPORT ============ -->
+      <!-- ============ TRANSPORT ============ -->
       <section v-show="activeTab === 'transport'">
-      <h2>Live streams ({{ sortedStreams.length }})</h2>
-      <p class="hint" v-if="sortedStreams.length === 0">No CMD_STREAM targets active.</p>
-      <div class="row">
-        <div class="stat stream-row" v-for="stream in visibleStreams" :key="stream.id">
-          <label>stream #{{ stream.id }} — {{ fmt(stream.hz) }} Hz</label>
-          <div class="stream-pads">
-            <PosView :pos="stream.left" :lim="ctrl.telemetry.dv || 200" :font-size="10" color="cyan" style="width: 90px" />
-            <PosView :pos="stream.right" :lim="ctrl.telemetry.dv || 200" :font-size="10" color="greenyellow" style="width: 90px" />
+        <h2>Live streams ({{ sortedStreams.length }})</h2>
+        <p class="hint" v-if="sortedStreams.length === 0">
+          No CMD_STREAM targets active.
+        </p>
+        <div class="row">
+          <div
+            class="stat stream-row"
+            v-for="stream in visibleStreams"
+            :key="stream.id"
+          >
+            <label>stream #{{ stream.id }} — {{ fmt(stream.hz) }} Hz</label>
+            <div class="stream-pads">
+              <PosView
+                :pos="stream.left"
+                :lim="ctrl.telemetry.dv || 200"
+                :font-size="10"
+                color="cyan"
+                style="width: 90px"
+              />
+              <PosView
+                :pos="stream.right"
+                :lim="ctrl.telemetry.dv || 200"
+                :font-size="10"
+                color="greenyellow"
+                style="width: 90px"
+              />
+            </div>
+          </div>
+          <div class="stat" v-if="hiddenStreams.length > 0">
+            <label>+{{ hiddenStreams.length }} more</label>
+            <div class="mono">aggregate {{ fmt(hiddenHzTotal) }} Hz</div>
           </div>
         </div>
-        <div class="stat" v-if="hiddenStreams.length > 0">
-          <label>+{{ hiddenStreams.length }} more</label>
-          <div class="mono">aggregate {{ fmt(hiddenHzTotal) }} Hz</div>
+      </section>
+
+      <section v-show="activeTab === 'transport'">
+        <h2>Per-topic channel rates</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>topic</th>
+              <th>sent (Hz)</th>
+              <th>coalesced (%)</th>
+              <th>bytes/s</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="r in rates" :key="r.topic">
+              <td class="mono">{{ r.topic }}</td>
+              <td>{{ fmt(r.hz) }}</td>
+              <td>{{ fmt(r.coalescePct) }}</td>
+              <td>{{ Math.round(r.bytesPerSec).toLocaleString() }}</td>
+            </tr>
+            <tr v-if="rates.length === 0">
+              <td colspan="4" class="hint">No frame traffic observed yet.</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section v-show="activeTab === 'transport'">
+        <h2>Store-hub writes</h2>
+        <div class="mono" v-if="snapshot">
+          writes {{ snapshot.storeHub.writes }} · updates
+          {{ snapshot.storeHub.updates }} · clears
+          {{ snapshot.storeHub.clears }}
         </div>
-      </div>
-    </section>
+      </section>
 
-    <section v-show="activeTab === 'transport'">
-      <h2>Per-topic channel rates</h2>
-      <table>
-        <thead>
-          <tr><th>topic</th><th>sent (Hz)</th><th>coalesced (%)</th><th>bytes/s</th></tr>
-        </thead>
-        <tbody>
-          <tr v-for="r in rates" :key="r.topic">
-            <td class="mono">{{ r.topic }}</td>
-            <td>{{ fmt(r.hz) }}</td>
-            <td>{{ fmt(r.coalescePct) }}</td>
-            <td>{{ Math.round(r.bytesPerSec).toLocaleString() }}</td>
-          </tr>
-          <tr v-if="rates.length === 0"><td colspan="4" class="hint">No frame traffic observed yet.</td></tr>
-        </tbody>
-      </table>
-    </section>
-
-    <section v-show="activeTab === 'transport'">
-      <h2>Store-hub writes</h2>
-      <div class="mono" v-if="snapshot">
-        writes {{ snapshot.storeHub.writes }} · updates {{ snapshot.storeHub.updates }} · clears {{ snapshot.storeHub.clears }}
-      </div>
-    </section>
-
-    <!-- ============ SYSTEM ============ -->
+      <!-- ============ SYSTEM ============ -->
       <section v-show="activeTab === 'system' && clockRows.length > 0">
         <h2>Clocks</h2>
         <table>
           <thead>
-            <tr><th>clock</th><th>method</th><th>offset</th><th>jitter</th><th>n</th></tr>
+            <tr>
+              <th>clock</th>
+              <th>method</th>
+              <th>offset</th>
+              <th>jitter</th>
+              <th>n</th>
+            </tr>
           </thead>
           <tbody>
             <tr v-for="c in clockRows" :key="c.id">
               <td class="mono">{{ c.id }}</td>
               <td>{{ c.method }}</td>
               <td class="mono">{{ c.offsetMs }} ms</td>
-              <td class="mono" :class="{ saturated: c.jitterUs > 500 }">{{ c.jitterUs }} µs</td>
+              <td class="mono" :class="{ saturated: c.jitterUs > 500 }">
+                {{ c.jitterUs }} µs
+              </td>
               <td>{{ c.samples }}</td>
             </tr>
           </tbody>
@@ -635,22 +770,31 @@ watch(activeTab, (t) => {
       </section>
 
       <section v-show="activeTab === 'system'">
-      <h2>Boot / activation timeline</h2>
-      <table>
-        <thead>
-          <tr><th>t</th><th>span</th><th>ms</th><th>meta</th></tr>
-        </thead>
-        <tbody>
-          <tr v-for="(s, i) in spans" :key="i">
-            <td class="mono">{{ new Date(s.t).toLocaleTimeString() }}</td>
-            <td class="mono">{{ s.name }}</td>
-            <td>{{ fmt(s.ms, 2) }}</td>
-            <td class="mono">{{ s.meta ? JSON.stringify(s.meta) : "" }}</td>
-          </tr>
-          <tr v-if="spans.length === 0"><td colspan="4" class="hint">No spans recorded yet this session.</td></tr>
-        </tbody>
-      </table>
-    </section>
+        <h2>Diagnostics timeline (spans)</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>t</th>
+              <th>span</th>
+              <th>ms</th>
+              <th>meta</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="(s, i) in spans" :key="i">
+              <td class="mono">{{ new Date(s.t).toLocaleTimeString() }}</td>
+              <td class="mono">{{ s.name }}</td>
+              <td>{{ fmt(s.ms, 2) }}</td>
+              <td class="mono">{{ s.meta ? JSON.stringify(s.meta) : "" }}</td>
+            </tr>
+            <tr v-if="spans.length === 0">
+              <td colspan="4" class="hint">
+                No spans recorded yet this session.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
     </div>
   </div>
 </template>
@@ -771,11 +915,11 @@ watch(activeTab, (t) => {
 
     // Graph tab (ruling 3): the graph fills the tab container and never scrolls;
     // every OTHER tab keeps its normal vertical scroll.
-    &.no-scroll {
+    &.immersive {
       overflow: hidden;
-      padding-bottom: 1.5rem;
       display: flex;
       flex-direction: column;
+      padding: 0;
     }
   }
 
@@ -856,7 +1000,11 @@ watch(activeTab, (t) => {
       border-left: 3px solid #f56;
       padding-left: 0.6rem;
       margin-left: -0.75rem;
-      background: linear-gradient(90deg, rgba(255, 85, 102, 0.08), transparent 60%);
+      background: linear-gradient(
+        90deg,
+        rgba(255, 85, 102, 0.08),
+        transparent 60%
+      );
     }
 
     .workload-head {
