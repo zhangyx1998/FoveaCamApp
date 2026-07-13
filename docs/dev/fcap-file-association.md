@@ -26,18 +26,22 @@ prints the one-time Finder → Get Info → Open with → Change All step.
 `~/Library/Application Support/fovea-cam-app/open-file.sock`:
 
 - **Running instance** — the socket exists; `nc -U` writes the newline-delimited
-  paths to it and exits. `open-file-server.ts` (main-owned listener, started in
-  the `whenReady` chain) reassembles the lines and calls `openExternal`, which
-  opens a viewer per recording. **Zero new processes.**
-- **Connect failure / not running** — cold-start detached:
-  `nohup electron <repo>/app <files> &` (the repo path is baked into the
-  forwarder at install time). Main's fresh-launch argv path (`process.argv`
-  filtered by `isRecordingPath`, funneled through the same `openExternal`) queues
-  those files until the window manager is ready. A bare launch (no args) just
-  opens the app.
+  paths to it and exits. `open-file-server.ts` (main-owned listener, the FIRST
+  `whenReady` step — the rest of the chain can take minutes on a rig) reassembles
+  the lines and calls `openExternal`, which opens a viewer per recording.
+  **Zero new processes.**
+- **Connect failure / not running** — a detached helper boots the real dev stack
+  (`npm run dev` from `<repo>/app`; the vite electron plugin owns
+  `VITE_DEV_SERVER_URL` and spawning Electron, so argv cannot pass through it),
+  then polls the socket for up to 120 s and delivers the paths over it. The repo
+  path is baked into the forwarder at install time; stack output lands in
+  `$TMPDIR/foveacam-dev-shim.log`. A bare launch (no args) just boots the stack.
 
-`openExternal` is the single sink for all three sources — macOS `open-file`, the
-socket callback, and cold-start argv — so no path can fork a duplicate Electron.
+Main's fresh-launch argv path (`process.argv` filtered by `isRecordingPath`)
+also feeds `openExternal` — it is what a packaged build's file association uses;
+the dev shim can't reach it through vite. `openExternal` is the single sink for
+all sources — macOS `open-file`, the socket callback, and argv — so no path can
+fork a duplicate Electron.
 
 ## Packaging
 

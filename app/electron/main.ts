@@ -1449,6 +1449,15 @@ async function createInitialWindows(): Promise<void> {
 
 app
   .whenReady()
+  // Open-file socket FIRST — the dev-mode shim polls for it to deliver
+  // double-clicked recordings (queued until windows exist), and the rest of
+  // this chain can take minutes on a rig (probe enumeration).
+  .then(() => {
+    openFileServer = startOpenFileServer(
+      path.join(DATA, "open-file.sock"),
+      openExternal,
+    );
+  })
   .then(sweepStaleWatchdogState)
   .then(customizeApp)
   // Store-schema migrations (calibration-records-v2.md) run FIRST — before the
@@ -1464,14 +1473,6 @@ app
   // TeleCanvas host: if the persisted config selected host mode, bring the
   // server up now so an external display can connect before any app opens.
   .then(applyPersistedTeleCanvas)
-  // Open-file socket: lets the dev-mode shim notify this running instance to
-  // open a recording instead of launching a second Electron.
-  .then(() => {
-    openFileServer = startOpenFileServer(
-      path.join(DATA, "open-file.sock"),
-      openExternal,
-    );
-  })
   .then(createInitialWindows);
 
 // Quit = graceful hardware quiescence first (safety invariant): dispose EVERY

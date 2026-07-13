@@ -35,6 +35,9 @@ osacompile -o "$APP" "$TMP_SCPT"
 rm -f "$TMP_SCPT"
 
 # --- Forwarder: notify a running instance over the socket, else cold-start.
+# Cold start boots the full dev stack (`npm run dev` — the vite electron plugin
+# owns VITE_DEV_SERVER_URL and spawning Electron; argv cannot pass through it),
+# then delivers the paths over the socket once the app is listening.
 # __REPO__ is substituted with the absolute repo path at install time.
 FORWARD="$APP/Contents/Resources/forward.sh"
 cat >"$FORWARD" <<'FORWARD_SH'
@@ -42,14 +45,27 @@ cat >"$FORWARD" <<'FORWARD_SH'
 set -euo pipefail
 REPO="__REPO__"
 SOCK="$HOME/Library/Application Support/fovea-cam-app/open-file.sock"
+LOG="${TMPDIR:-/tmp}/foveacam-dev-shim.log"
+export PATH="/opt/homebrew/bin:$PATH"
 
-if [ -S "$SOCK" ]; then
-  if printf '%s\n' "$@" | /usr/bin/nc -U -w 2 "$SOCK"; then
-    exit 0
-  fi
+notify() { printf '%s\n' "$@" | /usr/bin/nc -U -w 2 "$SOCK"; }
+
+if [ "${1:-}" = "--cold" ]; then
+  shift
+  cd "$REPO/app"
+  /opt/homebrew/bin/npm run dev >"$LOG" 2>&1 &
+  [ $# -eq 0 ] && exit 0
+  for _ in $(seq 1 240); do
+    sleep 0.5
+    if [ -S "$SOCK" ] && notify "$@"; then exit 0; fi
+  done
+  exit 1
 fi
 
-nohup "$REPO/app/node_modules/.bin/electron" "$REPO/app" "$@" >/dev/null 2>&1 &
+if [ -S "$SOCK" ] && notify "$@"; then
+  exit 0
+fi
+nohup /bin/bash "$0" --cold "$@" >>"$LOG" 2>&1 &
 FORWARD_SH
 # Bake the repo path into the forwarder (placeholder → absolute path).
 /usr/bin/sed -i '' "s|__REPO__|$REPO|g" "$FORWARD"

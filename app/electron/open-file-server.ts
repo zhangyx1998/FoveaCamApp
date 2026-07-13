@@ -44,7 +44,9 @@ export function startOpenFileServer(
       socket.end();
     });
   });
-  server.on("error", () => {});
+  server.on("error", (e) => {
+    console.error(`[open-file-server] ${socketPath}:`, e.message);
+  });
   server.listen(socketPath);
 
   return {
