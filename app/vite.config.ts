@@ -10,6 +10,14 @@ import root_package from "../package.json";
 import workspace_package from "./package.json";
 import { allEntries, entryTitle } from "./lib/windows";
 
+// The `dependencies` blocks are LOAD-BEARING: every key here becomes a Node
+// runtime EXTERNAL — excluded from prebundling, and the renderer build marks
+// it `type: "cjs"` (imports rewritten to bare `require(...)`). Only
+// Node-runtime packages belong in `dependencies` (core, serialport,
+// telecanvas, ...); a browser library placed there crashes every renderer at
+// launch with "require is not defined" from inside its ESM entry (rig-caught
+// 2026-07-12: @fortawesome/fontawesome-svg-core). Browser/renderer libs go in
+// `devDependencies` — vite bundles them.
 const external = Object.keys({
     ...(root_package.dependencies ?? {}),
     ...(workspace_package.dependencies ?? {}),
