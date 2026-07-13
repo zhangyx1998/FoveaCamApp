@@ -54,6 +54,7 @@ import { migrateStoreOnBoot } from "./store-migrate";
 import type { StoreClientMessage } from "@lib/store-proxy";
 import type { AppConfig } from "@lib/config";
 import { getIcon } from "./util";
+import { startOpenFileServer, type OpenFileServer } from "./open-file-server";
 import { resolveDefaultSavePath, validateWritablePath } from "@lib/util/fs";
 import {
   WindowManager,
@@ -1409,16 +1410,28 @@ async function devRestart(): Promise<void> {
 // macOS delivers double-clicked/dragged `.fcap`/`.fovea` files via `open-file` —
 // which can fire BEFORE `whenReady` when the app is launched by the file
 // itself, so pre-ready paths queue until the window manager can spawn.
-// (Windows/Linux deliver file paths via argv → the `second-instance` handler
-// below for a running instance; a fresh launch's argv is not wired yet —
-// packaging-verified with the electron-builder `fileAssociations` later.)
+// A running instance is also notified over a userData Unix socket by the
+// dev-mode shim (docs/dev/fcap-file-association.md) — that callback and a fresh
+// launch's own argv both funnel through `openExternal` too, so no path opens a
+// second Electron. (Windows/Linux still route argv via `second-instance`.)
 const pendingOpenFiles: string[] = [];
 let windowsReady = false;
+let openFileServer: OpenFileServer | null = null;
+
+function openExternal(p: string): void {
+  if (!isRecordingPath(p)) return;
+  if (windowsReady) manager.openViewer(p);
+  else pendingOpenFiles.push(p);
+}
+
 app.on("open-file", (event, filePath) => {
   event.preventDefault();
-  if (windowsReady) manager.openViewer(filePath);
-  else pendingOpenFiles.push(filePath);
+  openExternal(filePath);
 });
+
+// Cold-start argv (macOS shim connect-failure path, or a direct CLI launch):
+// seed recording args now so they queue behind the initial window layout.
+for (const arg of process.argv.filter(isRecordingPath)) openExternal(arg);
 
 // ---- Startup ---------------------------------------------------------------
 
@@ -1451,6 +1464,14 @@ app
   // TeleCanvas host: if the persisted config selected host mode, bring the
   // server up now so an external display can connect before any app opens.
   .then(applyPersistedTeleCanvas)
+  // Open-file socket: lets the dev-mode shim notify this running instance to
+  // open a recording instead of launching a second Electron.
+  .then(() => {
+    openFileServer = startOpenFileServer(
+      path.join(DATA, "open-file.sock"),
+      openExternal,
+    );
+  })
   .then(createInitialWindows);
 
 // Quit = graceful hardware quiescence first (safety invariant): dispose EVERY
@@ -1487,6 +1508,7 @@ app.on("before-quit", (event) => {
       await waitUntil(() => !registry.anyAlive(), 6000);
     } finally {
       killProbe();
+      openFileServer?.close();
       // Kill the TeleCanvas host (main-owned utilityProcess, no hardware).
       telecanvas.killAll();
       // Clean shutdown reached — stand the crash watchdog down before we exit.
