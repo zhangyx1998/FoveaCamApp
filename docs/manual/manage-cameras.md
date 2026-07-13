@@ -44,6 +44,17 @@ The moment one camera holds **Fovea Left** and another holds **Fovea Right**, th
 
 **Trigger Budget.** At the bottom of the pair panel, a readout row shows what the current exposure settings imply for the trigger: **"Max trigger rate ≈ N Hz (exposure X ms + margins)"** — or "readout floor X ms" when the camera's readout, not the exposure, is what binds the rate. The trigger pulse must cover the slower eye's exposure, and the interval between triggers adds the camera-reported readout floor plus a small fixed overhead margin (hover the row for the exact terms). The tracking apps derive their trigger pulse and pacing from these same settings — exposure is authoritative; lengthen the pair's exposure and the achievable trigger rate drops accordingly. The per-triple settle hold ([Settings](./settings.md#per-triple-settings)) adds on top when a tracking app drives the trigger.
 
+**Trigger.** A **test** button and a verdict readout. Pressing **test** fires two real triggers on **both** fovea cameras and checks a frame actually arrives from each: first a **software** trigger (which exercises the camera → frame path with no wiring involved), then — if a controller is connected — one **hardware** pulse through the trigger cabling. It briefly pauses the previews and restores free-run afterwards. Read the verdict:
+
+- **untested** — the test has not run this session.
+- **OK · sw+hw trigger** — every camera produced a frame from both a software and a hardware trigger; the trigger **input** chain is healthy (MCU → trigger line → exposure → frame). The strobe-return line is only proven by a live trigger-sync engage.
+- **OK · sw trigger** — software passed on both, but no controller was connected so the hardware leg was skipped.
+- **L: camera** / **R: camera** — that camera produced no frame even from a software trigger: the fault is the camera or its stream path, not the wiring.
+- **L: wiring** / **R: wiring** — software passed but the hardware pulse produced no frame: the MCU pulse is not reaching that camera — check the opto trigger cabling.
+- **L: no probe** / **R: no probe** — the test could not observe that camera's frames (its pipe is parked); not a failure — re-run with the preview open.
+
+This is the same fault the tracking apps trip automatically at engage (see [Disparity Scope](./disparity-scope.md)); run it here first when a synced-capture session refuses to engage.
+
 ### Pixel Format
 
 When a camera exposes format options, the **Pixel Format** dropdown lets you choose its sensor readout format. Changing format briefly pauses the preview to reconfigure the camera, and 12-bit packed formats (for example `BayerRG12p`) read full sensor depth to cut debayer quantization noise (hover the dropdown for these terms). The dropdown is momentarily disabled while the switch is applied.

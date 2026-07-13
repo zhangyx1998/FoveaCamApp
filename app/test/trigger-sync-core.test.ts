@@ -15,9 +15,13 @@ import {
   createTriggerOpChain,
   engageFailureReason,
   frameRequestFromBudget,
+  TRIGGER_FAULT_STREAK,
   TRIGGER_SPAN_EVERY_K,
   TRIGGER_SPAN_FIRST_N,
   triggerBlockReason,
+  triggerFaultBlocked,
+  triggerFaultMessage,
+  TriggerFaultDetector,
   TriggerRateWindow,
   TriggerSpanSampler,
 } from "@lib/trigger-sync";
@@ -120,6 +124,59 @@ describe("engageFailureReason (finding 10 — curated blocked line)", () => {
   it("stringifies non-Error throwables; empty message reads unknown", () => {
     expect(engageFailureReason("boom")).toBe("engage failed: boom");
     expect(engageFailureReason(new Error(""))).toBe("engage failed: unknown error");
+  });
+});
+
+describe("TriggerFaultDetector (passive fault gate)", () => {
+  const trip = (d: TriggerFaultDetector, reason: string, n: number): string | null => {
+    let out: string | null = null;
+    for (let i = 0; i < n; i++) out = d.onFailure(reason) ?? out;
+    return out;
+  };
+
+  it("trips on the Nth consecutive identical-reason failure, once", () => {
+    const d = new TriggerFaultDetector();
+    // The first N-1 are below threshold.
+    for (let i = 0; i < TRIGGER_FAULT_STREAK - 1; i++)
+      expect(d.onFailure("Strobe timeout")).toBeNull();
+    // The Nth trips, returning the reason.
+    expect(d.onFailure("Strobe timeout")).toBe("Strobe timeout");
+    // Past the trip it stays null — the session fires exactly once.
+    expect(d.onFailure("Strobe timeout")).toBeNull();
+    expect(d.onFailure("Strobe timeout")).toBeNull();
+  });
+
+  it("a FIN clears the streak (frames flowing = no fault)", () => {
+    const d = new TriggerFaultDetector();
+    trip(d, "Strobe timeout", TRIGGER_FAULT_STREAK - 1); // one short
+    d.onFin();
+    // The streak restarts from zero — one more failure is not a trip.
+    expect(d.onFailure("Strobe timeout")).toBeNull();
+    expect(trip(d, "Strobe timeout", TRIGGER_FAULT_STREAK - 1)).toBe("Strobe timeout");
+  });
+
+  it("a reason change restarts the count (a different failure isn't the fault)", () => {
+    const d = new TriggerFaultDetector();
+    trip(d, "queue full", TRIGGER_FAULT_STREAK - 1); // one short
+    // A new reason resets the streak to 1 — not a trip.
+    expect(d.onFailure("Strobe timeout")).toBeNull();
+    // It takes a full fresh streak of the NEW reason to trip.
+    expect(trip(d, "Strobe timeout", TRIGGER_FAULT_STREAK - 1)).toBe("Strobe timeout");
+  });
+
+  it("reset (re-engage) drops any streak", () => {
+    const d = new TriggerFaultDetector();
+    trip(d, "Strobe timeout", TRIGGER_FAULT_STREAK - 1);
+    d.reset();
+    expect(d.onFailure("Strobe timeout")).toBeNull();
+  });
+
+  it("messages name the reason (detail line + compact blocked reason)", () => {
+    expect(triggerFaultMessage("Strobe timeout")).toContain('"Strobe timeout"');
+    expect(triggerFaultMessage("Strobe timeout")).toContain("check trigger wiring");
+    expect(triggerFaultBlocked("Strobe timeout")).toBe(
+      'hardware trigger fault ("Strobe timeout") — check wiring',
+    );
   });
 });
 

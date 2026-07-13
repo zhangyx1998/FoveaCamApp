@@ -37,7 +37,12 @@ import RangeSlider from "@src/inputs/range-slider.vue";
 import { CAMERA_CONTROLS, TRIGGER_FRAME_MARGIN_US } from "@lib/camera-config";
 import { bindField, usePipeFrame, type Session } from "@lib/orchestrator/client";
 import { nodeId } from "@lib/orchestrator/graph-contract";
-import type { CameraView, ManageCamerasContract, Range } from "./contract";
+import type {
+  CameraView,
+  ManageCamerasContract,
+  Range,
+  TriggerTestVerdict,
+} from "./contract";
 
 // Readout formatters from the shared control schema — the same source the
 // orchestrator snapshot uses, so the displayed value can't drift from the wire.
@@ -368,6 +373,83 @@ const budgetTitle = computed(() => {
   );
 });
 
+// --- Trigger self-test (§Trigger test) --------------------------------------
+const triggerTest = computed(() =>
+  variant === "pair" ? session.telemetry.trigger_test : null,
+);
+const testing = ref(false);
+async function runTriggerTest() {
+  if (testing.value || formatBusy.value || unifyBusy.value) return;
+  testing.value = true;
+  try {
+    await session.call("testTrigger", undefined);
+  } finally {
+    testing.value = false;
+  }
+}
+
+type TriggerReadout = { text: string; tone: "muted" | "ok" | "danger"; title: string };
+const testedAt = (at: number) =>
+  ` Tested ${new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.`;
+const triggerReadout = computed<TriggerReadout>(() => {
+  if (testing.value)
+    return {
+      text: "testing…",
+      tone: "muted",
+      title: "Firing a software then hardware trigger on both fovea cameras.",
+    };
+  const r = triggerTest.value;
+  if (!r)
+    return {
+      text: "untested",
+      tone: "muted",
+      title:
+        "Run the trigger self-test to verify the camera→frame path (software) and the hardware trigger wiring.",
+    };
+  const token = (v: TriggerTestVerdict): string | null =>
+    v.sw === "unavailable"
+      ? "no probe"
+      : v.sw === "fail"
+        ? "camera"
+        : v.hw === "fail"
+          ? "wiring"
+          : null;
+  const issues: string[] = [];
+  let anyFail = false;
+  for (const side of ["L", "R"] as const) {
+    const t = token(r[side]);
+    if (t) issues.push(`${side}: ${t}`);
+    if (t === "camera" || t === "wiring") anyFail = true;
+  }
+  if (issues.length)
+    return {
+      text: issues.join(" · "),
+      tone: anyFail ? "danger" : "muted",
+      title:
+        "camera = the software trigger produced no frame (camera or stream path). " +
+        "wiring = software passed but the hardware pulse produced no frame — check the opto trigger cabling. " +
+        "no probe = the frame probe is unavailable (camera pipe parked) — not a failure; re-run with the preview open." +
+        testedAt(r.at),
+    };
+  const bothHw = r.L.hw === "ok" && r.R.hw === "ok";
+  return bothHw
+    ? {
+        text: "OK · sw+hw trigger",
+        tone: "ok",
+        title:
+          "Both fovea cameras produced a frame from a software AND a hardware trigger — the trigger input chain is healthy. " +
+          "The strobe-return line is only proven by a live trigger-sync engage." +
+          testedAt(r.at),
+      }
+    : {
+        text: "OK · sw trigger",
+        tone: "ok",
+        title:
+          "Both cameras produced a frame from a software trigger; the hardware leg was skipped (no controller connected)." +
+          testedAt(r.at),
+      };
+});
+
 // Click-to-type readout: the input replaces the value span in the same box
 // (layout-stable). Enter/blur commit, Escape cancels.
 const editing = ref<string | null>(null);
@@ -569,6 +651,26 @@ function cancelEdit(e?: Event) {
         <h4><span>Trigger Budget</span></h4>
         <p class="hint budget" :title="budgetTitle">{{ budgetText }}</p>
       </template>
+      <template v-if="variant === 'pair' && pair">
+        <h4><span>Trigger</span></h4>
+        <div class="trigger-test">
+          <button
+            class="test-btn"
+            :disabled="testing || formatBusy || unifyBusy"
+            title="Fires a real software then hardware trigger on both fovea cameras and checks a frame arrives. Briefly pauses the previews."
+            @click="runTriggerTest"
+          >
+            test
+          </button>
+          <span
+            class="verdict"
+            :class="triggerReadout.tone"
+            :title="triggerReadout.title"
+          >
+            {{ triggerReadout.text }}
+          </span>
+        </div>
+      </template>
       <button
         v-if="variant === 'single'"
         class="reset-config"
@@ -748,5 +850,46 @@ input.value {
 .unify button:disabled {
   cursor: wait;
   opacity: 0.6;
+}
+
+.trigger-test {
+  display: flex;
+  align-items: center;
+  gap: 1ch;
+
+  .test-btn {
+    cursor: pointer;
+    font: inherit;
+    font-size: 0.8em;
+    padding: 0.2em 1.2ch;
+    border-radius: 4px;
+    color: inherit;
+    border: 1px solid var(--tint-4);
+    background: var(--tint-1);
+
+    &:hover {
+      background: var(--tint-3);
+    }
+    &:disabled {
+      cursor: wait;
+      opacity: 0.6;
+    }
+  }
+
+  .verdict {
+    font-size: 0.8em;
+    font-variant-numeric: tabular-nums;
+    cursor: help;
+
+    &.muted {
+      opacity: 0.6;
+    }
+    &.ok {
+      color: var(--ok);
+    }
+    &.danger {
+      color: var(--danger-text);
+    }
+  }
 }
 </style>

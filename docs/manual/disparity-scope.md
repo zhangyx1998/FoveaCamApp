@@ -165,7 +165,8 @@ the two foveas capture frames:
 
 The selector is **intent**: it remembers what you asked for (persisted), and
 the app engages the trigger when the preconditions permit — and keeps trying
-without further action from you. While intent is on but not yet engaged the
+without further action from you (with one exception: a detected hardware
+fault, below). While intent is on but not yet engaged the
 selected option's outline tints to the warning color, and the reason —
 **no controller connected**, **controller firmware is not v2-capable
 (CMD_FRAME unavailable)**, and so on — lands in the title-bar **error tray**
@@ -189,6 +190,18 @@ v2 firmware, or flip back to **Free-run** to clear the notice.
 While engaged, a transient **pair skew** status word means an L/R pair
 straddled two trigger slots and was discarded; persistent skew shows up as
 rejects and timeouts in the Status hover.
+
+**Hardware trigger fault.** If, right after engaging, the firmware rejects
+every frame with one repeated reason and no frame ever arrives (the signature
+of a trigger pulse that never reaches the cameras — a wiring fault), the app
+detects it within about half a second: an **error** lands in the title-bar
+tray naming the firmware's reason, and the cameras are automatically restored
+to free-run so the views recover instead of freezing. In this one case the
+app does **not** keep retrying — the intent stays remembered, but re-engaging
+would just fault again. Fix the wiring (the
+[Manage Cameras](./manage-cameras.md#fovea-pair) **Trigger** test isolates
+which leg is broken), then flip the selector off and back on to re-arm;
+restarting the session also re-arms.
 
 Prefer **Trigger sync** for depth accuracy on moving targets and a uniform
 control cadence: simultaneous exposures remove the left/right timing skew that

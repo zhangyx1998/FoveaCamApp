@@ -117,6 +117,9 @@ import {
   firstErrorLine,
   frameRequestFromBudget,
   triggerBlockReason,
+  triggerFaultBlocked,
+  triggerFaultMessage,
+  TriggerFaultDetector,
   TriggerRateWindow,
   TriggerSpanSampler,
 } from "@lib/trigger-sync";
@@ -1347,6 +1350,12 @@ export default function disparityScopeSession(
     const triggerRate = new TriggerRateWindow();
     /** Caps outcome spans reaching the diagnostics ring; reset per engage. */
     const triggerSpanSampler = new TriggerSpanSampler();
+    /** Passive fault gate: a streak of identical-reason failures with zero
+     *  FINs (spec §trigger-sync fault gate) trips it. Reset per engage. */
+    const triggerFault = new TriggerFaultDetector();
+    /** A tripped fault gate latches trigger-sync OUT until intent off→on or a
+     *  re-activation — a faulted engage must not flap the retry tick. */
+    let triggerFaultLatched = false;
     /** Reject/timeout reasons already surfaced to the tray this engage. */
     const reportedTriggerReasons = new Set<string>();
     let lastTriggerBlocked: string | null = null;
@@ -1368,11 +1377,26 @@ export default function disparityScopeSession(
      *  every interval; the UI needs edges, not spam). Each new reason ALSO
      *  lands in the title-bar tray as a WARNING — the drawer keeps only the
      *  warn-tinted mode select, the tray carries the detail. */
-    function publishTriggerBlocked(reason: string | null): void {
+    function publishTriggerBlocked(reason: string | null, warn = true): void {
       if (reason === lastTriggerBlocked) return;
       lastTriggerBlocked = reason;
       s.telemetry({ trigger_blocked: reason });
-      if (reason !== null) report("trigger-sync", reason, "warning");
+      // The fault path reports its own ERROR-level line (`warn=false`) — a
+      // second warning of the compact reason would triple-surface it.
+      if (reason !== null && warn) report("trigger-sync", reason, "warning");
+    }
+
+    /** Passive fault gate tripped (spec §trigger-sync fault gate): the firmware
+     *  rejected every frame with one reason and no FIN ever landed — the pulse
+     *  is not reaching the cameras. Surface the ERROR (interpretation + the
+     *  reason), latch trigger-sync OUT so the retry tick can't re-engage, and
+     *  disengage back to free-run (cameras restored, the views recover). The
+     *  intent stays latched; the latch clears on intent off→on / re-activation. */
+    function handleTriggerFault(reason: string): void {
+      if (triggerFaultLatched) return;
+      triggerFaultLatched = true;
+      report("trigger-sync", triggerFaultMessage(reason), "error");
+      void disengageTrigger(triggerFaultBlocked(reason), false);
     }
 
     /** Exposure-authoritative budget over both fovea config docs (P6 —
@@ -1497,6 +1521,7 @@ export default function disparityScopeSession(
       triggerFrames = triggerRejects = triggerTimeouts = 0;
       triggerRate.reset(now());
       triggerSpanSampler.reset();
+      triggerFault.reset();
       reportedTriggerReasons.clear();
       let acksThisEngage = 0;
       triggerScheduler = new RoundRobinFrameScheduler({
@@ -1514,6 +1539,7 @@ export default function disparityScopeSession(
         onFrame(frame) {
           triggerFrames++;
           triggerRate.onFin();
+          triggerFault.onFin();
           if (triggerSpanSampler.shouldLog("fin"))
             span("trigger-sync.fin", 0, {
               stream: frame.stream,
@@ -1528,6 +1554,8 @@ export default function disparityScopeSession(
           if (triggerSpanSampler.shouldLog("rej", reason))
             span("trigger-sync.rej", 0, { reason, acksSoFar: acksThisEngage });
           reportDistinctTriggerReason(reason);
+          const fault = triggerFault.onFailure(reason);
+          if (fault) handleTriggerFault(fault);
         },
         onTimeout(failure) {
           triggerTimeouts++;
@@ -1535,6 +1563,8 @@ export default function disparityScopeSession(
           if (triggerSpanSampler.shouldLog("timeout", reason))
             span("trigger-sync.timeout", 0, { reason, acksSoFar: acksThisEngage });
           reportDistinctTriggerReason(reason);
+          const fault = triggerFault.onFailure(reason);
+          if (fault) handleTriggerFault(fault);
         },
       });
       applyTriggerTarget(streamId);
@@ -1554,7 +1584,10 @@ export default function disparityScopeSession(
     }
 
     /** Serialized via `queueTriggerOp` — see {@link engageTrigger}. */
-    async function disengageTriggerNow(blockedReason: string | null): Promise<void> {
+    async function disengageTriggerNow(
+      blockedReason: string | null,
+      warn: boolean,
+    ): Promise<void> {
       await timeSpan(
         "trigger-sync.disengage",
         async () => {
@@ -1574,7 +1607,7 @@ export default function disparityScopeSession(
               }
           }
           if (wasEngaged) s.telemetry({ trigger: null });
-          publishTriggerBlocked(s.state.trigger_sync ? blockedReason : null);
+          publishTriggerBlocked(s.state.trigger_sync ? blockedReason : null, warn);
         },
         { reason: blockedReason },
       );
@@ -1594,8 +1627,11 @@ export default function disparityScopeSession(
      *  BEFORE `releaseLeases`, which also drains any queued engage ahead of
      *  it on the chain. `blockedReason` publishes only while the intent stays
      *  latched (detach path). */
-    function disengageTrigger(blockedReason: string | null = null): Promise<void> {
-      return queueTriggerOp(() => disengageTriggerNow(blockedReason));
+    function disengageTrigger(
+      blockedReason: string | null = null,
+      warn = true,
+    ): Promise<void> {
+      return queueTriggerOp(() => disengageTriggerNow(blockedReason, warn));
     }
 
     // --- lifecycle --------------------------------------------------------
@@ -1632,6 +1668,7 @@ export default function disparityScopeSession(
       lastStep = now();
       lastSteppedSeq = -1;
       triggerEngageAllowed = true; // latched intent re-engages via the retry tick
+      triggerFaultLatched = false; // a fresh activation clears any prior fault latch
       dragSlew.reset();
       // Seed the capture-epoch ring so frames captured before the first target
       // write still resolve to the target in effect at activation (R1).
@@ -2242,7 +2279,8 @@ export default function disparityScopeSession(
           // engagement on this tick (preconditions are lazy/async — the native
           // sink attach, a controller reconnect); once engaged, the achieved-
           // rate readout publishes at the same throttle.
-          if (s.state.trigger_sync && !triggerEngaged) void engageTrigger();
+          if (s.state.trigger_sync && !triggerEngaged && !triggerFaultLatched)
+            void engageTrigger();
           else if (triggerEngaged) publishTriggerTelemetry();
           if (!nativeSink) {
             // No controller → fixed behavior; the estimate resets so a stale
@@ -2624,8 +2662,10 @@ export default function disparityScopeSession(
         // preconditions permit (else `trigger_blocked` + the retry tick);
         // off → back to free-run.
         trigger_sync(on) {
-          if (on) void engageTrigger();
-          else void disengageTrigger();
+          if (on) {
+            triggerFaultLatched = false; // intent off→on clears the fault latch
+            void engageTrigger();
+          } else void disengageTrigger();
         },
         tracker_type(type) {
           if (!trackerSrc.pipe) return; // idle — activate will read state

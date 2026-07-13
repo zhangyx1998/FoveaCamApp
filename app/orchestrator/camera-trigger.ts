@@ -48,6 +48,19 @@ export async function enableHardwareTrigger(
   });
 }
 
+/**
+ * Trigger self-test flip (manage-cameras §Trigger test): TriggerMode On with
+ * `TriggerSource=Software` — the SAME machinery as {@link enableHardwareTrigger}
+ * but fired by `camera.softwareTrigger()` instead of a hardware pulse. It
+ * exercises the camera → convert-pipe frame path WITHOUT any trigger wiring,
+ * so a self-test that flips here, fires software, and sees no frame indicts the
+ * camera/stream path — not the opto cabling (which the hardware leg tests next).
+ * Restore with {@link disableHardwareTrigger}.
+ */
+export async function enableSoftwareTrigger(lease: CameraLease): Promise<void> {
+  await enableHardwareTrigger(lease, { triggerSource: "Software" });
+}
+
 /** Reverts {@link enableHardwareTrigger} — back to free-run, matching every
  *  other (non-synced) camera. */
 export async function disableHardwareTrigger(

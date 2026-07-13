@@ -164,6 +164,77 @@ export class TriggerSpanSampler {
   }
 }
 
+/** Consecutive identical-reason frame FAILURES (reject/timeout) before the
+ *  passive fault gate trips. At the observed ~39 ms storm cadence this is
+ *  < 0.5 s — long enough to never trip on a transient reject, short enough to
+ *  restore free-run before the frozen feed reads as a hang. */
+export const TRIGGER_FAULT_STREAK = 10;
+
+/** PASSIVE hardware-trigger fault gate (spec disparity-scope §trigger-sync):
+ *  a run of {@link TRIGGER_FAULT_STREAK} identical-reason failures with ZERO
+ *  FINs in between means the MCU pulse never reaches the cameras (the rig's
+ *  deterministic REJ "Strobe timeout" storm — no exposures, no frames). Any
+ *  FIN clears the streak (frames ARE flowing); a reason change restarts it
+ *  (a different failure is not the same fault). `trip` returns the fault
+ *  reason exactly ONCE per streak so the session fires (report + disengage)
+ *  once and does not flap. Pure (trigger-sync-core.test.ts). */
+export class TriggerFaultDetector {
+  private streak = 0;
+  private reason: string | null = null;
+  private tripped = false;
+
+  constructor(private readonly threshold = TRIGGER_FAULT_STREAK) {}
+
+  /** New engage — drop any streak. */
+  reset(): void {
+    this.streak = 0;
+    this.reason = null;
+    this.tripped = false;
+  }
+
+  /** A FIN arrived: frames flow, no fault. */
+  onFin(): void {
+    this.streak = 0;
+    this.reason = null;
+    this.tripped = false;
+  }
+
+  /** A reject/timeout carrying `reason`. Returns the reason the FIRST time the
+   *  streak reaches the threshold, else null (including every failure past the
+   *  trip — the session acts once). */
+  onFailure(reason: string): string | null {
+    if (reason !== this.reason) {
+      this.reason = reason;
+      this.streak = 1;
+      this.tripped = false;
+    } else {
+      this.streak++;
+    }
+    if (!this.tripped && this.streak >= this.threshold) {
+      this.tripped = true;
+      return reason;
+    }
+    return null;
+  }
+}
+
+/** The ERROR-tray line for a tripped {@link TriggerFaultDetector} (spec
+ *  §trigger-sync fault gate): names the firmware reason and the check, lowercase
+ *  curated voice. The compact `trigger_blocked` reason ({@link triggerFaultBlocked})
+ *  carries the short form; this carries the detail. */
+export function triggerFaultMessage(reason: string): string {
+  return (
+    `hardware trigger fault: every frame rejected ("${reason}") — ` +
+    `no camera exposures; check trigger wiring. Restoring free-run.`
+  );
+}
+
+/** The compact `trigger_blocked` reason for a tripped fault gate (the tray
+ *  error carries the detail). */
+export function triggerFaultBlocked(reason: string): string {
+  return `hardware trigger fault ("${reason}") — check wiring`;
+}
+
 /** FIFO op chain serializing engage/disengage: their lease trigger
  *  reconfigures must never interleave (a fast OFF→ON otherwise re-enables
  *  against in-flight disables and can leave one camera untriggered while the

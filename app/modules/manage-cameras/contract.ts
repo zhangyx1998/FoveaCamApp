@@ -80,6 +80,27 @@ export type FoveaPairView = {
   budget: PairBudgetView;
 };
 
+/** One camera's trigger self-test verdict (§Trigger test): the SOFTWARE leg
+ *  (camera → convert-pipe frame path, `TriggerSource=Software` + a software
+ *  trigger) and the HARDWARE leg (one real MCU pulse via `Line0` — proves the
+ *  trigger INPUT chain only; the strobe RETURN line is only proven by a live
+ *  trigger-sync engage). `sw: "fail"` indicts the camera/stream path;
+ *  `sw: "ok"` + `hw: "fail"` isolates the trigger wiring; `"no-controller"` =
+ *  the hardware leg could not run; `"unavailable"` = the convert producer's
+ *  frame probe is dead (pipe parked) — not a pass or a fail. */
+export type TriggerTestVerdict = {
+  sw: "ok" | "fail" | "skipped" | "unavailable";
+  hw: "ok" | "fail" | "no-controller" | "unavailable";
+};
+
+/** Latest fovea-pair trigger self-test result, or null (never run / reset on
+ *  idle). `at` = completion epoch ms. */
+export type TriggerTestResult = {
+  at: number;
+  L: TriggerTestVerdict;
+  R: TriggerTestVerdict;
+};
+
 export const manageCameras = defineContract({
   state: {},
   telemetry: {
@@ -92,6 +113,9 @@ export const manageCameras = defineContract({
      *  role claims), or null — an actionable hint; the pair panel silently
      *  vanishing reads as a bug (UI/UX review #10). */
     pair_blocked: null as string | null,
+    /** Latest fovea-pair trigger self-test verdicts (§Trigger test), or null
+     *  (never run this session / reset on idle). */
+    trigger_test: null as TriggerTestResult | null,
   },
   // Preview channels are dynamic, one per serial (e.g. `frame(serial)`).
   frames: [] as const,
@@ -110,6 +134,10 @@ export const manageCameras = defineContract({
     /** Copy the pair-linked config of `source` (one of the pair's serials)
      *  onto the other camera — the explicit divergence resolution. */
     unifyPair: cmd<{ source: string }>(),
+    /** Run the fovea-pair trigger self-test (§Trigger test): fires a real
+     *  software then hardware trigger on BOTH fovea cameras, restoring free-run,
+     *  and publishes `trigger_test`. No-op unless the pair is linked. */
+    testTrigger: cmd(),
     /** Reset a camera to auto defaults and clear its stored config. */
     reset: cmd<{ serial: string }>(),
   },

@@ -489,6 +489,47 @@ telemetry `trigger: null`. On CONTROLLER DETACH the intent stays latched: camera
 return to free-run, `trigger_blocked` reads "controller detached", and the retry tick
 re-engages when a v2 controller re-attaches.
 
+**Passive fault gate.** A correctly-configured pair (TriggerMode On / Line0 /
+RisingEdge, Line1 ExposureActive out) whose trigger pulse never reaches the cameras'
+opto inputs storms `REJ "Strobe timeout"` every ~pulse+5 ms with ZERO FINs and zero
+exposures — a deterministic, firmware-named signature. `TriggerFaultDetector`
+(`@lib/trigger-sync`) watches the scheduler outcomes: `TRIGGER_FAULT_STREAK` = 10
+consecutive identical-reason failures (reject OR timeout) with no FIN in between trips
+the gate (at the ~39 ms storm cadence, < 0.5 s). ANY FIN clears the streak (frames are
+flowing); a reason change restarts it; `trip` returns the reason exactly ONCE so the
+session acts once. On trip the session `report`s an ERROR — not a warning — naming the
+firmware reason and the check (`triggerFaultMessage`, e.g. `hardware trigger fault:
+every frame rejected ("Strobe timeout") — no camera exposures; check trigger wiring.
+Restoring free-run.`), then DISENGAGES back to free-run (the serialized disengage, so
+the cameras are restored and the views recover instead of freezing). `trigger_blocked`
+carries the compact `triggerFaultBlocked` reason (the tray error holds the detail);
+the disengage suppresses its own warning (`warn=false`) so the reason is not
+triple-surfaced. NO-FLAP: the intent stays latched but a FAULT latch
+(`triggerFaultLatched`) blocks the retry tick from re-engaging — a faulted engage must
+not thrash the leases. The latch CLEARS on intent off→on (the user re-arms after
+fixing the wiring) and on re-activation (`activateSession`); it is not cleared by a
+bare disengage.
+
+The ACTIVE counterpart lives in **manage-cameras** (`testTrigger`, no separate spec
+file): the Fovea Pair panel's **Trigger** test fires a SOFTWARE trigger
+(`enableSoftwareTrigger` — `TriggerSource=Software` + `camera.softwareTrigger()`) then,
+if a controller is connected, ONE hardware pulse (`activeController().trigger(pulseUs)`
+— CMD_TRIGGER, `Microseconds` on the wire, exposure-covering, never ×1000) on BOTH
+fovea cameras, restoring free-run after each leg even on throw (retried once; a
+still-failing restore reports at ERROR — frozen-preview class). Frame arrival is the
+`camera/<serial>/convert` producer's native-probe output `count` diffed across the
+trigger (monotonic since producer start). The BASELINE is captured only after the
+counter holds still ~200 ms post-flip (bounded ~500 ms) — frames exposed pre-flip but
+still in readout/convert would otherwise land after a naive baseline and credit a dead
+trigger line; the post-fire wait is `max(1000, exposureMs × 2 + 500)` ms so a long
+exposure cannot false-fail. A dead probe row (producer parked) verdicts
+`"unavailable"`, never `"fail"`. Verdicts ride `trigger_test: { at, L, R }` telemetry
+(reset on idle; the command holds a server-side in-flight latch); a software fail
+indicts the camera/stream path, a software-pass + hardware-fail isolates the trigger
+wiring — the same fault the passive gate trips at engage. The hardware leg proves the
+trigger INPUT chain only (MCU→Line0→exposure→frame); the strobe RETURN line
+(Line1→MCU) is only proven by a live CMD_FRAME engage.
+
 **Teardown invariant.** `disableHardwareTrigger` rides `lease.reconfigure()`, so the
 idle-path disengage is AWAITED at the top of `idleSession`, strictly BEFORE
 `releaseLeases` — a released lease has no live handle to reconfigure, and a camera left

@@ -35,6 +35,15 @@ import {
 import { read, update, write } from "@orchestrator/store-hub";
 import { report } from "@orchestrator/diagnostics";
 import {
+  disableHardwareTrigger,
+  enableHardwareTrigger,
+  enableSoftwareTrigger,
+} from "@orchestrator/camera-trigger";
+import { activeController } from "@orchestrator/controller";
+import { nativeProbes } from "@orchestrator/native-probes";
+import { nodeId } from "@lib/orchestrator/graph-contract";
+import { firstErrorLine } from "@lib/trigger-sync";
+import {
   CAMERA_CONTROLS,
   PAIR_LINKED_CONTROLS,
   describeCamera,
@@ -44,7 +53,13 @@ import {
   readControlPatch,
 } from "@lib/camera-config";
 import { CoalescedWriter } from "@lib/coalesced-writer";
-import { manageCameras, type CameraView, type FoveaPairView } from "./contract";
+import {
+  manageCameras,
+  type CameraView,
+  type FoveaPairView,
+  type TriggerTestResult,
+  type TriggerTestVerdict,
+} from "./contract";
 import type { CameraInfo } from "@lib/orchestrator/contracts";
 import type { Camera } from "core/Aravis";
 
@@ -69,6 +84,8 @@ export default function manageCamerasSession(): ServerSession<typeof manageCamer
     const entries = new Map<string, Entry>();
     let poll: ReturnType<typeof setInterval> | null = null;
     let views: Record<string, CameraView> = {};
+    /** In-flight trigger self-test — `testTrigger` re-entrancy latch. */
+    let triggerTestRun: Promise<void> | null = null;
 
     function readView(e: Entry): CameraView {
       const c = e.lease.camera;
@@ -277,6 +294,155 @@ export default function manageCamerasSession(): ServerSession<typeof manageCamer
       return list;
     }
 
+    // --- Trigger self-test (§Trigger test) ------------------------------------
+    // Frame-arrival probe: the camera's convert-pipe producer exposes a native
+    // meter whose output `count` is MONOTONIC since producer start (same schema
+    // as every JS workload — cumulative, never windowed), so a before/after diff
+    // isolates a single triggered frame. Chosen over a temporary pipe consumer:
+    // no new SHM consumer/ArrayBuffer, no new lease — manage-cameras already
+    // leases the camera and its producer is already running.
+    /** Null = the probe row is absent (producer parked/detached) — the test
+     *  cannot observe frames and must verdict "unavailable", never "fail". */
+    function producedFrames(serial: string): number | null {
+      const probe = nativeProbes()[nodeId.convert(serial)];
+      if (!probe) return null;
+      let total = 0;
+      for (const stat of Object.values(probe.outputs ?? {})) total += stat.count ?? 0;
+      return total;
+    }
+
+    const FRAME_POLL_MS = 50;
+    const BASELINE_STABLE_MS = 200;
+    const BASELINE_WAIT_MS = 500;
+
+    /** Post-flip baseline: frames exposed BEFORE the trigger flip can still be
+     *  in readout/transfer/convert and land after it — crediting a dead trigger
+     *  line with "ok". Wait for the counter to hold still ~200 ms (bounded
+     *  ~500 ms total) before trusting it. */
+    async function settledBaseline(serial: string): Promise<number | null> {
+      const deadline = Date.now() + BASELINE_WAIT_MS;
+      let last = producedFrames(serial);
+      if (last === null) return null;
+      let heldSince = Date.now();
+      while (Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, FRAME_POLL_MS));
+        const cur = producedFrames(serial);
+        if (cur === null) return null;
+        if (cur !== last) {
+          last = cur;
+          heldSince = Date.now();
+        } else if (Date.now() - heldSince >= BASELINE_STABLE_MS) break;
+      }
+      return last;
+    }
+
+    /** Settle the baseline, fire, then wait for one NEW producer frame —
+     *  ≥1 s, scaled so a long exposure (≥~900 ms) can still deliver in time. */
+    async function awaitTriggeredFrame(
+      serial: string,
+      exposureUs: number,
+      fire: () => unknown,
+    ): Promise<"ok" | "fail" | "unavailable"> {
+      const baseline = await settledBaseline(serial);
+      if (baseline === null) return "unavailable";
+      await fire();
+      const deadline = Date.now() + Math.max(1000, (exposureUs / 1000) * 2 + 500);
+      while (Date.now() < deadline) {
+        const cur = producedFrames(serial);
+        if (cur !== null && cur > baseline) return "ok";
+        await new Promise((r) => setTimeout(r, FRAME_POLL_MS));
+      }
+      return "fail";
+    }
+
+    /** A camera stuck in trigger mode is the frozen-preview failure class:
+     *  retry the disable once, then report at ERROR naming the consequence. */
+    async function restoreFreeRun(e: Entry): Promise<void> {
+      let lastErr: unknown;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          await disableHardwareTrigger(e.lease);
+          return;
+        } catch (err) {
+          lastErr = err;
+        }
+      }
+      report(
+        "trigger-test",
+        `${e.serial} may be stuck in trigger mode — preview frozen; ` +
+          `reset the camera or power-cycle (${firstErrorLine(lastErr, 120)})`,
+        "error",
+      );
+    }
+
+    /** Self-test one camera — software leg always, hardware leg iff a controller
+     *  is connected. Restores free-run COMPLETELY after each leg, even on throw. */
+    async function testTriggerCamera(e: Entry): Promise<TriggerTestVerdict> {
+      const { camera } = e.lease;
+      const verdict: TriggerTestVerdict = { sw: "skipped", hw: "no-controller" };
+      const exposureUs = safe(() => camera.exposure, 0);
+      // SOFTWARE leg: camera → convert-pipe path, no wiring involved.
+      try {
+        await enableSoftwareTrigger(e.lease);
+        verdict.sw = await awaitTriggeredFrame(e.serial, exposureUs, () =>
+          camera.softwareTrigger(),
+        );
+      } catch (err) {
+        report(
+          "trigger-test",
+          `${e.serial} software leg: ${err instanceof Error ? err.message : err}`,
+          "warning",
+        );
+        verdict.sw = "fail";
+      } finally {
+        await restoreFreeRun(e);
+      }
+      // HARDWARE leg: one real MCU pulse via Line0, only if a controller is up.
+      // A dead probe means neither leg can observe frames — same verdict.
+      const controller = activeController();
+      if (verdict.sw === "unavailable") verdict.hw = "unavailable";
+      else if (controller?.connected) {
+        try {
+          await enableHardwareTrigger(e.lease); // Line0 in / Line1 ExposureActive
+          // CMD_TRIGGER duration is MICROSECONDS on the wire (verified: firmware
+          // `Trigger.duration` is Microseconds; `Controller.trigger` forwards it
+          // verbatim — NEVER ×1000). Cover the exposure, 5 ms floor for a clean
+          // rising edge.
+          const pulseUs = Math.round(Math.max(exposureUs, 5000));
+          verdict.hw = await awaitTriggeredFrame(e.serial, exposureUs, () =>
+            controller.trigger(pulseUs),
+          );
+        } catch (err) {
+          report(
+            "trigger-test",
+            `${e.serial} hardware leg: ${err instanceof Error ? err.message : err}`,
+            "warning",
+          );
+          verdict.hw = "fail";
+        } finally {
+          await restoreFreeRun(e);
+        }
+      }
+      return verdict;
+    }
+
+    /** Warn (with the interpretation) on any failing side. */
+    function reportTriggerTestFailures(r: TriggerTestResult): void {
+      const interpret = (v: TriggerTestVerdict): string | null =>
+        v.sw === "fail"
+          ? "camera/stream path (software trigger produced no frame)"
+          : v.hw === "fail"
+            ? "trigger wiring (software ok, hardware pulse produced no frame)"
+            : null;
+      const parts: string[] = [];
+      for (const side of ["L", "R"] as const) {
+        const msg = interpret(r[side]);
+        if (msg) parts.push(`${side}: ${msg}`);
+      }
+      if (parts.length)
+        report("trigger-test", `Trigger self-test — ${parts.join("; ")}.`, "warning");
+    }
+
     return {
       commands: {
         refresh,
@@ -364,6 +530,25 @@ export default function manageCamerasSession(): ServerSession<typeof manageCamer
           if (format) await applyPixelFormat(to, format);
           publishViews();
         },
+        async testTrigger() {
+          // Server-side in-flight latch (the renderer's `testing` ref is
+          // per-window): a second call rides the running test.
+          triggerTestRun ??= (async () => {
+            try {
+              const pair = pairEntries();
+              if (!pair) return;
+              // Sequential (never overlap two reconfigure flows / triggers).
+              const L = await testTriggerCamera(pair.left);
+              const R = await testTriggerCamera(pair.right);
+              const result: TriggerTestResult = { at: Date.now(), L, R };
+              s.telemetry({ trigger_test: result });
+              reportTriggerTestFailures(result);
+            } finally {
+              triggerTestRun = null;
+            }
+          })();
+          return triggerTestRun;
+        },
         async reset({ serial }) {
           const e = entries.get(serial);
           if (!e) return;
@@ -397,6 +582,7 @@ export default function manageCamerasSession(): ServerSession<typeof manageCamer
           poll = null;
         }
         for (const serial of [...entries.keys()]) closeEntry(serial);
+        s.telemetry({ trigger_test: null }); // stale verdicts don't outlive the session
       },
     };
   });
