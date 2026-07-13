@@ -148,13 +148,16 @@ const STATE_LABEL: Record<string, string> = {
   .count { color: var(--text-muted); font-weight: 400; }
   .clear {
     margin-left: auto;
-    background: none;
+    background: transparent;
     border: none;
     color: var(--accent-bright);
     cursor: pointer;
     font-size: var(--fs-sm);
     font-weight: 400;
-    padding: 0;
+    padding: 0 0.4ch;
+    border-radius: 0.3ch;
+    &:hover { background: var(--tint-2); }
+    &:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   }
 }
 .note {
@@ -170,12 +173,14 @@ const STATE_LABEL: Record<string, string> = {
   .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); font-size: var(--fs-sm); }
   .state { color: var(--text-faint); font-size: var(--fs-sm); }
   .abort {
-    background: none;
+    background: transparent;
     border: none;
     color: var(--text-muted);
     cursor: pointer;
     padding: 0 0.2ch;
-    &:hover { color: var(--danger-text); }
+    border-radius: 0.3ch;
+    &:hover { color: var(--danger-text); background: var(--tint-2); }
+    &:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   }
 }
 .dot {

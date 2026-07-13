@@ -127,15 +127,64 @@ descriptor tracks refresh independently.
   layout is authoritative and `moveBlock` mutates it directly — auto-pack is NEVER
   re-applied over user placement. `reconcileLayout`/`layoutMismatch` handle a stored
   layout vs the container's actual channels WITHOUT silently discarding it.
+  `insertBlockAt(rows, blocks, channel, insertBefore)` supports the touch-up
+  ruling 8 gesture — dropping a block on the thin boundary BETWEEN two lanes
+  removes it from its row and splices it in as a brand-new track (empty rows drop,
+  per-row start-time sort; a fresh row never collides). The on-lane drop still
+  routes through `moveBlock`/`dropCollides`.
+- **Initial playhead** (touch-up ruling 1): on open the playhead defaults to
+  `firstMeaningfulNs(blocks)` — the earliest block start — instead of t=0, so at
+  least one tile shows immediately. A persisted `playheadNs > 0` still wins; the
+  change is only the fresh/absent default.
 - **3D pairing** (ruling 4): L/R of one stream by side-tagged naming. A base pairs
   only when exactly one left and one right claim it (ambiguous never false-pairs).
   Side tokens match a WHOLE segment; single-letter `l`/`r` pair only as a standalone
   segment leaving a non-empty shared base.
 - **Tile order** (ruling 9): Z order = master row first, then top→bottom; a
   non-`disabled` 3D pair collapses to ONE tile at its higher (earlier) row.
+- **Tile slots** (touch-up ruling 2): `composeTileSlots` yields ONE slot per
+  track — either a real `tile` or a `placeholder` (`no-frame` / `disabled` /
+  `pair-collapsed`), so slot i ↔ track i is stable. A non-disabled pair renders in
+  the FIRST of its two tracks; the partner track's slot becomes a `pair-collapsed`
+  placeholder naming the base. The UI renders the slots through a persisted
+  `tileOrder` (a permutation of track indices, `reconcileTileOrder` against the
+  live track count) that the user pointer-drags to rearrange; placeholders are
+  drop targets only. `trackRole`/`trackColor` give each track a theme hue (L/C/R
+  role colors via `sideOf`/wide names, else a deterministic muted cycle) applied
+  as a lane + block tint and the matching tile-slot header chip (ruling 4).
 - **Decode set** (ruling 3): the frame channels the engine must decode — every
   enabled channel minus the hidden side of any left-/right-only pair; sorted +
   de-duplicated for a stable wire payload.
+
+## Time viewport {#viewport}
+
+`time-viewport.ts` — PURE visible-time-window algebra (Vue/Node-free,
+unit-tested), the touch-up rulings 3/5/6 geometry. A `TimeViewport {t0,t1}` is the
+visible file-relative window; every pointer x ⟷ time mapping in the tracks area
+(block x/width, playhead %, ruler ticks, click/drag-seek, wheel) goes through
+`fracOf`/`nsAtX` against it instead of a duration-percent. Not persisted (this
+wave): it resets to `fullViewport(duration)` when a file loads.
+
+- **Zoom/pan** (ruling 5): ctrl+wheel (= macOS pinch) → `zoomAt(factor, anchorFrac)`
+  keeping the cursor time fixed (span clamped to `[MIN_SPAN_NS, duration+2·bleed]`);
+  plain horizontal wheel → `panSoft(deltaNs)` with rubber-band softening past
+  `[−bleed, duration+bleed]`; vertical wheel falls through to native track-list
+  scroll. On gesture idle (~150 ms) an out-of-bounds viewport rAF-animates back to
+  `settleTarget` (critically-damped feel). `bleedNs`/`BLEED_FRACTION` size the
+  rubber-band allowance; the UI draws the out-of-`[0,duration]` regions as dimmed
+  hatched **bleed strips**.
+- **Ruler** (ruling 3): `rulerTicks(vp, widthPx)` yields nice-number ticks
+  (1/2/5·10^k ns ladder, s/ms boundaries) targeting ~a fixed px spacing, major
+  ticks labeled (mm:ss.SSS adapting to the step). Rendered as an absolute overlay
+  strip at the tracks top (above lanes, below the playhead); click/drag seeks via
+  `nsAtX` clamped to `[0,duration]`.
+- **Smooth playhead** (ruling 6): `interpolatePlayhead(lastNs, lastAtMs, nowMs,
+  rate, playing, duration)` extrapolates the last worker position by wall-clock ·
+  rate while playing (clamped to duration; identity when paused/scrubbing). A rAF
+  loop drives ONLY the visual playhead line + its %; worker `position` events
+  re-anchor it and pause/seek snap. Tiles/overlays keep deriving off the RAW worker
+  position (no per-frame re-derivation), and the transport timecode shows the raw
+  position (no fake precision).
 
 ## Enabled-set decode gate {#enabled-set}
 
@@ -187,7 +236,11 @@ silently discard a layout). `classifySidecar` distinguishes absent/ok/corrupt at
 the file level; channel-mismatch is decided in the UI (it needs the container's
 channels). Unknown keys dropped; every field type-checked + clamped so a
 hand-edited/version-skewed file can't wedge the UI. `SIDECAR_VERSION` bump ⇒ older
-`v` treated as corrupt (→ defaults) until a migration is added.
+`v` treated as corrupt (→ defaults) until a migration is added. The touch-up
+added an OPTIONAL `tileOrder?: number[]` (ruling 2 — the persisted tile-slot
+permutation): absent in older files (no version bump), conservatively cleaned
+(finite non-negative integers, de-duplicated) and only surfaced when present, so
+an older sidecar still round-trips byte-identically.
 
 ## Video export {#export}
 

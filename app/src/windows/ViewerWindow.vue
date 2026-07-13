@@ -35,23 +35,38 @@ import {
 } from "../viewer/stats";
 import StatsPopover, { type StatsEntry } from "../viewer/StatsPopover.vue";
 import {
-  activeChannels,
-  composeTiles,
+  composeTileSlots,
   decodeSet,
   detectMaster,
   detectPairs,
   dropCollides,
+  firstMeaningfulNs,
   initialLayout,
+  insertBlockAt,
   layoutMismatch,
   moveBlock,
-  nsAtClientX,
   reconcileLayout,
+  reconcileTileOrder,
   sideOf,
+  trackColor,
   THREE_D_MODES,
   type ChannelBlock,
   type ThreeDMode,
   type Tile,
+  type TileSlot,
 } from "../viewer/timeline";
+import {
+  fracOf,
+  fullViewport,
+  interpolatePlayhead,
+  nsAtX,
+  panSoft,
+  rulerTicks,
+  settleTarget,
+  zoomAt,
+  type RulerTick,
+  type TimeViewport,
+} from "../viewer/time-viewport";
 import {
   assignColors,
   footprintSide,
@@ -150,6 +165,9 @@ function onEngineEvent(ev: ViewerEvent): void {
     case "position":
       workerPositionNs.value = ev.positionNs;
       playing.value = ev.playing;
+      // Re-anchor the smooth playhead (ruling 6) to this authoritative sample.
+      lastPosWall = performance.now();
+      if (!ev.playing) displayNs.value = ev.positionNs; // paused sample snaps
       break;
     case "telemetry": {
       // Per-frame extras → the footprint overlay. Retain the LATEST doc per
@@ -332,6 +350,10 @@ onUnmounted(() => {
   window.removeEventListener("message", onViewerPort);
   closeStats();
   stopPanelPoll();
+  if (playheadRaf !== null) cancelAnimationFrame(playheadRaf);
+  if (settleRaf !== null) cancelAnimationFrame(settleRaf);
+  if (settleTimer) clearTimeout(settleTimer);
+  tracksRO?.disconnect();
   disposeEngineDown?.();
   disposeConfirmClose?.();
   disposeSession?.();
@@ -364,6 +386,9 @@ const pairs = computed(() => detectPairs(frameChannels.value));
 
 const tracks = ref<string[][]>([]); // full layout, row 0 = master track
 const disabled = ref<Set<string>>(new Set());
+// Preview tile order (ruling 2): a persisted permutation of TRACK indices giving
+// the left→right slot order. Reconciled against the live track count on use.
+const tileOrder = ref<number[]>([]);
 // GLOBAL 3D view mode (ruling 4, amended user 2026-07-09): one mode for EVERY
 // L/R pair, chosen in the preview header — no longer per pair.
 const threeD = ref<ThreeDMode>("disabled");
@@ -405,6 +430,7 @@ function currentSidecarState(): SidecarState {
     playheadNs: workerPositionNs.value,
     panelOpen: panelOpen.value,
     panelWidth: panelWidth.value,
+    tileOrder: tileOrder.value,
   };
 }
 
@@ -418,13 +444,23 @@ function persist(): void {
 function initializeLayout(persistIt: boolean): void {
   tracks.value = initialLayout(blocks.value, master.value.channel);
   disabled.value = new Set();
+  tileOrder.value = []; // natural track order until the user drags tiles
   threeD.value = "disabled";
   split.value = DEFAULT_SPLIT;
   tileWidth.value = DEFAULT_TILE_WIDTH;
   panelOpen.value = false;
   panelWidth.value = DEFAULT_PANEL_WIDTH;
   initialized.value = true;
+  seekInitial(0); // ruling 1: land on the first meaningful frame
   if (persistIt) persist();
+}
+
+/** Seek to the initial playhead (ruling 1): a persisted position wins; otherwise
+ *  the earliest block start (`firstMeaningfulNs`) so at least one tile shows on
+ *  open, instead of a blank t=0. A 0 target (no blocks) is a harmless no-op. */
+function seekInitial(persistedNs: number): void {
+  const target = persistedNs > 0 ? persistedNs : firstMeaningfulNs(blocks.value);
+  if (target > 0) send({ type: "seek", tNs: target });
 }
 
 function applySidecar(load: SidecarLoad): void {
@@ -442,6 +478,7 @@ function applySidecar(load: SidecarLoad): void {
   // status === "ok": restore. threeD/disabled/split/tileWidth apply regardless.
   const st = load.state;
   disabled.value = new Set(st.disabled);
+  tileOrder.value = st.tileOrder ? [...st.tileOrder] : [];
   threeD.value = st.threeD; // global mode (sidecar already collapsed old maps)
   split.value = st.split;
   tileWidth.value = st.tileWidth;
@@ -456,7 +493,8 @@ function applySidecar(load: SidecarLoad): void {
     tracks.value = st.tracks.map((r) => [...r]);
   }
   initialized.value = true;
-  if (st.playheadNs > 0) send({ type: "seek", tNs: st.playheadNs });
+  // Ruling 1: persisted playhead wins; otherwise the first meaningful frame.
+  seekInitial(st.playheadNs);
 }
 
 // Confirm-dialog resolutions.
@@ -500,6 +538,58 @@ const scrubNs = ref(0);
 const positionNs = computed(() => (scrubbing.value ? scrubNs.value : workerPositionNs.value));
 const durationNs = computed(() => file.value?.durationNs ?? 0);
 
+// --- time viewport (ruling 5) ----------------------------------------------
+// The visible time window over the tracks. NOT persisted this wave — it resets
+// to the full recording whenever a file's duration becomes known. Every pointer
+// x ⟷ time mapping (blocks, playhead, ruler, click-seek, wheel) goes through
+// `fracOf`/`nsAtX` against this so pan/zoom is uniform.
+const viewport = ref<TimeViewport>(fullViewport(0));
+watch(durationNs, (d) => (viewport.value = fullViewport(d)), { immediate: true });
+/** Pointer clientX → viewport fraction [0,1] over the tracks rect. */
+function fracAtClientX(clientX: number, r: DOMRect): number {
+  return r.width > 0 ? Math.min(1, Math.max(0, (clientX - r.left) / r.width)) : 0.5;
+}
+
+// --- smooth playhead (ruling 6) --------------------------------------------
+// While PLAYING, a rAF loop extrapolates the last worker position by wall-clock
+// · rate so the visual playhead line glides between the (coarser) worker
+// `position` events; each event RE-ANCHORS it, and pause/seek SNAP. Only the
+// playhead line + its % use this — tiles/overlays keep the raw worker position.
+const displayNs = ref(0);
+let lastPosWall = 0; // performance.now() at the last worker position event
+let playheadRaf: number | null = null;
+function playheadLoop(): void {
+  if (!playing.value) {
+    playheadRaf = null;
+    return;
+  }
+  displayNs.value = interpolatePlayhead(
+    workerPositionNs.value, lastPosWall, performance.now(),
+    rate.value, playing.value, durationNs.value,
+  );
+  playheadRaf = requestAnimationFrame(playheadLoop);
+}
+watch(playing, (p) => {
+  if (p) {
+    // Anchor NOW so the first rAF frame doesn't extrapolate from a stale sample
+    // (the paused-state timestamp) and jump to the end before the next event.
+    lastPosWall = performance.now();
+    displayNs.value = workerPositionNs.value;
+    if (playheadRaf === null) playheadRaf = requestAnimationFrame(playheadLoop);
+  } else {
+    if (playheadRaf !== null) cancelAnimationFrame(playheadRaf);
+    playheadRaf = null;
+    displayNs.value = workerPositionNs.value; // pause snaps to the true position
+  }
+});
+/** The playhead's VISUAL position: interpolated while playing, the scrub target
+ *  while scrubbing (seek snaps), else the raw worker position. */
+const smoothPositionNs = computed(() => {
+  if (scrubbing.value) return scrubNs.value;
+  if (playing.value) return displayNs.value;
+  return workerPositionNs.value;
+});
+
 function togglePlay(): void {
   if (!file.value) return;
   if (playing.value) {
@@ -519,11 +609,12 @@ function seekTo(tNs: number): void {
   telemetry.value = {}; // reset-on-seek: no future footprint left on screen
   send({ type: "seek", tNs: clamped });
 }
-/** Click-to-seek on a timeline track lane (snap). Shares `nsAtClientX` with the
- *  draggable playhead so both map pointer x → time identically. */
+/** Click-to-seek on a timeline track lane (snap). Maps pointer x → time through
+ *  the VIEWPORT (`nsAtX`, ruling 5) so it matches the ruler + draggable playhead;
+ *  `seekTo` clamps to [0, duration]. */
 function seekFromClientX(clientX: number, el: HTMLElement): void {
-  const r = el.getBoundingClientRect();
-  seekTo(nsAtClientX(clientX, r.left, r.width, durationNs.value));
+  const r = tracksEl.value?.getBoundingClientRect() ?? el.getBoundingClientRect();
+  seekTo(nsAtX(clientX, r.left, r.width, viewport.value));
   scrubbing.value = false;
 }
 
@@ -539,12 +630,12 @@ function onPlayheadDown(e: PointerEvent): void {
   (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
   playheadDrag.value = true;
   const r = tracksEl.value.getBoundingClientRect();
-  seekTo(nsAtClientX(e.clientX, r.left, r.width, durationNs.value));
+  seekTo(nsAtX(e.clientX, r.left, r.width, viewport.value));
 }
 function onPlayheadMove(e: PointerEvent): void {
   if (!playheadDrag.value || !tracksEl.value) return;
   const r = tracksEl.value.getBoundingClientRect();
-  seekTo(nsAtClientX(e.clientX, r.left, r.width, durationNs.value));
+  seekTo(nsAtX(e.clientX, r.left, r.width, viewport.value));
 }
 function onPlayheadUp(): void {
   if (!playheadDrag.value) return;
@@ -555,10 +646,56 @@ function onPlayheadUp(): void {
 
 // --- preview tiles ----------------------------------------------------------
 
-const orderedActive = computed(() =>
-  activeChannels(tracks.value, blocks.value, positionNs.value, enabledSet.value),
+// Ruling 2: ONE tile slot per track — a real tile or a placeholder (no-frame /
+// disabled / pair-collapsed). Derived on the RAW worker position (not the smooth
+// playhead) so tiles don't re-derive every animation frame during playback.
+const tileSlotsRaw = computed<TileSlot[]>(() =>
+  composeTileSlots(tracks.value, blocks.value, positionNs.value, enabledSet.value, pairModeOf.value),
 );
-const tiles = computed<Tile[]>(() => composeTiles(orderedActive.value, pairModeOf.value));
+/** The persisted order reconciled to the current track count (drop stale, append
+ *  missing). Identity when they already agree. */
+const effectiveOrder = computed(() => reconcileTileOrder(tileOrder.value, tracks.value.length));
+/** Slots in the persisted left→right order (slot i ↔ track i, remapped). */
+const orderedSlots = computed<TileSlot[]>(() => {
+  const byTrack = new Map(tileSlotsRaw.value.map((s) => [s.track, s]));
+  return effectiveOrder.value
+    .map((ti) => byTrack.get(ti))
+    .filter((s): s is TileSlot => s !== undefined);
+});
+/** How many slots actually render a view (placeholders excluded) — the header
+ *  count keeps its "N views" meaning. */
+const tileViewCount = computed(() => orderedSlots.value.filter((s) => s.kind === "tile").length);
+/** Stable per-slot key: real tiles key on their content, placeholders on track. */
+function slotKey(slot: TileSlot): string {
+  return slot.kind === "tile" ? `t:${tileKey(slot.tile)}` : `p:${slot.track}:${slot.reason}`;
+}
+/** The track hue for a slot's header chip (ruling 4) — same hue as its lane. */
+function slotColor(slot: TileSlot): string {
+  const row = tracks.value[slot.track];
+  return row ? trackColor(row, slot.track) : "transparent";
+}
+/** The lane tag for a track index (0 = master), shared by tiles + lanes. */
+function trackTag(track: number): string {
+  return track === 0 ? "master" : String(track);
+}
+/** Placeholder-slot accessors (kept as helpers so the template never leans on
+ *  v-else discriminated-union narrowing). */
+function placeholderLabel(slot: TileSlot): string {
+  return slot.kind === "placeholder" ? slot.label : "";
+}
+function placeholderReason(slot: TileSlot): string {
+  if (slot.kind !== "placeholder") return "";
+  switch (slot.reason) {
+    case "no-frame":
+      return "no frame at playhead";
+    case "disabled":
+      return "disabled";
+    case "pair-collapsed":
+      return "merged with its pair";
+    default:
+      return "";
+  }
+}
 
 /** The configured anaglyph style (app config `anaglyph_style`) — drives the 3D
  *  compose below. Live: a Settings change flows through the shared config doc.
@@ -903,21 +1040,196 @@ const footprintFontSize = computed(() => {
 });
 const footprintStroke = computed(() => Math.max(1.5, footprintFontSize.value * 0.22));
 
-// --- timeline geometry ------------------------------------------------------
+// --- timeline geometry (viewport-aware, ruling 5) ---------------------------
 
+/** A block's on-screen x/width, mapped through the viewport (`fracOf`). Blocks
+ *  outside the window land off-screen (clipped by the lane's overflow). */
 function blockStyle(channel: string): Record<string, string> {
   const b = blockByChannel.value.get(channel);
-  const d = durationNs.value;
-  if (!b || d <= 0) return { display: "none" };
-  const left = (b.startNs / d) * 100;
-  const width = Math.max(0.4, ((b.lastNs - b.startNs) / d) * 100);
+  if (!b || durationNs.value <= 0) return { display: "none" };
+  const left = fracOf(b.startNs, viewport.value) * 100;
+  const right = fracOf(b.lastNs, viewport.value) * 100;
+  const width = Math.max(0.4, right - left);
   return { left: `${left}%`, width: `${width}%` };
 }
-const playheadPct = computed(() => {
-  const d = durationNs.value;
-  return d > 0 ? (positionNs.value / d) * 100 : 0;
+/** Viewport fraction (0..1) of a file-relative ns, as a `%` string — the shared
+ *  mapping for the playhead, ruler ticks, and bleed strips. */
+function fracPct(ns: number): string {
+  return `${fracOf(ns, viewport.value) * 100}%`;
+}
+const playheadPct = computed(() => fracOf(smoothPositionNs.value, viewport.value) * 100);
+
+// Bleed strips (ruling 5): the dimmed hatched areas BEFORE t=0 and AFTER the end
+// mark the recording boundaries; they pan/zoom with the content. Rendered only
+// when the viewport actually shows past a bound.
+const bleedBeforePct = computed(() => {
+  const left = fracOf(0, viewport.value) * 100;
+  return left > 0 ? Math.min(100, left) : 0;
 });
+const bleedAfterPct = computed(() => {
+  const right = fracOf(durationNs.value, viewport.value) * 100;
+  return right < 100 ? Math.max(0, right) : 100;
+});
+
+// --- ruler (ruling 3) -------------------------------------------------------
+// An absolute overlay strip at the top of `.tracks`: nice-number ticks from
+// `rulerTicks`, re-rendered on any viewport OR width change. Clicking/dragging it
+// seeks (clamped to [0, duration]) — the lanes' own click-to-seek stays.
+const tracksWidth = ref(0);
+const rulerT = computed<RulerTick[]>(() =>
+  tracksWidth.value > 0 ? rulerTicks(viewport.value, tracksWidth.value) : [],
+);
+const rulerDrag = ref(false);
+function rulerSeekAt(clientX: number): void {
+  if (!tracksEl.value) return;
+  const r = tracksEl.value.getBoundingClientRect();
+  seekTo(nsAtX(clientX, r.left, r.width, viewport.value)); // seekTo clamps
+}
+function onRulerDown(e: PointerEvent): void {
+  if (e.button !== 0) return;
+  e.stopPropagation();
+  (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  rulerDrag.value = true;
+  rulerSeekAt(e.clientX);
+}
+function onRulerMove(e: PointerEvent): void {
+  if (!rulerDrag.value) return;
+  rulerSeekAt(e.clientX);
+}
+function onRulerUp(): void {
+  if (!rulerDrag.value) return;
+  rulerDrag.value = false;
+  scrubbing.value = false;
+  persist();
+}
+
+// --- wheel: pan / zoom + spring-back settle (ruling 5) ----------------------
+const ZOOM_RATE = 0.0025; // per wheel deltaY unit (multiplicative span factor)
+let settleTimer: ReturnType<typeof setTimeout> | null = null;
+let settleRaf: number | null = null;
+function onTracksWheel(e: WheelEvent): void {
+  if (durationNs.value <= 0 || !tracksEl.value) return;
+  const r = tracksEl.value.getBoundingClientRect();
+  if (e.ctrlKey) {
+    // ctrl+wheel (= macOS pinch): zoom centered on the cursor (nodegraph idiom).
+    e.preventDefault();
+    const anchorFrac = fracAtClientX(e.clientX, r);
+    // `zoomAt` divides span by `factor`, so factor>1 zooms IN. deltaY<0
+    // (scroll-up / pinch-out) → factor>1 → zoom in (nodegraph convention).
+    const factor = Math.exp(-e.deltaY * ZOOM_RATE);
+    viewport.value = zoomAt(viewport.value, factor, anchorFrac, durationNs.value);
+    scheduleSettle();
+  } else if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
+    // Predominantly horizontal → pan X (rubber-band past bounds via panSoft).
+    // Vertical scroll falls THROUGH to natively scroll the track list.
+    e.preventDefault();
+    const span = viewport.value.t1 - viewport.value.t0;
+    const deltaNs = (e.deltaX / (r.width || 1)) * span;
+    viewport.value = panSoft(viewport.value, deltaNs, durationNs.value);
+    scheduleSettle();
+  }
+}
+/** After the wheel gesture goes idle (~150 ms), animate any out-of-bounds
+ *  viewport back to its legal `settleTarget` (critically-damped feel). */
+function scheduleSettle(): void {
+  if (settleTimer) clearTimeout(settleTimer);
+  settleTimer = setTimeout(() => {
+    settleTimer = null;
+    animateSettle();
+  }, 150);
+}
+function animateSettle(): void {
+  const from = viewport.value;
+  const target = settleTarget(from, durationNs.value);
+  if (from.t0 === target.t0 && from.t1 === target.t1) return; // already legal
+  const start = performance.now();
+  const DUR = 200;
+  const step = (): void => {
+    const t = Math.min(1, (performance.now() - start) / DUR);
+    const e = 1 - (1 - t) ** 3; // ease-out cubic ≈ critically damped
+    viewport.value = {
+      t0: from.t0 + (target.t0 - from.t0) * e,
+      t1: from.t1 + (target.t1 - from.t1) * e,
+    };
+    settleRaf = t < 1 ? requestAnimationFrame(step) : null;
+  };
+  if (settleRaf) cancelAnimationFrame(settleRaf);
+  settleRaf = requestAnimationFrame(step);
+}
+
+// Track the `.tracks` width for the ruler (re-render ticks on resize). The
+// element mounts/unmounts with the collapse toggle, so bind the observer to the
+// ref rather than a one-shot onMounted.
+let tracksRO: ResizeObserver | null = null;
+watch(tracksEl, (el) => {
+  tracksRO?.disconnect();
+  tracksRO = null;
+  if (el) {
+    tracksWidth.value = el.clientWidth;
+    tracksRO = new ResizeObserver(() => (tracksWidth.value = el.clientWidth));
+    tracksRO.observe(el);
+  }
+});
+
 const isMasterChannel = (channel: string) => channel === master.value.channel;
+/** Track hue for a lane (ruling 4): a CSS custom property the lane + its blocks
+ *  tint against (border/accent only — not a loud fill). */
+function laneColor(row: readonly string[], index: number): string {
+  return trackColor(row, index);
+}
+
+// --- preview tile reordering (ruling 2) -------------------------------------
+// Pointer-drag a tile's header to rearrange the slots. `overIndex` is an
+// INSERTION index in [0, n]; a thin drop indicator renders there. On release the
+// track index is moved within the persisted `tileOrder` and saved.
+type TileDragState = { fromIndex: number; pointerId: number; overIndex: number; moved: boolean };
+const tileDrag = ref<TileDragState | null>(null);
+const tileEls = ref<HTMLElement[]>([]);
+function registerTileEl(el: Element | null, i: number): void {
+  if (el instanceof HTMLElement) tileEls.value[i] = el;
+}
+/** Insertion index (0..n) for a pointer x over the tile strip. */
+function tileInsertAtX(clientX: number): number {
+  const n = orderedSlots.value.length;
+  for (let i = 0; i < n; i++) {
+    const el = tileEls.value[i];
+    if (!el) continue;
+    const r = el.getBoundingClientRect();
+    if (clientX < r.left + r.width / 2) return i;
+  }
+  return n;
+}
+function onTileDragDown(e: PointerEvent, idx: number): void {
+  if (e.button !== 0) return;
+  (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  tileDrag.value = { fromIndex: idx, pointerId: e.pointerId, overIndex: idx, moved: false };
+}
+function onTileDragMove(e: PointerEvent): void {
+  const d = tileDrag.value;
+  if (!d || e.pointerId !== d.pointerId) return;
+  tileDrag.value = { ...d, overIndex: tileInsertAtX(e.clientX), moved: true };
+}
+function onTileDragUp(e: PointerEvent): void {
+  const d = tileDrag.value;
+  if (!d || e.pointerId !== d.pointerId) return;
+  tileDrag.value = null;
+  if (!d.moved) return; // a bare click (no move) leaves order + focus untouched
+  reorderTiles(d.fromIndex, d.overIndex);
+}
+/** Move the slot at `from` (visual index) to an INSERTION point, rewriting the
+ *  persisted track-index order. */
+function reorderTiles(from: number, insertBefore: number): void {
+  const order = [...effectiveOrder.value];
+  if (from < 0 || from >= order.length) return;
+  let target = insertBefore > from ? insertBefore - 1 : insertBefore; // account for removal
+  target = Math.max(0, Math.min(order.length - 1, target));
+  if (target === from) return;
+  const [moved] = order.splice(from, 1);
+  order.splice(target, 0, moved!);
+  tileOrder.value = order;
+  persist();
+}
+
 /** Set the single GLOBAL 3D mode (ruling 4 amendment) — applies to every pair. */
 function setThreeDMode(event: Event): void {
   threeD.value = (event.target as HTMLSelectElement).value as ThreeDMode;
@@ -1038,12 +1350,17 @@ function onKeydown(e: KeyboardEvent): void {
 /** Pending debounced release of the arrow-nudge scrub latch. */
 let nudgeSettle: ReturnType<typeof setTimeout> | null = null;
 
-// --- block drag/drop (ruling 2/10: snap; collision refused) -----------------
+// --- block drag/drop (ruling 2/8/10: snap; collision refused; insert new row) -
+// A drop target is EITHER a row (move onto that lane, `moveBlock`) OR a boundary
+// BETWEEN lanes (insert `channel` as a new row there, `insertBlockAt`, ruling 8).
+// The boundary is the thin top/bottom edge band of each lane.
+const LANE_EDGE_PX = 6;
 type DragState = {
   channel: string;
   pointerId: number;
   y: number; // current pointer clientY
-  targetRow: number; // hovered row (or tracks.length for a new bottom row)
+  targetRow: number; // hovered row (or tracks.length for a new bottom row); -1 when inserting
+  insertBefore: number | null; // boundary insertion index (ruling 8), else null
   colliding: boolean;
 };
 const drag = ref<DragState | null>(null);
@@ -1052,37 +1369,55 @@ function registerLane(el: Element | null, row: number): void {
   if (el instanceof HTMLElement) trackLaneEls.value[row] = el;
 }
 
-function rowAtClientY(clientY: number): number {
+/** Classify a pointer y over the lane stack: a lane row, or a between-lane
+ *  insertion boundary (ruling 8). Below the last lane → a new bottom row. */
+function dropTargetAtY(clientY: number): { row: number } | { insertBefore: number } {
   const lanes = trackLaneEls.value;
-  for (let i = 0; i < lanes.length; i++) {
+  for (let i = 0; i < tracks.value.length; i++) {
     const el = lanes[i];
     if (!el) continue;
     const r = el.getBoundingClientRect();
-    if (clientY >= r.top && clientY <= r.bottom) return i;
+    if (clientY >= r.top && clientY <= r.bottom) {
+      if (clientY <= r.top + LANE_EDGE_PX) return { insertBefore: i };
+      if (clientY >= r.bottom - LANE_EDGE_PX) return { insertBefore: i + 1 };
+      return { row: i };
+    }
   }
-  // Below the last lane → a NEW bottom row.
-  return tracks.value.length;
+  return { row: tracks.value.length }; // below the last lane → new bottom row
 }
 
 function onBlockPointerDown(e: PointerEvent, channel: string): void {
   if (e.button !== 0) return;
   focusBlock(channel);
   (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-  drag.value = { channel, pointerId: e.pointerId, y: e.clientY, targetRow: -1, colliding: false };
+  drag.value = { channel, pointerId: e.pointerId, y: e.clientY, targetRow: -1, insertBefore: null, colliding: false };
 }
 function onBlockPointerMove(e: PointerEvent): void {
   const d = drag.value;
   if (!d || e.pointerId !== d.pointerId) return;
-  const row = rowAtClientY(e.clientY);
+  const target = dropTargetAtY(e.clientY);
   d.y = e.clientY;
-  d.targetRow = row;
-  d.colliding = dropCollides(tracks.value, blocks.value, d.channel, row);
+  if ("insertBefore" in target) {
+    d.insertBefore = target.insertBefore;
+    d.targetRow = -1;
+    d.colliding = false; // a fresh row never collides
+  } else {
+    d.insertBefore = null;
+    d.targetRow = target.row;
+    d.colliding = dropCollides(tracks.value, blocks.value, d.channel, target.row);
+  }
   drag.value = { ...d };
 }
 function onBlockPointerUp(e: PointerEvent): void {
   const d = drag.value;
   if (!d || e.pointerId !== d.pointerId) return;
   drag.value = null;
+  if (d.insertBefore != null) {
+    // Insert as a NEW track at the boundary (ruling 8) — empty rows drop inside.
+    tracks.value = insertBlockAt(tracks.value, blocks.value, d.channel, d.insertBefore);
+    persist();
+    return;
+  }
   const currentRow = tracks.value.findIndex((r) => r.includes(d.channel));
   // Snap back (no-op) on collision or a drop onto the same row.
   if (d.targetRow < 0 || d.targetRow === currentRow || d.colliding) return;
@@ -1251,7 +1586,7 @@ function onPanelResizeUp(): void {
       <div ref="previewAreaEl" class="preview-area" :style="{ flex: previewFlex }">
         <section class="preview">
           <header class="preview-head">
-            <span class="count">{{ tiles.length }} view{{ tiles.length === 1 ? "" : "s" }}</span>
+            <span class="count">{{ tileViewCount }} view{{ tileViewCount === 1 ? "" : "s" }}</span>
             <span v-if="!master.designated" class="hint" title="No wide/center stream designated by the recorder — master is the first frame channel">
               no wide designation
             </span>
@@ -1281,78 +1616,117 @@ function onPanelResizeUp(): void {
               </label>
             </div>
           </header>
-        <div class="tiles">
-          <div
-            v-for="tile in tiles"
-            :key="tileKey(tile)"
-            class="tile"
-            :class="{
-              highlight: tileHighlighted(tile),
-              focused: tileFocused(tile),
-            }"
-            :style="{ width: tileWidth + 'px' }"
-            tabindex="0"
-            title="Click to focus · right-click for stream stats"
-            @pointerenter="setHover(tile.channels)"
-            @pointerleave="clearHover"
-            @focus="focusTile(tile)"
-            @click="focusTile(tile)"
-            @contextmenu="onTileContextMenu($event, tile)"
-          >
-            <div class="tile-head">
-              <span class="tile-name" :class="{ master: tile.kind === 'single' && isMasterChannel(tile.channel) }">
-                {{ tileLabel(tile) }}
-              </span>
-            </div>
-            <div class="tile-body">
-              <FrameView v-if="tileMat(tile)" :mat="tileMat(tile)!" width="100%" height="100%">
-                <template v-if="tile.kind === 'single'">
-                  <g v-for="box in overlayBoxesFor(tile.channel)" :key="box.topic">
-                    <rect
-                      :x="box.bbox.x" :y="box.bbox.y" :width="box.bbox.width" :height="box.bbox.height"
-                      :stroke="TARGET_COLORS[box.index % TARGET_COLORS.length]" stroke-width="3" fill="none"
-                    />
-                  </g>
-                  <!-- Fovea footprint projections (color-coded by pair; hover =
-                       timeline block hover; label carries stream id + pair depth). -->
-                  <!-- pointerleave RESTORES the containing tile's hover — the
-                       tile's own pointerenter doesn't re-fire when the pointer
-                       moves from a child back onto the parent, so a bare
-                       clearHover stranded the tile un-highlighted (UI/UX
-                       review 2026-07-11 #4). -->
-                  <g
-                    v-for="fp in footprintBoxesFor(tile.channel)"
-                    :key="'fp:' + fp.stream"
-                    class="footprint"
-                    :class="{ highlighted: fp.highlighted }"
-                    @pointerenter="setHover([fp.stream])"
-                    @pointerleave="setHover(tile.channels)"
-                  >
-                    <polygon
-                      :points="fp.points"
-                      :stroke="fp.color"
-                      :stroke-width="fp.highlighted ? footprintStroke * 1.7 : footprintStroke"
-                      :fill="fp.color"
-                      :fill-opacity="fp.highlighted ? 0.14 : 0.06"
-                    />
-                    <text
-                      :x="fp.label.x + footprintFontSize * 0.4"
-                      :y="fp.label.y - footprintFontSize * 0.4"
-                      class="footprint-label"
-                      :font-size="footprintFontSize"
-                      :stroke-width="footprintStroke"
-                      :fill="fp.color"
-                    >{{ footprintLabel(fp) }}</text>
-                  </g>
-                </template>
-              </FrameView>
-              <div v-else class="tile-placeholder" title="This stream spans the playhead but no frame has decoded here yet — play or scrub">
-                waiting for frame…
+        <div
+          class="tiles"
+          :class="{ reordering: tileDrag && tileDrag.moved }"
+          @pointermove="onTileDragMove"
+          @pointerup="onTileDragUp"
+          @pointercancel="onTileDragUp"
+        >
+          <template v-for="(slot, si) in orderedSlots" :key="slotKey(slot)">
+            <!-- Drop indicator BEFORE the slot the drag currently targets. -->
+            <div v-if="tileDrag && tileDrag.moved && tileDrag.overIndex === si" class="tile-drop-indicator" />
+
+            <!-- Real tile (a track's active view). -->
+            <div
+              v-if="slot.kind === 'tile'"
+              :ref="(el) => registerTileEl(el as Element | null, si)"
+              class="tile"
+              :class="{
+                highlight: tileHighlighted(slot.tile),
+                focused: tileFocused(slot.tile),
+                dragging: tileDrag && tileDrag.moved && tileDrag.fromIndex === si,
+              }"
+              :style="{ width: tileWidth + 'px' }"
+              tabindex="0"
+              title="Click to focus · drag the header to reorder · right-click for stream stats"
+              @pointerenter="setHover(slot.tile.channels)"
+              @pointerleave="clearHover"
+              @focus="focusTile(slot.tile)"
+              @click="focusTile(slot.tile)"
+              @contextmenu="onTileContextMenu($event, slot.tile)"
+            >
+              <div
+                class="tile-head drag-handle"
+                :style="{ '--track-color': slotColor(slot) }"
+                title="Drag to reorder tiles"
+                @pointerdown="onTileDragDown($event, si)"
+              >
+                <span class="chip" />
+                <span class="tile-name" :class="{ master: slot.tile.kind === 'single' && isMasterChannel(slot.tile.channel) }">
+                  {{ tileLabel(slot.tile) }}
+                </span>
+              </div>
+              <div class="tile-body">
+                <FrameView v-if="tileMat(slot.tile)" :mat="tileMat(slot.tile)!" width="100%" height="100%">
+                  <template v-if="slot.tile.kind === 'single'">
+                    <g v-for="box in overlayBoxesFor(slot.tile.channel)" :key="box.topic">
+                      <rect
+                        :x="box.bbox.x" :y="box.bbox.y" :width="box.bbox.width" :height="box.bbox.height"
+                        :stroke="TARGET_COLORS[box.index % TARGET_COLORS.length]" stroke-width="3" fill="none"
+                      />
+                    </g>
+                    <!-- Fovea footprint projections (color-coded by pair; hover =
+                         timeline block hover; label carries stream id + pair depth). -->
+                    <!-- pointerleave RESTORES the containing tile's hover — the
+                         tile's own pointerenter doesn't re-fire when the pointer
+                         moves from a child back onto the parent, so a bare
+                         clearHover stranded the tile un-highlighted (UI/UX
+                         review 2026-07-11 #4). -->
+                    <g
+                      v-for="fp in footprintBoxesFor(slot.tile.channel)"
+                      :key="'fp:' + fp.stream"
+                      class="footprint"
+                      :class="{ highlighted: fp.highlighted }"
+                      @pointerenter="setHover([fp.stream])"
+                      @pointerleave="setHover(slot.tile.channels)"
+                    >
+                      <polygon
+                        :points="fp.points"
+                        :stroke="fp.color"
+                        :stroke-width="fp.highlighted ? footprintStroke * 1.7 : footprintStroke"
+                        :fill="fp.color"
+                        :fill-opacity="fp.highlighted ? 0.14 : 0.06"
+                      />
+                      <text
+                        :x="fp.label.x + footprintFontSize * 0.4"
+                        :y="fp.label.y - footprintFontSize * 0.4"
+                        class="footprint-label"
+                        :font-size="footprintFontSize"
+                        :stroke-width="footprintStroke"
+                        :fill="fp.color"
+                      >{{ footprintLabel(fp) }}</text>
+                    </g>
+                  </template>
+                </FrameView>
+                <div v-else class="tile-placeholder" title="This stream spans the playhead but no frame has decoded here yet — play or scrub">
+                  waiting for frame…
+                </div>
               </div>
             </div>
-          </div>
-          <div v-if="tiles.length === 0" class="notice">
-            No enabled stream under the playhead — press play or scrub.
+
+            <!-- Placeholder slot (empty/disabled/pair-collapsed track) — subdued,
+                 non-interactive except as a reorder drop target (ruling 2). -->
+            <div
+              v-else
+              :ref="(el) => registerTileEl(el as Element | null, si)"
+              class="tile placeholder"
+              :style="{ width: tileWidth + 'px' }"
+            >
+              <div class="tile-head" :style="{ '--track-color': slotColor(slot) }">
+                <span class="chip" />
+                <span class="tile-tag">{{ trackTag(slot.track) }}</span>
+                <span class="tile-name">{{ placeholderLabel(slot) }}</span>
+              </div>
+              <div class="tile-body">
+                <div class="tile-placeholder">{{ placeholderReason(slot) }}</div>
+              </div>
+            </div>
+          </template>
+          <!-- Trailing drop indicator (append to the end). -->
+          <div v-if="tileDrag && tileDrag.moved && tileDrag.overIndex === orderedSlots.length" class="tile-drop-indicator" />
+          <div v-if="orderedSlots.length === 0" class="notice">
+            No tracks to preview.
           </div>
           </div>
         </section>
@@ -1465,7 +1839,32 @@ function onPanelResizeUp(): void {
           @pointermove="onBlockPointerMove"
           @pointerup="onBlockPointerUp"
           @pointercancel="onBlockPointerUp"
+          @wheel="onTracksWheel"
         >
+          <!-- Bleed strips (ruling 5): dimmed hatched areas outside [0,duration],
+               marking the recording boundaries; they pan/zoom with the content. -->
+          <div v-if="bleedBeforePct > 0" class="bleed before" :style="{ width: bleedBeforePct + '%' }" />
+          <div v-if="bleedAfterPct < 100" class="bleed after" :style="{ left: bleedAfterPct + '%' }" />
+
+          <!-- Time ruler (ruling 3): absolute overlay at the top; click/drag seeks. -->
+          <div
+            class="ruler"
+            @pointerdown="onRulerDown"
+            @pointermove="onRulerMove"
+            @pointerup="onRulerUp"
+            @pointercancel="onRulerUp"
+          >
+            <span
+              v-for="t in rulerT"
+              :key="t.ns"
+              class="tick"
+              :class="{ major: t.major }"
+              :style="{ left: fracPct(t.ns) }"
+            >
+              <span v-if="t.label" class="tick-label">{{ t.label }}</span>
+            </span>
+          </div>
+
           <!-- Draggable playhead (ruling 1): a wide invisible hit strip around
                the 1px line, split by hourglass-half ornaments (ruling 2) — solid
                red while playing, idle-neutral when paused. -->
@@ -1483,39 +1882,44 @@ function onPanelResizeUp(): void {
             <span class="line" />
             <span class="orn bottom" />
           </div>
-          <div
-            v-for="(row, ri) in tracks"
-            :key="ri"
-            class="lane"
-            :class="{ 'drop-ok': drag && drag.targetRow === ri && !drag.colliding, 'drop-bad': drag && drag.targetRow === ri && drag.colliding }"
-            :ref="(el) => registerLane(el as Element | null, ri)"
-            @pointerdown="(e) => seekFromClientX(e.clientX, e.currentTarget as HTMLElement)"
-          >
-            <span class="lane-tag">{{ ri === 0 ? "master" : ri }}</span>
+          <template v-for="(row, ri) in tracks" :key="ri">
+            <!-- Between-lane insertion indicator (ruling 8), shown during a drag. -->
+            <div v-if="drag && drag.insertBefore === ri" class="lane-insert" />
             <div
-              v-for="channel in row"
-              :key="channel"
-              class="block"
-              :class="{
-                focused: focused === channel,
-                highlight: blockHighlighted(channel),
-                disabled: disabled.has(channel),
-                master: isMasterChannel(channel),
-                dragging: drag && drag.channel === channel,
-              }"
-              :style="blockStyle(channel)"
-              tabindex="0"
-              :title="`${channel}${disabled.has(channel) ? ' (disabled)' : ''} · drag to reorder · right-click for stats · V toggles when focused`"
-              @pointerdown.stop="(e) => onBlockPointerDown(e, channel)"
-              @pointerenter="setHover([channel])"
-              @pointerleave="clearHover"
-              @focus="focusBlock(channel)"
-              @click.stop="focusBlock(channel)"
-              @contextmenu="onBlockContextMenu($event, channel)"
+              class="lane"
+              :class="{ 'drop-ok': drag && drag.targetRow === ri && !drag.colliding, 'drop-bad': drag && drag.targetRow === ri && drag.colliding }"
+              :style="{ '--track-color': laneColor(row, ri) }"
+              :ref="(el) => registerLane(el as Element | null, ri)"
+              @pointerdown="(e) => seekFromClientX(e.clientX, e.currentTarget as HTMLElement)"
             >
-              <span class="block-name">{{ channel }}</span>
+              <span class="lane-tag">{{ trackTag(ri) }}</span>
+              <div
+                v-for="channel in row"
+                :key="channel"
+                class="block"
+                :class="{
+                  focused: focused === channel,
+                  highlight: blockHighlighted(channel),
+                  disabled: disabled.has(channel),
+                  master: isMasterChannel(channel),
+                  dragging: drag && drag.channel === channel,
+                }"
+                :style="blockStyle(channel)"
+                tabindex="0"
+                :title="`${channel}${disabled.has(channel) ? ' (disabled)' : ''} · drag to reorder · right-click for stats · V toggles when focused`"
+                @pointerdown.stop="(e) => onBlockPointerDown(e, channel)"
+                @pointerenter="setHover([channel])"
+                @pointerleave="clearHover"
+                @focus="focusBlock(channel)"
+                @click.stop="focusBlock(channel)"
+                @contextmenu="onBlockContextMenu($event, channel)"
+              >
+                <span class="block-name">{{ channel }}</span>
+              </div>
             </div>
-          </div>
+          </template>
+          <!-- Insertion indicator at the very bottom boundary (ruling 8). -->
+          <div v-if="drag && drag.insertBefore === tracks.length" class="lane-insert" />
           <!-- New-row drop zone (drag to the bottom to create a track). -->
           <div
             class="lane new-row"
@@ -1644,20 +2048,24 @@ function onPanelResizeUp(): void {
   font-size: var(--fs-sm);
   .msg { flex: 1; }
   .dismiss {
-    background: none;
+    background: transparent;
     border: none;
     color: var(--text-muted);
     cursor: pointer;
+    border-radius: 0.3ch;
     padding: 0 0.4ch;
-    &:hover { color: var(--text); }
+    &:hover { color: var(--text); background: var(--tint-2); }
+    &:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   }
 }
 
+// Ruling 7: no resting border — a faint fill reads as interactive; stronger on
+// hover. (This is a secondary action; the danger/primary buttons keep fill.)
 .panel-export {
   margin-left: auto;
   align-self: center;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-muted);
+  background: transparent;
+  border: none;
   color: var(--text-dim);
   border-radius: 0.3ch;
   padding: 0.15rem 0.6ch;
@@ -1666,7 +2074,8 @@ function onPanelResizeUp(): void {
   display: inline-flex;
   align-items: center;
   gap: 0.4ch;
-  &:hover { color: var(--text-bright); border-color: var(--accent); }
+  &:hover { color: var(--text-bright); background: var(--tint-2); }
+  &:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 }
 
 // ---- preview area (tile strip + optional property panel) ----
@@ -1758,6 +2167,20 @@ function onPanelResizeUp(): void {
     overflow-x: auto;
     overflow-y: hidden;
     min-height: 0;
+    // While a tile reorder is in progress, the grabbed header reads as grabbing.
+    &.reordering .tile.dragging {
+      opacity: 0.55;
+    }
+  }
+
+  // Vertical accent line marking where a dragged tile will drop (ruling 2).
+  // SNAP: instant; a thin flex child so it never overlaps neighbor content.
+  .tile-drop-indicator {
+    flex: 0 0 2px;
+    align-self: stretch;
+    margin: 0.2em 0;
+    background: var(--accent-bright);
+    border-radius: 1px;
   }
 
   .tile {
@@ -1782,8 +2205,17 @@ function onPanelResizeUp(): void {
       outline: 2px solid var(--accent);
       outline-offset: -2px;
     }
+    // Placeholder slot (empty/disabled/pair-collapsed track): subdued, no video.
+    &.placeholder {
+      background: var(--bg-panel-alt);
+      border-style: dashed;
+      opacity: 0.8;
+    }
 
     .tile-head {
+      display: flex;
+      align-items: center;
+      gap: 0.5ch;
       padding: 0.2em 0.6em;
       font-size: 0.78em;
       color: var(--text-dim);
@@ -1791,10 +2223,31 @@ function onPanelResizeUp(): void {
       border-bottom: 1px solid var(--tint-1);
       white-space: nowrap;
       overflow: hidden;
-      text-overflow: ellipsis;
+      // Track-hue chip (ruling 4): a small color swatch keyed to the lane hue.
+      .chip {
+        flex: 0 0 auto;
+        width: 0.7ch;
+        height: 0.7ch;
+        border-radius: 2px;
+        background: var(--track-color, transparent);
+      }
+      .tile-tag {
+        flex: 0 0 auto;
+        color: var(--text-faint);
+        font-family: var(--font-mono);
+      }
+      .tile-name {
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
       .tile-name.master {
         color: var(--accent-bright);
         font-weight: 600;
+      }
+      // The real-tile header is the reorder drag handle.
+      &.drag-handle {
+        cursor: grab;
+        touch-action: none;
       }
     }
     .tile-body {
@@ -1805,9 +2258,14 @@ function onPanelResizeUp(): void {
       min-height: 0;
       background: var(--bg-chrome);
     }
+    &.placeholder .tile-body {
+      background: transparent;
+    }
     .tile-placeholder {
       color: var(--text-disabled);
       font-size: 0.85em;
+      text-align: center;
+      padding: 0 0.6em;
     }
   }
 }
@@ -1963,26 +2421,45 @@ function onPanelResizeUp(): void {
     }
   }
 
+  // Ruling 7 (standing): inline controls carry NO resting border/outline — a
+  // faint element background reads as the interactive surface, darker on hover,
+  // stronger while active. :focus-visible outlines stay for a11y.
   .play {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    background: var(--bg-app);
+    background: transparent;
     color: var(--text-strong);
-    border: 1px solid var(--border);
+    border: none;
     border-radius: 4px;
     padding: 0.3em 0;
     width: 2.6em;
     cursor: pointer;
     &:hover {
-      background: var(--bg-elevated);
+      background: var(--tint-2);
+    }
+    &:active {
+      background: var(--tint-4);
+    }
+    &:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 1px;
     }
   }
   select {
-    background: var(--bg-chrome);
+    background: transparent;
     color: var(--text-dim);
-    border: 1px solid var(--border-strong);
+    border: none;
     border-radius: 3px;
+    padding: 0.15em 0.3ch;
+    cursor: pointer;
+    &:hover {
+      background: var(--tint-2);
+    }
+    &:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 1px;
+    }
   }
   .threed-global {
     display: flex;
@@ -1992,19 +2469,26 @@ function onPanelResizeUp(): void {
     font-size: 0.85em;
   }
   .bar-btn {
-    background: var(--bg-app);
+    background: transparent;
     color: var(--text-strong);
-    border: 1px solid var(--border);
+    border: none;
     border-radius: 4px;
     padding: 0.3em 0.55em;
     cursor: pointer;
     &:hover {
-      background: var(--bg-elevated);
+      background: var(--tint-2);
     }
-    // Active (panel open) — accent outline; instant, no transition.
+    &:active {
+      background: var(--tint-4);
+    }
+    &:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 1px;
+    }
+    // Active (panel open) — accent color + a faint fill; no border (ruling 7).
     &.active {
       color: var(--accent-bright);
-      border-color: var(--accent);
+      background: var(--tint-3);
     }
   }
 }
@@ -2021,8 +2505,76 @@ function onPanelResizeUp(): void {
     position: relative;
     flex-grow: 1;
     overflow-y: auto;
-    padding: 0.4em 0;
+    overflow-x: hidden;
+    // Top padding reserves the ruler strip's height (ruling 3).
+    padding: 1.5em 0 0.4em;
     min-height: 0;
+
+    // Bleed strips (ruling 5): dimmed hatched areas outside [0,duration]. They
+    // sit BEHIND lanes (z 0) and mark where the recording has no content.
+    .bleed {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      z-index: 0;
+      pointer-events: none;
+      background-color: #0000;
+      background-image: repeating-linear-gradient(
+        45deg,
+        var(--tint-2) 0,
+        var(--tint-2) 1px,
+        transparent 1px,
+        transparent 7px
+      );
+      opacity: 0.6;
+      &.before { left: 0; }
+      &.after { right: 0; }
+    }
+
+    // Time ruler (ruling 3): absolute overlay strip at the very top, above lanes
+    // and below the playhead. Click/drag anywhere on it seeks.
+    .ruler {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 1.5em;
+      z-index: 4;
+      cursor: ew-resize;
+      border-bottom: 1px solid var(--tint-1);
+      background: var(--bg-chrome);
+      .tick {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        width: 0;
+        border-left: 1px solid var(--tint-2);
+        &.major {
+          border-left-color: var(--border-muted);
+        }
+        .tick-label {
+          position: absolute;
+          left: 0.3ch;
+          top: 0.1em;
+          font-size: 0.62em;
+          color: var(--text-faint);
+          font-family: var(--font-mono);
+          white-space: nowrap;
+          pointer-events: none;
+        }
+      }
+    }
+
+    // Insertion indicator between lanes (ruling 8) — an accent bar shown while a
+    // block drag hovers a lane boundary. SNAP: instant.
+    .lane-insert {
+      height: 3px;
+      margin: 0 0.6em;
+      border-radius: 2px;
+      background: var(--accent-bright);
+      position: relative;
+      z-index: 3;
+    }
 
     // Draggable playhead (ruling 1/2): a WIDE invisible hit strip (14px) around
     // a 1px line, with hourglass-half ornaments at top + bottom. The strip is
@@ -2081,8 +2633,11 @@ function onPanelResizeUp(): void {
       height: 2.6em;
       margin: 0.25em 0.6em;
       border: 1px dashed var(--tint-1);
+      // Track hue (ruling 4): a subtle left accent bar, NOT a loud fill.
+      border-left: 3px solid var(--track-color, var(--tint-1));
       border-radius: 4px;
       background: #ffffff06;
+      overflow: hidden; // clip blocks panned/zoomed outside the viewport
       // SNAP: instant drop-target feedback, no eased transition.
       &.drop-ok {
         border-color: var(--accent-bright);
@@ -2095,13 +2650,15 @@ function onPanelResizeUp(): void {
       &.new-row {
         height: 1.8em;
         opacity: 0.6;
+        border-left-color: var(--tint-1);
       }
       .lane-tag {
         position: absolute;
         left: 0.5ch;
         top: 0.2em;
         font-size: 0.68em;
-        color: var(--text-disabled);
+        // Tinted by the track hue (ruling 4); still legible.
+        color: var(--track-color, var(--text-disabled));
         pointer-events: none;
         z-index: 1;
       }
@@ -2116,7 +2673,9 @@ function onPanelResizeUp(): void {
       gap: 0.6ch;
       padding: 0 0.6ch;
       background: #2a3a4a;
-      border: 1px solid #4a6a8a;
+      // Track hue (ruling 4): the block edge picks up its lane's color; still a
+      // tint, not a loud fill.
+      border: 1px solid var(--track-color, #4a6a8a);
       border-radius: 3px;
       color: #dfe8f0;
       font-size: 0.8em;
@@ -2125,7 +2684,7 @@ function onPanelResizeUp(): void {
       touch-action: none;
       // Instant hover/focus cues (no transition on the control path).
       &:hover {
-        border-color: #6aa;
+        border-color: var(--accent-bright);
       }
       &.master {
         background: #23405a;
@@ -2192,21 +2751,27 @@ function onPanelResizeUp(): void {
       display: flex;
       justify-content: flex-end;
       gap: 1ch;
+      // Ruling 7: SECONDARY buttons are borderless (faint fill on hover); the
+      // PRIMARY/destructive action keeps emphasis via a solid fill, not a border.
       button {
-        background: var(--bg-app);
+        background: transparent;
         color: var(--text-strong);
-        border: 1px solid var(--border-strong);
+        border: none;
         border-radius: 4px;
         padding: 0.35em 1.1em;
         cursor: pointer;
         &:hover {
-          background: var(--bg-elevated);
+          background: var(--tint-2);
+        }
+        &:focus-visible {
+          outline: 2px solid var(--accent);
+          outline-offset: 1px;
         }
         &.danger {
-          border-color: var(--danger-strong);
-          color: var(--danger-text);
+          background: var(--danger);
+          color: #fff;
           &:hover {
-            background: var(--danger-bg);
+            background: var(--danger-strong);
           }
         }
       }

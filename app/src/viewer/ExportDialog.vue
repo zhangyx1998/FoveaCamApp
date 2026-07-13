@@ -352,18 +352,26 @@ async function confirm(): Promise<void> {
   gap: 0.6ch;
   padding: 0.8rem 1.1rem;
   border-top: 1px solid var(--border);
+  // Ruling 7 (standing): no resting borders on inline buttons. The SECONDARY
+  // (Cancel) button reads as a faint fill on hover; the PRIMARY action keeps its
+  // solid accent fill (emphasis via fill, not a border). :focus-visible stays.
   button {
     padding: 0.35rem 0.9rem;
     border-radius: 0.3ch;
     cursor: pointer;
     font-size: var(--fs-base);
-    border: 1px solid var(--border-muted);
+    border: none;
+    background: transparent;
+    &:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   }
-  .ghost { background: transparent; color: var(--text-dim); }
+  .ghost {
+    color: var(--text-dim);
+    &:hover { background: var(--tint-2); color: var(--text-bright); }
+  }
   .primary {
     background: var(--accent);
-    border-color: var(--accent);
     color: white;
+    &:hover:not(:disabled) { background: var(--accent-bright); }
     &:disabled { opacity: 0.5; cursor: not-allowed; }
   }
 }

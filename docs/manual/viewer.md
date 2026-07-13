@@ -31,10 +31,15 @@ The upper panel shows one **tile** per enabled stream whose block spans the curr
 
 The panel header shows the number of views, an optional **no wide designation** warning (see below), and a **tile** width slider. (The **3D View** control now lives on the transport bar — see [Playback controls](#playback-controls).)
 
+There is **one tile slot per track**. A slot with no view right now — an empty or disabled track, or the second track of a stereo pair that is merged into one tile — shows a subdued **placeholder** naming the track and why it is empty, so the tile row always lines up with the tracks below.
+
 - If a tile's stream has no decoded frame yet at the playhead, the tile shows **no frame** until you play or scrub onto a frame.
-- If nothing is enabled under the playhead, the panel shows **No enabled stream under the playhead — press play or scrub.**
+- If nothing is enabled under the playhead, the tiles are all placeholders.
 - Click a tile to **focus** its stream (it gets an outline); its details appear in the [Property panel](#property-panel) and it can be toggled with **`v`**.
-- Hovering or focusing a tile **highlights** its block in the timeline, and hovering or focusing a block highlights its tile — so you can always see which tile matches which track.
+- Hovering or focusing a tile **highlights** its block in the timeline, and hovering or focusing a block highlights its tile — so you can always see which tile matches which track. Each tile's header also carries a small **color chip** matching its track's color in the timeline.
+- **Rearrange tiles** by dragging a tile's **header** left or right; a drop line shows where it will land. The order is saved in the layout sidecar. (Because there is one slot per track, this reorders the previews without touching the tracks themselves.)
+
+When you open a recording, the playhead starts on the **first recorded frame** (the earliest block), not at time zero — so you always see content immediately instead of a blank panel. If you had a saved playhead position from last time, that is restored instead.
 
 ### Master / wide stream
 
@@ -96,7 +101,14 @@ If you close a Viewer window while exports are still running, it asks you to con
 
 ## The timeline panel (bottom)
 
-The lower panel is a read-only editor of **tracks** (rows) and **blocks** (the time span each stream covers). Row 0 is labelled **master**; the rest are numbered. A draggable **playhead** marks the current time.
+The lower panel is a read-only editor of **tracks** (rows) and **blocks** (the time span each stream covers). Row 0 is labelled **master**; the rest are numbered. A draggable **playhead** marks the current time. A **time ruler** runs along the top of the panel with labelled tick marks.
+
+Each track carries a **color**: left/right/center streams take the standard **L / C / R** role colors (cyan / orange / greenyellow), and other tracks get a distinct muted color. The color tints the track's label and its block edges, and matches the color chip on that track's preview tile — so a track, its block, and its tile are easy to connect at a glance.
+
+### Zooming and panning the timeline
+
+- **Zoom** the time axis with **Ctrl + scroll** (or a trackpad pinch) — it zooms centered on the pointer, so you can dive into a busy stretch without losing your place.
+- **Pan** by scrolling horizontally (two-finger swipe); scroll vertically to move through a long list of tracks. Scrolling past the start or end of the recording rubber-bands and springs back. The areas **before** the first frame and **after** the last are drawn as dimmed hatched **bleed** strips, marking the recording's boundaries.
 
 ### Playback controls
 
@@ -108,7 +120,8 @@ The **transport bar** is the horizontal bar between the preview and the timeline
 
 ### Seeking
 
-- **Drag the playhead** — the vertical marker with the hourglass ornaments — left or right to scrub. Its grab area is wider than the line, so you don't have to be pixel-perfect. The playhead and its ornaments are **solid red while playing** and neutral when paused.
+- **Drag the playhead** — the vertical marker with the hourglass ornaments — left or right to scrub. Its grab area is wider than the line, so you don't have to be pixel-perfect. The playhead and its ornaments are **solid red while playing** and neutral when paused. During playback the marker **glides smoothly** between position updates rather than stepping.
+- Or **click / drag on the time ruler** at the top of the panel to jump the playhead.
 - Or **click anywhere on a track lane** to jump the playhead to that point.
 - Or use the **← / →** arrow keys to step the playhead (about one 30 fps frame per press; hold **Shift** for a 1-second jump).
 
@@ -121,7 +134,9 @@ The **transport bar** is the horizontal bar between the preview and the timeline
 
 ### Rearranging tracks
 
-Drag a block up or down onto another lane to move its stream between tracks; because tile order follows track order, this is how you re-stack the previews. A drop is refused (the block snaps back) if it would collide with another block already occupying that time on the target lane. Drag a block below the last lane, onto the **＋ new track** zone, to give it a track of its own. Valid drop targets highlight; invalid ones show red.
+Drag a block up or down onto another lane to move its stream between tracks. A drop is refused (the block snaps back) if it would collide with another block already occupying that time on the target lane. Drag a block onto the thin gap **between two lanes** — a colored insertion line appears — to split it out onto a **brand-new track** at that position. Drag a block below the last lane, onto the **＋ new track** zone, to give it a track at the bottom. Valid drop targets highlight; invalid ones show red.
+
+To restack the **previews**, drag the tiles directly (see [The preview panel](#the-preview-panel-top)) — tile order is saved independently of track order.
 
 ### Focusing and disabling a stream
 
@@ -154,7 +169,7 @@ Use the **collapse chevron** on the right of the bar to fold the timeline away: 
 
 ## Layout persistence
 
-Everything about how you arranged the Viewer — track layout, disabled streams, 3D View modes, the preview/timeline split, tile width, and the playhead position — is saved to a **layout sidecar** (`<recording>.fcap.ui.json`) right next to the recording. Reopen the file later and your arrangement comes back. The recording file itself is never touched.
+Everything about how you arranged the Viewer — track layout, tile order, disabled streams, 3D View modes, the preview/timeline split, tile width, and the playhead position — is saved to a **layout sidecar** (`<recording>.fcap.ui.json`) right next to the recording. Reopen the file later and your arrangement comes back. The recording file itself is never touched.
 
 Two situations prompt you before anything is overwritten:
 

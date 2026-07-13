@@ -30,6 +30,18 @@ than polish.
    `app/src/windows/icons.ts` set — reuse/extend it; keep hit targets at
    the established size. Labeled controls elsewhere (panel headers, drawers,
    launcher) are unaffected.
+5. **Borderless inline controls** (user, 2026-07-13): inline interactive
+   elements — buttons, control shells, toggles, `<select>`s embedded in a bar
+   or panel — carry **no always-visible border or outline** at rest.
+   Interactivity reads as a **faint element background** (`--tint-2`) that
+   darkens on hover and strengthens on active/pressed (`--tint-3`/`--tint-4`);
+   in a dark theme the wash lightens rather than darkens. Two carve-outs stay:
+   **`:focus-visible` outlines** (keyboard a11y — never removed) and **primary
+   / destructive emphasis**, which is carried by a **solid fill**, not a border
+   (e.g. a danger button is a filled red, not a red-bordered ghost). First swept
+   across the viewer (`ViewerWindow.vue` transport + modal buttons, `ExportTray`,
+   `ExportDialog`) in the timeline touch-up wave; the standing rule governs
+   future sweeps of the rest of the app.
 
 ---
 

@@ -156,6 +156,39 @@ describe("threeD global-mode migration (ruling 4 amendment)", () => {
   });
 });
 
+describe("tile order (timeline touch-up ruling 2 — optional, conservative parse)", () => {
+  it("absent tileOrder stays absent (older sidecar round-trips unchanged)", () => {
+    const load = classifySidecar(JSON.stringify({ v: 1, tracks: [["a"]] }));
+    expect(load.status).toBe("ok");
+    if (load.status !== "ok") return;
+    expect("tileOrder" in load.state).toBe(false);
+  });
+
+  it("a present tileOrder round-trips and is cleaned (non-int / negative / dupes dropped)", () => {
+    const load = classifySidecar(
+      JSON.stringify({ v: 1, tracks: [["a"], ["b"], ["c"]], tileOrder: [2, 0, 1] }),
+    );
+    expect(load.status === "ok" && load.state.tileOrder).toEqual([2, 0, 1]);
+    const dirty = classifySidecar(
+      JSON.stringify({ v: 1, tileOrder: [1, 1, -3, 2.5, "x", 0] }),
+    );
+    expect(dirty.status === "ok" && dirty.state.tileOrder).toEqual([1, 0]);
+  });
+
+  it("a non-array tileOrder drops to absent (never corrupts the whole state)", () => {
+    const load = classifySidecar(JSON.stringify({ v: 1, tileOrder: "nope" }));
+    expect(load.status).toBe("ok");
+    if (load.status !== "ok") return;
+    expect("tileOrder" in load.state).toBe(false);
+  });
+
+  it("serialize → classify preserves a tileOrder exactly", () => {
+    const withOrder: SidecarState = { ...sample, tileOrder: [1, 2, 0] };
+    const load = classifySidecar(serializeSidecar(withOrder));
+    expect(load.status === "ok" && load.state).toEqual(withOrder);
+  });
+});
+
 describe("parseSidecar (best-effort) + path", () => {
   it("absent/corrupt → defaults", () => {
     expect(parseSidecar(null)).toEqual(defaultSidecar());

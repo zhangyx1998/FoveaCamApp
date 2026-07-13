@@ -386,6 +386,30 @@ RIG-GATED — no hardware on the authoring box.
 
 ## Viewer (fcap)
 
+### Timeline touch-up (2026-07-13 — eyeball pass, any machine with a .fovea)
+
+Proposal: `docs/proposals/viewer-timeline-touchup.md`.
+
+- [ ] **Open lands on content** — a fresh recording (no sidecar) opens with
+  the playhead at the earliest block start and ≥1 tile showing; a persisted
+  playhead still wins.
+- [ ] **Zoom/pan feel (macOS trackpad)** — pinch zooms at the cursor; scroll
+  pans X with rubber-band + spring-back at the edges (bleed strips visible
+  only transiently or when zoomed past a bound); vertical scroll still
+  scrolls the track list; ruler ticks stay legible at every depth.
+- [ ] **Smooth playhead** — the line glides at 0.25×–4×; timecode stays on
+  the honest worker clock; seek/pause snap cleanly, no drift after long play.
+- [ ] **Tiles** — one slot per track incl. placeholders (no-frame /
+  disabled / pair-collapsed); header-drag reorder persists across reopen;
+  track ids stable while scrubbing through sparse recordings.
+- [ ] **Track colors + ruler** — L/C/R hues land on the right tracks; muted
+  cycle elsewhere; saturated/disabled/master styling still reads; ruler
+  click/drag seeks exactly.
+- [ ] **Block insertion** — dragging a block between two lanes shows the
+  insertion line and creates the track there; empty tracks vanish.
+- [ ] **Ruling-7 sweep** — inline controls read as flat until hover (faint
+  bg), active state slightly stronger; keyboard focus outlines intact.
+
 ### Playback core
 - [ ] **Standalone** — plays with the orchestrator DOWN; survives app
   switches and orchestrator kill/restart mid-playback.
