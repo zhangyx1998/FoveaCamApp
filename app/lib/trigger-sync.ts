@@ -114,15 +114,54 @@ export class TriggerRateWindow {
   }
 }
 
+/** The error's first line, trimmed and clipped to `maxLen` — the shape both the
+ *  status line and the diagnostic reject/timeout spans want (the raw multi-line
+ *  Error.message is unusable in either). */
+export function firstErrorLine(error: unknown, maxLen: number): string {
+  const message = error instanceof Error ? error.message : String(error);
+  const firstLine = message.split("\n", 1)[0]!.trim() || "unknown error";
+  return firstLine.length > maxLen
+    ? `${firstLine.slice(0, maxLen - 1)}…`
+    : firstLine;
+}
+
 /** Curated `trigger_blocked` line for a hardware-trigger enable failure: a
  *  stable prefix + the error's first line, truncated — the raw multi-line
  *  Error.message verbatim broke the status voice. */
 export function engageFailureReason(error: unknown, maxLen = 80): string {
-  const message = error instanceof Error ? error.message : String(error);
-  const firstLine = message.split("\n", 1)[0]!.trim() || "unknown error";
-  const clipped =
-    firstLine.length > maxLen ? `${firstLine.slice(0, maxLen - 1)}…` : firstLine;
-  return `engage failed: ${clipped}`;
+  return `engage failed: ${firstErrorLine(error, maxLen)}`;
+}
+
+/** First-N per kind per engage, then every-Kth. */
+export const TRIGGER_SPAN_FIRST_N = 40;
+export const TRIGGER_SPAN_EVERY_K = 25;
+
+/** Bounds how many trigger outcome spans reach the 200-entry diagnostics ring
+ *  so the interesting engage window isn't flooded out: the first
+ *  {@link TRIGGER_SPAN_FIRST_N} events of each kind, then every
+ *  {@link TRIGGER_SPAN_EVERY_K}th. An event whose `reason` differs from the
+ *  previous one of its kind ALWAYS logs — a new firmware REJ reason is never
+ *  sampled away. `reset` per engage. Pure (trigger-sync-core.test.ts). */
+export class TriggerSpanSampler {
+  private readonly counts = new Map<string, number>();
+  private readonly lastReason = new Map<string, string>();
+
+  reset(): void {
+    this.counts.clear();
+    this.lastReason.clear();
+  }
+
+  /** Log this event of `kind`? `reason` (reject/timeout only) drives the
+   *  distinct-reason bypass; omit it for reasonless kinds (fin). */
+  shouldLog(kind: string, reason?: string): boolean {
+    const n = (this.counts.get(kind) ?? 0) + 1;
+    this.counts.set(kind, n);
+    const distinct = reason !== undefined && this.lastReason.get(kind) !== reason;
+    if (reason !== undefined) this.lastReason.set(kind, reason);
+    return (
+      distinct || n <= TRIGGER_SPAN_FIRST_N || n % TRIGGER_SPAN_EVERY_K === 0
+    );
+  }
 }
 
 /** FIFO op chain serializing engage/disengage: their lease trigger

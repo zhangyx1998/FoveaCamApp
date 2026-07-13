@@ -14,11 +14,12 @@ import { defineSession, type ServerSession } from "@orchestrator/runtime";
 import { acquireTriple, type CalibratedTriple } from "@orchestrator/calibration";
 import { read, subscribe } from "@orchestrator/store-hub";
 import { activeController } from "@orchestrator/controller";
-import { report } from "@orchestrator/diagnostics";
+import { report, span, timeSpan } from "@orchestrator/diagnostics";
 import { RoundRobinFrameScheduler } from "@orchestrator/scheduler";
 import {
   disableHardwareTrigger,
   enableHardwareTrigger,
+  readTriggerConfig,
 } from "@orchestrator/camera-trigger";
 import { cameraConfigPath } from "@orchestrator/camera";
 import { pairTriggerBudget, type PairTriggerBudget } from "@lib/camera-config";
@@ -113,9 +114,11 @@ import { matchStaleMsFor, pairEpochGateTrips } from "./trigger-sync";
 import {
   createTriggerOpChain,
   engageFailureReason,
+  firstErrorLine,
   frameRequestFromBudget,
   triggerBlockReason,
   TriggerRateWindow,
+  TriggerSpanSampler,
 } from "@lib/trigger-sync";
 import {
   AutotuneRun,
@@ -1342,7 +1345,19 @@ export default function disparityScopeSession(
     let triggerTimeouts = 0;
     /** Achieved-hz maturity window (≥1 s rolls; held between; null till first). */
     const triggerRate = new TriggerRateWindow();
+    /** Caps outcome spans reaching the diagnostics ring; reset per engage. */
+    const triggerSpanSampler = new TriggerSpanSampler();
+    /** Reject/timeout reasons already surfaced to the tray this engage. */
+    const reportedTriggerReasons = new Set<string>();
     let lastTriggerBlocked: string | null = null;
+
+    /** Warn the tray ONCE per distinct reject/timeout reason per engage — the
+     *  scope coalesces, so the firmware's words surface live without flooding. */
+    function reportDistinctTriggerReason(reason: string): void {
+      if (reportedTriggerReasons.has(reason)) return;
+      reportedTriggerReasons.add(reason);
+      report("trigger-sync", reason, "warning");
+    }
     /** FIFO mutex over the lease trigger config: an engage always awaits any
      *  in-flight disengage (and vice versa) before touching leases. */
     const queueTriggerOp = createTriggerOpChain((e) =>
@@ -1438,9 +1453,31 @@ export default function disparityScopeSession(
             // best-effort — the lease may already be releasing
           }
       };
+      const budget = deriveTriggerBudget();
+      // FIN budget follows the pulse-derived interval — a long exposure must
+      // not FIN-time-out under a fixed 1 s and wedge (spec §trigger-sync).
+      const completionTimeoutMs = Math.max(1000, (budget?.minIntervalMs ?? 0) * 3);
+      const engageMeta: Record<string, unknown> = {
+        streamId,
+        budget: budget && {
+          pulseUs: budget.pulseUs,
+          minIntervalMs: budget.minIntervalMs,
+          maxRateHz: budget.maxRateHz,
+        },
+        settleUs: t.settleTimeUs,
+        completionTimeoutMs,
+      };
       try {
-        await enableHardwareTrigger(t.leases.L);
-        await enableHardwareTrigger(t.leases.R);
+        await timeSpan(
+          "trigger-sync.engage",
+          async () => {
+            await enableHardwareTrigger(t.leases.L);
+            await enableHardwareTrigger(t.leases.R);
+            engageMeta.L = readTriggerConfig(t.leases.L);
+            engageMeta.R = readTriggerConfig(t.leases.R);
+          },
+          engageMeta,
+        );
       } catch (e) {
         await revert();
         publishTriggerBlocked(engageFailureReason(e));
@@ -1456,13 +1493,14 @@ export default function disparityScopeSession(
         await revert();
         return;
       }
-      triggerBudget = deriveTriggerBudget();
+      triggerBudget = budget;
       triggerFrames = triggerRejects = triggerTimeouts = 0;
       triggerRate.reset(now());
+      triggerSpanSampler.reset();
+      reportedTriggerReasons.clear();
+      let acksThisEngage = 0;
       triggerScheduler = new RoundRobinFrameScheduler({
-        // FIN budget follows the pulse-derived interval — a long exposure must
-        // not FIN-time-out under a fixed 1 s and wedge (spec §trigger-sync).
-        completionTimeoutMs: Math.max(1000, (triggerBudget?.minIntervalMs ?? 0) * 3),
+        completionTimeoutMs,
         requester: {
           frame(request) {
             const controller = activeController();
@@ -1470,15 +1508,33 @@ export default function disparityScopeSession(
             return controller.frame(request);
           },
         },
-        onFrame() {
+        onAccepted() {
+          acksThisEngage++;
+        },
+        onFrame(frame) {
           triggerFrames++;
           triggerRate.onFin();
+          if (triggerSpanSampler.shouldLog("fin"))
+            span("trigger-sync.fin", 0, {
+              stream: frame.stream,
+              frameId: frame.frameId,
+              exposureMs: Number(frame.tExposure - frame.tTrigger) / 1e6,
+              acksSoFar: acksThisEngage,
+            });
         },
-        onReject() {
+        onReject(failure) {
           triggerRejects++;
+          const reason = firstErrorLine(failure.error, 120);
+          if (triggerSpanSampler.shouldLog("rej", reason))
+            span("trigger-sync.rej", 0, { reason, acksSoFar: acksThisEngage });
+          reportDistinctTriggerReason(reason);
         },
-        onTimeout() {
+        onTimeout(failure) {
           triggerTimeouts++;
+          const reason = firstErrorLine(failure.error, 120);
+          if (triggerSpanSampler.shouldLog("timeout", reason))
+            span("trigger-sync.timeout", 0, { reason, acksSoFar: acksThisEngage });
+          reportDistinctTriggerReason(reason);
         },
       });
       applyTriggerTarget(streamId);
@@ -1499,23 +1555,29 @@ export default function disparityScopeSession(
 
     /** Serialized via `queueTriggerOp` — see {@link engageTrigger}. */
     async function disengageTriggerNow(blockedReason: string | null): Promise<void> {
-      triggerEpochCounter++; // any in-flight engage reverts itself
-      const wasEngaged = triggerEngaged;
-      triggerEngaged = false;
-      triggerScheduler?.stop();
-      triggerScheduler = null;
-      for (const u of triggerUnsubs.splice(0)) u();
-      triggerBudget = null;
-      if (wasEngaged && triple) {
-        for (const side of ["L", "R"] as const)
-          try {
-            await disableHardwareTrigger(triple.leases[side]);
-          } catch {
-            // best-effort — the lease may already be releasing
+      await timeSpan(
+        "trigger-sync.disengage",
+        async () => {
+          triggerEpochCounter++; // any in-flight engage reverts itself
+          const wasEngaged = triggerEngaged;
+          triggerEngaged = false;
+          triggerScheduler?.stop();
+          triggerScheduler = null;
+          for (const u of triggerUnsubs.splice(0)) u();
+          triggerBudget = null;
+          if (wasEngaged && triple) {
+            for (const side of ["L", "R"] as const)
+              try {
+                await disableHardwareTrigger(triple.leases[side]);
+              } catch {
+                // best-effort — the lease may already be releasing
+              }
           }
-      }
-      if (wasEngaged) s.telemetry({ trigger: null });
-      publishTriggerBlocked(s.state.trigger_sync ? blockedReason : null);
+          if (wasEngaged) s.telemetry({ trigger: null });
+          publishTriggerBlocked(s.state.trigger_sync ? blockedReason : null);
+        },
+        { reason: blockedReason },
+      );
     }
 
     /** Engage/disengage BOTH ride the FIFO op chain: a fast OFF→ON toggle

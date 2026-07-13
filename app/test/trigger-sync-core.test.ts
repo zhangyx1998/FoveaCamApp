@@ -15,8 +15,11 @@ import {
   createTriggerOpChain,
   engageFailureReason,
   frameRequestFromBudget,
+  TRIGGER_SPAN_EVERY_K,
+  TRIGGER_SPAN_FIRST_N,
   triggerBlockReason,
   TriggerRateWindow,
+  TriggerSpanSampler,
 } from "@lib/trigger-sync";
 import { pairTriggerBudget } from "@lib/camera-config";
 
@@ -156,5 +159,57 @@ describe("createTriggerOpChain (finding 2 — engage/disengage serialization)", 
     const ran = vi.fn(async () => {});
     await queue(ran);
     expect(ran).toHaveBeenCalledTimes(1); // chain recovered
+  });
+});
+
+describe("TriggerSpanSampler (outcome-span rate cap)", () => {
+  const logged = (
+    sampler: TriggerSpanSampler,
+    kind: string,
+    count: number,
+    reason?: string,
+  ): number => {
+    let hits = 0;
+    for (let i = 0; i < count; i++) if (sampler.shouldLog(kind, reason)) hits++;
+    return hits;
+  };
+
+  it("logs the first N of a reasonless kind, then rejects until the Kth", () => {
+    const sampler = new TriggerSpanSampler();
+    for (let n = 1; n <= TRIGGER_SPAN_FIRST_N; n++)
+      expect(sampler.shouldLog("fin")).toBe(true);
+    // Past the window only absolute multiples of K log.
+    for (let n = TRIGGER_SPAN_FIRST_N + 1; n < 2 * TRIGGER_SPAN_EVERY_K; n++)
+      expect(sampler.shouldLog("fin")).toBe(n % TRIGGER_SPAN_EVERY_K === 0);
+    // 2*K is the next multiple.
+    expect(sampler.shouldLog("fin")).toBe(true);
+  });
+
+  it("a reason distinct from the previous ALWAYS logs, even mid-window", () => {
+    const sampler = new TriggerSpanSampler();
+    // Burn past the first-N window with one repeated reason.
+    logged(sampler, "rej", TRIGGER_SPAN_FIRST_N, "queue full");
+    // Same reason at a non-multiple index is sampled away...
+    expect(sampler.shouldLog("rej", "queue full")).toBe(false);
+    // ...but a NEW reason at the very next (still non-multiple) index logs.
+    expect(sampler.shouldLog("rej", "strobe timeout")).toBe(true);
+    // Repeating THAT one is sampled away again.
+    expect(sampler.shouldLog("rej", "strobe timeout")).toBe(false);
+  });
+
+  it("counts each kind independently", () => {
+    const sampler = new TriggerSpanSampler();
+    logged(sampler, "rej", TRIGGER_SPAN_FIRST_N, "dup");
+    // rej is now past its window, but timeout starts fresh.
+    expect(sampler.shouldLog("rej", "dup")).toBe(false);
+    expect(sampler.shouldLog("timeout", "dup")).toBe(true);
+  });
+
+  it("reset() restarts the first-N window", () => {
+    const sampler = new TriggerSpanSampler();
+    logged(sampler, "fin", TRIGGER_SPAN_FIRST_N + 5);
+    expect(sampler.shouldLog("fin")).toBe(false); // past window
+    sampler.reset();
+    expect(sampler.shouldLog("fin")).toBe(true); // window fresh again
   });
 });

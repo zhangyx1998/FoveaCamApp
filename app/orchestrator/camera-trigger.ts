@@ -57,3 +57,38 @@ export async function disableHardwareTrigger(
     lease.camera.clearTriggers();
   });
 }
+
+/** GenICam nodes whose live values name the trigger-sync freeze cause. */
+const TRIGGER_CONFIG_FEATURES = [
+  "TriggerMode",
+  "TriggerSelector",
+  "TriggerSource",
+  "TriggerActivation",
+  "LineSelector",
+  "LineMode",
+  "LineSource",
+  "ExposureMode",
+  "ExposureAuto",
+] as const;
+
+/** Best-effort snapshot of a leased camera's trigger/strobe/exposure GenICam
+ *  state for diagnostic spans — no reconfigure, reads only. Every node is read
+ *  independently; a node the model lacks stores `<error: …>` for that key
+ *  instead of failing the whole snapshot. */
+export function readTriggerConfig(lease: CameraLease): Record<string, string> {
+  const { camera } = lease;
+  const out: Record<string, string> = {};
+  const probe = (key: string, read: () => string): void => {
+    try {
+      out[key] = read();
+    } catch (e) {
+      const line = (e instanceof Error ? e.message : String(e)).split("\n", 1)[0];
+      out[key] = `<error: ${line}>`;
+    }
+  };
+  for (const name of TRIGGER_CONFIG_FEATURES)
+    probe(name, () => camera.getFeature(name));
+  probe("trigger_source", () => camera.trigger_source);
+  probe("trigger_source_options", () => camera.trigger_source_options.join(", "));
+  return out;
+}
