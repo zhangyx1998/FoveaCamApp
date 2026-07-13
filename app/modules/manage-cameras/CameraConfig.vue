@@ -361,7 +361,7 @@ const budgetTitle = computed(() => {
   const b = pair.value?.budget;
   if (!b) return "";
   return (
-    `Trigger pulse covers the slower eye's exposure (${(b.pulseNs / 1e6).toFixed(2)} ms). ` +
+    `Trigger pulse covers the slower eye's exposure (${(b.pulseUs / 1000).toFixed(2)} ms). ` +
     `The minimum interval between triggers (${b.minIntervalMs.toFixed(2)} ms) adds the camera-reported ` +
     `readout floor and a fixed ${(TRIGGER_FRAME_MARGIN_US / 1000).toFixed(1)} ms overhead margin. ` +
     `The per-triple settle hold (Settings) adds on top when a tracking app drives the trigger.`

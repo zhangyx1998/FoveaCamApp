@@ -57,7 +57,8 @@ export type MultiFoveaCaptureResult =
  *  pacing the session derived from the leased pair's CONFIGURED exposure —
  *  null until a triple is leased. */
 export type TriggerBudgetTelemetry = {
-  pulseNs: number;
+  /** Trigger pulse width (µs, the wire unit — `FrameArg.pulse`). */
+  pulseUs: number;
   maxRateHz: number;
   minIntervalMs: number;
   exposureUsL: number;
@@ -123,9 +124,11 @@ export const multiFovea = defineContract({
     undistortPipe: null as string | null,
     // Demo default: two interleaved angle-space presets at ±5° (spec §targets).
     targets: [0, 1, 2, 3].map(demoPresetTarget) as MultiFoveaTargetConfig[],
-    /** CMD_FRAME trigger pulse width (ns). While `pulse_auto` holds, the
-     *  session derives it from the pair's configured exposure (P6); a client
-     *  write (the Pulse slider) flips `pulse_auto` off — manual override. */
+    /** CMD_FRAME trigger pulse width — DISPLAY/PERSIST unit is ns; the wire
+     *  (`FrameArg.pulse`) is µs, so the session divides by 1000 at the frame
+     *  boundary. While `pulse_auto` holds, the session derives it from the
+     *  pair's configured exposure (P6); a client write (the Pulse slider) flips
+     *  `pulse_auto` off — manual override. */
     pulse_ns: 1000000,
     /** Derive `pulse_ns` from the leased pair's exposure config (the P6 ruled
      *  default). Any client write to `pulse_ns` sets this false. */

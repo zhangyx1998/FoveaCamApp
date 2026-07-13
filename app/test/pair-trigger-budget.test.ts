@@ -7,9 +7,12 @@ import { describe, expect, it } from "vitest";
 import { TRIGGER_FRAME_MARGIN_US, pairTriggerBudget } from "@lib/camera-config";
 
 describe("pairTriggerBudget", () => {
-  it("pulse covers the slower eye's exposure (ns)", () => {
-    const b = pairTriggerBudget({ exposureUsL: 8000, exposureUsR: 12000 });
-    expect(b.pulseNs).toBe(12000 * 1000);
+  it("pulse covers the slower eye's exposure, in WIRE µs (never scaled ×1000)", () => {
+    const exposureUsR = 12000;
+    const b = pairTriggerBudget({ exposureUsL: 8000, exposureUsR });
+    // `FrameArg.pulse` is microseconds — the pulse IS the exposure µs, verbatim.
+    // A ×1000 here (the trigger-freeze bug: 16.7 ms → 16.7 s) would fail this.
+    expect(b.pulseUs).toBe(Math.round(exposureUsR));
   });
 
   it("interval = settle + exposure + margin when no readout rate is known", () => {
@@ -65,7 +68,7 @@ describe("pairTriggerBudget", () => {
       maxRateHzL: 0,
       maxRateHzR: NaN,
     });
-    expect(b.pulseNs).toBe(0);
+    expect(b.pulseUs).toBe(0);
     // Everything unknowable → the stated margin is the whole budget.
     expect(b.minIntervalMs).toBeCloseTo(TRIGGER_FRAME_MARGIN_US / 1000, 9);
     expect(Number.isFinite(b.maxRateHz)).toBe(true);

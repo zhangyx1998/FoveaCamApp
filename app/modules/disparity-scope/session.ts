@@ -113,6 +113,7 @@ import { matchStaleMsFor, pairEpochGateTrips } from "./trigger-sync";
 import {
   createTriggerOpChain,
   engageFailureReason,
+  frameRequestFromBudget,
   triggerBlockReason,
   TriggerRateWindow,
 } from "@lib/trigger-sync";
@@ -1386,13 +1387,7 @@ export default function disparityScopeSession(
     function applyTriggerTarget(streamId: number): void {
       if (!triggerScheduler || !triggerBudget || !triple) return;
       triggerScheduler.setTargets([
-        {
-          stream: streamId,
-          cameras: ["L", "R"],
-          pulse: triggerBudget.pulseNs,
-          settle_time: triple.settleTimeUs,
-          minIntervalMs: triggerBudget.minIntervalMs,
-        },
+        frameRequestFromBudget(triggerBudget, streamId, triple.settleTimeUs),
       ]);
     }
 
@@ -1404,7 +1399,7 @@ export default function disparityScopeSession(
           // the first matures (TriggerRateWindow) — a per-publish 33 ms window
           // quantized it to 0 or ~30 and flapped the status line.
           hz: triggerRate.sample(now()),
-          pulseMs: triggerBudget.pulseNs / 1e6,
+          pulseMs: triggerBudget.pulseUs / 1000,
           frames: triggerFrames,
           rejects: triggerRejects,
           timeouts: triggerTimeouts,
@@ -1465,6 +1460,9 @@ export default function disparityScopeSession(
       triggerFrames = triggerRejects = triggerTimeouts = 0;
       triggerRate.reset(now());
       triggerScheduler = new RoundRobinFrameScheduler({
+        // FIN budget follows the pulse-derived interval — a long exposure must
+        // not FIN-time-out under a fixed 1 s and wedge (spec §trigger-sync).
+        completionTimeoutMs: Math.max(1000, (triggerBudget?.minIntervalMs ?? 0) * 3),
         requester: {
           frame(request) {
             const controller = activeController();

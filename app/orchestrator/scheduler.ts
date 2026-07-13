@@ -49,7 +49,10 @@ export interface FrameSchedulerOptions {
   defaultMinIntervalMs?: number;
   retryDelayMs?: number;
   acceptedTimeoutMs?: number;
-  completionTimeoutMs?: number;
+  /** FIN-wait budget (ms). A getter lets a long-lived scheduler track a live
+   *  budget — a pulse legitimately longer than a fixed 1 s otherwise FIN-times-
+   *  out every frame, retries as duplicates, and wedges (the trigger-freeze bug). */
+  completionTimeoutMs?: number | (() => number);
   now?: () => number;
   isDuplicateRejection?: (error: unknown) => boolean;
   onAccepted?: (target: ScheduledFrameTarget) => void;
@@ -81,7 +84,7 @@ export class RoundRobinFrameScheduler {
   private readonly defaultMinIntervalMs: number;
   private readonly retryDelayMs: number;
   private readonly acceptedTimeoutMs: number;
-  private readonly completionTimeoutMs: number;
+  private readonly completionTimeoutMs: number | (() => number);
   private readonly now: () => number;
   private readonly isDuplicateRejection: (error: unknown) => boolean;
 
@@ -168,7 +171,11 @@ export class RoundRobinFrameScheduler {
     const acceptedTimer = this.armTimeout(this.acceptedTimeoutMs, () =>
       finish("timeout", new Error("Frame request ACK timed out")),
     );
-    const completionTimer = this.armTimeout(this.completionTimeoutMs, () =>
+    const completionTimeoutMs =
+      typeof this.completionTimeoutMs === "function"
+        ? this.completionTimeoutMs()
+        : this.completionTimeoutMs;
+    const completionTimer = this.armTimeout(completionTimeoutMs, () =>
       finish("timeout", new Error("Frame request FIN timed out")),
     );
 

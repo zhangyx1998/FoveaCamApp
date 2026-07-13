@@ -133,13 +133,22 @@ export default function multiFoveaSession(
     let schedulerTimeouts = 0;
 
     const scheduler = new RoundRobinFrameScheduler({
+      // FIN budget follows the live pulse-derived interval (getter — this
+      // scheduler outlives any single budget): a long exposure must not
+      // FIN-time-out under a fixed 1 s and wedge (spec §trigger-sync).
+      completionTimeoutMs: () => Math.max(1000, (budget?.minIntervalMs ?? 0) * 3),
       requester: {
         frame(request) {
           const controller = activeController();
           if (!controller) throw new Error("No controller connected");
           return controller.frame({
             ...request,
-            pulse: request.pulse ?? s.state.pulse_ns,
+            // Explicit L|R mask — an absent mask is NAPI-encoded 0, not the
+            // documented CAM_L|CAM_R default.
+            cameras: ["L", "R"],
+            // `pulse_ns` is the persist/display unit; the wire (`FrameArg.pulse`)
+            // is µs (spec §trigger-sync).
+            pulse: request.pulse ?? Math.round(s.state.pulse_ns / 1000),
             settle_time: request.settle_time ?? s.state.settle_time_us, // spec §settle
           });
         },
@@ -184,7 +193,8 @@ export default function multiFoveaSession(
         scheduler.setTargets(
           targets.map((target) => ({
             ...target,
-            pulse: s.state.pulse_ns,
+            // Wire unit is µs; `pulse_ns` is the persist/display ns (spec §trigger-sync).
+            pulse: Math.round(s.state.pulse_ns / 1000),
             cameras: ["L", "R"],
             // Exposure-derived pacing (P6): never trigger a pair faster than
             // it can expose + read out. Undefined pre-lease → scheduler default.
@@ -397,8 +407,9 @@ export default function multiFoveaSession(
         budget: { ...budget, exposureUsL, exposureUsR, settleUs: s.state.settle_time_us },
       });
       // Server-side setState does NOT fire the state watchers, so this never
-      // trips the pulse_ns watch's manual-override latch.
-      if (s.state.pulse_auto) s.setState("pulse_ns", budget.pulseNs);
+      // trips the pulse_ns watch's manual-override latch. The state key persists
+      // ns (display); the budget is µs — scale up at this boundary.
+      if (s.state.pulse_auto) s.setState("pulse_ns", budget.pulseUs * 1000);
       applyTargets(); // re-push pulse + minIntervalMs into the scheduler
     }
 

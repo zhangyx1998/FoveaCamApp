@@ -469,12 +469,17 @@ engage reverts it via an epoch counter):
    + camera-reported readout floor + the triple's `settleTimeUs` — identical to
    multi-fovea's `deriveBudget`.
 3. One-target scheduler `{stream: nativePos.streamId, cameras: [L,R], pulse:
-   budget.pulseNs, settle_time, minIntervalMs: budget.minIntervalMs}`, requester = the
-   active controller's `frame()`. FIN/reject/timeout counts feed the `trigger`
-   telemetry at the volt-telemetry throttle; `hz` rolls on ≥1 s maturity windows
-   (`TriggerRateWindow`) — held between rolls, null until the first window matures
-   after (re-)engage, since a per-publish 33 ms window quantizes the rate to 0 or ~30;
-   `pulseMs` = `pulseNs / 1e6`.
+   budget.pulseUs, settle_time, minIntervalMs: budget.minIntervalMs}` (built by the
+   shared `frameRequestFromBudget`), requester = the active controller's `frame()`.
+   The pulse is MICROSECONDS on the wire (`FrameArg.pulse`) — `budget.pulseUs` is the
+   exposure µs verbatim, never scaled (a ×1000 sent 16.7 ms as 16.7 s, past the FIN
+   timeout, and froze the feed). The scheduler's `completionTimeoutMs` is
+   `max(1000, minIntervalMs × 3)` so a pulse legitimately longer than 1 s (e.g. a
+   2 s exposure) does not FIN-time-out every frame, retry as duplicates, and wedge.
+   FIN/reject/timeout counts feed the `trigger` telemetry at the volt-telemetry
+   throttle; `hz` rolls on ≥1 s maturity windows (`TriggerRateWindow`) — held between
+   rolls, null until the first window matures after (re-)engage, since a per-publish
+   33 ms window quantizes the rate to 0 or ~30; `pulseMs` = `pulseUs / 1000`.
 4. Both fovea config docs are subscribed — an exposure edit re-derives the budget and
    re-pushes the scheduler target live.
 

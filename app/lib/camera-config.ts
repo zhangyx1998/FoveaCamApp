@@ -190,9 +190,9 @@ export function pairDivergence(left: PairSideView, right: PairSideView): string[
 // ---- Fovea-pair trigger budget (P6) ----------------------------------------
 //
 // AUTHORITY (ruled default): the cameras' EXPOSURE CONFIG is authoritative and
-// the trigger pulse DERIVES from it — `pulseNs` covers the slower eye's
+// the trigger pulse DERIVES from it — `pulseUs` covers the slower eye's
 // exposure. FLIP POINT: to make the trigger width authoritative instead,
-// invert exactly this function (take `pulseNs` as the input and return the
+// invert exactly this function (take `pulseUs` as the input and return the
 // exposure to program into both cameras); every consumer (multi-fovea's
 // budget derivation, manage-cameras' pair readout) reaches the budget only
 // through here, so the flip stays a one-function change.
@@ -217,8 +217,9 @@ export type PairTriggerBudgetInput = {
 };
 
 export type PairTriggerBudget = {
-  /** CMD_FRAME trigger pulse width (ns): covers max(exposureL, exposureR). */
-  pulseNs: number;
+  /** CMD_FRAME trigger pulse width (µs), matching the wire (`FrameArg.pulse` is
+   *  microseconds): covers max(exposureL, exposureR). */
+  pulseUs: number;
   /** Floor between CMD_FRAMEs to one L+R pair (ms): settle + the slower
    *  camera's frame floor (max of exposure and its reported readout period,
    *  which overlap on-sensor — never their sum) + `TRIGGER_FRAME_MARGIN_US`. */
@@ -239,7 +240,7 @@ export function pairTriggerBudget(input: PairTriggerBudgetInput): PairTriggerBud
   );
   const intervalUs = pos(input.settleUs) + frameUs + TRIGGER_FRAME_MARGIN_US;
   return {
-    pulseNs: Math.round(exposureUs * 1000),
+    pulseUs: Math.round(exposureUs),
     minIntervalMs: intervalUs / 1000,
     maxRateHz: 1e6 / intervalUs,
   };

@@ -13,6 +13,27 @@
 // match-join.ts / tracker-feed.ts. The match-join-COUPLED parts (pair window,
 // engaged staleness scale) live in disparity-scope's own trigger-sync.ts.
 
+import type { PairTriggerBudget } from "@lib/camera-config";
+import type { ScheduledFrameTarget } from "@orchestrator/scheduler";
+
+/** The ONE scheduler target both trigger-sync engage sites push: the budget's
+ *  pulse rides the wire in MICROSECONDS (`FrameArg.pulse`), so it is `pulseUs`
+ *  verbatim — no scaling. `cameras` is always the explicit `[L,R]` mask (an
+ *  absent mask is NAPI-encoded as 0, not the documented CAM_L|CAM_R default). */
+export function frameRequestFromBudget(
+  budget: PairTriggerBudget,
+  streamId: number,
+  settleUs: number,
+): ScheduledFrameTarget {
+  return {
+    stream: streamId,
+    cameras: ["L", "R"],
+    pulse: budget.pulseUs,
+    settle_time: settleUs,
+    minIntervalMs: budget.minIntervalMs,
+  };
+}
+
 /** Everything engagement waits on, snapshot-shaped for the retry tick. */
 export interface TriggerPreconditions {
   tripleLeased: boolean;

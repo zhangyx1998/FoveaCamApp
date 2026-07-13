@@ -14,9 +14,26 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createTriggerOpChain,
   engageFailureReason,
+  frameRequestFromBudget,
   triggerBlockReason,
   TriggerRateWindow,
 } from "@lib/trigger-sync";
+import { pairTriggerBudget } from "@lib/camera-config";
+
+describe("frameRequestFromBudget (engage-site scheduler target)", () => {
+  it("sends the pulse in WIRE µs and an explicit L|R mask", () => {
+    const budget = pairTriggerBudget({ exposureUsL: 16700, exposureUsR: 16700 });
+    const target = frameRequestFromBudget(budget, 7, 1500);
+    // The pulse rides the wire verbatim as µs — a ×1000 would be 16.7 s.
+    expect(target.pulse).toBe(Math.round(16700));
+    expect(target.pulse).toBe(budget.pulseUs);
+    expect(target.stream).toBe(7);
+    expect(target.settle_time).toBe(1500);
+    expect(target.minIntervalMs).toBe(budget.minIntervalMs);
+    // Explicit mask (an absent mask NAPI-encodes to 0, not CAM_L|CAM_R).
+    expect(target.cameras).toEqual(["L", "R"]);
+  });
+});
 
 const READY = {
   tripleLeased: true,

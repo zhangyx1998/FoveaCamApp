@@ -60,7 +60,8 @@ void _controlsConform;
  *  P6) — the pair panel's readout row. Settle hold is NOT included here (it is
  *  per-triple and added by the tracking apps that drive the trigger). */
 export type PairBudgetView = {
-  pulseNs: number;
+  /** Trigger pulse width (µs, the wire unit — `FrameArg.pulse`). */
+  pulseUs: number;
   maxRateHz: number;
   minIntervalMs: number;
   exposureUsL: number;
