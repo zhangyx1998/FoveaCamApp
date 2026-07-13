@@ -43,6 +43,12 @@ export interface SidecarState {
   /** Property panel width, px (UI round 2 ruling 4) — persisted when the user
    *  resizes it. Absent → DEFAULT_PANEL_WIDTH. */
   panelWidth: number;
+  /** Preview TILE ORDER (timeline touch-up ruling 2): a permutation of track
+   *  indices giving the left→right order of the preview tile slots (one slot per
+   *  track). Absent (older sidecars) → natural track order; reconciled against
+   *  the live track count on read (`reconcileTileOrder`). Optional so the field
+   *  only appears once the user has dragged tiles. */
+  tileOrder?: number[];
 }
 
 /** Panel-split bounds — the preview reserves a minimum height, the timeline can
@@ -125,10 +131,28 @@ function cleanDisabled(v: unknown): string[] {
   return [...new Set(v.filter((x): x is string => typeof x === "string"))];
 }
 
+/** Coerce a stored tile order into non-negative integers, or `undefined` when
+ *  the field is absent/not an array (conservative, matching the other cleaners:
+ *  a garbage field simply drops rather than corrupting the whole state). The
+ *  values are only *cleaned* here (finite, integer, ≥ 0, de-duplicated) —
+ *  reconciliation against the live track count happens in the UI on read. */
+function cleanTileOrder(v: unknown): number[] | undefined {
+  if (!Array.isArray(v)) return undefined;
+  const seen = new Set<number>();
+  const out: number[] = [];
+  for (const n of v) {
+    if (typeof n !== "number" || !Number.isFinite(n) || !Number.isInteger(n) || n < 0) continue;
+    if (seen.has(n)) continue;
+    seen.add(n);
+    out.push(n);
+  }
+  return out;
+}
+
 /** Coerce a parsed object that already passed the version check into a valid
  *  `SidecarState`, filling missing/invalid FIELDS from defaults. */
 function coerceValid(o: Record<string, unknown>): SidecarState {
-  return {
+  const state: SidecarState = {
     v: SIDECAR_VERSION,
     tracks: cleanTracks(o.tracks),
     disabled: cleanDisabled(o.disabled),
@@ -143,6 +167,11 @@ function coerceValid(o: Record<string, unknown>): SidecarState {
     panelOpen: o.panelOpen === true,
     panelWidth: clampPanelWidth(o.panelWidth),
   };
+  // Optional: only surface `tileOrder` when the file actually carried one, so an
+  // older sidecar round-trips byte-identically (no spurious empty array).
+  const tileOrder = cleanTileOrder(o.tileOrder);
+  if (tileOrder) state.tileOrder = tileOrder;
+  return state;
 }
 
 /** File-level load classification (ruling 10): ABSENT (no file) is silently

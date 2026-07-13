@@ -369,3 +369,197 @@ export function activeChannels(
   }
   return out;
 }
+
+// ---- timeline touch-up additions (viewer-timeline-touchup.md) -------------
+
+/** Earliest block start (ruling 1) — the initial playhead lands here so at
+ *  least one tile shows on open. 0 when there are no blocks. */
+export function firstMeaningfulNs(blocks: readonly ChannelBlock[]): number {
+  let min = Infinity;
+  for (const b of blocks) if (b.startNs < min) min = b.startNs;
+  return Number.isFinite(min) ? min : 0;
+}
+
+/** Insert `channel` as a NEW row at `insertBefore` (0..rows.length), removing
+ *  it from its current row; now-empty rows drop; per-row start-time sort like
+ *  `moveBlock`. Its own fresh row never collides. Returns a NEW layout.
+ *  `insertBefore` indexes the ORIGINAL rows (a new row is spliced at that
+ *  position before empties are dropped), so hovering the boundary above row i
+ *  inserts at i. */
+export function insertBlockAt(
+  rows: readonly string[][],
+  blocks: readonly ChannelBlock[],
+  channel: string,
+  insertBefore: number,
+): string[][] {
+  const byStart = new Map(blocks.map((b) => [b.channel, b.startNs]));
+  // Remove the channel everywhere; keep indices aligned to `rows` (no drop yet).
+  const next: string[][] = rows.map((r) => r.filter((c) => c !== channel));
+  const idx = Math.max(0, Math.min(insertBefore, next.length));
+  next.splice(idx, 0, [channel]);
+  return next
+    .filter((r) => r.length > 0)
+    .map((r) =>
+      [...r].sort(
+        (a, b) => (byStart.get(a) ?? 0) - (byStart.get(b) ?? 0) || a.localeCompare(b),
+      ),
+    );
+}
+
+/** The L/C/R role of a single channel: L/R via `sideOf()`, C via the wide/
+ *  center designation names, else null. */
+function channelRole(channel: string): "L" | "C" | "R" | null {
+  const s = sideOf(channel);
+  if (s) return s.side === "left" ? "L" : "R";
+  if ((WIDE_DESIGNATION_NAMES as readonly string[]).includes(channel.toLowerCase()))
+    return "C";
+  return null;
+}
+
+/** Track role from its channels (ruling 4): the single role shared by every
+ *  role-bearing channel on the row ("L"/"R" via `sideOf()`, "C" via the wide
+ *  designation names). null when the row mixes roles or carries none;
+ *  role-less channels don't veto an otherwise-uniform role. */
+export function trackRole(row: readonly string[]): "L" | "C" | "R" | null {
+  let found: "L" | "C" | "R" | null = null;
+  for (const ch of row) {
+    const r = channelRole(ch);
+    if (r === null) continue;
+    if (found === null) found = r;
+    else if (found !== r) return null; // mixed → no single role
+  }
+  return found;
+}
+
+/** Role colors mirror tokens.css --role-l/-c/-r (and profiler ROLE_COLORS). */
+const ROLE_TRACK_COLORS: Record<"L" | "C" | "R", string> = {
+  L: "cyan",
+  C: "orange",
+  R: "greenyellow",
+};
+
+/** Muted, deterministic non-role track palette — desaturated hues that won't
+ *  compete with the saturated role colors or warn/error accents. Cycled by
+ *  track index. */
+const MUTED_TRACK_COLORS: readonly string[] = [
+  "#7c8aa5", // muted blue
+  "#a58a7c", // muted terracotta
+  "#8aa57c", // muted sage
+  "#9a7ca5", // muted mauve
+  "#a5a07c", // muted khaki
+  "#7ca5a0", // muted teal
+  "#a57c92", // muted rose
+  "#8f8fa0", // muted slate
+];
+
+/** Track theme color (ruling 4): the L/C/R role color when `trackRole()` hits,
+ *  otherwise a deterministic muted cycle by track index (distinct from the role
+ *  hues). */
+export function trackColor(row: readonly string[], index: number): string {
+  const role = trackRole(row);
+  if (role) return ROLE_TRACK_COLORS[role];
+  const n = MUTED_TRACK_COLORS.length;
+  return MUTED_TRACK_COLORS[((index % n) + n) % n]!;
+}
+
+/** One tile SLOT per track (ruling 2): slot i ↔ track i. The track's active
+ *  (spanning + enabled) channel becomes a `tile`; a non-`disabled` pair renders
+ *  as ONE pair tile in the TOPMOST of its two active tracks, the partner active
+ *  track getting a `pair-collapsed` placeholder labeled with the base. A track
+ *  whose spanning channel is disabled gets a `disabled` placeholder (label =
+ *  that channel); a track with no channel at the playhead gets `no-frame`
+ *  (label = the row's channels). Reuses `activeChannels` semantics +
+ *  `pairDecodeChannels`. */
+export type TileSlot =
+  | { kind: "tile"; track: number; tile: Tile }
+  | {
+      kind: "placeholder";
+      track: number;
+      reason: "no-frame" | "disabled" | "pair-collapsed";
+      label: string;
+    };
+
+export function composeTileSlots(
+  rows: readonly string[][],
+  blocks: readonly ChannelBlock[],
+  playheadNs: number,
+  enabled: ReadonlySet<string>,
+  pairModeOf: ReadonlyMap<string, { pair: ChannelPair; mode: ThreeDMode }>,
+): TileSlot[] {
+  const byName = new Map(blocks.map((b) => [b.channel, b]));
+  const spans = (ch: string): boolean => {
+    const b = byName.get(ch);
+    return !!b && playheadNs >= b.startNs && playheadNs <= b.lastNs;
+  };
+  // Per-row spanning channel (regardless of enabled) — at most one (rows never
+  // overlap). And the active (spanning + enabled) channel, mirroring
+  // activeChannels' first-match semantics.
+  const spanCh: (string | null)[] = rows.map((row) => row.find(spans) ?? null);
+  const activeCh: (string | null)[] = rows.map(
+    (row) => row.find((ch) => enabled.has(ch) && spans(ch)) ?? null,
+  );
+  // Active tracks per non-disabled pair (base → ascending row indices). The
+  // topmost hosts the pair tile; the rest collapse.
+  const pairActiveTracks = new Map<string, number[]>();
+  activeCh.forEach((ch, t) => {
+    if (!ch) return;
+    const info = pairModeOf.get(ch);
+    if (info && info.mode !== "disabled") {
+      const arr = pairActiveTracks.get(info.pair.base) ?? [];
+      arr.push(t);
+      pairActiveTracks.set(info.pair.base, arr);
+    }
+  });
+
+  return rows.map((row, t): TileSlot => {
+    const ch = activeCh[t];
+    if (!ch) {
+      const span = spanCh[t];
+      if (span)
+        return { kind: "placeholder", track: t, reason: "disabled", label: span };
+      return { kind: "placeholder", track: t, reason: "no-frame", label: row.join(", ") };
+    }
+    const info = pairModeOf.get(ch);
+    if (info && info.mode !== "disabled") {
+      const tracks = pairActiveTracks.get(info.pair.base)!;
+      if (t === tracks[0]) {
+        return {
+          kind: "tile",
+          track: t,
+          tile: {
+            kind: "pair",
+            pair: info.pair,
+            mode: info.mode as Exclude<ThreeDMode, "disabled">,
+            channels: pairDecodeChannels(info.pair, info.mode),
+          },
+        };
+      }
+      return {
+        kind: "placeholder",
+        track: t,
+        reason: "pair-collapsed",
+        label: info.pair.base,
+      };
+    }
+    return { kind: "tile", track: t, tile: { kind: "single", channel: ch, channels: [ch] } };
+  });
+}
+
+/** Reconcile a persisted tile order (a permutation of track indices) against
+ *  the current track count: drop out-of-range/duplicate entries, append missing
+ *  indices in natural order. Value-identity when order already agrees. */
+export function reconcileTileOrder(
+  order: readonly number[],
+  trackCount: number,
+): number[] {
+  const seen = new Set<number>();
+  const out: number[] = [];
+  for (const i of order) {
+    if (Number.isInteger(i) && i >= 0 && i < trackCount && !seen.has(i)) {
+      seen.add(i);
+      out.push(i);
+    }
+  }
+  for (let i = 0; i < trackCount; i++) if (!seen.has(i)) out.push(i);
+  return out;
+}

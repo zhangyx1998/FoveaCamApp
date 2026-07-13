@@ -13,16 +13,22 @@ import {
   activeChannels,
   autoPack,
   composeTiles,
+  composeTileSlots,
   decodeSet,
   detectMaster,
   detectPairs,
   dropCollides,
+  firstMeaningfulNs,
   initialLayout,
+  insertBlockAt,
   layoutMismatch,
   moveBlock,
   nsAtClientX,
   reconcileLayout,
+  reconcileTileOrder,
   sideOf,
+  trackColor,
+  trackRole,
   type ChannelBlock,
   type ChannelPair,
   type ThreeDMode,
@@ -318,5 +324,164 @@ describe("nsAtClientX", () => {
   it("degenerate geometry (zero width / zero duration) → 0", () => {
     expect(nsAtClientX(150, L, 0, D)).toBe(0);
     expect(nsAtClientX(150, L, W, 0)).toBe(0);
+  });
+});
+
+// ---- touch-up wave: firstMeaningfulNs (ruling 1) --------------------------
+
+describe("firstMeaningfulNs", () => {
+  it("returns the earliest block start", () => {
+    expect(firstMeaningfulNs([b("a", 500, 900), b("b", 200, 400), b("c", 700, 800)])).toBe(200);
+  });
+  it("is 0 when there are no blocks", () => {
+    expect(firstMeaningfulNs([])).toBe(0);
+  });
+});
+
+// ---- touch-up wave: insertBlockAt (ruling 8) ------------------------------
+
+describe("insertBlockAt", () => {
+  const blocks = [b("a", 0, 100), b("b", 0, 100), b("c", 200, 300)];
+
+  it("inserts a NEW top row (insertBefore 0)", () => {
+    // "c" pulled out of its shared row onto a fresh row 0.
+    const next = insertBlockAt([["a"], ["b", "c"]], blocks, "c", 0);
+    expect(next).toEqual([["c"], ["a"], ["b"]]);
+  });
+
+  it("inserts a NEW middle row and drops the emptied source row", () => {
+    const next = insertBlockAt([["a"], ["b"], ["c"]], blocks, "b", 2);
+    // b removed from row 1 (now empty, dropped); new row spliced before old idx 2.
+    expect(next).toEqual([["a"], ["b"], ["c"]]);
+  });
+
+  it("inserts at/after the bottom (insertBefore >= rows.length)", () => {
+    const next = insertBlockAt([["a", "c"], ["b"]], blocks, "a", 9);
+    expect(next).toEqual([["c"], ["b"], ["a"]]);
+  });
+
+  it("sorts the destination sibling row by start time (own row stays single)", () => {
+    // Move c(200..300) to a new row: it's alone, so no siblings to sort, but
+    // the vacated row keeps its natural start order.
+    const next = insertBlockAt([["b", "c"]], blocks, "c", 0);
+    expect(next).toEqual([["c"], ["b"]]);
+  });
+});
+
+// ---- touch-up wave: trackRole / trackColor (ruling 4) ---------------------
+
+describe("trackRole", () => {
+  it("reads L/R from sideOf and C from wide designations", () => {
+    expect(trackRole(["left-cam"])).toBe("L");
+    expect(trackRole(["right-cam"])).toBe("R");
+    expect(trackRole(["center"])).toBe("C");
+    expect(trackRole(["wide"])).toBe("C");
+  });
+  it("stays uniform across role-bearing + role-less channels on one row", () => {
+    expect(trackRole(["left-cam", "left-eye"])).toBe("L");
+    expect(trackRole(["left-cam", "aux"])).toBe("L"); // role-less doesn't veto
+  });
+  it("is null when the row mixes roles or carries none", () => {
+    expect(trackRole(["left-cam", "right-cam"])).toBeNull();
+    expect(trackRole(["aux", "other"])).toBeNull();
+    expect(trackRole([])).toBeNull();
+  });
+});
+
+describe("trackColor", () => {
+  it("uses the role hues (tokens --role-l/-c/-r) when a role is present", () => {
+    expect(trackColor(["left-cam"], 3)).toBe("cyan");
+    expect(trackColor(["center"], 7)).toBe("orange");
+    expect(trackColor(["right-cam"], 1)).toBe("greenyellow");
+  });
+  it("cycles a deterministic muted palette by index for role-less tracks", () => {
+    const c0 = trackColor(["aux"], 0);
+    const c1 = trackColor(["aux"], 1);
+    expect(c0).not.toBe(c1);
+    expect(trackColor(["aux"], 0)).toBe(c0); // deterministic
+    // Muted (not the saturated role hues).
+    expect(["cyan", "orange", "greenyellow"]).not.toContain(c0);
+    // Cycles: index N wraps.
+    expect(trackColor(["aux"], 8)).toBe(trackColor(["aux"], 0));
+  });
+});
+
+// ---- touch-up wave: composeTileSlots (ruling 2) ---------------------------
+
+describe("composeTileSlots", () => {
+  const pairs = detectPairs(["left-cam", "right-cam"]);
+  const blocks = [
+    b("center", 0, 100),
+    b("left-cam", 0, 100),
+    b("right-cam", 0, 100),
+  ];
+  const rows = [["center"], ["left-cam"], ["right-cam"]];
+  const allEnabled = new Set(["center", "left-cam", "right-cam"]);
+
+  it("gives exactly one slot per track, slot i ↔ track i", () => {
+    const slots = composeTileSlots(rows, blocks, 50, allEnabled, new Map());
+    expect(slots).toHaveLength(3);
+    slots.forEach((s, i) => expect(s.track).toBe(i));
+  });
+
+  it("collapses a non-disabled pair into the topmost track, partner placeholder", () => {
+    const slots = composeTileSlots(rows, blocks, 50, allEnabled, pairModes(pairs, { cam: "anaglyph" }));
+    expect(slots[0]).toMatchObject({ kind: "tile" });
+    expect((slots[0] as { tile: { kind: string } }).tile.kind).toBe("single");
+    // topmost of the two pair tracks (row 1) hosts the pair tile.
+    expect(slots[1]).toMatchObject({ kind: "tile" });
+    expect((slots[1] as { tile: { kind: string; channels: string[] } }).tile).toMatchObject({
+      kind: "pair",
+      channels: ["left-cam", "right-cam"],
+    });
+    // partner track collapses, labeled with the base.
+    expect(slots[2]).toEqual({
+      kind: "placeholder",
+      track: 2,
+      reason: "pair-collapsed",
+      label: "cam",
+    });
+  });
+
+  it("marks a disabled spanning channel as a `disabled` placeholder", () => {
+    const enabled = new Set(["center", "right-cam"]); // left-cam disabled
+    const slots = composeTileSlots(rows, blocks, 50, enabled, new Map());
+    expect(slots[1]).toEqual({
+      kind: "placeholder",
+      track: 1,
+      reason: "disabled",
+      label: "left-cam",
+    });
+  });
+
+  it("marks a track with no frame at the playhead as `no-frame`", () => {
+    const slots = composeTileSlots(rows, blocks, 5000, allEnabled, new Map());
+    expect(slots.every((s) => s.kind === "placeholder")).toBe(true);
+    expect(slots[1]).toMatchObject({ reason: "no-frame", label: "left-cam" });
+  });
+
+  it("stays 1-slot-per-track stable as the playhead moves", () => {
+    for (const ph of [0, 50, 100, 500, 5000]) {
+      const slots = composeTileSlots(rows, blocks, ph, allEnabled, pairModes(pairs, { cam: "anaglyph" }));
+      expect(slots).toHaveLength(3);
+      slots.forEach((s, i) => expect(s.track).toBe(i));
+    }
+  });
+});
+
+// ---- touch-up wave: reconcileTileOrder (ruling 2) -------------------------
+
+describe("reconcileTileOrder", () => {
+  it("is identity when order already covers the tracks", () => {
+    expect(reconcileTileOrder([0, 1, 2], 3)).toEqual([0, 1, 2]);
+    expect(reconcileTileOrder([2, 0, 1], 3)).toEqual([2, 0, 1]);
+  });
+  it("drops out-of-range and duplicate entries", () => {
+    expect(reconcileTileOrder([0, 3, 1], 2)).toEqual([0, 1]);
+    expect(reconcileTileOrder([0, 0, 1], 2)).toEqual([0, 1]);
+  });
+  it("appends missing indices in natural order", () => {
+    expect(reconcileTileOrder([2, 0], 3)).toEqual([2, 0, 1]);
+    expect(reconcileTileOrder([], 3)).toEqual([0, 1, 2]);
   });
 });
