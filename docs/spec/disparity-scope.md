@@ -111,18 +111,34 @@ convergence timeout does NOT apply (user ruling 2026-07-11). The timeout exists 
 unattended pointer-set targets, not an active tracker. Otherwise `now() - windowStart >
 timeout` (timeout 0 = never, the slider-MAX sentinel).
 
-**Auto-vergence DISABLED** (user ruling 2026-07-12, `autoVergenceDisabled()`): `timeout
-= -1` (the slider-MIN sentinel, label "disabled") turns the auto loop OFF entirely —
-overriding even an active tracker — status "auto off"; pointer drags and the manual DOF
-sliders still steer (manual control, not auto). The same predicate carries the MANUAL
-HOLD latch, status "held": a `setPid` slider write disengages auto-follow (flipping
-`tracker_enabled` OFF for real — UI/UX review #4, the toggle must never read "on" while
-the feed gate drops every result) and sets `windowStart = -Infinity` (covers timeout 0,
-which a plain expiry can't); every activity path that restarts the window (drag,
-override release, a re-armed tracker's first found result) clears the latch by
-construction. Under either state `reset_vergence` also PUSHES the reconstructed
-all-zero pose (review #7 — nothing would ever step, so the zeroed readout would desync
-from the held mirrors). `windowStart` is refreshed on drag/track activity and
+**Auto-vergence DISABLED** (user ruling 2026-07-12, AMENDED same day — ruling #2:
+disabled/held freeze the CORRECTIONS, never the tracker; `autoVergenceDisabled()`):
+`timeout = -1` (the slider-MIN sentinel, label "disabled") stops the control law from
+stepping — status "auto off" — but a live tracker KEEPS its target, and while
+`trackerActive` the foveas keep FOLLOWING it: controlStep's disabled branch returns
+`slewToward(followVolts(state.target))` (slewed by construction — D1; pure geometry, no
+match-score gate, mirroring the drag ruling) through the frozen/manual DOF values.
+Pointer drags and the manual DOF sliders still steer (manual control, not auto).
+
+The same predicate carries the MANUAL HOLD latch, status "held": a `setPid` slider
+write OR `pauseVergence(true)` (the drawer's pause button — the slider-write takeover
+without a value change) calls `latchManualHold()` — `windowStart = -Infinity` (covers
+timeout 0, which a plain expiry can't) and NOTHING else: the tracker stays armed and
+following. The latch therefore survives tracker activity — `onTrack`/`markTrackerLost`
+refresh the window ONLY when it is not `-Infinity` — and is cleared explicitly by: a
+pointer drag (its controlStep ticks restart the window), the `tracker_enabled` off→on
+toggle (the watch sets `windowStart = now()` before re-arming — onTrack can no longer
+do it), `pauseVergence(false)` (resume — cancels a live tune first, takeover
+semantics), or a `pidOverride` release. `vergence_paused` telemetry publishes the
+latch on TRANSITIONS (direct latch paths + the volt-telemetry tick as catch-all;
+latch-state var resets at idle) and drives the pause/play toggle; the held/auto-off
+status carries a " · following" suffix while `trackerActive` (review #3 — parked and
+actively-following are visibly different states). `disengageAutoVergence` (tracker OFF for real, honest toggle —
+UI/UX review #4) is now the AUTOTUNE-ONLY entry: tune experiments script the target, so
+a live tracker would fight them. Under either state `reset_vergence` also PUSHES the
+reconstructed all-zero pose (review #7 — with a tracker following, the next tick slews
+onto its target at zero corrections; without one the zeroed readout would otherwise
+desync from the held mirrors). `windowStart` is refreshed on drag/track activity and
 reset per activation (value-sweep `freeze-window-not-reset-on-activate`: the clocks were
 initialized at session CREATION, so a window re-entering long after boot was already
 past the timeout — frozen before the first projection).

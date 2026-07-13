@@ -413,9 +413,11 @@ export default function disparityScopeSession(
     }
 
     /** Auto-vergence is OFF (`timeout` at the slider-min `-1` sentinel, or a
-     *  manual DOF write latched the hold — see `disengageAutoVergence`): the
-     *  control law never steps and feed-forward stays down. Pointer drags and
-     *  the manual sliders still steer — they're manual control, not auto. */
+     *  manual DOF write latched the hold — see `latchManualHold`): the
+     *  control law never steps. Pointer drags and the manual sliders still
+     *  steer — and a live tracker keeps FOLLOWING (ruling 2026-07-12 #2):
+     *  the foveas ride `followVolts(target)` through the frozen/manual DOF
+     *  values (controlStep's disabled branch); only the CORRECTIONS stop. */
     function autoVergenceDisabled(): boolean {
       return s.state.tuning.timeout < 0 || windowStart === -Infinity;
     }
@@ -636,7 +638,11 @@ export default function disparityScopeSession(
         onTrack(center, bbox) {
           pidNode?.ingest("target"); // meter the kcf → pid target edge (accepted rate)
           trackerActive = true;
-          windowStart = now(); // tracking = activity: keep the freeze window fresh
+          // Tracking = activity: keep the freeze window fresh — but NEVER
+          // clear the manual-hold latch (user ruling 2026-07-12 #2: a slider
+          // write freezes auto-vergence while the tracker keeps following;
+          // tracker results must not un-hold it).
+          if (windowStart !== -Infinity) windowStart = now();
           lastGood = center;
           writeTarget(center);
           steerCrops();
@@ -660,26 +666,52 @@ export default function disparityScopeSession(
     function markTrackerLost(): void {
       trackerArmed = false;
       trackerActive = false;
-      windowStart = now();
+      // Restart the freeze window — unless a manual hold is latched: a lost
+      // tracker under "held" must stay held, not resume auto-stepping.
+      if (windowStart !== -Infinity) windowStart = now();
       writeTarget(lastGood);
       s.telemetry({ tracker_bbox: null, tracker_lost: true });
     }
 
-    /** Manual DOF write (`setPid` slider drag) disengages auto-vergence
-     *  IMMEDIATELY — even mid-track: drop the auto-follow AND latch the hold by
-     *  expiring the convergence window (`-Infinity` ⇒ `autoVergenceDisabled`,
-     *  covering the `timeout = 0` no-timeout mode a plain expiry can't). Every
-     *  activity path that restarts the window (drag, override release, the
-     *  re-armed tracker's first found result) clears the latch by construction.
-     *  `tracker_enabled` flips OFF for real (UI/UX review #4: the toggle must
-     *  not read "on"/"armed" while the feed gate drops every result — one
-     *  honest click re-engages, and the manual's wording stays true). */
+    /** AUTOTUNE-ONLY disengage (user ruling 2026-07-12 #2 narrowed this):
+     *  drop the auto-follow AND latch the hold by expiring the convergence
+     *  window (`-Infinity` ⇒ `autoVergenceDisabled`, covering the `timeout=0`
+     *  no-timeout mode a plain expiry can't). The tune experiments script the
+     *  TARGET, so a live tracker would fight them — `tracker_enabled` flips
+     *  OFF for real (UI/UX review #4: the toggle must not read "on" while
+     *  results are ignored). Manual DOF writes NO LONGER come here — they
+     *  latch the hold via `latchManualHold` and keep the tracker following. */
     function disengageAutoVergence(): void {
       trackerArmed = false;
       trackerActive = false;
       windowStart = -Infinity;
       s.setState("tracker_enabled", false);
       s.telemetry({ tracker_bbox: null });
+    }
+
+    /** Manual DOF write (`setPid` slider drag) or the PAUSE button freezes
+     *  auto-vergence IMMEDIATELY — even mid-track — WITHOUT touching the
+     *  tracker (user ruling 2026-07-12 #2): the hold latch stops PID
+     *  stepping, while an armed tracker keeps updating the target and the
+     *  foveas keep FOLLOWING it through the (now manual) DOF values —
+     *  `controlStep`'s disabled branch. Cleared by: a pointer drag (its
+     *  ticks restart the window), toggling the tracker off→on, the pause
+     *  button's resume, or a `pidOverride` release. */
+    function latchManualHold(): void {
+      windowStart = -Infinity;
+      publishPaused();
+    }
+
+    /** `vergence_paused` on TRANSITIONS only — the latch is written from many
+     *  paths (slider writes, pause command, drag ticks, toggle re-arm), so
+     *  the telemetry tick calls this as a catch-all and the direct latch
+     *  paths call it for immediacy. */
+    let lastPausedTele = false;
+    function publishPaused(): void {
+      const paused = windowStart === -Infinity;
+      if (paused === lastPausedTele) return;
+      lastPausedTele = paused;
+      s.telemetry({ vergence_paused: paused });
     }
 
     // R3 watchdog state: stamped on EVERY delivered tracker result (found or
@@ -1133,7 +1165,20 @@ export default function disparityScopeSession(
         // Distinct from "frozen" (a timeout that a drag restarts) AND from the
         // transient drag "manual" (review #8): the sentinel needs the Timeout
         // slider moved, the "held" latch a new drag / tracker re-enable.
-        status = s.state.tuning.timeout < 0 ? "auto off" : "held";
+        // Ruling 2026-07-12 #2: disabled/held freezes the CORRECTIONS, not
+        // the tracker — while auto-follow is live the foveas keep following
+        // the tracker's target through the frozen/manual DOF values, slewed
+        // like every other follow writer (D1: no un-slewed volts path). No
+        // match-score gate, mirroring the drag ruling — the follow is pure
+        // geometry off the wide-view target. The status names the motion
+        // (review #3): parked and actively-following are visibly different.
+        const base = s.state.tuning.timeout < 0 ? "auto off" : "held";
+        if (trackerActive) {
+          status = `${base} · following`;
+          const follow = followVolts(s.state.target);
+          if (follow) return slewToward(follow);
+        }
+        status = base;
         return commandedVolts;
       }
       if (frozen()) {
@@ -2112,6 +2157,9 @@ export default function disparityScopeSession(
           }, latencyEnabled),
         );
         const timer = setInterval(() => {
+          // Catch-all for latch transitions that happen off the direct paths
+          // (a drag tick restarting the window, toggle re-arm, activation).
+          publishPaused();
           // R3 stall watchdog (mirror-flicker addendum): while auto-follow is
           // live, NO delivered result within the deadline ⇒ the source is
           // stalled — same policy as the count-based lost tolerance. The
@@ -2280,9 +2328,10 @@ export default function disparityScopeSession(
       fovea = { width: 0, height: 0 };
       stripScaleFactor = 1;
       commandedVolts = { l: ORIGIN_POS, r: ORIGIN_POS };
-      // The transition latch must reset with the telemetry, or an identical
-      // blocked reason after re-activation would be suppressed forever.
+      // The transition latches must reset with the telemetry, or an identical
+      // value after re-activation would be suppressed forever.
       lastTriggerBlocked = null;
+      lastPausedTele = false;
       s.resetTelemetry([
         "ready",
         "calibrated",
@@ -2294,6 +2343,7 @@ export default function disparityScopeSession(
         "autotune",
         "trigger",
         "trigger_blocked",
+        "vergence_paused",
       ]);
     }
 
@@ -2370,11 +2420,13 @@ export default function disparityScopeSession(
           }
         },
         async setPid({ dof, value }) {
-          // Bidirectional slider write: disengage auto-vergence FIRST (even
-          // mid-track — the ruling), so the next match pair can't fight the
-          // manual value, then apply + actuate from the new DOF state.
+          // Bidirectional slider write: latch the hold FIRST (even mid-track
+          // — ruling 2026-07-12 #2), so the next match pair can't fight the
+          // manual value, then apply + actuate from the new DOF state. The
+          // tracker stays armed: the foveas keep following its target
+          // through the manual DOF values (controlStep's disabled branch).
           cancelAutotune("manual DOF write"); // slider takeover wins
-          disengageAutoVergence();
+          latchManualHold();
           switch (dof) {
             case "verge":
               verge.value = value;
@@ -2397,6 +2449,24 @@ export default function disparityScopeSession(
           if (v && !pidNode?.override.engaged) {
             commandedVolts = v;
             pushVolts();
+          }
+        },
+        /** PAUSE = the slider-write takeover without a value change (spec
+         *  §freeze-window): latch the hold — a live tracker keeps following.
+         *  RESUME clears the latch only (the Timeout -1 sentinel is the
+         *  slider's to clear). */
+        async pauseVergence(pause) {
+          if (pause) {
+            cancelAutotune("paused"); // manual takeover wins, like setPid
+            latchManualHold();
+            status = "held";
+          } else if (windowStart === -Infinity) {
+            // A live tune also holds this latch — resume is a takeover and
+            // must cancel it (restore) before un-latching, or the run would
+            // suddenly fight the resumed auto-stepping.
+            cancelAutotune("resumed");
+            windowStart = now(); // the tracker-toggle re-engage semantics
+            publishPaused();
           }
         },
         // Two-stage auto-tune (spec §autotune): relay per DOF, optionally
@@ -2480,6 +2550,10 @@ export default function disparityScopeSession(
             s.telemetry({ tracker_bbox: null });
           } else if (!dragging) {
             cancelAutotune("tracker re-enabled"); // restore before re-arming
+            // Toggling the tracker back on HANDS CONTROL BACK: clear the
+            // manual-hold latch here — onTrack deliberately preserves it
+            // (ruling 2026-07-12 #2), so this is the explicit re-engage path.
+            windowStart = now();
             armTracker(s.state.target);
           }
           // While dragging, the pointer-up releaseOverride re-arms.

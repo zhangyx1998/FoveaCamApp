@@ -72,7 +72,8 @@ it converge.
 
 In the **Tracker** column of the drawer:
 
-- The **on** / **off** toggle arms the wide-view auto-follow tracker.
+- The **power toggle** (⏻ — lit while enabled) arms the wide-view auto-follow
+  tracker.
 - **Tracker** selects the engine, switchable **on the fly** (the two nodes are
   drop-in replacements running on their own native threads):
   - **Hybrid (NCC + re-detect)** — the default: a normalized-cross-correlation
@@ -104,24 +105,42 @@ The drawer's columns, left to right:
   Scale** (match detail; on a calibrated rig the true match scale comes from
   calibration and this reads out the measured magnification), **Min Match Score**
   (the confidence below which a correction is not trusted), **Timeout** (the
-  convergence window in ms; hard left reads **disabled** and turns auto-vergence
-  off entirely — manual control only; hard right is `∞`, never times out), and
+  convergence window in ms; hard left reads **disabled** and freezes the
+  auto-vergence corrections — a running tracker stays on and the foveas keep
+  following its target at the frozen vergence; hard right is `∞`, never times
+  out), and
   **X / Y Expansion** (the guide-strip size around the target). **Display**
   holds the **Zoom Ratio**, which sizes the sliced-view crop. Each column's
-  **reset** restores its defaults.
+  ↺ **reset** button (hover any icon button for its tooltip) restores its
+  defaults.
 - **Pan PID**, **Depth PID**, **Vertical PID** — the Kp / Ki / Kd gains for each
   degree of freedom, each with its own **reset**.
 - **Vergence Angles** — two-way sliders for **Verge**, **Pan X**, **Pan Y**, and
   **V-Shift**: they read out the live loop state, and dragging one takes over —
-  auto-vergence disengages immediately (even mid-track; the tracker toggle
-  turns off) and the mirrors follow the dragged value. The sliders shift to the
-  accent color while manual control holds the loop, and Status reads **held**
-  (or **auto off** when the Timeout slider sits at **disabled** — moving that
-  slider right does not clear a slider-write hold). A new pointer drag on the
-  view or re-enabling the tracker hands control back. The **PID Debug** panel
-  reads out live Status, Pan X / Y, Verge, commanded Distance, V-Shift, and the
-  actuation round-trip in ms. **reset** zeroes the loop state — under auto the
-  eyes re-converge fresh; under a manual hold it recenters the eyes.
+  the auto-vergence corrections freeze immediately (even mid-track) and the
+  dragged value applies. A running tracker is **not** disturbed: it keeps its
+  target, and the foveas keep following it through your manual values — you
+  are steering the vergence geometry while the tracker steers the aim. The
+  sliders shift to the accent color while manual control holds the loop, and
+  Status reads **held** (or **auto off** when the Timeout slider sits at
+  **disabled** — moving that slider right does not clear a slider-write hold),
+  with a **· following** suffix while a tracker is steering the aim.
+  A new pointer drag on the view or toggling the tracker off and back on hands
+  control back.
+
+  The **pause** button (⏸ in the column header) is the same hold without
+  touching a value: one click freezes the corrections exactly where they are —
+  a following tracker keeps steering — and the button flips to **play** (▶) to
+  resume auto-vergence. It goes inert while the Timeout slider sits at
+  **disabled** (auto-vergence is already off there; the slider is the way
+  back). Pausing or resuming during an auto-tune run aborts the run first.
+
+  The **PID Debug** panel reads out live Status, Pan X / Y, Verge, commanded
+  Distance, V-Shift, and the actuation round-trip in ms. The ↺
+  **reset** zeroes the loop state — under auto the eyes re-converge fresh;
+  under a manual hold it zeroes your corrections (with a tracker following,
+  the eyes re-center on its target; otherwise they re-aim, parallel, at the
+  last target).
 
 If corrections stop applying, check **Min Match Score** against the live match
 quality: when the score drops below it the loop holds rather than trusting a bad
@@ -187,8 +206,8 @@ calibrated triple and no drag in flight; run them on a static, well-matched
 target (for the depth gains, converge on a **near** target first — a
 parallel/infinity pose gives the depth axis nothing to push against).
 Starting a tune while the tracker is following **disengages the tracker**
-(the toggle turns off, like dragging a Vergence Angles slider does) and runs
-from the held pose. *This feature is code-complete but not yet verified on
+(the toggle turns off — the tune scripts the target itself, so a live tracker
+would fight the experiment) and runs from the held pose. *This feature is code-complete but not yet verified on
 hardware.*
 
 - **tune** — the relay stage: each axis in turn is wiggled with a small square

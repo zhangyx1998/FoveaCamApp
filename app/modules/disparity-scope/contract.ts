@@ -152,6 +152,11 @@ export const disparity = defineContract({
     overridden: false as boolean,
     /** Live PID integrator values (debug readout). */
     pids: { verge: 0, panX: 0, panY: 0, v_shift: 0 } as PidReadout,
+    /** The manual-hold latch is set (status "held") — via a Vergence Angles
+     *  slider write OR the pause button (an auto-tune run holds the same
+     *  latch, so this reads true mid-run). Transition-published; drives the
+     *  pause/play toggle (spec §freeze-window). */
+    vergence_paused: false as boolean,
     /** Auto-tune progress/result stream (null = no run yet this activation).
      *  Spec: docs/spec/disparity-scope.md#autotune. RIG-GATED experiments. */
     autotune: null as AutotuneProgress | null,
@@ -180,6 +185,11 @@ export const disparity = defineContract({
     reset_vergence: cmd(),
     /** Manually nudge one PID's integrator (debug slider). */
     setPid: cmd<{ dof: keyof PidReadout; value: number }>(),
+    /** `true` = PAUSE auto-vergence: latch the manual hold (the slider-write
+     *  takeover without a value change) — corrections freeze, a live tracker
+     *  keeps following. `false` = resume (clears the latch; the Timeout
+     *  slider's -1 sentinel still governs independently). */
+    pauseVergence: cmd<boolean>(),
     /** Start a two-stage gain auto-tune (spec §autotune): `relay` = per-DOF
      *  relay experiments only; `full` = relay + CMA-ES joint polish. Requires
      *  a calibrated session, tracker disarmed, no drag/override. RIG-GATED. */

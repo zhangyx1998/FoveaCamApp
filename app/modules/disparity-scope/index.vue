@@ -46,6 +46,13 @@ import RangeSlider from "@src/inputs/range-slider.vue";
 import SingleSelect, {
   type SingleSelectOption,
 } from "@src/inputs/single-select.vue";
+import { FontAwesomeIcon as Icon } from "@fortawesome/vue-fontawesome";
+import {
+  faArrowRotateLeft,
+  faPause,
+  faPlay,
+  faPowerOff,
+} from "@src/windows/icons";
 import type { TrackerType } from "./tracker-swap";
 
 const session = useSession(disparity, "disparity-scope");
@@ -259,8 +266,9 @@ const vergeLimits = computed<[number, number]>(() => [
   0,
   distanceToVerge(VERGE_MIN_DISTANCE_MM, state.baseline),
 ]);
-// Two-way sliders (manual vergence override): a write disengages auto-vergence
-// server-side and actuates immediately. The knob follows a LOCAL ECHO of the
+// Two-way sliders (manual vergence override): a write freezes auto-vergence
+// corrections server-side (the tracker keeps following) and actuates
+// immediately. The knob follows a LOCAL ECHO of the
 // last write instead of the ~30 Hz `pids` readout, so a drag isn't yanked
 // around by in-flight telemetry. The echo releases on CONFIRMATION — the
 // readout matching the written value — not on a timer (UI/UX review #3: a
@@ -299,13 +307,31 @@ const resetVergence = () => session.call("reset_vergence", undefined);
 // no reflow, no transition.
 const vergenceHeld = computed(
   () =>
-    telemetry.status === "held" ||
-    telemetry.status === "auto off" ||
+    // Prefix match: the held/auto-off states carry a " · following" suffix
+    // while a live tracker keeps steering the aim (spec §freeze-window).
+    telemetry.status.startsWith("held") ||
+    telemetry.status.startsWith("auto off") ||
     telemetry.status === "autotune",
 );
 const vergenceSliderColor = computed(() =>
   vergenceHeld.value ? "var(--accent-bright)" : "currentColor",
 );
+
+// Pause/play (spec §freeze-window): pause latches the manual hold — the
+// slider-write takeover without a value change — and play clears it. The
+// Timeout slider's "disabled" sentinel outranks it, so the button goes inert
+// there instead of pretending a resume it can't deliver.
+const pauseTitle = computed(() => {
+  if (timeout_disabled.value)
+    return "Auto-vergence is disabled by the Timeout slider (hard left) — move it right to re-enable";
+  if (tuneActive.value)
+    return "Resume auto-vergence — aborts the running auto-tune (pre-tune gains restored)";
+  return telemetry.vergence_paused
+    ? "Resume auto-vergence"
+    : "Pause auto-vergence corrections — a following tracker keeps steering the aim";
+});
+const togglePause = () =>
+  session.call("pauseVergence", !telemetry.vergence_paused);
 
 // Whole-object replace (like `tuning`) — a nested `state.kernel.w = v` reaches
 // neither server nor render.
@@ -545,7 +571,7 @@ function onCursor(c: (Point2d & Size & { buttons: number }) | null): void {
       <div class="options">
         <h4>
           <span>Parameters</span>
-          <button class="reset" title="Reset to defaults" @click="resetAllParams">reset</button>
+          <button class="reset" title="Reset to defaults" @click="resetAllParams"><Icon :icon="faArrowRotateLeft" /></button>
         </h4>
         <RangeSlider
           v-model="sensitivity_ratio"
@@ -577,7 +603,7 @@ function onCursor(c: (Point2d & Size & { buttons: number }) | null): void {
           :max="1"
           :neutral="timeoutScale.toRatio(DEFAULT_TUNING.timeout)"
           :step="0.01"
-          title="Convergence window after the last activity. Hard left disables auto-vergence entirely (manual control only); hard right never times out."
+          title="Convergence window after the last activity. Hard left disables auto-vergence corrections — a running tracker keeps the foveas following its target; hard right never times out."
         >
           <span>Timeout</span>
           <span>
@@ -667,7 +693,7 @@ function onCursor(c: (Point2d & Size & { buttons: number }) | null): void {
       <div class="options" v-for="g in gainGroups" :key="g.key">
         <h4>
           <span>{{ g.title }}</span>
-          <button class="reset" title="Reset to defaults" @click="resetGain(g.key)">reset</button>
+          <button class="reset" title="Reset to defaults" @click="resetGain(g.key)"><Icon :icon="faArrowRotateLeft" /></button>
         </h4>
         <RangeSlider
           v-for="(term, i) in g.terms"
@@ -686,14 +712,22 @@ function onCursor(c: (Point2d & Size & { buttons: number }) | null): void {
       <!-- Column 5: Vergence Angles -->
       <div class="options">
         <h4
-          title="Live loop readout — dragging a slider takes over: auto-vergence disengages (tracker turns off) and the mirrors follow the dragged value. Drag on the view or re-enable the tracker to hand control back."
+          title="Live loop readout — dragging a slider takes over: auto-vergence corrections freeze and the dragged value applies. A running tracker stays on and the foveas keep following it through your manual values. Drag on the view or toggle the tracker off and on to hand control back."
         >
           <span>Vergence Angles</span>
-          <button
-            class="reset"
-            title="Zero the loop state — auto re-converges; under a manual hold this recenters the eyes"
-            @click="resetVergence"
-          >reset</button>
+          <span class="h4-actions">
+            <button
+              class="reset"
+              :disabled="timeout_disabled"
+              :title="pauseTitle"
+              @click="togglePause"
+            ><Icon :icon="telemetry.vergence_paused ? faPlay : faPause" /></button>
+            <button
+              class="reset"
+              title="Zero the loop state — auto re-converges; under a manual hold this zeroes your corrections (a following tracker keeps the aim; otherwise the eyes re-aim at the last target)"
+              @click="resetVergence"
+            ><Icon :icon="faArrowRotateLeft" /></button>
+          </span>
         </h4>
         <RangeSlider v-model="pidVerge" :min="vergeLimits[0]" :max="vergeLimits[1]" :neutral="0" :step="0.01" :color="vergenceSliderColor">
           <span>Verge</span>
@@ -742,7 +776,7 @@ function onCursor(c: (Point2d & Size & { buttons: number }) | null): void {
             :title="state.tracker_enabled ? 'Disable tracker' : 'Enable tracker'"
             @click="state.tracker_enabled = !state.tracker_enabled"
           >
-            {{ state.tracker_enabled ? "on" : "off" }}
+            <Icon :icon="faPowerOff" />
           </button>
         </h4>
         <!-- Plain row + aria-label on the select (a bare <label> with no
@@ -902,7 +936,13 @@ function onCursor(c: (Point2d & Size & { buttons: number }) | null): void {
   // Shared by the h4 header buttons AND the Auto-Tune action row (one button
   // identity across the drawer). `text-transform`/`letter-spacing` undo the
   // h4 header styling; harmless outside it.
+  .h4-actions {
+    display: flex;
+    gap: 0.5ch;
+  }
+
   .reset {
+    min-width: 3ch;
     cursor: pointer;
     border: 1px solid var(--tint-4);
     border-radius: 4px;

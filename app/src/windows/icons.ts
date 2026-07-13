@@ -32,6 +32,8 @@ export {
   faFileExport,
   faPlay,
   faPause,
+  faPowerOff,
+  faArrowRotateLeft,
   faTriangleExclamation,
   faTrashCan,
   faBug,
