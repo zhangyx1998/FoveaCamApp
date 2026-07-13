@@ -22,6 +22,11 @@ exclusive — `architecture/processes.md`).
   name can never work on this rig. Note the opto input wants the MCU pulse
   within its voltage spec and adds µs-scale edge lag — irrelevant at the
   ms-scale pulse widths `pairTriggerBudget` derives.
+- **Controller side:** `firmware/include/Board.h` `camera[]` pairs are
+  controller-directional — `trigger` (Teensy OUTPUT → camera Line0),
+  `strobe` (Teensy INPUT ← camera Line1). The pre-2026-07-13 fields were
+  named `input`/`output` from the camera's perspective and the firmware
+  drove them controller-side — both links inverted, both dead.
 - 12-bit readout formats are supported end-to-end in code (preview-safe
   option filtering); live A/B on the rig is a Stage-F item.
 

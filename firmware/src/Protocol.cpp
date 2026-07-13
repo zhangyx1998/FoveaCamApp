@@ -298,7 +298,7 @@ HANDLE_SET(Command::Trigger) {
     return;
   }
   for (auto &cam : Board::camera)
-    cam.output.write(HIGH);
+    cam.trigger.write(HIGH);
   trigger.start(seq, payload, Global::time.now() + payload.duration);
   auto packet = Create::ACK(seq);
   deflate(payload, packet);
@@ -379,7 +379,7 @@ void Protocol::tick() {
   if (trigger.ready(now)) {
     trigger.clear();
     for (auto &cam : Board::camera)
-      cam.output.write(LOW);
+      cam.trigger.write(LOW);
     trigger.result.timestamp = now;
     auto packet = ::Packet::Command::Trigger::Create::FIN(trigger.seq);
     ::Packet::Command::Trigger::deflate(trigger.result, packet);

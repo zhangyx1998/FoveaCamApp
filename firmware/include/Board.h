@@ -72,12 +72,14 @@ constexpr unsigned ENABLE = HIGH;
 constexpr unsigned DISABLE = LOW;
 constexpr Pin<OUTPUT, DISABLE> enable{15};
 
+// Controller side of each camera's opto GPIO pair: `trigger` drives the
+// camera's trigger INPUT pin, `strobe` reads the camera's strobe OUTPUT pin.
 typedef struct CameraPinout {
-  const Pin<INPUT> input;
-  const Pin<OUTPUT> output;
+  const Pin<OUTPUT> trigger;
+  const Pin<INPUT> strobe;
   inline void init() const {
-    input.init();
-    output.init();
+    trigger.init();
+    strobe.init();
   }
 } CameraPinout;
 

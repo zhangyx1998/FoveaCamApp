@@ -146,13 +146,13 @@ static inline bool duplicateStream(uint8_t stream) {
 
 static void writeTrigger(uint8_t cameras, uint8_t level) {
   if (cameras & CAM_L)
-    Board::camera[1].output.write(level);
+    Board::camera[1].trigger.write(level);
   if (cameras & CAM_R)
-    Board::camera[2].output.write(level);
+    Board::camera[2].trigger.write(level);
 }
 
-// Common strobe-edge handler for both camera inputs; `bit` identifies the
-// camera in CameraMask terms, `pin` is that camera's Board::camera input pin.
+// Common strobe-edge handler for both cameras; `bit` identifies the camera
+// in CameraMask terms, `pin` is that camera's Board::camera strobe pin.
 static inline void onStrobeEdge(uint8_t bit, unsigned pin) {
   if (digitalReadFast(pin)) {
     strobeHighMask |= bit;
@@ -186,11 +186,11 @@ static inline void onStrobeEdge(uint8_t bit, unsigned pin) {
 }
 
 static void onStrobeLeft() {
-  onStrobeEdge(CAM_L, Board::camera[1].input.number);
+  onStrobeEdge(CAM_L, Board::camera[1].strobe.number);
 }
 
 static void onStrobeRight() {
-  onStrobeEdge(CAM_R, Board::camera[2].input.number);
+  onStrobeEdge(CAM_R, Board::camera[2].strobe.number);
 }
 
 static void sendResult(const Request &req) {
@@ -292,8 +292,8 @@ bool enqueue(Protocol::Sequence seq, uint8_t stream, uint8_t cameras,
 }
 
 void init() {
-  attachInterrupt(Board::camera[1].input.number, onStrobeLeft, CHANGE);
-  attachInterrupt(Board::camera[2].input.number, onStrobeRight, CHANGE);
+  attachInterrupt(Board::camera[1].strobe.number, onStrobeLeft, CHANGE);
+  attachInterrupt(Board::camera[2].strobe.number, onStrobeRight, CHANGE);
 }
 
 void tick() {
