@@ -7,7 +7,37 @@ tracks each target with a configurable tile (512×512 default, annotated in
 the view), and each mirror INDEPENDENTLY steers to keep its target centered.
 Views are capturable and recordable.
 
-## Semantics (interpretation of record — correct here if unflagged)
+## REVISION 2026-07-14 (user correction — supersedes the interaction model below)
+
+**The PosView STEERS THE MIRROR, it does not place a box.** Corrected app
+logic: the user drags each eye's PosView (a per-eye VOLTAGE pad, exactly
+manual-control's `splitEye` steering idiom — `:lim = controller.dv`,
+`:pos = telemetry.volt[eye]`, `@select → volt`) to move that mirror until the
+target lands in the CENTER of the fovea view. The tracking tile is ALWAYS at
+frame center (fixed 512×512, drawn there); the tracker (re)initializes on that
+CENTER tile on drag-END. There is no user-placed target pixel.
+
+Per-side flow (independent):
+- Drag the PosView = MANUAL mirror steering for that eye (volts drive the
+  mirror directly); this STOPS that eye's tracker/servo.
+- Release (drag END) = arm the tracker on the fixed center tile and engage the
+  servo, which then keeps whatever is now centered at the center as it moves
+  (the PosView marker rides the servo-driven volt between drags).
+
+Contract delta (replaces `armTarget`/`pauseTracker`):
+- `steerEye: cmd<{ eye: Eye; volt: Pos }>()` — manual steer; sets that eye's
+  volt (clamped to the envelope), stops its servo/tracker.
+- `armCenter: cmd<{ eye: Eye }>()` — drag-end: `servo.reset()` + arm the
+  tracker at `tileRect(frameCenter, tile, size)` + engage the servo.
+
+Everything else stands: the servo error is still `trackedCenter − frameCenter`
+(keep the locked target centered); `tileRect`/`EyeServo`/`reduceResult`/the
+Jacobian are UNCHANGED (the seed center is simply always the frame center);
+capture/recording unchanged. Only `contract.ts` (commands), `session.ts` (the
+steer/arm handlers + always-center seed) and `index.vue` (PosView = voltage
+pad; the 512² box is drawn fixed at center) change.
+
+## Semantics (SUPERSEDED by the revision above — kept for history)
 
 - Two INDEPENDENT single-eye visual servos. Left fovea tracks the left
   target; right fovea tracks the right target. No stereo/vergence coupling
@@ -222,6 +252,25 @@ record:
   `@select`, drag-end as the `null` release → `pauseTracker`/`armTarget`;
   tile/center/bbox drawn in the FrameView SVG (pixel-accurate viewBox), tile
   labeled with its px size.
+
+### Interaction-model correction SHIPPED (2026-07-14, follow-up wave)
+
+Per the REVISION at the top, a two-lane fix (SESSION-FIX + UI-FIX, PURE
+untouched — the servo/tile/Jacobian math is model-invariant) landed the
+corrected model; gates green (vue-tsc, vitest 1478/1478, vite build,
+boundaries):
+- Contract: `armTarget`/`pauseTracker` → `steerEye{eye,volt}` (manual mirror
+  steer; un-arms + drives the mirror directly, envelope-clamped) and
+  `armCenter{eye}` (drag-end: `servo.reset()` + arm at the FIXED center tile).
+- Session: all arming funnels through `armEye(eye)` seeding `frameCenter(eye)`
+  (swap re-arm, `setTile`, tile watch); `steerEye` clears a stale
+  lost/no-cal block for that eye; servo error `trackedCenter − frameCenter`
+  unchanged.
+- UI: PosView is a VOLTAGE pad (`:pos=telemetry.volt[eye]`,
+  `:lim=controller.dv`); the 512² tile + crosshair are drawn FIXED at the
+  frame center; per-eye status gains a "Steering" state while dragging. The
+  earlier non-square-`lim` caveat is MOOT — `:lim` is now the voltage
+  envelope, not a pixel half-extent.
 
 RIG-GATED (stage-f): the servo Jacobian sign/scale + gain on real mirrors,
 per-side independence + drag-stop/reseed, tile annotation accuracy, the

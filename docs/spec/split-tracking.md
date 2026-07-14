@@ -5,13 +5,14 @@ group). Proposal + decisions of record: `docs/proposals/split-tracking-app.md`.
 
 ## What it does
 
-Two INDEPENDENT single-eye visual servos. The user drops one target on the
-LEFT fovea view and one on the RIGHT; a switchable tracker (KCF / hybrid,
-disparity-scope's engines) tracks each target with a configurable template
-tile (512×512 default), and each mirror steers to keep ITS target at the
-fovea frame center. The two sides never share state — there is no
-stereo/vergence coupling (this is the distinction from disparity-scope, which
-drives both mirrors from one center-camera target).
+Two INDEPENDENT single-eye visual servos. Per eye, the user STEERS THE MIRROR
+with a PosView voltage pad (manual-control's `splitEye` idiom) to bring the
+desired target into the CENTER of the fovea view; on release, a switchable
+tracker (KCF / hybrid, disparity-scope's engines) initializes on the FIXED
+512×512 center tile and the mirror servos to keep whatever is now centered at
+the center. The two sides never share state — there is no stereo/vergence
+coupling (this is the distinction from disparity-scope, which drives both
+mirrors from one center-camera target).
 
 ## Sources / leasing {#leasing}
 
@@ -32,16 +33,18 @@ is drawer-switchable (`state.tracker_type`) with a self-contained hot swap
 back so the UI never advertises an engine that isn't live). Results drain via
 `for await` into the pure `reduceResult` reducer (`tracking.ts`).
 
-**Per-side lifecycle (independent).** Grabbing a side's target selector (drag
-START) → `pauseTracker{eye}`: that eye un-arms, its mirror holds. Releasing
-(drag END) → `armTarget{eye,center}`: `servo.reset()`, the tracker re-`arm`s at
-`tileRect(center, tile, size)`, servoing resumes. Dragging one side never
-touches the other.
+**Per-side lifecycle (independent).** Dragging a side's PosView (voltage pad)
+→ `steerEye{eye,volt}`: that eye un-arms and its mirror is driven directly to
+the commanded volt (manual steering). Releasing (drag END) → `armCenter{eye}`:
+`servo.reset()`, the tracker `arm`s at `tileRect(frameCenter, tile, size)` —
+the FIXED center tile — and the servo engages. Dragging one side never touches
+the other. (`armEye` is the single arm helper; the swap re-arm and `setTile`
+also seed the center.)
 
 The **tile** (`state.tile`, default 512×512, drawer-configurable
-`MIN_TILE`..`MAX_TILE` = 64..1024) is the tracker template ROI passed to
-`arm()`; `setTile` re-arms both armed sides live. It is drawn + labeled in each
-view around the tracked center.
+`MIN_TILE`..`MAX_TILE` = 64..1024) is the tracker template ROI, always centered
+in the frame; `setTile` re-arms both armed sides live. It is drawn + labeled at
+the frame center.
 
 ## Actuation {#actuation}
 
@@ -78,12 +81,14 @@ The shared mixins (`captureCommands/Telemetry`, `recordingCommands/Telemetry`)
 ## Renderer {#renderer}
 
 `app/modules/split-tracking/index.vue`. L/R fovea `StreamView`s (theme L/R) +
-a C context view, bound via `usePipeFrame`. Each fovea has a `PosView` target
-selector (`:lim` = half frame size, `@select` → image px); drag-start fires
-`pauseTracker`, drag-end fires `armTarget`. Overlays: the labeled tile box
-(size annotated), a frame-center crosshair, the live tracked bbox/center. The
-drawer carries the tracker-type segmented select, the tile-size input, PID gain
-inputs, per-eye status, and capture/record controls.
+a C context view, bound via `usePipeFrame`. Each fovea has a `PosView` VOLTAGE
+pad (`:pos` = `telemetry.volt[eye]`, `:lim` = `controller.dv`, `@select` →
+volt); a non-null steer fires `steerEye{eye,volt}`, the `null` release fires
+`armCenter{eye}`. Overlays (fixed at frame center): the labeled 512² tile box,
+a center crosshair, and the live tracked bbox/center. The drawer carries the
+tracker-type segmented select, the tile-size input, PID gain inputs, per-eye
+status (Steering / Tracking / Lost / Paused / Idle), and capture/record
+controls.
 
 ## Pure modules (unit-tested, no addon) {#pure}
 

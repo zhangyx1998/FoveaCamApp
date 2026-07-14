@@ -7,15 +7,15 @@ each mirror keeps its own target centered.
 ## Use it
 
 1. The app leases the L/C/R camera triple and shows the left and right fovea
-   views (plus a center context view).
-2. Below each fovea view, drag the **target selector** to the feature you want
-   that eye to track. When you release, that side's tracker (re)initializes on
-   the spot and the mirror starts driving the target to the frame center. The
-   box drawn in the view is the tracking tile (its size is labeled); the
-   crosshair marks the frame center.
-3. Grab a side's selector again to STOP that side (the mirror holds where it
-   is); release to re-seed at the new spot. The two sides are independent —
-   moving one never disturbs the other.
+   views (plus a center context view). A fixed box is drawn at the center of
+   each fovea view — that is where tracking initializes; its size is labeled.
+2. Below each fovea view, drag the **voltage pad** to steer that mirror until
+   the feature you want to track sits inside the center box. When you release,
+   that side's tracker locks onto whatever is in the center box and the mirror
+   then follows it, keeping it centered.
+3. To re-aim, grab the pad again (this stops that side and hands you manual
+   steering), move the target into the center box, and release to re-lock. The
+   two sides are independent — steering one never disturbs the other.
 
 ## Drawer
 

@@ -79,12 +79,13 @@ export const splitTracking = defineContract({
   // tracker overlays ride telemetry.
   frames: [] as const,
   commands: {
-    /** Drag END on a side's target selector: (re-)arm that eye's tracker at
-     *  `center` (fovea image px) + reset the servo + resume tracking. */
-    armTarget: cmd<{ eye: Eye; center: Point2d }, void>(),
-    /** Drag START on a side's target selector: stop servoing that eye + hold
-     *  its mirror (the tracker keeps running, its results ignored while paused). */
-    pauseTracker: cmd<{ eye: Eye }, void>(),
+    /** Manual mirror steer (the PosView voltage-pad idiom, manual-control's
+     *  `splitEye`): set that eye's volt directly (clamped to the live envelope)
+     *  and STOP its servo/tracker. No arm/seed here. */
+    steerEye: cmd<{ eye: Eye; volt: Pos }, void>(),
+    /** Drag END: reset the servo + arm the tracker on the FIXED center tile +
+     *  engage the servo. The seed center is always the frame center. */
+    armCenter: cmd<{ eye: Eye }, void>(),
     /** Hot-swap BOTH eyes' tracker engine (disparity-scope idiom). */
     setTrackerType: cmd<{ type: "hybrid" | "kcf" }, void>(),
     /** Resize the tracker template + view annotation; re-arms both armed sides. */

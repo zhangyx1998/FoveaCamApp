@@ -5,10 +5,14 @@ You may find the full license in project root directory.
 --------------------------------------------------- -->
 <!--
   Split Tracking — a thin client over the `split-tracking` session. Two
-  INDEPENDENT single-eye visual servos: drop a target on the LEFT fovea and one
-  on the RIGHT, each mirror steers to keep its target frame-centered. The center
-  wide view is context-only. Views are capturable/recordable (title-bar buttons).
-  Behavior spec: docs/proposals/split-tracking-app.md.
+  INDEPENDENT single-eye visual servos. Each eye's PosView is a per-eye VOLTAGE
+  pad (the manual-control `splitEye` idiom): dragging it MANUALLY STEERS that
+  mirror (volts drive the mirror directly, stopping its servo); the user brings
+  the target into the CENTER of the fovea view. On drag-END the tracker (re)inits
+  on the FIXED 512² center tile and the servo engages, keeping whatever is now
+  centered centered. The center wide view is context-only. Views are
+  capturable/recordable (title-bar buttons).
+  Behavior spec: docs/proposals/split-tracking-app.md ("REVISION 2026-07-14").
 
   Renderer-zero-core: every `core` import here is TYPE-ONLY (erased at build).
 -->
@@ -22,6 +26,7 @@ import Capture from "@src/capture";
 import Recording from "@src/record";
 import StreamView from "@src/components/StreamView.vue";
 import PosView, { type Pos } from "@src/components/PosView.vue";
+import { getController } from "@src/components/Controller.vue";
 import Drawer from "@src/components/Drawer.vue";
 import SingleSelect, { type SingleSelectOption } from "@src/inputs/single-select.vue";
 import { splitTracking, type Eye, type PidGains } from "./contract";
@@ -29,6 +34,10 @@ import { MIN_TILE, MAX_TILE } from "./tracking";
 
 const session = useSession(splitTracking, "split-tracking");
 const { state, telemetry } = session;
+
+// The MEMS controller facade — `controller.dv` is the per-eye voltage envelope
+// (the PosView `:lim`), exactly manual-control's split-eye steering pad.
+const controller = computed(getController);
 
 // Title-bar camera-Capture toggle + RecordButton (shared facades register
 // themselves via their module singletons — constructing is enough).
@@ -47,68 +56,44 @@ const frameC = usePipeFrame(() =>
   state.serials?.C ? nodeId.convert(state.serials.C) : null,
 );
 
-// --- per-eye target selector + drag lifecycle -------------------------------
-// PosView emits a Pos stream while dragging (mousedown → moves → null on
-// release). The two sides are fully independent. `drag[eye]` holds the live
-// CENTER-RELATIVE position (non-null exactly while that side is being dragged),
-// which doubles as our drag-in-progress flag.
-const drag = reactive<Record<Eye, Pos | null>>({ L: null, R: null });
+// --- per-eye VOLTAGE steering pad + drag lifecycle --------------------------
+// Each PosView is a per-eye voltage pad (`:pos` = the commanded volt, `:lim` =
+// controller.dv), exactly manual-control's `splitEye` idiom — NOT an image-pixel
+// target picker. Dragging MANUALLY STEERS that mirror (volts drive it directly,
+// stopping its servo); releasing arms the tracker on the FIXED center tile and
+// engages the servo. `dragging[eye]` is non-null exactly while that side is
+// being steered, doubling as the status/overlay flag. Fully independent per eye.
+const dragging = reactive<Record<Eye, boolean>>({ L: false, R: false });
 
-/** Half-frame vector; PosView `@select` is center-relative, image px = p + this. */
-function centerVec(eye: Eye): Point2d {
-  const s = telemetry.size[eye];
-  return { x: s.width / 2, y: s.height / 2 };
-}
-
-// Drag START = the FIRST non-null emit (drag[eye] was null) → pause that side's
-// tracker + hold its mirror. Drag END = the null emit → (re)arm the tracker at
-// the LAST non-null position (image px) + resume the servo. Independent per eye.
-function onSelect(eye: Eye, p: Pos | null): void {
+function onSteer(eye: Eye, p: Pos | null): void {
   if (p) {
-    if (drag[eye] === null) void session.call("pauseTracker", { eye });
-    drag[eye] = p;
+    // Non-null volt → manual mirror steer (sets that eye's volt, stops its servo).
+    dragging[eye] = true;
+    void session.call("steerEye", { eye, volt: p });
   } else {
-    const last = drag[eye];
-    drag[eye] = null;
-    if (last) {
-      const c = centerVec(eye);
-      void session.call("armTarget", {
-        eye,
-        center: { x: last.x + c.x, y: last.y + c.y },
-      });
-    }
+    // Release → arm the tracker on the fixed center tile + engage the servo.
+    dragging[eye] = false;
+    void session.call("armCenter", { eye });
   }
 }
 
 // --- per-eye view model (annotations in IMAGE-PIXEL space) ------------------
 // The tile box / crosshair / bbox draw in the StreamView default slot, whose
 // SVG viewBox is `0 0 width height` (pixel-accurate on the displayed frame).
-// The PosView selector uses `:lim` = half the frame (width/2 == height/2 for a
-// square fovea crop), so its center-relative Pos maps 1:1 to image px.
+// The 512² tracker tile is ALWAYS drawn at the fovea FRAME CENTER (never at a
+// drag position) — that is where the tracker (re)inits on drag-END. The live
+// tracked bbox/center is drawn from telemetry when found.
 function viewModel(eye: Eye) {
   const size = telemetry.size[eye];
-  const c = centerVec(eye);
+  const c: Point2d = { x: size.width / 2, y: size.height / 2 };
   const t = telemetry.tracked[eye];
-  const d = drag[eye];
-  // Annotation center (image px): the drag marker while dragging, else the live
-  // tracked center, else the frame center.
-  const annCenter: Point2d = d
-    ? { x: d.x + c.x, y: d.y + c.y }
-    : (t?.center ?? c);
-  // PosView marker (center-relative): follows the drag, else the tracked center.
-  const marker: Pos = d
-    ? d
-    : t?.center
-      ? { x: t.center.x - c.x, y: t.center.y - c.y }
-      : { x: 0, y: 0 };
   const { w, h } = state.tile;
   return {
     size,
     center: c,
-    marker,
-    lim: Math.max(size.width / 2, 1),
     stroke: Math.max(size.width, size.height, 1) * 0.003,
-    tile: { x: annCenter.x - w / 2, y: annCenter.y - h / 2, w, h },
+    // Fixed center tile: the tracker template, always at frame center.
+    tile: { x: c.x - w / 2, y: c.y - h / 2, w, h },
     tileLabel: `${w}×${h}`,
     tracked: t,
     status: statusOf(eye),
@@ -117,13 +102,14 @@ function viewModel(eye: Eye) {
 const L = computed(() => viewModel("L"));
 const R = computed(() => viewModel("R"));
 
-// Per-eye status (drag = we paused it; servo engaged = Tracking; armed-but-
-// -missed = Lost; otherwise Idle).
+// Per-eye status: Steering while this side is being dragged; else Tracking (servo
+// engaged) / Lost (armed but missed) / Paused (blocked) / Idle.
 function statusOf(eye: Eye): { text: string; tone: string } {
-  if (drag[eye]) return { text: "Paused", tone: "warn" };
+  if (dragging[eye]) return { text: "Steering", tone: "warn" };
   if (telemetry.tracking[eye]) return { text: "Tracking", tone: "ok" };
   const t = telemetry.tracked[eye];
   if (t && !t.found) return { text: "Lost", tone: "danger" };
+  if (telemetry.blocked) return { text: "Paused", tone: "warn" };
   return { text: "Idle", tone: "muted" };
 }
 
@@ -186,7 +172,8 @@ const drawer_height = ref(0);
           :stroke="THEME.L" :stroke-width="L.stroke" stroke-dasharray="6 6" opacity="0.5" />
         <line :x1="0" :y1="L.center.y" :x2="L.size.width" :y2="L.center.y"
           :stroke="THEME.L" :stroke-width="L.stroke" stroke-dasharray="6 6" opacity="0.5" />
-        <!-- 512² tracker tile, centered on the tracked center (or drag marker) -->
+        <!-- 512² tracker tile, FIXED at the fovea frame center (where the
+             tracker (re)inits on drag-END) — it does NOT move with a drag -->
         <rect :x="L.tile.x" :y="L.tile.y" :width="L.tile.w" :height="L.tile.h"
           fill="none" :stroke="THEME.L" :stroke-width="L.stroke" stroke-dasharray="12 8" />
         <text :x="L.tile.x + L.stroke * 2" :y="L.tile.y - L.stroke * 2"
@@ -203,13 +190,12 @@ const drawer_height = ref(0);
         </template>
       </StreamView>
       <PosView
-        :pos="L.marker"
-        :lim="L.lim"
+        :pos="telemetry.volt.L"
+        :lim="controller?.dv"
         :color="THEME.L"
-        unit="px"
+        unit="V"
         style="width: 100%"
-        :font-size="L.lim * 0.06"
-        @select="(p) => onSelect('L', p)"
+        @select="(p) => onSteer('L', p)"
       />
       <div class="status" :class="L.status.tone">
         <span class="dot"></span>{{ ROLE.L }} — {{ L.status.text }}
@@ -229,6 +215,7 @@ const drawer_height = ref(0);
           :stroke="THEME.R" :stroke-width="R.stroke" stroke-dasharray="6 6" opacity="0.5" />
         <line :x1="0" :y1="R.center.y" :x2="R.size.width" :y2="R.center.y"
           :stroke="THEME.R" :stroke-width="R.stroke" stroke-dasharray="6 6" opacity="0.5" />
+        <!-- 512² tracker tile, FIXED at the fovea frame center -->
         <rect :x="R.tile.x" :y="R.tile.y" :width="R.tile.w" :height="R.tile.h"
           fill="none" :stroke="THEME.R" :stroke-width="R.stroke" stroke-dasharray="12 8" />
         <text :x="R.tile.x + R.stroke * 2" :y="R.tile.y - R.stroke * 2"
@@ -244,13 +231,12 @@ const drawer_height = ref(0);
         </template>
       </StreamView>
       <PosView
-        :pos="R.marker"
-        :lim="R.lim"
+        :pos="telemetry.volt.R"
+        :lim="controller?.dv"
         :color="THEME.R"
-        unit="px"
+        unit="V"
         style="width: 100%"
-        :font-size="R.lim * 0.06"
-        @select="(p) => onSelect('R', p)"
+        @select="(p) => onSteer('R', p)"
       />
       <div class="status" :class="R.status.tone">
         <span class="dot"></span>{{ ROLE.R }} — {{ R.status.text }}

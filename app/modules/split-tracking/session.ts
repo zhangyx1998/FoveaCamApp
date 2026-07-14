@@ -297,15 +297,16 @@ export default function splitTrackingSession(
         : createChainedHybridTracker(src.pipe, src.node);
     }
 
-    /** (Re-)arm one eye's tracker at `center` with the current tile, reset its
-     *  servo, and resume its auto-follow gate. */
-    function armEye(eye: Eye, center: Point2d): void {
+    /** (Re-)arm one eye's tracker on the FIXED frame-center tile with the
+     *  current tile size, reset its servo, and engage its auto-follow gate.
+     *  The seed center is ALWAYS frameCenter (the tile is drawn centered). */
+    function armEye(eye: Eye): void {
       if (!tk[eye] || !size[eye].width) return;
       servo[eye].reset();
       misses[eye] = 0;
       lastStepAt[eye] = 0; // fresh dt on the next result
-      lastCenter[eye] = center;
-      tk[eye]!.arm(tileRect(center, s.state.tile, size[eye]));
+      lastCenter[eye] = frameCenter(eye); // keep onLost telemetry sane pre-first-result
+      tk[eye]!.arm(tileRect(frameCenter(eye), s.state.tile, size[eye]));
       armed[eye] = true;
       setTracking(eye, true);
       if (blocked && (blocked === `${eye} target lost` || blocked.startsWith("no calibration")))
@@ -342,7 +343,7 @@ export default function splitTrackingSession(
         tk[eye] = created;
         if (created) {
           void drainTracker(eye, created);
-          if (wasArmed) armEye(eye, lastCenter[eye]);
+          if (wasArmed) armEye(eye);
         }
       }
       runningTrackerType = running;
@@ -583,22 +584,31 @@ export default function splitTrackingSession(
         s.resetTelemetry(["ready", "tracked", "tracking", "volt", "blocked"]);
       },
       commands: {
-        async armTarget({ eye, center }) {
-          armEye(eye, center);
-        },
-        async pauseTracker({ eye }) {
-          // Stop servoing this eye + hold its mirror; the tracker keeps running
-          // (its results ignored while un-armed).
+        async steerEye({ eye, volt: v }) {
+          // Manual mirror steer (PosView voltage pad, manual-control's direct
+          // volt write): stop this eye's servo/tracker and drive the mirror
+          // directly to the commanded volt, clamped to the live envelope. No
+          // arm/seed here.
           armed[eye] = false;
           setTracking(eye, false);
+          const lim = voltEnvelope();
+          volt[eye] = { x: clampAxis(v.x, lim), y: clampAxis(v.y, lim) };
+          pushPair();
+          // A manual steer is a valid live command — clear a stale lost / no-cal
+          // block for this eye (mirror onTrack's blocked-clear).
+          if (blocked && (blocked === `${eye} target lost` || blocked.startsWith("no calibration")))
+            publishBlocked(null);
+        },
+        async armCenter({ eye }) {
+          armEye(eye);
         },
         async setTrackerType({ type }) {
           performTrackerSwap(type);
         },
         async setTile(tile: TileSize) {
           s.setState("tile", tile);
-          // Re-arm both armed sides live at their last center (kernel() idiom).
-          for (const eye of EYES) if (armed[eye]) armEye(eye, lastCenter[eye]);
+          // Re-arm both armed sides live on the fixed center tile (kernel() idiom).
+          for (const eye of EYES) if (armed[eye]) armEye(eye);
         },
         async setGains(gains: PidGains) {
           s.setState("gains", gains);
@@ -632,7 +642,7 @@ export default function splitTrackingSession(
         // Tile / gains are also settable via commands; the watches keep a direct
         // state seed (e.g. URL) applied on activate.
         tile() {
-          for (const eye of EYES) if (armed[eye]) armEye(eye, lastCenter[eye]);
+          for (const eye of EYES) if (armed[eye]) armEye(eye);
         },
         gains(g) {
           for (const eye of EYES) servo[eye].setGains(g as PidGains);
