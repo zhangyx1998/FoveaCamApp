@@ -15,6 +15,7 @@ export {
 } from "@fortawesome/free-regular-svg-icons";
 export {
   faTelevision,
+  faCrosshairs,
   faGears,
   faFlagCheckered,
   faCameraRotate,

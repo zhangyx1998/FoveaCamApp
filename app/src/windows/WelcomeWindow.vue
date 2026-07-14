@@ -25,6 +25,7 @@ import {
   faCameraRotate,
   faCircleHalfStroke,
   faCompass,
+  faCrosshairs,
   faFlagCheckered,
   faGears,
   faObjectGroup,
@@ -84,6 +85,7 @@ const utilities = launchableApps.filter((a) => a.group === "utility");
 const iconOf: Record<string, object> = {
   "disparity-scope": faCircleHalfStroke,
   "multi-fovea": faObjectGroup,
+  "split-tracking": faCrosshairs,
   "manual-control": faCompass,
   "single-capture": faCameraAlt,
   playground: faObjectUngroup,

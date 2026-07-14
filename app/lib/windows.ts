@@ -76,6 +76,11 @@ export const APP_REGISTRY = {
     session: "multi-fovea",
     group: "application",
   },
+  "split-tracking": {
+    title: "Tracking - Split",
+    session: "split-tracking",
+    group: "application",
+  },
   "manual-control": {
     title: "Manual Control",
     session: "manual-control",

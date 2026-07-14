@@ -32,6 +32,7 @@ type DevAppId = {
 const baseLoaders = {
   "disparity-scope": () => import("@modules/disparity-scope/index.vue"),
   "multi-fovea": () => import("@modules/multi-fovea/index.vue"),
+  "split-tracking": () => import("@modules/split-tracking/index.vue"),
   "manual-control": () => import("@modules/manual-control/index.vue"),
   "single-capture": () => import("@modules/single-capture/index.vue"),
   "manage-cameras": () => import("@modules/manage-cameras/index.vue"),

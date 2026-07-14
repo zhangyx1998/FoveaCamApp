@@ -317,6 +317,36 @@ RIG-GATED — no hardware on the authoring box.
   cleanly (no brick-leak warnings); immediate re-entry works; ≥10 open/close
   cycles with tracker + views live, no freeze/CPU runaway.
 
+## Split Tracking
+
+Proposal `docs/proposals/split-tracking-app.md`, spec
+`docs/spec/split-tracking.md`. Two INDEPENDENT single-eye visual servos; all
+RIG-GATED (no hardware on the authoring box).
+
+- [ ] **Servo Jacobian sign/scale** — with a target off-center, each mirror
+  moves to REDUCE the pixel error (not amplify it). If a side runs away, flip
+  that eye's `signX`/`signY` in jacobian.ts; tune `FOVEA_TRACK_ZOOM` to the
+  measured fovea magnification and the PID `gains` / `SERVO_MAX_STEP_V` for a
+  critically-damped settle. This is the first thing to verify.
+- [ ] **Per-side independence + reseed** — dragging the LEFT target holds the
+  left mirror and never perturbs the right; releasing re-seeds the left
+  tracker at the drop point and resumes; grabbing again stops it. Confirm the
+  two sides are fully decoupled.
+- [ ] **Track & center** — after a drop, each mirror drives its target to the
+  fovea frame center and holds it there under target motion; `tracking.<eye>`
+  reads true; losing the target (occlusion) holds the mirror and flips
+  `blocked`.
+- [ ] **Tracker swap** — Hybrid↔KCF in the drawer re-arms live at the current
+  target with no glitch; the drawer never shows an engine that isn't running.
+- [ ] **Tile annotation** — the drawn tile box matches the actual `arm()` ROI
+  and its label reads the configured size; changing the tile size re-arms both
+  armed sides. NON-SQUARE FOVEA: the UI PosView `lim=width/2` maps px 1:1 only
+  for a square crop — verify the y-axis selection lands correctly, or adjust
+  the per-axis `lim` (server `tileRect` clamps regardless).
+- [ ] **Capture / record** — capture writes the three streams
+  (left-fovea/center/right-fovea) at full bit depth; recording streams them;
+  the two are mutually exclusive; previews open.
+
 ## Multi-Fovea
 
 ### Demo presets + settle (v2.0.0 — flash first)

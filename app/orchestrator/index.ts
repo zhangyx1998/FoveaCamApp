@@ -39,6 +39,7 @@ import manageCamerasSession from "@modules/manage-cameras/session";
 import manualControlSession from "@modules/manual-control/session";
 import multiFoveaSession from "@modules/multi-fovea/session";
 import disparityScopeSession from "@modules/disparity-scope/session";
+import splitTrackingSession from "@modules/split-tracking/session";
 import calibrateIntrinsicSession from "@modules/calibrate-intrinsic/session";
 import calibrateDriftSession from "@modules/calibrate-drift/session";
 import calibrateDistortionSession from "@modules/calibrate-distortion/session";
@@ -401,6 +402,15 @@ const disparityScope = hub.add(
   ),
 );
 
+// --- split-tracking: two INDEPENDENT single-eye visual servos (calibrate-
+// extrinsic scaffold + per-eye disparity-scope tracker/Jacobian). Owns the
+// triple; mirrors what manual-control/calibrate-extrinsic receive: the pipe
+// broker, the undistort seam (L/R homography + C intrinsic pipes), the shared
+// raw-pipe registry (capture + recording), and the zlib compress seam.
+const splitTracking = hub.add(
+  splitTrackingSession(asBroker(Pipe), undistortSeam, rawPipes, compressSeam),
+);
+
 // --- calibrate-intrinsic: per-camera checkerboard/marker calibration (§7.1 S1b)
 const calibrateIntrinsic = hub.add(
   calibrateIntrinsicSession(asBroker(Pipe), rawPipes, compressSeam),
@@ -432,6 +442,7 @@ const cameraOwning: ServerSession<any>[] = [
   manualControl,
   multiFovea,
   disparityScope,
+  splitTracking,
   calibrateIntrinsic,
   calibrateDrift,
   calibrateDistortion,
