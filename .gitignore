@@ -46,4 +46,3 @@ app/windows/*.html
 docs/.vitepress/dist/
 docs/.vitepress/cache/
 
-# Claude Code session machinery (worktrees, local settings)
