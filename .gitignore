@@ -45,4 +45,8 @@ app/windows/*.html
 # VitePress build output + dev cache (generated; never committed)
 docs/.vitepress/dist/
 docs/.vitepress/cache/
+# Docs is a standalone npm package (decoupled from the app workspace) — its
+# lockfile IS tracked so Pages CI can `npm ci`. Re-include it against the
+# unanchored `package-lock.json` rule above (docs/node_modules stays ignored).
+!docs/package-lock.json
 

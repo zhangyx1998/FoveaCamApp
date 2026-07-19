@@ -31,15 +31,17 @@ jobs:
         with:
           node-version: 22
 
-      # No package-lock is tracked, so `npm ci` can't be used. --ignore-scripts
-      # skips the root postinstall (native core build). --workspaces=false installs only
-      # the root deps (vitepress) — the app workspace pins peer-conflicting vite
-      # majors the docs build never touches.
+      # Docs is a standalone npm package (docs/package.json) fully decoupled from
+      # the app workspace, so CI never resolves the app's peer-conflicting vite
+      # majors. Its lockfile is tracked, so `npm ci` gives a clean, reproducible
+      # install of just vitepress; docs has no lifecycle scripts to run.
       - name: Install deps
-        run: npm install --ignore-scripts --workspaces=false
+        run: npm ci
+        working-directory: docs
 
       - name: Build docs
-        run: npm run docs:build
+        run: npm run build
+        working-directory: docs
 
       - uses: actions/upload-pages-artifact@v3
         with:

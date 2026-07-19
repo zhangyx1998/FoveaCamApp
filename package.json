@@ -12,16 +12,15 @@
     "app": "cd app && npm run dev",
     "check:boundaries": "node scripts/check-boundaries.mjs",
     "compiledb": "node compiledb.cjs > compile_commands.json",
-    "docs:dev": "vitepress dev docs",
-    "docs:build": "vitepress build docs",
-    "docs:preview": "vitepress preview docs",
+    "docs:dev": "npm --prefix docs run dev",
+    "docs:build": "npm --prefix docs run build",
+    "docs:preview": "npm --prefix docs run preview",
     "postinstall": "cd core && make"
   },
   "devDependencies": {
     "@zhangyx1998/svg-loader": "^0.0.2",
     "glob": "^11.0.3",
-    "lint-staged": "^16.2.7",
-    "vitepress": "^1.6.4"
+    "lint-staged": "^16.2.7"
   },
   "lint-staged": {
     "*.{ts,js,vue,json}": "prettier --write",
