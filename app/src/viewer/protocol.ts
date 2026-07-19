@@ -12,14 +12,14 @@ import type { SidecarLoad, SidecarState } from "./sidecar.js";
 import type { ExportRequest, ExportOverview } from "./export/types.js";
 
 /** One channel of the open container, as shown in the viewer's track list.
- *  `metadata` is the channel's MCAP metadata (the §2b static decode props for
+ *  `metadata` is the channel's MCAP metadata (the static decode props for
  *  `x-fovea-raw` channels) plus a folded-in `messageEncoding` key so the UI
  *  can tell json (telemetry/descriptor) tracks from frame tracks. */
 export type ViewerChannelInfo = {
   name: string;
   metadata: Record<string, string>;
   /** File-relative ns [startNs,lastNs] of this channel's FIRST and LAST
-   *  message — the timeline block span (viewer-timeline §Blocks). Absent when
+   *  message — the timeline block span. Absent when
    *  the channel carried no message (registered but never written, or nothing
    *  recovered from a truncated tail): such a channel gets no block. */
   startNs?: number;
@@ -41,7 +41,7 @@ export type ViewerFileInfo = {
   durationNs: number;
   /** ABSOLUTE wall-clock epoch of the file's FIRST message, in milliseconds
    *  (the recording's start time). Feeds the property panel's absolute
-   *  first/last message timestamps (UI round 2 ruling 4). Milliseconds — not
+   *  first/last message timestamps. Milliseconds — not
    *  ns — so it stays a safe JS integer; absolute epoch ns (~1.75e18) exceeds
    *  2^53. Optional: absent when the source can't supply it. */
   startEpochMs?: number;
@@ -49,21 +49,21 @@ export type ViewerFileInfo = {
    *  and was opened through the streaming re-index fallback. */
   truncated: boolean;
   /** True when the container carries a `fovea:wide-camera` metadata record —
-   *  the recorder DECLARED a wide camera (viewer-timeline ruling 1). Drives
+   *  the recorder DECLARED a wide camera. Drives
    *  the "no wide designation" hint alongside master detection (the record is
    *  container-level intrinsics with no channel pointer, so the master CHANNEL
    *  is chosen by naming convention, not this flag). */
   wideCameraDeclared: boolean;
   /** ffmpeg was resolved (PATH + common Homebrew/MacPorts locations) by the
    *  engine — the export entry point is enabled iff true, else it shows the
-   *  "ffmpeg not found" hint (viewer-export spec 1). */
+   *  "ffmpeg not found" hint. */
   ffmpegAvailable: boolean;
   /** The `fovea:wide-camera` calibration parsed into a usable camera matrix +
    *  distortion — the undistort toggle is offerable for the WIDE/center stream
-   *  only when true (viewer-export spec 4). */
+   *  only when true. */
   wideCalibrationAvailable: boolean;
   /** The recorded stereo baseline (mm) from the `fovea:wide-camera` metadata
-   *  record's `baseline_mm` key (fovea-footprint-overlay). Feeds the footprint
+   *  record's `baseline_mm` key. Feeds the footprint
    *  overlay's vergence-plane depth readout. Absent (null) on containers
    *  recorded before the baseline was written, or an uncalibrated rig — the
    *  depth hover then shows "—". */
@@ -95,32 +95,32 @@ export type ViewerCommand =
   | { type: "play"; rate: number }
   | { type: "pause" }
   | { type: "seek"; tNs: number }
-  /** The set of frame channels the worker should DECODE (viewer-timeline
-   *  ruling 3/§Playback): only ENABLED, displayed streams. The worker skips
+  /** The set of frame channels the worker should DECODE: only ENABLED,
+   *  displayed streams. The worker skips
    *  decode for channels absent here (still ingested + accounted as dropped);
    *  a newly-added channel triggers a seek-refresh of that channel at the
    *  current playhead so it repaints immediately while paused. `channels` is
    *  the `decodeSet()` shape — sorted, de-duplicated topic names. */
   | { type: "set-enabled"; channels: string[] }
-  /** Persist viewer UI state to the sidecar (ruling 8). The worker debounces
+  /** Persist viewer UI state to the sidecar. The worker debounces
    *  and writes `<path>.fcap.ui.json`; the `.fcap` stays read-only. */
   | { type: "save-ui"; state: SidecarState }
   /** Ask the engine for LIVE stats on `channels` (one tile — a merged pair
    *  sends both L/R). The reply is a `stats` event echoing `requestId` so a
    *  late reply for a since-closed/replaced popover is discarded. */
   | { type: "get-stats"; requestId: number; channels: string[] }
-  /** Start a per-stream video export (viewer-export spec 8). The engine
+  /** Start a per-stream video export. The engine
    *  enqueues + dispatches per the parallel policy and streams `export-update`. */
   | { type: "export-start"; request: ExportRequest }
-  /** Abort ONE export (spec 11 / tray): SIGKILL its ffmpeg + unlink the partial
+  /** Abort ONE export (tray): SIGKILL its ffmpeg + unlink the partial
    *  output if it was running; drop it from the queue if it was still queued. */
   | { type: "export-abort"; id: number }
-  /** Abort EVERY queued+running export (window-close confirm, spec 11). */
+  /** Abort EVERY queued+running export (window-close confirm). */
   | { type: "export-abort-all" }
   /** Drop terminal (done/failed/aborted) jobs from the tray snapshot ("Clear
    *  finished"). Running/queued jobs are untouched. */
   | { type: "export-clear-finished" }
-  /** Global parallel-export policy (spec 10) — persisted renderer-side, pushed
+  /** Global parallel-export policy — persisted renderer-side, pushed
    *  to the engine on change (and once at spawn). */
   | { type: "export-set-parallel"; parallel: boolean }
   | { type: "close" };
@@ -149,7 +149,7 @@ export type ViewerEvent =
   | { type: "descriptor"; topic: string; doc: PlaybackDoc }
   /** Live-stats reply to a `get-stats` request (keyed by channel topic). */
   | { type: "stats"; requestId: number; live: Record<string, StreamLiveStats> }
-  /** Export queue snapshot for the title-bar tray (spec 9) — pushed on every
+  /** Export queue snapshot for the title-bar tray — pushed on every
    *  enqueue / progress tick / completion / abort. */
   | { type: "export-update"; overview: ExportOverview }
   | ViewerFrameEvent

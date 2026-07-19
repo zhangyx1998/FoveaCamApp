@@ -5,11 +5,11 @@
 // -------------------------------------------------------
 #pragma once
 
-// One tracker result off a tracker brick's thread (WS1 1d) — EXTRACTED from
-// Tracker.cpp (native-port-pipe.md wave): the payload now flows across TUs on
-// a native port link (`kcf.track_out → imm.measure_in`), so the struct must be
-// visible to both the tracker and the IMM predictor brick. The NAPI `convert`
-// specializations stay in Tracker.cpp (only that TU crosses to JS with it).
+// One tracker result off a tracker brick's thread. The payload flows across
+// TUs on a native port link (`kcf.track_out → imm.measure_in`), so the struct
+// must be visible to both the tracker and the IMM predictor brick. The NAPI
+// `convert` specializations stay in Tracker.cpp (only that TU crosses to JS
+// with it).
 
 #include <opencv2/core.hpp>
 #include <pointer.h>
@@ -23,7 +23,7 @@ struct TrackResult : Shared<TrackResult> {
   cv::Point2d center{0, 0};
   // True while the tracker is under a JS override (drag): KCF is NOT updated;
   // `center` is the override value. Flows downstream (matcher → PID) so each
-  // stage acts correspondingly (controller-node-and-fifo-edges §3.5).
+  // stage acts correspondingly.
   bool overridden = false;
   uint64_t seq = 0;             // result counter (transform thread)
   uint64_t deviceTimestamp = 0; // source frame's camera-clock stamp (correlation)

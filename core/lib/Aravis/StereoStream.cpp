@@ -4,8 +4,8 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// stereo-disparity-and-heatmap-nodes §"StereoStream (pinned)" NAPI seam: the
-// FIRST two-input chained brick — a cv::StereoSGBM disparity producer whose two
+// StereoStream NAPI seam: a two-input chained brick — a cv::StereoSGBM
+// disparity producer whose two
 // inputs are OwnedFrame taps on any convert / undistort / fovea / scale pipe.
 //   attachStereoPipe(leftPipeId, rightPipeId, pipeId, params)
 //     left/rightPipeId = live convert | undistort | fovea | scale pipe ids.
@@ -13,9 +13,9 @@
 //   setStereoParams(pipeId, params)  — reactive, matcher rebuilt on next frame.
 //   detachStereoPipe(pipeId)         — idempotent.
 //   stereoProbeAll()                 — meter rows + active out dims + origin.
-// The gated `PipeOfferSubscriber` stays MAX-BOUND (C-20). The output pipe is
+// The gated `PipeOfferSubscriber` stays MAX-BOUND. The output pipe is
 // CV_32FC1 disparity (Disparity32F / F32). Probe keys AND meter names = the
-// pipeId (= C-24 node id). Modelled 1:1 on ScaleStream.cpp.
+// pipeId (= the node id). Modelled 1:1 on ScaleStream.cpp.
 
 #include <map>
 #include <memory>
@@ -108,7 +108,7 @@ static StereoParams parseStereoParams(const Napi::Object &o) {
     p.wlsSigma = v;
   }
 #ifndef HAVE_OPENCV_XIMGPROC_WLS
-  // Portability (stereo-throughput.md ruling 2): a build without opencv_contrib
+  // Portability: a build without opencv_contrib
   // (ximgproc) accepts `wls` but degrades it to the unfiltered map.
   p.wls = false;
 #endif
@@ -335,7 +335,7 @@ FN(stereoProbeAll) {
   return out;
 }
 
-// ---- Topology.report() rows (unified-time-and-topology §6) ------------------
+// ---- Topology.report() rows -------------------------------------------------
 // kind "stereo" with TWO inputs (ports "left"/"right", BGRA8/U8 from the source
 // bricks); output CV_32F disparity (Disparity32F / F32).
 void appendStereoReports(Napi::Env env, Napi::Array &rows,

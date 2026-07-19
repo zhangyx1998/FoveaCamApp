@@ -99,7 +99,7 @@ const center_marker_size = computed(() => marker_size.value * marker_ratio.value
 // reactively from the triple's `baseline_mm` (legacy app value, else 200).
 const baseline = useTripleBaseline(() => state.configPath, app_config);
 
-// Review #12: capturable = detections present AND FRESH (a frozen tracker
+// Capturable = detections present AND FRESH (a frozen tracker
 // after camera loss must not stay capturable).
 const canRecord = computed(
   () =>
@@ -109,7 +109,7 @@ const canRecord = computed(
     telemetry.detection.R && telemetry.detectionFresh.R,
 );
 
-// User issue 3: the PosView record head follows the LIVE applied mirror pose
+// The PosView record head follows the LIVE applied mirror pose
 // (session `mirror` telemetry, fed at a fixed throttle) — falls back to the
 // controller session's last-published pose when the CAL feed isn't running.
 const livePos = computed(() => telemetry.mirror ?? ctrl.telemetry.pos);
@@ -193,7 +193,7 @@ function bbox(points: Point2d[]): string {
             :id="state.targetId.C"
             :color="THEME.C"
           />
-          <!-- LOCKED-state crosshair (user issue 1, master-aligned): edge-to-
+          <!-- LOCKED-state crosshair: edge-to-
                cursor cross through the tracked center marker with the wide-
                camera angle readout (undistort mapping, session-published). -->
           <FrameCursor
@@ -275,7 +275,7 @@ function bbox(points: Point2d[]): string {
           <span>Center Marker</span>
           <span>{{ (app_config.cal_marker_ratio * 100).toFixed(0) }}%</span>
         </RangeSlider>
-        <!-- User issue 2: the CAL visual-servo gain, live (the session restarts
+        <!-- The CAL visual-servo gain, live (the session restarts
              the servo debounced; velocity-form — one real gain; see contract). -->
         <RangeSlider v-model="state.servoGain" :min="1" :max="64" :neutral="16" :step="1">
           <span>Servo Gain</span>
@@ -292,7 +292,7 @@ function bbox(points: Point2d[]): string {
   </template>
 
   <div v-else-if="state.step === 'FIN'" class="finalize" style="padding-top: 4em">
-    <!-- Fit-quality header (review #14): pose count against the fit-gate
+    <!-- Fit-quality header: pose count against the fit-gate
          minimum + per-eye RMS residuals of the fit that just ran. -->
     <div class="fit-quality monospace" v-if="telemetry.fin">
       <span :style="{ color: telemetry.fin.samples >= telemetry.fin.minSamples ? 'var(--ok)' : 'var(--danger-text)' }">
@@ -347,7 +347,7 @@ function bbox(points: Point2d[]): string {
             />
           </svg>
         </div>
-        <!-- Per-record residual (review #14): volt distance between the fit's
+        <!-- Per-record residual: volt distance between the fit's
              prediction at this record's angle and its RECORDED voltage. -->
         <div class="residual monospace" v-if="telemetry.fin?.residuals[i]">
           <template v-if="telemetry.fin.residuals[i].L !== null">
@@ -365,7 +365,7 @@ function bbox(points: Point2d[]): string {
       <button :disabled="!telemetry.finalized" @click="session.call('setStep', { step: 'PRV' })">
         Preview Results
       </button>
-      <!-- Review #6: never saveable without a successful fit over captured
+      <!-- Never saveable without a successful fit over captured
            records (the session gates the command identically). -->
       <button
         :disabled="!telemetry.finalized || telemetry.records.length === 0"

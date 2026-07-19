@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Native PORT/PIPE substrate (docs/proposals/native-port-pipe.md) — NO
+// Native PORT/PIPE substrate — NO
 // hardware: a synthetic TrackResult source (`Port.createTestTrackSource`) is
 // piped into a counting sink (`Port.createTestTrackSink`) across all three
 // link types. Proves:
@@ -115,7 +115,7 @@ async function waitFor(pred: () => boolean, ms = 8000): Promise<void> {
   const sink = P.createTestTrackSink("test/44/sink");
   const wrongTag = P.createTestTrackSink("test/44/wrong", "detect");
 
-  // Runtime tags match the d.ts documentation (steering ruling 4).
+  // Runtime tags match the d.ts documentation.
   assert.equal(src.track_out.streamTag, "track", "out port tag is \"track\"");
   assert.equal(sink.track_in.streamTag, "track", "in port tag is \"track\"");
   assert.equal(src.track_out.node, "test/44/src", "out port node id");
@@ -198,10 +198,9 @@ async function waitFor(pred: () => boolean, ms = 8000): Promise<void> {
   const seqs = sink.seqs();
   for (let i = 1; i < seqs.length; i++)
     assert(seqs[i]! > seqs[i - 1]!, "latest delivery is monotonic (stale shed, never reordered)");
-  // Leaky retention fix (2026-07-11): with take-semantics the channel slot is
-  // MOVED out on readout, so a drained link over a STALLED upstream must not
-  // pin the last payload — `held` reads false once delivery caught up (the
-  // pre-fix cursor+`next` readout kept it true until the next write).
+  // Take-semantics: the channel slot is MOVED out on readout, so a drained link
+  // over a STALLED upstream must not pin the last payload — `held` reads false
+  // once delivery caught up.
   await waitFor(() => !link.probe().held);
   assert.equal(link.probe().held, false, "drained latest link pins no payload on upstream stall");
   link.release();
@@ -301,13 +300,13 @@ async function waitFor(pred: () => boolean, ms = 8000): Promise<void> {
   console.log("44-port-pipe: connect/release under producer load (25 cycles) OK.");
 }
 
-// --- 8: THROWING SINK closes the channel (value-sweep 2026-07-11) ----------------
-// A sink exception exits the delivery thread; before the fix the channel stayed
-// OPEN — a FIFO link then backpressure-blocked the producer's fan-out INSIDE
-// the stream mutex (whole-pipeline freeze; this section would hang), and
-// latest/ring links became silent black holes. Now every deliver() exit closes
-// the channel, so the producer's next push sees EOS and the fan-out ejects the
-// subscriber — pushes keep flowing, probe reads open:false, release() joins.
+// --- 8: THROWING SINK closes the channel ----------------
+// A sink exception exits the delivery thread; every deliver() exit closes the
+// channel. Otherwise a FIFO link would backpressure-block the producer's
+// fan-out INSIDE the stream mutex (whole-pipeline freeze), and latest/ring
+// links would become silent black holes. With the close, the producer's next
+// push sees EOS and the fan-out ejects the subscriber — pushes keep flowing,
+// probe reads open:false, release() joins.
 for (const [type, opts] of [
   ["fifo", { type: "fifo", depth: 4 }],
   ["latest", { type: "latest" }],

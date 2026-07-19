@@ -1,6 +1,5 @@
-// Projection DnD intent + drop-zone geometry (docs/proposals/
-// projection-split-view.md deliverable 4): the move/dup/app-window matrix and
-// the VSCode-style edge-quadrant / center classification, as pure logic.
+// Projection DnD intent + drop-zone geometry: the move/dup/app-window matrix
+// and the VSCode-style edge-quadrant / center classification, as pure logic.
 
 import { describe, expect, it } from "vitest";
 import {

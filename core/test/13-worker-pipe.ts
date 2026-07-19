@@ -4,29 +4,27 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// WS1 real-1f FOUNDATION regression (B-22, reclaims the dropped B-19a spike-13
-// slot — redone RIGHT now that B-20 gave us clean orderly teardown). This is the
-// milestone-critical native spawn architecture proven end-to-end as a LASTING
-// guard, DECOUPLED from C's app kernels so it won't churn as C iterates:
+// Foundation guard for the native spawn architecture, proven end-to-end and
+// DECOUPLED from the app kernels so it won't churn as they iterate:
 //
 //   main: enableFakeCamera → advertise a `camera:<serial>` pipe →
-//         attachCameraPipe (the real-1e converter thread runs) →
+//         attachCameraPipe (the converter thread runs) →
 //         Pipe.connect (main brokers the consumer gate → converter produces);
 //   WORKER (worker_thread, own V8 env): loads BOTH native addons — the SHM
-//         reader AND `core.node` itself (proves core-in-worker context-safety,
-//         B-19b/c — the addon Init runs in a 2nd env + survives terminate) —
+//         reader AND `core.node` itself (proves core-in-worker context-safety:
+//         the addon Init runs in a 2nd env + survives terminate) —
 //         then reader.open(shmName) + readInto a few LIVE frames, asserts each
 //         is byte-correct BGRA (GRAY→BGRA ⇒ B==G==R, alpha 255), runs a TRIVIAL
-//         transform (first-row luma sum — deliberately NOT C's disparity kernel,
-//         so this test stays decoupled from the app protocol), posts results;
-//   main: asserts it got N results, then ORDERLY teardown (the B-20 pattern:
-//         worker.terminate → disconnect → detachCameraPipe → camera.release) →
+//         transform (first-row luma sum — deliberately NOT the app's disparity
+//         kernel, so this test stays decoupled from the app protocol), posts results;
+//   main: asserts it got N results, then ORDERLY teardown IN ORDER
+//         (worker.terminate → disconnect → detachCameraPipe → camera.release) →
 //         EXITS NATURALLY (exit 0), zero non-zero-ref / leak warns.
 //
-// Together this guards: worker_thread spawn + core.node-in-worker (B-19b/c) +
-// reader-from-worker (B-19a fact A) + SHM read of a live converter pipe +
-// gate-fires-on-in-process-connect (B-19a fact B) + clean orderly teardown
-// (B-20). NO hardware (fake camera). Run: /opt/homebrew/bin/node core/test/13-worker-pipe.ts
+// Together this guards: worker_thread spawn + core.node-in-worker +
+// reader-from-worker + SHM read of a live converter pipe +
+// gate-fires-on-in-process-connect + clean orderly teardown.
+// NO hardware (fake camera). Run: /opt/homebrew/bin/node core/test/13-worker-pipe.ts
 
 import assert from "node:assert/strict";
 import { Worker } from "node:worker_threads";
@@ -63,8 +61,8 @@ assert(typeof shmName === "string" && shmName.length > 0, "broker returned a shm
 const code = String.raw`
   const { parentPort, workerData } = require("node:worker_threads");
   const reader = require(workerData.readerPath);
-  // Load core.node in THIS worker env too (B-19b/c: Init runs in a 2nd env and
-  // must survive terminate). Do NOT touch the camera — Aravis is per-process
+  // Load core.node in THIS worker env too (Init runs in a 2nd env and must
+  // survive terminate). Do NOT touch the camera — Aravis is per-process
   // exclusive; loading the addon is the context-safety proof, not using it.
   const core = require(workerData.corePath);
   const coreLoaded = core != null && typeof core === "object" && typeof core.Aravis === "object";
@@ -104,7 +102,7 @@ assert.equal(result.bgraOk, true, "worker frames are byte-correct BGRA (B==G==R,
 assert.equal(result.samples.length, result.got, "one transform result per frame");
 console.log(`13-worker-pipe: worker read ${result.got} live BGRA frames + ran core-in-worker safely (samples[0]=${result.samples[0]}).`);
 
-// --- ORDERLY teardown (the B-20 / test-15 converter-subset release order) -----
+// --- ORDERLY teardown (the test-15 converter-subset release order) -----
 await w.terminate(); // worker env torn down — reader + core.node must survive it
 P.disconnect(id);
 A.detachCameraPipe(id); // drops the ConverterStream (join) + its Arv::Stream ref

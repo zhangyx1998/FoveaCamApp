@@ -54,11 +54,11 @@ export function dtypeOf(mat: TypedArray): Dtype {
  * `FreqMeter` from `@lib/util/perf.ts`, a Vue-touching file).
  */
 export function significantBits(format: PixelFormat): number {
-  // Single source of truth: the pixel-format registry (docs/schema, B-P1) —
+  // Single source of truth: the pixel-format registry (docs/schema) —
   // so this can't drift from the C++ tables / pyfovea decode. The suffix
   // heuristic survives only as a defensive fallback for names outside the
-  // table; every real format is a table row and the C-P6 conformance test
-  // pins that the table path equals the old heuristic for each one.
+  // table; every real format is a table row and the conformance test
+  // pins that the table path equals the suffix heuristic for each one.
   const spec = pixelFormatSpec(format);
   if (spec) return spec.significantBits;
   if (format.endsWith("12p")) return 12;

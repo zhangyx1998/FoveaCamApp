@@ -1,8 +1,6 @@
-// A-30 local volt prediction — ported from the deleted actuation-stream.test.ts
-// (its `startActuationLoop` lifecycle half is fully covered by
-// controller-node.test.ts; this assertion is the surviving unique piece).
+// Local volt prediction.
 // `Controller.predictVolts` must reproduce the awaited `actuate()` ACK-readback
-// math exactly (given the firmware echoes commanded channels — RIG-VERIFY the
+// math exactly (given the firmware echoes commanded channels — verify the
 // echo assumption on hardware): the controller NODE's streaming path publishes
 // this prediction as telemetry / mirror-history trajectory in place of the
 // readback the fire-and-forget protocol has no response for.
@@ -21,7 +19,7 @@ vi.mock("core/Controller", () => {
     release = vi.fn();
     fireAndForget = vi.fn();
     get = vi.fn();
-    // Echoes the commanded channels back (the A-30 Q1 assumption), so the
+    // Echoes the commanded channels back, so the
     // readback decode and `predictVolts` must agree.
     set = vi.fn(async (prop: string, arg: { left?: number[]; right?: number[] }) => {
       if (prop === "Actuate")
@@ -46,7 +44,7 @@ vi.mock("serialport", () => ({ SerialPort: { list: vi.fn(async () => []) } }));
 
 import { Controller } from "@orchestrator/controller";
 
-describe("Controller.predictVolts (A-30)", () => {
+describe("Controller.predictVolts", () => {
   it("equals the awaited actuate() readback decode (firmware echoes channels)", async () => {
     const ctrl = new Controller({ path: "/dev/predict" } as never);
     await ctrl.ready;

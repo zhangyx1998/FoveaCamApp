@@ -1,7 +1,6 @@
-// Unified time P1 (docs/proposals/unified-time-and-topology.md §1–§2, RULED):
-// the min-filter estimator, the latch/pull/ping measurement routines against
-// fake hardware, the calibration registry, and sleep detection. All pure /
-// injected — no hardware, no real clocks.
+// Unified time: the min-filter estimator, the latch/pull/ping measurement
+// routines against fake hardware, the calibration registry, and sleep
+// detection. All pure / injected — no hardware, no real clocks.
 
 import { beforeEach, describe, expect, it } from "vitest";
 import {
@@ -22,7 +21,7 @@ import {
 
 beforeEach(() => clearCalibrations());
 
-describe("estimateOffsetNs (RULED: min-filter)", () => {
+describe("estimateOffsetNs (min-filter)", () => {
   it("picks the smallest-RTT sample's midpoint offset, not the mean", () => {
     // True offset 1000ns; two latency-contaminated samples (late midpoints,
     // wide brackets) that would bias a mean upward.
@@ -50,7 +49,7 @@ describe("estimateOffsetNs (RULED: min-filter)", () => {
   });
 });
 
-describe("latchCameraOffset (RULED primary path)", () => {
+describe("latchCameraOffset (primary path)", () => {
   it("brackets each latch with host reads and min-filters by RTT", () => {
     // Fake steady clock ticking 100ns per read; fake camera whose latched
     // value equals hostAtLatch - 5000 (true offset = 5000ns).
@@ -90,7 +89,7 @@ describe("pullCameraOffset (config-gated fallback)", () => {
     expect(cal.offsetNs).toBe(7500n);
   });
 
-  it("fallback gate defaults OFF (ruling 2)", () => {
+  it("fallback gate defaults OFF", () => {
     expect(isPullFallbackEnabled()).toBe(false);
     setPullFallbackEnabled(true);
     expect(isPullFallbackEnabled()).toBe(true);
@@ -98,7 +97,7 @@ describe("pullCameraOffset (config-gated fallback)", () => {
   });
 });
 
-describe("pingControllerOffset (RULED: dedicated timestamp command)", () => {
+describe("pingControllerOffset (dedicated timestamp command)", () => {
   it("converts MCU µs to ns and min-filters by RTT", async () => {
     let t = 1_000_000n;
     const now = () => (t += 1000n);

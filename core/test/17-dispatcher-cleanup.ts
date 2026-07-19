@@ -4,21 +4,20 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// WS1 real-1f B-21 regression: `cleanup()` (orchestrator process-quit) must NOT
-// hang. Root cause (B-20 finding #2): `Dispatcher::~Context` spun
-// `while(!closed) uv_run(async.loop, UV_RUN_NOWAIT)` to close its uv_async
-// handle; when `cleanup()` is reached from inside the uv loop (a module
+// `cleanup()` (orchestrator process-quit) must NOT hang. `Dispatcher::~Context`
+// must not spin `while(!closed) uv_run(async.loop, UV_RUN_NOWAIT)` to close its
+// uv_async handle: when `cleanup()` is reached from inside the uv loop (a module
 // top-level `await` resumes inside `uv_run`), that nested `uv_run` never fires
 // the close callback → infinite hang → the orchestrator gets force-killed on
-// quit. Fixed (B-21 option a): the uv_async lives in a heap holder that
-// OUTLIVES Context; `~Context` calls `uv_close(&h->async, close_cb)` and
-// RETURNS (no nested uv_run); `close_cb` frees the holder on the owning loop.
+// quit. Instead the uv_async lives in a heap holder that OUTLIVES Context;
+// `~Context` calls `uv_close(&h->async, close_cb)` and RETURNS (no nested
+// uv_run); `close_cb` frees the holder on the owning loop.
 //
-// This reproduces the scenario that hung (fake camera → converter thread →
-// read → `cleanup()`), PLUS a Dispatcher with a PENDING FUTURE at cleanup (a
+// This drives the scenario (fake camera → converter thread → read →
+// `cleanup()`), PLUS a Dispatcher with a PENDING FUTURE at cleanup (a
 // KCF `for await` still open — the `~Context` "active references" path). If
-// `cleanup()` returned, the MARKER prints and the process exits 0; pre-fix it
-// hangs (no MARKER → the sweep's per-test timeout fails it).
+// `cleanup()` returns, the MARKER prints and the process exits 0; if it hangs
+// no MARKER prints (the sweep's per-test timeout fails it).
 // Run UNSANDBOXED: /opt/homebrew/bin/node core/test/17-dispatcher-cleanup.ts
 
 import assert from "node:assert/strict";

@@ -15,7 +15,7 @@
 export type TrackerType = "hybrid" | "kcf";
 
 /** The default tracker — the current behavior (hybrid NCC + re-detect, the
- *  session default since bc20269). Referenced by the contract's state default
+ *  session default). Referenced by the contract's state default
  *  so the two never drift. */
 export const DEFAULT_TRACKER_TYPE: TrackerType = "hybrid";
 

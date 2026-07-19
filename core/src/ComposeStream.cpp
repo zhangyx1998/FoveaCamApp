@@ -4,11 +4,9 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// NATIVE prediction COMPOSE brick (docs/proposals/native-compose-controller.md
-// — phase 2 of the port-pipe program; supersedes the JS compose node of
-// prediction-compose-node.md, whose pure `composeVolts` stays as the JS
-// conformance reference). Joins the pid baseline with the IMM predictions in
-// the ruled Jacobian form:
+// NATIVE prediction COMPOSE brick. The pure JS `composeVolts` stays as the
+// conformance reference. Joins the pid baseline with the IMM predictions in
+// the Jacobian form:
 //
 //   V(t) = V_pid + J · (p_pred(t) − p_meas(t_pid))     per eye (J = 2×2)
 //
@@ -17,10 +15,10 @@
 // finite-difference of `followVolts` around `p_meas`, computed in the SESSION
 // (JS owns calibration). Per prediction tick (~600 Hz off the imm brick's
 // predict_out link) the brick emits final volts; `feedForward: false`
-// (override drag / lost-gate / no calibration) holds the baseline — exactly
-// the wave-1 `predVolts = null` semantics. The BASELINE FLOOR moved here too
-// (planner decision 4): the brick emits on BOTH every rebase (~60 Hz —
-// mirrors always driven, warm or cold) and every prediction tick.
+// (override drag / lost-gate / no calibration) holds the baseline
+// (`predVolts = null` semantics). The BASELINE FLOOR lives here: the brick
+// emits on BOTH every rebase (~60 Hz — mirrors always driven, warm or cold)
+// and every prediction tick.
 //
 // Shape: a `Stream<VoltPair::Ptr>` producer whose thread blocks on an
 // internal drop-oldest event ring (`Threading::Ring`); `pred_in` (tag
@@ -28,7 +26,7 @@
 // (non-blocking — never stalls the link); `rebase` pushes a floor event
 // (nullptr). `volt_out` (tag "volts") pipes into the controller's native
 // pos_in; an asyncIterator remains for the JS FALLBACK consumer (v1 firmware
-// / no controller — JS is then a genuine consumer, ruling 1 holds).
+// / no controller — JS is then a genuine consumer).
 
 #include <algorithm>
 #include <array>
@@ -81,16 +79,15 @@ struct ComposeRebase {
   bool warm = false; // false until the first rebase (emit the initial pose)
 };
 
-// Feed-forward STALENESS bound (mirror-flicker 2026-07-12, refinement 1 +
-// runaway guard 2): predictions whose underlying MEASUREMENT (`measuredAtNs`)
-// is older than this are not applied — floor AND prediction ticks degrade to
-// the raw baseline (the value-sweep staleness discipline). Default sized as
-// ~3 prediction periods at the SLOWEST allowed rate (60 Hz → 50 ms), so it
-// stays permissive across the ruled 60–1000 Hz window; sessions that know the
-// live rate pass a tighter bound via `staleAfterMs`.
+// Feed-forward STALENESS bound: predictions whose underlying MEASUREMENT
+// (`measuredAtNs`) is older than this are not applied — floor AND prediction
+// ticks degrade to the raw baseline. Default sized as ~3 prediction periods at
+// the SLOWEST allowed rate (60 Hz → 50 ms), so it stays permissive across the
+// 60–1000 Hz window; sessions that know the live rate pass a tighter bound via
+// `staleAfterMs`.
 static constexpr double kDefaultStaleAfterMs = 50.0;
 
-// Volt-space delta clamp (mirror-flicker guard 5, planner-ruled IN): the
+// Volt-space delta clamp: the
 // composed |J·Δp| contribution is clamped PER AXIS before it is added to the
 // baseline. Belt-and-suspenders ABOVE the wire's hard floor (chPair ±dv/2 +
 // volt2dac 0..65535 — verified, untouched): a legitimate feed-forward lead is
@@ -133,8 +130,7 @@ public:
   const std::string &name() const { return name_; }
 
   // NAPI thread (~60 Hz): store the new linearization + push a FLOOR event so
-  // the baseline is emitted even while the imm brick is cold (planner
-  // decision 4 — the wave-1 JS pushVolts floor moved here).
+  // the baseline is emitted even while the imm brick is cold.
   void rebase(const ComposeRebase &r) {
     {
       auto ref = rebase_.ref();
@@ -163,14 +159,13 @@ protected:
     ImmResult::Ptr ev;
     if (!events_.read(ev))
       throw StopIteration(); // ring closed — teardown
-    // HIL D2 fix (mirror-flicker 2026-07-12): cache the newest prediction on
-    // the brick thread; a FLOOR tick reuses it against the NEW linearization,
-    // so a rebase no longer rescinds the feed-forward lead (the old raw-vPid
-    // floor emitted a 60 Hz sawtooth of amplitude J·(pred − pMeas) that the
-    // MirrorSink dedupe could never suppress). A brick that has NEVER seen a
-    // prediction still emits the raw baseline — planner decision 4's
-    // cold-start intent ("mirrors always driven, warm or cold") is preserved;
-    // only the dip is gone.
+    // Cache the newest prediction on the brick thread; a FLOOR tick reuses it
+    // against the NEW linearization, so a rebase no longer rescinds the
+    // feed-forward lead (emitting the raw vPid floor instead would produce a
+    // 60 Hz sawtooth of amplitude J·(pred − pMeas) that the MirrorSink dedupe
+    // could never suppress). A brick that has NEVER seen a prediction still
+    // emits the raw baseline — the cold-start intent ("mirrors always driven,
+    // warm or cold") is preserved; only the dip is gone.
     if (ev)
       lastPred_ = ev;
     const ImmResult::Ptr &p = ev ? ev : lastPred_;
@@ -294,7 +289,7 @@ public:
                 &ComposeObject::get_volt_out>("volt_out", napi_enumerable),
             // JS FALLBACK consumer (v1 firmware / no controller): volts via
             // the standard async-generator seam — JS is then a genuine
-            // consumer (ruling 1 holds; the native pos_in path skips this).
+            // consumer (the native pos_in path skips this).
             Napi::InstanceWrap<ComposeObject>::template InstanceMethod<
                 &ComposeObject::asyncIterator>(asyncIterator),
         });
@@ -553,7 +548,7 @@ static FN(createTestPredictionSource) {
 }
 
 // Joined into the Tracker namespace from Tracker.cpp's exportTrackerNamespace
-// (the imm precedent — the compose brick is the prediction lane's companion).
+// (like the imm brick — the compose brick is its prediction-pipeline companion).
 #define EXPORT(OBJ, F) OBJ.Set(#F, Function::New<F>(env, #F));
 void exportComposeNamespace(Napi::Env env, Napi::Object &exports) {
   ComposeObject::Export(env, exports);

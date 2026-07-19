@@ -75,13 +75,12 @@ public:
 
   // Single-consumer readout: MOVES the value out (slot → null) so a stalled
   // upstream never pins the last payload inside the channel. `next()` keeps
-  // the slot as a multi-cursor dedupe anchor — the pre-port multiplex design,
-  // which also forced consumers to hold their previous ptr and lock-and-
-  // compare it against the slot. With take-semantics, non-null IS "new data":
-  // no cursor, and the empty probe is LOCK-FREE (see `full_`); every Leaky in
-  // THIS project is a standalone per-consumer channel (LeakyTapChannel,
-  // PortPipe latest links) — readers should prefer `take` (Leaky retention
-  // fix, 2026-07-11).
+  // the slot as a multi-cursor dedupe anchor, which forces consumers to hold
+  // their previous ptr and lock-and-compare it against the slot. With
+  // take-semantics, non-null IS "new data": no cursor, and the empty probe is
+  // LOCK-FREE (see `full_`); every Leaky in THIS project is a standalone
+  // per-consumer channel (LeakyTapChannel, PortPipe latest links) — readers
+  // should prefer `take` over `next`.
   bool take(std::shared_ptr<T> &dst, bool wait = false) {
     // Lock-free fast path: a non-waiting poll on an empty slot never touches
     // the mutex (a racing concurrent write is caught on the next poll).

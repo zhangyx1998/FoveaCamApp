@@ -3,7 +3,7 @@
 # This source code is licensed under the MIT license.
 # You may find the full license in project root directory.
 # -------------------------------------------------------
-"""Legacy dump → .fovea conversion: output must satisfy the §2b schema
+"""Legacy dump → .fovea conversion: output must satisfy the .fovea schema
 contract exactly as the app writer does, so the converted file reads back
 through the same FoveaReader path (frames, extras, metadata records)."""
 
@@ -25,7 +25,7 @@ def test_convert_roundtrip(tmp_path: Path):
         assert not reader.truncated
         assert sorted(reader.streams) == ["center", "left-fovea"]
 
-        # channel metadata per §2b
+        # channel metadata per the schema
         left = reader.streams["left-fovea"]
         assert left.dtype == "U16"
         assert left.shape == (2, 2)
@@ -41,7 +41,7 @@ def test_convert_roundtrip(tmp_path: Path):
                 assert dst.t == pytest.approx(src.timestamp)
                 assert dst.extra == src.extra
 
-        # session/finalize metadata carried over from manifest.json
+        # session/finalize metadata sourced from manifest.json
         assert reader.session["timestamp"] == "2026-07-06T13:00:00.000Z"
         assert reader.session["durationSec"] == "1.75"
 

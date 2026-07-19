@@ -4,12 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// native-recorder Wave 2: the RECORDER BRICK lifecycle gate. Drives the REAL
+// The RECORDER BRICK lifecycle gate. Drives the REAL
 // native brick (`core.Recorder.*` over `core.Pipe` synthetic producers — no
 // hardware, no JS worker, no ring read) through the full lifecycle:
 //
 //   1. record 2 synthetic pipes (producer-seam taps) + a data channel +
-//      ruling-3 telemetry (takeNotices → appendTelemetry round-trip), finalize,
+//      telemetry (takeNotices → appendTelemetry round-trip), finalize,
 //      then VERIFY the container with @mcap/core's McapIndexedReader: channels,
 //      message counts vs the brick's own counters, channel metadata verbatim,
 //      per-channel contiguous sequences, telemetry co-clocked with its frame;
@@ -171,7 +171,7 @@ async function run(): Promise<void> {
     P.connect("rec40:b");
     R.addDataStream(h, "fovea/t1");
 
-    // Let frames flow; drive the ruling-3 round-trip on a low-rate poll (the
+    // Let frames flow; drive the telemetry round-trip on a low-rate poll (the
     // host's exact pattern): notices → appendTelemetry with the OWNING frame's
     // seq + logTime.
     let telemetrySent = 0;

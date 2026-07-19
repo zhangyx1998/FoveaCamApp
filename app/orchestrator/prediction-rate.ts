@@ -26,7 +26,7 @@ export { APP_CONFIG_PATH, DEFAULT_PREDICTION_RATE_HZ, PREDICTION_RATE_MAX, PREDI
  *  `APP_CONFIG_PATH` under this reader's historical name). */
 export const PREDICTION_RATE_CONFIG_PATH = APP_CONFIG_PATH;
 
-/** Clamp any value to the ruled window; a non-finite/unset value falls back to
+/** Clamp any value to the allowed window; a non-finite/unset value falls back to
  *  the default (a config hiccup must never wedge the predictor). */
 export function clampPredictionRateHz(value: unknown): number {
   const n = typeof value === "number" ? value : Number(value);

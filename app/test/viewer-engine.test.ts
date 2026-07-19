@@ -1,6 +1,5 @@
-// Viewer-engine lifecycle sequencing (standalone-viewer-and-fcap, AS SHIPPED
-// amendment). The engine moved from an in-renderer worker (which never worked)
-// to a MAIN-owned utilityProcess per window; ViewerEngineManager owns the map +
+// Viewer-engine lifecycle sequencing. The engine runs as a MAIN-owned
+// utilityProcess per window; ViewerEngineManager owns the map +
 // the ordering invariants around it. The Electron process/port wiring is
 // injected, so these are the testable core:
 //   • flush-before-close: the flush ack releases the grace; a wedged flush is

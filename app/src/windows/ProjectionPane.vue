@@ -4,15 +4,14 @@ This source code is licensed under the MIT license.
 You may find the full license in project root directory.
 --------------------------------------------------- -->
 <!--
-  One projection pane (docs/proposals/projection-split-view.md deliverable
-  2/3/5). A slim VSCode-tab-like header (title + grip + close) is the DRAG
+  One projection pane. A slim VSCode-tab-like header (title + grip + close) is the DRAG
   SURFACE; the body renders the bound feed on the EXISTING payload paths:
     - {kind:"frame"} → a PASSIVE `useSession().frame()` ref (never activates the
       source session; frame refs are already rAF-coalesced),
     - {kind:"pipe"}  → `usePipeFrame(id)` over the pipes session (epoch-aware).
   No new frame plumbing — the pane is a thin host over those two refs.
 
-  Termination/rebind (deliverable 5): a `TerminationMachine` drives
+  Termination/rebind: a `TerminationMachine` drives
   live → frozen(cover) → rebound | terminated off observable signals — the
   channel death (`orchestratorDown`) and the feed's payload stopping/resuming
   (a pipe un-advertise nulls the payload; a fresh frame resumes it). While
@@ -21,7 +20,7 @@ You may find the full license in project root directory.
   terminated only if nothing returns. The window's auto-close watches the
   aggregate status via `reportStatus`.
 
-  Drop zones (deliverable 4): the pane body is a drop target — the pointer
+  Drop zones: the pane body is a drop target — the pointer
   position picks a VSCode-style zone (edge quadrant = split, center =
   move/swap); a live highlight previews where the drop lands.
 -->
@@ -411,7 +410,7 @@ function onDrop(e: DragEvent): void {
 }
 
 // VSCode-style drop preview: a translucent accent block over the half/center
-// the drop will land in. Snap (no transition) per the design ruling.
+// the drop will land in. Snap (no transition).
 .drop-hint {
   position: absolute;
   background: color-mix(in srgb, var(--accent-bright) 30%, transparent);

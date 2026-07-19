@@ -40,7 +40,7 @@ export function foveaTileSize(opts: {
 // the vision/control side keeps one import surface.
 export { foveaFootprintOnWide } from "./display-geometry";
 
-/** The fovea↔wide template-match magnification under the ruled resolution order
+/** The fovea↔wide template-match magnification under the resolution order
  *  (spec §magnification): knob > per-triple override > measured > 1; each tier
  *  must be finite and > 0 or it falls through. `nominalZoom === 0` is "Auto". */
 export function matchMagnification(
@@ -64,7 +64,7 @@ export interface Vec2Controller {
   readonly value: Point2d;
 }
 
-// --- capture-epoch target ring (R1, spec §control-law) ----------------------
+// --- capture-epoch target ring (spec §control-law) ----------------------
 
 /** One target write: `t` = host steady-clock ns (the trusted-time domain every
  *  pipe frame's `deviceTimestamp` is calibrated into), `target` = the value
@@ -89,7 +89,7 @@ export function recordTarget(
  *  write applies from its stamp onward). `fallback` (the live target) when the
  *  ring is empty, the epoch is missing/non-finite, or every sample is newer
  *  than the epoch — the out-of-coverage epoch an UNCALIBRATED camera clock
- *  produces lands here, degrading exactly to the pre-R1 behavior instead of
+ *  produces lands here, degrading to the live-target fallback instead of
  *  resolving an arbitrarily stale entry. */
 export function targetAtEpoch(
   ring: readonly TargetSample[],
@@ -122,7 +122,7 @@ export type VergenceControllers = {
 export type ScopeProjection = {
   l: Point2d;
   r: Point2d;
-  /** The target AS OF THE MATCHED FRAME'S CAPTURE EPOCH (R1, spec
+  /** The target AS OF THE MATCHED FRAME'S CAPTURE EPOCH (spec
    *  §control-law) — resolved by the join via {@link targetAtEpoch}, so the
    *  error pairs setpoint and measurement at the same instant. */
   target: Point2d;
@@ -154,7 +154,7 @@ export type VergenceControl = {
  *             opposite pan.y: the foveas move OPPOSITE vertically — spec §control-law)
  *
  * Each PID also receives the DOF's measurement point (error = setpoint −
- * measurement), so measurement-derivative controllers (R2) never differentiate
+ * measurement), so measurement-derivative controllers never differentiate
  * target motion — see the inline decomposition table.
  */
 export function stepVergence(
@@ -180,7 +180,7 @@ export function stepVergence(
   const ePan = VEC.mul(VEC.add(dL, dR), 0.5);
   const eVerge = aR.x - aL.x;
   const eVshift = (aR.y - aL.y) / 2;
-  // Per-DOF MEASUREMENT points (R2, spec §control-law), decomposed so
+  // Per-DOF MEASUREMENT points (spec §control-law), decomposed so
   // error = setpoint − measurement holds:
   //   pan     setpoint aT,  measurement (aL+aR)/2 — the ONLY DOF whose
   //           setpoint moves; measurement-derivative kills the target kick

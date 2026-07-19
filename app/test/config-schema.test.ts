@@ -4,7 +4,7 @@
 // (`@orchestrator/{prediction-rate,serial-latency,record-compression,
 // anaglyph-style}`) can agree with the renderer `@lib/config` WITHOUT importing
 // Vue. This test pins that the renderer defaults are built from the SAME schema
-// constants the readers import, so the old "keep in sync" hand-mirroring can
+// constants the readers import, so manual "keep in sync" hand-mirroring can
 // never silently drift back.
 
 import { describe, expect, it, vi } from "vitest";
@@ -44,7 +44,7 @@ describe("config-schema ↔ @lib/config defaults", () => {
     expect(APP_CONFIG_DEFAULTS.profiler_hover_card).toBe(DEFAULT_PROFILER_HOVER_CARD_MODE);
   });
 
-  it("pins the ruled prediction-rate window and record-compression union", () => {
+  it("pins the prediction-rate window and record-compression union", () => {
     expect(PREDICTION_RATE_MIN).toBe(60);
     expect(PREDICTION_RATE_MAX).toBe(1000);
     expect(DEFAULT_PREDICTION_RATE_HZ).toBe(600);
@@ -60,7 +60,7 @@ describe("config-schema ↔ @lib/config defaults", () => {
     expect(coerceRecordCompression(42)).toBe("none");
   });
 
-  it("pins the ruled profiler hover-card union + coerces untrusted values", () => {
+  it("pins the profiler hover-card union + coerces untrusted values", () => {
     expect(PROFILER_HOVER_CARD_MODES).toEqual(["follow", "corner"]);
     expect(DEFAULT_PROFILER_HOVER_CARD_MODE).toBe("follow");
     expect(coerceProfilerHoverCardMode("corner")).toBe("corner");

@@ -5,7 +5,7 @@
 // -------------------------------------------------------
 #pragma once
 
-// GENERALIZED metric-channel primitive (unified-time revision, 2026-07-08):
+// Generalized metric-channel primitive:
 // an OPTIONAL JS callback into the orchestrator main thread. One static slot
 // per channel — the clock-metrics channel wires through it now; other metric
 // channels (converter/tracker meters, topology deltas) are meant to adopt the

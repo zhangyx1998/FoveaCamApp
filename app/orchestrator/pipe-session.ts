@@ -4,12 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// WS1 pipe broker session (C-17) + the composition protocol (C-24 step 3). Advertises
-// typed SHM pipes, brokers the one-time connectPipe/disconnectPipe handshake to the
-// native publisher (refcount consumers), and materializes/tears down composed nodes on
-// renderer demand. Nothing per-frame passes through here. Compose is two-mode:
-// camera/-rooted (refcount, shared across windows) vs win/<windowId>/-rooted (window-
-// owned, exclusive). Broker + materializers + window hooks are injected.
+// Pipe broker session + the composition protocol. Advertises typed SHM pipes,
+// brokers the one-time connectPipe/disconnectPipe handshake to the native publisher
+// (refcount consumers), and materializes/tears down composed nodes on renderer
+// demand. Nothing per-frame passes through here. Compose is two-mode: camera/-rooted
+// (refcount, shared across windows) vs win/<windowId>/-rooted (window-owned,
+// exclusive). Broker + materializers + window hooks are injected.
 // spec: docs/spec/pipes.md#pipe-session
 
 import { defineSession, type ServerSession } from "./runtime.js";
@@ -41,7 +41,7 @@ export interface PipeBroker {
 export const asBroker = (p: typeof import("core/Pipe")): PipeBroker =>
   p as unknown as PipeBroker;
 
-/** One brick kind's lifecycle (C-24): `materialize` creates the node's
+/** One brick kind's lifecycle: `materialize` creates the node's
  *  producer/resources (e.g. fovea: advertise pipe + `attachFoveaPipe`) and
  *  returns its advert shape; `teardown` releases them (refs→0 / owner window
  *  closed). Registered per kind via `PipeSessionDeps.materializers`. */
@@ -59,26 +59,25 @@ export interface PipeSessionDeps {
   specs?: PipeSpec[];
   /** The publisher broker — `asBroker(Pipe)` in production, a fake in tests. */
   broker: PipeBroker;
-  /** Brick materializers by kind (C-24). Absent kind + camera-rooted id that is
+  /** Brick materializers by kind. Absent kind + camera-rooted id that is
    *  already advertised = ref-only compose (convert/undistort). */
   materializers?: Record<string, NodeMaterializer>;
-  /** Authoritative caller identity (A-34: `hub.windowIdOf`). Absent (tests /
+  /** Authoritative caller identity (`hub.windowIdOf`). Absent (tests /
    *  legacy) → win/-rooted composes are rejected; camera-rooted refs pool
    *  under an anonymous ledger. */
   windowIdOf?(ch: Channel): string | undefined;
-  /** Window-destroy signal (A-34: `hub.onWindowClosed`) — drives the auto
+  /** Window-destroy signal (`hub.onWindowClosed`) — drives the auto
    *  unref/teardown. Returns a disposer. */
   onWindowClosed?(fn: (windowId: string) => void): () => void;
-  /** Channel-close signal (value-sweep-2026-07-11: `hub.onChannelClosed`) —
-   *  fires on every client port close (reload / crash / window close), which
-   *  `onWindowClosed` does NOT (it's DESTROY-only, and reload keeps the
-   *  windowId). Drives reconciliation of the per-channel `connectPipe` ledger
-   *  so a leaked refcount can't wedge the C-21 consumer gate ON forever.
-   *  Returns a disposer. */
+  /** Channel-close signal (`hub.onChannelClosed`) — fires on every client port
+   *  close (reload / crash / window close), which `onWindowClosed` does NOT
+   *  (it's DESTROY-only, and reload keeps the windowId). Drives reconciliation of
+   *  the per-channel `connectPipe` ledger so a leaked refcount can't wedge the
+   *  consumer gate ON forever. Returns a disposer. */
   onChannelClosed?(fn: (ch: Channel) => void): () => void;
 }
 
-/** The pipe session + its dynamic-lifecycle controls (C-20). Sessions/tests
+/** The pipe session + its dynamic-lifecycle controls. Sessions/tests
  *  drive `advertise`/`unadvertise` as pipes come and go; each mutates the
  *  seeded `state.pipes` Record so subscribed renderers react. */
 export interface PipeSessionHandle {
@@ -105,13 +104,12 @@ export function pipeSession(deps: PipeSessionDeps): PipeSessionHandle {
   const advertised: Record<string, PipeAdvert> = {};
   const composed = new Map<string, ComposedNode>();
   const nodeEpochs = new Map<string, number>(); // persists across teardown
-  // value-sweep-2026-07-11 (`pipe-consumer-refcount-no-reconciliation`): raw
-  // connect refcounts per channel, so a renderer that took `connectPipe` counts
-  // and then went away (reload / crash / abrupt close) has them RECONCILED —
-  // mirroring the composed-node ledger's window bookkeeping. Keyed by the
-  // authoritative calling channel (from the command ctx). `channel → pipeId →
-  // count`. A channel with no ctx (legacy path) isn't tracked (nothing to
-  // reconcile — it never had a stable owner).
+  // Raw connect refcounts per channel, so a renderer that took `connectPipe`
+  // counts and then went away (reload / crash / abrupt close) has them
+  // RECONCILED — mirroring the composed-node ledger's window bookkeeping. Keyed
+  // by the authoritative calling channel (from the command ctx). `channel →
+  // pipeId → count`. A channel with no ctx (legacy path) isn't tracked (nothing
+  // to reconcile — it never had a stable owner).
   const connectLedger = new Map<Channel, Map<string, number>>();
   let srv: ServerSession<typeof pipes>;
 
@@ -230,7 +228,7 @@ export function pipeSession(deps: PipeSessionDeps): PipeSessionHandle {
           const winRooted = req.id.startsWith("win/");
           if (winRooted) {
             // Exclusive, window-owned: the id must sit under the CALLER's
-            // authoritative identity (no spoofing — A-34 tags the channel).
+            // authoritative identity (no spoofing — the hub tags the channel).
             if (!windowId)
               throw new Error(`compose: no window identity for "${req.id}"`);
             if (!req.id.startsWith(`win/${windowId}/`))
@@ -252,8 +250,8 @@ export function pipeSession(deps: PipeSessionDeps): PipeSessionHandle {
           }
 
           // Materialize: by kind, or ref-only for a camera-rooted id that is
-          // already an advertised pipe (convert/undistort — the C-21 gate parks
-          // them; compose refs are pure bookkeeping).
+          // already an advertised pipe (convert/undistort — the gate parks them;
+          // compose refs are pure bookkeeping).
           const materializer = materializers[req.kind];
           let shape: Pick<NodeAdvert, "kind" | "output">;
           let materialized = false;
@@ -304,14 +302,12 @@ export function pipeSession(deps: PipeSessionDeps): PipeSessionHandle {
   };
 }
 
-// --- fovea crop brick materializer (C-24 step 4, re-chained per
-// docs/proposals/unified-time-and-topology.md §5) --------------------------
+// --- fovea crop brick materializer ----------------------------------------
 
 /** The native fovea brick half the materializer drives —
- *  `Aravis.attachFoveaPipe`/`detachFoveaPipe` with a PIPE-ID source (the
- *  chained form: fovea crops the undistort/convert brick's frames; the legacy
- *  Camera-object source and its fused map-ROI `cal` are retired). Injected so
- *  the materializer and its vitest never load native core. */
+ *  `Aravis.attachFoveaPipe`/`detachFoveaPipe` with a PIPE-ID source (fovea crops
+ *  the undistort/convert brick's frames). Injected so the materializer and its
+ *  vitest never load native core. */
 export interface FoveaBrickSeam {
   attach(sourcePipeId: string, pipeId: string, options: { rect: Rect }): void;
   detach(pipeId: string): void;
@@ -326,15 +322,14 @@ export interface FoveaMaterializerDeps {
 }
 
 /**
- * Build the `fovea` NodeMaterializer: advertise the C-20 max-footprint pipe
- * and attach the native crop brick CHAINED on the camera's shared undistort
- * brick when one is live (a triple session advertised
- * `camera/<serial>/undistort`), else on the shared converter — uncalibrated
- * rigs degrade to converted-raw crops exactly like the old raw fallback. No
- * calibration loading: undistortion happens ONCE upstream in the chain (the
- * fused map-ROI path is retired natively). Teardown detaches the brick then
- * drops the pipe. C-20 churn semantics (max footprint, epoch bump on id
- * reuse, slot reuse) are carried by advertise/compose exactly as before.
+ * Build the `fovea` NodeMaterializer: advertise the max-footprint pipe and
+ * attach the native crop brick CHAINED on the camera's shared undistort brick
+ * when one is live (a triple session advertised `camera/<serial>/undistort`),
+ * else on the shared converter — uncalibrated rigs degrade to converted-raw
+ * crops. No calibration loading: undistortion happens ONCE upstream in the
+ * chain. Teardown detaches the brick then drops the pipe. Churn semantics (max
+ * footprint, epoch bump on id reuse, slot reuse) are carried by
+ * advertise/compose.
  */
 export function createFoveaMaterializer(deps: FoveaMaterializerDeps): NodeMaterializer {
   return {

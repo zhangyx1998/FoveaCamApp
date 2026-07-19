@@ -6,8 +6,7 @@ You may find the full license in project root directory.
 <!--
   TeleCanvas PUSH (per app window). Renders nothing — it watches the merged
   provider `content` and PUTs it to the active TeleCanvas target on every change,
-  exactly as the old RemoteCanvas overlay did, but always-on (not only while an
-  overlay is open) and in BOTH modes:
+  always-on (not only while an overlay is open) and in BOTH modes:
     • client → the configured remote `tele_canvas_url` (empty = disabled).
     • host   → this app's own server at http://127.0.0.1:<tele_canvas_port>/.
   Only the target URL differs between modes; the render/push path is identical.
@@ -24,8 +23,8 @@ You may find the full license in project root directory.
 
   Pushes go through the package's `TeleCanvasClient` (telecanvas/view): at most
   one PUT in flight, newer frames overwrite queued ones — a burst of DOM
-  mutations coalesces to the newest frame. AppWindow still mounts this under
-  <Suspense> (harmless — the async work is in onMounted now, not a top-level
+  mutations coalesces to the newest frame. AppWindow mounts this under
+  <Suspense> (harmless — the async work is in onMounted, not a top-level
   await).
 -->
 <script setup lang="ts">

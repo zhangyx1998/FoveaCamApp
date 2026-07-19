@@ -1,7 +1,7 @@
 // Relay (Åström–Hägglund) auto-tune experiment — stage 1 of the vergence
-// two-stage tune (docs/proposals/vergence-loop-tuning.md §1, spec
-// docs/spec/disparity-scope.md#autotune). Pure state machine over synthetic
-// plants: limit-cycle detection, bounded amplitude escalation, hard-timeout
+// two-stage tune (spec docs/spec/disparity-scope.md#autotune). Pure state
+// machine over synthetic plants: limit-cycle detection, bounded amplitude
+// escalation, hard-timeout
 // failure verdicts (never a throw), and the safety envelope (commands clamped
 // to the DOF's physical limits, amplitude ≤ the configured cap).
 

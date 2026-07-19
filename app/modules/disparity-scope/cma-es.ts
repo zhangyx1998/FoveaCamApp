@@ -5,7 +5,7 @@
 // -------------------------------------------------------
 //
 // Minimal dependency-free (μ/μ_w, λ)-CMA-ES over a bounded vector — stage 2 of
-// the two-stage vergence tune (docs/proposals/vergence-loop-tuning.md §1).
+// the two-stage vergence tune.
 // Asynchronous evaluation contract: `ask()` exposes the current generation's
 // candidates, `tell(candidate, cost)` scores one; the distribution updates when
 // the generation completes. Deterministic under the seeded xorshift RNG.

@@ -4,8 +4,8 @@ This source code is licensed under the MIT license.
 You may find the full license in project root directory.
 --------------------------------------------------- -->
 <!--
-  The SHARED observed-vs-projected mark set (calibration-records-v2.md
-  §Visualizer). Renders ONLY SVG marks (an `<g>`, no `<svg>` wrapper) in the
+  The SHARED observed-vs-projected mark set. Renders ONLY SVG marks (an `<g>`,
+  no `<svg>` wrapper) in the
   camera's SENSOR-PIXEL coordinate space, so it drops into ANY host SVG at that
   scale: the standalone `CalibrationVisualizer` wraps it in its own viewBox'd
   `<svg>`, and the live calibrate-extrinsic view mounts it inside a `StreamView`

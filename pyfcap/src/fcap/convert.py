@@ -4,12 +4,12 @@
 # You may find the full license in project root directory.
 # -------------------------------------------------------
 """Convert a legacy ``.stream``/``.meta`` dump directory into a single
-``.fcap`` container, emitting exactly the recorder-container.md §2b schema
-the B-5 writer produces (channels + telemetry + fovea:session/:finalize
-metadata), so every downstream consumer — this package, the viewer — sees
-one format regardless of the dump's age.
+``.fcap`` container, emitting exactly the .fcap schema the recorder's writer
+produces (channels + telemetry + fovea:session/:finalize metadata), so every
+downstream consumer — this package, the viewer — sees one format regardless
+of the dump's age.
 
-Writer settings mirror B-5: no chunk compression (its bench-backed
+Writer settings mirror the recorder: no chunk compression (the bench-backed
 default), chunk size 256 KiB (chunk ≈ 1 raw frame).
 """
 

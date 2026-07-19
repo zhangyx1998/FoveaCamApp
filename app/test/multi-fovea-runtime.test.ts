@@ -1,8 +1,8 @@
-// MultiFoveaRuntime (C-24 step 4) — the SESSION-SIDE POLICY half over B-25's
-// native multi-KCF thread: arm/disarm churn (slot index = target id, re-arm
-// re-inits), lost tolerance over the batched `ok:false` results, steering as
-// manual hold, controller-stream sync races (unchanged from the pre-port
-// tests), and the composed-fovea rect steering. All deps faked — no core.
+// MultiFoveaRuntime — the SESSION-SIDE POLICY half over the native multi-KCF
+// thread: arm/disarm churn (slot index = target id, re-arm re-inits), lost
+// tolerance over the batched `ok:false` results, steering as manual hold,
+// controller-stream sync races, and the composed-fovea rect steering. All
+// deps faked — no core.
 
 import { describe, expect, it, vi } from "vitest";
 import type { Rect } from "core/Geometry";
@@ -85,7 +85,7 @@ describe("MultiFoveaRuntime (batched multi-KCF)", () => {
     expect(rects[0]).toEqual([0, { x: 45, y: 45, width: 10, height: 10 }]);
   });
 
-  it("re-arms (not disarm+arm) when a target's center changes — ruled re-init path", async () => {
+  it("re-arms (not disarm+arm) when a target's center changes — re-init path", async () => {
     const { deps, armed, disarmed } = makeDeps([stream(30), stream(31)]);
     const runtime = new MultiFoveaRuntime({ activeRequestCount: 0 }, deps);
     runtime.setFrameSize({ width: 100, height: 100 });

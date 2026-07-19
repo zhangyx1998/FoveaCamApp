@@ -9,7 +9,7 @@
 // twice or fight over its config. Each shared camera advertises one native
 // `camera:<serial>` SHM pipe (the native converter producer) — N windows cost one
 // acquisition. INVARIANT: no camera frames touch the JS event loop (all vision runs in
-// worker threads; the in-process view-tap loop was retired at C-22b step 3).
+// worker threads).
 
 import type { Camera } from "core/Aravis";
 import type { Role } from "@lib/camera-config";
@@ -20,9 +20,8 @@ import { timeSpan } from "./diagnostics.js";
 import { read } from "./store-hub.js";
 import { awaitHardwareClear } from "./hardware-gate.js";
 
-// WS1 real-1c: the SHM PREVIEW write moved OFF this JS loop onto the native
-// per-camera converter thread (`ConverterStream`, via `Aravis.attachCameraPipe`
-// — the CaptureSink it replaced is deleted), published through
+// The SHM PREVIEW write runs on the native per-camera converter thread
+// (`ConverterStream`, via `Aravis.attachCameraPipe`), published through
 // C's `camera:<serial>` pipe. The orchestrator index injects the pipe broker's
 // advertise/unadvertise + the native attach/detach here so the registry can
 // (un)advertise a pipe per shared camera. Injected (not imported) so this
@@ -39,13 +38,13 @@ export function setRegistryPipeSeam(seam: RegistryPipeSeam | null): void {
 }
 
 /** Advertise a shared camera's `camera:<serial>` RGBA8 pipe + attach B's native
- *  producer (real-1c). Pure over the seam so it unit-tests without the native
+ *  producer. Pure over the seam so it unit-tests without the native
  *  acquire chain. Camera resolution comes from GenICam (no `Camera` accessor). */
 export function advertiseCameraPipe(
   seam: RegistryPipeSeam,
   camera: Pick<Camera, "serial" | "getFeatureInt">,
 ): string {
-  // C-24 step 1: path-like node id (formerly `camera:<serial>`).
+  // Path-like node id.
   const pipeId = nodeId.convert(camera.serial);
   // Width/Height are integer GenICam nodes — `getFeature` (arv_camera_get_string)
   // throws "Not a ArvGcString" on them; use the integer accessor.
@@ -77,7 +76,7 @@ interface Shared {
   readonly serial: string;
   camera: Camera;
   refs: number;
-  /** The advertised `camera:<serial>` pipe id (real-1c), while leased. */
+  /** The advertised `camera:<serial>` pipe id, while leased. */
   pipeId?: string;
   closed: boolean; // native handle released (guards double-release)
 }
@@ -88,9 +87,9 @@ export interface CameraLease {
   readonly camera: Camera;
   /**
    * Run `mutate` (e.g. a pixel-format change) against the shared handle. Camera
-   * frames flow through B's native `camera:<serial>` producer, not the JS loop
-   * (C-22b step 3 retired the in-process view-tap loop), so this is now just a
-   * hook to mutate the shared camera safely; renderers/vision workers read the
+   * frames flow through B's native `camera:<serial>` producer, not the JS loop,
+   * so this is just a hook to mutate the shared camera safely; renderers/vision
+   * workers read the
    * pipe and tolerate the transient.
    */
   reconfigure(mutate: () => void | Promise<void>): Promise<void>;
@@ -103,14 +102,13 @@ const shared = new Map<string, Shared>();
 // empties immediately) so `releaseAll` can await a close that started just
 // before it was called — otherwise it can return while a native handle is
 // still mid-release, and a renderer racing to open the same camera finds it
-// still claimed. See docs/history/refactor/orchestrator.md §12.1 C1.
+// still claimed.
 const closing = new Set<Promise<void>>();
 // Same pending closes keyed by serial: an activation that wants a serial whose
 // old handle is still mid-release must wait for that release to settle before
 // opening a NEW in-process handle — otherwise the fresh handle races the old
 // one's acquisition stop and every config write bounces off TLParamsLocked
-// with USB3Vision access-denied (rig 2026-07-08: manual-control exit →
-// next app's pixel-format restore failed on L/R).
+// with USB3Vision access-denied.
 const closingBySerial = new Map<string, Promise<void>>();
 
 /** Await any in-flight close of `serial`'s previous handle. */
@@ -121,13 +119,13 @@ async function awaitPendingClose(serial: string): Promise<void> {
 
 // Free the native camera handle (releasing the per-process device claim).
 // Idempotent — safe if a lingering lease also releases later. No JS preview loop
-// to stop anymore (C-22b step 3): camera frames flow through B's native
+// to stop: camera frames flow through B's native
 // producer, torn down here via `retireCameraPipe`.
 function closeShared(s: Shared): Promise<void> {
   if (s.closed) return Promise.resolve();
   s.closed = true;
   shared.delete(s.serial);
-  // real-1c: detach B's native producer + un-advertise the pipe (renderer
+  // Detach B's native producer + un-advertise the pipe (renderer
   // consumers see CLOSED and disconnect).
   if (s.pipeId && pipeSeam) {
     retireCameraPipe(pipeSeam, s.pipeId);
@@ -136,7 +134,7 @@ function closeShared(s: Shared): Promise<void> {
   const p = Promise.resolve(s.camera.release());
   // Track until settled: `s` is already out of `shared` by the time this
   // resolves, so a `releaseAll` call that lands *after* this starts but
-  // *before* it finishes would otherwise miss it entirely (see C1).
+  // *before* it finishes would otherwise miss it entirely.
   closing.add(p);
   closingBySerial.set(s.serial, p);
   p.finally(() => {
@@ -161,11 +159,10 @@ export async function releaseAll(): Promise<void> {
 
 /**
  * Retry `attempt` with backoff until it returns a truthy result or the bounded
- * window elapses. Absorbs the renderer→orchestrator camera handoff race
- * (docs/history/refactor/orchestrator.md RT1): a camera mid-release by the *other*
- * process briefly fails `arv_camera_new` even though it becomes available
- * again within a few seconds (Aravis/Camera exclusivity is per OS process —
- * see the hard rules in the refactor doc). At session activation, "not
+ * window elapses. Absorbs the renderer→orchestrator camera handoff race: a
+ * camera mid-release by the *other* process briefly fails `arv_camera_new`
+ * even though it becomes available again within a few seconds (Aravis/Camera
+ * exclusivity is per OS process). At session activation, "not
  * available yet" and "not connected" are indistinguishable without waiting,
  * so every camera-owning activation should go through this instead of a
  * single `acquire()` attempt.
@@ -198,12 +195,12 @@ async function registerShared(camera: Camera): Promise<Shared> {
   await timeSpan("camera.applyStoredConfig", () => applyStoredConfig(camera), {
     serial: camera.serial,
   });
-  // Unified time (FINAL ruling 0): clock calibration is owned by the native
-  // hardware-owner THREAD (initial at device init + incremental drift) — the
-  // former JS latch auto-run here is GONE: two latch drivers interleaving
-  // corrupt each other's TimestampLatchValue reads, and the native mutex
-  // cannot see a JS-driven executeFeature sequence. The JS registry fills
-  // from the owner's pushed metrics (onClockMetrics callback slot).
+  // Unified time: clock calibration is owned by the native hardware-owner
+  // THREAD (initial at device init + incremental drift) — NO JS latch driver
+  // runs here: two latch drivers interleaving corrupt each other's
+  // TimestampLatchValue reads, and the native mutex cannot see a JS-driven
+  // executeFeature sequence. The JS registry fills from the owner's pushed
+  // metrics (onClockMetrics callback slot).
   const s: Shared = {
     serial: camera.serial,
     camera,
@@ -211,8 +208,8 @@ async function registerShared(camera: Camera): Promise<Shared> {
     closed: false,
   };
   shared.set(camera.serial, s);
-  // real-1c: advertise the `camera:<serial>` RGBA8 pipe + attach B's native
-  // `CaptureSink` (produce-while-leased, ruling Q2). Skipped when the seam
+  // Advertise the `camera:<serial>` RGBA8 pipe + attach B's native
+  // `CaptureSink` (produce-while-leased). Skipped when the seam
   // isn't wired (vitest / view-tap-only) — the JS vision path still works.
   if (pipeSeam) s.pipeId = advertiseCameraPipe(pipeSeam, camera);
   return s;
@@ -225,7 +222,7 @@ async function registerShared(camera: Camera): Promise<Shared> {
 export async function acquire(serial: string): Promise<CameraLease | null> {
   let s = shared.get(serial);
   if (!s) {
-    // Disposable-orchestrator gate (ruling 2): defer opening the exclusive
+    // Disposable-orchestrator gate: defer opening the exclusive
     // device until main confirms the previous hardware instance released it.
     // No-op once cleared / while the gate is disarmed (unit tests).
     await awaitHardwareClear();
@@ -245,7 +242,7 @@ export async function acquire(serial: string): Promise<CameraLease | null> {
       return s!.camera;
     },
     async reconfigure(mutate) {
-      // No JS preview loop to pause anymore (C-22b step 3) — mutate the shared
+      // No JS preview loop to pause — mutate the shared
       // handle directly; B's native producer + pipe consumers ride the change.
       await mutate();
     },
@@ -261,7 +258,7 @@ export async function acquire(serial: string): Promise<CameraLease | null> {
 
 /**
  * Lease every serial in `serials` that's connected, in at most one discovery
- * pass total (RT1 F3) — vs. calling `acquire()` per serial, which pays its
+ * pass total — vs. calling `acquire()` per serial, which pays its
  * own `Camera.list()` for every not-yet-shared serial (up to N discovery+open
  * passes for N cameras). Used by activations that know in advance exactly
  * which cameras they want (e.g. a calibrated L/C/R triple). A serial with no
@@ -271,7 +268,7 @@ export async function acquireMany(
   serials: string[],
 ): Promise<Map<string, CameraLease>> {
   if (serials.some((serial) => !shared.has(serial))) {
-    // Disposable-orchestrator gate (ruling 2) — see `acquire`.
+    // Disposable-orchestrator gate — see `acquire`.
     await awaitHardwareClear();
     // Let any mid-release previous handles settle before reopening (see
     // `closingBySerial`) — an in-process reopen doesn't fail like a
@@ -303,14 +300,13 @@ export async function acquireMany(
 
 /**
  * One pass: read every connected camera's stored role *without opening it*
- * (`cameraConfigPath` only needs vendor/model/serial — RT1 F3), lease only
+ * (`cameraConfigPath` only needs vendor/model/serial), lease only
  * the L/C/R matches in one bulk discovery call (`acquireMany`), drop the
  * rest. Returns null (releasing any partial match) unless all three roles
- * are covered. Shared by every session that needs the calibrated triple
- * (originally `tracking-single`'s `tryMatchTriple`) — wrap with
- * `retryUntil(matchTriple)` at the call site, since a camera still
+ * are covered. Shared by every session that needs the calibrated triple —
+ * wrap with `retryUntil(matchTriple)` at the call site, since a camera still
  * mid-release by another process is simply absent from `listCameraInfo()`
- * for a beat, not present-but-failing (RT1).
+ * for a beat, not present-but-failing.
  */
 export async function matchTriple(): Promise<Record<Role, CameraLease> | null> {
   const roleOf = new Map<string, Role>();

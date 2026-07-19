@@ -222,7 +222,7 @@ describe("decodeSet (enabled-set worker protocol shape)", () => {
     expect(decodeSet(["left-cam", "right-cam"], modes)).toEqual(["left-cam", "right-cam"]);
   });
 
-  // Ruling 4 amendment (user 2026-07-09): 3D mode is GLOBAL — one mode applies
+  // 3D mode is GLOBAL — one mode applies
   // to EVERY pair. The pairModeOf map the UI feeds decodeSet is built by
   // stamping the single mode onto all pairs; the hidden-side skip then derives
   // from that one mode uniformly.
@@ -288,7 +288,7 @@ describe("moveBlock / dropCollides", () => {
   });
 });
 
-// ---- stored-layout reconciliation (ruling 10) -----------------------------
+// ---- stored-layout reconciliation -----------------------------
 
 describe("reconcileLayout / layoutMismatch", () => {
   it("flags a mismatch when channels differ from the container", () => {
@@ -302,7 +302,7 @@ describe("reconcileLayout / layoutMismatch", () => {
   });
 });
 
-// ---- playhead ⟷ time mapping (UI round 2 ruling 1) ------------------------
+// ---- playhead ⟷ time mapping ------------------------
 
 describe("nsAtClientX", () => {
   // A 200px-wide track area at left=100 over a 10 s (10e9 ns) recording.
@@ -327,7 +327,7 @@ describe("nsAtClientX", () => {
   });
 });
 
-// ---- touch-up wave: firstMeaningfulNs (ruling 1) --------------------------
+// ---- firstMeaningfulNs --------------------------
 
 describe("firstMeaningfulNs", () => {
   it("returns the earliest block start", () => {
@@ -338,7 +338,7 @@ describe("firstMeaningfulNs", () => {
   });
 });
 
-// ---- touch-up wave: insertBlockAt (ruling 8) ------------------------------
+// ---- insertBlockAt ------------------------------
 
 describe("insertBlockAt", () => {
   const blocks = [b("a", 0, 100), b("b", 0, 100), b("c", 200, 300)];
@@ -368,7 +368,7 @@ describe("insertBlockAt", () => {
   });
 });
 
-// ---- touch-up wave: trackRole / trackColor (ruling 4) ---------------------
+// ---- trackRole / trackColor ---------------------
 
 describe("trackRole", () => {
   it("reads L/R from sideOf and C from wide designations", () => {
@@ -406,7 +406,7 @@ describe("trackColor", () => {
   });
 });
 
-// ---- touch-up wave: composeTileSlots (ruling 2) ---------------------------
+// ---- composeTileSlots ---------------------------
 
 describe("composeTileSlots", () => {
   const pairs = detectPairs(["left-cam", "right-cam"]);
@@ -469,7 +469,7 @@ describe("composeTileSlots", () => {
   });
 });
 
-// ---- touch-up wave: reconcileTileOrder (ruling 2) -------------------------
+// ---- reconcileTileOrder -------------------------
 
 describe("reconcileTileOrder", () => {
   it("is identity when order already covers the tracks", () => {

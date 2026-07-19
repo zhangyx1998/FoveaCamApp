@@ -4,8 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Shared per-window boot glue for the multi-entry renderer build
-// (docs/history/refactor/multi-window.md req. 2). Each entry HTML's script calls
+// Shared per-window boot glue for the multi-entry renderer build. Each entry HTML's script calls
 // `bootWindow()` with its root component — global listeners that every
 // window class wants live here, once, instead of per-entry copies.
 

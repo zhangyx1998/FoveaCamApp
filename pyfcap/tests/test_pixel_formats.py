@@ -3,7 +3,7 @@
 # This source code is licensed under the MIT license.
 # You may find the full license in project root directory.
 # -------------------------------------------------------
-"""Coverage for the generated pixel-format registry mirror (B-P1/B-11):
+"""Coverage for the generated pixel-format registry mirror:
 ``pyfcap/src/fcap/pixel_formats.py`` is generated from
 ``docs/schema/pixel-formats.ts`` and is the single source `dtypes.py` reads.
 These tests lock its internal consistency (so generator drift or a hand-edit is

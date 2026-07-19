@@ -6,8 +6,7 @@
 #pragma once
 
 // A commanded per-eye mirror pose in FINAL volts — the payload of the
-// `compose.volt_out → controller.pos_in` native link
-// (native-compose-controller.md). Tag "volts".
+// `compose.volt_out → controller.pos_in` native link. Tag "volts".
 
 #include <pointer.h>
 

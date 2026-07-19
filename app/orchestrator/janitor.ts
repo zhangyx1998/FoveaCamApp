@@ -24,8 +24,8 @@ const warn = (msg: string, e: unknown): void =>
 async function disableMems(): Promise<void> {
   const { Device, Protocol } = await import("core/Controller");
   // Same match the controller session uses on connect: the contract's default
-  // vendor/product ids (a UI override is per-boot state that died with the
-  // orchestrator — the defaults are the persistent source of truth).
+  // vendor/product ids (a UI override is per-boot state unavailable to the
+  // janitor — the defaults are the persistent source of truth).
   const { vendorId, productId } = controller.state;
   const ports = await SerialPort.list();
   const info = ports.find(
@@ -103,7 +103,7 @@ async function quiesceAll(): Promise<void> {
   // Release the native module's per-env contexts NOW, while statics are
   // alive — leaving it to process.exit teardown runs the same hooks after
   // static mutex destruction and spams "[Cleanup] … mutex lock failed:
-  // Invalid argument" (harmless but reads like a crash; rig 2026-07-08).
+  // Invalid argument" (harmless but reads like a crash).
   try {
     const { cleanup } = await import("core");
     cleanup();
@@ -131,7 +131,7 @@ function pidAlive(pid: number): boolean {
 
 interface WatchdogState {
   mainPid: number;
-  /** Live orchestrator instance pids (disposable model, ruling 5: 0..N alive).
+  /** Live orchestrator instance pids (disposable model: 0..N alive).
    *  `orchestratorPid` is the legacy single-pid field, still read for
    *  backward-compat with a state file written by an older main. */
   orchestratorPids?: number[];
@@ -209,8 +209,8 @@ async function runWatchdog(): Promise<void> {
 }
 
 void (async () => {
-  // Teardown-hardening (Task 3): trace a native crash in the janitor itself —
-  // the last line of hardware-quiescence defense — before it dies.
+  // Trace a native crash in the janitor itself — the last line of
+  // hardware-quiescence defense — before it dies.
   (await import("core")).installCrashHandler();
   if (process.env.FOVEA_JANITOR_MODE === "watchdog") {
     await runWatchdog();

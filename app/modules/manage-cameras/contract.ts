@@ -6,7 +6,7 @@
 //
 // Typed boundary for the manage-cameras session — a live property snapshot per
 // camera (`telemetry.views`, keyed by serial); edits + the pixel-format
-// reconfigure flow are commands. The L/R fovea-pair link (P5) rides telemetry
+// reconfigure flow are commands. The L/R fovea-pair link rides telemetry
 // as `pair` with its own paired write commands.
 
 import { cmd, defineContract } from "@lib/orchestrator/protocol";
@@ -45,7 +45,7 @@ export type CameraView = {
   black_level_range: Range;
 };
 
-// Drift guard (A-P11): the control half of `CameraView` must be structurally
+// Drift guard: the control half of `CameraView` must be structurally
 // identical to the schema-owned `CameraControlsView` in @lib/camera-config —
 // `readControlFields` is typed to produce that, and `readView` spreads it into
 // a `CameraView`. If either side gains/loses/retypes a control field, one of
@@ -56,8 +56,8 @@ type _BA = ControlHalf extends CameraControlsView ? true : never;
 const _controlsConform: [_AB, _BA] = [true, true];
 void _controlsConform;
 
-/** Trigger budget derived from the pair's exposure config (`pairTriggerBudget`,
- *  P6) — the pair panel's readout row. Settle hold is NOT included here (it is
+/** Trigger budget derived from the pair's exposure config (`pairTriggerBudget`)
+ *  — the pair panel's readout row. Settle hold is NOT included here (it is
  *  per-triple and added by the tracking apps that drive the trigger). */
 export type PairBudgetView = {
   /** Trigger pulse width (µs, the wire unit — `FrameArg.pulse`). */
@@ -68,7 +68,7 @@ export type PairBudgetView = {
   exposureUsR: number;
 };
 
-/** Fovea Pair link (P5): present while exactly one camera holds role L and one
+/** Fovea Pair link: present while exactly one camera holds role L and one
  *  holds role R. Pair values persist into BOTH cameras' existing config docs
  *  (no new store doc — every other config reader stays untouched). */
 export type FoveaPairView = {
@@ -107,11 +107,11 @@ export const manageCameras = defineContract({
     list: [] as CameraInfo[],
     /** Per-camera live snapshot, keyed by serial. */
     views: {} as Record<string, CameraView>,
-    /** The L/R fovea-pair link, or null while unlinked (P5). */
+    /** The L/R fovea-pair link, or null while unlinked. */
     pair: null as FoveaPairView | null,
     /** Why the link is BLOCKED despite fovea roles being claimed (duplicate
      *  role claims), or null — an actionable hint; the pair panel silently
-     *  vanishing reads as a bug (UI/UX review #10). */
+     *  vanishing reads as a bug. */
     pair_blocked: null as string | null,
     /** Latest fovea-pair trigger self-test verdicts (§Trigger test), or null
      *  (never run this session / reset on idle). */

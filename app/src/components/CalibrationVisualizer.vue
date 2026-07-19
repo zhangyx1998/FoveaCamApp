@@ -4,8 +4,8 @@ This source code is licensed under the MIT license.
 You may find the full license in project root directory.
 --------------------------------------------------- -->
 <!--
-  Extrinsic-calibration visualizer (calibration-records-v2.md §Visualizer). A
-  VIRTUAL STREAM — no frame buffers: it draws, at the camera's aspect ratio,
+  Extrinsic-calibration visualizer. A VIRTUAL STREAM — no frame buffers: it
+  draws, at the camera's aspect ratio,
   every recorded datapoint's OBSERVED corner points (dots) against the
   INVERSE-PROJECTED corners the calibration solve expects (crosses), joined by a
   faint error segment so the reprojection residual reads at a glance. The
@@ -13,8 +13,8 @@ You may find the full license in project root directory.
   construction `findPinholeProjection` fits) — no camera math is reimplemented,
   and it stays core-free so this renders in any renderer window.
 
-  ONE component, TWO hosts (the ruled shared-renderer rule): the Settings
-  window's "Inspect" opens it in a panel (default), and a live calibrate-extrinsic
+  ONE component, TWO hosts: the Settings window's "Inspect" opens it in a panel
+  (default), and a live calibrate-extrinsic
   view mounts the SAME component with `overlay` (transparent background, no
   chrome) on top of its stream when the overlay toggle targets its camera.
 -->

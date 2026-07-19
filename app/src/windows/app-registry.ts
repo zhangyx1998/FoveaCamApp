@@ -6,8 +6,8 @@
 //
 // App id → module component loaders for the per-app window shell.
 // Dynamic imports keep each entry's initial chunk lean (renderer entries MAY
-// share chunks — V11 applies to preloads only). Playground is dev-gated the
-// same way App.vue gated it: under `import.meta.env.DEV ? … : {}` the
+// share chunks — only preloads must bundle standalone). Playground is dev-gated:
+// under `import.meta.env.DEV ? … : {}` the
 // production build constant-folds the branch away, so the playground module
 // (the last renderer code importing `core` directly) never reaches a
 // production bundle — the renderer stays zero-core.

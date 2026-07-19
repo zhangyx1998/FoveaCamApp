@@ -40,7 +40,7 @@ const FRAME = (
 const pathify = (name: string): string =>
   name.replace(/:/g, "/").replace(/\/+/g, "/").replace(/^\//, "");
 
-/** Brick kind from a path-like node id (C-24 scheme): the last non-numeric
+/** Brick kind from a path-like node id: the last non-numeric
  *  segment — `camera/123/convert` → "convert",
  *  `camera/123/undistort/fovea/2` → "fovea". */
 function kindOf(id: string): string {
@@ -67,8 +67,8 @@ function badge(row: WorkloadRow): NodeStats {
 }
 
 /**
- * STAGE-2 source selection (A-36): prefer the orchestrator-SERVED topology —
- * C-24's `graphTopology()` riding `PerfSnapshot.graph` (exact byte rates,
+ * STAGE-2 source selection: prefer the orchestrator-SERVED topology — the
+ * `graphTopology()` riding `PerfSnapshot.graph` (exact byte rates,
  * consumer sinks, session wirings) — and fall back to the Stage-1 derivation
  * below when absent (older orchestrator / graph builder not injected). The
  * fallback thunk is only evaluated on the fallback path.
@@ -113,7 +113,7 @@ export function deriveTopology(
     });
 
   // Structural pass: advertised pipes → bricks. Pipe ids ARE path-like node
-  // ids now (C-24 step 1, built via `nodeId`): `camera/<serial>/convert`,
+  // ids now (built via `nodeId`): `camera/<serial>/convert`,
   // `camera/<serial>/undistort`, `camera/<serial>/undistort/fovea/<slot>`.
   // Every `camera/<serial>/...` pipe gets its camera source node + the
   // PHYSICAL camera→brick edge (per the nodeId.fovea note: a fovea id nests
@@ -135,7 +135,7 @@ export function deriveTopology(
     }
   }
 
-  // Stats pass: fold every workload row onto the graph. C-24 step 1: meter
+  // Stats pass: fold every workload row onto the graph. Meter
   // names CONTAINING "/" are path-like node ids (B's pipe-backed meters use
   // the pipe id verbatim) — attach directly, or surface a standalone node when
   // no advert built one (e.g. a parked pipe's meter). Names with ":" are
@@ -161,9 +161,8 @@ export function deriveTopology(
 
     // Known standalone families — path-ified id, kind from the name's root.
     // `controller:<port>` / `recorder:<name>` / `viewer:<file>` → sinks;
-    // anything else → a generic metered node. (The legacy `tracking:kcf`
-    // mapping died with the tracking-single app — KCF meters are path-like
-    // now: camera/<serial>/kcf, /kcf-multi, /undistort/kcf, handled by the
+    // anything else → a generic metered node. (KCF meters are path-like:
+    // camera/<serial>/kcf, /kcf-multi, /undistort/kcf, handled by the
     // "/" branch above via kindOf.)
     const root = row.name.split(":")[0] || "workload";
     const kindMap: Record<string, { kind: string; output: StreamType | null }> = {
@@ -250,7 +249,7 @@ export interface HoverDetail {
 }
 
 /** Node hover card: full id (the label truncates to 2 segments) + the
- *  workload numbers that used to crowd the always-on label. */
+ *  full workload numbers kept out of the always-on label. */
 export function nodeDetail(node: GraphNode): HoverDetail {
   const rows: HoverDetail["rows"] = [["kind", node.kind]];
   const s = node.stats;
@@ -290,8 +289,7 @@ export function isDropping(e: GraphEdge): boolean {
 }
 
 /** Backpressure marker: a FIFO (lossless) edge whose consumer queue reached its
- *  capacity over the window — the FIFO actually blocked its producer
- *  (controller-node-and-fifo-edges §2). */
+ *  capacity over the window — the FIFO actually blocked its producer. */
 export function isBackpressured(e: GraphEdge): boolean {
   return !!e.queue && e.queue.highWater >= e.queue.capacity;
 }
@@ -335,8 +333,8 @@ export function edgeDetail(e: GraphEdge): HoverDetail {
   if (tx?.maxIntervalMs) gaps.push(`↑ ${tx.maxIntervalMs.toFixed(0)} ms`);
   if (rx?.maxIntervalMs) gaps.push(`↓ ${rx.maxIntervalMs.toFixed(0)} ms`);
   if (gaps.length > 0) rows.push(["worst gap", gaps.join(" · ")]);
-  // FIFO (lossless) edges show the high-water mark IN PLACE OF the drops row
-  // (§2); drops and queue are mutually exclusive in practice (drops absent on
+  // FIFO (lossless) edges show the high-water mark IN PLACE OF the drops row;
+  // drops and queue are mutually exclusive in practice (drops absent on
   // non-lossy edges).
   if (e.queue) {
     const q = e.queue;
@@ -349,7 +347,7 @@ export function edgeDetail(e: GraphEdge): HoverDetail {
   return { title: `${e.from} → ${e.to}`, rows };
 }
 
-// --- Renderer consumer-sink collapse (user 2026-07-10) ----------------------
+// --- Renderer consumer-sink collapse ----------------------
 
 /** The single collapsed renderer node id (see `collapseConsumerSinks`). */
 export const RENDERER_ID = "renderer";
@@ -376,10 +374,10 @@ export function collapseConsumerSinks(t: GraphTopology): GraphTopology {
   return { ...t, nodes, edges };
 }
 
-// --- Idle derivation (user 2026-07-10) --------------------------------------
+// --- Idle derivation --------------------------------------
 
 /** IDLE = not running because nothing downstream DEMANDS the output — a
- *  consumer-gated producer parked by design (C-21 gate), an EXPECTED state that
+ *  consumer-gated producer parked by design, an EXPECTED state that
  *  renders desaturated + dimmed with an "idle" caption, NOT the red stalled
  *  accent. Positive no-demand evidence, propagated UPSTREAM over the topology:
  *   - a pipe node whose `pipe.consumers === 0` — zero SHM subscribers (the
@@ -429,7 +427,7 @@ export function deriveIdle(t: GraphTopology): IdleSet {
     if ((stats?.ratePerSec ?? 0) > 0 || (stats?.utilization ?? 0) > 0 || stats?.saturated) {
       // Demonstrably spinning (rate) OR burning CPU (util/saturated): a pegged
       // node that emits nothing is a STALL and must never paint as parked —
-      // the saturated red stays the loudest thing. Parked C-21 producers have
+      // the saturated red stays the loudest thing. Parked producers have
       // ~0 util, so util > 0 is a safe not-parked gate.
       idle = false;
     } else if (pipe && (pipe.consumers ?? 0) > 0) {
@@ -465,7 +463,7 @@ export function deriveIdle(t: GraphTopology): IdleSet {
   return { nodes, edges };
 }
 
-// --- Parallel-edge lanes (user 2026-07-10) ----------------------------------
+// --- Parallel-edge lanes ----------------------------------
 
 /** Lane index + count for SAME-DIRECTION parallel edges (identical `from`→`to`,
  *  distinct port). Bidirectional pairs (A→B / B→A) already separate via their
@@ -502,7 +500,7 @@ export function toElements(t0: GraphTopology): GraphElement[] {
       kind: n.kind,
       label: nodeLabel(n, t.roles),
       detail: nodeDetail(n),
-      // In-graph busy indicator (ruling 3): metered nodes carry their raw
+      // In-graph busy indicator: metered nodes carry their raw
       // utilization (0..1); the component draws the native SVG arc from it
       // (color-tiered by `saturated` + the util thresholds). Unmetered nodes
       // omit it, so the component skips the arc.
@@ -546,7 +544,7 @@ export function toElements(t0: GraphTopology): GraphElement[] {
   return els;
 }
 
-/** Hover DISTANCE (user 2026-07-10): BFS hop distance from the hovered element
+/** Hover DISTANCE: BFS hop distance from the hovered element
  *  over the INCIDENCE graph — a node is adjacent to its incident edges and an
  *  edge to its two endpoint nodes, so from a hovered node its edges are 1 and
  *  their far endpoints 2; from a hovered edge its endpoints are 1. Distance

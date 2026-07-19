@@ -14,8 +14,8 @@ import type { Point2d } from "core/Geometry";
 import type { ExtrinsicRecord, FinStats } from "./contract";
 
 /** Reshape captured records into the per-fovea dataset; `key` selects the eye.
- *  The measured-magnification inputs come off the center record (side_pts ruling
- *  3, center quad ruling 2 fallback, marker sizes) — all optional, degrading to
+ *  The measured-magnification inputs come off the center record (side_pts,
+ *  center quad fallback, marker sizes) — all optional, degrading to
  *  "no measured magnification" when absent (spec §capture-measurements). */
 export function createDataSet(
   records: ExtrinsicRecord[],
@@ -33,7 +33,7 @@ export function createDataSet(
 }
 
 /** Minimum samples for a trustworthy fit — the SAME threshold
- *  `fitExtrinsicRegression` gates on (review #14: below this the SVD returns
+ *  `fitExtrinsicRegression` gates on (below this the SVD returns
  *  a silently-plausible minimum-norm solution). `finalize` hard-gates here. */
 export const MIN_FIT_SAMPLES = 10;
 
@@ -41,7 +41,7 @@ export const MIN_FIT_SAMPLES = 10;
 export type A2VPredict = { predict(angle: Point2d): Point2d };
 
 /**
- * Per-record fit RESIDUALS (review #14, session-computable half): for every
+ * Per-record fit RESIDUALS: for every
  * captured record, predict each eye's voltage from the FITTED conversions at
  * the record's measured center angle and compare against the RECORDED voltage
  * — the volt-space distance each sample disagrees with the fit it produced.

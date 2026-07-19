@@ -51,7 +51,7 @@ function validate(cal?: Partial<CameraCalibration>): cal is CameraCalibration {
   );
 }
 
-// Exported for calibrate-intrinsic's session (§7.1 S1b) — it needs the same
+// Exported for calibrate-intrinsic's session — it needs the same
 // "read + validate + build Undistort" logic to show a camera's FOV/date in
 // its picker list, without duplicating the validation rules. Parameter
 // widened to the same `Pick` `cameraConfigPath`/`getCameraKey` already use —
@@ -61,8 +61,8 @@ export async function loadIntrinsic(
 ): Promise<{ undistort: Undistort | null; date: Date | null; rms: number | null }> {
   const cal = await loadIntrinsicCalibration(getCameraKey(camera));
   const date = cal.date instanceof Date ? cal.date : null;
-  // Additive (proposal item 5): absent on calibrations solved before the core
-  // returned it, so degrade to null rather than 0 (which would read as "perfect").
+  // Additive: absent on calibrations solved before the core returned it, so
+  // degrade to null rather than 0 (which would read as "perfect").
   const rms = typeof cal.rms === "number" ? cal.rms : null;
   try {
     if (validate(cal)) return { undistort: new Undistort(cal), date, rms };
@@ -98,9 +98,9 @@ async function loadIntrinsicCalibration(
   return read<Partial<CameraCalibration>>(["calibrate-intrinsic", cameraKey], {});
 }
 
-/** Minimum extrinsic poses for the cubic fit (calibration-review-2026-07-11
- *  #14): the per-axis cubic design matrix has 10 terms, so fewer than 10
- *  samples is underdetermined — the SVD returns a minimum-norm solution that
+/** Minimum extrinsic poses for the cubic fit: the per-axis cubic design matrix
+ *  has 10 terms, so fewer than 10 samples is underdetermined — the SVD returns
+ *  a minimum-norm solution that
  *  LOOKS plausible while steering garbage. Shared threshold: the extrinsic
  *  wizard gates its FIN step on the same constant. */
 export const MIN_EXTRINSIC_SAMPLES = 10;
@@ -111,7 +111,7 @@ export class ExtrinsicFitError extends Error {
   override readonly name = "ExtrinsicFitError";
 }
 
-// Exported for calibrate-extrinsic's session (§7.1 S1b) — its FIN wizard
+// Exported for calibrate-extrinsic's session — its FIN wizard
 // step fits a live preview regression from the *in-progress* (not yet
 // persisted) dataset, same math as loading a saved one.
 export async function fitExtrinsicRegression(
@@ -135,9 +135,8 @@ export async function fitExtrinsicRegression(
   const V2A = new Regression<Point2d, Point2d>(keys, keys, config);
   const A2V = new Regression<Point2d, Point2d>(keys, keys, config);
   // `magnification`/`magnification_std` = the measured fovea↔wide optical ratio
-  // (ruled 2026-07-09: the distance-and-size-free marker-quad ratio, replacing
-  // the retired `scale·1000/focal` formula). `scale`/`scale_std` stay for
-  // diagnostics/continuity but no longer feed the magnification.
+  // (the distance-and-size-free marker-quad ratio). `scale`/`scale_std` stay
+  // for diagnostics/continuity but no longer feed the magnification.
   const { A2H, scale, scale_std, magnification, magnification_std } =
     await findPinholeProjection(ds);
   return {
@@ -180,7 +179,7 @@ async function loadExtrinsic(
   return fitExtrinsicRegression(await loadExtrinsicDataset(camera));
 }
 
-// Exported for calibrate-drift's session (§7.1 S1b) — it reads/writes
+// Exported for calibrate-drift's session — it reads/writes
 // `drift_l`/`drift_r` on this same document directly (via store-hub, for the
 // caching/broadcast behavior), so it needs the path without re-deriving the
 // hash independently.
@@ -223,8 +222,8 @@ export type CalibratedTriple = {
   leases: Record<Role, CameraLease>;
   conv: CoordinateConversions;
   undistort: Undistort | null;
-  /** Calibration-MEASURED fovea↔wide magnification per eye (the ruled
-   *  marker-quad ratio from the extrinsic fit — `fitMagnification`), or null
+  /** Calibration-MEASURED fovea↔wide magnification per eye (the marker-quad
+   *  ratio from the extrinsic fit — `fitMagnification`), or null
    *  when the extrinsic dataset doesn't support the measurement (legacy fit
    *  with no wide-camera marker quads). Consumers needing a single optical
    *  zoom (e.g. disparity-scope's template match) use this in Auto (zoom 0)
@@ -232,7 +231,7 @@ export type CalibratedTriple = {
   magnification: { L: number | null; R: number | null };
   /** The per-triple zoom override (>0), else null — the rig's stored optical
    *  fovea↔wide zoom. Feeds disparity-scope's match magnification under the
-   *  ruled order knob > override > measured > 1 (see
+   *  order knob > override > measured > 1 (see
    *  `vergence.matchMagnification`); null = no override stored. */
   zoomOverride: number | null;
   /** The per-triple baseline (mm, >0), else null — resolved against the legacy
@@ -258,27 +257,27 @@ export type CalibratedTriple = {
 };
 
 /**
- * Lease the calibrated L/C/R triple through the registry (bounded retry —
- * RT1) and load its conversions, in the shape every camera-owning control
- * loop needs. Shared by `tracking-single` and `manual-control` sessions so
- * this ~15-line dance (and its RT1 retry behavior) lives in exactly one
+ * Lease the calibrated L/C/R triple through the registry (bounded retry) and
+ * load its conversions, in the shape every camera-owning control loop needs.
+ * Shared by `tracking-single` and `manual-control` sessions so this ~15-line
+ * dance (and its retry behavior) lives in exactly one
  * place. Returns null if no complete triple could be leased within the
  * retry window — caller is responsible for publishing `ready: false`.
  */
 export async function leaseCalibratedTriple(): Promise<CalibratedTriple | null> {
   const leases = await timeSpan("calibration.matchTriple", () => retryUntil(matchTriple));
   if (!leases) return null;
-  // Release-on-throw (calibration-review-2026-07-11 #2): anything after the
-  // acquire can throw — and a fresh/uncalibrated rig ALWAYS throws in
-  // `loadConversions` (no extrinsic data). Without the unwind all three leases
-  // leaked until force-release/restart, wedging every camera-owning module.
-  // The throw still propagates (the caller's `s.fail` keeps its error surface).
+  // Release-on-throw: anything after the acquire can throw — and a
+  // fresh/uncalibrated rig ALWAYS throws in `loadConversions` (no extrinsic
+  // data). Without the unwind all three leases leak until force-release/
+  // restart, wedging every camera-owning module. The throw still propagates
+  // (the caller's `s.fail` keeps its error surface).
   try {
     const inputs = await loadConversions(leases.L.camera, leases.C.camera, leases.R.camera);
     const configPath = await tripleConfigPath(leases.L.camera, leases.C.camera, leases.R.camera);
     // Accept a stored per-triple override/baseline only when it is a finite
     // positive number (0 / NaN / negative ⇒ unset ⇒ null → the consumer falls
-    // back per the ruled resolution order).
+    // back per the resolution order).
     const posFinite = (v: unknown): number | null =>
       typeof v === "number" && Number.isFinite(v) && v > 0 ? v : null;
     return {

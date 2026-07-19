@@ -4,21 +4,22 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Guard for the destroyed-mutex TEARDOWN race (core/lib/Stream/Stream.h), the
-// 2026-07-09 exit-6 abort ("mutex lock failed: Invalid argument" during a
-// SIGTERM'd orchestrator teardown).
+// Guard for the destroyed-mutex TEARDOWN race (core/lib/Stream/Stream.h):
+// "mutex lock failed: Invalid argument" (exit 6) during a SIGTERM'd
+// orchestrator teardown.
 //
 //   Subscriber::close(unsubscribe=true) captures a raw Stream* under its state
-//   guard, RELEASES the guard, then locks stream->mutex in unsubscribe(). On a
-//   clean shutdown the base historically left subscribers' back-pointers intact,
-//   so if the owning brick's ~Stream freed that mutex in the gap, the close()
-//   locked a DESTROYED std::mutex — macOS libc++ reports EINVAL -> system_error
-//   -> thrown from the noexcept ~Subscriber -> std::terminate (exit 6).
+//   guard, RELEASES the guard, then locks stream->mutex in unsubscribe(). If a
+//   clean shutdown leaves subscribers' back-pointers intact and the owning
+//   brick's ~Stream frees that mutex in the gap, close() locks a DESTROYED
+//   std::mutex — macOS libc++ reports EINVAL -> system_error -> thrown from the
+//   noexcept ~Subscriber -> std::terminate (exit 6).
 //
-// The fix (Stream::shutdown -> eject_all_and_drain + the closes_in_flight_
-// gate): before ~Stream frees the mutex, every remaining subscriber's back-
-// pointer is nulled and any close() already in flight toward unsubscribe() is
-// drained. A later close() sees a dead stream and skips unsubscribe entirely.
+// Ordering invariant (Stream::shutdown -> eject_all_and_drain + the
+// closes_in_flight_ gate): before ~Stream frees the mutex, every remaining
+// subscriber's back-pointer is nulled and any close() already in flight toward
+// unsubscribe() is drained. A later close() sees a dead stream and skips
+// unsubscribe entirely.
 //
 // This is HARDWARE-FREE by design: it drives the native `__streamTeardownRace-
 // SelfTest`, which churns Stream destruction against concurrent Subscriber

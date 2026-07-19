@@ -112,7 +112,7 @@ export default function manualControlSession(
 
     // --- center-tile native view pipes (spec §views) ---------------------
     // Created at activate over the L/R undistorted sources; parked until the
-    // renderer connects the selected pipe (C-21 consumer gate). The COMPOSITE
+    // renderer connects the selected pipe (consumer gate). The COMPOSITE
     // brick backs disparity/anaglyph (mode retuned from `state.view`), the
     // STEREO SGBM + heatmap back the sgbm view.
     let stereo: StereoHandle | null = null;
@@ -253,7 +253,7 @@ export default function manualControlSession(
       }
     }
 
-    // --- capture (docs/history/refactor/orchestrator.md roadmap item 6) ----------
+    // --- capture ----------------------------------------------------------------
 
     // The center pipe the vision worker consumes — capture's one-shot read rides
     // it; stays connected the whole active span so the producer is live.
@@ -320,8 +320,8 @@ export default function manualControlSession(
       getTriple: () => triple,
       volts: () => volts,
       rawPipes,
-      // Connect a raw pipe for the recorder node (refcount++ → C-21 gate);
-      // inject the JS-side significantBits the native spec drops (ruling 8).
+      // Connect a raw pipe for the recorder node (refcount++ → gate);
+      // inject the JS-side significantBits the native spec drops.
       connect: (pipeId) => {
         const handle = broker.connect(pipeId);
         const injected = rawPipes.specOf(pipeId);
@@ -350,7 +350,7 @@ export default function manualControlSession(
     // hardware-trigger both foveas, then round-robin CMD_FRAME on the MCU
     // position stream. Manual-control has NO match-join, so the pairing/
     // staleness parts of disparity-scope's machine are dropped — free-run stays
-    // byte-identical while disengaged. RIG-GATED (no hardware on this box).
+    // byte-identical while disengaged.
 
     let triggerEngaged = false;
     /** False from idle start until the next activate: the retry tick keeps
@@ -559,10 +559,9 @@ export default function manualControlSession(
     // --- lifecycle -------------------------------------------------------
 
     function initParams(): Record<string, unknown> {
-      // The display worker only serves the `sliced` center now (legacy
-      // diff/depth kernel views retired — disparity/anaglyph/sgbm are native
-      // pipes; spec §views). No `view`/depth params: the kernel defaults to
-      // sliced and stays there.
+      // The display worker only serves the `sliced` center; disparity/anaglyph/
+      // sgbm are native pipes (spec §views). No `view`/depth params: the kernel
+      // defaults to sliced and stays there.
       return {
         kind: "display",
         zoom: Math.max(1, s.state.zoom),
@@ -571,7 +570,7 @@ export default function manualControlSession(
       };
     }
 
-    /** Connect a pipe by id (refcount++ → C-21 gate) → worker input. */
+    /** Connect a pipe by id (refcount++ → gate) → worker input. */
     function connectPipe(role: "L" | "C" | "R", pipeId: string, ids: string[]): PipeInput {
       const handle = broker.connect(pipeId);
       ids.push(pipeId);
@@ -657,7 +656,7 @@ export default function manualControlSession(
 
       // STEREO SGBM + HEATMAP + COMPOSITE bricks (spec §views): the center
       // tile's disparity/anaglyph/sgbm options, parked until the renderer
-      // connects the selected pipe (C-21 consumer gate). Node ids under a
+      // connects the selected pipe (consumer gate). Node ids under a
       // "manual"/"manual-composite" scope. Dims from the L camera.
       const camL = t.leases.L.camera;
       const stereoDims = {

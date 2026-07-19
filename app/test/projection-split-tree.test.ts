@@ -1,6 +1,6 @@
-// Projection split-tree reducer (docs/proposals/projection-split-view.md
-// deliverable 2): insert/remove/resize/move/swap + serialize round-trip, with
-// the split invariants (>=2 children, normalized ratios, same-dir flattening).
+// Projection split-tree reducer: insert/remove/resize/move/swap + serialize
+// round-trip, with the split invariants (>=2 children, normalized ratios,
+// same-dir flattening).
 
 import { describe, expect, it } from "vitest";
 import type { Pane } from "@lib/projection/descriptor";

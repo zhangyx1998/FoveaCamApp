@@ -4,8 +4,8 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Firmware-in-the-loop coverage for the right-fovea DAC-freeze mitigations
-// (docs/dev/right-dac-freeze-2026-07-12.md), driving the REAL firmware TUs via
+// Firmware-in-the-loop coverage for the right-fovea DAC-freeze mitigations,
+// driving the REAL firmware TUs via
 // the fovea-fw-sim harness (test/build/fovea-fw-sim; build with
 // `cd test && make build`). Companion to 47-firmware-sim.ts, same DAC-word
 // capture + control plane. Proves:

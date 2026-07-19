@@ -4,24 +4,22 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Shared types for the MCAP recorder (docs/history/refactor/recorder-container.md
-// §2 decision + §3): the orchestrator-side writer facade, the channel→writer
-// topology seam, and the main↔worker message protocol. Vue-free and
-// core-free — `writer.ts`/the worker never touch `core`; all Mat/PixelFormat
-// handling stays in `index.ts` (the sink layer), so the worker host code
-// stays a pure bytes-in/bytes-out pipeline (Mat/PixelFormat lives in the sink).
+// Shared types for the MCAP recorder: the orchestrator-side writer facade, the
+// channel→writer topology seam, and the main↔worker message protocol. Vue-free
+// and core-free — `writer.ts`/the worker never touch `core`; all Mat/PixelFormat
+// handling stays in `index.ts` (the sink layer), so the worker host code stays a
+// pure bytes-in/bytes-out pipeline.
 
 import { FOVEA_EXTENSION } from "./schema.js";
 
 export { FOVEA_EXTENSION, TELEMETRY_TOPIC } from "./schema.js";
 
 /**
- * Channel→writer mapping seam (recorder-container.md §2 follow-up 1).
- * Today exactly one implementation exists — `singleFileTopology`, everything
- * into one file — but the sink resolves every stream through this interface,
- * so full-res sharding (N writer workers / N files per recording) becomes a
- * new topology implementation, additive, with no sink/worker API change.
- * Deliberately NOT implemented this round — user decision pending.
+ * Channel→writer mapping seam. Today exactly one implementation exists —
+ * `singleFileTopology`, everything into one file — but the sink resolves every
+ * stream through this interface, so full-res sharding (N writer workers / N
+ * files per recording) becomes a new topology implementation, additive, with no
+ * sink/worker API change.
  */
 export interface RecorderTopology {
   /** Stable writer key hosting a given stream/channel name. */
@@ -29,8 +27,7 @@ export interface RecorderTopology {
   /** File name (relative to the session directory) for a writer key. */
   fileNameFor(writerKey: string): string;
   /** Writer keys to eagerly create at session start (so the container file
-   *  exists from t0 even if no frame ever arrives — the legacy writer's
-   *  manifest-at-start behavior, ported). */
+   *  exists from t0 even if no frame ever arrives). */
   initialWriterKeys(): readonly string[];
 }
 
@@ -44,16 +41,15 @@ export function singleFileTopology(baseName: string): RecorderTopology {
   };
 }
 
-/** Per-stream counters exposed to recording telemetry — same shape the
- *  legacy path derived from `StreamWriter` (`frames`/`dropped`/`bytes` from
- *  `summary`, `fps` from its `FreqMeter`), plus the F2 drop-cause split
+/** Per-stream counters exposed to recording telemetry (`frames`/`dropped`/
+ *  `bytes`, `fps`), plus the drop-cause split
  *  (`droppedQueue + droppedRing == dropped`). */
 export interface StreamStats {
   frames: number;
   dropped: number;
-  /** F2: drops caused by writer/encode backpressure (queue full). */
+  /** Drops caused by writer/encode backpressure (queue full). */
   droppedQueue: number;
-  /** F2: drops caused by the ring lapping the read loop (source faster). */
+  /** Drops caused by the ring lapping the read loop (source faster). */
   droppedRing: number;
   bytes: number;
   fps: number;
@@ -67,23 +63,22 @@ export interface FinalizeStats {
   chunkCount: number;
   /** Bytes written to the container file. */
   bytes: number;
-  /** Finalize did NOT complete cleanly (value-sweep-2026-07-11 finding
-   *  `recording-finalize-truncation-reads-as-success`): the writer wedged past
-   *  the deadline or the native finalize threw, so `abort()` left a crash-shape
-   *  container on disk. Absent/false = a clean finalize. The recording service
-   *  reads this to surface a banner and SKIP the viewer auto-open (a truncated
-   *  container reads as a normal stop otherwise). */
+  /** Finalize did NOT complete cleanly: the writer wedged past the deadline or
+   *  the native finalize threw, so `abort()` left a crash-shape container on
+   *  disk. Absent/false = a clean finalize. The recording service reads this to
+   *  surface a banner and SKIP the viewer auto-open (a truncated container reads
+   *  as a normal stop otherwise). */
   truncated?: boolean;
 }
 
 // ---- main-thread → worker protocol -------------------------------------
 
 /**
- * Bench-only (B-P4) MCAP chunk-compression injection. Production NEVER sets
- * this — the recorder default is uncompressed, because B-4 measured that
- * compressing on the single (non-reentrant) writer chain makes the throughput
- * bottleneck worse. The worker lazy-`require()`s `moduleEntry` ONLY when this
- * field is present, so a production build ships no compressor dependency.
+ * Bench-only MCAP chunk-compression injection. Production NEVER sets this — the
+ * recorder default is uncompressed, because compressing on the single
+ * (non-reentrant) writer chain makes the throughput bottleneck worse. The worker
+ * lazy-`require()`s `moduleEntry` ONLY when this field is present, so a
+ * production build ships no compressor dependency.
  */
 export interface CompressionInjection {
   /** MCAP chunk `compression` field written into the file (e.g. "lz4", "zstd"). */
@@ -104,13 +99,13 @@ export type RecorderWorkerIn =
       /** McapWriter `chunkSize`. A chunk finalizes (and flushes to disk)
        *  after the first message that pushes it past this threshold, so any
        *  raw frame larger than this gets its own chunk — the "chunk ≈ 1 raw
-       *  frame" crash-loss-window default from the B-4 bench. */
+       *  frame" crash-loss-window default. */
       chunkBytes: number;
       library: string;
       /** Session-level metadata record (ISO timestamp etc.). */
       session?: Record<string, string>;
       /** Bench-only chunk compression (see `CompressionInjection`). Undefined
-       *  in production → uncompressed, today's behavior. */
+       *  in production → uncompressed. */
       compression?: CompressionInjection;
     }
   | {
@@ -142,7 +137,7 @@ export type RecorderWorkerIn =
       type: "finalize";
       id: number;
       /** Optional closing metadata record (e.g. durationSec) written before
-       *  `end()` — the new home of the legacy manifest's `duration`. */
+       *  `end()`. */
       session?: Record<string, string>;
     };
 

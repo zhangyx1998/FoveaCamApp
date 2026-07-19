@@ -1,4 +1,4 @@
-// Coverage for the `WINDOWS` taxonomy table (A-P8) — the single source the
+// Coverage for the `WINDOWS` taxonomy table — the single source the
 // launcher, window manager, options adapter, manifest planner, and vite entry
 // build all derive from. These assertions pin the invariants a new window
 // class must satisfy so it can't silently miss one across those consumers.
@@ -65,7 +65,7 @@ describe("WINDOWS taxonomy table", () => {
       expect(spec.sandbox).toBe(cls === "profiler");
       expect(spec.preload === "profiler").toBe(spec.sandbox);
       // The viewer is the only standalone class (its preload spawns the
-      // in-window playback worker — standalone-viewer-and-fcap ruling 1);
+      // in-window playback worker);
       // every other unsandboxed class loads the shm-reader preload.
       expect(spec.preload === "viewer").toBe(cls === "viewer");
     }

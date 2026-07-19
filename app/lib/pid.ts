@@ -6,19 +6,16 @@
 
 // `clamp` comes from `./util/math` (Vue-free, no imports at all) rather than
 // `./util` — that module pulls in `vue` (several of its other exports use
-// `ref`/`computed`), and this file must stay Vue-free: the orchestrator's
-// disparity-scope session (docs/history/refactor/orchestrator.md §7.1 S1a) was the
-// first orchestrator-side `@lib/pid` consumer, and pulling `vue` into the
-// orchestrator bundle from here broke the "Vue-free orchestrator" hard rule
-// (§3) — a ~1.3 MB bundle-size jump caught it.
+// `ref`/`computed`), and this file must stay Vue-free: the orchestrator
+// consumes `@lib/pid`, and it must not pull `vue` into the orchestrator
+// bundle ("Vue-free orchestrator" hard rule).
 import { clamp } from "./util/math.js";
 // Type-only (erased at compile) — keeps this module Vue-free AND core-runtime-
 // free (see the header note): `Point2d` is just `{ x, y }`, no addon pulled in.
 import type { Point2d } from "core/Geometry";
 
 /**
- * The ONE reusable, serializable PID parameter record (unified per the PID-node
- * directive, docs/proposals/pid-nodes-and-view-replumb.md §"PID node design").
+ * The ONE reusable, serializable PID parameter record.
  * Every controller — scalar {@link PID} and {@link PID2D} per-axis — is
  * parameterized by this shape, so a module declares gains/limits once and feeds
  * the same object to construction, {@link PID.setParams}, and any UI binding.
@@ -133,14 +130,13 @@ export class PID {
   }
 
   /**
-   * Re-bound a LIVE controller (value-sweep 2026-07-11
-   * `verge-integral-clamp-stale`). A bare `pid.limits = [...]` assignment is a
+   * Re-bound a LIVE controller. A bare `pid.limits = [...]` assignment is a
    * TRAP: the constructor aliases `integralLimits` to the SAME array when no
    * explicit integral clamp was given, so replacing `limits` with a new array
    * leaves the integrator clamped to the CONSTRUCTION-time bound — and in
-   * velocity-form loops the integrator IS the command (the disparity verge
-   * DOF stayed clamped to the default-200 mm baseline range on any other
-   * rig). This setter updates BOTH bounds (mirroring `setParams`' "limits
+   * velocity-form loops the integrator IS the command, so a stale clamp
+   * strands the command out of range. This setter updates BOTH bounds
+   * (mirroring `setParams`' "limits
    * without integralLimits re-derives the integral clamp") and re-clamps the
    * live integrator so a narrowed range can't strand an out-of-range command.
    */

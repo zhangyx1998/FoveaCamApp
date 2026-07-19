@@ -7,8 +7,8 @@
 // Pairing brick seam: a core-free typed surface over Aravis.createPairStream — the
 // per-stage L/R pairing brick (two in-process FIFO taps joined against FIN-derived
 // anchors on the brick's own thread; batched async-iterator record output). Always-
-// running (ruling 5, NOT consumer-gated), trigger mode only (ruling 1: free-run idles
-// with an empty anchor pool). Seam-injected (never imports core).
+// running (NOT consumer-gated), trigger mode only (free-run idles with an empty
+// anchor pool). Seam-injected (never imports core).
 // spec: docs/spec/pipes.md#pair-pipe
 
 import type { WorkloadSnapshot } from "@lib/orchestrator/stats.js";

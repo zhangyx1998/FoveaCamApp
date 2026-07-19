@@ -21,11 +21,11 @@ namespace {
 
 // Per-ENV addon state. The `Reader` class constructor reference MUST be
 // per-environment, not a process-global static: this addon is loaded into a
-// fresh V8 env in every worker_thread (the vision-worker bridge, WS1 real-1f),
+// fresh V8 env in every worker_thread (the vision-worker bridge),
 // and a global static would be overwritten by the last env to load + left
 // dangling when that env (e.g. a terminated worker) is torn down — the main
-// thread's next `open()` then dereferences a dead Isolate and segfaults
-// (B-19a repro). Stored via `SetInstanceData` → freed on env teardown while
+// thread's next `open()` then dereferences a dead Isolate and segfaults.
+// Stored via `SetInstanceData` → freed on env teardown while
 // N-API is still valid, so the reference destructs cleanly.
 struct AddonData {
   FunctionReference constructor;

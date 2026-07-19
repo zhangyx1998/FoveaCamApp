@@ -43,10 +43,9 @@ const RIG_GATED = new Set([
 ]);
 
 // Hardware-free but currently BLOCKED (does not pass standalone) — excluded from
-// the "all" sweep so one known-broken test can't wedge the whole run. Run it
-// explicitly by number when working the fix. (47 is blocked by the core Device
-// rx-thread deadlock noted in its own header.)
-const KNOWN_BLOCKED = new Set(); // 47 unblocked: rx deadlock fixed in b5b1f30
+// the "all" sweep so one known-broken test can't wedge the whole run. Add a test
+// stem here to quarantine it; run it explicitly by number when working the fix.
+const KNOWN_BLOCKED = new Set();
 
 const PER_TEST_TIMEOUT_MS = 180_000;
 

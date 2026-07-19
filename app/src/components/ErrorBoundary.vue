@@ -64,9 +64,9 @@ function reset() {
 </template>
 
 <style scoped lang="scss">
-/* One app-native error identity (P2): app dark surfaces, --danger family,
+/* One app-native error identity: app dark surfaces, --danger family,
    --font-mono. No fade-in on the surface itself — a crash must be instantly
-   legible (ruled principle: error surfaces instantly visible, layout-stable). */
+   legible and layout-stable. */
 .error-boundary {
     width: 100%;
     height: 100%;

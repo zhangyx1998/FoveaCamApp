@@ -1,4 +1,4 @@
-// Viewer tile-split math (viewer-tiles-split-and-project.md ruling 3): the pure
+// Viewer tile-split math: the pure
 // fraction transforms behind the full-width, divider-resizable tiles row —
 // equal split, reconcile-to-count (drop/append + renorm), and divider drag with
 // both neighbors clamped at the floor. Invariant under test: length === n and

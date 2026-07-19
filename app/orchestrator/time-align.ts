@@ -39,7 +39,7 @@ export interface ClockCalibration {
 }
 
 // THE host clock. Default = hrtime (tests, pre-boot); the orchestrator boot
-// swaps in core's `steadyNowNs` (FINAL ruling 0: the NATIVE steady clock is
+// swaps in core's `steadyNowNs` (the NATIVE steady clock is
 // the single time authority — hrtime and libc++ steady_clock are not
 // guaranteed the same Darwin clock domain, and every owner-applied timestamp
 // lives in the native domain).
@@ -67,7 +67,7 @@ export function hostNsToEpochMs(hostNs: bigint): number {
   return bootAnchor.epochMs + Number((hostNs - bootAnchor.hrtimeNs) / 1_000_000n);
 }
 
-/** RULED estimator: pick the sample with the smallest bracket (min RTT — the
+/** Estimator: pick the sample with the smallest bracket (min RTT — the
  *  least latency-contaminated observation); offset = its midpoint − subject.
  *  Jitter = p90 − min over all candidate offsets. Pure. */
 export function estimateOffsetNs(samples: OffsetSample[]): {
@@ -105,8 +105,8 @@ export function estimateOffsetOneSidedNs(samples: OffsetSample[]): {
 const calibrations = new Map<ClockId, ClockCalibration>();
 
 export function setCalibration(clock: ClockId, cal: ClockCalibration): void {
-  // Stability metric (user 2026-07-08): drift vs the previous calibration of
-  // the same clock — refreshed on every mid-task re-calibration.
+  // Stability metric: drift vs the previous calibration of the same clock —
+  // refreshed on every mid-task re-calibration.
   const prev = calibrations.get(clock);
   if (prev && cal.atNs > prev.atNs && cal.driftPpm === undefined) {
     const dOffset = Number(cal.offsetNs - prev.offsetNs);
@@ -171,17 +171,17 @@ export function sleepDetected(thresholdMs = 2000): boolean {
   return wallMs - steadyMs >= thresholdMs;
 }
 
-// ---- camera measurement (latch-first, RULED) --------------------------------
+// ---- camera measurement (latch-first) --------------------------------
 
 /** GenICam feature spellings (SFNC; FLIR/Basler-compatible). The latched value
- *  is nanoseconds on modern USB3V cameras — RIG-CHECK per model. */
+ *  is nanoseconds on modern USB3V cameras — verify per camera model. */
 const LATCH_EXEC = "TimestampLatch";
 const LATCH_VALUE = "TimestampLatchValue";
 
 /** The camera surface these routines need (structural — tests fake it). */
 export type LatchableCamera = Pick<Camera, "executeFeature" | "getFeatureInt">;
 
-/** RULED ruling 2 primary path: N latch round-trips, min-filtered by RTT.
+/** Primary path: N latch round-trips, min-filtered by RTT.
  *  No exposure changes, no streaming — cheap enough for periodic drift
  *  re-runs. Throws when the camera lacks the latch features (caller decides
  *  whether the pull fallback is enabled). */
@@ -205,8 +205,8 @@ export function latchCameraOffset(
   return { offsetNs, jitterNs, samples: n, method: "latch", atNs: now() };
 }
 
-/** Directive fallback (ruling 2: config-gated, DISABLED by default): pull N
- *  frames at 1 ms exposure; offset = min(arrival − deviceTs). Requires the
+/** Fallback (config-gated, DISABLED by default): pull N frames at 1 ms
+ *  exposure; offset = min(arrival − deviceTs). Requires the
  *  caller to own exposure save/restore and frame grabbing — injected so this
  *  stays pure of acquisition details. */
 export function pullCameraOffset(
@@ -222,10 +222,10 @@ export function pullCameraOffset(
   return { offsetNs, jitterNs, samples: n, method: "pull", atNs: now() };
 }
 
-/** RULED ruling 4: controller ping — N `System.Timestamp` reads (MCU uint64
- *  MICROSECONDS, stamped at parse time firmware-side), bracketed by host ns.
- *  Injected read fn so this works against the fake device in tests and the
- *  real `Controller.readTimestamp()` (P2) alike. */
+/** Controller ping — N `System.Timestamp` reads (MCU uint64 MICROSECONDS,
+ *  stamped at parse time firmware-side), bracketed by host ns. Injected read
+ *  fn so this works against the fake device in tests and the real
+ *  `Controller.readTimestamp()` alike. */
 export async function pingControllerOffset(
   readTimestampUs: () => Promise<bigint>,
   { n = 10, now = hostNowNs }: { n?: number; now?: () => bigint } = {},
@@ -241,7 +241,7 @@ export async function pingControllerOffset(
   return { offsetNs, jitterNs, samples: n, method: "ping", atNs: now() };
 }
 
-// ---- fallback gate (ruling 2) ----------------------------------------------
+// ---- fallback gate ----------------------------------------------
 
 let pullFallbackEnabled = false;
 export function setPullFallbackEnabled(enabled: boolean): void {

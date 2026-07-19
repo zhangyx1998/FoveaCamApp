@@ -4,21 +4,19 @@ This source code is licensed under the MIT license.
 You may find the full license in project root directory.
 --------------------------------------------------- -->
 <!--
-  Dismissible error tray (value-sweep-2026-07-11
-  `error-broadcast-dead-ends-in-console`). Everything the orchestrator's
-  process-wide `report()` carried — camera-registry sink throws, recorder
-  finalize truncations, capture-worker death, unhandled command rejections —
-  used to terminate at renderer `console.error`, invisible in a packaged app.
+  Dismissible error tray. Everything the orchestrator's process-wide `report()`
+  carries — camera-registry sink throws, recorder finalize truncations,
+  capture-worker death, unhandled command rejections — would otherwise terminate
+  at renderer `console.error`, invisible in a packaged app.
   This title-bar chrome renders the bounded, coalesced ring `client.ts` keeps
   (`errorTray`): a badge with the live count, a dropdown of recent reports
   (scope · message · ×count · age), per-row copy + dismiss, and clear-all. An
   empty ring flips the panel to the `--ok` green identity (all-clear at a
   glance); any report restores the danger identity.
 
-  Dark-lab operator language (docs/design/design-language.md): monospace, the
-  one `--danger` error identity, tokens over raw hex, icon-only title-bar button
-  with an explicit `title=` (§ ruled principle 4), snap (no transitions) on this
-  glanceable failure surface.
+  Dark-lab operator language: monospace, the one `--danger` error identity,
+  tokens over raw hex, icon-only title-bar button with an explicit `title=`,
+  snap (no transitions) on this glanceable failure surface.
 -->
 <script setup lang="ts">
 import { computed, onUnmounted, ref } from "vue";
@@ -179,8 +177,8 @@ function clearAll(): void {
   display: inline-flex;
 }
 
-// Mirrors AppWindow's `.icon-button` idiom (§ ruled principle 4 — icon-only
-// title bar), plus a danger tint when reports are present.
+// Mirrors AppWindow's `.icon-button` idiom (icon-only title bar), plus a danger
+// tint when reports are present.
 .icon-button {
   position: relative;
   background: none;
@@ -244,7 +242,7 @@ function clearAll(): void {
   font-size: 0.8em;
 
   // Empty ring = all-clear: the one `--ok` green identity replaces the danger
-  // frame (snap, no transition — glanceable state, ruled principle).
+  // frame (snap, no transition — glanceable state).
   &.ok {
     border-color: var(--ok);
 
@@ -351,7 +349,7 @@ function clearAll(): void {
   background: none;
   border: none;
   // Matches `.clear` — two adjacent targets (one destructive) need real
-  // hit area, not the old single-dismiss sliver.
+  // hit area, not a thin sliver.
   padding: 0.2em 0.4em;
   cursor: pointer;
   color: var(--text-faint);

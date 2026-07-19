@@ -62,8 +62,8 @@ const frameR = usePipeFrame(() => (state.serials?.R ? nodeId.undistort(state.ser
 
 // Center TILE (spec §views): `sliced` keeps the magnified `session.frame`
 // path; disparity/anaglyph bind the COMPOSITE pipe, sgbm the STEREO heatmap
-// (native, SHM-bound). Binding only the selected pipe parks the rest (C-21
-// consumer gate) — the session ids these under the "manual" scope.
+// (native, SHM-bound). Binding only the selected pipe parks the rest (consumer
+// gate) — the session ids these under the "manual" scope.
 const centerPipeFrame = usePipeFrame(() => {
   switch (state.view) {
     case "disparity":
@@ -656,7 +656,7 @@ window.addEventListener("keydown", (e) => {
 }
 
 // Capture Mode block (spec §trigger-sync) — mirrors the disparity-scope drawer
-// idiom (8979b44): a segmented Free-run/Trigger-sync select that tints warn
+// idiom: a segmented Free-run/Trigger-sync select that tints warn
 // while intent ≠ engaged, plus a compact always-rendered Status row.
 .capture-mode {
   height: auto !important; // opt out of the .options 2em row cap

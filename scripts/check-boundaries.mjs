@@ -5,17 +5,15 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Process-boundary gate (docs/dev/gates.md). Two RULED invariants that were
-// enforced only by "nobody-runs-them" manual greps in the docs are now a real
-// check the gate suite runs (npm run check:boundaries). Both are TRANSITIVE
-// import walks — a shallow grep of `app/orchestrator/` would have missed the
+// Process-boundary gate (npm run check:boundaries). Enforces two invariants as
+// TRANSITIVE import walks — a shallow grep of `app/orchestrator/` misses the
 // exact case this exists for: a session importing `@lib/config`, which imports
 // Vue, pulling all of Vue into the utility process (fixed by @lib/config-schema).
 //
 //   1. Orchestrator zero-Vue  — nothing reachable from the orchestrator entry
 //      (`app/orchestrator/index.ts`) or any module `session.ts` may RUNTIME-
 //      import `vue` (a devDependency — it would bundle into the utilityProcess).
-//      architecture/processes.md §2.
+//      See architecture/processes.md.
 //   2. Renderer zero-core     — nothing reachable from a renderer file (every
 //      `.vue` + `app/src/**`) may RUNTIME-import `core` (the native addon).
 //      `import type` is fine (type-only erases). Sole exception: the dev-only
@@ -203,7 +201,7 @@ const coreViolations = scan(
 
 // --- verdict ----------------------------------------------------------------
 
-console.log("Process-boundary gates (docs/dev/gates.md):");
+console.log("Process-boundary gates:");
 const failed =
   report("orchestrator zero-Vue", vueViolations) |
   report("renderer zero-core (type-only OK; playground exempt)", coreViolations);

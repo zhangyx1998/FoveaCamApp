@@ -38,7 +38,7 @@
 #include "Cleanup.h"
 #include "CoreObject.h" // MirrorSink CoreObject (native pos_in)
 #include "Dispatcher.h"
-#include "PortPipe.h"  // native pos_in sink (native-compose-controller.md)
+#include "PortPipe.h"  // native pos_in sink
 #include "VoltPair.h"  // the compose -> pos_in payload
 #include "Protocol/Protocol.h"
 #include "Protocol/Version.h"
@@ -53,8 +53,7 @@ static SymbolRegistry bufferAccessor;
 static SymbolRegistry propNameAccessor;
 // Cached decoders for CMD_FRAME's asymmetric ACK/FIN payloads (FrameAccepted
 // / FrameResult), set once in Command::Init and used by DeviceObject::send
-// to override the request-encoder factory when decoding responses — see
-// docs/history/refactor/synced-capture.md §5/§9 (P3).
+// to override the request-encoder factory when decoding responses.
 static Isolated<Napi::Reference<Napi::Function>> frameAcceptedFactory;
 static Isolated<Napi::Reference<Napi::Function>> frameResultFactory;
 
@@ -232,11 +231,9 @@ static FN(Uint16Packet) {
 }
 
 // uint32 payloads — Command::Trigger's wire shape is `Microseconds duration`
-// (uint32, lib/Protocol/Packet.h:94/110). It was registered through
-// Uint16Packet since inception: any duration > 65535 µs threw JS-side, and a
-// value that fit produced a 2-byte payload the firmware's exact-size
-// FixedSizePacket::inflate REJects — CMD_TRIGGER never worked through the
-// NAPI factory (caught by the fw-sim harness, core/test/47 §6, 2026-07-11).
+// (uint32, lib/Protocol/Packet.h:94/110). It MUST be registered through
+// Uint32Packet, not Uint16: the firmware's exact-size FixedSizePacket::inflate
+// REJects a mismatched-width payload, so a 2-byte encoding never actuates.
 static FN(Uint32Packet) {
   EXPECT_EXACTLY_ONE_ARGUMENT("Packet<Uint32>");
   uint32_t value;
@@ -379,8 +376,7 @@ inline Napi::Array mirrorPositionToArray(
 
 // CameraMask <-> JS: a number (raw bitmask) or an array of camera-name
 // strings ("C"/"L"/"R"); undefined/omitted means "firmware default"
-// (CAM_L | CAM_R — C is REJected until it has a strobe cable, see
-// docs/history/refactor/synced-capture.md §2/§8).
+// (CAM_L | CAM_R — C is REJected until it has a strobe cable).
 inline uint8_t parseCameraMask(Napi::Value const &val) {
   if (val.IsUndefined() || val.IsNull())
     return 0;
@@ -449,7 +445,7 @@ static FN(ActuatePacket) {
 }
 
 // CMD_STREAM: create/update/terminate a named mirror-position target.
-// Single-phase (ACK echoes the same shape back, no FIN — see §3.2/§9).
+// Single-phase (ACK echoes the same shape back, no FIN).
 static FN(MirrorStreamPacket) {
   EXPECT_EXACTLY_ONE_ARGUMENT("Packet<MirrorStream>");
   Packet::Command::MirrorStream command{};
@@ -541,7 +537,7 @@ static FN(FrameAcceptedPacket) {
 }
 
 // CMD_FRAME FIN payload: latched at exposure start. Timestamps are BigInt
-// (uint64 µs, matching Global::time on the firmware side — see §9 FW1).
+// (uint64 µs, matching Global::time on the firmware side).
 static FN(FrameResultPacket) {
   EXPECT_EXACTLY_ONE_ARGUMENT("Packet<FrameResult>");
   Packet::Command::FrameResult result{};
@@ -606,12 +602,12 @@ static Napi::Object Init(Napi::Env env) {
 }; // namespace Command
 
 // Protocol v2 two-phase properties: ACK resolves `.accepted`, FIN resolves
-// the terminal value. Deliberately narrower than the plan text's "everything
+// the terminal value. Deliberately narrower than a blanket "everything
 // but CMD_*" — CMD_STREAM is protocol-level single-phase (ACK/REJ only, no
-// FIN ever sent, see docs/history/refactor/synced-capture.md §3.2/§9); treating it as
+// FIN ever sent); treating it as
 // two-phase here would leave every CMD_STREAM request's pending-map entry
 // stuck until the connection closes, since no FIN would ever arrive to erase
-// it. Gated additionally per-device by `DeviceObject::v2_capable` (P3.1a) —
+// it. Gated additionally per-device by `DeviceObject::v2_capable` —
 // this only says which properties *could* be two-phase on v2 firmware, not
 // whether *this* connection has confirmed it's talking to v2 firmware.
 static inline bool isTwoPhase(Property p) {
@@ -742,7 +738,7 @@ public:
     }
   }
   // Rejects whichever phase(s) are still outstanding (REJ is terminal at
-  // either phase — see docs/history/refactor/synced-capture.md §3.1).
+  // either phase).
   inline void Reject(Napi::Value reason) {
     if (two_phase && !accepted_settled) {
       accepted_settled = true;
@@ -788,7 +784,7 @@ struct SerialWriteSeam : Shared<SerialWriteSeam> {
   std::atomic<uint32_t> pendingCount{0};
   // Governor mirror (written by the active MirrorSink's evaluation, read by
   // Device.stats → controller telemetry → the profiler "Serial pressure"
-  // block — every new stat surfaces in the profiler, user ruling).
+  // block — every new stat here surfaces in the profiler).
   std::atomic<double> govEffectiveRateHz{0};
   std::atomic<double> govCeilingHz{0};
   std::atomic<int> govState{-1}; // -1 none/off, 0 steady, 1 seeking, 2 backoff
@@ -874,8 +870,8 @@ struct SerialWriteSeam : Shared<SerialWriteSeam> {
       ;
   }
 
-  // ---- framing-safe writes (the wave-6 AUDIT FIX) ---------------------------
-  // The fd is O_NONBLOCK: a PARTIAL ::write used to leave a truncated COBS
+  // ---- framing-safe writes --------------------------------------------------
+  // The fd is O_NONBLOCK: a PARTIAL ::write would leave a truncated COBS
   // frame on the wire — the next frame's bytes then concatenate into it and
   // BOTH are lost to the checksum (silent 2-packet corruption). Now every
   // writer goes through writeBytes(): a short write saves the unwritten
@@ -1064,7 +1060,7 @@ private:
     return __sequence__++;
   }
 
-  // Safe-by-default (P3.1a, docs/history/refactor/synced-capture.md §9.3): stays
+  // Safe-by-default: stays
   // false — meaning every property, including CMD_ACTUATE/TRIGGER/FRAME,
   // resolves on ACK exactly like v1 firmware always behaved — until
   // verifyVersion() confirms firmware major >= Protocol::Version::Major.
@@ -1164,11 +1160,10 @@ private:
       if (p->has(sequence)) {
         auto pr = p->at(sequence);
         // Two-phase requests keep their pending-map entry across the ACK —
-        // only FIN/REJ retire it (see PendingRequest::two_phase and
-        // docs/history/refactor/synced-capture.md §3.1/§5).
+        // only FIN/REJ retire it (see PendingRequest::two_phase).
         bool retire = !(pr->two_phase && method == Method::ACK &&
                         property == pr->property);
-        // ACK-RTT sample (Part 1): the FIRST response for this request —
+        // ACK-RTT sample: the FIRST response for this request —
         // queue pressure inflates this before anything drops. rx thread only.
         if (!pr->rttRecorded && pr->sentNs > 0) {
           pr->rttRecorded = true;
@@ -1258,7 +1253,7 @@ private:
   // rx poll cadence: bounds shutdown latency (destroy() joins within one
   // timeout) and paces the idle-tick work below. The fd is O_NONBLOCK — the
   // old read→EAGAIN→continue loop burned ~100% of a core whenever a
-  // controller was connected (value-sweep 2026-07-11 / wave-6 task #11).
+  // controller was connected.
   static constexpr int RX_POLL_TIMEOUT_MS = 50;
   // Pending-map sweep: entries whose response never came (device wedged /
   // unplugged mid-request) would otherwise pin their PendingRequest (+ JS
@@ -1400,9 +1395,9 @@ private:
                 v2_capable ? 1 : 0, tx.size());
         VERBOSE("send %u bytes: %s", tx.size(),
                 hexFormat(tx.data(), tx.size()).c_str());
-        // Framing-safe seam write (wave-6 audit fix): a short write TAILS the
-        // remainder (the frame still completes — keep the request pending); a
-        // frame that never started is a clean drop → the old throw semantics.
+        // Framing-safe seam write: a short write TAILS the remainder (the
+        // frame still completes — keep the request pending); a frame that
+        // never started is a clean drop → throws to the caller.
         const auto wr = seam_->writeBytes(tx.data(), tx.size());
         if (wr == SerialWriteSeam::WriteResult::Dropped ||
             wr == SerialWriteSeam::WriteResult::Closed) {
@@ -1465,8 +1460,8 @@ private:
     return send(sequence, property, factory, packet);
   }
 
-  // Protocol::Sequence == 0 fire-and-forget (docs/history/refactor/synced-capture.md
-  // §3.1): the firmware performs the SET but sends no ACK/FIN/REJ at all —
+  // Protocol::Sequence == 0 fire-and-forget: the firmware performs the SET but
+  // sends no ACK/FIN/REJ at all —
   // used for high-rate stream position updates (CMD_STREAM UPDATE, ~1kHz).
   // No pending-map entry, no promise; a write failure throws synchronously.
   FN(fireAndForget) {
@@ -1491,8 +1486,8 @@ private:
       VERBOSE("trace tx seq=0 SET:%s two_phase=0 v2_capable=%d bytes=%u",
               convert<std::string>(property).c_str(), v2_capable ? 1 : 0,
               tx.size());
-      // Framing-safe seam write (wave-6 audit fix): Dropped = the frame never
-      // started (framing intact) → the old throw semantics; Queued = tailed,
+      // Framing-safe seam write: Dropped = the frame never
+      // started (framing intact) → throws; Queued = tailed,
       // completes on the next write attempt (fire-and-forget: success).
       const auto wr = seam_->writeBytes(tx.data(), tx.size());
       if (wr == SerialWriteSeam::WriteResult::Dropped ||
@@ -1507,14 +1502,14 @@ private:
     return env.Undefined();
   }
 
-  // P3.1a (docs/history/refactor/synced-capture.md §9.3): fetches SYS_VERSION and
+  // Fetches SYS_VERSION and
   // sets v2_capable = (firmware.major >= Protocol::Version::Major). Until
   // this resolves (or if it's never called), v2_capable stays false and
   // every property behaves single-phase — safe against v1 firmware, just
   // not two-phase-accurate against v2 firmware. Returns the decoded version
   // plus the `compatible` verdict; never rejects on a *version mismatch*
-  // (only on a transport/REJ failure), matching the plan's "recommended"
-  // fallback over an outright refusal.
+  // (only on a transport/REJ failure), a "recommended"-style fallback over an
+  // outright refusal.
   FN(verifyVersion) {
     auto env = info.Env();
     const auto sequence = this->sequence();
@@ -1560,8 +1555,8 @@ private:
 
 
 // =====================================================================
-// Native mirror POSITION SINK (native-compose-controller.md planner decision
-// 2/3): the controller's `pos_in` port. Accepts FINAL volts off a port link's
+// Native mirror POSITION SINK: the controller's `pos_in` port. Accepts FINAL
+// volts off a port link's
 // delivery thread and performs, natively, exactly what the JS
 // StreamHandle.update path did: the stream-update GATE (1 ms min interval +
 // dedupe on the input volts), volt→DAC conversion (the @lib/controller-codec
@@ -1575,7 +1570,7 @@ private:
 //
 // Stream lifecycle stays JS: the session/controller-node CREATEs the MCU
 // stream (ACK-backed) and TERMINATEs it on close/unbind — this sink only
-// fires UPDATEs, so FW5 and the quiesce order hold identically. A closed
+// fires UPDATEs, so the quiesce order holds identically. A closed
 // seam (device destroyed / disconnected) turns writes into counted no-ops.
 // =====================================================================
 
@@ -1614,12 +1609,12 @@ static int64_t sinkSteadyNs() {
       .count();
 }
 
-// AIMD governor knobs (serial-rate-governor.md Part 2). All NAPI-settable via
-// MirrorSink.setGovernor; `enabled: false` pins the wave-5 fixed-gate
-// behavior exactly. Defaults per the ruling.
+// AIMD governor knobs. All NAPI-settable via
+// MirrorSink.setGovernor; `enabled: false` pins the fixed-gate behavior
+// exactly.
 struct GovernorParams {
   bool enabled = true;
-  double ceilingHz = 1000; // = the wave-5 fixed 1 ms gate; session sets the
+  double ceilingHz = 1000; // = the fixed 1 ms gate; session sets the
                            // prediction_rate_hz REQUESTED rate here
   double floorHz = 60;
   double stepHz = 25;       // additive climb per evaluation
@@ -1647,14 +1642,14 @@ struct MirrorSink : Shared<MirrorSink> {
   std::atomic<uint64_t> deduped{0};  // gate: same pose
   std::atomic<uint64_t> throttled{0}; // gate: min-interval / governor rate
   std::atomic<uint64_t> errors{0};   // seam closed / write failure
-  std::atomic<uint64_t> deferred{0}; // fairness reserve deferrals (Part 2)
+  std::atomic<uint64_t> deferred{0}; // fairness reserve deferrals
   std::atomic<uint64_t> backoffs{0}; // governor multiplicative decreases
 
-  // ---- AIMD governor (Part 2 — lives HERE, in the wave-5 gate) -------------
+  // ---- AIMD governor (lives HERE, in the emission gate) ---------------------
   // `effRateHz_` starts AT the ceiling (optimistic start): a clean link is
-  // byte-identical to wave 5 from the first tick; the additive climb engages
-  // only after a backoff. Guarded by `mtx` (evaluated lazily on the write
-  // path at `evalMs` cadence — the ruled lock-free-ish emission: one branch +
+  // byte-identical to the fixed-gate behavior from the first tick; the additive
+  // climb engages only after a backoff. Guarded by `mtx` (evaluated lazily on
+  // the write path at `evalMs` cadence — a lock-free-ish emission: one branch +
   // rare O(window) percentile copy every ~100 ms).
   GovernorParams gov;             // mtx
   double effRateHz_ = 1000;       // mtx
@@ -1673,7 +1668,7 @@ struct MirrorSink : Shared<MirrorSink> {
   }
 
   /** Mirror the governor view into the seam atomics (Device.stats → the
-   *  profiler "Serial pressure" block — every new stat surfaces, ruling). */
+   *  profiler "Serial pressure" block — every new stat here surfaces). */
   void publishGovernor() { // mtx held
     if (!gov.enabled) {
       govState_ = -1;
@@ -1777,7 +1772,7 @@ struct MirrorSink : Shared<MirrorSink> {
         deduped.fetch_add(1, std::memory_order_relaxed);
         return;
       }
-      // Effective emission interval: the wave-5 1 ms floor, opened up to the
+      // Effective emission interval: the 1 ms floor, opened up to the
       // governor's discovered rate (governor off = exactly the fixed gate).
       const int64_t minIntervalNs =
           gov.enabled
@@ -1987,7 +1982,7 @@ public:
   }
 
   // setGovernor(partial GovernorParams) — live retune; named invalid_arguments
-  // (the stereo-params precedent). `enabled: false` pins wave-5 fixed-gate
+  // (the stereo-params precedent). `enabled: false` pins the fixed-gate
   // behavior byte-for-byte.
   FN(setGovernor) {
     auto env = info.Env();
@@ -2124,7 +2119,7 @@ CORE_OBJECT(MirrorSinkObject)
 // createMirrorSink(device, { streamId, bias, dv, nodeId }) — attach a native
 // pos_in sink to a live Device's write seam. The MCU stream (streamId) must
 // already exist (JS createStream, ACK-backed) and is TERMINATED by JS on
-// close — this sink only fires UPDATEs (FW5/quiesce ownership stays JS).
+// close — this sink only fires UPDATEs (quiesce ownership stays JS).
 static FN(createMirrorSink) {
   auto env = info.Env();
   try {
@@ -2160,7 +2155,7 @@ static FN(createMirrorSink) {
 // Test-only (__serialTestPty): openpty() → { fd: master, path: slave }. The
 // Device opens the slave by path (SerialOpen's normal tty setup works on a
 // pty); the test reads the master fd from JS (`fs.readSync(fd, ...)`) to
-// assert the exact frames a native sink wrote. Hardware-free FW5 coverage.
+// assert the exact frames a native sink wrote. Hardware-free UPDATE-write coverage.
 static FN(__serialTestPty) {
   auto env = info.Env();
   try {

@@ -42,7 +42,7 @@ export function guarded(scope: string, fn: () => void): void {
   }
 }
 
-/** A single structured timing measurement (docs/history/refactor/orchestrator.md §7.1 S5). */
+/** A single structured timing measurement. */
 export type Span = {
   name: string;
   ms: number;

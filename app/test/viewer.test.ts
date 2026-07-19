@@ -1,7 +1,6 @@
-// STANDALONE viewer playback (standalone-viewer-and-fcap ruling 1; formerly
-// the C-8 `viewer` session, retired) — the container playback data layer,
+// STANDALONE viewer playback — the container playback data layer,
 // tested end to end against a REAL synthetic container generated in-test by
-// the B-5 recorder sink. The PLAYER (src/viewer/player.ts — the exact engine
+// the recorder sink. The PLAYER (src/viewer/player.ts — the exact engine
 // the viewer window's worker hosts) is driven directly through its hooks;
 // decode is injected (no core native in vitest, per house convention); the
 // clock is virtual, so pacing math is asserted deterministically instead of

@@ -4,10 +4,9 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Stereo pipe seam plumbing + the RULED signed window (sgbm-signed-range.md +
-// stereo-throughput.md): the window constant BOTH sessions attach with, the
-// params pass-through on attach/attachPaired/retune (including the new
-// throughput strategy params), and the advert/retire lifecycle.
+// Stereo pipe seam plumbing + the signed window: the window constant BOTH
+// sessions attach with, the params pass-through on attach/attachPaired/retune
+// (including the throughput strategy params), and the advert/retire lifecycle.
 
 import { describe, expect, it } from "vitest";
 import {
@@ -42,7 +41,7 @@ function fakeSeam() {
   return { seam, calls };
 }
 
-describe("SIGNED_DISPARITY_WINDOW (sgbm-signed-range.md ruling)", () => {
+describe("SIGNED_DISPARITY_WINDOW", () => {
   it("is the fixed symmetric −256…+255 window", () => {
     expect(SIGNED_DISPARITY_WINDOW).toEqual({
       numDisparities: 512,
@@ -53,7 +52,7 @@ describe("SIGNED_DISPARITY_WINDOW (sgbm-signed-range.md ruling)", () => {
   it("derives the pinned heatmap normalization from the window (no drift)", () => {
     // min = the window floor; max = its ceiling (minDisparity + num − 1) — so
     // the invalid marker (minDisparity − 1) clamps to the floor color instead
-    // of dragging the per-frame auto-min (sgbm-signed-range.md §Downstream).
+    // of dragging the per-frame auto-min.
     expect(SIGNED_DISPARITY_HEATMAP_RANGE).toEqual({ min: -256, max: 255 });
     expect(SIGNED_DISPARITY_HEATMAP_RANGE.min).toBe(
       SIGNED_DISPARITY_WINDOW.minDisparity,

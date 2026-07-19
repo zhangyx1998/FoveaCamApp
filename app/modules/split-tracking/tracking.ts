@@ -4,9 +4,9 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Split-tracking PURE core (docs/proposals/split-tracking-app.md §"Pinned pure
-// module"): the geometry + per-eye visual-servo control law + the single-side
-// TrackResult reducer, all side-effect-free and unit-testable with synthetic
+// Split-tracking PURE core: the geometry + per-eye visual-servo control law +
+// the single-side TrackResult reducer, all side-effect-free and unit-testable
+// with synthetic
 // inputs (no addon, no controller, no Vue). This module is the SINGLE SOURCE for
 // the shared `Eye`/`TileSize`/`PidGains` types — `contract.ts` re-imports them
 // from here so the two never drift.
@@ -49,12 +49,12 @@ export const MIN_TILE = 64;
 export const MAX_TILE = 1024;
 
 /**
- * SAFE, conservative starting gains — a bench RIG tunes these (drawer-editable
+ * SAFE, conservative starting gains — tune on hardware (drawer-editable
  * via `setGains`). Deliberately gentle: low `kp` (correct a small fraction of
  * the volt error per tick), tiny `ki` (slowly trim residual bias without
  * winding up), small `kd` (a little damping). Chosen to be stable-by-default on
  * the integrating mirror plant rather than fast — the operator raises them.
- * RIG-TUNABLE — not a shipped operating point.
+ * Not a shipped operating point.
  */
 export const DEFAULT_GAINS: PidGains = { kp: 0.15, ki: 0.01, kd: 0.02 };
 
@@ -63,7 +63,7 @@ export const DEFAULT_GAINS: PidGains = { kp: 0.15, ki: 0.01, kd: 0.02 };
  * The session picks the real value; this is a conservative placeholder given
  * the controller's ~0..200 V range (see controller-codec `volt2dac`) — a small
  * slew ceiling so a bad Jacobian sign or a large reacquire error can never fling
- * the mirror. RIG-TUNABLE.
+ * the mirror. Tune on hardware.
  */
 export const DEFAULT_MAX_STEP_V = 1.0;
 

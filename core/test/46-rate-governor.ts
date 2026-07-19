@@ -4,15 +4,14 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Serial rate GOVERNOR + pressure instrumentation (docs/proposals/
-// serial-rate-governor.md Parts 1+2) — NO hardware: a pty Device + the native
+// Serial rate GOVERNOR + pressure instrumentation — NO hardware: a pty Device + the native
 // compose/sink chain, pressure scripted via `Device.__testPressure`
 // (synthetic outq readings, injected ACK-RTT samples, soft-fail bumps).
 // Proves:
 //   1. PRESSURE STATS — Device.stats carries the outq gauge/high-water,
 //      txSoftFail, ackRttMs percentiles + connect-time baseline, and the
 //      governor mirror; SYS_TIMESTAMP GET (the probe ping) COEXISTS with an
-//      active mirror stream and feeds ackRttMs (FW5 holds — it is not
+//      active mirror stream and feeds ackRttMs (it is not
 //      Actuate).
 //   2. AIMD — additive climb (+stepHz per eval) to the ceiling on a clean
 //      link; multiplicative halve → floor on EACH pressure signal (EAGAIN
@@ -21,11 +20,11 @@
 //   3. FAIRNESS — under a full-rate flood, a pending two-phase request older
 //      than fairnessMs DEFERS updates (counted) until its ACK; the request
 //      completes within the deadline; maxDeferMs caps starvation.
-//   4. OFF SWITCH — `setGovernor({enabled:false})` pins the wave-5 fixed
+//   4. OFF SWITCH — `setGovernor({enabled:false})` pins the fixed
 //      1 ms gate (throttle behavior identical; no governor evaluation).
 //   5. FRAMING under real EAGAIN — flooding an undrained pty until the
 //      kernel buffer fills produces txSoftFail events while every frame that
-//      reaches the wire still decodes cleanly (the audit fix: short writes
+//      reaches the wire still decodes cleanly (short writes
 //      tail the remainder; drops never truncate a frame).
 //   6. Latency-comp math parity (Part 4): EMA(p50)/2 — the JS estimator's
 //      fixture is pinned in vitest; here the ackRttP50 probe surface it
@@ -130,7 +129,7 @@ const drainTimer = setInterval(drainPty, 10); // keep the pty buffer empty
   assert.equal(st.ackRttMs.baselineP50, 2, "connect-time baseline = median of first samples");
   assert.equal(st.governor.state, "steady", "governor mirror live (defaults)");
   assert(st.outqSupported, "TIOCOUTQ supported on this platform (Linux tty)");
-  // PROBE PING coexists with the active stream (FW5: SYS_TIMESTAMP GET is not
+  // PROBE PING coexists with the active stream (SYS_TIMESTAMP GET is not
   // Actuate): fire one against the silent pty — the WRITE must succeed (the
   // request times out later without a responder; that rejection is benign).
   const stop = startDrive(compose);
@@ -232,7 +231,7 @@ const drainTimer = setInterval(drainPty, 10); // keep the pty buffer empty
   console.log("46-rate-governor: fairness deferral + starvation cap OK.");
 }
 
-// --- 4: OFF switch = wave-5 fixed-gate parity -----------------------------------
+// --- 4: OFF switch = fixed-gate parity -----------------------------------
 {
   sink.setGovernor({ enabled: false });
   {
@@ -241,16 +240,16 @@ const drainTimer = setInterval(drainPty, 10); // keep the pty buffer empty
     assert.equal(p.effectiveRateHz, 0, "no governed rate advertised");
   }
   assert.equal(dev.stats.governor.state, "off", "stats mirror reports off");
-  // Fixed 1 ms gate still applies (wave-5): a 3 ms-spaced pair of distinct
+  // Fixed 1 ms gate still applies: a 3 ms-spaced pair of distinct
   // poses both write; pressure signals change NOTHING while off.
   dev.__testPressure({ outq: 100000, softFail: 5 });
-  // PRE-EXISTING 1-in-6 flake (seen on the pre-J binary too): §3's flood can
-  // finish <1 ms before this pose, so the wave-5 fixed gate THROTTLES pose 1
-  // (dropped — latest-wins has no retry) and only pose 2 writes. Clear the
-  // min-interval first, then confirm each pose actually lands before the
-  // next. The assertion's meaning is unchanged: with the governor off, both
-  // DISTINCT spaced poses write through the fixed 1 ms gate.
-  await sleep(5); // clear the fixed 1 ms min-interval after §3's flood
+  // Timing flake guard: a preceding flood can finish <1 ms before this pose, so
+  // the fixed 1 ms gate would THROTTLE pose 1 (dropped — latest-wins has no
+  // retry) and only pose 2 writes. Clear the min-interval first, then confirm
+  // each pose actually lands before the next. The assertion's meaning is
+  // unchanged: with the governor off, both DISTINCT spaced poses write through
+  // the fixed 1 ms gate.
+  await sleep(5); // clear the fixed 1 ms min-interval after the flood
   const w0 = sink.probe().written;
   compose.rebase({ vPid: { l: { x: 500, y: 1 }, r: { x: 0, y: 0 } }, feedForward: false });
   await waitFor(() => sink.probe().written - w0 >= 1, "first off-switch pose written");
@@ -277,7 +276,7 @@ const drainTimer = setInterval(drainPty, 10); // keep the pty buffer empty
   await sleep(20);
   // Drain EVERYTHING and verify framing: every complete frame COBS-decodes to
   // an 18-byte MirrorStream payload (op=UPDATE, id=2) — a truncated frame
-  // would desync its successor (the pre-audit corruption).
+  // would desync its successor.
   const chunks: Buffer[] = [];
   for (;;) {
     const buf = Buffer.alloc(65536);
@@ -320,8 +319,8 @@ const drainTimer = setInterval(drainPty, 10); // keep the pty buffer empty
   }
   // Volume floor is PLATFORM-dependent: the flood runs until the kernel tty
   // buffer fills (real EAGAIN), and that buffer is ~64 KB on Linux (thousands
-  // of ~23-byte frames) but only ~1 KB on macOS (≈40 frames — measured 42 on
-  // the darwin/arm64 pass, 2026-07-11). The floor only proves the flood
+  // of ~23-byte frames) but only ~1 KB on macOS (≈40 frames, measured ~42 on
+  // darwin/arm64). The floor only proves the flood
   // actually pushed data; the INTEGRITY assertions below (bad === 0, soft
   // fails counted) are the real checks and are platform-independent.
   assert(frames > 30, `flood produced frames (${frames})`);

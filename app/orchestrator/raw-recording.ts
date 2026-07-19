@@ -8,7 +8,7 @@
 // apps with no per-frame fovea binding (disparity-scope + the four calibrate wizards)
 // that just want the default recordable set — the full-bit-depth camera/<serial>/raw
 // stream(s), advert-verbatim. Each app opts in with a cameras() accessor + finished
-// notifier; reuses manual-control's raw-pipe acquire + ruling-8 significantBits inject.
+// notifier; reuses manual-control's raw-pipe acquire + significantBits inject.
 // No onFrame (no per-frame extras): the container is the raw sensor stream only.
 // spec: docs/spec/capture-recording.md#raw-recording
 
@@ -45,7 +45,7 @@ export interface RawRecordingCamera {
 export interface RawRecordingDeps {
   /** Graph node id — `recorder/<session>`. */
   id: string;
-  /** Broker for the recorder-node pipe connects (refcount++ → C-21 gate). */
+  /** Broker for the recorder-node pipe connects (refcount++ → consumer gate). */
   broker: PipeBroker;
   /** Refcounted raw-pipe registry (ONE advertise per id ever; shared process
    *  wide with any concurrent acquirer — capture / another app's recording). */
@@ -127,7 +127,7 @@ export function createRawRecording(deps: RawRecordingDeps): RecordingService {
         }
       }
 
-      // Ruling-8 significantBits injection (the native spec round-trip drops it
+      // significantBits injection (the native spec round-trip drops it
       // — the advertiser's job): wrap the plain broker connect to re-attach the
       // JS-side significantBits recorded for each advertised id (raw AND /zlib).
       const connect: RecorderConnect = (pipeId) => {

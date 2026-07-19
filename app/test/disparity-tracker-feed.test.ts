@@ -1,5 +1,5 @@
-// Disparity-scope's chained-tracker result routing (controller-node-and-fifo-
-// edges §3.5): the KCF runs on its own native thread; the session feeds every
+// Disparity-scope's chained-tracker result routing: the KCF runs on its own
+// native thread; the session feeds every
 // `TrackResult` through the pure reducer in `tracker-feed.ts`, which routes
 //   - OVERRIDDEN results (a pointer drag) → onDrag, ALWAYS (bypass the armed
 //     gate — the drag is the user), so the override flag reaches the kernel
@@ -56,7 +56,7 @@ function handlers(armed = true) {
   return h satisfies DisparityTrackerHandlers & { setArmed(v: boolean): void };
 }
 
-describe("createDisparityTrackerFeed (§3.5 result routing)", () => {
+describe("createDisparityTrackerFeed (result routing)", () => {
   it("routes found results to onTrack while armed", () => {
     const h = handlers(true);
     const feed = createDisparityTrackerFeed(h);
@@ -143,8 +143,8 @@ describe("createDisparityTrackerFeed (§3.5 result routing)", () => {
     expect(h.onLost).toHaveBeenCalledTimes(1);
   });
 
-  it("drag → release → re-armed tracking: the full §3.5 gesture in result order", () => {
-    // Mirrors the ruled drag flow: overridden results while dragging (flag
+  it("drag → release → re-armed tracking: the full gesture in result order", () => {
+    // Mirrors the drag flow: overridden results while dragging (flag
     // rides downstream), then normal found results after releaseOverride
     // re-arms at the drag end.
     const h = handlers(true);
@@ -186,7 +186,7 @@ describe("consumeTracker (iteration driver)", () => {
 
 });
 
-// ---- R3 stall watchdog predicate (mirror-flicker addendum) --------------------
+// ---- stall watchdog predicate --------------------
 // The count-based lostTolerance above only covers DELIVERED misses; a stalled
 // source delivers nothing — the session's watchdog uses this predicate on the
 // delivery-heartbeat age (the match-staleness precedent's pure-helper shape).

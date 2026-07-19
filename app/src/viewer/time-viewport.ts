@@ -8,7 +8,6 @@
 // tested). One coordinate convention: a viewport is a visible [t0, t1] window
 // in file-relative ns; screen fraction 0..1 maps linearly across it. Mirrors
 // the profiler nodegraph zoomAt's fixed-point-under-anchor semantics in 1D.
-// spec: docs/proposals/viewer-timeline-touchup.md (rulings 1/3/5/6)
 
 /** Visible time window in file-relative ns. `t0` may go < 0 and `t1` > duration
  *  only within the bleed allowance (rubber-band); hard bounds clamp there. */
@@ -64,8 +63,8 @@ function clampToHard(vp: TimeViewport, durationNs: number): TimeViewport {
 }
 
 /** Zoom by `factor` (>1 zooms IN → smaller span) keeping the time at
- *  `anchorFrac` (0..1 of the tracks width) fixed on screen (ruling 5; nodegraph
- *  zoomAt precedent). Span clamps to [MIN_SPAN_NS, duration + 2·bleed], then the
+ *  `anchorFrac` (0..1 of the tracks width) fixed on screen (nodegraph zoomAt
+ *  precedent). Span clamps to [MIN_SPAN_NS, duration + 2·bleed], then the
  *  result pans into the hard bleed bounds. */
 export function zoomAt(
   vp: TimeViewport,
@@ -215,7 +214,7 @@ function formatTick(ns: number, majorStepNs: number): string {
 }
 
 /** Ruler ticks over the FULL viewport (incl. bleed) at ~`targetPx` spacing on a
- *  1/2/5·10^k ns ladder (ruling 3). Major ticks land on round decade multiples
+ *  1/2/5·10^k ns ladder. Major ticks land on round decade multiples
  *  and carry labels; minor ticks fill in between unlabeled. */
 export function rulerTicks(
   vp: TimeViewport,
@@ -239,7 +238,7 @@ export function rulerTicks(
   return ticks;
 }
 
-/** Smooth playhead (ruling 6): while playing, extrapolate the last worker
+/** Smooth playhead: while playing, extrapolate the last worker
  *  position by wall-clock elapsed · rate, clamped to [0, duration]. Paused /
  *  scrubbing → `lastNs` unchanged. */
 export function interpolatePlayhead(

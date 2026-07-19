@@ -51,8 +51,7 @@ declare module "core/Controller" {
     stream: number;
     // Bitmask (CameraName[] or a raw number); omitted/undefined means
     // the firmware default (CAM_L | CAM_R). "C" is REJected until the
-    // center camera has a strobe cable — see
-    // docs/history/refactor/synced-capture.md §2/§8.
+    // center camera has a strobe cable.
     cameras?: CameraName[] | number;
     pulse?: number; // trigger pulse width, in microseconds
     // v2.0 trigger settle HOLD (µs) — held only when this request SWITCHES the
@@ -69,8 +68,7 @@ declare module "core/Controller" {
   export type FrameAccepted = { queue_position: number };
   /** CMD_FRAME FIN payload, latched at exposure start (strobe rising
    *  edge). Timestamps are MCU microseconds, as `bigint` (uint64,
-   *  matching firmware's Global::time — see
-   *  docs/history/refactor/synced-capture.md §9 FW1). */
+   *  matching firmware's Global::time). */
   export type FrameResult = {
     stream: number;
     /** Firmware-monotonic capture id (1-based; 0 = none). Stable frame
@@ -87,7 +85,7 @@ declare module "core/Controller" {
   };
 
   /**
-   * Protocol v2 two-phase request (docs/history/refactor/synced-capture.md §3.1/§5):
+   * Protocol v2 two-phase request:
    * `accepted` resolves on ACK (queued/applied; rejects on REJ) independently
    * of the returned promise itself, which only resolves on FIN (or rejects on
    * a REJ at either phase).
@@ -112,7 +110,7 @@ declare module "core/Controller" {
         Readonly<FirmwareVersion>;
       readonly Reset: PacketFactory<ResetType>;
       readonly Enable: PacketFactory<Boolean>;
-      /** Clock calibration (unified-time proposal, Rulings 4). GET → the
+      /** Clock calibration. GET → the
        *  MCU's uint64 MICROSECOND clock as `bigint`, stamped firmware-side
        *  at packet parse time (same Global::time clock/units as
        *  `FrameResult.t_trigger`/`t_exposure`). SET (arg = new counter
@@ -149,8 +147,7 @@ declare module "core/Controller" {
       rxBytes: number;
       txPackets: number;
       rxPackets: number;
-      // ---- Serial pressure (serial-rate-governor.md Part 1; poll-on-read
-      // at the caller's stats cadence) --------------------------------------
+      // ---- Serial pressure (poll-on-read at the caller's stats cadence) ----
       /** Kernel tty output-queue depth (TIOCOUTQ) — where CDC-ACM NAK
        *  backpressure materializes. 0 when `outqSupported` is false. */
       outqBytes: number;
@@ -197,8 +194,8 @@ declare module "core/Controller" {
     ): Promise<PacketInstance<T>>;
 
     /**
-     * Sequence == 0 fire-and-forget (docs/history/refactor/synced-capture.md
-     * §3.1): the firmware performs the SET but sends no ACK/FIN/REJ at
+     * Sequence == 0 fire-and-forget: the firmware performs the SET but sends
+     * no ACK/FIN/REJ at
      * all — no promise, no pending-map entry. Intended for high-rate
      * stream position updates (CMD_STREAM UPDATE, ~1kHz); throws
      * synchronously on a transport/encode failure.
@@ -216,7 +213,7 @@ declare module "core/Controller" {
      * version *mismatch* — only on a transport/REJ failure — so old
      * firmware simply keeps v2Capable false (v1-compat: every property
      * resolves on ACK, matching pre-v2 behavior) rather than refusing
-     * to operate. See docs/history/refactor/synced-capture.md §9.3 (P3.1a).
+     * to operate.
      */
     verifyVersion(): Promise<FirmwareVersion & { compatible: boolean }>;
     release(): void;
@@ -235,7 +232,7 @@ declare module "core/Controller" {
   export type ResetType = "SOFT" | "HARD" | "MEMS";
   export type LogLevel = "OFF" | "ERR" | "WARN" | "INFO" | "VERB";
   export type AnalogChannels = [number, number, number, number];
-  // ---- Native mirror position sink (native-compose-controller.md) ----------
+  // ---- Native mirror position sink ----------
 
   /** One native-history sample: the PREDICTED volts (DAC round-trip —
    *  predictVolts parity) at a host-steady-ns stamp. */
@@ -255,8 +252,8 @@ declare module "core/Controller" {
   }
 
   /**
-   * The controller's NATIVE position in-port (native-compose-controller.md
-   * planner decision 2/3): accepts FINAL volts off a port link's delivery
+   * The controller's NATIVE position in-port: accepts FINAL volts off a port
+   * link's delivery
    * thread and natively replicates the JS StreamHandle.update path — the
    * stream-update GATE (1 ms min interval + dedupe), the channels() volt→DAC
    * conversion, and the CMD_STREAM UPDATE fire-and-forget write through the
@@ -265,7 +262,7 @@ declare module "core/Controller" {
    * disconnect writes are counted no-ops). Each accepted write records into
    * a fixed 4096-sample native history ring (the mirror-history authority
    * for NATIVELY-driven inputs). Stream lifecycle stays JS: create/TERMINATE
-   * ride `Controller.createStream` (FW5 + quiesce ownership unchanged).
+   * ride `Controller.createStream` (quiesce ownership unchanged).
    */
   export interface MirrorSink extends CoreObject<MirrorSink> {
     /** Typed volts IN port — runtime tag `"volts"`. */
@@ -277,7 +274,7 @@ declare module "core/Controller" {
       throttled: number;
       errors: number;
       /** Fairness-reserve deferrals (coalesced UPDATEs behind a pending
-       *  two-phase request — serial-rate-governor.md Part 2). */
+       *  two-phase request). */
       deferred: number;
       /** Governor multiplicative decreases. */
       backoffs: number;
@@ -287,14 +284,14 @@ declare module "core/Controller" {
       effectiveRateHz: number;
       ceilingHz: number;
       governorState: "off" | "steady" | "seeking" | "backoff";
-      /** ACK-RTT view — the session's serial-latency estimate (Part 4) reads
+      /** ACK-RTT view — the session's serial-latency estimate reads
        *  p50 here at its stats throttle. */
       ackRttP50: number;
       ackRttP95: number;
       ackRttCount: number;
     };
     /** Live-retune the AIMD governor (partial update; named errors on bad
-     *  ranges). `enabled: false` pins the wave-5 fixed 1 ms gate exactly.
+     *  ranges). `enabled: false` pins the fixed 1 ms gate exactly.
      *  The session sets `ceilingHz` = the global prediction_rate_hz. */
     setGovernor(params: {
       enabled?: boolean;

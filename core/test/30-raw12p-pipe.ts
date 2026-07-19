@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// multi-fovea-recording ruling 1: PACKED raw-12p camera pipes
+// PACKED raw-12p camera pipes
 // (`attachRaw12pPipe`). Unlike the raw pipe (test 29 — the UNPACKED 16-bit
 // `frame->raw` container), this taps the ArvBuffer BEFORE Frame construction
 // (`Arv::Stream::BufferTap`, fired inside `Stream::iterate()` before the 12p→16
@@ -23,8 +23,8 @@
 // WHOLE-BYTE, NON-packed format), so `payloadSize == width*height`. The tap is
 // format-AGNOSTIC (it copies arv_buffer's payload bytes verbatim regardless of
 // packing), so this proves the plumbing; a GENUINE Bayer-12p wire capture
-// (payloadSize == width*height*3/2) is rig-gated (stage-f §Multi-fovea
-// recording — "12p payload verbatim vs a reference wire capture").
+// (payloadSize == width*height*3/2) needs hardware (12p payload verbatim vs a
+// reference wire capture).
 //
 // Run UNSANDBOXED: /opt/homebrew/bin/node core/test/30-raw12p-pipe.ts
 

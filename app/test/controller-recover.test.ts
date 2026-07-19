@@ -1,5 +1,4 @@
-// Controller MEMS recovery (right-dac-freeze M2,
-// docs/dev/right-dac-freeze-2026-07-12.md). `recoverMems()` re-inits the MEMS
+// Controller MEMS recovery. `recoverMems()` re-inits the MEMS
 // DACs in place via System::Reset(MEMS = 2) WITHOUT dropping the session.
 // Verifies: (1) it sends the MEMS reset enum on capable firmware; (2) it is
 // version-gated — a hard reject below 2.1.0 with nothing put on the wire;

@@ -21,8 +21,8 @@ const titleBarHeight = ref(0);
 
 <template>
   <div class="main" :style="{ top: titleBarHeight + 'px' }">
-    <!-- Async-setup rejections must be observable, not an infinite spinner
-         (rig find 2026-07-11) — same boundary as ConfigWindow/AppWindow. -->
+    <!-- Async-setup rejections must be observable, not an infinite spinner —
+         same boundary as ConfigWindow/AppWindow. -->
     <ErrorBoundary>
       <Suspense>
         <TeleCanvasBody />

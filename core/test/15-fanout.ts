@@ -4,21 +4,21 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// WS1 real-1f (B-19b Q6 + B-20 teardown): with the registry JS view-tap loop
+// With the registry JS view-tap loop
 // GONE, `camera.stream` fans to multiple free-running native consumers as
 // concurrent `Stream`-base subscribers, AND an ORDERLY vision-session teardown
 // tears them all down cleanly (this is the multi-window-switch drain path).
 //
 // Drives THREE consumers at once on one fake camera:
-//   - the real-1e ConverterStream (camera → BGRA pipe, read via the reader addon),
+//   - the ConverterStream (camera → BGRA pipe, read via the reader addon),
 //   - the marker `detector.stream` (native detection stream), and
-//   - the real-1d KcfTrackerStream (createTracker).
+//   - the KcfTrackerStream (createTracker).
 // Then tears down IN ORDER — stop the loops → detach the converter → release the
 // tracker/detector/camera CoreObjects — which drops every Arv::Stream/Camera
 // RefCount reference and joins every thread, so the process EXITS NATURALLY
 // (exit 0) with NO `cleanup()`, no hang, and no "RootReference destroyed with
-// non-zero reference" segfault (B-20 root cause: those crashes came from
-// tearing down via `cleanup()`/`process.exit` WITHOUT the orderly release).
+// non-zero reference" segfault (which occurs when tearing down via
+// `cleanup()`/`process.exit` WITHOUT the orderly release).
 // NO hardware (fake camera). Run: /opt/homebrew/bin/node core/test/15-fanout.ts
 
 import assert from "node:assert/strict";
@@ -42,7 +42,7 @@ const [height, width] = (await camera.grab(2_000_000)).raw.shape as [number, num
 
 let stop = false, converterFrames = 0, detectorTicks = 0, kcfResults = 0;
 
-// --- consumer 1: real-1e converter → BGRA pipe, read back via the reader ------
+// --- consumer 1: converter → BGRA pipe, read back via the reader ------
 const pipeId = "fan:pipe";
 const bytes = width * height * 4;
 P.advertise({ id: pipeId, pixelFormat: "BGRA8", dtype: "U8", width, height, channels: 4, stride: width * 4, bytesPerFrame: bytes, ringDepth: 4 });
@@ -67,7 +67,7 @@ const detectorLoop = (async () => {
   }
 })();
 
-// --- consumer 3: real-1d KCF tracker thread ----------------------------------
+// --- consumer 3: KCF tracker thread ----------------------------------
 const tracker = T.createTracker(camera);
 tracker.arm({ x: Math.floor(width / 3), y: Math.floor(height / 3), width: 96, height: 96 });
 const kcfLoop = (async () => {

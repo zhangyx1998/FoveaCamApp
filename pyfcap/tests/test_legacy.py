@@ -4,8 +4,8 @@
 # You may find the full license in project root directory.
 # -------------------------------------------------------
 """Legacy .stream/.meta read path over a fixture dump written by the REAL
-legacy writer (createLegacySink → StreamWriter — byte-identical to pre-B-5
-recordings)."""
+legacy writer (createLegacySink → StreamWriter — byte-identical to real
+legacy recordings)."""
 
 from pathlib import Path
 

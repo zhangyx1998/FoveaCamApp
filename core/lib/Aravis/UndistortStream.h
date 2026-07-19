@@ -5,17 +5,17 @@
 // -------------------------------------------------------
 #pragma once
 
-// unified-time-and-topology §5 (B, native re-plumb): the UNDISTORT brick v2.
+// The UNDISTORT brick v2.
 // Input is the CONVERTER's in-process OwnedFrame tap (BGRA/converted only —
 // NEVER the raw Bayer Arv::Stream; raw never leaves the converter). Two
 // variants, selected at construction:
 //   - INTRINSIC: classic `cv::remap` with maps precomputed at attach from the
 //     persisted CameraCalibration JSON (`cv::initUndistortRectifyMap`) —
-//     cached-maps behavior unchanged from v1 (center camera).
+//     cached-maps behavior (center camera).
 //   - HOMOGRAPHY: per-frame `cv::warpPerspective` with H looked up from the
-//     native ParamRing by the frame's host time. Timestamps are OWNER-APPLIED
-//     (unified-time ruling 2026-07-08): the camera stamps every frame with its
-//     calibrated dt at Frame creation, so the lookup uses
+//     native ParamRing by the frame's host time. Timestamps are OWNER-APPLIED:
+//     the camera stamps every frame with its calibrated dt at Frame creation,
+//     so the lookup uses
 //     `hostNs = frame.deviceTimestamp` DIRECTLY — no per-brick offset. The
 //     probe's `calibratedClock` reflects the CAMERA's calibration state
 //     (ClockCalibration registry, keyed by the serial resolved at attach).
@@ -47,7 +47,7 @@ class UndistortStream : public ChainedStream {
 public:
   using Ptr = std::shared_ptr<UndistortStream>;
   enum class Variant { Intrinsic, Homography };
-  // FIFO input capacity (controller-node-and-fifo-edges §1): the undistort
+  // FIFO input capacity: the undistort
   // brick consumes the converter's OwnedFrame tap through a bounded blocking
   // FIFO so EVERY converted frame is processed in order; a full queue
   // backpressures the converter (which sheds at its own latest-wins camera
@@ -55,7 +55,7 @@ public:
   static constexpr size_t kFifoCapacity = 8;
 
   // INTRINSIC variant. Maps built SYNCHRONOUSLY here (attach, NAPI thread —
-  // tens of ms once per session-open, B-23 ruling #4), owned by the stream
+  // tens of ms once per session-open), owned by the stream
   // (2× CV_32FC1 sensor-size Mats), freed with the stream.
   static Ptr create(Source source, std::string sourceId,
                     const CameraCalibration::Ptr &cal, std::string name) {
@@ -131,9 +131,9 @@ protected:
   void stop() override {
     ChainedStream::stop();
     // Parked (stream thread — single-writer over buf_): drop the reused
-    // full-frame output (value-sweep 2026-07-11 idle-retention). map1_/map2_
-    // are deliberately KEPT: initUndistortRectifyMap at sensor size is an
-    // expensive rebuild, not worth the park-time savings.
+    // full-frame output. map1_/map2_ are deliberately KEPT:
+    // initUndistortRectifyMap at sensor size is an expensive rebuild, not worth
+    // the park-time savings.
     buf_.release();
   }
 
@@ -164,7 +164,7 @@ protected:
       cv::remap(in->mat, buf_, map1_, map2_, cv::INTER_LINEAR);
     } else {
       // OWNER-APPLIED timestamps: deviceTimestamp is already calibrated at
-      // Frame creation (Camera dt, unified-time ruling) — use it DIRECTLY.
+      // Frame creation (Camera dt) — use it DIRECTLY.
       const int64_t hostNs = static_cast<int64_t>(in->deviceTimestamp);
       ParamRing::Params h;
       if (ring_.lookup(hostNs, h)) {

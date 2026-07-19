@@ -24,9 +24,9 @@ import {
 
 // The cross-process config SCHEMA — doc path, value unions, defaults, clamp
 // bounds — now lives in the Vue-free `./config-schema` so the orchestrator
-// readers can share it without importing this Vue-touching module (they used to
-// hand-mirror every literal). Re-exported here so existing `@lib/config`
-// consumers keep the same import surface.
+// readers can share it without importing this Vue-touching module.
+// Re-exported here so existing `@lib/config` consumers keep the same import
+// surface.
 export { APP_CONFIG_PATH };
 export type { RecordCompression };
 
@@ -59,12 +59,12 @@ export interface AppConfig {
   // keeps its own composition and its per-stream toggles gate WHICH streams use
   // this method (disabled under "none"). On-disk contract unchanged: compressed
   // streams carry the `/zlib` pixelFormat suffix, so the viewer/pyfcap decode is
-  // untouched. NOTE (rig-gated, stage-f): lossless zlib may not hold full-rate
+  // untouched. NOTE (verify on hardware): lossless zlib may not hold full-rate
   // 12p on all three cameras — drops attribute honestly in the RecordButton hover.
   record_compression?: RecordCompression;
   // ---- Camera layout / calibration geometry ----------------------------
-  // Stereo baseline (mm) — LEGACY FALLBACK ONLY (2026-07-09 per-triplet-settings
-  // wave). The baseline is now a per-TRIPLE setting (`baseline_mm` in the
+  // Stereo baseline (mm) — LEGACY FALLBACK ONLY. The baseline is a per-TRIPLE
+  // setting (`baseline_mm` in the
   // `["triples", <hash>]` doc); this app-level value is only consumed as the
   // fallback when a triple has no `baseline_mm` (see `@lib/calibration-data`'s
   // `resolveBaseline`). NOT surfaced in the Settings App section anymore — the
@@ -77,7 +77,7 @@ export interface AppConfig {
   // immediately (store-hub broadcast), and vice-versa.
   cal_marker_size_mm: number;
   cal_marker_ratio: number;
-  // Anaglyph style (user ruling 2026-07-09) — the left-eye/right-eye color
+  // Anaglyph style — the left-eye/right-eye color
   // arrangement for EVERY anaglyph surface: the disparity-scope center "Anaglyph"
   // view AND the standalone viewer's 3D mode. Written as "<left><right>": R = red,
   // B = blue, C = cyan. Default "RC" = the historical red-left / cyan-right. The
@@ -86,43 +86,43 @@ export interface AppConfig {
   // brick). Applies LIVE: the disparity session watches this doc and retunes the
   // composite brick without reconnect; the viewer recomposes on the next frame.
   anaglyph_style?: AnaglyphStyle;
-  // Capture stack depth. NOTE (2026-07-09): this AppConfig key is currently
+  // Capture stack depth. NOTE: this AppConfig key is currently
   // UNUSED — manual-control keeps its own session-local `cap_stack` state, so a
   // value here drives nothing. Deliberately NOT surfaced in the config window
   // ("every setting shown must drive behavior"). Kept for back-compat / callers
   // that may adopt it later.
   cap_stack: number;
   // Prediction rate (Hz) — GLOBAL setting driving the native IMM motion-
-  // predictor brick's free-running emit rate (docs/proposals/prediction-compose-
-  // node.md ruling 2). Default 600, clamped 60..1000. Edited from BOTH Settings
+  // predictor brick's free-running emit rate. Default 600, clamped 60..1000.
+  // Edited from BOTH Settings
   // → Global config AND the disparity-scope drawer slider (same key), and
   // live-applied by the disparity-scope session via `imm.setParams({ rateHz })`
   // — no reconnect. The default + clamp bounds are the shared `@lib/config-schema`
   // constants (`DEFAULT_PREDICTION_RATE_HZ`, `PREDICTION_RATE_MIN/MAX`), which the
   // Vue-free `@orchestrator/prediction-rate` reader imports too (single source).
   prediction_rate_hz?: number;
-  // Serial-latency compensation in the motion predictor (serial-rate-
-  // governor.md Part 4, ruled 2026-07-10). ON: the disparity-scope session
+  // Serial-latency compensation in the motion predictor. ON: the
+  // disparity-scope session
   // adds a MEASURED one-way serial latency (EMA of the ACK-RTT p50 / 2) to
   // the per-triple fixed `delay_compensation_ms` lookahead, live-applied via
   // `imm.setParams`. OFF (default) / no controller / no RTT samples =
   // byte-identical fixed behavior. Settings → Global config only (no drawer
-  // control, per ruling). Orchestrator-side twin: `@orchestrator/serial-latency`.
+  // control). Orchestrator-side twin: `@orchestrator/serial-latency`.
   serial_latency_comp?: boolean;
-  // ---- Viewer video export (viewer-export.md spec 10) ------------------
+  // ---- Viewer video export ---------------------------------------------
   // Global PARALLEL-export toggle. false (default) = new exports QUEUE and
   // dispatch after the current one finishes; true = run concurrently. Persisted
   // like every other viewer/app option; the viewer window pushes it to its
   // playback engine (the queue's dispatch policy) on change + at spawn.
   export_parallel?: boolean;
-  // ---- Projection split view (projection-split-view.md deliverable 6) ---
+  // ---- Projection split view -------------------------------------------
   // Auto-close a projection window when ALL its panes have TERMINATED (their
   // sources didn't reappear within the rebind grace, ~10 s). Default TRUE.
   // A pane frozen by a mere app-switch handoff rebinds and never counts, so a
   // default-on auto-close doesn't erase projections on every switch — only a
   // window whose every source is truly gone closes itself.
   projection_auto_close?: boolean;
-  // ---- Profiler node graph (profiler-graph-handrolled.md ruling 8) ------
+  // ---- Profiler node graph ---------------------------------------------
   // Hover-detail card behavior for the profiler's pipeline graph. "follow"
   // (default) — the card tracks the cursor, quadrant-flipped so it never
   // overflows the graph container. "corner" — the card snaps to a container

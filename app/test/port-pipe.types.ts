@@ -4,14 +4,13 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// COMPILE-TIME harness for the native port/pipe d.ts (native-port-pipe.md
-// §"TS harness", ruling addendum 2026-07-10). Type-only — never imported at
-// runtime; compiled by the vue-tsc gate via an explicit tsconfig `include`
-// entry. Every `@ts-expect-error` line FAILS the gate if a future d.ts
-// regression makes the illegal call compile (TS flags an unused directive),
-// and the legal calls fail it if the surface breaks. Runtime tags are pinned
-// to these same payloads by core/test/42 + 44 (ruling: runtime and compile
-// time must agree).
+// COMPILE-TIME harness for the native port/pipe d.ts. Type-only — never
+// imported at runtime; compiled by the vue-tsc gate via an explicit tsconfig
+// `include` entry. Every `@ts-expect-error` line FAILS the gate if a d.ts
+// change makes the illegal call compile (TS flags an unused directive), and
+// the legal calls fail it if the surface breaks. Runtime tags are pinned to
+// these same payloads by core/test/42 + 44 (runtime and compile time must
+// agree).
 
 import type {
   Compose,
@@ -67,7 +66,7 @@ tracker.track_out.pipe(tracker.track_out);
 // @ts-expect-error — an in-port has no pipe()
 imm.measure_in.pipe(tracker.track_out);
 
-// --- wave-5 lanes (native-compose-controller.md) ---------------------------------
+// --- compose lanes ---------------------------------------------------------------
 
 declare const compose: Compose;
 declare const sink: MirrorSink;

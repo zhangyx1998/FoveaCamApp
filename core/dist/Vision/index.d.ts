@@ -143,7 +143,7 @@ declare module "core/Vision" {
     sigmaY?: number, // default: sigmaX
   ): T;
 
-  /** Async `gaussian` (calibration review 2026-07-11 #7): identical math, the
+  /** Async `gaussian`: identical math, the
    *  blur runs off the JS loop. Zero-copy input — do not mutate `mat` while
    *  the promise is pending. */
   export function gaussianAsync<T extends Mat>(
@@ -208,8 +208,8 @@ declare module "core/Vision" {
     confidence?: number, // default: 0.995
   ): Mat<Float64Array>;
 
-  /** Async `findHomography` (calibration review 2026-07-11 #7): identical
-   *  math/defaults, the RANSAC fit runs off the JS loop (inputs are copied). */
+  /** Async `findHomography`: identical math/defaults, the RANSAC fit runs off
+   *  the JS loop (inputs are copied). */
   export function findHomographyAsync(
     src_points: Point2d[],
     dst_points: Point2d[],
@@ -248,9 +248,8 @@ declare module "core/Vision" {
     right: T,
     numDisparities?: number, // default: 0
     blockSize?: number, // default: 21
-    // Signed search window floor (depth-view-legacy-stereobm, 2026-07-11):
-    // foveated gaze makes true disparity signed — pass a negative floor
-    // (sgbm-signed-range.md window) to search −W…+W. Default 0 = legacy.
+    // Signed search window floor: foveated gaze makes true disparity signed —
+    // pass a negative floor to search −W…+W. Default 0 = classic 0…W.
     minDisparity?: number,
   ): Mat<TypedArray>;
 
@@ -273,8 +272,8 @@ declare module "core/Vision" {
       frame: Frame,
       scale?: number, // default 1.0
     ): Promise<MarkerDetectResults>;
-    /** Detection stream over a camera stream. `name` (B-24: graph node ids
-     *  ARE meter names — pass `nodeId.detect(serial)`) names the native
+    /** Detection stream over a camera stream. `name` (graph node ids ARE
+     *  meter names — pass `nodeId.detect(serial)`) names the native
      *  ThreadMeter so the detect node's stats fold into `perfSnapshot`; the
      *  returned stream's `probe()` reads that meter out-of-loop (null once
      *  the stream is released — weak capture, never extends its lifetime). */

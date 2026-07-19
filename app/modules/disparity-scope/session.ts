@@ -7,8 +7,7 @@
 // Disparity-scope session — auto-vergence, SPLIT-NODE topology (thin
 // main-thread coordinator: wires the graph, forwards final results).
 // Behavior spec (topology, drag, freeze window, tracker, join, actuation,
-// teardown): docs/spec/disparity-scope.md. Proposal:
-// docs/proposals/split-disparity-nodes.md (ruled 2026-07-09).
+// teardown): docs/spec/disparity-scope.md.
 
 import { defineSession, type ServerSession } from "@orchestrator/runtime";
 import { acquireTriple, type CalibratedTriple } from "@orchestrator/calibration";
@@ -259,7 +258,7 @@ export default function disparityScopeSession(
       R: null,
     };
     // General-purpose bricks composed on activate, retired via `disposers`
-    // consumer-most-first (spec §topology, §teardown).
+    // consumer-most-first (spec §topology).
     let stripSlice: SliceHandle | null = null;
     let tileSlice: SliceHandle | null = null;
     let stripScale: ScaleHandle | null = null;
@@ -268,7 +267,7 @@ export default function disparityScopeSession(
       R: null,
     };
     /** SGBM disparity + heatmap — PARKED until the renderer connects the heatmap
-     *  pipe (ruling 2; spec §topology). */
+     *  pipe (spec §topology). */
     let stereo: StereoHandle | null = null;
     let stereoHeatmap: HeatmapHandle | null = null;
     /** Anaglyph / L-vs-R difference COMPOSITE brick — parked until the center
@@ -308,7 +307,7 @@ export default function disparityScopeSession(
     let status = "initializing";
     let lastGood: Point2d = ZERO;
 
-    // --- chained tracker state (§3.5; spec §tracker) ---
+    // --- chained tracker state (spec §tracker) ---
     /** Session-owned tracker thread on the C undistort chain. Engine is
      *  runtime-selectable (`state.tracker_type`), both drop-in (tracker-swap.ts). */
     let tk: KcfTracker | null = null;
@@ -342,7 +341,7 @@ export default function disparityScopeSession(
 
     // The named DOF controllers (owned by the PID node once created). `pan` is a
     // PID2D (separate x/y integrators); `verge`/`v_shift` are scalar PIDs.
-    // All in MEASUREMENT-derivative mode (R2, spec §control-law): tracker
+    // All in MEASUREMENT-derivative mode (spec §control-law): tracker
     // target motion must never kick kd; stepVergence supplies each DOF's
     // measurement point.
     const MEAS_D = { derivativeOn: "measurement" } as const;
@@ -383,12 +382,12 @@ export default function disparityScopeSession(
     }
 
     /** The per-triple stored optical zoom override (>0), else null — the middle
-     *  tier of the ruled magnification order (spec §magnification). */
+     *  tier of the magnification order (spec §magnification). */
     function tripleZoomOverride(): number | null {
       return triple?.zoomOverride ?? null;
     }
 
-    /** Resolved match magnification under the ruled order (spec §magnification).
+    /** Resolved match magnification under the resolution order (spec §magnification).
      *  Drives the match scale AND (via `Math.max(1, matchZoom())`) crop/search sizing. */
     function matchZoom(): number {
       return matchMagnification(measuredMatchZoom(), s.state.zoom, tripleZoomOverride());
@@ -422,8 +421,8 @@ export default function disparityScopeSession(
     /** Auto-vergence is OFF (`timeout` at the slider-min `-1` sentinel, or a
      *  manual DOF write latched the hold — see `latchManualHold`): the
      *  control law never steps. Pointer drags and the manual sliders still
-     *  steer — and a live tracker keeps FOLLOWING (ruling 2026-07-12 #2):
-     *  the foveas ride `followVolts(target)` through the frozen/manual DOF
+     *  steer — and a live tracker keeps FOLLOWING: the foveas ride
+     *  `followVolts(target)` through the frozen/manual DOF
      *  values (controlStep's disabled branch); only the CORRECTIONS stop. */
     function autoVergenceDisabled(): boolean {
       return s.state.tuning.timeout < 0 || windowStart === -Infinity;
@@ -440,7 +439,7 @@ export default function disparityScopeSession(
     }
 
     // --- crop/scale geometry (spec §topology) ------------------------------
-    // The session owns ALL sizing math (ruling 5); the match workers stay
+    // The session owns ALL sizing math; the match workers stay
     // geometry-free. Steering is reactive (applied on the producers' next frame).
 
     function clampToWide(r: Rect): Rect {
@@ -454,8 +453,8 @@ export default function disparityScopeSession(
       };
     }
 
-    /** The display center tile: `wide/zoom`, target-centered (the same crop
-     *  the old kernel's "sliced" view cut). */
+    /** The display center tile: `wide/zoom`, target-centered (the crop the
+     *  `sliced` view shows). */
     function tileRect(): Rect {
       const z = Math.max(1, matchZoom()); // resolved zoom (Auto → measured)
       return clampToWide(
@@ -467,7 +466,7 @@ export default function disparityScopeSession(
     }
 
     /** The match strip: the center tile expanded by `expand_x`/`expand_y`,
-     *  target-centered (the guide strip `analyzeVergence` used to cut). */
+     *  target-centered. */
     function computeStripRect(): Rect {
       const z = Math.max(1, matchZoom()); // resolved zoom (Auto → measured)
       const t = s.state.tuning;
@@ -527,7 +526,7 @@ export default function disparityScopeSession(
         composite?.retune(compositeParamsFor(view));
     }
 
-    // --- chained tracker (§3.5): arm + result feed -------------------------
+    // --- chained tracker: arm + result feed -------------------------
 
     /** Publish the `overridden` telemetry on TRANSITIONS only (the tracker
      *  re-affirms the flag every frame; the UI badge needs edges, not spam). */
@@ -603,7 +602,7 @@ export default function disparityScopeSession(
       }
     }
 
-    // R1 (spec §control-law): {t, target} ring in host steady-clock ns — the
+    // (spec §control-law): {t, target} ring in host steady-clock ns — the
     // trusted-time domain every pipe frame's deviceTimestamp is calibrated
     // into — appended at EVERY target write, so the join can resolve the
     // target AS OF a matched frame's capture epoch. 256 entries cover >1 s at
@@ -624,18 +623,13 @@ export default function disparityScopeSession(
       {
         armed: () => trackerArmed,
         onDrag(center) {
-          // D1 (docs/dev/mirror-flicker-2026-07-12.md): this path used to
-          // ALSO push volts — with the RAW (un-slewed) followVolts pose,
-          // alternating the compose floor between two trajectories against
-          // the slewed pointer/match writers at a combined ~120-240 Hz (the
-          // drag flicker). The volts push is DELETED, not slewed: the pointer
-          // handler pushes synchronously, and the match-path re-affirm
-          // (controlStep's overridden branch) slews toward `state.target` —
-          // which this handler still UPDATES below — at match rate, off the
-          // same camera-frame cadence as this callback. A coalesced-away
-          // pointer move is therefore still steered-to within one match tick
-          // (the old comment's concern), with strictly fewer volts writers:
-          // every drag writer is slewed BY CONSTRUCTION.
+          // This path must NOT push volts — it only UPDATES the target below.
+          // The pointer handler pushes synchronously, and the match-path
+          // re-affirm (controlStep's overridden branch) slews toward
+          // `state.target` at match rate, off the same camera-frame cadence as
+          // this callback — so a coalesced-away pointer move is still
+          // steered-to within one match tick, and every drag volts writer is
+          // slewed BY CONSTRUCTION (no un-slewed volts path).
           pidNode?.ingest("target"); // meter the kcf → pid target edge
           lastGood = center;
           writeTarget(center);
@@ -646,9 +640,9 @@ export default function disparityScopeSession(
           pidNode?.ingest("target"); // meter the kcf → pid target edge (accepted rate)
           trackerActive = true;
           // Tracking = activity: keep the freeze window fresh — but NEVER
-          // clear the manual-hold latch (user ruling 2026-07-12 #2: a slider
-          // write freezes auto-vergence while the tracker keeps following;
-          // tracker results must not un-hold it).
+          // clear the manual-hold latch (a slider write freezes auto-vergence
+          // while the tracker keeps following; tracker results must not
+          // un-hold it).
           if (windowStart !== -Infinity) windowStart = now();
           lastGood = center;
           writeTarget(center);
@@ -664,10 +658,10 @@ export default function disparityScopeSession(
     );
 
     /** The ONE lost policy — the count-based `onLost` (delivered misses) and
-     *  the R3 stall WATCHDOG (nothing delivered at all) both land here (spec
-     *  §tracker; docs/dev/mirror-flicker-2026-07-12.md addendum): release
-     *  auto-follow, hold the last good target, restart the freeze window,
-     *  latch `tracker_lost`. `composeHealthy` then flips feed-forward off at
+     *  the stall WATCHDOG (nothing delivered at all) both land here (spec
+     *  §tracker): release auto-follow, hold the last good target, restart the
+     *  freeze window, latch `tracker_lost`. `composeHealthy` then flips
+     *  feed-forward off at
      *  the next rebase — a dead source can never keep driving the mirrors
      *  through the predictor's coast. */
     function markTrackerLost(): void {
@@ -680,13 +674,12 @@ export default function disparityScopeSession(
       s.telemetry({ tracker_bbox: null, tracker_lost: true });
     }
 
-    /** AUTOTUNE-ONLY disengage (user ruling 2026-07-12 #2 narrowed this):
-     *  drop the auto-follow AND latch the hold by expiring the convergence
-     *  window (`-Infinity` ⇒ `autoVergenceDisabled`, covering the `timeout=0`
-     *  no-timeout mode a plain expiry can't). The tune experiments script the
-     *  TARGET, so a live tracker would fight them — `tracker_enabled` flips
-     *  OFF for real (UI/UX review #4: the toggle must not read "on" while
-     *  results are ignored). Manual DOF writes NO LONGER come here — they
+    /** AUTOTUNE-ONLY disengage: drop the auto-follow AND latch the hold by
+     *  expiring the convergence window (`-Infinity` ⇒ `autoVergenceDisabled`,
+     *  covering the `timeout=0` no-timeout mode a plain expiry can't). The tune
+     *  experiments script the TARGET, so a live tracker would fight them —
+     *  `tracker_enabled` flips OFF for real (the toggle must not read "on"
+     *  while results are ignored). Manual DOF writes do NOT come here — they
      *  latch the hold via `latchManualHold` and keep the tracker following. */
     function disengageAutoVergence(): void {
       trackerArmed = false;
@@ -698,7 +691,7 @@ export default function disparityScopeSession(
 
     /** Manual DOF write (`setPid` slider drag) or the PAUSE button freezes
      *  auto-vergence IMMEDIATELY — even mid-track — WITHOUT touching the
-     *  tracker (user ruling 2026-07-12 #2): the hold latch stops PID
+     *  tracker: the hold latch stops PID
      *  stepping, while an armed tracker keeps updating the target and the
      *  foveas keep FOLLOWING it through the (now manual) DOF values —
      *  `controlStep`'s disabled branch. Cleared by: a pointer drag (its
@@ -721,12 +714,12 @@ export default function disparityScopeSession(
       s.telemetry({ vergence_paused: paused });
     }
 
-    // R3 watchdog state: stamped on EVERY delivered tracker result (found or
+    // Watchdog state: stamped on EVERY delivered tracker result (found or
     // miss — delivery is what the count-based tolerance already covers);
     // checked on the telemetry cadence below.
     let lastTrackerResultAt = 0;
 
-    // --- PID-node override slot (generic volts path ONLY since §3.5) --------
+    // --- PID-node override slot (generic volts path ONLY) --------
 
     /** Mirror the server-authoritative override slot into contract state so the
      *  renderer's `usePidOverride` proxy reads `engaged`/`value` back. */
@@ -755,8 +748,8 @@ export default function disparityScopeSession(
       v_shift.value = seed.v_shift; // PID setter clamps to its limits
     }
 
-    // --- two-stage auto-tune (spec §autotune; vergence-loop-tuning.md §1) ---
-    // Session-driven, drawer-gated, RIG-GATED experiments. The run rides the
+    // --- two-stage auto-tune (spec §autotune) ---
+    // Session-driven, drawer-gated; experiments run on hardware. The run rides the
     // existing manual-hold machinery (normal stepping already held, feed-
     // forward down via `frozen()`), drives DOFs through the same controller
     // `.value` + follow-map push path the sliders use, and samples the SAME
@@ -892,7 +885,7 @@ export default function disparityScopeSession(
     }
 
     function startAutotune(stage: AutotuneStage): void {
-      // SILENT while a run is live (UI/UX review blocker): a double-click's
+      // SILENT while a run is live: a double-click's
       // second command must never overwrite the live progress record with a
       // "failed" one — that would re-enable the tune buttons and hide abort
       // while the mirrors are still wiggling.
@@ -1113,7 +1106,7 @@ export default function disparityScopeSession(
       runControl({
         l: (side === "L" ? m : other).center,
         r: (side === "R" ? m : other).center,
-        // R1 (spec §control-law): the error pairs the matched centers with the
+        // (spec §control-law): the error pairs the matched centers with the
         // target AS OF the strip frame's capture epoch (its trusted
         // deviceTimestamp), not the target as of now — a moving target no
         // longer injects phantom error ∝ velocity × pipeline delay.
@@ -1170,15 +1163,15 @@ export default function disparityScopeSession(
       }
       if (autoVergenceDisabled()) {
         // Distinct from "frozen" (a timeout that a drag restarts) AND from the
-        // transient drag "manual" (review #8): the sentinel needs the Timeout
-        // slider moved, the "held" latch a new drag / tracker re-enable.
-        // Ruling 2026-07-12 #2: disabled/held freezes the CORRECTIONS, not
-        // the tracker — while auto-follow is live the foveas keep following
-        // the tracker's target through the frozen/manual DOF values, slewed
-        // like every other follow writer (D1: no un-slewed volts path). No
-        // match-score gate, mirroring the drag ruling — the follow is pure
-        // geometry off the wide-view target. The status names the motion
-        // (review #3): parked and actively-following are visibly different.
+        // transient drag "manual": the sentinel needs the Timeout slider
+        // moved, the "held" latch a new drag / tracker re-enable.
+        // Disabled/held freezes the CORRECTIONS, not the tracker — while
+        // auto-follow is live the foveas keep following the tracker's target
+        // through the frozen/manual DOF values, slewed like every other follow
+        // writer (no un-slewed volts path). No match-score gate, mirroring the
+        // drag path — the follow is pure geometry off the wide-view target. The
+        // status names the motion: parked and actively-following are visibly
+        // different.
         const base = s.state.tuning.timeout < 0 ? "auto off" : "held";
         if (trackerActive) {
           status = `${base} · following`;
@@ -1399,9 +1392,9 @@ export default function disparityScopeSession(
       void disengageTrigger(triggerFaultBlocked(reason), false);
     }
 
-    /** Exposure-authoritative budget over both fovea config docs (P6 —
-     *  multi-fovea's `deriveBudget` shape; the flip point stays inside
-     *  `pairTriggerBudget`). Settle hold comes from the leased triple. */
+    /** Exposure-authoritative budget over both fovea config docs (multi-fovea's
+     *  `deriveBudget` shape; the flip point stays inside `pairTriggerBudget`).
+     *  Settle hold comes from the leased triple. */
     function deriveTriggerBudget(): PairTriggerBudget | null {
       if (!triple) return null;
       const safe = <T,>(fn: () => T, fallback: T): T => {
@@ -1636,7 +1629,7 @@ export default function disparityScopeSession(
 
     // --- lifecycle --------------------------------------------------------
 
-    /** Connect a pipe by id (refcount++ → C-21 gate) and return its worker
+    /** Connect a pipe by id (refcount++ consumer gate) and return its worker
      *  `PipeInput` under `role`; registers the `disconnect` on `disposers`.
      *  Connecting the shared strip twice is fine — refcounted. */
     function connectPipe(role: string, pipeId: string): PipeInput {
@@ -1671,7 +1664,7 @@ export default function disparityScopeSession(
       triggerFaultLatched = false; // a fresh activation clears any prior fault latch
       dragSlew.reset();
       // Seed the capture-epoch ring so frames captured before the first target
-      // write still resolve to the target in effect at activation (R1).
+      // write still resolve to the target in effect at activation.
       targetRing.length = 0;
       recordTarget(
         targetRing,
@@ -1692,7 +1685,7 @@ export default function disparityScopeSession(
       triple = t;
       publishSerials(t.leases, disposers, s);
 
-      // Per-triple baseline (Ruling A): `baseline_mm`, else legacy
+      // Per-triple baseline: `baseline_mm`, else legacy
       // `baseline_distance_mm`, else 200 (`resolveBaseline`). Activate-time only
       // (a Settings edit applies on the next start). Set state (renderer slider)
       // AND the verge limit directly (the `baseline` watch may not fire on a
@@ -1787,7 +1780,7 @@ export default function disparityScopeSession(
         { rect: tileRect(), maxWidth: wide.width, maxHeight: wide.height },
       );
 
-      // SCALE nodes (ruling 5): strip at ratio `s` (meeting the demagnified
+      // SCALE nodes: strip at ratio `s` (meeting the demagnified
       // fovea tiles at the same pixel scale), one needle per fovea at the tile
       // dsize. Strip max = 2× frame; extremes clamp natively.
       stripScaleFactor = effectiveScale();
@@ -1880,8 +1873,8 @@ export default function disparityScopeSession(
         nodeId.stereo("scope"),
         {
           ...stereoDims,
-          // Fixed symmetric −256…+255 window (sgbm-signed-range.md): foveated
-          // gaze makes disparity SIGNED; the 0…+128 default matched garbage.
+          // Fixed symmetric −256…+255 window: foveated gaze makes disparity
+          // SIGNED; a 0…+128 window matches garbage.
           params: SIGNED_DISPARITY_WINDOW,
         },
       );
@@ -1891,9 +1884,9 @@ export default function disparityScopeSession(
         nodeId.heatmap(stereo.pipeId, "view"),
         {
           ...stereoDims,
-          // Normalization PINNED to the −256…+255 window (sgbm-signed-range.md):
-          // per-frame auto min/max locked onto the invalid marker (≈ −257) and
-          // washed the view out; pinned, invalids clamp to the floor color.
+          // Normalization PINNED to the −256…+255 window: per-frame auto
+          // min/max locks onto the invalid marker (≈ −257) and washes the view
+          // out; pinned, invalids clamp to the floor color.
           params: SIGNED_DISPARITY_HEATMAP_RANGE,
         },
       );
@@ -1934,7 +1927,7 @@ export default function disparityScopeSession(
       monitor.done("pipeline");
 
       monitor.start("tracker");
-      // §3.5: the chained tracker on its OWN native thread, tapping the same C
+      // The chained tracker on its OWN native thread, tapping the same C
       // brick the kernel reads (spec §tracker). Disposer added HERE so the tap
       // detaches before the brick dies (FIFO teardown; spec §teardown).
       const kcfId = nodeId.undistortKcf(serialC);
@@ -1991,7 +1984,7 @@ export default function disparityScopeSession(
         // JS keeps its own tracker consumption (pid target + steer + telemetry);
         // pid reads RAW results, not imm predictions (spec §actuation).
         void consumeTracker(tk, (r) => {
-          lastTrackerResultAt = now(); // R3 watchdog: delivery heartbeat
+          lastTrackerResultAt = now(); // stall watchdog: delivery heartbeat
           trackerFeed(r);
         });
       }
@@ -2027,7 +2020,7 @@ export default function disparityScopeSession(
       const pidId = nodeId.win("disparity-scope", "pid");
       const immId = nodeId.imm(kcfId);
       const composeId = nodeId.win("disparity-scope", "compose");
-      const rgba = { kind: "frame", pixelFormat: "RGBA8", dtype: "U8" } as const; // honest RGBA8 (channel-order-fix.md)
+      const rgba = { kind: "frame", pixelFormat: "RGBA8", dtype: "U8" } as const; // honest RGBA8
       const analysis = { kind: "analysis", schema: "template-match" } as const;
       const matchIds = {
         L: nodeId.win("disparity-scope", "match", "L"),
@@ -2035,9 +2028,8 @@ export default function disparityScopeSession(
       } as const;
       // Two generic match workers (meterName = node id → per-side self-meter on
       // each node badge). The correlation heatmap is a Debugger-only DIAGNOSTIC:
-      // start emitHeatmap OFF and gate it on real frame interest (value-sweep
-      // `ungated-diagnostic-heatmap` — computing it every tick with no debugger
-      // was pure waste).
+      // start emitHeatmap OFF and gate it on real frame interest — computing it
+      // every tick with no debugger open is wasted work.
       const HEATMAP_FRAMES = ["match_left", "match_right"] as const;
       let heatmapEmitting = false;
       const syncHeatmapInterest = (): void => {
@@ -2257,10 +2249,10 @@ export default function disparityScopeSession(
           // Catch-all for latch transitions that happen off the direct paths
           // (a drag tick restarting the window, toggle re-arm, activation).
           publishPaused();
-          // R3 stall watchdog (mirror-flicker addendum): while auto-follow is
-          // live, NO delivered result within the deadline ⇒ the source is
-          // stalled — same policy as the count-based lost tolerance. The
-          // status names the distinct cause for the operator.
+          // Stall watchdog: while auto-follow is live, NO delivered result
+          // within the deadline ⇒ the source is stalled — same policy as the
+          // count-based lost tolerance. The status names the distinct cause
+          // for the operator.
           if (
             trackerActive &&
             lastTrackerResultAt > 0 &&
@@ -2295,10 +2287,10 @@ export default function disparityScopeSession(
           const probe = nativeSink.probe();
           if (latencyEnabled && probe.ackRttCount > 0) {
             estimator.push(probe.ackRttP50);
-            // R4 (mirror-flicker addendum): the TOTAL lookahead is clamped —
-            // congestion-inflated RTT must never grow the extrapolation
-            // without bound (larger deltas defeat the sink dedupe and feed
-            // the congestion back). MAX_TOTAL_LOOKAHEAD_MS documents the cap.
+            // The TOTAL lookahead is clamped — congestion-inflated RTT must
+            // never grow the extrapolation without bound (larger deltas defeat
+            // the sink dedupe and feed the congestion back).
+            // MAX_TOTAL_LOOKAHEAD_MS documents the cap.
             const total = clampLookaheadMs(fixedDelayMs + (estimator.latencyMs ?? 0));
             applyDelay(total);
             publishAppliedLookahead(appliedDelayMs);
@@ -2505,7 +2497,7 @@ export default function disparityScopeSession(
           pan.reset();
           verge.reset();
           v_shift.reset();
-          // Under a manual hold (review #7) nothing would ever step, leaving
+          // Under a manual hold nothing would ever step, leaving
           // the zeroed readout desynced from the mirrors — reset then also
           // means "recenter": push the reconstructed (all-zero) pose. While
           // auto runs, keep the no-push behavior (the loop re-converges).
@@ -2518,8 +2510,8 @@ export default function disparityScopeSession(
           }
         },
         async setPid({ dof, value }) {
-          // Bidirectional slider write: latch the hold FIRST (even mid-track
-          // — ruling 2026-07-12 #2), so the next match pair can't fight the
+          // Bidirectional slider write: latch the hold FIRST (even mid-track),
+          // so the next match pair can't fight the
           // manual value, then apply + actuate from the new DOF state. The
           // tracker stays armed: the foveas keep following its target
           // through the manual DOF values (controlStep's disabled branch).
@@ -2569,7 +2561,7 @@ export default function disparityScopeSession(
         },
         // Two-stage auto-tune (spec §autotune): relay per DOF, optionally
         // followed by the CMA-ES joint polish. Drawer-gated, never automatic;
-        // RIG-GATED — unverified on hardware until the owed rig pass.
+        // runs on hardware.
         async autotune({ stage }) {
           startAutotune(stage);
         },
@@ -2650,7 +2642,7 @@ export default function disparityScopeSession(
             cancelAutotune("tracker re-enabled"); // restore before re-arming
             // Toggling the tracker back on HANDS CONTROL BACK: clear the
             // manual-hold latch here — onTrack deliberately preserves it
-            // (ruling 2026-07-12 #2), so this is the explicit re-engage path.
+            // so this is the explicit re-engage path.
             windowStart = now();
             armTracker(s.state.target);
           }

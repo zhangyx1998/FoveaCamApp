@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// pairing-nodes P-1 NAPI seam: the per-stage L/R PAIRING brick (PairStream.h).
+// Pairing NAPI seam: the per-stage L/R PAIRING brick (PairStream.h).
 //   createPairStream(leftId, rightId, opts) -> a create-only CoreObject
 //     leftId/rightId = live convert | undistort | fovea | scale pipe ids (or a
 //                      test source, below). opts = { mode?: "root"|"exact",
@@ -221,7 +221,7 @@ public:
   }
 
   // pushResolvedAnchor({ anchorId?, tExposure, stream?, leftKey, rightKey,
-  //   payload? }) — the root→downstream key delivery (pairing-nodes ruling 2).
+  //   payload? }) — the root→downstream key delivery.
   // The root brick's completed pair carries left/right deviceTimestamps; the
   // session forwards them (loop-safe, FIN rate) as the exact-join keys for the
   // NEXT stage's `exact` brick. No frame is re-stamped (trusted-time).

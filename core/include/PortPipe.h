@@ -8,7 +8,7 @@
 // Generic native PORT/PIPE substrate: bricks expose named TYPED ports as JS
 // handles; `outPort.pipe(inPort, opts?)` connects two native C++ threads and
 // returns a Link with probe()/release(). Link types: latest / fifo / ring.
-// spec: docs/spec/core-port-pipe.md (design: docs/proposals/native-port-pipe.md)
+// spec: docs/spec/core-port-pipe.md
 
 #include <atomic>
 #include <functional>
@@ -34,7 +34,7 @@ struct LinkOptions {
   size_t depth = 8;
 };
 
-/** Out-of-loop probe snapshot (the ruled Link.probe() shape). */
+/** Out-of-loop probe snapshot (the Link.probe() shape). */
 struct LinkStats {
   const char *type = "latest";
   size_t capacity = 1;
@@ -99,7 +99,7 @@ template <typename P> class LinkImpl : public Link {
   using Sink = std::function<void(const P &)>;
 
   // Producer-side subscriber: pushes every item into the channel. A FIFO push
-  // BLOCKS when full (the ruled backpressure); close() wakes it (EOS), which
+  // BLOCKS when full (backpressure); close() wakes it (EOS), which
   // the Stream fan-out treats as this subscriber's exit — never a crash.
   class Sub : public Subscriber<P> {
   public:
@@ -172,7 +172,7 @@ public:
       // Latest-wins: anything written but never delivered was superseded.
       s.dropped = s.written > s.delivered ? s.written - s.delivered : 0;
       s.highWater = 1;
-      s.held = leaky_->holds(); // lock-free probe (retention regression)
+      s.held = leaky_->holds(); // lock-free probe
       break;
     case LinkOptions::Type::Fifo:
       s.type = "fifo";

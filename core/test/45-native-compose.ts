@@ -4,10 +4,9 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Native compose brick + controller pos_in sink (docs/proposals/
-// native-compose-controller.md) — NO hardware. Proves:
+// Native compose brick + controller pos_in sink — NO hardware. Proves:
 //   1. COMPOSE CONFORMANCE — shared vectors (docs/schema/codec/
-//      compose-vectors.json, generated from the wave-1 JS composeVolts
+//      compose-vectors.json, generated from the JS composeVolts
 //      reference): rebase + a piped prediction tick reproduce
 //      V = V_pid + J·(p_pred − p_meas); feedForward=false and a coasted miss
 //      hold the baseline; every rebase emits the baseline FLOOR.
@@ -21,7 +20,7 @@
 //      DAC round-trip volts.
 //   4. HISTORY — ring recording + historyLatest/historyAt (mirrorAt-parity
 //      interpolation + clamped ends) + historyQuery range.
-//   5. TEARDOWN under load + FW5-adjacent: link release mid-flood, then
+//   5. TEARDOWN under load: link release mid-flood, then
 //      Device release mid-flow — the write seam closes FIRST, sink writes
 //      become counted no-ops (open:false), no crash, no further bytes.
 //
@@ -117,7 +116,7 @@ const fixture = JSON.parse(
     name: "win/45/compose",
     initial: { l: { x: 0, y: 0 }, r: { x: 0, y: 0 } },
     // Algebra pin only — the staleness bound and the guard-5 delta clamp
-    // each have their OWN sections (§6c/§6d); the fixture's cross-vector
+    // each have their OWN sections; the fixture's cross-vector
     // floor deltas legitimately exceed the default 50 V clamp.
     staleAfterMs: 0,
     maxDeltaV: 0,
@@ -142,7 +141,7 @@ const fixture = JSON.parse(
   const close = (a: number, b: number, what: string) =>
     assert(Math.abs(a - b) <= tol, `${what}: ${a} vs ${b}`);
 
-  // Expected FLOOR emission under the D2 policy (mirror-flicker 2026-07-12):
+  // Expected FLOOR emission under the D2 policy:
   // the newest cached prediction applied against the NEW linearization; a cold
   // brick (no prediction yet) or an unhealthy rebase floors the raw baseline.
   const floorExpect = (r: Fixture["vectors"][number]["rebase"], lastPred: XY | null): { l: XY; r: XY } => {
@@ -161,7 +160,7 @@ const fixture = JSON.parse(
   for (const v of fixture.vectors) {
     compose.rebase(v.rebase);
     const floor = await next();
-    // Planner decision 4 (amended by HIL D2): every rebase emits a floor, but
+    // Policy: every rebase emits a floor, but
     // the floor no longer RESCINDS a healthy feed-forward — it re-applies the
     // cached prediction against the new linearization (raw only while cold).
     const fexp = floorExpect(v.rebase, lastPred);
@@ -350,7 +349,7 @@ function channels(p: XY, bias: number, dv: number): number[] {
   }
   console.log("45-native-compose: history ring (latest/at/query, mirrorAt parity) OK.");
 
-  // --- 5: teardown under load + FW5-adjacent seam close --------------------------
+  // --- 5: teardown under load + seam close --------------------------
   // Flood ticks while links churn (the port-pipe release-under-load discipline).
   const src = T.createTestPredictionSource("test/45/imm2");
   compose.rebase({
@@ -392,7 +391,7 @@ function channels(p: XY, bias: number, dv: number): number[] {
   console.log("45-native-compose: teardown under load + FW5 seam close (no writes after disconnect) OK.");
 }
 
-// --- 6: HIL D2 floor policy + runaway guards (mirror-flicker 2026-07-12) --------
+// --- 6: D2 floor policy + runaway guards --------
 // (a) the shared floorPolicy sequence vector: a rebase BETWEEN predictions
 //     emits NO baseline dip (pre-fix, every rebase floored RAW vPid — the
 //     60 Hz sawtooth); (b) cold brick still floor-emits; (c) a stalled imm
@@ -512,8 +511,7 @@ function channels(p: XY, bias: number, dv: number): number[] {
     console.log(`45-native-compose: sawtooth regression OK — ${warm.length} emissions, zero baseline dips (pre-fix: every rebase dipped).`);
   }
 
-  // (b) cold brick: zero predictions ever → floors emit the RAW baseline
-  // (planner decision 4 preserved).
+  // (b) cold brick: zero predictions ever → floors emit the RAW baseline.
   {
     const compose = mkCompose("win/45/cold");
     const r = reader(compose);

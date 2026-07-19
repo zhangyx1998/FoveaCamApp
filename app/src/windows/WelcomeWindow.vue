@@ -56,7 +56,7 @@ const cameraList = computed(() => sortedCameras(cameras.value));
 // complete L/C/R triple that has a nickname, show it. The store is main-backed,
 // so SUBSCRIBE to the triple doc (Store.open, not a one-shot read) — a Settings
 // nickname edit while Welcome is open must reflect live, not wait for the next
-// camera-list change (UI/UX review 2026-07-10).
+// camera-list change.
 const rigNickname = ref<string | null>(null);
 let nicknameDoc: { nickname?: string } | null = null;
 watch(cameras, () => void refreshNickname(), { immediate: true });

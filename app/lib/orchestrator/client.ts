@@ -59,7 +59,7 @@ import {
 
 /** Rebuild the Mat shape (`FrameView`/vision ops expect) from a frame payload.
  *  The view is LENGTH-BOUNDED to the payload's shape — pool buffers are sized
- *  to the pipe's max footprint (C-20 slot bytes), so `p.data` may be larger
+ *  to the pipe's max footprint (slot bytes), so `p.data` may be larger
  *  than the active frame; a whole-buffer view would fail `new ImageData`'s
  *  exact-length check downstream. */
 export function payloadToMat(p: FramePayload | null): Mat<Uint8Array> | null {
@@ -75,14 +75,14 @@ export function payloadToMat(p: FramePayload | null): Mat<Uint8Array> | null {
   ) as unknown as Mat<Uint8Array>;
 }
 
-// Renderer SHM transfer pool (C-P2) — the ping-pong buffer pool, port
-// handshake, timeout, and message protocol with the preload live in their own
-// module now. Module-scope singleton, matching the previous inline state: one
-// pool per renderer window (the display path calls `shm.read()` in the frame
-// flush and `shm.release()` when a materialized frame is displaced).
+// Renderer SHM transfer pool — the ping-pong buffer pool, port handshake,
+// timeout, and message protocol with the preload live in their own module.
+// Module-scope singleton: one pool per renderer window (the display path calls
+// `shm.read()` in the frame flush and `shm.release()` when a materialized
+// frame is displaced).
 const shm = createShmClient();
 
-/** Observe-only snapshot of the renderer SHM transfer pool (C-P9): read
+/** Observe-only snapshot of the renderer SHM transfer pool: read
  *  outcomes (ok/null/timeout/error), buffer pool alloc/reuse, in-flight
  *  count, and round-trip latency. Read by the StreamView SHM OSD and folded
  *  into `dumpPerfSnapshot` under `renderer.shmReads`. Meters observe only —
@@ -101,12 +101,12 @@ function domEndpoint(port: MessagePort): Endpoint {
   };
 }
 
-// ---- Renderer error tray (value-sweep-2026-07-11) -------------------------
+// ---- Renderer error tray ---------------------------------------------------
 // Process-wide diagnostics (`topic.error`), fire-and-forget command rejections,
-// and orchestrator-side `report()`s used to dead-end at `console.error` —
-// invisible in a packaged app. They now ALSO land in a bounded, dismissible
-// ring the `ErrorTray.vue` chrome renders. Reactive + module-scope singleton
-// (one tray per renderer window), same pattern as `orchestratorSpans` below.
+// and orchestrator-side `report()`s land in a bounded, dismissible ring the
+// `ErrorTray.vue` chrome renders (otherwise they dead-end at `console.error`,
+// invisible in a packaged app). Reactive + module-scope singleton (one tray
+// per renderer window), same pattern as `orchestratorSpans` below.
 export type ErrorReport = {
   scope: string;
   message: string;
@@ -171,9 +171,9 @@ function errMessage(err: unknown): string {
 
 let channel: Promise<Channel> | null = null;
 
-// Live boot/activation/connect timing feed (§7.1 S5) — bounded ring, module-
-// scope singleton like `rendererLoopLag` below, so a future profiler window
-// (§7.1 S4) can render a timeline without polling `perfSnapshot`.
+// Live boot/activation/connect timing feed — bounded ring, module-scope
+// singleton like `rendererLoopLag` below, so a profiler window can render a
+// timeline without polling `perfSnapshot`.
 const SPAN_RING_CAPACITY = 200;
 export const orchestratorSpans: Span[] = [];
 
@@ -193,8 +193,7 @@ export function connect(): Promise<Channel> {
       // Process-wide diagnostics (e.g. a camera-registry sink throw with no
       // single owning session, a recorder finalize truncation, capture-worker
       // death) — surface to the console AND the dismissible error tray so the
-      // report doesn't dead-end in a packaged app (value-sweep-2026-07-11
-      // `error-broadcast-dead-ends-in-console`).
+      // report doesn't dead-end in a packaged app.
       ch.on(
         topic.error,
         ({ scope, message, level }: { scope: string; message: string; level?: ErrorReport["level"] }) => {
@@ -215,7 +214,7 @@ export function connect(): Promise<Channel> {
 }
 
 /** Why the orchestrator process went down, delivered on the `orchestrator:down`
- *  push (orchestrator-lifecycle-and-exit ruling 3/4). `clean` = it acked a
+ *  push. `clean` = it acked a
  *  graceful quiesce before exit; `killed` = main terminated it (quit / hung-
  *  quiesce timeout) without an ack; `crash` = it died unexpectedly (native
  *  fault, signal, OOM). The clean/crash decision is ACK-based on main's side —
@@ -227,8 +226,7 @@ export type OrchestratorDownReport = {
    *  (shown in the crash banner) — never the clean/crash discriminator. */
   code: number | null;
   message?: string;
-  // ---- Crash diagnostics (orchestrator-lifecycle-and-exit §"Crash
-  // diagnostics", AS SHIPPED). Present only on a NON-clean exit; main flushes
+  // ---- Crash diagnostics. Present only on a NON-clean exit; main flushes
   // the instance's stdout/stderr ring to a file and enriches the report before
   // it reaches the window. All optional — a `clean` report never carries them.
   /** Absolute path to the flushed per-instance stdout/stderr ring buffer
@@ -246,7 +244,7 @@ export type OrchestratorDownReport = {
 
 /** Reactive last-seen orchestrator-down report for THIS window, or null while
  *  the orchestrator is up. The crash surface (`CrashReport.vue`) renders off
- *  it. Owner-scoping (ruling 4): set ONLY when this window actually held an
+ *  it. Owner-scoping: set ONLY when this window actually held an
  *  orchestrator channel, so a window never associated with the dead task
  *  ignores the broadcast. A `clean` report is recorded but the surface hides
  *  it (a graceful shutdown is not a user-facing failure). */
@@ -257,8 +255,7 @@ export const orchestratorDown = shallowRef<OrchestratorDownReport | null>(null);
 // inside <suspense> never resolves). `main.ts` owns the child process and
 // detects the exit reliably, so it broadcasts here instead of relying on
 // MessagePort close semantics across a process crash. Full transparent
-// reconnect (respawn + re-subscribe already-mounted sessions) is out of scope
-// for this fix — see docs/history/refactor/orchestrator.md §12.1 C5 / §12.3 R3.
+// reconnect (respawn + re-subscribe already-mounted sessions) is out of scope.
 window.foveaBridge.onOrchestratorDown((report) => {
   // Only surface in windows that actually connected to the orchestrator — a
   // passive/never-connected window is not "associated with the dead task".
@@ -266,8 +263,7 @@ window.foveaBridge.onOrchestratorDown((report) => {
   channel?.then((ch) => ch.close());
 });
 
-// Renderer-side event-loop lag probe (perf substrate, docs/history/refactor/
-// orchestrator.md §7.3 item 1) — started once at module load, module-scope
+// Renderer-side event-loop lag probe — started once at module load, module-scope
 // singleton so every `StreamView` inspector overlay reads the same numbers
 // instead of each starting its own timer. Read directly (not via a Vue ref)
 // by `StreamView`'s inspector `computed`, which already re-runs at frame
@@ -323,12 +319,11 @@ function shmReadSummary(stats = shmReadStats()): Record<string, string> {
   };
 }
 
-// Perf snapshot dump (§7.3 item 4) — Ctrl+Shift+S while inspector mode is on
-// (see `inspectorMode` in `@lib/util/perf.ts`) fetches `system.perfSnapshot`,
+// Perf snapshot dump — Ctrl+Shift+S while inspector mode is on (see
+// `inspectorMode` in `@lib/util/perf.ts`) fetches `system.perfSnapshot`,
 // merges in this renderer's own loop lag, and writes it under the app data
 // dir. Gated on inspector mode so it's not a stray global shortcut most of
-// the time (same reasoning as the Ctrl+Shift+I collision note, §6 V2 — pick
-// something else if this collides on your platform).
+// the time; pick something else if this collides on your platform.
 if (typeof window !== "undefined") {
   window.addEventListener("keydown", (e) => {
     if (!inspectorMode.value) return;
@@ -340,7 +335,7 @@ if (typeof window !== "undefined") {
 
 /** Fetch `system.perfSnapshot`, merge in this window's own render loop lag,
  *  and write it under the app data dir. Exported so the profiler window's
- *  export button (§7.1 S4) can trigger the same dump the keybind does. */
+ *  export button can trigger the same dump the keybind does. */
 export async function dumpPerfSnapshot(): Promise<string> {
   const ch = await connect();
   const snapshot = await ch.request<Record<string, unknown>>(
@@ -364,15 +359,14 @@ export async function dumpPerfSnapshot(): Promise<string> {
 
 /** What the renderer DISPLAYS: the wire `FramePayload` plus the stream address,
  *  stamped CLIENT-SIDE at the two ref chokepoints (`useSession().frame()`,
- *  `usePipeFrame()`) — the client half of what A-P12 lifted out of wire
- *  `FrameMeta`. The wire types stay transport-only; `source` never crosses a
- *  process boundary. Carrying the address on the displayed payload is what
+ *  `usePipeFrame()`). The wire types stay transport-only; `source` never
+ *  crosses a process boundary. Carrying the address on the displayed payload is what
  *  makes `StreamView`'s projection button implicit — any surface bound to one
  *  of these refs is projectable with zero extra wiring. */
 export type StreamPayload = FramePayload & { source?: PaneSource };
 
 /** What `useSession().frame(name)` returns: the reactive `payload` ref (each
- *  displayed payload carries its client-stamped `source` address, A-P12). */
+ *  displayed payload carries its client-stamped `source` address). */
 export type FrameRef = {
   payload: Readonly<Ref<StreamPayload | null>>;
 };
@@ -385,8 +379,8 @@ export type Session<C extends Contract> = {
   /** Reactive, readonly — read as plain properties (`telemetry.foo`). */
   telemetry: Readonly<TelemetryOf<C>>;
   /** Reactive, readonly — the current session status: `error` (the user-visible
-   *  failure, or null; A-P13) and `progress` (the in-flight spin-up step list,
-   *  or null; ruling 2026-07-09). Seeded on subscribe and updated live;
+   *  failure, or null) and `progress` (the in-flight activation step list,
+   *  or null). Seeded on subscribe and updated live;
    *  additive, so modules opt in to showing it. */
   status: Readonly<SessionStatus>;
   // `string & {}` keeps autocomplete for the contract's static frame names while
@@ -418,7 +412,7 @@ export function useDynamicFrame<C extends Contract>(
   });
 }
 
-// The renderer's pipe reader IO, backed by the shared shm client's C-15 pool
+// The renderer's pipe reader IO, backed by the shared shm client's pool
 // (`readPipe`/`releaseBuffer`) — the transport `createPipeConsumer` polls.
 const pipeReaderIO: PipeReaderIO = {
   readPipe: (shmName, lastSeq, bytes) => shm.readPipe(shmName, lastSeq, bytes),
@@ -426,17 +420,17 @@ const pipeReaderIO: PipeReaderIO = {
 };
 
 /**
- * Bind a reactive `FramePayload` ref to an advertised SHM pipe (WS1 real-1c) —
- * the renderer's replacement for `session.frame()` on the raw-camera preview
- * surfaces. Discovers the pipe from the `pipes` session's reactive `state.pipes`,
- * `connectPipe`s once for a `PipeHandle`, streams frames via C's
+ * Bind a reactive `FramePayload` ref to an advertised SHM pipe — the renderer's
+ * replacement for `session.frame()` on the raw-camera preview surfaces.
+ * Discovers the pipe from the `pipes` session's reactive `state.pipes`,
+ * `connectPipe`s once for a `PipeHandle`, streams frames via
  * `createPipeConsumer` (pixels ride the shared segment, never the Channel),
- * RECONNECTS on an epoch bump (C-20 reuse-safe id), and CLEARS on
+ * RECONNECTS on an epoch bump (reuse-safe id), and CLEARS on
  * un-advertise / CLOSED. `pipeId` may be static or a ref/getter (e.g. the
  * currently-selected `camera:<serial>`); pass null to bind nothing. Returns a
  * readonly ref for `StreamView :payload`; each displayed payload carries its
- * client-stamped `{kind:"pipe"}` address (A-P12), so the bound view is
- * projectable implicitly.
+ * client-stamped `{kind:"pipe"}` address, so the bound view is projectable
+ * implicitly.
  */
 export function usePipeFrame(
   pipeId: MaybeRefOrGetter<string | null | undefined>,
@@ -450,11 +444,10 @@ export function usePipeFrame(
   function teardown(): void {
     consumer?.stop();
     consumer = null;
-    // Un-swallowed (value-sweep-2026-07-11): the balancing disconnect no longer
-    // hides its rejection behind `.catch(() => {})`. `session.call` surfaces a
-    // failed disconnect (a dead channel — the very leak this fix reconciles) to
-    // the error tray instead of vanishing, and its detached default handler
-    // keeps a dead-channel reject from becoming an unhandled rejection.
+    // The balancing disconnect surfaces its rejection instead of hiding it:
+    // `session.call` routes a failed disconnect (a dead channel) to the error
+    // tray, and its detached default handler keeps a dead-channel reject from
+    // becoming an unhandled rejection.
     if (boundId) void session.call("disconnectPipe", { pipeId: boundId });
     boundId = null;
     boundEpoch = null;
@@ -470,9 +463,9 @@ export function usePipeFrame(
     } catch {
       return; // pipe vanished between discovery and connect — the watch retries
     }
-    // A newer bind superseded us while connecting — abort this one.
+    // A newer bind replaced us while connecting — abort this one.
     if (boundId !== id || boundEpoch !== epoch) return;
-    // A-P12 client-side stamp: one address object per bind, applied to every
+    // Client-side stamp: one address object per bind, applied to every
     // displayed payload so `StreamView` derives projectability implicitly.
     const address: PaneSource = { kind: "pipe", id };
     consumer = createPipeConsumer(
@@ -483,8 +476,8 @@ export function usePipeFrame(
         if (stamped) stamped.source = address;
         frame.value = stamped; // p === null on CLOSED → clears the display
       },
-      // value-sweep-2026-07-11 (`pipe-consumer-swallows-read-errors`): after a
-      // streak of failed reads (a dead/stalled pipe), surface once to the tray.
+      // After a streak of failed reads (a dead/stalled pipe), surface once to
+      // the tray.
       ({ consecutive, error }) =>
         reportToTray(
           "pipe",
@@ -577,7 +570,7 @@ export type UseSessionOptions = {
 
 /**
  * Bind a typed session — `state`/`telemetry` mirror the same shape the server
- * `ServerSession` exposes (§12.3 R3), so a module reads `session.state.verge`
+ * `ServerSession` exposes, so a module reads `session.state.verge`
  * directly instead of `session.state("verge").value`. Active subscriptions are
  * torn down with the current effect scope, decrementing the orchestrator's
  * activation interest; passive subscriptions observe state/telemetry without
@@ -654,9 +647,9 @@ export function useSession<C extends Contract>(
   }
   const telemetry = readonly(reactive(telemetryRefs)) as Readonly<TelemetryOf<C>>;
 
-  // Status (A-P13 + spin-up ruling 2026-07-09): one reactive object carrying the
-  // current failure AND the in-flight activation progress list, seeded on
-  // subscribe and updated live via the status topic.
+  // Status: one reactive object carrying the current failure AND the in-flight
+  // activation progress list, seeded on subscribe and updated live via the
+  // status topic.
   const statusState = reactive<SessionStatus>({ error: null, progress: null });
   track(
     ready.then((ch) =>
@@ -674,7 +667,7 @@ export function useSession<C extends Contract>(
     if (cached) return cached;
     {
       const r = shallowRef<StreamPayload | null>(null);
-      // A-P12: the stream address is client-only — stamped onto each DISPLAYED
+      // The stream address is client-only — stamped onto each DISPLAYED
       // payload below (after the shm materialize), never onto the wire types.
       const address: PaneSource = { kind: "frame", session: name, frame: k };
       const fref: FrameRef = {
@@ -721,7 +714,7 @@ export function useSession<C extends Contract>(
       };
       track(
         ready.then((ch) => {
-          // C10: tell the orchestrator this topic is actually read, once, the
+          // Tell the orchestrator this topic is actually read, once, the
           // first time this ref is created — see `ServerSession.frame()`.
           ch.declareFrameInterest(frameTopic);
           return ch.onFrame(frameTopic, (payload) => {
@@ -732,8 +725,8 @@ export function useSession<C extends Contract>(
                   payload.meta.tReceive - payload.meta.tPublish,
                 );
             }
-            // A-P12: the stream address is stamped client-side in `flush` (on
-            // the DISPLAYED payload), not carried on the wire `meta` anymore.
+            // The stream address is stamped client-side in `flush` (on the
+            // DISPLAYED payload), not carried on the wire `meta`.
             latest = payload;
             if (!scheduled) {
               scheduled = true;
@@ -742,11 +735,10 @@ export function useSession<C extends Contract>(
           });
         }),
       );
-      // value-sweep-2026-07-11 (`frame-ref-dispose-strands-pool-buffer`): on
-      // scope dispose, RELEASE the last displayed shm buffer back to the pool
-      // and CANCEL any pending flush. Without this the final materialized
-      // payload was stranded (pool `outstanding` ratcheted, buckets became
-      // unevictable, the hwm never decayed) and an in-flight rAF could paint
+      // On scope dispose, RELEASE the last displayed shm buffer back to the
+      // pool and CANCEL any pending flush — otherwise the final materialized
+      // payload is stranded (pool `outstanding` ratchets, buckets become
+      // unevictable, the hwm never decays) and an in-flight rAF could paint
       // after teardown. Bumping `token` also makes any in-flight `shm.read`
       // resolve into the release-and-drop branch instead of assigning.
       disposers.push(() => {
@@ -771,17 +763,15 @@ export function useSession<C extends Contract>(
       const p = ready.then((ch) =>
         ch.request(topic.command(name, String(cname)), arg),
       );
-      // Default rejection surface (value-sweep-2026-07-11
-      // `fire-and-forget-command-calls-drop-rejections`): 93 bare
-      // `session.call()` sites dropped command rejections — the "clicked and
-      // nothing happened" class. Route EVERY rejection to the error tray at this
-      // ONE chokepoint. DOUBLE-SURFACE semantics (documented): the tray entry
-      // ALWAYS lands, on a DETACHED `.catch` branch, so `p` itself still rejects
-      // — a caller that adds its own `.catch(...)` runs additionally (for local
-      // UI / control flow) and does NOT suppress the tray. The detached branch
-      // also means `void session.call(...)` never becomes an unhandled
-      // rejection. `bindField`/`usePidOverride` (`void session.call`) inherit
-      // this for free.
+      // Default rejection surface: bare `session.call()` sites would otherwise
+      // drop command rejections — the "clicked and nothing happened" class.
+      // Route EVERY rejection to the error tray at this ONE chokepoint.
+      // DOUBLE-SURFACE semantics: the tray entry ALWAYS lands, on a DETACHED
+      // `.catch` branch, so `p` itself still rejects — a caller that adds its
+      // own `.catch(...)` runs additionally (for local UI / control flow) and
+      // does NOT suppress the tray. The detached branch also means
+      // `void session.call(...)` never becomes an unhandled rejection.
+      // `bindField`/`usePidOverride` (`void session.call`) inherit this for free.
       p.catch((err) => reportToTray(name, `${String(cname)}: ${errMessage(err)}`));
       return p;
     },
@@ -822,7 +812,7 @@ export function useSessionStatus(name: string): Readonly<SessionStatus> {
   return readonly(statusState) as Readonly<SessionStatus>;
 }
 
-/** The reactive PID-override proxy `usePidOverride` returns (deliverable 3):
+/** The reactive PID-override proxy `usePidOverride` returns:
  *  property access, not `.value.value`. Assigning `.value` engages/updates the
  *  server slot; `.release()` (or `.value = null`) releases; `.engaged`/reading
  *  `.value` mirror the server-authoritative state. */

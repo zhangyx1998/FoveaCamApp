@@ -1,7 +1,6 @@
-// PID node infrastructure (docs/proposals/pid-nodes-and-view-replumb.md
-// §"PID node design (worker A)"): the reusable PID parameter shape + PID-2D
-// variant (`@lib/pid`), the graph-visible controller node with the ruled
-// override slot (`@orchestrator/pid-node`), and the module-agnostic override
+// PID node infrastructure: the reusable PID parameter shape + PID-2D
+// variant (`@lib/pid`), the graph-visible controller node with the override
+// slot (`@orchestrator/pid-node`), and the module-agnostic override
 // contract fragment (`@lib/orchestrator/pid-override-contract`).
 //
 // All pure — no native `core` addon (only `@lib/pid`'s `clamp` + type-only
@@ -131,7 +130,7 @@ function makeNode(seed?: (v: Volts) => void) {
   return { node, pan, verge };
 }
 
-describe("createPidNode — override slot (RULED semantics)", () => {
+describe("createPidNode — override slot", () => {
   beforeEach(resetTopologyStateForTest);
 
   it("runs the control fn and returns its result when NOT engaged", () => {

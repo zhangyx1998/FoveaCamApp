@@ -1,6 +1,6 @@
-// Projection pane descriptor codec (docs/proposals/projection-split-view.md
-// deliverable 3): versioned serialize/parse for a single pane and the DnD
-// transfer payload, defensive against malformed / wrong-version input.
+// Projection pane descriptor codec: versioned serialize/parse for a single
+// pane and the DnD transfer payload, defensive against malformed /
+// wrong-version input.
 
 import { describe, expect, it } from "vitest";
 import {

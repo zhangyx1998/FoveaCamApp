@@ -77,7 +77,7 @@ const frameR = usePipeFrame(() =>
 // Center view = ONE pipe-backed StreamView over a computed pipe id (spec
 // §topology): sliced → scope-tile slice, disparity/anaglyph → the composite
 // brick (one pipe, mode retuned server-side), sgbm → the stereo heatmap.
-// Binding only the selected pipe parks the rest (C-21 consumer gate).
+// Binding only the selected pipe parks the rest (consumer gate).
 const centerFrame = usePipeFrame(() => {
   const c = state.serials?.C;
   if (!c) return null;
@@ -190,7 +190,7 @@ const triple_override = computed(() =>
     : null,
 );
 // The magnification actually driving the match, mirroring the session's
-// `matchZoom()` under the ruled order (spec §magnification) — keeps the readouts honest.
+// `matchZoom()` under the resolution order (spec §magnification) — keeps the readouts honest.
 const match_zoom = computed(() =>
   state.zoom > 0
     ? state.zoom
@@ -271,8 +271,8 @@ const vergeLimits = computed<[number, number]>(() => [
 // immediately. The knob follows a LOCAL ECHO of the
 // last write instead of the ~30 Hz `pids` readout, so a drag isn't yanked
 // around by in-flight telemetry. The echo releases on CONFIRMATION — the
-// readout matching the written value — not on a timer (UI/UX review #3: a
-// loaded IPC lane could outlive any fixed window and snap the knob back); the
+// readout matching the written value — not on a timer (a loaded IPC lane
+// could outlive any fixed window and snap the knob back); the
 // hard cap only covers a write the server clamped and will never echo back.
 const PID_ECHO_EPS = 1e-6;
 const PID_ECHO_MAX_MS = 1000;
@@ -301,7 +301,7 @@ const pidPanX = pidRef("panX");
 const pidPanY = pidRef("panY");
 const pidVshift = pidRef("v_shift");
 const resetVergence = () => session.call("reset_vergence", undefined);
-// Takeover cue (review #5): the four sliders shift to the accent while manual
+// Takeover cue: the four sliders shift to the accent while manual
 // control holds the loop ("held" latch / Timeout hard-left / a live auto-tune
 // run wiggling them), restoring one visual identity per state — color only,
 // no reflow, no transition.
@@ -344,7 +344,7 @@ const kernel_h = computed<number>({
   set: (v) => (state.kernel = { ...state.kernel, h: v }),
 });
 
-// --- auto-tune (spec §autotune) — drawer-gated RIG experiments --------------
+// --- auto-tune (spec §autotune) — drawer-gated hardware experiments --------------
 const tuneActive = computed(() => {
   const p = telemetry.autotune;
   return p !== null && (p.phase === "relay" || p.phase === "eval");
@@ -393,9 +393,10 @@ const tuneLine = computed(() => {
 const TUNE_TITLE =
   "Relay auto-tune, per DOF: small (2–10% of range) square-wave experiments " +
   "about the held pose measure each DOF's ultimate gain/period, then apply " +
-  "conservative Tyreus-Luyben gains. RIG experiment — needs a calibrated " +
-  "triple and a static matchable target; starting a tune disengages the " +
-  "tracker. Unverified on hardware until the rig pass.";
+  "conservative Tyreus-Luyben gains. Runs a live experiment on the physical " +
+  "hardware — needs a calibrated triple and a static matchable target; " +
+  "starting a tune disengages the tracker. Experimental: not yet validated " +
+  "on hardware.";
 const POLISH_TITLE =
   "Relay tune, then CMA-ES joint polish: scripted target steps scored by " +
   "ITAE + overshoot + actuation effort, budget-capped (takes minutes). " +
@@ -606,7 +607,7 @@ function onCursor(c: (Point2d & Size & { buttons: number }) | null): void {
         >
           <span>Timeout</span>
           <span>
-            <!-- Tinted (review #1): the hard-left knob sits ~0 px from the
+            <!-- Tinted: the hard-left knob sits ~0 px from the
                  ~100 ms position, so the label is the disambiguator. -->
             <template v-if="timeout_disabled"
               ><span :style="{ color: 'var(--warn)' }">disabled</span></template
@@ -639,7 +640,7 @@ function onCursor(c: (Point2d & Size & { buttons: number }) | null): void {
           :title="
             state.zoom > 0
               ? 'Explicit zoom drives both the sliced-view crop and the ' +
-                'template-match magnification (ruled authoritative — wins over ' +
+                'template-match magnification (takes priority over ' +
                 'the per-triple override and the measured value)'
               : triple_override !== null
                 ? `Auto — using this triple's stored zoom override ` +
@@ -811,7 +812,7 @@ function onCursor(c: (Point2d & Size & { buttons: number }) | null): void {
                 : "off"
           }}</span>
         </div>
-        <!-- Auto-tune (spec §autotune): drawer-gated RIG experiments, never
+        <!-- Auto-tune (spec §autotune): drawer-gated hardware experiments, never
              automatic. Buttons disable while not runnable (title names the
              blocking condition); abort is ALWAYS rendered — visibility only —
              so the header slot is truly reserved (no line-height shift). -->
@@ -1061,8 +1062,8 @@ function onCursor(c: (Point2d & Size & { buttons: number }) | null): void {
     &.tune-actions {
       gap: 1ch;
 
-      // First-class actions, not reset-sized links (the buried-buttons
-      // finding): the SingleSelect option identity, sharing the column width.
+      // First-class actions, not reset-sized links: the SingleSelect option
+      // identity, sharing the column width.
       .tune {
         flex: 1;
         padding: 0.4em 0.6em;

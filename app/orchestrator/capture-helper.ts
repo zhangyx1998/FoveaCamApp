@@ -4,11 +4,11 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Composable capture facility: lifts the capture machinery that used to live inline
-// in manual-control (node wiring, on-demand per-shot raw L/R acquire, telemetry,
-// the command surface, and the recording-vs-capture exclusivity guard) so any
-// triple-holding session opts in with config. Faithful to manual-control including
-// the reverse-order acquire unwind and the F1 burst-timeout forwarding.
+// Composable capture facility: the capture machinery (node wiring, on-demand
+// per-shot raw L/R acquire, telemetry, the command surface, and the
+// recording-vs-capture exclusivity guard) so any triple-holding session opts in
+// with config. Includes the reverse-order acquire unwind and the burst-timeout
+// forwarding.
 // spec: docs/spec/capture-recording.md#capture-helper
 
 import {
@@ -46,8 +46,7 @@ export interface CaptureLeases {
   right: RawGeometrySource;
 }
 
-/** A short capture-burst ring depth (manual-control used 8 for the on-demand
- *  per-shot advertise). */
+/** A short capture-burst ring depth for the on-demand per-shot advertise. */
 const CAPTURE_RING_DEPTH = 8;
 
 export interface CaptureHelperDeps {
@@ -67,7 +66,7 @@ export interface CaptureHelperDeps {
   /** TRIPLE mode: the session's already-connected center pipe (undistort/
    *  convert), or null when not connected. Omit for single-stream mode. */
   centerPipe?(): CaptureCenterPipe | null;
-  /** SINGLE-STREAM mode (ruling 3, item 4): the ONE selected camera lease. Its
+  /** SINGLE-STREAM mode: the ONE selected camera lease. Its
    *  PRESENCE switches the helper to single-stream composition. The capture
    *  REUSES the session's `select` lease — it NEVER acquires its own camera —
    *  and returns null when no camera is selected (→ capture refuses cleanly). */
@@ -77,7 +76,7 @@ export interface CaptureHelperDeps {
    *  `CaptureSingleShot`). Return null when the session is not ready to capture
    *  (→ the command rejects "Capture not ready"). */
   snapshot(reset: boolean, indexed: boolean): CaptureShot | CaptureSingleShot | null;
-  /** Exclusivity (ruling 6): true while a recording is active. Capture is
+  /** Exclusivity: true while a recording is active. Capture is
    *  refused while true — capture and recording share the raw pipe ids. */
   recordingActive(): boolean;
   /** Publish the capture telemetry patch (session `s.telemetry`). */
@@ -111,8 +110,7 @@ export interface CaptureHelper {
   stop(): Promise<void>;
 }
 
-/** One connected raw stream → the worker's per-stream init (verbatim from
- *  manual-control's `streamInitFrom`). */
+/** One connected raw stream → the worker's per-stream init. */
 function streamInitFrom(conn: {
   shmName: string;
   spec: {
@@ -137,11 +135,10 @@ function streamInitFrom(conn: {
 const IDENTITY_H = [1, 0, 0, 0, 1, 0, 0, 0, 1];
 
 /** A degraded capture shot for a triple-holder that has no per-frame mirror
- *  pose to derive fovea homographies from (ruling 3: "capture degrades to raw
- *  stacks without the wrap"). The L/R foveae stack the raw sensors WITHOUT a
- *  perspective wrap (identity H — `wrapPerspective` is a no-op), the center is
- *  the FULL undistorted frame (an over-sized rect the worker clamps to the
- *  frame), and `capture_meta` states the degradation explicitly. Every triple-
+ *  pose to derive fovea homographies from. The L/R foveae stack the raw sensors
+ *  WITHOUT a perspective wrap (identity H — `wrapPerspective` is a no-op), the
+ *  center is the FULL undistorted frame (an over-sized rect the worker clamps to
+ *  the frame), and `capture_meta` states the degradation explicitly. Every triple-
  *  holder can produce this uniformly without coupling capture to its control
  *  loop's volt tracking. */
 export function rawTripleShot(opts: {
@@ -172,9 +169,9 @@ export function rawTripleShot(opts: {
   };
 }
 
-/** A degraded SINGLE-STREAM shot (capture-recorder-everywhere ruling 3, item 4):
- *  stack the one selected camera's raw full-depth sensor into ONE held resource,
- *  UNWRAPPED (no fovea homography, no center slice, no diff). `capture_meta`
+/** A degraded SINGLE-STREAM shot: stack the one selected camera's raw full-depth
+ *  sensor into ONE held resource, UNWRAPPED (no fovea homography, no center
+ *  slice, no diff). `capture_meta`
  *  states the raw-stack mode explicitly. Every single-camera session (calibrate-
  *  intrinsic) produces this uniformly. */
 export function rawSingleShot(opts: {
@@ -206,8 +203,7 @@ export function createCaptureHelper(deps: CaptureHelperDeps): CaptureHelper {
   let capturing = false;
   const createNode = deps.createNode ?? createCaptureNode;
 
-  /** ON-DEMAND per-shot connect (capture-node `AcquireStreams`) — extracted
-   *  verbatim from manual-control's `acquireCaptureStreams`: advertise+attach
+  /** ON-DEMAND per-shot connect (capture-node `AcquireStreams`): advertise+attach
    *  the raw L/R producers (refcounted), connect all three streams, and return
    *  a `release` that disconnects then releases them. A throw mid-sequence
    *  unwinds what already succeeded in REVERSE order (else the orphaned
@@ -321,7 +317,7 @@ export function createCaptureHelper(deps: CaptureHelperDeps): CaptureHelper {
 
     async captureShot(tag?: number): Promise<void> {
       if (!node) throw new Error("Capture not ready");
-      // EXCLUSIVITY (ruling 6): capture and recording advertise the SAME
+      // EXCLUSIVITY: capture and recording advertise the SAME
       // `camera/<serial>/raw` ids; capture's per-shot advertise/retire would
       // clobber an active recording's pipes. Refuse cleanly (typed error →
       // renderer). Single-threaded, so the flag read is race-free.

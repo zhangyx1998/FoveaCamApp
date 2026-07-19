@@ -4,10 +4,10 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// `createVisionWorker` (C-22b) message routing — the main-side half of the
+// `createVisionWorker` message routing — the main-side half of the
 // per-session vision worker, unit-tested with an injected fake worker (the real
-// worker file is a build-gated bundle; the integration test that spawns it
-// gates on A-28 + B-19c). Verifies: init post shape, result→onResult routing,
+// worker file is a build-gated bundle, spawned by a separate integration
+// test). Verifies: init post shape, result→onResult routing,
 // param/stop posts, terminate idempotence + no-post-after-terminate.
 
 import { describe, it, expect, vi } from "vitest";
@@ -107,8 +107,8 @@ describe("createVisionWorker (C-22b host)", () => {
     expect(fake.posted).toHaveLength(postCount);
   });
 
-  // Rig 2026-07-08: a kernel-bound app (disparity at ~35fps vs 60fps cameras)
-  // was INVISIBLE in the profiler — nothing metered the worker. With
+  // Without a meter, a kernel-bound worker (disparity at ~35fps vs 60fps
+  // cameras) is INVISIBLE in the profiler. With
   // `meterName`, the worker's posted stats rows are served as a native-probe
   // source (staleness-gated, disposed with the worker).
   it("serves posted stats rows as a probe while alive (meterName)", async () => {

@@ -38,7 +38,7 @@ export type Role = keyof Triple;
 export type Range = { min: number; max: number };
 export type AutoMode = "Off" | "Once" | "Continuous";
 
-// ---- Tunable camera controls (A-P11) --------------------------------------
+// ---- Tunable camera controls ----------------------------------------------
 // One declarative schema for the frame-rate / exposure / gain / black-level
 // family, which otherwise repeats across the manage-cameras wire type
 // (`CameraView`), the 1 Hz read snapshot, the reset defaults, and the UI.
@@ -137,7 +137,7 @@ export type CameraControlsView = {
 
 const ZERO_RANGE: Range = { min: 0, max: 0 };
 
-// ---- Fovea-pair linked config (P5) -----------------------------------------
+// ---- Fovea-pair linked config ----------------------------------------------
 // When two cameras hold roles L and R, manage-cameras edits them as ONE
 // "Fovea Pair" group. Pair values persist into BOTH cameras' existing config
 // docs (no new store doc — calibration and every other config reader keep
@@ -187,9 +187,9 @@ export function pairDivergence(left: PairSideView, right: PairSideView): string[
   return diffs;
 }
 
-// ---- Fovea-pair trigger budget (P6) ----------------------------------------
+// ---- Fovea-pair trigger budget ----------------------------------------------
 //
-// AUTHORITY (ruled default): the cameras' EXPOSURE CONFIG is authoritative and
+// AUTHORITY: the cameras' EXPOSURE CONFIG is authoritative and
 // the trigger pulse DERIVES from it — `pulseUs` covers the slower eye's
 // exposure. FLIP POINT: to make the trigger width authoritative instead,
 // invert exactly this function (take `pulseUs` as the input and return the
@@ -249,7 +249,7 @@ export function pairTriggerBudget(input: PairTriggerBudgetInput): PairTriggerBud
 /**
  * Read every control's snapshot fields off a live camera through the caller's
  * throw-guard (`safe`), preserving the exact per-field fallbacks the 1 Hz poll
- * relies on: a camera can be force-released mid-poll (§12.1 C2), and an
+ * relies on: a camera can be force-released mid-poll, and an
  * unguarded read on a released `CoreObject` throws — uncaught in `setInterval`
  * it would crash the orchestrator. The reader is injected so this stays pure
  * (no `core` import) and unit-testable with a fake camera.
@@ -337,11 +337,10 @@ export function getCameraInfo(camera?: Camera) {
   };
 }
 
-// Per-fovea extrinsic calibration sample (moved here from the now-retired
-// `lib/camera.ts` — docs/history/refactor/orchestrator.md §7.1 S1c — since both
+// Per-fovea extrinsic calibration sample. Lives here — the dependency-free,
+// both-processes home for pure camera types — because both
 // `orchestrator/calibration.ts` and `modules/calibrate-extrinsic/session.ts`
-// need the type and this file is the dependency-free, both-processes home
-// for pure camera types).
+// need the type.
 export type ExtrinsicData = {
   /** Outer + internal marker corners. */
   img_points: Point2d[];
@@ -351,16 +350,16 @@ export type ExtrinsicData = {
   voltage: Point2d;
   /** Angular position (x, y) from the wide camera, in radians. */
   angle: Point2d;
-  /** MEASURED-magnification inputs (ruled 2026-07-09). All optional — absent
-   *  on legacy datasets, which then carry NO measured magnification. See
+  /** MEASURED-magnification inputs. All optional — absent on legacy datasets,
+   *  which then carry NO measured magnification. See
    *  `recordMagnification`/`fitMagnification` (@lib/coordinate-conversions). */
-  /** Ruling 3 (preferred): the WIDE (C) camera's outer quad of the SAME side
+  /** Preferred: the WIDE (C) camera's outer quad of the SAME side
    *  marker this eye's fovea tracks (`C.side_pts[key]` at capture). */
   wide_img_points?: Point2d[];
-  /** Ruling 2 (fallback): the wide camera's own CENTER-marker outer quad
+  /** Fallback: the wide camera's own CENTER-marker outer quad
    *  (`C.img_pts.slice(0, 4)` at capture). */
   wide_center_points?: Point2d[];
-  /** Ruling 2: marker sizes (mm) at capture — center is sized independently. */
+  /** Marker sizes (mm) at capture — center is sized independently. */
   marker?: { side_mm: number; center_mm: number };
 };
 

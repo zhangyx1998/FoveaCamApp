@@ -5,7 +5,7 @@
 // -------------------------------------------------------
 //
 // Projection split-view — the controller the window shell provides to its panes
-// and split nodes (docs/proposals/projection-split-view.md deliverable 2/4/5).
+// and split nodes.
 // ProjectionWindow owns the split tree + all mutation; the recursive
 // SplitNode/ProjectionPane components stay thin and call up through this
 // injected surface instead of a deep emit chain. Vue-type-only import.

@@ -21,7 +21,7 @@ declare module "core" {
     export function installCrashHandler(): void;
 
     /**
-     * THE native host time authority (unified-time §1): libc++
+     * THE native host time authority: libc++
      * `std::chrono::steady_clock` as integer nanoseconds (bigint). Every
      * clock-calibration offset the native layer computes/stores — and every
      * OWNER-APPLIED frame timestamp on a calibrated camera — is in THIS
@@ -31,18 +31,18 @@ declare module "core" {
     export function steadyNowNs(): bigint;
 
     /**
-     * native-recorder Wave 2: the live RECORDER BRICK (hand-rolled C++ MCAP
+     * The live RECORDER BRICK (hand-rolled C++ MCAP
      * writer + free-running writer thread fed by producer-seam record taps).
      * Driven by `@orchestrator/recorder-node` — nothing per-frame crosses this
      * boundary. Handle-based; all fovea schema/metadata constants are passed IN
      * (docs/schema stays the single source of truth).
      */
     /**
-     * Native port/pipe substrate (docs/proposals/native-port-pipe.md) —
+     * Native port/pipe substrate —
      * root-object-only namespace (the Recorder precedent). Production ports
      * hang off brick objects (`tracker.track_out`, `imm.measure_in`); this
      * namespace carries the class registrations + the HARDWARE-FREE test
-     * hooks core/test/44 and 42 drive.
+     * hooks the port tests drive.
      */
     export namespace Port {
         /** Push-driven TrackResult source with a `track_out` port (tag
@@ -90,7 +90,7 @@ declare module "core" {
             written: number;
             bytes: number;
         }
-        /** A per-frame write notice (ruling-3 extras dispatch), drained by the
+        /** A per-frame write notice (extras dispatch), drained by the
          *  host's low-rate poll and correlated by stream+seq. */
         interface FrameNotice {
             stream: string;
@@ -126,7 +126,7 @@ declare module "core" {
          *  written up front), spawn the writer thread. Returns the handle. */
         function create(opts: CreateOptions): number;
         /** Tap `pipeId`'s publisher, record it as channel `name`. `metadata` is
-         *  copied VERBATIM into the MCAP channel (advert-verbatim, ruling 8).
+         *  copied VERBATIM into the MCAP channel.
          *  Throws on unknown pipe / duplicate live name / after finalize. */
         function addStream(
             handle: number,
@@ -140,7 +140,7 @@ declare module "core" {
         function addDataStream(handle: number, name: string): void;
         function removeDataStream(handle: number, name: string): void;
         function postData(handle: number, name: string, payloadJson: string): void;
-        /** Ruling-3 telemetry extras: one doc on the telemetry channel with the
+        /** Telemetry extras: one doc on the telemetry channel with the
          *  OWNING frame's seq + container-axis logTime. */
         function appendTelemetry(
             handle: number,
@@ -153,7 +153,7 @@ declare module "core" {
         /** The writer thread's profiling metric block (same snapshot shape as
          *  every other native brick probe). */
         function probe(handle: number): unknown;
-        /** R-1 finalize: detach every tap, drain the queue snapshot, write the
+        /** Finalize: detach every tap, drain the queue snapshot, write the
          *  summary/footer. Resolve AFTER the writer finished; call destroy()
          *  only after this promise settles. */
         function finalize(

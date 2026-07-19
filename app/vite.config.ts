@@ -15,8 +15,8 @@ import { allEntries, entryTitle } from "./lib/windows";
 // it `type: "cjs"` (imports rewritten to bare `require(...)`). Only
 // Node-runtime packages belong in `dependencies` (core, serialport,
 // telecanvas, ...); a browser library placed there crashes every renderer at
-// launch with "require is not defined" from inside its ESM entry (rig-caught
-// 2026-07-12: @fortawesome/fontawesome-svg-core). Browser/renderer libs go in
+// launch with "require is not defined" from inside its ESM entry (e.g.
+// @fortawesome/fontawesome-svg-core). Browser/renderer libs go in
 // `devDependencies` — vite bundles them.
 const external = Object.keys({
     ...(root_package.dependencies ?? {}),
@@ -38,7 +38,7 @@ const target = resolve(
     "electron"
 );
 
-// HMR boundary (docs/history/refactor/multi-window.md req. 8 / §4). The danger class
+// HMR boundary. The danger class
 // is stateful singletons and shared wire code: `lib/orchestrator/**` (Channel,
 // the module-level `connect()` channel promise, shm read pool, protocol types
 // compiled into BOTH renderer and orchestrator bundles), `lib/store.ts`, and
@@ -85,7 +85,7 @@ const hmrBoundary = (): Plugin => ({
     },
 });
 
-// Window entry-HTML generator (A-27). The ~16 windows/*.html files were near-
+// Window entry-HTML generator. The ~16 windows/*.html files were near-
 // identical — same head/body/reset, differing only in <title> and the boot
 // script — and each shipped with a one-line src/windows/<name>.ts entry. Both
 // are now GENERATED from the `@lib/windows` registry: adding a window = one
@@ -180,7 +180,7 @@ export default defineConfig(({ command }) => {
                     // Shortcut of `build.lib.entry`. The orchestrator is a
                     // second Node entry built alongside main; the main process
                     // forks it as a utilityProcess (.dist/electron/orchestrator.js).
-                    // `vision-worker` (A-28) is C's per-session vision worker_thread,
+                    // `vision-worker` is the per-session vision worker_thread,
                     // bundled the SAME way as the orchestrator — the shared
                     // `rollupOptions.external: isExternal` below externalizes `core`
                     // + native `.node` for it identically (the worker does
@@ -190,8 +190,7 @@ export default defineConfig(({ command }) => {
                         main: "electron/main.ts",
                         orchestrator: "orchestrator/index.ts",
                         "vision-worker": "orchestrator/vision-worker.ts",
-                        // Standalone viewer playback ENGINE (standalone-
-                        // viewer-and-fcap ruling 1, AS SHIPPED amendment):
+                        // Standalone viewer playback ENGINE:
                         // forked by MAIN as a utilityProcess (one per viewer
                         // window) — `utilityProcess.fork(DIR/viewer-worker.js)`
                         // — NOT a renderer worker (Electron renderers can't
@@ -203,8 +202,7 @@ export default defineConfig(({ command }) => {
                         // the orchestrator dies without confirming quiescence
                         // (MEMS disable + camera acquisition stop).
                         janitor: "orchestrator/janitor.ts",
-                        // Camera-enumeration PROBE (disposable-orchestrator
-                        // ruling 3): a small persistent enumerate-only process
+                        // Camera-enumeration PROBE: a small persistent enumerate-only process
                         // main forks at startup to feed the status-only Welcome
                         // window a live camera list. Never opens a camera; a
                         // Node entry like the orchestrator (external `core`).
@@ -244,9 +242,9 @@ export default defineConfig(({ command }) => {
             // Preload entries build via the low-level plugin: ONE BUILD PER
             // ENTRY, so modules shared between preloads (preload-bridge.ts)
             // are inlined into each output instead of split into a sibling
-            // chunk — sandboxed preloads cannot require sibling chunks (V11).
+            // chunk — sandboxed preloads cannot require sibling chunks.
             // Output is CJS named .cjs: unsandboxed preloads load .mjs as
-            // real ESM where bare `require` throws (V11b).
+            // real ESM where bare `require` throws.
             electronPreload(
                 ["preload-renderer", "preload-profiler", "preload-viewer"].map((name) => ({
                     // Preload change → reload pages; never args.startup()
@@ -256,13 +254,13 @@ export default defineConfig(({ command }) => {
                     vite: {
                         resolve: { alias },
                         build: {
-                            sourcemap: sourcemap ? "inline" : undefined, // #332
+                            sourcemap: sourcemap ? "inline" : undefined,
                             minify: isBuild,
                             outDir: target,
                             // Explicit lib config: the plugin otherwise
                             // derives formats from package `type` (module →
-                            // "es"), emitting ESM into a .cjs file — V11b
-                            // all over again, one layer down.
+                            // "es"), emitting ESM into a .cjs file — the same
+                            // bare-`require`-throws failure, one layer down.
                             lib: {
                                 entry: { [name]: `electron/${name}.ts` },
                                 formats: ["cjs"],
@@ -290,13 +288,12 @@ export default defineConfig(({ command }) => {
         resolve: { alias },
         build: {
             outDir: resolve(PROJECT_ROOT, ".dist", "renderer"),
-            // Multi-entry renderer (docs/history/refactor/multi-window.md req. 2):
+            // Multi-entry renderer:
             // one entry HTML per window class/app from the `@lib/windows`
-            // catalog. The legacy single-window index.html was removed in
-            // Stage 5 round 2 (A-10c) — every window is a windows/* entry.
-            // Renderer entries MAY share chunks — they're http/file-served
-            // pages; the V11 one-build-per-entry rule applies to preloads
-            // only.
+            // catalog. The legacy single-window index.html is gone — every
+            // window is a windows/* entry. Renderer entries MAY share chunks
+            // — they're http/file-served pages; the one-build-per-entry rule
+            // applies to preloads only.
             rollupOptions: {
                 input: Object.fromEntries(
                     Object.entries(allEntries()).map(([name, entry]) => [

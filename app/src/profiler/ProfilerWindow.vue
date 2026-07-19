@@ -56,15 +56,14 @@ import {
   faThumbtack,
 } from "@fortawesome/free-solid-svg-icons";
 
-// Shared window chrome (A-7): the profiler BrowserWindow now uses the same
+// Shared window chrome: the profiler BrowserWindow uses the same
 // hidden-titlebar overlay as every other window class.
 const titleBarHeight = ref(0);
 
-// Per-instance binding (orchestrator-lifecycle-and-exit §"Profiler per-instance
-// binding"): this window pinned AT OPEN to exactly one orchestrator instance —
-// the ids ride the URL and are IMMUTABLE for the window's life. The connect
-// broker (main) routes us to that instance and NOTHING else; when it dies we
-// freeze here with everything already collected and never re-attach (ruling 2).
+// Per-instance binding: this window pinned AT OPEN to exactly one orchestrator
+// instance — the ids ride the URL and are IMMUTABLE for the window's life. The
+// connect broker (main) routes us to that instance and NOTHING else; when it
+// dies we freeze here with everything already collected and never re-attach.
 const boundInstanceId = readUrlParam(PROFILER_INSTANCE_PARAM);
 const boundSession = readUrlParam(PROFILER_SESSION_PARAM);
 const subtitle = computed(() =>
@@ -85,10 +84,9 @@ const sys = useSession(system, "system");
 const ctrl = useSession(controller, "controller", { passive: true });
 const mc = useSession(manualControl, "manual-control", { passive: true });
 
-// Live streams (docs/history/refactor/orchestrator.md §7.1 S4 added scope): render
-// live streams only, and beyond ~8 collapse to an aggregate + top-N-by-Hz —
-// don't build a wall of rows once stream capacity grows (ST-64, synced-
-// capture thread).
+// Live streams: render live streams only, and beyond ~8 collapse to an
+// aggregate + top-N-by-Hz — don't build a wall of rows once stream capacity
+// grows.
 const VISIBLE_STREAM_ROWS = 8;
 const sortedStreams = computed(() =>
   [...ctrl.telemetry.streams].sort((a, b) => b.hz - a.hz),
@@ -129,13 +127,13 @@ type Rate = {
 };
 const rates = ref<Rate[]>([]);
 
-// Uniform per-workload sections (workload-metering.md §4) — the transform is
+// Uniform per-workload sections — the transform is
 // pure (`./workload-view.ts`, unit-tested); this component only renders it.
 // Fed from the same 1 Hz `perfSnapshot` poll + `prev` diff the channel-rate
 // table already uses — no new wire messages.
 const workloads = ref<WorkloadRow[]>([]);
 
-// Bottleneck-first ordering (A-26): the busiest workload is almost always the
+// Bottleneck-first ordering: the busiest workload is almost always the
 // fps cap, so sort by utilization descending and flag anything at/above the
 // HIGH threshold as SATURATED — the saturated loop should be the first row and
 // scream off the page (the user's snapshots put `registry:*` at ~0.99 while the
@@ -147,8 +145,8 @@ const sortedWorkloads = computed(() =>
 const isSaturated = (utilization: number): boolean =>
   utilization >= UTILIZATION_HIGH;
 
-// Pipeline graph (A-33/A-36, real-2 objective 1). STAGE 2: the orchestrator
-// SERVES the topology (C-24's `graphTopology()`, riding `PerfSnapshot.graph` —
+// Pipeline graph. STAGE 2: the orchestrator
+// SERVES the topology (`graphTopology()`, riding `PerfSnapshot.graph` —
 // exact byte rates from bytesTotal deltas, consumer sinks, session wirings);
 // the Stage-1 renderer-side derivation (`deriveTopology`, pure + unit-tested,
 // same 1 Hz workload rows + advertised pipes) remains the FALLBACK for an
@@ -296,7 +294,7 @@ function fmt(v: number, digits = 1): string {
   return Number.isFinite(v) ? v.toFixed(digits) : "-";
 }
 
-// Clock-calibration health (unified-time proposal §3) — offsets are raw ns
+// Clock-calibration health — offsets are raw ns
 // bigints stringified over the wire; render ms with µs jitter (>500µs jitter
 // flags the row: the estimator's confidence is poor).
 const clockRows = computed(() => {
@@ -310,8 +308,8 @@ const clockRows = computed(() => {
   }));
 });
 
-// Tabs (proposal §2 — the ~12-section scroll splits into a fixed tab strip
-// behind the title bar; the Settings two-tab shell is the precedent). The graph
+// Tabs: the ~12-section scroll splits into a fixed tab strip
+// behind the title bar; the Settings two-tab shell is the precedent. The graph
 // is primary, so it is the default. Active tab persists across reloads via raw
 // localStorage — the profiler already leans on it for the pin / report-rate /
 // graph-height choices (@lib/local + url-state are for reactive session state;
@@ -343,8 +341,8 @@ watch(activeTab, (t) => {
     :subtitle="subtitle"
     @height="(h) => (titleBarHeight = h)"
   >
-    <!-- Snapshot controls live on the title bar (the old header's h1 was
-         redundant with the bar's subtitle). Icon-only buttons (FontAwesome,
+    <!-- Snapshot controls live on the title bar (no separate in-body header).
+         Icon-only buttons (FontAwesome,
          matching the recorder's title-bar chrome) sized for the ~40px bar;
          the export result (written path / failure) shows in the
          SnapshotOverlay popup, not inline. -->
@@ -396,7 +394,7 @@ watch(activeTab, (t) => {
     </div>
   </TitleBar>
   <div class="profiler" :style="{ top: titleBarHeight + 'px' }">
-    <!-- Frozen session-end banner (ruling 2): layout-stable, always occupies
+    <!-- Frozen session-end banner: layout-stable, always occupies
          the top of the body so the panels below never shift when it appears.
          Distinguishes a clean end from a crash off the typed down report. -->
     <div
@@ -409,7 +407,7 @@ watch(activeTab, (t) => {
       <span class="banner-detail">{{ endState.detail }}</span>
     </div>
 
-    <!-- Fixed tab strip behind the title bar (proposal §2; the Settings two-tab
+    <!-- Fixed tab strip behind the title bar (the Settings two-tab
          shell is the precedent) — never scrolls out of view, only .tab-content
          scrolls. The switch snaps (no transition, per the design language). -->
     <div class="tabs" role="tablist" aria-label="Profiler sections">
@@ -607,10 +605,8 @@ watch(activeTab, (t) => {
         </div>
       </section>
 
-      <!-- Serial PRESSURE (serial-rate-governor.md Part 3 — every new stat
-         surfaces in the profiler, user ruling): governor rate vs requested,
-         outq gauges, soft-fail counter, ACK-RTT percentiles, and the
-         predictor's applied lookahead (Part 4). -->
+      <!-- Serial PRESSURE: governor rate vs requested, outq gauges, soft-fail
+         counter, ACK-RTT percentiles, and the predictor's applied lookahead. -->
       <section v-show="activeTab === 'control'">
         <h2>Serial pressure</h2>
         <p class="hint" v-if="!ctrl.telemetry.connected">
@@ -858,7 +854,7 @@ watch(activeTab, (t) => {
   left: 0;
   right: 0;
   bottom: 0;
-  // Fixed tab strip + independently-scrolling content (proposal §2): the
+  // Fixed tab strip + independently-scrolling content: the
   // profiler itself no longer scrolls — it is a flex column whose header
   // (banner + tab strip) stays put while only .tab-content scrolls.
   display: flex;
@@ -913,7 +909,7 @@ watch(activeTab, (t) => {
     overflow: auto;
     padding: 1rem 1.5rem 3rem;
 
-    // Graph tab (ruling 3): the graph fills the tab container and never scrolls;
+    // Graph tab: the graph fills the tab container and never scrolls;
     // every OTHER tab keeps its normal vertical scroll.
     &.immersive {
       overflow: hidden;
@@ -925,7 +921,7 @@ watch(activeTab, (t) => {
 
   // The graph section fills the tab (the graph is primary and gets the freed
   // vertical space); the SVG node graph auto-scales with the profiler window
-  // (no in-panel resize handle anymore — ruling 3).
+  // (no in-panel resize handle).
   .graph-section {
     margin-bottom: 0;
     flex: 1;
@@ -983,7 +979,7 @@ watch(activeTab, (t) => {
     color: var(--text-disabled);
   }
 
-  // Uniform workload sections (workload-metering.md §4). The utilization
+  // Uniform workload sections. The utilization
   // meter is a thin single-value bar; the % is always printed in text ink
   // beside it, so the status tint (ok/warn/high) is redundant encoding,
   // never color-alone.
@@ -994,7 +990,7 @@ watch(activeTab, (t) => {
       border-bottom: none;
     }
 
-    // Saturated workload = the bottleneck (A-26). A red left rail + tinted
+    // Saturated workload = the bottleneck. A red left rail + tinted
     // backdrop pulls the eye straight to it above the sorted-descending list.
     &.saturated {
       border-left: 3px solid #f56;
@@ -1075,7 +1071,7 @@ watch(activeTab, (t) => {
         text-align: right;
         font-variant-numeric: tabular-nums;
       }
-      // C-18: max inter-arrival (10 s). Dim by default; a stalled stream (gap
+      // Max inter-arrival (10 s). Dim by default; a stalled stream (gap
       // > 2× nominal period) turns amber + bold so it reads at a glance — the
       // number is always printed, so the tint is redundant, never color-alone.
       .interval {
@@ -1107,7 +1103,7 @@ watch(activeTab, (t) => {
     font-size: 0.8rem;
   }
 
-  // Frozen session-end banner (ruling 2). Layout-stable: reserves its own strip
+  // Frozen session-end banner. Layout-stable: reserves its own strip
   // at the top of the body so nothing below jumps when it appears. Clean/killed
   // end = neutral amber notice; a crash = the shared danger identity (tokens).
   .session-banner {

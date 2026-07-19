@@ -70,7 +70,7 @@ export interface RecordingSink {
    *  that cannot ship are dropped and accounted (never silently).
    *  `extra` becomes the frame's `telemetry` JSON doc (`{stream, seq, t,
    *  ...extra}`); stays generic, but the decoder-facing keys are the
-   *  `RecordedFrameExtras` schema (`./metadata.ts`) — including the WS4 4b
+   *  `RecordedFrameExtras` schema (`./metadata.ts`) — including the
    *  frame↔voltage binding (`frame_id` + exposure-averaged `volt`, built via
    *  `frameVoltageExtras`). */
   write(

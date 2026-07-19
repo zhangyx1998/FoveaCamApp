@@ -21,22 +21,20 @@ export type CameraInfo = {
   vendor: string;
 };
 
-/** Rolling mean/max pair, the shape every perf-substrate stat publishes as
- *  (docs/history/refactor/orchestrator.md §7.3). */
+/** Rolling mean/max pair, the shape every perf-substrate stat publishes. */
 export type Stat = { mean: number; max: number };
 
-// --- recording mixin (capture-recorder-everywhere ruling 2) ----------------
+// --- recording mixin ---------------------------------------------------------
 // Every app gets recording: this additive helper produces the
 // `startRecording`/`stopRecording`/`recordingStats` telemetry+command shape the
 // renderer's `Recording` facade (`@src/record`) + the title-bar RecordButton
-// already read (manual-control / multi-fovea established it inline). Spread the
-// two helpers into a contract's `telemetry` / `commands` so a new app opts in
-// with one line each instead of re-declaring the shape.
+// read. Spread the two helpers into a contract's `telemetry` / `commands` so a
+// new app opts in with one line each instead of re-declaring the shape.
 
 /** One recorded stream's live UI counters — the value type of
- *  `recordingStreams`. `published = frames + dropped` (pinned invariant); the F2
- *  drop split (5c7c9d4) rides `droppedQueue + droppedRing == dropped`, optional
- *  so a contract predating it still assigns cleanly (RecordButton reads `?? 0`). */
+ *  `recordingStreams`. `published = frames + dropped` (pinned invariant); the
+ *  drop split rides `droppedQueue + droppedRing == dropped`, optional so a
+ *  contract that omits it still assigns cleanly (RecordButton reads `?? 0`). */
 export type RecordingStreamInfo = {
   frames: number;
   dropped: number;
@@ -72,7 +70,7 @@ export function recordingCommands(): {
   };
 }
 
-// --- capture mixin (capture-recorder-everywhere ruling 3) ------------------
+// --- capture mixin -----------------------------------------------------------
 // Every triple-holding app gets capture: this additive helper produces the
 // `captureShot`/`getCapturePreview`/`saveCapture`/`discardCapture` command shape
 // + the `captureBusy`/`capture_meta` telemetry the renderer's `Capture` facade
@@ -80,11 +78,11 @@ export function recordingCommands(): {
 // helpers into a contract's `telemetry`/`commands` so a new app opts in with one
 // line each.
 //
-// NAMING (planner ruling): the mixin uses `captureShot`/`getCapturePreview` —
-// collision-free with app-local commands (calibrate-intrinsic already has a
-// `capture` for calibration records). manual-control keeps its legacy
-// `capture`/`getPreview` names ALSO (aliased to the same helper) for backward
-// compat, and additionally spreads this mixin so the shared preview window works.
+// NAMING: the mixin uses `captureShot`/`getCapturePreview` — collision-free
+// with app-local commands (calibrate-intrinsic already has a `capture` for
+// calibration records). manual-control ALSO exposes `capture`/`getPreview`
+// (aliased to the same helper) and additionally spreads this mixin so the
+// shared preview window works.
 
 /** Telemetry fields a capture-capable app publishes. Spread into a contract's
  *  `telemetry`: `telemetry: { ...captureTelemetry(), ...myFields }`. */
@@ -98,7 +96,7 @@ export function captureTelemetry(): {
     // Per-resource metadata (name -> meta object, or an array for a raster
     // capture) — the capture NODE's manifest, republished after each shot. The
     // renderer reads this for the resource list; image data is PULLED per
-    // resource via `getCapturePreview` (ruling 7), never streamed on a channel.
+    // resource via `getCapturePreview`, never streamed on a channel.
     capture_meta: {} as Record<string, Serializable>,
   };
 }
@@ -115,9 +113,9 @@ export function captureCommands(): {
     /** Run ONE capture shot: stacks the raw L/R foveae + slices the center in
      *  the capture worker, holding the full-depth resources. `tag` present ⇒ a
      *  raster shot accumulating an indexed resource; absent/0 ⇒ a fresh
-     *  accumulation. Refused while a recording is active (ruling 6). */
+     *  accumulation. Refused while a recording is active. */
     captureShot: cmd<{ tag?: number }>(),
-    /** Pull one held capture resource downconverted to 8-bit BGRA (ruling 7) —
+    /** Pull one held capture resource downconverted to 8-bit BGRA —
      *  `index` selects an entry of a raster resource (default: the latest). */
     getCapturePreview: cmd<{ resource: string; index?: number }, FramePayload | null>(),
     /** Persist the pending capture to disk and clear it. */
@@ -127,20 +125,20 @@ export function captureCommands(): {
   };
 }
 
-/** A structured timing measurement (§7.1 S5) — boot phases, per-activation
+/** A structured timing measurement — boot phases, per-activation
  *  camera/calibration work, controller connect. Mirrors
  *  `orchestrator/diagnostics.ts`'s `Span`; duplicated here (not imported)
  *  since `contracts.ts` is the renderer-safe boundary and `diagnostics.ts`
  *  is orchestrator-only. */
 export type Span = { name: string; ms: number; meta?: Record<string, unknown>; t: number };
 
-/** One workload counter reading (docs/history/refactor/workload-metering.md §2).
- *  Mirrors `orchestrator/metering.ts`'s snapshot shapes; duplicated here (not
- *  imported) for the same reason as `Span` — `contracts.ts` is the
- *  renderer-safe boundary and `metering.ts` is orchestrator-only. */
-// C-18: `maxIntervalMs` = largest gap (ms) between consecutive events over the
+/** One workload counter reading. Mirrors `orchestrator/metering.ts`'s snapshot
+ *  shapes; duplicated here (not imported) for the same reason as `Span` —
+ *  `contracts.ts` is the renderer-safe boundary and `metering.ts` is
+ *  orchestrator-only. */
+// `maxIntervalMs` = largest gap (ms) between consecutive events over the
 // trailing window (mirrors `stats.WorkloadStreamStat`/`metering.ts`). Optional
-// so pre-C-18 snapshots still fit; the profiler reads it typed, not `as any`.
+// so snapshots that omit it still fit; the profiler reads it typed, not `as any`.
 export type WorkloadCounterSnapshot = {
   count: number;
   ratePerSec: number;
@@ -161,7 +159,7 @@ export type WorkloadSnapshot = {
 };
 
 /** One `system.perfSnapshot` document — the artifact the zero-copy decision
- *  and round-over-round regression checks consume (§7.3 item 4). */
+ *  and regression checks consume. */
 export type PerfSnapshot = {
   timestamp: string; // ISO 8601
   orchestrator: {
@@ -170,15 +168,15 @@ export type PerfSnapshot = {
   /** Per-topic frame counters/timing, summed across every connected channel. */
   frames: Record<string, FrameTopicStats>;
   /** Per-name workload meters (native tracker/pipe thread probes, recorder
-   *  workers — docs/history/refactor/workload-metering.md). */
+   *  workers). */
   workloads: Record<string, WorkloadSnapshot>;
   storeHub: { writes: number; updates: number; clears: number };
-  /** Ring-buffer snapshot of recent boot/activation/connect timings (§7.1 S5). */
+  /** Ring-buffer snapshot of recent boot/activation/connect timings. */
   spans: Span[];
-  /** The live stream node graph (C-24, ruled Q2: folded into this 1 Hz poll).
-   *  Optional so pre-graph snapshot documents stay valid. */
+  /** The live stream node graph, folded into this 1 Hz poll. Optional so
+   *  snapshot documents without it stay valid. */
   graph?: GraphTopology;
-  /** Clock-calibration health (unified-time proposal §3): per subject clock,
+  /** Clock-calibration health: per subject clock,
    *  offset/jitter (ns, stringified bigint) + sample count + method. Optional
    *  so pre-clock snapshots stay valid. */
   clocks?: Record<
@@ -195,7 +193,7 @@ export const system = defineContract({
   state: {},
   telemetry: {
     cameraCount: 0,
-    // Event-loop lag probe (§7.3 item 1) — the "own libuv loop" metric.
+    // Event-loop lag probe — the "own libuv loop" metric.
     // Always-on, ≤ 1 Hz publish rate per the perf-substrate constraints.
     loopLag: { mean: 0, max: 0 } as Stat,
   },
@@ -223,8 +221,7 @@ export type SystemContract = typeof system;
  * (the title-bar `Controller.vue`, a thin client over this session, connects on
  * mount).
  */
-/** One live CMD_STREAM's telemetry row — the profiler's per-stream table
- *  (docs/history/refactor/orchestrator.md §7.1 S4 added scope). */
+/** One live CMD_STREAM's telemetry row — the profiler's per-stream table. */
 export type StreamStat = { id: number; hz: number; left: Pos; right: Pos };
 
 export const controller = defineContract({
@@ -233,29 +230,27 @@ export const controller = defineContract({
     connected: false as boolean,
     pending: false as boolean,
     enabled: false as boolean,
-    // Firmware exposes the System::Reset MEMS recovery type (>= 2.1.0,
-    // right-dac-freeze M2) — gates the title-bar "Recover mirror" button.
-    // False while disconnected or on older firmware.
+    // Firmware exposes the System::Reset MEMS recovery type (>= 2.1.0) —
+    // gates the title-bar "Recover mirror" button. False while disconnected
+    // or on older firmware.
     canRecoverMems: false as boolean,
     dv: 0,
     pos: { left: { x: 0, y: 0 }, right: { x: 0, y: 0 } } as {
       left: Pos;
       right: Pos;
     },
-    // Serial + per-stream probes (§7.1 S4 added scope) — sampled ~2 Hz by
-    // the session while connected; rates derived from `Device.stats`'
-    // cumulative counters (native, landed with the synced-capture thread's
-    // P4.1) by diffing successive samples.
+    // Serial + per-stream probes — sampled ~2 Hz by the session while
+    // connected; rates derived from `Device.stats`' cumulative counters
+    // (native) by diffing successive samples.
     serialRate: {
       txBytesPerSec: 0,
       rxBytesPerSec: 0,
       txPacketsPerSec: 0,
       rxPacketsPerSec: 0,
     },
-    // Serial PRESSURE block (serial-rate-governor.md Part 3 — every new stat
-    // surfaces in the profiler, user ruling): the wave-6 Device.stats sensors
-    // + the AIMD governor's view + the predictor's applied lookahead (Part 4;
-    // null = no predictor session active). Sampled by the same probe timer.
+    // Serial PRESSURE block: the Device.stats sensors + the AIMD governor's
+    // view + the predictor's applied lookahead (null = no predictor session
+    // active). Sampled by the same probe timer.
     serialPressure: {
       effectiveRateHz: 0,
       ceilingHz: 0,
@@ -275,9 +270,9 @@ export const controller = defineContract({
     disconnect: cmd(),
     enable: cmd(),
     disable: cmd(),
-    /** Re-initialize the MEMS DACs without dropping the session (right-dac-freeze
-     *  M2) — sends System::Reset(MEMS). Resolves on ACK, rejects on REJ
-     *  (firmware REJs when disabled / below v2.1.0). */
+    /** Re-initialize the MEMS DACs without dropping the session — sends
+     *  System::Reset(MEMS). Resolves on ACK, rejects on REJ (firmware REJs
+     *  when disabled / below v2.1.0). */
     recoverMems: cmd(),
     actuate: cmd<
       { left?: Pos; right?: Pos; settleTime?: number },
@@ -291,7 +286,6 @@ export const controller = defineContract({
 
 export type ControllerContract = typeof controller;
 
-// The former `viewer` session contract (`./viewer-contract.ts`) is RETIRED
-// (standalone-viewer-and-fcap ruling 1): the viewer window no longer talks to
-// the orchestrator at all — playback lives in the window's own worker
+// The viewer window doesn't talk to the orchestrator at all — there is no
+// viewer session contract; playback lives in the window's own worker
 // (`src/viewer/worker.ts`, protocol in `src/viewer/protocol.ts`).

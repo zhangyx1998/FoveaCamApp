@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// RAW camera pipes (capture-recorder-nodes Phase 1): the ConverterStream
+// RAW camera pipes: the ConverterStream
 // PipeOfferSubscriber pattern applied to the camera SOURCE stream — recorders
 // need full-bit-depth sensor bytes, not the 8-bit BGRA8 preview. Two load-bearing
 // invariants: EXTRACT-BEFORE-RELEASE (the sync fan-out copies frame->raw before
@@ -210,7 +210,7 @@ FN(rawProbeAll) {
   return out;
 }
 
-// ---- Topology.report() rows (unified-time-and-topology §6) ------------------
+// ---- Topology.report() rows -------------------------------------------------
 // One raw-pipe row: id, kind "raw", ACTUAL input edge camera/<serial> (raw wire
 // format), output = the sensor format pipe, full meter stats; transport/epoch/
 // pipe extras stamped when the id is a live advertised pipe.
@@ -232,7 +232,7 @@ void appendRawReports(Napi::Env env, Napi::Array &rows,
 }
 
 // ============================================================================
-// multi-fovea-recording ruling 1: PACKED raw-12p pipes (pre-Frame ArvBuffer tap)
+// PACKED raw-12p pipes (pre-Frame ArvBuffer tap)
 // ============================================================================
 // The raw tap above publishes `frame->raw` — the UNPACKED full-depth container
 // (packed 12p is expanded to 16-bit at Frame construction, see Frame.h). A
@@ -266,7 +266,7 @@ protected:
   void push(const Frame::Ptr &) override {}
 };
 
-// The in-process OwnedFrame tap fan-out (multi-fovea-recording R-1). Lives in
+// The in-process OwnedFrame tap fan-out. Lives in
 // the Raw12pBinding (persists across gate toggles); the gated Raw12pTap holds a
 // pointer to it and, on the CAPTURE thread, publishes ONE deep-copied OwnedFrame
 // to each registered channel — but ONLY when ≥1 channel is registered (the
@@ -389,7 +389,7 @@ public:
         static_cast<int64_t>(arv_buffer_get_timestamp(buffer)) + clockOffsetNs);
     meta.systemTimestamp = arv_buffer_get_system_timestamp(buffer);
     sink_->offer(data, info, meta); // synchronous copy into the ring, pre-requeue
-    // In-process OwnedFrame tap (R-1): deep-copy the SAME verbatim payload into
+    // In-process OwnedFrame tap: deep-copy the SAME verbatim payload into
     // an OwnedFrame (U8 Mat header, rows×rowBytes) and fan it out — but only if
     // a brick consumer registered a channel (lock-free `active()` gate). The
     // packed payload rides a U8 Mat; dims/origin(0,0)/timestamps/seq carried.
@@ -525,7 +525,7 @@ FN(detachRaw12pPipe) {
   JS_EXCEPT(env.Undefined())
 }
 
-// ---- in-process OwnedFrame tap open/close (R-1; brick→brick transport) ------
+// ---- in-process OwnedFrame tap open/close (brick→brick transport) -----------
 // Register/unregister an OwnedFrame channel on the raw12p pipe's fan-out. The
 // CALLER (CompressStream) must ALSO drive the pipe's consumer gate (a
 // connect()) so the gated Raw12pTap exists and produces. Channel MUST be Leaky

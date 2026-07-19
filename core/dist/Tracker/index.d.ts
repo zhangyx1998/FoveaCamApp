@@ -16,7 +16,7 @@ declare module "core/Tracker" {
     updateAsync(frame: Mat): Promise<Rect | null>;
   }
 
-  /** One KCF result off the 1d tracker thread (WS1 1d). */
+  /** One KCF result off the tracker thread. */
   export interface TrackResult {
     found: boolean;
     /** Tracked box in frame pixels, or null when tracking is lost. On an
@@ -55,7 +55,7 @@ declare module "core/Tracker" {
     outputs: Record<string, WorkloadStat>;
   }
 
-  /** KCF tracker running on its OWN free-running C++ thread (WS1 1d): it
+  /** KCF tracker running on its OWN free-running C++ thread: it
    *  consumes the LATEST frame off the camera's shared `Arv::Stream`
    *  (latest-wins, drop-stale) and runs full-frame KCF off the JS loop; results
    *  arrive via async iteration. `arm(roi)` (re-)inits KCF on the next frame. */
@@ -73,20 +73,20 @@ declare module "core/Tracker" {
     probe(): TrackerMeter;
     /** Test-only: add `ms` of artificial per-frame work (drives the drop path). */
     stall(ms: number): void;
-    /** The tracker's typed track OUT port (native-port-pipe.md) — runtime tag
+    /** The tracker's typed track OUT port — runtime tag
      *  `"track"`. Pipe it into a matching in-port (e.g. the IMM brick's
      *  `measure_in`) to move results thread-to-thread natively; the returned
      *  link self-registers its profiler edge. Lazily created, cached. */
     readonly track_out: OutPort<TrackResult>;
   }
 
-  /** Create a KCF tracker thread bound to `camera`'s shared stream (WS1 1d).
+  /** Create a KCF tracker thread bound to `camera`'s shared stream.
    *  Optional `name` = the graph node id (becomes the meter/probe name;
    *  defaults to the legacy `"tracker:center"`). */
   export function createTracker(camera: Camera, name?: string): KcfTracker;
 
-  /** Create a CHAINED KCF tracker on another brick's in-process OwnedFrame tap
-   *  (controller-node-and-fifo-edges §3.5): `sourcePipeId` is a live convert or
+  /** Create a CHAINED KCF tracker on another brick's in-process OwnedFrame tap:
+   *  `sourcePipeId` is a live convert or
    *  undistort pipe id, so the tracker tracks EXACTLY that brick's view (e.g.
    *  the undistorted C frame the disparity kernel sees). Input transport is
    *  latest-wins (track the freshest frame). Same object surface as
@@ -104,8 +104,7 @@ declare module "core/Tracker" {
    *  low-texture scenes where GRAY-KCF collapses, and re-acquires after
    *  occlusion/fast motion (KCF is silent-forever-lost). Same object surface /
    *  {@link TrackResult} schema / meter schema as `createTracker`. Optional
-   *  `name` = the graph node id (default `"tracker:center"`). See
-   *  docs/proposals/hybrid-tracker.md. */
+   *  `name` = the graph node id (default `"tracker:center"`). */
   export function createHybridTracker(camera: Camera, name?: string): KcfTracker;
 
   /** Create a CHAINED HYBRID tracker on another brick's OwnedFrame tap — the
@@ -117,7 +116,7 @@ declare module "core/Tracker" {
     name?: string,
   ): KcfTracker;
 
-  /** One target's verdict inside a `MultiTrackResult` batch (real-2, B-25). */
+  /** One target's verdict inside a `MultiTrackResult` batch. */
   export interface MultiTrackTarget {
     /** Opaque target id, as passed to `arm()` (multi-fovea slot ids). */
     id: string;
@@ -163,7 +162,7 @@ declare module "core/Tracker" {
   }
 
   /**
-   * Multi-target KCF on ONE free-running C++ thread (real-2, B-25): up to 8
+   * Multi-target KCF on ONE free-running C++ thread: up to 8
    * independent KCF instances updated sequentially per frame off the camera's
    * shared stream (latest-wins), results batched per frame via async
    * iteration. `arm(id, roi)` (re-)inits that target on the next frame (re-arm
@@ -182,7 +181,7 @@ declare module "core/Tracker" {
     stall(ms: number): void;
   }
 
-  /** Options for `createMultiTracker` (real-2, B-25). */
+  /** Options for `createMultiTracker`. */
   export interface CreateMultiTrackerOptions {
     /** Plain persisted calibration JSON ⇒ track on the UNDISTORTED frame
      *  (fused remap; bboxes in undistorted coordinates — what multi-fovea's
@@ -193,14 +192,14 @@ declare module "core/Tracker" {
     name?: string;
   }
 
-  /** Create the multi-target KCF thread bound to `camera`'s shared stream
-   *  (real-2, B-25) — symmetric with `createTracker`. */
+  /** Create the multi-target KCF thread bound to `camera`'s shared stream —
+   *  symmetric with `createTracker`. */
   export function createMultiTracker(
     camera: Camera,
     options?: CreateMultiTrackerOptions,
   ): MultiKcfTracker;
 
-  // ---- IMM motion-predictor brick (prediction-compose-node.md) -------------
+  // ---- IMM motion-predictor brick -------------
 
   /** One prediction off the native IMM brick (or the zero-coast value returned
    *  by {@link ImmPredictor.ingest}). Mirrors {@link TrackResult} plus the
@@ -228,8 +227,8 @@ declare module "core/Tracker" {
      *  (informational). */
     propagatedToNs: bigint;
     /** HOST steady-clock ns of the measurement ingest this prediction is
-     *  based on (mirror-flicker 2026-07-12): the compose brick's staleness
-     *  gate skips feed-forward when this is too old. 0 = unset (treated as
+     *  based on: the compose brick's staleness gate skips feed-forward when
+     *  this is too old. 0 = unset (treated as
      *  stale by consumers). */
     measuredAtNs: bigint;
   }
@@ -245,7 +244,7 @@ declare module "core/Tracker" {
     deviceTimestamp?: bigint;
   }
 
-  /** Live-tunable brick params (proposal ruling 2/4): the global prediction
+  /** Live-tunable brick params: the global prediction
    *  rate + the signed per-triple delay offset. */
   export interface ImmSetParams {
     /** Prediction emit rate (Hz) — clamped 60..1000 on the brick. */
@@ -273,8 +272,8 @@ declare module "core/Tracker" {
   }
 
   /**
-   * The native IMM motion-predictor brick on its OWN free-running thread
-   * (prediction-compose-node.md): `ingest(result)` pushes a tracker measurement
+   * The native IMM motion-predictor brick on its OWN free-running thread:
+   * `ingest(result)` pushes a tracker measurement
    * at ~60 Hz (runs the IMM measurement cycle, returns the zero-coast
    * prediction); the async iterator emits high-rate coasting predictions
    * (default 600 Hz). `setParams` live-applies rate/delay changes. `probe()`
@@ -294,19 +293,19 @@ declare module "core/Tracker" {
     /** TEST-ONLY (coast-cap conformance, test 42): the free-run prediction at
      *  `coastMs` after the last ingest — deterministic (no clock read). Null
      *  while cold. Past `maxGapMs` of coast the result degrades to the
-     *  miss-coast shape (found=false, coasting=true) instead of extrapolating
-     *  (mirror-flicker 2026-07-12 R1 cap). */
+     *  miss-coast shape (found=false, coasting=true) instead of
+     *  extrapolating. */
     predictAfter(coastMs: number): ImmPrediction | null;
     /** Live rate/delay change. */
     setParams(params: ImmSetParams): void;
     /** Snapshot the native thread meter (out-of-loop safe). */
     probe(): TrackerMeter;
-    /** The brick's typed measurement IN port (native-port-pipe.md) — runtime
+    /** The brick's typed measurement IN port — runtime
      *  tag `"track"`. The disparity-scope session pipes the tracker's
      *  `track_out` here (the JS measurement relay is gone). Lazily created,
      *  cached; the sink runs on the link's delivery thread. */
     readonly measure_in: InPort<TrackResult>;
-    /** The brick's typed prediction OUT port (native-compose-controller.md) —
+    /** The brick's typed prediction OUT port —
      *  runtime tag `"prediction"`. Pipe it into the native compose brick's
      *  `pred_in`; the session's JS iterator consumption of predictions is
      *  retired (the iterator remains for tests/tooling). */
@@ -319,14 +318,14 @@ declare module "core/Tracker" {
     options?: CreateImmPredictorOptions,
   ): ImmPredictor;
 
-  // ---- Native compose brick (native-compose-controller.md) -----------------
+  // ---- Native compose brick -----------------
 
   /** The ~60 Hz rebase linearization the SESSION pushes per pid step: the
    *  absolute pid volts, the measured target it acted on, and the per-eye
    *  2×2 pixel→volt Jacobian (row-major [dVx/dpx, dVx/dpy, dVy/dpx, dVy/dpy],
    *  the finite-difference of followVolts around pMeas — JS owns calibration).
    *  `feedForward: false` (drag override / lost-gate / no calibration) makes
-   *  every tick hold the baseline (the wave-1 `predVolts = null` semantics);
+   *  every tick hold the baseline (the `predVolts = null` semantics);
    *  pMeas/jL/jR may then be omitted. */
   export interface ComposeRebase {
     vPid: { l: { x: number; y: number }; r: { x: number; y: number } };
@@ -337,11 +336,11 @@ declare module "core/Tracker" {
   }
 
   /**
-   * The NATIVE prediction compose brick (native-compose-controller.md —
-   * supersedes the JS compose node; `composeVolts` stays the JS conformance
-   * reference). Emits final volts `V = V_pid + J·(p_pred − p_meas)` on every
-   * prediction tick off `pred_in` AND the baseline floor on every `rebase`
-   * (planner decision 4). `volt_out` pipes into the controller's native
+   * The NATIVE prediction compose brick (replaces the JS compose node;
+   * `composeVolts` stays the JS conformance reference). Emits final volts
+   * `V = V_pid + J·(p_pred − p_meas)` on every prediction tick off `pred_in`
+   * AND the baseline floor on every `rebase`.
+   * `volt_out` pipes into the controller's native
    * `pos_in`; the asyncIterator is the JS FALLBACK consumer (v1 firmware /
    * no controller — JS is then a genuine consumer).
    */
@@ -356,10 +355,9 @@ declare module "core/Tracker" {
   }
 
   /** Create the native compose brick. `initial` seeds the pre-rebase baseline
-   *  (the parked pose). Guards (mirror-flicker 2026-07-12; non-positive
-   *  disables):
+   *  (the parked pose). Guards (non-positive disables):
    *  - `staleAfterMs` — feed-forward staleness bound on the prediction's
-   *    `measuredAtNs` (default 50 ms ≈ 3 periods at the slowest ruled rate;
+   *    `measuredAtNs` (default 50 ms ≈ 3 periods at the slowest rate;
    *    sessions that know the live prediction rate should pass ~2–3 periods).
    *  - `maxDeltaV` — per-axis clamp on the composed |J·Δp| contribution
    *    (default 50 V; sessions that know the live `dv` should pass a

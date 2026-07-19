@@ -7,8 +7,8 @@
 // Compression brick seam: a core-free wrapper over Aravis.attachCompressPipe. The
 // native thread FIFO-reads an already-advertised source pipe and republishes each
 // frame as an INDEPENDENT per-frame zlib blob (keeps the container seekable) into a
-// sibling output pipe whose advert bakes the `/zlib` suffix into pixelFormat (ruling
-// 9); the recorder consumes it verbatim (ruling 8). Consumer-gated; never imports core.
+// sibling output pipe whose advert bakes the `/zlib` suffix into pixelFormat;
+// the recorder consumes it verbatim. Consumer-gated; never imports core.
 // spec: docs/spec/pipes.md#compress-pipe
 
 import type { PipeSpec } from "@lib/orchestrator/pipe-contract.js";
@@ -25,8 +25,8 @@ export interface CompressPipeSeam {
 
 export interface CompressHandle {
   readonly pipeId: string;
-  /** The output advert (+ the JS-side significantBits carried over from the
-   *  source — the recorder connect seam injects it verbatim, ruling 8). */
+  /** The output advert (+ the JS-side significantBits from the source — the
+   *  recorder connect seam injects it verbatim). */
   readonly spec: RawPipeAdvertSpec;
   /** Detach the brick + un-advertise the output (consumers see CLOSED). */
   retire(): void;
@@ -38,7 +38,7 @@ export interface CompressHandle {
 export const zlibBound = (n: number): number =>
   n + (n >> 12) + (n >> 14) + (n >> 25) + 13;
 
-/** Codec suffix appended to the source `pixelFormat` (ruling 9). */
+/** Codec suffix appended to the source `pixelFormat`. */
 export const ZLIB_SUFFIX = "/zlib";
 
 /** Build the sibling output advert for a compressed stream: source format +

@@ -58,7 +58,7 @@ private:
               &ref->data_queue.back());
     } else {
       // COPY the Ptr out before pop() — a reference into the queue would
-      // dangle once popped (B-25: crashed under a closing consumer).
+      // dangle once popped.
       auto future = ref->future_queue.front();
       VERBOSE("%s::push(%p) -> Future[%p]", NAME.c_str(), value.get(),
               future.get());
@@ -76,10 +76,9 @@ private:
     VERBOSE("%s::close()", NAME.c_str());
     Subscriber<T>::close(unsubscribe, err);
     // Drain ALL pending futures under ONE guard hold, then dispatch after
-    // release. The old loop released the guard inside its body and then
-    // re-evaluated `ref->future_queue.empty()` in the while condition —
-    // Guard use-after-release, thrown the moment a queue closed with a
-    // pending future (e.g. a stream crash while the consumer awaits; B-25).
+    // release. Releasing the guard inside the loop and re-evaluating
+    // `ref->future_queue.empty()` in the while condition would be a Guard
+    // use-after-release (a queue closing with a pending future).
     std::queue<Future::Ptr> drained;
     {
       auto ref = data.ref();
@@ -125,11 +124,9 @@ public:
   FN(stop) {
     VERBOSE("%s::stop([From JS])", NAME.c_str());
     // VIRTUAL close — must reach Queue::close so pending futures are drained
-    // ({done} resolution). The old `Subscriber<T>::close()` was a QUALIFIED
-    // (static) call that bypassed the override: a consumer parked on a pending
-    // next() when JS called return() was never resolved — its await leaked
-    // forever. Timing-masked at -O0 (data_queue usually non-empty, so next()
-    // rarely parked); deterministic wedge at -O2 (test 36's pump drain).
+    // ({done} resolution). A QUALIFIED (static) `Subscriber<T>::close()` call
+    // bypasses the override, leaving a consumer parked on a pending next()
+    // (from JS return()) unresolved — its await leaks forever.
     close(true, nullptr);
     auto env = info.Env();
     auto deferred = Napi::Promise::Deferred::New(env);
@@ -224,7 +221,7 @@ public:
   FN(stop) {
     VERBOSE("%s::stop()", NAME.c_str());
     auto env = info.Env();
-    // Virtual close (same fix as Queue::stop): reach Latest::close so the
+    // Virtual close (same as Queue::stop): reach Latest::close so the
     // native `wait()` blockers are notified, not just the base state flip.
     close(true, nullptr);
     return IterNext(env);
@@ -292,9 +289,8 @@ private:
 
 protected:
   // start/stop are overridable (call the base!) so a brick can release its
-  // reused full-frame buffers on the active→parked edge (idle-retention fix,
-  // value-sweep 2026-07-11) — both run on the stream thread, so the
-  // single-writer rule over transform-owned state holds.
+  // reused full-frame buffers on the active→parked edge — both run on the
+  // stream thread, so the single-writer rule over transform-owned state holds.
   void start() override { sub = Sub::Latest<I>::create(upstream()); }
   void stop() override { sub = nullptr; }
 

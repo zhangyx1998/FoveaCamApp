@@ -177,7 +177,7 @@ describe("accumulate / manifestOf", () => {
     expect(store.get("left")).toEqual([{ image: "L0" }, { image: "L1" }, { image: "L2" }]);
   });
 
-  it("single-stream shape: reset wide meta + one image-only resource (ruling 3, item 4)", () => {
+  it("single-stream shape: reset wide meta + one image-only resource", () => {
     // Mirrors runSingleCapture's accumulation: a reset shot clears + provides
     // `wide` (meta), then the one stacked full-depth image lands unindexed under
     // its resource name (image-only → null meta). No left/right/center/diff.

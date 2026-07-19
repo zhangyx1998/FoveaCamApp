@@ -1,8 +1,8 @@
-// Unit coverage for the Vue-free session-resource primitives (A-R2-P1, the
-// non-breaking building blocks the A-P1 lifecycle refactor sits on):
+// Unit coverage for the Vue-free session-resource primitives (the non-breaking
+// building blocks the lifecycle refactor sits on):
 // DisposerBag, releaseLeases. Types-only imports, so no native/mocking needed —
-// fakes stand in for CameraLease. (C-22b step 3 retired `bindViews` — all vision
-// now reads the `camera:<serial>` pipe in worker threads, not `onView`.)
+// fakes stand in for CameraLease. (All vision reads the `camera:<serial>` pipe
+// in worker threads, not `onView`.)
 
 import { describe, expect, it, vi } from "vitest";
 import {

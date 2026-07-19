@@ -147,9 +147,9 @@ HANDLE_SET(System::Reset) {
     send(packet);
     delay(100);
 #ifdef FOVEA_HOST_SIM
-    // Host sim (docs/proposals/firmware-sim-harness.md): "bkpt" is an ARM32
-    // instruction and cannot assemble on an x86/arm64 host — route through the
-    // same reboot shim the HARD path uses. Never defined by PlatformIO.
+    // Host sim: "bkpt" is an ARM32 instruction and cannot assemble on an
+    // x86/arm64 host — route through the same reboot shim the HARD path uses.
+    // FOVEA_HOST_SIM is never defined by PlatformIO.
     _reboot_Teensyduino_();
 #else
     asm volatile("bkpt"); // Breakpoint instruction causes reset
@@ -157,8 +157,8 @@ HANDLE_SET(System::Reset) {
     crash("Reboot failed");
   }
   if (payload.type == Payload::MEMS) {
-    // M2 targeted DAC recovery (docs/dev/right-dac-freeze-2026-07-12.md): a full
-    // MEMS re-init (intentionally INCLUDING the AD5664R RESET) to unwedge a
+    // Targeted DAC recovery: a full MEMS re-init (intentionally INCLUDING the
+    // AD5664R RESET) to unwedge a
     // latched-off DAC — WITHOUT cycling the Board::enable rail or clearing the
     // stream table, so the live session survives. Streams::touch() marks the
     // active stream dirty so the next Streams::tick() re-commits current

@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// native-recorder Wave 2: the RECORDER BRICK. A free-running native writer
+// The RECORDER BRICK. A free-running native writer
 // thread owning one hand-rolled McapWriter, fed brick→brick from record taps at
 // the Publisher::offer seam (Pipe.h `RecordTap`) — the single point every
 // recorded source (raw camera pipes, CompressStream /zlib outputs, derived
@@ -112,7 +112,7 @@ struct StreamCounters {
   uint64_t bytes = 0;
 };
 
-/** A per-frame write notice (ruling-3 extras dispatch): drained by the host's
+/** A per-frame write notice (extras dispatch): drained by the host's
  *  low-rate poll, correlated by stream+seq. */
 struct FrameNotice {
   std::string stream;
@@ -131,7 +131,7 @@ public:
 
   /** Tap `pipeId`'s publisher and record it as channel `name`. `metadata` is
    *  the channel metadata map, copied VERBATIM (built JS-side from the advert —
-   *  ruling 8: the recorder never interprets formats). `wantsExtras` gates the
+   *  the recorder never interprets formats). `wantsExtras` gates the
    *  per-frame notices. Throws on unknown pipe / duplicate live name / after
    *  finalize. Re-adding an ENDED name continues its channel + sequence. */
   void addStream(const std::string &name, const std::string &pipeId,

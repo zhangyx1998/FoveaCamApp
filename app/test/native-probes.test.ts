@@ -1,4 +1,4 @@
-// A-24 Stage 3: the native-probe splice. C's SHM pipe producers + B's 1d KCF
+// The native-probe splice. C's SHM pipe producers + B's 1d KCF
 // tracker expose native meters in the `WorkloadSnapshot` shape; this seam folds
 // them into `system.perfSnapshot.workloads` next to the JS meters WITHOUT
 // `system.ts` touching `core`. Covers the registry and the end-to-end splice
@@ -56,7 +56,7 @@ describe("native-probes registry", () => {
     }
   });
 
-  // Rig regression (2026-07-08): the converter/tracker serializers emitted a
+  // Rig regression: the converter/tracker serializers emitted a
   // FLAT shape (uptimeMs + dropTotal, no window/drops); one such row crashed
   // perfSnapshot's graph fold (`.ratePerSec` of undefined) → empty pipeline
   // graph + failed snapshot export in every app. The merge must coerce flat
@@ -83,7 +83,7 @@ describe("native-probes registry", () => {
     }
   });
 
-  // FIFO queue stats (controller-node-and-fifo-edges §1/§2): the undistort
+  // FIFO queue stats: the undistort
   // brick's snapshot carries `queue: {depth, highWater, capacity}`. Pass a
   // well-formed one through; a malformed one (any field missing/non-numeric)
   // must degrade to `queue` ABSENT, never throw — same defensive contract that
@@ -111,7 +111,7 @@ describe("native-probes registry", () => {
   });
 });
 
-// Universal node reporting (unified-time-and-topology §6): the same seam one
+// Universal node reporting: the same seam one
 // level up — sources report whole `NodeReport` batches for `buildTopology`'s
 // `reports` dep, with the identical disposer + throw-isolation contract.
 describe("node-reports registry", () => {

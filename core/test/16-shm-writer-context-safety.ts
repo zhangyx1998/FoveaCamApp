@@ -4,17 +4,16 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// WS1 real-1f B-19c regression: `core.node`'s SHM writer classes must be
-// CONTEXT-SAFE across worker_thread teardown — the same fix as the reader
-// addon (test 14), applied to `ShmSlotObject`/`ShmWriterObject` whose
-// `static Napi::FunctionReference constructor` was a process-global. When C's
-// vision worker loads `core.node` (for core/Vision) and terminates, those
-// statics used to dangle → the MAIN thread's next `Shm.Writer(...).nextSlot()`
-// (which calls `ShmSlotObject::Create`) segfaulted in V8. Fixed by storing both
-// constructors in per-env instance data (`SetInstanceData<ShmAddonData>`).
+// `core.node`'s SHM writer classes must be CONTEXT-SAFE across worker_thread
+// teardown — same fix as the reader addon (test 14). `ShmSlotObject`/
+// `ShmWriterObject` store their constructors in per-env instance data
+// (`SetInstanceData<ShmAddonData>`), NOT a process-global
+// `static Napi::FunctionReference`: a process-global would dangle when a
+// worker that loaded `core.node` (for core/Vision) terminates, segfaulting the
+// MAIN thread's next `Shm.Writer(...).nextSlot()` (`ShmSlotObject::Create`) in V8.
 //
-// Repro that used to crash: main writer OK → worker loads core.node + uses a
-// writer OK → worker terminates → MAIN `Shm.Writer().nextSlot()` STILL works.
+// Sequence: main writer OK → worker loads core.node + uses a writer OK →
+// worker terminates → MAIN `Shm.Writer().nextSlot()` STILL works.
 // Run UNSANDBOXED: /opt/homebrew/bin/node core/test/16-shm-writer-context-safety.ts
 
 import assert from "node:assert/strict";
@@ -33,7 +32,7 @@ const S = Shm as unknown as {
   };
 };
 
-/** Exercises `ShmSlotObject::Create` (the call that used to segfault). */
+/** Exercises `ShmSlotObject::Create`. */
 function useWriter(topic: string, fill: number): number {
   const writer = new S.Writer(S.topicKey(topic));
   const slot = writer.nextSlot([2, 3], 4); // → ShmSlotObject::Create
@@ -48,8 +47,7 @@ function useWriter(topic: string, fill: number): number {
 // 1) main writer works before any worker.
 assert.equal(useWriter("ctx-writer-1", 11), 11, "main writer (baseline)");
 
-// 2) a worker loads core.node in its OWN env + uses a writer (overwrites the
-//    old global static in the buggy version), then terminates.
+// 2) a worker loads core.node in its OWN env + uses a writer, then terminates.
 const worker = new Worker(
   `
     import { parentPort } from "node:worker_threads";
@@ -69,8 +67,7 @@ const workerOk = await new Promise((resolve, reject) => {
 assert.equal(workerOk, true, "worker used a writer in its own env");
 await worker.terminate();
 
-// 3) THE regression: after the worker's env was torn down, the MAIN writer must
-//    still create a slot (ShmSlotObject::Create used to segfault here).
+// 3) after the worker's env is torn down, the MAIN writer must still create a slot.
 assert.equal(useWriter("ctx-writer-3", 33), 33, "main writer after worker teardown (was a segfault)");
 
 cleanup();

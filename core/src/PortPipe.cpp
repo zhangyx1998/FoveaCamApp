@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Native PORT/PIPE NAPI seam (docs/proposals/native-port-pipe.md): the three
+// Native PORT/PIPE NAPI seam: the three
 // CoreObjects (`OutPort`, `InPort`, `PipeLink`), the pipe() connect (tag +
 // payload-type checked, params validated with named invalid_arguments — the
 // stereo-params precedent), the live-link registry feeding Topology.report()
@@ -59,7 +59,7 @@ void unregisterLink(Link *link) {
 // edgesOnly: true, inputs: [{from, port, type, lossy}] }` — the JS fold unions
 // the input into the consumer's real node (or synthesizes a placeholder whose
 // kind derives from the id path). FIFO links carry the hwm/capacity on the
-// edge (controller-node-and-fifo-edges §2 treatment); latest/ring are lossy.
+// edge; latest/ring are lossy.
 void appendLinkReports(Napi::Env env, Napi::Array &rows) {
   std::scoped_lock lk(g_linksMutex);
   for (Link *l : g_links) {

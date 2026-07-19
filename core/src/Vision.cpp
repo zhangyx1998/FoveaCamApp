@@ -118,11 +118,10 @@ static FN(convertType) {
   JS_EXCEPT(env.Undefined())
 }
 
-// MatView adoption (value-sweep 2026-07-11, mat-convert-full-copy-per-vision-
-// call): the hot READ-ONLY kernels below take `convert<cv::MatView>` — a
-// zero-copy Mat header over the caller's TypedArray (the JS ref is pinned for
-// the view's lifetime) — instead of memcpy'ing the full input into a fresh
-// Mat. Each adopted kernel was AUDITED for in-place aliasing: none may write
+// MatView adoption: the hot READ-ONLY kernels below take `convert<cv::MatView>`
+// — a zero-copy Mat header over the caller's TypedArray (the JS ref is pinned
+// for the view's lifetime) — instead of memcpy'ing the full input into a fresh
+// Mat. Each adopted kernel is verified for in-place aliasing: none may write
 // through the view (a kernel that mutates its input keeps the copying
 // converter). Sync kernels drop the view before returning; the async ones
 // (matchTemplate) ride shared_ptr<MatView> captured into the AsyncTask —
@@ -211,9 +210,8 @@ static FN(resize) {
 static FN(heatmap) {
   const auto env = info.Env();
   try {
-    // READ-ONLY via restructure: the old code normalize/convertTo'd IN PLACE
-    // on its private copy; with a zero-copy view every step now lands in a
-    // distinct working Mat so the caller's buffer is never written. The
+    // READ-ONLY: the caller's buffer is a zero-copy view, so every step lands
+    // in a distinct working Mat and the caller's buffer is never written. The
     // no-op 8U/no-norm path shares the view's header (read-only below).
     const auto view = convert<cv::MatView>(info[0]);
     auto norm = optionalArgument<bool>(info[1], false);
@@ -284,9 +282,9 @@ inline Size2i toSize(const Napi::Value &value) {
 static FN(gaussian) {
   const auto env = info.Env();
   try {
-    // AUDITED: the old code blurred IN PLACE on its private copy; a zero-copy
-    // view must blur src → dst (distinct) so the caller's buffer stays
-    // unwritten. Same observable result: a fresh blurred output array.
+    // READ-ONLY: a zero-copy view must blur src → dst (distinct) so the
+    // caller's buffer stays unwritten. Same observable result: a fresh blurred
+    // output array.
     const auto mat = convert<cv::MatView>(info[0]);
     const auto ksize = toSize(info[1]); // Ensure odd size
     const auto sigmaX = optionalArgument<double>(info[2], 2);
@@ -298,9 +296,9 @@ static FN(gaussian) {
   JS_EXCEPT(env.Undefined())
 }
 
-// ASYNC gaussian (calibration review 2026-07-11 #7): the marker tracker's
-// fitSubPix ran the full-frame blur SYNCHRONOUSLY on the orchestrator loop
-// every detection tick. Same math/args as `gaussian`; the work runs on the
+// ASYNC gaussian: moves the marker tracker's fitSubPix full-frame blur OFF the
+// orchestrator loop (it otherwise runs synchronously every detection tick).
+// Same math/args as `gaussian`; the work runs on the
 // AsyncTask worker, with the input riding a shared_ptr<MatView> (the
 // matchTemplate pattern — read-only, ref released on the JS thread by the
 // AsyncWorker; the caller must not mutate the input while pending).
@@ -343,10 +341,10 @@ inline cv::Mat mono(const cv::Mat &mat) {
 static FN(diff) {
   const auto env = info.Env();
   try {
-    // AUDITED: mono() returns a SHARING header when the input is already
-    // grayscale, so the CLAHE stage below must write into a DISTINCT mat —
-    // the old in-place apply would have mutated the caller's buffer through
-    // the view. Everything else only reads a/b (merge inputs).
+    // mono() returns a SHARING header when the input is already grayscale, so
+    // the CLAHE stage below must write into a DISTINCT mat — an in-place apply
+    // would mutate the caller's buffer through the view. Everything else only
+    // reads a/b (merge inputs).
     const auto va = convert<cv::MatView>(info[0]);
     const auto vb = convert<cv::MatView>(info[1]);
     auto norm = optionalArgument(info[2], false);
@@ -478,12 +476,11 @@ static FN(calibrateCamera) {
     auto sensor_size = convert<cv::Size2i>(info[0]);
     auto img_points = convert<vector<Points2D>>(info[1]);
     auto obj_points = convert<vector<Points3D>>(info[2]);
-    // Termination (calibration review 2026-07-11 #13): the old default
-    // epsilon 0.01 (vs OpenCV's own DBL_EPSILON) could freeze the distortion
-    // coefficients after the first LM steps on well-posed sets. 1e-9 lets the
-    // solve actually converge; iterations bumped 30 → 50 so a tight epsilon
-    // has headroom to be the terminating condition (a solve this size is
-    // milliseconds per iteration — the AsyncTask keeps it off the loop).
+    // Termination: a loose epsilon (e.g. 0.01, vs OpenCV's own DBL_EPSILON) can
+    // freeze the distortion coefficients after the first LM steps on well-posed
+    // sets, so use 1e-9 to let the solve actually converge; 50 iterations give
+    // a tight epsilon headroom to be the terminating condition (a solve this
+    // size is milliseconds per iteration — the AsyncTask keeps it off the loop).
     auto criteria = optionalArgument<cv::TermCriteria>(
         info[3],
         {cv::TermCriteria::EPS + cv::TermCriteria::MAX_ITER, 50, 1e-9});
@@ -492,8 +489,8 @@ static FN(calibrateCamera) {
       ret->sensor_size = sensor_size;
       // flags = 0 keeps k3 FREE. CALIB_FIX_K3 was considered (k3 is poorly
       // constrained by few boards and can go wild) and DEFERRED: few-board
-      // solves are gated by the min-record count upstream (review wave,
-      // Lane G) instead of biasing well-sampled solves, and the persisted
+      // solves are gated by the min-record count upstream instead of biasing
+      // well-sampled solves, and the persisted
       // record format carries all 5 coefficients either way.
       ret->rms = cv::calibrateCamera(obj_points, img_points, sensor_size,
                                      ret->camera_matrix, ret->dist_coeffs,
@@ -524,9 +521,9 @@ static FN(findHomography) {
   JS_EXCEPT(env.Undefined());
 }
 
-// ASYNC findHomography (calibration review 2026-07-11 #7): fitSubPix ran up
-// to 3× RANSAC per tick on the orchestrator loop. Same args/defaults as the
-// sync form; inputs are plain point vectors (copied — no buffer aliasing).
+// ASYNC findHomography: moves fitSubPix's up-to-3× RANSAC per tick OFF the
+// orchestrator loop. Same args/defaults as the sync form; inputs are plain
+// point vectors (copied — no buffer aliasing).
 static FN(findHomographyAsync) {
   const auto env = info.Env();
   try {
@@ -592,10 +589,9 @@ static FN(disparity) {
     cv::Mat right = mono(vr);
     const auto numDisparities = optionalArgument<int>(info[2], 0);
     const auto blockSize = optionalArgument<int>(info[3], 21);
-    // v2 (depth-view-legacy-stereobm, 2026-07-11): a signed search window —
-    // foveated (independently steered) gaze makes the true L↔R disparity
-    // SIGNED (sgbm-signed-range.md); the unsigned 0…N default matched
-    // garbage. Default 0 preserves the legacy behavior byte-for-byte.
+    // Signed search window: foveated (independently steered) gaze makes the
+    // true L↔R disparity SIGNED; an unsigned 0…N default matches garbage.
+    // Default 0 preserves the prior unsigned behavior byte-for-byte.
     const auto minDisparity = optionalArgument<int>(info[4], 0);
     cv::Mat disparity;
     cv::Ptr<cv::StereoBM> stereo =
@@ -631,15 +627,14 @@ static FN(depthFromProjection) {
     // Check if projected has 3 channels
     if (projected.channels() != 3)
       throw JS::Error(env, "Input to depthFromProjection must have 3 channels");
-    // Extract Z channel. Edge handling (calibration review 2026-07-11 #16):
-    // pass 1 clamps FINITE Z into [near, far] and accumulates min/max over
-    // finite values ONLY (an Inf reaching min/max — possible with the default
-    // ±Inf clamp bounds — used to poison the normalization); pass 2 maps
-    // non-finite pixels into the DISPLAY range (NaN/−Inf → 0 = near end,
-    // +Inf → 255 = far end) instead of writing raw mm into a 0-255 image,
-    // and a zero span (flat scene / single depth) renders mid-scale instead
-    // of dividing 0/0 into NaN pixels. The finite path with finite bounds is
-    // byte-identical to the old behavior.
+    // Extract Z channel. Edge handling: pass 1 clamps FINITE Z into [near, far]
+    // and accumulates min/max over finite values ONLY (an Inf reaching min/max
+    // — possible with the default ±Inf clamp bounds — would poison the
+    // normalization); pass 2 maps non-finite pixels into the DISPLAY range
+    // (NaN/−Inf → 0 = near end, +Inf → 255 = far end) instead of writing raw mm
+    // into a 0-255 image, and a zero span (flat scene / single depth) renders
+    // mid-scale instead of dividing 0/0 into NaN pixels. The finite path with
+    // finite bounds is byte-identical to a plain clamp+normalize.
     cv::Mat z = cv::Mat(projected.rows, projected.cols, CV_32FC1);
     double z_min = INFINITY, z_max = -INFINITY;
     for (int y = 0; y < projected.rows; ++y) {

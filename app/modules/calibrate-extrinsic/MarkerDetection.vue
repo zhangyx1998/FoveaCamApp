@@ -4,8 +4,7 @@ This source code is licensed under the MIT license.
 You may find the full license in project root directory.
 --------------------------------------------------- -->
 <!--
-  Marker-detection annotation (restored from MASTER's MarkerDetection.vue —
-  calibration-review 2026-07-11, user issue 1): the outline <path> around the
+  Marker-detection annotation: the outline <path> around the
   detected quad, size-scaled corner dots with a black rim, and the marker ID
   rendered at the detection center — all sized off the marker's on-screen
   span and themed via `--theme` so each eye keeps its role color. Renders
@@ -20,7 +19,7 @@ const props = defineProps<{
    *  any further points (internal corners) render as dots only. */
   points: Point2d[];
   /** Marker id to print at the center (omit to skip the label — e.g. when
-   *  internal-corner dots would collide with it, the master behavior). */
+   *  internal-corner dots would collide with it). */
   id?: number;
   /** Theme color (defaults to the surrounding `--theme`). */
   color?: string;
@@ -29,8 +28,8 @@ const props = defineProps<{
 const style = computed(() =>
   props.color ? { "--theme": props.color } : undefined,
 );
-/** On-screen marker span = the largest pairwise corner distance — the master's
- *  size heuristic (outline/dot weights and the ID font all scale from it). */
+/** On-screen marker span = the largest pairwise corner distance
+ *  (outline/dot weights and the ID font all scale from it). */
 const size = computed(() => {
   const q = props.points.slice(0, 4);
   let max = 0;

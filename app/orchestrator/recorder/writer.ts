@@ -44,16 +44,16 @@ export interface McapWriterWorkerOptions {
   maxQueuedFrames?: number;
   /** Session-level metadata record written at start. */
   session?: Record<string, string>;
-  /** Bench-only (B-P4): inject MCAP chunk compression. NEVER set by production
-   *  callers — the recorder default is uncompressed (B-4 finding). */
+  /** Bench-only: inject MCAP chunk compression. NEVER set by production callers
+   *  — the recorder default is uncompressed. */
   compression?: CompressionInjection;
 }
 
 export class McapWriterWorker {
   /** Any message larger than this finalizes (flushes) its chunk — every raw
-   *  camera frame (≥ ~1.5 MiB) gets chunk ≈ 1 frame, the B-4 crash-loss
-   *  default, while tiny telemetry messages coalesce into the next frame's
-   *  chunk instead of bloating the chunk index. */
+   *  camera frame (≥ ~1.5 MiB) gets chunk ≈ 1 frame, the crash-loss default,
+   *  while tiny telemetry messages coalesce into the next frame's chunk instead
+   *  of bloating the chunk index. */
   static readonly chunkBytes = DEFAULT_CHUNK_BYTES;
   static readonly maxQueuedFrames = DEFAULT_MAX_QUEUED_FRAMES;
 
@@ -193,8 +193,8 @@ export class McapWriterWorker {
   /** Stop recording WITHOUT finalizing: terminate the worker immediately, so
    *  the chunk still buffered in the writer is lost and the file has no
    *  footer/summary — a crash-shaped container that only the streaming/
-   *  re-index reader path recovers (B-4). Used to cancel a recording and by
-   *  the recorder bench's crash test. Idempotent. */
+   *  re-index reader path recovers. Used to cancel a recording and by the
+   *  recorder bench's crash test. Idempotent. */
   async abort(): Promise<void> {
     this.finalizing = true; // suppress the exit→fail path on abrupt terminate
     this.pendingFinalize = null;

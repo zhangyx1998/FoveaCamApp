@@ -1,6 +1,6 @@
-// Anchor enrichment node coverage (pairing-nodes ruling 4). Concerns:
+// Anchor enrichment node coverage. Concerns:
 //   (1) PAYLOAD PACKING — a FIN outcome's exposure-averaged volts → V2A angles →
-//       per-side H, packed into the opaque doubles payload at the ruled offsets
+//       per-side H, packed into the opaque doubles payload at fixed offsets
 //       (a fake calibration makes the arithmetic checkable); volts-only when no
 //       conversions are wired.
 //   (2) FAN-OUT — N registered pairing sinks each receive the SAME anchor
@@ -74,7 +74,7 @@ describe("packAnchorPayload", () => {
     expect(Array.from(p)).toEqual([1, 2, 3, 4]);
   });
 
-  it("packs volts + V2A angles + per-side H at the ruled offsets", () => {
+  it("packs volts + V2A angles + per-side H at the expected offsets", () => {
     const p = packAnchorPayload(outcome(0n, P(1, 2), P(3, 4)), fakeConv);
     expect(p.length).toBe(ANCHOR_PAYLOAD.LEN_FULL);
     // volts
@@ -137,7 +137,7 @@ describe("AnchorNode — graph row", () => {
   });
 });
 
-// (4) RESOLVED-ANCHOR key delivery (pairing-nodes ruling 2, R-1). The root pair
+// (4) RESOLVED-ANCHOR key delivery. The root pair
 // record's per-side deviceTimestamps become the downstream exact-join keys —
 // carried, never re-stamped (trusted-time).
 describe("resolvedAnchorFromRecord — root → downstream key delivery", () => {

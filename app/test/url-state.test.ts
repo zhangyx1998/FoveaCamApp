@@ -1,4 +1,4 @@
-// `@lib/url-state` (A-10a, docs/history/refactor/multi-window.md req. 7): the
+// `@lib/url-state`: the
 // state↔URL helper backing projection params and calibrate-extrinsic's
 // wizard step. Node test env — `location`/`history` are stubbed.
 

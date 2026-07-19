@@ -4,11 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Native crash-site tracing for the orchestrator (teardown-hardening, Task 3).
+// Native crash-site tracing for the orchestrator.
 //
-// The 2026-07-09 incident aborted with only a libc++ one-liner ("terminating
-// due to uncaught exception ... mutex lock failed: Invalid argument") and NO
-// native stack — macOS wrote no .ips for the utilityProcess. installCrashHandler
+// macOS writes no native stack (no .ips for the utilityProcess) when the
+// process aborts on an uncaught exception — e.g. a "mutex lock failed: Invalid
+// argument" from a destroyed mutex, which libc++ reports as a one-liner with no
+// stack. installCrashHandler
 // closes that gap: a std::set_terminate hook + SIGABRT/SIGSEGV/SIGBUS handlers
 // print a banner, the exception message (terminate only), the module load base
 // (for offline `atos` symbolication of the offset-only .node frames) and the

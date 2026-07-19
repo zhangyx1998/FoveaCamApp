@@ -4,8 +4,8 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Minimal CAPTURE contract (capture-recorder-everywhere ruling 3) — the mixin
-// telemetry/commands only. The shared `CapturePreview` window is a PASSIVE
+// Minimal CAPTURE contract — the mixin telemetry/commands only. The shared
+// `CapturePreview` window is a PASSIVE
 // viewer over ANY capturable app's session, so it can't import the app's full
 // contract; it subscribes with this minimal shape instead (the WS protocol is
 // name-based — the telemetry stream carries every field, this just types the

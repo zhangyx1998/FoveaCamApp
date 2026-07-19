@@ -1,4 +1,4 @@
-// Coverage for the fovea-pair link helpers (P5): which keys the pair edits as
+// Coverage for the fovea-pair link helpers: which keys the pair edits as
 // one, and when two L/R snapshots count as DIVERGENT (gating the pair panel
 // behind the explicit unify prompt).
 

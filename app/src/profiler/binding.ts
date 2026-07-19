@@ -18,7 +18,7 @@ export function shortInstanceId(id: string): string {
 }
 
 /** Title-bar subtitle for a profiler bound to `sessionName` / `instanceId`
- *  (ruling 3 — the session name + instance id). Unbound (opened with no live
+ *  (the session name + instance id). Unbound (opened with no live
  *  instance) reads "no active session". */
 export function profilerSubtitle(
   sessionName: string | null | undefined,

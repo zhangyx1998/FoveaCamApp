@@ -8,8 +8,8 @@
 // The single home for the Fovea SHM READ path — mapping open + header
 // validation + slot addressing + the seqlock read. Compiled into BOTH the core
 // target and the sandboxed reader addon so the hard memory-ordering logic
-// (V8/V9 defects were exactly seqlock/read-window races) lives in one place and
-// a fix lands on both sides at once.
+// (the seqlock/read-window races) lives in one place and a fix lands on both
+// sides at once.
 //
 // HARD CONSTRAINT: this TU is system-library-only. It includes only
 // `ShmLayout.h` + the C++ standard library / POSIX (mmap, shm_open) — NO
@@ -53,9 +53,9 @@ enum class ReadStatus {
   NoNewFrame,  // latestSeq <= lastSeq — nothing newer to read (pipe still OPEN)
   DestTooSmall, // destination smaller than the slot's frame bytes
   TornRead,    // MAX_READ_RETRIES seqlock attempts all raced the writer
-  Closed,      // no new frame AND the publisher set state=CLOSED (C-16) — the
+  Closed,      // no new frame AND the publisher set state=CLOSED — the
                // final frame was already delivered; consumer should unmap
-  // ---- FIFO-mode outcomes (readSeqInto only; capture-recorder-nodes Ph0) ----
+  // ---- FIFO-mode outcomes (readSeqInto only) ----
   NotYet,      // wantSeq > latestSeq — the requested frame is not published yet
                // (pipe still OPEN); the consumer short-polls/backs off and retries
   Gone,        // wantSeq's ring slot was already recycled by a newer frame — the
@@ -106,8 +106,8 @@ ReadStatus readLatestInto(const ReadMapping &m, void *dst, size_t dstBytes,
  *                ring) → `out.oldestSeq` = the oldest live seq to jump to.
  *    - `Closed`  `wantSeq` beyond `latestSeq` AND the publisher set CLOSED.
  *    - `DestTooSmall` / `TornRead` as readLatestInto.
- *  Same seqlock retry discipline + DestTooSmall (`dstBytes >= slotBytes`, the
- *  C-20 rule) as `readLatestInto`; never blocks the writer. */
+ *  Same seqlock retry discipline + DestTooSmall (`dstBytes >= slotBytes`)
+ *  as `readLatestInto`; never blocks the writer. */
 ReadStatus readSeqInto(const ReadMapping &m, uint64_t wantSeq, void *dst,
                        size_t dstBytes, ReadResult &out);
 

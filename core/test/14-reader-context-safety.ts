@@ -4,15 +4,14 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// WS1 real-1f B-19b regression: the SHM reader addon must be CONTEXT-SAFE across
-// worker_thread teardown. Before the fix, `ReaderObject::constructor` was a
-// process-global `static FunctionReference`; a worker loading the addon
-// overwrote it with the worker's env reference, and the worker's teardown left
-// it dangling → the MAIN thread's next `reader.open()` segfaulted in V8
-// (EscapableHandleScope, dead Isolate). Fixed by storing the constructor in
-// per-env instance data (SetInstanceData).
+// The SHM reader addon must be CONTEXT-SAFE across worker_thread teardown.
+// `ReaderObject`'s constructor is stored in per-env instance data
+// (SetInstanceData), NOT a process-global `static FunctionReference`: a
+// process-global gets overwritten by a worker loading the addon and left
+// dangling on the worker's teardown, segfaulting the MAIN thread's next
+// `reader.open()` in V8 (EscapableHandleScope, dead Isolate).
 //
-// This test reproduces the exact sequence that used to crash:
+// Sequence exercised:
 //   main read OK → worker loads addon + reads OK → worker terminates →
 //   MAIN reader.open()/readInto() STILL works (no segfault, byte-correct).
 // Run UNSANDBOXED: /opt/homebrew/bin/node core/test/14-reader-context-safety.ts
@@ -49,7 +48,7 @@ function makePipe(id: string, fill: number) {
 }
 
 function mainRead(shmName: string, bytes: number): number | null {
-  const rh = reader.open(shmName); // ← the call that used to segfault post-teardown
+  const rh = reader.open(shmName); // ← must stay valid after worker teardown
   const dest = new ArrayBuffer(bytes);
   let r = null;
   for (let i = 0; i < 300 && !r; i++) {
@@ -66,8 +65,7 @@ function mainRead(shmName: string, bytes: number): number | null {
   assert.equal(mainRead(p1.shmName, p1.bytes), 11, "main read (baseline)");
   P.close("ctx:1"); P.drop("ctx:1");
 
-  // 2) a worker loads the addon in its own env + reads (overwrites the old
-  //    global static in the buggy version), then terminates.
+  // 2) a worker loads the addon in its own env + reads, then terminates.
   const p2 = makePipe("ctx:2", 22);
   const code = String.raw`
     const { parentPort, workerData } = require("node:worker_threads");
@@ -85,12 +83,12 @@ function mainRead(shmName: string, bytes: number): number | null {
   await w.terminate();
   P.close("ctx:2"); P.drop("ctx:2");
 
-  // 3) THE regression: after the worker's env was torn down, the MAIN reader
-  //    must still open+read a fresh segment (used to segfault).
+  // 3) after the worker's env is torn down, the MAIN reader must still
+  //    open+read a fresh segment.
   const p3 = makePipe("ctx:3", 33);
   assert.equal(mainRead(p3.shmName, p3.bytes), 33, "main read after worker teardown (was a segfault)");
   P.close("ctx:3"); P.drop("ctx:3");
 }
 
 console.log("14-reader-context-safety: reader addon survives worker_thread teardown (per-env instance data).");
-process.exit(0); // cleanup() hangs in the fake-camera/converter path (B-19a finding #2); not exercised here
+process.exit(0); // cleanup() hangs in the fake-camera/converter path; not exercised here

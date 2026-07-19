@@ -15,11 +15,11 @@ export type CounterRate = {
   ratePerSec: number;
 };
 
-/** A workload input/output stream counter with the C-18 diagnostic:
+/** A workload input/output stream counter with the interval diagnostic:
  *  `maxIntervalMs` = the largest gap (ms) between consecutive events over the
  *  trailing window (0 = no data / no gap yet). Mirrors `metering.ts`'s
  *  `WorkloadStreamStat`; kept OPTIONAL here so the profiler reads it typed
- *  (not `as any`) while pre-C-18 snapshots/fixtures that omit it still fit. */
+ *  (not `as any`) while snapshots/fixtures that omit it still fit. */
 export type WorkloadStreamStat = CounterRate & { maxIntervalMs?: number };
 
 export type SampleStats = {
@@ -34,7 +34,7 @@ export type DropSnapshot = {
   byReason: Record<string, number>;
 };
 
-/** FIFO input-queue stats (controller-node-and-fifo-edges §1/§2): present only
+/** FIFO input-queue stats: present only
  *  on workloads whose input is a bounded FIFO (e.g. the undistort brick).
  *  `highWater` = max queued depth over the trailing 10s window; `depth` = the
  *  last-sampled depth. Replaces the drop rate on FIFO (lossless) edges. */

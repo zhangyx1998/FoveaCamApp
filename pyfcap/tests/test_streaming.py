@@ -3,7 +3,7 @@
 # This source code is licensed under the MIT license.
 # You may find the full license in project root directory.
 # -------------------------------------------------------
-"""B-P10: FoveaReader.iter_frames_streaming() — additive, file-order, bounded
+"""FoveaReader.iter_frames_streaming() — additive, file-order, bounded
 telemetry join, single forward pass. Covers a large-ish synthetic recording
 (bounded-memory / yields-before-whole-file) and the real crash-truncated
 fixture (streaming recovery without whole-file materialization)."""

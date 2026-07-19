@@ -24,11 +24,11 @@ export function readUrlState(): Record<string, string> {
   return Object.fromEntries(new URLSearchParams(location.search));
 }
 
-/** This window's stable instance id (A-34) — minted by the window manager at
+/** This window's stable instance id — minted by the window manager at
  *  spawn and threaded here via `?win=` (see `WINDOW_ID_PARAM`), so it survives
  *  reloads + manifest restores. Null only for windows that predate the manager
  *  (shouldn't happen in practice). Static per window — read once, no reactivity
- *  needed. C-24's composition addresses this window's nodes as
+ *  needed. The composition protocol addresses this window's nodes as
  *  `win/<windowId>/...`. */
 export function windowId(): string | null {
   return readUrlParam(WINDOW_ID_PARAM);

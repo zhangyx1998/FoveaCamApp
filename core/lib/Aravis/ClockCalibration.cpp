@@ -4,8 +4,8 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Camera clock calibration (see ClockCalibration.h for the ruling + clock
-// domain contract): the min-filter estimator, the blocking+exclusive latch
+// Camera clock calibration (see ClockCalibration.h for the clock domain
+// contract): the min-filter estimator, the blocking+exclusive latch
 // run, the per-serial stability ring, and the NAPI read surface
 // (`steadyNowNs` root export, `Aravis.clockStabilityAll`, the hardware-free
 // `__clockCalSelfTest`).
@@ -27,8 +27,8 @@ using namespace Napi;
 namespace Arv {
 
 // GenICam feature spellings (SFNC; FLIR/Basler-compatible). The latched value
-// is assumed NANOSECONDS on modern USB3V cameras — RIG-CHECK per model (a
-// tick-based model needs TimestampTickFrequency scaling here).
+// is assumed NANOSECONDS on modern USB3V cameras — verify per model on hardware
+// (a tick-based model needs TimestampTickFrequency scaling here).
 static constexpr const char *LATCH_EXEC = "TimestampLatch";
 static constexpr const char *LATCH_VALUE = "TimestampLatchValue";
 

@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// unified-time (2026-07-08): native camera clock calibration — owner-thread
+// Native camera clock calibration — owner-thread
 // lifecycle, owner-applied dt, steadyNowNs authority, CallbackSlot push
 // channel. Camera-less where the latch can't run (the Aravis fake camera has
 // no TimestampLatch — which makes the UNSUPPORTED path itself testable).

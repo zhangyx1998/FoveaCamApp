@@ -5,11 +5,8 @@
 # -------------------------------------------------------
 #
 # fcap — Python reader/CLI for FoveaCam recordings (.fcap MCAP containers,
-# legacy .fovea containers, + the legacy .stream/.meta dumps). PyPI
-# publishing is USER-GATED: this file is packaging prep only. The
-# distribution name below is "fcap" (per user ruling); PyPI name
-# availability MUST be checked at publish time and publishing stays gated
-# on the user.
+# legacy .fovea containers, + the legacy .stream/.meta dumps). The
+# distribution name is "fcap"; check PyPI name availability before publishing.
 
 [build-system]
 requires = ["setuptools>=69"]

@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// PID limit re-bounding (value-sweep 2026-07-11 `verge-integral-clamp-stale`):
+// PID limit re-bounding:
 // the constructor aliases `integralLimits` to the `limits` ARRAY when no
 // explicit integral clamp is given — a later bare `.limits = [...]` left the
 // integrator (the COMMAND, in velocity form) clamped to the construction-time
@@ -21,7 +21,7 @@ const VERGE_AT_400MM = 1.0; // a 400 mm rig resolves a WIDER verge range
 describe("PID.setLimits (verge-integral-clamp-stale)", () => {
   it("REGRESSION: a bare `.limits =` leaves the integrator clamped to the construction bound", () => {
     const pid = new PID({ ki: 1, limits: [0, VERGE_AT_200MM] });
-    pid.limits = [0, VERGE_AT_400MM]; // the OLD two-site pattern
+    pid.limits = [0, VERGE_AT_400MM]; // the bare two-site pattern
     for (let i = 0; i < 100; i++) pid.step(1, 1); // drive toward the new bound
     // The command saturates at the STALE construction-time bound — the defect.
     expect(pid.value).toBe(VERGE_AT_200MM);
@@ -52,7 +52,7 @@ describe("PID.setLimits (verge-integral-clamp-stale)", () => {
   });
 });
 
-// The kd explosion (auto-vergence 2026-07-12): the raw derivative `Δe/dt` is
+// The kd explosion: the raw derivative `Δe/dt` is
 // the one PID term that DIVIDES by dt, so a near-zero-dt step (the match
 // join's intra-frame re-pair) kicked the output by an unbounded amount for ANY
 // kd ≠ 0. The derivative is now low-passed with α = dt/(dt + dTau) — a tiny-dt
@@ -97,7 +97,7 @@ describe("PID derivative filter (kd-explosion regression)", () => {
   });
 });
 
-// R2 (vergence-loop-tuning §2): derivative-on-measurement — the standard
+// Derivative-on-measurement — the standard
 // anti-setpoint-kick form. `d(−measurement)/dt` replaces `de/dt` (same
 // low-pass state), so a moving setpoint (the tracker's target during follow)
 // never excites kd, while measurement motion responds identically to error

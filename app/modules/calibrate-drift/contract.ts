@@ -32,19 +32,19 @@ export const calibrateDrift = defineContract({
      *  each eye is a separate PID node — `applyPidOverride` stays generic. */
     pidOverrideL: pidOverrideState<Pos>(),
     pidOverrideR: pidOverrideState<Pos>(),
-    /** Leased camera serials per role (C-22) — the renderer binds raw previews
+    /** Leased camera serials per role — the renderer binds raw previews
      *  to the `camera:<serial>` pipe via `usePipeFrame`. Set on acquire. */
     serials: {} as Partial<Record<"L" | "C" | "R", string>>,
     /** The leased triple's config store path (`["triples", <hash>]`), or []
      *  pre-lease — the renderer opens this doc reactively to read the per-triple
-     *  `baseline_mm` for LIVE marker spacing (per-triplet-settings wave,
-     *  `useTripleBaseline`). Set on acquire. */
+     *  `baseline_mm` for LIVE marker spacing (`useTripleBaseline`). Set on
+     *  acquire. */
     configPath: [] as string[],
     /** Centering visual-servo gain (velocity-form: `startServo`'s single `kp`,
      *  which maps to `ki` internally — kp/kd are structurally 0 in this control
      *  law). Drawer-tunable; the session restarts the servo (debounced) on
      *  change — the servo re-seeds from the live pose, so retuning never snaps.
-     *  Default = drift's historical hardcoded gain (extrinsic's drawer pattern). */
+     *  Default = drift's baseline gain (extrinsic's drawer pattern). */
     servoGain: 10,
   },
   telemetry: {
@@ -57,12 +57,12 @@ export const calibrateDrift = defineContract({
     derived: { L: null, R: null } as Record<"L" | "R", Point2d | null>,
     /** Currently-saved drift (the triple config's `drift_l`/`drift_r`). */
     saved: { L: null, R: null } as Record<"L" | "R", Point2d | null>,
-    // Recording (capture-recorder-everywhere ruling 2).
+    // Recording.
     ...captureTelemetry(),
     ...recordingTelemetry(),
   },
   // No session frames: the raw L/C/R previews bind the `camera:<serial>` pipe
-  // via `usePipeFrame` (C-22 migration); marker overlays are drawn from the
+  // via `usePipeFrame`; marker overlays are drawn from the
   // `detection` telemetry, not frames.
   frames: [] as const,
   commands: {
@@ -76,8 +76,8 @@ export const calibrateDrift = defineContract({
     updateDrift: cmd<{ role: "L" | "R" | "ALL" }>(),
     /** Clear a fovea's saved drift. */
     clearDrift: cmd<{ role: "L" | "R" | "ALL" }>(),
-    // Recording (capture-recorder-everywhere ruling 2): records the raw L/C/R
-    // sensor streams (advert-verbatim, the OBVIOUS default set).
+    // Recording: records the raw L/C/R sensor streams (advert-verbatim, the
+    // OBVIOUS default set).
     ...captureCommands(),
     ...recordingCommands(),
   },

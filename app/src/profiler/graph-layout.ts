@@ -42,7 +42,7 @@ export interface LayoutResult {
   bbox: Box;
 }
 
-// Defaults roughly matching the old dagre feel.
+// Default rank/node separations for the layered layout.
 const DEFAULT_RANK_SEP = 72;
 const DEFAULT_NODE_SEP = 30;
 const DEFAULT_PADDING = 12;

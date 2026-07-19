@@ -1,4 +1,4 @@
-// Controller stream helpers (docs/history/refactor/synced-capture.md ST-64a/ST-64c):
+// Controller stream helpers:
 // allocator capacity/reuse and host-side stream update suppression are pure
 // logic, so test them without opening serial hardware.
 

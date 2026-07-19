@@ -10,12 +10,8 @@ import { formatCounterRate, formatSampleStats } from "@lib/orchestrator/stats";
 import type { PaneDescriptor } from "@lib/projection/descriptor";
 import { NoCheck } from "@lib/util/vue";
 
-// Payload-only (docs/history/refactor/orchestrator.md §7.1 S1c): every camera/stream
-// now lives orchestrator-side, so the renderer only ever displays a
-// `session.frame(...)` ref — the old direct-`Camera`/raw-`Frame` stream mode
-// this component also used to support has no remaining callers (grep-
-// verified across the whole tree before removal) and is deleted rather than
-// kept dead.
+// Payload-only: every camera/stream lives orchestrator-side, so the renderer
+// only ever displays a `session.frame(...)` ref.
 
 const emit = defineEmits<{
   (
@@ -38,7 +34,7 @@ const props = defineProps({
   },
   // Orchestrator frame payload: bind a `session.frame(...)` / `usePipeFrame(...)`
   // ref. Displayed payloads arrive with their client-stamped stream address
-  // (`StreamPayload.source`, A-P12), which alone drives the projection button —
+  // (`StreamPayload.source`), which alone drives the projection button —
   // no separate address prop to wire at call sites.
   payload: {
     type: NoCheck<StreamPayload | null | undefined>(),
@@ -77,8 +73,8 @@ const props = defineProps({
     required: false,
     default: false,
   },
-  // Multi-window.md req. 4: the project-to-window button opens a projection
-  // window for this stream; the address rides the displayed payload itself.
+  // The project-to-window button opens a projection window for this stream;
+  // the address rides the displayed payload itself.
   // Set `projectable` false to hide the button entirely (used by the projection
   // window itself, so it doesn't offer projecting a projection, and by debug
   // views whose SVG overlays would not ride along).
@@ -93,8 +89,8 @@ const mat = ref<Mat | null>(null);
 const fps = new FreqMeter();
 const inspectorOn = computed(() => props.inspector || inspectorMode.value);
 
-// Staleness detection (value-sweep-2026-07-11 `streamview-stalled-reads-healthy`):
-// the meters only update on a payload change, so a dead stream shows the last
+// Staleness detection: the meters only update on a payload change, so a dead
+// stream would otherwise show the last
 // frame and its last healthy FPS forever. A 1 Hz ticker feeds the overlay
 // `computed` an independent clock so it can render a STALLED badge once the gap
 // since the last frame exceeds a threshold scaled to the recent rate.
@@ -114,8 +110,8 @@ const stallSeconds = computed<number | null>(() => {
   return since > threshold ? since / 1000 : null;
 });
 
-// Profiling meters, fed from `FramePayload.meta` (docs/history/refactor/
-// orchestrator.md roadmap item 3). `seq`/timestamps arrive only when the
+// Profiling meters, fed from `FramePayload.meta`. `seq`/timestamps arrive only
+// when the
 // producer/transport stamped them, so every reading here degrades gracefully
 // to "no data yet" rather than throwing.
 let prevSeq: number | null = null;
@@ -169,7 +165,7 @@ const overlay = computed(() => {
       result["Frame Age"] = frameAge.toString();
       if (p.shm) {
         result["SHM"] = `gen ${p.shm.gen} / retries ${p.shm.retries ?? 0}`;
-        // Renderer transfer-pool health (C-P9) — module-wide singleton, so
+        // Renderer transfer-pool health — module-wide singleton, so
         // every SHM inspector overlay shows the same pool counters.
         const s = shmReadStats();
         result["SHM Reads"] =
@@ -182,14 +178,14 @@ const overlay = computed(() => {
       }
       result["Throughput"] =
         `${((fps.value * (p.data?.byteLength ?? 0)) / 1e6).toFixed(2)} MB/s`;
-      // Renderer-side event-loop lag (perf substrate, §7.3 item 1) — a
+      // Renderer-side event-loop lag (perf substrate) — a
       // module-level singleton (one probe, not one per StreamView), so
       // every inspector overlay shows the same renderer-wide number.
       result["Renderer Lag"] =
         `${rendererLoopLag.stats.mean.toFixed(2)} ms (max ${rendererLoopLag.stats.max.toFixed(2)})`;
     }
   }
-  // Stall badge: reuse the Frame Rate row (layout stability §3 — no new row to
+  // Stall badge: reuse the Frame Rate row (layout stability — no new row to
   // shift neighbors) so a frozen stream reads "STALLED n.n s" instead of a stale,
   // healthy-looking FPS.
   const stalled = stallSeconds.value;
@@ -199,12 +195,12 @@ const overlay = computed(() => {
 });
 
 // Projectable pane descriptor for the project-to-window button — implicit: the
-// displayed payload carries its client-stamped stream address (A-P12), so any
+// displayed payload carries its client-stamped stream address, so any
 // frame- or pipe-backed view is projectable with no extra wiring. Null (no
 // frame yet / no address / `projectable` false) keeps only the fullscreen icon.
 // The address is RETAINED past a payload null (pipe close nulls the payload but
-// `mat` keeps showing the last frame — UI/UX review: the affordance must live
-// exactly as long as the pixels; a rebind's first frame re-stamps it).
+// `mat` keeps showing the last frame): the affordance must live exactly as long
+// as the pixels; a rebind's first frame re-stamps it.
 const lastSource = ref<StreamPayload["source"]>(undefined);
 watch(
   () => props.payload?.source,
@@ -243,7 +239,7 @@ const projection = computed<PaneDescriptor | null>(() => {
          to FrameView. `#[name]` with name === "default" reaches FrameView's
          unnamed <slot>, so the default renders exactly once in its original
          position; only slots actually passed are forwarded, so untitled
-         StreamViews are unchanged (composite-node-and-center-select-fix §A). -->
+         StreamViews are unchanged. -->
     <template v-for="(_, name) in $slots" #[name]="slotProps">
       <slot :name="name" v-bind="slotProps ?? {}" />
     </template>

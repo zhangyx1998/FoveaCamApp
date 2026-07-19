@@ -68,7 +68,7 @@ export interface PositionInput {
    *  trajectory (ONE place) and returns the predicted volts synchronously; the
    *  MCU stream (v2) / paced loop (v1) applies it. When no controller is bound
    *  the last predicted value is returned (the mirror holds) and nothing is
-   *  recorded — matching the old loop's idle (`onVolts` never fired). */
+   *  recorded. */
   update(pos: PositionPair): PositionPair;
   /** Terminate the MCU stream, retire the graph edge, and — if this was the
    *  last open input and the node enabled the controller — disable it. */
@@ -102,7 +102,7 @@ export interface NativePositionInput {
 
 /** An injected FIN-outcome sink (no native imports): the anchor enrichment
  *  node registers one, and `startTriggerCapture` forwards every completed
- *  exposure to it (pairing-nodes ruling 6). */
+ *  exposure to it (pairing-nodes). */
 export type FinSink = (outcome: FrameOutcome) => void;
 
 export interface TriggerCaptureOptions {
@@ -230,8 +230,8 @@ export class ControllerNode {
 
   /** Register a FIN-outcome sink (the anchor enrichment node). Every completed
    *  exposure from an active `startTriggerCapture` is forwarded here — the root
-   *  PairStream (not this node) does the L/R matching now (pairing-nodes ruling
-   *  6). Returns an unregister. */
+   *  PairStream (not this node) does the L/R matching (pairing-nodes). Returns
+   *  an unregister. */
   onFin(sink: FinSink): () => void {
     this.finListeners.add(sink);
     return () => this.finListeners.delete(sink);
@@ -300,13 +300,12 @@ export class ControllerNode {
   }
 
   /** @internal — TRUE while any native input is attached OR attaching
-   *  (value-sweep 2026-07-11 `dual-cmd-stream-handoff-race`): the JS inputs
-   *  must not create/hold their own CMD_STREAM in that window — the firmware
-   *  DAC is first-CREATE-wins and never re-arbitrates, so a second stream
-   *  either parks the mirrors dead (native stream lost the race) or leaves
-   *  an FW5-violating orphan (JS stream lost). `creating` is set
-   *  SYNCHRONOUSLY in sync(), so the suppression is active from
-   *  `openNativePosition()`'s return — before the fallback's first update. */
+   *  (dual-cmd-stream-handoff-race): the JS inputs must not create/hold their
+   *  own CMD_STREAM in that window — the firmware DAC is first-CREATE-wins and
+   *  never re-arbitrates, so a second stream either parks the mirrors dead
+   *  (native stream lost the race) or leaves an orphan stream (JS stream lost).
+   *  `creating` is set SYNCHRONOUSLY in sync(), so the suppression is active
+   *  from `openNativePosition()`'s return — before the fallback's first update. */
   nativeEngaged(): boolean {
     for (const n of this.nativeInputs) if (n.engagedOrPending) return true;
     return false;
@@ -359,9 +358,8 @@ export class ControllerNode {
           );
         } catch {
           // Transient v1 failure (a dropped packet, a mid-swap actuate) —
-          // retry next tick. Do NOT clear `enabledByUs` here (value-sweep
-          // 2026-07-11 `v1-transient-error-clears-enabledByUs`): the device
-          // stays enabled, and clearing the ownership flag silently broke
+          // retry next tick. Do NOT clear `enabledByUs` here: the device stays
+          // enabled, and clearing the ownership flag would break
           // disable-on-last-close. The flag is cleared only where the enable
           // state actually changes: disableIfLast (we disabled) and
           // unbindController (the device is gone).
@@ -418,15 +416,15 @@ class PositionInputImpl implements PositionInput {
 
     const predicted = c.predictVolts({ left: pos.left, right: pos.right });
     this.lastPredicted = predicted;
-    // ONE place for the trusted-time trajectory (unified-time §4).
+    // ONE place for the trusted-time trajectory (unified-time).
     this.node.recordTrajectory(predicted);
 
     if (c.v2Capable) {
       // Keep `c.pos` live under streaming (no readback) so calibrate voltage
-      // capture / drift derivation read the applied pose, as they did on the
-      // pre-node awaited path (guarded — partial fakes may omit it).
+      // capture / drift derivation read the applied pose (guarded — partial
+      // fakes may omit it).
       c.applyStreamedPos?.(predicted);
-      // value-sweep `dual-cmd-stream-handoff-race`: while a native input is
+      // dual-cmd-stream-handoff-race: while a native input is
       // attached or attaching, this JS input must not create/hold its own
       // CMD_STREAM (see ControllerNode.nativeEngaged). Drop anything still
       // held from before the attach began; the native path owns the wire.
@@ -615,8 +613,7 @@ export function resetControllerNodeForTest(): void {
  *  drive a position input at a fixed cadence — the push-model replacement for
  *  `startActuationLoop`'s internal 1 ms timer (the SESSION now owns the pacing;
  *  the node only transports). Returns a stop function. A throwing tick is
- *  swallowed so one bad frame can't kill the loop (matching the old loop's
- *  per-tick try/catch). */
+ *  swallowed so one bad frame can't kill the loop. */
 export function startPacer(intervalMs: number, tick: () => void): () => void {
   let running = true;
   void (async () => {

@@ -4,8 +4,8 @@ This source code is licensed under the MIT license.
 You may find the full license in project root directory.
 --------------------------------------------------- -->
 <!--
-  Orchestrator spin-up progress overlay (user ruling 2026-07-09): app windows
-  blank out during session activation / graph building with no indicator. This
+  Orchestrator startup progress overlay: app windows blank out during session
+  activation / graph building with no indicator. This
   is the reusable, app-agnostic overlay — `AppWindow` hosts one for whatever
   session it hosts, driven by that session's `status.progress` (see
   `@lib/orchestrator/progress`). Presentation only: the host decides when it is
@@ -66,7 +66,7 @@ const emit = defineEmits<{ close: [] }>();
   font-size: 1.1em;
   line-height: 1;
   cursor: pointer;
-  // Dim resting affordance (ruled principle: prefer dim-resting over invisible)
+  // Dim resting affordance (prefer dim-resting over invisible)
   // — the escape hatch stays discoverable, intensifying on overlay hover.
   opacity: 0.35;
   transition: opacity 0.15s;
@@ -95,7 +95,7 @@ const emit = defineEmits<{ close: [] }>();
   align-items: center;
   gap: 0.75ch;
   font-size: 1.05em;
-  // Ruled progress vocab: pending (dim) → active (bright) → done (ok green).
+  // Progress vocab: pending (dim) → active (bright) → done (ok green).
   color: var(--text-faint);
   transition: color 0.15s;
 

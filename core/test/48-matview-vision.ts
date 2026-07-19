@@ -4,20 +4,18 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// MatView adoption in the Vision kernels (value-sweep 2026-07-11,
-// mat-convert-full-copy-per-vision-call) — NO hardware. The hot READ-ONLY
+// MatView adoption in the Vision kernels — NO hardware. The hot READ-ONLY
 // kernels (slice, cvtColor, gaussian, diff, minMaxLoc, matchTemplate,
 // heatmap, wrapPerspective, disparity) now take a zero-copy Mat header over
 // the caller's TypedArray instead of memcpy'ing the input. Proves:
 //   1. CONFORMANCE — each adopted kernel still computes the same result
 //      (golden per-pixel expectations / planted-feature checks).
-//   2. NO INPUT MUTATION — the aliasing audit holds: every kernel leaves the
-//      caller's buffer byte-identical (the in-place normalize/blur/CLAHE
-//      paths were restructured to write into distinct Mats).
+//   2. NO INPUT MUTATION — every kernel leaves the
+//      caller's buffer byte-identical (the normalize/blur/CLAHE
+//      paths write into distinct Mats, not in place).
 //   3. MICRO-BENCH — ns/call and MB/s of eliminated copy for the display
 //      kernel's hottest calls (cvtColor, slice, minMaxLoc), comparing the
-//      zero-copy call against the same call plus an explicit input copy
-//      (what the old converter did on every invocation).
+//      zero-copy call against the same call plus an explicit input copy.
 //
 // Run UNSANDBOXED: node core/test/48-matview-vision.ts
 
@@ -105,7 +103,7 @@ const W = 320, H = 240;
   console.log("48-matview-vision: cvtColor conformance + no-mutation OK.");
 }
 
-// --- 3: gaussian — input untouched (the old path blurred a private copy) ------
+// --- 3: gaussian — input untouched ------
 {
   const src = mat(W, H, 1, (x, y) => ((x ^ y) * 7) % 256);
   const blurred = await assertNoMutation(src, "gaussian", () => V.gaussian(src, 5, 2));
@@ -135,7 +133,7 @@ const W = 320, H = 240;
     assert.equal(out[i + 1], 0, "diff G = black");
     assert.equal(out[i + 3], 255, "diff A = opaque");
   }
-  // norm=true routes through CLAHE — the exact path that used to write
+  // norm=true routes through CLAHE — a path that must not write
   // IN PLACE into an already-gray input.
   await assertNoMutation(a, "diff norm (a)", () =>
     assertNoMutation(b, "diff norm (b)", () => V.diff(a, b, true)),
@@ -198,7 +196,7 @@ const W = 320, H = 240;
     assert.equal(hm[i + 1], Math.min(v, 255 - v), "heatmap G = min(R,B)");
     assert.equal(hm[i + 3], 255, "heatmap A = opaque");
   }
-  // norm=true is the path that used to normalize IN PLACE on its private copy.
+  // norm=true is the normalize path — it must not write IN PLACE on its input.
   await assertNoMutation(src, "heatmap norm", () => V.heatmap(src, true));
   console.log("48-matview-vision: heatmap conformance + no-mutation OK.");
 }
@@ -231,10 +229,9 @@ const W = 320, H = 240;
   console.log("48-matview-vision: disparity conformance + no-mutation OK.");
 }
 
-// --- 10: micro-bench — zero-copy vs the old copy-per-call ----------------------
+// --- 10: micro-bench — zero-copy vs explicit copy-per-call ----------------------
 {
-  // Display-kernel-shaped input: 1920×1200 RGBA8 (9.2 MB per call, the frame
-  // the old converter memcpy'd on EVERY Vision call).
+  // Display-kernel-shaped input: 1920×1200 RGBA8 (9.2 MB per call).
   const BW = 1920, BH = 1200;
   const big = new Uint8Array(BW * BH * 4) as Mat;
   for (let i = 0; i < big.length; i += 4097) big[i] = i % 251;
@@ -249,10 +246,9 @@ const W = 320, H = 240;
     return Number(process.hrtime.bigint() - t0) / ITERS;
   };
 
-  // AFTER: the zero-copy call as shipped.
+  // The zero-copy call.
   const zeroCopy = benchNs(() => void V.cvtColor(big, "RGBA2GRAY"));
-  // BEFORE-equivalent: the same call plus one full input copy — exactly the
-  // memcpy the old convert<cv::Mat> performed per invocation (the JS-side
+  // Baseline: the same call plus one full input copy (the JS-side
   // slice() is the same bytes through the same memory system).
   const withCopy = benchNs(() => {
     const copy = big.slice() as Mat;
@@ -285,7 +281,7 @@ const W = 320, H = 240;
   assert(zeroSlice < copySlice, "zero-copy slice beats copy-per-call");
 }
 
-// --- 11: async variants (calibration review 2026-07-11 #7) ---------------------
+// --- 11: async variants ---------------------
 // gaussianAsync / findHomographyAsync power marker-tracker's fitSubPix off the
 // orchestrator loop: conformance (same output as the sync forms) + a
 // loop-impact measurement (JS-thread-blocking ms per call, sync vs async).

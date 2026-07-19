@@ -103,11 +103,11 @@ export class MarkerTracker {
     targetId = 0,
     private readonly scale = 1.0,
     private readonly internal = false,
-    // B-24 meter name for the native detection thread (graph node ids ARE
-    // meter names). Defaults to `nodeId.detect(serial)` — exactly the id the
-    // sessions' registerGraphWiring rows use (calibrate-extrinsic 2026-07-11),
-    // so the folded stats key onto the registered detect nodes with no
-    // caller changes. Overridable for callers with a different node scheme.
+    // Meter name for the native detection thread (graph node ids ARE meter
+    // names). Defaults to `nodeId.detect(serial)` — exactly the id the
+    // sessions' registerGraphWiring rows use, so the folded stats key onto
+    // the registered detect nodes with no caller changes. Overridable for
+    // callers with a different node scheme.
     private readonly meterName: string = nodeId.detect(camera.serial),
   ) {
     this.targetId = targetId;
@@ -137,23 +137,19 @@ export class MarkerTracker {
         obj_pts.push({ x, y, z: 0.0 });
     let img_pts = bilinearInterpolate(result, obj_pts);
     if (this.internal) {
-      // The blur feeds ONLY this refinement branch — the wide (external)
-      // tracker computed and discarded it every tick (review 2026-07-11).
-      // ASYNC variants (review #7, the finding's remaining half): the
-      // full-frame blur and the up-to-3× RANSAC fits below used to run
-      // SYNCHRONOUSLY on the orchestrator loop every detection tick — they
-      // now run on the AsyncTask worker (gaussianAsync/findHomographyAsync,
-      // same math), leaving only O(points) JS arithmetic on the loop. The
-      // 89e462c bounds/degrade semantics are unchanged. (`gray` is the
-      // view's OWNED copy on the electron/cage build, so the async blur
-      // never reads freed frame memory.)
+      // The blur feeds ONLY this internal refinement branch. The full-frame
+      // blur and the up-to-3× RANSAC fits below run on the AsyncTask worker
+      // (gaussianAsync/findHomographyAsync), leaving only O(points) JS
+      // arithmetic on the orchestrator loop. (`gray` is the view's OWNED copy
+      // on the electron/cage build, so the async blur never reads freed frame
+      // memory.)
       const gray = await frame.view("Mono8");
       const blurred = await gaussianAsync(gray, 11, 2.0);
       const [rows, cols] = blurred.shape;
       // Projected interior points EXTRAPOLATE and can land outside the
       // frame for an edge/tilted marker; cv::cornerSubPix ASSERTS on any
-      // out-of-rect point (rig crash 2026-07-11, cornersubpix.cpp:99).
-      // Refine only the in-bounds subset, keep raw projections for the
+      // out-of-rect point. Refine only the in-bounds subset, keep raw
+      // projections for the
       // rest, and fit the next H from the refined pairs alone (exact-fit
       // extrapolations would only anchor the fit to its previous estimate).
       let fitObj = obj_pts;
@@ -194,10 +190,8 @@ export class MarkerTracker {
     const others: MarkerDetectResult[] = [];
     for (const d of detections) {
       if (target === null && d.id === this.targetId) {
-        // A refinement failure must DEGRADE, not kill the tracker loop —
-        // pre-fix, one cv assertion rejected `this.task` and the tracker
-        // silently died for the rest of the session (rig crash 2026-07-11).
-        // Treat it as a lost tick; surface the first failure per tracker.
+        // A refinement failure must DEGRADE, not kill the tracker loop:
+        // treat it as a lost tick; surface the first failure per tracker.
         try {
           target = await this.fitSubPix(detections.frame, d);
         } catch (e) {
@@ -224,9 +218,8 @@ export class MarkerTracker {
   }
 
   private start(): void {
-    // Named meter (calibration review 2026-07-11, Lane F handoff): the native
-    // detector thread meters under the detect NODE id, so the session-
-    // registered graph rows stop rendering unmetered.
+    // Named meter: the native detector thread meters under the detect NODE
+    // id, so the session-registered graph rows render metered.
     const stream = this.detector.stream(this.camera.stream, this.scale, this.meterName);
     this.stream = stream;
     this.task = abortableNext(async (ctx) => {
@@ -295,8 +288,7 @@ export interface Servo {
  * Visual-servo the controller toward `left`/`right` trackers' targets (or
  * back toward `origin*` when no target is visible) — the original `actuate()`
  * control loop, rebuilt as a pair of graph-visible PID controller NODES
- * (docs/proposals/pid-nodes-and-view-replumb.md) that push a combined pose to
- * the shared controller NODE (controller-node-and-fifo-edges §3). The device
+ * that push a combined pose to the shared controller NODE. The device
  * transport (v2 CMD_STREAM / v1 awaited actuate + enable lifecycle) lives in the
  * node; this function no longer runs its own actuate loop or touches
  * `activeController` — it opens ONE position input and pushes on each detection.
@@ -311,20 +303,20 @@ export interface Servo {
  * integrator is RE-BASED each tick on the last APPLIED volts — `update()`'s
  * synchronous return (`predictVolts`), SEEDED from the controller's live `pos`
  * on the first tick. This is bit-identical to the original read of
- * `c.pos.left/right` (A-30: `predictVolts` equals the actuate readback) AND
+ * `c.pos.left/right` (`predictVolts` equals the actuate readback) AND
  * correct on the streaming path, where `c.pos` is static because updates never
  * round-trip. The default `kp` (16.0) and the per-caller value (both calibrate
  * apps pass their drawer-tunable `state.servoGain`; drift defaults 10) carry
  * through unchanged as `ki`.
  *
- * OVERRIDE. Each eye's PID node exposes a RULED override slot
+ * OVERRIDE. Each eye's PID node exposes an override slot
  * (`servo.override.left`/`right`); the owning module drives it from its
  * `pidOverride` contract command via `applyPidOverride` (a pose engages/updates,
  * a release resumes). While engaged, `node.step` skips the control law and
  * resets that eye's integrator each tick (no windup builds behind the drag); the
  * output is the pinned pose. On release the node's `seed` reseeds the integrator
  * from the LAST override so control resumes FROM the released pose — velocity-
- * form continuity, no snap-back (the behavioral guarantee the ruled slot adds;
+ * form continuity, no snap-back (the behavioral guarantee the slot adds;
  * the re-base already resumes from the dragged `c.pos`, and the seed keeps that
  * true even if a future migration makes the integrator authoritative). The per-
  * eye grain is preserved because each eye is a separate node: dragging ONE eye
@@ -430,7 +422,7 @@ export function startServo(
     // The node's override slot is driven externally (the module's `pidOverride`
     // command → `applyPidOverride(pidNode.override, …)`). `pidNode.step` runs
     // `control` UNLESS the slot is engaged — then it resets `pid` and returns the
-    // pinned pose (the old `override ?? servo` poll, at the node).
+    // pinned pose.
     pending[side] = outputOf(pidNode.step(() => control(base, tracker.centerRelative, origin, pid)));
     // Push the combined pose; the return is the applied (predicted) volts — the
     // next tick's re-base for BOTH eyes (the held eye keeps its last value).

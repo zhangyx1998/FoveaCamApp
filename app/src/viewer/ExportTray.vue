@@ -1,8 +1,7 @@
 <script setup lang="ts">
-// Title-bar EXPORT PROGRESS tray (viewer-export.md spec 9). Shows OVERALL
-// progress across active exports; hover expands to a per-stream status report
-// (name, %, fps/eta, state). Follows the title bar's icon-button language.
-// Layout-stable + instant (no slide) per the ruled interaction principles.
+// Title-bar EXPORT PROGRESS tray. Shows OVERALL progress across active exports;
+// hover expands to a per-stream status report (name, %, fps/eta, state). Follows
+// the title bar's icon-button language. Layout-stable + instant (no slide).
 import { computed } from "vue";
 import { FontAwesomeIcon as Icon } from "@fortawesome/vue-fontawesome";
 import { faFilm, faXmark } from "../windows/icons";
@@ -129,7 +128,7 @@ const STATE_LABEL: Record<string, string> = {
   width: 20rem;
   max-width: 90vw;
   // One floating-panel language with the stats popover (elevated surface, 6px
-  // radius, matching shadow) — UI/UX review 2026-07-10.
+  // radius, matching shadow).
   background: var(--bg-elevated);
   border: 1px solid var(--border-strong);
   border-radius: 6px;

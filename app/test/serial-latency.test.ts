@@ -70,7 +70,7 @@ describe("applied-lookahead bus", () => {
 
 });
 
-// ---- mirror-flicker addendum R4 (docs/dev/mirror-flicker-2026-07-12.md) -------
+// ---- mirror-flicker lookahead guards ------------------------------------------
 describe("R4 lookahead guards", () => {
   it("discards RTT samples above the transport-hiccup ceiling", () => {
     const e = new SerialLatencyEstimator();
@@ -91,7 +91,7 @@ describe("R4 lookahead guards", () => {
     expect(clampLookaheadMs(NaN)).toBe(0); // never poison the predictor delay
   });
 
-  it("the cap is the ruled 50 ms", () => {
+  it("the cap is 50 ms", () => {
     expect(MAX_TOTAL_LOOKAHEAD_MS).toBe(50);
   });
 });

@@ -11,7 +11,7 @@ declare module "core/Pipe" {
     stride: number;
     bytesPerFrame: number;
     ringDepth: number;
-    /** C-20: ring capacity (max per-fovea footprint); defaults to nominal. */
+    /** Ring capacity (max per-fovea footprint); defaults to nominal. */
     maxWidth?: number;
     maxHeight?: number;
     maxBytes?: number;
@@ -24,7 +24,7 @@ declare module "core/Pipe" {
     shmName: string;
     spec: PipeSpec;
     ringDepth: number;
-    epoch: number; // segment generation (C-20 reuse-safe identity)
+    epoch: number; // segment generation (reuse-safe identity)
     headerLayout: { layoutVersion: number; magic: string };
   }
 
@@ -43,12 +43,12 @@ declare module "core/Pipe" {
   /** Producer-side close: `state=CLOSED` after the final frame, stop the
    *  publisher thread. */
   export function close(id: string): void;
-  /** Scaffold only (WS1 1c-PREP): drive a pipe with synthetic frames at `fps`
-   *  (byte = `seed + frame#`). 1c/1d replace this with the camera/CV producer. */
+  /** Scaffold only: drive a pipe with synthetic frames at `fps`
+   *  (byte = `seed + frame#`). The camera/CV producer replaces this. */
   export function attachSynthetic(id: string, fps: number, seed: number): void;
 
   /** One probed workload snapshot — same shape as the JS `WorkloadSnapshot`
-   *  (C-18), so the orchestrator folds a native producer stream into
+   *  so the orchestrator folds a native producer stream into
    *  `perfSnapshot.workloads` and the profiler renders it identically. */
   export interface ProbeSnapshot {
     name: string;
@@ -58,19 +58,19 @@ declare module "core/Pipe" {
     inputs: Record<string, { count: number; ratePerSec: number; maxIntervalMs: number }>;
     outputs: Record<string, { count: number; ratePerSec: number; maxIntervalMs: number }>;
     drops: { total: number; ratePerSec: number; byReason: Record<string, number> };
-    /** FIFO-input queue metering (controller-node-and-fifo-edges §2). Present
+    /** FIFO-input queue metering. Present
      *  ONLY on a FIFO-fed brick's meter (e.g. the undistort brick); absent on
      *  latest-wins/Leaky-fed producers. `highWater` = windowed (10s) max sampled
      *  depth, `depth` = last sample, `capacity` = the FIFO bound. */
     queue?: { depth: number; highWater: number; capacity: number };
   }
-  /** Out-of-loop probe of a pipe's native producer meter (C-19). Read at ~1 Hz;
+  /** Out-of-loop probe of a pipe's native producer meter. Read at ~1 Hz;
    *  never per-frame — the free-running producer thread records lock-free. */
   export function probe(id: string): ProbeSnapshot;
-  /** Probe EVERY live pipe → `{[pipeId]: ProbeSnapshot}` (C-20). Dropped pipes
+  /** Probe EVERY live pipe → `{[pipeId]: ProbeSnapshot}`. Dropped pipes
    *  are absent — no stale workload rows under churn. */
   export function probeAll(): Record<string, ProbeSnapshot>;
-  /** One advertised pipe's identity/liveness row (C-24 item 2). `bytesTotal`
+  /** One advertised pipe's identity/liveness row. `bytesTotal`
    *  counts ACTIVE ring-written bytes since advertise (exact under
    *  variable-size fovea frames) — diff snapshots for per-edge MB/s. */
   export interface PipeListEntry {
@@ -82,15 +82,15 @@ declare module "core/Pipe" {
     bytesTotal: number;
   }
   /** Enumerate every ADVERTISED pipe WITHOUT connecting — the graph topology's
-   *  discovery source (C-24). Dropped pipes are absent. */
+   *  discovery source. Dropped pipes are absent. */
   export function list(): PipeListEntry[];
-  /** Test hook (C-19): pause the synthetic producer for ~`ms` so the probed
+  /** Test hook: pause the synthetic producer for ~`ms` so the probed
    *  `maxIntervalMs` spikes — proving a producer stall is visible out-of-loop. */
   export function injectStall(id: string, ms: number): void;
-  /** Test hook (C-20): offer one synthetic frame of active size `w×h` (filled
+  /** Test hook: offer one synthetic frame of active size `w×h` (filled
    *  with `byte`) into a live pipe — drives the resize/reuse tests. */
   export function offerFrame(id: string, w: number, h: number, byte: number): void;
-  /** Test hooks (C-21): install a consumer gate that records each fire, and
+  /** Test hooks: install a consumer gate that records each fire, and
    *  read the log — verifies the gate's immediate-on-register + 0↔1 edge firing.
    *  (The REAL gate is a C++ `setConsumerGate`, registered by B's Aravis side.) */
   export function installTestGate(id: string): void;

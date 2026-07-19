@@ -6,7 +6,7 @@
 //
 // Main-window preload: shared bridge + shm frame reader. Runs `sandbox: false`
 // (required to load the native reader addon); the frame-only profiler window
-// stays sandboxed. Self-contained per its own build pass (V11).
+// stays sandboxed. Self-contained: built in its own build pass.
 import path from "node:path";
 import { installBridge } from "./preload-bridge";
 import type { FramePayload } from "@lib/orchestrator/protocol";
@@ -28,10 +28,10 @@ import {
 } from "@lib/orchestrator/shm-messages";
 
 type ReaderHandle = object;
-/** A closed pipe read (C-17): explicit signal, distinct from `null` (no new
+/** A closed pipe read: explicit signal, distinct from `null` (no new
  *  frame) — the reader addon returns this once the publisher sets state=CLOSED. */
 type ReaderClosed = { closed: true };
-/** FIFO reader outcomes (capture-recorder-nodes Phase 0): `wantSeq` isn't
+/** FIFO reader outcomes: `wantSeq` isn't
  *  published yet (poll again), or its ring slot was recycled (jump to
  *  `oldestSeq`, drop-account the gap). Ok/Closed reuse the readInto shapes. */
 type ReaderNotYet = { notYet: true };
@@ -59,12 +59,12 @@ const isGone = (r: unknown): r is ReaderGone =>
   typeof r === "object" && r !== null && (r as ReaderGone).gone === true;
 
 // This bundle is emitted as CommonJS (unsandboxed preloads load `.mjs` as
-// real ESM where bare `require` throws — V11b), so the module wrapper's own
+// real ESM where bare `require` throws), so the module wrapper's own
 // `require` is available at runtime. Do NOT use
 // `createRequire(import.meta.url)`: vite's CJS shim for `import.meta.url`
 // resolves via `document.baseURI` in a preload (a preload has a `document`),
-// which yields the dev server's http URL and `createRequire` rejects it
-// (V11c — the "Received 'http://localhost:5173/…'" boot failure).
+// which yields the dev server's http URL and `createRequire` rejects it,
+// failing boot.
 declare const require: NodeRequire;
 
 const coreEntry = require.resolve("core");
@@ -100,9 +100,9 @@ function readShmFrame(payload: FramePayload, dest: ArrayBuffer): FramePayload | 
   );
 }
 
-// Pipe consumer reads (C-17): keyed by segment NAME with a consumer-tracked
+// Pipe consumer reads: keyed by segment NAME with a consumer-tracked
 // lastSeq (no per-frame descriptor). Handles cached by name; the reader addon
-// reuses the transferred `buffer` as its dest (C-15).
+// reuses the transferred `buffer` as its dest.
 const pipeHandles = new Map<string, ReaderHandle>();
 
 function pipeHandleFor(shmName: string): ReaderHandle {
@@ -134,7 +134,7 @@ function handlePipeRead(port: MessagePort, msg: PipeReadRequest): void {
         buffer: msg.buffer,
         seq: result ? result.seq : undefined,
         tCapture: result ? result.meta?.tCapture : undefined,
-        // A-26 Fix D: forward the convert cost + seqlock health the reader
+        // Forward the convert cost + seqlock health the reader
         // already computed so the StreamView inspector lights up on pipes.
         convertMs: result ? result.meta?.convertMs : undefined,
         gen: result ? result.gen : undefined,
@@ -162,11 +162,11 @@ function handlePipeRead(port: MessagePort, msg: PipeReadRequest): void {
   }
 }
 
-// FIFO consumer reads (capture-recorder-nodes Phase 0): the recorder/capture
+// FIFO consumer reads: the recorder/capture
 // node asks for a SPECIFIC `wantSeq` via `readSeqInto` (ordered, lossless-
 // within-a-ring). Shares the same by-name handle cache + transferred buffer as
 // the latest-wins path; only the classification (notYet / gone+oldestSeq /
-// closed / frame) differs. The reader addon reuses `buffer` as its dest (C-15),
+// closed / frame) differs. The reader addon reuses `buffer` as its dest,
 // so nothing is copied beyond the ring→buffer memcpy inside the addon.
 function handlePipeReadSeq(port: MessagePort, msg: PipeReadSeqRequest): void {
   try {

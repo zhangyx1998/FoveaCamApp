@@ -5,7 +5,7 @@
 // -------------------------------------------------------
 //
 // General-purpose session-owned SLICE node: a named reuse of the native fovea crop
-// brick — a live-steered ROI copy of a source pipe published as its own C-20
+// brick — a live-steered ROI copy of a source pipe published as its own
 // variable-size pipe (each frame carries active dims + frame-bound crop origin).
 // The session-owned sibling of createFoveaMaterializer, with named ids outside the
 // renderer-composed slot space. Seam-injected (never imports core).
@@ -29,7 +29,7 @@ export interface SlicePipeSeam {
 export interface SlicePipeOptions {
   /** Initial crop rect, in SOURCE-frame pixels. */
   rect: Rect;
-  /** Ring footprint (C-20 max dims — a later `steer` may grow the crop up to
+  /** Ring footprint (max dims — a later `steer` may grow the crop up to
    *  this; the native brick clamps beyond it). */
   maxWidth: number;
   maxHeight: number;
@@ -44,7 +44,7 @@ export interface SliceHandle {
   retire(): void;
 }
 
-/** Advertise the C-20 max-footprint pipe + attach the crop brick chained on
+/** Advertise the max-footprint pipe + attach the crop brick chained on
  *  `sourcePipeId` (an undistort/convert pipe). Advertise BEFORE attach — the
  *  producer must find its pipe. */
 export function createSlicePipe(

@@ -4,11 +4,10 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Scale brick (split-disparity-nodes §"Scale node = a NEW native chained
-// brick"): spawn/cancel-able RESIZE producer threads chained on any
+// Scale brick: spawn/cancel-able RESIZE producer threads chained on any
 // convert / undistort / fovea (slice) pipe's owned-frame tap. cv::resize
 // (INTER_AREA shrinking / INTER_LINEAR growing), reactive params
-// {ratio|dwidth|dheight|dsize}, C-20 dynamic pipe (per-frame active OUT w/h,
+// {ratio|dwidth|dheight|dsize}, dynamic pipe (per-frame active OUT w/h,
 // source crop origin forwarded UNSCALED in the v4 slot header). NO hardware
 // (fake camera). Proves:
 //   1. RATIO=1 IDENTITY — a ratio:1 scale of the convert pipe is byte-exact to
@@ -24,7 +23,7 @@
 //      the NEW origin, no re-attach.
 //   5. REACTIVE setScaleParams — a live param swap changes the active out dims
 //      on the next frame; unknown pipe -> false; invalid/ambiguous params throw.
-//   6. DETACH idempotency + orderly teardown (B-20) → natural exit 0.
+//   6. DETACH idempotency + orderly teardown → natural exit 0.
 // Run UNSANDBOXED: /opt/homebrew/bin/node core/test/25-scale-pipe.ts
 
 import assert from "node:assert/strict";
@@ -66,7 +65,7 @@ const cal = {
 
 const CH = 4; // BGRA8
 const fullBytes = W * H * CH;
-const MAXW = 256, MAXH = 192;                 // slice ring footprint (C-20 max)
+const MAXW = 256, MAXH = 192;                 // slice ring footprint (max)
 const maxBytes = MAXW * MAXH * CH;
 const R0 = { x: 64, y: 48, width: 128, height: 96 };   // initial slice crop
 const R1 = { x: 200, y: 100, width: 240, height: 160 }; // steered slice crop
@@ -244,7 +243,7 @@ assert.equal(A.scaleProbeAll()[scFovId], undefined, "detached id absent from the
 P.close(scFovId); P.drop(scFovId);
 console.log("25-scale-pipe: detach idempotency OK.");
 
-// --- orderly teardown (B-20 pattern) → natural exit --------------------------
+// --- orderly teardown → natural exit --------------------------
 for (const [s, id] of [[scId, scIdId], [scHalf, scHalfId], [scDs, scDsId], [scDw, scDwId]] as const) {
   reader.close(s.rh); P.disconnect(id);
   assert.equal(A.detachScalePipe(id), true, `detach ${id}`);

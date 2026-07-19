@@ -5,12 +5,11 @@
 # -------------------------------------------------------
 """Payload decoding primitives shared by the .fcap and legacy readers.
 
-Ports the decode logic of the retired per-dump ``stream-decoder.py``
-template: dtype mapping (must match ``app/lib/util/dtype.ts``),
+Provides: dtype mapping (must match ``app/lib/util/dtype.ts``),
 significant-bits scaling (12-bit data lives 0..4095 in a 16-bit container —
 scale by 4095, not 65535), plus the GenICam ``*12p`` unpack (3 bytes -> 2
-pixels) for frames recorded packed, per the recorder-container.md §2b
-contract ("12-bit-packed formats STAY packed").
+pixels) for frames recorded packed, per the .fcap contract
+("12-bit-packed formats STAY packed").
 """
 
 from __future__ import annotations
@@ -110,8 +109,8 @@ def decode_payload(
 def to_display(img: np.ndarray, pixel_format: str, bits: int = 0) -> np.ndarray:
     """Scale a decoded frame to uint8 using its TRUE bit depth, so 12-bit
     data (0..4095 in a 16-bit container) is not rendered ~16x too dark.
-    Ported from stream-decoder.py's normalization step. Demosaic is NOT
-    applied here — see :func:`demosaic` (optional, needs cv2)."""
+    Demosaic is NOT applied here — see :func:`demosaic` (optional, needs
+    cv2)."""
     if img.dtype == np.uint8:
         return img
     max_val = (1 << significant_bits(pixel_format, bits)) - 1

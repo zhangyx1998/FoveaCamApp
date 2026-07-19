@@ -85,7 +85,7 @@ type Tab = "global" | "device";
 const activeTab = ref<Tab>("global");
 // One shared scroller hosts both v-show sections (preserves expanded/transient
 // state across switches) — reset it on tab change so Device doesn't open
-// pre-scrolled to Global's offset (UI/UX review 2026-07-10).
+// pre-scrolled to Global's offset.
 const tabContent = ref<HTMLElement | null>(null);
 watch(activeTab, () => tabContent.value?.scrollTo({ top: 0 }));
 
@@ -95,32 +95,30 @@ const record_compression = await useConfigRef("record_compression");
 const tele_canvas_mode = await useConfigRef("tele_canvas_mode");
 const tele_canvas_url = await useConfigRef("tele_canvas_url");
 const tele_canvas_port = await useConfigRef("tele_canvas_port");
-// LEGACY app-level baseline — no longer an App-section field (Ruling A moved
-// the baseline to a per-TRIPLE setting). Kept here only to show the effective
-// FALLBACK value in a triple's baseline hint when that triple has no override.
+// App-level baseline fallback: the baseline is a per-TRIPLE setting. Kept here
+// only to show the effective FALLBACK value in a triple's baseline hint when
+// that triple has no override.
 const baseline_distance_mm = await useConfigRef("baseline_distance_mm");
 const cal_marker_size_mm = await useConfigRef("cal_marker_size_mm");
 const cal_marker_ratio = await useConfigRef("cal_marker_ratio");
-// Anaglyph style (user ruling 2026-07-09): live-writable ref over the shared
+// Anaglyph style: live-writable ref over the shared
 // config doc. The card view-models (label + literal swatch colors + selection)
 // come from the SHARED `docs/schema/anaglyph` helper so the cards render the
 // exact same truth the viewer/native brick compose. Clicking a card writes the
 // style — applies live (disparity-scope center Anaglyph view + viewer 3D).
 const anaglyph_style = await useConfigRef("anaglyph_style");
 // GLOBAL prediction rate (Hz) driving the native IMM brick's feed-forward emit
-// rate (prediction-compose-node.md ruling 2). Same doc key the disparity-scope
-// drawer slider binds — edits here apply live across windows.
+// rate. Same doc key the disparity-scope drawer slider binds — edits here
+// apply live across windows.
 const prediction_rate_hz = await useConfigRef("prediction_rate_hz");
-// Serial-latency compensation (serial-rate-governor.md Part 4): adds the
-// measured one-way serial latency to the predictor's fixed lookahead.
-// Default OFF; Settings-only (no drawer control, per ruling).
+// Serial-latency compensation: adds the measured one-way serial latency to the
+// predictor's fixed lookahead. Default OFF; Settings-only (no drawer control).
 const serial_latency_comp = await useConfigRef("serial_latency_comp");
-// Auto-close a projection window once ALL its panes have terminated
-// (projection-split-view.md deliverable 6). Default ON. INTEGRATION NOTE:
-// the config-schema lane migrates this key at integration.
+// Auto-close a projection window once ALL its panes have terminated.
+// Default ON.
 const projection_auto_close = await useConfigRef("projection_auto_close");
-// Profiler node-graph hover-card behavior (profiler-graph-handrolled.md ruling
-// 8). Same doc key the profiler window reads live over the shared config doc.
+// Profiler node-graph hover-card behavior. Same doc key the profiler window
+// reads live over the shared config doc.
 const profiler_hover_card = await useConfigRef("profiler_hover_card");
 const anaglyphCardList = computed(() => anaglyphCards(anaglyph_style.value));
 function selectAnaglyph(style: AnaglyphStyle): void {
@@ -253,7 +251,7 @@ watch(
 // Record multi-selection — declared BEFORE the immediate watcher below, which
 // clears it on triple switch (an immediate watcher runs at setup: referencing a
 // later `const` hits the temporal dead zone, rejects the async setup, and spins
-// the Suspense forever — rig find 2026-07-11).
+// the Suspense forever).
 const selectedIds = ref<Set<string>>(new Set());
 // Open the selected triple's reactive doc so the per-triple fields bind to it.
 watch(
@@ -261,7 +259,7 @@ watch(
   (key) => {
     // A record selection never survives a triple switch — a stale set left the
     // "Aggregate N" header button live while aggregateSelected() filtered to
-    // the NEW triple's records and silently no-opped (UI/UX review 2026-07-10).
+    // the NEW triple's records and silently no-opped.
     selectedIds.value = new Set();
     if (key) void openTripleDoc(key);
   },
@@ -270,7 +268,7 @@ watch(
 
 function selectTriple(key: string) {
   selectedTripleKey.value = key;
-  tripleDialogOpen.value = false; // instant close (no fade) — snap ruling
+  tripleDialogOpen.value = false; // instant close (no fade)
 }
 
 /** Read a triple's current zoom_override (0 / absent = none). */
@@ -485,7 +483,7 @@ async function doDiscardRecord(rec: CalibrationRecord): Promise<void> {
   if (!selectedTripleKey.value) return;
   // A discarded record must not stay overlaid: the toggle row disappears from
   // the list with it, leaving the live view stuck with no affordance to turn
-  // the marks off (UI/UX review 2026-07-10).
+  // the marks off.
   if (overlayState.recordId === rec.id) Object.assign(overlayState, OVERLAY_OFF);
   const { record, orphaned } = removeAssociations(
     rec,
@@ -566,7 +564,7 @@ async function importOneRecord(incoming: RecordExportFile["record"]): Promise<bo
   // corrupt bundle can't clobber an unrelated record. Returns whether an
   // inner-data mismatch was detected — the CALLER folds it into its toast (a
   // notify here was overwritten by the bundle path's success toast and never
-  // seen; UI/UX review 2026-07-10).
+  // seen).
   const trueId = await recordId(incoming.inner);
   const dir = recordStore((incoming.inner as RecordInner).kind);
   const existing = await Store.read<CalibrationRecord | null>([dir, trueId], null);
@@ -659,7 +657,7 @@ async function applyDeviceImport(
   for (const r of bundle.records) if (await importOneRecord(r)) mismatches++;
   await refresh();
   // One toast carries everything — a per-record warning toast was overwritten
-  // by this success toast and never seen (UI/UX review 2026-07-10).
+  // by this success toast and never seen.
   notify(
     `Imported device config (${bundle.records.length} record${bundle.records.length === 1 ? "" : "s"})` +
       (mismatches ? ` — WARNING: ${mismatches} with a data mismatch.` : "."),
@@ -722,7 +720,7 @@ onUnmounted(() => {
 <template>
   <div class="config-root">
     <!-- Fixed tab header — never scrolls out of view (only .tab-content does).
-         Tab switch is instant (no fade/slide) per the snap ruling. -->
+         Tab switch is instant (no fade/slide). -->
     <div class="tabs" role="tablist" aria-label="Settings sections">
       <button
         role="tab"
@@ -1018,8 +1016,7 @@ onUnmounted(() => {
               <!-- SIGNED field: commit on @change (blur/Enter), NOT @input —
                    a live @input turns the intermediate "-" of "-5" into
                    Number("") === 0, clears the doc field, and Vue stamps "0"
-                   back over the minus the user just typed (UI/UX review
-                   2026-07-10). The unsigned siblings keep live @input. -->
+                   back over the minus the user just typed. The unsigned siblings keep live @input. -->
               <input
                 type="number"
                 step="1"
@@ -1073,7 +1070,7 @@ onUnmounted(() => {
             <span class="head-actions">
               <!-- Always rendered (disabled+hinted below 2 selections) — a
                    v-if reflowed the header row AND hid the feature from anyone
-                   who hadn't selected two rows yet (UI/UX review 2026-07-10). -->
+                   who hadn't selected two rows yet. -->
               <button
                 class="btn"
                 :disabled="!selectedAllExtrinsic"
@@ -1176,7 +1173,7 @@ onUnmounted(() => {
             </div>
             <!-- The genuinely destructive zero-association case gets the danger
                  border back (nested normally mutes it) — the wording alone
-                 didn't escalate visually (UI/UX review 2026-07-10). -->
+                 didn't escalate visually. -->
             <div
               v-if="confirmDiscardId === row.id"
               class="confirm-inline nested"
@@ -1261,7 +1258,7 @@ onUnmounted(() => {
 
     <!-- Triple picker modal (same DOM, centered floating scrollable list —
          reuses the app's .modal-scrim/.modal shell). Opening it does not shift
-         the underlying layout (fixed scrim); no fade/slide (snap ruling). -->
+         the underlying layout (fixed scrim); no fade/slide. -->
     <div
       v-if="tripleDialogOpen"
       class="modal-scrim"
@@ -1375,7 +1372,7 @@ onUnmounted(() => {
   background: none;
   border: none;
   // 2px bottom border always present (transparent) so selecting only recolors
-  // it — no layout shift; the switch snaps (no transition, instant ruling).
+  // it — no layout shift; the switch snaps (no transition).
   border-bottom: 2px solid transparent;
   margin-bottom: -1px;
   padding: 0.5em 1em;
@@ -1519,7 +1516,7 @@ input {
   font-family: inherit;
   // 2px border always present (transparent) so selecting only recolors it —
   // no layout shift (design-language: layout-stable, instant cue). No
-  // transition: control-path feedback snaps (instant/snap ruling), and the
+  // transition: control-path feedback snaps, and the
   // selected state never relies on animation (prefers-reduced-motion safe).
   border: 2px solid transparent;
   outline: none;

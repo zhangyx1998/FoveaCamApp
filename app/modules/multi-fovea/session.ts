@@ -68,7 +68,7 @@ const ORIGIN: Pos = { x: 0, y: 0 };
 
 /** Convergence distance for the center-steer toe-in (mm). A fixed, deliberate
  *  mid-range default — the steer targets a wide-view pixel, not a measured
- *  depth (calibration review 2026-07-11 #16 named the old inline literal). */
+ *  depth. */
 const CENTER_STEER_CONVERGE_MM = 1000;
 
 function radians(deg: number): number {
@@ -76,7 +76,7 @@ function radians(deg: number): number {
 }
 
 /** Native multi-KCF surface (d.ts pending; cast like the Aravis NAPIs). `arm`
- *  on a live id RE-INITS that target (ruled steer-while-armed). */
+ *  on a live id RE-INITS that target (steer-while-armed). */
 interface MultiKcfTracker extends AsyncIterable<MultiTrackBatch> {
   arm(id: string, roi: Rect): void;
   disarm(id: string): void;
@@ -123,7 +123,7 @@ export default function multiFoveaSession(
     let captureCenter: { shmName: string; maxBytes: number; channels: number } | null = null;
     let tk: MultiKcfTracker | null = null;
     let serialC: string | null = null;
-    // Exposure-derived trigger budget (P6) — the scheduler's per-target pacing
+    // Exposure-derived trigger budget — the scheduler's per-target pacing
     // floor; null until a triple is leased. See `deriveBudget`.
     let budget: PairTriggerBudget | null = null;
     const trackMs = new RollingStats(0.9, 2, "ms");
@@ -196,7 +196,7 @@ export default function multiFoveaSession(
             // Wire unit is µs; `pulse_ns` is the persist/display ns (spec §trigger-sync).
             pulse: Math.round(s.state.pulse_ns / 1000),
             cameras: ["L", "R"],
-            // Exposure-derived pacing (P6): never trigger a pair faster than
+            // Exposure-derived pacing: never trigger a pair faster than
             // it can expose + read out. Undefined pre-lease → scheduler default.
             minIntervalMs: budget?.minIntervalMs,
           })),
@@ -253,7 +253,7 @@ export default function multiFoveaSession(
         center: und.center,
         fov: und.fov,
       };
-      // Per-triple baseline (mm) rides alongside the intrinsics for Part B's
+      // Per-triple baseline (mm) rides alongside the intrinsics for the
       // depth readout (additive; old containers → viewer shows "—").
       if (triple?.baselineMm != null) meta.baseline_mm = triple.baselineMm;
       return meta;
@@ -309,8 +309,8 @@ export default function multiFoveaSession(
         return { angle: { x: 0, y: 0 }, volt: { L: ORIGIN, R: ORIGIN } };
       }
       const angle = triple.undistort.angular([center], false)[0];
-      // Per-triple PHYSICAL baseline (review #16 — was a hardcoded 200 mm);
-      // 200 stays as the no-stored-baseline fallback (the app-wide default).
+      // Per-triple PHYSICAL baseline; 200 stays as the no-stored-baseline
+      // fallback (the app-wide default).
       const A = inverseTriangulate(
         angle,
         triple.baselineMm ?? 200,
@@ -336,7 +336,7 @@ export default function multiFoveaSession(
       try {
         for await (const batch of t) {
           const elapsed = runtime.onTrackResults(batch);
-          // Descriptor emission (recording ruling 3): every armed target's
+          // Descriptor emission (recording): every armed target's
           // observation in this batch → one `fovea/<slot>` doc. No-op idle.
           recording.onTrackBatch(batch);
           if (elapsed <= 0) continue;
@@ -376,8 +376,8 @@ export default function multiFoveaSession(
     }
 
     /** Derive the trigger budget from the leased pair's CONFIGURED exposure
-     *  (P6 ruled default: exposure config is authoritative; the pulse and the
-     *  scheduler pacing follow it). The AUTHORITY FLIP POINT lives inside
+     *  (exposure config is authoritative; the pulse and the scheduler pacing
+     *  follow it). The AUTHORITY FLIP POINT lives inside
      *  `pairTriggerBudget` (@lib/camera-config) — this is its only multi-fovea
      *  call site. Re-run on activate, on a settle edit, and whenever either
      *  fovea's config doc changes (manage-cameras edits are observable through
@@ -560,8 +560,8 @@ export default function multiFoveaSession(
                 {
                   maxWidth: camL.getFeatureInt("Width"),
                   maxHeight: camL.getFeatureInt("Height"),
-                  // Fixed symmetric −256…+255 window (sgbm-signed-range.md;
-                  // foveated gaze makes disparity SIGNED).
+                  // Fixed symmetric −256…+255 window (foveated gaze makes
+                  // disparity SIGNED).
                   params: SIGNED_DISPARITY_WINDOW,
                 },
               );
@@ -618,13 +618,13 @@ export default function multiFoveaSession(
       monitor.done("trackers");
 
       monitor.start("controller");
-      // Arm-rect clamp source (ruled): camera dims from the lease at activate.
+      // Arm-rect clamp source: camera dims from the lease at activate.
       runtime.setFrameSize({
         width: t.leases.C.camera.getFeatureInt("Width"),
         height: t.leases.C.camera.getFeatureInt("Height"),
       });
       publishSerials(t.leases, scope, s);
-      // Exposure-derived pulse + pacing (P6) — before the scheduler starts so
+      // Exposure-derived pulse + pacing — before the scheduler starts so
       // the first CMD_FRAMEs already carry the derived values.
       deriveBudget();
       // Start the round-robin scheduler (spec §topology): must run or `pump()`
@@ -724,7 +724,7 @@ export default function multiFoveaSession(
             return { ok: false, reason: "controller-not-v2-capable" };
           return { ok: false, reason: "stage-f-hardware-gated" };
         },
-        // Capture (ruling 3) — forward to the shared helper.
+        // Capture — forward to the shared helper.
         async captureShot({ tag }) {
           if (!captureHelper) throw new Error("Capture not ready");
           await captureHelper.captureShot(tag);
@@ -739,7 +739,7 @@ export default function multiFoveaSession(
           await captureHelper?.discard();
         },
         async startRecording({ path }) {
-          if (captureHelper?.capturing) return false; // exclusivity (ruling 6)
+          if (captureHelper?.capturing) return false; // exclusivity
           return recording.start(path);
         },
         async stopRecording() {

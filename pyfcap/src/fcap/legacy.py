@@ -5,12 +5,11 @@
 # -------------------------------------------------------
 """Legacy ``.stream``/``.meta`` dump reader.
 
-Absorbs the read path of the retired per-dump ``stream-decoder.py``
-template (its playback/ffmpeg UI is NOT ported — this package is a data
-API + CLI): the JSONL meta sidecar with short keys (o/n/s/d/t/f/b/x), the
-binary blob offsets, significant-bits scaling, and the affine extra.
-Existing dumps and external tooling stay loadable forever through this
-module; ``fcap convert`` re-encodes them as ``.fcap``.
+Reads the legacy dump format: the JSONL meta sidecar with short keys
+(o/n/s/d/t/f/b/x), the binary blob offsets, significant-bits scaling, and
+the affine extra. This package is a data API + CLI (no playback/ffmpeg UI).
+Existing dumps and external tooling stay loadable through this module;
+``fcap convert`` re-encodes them as ``.fcap``.
 """
 
 from __future__ import annotations

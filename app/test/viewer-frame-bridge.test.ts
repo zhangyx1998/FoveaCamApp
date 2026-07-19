@@ -1,4 +1,4 @@
-// Viewer → projection frame bridge (viewer-tiles-split-and-project.md ruling 4):
+// Viewer → projection frame bridge:
 // the BroadcastChannel transport that mirrors a viewer tile into a projection.
 // Under test: ref-counted `wanted()` transitions (distinct subscribers,
 // heartbeat idempotency), subscribe/unsubscribe round-trip, the frame message

@@ -12,7 +12,6 @@ You may find the full license in project root directory.
   on the FIXED 512² center tile and the servo engages, keeping whatever is now
   centered centered. The center wide view is context-only. Views are
   capturable/recordable (title-bar buttons).
-  Behavior spec: docs/proposals/split-tracking-app.md ("REVISION 2026-07-14").
 
   Renderer-zero-core: every `core` import here is TYPE-ONLY (erased at build).
 -->

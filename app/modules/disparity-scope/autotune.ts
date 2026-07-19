@@ -5,12 +5,11 @@
 // -------------------------------------------------------
 //
 // Two-stage vergence auto-tune run — the phase state machine the session feeds
-// with match-pair samples (docs/proposals/vergence-loop-tuning.md §1, ruled:
-// relay first stage → optional CMA-ES joint polish, session-driven,
-// drawer-gated, never automatic). PURE over injected hooks: the session owns
-// pose/gain application; every terminal path is a callback, never a throw.
-// RIG-GATED: real experiments; simulation only smoke-tests the optimizer.
-// Behavior spec: docs/spec/disparity-scope.md#autotune.
+// with match-pair samples: relay first stage → optional CMA-ES joint polish,
+// session-driven, drawer-gated, never automatic. PURE over injected hooks: the
+// session owns pose/gain application; every terminal path is a callback, never
+// a throw. Real experiments run on hardware; simulation only smoke-tests the
+// optimizer. Behavior spec: docs/spec/disparity-scope.md#autotune.
 
 import { RelayExperiment, tyreusLuyben, type RelayVerdict } from "./relay-tune";
 import { CmaEs, fromLogSpace, toLogSpace } from "./cma-es";

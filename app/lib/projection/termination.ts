@@ -12,7 +12,7 @@
 // spec: docs/spec/projection.md#termination
 
 /** Grace window (ms) a lost source has to reappear before the pane is counted
- *  TERMINATED (for auto-close). ~10 s per the planner decision — long enough to
+ *  TERMINATED (for auto-close). ~10 s — long enough to
  *  ride out an app switch's orchestrator handoff, short enough that a genuinely
  *  dead window auto-closes promptly. Param'd on the machine for tests/tuning. */
 export const DEFAULT_GRACE_MS = 10_000;

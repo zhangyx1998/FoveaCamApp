@@ -1,5 +1,4 @@
-// Drag-target slew math (value-sweep addendum 2026-07-11,
-// manual-control-drag-slew) — the pure first-order smoother behind the
+// Drag-target slew math — the pure first-order smoother behind the
 // manual-control pacer (@modules/manual-control/slew): convergence,
 // per-channel monotonicity (no overshoot), epsilon termination with an EXACT
 // final target, and dt scaling.

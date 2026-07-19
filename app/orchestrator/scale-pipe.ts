@@ -5,7 +5,7 @@
 // -------------------------------------------------------
 //
 // General-purpose session-owned scale/resize node: a native chained brick
-// (`ScaleStream`) that resizes a source pipe's frames into its own C-20
+// (`ScaleStream`) that resizes a source pipe's frames into its own
 // variable-size pipe. One reactive sizing param (ratio/dwidth/dheight/dsize),
 // output dims recomputed per frame from the active input dims; the crop origin is
 // forwarded unscaled. Seam-injected (never imports core).
@@ -30,7 +30,7 @@ export interface ScalePipeSeam {
 
 export interface ScalePipeOptions {
   params: ScaleParams;
-  /** Ring footprint (C-20 max dims — a later `retune` may grow the output up
+  /** Ring footprint (max dims — a later `retune` may grow the output up
    *  to this; the native brick clamps beyond it). */
   maxWidth: number;
   maxHeight: number;
@@ -48,7 +48,7 @@ export interface ScaleHandle {
   retire(): void;
 }
 
-/** Advertise the C-20 max-footprint pipe + attach the scale brick chained on
+/** Advertise the max-footprint pipe + attach the scale brick chained on
  *  `sourcePipeId`. Advertise BEFORE attach. */
 export function createScalePipe(
   seam: ScalePipeSeam,

@@ -29,9 +29,8 @@ export interface TriggerLines {
  * feature accessors. `setTrigger` wraps `arv_camera_set_trigger(source)`,
  * whose argument is the trigger SOURCE — Aravis itself sets TriggerMode=On,
  * TriggerSelector=FrameStart, and TriggerActivation=RisingEdge. (Passing
- * "FrameStart" here fails with "[TriggerSource] 'FrameStart' not an entry"
- * — rig-caught 2026-07-12; the deleted sync.ts original had the same
- * never-run bug.) Runs through `lease.reconfigure()` so shared-handle
+ * "FrameStart" here fails with "[TriggerSource] 'FrameStart' not an entry".)
+ * Runs through `lease.reconfigure()` so shared-handle
  * mutation stays on the lease's safe path — pipe consumers ride the
  * transient.
  */

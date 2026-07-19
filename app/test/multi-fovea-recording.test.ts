@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Multi-fovea recording controller (multi-fovea-recording r2.1, wave I-2).
+// Multi-fovea recording controller.
 // Everything injected — the recorder node factory, the raw-pipe registry seam,
 // the compress seam — so the dts→seq re-keying, the free-run descriptor shape,
 // the extras gating, the channel churn, and the compression routing are all
@@ -194,7 +194,7 @@ describe("multi-fovea recording controller", () => {
     expect(streams.left!.pipeId).toBe("camera/SL/raw12p");
     expect(streams.center!.pipeId).toBe("camera/SC/raw12p");
     expect(streams.right!.pipeId).toBe("camera/SR/raw12p");
-    // Wide singleton rides through (ruling 2).
+    // Wide singleton rides through.
     expect(nodes[0]!.options.cameraMatrix).toEqual({
       sensor_size: { width: 640, height: 480 },
     });
@@ -274,7 +274,7 @@ describe("multi-fovea recording controller", () => {
     const right = onFrame("right", 2, 200n) as Record<string, unknown>;
     expect(right.volt).toEqual({ x: 3, y: 4 });
     expect(right.affine).toEqual([20, 21, 22, 23, 24, 25, 26, 27, 28]);
-    // Center never posts extras (its camera matrix is the §2 singleton).
+    // Center never posts extras (its camera matrix is the singleton).
     expect(onFrame("center", 3, 100n)).toBeNull();
     await rec.stop();
   });
@@ -308,14 +308,14 @@ describe("multi-fovea recording controller", () => {
     const rec = createMultiFoveaRecording(deps);
     await rec.start(tmp());
     const node = nodes[0]!;
-    // The recorder consumes the sibling INSTEAD (ruling 9, zero extra config).
+    // The recorder consumes the sibling INSTEAD (zero extra config).
     expect(node.options.streams.left!.pipeId).toBe("camera/SL/raw12p/zlib");
     expect(node.options.streams.center!.pipeId).toBe("camera/SC/raw12p");
     expect(compress.log).toContain(
       "advertise:camera/SL/raw12p/zlib:BayerRG12p/zlib",
     );
     expect(compress.log).toContain("attach:camera/SL/raw12p->camera/SL/raw12p/zlib");
-    // Ruling 8: the wrapped connect injects the JS-side significantBits for
+    // The wrapped connect injects the JS-side significantBits for
     // BOTH the raw and the compressed pipes (the native spec drops it).
     const conn = node.options.connect("camera/SL/raw12p/zlib");
     expect(conn.spec.significantBits).toBe(12);

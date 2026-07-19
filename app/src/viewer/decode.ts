@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// `x-fovea-raw` → displayable Mat, driven by §2b channel metadata (never byte
+// `x-fovea-raw` → displayable Mat, driven by channel metadata (never byte
 // sniffing). core Vision imported lazily, only for U16 scaling / Bayer demosaic.
 // spec: docs/spec/viewer.md#decode
 
@@ -15,8 +15,8 @@ import { pixelFormatSpec, cvBayerPrefix } from "../../../docs/schema/pixel-forma
 
 export type FrameDecoder = (bytes: Uint8Array) => Mat<Uint8Array>;
 
-/** Per-frame decompressors keyed by the `/codec` suffix (multi-fovea-recording
- *  ruling 9). Only codecs the platform provides without new deps — zlib today
+/** Per-frame decompressors keyed by the `/codec` suffix. Only codecs the
+ *  platform provides without new deps — zlib today
  *  (bz2 pluggable when core adds it). Each blob is INDEPENDENTLY compressed, so
  *  a single frame decompresses alone (the container stays seekable). */
 const CODECS: Record<string, (bytes: Uint8Array) => Uint8Array> = {
@@ -25,7 +25,7 @@ const CODECS: Record<string, (bytes: Uint8Array) => Uint8Array> = {
 
 /** Split a `pixelFormat` string on `/`: the base format + its codec suffix
  *  chain (in APPLY order — leftmost applied first). Offline readers decompress
- *  right-to-left, then interpret the base format (ruling 9). */
+ *  right-to-left, then interpret the base format. */
 export function splitCodecs(pixelFormat: string): { base: string; codecs: string[] } {
   const parts = pixelFormat.split("/");
   return { base: parts[0] ?? "", codecs: parts.slice(1) };
@@ -68,7 +68,7 @@ export function unpack12p(bytes: Uint8Array, samples: number): Uint16Array {
   return out;
 }
 
-/** The §2b static decode props, parsed out of `FoveaChannel.metadata`. */
+/** The static decode props, parsed out of `FoveaChannel.metadata`. */
 export interface DecodeProps {
   dtype: Dtype;
   shape: number[];
@@ -156,13 +156,12 @@ function warnOnSchemaDrift(props: DecodeProps): void {
 type BayerCode = `Bayer${"GR" | "RG" | "GB" | "BG"}2RGB`;
 
 /** OpenCV demosaic code for a pixel format, or null if it's not Bayer — driven
- *  by the shared registry (docs/schema, B-P1), NOT a private regex, so viewer
+ *  by the shared registry (docs/schema), NOT a private regex, so viewer
  *  demosaic can't drift from the format facts. The cv constant carries the
- *  OpenCV↔PFNC off-by-one R/B-swap correction (`cvBayerPrefix`,
- *  channel-order-fix.md): a GenICam BayerRG mosaic demosaics with
- *  `COLOR_BayerBG2RGB`, so an old raw-Bayer recording renders red-as-red.
- *  Output is honest RGB (FrameView pours R,G,B into an RGBA-native canvas).
- *  Exported for the C-P6 conformance test. */
+ *  OpenCV↔PFNC off-by-one R/B-swap correction (`cvBayerPrefix`): a GenICam
+ *  BayerRG mosaic demosaics with `COLOR_BayerBG2RGB`, so a raw-Bayer recording
+ *  renders red-as-red. Output is honest RGB (FrameView pours R,G,B into an
+ *  RGBA-native canvas). Exported for the conformance test. */
 export const bayerCode = (pixelFormat: string): BayerCode | null => {
   const bayer = pixelFormatSpec(pixelFormat)?.bayer;
   return bayer ? (`${cvBayerPrefix(bayer)}2RGB` as BayerCode) : null;

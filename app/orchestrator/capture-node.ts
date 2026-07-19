@@ -36,13 +36,13 @@ const BAYER_RGB_CODES: Record<string, string> = Object.fromEntries(
   ]),
 );
 
-/** F1 default burst read timeout (ms). Overridable per shot via
+/** Default burst read timeout (ms). Overridable per shot via
  *  `CaptureShot.burstTimeoutMs`. Generous vs a healthy burst (5 fresh frames at
  *  camera rate is sub-second) — it only fires when a raw producer never
  *  delivers, so a hung capture rejects instead of requiring an app restart. */
 export const DEFAULT_BURST_TIMEOUT_MS = 10_000;
 
-/** F1 per-port progress post cadence (ms) — rate-limits the worker→main burst
+/** Per-port progress post cadence (ms) — rate-limits the worker→main burst
  *  progress notices so a rig watcher sees WHICH port stalls before the timeout. */
 const PROGRESS_INTERVAL_MS = 250;
 
@@ -73,7 +73,7 @@ export interface BurstCfg {
   startSeq: bigint;
   /** Number of consecutive fresh frames to grab (the cap-stack count). */
   count: number;
-  /** F1 burst timeout hook: TRUE once the run's deadline has passed. On a live
+  /** Burst timeout hook: TRUE once the run's deadline has passed. On a live
    *  rig a raw producer whose gate never fired (a prior recording retired the
    *  shared `camera/<serial>/raw` ids; re-advertise didn't restart it) leaves
    *  `read` forever NotYet — without this the burst hangs and starves the
@@ -92,7 +92,7 @@ export async function grabBurst(cfg: BurstCfg): Promise<number> {
   let want = cfg.startSeq;
   let got = 0;
   while (got < cfg.count) {
-    if (cfg.expired?.()) return got; // F1: deadline passed → return short, never hang
+    if (cfg.expired?.()) return got; // deadline passed → return short, never hang
     const r = cfg.read(want);
     if (r === null) continue; // torn seqlock read — retry the same seq
     if ("closed" in r) return got; // producer retired mid-burst
@@ -117,13 +117,13 @@ export async function grabBurst(cfg: BurstCfg): Promise<number> {
 }
 
 // ============================================================================
-// PURE PART 2 — indexed-resource accumulation (capture.ts semantics, exact).
+// PURE PART 2 — indexed-resource accumulation.
 // ============================================================================
 
 /** Where to store a resource this shot. `indexed` (a raster/multi-shot capture)
- *  → the resource ACCUMULATES as an array (one entry per shot, in call order),
- *  matching the old `Capture.capture()` `provide()`; unindexed → a single entry
- *  that REPLACES (matching a 1-shot capture / the once-captured "wide"). */
+ *  → the resource ACCUMULATES as an array (one entry per shot, in call order);
+ *  unindexed → a single entry that REPLACES (a 1-shot capture / the
+ *  once-captured "wide"). */
 export function accumulate<T>(
   store: Map<string, T | T[]>,
   name: string,
@@ -142,11 +142,10 @@ export function accumulate<T>(
   return index;
 }
 
-/** Build the resource → metadata manifest the renderer reads (`capture_meta`).
- *  Mirrors the deleted `publishMeta` EXACTLY: each resource maps to its meta
- *  (or `null` for an image-only resource), an ARRAY of them for an indexed
- *  resource. Insertion order is preserved (wide, fovea, center, left, right,
- *  diff). */
+/** Build the resource → metadata manifest the renderer reads (`capture_meta`):
+ *  each resource maps to its meta (or `null` for an image-only resource), an
+ *  ARRAY of them for an indexed resource. Insertion order is preserved (wide,
+ *  fovea, center, left, right, diff). */
 export function manifestOf<T>(
   store: Map<string, T | T[]>,
   metaOf: (entry: T) => Serializable,
@@ -164,8 +163,8 @@ export function manifestOf<T>(
 // PURE PART 3 — center rect clamp + downconvert selection.
 // ============================================================================
 
-/** Clamp a crop rect into the frame — ported verbatim from capture.ts's
- *  `clampRect` (integer-rounded, min 1×1, kept inside W×H). */
+/** Clamp a crop rect into the frame (integer-rounded, min 1×1, kept inside
+ *  W×H). */
 export function clampRect(
   r: { x: number; y: number; width: number; height: number },
   width: number,
@@ -180,8 +179,7 @@ export function clampRect(
 
 /** A held resource previews at 8-bit BGRA: an already-8-bit resource (the
  *  sliced center) passes through; a full-depth (16-bit) resource is
- *  down-converted. Mirrors the deleted `publishFrame`'s
- *  `image instanceof Uint8Array ? image : convertType(image, "8U")`. */
+ *  down-converted. */
 export function needsDownconvert(bytesPerElement: number): boolean {
   return bytesPerElement > 1;
 }
@@ -215,8 +213,8 @@ export interface CaptureStreams {
   center: CaptureCenterInit;
 }
 
-/** The DEGENERATE single-stream composition (capture-recorder-everywhere ruling
- *  3, item 4): exactly ONE raw stream is provided. The worker stacks that one
+/** The DEGENERATE single-stream composition: exactly ONE raw stream is
+ *  provided. The worker stacks that one
  *  stream full-depth (same stack math, no wrap / center slice / diff) and holds
  *  the result as a single named resource. Used by calibrate-intrinsic, which
  *  leases one camera at a time (never a fixed triple). */
@@ -234,7 +232,7 @@ export type CaptureStreamsAny = CaptureStreams | CaptureSingleStreams;
 export type AcquireStreams = () => { streams: CaptureStreamsAny; release: () => void };
 
 /** One capture shot's calibration-derived transforms + per-resource metadata —
- *  computed on MAIN in the ruling-3 `onCaptureStart` snapshot and attached to
+ *  computed on MAIN in the `onCaptureStart` snapshot and attached to
  *  the whole shot regardless of stack depth. */
 export interface CaptureShot {
   /** Clear the held resources + (re)provide "wide" — the first shot of an
@@ -244,7 +242,7 @@ export interface CaptureShot {
   indexed: boolean;
   /** Frames averaged per fovea (cap-stack). */
   stackCount: number;
-  /** F1: per-shot burst read timeout (ms). Omit → `DEFAULT_BURST_TIMEOUT_MS`.
+  /** Per-shot burst read timeout (ms). Omit → `DEFAULT_BURST_TIMEOUT_MS`.
    *  On expiry the run is abandoned and rejected WITH per-port delivered counts
    *  (the stalled port is named), the host releases the acquired pipes, and
    *  `captureBusy` clears — a stuck raw producer never wedges the app. */
@@ -274,7 +272,7 @@ export interface CaptureSingleShot {
   reset: boolean;
   indexed: boolean;
   stackCount: number;
-  /** F1: per-shot burst read timeout (ms). Omit → `DEFAULT_BURST_TIMEOUT_MS`. */
+  /** Per-shot burst read timeout (ms). Omit → `DEFAULT_BURST_TIMEOUT_MS`. */
   burstTimeoutMs?: number;
   /** Resource name for the one stacked full-depth image (e.g. "sensor"). */
   resource: string;
@@ -311,8 +309,8 @@ export interface CaptureNodeHandle {
    *  stack/wrap/diff/slice in-worker, hold the resources, release the pipes.
    *  Resolves with the resource → metadata manifest (`capture_meta`). */
   capture(shot: CaptureShotAny): Promise<Record<string, Serializable>>;
-  /** Pull one held resource's ACTUAL data downconverted to 8-bit BGRA (ruling
-   *  7). Returns null for a meta-only resource / a bad index. */
+  /** Pull one held resource's ACTUAL data downconverted to 8-bit BGRA. Returns
+   *  null for a meta-only resource / a bad index. */
   getPreview(resource: string, index?: number): Promise<FramePayload | null>;
   /** Persist the held resources to `path` (in-worker fs/encode). Clears them. */
   save(path: string, format: string): Promise<void>;
@@ -351,14 +349,14 @@ export type CaptureNodeIn =
 export type CaptureNodeOut =
   | { type: "reading-done"; runId: number }
   | { type: "captured"; runId: number; manifest: Record<string, Serializable>; bursts: Record<string, number>; stackMs: number }
-  /** F1 rate-limited per-port burst progress — `delivered[port]` frames of the
+  /** Rate-limited per-port burst progress — `delivered[port]` frames of the
    *  `expected` cap-stack count so far (center is a single frame → expected 1);
    *  surfaced so a rig watcher sees WHICH port stalls before the timeout fires. */
   | { type: "progress"; runId: number; delivered: Record<string, number>; expected: number }
   | { type: "preview"; reqId: number; payload: FramePayload | null }
   | { type: "saved"; reqId: number }
   | { type: "discarded"; reqId: number }
-  /** F1: an error carries the partial per-port `bursts` counts on a run failure
+  /** An error carries the partial per-port `bursts` counts on a run failure
    *  (timeout / short burst) so the host meters honest partial deliveries and the
    *  message already names the stalled port. */
   | { type: "error"; runId?: number; reqId?: number; message: string; stack?: string; bursts?: Record<string, number> };
@@ -436,7 +434,7 @@ export function createCaptureNode(options: CaptureNodeOptions): CaptureNodeHandl
       meter.emit("stackMs", Math.round(msg.stackMs));
       run?.resolve(msg.manifest);
     } else if (msg.type === "progress") {
-      // F1: rate-limited per-port burst progress — name WHICH port stalls while
+      // Rate-limited per-port burst progress — name WHICH port stalls while
       // the burst is still running (before the timeout rejects it). Generic over
       // the reported ports (triple: left/right/center; single: single).
       const parts = Object.entries(msg.delivered)
@@ -455,7 +453,7 @@ export function createCaptureNode(options: CaptureNodeOptions): CaptureNodeHandl
         const run = pendingRuns.get(msg.runId);
         pendingRuns.delete(msg.runId);
         releaseRun(run);
-        // F1: meter the partial per-port deliveries even on failure (honest —
+        // Meter the partial per-port deliveries even on failure (honest —
         // a stalled port ingests 0, the healthy ports their real counts).
         if (msg.bursts)
           for (const [port, n] of Object.entries(msg.bursts)) meter.ingest(port, n ?? 0);
@@ -602,8 +600,7 @@ function makeRGBA(mat, format) {
 }
 
 // Held resources are honest RGBA; cv::imwrite wants BGR channel order. ONE
-// honest swap at save — the old makeBGR off-by-one + compensating RGBA2BGRA are
-// gone (two cancelling bugs; channel-order-fix.md).
+// honest swap at save.
 function toSaveBGR(image) {
   switch (image.channels) {
     case 4: return V.cvtColor(image, "RGBA2BGR");

@@ -19,7 +19,7 @@ export type WorkloadCounterRow = {
   /** Interval rate when a comparable previous snapshot exists, else the
    *  meter's cumulative rate. */
   ratePerSec: number;
-  /** C-18 diagnostic: largest inter-arrival interval (ms) over the trailing
+  /** Stall diagnostic: largest inter-arrival interval (ms) over the trailing
    *  10 s. Flat ≈ period → this producer stream is healthy; a spike is a stall. */
   maxIntervalMs: number;
   /** True when `maxIntervalMs` exceeds `STALL_FACTOR` × the stream's nominal
@@ -28,7 +28,7 @@ export type WorkloadCounterRow = {
 };
 
 /** A stream whose worst 10 s gap exceeds this multiple of its nominal period is
- *  flagged stalled. ~2× per the C-18 request (a periodic tens-of-ms freeze on a
+ *  flagged stalled. ~2× (a periodic tens-of-ms freeze on a
  *  ~18 ms/55 fps producer trips it). Exported for the unit test to pin. */
 export const STALL_FACTOR = 2;
 

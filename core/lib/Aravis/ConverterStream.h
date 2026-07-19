@@ -5,7 +5,7 @@
 // -------------------------------------------------------
 #pragma once
 
-// The per-stream format converter thread (B-18): one thread per (camera × target
+// The per-stream format converter thread: one thread per (camera × target
 // format) runs the shared convertFrame OFF the capture thread and offers the
 // converted bytes to C's pipe FrameSink; auto-parks when consumers drain.
 // spec: docs/spec/core-frame-bricks.md#converter
@@ -76,12 +76,12 @@ struct OwnedFrame : Shared<OwnedFrame> {
 // (selected per-chain via `ChannelKind`), presenting ONE producer/consumer
 // surface so `TapPublisher` and `ChainedStreamOf` are transport-agnostic:
 //   - LeakyTapChannel (default): latest-wins — a slow consumer sheds stale
-//     frames; the ruled transport for previews, fovea crops and trackers
+//     frames; the transport for previews, fovea crops and trackers
 //     (track the freshest). Skips are metered downstream via `OwnedFrame.seq`.
 //   - FifoTapChannel{capacity}: bounded blocking queue — EVERY frame in order,
 //     and a full queue BLOCKS the producer's synchronous dispatch. That
-//     backpressure is the DESIGN for the undistort input (controller-node-and-
-//     fifo-edges §1): the source's own camera input is latest-wins, so
+//     backpressure is the DESIGN for the undistort input: the source's own
+//     camera input is latest-wins, so
 //     sustained overload sheds at the camera→convert edge (metered as
 //     converter drops) while convert→undistort stays complete and ordered.
 //     Metered: exposes depth / windowed high-water / capacity for the
@@ -113,12 +113,11 @@ class LeakyTapChannel : public TapChannel {
 public:
   void write(OwnedFrame::Ptr &frame) override { leaky_.write(frame); }
   bool poll(OwnedFrame::Ptr &out, bool wait) override {
-    // `take` MOVES the slot out — this channel is single-consumer, and the
-    // old cursor+`next` readout left the last frame pinned in BOTH the slot
-    // and the cursor until the next write: an upstream stall held a full
-    // OwnedFrame (deep-copied Mat, MBs) indefinitely (Leaky retention fix,
-    // 2026-07-11). Latest-wins dedupe needs no cursor — the slot is null
-    // after readout.
+    // `take` MOVES the slot out — this channel is single-consumer. A cursor +
+    // `next` readout would pin the last frame in BOTH the slot and the cursor
+    // until the next write, so an upstream stall would hold a full OwnedFrame
+    // (deep-copied Mat, MBs) indefinitely. Latest-wins dedupe needs no cursor —
+    // the slot is null after readout.
     return leaky_.take(out, wait);
   }
   void close() override { leaky_.close(); }
@@ -353,7 +352,7 @@ class ConverterStream
     : public TransformStream<Frame::Ptr, ConvertedFrame::Ptr> {
 public:
   using Ptr = std::shared_ptr<ConverterStream>;
-  // `name` = the pipe/node id (B-24: meter names ARE node ids, so the topology
+  // `name` = the pipe/node id (meter names ARE node ids, so the topology
   // snapshot folds stats onto nodes by id with no shim).
   static Ptr create(Arv::Stream::Ptr upstream, PixelFormat target,
                     std::string name) {
@@ -394,9 +393,9 @@ protected:
     TransformStream::stop();
     // Parked (active→parked edge, stream thread — the single-writer rule over
     // buf_ holds): drop the reused full-frame conversion target instead of
-    // retaining it for the lease lifetime (value-sweep 2026-07-11
-    // idle-retention). Any in-flight ConvertedFrame still holds its own
-    // header ref on the data; the next unpark reallocates via convertFrame().
+    // retaining it for the lease lifetime. Any in-flight ConvertedFrame still
+    // holds its own header ref on the data; the next unpark reallocates via
+    // convertFrame().
     buf_.release();
   }
 
@@ -457,8 +456,8 @@ void appendConvertNodeRow(Napi::Env env, Napi::Array &rows,
                           const std::string &id,
                           const std::shared_ptr<ConverterStream> &c);
 
-// The B-owned pipe producer: a DIRECT synchronous-consume Subscriber on any
-// ConvertedFrame producer (ConverterStream, real-1g UndistortStream). `push`
+// The pipe producer: a DIRECT synchronous-consume Subscriber on any
+// ConvertedFrame producer (ConverterStream, UndistortStream). `push`
 // runs on the producer thread, in the base loop's synchronous dispatch BEFORE
 // the next transform — so `offer()` (which copies into the ring) consumes the
 // reused buffer safely. MUST NOT be a Sub::Latest/Queue (those retain the Ptr
@@ -466,9 +465,9 @@ void appendConvertNodeRow(Napi::Env env, Napi::Array &rows,
 class PipeOfferSubscriber : public Subscriber<ConvertedFrame::Ptr> {
 public:
   // `maxBound=false`: fixed-geometry pipes (converter/undistort) — a frame must
-  // match the advertised w/h EXACTLY. `maxBound=true` (B-24 fovea): w/h are the
+  // match the advertised w/h EXACTLY. `maxBound=true` (fovea): w/h are the
   // ring's MAX footprint — any active frame ≤ max is offered, its per-frame
-  // w/h riding the C-20 slot header (Publisher::offer re-validates ≤ max).
+  // w/h riding the slot header (Publisher::offer re-validates ≤ max).
   PipeOfferSubscriber(::Stream<ConvertedFrame::Ptr> *producer,
                       Pipe::FrameSink *sink, uint32_t width, uint32_t height,
                       bool maxBound = false)
@@ -481,8 +480,8 @@ protected:
     if (!cf || !sink_)
       return;
     const cv::Mat &m = cf->mat;
-    // Geometry guard: exact-match for fixed pipes (a size/format change ⇒ A
-    // re-advertises); within-max for dynamic fovea pipes (C-20 active w/h).
+    // Geometry guard: exact-match for fixed pipes (a size/format change ⇒ the
+    // producer re-advertises); within-max for dynamic fovea pipes (active w/h).
     const auto w = static_cast<uint32_t>(m.cols);
     const auto h = static_cast<uint32_t>(m.rows);
     if (maxBound_ ? (w > width_ || h > height_ || w == 0 || h == 0)
@@ -499,7 +498,7 @@ protected:
     info.bytesPerElement = static_cast<uint32_t>(m.elemSize1());
     info.bytes =
         static_cast<size_t>(m.cols) * m.rows * m.channels() * m.elemSize1();
-    // v4 (B-24/C-24): FRAME-BOUND crop origin rides the slot header with the
+    // v4: FRAME-BOUND crop origin rides the slot header with the
     // active size (fovea producers set it; full-frame producers leave 0/0).
     info.originX = cf->originX;
     info.originY = cf->originY;
@@ -519,13 +518,13 @@ private:
 };
 
 // Meter::Snapshot → JS object (defined in ConverterStream.cpp; shared by
-// converterProbeAll + the real-1g undistortProbeAll).
+// converterProbeAll + undistortProbeAll).
 Napi::Value meterSnapshotToJs(Napi::Env env, const Meter::Snapshot &s);
 
-// ---- raw12p in-process OwnedFrame tap (multi-fovea-recording R-1 transport) --
+// ---- raw12p in-process OwnedFrame tap ---------------------------------------
 // The packed raw12p producer (RawPipe.cpp) exposes its VERBATIM wire payload as
 // an in-process OwnedFrame tap so brick→brick consumers (CompressStream) read it
-// WITHOUT a SHM ring (rings = IPC/JS-worker boundaries ONLY, ruled 2026-07-09).
+// WITHOUT a SHM ring (rings = IPC/JS-worker boundaries ONLY).
 // The tap fans out on the CAPTURE thread, so the channel MUST be latest-wins
 // (LeakyTapChannel) — a blocking FIFO would stall capture. Drops are metered
 // downstream via OwnedFrame.seq gaps. The raw12p RING output is unchanged (it

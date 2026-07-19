@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// unified-time-and-topology §6: the consolidated `Topology.report()` NAPI.
+// The consolidated `Topology.report()` NAPI.
 // Row builders + the pipe sweep live here; each brick family appends its own
 // rows (see Topology.h). Everything runs on the NAPI thread; the only
 // cross-thread reads are the seqlocked meter probes + PipeHub's own locking.

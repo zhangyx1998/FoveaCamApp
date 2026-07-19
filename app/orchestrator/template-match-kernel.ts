@@ -16,8 +16,8 @@ import { cvtColor, gaussian, heatmap, matchTemplate, minMaxLoc, slice, type Mat 
 import { RECT } from "@lib/util/geometry";
 import type { FrameSet, KernelFrameOut, KernelOutput, VisionKernel } from "./vision-kernel.js";
 
-/** Params — smoothing/diagnostics only (ruling 5: geometry lives in the
- *  scale nodes in front of this kernel). */
+/** Params — smoothing/diagnostics only (geometry lives in the scale nodes in
+ *  front of this kernel). */
 export type TemplateMatchParams = {
   kind?: "template-match";
   /** Correlation-map Gaussian smoothing before peak-finding (a single noisy
@@ -70,8 +70,7 @@ export function createTemplateMatchKernel(
 
   // The retained needle tile (grayscale). `cvtColor` allocates a fresh buffer
   // before this function's first await, so retaining its output past the
-  // `process` call is safe even though the worker reuses the read buffer
-  // (same reasoning the old getFoveaTile documented).
+  // `process` call is safe even though the worker reuses the read buffer.
   let tile: Mat<Uint8Array> | null = null;
 
   const kernel: VisionKernel = {

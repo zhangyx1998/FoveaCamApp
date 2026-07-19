@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Firmware-in-the-loop (docs/proposals/firmware-sim-harness.md): core's
+// Firmware-in-the-loop: core's
 // Device driving the REAL firmware logic — firmware/src/{Protocol,Streams,
 // Capture,Global,MEMS}.cpp compiled into test/build/fovea-fw-sim (HAL shim +
 // pty; build with `cd test && make build`) — the first firmware BEHAVIOR
@@ -15,7 +15,7 @@
 //      Config::Bias REJ while enabled.
 //   3. Stream table — CREATE applies the target to the DAC; awaited UPDATE
 //      ACKs; fire-and-forget UPDATE (seq=0) applies SILENTLY (zero response
-//      packets); TERMINATE-with-pending-frame REJ (later, §5).
+//      packets); TERMINATE-with-pending-frame REJ (later).
 //   4. CMD_FRAME two-phase — ACK{queue_position} → injected strobes → FIN
 //      with frame_id + exposure-AVERAGED positions (rise/fall latch mean,
 //      pinned with a mid-exposure UPDATE); strobe-timeout REJ; 8-deep
@@ -29,7 +29,7 @@
 //      test anywhere): switch-frame trigger deferred >= settle window
 //      (MCU-clock proof), same-stream frame undeferred, settle 0 parity.
 //
-// KNOWN BLOCKER (2026-07-11, core-side — see the canary below): the current
+// KNOWN BLOCKER (core-side — see the canary below): the current
 // core build deadlocks its Device rx thread after the FIRST retired response
 // (core/src/Controller.cpp handleRawPacket holds `pending.ref()` across
 // notePendingChanged(), which locks `pending.ref()` again — Threading::Guard

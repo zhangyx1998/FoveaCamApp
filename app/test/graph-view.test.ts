@@ -1,4 +1,4 @@
-// A-33 profiler graph panel — the pure view-model layer (`graph-view.ts`):
+// Profiler graph panel — the pure view-model layer (`graph-view.ts`):
 // Stage-1 topology derivation from mock workload rows + pipe adverts, the
 // cytoscape element reduction, and the membership key that gates re-layout.
 // This IS the panel's mock-data story: the same mocks drive the component.
@@ -182,8 +182,8 @@ describe("membershipKey / toElements — layout stability", () => {
   });
 });
 
-describe("Stage-2 source selection + served-shape rendering (A-36)", () => {
-  // Mirrors C-24's graphTopology() emission (orchestrator/graph-topology.ts):
+describe("Stage-2 source selection + served-shape rendering", () => {
+  // Mirrors the graphTopology() emission (orchestrator/graph-topology.ts):
   // camera root, pipe brick with epoch+stats, aggregate consumer sink with the
   // exact byte-rate edge, and a stage-1 session wiring under win/<windowId>.
   const served = (): import("@lib/orchestrator/graph-contract").GraphTopology => ({
@@ -365,7 +365,7 @@ describe("edge flow labels (tx/rx/drop — 4732f64 contract)", () => {
   });
 });
 
-describe("FIFO queue edges (controller-node-and-fifo-edges §2)", () => {
+describe("FIFO queue edges", () => {
   const fifo: GraphEdge = {
     from: "camera/123/convert",
     to: "camera/123/undistort",
@@ -411,7 +411,7 @@ describe("FIFO queue edges (controller-node-and-fifo-edges §2)", () => {
 
 const FR: StreamType = { kind: "frame", pixelFormat: "RGBA8", dtype: "U8" };
 
-describe("deriveIdle — idle vs stalled (user 2026-07-10)", () => {
+describe("deriveIdle — idle vs stalled", () => {
   // camera → convert(pipe, 0 Hz) → renderer(sink), the convert→renderer edge
   // carrying the pipe's live consumer refcount.
   const chain = (consumers: number): GraphTopology => ({
@@ -462,7 +462,7 @@ describe("deriveIdle — idle vs stalled (user 2026-07-10)", () => {
   it("never paints a pegged (saturated/util>0) node idle — a stuck loop is a STALL", () => {
     // 0 Hz output, 0 consumers downstream — but 95% util: a compute loop
     // burning CPU while emitting nothing. Must keep the red accent, not the
-    // parked slate (UI/UX review 2026-07-10 fix: util vetoes idle).
+    // parked slate (util vetoes idle).
     const t: GraphTopology = {
       seq: 1,
       at: 0,
@@ -581,7 +581,7 @@ describe("deriveIdle — idle vs stalled (user 2026-07-10)", () => {
   });
 });
 
-describe("collapseConsumerSinks — SHM consumer collapse (user 2026-07-10)", () => {
+describe("collapseConsumerSinks — SHM consumer collapse", () => {
   const sink = (id: string): GraphNode => ({ id, kind: "view", output: null, transport: "sink" });
   const topo = (): GraphTopology => ({
     seq: 1,
@@ -633,7 +633,7 @@ describe("collapseConsumerSinks — SHM consumer collapse (user 2026-07-10)", ()
   });
 });
 
-describe("hover distance + opacity — distance-graded hover (user 2026-07-10)", () => {
+describe("hover distance + opacity — distance-graded hover", () => {
   // camera/123 → convert, camera/123 → undistort (two edges, three nodes).
   const els = toElements(deriveTopology([], PIPES, 1, 0));
   const CONVERT_EDGE = "edge:camera/123->camera/123/convert#in";
@@ -680,16 +680,16 @@ describe("hover distance + opacity — distance-graded hover (user 2026-07-10)",
   });
 });
 
-describe("util field — in-graph utilization indicator (user 2026-07-10, ruling 3)", () => {
+describe("util field — in-graph utilization indicator", () => {
   it("carries raw utilization on metered nodes only (component draws the arc)", () => {
     const t = deriveTopology([row("camera/123/convert", { utilization: 0.6 })], PIPES, 1, 0);
     const els = toElements(t);
     const convert = els.find((e) => e.data.id === "camera/123/convert")!;
-    // Raw 0..1 utilization, NOT a data-URI (busyRing died with cytoscape).
+    // Raw 0..1 utilization, NOT a data-URI.
     expect(convert.data.util).toBe(0.6);
     const camera = els.find((e) => e.data.id === "camera/123")!;
     expect(camera.data.util).toBeUndefined(); // unmetered → no util
-    expect(camera.data.ring).toBeUndefined(); // the old ring field is gone
+    expect(camera.data.ring).toBeUndefined(); // no ring field
   });
 
   it("attaches util for a zero utilization (present but 0) and never for unmetered", () => {
@@ -719,7 +719,7 @@ describe("util field — in-graph utilization indicator (user 2026-07-10, ruling
   });
 });
 
-describe("nodeLabel — role abbreviations in an app context (user 2026-07-10)", () => {
+describe("nodeLabel — role abbreviations in an app context", () => {
   const roles = { "111": "L", "222": "C", "333": "R" };
   const n = (id: string): GraphNode => ({ id, kind: "x", output: null, transport: "native" });
 

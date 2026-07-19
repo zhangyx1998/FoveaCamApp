@@ -18,7 +18,7 @@ import type {
   MultiFoveaTargetTelemetry,
 } from "./contract";
 
-/** One per-frame batch from the native multi-KCF thread (B-25 ruled shape). */
+/** One per-frame batch from the native multi-KCF thread. */
 export type MultiTrackBatch = {
   seq: number;
   deviceTimestamp?: bigint;
@@ -27,7 +27,7 @@ export type MultiTrackBatch = {
 
 export interface MultiFoveaRuntimeDeps {
   /** (Re-)arm the native tracker target — `arm()` on a LIVE id RE-INITS it
-   *  (the ruled steer-while-armed path; the learned filter resets, inherent). */
+   *  (the steer-while-armed path; the learned filter resets, inherent). */
   arm(id: string, roi: Rect): void;
   disarm(id: string): void;
   createStream(index: number, center: Point2d): Promise<StreamHandle | null>;
@@ -41,7 +41,7 @@ export interface MultiFoveaRuntimeDeps {
    *  fixed-angle PRESET target's fovea crop. null (no arg / uncalibrated) →
    *  the caller falls back to the slot's `center`. */
   projectAngle?(angle: Point2d): Point2d | null;
-  /** Steer the slot's composed fovea crop node (C-24: `setFoveaRect` on the
+  /** Steer the slot's composed fovea crop node (`setFoveaRect` on the
    *  `camera/<serial>/undistort/fovea/<index>` pipe — a no-op when the window
    *  hasn't composed that node). */
   updateFoveaRect(index: number, rect: Rect): void;
@@ -72,7 +72,7 @@ export class MultiFoveaRuntime {
     private readonly deps: MultiFoveaRuntimeDeps,
   ) {}
 
-  /** Camera frame dims (the arm-rect clamp source — ruled: from the lease at
+  /** Camera frame dims (the arm-rect clamp source — from the lease at
    *  activate, not learned per frame). Call BEFORE the first `setTargets`. */
   setFrameSize(size: Size): void {
     this.size = size;
@@ -157,7 +157,7 @@ export class MultiFoveaRuntime {
     this.publish(now);
   }
 
-  /** Consume one native batch (B-25). Returns the thread's summed per-target
+  /** Consume one native batch. Returns the thread's summed per-target
    *  update cost (ms) for the session's trackMs telemetry. */
   onTrackResults(batch: MultiTrackBatch): number {
     let trackMs = 0;
@@ -191,7 +191,7 @@ export class MultiFoveaRuntime {
   }
 
   /** (Re-)arm the native target at the slot's configured center — arm on a
-   *  live id re-inits natively (ruled steer-while-armed path). */
+   *  live id re-inits natively (steer-while-armed path). */
   private armSlot(slot: Slot, index: number): void {
     const roi = this.clampRect(
       RECT.fromCenter(slot.config.center, {

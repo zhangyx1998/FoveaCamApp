@@ -1,4 +1,4 @@
-// WS4 4b write-path (A-22): a recorded fovea frame carries the voltage that
+// The write-path: a recorded fovea frame carries the voltage that
 // PRODUCED it — the FIN exposure-averaged voltage + `frame_id` for a triggered
 // capture, or a live snapshot for a free-run frame. Exercises `buildFoveaMeta`,
 // the per-frame metadata builder `consume()` writes into the `.fovea`
@@ -21,7 +21,7 @@ const H = Object.assign([1, 0, 0, 0, 1, 0, 0, 0, 1], {
 }) as unknown as Mat<Float64Array>;
 const A = { x: 0.1, y: 0.2 };
 
-describe("recorded fovea frame metadata (WS4 4b)", () => {
+describe("recorded fovea frame metadata", () => {
   it("a triggered (FIN) capture records the exposure-averaged voltage + frame_id", () => {
     const meta = buildFoveaMeta({
       source: "fin",
@@ -50,7 +50,7 @@ describe("recorded fovea frame metadata (WS4 4b)", () => {
   });
 });
 
-describe("resolveFoveaBinding (fin vs live branch selection, WS4 4b)", () => {
+describe("resolveFoveaBinding (fin vs live branch selection)", () => {
   // Identity conversions isolate the branch logic from the (separately-tested)
   // regression math: pixel==angle, angle→a fixed fake homography.
   const conv = {

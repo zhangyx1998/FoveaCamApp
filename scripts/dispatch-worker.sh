@@ -1,15 +1,14 @@
 #!/usr/bin/env bash
-# Dispatch a refactor coder (Codex, headless) — planner-triggered.
+# Dispatch a refactor coder (Codex, headless).
 #
 # Usage: scripts/dispatch-worker.sh <A|B|C> ["planner note for this run"]
 #
 # First run per role starts a fresh Codex session with the full kickoff
 # prompt and records its session id; later runs `codex exec resume` the
 # same session with a short re-entry prompt, so the worker keeps its
-# warmed-up context across iterations (user preference — cold starts are
-# costly in time and tokens). To retire a role's session and force a
-# fresh start (e.g. at a stage boundary, to cap context growth), delete
-# .worker-logs/session-<role>.id.
+# warmed-up context across iterations (cold starts are costly in time and
+# tokens). To retire a role's session and force a fresh start (to cap
+# context growth), delete .worker-logs/session-<role>.id.
 #
 # stdin MUST be /dev/null: codex exec appends piped stdin to the prompt
 # and blocks until EOF — a background shell's never-closing stdin pipe

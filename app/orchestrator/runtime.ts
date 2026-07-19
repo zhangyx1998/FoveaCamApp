@@ -77,9 +77,9 @@ export class ServerSession<C extends Contract> {
   // Merged telemetry snapshot (patches applied on top of contract defaults) —
   // needed so a subscriber arriving after a one-shot publish (e.g. `ready`,
   // `list`, `connected`) still sees it, instead of waiting for the next patch
-  // that may never come. See docs/history/refactor/orchestrator.md §12.1 C3.
+  // that may never come.
   private readonly telemetrySnapshot: Record<string, any>;
-  // A-P13: current user-visible failure (e.g. a failed activation), seeded to
+  // Current user-visible failure (e.g. a failed activation), seeded to
   // new subscribers like the telemetry snapshot so a failure that happened
   // before a window opened is still shown, not lost to stderr.
   private readonly statusSnapshot: SessionStatus = { error: null, progress: null };
@@ -88,15 +88,14 @@ export class ServerSession<C extends Contract> {
   private readonly channels = new Set<Channel>(); // attached (command-capable)
   private readonly subscribers = new Set<Channel>(); // observers (state/telemetry/frames)
   private readonly activeSubscribers = new Set<Channel>(); // activation interest
-  // V4 (docs/history/refactor/orchestrator.md §7.1): last payload per frame topic,
-  // so a one-shot resource (e.g. a capture preview, published exactly once)
-  // still reaches a channel that only opens its `frame(name)` ref *after*
-  // the publish — otherwise it's silently dropped (no listener yet
-  // client-side, and under C10 the server wouldn't even attempt the send).
-  // Bounded by clearing on idle/dispose, not by topic count — dynamic
-  // per-capture channel names would otherwise accumulate forever.
+  // Last payload per frame topic, so a one-shot resource (e.g. a capture
+  // preview, published exactly once) still reaches a channel that only opens
+  // its `frame(name)` ref *after* the publish — otherwise it's silently
+  // dropped (no listener yet client-side, and the demand gate wouldn't even
+  // attempt the send). Bounded by clearing on idle/dispose, not by topic
+  // count — dynamic per-capture channel names would otherwise accumulate forever.
   private readonly frameCache = new Map<string, FramePayload>();
-  // S5 (docs/history/refactor/orchestrator.md §7.1): timestamp of the most recent
+  // Timestamp of the most recent
   // activation (subscribers 0 -> 1), cleared once the first frame after it
   // publishes — measures "activate -> first frame" ("time to live stream")
   // generically for every session, without per-module instrumentation.
@@ -110,8 +109,7 @@ export class ServerSession<C extends Contract> {
   private activateFn?: () => void;
   private idleFn?: () => void | Promise<void>;
   private busyFn?: () => string | null;
-  // Latest idle settlement (multi-window drain, docs/history/refactor/
-  // multi-window.md §3): an async `idle` (e.g. manual-control's
+  // Latest idle settlement (multi-window drain): an async `idle` (e.g. manual-control's
   // capture/recording drain) returns a promise; `drained()` awaits it so
   // "closed" can mean session-idle-drained, not merely window-destroyed.
   private lastIdle: Promise<void> = Promise.resolve();
@@ -126,7 +124,7 @@ export class ServerSession<C extends Contract> {
   }
 
   /** Register a command handler (called when a client invokes it). The
-   *  optional second arg carries the CALLING channel (C-24: compose validates
+   *  optional second arg carries the CALLING channel (compose validates
    *  the caller's authoritative windowId via `hub.windowIdOf(ctx.channel)`);
    *  existing single-param handlers are unaffected. */
   command<K extends keyof CommandsOf<C>>(
@@ -178,7 +176,7 @@ export class ServerSession<C extends Contract> {
   }
 
   private runIdle(): void {
-    // Spin-up ruling 2026-07-09: a teardown (last window closed, or a forced
+    // A teardown (last window closed, or a forced
     // drain / dispose) must never leave a stale progress overlay for the next
     // subscriber — clear it (and orphan any outstanding monitor handle) before
     // the module's own idle hook runs.
@@ -215,7 +213,7 @@ export class ServerSession<C extends Contract> {
   /** Report a user-visible session failure (e.g. a failed activation / camera
    *  contention) — logged locally AND pushed to every subscriber on the status
    *  channel, and seeded to future subscribers, so it's visible without
-   *  watching the orchestrator console. See §12.1 C7 / A-P13. */
+   *  watching the orchestrator console. */
   fail(reason: string): void {
     this.statusSnapshot.error = reason;
     report(this.name, reason);
@@ -246,7 +244,7 @@ export class ServerSession<C extends Contract> {
   }
 
   /**
-   * Declare an ORCHESTRATOR SPIN-UP progress monitor (user ruling 2026-07-09):
+   * Declare an ORCHESTRATOR SPIN-UP progress monitor:
    * a session names its activation steps UPFRONT, then transitions each one as
    * it works, so any subscribed window can render a progress overlay instead of
    * a blank screen while the graph builds. Declaring publishes the full pending
@@ -277,7 +275,7 @@ export class ServerSession<C extends Contract> {
   }
 
   /** @deprecated Alias of `fail()` — kept for callers that read as "report an
-   *  error". Both log + surface to the renderer (the old body only logged). */
+   *  error". Both log + surface to the renderer. */
   error(message: string): void {
     this.fail(message);
   }
@@ -285,8 +283,7 @@ export class ServerSession<C extends Contract> {
   // `string & {}` allows dynamic channels (e.g. one per camera serial) while
   // keeping autocomplete for the contract's static frame names.
   //
-  // C10 (docs/history/refactor/orchestrator.md §7.1 item 3): only send to
-  // subscribers that declared interest in *this* topic — a session
+  // Only send to subscribers that declared interest in *this* topic — a session
   // subscriber that never opened `frame(name)` for it shouldn't pay the
   // structured-clone + backpressure-gate cost for a topic it never reads.
   frame(
@@ -296,7 +293,7 @@ export class ServerSession<C extends Contract> {
   ): void {
     const t = topic.frame(this.name, String(name));
     const payload = this.getFrameTransport().write(t, source, meta);
-    this.frameCache.set(t, payload); // V4: last-payload cache, replayed on late interest
+    this.frameCache.set(t, payload); // last-payload cache, replayed on late interest
     if (this.activatedAt !== null) {
       span(`session.${this.name}.timeToFirstFrame`, performance.now() - this.activatedAt);
       this.activatedAt = null;
@@ -304,10 +301,10 @@ export class ServerSession<C extends Contract> {
     for (const ch of this.subscribers) if (ch.hasFrameInterest(t)) ch.sendFrame(t, payload);
   }
 
-  // value-sweep 2026-07-11 `ungated-diagnostic-heatmap`: sessions gating an
-  // EXPENSIVE producer (the template-match diagnostic heatmap) on real demand
-  // need the aggregate per-topic interest the C10 machinery already tracks
-  // per channel. Coarse change notifications — listeners re-derive via
+  // Sessions gating an EXPENSIVE producer (the template-match diagnostic
+  // heatmap) on real demand need the aggregate per-topic interest the demand
+  // machinery already tracks per channel. Coarse change notifications —
+  // listeners re-derive via
   // `frameInterested` (interest is only ever gained per channel and lost by
   // channel departure, so "something changed" is enough signal).
   private readonly frameInterestListeners = new Set<() => void>();
@@ -337,7 +334,7 @@ export class ServerSession<C extends Contract> {
       ch.handle(topic.command(this.name, cname), (arg: unknown) =>
         fn(arg, { channel: ch }),
       );
-    // V4: replay a cached last-payload to a channel that declares interest
+    // Replay a cached last-payload to a channel that declares interest
     // in a frame topic *after* it was already published — see `frame()`.
     // Every session attached to `ch` gets this callback; a lookup miss for a
     // topic another session owns is just a harmless no-op.
@@ -356,7 +353,7 @@ export class ServerSession<C extends Contract> {
       // value optimistically, so its own echo is pure round-trip — and on a
       // rapid sequence of writes (e.g. a slider drag), that echo can arrive
       // after a newer local write and transiently clobber it back to the
-      // stale value. See §12.1 C8.
+      // stale value.
       for (const peer of this.subscribers)
         if (peer !== ch) peer.emit(topic.state(this.name), { key, value });
     });
@@ -373,7 +370,7 @@ export class ServerSession<C extends Contract> {
       this.subscribers.add(ch);
       // Seed the new subscriber with the current state + telemetry snapshot —
       // without the telemetry seed, one-shot keys (`ready`, `list`, `connected`)
-      // published before this subscriber arrived would never reach it (C3).
+      // published before this subscriber arrived would never reach it.
       for (const key of Object.keys(this.state))
         ch.emit(topic.state(this.name), { key, value: (this.state as any)[key] });
       ch.emit(topic.telemetry(this.name), this.telemetrySnapshot);
@@ -399,7 +396,7 @@ export class ServerSession<C extends Contract> {
     if (wasSubscriber) this.notifyFrameInterestChange(); // interest may have shrunk
     if (wasActive && this.activeSubscribers.size === 0) {
       this.runIdle();
-      this.clearFrameCache(); // V4: bound memory — stale previews from this activation are gone anyway
+      this.clearFrameCache(); // bound memory — stale previews from this activation are gone anyway
     }
   }
 
@@ -416,7 +413,7 @@ export class ServerSession<C extends Contract> {
   /**
    * Force-release session resources regardless of current active count —
    * used both for orchestrator shutdown and for handing exclusive hardware
-   * access back to a non-migrated renderer module (§12.3 R4). Clearing
+   * access back to a non-migrated renderer module. Clearing
    * interest sets (not just calling `idleFn`) matters: without it, a later
    * genuine subscribe from a still-mounted client wouldn't re-fire
    * `activateFn` (the count would never have returned to zero).
@@ -444,8 +441,7 @@ function parseSubscriptionPayload(
  * and `watch` is typed per state key instead of a manually-`switch`ed
  * `(key, value)` callback. `build` receives the already-constructed
  * `ServerSession` so handlers can close over `s.state`/`s.telemetry`/`s.frame`/
- * `s.error` — the same object `defineSession` returns. See
- * docs/history/refactor/orchestrator.md §12.3 R2.
+ * `s.error` — the same object `defineSession` returns.
  */
 export interface SessionDefinition<C extends Contract> {
   /** First renderer subscribed — (re)start session-owned resources. */
@@ -492,16 +488,15 @@ export class Hub {
   private readonly sessions: ServerSession<any>[] = [];
   private readonly byName = new Map<string, ServerSession<any>>();
   private readonly channels = new Set<Channel>();
-  // A-34: channel → stable windowId (from the main-process connect handshake).
-  // C-24's composition validation keys `win/<windowId>/...` requests on it.
+  // Channel → stable windowId (from the main-process connect handshake).
+  // The composition validation keys `win/<windowId>/...` requests on it.
   private readonly channelWindows = new Map<Channel, string>();
   private readonly windowClosedHooks = new Set<(windowId: string) => void>();
-  // value-sweep-2026-07-11 (`pipe-consumer-refcount-no-reconciliation`):
-  // per-CHANNEL teardown hooks. Unlike `windowClosed` (DESTROY only), these
+  // Per-CHANNEL teardown hooks. Unlike `windowClosed` (DESTROY only), these
   // fire on every port close — reload, renderer crash, and window close alike —
   // so a session holding per-channel native refcounts (the pipe broker's
   // connect ledger) can reconcile them when the renderer that took them goes
-  // away, instead of wedging the C-21 consumer gate ON forever.
+  // away, instead of wedging the consumer gate ON forever.
   private readonly channelClosedHooks = new Set<(ch: Channel) => void>();
 
   add<C extends Contract>(session: ServerSession<C>): ServerSession<C> {
@@ -510,13 +505,13 @@ export class Hub {
     return session;
   }
 
-  /** The stable windowId a channel's window carries (A-34), if the connect
+  /** The stable windowId a channel's window carries, if the connect
    *  handshake supplied one. Undefined for untagged/legacy connections. */
   windowIdOf(ch: Channel): string | undefined {
     return this.channelWindows.get(ch);
   }
 
-  /** Register a window-close hook (A-34): fires with the closed window's
+  /** Register a window-close hook: fires with the closed window's
    *  stable id when the MAIN process reports the BrowserWindow destroyed —
    *  the authoritative teardown signal for per-window state (a mere channel
    *  close also happens on RELOAD, where the windowId lives on). Returns an
@@ -531,7 +526,7 @@ export class Hub {
     for (const fn of this.windowClosedHooks) fn(windowId);
   }
 
-  /** Register a channel-close hook (value-sweep-2026-07-11): fires with the
+  /** Register a channel-close hook: fires with the
    *  Channel whenever its client port closes — reload, crash, or window close.
    *  The authoritative signal for reconciling per-channel native state (e.g.
    *  the pipe broker's connect refcounts). Returns an unregister disposer. */
@@ -575,12 +570,12 @@ export class Hub {
 
   /** Broadcast a diagnostic error to every connected renderer, regardless of
    *  session subscription — for failures with no single owning session (e.g.
-   *  the shared camera registry). See §12.1 C7. */
+   *  the shared camera registry). */
   reportError(scope: string, message: string, level: ReportLevel = "error"): void {
     for (const ch of this.channels) ch.emit(topic.error, { scope, message, level });
   }
 
-  /** Broadcast a `Span` (§7.1 S5) to every connected renderer, live, the same
+  /** Broadcast a `Span` to every connected renderer, live, the same
    *  way `reportError` broadcasts diagnostics — a future profiler window
    *  consumes this for a real-time timeline. */
   reportSpan(s: Span): void {
@@ -588,7 +583,7 @@ export class Hub {
   }
 
   /** Per-topic frame stats summed across every connected channel (perf
-   *  substrate, §7.3 item 4 — `system.perfSnapshot` aggregates this). */
+   *  substrate — `system.perfSnapshot` aggregates this). */
   frameStatsSnapshot(): Record<
     string,
     FrameTopicStats

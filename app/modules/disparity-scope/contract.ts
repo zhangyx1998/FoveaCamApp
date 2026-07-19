@@ -76,13 +76,13 @@ export type PidReadout = { verge: number; panX: number; panY: number; v_shift: n
 
 export const disparity = defineContract({
   state: {
-    /** Leased camera serials per role (C-22) — raw center preview binds to the
+    /** Leased camera serials per role — raw center preview binds to the
      *  `camera:<serial>` pipe via `usePipeFrame`. Set on acquire. */
     serials: {} as Partial<Record<"L" | "C" | "R", string>>,
     /** Target center within the wide frame (pixels). */
     target: ZERO,
     /** Physical stereo baseline (mm), resolved SERVER-SIDE at activate (spec
-     *  §magnification, Ruling A). 200 here is only the pre-activate placeholder
+     *  §magnification). 200 here is only the pre-activate placeholder
      *  the verge-limit slider reads back; not live. */
     baseline: 200,
     /** Nominal FOV(wide) / FOV(fovea) — drives the sliced-view crop, and is the
@@ -102,7 +102,7 @@ export const disparity = defineContract({
     /** Trigger-sync capture INTENT (spec §trigger-sync): the user asks for
      *  hardware-triggered L/R pairs; the intent latches and the session
      *  engages when preconditions permit (v2 controller + native stream +
-     *  leased triple), surfacing `trigger_blocked` while it waits. RIG-GATED. */
+     *  leased triple), surfacing `trigger_blocked` while it waits. */
     trigger_sync: false as boolean,
     /** PID-node OVERRIDE slot — server-authoritative `{engaged, value}`, driven
      *  ONLY by the generic `pidOverride` command (pointer drags ride the tracker
@@ -110,8 +110,8 @@ export const disparity = defineContract({
     pidOverride: pidOverrideState<VergenceVolts>(),
   },
   telemetry: {
-    /** Calibrated triple leased + conversions loaded (§12.1-style pattern —
-     *  see manual-control's own `ready`). */
+    /** Calibrated triple leased + conversions loaded (see manual-control's own
+     *  `ready`). */
     ready: false as boolean,
     /** The leased triple actually carries an undistort calibration. `ready`
      *  publishes even on the uncalibrated convert-fallback path (control then
@@ -140,7 +140,7 @@ export const disparity = defineContract({
      *  drives the match only in Auto (spec §magnification). Constant per activation. */
     match_magnification: null as number | null,
     /** The leased triple's stored optical zoom override (>0), or null — the
-     *  middle tier of the ruled order (spec §magnification). The UI shows "Auto
+     *  middle tier of the resolution order (spec §magnification). The UI shows "Auto
      *  N× (triple override)". Constant per activation. */
     zoom_override: null as number | null,
     tracker_bbox: null as Rect | null,
@@ -158,7 +158,7 @@ export const disparity = defineContract({
      *  pause/play toggle (spec §freeze-window). */
     vergence_paused: false as boolean,
     /** Auto-tune progress/result stream (null = no run yet this activation).
-     *  Spec: docs/spec/disparity-scope.md#autotune. RIG-GATED experiments. */
+     *  Spec: docs/spec/disparity-scope.md#autotune. */
     autotune: null as AutotuneProgress | null,
     /** Trigger-sync readout — non-null exactly while ENGAGED (spec
      *  §trigger-sync); published at the volt-telemetry throttle. */
@@ -192,7 +192,7 @@ export const disparity = defineContract({
     pauseVergence: cmd<boolean>(),
     /** Start a two-stage gain auto-tune (spec §autotune): `relay` = per-DOF
      *  relay experiments only; `full` = relay + CMA-ES joint polish. Requires
-     *  a calibrated session, tracker disarmed, no drag/override. RIG-GATED. */
+     *  a calibrated session, tracker disarmed, no drag/override. */
     autotune: cmd<{ stage: AutotuneStage }>(),
     /** Abort a running auto-tune — restores the pre-tune tuning + pose. */
     autotuneAbort: cmd(),

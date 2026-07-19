@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// unified-time-and-topology §5 (B, native re-plumb) NAPI seam: attach/detach
+// Undistort NAPI seam: attach/detach
 // the UNDISTORT brick v2 + its control surface. The brick consumes the
 // CONVERTER's in-process OwnedFrame tap (never the raw Bayer stream):
 //   attachUndistortPipe(source, pipeId, options)
@@ -111,7 +111,7 @@ FN(attachUndistortPipe) {
                                        ringCapacity, pipeId);
     } else {
       // The PLAIN persisted CameraCalibration JSON — never the env-bound
-      // Vision `Undistort` instance (B-23 ruling #1). Maps built in the ctor.
+      // Vision `Undistort` instance. Maps built in the ctor.
       Napi::Value calValue = info[2];
       if (info[2].IsObject() && info[2].As<Napi::Object>().Has("cal"))
         calValue = info[2].As<Napi::Object>().Get("cal");
@@ -228,13 +228,12 @@ FN(undistortStall) {
   JS_EXCEPT(env.Undefined())
 }
 
-// DEPRECATED NO-OP (unified-time ruling 2026-07-08: owner-applied
-// timestamps). The camera itself now stamps every frame with its calibrated
-// dt at Frame creation (`camera.calibrateClock`), so the per-brick offset
-// store is gone — the ParamRing lookup uses `frame.deviceTimestamp` directly.
+// DEPRECATED NO-OP: the camera stamps every frame with its calibrated dt at
+// Frame creation (`camera.calibrateClock`), so there is no per-brick offset
+// store — the ParamRing lookup uses `frame.deviceTimestamp` directly.
 // Kept as a 0-returning stub only until the one JS caller
-// (app/orchestrator/clock-calibration.ts, coordinator-owned) drops it; then
-// delete this export + its d.ts row.
+// (app/orchestrator/clock-calibration.ts) drops it; then delete this export +
+// its d.ts row.
 FN(setClockOffset) {
   auto env = info.Env();
   return Number::New(env, 0);
@@ -261,11 +260,11 @@ FN(undistortProbeAll) {
   return out;
 }
 
-// ---- Topology.report() rows (unified-time-and-topology §6) ------------------
-// TODO(B-r2): chained-brick input/output types are tagged BGRA8/U8 — true for
-// every live chain today (the converter target is the pipe's advertised
-// format, BGRA8 everywhere). Carry the source brick's actual target format
-// through the binding once a non-BGRA chain exists.
+// ---- Topology.report() rows -------------------------------------------------
+// Chained-brick input/output types are tagged BGRA8/U8 — true for every live
+// chain today (the converter target is the pipe's advertised format, BGRA8
+// everywhere). Carry the source brick's actual target format through the
+// binding once a non-BGRA chain exists.
 void appendUndistortReports(Napi::Env env, Napi::Array &rows,
                             std::set<std::string> &seen) {
   std::scoped_lock lock(g_mutex);
@@ -278,10 +277,10 @@ void appendUndistortReports(Napi::Env env, Napi::Array &rows,
       appendConvertNodeRow(env, rows, b.privateSource->name(),
                            b.privateSource);
     auto row = Topology::node(env, pipeId, "undistort", "native");
-    // The convert→undistort edge is a bounded FIFO (controller-node-and-fifo-
-    // edges §1): LOSSLESS + ordered. Mark it `lossy:false` EXPLICITLY so worker
-    // F's fold does not default it to lossy from the convert producer's pipe
-    // transport (the queue high-water replaces the drop rate on this edge).
+    // The convert→undistort edge is a bounded FIFO: LOSSLESS + ordered. Mark it
+    // `lossy:false` EXPLICITLY so the fold does not default it to lossy from the
+    // convert producer's pipe transport (the queue high-water replaces the drop
+    // rate on this edge).
     Topology::addInput(env, row, b.stream->sourceId(), "frame",
                        Topology::frameType(env, "RGBA8", "U8"), /*lossy=*/0);
     if (!Topology::decoratePipe(env, row, pipeId))

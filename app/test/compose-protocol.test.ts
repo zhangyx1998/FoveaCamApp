@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// C-24 step 3: the compose/decompose protocol's TWO-MODE semantics (ruled) —
+// The compose/decompose protocol's TWO-MODE semantics —
 // win/-rooted = window-owned exclusive (authoritative identity, no spoofing);
 // camera/-rooted = refcounted shared bricks (idempotent across windows;
 // refs→0 tears down via the kind's materializer, or is pure bookkeeping for
@@ -164,7 +164,7 @@ describe("compose protocol (C-24 step 3)", () => {
     await expect(w.compose("bogus/thing", "x")).rejects.toThrow(/rooted/);
   });
 
-  // THE user-objective-2 acceptance proof (C-24 step 4): target-toggle-driven
+  // The acceptance proof: target-toggle-driven
   // fovea churn — nodes spawn/cancel mid-flight on renderer demand, reused ids
   // bump epochs, and BOTH discovery surfaces track it: `state.nodes` and the
   // served `graphTopology()` (what the profiler graph renders).

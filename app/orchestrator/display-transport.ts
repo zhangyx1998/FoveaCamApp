@@ -5,10 +5,10 @@
 // -------------------------------------------------------
 //
 // Transport types for the shared DISPLAY vision kernel — the processed views' params +
-// results. Fork-independent + worker-safe (numbers only). real-1g (C-23): the calibration
-// (de)serialization is GONE (the kernel's C input is the already-undistorted
-// undistort:<serial> pipe); main ships the fovea homographies / depth Q-matrix / slice
-// center as flat matrices/points instead.
+// results. Fork-independent + worker-safe (numbers only). No calibration
+// (de)serialization: the kernel's C input is the already-undistorted
+// undistort:<serial> pipe; main ships the fovea homographies / depth Q-matrix / slice
+// center as flat matrices/points.
 // spec: docs/spec/vision.md#display-kernel
 
 import type { Point2d, Size } from "core/Geometry";

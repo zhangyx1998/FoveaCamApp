@@ -5,7 +5,7 @@
 // -------------------------------------------------------
 //
 // The prediction-compose feed-forward math — the JS CONFORMANCE REFERENCE for the
-// native ComposeStream brick (imm → compose → controller). The ruled form is
+// native ComposeStream brick (imm → compose → controller). The form is
 // V(t) = V_pid + J·(p_pred(t) − p_meas(t_pid)), expressed here as predVolts − measVolts
 // over a pixel→volt map (identical to J·Δp for the linear Jacobian the brick receives);
 // the fixture (docs/schema/codec/compose-vectors.json) pins the two forms equal.

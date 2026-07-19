@@ -1,5 +1,5 @@
 // The pure tracker hot-swap sequencing (disparity-scope/tracker-swap.ts —
-// runtime-selectable drop-in tracker engines, user 2026-07-11). All side
+// runtime-selectable drop-in tracker engines). All side
 // effects are injected ops, so plain spies pin the ORDER (release before
 // create, consume before rearm), the arm-only-if-armed gate, and the degrade
 // ladder (requested throws → fallback runs + ok:false; both throw → null).

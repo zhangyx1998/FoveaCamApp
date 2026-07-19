@@ -25,7 +25,7 @@ import {
 vi.mock("@lib/store", () => ({ default: class {} }));
 
 describe("anaglyph style table", () => {
-  it("declares the four ruled styles with RC default", () => {
+  it("declares the four styles with RC default", () => {
     expect(ANAGLYPH_STYLES).toEqual(["RB", "RC", "BR", "CR"]);
     expect(DEFAULT_ANAGLYPH_STYLE).toBe("RC");
   });
@@ -41,7 +41,7 @@ describe("anaglyph style table", () => {
       RC: { r: "left", g: "right", b: "right" },
       // B/R: left blue → B, right red → R, green unused.
       BR: { r: "right", g: null, b: "left" },
-      // C/R (ruled 2026-07-10, mirror of R/C): left cyan → G+B, right red → R.
+      // C/R (mirror of R/C): left cyan → G+B, right red → R.
       CR: { r: "right", g: "left", b: "left" },
     };
     expect(ANAGLYPH_CHANNELS).toEqual(expected);
@@ -50,7 +50,7 @@ describe("anaglyph style table", () => {
   });
 
   it("conflict rule: a shared channel goes to the LEFT eye, right keeps the rest", () => {
-    // No RULED style conflicts (C/R replaced the odd B/C, ruling 2026-07-10),
+    // No conflicts among the current styles,
     // but the derivation rule guards future styles — pin it with a synthetic
     // blue/cyan row: they share ch2 → left wins, right reduces to green (ch1).
     (ANAGLYPH_COLORS as Record<string, unknown>)["XX"] = { left: "blue", right: "cyan" };

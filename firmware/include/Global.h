@@ -12,10 +12,11 @@
 #include <Protocol/Packet.h>
 #include <crash.h>
 
-// Renamed from Time.h (2026-07-11): on macOS's case-insensitive filesystem a
-// `Time.h` on the -I path SHADOWS the SDK's <time.h> for every TU of the host
-// fw-sim build — libc++'s <ctime> then can't resolve ::time_t/::tm. The MCU
-// build is unaffected either way; the name just must not collide.
+// The clock counter lives in TimeCounter.h, not Time.h: on macOS's
+// case-insensitive filesystem a `Time.h` on the -I path SHADOWS the SDK's
+// <time.h> for every TU of the host fw-sim build — libc++'s <ctime> then can't
+// resolve ::time_t/::tm. The MCU build is unaffected; the name just must not
+// collide.
 #include <TimeCounter.h>
 
 #define SYSTEM_INFO "FoveaCam Duo Controller"

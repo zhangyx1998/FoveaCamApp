@@ -1,4 +1,4 @@
-// C-17: the pipe broker session — advertises specs into state and brokers
+// The pipe broker session — advertises specs into state and brokers
 // connect/disconnect to core.Pipe (a fake broker here; native is proven by
 // core/test/09-pipe.ts). Driven over a real Channel pair.
 
@@ -89,7 +89,7 @@ function harness(specs: PipeSpec[]) {
   };
 }
 
-describe("pipe session (C-17/C-20)", () => {
+describe("pipe session", () => {
   it("advertises its specs into the discovery Record on build", async () => {
     const h = harness([spec("preview:L"), spec("preview:R")]);
     await flush();
@@ -153,7 +153,7 @@ describe("pipe session (C-17/C-20)", () => {
   });
 });
 
-// --- connect-refcount reconciliation (value-sweep-2026-07-11) --------------
+// --- connect-refcount reconciliation ---------------------------------------
 
 describe("pipe session connect-ledger reconciliation", () => {
   function ledgerHarness() {
@@ -185,7 +185,7 @@ describe("pipe session connect-ledger reconciliation", () => {
     await h.call("connectPipe", { pipeId: "camera/1/convert" });
     expect(h.consumers.get("camera/1/convert")).toBe(2);
     // Channel close (reload/crash/window-close) → both leaked connects undone,
-    // so the C-21 consumer gate parks instead of wedging ON forever.
+    // so the consumer gate parks instead of wedging ON forever.
     h.close();
     expect(h.consumers.get("camera/1/convert")).toBe(0);
   });
@@ -207,7 +207,7 @@ describe("pipe session connect-ledger reconciliation", () => {
   });
 });
 
-// --- fovea materializer (§5 re-chain: chained pipe-id source) --------------
+// --- fovea materializer (chained pipe-id source) ---------------------------
 
 function materializerHarness(advertisedIds: string[]) {
   const advertised = new Set(advertisedIds);
@@ -234,7 +234,7 @@ function materializerHarness(advertisedIds: string[]) {
   return { materializer, pipes, brick, specs, calls };
 }
 
-describe("createFoveaMaterializer (§5 chained fovea brick)", () => {
+describe("createFoveaMaterializer (chained fovea brick)", () => {
   const ID = "camera/SN1/undistort/fovea/2";
   const req = (params?: Record<string, unknown>) =>
     ({ id: ID, kind: "fovea", inputs: {}, params }) as never;

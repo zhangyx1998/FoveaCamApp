@@ -209,9 +209,9 @@ struct EngineResult {
 // supplies only (re-)init + per-frame update via the two virtual hooks. All
 // state is touched only on the owning stream's transform thread, except the
 // atomic-flagged JS handoffs (arm / override / release), same discipline as the
-// original `arm()`. NOTE (2026-07-10): extracted from the former monolithic
-// `KcfCore` so the higher-fps hybrid tracker reuses the EXACT same state
-// machine; KCF's observable behavior is unchanged (guarded by tests 12/21).
+// original `arm()`. Both KCF and the higher-fps hybrid reuse the EXACT same
+// state machine; KCF's observable behavior is unchanged (guarded by tests
+// 12/21).
 class TrackerCore {
 public:
   virtual ~TrackerCore() = default;
@@ -441,7 +441,7 @@ private:
   uint64_t lastDrops_ = 0;   // transform-thread only
 };
 
-// CHAINED KCF variant (controller-node-and-fifo-edges §3.5): tracks another
+// CHAINED KCF variant: tracks another
 // brick's OwnedFrame tap (the convert/undistort C view the disparity kernel
 // sees) instead of the raw camera stream. Input channel = Leaky (latest-wins
 // is right for a tracker — track the freshest frame; skips meter as drops).
@@ -493,7 +493,7 @@ private:
 };
 
 // =====================================================================
-// Higher-FPS HYBRID tracker (2026-07-10, user request): a drop-in replacement
+// Higher-FPS HYBRID tracker: a drop-in replacement
 // for the KCF tracker node that holds lock on this rig's hard MONO content (the
 // needle/blob + low-texture scenes where GRAY-KCF collapses to a single-frame
 // hit) AND runs faster. Engine = windowed NCC (cv::matchTemplate CCOEFF_NORMED,
@@ -501,9 +501,8 @@ private:
 // with a dual anchor/adaptive template (drift-proof) and an expanding-window
 // ANCHOR re-detection ladder (KCF is silent-forever-lost; this RE-ACQUIRES).
 // Single-scale (rig target scale is fovea-controlled); scale robustness is
-// future work. Thresholds/rationale + the KCF-vs-hybrid bench live in
-// docs/proposals/hybrid-tracker.md. Reuses TrackerCore's arm/override/re-arm
-// state machine verbatim — only the two engine hooks differ.
+// future work. Reuses TrackerCore's arm/override/re-arm state machine verbatim
+// — only the two engine hooks differ.
 // =====================================================================
 class HybridCore : public TrackerCore {
 public:
@@ -806,9 +805,8 @@ private:
 
 // Shared full-schema serializer (window + drops + flat back-compat fields) —
 // defined in core/lib/Aravis/ConverterStream.cpp; forward-declared like
-// MarkerDetector.cpp does to avoid pulling the pipe headers into this TU.
-// Tracker probes previously used a local flat copy WITHOUT `drops`, which
-// crashed `perfSnapshot`'s graph fold the moment a tracker went live.
+// MarkerDetector.cpp does to avoid pulling the pipe headers into this TU. Must
+// carry `drops` — `perfSnapshot`'s graph fold crashes on a flat copy without it.
 namespace Arv {
 Napi::Value meterSnapshotToJs(Napi::Env env, const Meter::Snapshot &s);
 }
@@ -950,7 +948,7 @@ static FN(createTracker) {
   try {
     auto camera = convert<Arv::Camera::Ptr>(info[0]);
     // Optional info[1]: the graph node id — becomes the meter/probe name
-    // (B-24; defaults to the legacy "tracker:center").
+    // (defaults to "tracker:center").
     auto stream = info.Length() >= 2 && info[1].IsString()
                       ? KcfTrackerStream::create(
                             Arv::Stream::get(camera),
@@ -963,7 +961,7 @@ static FN(createTracker) {
 }
 
 // Factory: `createChainedTracker(sourcePipeId, name?)` — a KCF tracker on
-// another brick's OwnedFrame tap (controller-node-and-fifo-edges §3.5), so it
+// another brick's OwnedFrame tap, so it
 // tracks EXACTLY the convert/undistort view the kernel sees. `sourcePipeId`
 // resolves to a live convert brick (findConverter) or undistort brick
 // (findUndistort); the tracker holds it by shared_ptr (survives a later
@@ -1126,7 +1124,7 @@ public:
                  const CameraCalibration::Ptr &cal)
       : upstream_(std::move(upstream)),
         meter_(std::move(name), {"frame"}, {"track"}, nowMs()) {
-    if (cal) { // sync map build at create (B-23 ruling #4 precedent)
+    if (cal) { // sync map build at create
       const auto &mtx = cal->camera_matrix;
       cv::initUndistortRectifyMap(mtx, cal->dist_coeffs, {}, mtx,
                                   cal->sensor_size, CV_32FC1, map1_, map2_);
@@ -1263,7 +1261,7 @@ protected:
     result->seq = ++produced_;
     result->deviceTimestamp = frame->device_timestamp;
     meter_.emit("track", nowMs());
-    return result; // a batch EVERY frame while ≥1 target armed (ruling #4)
+    return result; // a batch EVERY frame while ≥1 target armed
   }
 
 private:

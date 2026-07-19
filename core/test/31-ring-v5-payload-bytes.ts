@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// multi-fovea-recording ruling 10: RING LAYOUT v5 — per-frame `payloadBytes`.
+// RING LAYOUT v5 — per-frame `payloadBytes`.
 // A slot can now carry a VARIABLE-LENGTH payload (compression bricks) shorter
 // than the slot capacity; the reader copies EXACTLY that many bytes and surfaces
 // the length to JS as `bytes`. NO hardware — the `Pipe.offerFrame` test hook

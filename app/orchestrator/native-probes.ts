@@ -27,19 +27,17 @@ export function registerNativeProbe(source: NativeProbeSource): () => void {
   return () => sources.delete(source);
 }
 
-/** Coerce a probe row to the FULL `WorkloadSnapshot` schema. The converter/
- *  tracker serializers historically emitted a flat shape (`uptimeMs` +
- *  `dropTotal`, no `window`/`drops`), and one malformed row crashed the whole
- *  `perfSnapshot` (rig 2026-07-08: `.ratePerSec` of undefined → empty graph +
- *  failed export in every app). The native side is schema-converged now; this
- *  keeps any future probe from ever taking the snapshot down again. Extra
- *  fields (e.g. multi-KCF `targets`) pass through untouched. */
+/** Coerce a probe row to the FULL `WorkloadSnapshot` schema. A malformed row
+ *  (a flat `uptimeMs`/`dropTotal` shape with no `window`/`drops`) must never
+ *  crash `perfSnapshot` — a `.ratePerSec` of undefined blanks the graph and
+ *  fails export. Extra fields (e.g. multi-KCF `targets`) pass through
+ *  untouched. */
 export function normalizeProbeRow(row: WorkloadSnapshot): WorkloadSnapshot {
   const r = row as WorkloadSnapshot &
     Partial<{ uptimeMs: number; dropTotal: number }>;
   const uptimeMs = r.window?.uptimeMs ?? r.uptimeMs ?? 1;
   const total = r.drops?.total ?? r.dropTotal ?? 0;
-  // FIFO queue stats (controller-node-and-fifo-edges §1/§2): the undistort
+  // FIFO queue stats: the undistort
   // brick's snapshot carries `queue: {depth, highWater, capacity}`; Leaky
   // bricks omit it. Pass it through ONLY when fully well-formed — a partial /
   // malformed row must degrade to `queue` absent, never blank the graph (same
@@ -76,15 +74,15 @@ function normalizeQueue(q: unknown): QueueStat | undefined {
   return undefined;
 }
 
-// --- Universal node reports (unified-time-and-topology §6) -------------------
+// --- Universal node reports --------------------------------------------------
 //
 // Same seam, one level up: alongside the per-name workload probes, a source
 // can report whole `NodeReport` batches — id + kind + transport + ACTUAL input
 // connections + optional stats in the converged `WorkloadSnapshot` schema.
 // `buildTopology` merges these AFTER its compat adapters (a real report wins
 // by id over an adapter-synthesized node); the native `Topology.report()`
-// NAPI (proposal §7 P3) will register here, as will JS workers/sessions as
-// they migrate off `registerGraphWiring`.
+// NAPI will register here, as will JS workers/sessions as they migrate off
+// `registerGraphWiring`.
 
 /** A node-report batch — the universal reporting shape, read at snapshot
  *  time. Returns `[]` when nothing is live (no stale rows). */

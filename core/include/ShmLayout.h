@@ -20,16 +20,15 @@
 namespace ShmRing {
 
 static constexpr char MAGIC[8] = {'F', 'V', 'S', 'H', 'M', 'R', 'G', '\0'};
-// v2 (C-16): SegmentHeader gains the `state` word (OPEN|CLOSED) for symmetric
-// pipe close. v3 (C-20): SlotHeader gains per-frame active `width/height` so a
+// v2: SegmentHeader gains the `state` word (OPEN|CLOSED) for symmetric
+// pipe close. v3: SlotHeader gains per-frame active `width/height` so a
 // dynamic fovea pipe can carry a varying active size inside a MAX-sized ring
-// (the consumer reads the active size per frame). v4 (C-24/B-24): SlotHeader
+// (the consumer reads the active size per frame). v4: SlotHeader
 // gains per-frame crop `originX/originY` — a fovea crop's position in its
 // parent stream, FRAME-BOUND like the active size (a JS-side rect echo races
-// frame timing; FIN-voltage precedent). v5 (multi-fovea-recording ruling 10):
-// SlotHeader gains per-frame `payloadBytes` — the ACTUAL byte length of this
-// slot's payload (compression bricks emit variable-length blobs); 0 = derive
-// from dims (the live/uncompressed writers leave it 0 → zero behavior change).
+// frame timing). v5: SlotHeader gains per-frame `payloadBytes` — the ACTUAL
+// byte length of this slot's payload (compression bricks emit variable-length
+// blobs); 0 = derive from dims (the live/uncompressed writers leave it 0).
 // Single process — writer + reader share this header, rebuilt together, so
 // there is no version skew.
 static constexpr uint32_t LAYOUT_VERSION = 5;
@@ -42,7 +41,7 @@ static constexpr size_t PAGE_ALIGN = 16 * 1024;
 static constexpr size_t DATA_ALIGN = 64;
 static constexpr uint32_t MAX_READ_RETRIES = 8;
 
-/** Pipe lifecycle state stored in the segment header (C-16, WS1). A consumer
+/** Pipe lifecycle state stored in the segment header. A consumer
  *  reads it only on the cold "no new frame" path, so the final frame is always
  *  delivered before CLOSED is observed — an explicit signal, not a frozen last
  *  frame. Written by the publisher with a release store, read with acquire. */
@@ -79,7 +78,7 @@ struct alignas(64) SegmentHeader {
   uint64_t dataOffset;
   std::atomic<uint64_t> latestSeq;
   std::atomic<uint32_t> latestSlot;
-  // v2 (C-16): appended so existing field offsets are unchanged. 0 = OPEN
+  // v2: appended so existing field offsets are unchanged. 0 = OPEN
   // (memset default), 1 = CLOSED. Only pipe publishers ever store CLOSED; the
   // live preview writer leaves it OPEN, so its readers never take the closed
   // path — zero behavior change to the live path.
@@ -94,16 +93,16 @@ struct alignas(64) SlotHeader {
   double convertMs;
   uint64_t deviceTimestamp;
   uint64_t systemTimestamp;
-  // v3 (C-20): active frame size for this slot (≤ the segment's max dims), so a
+  // v3: active frame size for this slot (≤ the segment's max dims), so a
   // dynamic fovea pipe carries a varying size inside a MAX-sized ring. The live
   // writer leaves them = the segment's fixed dims (publish's defaulted args).
   uint32_t width;
   uint32_t height;
-  // v4 (C-24/B-24): this frame's crop origin within its PARENT stream (fovea
+  // v4: this frame's crop origin within its PARENT stream (fovea
   // crop nodes). 0/0 for uncropped streams (publish's defaulted args).
   uint32_t originX;
   uint32_t originY;
-  // v5 (multi-fovea-recording ruling 10): the ACTUAL payload byte length in this
+  // v5: the ACTUAL payload byte length in this
   // slot. Compression bricks emit variable-length blobs, so the reader copies
   // exactly this many bytes and surfaces it to the consumer instead of the
   // dim-derived count. 0 = derive from dims (every live/uncompressed writer —

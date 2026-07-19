@@ -7,7 +7,7 @@
 // Recorder node: a thin driver over the native recorder brick (`core.Recorder.*`).
 // The brick owns the whole C++ write path (producer-seam taps, drop-oldest queues,
 // a writer thread hosting McapWriter); the host only connects pipes, registers the
-// graph row + meter, and polls stats + ruling-3 frame notices on a low-rate timer.
+// graph row + meter, and polls stats + frame notices on a low-rate timer.
 // Pure parts (stats fold, extras dispatch) are exported + unit-tested; the native
 // seam is injected so vitest never loads core.
 // spec: docs/spec/capture-recording.md#recorder-node
@@ -74,11 +74,11 @@ export interface StreamCounters {
   ingested: number;
   /** Total shed frames (accounted, never silent). */
   dropped: number;
-  /** F2 attribution — shed while the writer was mid-encode/write (the mcap
-   *  chain can't keep up: tune the queue cap / write batching). */
+  /** Shed while the writer was mid-encode/write (the mcap chain can't keep up:
+   *  tune the queue cap / write batching). */
   droppedQueue: number;
-  /** F2 attribution — shed while the writer was between items (an arrival
-   *  burst outran the drain). */
+  /** Shed while the writer was between items (an arrival burst outran the
+   *  drain). */
   droppedRing: number;
   /** Frames the native writer encoded + wrote. */
   written: number;
@@ -92,7 +92,7 @@ export interface StreamFold {
   fps: FreqMeter;
 }
 
-/** The recording-telemetry row shape the UI expects (unchanged). */
+/** The recording-telemetry row shape the UI expects. */
 export type RecorderStreamStats = StreamStats;
 
 /** Fold the brick's cumulative counters into the graph meter (as DELTAS) and
@@ -120,8 +120,8 @@ export function foldStreamStats(
     const dWritten = Math.max(0, next.written - prev.written);
     const dBytes = Math.max(0, next.bytes - prev.bytes);
     if (dIngest) meter.ingest(name, dIngest);
-    // F2 attribution: split drop causes into distinct meter reasons (they sum to
-    // the old single "ring-recycled" total, so the drop invariant is unchanged).
+    // Split drop causes into distinct meter reasons; they sum to the total, so
+    // the drop invariant holds.
     if (dDropQueue) meter.drop("queue-overflow", dDropQueue);
     if (dDropRing) meter.drop("ring-recycled", dDropRing);
     if (dWritten) meter.emit("written", dWritten);
@@ -140,9 +140,9 @@ export function foldStreamStats(
   return out;
 }
 
-// Pure: ruling-3 per-frame metadata dispatch (extras correlation).
+// Pure: per-frame metadata dispatch (extras correlation).
 
-/** The session's ruling-3 handler: given a NEW frame's stream + seq + TRUSTED
+/** The session's per-frame handler: given a NEW frame's stream + seq + TRUSTED
  *  capture time (`tNs`, ns — device time when the source stamps it, else the
  *  container axis clock), return per-frame extras to ride the telemetry
  *  channel, or null. This `tNs` is the value future FIN pairing correlates on.
@@ -182,9 +182,9 @@ export interface ExtrasMessage {
 }
 
 /**
- * Invoke the ruling-3 callback for one frame and, if it returns extras, build
+ * Invoke the per-frame callback for one frame and, if it returns extras, build
  * the telemetry doc (`{stream, seq, t, ...extras}`, `t` = the TRUSTED capture
- * time in SECONDS — the exact legacy `telemetry` channel shape) and post it
+ * time in SECONDS — the `telemetry` channel shape) and post it
  * with the OWNING frame's `logTimeNs` (so the telemetry message logs on the
  * same container axis as its frame). Returns the message posted (or null when
  * there are no extras / no callback). Pure over the injected callback + post
@@ -300,7 +300,7 @@ export interface RecorderPipeConnection {
     /** Advert significant-bit depth. Copied VERBATIM — NOT derived from
      *  `pixelFormat` (a codec-suffixed name would defeat the registry lookup). */
     significantBits?: number;
-    /** C-20 slot size (over-provisioned). */
+    /** Slot size (over-provisioned). */
     maxBytes?: number;
   };
   /** Disconnect (refcount--) — parks the producer when the last consumer goes. */
@@ -309,16 +309,16 @@ export interface RecorderPipeConnection {
 
 /** A multi-fovea target descriptor written to a data (non-frame) channel — the
  *  geometry + raw-frame pointers an offline reconstructor needs (imagery is
- *  never re-encoded; multi-fovea-recording r2 ruling 3). `frames` values are
+ *  never re-encoded). `frames` values are
  *  the per-stream mcap sequences the observation corresponds to. */
 export interface FoveaDescriptor {
   /** Observation timestamp (ns). The container axis logTime is stamped by the
    *  brick independently; this is the trusted correlation time in the doc. */
   tNs: number;
   bbox: { x: number; y: number; width: number; height: number };
-  // Pointers are NULLABLE (wave I-2): free-run recordings carry left/right =
-  // null (no trigger-mode pair bound the exposure, pairing-nodes ruling 1); an
-  // evicted/unmatched dts key is likewise null rather than absent. Offline
+  // Pointers are NULLABLE: free-run recordings carry left/right = null (no
+  // trigger-mode pair bound the exposure); an evicted/unmatched dts key is
+  // likewise null rather than absent. Offline
   // readers treat null and missing identically (no frame binds).
   frames: {
     left?: number | null;
@@ -350,20 +350,19 @@ export interface RecorderNodeOptions {
   path: string;
   /** name → pipe. Names are the container channel names. */
   streams: Record<string, { pipeId: string }>;
-  /** Connect each named pipe (refcount++ → C-21 gate → producer runs). The
-   *  connect drives the producer exactly as before; the brick taps the
-   *  producer seam instead of reading the ring. */
+  /** Connect each named pipe (refcount++ → gate → producer runs). The brick
+   *  taps the producer seam directly. */
   connect: RecorderConnect;
   /** ISO session timestamp → the `fovea:session` metadata record. */
   timestamp: string;
-  /** Wide camera intrinsics + distortion singleton (multi-fovea-recording r2
-   *  ruling 2) → written ONCE at start as the `fovea:wide-camera` metadata
+  /** Wide camera intrinsics + distortion singleton → written ONCE at start as
+   *  the `fovea:wide-camera` metadata
    *  record. Values are JSON-encoded into the MCAP string→string metadata map
    *  by the host (nested arrays/numbers survive). Omit ⇒ no record. */
   cameraMatrix?: Record<string, unknown>;
-  /** Ruling-3 per-frame extras callback (optional). */
+  /** Per-frame extras callback (optional). */
   onFrame?: OnRecordedFrame;
-  /** R-2 opt: the streams `onFrame` can actually return extras for. The brick
+  /** The streams `onFrame` can actually return extras for. The brick
    *  produces a per-frame notice (and the host invokes `onFrame`) ONLY for
    *  these. Omit ⇒ every stream posts notices (backward-compatible). */
   extrasStreams?: string[];
@@ -375,7 +374,7 @@ export interface RecorderNodeOptions {
   maxQueuedFrames?: number;
   /** Stats + notices poll cadence (ms, default 250). */
   pollMs?: number;
-  /** R-2: hard ceiling on `stop()`'s finalize wait (ms, default 30_000). A
+  /** Hard ceiling on `stop()`'s finalize wait (ms, default 30_000). A
    *  wedged finalize must NEVER hang session teardown / hardware quiescence:
    *  on expiry we log, abort the native recorder (crash-shape container left
    *  on disk — the documented contract), release the pipes in order, and
@@ -407,7 +406,7 @@ export interface RecorderNodeHandle {
   /** Retire a data channel: the channel STAYS in the container; later
    *  `postData` for it is dropped. No pipe to release (data is pushed). */
   removeDataStream(name: string): void;
-  /** Finalize the container (R-1 drain: detach every tap, drain the queue
+  /** Finalize the container (drain: detach every tap, drain the queue
    *  snapshot, write the mcap summary/index, close), disconnect pipes, and
    *  retire the graph node. Resolves with the finalize stats. */
   stop(): Promise<FinalizeStats>;
@@ -421,9 +420,8 @@ const FRAME_STREAM = (pixelFormat: string, dtype: string): StreamType => ({
 });
 
 /** Advert → the brick's channel metadata map: format fields copied VERBATIM
- *  (the recorder is a format-agnostic socket — no interpretation; ruling 8).
- *  Shared by initial + churned streams so nothing can diverge. Exactly the
- *  fields (and stride fallback) the JS worker wrote. */
+ *  (the recorder is a format-agnostic socket — no interpretation). Shared by
+ *  initial + churned streams so nothing can diverge. */
 export function channelMetadata(spec: RecorderPipeConnection["spec"]): Record<string, string> {
   const shape =
     spec.channels > 1 ? [spec.height, spec.width, spec.channels] : [spec.height, spec.width];
@@ -445,7 +443,7 @@ export function channelMetadata(spec: RecorderPipeConnection["spec"]): Record<st
 /**
  * Create the recorder node. Connects every named pipe, creates the native
  * recorder brick + taps, registers the `recorder/<session>` graph row (+
- * per-stream input edges) and its meter, and drives the ruling-3 callback
+ * per-stream input edges) and its meter, and drives the per-frame callback
  * round-trip on a low-rate poll. `stop()` finalizes.
  */
 export function createRecorderNode(options: RecorderNodeOptions): RecorderNodeHandle {
@@ -503,7 +501,7 @@ export function createRecorderNode(options: RecorderNodeOptions): RecorderNodeHa
 
   // --- create the native brick (container open + writer thread) -------------
   // JSON-encode the wide-camera singleton into the string→string metadata map
-  // (nested arrays/numbers survive) — the exact legacy encoding.
+  // (nested arrays/numbers survive).
   const cameraMatrix = options.cameraMatrix
     ? Object.fromEntries(
         Object.entries(options.cameraMatrix).map(([k, v]) => [
@@ -540,8 +538,8 @@ export function createRecorderNode(options: RecorderNodeOptions): RecorderNodeHa
       telemetryTopic: TELEMETRY_TOPIC,
     });
   } catch (err) {
-    // Build failure unwind (20e8834 discipline): never leave a connected pipe
-    // behind a throw — recording-service releases only its own acquisition,
+    // Build failure unwind: never leave a connected pipe behind a throw —
+    // recording-service releases only its own acquisition,
     // the node's connects are ours to release.
     releaseAllConnections();
     throw err;
@@ -578,11 +576,11 @@ export function createRecorderNode(options: RecorderNodeOptions): RecorderNodeHa
   // deterministically (the brick also refuses late admissions; both guard).
   let finalizing = false;
 
-  // --- the low-rate poll: stats fold + ruling-3 notice dispatch -------------
+  // --- the low-rate poll: stats fold + frame-notice dispatch ----------------
   const pollOnce = (): void => {
     uiStats = foldStreamStats(meter, folds, native.stats(handle));
-    // Ruling-3: drain the brick's frame notices and, when the session callback
-    // returns extras, ride them back on the telemetry channel (correlated by
+    // Drain the brick's frame notices and, when the session callback returns
+    // extras, ride them back on the telemetry channel (correlated by
     // stream+seq, co-clocked via the owning frame's logTimeNs). The frame is
     // ALREADY written natively; this never blocks it.
     for (const notice of native.takeNotices(handle)) {
@@ -637,8 +635,7 @@ export function createRecorderNode(options: RecorderNodeOptions): RecorderNodeHa
     removeStream(name: string): void {
       if (!connections.has(name)) return;
       // The brick detaches the tap SYNCHRONOUSLY (queued frames still write,
-      // the channel stays registered), so the pipe releases immediately — the
-      // worker era's async stream-ended dance is gone.
+      // the channel stays registered), so the pipe releases immediately.
       native.removeStream(handle, name);
       releaseStream(name);
     },
@@ -662,9 +659,8 @@ export function createRecorderNode(options: RecorderNodeOptions): RecorderNodeHa
       finalizing = true;
       clearInterval(pollTimer);
       const durationSec = (performance.now() - startedAt) / 1000;
-      // value-sweep-2026-07-11 (`recording-finalize-truncation-reads-as-success`):
-      // the deadline/failure sentinel now carries `truncated: true` so the
-      // recording service can surface it instead of publishing a clean stop.
+      // The deadline/failure sentinel carries `truncated: true` so the recording
+      // service can surface it instead of publishing a clean stop.
       const truncated: FinalizeStats = {
         messageCount: "0",
         chunkCount: 0,
@@ -678,8 +674,8 @@ export function createRecorderNode(options: RecorderNodeOptions): RecorderNodeHa
       } catch {
         /* stats/notices are best-effort on the way down */
       }
-      // R-1 finalize with the R-2 hard deadline: a wedged writer must NEVER
-      // hang teardown / hardware quiescence. On expiry: abort (crash-shape
+      // Finalize with the hard deadline: a wedged writer must NEVER hang
+      // teardown / hardware quiescence. On expiry: abort (crash-shape
       // container left on disk — the documented contract) and return truncated.
       const finalizePromise: Promise<FinalizeStats | null> = native
         .finalize(handle, durationSec)
@@ -701,8 +697,7 @@ export function createRecorderNode(options: RecorderNodeOptions): RecorderNodeHa
       if (stats === null) {
         // Deadline expiry (or a finalize failure): abort unblocks the native
         // finalize waiter; give it a short grace so destroy() is safe. A writer
-        // wedged in a syscall keeps its handle (leaked — process exit recovers),
-        // matching the worker era's terminate best-effort.
+        // wedged in a syscall keeps its handle (leaked — process exit recovers).
         report(
           "recorder-node",
           `finalize exceeded ${finalizeDeadlineMs}ms or failed — aborting; ` +
@@ -722,7 +717,7 @@ export function createRecorderNode(options: RecorderNodeOptions): RecorderNodeHa
       }
       if (deadlineTimer) clearTimeout(deadlineTimer);
       // Final stats fold AFTER the drain completed so `stats()` reflects every
-      // frame the finalize drain wrote (the worker era's final stats push).
+      // frame the finalize drain wrote.
       try {
         uiStats = foldStreamStats(meter, folds, native.stats(handle));
       } catch {

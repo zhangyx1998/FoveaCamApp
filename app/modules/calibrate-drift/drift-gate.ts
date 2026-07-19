@@ -20,7 +20,7 @@ export interface LockState {
 /** Gate a derived value on that eye's tracker holding a live marker lock. A
  *  drift derived while the fovea tracker is unlocked is a plausible-looking but
  *  meaningless value (mirror parked at origin) — publish/commit null instead
- *  (regression vs master; the UI enables "Update Drift" off `derived` non-null). */
+ *  (the UI enables "Update Drift" off `derived` non-null). */
 export function gateOnLock<T>(value: T | null, tracker: LockState | null | undefined): T | null {
   return tracker && tracker.target ? value : null;
 }
@@ -37,7 +37,7 @@ export function driftDelta(derived: Point2d | null, saved: Point2d | null): numb
 /** Below this angular delta (radians) a re-committed drift is within marker-
  *  tracking measurement noise — committing it is churn, not signal — so the
  *  Update button is disabled. ~0.03° is a deliberately conservative floor;
- *  revisit once the stage-f rig pass measures the real tracker jitter. */
+ *  revisit once a hardware pass measures the real tracker jitter. */
 export const DRIFT_NOISE_FLOOR_RAD = 5e-4;
 
 /** Whether a derived drift is worth committing: present AND at least a noise

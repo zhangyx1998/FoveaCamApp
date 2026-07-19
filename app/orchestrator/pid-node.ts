@@ -62,7 +62,7 @@ export interface PidNodeOptions<V> {
    * Release hook: reseed the controllers from the LAST override value so the
    * resumed control output is continuous. Invoked by `override.release()` with
    * the value the slot held at release. Omit only if a jump on release is
-   * acceptable — the directive requires it for the drag path.
+   * acceptable (required for the drag path).
    */
   seed?: (lastOverride: V) => void;
 }
@@ -168,7 +168,7 @@ export function createPidNode<V>(opts: PidNodeOptions<V>): PidNodeHandle<V> {
     },
   };
 
-  // --- topology wiring (C-24 stage-1 shim) -----------------------------------
+  // --- topology wiring (shim) -----------------------------------
   const inputType = (i: PidNodeInput): StreamType => i.type ?? PID_STREAM;
   const wiring: GraphWiring = {
     nodes: [
@@ -201,11 +201,11 @@ export function createPidNode<V>(opts: PidNodeOptions<V>): PidNodeHandle<V> {
   const unregister = registerGraphWiring(wiring);
 
   // Self-meter keyed by the NODE id (the fold reads workloads by id when no
-  // statsKey is set): without it the pid → controller edge had NO tx rate,
-  // and the controller's serial meter (empty `inputs`) supplied a false
-  // 0 Hz rx — the profiler edge read "0Hz" during live control. `step`
-  // emits one unit per output port per tick (held or computed — either way
-  // a command went downstream); `ingest` is the caller's per-arrival hook.
+  // statsKey is set): without it the pid → controller edge would have no tx
+  // rate, and the controller's serial meter (empty `inputs`) would supply a
+  // false 0 Hz rx — the profiler edge reading "0Hz" during live control.
+  // `step` emits one unit per output port per tick (held or computed — either
+  // way a command went downstream); `ingest` is the caller's per-arrival hook.
   const meter = registerWorkload(id, {
     inputs: opts.inputs.map((i) => i.port),
     outputs: opts.outputs.map((o) => o.port),
@@ -258,8 +258,8 @@ export function createPidNode<V>(opts: PidNodeOptions<V>): PidNodeHandle<V> {
 /**
  * Server-side mapping from a {@link PidOverrideCommand} to the slot, returning
  * the fresh {@link PidOverrideState} for the module to `setState`. Keeps the
- * engage/update/release wiring identical across modules (deliverable 3's
- * "reusable by any module"): a module's command handler is one line —
+ * engage/update/release wiring identical across modules (reusable by any
+ * module): a module's command handler is one line —
  * `return applyPidOverride(node.override, arg)` followed by mirroring the
  * result into contract state.
  */

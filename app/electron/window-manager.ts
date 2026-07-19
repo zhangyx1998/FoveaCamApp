@@ -26,8 +26,8 @@ export interface WindowDescriptor {
   appId?: string;
   /** Entry path relative to the renderer root (dev URL / dist file). */
   entry: string;
-  /** URL query string (starts with "?") carrying state-in-URL params
-   *  (multi-window.md req. 7) — appended to the dev-server URL or passed as
+  /** URL query string (starts with "?") carrying state-in-URL params —
+   *  appended to the dev-server URL or passed as
    *  `loadFile`'s `search` in a packaged build. */
   search?: string;
   /** Restore geometry (from a manifest); spawn uses defaults when absent. */
@@ -38,19 +38,19 @@ export interface WindowDescriptor {
   fullscreen?: boolean;
   maximized?: boolean;
   /** Full landing URL to restore (overrides `entry` when given — carries the
-   *  state params, multi-window.md req. 7). */
+   *  state params). */
   url?: string;
   /** Viewer windows: the opened `.fovea` path — the one-window-per-file
-   *  dedupe key (recorder-container.md §4). */
+   *  dedupe key. */
   fileKey?: string;
-  /** WS2 2a: the parent window this one belongs to (a sub-window of an app).
+  /** The parent window this one belongs to (a sub-window of an app).
    *  When the owner closes, this window's class `onOwnerClose` policy decides
    *  whether it cascades closed or survives. Undefined for top-level windows. */
   owner?: ManagedWindow;
-  /** WS2 2a: dedupe key for the `toggle` primitive (2b's debug drawer) — the
-   *  generalized form of `fileKey`'s open-or-focus dedupe, plus a close path. */
+  /** Dedupe key for the `toggle` primitive — the generalized form of
+   *  `fileKey`'s open-or-focus dedupe, plus a close path. */
   key?: string;
-  /** Stable per-instance id (A-34): minted by the manager at spawn
+  /** Stable per-instance id: minted by the manager at spawn
    *  (`<appId|class>-<n>`, unique among LIVE windows) and threaded into the
    *  window URL as `?win=` so the renderer knows its own identity and it
    *  survives reloads + manifest restores. Callers never set this — the
@@ -66,12 +66,12 @@ export interface ManagedWindow {
   readonly appId?: string;
   /** Mirror of `WindowDescriptor.fileKey` (viewer windows only). */
   readonly fileKey?: string;
-  /** Mirror of `WindowDescriptor.owner` (sub-windows only) — WS2 2a. */
+  /** Mirror of `WindowDescriptor.owner` (sub-windows only). */
   readonly owner?: ManagedWindow;
-  /** Mirror of `WindowDescriptor.key` (toggle-managed windows) — WS2 2a. */
+  /** Mirror of `WindowDescriptor.key` (toggle-managed windows). */
   readonly key?: string;
-  /** Mirror of `WindowDescriptor.windowId` (A-34) — every spawned window has
-   *  one (optional only for pre-A-34 fakes/tests). */
+  /** Mirror of `WindowDescriptor.windowId` — every spawned window has
+   *  one (optional only for fakes/tests). */
   readonly windowId?: string;
   focus(): void;
   close(): void;
@@ -114,7 +114,7 @@ function searchOf(url: string | undefined): string | undefined {
 }
 
 /** The `?win=` id carried by a (possibly absent) URL or search string — how a
- *  manifest-restored window keeps its pre-restart identity (A-34). */
+ *  manifest-restored window keeps its pre-restart identity. */
 export function windowIdOf(urlOrSearch: string | undefined): string | undefined {
   if (!urlOrSearch) return undefined;
   const search = urlOrSearch.startsWith("?") ? urlOrSearch : searchOf(urlOrSearch);
@@ -157,7 +157,7 @@ export class WindowManager {
     return this.byClass("app")[0] ?? null;
   }
 
-  /** Open sub-windows owned by `win` (WS2 2a). */
+  /** Open sub-windows owned by `win`. */
   childrenOf(win: ManagedWindow): ManagedWindow[] {
     return this.open().filter((w) => w.owner === win);
   }
@@ -165,9 +165,9 @@ export class WindowManager {
   /** Main.ts must call this from the BrowserWindow "closed" event. */
   onWindowClosed(win: ManagedWindow): void {
     this.windows.delete(win);
-    // WS2 2a: cascade-close owned children whose CLASS opts into it. A
+    // Cascade-close owned children whose CLASS opts into it. A
     // `survive` child (projection/viewer default) stays open with its frozen
-    // last frame; a `cascade` child (2b's debug drawer) closes with its owner.
+    // last frame; a `cascade` child closes with its owner.
     // Closing a child re-enters here for it, so grandchildren cascade too.
     for (const child of this.childrenOf(win))
       if (WINDOWS[child.class].onOwnerClose === "cascade" && !child.isDestroyed())
@@ -190,7 +190,7 @@ export class WindowManager {
     this.quitting = true;
   }
 
-  /** Quit teardown (orchestrator-lifecycle-and-exit gap 5): close owned
+  /** Quit teardown: close owned
    *  sub-windows FIRST so their `onOwnerClose` cascade runs before the app/top
    *  windows they belong to, then everything else — establishing the
    *  window-first order (sub-windows → app windows → orchestrator handshake).
@@ -209,7 +209,7 @@ export class WindowManager {
     return win;
   }
 
-  // A-34: stable per-instance window identity. Monotonic mint counter —
+  // Stable per-instance window identity. Monotonic mint counter —
   // uniqueness matters among LIVE windows (+ stability across reloads/manifest
   // restores, which recover the id from the persisted URL); collisions after
   // a restore are dodged by probing the live set.
@@ -259,8 +259,8 @@ export class WindowManager {
    * Open (or focus) the app-wide Settings window (Cmd+, / "Settings…" menu).
    * SINGLETON — a second open focuses the existing one (like `ensureWelcome`).
    * Unbound + orchestrator-free: its store goes straight to MAIN (the single
-   * config authority, config-store-main-authority.md), so cross-window edits
-   * apply live with no orchestrator instance to back it.
+   * config authority), so cross-window edits apply live with no orchestrator
+   * instance to back it.
    */
   openConfig(): ManagedWindow {
     const existing = this.byClass("config")[0];
@@ -288,9 +288,8 @@ export class WindowManager {
   }
 
   /**
-   * Open (or focus) a profiler window pinned to ONE orchestrator instance
-   * (orchestrator-lifecycle-and-exit §"Profiler per-instance binding"). No
-   * longer a singleton: it keys by `instanceId` so re-clicking the chart icon
+   * Open (or focus) a profiler window pinned to ONE orchestrator instance. Not
+   * a singleton: it keys by `instanceId` so re-clicking the chart icon
    * for the SAME live instance re-focuses its existing profiler, while a NEW
    * app (a new instance) opens a SECOND profiler — the two coexist, each pinned
    * (possibly to a dead instance) and each titled with its own session. The
@@ -331,8 +330,8 @@ export class WindowManager {
   }
 
   /**
-   * Open a recorder viewer window for one `.fovea` file
-   * (recorder-container.md §4). 0..N across files but ONE PER FILE — a
+   * Open a recorder viewer window for one `.fovea` file.
+   * 0..N across files but ONE PER FILE — a
    * second open of the same path focuses the existing window. Never counted
    * for the welcome rule, never exclusive, never drained.
    */
@@ -356,8 +355,8 @@ export class WindowManager {
   }
 
   /**
-   * Keyed toggle primitive (WS2 2a) — the reusable substrate for 2b's debug
-   * drawer. The generalized form of `openViewer`'s dedupe, plus a close path:
+   * Keyed toggle primitive — the reusable substrate for the debug drawer.
+   * The generalized form of `openViewer`'s dedupe, plus a close path:
    * if a window with `key` is already open, close it (toggle off) and return
    * null; otherwise spawn it (toggle on) and return the new window. The caller
    * supplies the full descriptor (class, entry, `owner`, …); `key` is stamped
@@ -373,9 +372,9 @@ export class WindowManager {
   }
 
   /**
-   * Toggle a module's `debug`-class sub-window (WS2 2b) — the FIRST
-   * `owner`-setting caller of `toggle`, proving the 2a substrate end to end.
-   * Owner-bound (`debug` is the sole `onOwnerClose: cascade` class): it tears
+   * Toggle a module's `debug`-class sub-window — an `owner`-setting caller of
+   * `toggle`. Owner-bound (`debug` is the sole `onOwnerClose: cascade` class):
+   * it tears
    * down when the opener app window closes or is switched away. The `session`
    * name + `kind` ride the URL (the mounted module component resolves its own
    * contract/pipes from them).
@@ -383,8 +382,8 @@ export class WindowManager {
    * `kind` (default `debugger`) selects WHICH module component the `debug`
    * host mounts (`debug-registry`), and — because it is part of the dedupe key
    * `debug:<session>:<kind>` — lets ONE session own more than one such window
-   * at a time (its debugger AND its capture-preview, capture-recorder-nodes.md
-   * ruling 8). Same session + same kind still dedupes to one window.
+   * at a time (its debugger AND its capture-preview). Same session + same kind
+   * still dedupes to one window.
    */
   toggleDebug(
     session: string,
@@ -403,7 +402,7 @@ export class WindowManager {
   /**
    * OPEN-OR-FOCUS a module's `debug`-class sub-window (never closes) — the
    * idempotent sibling of `toggleDebug` for callers that must ENSURE the window
-   * is up (capture-recorder-nodes.md ruling 8 / Phase 4: the capture / raster
+   * is up (the capture / raster
    * buttons open the preview window after a shot without a second click
    * toggling it back shut). Same dedupe key + owner cascade as `toggleDebug`.
    */
@@ -429,10 +428,10 @@ export class WindowManager {
   }
 
   /**
-   * Open a projection window for one stream (multi-window.md req. 4).
+   * Open a projection window for one stream.
    * 0..N instances — never a singleton, never exclusive, never counted for
    * the welcome rule, never drained (passive subscriber), and deliberately
-   * left open when its source app closes (§5.3 adopted default: frozen last
+   * left open when its source app closes (frozen last
    * frame; the stream resumes if the topic comes back).
    */
   openProjection(
@@ -440,7 +439,7 @@ export class WindowManager {
     opts: { bounds?: WindowBounds; url?: string } = {},
   ): ManagedWindow {
     // Two seed shapes: the split-view path passes a serialized pane descriptor
-    // (`?pane=…`, projection-split-view.md); the legacy single-stream path
+    // (`?pane=…`); the single-stream path
     // passes `{session, frame}` (`?session=…&frame=…`). The window reads either
     // and then serializes its live split tree into `?layout=…` itself.
     const query =
@@ -536,7 +535,7 @@ export class WindowManager {
           // Recover the per-instance binding from the persisted URL so a
           // restored profiler keeps its pin + dedupe key. The instance itself is
           // gone after a restart, so it opens straight into the frozen "session
-          // ended" state — correct (it must never re-attach, ruling 2).
+          // ended" state — correct (it must never re-attach).
           const search = searchOf(w.url);
           const q = search ? new URLSearchParams(search.slice(1)) : null;
           this.openProfiler({

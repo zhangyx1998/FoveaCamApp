@@ -80,12 +80,12 @@ describe("IMM predictor conformance vectors", () => {
     });
   });
 
-  it("pins the R1 coast cap (mirror-flicker 2026-07-12) to the shared vectors", async () => {
+  it("pins the R1 coast cap to the shared vectors", async () => {
     // predictAfter(coastMs): found=true coasting predictions only while
     // coastMs <= maxGapMs; past the cap the miss-coast shape (found=false,
     // coasting=true, center=null) — a stalled source must never extrapolate
     // quadratically forever. Same numbers pinned on the native brick by
-    // core/test/42-imm-predictor.ts §6.
+    // core/test/42-imm-predictor.ts.
     const fixture = JSON.parse(
       await readFile(
         resolve(process.cwd(), "../docs/schema/codec/imm-vectors.json"),

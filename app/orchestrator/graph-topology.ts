@@ -44,7 +44,7 @@ export interface TopologyDeps {
 }
 
 /** A registered node may name a LEGACY meter key its stats fold from (e.g.
- *  "tracking:kcf") — node ids and meter names converge (B-24), so new meters
+ *  "tracking:kcf") — node ids and meter names converge, so new meters
  *  need no statsKey. */
 export type WiredNode = GraphNode & { statsKey?: string };
 export interface GraphWiring {
@@ -65,9 +65,9 @@ const SATURATED_UTILIZATION = 0.9;
 
 const wirings = new Set<GraphWiring>();
 
-/** STAGE-1 SHIM: a session registers its fixed composition on activate; the
- *  disposer (drain) removes it. Superseded when sessions report `NodeReport`s
- *  directly (see the migration story above). */
+/** SHIM: a session registers its fixed composition on activate; the
+ *  disposer (drain) removes it. Replaced when sessions report `NodeReport`s
+ *  directly. */
 export function registerGraphWiring(wiring: GraphWiring): () => void {
   wirings.add(wiring);
   return () => wirings.delete(wiring);
@@ -79,9 +79,8 @@ function statsFrom(w: WorkloadSnapshot | undefined): NodeStats | undefined {
   let ratePerSec = 0;
   let maxIntervalMs = 0;
   // Defensive reads throughout: one malformed probe row must degrade to a
-  // partial badge, never crash `perfSnapshot` (rig 2026-07-08: tracker/
-  // converter rows without `drops` blanked the graph + broke export
-  // everywhere). `nativeProbes()` normalizes, but wirings inject rows too.
+  // partial badge, never crash `perfSnapshot`. `nativeProbes()` normalizes,
+  // but wirings inject rows too.
   for (const s of Object.values(w.outputs ?? {})) {
     ratePerSec = Math.max(ratePerSec, s.ratePerSec ?? 0);
     maxIntervalMs = Math.max(maxIntervalMs, s.maxIntervalMs ?? 0);
@@ -111,11 +110,11 @@ let seq = 0;
 
 // --- ADAPTER (a): Pipe.list() → NodeReports ---------------------------------
 
-/** COMPAT ADAPTER — dies with the native `Topology.report()` NAPI (P3).
- *  Every advertised SHM pipe → a pipe-transport report; every
- *  `camera/<serial>/...` pipe also synthesizes its implicit raw-source root
- *  (`camera/<serial>`, native transport) and declares the PHYSICAL
- *  camera→brick input (see the header note on fused pipelines). */
+/** COMPAT ADAPTER for the native `Topology.report()` NAPI. Every advertised
+ *  SHM pipe → a pipe-transport report; every `camera/<serial>/...` pipe also
+ *  synthesizes its implicit raw-source root (`camera/<serial>`, native
+ *  transport) and declares the PHYSICAL camera→brick input (see the header
+ *  note on fused pipelines). */
 export function pipeListToReports(pipes: PipeListRow[]): NodeReport[] {
   const cameras = new Map<string, NodeReport>();
   const reports: NodeReport[] = [];
@@ -159,12 +158,13 @@ export function pipeListToReports(pipes: PipeListRow[]): NodeReport[] {
 
 // --- ADAPTER (b): registerGraphWiring entries → NodeReports ------------------
 
-/** COMPAT ADAPTER — dies when sessions post `NodeReport`s directly. Wiring
- *  edges move into the TARGET node's `inputs` (edge ownership per §6); an edge
- *  targeting a node the wiring doesn't declare gets a minimal placeholder
- *  report (merged input-union with whichever layer really owns that id).
- *  `statsKey` folding preserved: the legacy meter row is attached as the
- *  report's stats; a pre-reduced `WiredNode.stats` badge rides `badge`. */
+/** COMPAT ADAPTER for wirings that haven't migrated to posting `NodeReport`s
+ *  directly. Wiring edges move into the TARGET node's `inputs` (edge
+ *  ownership); an edge targeting a node the wiring doesn't declare gets a
+ *  minimal placeholder report (merged input-union with whichever layer really
+ *  owns that id). `statsKey` folding preserved: the legacy meter row is
+ *  attached as the report's stats; a pre-reduced `WiredNode.stats` badge rides
+ *  `badge`. */
 export function wiringToReports(
   entries: Iterable<GraphWiring>,
   workloads: Record<string, WorkloadSnapshot>,
@@ -215,7 +215,7 @@ export interface ReportFoldOpts {
   at?: number;
 }
 
-/** PRIMARY entry (unified-time-and-topology §6): fold `NodeReport`s into the
+/** PRIMARY entry: fold `NodeReport`s into the
  *  served `GraphTopology`. Nodes = reports; edges = flatten(inputs); pipe
  *  reports with live consumers additionally grow an aggregate consumer-sink
  *  node (renderer views/one-shot readers connect anonymously via the broker —
@@ -288,7 +288,7 @@ export function buildTopologyFromReports(
           ? Math.max(0, txHz - rxHz)
           : snap?.drops?.ratePerSec;
       // FIFO (lossless) edges report the consumer's high-water mark IN PLACE OF
-      // a drop rate (controller-node-and-fifo-edges §2). Only when the consumer
+      // a drop rate. Only when the consumer
       // snapshot carries a well-formed `queue`; explicit `input.lossy === false`
       // already defeats the pipe-producer default above so a FIFO input off a
       // pipe producer still lands here. Malformed queue → attribute absent.
@@ -382,7 +382,7 @@ function inputQueueStat(
   };
 }
 
-/** Consumer-side FIFO queue stats for a NON-lossy edge (§2): the trailing-10s
+/** Consumer-side FIFO queue stats for a NON-lossy edge: the trailing-10s
  *  high-water mark + capacity (+ last-sampled depth). Defensive — a partial or
  *  non-numeric `queue` degrades to `undefined`, never throws. */
 function queueEdgeStat(
@@ -431,7 +431,7 @@ function inputMaxIntervalMs(w: WorkloadSnapshot | undefined): number | undefined
  *  placeholder targeting a pipe-derived node adds its edge without touching
  *  the node). ACROSS layers a later layer REPLACES an earlier one outright —
  *  node fields AND inputs — so a real `NodeReport` fully supersedes adapter
- *  synthesis (§6: the report knows its ACTUAL connections; no synthesized
+ *  synthesis (the report knows its ACTUAL connections; no synthesized
  *  edges survive next to it). */
 function mergeReportLayers(layers: NodeReport[][]): NodeReport[] {
   const merged = new Map<string, AdapterReport>();
@@ -483,8 +483,8 @@ function unionInputs(target: AdapterReport, source: NodeReport): void {
 // --- Legacy entry (unchanged signature/behavior) ------------------------------
 
 /** Thin composition kept for `system.ts`/`index.ts`: adapters → real reports
- *  (win by id) → the universal fold. Signature and served behavior are
- *  IDENTICAL to pre-v2 — the regression tests pin the adapter output. */
+ *  (win by id) → the universal fold. The regression tests pin the adapter
+ *  output. */
 export function buildTopology(deps: TopologyDeps): GraphTopology {
   const at = deps.now?.() ?? Date.now();
   const workloads = deps.workloads();
@@ -520,7 +520,7 @@ function inputRate(w: WorkloadSnapshot | undefined): number | undefined {
   // `undefined` (not 0) when the meter declares NO input channels — mirrors
   // `outputRate`. A meter that doesn't observe its inputs (the controller's
   // serial meter: `inputs: []`) must not claim a 0 Hz rx for edges into its
-  // node; that read as "controller input edge: 0Hz" during live control.
+  // node; that would read as "controller input edge: 0Hz" during live control.
   if (!w) return undefined;
   let rate: number | undefined;
   for (const s of Object.values(w.inputs ?? {}))

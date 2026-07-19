@@ -24,8 +24,8 @@ private:
   size_t max_size = 0;
   // Exact high-water mark: the largest queue.size() ever observed at push
   // (under the same mutex). `take_high_water()` reads-and-resets it so a
-  // reader can maintain a windowed max (FIFO-edge metering, controller-node-
-  // and-fifo-edges §1). Never decreases except on take/flush.
+  // reader can maintain a windowed max (FIFO-edge metering). Never decreases
+  // except on take/flush.
   size_t high_water_ = 0;
 
   void push(T data) {

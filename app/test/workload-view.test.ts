@@ -1,6 +1,6 @@
 // `@src/profiler/workload-view` — the pure snapshot→view-model transform
-// behind the profiler's uniform workload sections (C-7, workload-metering.md
-// §4). Pure data-in/data-out: time comes from the snapshots' own
+// behind the profiler's uniform workload sections. Pure data-in/data-out:
+// time comes from the snapshots' own
 // `window.snapshotAt`, so no fake timers are needed.
 
 import { describe, expect, it } from "vitest";
@@ -169,9 +169,9 @@ describe("utilizationLevel — the meter's status tint thresholds", () => {
   });
 });
 
-describe("workloadRows — C-18 maxIntervalMs + stall highlight", () => {
+describe("workloadRows — maxIntervalMs + stall highlight", () => {
   // maxIntervalMs rides the snapshot at runtime; the A-owned counter type does
-  // not carry it yet (handoff logged), so cast the mock counters here.
+  // not carry it yet, so cast the mock counters here.
   const withInterval = (
     v: Record<string, { count: number; ratePerSec: number; maxIntervalMs: number }>,
   ) => v as unknown as WorkloadSnapshot["inputs"];

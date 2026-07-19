@@ -36,14 +36,13 @@
 
 namespace Arv {
 
-/** Matcher strategy (stereo-throughput.md ruling 1: "the matcher is not
- *  sacred") — selectable live like every other reactive param. */
+/** Matcher strategy — selectable live like every other reactive param. */
 enum class StereoAlgorithm { SGBM = 0, BM = 1 };
 
 // The reactive matcher spec — validated on the NAPI thread (see
 // StereoStream.cpp), applied on the brick thread (rebuilds the matcher).
 // numDisparities rounded up to a multiple of 16 (min 16); blockSize forced odd
-// (min 1); minDisparity any (signed — sgbm-signed-range.md).
+// (min 1); minDisparity any (signed).
 //
 // Throughput params (stereo-throughput.md): `matchScale` (1|2|4) matches at
 // 1/scale resolution with the window scaled alongside (numDisparities/scale,
@@ -277,7 +276,7 @@ private:
   void stopPaired() {
     // Close the channel FIRST (ChainedStream deadlock discipline): wakes an
     // iteratePaired() blocked in read(), then drop the subscriber so the pair
-    // brick stops fanning to us (its keep-alive keeps it running — ruling 5).
+    // brick stops fanning to us (its keep-alive keeps it running).
     {
       auto ref = recCh_.ref();
       if (*ref)

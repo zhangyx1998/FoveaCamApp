@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Multi-fovea recording END-TO-END soak (wave I-2). Drives the REAL recording
+// Multi-fovea recording END-TO-END soak. Drives the REAL recording
 // controller — the refcounted raw-pipe registry over NATIVE raw12p taps
 // (fake camera), the REAL zlib CompressStream brick on one stream, the real
 // recorder node worker — through a free-run recording with DESCRIPTOR CHURN
@@ -18,7 +18,7 @@
 //       significantBits injected by the advertiser);
 //   (e) seek before a mid-file channel's first message = no message, no crash;
 //   (f) full teardown: registry refcounts at zero, pipes retired.
-// Live pair→descriptor binding is RIG-GATED (stage-f — fake cameras don't
+// Live pair→descriptor binding is not exercised here (fake cameras don't
 // stamp device time and there is no FIN source here); the dts→seq re-keying
 // is unit-tested in multi-fovea-recording.test.ts.
 //

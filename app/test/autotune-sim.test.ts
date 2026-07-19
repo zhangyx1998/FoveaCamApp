@@ -1,9 +1,9 @@
 // Two-stage auto-tune — run machine + optimizer SMOKE TEST against a toy
 // delayed plant driven through the real `stepVergence`/`followTarget` law
-// (docs/proposals/vergence-loop-tuning.md §1: "use simulation only to
-// smoke-test the optimizer itself"). This asserts the pipeline produces
-// finite, bounded gains that improve the SIM cost vs DEFAULT_TUNING — it is
-// NOT a claim about the rig (RIG-GATED; spec docs/spec/disparity-scope.md#autotune).
+// (simulation is used only to smoke-test the optimizer itself). This asserts
+// the pipeline produces finite, bounded gains that improve the SIM cost vs
+// DEFAULT_TUNING — it is
+// NOT a claim about the rig (spec docs/spec/disparity-scope.md#autotune).
 
 import { describe, expect, it } from "vitest";
 import { PID, PID2D } from "@lib/pid";

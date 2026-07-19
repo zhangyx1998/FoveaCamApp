@@ -1,10 +1,8 @@
-// D-item-3 profiler graph interactions — the PURE decision logic behind the
+// Profiler graph interactions — the PURE decision logic behind the
 // node-graph canvas interactions (graph-interactions.ts): ctrl-wheel zoom
 // gating + zoom math, the dragged-position preservation merge, edge-path
 // geometry, and the profiler report-rate parsing. DOM/fullscreen wiring stays
-// thin and untested by design. (The resizable-height block died with ruling 3;
-// the cytoscape control-point decomposition died with the library — the graph
-// now emits `edgePath` SVG cubics directly.)
+// thin and untested by design. (The graph emits `edgePath` SVG cubics directly.)
 
 import { describe, expect, it } from "vitest";
 import {
@@ -81,7 +79,7 @@ describe("profiler report interval parsing", () => {
   });
 });
 
-describe("perpendicular-stem edge geometry (user ruling 1)", () => {
+describe("perpendicular-stem edge geometry", () => {
   it("scales the stem with edge length, clamped both ends", () => {
     expect(stemOffset(10)).toBe(STEM_MIN_PX); // 3.5 < min → clamp up
     expect(stemOffset(200)).toBeCloseTo(70); // 200 * 0.35

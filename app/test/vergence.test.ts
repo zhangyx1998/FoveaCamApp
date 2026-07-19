@@ -1,5 +1,4 @@
-// disparity-scope's `stepVergence` control law (docs/history/refactor/orchestrator.md
-// §7.1 S1a — the §1 flagship migration; PURE since the node split — the
+// disparity-scope's `stepVergence` control law (PURE — the
 // template-match mechanism lives in @orchestrator/template-match-kernel, fed
 // by slice/scale bricks). `stepVergence` is the actual risk surface (error
 // decomposition, PID wiring, sign conventions, low-score hold behavior) and
@@ -81,7 +80,7 @@ function projectionFor(
 // full-resolution fovea against an un-demagnified strip — the "same pixel scale"
 // class of bug) can't pass silently.
 //
-// NOTE (audit 2026-07): the magnification used here is the session's nominal
+// NOTE: the magnification used here is the session's nominal
 // `zoom` STATE (default 9.0), not the calibration-measured fovea/wide ratio
 // (`findPinholeProjection` measures it as `scale` but discards it). The math is
 // self-consistent for any `zoom`; correctness of the *absolute* scale still
@@ -122,13 +121,10 @@ describe("foveaTileSize (fovea↔wide match scale-consistency)", () => {
   });
 });
 
-// The measured-magnification derivation (RULED 2026-07-09 — the old
-// `scale·1000/focal` formula was RETIRED: it assumed the marker sat 1000
-// side-lengths from the camera during extrinsic capture (false on the rig,
-// inflating the match zoom ~16×)). The replacement is a distance-and-size-free
+// The measured-magnification derivation is a distance-and-size-free
 // ratio of the two cameras' marker quads: preferred from the wide camera's
-// view of the SAME side marker (ruling 3 — everything cancels), else the
-// center-marker fallback with the marker-size metadata (ruling 2). Injected
+// view of the SAME side marker (everything cancels), else the
+// center-marker fallback with the marker-size metadata. Injected
 // `area` keeps the math pure; here we use a shoelace area on synthetic quads.
 function shoelace(pts: Point2d[]): number {
   let a = 0;
@@ -150,7 +146,7 @@ function square(side: number): Point2d[] {
 }
 
 describe("recordMagnification (marker-quad ratio, distance/size-free)", () => {
-  it("ruling 3 (preferred): sqrt(area(fovea) / area(wide side marker)) — 9× linear ⇒ 9", () => {
+  it("preferred: sqrt(area(fovea) / area(wide side marker)) — 9× linear ⇒ 9", () => {
     // Fovea sees the side marker 9× larger (linear) than the wide camera does.
     const d: MagnificationSample = {
       img_points: square(90),
@@ -159,7 +155,7 @@ describe("recordMagnification (marker-quad ratio, distance/size-free)", () => {
     expect(recordMagnification(d, shoelace)).toBeCloseTo(9);
   });
 
-  it("ruling 2 (fallback): center-marker ratio scaled by center_mm/side_mm", () => {
+  it("fallback: center-marker ratio scaled by center_mm/side_mm", () => {
     // Fovea side-marker quad 90px; wide CENTER-marker quad 10px → sqrt ratio 9.
     // The center marker is half the physical size of the side (10mm vs 20mm),
     // so the true magnification is 9 × (center_mm/side_mm) = 9 × 0.5 = 4.5.
@@ -228,11 +224,10 @@ describe("fitMagnification (mean/std over supporting records)", () => {
   });
 });
 
-// RULED precedence flip (2026-07-09): an explicit nominal `zoom > 0` is now
-// AUTHORITATIVE over the measured magnification (the old measured-wins path was
-// retired with the false-distance formula). A zoom of 0 is the new "Auto"
+// Precedence: an explicit nominal `zoom > 0` is
+// AUTHORITATIVE over the measured magnification. A zoom of 0 is the "Auto"
 // state → use the measured value, else 1. Session and UI both mirror this.
-describe("matchMagnification (ruled precedence — explicit zoom wins, 0 = Auto)", () => {
+describe("matchMagnification (precedence — explicit zoom wins, 0 = Auto)", () => {
   it("an explicit zoom > 0 is authoritative, even over a measured value", () => {
     expect(matchMagnification(8.7, 9)).toBe(9);
     expect(matchMagnification(8.7, 1)).toBe(1);
@@ -283,7 +278,7 @@ describe("matchMagnification (ruled precedence — explicit zoom wins, 0 = Auto)
     expect(matchMagnification(8.7, 0, NaN)).toBe(8.7); // NaN ⇒ measured
     expect(matchMagnification(8.7, 0, Infinity)).toBe(8.7); // ∞ ⇒ measured
     expect(matchMagnification(null, 0, 0)).toBe(1); // 0 override, no measured ⇒ 1
-    // The old 2-arg call is the override-absent case (unchanged behavior).
+    // The 2-arg call is the override-absent case.
     expect(matchMagnification(8.7, 0)).toBe(8.7);
     expect(matchMagnification(8.7, 9)).toBe(9);
   });
@@ -304,8 +299,8 @@ describe("matchMagnification (ruled precedence — explicit zoom wins, 0 = Auto)
 });
 
 // The `overridden` flag is metadata: stepVergence itself never reads it (the
-// SESSION branches to `followTarget` before calling stepVergence — direct-follow
-// ruling 2026-07-08). Pinning flag-agnosticism here keeps the control law honest
+// SESSION branches to `followTarget` before calling stepVergence). Pinning
+// flag-agnosticism here keeps the control law honest
 // if a future caller ever routes a flagged projection through it.
 describe("stepVergence on an overridden projection (flag is not a control input)", () => {
   it("produces the identical command for overridden and non-overridden inputs", () => {
@@ -342,12 +337,12 @@ describe("stepVergence on an overridden projection (flag is not a control input)
   });
 });
 
-// The drag path (direct-follow rulings 2026-07-08/09): pointer-down RESETS
+// The drag path: pointer-down RESETS
 // pan/verge/v_shift, and while `overridden` the session commands
 // `followTarget` with the (all-zero) controller state — BOTH eyes exactly ON
 // the raw cursor ray, parallel, vergence at INFINITY, no residual
-// corrections; no PID stepping, no match-score gate. The old match-gated drag
-// deadlocked (strip recenters on the dragged target → scores drop → hold →
+// corrections; no PID stepping, no match-score gate. A match-gated drag would
+// deadlock (strip recenters on the dragged target → scores drop → hold →
 // foveas never move); these pin the follow map + the release continuity that
 // replaces the seed on this path.
 describe("followTarget (drag: parallel follow on the raw ray, vergence at infinity)", () => {
@@ -657,7 +652,7 @@ describe("stepVergence", () => {
   });
 });
 
-// R2 (vergence-loop-tuning §2): the vergence controllers run derivative-on-
+// The vergence controllers run derivative-on-
 // measurement, and stepVergence supplies each DOF's measurement point. Only
 // PAN actually changes behavior — its setpoint (the target ray) moves during
 // follow; verge/v_shift regulate to a CONSTANT 0-disparity setpoint, so their
@@ -734,7 +729,7 @@ describe("stepVergence derivative-on-measurement (R2 — no target kick)", () =>
   });
 });
 
-// R1 (vergence-loop-tuning §2): the capture-epoch target ring. The join
+// The capture-epoch target ring. The join
 // resolves the target AS OF the matched frame's capture timestamp (trusted
 // host-ns deviceTimestamp) so the PID error never contains phantom
 // target-motion the matches haven't seen yet.

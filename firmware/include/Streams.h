@@ -52,8 +52,8 @@ void snapshot(MirrorPosition &left, MirrorPosition &right);
 // live targets. No-op when no stream is active.
 void touch();
 
-// Call every loop() tick, BEFORE tick(): M1 periodic config re-assertion
-// (docs/dev/right-dac-freeze-2026-07-12.md). While the system is enabled,
+// Call every loop() tick, BEFORE tick(): periodic config re-assertion. While
+// the system is enabled,
 // re-sends the idempotent MEMS setup words at ~1 Hz (never a RESET or a value
 // write, so the mirror never moves) and touch()es the active stream so the
 // next tick() re-commits live targets. Cadence is off Global::time.

@@ -9,7 +9,7 @@
 // running a 3-shot RASTER (indexed accumulation), then proves:
 //   (a) the node holds one resource per shot — the `capture_meta` manifest has
 //       wide (once) + per-shot arrays of fovea/center/left/right/diff;
-//   (b) getPreview returns the node's ACTUAL held data (ruling 7) at 8-bit BGRA
+//   (b) getPreview returns the node's ACTUAL held data at 8-bit BGRA
 //       with correct dims/channels/depth (4-ch for the wrapped foveae + diff,
 //       source-ch for the sliced center; meta-only resources → null);
 //   (c) save() writes files in-worker (per-resource dirs + a `wide.json`);
@@ -206,14 +206,14 @@ describe("capture node soak (real worker + native raw pipes + core/Vision)", () 
     console.log("\n[capture-soak] " + JSON.stringify({ Ww, Hh, CH, BPE, acquisitions, resources: Object.keys(manifest) }, null, 2));
   });
 
-  // --- PIXEL PARITY (R-3 audit item 1): computable numeric ground truth ------
+  // --- PIXEL PARITY: computable numeric ground truth ------
   // Drives the SAME `core/Vision` call sequence the capture worker embeds
   // (stack-average → convertType 16U → makeBGRA → wrapPerspective → diff →
   // downconvert 8U) on UNIFORM synthetic inputs, where the exact result is
   // known independently of any frame content: a uniform stack averages to its
   // value bit-exactly, an identity warp preserves uniformity, makeBGRA is
   // opaque, and the diff of two identical frames is exactly zero. This is the
-  // math whose bytes must match the pre-wave `manual-control/capture.ts`.
+  // math whose bytes must match `manual-control/capture.ts`.
   it("stacks/normalizes/diffs uniform frames to exact known values", () => {
     // makeMat: the @lib/mat shape/channels tag the worker uses verbatim.
     const makeMat = <T extends { shape?: number[]; channels?: number }>(

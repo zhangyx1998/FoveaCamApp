@@ -5,7 +5,7 @@
 // -------------------------------------------------------
 //
 // Main-side spawner for the per-session vision worker: a session on acquire connectPipes
-// its camera pipes (bumping the C-21 gate), then createVisionWorker spawns the bundled
+// its camera pipes (bumping the consumer gate), then createVisionWorker spawns the bundled
 // worker with the shmNames + reader-addon path and pumps params/results over a MessagePort;
 // on release terminate() (tied to the ResourceScope). This host owns the broker/gate and
 // passes only shmNames — the worker is READ-ONLY SHM. Orchestrator-side, Vue-free.
@@ -30,7 +30,7 @@ const requireHere = createRequire(import.meta.url);
 /** Resolve the shm-reader addon path the parent hands the worker (bare
  *  `require` in a worker resolves against cwd, not the app dir — same reason
  *  the recorder worker gets its `@mcap/core` path from the parent). Exported
- *  for `pipe-read-once.ts` (C-23 one-shot capture read — same addon, loaded on
+ *  for `pipe-read-once.ts` (one-shot capture read — same addon, loaded on
  *  the orchestrator thread for a single on-demand frame). */
 export function readerAddonPath(): string {
   const coreEntry = requireHere.resolve("core");

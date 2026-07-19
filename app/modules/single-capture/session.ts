@@ -21,7 +21,7 @@ export default function liveViewSession(): ServerSession<typeof liveview> {
       lease = null;
       if (!serial) return;
       // Lease the shared camera (the registry fans its preview to every viewer).
-      // Retry with backoff — a camera mid-release briefly fails to open (RT1).
+      // Retry with backoff — a camera mid-release briefly fails to open.
       const held = await retryUntil(() => acquire(serial));
       if (!held) return;
       // A newer serial may have superseded us while opening — honor it.

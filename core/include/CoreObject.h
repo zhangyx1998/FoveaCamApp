@@ -60,9 +60,7 @@
  * CoreObject::Create(). It expects exactly one argument of type External<Core>
  *
  * Each Create() call returns a NEW JS wrapper over the (shared) native object
- * — JS `===` does NOT hold across wrappers of the same native object. (A
- * strict-equality instance cache existed behind CORE_OBJECT_FEAT_STRICT_EQ,
- * hardcoded off since inception; removed 2026-07-11, value-sweep Tier 4.)
+ * — JS `===` does NOT hold across wrappers of the same native object.
  */
 template <class Obj, SmartPtrLike _Core>
 class CoreObject : public Napi::ObjectWrap<Obj> {

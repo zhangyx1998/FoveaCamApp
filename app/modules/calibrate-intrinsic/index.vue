@@ -31,8 +31,8 @@ const session = useSession(calibrateIntrinsic, "calibrate-intrinsic");
 // Serial whose Reset is awaiting the two-step confirm (null = none).
 const confirmingReset = ref<string | null>(null);
 const { state, telemetry } = session;
-// Recording context (capture-recorder-everywhere ruling 2): the title-bar
-// RecordButton + Cmd/Ctrl-R record the selected camera's raw sensor stream.
+// Recording context: the title-bar RecordButton + Cmd/Ctrl-R record the
+// selected camera's raw sensor stream.
 new Recording(session, "calibrate-intrinsic");
 // Capture facade — camera-icon toggle of the shared preview window.
 new Capture(session, "calibrate-intrinsic");
@@ -96,8 +96,8 @@ const pattern_h = computed<number>({
   <div v-if="!state.activeSerial" class="items">
     <div class="picker-head">
       <h1 style="margin: 0; padding: 0">Select a camera to calibrate</h1>
-      <!-- Re-enumerate on demand (review #16): the list was populated once on
-           mount — a camera plugged in afterwards never appeared. -->
+      <!-- Re-enumerate on demand so a camera plugged in after mount appears
+           (the list is otherwise populated once on mount). -->
       <button class="refresh" title="Re-scan connected cameras" @click="session.call('refresh', undefined)">
         Refresh
       </button>
@@ -142,14 +142,14 @@ const pattern_h = computed<number>({
           >
             Calibrate (Marker)
           </button>
-          <!-- Two-step confirm (UI/UX review 2026-07-11): reset drops this
-               camera's association and HARD-DELETES an orphaned record — more
-               destructive than the Settings Discard (which trashes), so it
-               must not fire on one click, and the copy must say "permanently". -->
+          <!-- Two-step confirm: reset drops this camera's association and
+               HARD-DELETES an orphaned record — more destructive than the
+               Settings Discard (which trashes), so it must not fire on one
+               click, and the copy must say "permanently". -->
           <!-- Enabled whenever ANY stored calibration exists — including a
                CORRUPT record (calibrated_at set, fov null because the Undistort
                rebuild failed), which is exactly the record one most needs to
-               reset (review #16). -->
+               reset. -->
           <button
             v-if="confirmingReset !== v.info.serial"
             :disabled="!v.fov && !v.calibrated_at"
@@ -186,8 +186,7 @@ const pattern_h = computed<number>({
         <CameraRole v-if="activeView?.role" :role="(activeView.role as any)" />
       </NavBack>
       <!-- Title required: FrameView hides the whole title bar (fullscreen +
-           project icons) on a null title — untitled, this was the one stream
-           view with no projection affordance at all (UI/UX review). -->
+           project icons) on a null title, leaving no projection affordance. -->
       <StreamView
         class="stream"
         title="Preview"
@@ -259,8 +258,8 @@ const pattern_h = computed<number>({
       </div>
       <div class="buttons">
         <button @click="session.call('capture', undefined)" :disabled="!telemetry.detection">Capture</button>
-        <!-- Gated on the shared minimum-sample floor (review #13): a 1–2 view
-             solve persists plausible garbage. The tooltip names the shortfall. -->
+        <!-- Gated on the shared minimum-sample floor: a 1–2 view solve persists
+             plausible garbage. The tooltip names the shortfall. -->
         <button
           @click="session.call('calibrateNow', undefined)"
           :disabled="telemetry.sampleCount < MIN_SOLVE_SAMPLES || telemetry.busy"
@@ -280,7 +279,7 @@ const pattern_h = computed<number>({
         </button>
       </div>
     </div>
-    <!-- CHECKER projection (item 2): white field + black squares projected onto
+    <!-- CHECKER projection: white field + black squares projected onto
          the remote display so the operator has a physical board to calibrate. -->
     <RemoteCanvasTeleport v-if="state.method === 'CHECKER'">
       <rect x="-50vw" y="-50vh" width="100vw" height="100vh" fill="white" />

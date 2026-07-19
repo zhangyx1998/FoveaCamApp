@@ -1,4 +1,4 @@
-// Pointer-obscuration tracker (value-sweep addendum 2026-07-11) — the pure
+// Pointer-obscuration tracker — the pure
 // decision logic behind FrameView/PosView's drag/hover gating
 // (@lib/pointer-obscured): containment vs covered vs outside-the-box, and the
 // rounded-coordinate memo that keeps `elementFromPoint` off the 1 kHz

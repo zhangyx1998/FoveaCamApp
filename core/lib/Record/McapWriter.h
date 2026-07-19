@@ -14,15 +14,14 @@
 // file identically. Conformance is pinned by core/test/39-mcap-writer.ts, which
 // drives this writer AND @mcap/core with identical inputs and byte-compares.
 //
-// WHY hand-rolled (drop diagnosis): the JS recorder made two full copies per
+// WHY hand-rolled: the JS recorder made two full copies per
 // frame (reused SHM read buffer -> fresh ArrayBuffer -> @mcap chunk builder),
 // ran CRC32 in JS, framed a chunk per frame, and served every stream from ONE JS
 // worker. This writer writes straight from a tapped frame buffer (one copy into
 // the writer thread's chunk buffer), uses zlib crc32(), and is owned by a
 // free-running native thread (RecorderStream) instead of a JS worker.
 //
-// The record grammar / CRC coverage is documented in
-// docs/proposals/native-recorder.md and mirrored from @mcap/core's
+// The record grammar / CRC coverage is mirrored from @mcap/core's
 // McapWriter.ts + McapRecordBuilder.ts + ChunkBuilder.ts.
 //
 // THREADING: this class is NOT internally synchronized. Exactly one thread (the

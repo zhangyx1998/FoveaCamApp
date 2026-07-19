@@ -286,9 +286,9 @@ async function captureOnce(): Promise<void> {
           Requires v2.0 firmware — reflash the MCU to run the interleaved
           demo (streams are disabled on this firmware).
         </p>
-        <!-- One identity per state (UI/UX review #9): Auto = derived from the
-             fovea pair's exposure (slider disabled, tracks it live); Manual =
-             pinned. The mode select is the only way in/out of manual. -->
+        <!-- One identity per state: Auto = derived from the fovea pair's
+             exposure (slider disabled, tracks it live); Manual = pinned. The
+             mode select is the only way in/out of manual. -->
         <label
           class="pulse"
           title="CMD_FRAME trigger pulse width. Auto derives it from the fovea pair's configured exposure (Manage Cameras) and follows exposure edits live; Manual pins the value."

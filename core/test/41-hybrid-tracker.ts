@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Higher-FPS HYBRID tracker (2026-07-10): a drop-in replacement for the KCF
+// Higher-FPS HYBRID tracker: a drop-in replacement for the KCF
 // tracker node — windowed NCC + dual anchor/adaptive template + expanding
 // ANCHOR re-detection recovery. Same handle API / TrackResult schema / meter
 // schema / threading model as the KCF tracker, so this test is test 12's
@@ -12,8 +12,8 @@
 //
 // PLUMBING + PARITY only. Tracking QUALITY (found ratio, center accuracy, µs,
 // recovery) is benchmarked in the pure C++ probe — the Aravis fake camera's
-// ramp is SPATIALLY PERIODIC and gives chaotic correlation-tracker verdicts
-// (2026-07-10 memory), so quality MUST NOT be asserted on it. Here we prove:
+// ramp is SPATIALLY PERIODIC and gives chaotic correlation-tracker verdicts,
+// so quality MUST NOT be asserted on it. Here we prove:
 // the thread + async-generator seam + meter schema, override/release re-arm
 // parity, and stall→drop metering — identical to the KCF path.
 // Run UNSANDBOXED: /opt/homebrew/bin/node core/test/41-hybrid-tracker.ts

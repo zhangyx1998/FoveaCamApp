@@ -130,9 +130,9 @@ const props = defineProps<{ path: string }>();
 const titleBarHeight = ref(0);
 
 // --- engine link (window-local playback state) ------------------------------
-// The playback engine is a MAIN-owned utilityProcess (standalone-viewer-and-fcap
-// AS SHIPPED amendment — a renderer can't host a Node worker). Main brokers a
-// MessagePort back over `viewer:port`; we talk to the engine directly over it.
+// The playback engine is a MAIN-owned utilityProcess (a renderer can't host a
+// Node worker). Main brokers a MessagePort back over `viewer:port`; we talk to
+// the engine directly over it.
 
 const file = ref<ViewerFileInfo | null>(null);
 const openError = ref<string | null>(null);
@@ -168,7 +168,7 @@ function onEngineEvent(ev: ViewerEvent): void {
     case "position":
       workerPositionNs.value = ev.positionNs;
       playing.value = ev.playing;
-      // Re-anchor the smooth playhead (ruling 6) to this authoritative sample.
+      // Re-anchor the smooth playhead to this authoritative sample.
       lastPosWall = performance.now();
       if (!ev.playing) displayNs.value = ev.positionNs; // paused sample snaps
       break;
@@ -264,7 +264,7 @@ function cancelClose(): void {
   confirmClose.value = false;
 }
 
-// --- live-capture banner (addendum) ----------------------------------------
+// --- live-capture banner ----------------------------------------
 const bannerState = ref(initialBannerState);
 const showBanner = computed(() => bannerVisible(bannerState.value));
 function dismissBanner(): void {
@@ -286,7 +286,7 @@ const exportUndistortAvailable = computed(
     // A DESIGNATED wide/center only: detectMaster falls back to the first
     // frame channel (designated:false) on recordings that never name one, and
     // applying the wide-camera calibration to an arbitrary (possibly fovea)
-    // stream would silently mis-undistort it (UI/UX review 2026-07-10).
+    // stream would silently mis-undistort it.
     master.value.designated &&
     exportDialogChannel.value != null &&
     exportDialogChannel.value === master.value.channel,
@@ -306,7 +306,7 @@ const exportDialogStat = computed(() => {
   const stat = assembleStaticStats(info);
   // Default fps = the summary-derived rate (avgFps: (count-1)/span). The median-
   // of-deltas detector is applied in the engine's resample path; a per-stream
-  // full timestamp scan at dialog-open is avoided (viewer-export AS-BUILT note).
+  // full timestamp scan at dialog-open is avoided.
   return { width: stat.width, height: stat.height, fps: stat.avgFps ?? 30 };
 });
 
@@ -390,27 +390,27 @@ const pairs = computed(() => detectPairs(frameChannels.value));
 
 const tracks = ref<string[][]>([]); // full layout, row 0 = master track
 const disabled = ref<Set<string>>(new Set());
-// Preview tile order (ruling 2): a persisted permutation of TRACK indices giving
+// Preview tile order: a persisted permutation of TRACK indices giving
 // the left→right slot order. Reconciled against the live track count on use.
 const tileOrder = ref<number[]>([]);
-// GLOBAL 3D view mode (ruling 4, amended user 2026-07-09): one mode for EVERY
+// GLOBAL 3D view mode: one mode for EVERY
 // L/R pair, chosen in the preview header — no longer per pair.
 const threeD = ref<ThreeDMode>("disabled");
 const split = ref<number>(DEFAULT_SPLIT); // preview height fraction
-// Preview tile widths (ruling 3): persisted FRACTIONS (sum 1) — the tiles row
+// Preview tile widths: persisted FRACTIONS (sum 1) — the tiles row
 // always fills 100% and never scrolls. Reconciled to the live slot count on use
 // (`effectiveTileSizes`); an empty list defaults to equal fractions. Divider
 // drags between adjacent tiles rewrite this pair-wise.
 const tileSizes = ref<number[]>([]);
-// Property panel (UI round 2 ruling 4) — persisted visibility + width.
+// Property panel — persisted visibility + width.
 const panelOpen = ref(false);
 const panelWidth = ref<number>(DEFAULT_PANEL_WIDTH);
 const initialized = ref(false);
-/** Non-null while a confirm dialog is up (ruling 10 — corrupt/mismatch). */
+/** Non-null while a confirm dialog is up (corrupt/mismatch). */
 const confirmReset = ref<null | { reason: "corrupt" | "mismatch" }>(null);
 
 /** pair-membership lookup: channel → {pair, mode}. Every pair takes the SINGLE
- *  global mode (ruling 4 amendment); the tile/decode-set derivation is unchanged
+ *  global mode; the tile/decode-set derivation is unchanged
  *  downstream — it just reads one mode for all pairs now. */
 const pairModeOf = computed(() => {
   const m = new Map<string, { pair: (typeof pairs.value)[number]; mode: ThreeDMode }>();
@@ -448,7 +448,7 @@ function persist(): void {
   send({ type: "save-ui", state: currentSidecarState() });
 }
 
-/** Seed a fresh layout + defaults (ruling 10: greedy fit runs ONLY here). */
+/** Seed a fresh layout + defaults (greedy fit runs ONLY here). */
 function initializeLayout(persistIt: boolean): void {
   tracks.value = initialLayout(blocks.value, master.value.channel);
   disabled.value = new Set();
@@ -459,11 +459,11 @@ function initializeLayout(persistIt: boolean): void {
   panelOpen.value = false;
   panelWidth.value = DEFAULT_PANEL_WIDTH;
   initialized.value = true;
-  seekInitial(0); // ruling 1: land on the first meaningful frame
+  seekInitial(0); // land on the first meaningful frame
   if (persistIt) persist();
 }
 
-/** Seek to the initial playhead (ruling 1): a persisted position wins; otherwise
+/** Seek to the initial playhead: a persisted position wins; otherwise
  *  the earliest block start (`firstMeaningfulNs`) so at least one tile shows on
  *  open, instead of a blank t=0. A 0 target (no blocks) is a harmless no-op. */
 function seekInitial(persistedNs: number): void {
@@ -473,7 +473,7 @@ function seekInitial(persistedNs: number): void {
 
 function applySidecar(load: SidecarLoad): void {
   if (load.status === "absent") {
-    // Nothing to lose — silently initialize + persist (ruling 10).
+    // Nothing to lose — silently initialize + persist.
     initializeLayout(true);
     return;
   }
@@ -494,14 +494,14 @@ function applySidecar(load: SidecarLoad): void {
   panelWidth.value = st.panelWidth;
   if (layoutMismatch(st.tracks, frameChannels.value)) {
     // Channels changed since last view: reconcile in-memory (don't discard),
-    // and ask before overwriting (ruling 10).
+    // and ask before overwriting.
     tracks.value = reconcileLayout(st.tracks, frameChannels.value);
     confirmReset.value = { reason: "mismatch" };
   } else {
     tracks.value = st.tracks.map((r) => [...r]);
   }
   initialized.value = true;
-  // Ruling 1: persisted playhead wins; otherwise the first meaningful frame.
+  // persisted playhead wins; otherwise the first meaningful frame.
   seekInitial(st.playheadNs);
 }
 
@@ -521,7 +521,7 @@ function dismissConfirm(): void {
   confirmReset.value = null;
 }
 
-// --- worker decode gate (enabled-set, ruling 3) -----------------------------
+// --- worker decode gate (enabled-set) -----------------------------
 
 const currentDecodeSet = computed(() => decodeSet(enabledFrameChannels.value, pairModeOf.value));
 watch(
@@ -546,8 +546,8 @@ const scrubNs = ref(0);
 const positionNs = computed(() => (scrubbing.value ? scrubNs.value : workerPositionNs.value));
 const durationNs = computed(() => file.value?.durationNs ?? 0);
 
-// --- time viewport (ruling 5) ----------------------------------------------
-// The visible time window over the tracks. NOT persisted this wave — it resets
+// --- time viewport ----------------------------------------------
+// The visible time window over the tracks. NOT persisted — it resets
 // to the full recording whenever a file's duration becomes known. Every pointer
 // x ⟷ time mapping (blocks, playhead, ruler, click-seek, wheel) goes through
 // `fracOf`/`nsAtX` against this so pan/zoom is uniform.
@@ -558,7 +558,7 @@ function fracAtClientX(clientX: number, r: DOMRect): number {
   return r.width > 0 ? Math.min(1, Math.max(0, (clientX - r.left) / r.width)) : 0.5;
 }
 
-// --- smooth playhead (ruling 6) --------------------------------------------
+// --- smooth playhead --------------------------------------------
 // While PLAYING, a rAF loop extrapolates the last worker position by wall-clock
 // · rate so the visual playhead line glides between the (coarser) worker
 // `position` events; each event RE-ANCHORS it, and pause/seek SNAP. Only the
@@ -618,7 +618,7 @@ function seekTo(tNs: number): void {
   send({ type: "seek", tNs: clamped });
 }
 /** Click-to-seek on a timeline track lane (snap). Maps pointer x → time through
- *  the VIEWPORT (`nsAtX`, ruling 5) so it matches the ruler + draggable playhead;
+ *  the VIEWPORT (`nsAtX`) so it matches the ruler + draggable playhead;
  *  `seekTo` clamps to [0, duration]. */
 function seekFromClientX(clientX: number, el: HTMLElement): void {
   const r = tracksEl.value?.getBoundingClientRect() ?? el.getBoundingClientRect();
@@ -626,7 +626,7 @@ function seekFromClientX(clientX: number, el: HTMLElement): void {
   scrubbing.value = false;
 }
 
-// --- draggable playhead (UI round 2 ruling 1) -------------------------------
+// --- draggable playhead -------------------------------
 // The playhead line itself drags along the timeline (no separate scrub input);
 // its hit strip is wider than the 1px line (see `.playhead` in the styles). We
 // map against the TRACKS element rect so the mapping matches lane click-seek.
@@ -654,7 +654,7 @@ function onPlayheadUp(): void {
 
 // --- preview tiles ----------------------------------------------------------
 
-// Ruling 2: ONE tile slot per track — a real tile or a placeholder (no-frame /
+// ONE tile slot per track — a real tile or a placeholder (no-frame /
 // disabled / pair-collapsed). Derived on the RAW worker position (not the smooth
 // playhead) so tiles don't re-derive every animation frame during playback.
 const tileSlotsRaw = computed<TileSlot[]>(() =>
@@ -673,7 +673,7 @@ const orderedSlots = computed<TileSlot[]>(() => {
 /** How many slots actually render a view (placeholders excluded) — the header
  *  count keeps its "N views" meaning. */
 const tileViewCount = computed(() => orderedSlots.value.filter((s) => s.kind === "tile").length);
-/** Persisted tile FRACTIONS reconciled to the live slot count (ruling 3): drops
+/** Persisted tile FRACTIONS reconciled to the live slot count: drops
  *  stale entries, appends missing, renormalizes to sum 1; equal fractions when
  *  none persisted. The width source of truth for the flex row. */
 const effectiveTileSizes = computed(() =>
@@ -689,7 +689,7 @@ function tileFlex(si: number): string {
 function slotKey(slot: TileSlot): string {
   return slot.kind === "tile" ? `t:${tileKey(slot.tile)}` : `p:${slot.track}:${slot.reason}`;
 }
-/** The track hue for a slot's header chip (ruling 4) — same hue as its lane. */
+/** The track hue for a slot's header chip — same hue as its lane. */
 function slotColor(slot: TileSlot): string {
   const row = tracks.value[slot.track];
   return row ? trackColor(row, slot.track) : "transparent";
@@ -733,7 +733,7 @@ void useConfigRef("anaglyph_style").then((r) => {
  *  live disparity-scope and viewer playback match). Each output RGB channel is
  *  sourced from the LEFT frame, the RIGHT frame, or forced 0 per the style map;
  *  grayscale (1ch) sources broadcast. Merged renderer-side into a fresh
- *  3-channel RGB Mat (no core dependency, ruling 4). Uses the min of the two
+ *  3-channel RGB Mat (no core dependency). Uses the min of the two
  *  frames' dims when they differ. */
 function anaglyph(
   l: Mat<Uint8Array>,
@@ -789,7 +789,7 @@ function tileMat(tile: Tile): Mat<Uint8Array> | null {
 function tileKey(tile: Tile): string {
   return tile.kind === "single" ? tile.channel : `pair:${tile.pair.base}`;
 }
-/** Stable per-tile broadcast/descriptor key (ruling 4). == `tileKey`: single →
+/** Stable per-tile broadcast/descriptor key. == `tileKey`: single →
  *  channel name, pair → `pair:<base>`. MUST equal the projection descriptor's
  *  `tileKey` and the frame-bridge broadcast key so a projection subscribes to
  *  the exact tile it mirrors. */
@@ -800,7 +800,7 @@ function tileLabel(tile: Tile): string {
   return `${tile.pair.base} (${m})`;
 }
 
-// --- projectable tiles (ruling 4) -------------------------------------------
+// --- projectable tiles -------------------------------------------
 // A tile can be projected to a standalone projection window; the projection
 // MIRRORS the tile by subscribing to a same-origin frame broadcast keyed by
 // (recording, tileKey). We publish a tile's CURRENT displayed Mat only while a
@@ -997,7 +997,7 @@ const footprintColorIndex = computed(() =>
 // Footprints share TARGET_COLORS with the descriptor bboxes on the SAME center
 // tile — offset the footprint sub-range so a tracked-target rect and a fovea
 // footprint don't independently land on one color meaning two different things
-// (UI/UX review 2026-07-11 #3; descriptor indices start at 0 and are few).
+// (descriptor indices start at 0 and are few).
 const FOOTPRINT_PALETTE_OFFSET = 4;
 function footprintColor(stream: string): string {
   const g = groupOfStream.value.get(stream);
@@ -1016,7 +1016,7 @@ function pairDepth(g: FootprintGroup | undefined): number | null {
 
 /** True iff `s`'s block spans the current playhead — the honesty gate: a
  *  retained telemetry doc from an ENDED block must never project onto a frame
- *  from a different time (UI/UX review 2026-07-11 #1: the hover branch was
+ *  from a different time (the hover branch was
  *  missing this and drew a t=5s footprint over a t=10s frame). */
 function activeAtPlayhead(s: string): boolean {
   const b = blockByChannel.value.get(s);
@@ -1028,7 +1028,7 @@ function activeAtPlayhead(s: string): boolean {
  *  ALSO playhead-gated (hovering an ended block reveals nothing). The master
  *  (wide) stream carries no affine, so it never self-draws.
  *
- *  Partial-pair suppression (review #2): after a paused scrub only ONE stream
+ *  Partial-pair suppression: after a paused scrub only ONE stream
  *  of a pair may have recovered telemetry (single multiplexed channel); a lone
  *  box in the pair's shared color reads as a bug, so ALL mode draws a paired
  *  stream only when BOTH sides carry telemetry (full state returns on play).
@@ -1101,7 +1101,7 @@ const footprintFontSize = computed(() => {
 });
 const footprintStroke = computed(() => Math.max(1.5, footprintFontSize.value * 0.22));
 
-// --- timeline geometry (viewport-aware, ruling 5) ---------------------------
+// --- timeline geometry (viewport-aware) ---------------------------
 
 /** A block's on-screen x/width, mapped through the viewport (`fracOf`). Blocks
  *  outside the window land off-screen (clipped by the lane's overflow). */
@@ -1120,7 +1120,7 @@ function fracPct(ns: number): string {
 }
 const playheadPct = computed(() => fracOf(smoothPositionNs.value, viewport.value) * 100);
 
-// Bleed strips (ruling 5): the dimmed hatched areas BEFORE t=0 and AFTER the end
+// Bleed strips: the dimmed hatched areas BEFORE t=0 and AFTER the end
 // mark the recording boundaries; they pan/zoom with the content. Rendered only
 // when the viewport actually shows past a bound.
 const bleedBeforePct = computed(() => {
@@ -1132,7 +1132,7 @@ const bleedAfterPct = computed(() => {
   return right < 100 ? Math.max(0, right) : 100;
 });
 
-// --- ruler (ruling 3) -------------------------------------------------------
+// --- ruler -------------------------------------------------------
 // An absolute overlay strip at the top of `.tracks`: nice-number ticks from
 // `rulerTicks`, re-rendered on any viewport OR width change. Clicking/dragging it
 // seeks (clamped to [0, duration]) — the lanes' own click-to-seek stays.
@@ -1164,7 +1164,7 @@ function onRulerUp(): void {
   persist();
 }
 
-// --- wheel: pan / zoom + spring-back settle (ruling 5) ----------------------
+// --- wheel: pan / zoom + spring-back settle ----------------------
 const ZOOM_RATE = 0.0025; // per wheel deltaY unit (multiplicative span factor)
 let settleTimer: ReturnType<typeof setTimeout> | null = null;
 function onTracksWheel(e: WheelEvent): void {
@@ -1190,7 +1190,7 @@ function onTracksWheel(e: WheelEvent): void {
   }
 }
 /** After the wheel gesture goes idle (~150 ms), SNAP any out-of-bounds viewport
- *  back to its legal `settleTarget` (ruling 1: instantaneous bounce — the
+ *  back to its legal `settleTarget` (instantaneous bounce — the
  *  rubber-band RESISTANCE during the drag stays in `panSoft`; only the settle is
  *  instant). Idle-debounced (not synchronous per-wheel) so the snap fires once
  *  the gesture stops rather than fighting a continuing scroll. */
@@ -1222,13 +1222,13 @@ watch(tracksEl, (el) => {
 });
 
 const isMasterChannel = (channel: string) => channel === master.value.channel;
-/** Track hue for a lane (ruling 4): a CSS custom property the lane + its blocks
+/** Track hue for a lane: a CSS custom property the lane + its blocks
  *  tint against (border/accent only — not a loud fill). */
 function laneColor(row: readonly string[], index: number): string {
   return trackColor(row, index);
 }
 
-// --- preview tile reordering (ruling 2) -------------------------------------
+// --- preview tile reordering -------------------------------------
 // Pointer-drag a tile's header to rearrange the slots. `overIndex` is an
 // INSERTION index in [0, n]; a thin drop indicator renders there. On release the
 // track index is moved within the persisted `tileOrder` and saved.
@@ -1280,13 +1280,13 @@ function reorderTiles(from: number, insertBefore: number): void {
   persist();
 }
 
-/** Set the single GLOBAL 3D mode (ruling 4 amendment) — applies to every pair. */
+/** Set the single GLOBAL 3D mode — applies to every pair. */
 function setThreeDMode(event: Event): void {
   threeD.value = (event.target as HTMLSelectElement).value as ThreeDMode;
   persist();
 }
 
-// --- v-toggle (ruling 5): focused block + `v` toggles the stream ------------
+// --- v-toggle: focused block + `v` toggles the stream ------------
 const focused = ref<string | null>(null);
 function focusBlock(channel: string): void {
   focused.value = channel;
@@ -1297,7 +1297,7 @@ function focusTile(tile: Tile): void {
   focused.value = tile.channels[0] ?? null;
 }
 
-// --- cross-highlighting (UI round 2 ruling 5) -------------------------------
+// --- cross-highlighting -------------------------------
 // Hovering OR focusing a track block highlights its preview tile, and vice
 // versa — one shared highlight set keyed by stream id. Instant on/off; the
 // treatment is outline/box-shadow only (never a layout-changing border).
@@ -1369,8 +1369,7 @@ function onKeydown(e: KeyboardEvent): void {
   }
   // --- Transport shortcuts (only meaningful once a file is open). Space toggles
   // play/pause; ←/→ frame-nudge the playhead, playing or paused (Shift = larger
-  // jump). These are the universal player conventions, previously
-  // undiscoverable here. ---
+  // jump), the universal player conventions. ---
   if (!file.value) return;
   if (e.key === " ") {
     // A focused button (e.g. the play control itself) already toggles on its
@@ -1385,9 +1384,9 @@ function onKeydown(e: KeyboardEvent): void {
     const dir = e.key === "ArrowRight" ? 1 : -1;
     // Accumulate across key-repeat: keep `scrubbing` LATCHED through the burst
     // (positionNs then reads scrubNs, so each press steps from the previous
-    // press, not from a stale worker echo — rapid presses used to collapse to
-    // ~1 frame; UI/UX review 2026-07-10). Debounced release settles back onto
-    // the worker position and persists once per burst.
+    // press, not from a stale worker echo — otherwise rapid presses collapse to
+    // ~1 frame). Debounced release settles back onto the worker position and
+    // persists once per burst.
     seekTo(positionNs.value + dir * (e.shiftKey ? SEEK_STEP_NS : NUDGE_STEP_NS));
     if (nudgeSettle) clearTimeout(nudgeSettle);
     nudgeSettle = setTimeout(() => {
@@ -1400,9 +1399,9 @@ function onKeydown(e: KeyboardEvent): void {
 /** Pending debounced release of the arrow-nudge scrub latch. */
 let nudgeSettle: ReturnType<typeof setTimeout> | null = null;
 
-// --- block drag/drop (ruling 2/8/10: snap; collision refused; insert new row) -
+// --- block drag/drop (snap; collision refused; insert new row) -
 // A drop target is EITHER a row (move onto that lane, `moveBlock`) OR a boundary
-// BETWEEN lanes (insert `channel` as a new row there, `insertBlockAt`, ruling 8).
+// BETWEEN lanes (insert `channel` as a new row there, `insertBlockAt`).
 // The boundary is the thin top/bottom edge band of each lane.
 const LANE_EDGE_PX = 6;
 type DragState = {
@@ -1410,7 +1409,7 @@ type DragState = {
   pointerId: number;
   y: number; // current pointer clientY
   targetRow: number; // hovered row (or tracks.length for a new bottom row); -1 when inserting
-  insertBefore: number | null; // boundary insertion index (ruling 8), else null
+  insertBefore: number | null; // boundary insertion index, else null
   colliding: boolean;
 };
 const drag = ref<DragState | null>(null);
@@ -1420,7 +1419,7 @@ function registerLane(el: Element | null, row: number): void {
 }
 
 /** Classify a pointer y over the lane stack: a lane row, or a between-lane
- *  insertion boundary (ruling 8). Below the last lane → a new bottom row. */
+ *  insertion boundary. Below the last lane → a new bottom row. */
 function dropTargetAtY(clientY: number): { row: number } | { insertBefore: number } {
   const lanes = trackLaneEls.value;
   for (let i = 0; i < tracks.value.length; i++) {
@@ -1463,7 +1462,7 @@ function onBlockPointerUp(e: PointerEvent): void {
   if (!d || e.pointerId !== d.pointerId) return;
   drag.value = null;
   if (d.insertBefore != null) {
-    // Insert as a NEW track at the boundary (ruling 8) — empty rows drop inside.
+    // Insert as a NEW track at the boundary — empty rows drop inside.
     tracks.value = insertBlockAt(tracks.value, blocks.value, d.channel, d.insertBefore);
     persist();
     return;
@@ -1475,7 +1474,7 @@ function onBlockPointerUp(e: PointerEvent): void {
   persist();
 }
 
-// --- divider drag (ruling 6: snap; min preview height; collapse drawer) ------
+// --- divider drag (snap; min preview height; collapse drawer) ------
 const dividerDrag = ref(false);
 const mainEl = ref<HTMLElement | null>(null);
 function onDividerDown(e: PointerEvent): void {
@@ -1504,7 +1503,7 @@ function expandTimeline(): void {
   split.value = DEFAULT_SPLIT;
   persist();
 }
-/** The transport bar's collapse/expand chevron (UI round 2 ruling 3) — the bar
+/** The transport bar's collapse/expand chevron — the bar
  *  stays visible either way, so this just folds the tracks below it away. */
 function toggleCollapse(): void {
   if (timelineCollapsed.value) expandTimeline();
@@ -1514,7 +1513,7 @@ const previewFlex = computed(() =>
   timelineCollapsed.value ? "1 1 auto" : `0 0 ${(split.value * 100).toFixed(2)}%`,
 );
 
-// --- tile divider resize (ruling 3) -----------------------------------------
+// --- tile divider resize -----------------------------------------
 // A thin handle between adjacent tiles; dragging it moves the shared edge of
 // that pair (sum preserved, both floored at MIN_TILE_FRACTION). deltaFrac maps
 // px → fraction against the tiles-row width; live during the drag, persisted on
@@ -1549,7 +1548,7 @@ function onTileDividerUp(e: PointerEvent): void {
   persist();
 }
 
-// --- property panel (UI round 2 ruling 4) -----------------------------------
+// --- property panel -----------------------------------
 // A right-side inspector of the FOCUSED stream: the popover's static+live stats
 // (reused via stats.ts) PLUS timeline/topology context. Toggle + width persist
 // to the sidecar. When nothing is focused it shows a dim placeholder.
@@ -1650,7 +1649,7 @@ function onPanelResizeUp(): void {
 
 <template>
   <div ref="mainEl" class="main" :style="{ top: titleBarHeight + 'px' }">
-    <!-- Live-capture warning banner (viewer-export addendum): layout-stable
+    <!-- Live-capture warning banner: layout-stable
          (pushes content down, no overlay), instant (no slide), dismissable. -->
     <div v-if="showBanner" class="session-banner">
       <span class="msg">A live capture session is running — viewer playback and export may be degraded.</span>
@@ -1694,7 +1693,7 @@ function onPanelResizeUp(): void {
             <!-- Drop indicator BEFORE the slot the drag currently targets. -->
             <div v-if="tileDrag && tileDrag.moved && tileDrag.overIndex === si" class="tile-drop-indicator" />
 
-            <!-- Divider between adjacent tiles (ruling 3): drag to resize the
+            <!-- Divider between adjacent tiles: drag to resize the
                  pair. Faint at rest (borderless idiom), accent on hover; inert
                  during a reorder so it never clashes with the drop indicator. -->
             <div
@@ -1762,8 +1761,7 @@ function onPanelResizeUp(): void {
                     <!-- pointerleave RESTORES the containing tile's hover — the
                          tile's own pointerenter doesn't re-fire when the pointer
                          moves from a child back onto the parent, so a bare
-                         clearHover stranded the tile un-highlighted (UI/UX
-                         review 2026-07-11 #4). -->
+                         clearHover stranded the tile un-highlighted. -->
                     <g
                       v-for="fp in footprintBoxesFor(slot.tile.channel)"
                       :key="'fp:' + fp.stream"
@@ -1797,7 +1795,7 @@ function onPanelResizeUp(): void {
             </div>
 
             <!-- Placeholder slot (empty/disabled/pair-collapsed track) — subdued,
-                 non-interactive except as a reorder drop target (ruling 2). -->
+                 non-interactive except as a reorder drop target. -->
             <div
               v-else
               :ref="(el) => registerTileEl(el as Element | null, si)"
@@ -1822,7 +1820,7 @@ function onPanelResizeUp(): void {
           </div>
         </section>
 
-        <!-- ===== PROPERTY PANEL (focused-stream inspector, ruling 4) ===== -->
+        <!-- ===== PROPERTY PANEL (focused-stream inspector) ===== -->
         <aside v-if="panelOpen" class="property-panel" :style="{ width: panelWidth + 'px' }">
           <div
             class="panel-resize"
@@ -1880,7 +1878,7 @@ function onPanelResizeUp(): void {
         </aside>
       </div>
 
-      <!-- ===== TRANSPORT BAR (the draggable divider, ruling 3) =====
+      <!-- ===== TRANSPORT BAR (the draggable divider) =====
            The bar itself is the resize drag handle (pointer drag = split);
            the LEFT / RIGHT control clusters are interactive islands
            (`@pointerdown.stop`) so their buttons never start a drag — same
@@ -1932,12 +1930,12 @@ function onPanelResizeUp(): void {
           @pointercancel="onBlockPointerUp"
           @wheel="onTracksWheel"
         >
-          <!-- Bleed strips (ruling 5): dimmed hatched areas outside [0,duration],
+          <!-- Bleed strips: dimmed hatched areas outside [0,duration],
                marking the recording boundaries; they pan/zoom with the content. -->
           <div v-if="bleedBeforePct > 0" class="bleed before" :style="{ width: bleedBeforePct + '%' }" />
           <div v-if="bleedAfterPct < 100" class="bleed after" :style="{ left: bleedAfterPct + '%' }" />
 
-          <!-- Time ruler (ruling 3): absolute overlay at the top; click/drag seeks. -->
+          <!-- Time ruler: absolute overlay at the top; click/drag seeks. -->
           <div
             class="ruler"
             @pointerdown="onRulerDown"
@@ -1956,8 +1954,8 @@ function onPanelResizeUp(): void {
             </span>
           </div>
 
-          <!-- Draggable playhead (ruling 1): a wide invisible hit strip around
-               the 1px line, split by hourglass-half ornaments (ruling 2) — solid
+          <!-- Draggable playhead: a wide invisible hit strip around
+               the 1px line, split by hourglass-half ornaments — solid
                red while playing, idle-neutral when paused. -->
           <div
             class="playhead"
@@ -1974,7 +1972,7 @@ function onPanelResizeUp(): void {
             <span class="orn bottom" />
           </div>
           <template v-for="(row, ri) in tracks" :key="ri">
-            <!-- Between-lane insertion indicator (ruling 8), shown during a drag. -->
+            <!-- Between-lane insertion indicator, shown during a drag. -->
             <div v-if="drag && drag.insertBefore === ri" class="lane-insert" />
             <div
               class="lane"
@@ -2009,7 +2007,7 @@ function onPanelResizeUp(): void {
               </div>
             </div>
           </template>
-          <!-- Insertion indicator at the very bottom boundary (ruling 8). -->
+          <!-- Insertion indicator at the very bottom boundary. -->
           <div v-if="drag && drag.insertBefore === tracks.length" class="lane-insert" />
           <!-- New-row drop zone (drag to the bottom to create a track). -->
           <div
@@ -2034,7 +2032,7 @@ function onPanelResizeUp(): void {
       :three-d-mode="statsThreeDLabel"
     />
 
-    <!-- ===== confirm dialog (ruling 10: corrupt / mismatch) ===== -->
+    <!-- ===== confirm dialog (corrupt / mismatch) ===== -->
     <div v-if="confirmReset" class="modal-scrim">
       <div class="modal">
         <template v-if="confirmReset.reason === 'corrupt'">
@@ -2125,7 +2123,7 @@ function onPanelResizeUp(): void {
   flex-grow: 1;
 }
 
-// Live-capture banner (addendum): a flex child at the top of `.main`, so it
+// Live-capture banner: a flex child at the top of `.main`, so it
 // pushes the preview area down (layout-stable, no overlay). Instant appearance.
 .session-banner {
   flex: 0 0 auto;
@@ -2150,7 +2148,7 @@ function onPanelResizeUp(): void {
   }
 }
 
-// Ruling 7: no resting border — a faint fill reads as interactive; stronger on
+// no resting border — a faint fill reads as interactive; stronger on
 // hover. (This is a secondary action; the danger/primary buttons keep fill.)
 .panel-export {
   margin-left: auto;
@@ -2246,7 +2244,7 @@ function onPanelResizeUp(): void {
     flex-direction: row;
     width: 100%;
     padding: 0.5em;
-    // Ruling 3: the tiles row ALWAYS fills 100% and never scrolls — widths are
+    // the tiles row ALWAYS fills 100% and never scrolls — widths are
     // flex-grow fractions, dividers carve the pairs.
     overflow: hidden;
     min-height: 0;
@@ -2260,7 +2258,7 @@ function onPanelResizeUp(): void {
     }
   }
 
-  // Divider handle between two adjacent tiles (ruling 3): a few px, faint at
+  // Divider handle between two adjacent tiles: a few px, faint at
   // rest per the borderless idiom, accent + grab cursor on hover/drag.
   .tile-divider {
     flex: 0 0 6px;
@@ -2279,7 +2277,7 @@ function onPanelResizeUp(): void {
     }
   }
 
-  // Vertical accent line marking where a dragged tile will drop (ruling 2).
+  // Vertical accent line marking where a dragged tile will drop.
   // SNAP: instant; a thin flex child so it never overlaps neighbor content.
   .tile-drop-indicator {
     flex: 0 0 2px;
@@ -2290,21 +2288,21 @@ function onPanelResizeUp(): void {
   }
 
   .tile {
-    // Width = flex-grow fraction (ruling 3); the flex shorthand is bound inline
+    // Width = flex-grow fraction; the flex shorthand is bound inline
     // (`tileFlex`). min-width:0 lets a tile shrink below its content on resize.
     min-width: 0;
     display: flex;
     flex-direction: column;
     min-height: 0;
     background: var(--bg-canvas);
-    // Borderless at rest (ruling 2 / ruling-7 idiom): a faint track-hue outline
+    // Borderless at rest: a faint track-hue outline
     // that RAISES on highlight/focus rather than a loud constant border.
     border: 1px solid transparent;
     border-radius: 4px;
     overflow: hidden;
     outline: none;
     box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--track-color, var(--tint-2)) 22%, transparent);
-    // Cross-highlight (ruling 5): track-hue box-shadow ring — visible, never
+    // Cross-highlight: track-hue box-shadow ring — visible, never
     // reflows. SNAP: instant on/off, no transition on this feedback path.
     &.highlight {
       box-shadow: 0 0 0 2px var(--track-color, var(--accent-bright));
@@ -2332,7 +2330,7 @@ function onPanelResizeUp(): void {
       border-bottom: 1px solid var(--tint-1);
       white-space: nowrap;
       overflow: hidden;
-      // Track-hue chip (ruling 4): a small color swatch keyed to the lane hue.
+      // Track-hue chip: a small color swatch keyed to the lane hue.
       .chip {
         flex: 0 0 auto;
         width: 0.7ch;
@@ -2379,7 +2377,7 @@ function onPanelResizeUp(): void {
   }
 }
 
-// ---- property panel (focused-stream inspector, ruling 4) ----
+// ---- property panel (focused-stream inspector) ----
 .property-panel {
   position: relative;
   flex: 0 0 auto;
@@ -2479,7 +2477,7 @@ function onPanelResizeUp(): void {
   }
 }
 
-// ---- transport bar (the draggable divider, ruling 3) ----
+// ---- transport bar (the draggable divider) ----
 .transport-bar {
   flex: 0 0 auto;
   display: flex;
@@ -2530,7 +2528,7 @@ function onPanelResizeUp(): void {
     }
   }
 
-  // Ruling 7 (standing): inline controls carry NO resting border/outline — a
+  // inline controls carry NO resting border/outline — a
   // faint element background reads as the interactive surface, darker on hover,
   // stronger while active. :focus-visible outlines stay for a11y.
   .play {
@@ -2594,7 +2592,7 @@ function onPanelResizeUp(): void {
       outline: 2px solid var(--accent);
       outline-offset: 1px;
     }
-    // Active (panel open) — accent color + a faint fill; no border (ruling 7).
+    // Active (panel open) — accent color + a faint fill; no border.
     &.active {
       color: var(--accent-bright);
       background: var(--tint-3);
@@ -2615,11 +2613,11 @@ function onPanelResizeUp(): void {
     flex-grow: 1;
     overflow-y: auto;
     overflow-x: hidden;
-    // Top padding reserves the ruler strip's height (ruling 3).
+    // Top padding reserves the ruler strip's height.
     padding: 1.5em 0 0.4em;
     min-height: 0;
 
-    // Bleed strips (ruling 5): dimmed hatched areas outside [0,duration]. They
+    // Bleed strips: dimmed hatched areas outside [0,duration]. They
     // sit BEHIND lanes (z 0) and mark where the recording has no content.
     .bleed {
       position: absolute;
@@ -2640,7 +2638,7 @@ function onPanelResizeUp(): void {
       &.after { right: 0; }
     }
 
-    // Time ruler (ruling 3): absolute overlay strip at the very top, above lanes
+    // Time ruler: absolute overlay strip at the very top, above lanes
     // and below the playhead. Click/drag anywhere on it seeks.
     .ruler {
       position: absolute;
@@ -2674,7 +2672,7 @@ function onPanelResizeUp(): void {
       }
     }
 
-    // Insertion indicator between lanes (ruling 8) — an accent bar shown while a
+    // Insertion indicator between lanes — an accent bar shown while a
     // block drag hovers a lane boundary. SNAP: instant.
     .lane-insert {
       height: 3px;
@@ -2685,7 +2683,7 @@ function onPanelResizeUp(): void {
       z-index: 3;
     }
 
-    // Draggable playhead (ruling 1/2): a WIDE invisible hit strip (14px) around
+    // Draggable playhead: a WIDE invisible hit strip (14px) around
     // a 1px line, with hourglass-half ornaments at top + bottom. The strip is
     // centered on the playhead position (translateX -50%). Idle-neutral by
     // default; SOLID RED while playing — snap color change, no transition.
@@ -2742,7 +2740,7 @@ function onPanelResizeUp(): void {
       height: 2.6em;
       margin: 0.25em 0.6em;
       border: 1px dashed var(--tint-1);
-      // Track hue (ruling 4): a subtle left accent bar, NOT a loud fill.
+      // Track hue: a subtle left accent bar, NOT a loud fill.
       border-left: 3px solid var(--track-color, var(--tint-1));
       border-radius: 4px;
       background: #ffffff06;
@@ -2766,7 +2764,7 @@ function onPanelResizeUp(): void {
         left: 0.5ch;
         top: 0.2em;
         font-size: 0.68em;
-        // Tinted by the track hue (ruling 4); still legible.
+        // Tinted by the track hue; still legible.
         color: var(--track-color, var(--text-disabled));
         pointer-events: none;
         z-index: 1;
@@ -2782,7 +2780,7 @@ function onPanelResizeUp(): void {
       gap: 0.6ch;
       padding: 0 0.6ch;
       background: #2a3a4a;
-      // Track hue (ruling 4): the block edge picks up its lane's color; still a
+      // Track hue: the block edge picks up its lane's color; still a
       // tint, not a loud fill.
       border: 1px solid var(--track-color, #4a6a8a);
       border-radius: 3px;
@@ -2803,7 +2801,7 @@ function onPanelResizeUp(): void {
         outline: 2px solid var(--accent);
         outline-offset: 0;
       }
-      // Cross-highlight (ruling 5): box-shadow ring — instant, no reflow.
+      // Cross-highlight: box-shadow ring — instant, no reflow.
       &.highlight {
         box-shadow: 0 0 0 2px var(--accent-bright);
       }
@@ -2860,7 +2858,7 @@ function onPanelResizeUp(): void {
       display: flex;
       justify-content: flex-end;
       gap: 1ch;
-      // Ruling 7: SECONDARY buttons are borderless (faint fill on hover); the
+      // SECONDARY buttons are borderless (faint fill on hover); the
       // PRIMARY/destructive action keeps emphasis via a solid fill, not a border.
       button {
         background: transparent;
@@ -2888,7 +2886,7 @@ function onPanelResizeUp(): void {
   }
 }
 
-// ---- title-bar buttons (icon-only, per the app-wide ruling) ----
+// ---- title-bar buttons (icon-only) ----
 // Mirrors AppWindow.vue's `.icon-button` so viewer chrome matches the app.
 .icon-button {
   background: none;

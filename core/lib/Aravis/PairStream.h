@@ -5,16 +5,15 @@
 // -------------------------------------------------------
 #pragma once
 
-// pairing-nodes (ruled 2026-07-09) P-1: the per-stage L/R PAIRING brick. Two
-// in-process FIFO TapChannel inputs (`OwnedFrame::Ptr` — the unified-time §5 tap
-// transport; SHM rings are IPC-only, ruled 2026-07-09) joined against anchors
-// pushed in at FIN rate. A pair record PINS {anchor, OwnedFrame::Ptr left,
-// OwnedFrame::Ptr right} — three shared references, no pixel copies. Two join
-// modes: `root` (±toleranceNs match, `matchPair` semantics ported from
+// The per-stage L/R PAIRING brick. Two in-process FIFO TapChannel inputs
+// (`OwnedFrame::Ptr` tap transport; SHM rings are IPC-only) joined against
+// anchors pushed in at FIN rate. A pair record PINS {anchor, OwnedFrame::Ptr
+// left, OwnedFrame::Ptr right} — three shared references, no pixel copies. Two
+// join modes: `root` (±toleranceNs match, `matchPair` semantics mirror
 // app/orchestrator/sync.ts) and `exact` (deviceTimestamp key equality, an
 // anchor with that key must exist).
 //
-// ALWAYS-RUNNING (ruling 5), UNLIKE the demand-gated ChainedStream/StereoStream
+// ALWAYS-RUNNING, UNLIKE the demand-gated ChainedStream/StereoStream
 // bricks: those park when their output loses all subscribers (the base
 // `Stream::loop()` breaks on `subscribers.empty()`). A pairing brick must keep
 // consuming inputs + maintaining the anchor pool even with zero output
@@ -55,10 +54,10 @@
 namespace Arv {
 
 // Join mode: tolerance-match ONCE at the root; downstream stages join by EXACT
-// key equality on the passed-through deviceTimestamp (pairing-nodes ruling 2).
+// key equality on the passed-through deviceTimestamp.
 enum class PairMode { Root, Exact };
 
-// The FIN-derived anchor (pairing-nodes ruling 1/4): a REAL exposure outcome.
+// The FIN-derived anchor: a REAL exposure outcome.
 // `payload` is OPAQUE to the brick — the JS enrichment node packs volts / V2A
 // angles / H into it; the brick pins it and echoes it back in the record.
 struct PairAnchor {
@@ -66,8 +65,7 @@ struct PairAnchor {
   int64_t tExposure = 0;  // trusted host-ns exposure time (ROOT match key)
   int32_t stream = 0;     // FIN stream id
   std::vector<double> payload; // opaque enrichment attachment (may be empty)
-  // RESOLVED per-side join keys (pairing-nodes ruling 2, R-1 resolution of the
-  // deferred "how downstream frames land identical keys"). A ROOT pair completes
+  // RESOLVED per-side join keys. A ROOT pair completes
   // on the ±tolerance window; the two matched frames' ACTUAL deviceTimestamps
   // become these keys. The root re-emits this anchor (via `pushResolvedAnchor`)
   // to DOWNSTREAM `exact`-mode bricks, which join their per-side inputs by EXACT
@@ -95,8 +93,8 @@ struct PairBatch : Shared<PairBatch> {
   std::vector<PairRecord> records;
 };
 
-// Bounded pool caps (pairing-nodes ruling 3/4 — all bounded drop-oldest). See
-// PairStream.cpp report notes for the rationale.
+// Bounded pool caps (all bounded drop-oldest). See PairStream.cpp report notes
+// for the rationale.
 struct PairCaps {
   size_t anchors = 64;   // ~1 s of unmatched FIN backlog before drop-oldest
   size_t pending = 64;   // ~1 s @60fps per side — outlives trigger-path latency
@@ -163,7 +161,7 @@ public:
   }
 
   // NAPI thread: push a RESOLVED anchor into the bounded pool (drop-oldest) — the
-  // root→downstream key delivery (pairing-nodes ruling 2). `id` carries the
+  // root→downstream key delivery. `id` carries the
   // ORIGIN anchor id for provenance (0 → assign a fresh one); `leftKey`/`rightKey`
   // are the root-matched per-side deviceTimestamps a downstream `exact` brick
   // joins on. `tExposure`/`payload` are echoed through unchanged. Frames are
@@ -305,7 +303,7 @@ private:
 
   // Internal keep-alive subscriber: pins the base loop active for the brick's
   // whole life (always-running), and DISCARDS batches so a zero-real-subscriber
-  // brick drops completed pairs immediately (ruling 5).
+  // brick drops completed pairs immediately.
   struct KeepAlive : public Subscriber<PairBatch::Ptr> {
     explicit KeepAlive(PairStream *s) : Subscriber<PairBatch::Ptr>(s) {}
     void push(const PairBatch::Ptr &) override {} // drop

@@ -4,8 +4,8 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Viewer → projection frame bridge (viewer-tiles-split-and-project.md ruling 4).
-// A projected viewer TILE mirrors exactly what the tile displays: the viewer
+// Viewer → projection frame bridge. A projected viewer TILE mirrors exactly
+// what the tile displays: the viewer
 // renderer re-broadcasts the resolved Mat over a same-origin `BroadcastChannel`
 // (one per app origin, shared across BrowserWindows), REF-COUNTED so the hot
 // path stays untouched when nothing is projected. The publisher (viewer side)

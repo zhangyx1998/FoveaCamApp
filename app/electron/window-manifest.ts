@@ -28,7 +28,7 @@ export interface ManifestWindow {
   class: WindowClass;
   /** App id for `class: "app"` windows. */
   appId?: string;
-  /** Full landing URL (includes any state subpath — multi-window.md req. 7). */
+  /** Full landing URL (includes any state subpath). */
   url?: string;
   bounds?: WindowBounds;
 }
@@ -59,7 +59,7 @@ export function planFromManifest(
     if (!spec) continue;
     // Owner-bound (cascade) windows can't restore without their owner — the
     // owner pointer isn't persisted, and re-parenting is meaningless across a
-    // restart. Drop them (WS2 2b `debug`); the app re-opens its drawer on demand.
+    // restart. Drop them; the app re-opens its drawer on demand.
     if (spec.onOwnerClose === "cascade") continue;
     if (spec.exclusive) {
       // Exclusivity: at most one, first valid one wins (app needs a real id).

@@ -12,7 +12,7 @@
   frames as ``.npy`` (raw, exact) or ``.pgm`` (8-bit display-scaled,
   mono-only; pure stdlib — no OpenCV requirement).
 - ``fcap convert <legacy-dir> [-o out.fcap]`` — re-encode a legacy
-  ``.stream``/``.meta`` dump as a single ``.fcap`` container (§2b schema).
+  ``.stream``/``.meta`` dump as a single ``.fcap`` container (.fcap schema).
 """
 
 from __future__ import annotations

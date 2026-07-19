@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// WS1 real-1e (B-18) NAPI seam: attach/detach a camera→pipe CONVERTER thread,
+// Converter NAPI seam: attach/detach a camera→pipe CONVERTER thread,
 // plus the no-hardware `feedTestFrame` hook and the converter meter probe. The
 // per-pipe binding holds a persistent `ConverterStream` (per camera × target
 // format) and a GATED `PipeOfferSubscriber` whose lifetime C's consumer gate
@@ -65,8 +65,7 @@ Napi::Value meterSnapshotToJs(Napi::Env env, const Meter::Snapshot &s) {
   o.Set("name", Napi::String::New(env, s.name));
   // FULL `WorkloadSnapshot` schema (window + drops), matching Pipe.cpp's
   // `snapshotToObject` — the graph/profiler consume these rows through the
-  // same typed path as pipe meters, and a missing `drops` object crashed
-  // `perfSnapshot` the moment a converter went live (rig 2026-07-08). The
+  // same typed path as pipe meters, so the `drops` object must be present. The
   // flat `uptimeMs`/`dropTotal` stay for the published tracker-probe d.ts.
   auto window = Napi::Object::New(env);
   window.Set("startedAt", Napi::Number::New(env, static_cast<double>(s.startedAtMs)));
@@ -88,9 +87,9 @@ Napi::Value meterSnapshotToJs(Napi::Env env, const Meter::Snapshot &s) {
   o.Set("dropTotal", Napi::Number::New(env, static_cast<double>(s.dropTotal)));
   o.Set("inputs", statsToJs(env, s.inputs));
   o.Set("outputs", statsToJs(env, s.outputs));
-  // FIFO-input queue metering (controller-node-and-fifo-edges §2): present ONLY
-  // for a brick whose meter recorded a depth sample (the undistort FIFO chain);
-  // ABSENT for Leaky bricks so worker F's fold keeps its lossy/drops behavior.
+  // FIFO-input queue metering: present ONLY for a brick whose meter recorded a
+  // depth sample (the undistort FIFO chain); ABSENT for Leaky bricks so the
+  // fold keeps its lossy/drops behavior.
   if (s.hasQueue) {
     auto q = Napi::Object::New(env);
     q.Set("depth", Napi::Number::New(env, static_cast<double>(s.queueDepth)));
@@ -171,7 +170,7 @@ FN(detachCameraPipe) {
   JS_EXCEPT(env.Undefined())
 }
 
-// ---- per-pipeId converter meter snapshots (A-25 → perfSnapshot.workloads) --
+// ---- per-pipeId converter meter snapshots (→ perfSnapshot.workloads) --------
 FN(converterProbeAll) {
   auto env = info.Env();
   auto out = Napi::Object::New(env);
@@ -226,7 +225,7 @@ FN(enableFakeCamera) {
   return env.Undefined();
 }
 
-// ---- Topology.report() rows (unified-time-and-topology §6) ------------------
+// ---- Topology.report() rows -------------------------------------------------
 // One convert-brick row: id, kind "convert", ACTUAL input edge camera/<serial>
 // (raw wire format), converted output type, full meter stats; transport/epoch/
 // pipe extras stamped when the id is a live advertised pipe.

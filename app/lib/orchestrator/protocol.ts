@@ -29,18 +29,16 @@ export type Serializable =
   | ArrayBufferView;
 
 /**
- * Per-frame profiling metadata (transport-observability goal, docs/history/refactor/
- * orchestrator.md roadmap item 3). Producer-set fields (`tCapture`,
- * `convertMs`) are optional — filled in by whichever session measured them
- * (currently the registry's shared preview loop only); `seq`/`tPublish` are
- * always stamped by `Channel.sendFrame` itself, since only the transport sees
- * actual send order and wire time. `tReceive`/`tDisplay` are stamped
- * renderer-side by `client.ts`. All timestamps share the host `Date.now()`
- * clock — same-machine processes, no cross-clock correlation needed (unlike
- * the native Aravis buffer timestamp, which is a separate device clock
- * domain — see the synced-capture plan for that). `deviceTimestamp` and
- * `systemTimestamp` are copied from native `Frame` objects before release
- * when the producer has them.
+ * Per-frame profiling metadata. Producer-set fields (`tCapture`, `convertMs`)
+ * are optional — filled in by whichever session measured them (currently the
+ * registry's shared preview loop only); `seq`/`tPublish` are always stamped by
+ * `Channel.sendFrame` itself, since only the transport sees actual send order
+ * and wire time. `tReceive`/`tDisplay` are stamped renderer-side by
+ * `client.ts`. All timestamps share the host `Date.now()` clock — same-machine
+ * processes, no cross-clock correlation needed (unlike the native Aravis buffer
+ * timestamp, which is a separate device clock domain). `deviceTimestamp` and
+ * `systemTimestamp` are copied from native `Frame` objects before release when
+ * the producer has them.
  */
 export type FrameMeta = {
   /** Per-topic send counter, assigned per `sendFrame` call (including calls
@@ -69,10 +67,10 @@ export type FrameMeta = {
   /** ms when the rAF-coalesced ref actually updated (the frame that lost the
    *  coalescing race never gets this stamp). */
   tDisplay?: number;
-  // A-P12: the client-only `source` stream address was removed from this WIRE
-  // type — it never crossed the wire; the renderer stamps it onto each
-  // DISPLAYED payload at its ref chokepoints (`StreamPayload` in client.ts),
-  // keeping `FrameMeta` transport-only.
+  // The client-only `source` stream address is NOT part of this WIRE type — it
+  // never crosses the wire; the renderer stamps it onto each DISPLAYED payload
+  // at its ref chokepoints (`StreamPayload` in client.ts), keeping `FrameMeta`
+  // transport-only.
 };
 
 export type ShmFrameRef = {
@@ -158,12 +156,12 @@ type Frame = { k: "frame"; t: string; f: FramePayload };
 // Frame acknowledgement — the receiver returns one per delivered frame so the
 // sender can keep at most one frame in flight per topic (latest-wins drop).
 type Fack = { k: "fack"; t: string };
-// C10 (docs/history/refactor/orchestrator.md §7.1 item 3): a client declares interest
-// in a frame topic once, when it first opens that topic's ref — the sender
-// only calls `sendFrame` for channels that declared interest, instead of
-// broadcasting every frame topic to every session subscriber regardless of
-// whether that window ever reads it. Never "undeclared" (bounded by each
-// session's small fixed `frames` list — see `Channel.declareFrameInterest`).
+// Frame-interest declaration: a client declares interest in a frame topic once,
+// when it first opens that topic's ref — the sender only calls `sendFrame` for
+// channels that declared interest, instead of broadcasting every frame topic to
+// every session subscriber regardless of whether that window ever reads it.
+// Never "undeclared" (bounded by each session's small fixed `frames` list — see
+// `Channel.declareFrameInterest`).
 type FrameInterest = { k: "finterest"; t: string };
 type Wire = Req | Res | Evt | Frame | Fack | FrameInterest;
 
@@ -204,7 +202,7 @@ export class Channel {
   // gaps in the *received* sequence measure exactly what the backpressure
   // gate dropped.
   private readonly frameSeq = new Map<string, number>();
-  // Per-topic send/coalesce/byte counters (perf substrate, §7.3 item 3) —
+  // Per-topic send/coalesce/byte counters (perf substrate) —
   // sender-side ground truth; the receiver's inspector OSD only *infers*
   // drops from `seq` gaps, so the two cross-check each other.
   private readonly frameStats = new Map<
@@ -213,14 +211,13 @@ export class Channel {
   >();
   private readonly frameTiming = new Map<string, { convertMs: RollingStats }>();
   private readonly statsStartedAt = Date.now();
-  // C10: topics this channel's *peer* has declared interest in (frames sent
+  // Topics this channel's *peer* has declared interest in (frames sent
   // by this Channel are gated on it; frames received don't consult it).
   private readonly frameInterest = new Set<string>();
-  // V4 (docs/history/refactor/orchestrator.md §7.1): fired whenever a peer declares
-  // interest in a topic — `ServerSession.attach()` uses this to replay a
-  // cached last-payload for one-shot frame resources (e.g. a capture
-  // preview) to a channel that opens its ref *after* the frame was already
-  // published. Plain listener set, same shape as `.on()`/`.onFrame()`.
+  // Fired whenever a peer declares interest in a topic — `ServerSession.attach()`
+  // uses this to replay a cached last-payload for one-shot frame resources (e.g.
+  // a capture preview) to a channel that opens its ref *after* the frame was
+  // already published. Plain listener set, same shape as `.on()`/`.onFrame()`.
   private readonly frameInterestListeners = new Set<(t: string) => void>();
 
   constructor(private readonly endpoint: Endpoint) {
@@ -233,7 +230,7 @@ export class Channel {
     this.endpoint.post({ k: "finterest", t: topic });
   }
 
-  /** Whether the peer has declared interest in this frame topic (C10). A
+  /** Whether the peer has declared interest in this frame topic. A
    *  session should skip `sendFrame` entirely for uninterested channels —
    *  not just to save bandwidth, but to keep `stats()` honest ("sent" means
    *  "sent to someone who asked for it"). */
@@ -389,8 +386,7 @@ export class Channel {
     this.framePending.clear();
     // Reject in-flight requests instead of leaving callers hanging forever —
     // without this, a dead orchestrator (crash/restart) strands every pending
-    // `call()` (e.g. one awaited inside a suspense-mounted module). See
-    // docs/history/refactor/orchestrator.md §12.1 C5.
+    // `call()` (e.g. one awaited inside a suspense-mounted module).
     for (const p of this.pending.values())
       p.reject(new Error("Channel closed"));
     this.pending.clear();
@@ -457,11 +453,11 @@ export class Channel {
 
 // --- Topic helpers (shared so both ends agree on the wire strings) -------
 
-/** Per-session status snapshot (A-P13). `error` is the current user-visible
- *  failure (e.g. a failed activation / camera contention), or null when healthy.
- *  `progress` (spin-up ruling 2026-07-09) is the session's in-flight activation
- *  step list, or null when no spin-up is in flight — additive, so seeded to new
- *  subscribers exactly like `error` (see `ServerSession.progressMonitor`). */
+/** Per-session status snapshot. `error` is the current user-visible failure
+ *  (e.g. a failed activation / camera contention), or null when healthy.
+ *  `progress` is the session's in-flight activation step list, or null when no
+ *  activation is in flight — additive, so seeded to new subscribers exactly
+ *  like `error` (see `ServerSession.progressMonitor`). */
 export type SessionStatus = {
   error: string | null;
   progress: ProgressItem[] | null;
@@ -470,7 +466,7 @@ export type SessionStatus = {
 export const topic = {
   state: (session: string) => `st:${session}`,
   telemetry: (session: string) => `tel:${session}`,
-  // Per-session status (A-P13): the current user-visible failure, if any.
+  // Per-session status: the current user-visible failure, if any.
   // Seeded to every new subscriber like state/telemetry, so an activation
   // failure that happened before a window opened is still shown. Payload is a
   // `SessionStatus`.
@@ -487,7 +483,7 @@ export const topic = {
   // camera-registry sink throw, have no single owning session). Payload is
   // `{ scope: string, message: string }`.
   error: "__err__",
-  // Structured timing measurement broadcast (§7.1 S5) — payload is a `Span`
+  // Structured timing measurement broadcast — payload is a `Span`
   // (`orchestrator/diagnostics.ts`), fired live as each one is recorded so a
   // future profiler window can render a timeline without polling.
   span: "__span__",

@@ -5,11 +5,11 @@
 // -------------------------------------------------------
 #pragma once
 
-// Native free-thread instrumentation meter (C-19, WS1 real-1c). The C++ mirror
+// Native free-thread instrumentation meter. The C++ mirror
 // of the JS `Workload` meter (metering.ts): a free-running producer/publisher
 // thread records ingest/emit/busy/drop into its OWN meter, and the orchestrator
 // PROBES it out-of-loop (never per-frame) into `perfSnapshot.workloads` using
-// the SAME schema C-18 defined (`WorkloadStreamStat{count,ratePerSec,
+// the SAME schema as the JS side (`WorkloadStreamStat{count,ratePerSec,
 // maxIntervalMs}`, `INTERVAL_WINDOW{bins:10,binMs:1000}`), so the profiler
 // renders a native producer stream identically to a JS one.
 //
@@ -54,7 +54,7 @@ struct Snapshot {
   std::vector<std::pair<std::string, StreamStat>> inputs;
   std::vector<std::pair<std::string, StreamStat>> outputs;
   uint64_t dropTotal = 0;
-  // FIFO-input queue metering (controller-node-and-fifo-edges §1/§2). Present
+  // FIFO-input queue metering. Present
   // ONLY when the meter recorded ≥1 depth sample (`hasQueue`) — a FIFO-fed
   // brick (undistort). Leaky-fed bricks leave it absent so `meterSnapshotToJs`
   // omits the `queue` key. `queueHighWater` is the windowed (10s) max of the
@@ -93,7 +93,7 @@ public:
   Snapshot probe(int64_t nowMs) const;
 
 private:
-  // Per-stream interval ring (C-18 bin-ring). POD — copied under the seqlock.
+  // Per-stream interval ring (bin-ring). POD — copied under the seqlock.
   struct Ring {
     double bins[BIN_COUNT] = {};
     int64_t binStart = 0;
@@ -119,7 +119,7 @@ private:
 
   int32_t indexOf(const std::vector<std::string> &names, const std::string &s) const;
 
-  // Bin-ring helpers (C-18 port). Static — they operate on a POD Ring; the
+  // Bin-ring helpers. Static — they operate on a POD Ring; the
   // probe calls them on its seqlock COPY, the writer on the live block.
   static void rotate(Ring &r, int64_t now);
   static void recordEvent(Ring &r, int64_t now);

@@ -5,7 +5,7 @@
 // -------------------------------------------------------
 //
 // Relay (Åström–Hägglund) auto-tune experiment — PURE single-DOF state machine
-// (stage 1 of the two-stage tune, docs/proposals/vergence-loop-tuning.md §1).
+// (stage 1 of the two-stage tune).
 // Drives one DOF with a ±amplitude square wave about its current value through
 // the supplied `command` callback, detects the induced limit cycle from the
 // (t, error) sample stream, and derives ultimate gain/period → Tyreus–Luyben

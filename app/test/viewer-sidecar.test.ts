@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Viewer UI-state sidecar (viewer-timeline.md ruling 8/10): round-trip, the
+// Viewer UI-state sidecar: round-trip, the
 // absent/ok/corrupt classification, field clamping, and the path derivation.
 
 import { describe, expect, it } from "vitest";
@@ -25,7 +25,7 @@ const sample: SidecarState = {
   v: 1,
   tracks: [["center"], ["left", "aux"], ["right"]],
   disabled: ["aux"],
-  threeD: "anaglyph", // GLOBAL mode (ruling 4 amendment)
+  threeD: "anaglyph", // GLOBAL mode
   split: 0.42,
   playheadNs: 123_456,
   panelOpen: true,
@@ -67,7 +67,7 @@ describe("classifySidecar", () => {
   });
 });
 
-describe("property panel state (UI round 2 ruling 4 — tolerant read)", () => {
+describe("property panel state (tolerant read)", () => {
   it("absent panel fields default to CLOSED + default width", () => {
     // An older sidecar (no panel keys) must not throw and must read closed.
     const load = classifySidecar(JSON.stringify({ v: 1, tracks: [["a"]] }));
@@ -116,7 +116,7 @@ describe("field coercion / clamping", () => {
   });
 });
 
-describe("threeD global-mode migration (ruling 4 amendment)", () => {
+describe("threeD global-mode migration", () => {
   const mode = (json: object): string => {
     const load = classifySidecar(JSON.stringify({ v: 1, ...json }));
     return load.status === "ok" ? load.state.threeD : "<corrupt>";
@@ -144,7 +144,7 @@ describe("threeD global-mode migration (ruling 4 amendment)", () => {
   });
 });
 
-describe("tile order (timeline touch-up ruling 2 — optional, conservative parse)", () => {
+describe("tile order (optional, conservative parse)", () => {
   it("absent tileOrder stays absent (older sidecar round-trips unchanged)", () => {
     const load = classifySidecar(JSON.stringify({ v: 1, tracks: [["a"]] }));
     expect(load.status).toBe("ok");
@@ -177,7 +177,7 @@ describe("tile order (timeline touch-up ruling 2 — optional, conservative pars
   });
 });
 
-describe("tile sizes (split ruling 3 — optional, conservative parse; no sum normalization)", () => {
+describe("tile sizes (optional, conservative parse; no sum normalization)", () => {
   it("absent tileSizes stays absent (older sidecar round-trips unchanged)", () => {
     const load = classifySidecar(JSON.stringify({ v: 1, tracks: [["a"]] }));
     expect(load.status).toBe("ok");

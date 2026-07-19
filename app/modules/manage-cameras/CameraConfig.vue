@@ -8,7 +8,7 @@ You may find the full license in project root directory.
   manage-cameras session telemetry and routes every edit through a command; the
   orchestrator owns the camera and persists changes. No `core` access here.
 
-  Three variants (P5):
+  Three variants:
   - "single"  — full per-camera panel (the original view);
   - "linked"  — an L/R camera while the Fovea Pair link holds: preview + Role
                 (editing Role is how you unlink) + read-only value rows;
@@ -233,7 +233,7 @@ const exposure: Control = {
       "Manual: the slider sets exposure; Auto lets the camera meter it (once or continuously)",
   },
   manual: () => view.value?.exposure_auto === "Off",
-  // Integer µs (was 100 µs rounding): anti-flicker detents like 1/60 s =
+  // Integer µs: anti-flicker detents like 1/60 s =
   // 16666.7 µs must land exactly, not at 16700 µs.
   slider: echoNum(
     () => logExp(view.value?.exposure ?? 1),
@@ -323,7 +323,7 @@ function reset() {
   void session.call("reset", { serial: camSerial.value });
 }
 
-// --- Fovea Pair extras (P5/P6) ----------------------------------------------
+// --- Fovea Pair extras ------------------------------------------------------
 
 const divergent = computed(() => pair.value?.divergent ?? []);
 
@@ -337,7 +337,7 @@ const divergentLabels = computed(() =>
 );
 
 // Unify runs seconds when pixel formats differ (two sequential reconfigure
-// flows) — the buttons must show it and refuse re-entry (UI/UX review #2).
+// flows) — the buttons must show it and refuse re-entry.
 const unifyBusy = ref(false);
 async function unify(source: string) {
   if (unifyBusy.value) return;
@@ -353,7 +353,7 @@ const budgetText = computed(() => {
   const b = pair.value?.budget;
   if (!b) return "";
   const expUs = Math.max(b.exposureUsL, b.exposureUsR);
-  // Name the BINDING term inline (review #8): the frame period is
+  // Name the BINDING term inline: the frame period is
   // max(exposure, camera readout floor) — attribute the rate honestly.
   const frameUs = b.minIntervalMs * 1000 - TRIGGER_FRAME_MARGIN_US;
   const term =
@@ -621,7 +621,7 @@ function cancelEdit(e?: Event) {
             <span>{{ c.label }}</span>
             <!-- keydown.stop: arrow keys must edit the TEXT, not bubble to the
                  slider root's handler (which would move the camera value under
-                 the caret — review F5). -->
+                 the caret). -->
             <input
               v-if="editing === c.key"
               v-focus

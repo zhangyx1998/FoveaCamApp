@@ -4,10 +4,10 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Shared DISPLAY vision kernel (calibration-free since C-23): runs INSIDE the vision
+// Shared DISPLAY vision kernel (calibration-free): runs INSIDE the vision
 // worker, producing the processed views (magnified slice, perspective-wrapped foveae,
 // combined diff/depth) + multi-fovea's center relay off the JS event loop. Each session
-// ships its calibration-derived matrices as params. real-1g: the C input is the
+// ships its calibration-derived matrices as params. The C input is the
 // undistort:<serial> pipe (already-undistorted), so no in-worker Undistort; process is sync.
 // spec: docs/spec/vision.md#display-kernel
 
@@ -35,25 +35,19 @@ import type {
   VisionKernel,
 } from "./vision-kernel.js";
 
-// --- depth view matcher window (depth-view-legacy-stereobm, 2026-07-11) -------
-// The depth view used to run FULL-RES StereoBM over the legacy UNSIGNED 0…64
-// window — duplicating (worse) what the tuned native stereo brick does, and
-// inheriting the exact unsigned-window bug disparity-scope fixed
-// (sgbm-signed-range.md: independently steered foveae make true disparity
-// SIGNED). Chosen fix (effort call, documented): keep the view in this kernel
-// but adopt the brick's ruled geometry — the SIGNED_DISPARITY_WINDOW scaled by
-// a quarter-res match (the stereo-throughput matchScale default). Full
+// --- depth view matcher window --------------------------------------------
+// The depth view runs a quarter-res SIGNED match over SIGNED_DISPARITY_WINDOW
+// (independently steered foveae make true disparity SIGNED). Full
 // native-stereo-pipe routing (disparity-scope's path) needs warped L/R PIPES
-// manual-control doesn't build — a session-level replumb with rig-gated
-// verification, disproportionate for a preview view; revisit if the depth
-// view ever becomes a measurement surface.
+// manual-control doesn't build — disproportionate for a preview view; revisit
+// if the depth view ever becomes a measurement surface.
 const DEPTH_MATCH_SCALE = 4; // match at 1/4 res, window scaled alongside
 const DEPTH_WINDOW = {
   // 512/−256 → 128/−64 at quarter scale (multiples of 16 preserved).
   numDisparities: SIGNED_DISPARITY_WINDOW.numDisparities / DEPTH_MATCH_SCALE,
   minDisparity: SIGNED_DISPARITY_WINDOW.minDisparity / DEPTH_MATCH_SCALE,
 } as const;
-const DEPTH_BLOCK_SIZE = 21; // the legacy block size, unchanged
+const DEPTH_BLOCK_SIZE = 21; // StereoBM block size
 
 function toMat(nums: number[] | null | undefined, shape: number[]): Mat<Float64Array> | null {
   const n = shape.reduce((a, b) => a * b, 1);
@@ -98,10 +92,10 @@ export function createDisplayKernel(initial: Record<string, unknown>): VisionKer
   }
 
   function fovea(role: "L" | "R", raw: Mat<Uint8Array>): void {
-    // The kernel emits NO L/R preview frames anymore (real-2b sweep close:
-    // every consumer's L/R view binds a `camera/<serial>/undistort` pipe
-    // directly). The warp survives solely as the combined (diff/depth)
-    // `aligned` input — sliced view skips it entirely (the hot path).
+    // The kernel emits NO L/R preview frames: every consumer's L/R view binds
+    // a `camera/<serial>/undistort` pipe directly. The warp survives solely as
+    // the combined (diff/depth) `aligned` input — sliced view skips it entirely
+    // (the hot path).
     const combining = p.view !== "sliced";
     if (combining) {
       const H = role === "L" ? p.homographyL : p.homographyR;
@@ -130,9 +124,9 @@ export function createDisplayKernel(initial: Record<string, unknown>): VisionKer
       out.push({ name: "center", mat: diff(L, R, true) });
     } else if (p.qMatrix) {
       // Quarter-res SIGNED match (see DEPTH_WINDOW above): ~1/16 the pixels ×
-      // 2× the (now correct) search width ≈ 1/8 the old matcher cost, and
-      // toed-in gaze no longer matches garbage. The emitted heatmap is
-      // quarter-res — a preview surface; FrameView scales at draw.
+      // 2× the search width ≈ 1/8 the matcher cost, and toed-in gaze matches
+      // correctly. The emitted heatmap is quarter-res — a preview surface;
+      // FrameView scales at draw.
       const [h = 0, w = 0] = L.shape;
       const size = {
         width: Math.max(16, Math.round(w / DEPTH_MATCH_SCALE)),
@@ -148,8 +142,8 @@ export function createDisplayKernel(initial: Record<string, unknown>): VisionKer
       );
       // StereoBM emits CV_16S FIXED-POINT disparity (4 fractional bits);
       // reprojectImageTo3D does NOT divide — feed it raw and every depth is
-      // 16× compressed (calibration review 2026-07-11 #3). Convert to float
-      // ÷16 like the native brick's own convertTo (StereoStream.h). VALUES
+      // 16× compressed. Convert to float ÷16 like the native brick's own
+      // convertTo (StereoStream.h). VALUES
       // deliberately stay in MATCH-SPACE pixel units — u, v and Q's affine
       // column are match-space too (scaledQ), so no ×DEPTH_MATCH_SCALE here;
       // the brick multiplies by matchScale only because it PUBLISHES
@@ -178,9 +172,8 @@ export function createDisplayKernel(initial: Record<string, unknown>): VisionKer
       const out: KernelFrameOut[] = [];
       const values: DisplayValues = {};
       if (frames.C) {
-        // Already undistorted (the `undistort:<serial>` pipe input, real-1g) —
-        // or raw on an uncalibrated rig (session fell back to `camera:<serial>`,
-        // matching the old `undistort ? apply : raw` degradation).
+        // Already undistorted (the `undistort:<serial>` pipe input) — or raw on
+        // an uncalibrated rig (session fell back to `camera:<serial>`).
         const view = frames.C.mat;
         const [h = 0, w = 0] = view.shape;
         if (w !== width || h !== height) {

@@ -119,10 +119,10 @@ describe("renderer Store client", () => {
   });
 
   it("a Mat-shaped TypedArray keeps its attached shape across the wire (undistort crash regression)", async () => {
-    // The 2026-07-11 rig crash: calibration Mats are Float64Arrays with EXPANDO
+    // Calibration Mats are Float64Arrays with EXPANDO
     // props (`shape`, `channels`) the codec re-attaches; bare structured clone
-    // strips them, so loadIntrinsic fed the native Undistort a shapeless Mat
-    // ("Mat.shape must be an array of integers") and the session died. The
+    // strips them, so a shapeless Mat fails the native Undistort
+    // ("Mat.shape must be an array of integers"). The
     // wire framing (codec-JSON both directions) must round-trip them.
     const mat = Object.assign(new Float64Array([1, 0, 0, 0, 1, 0, 0, 0, 1]), {
       shape: [3, 3],
@@ -139,10 +139,10 @@ describe("renderer Store client", () => {
     expect((doc.camera_matrix as any).channels).toBe(1);
   });
 
-  it("a SUBARRAY TypedArray view round-trips by its own bytes (review 2026-07-11, latent)", () => {
-    // The codec used to serialize `view.buffer` WHOLE — a view with a non-zero
-    // byteOffset (or shorter length) revived as a full-buffer array: wrong
-    // values AND wrong length. byteOffset/byteLength must be honored.
+  it("a SUBARRAY TypedArray view round-trips by its own bytes (latent)", () => {
+    // A view with a non-zero byteOffset (or shorter length) must round-trip by
+    // its own bytes, not as a full-buffer array (wrong values AND wrong
+    // length): byteOffset/byteLength must be honored.
     const backing = new Float64Array([9, 9, 1.5, -2.25, 3, 4, 9]);
     const view = Object.assign(backing.subarray(2, 6), { shape: [2, 2], channels: 1 });
     const revived = wireDecode<Float64Array & { shape: number[]; channels: number }>(

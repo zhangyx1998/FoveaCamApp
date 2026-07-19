@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// channel-order-fix.md empirical PIN: OpenCV's `COLOR_BayerXX2*` enum naming is
+// OpenCV's `COLOR_BayerXX2*` enum naming is
 // off-by-one vs the GenICam/PFNC sensor naming, so the correct demosaic constant
 // for a GenICam BayerYY mosaic has R and B swapped. `cvBayerPrefix` (the single
 // source the C++ `cvtColorCode` table, the viewer decode, and the capture path
@@ -14,7 +14,7 @@
 //  - the REGISTRY constant `${cvBayerPrefix("BayerRG")}2RGB` (= BayerBG2RGB)
 //    demosaics red into channel 0 (honest RGB) and leaves channel 2 (B) zero;
 //  - the LITERAL PFNC-named constant `BayerRG2RGB` demosaics red into channel 2
-//    (the off-by-one that swapped R/B on every live preview before the fix).
+//    (the off-by-one that swaps R/B on the live preview).
 // If the registry ever regresses to the literal name, red lands in ch2 here and
 // this test fails.
 

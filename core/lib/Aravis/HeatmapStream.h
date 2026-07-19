@@ -5,8 +5,7 @@
 // -------------------------------------------------------
 #pragma once
 
-// stereo-disparity-and-heatmap-nodes §"HeatmapStream (pinned)": a plain
-// single-input chained brick (ScaleStream's exact shape) that colormaps a
+// A plain single-input chained brick (ScaleStream's exact shape) that colormaps a
 // 1-channel input (CV_32FC1 or CV_8UC1) to BGRA8 so the output matches every
 // other BGRA8 pipe. Input is another brick's OwnedFrame tap (normally a stereo
 // disparity pipe — Leaky/latest-wins; demand propagation keeps the upstream

@@ -23,8 +23,8 @@ const titleBarHeight = ref(0);
   <div class="main" :style="{ top: titleBarHeight + 'px' }">
     <!-- ErrorBoundary makes an async-setup REJECTION observable — without it a
          throwing setup leaves the Suspense fallback spinning forever with the
-         error only in the console (rig find 2026-07-11; user ruling: async
-         setup failures must be observable). -->
+         error only in the console. Async setup failures must be
+         observable. -->
     <ErrorBoundary>
       <Suspense>
         <ConfigBody />

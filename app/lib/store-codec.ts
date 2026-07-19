@@ -87,9 +87,9 @@ export function replacer(key: string, value: any) {
   }
   for (const [k, c] of Object.entries(TypedArrayConstructors)) {
     if (value instanceof c) {
-      // Honor the VIEW's byteOffset/byteLength (calibration-review-2026-07-11,
-      // latent): a subarray view used to serialize its WHOLE backing buffer —
-      // wrong values AND wrong length after revive. Encode exactly the bytes
+      // Honor the VIEW's byteOffset/byteLength: serializing the WHOLE backing
+      // buffer of a subarray view yields wrong values AND wrong length after
+      // revive. Encode exactly the bytes
       // the view covers; the reviver's `new ctor(buffer)` then reconstructs a
       // same-length view over the sliced copy. Full-buffer views (byteOffset 0,
       // full length — every Mat the app stores today) produce byte-identical
@@ -138,7 +138,7 @@ export function reviver(key: string, value: any) {
 // silently STRIPS expando properties attached to it — a stored Mat's
 // `shape`/`channels` (see the reviver's `Object.assign(arr, props)`), which the
 // native Undistort constructor requires ("Mat.shape must be an array of
-// integers" crash, rig find 2026-07-11). Encode at the sending edge, revive at
+// integers" crash). Encode at the sending edge, revive at
 // the receiving edge, on BOTH transports (ipcRenderer and parentPort).
 
 /** Encode one store value for an IPC/parentPort hop. `undefined` → "null". */

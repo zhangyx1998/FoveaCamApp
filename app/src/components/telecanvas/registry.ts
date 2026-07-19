@@ -7,10 +7,9 @@
 // TeleCanvas PROVIDER registry (renderer, per-window module scope). App modules
 // contribute SVG through `RemoteCanvasTeleport.vue` (hidden <svg> +
 // MutationObserver → a registered provider ref); `content` merges every
-// registered provider into one SVG string. This is the exact registry + merge
-// that used to live in the old `RemoteCanvas.vue` — extracted verbatim so the
-// push (Pusher.vue, mounted per app window) and the TeleCanvas window's
-// client-mode preview share one module scope.
+// registered provider into one SVG string. The registry + merge is shared so
+// the push (Pusher.vue, mounted per app window) and the TeleCanvas window's
+// client-mode preview use one module scope.
 //
 // IMPORTANT — the registry is PER RENDERER: each window (app window, TeleCanvas
 // window) has its own `registry`/`content`. The TeleCanvas window therefore

@@ -1,4 +1,4 @@
-// Controller THREAD NODE coverage (controller-node-and-fifo-edges §3). The node
+// Controller THREAD NODE coverage. The node
 // absorbs `startActuationLoop`'s device lifecycle as a PUSH model and adds
 // trigger-mode fovea pairing. Concerns:
 //   (1) POSITION LIFECYCLE (v2) — createStream on first update, stream.update on
@@ -13,7 +13,7 @@
 //       retires it.
 //   (5) TRIGGER FIN FORWARDING — `startTriggerCapture` schedules CMD_FRAME and
 //       forwards each FIN outcome to every registered `onFin` sink (the L/R pair
-//       matching moved to the native PairStream, pairing-nodes ruling 6).
+//       matching lives in the native PairStream).
 //
 // No serial hardware / addon: the node takes injected fake controllers + fake
 // FIN sinks (type-only `Controller`/`FrameOutcome` imports are erased).

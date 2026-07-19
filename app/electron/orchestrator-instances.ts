@@ -8,8 +8,9 @@
 // fork/port/janitor wiring is INJECTED from main.ts, unit-tested with fakes).
 // Owns: the typed instance table + ≤1-hardware gate; the hardware-clear GATE
 // (withhold "hardware-clear" until the previous hardware instance is confirmed
-// dead + swept, since Aravis acquisition must serialize even as spin-up overlaps
-// the old teardown); death classification + janitor on every non-clean path.
+// dead + swept, since Aravis acquisition must serialize even as a fresh instance
+// forks while the previous one is still tearing down); death classification +
+// janitor on every non-clean path.
 // spec: docs/spec/windows.md#instances
 
 import {
@@ -67,8 +68,8 @@ export interface InstanceRegistryDeps {
   /** Run the hardware janitor for a non-cleanly-dead instance (fresh process,
    *  disarms MEMS + stops cameras). Resolves when the sweep completes. */
   runJanitor(inst: InstanceView, reason: string): Promise<void>;
-  /** Push a typed down report to the instance's owned windows (crash surface,
-   *  ruling 4 — scoped to the instance's windows). */
+  /** Push a typed down report to the instance's owned windows (crash surface —
+   *  scoped to the instance's windows). */
   notifyDown(inst: InstanceView, report: OrchestratorDownReport): void;
   /** Fires whenever a hardware orchestrator process becomes alive / all die —
    *  main pauses the enumerate-only probe while a hardware instance is alive so
@@ -80,7 +81,7 @@ export interface InstanceRegistryDeps {
   /** Injectable timer (bounded quiesce), defaults to setTimeout/clearTimeout. */
   schedule?(fn: () => void, ms: number): TimerToken;
   cancel?(t: TimerToken): void;
-  /** Bounded quiesce deadline (ms) before a kill (~3-5s per the ruling). */
+  /** Bounded quiesce deadline (ms) before a kill (~3-5s). */
   quiesceMs?: number;
 }
 
@@ -98,12 +99,12 @@ interface InstanceRec {
   expected: boolean;
   /** Janitor sweep for this instance's non-clean death completed. */
   janitorDone: boolean;
-  /** Owned windows (A-34 windowIds). A hardware instance dies when its last
+  /** Owned windows (windowIds). A hardware instance dies when its last
    *  owned window closes. */
   windows: Set<string>;
-  /** Attached observer windows (A-34 windowIds) — the profiler pins here at
+  /** Attached observer windows (windowIds) — the profiler pins here at
    *  open. Unlike owned `windows` these NEVER gate teardown (the profiler may
-   *  outlive its instance, ruling 2), but they DO receive the down report and
+   *  outlive its instance), but they DO receive the down report and
    *  route their connect to this instance (never any other). */
   attachments: Set<string>;
   /** Set once the instance has ever owned a window — so a just-forked instance
@@ -162,7 +163,7 @@ export class OrchestratorInstances {
    *  stream graph. With no app instance, falls back to the newest live
    *  NON-hardware instance (a future viewer compute instance). Null when nothing
    *  is up. NOTE: the config store no longer routes here — it goes straight to
-   *  MAIN (config-store-main-authority.md), so config/TeleCanvas windows need no
+   *  MAIN, so config/TeleCanvas windows need no
    *  instance and main no longer forks a "settings" one. */
   connectTarget(): InstanceProc | null {
     const hw = this.currentHardware();
@@ -232,7 +233,7 @@ export class OrchestratorInstances {
     return view(rec);
   }
 
-  /** Associate an owned window (A-34 windowId) with an instance. */
+  /** Associate an owned window (windowId) with an instance. */
   claimWindow(id: string, windowId: string): void {
     const rec = this.byId(id);
     if (!rec) return;
@@ -248,7 +249,7 @@ export class OrchestratorInstances {
   }
 
   /** Attach an OBSERVER window (the profiler) to an instance at open — the
-   *  immutable per-instance binding (ruling 1/2). Unlike `claimWindow` this
+   *  immutable per-instance binding. Unlike `claimWindow` this
    *  never marks `hadWindow` and never gates teardown: the profiler may outlive
    *  the instance. No-op if the instance is unknown. */
   attachWindow(id: string, windowId: string): void {
@@ -273,8 +274,8 @@ export class OrchestratorInstances {
     return rec ? view(rec) : null;
   }
 
-  /** The windowIds an instance currently owns — the crash-report scope (ruling
-   *  4): a down report reaches ONLY this instance's windows, so a NEW instance's
+  /** The windowIds an instance currently owns — the crash-report scope: a down
+   *  report reaches ONLY this instance's windows, so a NEW instance's
    *  app window never reacts to the OLD instance's death. */
   windowsOf(id: string): string[] {
     return [...(this.byId(id)?.windows ?? [])];

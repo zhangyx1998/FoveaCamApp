@@ -5,15 +5,14 @@
 // -------------------------------------------------------
 #pragma once
 
-// unified-time-and-topology §5 (B, native re-plumb): the FOVEA CROP brick v2.
+// The FOVEA CROP brick v2.
 // Input is another brick's OwnedFrame tap (normally the UNDISTORT brick —
 // chain convert → undistort → fovea; a convert brick works too for raw
-// crops). The crop is a PLAIN ROI copy of the input frame — the fused map-ROI
-// convert+remap of v1 is retired: undistortion happens ONCE upstream and N
-// foveas share it (the id `.../undistort/fovea/<slot>` finally matches the
-// physical dataflow). C-20 semantics on the SHM pipe are unchanged: dynamic
-// pipe, max-footprint ring, per-frame active w/h + FRAME-BOUND originX/originY
-// in the v4 slot header, epoch reuse-safe ids.
+// crops). The crop is a PLAIN ROI copy of the input frame: undistortion happens
+// ONCE upstream and N foveas share it (the id `.../undistort/fovea/<slot>`
+// matches the physical dataflow). The SHM pipe is dynamic: max-footprint ring,
+// per-frame active w/h + FRAME-BOUND originX/originY in the v4 slot header,
+// epoch reuse-safe ids.
 //
 // The crop rect stays LIVE-updatable (KCF arm() pattern: guarded pending +
 // atomic flag, applied on the next frame, clamped to frame domain + max
@@ -81,8 +80,8 @@ protected:
   void stop() override {
     ChainedStream::stop();
     // Parked (stream thread — single-writer over buf_): drop the reused
-    // output buffer instead of retaining it for the lease lifetime
-    // (value-sweep 2026-07-11 idle-retention); unpark reallocates it.
+    // output buffer instead of retaining it for the lease lifetime;
+    // unpark reallocates it.
     buf_.release();
   }
 

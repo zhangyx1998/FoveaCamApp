@@ -5,8 +5,7 @@
 // -------------------------------------------------------
 #pragma once
 
-// split-disparity-nodes §"Scale node = a NEW native chained brick": a general-
-// purpose RESIZE brick, modelled exactly on the FOVEA CROP brick (FoveaStream).
+// A general-purpose RESIZE brick, modelled exactly on the FOVEA CROP brick (FoveaStream).
 // Input is another brick's OwnedFrame tap (any convert / undistort / fovea
 // pipe — Leaky/latest-wins, demand propagation keeps the upstream chain awake).
 // The product is a `cv::resize` of the input frame:
@@ -121,8 +120,8 @@ protected:
   void stop() override {
     ChainedStream::stop();
     // Parked (stream thread — single-writer over buf_): drop the reused
-    // output buffer instead of retaining it for the lease lifetime
-    // (value-sweep 2026-07-11 idle-retention); unpark reallocates it.
+    // output buffer instead of retaining it for the lease lifetime;
+    // unpark reallocates it.
     buf_.release();
   }
 

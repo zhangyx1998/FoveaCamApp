@@ -4,11 +4,10 @@ This source code is licensed under the MIT license.
 You may find the full license in project root directory.
 --------------------------------------------------- -->
 <!--
-  Shared capture-preview window body (capture-recorder-everywhere ruling 3):
-  the capture previews + SaveControls/SaveReport, PARAMETERIZED by session name
-  (was hardcoded to manual-control per capture-recorder-nodes ruling 8). A
-  `debug`-class window (`kind: "capture"`) the camera icon toggles, mounted
-  full-window by DebugWindow.
+  Shared capture-preview window body: the capture previews +
+  SaveControls/SaveReport, parameterized by session name. A `debug`-class
+  window (`kind: "capture"`) the camera icon toggles, mounted full-window by
+  DebugWindow.
 
   The window is a PASSIVE viewer over ANY capturable app's session (the debugger
   pattern): the opener app window keeps the session active/leased; this window
@@ -45,7 +44,7 @@ const session = useSession(captureContract, props.session, { passive: true });
 // passive VIEWER that pulls the node's held resources.
 const cap = new Capture(session, props.session);
 
-// ── DATA-SOURCE SEAM (ruling 7) ────────────────────────────────────────────
+// ── DATA-SOURCE SEAM ───────────────────────────────────────────────────────
 // Preview = the capture node's ACTUAL held resources: the resource list +
 // metadata ride `telemetry.capture_meta` (the node's manifest), and each IMAGE
 // is PULLED on demand via `getCapturePreview` (the node downconverts its real
@@ -121,7 +120,7 @@ const image_entries = computed(() =>
 
 const data_ready = computed(() => Object.keys(session.telemetry.capture_meta).length > 0);
 
-// In-window capture trigger (ruling 3): apps without bespoke capture-driving UI
+// In-window capture trigger: apps without bespoke capture-driving UI
 // (every app but manual-control) get a basic single-shot trigger here, so the
 // camera icon → preview window is a complete capture→preview→save loop. The
 // server refuses (typed error) while a recording is active — surfaced inline.
@@ -139,8 +138,8 @@ async function triggerCapture() {
 
 const save_state = ref<Promise<void> | null>(null);
 
-// Closing the window = the old overlay's "exit" (server holds the resources
-// until the next save/discard/run, unchanged).
+// Closing the window is the "exit": the server holds the resources until the
+// next save/discard/run.
 function close() {
   window.close();
 }

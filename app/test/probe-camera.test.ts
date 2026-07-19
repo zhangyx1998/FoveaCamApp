@@ -1,4 +1,4 @@
-// Camera-enumeration probe pure helpers (disposable-orchestrator ruling 3):
+// Camera-enumeration probe pure helpers:
 // list diffing (main forwards to Welcome only on a real change), the status-
 // only Welcome status derivation (no more "orchestrator down"), and stable
 // sorting. Vue-free / Electron-free — the same helpers the probe process, main,

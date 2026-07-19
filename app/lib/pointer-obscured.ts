@@ -4,8 +4,7 @@
  * You may find the full license in project root directory.
  * ------------------------------------------------------ */
 
-// Pointer OBSCURATION test (value-sweep addendum 2026-07-11,
-// frameview-pointer-obscuration): drag/hover surfaces that install
+// Pointer OBSCURATION test: drag/hover surfaces that install
 // window-level listeners (FrameView steer, PosView voltage drag) keep
 // processing every pointer event even when another element — the drawer, a
 // dialog — sits ON TOP of them, so "drags through the drawer" kept steering

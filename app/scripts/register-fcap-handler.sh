@@ -4,7 +4,7 @@
 # Builds `~/Applications/FoveaCam Dev.app` — an AppleScript droplet that
 # forwards opened files to the RUNNING app over its userData Unix socket (no
 # second Electron), cold-starting the dev binary only when nothing is listening.
-# Idempotent: re-run to rebuild. See docs/dev/fcap-file-association.md.
+# Idempotent: re-run to rebuild.
 # ------------------------------------------------------
 set -euo pipefail
 

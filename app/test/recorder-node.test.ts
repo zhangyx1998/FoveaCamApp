@@ -4,17 +4,17 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// native-recorder Wave 3: the recorder node is a thin driver over the native
-// brick (`core.Recorder.*`), so the host is exercised against a FAKE native
-// seam — vitest never loads native core (the brick's own lifecycle is gated by
+// The recorder node is a thin driver over the native brick
+// (`core.Recorder.*`), so the host is exercised against a FAKE native seam —
+// vitest never loads native core (the brick's own lifecycle is gated by
 // core/test/40-recorder-brick.ts). Covered here:
 //  - `foldStreamStats` — brick cumulative counters → meter DELTAS + UI stats
-//    (unchanged from the worker era — the counter shape is identical);
-//  - `dispatchFrame` — ruling-3 extras correlation onto the telemetry doc;
-//  - `channelMetadata` — advert → VERBATIM channel metadata (ruling 8);
+//    (the counter shape is identical);
+//  - `dispatchFrame` — extras correlation onto the telemetry doc;
+//  - `channelMetadata` — advert → VERBATIM channel metadata;
 //  - the host lifecycle: connect ordering, schema-constant plumbing, extras
 //    gating, churn (add/remove stream + data channels), finalize mapping, the
-//    R-2 deadline abort, and the build-failure unwind.
+//    deadline abort, and the build-failure unwind.
 
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -93,9 +93,9 @@ describe("foldStreamStats (brick counters → meter deltas + UI stats)", () => {
   it("folds over a GROWING then shrinking-but-retained key set (churn)", () => {
     const meter = fakeMeter();
     const folds = new Map<string, StreamFold>();
-    // Wave 1: only stream `a`.
+    // Snapshot 1: only stream `a`.
     foldStreamStats(meter, folds, { a: { ingested: 5, dropped: 0, droppedQueue: 0, droppedRing: 0, written: 5, bytes: 50 } });
-    // Wave 2: `b` churned IN mid-run (a new key mid-snapshot); `a` unchanged.
+    // Snapshot 2: `b` churned IN mid-run (a new key mid-snapshot); `a` unchanged.
     // The brick keeps ended streams in its counters, so a departed stream still
     // appears here with frozen totals — the fold must handle the changing set.
     meter.ingest.mockClear();
@@ -110,7 +110,7 @@ describe("foldStreamStats (brick counters → meter deltas + UI stats)", () => {
   });
 });
 
-describe("dispatchFrame (ruling-3 extras correlation)", () => {
+describe("dispatchFrame (extras correlation)", () => {
   it("builds a stream+seq-correlated telemetry doc and posts it", () => {
     const posts: ExtrasMessage[] = [];
     // The trusted capture time (tNs) rides the doc's `t`; the message logs on
@@ -148,7 +148,7 @@ describe("dispatchFrame (ruling-3 extras correlation)", () => {
   });
 });
 
-describe("channelMetadata (advert → VERBATIM channel metadata, ruling 8)", () => {
+describe("channelMetadata (advert → VERBATIM channel metadata)", () => {
   it("copies opaque pixelFormat / stride / significantBits verbatim", () => {
     const meta = channelMetadata({
       pixelFormat: "BayerRG12p/bz2", // opaque, codec-suffixed — never parsed
@@ -477,8 +477,7 @@ describe("createRecorderNode dynamic streams + data channels", () => {
     });
     node.removeStream("left");
     expect(state.of("removeStream").map((c) => c.args[1])).toEqual(["left"]);
-    // The brick's tap detach is synchronous, so the pipe releases at once —
-    // the worker era's async stream-ended dance is gone.
+    // The brick's tap detach is synchronous, so the pipe releases at once.
     expect(released).toEqual(["pipe/L"]);
     // Unknown name → no-op.
     node.removeStream("nope");
@@ -542,7 +541,7 @@ describe("createRecorderNode dynamic streams + data channels", () => {
   });
 });
 
-describe("createRecorderNode stop() + ruling-3 round-trip", () => {
+describe("createRecorderNode stop() + extras round-trip", () => {
   it("finalizes, maps native stats to FinalizeStats, destroys, releases pipes AFTER", async () => {
     const released: string[] = [];
     const { native, state } = fakeNative();
@@ -580,8 +579,8 @@ describe("createRecorderNode stop() + ruling-3 round-trip", () => {
     });
     const stats = await node.stop();
     // Deadline path → truncated stats, native aborted, container left on disk.
-    // value-sweep-2026-07-11: the sentinel now carries `truncated: true` so the
-    // recording service can surface it instead of publishing a clean stop.
+    // The sentinel carries `truncated: true` so the recording service can
+    // surface it instead of publishing a clean stop.
     expect(stats).toEqual({ messageCount: "0", chunkCount: 0, bytes: 0, truncated: true });
     expect(state.aborted).toBe(true);
     // Ordering preserved: pipes released only AFTER the (forced) stop.
@@ -620,9 +619,8 @@ describe("createRecorderNode stop() + ruling-3 round-trip", () => {
   });
 
   it("re-folds stats AFTER finalize so the drain's tail frames are counted", async () => {
-    // The R-1 drain writes frames AFTER the pre-finalize poll; the host must
-    // fold once more post-finalize or `stats()` undercounts (the worker era's
-    // final stats push, preserved).
+    // The drain writes frames AFTER the pre-finalize poll; the host must fold
+    // once more post-finalize or `stats()` undercounts.
     const stats: Record<string, StreamCounters> = {
       a: { ingested: 5, dropped: 0, droppedQueue: 0, droppedRing: 0, written: 5, bytes: 500 },
     };

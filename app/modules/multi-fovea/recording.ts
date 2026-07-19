@@ -65,13 +65,13 @@ export interface RecordingTarget {
 export interface MultiFoveaRecordingDeps {
   /** The leased L/C/R cameras, or null when the session isn't active. */
   cameras(): Record<"L" | "C" | "R", RecordingCamera> | null;
-  /** Wide camera singleton metadata (ruling 2) — intrinsics/distortion from
-   *  the calibration triple; null on an uncalibrated rig (record omitted). */
+  /** Wide camera singleton metadata — intrinsics/distortion from the
+   *  calibration triple; null on an uncalibrated rig (record omitted). */
   wideCamera(): Record<string, unknown> | null;
-  /** Refcounted raw-pipe registry (ruling 5). Injected from index.ts. */
+  /** Refcounted raw-pipe registry. Injected from index.ts. */
   rawPipes: RawPipeRegistry;
-  /** Plain broker connect (refcount++ → C-21 gate). Wrapped to inject each
-   *  advert's JS-side `significantBits` the native PipeSpec drops (ruling 8). */
+  /** Plain broker connect (refcount++ → gate). Wrapped to inject each advert's
+   *  JS-side `significantBits` the native PipeSpec drops. */
   connect: RecorderConnect;
   /** Compression brick seam; absent → the compress switches are ignored. */
   compress?: CompressPipeSeam;
@@ -85,7 +85,7 @@ export interface MultiFoveaRecordingDeps {
   mirrorAt?: (hostNs: bigint) => MirrorAt | null;
   /** Free-run extras: the triple's per-eye V2A + A2H, or null uncalibrated. */
   conversions?: () => FreeRunConversions | null;
-  /** Notify main a recording finished (auto-open viewer, ruling 7). */
+  /** Notify main a recording finished (auto-open viewer). */
   finished(foveaPath: string): void;
   telemetry(patch: {
     recording_active?: boolean;
@@ -129,8 +129,8 @@ function boundedSet<K, V>(map: Map<K, V>, key: K, value: V): void {
   if (map.size > MAP_CAP) map.delete(map.keys().next().value as K);
 }
 
-/** The descriptor doc this controller writes: the ruled shape with EXPLICIT
- *  nulls for absent pointers (free-run L/R; an evicted/unmatched key). */
+/** The descriptor doc this controller writes: the shape with EXPLICIT nulls
+ *  for absent pointers (free-run L/R; an evicted/unmatched key). */
 export interface MultiFoveaDescriptor {
   tNs: number;
   bbox: Rect;
@@ -262,7 +262,7 @@ export function createMultiFoveaRecording(
     return historyExtras(mirror, deps.conversions?.() ?? null, side);
   }
 
-  /** Diff the live channel set against the enabled targets (ruling 3 churn).
+  /** Diff the live channel set against the enabled targets (churn).
    *  Only meaningful with a live node; the snapshot persists for `start`. */
   function syncChannels(): void {
     const node = service.node;
@@ -298,7 +298,7 @@ export function createMultiFoveaRecording(
     async prepare() {
       method = await readMethod();
     },
-    // Channels for targets already armed at start (ruling 3).
+    // Channels for targets already armed at start.
     onStarted: () => syncChannels(),
     onStopped: () => clearMaps(),
     acquire() {
@@ -340,7 +340,7 @@ export function createMultiFoveaRecording(
         }
       });
 
-      // Ruling 8: inject the JS-side significantBits the native spec drops (raw + compressed).
+      // Inject the JS-side significantBits the native spec drops (raw + compressed).
       const connect: RecorderConnect = (pipeId) => {
         const conn = deps.connect(pipeId);
         const sb = significantBitsOf.get(pipeId);

@@ -36,12 +36,12 @@ export interface PairAnchorSink {
  *  the SAME `V2A`/`A2H` the display wrap + `conversionComputeH` consume). */
 export type AnchorConversions = Pick<CoordinateConversions, "V2A" | "A2H">;
 
-// --- root → downstream resolved-anchor key delivery (pairing-nodes ruling 2) --
-// P-1 deferred "how downstream frames land identical keys"; R-1 resolves it with
-// RESOLVED anchors (never re-stamping — that would violate trusted-time). The
-// ROOT pairing brick tolerance-matches raw camera arrivals against the FIN
-// anchor; the two matched frames' ACTUAL deviceTimestamps are the join keys the
-// NEXT stage joins on (its convert/undistort output carries the same timestamps
+// --- root → downstream resolved-anchor key delivery -------------------------
+// Downstream frames land identical join keys via RESOLVED anchors (never
+// re-stamping — that would violate trusted-time). The ROOT pairing brick
+// tolerance-matches raw camera arrivals against the FIN anchor; the two
+// matched frames' ACTUAL deviceTimestamps are the join keys the NEXT stage
+// joins on (its convert/undistort output carries the same timestamps
 // unchanged, meta-passthrough). The session reads the root's (FIN-rate, low)
 // batched pair records and forwards each as a resolved anchor to the downstream
 // `exact` brick — loop-safe, symmetric with the FIN-rate enrichment fan-out.
@@ -126,7 +126,7 @@ export function packAnchorPayload(
   return out;
 }
 
-/** The graph node id for the enrichment row (pairing-nodes ruling 7). */
+/** The graph node id for the enrichment row. */
 export const anchorNodeId = (): string => `${nodeId.controller()}/anchors`;
 
 /** Control-edge type (no frame on the FIN path — scalars). */
@@ -177,7 +177,7 @@ export class AnchorNode {
 
   /** Enrich ONE FIN outcome into an anchor and fan it out to every registered
    *  pairing brick. Trigger-mode only — the controller node forwards FIN
-   *  outcomes here (pairing-nodes ruling 6). */
+   *  outcomes here. */
   ingest(outcome: FrameOutcome): void {
     const payload = packAnchorPayload(outcome, this.conv);
     for (const sink of this.sinks)
@@ -195,7 +195,7 @@ export class AnchorNode {
   }
 }
 
-// --- module singleton (ONE anchor pool source, ruling 4) ---------------------
+// --- module singleton (ONE anchor pool source) ---------------------
 let singleton: AnchorNode | null = null;
 
 export function anchorNode(): AnchorNode {

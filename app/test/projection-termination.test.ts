@@ -1,5 +1,4 @@
-// Projection per-pane termination/rebind machine (docs/proposals/
-// projection-split-view.md deliverable 5): live → frozen(cover) →
+// Projection per-pane termination/rebind machine: live → frozen(cover) →
 // rebound | terminated, under fake timers.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

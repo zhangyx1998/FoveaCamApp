@@ -66,7 +66,7 @@ declare module "core/Aravis" {
     // Generic GenICam feature access — for anything without a dedicated
     // accessor above, e.g. configuring a strobe/line output as
     // ExposureActive for synced capture (LineSelector + LineMode +
-    // LineSource) — see docs/history/refactor/synced-capture.md §6.
+    // LineSource).
     getFeature(name: string): string;
     /** Read an integer GenICam node (e.g. `Width`/`Height`) — `getFeature` uses
      *  `arv_camera_get_string` and throws on integer nodes. */
@@ -104,7 +104,7 @@ declare module "core/Aravis" {
     grab(timeout?: number): Promise<Frame>;
 
     /**
-     * MANUAL clock-recalibration trigger (unified-time, 2026-07-08). The
+     * MANUAL clock-recalibration trigger. The
      * calibration LIFECYCLE is native: the camera's OWNER THREAD runs the
      * initial TimestampLatch pass at device initialization and a drift
      * re-run every 30 s — this method is a thin synchronous nudge onto the
@@ -131,8 +131,8 @@ declare module "core/Aravis" {
     // Stream control
     /** Shared frame stream view — created LAZILY on first read (and cached):
      *  merely listing/opening cameras creates no native stream, and
-     *  `release()` cascades to it (the stream held the device claim past
-     *  release until GC — janitor rig find 2026-07-08). */
+     *  `release()` cascades to it (the stream would otherwise hold the device
+     *  claim past release until GC). */
     readonly stream: Stream<Frame>;
   }
 
@@ -192,7 +192,7 @@ declare module "core/Aravis" {
 
   /**
    * Out-of-loop probe of every ACTIVE per-camera BGRA converter thread
-   * (WS1 real-1e, B-18) → `{ [pipeId]: ProbeSnapshot }` — the same snapshot
+   * → `{ [pipeId]: ProbeSnapshot }` — the same snapshot
    * shape as `Pipe.probeAll()` and the tracker meter, so it folds straight into
    * `perfSnapshot.workloads` and renders identically in the profiler. A parked
    * (refcount-0) or detached converter is absent from the map — no stale rows.
@@ -211,7 +211,7 @@ declare module "core/Aravis" {
   /** Detach + join the convert producer. Idempotent (false if unknown). */
   export function detachCameraPipe(pipeId: string): boolean;
 
-  /** One clock-calibration result (unified-time): `hostNs = rawDeviceNs +
+  /** One clock-calibration result: `hostNs = rawDeviceNs +
    *  offsetNs`, everything in the `steadyNowNs` domain. `jitterNs` =
    *  p90 − min over the candidate offsets (the min-filter's confidence). */
   export interface CameraClockCalibration {
@@ -255,11 +255,11 @@ declare module "core/Aravis" {
   export function onClockMetrics(cb: ((row: ClockMetricsRow) => void) | null): void;
 
   /** `undistortProbeAll` snapshot: the shared meter shape + the v2 variant
-   *  surface (unified-time-and-topology §5). */
+   *  surface. */
   export interface UndistortProbeSnapshot extends ProbeSnapshot {
     variant: "intrinsic" | "homography";
-    /** The owning CAMERA's clock-calibration state (owner-applied dt,
-     *  unified-time): true once `calibrateClock` succeeded for the serial
+    /** The owning CAMERA's clock-calibration state (owner-applied dt):
+     *  true once `calibrateClock` succeeded for the serial
      *  resolved at attach. False = frames carry the raw device counter and
      *  the H lookup runs uncalibrated. Irrelevant for `intrinsic`. */
     calibratedClock: boolean;
@@ -276,8 +276,8 @@ declare module "core/Aravis" {
    */
   export function undistortProbeAll(): Record<string, UndistortProbeSnapshot>;
 
-  /** Variant selector for `attachUndistortPipe` (unified-time-and-topology
-   *  §5): INTRINSIC (center camera — cached `initUndistortRectifyMap` maps
+  /** Variant selector for `attachUndistortPipe`: INTRINSIC (center camera —
+   *  cached `initUndistortRectifyMap` maps
    *  from the plain persisted calibration JSON) or HOMOGRAPHY (L/R
    *  mirror-steered — per-frame `warpPerspective` with H looked up from the
    *  native mirror-history ring by the frame's host-ns time). */
@@ -287,7 +287,7 @@ declare module "core/Aravis" {
     | { homography: true; ringCapacity?: number };
 
   /**
-   * Attach an UNDISTORT brick v2 (unified-time-and-topology §5): consumes the
+   * Attach an UNDISTORT brick v2: consumes the
    * CONVERTER's in-process owned-frame tap — BGRA/converted input only, never
    * the raw Bayer stream. `source` is the convert brick's pipeId (preferred —
    * shares the live converter; demand propagates: this brick running keeps
@@ -307,13 +307,13 @@ declare module "core/Aravis" {
 
   /**
    * Push one mirror/H sample into a HOMOGRAPHY undistort brick's native
-   * history ring (unified-time-and-topology §3/§5): `h` is the 3×3 matrix,
+   * history ring: `h` is the 3×3 matrix,
    * row-major, 9 doubles; `hostNs` its host-clock timestamp. Designed for the
    * ~1 kHz actuation loop (mutex-guarded native ring; no per-frame JS). The
    * undistort thread warps each frame with the entry nearest ≤ (linearly
    * interpolated) its `deviceTimestamp` — which is already OWNER-APPLIED
-   * host time on a calibrated camera (unified-time: the camera stamps its dt
-   * at Frame creation). Returns false for an unknown pipe or a
+   * host time on a calibrated camera (the camera stamps its dt at Frame
+   * creation). Returns false for an unknown pipe or a
    * non-homography variant.
    */
   export function pushHomography(
@@ -323,9 +323,9 @@ declare module "core/Aravis" {
   ): boolean;
 
   /**
-   * @deprecated NO-OP, always returns 0 (unified-time ruling 2026-07-08:
-   * timestamps are OWNER-APPLIED — the camera stamps its calibrated dt at
-   * Frame creation, so per-brick offsets no longer exist). Kept only until
+   * @deprecated NO-OP, always returns 0 (timestamps are OWNER-APPLIED — the
+   * camera stamps its calibrated dt at Frame creation, so per-brick offsets no
+   * longer exist). Kept only until
    * the last JS caller migrates to `camera.calibrateClock` /
    * the owner-thread lifecycle; then this export is deleted.
    */
@@ -334,8 +334,7 @@ declare module "core/Aravis" {
     offsetNs: bigint,
   ): number;
 
-  /** Options for `attachFoveaPipe` (re-based on the undistort brick,
-   *  unified-time-and-topology §5). */
+  /** Options for `attachFoveaPipe` (re-based on the undistort brick). */
   export interface FoveaPipeOptions {
     /** Initial crop rect, in SOURCE-frame pixels (the undistorted frame when
      *  chained on an undistort brick; the converted frame otherwise). */
@@ -354,7 +353,7 @@ declare module "core/Aravis" {
    * (preferred), a convert pipeId (raw crop), or a Camera (legacy — a private
    * chain is created, see `FoveaPipeOptions.cal`). Demand propagates: this
    * brick running keeps the whole upstream chain awake. The pipe is DYNAMIC
-   * with C-20 semantics — advertise with `maxWidth`/`maxHeight`/`maxBytes`
+   * — advertise with `maxWidth`/`maxHeight`/`maxBytes`
    * (the ring footprint); every frame carries its ACTIVE w/h and FRAME-BOUND
    * crop origin in the v4 slot header (surfaced by the reader as
    * `width`/`height`/`originX`/`originY`). Steer live via `setFoveaRect`.
@@ -390,15 +389,15 @@ declare module "core/Aravis" {
   }
 
   /**
-   * Out-of-loop probe of every ACTIVE fovea thread (real-2, B-24) →
+   * Out-of-loop probe of every ACTIVE fovea thread →
    * `{ [pipeId]: FoveaProbeSnapshot }` — keys AND meter names are the node
    * ids. Folds into `perfSnapshot.workloads`/`graphTopology()` identically.
    */
   export function foveaProbeAll(): Record<string, FoveaProbeSnapshot>;
 
   /**
-   * Reactive resize spec for `attachScalePipe`/`setScaleParams`
-   * (split-disparity-nodes §"Scale node"). EXACTLY ONE field must be present;
+   * Reactive resize spec for `attachScalePipe`/`setScaleParams`.
+   * EXACTLY ONE field must be present;
    * providing zero or more than one throws. Output dims are recomputed PER
    * FRAME from these params + that frame's ACTIVE input dims (variable-size
    * sources like a slice/fovea pipe just work), then clamped to the ring's max
@@ -422,7 +421,7 @@ declare module "core/Aravis" {
    * chained on any convert / undistort / fovea (slice) / scale pipe's
    * OwnedFrame tap (Leaky/latest-wins input; demand propagation keeps the
    * whole upstream chain awake). The pipe MUST be advertised first (unknown
-   * pipe throws). The pipe is DYNAMIC with C-20 semantics — advertise with
+   * pipe throws). The pipe is DYNAMIC — advertise with
    * `maxWidth`/`maxHeight`/`maxBytes` (the ring footprint); every frame carries
    * its ACTIVE out w/h and the source frame's crop origin — forwarded UNSCALED
    * in SOURCE full-res coords — in the v4 slot header (surfaced by the reader
@@ -464,15 +463,13 @@ declare module "core/Aravis" {
   export function scaleProbeAll(): Record<string, ScaleProbeSnapshot>;
 
   /**
-   * Reactive matcher spec for `attachStereoPipe`/`setStereoParams`
-   * (stereo-disparity-and-heatmap-nodes §"StereoStream" + the
-   * stereo-throughput.md strategy params). All fields optional; validated
-   * NAPI-side and applied on the next frame (matcher rebuilt).
+   * Reactive matcher spec for `attachStereoPipe`/`setStereoParams`. All fields
+   * optional; validated NAPI-side and applied on the next frame (matcher
+   * rebuilt).
    *   - `numDisparities` — search range, rounded UP to a multiple of 16
    *                        (min 16; default 128).
    *   - `blockSize`      — matched block size, forced ODD (min 1; default 5).
-   *   - `minDisparity`   — smallest disparity (default 0; any SIGNED value —
-   *                        sgbm-signed-range.md).
+   *   - `minDisparity`   — smallest disparity (default 0; any SIGNED value).
    *   - `algorithm`      — "sgbm" (default) | "bm" (classic StereoBM, faster,
    *                        weaker on low texture).
    *   - `mode`           — SGBM variant: "sgbm" | "3way" (default) | "hh".
@@ -518,7 +515,7 @@ declare module "core/Aravis" {
   ): boolean;
 
   /**
-   * Attach the TRIGGER-MODE stereo brick (stereo-paired-inputs): a `cv::StereoSGBM`
+   * Attach the TRIGGER-MODE stereo brick: a `cv::StereoSGBM`
    * disparity producer driven by a live PAIRING brick (`pairStage`, e.g.
    * `"pair/undistort"`) whose records carry matched L/R frames per exposure pair
    * (a missing pairing brick throws). Output is the SAME CV_32F disparity pipe
@@ -558,8 +555,8 @@ declare module "core/Aravis" {
   export function stereoProbeAll(): Record<string, StereoProbeSnapshot>;
 
   /**
-   * Reactive colormap spec for `attachHeatmapPipe`/`setHeatmapParams`
-   * (stereo-disparity-and-heatmap-nodes §"HeatmapStream"). Both fields optional
+   * Reactive colormap spec for `attachHeatmapPipe`/`setHeatmapParams`. Both
+   * fields optional
    * and INDEPENDENT: an absent bound is auto-derived from that frame's
    * min/max (`cv::minMaxLoc`). Values outside `[min,max]` are clamped.
    */
@@ -609,8 +606,8 @@ declare module "core/Aravis" {
   export function heatmapProbeAll(): Record<string, HeatmapProbeSnapshot>;
 
   /**
-   * Reactive composite spec for `attachCompositePipe`/`setCompositeParams`
-   * (composite-node-and-center-select-fix §B). Validated NAPI-side and applied
+   * Reactive composite spec for `attachCompositePipe`/`setCompositeParams`.
+   * Validated NAPI-side and applied
    * on the next frame (just the mode enum — no matcher rebuild).
    *   - `anaglyph`   — out.R = LEFT.R; out.G = RIGHT.G; out.B = RIGHT.B
    *                    (red = LEFT eye, cyan = RIGHT eye).
@@ -666,7 +663,7 @@ declare module "core/Aravis" {
   export function compositeProbeAll(): Record<string, CompositeProbeSnapshot>;
 
   /**
-   * capture-recorder-nodes Phase 1: attach a RAW camera-source pipe. A gated
+   * Attach a RAW camera-source pipe. A gated
    * `Frame::Ptr` subscriber on the camera's `Arv::Stream` publishes
    * FULL-BIT-DEPTH sensor bytes (`frame->raw`) into the pipe `pipeId`'s ring —
    * the path the recorder/capture nodes consume (NOT the 8-bit BGRA8 preview).
@@ -691,7 +688,7 @@ declare module "core/Aravis" {
   export function rawProbeAll(): Record<string, ProbeSnapshot>;
 
   /**
-   * multi-fovea-recording ruling 1: subscribe a gated PACKED raw-12p producer to
+   * Subscribe a gated PACKED raw-12p producer to
    * the camera's `Arv::Stream`. Unlike `attachRawPipe` (which publishes the
    * UNPACKED 16-bit `frame->raw`), this taps the ArvBuffer BEFORE Frame
    * construction and publishes the VERBATIM wire payload — packed Bayer-12p when
@@ -715,8 +712,7 @@ declare module "core/Aravis" {
    */
   export function raw12pProbeAll(): Record<string, ProbeSnapshot>;
 
-  /** Construction options for `attachCompressPipe` (multi-fovea-recording
-   *  rulings 9/10). */
+  /** Construction options for `attachCompressPipe`. */
   export interface CompressOptions {
     /** zlib compression level: 0 (store) … 9 (max), or -1 / omitted =
      *  `Z_DEFAULT_COMPRESSION`. */
@@ -724,7 +720,7 @@ declare module "core/Aravis" {
   }
 
   /**
-   * multi-fovea-recording rulings 9/10: attach an intra-frame COMPRESSION brick.
+   * Attach an intra-frame COMPRESSION brick.
    * A native thread FIFO-reads the ALREADY-ADVERTISED `sourcePipeId` (raw12p,
    * raw, convert, undistort, …) and republishes each frame zlib-compressed into
    * `pipeId` — a per-frame INDEPENDENT blob (every output frame decompresses
@@ -757,7 +753,7 @@ declare module "core/Aravis" {
   export function compressProbeAll(): Record<string, ProbeSnapshot>;
 
   /**
-   * Construction options for `createPairStream` (pairing-nodes P-1). `mode`
+   * Construction options for `createPairStream`. `mode`
    * selects the join: `root` tolerance-matches raw camera arrivals against the
    * FIN anchor (`|deviceTimestamp + sideDelta − tExposure| ≤ toleranceNs`,
    * `matchPair` semantics), `exact` joins L/R on identical `deviceTimestamp`
@@ -793,7 +789,7 @@ declare module "core/Aravis" {
   }
 
   /** A RESOLVED anchor pushed via `PairStream.pushResolvedAnchor` — the
-   *  root→downstream key delivery (pairing-nodes ruling 2). The ROOT brick's
+   *  root→downstream key delivery. The ROOT brick's
    *  completed pair yields the two matched frames' per-side deviceTimestamps
    *  (`leftKey`/`rightKey`); the session forwards them (loop-safe, FIN rate) so
    *  a DOWNSTREAM `exact` brick joins the NEXT stage's frames by per-side key
@@ -847,7 +843,7 @@ declare module "core/Aravis" {
     mode: "root" | "exact";
   }
 
-  /** The per-stage L/R PAIRING brick handle (pairing-nodes P-1). ALWAYS-RUNNING
+  /** The per-stage L/R PAIRING brick handle. ALWAYS-RUNNING
    *  (created with the trigger topology, exempt from consumer-refcount teardown)
    *  and record-output: consumers get RECORDS via the async iterator, never the
    *  pinned buffers. Release with `release()`. */
@@ -856,7 +852,7 @@ declare module "core/Aravis" {
      *  brick-assigned monotonic anchor id. Root mode: the tolerance-match key. */
     pushAnchor(anchor: PairAnchor): number;
     /** Push a RESOLVED anchor for a DOWNSTREAM `exact` brick (root→downstream key
-     *  delivery, pairing-nodes ruling 2). Joins the next stage's L/R by per-side
+     *  delivery). Joins the next stage's L/R by per-side
      *  `leftKey`/`rightKey` equality. Returns the (origin or assigned) anchor id. */
     pushResolvedAnchor(anchor: PairResolvedAnchor): number;
     probe(): PairProbeSnapshot;
@@ -871,7 +867,7 @@ declare module "core/Aravis" {
    * / undistort / fovea / scale, resolved by id — a missing source throws). Two
    * in-process FIFO taps are joined against FIN-derived anchors on the brick's
    * own thread; always-running (does NOT park on zero subscribers). Trigger
-   * mode only — anchors are REAL exposure outcomes (pairing-nodes ruling 1).
+   * mode only — anchors are REAL exposure outcomes.
    */
   export function createPairStream(
     leftId: string,

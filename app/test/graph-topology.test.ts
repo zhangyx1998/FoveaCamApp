@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// `buildTopology` (C-24 step 2): pipe-derived nodes + implicit camera roots +
+// `buildTopology`: pipe-derived nodes + implicit camera roots +
 // PHYSICAL producer edges + aggregate consumer sinks + exact bytes-delta MB/s +
 // the stage-1 `registerGraphWiring` shim. Driven with fakes (no native core).
 
@@ -56,7 +56,7 @@ describe("kindOfPipeId", () => {
 describe("buildTopology", () => {
   beforeEach(resetTopologyStateForTest);
 
-  // Rig regression (2026-07-08): a probe row WITHOUT `drops`/`window` (the
+  // Rig regression: a probe row WITHOUT `drops`/`window` (the
   // legacy flat converter/tracker shape) crashed the fold (`.ratePerSec` of
   // undefined) — blanking the graph + failing snapshot export in every app.
   // The fold must degrade to a partial badge instead.
@@ -140,8 +140,7 @@ describe("buildTopology", () => {
 
   it("merges registered wiring, folds legacy statsKey, and disposes cleanly", () => {
     // The statsKey MECHANISM stays (a node may fold from a `:`-family legacy
-    // meter name); the fixture no longer uses the dead `tracking:kcf` meter —
-    // that family died with the tracking-single app (6f8097c).
+    // meter name); the fixture no longer uses the dead `tracking:kcf` meter.
     const dispose = registerGraphWiring({
       nodes: [
         {
@@ -186,7 +185,7 @@ describe("buildTopology", () => {
     expect(buildTopology(deps).roles).toBeUndefined(); // drain removes it
   });
 
-  // Edge-flow spec (user 2026-07-08): every edge reports TX (producer output
+  // Edge-flow spec: every edge reports TX (producer output
   // Hz + bytes/s + maxInterval), RX (consumer per-port input Hz +
   // maxInterval), and a drop rate ONLY on lossy links (tx−rx when both
   // metered). Raw numbers in JSON — the profiler humanizes.
@@ -292,7 +291,7 @@ describe("buildTopology", () => {
     });
   });
 
-  // FIFO edges (controller-node-and-fifo-edges §2): a NON-lossy edge whose
+  // FIFO edges: a NON-lossy edge whose
   // consumer snapshot carries `queue` reports the high-water mark IN PLACE OF a
   // drop rate. The undistort brick's input off the (pipe-transport) convert
   // brick is the live case — its explicit `lossy: false` must defeat the
@@ -396,7 +395,7 @@ describe("buildTopology", () => {
   });
 });
 
-// --- Universal node reporting (unified-time-and-topology §6) -----------------
+// --- Universal node reporting -----------------
 
 describe("buildTopologyFromReports", () => {
   beforeEach(resetTopologyStateForTest);
@@ -507,7 +506,7 @@ describe("buildTopology with real reports (deps.reports)", () => {
         {
           id: "camera/1/convert",
           kind: "convert",
-          transport: "native", // post-P3: the brick reports itself
+          transport: "native", // the brick reports itself
           inputs: [{ from: "camera/1", port: "raw", type: { kind: "frame", pixelFormat: "BayerRG12p", dtype: "U16" } }],
           output: { kind: "frame", pixelFormat: "RGBA8", dtype: "U8" },
           epoch: 7,

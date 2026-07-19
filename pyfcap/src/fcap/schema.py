@@ -3,7 +3,7 @@
 # This source code is licensed under the MIT license.
 # You may find the full license in project root directory.
 # -------------------------------------------------------
-"""Mirrored constants for the recorder-container.md §2b ``.fovea`` schema."""
+"""Mirrored constants for the ``.fovea``/``.fcap`` container schema."""
 
 from __future__ import annotations
 

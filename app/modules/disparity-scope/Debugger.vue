@@ -21,7 +21,7 @@ import StreamView from "@src/components/StreamView.vue";
 const session = useSession(disparity, "disparity-scope", { passive: true });
 const { state, telemetry } = session;
 
-// Row 1: the guide-strip slice pipe (same pipe the main UI used to inline).
+// Row 1: the guide-strip slice pipe.
 const frameStrip = usePipeFrame(() =>
   state.serials?.C ? nodeId.slice(state.serials.C, "scope-strip") : null,
 );

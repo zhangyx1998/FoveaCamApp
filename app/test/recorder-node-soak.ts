@@ -4,9 +4,9 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// multi-fovea-recording Wave I-1a CHURN SOAK (native-recorder era: the node is
-// a thin driver over the NATIVE brick — producer-seam taps + the hand-rolled
-// C++ MCAP writer; no JS worker). Drives the ACTUAL recorder node over NATIVE
+// CHURN SOAK. The node is a thin driver over the NATIVE brick — producer-seam
+// taps + the hand-rolled C++ MCAP writer; no JS worker. Drives the ACTUAL
+// recorder node over NATIVE
 // fake-camera raw pipes for ~10-20s while CHURNING streams the way multi-fovea
 // does, then finalizes and DECODES the `.fcap` to prove:
 //   (a) exact frame accounting on the STABLE (whole-recording) streams —
@@ -147,7 +147,7 @@ describe("recorder node churn soak (dynamic streams + descriptors + camera matri
       STATIC.map((name) => [name, { pipeId: pipeIdFor(name) }]),
     );
 
-    // ruling-4 extras: L/R foveae carry a (fake) volt/H doc, center wide none.
+    // extras: L/R foveae carry a (fake) volt/H doc, center wide none.
     const MIRROR: Record<string, "L" | "R" | null> = {
       "left-fovea": "L",
       center: null,

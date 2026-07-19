@@ -4,13 +4,13 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// WS1 real-1c B-side loopback (B-16 Phase 2). NO hardware: exercises B's
+// Capture→pipe loopback. NO hardware: exercises the
 // Aravis capture→pipe convert+offer path (feedPipe, via the test hook
-// Aravis.feedTestFrame) end-to-end through C's REAL pipe ring — advertise a
+// Aravis.feedTestFrame) end-to-end through the REAL pipe ring — advertise a
 // BGRA8 pipe → connect (broker) → feed a synthetic Mono8 frame → the reader
 // addon reads back the CONVERTED BGRA8 bytes (GRAY→BGRA: B=G=R=gray, A=255) +
-// the FrameMeta timestamps we filled. Proves the C↔B seam without a camera; the
-// live capture path (real Arv::Stream frames) is rig-gated (Stage F).
+// the FrameMeta timestamps we filled. Proves the capture↔pipe seam without a
+// camera; the live capture path (real Arv::Stream frames) needs hardware.
 // Run UNSANDBOXED: /opt/homebrew/bin/node core/test/11-capture-pipe.ts
 
 import assert from "node:assert/strict";
@@ -170,7 +170,7 @@ const A = Aravis as unknown as {
   P.drop(id);
 }
 
-// ---- B-17 Part 1: attach→frames→detach through the REAL capture path -----
+// ---- attach→frames→detach through the REAL capture path -----
 // Uses Aravis's built-in fake camera (no hardware): attachCameraPipe subscribes
 // a CaptureSink to the fake camera's Arv::Stream, whose Mono8 frames are
 // converted to BGRA8 and offered to the pipe — proving the cut-over seam A

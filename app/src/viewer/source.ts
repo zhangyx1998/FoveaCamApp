@@ -26,7 +26,7 @@ export interface FoveaChannel {
 
 export interface FoveaMessage {
   channelId: number;
-  /** Absolute log time (ns) as recorded — the §2b monotonic session clock. */
+  /** Absolute log time (ns) as recorded — the monotonic session clock. */
   logTime: bigint;
   data: Uint8Array;
 }
@@ -40,7 +40,7 @@ export interface FoveaSource {
   /** True = opened through the footerless streaming fallback. */
   readonly truncated: boolean;
   /** True when the container carries a `fovea:wide-camera` metadata record —
-   *  the recorder declared a wide camera (viewer-timeline ruling 1). */
+   *  the recorder declared a wide camera. */
   readonly wideCameraDeclared: boolean;
   /** Messages in log-time order (file order for truncated sources — the
    *  writer emits in arrival order, so it's log-time-ordered per channel and
@@ -55,12 +55,12 @@ export interface FoveaSource {
    *  from the result. */
   latestBefore(tNs: bigint, topics: readonly string[]): Promise<Map<string, FoveaMessage>>;
   /** First/last message ABSOLUTE log-time per channel topic — the timeline
-   *  block spans (viewer-timeline §Blocks). Channels with no message are
+   *  block spans. Channels with no message are
    *  absent. Computed once at open (cheap seeks on the indexed path; one extra
    *  scan on the truncated path — the crash-recovery edge case). */
   channelSpans(): Promise<Map<string, { startNs: bigint; endNs: bigint }>>;
   /** The `fovea:wide-camera` metadata record's string→string map (intrinsics +
-   *  distortion for the wide/center camera, multi-fovea-recording ruling 2), or
+   *  distortion for the wide/center camera), or
    *  null when the container carries no such record. The values are JSON-encoded
    *  by the recorder; the export undistort path parses them. */
   wideCameraMeta(): Promise<Record<string, string> | null>;
@@ -240,12 +240,12 @@ class IndexedSource implements FoveaSource {
 // ---- streaming fallback (footerless) --------------------------------------
 
 /** Stream one sequential pass of the file through a fresh McapStreamReader,
- *  yielding each record as it parses (C-P7). Because it is an async generator,
- *  the caller pulls records one at a time — the `yield` applies natural
+ *  yielding each record as it parses. Because it is an async generator, the
+ *  caller pulls records one at a time — the `yield` applies natural
  *  backpressure, so a full-file playback of a large crash artifact never
  *  materializes the recovered messages into an array. A parse error on the
- *  truncated tail ends the pass (everything before it was recovered) — the B-4
- *  recovery story. Stops at DataEnd/Footer for a well-formed file. Early
+ *  truncated tail ends the pass (everything before it was recovered). Stops at
+ *  DataEnd/Footer for a well-formed file. Early
  *  consumer break (`return()`) unwinds here without tripping the catch. */
 async function* scanRecords(
   handle: FileHandle,
@@ -316,7 +316,7 @@ class TruncatedSource implements FoveaSource {
     topics?: readonly string[];
   } = {}): AsyncGenerator<FoveaMessage, void, void> {
     const ids = this.topicIds(opts.topics);
-    // Stream records straight through the async scan (C-P7): one record in
+    // Stream records straight through the async scan: one record in
     // flight at a time, so playing back a large crash artifact never buffers
     // the recovered messages into an array.
     for await (const record of scanRecords(this.handle)) {

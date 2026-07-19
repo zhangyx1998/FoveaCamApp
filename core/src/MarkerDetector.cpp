@@ -190,10 +190,9 @@ inline Result::Ptr detect(const Arv::Frame::Ptr &frame,
     cv::normalize(mat, mat, 0, 255, cv::NORM_MINMAX);
   } else {
     // At scale 1.0 `gray` is a HEADER OVER THE LIVE SHARED Mono8 frame
-    // buffer — the old in-place normalize contrast-stretched the frame under
+    // buffer — an in-place normalize would contrast-stretch the frame under
     // concurrent preview/recording/capture consumers (data race + visible
-    // corruption; calibration review 2026-07-11 #8). Normalize into a
-    // DISTINCT mat (the heatmap-brick restructure precedent).
+    // corruption). Normalize into a DISTINCT mat.
     cv::normalize(gray, mat, 0, 255, cv::NORM_MINMAX);
   }
   std::vector<int> ids;
@@ -205,7 +204,7 @@ inline Result::Ptr detect(const Arv::Frame::Ptr &frame,
   // Scale corners back to original size. CLAMP into the full-res rect: the
   // sub-pixel corner of an edge-touching marker can rescale marginally past
   // cols-1/rows-1, and downstream cornerSubPix ASSERTS on any out-of-rect
-  // point (rig crash 2026-07-11, cornersubpix.cpp:99).
+  // point.
   if (scale != 1.0) {
     const float xMax = static_cast<float>(gray.cols - 1);
     const float yMax = static_cast<float>(gray.rows - 1);

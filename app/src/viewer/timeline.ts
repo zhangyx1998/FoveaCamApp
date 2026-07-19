@@ -120,7 +120,7 @@ function overlaps(a: ChannelBlock, b: ChannelBlock): boolean {
   return a.startNs < b.lastNs && b.startNs < a.lastNs;
 }
 
-/** Greedy min-track interval packing (ruling 2): start-sorted, first-fit onto
+/** Greedy min-track interval packing: start-sorted, first-fit onto
  *  the fewest rows with no overlap. Optimal for interval scheduling (row count
  *  == max concurrency). Deterministic tie-break by channel name. Returns rows
  *  of channel names. */
@@ -140,7 +140,7 @@ export function autoPack(blocks: readonly ChannelBlock[]): string[][] {
   return rows.map((r) => r.map((b) => b.channel));
 }
 
-/** The INITIAL track layout (ruling 10: run only at sidecar init/reset): the
+/** The INITIAL track layout (run only at sidecar init/reset): the
  *  master on row 0, the remaining frame blocks greedily auto-packed onto the
  *  fewest non-overlapping rows below. Deterministic. Returns rows of channel
  *  names (row 0 = master track). After initialization the sidecar's stored
@@ -158,7 +158,7 @@ export function initialLayout(
 
 /** Would dropping `channel`'s block onto `targetRow` collide with another
  *  block already on that row? The UI calls this on drag-drop to REFUSE (snap
- *  back) an overlapping placement (ruling 2). `targetRow === rows.length`
+ *  back) an overlapping placement. `targetRow === rows.length`
  *  (a brand-new bottom row) never collides. */
 export function dropCollides(
   rows: readonly string[][],
@@ -175,7 +175,7 @@ export function dropCollides(
 }
 
 /** Move `channel`'s block to `targetRow`, mutating the stored layout directly
- *  (ruling 10 — the sidecar is the source of truth; no auto-pack re-run). The
+ *  (the sidecar is the source of truth; no auto-pack re-run). The
  *  block is removed from its current row and appended to `targetRow`
  *  (`targetRow === rows.length` creates a new bottom track); now-empty rows are
  *  dropped ("removing tracks as needed"). Rows are re-sorted by start time.
@@ -202,7 +202,7 @@ export function moveBlock(
 }
 
 /** Reconcile a stored layout against the container's ACTUAL frame channels
- *  WITHOUT persisting (ruling 10: never silently discard/overwrite a user
+ *  WITHOUT persisting (never silently discard/overwrite a user
  *  layout on mismatch). Channels in the layout that no longer exist are
  *  dropped; present channels missing from the layout are appended to new
  *  bottom rows so playback still shows them. The caller uses `layoutMismatch`
@@ -222,7 +222,7 @@ export function reconcileLayout(
 
 /** Do the channels named in a stored layout differ from the container's frame
  *  channels? (extra layout channels OR missing container channels) — the
- *  ruling-10 "mismatched ui metadata" trigger for a confirm prompt. */
+ *  "mismatched ui metadata" trigger for a confirm prompt. */
 export function layoutMismatch(
   rows: readonly string[][],
   frameChannels: readonly string[],
@@ -236,7 +236,7 @@ export function layoutMismatch(
 
 // ---- tiles ----------------------------------------------------------------
 
-/** 3D view mode for an L/R pair (ruling 4). EXTENSIBLE: a future `dlp` (or
+/** 3D view mode for an L/R pair. EXTENSIBLE: a future `dlp` (or
  *  other 3D tech) is one more case here + a decode/render branch, never a
  *  rewrite. `disabled` = two independent tiles; the rest collapse to one. */
 export type ThreeDMode = "disabled" | "left-only" | "right-only" | "anaglyph";
@@ -332,7 +332,7 @@ export function decodeSet(
 
 /** Map a pointer `clientX` over the timeline track area to a file-relative ns,
  *  CLAMPED to [0, durationNs]. Pure so the click-to-seek and the draggable
- *  playhead (UI round 2 ruling 1) share one mapping and it is unit-tested:
+ *  playhead share one mapping and it is unit-tested:
  *  before the left edge → 0, past the right edge → durationNs, degenerate
  *  geometry (zero width / zero duration) → 0. */
 export function nsAtClientX(
@@ -370,9 +370,9 @@ export function activeChannels(
   return out;
 }
 
-// ---- timeline touch-up additions (viewer-timeline-touchup.md) -------------
+// ---- timeline touch-up additions ------------------------------------------
 
-/** Earliest block start (ruling 1) — the initial playhead lands here so at
+/** Earliest block start — the initial playhead lands here so at
  *  least one tile shows on open. 0 when there are no blocks. */
 export function firstMeaningfulNs(blocks: readonly ChannelBlock[]): number {
   let min = Infinity;
@@ -416,7 +416,7 @@ function channelRole(channel: string): "L" | "C" | "R" | null {
   return null;
 }
 
-/** Track role from its channels (ruling 4): the single role shared by every
+/** Track role from its channels: the single role shared by every
  *  role-bearing channel on the row ("L"/"R" via `sideOf()`, "C" via the wide
  *  designation names). null when the row mixes roles or carries none;
  *  role-less channels don't veto an otherwise-uniform role. */
@@ -452,7 +452,7 @@ const MUTED_TRACK_COLORS: readonly string[] = [
   "#8f8fa0", // muted slate
 ];
 
-/** Track theme color (ruling 4): the L/C/R role color when `trackRole()` hits,
+/** Track theme color: the L/C/R role color when `trackRole()` hits,
  *  otherwise a deterministic muted cycle by track index (distinct from the role
  *  hues). */
 export function trackColor(row: readonly string[], index: number): string {
@@ -462,7 +462,7 @@ export function trackColor(row: readonly string[], index: number): string {
   return MUTED_TRACK_COLORS[((index % n) + n) % n]!;
 }
 
-/** One tile SLOT per track (ruling 2): slot i ↔ track i. The track's active
+/** One tile SLOT per track: slot i ↔ track i. The track's active
  *  (spanning + enabled) channel becomes a `tile`; a non-`disabled` pair renders
  *  as ONE pair tile in the TOPMOST of its two active tracks, the partner active
  *  track getting a `pair-collapsed` placeholder labeled with the base. A track

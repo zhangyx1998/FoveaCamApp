@@ -148,7 +148,7 @@ describe("typed-array canonicalization (intrinsic Mats)", () => {
     expect(canonicalize({ m: live })).toBe(canonicalize(encoded));
   });
 
-  it("a SUBARRAY view canonicalizes by its own bytes and still mirrors the codec (review 2026-07-11, latent)", async () => {
+  it("a SUBARRAY view canonicalizes by its own bytes and still mirrors the codec (latent)", async () => {
     // byteOffset/byteLength honored: a view over part of a larger buffer must
     // hash only its own bytes — identical to a compact copy of the same values —
     // and must keep byte-matching the codec's on-disk encoding.
@@ -459,7 +459,7 @@ describe("active-dataset resolution + ordering", () => {
     expect(resolveActiveDataset([other], "camA")).toBeNull();
   });
 
-  it("an EMPTY latest record never shadows an older good one (review 2026-07-11 #6)", async () => {
+  it("an EMPTY latest record never shadows an older good one", async () => {
     const a: Association = { cameraKey: "camA" };
     const good = await makeRecord(extrinsicInner(dataset(4)), {
       created: "2026-07-01T00:00:00.000Z",

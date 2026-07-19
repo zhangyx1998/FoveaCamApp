@@ -4,8 +4,8 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Host HAL implementation (docs/proposals/firmware-sim-harness.md): the
-// Arduino/SPI surface the real firmware TUs run against. Everything is
+// Host HAL implementation: the Arduino/SPI surface the real firmware TUs run
+// against. Everything is
 // recorded rather than actuated — pin writes go to a level table (+ the
 // main.cpp hook for trigger/enable observability), MEMS-SPI transactions
 // commit DAC words to the control plane, micros() runs off the steady clock,

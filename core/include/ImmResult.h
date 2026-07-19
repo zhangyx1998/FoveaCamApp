@@ -5,10 +5,9 @@
 // -------------------------------------------------------
 #pragma once
 
-// One prediction off the native IMM brick — EXTRACTED from ImmPredictor.cpp
-// (native-compose-controller.md wave): the payload now flows across TUs on a
-// native port link (`imm.predict_out → compose.pred_in`). Shape unchanged;
-// the NAPI `convert` specializations stay in ImmPredictor.cpp.
+// One prediction off the native IMM brick. The payload flows across TUs on a
+// native port link (`imm.predict_out → compose.pred_in`); the NAPI `convert`
+// specializations stay in ImmPredictor.cpp.
 
 #include <cstdint>
 #include <pointer.h>
@@ -25,9 +24,8 @@ struct ImmResult : Shared<ImmResult> {
   uint64_t deviceTimestamp = 0;
   int64_t propagatedToNs = 0; // deviceTimestamp + Δ·1e9 (informational)
   // HOST steady-clock ns of the measurement INGEST this prediction is based
-  // on (mirror-flicker 2026-07-12, refinement 1 / guard 2): the compose
-  // brick's staleness gate compares this against its own steady clock and
-  // skips feed-forward when the underlying measurement is too old. 0 = unset
-  // (a producer that predates the stamp) — consumers treat that as stale.
+  // on: the compose brick's staleness gate compares this against its own
+  // steady clock and skips feed-forward when the underlying measurement is too
+  // old. 0 = unset; consumers treat that as stale.
   int64_t measuredAtNs = 0;
 };

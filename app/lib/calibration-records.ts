@@ -173,7 +173,7 @@ export function canonicalize(value: unknown): string {
 /** Base64 of a byte range (mirrors store-codec's `toBase64`, so the canonical
  *  typed-array form byte-matches the on-disk encoding). For a typed-array VIEW
  *  the caller passes the view-bounded bytes — matching the codec's
- *  byteOffset/byteLength fix (calibration-review-2026-07-11, latent). */
+ *  byteOffset/byteLength handling. */
 function bufferBase64(bytes: Uint8Array): string {
   let binary = "";
   for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]!);
@@ -429,8 +429,8 @@ export function orderRecordsLatestFirst(
 /**
  * Resolve the ACTIVE extrinsic dataset a camera should calibrate with: the
  * LATEST *non-empty* extrinsic record (by `created`) associated with
- * `cameraKey`. An EMPTY dataset never shadows an older good one
- * (calibration-review-2026-07-11 #6): the resolver falls through to the
+ * `cameraKey`. An EMPTY dataset never shadows an older good one:
+ * the resolver falls through to the
  * next-newest non-empty record; only when NO bound record has data does it
  * return null (the loader then applies its legacy fallback). Pure; unit-tested.
  */

@@ -1,7 +1,6 @@
 // Profiler node-graph VIEWPORT algebra (graph-viewport.ts) — the pure
 // screen/model transform + pan clamp + pointer zoom + contain-fit + resize
-// refit behind the hand-rolled NodeGraph component. Rulings 4/5/6 of
-// docs/proposals/profiler-graph-handrolled.md. DOM/wheel wiring stays thin.
+// refit behind the hand-rolled NodeGraph component. DOM/wheel wiring stays thin.
 
 import { describe, expect, it } from "vitest";
 import {
@@ -77,7 +76,7 @@ describe("intersect", () => {
   });
 });
 
-describe("clampPan — the center model point stays in the graph bbox (ruling 4)", () => {
+describe("clampPan — the center model point stays in the graph bbox", () => {
   const graph: Box = { x: 0, y: 0, w: 1000, h: 800 };
   const c: Size = { w: 400, h: 300 };
 
@@ -123,7 +122,7 @@ describe("clampPan — the center model point stays in the graph bbox (ruling 4)
   });
 });
 
-describe("zoomAt — the model point under the pointer stays fixed (ruling 6)", () => {
+describe("zoomAt — the model point under the pointer stays fixed", () => {
   // A graph large enough that clampPan never binds, so the fixed-point property
   // is exact.
   const graph: Box = { x: -10000, y: -10000, w: 20000, h: 20000 };
@@ -147,7 +146,7 @@ describe("zoomAt — the model point under the pointer stays fixed (ruling 6)", 
   });
 });
 
-describe("fitBox — contain-fit + center (ruling 5 building block)", () => {
+describe("fitBox — contain-fit + center", () => {
   const c: Size = { w: 800, h: 600 };
 
   it("picks the smaller axis ratio (contain) and centers the target", () => {
@@ -187,7 +186,7 @@ describe("fitBox — contain-fit + center (ruling 5 building block)", () => {
   });
 });
 
-describe("viewportContent — visible model content (ruling 5)", () => {
+describe("viewportContent — visible model content", () => {
   const graph: Box = { x: 0, y: 0, w: 100, h: 100 };
 
   it("is the intersection of the visible box and the graph bbox", () => {
@@ -201,7 +200,7 @@ describe("viewportContent — visible model content (ruling 5)", () => {
   });
 });
 
-describe("resizeViewport — keep the same model content on container resize (ruling 5)", () => {
+describe("resizeViewport — keep the same model content on container resize", () => {
   it("first reveal from a 0×0 box fits the WHOLE graph bbox", () => {
     const graph: Box = { x: 0, y: 0, w: 1000, h: 600 };
     const vp: Viewport = { zoom: 1, pan: { x: 0, y: 0 } };

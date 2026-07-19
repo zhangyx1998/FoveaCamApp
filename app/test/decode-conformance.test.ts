@@ -1,9 +1,9 @@
-// C-P6: the TS decode side of the single pixel-format registry (B-P1). Pins
+// The TS decode side of the single pixel-format registry. Pins
 // that the viewer/display decode helpers consume `docs/schema/pixel-formats`
 // and can't drift from the format facts (which also drive the C++ tables and
 // pyfovea training decode). Consume/assert only — no metadata-name changes.
 //
-// Per B-P1's conformance note: `PixelFormatSpec.name` is typed `string`, not a
+// Conformance note: `PixelFormatSpec.name` is typed `string`, not a
 // literal union, so the guard against the `core/Aravis` d.ts union is a runtime
 // VALUE-set comparison (not a type-level assert).
 

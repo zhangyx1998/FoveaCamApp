@@ -4,25 +4,24 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Stereo disparity THROUGHPUT + SIGNED-RANGE bench (docs/proposals/
-// stereo-throughput.md + sgbm-signed-range.md) — NO hardware. Drives the real
+// Stereo disparity THROUGHPUT + SIGNED-RANGE bench — NO hardware. Drives the real
 // StereoStream brick (attachStereoPipe over two synthetic pair-test sources)
 // with camera-res (1440×1080) 2D-noise stereo frames whose PLANAR ground-truth
-// disparity is known and SIGNED (±200 px, inside the ruled −256…+255 window).
+// disparity is known and SIGNED (±200 px, inside the −256…+255 window).
 //
-// Per candidate {algorithm, mode, matchScale, wls} at the ruled window
+// Per candidate {algorithm, mode, matchScale, wls} at the window
 // { numDisparities: 512, minDisparity: −256 }:
 //   - QUALITY  — fraction of VALID pixels within ±2 px (full-res units) of the
 //     ground truth, on BOTH signs; plus the invalid-pixel rate.
 //   - SIGN     — the recovered median must carry the INJECTED sign for both a
-//     positive and a negative plane. A contradiction implicates the OPEN
-//     stage-f H-vs-inverse homography-orientation question (report-only).
+//     positive and a negative plane. A contradiction implicates an OPEN
+//     H-vs-inverse homography-orientation question (report-only).
 //   - FPS      — steady-state emit rate while pairs are pushed faster than the
 //     matcher consumes (latest-wins overload; ≥100 frames or a time cap).
 // Prints the full result table; asserts the DEFAULT brick params (the bench
-// winner baked into StereoParams) meet the ruled ≥55 fps floor + quality bar.
+// winner baked into StereoParams) meet the ≥55 fps floor + quality bar.
 // Also proves live retune across ALL new params (the same setStereoParams
-// path the sessions use) and dims-at-match-scale emission.
+// path callers use) and dims-at-match-scale emission.
 //
 // Run UNSANDBOXED: node core/test/43-stereo-throughput.ts
 
@@ -270,8 +269,8 @@ for (const r of rows) {
 console.log("");
 
 // --- assertions ------------------------------------------------------------------
-// SIGN CONVENTION (sgbm-signed-range.md): every candidate must recover the
-// injected sign on both planes — a contradiction implicates the OPEN stage-f
+// SIGN CONVENTION: every candidate must recover the
+// injected sign on both planes — a contradiction implicates an OPEN
 // H-vs-inverse homography-orientation question (flag, do not fix here).
 for (const r of rows) {
   assert(

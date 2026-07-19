@@ -5,8 +5,8 @@
 // -------------------------------------------------------
 #pragma once
 
-// unified-time-and-topology §3/§5 (B, native re-plumb): the native mirror/H
-// ring — a fixed-capacity history of time-stamped parameter vectors (v1: a
+// The native mirror/H ring — a fixed-capacity history of time-stamped
+// parameter vectors (v1: a
 // 3×3 homography as 9 doubles, row-major). The JS actuation loop WRITES at up
 // to ~1 kHz via the `pushHomography` NAPI; the undistort thread READS by the
 // frame's host-ns time: the nearest entry ≤ hostNs, linearly interpolated
@@ -20,8 +20,7 @@
 //
 // Entries are assumed pushed in non-decreasing hostNs order (the writer is a
 // single sequential loop). An out-of-order push is accepted but clamps to the
-// previous timestamp (monotonicity preserved; TODO(B-r2): surface a counter
-// if out-of-order pushes ever become a real signal).
+// previous timestamp (monotonicity preserved).
 
 #include <algorithm>
 #include <array>

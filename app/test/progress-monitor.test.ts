@@ -1,4 +1,4 @@
-// Orchestrator spin-up progress monitor (user ruling 2026-07-09): a session
+// Orchestrator spin-up progress monitor: a session
 // declares its activation steps upfront and transitions each one as the graph
 // builds, riding the per-session STATUS channel so any window can render a
 // progress overlay instead of blanking. This exercises `ServerSession
@@ -48,7 +48,7 @@ const STEPS = [
   { id: "b", label: "Step B" },
 ];
 
-describe("orchestrator spin-up progress monitor (ruling 2026-07-09)", () => {
+describe("orchestrator spin-up progress monitor", () => {
   it("declare publishes the full pending list; start/done publish transitions; complete clears", async () => {
     const s = makeSession();
     const p = pair();

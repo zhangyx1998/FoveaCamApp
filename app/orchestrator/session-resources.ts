@@ -42,7 +42,7 @@ export function releaseLeases(target: CalibratedTriple | LeaseSet | null | undef
   for (const lease of Object.values(leases)) lease.release();
 }
 
-/** Publish the leased triple's camera serials into `state.serials` (C-22) so the
+/** Publish the leased triple's camera serials into `state.serials` so the
  *  renderer can bind raw previews to the native `camera:<serial>` pipe via
  *  `usePipeFrame` — replacing the JS `onView` view-tap for the raw feeds. Every
  *  triple contract declares `serials: {} as Partial<Record<"L"|"C"|"R", string>>`.

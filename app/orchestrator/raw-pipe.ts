@@ -28,7 +28,7 @@ export type RawPayloadKind = "raw" | "raw12p";
 /** A raw pipe's advertise spec + the `significantBits` the native PipeSpec does
  *  NOT round-trip (C++ derives it internally from the format enum, so a codec-
  *  suffixed pixelFormat would lose it). The ADVERTISER carries it JS-side and
- *  injects it into the recorder connection (ruling 8: copied verbatim, never
+ *  injects it into the recorder connection (copied verbatim, never
  *  re-derived from the opaque pixelFormat). */
 export type RawPipeAdvertSpec = PipeSpec & { significantBits: number };
 
@@ -182,8 +182,8 @@ export function rawPipeSpec(
   };
 }
 
-/** The PACKED `camera/<serial>/raw12p` spec: the VERBATIM wire payload (ruling
- *  1 + `attachRaw12pPipe` d.ts). Advertise TRUE image `width`/`height` +
+/** The PACKED `camera/<serial>/raw12p` spec: the VERBATIM wire payload (matches
+ *  `attachRaw12pPipe` d.ts). Advertise TRUE image `width`/`height` +
  *  `channels`=1 + `dtype`="U8" (opaque byte stream), `stride`=packed bytes/row,
  *  `significantBits` from the format (12 for 12p) so the viewer can unpack, and
  *  `maxBytes`/`bytesPerFrame` = the packed footprint. A whole-byte format packs

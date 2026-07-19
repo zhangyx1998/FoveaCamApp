@@ -127,8 +127,8 @@ export default function calibrateExtrinsicSession(
     let fittedL: ExtrinsicConversions | null = null;
     let fittedR: ExtrinsicConversions | null = null;
 
-    // Per-role wall-clock stamp of the last PUBLISHED detection (review #12,
-    // session half): a frozen tracker (camera loss) stops stamping, the
+    // Per-role wall-clock stamp of the last PUBLISHED detection: a frozen
+    // tracker (camera loss) stops stamping, the
     // freshness ticker flips its telemetry false, and capture re-checks the
     // raw age — frozen detections are no longer capturable.
     const DETECTION_STALE_MS = 500;
@@ -150,7 +150,7 @@ export default function calibrateExtrinsicSession(
       const t = Date.now();
       for (const role of ["L", "C", "R"] as const)
         if (views[role]) lastDetectionAt[role] = t;
-      // Center crosshair feed (master parity): the tracked centroid (+ frame
+      // Center crosshair feed: the tracked centroid (+ frame
       // size) and its undistort-mapped wide-camera angle for the deg readout.
       const centerAbs = trackers.C.centerAbsolute;
       s.telemetry({
@@ -199,7 +199,7 @@ export default function calibrateExtrinsicSession(
       }
     }
 
-    // Drawer gain retune (user issue 2): the servo's gain is fixed at
+    // Drawer gain retune: the servo's gain is fixed at
     // construction (velocity-form ki — see the contract note), so a LIVE
     // retune restarts it. Debounced (a slider drag writes state per tick, and
     // each restart churns the MCU stream); safe mid-run because startServo
@@ -210,10 +210,9 @@ export default function calibrateExtrinsicSession(
       servoRetuneTimer = setTimeout(() => {
         servoRetuneTimer = null;
         if (s.state.step !== "CAL" || !servo || !trackers) return;
-        // Carry an ENGAGED drag override across the retune restart (drift
-        // review 2026-07-12): the operator may be holding a PosView pin while
-        // the gain retunes. enterStep's released reset is only correct for
-        // real step round-trips.
+        // Carry an ENGAGED drag override across the retune restart: the
+        // operator may be holding a PosView pin while the gain retunes.
+        // enterStep's released reset is only correct for real step round-trips.
         const prevL = servo.override.left?.engaged ? servo.override.left.value : null;
         const prevR = servo.override.right?.engaged ? servo.override.right.value : null;
         enterStep("CAL"); // stop + restart with the current state.servoGain
@@ -269,10 +268,9 @@ export default function calibrateExtrinsicSession(
       }
       leases = matched;
       undistort = u;
-      // Teardown is LIFO (review #10): the LEASE release is registered FIRST
-      // so it runs LAST — the recording defer below it finalizes while the
-      // cameras are still leased (the calibrate-distortion order; the old
-      // order released leases under an active recording).
+      // Teardown is LIFO: the LEASE release is registered FIRST so it runs
+      // LAST — the recording defer below it finalizes while the cameras are
+      // still leased.
       scope.defer(() => {
         releaseLeases(leases);
         leases = null;
@@ -286,13 +284,11 @@ export default function calibrateExtrinsicSession(
       s.telemetry({ records, saved: false });
       monitor.done("records");
 
-      // Profiler visibility (user issue 4, session half): the three detector
-      // threads were metered natively but graph-INVISIBLE — register their
-      // node rows + camera→detect edges + the leased triple's role labels
-      // (the calibrate-drift roles precedent). The trackers default their
-      // native meter name to `nodeId.detect(serial)` and expose `probe`
-      // (marker-tracker.ts), so the probe registration below keys the live
-      // thread stats onto exactly these node rows.
+      // Profiler visibility: register the three detector threads' node rows +
+      // camera→detect edges + the leased triple's role labels. The trackers
+      // default their native meter name to `nodeId.detect(serial)` and expose
+      // `probe` (marker-tracker.ts), so the probe registration below keys the
+      // live thread stats onto exactly these node rows.
       scope.defer(
         registerGraphWiring({
           roles: {
@@ -320,10 +316,10 @@ export default function calibrateExtrinsicSession(
         }),
       );
 
-      // LIVE mirror pose telemetry (user issue 3): the PosView record head
-      // tracks the applied pose (kept live by applyStreamedPos on v2 / the
-      // awaited actuate on v1) at a fixed throttle; deduped so an idle mirror
-      // publishes nothing. Doubles as the detection-freshness ticker (#12).
+      // LIVE mirror pose telemetry: the PosView record head tracks the applied
+      // pose (kept live by applyStreamedPos on v2 / the awaited actuate on v1)
+      // at a fixed throttle; deduped so an idle mirror publishes nothing.
+      // Doubles as the detection-freshness ticker.
       {
         let lastSent = "";
         const ticker = setInterval(() => {
@@ -395,7 +391,7 @@ export default function calibrateExtrinsicSession(
       enterStep(s.state.step);
       monitor.done("actuation");
 
-      // --- capture (ruling 3, DEGRADED — no undistort) -----------------------
+      // --- capture (DEGRADED — no undistort) ---------------------------------
       const capCenterId = nodeId.convert(leases.C.camera.serial);
       const capCenter = broker.connect(capCenterId);
       scope.defer(() => void broker.disconnect(capCenterId));
@@ -481,14 +477,13 @@ export default function calibrateExtrinsicSession(
         async capture() {
           if (!trackers || !undistort) return;
           const { L, C, R } = trackers;
-          // Review #12 (session half): frozen detections (camera loss) must
-          // not be capturable — every role's LAST detection must be fresh.
+          // Frozen detections (camera loss) must not be capturable — every
+          // role's LAST detection must be fresh.
           const fresh = detectionFresh();
           if (!fresh.L || !fresh.C || !fresh.R) return;
-          // Review L1 (TOCTOU): SNAPSHOT every tracker-derived value BEFORE
-          // any await — the store read below yields, and the trackers keep
-          // ticking (a mid-await retarget/loss used to mix two frames into
-          // one record).
+          // TOCTOU: SNAPSHOT every tracker-derived value BEFORE any await —
+          // the store read below yields, and the trackers keep ticking, so a
+          // mid-await retarget/loss would mix two frames into one record.
           const targetL = L.target;
           const targetC = C.target;
           const targetR = R.target;
@@ -496,14 +491,13 @@ export default function calibrateExtrinsicSession(
           const otherTargets = [...C.otherTargets];
           const targetIds = { ...s.state.targetId };
           if (!targetL || !targetC || !targetR || !centerAbsolute) return;
-          // Review #9: pair the recorded image with the mirror pose AT THE
-          // DETECTION FRAME's time, not "whatever the stream reached by now"
-          // (worse at high stream rates). The controller-node's JS path
-          // records every applied pose into the mirror-history ring with
-          // host-steady stamps; each eye's frame carries the trusted
-          // owner-applied timestamp in the same domain when clock-calibrated.
-          // A sample farther than 1 s (uncalibrated camera clock, empty ring)
-          // falls back to the live pose — the old behavior, never worse.
+          // Pair the recorded image with the mirror pose AT THE DETECTION
+          // FRAME's time, not "whatever the stream reached by now" (worse at
+          // high stream rates). The controller-node's JS path records every
+          // applied pose into the mirror-history ring with host-steady stamps;
+          // each eye's frame carries the trusted owner-applied timestamp in the
+          // same domain when clock-calibrated. A sample farther than 1 s
+          // (uncalibrated camera clock, empty ring) falls back to the live pose.
           const livePos = activeController()?.pos;
           if (!livePos) return;
           const alignedVolt = (frameTs: bigint | null, side: "left" | "right"): Pos => {
@@ -515,8 +509,8 @@ export default function calibrateExtrinsicSession(
           const voltageL = alignedVolt(L.frame?.deviceTimestamp ?? null, "left");
           const voltageR = alignedVolt(R.frame?.deviceTimestamp ?? null, "right");
           const angle = undistort.angular([centerAbsolute], true)[0];
-          // Ruling 3 (spec §capture-measurements): the wide camera's view of the
-          // side markers, matched by per-eye target id; absent → center fallback.
+          // The wide camera's view of the side markers (spec §capture-measurements),
+          // matched by per-eye target id; absent → center fallback.
           const sideQuad = (id: number): Point2d[] | undefined => {
             const d = otherTargets.find((o) => o.id === id);
             return d ? d.slice(0, 4).map((p) => ({ x: p.x, y: p.y })) : undefined;
@@ -525,7 +519,7 @@ export default function calibrateExtrinsicSession(
             L: sideQuad(targetIds.L),
             R: sideQuad(targetIds.R),
           };
-          // Ruling 2: the independently-adjustable marker sizes at capture.
+          // The independently-adjustable marker sizes at capture.
           const cfg = await read<MarkerConfig>(CONFIG_PATH, {});
           const side_mm = cfg.cal_marker_size_mm ?? 60.0;
           const marker = { side_mm, center_mm: side_mm * (cfg.cal_marker_ratio ?? 1.0) };
@@ -552,9 +546,9 @@ export default function calibrateExtrinsicSession(
           fittedL = fittedR = null;
           s.telemetry({ finalized: false, fin: null });
           enterStep("FIN");
-          // Review #14: below the fit threshold the SVD returns a silently-
-          // plausible minimum-norm solution — hard-gate the fit (the FIN UI
-          // shows the count against the minimum) instead of persisting junk.
+          // Below the fit threshold the SVD returns a silently-plausible
+          // minimum-norm solution — hard-gate the fit (the FIN UI shows the
+          // count against the minimum) instead of persisting junk.
           if (records.length < MIN_FIT_SAMPLES) {
             s.telemetry({
               fin: computeFinStats(records, { L: null, R: null }),
@@ -569,8 +563,7 @@ export default function calibrateExtrinsicSession(
           fittedR = r;
           s.telemetry({
             finalized: !!(fittedL && fittedR),
-            // Review #14 (session-computable half): per-record volt-space
-            // residuals of the fit that was just produced.
+            // Per-record volt-space residuals of the fit that was just produced.
             fin: computeFinStats(records, {
               L: fittedL ? fittedL.A2V : null,
               R: fittedR ? fittedR.A2V : null,
@@ -579,9 +572,9 @@ export default function calibrateExtrinsicSession(
         },
         async setStep({ step }) {
           if (step === "PRV" && !(fittedL && fittedR)) return;
-          // Review #6: FIN is a review of CAPTURED records — a `?step=FIN`
-          // URL seed with nothing captured lands on an empty review with a
-          // live Confirm button; bounce back to CAL instead.
+          // FIN is a review of CAPTURED records — a `?step=FIN` URL seed with
+          // nothing captured lands on an empty review with a live Confirm
+          // button; bounce back to CAL instead.
           if (step === "FIN" && records.length === 0) return;
           s.setState("step", step);
           enterStep(step);
@@ -599,8 +592,8 @@ export default function calibrateExtrinsicSession(
           s.telemetry({ preview: { pos: { L: l, R: r }, cursor_l, cursor_r } });
         },
         async confirm() {
-          // Review #6: never persist an unfitted / empty dataset — an empty
-          // latest record would SHADOW older good ones at resolve time.
+          // Never persist an unfitted / empty dataset — an empty latest record
+          // would SHADOW older good ones at resolve time.
           if (!leases || !(fittedL && fittedR) || records.length === 0) return;
           // Persist each eye's dataset as a content-hashed record (spec §persistence).
           const [, tripleHash] = await tripleConfigPath(
@@ -639,7 +632,7 @@ export default function calibrateExtrinsicSession(
           enterStep(step);
         },
         servoGain() {
-          retuneServo(); // debounced live restart (user issue 2)
+          retuneServo(); // debounced live restart
         },
       },
       busy() {

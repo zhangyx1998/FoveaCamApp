@@ -66,14 +66,13 @@ export interface WorkloadDropSnapshot {
   byReason: Record<string, number>;
 }
 
-/** Per-stream counter with the C-18 diagnostic: `maxIntervalMs` = the largest
- *  interval (ms) between consecutive events over the trailing 10 s. `CounterRate`
- *  plus one field; assignable to `CounterRate`, so it rides the existing
- *  `WorkloadSnapshot.inputs`/`outputs` shape at runtime even before the A-owned
- *  snapshot TYPES pick the field up (handoff logged). */
+/** Per-stream counter with the max-interval diagnostic: `maxIntervalMs` = the
+ *  largest interval (ms) between consecutive events over the trailing 10 s.
+ *  `CounterRate` plus one field; assignable to `CounterRate`, so it rides the
+ *  existing `WorkloadSnapshot.inputs`/`outputs` shape at runtime. */
 export type WorkloadStreamStat = CounterRate & { maxIntervalMs: number };
 
-// C-18 max inter-arrival tracker: 10 × 1 s bins in a ring. Each bin holds the
+// Max inter-arrival tracker: 10 × 1 s bins in a ring. Each bin holds the
 // max consecutive-event interval seen during that second; the rolling 10 s max
 // is the max over the bins. The ring rotates by wall-clock (lazily, at event
 // and snapshot time), so a stall ages fully out 10 s after it stops, and an
@@ -84,9 +83,9 @@ const BIN_COUNT = 10;
 /** Transport-agnostic descriptor of the max-interval window. This block, the
  *  per-stream `WorkloadStreamStat`, and the whole `WorkloadSnapshot` are PLAIN
  *  DATA by design: when the SHM producer / KCF tracker move into free-running
- *  C++ threads (real-1c / 1d), their native meters populate the exact same
- *  shapes and the orchestrator probes them out-of-loop — the snapshot + profiler
- *  UI stay stable across the JS→C++ move. See the C-18 log for the full schema. */
+ *  C++ threads, their native meters populate the exact same shapes and the
+ *  orchestrator probes them out-of-loop — the snapshot + profiler UI stay
+ *  stable across the JS→C++ move. */
 export const INTERVAL_WINDOW = { bins: BIN_COUNT, binMs: BIN_MS } as const;
 
 interface IntervalRing {
@@ -296,8 +295,7 @@ export function workloadSnapshot(name: string, now = Date.now()): WorkloadSnapsh
 
 /** Every live workload's snapshot, keyed by name — the exact value
  *  `system.perfSnapshot` should splice in under its additive `workloads`
- *  key (see the C-6 log for the handoff needed in `system.ts`/`contracts.ts`,
- *  which this round doesn't touch — out of C's file ownership). */
+ *  key. */
 export function workloadsSnapshot(now = Date.now()): Record<string, WorkloadSnapshot> {
   const out: Record<string, WorkloadSnapshot> = {};
   for (const state of workloads.values()) out[state.name] = snapshotOf(state, now);

@@ -19,10 +19,10 @@
 //   which already yields VOLT-PER-PIXEL directly (no explicit matrix inverse:
 //   differentiating the volt(px) map IS the "inverse" of the px(volt) map).
 //
-// RIG-TUNABLE: the per-axis SIGN (`signX`/`signY`) and the effective focal
+// Hardware-tunable: the per-axis SIGN (`signX`/`signY`) and the effective focal
 // SCALE (via the caller's `zoom` into `deriveFoveaIntrinsics`) depend on the
 // fovea camera↔mirror mounting (image flips, warp magnification). The pinhole
-// defaults below (+1, +1) are the naive convention; the stage-f servo pass
+// defaults below (+1, +1) are the naive convention; a servo pass on hardware
 // pins the true signs/scale. Everything here is deterministic geometry.
 
 import type { Point2d } from "core/Geometry";
@@ -35,7 +35,7 @@ export interface EyeJInvInputs {
   angle0: Point2d;
   /** This eye's angle→volt regression — `conv.A2V[eye]`. */
   a2v(angle: Point2d): Point2d;
-  /** RIG-TUNABLE per-axis pixel→angle sign (default +1). */
+  /** Hardware-tunable per-axis pixel→angle sign (default +1). */
   signX?: number;
   signY?: number;
   /** Finite-difference step in pixels (default 1). */

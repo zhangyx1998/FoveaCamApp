@@ -24,12 +24,10 @@ using Packet::Command::MirrorPosition;
 using Packet::Command::Timestamp;
 
 static constexpr uint8_t QUEUE_CAPACITY = 8;
-// Both trigger outputs Frame requests can drive today (C has no strobe
-// cable — camera-side size constraints, see docs/history/refactor/synced-capture.md
-// §2/§8).
+// Both trigger outputs Frame requests can drive today (C has no strobe cable —
+// camera-side size constraints).
 static constexpr uint8_t SUPPORTED_CAMERAS = CAM_L | CAM_R;
-// Fixed margin added to `pulse` before a strobe REJ-timeout fires. Not yet
-// bench-verified (docs/history/refactor/synced-capture.md §4) — revisit once a
+// Fixed margin added to `pulse` before a strobe REJ-timeout fires. Tune once a
 // logic analyzer trace of real strobe timing is available.
 static constexpr Timestamp STROBE_MARGIN_US = 5000;
 
@@ -106,7 +104,7 @@ static volatile bool exposureLatched = false;
 // Raw hardware microsecond sample taken *in the ISR* — not Global::time,
 // whose (counter, anchor) update is a non-atomic read-modify-write also
 // performed by loop(); an ISR calling Global::time.now() could preempt that
-// update mid-flight and corrupt the counter (§9 FW3a). tick() (main-loop
+// update mid-flight and corrupt the counter. tick() (main-loop
 // only) translates this into the wide Global::time domain once, below.
 static volatile uint32_t exposureLatchRawMicros = 0;
 static bool exposureLatchTranslated = false; // main-loop-only
@@ -130,7 +128,7 @@ static volatile uint8_t strobeHighMask = 0;
 // request — distinct from strobeHighMask (current level): without this, a
 // camera that never rises at all (e.g. unplugged/dead) never blocks
 // completion, and once the *other* camera falls the request FINs as success
-// with only one camera actually exposed (§9 FW2).
+// with only one camera actually exposed.
 static volatile uint8_t risenMask = 0;
 // Requested camera bits this request is still waiting to see fall.
 static volatile uint8_t awaitingFallMask = 0;
@@ -231,7 +229,7 @@ static void startNext() {
   exposureFinishValid = false;
   // Compound read-modify-write on ISR-shared volatiles: without disabling
   // interrupts, an onStrobeEdge() firing between the load and the store
-  // could have its own update overwritten by this one (§9 FW3b).
+  // could have its own update overwritten by this one.
   noInterrupts();
   strobeHighMask &= static_cast<uint8_t>(~active.cameras); // drop stale level
   risenMask &= static_cast<uint8_t>(~active.cameras);      // drop stale rise
@@ -318,7 +316,7 @@ void tick() {
     if (exposureLatched && !exposureLatchTranslated) {
       // Translate the ISR's raw micros() sample into the wide Global::time
       // domain here, in the main loop, where touching Global::time's
-      // internal state can't race an ISR (§9 FW3a). Unsigned subtraction on
+      // internal state can't race an ISR. Unsigned subtraction on
       // the raw 32-bit sample is wraparound-correct as long as this runs
       // within one micros() wrap of the latch (trivially true — at most one
       // loop() iteration later).
@@ -330,7 +328,7 @@ void tick() {
     // Every requested camera must have both risen (risenMask) and returned
     // low (cleared from strobeHighMask) — requiring risenMask too is what
     // stops a camera that never strobes at all from producing a silent
-    // "successful" FIN off the other camera's fall alone (§9 FW2).
+    // "successful" FIN off the other camera's fall alone.
     bool exposureOver = exposureLatched && risenMask == active.cameras &&
                         (strobeHighMask & awaitingFallMask) == 0;
     bool timedOut =

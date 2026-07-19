@@ -47,12 +47,12 @@ export type RecordThumb = {
  *  every marker's corners flattened; a dot per point is enough to see detection). */
 export type DetectionView = { points: Point2d[] };
 
-/** Minimum SAMPLES (planar views) before a solve is allowed
- *  (calibration-review-2026-07-11 #13): `calibrateCamera` with 1–2 views
- *  produces a plausible-looking but garbage model (k-coefficients
- *  underdetermined). Three views is the accepted floor for a constrained
- *  solve — checker: 3 boards; marker: 3 marker views (a record may carry
- *  several). Shared by the session guard and the renderer's Calibrate gate. */
+/** Minimum SAMPLES (planar views) before a solve is allowed:
+ *  `calibrateCamera` with 1–2 views produces a plausible-looking but garbage
+ *  model (k-coefficients underdetermined). Three views is the accepted floor
+ *  for a constrained solve — checker: 3 boards; marker: 3 marker views (a
+ *  record may carry several). Shared by the session guard and the renderer's
+ *  Calibrate gate. */
 export const MIN_SOLVE_SAMPLES = 3;
 
 export const calibrateIntrinsic = defineContract({
@@ -97,8 +97,7 @@ export const calibrateIntrinsic = defineContract({
     /** Freeze the current detection into a record. */
     capture: cmd(),
     /** Remove one captured record by its STABLE thumb id (not list index — an
-     *  index race against a concurrent removal/clear deleted the wrong record;
-     *  calibration-review-2026-07-11 #16). */
+     *  index race against a concurrent removal/clear deleted the wrong record). */
     removeRecord: cmd<{ id: number }>(),
     /** Run `calibrateCamera` over every record and persist the result. */
     calibrateNow: cmd(),

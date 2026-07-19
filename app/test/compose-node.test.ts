@@ -87,7 +87,7 @@ describe("compose conformance vectors (native brick reference)", () => {
   });
 
   it("pins the HIL D2 floor policy sequence (rebase between predictions: NO dip)", async () => {
-    // mirror-flicker 2026-07-12 refinement 2: the shared floorPolicy vector.
+    // The shared floorPolicy vector.
     // The native brick (core/test/45) runs the sequence through the REAL
     // ComposeStream; here every step's expected emission is recomputed from
     // the composeVolts algebra with the SAME cached-latest-prediction policy:

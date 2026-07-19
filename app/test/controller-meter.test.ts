@@ -1,4 +1,4 @@
-// Controller serial WRITE meter (A-29). Verifies the `controller:<port>`
+// Controller serial WRITE meter. Verifies the `controller:<port>`
 // workload registers, `emit`s one `packets` output on every packet pushed to
 // the wire (awaited config/actuate sends AND the fire-and-forget stream update
 // hot path), and disposes on `release()` — so the serial send rate becomes a
@@ -61,7 +61,7 @@ const PORT = "/dev/fake-controller";
 const NAME = `controller:${PORT}`;
 const packets = () => workloadSnapshot(NAME)!.outputs.packets.count;
 
-describe("Controller serial WRITE meter (A-29)", () => {
+describe("Controller serial WRITE meter", () => {
   let ctrl: Controller | undefined;
   afterEach(() => {
     ctrl?.release(); // idempotent; disposes the meter between tests

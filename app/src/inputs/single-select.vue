@@ -6,8 +6,8 @@
 // the current choice is always visible, options can carry hints, and it is
 // keyboard-operable (arrow keys cycle, focus ring on the group).
 //
-// Ruled interaction principles (docs/design tokens): INSTANT (selection applies
-// on click, no confirm), SNAP (short color transition only — the active border
+// Interaction principles: INSTANT (selection applies on click, no confirm),
+// SNAP (short color transition only — the active border
 // is always present so nothing reflows), LAYOUT-STABLE (the selected/idle
 // states differ only in color, never in box size).
 //
@@ -65,7 +65,7 @@ function onKeydown(e: KeyboardEvent): void {
 </script>
 
 <template>
-  <!-- Roving tabindex (proper radiogroup semantics, UI/UX review 2026-07-11):
+  <!-- Roving tabindex (proper radiogroup semantics):
        ONE tab stop — the selected option — and arrows move within; the group
        div itself is not tabbable (it only hosts the keydown handler). -->
   <div

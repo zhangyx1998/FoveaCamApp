@@ -66,13 +66,13 @@ let player: Player | null = null;
 let opening = false;
 let openedPath: string | null = null;
 
-// --- video export (viewer-export.md): ffmpeg is resolved ONCE at engine start
-// (PATH + common Homebrew/MacPorts locations — the launchd-PATH nuance, spec 1);
-// the runner is created at `open` when the source + calibration are known.
+// --- video export: ffmpeg is resolved ONCE at engine start (PATH + common
+// Homebrew/MacPorts locations — the launchd-PATH nuance); the runner is created
+// at `open` when the source + calibration are known.
 const ffmpegPath: string | null = resolveFfmpeg();
 let exporter: ExportRunner | null = null;
 
-// --- sidecar (ruling 8): debounced write-through, worker is the ONLY writer.
+// --- sidecar: debounced write-through, worker is the ONLY writer.
 const SIDECAR_DEBOUNCE_MS = 400;
 let sidecarTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingSidecar: SidecarState | null = null;
@@ -80,7 +80,7 @@ let pendingSidecar: SidecarState | null = null;
 async function readSidecar(fcapPath: string): Promise<SidecarLoad> {
   // Sidecar is a SEPARATE file next to the read-only container. ENOENT ⇒
   // ABSENT (renderer silently initializes); a present-but-broken file ⇒
-  // CORRUPT (renderer confirms before overwrite) — ruling 10.
+  // CORRUPT (renderer confirms before overwrite).
   let text: string | null = null;
   try {
     text = await readFile(sidecarPathFor(fcapPath), "utf8");
@@ -206,8 +206,8 @@ async function close(): Promise<void> {
   const p = player;
   player = null;
   source = null;
-  // Kill + unlink any in-flight exports before the source closes (spec 11 —
-  // the window-close confirm already ran renderer-side; this is the backstop).
+  // Kill + unlink any in-flight exports before the source closes (the
+  // window-close confirm already ran renderer-side; this is the backstop).
   exporter?.abortAll();
   exporter = null;
   await flushSidecar();

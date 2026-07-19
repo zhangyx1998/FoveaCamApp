@@ -1,16 +1,16 @@
-// C-16: the WS1 pipe contract advertises typed pipes and brokers a one-time
+// The pipe contract advertises typed pipes and brokers a one-time
 // connect handshake — no per-frame Channel traffic. Pin the shape so the
 // scaffold's broker surface can't drift.
 
 import { describe, expect, it } from "vitest";
 import { pipes, type PipeSpec, type PipeHandle } from "@lib/orchestrator/pipe-contract";
 
-describe("pipe contract (C-16)", () => {
+describe("pipe contract", () => {
   it("advertises pipes as a keyed discovery Record + connect/disconnect broker", () => {
-    expect(pipes.state.pipes).toEqual({}); // C-20: keyed Record, seeded + diffed
-    expect(pipes.state.nodes).toEqual({}); // C-24: composed-node discovery
+    expect(pipes.state.pipes).toEqual({}); // keyed Record, seeded + diffed
+    expect(pipes.state.nodes).toEqual({}); // composed-node discovery
     expect(Object.keys(pipes.commands).sort()).toEqual([
-      "compose", // C-24 step 3
+      "compose", // step 3
       "connectPipe",
       "decompose",
       "disconnectPipe",

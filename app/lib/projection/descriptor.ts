@@ -29,7 +29,7 @@ function acceptsCodecVersion(v: unknown): boolean {
 export type FramePaneSource = { kind: "frame"; session: string; frame: string };
 /** An advertised SHM pipe source — `usePipeFrame` over the pipes session. */
 export type PipePaneSource = { kind: "pipe"; id: string };
-/** A viewer TILE mirror source (viewer-tiles-split-and-project.md): the viewer
+/** A viewer TILE mirror source: the viewer
  *  re-broadcasts the Mat a tile currently displays over a `BroadcastChannel`,
  *  keyed by (`recording`, `tileKey`). `tileKey` is the viewer's stable per-tile
  *  key — a single channel name, or `pair:<base>` for a collapsed 3D tile — so

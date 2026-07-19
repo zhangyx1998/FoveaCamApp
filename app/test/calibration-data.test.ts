@@ -124,15 +124,14 @@ describe("enumerateCalibrationData", () => {
     expect(extr.detail).toBe("4 samples");
   });
 
-  it("drift flag shows for the REAL Point2d shape calibrate-drift writes (review 2026-07-11 #16)", async () => {
+  it("drift flag shows for the REAL Point2d shape calibrate-drift writes", async () => {
     const hash = await tripleHash({
       L: getCameraKey(camL),
       C: getCameraKey(camC),
       R: getCameraKey(camR),
     });
-    // The doc's drift values are `Point2d | null` (calibrate-drift's `saved.L/R`)
-    // — the old `typeof === "number"` check never matched, so the flag NEVER
-    // showed on any real rig.
+    // The doc's drift values are `Point2d | null` (calibrate-drift's `saved.L/R`);
+    // the flag must accept that shape, not a bare number.
     const real = await enumerateCalibrationData(
       fakeStore({ [`triples/${hash}`]: { drift_l: { x: 0.01, y: -0.02 }, drift_r: null } }),
       [camL, camC, camR],
@@ -214,7 +213,7 @@ describe("mergeTripleConfig", () => {
   });
 });
 
-describe("resolveBaseline (ruled order — triple > legacy app > 200)", () => {
+describe("resolveBaseline (order — triple > legacy app > 200)", () => {
   it("prefers the per-triple baseline when it is finite and > 0", () => {
     expect(resolveBaseline(175, 200)).toBe(175);
     expect(resolveBaseline(300, undefined)).toBe(300);

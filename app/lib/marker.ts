@@ -44,14 +44,14 @@ export function getMarkerProjection(result: MarkerDetectResult) {
  * spread `magnification_std`): the distance-and-size-free ratio of the two
  * cameras' views of the marker — preferred from the wide camera's view of the
  * SAME side marker, else the center-marker fallback with marker-size metadata
- * (RULED 2026-07-09; see `fitMagnification`/`recordMagnification` in
+ * (see `fitMagnification`/`recordMagnification` in
  * @lib/coordinate-conversions). `null` when no record carries the wide quad
  * (legacy dataset) → the template-match consumer falls back to nominal zoom.
  *
- * The legacy `scale` (fovea px per object-unit at the protocol's nominal
- * 1000-unit distance) is still returned for continuity/diagnostics but NO
- * LONGER feeds the magnification — the old `scale·1000/focal` derivation was
- * retired (its 1000-side-length distance assumption is false on the rig).
+ * The `scale` (fovea px per object-unit at the protocol's nominal 1000-unit
+ * distance) is returned for diagnostics but does NOT feed the magnification —
+ * a `scale·1000/focal` derivation would rely on a false 1000-side-length
+ * distance assumption.
  */
 export async function findPinholeProjection(ds: ExtrinsicDataset) {
   const relative = ds.map(({ obj_points, angle }) =>
@@ -65,7 +65,7 @@ export async function findPinholeProjection(ds: ExtrinsicDataset) {
   const scale_std = Math.sqrt(
     scales.reduce((a, b) => a + (b - scale) ** 2, 0) / scales.length,
   );
-  // Ruled magnification: same-side-marker ratio (else center-marker fallback).
+  // Magnification: same-side-marker ratio (else center-marker fallback).
   const { magnification, magnification_std } = fitMagnification(ds, area);
   console.log({ scale, scale_std, magnification, magnification_std });
   // Ger homography projection matrix H per angle

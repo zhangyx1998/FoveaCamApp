@@ -6,7 +6,7 @@
 """Typed reader for ``.fcap`` recordings (standard MCAP inside; legacy
 ``.fovea`` files use the identical container and read the same way).
 
-Implements the recorder-container.md §2b schema contract:
+Implements the .fcap schema contract:
 
 - one channel per recorded stream, ``messageEncoding: "x-fovea-raw"`` —
   message bytes are the raw frame exactly as captured (12-bit-packed
@@ -19,14 +19,14 @@ Implements the recorder-container.md §2b schema contract:
 - timestamps are nanoseconds, monotonic from process start; the absolute
   wall-clock anchor lives in the ``fovea:session`` metadata record.
 
-Crash tolerance (a MUST per §2b): a crash-truncated file has no footer, so
+Crash tolerance (required): a crash-truncated file has no footer, so
 the indexed/seeking path fails — this reader falls back to a sequential
 streaming scan that recovers every complete record before the truncation
-point (the B-4 finding: loss window ≈ 1 message with the writer's
-chunk-per-frame default). ``FoveaReader.truncated`` reports which path was
-taken. The B-5 writer posts a frame's telemetry document *before* the frame
-on the same worker chain, so a single forward pass always sees extras
-before the frame they belong to — the fallback join needs no second pass.
+point (loss window ≈ 1 message with the writer's chunk-per-frame default).
+``FoveaReader.truncated`` reports which path was taken. The writer posts a
+frame's telemetry document *before* the frame on the same write chain, so a
+single forward pass always sees extras before the frame they belong to — the
+fallback join needs no second pass.
 """
 
 from __future__ import annotations
@@ -77,7 +77,7 @@ class FoveaFrame:
 
     @property
     def t(self) -> float:
-        """Timestamp in seconds (same clock the legacy writer used)."""
+        """Timestamp in seconds."""
         return self.log_time / 1e9
 
     @property
@@ -98,11 +98,11 @@ class FoveaFrame:
         a = self.extra.get("affine")
         return None if a is None else np.array(a, dtype=np.float64).reshape(3, 3)
 
-    # ---- WS4 4b frame↔voltage binding ------------------------------------
+    # ---- frame↔voltage binding -------------------------------------------
     # Typed accessors over the recorder's `RecordedFrameExtras` schema
     # (app/orchestrator/recorder/metadata.ts — the fixed contract). All
-    # optional: frames from older files / free-running capture have no such
-    # extras, so every accessor returns None then (backward-compatible).
+    # optional: frames from files without these extras / free-running capture
+    # have none, so every accessor returns None then (backward-compatible).
     # Note the LITERAL dotted JSON keys "volt.unit"/"volt.source" — flat keys,
     # not nested objects — mirrored exactly from the TS schema.
 
@@ -122,7 +122,7 @@ class FoveaFrame:
     @property
     def volt(self) -> XY | None:
         """This stream's mirror voltage ``{x, y}`` — the exposure-AVERAGED value
-        when :attr:`volt_source` is ``"fin-averaged"`` (B-12). None if absent."""
+        when :attr:`volt_source` is ``"fin-averaged"``. None if absent."""
         return self._xy("volt")
 
     @property
@@ -133,7 +133,7 @@ class FoveaFrame:
 
     @property
     def volt_source(self) -> str | None:
-        """Provenance of :attr:`volt`: ``"fin-averaged"`` (B-12 exposure-average)
+        """Provenance of :attr:`volt`: ``"fin-averaged"`` (exposure-average)
         or ``"live-snapshot"``, or None. Reads the literal ``"volt.source"`` key."""
         return self.extra.get("volt.source")
 
@@ -211,7 +211,7 @@ class FoveaReader:
                     self.session.update(metadata.metadata)
         except Exception:  # noqa: BLE001 — footerless/torn files can fail the
             # indexed path with anything from InvalidMagic to a struct.error
-            # on a torn record; §2b requires falling back, not failing.
+            # on a torn record; the format requires falling back, not failing.
             self.truncated = True
             self._recover()
 
@@ -322,9 +322,9 @@ class FoveaReader:
         map of ``iter_frames`` would turn the reader into an accidental
         whole-file materializer.
 
-        Differences from ``iter_frames`` (documented tradeoffs, per B-P10):
+        Differences from ``iter_frames`` (documented tradeoffs):
 
-        - **Order is file order, not log-time order.** The B-5 writer emits a
+        - **Order is file order, not log-time order.** The writer emits a
           frame's telemetry document immediately before the frame on one write
           chain, so a single forward pass sees a frame's extras before the
           frame — no index or second pass needed — but interleaved streams come

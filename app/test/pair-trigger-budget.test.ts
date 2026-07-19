@@ -1,4 +1,4 @@
-// Coverage for the fovea-pair trigger budget (P6): the ONE derivation both
+// Coverage for the fovea-pair trigger budget: the ONE derivation both
 // multi-fovea (pulse + scheduler pacing) and manage-cameras (readout row) use.
 // The exposure-vs-pulse authority flip point lives inside this function — see
 // the AUTHORITY comment in @lib/camera-config.

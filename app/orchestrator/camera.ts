@@ -52,8 +52,7 @@ export async function applyStoredConfig(camera: Camera): Promise<void> {
   // beat (the acquisition stop runs on the OLD stream's native thread) — and
   // while the device holds TLParamsLocked, every config write bounces with
   // USB3Vision access-denied. Retry the apply across that window rather than
-  // continuing on a half-configured camera (rig 2026-07-08: manual-control
-  // exit left the next app's L/R on a stale pixel format).
+  // continuing on a half-configured camera.
   const deadline = Date.now() + 3000;
   for (;;) {
     let applied = false;
@@ -72,7 +71,7 @@ export async function applyStoredConfig(camera: Camera): Promise<void> {
           ` (device still locked? wanted pixel_format=${config.pixel_format},` +
           ` have ${camera.pixel_format})`,
       );
-      return; // keep the legacy warn-and-continue behavior on final failure
+      return; // warn-and-continue on final failure
     }
     await new Promise((r) => setTimeout(r, 250));
   }

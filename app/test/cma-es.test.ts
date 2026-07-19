@@ -1,5 +1,5 @@
 // Minimal (μ/μ_w, λ)-CMA-ES — stage 2 of the vergence two-stage tune
-// (docs/proposals/vergence-loop-tuning.md §1). Pure optimizer conformance:
+// Pure optimizer conformance:
 // convergence on sphere + Rosenbrock within budget, bound respect, and
 // determinism under the seeded RNG (the asynchronous ask/tell contract the
 // session's eval protocol drives).

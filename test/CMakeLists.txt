@@ -40,8 +40,7 @@ foreach(SRC ${SRCS})
 endforeach()
 
 # ------------------------------------------------------------------------------
-# fovea-fw-sim — firmware-in-the-loop simulator
-# (docs/proposals/firmware-sim-harness.md): the REAL firmware translation
+# fovea-fw-sim — firmware-in-the-loop simulator: the REAL firmware translation
 # units compiled for the host behind the thin HAL shim in fw-sim/shim
 # (Arduino/SPI/core_pins stand-ins). Firmware.cpp is NOT compiled — the sim's
 # main.cpp provides the pump + a verbatim copy of its dispatch switch.

@@ -1,4 +1,4 @@
-// Mirror-position history P1 (docs/proposals/unified-time-and-topology.md §4):
+// Mirror-position history:
 // ring semantics, interpolation, clamping, monotonic guard, wraparound.
 
 import { describe, expect, it } from "vitest";

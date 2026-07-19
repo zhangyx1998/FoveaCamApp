@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Refcounted raw-pipe registry (multi-fovea-recording ruling 5). Proves the
+// Refcounted raw-pipe registry. Proves the
 // single-advertise invariant + refcounted attach/detach across BOTH payload
 // kinds, and the packed/unpacked geometry the advertiser must populate.
 
@@ -105,7 +105,7 @@ describe("createRawPipeRegistry", () => {
     // release retires the producer (detach → unadvertise), a later capture
     // acquire of the SAME id is a fresh 0→1 edge that MUST re-advertise AND
     // re-attach — the attach re-runs `attachRawPipe` → `hub.setConsumerGate`, so
-    // the C-21 producer gate is re-registered on the fresh epoch and the next
+    // the producer gate is re-registered on the fresh epoch and the next
     // consumer connect can start frames flowing again. A registry that skipped
     // the re-attach would leave the reused id advertised but producer-gate-less
     // (readSeqInto → NotYet forever). This pins the ORDER too: advertise BEFORE

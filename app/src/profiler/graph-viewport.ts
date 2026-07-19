@@ -7,10 +7,10 @@
 // Profiler node-graph VIEWPORT algebra — pure, Vue/DOM-free, unit-tested.
 // One coordinate convention: screen = model · zoom + pan (pan in screen px).
 // Owns the zoom bounds (single source of truth; graph-interactions re-exports).
-// Rulings 4/5/6 (docs/proposals/profiler-graph-handrolled.md):
-//   4 clampPan — the model point at the container CENTER stays in the graph bbox;
-//   5 viewportContent / resizeViewport — refit the visible content on resize;
-//   6 zoomAt — zoom keeps the model point under the POINTER fixed.
+// Core operations:
+//   clampPan — the model point at the container CENTER stays in the graph bbox;
+//   viewportContent / resizeViewport — refit the visible content on resize;
+//   zoomAt — zoom keeps the model point under the POINTER fixed.
 // spec: docs/spec/profiler-graph.md#interactions
 
 /** Axis-aligned box in model space (px). */
@@ -92,7 +92,7 @@ export function viewportBox(vp: Viewport, container: Size): Box {
   return { x: tl.x, y: tl.y, w: container.w / vp.zoom, h: container.h / vp.zoom };
 }
 
-/** Ruling 5: the model content actually on screen = intersection(visible box,
+/** The model content actually on screen = intersection(visible box,
  *  graph bbox). Null when nothing of the graph is visible (empty intersection)
  *  — the caller falls back to the whole graph. */
 export function viewportContent(
@@ -103,7 +103,7 @@ export function viewportContent(
   return intersect(viewportBox(vp, container), graph);
 }
 
-/** Ruling 4: clamp `pan` so the model point at the container CENTER always lies
+/** Clamp `pan` so the model point at the container CENTER always lies
  *  inside the graph bbox. Solving `screenToModel(center).{x,y} ∈ graph` for pan
  *  gives a closed interval per axis; we clamp into it. A degenerate zero-size
  *  graph collapses the interval to a point → the center pins to that point. */
@@ -120,7 +120,7 @@ export function clampPan(vp: Viewport, container: Size, graph: Box): Viewport {
   };
 }
 
-/** Pan by a screen-px delta (scroll), then clamp (ruling 4). */
+/** Pan by a screen-px delta (scroll), then clamp. */
 export function panBy(
   vp: Viewport,
   dx: number,
@@ -135,7 +135,7 @@ export function panBy(
   );
 }
 
-/** Ruling 6: zoom to `nextZoom` (clamped) keeping the model point under
+/** Zoom to `nextZoom` (clamped) keeping the model point under
  *  `pointer` (container-relative px) fixed on screen, then clampPan. */
 export function zoomAt(
   vp: Viewport,
@@ -173,7 +173,7 @@ export function fitBox(
   };
 }
 
-/** Ruling 5: on container resize keep looking at the SAME model content.
+/** On container resize keep looking at the SAME model content.
  *  content = viewportContent(prev) — the whole graph when that is null/degenerate
  *  (e.g. the first reveal from a 0×0 box) — refit into `next`, then clampPan. */
 export function resizeViewport(

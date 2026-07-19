@@ -1,4 +1,4 @@
-// C-17: the renderer pipe-consumer loop — polls the reader (injected), tracks
+// The renderer pipe-consumer loop — polls the reader (injected), tracks
 // lastSeq, emits FramePayloads, recycles the displaced buffer, and stops on the
 // explicit CLOSED signal. Driven with a scripted reader (no native/preload).
 
@@ -32,7 +32,7 @@ function handle(): PipeHandle {
   };
 }
 
-describe("pipe consumer (C-17)", () => {
+describe("pipe consumer", () => {
   it("polls, tracks lastSeq, emits FramePayloads, recycles the displaced buffer", async () => {
     const frames = [
       { data: new ArrayBuffer(12), seq: 1n, tCapture: 1 },
@@ -167,9 +167,9 @@ describe("pipe consumer (C-17)", () => {
   });
 
   it("counts read errors and surfaces ONCE per streak, re-arming on recovery (value-sweep)", async () => {
-    // Read errors used to retry forever with zero signal. Count them, expose on
-    // the consumer, and surface once after a threshold of CONSECUTIVE failures
-    // (not per-retry spam); a successful read re-arms the signal.
+    // Count read errors, expose on the consumer, and surface once after a
+    // threshold of CONSECUTIVE failures (not per-retry spam); a successful
+    // read re-arms the signal.
     let mode: "throw" | "frame" = "throw";
     const io: PipeReaderIO = {
       readPipe: vi.fn(async () => {

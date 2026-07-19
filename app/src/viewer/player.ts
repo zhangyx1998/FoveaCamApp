@@ -15,8 +15,8 @@ import type { FoveaChannel, FoveaMessage, FoveaSource } from "./source.js";
 import { TELEMETRY_TOPIC } from "../../../docs/schema/fovea.js";
 
 /** Playback accounting hooks (structurally a subset of the orchestrator's
- *  `WorkloadHandle`, which the retired viewer session used to inject). The
- *  standalone viewer has no workload registry — the default meter is a no-op;
+ *  `WorkloadHandle`). The standalone viewer has no workload registry — the
+ *  default meter is a no-op;
  *  tests inject a recorder to assert ingest/emit/drop accounting. */
 export interface PlayerMeter {
   ingest(input: string): void;
@@ -65,7 +65,7 @@ export interface PlayerHooks {
   /** Latest replayed telemetry-channel document (parsed JSON). */
   emitTelemetry?: (doc: PlaybackDoc) => void;
   /** Latest replayed DESCRIPTOR document for a non-telemetry json channel
-   *  (multi-fovea `fovea/<target>` tracks — bbox overlay data, ruling 6).
+   *  (multi-fovea `fovea/<target>` tracks — bbox overlay data).
    *  Keyed by channel topic; latest-wins at playback rate (the nearest-sample
    *  the overlay draws). Absent → descriptor tracks are ingested + dropped. */
   emitDescriptor?: (topic: string, doc: PlaybackDoc) => void;
@@ -81,7 +81,7 @@ export interface Player {
   /** Jump to `tNs` (relative). Paused: republish latest-before frames so a
    *  scrub redraws. Playing: resume from there. */
   seek(tNs: number): Promise<void>;
-  /** Restrict which FRAME channels are decoded (viewer-timeline ruling 3): a
+  /** Restrict which FRAME channels are decoded: a
    *  channel absent from the set is ingested + dropped without decode. `null`
    *  = decode all frame channels (the default). Newly-enabled channels get a
    *  seek-refresh at the current position while paused so they repaint. */
@@ -143,7 +143,7 @@ export function createPlayer(
   // decode node follows the latest seek instead of trailing the backlog.
   let pendingSeekNs: number | null = null;
   let seekRefreshing = false;
-  // Enabled frame-channel gate (ruling 3): null = decode every frame channel;
+  // Enabled frame-channel gate: null = decode every frame channel;
   // a Set restricts decode to those topics (others ingest + drop). json
   // (telemetry/descriptor) channels are never gated — they're cheap and feed
   // overlays regardless of which tiles are shown.
@@ -192,7 +192,7 @@ export function createPlayer(
           if (!emitTelemetry) throw new Error("viewer player missing telemetry hook");
           emitTelemetry(doc);
         } else {
-          // Descriptor track (`fovea/<target>` — ruling 6): latest-wins per
+          // Descriptor track (`fovea/<target>`): latest-wins per
           // topic; no hook → ingest-and-drop (still accounted above).
           hooks.emitDescriptor?.(channel.topic, doc);
         }
@@ -202,7 +202,7 @@ export function createPlayer(
       }
       return;
     }
-    // Enabled-set gate (ruling 3): a frame channel that isn't currently
+    // Enabled-set gate: a frame channel that isn't currently
     // displayed is ingested + dropped BEFORE the (expensive) decode.
     if (enabled && !enabled.has(channel.topic)) {
       workload.drop("disabled");
@@ -271,7 +271,7 @@ export function createPlayer(
     if (topics.length === 0) return;
     const at = source.startNs + BigInt(Math.round(tNs));
     const latest = await source.latestBefore(at, topics);
-    // Superseded while the (async) query ran: a newer scrub target landed, or
+    // Overtaken while the (async) query ran: a newer scrub target landed, or
     // playback/close took over. Drop this pass — the coalescing loop will run
     // the newest target — so we never decode a stale scrub position.
     if (pendingSeekNs !== null || closed || playing) return;
@@ -285,7 +285,7 @@ export function createPlayer(
 
   /** Republish the latest-before frame for a specific set of frame topics at
    *  the current position — the seek-refresh a channel gets when it is newly
-   *  enabled while paused (ruling 3), so it repaints without a full re-seek. */
+   *  enabled while paused, so it repaints without a full re-seek. */
   async function refreshTopics(topics: readonly string[]): Promise<void> {
     const wanted = topics.filter((t) => frameTopicSet.has(t));
     if (wanted.length === 0) return;

@@ -1,8 +1,8 @@
-// Depth-path math (calibration review 2026-07-11 #3 + #16) — the pure stereo
+// Depth-path math — the pure stereo
 // lib (@lib/stereo): createQMatrix's principal-point disparity offset sign
-// (the old (L−R) form put the fixation plane at NEGATIVE depth) and
-// vergenceToDistance's exact symmetric-fixation inverse (was a small-angle
-// sin form). Fixtures reproduce deriveFoveaIntrinsics' ideal-pinhole output
+// places the fixation plane at POSITIVE depth, and vergenceToDistance's
+// exact symmetric-fixation inverse. Fixtures reproduce
+// deriveFoveaIntrinsics' ideal-pinhole output
 // for a CONVERGED pose, and reprojection applies Q exactly the way
 // cv::reprojectImageTo3D does ([X Y Z W]ᵀ = Q·[u v d 1]ᵀ, point = ·/W).
 
@@ -43,12 +43,12 @@ function reprojectZ(Q: Float64Array, u: number, v: number, d: number): number {
   return Z / Wq;
 }
 
-describe("createQMatrix (review #3: principal-point sign)", () => {
+describe("createQMatrix (principal-point sign)", () => {
   it("reprojects ZERO disparity to the fixation distance (sign + magnitude)", () => {
     const { L, R } = convergedIntrinsics(Z_FIX);
     const Q = createQMatrix(L, R, B);
     const z = reprojectZ(Q, W / 2, H / 2, 0);
-    // The regression this pins: the old (L−R) sign returned −Z_FIX here.
+    // Pins the sign: reprojection at the principal point returns +Z_FIX.
     expect(z).toBeCloseTo(Z_FIX, 6);
     expect(z).toBeGreaterThan(0);
   });
@@ -94,7 +94,7 @@ describe("createQMatrix (review #3: principal-point sign)", () => {
   });
 });
 
-describe("vergenceToDistance (review #16: exact symmetric inverse)", () => {
+describe("vergenceToDistance (exact symmetric inverse)", () => {
   it("round-trips inverseTriangulate exactly on the gaze axis", () => {
     for (const z of [120, 500, 800, 3000, 25_000]) {
       const { l, r } = inverseTriangulate({ x: 0, y: 0 }, B, z);

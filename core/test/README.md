@@ -29,8 +29,8 @@ freshly built addon.
    node test/07-regression.ts
    ```
 
-   > The `#!npx ts-node` shebang line at the top of every test is **stale** —
-   > left over from before native type-stripping. Ignore it; run with `node`.
+   > Ignore the `#!npx ts-node` shebang at the top of every test — run with
+   > `node` (native type-stripping handles the types).
 
 3. Or use the runner (`test/run.mjs`):
 
@@ -83,8 +83,3 @@ Everything else (00, 06–48). Three families, all self-contained:
 - **PTY-serial controller tests** — open a pseudo-terminal `Device` (a scripted
   serial peer, **not** real hardware) to test the compose/sink chain, the serial
   rate governor, and the firmware simulation (`45`, `46`, `47`).
-
-**Known-blocked:** `47-firmware-sim` is hardware-free in intent (pty + the real
-firmware logic) but currently blocked by the core `Device` rx-thread deadlock
-noted in its header, so it does not pass standalone. The runner excludes it from
-`all`; run it by number when working that fix.

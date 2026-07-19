@@ -1,14 +1,14 @@
-// calibrate-intrinsic session — the calibration-review-2026-07-11 fix wave:
-//   #5  select() supersede guard (single-capture's pattern) — a racing second
+// calibrate-intrinsic session — behaviors under test:
+//   - select() supersede guard (single-capture's pattern) — a racing second
 //       select / deselect releases the late lease instead of installing it.
-//   #15 failed lease → s.fail (user-visible), not a frozen overlay.
-//   #4  calibrateNow snapshots state before the first await, bails (tray
+//   - failed lease → s.fail (user-visible), not a frozen overlay.
+//   - calibrateNow snapshots state before the first await, bails (tray
 //       message) on a mid-solve camera switch, and is covered by busy().
-//   #13 minimum-sample gate + zero-sample marker capture refusal + actionable
+//   - minimum-sample gate + zero-sample marker capture refusal + actionable
 //       OpenCV solve-error mapping.
-//   #16 removeRecord by stable id; scale change keeps records; stale
+//   - removeRecord by stable id; scale change keeps records; stale
 //       detections not capturable after a restart; double-click solve guard.
-//   Q1  profiler visibility: checker worker + marker detector graph nodes.
+//   - profiler visibility: checker worker + marker detector graph nodes.
 //
 // Every native / IO seam is mocked (established pattern: marker-calibration
 // .test.ts); the session runs over a real Channel pair (fake-endpoint).
@@ -238,7 +238,7 @@ function harness() {
 
 // --- tests ---------------------------------------------------------------------
 
-describe("select lifecycle (review #5/#15)", () => {
+describe("select lifecycle", () => {
   it("a second select supersedes the first: the late lease is released", async () => {
     const h = harness();
     await h.call("refresh");
@@ -299,7 +299,7 @@ describe("select lifecycle (review #5/#15)", () => {
   });
 });
 
-describe("records + capture (review #13/#16)", () => {
+describe("records + capture", () => {
   it("captures checker records, tracks sampleCount, removes by STABLE id", async () => {
     const h = harness();
     await h.call("refresh");
@@ -383,7 +383,7 @@ describe("records + capture (review #13/#16)", () => {
   });
 });
 
-describe("dictionary change rebuilds the detector (review #1, session half)", () => {
+describe("dictionary change rebuilds the detector", () => {
   it("a dictionary state change constructs a NEW MarkerDetector with that dictionary", async () => {
     const h = harness();
     await h.call("refresh");
@@ -401,7 +401,7 @@ describe("dictionary change rebuilds the detector (review #1, session half)", ()
   });
 });
 
-describe("calibrateNow (review #4/#13/#16)", () => {
+describe("calibrateNow", () => {
   async function withRecords(h: ReturnType<typeof harness>, n: number): Promise<void> {
     await h.call("refresh");
     await h.call("select", { serial: "CAM1" });
@@ -494,7 +494,7 @@ describe("calibrateNow (review #4/#13/#16)", () => {
   });
 });
 
-describe("profiler visibility (review Q1/#15)", () => {
+describe("profiler visibility", () => {
   it("registers the checker worker as a graph node wired to the convert pipe", async () => {
     const h = harness();
     await h.call("refresh");
@@ -509,7 +509,7 @@ describe("profiler visibility (review Q1/#15)", () => {
     const edge = (wiring.edges as Array<Record<string, unknown>>)[0]!;
     expect(edge.from).toBe("camera/CAM1/convert");
     expect(edge.to).toBe(node.id);
-    // Meter name == node id (B-24): the worker self-meter folds onto the node.
+    // Meter name == node id: the worker self-meter folds onto the node.
     expect(ctl.visionWorkers[0]!.init.meterName).toBe(node.id);
     await h.call("deselect");
     await settle();

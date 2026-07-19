@@ -29,10 +29,9 @@ import { createDistortionKernel } from "@modules/calibrate-distortion/vision";
 import { createCheckerKernel } from "@modules/calibrate-intrinsic/vision";
 
 /** Kernel registry — keyed by `params.kind`. `template-match` is the generic
- *  needle-into-haystack correlator (split-disparity-nodes — disparity-scope
- *  spawns two; the monolithic `disparity` kernel is deleted); `display`
+ *  needle-into-haystack correlator (disparity-scope spawns two); `display`
  *  serves manual-control + multi-fovea (center only); `distortion`/`checker`
- *  serve the calibrate apps (C-22b step 2/3). */
+ *  serve the calibrate apps. */
 const KERNELS: Record<string, KernelFactory> = {
   "template-match": createTemplateMatchKernel,
   display: createDisplayKernel,
@@ -225,9 +224,8 @@ function readFrames(): FrameSet | "closed" {
   return frames;
 }
 
-// OWNERSHIP RULE for postResult's zero-copy transfer (value-sweep 2026-07-11,
-// vision-worker-postresult-redundant-slice): every frame a kernel emits is a
-// FRESH Vision-call output (slice/diff/heatmap/wrapPerspective/cvtColor —
+// OWNERSHIP RULE for postResult's zero-copy transfer: every frame a kernel
+// emits is a FRESH Vision-call output (slice/diff/heatmap/wrapPerspective/cvtColor —
 // audited across all four kernels), uniquely owned by this worker and never a
 // view over a reused pipe read buffer. On the electron (V8_MEMORY_CAGE) build
 // those are ordinary process-owned ArrayBuffers → transfer them directly. On

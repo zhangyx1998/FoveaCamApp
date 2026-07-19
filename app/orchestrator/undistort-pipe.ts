@@ -6,7 +6,7 @@
 //
 // Undistorted-stream pipe helper: sessions advertise a first-class
 // `camera/<serial>/undistort` SHM pipe (session-scoped — needs the session's center
-// calibration). The native brick chains on the shared converter and is C-21 gated.
+// calibration). The native brick chains on the shared converter and is consumer-gated.
 // Two variants: CENTER intrinsic undistort ({ cal }) and L/R per-frame homography
 // warp ({ homography: true }, H from a time-indexed ParamRing fed by homography-feeder).
 // spec: docs/spec/pipes.md#undistort-pipe
@@ -17,7 +17,7 @@ import type { PipeSpec } from "@lib/orchestrator/pipe-contract.js";
 import { nodeId } from "@lib/orchestrator/graph-contract.js";
 
 /** The attach variant selector — mirrors the native `UndistortPipeOptions`
- *  minus the retired legacy positional-cal form (chained bricks only). */
+ *  minus the positional-cal form (chained bricks only). */
 export type UndistortAttachOptions =
   | { cal: CameraCalibration }
   | { homography: true; ringCapacity?: number };
@@ -26,8 +26,7 @@ export type UndistortAttachOptions =
  *  session handle's (discovery-mutating: renderers find the pipe via
  *  `state.pipes`), not bare native `Pipe.advertise`; `attach`/`detach` wrap
  *  `Aravis.attachUndistortPipe`/`detachUndistortPipe`. `attach`'s source is
- *  the CONVERT brick's pipeId (unified-topology §5 — the brick chains on the
- *  shared converter; the legacy Camera-object source is retired here).
+ *  the CONVERT brick's pipeId (the brick chains on the shared converter).
  *  Injected (not imported) so sessions and their vitest never load native
  *  core. */
 export interface UndistortPipeSeam {
@@ -37,11 +36,11 @@ export interface UndistortPipeSeam {
   detach(pipeId: string): void;
 }
 
-// C-24 step 1: path-like node id (formerly `undistort:<serial>`) — the single
-// spelling lives in `nodeId` (graph-contract); this alias keeps call-site naming.
+// Path-like node id — the single spelling lives in `nodeId` (graph-contract);
+// this alias keeps call-site naming.
 export const undistortPipeId = nodeId.undistort;
 
-/** Shared advertise half: the ruled RGBA8 spec at camera dims (both variants
+/** Shared advertise half: the RGBA8 spec at camera dims (both variants
  *  are 1:1 warps). Advertise BEFORE attach — the producer must find its pipe. */
 function advertisePipe(
   seam: UndistortPipeSeam,
@@ -84,7 +83,7 @@ export function advertiseUndistortPipe(
 
 /** Advertise the `camera/<serial>/undistort` pipe + attach the HOMOGRAPHY
  *  undistort brick chained on the camera's shared converter (the L/R
- *  mirror-steered cameras — proposal §5). No calibration record: the warp is
+ *  mirror-steered cameras). No calibration record: the warp is
  *  driven per frame by H samples the session pushes via a homography feeder
  *  (`startHomographyFeeder`); until samples flow the brick passes frames
  *  through untouched. Returns the pipe id. */

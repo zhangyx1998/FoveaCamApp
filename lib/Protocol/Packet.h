@@ -42,21 +42,20 @@ FIXED_SIZE_PACKET(Version, SYS_VERSION) {
 };
 
 FIXED_SIZE_PACKET(Reset, SYS_RESET) {
-  // SOFT/HARD reboot the MCU (single-phase ACK, then reset). MEMS (v2.1.0) is a
-  // targeted DAC recovery: re-init the AD5664R DACs in place without rebooting
-  // or dropping the session — see firmware Protocol.cpp HANDLE_SET(System::Reset)
-  // and docs/dev/right-dac-freeze-2026-07-12.md (mitigation M2). Wire layout is
-  // unchanged (one uint8_t); an unknown type on older firmware is REJected.
+  // SOFT/HARD reboot the MCU (single-phase ACK, then reset). MEMS is a targeted
+  // DAC recovery: re-init the AD5664R DACs in place without rebooting or
+  // dropping the session (see firmware Protocol.cpp HANDLE_SET(System::Reset)).
+  // Wire layout is unchanged (one uint8_t); an unknown type on older firmware
+  // is REJected.
   typedef enum Type : uint8_t { SOFT = 0, HARD = 1, MEMS = 2 } Type;
   Type type;
 };
 
 FIXED_SIZE_PACKET(Enable, SYS_ENABLE) { uint8_t enable; };
 
-// Clock-calibration surface (docs/proposals/unified-time-and-topology.md,
-// Rulings item 4 / §2 "Controller↔host"). GET replies the MCU's
-// wraparound-corrected uint64 microsecond clock (Global::time), stamped AT
-// PACKET PARSE/HANDLE TIME — not at reply serialization — so a host
+// Clock-calibration surface. GET replies the MCU's wraparound-corrected uint64
+// microsecond clock (Global::time), stamped AT PACKET PARSE/HANDLE TIME — not
+// at reply serialization — so a host
 // calibration ping's jitter stays at the serial-latency floor. SET resets the
 // counter to the payload value (normally 0) and echoes the fresh clock back.
 // Single-phase (ACK/REJ, no FIN). Same clock domain and units as
@@ -150,16 +149,15 @@ FIXED_SIZE_PACKET(Frame, CMD_FRAME) {
   uint8_t stream;        // stream the mirrors follow during this exposure
   uint8_t cameras;        // CameraMask bitmask; default CAM_L | CAM_R
   Microseconds pulse;    // trigger pulse width
-  // Trigger SETTLE HOLD (µs), v2.0. Applied ONLY when this request SWITCHES
-  // the active stream (the mirror is commanded to a new location): the
-  // firmware moves the mirror, waits settle_time, THEN asserts the trigger.
-  // Independent of `pulse` — it is NOT subtracted from the exposure window.
-  // 0 = no hold (byte-for-byte the pre-v2.0 behavior). Same 2-point mirror
-  // averaging + strobe machinery runs afterward, unchanged.
+  // Trigger SETTLE HOLD (µs). Applied ONLY when this request SWITCHES the
+  // active stream (the mirror is commanded to a new location): the firmware
+  // moves the mirror, waits settle_time, THEN asserts the trigger. Independent
+  // of `pulse` — it is NOT subtracted from the exposure window. 0 = no hold.
+  // The 2-point mirror averaging + strobe machinery runs afterward.
   Microseconds settle_time;
 };
 
-// Compile-time lock on the v2.0 CMD_FRAME request layout (mirrors the
+// Compile-time lock on the CMD_FRAME request layout (mirrors the
 // FrameAccepted/FrameResult asserts below): stream(1)+cameras(1)+pulse(4)+
 // settle_time(4). Enforced on BOTH host and MCU (shared header) so a field
 // reorder or a lost `__packed__` can never silently desync the request.
@@ -182,14 +180,13 @@ PACKED(FrameResult) {
   Timestamp t_exposure; // MCU us: strobe rise (exposure start)
   // Exposure-AVERAGED mirror position: per-channel round-half-up mean of the
   // DAC target latched at strobe rise (exposure start) and at strobe fall
-  // (exposure finish) — a better estimate of where the mirror was during the
-  // frame than the start-only value this replaces.
+  // (exposure finish).
   MirrorPosition left;
   MirrorPosition right;
 };
 
-// Compile-time locks on the CMD_FRAME two-phase wire layout (B-12 / WS4 §5),
-// enforced on BOTH host and MCU since they share this header — so a field
+// Compile-time locks on the CMD_FRAME two-phase wire layout, enforced on BOTH
+// host and MCU since they share this header — so a field
 // reorder, a lost `__packed__`, or padding creep can never silently desync the
 // FIN payload. Runtime counterpart: core/test/10-frame-result.ts.
 static_assert(sizeof(FrameAccepted) == 1, "Frame ACK payload is one byte");
@@ -197,7 +194,7 @@ static_assert(sizeof(FrameResult) == 37,
               "FIN payload = stream(1)+frame_id(4)+t_trigger(8)+t_exposure(8)"
               "+left(8)+right(8)");
 static_assert(offsetof(FrameResult, stream) == 0);
-static_assert(offsetof(FrameResult, frame_id) == 1); // right after stream (B-12)
+static_assert(offsetof(FrameResult, frame_id) == 1); // right after stream
 static_assert(offsetof(FrameResult, t_trigger) == 5);
 static_assert(offsetof(FrameResult, t_exposure) == 13);
 static_assert(offsetof(FrameResult, left) == 21);

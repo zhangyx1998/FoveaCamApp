@@ -23,8 +23,8 @@ const props = defineProps({
   },
   /** Right-click reset target + infill anchor. UNDECLARED = no meaningful
    *  neutral: right-click reset is disabled (a stray context-click on e.g. a
-   *  live camera-exposure slider must not slam the hardware to range-min —
-   *  the old default-0 did exactly that) and the infill anchors at `min`. */
+   *  live camera-exposure slider must not slam the hardware to range-min) and
+   *  the infill anchors at `min`. */
   neutral: {
     type: Number,
     required: false,

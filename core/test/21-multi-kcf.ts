@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// real-2 (B-25): multi-target KCF on ONE C++ thread — the LAST on-loop vision
+// Multi-target KCF on ONE C++ thread — the LAST on-loop vision
 // (multi-fovea's JS runtime.onCenterFrame KCF) as a native graph brick. NO
 // hardware (fake camera: a Mono8 ramp shifting 1px/frame). Proves:
 //   1. BATCHED per-frame results — one node, one output stream: every batch
@@ -19,13 +19,13 @@
 //      ok). Note: on the fake ramp cv::TrackerKCF reports found on only a few
 //      frames (12's test never required found either) — parity is "same
 //      engine, same frames, same verdicts", not sustained tracking.
-//   4. DETERMINISTIC drop metering (post-d2bffce pattern): injected 120ms
+//   4. DETERMINISTIC drop metering: injected 120ms
 //      stall >> the ~42ms frame interval ⇒ dropTotal climbs, busyMs > 0.
-//   5. PROBE — name == the C-24 node id (camera/<serial>/kcf-multi, supplied
+//   5. PROBE — name == the node id (camera/<serial>/kcf-multi, supplied
 //      via opts.name, never hardcoded natively), per-target block
 //      {id, ok, bbox, updateMs, ageMs}, undistorted flag; default name
 //      "tracker:multi" when opts.name omitted.
-//   6. ORDERLY teardown (B-20 pattern) → natural exit 0, zero leak warns.
+//   6. ORDERLY teardown → natural exit 0, zero leak warns.
 // Run UNSANDBOXED: /opt/homebrew/bin/node core/test/21-multi-kcf.ts
 
 import assert from "node:assert/strict";
@@ -58,7 +58,7 @@ const probe0 = await camera.grab(2_000_000);
 const [H, W] = probe0.raw.shape as [number, number];
 probe0.release?.();
 const serial = String(camera.serial ?? "0");
-const nodeId = `camera/${serial}/kcf-multi`; // C-24 nodeId.kcfMulti(serial)
+const nodeId = `camera/${serial}/kcf-multi`; // nodeId.kcfMulti(serial)
 
 const f = W * 0.8;
 const cal = {

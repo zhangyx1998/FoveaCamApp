@@ -218,7 +218,7 @@ export default function calibrateDriftSession(
       });
       monitor.done("servo");
 
-      // --- capture (ruling 3) ------------------------------------------------
+      // --- capture -----------------------------------------------------------
       const capCenterId = nodeId.convert(t.leases.C.camera.serial);
       const capCenter = broker.connect(capCenterId);
       scope.defer(() => void broker.disconnect(capCenterId));

@@ -385,7 +385,7 @@ Napi::Value recorderAppendTelemetry(const Napi::CallbackInfo &info) {
   JS_EXCEPT(env.Undefined())
 }
 
-// takeNotices(handle) -> [{stream, seq, logTimeNs, tNs}] (ruling-3 dispatch,
+// takeNotices(handle) -> [{stream, seq, logTimeNs, tNs}] (extras dispatch,
 // drained on the host's low-rate poll — out-of-loop, never per-frame JS).
 Napi::Value recorderTakeNotices(const Napi::CallbackInfo &info) {
   auto env = info.Env();

@@ -37,12 +37,9 @@ const options = [
   "ARUCO_MIP_36h12",
 ] as const;
 
-// v-model-capable (calibration-review-2026-07-11 #1): the previous render bound
-// neither the select's value nor a change handler, so the picker was INERT —
-// the dictionary stayed pinned to the contract default (4X4_50) and the
-// manual's AprilTag workflow silently detected nothing. A functional component
-// must declare `props`/`emits` for `ctx.emit` to dispatch, and a native
-// <select> needs the `value` DOM prop + a `change` listener wired by hand.
+// v-model-capable: a functional component must declare `props`/`emits` for
+// `ctx.emit` to dispatch, and a native <select> needs the `value` DOM prop +
+// a `change` listener wired by hand.
 export const DictionaryTypeSelector: FunctionalComponent<
   { modelValue: PreDefinedDictionary },
   { "update:modelValue": (value: PreDefinedDictionary) => void }

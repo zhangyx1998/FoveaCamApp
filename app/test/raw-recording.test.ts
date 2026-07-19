@@ -4,13 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// The generic raw-stream recording facility (capture-recorder-everywhere ruling
-// 2) + the app-level `record_compression` routing (user directive 2026-07-09).
-// Everything injected — the recorder node factory, the raw-pipe registry seam,
-// the compress seam, the broker, and the method reader — so the ROUTING DECISION
-// (method "none" records raw, method "zlib" routes every stream through the
-// per-frame /zlib sibling) and the ruling-8 significantBits injection are proven
-// without native core or a worker thread.
+// The generic raw-stream recording facility + the app-level
+// `record_compression` routing. Everything injected — the recorder node
+// factory, the raw-pipe registry seam, the compress seam, the broker, and the
+// method reader — so the ROUTING DECISION (method "none" records raw, method
+// "zlib" routes every stream through the per-frame /zlib sibling) and the
+// significantBits injection are proven without native core or a worker thread.
 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -142,7 +141,7 @@ describe("raw recording facility — record_compression routing", () => {
     // No brick advertised/attached.
     expect(compress.log).toEqual([]);
     expect(registry.refCount("camera/SL/raw")).toBe(1);
-    // Ruling-8: significantBits injected onto the raw connect (12p → 12).
+    // significantBits injected onto the raw connect (12p → 12).
     expect(nodes[0]!.options.connect("camera/SL/raw").spec.significantBits).toBe(12);
     await rec.stop();
     expect(registry.refCount("camera/SL/raw")).toBe(0);
@@ -163,7 +162,7 @@ describe("raw recording facility — record_compression routing", () => {
     // Every stream advertised + attached its /zlib sibling on the source format.
     expect(compress.log).toContain("advertise:camera/SL/raw/zlib:BayerRG12p/zlib");
     expect(compress.log).toContain("attach:camera/SL/raw->camera/SL/raw/zlib");
-    // Ruling-8: significantBits injected for the compressed pipe too.
+    // significantBits injected for the compressed pipe too.
     expect(nodes[0]!.options.connect("camera/SL/raw/zlib").spec.significantBits).toBe(12);
     await rec.stop();
     // Teardown: bricks detached + siblings unadvertised.

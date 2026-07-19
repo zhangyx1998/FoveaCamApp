@@ -23,8 +23,8 @@ export type ExtrinsicRecord = {
   C: TrackerRecord & {
     angle: Point2d;
     /** Measured-magnification inputs on the wide camera (both optional; spec
-     *  §capture-measurements). `side_pts`: the wide view of the side markers
-     *  (ruling 3); `marker`: the marker sizes at capture (ruling 2 fallback). */
+     *  §capture-measurements). `side_pts`: the wide view of the side markers;
+     *  `marker`: the marker sizes at capture (fallback). */
     side_pts?: { L?: Point2d[]; R?: Point2d[] };
     marker?: { side_mm: number; center_mm: number };
   };
@@ -33,7 +33,7 @@ export type ExtrinsicRecord = {
 
 export type DetectionView = { points: Point2d[] } | null;
 
-/** FIN-step fit-quality stats (review #14, session-computable half): sample
+/** FIN-step fit-quality stats: sample
  *  count vs the fit-gate minimum + per-record volt-space residuals (predicted
  *  vs recorded voltage at each record's angle) + per-eye RMS. */
 export type FinStats = {
@@ -55,13 +55,12 @@ export const calibrateExtrinsic = defineContract({
      *  because each eye is a separate PID node — `applyPidOverride` stays generic. */
     pidOverrideL: pidOverrideState<Pos>(),
     pidOverrideR: pidOverrideState<Pos>(),
-    /** Leased camera serials per role (C-22) — raw previews bind to the
+    /** Leased camera serials per role — raw previews bind to the
      *  `camera:<serial>` pipe via `usePipeFrame`. Set on acquire. */
     serials: {} as Partial<Record<"L" | "C" | "R", string>>,
     /** The leased triple's config store path (`["triples", <hash>]`), or []
      *  pre-lease — the renderer opens this doc reactively to read the per-triple
-     *  `baseline_mm` for LIVE marker spacing (per-triplet-settings wave,
-     *  `useTripleBaseline`). Set on acquire. */
+     *  `baseline_mm` for LIVE marker spacing (`useTripleBaseline`). Set on acquire. */
     configPath: [] as string[],
     /** CAL visual-servo gain (velocity-form: `startServo`'s single `kp`, which
      *  maps to `ki` internally — kp/kd are structurally 0 in this control law).
@@ -72,7 +71,7 @@ export const calibrateExtrinsic = defineContract({
   telemetry: {
     ready: false as boolean,
     detection: { L: null, C: null, R: null } as Record<"L" | "C" | "R", DetectionView>,
-    /** Per-role detection FRESHNESS (review #12, session half): false once a
+    /** Per-role detection FRESHNESS: false once a
      *  role's last detection is older than the staleness bound — a frozen
      *  tracker (camera loss) must not stay capturable. */
     detectionFresh: { L: false, C: false, R: false } as Record<"L" | "C" | "R", boolean>,
@@ -81,7 +80,7 @@ export const calibrateExtrinsic = defineContract({
      *  the center tracker holds no target. */
     center_cursor: null as (Point2d & Size) | null,
     /** That centroid's wide-camera angle via the undistort mapping (radians) —
-     *  the crosshair's degree readout (master parity). Null while the center
+     *  the crosshair's degree readout. Null while the center
      *  tracker holds no target (intrinsics are guaranteed loaded while the
      *  session runs — activation fails closed without them). */
     center_angle: null as Point2d | null,
@@ -89,7 +88,7 @@ export const calibrateExtrinsic = defineContract({
      *  throttle from the controller's applied pose, so the head tracks servo
      *  motion + drags in realtime. Null = no controller bound. */
     mirror: null as { left: Pos; right: Pos } | null,
-    /** FIN fit-quality stats (review #14) — null until a finalize ran. */
+    /** FIN fit-quality stats — null until a finalize ran. */
     fin: null as FinStats | null,
     records: [] as ExtrinsicRecord[],
     /** Both L/R regressions fit successfully (gates "Preview Results"). */
@@ -102,12 +101,12 @@ export const calibrateExtrinsic = defineContract({
       cursor_l: null as Point2d | null,
       cursor_r: null as Point2d | null,
     },
-    // Recording (capture-recorder-everywhere ruling 2).
+    // Recording.
     ...captureTelemetry(),
     ...recordingTelemetry(),
   },
   // No session frames: the raw L/C/R previews bind the `camera:<serial>` pipe
-  // via `usePipeFrame` (C-22 migration); detections/overlays ride telemetry.
+  // via `usePipeFrame`; detections/overlays ride telemetry.
   frames: [] as const,
   commands: {
     setTargetId: cmd<{ role: "L" | "C" | "R"; id: number }>(),
@@ -130,7 +129,7 @@ export const calibrateExtrinsic = defineContract({
     setPreviewTarget: cmd<{ p: Point2d }>(),
     /** Persist `records` to the real `calibrate-extrinsic` store paths. */
     confirm: cmd(),
-    // Recording (capture-recorder-everywhere ruling 2): the raw L/C/R streams.
+    // Recording: the raw L/C/R streams.
     ...captureCommands(),
     ...recordingCommands(),
   },

@@ -4,11 +4,11 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// `undistort-pipe` (C-23, real-1g; §5 re-chain): the session-scoped
+// `undistort-pipe`: the session-scoped
 // `camera/<serial>/undistort` advertise/retire helper, unit-tested over an
-// injected fake seam (never loads native core / the pipe session). Encoding is
-// RULED: id `camera/<serial>/undistort`, format in `spec.pixelFormat` (RGBA8),
-// same dims as the camera. Since unified-time-and-topology §5 the brick CHAINS
+// injected fake seam (never loads native core / the pipe session). Encoding:
+// id `camera/<serial>/undistort`, format in `spec.pixelFormat` (RGBA8),
+// same dims as the camera. The brick CHAINS
 // ON THE SHARED CONVERTER — attach's source is `camera/<serial>/convert`, not
 // the Camera object — in one of two variants: intrinsic `{cal}` (center) or
 // `{homography: true}` (mirror-steered L/R).
@@ -41,8 +41,8 @@ const fakeCamera = () =>
     getFeatureInt: (name: string) => (name === "Width" ? 640 : 480),
   }) as never;
 
-describe("undistort-pipe (C-23, §5 re-chain)", () => {
-  it("advertises the ruled id + RGBA8 spec at camera dims, then attaches CHAINED on the convert pipe", () => {
+describe("undistort-pipe (re-chain)", () => {
+  it("advertises the id + RGBA8 spec at camera dims, then attaches CHAINED on the convert pipe", () => {
     const { seam, calls } = fakeSeam();
     const id = advertiseUndistortPipe(seam, fakeCamera(), CAL);
     expect(id).toBe("camera/SN42/undistort");
@@ -60,7 +60,7 @@ describe("undistort-pipe (C-23, §5 re-chain)", () => {
     });
     // Advertise BEFORE attach: the producer must find its pipe.
     expect(calls).toEqual(["advertise", "attach"]);
-    // §5: source = the SHARED converter's pipe id (legacy Camera arg retired);
+    // source = the SHARED converter's pipe id;
     // intrinsic variant carries the plain cal record, untouched.
     expect(seam.attach).toHaveBeenCalledWith(
       "camera/SN42/convert",

@@ -16,7 +16,7 @@ import CameraConfig from "./CameraConfig.vue";
 
 const session = useSession(manageCameras, "manage-cameras");
 
-// Fovea Pair link (P5): while cameras hold roles L and R, their columns
+// Fovea Pair link: while cameras hold roles L and R, their columns
 // collapse to readouts and one shared "Fovea Pair" panel edits both.
 const pair = computed(() => session.telemetry.pair);
 const variantFor = (serial: string) =>

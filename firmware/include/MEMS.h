@@ -24,8 +24,8 @@ typedef enum Device : uint8_t {
 using Packet::Command::MirrorPosition;
 
 void enable();
-// M1 periodic config re-assertion (docs/dev/right-dac-freeze-2026-07-12.md):
-// re-send the idempotent DAC-power / internal-reference / software-LDAC setup
+// Periodic config re-assertion: re-send the idempotent DAC-power /
+// internal-reference / software-LDAC setup
 // words to BOTH mirrors. Never RESETs, never writes a value — the mirror does
 // not move, so it is safe to call mid-capture.
 void refresh();

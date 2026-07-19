@@ -4,9 +4,8 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// unified-time-and-topology §5 (B, native re-plumb) NAPI seam: spawn/cancel-
-// able fovea crop pipes, RE-BASED on the undistort brick's OwnedFrame tap
-// (chain convert → undistort → fovea; the fused map-ROI path is retired):
+// Fovea NAPI seam: spawn/cancel-able fovea crop pipes on the undistort brick's
+// OwnedFrame tap (chain convert → undistort → fovea):
 //   attachFoveaPipe(source, pipeId, options)
 //     source  = an UNDISTORT pipeId (preferred — crop of the undistorted
 //               space) | a CONVERT pipeId (raw crop) | a Camera (legacy — a
@@ -14,10 +13,10 @@
 //               given] chain `<pipeId>#convert`/`#undistort` is created and
 //               owned by this binding)
 //     options = { rect, cal? } — cal only meaningful with a Camera source.
-// The gated `PipeOfferSubscriber` stays MAX-BOUND (C-20: per-frame active w/h
+// The gated `PipeOfferSubscriber` stays MAX-BOUND (per-frame active w/h
 // ≤ the advertised max footprint, frame-bound originX/originY in the v4 slot
 // header). `setFoveaRect` steers the crop live — no re-attach, no gate churn.
-// Probe keys AND meter names = the pipeId (= C-24 node id).
+// Probe keys AND meter names = the pipeId (= the node id).
 
 #include <map>
 #include <memory>
@@ -72,7 +71,7 @@ FN(attachFoveaPipe) {
     JS_ASSERT(sink != nullptr, Error, "attachFoveaPipe: unknown pipe " + pipeId,
               env.Undefined());
     const auto &spec = hub.publisher(pipeId).spec();
-    // C-20 footprint cap: the ring is sized to max (defaults to nominal).
+    // Footprint cap: the ring is sized to max (defaults to nominal).
     const uint32_t maxW = spec.maxWidth ? spec.maxWidth : spec.width;
     const uint32_t maxH = spec.maxHeight ? spec.maxHeight : spec.height;
 
@@ -102,10 +101,8 @@ FN(attachFoveaPipe) {
       }
       sourceId = srcId;
     } else {
-      // Legacy Camera source: build the private chain this fovea needs.
-      // TODO(B-r2): retire once the JS registry chains foveas on the shared
-      // camera/<serial>/undistort brick (this path full-frame-remaps PER
-      // fovea — correct, but N× the shared-brick cost).
+      // Legacy Camera source: build the private chain this fovea needs. This
+      // path full-frame-remaps PER fovea (correct, but N× the shared-brick cost).
       auto camera = convert<Arv::Camera::Ptr>(info[0]);
       const PixelFormat target = convert<PixelFormat>(spec.pixelFormat);
       privateConvert = ConverterStream::create(Arv::Stream::get(camera),
@@ -114,7 +111,7 @@ FN(attachFoveaPipe) {
       sourceId = pipeId + "#convert";
       if (hasCal) {
         // Plain persisted CameraCalibration JSON (never the env-bound Vision
-        // `Undistort` instance — B-23 ruling #1).
+        // `Undistort` instance).
         auto cal = convert<CameraCalibration::Ptr>(opts.Get("cal"));
         privateUndistort = UndistortStream::create(
             source, sourceId, cal, pipeId + "#undistort");
@@ -220,9 +217,9 @@ FN(foveaProbeAll) {
   return out;
 }
 
-// ---- Topology.report() rows (unified-time-and-topology §6) ------------------
-// TODO(B-r2): chained-brick input/output types tagged BGRA8/U8 — see the note
-// on appendUndistortReports (true for every live chain today).
+// ---- Topology.report() rows -------------------------------------------------
+// Chained-brick input/output types tagged BGRA8/U8 — see the note on
+// appendUndistortReports (true for every live chain today).
 void appendFoveaReports(Napi::Env env, Napi::Array &rows,
                         std::set<std::string> &seen) {
   std::scoped_lock lock(g_mutex);

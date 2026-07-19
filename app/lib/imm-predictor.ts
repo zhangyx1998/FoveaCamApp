@@ -396,7 +396,7 @@ class AxisImm {
 
 /** Propagate a combined per-axis state [p, v, a] by `dt` seconds using full
  *  kinematics (works for a signed dt — negative retrodicts). This does NOT run
- *  the filter; it advances the single best estimate, per the ruled sign
+ *  the filter; it advances the single best estimate, per the sign
  *  convention (+ = forward / lead, − = backward / lag). */
 function propagatePos(state: Vec, dt: number): number {
   return state[0] + state[1] * dt + 0.5 * state[2] * dt * dt;
@@ -428,9 +428,9 @@ export class ImmPredictor {
   private ay!: AxisImm;
   private lastTs: bigint | null = null;
   private warm = false;
-  // Free-run mirror state (mirror-flicker 2026-07-12 R1): the native brick's
-  // lastWasMiss_/lastMeas_ pair, tracked so `predictAfter` reproduces the
-  // brick's coast-cap semantics exactly.
+  // Free-run mirror state: the native brick's lastWasMiss_/lastMeas_ pair,
+  // tracked so `predictAfter` reproduces the brick's coast-cap semantics
+  // exactly.
   private lastWasMiss = false;
   private lastMeas: TrackResult | null = null;
 
@@ -481,9 +481,9 @@ export class ImmPredictor {
 
   /**
    * Free-run prediction `coastMs` after the last processed result — the TS
-   * mirror of the native brick's `predictAt`/`predictAfter` (mirror-flicker
-   * 2026-07-12 R1). Null while cold. A miss-coast (last result was a miss) OR
-   * a coast past `maxGapMs` — the R1 CAP: a stalled source must degrade to
+   * mirror of the native brick's `predictAt`/`predictAfter`.
+   * Null while cold. A miss-coast (last result was a miss) OR
+   * a coast past `maxGapMs` — the CAP: a stalled source must degrade to
    * the miss-coast shape (found=false, coasting=true) instead of
    * extrapolating the CA state quadratically forever — returns no center;
    * otherwise the combined estimate propagates by `coast + delay`.

@@ -5,7 +5,7 @@
 // -------------------------------------------------------
 #pragma once
 
-// unified-time-and-topology §6 (B, native re-plumb): ONE consolidated
+// ONE consolidated
 // `Topology.report()` NAPI returning a `NodeReport[]` row for every live
 // native brick (convert/undistort/fovea) + every advertised SHM pipe — the
 // same shape the JS side defines in `graph-contract.ts` (`NodeReport`):
@@ -13,10 +13,10 @@
 //     output, epoch?, stats, pipe?: {consumers, bytesTotal} }
 // `inputs` reflect the ACTUAL channel connections (convert←camera,
 // undistort←convert, fovea←undistort) — no hand-declared edges. The existing
-// `probeAll`/`Pipe.list` exports stay intact (JS migration is staged).
-// TODO(B-r2): fold the KCF/multi-KCF tracker streams in once their handles
-// live in an id-keyed native registry (today they are JS-held CoreObjects
-// reporting through their own probe surface).
+// `probeAll`/`Pipe.list` exports stay intact.
+// TODO: fold the KCF/multi-KCF tracker streams in once their handles live in
+// an id-keyed native registry (today they are JS-held CoreObjects reporting
+// through their own probe surface).
 //
 // Assembly runs entirely ON the NAPI thread: each brick family appends its
 // rows (it owns its registry + knows its actual inputs), recording covered
@@ -69,30 +69,30 @@ void appendFoveaReports(Napi::Env env, Napi::Array &rows,
                         std::set<std::string> &seen);
 void appendScaleReports(Napi::Env env, Napi::Array &rows,
                         std::set<std::string> &seen);
-// stereo-disparity-and-heatmap-nodes: the two-input SGBM brick (kind "stereo",
-// left/right input edges) + the colormap brick (kind "heatmap").
+// The two-input SGBM brick (kind "stereo", left/right input edges) + the
+// colormap brick (kind "heatmap").
 void appendStereoReports(Napi::Env env, Napi::Array &rows,
                          std::set<std::string> &seen);
 void appendHeatmapReports(Napi::Env env, Napi::Array &rows,
                           std::set<std::string> &seen);
-// composite-node-and-center-select-fix: the two-input composite brick
-// (kind "composite", left/right BGRA8 input edges, BGRA8 output).
+// The two-input composite brick (kind "composite", left/right BGRA8 input
+// edges, BGRA8 output).
 void appendCompositeReports(Napi::Env env, Napi::Array &rows,
                             std::set<std::string> &seen);
-// capture-recorder-nodes Phase 1: the RAW camera-source pipe (kind "raw",
-// camera/<serial> input edge, full-bit-depth sensor-format output).
+// The RAW camera-source pipe (kind "raw", camera/<serial> input edge,
+// full-bit-depth sensor-format output).
 void appendRawReports(Napi::Env env, Napi::Array &rows,
                       std::set<std::string> &seen);
-// multi-fovea-recording ruling 1: the PACKED raw-12p camera-source pipe (kind
-// "raw12p", camera/<serial> input edge, verbatim wire-format payload output).
+// The PACKED raw-12p camera-source pipe (kind "raw12p", camera/<serial> input
+// edge, verbatim wire-format payload output).
 void appendRaw12pReports(Napi::Env env, Napi::Array &rows,
                          std::set<std::string> &seen);
-// multi-fovea-recording rulings 9/10: the intra-frame COMPRESSION pipe (kind
-// "compress", source-pipe input edge, `<sourceFormat>/zlib` opaque output).
+// The intra-frame COMPRESSION pipe (kind "compress", source-pipe input edge,
+// `<sourceFormat>/zlib` opaque output).
 void appendCompressReports(Napi::Env env, Napi::Array &rows,
                            std::set<std::string> &seen);
-// pairing-nodes P-1: the per-stage L/R PAIRING brick (kind "pair", THREE input
-// edges left/right/anchor, record output). Always-running, weak-ref registry.
+// The per-stage L/R PAIRING brick (kind "pair", THREE input edges
+// left/right/anchor, record output). Always-running, weak-ref registry.
 void appendPairReports(Napi::Env env, Napi::Array &rows,
                        std::set<std::string> &seen);
 
@@ -100,10 +100,10 @@ void appendPairReports(Napi::Env env, Napi::Array &rows,
 
 namespace PortPipe {
 
-// native-port-pipe.md: one EDGES-ONLY row ({id: toId, kind: "", edgesOnly:
-// true, inputs: [the link edge]}) per live native port link - the JS fold
-// unions the edge into the consumer's node, so piped edges show on the
-// profiler graph without any session-side registerGraphWiring shim.
+// One EDGES-ONLY row ({id: toId, kind: "", edgesOnly: true, inputs: [the link
+// edge]}) per live native port link - the JS fold unions the edge into the
+// consumer's node, so piped edges show on the profiler graph without any
+// session-side registerGraphWiring shim.
 void appendLinkReports(Napi::Env env, Napi::Array &rows);
 
 } // namespace PortPipe

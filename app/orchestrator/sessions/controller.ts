@@ -40,9 +40,8 @@ const ZERO_PRESSURE = {
   ackRttMs: { p50: 0, p95: 0, max: 0, count: 0, baselineP50: 0 },
   appliedLookaheadMs: null,
 };
-// Serial + per-stream probes (docs/history/refactor/orchestrator.md §7.1 S4 added
-// scope) — 2 Hz matches the doc's own throttle note ("wire cost is a few
-// numbers x <=8 streams").
+// Serial + per-stream probes — 2 Hz keeps wire cost to a few numbers x <=8
+// streams.
 const PROBE_INTERVAL_MS = 500;
 
 export function controllerSession(): ServerSession<typeof controller> {
@@ -97,9 +96,8 @@ export function controllerSession(): ServerSession<typeof controller> {
             }
           : ZERO_RATE;
         prevStats = cur;
-        // Serial PRESSURE block (serial-rate-governor.md Part 3): the wave-6
-        // Device.stats sensors + governor mirror; applied lookahead bridged
-        // from the disparity session (Part 4 bus).
+        // Serial PRESSURE block: the Device.stats sensors + governor mirror;
+        // applied lookahead bridged from the disparity session.
         // Defensive over PARTIAL stats (test fakes / an older core build):
         // a missing pressure block degrades to zeros, never a throw — the
         // probe timer must survive any stats shape (observe, never gate).
@@ -114,23 +112,22 @@ export function controllerSession(): ServerSession<typeof controller> {
           ackRttMs: cur.ackRttMs ?? ZERO_PRESSURE.ackRttMs,
           appliedLookaheadMs: currentAppliedLookahead(),
         };
-        // value-sweep 2026-07-11 `controller-unplug-invisible`: re-read the
-        // LIVE connection state every probe tick — a USB unplug flips
-        // `c.connected` but nothing re-published it, so the title-bar
-        // indicator stayed green while the mirrors silently stopped steering.
+        // Re-read the LIVE connection state every probe tick — a USB unplug
+        // flips `c.connected`, and nothing else re-publishes it, so without
+        // this the title-bar indicator would stay green while the mirrors
+        // silently stopped steering.
         s.telemetry({
           connected: !!c.connected,
           serialRate,
           serialPressure,
           streams: c.streamSnapshot(dtSec),
         });
-        // PROBE PING (Part 1): keep ackRttMs live even when no user traffic
-        // flows — the device-loop-saturation proxy. A SYS_TIMESTAMP GET (the
-        // clock-ping machinery) is NOT Actuate, so FW5 holds and it coexists
-        // with an active stream (asserted in core/test/46). A rejection is
-        // ALSO the unplug signal (`controller-unplug-invisible`): when the
-        // device reports disconnected, flip the telemetry + banner ONCE
-        // instead of discarding the exact rejection that carries the news.
+        // PROBE PING: keep ackRttMs live even when no user traffic flows — the
+        // device-loop-saturation proxy. A SYS_TIMESTAMP GET (the clock-ping
+        // machinery) is NOT Actuate, so it coexists with an active stream. A
+        // rejection is ALSO the unplug signal: when the device reports
+        // disconnected, flip the telemetry + banner ONCE instead of discarding
+        // the exact rejection that carries the news.
         void c.readTimestamp?.().catch(() => {
           if (!c.connected && !unplugReported) {
             unplugReported = true;
@@ -145,7 +142,7 @@ export function controllerSession(): ServerSession<typeof controller> {
       commands: {
         async connect() {
           if (ctrl()) return true;
-          // Disposable-orchestrator gate (ruling 2): defer opening the exclusive
+          // Disposable-orchestrator gate: defer opening the exclusive
           // MEMS serial until main confirms the previous instance released it.
           await awaitHardwareClear();
           s.telemetry({ pending: true });
@@ -165,7 +162,7 @@ export function controllerSession(): ServerSession<typeof controller> {
               controllerNode().bindController(c);
               publish();
               startProbe();
-              // Unified time (proposal §3): MCU↔host clock calibration via
+              // Unified time: MCU↔host clock calibration via
               // the v1.1 System.Timestamp ping — fire-and-forget, RACED
               // against a deadline because pre-v1.1 firmware REJects the
               // unknown property with seq 0 (dropped) and the read would
@@ -178,7 +175,7 @@ export function controllerSession(): ServerSession<typeof controller> {
                   ]);
                   if (cal) {
                     setCalibration("controller", cal);
-                    // Owner-applied dt (ruling 0): every FIN timestamp the
+                    // Owner-applied dt: every FIN timestamp the
                     // controller surfaces from here on is trusted host-ns.
                     c.setClockOffsetNs(cal.offsetNs);
                   } else
@@ -206,12 +203,12 @@ export function controllerSession(): ServerSession<typeof controller> {
           try {
             // Never hand back an energized mirror driver: releasing the port
             // leaves the firmware's Enable state untouched (hardware-safety
-            // invariant, docs/hardware/stage-f.md).
+            // invariant).
             if (c?.connected && c.enabled) await c.disable();
           } catch (e) {
-            // value-sweep 2026-07-11 (error-broadcast finding tail): a failed
-            // disable-on-disconnect is a safety-relevant event — surface it in
-            // the renderer error tray, not just an unwatched console.
+            // A failed disable-on-disconnect is a safety-relevant event —
+            // surface it in the renderer error tray, not just an unwatched
+            // console.
             report("controller", `disable-on-disconnect failed: ${(e as Error).message}`);
           }
           c?.release();

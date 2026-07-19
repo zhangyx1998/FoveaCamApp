@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// unified-time-and-topology §5 (B, native re-plumb): the in-process brick
+// The in-process brick
 // chain — converter → (Leaky<OwnedFrame> tap) → undistort v2 HOMOGRAPHY →
 // (tap) → fovea. NO hardware (fake camera). Proves:
 //   0. ParamRing lookup semantics — the native self-test (exact hit, linear
@@ -30,7 +30,7 @@
 //   6. CHAIN DEPTH 3 — a fovea chained on the undistort brick crops the
 //      WARPED frames byte-exact (OwnedFrame handoff twice removed from the
 //      camera).
-//   7. ORDERLY teardown (B-20 pattern) → natural exit 0, zero leak warns.
+//   7. ORDERLY teardown → natural exit 0, zero leak warns.
 // Run UNSANDBOXED: /opt/homebrew/bin/node core/test/22-brick-chain.ts
 
 import assert from "node:assert/strict";
@@ -211,7 +211,7 @@ assert.equal(A.detachFoveaPipe(fovId), true, "detach fovea");
 P.close(fovId); P.drop(fovId);
 
 // --- 8: FIFO backpressure — every converted frame reaches undistort IN ORDER --
-// The convert→undistort edge is a bounded blocking FIFO (§1): slow the
+// The convert→undistort edge is a bounded blocking FIFO: slow the
 // undistort consumer past the camera frame interval so its input queue backs
 // up. The FIFO must never skip (undistort drops stay 0, deviceTimestamps
 // strictly increase), the queue high-water must climb above 1, and the
@@ -259,7 +259,7 @@ P.close(fovId); P.drop(fovId);
   console.log(`22-brick-chain: FIFO backpressure OK (highWater=${up.queue.highWater}/cap ${up.queue.capacity}, undistort drops 0, converter shed ${cp.dropTotal}, complete convert=${conv}/undistort=${undIn}).`);
 }
 
-// --- 7: orderly teardown (B-20 pattern) → natural exit -----------------------
+// --- 7: orderly teardown → natural exit -----------------------
 reader.close(wrp.rh); P.disconnect(wrpId);
 assert.equal(A.detachUndistortPipe(wrpId), true, "detach undistort");
 P.close(wrpId); P.drop(wrpId);

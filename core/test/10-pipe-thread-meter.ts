@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// WS1 real-1c (C-19) — producer/publisher SHM write OFF the JS loop + the
+// Producer/publisher SHM write OFF the JS loop + the
 // native ThreadMeter probe. A driving thread (SyntheticProducer) feeds frames
 // → the publisher seqlock-writes SHM on that thread → a reader-addon consumer
 // reads them; the native meter records the producer arrival intervals and the

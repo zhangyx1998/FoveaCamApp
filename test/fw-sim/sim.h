@@ -5,8 +5,7 @@
 // -------------------------------------------------------
 //
 // Internal seam between the HAL shim (hal.cpp — Arduino/SPI surface) and the
-// sim pump (main.cpp — pty owner, control channel, strobe scheduler). See
-// docs/proposals/firmware-sim-harness.md.
+// sim pump (main.cpp — pty owner, control channel, strobe scheduler).
 
 #pragma once
 

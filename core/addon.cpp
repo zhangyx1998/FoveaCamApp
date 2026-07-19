@@ -23,8 +23,7 @@ Napi::Value attachCameraPipe(const Napi::CallbackInfo &info);
 Napi::Value detachCameraPipe(const Napi::CallbackInfo &info);
 Napi::Value enableFakeCamera(const Napi::CallbackInfo &info);
 Napi::Value converterProbeAll(const Napi::CallbackInfo &info);
-// B-23 (real-1g) + unified-time-and-topology §5 (undistort brick v2), defined
-// in core/lib/Aravis/UndistortStream.cpp.
+// Undistort brick, defined in core/lib/Aravis/UndistortStream.cpp.
 Napi::Value attachUndistortPipe(const Napi::CallbackInfo &info);
 Napi::Value detachUndistortPipe(const Napi::CallbackInfo &info);
 Napi::Value undistortProbeAll(const Napi::CallbackInfo &info);
@@ -32,8 +31,8 @@ Napi::Value pushHomography(const Napi::CallbackInfo &info);
 Napi::Value setClockOffset(const Napi::CallbackInfo &info);
 Napi::Value undistortStall(const Napi::CallbackInfo &info);
 Napi::Value __paramRingSelfTest(const Napi::CallbackInfo &info);
-// unified-time (2026-07-08): native camera clock calibration read surface +
-// THE host time authority. Defined in core/lib/Aravis/ClockCalibration.cpp.
+// Native camera clock calibration read surface + THE host time authority.
+// Defined in core/lib/Aravis/ClockCalibration.cpp.
 Napi::Value steadyNowNsJs(const Napi::CallbackInfo &info);
 Napi::Value clockStabilityAll(const Napi::CallbackInfo &info);
 Napi::Value onClockMetrics(const Napi::CallbackInfo &info);
@@ -75,14 +74,14 @@ Napi::Value compositeProbeAll(const Napi::CallbackInfo &info);
 Napi::Value attachRawPipe(const Napi::CallbackInfo &info);
 Napi::Value detachRawPipe(const Napi::CallbackInfo &info);
 Napi::Value rawProbeAll(const Napi::CallbackInfo &info);
-// multi-fovea-recording ruling 1: PACKED raw-12p camera pipes (verbatim wire
-// payload via a pre-Frame ArvBuffer tap), defined in core/lib/Aravis/RawPipe.cpp.
+// PACKED raw-12p camera pipes (verbatim wire payload via a pre-Frame ArvBuffer
+// tap), defined in core/lib/Aravis/RawPipe.cpp.
 Napi::Value attachRaw12pPipe(const Napi::CallbackInfo &info);
 Napi::Value detachRaw12pPipe(const Napi::CallbackInfo &info);
 Napi::Value raw12pProbeAll(const Napi::CallbackInfo &info);
-// multi-fovea-recording rulings 9/10: the intra-frame COMPRESSION brick (a
-// native thread FIFO-reads a source pipe, zlib-compresses per frame, publishes
-// an opaque /zlib blob), defined in core/lib/Aravis/CompressStream.cpp.
+// The intra-frame COMPRESSION brick (a native thread FIFO-reads a source pipe,
+// zlib-compresses per frame, publishes an opaque /zlib blob), defined in
+// core/lib/Aravis/CompressStream.cpp.
 Napi::Value attachCompressPipe(const Napi::CallbackInfo &info);
 Napi::Value detachCompressPipe(const Napi::CallbackInfo &info);
 Napi::Value compressProbeAll(const Napi::CallbackInfo &info);
@@ -96,8 +95,8 @@ Napi::Value createPairTestSource(const Napi::CallbackInfo &info);
 Napi::Value pushPairTestFrame(const Napi::CallbackInfo &info);
 Napi::Value releasePairTestSource(const Napi::CallbackInfo &info);
 }
-// unified-time-and-topology §6: consolidated NodeReport rows for every live
-// native brick + pipe. Defined in core/src/Topology.cpp.
+// Consolidated NodeReport rows for every live native brick + pipe. Defined in
+// core/src/Topology.cpp.
 namespace Topology {
 Napi::Value report(const Napi::CallbackInfo &info);
 }
@@ -175,8 +174,8 @@ static Object init(Env env, Object exports) {
                Function::New<Arv::detachUndistortPipe>(env, "detachUndistortPipe"));
     Aravis.Set("undistortProbeAll",
                Function::New<Arv::undistortProbeAll>(env, "undistortProbeAll"));
-    // unified-time-and-topology §5: the homography-variant control surface —
-    // mirror/H history writes (≤ ~1 kHz) + the device→host clock offset.
+    // The homography-variant control surface — mirror/H history writes
+    // (≤ ~1 kHz) + the device→host clock offset.
     Aravis.Set("pushHomography",
                Function::New<Arv::pushHomography>(env, "pushHomography"));
     Aravis.Set("setClockOffset",
@@ -272,17 +271,17 @@ static Object init(Env env, Object exports) {
                Function::New<Arv::detachRawPipe>(env, "detachRawPipe"));
     Aravis.Set("rawProbeAll",
                Function::New<Arv::rawProbeAll>(env, "rawProbeAll"));
-    // multi-fovea-recording ruling 1: PACKED raw-12p pipes — a pre-Frame
-    // ArvBuffer tap publishes the VERBATIM wire payload (packed 12p when the
-    // sensor runs 12p readout). Same consumer-gate/on-demand contract as raw.
+    // PACKED raw-12p pipes — a pre-Frame ArvBuffer tap publishes the VERBATIM
+    // wire payload (packed 12p when the sensor runs 12p readout). Same
+    // consumer-gate/on-demand contract as raw.
     Aravis.Set("attachRaw12pPipe",
                Function::New<Arv::attachRaw12pPipe>(env, "attachRaw12pPipe"));
     Aravis.Set("detachRaw12pPipe",
                Function::New<Arv::detachRaw12pPipe>(env, "detachRaw12pPipe"));
     Aravis.Set("raw12pProbeAll",
                Function::New<Arv::raw12pProbeAll>(env, "raw12pProbeAll"));
-    // multi-fovea-recording rulings 9/10: intra-frame COMPRESSION pipes — a
-    // native thread FIFO-reads a source pipe and republishes each frame zlib-
+    // Intra-frame COMPRESSION pipes — a native thread FIFO-reads a source pipe
+    // and republishes each frame zlib-
     // compressed (opaque /zlib blob, ring-v5 payloadBytes). Gated by the output
     // pipe's own consumer refcount (parks with no consumer).
     Aravis.Set("attachCompressPipe",
@@ -332,18 +331,18 @@ static Object init(Env env, Object exports) {
     auto Shm = Object::New(env);
     ShmRing::exportShmNamespace(env, Shm);
     exports.Set("Shm", Shm);
-    // WS1 producer/publisher pipe broker (C-16)
+    // Producer/publisher pipe broker
     auto PipeNs = Object::New(env);
     Pipe::exportPipeNamespace(env, PipeNs);
     exports.Set("Pipe", PipeNs);
-    // Consolidated node-topology reporting (unified-time-and-topology §6):
-    // one NodeReport[] for every live native brick + advertised pipe.
+    // Consolidated node-topology reporting: one NodeReport[] for every live
+    // native brick + advertised pipe.
     auto TopologyNs = Object::New(env);
     TopologyNs.Set("report", Function::New<Topology::report>(env, "report"));
     exports.Set("Topology", TopologyNs);
-    // Native port/pipe substrate (native-port-pipe.md): registers the
-    // OutPort/InPort/PipeLink CoreObjects + the hardware-free test hooks.
-    // Root-object-only namespace (the Recorder precedent).
+    // Native port/pipe substrate: registers the OutPort/InPort/PipeLink
+    // CoreObjects + the hardware-free test hooks. Root-object-only namespace
+    // (the Recorder precedent).
     {
       void exportPortNamespace(Napi::Env, Napi::Object &);
       auto PortNs = Object::New(env);
@@ -351,7 +350,7 @@ static Object init(Env env, Object exports) {
       exports.Set("Port", PortNs);
     }
     // Finalize
-    // THE native host time authority (unified-time §1): libc++ steady_clock
+    // THE native host time authority: libc++ steady_clock
     // integer ns. Every clock-calibration offset is in THIS domain; JS
     // hostNowNs delegates here (hrtime is not guaranteed the same Darwin
     // clock domain — one authority only).

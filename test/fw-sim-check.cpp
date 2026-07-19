@@ -4,11 +4,10 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// fovea-fw-sim SELF-CHECK (docs/proposals/firmware-sim-harness.md): drives
-// the firmware simulator over its pty using the SHARED wire stack
-// (lib/Protocol + lib/COBS) directly — no core addon — so the sim's
-// firmware behavior is verifiable standalone (`cd test && make build &&
-// ./build/fw-sim-check`). Covers the proposal's behavioral list at the wire
+// fovea-fw-sim SELF-CHECK: drives the firmware simulator over its pty using
+// the SHARED wire stack (lib/Protocol + lib/COBS) directly — no core addon —
+// so the sim's firmware behavior is verifiable standalone (`cd test && make
+// build && ./build/fw-sim-check`). Covers the behaviors below at the wire
 // level; core/test/47-firmware-sim.ts drives the same behaviors through
 // core's Device.
 //

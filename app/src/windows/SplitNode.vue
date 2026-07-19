@@ -4,8 +4,7 @@ This source code is licensed under the MIT license.
 You may find the full license in project root directory.
 --------------------------------------------------- -->
 <!--
-  Recursive renderer for the projection split tree (docs/proposals/
-  projection-split-view.md deliverable 2). A leaf renders one ProjectionPane; a
+  Recursive renderer for the projection split tree. A leaf renders one ProjectionPane; a
   split lays its children out along `dir` with flex-grow == the child's ratio,
   interleaving draggable dividers. A divider drag reports the fraction it moved
   across the split's axis to the window controller, which clamps + re-normalizes

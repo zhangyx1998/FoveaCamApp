@@ -30,7 +30,7 @@ export interface HeatmapPipeSeam {
 
 export interface HeatmapPipeOptions {
   params?: HeatmapParams;
-  /** Ring footprint (C-20 max dims — the source's max footprint). */
+  /** Ring footprint (max dims — the source's max footprint). */
   maxWidth: number;
   maxHeight: number;
 }

@@ -6,8 +6,8 @@
 //
 // PURE logic behind the node-graph interactions (ctrl-wheel zoom gating,
 // dragged-position preservation, edge-path geometry) + the report rate. The
-// graph now fills its profiler tab (ruling 3) — the resizable-height block is
-// gone. Vue/DOM/cytoscape-free, unit-tested.
+// graph fills its profiler tab (no separate resizable-height block).
+// Vue/DOM/cytoscape-free, unit-tested.
 // spec: docs/spec/profiler-graph.md#interactions
 
 import { ZOOM_MIN, ZOOM_MAX } from "./graph-viewport";
@@ -76,13 +76,12 @@ export function parseReportInterval(raw: string | null): number {
     : DEFAULT_REPORT_INTERVAL_MS;
 }
 
-// --- Perpendicular-stem edge geometry (user 2026-07-10, ruling 1) ------------
+// --- Perpendicular-stem edge geometry ------------
 //
 // The graph is layered LR: every edge leaves the SOURCE's right face and enters
 // the TARGET's left face. The stem must leave/enter PERPENDICULAR to that face
 // — i.e. horizontally. In hand-rolled SVG that is simply a cubic whose two
-// control points sit `off` px horizontally off each endpoint (`edgePath`); the
-// old cytoscape `(weight, distance)` decomposition died with the library.
+// control points sit `off` px horizontally off each endpoint (`edgePath`).
 
 /** Stem length as a fraction of the attachment-point separation… */
 export const STEM_FRACTION = 0.35;

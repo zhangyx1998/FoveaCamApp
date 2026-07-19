@@ -43,9 +43,9 @@ export function cameraListChanged(a: ProbeCamera[], b: ProbeCamera[]): boolean {
   return false;
 }
 
-/** The Welcome window's connection status line (ruling 3). "orchestrator down"
- *  is GONE — Welcome no longer depends on an orchestrator; the status reflects
- *  the probe. `probing` is false until the first snapshot arrives. */
+/** The Welcome window's connection status line. Welcome doesn't depend on an
+ *  orchestrator; the status reflects the probe. `probing` is false until the
+ *  first snapshot arrives. */
 export function welcomeStatus(cameras: ProbeCamera[], probing: boolean): string {
   if (!probing) return "looking for cameras…";
   const n = cameras.length;

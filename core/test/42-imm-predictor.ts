@@ -252,7 +252,7 @@ const fixture = JSON.parse(readFileSync(fixturePath, "utf8")) as Fixture;
   const brick = T.createImmPredictor({ rateHz: 600, ...fixture.config });
   const src = PT.createTestTrackSource("test/42/kcf");
 
-  // Runtime tags match the d.ts documentation (steering ruling 4): both ends
+  // Runtime tags match the d.ts documentation: both ends
   // carry "track" — the compile-time OutPort<TrackResult>/InPort<TrackResult>
   // brand and the runtime tag agree.
   assert.equal(src.track_out.streamTag, "track", "source out tag is \"track\"");
@@ -304,7 +304,7 @@ const fixture = JSON.parse(readFileSync(fixturePath, "utf8")) as Fixture;
   );
 }
 
-// --- 6. R1 coast cap (mirror-flicker 2026-07-12 addendum) -----------------------
+// --- 6. R1 coast cap -----------------------
 // A stalled measurement source must degrade to the miss-coast shape instead of
 // extrapolating the CA state quadratically forever: `predictAfter(coastMs)`
 // (deterministic — offsets against the last ingest anchor, no clock) stays

@@ -29,7 +29,7 @@ const props = defineProps<{ topology: GraphTopology | null }>();
 // Pure reduction — the panel diffs by element id inside NodeGraph.
 const elements = computed(() => (props.topology ? toElements(props.topology) : []));
 
-// Live hover-card mode over the shared `["config"]` doc (ruling 8). The profiler
+// Live hover-card mode over the shared `["config"]` doc. The profiler
 // is its own BrowserWindow; `useConfigRef` reads that doc reactively and follows
 // cross-window broadcasts. Not top-level-await'able here (no <Suspense> parent),
 // so we mirror into a local ref + `watch` (disparity-scope drawer idiom).

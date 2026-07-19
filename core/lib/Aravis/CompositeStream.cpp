@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// composite-node-and-center-select-fix §B NAPI seam: the two-input COMPOSITE
+// Composite NAPI seam: the two-input COMPOSITE
 // brick — a per-pixel BGRA op (anaglyph / L-vs-R difference) whose two inputs
 // are OwnedFrame taps on any convert / undistort / fovea / scale pipe.
 //   attachCompositePipe(leftPipeId, rightPipeId, pipeId, params)
@@ -13,8 +13,8 @@
 //   setCompositeParams(pipeId, params)  — reactive, applied on the next frame.
 //   detachCompositePipe(pipeId)         — idempotent.
 //   compositeProbeAll()                 — meter rows + active out dims + origin.
-// The gated `PipeOfferSubscriber` stays MAX-BOUND (C-20). The output pipe is
-// BGRA8 (like the heatmap). Probe keys AND meter names = the pipeId (= C-24
+// The gated `PipeOfferSubscriber` stays MAX-BOUND. The output pipe is
+// BGRA8 (like the heatmap). Probe keys AND meter names = the pipeId (= the
 // node id). Modelled 1:1 on StereoStream.cpp (SIMPLER: no matcher rebuild).
 
 #include <map>
@@ -220,7 +220,7 @@ FN(compositeProbeAll) {
   return out;
 }
 
-// ---- Topology.report() rows (unified-time-and-topology §6) ------------------
+// ---- Topology.report() rows -------------------------------------------------
 // kind "composite" with TWO inputs (ports "left"/"right", BGRA8/U8 from the
 // source bricks); output BGRA8/U8 (via decoratePipe fallback).
 void appendCompositeReports(Napi::Env env, Napi::Array &rows,

@@ -1,9 +1,9 @@
-// calibration-review-2026-07-11 #2 + #14 — orchestrator/calibration.ts:
-//   #2  leaseCalibratedTriple must RELEASE all three camera leases when
+// orchestrator/calibration.ts:
+//   - leaseCalibratedTriple must RELEASE all three camera leases when
 //       anything after the acquire throws (a fresh/uncalibrated rig ALWAYS
 //       throws in loadConversions) — the leak wedged every camera-owning
 //       module until force-release/restart.
-//   #14 fitExtrinsicRegression refuses an underdetermined cubic fit (< 10
+//   - fitExtrinsicRegression refuses an underdetermined cubic fit (< 10
 //       poses) with a NAMED, actionable error instead of letting the SVD
 //       return silently-plausible minimum-norm garbage.
 // Native seams + store/registry mocked (established marker-calibration

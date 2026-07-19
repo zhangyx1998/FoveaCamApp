@@ -1,5 +1,5 @@
-// IMM motion predictor chained after the disparity-scope tracker (docs/
-// proposals/imm-delay-compensation.md). The predictor consumes timestamped
+// IMM motion predictor chained after the disparity-scope tracker.
+// The predictor consumes timestamped
 // `TrackResult`s and outputs the target's ESTIMATED position at
 // `t_result + delayMs` (positive = lead / future, negative = lag / past);
 // `delayMs === 0` is an EXACT passthrough. Pure module (types-only core

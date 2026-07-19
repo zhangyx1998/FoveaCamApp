@@ -3,9 +3,9 @@
 # This source code is licensed under the MIT license.
 # You may find the full license in project root directory.
 # -------------------------------------------------------
-"""B-14 (WS4 4b, decoder half): FoveaReader exposes the recorder's
-``RecordedFrameExtras`` (app/orchestrator/recorder/metadata.ts — the fixed
-contract) as typed per-frame accessors, additive/optional.
+"""FoveaReader exposes the recorder's ``RecordedFrameExtras``
+(app/orchestrator/recorder/metadata.ts — the fixed contract) as typed
+per-frame accessors, additive/optional.
 
 Fixtures are synthesized here (no committed binary needed). The load-bearing
 byte is the per-frame ``telemetry`` JSON document; the with-extras frame's doc
@@ -93,7 +93,7 @@ def test_reads_recorded_frame_extras(with_extras: Path):
 
 
 def test_extras_exposed_on_streaming_path(with_extras: Path):
-    # iter_frames_streaming (B-P10) must surface the same typed extras.
+    # iter_frames_streaming must surface the same typed extras.
     with FoveaReader(with_extras) as reader:
         frame = next(reader.iter_frames_streaming("cam"))
     assert frame.frame_id == 42
@@ -181,9 +181,9 @@ def test_malformed_volt_decodes_to_none(tmp_path: Path, volt_value):
 
 
 def test_legacy_pt_volt_shape_is_none_but_raw_preserved(tmp_path: Path):
-    # The legacy B-5 `{p, t}` volt shape is NOT the {x,y} RecordedFrameExtras
+    # The legacy `{p, t}` volt shape is NOT the {x,y} RecordedFrameExtras
     # contract, so `.volt` returns None — but `.extra["volt"]` still exposes the
-    # legacy payload (documented in B-14; not a schema conflict).
+    # legacy payload (not a schema conflict).
     with _frame_with_doc(tmp_path, {"stream": "cam", "seq": 0, "t": 1.0, "volt": {"p": 0.5, "t": -0.25}}) as r:
         frame = r.frames("cam")[0]
     assert frame.volt is None

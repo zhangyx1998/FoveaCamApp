@@ -20,40 +20,39 @@ export const SIDECAR_VERSION = 1;
 export interface SidecarState {
   v: typeof SIDECAR_VERSION;
   /** The FULL track layout: rows of channel names (row 0 = master track). The
-   *  sidecar is the source of truth after initialization (ruling 10) — greedy
-   *  fit runs only to seed this; drags mutate it directly. */
+   *  sidecar is the source of truth after initialization — greedy fit runs only
+   *  to seed this; drags mutate it directly. */
   tracks: string[][];
-  /** v-toggled OFF frame channels (ruling 5) — hidden from preview. */
+  /** v-toggled OFF frame channels — hidden from preview. */
   disabled: string[];
-  /** GLOBAL 3D view mode (ruling 4, amended user 2026-07-09: one mode applies
-   *  to EVERY L/R pair, not per pair). Old sidecars stored a `Record<base,mode>`
-   *  map; `cleanThreeMode` collapses that to a single mode on read (no version
-   *  bump — the migration is lossless-tolerant, not a corruption). */
+  /** GLOBAL 3D view mode: one mode applies to EVERY L/R pair, not per pair. Old
+   *  sidecars stored a `Record<base,mode>` map; `cleanThreeMode` collapses that
+   *  to a single mode on read (no version bump — the migration is
+   *  lossless-tolerant, not a corruption). */
   threeD: ThreeDMode;
   /** Preview panel height fraction of the window (0.15..0.9); the timeline
-   *  panel gets the rest (ruling 6). 0 ⇒ timeline collapsed to the drawer. */
+   *  panel gets the rest. 0 ⇒ timeline collapsed to the drawer. */
   split: number;
-  /** Last playhead position, ns file-relative (restored on reopen, ruling 8). */
+  /** Last playhead position, ns file-relative (restored on reopen). */
   playheadNs: number;
-  /** Property panel visibility (UI round 2 ruling 4). Tolerant: an absent field
-   *  in an older sidecar defaults CLOSED (no version bump). */
+  /** Property panel visibility. Tolerant: an absent field in an older sidecar
+   *  defaults CLOSED (no version bump). */
   panelOpen: boolean;
-  /** Property panel width, px (UI round 2 ruling 4) — persisted when the user
-   *  resizes it. Absent → DEFAULT_PANEL_WIDTH. */
+  /** Property panel width, px — persisted when the user resizes it.
+   *  Absent → DEFAULT_PANEL_WIDTH. */
   panelWidth: number;
-  /** Preview TILE ORDER (timeline touch-up ruling 2): a permutation of track
-   *  indices giving the left→right order of the preview tile slots (one slot per
-   *  track). Absent (older sidecars) → natural track order; reconciled against
-   *  the live track count on read (`reconcileTileOrder`). Optional so the field
-   *  only appears once the user has dragged tiles. */
+  /** Preview TILE ORDER: a permutation of track indices giving the left→right
+   *  order of the preview tile slots (one slot per track). Absent (older
+   *  sidecars) → natural track order; reconciled against the live track count on
+   *  read (`reconcileTileOrder`). Optional so the field only appears once the
+   *  user has dragged tiles. */
   tileOrder?: number[];
-  /** Preview TILE SIZES (viewer-tiles-split-and-project.md ruling 3): per-slot
-   *  width FRACTIONS of the full-width tiles row (left→right, summing to ~1).
-   *  Absent (older sidecars, or before the user drags a divider) → an equal
-   *  split. Parsed CONSERVATIVELY here (finite numbers, else dropped) — sum
-   *  normalization + reconciliation against the live tile count is `tile-split`'s
-   *  job on read, NOT the parser's. Optional so the field only appears once the
-   *  user has resized a divider. Replaces the retired px `tileWidth` slider. */
+  /** Preview TILE SIZES: per-slot width FRACTIONS of the full-width tiles row
+   *  (left→right, summing to ~1). Absent (older sidecars, or before the user
+   *  drags a divider) → an equal split. Parsed CONSERVATIVELY here (finite
+   *  numbers, else dropped) — sum normalization + reconciliation against the
+   *  live tile count is `tile-split`'s job on read, NOT the parser's. Optional so
+   *  the field only appears once the user has resized a divider. */
   tileSizes?: number[];
 }
 
@@ -63,14 +62,13 @@ export const MIN_SPLIT = 0.15;
 export const MAX_SPLIT = 0.92;
 export const COLLAPSED_SPLIT = 0; // sentinel: timeline drawer collapsed
 export const DEFAULT_SPLIT = 0.5;
-/** Retired px tile-width bounds (ruling 7 → superseded by the fraction-based
- *  split in `tile-split.ts`, ruling 3). No longer written to the sidecar and no
- *  longer read, but kept EXPORTED while the viewer UI lane finishes dropping the
- *  slider (removing the exports mid-flight would break that lane's imports). */
+/** Legacy px tile-width bounds, replaced by the fraction-based split in
+ *  `tile-split.ts`. No longer written to the sidecar and no longer read, but
+ *  kept EXPORTED because other modules still import them. */
 export const MIN_TILE_WIDTH = 120;
 export const MAX_TILE_WIDTH = 900;
 export const DEFAULT_TILE_WIDTH = 320;
-/** Property-panel width bounds (UI round 2 ruling 4). */
+/** Property-panel width bounds. */
 export const MIN_PANEL_WIDTH = 220;
 export const MAX_PANEL_WIDTH = 560;
 export const DEFAULT_PANEL_WIDTH = 300;
@@ -113,14 +111,13 @@ function cleanTracks(v: unknown): string[][] {
 const isMode = (m: unknown): m is ThreeDMode =>
   typeof m === "string" && THREE_D_MODES.includes(m as ThreeDMode);
 
-/** Coerce the stored `threeD` into the single GLOBAL mode (ruling 4 amendment).
- *  Accepts BOTH shapes tolerantly:
- *   - NEW: a bare mode string → itself (unknown string → "disabled").
- *   - OLD (per-pair map `{ base: mode }`): collapse to the first non-"disabled"
+/** Coerce the stored `threeD` into the single GLOBAL mode. Accepts BOTH shapes
+ *  tolerantly:
+ *   - a bare mode string → itself (unknown string → "disabled").
+ *   - a per-pair map `{ base: mode }`: collapse to the first non-"disabled"
  *     value, else "disabled". Lossy-by-design (global mode replaces per-pair)
  *     and lossless-enough (the user re-picks once) — written back in the new
- *     shape on the next save, no confirm prompt (ruling 10 governs only
- *     corrupt/mismatch, not this upgrade). */
+ *     shape on the next save, no confirm prompt. */
 function cleanThreeMode(v: unknown): ThreeDMode {
   if (isMode(v)) return v;
   if (v && typeof v === "object" && !Array.isArray(v)) {
@@ -181,7 +178,7 @@ function coerceValid(o: Record<string, unknown>): SidecarState {
       typeof o.playheadNs === "number" && Number.isFinite(o.playheadNs)
         ? Math.max(0, o.playheadNs)
         : 0,
-    // Tolerant: absent → CLOSED / default width (no version bump, ruling 4).
+    // Tolerant: absent → CLOSED / default width (no version bump).
     panelOpen: o.panelOpen === true,
     panelWidth: clampPanelWidth(o.panelWidth),
   };
@@ -190,15 +187,15 @@ function coerceValid(o: Record<string, unknown>): SidecarState {
   const tileOrder = cleanTileOrder(o.tileOrder);
   if (tileOrder) state.tileOrder = tileOrder;
   // Optional: mirror `tileOrder` — only surface `tileSizes` when the file
-  // carried one, so an older sidecar round-trips byte-identically. `tileWidth`
-  // (retired) is deliberately NOT read — an old sidecar's field is tolerated
-  // (ignored) rather than parsed.
+  // carried one, so an older sidecar round-trips byte-identically. The legacy
+  // `tileWidth` field is deliberately NOT read — an old sidecar's field is
+  // tolerated (ignored) rather than parsed.
   const tileSizes = cleanTileSizes(o.tileSizes);
   if (tileSizes) state.tileSizes = tileSizes;
   return state;
 }
 
-/** File-level load classification (ruling 10): ABSENT (no file) is silently
+/** File-level load classification: ABSENT (no file) is silently
  *  initialized by the caller; CORRUPT (present but unparseable / wrong version
  *  / not an object) prompts a confirm before overwrite; OK carries the
  *  validated state (the caller still checks channel-mismatch against the
@@ -235,8 +232,8 @@ export function serializeSidecar(state: SidecarState): string {
   return JSON.stringify(state, null, 2);
 }
 
-/** The sidecar path for a container: `<recording>.fcap` → `<…>.fcap.ui.json`
- *  (proposal Design §Sidecar). Kept string-only so it's node-free. */
+/** The sidecar path for a container: `<recording>.fcap` → `<…>.fcap.ui.json`.
+ *  Kept string-only so it's node-free. */
 export function sidecarPathFor(fcapPath: string): string {
   return `${fcapPath}.ui.json`;
 }

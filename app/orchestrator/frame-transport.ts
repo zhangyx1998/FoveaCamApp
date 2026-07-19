@@ -29,7 +29,7 @@ type NormalizedFrame = {
 type ShmSlot = {
   /** Read snapshot under the Electron V8 cage — never write through it. */
   readSnapshot(): Mat<Uint8Array>;
-  /** Native memcpy into the slot — the only correct write path (V13). */
+  /** Native memcpy into the slot — the only correct write path. */
   write(src: ArrayBufferView): void;
 };
 
@@ -93,7 +93,7 @@ export function createShmFrameTransport(Shm: ShmApi): FrameTransport {
       const slot = w.nextSlot(frame.shape, frame.channels);
       // Native memcpy into the slot — never `slot.readSnapshot().set(...)`:
       // under Electron's V8 memory cage snapshots are cage-local copies and
-      // writes would land in the throwaway copy (V13).
+      // writes would land in the throwaway copy.
       slot.write(frame.bytes);
       return w.publish(frame.meta);
     },

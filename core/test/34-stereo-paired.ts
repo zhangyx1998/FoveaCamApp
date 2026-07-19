@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// stereo-paired-inputs (ruled 2026-07-09): the SGBM disparity join over EXPOSURE
+// SGBM disparity join over EXPOSURE
 // PAIRS — `attachStereoPaired`. Instead of two latest-wins OwnedFrame taps, the
 // paired brick chains on the always-running `PairStream` brick with ONE record
 // tap and runs SGBM per PairRecord (L/R matched by construction). NO hardware —

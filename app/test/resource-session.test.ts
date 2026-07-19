@@ -154,9 +154,8 @@ describe("resource-session lifecycle (A-P1)", () => {
   });
 
   it("routes an activate() throw to the status banner, cleared on re-subscribe (value-sweep)", async () => {
-    // A failing `activate()` used to console-`report()` only, leaving a dead
-    // black view. It must now set the session's user-visible status error (the
-    // A-P13 banner) and clear it on the next activation (retry-on-reactivate).
+    // A failing `activate()` must set the session's user-visible status error
+    // (the banner) and clear it on the next activation (retry-on-reactivate).
     let shouldFail = true;
     const session = defineResourceSession("res", contract, () => ({
       activate: () => {

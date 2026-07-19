@@ -4,12 +4,10 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Consolidated per-window boot map (A-27). The generated entry HTML
+// Consolidated per-window boot map. The generated entry HTML
 // (`foveaWindowEntries` in vite.config.ts) inlines a single module script that
 // calls `bootEntry(<key>)`; this file is the one place that maps an entry key
-// to its root component + boot, replacing the former six one-line entry
-// scripts (`app-window.ts`, `profiler.ts`, `projection.ts`, `viewer.ts`,
-// `welcome.ts`, `debug.ts`).
+// to its root component + boot.
 //
 // The key space matches `@lib/windows` `allEntries()`: the non-app window
 // classes are keyed by class name (`welcome`, `profiler`, `projection`,
@@ -19,7 +17,7 @@
 // and app ids are disjoint, so the lookup is unambiguous.
 //
 // Root components are dynamic-imported so each entry's initial chunk stays lean
-// (renderer entries MAY share chunks — V11 applies to preloads only).
+// (renderer entries MAY share chunks — that restriction applies to preloads only).
 
 import type { Component } from "vue";
 import { appById } from "@lib/windows";
@@ -31,13 +29,13 @@ type RootLoader = () => Promise<{ default: Component }>;
 type SpecialEntry = { load: RootLoader; props?: () => Record<string, unknown> };
 
 // The non-app window classes. `props` reproduces the per-window URL-param
-// derivation the old one-line entries performed (state-in-URL, req. 7).
+// derivation from the URL (state-in-URL).
 const windowRoots: Record<string, SpecialEntry> = {
   welcome: { load: () => import("./WelcomeWindow.vue") },
   profiler: { load: () => import("../profiler/ProfilerWindow.vue") },
   projection: {
     load: () => import("./ProjectionWindow.vue"),
-    // Split-view (projection-split-view.md): the layout rides `?layout=` (the
+    // Split-view: the layout rides `?layout=` (the
     // live split tree, written back on every change). Seeds fall back to a
     // single-pane `?pane=` descriptor, then the legacy `?session=&frame=` pair
     // — the window resolves the precedence.

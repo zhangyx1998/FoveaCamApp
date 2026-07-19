@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// split-disparity-nodes §"Scale node = a NEW native chained brick" NAPI seam:
+// Scale NAPI seam: a native chained resize brick.
 // spawn/cancel-able RESIZE pipes, chained on any convert / undistort / fovea /
 // scale pipe's OwnedFrame tap (Leaky/latest-wins input, demand propagation
 // keeps the upstream chain awake). Modelled 1:1 on FoveaStream.cpp:
@@ -14,9 +14,9 @@
 //   setScaleParams(pipeId, params)  — reactive, applied on the NEXT frame.
 //   detachScalePipe(pipeId)         — idempotent.
 //   scaleProbeAll()                 — meter rows + active out dims + origin.
-// The gated `PipeOfferSubscriber` stays MAX-BOUND (C-20: per-frame active out
+// The gated `PipeOfferSubscriber` stays MAX-BOUND (per-frame active out
 // w/h ≤ the advertised max footprint, forwarded crop origin in the v4 slot
-// header). Probe keys AND meter names = the pipeId (= C-24 node id).
+// header). Probe keys AND meter names = the pipeId (= the node id).
 
 #include <map>
 #include <memory>
@@ -115,7 +115,7 @@ FN(attachScalePipe) {
     JS_ASSERT(sink != nullptr, Error, "attachScalePipe: unknown pipe " + pipeId,
               env.Undefined());
     const auto &spec = hub.publisher(pipeId).spec();
-    // C-20 footprint cap: the ring is sized to max (defaults to nominal).
+    // Footprint cap: the ring is sized to max (defaults to nominal).
     const uint32_t maxW = spec.maxWidth ? spec.maxWidth : spec.width;
     const uint32_t maxH = spec.maxHeight ? spec.maxHeight : spec.height;
 
@@ -228,7 +228,7 @@ FN(scaleProbeAll) {
   return out;
 }
 
-// ---- Topology.report() rows (unified-time-and-topology §6) ------------------
+// ---- Topology.report() rows -------------------------------------------------
 void appendScaleReports(Napi::Env env, Napi::Array &rows,
                         std::set<std::string> &seen) {
   std::scoped_lock lock(g_mutex);

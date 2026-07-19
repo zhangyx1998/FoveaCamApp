@@ -5,8 +5,7 @@
 // -------------------------------------------------------
 #pragma once
 
-// unified-time (user ruling, 2026-07-08, structural revision): THE HARDWARE
-// OWNER THREAD OWNS CALIBRATION. Every `Arv::Camera` spawns a lightweight
+// THE HARDWARE OWNER THREAD OWNS CALIBRATION. Every `Arv::Camera` spawns a lightweight
 // `ClockCalibrator` thread at device initialization which (a) runs the
 // initial latch calibration, then (b) re-runs an incremental drift
 // calibration every `DRIFT_PERIOD` (30 s), parking in between. A camera
@@ -15,7 +14,7 @@
 // `camera.calibrateClock(n?)` NAPI (a thin trigger onto the SAME guarded
 // routine) can retry on demand.
 //
-// TWO-TIER LOCKING (user refinement, 2026-07-08):
+// TWO-TIER LOCKING:
 //   1. The GLOBAL calibration mutex guards ONLY INITIAL runs — device owners'
 //      boot-time latch bursts serialize against each other (three cameras
 //      coming up must not run precision-sensitive bursts concurrently on the

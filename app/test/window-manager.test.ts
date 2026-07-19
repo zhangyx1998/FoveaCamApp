@@ -1,4 +1,4 @@
-// Main-process window state machine (A-6, docs/history/refactor/multi-window.md §3)
+// Main-process window state machine
 // exercised with fakes: a fake `spawn` (no BrowserWindow) and a fake
 // session-drain hook. Covers the welcome rule, app exclusivity with
 // drain-aware switching, busy refusal, the profiler singleton, and manifest
@@ -158,7 +158,7 @@ describe("WindowManager", () => {
     expect(welcome).toBeDefined();
   });
 
-  // Switch inheritance (UX, 2026-07-08): the replacement window lands on the
+  // Switch inheritance: the replacement window lands on the
   // same bounds + full-screen/maximized state as the window it replaces — in
   // BOTH directions (welcome→app at switch; app→welcome via the welcome rule,
   // answered from the adapter's last-known snapshot post-destroy).
@@ -255,7 +255,7 @@ describe("WindowManager", () => {
       appId: "manage-cameras",
       bounds: { x: 1, y: 2, width: 300, height: 200 },
     });
-    // A-34: the landing URL carries the minted stable id.
+    // The landing URL carries the minted stable id.
     expect(appEntry!.url).toMatch(/^test:\/\/windows\/manage-cameras\.html\?win=manage-cameras-\d+$/);
   });
 
@@ -276,7 +276,7 @@ describe("WindowManager", () => {
     expect(app.desc.url).toBe("test://windows/disparity-scope.html");
   });
 
-  // --- projection windows (A-9, multi-window.md req. 4) -------------------
+  // --- projection windows -------------------
 
   it("allows multiple projection windows (0..N, never a singleton)", () => {
     const { manager, spawned } = harness();
@@ -295,7 +295,7 @@ describe("WindowManager", () => {
     // Closing the app respawns welcome even though a projection stays open…
     manager.appWindow()!.close();
     expect(manager.open().map((w) => w.class).sort()).toEqual(["projection", "welcome"]);
-    expect(projection.destroyed).toBe(false); // §5.3: survives its source app's close
+    expect(projection.destroyed).toBe(false); // survives its source app's close
     // …and closing the projection itself never conjures anything.
     const before = spawned.length;
     projection.close();
@@ -339,7 +339,7 @@ describe("WindowManager", () => {
     expect(w.desc.bounds).toEqual({ x: 9, y: 9, width: 640, height: 480 });
   });
 
-  // --- recorder viewer windows (A-11, recorder-container.md §4) -----------
+  // --- recorder viewer windows -----------
 
   it("viewer windows: 0..N across files but exactly one per file", () => {
     const { manager, spawned } = harness();
@@ -575,7 +575,7 @@ afterEach(() => {
   WINDOWS.projection.onOwnerClose = "survive";
 });
 
-describe("stable window identity (A-34)", () => {
+describe("stable window identity", () => {
   it("mints unique <appId|class>-<n> ids and stamps ?win= into the spawn search", async () => {
     const { manager, spawned } = harness();
     manager.ensureWelcome();

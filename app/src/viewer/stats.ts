@@ -83,7 +83,7 @@ export function assembleStaticStats(info: ViewerChannelInfo): StreamStaticStats 
   };
 }
 
-// ---- focused-entity detail (property panel, UI round 2 ruling 4) ----------
+// ---- focused-entity detail (property panel) -------------------------------
 
 /** The FULL inspector record for the focused stream — the static stats PLUS the
  *  timeline/topology context the property panel shows beyond the popover. Pure:
@@ -159,8 +159,8 @@ export function assembleEntityDetail(
 
 // ---- formatters -----------------------------------------------------------
 
-/** Zero-padded `HH:MM:SS.sss` timecode for a file-relative ns position (UI
- *  round 2 ruling 3 — the transport bar's center readout). Hours are shown and
+/** Zero-padded `HH:MM:SS.sss` timecode for a file-relative ns position (the
+ *  transport bar's center readout). Hours are shown and
  *  grow past two digits for very long recordings; ms are rounded, so the digits
  *  tick without ever changing the field width (monospace + fixed layout). */
 export function formatTimecode(ns: number): string {

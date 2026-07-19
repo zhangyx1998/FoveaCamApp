@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// WS1 1c-PREP end-to-end pipe integration (C-17). Exercises the whole consumer
+// End-to-end pipe integration. Exercises the whole consumer
 // transport with SYNTHETIC frames: advertise → connect (broker) → the reader
 // addon (the same call the preload makes) reads N frames with correct
 // bytes/seq → consumer refcount → symmetric CLOSED. No cameras, no live path.

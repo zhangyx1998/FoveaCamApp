@@ -1,5 +1,5 @@
-// `@orchestrator/metering` — the Workload meter core (docs/history/refactor/
-// workload-metering.md §2). Covers the math (utilization, rates, drops) with
+// `@orchestrator/metering` — the Workload meter core. Covers the math
+// (utilization, rates, drops) with
 // fake timers so results are exact, plus one integration-style pass through
 // a fake loop-like workload exercising the full ingest/begin/end/emit/drop
 // cycle the way a real citizen (native tracker/pipe thread probe, recorder
@@ -262,7 +262,7 @@ describe("integration: a fake loop-like workload", () => {
   });
 });
 
-describe("C-18 — maxIntervalMs (trailing-10s max inter-arrival, 10×1s bin ring)", () => {
+describe("maxIntervalMs (trailing-10s max inter-arrival, 10×1s bin ring)", () => {
   // Read the additive field the A-owned snapshot types don't carry yet.
   const mi = (snap: { inputs: Record<string, unknown> }, stream: string): number =>
     (snap.inputs[stream] as { maxIntervalMs: number }).maxIntervalMs;

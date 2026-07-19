@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// WS1 pipe contract (C-16). The orchestrator ADVERTISES typed SHM pipes; a renderer
+// Pipe contract. The orchestrator ADVERTISES typed SHM pipes; a renderer
 // selects one by id, connectPipes ONCE to a PipeHandle, then reads pixels per-frame
 // straight from the shared segment via the reader addon (nothing rides the Channel
 // per-frame). PipeSpec IS the explicit frame typing (bytesPerFrame/dtype/pixelFormat
@@ -40,11 +40,11 @@ export type PipeSpec = {
    *  (`ShmRing::SLOT_COUNT`), max 64 (`MAX_SLOT_COUNT`); the C++ advertise path
    *  (`Pipe::specFromValue` → `Publisher` → `Segment.slotCount`) validates the
    *  range. Latest-wins consumers ignore it beyond having more slots; FIFO
-   *  consumers (capture-recorder-nodes Phase 0, `readPipeSeq`) request DEEP
+   *  consumers (`readPipeSeq`) request DEEP
    *  rings (recorder 32–64) so a lagging reader stays lossless up to the depth
    *  before frames recycle (then drop-accounted, writer never blocked). */
   ringDepth: number;
-  /** C-20 dynamic resize: the ring is sized to this MAX per-FOVEA footprint (a
+  /** Dynamic resize: the ring is sized to this MAX per-FOVEA footprint (a
    *  small hi-res crop, NOT the camera resolution — keeps N concurrent max rings
    *  bounded); each frame carries its own active w/h ≤ max. Omitted (== nominal)
    *  for fixed pipes like `camera:<serial>`. */
@@ -56,7 +56,7 @@ export type PipeSpec = {
 /** What `connectPipe` resolves to — everything a consumer needs to map + read
  *  the segment via the reader addon. `headerLayout` lets the consumer sanity-
  *  check the binary layout it's about to read (the addon also validates it
- *  natively on `open`). `epoch` is the segment generation (C-20 reuse-safe id). */
+ *  natively on `open`). `epoch` is the segment generation (reuse-safe id). */
 export type PipeHandle = {
   pipeId: string;
   /** POSIX segment name for `reader.open(shmName)`. */
@@ -67,14 +67,14 @@ export type PipeHandle = {
   headerLayout: { layoutVersion: number; magic: string };
 };
 
-/** One advertised pipe in the discovery Record (C-20). `epoch` bumps each
+/** One advertised pipe in the discovery Record. `epoch` bumps each
  *  re-advertise of an id — the renderer detects a reused id and reconnects. */
 export type PipeAdvert = {
   spec: PipeSpec;
   epoch: number;
 };
 
-/** One composed node in the discovery Record (C-24 step 3). `owner` is set for
+/** One composed node in the discovery Record. `owner` is set for
  *  window-owned (`win/<windowId>/...`) nodes; camera-rooted composed bricks are
  *  shared (refcounted across windows) and carry no owner. */
 export type NodeAdvert = {
@@ -84,7 +84,7 @@ export type NodeAdvert = {
   owner?: string;
 };
 
-/** Compose one node (C-24 two-mode, ruled): `id` must be EITHER under the
+/** Compose one node (two-mode): `id` must be EITHER under the
  *  calling window's `win/<windowId>/` namespace (exclusive, window-owned,
  *  torn down with the window) OR a legal camera-rooted brick path (shared,
  *  refcount semantics — idempotent across windows; refs→0 parks or tears
@@ -99,12 +99,12 @@ export type ComposeRequest = {
 
 export const pipes = defineContract({
   state: {
-    /** Every advertised pipe, keyed by pipeId (C-20 dynamic discovery). Seeded
+    /** Every advertised pipe, keyed by pipeId (dynamic discovery). Seeded
      *  to every subscriber (current set) + snapshot-replaced on each advertise/
      *  un-advertise (delta) — the renderer reacts to pipes appearing/vanishing
      *  at runtime by diffing this Record. */
     pipes: {} as Record<string, PipeAdvert>,
-    /** Every COMPOSED node, keyed by node id (C-24 step 3) — the same
+    /** Every COMPOSED node, keyed by node id — the same
      *  epoch-diff discovery discipline as `pipes`. */
     nodes: {} as Record<string, NodeAdvert>,
   },
@@ -119,7 +119,7 @@ export const pipes = defineContract({
     /** Release a consumer (refcount--). At zero the publisher pauses
      *  production, but the pipe stays advertised and is reconnectable. */
     disconnectPipe: cmd<{ pipeId: string }, void>(),
-    /** Materialize a node (C-24 two-mode — see ComposeRequest). Idempotent per
+    /** Materialize a node (two-mode — see ComposeRequest). Idempotent per
      *  (window, id): a re-compose refs the existing node. */
     compose: cmd<ComposeRequest, NodeAdvert>(),
     /** Unref (camera-rooted) / tear down (win-rooted) a composed node. */

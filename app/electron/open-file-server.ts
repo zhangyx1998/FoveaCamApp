@@ -11,7 +11,6 @@
 // Wire protocol: a client connects, writes newline-delimited absolute file
 // paths, then half-closes; the server buffers the whole connection, splits on
 // `end`, and invokes `onPath` once per non-empty trimmed line.
-// spec: docs/dev/fcap-file-association.md
 
 import net from "node:net";
 import fs from "node:fs";

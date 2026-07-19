@@ -117,7 +117,7 @@ describe("formatters", () => {
   });
 });
 
-describe("formatTimecode (HH:MM:SS.sss, UI round 2 ruling 3)", () => {
+describe("formatTimecode (HH:MM:SS.sss)", () => {
   it("zero-pads all fields", () => {
     expect(formatTimecode(0)).toBe("00:00:00.000");
     expect(formatTimecode(1.5 * NS)).toBe("00:00:01.500");
@@ -134,7 +134,7 @@ describe("formatTimecode (HH:MM:SS.sss, UI round 2 ruling 3)", () => {
   });
 });
 
-describe("assembleEntityDetail (property panel, UI round 2 ruling 4)", () => {
+describe("assembleEntityDetail (property panel)", () => {
   const info: ViewerChannelInfo = {
     name: "left-cam",
     metadata: {

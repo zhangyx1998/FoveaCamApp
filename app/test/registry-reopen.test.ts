@@ -1,4 +1,4 @@
-// Rig regression (2026-07-08): exiting manual-control → the next activation
+// Exiting manual-control → the next activation
 // reopened a serial whose OLD handle was still mid-release. In-process that
 // reopen "succeeds" onto a still-streaming device (unlike the cross-process
 // RT1 race, where the open itself fails), and every config write then bounces

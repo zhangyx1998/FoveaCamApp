@@ -37,7 +37,7 @@ const session = meta?.session ?? null;
 const titleBarHeight = ref(0);
 const isCapAvailable = computed(() => current_capture.value !== null);
 
-// Spin-up progress overlay (ruling 2026-07-09): observe the hosted session's
+// Spin-up progress overlay: observe the hosted session's
 // status generically (passive — the app's own module drives the active
 // subscription that triggers activation). While the session reports an in-flight
 // progress list AND the user hasn't dismissed it, cover the blank app area with
@@ -45,7 +45,7 @@ const isCapAvailable = computed(() => current_capture.value !== null);
 // (progress transitions null → non-null), so dismissing a stale run never
 // suppresses the next activation's overlay.
 const sessionStatus = session ? useSessionStatus(session) : null;
-// Disposable-orchestrator ruling 2: the hardware-clear WAIT ("waiting for
+// The hardware-clear WAIT ("waiting for
 // previous session to release hardware…") rides the process-wide `system`
 // session, not the app's own — observe it too so a switch that defers
 // acquisition shows WHY spin-up pauses. The app session's own progress (graph
@@ -70,9 +70,8 @@ function openProfiler() {
   window.foveaBridge.openProfilerWindow();
 }
 
-// Module debug sub-window toggle (catalog-declared via AppMeta.debugWindow;
-// moved off the page body per user 2026-07-11). Same open-or-close semantics
-// the old in-page button had.
+// Module debug sub-window toggle (catalog-declared via AppMeta.debugWindow):
+// open-or-close semantics, off the page body.
 function toggleDebug() {
   if (meta?.session) window.foveaBridge.toggleDebugWindow(meta.session);
 }
@@ -85,9 +84,8 @@ function openTeleCanvas() {
   window.foveaBridge.openTeleCanvasWindow();
 }
 
-// Capture preview moved out of the title-bar overlay into its own `debug`-class
-// window (capture-recorder-nodes.md ruling 8): the camera icon now TOGGLES that
-// window (open-or-close) instead of flipping an in-window overlay. Gated on a
+// Capture preview lives in its own `debug`-class window: the camera icon
+// TOGGLES that window (open-or-close). Gated on a
 // live capture context (only manual-control constructs one) and the app's
 // session name (the window resolves its module component from it).
 function toggleCapture() {
@@ -126,7 +124,7 @@ window.addEventListener("keydown", (e) => {
       :items="activeProgress!"
       @close="progressDismissed = true"
     />
-    <!-- Orchestrator crash banner (lifecycle ruling 4) — self-hiding on clean. -->
+    <!-- Orchestrator crash banner — self-hiding on clean. -->
     <CrashReport />
     <!-- Always-on TeleCanvas push (renders nothing; async config → Suspense). -->
     <Suspense><TeleCanvasPusher /></Suspense>
@@ -147,9 +145,8 @@ window.addEventListener("keydown", (e) => {
     >
       <Icon :icon="faCamera" />
     </button>
-    <!-- Module debug sub-window toggle (catalog-declared; moved off the page
-         body per user 2026-07-11). Toggle semantics match the old in-page
-         button: open-or-close via toggleDebugWindow. -->
+    <!-- Module debug sub-window toggle (catalog-declared, off the page body):
+         open-or-close via toggleDebugWindow. -->
     <button
       v-if="meta?.debugWindow && meta.session"
       class="icon-button"
@@ -164,8 +161,8 @@ window.addEventListener("keydown", (e) => {
     <button class="icon-button" title="Open profiler window" @click="openProfiler">
       <Icon :icon="faChartLine" />
     </button>
-    <!-- Dismissible error tray (value-sweep-2026-07-11): process-wide reports,
-         command rejections, and recorder truncations, no longer console-only. -->
+    <!-- Dismissible error tray: process-wide reports,
+         command rejections, and recorder truncations, not console-only. -->
     <ErrorTray />
     <Controller />
   </TitleBar>

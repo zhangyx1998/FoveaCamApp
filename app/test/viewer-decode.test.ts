@@ -4,8 +4,8 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Viewer decode: `/codec` suffix chain + 12p unpack (multi-fovea-recording
-// rulings 6/9). The pure helpers (split / decompress / unpack) are exercised
+// Viewer decode: `/codec` suffix chain + 12p unpack. The pure helpers
+// (split / decompress / unpack) are exercised
 // directly; the vision-backed packed+bayer path is proven by the core Vision
 // integration in viewer.test.ts, so here we cover a NON-vision `/zlib`-over-U8
 // round trip end to end through the decoder factory.

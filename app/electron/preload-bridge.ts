@@ -8,7 +8,7 @@
 // MessagePort can't cross `contextBridge` as an argument (structured-clone
 // limits), so it's handed to the main world via `window.postMessage`
 // (client.ts listens on the DOM `message` event).
-// V11: sharing this module works ONLY because each preload entry is bundled by
+// Sharing this module works ONLY because each preload entry is bundled by
 // its OWN build pass (vite `preloadBuild()`) so it inlines here — a multi-entry
 // rollup pass would split it into a sibling chunk, and sandboxed preloads cannot
 // require sibling chunks.
@@ -23,7 +23,7 @@ import type {
 // Typed wrappers over the raw `ipcRenderer` surface, constrained by the shared
 // channel registry (bridge.ts) — a bad channel name or arg tuple is a compile
 // error here. All types-only imports (erased at build), so the emitted preload
-// stays self-contained CJS with no sibling-chunk import (V11).
+// stays self-contained CJS with no sibling-chunk import.
 function invoke<K extends keyof InvokeChannels>(
   channel: K,
   ...args: InvokeChannels[K]["args"]

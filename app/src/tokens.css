@@ -63,15 +63,13 @@
        brighter hover/active sibling. */
     --accent: #08c;
     --accent-bright: #0af;
-    /* ok: #4caf50 won — it is the RULED progress "done" green (ProgressMonitor).
-       Collapses the 7 greens for "good". */
+    /* ok: the progress "done" green (ProgressMonitor). One green for "good". */
     --ok: #4caf50;
     /* warn: #fa0 won — the dominant amber accent (welcome/viewer/profiler). */
     --warn: #fa0;
-    /* danger family (P2): one error identity. #a00 = solid stop/action red
+    /* danger family: one error identity. #a00 = solid stop/action red
        (Record/Save action buttons, the app's own red). Support tiers for the
-       banner/crash look derive a coherent dark-red family. Collapses the 8
-       error reds. */
+       banner/crash look derive a coherent dark-red family. */
     --danger: #a00;          /* solid stop / action / invalid red */
     --danger-strong: #c0392b;/* border / emphasis on a dark error banner */
     --danger-text: #ff9b8f;  /* readable error text on a dark fill */

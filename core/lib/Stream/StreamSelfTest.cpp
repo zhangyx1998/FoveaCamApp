@@ -9,7 +9,7 @@
 // the ClockCalibrator so the ONLY thing under stress is Stream destruction vs
 // concurrent Subscriber::close(unsubscribe=true).
 //
-// The race (2026-07-09 exit-6 incident): Subscriber::close() captures a raw
+// The race: Subscriber::close() captures a raw
 // Stream* under its state guard, releases the guard, then locks stream->mutex in
 // unsubscribe(). If the owning object's ~Stream frees that mutex in the gap, the
 // lock hits a destroyed std::mutex — macOS libc++ reports EINVAL -> system_error

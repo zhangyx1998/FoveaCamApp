@@ -1,4 +1,4 @@
-// Profiler hover-card placement (ruling 8) — the PURE placement math behind the
+// Profiler hover-card placement — the PURE placement math behind the
 // two hover-card behaviors (follow / corner). DOM/pointer wiring in NodeGraph.vue
 // stays thin and untested by design; this pins the geometry.
 

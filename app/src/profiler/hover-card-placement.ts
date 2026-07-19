@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// PURE hover-card placement math for the profiler node graph (ruling 8, DOM-free,
+// PURE hover-card placement math for the profiler node graph (DOM-free,
 // unit-tested). Two behaviors behind the `profiler_hover_card` config entry:
 //   - `follow`  — the card follows the cursor, quadrant-flipped so it never
 //                 overflows the graph container (prefer below-right of cursor).
@@ -40,7 +40,7 @@ function clamp(v: number, lo: number, hi: number): number {
 }
 
 /**
- * FOLLOW placement (ruling 8a): anchor the card's top-left near the cursor,
+ * FOLLOW placement: anchor the card's top-left near the cursor,
  * preferring the BELOW-RIGHT quadrant (`+offset, +offset`). Flip HORIZONTALLY to
  * the left of the cursor when the right edge would overflow the container, and
  * VERTICALLY above the cursor when the bottom edge would overflow — the classic
@@ -74,7 +74,7 @@ function overlapArea(a: Box, b: Box): number {
 }
 
 /**
- * CORNER placement (ruling 8b): snap the card to one of the four container
+ * CORNER placement: snap the card to one of the four container
  * corners (inset by `margin`). Among the four, pick the corner whose resulting
  * card rect overlaps the hovered `item` bbox the LEAST — so the card never sits
  * on top of what the user is inspecting. Ties (equal overlap — the common case

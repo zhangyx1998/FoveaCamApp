@@ -4,17 +4,17 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// multi-fovea-recording rulings 9 + 10 + R-1 transport re-base: the COMPRESSION
+// The COMPRESSION
 // brick (`attachCompressPipe`). A native thread reads a SOURCE raw12p pipe via
 // an IN-PROCESS OwnedFrame tap (NOT a SHM ring — rings = IPC/JS-worker
-// boundaries ONLY, ruled 2026-07-09), zlib-compresses each frame INDEPENDENTLY,
+// boundaries ONLY), zlib-compresses each frame INDEPENDENTLY,
 // and republishes an opaque `/zlib` blob into an output pipe via the ring-v5
 // payloadBytes path. The recorder (a JS-worker consumer) reads the OUTPUT ring —
 // that boundary stays a ring, correctly.
 //
 // NO hardware: the Aravis fake camera drives a `camera/.../raw12p` packed tap
 // (as in test 30 — a whole-byte Mono8 wire format proves the format-agnostic
-// plumbing; a genuine 12p wire capture is rig-gated). Compress taps THAT source.
+// plumbing; a genuine 12p wire capture needs hardware). Compress taps THAT source.
 // Proves:
 //   1. Consumer-gated demand cascade: connecting the OUTPUT pipe opens the tap +
 //      connects the raw12p SOURCE (so its capture tap runs) AND spawns the

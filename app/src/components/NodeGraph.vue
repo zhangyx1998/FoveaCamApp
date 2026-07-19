@@ -192,8 +192,8 @@ function ringColor(util: number, saturated: boolean): string {
 }
 
 // Node fill by brick kind (open set — unknown kinds get the default slate).
-// Ported verbatim from the old cytoscape KIND_COLORS; supplied to CSS as the
-// `--kind` custom property (saturated/idle class rules override it).
+// Supplied to CSS as the `--kind` custom property (saturated/idle class rules
+// override it).
 const KIND_COLORS: Record<string, string> = {
   camera: "#2f6f4f",
   convert: "#2b5d8a",
@@ -336,7 +336,7 @@ function marching(id: string, idle: boolean): boolean {
   return !!d && !idle && (d.get(id) ?? Infinity) <= 1;
 }
 
-// --- Hover detail card (ruling 8) --------------------------------------------
+// --- Hover detail card --------------------------------------------------------
 const card = ref<{ detail: HoverDetail; x: number; y: number } | null>(null);
 const lastCursor = ref<NodePosition>({ x: 0, y: 0 });
 
@@ -442,21 +442,21 @@ function onPointerMove(ev: PointerEvent): void {
 }
 
 function onWheel(ev: WheelEvent): void {
-  ev.preventDefault(); // the graph never scrolls the tab (ruling 3)
+  ev.preventDefault(); // the graph never scrolls the tab
   const r = containerRect();
   const c = containerSize.value;
   if (isZoomGesture(ev)) {
-    // ctrl+wheel (macOS pinch) → zoom centered on the pointer (ruling 6).
+    // ctrl+wheel (macOS pinch) → zoom centered on the pointer.
     const pointer = { x: ev.clientX - r.left, y: ev.clientY - r.top };
     vp.value = zoomAt(vp.value, nextZoomLevel(vp.value.zoom, ev.deltaY), pointer, c, graphBox.value);
   } else {
-    // Plain wheel (trackpad two-finger) → X/Y pan, clamped (ruling 4).
+    // Plain wheel (trackpad two-finger) → X/Y pan, clamped.
     vp.value = panBy(vp.value, -ev.deltaX, -ev.deltaY, c, graphBox.value);
   }
   if (hoveredId.value) updateCard();
 }
 
-// Node drag: live edge re-lay on EVERY pointermove (ruling 2) — positions are
+// Node drag: live edge re-lay on EVERY pointermove — positions are
 // reactive, so edge paths recompute per frame. Zoom is captured at grab.
 function onNodePointerDown(ev: PointerEvent, id: string): void {
   ev.stopPropagation();
@@ -479,7 +479,7 @@ function onNodePointerDown(ev: PointerEvent, id: string): void {
   window.addEventListener("pointerup", up);
 }
 
-// --- Viewport resize (ruling 5): ResizeObserver drives the refit --------------
+// --- Viewport resize: ResizeObserver drives the refit -------------------------
 function onResize(): void {
   const el = container.value;
   if (!el) return;
@@ -508,7 +508,7 @@ function fitView(): void {
 
 function resetLayout(): void {
   // Forget dragged positions, re-run auto layout, refit (NO height — the panel
-  // is no longer resizable, ruling 3).
+  // is not resizable).
   dragged.clear();
   relayout(props.elements);
   requestAnimationFrame(fitView);
@@ -532,8 +532,8 @@ watch(
     if (key !== lastKey) {
       lastKey = key;
       relayout(els);
-      // Match the old dagre `fit:true`: reframe on a membership change once the
-      // container has a real box (first reveal is fit by the ResizeObserver).
+      // Reframe on a membership change once the container has a real box
+      // (first reveal is fit by the ResizeObserver).
       if (sizedOnce) requestAnimationFrame(fitView);
     }
   },
@@ -660,7 +660,7 @@ onBeforeUnmount(() => {
                 :dy="i === 0 ? 3 : LINE_H"
               >{{ line }}</tspan>
             </text>
-            <!-- Busy ring (ruling 3): native arc pinned to the top-right corner. -->
+            <!-- Busy ring: native arc pinned to the top-right corner. -->
             <g v-if="n.ringDash" :transform="`translate(${n.size.w / 2} ${-n.size.h / 2})`">
               <circle :r="RING_R" fill="none" :stroke="RING_TRACK" stroke-width="3" />
               <circle
@@ -776,7 +776,7 @@ onBeforeUnmount(() => {
         stroke: #33383f;
         stroke-dasharray: 5 4;
       }
-      // Marching flow (ruling 7): hover-highlighted active edges only.
+      // Marching flow: hover-highlighted active edges only.
       &.marching {
         stroke-dasharray: 6 4;
         animation: ng-march 0.6s linear infinite;

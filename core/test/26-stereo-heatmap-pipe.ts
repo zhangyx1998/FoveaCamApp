@@ -18,7 +18,7 @@
 // Proves:
 //   1. ATTACH GUARDS — unknown target pipe / unknown source pipe / bad params
 //      throw with named errors.
-//   2. ON-DEMAND (ruling 2) — with NO consumer anywhere, the stereo brick stays
+//   2. ON-DEMAND — with NO consumer anywhere, the stereo brick stays
 //      PARKED (zero produced frames). Connecting the HEATMAP pipe (the only
 //      consumer, two bricks downstream) wakes the WHOLE chain — heatmap tap →
 //      stereo → two slice taps → convert → camera; disconnecting parks it again.

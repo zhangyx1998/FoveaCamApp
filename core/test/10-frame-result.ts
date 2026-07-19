@@ -5,14 +5,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Host-side FrameResult (FIN payload) round-trip + wire-layout check — B-15
-// bench prep for WS4 (synced-capture Stage F). The B-12 FIN payload gained a
-// `frame_id` (uint32) right after `stream`, and `left`/`right` now carry the
-// EXPOSURE-AVERAGED mirror voltage. This proves, WITHOUT hardware, that the
+// Host-side FrameResult (FIN payload) round-trip + wire-layout check, without
+// hardware. The FIN payload carries `frame_id` (uint32) right after `stream`,
+// and `left`/`right` carry the EXPOSURE-AVERAGED mirror voltage. Proves the
 // native `Protocol.Command.FrameResult` factory encodes/decodes that layout
-// exactly and that its byte offsets match the ratified synced-capture.md §5
-// shape — so when the rig sends real FINs at the bench, the host decode is
-// already unit-verified. Run: /opt/homebrew/bin/node core/test/10-frame-result.ts
+// exactly, with byte offsets matching the synced-capture wire shape.
+// Run: /opt/homebrew/bin/node core/test/10-frame-result.ts
 
 import assert from "node:assert/strict";
 import { Protocol } from "core/Controller";
@@ -60,7 +58,7 @@ assert.equal(decoded.t_exposure, sample.t_exposure, "t_exposure survives");
 assert.deepEqual([...decoded.left], sample.left, "averaged left volts survive");
 assert.deepEqual([...decoded.right], sample.right, "averaged right volts survive");
 
-// --- 2. exact wire layout (locks the ratified §5 field order/offsets) -------
+// --- 2. exact wire layout (locks the field order/offsets) -------
 // stream(1) + frame_id(4) + t_trigger(8) + t_exposure(8) + left(8) + right(8).
 assert.equal(buf.byteLength, 37, "FIN payload is 37 bytes");
 const view = new DataView(buf);

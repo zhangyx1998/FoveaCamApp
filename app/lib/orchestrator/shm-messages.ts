@@ -29,10 +29,10 @@ export type ShmReadDone = {
   error?: string;
 };
 
-// WS1 pipe transport (C-17). A connected pipe consumer reads by segment NAME
+// Pipe transport. A connected pipe consumer reads by segment NAME
 // with a consumer-tracked `lastSeq` (there is no per-frame descriptor, unlike
 // the SHM_READ path). One-time connect handshake, then these ride the same
-// preload MessagePort + C-15 buffer pool.
+// preload MessagePort + buffer pool.
 export const PIPE_READ = "fovea:pipe:read";
 export const PIPE_READ_DONE = "fovea:pipe:read-done";
 
@@ -54,14 +54,14 @@ export type PipeReadDone = {
   seq?: bigint;
   tCapture?: number;
   /** Producer-side convert cost (ms) for this frame, from the reader's
-   *  `FrameMeta` (A-26 Fix D) — lets the StreamView inspector show `convertMs`
+   *  `FrameMeta` — lets the StreamView inspector show `convertMs`
    *  on pipe streams, not just the tracking-multi wide view. */
   convertMs?: number;
   /** Seqlock generation + retry count from the reader's `readInto` result
-   *  (A-26 Fix D) — surfaces the SHM health line in the inspector for pipes. */
+   *  — surfaces the SHM health line in the inspector for pipes. */
   gen?: number;
   retries?: number;
-  /** Active frame size for this read (C-20 dynamic resize) — the frame occupies
+  /** Active frame size for this read (dynamic resize) — the frame occupies
    *  `width*height*channels` bytes at the head of the (max-sized) buffer. */
   width?: number;
   height?: number;
@@ -77,9 +77,9 @@ export type PipeReadDone = {
   error?: string;
 };
 
-// capture-recorder-nodes Phase 0: FIFO pipe read transport. The recorder/capture
+// FIFO pipe read transport. The recorder/capture
 // consumer reads a SPECIFIC frame (`wantSeq = lastDelivered + 1`) through the
-// same preload MessagePort + C-15 buffer pool as PIPE_READ, but via the reader
+// same preload MessagePort + buffer pool as PIPE_READ, but via the reader
 // addon's `readSeqInto` (ordered, lossless-within-a-ring delivery). The DONE
 // message classifies the FIFO outcome (frame / notYet / gone+oldestSeq /
 // closed) so the consumer can drop-account a lagged ring. The latest-wins

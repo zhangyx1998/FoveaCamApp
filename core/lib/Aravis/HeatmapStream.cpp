@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// stereo-disparity-and-heatmap-nodes §"HeatmapStream (pinned)" NAPI seam:
+// HeatmapStream NAPI seam:
 // spawn/cancel-able colormap pipes, chained on a stereo disparity pipe (or any
 // convert / undistort / fovea / scale pipe's OwnedFrame tap). Colormaps a
 // 1-channel input (CV_32FC1 or CV_8UC1) through COLORMAP_TURBO → BGRA8.
@@ -197,7 +197,7 @@ FN(heatmapProbeAll) {
   return out;
 }
 
-// ---- Topology.report() rows (unified-time-and-topology §6) ------------------
+// ---- Topology.report() rows -------------------------------------------------
 // kind "heatmap"; input from the source brick id; output BGRA8/U8.
 void appendHeatmapReports(Napi::Env env, Napi::Array &rows,
                           std::set<std::string> &seen) {

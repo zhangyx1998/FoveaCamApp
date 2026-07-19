@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// WS1 dynamic pipe lifecycle (C-20): churn (create/destroy → no leaked
+// Dynamic pipe lifecycle: churn (create/destroy → no leaked
 // segments), resize (active w/h varies inside a MAX-sized ring, no segment
 // recreation), and reuse-safe identity (epoch bump → new segment → a stale
 // consumer sees CLOSED). Run UNSANDBOXED: /opt/homebrew/bin/node <file>.ts
@@ -140,7 +140,7 @@ const baseSpec = (id: string, extra: Record<string, unknown> = {}) => ({
   P.drop(id);
 }
 
-// ---- C-21 consumer gate: immediate-on-register + 0↔1 edges only -----------
+// ---- consumer gate: immediate-on-register + 0↔1 edges only -----------
 {
   const id = "gate:x";
   P.advertise(baseSpec(id));

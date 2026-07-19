@@ -40,8 +40,8 @@ describe("enableHardwareTrigger", () => {
     await enableHardwareTrigger(lease);
     expect(raw.reconfigure).toHaveBeenCalledTimes(1);
     // setTrigger takes the SOURCE (arv_camera_set_trigger semantics — Aravis
-    // sets TriggerMode/TriggerSelector itself). Passing "FrameStart" was the
-    // rig-caught 2026-07-12 failure; pin the argument.
+    // sets TriggerMode/TriggerSelector itself). Passing "FrameStart" is wrong;
+    // pin the source argument.
     expect(camera.setTrigger).toHaveBeenCalledWith("Line0");
     expect(features).toEqual({
       LineSelector: "Line1",

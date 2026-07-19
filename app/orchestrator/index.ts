@@ -45,7 +45,7 @@ import calibrateDriftSession from "@modules/calibrate-drift/session";
 import calibrateDistortionSession from "@modules/calibrate-distortion/session";
 import calibrateExtrinsicSession from "@modules/calibrate-extrinsic/session";
 
-// S5 (docs/history/refactor/orchestrator.md §7.1): boot phase timing. `FOVEA_FORK_TS`
+// Boot phase timing. `FOVEA_FORK_TS`
 // is stamped by `main.ts` right before `utilityProcess.fork()`; by the time
 // this line runs, every statically-imported module (including `core`'s
 // native addon, imported transitively above) has already been resolved —
@@ -54,16 +54,16 @@ import calibrateExtrinsicSession from "@modules/calibrate-extrinsic/session";
 // eval as a single leg (there's no way to isolate "core import" alone
 // without switching the whole graph to dynamic imports, not worth the risk
 // for a measurement feature).
-// Teardown-hardening (Task 3): trace any native crash to stderr with a
-// symbolicatable backtrace before the process dies, WITHOUT changing exit-code
-// semantics (exit 6 still triggers the janitor). Earliest core-loading point —
-// `core` is already resolved by the static import above.
+// Trace any native crash to stderr with a symbolicatable backtrace before the
+// process dies, WITHOUT changing exit-code semantics (exit 6 still triggers
+// the janitor). Earliest core-loading point — `core` is already resolved by
+// the static import above.
 installCrashHandler();
 
 const forkTs = Number(process.env.FOVEA_FORK_TS);
 if (Number.isFinite(forkTs)) span("boot.forkToLoad", Date.now() - forkTs);
 
-// Disposable-orchestrator gate (ruling 2): close the hardware-acquisition gate
+// Disposable-orchestrator gate: close the hardware-acquisition gate
 // at boot so no session opens a camera / the MEMS serial until main sends
 // `hardware-clear` (the previous hardware instance confirmed dead + swept).
 // Armed BEFORE any port attaches (subscriptions — hence activation — can only
@@ -73,7 +73,7 @@ armHardwareGate();
 const hub = new Hub();
 setFrameTransportFactory(() => createShmFrameTransport(Shm as ShmApi));
 
-// Unified time (FINAL ruling 0): the NATIVE steady clock is the single time
+// Unified time: the NATIVE steady clock is the single time
 // authority — every JS hostNowNs reading (mirror history, calibration
 // registry ages, homography feeder stamps) joins the owner-applied frame
 // domain. Then arm the clock-metrics push channel: the camera owner threads
@@ -84,24 +84,24 @@ wireClockMetrics(onClockMetrics);
 
 // Forward process-wide diagnostics (registry sink-throw isolation, etc.) to
 // every connected renderer, so failures are visible without watching the
-// orchestrator console. See docs/history/refactor/orchestrator.md §12.1 C7.
+// orchestrator console.
 onReport((scope, message, level) => hub.reportError(scope, message, level));
-// Same pattern for structured timing spans (§7.1 S5) — live broadcast so a
+// Same pattern for structured timing spans — live broadcast so a
 // future profiler window can render a timeline without polling.
 onSpan((s) => hub.reportSpan(s));
 
-// --- WS1 pipe broker: advertises `camera:<serial>` SHM pipes (real-1c) -----
-// C's pipe session + broker; the registry (un)advertises a pipe per shared
-// camera and attaches B's native `CaptureSink` (the SHM preview write is now
+// --- pipe broker: advertises `camera:<serial>` SHM pipes ------------------
+// The pipe session + broker; the registry (un)advertises a pipe per shared
+// camera and attaches the native `CaptureSink` (the SHM preview write is
 // native, off the JS loop). Both native seams are cast here (Aravis pipe NAPIs
-// aren't in the d.ts yet — B-owned) so registry.ts stays type-clean + testable.
-// C-24 step 4: the fovea crop brick (B-24 fused map-ROI FoveaStream). The
-// materializer advertises the C-20 max-footprint pipe, loads the PLAIN
-// persisted calibration (undistorted-coordinate crops when calibrated), and
-// attaches B's native producer; teardown detaches + drops. Camera source =
-// the LEASED handle only (a fovea is composable only while its camera lives —
-// unleased compose fails loudly, never acquires). `pipeBroker` is referenced
-// lazily (materialize runs long after module init — no TDZ).
+// aren't in the d.ts yet) so registry.ts stays type-clean + testable.
+// The fovea crop brick (fused map-ROI FoveaStream). The materializer advertises
+// the max-footprint pipe, loads the PLAIN persisted calibration
+// (undistorted-coordinate crops when calibrated), and attaches the native
+// producer; teardown detaches + drops. Camera source = the LEASED handle only
+// (a fovea is composable only while its camera lives — unleased compose fails
+// loudly, never acquires). `pipeBroker` is referenced lazily (materialize runs
+// long after module init — no TDZ).
 // The fovea crop brick's native surface. These NAPIs are declared in
 // `core/Aravis`'s d.ts, so we take the REAL types via a `typeof Aravis` Pick
 // instead of a hand-mirrored `as unknown as {…}` shadow interface — a d.ts
@@ -110,10 +110,9 @@ const aravisFovea: Pick<
   typeof Aravis,
   "attachFoveaPipe" | "setFoveaRect" | "detachFoveaPipe"
 > = Aravis;
-// Unified-topology §5: fovea slots CHAIN on the camera's shared undistort
+// Unified-topology: fovea slots CHAIN on the camera's shared undistort
 // brick (else the shared converter — uncalibrated degrade). No per-fovea cal
-// loading: undistortion happens ONCE upstream; the fused map-ROI path and
-// the legacy Camera-source private chains have no production callers left.
+// loading: undistortion happens ONCE upstream.
 const foveaMaterializer = createFoveaMaterializer({
   pipes: () => pipeBroker, // lazy — materialize runs long after init
   brick: {
@@ -124,12 +123,11 @@ const foveaMaterializer = createFoveaMaterializer({
 
 const pipeBroker = pipeSession({
   broker: asBroker(Pipe),
-  // C-24 step 3 (compose protocol): authoritative caller identity + destroy
-  // signal from A-34 window tagging.
+  // Compose protocol: authoritative caller identity + destroy signal from
+  // window tagging.
   windowIdOf: (ch) => hub.windowIdOf(ch),
   onWindowClosed: (fn) => hub.onWindowClosed(fn),
-  // value-sweep-2026-07-11 (`pipe-consumer-refcount-no-reconciliation`):
-  // reconcile leaked raw connect refcounts when a renderer port closes.
+  // Reconcile leaked raw connect refcounts when a renderer port closes.
   onChannelClosed: (fn) => hub.onChannelClosed(fn),
   materializers: { fovea: foveaMaterializer },
 });
@@ -140,11 +138,11 @@ setRegistryPipeSeam({
   attach: (camera, pipeId) => void Aravis.attachCameraPipe(camera, pipeId),
   detach: (pipeId) => void Aravis.detachCameraPipe(pipeId),
 });
-// real-1g (C-23/B-23): the SESSION-advertised `undistort:<serial>` pipes —
-// B's native remap producer (camera → convert → precomputed-map remap →
-// FrameSink), attached with the plain persisted calibration record; B rebuilds
-// the maps natively. The seam types camera/cal as `unknown` (so it unit-tests
-// without the native core) — this local cast bridges to the typed NAPI surface.
+// The SESSION-advertised `undistort:<serial>` pipes — the native remap producer
+// (camera → convert → precomputed-map remap → FrameSink), attached with the
+// plain persisted calibration record; the maps are rebuilt natively. The seam
+// types camera/cal as `unknown` (so it unit-tests without the native core) —
+// this local cast bridges to the typed NAPI surface.
 const aravisUndistort = Aravis as unknown as {
   attachUndistortPipe(camera: unknown, pipeId: string, cal: unknown): void;
   detachUndistortPipe(pipeId: string): void;
@@ -156,24 +154,24 @@ const undistortSeam = {
     aravisUndistort.attachUndistortPipe(camera, pipeId, cal),
   detach: (pipeId: string) => aravisUndistort.detachUndistortPipe(pipeId),
 } as import("./undistort-pipe.js").UndistortPipeSeam;
-// A-24 Stage 3: fold every live SHM pipe producer's native meter into
+// Fold every live SHM pipe producer's native meter into
 // `perfSnapshot.workloads` (probed out-of-loop; `ProbeSnapshot` === the JS
-// `WorkloadSnapshot` shape). The 1d KCF tracker registers its own probe from
+// `WorkloadSnapshot` shape). The KCF tracker registers its own probe from
 // the tracking session.
 registerNativeProbe(
   () => Pipe.probeAll() as unknown as Record<string, WorkloadSnapshot>,
 );
-// real-1e (B-18): the per-camera BGRA converter threads — a sibling probe, one
+// The per-camera BGRA converter threads — a sibling probe, one
 // `converter:<target>` row per active converter (absent when parked/detached).
 registerNativeProbe(
   () => Aravis.converterProbeAll() as unknown as Record<string, WorkloadSnapshot>,
 );
-// real-1g (B-23): the per-camera undistort threads — same sibling-probe shape,
+// The per-camera undistort threads — same sibling-probe shape,
 // one `undistort:<format>` row per active undistort pipe (absent when parked).
 registerNativeProbe(
   () => Aravis.undistortProbeAll() as unknown as Record<string, WorkloadSnapshot>,
 );
-// Unified-topology §6 REAL-REPORT layer: every live native brick self-reports
+// Unified-topology REAL-REPORT layer: every live native brick self-reports
 // its NodeReport (convert ← camera, undistort ← convert, fovea ← undistort —
 // ACTUAL chain inputs). These rows REPLACE the fold's adapter synthesis by id,
 // so the graph shows real wiring wherever a brick reports.
@@ -188,17 +186,17 @@ const liveview = hub.add(liveViewSession());
 const manageCameras = hub.add(manageCamerasSession());
 
 // --- controller: serial MEMS mirror device (dormant until `connect`) ------
-// Create the long-lived controller NODE up front (controller-node-and-fifo-
-// edges §3): registers its `controller` graph node BEFORE any session's
-// PID/position edges, so the declared node (with the serial-meter statsKey)
-// wins over a synthesized placeholder. The session binds/unbinds the device.
+// Create the long-lived controller NODE up front: registers its `controller`
+// graph node BEFORE any session's PID/position edges, so the declared node
+// (with the serial-meter statsKey) wins over a synthesized placeholder. The
+// session binds/unbinds the device.
 controllerNode();
 hub.add(controllerSession());
 
-// capture-recorder-nodes Phase 1/2: the full-bit-depth `camera/<serial>/raw`
-// pipes the recorder node FIFO-consumes (Aravis.attachRawPipe publishes
-// `frame->raw` verbatim; consumer-gated like every pipe). Seam types the camera
-// as `unknown` so the session/recorder unit-test without native core.
+// The full-bit-depth `camera/<serial>/raw` pipes the recorder node
+// FIFO-consumes (Aravis.attachRawPipe publishes `frame->raw` verbatim;
+// consumer-gated like every pipe). Seam types the camera as `unknown` so the
+// session/recorder unit-test without native core.
 // Real d.ts types (both attach fns already type `camera` as `unknown` there,
 // so the seam's opaque camera survives) — a `typeof Aravis` Pick, not a
 // hand-mirrored shadow interface.
@@ -207,7 +205,7 @@ const aravisRaw: Pick<
   "attachRawPipe" | "detachRawPipe" | "attachRaw12pPipe" | "detachRaw12pPipe"
 > = Aravis;
 // Kind-routed seam: `"raw"` → the UNPACKED 16-bit container; `"raw12p"` → the
-// VERBATIM packed wire payload (multi-fovea-recording ruling 1).
+// VERBATIM packed wire payload.
 const rawSeam: import("./raw-pipe.js").RawPipeSeam = {
   advertise: pipeBroker.advertise,
   unadvertise: pipeBroker.unadvertise,
@@ -220,9 +218,9 @@ const rawSeam: import("./raw-pipe.js").RawPipeSeam = {
       ? aravisRaw.detachRaw12pPipe(pipeId)
       : aravisRaw.detachRawPipe(pipeId)),
 };
-// ONE process-wide refcounted registry (multi-fovea-recording ruling 5): shared
-// by manual-control + multi-fovea so a live raw pipe id is advertised ONCE and
-// shared, never clobbered by a second advertise.
+// ONE process-wide refcounted registry: shared by manual-control + multi-fovea
+// so a live raw pipe id is advertised ONCE and shared, never clobbered by a
+// second advertise.
 const rawPipes = createRawPipeRegistry(rawSeam);
 
 // --- manual-control: manual steering + capture + recording ----------------
@@ -231,9 +229,9 @@ const rawPipes = createRawPipeRegistry(rawSeam);
 // `hub.add` after the stereo seams are defined.
 
 // --- multi-fovea: protocol-v2 multi-target logic skeleton ------------------
-// Wave I-2 seams: the PAIRING brick factory (pairing-nodes P-1 — always-running
-// per-stage L/R joins) + the zlib COMPRESSION brick (multi-fovea-recording
-// ruling 9 — optional per-stream, the recorder consumes the /zlib sibling).
+// Seams: the PAIRING brick factory (pairing-nodes — always-running per-stage
+// L/R joins) + the zlib COMPRESSION brick (optional per-stream, the recorder
+// consumes the /zlib sibling).
 const aravisPair = Aravis as unknown as {
   createPairStream(
     leftId: string,
@@ -264,8 +262,7 @@ registerNativeProbe(
 // receive the paired-SGBM seam (stereo-paired-inputs) — see its `hub.add` after
 // the stereo seams are defined.
 
-// --- disparity-scope: auto-vergence control loop (§7.1 S1a; split-node
-// topology per docs/proposals/split-disparity-nodes.md) ---------------------
+// --- disparity-scope: auto-vergence control loop (split-node topology) -----
 // The session composes GENERAL-PURPOSE bricks: slice (the fovea crop brick
 // under session-owned ids) + scale (the ScaleStream brick) + template-match
 // workers. Seams injected so the session unit-tests without native core.
@@ -411,31 +408,30 @@ const splitTracking = hub.add(
   splitTrackingSession(asBroker(Pipe), undistortSeam, rawPipes, compressSeam),
 );
 
-// --- calibrate-intrinsic: per-camera checkerboard/marker calibration (§7.1 S1b)
+// --- calibrate-intrinsic: per-camera checkerboard/marker calibration -------
 const calibrateIntrinsic = hub.add(
   calibrateIntrinsicSession(asBroker(Pipe), rawPipes, compressSeam),
 );
 
-// --- calibrate-drift: per-fovea drift measurement (§7.1 S1b) --------------
+// --- calibrate-drift: per-fovea drift measurement -------------------------
 const calibrateDrift = hub.add(calibrateDriftSession(asBroker(Pipe), rawPipes, compressSeam));
 
-// --- calibrate-distortion: projector-alignment/homography check (§7.1 S1b)
+// --- calibrate-distortion: projector-alignment/homography check -----------
 const calibrateDistortion = hub.add(
   calibrateDistortionSession(asBroker(Pipe), rawPipes, compressSeam),
 );
 
-// --- calibrate-extrinsic: extrinsic calibration wizard (§7.1 S1b) --------
+// --- calibrate-extrinsic: extrinsic calibration wizard --------------------
 const calibrateExtrinsic = hub.add(
   calibrateExtrinsicSession(asBroker(Pipe), rawPipes, compressSeam),
 );
 
-// The former `viewer` session (C-8) is RETIRED (standalone-viewer-and-fcap
-// ruling 1): container playback now lives entirely inside the viewer window
-// (src/viewer/worker.ts via preload-viewer) and never touches this process —
-// playback survives orchestrator restarts by construction.
+// Container playback lives entirely inside the viewer window (src/viewer/
+// worker.ts via preload-viewer) and never touches this process — playback
+// survives orchestrator restarts by construction.
 
 // Camera-owning sessions — the force-idle set shared by `system.releaseCameras`
-// (§12.3 R4) and the multi-window drain path below.
+// and the multi-window drain path below.
 const cameraOwning: ServerSession<any>[] = [
   liveview,
   manageCameras,
@@ -454,11 +450,11 @@ const system = hub.add(
   systemSession(
     () => cameraOwning,
     () => hub.frameStatsSnapshot(),
-    // C-24: the live node graph rides perfSnapshot (ruled Q2) — pipes from the
-    // native enumerator (item 2, exact bytesTotal for MB/s), stats from the
-    // same probed workloads map, session wiring via registerGraphWiring, and
-    // the REAL-REPORT layer (Topology.report() + any registered JS sources)
-    // replacing adapter synthesis by id (unified-topology §6).
+    // The live node graph rides perfSnapshot — pipes from the native
+    // enumerator (exact bytesTotal for MB/s), stats from the same probed
+    // workloads map, session wiring via registerGraphWiring, and the
+    // REAL-REPORT layer (Topology.report() + any registered JS sources)
+    // replacing adapter synthesis by id (unified-topology).
     (workloads) =>
       buildTopology({
         listPipes: () => Pipe.list(),
@@ -468,7 +464,7 @@ const system = hub.add(
   ),
 );
 
-// Disposable-orchestrator ruling 2: surface the hardware-clear WAIT as a named
+// Disposable-orchestrator: surface the hardware-clear WAIT as a named
 // spin-up step on the `system` session so a subscribed app window shows WHY
 // spin-up pauses (AppWindow observes system status alongside its own). The step
 // appears only while an acquisition is actually blocked on the gate and clears
@@ -490,11 +486,11 @@ onHardwareWaitChange((waiting) => {
 
 if (Number.isFinite(forkTs)) span("boot.sessionsRegistered", Date.now() - forkTs);
 
-// --- multi-window drain (docs/history/refactor/multi-window.md §3) -----------------
+// --- multi-window drain ----------------------------------------------------
 // Main asks us to idle every camera-owning session before spawning the next
 // app window ("closed" = session-idle-drained, not window-destroyed). Refuse
 // — draining NOTHING — if any session reports busy (mid-capture/recording);
-// otherwise dispose all, await their async idles (V1-class drains), and let
+// otherwise dispose all, await their async idles, and let
 // `releaseAll()` backstop any handle outside session control (same order as
 // `system.releaseCameras`).
 async function drainForWindowSwitch(): Promise<{ ok: boolean; reason?: string }> {
@@ -508,7 +504,7 @@ async function drainForWindowSwitch(): Promise<{ ok: boolean; reason?: string }>
   return { ok: true };
 }
 
-// --- hardware quiescence (docs/hardware/stage-f.md safety invariant) -------
+// --- hardware quiescence (safety invariant) --------------------------------
 // The MEMS controller must never stay energized and no camera may stay
 // streaming past this process's life, no matter how it ends. This is the
 // GRACEFUL half: an awaited disable + release, run on main's `shutdown`
@@ -553,8 +549,7 @@ let quiescing = false;
 /** GRACEFUL shutdown (main's `shutdown` message): drain, disarm hardware, then
  *  post the clean-exit ACK and WAIT — main reaps us (kill) once it records the
  *  ack. NOT self-exiting is deliberate: a still-running process cannot drop the
- *  queued `quiesced` message, so main's clean/crash decision is deterministic
- *  without the old flush-sleep + code===0 fallback (lifecycle ruling 3/4). */
+ *  queued `quiesced` message, so main's clean/crash decision is deterministic. */
 function quiesceAndAck(): void {
   if (quiescing) return;
   quiescing = true;
@@ -583,10 +578,10 @@ function quiesceAndExit(code: number): void {
   })();
 }
 
-// Headless PARK is RETIRED (disposable-orchestrator ruling 5): with no app
-// window there is no hardware instance at all — the process is disposed on the
-// last owned window's close, so there is nothing to park. The enumerate-only
-// probe (orchestrator/probe.ts) holds no hardware and feeds Welcome instead.
+// No headless park: with no app window there is no hardware instance at all —
+// the process is disposed on the last owned window's close, so there is nothing
+// to park. The enumerate-only probe (orchestrator/probe.ts) holds no hardware
+// and feeds Welcome instead.
 
 // A JS-level CRASH must still leave the hardware safe — quiesce, then die
 // nonzero (main's janitor stays as the backstop for native aborts, which
@@ -596,10 +591,9 @@ process.on("uncaughtException", (err) => {
   quiesceAndExit(1);
 });
 // A rejection is NOT a crash: teardown paths (worker termination, dropped
-// pipes on app exit) reject benignly, and Electron's utilityProcess default
-// was warn-and-continue. Exiting here turned every sub-app exit into an
-// orchestrator death + janitor sweep (rig 2026-07-08) — log loudly, surface
-// to renderers, keep running.
+// pipes on app exit) reject benignly. Exiting here would turn every sub-app
+// exit into an orchestrator death + janitor sweep — log loudly, surface to
+// renderers, keep running.
 process.on("unhandledRejection", (reason) => {
   console.error("[orchestrator] unhandledRejection:", reason);
   hub.reportError("unhandledRejection", String(reason));
@@ -615,7 +609,7 @@ process.parentPort.on("message", (e) => {
     quiesceAndAck();
     return;
   }
-  // Disposable-orchestrator gate (ruling 2): main confirmed the previous
+  // Disposable-orchestrator gate: main confirmed the previous
   // hardware instance released the devices — open the acquisition gate. Deferred
   // camera-owning activations + controller.connect proceed from here.
   if (data?.type === "hardware-clear") {
@@ -631,8 +625,8 @@ process.parentPort.on("message", (e) => {
       );
     return;
   }
-  // A-34: main reports a BrowserWindow destroyed — the authoritative teardown
-  // signal for per-window state (`win/<windowId>/...`, C-24 composition).
+  // main reports a BrowserWindow destroyed — the authoritative teardown
+  // signal for per-window state (`win/<windowId>/...` composition).
   if (data?.type === "window:closed") {
     if (typeof data.windowId === "string") hub.windowClosed(data.windowId);
     return;
@@ -641,15 +635,14 @@ process.parentPort.on("message", (e) => {
     firstPort = false;
     if (Number.isFinite(forkTs)) span("boot.firstPortAttached", Date.now() - forkTs);
   }
-  // A-34: the connect handoff carries the sender window's stable id — the Hub
+  // The connect handoff carries the sender window's stable id — the Hub
   // tags each channel so sessions can key per-window behavior on it.
   for (const port of e.ports) hub.attach(port, { windowId: data?.windowId });
 });
 
 // Orderly shutdown: release session resources (cameras, serial, intervals) then
 // the native module. `core` is imported eagerly so `cleanup()` is synchronous —
-// the prior `process.on("exit", () => import(...))` could not complete an async
-// import as the process was tearing down.
+// an async import cannot complete as the process is tearing down.
 let shuttingDown = false;
 function shutdown(): void {
   if (shuttingDown) return;

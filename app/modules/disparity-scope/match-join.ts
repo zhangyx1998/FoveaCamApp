@@ -19,7 +19,7 @@
 // engaged (free-run epochs are frame-phase-offset by nature).
 
 /** Defaults: ~12 strip frames at the ~38 fps floor ≈ 300 ms; seq gap of 12
- *  matches (the same horizon expressed in frames). Rig-tunable via the
+ *  matches (the same horizon expressed in frames). Hardware-tunable via the
  *  function params if the bench wants different horizons. */
 export const MATCH_STALE_MS = 300;
 export const MATCH_STALE_SEQ_GAP = 12;

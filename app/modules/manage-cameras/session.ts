@@ -8,7 +8,7 @@
 // snapshot (~1 Hz) into telemetry, and applies edits + the pixel-format
 // reconfigure flow as commands, persisting to the shared config store.
 //
-// Fovea Pair (P5): while exactly one camera holds role L and one holds role R,
+// Fovea Pair: while exactly one camera holds role L and one holds role R,
 // telemetry carries a `pair` link and the `setPair`/`setPairPixelFormat`
 // commands apply one edit to BOTH cameras (each through its own writer /
 // reconfigure flow), persisting into BOTH cameras' existing config docs — no
@@ -101,7 +101,7 @@ export default function manageCamerasSession(): ServerSession<typeof manageCamer
       };
     }
 
-    // The L/R fovea-pair link (P5): exactly one camera per role, both views
+    // The L/R fovea-pair link: exactly one camera per role, both views
     // present. Duplicate role claims break the link (which serial would the
     // pair edit?) until the user resolves the roles.
     function pairEntries(): { left: Entry; right: Entry } | null {
@@ -114,7 +114,7 @@ export default function manageCamerasSession(): ServerSession<typeof manageCamer
 
     /** Why the pair link is BLOCKED despite fovea roles being claimed — the
      *  duplicate-role case must be actionable in the UI, not a silent
-     *  panel-vanish (UI/UX review #10). Null = linked or simply unclaimed. */
+     *  panel-vanish. Null = linked or simply unclaimed. */
     function pairBlockReason(): string | null {
       const byRole: Record<"L" | "R", number> = { L: 0, R: 0 };
       for (const e of entries.values())
@@ -168,8 +168,8 @@ export default function manageCamerasSession(): ServerSession<typeof manageCamer
     /** Last divergence list actually published. `setPair` writes land on the
      *  two cameras in separate microtasks, so a patch-path recompute between
      *  the two read-backs sees a HALF-APPLIED pair — publishing that flashes
-     *  the unify prompt mid-drag and unmounts the slider being dragged (UI/UX
-     *  review #5). New divergence therefore surfaces only via the 1 Hz poll /
+     *  the unify prompt mid-drag and unmounts the slider being dragged. New
+     *  divergence therefore surfaces only via the 1 Hz poll /
      *  structural publishes; the patch path may only CLEAR or carry it. */
     let publishedDivergent: string[] = [];
     function gatedPair(patch: boolean): FoveaPairView | null {
@@ -227,8 +227,8 @@ export default function manageCamerasSession(): ServerSession<typeof manageCamer
     }
 
     async function openCamera(serial: string): Promise<void> {
-      // Retry with backoff — a failure here is a still-settling handoff race
-      // (RT1), not an absent camera (it was just listed).
+      // Retry with backoff — a failure here is a still-settling handoff race,
+      // not an absent camera (it was just listed).
       const lease = await retryUntil(() => acquire(serial));
       if (lease) await registerEntry(serial, lease);
       // Can't lease a just-listed camera → held by another process; surface it.
@@ -466,7 +466,7 @@ export default function manageCamerasSession(): ServerSession<typeof manageCamer
           await applyPixelFormat(e, format);
           publishViews();
         },
-        // --- Fovea Pair (P5) — one panel, both cameras, atomically ----------
+        // --- Fovea Pair — one panel, both cameras, atomically ----------
         async setPair({ key, value }) {
           const pair = pairEntries();
           if (!pair) return;

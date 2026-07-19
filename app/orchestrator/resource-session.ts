@@ -131,23 +131,22 @@ export function defineResourceSession<C extends Contract>(
       const gen = ++generation;
       const prev = lastDrain;
       void (async () => {
-        await prev; // wait out the previous idle's drain (V1/RT1)
+        await prev; // wait out the previous idle's drain
         if (gen !== generation) return; // superseded before we even started
         const sc = new Scope(() => gen !== generation);
         scope = sc;
         try {
           await def.activate(sc, s);
         } catch (e) {
-          // value-sweep-2026-07-11 (`activate-errors-bypass-banner`): route the
-          // failure to `s.fail()` (which also logs via `report`) instead of a
-          // bare `report()`. `fail()` sets the session's user-visible status
-          // error and broadcasts it, so an activation failure shows the A-P13
-          // banner (+ the tray) rather than a dead black view. The runtime
-          // clears the error on the next activation (subscribe → clearError),
-          // preserving retry-on-reactivate.
+          // Route the failure to `s.fail()` (which also logs via `report`).
+          // `fail()` sets the session's user-visible status error and
+          // broadcasts it, so an activation failure shows the banner (+ the
+          // tray) rather than a dead black view. The runtime clears the error
+          // on the next activation (subscribe → clearError), preserving
+          // retry-on-reactivate.
           s.fail(`activate: ${e instanceof Error ? e.message : String(e)}`);
         }
-        // Superseded mid-activate → drain whatever we set up (V5/V10). If idle
+        // Superseded mid-activate → drain whatever we set up. If idle
         // already drained this scope, `drain()` is a no-op.
         if (sc.cancelled) await sc.drain();
       })();

@@ -4,14 +4,13 @@ This source code is licensed under the MIT license.
 You may find the full license in project root directory.
 --------------------------------------------------- -->
 <!--
-  Debug sub-window (WS2 2b): a thin shell that mounts a MODULE-OWNED component
+  Debug sub-window: a thin shell that mounts a MODULE-OWNED component
   full-window under the TitleBar (cascade-closes with the opener app). The
   component (resolved by `(kind, session)` via `debug-registry`) owns all its
   own subscriptions — passive contract, pipes, frames — so this shell stays
   contract-agnostic: it only resolves the loader and hosts it. `session` +
   `kind` ride the URL like a projection window. `kind` (default `debugger`)
-  lets one session host both its debugger and its capture-preview window
-  (capture-recorder-nodes.md ruling 8).
+  lets one session host both its debugger and its capture-preview window.
 -->
 <script setup lang="ts">
 import { computed, ref, shallowRef, watchEffect, type Component } from "vue";

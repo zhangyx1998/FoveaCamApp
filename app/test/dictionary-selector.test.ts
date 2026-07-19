@@ -1,9 +1,7 @@
-// calibration-review-2026-07-11 #1: the marker Dictionary picker was INERT —
-// the functional component bound neither the <select>'s value nor a change
-// handler (and declared no props/emits, so ctx.emit couldn't dispatch); the
-// dictionary stayed pinned to the contract default and the manual's AprilTag
-// workflow silently detected nothing. These tests pin the v-model contract at
-// the vnode level (no DOM needed).
+// The marker Dictionary picker's v-model contract: the functional component
+// must bind both the <select>'s value and a change handler (and declare the
+// props/emits so ctx.emit can dispatch), so the dictionary is not pinned to the
+// contract default. These tests pin the contract at the vnode level (no DOM needed).
 
 import { describe, expect, it, vi } from "vitest";
 import type { VNode } from "vue";

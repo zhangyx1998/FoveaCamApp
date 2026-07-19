@@ -1,7 +1,6 @@
 // Channel backpressure gate: latest-wins coalescing, fack accounting, and
-// C10 per-frame-topic interest gating (docs/history/refactor/orchestrator.md §7.1
-// item 2, third target). Drives two real `Channel`s over a fake `Endpoint`
-// pair — no session/Hub involved, this is pure transport-layer behavior.
+// per-frame-topic interest gating. Drives two real `Channel`s over a fake
+// `Endpoint` pair — no session/Hub involved, this is pure transport-layer behavior.
 
 import { describe, expect, it } from "vitest";
 import { Channel, type FramePayload } from "@lib/orchestrator/protocol";

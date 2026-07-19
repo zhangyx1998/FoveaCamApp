@@ -242,7 +242,7 @@ function assertPattern(result: ReaderResultWithData): void {
 }
 
 {
-  // WS1 pipe scaffold (C-16): the publisher thread + synthetic producer thread
+  // Pipe scaffold: the publisher thread + synthetic producer thread
   // + reader-addon consumer, all off the JS loop. Exercises per-segment
   // ringDepth, the v2 CLOSED state signal, and consumer refcounting.
   const P = Pipe as any;

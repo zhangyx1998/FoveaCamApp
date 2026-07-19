@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Homography feeder (unified-time-and-topology §3+§5): the ~200 Hz timer that
+// Homography feeder: the ~200 Hz timer that
 // pushes H(mirrorAt(now)) samples into an L/R HOMOGRAPHY undistort brick.
 // Pure-tested with fake timers + injected history/clock/push — cadence,
 // sample-time stamping (hostNs = the mirror sample's own record time),
@@ -49,7 +49,7 @@ function harness(opts?: {
   return { stop, push, pushes };
 }
 
-describe("homography feeder (§5 L/R bricks)", () => {
+describe("homography feeder (L/R bricks)", () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 

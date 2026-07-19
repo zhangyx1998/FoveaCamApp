@@ -45,8 +45,8 @@ export default class Capture<C extends CapturableContract = CapturableContract> 
     return this.session.call("captureShot", { tag });
   }
 
-  /** Pull one held resource's ACTUAL data (ruling 7), downconverted to 8-bit
-   *  BGRA by the node. `index` selects an entry of a raster resource. */
+  /** Pull one held resource's ACTUAL data, downconverted to 8-bit BGRA by the
+   *  node. `index` selects an entry of a raster resource. */
   getPreview(resource: string, index?: number): Promise<FramePayload | null> {
     return this.session.call("getCapturePreview", { resource, index });
   }

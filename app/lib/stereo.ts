@@ -45,15 +45,16 @@ export function createQMatrix(
   const cy = avg([L.c.y, R.c.y]);
   const f = avg([L.f.x, L.f.y, R.f.x, R.f.y]);
   const b = 1 / Math.abs(baseline);
-  // Principal-point disparity offset (calibration review 2026-07-11 #3).
+  // Principal-point disparity offset.
   // reprojectImageTo3D computes W = b·d + p and Z = f/W. Physically, with the
   // left camera at the origin and the right at +B: uL = f·X/Z + cxL,
   // uR = f·(X−B)/Z + cxR, so d = uL − uR = f·B/Z + (cxL − cxR) and
   // Z = f·B / (d + (cxR − cxL)) — i.e. p·B must equal cxR − cxL
   // (OpenCV's Q[3][3] = −(cx1−cx2)/B, same thing with this row's b = +1/B).
-  // The old (L−R) sign put the fixation plane at NEGATIVE depth: converged
+  // The (R−L) sign keeps the fixation plane at POSITIVE depth: converged
   // foveae have cxL < cxR (deriveFoveaIntrinsics shifts each virtual center
-  // AWAY from the toe-in), so p must be positive → Z(d=0) = f/p = +z_fix.
+  // AWAY from the toe-in), so p must be positive → Z(d=0) = f/p = +z_fix
+  // (the opposite sign would put it at negative depth).
   // Unit-pinned in app/test/stereo-q.test.ts.
   const p = (R.c.x - L.c.x) * b;
   const Q = new Float64Array([
@@ -109,8 +110,8 @@ export function vergeToDistance(verge: number, baseline: number) {
  * at, derived from feedback rather than the command.
  *
  * EXACT inverse of {@link inverseTriangulate}'s symmetric fixation model
- * (calibration review 2026-07-11 #16 — the old `baseline/sin(vergence)`
- * small-angle form biased the display at near range): on the gaze axis,
+ * (used instead of the small-angle `baseline/sin(vergence)` form, which
+ * biases the display at near range): on the gaze axis,
  * `aL = atan(b/z)`, `aR = −atan(b/z)` with `b = baseline/2`, so
  * `vergence = 2·atan(b/z)` and `z = b/tan(vergence/2)` exactly (round-trip
  * unit-pinned in app/test/stereo-q.test.ts). Callers only pass the angle

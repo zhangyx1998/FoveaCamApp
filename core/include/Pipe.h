@@ -60,8 +60,8 @@ struct FrameInfo {
   size_t payloadBytes = 0; // >0 = opaque variable-length payload (compression)
 };
 
-/** THE producer→publisher seam (C-19). Every producer plugs in here: B's Aravis
- *  capture hook, the option-(b) JS handoff, and the Phase-2 test driver. The
+/** THE producer→publisher seam. Every producer plugs in here: B's Aravis
+ *  capture hook, the JS handoff, and the test driver. The
  *  producer delivers frames ALREADY CONVERTED to the pipe's advertised format
  *  (e.g. BGRA8); the publisher stays raw-memcpy+seqlock, convert-agnostic. A
  *  C++ producer obtains its sink via `PipeHub::instance().sink(pipeId)`. */
@@ -70,13 +70,13 @@ public:
   virtual ~FrameSink() = default;
   /** Latest-wins, non-blocking, thread-safe (producer thread → publisher
    *  thread). The frame's ACTIVE size must fit the ring (`info.bytes` ≤ the
-   *  pipe's max slot bytes, active w/h ≤ the C-20 max footprint), else the
+   *  pipe's max slot bytes, active w/h ≤ the max footprint), else the
    *  frame is dropped (a bookkeeping drop, never a throw). */
   virtual void offer(const void *data, const FrameInfo &info,
                      const ShmRing::FrameMeta &meta) = 0;
 };
 
-/** Fired when a pipe's consumer presence crosses the 0↔1 boundary (C-21). B's
+/** Fired when a pipe's consumer presence crosses the 0↔1 boundary. B's
  *  `attachCameraPipe` registers one to subscribe/unsubscribe its converter to
  *  the ConverterStream — so the refcount is the SINGLE gate driving "idle when
  *  no pipe open" (the converter auto-parks once its subscriber detaches). */
@@ -148,7 +148,7 @@ public:
 
   const PipeSpec &spec() const { return spec_; }
   const std::string &shmName() const { return shmName_; }
-  /** Segment generation = the pipe's epoch (C-20 reuse-safe identity). */
+  /** Segment generation = the pipe's epoch (reuse-safe identity). */
   uint32_t epoch() const { return segment_ ? segment_->generation : 0; }
 
   /** Out-of-loop probe of the native producer meter (orchestrator thread). */
@@ -183,7 +183,7 @@ private:
 
 /** Scaffold producer: emits synthetic frames at ~`fps` (byte = seed + frame#)
  *  into its publisher until stopped. Its own thread — proving per-frame work
- *  runs OFF the JS loop, the whole WS1 north star. */
+ *  runs OFF the JS loop. */
 class SyntheticProducer : public FrameProducer {
 public:
   SyntheticProducer(PipeSpec spec, double fps, uint8_t seed);
@@ -221,7 +221,7 @@ public:
   uint32_t advertise(const PipeSpec &spec);
   Publisher &publisher(const std::string &id);   // throws if unknown
   FrameSink *sink(const std::string &id);        // nullptr if unknown
-  /** Register a pipe's consumer-presence gate (C-21) — B's `attachCameraPipe`
+  /** Register a pipe's consumer-presence gate — B's `attachCameraPipe`
    *  drives its converter subscribe/unsubscribe from it. Throws if unknown. */
   void setConsumerGate(const std::string &id, ConsumerGate gate);
   void attachSynthetic(const std::string &id, double fps, uint8_t seed);
@@ -231,8 +231,8 @@ public:
    *  from the result (no stale workload rows under churn). */
   std::vector<std::pair<std::string, Meter::Snapshot>> probeAll();
 
-  /** One advertised pipe's identity/liveness row (C-24 item 2 — topology
-   *  discovery WITHOUT connecting). */
+  /** One advertised pipe's identity/liveness row (topology discovery WITHOUT
+   *  connecting). */
   struct ListEntry {
     std::string id;
     PipeSpec spec;

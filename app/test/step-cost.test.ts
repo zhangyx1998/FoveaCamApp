@@ -1,6 +1,6 @@
-// Scripted-step trace cost (docs/proposals/vergence-loop-tuning.md §1 — the
-// CMA-ES polish objective): ITAE + overshoot penalty + actuation effort on
-// synthetic traces. The ORDERING properties are what the optimizer relies on.
+// Scripted-step trace cost (the CMA-ES polish objective): ITAE + overshoot
+// penalty + actuation effort on synthetic traces. The ORDERING properties are
+// what the optimizer relies on.
 
 import { describe, expect, it } from "vitest";
 import {

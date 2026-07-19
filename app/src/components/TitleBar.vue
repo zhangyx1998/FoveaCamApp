@@ -1,6 +1,6 @@
 <script setup lang="ts">
-// The shared window chrome (multi-window.md req. 9 / §3): used by every
-// window class (welcome / app / profiler). Fullscreen handling lives here —
+// The shared window chrome: used by every window class (welcome / app /
+// profiler). Fullscreen handling lives here —
 // main forwards each window's `enter/leave-full-screen` via
 // `foveaBridge.onFullscreenChange`, and the chrome adjusts the
 // traffic-light inset + drag regions on BOTH transitions.
@@ -43,10 +43,10 @@ const fullscreen = ref(false);
 // Base bar height when the Window Controls Overlay reports nothing usable.
 const BASE_HEIGHT = 40;
 
-// UI-1 (hil-findings.md): keep the bar VISIBLE in full screen (VSCode-style).
-// On macOS full screen `getTitlebarAreaRect()` reports `height: 0`, and the old
-// `0 ?? 40` only caught null/undefined — so the bar collapsed to 0px and the
-// content pane covered it. Full screen → fixed base height, full-width (no
+// Keep the bar VISIBLE in full screen (VSCode-style). On macOS full screen
+// `getTitlebarAreaRect()` reports `height: 0`, which `?? 40` would not catch
+// (only null/undefined), collapsing the bar to 0px — so guard with
+// `|| BASE_HEIGHT`. Full screen → fixed base height, full-width (no
 // traffic-light reserve). Windowed → overlay height (`|| BASE_HEIGHT` so a
 // transient 0 during the transition falls back) plus its top offset.
 const height = computed(() =>
@@ -67,7 +67,7 @@ const leftInset = computed(() =>
 
 function style(): Record<string, string> {
   // Full screen: fixed base height, full-width, no top reserve (same guard as
-  // the `height` computed — UI-1). Windowed: overlay geometry, with `|| BASE`
+  // the `height` computed). Windowed: overlay geometry, with `|| BASE`
   // so a transient 0 during the transition doesn't collapse the bar.
   if (fullscreen.value) {
     return {
@@ -89,13 +89,11 @@ function onResize() {
   rect.value = getRect();
 }
 
-// The old one-way bug: the rect was recomputed only on window `resize`, which
-// fires DURING the fullscreen transition — `getTitlebarAreaRect()` still
-// reports the transitional geometry at that point, and nothing recomputes
-// after it settles, so the chrome stayed broken after returning to windowed
-// mode. Fix: recompute on the overlay's own `geometrychange` event (the
-// authoritative signal) AND on both forwarded fullscreen transitions, with
-// settle-delayed retries for the macOS transition animation.
+// `resize` alone is insufficient: it fires DURING the fullscreen transition,
+// when `getTitlebarAreaRect()` still reports transitional geometry, and nothing
+// recomputes after it settles. Recompute on the overlay's own `geometrychange`
+// event (the authoritative signal) AND on both forwarded fullscreen
+// transitions, with settle-delayed retries for the macOS transition animation.
 function refreshSoon() {
   onResize();
   requestAnimationFrame(onResize);
@@ -135,7 +133,7 @@ onUnmounted(() => {
     </div>
     <!-- The subtitle joins the draggable chrome. The class must sit on the
          real elements — a `<template>` renders nothing, so a class on it is
-         silently dropped (the old bug: the subtitle area wasn't draggable). -->
+         silently dropped, which would leave the subtitle area non-draggable. -->
     <template v-if="subtitle">
       <div class="connector draggable">-</div>
       <div class="subtitle draggable">{{ subtitle }}</div>

@@ -76,8 +76,8 @@ class Frame : public Shared<Frame> {
 
 public:
   // Private constructor - only accessible via Shared::create().
-  // `clockOffsetNs` = the OWNER-APPLIED device→host dt (Camera.h,
-  // unified-time ruling 2026-07-08): Frame creation is the single choke point
+  // `clockOffsetNs` = the OWNER-APPLIED device→host dt (Camera.h):
+  // Frame creation is the single choke point
   // where device timestamps enter the system, so every outward consumer (JS
   // Frame.deviceTimestamp, SHM slot headers, OwnedFrame taps, KCF results)
   // sees pre-calibrated time. 0 = uncalibrated passthrough (raw counter).
@@ -120,11 +120,11 @@ public:
   }
 };
 
-// Single source of truth for the raw→display conversion (B-18). `cvtColor(raw,
+// Single source of truth for the raw→display conversion. `cvtColor(raw,
 // out, cvtColorCode(src,dst))` then, when `dst` is 8-bit but the cvtColor
 // result kept a >8-bit container (Mono16 / Bayer16 / 12p → raw is CV_16UC1),
-// scale to true 8-bit by the source's significant bit depth — the step whose
-// omission in the old inline `feedPipe` caused the 12p "purple stripes" bug.
+// scale to true 8-bit by the source's significant bit depth — this scaling
+// step is REQUIRED, or 12p output shows banding ("purple stripes").
 // `Frame::view` and the pipe converter thread both call this (no duplication).
 // Writes into the caller's reusable `out` (src==dst is a plain copy).
 void convertFrame(const cv::Mat &raw, PixelFormat src, PixelFormat dst,

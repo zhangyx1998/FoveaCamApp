@@ -10,7 +10,7 @@
 // — it's handed off separately via `window.postMessage` (preload's
 // `orchestrator:port` listener + client.ts `connect()`). Kept narrow on purpose.
 // TYPE-ONLY imports below stay erased at build so this module contributes no
-// runtime value to the self-contained CJS preload bundle (V11).
+// runtime value to the self-contained CJS preload bundle.
 import type { OrchestratorDownReport } from "@lib/orchestrator/client";
 import type { ProbeCamera } from "@lib/orchestrator/probe";
 import type { PatchOp } from "@lib/store-patch";
@@ -21,14 +21,13 @@ export type { TeleCanvasMode, TeleCanvasStatus };
 
 export interface FoveaBridge {
   connectOrchestrator(): void;
-  /** Live camera list from the enumerate-only PROBE (disposable-orchestrator
-   *  ruling 3) — the status-only Welcome window's sole data source. Fires on
-   *  every real change (device added/removed/role edit). Returns a disposer. */
+  /** Live camera list from the enumerate-only PROBE — the status-only Welcome
+   *  window's sole data source. Fires on every real change (device
+   *  added/removed/role edit). Returns a disposer. */
   onProbeCameras(cb: (cameras: ProbeCamera[]) => void): () => void;
   /** The orchestrator process went down. The callback receives a typed report
    *  (clean / killed / crash + exit code) so a window can surface a crash
-   *  banner (orchestrator-lifecycle-and-exit ruling 3/4); a `clean` report is
-   *  delivered too but the surface hides it. */
+   *  banner; a `clean` report is delivered too but the surface hides it. */
   onOrchestratorDown(cb: (report: OrchestratorDownReport) => void): void;
   openProfilerWindow(): void;
   /** Open (or focus) the app-wide Settings window (also reachable via the
@@ -60,36 +59,34 @@ export interface FoveaBridge {
    *  host's empty buffer after a respawn). Returns a disposer. */
   onTeleCanvasTarget(cb: (target: TeleCanvasTarget) => void): () => void;
   /** Open (or switch to) an app window by catalog id (`@lib/windows`) — the
-   *  main-process window manager enforces exclusivity + drain
-   *  (docs/history/refactor/multi-window.md §3). */
+   *  main-process window manager enforces exclusivity + drain. */
   openAppWindow(appId: string): void;
-  /** Open a projection window (split-pane viewer, projection-split-view.md)
-   *  seeded with ONE pane. `pane` is a serialized pane descriptor
+  /** Open a projection window (split-pane viewer) seeded with ONE pane. `pane`
+   *  is a serialized pane descriptor
    *  (`@lib/projection/descriptor` `serializePane`) — a `{kind:"frame",…}` or
    *  `{kind:"pipe",…}` source. 0..N instances; passive subscriber — never
    *  activates the source session, never counted for the welcome rule, survives
    *  its source app's close. The window then owns its own split layout in-URL. */
   openProjectionWindow(pane: string): void;
-  /** Toggle a module's `debug`-class sub-window (WS2 2b): open-or-close a
-   *  module-owned window for `session`. Owner-bound to the app that requested
-   *  it (cascade-closes on app close/switch). `kind` (default `debugger`)
-   *  selects which module component the host mounts and lets one session own
-   *  both a debugger and a capture-preview window at once
-   *  (capture-recorder-nodes.md ruling 8). */
+  /** Toggle a module's `debug`-class sub-window: open-or-close a module-owned
+   *  window for `session`. Owner-bound to the app that requested it
+   *  (cascade-closes on app close/switch). `kind` (default `debugger`) selects
+   *  which module component the host mounts and lets one session own both a
+   *  debugger and a capture-preview window at once. */
   toggleDebugWindow(session: string, kind?: string): void;
   /** OPEN-OR-FOCUS a module's `debug`-class sub-window (never closes) — the
    *  idempotent sibling of `toggleDebugWindow` for callers that must ENSURE the
-   *  window is up (capture-recorder-nodes.md Phase 4: the capture / raster
-   *  buttons open the preview window after a shot). */
+   *  window is up (the capture / raster buttons open the preview window after a
+   *  shot). */
   openDebugWindow(session: string, kind?: string): void;
   /** Fullscreen transitions for THIS window, forwarded by main from the
    *  BrowserWindow enter/leave-full-screen events — the shared window chrome
-   *  adjusts traffic-light inset + drag regions on both edges (A-7). */
+   *  adjusts traffic-light inset + drag regions on both edges. */
   onFullscreenChange(cb: (fullscreen: boolean) => void): void;
-  /** Recorder trigger (plain Ctrl/Cmd-R, rebound from reload — multi-window.md
-   *  req. 6). Consumed by `RecordButton.vue` (capture-recorder-nodes.md ruling
-   *  9): where a recording context exists it toggles start/stop. Returns a
-   *  disposer so the consumer can drop the listener on unmount. */
+  /** Recorder trigger (plain Ctrl/Cmd-R, rebound from reload). Consumed by
+   *  `RecordButton.vue`: where a recording context exists it toggles
+   *  start/stop. Returns a disposer so the consumer can drop the listener on
+   *  unmount. */
   onRecorderTrigger(cb: () => void): () => void;
   /** Join path segments (replaces `node:path`'s `resolve`, which isn't
    *  reachable from an isolated renderer — the polyfill plugin needs a real
@@ -111,9 +108,9 @@ export interface FoveaBridge {
    *  paths inside the perf-snapshots dir are accepted — narrow surface. */
   revealPerfSnapshot(file: string): Promise<void>;
   /** Reveals a recording container in the OS file browser (Finder/Explorer),
-   *  selecting the file — the viewer window's "Open folder" affordance
-   *  (standalone-viewer-and-fcap UX 5). Any path the renderer holds is accepted
-   *  (the bridge already trusts renderer-supplied paths). */
+   *  selecting the file — the viewer window's "Open folder" affordance. Any
+   *  path the renderer holds is accepted (the bridge already trusts
+   *  renderer-supplied paths). */
   revealRecording(file: string): Promise<void>;
   /** Reveal a crash-diagnostics file (the flushed stdout/stderr ring log or a
    *  native minidump) in the OS file browser, selecting it — the CrashReport
@@ -125,9 +122,9 @@ export interface FoveaBridge {
    *  and re-applies it on mount. */
   setWindowPinned(pinned: boolean): void;
   /** Ask main to fork THIS window's viewer playback engine (a utilityProcess)
-   *  over `file` and broker a `MessagePort` back (standalone-viewer-and-fcap,
-   *  AS SHIPPED amendment). Renderer-initiated so the port arrives once the
-   *  window is loaded and listening; a re-call (dev full-reload) terminates the
+   *  over `file` and broker a `MessagePort` back. Renderer-initiated so the
+   *  port arrives once the window is loaded and listening; a re-call (dev
+   *  full-reload) terminates the
    *  previous engine first. The port lands on the DOM `message` event as
    *  `"viewer:port"` (like `orchestrator:port`, outside the typed push table —
    *  a live port can't cross a bridge call). */
@@ -136,13 +133,13 @@ export interface FoveaBridge {
    *  the window surface an error state instead of waiting forever for frames.
    *  Returns a disposer. */
   onViewerEngineDown(cb: (message: string) => void): () => void;
-  /** System save dialog for a video export (viewer-export spec 8). `defaultName`
+  /** System save dialog for a video export. `defaultName`
    *  is the suggested basename (`<recording>-<stream>`), `ext` the container
    *  extension (no dot). Resolves to the chosen absolute path, or null when the
    *  user cancels. */
   showExportSaveDialog(defaultName: string, ext: string): Promise<string | null>;
   /** Is a live capture (hardware) app session currently running? The viewer
-   *  banner seeds off this (viewer-export addendum). Subscribe to
+   *  banner seeds off this. Subscribe to
    *  `onAppSessionActive` BEFORE awaiting this, so a change between seed + await
    *  isn't missed (the telecanvas:target seed+push pattern). */
   getAppSessionActive(): Promise<boolean>;
@@ -150,18 +147,18 @@ export interface FoveaBridge {
    *  change (mirrors `onTeleCanvasTarget`). Returns a disposer. */
   onAppSessionActive(cb: (active: boolean) => void): () => void;
   /** Tell main whether THIS viewer window has queued/running exports — main uses
-   *  it to intercept the window CLOSE with an abort confirm (spec 11). Sent on
+   *  it to intercept the window CLOSE with an abort confirm. Sent on
    *  every 0-crossing of the active-export count. */
   setViewerExportsActive(active: boolean): void;
-  /** Main asks THIS window to confirm a close while exports run (spec 11): show
+  /** Main asks THIS window to confirm a close while exports run: show
    *  the abort modal. On confirm the renderer aborts its exports then calls
    *  `confirmViewerClose`; on cancel it does nothing (the window stays open).
    *  Returns a disposer. */
   onViewerConfirmClose(cb: () => void): () => void;
-  /** The user confirmed aborting exports — proceed with the intercepted close
-   *  (spec 11). Main destroys the window. */
+  /** The user confirmed aborting exports — proceed with the intercepted close.
+   *  Main destroys the window. */
   confirmViewerClose(): void;
-  // ---- Config store (MAIN authority, config-store-main-authority.md) --------
+  // ---- Config store (MAIN authority) ----------------------------------------
   /** Read a config document AND subscribe this window to future changes
    *  (`Store.open`): every subsequent edit — this window's, another window's, or
    *  an orchestrator-internal session's — arrives via `onStoreChanged`.
@@ -211,13 +208,12 @@ export interface FoveaBridge {
 // tuple → return type. Both sides derive thin wrappers from it (preload-
 // bridge.ts's `invoke`/`send`/`listen`; main.ts's `handle`/`onRenderer`/
 // `pushTo`), so a channel-name typo or an arg/return-shape mismatch on either
-// side is a COMPILE error, not a boot-time surprise (the V11 preload work
-// showed how costly a silent bridge break is).
+// side is a COMPILE error, not a boot-time surprise.
 //
-// V11: this module is TYPES-ONLY (interfaces, no runtime values). `import
-// type` from it erases entirely, so nothing here can land in the self-
-// contained CJS preload bundle — no sibling-chunk import, no `import.meta`,
-// no `createRequire`. Keep it that way (do not add runtime consts here).
+// This module is TYPES-ONLY (interfaces, no runtime values). `import type` from
+// it erases entirely, so nothing here can land in the self-contained CJS
+// preload bundle — no sibling-chunk import, no `import.meta`, no
+// `createRequire`. Keep it that way (do not add runtime consts here).
 
 /** Request→response channels (`ipcRenderer.invoke` ↔ `ipcMain.handle`). */
 export interface InvokeChannels {
@@ -232,10 +228,10 @@ export interface InvokeChannels {
   "crash:reveal": { args: [file: string]; ret: void };
   "telecanvas:get-status": { args: []; ret: TeleCanvasStatus };
   "telecanvas:get-target": { args: []; ret: TeleCanvasTarget };
-  /** Video-export save dialog (spec 8): [defaultBasename, containerExt] →
+  /** Video-export save dialog: [defaultBasename, containerExt] →
    *  chosen absolute path or null (cancelled). */
   "export:save-dialog": { args: [defaultName: string, ext: string]; ret: string | null };
-  /** Seed the viewer banner: is a hardware app session live (addendum)? */
+  /** Seed the viewer banner: is a hardware app session live? */
   "app-session:active": { args: []; ret: boolean };
   // ---- Config store (MAIN authority) ---------------------------------------
   /** Read a doc + subscribe this window (`Store.open`). Wire-encoded values. */
@@ -281,10 +277,10 @@ export interface SendChannels {
    *  engine over `file` and brokers a `MessagePort` back via `viewer:port`. */
   "viewer:spawn": [file: string];
   /** Sender-scoped: THIS viewer window's queued/running export count crossed 0
-   *  — main uses it to arm/disarm the close-abort intercept (spec 11). */
+   *  — main uses it to arm/disarm the close-abort intercept. */
   "viewer:exports-active": [active: boolean];
   /** Sender-scoped: the user confirmed the export-abort close — proceed with
-   *  destroying this window (spec 11). */
+   *  destroying this window. */
   "viewer:close-confirmed": [];
 }
 
@@ -298,17 +294,17 @@ export interface PushChannels {
   "recorder:trigger": [];
   /** The viewer engine (utilityProcess) crashed — carries a human message. */
   "viewer:engine-down": [message: string];
-  /** Live camera list from the enumerate-only probe (ruling 3). */
+  /** Live camera list from the enumerate-only probe. */
   "probe:cameras": [cameras: ProbeCamera[]];
   /** TeleCanvas host status changes (standalone dual-mode module). */
   "telecanvas:status": [status: TeleCanvasStatus];
   /** TeleCanvas push-target changes — main → EVERY window (cross-instance). */
   "telecanvas:target": [target: TeleCanvasTarget];
   /** Live capture (hardware) app session started/stopped — main → EVERY window
-   *  (viewer banner, addendum). */
+   *  (viewer banner). */
   "app-session:active": [active: boolean];
   /** Main → a viewer window: confirm aborting exports before the intercepted
-   *  close proceeds (spec 11). */
+   *  close proceeds. */
   "viewer:confirm-close": [];
   /** A config document changed — main → each subscribed window (path + full
    *  value). The `Store` client routes by path and applies in place. */

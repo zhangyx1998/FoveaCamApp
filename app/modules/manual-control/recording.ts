@@ -6,7 +6,7 @@
 //
 // Server-side recording — thin config over the shared
 // `@orchestrator/recording-service`: the L/C/R fovea streams (full-bit-depth
-// `camera/<serial>/raw` pipes) + the ruling-3 fovea-binding `onFrame`. Recording
+// `camera/<serial>/raw` pipes) + the fovea-binding `onFrame`. Recording
 // flows through the RECORDER NODE (its own worker thread); main only advertises,
 // creates/retires, and answers per-frame metadata. Behavior spec:
 // docs/spec/manual-control.md §capture.
@@ -46,14 +46,14 @@ export interface RecordingDeps {
   /** Refcounted registry for the full-bit-depth `camera/<serial>/raw` pipes
    *  (ONE advertise per id ever; native producer). Injected from index.ts. */
   rawPipes: RawPipeRegistry;
-  /** Connect a pipe for the recorder node (refcount++ → C-21 gate → producer
+  /** Connect a pipe for the recorder node (refcount++ → gate → producer
    *  runs); the node releases it on stop. Injected from the session (broker). */
   connect: RecorderConnect;
-  /** Notify main a recording finished so the viewer auto-opens it (rulings
-   *  8/9). Injected (production: `process.parentPort` post). */
+  /** Notify main a recording finished so the viewer auto-opens it. Injected
+   *  (production: `process.parentPort` post). */
   finished(foveaPath: string): void;
   /** The FIN outcome matched to the frame being recorded on this fovea mirror,
-   *  else null → free-run live snapshot (spec §capture). Stage-F-gated. */
+   *  else null → free-run live snapshot (spec §capture). */
   foveaBinding?(mirror: "L" | "R"): { frameId: number; volt: Pos } | null;
   telemetry(patch: {
     recording_active?: boolean;
@@ -61,7 +61,7 @@ export interface RecordingDeps {
   }): void;
 }
 
-/** Resolve a fovea frame's voltage binding (WS4 4b): the FIN's exposure-averaged
+/** Resolve a fovea frame's voltage binding: the FIN's exposure-averaged
  *  voltage when a triggered capture is matched to this frame, else the live
  *  snapshot. `conv` is captured from the recording's triple at `start()` (stays
  *  valid even if the triple is released mid-recording). Pure over `deps`/`conv`. */
@@ -156,10 +156,10 @@ export function createRecording(deps: RecordingDeps): RecordingController {
         nodeOptions: {
           streams,
           connect: deps.connect,
-          // R-2 opt: only the L/R foveae carry a binding — gate the per-frame
+          // Only the L/R foveae carry a binding — gate the per-frame
           // notice so the center channel skips the pointless main round-trip.
           extrasStreams: ["left-fovea", "right-fovea"],
-          // Ruling-3: per NEW frame, the session injects volt/angle/homography
+          // Per NEW frame, the session injects volt/angle/homography
           // for the L/R foveae (center carries none). Never blocks the write.
           onFrame: (stream) => {
             const mirror = STREAM_MIRROR[stream];

@@ -5,8 +5,7 @@
 // -------------------------------------------------------
 #pragma once
 
-// composite-node-and-center-select-fix §B: a two-input composite brick modelled
-// on StereoStream (the FIRST two-input chained brick) but SIMPLER — no SGBM,
+// A two-input composite brick modelled on StereoStream but SIMPLER — no SGBM,
 // just a per-pixel color op. Both inputs are OwnedFrame taps (Leaky/latest-wins)
 // on any frame brick (undistort / convert / fovea / scale). It opens TWO
 // TapPublishers in start() (closed in stop()) so demand propagates to BOTH
@@ -24,8 +23,7 @@
 //                 kAnaglyphChannelSrc) — the LEFT frame drives its eye-color's
 //                 channels, the RIGHT frame the other eye's, unused = 0. Default
 //                 style RC = out.R←LEFT, out.G/B←RIGHT (red = LEFT eye, cyan =
-//                 RIGHT — same parity as the retired DiffView mode + back-compat
-//                 when `style` is absent).
+//                 RIGHT — the back-compat default when `style` is absent).
 //   - difference: cv::absdiff(L, R) on the color channels (alpha forced 255).
 // Input dims must match AND both must be 4-channel (unequal / non-BGRA → drop +
 // meter_.drop, the transient during steer/retune). The retune rebuilds nothing
@@ -45,8 +43,7 @@ namespace Arv {
 // CompositeStream.cpp), applied on the brick thread (just the enums).
 enum class CompositeMode { Anaglyph, Difference };
 
-// Anaglyph STYLE = "<left-eye color>/<right-eye color>" (user ruling
-// 2026-07-09, fourth option corrected to C/R 2026-07-10): R = red, B = blue,
+// Anaglyph STYLE = "<left-eye color>/<right-eye color>": R = red, B = blue,
 // C = cyan. Order MIRRORS docs/schema/anaglyph.ts `ANAGLYPH_STYLES`
 // (RB, RC, BR, CR); RC is the back-compat default (red = LEFT, cyan = RIGHT).
 enum class AnaglyphStyle { RB, RC, BR, CR };
@@ -63,7 +60,7 @@ struct CompositeParams {
 // (ch1), 2 = B (ch2). Value: 0 = take the LEFT frame's SAME channel, 1 = the
 // RIGHT frame's, -1 = force 0. Derived under the conflict rule "left claims its
 // color's channels first, right fills only what's free" (none of the four
-// ruled styles actually conflict; the rule guards future styles).
+// styles actually conflict; the rule guards future styles).
 inline constexpr int kAnaglyphChannelSrc[4][3] = {
     /* RB */ {0, -1, 1}, // out.R←LEFT(red), out.G=0, out.B←RIGHT(blue)
     /* RC */ {0, 1, 1},  // out.R←LEFT(red), out.G←RIGHT, out.B←RIGHT (cyan)
@@ -238,7 +235,7 @@ private:
       setAlpha255(buf_);
     } else {
       // anaglyph: assemble each color channel from the STYLE map (0 = LEFT frame,
-      // 1 = RIGHT frame, -1 = 0). Pipes are honest RGBA8 (channel-order-fix.md):
+      // 1 = RIGHT frame, -1 = 0). Pipes are honest RGBA8:
       // ch0 = R, ch1 = G, ch2 = B, ch3 = A. Zero the color planes + set alpha 255
       // up front (channels neither eye claims stay 0), then blit each eye's owned
       // channels FROM ITS OWN FRAME's SAME channel index.

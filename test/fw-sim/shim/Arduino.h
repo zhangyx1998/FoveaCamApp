@@ -4,8 +4,8 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Host HAL shim (docs/proposals/firmware-sim-harness.md): the <Arduino.h>
-// surface the REAL firmware translation units compile against on the host.
+// Host HAL shim: the <Arduino.h> surface the REAL firmware translation units
+// compile against on the host.
 // Implementations live in test/fw-sim/hal.cpp — micros() off the steady
 // clock (uint32, preserving Teensy wrap semantics), noInterrupts()/
 // interrupts() as a recursive-mutex pair, a recording pin table (Board.h's
@@ -58,8 +58,8 @@ void analogWrite(unsigned pin, unsigned duty);
 void analogWriteFrequency(unsigned pin, float freq);
 void attachInterrupt(unsigned pin, void (*isr)(), int mode);
 
-// noInterrupts()/interrupts() — a recursive-mutex lock/unlock pair (proposal
-// ruling). Injected strobe "ISRs" acquire the same mutex, so firmware critical
+// noInterrupts()/interrupts() — a recursive-mutex lock/unlock pair. Injected
+// strobe "ISRs" acquire the same mutex, so firmware critical
 // sections exclude them exactly like cli/sei does on the MCU.
 void noInterrupts();
 void interrupts();

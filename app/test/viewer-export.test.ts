@@ -51,7 +51,7 @@ function req(over: Partial<ExportRequest> = {}): ExportRequest {
 // ---- codec / pixfmt / alpha table ----------------------------------------
 
 describe("codec table", () => {
-  it("offers every ruled codec with a sane container", () => {
+  it("offers every codec with a sane container", () => {
     expect(CODECS.map((c) => c.id)).toEqual(["prores", "x264", "x265", "vp9", "av1"]);
     expect(containerFor("prores")).toBe("mov");
     expect(containerFor("x264")).toBe("mp4");
@@ -261,7 +261,7 @@ describe("ExportQueue", () => {
   it("clearFinished mid-episode keeps the episode's terminal jobs (monotonicity holds)", () => {
     // Parallel: a done, b running, c queued → 0.5. Clearing finished MID-run
     // must NOT delete a — pulling its 1.0 out of the denominator dropped the
-    // headline 50→25% (UI/UX review 2026-07-10 #1). Once the episode settles,
+    // headline 50→25%. Once the episode settles,
     // clearFinished drops everything.
     const q = new ExportQueue(true);
     const a = q.enqueue(req());
@@ -281,8 +281,7 @@ describe("ExportQueue", () => {
   });
 
   it("aborted jobs leave both numerator and denominator (no phantom progress)", () => {
-    // a running 0.2, b queued → 0.1. Aborting b must NOT read as "60% done"
-    // (the old fold counted aborted as 1.0 — UI/UX review 2026-07-10 #2);
+    // a running 0.2, b queued → 0.1. Aborting b must NOT read as "60% done";
     // cancelled work simply leaves the math.
     const q = new ExportQueue(true);
     const a = q.enqueue(req());

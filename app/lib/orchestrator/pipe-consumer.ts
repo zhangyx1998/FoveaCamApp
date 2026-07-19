@@ -5,7 +5,7 @@
 // -------------------------------------------------------
 //
 // Renderer-side pipe consumer loop: given a PipeHandle (from connectPipe), it polls the
-// segment through the preload reader addon (io.readPipe — reuses the C-15 buffer pool),
+// segment through the preload reader addon (io.readPipe — reuses the shared buffer pool),
 // tracks lastSeq itself, and emits FramePayloads to a display sink; on CLOSED it stops and
 // releases its buffers. Nothing per-frame crosses the Channel. Vue-free; io is injected so
 // tests drive a scripted reader.
@@ -28,9 +28,8 @@ export interface PipeReaderIO {
 export type PipeFrameSink = (frame: FramePayload | null) => void;
 
 /** One-shot notice raised after `ERROR_SURFACE_THRESHOLD` CONSECUTIVE read
- *  failures (value-sweep-2026-07-11 `pipe-consumer-swallows-read-errors`) — read
- *  errors used to retry forever with zero signal. Fired once per streak (not
- *  per retry); re-arms after any successful read. */
+ *  failures — otherwise read errors retry forever with zero signal. Fired once
+ *  per streak (not per retry); re-arms after any successful read. */
 export type PipeErrorSink = (info: {
   /** Consecutive failures at the moment of surfacing. */
   consecutive: number;
@@ -78,9 +77,8 @@ export function createPipeConsumer(
   let closed = false;
   let running = false;
   let handle_ = 0;
-  // value-sweep-2026-07-11 (`pipe-consumer-swallows-read-errors`): count read
-  // failures and surface ONCE per streak (a dead pipe no longer retries
-  // silently forever).
+  // Count read failures and surface ONCE per streak (a dead pipe must not
+  // retry silently forever).
   let readErrors = 0;
   let consecutiveReadErrors = 0;
   // Bumped by stop(): an in-flight poll compares its captured value after the
@@ -92,12 +90,11 @@ export function createPipeConsumer(
     const gen = generation;
     let r: PipeReadFrame | "closed" | null;
     try {
-      // Buffer = the ring's SLOT size: C-20 dynamic pipes size slots to
-      // `maxBytes` (max footprint), and the reader rejects any destination
-      // smaller than the slot (DestTooSmall) — provisioning the nominal
-      // `bytesPerFrame` here made every read of a variable-size pipe throw,
-      // which this catch silently retried forever ("No Frame"). Same rule the
-      // worker path already applies (session `connectPipe`).
+      // Buffer = the ring's SLOT size: dynamic pipes size slots to `maxBytes`
+      // (max footprint), and the reader rejects any destination smaller than
+      // the slot (DestTooSmall). Provisioning the nominal `bytesPerFrame` would
+      // make every read of a variable-size pipe throw. Same rule the worker
+      // path applies (session `connectPipe`).
       r = await io.readPipe(shmName, lastSeq, spec.maxBytes ?? spec.bytesPerFrame);
     } catch (err) {
       readErrors++;
@@ -125,13 +122,12 @@ export function createPipeConsumer(
     }
     if (!r) return; // no newer frame this poll
     lastSeq = r.seq;
-    // Use the frame's ACTIVE size (C-20 dynamic resize) — a fovea varies its
+    // Use the frame's ACTIVE size (dynamic resize) — a fovea varies its
     // w/h inside a max ring; fall back to the spec nominal for fixed pipes.
     const width = r.width ?? spec.width;
     const height = r.height ?? spec.height;
-    // A-26 Fix D: carry the producer convert cost + seqlock health the reader
-    // computed so the StreamView inspector shows the same metrics on pipe
-    // streams (previously only tracking-multi's wide SHM view had them).
+    // Carry the producer convert cost + seqlock health the reader computed so
+    // the StreamView inspector shows the same metrics on pipe streams.
     const meta: FrameMeta = { tCapture: r.tCapture, seq: Number(r.seq) };
     if (r.convertMs !== undefined) meta.convertMs = r.convertMs;
     const payload: FramePayload = {
@@ -147,7 +143,7 @@ export function createPipeConsumer(
       payload.shm = { seg: shmName, gen: r.gen, seq: r.seq, retries: r.retries };
     }
     // The displaced frame's buffer returns to the pool (steady state: zero
-    // allocation — the C-15 win, now on the pipe path).
+    // allocation, on the pipe path).
     if (displayed) io.releaseBuffer(displayed);
     displayed = r.data;
     sink(payload);

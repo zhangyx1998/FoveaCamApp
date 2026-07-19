@@ -1,8 +1,7 @@
-// The MAIN config-store authority core (config-store-main-authority.md): the
-// cache + per-doc serialized queue + notify-except-origin engine, lifted out of
-// the old orchestrator store-hub. These are the read/write/update/clear/echo-
-// skip/serialization semantics the retired `store-hub.test.ts` covered, now
-// exercised against the authority directly with an in-memory fs, PLUS the new
+// The MAIN config-store authority core: the
+// cache + per-doc serialized queue + notify-except-origin engine.
+// Covers read/write/update/clear/echo-skip/serialization semantics
+// exercised against the authority directly with an in-memory fs, PLUS the
 // key-level `patch` (two writers to DIFFERENT keys both survive).
 
 import { describe, expect, it, vi } from "vitest";

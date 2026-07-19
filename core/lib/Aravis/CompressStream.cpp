@@ -4,24 +4,23 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// multi-fovea-recording rulings 9 + 10: the COMPRESSION brick. A two-ended
-// native node that consumes ANY advertised frame pipe and republishes each
-// frame INTRA-FRAME compressed (every output frame decompresses alone — the
-// container-seekability ruling) into an output pipe whose advert carries the
-// source format with a `/codec` suffix (`BayerRG12p/zlib`).
+// The COMPRESSION brick. A two-ended native node that consumes ANY advertised
+// frame pipe and republishes each frame INTRA-FRAME compressed (every output
+// frame decompresses alone — container-seekability) into an output pipe whose
+// advert carries the source format with a `/codec` suffix (`BayerRG12p/zlib`).
 //
-// TRANSPORT (R-1 re-base, multi-fovea-recording): brick→brick handoffs are
-// in-process OwnedFrame taps, NEVER SHM rings (rings = IPC/JS-worker boundaries
-// ONLY, ruled 2026-07-09). The PRIMARY compression input is the packed
-// `camera/<serial>/raw12p` stream; RawPipe.cpp now exposes its verbatim payload
-// as an OwnedFrame tap (`openRaw12pTap`), so this brick reads its source via a
+// TRANSPORT: brick→brick handoffs are in-process OwnedFrame taps, NEVER SHM
+// rings (rings = IPC/JS-worker boundaries ONLY). The PRIMARY compression input
+// is the packed `camera/<serial>/raw12p` stream; RawPipe.cpp exposes its
+// verbatim payload as an OwnedFrame tap (`openRaw12pTap`), so this brick reads
+// its source via a
 // latest-wins `LeakyTapChannel` (the raw12p fan-out runs on the CAPTURE thread —
 // a blocking FIFO would stall capture; drops are metered via OwnedFrame.seq
 // gaps). It forwards the SOURCE frame's identity (width/height/origin +
 // device/system timestamps) from the OwnedFrame. The raw12p RING output stays
 // unchanged as the lossless path for DIRECT (uncompressed) recording.
 //
-// DEMAND: the output (compress) pipe's consumer refcount gates the brick (C-21).
+// DEMAND: the output (compress) pipe's consumer refcount gates the brick.
 // On the 0→1 edge the gate OPENS a tap channel on the source + CONNECTS the
 // source pipe (driving the raw12p producer's own gate, so the gated tap exists)
 // + spawns the runner reading that channel; on →0 it closes the channel (waking

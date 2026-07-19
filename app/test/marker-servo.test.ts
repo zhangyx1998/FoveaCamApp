@@ -1,12 +1,12 @@
 // Coverage for the marker servo's PID-node control core (marker-tracker.ts
-// `startServo`), now pushing through the controller NODE (controller-node-and-
-// fifo-edges §3) instead of its own actuate loop. Three concerns:
+// `startServo`), now pushing through the controller NODE instead of its own
+// actuate loop. Three concerns:
 //   (1) NUMERIC EQUIVALENCE — the PID2D velocity-form step (ki = kp, kp = kd = 0)
 //       reproduces the original hand-rolled `pos += rel*kp`, and the no-marker
 //       branch reproduces the overshoot-guarded `backToCenter` return-to-origin.
 //       The re-base source moved from `c.pos` to `update()`'s predicted return
-//       (seeded from `c.pos` on the first tick) — bit-identical under A-30.
-//   (2) OVERRIDE — the ruled slot through the servo: while a per-eye override is
+//       (seeded from `c.pos` on the first tick) — bit-identical.
+//   (2) OVERRIDE — the override slot through the servo: while a per-eye override is
 //       held the control law is skipped and the output is pinned; on release the
 //       servo resumes FROM the released pose (no snap-back).
 //   (3) GRAPH WIRING — each eye registers a `pid` node + its detect→pid and
@@ -68,7 +68,7 @@ class FakeController {
     this.pos.right = { ...p.right };
     return { ...this.pos };
   }
-  // Identity prediction — the servo re-bases on this return; A-30 says it equals
+  // Identity prediction — the servo re-bases on this return; it equals
   // the actuate readback (here trivially so).
   predictVolts(p: { left: Pos; right: Pos }) {
     return { left: { ...p.left }, right: { ...p.right } };
@@ -173,7 +173,7 @@ describe("marker servo — numeric equivalence with the original proportional up
 
 // --- (2) override semantics through the servo --------------------------------
 
-describe("marker servo — ruled override slot (held pins output, release resumes from pose)", () => {
+describe("marker servo — override slot (held pins output, release resumes from pose)", () => {
   it("while held: skips the control law and pins the output; on release: resumes from the released pose", async () => {
     fake.pos.left = { x: 0, y: 0 };
     const L = fakeTracker("SER-L");
@@ -181,7 +181,7 @@ describe("marker servo — ruled override slot (held pins output, release resume
       originLeft: () => ({ x: 0, y: 0 }),
     });
 
-    // Engage the ruled slot directly (the path the module's `pidOverride`
+    // Engage the override slot directly (the path the module's `pidOverride`
     // command drives via `applyPidOverride`): the marker is visible but must be
     // IGNORED while overridden.
     servo.override.left!.engage({ x: 7, y: 8 });

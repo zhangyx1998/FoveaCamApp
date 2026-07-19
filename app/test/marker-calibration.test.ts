@@ -1,4 +1,4 @@
-// Unit coverage for the shared marker-calibration primitives (A-P4) used by
+// Unit coverage for the shared marker-calibration primitives used by
 // calibrate-extrinsic / calibrate-drift / calibrate-distortion. The two native
 // value imports (`MarkerTracker`, `MarkerDetector`) are mocked so importing the
 // module doesn't pull the addon — the primitives under test are pure and run

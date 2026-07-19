@@ -1,4 +1,4 @@
-// Structured timing spans (docs/history/refactor/orchestrator.md §7.1 S5): the
+// Structured timing spans: the
 // `span()`/`spans()` ring in `orchestrator/diagnostics.ts`, `Hub.reportSpan`'s
 // live broadcast (same pattern as `reportError`), and `ServerSession`'s
 // generic "activate -> first frame" measurement.
@@ -54,7 +54,7 @@ describe("Hub.reportSpan", () => {
     const chClient = new Channel(epB);
     // `Hub.attach` expects a real `MessagePortMain` (Electron-only); reach
     // into the private `channels` set directly instead — the same one
-    // `reportError` (already tested via code review) broadcasts over.
+    // `reportError` (already tested) broadcasts over.
     (hub as any).channels.add(chServer);
 
     const received: unknown[] = [];

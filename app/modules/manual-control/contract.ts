@@ -63,10 +63,10 @@ export type VoltPair = { l: Pos; r: Pos };
 
 export const manualControl = defineContract({
   state: {
-    /** Leased camera serials per role (C-22) — raw center preview binds to the
+    /** Leased camera serials per role — raw center preview binds to the
      *  `camera:<serial>` pipe via `usePipeFrame`. Set on acquire. */
     serials: {} as Partial<Record<"L" | "C" | "R", string>>,
-    /** The advertised `undistort:<serial>` pipe id while active (C-23, real-1g) —
+    /** The advertised `undistort:<serial>` pipe id while active —
      *  null when unadvertised (no calibration); renderer falls back to the raw
      *  `camera:<serial>` pipe. */
     undistortPipe: null as string | null,
@@ -84,8 +84,7 @@ export const manualControl = defineContract({
      *  hardware-triggered L/R pairs on the MCU position stream; the intent
      *  latches and the session engages when preconditions permit (v2 controller
      *  + native stream + leased triple), surfacing `trigger_blocked` while it
-     *  waits. No pairing/staleness here (manual-control has no match-join).
-     *  RIG-GATED. */
+     *  waits. No pairing/staleness here (manual-control has no match-join). */
     trigger_sync: false as boolean,
     // Capture parameters.
     cap_stack: 5, // frames averaged per capture
@@ -110,7 +109,7 @@ export const manualControl = defineContract({
     // Control-path latency — `c.actuate()` round-trip, throttled like `volt`.
     perf: { actuateMs: { mean: 0, max: 0 } as Stat },
     /** Trigger-sync readout — non-null exactly while ENGAGED (spec
-     *  §trigger-sync); published at the volt-telemetry throttle. RIG-GATED. */
+     *  §trigger-sync); published at the volt-telemetry throttle. */
     trigger: null as TriggerTelemetry | null,
     /** Human-readable reason trigger-sync engagement is WAITING (intent on,
      *  preconditions unmet, or the last engage attempt failed); null when

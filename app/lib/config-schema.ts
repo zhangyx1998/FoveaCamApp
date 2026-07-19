@@ -18,7 +18,7 @@ export const APP_CONFIG_PATH: string[] = ["config"];
 
 // --- record compression (RECORDING START; @orchestrator/record-compression) ---
 
-/** The ruled recording-compression methods (extensible union — more may come,
+/** The recording-compression methods (extensible union — more may come,
  *  none besides zlib now). "none" = raw uncompressed streams; "zlib" = per-frame
  *  zlib CompressStream (recorder consumes the `/zlib` sibling). */
 export const RECORD_COMPRESSIONS = ["none", "zlib"] as const;
@@ -38,10 +38,9 @@ export function coerceRecordCompression(value: unknown): RecordCompression {
 }
 
 // --- prediction rate (GLOBAL; @orchestrator/prediction-rate) ------------------
-// docs/proposals/prediction-compose-node.md ruling 2 — the native IMM brick's
-// free-running emit rate.
+// The native IMM brick's free-running emit rate.
 
-/** Prediction-rate clamp window (Hz), proposal ruling 2. */
+/** Prediction-rate clamp window (Hz). */
 export const PREDICTION_RATE_MIN = 60;
 export const PREDICTION_RATE_MAX = 1000;
 
@@ -51,21 +50,19 @@ export const PREDICTION_RATE_MAX = 1000;
 export const DEFAULT_PREDICTION_RATE_HZ = 600;
 
 // --- serial-latency compensation (GLOBAL; @orchestrator/serial-latency) -------
-// docs/proposals/serial-rate-governor.md Part 4.
 
 /** Serial-latency compensation toggle default = OFF (byte-identical fixed
  *  lookahead behavior until the operator opts in). */
 export const DEFAULT_SERIAL_LATENCY_COMP = false;
 
 /** Auto-close a projection window when ALL panes have terminated
- *  (projection-split-view.md deliverable 6; renderer-only consumer). */
+ *  (renderer-only consumer). */
 export const DEFAULT_PROJECTION_AUTO_CLOSE = true;
 
 // --- profiler hover-card mode (GLOBAL; renderer-only, profiler graph panel) ---
-// docs/proposals/profiler-graph-handrolled.md ruling 8 — the profiler node
-// graph's hover-detail card behavior.
+// The profiler node graph's hover-detail card behavior.
 
-/** The ruled profiler hover-card behaviors (extensible union). "follow" = the
+/** The profiler hover-card behaviors (extensible union). "follow" = the
  *  card follows the cursor (quadrant-flipped to stay in view); "corner" = the
  *  card snaps to a container corner that does not cover the hovered element. */
 export const PROFILER_HOVER_CARD_MODES = ["follow", "corner"] as const;

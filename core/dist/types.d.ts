@@ -44,10 +44,10 @@ export class Stream<T> extends CoreObject<Stream<T>> {
     [Symbol.asyncIterator](): AsyncIterableIterator<T>;
 }
 
-// ---- Native port/pipe substrate (docs/proposals/native-port-pipe.md) --------
+// ---- Native port/pipe substrate --------
 
 /**
- * Per-link-type options (ruled discriminated union — per-type params cannot
+ * Per-link-type options (discriminated union — per-type params cannot
  * cross): `latest` = latest-wins shedding (default); `fifo` = lossless bounded
  * blocking queue with producer backpressure (`depth`, default 8); `ring` =
  * bounded drop-oldest, non-blocking producer (`size`, default 8). Validated
@@ -75,8 +75,8 @@ export interface LinkProbe {
     open: boolean;
     /** Latest links only: the channel slot currently pins an undelivered
      *  payload. With take-semantics this is true only between a write and
-     *  its readout — a drained link on a stalled upstream reads false
-     *  (Leaky retention fix, 2026-07-11). Always false for fifo/ring. */
+     *  its readout — a drained link on a stalled upstream reads false.
+     *  Always false for fifo/ring. */
     held: boolean;
 }
 
@@ -112,7 +112,7 @@ export interface OutPort<T> extends CoreObject<OutPort<T>> {
 /** A brick's typed IN port (`<name>_in` accessor — lazily created, cached).
  *  The phantom brand is REQUIRED (never materialized at runtime — in-ports
  *  only ever come from d.ts-typed accessors): an optional brand would let an
- *  OutPort structurally satisfy InPort, and the ruled out→out `pipe()` case
+ *  OutPort structurally satisfy InPort, and the out→out `pipe()` case
  *  must fail vue-tsc. */
 export interface InPort<T> extends CoreObject<InPort<T>> {
     readonly node: string;
@@ -122,14 +122,14 @@ export interface InPort<T> extends CoreObject<InPort<T>> {
     /** Phantom payload brand only — never materialized at runtime. Function-
      *  typed so `T` sits in BOTH variance positions (invariant): structurally
      *  overlapping payloads (e.g. ImmPrediction ⊃ TrackResult) must not
-     *  unify across lanes — the runtime tags would reject what a covariant
-     *  brand would let compile. */
+     *  unify — the runtime tags would reject what a covariant brand would
+     *  let compile. */
     readonly __payload: (payload: T) => T;
 }
 
-/** The `compose.volt_out → controller.pos_in` link payload (native-compose-
- *  controller.md): a commanded per-eye mirror pose in FINAL volts. Phantom
- *  brand for the port harness; runtime tag "volts". */
+/** The `compose.volt_out → controller.pos_in` link payload: a commanded
+ *  per-eye mirror pose in FINAL volts. Phantom brand for the port harness;
+ *  runtime tag "volts". */
 export interface MirrorVolts {
     left: { x: number; y: number };
     right: { x: number; y: number };

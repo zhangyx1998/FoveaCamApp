@@ -5,7 +5,7 @@
 // -------------------------------------------------------
 //
 // The always-on system session. Process-wide concerns and the `core` smoke
-// test; also the cross-process camera handoff (`releaseCameras`, §12.1 C2) for
+// test; also the cross-process camera handoff (`releaseCameras`) for
 // renderer modules that still open cameras directly.
 
 import { defineSession, type ServerSession } from "../runtime.js";
@@ -25,7 +25,7 @@ import { startLoopLagProbe } from "@lib/util/rolling";
 const LOOP_LAG_PUBLISH_INTERVAL_MS = 1000; // ≤ 1 Hz per the perf-substrate constraint
 
 /**
- * Sessions to force-idle before the registry hands cameras back (§12.3 R4).
+ * Sessions to force-idle before the registry hands cameras back.
  * `frameStats` aggregates every connected channel's per-topic frame counters
  * (`Hub.frameStatsSnapshot`) — kept as a callback rather than passing `Hub`
  * itself so this session stays easy to unit-test against a stub.
@@ -36,9 +36,9 @@ export function systemSession(
     string,
     FrameTopicStats
   >,
-  /** The live node-graph builder (C-24, ruled Q2: folded into the 1 Hz
-   *  perfSnapshot). Optional so existing tests/callers stay valid; index.ts
-   *  injects `buildTopology` over `Pipe.list()` + the workloads map. */
+  /** The live node-graph builder (folded into the 1 Hz perfSnapshot).
+   *  Optional so existing tests/callers stay valid; index.ts injects
+   *  `buildTopology` over `Pipe.list()` + the workloads map. */
   graph?: (workloads: Record<string, WorkloadSnapshot>) => GraphTopology,
 ): ServerSession<typeof system> {
   return defineSession("system", system, (s) => {
@@ -59,29 +59,26 @@ export function systemSession(
           // camera-owning session first (orderly lease release) so a renderer
           // needing exclusive access isn't racing an async idle release.
           // `registry.releaseAll()` is a backstop for any handle outside
-          // session control. See §12.1 C2 / §12.3 R4.
+          // session control.
           for (const c of cameraOwning()) c.dispose();
           await releaseAll();
         },
         async perfSnapshot(): Promise<PerfSnapshot> {
-          // Workload meters (docs/history/refactor/workload-metering.md §2) — the JS
-          // meters from `@orchestrator/metering`, PLUS the native free-running
-          // threads probed out-of-loop (WS1 real-1c/1d, A-24 Stage 3): C's SHM
-          // pipe producers + B's KCF tracker, injected via `native-probes` so
+          // Workload meters — the JS meters from `@orchestrator/metering`, PLUS
+          // the native free-running threads probed out-of-loop: the native SHM
+          // pipe producers + the KCF tracker, injected via `native-probes` so
           // this builder stays `core`-free. Same `WorkloadSnapshot` shape →
           // the profiler renders native streams identically to JS ones.
           const workloads = { ...workloadsSnapshot(), ...nativeProbes() };
           // The graph fold must never reject the whole snapshot: a single
-          // malformed workload row once blanked the profiler AND failed
-          // every export in every app (rig 2026-07-08). Degrade to a
-          // graph-less snapshot and surface the error instead.
+          // malformed workload row must not blank the profiler or fail export.
+          // Degrade to a graph-less snapshot and surface the error instead.
           let topology: GraphTopology | undefined;
           try {
             topology = graph?.(workloads);
           } catch (e) {
-            // value-sweep 2026-07-11 (error-broadcast finding tail): route
-            // through report() so the failure reaches the renderer error tray
-            // instead of dying in an unwatched orchestrator console.
+            // Route through report() so the failure reaches the renderer error
+            // tray instead of dying in an unwatched orchestrator console.
             report("system", `graph topology fold failed: ${(e as Error).message}`);
           }
           return {
@@ -93,11 +90,11 @@ export function systemSession(
             workloads,
             storeHub: writeCounts(),
             spans: [...spans()],
-            // Unified time (proposal §3): clock-calibration health rides the
+            // Unified time: clock-calibration health rides the
             // same 1 Hz poll — the profiler shows which clocks are aligned.
             clocks: calibrationsSnapshot(),
-            // C-24: the live node graph, riding the same 1 Hz poll (ruled Q2) —
-            // stats keyed onto nodes from the SAME workloads map above.
+            // The live node graph, riding the same 1 Hz poll — stats keyed onto
+            // nodes from the SAME workloads map above.
             ...(topology ? { graph: topology } : {}),
           };
         },

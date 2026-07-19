@@ -6,10 +6,10 @@
 #pragma once
 
 // The single home for the Fovea SHM WRITE path — the RW segment mapping +
-// header init + seqlock publish. Extracted from `ShmRing.cpp` (C-16) so both
-// the live preview `WriterCore` and the new pipe `Publisher` share ONE writer
-// (mirrors the `ShmRead` read-side split). The seqlock discipline lives here
-// once; a fix lands on every writer at the same time.
+// header init + seqlock publish. Both the live preview `WriterCore` and the
+// pipe `Publisher` share ONE writer (mirrors the `ShmRead` read-side split).
+// The seqlock discipline lives here once; a fix lands on every writer at the
+// same time.
 //
 // System-library-only (ShmLayout + libc/POSIX); no N-API / OpenCV / Aravis /
 // GLib / libusb — safe to compile anywhere the layout is used. Naming, the
@@ -70,7 +70,7 @@ public:
                    uint32_t activeWidth = 0, uint32_t activeHeight = 0,
                    uint32_t originX = 0, uint32_t originY = 0,
                    uint64_t payloadBytes = 0);
-  /** Release-ordered `state` store — the symmetric-close signal (C-16). Call
+  /** Release-ordered `state` store — the symmetric-close signal. Call
    *  after the final `publish()`; consumers observe it on their next read. */
   void setState(PipeState state);
 };

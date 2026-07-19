@@ -5,7 +5,7 @@
 // -------------------------------------------------------
 //
 // Multi-fovea tracking surface — the typed boundary shared by renderer +
-// orchestrator. Real synced frame capture is Stage-F-gated. Behavior spec:
+// orchestrator. Real synced frame capture requires hardware. Behavior spec:
 // docs/spec/multi-fovea.md.
 
 import { cmd, defineContract } from "@lib/orchestrator/protocol";
@@ -53,7 +53,7 @@ export type MultiFoveaCaptureResult =
   | { ok: true }
   | { ok: false; reason: string };
 
-/** Exposure-derived trigger budget (P6, `pairTriggerBudget`): the pulse +
+/** Exposure-derived trigger budget (`pairTriggerBudget`): the pulse +
  *  pacing the session derived from the leased pair's CONFIGURED exposure —
  *  null until a triple is leased. */
 export type TriggerBudgetTelemetry = {
@@ -92,7 +92,7 @@ export const DEFAULT_PRESET_LOCATIONS: PresetLocation[] = [
 
 /** Conservative preset-angle bound (deg, symmetric) — the A2V DAC assert THROWS
  *  rather than clamps, so every preset entry point clamps here (spec §targets).
- *  RIG-TUNE to the mirror's real safe deflection once confirmed. */
+ *  Tune to the mirror's real safe deflection once confirmed on hardware. */
 export const PRESET_ANGLE_LIMIT_DEG = 10;
 
 /** Clamp one preset angle component into the safe symmetric range. */
@@ -115,10 +115,10 @@ export function demoPresetTarget(index: number): MultiFoveaTargetConfig {
 
 export const multiFovea = defineContract({
   state: {
-    /** Leased camera serials per role (C-22) — raw center preview binds to the
+    /** Leased camera serials per role — raw center preview binds to the
      *  `camera:<serial>` pipe via `usePipeFrame`. Set on acquire. */
     serials: {} as Partial<Record<"L" | "C" | "R", string>>,
-    /** The advertised `undistort:<serial>` pipe id while active (C-23, real-1g) —
+    /** The advertised `undistort:<serial>` pipe id while active —
      *  null when unadvertised (no calibration); renderer falls back to the raw
      *  `camera:<serial>` pipe. */
     undistortPipe: null as string | null,
@@ -127,11 +127,11 @@ export const multiFovea = defineContract({
     /** CMD_FRAME trigger pulse width — DISPLAY/PERSIST unit is ns; the wire
      *  (`FrameArg.pulse`) is µs, so the session divides by 1000 at the frame
      *  boundary. While `pulse_auto` holds, the session derives it from the
-     *  pair's configured exposure (P6); a client write (the Pulse slider) flips
+     *  pair's configured exposure; a client write (the Pulse slider) flips
      *  `pulse_auto` off — manual override. */
     pulse_ns: 1000000,
-    /** Derive `pulse_ns` from the leased pair's exposure config (the P6 ruled
-     *  default). Any client write to `pulse_ns` sets this false. */
+    /** Derive `pulse_ns` from the leased pair's exposure config. Any client
+     *  write to `pulse_ns` sets this false. */
     pulse_auto: true as boolean,
     /** Trigger SETTLE hold (µs) — pushed into every CMD_FRAME (spec §settle). */
     settle_time_us: 0,
@@ -149,7 +149,7 @@ export const multiFovea = defineContract({
     size: { width: 0, height: 0 } as Size,
     targets: [] as MultiFoveaTargetTelemetry[],
     scheduler: { inFlight: 0, frames: 0, rejects: 0, timeouts: 0 },
-    /** Exposure-derived trigger budget (P6) — null until a triple is leased. */
+    /** Exposure-derived trigger budget — null until a triple is leased. */
     budget: null as TriggerBudgetTelemetry | null,
     perf: { trackMs: { mean: 0, max: 0 } as Stat },
     // Capture (shared mixin; spec §capture) — the degraded raw-stack shot.

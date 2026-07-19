@@ -27,10 +27,9 @@ export const STREAM_CAPACITY = 64;
 export const STREAM_MIN_UPDATE_INTERVAL_MS = 1;
 
 // Minimum firmware/protocol version exposing the targeted MEMS-recovery reset
-// (System::Reset MEMS type — right-dac-freeze M2,
-// docs/dev/right-dac-freeze-2026-07-12.md). Older firmware REJects the unknown
-// enum, so `recoverMems()`/`v21Capable` gate on this — the v2Capable
-// major-only version gate taken one level finer (major.minor.patch).
+// (System::Reset MEMS type). Older firmware REJects the unknown enum, so
+// `recoverMems()`/`v21Capable` gate on this — the v2Capable major-only version
+// gate taken one level finer (major.minor.patch).
 export const RECOVER_MEMS_MIN_VERSION = { major: 2, minor: 1, patch: 0 } as const;
 
 /** `a >= b` over (major, minor, patch) firmware versions. */
@@ -55,7 +54,7 @@ function clonePos(pos: Pos): Pos {
  *  locally-computed `channels()` array — into an {x,y} volt pair (the
  *  differential pairs 0-1 / 2-3 via `dac2volt`). Shared by `actuate()`'s
  *  readback decode and `predictVolts()` so the streamed local prediction is
- *  byte-for-byte the same math as the awaited readback (A-30). */
+ *  byte-for-byte the same math as the awaited readback. */
 function decodeChannels(chan: readonly number[]): Pos {
   return { x: dac2volt(chan[0] - chan[1]), y: dac2volt(chan[2] - chan[3]) };
 }
@@ -106,7 +105,7 @@ export class StreamUpdateGate {
   }
 }
 
-/** A CMD_STREAM handle (docs/history/refactor/synced-capture.md §3.2/§6): a named,
+/** A CMD_STREAM handle: a named,
  *  continuously-updatable mirror-position target. `update()` is fire-and-
  *  forget (seq=0, ~1kHz-safe) — it never resolves/rejects, matching the
  *  protocol's design (the firmware sends no response for it at all). */
@@ -131,18 +130,18 @@ export interface NativeMirrorSinkHandle {
  *  matching `actuate()`'s existing convention. Distinct from core's raw
  *  `FrameResult` (`core/Controller`), which is in wire units. */
 export interface FrameOutcome {
-  /** Stable per-capture frame identity (FIN `frame_id`, B-12) — binds this
+  /** Stable per-capture frame identity (FIN `frame_id`) — binds this
    *  outcome to the exact camera frame it produced, for downstream recorder
-   *  metadata (WS4 4b). */
+   *  metadata. */
   frameId: number;
   stream: number;
-  /** OWNER-APPLIED TRUSTED TIME (unified-time ruling 0): host-steady-domain
+  /** OWNER-APPLIED TRUSTED TIME (unified-time): host-steady-domain
    *  NANOSECONDS — the raw MCU µs ×1000 plus the controller's calibrated dt
    *  (0 until `setClockOffsetNs`, i.e. raw µs-resolution ns). Downstream
    *  nodes NEVER re-correct these. */
   tTrigger: bigint;
   tExposure: bigint;
-  /** Exposure-AVERAGED mirror voltage for this frame (B-12: MEMS voltage
+  /** Exposure-AVERAGED mirror voltage for this frame (MEMS voltage
    *  sampled at exposure start AND finish, then averaged), converted DAC→volts
    *  like `actuate()`. */
   left: Pos;
@@ -166,7 +165,7 @@ export class Controller {
    *  into its stats by this key on bind. */
   readonly port: string;
   private bias = 0;
-  // Owner-applied dt (unified-time ruling 0): host-steady-ns offset mapping
+  // Owner-applied dt (unified-time): host-steady-ns offset mapping
   // the MCU µs clock into the trusted domain. 0 until calibration (the ping
   // on connect); atomically swapped on mid-task re-calibration — outcomes
   // decoded after the swap carry the new offset.
@@ -184,22 +183,20 @@ export class Controller {
   private firmwareVersion: FirmwareVersion | null = null;
   private _pos: { left: Pos; right: Pos } = origin;
   private readonly streamIds = new StreamIdPool();
-  // Live-stream telemetry (docs/history/refactor/orchestrator.md §7.1 S4 added
-  // scope): `count` accumulates between `streamSnapshot()` calls, which
-  // reset it — the caller's sampling interval turns the raw count into a
-  // rolling Hz. `left`/`right` are the last-sent target, for the
+  // Live-stream telemetry: `count` accumulates between `streamSnapshot()`
+  // calls, which reset it — the caller's sampling interval turns the raw
+  // count into a rolling Hz. `left`/`right` are the last-sent target, for the
   // profiler's per-stream XY position pad.
   private readonly streamStats = new Map<
     number,
     { count: number; left: Pos; right: Pos }
   >();
-  /** Observe-only serial WRITE meter (A-29). One `packets` output is emitted on
+  /** Observe-only serial WRITE meter. One `packets` output is emitted on
    *  every packet pushed to the wire — the awaited `set`/`actuate`/stream
    *  create+terminate + `frame` paths AND the fire-and-forget stream `update`
    *  hot path — so the serial send rate becomes a first-class
-   *  `perfSnapshot.workloads` row (`controller:<port>`) the A-26 profiler sorts
-   *  and flags. It was previously invisible (only `loopLag` hinted at the
-   *  ~40 Hz cap). The `actuate()` round-trip is also timed as busy. NEVER gates:
+   *  `perfSnapshot.workloads` row (`controller:<port>`) the profiler sorts
+   *  and flags. The `actuate()` round-trip is also timed as busy. NEVER gates:
    *  `emit`/`measure` are safe no-ops post-dispose and always run the wrapped
    *  send unchanged (the metering "observe, never gate" contract). */
   private readonly serialMeter: WorkloadHandle;
@@ -220,8 +217,7 @@ export class Controller {
     const device = this.device;
     this.ready = (async () => {
       // Must run before anything two-phase-sensitive (createStream/frame,
-      // and actuate/trigger's `.accepted`) — see P3.1a,
-      // docs/history/refactor/synced-capture.md §9.3. Never throws on a version
+      // and actuate/trigger's `.accepted`). Never throws on a version
       // *mismatch* (only on a transport failure): old firmware just keeps
       // device.v2Capable false (v1-compat).
       // Retain the resolved version for the finer-grained recover gate
@@ -250,7 +246,7 @@ export class Controller {
     return this.device.v2Capable;
   }
   /** True once `ready` has confirmed firmware >= 2.1.0 — the version that adds
-   *  the System::Reset MEMS recovery type (right-dac-freeze M2). Finer-grained
+   *  the System::Reset MEMS recovery type. Finer-grained
    *  sibling of `v2Capable` (which gates on the major number only); gates
    *  `recoverMems()` and the renderer's "Recover mirror" affordance. */
   get v21Capable() {
@@ -259,9 +255,8 @@ export class Controller {
       versionAtLeast(this.firmwareVersion, RECOVER_MEMS_MIN_VERSION)
     );
   }
-  /** Cumulative serial byte/packet counters (docs/history/refactor/orchestrator.md
-   *  §7.1 S4 added scope) — the caller derives rates by diffing successive
-   *  samples, same pattern as `streamSnapshot()`'s Hz. */
+  /** Cumulative serial byte/packet counters — the caller derives rates by
+   *  diffing successive samples, same pattern as `streamSnapshot()`'s Hz. */
   get stats() {
     return this.device.stats;
   }
@@ -292,7 +287,7 @@ export class Controller {
   private get<T>(prop: any) {
     if (!this.device.connected) throw new Error("Controller not connected");
     // A GET is one serial write too — same observe-only accounting as set()
-    // below (A-29; covers readTimestamp's calibration pings).
+    // below (covers readTimestamp's calibration pings).
     this.serialMeter.emit("packets");
     return this.device.get(prop) as Promise<T>;
   }
@@ -321,12 +316,11 @@ export class Controller {
     this._enabled = false;
   }
 
-  /** Re-initialize the MEMS DACs WITHOUT dropping the session: the host half of
-   *  right-dac-freeze mitigation M2 (docs/dev/right-dac-freeze-2026-07-12.md).
+  /** Re-initialize the MEMS DACs WITHOUT dropping the session.
    *  Sends System::Reset(MEMS = 2), which runs the MEMS::enable() re-init
    *  (AD5664R software reset + reference/DAC power-on + neutral bias) WITHOUT
    *  cycling the driver rail or clearing the stream table — the app-side
-   *  "recover mirror" action and the H1 bench discriminator. Single-phase:
+   *  "recover mirror" action. Single-phase:
    *  resolves on ACK, propagates the firmware REJ as a rejection (the firmware
    *  REJs when the system is disabled). Requires firmware >= 2.1.0 (older
    *  firmware REJects the unknown enum), guarded locally like createStream()'s
@@ -342,7 +336,7 @@ export class Controller {
     await this.set(Protocol.System.Reset, "MEMS");
   }
 
-  /** Clock-calibration ping (unified-time proposal §2, Rulings 4): the MCU's
+  /** Clock-calibration ping (unified-time): the MCU's
    *  current clock in MICROSECONDS as a uint64 `bigint`, stamped
    *  firmware-side at packet parse time so the reading's jitter stays at the
    *  serial-latency floor. RAW BY CONTRACT — this is the calibration
@@ -354,7 +348,7 @@ export class Controller {
     return ts.valueOf();
   }
   /** Resets the MCU clock counter to 0 (SET System.Timestamp) — the ONLY
-   *  clock reset since v1.1 (enable() no longer resets time). Invalidates
+   *  clock reset (enable() does not reset time). Invalidates
    *  any prior offset calibration: re-ping after using this. */
   async resetTimestamp(): Promise<void> {
     await this.set(Protocol.System.Timestamp, 0n);
@@ -374,8 +368,8 @@ export class Controller {
 
   async actuate(pos: { left?: Pos; right?: Pos }, settleTime = 0) {
     // `settle_time`/`complete_time` are the NATIVE core `Device.set` protocol
-    // field names (B-owned) — they stay snake_case at this boundary; only the
-    // wire-facing param/return are camelCased (A-P7).
+    // field names — they stay snake_case at this boundary; only the
+    // wire-facing param/return are camelCased.
     this.serialMeter.emit("packets");
     // `measure` times the actuate round-trip as busy while running the send
     // unchanged (span stays open until the awaited set settles).
@@ -394,8 +388,8 @@ export class Controller {
   /**
    * Locally predict the actuated volts for `pos` WITHOUT a serial round-trip:
    * the exact `channels()`→`dac2volt` math `actuate()` applies to the ACK
-   * readback, assuming the firmware echoes the commanded channels (A-30 ruling
-   * Q1; RIG-VERIFY predicted vs a sampled real readback). This lets the fire-
+   * readback, assuming the firmware echoes the commanded channels (verify the
+   * prediction against a sampled real readback on hardware). This lets the fire-
    * and-forget streaming actuation path (the controller thread node,
    * `controller-node.ts`) publish telemetry /
    * fovea-wrap volts without paying the awaited readback the streaming protocol
@@ -423,13 +417,13 @@ export class Controller {
   }
 
   // --- Protocol v2: streams + synced-frame requests -----------------------
-  // docs/history/refactor/synced-capture.md §3.2/§6. Deliberately independent of
-  // `this._pos`/`actuate()` — mixing Actuate writes with an active stream
-  // leaves `Streams::snapshot()` reporting the stream's target rather than
-  // the DAC's actual (Actuate-set) state (§9 FW5); callers should pick one.
+  // Deliberately independent of `this._pos`/`actuate()` — mixing Actuate
+  // writes with an active stream leaves `Streams::snapshot()` reporting the
+  // stream's target rather than the DAC's actual (Actuate-set) state; callers
+  // should pick one.
 
   /** Creates a CMD_STREAM (id auto-allocated, 0..63 — Streams::CAPACITY).
-   *  ACK-backed (protocol-level single-phase: ACK/REJ, no FIN — §3.2/§9). */
+   *  ACK-backed (protocol-level single-phase: ACK/REJ, no FIN). */
   async createStream(pos: { left: Pos; right: Pos }): Promise<StreamHandle> {
     if (!this.device.connected) throw new Error("Controller not connected");
     if (!this.device.v2Capable)
@@ -496,7 +490,7 @@ export class Controller {
    * device's write seam — the UPDATE path (gate + channels() + fire-and-
    * forget + history) then runs entirely native off a port link's delivery
    * thread. JS KEEPS stream lifecycle ownership: `close()` releases the sink
-   * (writes stop) and TERMINATEs the stream (FW5 + quiesce unchanged).
+   * (writes stop) and TERMINATEs the stream (quiesce unchanged).
    */
   async createNativeMirrorSink(
     pos: { left: Pos; right: Pos },
@@ -522,13 +516,13 @@ export class Controller {
     };
   }
 
-  /** Issues a CMD_FRAME triggered-capture request on `stream` (§3.2/§5).
+  /** Issues a CMD_FRAME triggered-capture request on `stream`.
    *  Two-phase: `.accepted` resolves on ACK (queue position; rejects on
    *  REJ) independently of the returned promise, which resolves on FIN with
-   *  the exposure-AVERAGED mirror voltage (B-12; converted to volts like
+   *  the exposure-AVERAGED mirror voltage (converted to volts like
    *  `actuate()`) plus the FIN `frameId` and the MCU trigger/exposure
    *  timestamps — feed these to `sync.ts`'s `calibrate`/`matchPair` for L/R
-   *  pairing, and `frameId` binds the voltage to the recorded frame (4b). */
+   *  pairing, and `frameId` binds the voltage to the recorded frame. */
   frame(opts: {
     stream: number;
     cameras?: CameraName[] | number;
@@ -552,7 +546,7 @@ export class Controller {
       return {
         frameId: result.frame_id,
         stream: result.stream,
-        // Owner-applied trusted time (unified-time ruling 0): raw MCU µs →
+        // Owner-applied trusted time (unified-time): raw MCU µs →
         // host-steady ns at THE decode boundary. No downstream correction.
         tTrigger: result.t_trigger * 1000n + this.clockOffsetNs,
         tExposure: result.t_exposure * 1000n + this.clockOffsetNs,

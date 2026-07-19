@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// unified-time-and-topology §6: the consolidated `Topology.report()` NAPI —
+// The consolidated `Topology.report()` NAPI —
 // one NodeReport[] (graph-contract shape) for every live native brick +
 // advertised pipe. NO hardware (fake camera). Proves:
 //   1. CHAIN EDGES ARE ACTUAL — convert←camera/<serial>, undistort←convert,
@@ -21,7 +21,7 @@
 //   5. COMPAT SURFACES INTACT — Pipe.list()/Pipe.probeAll()/converterProbeAll
 //      keep working unchanged next to Topology.report().
 //   6. LIVENESS — detached bricks/dropped pipes vanish from the report.
-//      ORDERLY teardown (B-20) → natural exit 0.
+//      ORDERLY teardown → natural exit 0.
 // Run UNSANDBOXED: /opt/homebrew/bin/node core/test/23-topology-report.ts
 
 import assert from "node:assert/strict";

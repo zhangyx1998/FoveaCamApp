@@ -15,7 +15,7 @@
 // advertise/capture+recording) + manual-control (openPosition push model,
 // controller-absent retry) + disparity-scope (chained tracker + reducer +
 // finite-difference Jacobian, per-eye here). NO Vue (orchestrator zero-Vue
-// boundary). RIG-GATED: tracker + servo behavior is unverified on hardware.
+// boundary). Tracker + servo behavior is unverified on hardware.
 
 import { type ServerSession } from "@orchestrator/runtime";
 import {
@@ -83,14 +83,14 @@ import { eyeJInv } from "./jacobian";
 const EYES = ["L", "R"] as const;
 type TrackerType = "hybrid" | "kcf";
 
-// --- RIG-TUNABLE servo constants (stage-f servo pass pins these) -------------
+// --- Hardware-tunable servo constants (a servo pass on hardware pins these) ---
 /** Effective fovea-view magnification fed to `deriveFoveaIntrinsics` for the
  *  focal used in the px→volt model. The fovea views are homography-warped to
  *  the WIDE undistorted frame (≈ wide focal ⇒ zoom 1). If a rig taps the RAW
  *  (natively magnified) fovea pipe instead, set this to the measured
- *  magnification. RIG-TUNABLE. */
+ *  magnification. Tune on hardware. */
 const FOVEA_TRACK_ZOOM = 1;
-/** Per-tick volt saturation for each eye's servo step (anti-slam). RIG-TUNABLE. */
+/** Per-tick volt saturation for each eye's servo step (anti-slam). Tune on hardware. */
 const SERVO_MAX_STEP_V = 5.0;
 /** Fallback voltage envelope when no controller is bound (controller.dv). */
 const DEFAULT_DV = 170.0;
@@ -193,7 +193,7 @@ export default function splitTrackingSession(
 
     /** The eye's px→volt inverse Jacobian at its CURRENT commanded volt — the
      *  finite-difference geometric model (jacobian.ts). Null (⇒ servo holds)
-     *  without a calibrated wide intrinsic. RIG-GATED sign/scale. */
+     *  without a calibrated wide intrinsic. Sign/scale tuned on hardware. */
     function jInvFor(eye: Eye): Mat2 | null {
       if (!triple || !triple.undistort) return null;
       const angle0 = triple.conv.V2A[eye](volt[eye]);
@@ -512,7 +512,7 @@ export default function splitTrackingSession(
 
       // --- capture + recording (calibrate-extrinsic port, raw stacks) --------
       // Persistent center pipe (refcount++ keeps the producer live for the
-      // worker's one-shot read); center = the convert pipe (proposal §capture).
+      // worker's one-shot read); center = the convert pipe.
       const capCenterId = nodeId.convert(t.leases.C.camera.serial);
       const capCenter = broker.connect(capCenterId);
       scope.defer(() => void broker.disconnect(capCenterId));

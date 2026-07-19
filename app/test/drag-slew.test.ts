@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Drag slew math (value-sweep 2026-07-11 addendum `disparity-drag-slew`):
+// Drag slew math:
 // first-order approach toward the pointer target — monotonic, converging,
 // epsilon-terminating (exact target once settled, then quiet).
 
@@ -78,14 +78,13 @@ describe("slewStep", () => {
 
 });
 
-// ---- D1 regression (docs/dev/mirror-flicker-2026-07-12.md) --------------------
-// The drag flicker: THREE ~60 Hz writers rebased the compose floor during a
-// drag — pointer + match slewed, but trackerFeed.onDrag pushed the RAW target
-// pose, alternating the floor between two trajectories separated by the slew
-// lag. Post-fix, every drag writer routes through ONE DragSlew instance (the
-// production state machine below), so the rebased vPid sequence is MONOTONE
-// along the slew trajectory. The pre-fix wiring is modeled explicitly to pin
-// that the monotonicity detector catches exactly that failure.
+// ---- drag-writer regression ----
+// Every drag writer must route through ONE DragSlew instance (the production
+// state machine below), so the rebased vPid sequence is MONOTONE along the slew
+// trajectory. Without it, multiple ~60 Hz writers (pointer + match slewed, but a
+// RAW target pose from onDrag) alternate the floor between two trajectories
+// separated by the slew lag. The naive multi-writer wiring is modeled explicitly
+// to pin that the monotonicity detector catches exactly that failure.
 
 describe("DragSlew — D1 drag-writer regression", () => {
   /** Linear pixel→volt map standing in for followVolts (x-only motion). */
@@ -138,7 +137,7 @@ describe("DragSlew — D1 drag-writer regression", () => {
       commanded = slew.toward(commanded, follow(px));
       return commanded;
     };
-    // The OLD onDrag: pushes followVolts(center) RAW — ahead of the slew by
+    // The naive raw writer: pushes followVolts(center) RAW — ahead of the slew by
     // the lag, so the floor ping-pongs raw/slewed/raw/slewed…
     const rawWriter = (px: number): SlewPose => {
       commanded = follow(px);

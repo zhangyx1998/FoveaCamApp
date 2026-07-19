@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Player descriptor routing (multi-fovea-recording ruling 6, wave I-2): json
+// Player descriptor routing: json
 // channels other than `telemetry` are DESCRIPTOR tracks — routed to the
 // `emitDescriptor` hook keyed by topic (never mixed into the telemetry doc),
 // republished latest-before on a paused scrub, and safely absent when a seek

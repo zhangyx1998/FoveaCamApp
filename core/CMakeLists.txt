@@ -13,11 +13,11 @@ list(APPEND CMAKE_MODULE_PATH ${PROJECT_HOME}/scripts)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
-# Optimized-with-symbols, ALWAYS. This line was `Debug` (-g only, NO -O) from
-# 2025-10-11 until 2026-07-10 — every native brick ran at -O0; the recorder's
-# vector copies executed BYTE-BY-BYTE (~82 fps writer vs ~1500 fps at -O2, the
-# frame-drop root cause). `-g` stays: the crash handler's backtraces need
-# symbols. `-DDEBUG` stays: it only gates the env-controlled VERBOSE logging.
+# Optimized-with-symbols, ALWAYS. BUILD_TYPE is Debug but CMAKE_CXX_FLAGS_DEBUG
+# below forces -O2: at -O0 the recorder's vector copies run byte-by-byte
+# (~82 fps writer vs ~1500 fps at -O2). `-g` stays: the crash handler's
+# backtraces need symbols. `-DDEBUG` stays: it only gates the env-controlled
+# VERBOSE logging.
 set(CMAKE_BUILD_TYPE Debug)
 
 set(SRC_DIR ${PROJECT_HOME}/src)
@@ -32,8 +32,8 @@ add_definitions(${CXX_FLAGS})
 # When a Napi::Error can't be rethrown into JS (env terminating, or an
 # exception already pending), node-addon-api otherwise throws AGAIN inside a
 # noexcept frame -> libc++ "terminating due to uncaught exception of type
-# Napi::Error" -> SIGABRT (took the whole orchestrator down on the rig,
-# 2026-07-08). This define turns exactly those unthrowable states into no-ops.
+# Napi::Error" -> SIGABRT. This define turns exactly those unthrowable states
+# into no-ops.
 add_definitions(-DNODE_API_SWALLOW_UNTHROWABLE_EXCEPTIONS)
 
 # Dependencies
@@ -41,8 +41,8 @@ find_package(NodeApiHeaders REQUIRED)
 find_package(NodeAddonApi REQUIRED)
 find_package(LibUSB REQUIRED)
 find_package(Aravis REQUIRED)
-# multi-fovea-recording ruling 9: the compression brick uses system zlib (libz)
-# for per-frame intra-frame compression — no new dependency (CMake ships
+# The compression brick uses system zlib (libz) for per-frame intra-frame
+# compression — no new dependency (CMake ships
 # FindZLIB; libz is present on every target platform).
 find_package(ZLIB REQUIRED)
 find_package(OpenCV REQUIRED COMPONENTS

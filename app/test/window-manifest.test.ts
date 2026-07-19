@@ -1,5 +1,5 @@
-// Window manifest persist/consume + restore-plan logic (A-6, docs/history/refactor/
-// multi-window.md req. 6 / §4): the dev-restart flow's state carrier.
+// Window manifest persist/consume + restore-plan logic: the dev-restart
+// flow's state carrier.
 
 import { mkdtempSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";

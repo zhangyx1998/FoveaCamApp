@@ -2,11 +2,10 @@
 import { computed } from "vue";
 import { MARKER_PATTERNS } from "@lib/marker-patterns.generated";
 
-// Static bit-grid lookup (docs/history/refactor/orchestrator.md §7.1 Stage 3 T1) —
-// this was the last renderer-reachable `core` dependency: drawing a marker
-// only needs its dictionary's fixed pattern data, not a live
-// `core/Vision` `MarkerDetector`. Regenerate `MARKER_PATTERNS` (`app/
-// scripts/gen-marker-patterns.cjs`) to add a dictionary beyond "4X4_50".
+// Static bit-grid lookup — drawing a marker only needs its dictionary's fixed
+// pattern data, not a live `core/Vision` `MarkerDetector`. Regenerate
+// `MARKER_PATTERNS` (`app/scripts/gen-marker-patterns.cjs`) to add a dictionary
+// beyond "4X4_50".
 
 const props = defineProps<{
   id: number;

@@ -1,6 +1,5 @@
-// value-sweep-2026-07-11: the renderer error tray
-// (`error-broadcast-dead-ends-in-console`) + the `useSession().call()` default
-// rejection surface (`fire-and-forget-command-calls-drop-rejections`).
+// The renderer error tray + the `useSession().call()` default
+// rejection surface.
 //
 // `client.ts` runs DOM-only code at import (it registers a `window.foveaBridge`
 // down-report hook and a keydown listener at module scope), so a minimal

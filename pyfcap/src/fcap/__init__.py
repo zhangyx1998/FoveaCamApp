@@ -7,18 +7,17 @@
 
 Two on-disk formats, one API surface:
 
-- ``.fcap`` single-file containers (standard MCAP inside; the
-  recorder-container.md §2b schema) via :class:`FoveaReader` — including
-  the streaming recovery path for crash-truncated (footerless) files.
-  Legacy ``.fovea`` files use the identical container and read the same
-  way (the reader is extension-agnostic);
+- ``.fcap`` single-file containers (standard MCAP inside, the .fcap
+  container schema) via :class:`FoveaReader` — including the streaming
+  recovery path for crash-truncated (footerless) files. Legacy ``.fovea``
+  files use the identical container and read the same way (the reader is
+  extension-agnostic);
 - legacy ``.stream``/``.meta`` dump directories via
-  :class:`LegacyRecording` / :class:`LegacyStream`, absorbing the retired
-  per-dump ``stream-decoder.py`` template's decode logic;
+  :class:`LegacyRecording` / :class:`LegacyStream`;
 - :func:`convert_legacy` re-encodes a legacy dump as ``.fcap``.
 
-Distribution/import name ``fcap``; PyPI publishing is user-gated (check
-name availability at publish time).
+Distribution/import name ``fcap``; check PyPI name availability before
+publishing.
 """
 
 from .convert import convert_legacy

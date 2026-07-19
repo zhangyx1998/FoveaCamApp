@@ -4,8 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// fovea-fw-sim (docs/proposals/firmware-sim-harness.md): a host binary
-// running the REAL firmware translation units — firmware/src/{Protocol,
+// fovea-fw-sim: a host binary running the REAL firmware translation units — firmware/src/{Protocol,
 // Streams,Capture,Global,MEMS}.cpp — behind the thin HAL shim (hal.cpp /
 // shim/*.h). Owns a pty pair (prints `pty <slave-path>` on stdout; core's
 // Device opens the slave), and its main loop mirrors Firmware.cpp's exactly:
@@ -84,7 +83,7 @@ struct Edge {
 };
 
 // Index 0 = L (Board::camera[1]), 1 = R (Board::camera[2]) — the two
-// hardware-triggerable cameras (serial-protocol.md §5).
+// hardware-triggerable cameras.
 StrobeConfig strobes[2];
 std::vector<Edge> edges;
 std::mt19937 rng(42); // deterministic across runs

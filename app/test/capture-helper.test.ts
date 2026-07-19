@@ -4,8 +4,8 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Unit tests for the shared CAPTURE helper (capture-recorder-everywhere ruling
-// 3): the command round-trip + telemetry, the recording-vs-capture exclusivity
+// Unit tests for the shared CAPTURE helper: the command round-trip + telemetry,
+// the recording-vs-capture exclusivity
 // refusal, the "not ready" degradation, the burst-timeout rejection pass-through
 // (captureBusy always resets), and the extracted ON-DEMAND acquire sequence with
 // its reverse-order error unwind. A FAKE capture node (via the `createNode` seam)
@@ -108,7 +108,7 @@ function makeHelper(over: Partial<CaptureHelperDeps> = {}) {
   };
 }
 
-/** A SINGLE-STREAM helper (ruling 3, item 4): the `camera` dep switches the
+/** A SINGLE-STREAM helper: the `camera` dep switches the
  *  helper to the degenerate single-stream mode. `snapshot` builds a
  *  `rawSingleShot` (or null when no camera is selected). */
 function makeSingleHelper(over: Partial<CaptureHelperDeps> = {}) {
@@ -171,7 +171,7 @@ describe("captureShot", () => {
     expect(node.shots[2]).toMatchObject({ reset: true, indexed: false });
   });
 
-  it("refuses while a recording is active (exclusivity, ruling 6) — never touches the node", async () => {
+  it("refuses while a recording is active (exclusivity) — never touches the node", async () => {
     const { helper, node, setRecording } = makeHelper();
     helper.build();
     setRecording(true);
@@ -306,7 +306,7 @@ describe("on-demand acquireStreams (extracted verbatim from manual-control)", ()
   });
 });
 
-describe("single-stream capture (capture-recorder-everywhere ruling 3, item 4)", () => {
+describe("single-stream capture", () => {
   it("rawSingleShot: one full-depth resource, `wide` only on the reset shot", () => {
     const s0 = rawSingleShot({ reset: true, indexed: false, stackCount: 5, resource: "sensor" });
     expect(s0).toMatchObject({ reset: true, indexed: false, stackCount: 5, resource: "sensor" });
@@ -404,7 +404,7 @@ describe("single-stream capture (capture-recorder-everywhere ruling 3, item 4)",
     expect(telemetry).toHaveBeenLastCalledWith({ captureBusy: false });
   });
 
-  it("refuses a single-stream capture while a recording is active (exclusivity, ruling 6)", async () => {
+  it("refuses a single-stream capture while a recording is active (exclusivity)", async () => {
     const { helper, node, setRecording } = makeSingleHelper();
     helper.build();
     setRecording(true);

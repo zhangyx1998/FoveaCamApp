@@ -23,15 +23,15 @@ export const SERIAL_LATENCY_CONFIG_PATH = APP_CONFIG_PATH;
  *  pressure, slow enough that RTT jitter never whips the predictor. */
 export const SERIAL_LATENCY_EMA_ALPHA = 0.25;
 
-/** RTT samples above this are TRANSPORT HICCUPS, not steady-state latency
- *  (mirror-flicker addendum R4): a single multi-hundred-ms p50 (USB
+/** RTT samples above this are TRANSPORT HICCUPS, not steady-state latency:
+ *  a single multi-hundred-ms p50 (USB
  *  re-enumeration, a wedged read) would take many EMA steps to wash out and
  *  meanwhile inflate the predictor's lookahead. Discarded like the existing
  *  non-finite hiccup guard. */
 export const RTT_SAMPLE_CEILING_MS = 250;
 
 /** Hard cap on the TOTAL applied lookahead (fixed + adaptive), ms — the
- *  runaway-lookahead guard (addendum R4): congestion grows RTT, an uncapped
+ *  runaway-lookahead guard: congestion grows RTT, an uncapped
  *  lookahead grows per-tick deltas, which defeat the sink dedupe and feed the
  *  congestion back. 50 ms ≈ 3 camera frames of lead — beyond that the
  *  extrapolation is doing more harm than the latency it hides. */
@@ -56,7 +56,7 @@ export class SerialLatencyEstimator {
   /** Feed one ackRttMs.p50 sample (ms). Non-finite/negative samples are
    *  ignored (a probe hiccup must never poison the estimate), and so are
    *  samples above {@link RTT_SAMPLE_CEILING_MS} — a transport hiccup is a
-   *  discrete event, not a latency to lead by (addendum R4). */
+   *  discrete event, not a latency to lead by. */
   push(rttP50Ms: number): void {
     if (!Number.isFinite(rttP50Ms) || rttP50Ms < 0) return;
     if (rttP50Ms > RTT_SAMPLE_CEILING_MS) return;
@@ -109,7 +109,7 @@ export function subscribeSerialLatencyComp(
   });
 }
 
-// --- applied-lookahead bus (Part 4 telemetry) ---------------------------------
+// --- applied-lookahead bus ---------------------------------
 // The predictor's APPLIED total lookahead (fixed + live) must join the
 // controller/serial-pressure telemetry (the profiler shows what the predictor
 // actually leads by), but the estimate lives in the disparity-scope session.

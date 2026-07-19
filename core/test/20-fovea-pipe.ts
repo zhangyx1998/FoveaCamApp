@@ -4,10 +4,10 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Fovea brick v2 (unified-time-and-topology §5): spawn/cancel-able per-fovea
+// Fovea brick v2: spawn/cancel-able per-fovea
 // producer threads RE-BASED on the upstream brick's in-process owned-frame
-// tap (chain convert → undistort → fovea; the crop is a PLAIN ROI copy — the
-// fused map-ROI path is retired), feeding DYNAMIC pipes (C-20: max-footprint
+// tap (chain convert → undistort → fovea; the crop is a PLAIN ROI copy, not a
+// fused map-ROI), feeding DYNAMIC pipes (max-footprint
 // ring, per-frame active w/h in the slot header, epoch reuse-safe ids). NO
 // hardware (fake camera). Proves:
 //   1. RAW-CROP IDENTITY — a fovea chained on the CONVERT brick equals the
@@ -22,10 +22,10 @@
 //      close+drop ×6 on the SAME id (LEGACY Camera-source form — private
 //      #convert chain, back-compat): every generation flows frames, epochs
 //      bump (fresh shm segment names), nothing leaks.
-//   5. foveaProbeAll — keyed by pipeId (= C-24 node id), meter name == key,
+//   5. foveaProbeAll — keyed by pipeId (the node id), meter name == key,
 //      frame-bound activeWidth/Height/originX/originY fields; converter +
-//      undistort probes now also carry name == pipeId (B-24 rename).
-//   6. ORDERLY teardown (B-20 pattern) → natural exit 0, zero leak warns.
+//      undistort probes also carry name == pipeId.
+//   6. ORDERLY teardown → natural exit 0, zero leak warns.
 // Run UNSANDBOXED: /opt/homebrew/bin/node core/test/20-fovea-pipe.ts
 
 import assert from "node:assert/strict";
@@ -67,7 +67,7 @@ const cal = {
 
 const CH = 4; // BGRA8
 const fullBytes = W * H * CH;
-const MAXW = 256, MAXH = 192; // fovea ring footprint (C-20 max)
+const MAXW = 256, MAXH = 192; // fovea ring footprint (max)
 const maxBytes = MAXW * MAXH * CH;
 const R0 = { x: 64, y: 48, width: 128, height: 96 }; // initial crop
 
@@ -76,7 +76,7 @@ const advertiseFull = (id: string) =>
 const advertiseFovea = (id: string) =>
   P.advertise({ id, pixelFormat: "BGRA8", dtype: "U8", width: R0.width, height: R0.height, channels: CH, stride: R0.width * CH, bytesPerFrame: R0.width * R0.height * CH, ringDepth: 4, maxWidth: MAXW, maxHeight: MAXH, maxBytes });
 
-const rawId = `camera/${serial}/convert`; // C-24 path-like spelling
+const rawId = `camera/${serial}/convert`; // path-like spelling
 const undId = `camera/${serial}/undistort`;
 const fovRawId = `camera/${serial}/convert/fovea/0`;
 const fovUndId = `camera/${serial}/undistort/fovea/0`;
@@ -183,7 +183,7 @@ const fovRaw = open(fovRawId, maxBytes), fovUnd = open(fovUndId, maxBytes);
   console.log("20-fovea-pipe: mid-flight setFoveaRect steering OK (active w/h + origin).");
 }
 
-// --- 5: probes keyed by pipeId, meter name == key (incl. B-24 renames) -------
+// --- 5: probes keyed by pipeId, meter name == key -------
 {
   const fov = A.foveaProbeAll();
   for (const id of [fovRawId, fovUndId]) {
@@ -235,7 +235,7 @@ P.close(fovRawId); P.drop(fovRawId);
   console.log("20-fovea-pipe: spawn/cancel churn x6 leak-free, epochs bump.");
 }
 
-// --- 6: ORDERLY teardown (B-20 pattern) → natural exit -----------------------
+// --- 6: ORDERLY teardown → natural exit -----------------------
 reader.close(raw.rh); reader.close(und.rh);
 P.disconnect(rawId); P.disconnect(undId);
 A.detachCameraPipe(rawId);

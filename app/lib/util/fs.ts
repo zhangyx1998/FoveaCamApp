@@ -15,9 +15,8 @@ import {
 
 // Node-only (main process). Not reachable from the renderer directly once
 // contextIsolation is on — `node:fs`/`node:os` need a real `require`, which
-// the renderer only gets under `nodeIntegration: true`
-// (docs/history/refactor/orchestrator.md §7.1 T5). The renderer calls these
-// indirectly via `window.foveaBridge`, whose `preload.ts`/`main.ts` wiring
+// the renderer only gets under `nodeIntegration: true`. The renderer calls
+// these indirectly via `window.foveaBridge`, whose `preload.ts`/`main.ts` wiring
 // forwards straight into these functions.
 
 export function validateWritablePath(path: string): boolean {

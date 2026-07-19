@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// Per-stream VIDEO-EXPORT dialog (viewer-export.md spec 1–8). A proper modal
+// Per-stream VIDEO-EXPORT dialog. A proper modal
 // consistent with the viewer's existing modal pattern; every option reads the
 // pure codec table (`export/codecs`) so the UI can never offer a combination the
 // ffmpeg-arg builder can't produce. Disabled controls always carry a WHY hint
@@ -34,7 +34,7 @@ const props = defineProps<{
   undistortAvailable: boolean;
   /** Why undistort is unavailable (shown when disabled). */
   undistortReason: string;
-  /** Global parallel-export policy (persisted; spec 10). */
+  /** Global parallel-export policy (persisted). */
   parallel: boolean;
 }>();
 
@@ -69,7 +69,7 @@ watch(profile, (p) => {
 });
 
 // Alpha is only meaningful when the pixfmt supports it AND undistort is on (OOB
-// remap regions are what alpha reveals — spec 5). Otherwise it's forced off with
+// remap regions are what alpha reveals). Otherwise it's forced off with
 // a reason.
 const pixfmtHasAlpha = computed(() => alphaSupported(codec.value, pixfmt.value));
 const alphaEnabled = computed(() => pixfmtHasAlpha.value && undistort.value);
@@ -158,7 +158,7 @@ async function confirm(): Promise<void> {
             <input type="number" min="1" step="1" v-model.number="fps" :class="{ invalid: !fpsValid }" />
             <span class="unit">fps</span>
             <!-- Disabled when nothing was detected — the reset must never jump
-                 to an arbitrary value the label doesn't show (UI/UX review). -->
+                 to an arbitrary value the label doesn't show. -->
             <button
               type="button"
               class="link"
@@ -192,9 +192,9 @@ async function confirm(): Promise<void> {
           <span class="lbl">Transparency</span>
           <label class="chk" :title="alphaEnabled ? '' : alphaReason">
             <!-- Shows the EFFECTIVE state: a disabled checkbox must never read
-                 "checked" while alpha is off (UI/UX review 2026-07-10). The
-                 user's intent (`alpha`) survives a codec round-trip, so
-                 re-enabling restores the checkmark. -->
+                 "checked" while alpha is off. The user's intent (`alpha`)
+                 survives a codec round-trip, so re-enabling restores the
+                 checkmark. -->
             <input
               type="checkbox"
               :checked="effectiveAlpha"
@@ -241,8 +241,8 @@ async function confirm(): Promise<void> {
 <style scoped lang="scss">
 // Unified with the viewer's confirm-dialog shell (ViewerWindow `.modal-scrim`/
 // `.modal`): same scrim + z-index 100 + surface tokens so the two never read as
-// different modal languages (UI/UX review 2026-07-10). The export form keeps its
-// wider form factor via `.export-modal`.
+// different modal languages. The export form keeps its wider form factor via
+// `.export-modal`.
 .modal-scrim {
   position: fixed;
   inset: 0;
@@ -352,7 +352,7 @@ async function confirm(): Promise<void> {
   gap: 0.6ch;
   padding: 0.8rem 1.1rem;
   border-top: 1px solid var(--border);
-  // Ruling 7 (standing): no resting borders on inline buttons. The SECONDARY
+  // No resting borders on inline buttons. The SECONDARY
   // (Cancel) button reads as a faint fill on hover; the PRIMARY action keeps its
   // solid accent fill (emphasis via fill, not a border). :focus-visible stays.
   button {

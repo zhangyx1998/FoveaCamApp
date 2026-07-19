@@ -1,8 +1,7 @@
-// calibration-review-2026-07-11 #11: the checker kernel used to treat ANY
-// non-empty corner list as a detection — but `findChessboardCorners`' contract
-// (the discarded found-boolean) is "all W×H corners located, in order". A
-// partial detection was capturable and later rejected the WHOLE solve with an
-// opaque count-mismatch. The kernel must gate on corners.length === W*H.
+// The checker kernel must gate on corners.length === W*H, not on any non-empty
+// corner list: `findChessboardCorners`' contract (the discarded found-boolean)
+// is "all W×H corners located, in order", so a partial detection must NOT be
+// capturable.
 
 import { describe, expect, it, vi } from "vitest";
 

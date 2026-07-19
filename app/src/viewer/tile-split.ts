@@ -4,8 +4,8 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// PURE viewer tile-split math (viewer-tiles-split-and-project.md ruling 3): the
-// preview tiles panel is one full-width, non-scrolling row whose slot widths are
+// PURE viewer tile-split math: the preview tiles panel is one full-width,
+// non-scrolling row whose slot widths are
 // FRACTIONS summing to 1. This module owns every fraction transform — equal
 // split, reconcile-to-count (drop/append + renormalize on load), and the
 // divider drag — with a single invariant: the returned list has length `n` and

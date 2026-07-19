@@ -194,7 +194,7 @@ describe("shm-client transfer pool", () => {
     expect(client.stats().latencyMs.count).toBe(1);
   });
 
-  it("C-15: N=3 same-size streams — pool auto-sizes, ZERO steady-state allocation", async () => {
+  it("N=3 same-size streams — pool auto-sizes, ZERO steady-state allocation", async () => {
     const port = fakePort();
     const client = createShmClient(() => port as unknown as MessagePort);
     const N = 3;
@@ -222,8 +222,7 @@ describe("shm-client transfer pool", () => {
     warm.forEach((p) => client.release(p));
 
     // Steady state: reacquire + release the same working set repeatedly. Every
-    // checkout must hit the retained pool — allocations must NOT climb. (Under
-    // the old fixed cap-3 this reallocates 2N-3 buffers each round.)
+    // checkout must hit the retained pool — allocations must NOT climb.
     const ROUNDS = 5;
     for (let r = 0; r < ROUNDS; r++) {
       const bufs = await acquire(WORKING_SET);
@@ -233,7 +232,7 @@ describe("shm-client transfer pool", () => {
     expect(client.stats().poolHits).toBe(WORKING_SET * ROUNDS); // all reused
   });
 
-  it("C-15: a resolution/format switch releases the old size's retained buffers", async () => {
+  it("a resolution/format switch releases the old size's retained buffers", async () => {
     const port = fakePort();
     const client = createShmClient(() => port as unknown as MessagePort);
     const sizeA = (): FramePayload => ({ shape: [2, 2], channels: 1, shm: { seg: "a", gen: 1, seq: 5n } });
@@ -261,8 +260,7 @@ describe("shm-client transfer pool", () => {
   });
 
   it("the retention cap is WINDOWED — decays after the working set shrinks (value-sweep)", async () => {
-    // A one-off spike used to pin the free-list retention cap forever (peak
-    // EVER), so the pool never released those buffers. The cap is now a sliding
+    // The free-list retention cap is a sliding
     // window max: once the working set shrinks past a couple of windows, the cap
     // decays and surplus buffers are let go.
     const port = fakePort();
@@ -293,8 +291,7 @@ describe("shm-client transfer pool", () => {
     expect(client.stats().allocations).toBe(2); // the loop only ever reused
 
     // A fresh 2-concurrent burst now needs 2 buffers but the pool retains only 1
-    // (the decayed cap) → exactly ONE re-allocation. Under the old peak-EVER cap
-    // this retained 2 and allocated nothing.
+    // (the decayed cap) → exactly ONE re-allocation.
     (await acquire(2)).forEach((p) => client.release(p));
     expect(client.stats().allocations).toBe(3);
   });

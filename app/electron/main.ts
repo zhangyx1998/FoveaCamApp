@@ -71,7 +71,7 @@ import type { InvokeChannels, PushChannels, SendChannels } from "./bridge";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const DATA = app.getPath("userData");
-// MAIN is the config-store authority (config-store-main-authority.md): its own fs
+// MAIN is the config-store authority: its own fs
 // primitives (orchestrator/store.ts, reused) resolve the store root from
 // `FOVEA_DATA_PATH`, which main otherwise only sets for its CHILDREN. Set it for
 // main's own process too. Resolved lazily per call there, so this body-top
@@ -83,8 +83,7 @@ process.env.FOVEA_DATA_PATH ??= DATA;
 // ├─┬ .dist/electron
 // │ ├── main.js / orchestrator.js / preload-*.cjs
 // ├─┬ .dist/renderer
-// │ └── windows/*.html      (multi-window entries, docs/history/refactor/multi-window.md;
-// │                          the legacy index.html was removed in round 2)
+// │ └── windows/*.html      (multi-window entries)
 //
 const DIST = path.join(DIR, "..");
 process.env.APP_ROOT = path.join(DIR, "../..");
@@ -104,10 +103,9 @@ if (process.platform === "win32") app.setAppUserModelId(app.getName());
 // Disable Chromium's Graphite (Skia's new raster backend, default-on in this
 // Electron's Chromium): under our sustained many-canvas putImageData load
 // (disparity-scope paints ~7 full-rate views) it dies after minutes with
-// "Graphite insertRecording failed with status 5" → GPU process exit_code=5
-// (rig 2026-07-09 00:41). Ganesh (the fallback) carries the same load
-// stably. Must be appended BEFORE app ready. Revisit on Electron upgrades —
-// Graphite may stabilize, and this line then deserves an A/B on the rig.
+// "Graphite insertRecording failed with status 5" → GPU process exit_code=5.
+// Ganesh (the fallback) carries the same load stably. Must be appended BEFORE
+// app ready; revisit on Electron upgrades in case Graphite stabilizes.
 app.commandLine.appendSwitch("disable-features", "SkiaGraphite");
 
 // ---- Native-crash minidumps -----------------------------------------------
@@ -142,18 +140,18 @@ if (!app.requestSingleInstanceLock()) {
 const preload = {
   renderer: path.join(DIR, "preload-renderer.cjs"),
   profiler: path.join(DIR, "preload-profiler.cjs"),
-  // Standalone viewer (standalone-viewer-and-fcap ruling 1): bridge + the
-  // in-window playback worker; no shm reader, no orchestrator port.
+  // Standalone viewer: bridge + the in-window playback worker; no shm reader,
+  // no orchestrator port.
   viewer: path.join(DIR, "preload-viewer.cjs"),
 };
 
 function customizeApp() {
   app.setName("FoveaCam Duo");
   // Application menu WITHOUT the reload role: plain Ctrl/Cmd-R is reserved
-  // for the recorder trigger in every mode (multi-window.md req. 6) — the
+  // for the recorder trigger in every mode — the
   // default menu's View→Reload/Force-Reload accelerators would bypass the
   // per-window `before-input-event` interception below.
-  // Direct app-switch affordance (A-13, adopted default): an "Apps" submenu
+  // Direct app-switch affordance: an "Apps" submenu
   // over the `lib/windows.ts` catalog. Selecting an app routes through the
   // window manager's existing openApp drain/switch flow — exclusivity, the
   // busy-refusal prompt, and welcome-close all apply unchanged. Being the
@@ -209,7 +207,7 @@ function customizeApp() {
     {
       label: "File",
       submenu: [
-        // A-11: open a `.fovea` recording in a viewer window (one per file).
+        // Open a `.fovea` recording in a viewer window (one per file).
         {
           label: "Open Recording…",
           accelerator: "CmdOrCtrl+O",
@@ -220,9 +218,9 @@ function customizeApp() {
           ? [{ type: "separator" as const }, settingsItem]
           : []),
         { type: "separator" },
-        // OS-standard close-window shortcut — the custom menu previously had
-        // no Close item, so Cmd/Ctrl-W was dead. Routes through win.close()
-        // like the traffic light (welcome respawn / owner-close unchanged).
+        // OS-standard close-window shortcut for Cmd/Ctrl-W. Routes through
+        // win.close() like the traffic light (welcome respawn / owner-close
+        // unchanged).
         { role: "close", accelerator: "CmdOrCtrl+W" },
       ],
     },
@@ -240,16 +238,15 @@ function customizeApp() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
-// Recording container extensions the app opens (standalone-viewer-and-fcap
-// ruling 2): `.fcap` is what the recorder writes now; `.fovea` stays accepted
-// as a READ-ONLY legacy so existing rig recordings still open. The dialog filter,
-// macOS `open-file`, and the Windows/Linux `second-instance` arg association all
-// derive from this one list.
+// Recording container extensions the app opens: `.fcap` is what the recorder
+// writes; `.fovea` stays accepted as a READ-ONLY legacy so existing recordings
+// still open. The dialog filter, macOS `open-file`, and the Windows/Linux
+// `second-instance` arg association all derive from this one list.
 const RECORDING_EXTENSIONS = ["fcap", "fovea"] as const;
 const isRecordingPath = (p: string): boolean =>
   RECORDING_EXTENSIONS.some((ext) => p.toLowerCase().endsWith(`.${ext}`));
 
-/** File→Open Recording… (A-11): `.fcap`/`.fovea` filter, one viewer window per
+/** File→Open Recording…: `.fcap`/`.fovea` filter, one viewer window per
  *  file (a re-open of an already-viewed file focuses its window). */
 async function openRecordingDialog(): Promise<void> {
   const result = await dialog.showOpenDialog({
@@ -286,12 +283,12 @@ function pushTo<K extends keyof PushChannels>(
   channel: K,
   ...args: PushChannels[K]
 ): void {
-  // A push to a dying window is correct to DROP, never fatal (incident
-  // 2026-07-09: `orchestrator:down` threw "Render frame was disposed before
-  // WebFrameMain could be accessed" here while the parent restarted). Guard the
-  // obvious destroyed case, and wrap `send` too — the render frame can be
-  // disposed in the window between this check and the actual send (webFrameMain
-  // race), which `isDestroyed()` won't catch. Log at debug; never throw.
+  // A push to a dying window is correct to DROP, never fatal: `orchestrator:down`
+  // can otherwise throw "Render frame was disposed before WebFrameMain could be
+  // accessed" while the parent restarts. Guard the obvious destroyed case, and
+  // wrap `send` too — the render frame can be disposed in the window between this
+  // check and the actual send (webFrameMain race), which `isDestroyed()` won't
+  // catch. Log at debug; never throw.
   if (wc.isDestroyed()) {
     console.debug(`[push] drop "${String(channel)}" → destroyed webContents`);
     return;
@@ -332,7 +329,7 @@ handleSender("store:patch", (wc, path, ops) =>
 );
 handleSender("store:clear", (wc, path) => storeMain.clear(wc, path));
 handle("store:list", (path) => storeMain.list(path));
-// Refcount-to-zero record delete (calibration-records-v2): move the backing
+// Refcount-to-zero record delete: move the backing
 // store file to the OS TRASH (recoverable), THEN clear the doc from the
 // authority cache + broadcast. The clear's `rm` no-ops on the already-trashed
 // file. Store docs live at `<DATA>/store/<...segments>.json`.
@@ -383,11 +380,11 @@ handle("fs:read-text", async (file) => {
   }
 });
 
-// ---- Renderer bridge handlers (docs/history/refactor/orchestrator.md §7.1 T5) -----
-// The renderer's `SavePath`/`SaveControls`/`RecordControls` used to call
-// `node:path`/`node:fs`/`node:os` directly — reachable only under the old
-// `nodeIntegration: true`. These mirror that logic here so `foveaBridge`
-// (preload-bridge.ts) can forward to it over IPC instead.
+// ---- Renderer bridge handlers ---------------------------------------------
+// The renderer's `SavePath`/`SaveControls`/`RecordControls` can't call
+// `node:path`/`node:fs`/`node:os` directly from an isolated renderer, so these
+// mirror that logic here and `foveaBridge` (preload-bridge.ts) forwards to it
+// over IPC.
 handle("save-path:resolve", (segments) => path.resolve(...segments));
 handle("save-path:resolve-default", (directory, base) =>
   resolveDefaultSavePath(directory, base),
@@ -425,7 +422,7 @@ handle("perf-snapshot:reveal", (file) => {
 });
 
 // Reveal a recording container in Finder/Explorer (selects the file) — the
-// viewer window's "Open folder" button (standalone-viewer-and-fcap UX 5).
+// viewer window's "Open folder" button.
 handle("viewer:reveal", (file) => {
   if (typeof file === "string" && file) shell.showItemInFolder(file);
 });
@@ -437,7 +434,7 @@ handle("crash:reveal", (file) => {
     shell.showItemInFolder(file);
 });
 
-// ---- Orchestrator instances (disposable per app, ruling 2) ----------------
+// ---- Orchestrator instances (disposable per app) --------------------------
 // The registry (`orchestrator-instances.ts`, Electron-free + unit-tested) owns
 // the typed table + ≤1-hardware gate; the fork/port/janitor wiring is injected
 // below. Main brokers a direct MessagePort renderer↔instance.
@@ -449,7 +446,7 @@ let drainSeq = 0;
 // settled without touching another instance's.
 const instanceDrains = new Map<string, Map<number, (r: { ok: boolean; reason?: string }) => void>>();
 // windowId → its live webContents, so the registry's `notifyDown` can push a
-// crash report to a dying instance's OWNED windows only (ruling 4 scoping).
+// crash report to a dying instance's OWNED windows only.
 const webContentsByWindowId = new Map<string, Electron.WebContents>();
 // instanceId → its last down report, so a profiler that connects AFTER its
 // bound instance already died still gets the typed frozen banner (the connect
@@ -540,7 +537,7 @@ function runJanitor(reason: string): Promise<void> {
   });
 }
 
-// ---- Main-crash watchdog (safety invariant gap 1) -------------------------
+// ---- Main-crash watchdog (safety invariant) -------------------------------
 // Closes the hole where main's OWN hard crash (SIGKILL/SIGSEGV) reaps the
 // orchestrator with nothing left to disarm the mirrors. A DETACHED sibling (not
 // a utilityProcess child — those die with main), `janitor.js` in
@@ -558,7 +555,7 @@ let watchdogSpawned = false;
 
 /** (Re)write this main instance's watchdog state file — mainPid is fixed;
  *  `orchestratorPids` is the CURRENT set of live instance pids (disposable
- *  model, ruling 5: 0..N alive), refreshed whenever the set changes so the
+ *  model: 0..N alive), refreshed whenever the set changes so the
  *  watchdog waits on the right orphans before quiescing. */
 function writeWatchdogState(): void {
   try {
@@ -660,7 +657,7 @@ function forkInstance(id: string, kind: InstanceKind): InstanceProc {
       ...process.env,
       // Each instance reads/writes the same config store as the renderer.
       FOVEA_DATA_PATH: DATA,
-      // Boot-span baseline (§7.1 S5) — stamped as close to `fork()` as possible
+      // Boot-span baseline — stamped as close to `fork()` as possible
       // so `index.ts` can measure fork -> first-useful-work timing per instance.
       FOVEA_FORK_TS: String(forkTs),
       FOVEA_INSTANCE_KIND: kind,
@@ -678,7 +675,7 @@ function forkInstance(id: string, kind: InstanceKind): InstanceProc {
   // The watchdog needs the CURRENT instance pids; `pid` is populated on spawn.
   proc.on("spawn", () => writeWatchdogState());
   // Config-store client: route this instance's `store:*` parentPort messages to
-  // the MAIN authority (config-store-main-authority.md); detach on exit.
+  // the MAIN authority; detach on exit.
   const store = storeMain.attachProcess((m) => proc.postMessage(m));
   proc.on("message", (data: unknown) => {
     const msg = data as {
@@ -693,13 +690,12 @@ function forkInstance(id: string, kind: InstanceKind): InstanceProc {
       return;
     }
     if (msg?.type === "quiesced") {
-      // The authoritative clean-exit ack (ruling 3/4) — the registry reaps it.
+      // The authoritative clean-exit ack — the registry reaps it.
       registry.onAck(id);
       return;
     }
-    // Phase 5 auto-open (capture-recorder-nodes.md ruling 8): a recorder node
-    // finalized a container — surface it in a STANDALONE viewer window (one per
-    // file; the window does its own playback — standalone-viewer-and-fcap 1).
+    // Auto-open: a recorder node finalized a container — surface it in a
+    // STANDALONE viewer window (one per file; the window does its own playback).
     if (msg?.type === "recording:finished") {
       if (typeof msg.path === "string" && msg.path) manager.openViewer(msg.path);
       return;
@@ -736,7 +732,7 @@ function forkInstance(id: string, kind: InstanceKind): InstanceProc {
   };
 }
 
-// ---- Camera-enumeration probe (disposable-orchestrator ruling 3) ----------
+// ---- Camera-enumeration probe ---------------------------------------------
 // A small persistent enumerate-only process that feeds the status-only Welcome
 // window a live camera list + connected state. It NEVER opens a camera, holds
 // no hardware, gates nothing, and outlives app instances; main restarts it if
@@ -802,8 +798,8 @@ registry = new OrchestratorInstances({
     // Remember it so a profiler that attaches after this death still gets the
     // frozen banner (the connect broker replays it below).
     lastDownReports.set(inst.id, report);
-    // Scope the down report to the DYING instance's OWNED windows (ruling 4)
-    // PLUS its attached observer windows (the profiler, ruling 2 — it freezes
+    // Scope the down report to the DYING instance's OWNED windows
+    // PLUS its attached observer windows (the profiler — it freezes
     // with its accumulated data and shows "session ended/crashed"): a NEW
     // instance's app window must never react to the OLD instance's death. On a
     // crash the app window is still open (its channel rejects in-flight calls +
@@ -823,7 +819,7 @@ registry = new OrchestratorInstances({
   // with the app's exclusive acquisition); resume at the Welcome screen.
   onHardwareAliveChange: (alive) => {
     probe?.postMessage({ type: alive ? "probe:pause" : "probe:resume" });
-    // Viewer banner (viewer-export addendum): tell every window a live capture
+    // Viewer banner: tell every window a live capture
     // session started/stopped (function-declaration-hoisted; runs at edge time).
     broadcastAppSessionActive(alive);
   },
@@ -833,7 +829,7 @@ registry = new OrchestratorInstances({
 });
 
 /** Ask an instance to idle every camera-owning session and wait for the
- *  releases to settle (multi-window.md §3 — "closed" = session-idle-drained).
+ *  releases to settle ("closed" = session-idle-drained).
  *  `{ok: false}` = refused: a session is mid-capture/recording. */
 function drainInstance(inst: InstanceView): Promise<{ ok: boolean; reason?: string }> {
   const seq = ++drainSeq;
@@ -867,25 +863,25 @@ function drainSessions(): Promise<{ ok: boolean; reason?: string }> {
   });
 }
 
-// A-34: sender (webContents id) → stable windowId, maintained by spawnWindow.
+// Sender (webContents id) → stable windowId, maintained by spawnWindow.
 // Lets the connect handshake below tag each channel with the window it
-// belongs to — the orchestrator side keys per-window state (C-24 compose
-// namespaces `win/<windowId>/...`) on it.
+// belongs to — the orchestrator side keys per-window state
+// (`win/<windowId>/...` namespaces) on it.
 const windowIdBySender = new Map<number, string>();
 
 // A renderer asks to connect; hand both ends of a fresh channel out. Already
 // generic per-`event.sender` — every window class connecting just gets its
-// own port pair (§7.1 S4 / multi-window per-window handshake). The handoff
-// message carries the sender's stable windowId (A-34) so the Hub can tag the
-// channel; null for a sender the manager doesn't know (shouldn't happen).
+// own port pair. The handoff message carries the sender's stable windowId so
+// the Hub can tag the channel; null for a sender the manager doesn't know
+// (shouldn't happen).
 ipcMain.on("orchestrator:connect" satisfies keyof SendChannels, (event) => {
   const windowId = windowIdBySender.get(event.sender.id) ?? null;
-  // Instance-scoped brokering (ruling 6). A window BOUND to a specific instance
+  // Instance-scoped brokering. A window BOUND to a specific instance
   // — an app window (owns it) or a profiler (attached at open, per-instance
   // binding) — routes to THAT instance and NOTHING else. If its instance is
   // already dead, fail CLOSED: replay the typed down report (frozen "session
   // ended/crashed" banner) and broker no port — a profiler must never connect
-  // to another session (ruling 2). An UNBOUND window (projection/debug) routes
+  // to another session. An UNBOUND window (projection/debug) routes
   // to the CURRENT live app instance. With no app instance at all — the
   // status-only Welcome, which never connects — there is nothing to broker.
   const bound = windowId ? registry.boundInstance(windowId) : null;
@@ -912,7 +908,7 @@ ipcMain.on("window:set-pinned" satisfies keyof SendChannels, (event, pinned) => 
   BrowserWindow.fromWebContents(event.sender)?.setAlwaysOnTop(!!pinned);
 });
 
-// ---- Viewer playback engines (standalone-viewer-and-fcap, AS SHIPPED) ------
+// ---- Viewer playback engines ----------------------------------------------
 // One MAIN-owned utilityProcess per viewer window: the playback engine can't be
 // a renderer worker (Electron renderers can't construct Node workers), so main
 // forks it exactly like the orchestrator and brokers a MessagePort between the
@@ -975,10 +971,10 @@ ipcMain.on("viewer:spawn" satisfies keyof SendChannels, (event, file) => {
   if (typeof file === "string" && file) void viewerEngines.spawn(event.sender.id, file);
 });
 
-// ---- Viewer video export (viewer-export.md) -------------------------------
-// Main owns the system save dialog (spec 8) + the window-close abort intercept
-// (spec 11). The ffmpeg pipeline itself lives in the viewer ENGINE (utility
-// process) — main only brokers the save path + the close handshake.
+// ---- Viewer video export --------------------------------------------------
+// Main owns the system save dialog + the window-close abort intercept. The
+// ffmpeg pipeline itself lives in the viewer ENGINE (utility process) — main
+// only brokers the save path + the close handshake.
 
 // Sender (viewer webContents id) → does it have queued/running exports? The
 // renderer pushes on every 0-crossing; `close` reads it to decide whether to
@@ -996,7 +992,7 @@ ipcMain.on("viewer:close-confirmed" satisfies keyof SendChannels, (event) => {
   BrowserWindow.fromWebContents(event.sender)?.close();
 });
 
-// The video-export save dialog (spec 8): default filename `<recording>-<stream>`
+// The video-export save dialog: default filename `<recording>-<stream>`
 // with the codec's container extension, filtered to that extension.
 handle("export:save-dialog", async (defaultName, ext) => {
   const focused = BrowserWindow.getFocusedWindow();
@@ -1010,7 +1006,7 @@ handle("export:save-dialog", async (defaultName, ext) => {
   return result.canceled || !result.filePath ? null : result.filePath;
 });
 
-// ---- Live-session banner broadcast (viewer-export addendum) ----------------
+// ---- Live-session banner broadcast ----------------------------------------
 // Main is the only process that knows BOTH a viewer window and the per-app
 // hardware instances (registry). Mirror the telecanvas:target seed+push pattern:
 // seed via invoke, push to EVERY window on the hardware-alive edge.
@@ -1112,14 +1108,14 @@ function applyPersistedTeleCanvas(): void {
   telecanvas.apply(mode, port);
 }
 
-// ---- Window manager (docs/history/refactor/multi-window.md §3) --------------------
+// ---- Window manager -------------------------------------------------------
 
 function entryURL(desc: WindowDescriptor): { url?: string; file?: string; search?: string } {
   // A manifest-restored window lands on its persisted URL (carries the state
-  // params, req. 7) — but only in dev, where the dev-server origin matches.
+  // params) — but only in dev, where the dev-server origin matches.
   if (desc.url && IS_DEV && desc.url.startsWith(VITE_DEV_SERVER_URL!))
     return { url: desc.url };
-  // State-in-URL params (req. 7, e.g. a projection's `?session=…&frame=…`)
+  // State-in-URL params (e.g. a projection's `?session=…&frame=…`)
   // ride the query string in both modes: appended to the dev URL, passed as
   // `loadFile`'s `search` in a packaged build.
   if (IS_DEV)
@@ -1132,9 +1128,8 @@ function entryURL(desc: WindowDescriptor): { url?: string; file?: string; search
 // every window consumer derives from one source; only the Electron-specific
 // chrome (hidden titlebar + overlay, icon, background) stays here.
 function windowOptions(desc: WindowDescriptor): Electron.BrowserWindowConstructorOptions {
-  // Shared chrome (A-7 / multi-window.md §3): every window class uses the
-  // hidden titlebar + overlay so the one TitleBar component renders the
-  // chrome consistently, profiler included (it previously had native chrome).
+  // Shared chrome: every window class uses the hidden titlebar + overlay so the
+  // one TitleBar component renders the chrome consistently, profiler included.
   const chrome: Electron.BrowserWindowConstructorOptions = {
     titleBarStyle: "hidden",
     titleBarOverlay: { color: "#2f3241", symbolColor: "#74b1be", height: 40 },
@@ -1173,8 +1168,8 @@ function spawnWindow(desc: WindowDescriptor): ManagedWindow {
     ...(desc.fullscreen ? { fullscreen: true } : {}),
   });
   if (desc.maximized && !desc.fullscreen) win.maximize();
-  // App windows maximize by default (legacy behavior) unless restoring or
-  // inheriting a specific display state.
+  // App windows maximize by default unless restoring or inheriting a specific
+  // display state.
   else if (desc.class === "app" && !desc.bounds && !desc.fullscreen) win.maximize();
 
   const target = entryURL(desc);
@@ -1186,18 +1181,18 @@ function spawnWindow(desc: WindowDescriptor): ManagedWindow {
     if (url.startsWith("https:")) shell.openExternal(url);
     return { action: "deny" };
   });
-  // Renderer-initiated reloads/navigation blocked in production (req. 6) —
-  // the packaged windows never navigate legitimately. Dev keeps navigation
-  // for the vite dev-server flows.
+  // Renderer-initiated reloads/navigation blocked in production — the packaged
+  // windows never navigate legitimately. Dev keeps navigation for the vite
+  // dev-server flows.
   if (!IS_DEV)
     win.webContents.on("will-navigate", (e) => e.preventDefault());
 
-  // A-7: forward fullscreen transitions so the shared chrome can adjust
-  // traffic-light inset + drag regions on BOTH edges (the old one-way bug).
+  // Forward fullscreen transitions so the shared chrome can adjust
+  // traffic-light inset + drag regions on BOTH edges.
   win.on("enter-full-screen", () => pushTo(win.webContents, "window:fullscreen", true));
   win.on("leave-full-screen", () => pushTo(win.webContents, "window:fullscreen", false));
 
-  // Reload accelerator policy (req. 6), enforced per-window:
+  // Reload accelerator policy, enforced per-window:
   //   plain Ctrl/Cmd-R  → recorder trigger stub, NEVER reload (all modes)
   //   Ctrl/Cmd-Shift-R  → dev only: full restart (main + orchestrator) with
   //                       window-layout restore; blocked in production.
@@ -1209,8 +1204,7 @@ function spawnWindow(desc: WindowDescriptor): ManagedWindow {
     if (input.shift) {
       if (IS_DEV) void devRestart();
     } else {
-      // No-op stub — real semantics land with the recorder stage
-      // (docs/history/refactor/recorder-container.md).
+      // Emit the recorder trigger; the renderer's RecordButton consumes it.
       pushTo(win.webContents, "recorder:trigger");
     }
   });
@@ -1235,9 +1229,9 @@ function spawnWindow(desc: WindowDescriptor): ManagedWindow {
     class: desc.class,
     appId: desc.appId,
     fileKey: desc.fileKey,
-    owner: desc.owner, // WS2 2a: parent pointer (set by 2b's sub-window opener)
-    key: desc.key, // WS2 2a: toggle dedupe key
-    windowId: desc.windowId, // A-34: manager-minted stable instance id
+    owner: desc.owner, // parent pointer (set by the sub-window opener)
+    key: desc.key, // toggle dedupe key
+    windowId: desc.windowId, // manager-minted stable instance id
     focus: () => {
       if (win.isMinimized()) win.restore();
       win.focus();
@@ -1251,7 +1245,7 @@ function spawnWindow(desc: WindowDescriptor): ManagedWindow {
     isMaximized: () =>
       win.isDestroyed() ? lastDisplayState.maximized : win.isMaximized(),
   };
-  // Disposable-orchestrator (ruling 2): an APP window forks a FRESH hardware
+  // Disposable-orchestrator: an APP window forks a FRESH hardware
   // instance and owns it. The window is claimed now so its close disposes the
   // instance (registry.onWindowClosed → drain-and-quiesce → kill → janitor).
   // The renderer's `orchestrator:connect` (after load) then brokers to it.
@@ -1261,8 +1255,8 @@ function spawnWindow(desc: WindowDescriptor): ManagedWindow {
     const inst = registry.open("hardware", desc.appId);
     registry.claimWindow(inst.id, desc.windowId);
   }
-  // A-34: sender→windowId lookup for the orchestrator channel handshake (the
-  // connect IPC only knows `event.sender`), + the close-teardown signal C-24's
+  // Sender→windowId lookup for the orchestrator channel handshake (the
+  // connect IPC only knows `event.sender`), + the close-teardown signal the
   // composition keys `win/<windowId>/...` namespaces on.
   if (desc.windowId) {
     const windowId = desc.windowId;
@@ -1272,7 +1266,7 @@ function spawnWindow(desc: WindowDescriptor): ManagedWindow {
     win.on("closed", () => {
       windowIdBySender.delete(senderId);
       webContentsByWindowId.delete(windowId);
-      // Route the per-window teardown signal (C-24 compose `win/<id>` state) to
+      // Route the per-window teardown signal (`win/<id>` compose state) to
       // the instance BOUND to this window (owned app, or an attached profiler),
       // else the current instance (an unbound projection/debug). Skip a DEAD
       // binding — a profiler that outlived its instance has nothing to notify
@@ -1289,7 +1283,7 @@ function spawnWindow(desc: WindowDescriptor): ManagedWindow {
   // is gone by "closed".
   if (desc.class === "viewer") {
     const engineKey = win.webContents.id;
-    // Export abort-on-close intercept (viewer-export spec 11): while this window
+    // Export abort-on-close intercept: while this window
     // has queued/running exports, the FIRST close is intercepted — ask the
     // renderer to confirm the abort; it aborts + calls `confirmViewerClose`,
     // which re-`close()`s with the confirmed flag set (letting this pass).
@@ -1305,9 +1299,9 @@ function spawnWindow(desc: WindowDescriptor): ManagedWindow {
       void viewerEngines.close(engineKey); // engine also abortAll()s exports
     });
   }
-  // Settings / TeleCanvas windows need no orchestrator instance anymore — their
-  // store goes straight to MAIN (config-store-main-authority.md), which retired
-  // the non-hardware "settings" instance (and its close-release plumbing).
+  // Settings / TeleCanvas windows need no orchestrator instance — their store
+  // goes straight to MAIN, so there is no non-hardware "settings" instance to
+  // release on close.
   win.on("closed", () => manager.onWindowClosed(managed));
   return managed;
 }
@@ -1327,11 +1321,11 @@ const manager = new WindowManager({
 
 // ---- App-wide Settings window (Cmd+, / "Settings…") -----------------------
 // The config + TeleCanvas windows are SINGLETON, UNBOUND windows that consume
-// ONLY the config store (now MAIN-backed, config-store-main-authority.md) plus
-// main-brokered bridge data (probe cameras, TeleCanvas host status). They never
-// connect to an orchestrator instance, so — unlike before — main forks NO
-// lightweight "settings" instance to back their store from Welcome. A config
-// edit applies live across every window via main's authority broadcast.
+// ONLY the config store (MAIN-backed) plus main-brokered bridge data (probe
+// cameras, TeleCanvas host status). They never connect to an orchestrator
+// instance, so main forks NO lightweight "settings" instance to back their
+// store. A config edit applies live across every window via main's authority
+// broadcast.
 function openConfigWindow(): void {
   manager.openConfig();
 }
@@ -1345,7 +1339,7 @@ onRenderer("window:open-app", (appId) => {
   if (typeof appId === "string" && appById(appId)) void manager.openApp(appId);
 });
 // Open a profiler pinned to the CURRENT live app instance (per-instance
-// binding, orchestrator-lifecycle-and-exit §"Profiler per-instance binding").
+// binding).
 // The binding is stamped into the window URL + registered as an observer
 // ATTACHMENT (never an owned window, so closing the profiler can't dispose the
 // instance, and the instance's death can't close the profiler). Opened from the
@@ -1358,26 +1352,26 @@ onRenderer("open-profiler-window", () => {
   if (inst && win.windowId) registry.attachWindow(inst.id, win.windowId);
 });
 onRenderer("window:open-projection", (pane) => {
-  // `pane` is a serialized pane descriptor (projection-split-view.md) — the
+  // `pane` is a serialized pane descriptor — the
   // window seeds a single-leaf layout from it, then owns its own split tree.
   if (typeof pane === "string" && pane) manager.openProjection({ pane });
 });
-// WS2 2b: toggle a module's `debug`-class sub-window. Owner = the current app
+// Toggle a module's `debug`-class sub-window. Owner = the current app
 // window (apps are exclusive, so it's the opener); cascade tears it down on
-// switch. `kind` selects the module component (debugger vs capture-preview,
-// capture-recorder-nodes.md ruling 8) and keys a distinct window per kind.
+// switch. `kind` selects the module component (debugger vs capture-preview)
+// and keys a distinct window per kind.
 onRenderer("window:toggle-debug", (session, kind) => {
   if (typeof session === "string" && session)
     manager.toggleDebug(session, manager.appWindow(), kind);
 });
-// Idempotent open-or-focus of the same `debug`-class sub-window (ruling 8 /
-// Phase 4): the capture / raster buttons ENSURE the preview window is up.
+// Idempotent open-or-focus of the same `debug`-class sub-window: the capture /
+// raster buttons ENSURE the preview window is up.
 onRenderer("window:open-debug", (session, kind) => {
   if (typeof session === "string" && session)
     manager.openDebug(session, manager.appWindow(), kind);
 });
 
-// ---- Dev restart (Ctrl/Cmd-Shift-R, multi-window.md req. 6 / §4) ----------
+// ---- Dev restart (Ctrl/Cmd-Shift-R) ---------------------------------------
 // Persist the window manifest → relaunch the whole app (orchestrator dies
 // with main and boots fresh) → startup consumes the manifest below.
 let restarting = false;
@@ -1395,7 +1389,7 @@ async function devRestart(): Promise<void> {
   // each drains + disarms hardware + acks (the registry kills + janitors any
   // that wedge). Bounded so a hung quiesce can't stall the relaunch over armed
   // hardware. The probe (utilityProcess child) dies with main; the relaunched
-  // main spawns fresh ones (ruling 5: instance killed → fresh on next open;
+  // main spawns fresh ones (an instance killed here re-forks on next open; the
   // probe survives via respawn).
   registry.teardownAll("dev restart");
   await waitUntil(() => !registry.anyAlive(), 3000);
@@ -1406,12 +1400,12 @@ async function devRestart(): Promise<void> {
   app.exit(0);
 }
 
-// ---- File association (A-11, recorder-container.md §4) --------------------
+// ---- File association ------------------------------------------------------
 // macOS delivers double-clicked/dragged `.fcap`/`.fovea` files via `open-file` —
 // which can fire BEFORE `whenReady` when the app is launched by the file
 // itself, so pre-ready paths queue until the window manager can spawn.
 // A running instance is also notified over a userData Unix socket by the
-// dev-mode shim (docs/dev/fcap-file-association.md) — that callback and a fresh
+// dev-mode shim — that callback and a fresh
 // launch's own argv both funnel through `openExternal` too, so no path opens a
 // second Electron. (Windows/Linux still route argv via `second-instance`.)
 const pendingOpenFiles: string[] = [];
@@ -1451,7 +1445,7 @@ app
   .whenReady()
   // Open-file socket FIRST — the dev-mode shim polls for it to deliver
   // double-clicked recordings (queued until windows exist), and the rest of
-  // this chain can take minutes on a rig (probe enumeration).
+  // this chain can take minutes on hardware (probe enumeration).
   .then(() => {
     openFileServer = startOpenFileServer(
       path.join(DATA, "open-file.sock"),
@@ -1460,11 +1454,11 @@ app
   })
   .then(sweepStaleWatchdogState)
   .then(customizeApp)
-  // Store-schema migrations (calibration-records-v2.md) run FIRST — before the
+  // Store-schema migrations run FIRST — before the
   // probe or any window can read the store — so no client observes a
   // half-migrated tree. Auto-snapshots the store git repo around the change.
   .then(migrateStoreOnBoot)
-  // Disposable model (ruling 2/3): no orchestrator is spawned at startup — app
+  // Disposable model: no orchestrator is spawned at startup — app
   // instances fork on demand at app-window open. The enumerate-only PROBE and
   // the detached main-crash WATCHDOG come up now instead, so Welcome shows the
   // live camera list and the safety net is armed for the whole session.
@@ -1488,7 +1482,7 @@ app.on("before-quit", (event) => {
   event.preventDefault();
   void (async () => {
     try {
-      // WINDOW-FIRST teardown order (ruling 1/3): close owned sub-windows (they
+      // WINDOW-FIRST teardown order: close owned sub-windows (they
       // cascade) then app/top windows, and let their teardown (pipe reads,
       // `window:closed`) flush BEFORE the instance handshakes, so no renderer is
       // mid pipe-read while an instance disarms. Bounded so a stuck window can't
@@ -1501,7 +1495,7 @@ app.on("before-quit", (event) => {
       // Viewer engines are MAIN-owned utilityProcesses independent of the
       // instances/hardware — flush their sidecars (bounded) and reap them.
       await viewerEngines.killAll();
-      // Instance handshakes (ruling 3/4): every live instance quiesces + acks;
+      // Instance handshakes: every live instance quiesces + acks;
       // the registry reaps on the ack or kills + janitors at the bounded
       // deadline. Await all deaths (bounded — the per-instance timers guarantee
       // progress even if this outer wait lapses).
@@ -1529,11 +1523,11 @@ app.on("window-all-closed", () => {
     app.quit();
     return;
   }
-  // Disposable model (ruling 5): PARK is retired. With no app window there is no
-  // hardware instance at all — closing the app window already disposed its
-  // instance (drain → quiesce → kill → janitor), so nothing is held headless.
-  // The enumerate-only probe holds nothing; the macOS app idles safely with the
-  // menu bar until a dock re-activate re-opens Welcome.
+  // Disposable model: with no app window there is no hardware instance at all —
+  // closing the app window already disposed its instance (drain → quiesce →
+  // kill → janitor), so nothing is held headless. The enumerate-only probe
+  // holds nothing; the macOS app idles safely with the menu bar until a dock
+  // re-activate re-opens Welcome.
 });
 
 app.on("second-instance", (_e, commandLine = []) => {

@@ -71,8 +71,8 @@ const props = defineProps({
     required: false,
     default: null,
   },
-  // Projectable source for the DEDICATED project-to-window button
-  // (projection-split-view.md deliverable 1): a `{kind:"frame",…}` or
+  // Projectable source for the DEDICATED project-to-window button:
+  // a `{kind:"frame",…}` or
   // `{kind:"pipe",…}` pane descriptor. When set, a SECOND title-bar icon
   // appears next to the element-fullscreen one — click opens a projection
   // window seeded with this pane; in an app window the same icon is the drag
@@ -96,16 +96,16 @@ const emit = defineEmits<{
 const container = useTemplateRef<HTMLDivElement>("container");
 const canvas = useTemplateRef<HTMLCanvasElement>("canvas");
 
-// Element-fullscreen button (kept, deliverable 1): ALWAYS DOM-fullscreens the
-// container — no longer overloaded with projection (that split off to its own
-// icon so the two actions are never confused, user ruling 1).
+// Element-fullscreen button: ALWAYS DOM-fullscreens the container — separate
+// from projection (that has its own icon so the two actions are never
+// confused).
 function expand(): void {
   container.value?.requestFullscreen();
 }
 
 // Origin of a projection drag from THIS window: only a projection window is a
 // "move" source; every other host (app windows, welcome previews) has a rigid
-// layout, so its drags advertise copy-only (DnD matrix, deliverable 4).
+// layout, so its drags advertise copy-only.
 const dragOrigin: "app" | "projection" =
   typeof location !== "undefined" && location.pathname.endsWith("projection.html")
     ? "projection"
@@ -151,7 +151,7 @@ const canvasStyle = computed(() => {
   };
 });
 
-// --- paint path (value-sweep 2026-07-11, frameview-putimagedata-main-thread) --
+// --- paint path ---------------------------------------------------------------
 // putImageData is a SYNCHRONOUS full-res raster on the Vue main thread — per
 // frame per view (~9 MB for a 1920×1200 RGBA frame, even in a 300 px tile).
 // createImageBitmap decodes ASYNC (off the main thread) and drawImage blits
@@ -171,7 +171,7 @@ async function paint(img: ImageData): Promise<void> {
       // REPLACE semantics, matching putImageData: the default source-over
       // drawImage BLENDS, so a frame's transparent pixels pass the previous
       // frame's leftovers through instead of showing the element behind the
-      // canvas (rig-caught 2026-07-12 on alpha-carrying views).
+      // canvas (matters for alpha-carrying views).
       ctx.globalCompositeOperation = "copy";
       ctx.drawImage(bitmap, 0, 0);
     }
@@ -202,14 +202,12 @@ const mat = computed(() => {
 });
 
 // Expand a 1- or 3-channel Mat to 4-channel (RGBA, alpha=255) in plain JS —
-// every renderer-reachable Mat now arrives via `payloadToMat` (always
+// every renderer-reachable Mat arrives via `payloadToMat` (always
 // `Uint8Array`, always 4-channel BGRA/RGBA already, see the wire's
-// `toFramePayload`), so this is dead code on any *current* call path, but
+// `toFramePayload`), so this is dead code on any current call path, but
 // kept as a real (not native-backed) implementation so the component stays
 // correct for a 1/3-channel Mat rather than silently regressing if one ever
-// shows up again. Replaces the old `core/Vision` `cvtColor` calls — the
-// last native runtime dependency in the renderer bundle (docs/history/refactor/
-// orchestrator.md §7.1 Stage 3 T1).
+// shows up again.
 function expandToRGBA(src: Uint8Array, channels: 1 | 3): Uint8Array {
   const pixels = src.length / channels;
   const out = new Uint8Array(pixels * 4);
@@ -324,14 +322,14 @@ function translatePos(
 
 const drag = ref(false);
 // Chromium coalesces `mousemove` to the display refresh (~60 Hz) — which
-// capped the manual-control MEMS stream at 60 packets/s (rig 2026-07-08).
+// caps the manual-control MEMS stream at 60 packets/s.
 // `pointerrawupdate` delivers input at the device's polling rate (125 Hz–1
 // kHz), which the fire-and-forget CMD_STREAM path is built to carry;
 // `mousemove` stays as the fallback where the raw event isn't supported.
 const MOVE_EVENT = "onpointerrawupdate" in window ? "pointerrawupdate" : "mousemove";
 function trackUntilRelease(e: MouseEvent) {
   if (!(e.buttons & 1)) return untrack();
-  // Obscuration gate (value-sweep addendum 2026-07-11): a drag that wanders
+  // Obscuration gate: a drag that wanders
   // over an overlaying element (the drawer) must stop STEERING while covered —
   // skip the emit, do NOT end the drag (mouseup above still ends it globally,
   // so releasing over the drawer never wedges the drag state). Steering
@@ -355,8 +353,8 @@ function track(e: MouseEvent) {
   trackUntilRelease(e);
 }
 
-// Hover/cursor ('mouse') emits, obscuration-gated (value-sweep addendum
-// 2026-07-11): while a foreign element tops the pointer inside our box, the
+// Hover/cursor ('mouse') emits, obscuration-gated: while a foreign element
+// tops the pointer inside our box, the
 // cursor handler must read "not over the frame" — emit null (the mouseleave
 // shape), never a translated position through the drawer.
 function gatedMouse(e: MouseEvent) {
@@ -384,7 +382,7 @@ function mix<T, P>(t: T, p: P): T & P {
       <div class="title-slot">
         <slot name="title"></slot>
       </div>
-      <!-- Deliverable 1: TWO distinct title-bar icons. The project-to-window
+      <!-- TWO distinct title-bar icons. The project-to-window
            icon shows only for an addressable feed and doubles as the drag
            handle; element-fullscreen is always present. -->
       <button

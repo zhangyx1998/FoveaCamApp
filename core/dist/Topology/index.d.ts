@@ -31,7 +31,7 @@ declare module "core/Topology" {
   }
 
   /**
-   * UNIVERSAL node self-report (unified-time-and-topology §6) — the native
+   * UNIVERSAL node self-report — the native
    * mirror of `graph-contract.ts` `NodeReport`. One row per live native brick
    * (convert/undistort/fovea, `transport: "native"` — promoted to `"pipe"`
    * with `epoch` + `pipe` extras when its output id is a live advertised SHM
@@ -47,7 +47,7 @@ declare module "core/Topology" {
     transport: "pipe" | "native";
     inputs: NodeInput[];
     output: StreamType | null;
-    /** Reuse-safe identity generation (C-20); pipe-backed rows only. */
+    /** Reuse-safe identity generation; pipe-backed rows only. */
     epoch?: number;
     /** Full meter snapshot (the converged WorkloadSnapshot schema). */
     stats?: ProbeSnapshot;
@@ -58,8 +58,7 @@ declare module "core/Topology" {
   /**
    * Consolidated topology report: every live native brick + advertised pipe,
    * one call (replaces deriving the graph from `*ProbeAll()` + `Pipe.list()`
-   * — both of which remain exported during the JS migration). Probe at ~1 Hz;
-   * never per-frame.
+   * — both of which remain exported). Probe at ~1 Hz; never per-frame.
    */
   export function report(): NodeReport[];
 }

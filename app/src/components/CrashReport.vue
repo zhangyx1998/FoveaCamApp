@@ -4,17 +4,17 @@ This source code is licensed under the MIT license.
 You may find the full license in project root directory.
 --------------------------------------------------- -->
 <!--
-  Orchestrator crash banner (orchestrator-lifecycle-and-exit ruling 4). Mounted
-  in the windows associated with the orchestrated task (app window + its owned
+  Orchestrator crash banner. Mounted in the windows associated with the
+  orchestrated task (app window + its owned
   debug sub-window). Renders off the reactive `orchestratorDown` report exposed
   by the orchestrator client, which is set ONLY in windows that actually held a
   channel — so owner-scoping falls out for free. A `clean` report is recorded
   but hidden (a graceful shutdown is not a user-facing failure).
 
-  DELIBERATELY MINIMAL + neutral-styled — a design-tokens wave restyles this;
-  all styles live here (no scattered hex elsewhere). "Reopen app" reloads the
-  window, which re-runs the orchestrator connect handshake (main lazily respawns
-  the orchestrator) — transparent reconnect is out of scope (client.ts §12.1 C5).
+  DELIBERATELY MINIMAL + neutral-styled; all styles live here (no scattered hex
+  elsewhere). "Reopen app" reloads the window, which re-runs the orchestrator
+  connect handshake (main lazily respawns the orchestrator) — transparent
+  reconnect is out of scope.
 -->
 <script setup lang="ts">
 import { computed } from "vue";
@@ -31,8 +31,8 @@ const headline = computed(() => {
   return `Orchestrator ${verb} (code ${code}) — hardware parked by cleanup worker.`;
 });
 
-// Crash diagnostics (orchestrator-lifecycle-and-exit §"Crash diagnostics"):
-// present only on a non-clean exit that captured output / a minidump.
+// Crash diagnostics: present only on a non-clean exit that captured output / a
+// minidump.
 const lastLines = computed(() => report.value?.lastLines ?? []);
 const logText = computed(() => lastLines.value.join("\n"));
 const logPath = computed(() => report.value?.logPath ?? "");
@@ -103,7 +103,7 @@ function reopen(): void {
 </template>
 
 <style scoped lang="scss">
-/* One app error identity (P2): --danger family, --font-mono. A fixed overlay
+/* One app error identity: --danger family, --font-mono. A fixed overlay
    banner (does not reflow page content) that is instantly visible — no fade-in.
    Bottom-anchored, so the diagnostics block grows UPWARD on expand and its log
    tail scrolls internally — the page never shifts. */

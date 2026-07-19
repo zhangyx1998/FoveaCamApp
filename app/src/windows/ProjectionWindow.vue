@@ -4,26 +4,25 @@ This source code is licensed under the MIT license.
 You may find the full license in project root directory.
 --------------------------------------------------- -->
 <!--
-  Projection window — a VSCode-style SPLIT-PANE shell (docs/proposals/
-  projection-split-view.md, replacing the former single-stream viewer). This
+  Projection window — a VSCode-style SPLIT-PANE shell. This
   component OWNS the recursive split tree and every mutation; the recursive
   SplitNode / ProjectionPane children stay thin over the pure reducer
   (`@lib/projection/split-tree`) and call up through the injected controller.
 
-  State-in-URL (deliverable 2): the live layout is serialized into `?layout=`
+  State-in-URL: the live layout is serialized into `?layout=`
   (the `?win` state-in-URL precedent) on every change, so a reload / manifest
   restore replays the EXACT layout. The initial seed resolves in precedence:
     ?layout  (a full tree)  →  ?pane  (one serialized descriptor)
                             →  legacy ?session=&frame=  (a single frame pane).
 
-  Cross-window DnD (deliverable 4): panes advertise a descriptor under the
+  Cross-window DnD: panes advertise a descriptor under the
   custom MIME; a drop resolves move/copy (default move; Alt = copy; app-origin
   drags are copy-only) and same-/cross-window here, then mutates the tree. A
   same-window move is atomic (`movePane`); a cross-window move inserts a fresh
   copy and the SOURCE window removes its pane on its `move` dragend. Removing the
   last pane (a move-out or a close) closes the window.
 
-  Auto-close (deliverable 5/6): when EVERY pane is `terminated` and the new
+  Auto-close: when EVERY pane is `terminated` and the new
   `projection_auto_close` global config is on, the window closes itself.
 -->
 <script setup lang="ts">

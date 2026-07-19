@@ -7,7 +7,7 @@
 // Controller-node NATIVE position input (native-compose-controller.md):
 // attach-on-bind lifecycle, v1/unbound refusal (the session fallback owns
 // those), TERMINATE + disable-iff-last on close, and detach on unbind — the
-// FW5/quiesce-relevant JS half of the native pos_in path, driven with fake
+// quiesce-relevant JS half of the native pos_in path, driven with fake
 // controllers (no native core loads).
 
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -184,7 +184,7 @@ describe("openNativePosition", () => {
       close: vi.fn(async () => {}),
     })) as never;
     // A SLOW native attach: the sink promise stays pending until we resolve it
-    // — the exact window the JS fallback used to race a second CREATE into.
+    // — the exact window a second CREATE could race into.
     let resolveAttach!: (h: ReturnType<typeof makeSinkHandle>) => void;
     c.createNativeMirrorSink = vi.fn(
       () => new Promise<ReturnType<typeof makeSinkHandle>>((r) => (resolveAttach = r)),
@@ -196,8 +196,8 @@ describe("openNativePosition", () => {
       onDetach: vi.fn(),
     });
     const js = node.openPosition("js-fallback", { initial: ORIGIN });
-    // The fallback pumps updates DURING the pending attach (wave-5 fallback
-    // loop shape) — the JS input must NOT lazily create its own stream.
+    // The fallback pumps updates DURING the pending attach — the JS input
+    // must NOT lazily create its own stream.
     js.update(PAIR(P(1, 1), P(1, 1)));
     js.update(PAIR(P(2, 2), P(2, 2)));
     await tick();
@@ -219,7 +219,7 @@ describe("openNativePosition", () => {
     c.createStream = vi.fn(async () => jsStream) as never;
     node.bindController(c as never);
     // The JS input creates its stream FIRST (controller bound before any
-    // native input existed — e.g. a pre-wave-5 style session, or the fallback
+    // native input existed — e.g. a legacy session, or the fallback
     // engaged while the controller was v2 but the native open came later).
     const js = node.openPosition("js-first", { initial: ORIGIN });
     js.update(PAIR(P(1, 1), P(1, 1)));

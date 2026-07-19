@@ -4,15 +4,13 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// NATIVE IMM (Interacting Multiple Model) Kalman motion-predictor BRICK
-// (docs/proposals/prediction-compose-node.md — supersedes the inline
-// `app/orchestrator/imm-node.ts` wiring of imm-delay-compensation.md; the
-// filter math, sign convention, and per-triple `delay_compensation_ms` offset
-// all carry forward). Unlike the retired TS node (a synchronous per-tracker-
-// result transform), this is a STANDALONE PRODUCER on its OWN free-running
-// thread: it ingests tracker measurements at ~60 Hz and emits PREDICTIONS at a
-// configurable rate (default 600 Hz), so the imm node finally shows on the
-// profiler graph with a truthful high output rate.
+// NATIVE IMM (Interacting Multiple Model) Kalman motion-predictor BRICK.
+// Preserves the filter math, sign convention, and per-triple
+// `delay_compensation_ms` offset. A STANDALONE PRODUCER on its OWN free-running
+// thread (not a synchronous per-tracker-result transform): it ingests tracker
+// measurements at ~60 Hz and emits PREDICTIONS at a configurable rate (default
+// 600 Hz), so the imm node shows on the profiler graph with a truthful high
+// output rate.
 //
 // The pure filter is a byte-faithful C++ port of `app/lib/imm-predictor.ts`
 // (KEPT as the REFERENCE implementation): three models (CP/CV/CA) over a shared
@@ -84,7 +82,7 @@ static int64_t nowNs() {
 
 constexpr double NS_PER_SEC = 1e9;
 
-// Clamp the global prediction rate to the ruled window (proposal ruling 2). The
+// Clamp the global prediction rate to the allowed window. The
 // TS/UI layer clamps too; this is the defensive floor/ceiling on the brick.
 constexpr double kRateMin = 60.0;
 constexpr double kRateMax = 1000.0;
@@ -508,11 +506,11 @@ public:
     if (!warm_) return nullptr;
     const double coastSec =
         static_cast<double>(wallNs - lastMeasWallNs_) / NS_PER_SEC;
-    // R1 COAST CAP (mirror-flicker 2026-07-12 addendum): every other guard is
-    // EVENT-driven (maxGapMs acts inside ingest; the JS lost policy needs
-    // found=false results DELIVERED) — a source that stalls outright used to
-    // extrapolate the CA state quadratically forever with found=true, bounded
-    // only by the wire clamp. Past maxGapMs of wall-clock coast (the same
+    // COAST CAP: every other guard is EVENT-driven (maxGapMs acts inside
+    // ingest; the JS lost policy needs found=false results DELIVERED) — but a
+    // source that stalls outright would extrapolate the CA state quadratically
+    // forever with found=true, bounded only by the wire clamp. Past maxGapMs of
+    // wall-clock coast (the same
     // bound ingest applies to measurement gaps) degrade to the miss-coast
     // shape instead of extrapolating.
     if (lastWasMiss_ || coastSec > t_.maxGapMs / 1000.0) {

@@ -170,7 +170,7 @@ Meta metaFromValue(const Napi::Value &value) {
 }
 
 // The `Segment` writer is now the shared `ShmRing::Segment` (ShmWrite.h),
-// reused by both this live preview writer and the C-16 pipe `Publisher`.
+// reused by both this live preview writer and the pipe `Publisher`.
 
 struct SlotNative {
   std::shared_ptr<Segment> segment;
@@ -184,8 +184,8 @@ struct SlotNative {
 // worker_thread loads core.node (the vision worker, for core/Vision) and
 // terminates, a global static would be overwritten by the worker's env and left
 // dangling → the main thread's next ShmSlot/Writer `Create` dereferences a dead
-// Isolate and segfaults — the identical bug fixed for the reader addon in
-// B-19b. Stored in core.node's single instance-data slot (nothing else uses
+// Isolate and segfaults — the identical bug fixed for the reader addon.
+// Stored in core.node's single instance-data slot (nothing else uses
 // it); freed by N-API on env teardown while the env is still valid.
 struct ShmAddonData {
   Napi::FunctionReference slotCtor;

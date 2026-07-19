@@ -4,8 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Host <SPI.h> shim (docs/proposals/firmware-sim-harness.md): the MEMS-SPI
-// DAC-word capture. firmware/src/MEMS.cpp + MEMS-SPI.h compile unchanged;
+// Host <SPI.h> shim: the MEMS-SPI DAC-word capture. firmware/src/MEMS.cpp + MEMS-SPI.h compile unchanged;
 // every begin/endTransaction pair's transferred bytes are committed as one
 // DAC word to the sim's control plane (Sim::onDacWord), with the CS pins
 // (Board::mems_cs, LOW = selected) sampled at commit time. Transfers outside

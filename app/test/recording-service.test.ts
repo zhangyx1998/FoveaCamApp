@@ -4,11 +4,11 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// The composable recording facility (capture-recorder-everywhere ruling 1).
+// The composable recording facility.
 // Everything injected — the recorder node factory, the acquire config — so the
-// start/stop lifecycle, the acquire-then-build ERROR-PATH unwind (mirrors
-// multi-fovea-recording.test.ts's regression: a recorder-node throw releases
-// EVERY acquired resource so a retry is clean), the poll telemetry, and the
+// start/stop lifecycle, the acquire-then-build ERROR-PATH unwind (a
+// recorder-node throw releases EVERY acquired resource so a retry is clean),
+// the poll telemetry, and the
 // finished notification are proven without native core or a worker thread.
 //
 // Also pins the shape of the additive contract mixin (`recordingTelemetry` /

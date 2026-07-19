@@ -4,10 +4,10 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Scripted-target-step cost — PURE trace scoring for the CMA-ES polish stage
-// (docs/proposals/vergence-loop-tuning.md §1): ITAE + overshoot penalty +
-// actuation-effort term, all normalized by the step magnitude so costs compare
-// across step sizes. Behavior spec: docs/spec/disparity-scope.md#autotune.
+// Scripted-target-step cost — PURE trace scoring for the CMA-ES polish stage:
+// ITAE + overshoot penalty + actuation-effort term, all normalized by the step
+// magnitude so costs compare across step sizes. Behavior spec:
+// docs/spec/disparity-scope.md#autotune.
 
 export interface StepTraceSample {
   /** Time since the target step (loop-dt units). */

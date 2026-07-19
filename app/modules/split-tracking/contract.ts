@@ -10,8 +10,8 @@
 // configurable tile, and each mirror INDEPENDENTLY steers to keep its target at
 // the fovea frame CENTER. No stereo/vergence coupling — the two sides never
 // touch each other's state. Views are capturable and recordable.
-// Behavior spec: docs/spec/split-tracking.md. RIG-GATED: tracker + servo
-// behavior is unverified on hardware until the owed stage-f rig pass.
+// Behavior spec: docs/spec/split-tracking.md. Tracker + servo behavior is
+// unverified on hardware until a rig pass.
 
 import { cmd, defineContract } from "@lib/orchestrator/protocol";
 import type { Point2d, Rect, Size } from "core/Geometry";
@@ -33,7 +33,7 @@ export type { Eye, PidGains, TileSize } from "./tracking";
 
 export const splitTracking = defineContract({
   state: {
-    /** Leased camera serials per role (C-22) — the fovea views bind each eye's
+    /** Leased camera serials per role — the fovea views bind each eye's
      *  undistort-or-convert pipe via `usePipeFrame`. Set on acquire. */
     serials: {} as Partial<Record<"L" | "C" | "R", string>>,
     /** Advertised per-eye undistort pipe id, else null (convert fallback). The
@@ -56,7 +56,7 @@ export const splitTracking = defineContract({
      *  the frame center the servo drives toward. */
     size: { L: { width: 0, height: 0 }, R: { width: 0, height: 0 } } as Record<Eye, Size>,
     /** Per-eye live tracker readout (center/bbox in fovea image px) for the
-     *  overlays; null before the first result. RIG-GATED. */
+     *  overlays; null before the first result. */
     tracked: { L: null, R: null } as Record<
       Eye,
       { center: Point2d | null; bbox: Rect | null; found: boolean } | null
@@ -71,7 +71,7 @@ export const splitTracking = defineContract({
     blocked: null as string | null,
     /** Control-path latency (same shape/throttle as manual-control). */
     perf: { actuateMs: { mean: 0, max: 0 } as Stat },
-    // Recording + capture (capture-recorder-everywhere ruling 2).
+    // Recording + capture (capture-recorder-everywhere).
     ...captureTelemetry(),
     ...recordingTelemetry(),
   },

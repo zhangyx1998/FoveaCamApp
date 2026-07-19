@@ -1,5 +1,4 @@
-// Disposable-orchestrator instance registry (docs/proposals/orchestrator-
-// lifecycle-and-exit.md §"RE-AMENDED ruling 2"). The Electron fork/port/janitor
+// Disposable-orchestrator instance registry. The Electron fork/port/janitor
 // wiring is injected, so the state machine is the testable core:
 //   • fork/ack/timeout/kill transitions
 //   • the ≤1-hardware-holder gate (hardware-clear withheld until the previous
@@ -238,7 +237,7 @@ describe("OrchestratorInstances — profiler per-instance binding", () => {
     expect(h.reg.instanceForWindow("profiler-1")).toBeNull();
 
     // Instance dies — boundInstance STILL resolves it (dead), so the connect
-    // broker can fail closed instead of routing to another instance (ruling 2).
+    // broker can fail closed instead of routing to another instance.
     h.reg.onExit(a.id, 6);
     const bound = h.reg.boundInstance("profiler-1");
     expect(bound?.id).toBe("hw-1");

@@ -7,8 +7,8 @@
 // PURE first-order drag SLEW (spec §drag-slew): slew the commanded pose toward
 // the latest pointer target so successive control ticks emit DIFFERING poses the
 // MirrorSink gate passes at capacity, then epsilon-snap and go quiet.
-// NOTE (Lane C parity): manual-control duplicates this ~15-line function — keep
-// the constant/shape consistent; a later dedup can hoist both into @lib.
+// NOTE: manual-control duplicates this ~15-line function — keep the
+// constant/shape consistent; a later dedup can hoist both into @lib.
 
 import type { Pos } from "@lib/controller-codec";
 
@@ -66,13 +66,11 @@ export function slewStep(
 }
 
 /**
- * The drag-slew STATE MACHINE the session drives (extracted so the D1
- * regression test exercises the production state, not a model — docs/dev/
- * mirror-flicker-2026-07-12.md). ALL drag-path volts writers must route
- * through ONE instance: the flicker was one writer pushing the RAW target
- * among slewed writers, alternating the compose floor between two
- * trajectories separated by the slew lag. Seeded from the caller-supplied
- * pose on the first `toward` of a drag; `reset()` on drag end / activate.
+ * The drag-slew STATE MACHINE the session drives. ALL drag-path volts writers
+ * must route through ONE instance: a raw-target writer mixed among slewed
+ * writers alternates the compose floor between two trajectories separated by
+ * the slew lag. Seeded from the caller-supplied pose on the first `toward` of a
+ * drag; `reset()` on drag end / activate.
  */
 export class DragSlew {
   private state: { pose: SlewPose; at: number } | null = null;

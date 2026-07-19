@@ -133,9 +133,8 @@ public:
 
   // Cascade: releasing the camera also releases its lazily created stream
   // view. The StreamObject holds a Stream::Ptr and the Stream holds the
-  // Camera::Ptr — without this, `camera.release()` kept the DEVICE claimed
-  // until GC collected the JS stream object (janitor rig find 2026-07-08:
-  // "RootReference of Arv::Stream destroyed with non-zero reference").
+  // Camera::Ptr — without this, `camera.release()` keeps the DEVICE claimed
+  // until GC collects the JS stream object.
   static void destruct(CameraObject *obj) {
     if (obj->stream_ref.IsEmpty())
       return;
@@ -306,7 +305,7 @@ private:
     JS_EXCEPT(env.Undefined())
   }
 
-  // ---- clock calibration (unified-time, structural revision 2026-07-08) -----
+  // ---- clock calibration ----------------------------------------------------
   // MANUAL RECALIBRATE trigger: the owner thread (ClockCalibrator, spawned at
   // device init) is the calibration LIFECYCLE — this NAPI is a thin
   // synchronous nudge onto the same guarded routine (per-DEVICE mutex; it

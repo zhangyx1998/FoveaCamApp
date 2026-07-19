@@ -6,7 +6,7 @@
 //
 // Composable recording facility: the ~90%-shared skeleton the per-app recording
 // controllers ran (start/stop around the recorder node, a 250ms stats poll, the
-// recording_active/recordingStreams telemetry incl. the F2 drop split, and the
+// recording_active/recordingStreams telemetry incl. the drop split, and the
 // acquire-then-build unwind discipline). Each app passes config; the app's `acquire`
 // decides which pipes to record and returns a reverse-order `release` closure. The
 // facility owns one throw path: build-after-acquire failure releases and rethrows.
@@ -23,8 +23,8 @@ import {
 import { report } from "./diagnostics.js";
 
 /** The telemetry patch a recording session publishes (the exact shape both
- *  existing controllers already emit — F2 drop split rides `RecorderStreamStats`
- *  transparently). */
+ *  existing controllers already emit — the drop split rides
+ *  `RecorderStreamStats` transparently). */
 export type RecordingTelemetryPatch = {
   recording_active?: boolean;
   recordingStreams?: Record<string, RecorderStreamStats>;
@@ -124,7 +124,7 @@ export function createRecordingService(config: RecordingServiceConfig): Recordin
       mkdirSync(dirname(path), { recursive: true });
 
       const acq = config.acquire(path);
-      // Error-path guard (20e8834): the acquire refcounted the raw producers;
+      // Error-path guard: the acquire refcounted the raw producers;
       // the native recorder-node build can still throw (worker spawn / broker
       // connect). A throw before `active = true` would orphan acquired handles
       // with the controller idle — the deferred cleanup never fires, and a retry
@@ -170,12 +170,10 @@ export function createRecordingService(config: RecordingServiceConfig): Recordin
       acquisition = null;
       config.onStopped?.();
       config.telemetry({ recording_active: false, recordingStreams: {} });
-      // value-sweep-2026-07-11 (`recording-finalize-truncation-reads-as-success`):
-      // a wedged/failed finalize left a crash-shape container on disk. Surface it
+      // A wedged/failed finalize left a crash-shape container on disk. Surface it
       // through the process-wide error path (→ renderer error tray) and DO NOT
-      // auto-open the viewer on a truncated file — the operator learned about it
-      // at playback before, after the rig was torn down. A clean finalize
-      // auto-opens the viewer exactly as before.
+      // auto-open the viewer on a truncated file. A clean finalize auto-opens the
+      // viewer.
       if (finished && stats?.truncated) {
         report(
           config.id,

@@ -18,7 +18,7 @@ import type { DropZone } from "./split-tree.js";
 export const PANE_MIME = "application/x-fovea-pane+json";
 
 /** Where a drag started — an app window's pane layout is fixed, so its drags
- *  advertise copy-only (deliverable 4 / user ruling 3). */
+ *  advertise copy-only. */
 export type DragOrigin = "app" | "projection";
 
 /** The resolved semantic of a drop. `move` re-docks the pane (source removes it
@@ -30,7 +30,7 @@ export type DragModifiers = { alt: boolean };
 
 /**
  * Resolve the drop intent from the ORIGIN and the live modifiers:
- *   - app origin      → always `copy` (copy-only, ruling 3);
+ *   - app origin      → always `copy` (copy-only);
  *   - projection + Alt → `copy` (explicit duplicate);
  *   - projection      → `move` (the default).
  */

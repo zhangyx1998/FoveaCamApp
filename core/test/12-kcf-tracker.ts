@@ -4,12 +4,12 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// WS1 1d: KCF tracker on its own free-running C++ thread. NO hardware — drives
+// KCF tracker on its own free-running C++ thread. NO hardware — drives
 // the whole seam via Aravis's fake camera (a Mono8 ramp that shifts 1px/frame,
 // a moving target): createTracker on the camera → arm(roi) → async-iterate the
 // result stream (KCF runs OFF the JS loop on the transform thread) → probe the
 // ThreadMeter (records frame/track intervals + latest-wins drops). Tracking
-// ACCURACY is rig-gated (v1 full-frame KCF); this proves the thread + seam +
+// ACCURACY needs hardware (v1 full-frame KCF); this proves the thread + seam +
 // meter. Run UNSANDBOXED: /opt/homebrew/bin/node core/test/12-kcf-tracker.ts
 
 import assert from "node:assert/strict";
@@ -98,7 +98,7 @@ async function take(tr: Tracker, n: number, ms = 8000): Promise<Result[]> {
       assert(b.x >= 0 && b.y >= 0 && b.x < width && b.y < height, "bbox in-bounds");
     }
   }
-  // SUSTAINED tracking (regression guard, 2026-07-10): cv::TrackerKCF's default
+  // SUSTAINED tracking (regression guard): cv::TrackerKCF's default
   // CN features need a 3-CHANNEL image. When the tracker was fed grayscale it
   // returned a hit on the FIRST update() then lost EVERY subsequent frame
   // (OpenCV 4.13.0), so the rig saw the box "flash then disappear". The raw
@@ -154,7 +154,7 @@ async function take(tr: Tracker, n: number, ms = 8000): Promise<Result[]> {
   );
 
   // Override on the RAW variant: while engaged, results carry the override
-  // center + overridden:true and KCF is NOT consulted (proposal §3.5, both
+  // center + overridden:true and KCF is NOT consulted (both
   // variants). Un-stall first so frames flow quickly.
   tracker.stall(0);
   const OVR = { x: Math.floor(width / 2), y: Math.floor(height / 2) };
@@ -174,7 +174,7 @@ async function take(tr: Tracker, n: number, ms = 8000): Promise<Result[]> {
   tracker.release();
 }
 
-// --- §3.5 CHAINED tracker on a convert brick + override/release re-arm --------
+// --- CHAINED tracker on a convert brick + override/release re-arm --------
 {
   const cams = await A.Camera.list();
   const camera = cams[0]!;

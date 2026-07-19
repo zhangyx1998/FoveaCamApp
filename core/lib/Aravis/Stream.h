@@ -21,7 +21,7 @@ public:
   typedef RefCount::Reference<Stream> Ptr;
   static Ptr get(Camera::Ptr camera);
 
-  // Pre-Frame ArvBuffer tap (multi-fovea-recording ruling 1). `Frame`
+  // Pre-Frame ArvBuffer tap. `Frame`
   // construction UNPACKS packed 12p into a 16-bit container, so the VERBATIM
   // packed wire payload exists ONLY between the buffer pop and its requeue
   // inside iterate(). A tap is a synchronous callback fired there — BEFORE

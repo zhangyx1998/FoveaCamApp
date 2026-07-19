@@ -13,7 +13,7 @@ const isRecording = computed(
 const streams = computed(() => current_recording.value?.streams);
 const hover = ref(false);
 
-// Cmd/Ctrl-R consumer (capture-recorder-nodes.md ruling 9). Main rebinds plain
+// Cmd/Ctrl-R consumer. Main rebinds plain
 // Cmd/Ctrl-R off reload and pushes `recorder:trigger` to the focused window;
 // here it toggles recording where a context exists — start (resolving the save
 // path exactly like RecordControls' Start button) / stop — else a no-op.
@@ -92,8 +92,8 @@ function handleClick() {
         </tr>
       </thead>
       <tbody>
-        <!-- F2 attribution: published = written + drops (pinned invariant); the
-             drops cell splits queue-overflow (q) vs ring-lapped (r) so a rig run
+        <!-- published = written + drops (pinned invariant); the drops cell
+             splits queue-overflow (q) vs ring-lapped (r) so a recording run
              reads the cause without devtools. -->
         <tr v-for="[name, info] of streams" :key="name">
           <td class="stream-name">{{ name }}</td>
@@ -126,7 +126,7 @@ function handleClick() {
   color: inherit;
   border-radius: 4px;
   // Critical control (record toggle): instant hover feedback, no transition
-  // (ruled principle: realtime feedback / snap over smooth).
+  // (realtime feedback / snap over smooth).
   outline: 1px solid transparent;
 
   &:hover {

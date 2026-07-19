@@ -1,4 +1,4 @@
-// MCAP recorder writer (B-5, docs/history/refactor/recorder-container.md §2 + §3):
+// MCAP recorder writer:
 // the fovea sink writes a single-file `.fovea` container (standard MCAP)
 // through a worker_threads worker — validated here by writing synthetic
 // frames and reading the file back with the real @mcap/core indexed reader
@@ -144,7 +144,7 @@ describe("MCAP recorder (fovea sink)", () => {
     expect(await readFile(join(dir, "README.md"), "utf8")).toContain("MCAP");
   });
 
-  it("carries the WS4 4b frame↔voltage binding in per-frame telemetry", async () => {
+  it("carries the frame↔voltage binding in per-frame telemetry", async () => {
     const dir = await tempRoot();
     const sink = await createFoveaSink(dir, "2026-07-06T00:00:00.000Z");
 

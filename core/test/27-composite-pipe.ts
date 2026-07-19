@@ -4,9 +4,8 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Composite (anaglyph / L-vs-R difference) brick (composite-node-and-center-
-// select-fix §B): a two-input RGBA op modelled on StereoStream. NO hardware
-// (fake camera).
+// Composite (anaglyph / L-vs-R difference) brick: a two-input RGBA op modelled
+// on StereoStream. NO hardware (fake camera).
 //
 // The stereo pair is SYNTHESIZED with two slice (fovea) crops of the SAME
 // convert source — the LEFT crop at RL, the RIGHT crop at RR. With ZERO offset
@@ -15,9 +14,9 @@
 // the anaglyph output's R plane must equal the LEFT crop's R plane and the G/B
 // planes the RIGHT crop's (red = LEFT eye, cyan = RIGHT eye).
 //
-// Proves (proposal §E):
+// Proves:
 //   1. ATTACH GUARDS — unknown target / unknown source / bad mode throw named.
-//   2. PARKED before a consumer (ruling C-21) — connecting the composite pipe
+//   2. PARKED before a consumer — connecting the composite pipe
 //      wakes the whole chain (composite → two slice taps → convert → camera);
 //      both input ports metered; output RGBA8 with alpha 255.
 //   3. ANAGLYPH channel identity — output R == LEFT crop R, G/B == RIGHT crop.

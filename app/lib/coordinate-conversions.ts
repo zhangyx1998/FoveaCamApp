@@ -26,10 +26,10 @@ export type ExtrinsicConversions = {
   /** Calibration-MEASURED fovea image scale: fovea px per object-unit at the
    *  extrinsic protocol's nominal 1000-object-unit marker distance (from
    *  `findPinholeProjection`, @lib/marker). Optional — absent on fits made
-   *  before this field existed. NOTE: no longer feeds the fovea↔wide
-   *  magnification (the ×1000/focal formula was RETIRED 2026-07-09 — it baked
-   *  in a false "marker at 1000 side-lengths" distance assumption); kept only
-   *  because it is persisted on old fits and is a harmless calibration signal. */
+   *  before this field existed. NOTE: does NOT feed the fovea↔wide
+   *  magnification (a ×1000/focal formula would bake in a false "marker at
+   *  1000 side-lengths" distance assumption); kept only because it is
+   *  persisted on old fits and is a harmless calibration signal. */
   scale?: number;
   /** Per-pose spread of `scale` (same units) — a calibration-quality signal. */
   scale_std?: number;
@@ -50,29 +50,29 @@ export type ExtrinsicConversions = {
 export type MagnificationSample = {
   /** The fovea camera's outer marker quad (first 4 of `img_points`). */
   img_points: Point2d[];
-  /** Ruling 3 (preferred): the WIDE (C) camera's quad of the SAME side marker
+  /** Preferred: the WIDE (C) camera's quad of the SAME side marker
    *  this eye's fovea tracks — same physical marker, so size and distance
    *  cancel exactly in the ratio. */
   wide_img_points?: Point2d[];
-  /** Ruling 2 (fallback): the wide camera's own CENTER-marker quad; needs
+  /** Fallback: the wide camera's own CENTER-marker quad; needs
    *  `marker` sizes because the center marker is sized independently. */
   wide_center_points?: Point2d[];
-  /** Ruling 2: marker sizes (mm) at capture — the center is adjusted freely
+  /** Marker sizes (mm) at capture — the center is adjusted freely
    *  relative to the sides, so the fallback must carry both. */
   marker?: { side_mm: number; center_mm: number };
 };
 
 /**
  * The measured fovea↔wide optical magnification for ONE calibration record —
- * the distance-and-size-free ratio of the two cameras' views of a marker
- * (RULED 2026-07-09; replaces the retired `scale·1000/focal` formula, which
- * assumed the marker sat 1000 side-lengths away — false on the rig).
+ * the distance-and-size-free ratio of the two cameras' views of a marker.
+ * This ratio avoids the false "marker at 1000 side-lengths" distance
+ * assumption of a `scale·1000/focal` formula.
  *
- *  - Preferred (ruling 3): `sqrt(area(foveaQuad) / area(wide_img_points))` —
+ *  - Preferred: `sqrt(area(foveaQuad) / area(wide_img_points))` —
  *    the fovea and the wide camera view the SAME physical side marker, so the
  *    marker's size and its distance cancel; the area ratio's square root is
  *    the linear px-per-px magnification directly.
- *  - Fallback (ruling 2): `sqrt(area(foveaQuad) / area(wide_center_points)) ×
+ *  - Fallback: `sqrt(area(foveaQuad) / area(wide_center_points)) ×
  *    (center_mm / side_mm)` — the fovea sees the side marker, the wide camera
  *    sees the (independently-sized) CENTER marker; fovea px/mm =
  *    foveaSidePx/side_mm, wide px/mm = centerPx/center_mm, and the

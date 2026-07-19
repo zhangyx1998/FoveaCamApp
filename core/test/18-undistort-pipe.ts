@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Undistort brick v2 (unified-time-and-topology §5): undistorted streams as
+// Undistort brick v2: undistorted streams as
 // their OWN pipes, produced by a native INTRINSIC remap thread CHAINED on the
 // converter's in-process owned-frame tap (BGRA in — never the raw stream),
 // maps built at attach from the plain persisted CameraCalibration JSON. NO
@@ -23,7 +23,7 @@
 //      resumes production (fresh frames flow).
 //   4. undistortProbeAll() exposes per-pipe ThreadMeter snapshots + the v2
 //      {variant, calibratedClock} surface.
-//   5. ORDERLY teardown (B-20 pattern) → natural exit 0, zero leak warns.
+//   5. ORDERLY teardown → natural exit 0, zero leak warns.
 // Run UNSANDBOXED: /opt/homebrew/bin/node core/test/18-undistort-pipe.ts
 
 import assert from "node:assert/strict";
@@ -164,7 +164,7 @@ let resumed = 0;
 assert(resumed >= 2, `undistort pipe resumed after reconnect (${resumed})`);
 console.log("18-undistort-pipe: gate park+resume OK.");
 
-// --- 5. ORDERLY teardown (B-20 pattern) --------------------------------------
+// --- 5. ORDERLY teardown --------------------------------------
 reader.close(raw.rh); reader.close(dst.rh); reader.close(re.rh);
 P.disconnect(rawId); P.disconnect(dstId); P.disconnect(idnId);
 assert.equal(A.detachUndistortPipe(idnId), true, "detach identity");

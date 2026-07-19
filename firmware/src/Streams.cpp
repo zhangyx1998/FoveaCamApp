@@ -24,7 +24,7 @@ Entry table[CAPACITY];
 uint8_t activeId = INVALID_ID;
 bool dirty = false; // active stream's target not yet written to the DAC
 
-// M1 housekeeping cadence (docs/dev/right-dac-freeze-2026-07-12.md).
+// Housekeeping cadence for periodic config re-assertion.
 constexpr uint64_t REFRESH_PERIOD_US = 1'000'000; // ~1 Hz
 uint64_t lastRefreshUs = 0;
 bool refreshPrimed = false; // cadence clock started on the enable edge
@@ -47,13 +47,10 @@ bool create(uint8_t id, const MirrorPosition &left,
   if (id >= CAPACITY || table[id].active)
     return false;
   table[id] = Entry{true, false, left, right};
-  // A stream drives the DAC only while ACTIVE, but activation previously came
-  // ONLY from a CMD_FRAME capture targeting it (Capture.cpp) — the host's
-  // streamed-actuation path (CREATE + fire-and-forget UPDATEs, A-30) never
-  // moved the mirror at all (rig 2026-07-08: locked at origin). A freshly
-  // CREATEd stream now takes the DAC when nothing else holds it; captures
-  // still re-activate their own stream per request (FW5: hosts run one
-  // exclusive stream, so this never steals from a live one).
+  // A stream drives the DAC only while ACTIVE. A freshly CREATEd stream takes
+  // the DAC when nothing else holds it; captures still re-activate their own
+  // stream per request. Hosts run one exclusive stream, so this never steals
+  // from a live one.
   if (activeId == INVALID_ID) {
     activeId = id;
     dirty = true;
@@ -67,7 +64,7 @@ bool update(uint8_t id, const MirrorPosition &left,
     return false;
   // Guard against the strobe ISR's Streams::snapshot() (Capture.cpp) reading
   // a torn MirrorPosition mid-write — it runs concurrently with this from
-  // interrupt context (§9 FW6).
+  // interrupt context.
   noInterrupts();
   table[id].left = left;
   table[id].right = right;
@@ -115,8 +112,8 @@ void touch() {
 }
 
 void housekeeping() {
-  // M1 periodic config re-assertion (docs/dev/right-dac-freeze-2026-07-12.md).
-  // Called every loop() but acts only while the system is enabled and >= 1 s
+  // Periodic config re-assertion. Called every loop() but acts only while the
+  // system is enabled and >= 1 s
   // since the last refresh. MEMS::refresh() re-sends config-only words (no
   // RESET, no value write), so the mirror never moves — safe mid-capture; the
   // subsequent touch() re-commits the current targets within one tick.

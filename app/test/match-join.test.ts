@@ -4,8 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// L/R match-join staleness bound (value-sweep 2026-07-11
-// `match-pair-join-no-staleness-bound`): a stalled side must read as LOST,
+// L/R match-join staleness bound: a stalled side must read as LOST,
 // not steer one frozen eye forever.
 
 import { describe, expect, it } from "vitest";

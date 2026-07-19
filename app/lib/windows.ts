@@ -21,26 +21,25 @@ export type WindowClass =
   | "config"
   | "telecanvas";
 
-/** URL state params addressing a projection window's stream (multi-window.md
- *  req. 4 — the first state-in-URL consumer): the orchestrator session name
- *  and the frame-channel name within it (e.g. session=tracking, frame=C). */
+/** URL state params addressing a projection window's stream: the orchestrator
+ *  session name and the frame-channel name within it (e.g. session=tracking,
+ *  frame=C). */
 export type ProjectionParams = { session: string; frame: string };
 
-/** Query-string key carrying a window's stable instance id (A-34, real-2):
+/** Query-string key carrying a window's stable instance id:
  *  minted by the window manager at spawn (`<appId|class>-<n>`, unique among
  *  live windows), read renderer-side via `@lib/url-state`'s `windowId()`.
  *  Riding the URL makes it stable across reloads and manifest restores (the
- *  manifest persists the full landing URL). C-24's composition protocol keys
+ *  manifest persists the full landing URL). The composition protocol keys
  *  `win/<windowId>/...` node namespaces + close-teardown on it. */
 export const WINDOW_ID_PARAM = "win";
 
-/** URL query keys pinning a profiler window to ONE orchestrator instance
- *  (orchestrator-lifecycle-and-exit §"Profiler per-instance binding"): the
- *  instance id it profiles into (`instance`) and that instance's human session
- *  name / app id (`session`, e.g. `manual-control`). Stamped at open by
+/** URL query keys pinning a profiler window to ONE orchestrator instance:
+ *  the instance id it profiles into (`instance`) and that instance's human
+ *  session name / app id (`session`, e.g. `manual-control`). Stamped at open by
  *  `WindowManager.openProfiler`, read renderer-side for the title bar + the
  *  connect broker's fail-closed routing. Immutable for the window's life — a
- *  profiler NEVER re-binds to a newer instance (ruling 2). */
+ *  profiler NEVER re-binds to a newer instance. */
 export const PROFILER_INSTANCE_PARAM = "instance";
 export const PROFILER_SESSION_PARAM = "session";
 
@@ -56,8 +55,7 @@ export interface AppMeta {
   /** Dev-only app (excluded from production launcher + registry). */
   dev?: true;
   /** This app owns a `debug`-class sub-window (Debugger.vue) — AppWindow shows
-   *  a title-bar toggle for it (moved off the page body, user 2026-07-11).
-   *  Value = the tooltip label for the toggle. */
+   *  a title-bar toggle for it. Value = the tooltip label for the toggle. */
   debugWindow?: string;
 }
 
@@ -147,8 +145,7 @@ export function appById(id: string): AppMeta | undefined {
  *  main-side (main.ts's options adapter), so this module stays Node-free.
  *  `renderer` = bridge + shm reader (`sandbox: false`); `profiler` = sandboxed
  *  bridge only; `viewer` = bridge + the standalone playback worker
- *  (`sandbox: false`; NO shm reader/orchestrator port —
- *  standalone-viewer-and-fcap ruling 1). */
+ *  (`sandbox: false`; NO shm reader/orchestrator port). */
 export type PreloadKind = "renderer" | "profiler" | "viewer";
 
 /** Constructor size + minimums for a window class — Electron-agnostic; main.ts
@@ -161,7 +158,7 @@ export interface WindowSizeSpec {
 }
 
 /**
- * One row of the window taxonomy (multi-window.md §2) — the single source of
+ * One row of the window taxonomy — the single source of
  * truth every window consumer derives from: the renderer launcher, the main
  * window manager + its metadata→BrowserWindowOptions adapter, the manifest
  * restore planner, and the vite multi-entry build. Centralizing it means a new
@@ -181,10 +178,10 @@ export interface WindowSpec {
   /** `WindowDescriptor` field that dedupes instances (viewer → one per file);
    *  omitted for 0..N classes with no dedupe. */
   dedupe?: "fileKey";
-  /** What happens to a window of this class when its `owner` window closes
-   *  (WS2 2a, project-multi-subwindow-per-app): `cascade` = close with the
-   *  owner (2b's debug drawer); `survive` = stay open (projection/viewer keep
-   *  their frozen last frame, §5.3). Ownerless windows ignore this. */
+  /** What happens to a window of this class when its `owner` window closes:
+   *  `cascade` = close with the owner (the debug drawer); `survive` = stay
+   *  open (projection/viewer keep their frozen last frame). Ownerless windows
+   *  ignore this. */
   onOwnerClose: "cascade" | "survive";
   /** Static entry HTML (relative to the renderer root). App windows derive a
    *  per-id entry instead — see `entryFor`. */
@@ -203,7 +200,7 @@ export const WINDOWS: Record<WindowClass, WindowSpec> = {
     countsForWelcome: false,
     onOwnerClose: "survive",
     entry: "windows/welcome.html",
-    // Live annotated previews need the shm reader (multi-window.md §2).
+    // Live annotated previews need the shm reader.
     preload: "renderer",
     sandbox: false,
     title: "FoveaCam Duo",
@@ -228,7 +225,7 @@ export const WINDOWS: Record<WindowClass, WindowSpec> = {
     singleton: false,
     exclusive: false,
     countsForWelcome: false,
-    // SURVIVE (ruling 2): the profiler outlives its instance's death — it stays
+    // SURVIVE: the profiler outlives its instance's death — it stays
     // open with its accumulated graphs/meters/logs frozen and inspectable, and
     // is NEVER re-attached to a newer instance.
     onOwnerClose: "survive",
@@ -257,7 +254,7 @@ export const WINDOWS: Record<WindowClass, WindowSpec> = {
     onOwnerClose: "survive",
     dedupe: "fileKey",
     entry: "windows/viewer.html",
-    // Standalone playback (ruling 1): the dedicated viewer preload spawns the
+    // Standalone playback: the dedicated viewer preload spawns the
     // in-window worker (MCAP read + decode) — no shm reader, no orchestrator.
     preload: "viewer",
     sandbox: false,
@@ -265,12 +262,12 @@ export const WINDOWS: Record<WindowClass, WindowSpec> = {
     bounds: { width: 1100, height: 760, minWidth: 640, minHeight: 420 },
   },
   debug: {
-    // WS2 2b: a module's own debugger sub-window (mounts the module's
+    // A module's own debugger sub-window (mounts the module's
     // `Debugger.vue` full-window; disparity-scope is its first real user — a
     // vertical stack of the match strip + per-side correlation heatmaps).
-    // Owner-bound — the FIRST class to opt into cascade (closes with its opener
-    // app; A-20/2a). Projection-style: renderer preload (shm reader), passive
-    // subscriber (never drains/switches the app, never counts for welcome).
+    // Owner-bound — closes with its opener app. Projection-style: renderer
+    // preload (shm reader), passive subscriber (never drains/switches the app,
+    // never counts for welcome).
     singleton: false,
     exclusive: false,
     countsForWelcome: false,
@@ -323,8 +320,8 @@ export const WINDOWS: Record<WindowClass, WindowSpec> = {
 
 /**
  * Entry HTML path (relative to the vite root / renderer dist root) for a
- * window class. Every app gets its own entry URL + HTML (multi-window.md
- * req. 2); the singleton/utility classes carry a static entry in `WINDOWS`.
+ * window class. Every app gets its own entry URL + HTML;
+ * the singleton/utility classes carry a static entry in `WINDOWS`.
  */
 export function entryFor(cls: WindowClass, appId?: string): string {
   if (cls === "app") {
@@ -348,7 +345,7 @@ export function allEntries(): Record<string, string> {
 
 /** Document (pre-mount OS) title for a generated entry HTML, keyed by the
  *  `allEntries()` key (window-class name for the static classes, app id for
- *  app windows). Consumed by the `foveaWindowEntries` vite plugin (A-27) so the
+ *  app windows). Consumed by the `foveaWindowEntries` vite plugin so the
  *  registry is the single source for titles too. The live TitleBar /
  *  BrowserWindow title governs once the Vue app mounts — this is only what the
  *  OS shows before boot. App titles derive from `APP_REGISTRY` uniformly. */

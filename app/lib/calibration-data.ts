@@ -41,9 +41,8 @@ export interface TripleConfig {
    *  matches this triple. Empty/absent = no nickname (fall back to serials). */
   nickname?: string;
   /** Per-eye drift offsets (angle-space `Point2d`) written by calibrate-drift
-   *  (`saved.L`/`saved.R`, nullable). The type previously LIED (`number`) —
-   *  calibration-review-2026-07-11 #16 — so the Device tab's `typeof === "number"`
-   *  check never matched a real doc and the drift flag never showed. */
+   *  (`saved.L`/`saved.R`, nullable). Stored as `Point2d | null`, not a scalar,
+   *  so the Device tab's presence check matches a real doc. */
   drift_l?: Point2d | null;
   drift_r?: Point2d | null;
   zoom_override?: number;
@@ -67,8 +66,8 @@ export interface TripleConfig {
 export const DEFAULT_BASELINE_MM = 200;
 
 /**
- * Resolve the physical stereo baseline (mm) for a triple under the RULED order
- * (2026-07-09): the per-triple `baseline_mm` wins, else the legacy app-level
+ * Resolve the physical stereo baseline (mm) for a triple under the precedence
+ * order: the per-triple `baseline_mm` wins, else the legacy app-level
  * `baseline_distance_mm`, else {@link DEFAULT_BASELINE_MM}. Each tier must be a
  * finite number > 0 to be accepted (a stored 0 / NaN / negative is treated as
  * unset and falls through), so existing rigs — which only ever set the legacy

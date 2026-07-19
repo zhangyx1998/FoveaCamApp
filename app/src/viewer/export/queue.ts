@@ -94,7 +94,7 @@ export class ExportQueue {
     return { aborted: true, wasRunning, start: this.dispatch() };
   }
 
-  /** Abort every queued+running job (window close, spec 11). Returns the ids of
+  /** Abort every queued+running job (window close). Returns the ids of
    *  jobs that were RUNNING (the caller kills + unlinks each). */
   abortAll(): number[] {
     const running: number[] = [];
@@ -120,7 +120,7 @@ export class ExportQueue {
     job.etaSec = etaSec;
   }
 
-  /** Flip the parallel flag (spec 10). Turning it ON dispatches the whole
+  /** Flip the parallel flag. Turning it ON dispatches the whole
    *  backlog; OFF never pauses a running job. Returns the ids to START. */
   setParallel(parallel: boolean): number[] {
     this.parallel = parallel;
@@ -151,13 +151,13 @@ export class ExportQueue {
   }
 
   /** Drop TERMINAL jobs (done/failed/aborted) from the snapshot — the tray's
-   *  "Clear finished" affordance (UI/UX review 2026-07-10: results must not pin
-   *  the tray icon for the window's lifetime with no exit). Running/queued jobs
-   *  are untouched — and while the CURRENT episode is still active, its own
-   *  terminal jobs are kept too: deleting them would pull 1.0-weight entries
-   *  out of `overallProgress`'s denominator and drop the headline % (the exact
-   *  non-monotonicity the episode model exists to prevent; review #1). They
-   *  become clearable the moment the episode settles. */
+   *  "Clear finished" affordance (results must not pin the tray icon for the
+   *  window's lifetime with no exit). Running/queued jobs are untouched — and
+   *  while the CURRENT episode is still active, its own terminal jobs are kept
+   *  too: deleting them would pull 1.0-weight entries out of `overallProgress`'s
+   *  denominator and drop the headline % (the exact non-monotonicity the episode
+   *  model exists to prevent). They become clearable the moment the episode
+   *  settles. */
   clearFinished(): void {
     const activeEpisode = this.activeCount() > 0 ? this.episode : -1;
     this.order = this.order.filter((id) => {
@@ -173,8 +173,8 @@ export class ExportQueue {
    *  is idle (no queued/running jobs — nothing was ever active, or the whole run
    *  finished). MONOTONIC across completions: terminal jobs stay in the
    *  denominator counting as fully done (1), so a finishing sibling can only
-   *  raise the headline %, never drop it (UI/UX review 2026-07-10 — the old
-   *  drop-done-from-denominator average jumped around, e.g. 50→25→50). Queued
+   *  raise the headline %, never drop it — dropping done jobs from the
+   *  denominator would make the average jump around (e.g. 50→25→50). Queued
    *  jobs count as 0; running jobs count their live fraction. */
   overallProgress(): number | null {
     let sum = 0;
@@ -186,7 +186,7 @@ export class ExportQueue {
       if (j.state === "aborted") {
         // Cancelled ≠ work: an aborted job leaves BOTH numerator and
         // denominator (counting it as 1.0 inflated the headline — abort a
-        // queued job and "progress" jumped; UI/UX review 2026-07-10 #2).
+        // queued job and "progress" jumped).
         // Still monotonic: removing a 0-progress queued job from the
         // denominator can only raise the %.
         n--;

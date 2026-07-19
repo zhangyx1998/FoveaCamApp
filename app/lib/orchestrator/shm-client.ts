@@ -42,8 +42,8 @@ import {
 /** Round-trip latency summary (ms). */
 export type ShmLatencyStats = SampleStats;
 
-/** Observe-only counters for the transfer pool (C-P9 surfaces these as a
- *  workload/OSD block). Never gate reads on any of these. */
+/** Observe-only counters for the transfer pool (surfaced as a workload/OSD
+ *  block). Never gate reads on any of these. */
 export type ShmReadStats = {
   /** Transfer reads that returned a fresh frame. */
   reads: number;
@@ -76,19 +76,19 @@ export type ShmReadStats = {
   latencyMs: ShmLatencyStats;
 };
 
-/** One frame read from a connected pipe (C-17). `data` is the pool buffer that
+/** One frame read from a connected pipe. `data` is the pool buffer that
  *  now backs the pixels — return it via `releaseBuffer()` once displaced. */
 export type PipeReadFrame = {
   data: ArrayBuffer;
   seq: bigint;
   tCapture?: number;
-  /** Producer convert cost (ms) + seqlock health for this read (A-26 Fix D) —
-   *  carried through so the consumer can populate `FramePayload.meta`/`.shm`
-   *  and the StreamView inspector shows the same metrics on pipe streams. */
+  /** Producer convert cost (ms) + seqlock health for this read — carried
+   *  through so the consumer can populate `FramePayload.meta`/`.shm` and the
+   *  StreamView inspector shows the same metrics on pipe streams. */
   convertMs?: number;
   gen?: number;
   retries?: number;
-  /** Active frame size (C-20 dynamic resize) — the frame occupies
+  /** Active frame size (dynamic resize) — the frame occupies
    *  `width*height*channels` bytes at the head of `data`. */
   width?: number;
   height?: number;
@@ -102,7 +102,7 @@ export type PipeReadFrame = {
   bytes?: number;
 };
 
-/** A FIFO pipe read outcome (capture-recorder-nodes Phase 0). Mirrors the
+/** A FIFO pipe read outcome. Mirrors the
  *  reader addon's `readSeqInto` classification so the recorder/capture consumer
  *  can drive an ordered, drop-accounted stream:
  *   - `PipeReadFrame`     `wantSeq` was delivered (`.seq === wantSeq`).
@@ -129,19 +129,19 @@ export interface ShmClient {
    *  payloads (their buffers aren't pooled) and for null. */
   release(payload: FramePayload | null): void;
   /** Read the latest frame of a connected pipe by segment name, tracking
-   *  `lastSeq` consumer-side (C-17). Resolves the frame (`data` = a pool
-   *  buffer), `"closed"` when the publisher has closed, or `null` when no newer
-   *  frame exists. Rejects on transport error/timeout (the consumer retries). */
+   *  `lastSeq` consumer-side. Resolves the frame (`data` = a pool buffer),
+   *  `"closed"` when the publisher has closed, or `null` when no newer frame
+   *  exists. Rejects on transport error/timeout (the consumer retries). */
   readPipe(
     shmName: string,
     lastSeq: bigint,
     bytes: number,
   ): Promise<PipeReadFrame | "closed" | null>;
   /** FIFO read of a SPECIFIC frame `wantSeq` from a connected pipe by segment
-   *  name (capture-recorder-nodes Phase 0). Same pool/provisioning as `readPipe`
-   *  (`bytes` = the ring SLOT size, `maxBytes ?? bytesPerFrame` — the C-20 rule);
-   *  resolves the FIFO outcome (see `PipeSeqReadResult`). Rejects on transport
-   *  error/timeout (the consumer retries the same seq). */
+   *  name. Same pool/provisioning as `readPipe` (`bytes` = the ring SLOT size,
+   *  `maxBytes ?? bytesPerFrame`); resolves the FIFO outcome (see
+   *  `PipeSeqReadResult`). Rejects on transport error/timeout (the consumer
+   *  retries the same seq). */
   readPipeSeq(
     shmName: string,
     wantSeq: bigint,
@@ -183,21 +183,19 @@ export function createShmClient(
   clock: () => number = now,
 ): ShmClient {
   const createdAt = Date.now();
-  // Free-list of recyclable buffers, bucketed by byte length (C-15). Instead of
-  // a fixed cap, each size's free-list is bounded by that size's own high-water
-  // mark of concurrently-OUTSTANDING buffers (checked out, not yet recycled) —
-  // i.e. the live working set. N same-resolution previews hold ~2N same-size
-  // buffers (1 transferred to the preload mid-read + 1 displayed), so the pool
-  // auto-grows to retain exactly that and steady state never re-allocates. The
-  // old fixed `MAX_POOLED_PER_SIZE = 3` overflowed at N≥2 → a fresh multi-MB
-  // ArrayBuffer per frame → major GC → the manage-cameras ~1–2 s freeze.
+  // Free-list of recyclable buffers, bucketed by byte length. Instead of a fixed
+  // cap, each size's free-list is bounded by that size's own high-water mark of
+  // concurrently-OUTSTANDING buffers (checked out, not yet recycled) — i.e. the
+  // live working set. N same-resolution previews hold ~2N same-size buffers (1
+  // transferred to the preload mid-read + 1 displayed), so the pool auto-grows
+  // to retain exactly that and steady state never re-allocates. A fixed per-size
+  // cap overflows at N≥2 → a fresh multi-MB ArrayBuffer per frame → major GC →
+  // a visible multi-second freeze.
   //
-  // value-sweep-2026-07-11 (`frame-ref-dispose-strands-pool-buffer`): the cap is
-  // a WINDOWED max, not peak-EVER. A one-off spike (e.g. a transient burst of
-  // previews, or a since-fixed leak) used to pin the retention cap forever, so
-  // the pool never released those buffers back. Tracking the max over a trailing
-  // couple of windows lets the cap DECAY once the working set shrinks, while a
-  // steady stream keeps its cap (the peak recurs every window) and never
+  // The cap is a WINDOWED max, not peak-EVER: a one-off spike (a transient burst
+  // of previews) must not pin the retention cap forever. Tracking the max over a
+  // trailing couple of windows lets the cap DECAY once the working set shrinks,
+  // while a steady stream keeps its cap (the peak recurs every window) and never
   // re-allocates.
   const RETENTION_WINDOW_MS = 5_000;
   interface SizeBucket {
@@ -242,9 +240,8 @@ export function createShmClient(
    *  in-flight) once a DIFFERENT size becomes active — a resolution/format
    *  switch stops using the old size, so its retained buffers must not linger.
    *  Done at checkout (not recycle): a same-size release→reacquire keeps
-   *  `outstanding` transiently 0 but must still reuse (the C-P2 pinned tests),
-   *  so idle same-size buckets are preserved; only a switch to another size
-   *  evicts the old one. */
+   *  `outstanding` transiently 0 but must still reuse, so idle same-size
+   *  buckets are preserved; only a switch to another size evicts the old one. */
   function evictIdleSizesExcept(keep: number): void {
     for (const [size, b] of pools)
       if (size !== keep && b.outstanding === 0) pools.delete(size);
@@ -258,7 +255,7 @@ export function createShmClient(
       startedAt: number;
     }
   >();
-  // Pipe reads (C-17) share the port + pool but track their own pending set
+  // Pipe reads share the port + pool but track their own pending set
   // (a different resolve shape than the SHM_READ path).
   const pipePending = new Map<
     number,
@@ -268,7 +265,7 @@ export function createShmClient(
       timer: ReturnType<typeof setTimeout>;
     }
   >();
-  // FIFO pipe reads (Phase 0) share the port + pool but resolve a wider outcome
+  // FIFO pipe reads share the port + pool but resolve a wider outcome
   // (frame / notyet / gone+oldestSeq / closed), so they track their own pending.
   const pipeSeqPending = new Map<
     number,
@@ -308,7 +305,7 @@ export function createShmClient(
     // Retain up to the windowed working-set cap. A steady stream keeps its cap
     // (the peak recurs each window), so this never drops a buffer the steady
     // state needs; once the working set shrinks past a window, the cap decays
-    // and surplus buffers are let go (the retention leak this fixes).
+    // and surplus buffers are let go.
     if (b.free.length < retentionCap(b)) b.free.push(buffer);
   }
 

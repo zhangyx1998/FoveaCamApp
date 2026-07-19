@@ -3,9 +3,9 @@
 # This source code is licensed under the MIT license.
 # You may find the full license in project root directory.
 # -------------------------------------------------------
-"""FoveaReader over fixtures written by the REAL app recorder (B-5 harness
-— see fixtures/generate.ts): schema contract decode, telemetry join, 12p
-unpack, and the streaming recovery path for a crash-truncated file."""
+"""FoveaReader over fixtures written by the REAL app recorder (see
+fixtures/generate.ts): schema contract decode, telemetry join, 12p unpack,
+and the streaming recovery path for a crash-truncated file."""
 
 from pathlib import Path
 

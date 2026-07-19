@@ -1,7 +1,7 @@
 // `createDataSet` (calibrate-extrinsic/dataset.ts) reshapes captured
 // `ExtrinsicRecord`s into the per-fovea `ExtrinsicDataset` the regression fit
-// consumes. Since the measured-magnification fix (ruled 2026-07-09) it also
-// threads the wide-camera marker quads + marker sizes per eye — optional, so a
+// consumes. It also threads the wide-camera marker quads + marker sizes per eye
+// — optional, so a
 // legacy record (missing those fields) must still reshape cleanly. Pure (types
 // only), no orchestrator runtime needed.
 
@@ -49,9 +49,9 @@ describe("createDataSet (measured-magnification field threading)", () => {
     expect(dsL!.img_points).toEqual(quad(90)); // this eye's fovea quad
     expect(dsL!.voltage).toEqual({ x: 1, y: 2 });
     expect(dsL!.angle).toEqual({ x: 0.1, y: 0.2 }); // from C
-    // Ruling 3: the wide camera's view of THIS eye's side marker.
+    // The wide camera's view of THIS eye's side marker.
     expect(dsL!.wide_img_points).toEqual(quad(11));
-    // Ruling 2 fallback: C's own center-marker outer quad (first 4).
+    // Fallback: C's own center-marker outer quad (first 4).
     expect(dsL!.wide_center_points).toEqual(quad(10));
     expect(dsL!.marker).toEqual({ side_mm: 20, center_mm: 10 });
 
@@ -89,7 +89,7 @@ describe("createDataSet (measured-magnification field threading)", () => {
     expect(createDataSet([r], "R")[0]!.wide_img_points).toBeUndefined();
   });
 
-  // Review L3: pin the per-eye field THREADING no earlier test asserted — a
+  // Pin the per-eye field THREADING no earlier test asserted — a
   // swapped eye (R dataset carrying L's voltage/obj_points) would fit a
   // plausible-looking but crossed regression.
   it("threads obj_points per eye (L3)", () => {
@@ -111,7 +111,7 @@ describe("createDataSet (measured-magnification field threading)", () => {
   });
 });
 
-describe("computeFinStats (review #14 residual surfacing)", () => {
+describe("computeFinStats (residual surfacing)", () => {
   // A linear predictor whose error vs the recorded voltage is exactly known.
   const exact: A2VPredict = { predict: () => ({ x: 1, y: 2 }) }; // == L.voltage
   const off: A2VPredict = { predict: () => ({ x: 3, y: 8 }) }; // R.voltage + (0,4)
@@ -141,7 +141,7 @@ describe("computeFinStats (review #14 residual surfacing)", () => {
     expect(fin.rmsL).toBeNull();
   });
 
-  it("MIN_FIT_SAMPLES matches the ruled fit gate", () => {
+  it("MIN_FIT_SAMPLES matches the fit gate", () => {
     expect(MIN_FIT_SAMPLES).toBe(10);
   });
 });
