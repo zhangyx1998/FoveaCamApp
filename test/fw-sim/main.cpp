@@ -16,8 +16,9 @@
 // Control channel (stdin, line-oriented; every accepted line is ACKed with
 // `ok <line>` on stdout so a driver can sequence against it):
 //   strobe <L|R> <rise_us> <fall_us> [jitter_us]   arm auto strobe injection:
-//       on each trigger RISE of that camera's output pin, its strobe INPUT
-//       rises at +rise_us and falls at +fall_us (±jitter, deterministic PRNG)
+//       on each RISE of that camera's trigger pin (the pin the firmware
+//       drives), its strobe pin (the pin the firmware reads) rises at
+//       +rise_us and falls at +fall_us (±jitter, deterministic PRNG)
 //   strobe <L|R> off                               disarm (timeout tests)
 //   quit                                           exit 0
 //
@@ -103,7 +104,7 @@ void scheduleStrobes(int cam) {
   const auto &cfg = strobes[cam];
   if (!cfg.armed)
     return;
-  const unsigned inputPin = Board::camera[cam + 1].input.number;
+  const unsigned strobePin = Board::camera[cam + 1].strobe.number;
   const uint64_t now = Sim::nowUs();
   int64_t rise = int64_t(cfg.riseUs) + jitter(cfg.jitterUs);
   int64_t fall = int64_t(cfg.fallUs) + jitter(cfg.jitterUs);
@@ -111,11 +112,11 @@ void scheduleStrobes(int cam) {
     rise = 0;
   if (fall <= rise)
     fall = rise + 1;
-  edges.push_back({now + uint64_t(rise), inputPin, HIGH});
-  edges.push_back({now + uint64_t(fall), inputPin, LOW});
+  edges.push_back({now + uint64_t(rise), strobePin, HIGH});
+  edges.push_back({now + uint64_t(fall), strobePin, LOW});
 }
 
-// Fire every due edge in due-order: set the input pin level, then invoke the
+// Fire every due edge in due-order: set the strobe pin level, then invoke the
 // attached ISR — the sim's stand-in for the MCU's pin-change interrupt.
 void pumpStrobes() {
   if (edges.empty())
@@ -129,7 +130,7 @@ void pumpStrobes() {
       break;
     Sim::setInputPin(e.pin, e.level);
     Sim::fireIsr(e.pin);
-    Sim::emit("strobe %s %u", e.pin == Board::camera[1].input.number ? "L" : "R",
+    Sim::emit("strobe %s %u", e.pin == Board::camera[1].strobe.number ? "L" : "R",
               unsigned(e.level));
     fired++;
   }
@@ -202,16 +203,16 @@ void pumpControl() {
 
 void Sim::onPinWrite(unsigned pin, uint8_t level) {
   // Observability: the system-enable rail + the three camera trigger outputs.
-  if (pin == Board::enable.number || pin == Board::camera[0].output.number ||
-      pin == Board::camera[1].output.number ||
-      pin == Board::camera[2].output.number)
+  if (pin == Board::enable.number || pin == Board::camera[0].trigger.number ||
+      pin == Board::camera[1].trigger.number ||
+      pin == Board::camera[2].trigger.number)
     Sim::emit("pin %u %u", pin, unsigned(level));
   // Trigger RISE starts that camera's scripted strobe schedule ("relative to
   // the trigger write").
   if (level == HIGH) {
-    if (pin == Board::camera[1].output.number)
+    if (pin == Board::camera[1].trigger.number)
       scheduleStrobes(0); // L
-    else if (pin == Board::camera[2].output.number)
+    else if (pin == Board::camera[2].trigger.number)
       scheduleStrobes(1); // R
   }
 }
