@@ -32,10 +32,11 @@ jobs:
           node-version: 22
 
       # No package-lock is tracked, so `npm ci` can't be used. --ignore-scripts
-      # skips the root `postinstall` (cd core && make — a native OpenCV build the
-      # docs don't need and that would fail/stall on a runner).
+      # skips the root postinstall (native core build). --workspaces=false installs only
+      # the root deps (vitepress) — the app workspace pins peer-conflicting vite
+      # majors the docs build never touches.
       - name: Install deps
-        run: npm install --ignore-scripts
+        run: npm install --ignore-scripts --workspaces=false
 
       - name: Build docs
         run: npm run docs:build
