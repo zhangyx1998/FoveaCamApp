@@ -1,0 +1,55 @@
+# Build the VitePress docs and publish them to GitHub Pages.
+# Repo Settings → Pages → Source must be set to "GitHub Actions" (one-time).
+name: Deploy Docs to Pages
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'docs/**'
+      - '.github/workflows/docs.yml'
+  workflow_dispatch: # allow manual runs from the Actions tab
+
+# Allow the deploy job to publish to Pages via OIDC.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deploy at a time; don't cancel an in-flight publish.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # No package-lock is tracked, so `npm ci` can't be used. --ignore-scripts
+      # skips the root `postinstall` (cd core && make — a native OpenCV build the
+      # docs don't need and that would fail/stall on a runner).
+      - name: Install deps
+        run: npm install --ignore-scripts
+
+      - name: Build docs
+        run: npm run docs:build
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/.vitepress/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

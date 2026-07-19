@@ -31,6 +31,11 @@ export default defineConfig({
   description:
     'Developer documentation for FoveaCam Duo — a stereo MEMS-foveated camera rig on Electron.',
 
+  // Project Pages served under https://zhangyx1998.github.io/FoveaCamApp/ — the
+  // base must match the repo name so assets/links resolve. Auto-nav emits
+  // root-relative links (/manual/, …); VitePress rewrites them with this base.
+  base: '/FoveaCamApp/',
+
   // root === docs; docs itself is the source tree.
   srcDir: '.',
 
