@@ -2,12 +2,11 @@
 
 Developer-facing behavior spec for the `disparity-scope` app session (auto-vergence).
 Distinct from the user manual; this captures the state machine, gating semantics,
-drag rulings, and precedence rules the code points here for. Code carries only
+drag behavior, and precedence rules the code points here for. Code carries only
 tight one-line pointers to these anchors.
 
-Topology follows the SPLIT-NODE proposal (`docs/proposals/split-disparity-nodes.md`,
-ruled 2026-07-09). The session is a THIN main-thread coordinator: it wires up the
-graph and forwards final results; it does not micro-manage frames.
+Topology follows a split-node design. The session is a THIN main-thread coordinator: it
+wires up the graph and forwards final results; it does not micro-manage frames.
 
 ## Pipeline topology {#topology}
 
@@ -19,7 +18,7 @@ compose the split pipeline out of GENERAL-PURPOSE nodes.
 - **Slice nodes** on the C undistort (the fovea crop brick, reused), live-steered by
   `steerCrops` as target/zoom move: `slice/scope-strip` (target-centered match strip)
   and `slice/scope-tile` (display center tile).
-- **Scale nodes** (ruling 5 — the match kernel does NO resizing), retuned by
+- **Scale nodes** (the match kernel does NO resizing), retuned by
   `retuneScalers` on zoom/magnification/tuning change: the strip's `scale/match`
   (ratio = match scale `s`) and one `scale/scope-needle` per fovea (`dsize` =
   `foveaTileSize`).
@@ -31,10 +30,9 @@ compose the split pipeline out of GENERAL-PURPOSE nodes.
 - **Views.** Sliced/guide views ARE the slice pipes (renderer `usePipeFrame`). The
   L-vs-R difference AND anaglyph center views are a real two-input COMPOSITE brick
   (`stereo/composite`, mode retuned from `state.view`) on the two fovea undistort
-  pipes — the renderer DiffView canvas composite is retired. Only the per-side match
-  heatmaps remain session frame channels. SGBM disparity + heatmap are separate bricks
-  (`createStereoPipe` → `createHeatmapPipe`), PARKED until the renderer connects the
-  heatmap pipe (ruling 2 — no subscriber, no compute).
+  pipes. Only the per-side match heatmaps remain session frame channels. SGBM disparity
+  + heatmap are separate bricks (`createStereoPipe` → `createHeatmapPipe`), PARKED until
+  the renderer connects the heatmap pipe (no subscriber, no compute).
 
 ### Needle geometry — the too-small-needle defect {#needle-geometry}
 
@@ -44,19 +42,19 @@ demagnified patch) — it has already divided by the magnification once. Feeding
 the needle scaler (whose `foveaTileSize` dsize divides by magnification AGAIN)
 demagnifies TWICE (~9× linear / 81× area too small vs the strip). The raw convert pipe
 is the full fovea FOV at fovea-native resolution, so `foveaTileSize` is the SINGLE,
-correct ÷magnification (legacy `getFoveaTile` semantics). The warped pipes stay the
+correct ÷magnification (matching `getFoveaTile` semantics). The warped pipes stay the
 stereo/composite source (`warpedSources`) — those bricks WANT the wide-aligned warp.
 
 Base-dims/zoom pairing (`needleGeometry`): a MEASURED magnification is a
 fovea-px-per-center-px ratio → divide the FOVEA source dims; a NOMINAL zoom (window
 knob or per-triple `zoom_override`, both rig-nominal FOV ratios) → divide the CENTER
-dims (legacy `W_c/z`). Pairing either zoom with the other width injects an uncorrected
+dims (`W_c/z`). Pairing either zoom with the other width injects an uncorrected
 foveaRes/centerRes factor. The FOVEA branch is taken ONLY when the measured tier
 actually WINS the resolution order (decided by tier, not numeric identity).
 
-## Match magnification — ruled resolution order {#magnification}
+## Match magnification — resolution order {#magnification}
 
-Ruled 2026-07-09 (per-triplet-settings wave), `matchMagnification`:
+The resolution order (`matchMagnification`):
 
     app-window zoom knob (state.zoom > 0)      — AUTHORITATIVE
       > per-triple zoom_override (> 0)          — the rig's stored optical zoom
@@ -70,8 +68,8 @@ scale AND (via `Math.max(1, matchZoom())`) the sliced-view crop + tracker search
 
 ## Drag = parallel follow {#drag}
 
-Pointer drag → the TRACKER's override (§3.5). Down/move call `tk.override(p)`; the
-control step switches to DIRECT FOLLOW (user rulings 2026-07-08/09):
+Pointer drag → the TRACKER's override (see [Chained tracker](#tracker)). Down/move call
+`tk.override(p)`; the control step switches to DIRECT FOLLOW:
 
 - Pointer-down RESETS pan/verge/v_shift, so BOTH eyes ride exactly ON the raw cursor
   ray — parallel, vergence at INFINITY, no residual corrections — with no PID stepping
@@ -92,32 +90,31 @@ control step switches to DIRECT FOLLOW (user rulings 2026-07-08/09):
 
 ### Drag slew {#drag-slew}
 
-value-sweep 2026-07-11 `disparity-drag-slew` (`drag-slew.ts`). During a drag the mirror
-pose used to STEP to each pointer sample then sit still — the serial link idled between
-pointer events while the governed stream had ~600–1000 Hz capacity (the compose floor
-re-emits an IDENTICAL pose, which the MirrorSink gate dedupes away). Slewing the
-commanded pose toward the latest pointer target with a short time constant (τ = 8 ms)
-makes successive control ticks emit DIFFERING poses while the target moves — the gate
-passes them at capacity — and epsilon-SNAPS to the exact target once settled, quiet on a
-static target. Rides the VALUE only: the transport underneath is untouched, so it cannot
-resurrect a suppressed JS stream (`dual-cmd-stream-handoff-race`). NOTE (Lane C parity):
-manual-control duplicates the same ~15-line function — keep constant/shape consistent.
+Source: `drag-slew.ts`. Stepping the mirror pose directly to each pointer sample would
+idle the serial link between pointer events while the governed stream has ~600–1000 Hz
+capacity (the compose floor re-emits an IDENTICAL pose, which the MirrorSink gate dedupes
+away). Slewing the commanded pose toward the latest pointer target with a short time
+constant (τ = 8 ms) makes successive control ticks emit DIFFERING poses while the target
+moves — the gate passes them at capacity — and epsilon-SNAPS to the exact target once
+settled, quiet on a static target. Rides the VALUE only: the transport underneath is
+untouched, so it cannot resurrect a suppressed JS stream. NOTE: manual-control duplicates
+the same ~15-line function — keep constant/shape consistent.
 
 ## Freeze / convergence window {#freeze-window}
 
 `frozen()`: while the auto-follow gate is armed (including the armed-but-hunting window
 before the first lock and the hybrid's re-detect recovery) OR found results flow, the
-convergence timeout does NOT apply (user ruling 2026-07-11). The timeout exists for
+convergence timeout does NOT apply. The timeout exists for
 unattended pointer-set targets, not an active tracker. Otherwise `now() - windowStart >
 timeout` (timeout 0 = never, the slider-MAX sentinel).
 
-**Auto-vergence DISABLED** (user ruling 2026-07-12, AMENDED same day — ruling #2:
-disabled/held freeze the CORRECTIONS, never the tracker; `autoVergenceDisabled()`):
+**Auto-vergence DISABLED** (disabled/held freeze the CORRECTIONS, never the tracker;
+`autoVergenceDisabled()`):
 `timeout = -1` (the slider-MIN sentinel, label "disabled") stops the control law from
 stepping — status "auto off" — but a live tracker KEEPS its target, and while
 `trackerActive` the foveas keep FOLLOWING it: controlStep's disabled branch returns
-`slewToward(followVolts(state.target))` (slewed by construction — D1; pure geometry, no
-match-score gate, mirroring the drag ruling) through the frozen/manual DOF values.
+`slewToward(followVolts(state.target))` (slewed by construction; pure geometry, no
+match-score gate, mirroring the drag behavior) through the frozen/manual DOF values.
 Pointer drags and the manual DOF sliders still steer (manual control, not auto).
 
 The same predicate carries the MANUAL HOLD latch, status "held": a `setPid` slider
@@ -132,18 +129,18 @@ do it), `pauseVergence(false)` (resume — cancels a live tune first, takeover
 semantics), or a `pidOverride` release. `vergence_paused` telemetry publishes the
 latch on TRANSITIONS (direct latch paths + the volt-telemetry tick as catch-all;
 latch-state var resets at idle) and drives the pause/play toggle; the held/auto-off
-status carries a " · following" suffix while `trackerActive` (review #3 — parked and
-actively-following are visibly different states). `disengageAutoVergence` (tracker OFF for real, honest toggle —
-UI/UX review #4) is now the AUTOTUNE-ONLY entry: tune experiments script the target, so
+status carries a " · following" suffix while `trackerActive` (parked and
+actively-following are visibly different states). `disengageAutoVergence` (tracker OFF for
+real, honest toggle) is the AUTOTUNE-ONLY entry: tune experiments script the target, so
 a live tracker would fight them. Under either state `reset_vergence` also PUSHES the
-reconstructed all-zero pose (review #7 — with a tracker following, the next tick slews
+reconstructed all-zero pose (with a tracker following, the next tick slews
 onto its target at zero corrections; without one the zeroed readout would otherwise
 desync from the held mirrors). `windowStart` is refreshed on drag/track activity and
-reset per activation (value-sweep `freeze-window-not-reset-on-activate`: the clocks were
-initialized at session CREATION, so a window re-entering long after boot was already
-past the timeout — frozen before the first projection).
+reset per activation (reset on activate is required: if the clocks initialize only at
+session CREATION, a window re-entering long after boot is already past the timeout —
+frozen before the first projection).
 
-## Chained tracker (§3.5) {#tracker}
+## Chained tracker {#tracker}
 
 `createChainedHybridTracker` (NCC match+re-detect, the drop-in KCF successor) or GRAY-KCF
 runs on its OWN native thread, chained on the C undistort brick's OwnedFrame tap
@@ -157,17 +154,16 @@ runs on its OWN native thread, chained on the C undistort brick's OwnedFrame tap
   `onLost()` fires ONCE (counter resets).
 - **Lost policy** (`onLost`): release auto-follow (JS gate), hold the last good target,
   restart the convergence window, set `tracker_lost` telemetry (drives the drawer Status
-  "lost"; a stale "armed" beside a "frozen" vergence status read as a contradiction —
-  UI/UX review 2026-07-11).
-- **Hot-swap** (`tracker-swap.ts`, user request 2026-07-11): the two factories share an
+  "lost"; a stale "armed" beside a "frozen" vergence status reads as a contradiction).
+- **Hot-swap** (`tracker-swap.ts`): the two factories share an
   IDENTICAL handle surface (same `TrackResult`/`arm/override/probe/release`/meter), so
   the session releases one and spins the other on the SAME source pipe + graph node id —
   no graph churn, no session restart, only a brief tracker-results gap. Sequencing:
-  release → create → resume consume + re-pipe kcf→imm → re-arm IFF `wasArmed`. DEGRADE
-  (requirement 4): a factory throw falls back to the previously-running type and pins
+  release → create → resume consume + re-pipe kcf→imm → re-arm IFF `wasArmed`. DEGRADE:
+  a factory throw falls back to the prior running type and pins
   state to reality (`ok:false`); a fallback throw too → null tracker (pointer-only).
 - **Deferred swap during drag**: a `tracker_type` change requested WHILE a drag is in
-  flight is DEFERRED to drag end (ruled-safe: never re-plumb the tracker mid-gesture;
+  flight is DEFERRED to drag end (safe: never re-plumb the tracker mid-gesture;
   pointer-up applies the pending swap and re-arms at the settled pose).
 
 ## Match join {#match-join}
@@ -179,7 +175,7 @@ degrades to the slower side's rate. Each result is lifted out of scaled-strip sp
 undistorted-wide px. The projection's target is resolved at the strip frame's CAPTURE
 epoch, not now — see [capture-epoch target](#capture-epoch-target).
 
-**Once per pair** (kd explosion, 2026-07-12): the control step is gated on the PAIR seq
+**Once per pair** (kd explosion): the control step is gated on the PAIR seq
 (the OLDER side's) advancing past the last stepped one. Un-gated, the law ran TWICE per
 strip frame — each side's arrival re-paired with the other's held result — and the
 second run's near-zero `dt` (worker-completion skew × sensitivity) turned the raw
@@ -190,9 +186,9 @@ lagging partner still steers at the laggard's rate within the staleness bounds b
 The derivative itself is additionally LOW-PASSED in `@lib/pid` (α = dt/(dt + dTau),
 default τ = 2 dt-units), which is time-consistent: a tiny-dt step contributes ~nothing.
 
-**Partner staleness** (`match-join.ts`, value-sweep `match-pair-join-no-staleness-bound`):
-a stalled partner (dead worker / starved pipe) used to freeze ONE eye's center into the
-vergence law indefinitely while status read "tracking". A partner beyond the AGE
+**Partner staleness** (`match-join.ts`):
+a stalled partner (dead worker / starved pipe) would otherwise freeze ONE eye's center
+into the vergence law indefinitely while status reads "tracking". A partner beyond the AGE
 (~300 ms) or SEQ-GAP (12 frames) bound is treated as LOST: hold the pose (skip the
 control step — existing hold semantics) and surface "match stale". Corrupt clock ⇒ hold.
 
@@ -210,9 +206,9 @@ drift apart on noisy frames).
   sign is opposite the common-vertical (`pan.y`) one: `v_shift` drives the foveas in
   OPPOSITE vertical directions (`l.y = ray.y + v_shift`, `r.y = ray.y − v_shift`), so
   nulling the differential disparity needs the negated error or `v_shift` winds to its limit.
-- **Input space** (post-replumb): projected centres arrive as UNDISTORTED wide-frame
+- **Input space**: projected centres arrive as UNDISTORTED wide-frame
   pixels, so they lift to angles via `P2A.C(px, false)` (already-undistorted linear
-  pinhole map, not the raw-pixel default the pre-replumb kernel used). Feeding back on
+  pinhole map, not the raw-pixel default). Feeding back on
   the image-MATCHED position (not the calibration-predicted one) lets a constant
   extrinsic offset be absorbed by the loop instead of biasing convergence.
 - **Hold** (returns null): either match below `minScore` (also rejects NaN) — the
@@ -221,13 +217,13 @@ drift apart on noisy frames).
   supplies a rate-normalized `dt` to keep convergence wall-clock consistent across
   variable pipeline throughput.
 
-### Capture-epoch target (R1) {#capture-epoch-target}
+### Capture-epoch target {#capture-epoch-target}
 
-Tracker↔PID coupling fix 1 of 2 (`vergence-loop-tuning.md` §2, ruled 2026-07-12). The
+Tracker↔PID coupling fix 1 of 2. The
 matched centers `aL/aR` come from a strip captured 2–4 frames ago; stepping against the
 target AS OF NOW put phantom error ∝ target velocity × pipeline delay into the PID
 during follow — motion the loop hadn't had time to act on AND that compose feed-forward
-already leads (double-count). The join now feeds `projection.target` = the target **as
+already leads (double-count). The join feeds `projection.target` = the target **as
 of the matched frame's capture epoch**:
 
 - **Ring.** The session keeps a `{t, target}` ring (`recordTarget`, host steady-clock
@@ -241,13 +237,13 @@ of the matched frame's capture epoch**:
 - **Lookup** (`targetAtEpoch`, pure): the NEWEST sample with `t ≤ epoch` (a write
   applies from its stamp onward). Empty ring / missing epoch / epoch before coverage →
   the LIVE target — the out-of-range epoch an uncalibrated camera clock produces
-  degrades exactly to the pre-R1 behavior, never to an arbitrarily stale entry.
+  degrades exactly to the live-target behavior, never to an arbitrarily stale entry.
 - **Scope.** ONLY the PID error decomposition moves to the epoch target. `pushVolts`'
   compose rebase keeps `pMeas` = the LIVE target (feed-forward leads from the live
   measurement paired with the imm predictions), and the drag re-affirm in `controlStep`'s
   overridden branch follows the LIVE target (a drag chases the pointer).
 
-### Derivative on measurement (R2) {#derivative-on-measurement}
+### Derivative on measurement {#derivative-on-measurement}
 
 Coupling fix 2 of 2: with the derivative on `de/dt`, every tracker target update rode
 `d(aT)/dt` straight into the output at tracker rate (setpoint kick — the low-pass
@@ -265,7 +261,7 @@ measurement so `error = setpoint − measurement` holds:
 | v_shift | 0 (constant) | `(aL.y − aR.y)/2` | none |
 
 The once-per-pair gate, the filtered derivative, and the hold/disabled semantics above
-are unchanged — R1/R2 layer on top of them.
+still apply — the capture-epoch target and measurement-derivative layer on top of them.
 
 ### Seed space contract — the drag-release seam {#seed-space}
 
@@ -273,7 +269,7 @@ are unchanged — R1/R2 layer on top of them.
 a pair of per-eye gaze ANGLES about the target ray — the exact algebraic inverse of the
 forward reconstruction, so seeding a released PID node gives output continuity.
 
-The inputs are ANGLES, not volts (this was the release-jump bug). The forward law
+The inputs are ANGLES, not volts. The forward law
 commands VOLTS via `A2V(reconstruct(...))`; recovering angles from an override VOLT pair
 by inverting through `V2A` is LOSSY — `A2V` and `V2A` are independently fitted PER-EYE
 regressions, so `V2A.L∘A2V.L ≠ V2A.R∘A2V.R`. A PARALLEL drag round-trips back as two
@@ -287,11 +283,11 @@ per-eye volts that genuinely encode a vergence) round-trips through `V2A`. `SEED
 
 ## Auto-tune {#autotune}
 
-Two-stage gain auto-tune (`vergence-loop-tuning.md` §1, ruled: relay first
-stage + CMA-ES joint polish, session-driven, drawer-gated, NEVER automatic).
-**RIG-GATED**: both stages are physical experiments (real optics in the loop);
-everything below is code-complete + unit/simulation-tested but UNVERIFIED on
-hardware until the owed rig pass. Pure core: `relay-tune.ts`, `cma-es.ts`,
+Two-stage gain auto-tune: relay first stage + CMA-ES joint polish, session-driven,
+drawer-gated, NEVER automatic.
+**Hardware-gated**: both stages are physical experiments (real optics in the loop);
+everything below is code-complete + unit/simulation-tested but must be verified on the
+hardware rig. Pure core: `relay-tune.ts`, `cma-es.ts`,
 `step-cost.ts`, `autotune.ts` (the phase machine over injected hooks — throws
 never cross into the session; every failure is a verdict/callback).
 
@@ -299,8 +295,8 @@ never cross into the session; every failure is a verdict/callback).
   calibrated triple (the `calibrated` telemetry flag — `ready` alone also
   covers the uncalibrated convert-fallback path), no drag, no generic
   override — refusals surface as a `failed` progress record, never an error.
-  An armed/enabled tracker is NOT a refusal (buried-buttons ruling
-  2026-07-12): starting a tune DISENGAGES it via `disengageAutoVergence`
+  An armed/enabled tracker is NOT a refusal: starting a tune DISENGAGES it via
+  `disengageAutoVergence`
   (toggle flips off honestly), the same takeover semantics as a Vergence
   Angles slider write. EXCEPTION: a start while a run is LIVE is ignored SILENTLY — a
   refusal record must never overwrite a non-terminal progress record (the
@@ -337,7 +333,7 @@ never cross into the session; every failure is a verdict/callback).
   space, box-bounded ±1 decade around the relay seed, budget-capped. Each
   candidate: apply gains live (NOT persisted) → settle → scripted target step
   (alternating ±`stepPx` from the pre-tune target, through the normal
-  `writeTarget` path so R1 epoch semantics hold) → record the trace → cost =
+  `writeTarget` path so the capture-epoch semantics hold) → record the trace → cost =
   `stepCost(panX)` (ITAE + overshoot² + command total-variation, normalized by
   the observed peak — the transport-delay lead-in is harmless) + the other
   DOFs' regulation cost. The PRE-TUNE gains are evaluated first (the
@@ -362,14 +358,13 @@ never cross into the session; every failure is a verdict/callback).
 
 ## Actuation / native compose path {#actuation}
 
-Push-model at the projection/PID result rate. `native-compose-controller.md` (supersedes
-the wave-1 JS compose node).
+Push-model at the projection/PID result rate, via the native compose brick.
 
 - **pushVolts** REBASEs the native compose brick from the pid command (~60 Hz):
   `{V_pid, p_meas, J}` where `J` is the per-eye 2×2 finite-difference (`J_EPS_PX = 1 px`)
-  of `followVolts` around the measured target (planner decision 1 — JS owns calibration,
-  the brick owns the per-tick `V = V_pid + J·(p_pred − p_meas)`). The brick emits the
-  baseline FLOOR on every rebase (decision 4 — the wave-1 JS floor retired).
+  of `followVolts` around the measured target (JS owns calibration, the brick owns the
+  per-tick `V = V_pid + J·(p_pred − p_meas)`). The brick emits the baseline FLOOR on
+  every rebase.
 - **Feed-forward gate** (`composeHealthy`): applied ONLY while control is healthy —
   actively tracking, not dragging, no generic override pinned, not frozen. Otherwise the
   compose node holds the `V_pid` baseline. No calibration for `J` ⇒ hold the baseline.
@@ -377,13 +372,13 @@ the wave-1 JS compose node).
   `delay_compensation_ms` is a prediction OFFSET param, not a wire gate), so the imm node
   is always on the profiler graph. Free-runs at the global `prediction_rate_hz`
   (default 600, clamp 60..1000), live-applied via a store subscription; that rate is also
-  the serial governor's REQUESTED ceiling (serial-rate-governor.md Part 2).
-- **kcf → imm** is a NATIVE PORT LINK (native-port-pipe.md ruling 1: both endpoints
+  the serial governor's REQUESTED ceiling.
+- **kcf → imm** is a NATIVE PORT LINK (both endpoints
   native, no JS relay), re-established on every hot-swap (a fresh tracker's `track_out`
   must re-pipe into the SAME imm brick). **pid consumes RAW tracker results** (not imm
   predictions): the feed-forward pairs `V_pid` with the measured center it acted on; a
   predicted input would double-count the motion.
-- **Transports.** The legacy JS `posInput` is the FALLBACK (v1 firmware / no controller):
+- **Transports.** The JS `posInput` is the FALLBACK (v1 firmware / no controller):
   `consumeComposeFallback` drains the compose volt iterator and drives it ONLY while no
   native sink is attached. When a v2 controller binds, the native position input attaches
   a mirror sink, the session pipes `compose.volt_out ══ sink.pos_in`, and the whole
@@ -394,7 +389,7 @@ the wave-1 JS compose node).
   the predictor's delay gains a measured one-way term
   (`delayMs = fixed + EMA(ackRttP50)/2`), re-applied only when it moves by >0.05 ms. OFF /
   no sink / no samples = the fixed lookahead exactly.
-- **Mirror-history provenance** (planner decision 3): while the native sink drives the
+- **Mirror-history provenance**: while the native sink drives the
   mirrors, the JS `mirrorHistory` no longer sees this session's trajectory — the
   homography feeder reads the sink's NATIVE ring; falls back to the JS authority whenever
   the JS `posInput` path is driving.
@@ -412,18 +407,18 @@ still leased), drain any in-flight capture shot, then close transports and
 `disposers.dispose()`.
 
 Load-bearing constraints kept at the code:
-- `verge.setLimits(...)`, NOT a bare `.limits =` (value-sweep `verge-integral-clamp-stale`):
-  the integral clamp aliases the construction-time array, so replacing `limits` alone left
-  the velocity-form command clamped to the default-200 mm baseline range on other rigs.
+- `verge.setLimits(...)`, NOT a bare `.limits =`: the integral clamp aliases the
+  construction-time array, so replacing `limits` alone leaves the velocity-form command
+  clamped to the default-200 mm baseline range on other rigs.
 - `A2P.C` in `onVolts` guards the UNDISTORT, not just the triple — it throws "Wide camera
-  not calibrated" without it, fires on EVERY volts push, and the uncaught throw killed the
-  orchestrator on an uncalibrated rig (crash log hw-1 2026-07-10T19-31).
+  not calibrated" without it, fires on EVERY volts push, and an uncaught throw would kill
+  the orchestrator on an uncalibrated rig.
 
 ## Trigger-sync mode {#trigger-sync}
 
-> **RIG-GATED.** Requires protocol-v2 firmware AND the pending MEMS flash for CMD_FRAME;
+> **Hardware-gated.** Requires protocol-v2 firmware AND the pending MEMS flash for CMD_FRAME;
 > the GenICam trigger/strobe line names are unverified placeholders. Code-complete +
-> unit-tested only — first live run owed at `docs/hardware/stage-f.md`.
+> unit-tested only — verify on the hardware rig.
 
 Hardware-triggered L/R pair capture for the scope: both foveas switch to
 FrameStart-triggered mode and a one-target `RoundRobinFrameScheduler` round-robins
@@ -465,7 +460,7 @@ engage reverts it via an epoch counter):
 
 1. `enableHardwareTrigger(leases.L)` then `.R` — any failure best-effort disables BOTH
    sides, publishes `trigger_blocked: "engage failed: …"`, and stays disengaged.
-2. Budget = `pairTriggerBudget` over both fovea config docs (exposure-authoritative, P6)
+2. Budget = `pairTriggerBudget` over both fovea config docs (exposure-authoritative)
    + camera-reported readout floor + the triple's `settleTimeUs` — identical to
    multi-fovea's `deriveBudget`.
 3. One-target scheduler `{stream: nativePos.streamId, cameras: [L,R], pulse:
@@ -558,9 +553,9 @@ the seq-gap bound is unchanged.
 
 ## Capture & recording {#capture}
 
-capture-recorder-everywhere ruling 2/3/6. Recording captures the raw L/C/R sensor streams
+capture-recorder-everywhere. Recording captures the raw L/C/R sensor streams
 (advert-verbatim). Capture composes the stacked L/R + center-slice shot over the leased
 triple; the degraded `rawTripleShot` writes raw stacks WITHOUT the fovea homography wrap
-(the session tracks no per-shot pose to derive H) — stated in `capture_meta`. EXCLUSIVITY
-(ruling 6): a recording is refused while a capture shot holds the shared raw pipes, and
+(the session tracks no per-shot pose to derive H) — stated in `capture_meta`. EXCLUSIVITY:
+a recording is refused while a capture shot holds the shared raw pipes, and
 vice versa; `busy()` refuses a mid-recording/mid-capture drain.

@@ -18,7 +18,7 @@ Unlike the recorder (one long-lived connection), the capture node is idle betwee
 captures — it holds no pipe consumer connection while parked. `capture()` connects
 the raw L/R producers on demand (the injected `acquireStreams` seam:
 advertise+attach the `camera/<serial>/raw` producer, refcount++ the broker → the
-C-21 gate fires → the capture-thread subscriber is created; see
+consumer gate fires → the capture-thread subscriber is created; see
 `core/lib/Aravis/RawPipe.cpp`), drains the burst, then releases (refcount-- → gate
 parks → subscriber destructs → zero capture-thread cost). The center view rides the
 session's already-connected `undistort:<serial>` pipe (a fresh latest-wins read).
@@ -31,10 +31,9 @@ verbatim via `.toString()` (zero drift), exactly like `recorder-node.ts`'s
 `runStreamConsumer`. The eval'd CJS worker source exists because the orchestrator
 bundles to a single file, so a sibling worker file would not exist at runtime; the
 `core/Vision` + reader-addon entry paths are resolved by the parent and handed in
-`workerData`. The image math (stack/makeRGBA/wrapPerspective/diff/slice) is ported
-faithfully from the deleted `manual-control/capture.ts` and runs against the
-worker's required `core/Vision` — same call sequence, so the saved bytes match the
-pre-wave implementation (full-depth parity is the Wave R-3 audit item).
+`workerData`. The image math (stack/makeRGBA/wrapPerspective/diff/slice) runs against
+the worker's required `core/Vision` with the same call sequence as the pure exported
+helpers, so the saved bytes match byte-for-byte at full depth.
 
 ### grabBurst loss contract {#grabburst}
 
@@ -43,7 +42,7 @@ actually delivered (`< count` iff the pipe closed early or the deadline passed).
 The state machine reuses recorder-node's loss contract, bounded to the burst:
 
 - `null` (torn seqlock read) → retry the same seq
-- Closed → stop (producer retired mid-burst — return short)
+- Closed → stop (producer closed mid-burst — return short)
 - NotYet → back off (waiting for the next fresh frame)
 - Gone → account `oldest − want` drops, jump to `oldest`
 - Ok → deliver, `want = seq + 1`, until `count` delivered
@@ -53,11 +52,11 @@ the reader's actual payload length when reported (ring v5), else the advert
 fallback — recorder-node parity, so a packed/variable-length payload is byte-exact
 and never dim-derived.
 
-### F1 burst timeout
+### Burst timeout
 
 Default `DEFAULT_BURST_TIMEOUT_MS` (10s), overridable per shot via
 `CaptureShot.burstTimeoutMs`. On a live rig a raw producer whose gate never fired
-(a prior recording retired the shared `camera/<serial>/raw` ids; re-advertise
+(a prior recording released the shared `camera/<serial>/raw` ids; re-advertise
 didn't restart it) leaves `read` forever NotYet — without the deadline the burst
 hangs and starves the single-threaded worker (Save never enables). On expiry the
 run is abandoned and rejected WITH per-port delivered counts (the stalled port is
@@ -77,7 +76,7 @@ crop around the target.
 
 ### Degenerate single-stream mode
 
-Exactly one raw stream is provided (capture-recorder-everywhere ruling 3, item 4).
+Exactly one raw stream is provided.
 The worker stacks that one stream full-depth (same stack math, no wrap / center
 slice / diff) and holds the result as a single named resource. Used by
 calibrate-intrinsic, which leases one camera at a time (never a fixed triple). The
@@ -87,9 +86,8 @@ worker dispatches on `"single" in streams`; the host forwards it opaquely.
 
 The three demosaic sites (core `cvtColorCode`, viewer decode, this worker) share
 ONE source (`cvBayerPrefix`, `docs/schema`) so the OpenCV↔PFNC off-by-one R/B-swap
-can't drift (`channel-order-fix.md`). Held resources are honest RGBA (red = channel
-0); `cv::imwrite` wants BGR, so there is ONE honest swap at save — the old
-`makeBGR` off-by-one + compensating `RGBA2BGRA` are gone (two cancelling bugs).
+can't drift. Held resources are honest RGBA (red = channel 0); `cv::imwrite` wants
+BGR, so there is ONE honest swap at save.
 
 ### Lifecycle edge cases (host)
 
@@ -107,22 +105,22 @@ Source: `app/orchestrator/recorder-node.ts`, `app/orchestrator/recorder/*`
 
 The recorder node is a thin driver over the native recorder brick (`core.Recorder.*`
 — `core/lib/Record/RecorderStream`). The brick owns the whole write path in C++:
-producer-seam record taps on the same pipes this node used to FIFO-read (raw camera
+producer-seam record taps on the recorded pipes (raw camera
 publishers, `CompressStream` /zlib outputs, derived bricks — advert-verbatim,
-byte-for-byte what the ring carried), bounded drop-oldest queues, and a free-running
-writer thread hosting the hand-rolled McapWriter (`docs/proposals/native-recorder.md`).
-Nothing per-frame crosses JS in either direction — the host polls stats + ruling-3
-frame notices on a low-rate timer and forwards extras back as native enqueues.
+byte-for-byte what the ring carries), bounded drop-oldest queues, and a free-running
+writer thread hosting the hand-rolled McapWriter.
+Nothing per-frame crosses JS in either direction — the host polls stats + per-frame
+notices on a low-rate timer and forwards extras back as native enqueues.
 
 ### What the host owns
 
-- The broker pipe connects (refcount++ → C-21 gate → producer runs) and their
+- The broker pipe connects (refcount++ → gate → producer runs) and their
   release ordering (tap detach is synchronous, so `removeStream` releases its pipe
   immediately — no async stream-ended dance).
 - The `recorder/<session>` graph row + workload meter, fed by `foldStreamStats` over
-  the brick's cumulative counters (same `StreamCounters` shape, same F2 drop
+  the brick's cumulative counters (same `StreamCounters` shape, same drop
   attribution).
-- The ruling-3 extras round-trip (`dispatchFrame` over drained notices →
+- The per-frame extras round-trip (`dispatchFrame` over drained notices →
   `appendTelemetry`).
 - The container-layout inputs (`schema.ts` constants + advert-verbatim channel
   metadata) — passed into the brick so `docs/schema` stays the single source of truth.
@@ -135,7 +133,7 @@ a JS worker — a legitimate SHM/JS boundary; `core/test/29-raw-pipe.ts` is cano
 ### Counter invariants
 
 `StreamCounters` are monotonic totals: `written + dropped == ingested`,
-`droppedQueue + droppedRing == dropped`. F2 attribution splits drops into
+`droppedQueue + droppedRing == dropped`. Drop attribution splits drops into
 `queue-overflow` (shed while the writer was mid-encode/write — tune queue cap / write
 batching) and `ring-recycled` (shed while the writer was between items — an arrival
 burst outran the drain). They sum to the old single "ring-recycled" total, so the
@@ -158,7 +156,7 @@ frame carries no extras, never a stall.
 
 ### Format-agnostic socket
 
-The recorder never parses advertised format strings (ruling 8): `pixelFormat` (may
+The recorder never parses advertised format strings: `pixelFormat` (may
 carry codec suffixes like "BayerRG12p/bz2"), `stride`, and `significantBits` are
 copied verbatim into channel metadata, never derived from a name (a codec-suffixed
 name would defeat the registry lookup). `channelMetadata` is shared by initial and
@@ -166,34 +164,32 @@ churned streams so nothing diverges.
 
 ### FoveaDescriptor pointers
 
-Frame pointers are nullable (wave I-2): free-run recordings carry left/right = null
-(no trigger-mode pair bound the exposure, pairing-nodes ruling 1); an evicted/
+Frame pointers are nullable: free-run recordings carry left/right = null
+(no trigger-mode pair bound the exposure); an evicted/
 unmatched key is likewise null rather than absent. Offline readers treat null and
 missing identically.
 
 ### Finalize deadline
 
-`stop()` finalizes with an R-2 hard deadline (`finalizeDeadlineMs`, default 30s): a
+`stop()` finalizes with a hard deadline (`finalizeDeadlineMs`, default 30s): a
 wedged writer must never hang session teardown / hardware quiescence. On expiry the
 host logs, aborts the native recorder (crash-shape container left on disk — the
 documented contract), releases the pipes in order, and returns truncated stats
-(`truncated: true`, per value-sweep-2026-07-11 so the recording service surfaces it
+(`truncated: true`, so the recording service surfaces it
 instead of publishing a clean stop). A writer wedged in a syscall keeps its handle
-(leaked — process exit recovers). Build-failure unwind (20e8834 discipline): never
+(leaked — process exit recovers). Build-failure unwind: never
 leave a connected pipe behind a throw — the node's connects are the node's to release.
 
 ## Recorder sink facade {#recorder-sink}
 
 Source: `app/orchestrator/recorder/*`
-(`docs/history/refactor/recorder-container.md` §2 decision + §3)
 
 Writes a single `.fovea` container (standard MCAP inside) through one worker_threads
-writer per topology key (`singleFileTopology` today: exactly one worker, one file). The
-legacy `.stream`/`.meta`/manifest backend + its `RECORDER_BACKEND` selector were dropped
-(capture-recorder-nodes ruling 6); this MCAP sink is the only backend.
+writer per topology key (`singleFileTopology` today: exactly one worker, one file). This
+MCAP sink is the only backend.
 
-Live manual-control recording no longer flows through this sink — it flows through the
-recorder NODE (`recorder-node.ts`, native brick). This sink + `McapWriterWorker` remain
+Live manual-control recording flows through the recorder NODE (`recorder-node.ts`, native
+brick), not this sink. This sink + `McapWriterWorker` remain
 as the container-writing surface the recorder bench + tests drive directly.
 
 ### Container layout
@@ -202,50 +198,49 @@ as the container-writing surface the recorder bench + tests drive directly.
   the frame exactly as captured (12p stays packed); channel metadata carries the static
   decode props (dtype/shape/pixelFormat/significantBits/channels), taken from the
   stream's first frame.
-- One `telemetry` channel (JSON): per-frame extras (volt/angle/homography, the legacy
-  sidecar's `x` payload) sent only for frames that have extras, correlated by
+- One `telemetry` channel (JSON): per-frame extras (volt/angle/homography, the
+  sidecar `x` payload) sent only for frames that have extras, correlated by
   stream+seq (or logTime).
 - MCAP metadata records `fovea:session` (ISO timestamp) and `fovea:finalize`
   (durationSec).
 
 ### Timestamps
 
-logTime/publishTime are nanoseconds on the same clock the legacy writer used
+logTime/publishTime are nanoseconds on the same clock
 (`performance.now()/1000` seconds) — relative to process start, monotonic across every
 channel of a session; the absolute wall-clock anchor is the `fovea:session` metadata
 record.
 
 ## Capture helper (composable facility) {#capture-helper}
 
-Source: `app/orchestrator/capture-helper.ts` (capture-recorder-everywhere ruling 3)
+Source: `app/orchestrator/capture-helper.ts`
 
-Lifts the capture machinery that used to live inline in `manual-control/session.ts`
-(createCaptureNode wiring, the on-demand per-shot raw L/R advertise+connect, the
-captureBusy/capture_meta telemetry, the captureShot/getPreview/save/discard command
-surface, and the recording-vs-capture exclusivity guard) so any triple-holding session
-opts in with config (its held L/R cameras, its live center pipe, an app-specific per-shot
-snapshot, and its recording service's `active` flag).
+Holds the capture machinery — createCaptureNode wiring, the on-demand per-shot raw L/R
+advertise+connect, the captureBusy/capture_meta telemetry, the
+captureShot/getPreview/save/discard command surface, and the recording-vs-capture
+exclusivity guard — so any triple-holding session opts in with config (its held L/R
+cameras, its live center pipe, an app-specific per-shot snapshot, and its recording
+service's `active` flag).
 
-The extraction is faithful to manual-control: same on-demand acquire sequence with the
-reverse-order error unwind (a mid-sequence throw never orphans a refcount →
-camera-exclusivity hazard), the same F1 burst-timeout semantics (owned by the capture
-NODE — the helper forwards `snapshot()`'s optional `burstTimeoutMs`), and the same
-exclusivity refusal (capture refused while a recording holds the shared
+It uses the on-demand acquire sequence with reverse-order error unwind (a mid-sequence
+throw never orphans a refcount → camera-exclusivity hazard), the burst-timeout semantics
+(owned by the capture NODE — the helper forwards `snapshot()`'s optional `burstTimeoutMs`),
+and the exclusivity refusal (capture refused while a recording holds the shared
 `camera/<serial>/raw` ids).
 
-Naming (planner ruling): the contract mixin names are `captureShot` / `getCapturePreview`
+Naming: the contract mixin names are `captureShot` / `getCapturePreview`
 / `saveCapture` / `discardCapture` (+ `captureBusy` / `capture_meta` telemetry) —
 collision-free with app-local commands (calibrate-intrinsic already has a `capture`).
-manual-control keeps its legacy `capture`/`getPreview` names aliased to this same helper.
+manual-control keeps its `capture`/`getPreview` names aliased to this same helper.
 
 ## Recording service (composable facility) {#recording-service}
 
-Source: `app/orchestrator/recording-service.ts` (capture-recorder-everywhere ruling 1)
+Source: `app/orchestrator/recording-service.ts`
 
-The per-app recording controllers were ~90% the same shape: a `start`/`stop` around the
+The per-app recording controllers share ~90% of their shape: a `start`/`stop` around the
 recorder NODE lifecycle, a 250ms stats poll, the `recording_active` / `recordingStreams`
-telemetry (including the F2 drop-cause split, carried verbatim in `RecorderStreamStats`),
-and the acquire-then-build error-path unwind discipline (20e8834). That skeleton lives
+telemetry (including the drop-cause split, carried verbatim in `RecorderStreamStats`),
+and the acquire-then-build error-path unwind discipline. That skeleton lives
 here once; each app passes config (guard, resource acquisition + node options, optional
 start/stop hooks) and keeps only its own semantics (fovea binding, descriptor channels,
 compression routing, path policy).
@@ -264,11 +259,11 @@ Source: `app/orchestrator/recorder/writer.ts`
 
 Main-thread host for one recorder worker (one McapWriter, one container file): a
 worker_threads worker fed by transferred ArrayBuffers, bounded queue, fail-fast on worker
-error, multiplexing N channels into a single file, metered from day one. (The live
+error, multiplexing N channels into a single file, fully metered. (The live
 recording path is the recorder NODE; this sink writer remains the container surface the
 recorder bench + `test/recorder.test.ts` container-contract tests drive directly.)
 
-Backpressure contract (recorder-container.md §3): the orchestrator loop must never block on
+Backpressure contract: the orchestrator loop must never block on
 the recorder. `writeFrame` is synchronous and never awaits — when a channel's in-flight
 window is full the frame is REFUSED (returns false) and accounted as a drop; the payload
 thunk is not even invoked, so no copy is wasted on a frame that won't ship. Drops are data,
@@ -295,7 +290,7 @@ first. Protocol: see `types.ts` (RecorderWorkerIn / RecorderWorkerOut).
 
 ## Raw-recording helper {#raw-recording}
 
-Source: `app/orchestrator/raw-recording.ts` (capture-recorder-everywhere ruling 2)
+Source: `app/orchestrator/raw-recording.ts`
 
 Shared "record the app's raw camera streams" config over the recording facility. Most apps
 that gain recording (disparity-scope + the four calibrate wizards) have no per-frame fovea
@@ -304,14 +299,14 @@ binding to inject — they just want the obvious default recordable set: the ful
 app opts in with a `cameras()` accessor and a `finished` notifier instead of re-deriving the
 raw-pipe acquire + connect + error-unwind config.
 
-It reuses manual-control's exact raw-pipe acquire (the unpacked 16-bit container, deep
-recorder ring) + the ruling-8 significantBits connect injection. No `onFrame`: these
+It reuses manual-control's raw-pipe acquire (the unpacked 16-bit container, deep
+recorder ring) + the significantBits connect injection. No `onFrame`: these
 recordings carry no per-frame extras (the app holds no controller pose bound to the frame) —
 the container is the raw sensor stream only, honest and reconstructable.
 
 ## Recording-compression setting {#record-compression}
 
-Source: `app/orchestrator/record-compression.ts` (user directive 2026-07-09)
+Source: `app/orchestrator/record-compression.ts`
 
 The app-level recording-compression setting, orchestrator side. Reads the configured method
 from the shared `["config"]` document at RECORDING START (the store-hub read pattern, NOT
@@ -322,7 +317,7 @@ consumes), so the two can never drift.
 
 ## Per-frame recorder metadata {#recorder-metadata}
 
-Source: `app/orchestrator/recorder/metadata.ts` (WS4 4b)
+Source: `app/orchestrator/recorder/metadata.ts`
 
 Per-frame recorder metadata schema. The `.fovea` `telemetry` channel carries one JSON
 document per frame that has extras — `{stream, seq, t, ...extras}`, correlated to its raw

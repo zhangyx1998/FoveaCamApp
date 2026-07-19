@@ -6,7 +6,6 @@ Source pointers are per section; the code carries only load-bearing invariants i
 ## Calibration records {#calibration-records}
 
 Source: `app/lib/calibration-records.ts`
-(`docs/proposals/calibration-records-v2.md` + its AS-BUILT store-schema-v2 addendum)
 
 A calibration RECORD is the per-camera replacement for the flat calibration document.
 Both kinds — EXTRINSIC (per-fovea datapoint array) and INTRINSIC (center-camera solve) —
@@ -58,7 +57,6 @@ one-shot `Store.read` (no subscription) since this is a management view over man
 ## Marker tracker {#marker-tracker}
 
 Source: `app/orchestrator/marker-tracker.ts`
-(`docs/history/refactor/orchestrator.md` §7.1 S1b)
 
 Orchestrator-side port of the renderer's `calibrate-extrinsic/tracker.ts` (`Tracker` class
 + `actuate()`), shared by calibrate-extrinsic, calibrate-distortion, and calibrate-drift —
@@ -90,7 +88,6 @@ dictionary, or fovea scale.
 ## Calibration visualizer {#calibration-visualizer}
 
 Source: `app/lib/calibration-visualizer.ts`
-(`docs/proposals/calibration-records-v2.md` §Visualizer)
 
 Pure projection math for the extrinsic-calibration visualizer. For each recorded datapoint it
 pairs the OBSERVED marker corners (as detected in the fovea image) with the PROJECTED corners
@@ -104,7 +101,7 @@ across poses).
 
 ## Live triple baseline {#triple-baseline}
 
-Source: `app/lib/triple-baseline.ts` (per-triplet-settings wave, Ruling A)
+Source: `app/lib/triple-baseline.ts`
 
 RENDERER-ONLY composable: the LIVE per-triple stereo baseline (mm) for the calibrate-* marker
 overlays. The session publishes the leased triple's config store path; this opens that same
@@ -139,7 +136,7 @@ to the other's loader types.
 
 ## Calibration overlay toggle {#calibration-overlay}
 
-Source: `app/lib/calibration-overlay.ts` (calibration-records-v2 §Overlay)
+Source: `app/lib/calibration-overlay.ts`
 
 Live cross-window state for the extrinsic-calibration overlay toggle. Rides a single store
 doc (`["ui", "cal-overlay"]`) — MAIN is the config authority, so a toggle in the Settings

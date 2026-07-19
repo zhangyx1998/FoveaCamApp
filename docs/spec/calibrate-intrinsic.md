@@ -53,8 +53,8 @@ The DEGENERATE single-stream case of capture-recorder-everywhere. Recording reco
 selected camera's raw full-depth sensor stream (advert-verbatim). Capture burst-stacks
 that raw sensor into ONE held resource (no wrap/center/diff), REUSING the session's
 `select` lease (it never acquires its own camera). Both are built per `select` (the lease
-is per-camera, unlike the fixed-triple sessions) and stopped on `deselect`. EXCLUSIVITY
-(ruling 6): a capture shot is refused while a recording is active (shared raw pipe ids),
+is per-camera, unlike the fixed-triple sessions) and stopped on `deselect`. EXCLUSIVITY:
+a capture shot is refused while a recording is active (shared raw pipe ids),
 and vice versa; `busy()` refuses a mid-recording/mid-capture drain. Deselect finalizes
 an in-flight recording + capture shot BEFORE the lease releases (their raw pipes must
 release while the camera is still leased).

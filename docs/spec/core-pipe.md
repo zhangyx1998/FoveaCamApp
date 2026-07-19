@@ -2,8 +2,7 @@
 
 Behavior spec for `core/include/Pipe.h` + `core/src/Pipe.cpp` (`namespace Pipe`).
 Invariant: SHM rings are IPC / JS-worker boundaries ONLY; brick→brick handoffs
-never read the ring (see MEMORY `project_shm_pipe_architecture`). The code carries
-`// spec:` pointers to the anchors below.
+never read the ring. The code carries `// spec:` pointers to the anchors below.
 
 ## seam {#seam}
 
@@ -15,13 +14,13 @@ pipe's advertised format (e.g. BGRA8); the publisher stays raw-memcpy + seqlock.
 The orchestrator brokers a ONE-TIME connect handshake — nothing per-frame crosses
 JS. A C++ producer obtains its sink via `PipeHub::instance().sink(pipeId)`.
 
-COLLAPSED (C-19): there is NO separate publisher thread — `offer()` seqlock-writes
+COLLAPSED: there is NO separate publisher thread — `offer()` seqlock-writes
 the frame directly ON THE PRODUCER'S thread (already off the JS loop). Single
 writer to the ring (1:1 producer↔pipe).
 
 ## sizing {#sizing}
 
-C-20: the ring is sized to a tunable per-FOVEA max (NOT the camera resolution — a
+The ring is sized to a tunable per-FOVEA max (NOT the camera resolution — a
 fovea is a small hi-res crop, so N max rings stay bounded); each frame carries its
 own active w/h ≤ max. Camera pipes: `max == fixed`. `PipeSpec.maxBytes` is the
 slot size (defaults to `bytesPerFrame`); a renderer read must provision `maxBytes`
@@ -30,13 +29,13 @@ slot size (defaults to `bytesPerFrame`); a renderer read must provision `maxByte
 `FrameInfo` fields:
 - `stride` = bytes per row of `data` (`cv::Mat::step`); may exceed `width*channels`
   (the publisher copies row-by-row into the tight slot).
-- `originX/originY` (v4, C-24/B-24): a crop's FRAME-BOUND position within its
+- `originX/originY` (v4): a crop's FRAME-BOUND position within its
   parent stream (fovea nodes). Uncropped producers leave 0/0.
 - `bytesPerElement` (`cv::Mat::elemSize1()`): 1 for U8 frames (default), 4 for a
   CV_32FC1 disparity map. The tight-packed row/active-byte math multiplies by
   this so a non-U8 mat publishes without truncation. Additive: default 1 keeps
   every U8 producer byte-for-byte unchanged.
-- `payloadBytes` (v5, multi-fovea-recording ruling 10): an OPAQUE variable-length
+- `payloadBytes` (v5): an OPAQUE variable-length
   payload (compression bricks). When nonzero, `offer()` copies exactly
   `payloadBytes` contiguous bytes from `data` (ignoring stride/rows) and records
   the length in the slot header — `width/height/origin` still carry the SOURCE
@@ -49,14 +48,14 @@ exceeds the ring slot is dropped (a bookkeeping drop, never a throw).
 
 `connect()`/`disconnect()` maintain the consumer refcount. At zero the ring write
 pauses (segment stays mapped/advertised — reconnectable). The 0↔1 edges fire the
-`ConsumerGate` (C-21), which drives the converter subscribe/unsubscribe — the
+`ConsumerGate`, which drives the converter subscribe/unsubscribe — the
 SINGLE gate for "idle when no pipe open". `setConsumerGate` fires
 `gate(refcount>0)` IMMEDIATELY on registration (reconciling a consumer that
 connected first), then on each edge. NAPI-thread only.
 
 ## quiesce {#quiesce}
 
-`quiesceConsumers()` is a defense-in-depth teardown backstop (S-1a), fired by
+`quiesceConsumers()` is a defense-in-depth teardown backstop, fired by
 `PipeHub::drop` BEFORE the Publisher (segment unmap) is destroyed. Producer
 bindings in SEPARATE registries (RawPipe / Converter / Compress) cache the
 Publisher's raw `FrameSink*` and only release their gated subscriber on a
@@ -91,7 +90,7 @@ advertise, or one after `drop`, bumps a per-id epoch → a NEW segment name
 (`/fv.p<hash>.g<epoch>`), so a stale consumer on the old segment sees CLOSED and
 never binds the reused id. Epochs persist across `drop`.
 
-`bytesTotal()` is the total ACTIVE bytes ring-written since advertise (C-24) — one
+`bytesTotal()` is the total ACTIVE bytes ring-written since advertise — one
 add per successful offer, so the topology's per-edge MB/s is exact even for
 variable-size fovea frames (rate × nominal would lie). Monotonic; relaxed atomic
 (single producer-thread writer, any-thread reads); the reader diffs snapshots.

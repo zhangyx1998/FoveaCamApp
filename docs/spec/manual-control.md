@@ -29,16 +29,16 @@ rule (`resolveVolts`, `splitFlags`, `isSplit`) so it is unit-testable without a 
 
 The per-eye wide-view footprint boxes are drawn from the per-eye L_PX/R_PX volt
 projections (`A2P.C(V2A(volts))`), so the two boxes physically separate while split.
-DEGRADE on uncalibrated rigs — `A2P.C` throws without an undistort (the disparity-scope
-hw-1 crash lesson); return {0,0} and let the renderer hide the boxes.
+DEGRADE on uncalibrated rigs — `A2P.C` throws without an undistort; return {0,0} and let
+the renderer hide the boxes.
 
 ## Drag slew {#drag-slew}
 
-value-sweep 2026-07-11 `manual-control-drag-slew` (`slew.ts`). The 1 ms pacer used to
-re-push the RAW latest pointer target every tick; between pointer samples the pose is
-IDENTICAL, the StreamUpdateGate/MirrorSink dedupes it, and the serial link idles at the
-pointer sample rate despite ~600–1000 Hz of governed capacity. Instead the pacer keeps the
-previously COMMANDED pose and slews it toward the latest target with a first-order smoother
+Source: `slew.ts`. Re-pushing the RAW latest pointer target every tick would idle the
+serial link: between pointer samples the pose is IDENTICAL, the StreamUpdateGate/MirrorSink
+dedupes it, and the link runs only at the pointer sample rate despite ~600–1000 Hz of
+governed capacity. Instead the 1 ms pacer keeps the last COMMANDED pose and slews it toward
+the latest target with a first-order smoother
 (τ = `SLEW_TAU_MS` = 8 ms) — during motion every tick yields a DISTINCT intermediate pose
 the gate passes, so the wire runs at capacity with meaningful interpolation (smoother MEMS
 motion). Within `SLEW_EPSILON_V` (0.005 V, just above the DAC LSB) it SNAPS to the exact
@@ -49,16 +49,16 @@ both into @lib.
 
 ## Display worker & views {#views}
 
-The center tile offers four views: `sliced | disparity | anaglyph | sgbm` (the legacy
-display-kernel `diff`/`depth` modes are RETIRED — `coerceView` maps a persisted `diff →
+The center tile offers four views: `sliced | disparity | anaglyph | sgbm` (the
+display-kernel `diff`/`depth` modes are not offered — `coerceView` maps a persisted `diff →
 disparity`, `depth → sgbm` at the boundary). Only `sliced` still rides the shared `display`
 vision-worker kernel; the other three are native pipes (the same bricks disparity-scope
-introduced), consumer-gated — the renderer connects the SELECTED pipe and the rest park.
+uses), consumer-gated — the renderer connects the SELECTED pipe and the rest park.
 
 - **sliced** — the magnified center crop, off the JS event loop in the `display` kernel. Main
   pushes `voltParams` (the fovea homographies `A2H∘V2A(volts)` + the depth Q-matrix at the
   current pose) + `sliceAtParam` (the undistorted center pixel the crop centers on) on each
-  throttled volt/target update. The kernel now ONLY serves this view (no `view`/depth params —
+  throttled volt/target update. The kernel ONLY serves this view (no `view`/depth params —
   it defaults to `sliced` and stays there).
 - **disparity / anaglyph** — the COMPOSITE brick (`nodeId.stereo("manual-composite")`) over the
   L/R undistorted (homography-warped) sources: `disparity → difference`, `anaglyph → anaglyph`
@@ -76,7 +76,7 @@ the undistort producers they read retire (LIFO).
 
 ## Trigger-sync capture {#trigger-sync}
 
-RIG-GATED — unverified on hardware; the Linux box has no cameras/controller.
+Hardware-gated — hardware-triggered capture requires the full camera + controller rig to verify.
 
 Optional hardware-triggered L/R stereo pairs, ported from disparity-scope MINUS all pairing /
 staleness (manual-control has no match-join). `state.trigger_sync` is USER INTENT (a plain
@@ -102,7 +102,7 @@ state binding; the server never refuses the write); ENGAGEMENT is a live state m
 
 ## Actuation {#actuation}
 
-Push model (controller-node-and-fifo-edges §3): the SESSION owns the 1 ms pacer cadence.
+Push model: the SESSION owns the 1 ms pacer cadence.
 Each tick slews toward `targetVolts`, pushes the pose, and uses the node's synchronous
 predicted-volts return for the local mirror mirror + telemetry. `onApplied` supplies the
 awaited round-trip ms on the v1 fallback (~0 on the v2 streaming path). Volt + pose telemetry
@@ -112,27 +112,27 @@ is throttled to `VOLT_TELEMETRY_INTERVAL_MS`.
 
 capture-recorder-everywhere. Capture is the shared `@orchestrator/capture-helper` (the
 createCaptureNode wiring + the ON-DEMAND per-shot raw L/R advertise/connect + telemetry + the
-recording-vs-capture exclusivity guard were lifted VERBATIM); manual-control is a CONSUMER
+recording-vs-capture exclusivity guard all live in the helper); manual-control is a CONSUMER
 supplying its calibrated-triple snapshot (`captureSnapshot`: the calibration-derived transforms
 + per-resource metadata for the whole shot). Full fovea snapshot requires undistort — null
 degrades the command to "Capture not ready".
 
-The renderer drives the raster: it owns the set-points + steer, so per-shot `capture({tag})`
-replaces the old server-side setpoints sweep. `tag` present ⇒ a raster shot that ACCUMULATES
+The renderer drives the raster: it owns the set-points + steer, so it issues a per-shot
+`capture({tag})` for each shot. `tag` present ⇒ a raster shot that ACCUMULATES
 an indexed resource; `tag === 0`/absent starts a fresh accumulation. Resources are held by the
-capture node; images are PULLED per resource via `getPreview`/`getCapturePreview` (ruling 7).
+capture node; images are PULLED per resource via `getPreview`/`getCapturePreview`.
 
 Recording flows entirely through the RECORDER NODE (`@orchestrator/recorder-node`) — one worker
 thread FIFO-consuming the full-bit-depth `camera/<serial>/raw` pipes and hosting the mcap writer
 in-worker (built on the shared `@orchestrator/recording-service`). Main only advertises the raw
-pipes, creates/retires the node, and answers the ruling-3 per-frame metadata callback. Only the
+pipes, creates/retires the node, and answers the per-frame metadata callback. Only the
 L/R foveae carry a voltage binding (`resolveFoveaBinding`/`buildFoveaMeta`): FIN-bound frames
 carry the exposure-averaged voltage + frame_id (`volt.source: fin-averaged`), free-run frames a
 live snapshot (`live-snapshot`); both add the mirror angle + homography. The center channel skips
-the per-frame notice (R-2 opt). On finalize, main is notified (`recording:finished`) so the viewer
+the per-frame notice. On finalize, main is notified (`recording:finished`) so the viewer
 auto-opens the finished `.fovea`.
 
-EXCLUSIVITY (ruling 6): a capture shot in flight holds the raw L/R pipes; starting a recording
+EXCLUSIVITY: a capture shot in flight holds the raw L/R pipes; starting a recording
 would re-advertise the same ids and the shot's release would then retire the recording's
 producers — so a recording is refused (false) while `capturing`. Between raster shots `capturing`
 is false, so a recording CAN start there; the next capture shot is then refused by the helper's

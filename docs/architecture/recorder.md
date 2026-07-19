@@ -5,28 +5,17 @@
 > `app/orchestrator/capture-node.ts` (its capture sibling),
 > `app/orchestrator/recorder/*` (the container/writer contract surface),
 > `app/modules/manual-control/recording.ts` (streams map + extras callback),
-> the STANDALONE viewer: `app/src/viewer/*` (worker + protocol + source/
-> player/decode) + `app/src/windows/ViewerWindow.vue` +
-> `app/electron/preload-viewer.ts`. Design + rulings:
-> `docs/proposals/capture-recorder-nodes.md` (SHIPPED 2026-07-09/10 — named
-> raw FIFO pipes, per-frame `onFrame(stream, seq, deviceTs)` extras callback,
-> capture `onCaptureStart` once per run, pull-based capture previews,
-> auto-open viewer on `recording:finished`; legacy `.stream`/`.meta` backend
-> DELETED) + `docs/proposals/multi-fovea-recording.md` (SHIPPED 2026-07-09 —
-> raw12p packed sensor streams, `fovea.descriptor/v1` data channels, the
-> `fovea:wide-camera` singleton, `/codec` compressed pipes; see
-> `app/modules/multi-fovea/recording.ts` + `app/orchestrator/raw-pipe.ts`,
-> `app/orchestrator/compress-pipe.ts`, `app/src/viewer/decode.ts`) +
-> `docs/proposals/pairing-nodes.md` (SHIPPED 2026-07-09 — L/R exposure pairs
-> feed the descriptor L/R pointers) +
-> `docs/proposals/standalone-viewer-and-fcap.md` (rulings 1–2: the viewer is
-> STANDALONE — orchestrator-free; the container renamed `.fcap`).
+> `app/modules/multi-fovea/recording.ts`, `app/orchestrator/raw-pipe.ts`,
+> `app/orchestrator/compress-pipe.ts`, `app/src/viewer/decode.ts`, the
+> STANDALONE viewer: `app/src/viewer/*` (worker + protocol + source/player/
+> decode) + `app/src/windows/ViewerWindow.vue` +
+> `app/electron/preload-viewer.ts`.
 
 ## 1. Container
 
-A recording is one **MCAP** file with the **`.fcap`** extension (renamed from
-`.fovea` — `standalone-viewer-and-fcap.md` ruling 2; the value lives in
-`app/orchestrator/recorder/schema.ts`'s `FOVEA_EXTENSION` export). Legacy
+A recording is one **MCAP** file with the **`.fcap`** extension (the value
+lives in `app/orchestrator/recorder/schema.ts`'s `FOVEA_EXTENSION` export).
+Legacy
 `.fovea` recordings stay **readable** — the viewer open filter, macOS
 `open-file`, and the Windows/Linux arg association (`electron/main.ts`) all
 accept both `.fcap` and `.fovea`. The container holds channels per recorded
@@ -45,7 +34,7 @@ Angles/homography snapshots ride the same per-frame metadata so recorded
 frames are reconstructable without the live calibration.
 
 **Channel/payload facts (VERBATIM from the pipe advert — the recorder never
-interprets bytes, `multi-fovea-recording.md` rulings 8–10):** each frame
+interprets bytes):** each frame
 channel's `metadata` carries `{dtype, width, height, channels, pixelFormat,
 significantBits, stride}` copied straight from the source pipe. `pixelFormat`
 is **opaque** and may be a **packed** wire format (`BayerRG12p` — the
@@ -60,16 +49,16 @@ own byte count.
 **Non-frame records (multi-fovea):**
 
 - `fovea:wide-camera` (`WIDE_CAMERA_METADATA_NAME`) — a single metadata record
-  written once at start: the wide/center camera's intrinsics + distortion
-  (`multi-fovea-recording.md` ruling 2). The wide camera is static, so there
+  written once at start: the wide/center camera's intrinsics + distortion.
+  The wide camera is static, so there
   are NO per-frame wide extras.
 - `fovea.descriptor/v1` **data channels** — one JSON channel per live target
   (`fovea/<target>`), churned in/out with target arm/disarm. Each doc is
   `{tNs, bbox, frames:{left,center,right}}` where the `frames` values are
   per-stream MCAP **sequence pointers** into the recorded raw streams, and
   are **null-able**: `left`/`right` are non-null only when a trigger-mode
-  pairing record bound the observation's exposures (`pairing-nodes.md`
-  ruling 1 — free-run recordings always carry `left:null, right:null`);
+  pairing record bound the observation's exposures (free-run recordings
+  always carry `left:null, right:null`);
   `center` is the NEAREST recorded wide frame by timestamp and is explicitly
   UNSYNCHRONIZED (the wide camera is not hardware-triggerable — CAM0 GPIO
   uncabled). Fovea imagery is reconstructed offline from the pointed-at raw
@@ -99,13 +88,13 @@ visible in the profiler instead of stalling the frame path.
 ## 3. Viewer (STANDALONE)
 
 `.fcap`/`.fovea` files open in a **viewer window** — 0..N windows, exactly one
-per file (`fileKey` dedupe, `windows.md`). The viewer is STANDALONE
-(standalone-viewer-and-fcap ruling 1): it never talks to the orchestrator.
+per file (`fileKey` dedupe, `windows.md`). The viewer is STANDALONE: it never
+talks to the orchestrator.
 Its dedicated preload (`preload-viewer.cjs`) spawns a `worker_threads` worker
 (`viewer-worker.js`, source `app/src/viewer/worker.ts`) INSIDE the window's
 process that hosts the whole data layer — MCAP read (`source.ts`, indexed +
 footerless streaming fallback), frame decode (`decode.ts`, loads `core/Vision`
-lazily — the one ruled exception to the core-free-renderer boundary), and
+lazily — the one exception to the core-free-renderer boundary), and
 timestamp-paced playback (`player.ts`). Decoded Mats cross worker → preload →
 window over transferred buffers (zero copies) and render through FrameView's
 ImageData path; playback state (position/play/seek) is window-local. Playback

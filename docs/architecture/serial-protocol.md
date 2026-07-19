@@ -4,7 +4,6 @@
 > `core/Controller` (native `Device` + `Protocol`), `firmware/` (MCU),
 > `app/orchestrator/scheduler.ts` + `sync.ts` (synced capture),
 > `app/orchestrator/controller-node.ts` (the position-stream push model).
-> Full protocol design history: `docs/history/refactor/synced-capture.md`.
 
 ## 1. Device model
 
@@ -28,11 +27,10 @@ decoded back to volts via `dac2volt`), `Trigger`, `Reset`.
 (protocol v2.1.0)** is a targeted DAC recovery — re-inits the AD5664R DACs in
 place (full re-init incl. RESET) without a reboot or an enable-rail cycle, then
 re-commits the active stream's targets, so a wedged right-fovea mirror
-(`docs/dev/right-dac-freeze-2026-07-12.md`) recovers without dropping the
-session — the host's "recover mirror" button. REJects while disabled. The
-firmware ALSO re-asserts the idempotent MEMS config words at ~1 Hz on its own
-while enabled (mitigation M1), turning a corrupted-word DAC wedge into a ≤1 s
-glitch.
+recovers without dropping the session — the host's "recover mirror" button.
+REJects while disabled. The firmware ALSO re-asserts the idempotent MEMS
+config words at ~1 Hz on its own while enabled, turning a corrupted-word DAC
+wedge into a ≤1 s glitch.
 
 ## 3. v2 surface — streams and synced frames
 
@@ -54,9 +52,9 @@ glitch.
 
 ## 4. The actuation path (controller node, push model)
 
-The old per-session `startActuationLoop` (1 ms pull loop, `actuation.ts`)
-is **deleted**. Its role is absorbed by the singleton **controller node**
-(`app/orchestrator/controller-node.ts`): each hot-actuating session calls
+The singleton **controller node**
+(`app/orchestrator/controller-node.ts`) owns the actuation path: each
+hot-actuating session calls
 `node.openPosition(name, { from, initial })` and PUSHES target poses at its
 own natural cadence (kernel result / pointer / servo tick). On v2 firmware
 each open position input maps 1:1 to a CMD_STREAM (created on first update,
@@ -68,9 +66,9 @@ it runs one internal paced awaited `actuate()` loop over the latest pushed
 pose. Enable lifecycle: enable on first open if disabled, disable on last
 close iff the node enabled it; streams drop + lazily recreate on controller
 reconnect. `update()` also records the predicted trajectory into
-mirror-history (the single trusted-time writer). RIG-VERIFY items for this
-path live in `docs/hardware/stage-f.md` (prediction accuracy vs a sampled
-readback; FW5 coexistence with CMD_FRAME).
+mirror-history (the single trusted-time writer). Prediction accuracy (vs a
+sampled readback) and FW5 coexistence with CMD_FRAME require verification on
+the full hardware rig.
 
 ## 5. Hardware triggering
 
@@ -79,6 +77,5 @@ center camera's GPIO port is reserved on the board but uncabled
 (camera-side connector size; recoverable with a slimmer cable —
 `docs/hardware/rig.md`).
 
-*(Planner-review stub: wire-level framing — packet layout, seq/ACK/REJ/FIN
-encoding, CRC — is B/firmware-owned; transcribe from `core/src/
-Controller.cpp` + `firmware/include/` when pinning this section.)*
+Wire-level framing — packet layout, seq/ACK/REJ/FIN encoding, CRC — lives in
+`core/src/Controller.cpp` and `firmware/include/`.

@@ -1,7 +1,7 @@
 # Split Tracking
 
 App id / session name: `split-tracking` (title "Tracking - Split", application
-group). Proposal + decisions of record: `docs/proposals/split-tracking-app.md`.
+group).
 
 ## What it does
 
@@ -39,7 +39,7 @@ the commanded volt (manual steering). Releasing (drag END) → `armCenter{eye}`:
 `servo.reset()`, the tracker `arm`s at `tileRect(frameCenter, tile, size)` —
 the FIXED center tile — and the servo engages. Dragging one side never touches
 the other. (`armEye` is the single arm helper; the swap re-arm and `setTile`
-also seed the center.)
+also arm at the center.)
 
 The **tile** (`state.tile`, default 512×512, drawer-configurable
 `MIN_TILE`..`MAX_TILE` = 64..1024) is the tracker template ROI, always centered
@@ -66,9 +66,9 @@ pixel→volt Jacobian is `d/dp[A2V(angle0 + p/focal)]` — a finite difference t
 yields volt-per-px directly (no explicit inverse). Inputs per tick: `focal`
 from `deriveFoveaIntrinsics(...).f`, `angle0 = conv.V2A[eye](volt)`, per-eye
 `conv.A2V[eye]`. Degenerate/uncalibrated focal → zero matrix (servo holds, no
-NaN to the mirror). **RIG-TUNABLE:** the per-axis pixel→angle signs and the
+NaN to the mirror). **Hardware-tunable:** the per-axis pixel→angle signs and the
 effective fovea zoom/scale depend on the camera↔mirror mounting; `FOVEA_TRACK_ZOOM`
-and `SERVO_MAX_STEP_V` are the bench knobs.
+and `SERVO_MAX_STEP_V` are the bench knobs tuned on the hardware rig.
 
 ## Capture + recording {#capture}
 

@@ -35,8 +35,7 @@ Read in this order:
 
 ## Invariant glossary
 
-Code comments cite these ids; the defining discussion is in the linked doc
-(historical root-cause analyses live in `docs/history/refactor/`).
+Code comments cite these ids; the defining discussion is in the linked doc.
 
 | Id | One line | Doc |
 |---|---|---|

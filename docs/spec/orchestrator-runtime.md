@@ -35,35 +35,34 @@ watchdog" header for the process tree.
 
 ## Resource-scoped session lifecycle {#resource-session}
 
-Source: `app/orchestrator/resource-session.ts` (A-P1)
+Source: `app/orchestrator/resource-session.ts`
 
 Each activation gets a `ResourceScope` that owns the cleanups registered during
-`activate` and drains them LIFO on idle. The scope enforces the two lifecycle invariants
-that produced a recurring bug class in the hand-rolled sessions:
+`activate` and drains them LIFO on idle. The scope enforces the two lifecycle invariants:
 
-1. Ordered async drain (V1/RT1): `idle()` returns a promise that resolves only after
+1. Ordered async drain: `idle()` returns a promise that resolves only after
    every registered cleanup — including camera-lease releases and async drains — has run,
    LIFO. The runtime's `drained()` awaits it, so a window switch waits for the real
    teardown.
-2. Stale-async-completion safety (V5/V10): if the session idles (or re-activates) while a
-   slow `activate` is still running, that activation is superseded — every resource it
+2. Stale-async-completion safety: if the session idles (or re-activates) while a
+   slow `activate` is still running, that activation is abandoned — every resource it
    acquires from then on is released immediately instead of leaking, and a re-activation
    serializes behind the prior drain so two activations never hold the leases at once.
 
-Built on the A-R2-P1 `session-resources` primitives (DisposerBag/releaseLeases still used
+Built on the `session-resources` primitives (DisposerBag/releaseLeases still used
 inside `activate`); this adds the generation/drain machinery around them. Additive:
 `defineResourceSession` sits alongside `defineSession`, so sessions migrate one at a time.
 
 ## Window/app catalog {#windows}
 
-Source: `app/lib/windows.ts` (Stage 5, `docs/history/refactor/multi-window.md`)
+Source: `app/lib/windows.ts`
 
 The single source of truth for the multi-window foundation. Imported by the renderer
 (welcome launcher, per-app window shell), the Electron main process (window manager entry
 wiring), vite.config.ts (multi-entry renderer build), and the window-manager unit tests.
 Must stay Vue-free and Node-free (pure data + string helpers) so every consumer can load it.
 
-Window taxonomy (multi-window.md §2):
+Window taxonomy:
 - `welcome` — singleton, the fallback when no app window is open.
 - `app` — ≤ 1 at a time (apps are mutually exclusive over camera leases + the controller).
 - `profiler` — 0..N utility; one per orchestrator instance, each pins to the app instance
@@ -71,12 +70,11 @@ Window taxonomy (multi-window.md §2):
 - `projection` — 0..N single-stream viewers (passive subscribers, never exclusive, never
   counted for the welcome rule, survive their source app's close).
 - `viewer` — 0..N recorder playback windows, ONE PER `.fcap`/`.fovea` file (non-exclusive,
-  never counted for the welcome rule, STANDALONE: never touches the orchestrator —
-  standalone-viewer-and-fcap ruling 1).
+  never counted for the welcome rule, STANDALONE: never touches the orchestrator).
 
 ## Hardware-acquisition gate {#hardware-gate}
 
-Source: `app/orchestrator/hardware-gate.ts` (disposable-orchestrator ruling 2)
+Source: `app/orchestrator/hardware-gate.ts`
 
 A fresh orchestrator instance forks and builds its node graph IMMEDIATELY, but must not touch
 the exclusive hardware (Aravis cameras, MEMS serial) until the PREVIOUS hardware instance is
@@ -91,7 +89,7 @@ unit tests never block; the orchestrator process `arm()`s it at boot, then
 
 ## Camera-enumeration probe {#probe}
 
-Source: `app/orchestrator/probe.ts` (disposable-orchestrator ruling 3)
+Source: `app/orchestrator/probe.ts`
 
 A small persistent utilityProcess main forks ONCE at startup — separate from any app instance
 — whose ONLY job is to load `core`, enumerate connected devices on an interval (~2s), and post
@@ -104,7 +102,7 @@ exclusive) and RESUMES it back at the Welcome screen.
 
 ## Diagnostics (report / span) {#diagnostics}
 
-Source: `app/orchestrator/diagnostics.ts` (`docs/history/refactor/orchestrator.md` §12.1 C7)
+Source: `app/orchestrator/diagnostics.ts`
 
 Process-wide error reporting for orchestrator code with no single owning session (the camera
 registry is shared) or that would otherwise fail silently into the utility process's stdio.
@@ -116,20 +114,20 @@ console.error, danger identity in the renderer tray, exact scope+message coalesc
 one row per scope whose message tracks the latest report, so a flapping condition never floods
 the tray ring). Every report reaches every connected window by design — use a fine-grained
 scope label (e.g. "trigger-sync") so cross-window reports stay interpretable.
-`span()` is the S5 sibling: structured timing measurements (boot phases, per-activation
+`span()` is the sibling for structured timing measurements (boot phases, per-activation
 camera/calibration work, controller connect) instead of failures — same shape, always recorded
-locally (bounded ring), forwarded via `onSpan()` so a future profiler window renders a live
+locally (bounded ring), forwarded via `onSpan()` so a profiler window renders a live
 timeline without polling.
 
 ## State-in-URL helper {#url-state}
 
-Source: `app/lib/url-state.ts` (`docs/history/refactor/multi-window.md` req. 7 / §4)
+Source: `app/lib/url-state.ts`
 
 Stateful windows expose internal state in their URL so a dev restart / manifest restore lands
 back in the same internal state, not just the same window. The orchestrator session stays
 authoritative — the URL is the ADDRESS of that state, not a second copy: components sync
 state → URL with `history.replaceState` (no navigation, no history spam) and read the URL
-once on load to seed the session. State rides the QUERY STRING, not a path subpath: packaged
+once on load to initialize the session. State rides the QUERY STRING, not a path subpath: packaged
 windows load via `loadFile(file, { search })`, where a path subpath would break file://
 resolution — the query string is the one URL slot that rides both the dev-server URL and the
 packaged file URL unchanged. Renderer-only; framework-free (Vue callers wrap `writeUrlState`
@@ -137,7 +135,7 @@ in a `watchEffect`).
 
 ## TeleCanvas contract {#telecanvas}
 
-Source: `app/lib/telecanvas.ts` (standalone dual-mode module, user directive 2026-07-09)
+Source: `app/lib/telecanvas.ts` (standalone dual-mode module)
 
 The TeleCanvas shared contract. Pure data — Vue-free AND Node-free — so every consumer can
 load it: the renderer (config refs, the TeleCanvas window, the settings section), the typed
@@ -157,20 +155,20 @@ box (the same WebSocket wire an external display uses).
 
 ## Unified time (time-align) {#time-align}
 
-Source: `app/orchestrator/time-align.ts` (unified-time-and-topology §1–§3, RULED)
+Source: `app/orchestrator/time-align.ts`
 
 THE time origin is the orchestrator's steady clock (`process.hrtime.bigint`, integer ns,
 monotonic). Every other clock — camera tick counters, the MCU's uint64 micros, Aravis wall
-stamps — maps INTO host-ns via a calibrated offset estimated with the MIN-FILTER (ruling 1:
-latency noise is one-sided; the minimum over N samples converges on the true offset, the mean
-absorbs tail latency — PTP's trick). Consumers never see raw device time: they call
+stamps — maps INTO host-ns via a calibrated offset estimated with the MIN-FILTER: latency
+noise is one-sided; the minimum over N samples converges on the true offset, the mean
+absorbs tail latency (PTP's trick). Consumers never see raw device time: they call
 `toHostNs(clock, ts)` after boot calibration. Caveat owned here: hrtime PAUSES during system
 sleep — `sleepDetected()` compares wall-vs-steady progress; a jump invalidates every
 calibration.
 
 ## Native probes seam {#native-probes}
 
-Source: `app/orchestrator/native-probes.ts` (A-24 Stage 3)
+Source: `app/orchestrator/native-probes.ts`
 
 The free-running C++ threads — the SHM pipe producers (`Pipe.probeAll()`) and the KCF tracker
 (`tk.probe()`) — expose native meters in the `WorkloadSnapshot` shape, probed OUT-OF-LOOP.

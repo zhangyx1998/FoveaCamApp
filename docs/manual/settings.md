@@ -227,6 +227,5 @@ delete** / **Cancel** step) for removing an orphaned one. Intrinsic and extrinsi
 calibrations now live as records in the per-rig list above, not here. Use the
 refresh button in its header after calibrating in another window.
 
-For the design rationale and the on-disk record format, see the
-[calibration-records-v2 proposal](../proposals/calibration-records-v2.md) and its
-[format spec](../schema/calibration-record.md).
+For the on-disk record format, see the
+[calibration record format spec](../schema/calibration-record.md).

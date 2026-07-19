@@ -26,14 +26,14 @@ extrinsic data, which is exactly what this tool produces. It uses role-matched c
 ## Capture measurements {#capture-measurements}
 
 Each CAL capture records, per record: the L/R foveae's marker img/obj points + mirror
-voltage, and the center camera's marker + observed wide angle. Plus the ruled measured-
+voltage, and the center camera's marker + observed wide angle. Plus the measured-
 magnification inputs off the center record:
 
-- **Ruling 3** (`side_pts`, preferred): the WIDE camera's raw view of the SIDE markers
+- **`side_pts`** (preferred): the WIDE camera's raw view of the SIDE markers
   (the SAME physical markers the L/R foveae track) — matched from `C.otherTargets` by the
   per-eye target id, recording its outer 4-corner quad. Absent when the wide camera didn't
   see that side marker → that eye's record falls back to the center marker.
-- **Ruling 2** (fallback): the wide camera's own center-marker quad.
+- **Center-marker quad** (fallback): the wide camera's own center-marker quad.
 - The independently-adjustable marker sizes (`side_mm`, `center_mm = side_mm × ratio`)
   read from the app config at capture.
 
@@ -42,9 +42,8 @@ measured-magnification fields are optional so a record captured before they exis
 where the wide camera couldn't see the side marker) degrades to "no measured
 magnification" for that record.
 
-The PRV preview maps angle → volt via `A2V.predict` (NOT the reverse — the original
-renderer's preview.vue had this backwards; fixed here), then round-trips each predicted
-volt back through V2A → angle → pixel for the wide-view overlay.
+The PRV preview maps angle → volt via `A2V.predict` (NOT the reverse), then round-trips
+each predicted volt back through V2A → angle → pixel for the wide-view overlay.
 
 ## Persistence {#persistence}
 
@@ -59,7 +58,7 @@ latest record bound to the camera.
 capture-recorder-everywhere. Recording records the raw L/C/R sensor streams (advert-
 verbatim). Capture is DEGRADED: this tool holds no undistort (it PRODUCES the extrinsic
 data), so the L/R foveae stack raw WITHOUT the fovea homography wrap (stated in
-`capture_meta`). EXCLUSIVITY (ruling 6): a recording is refused while a capture shot holds
+`capture_meta`). EXCLUSIVITY: a recording is refused while a capture shot holds
 the shared raw pipes; `busy()` refuses a mid-recording/mid-capture drain.
 
 ## Teardown {#teardown}

@@ -7,7 +7,6 @@ pointers are per section; the code carries only load-bearing invariants inline.
 ## Split tree {#split-tree}
 
 Source: `app/lib/projection/split-tree.ts`
-(`docs/proposals/projection-split-view.md` §"Layout model")
 
 The layout of a projection window is a recursive tree: `Leaf(pane) | Split{ dir:
 row|col, children, ratios }`, serialized into the window's URL (`?win`/state-in-URL
@@ -29,7 +28,6 @@ stable across a reload).
 ## Pane termination / rebind {#termination}
 
 Source: `app/lib/projection/termination.ts`
-(`docs/proposals/projection-split-view.md` §"Termination/rebind")
 
 Orchestrators are disposable per-app, so every app switch KILLS all projected sources.
 Auto-close-on-default would then erase projections on every switch — so a pane that loses
@@ -45,32 +43,36 @@ frozen --grace elapses-->   terminated      the source did NOT come back within 
 
 Only when EVERY pane is `terminated` and `projection_auto_close` is on does the window
 close itself. Dismissing the cover keeps the frozen frame (status stays `frozen`, the
-timer keeps running) — it only hides the note. GRACE_MS (~10s per the planner decision) is
+timer keeps running) — it only hides the note. GRACE_MS (~10s) is
 long enough to ride out an app switch's orchestrator handoff, short enough that a genuinely
 dead window auto-closes promptly. Pure + timer-injectable (unit-tests under fake timers).
 
 ## Pane descriptor codec {#descriptor}
 
 Source: `app/lib/projection/descriptor.ts`
-(`docs/proposals/projection-split-view.md` §"Sources")
 
 A projectable pane binds ONE of three source kinds: `{kind:"frame", session, frame}` (a
 Channel frame ref, driven passively by `useSession().frame(name)`), `{kind:"pipe", id}`
 (an advertised SHM pipe, driven by `usePipeFrame(id)`, epoch-aware — this is what makes raw
 camera previews/undistorts projectable), or `{kind:"viewer", recording, tileKey}` (a fcap
-VIEWER tile — the viewer decodes in its own window, so there is no live session/pipe: the
-pane MIRRORS the tile via a ref-counted same-origin `BroadcastChannel`
-(`app/src/viewer/viewer-frame-bridge.ts`, `VIEWER_FRAME_CHANNEL`). The viewer re-broadcasts
-the Mat a tile currently displays — playhead/3D already resolved — only for `tileKey`s a
-projection has subscribed to; posts stop → the pane's freeze machine shows "source has
-closed". `tileKey` is the tile identity: a channel name, or `pair:<base>` for a 3D pair.
-See `docs/proposals/viewer-tiles-split-and-project.md`). This module is the VERSIONED
-serialize/parse boundary for those descriptors (a single pane for the DnD payload; the whole
-layout tree via split-tree.ts's `parsePane`) — `PANE_CODEC_VERSION` is 2 (v1 frame/pipe
-descriptors still parse; the viewer kind is additive). Every decode is defensive — a
-malformed / future-version string parses to `null` rather than throwing, so a stale URL or
-foreign drag never crashes a window. Renderer- and main-safe (pure data + JSON); no Vue, no
-DOM.
+VIEWER tile, mirrored over a broadcast bridge — see [Viewer-source panes](#viewer-source)).
+This module is the VERSIONED serialize/parse boundary for those descriptors (a single pane
+for the DnD payload; the whole layout tree via split-tree.ts's `parsePane`) —
+`PANE_CODEC_VERSION` is 2 (v1 frame/pipe descriptors still parse; the viewer kind is
+additive). Every decode is defensive — a malformed / future-version string parses to `null`
+rather than throwing, so a stale URL or foreign drag never crashes a window. Renderer- and
+main-safe (pure data + JSON); no Vue, no DOM.
+
+### Viewer-source panes {#viewer-source}
+
+Source: `app/src/viewer/viewer-frame-bridge.ts`
+
+For the `viewer` kind the viewer decodes in its own window, so there is no live
+session/pipe: the pane MIRRORS the tile via a ref-counted same-origin `BroadcastChannel`
+(`VIEWER_FRAME_CHANNEL`). The viewer re-broadcasts the Mat a tile currently displays —
+playhead/3D already resolved — only for `tileKey`s a projection has subscribed to; posts
+stop → the pane's freeze machine shows "source has closed". `tileKey` is the tile
+identity: a channel name, or `pair:<base>` for a 3D pair.
 
 ## Implicit projection button {#implicit-button}
 
@@ -85,18 +87,18 @@ projects the currently-shown pipe). `StreamView` derives the `PaneDescriptor` fr
 `payload.source` alone, so ANY surface bound to one of these refs offers the button once
 its first frame arrives.
 
-A-P12 still holds: the stamp is client-side only, applied after receive/materialize —
+The stamp is client-side only, applied after receive/materialize —
 the wire types (`FramePayload`/`FrameMeta` in `protocol.ts`) stay transport-only and the
 address never crosses a process boundary.
 
 Opt-out is `:projectable="false"`, used where the button must NOT appear:
 - `ProjectionPane.vue` — a projection window must not offer re-projecting itself;
 - `disparity-scope/Debugger.vue` — debug views whose meaning rides SVG overlays that a
-  projected pane would not carry (ruled in `disparity-debugger-window.md`).
+  projected pane would not carry.
 
 ## Cross-window drag & drop {#dnd}
 
-Source: `app/lib/projection/dnd.ts` (`docs/proposals/projection-split-view.md` §"DnD")
+Source: `app/lib/projection/dnd.ts`
 
 HTML5 drag carries a pane descriptor under a custom MIME so a drag works across Electron
 windows of ONE app. This module is the PURE decision layer the Vue drag handlers call: the

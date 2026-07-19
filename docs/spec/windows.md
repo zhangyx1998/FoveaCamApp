@@ -4,10 +4,6 @@ Behavior contracts for the multi-window shell and per-app orchestrator
 lifecycle: `app/electron/main.ts`, `window-manager.ts`, `window-manifest.ts`,
 `orchestrator-instances.ts`, `orchestrator-exit.ts`, and the renderer window
 hosts under `app/src/windows/**`. Source files carry `// spec:` pointers here.
-Governing docs: `docs/history/refactor/multi-window.md`,
-`docs/proposals/disposable-orchestrator.md`,
-`docs/proposals/orchestrator-lifecycle-and-exit.md`,
-`docs/proposals/config-store-main-authority.md`, `docs/hardware/stage-f.md`.
 
 ## Window manager state machine {#window-manager}
 
@@ -17,7 +13,7 @@ the real BrowserWindow in main.ts; `drainSessions` asks the orchestrator to idle
 every camera-owning session and waits for settlement; `notifyRefusal` surfaces a
 busy refusal). Unit-tested with fakes (`test/window-manager.test.ts`).
 
-Adopted defaults (multi-window.md §5, user-vetoable):
+Adopted defaults:
 
 1. **Welcome rule** — Welcome CLOSES on app open, respawns when the last app
    window closes. Only an APP window closing respawns it (closing welcome itself
@@ -36,15 +32,15 @@ Adopted defaults (multi-window.md §5, user-vetoable):
    app→welcome direction reads a last-known snapshot because the BrowserWindow is
    destroyed by the time the welcome rule fires.
 
-Window identity (A-34): `spawn()` is the single chokepoint. It resolves a stable
+Window identity: `spawn()` is the single chokepoint. It resolves a stable
 `windowId` (recovered from a restored URL, else minted `<appId|class>-<n>`,
 unique among LIVE windows) and ALWAYS stamps it into `search` as `?win=` — the
 packaged build loads `entry + search` (a restored `url` is only honored on the
 dev origin), so `search` is the one slot carrying the id in every mode. The id
 survives reload + manifest restore, and the renderer reads its own identity from
-it. C-24 composition namespaces `win/<windowId>/...` on it.
+it. Composition namespaces `win/<windowId>/...` on it.
 
-Sub-windows (WS2 2a): a window may declare an `owner`. On owner close, the child's
+Sub-windows: a window may declare an `owner`. On owner close, the child's
 class `onOwnerClose` policy decides `cascade` (close with owner — the debug
 drawer, the sole cascade class) or `survive` (stay with a frozen last frame —
 projection/viewer). `toggle`/`toggleDebug`/`openDebug` are the keyed
@@ -65,8 +61,8 @@ flow (Ctrl/Cmd-Shift-R, dev only). `collectManifest` snapshots every open window
 (profiler recovers its per-instance binding from the persisted URL and opens
 straight into the frozen "session ended" state — the instance is gone after a
 restart and must never re-attach). Dev restart relaunches the whole app so the
-orchestrator boots fresh; production blocks reloads/navigation (multi-window.md
-req. 6). Plain Ctrl/Cmd-R is reserved for the recorder trigger in every mode.
+orchestrator boots fresh; production blocks reloads/navigation. Plain Ctrl/Cmd-R
+is reserved for the recorder trigger in every mode.
 
 ## Disposable orchestrator instances {#instances}
 
@@ -83,7 +79,7 @@ process, so the Welcome launcher never wedges.
 - **Clean-vs-crash** — decided by the `quiesced` ack, NEVER the exit code. A clean
   exit acks after MEMS-disable + camera-release; any exit without that ack is a
   crash → the janitor runs.
-- **Brokering** (ruling 6) — main brokers a direct `MessagePort` between each
+- **Brokering** — main brokers a direct `MessagePort` between each
   renderer and its instance; frames/commands then flow point-to-point. A window
   BOUND to an instance (an app window that owns it, or an attached profiler) routes
   to THAT instance only; if its instance is dead, fail CLOSED (replay the typed down
@@ -92,19 +88,19 @@ process, so the Welcome launcher never wedges.
 
 ## Profiler per-instance binding {#profiler-binding}
 
-A profiler pins to ONE instance (orchestrator-lifecycle-and-exit). It is
-registered as an observer ATTACHMENT, never an owned window — closing it can't
-dispose the instance, and the instance's death can't close it (it freezes with its
-accumulated data, "session ended/crashed"). The binding rides the URL (`instance` +
-`session` params) so it survives reload/restore and the connect broker routes
-fail-closed to it. Keyed by `instanceId`: re-clicking the chart icon for the SAME
-live instance re-focuses its profiler; a NEW app opens a SECOND profiler. Opened
-from the status-only Welcome (no live instance) it is unbound → "no active session".
+A profiler pins to ONE instance. It is registered as an observer ATTACHMENT, never
+an owned window — closing it can't dispose the instance, and the instance's death
+can't close it (it freezes with its accumulated data, "session ended/crashed"). The
+binding rides the URL (`instance` + `session` params) so it survives reload/restore
+and the connect broker routes fail-closed to it. Keyed by `instanceId`: re-clicking
+the chart icon for the SAME live instance re-focuses its profiler; a NEW app opens a
+SECOND profiler. Opened from the status-only Welcome (no live instance) it is
+unbound → "no active session".
 
 ## Hardware quiescence & crash safety {#quiescence}
 
-Safety invariant (`docs/hardware/stage-f.md`): MEMS mirrors + cameras must NEVER
-stay armed past orchestrator death, even on crash. Three nested nets:
+Safety invariant: MEMS mirrors + cameras must NEVER stay armed past orchestrator
+death, even on crash. Three nested nets:
 
 1. **Quiesced handshake** — an instance confirms `quiesced` (MEMS disabled +
    cameras released) before a graceful exit.
@@ -124,7 +120,7 @@ stay armed past orchestrator death, even on crash. Three nested nets:
    with nothing left to disarm the mirrors (releasing a serial port does not
    de-energize them).
 
-Quit path — WINDOW-FIRST teardown (ruling 1/3): close owned sub-windows (cascade),
+Quit path — WINDOW-FIRST teardown: close owned sub-windows (cascade),
 then app/top windows, let their teardown (pipe reads, `window:closed`) flush
 BEFORE the instance handshakes so no renderer is mid pipe-read while an instance
 disarms; then flush viewer engines, then quiesce every instance (bounded), then
@@ -142,27 +138,26 @@ flushes the ring to a file, inlines a tail, and pairs the newest minidump whose
 mtime is at/after the instance's fork time (best-effort attribution — multiple
 instances share the dir). The enriched report is remembered per instance so a
 late-attaching profiler replays the same frozen banner, and pushed to the dying
-instance's OWNED + ATTACHED windows only (ruling 4 scoping) — a new instance's app
+instance's OWNED + ATTACHED windows only (scoping) — a new instance's app
 window must never react to the old instance's death.
 
 ## Config store authority {#config-store}
 
-`config-store-main-authority.md`: MAIN is the single config-store authority.
-`StoreMain` owns the cache + fs + broadcast; renderer windows talk to it over
-`store:*` IPC, orchestrator instances + the probe over their parentPort. This
-retires the per-instance store-hub that couldn't see across instances. Settings /
-TeleCanvas windows are singleton, UNBOUND, orchestrator-free — their store goes
-straight to MAIN, so a config edit applies live across every window with no
-instance to back it. Main itself sets `FOVEA_DATA_PATH` for its own process (not
-just children) so its reused fs primitives resolve the store root.
+MAIN is the single config-store authority. `StoreMain` owns the cache + fs +
+broadcast; renderer windows talk to it over `store:*` IPC, orchestrator instances +
+the probe over their parentPort. A per-instance store-hub could not see across
+instances. Settings / TeleCanvas windows are singleton, UNBOUND, orchestrator-free
+— their store goes straight to MAIN, so a config edit applies live across every
+window with no instance to back it. Main itself sets `FOVEA_DATA_PATH` for its own
+process (not just children) so its reused fs primitives resolve the store root.
 
 ## Push safety {#push-safety}
 
-A push to a dying window is correct to DROP, never fatal (incident 2026-07-09:
-`orchestrator:down` threw "Render frame was disposed before WebFrameMain could be
-accessed" while the parent restarted). `pushTo` guards `isDestroyed()` AND wraps
-`send` — the render frame can be disposed between the check and the send
-(webFrameMain race that `isDestroyed()` won't catch). Log at debug; never throw.
+A push to a dying window is correct to DROP, never fatal: `orchestrator:down` can
+throw "Render frame was disposed before WebFrameMain could be accessed" while the
+parent restarts. `pushTo` guards `isDestroyed()` AND wraps `send` — the render
+frame can be disposed between the check and the send (webFrameMain race that
+`isDestroyed()` won't catch). Log at debug; never throw.
 
 ## File association {#file-association}
 

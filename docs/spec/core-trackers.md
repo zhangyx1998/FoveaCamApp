@@ -1,9 +1,8 @@
 # core trackers (KCF)
 
 Behavior spec for the OpenCV tracker configuration in `core/src/Tracker.cpp`
-(`makeKcf`, `asColor8`). These are load-bearing traps on OpenCV 4.13.0; probes for
-each claim live in the 2026-07-10 fix commits. The code carries `// spec:`
-pointers.
+(`makeKcf`, `asColor8`). These are load-bearing traps on OpenCV 4.13.0. The code
+carries `// spec:` pointers.
 
 ## kcf-gray {#kcf-gray}
 
@@ -15,8 +14,8 @@ pointers.
    needle/target scenes, or ANY smooth gradient at the disparity kernel's 64×64
    arm size) the compressed CN response is degenerate: KCF finds the target once
    (frame 2's patch still equals the model) and then NEVER again. Symptom: the box
-   flashes once or never locks, UI parks on "armed". GRAY features tracked these
-   scenes for months pre-4.13.
+   flashes once or never locks, UI parks on "armed". GRAY features track these
+   scenes reliably.
 2. **`desc_pca = GRAY` AND `desc_npca = GRAY`, `compressed_size = 1`.** The obvious
    GRAY-only configs are BROKEN in 4.13.0 — `{pca=GRAY, npca=0}` and
    `{pca=0, npca=GRAY}` both throw "Matrix operand is an empty matrix" on the

@@ -13,13 +13,13 @@
 | **Renderer windows** | one `BrowserWindow` per entry (`docs/architecture/windows.md`) | Vue UI only. **Core-free** (type-only imports allowed). Pixels arrive via SHM pipes or session frame topics. |
 | **Vision workers** | `worker_thread` per vision session, bundled `.dist/electron/vision-worker.js` | Per-session pixel work (KCF, warp, diff, detection kernels) off the orchestrator loop; SHM-reads camera pipes directly. |
 | **Recorder worker** | `worker_thread` | `.fcap` MCAP writing (`recorder.md`). |
-| **Viewer worker** | `worker_thread` per viewer WINDOW (spawned by `preload-viewer.cjs`; bundled `.dist/electron/viewer-worker.js`) | STANDALONE recording playback: MCAP read + core-Vision decode + pacing, entirely inside the window's process — never touches the orchestrator (`recorder.md` §3). The scoped, ruled exception to the core-free-renderer rule. |
+| **Viewer worker** | `worker_thread` per viewer WINDOW (spawned by `preload-viewer.cjs`; bundled `.dist/electron/viewer-worker.js`) | STANDALONE recording playback: MCAP read + core-Vision decode + pacing, entirely inside the window's process — never touches the orchestrator (`recorder.md` §3). The scoped exception to the core-free-renderer rule. |
 | **Native threads** (inside the orchestrator process, owned by `core`) | Arv capture sinks, format converters, undistort remap, KCF tracker, SHM pipe publishers | Free-running per-frame work; each exposes a meter block the orchestrator probes out-of-loop (`metering.md`). |
 
 ## 2. Boundaries (the two greps)
 
-Two lint-by-grep rules keep the bundles honest; CI-equivalent checks run at
-every task boundary (`docs/dev/gates.md`):
+Two lint-by-grep rules keep the bundles honest, enforced by CI-equivalent
+checks:
 
 - **Orchestrator-reachable code is Vue-free.** Nothing under
   `app/orchestrator/` or imported by it may import `vue`. (The one deliberate
@@ -50,8 +50,7 @@ every task boundary (`docs/dev/gates.md`):
 
 Preloads are built by the low-level `vite-plugin-electron` with **one build
 per entry** and explicit lib config. Violating any of these reproduces a
-documented boot failure (root-cause transcripts:
-`docs/history/refactor/preload-error.md`):
+boot failure:
 
 - **V11** — modules shared between preloads are inlined into each output,
   never split into sibling chunks: a sandboxed preload cannot `require` a

@@ -59,10 +59,10 @@ passive subscriptions so opening it never starts actuation or camera taps
 
 - **Workload table** — sorted by utilization descending; anything ≥ 0.9 gets
   the red **SATURATED** flag (badge + rail). The busiest workload is almost
-  always the fps cap: the canonical case was `registry:<serial>` (the old JS
-  view-tap loop) reading 0.99 while the native converters sat idle — the
-  loop's removal is what the flag was built to make obvious.
+  always the fps cap, and the flag makes an unexpected bottleneck obvious —
+  e.g. a `registry:<serial>` JS view-tap loop reading 0.99 while the native
+  converters sit idle.
 - **Graph panel** — the live node graph (`stream-graph.md` §6).
 - **Rates/streams/spans** — channel frame rates, controller stream Hz,
   boot/step spans; snapshot export writes the whole `PerfSnapshot` to disk
-  for offline comparison (the HIL baseline workflow).
+  for offline baseline comparison.

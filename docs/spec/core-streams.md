@@ -3,7 +3,7 @@
 Behavior spec for `core/lib/Stream/Stream.h` (`Stream<T>` publisher +
 `Subscriber<T>`). These are the teardown-safety rules that prevent a family of
 reintroduction bugs — the code carries `// spec:` pointers back to the anchors
-below. Nothing here is aspirational; every rule closed a specific crash/hang.
+below. Nothing here is aspirational; every rule prevents a specific crash/hang.
 
 `Stream<T>` runs one producer thread that fans a payload out to N subscribers
 under `mutex`. `Shared<Stream>` is intentionally unsupported (add it in a derived
@@ -16,7 +16,7 @@ destructed from the subscribing end.
 `shutdown()` sets `flag_terminate` UNDER `mutex`, then `notify_all`.
 `wait_activate()` evaluates its predicate (which reads `flag_terminate`) while
 holding `mutex` and then atomically unlocks+sleeps in `unfreeze.wait()`. If the
-flag were flipped + notified WITHOUT the mutex (the historical code), the notify
+flag were flipped + notified WITHOUT the mutex, the notify
 could land in the gap after the parking thread read the flag as false but before
 it blocked — a lost wakeup: the producer sleeps forever and the `thread.join()`
 hangs, the orchestrator never exits, and hardware stays armed. A hung teardown
@@ -26,11 +26,11 @@ never lost.
 
 ## eject-and-drain {#eject-and-drain}
 
-The destroyed-mutex race fix (2026-07-09 exit-6 abort). After `shutdown()` joins
+The destroyed-mutex race. After `shutdown()` joins
 the producer thread, THIS stream's own thread can never touch `mutex` /
 `subscribers` again. What remains is a cross-thread `Subscriber::close()` racing
-our destruction: on a CLEAN shutdown (unlike `crash()`) the base historically
-left every subscriber's back-pointer intact — so a subscriber destroyed AFTER us
+our destruction: on a CLEAN shutdown (unlike `crash()`), without ejection the base
+would leave every subscriber's back-pointer intact — so a subscriber destroyed AFTER us
 would `close() -> unsubscribe()` and lock a freed `mutex`. `eject_all_and_drain()`
 closes this in two moves, both BEFORE `~Stream` frees `mutex`:
 
@@ -59,12 +59,9 @@ provably live (see [lifetime-order](#lifetime-order)); the decrement follows
 `Stream::unsubscribe` (which takes the stream `mutex`). The publisher fan-out in
 `Stream::loop()` holds the stream `mutex` first, then takes each subscriber's
 state guard — so holding the state guard while reaching for the stream mutex is
-the opposite order and deadlocks. (Observed: a TransformStream thread exiting →
-`~Latest` → `~Subscriber` → `close(true)` racing its upstream fan-out wedged the
-whole app; the fan-out stuck wanting a state guard, this `unsubscribe` stuck
-wanting the stream mutex.) Therefore: freeze the state under the guard (capture +
-null the stream pointer, set the error), RELEASE the guard, and only then
-`unsubscribe`. This reorder (commit ee6fc46) is safe:
+the opposite order and deadlocks. Therefore: freeze the state under the guard
+(capture + null the stream pointer, set the error), RELEASE the guard, and only then
+`unsubscribe`. This reorder is safe:
 
 1. `push()` is still never called on a closed subscriber: the fan-out checks
    `ref->isActive()` under the state guard, and once the stream is nulled (under
@@ -84,7 +81,7 @@ unsubscribe path regardless.
 
 ## lifetime-order {#lifetime-order}
 
-The destroyed-mutex race, subscriber side (2026-07-09 exit-6 abort). The
+The destroyed-mutex race, subscriber side. The
 [lock-order](#lock-order) reorder releases the state guard before locking
 `stream->mutex`, so nothing intrinsically keeps `stream` ALIVE across the
 `unsubscribe()` call — a concurrent `~Stream` (owning brick teardown) could free
@@ -100,7 +97,7 @@ a `noexcept ~Subscriber` → `std::terminate`). Closed by pairing with
   it is blocked behind us and cannot have advanced to free the stream. Therefore
   `stream` is provably ALIVE at the `closes_in_flight_` increment.
 - We bump `closes_in_flight_` WHILE STILL HOLDING the state guard (a plain
-  atomic — no lock, so the ee6fc46 lock order is untouched). The
+  atomic — no lock, so the lock order is untouched). The
   [eject-and-drain](#eject-and-drain) drain refuses to return (and thus `~Stream`
   refuses to free `mutex`) until this count is 0, i.e. until our `unsubscribe()`
   and its matching decrement have completed. A `close()` that arrives AFTER the

@@ -6,7 +6,6 @@ Source pointers are per section; the code carries only load-bearing invariants i
 ## Controller node {#controller-node}
 
 Source: `app/orchestrator/controller-node.ts`
-(`docs/proposals/controller-node-and-fifo-edges.md` §3)
 
 One long-lived singleton — the graph node id `nodeId.controller()` ("controller") —
 created at orchestrator startup. It binds/unbinds the active `Controller` (serial
@@ -47,7 +46,7 @@ that path, and this node must not bypass it.
 
 ### Native position input {#native-position-input}
 
-Source: `docs/proposals/native-compose-controller.md`. A session pipes a native volts
+A session pipes a native volts
 producer (the compose brick's `volt_out`) into the sink's `pos_in` whenever one
 attaches. Attach requires a bound v2 controller — the node creates the MCU stream
 (ACK-backed) + native sink lazily on open or on a later `bindController`, and detaches
@@ -59,19 +58,17 @@ input — JS or native — closes), so FW5 + hardware quiescence hold identicall
 
 `startTriggerCapture` schedules round-robin `CMD_FRAME` (the pure, tested
 `RoundRobinFrameScheduler`, `scheduler.ts`) and forwards each FIN outcome to the
-registered FIN sinks (`onFin`) — the anchor enrichment node (`anchor-node.ts`). The
-per-frame L/R pair matching that used to live here is superseded by the native root
-PairStream (`docs/proposals/pairing-nodes.md` ruling 6): the brick tolerance-matches raw
+registered FIN sinks (`onFin`) — the anchor enrichment node (`anchor-node.ts`). Per-frame
+L/R pair matching is owned by the native root PairStream: the brick tolerance-matches raw
 camera arrivals against the FIN anchor on its own thread. `sync.ts`
-`matchPair`/`matchesExposure` stay as the ruled pure-JS reference (unit tests keep them).
+`matchPair`/`matchesExposure` remain as the pure-JS reference (unit tests keep them).
 
 ## PID node {#pid-node}
 
 Source: `app/orchestrator/pid-node.ts`
-(`docs/proposals/pid-nodes-and-view-replumb.md` §"PID node design")
 
-A graph-visible PID controller node: control math a module ran inline (e.g.
-disparity-scope's `stepVergence`) becomes a first-class node in the stream topology.
+A graph-visible PID controller node: control math that would otherwise run inline in a
+module (e.g. disparity-scope's `stepVergence`) becomes a first-class node in the stream topology.
 It consumes an upstream analysis result (e.g. the scope's projected fovea centers) and
 produces a command for a downstream node (the MEMS `controller/<port>`). This is NOT
 per-frame JS work — it runs scalar controllers at the upstream RESULT rate, so the
@@ -80,11 +77,11 @@ frames.
 
 Two responsibilities beyond holding PIDs:
 
-1. Topology — on creation it registers a `registerGraphWiring` entry (the C-24 stage-1
+1. Topology — on creation it registers a `registerGraphWiring` entry (the graph-wiring
    shim) so the node + its scope→pid and pid→controller edges show in the profiler
    graph; `dispose()` retires it. `report()` returns the equivalent `NodeReport`.
 2. Override — a renderer-driven slot (`usePidOverride` proxy → module command → here)
-   that PINS the output. Ruled semantics: while engaged, `step()` SKIPS the control fn
+   that PINS the output. Semantics: while engaged, `step()` SKIPS the control fn
    and RESETS every named controller each tick (state held at zero, so windup can't
    accumulate behind the override); the output IS the override value. On `release()`
    the caller-supplied `seed(lastOverride)` reseeds the controllers from the last
@@ -93,7 +90,7 @@ Two responsibilities beyond holding PIDs:
 
 ## Homography feeder {#homography-feeder}
 
-Source: `app/orchestrator/homography-feeder.ts` (unified-time-and-topology §3+§5)
+Source: `app/orchestrator/homography-feeder.ts`
 
 While a triple session is active, each L/R homography undistort brick needs a steady
 stream of `{hostNs, H}` samples in its native ParamRing so the undistort thread can warp
@@ -114,16 +111,15 @@ deliberately-unwired v1 seam) — the brick meters `passthrough`. Everything is 
 ## Prediction-compose reference {#compose-reference}
 
 Source: `app/orchestrator/compose-node.ts`
-(`docs/proposals/native-compose-controller.md`)
 
 The prediction-compose feed-forward math, kept as the JS CONFORMANCE REFERENCE. The
-wave-1 `createComposeNode` graph node is retired: the compose is now the native
-`ComposeStream` brick (core/src/ComposeStream.cpp) piped imm → compose → controller, and
+compose is the native `ComposeStream` brick (core/src/ComposeStream.cpp) piped imm →
+compose → controller, and
 its per-tick math must reproduce this function on the shared vectors
 (docs/schema/codec/compose-vectors.json) — the same TS-reference pattern as
 `@lib/imm-predictor` for the IMM brick.
 
-The ruled form is `V(t) = V_pid + J·(p_pred(t) − p_meas(t_pid))`. This reference expresses
+The form is `V(t) = V_pid + J·(p_pred(t) − p_meas(t_pid))`. This reference expresses
 `J·Δp` as the difference of a pixel→volt map evaluated at both points
 (`predVolts − measVolts`) — for the LINEAR map the native brick receives (the session's
 finite-difference Jacobian at `p_meas`), the two forms are identical, which is exactly what
@@ -131,10 +127,10 @@ the fixture pins.
 
 ## Serial-latency compensation {#serial-latency}
 
-Source: `app/orchestrator/serial-latency.ts` (serial-rate-governor Part 4)
+Source: `app/orchestrator/serial-latency.ts`
 
 The per-triple `delay_compensation_ms` is a FIXED lookahead; the serial hop's contribution
-varies with queue depth / host load. With the wave-6 pressure sensors it becomes adaptive:
+varies with queue depth / host load. With the pressure sensors it becomes adaptive:
 `serialLatencyMs = EMA(ackRttMs.p50) / 2` (one-way ≈ half the ACK round trip; EMA smoothing
 so RTT jitter never whips the predictor). The disparity-scope session polls the estimate at
 its stats throttle and pushes `imm.setParams({ delayMs: fixed + (enabled ? latency : 0) })`.
@@ -144,7 +140,7 @@ is a pure class, unit-tested.
 
 ## Anchor enrichment node {#anchor-node}
 
-Source: `app/orchestrator/anchor-node.ts` (pairing-nodes ruling 4)
+Source: `app/orchestrator/anchor-node.ts`
 
 A JS, FIN-rate (low, loop-safe) middle node. Each completed controller exposure (FIN
 `FrameOutcome`) becomes ONE stage-independent anchor — its exposure time + stream + the
@@ -158,21 +154,21 @@ vitest drives it with a fake calibration and never loads the addon.
 
 ## Mirror history {#mirror-history}
 
-Source: `app/orchestrator/mirror-history.ts` (unified-time-and-topology §4)
+Source: `app/orchestrator/mirror-history.ts`
 
 Short memory of mirror positions vs host time. The fovea/L-R undistort homography needs the
 mirror position AT THE FRAME'S (past) exposure time — commands are issued up to ~1 kHz while
 frames arrive at ~60 fps, so the orchestrator keeps a small ring of `{hostNs, left, right}`
 and answers `mirrorAt(hostNs)` with linear interpolation between the two neighbors. Writers
 (controller-node.ts — the ONE trajectory place): every SENT position update records its
-`predictVolts` result; the v1 awaited `actuate()` path records the readback. Honesty note
-(§4): these are COMMANDS — the physical mirror follows with LPF group delay (~1.3 ms at the
+`predictVolts` result; the v1 awaited `actuate()` path records the readback. Honesty note:
+these are COMMANDS — the physical mirror follows with LPF group delay (~1.3 ms at the
 120 Hz LPF) + settle; triggered captures should prefer the FIN exposure-averaged voltage when
-present (P4).
+present.
 
 ## Prediction-rate setting {#prediction-rate}
 
-Source: `app/orchestrator/prediction-rate.ts` (prediction-compose-node ruling 2)
+Source: `app/orchestrator/prediction-rate.ts`
 
 The GLOBAL prediction-rate setting, orchestrator side: ONE app-wide key `prediction_rate_hz`
 (default 600, clamped 60..1000) that drives the native IMM brick's free-running emit rate.
@@ -185,12 +181,12 @@ AppConfig defaults consume), so the renderer and this reader can never drift.
 
 ## Clock-metrics bridge {#clock-calibration}
 
-Source: `app/orchestrator/clock-calibration.ts` (unified-time FINAL ruling 0)
+Source: `app/orchestrator/clock-calibration.ts`
 
 JS side of the clock-metrics channel. The hardware owner THREADS own calibration — initial at
 device init + incremental drift every 30s, entirely native (ClockCalibration.cpp). There is
-NO JS calibration driver anymore (a second latch driver would race the owner thread on the
-TimestampLatch device register), and no per-brick offset push (owner-applied dt makes every
+NO JS calibration driver (a second latch driver would race the owner thread on the
+TimestampLatch device register); and no per-brick offset push (owner-applied dt makes every
 surfaced timestamp trusted at the source). This module just BRIDGES the owner's pushed metrics
 into the JS-side registry (`time-align.ts`) that feeds perfSnapshot.clocks / telemetry:
 `Aravis.onClockMetrics` is the CallbackSlot channel — a lock-free armed flag native-side means

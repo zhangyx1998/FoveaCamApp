@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Trivial emitter for the B-P1 pixel-format registry. Reads the single source
+// Trivial emitter for the pixel-format registry. Reads the single source
 // table (pixel-formats.ts) and (re)writes the checked-in C++ header + Python
 // mirror. NOT wired into any build — run by hand after editing the table:
 //   /opt/homebrew/bin/node docs/schema/generate-pixel-formats.ts

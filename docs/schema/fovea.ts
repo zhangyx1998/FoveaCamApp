@@ -6,10 +6,9 @@ export const TELEMETRY_TOPIC = "telemetry";
 export const RAW_FRAME_SCHEMA_NAME = "fovea.raw_frame/v1";
 export const TELEMETRY_SCHEMA_NAME = "fovea.frame_meta/v1";
 /** Multi-fovea descriptor (data) channel schema — one JSON channel per live
- *  target (`fovea/<target-id>`), churned in/out with targets (multi-fovea-
- *  recording r2 ruling 3). Fovea imagery is reconstructed OFFLINE from the raw
- *  streams + per-frame params; these descriptors carry only the geometry +
- *  frame pointers, never pixels. */
+ *  target (`fovea/<target-id>`), churned in/out with targets. Fovea imagery is
+ *  reconstructed OFFLINE from the raw streams + per-frame params; these
+ *  descriptors carry only the geometry + frame pointers, never pixels. */
 export const DESCRIPTOR_SCHEMA_NAME = "fovea.descriptor/v1";
 export const JSON_SCHEMA_ENCODING = "jsonschema";
 export const RAW_FRAME_MESSAGE_ENCODING = "x-fovea-raw";
@@ -18,7 +17,7 @@ export const DESCRIPTOR_MESSAGE_ENCODING = "json";
 
 export const SESSION_METADATA_NAME = "fovea:session";
 export const FINALIZE_METADATA_NAME = "fovea:finalize";
-/** Global singleton written once at start (multi-fovea-recording r2 ruling 2):
+/** Global singleton written once at start:
  *  the wide camera's intrinsics + distortion. The wide camera is static, so it
  *  applies to every wide frame and there are NO per-frame wide extras. Also
  *  carries (additively) the triple's stereo `baseline_mm` when known — the
@@ -69,9 +68,9 @@ export const DESCRIPTOR_SCHEMA_DATA = JSON.stringify({
     "from the pointed-at raw frames + per-frame params.",
 });
 
-// All copied VERBATIM from the pipe advert (multi-fovea-recording r2.1 ruling
-// 8) — the recorder never interprets them. `stride` (bytes/row) is the advert's
-// own number (packed 12p / codec payloads own it, not a dtype computation).
+// All copied VERBATIM from the pipe advert — the recorder never interprets
+// them. `stride` (bytes/row) is the advert's own number (packed 12p / codec
+// payloads own it, not a dtype computation).
 export const FRAME_METADATA_KEYS = [
   "dtype",
   "shape",

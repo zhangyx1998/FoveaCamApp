@@ -5,10 +5,10 @@ Source pointers are per section; the code carries only load-bearing invariants i
 
 ## graphTopology fold {#graph-topology}
 
-Source: `app/orchestrator/graph-topology.ts` (unified-time-and-topology §6)
+Source: `app/orchestrator/graph-topology.ts`
 
 The universal node-reporting fold assembles the live stream-node graph the profiler
-renders, served inside `system.perfSnapshot` (ruled Q2: the existing 1 Hz poll).
+renders, served inside `system.perfSnapshot` (the existing 1 Hz poll).
 
 One shape, every node type: nodes self-report as `NodeReport` (contract in
 `@lib/orchestrator/graph-contract`) and `buildTopologyFromReports` is a mechanical
@@ -16,34 +16,34 @@ fold — nodes = reports (stats folded by id from the workloads map when a repor
 none), edges = flatten(report.inputs). A node missing from the graph means it isn't
 reporting, never that derivation guessed wrong.
 
-### Migration adapters (proposal §6/§7)
+### Migration adapters
 
 Today only part of the pipeline self-reports, so two adapters synthesize reports from
 the legacy surfaces:
 
-- `pipeListToReports` wraps `Pipe.list()` rows — reproduces the C-24 camera-root
+- `pipeListToReports` wraps `Pipe.list()` rows — reproduces the camera-root
   synthesis (implicit `camera/<serial>` node + the physical camera→brick input; the
   convert/undistort/fovea bricks all tap the raw camera stream inside their fused
   native pipelines, so a fovea does NOT read the undistort pipe even though its id
-  nests under /undistort/). Dies when the native `Topology.report()` NAPI lands (P3).
+  nests under /undistort/). Removed once the native `Topology.report()` NAPI lands.
 - `wiringToReports` wraps the `registerGraphWiring` stage-1 shim (sessions register
   fixed compositions on activate, dispose on drain) — edges move into the target
   node's `inputs`, legacy `statsKey` folding preserved. Dies when sessions/workers
   post `NodeReport`s directly.
 
-`buildTopology(deps)` keeps its exact pre-v2 signature/behavior as a thin composition:
+`buildTopology(deps)` keeps a stable signature/behavior as a thin composition:
 adapters → (optional) real reports from `deps.reports` (merged AFTER the adapters — a
 real report REPLACES an adapter-synthesized node of the same id) →
 `buildTopologyFromReports`. `system.ts` needs no changes.
 
 ### Defensive read
 
-Rig 2026-07-08 regression class: a malformed report / probe row degrades to a partial
-node, never throws — one bad row must not blank the graph or break snapshot export.
+A malformed report / probe row degrades to a partial node, never throws — one bad row
+must not blank the graph or break snapshot export.
 
 ## Workload metering {#metering}
 
-Source: `app/orchestrator/metering.ts` (Stage 5, `docs/history/refactor/workload-metering.md`)
+Source: `app/orchestrator/metering.ts`
 
 A common perf-reporting abstraction any loop-like unit in the orchestrator registers once,
 so the native tracker/pipe thread probes and the recorder worker all become instances of

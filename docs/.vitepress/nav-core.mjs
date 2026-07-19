@@ -14,7 +14,7 @@
 //   buildAutoNav(srcDir)        -> { sections, nav, sidebar }
 //   scanSectionItems(srcDir,d)  -> sidebar item array for one top-level section
 //   firstHeading(absFile)       -> first `# heading` text, or null
-//   titleCase(name)             -> "stage-f" -> "Stage F"
+//   titleCase(name)             -> "serial-protocol" -> "Serial Protocol"
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -22,7 +22,7 @@ import path from 'node:path';
 const IGNORED_DIRS = new Set(['.vitepress', 'node_modules', '.git']);
 const INDEX_BASENAMES = new Set(['readme', 'index']); // case-insensitive
 
-/** Title-case a directory / file basename: "stage-f" -> "Stage F". */
+/** Title-case a directory / file basename: "serial-protocol" -> "Serial Protocol". */
 export function titleCase(name) {
   return String(name)
     .replace(/[-_/]+/g, ' ')
@@ -64,9 +64,9 @@ function toLink(srcDir, absFile) {
   const base = rel.split('/').pop();
   if (isIndexFile(base + '.md')) {
     const dir = rel.slice(0, rel.length - base.length); // keeps trailing slash or ''
-    return '/' + dir; // "/", "/applications/", "/history/refactor/"
+    return '/' + dir; // "/", "/manual/", "/spec/"
   }
-  return '/' + rel; // "/applications/manage-cameras"
+  return '/' + rel; // "/manual/manage-cameras"
 }
 
 /** Does a directory (recursively) contain at least one .md file? */

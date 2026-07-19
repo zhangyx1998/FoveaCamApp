@@ -25,8 +25,8 @@ const test = (name, fn) => {
 
 // ── 1. Pure helpers ────────────────────────────────────────────────────────────
 test('titleCase splits on - and _', () => {
-  assert.equal(titleCase('applications'), 'Applications');
-  assert.equal(titleCase('stage-f'), 'Stage F');
+  assert.equal(titleCase('architecture'), 'Architecture');
+  assert.equal(titleCase('serial-protocol'), 'Serial Protocol');
   assert.equal(titleCase('multi_window'), 'Multi Window');
 });
 
@@ -39,49 +39,49 @@ test('buildAutoNav on a synthetic tree', () => {
     fs.writeFileSync(p, body);
   };
   w('README.md', '# Home\n');
-  w('applications/README.md', '# Application docs\n');
-  w('applications/manage-cameras.md', '# Manage cameras\n');
-  w('applications/single-capture.md', '# Single capture\n');
-  w('history/refactor/README.md', '# Refactor archive\n');
-  w('history/refactor/planner.md', '# The planner\n');
-  w('history/refactor/proposals/A.md', '# Proposal A\n');
-  w('dev/gates.md', '# The gate suite\n'); // no README in this section
-  w('dev/typescript.md', '# TypeScript\n');
+  w('guide/README.md', '# Guide\n');
+  w('guide/manage-cameras.md', '# Manage cameras\n');
+  w('guide/single-capture.md', '# Single capture\n');
+  w('reference/core/README.md', '# Core reference\n');
+  w('reference/core/overview.md', '# Overview\n');
+  w('reference/core/details/A.md', '# Detail A\n');
+  w('notes/gates.md', '# The gate suite\n'); // no README in this section
+  w('notes/typescript.md', '# TypeScript\n');
   // code-only dir: must be excluded from nav/sidebar
-  fs.mkdirSync(path.join(root, 'schema'), { recursive: true });
-  fs.writeFileSync(path.join(root, 'schema', 'pixel-formats.ts'), 'export const x = 1;');
+  fs.mkdirSync(path.join(root, 'codeonly'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'codeonly', 'pixel-formats.ts'), 'export const x = 1;');
 
   const { nav, sidebar, sections } = buildAutoNav(root);
 
-  // NAV: one per top-level dir that has markdown; schema excluded; title-cased.
+  // NAV: one per top-level dir that has markdown; code-only excluded; title-cased.
   const navTexts = nav.map((n) => n.text);
-  assert.deepEqual(navTexts, ['Applications', 'Dev', 'History'], 'nav order + titles');
-  assert.ok(!navTexts.includes('Schema'), 'code-only schema/ excluded from nav');
+  assert.deepEqual(navTexts, ['Guide', 'Notes', 'Reference'], 'nav order + titles');
+  assert.ok(!navTexts.includes('Codeonly'), 'code-only dir excluded from nav');
 
   // NAV links: README-backed section -> "/section/", README-less -> first page.
   const byText = Object.fromEntries(nav.map((n) => [n.text, n.link]));
-  assert.equal(byText.Applications, '/applications/', 'README section links to dir');
-  assert.equal(byText.Dev, '/dev/gates', 'README-less section links to first page');
-  assert.equal(byText.History, '/history/refactor/', 'nests to first README deep');
+  assert.equal(byText.Guide, '/guide/', 'README section links to dir');
+  assert.equal(byText.Notes, '/notes/gates', 'README-less section links to first page');
+  assert.equal(byText.Reference, '/reference/core/', 'nests to first README deep');
 
-  // SIDEBAR applications: README/index first, then alphabetical, H1 as text.
-  const apps = sidebar['/applications/'];
+  // SIDEBAR guide: README/index first, then alphabetical, H1 as text.
+  const guide = sidebar['/guide/'];
   assert.deepEqual(
-    apps.map((i) => i.text),
-    ['Application docs', 'Manage cameras', 'Single capture'],
-    'applications sidebar order + H1 text',
+    guide.map((i) => i.text),
+    ['Guide', 'Manage cameras', 'Single capture'],
+    'guide sidebar order + H1 text',
   );
-  assert.equal(apps[0].link, '/applications/', 'README item links to dir');
-  assert.equal(apps[1].link, '/applications/manage-cameras');
+  assert.equal(guide[0].link, '/guide/', 'README item links to dir');
+  assert.equal(guide[1].link, '/guide/manage-cameras');
 
-  // SIDEBAR history: nested proposals/ becomes a collapsible group.
-  const hist = sidebar['/history/'];
-  const refactorGroup = hist.find((i) => i.text === 'Refactor');
-  assert.ok(refactorGroup && Array.isArray(refactorGroup.items), 'refactor is a group');
-  assert.equal(refactorGroup.collapsed, false, 'groups are collapsible (expanded)');
-  assert.equal(refactorGroup.link, '/history/refactor/', 'group header links to its README');
-  const proposalsGroup = refactorGroup.items.find((i) => i.text === 'Proposals');
-  assert.ok(proposalsGroup && proposalsGroup.items.length === 1, 'nested proposals group');
+  // SIDEBAR reference: nested details/ becomes a collapsible group.
+  const ref = sidebar['/reference/'];
+  const coreGroup = ref.find((i) => i.text === 'Core');
+  assert.ok(coreGroup && Array.isArray(coreGroup.items), 'core is a group');
+  assert.equal(coreGroup.collapsed, false, 'groups are collapsible (expanded)');
+  assert.equal(coreGroup.link, '/reference/core/', 'group header links to its README');
+  const detailsGroup = coreGroup.items.find((i) => i.text === 'Details');
+  assert.ok(detailsGroup && detailsGroup.items.length === 1, 'nested details group');
 
   assert.equal(sections.length, 3);
   fs.rmSync(root, { recursive: true, force: true });
@@ -91,7 +91,7 @@ test('buildAutoNav on a synthetic tree', () => {
 test('firstHeading returns null when no H1', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'autonav-h-'));
   const p = path.join(root, 'x.md');
-  fs.writeFileSync(p, '(from user)\n\nsome prose\n');
+  fs.writeFileSync(p, 'no heading here\n\nsome prose\n');
   assert.equal(firstHeading(p), null);
   fs.rmSync(root, { recursive: true, force: true });
 });
@@ -100,10 +100,10 @@ test('scans the REAL docs tree without throwing', () => {
   const realDocs = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
   const { nav, sidebar } = buildAutoNav(realDocs);
   assert.ok(nav.length >= 5, 'expected >=5 real sections, got ' + nav.length);
-  assert.ok(sidebar['/applications/'], 'applications sidebar present');
+  assert.ok(sidebar['/manual/'], 'manual sidebar present');
   // README-less section must fall back to first page, not a dangling "/section/".
-  const dev = nav.find((n) => n.text === 'Dev');
-  assert.ok(dev && dev.link !== '/dev/', 'dev has no README -> deep link, got ' + (dev && dev.link));
+  const hw = nav.find((n) => n.text === 'Hardware');
+  assert.ok(hw && hw.link !== '/hardware/', 'hardware has no README -> deep link, got ' + (hw && hw.link));
 });
 
 console.log(`\n${passed} test group(s) passed.`);

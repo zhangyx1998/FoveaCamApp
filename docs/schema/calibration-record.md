@@ -1,10 +1,8 @@
 # Calibration record format (store schema v2)
 
-The on-disk contract for calibration records and their export files. Design
-rationale is in
-[`docs/proposals/calibration-records-v2.md`](../proposals/calibration-records-v2.md)
-(+ its schema-v2 AS-BUILT addendum); this doc is the format spec — enough to
-hand-craft a valid EXTRINSIC JSON (plain point arrays). Intrinsic ids are
+The on-disk contract for calibration records and their export files. This is the
+format spec — enough to hand-craft a valid EXTRINSIC JSON (plain point arrays).
+Intrinsic ids are
 tool-computed only: their inner data folds Float64 Mats into the codec's
 `{type, buffer: base64, props}` canonical form before hashing, which is not
 practical by hand — use `recordId()` from the lib. The canonical types live in
@@ -51,7 +49,7 @@ name is always distinguishable from a 32-hex id.
   "id": "<id>",                    // == recordId(inner) = 32-hex SHA-256(canonicalize(inner)); also the filename
   "inner": { /* IMMUTABLE hash pre-image — one of the two shapes below */ },
   "outer": {                       // MUTABLE — edit freely, id never changes
-    "created": "2026-07-10T12:00:00.000Z",   // ISO-8601, latest-first ordering key
+    "created": "2025-01-15T12:00:00.000Z",   // ISO-8601, latest-first ordering key
     "label": "optional human label",
     "associations": [
       { "cameraKey": "FLIR_Blackfly-S-BFS-U3-16S2C_24044020",
@@ -129,11 +127,11 @@ codec form (`{ type, buffer: base64, props }`); the app revives them to
 ```jsonc
 {
   "schema": "fovea-calibration-record@1",
-  "exported": "2026-07-10T12:00:00.000Z",
+  "exported": "2025-01-15T12:00:00.000Z",
   "record": {                      // associations STRIPPED
     "id": "<id>",
     "inner": { "kind": "extrinsic", "dataset": [ ... ] },  // or the intrinsic shape
-    "created": "2026-07-01T00:00:00.000Z",
+    "created": "2025-01-01T00:00:00.000Z",
     "label": "optional",
     "sources": ["<id>"],           // if aggregated
     "role": "L"                    // "L" | "C" | "R", advisory — for re-binding on import
@@ -150,7 +148,7 @@ exists, **add an association** to the importing triple (warn if the existing
 ```jsonc
 {
   "schema": "fovea-device-config@1",
-  "exported": "2026-07-10T12:00:00.000Z",
+  "exported": "2025-01-15T12:00:00.000Z",
   "sourceTripleHash": "<sha256-hex>",   // provenance; a re-import onto the SAME rig skips the nickname prompt
   "config": {                            // the per-triple doc verbatim
     "nickname": "Lab Rig",

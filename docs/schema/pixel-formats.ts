@@ -4,7 +4,7 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// SINGLE SOURCE OF TRUTH for the sensor pixel-format registry (B-P1).
+// SINGLE SOURCE OF TRUTH for the sensor pixel-format registry.
 //
 // Every hand-maintained format list — the C++ `Arv::PixelFormat` enum + its
 // string/Aravis/cv::Format switches + `significantBits`/`isPacked` helpers
@@ -15,7 +15,7 @@
 //   /opt/homebrew/bin/node docs/schema/generate-pixel-formats.ts
 // (a trivial emitter — NOT wired into any build). Edit this table, regenerate,
 // and commit the artifacts together. TS consumers (viewer decode, dtype
-// helpers) import this module directly; C-P6 owns their conformance tests.
+// helpers) import this module directly and are pinned by conformance tests.
 //
 // Row order is load-bearing: it fixes the C++ enum's underlying uint8_t values,
 // which are NOT part of the wire/API contract but must stay stable across a
@@ -90,9 +90,8 @@ export function pixelFormatSpec(name: string): PixelFormatSpec | undefined {
 // OpenCV's `COLOR_BayerXX2*` enum naming is OFF-BY-ONE vs the GenICam/PFNC
 // sensor naming: the physically correct OpenCV constant for a GenICam BayerYY
 // mosaic has R and B swapped (greens stay on the same diagonal — a PURE R/B
-// swap, NO demosaic phase shift). Empirically proven in
-// docs/proposals/channel-order-fix.md (a synthetic pure-red RGGB mosaic through
-// both constants). THIS is the single place the swap is encoded: the C++
+// swap, NO demosaic phase shift), verified with a synthetic pure-red RGGB mosaic
+// through both constants. THIS is the single place the swap is encoded: the C++
 // `cvtColorCode` table (via the generated FOVEA_BAYER_CV_FORMATS macro), the
 // viewer's `decode.ts`, and the capture save path all derive their demosaic
 // constant from here so the three sites can NEVER drift.

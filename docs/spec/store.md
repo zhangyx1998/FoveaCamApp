@@ -7,19 +7,18 @@ load-bearing invariants inline.
 ## Orchestrator store client (store-hub) {#store-hub}
 
 Source: `app/orchestrator/store-hub.ts`
-(`docs/proposals/config-store-main-authority.md`)
 
 The single authority lives in MAIN; this module is a thin proxy over the instance's
 `parentPort` that preserves the exact public API every orchestrator-internal caller
-relied on (`read`/`write`/`update`/`clear`/`list`/`subscribe`/`writeCounts`) and their
-reactive semantics: a `subscribe()` listener fires on ANY window's edit, now including a
-window on a DIFFERENT orchestrator instance (the old per-process hub could not see across
-instances — defect D1). `write`/`update`/`clear` forward to main and locally apply the
-value main returns, so this process's own subscribers (anaglyph-style retune, etc.)
-update without a double-echo (main skips the originator).
+relies on (`read`/`write`/`update`/`clear`/`list`/`subscribe`/`writeCounts`) and their
+reactive semantics: a `subscribe()` listener fires on ANY window's edit, including a
+window on a DIFFERENT orchestrator instance (a per-process hub cannot see across
+instances). `write`/`update`/`clear` forward to main and locally apply the value main
+returns, so this process's own subscribers (anaglyph-style retune, etc.) update without a
+double-echo (main skips the originator).
 
-`attachStore` is gone: renderer `Store` clients now talk to main directly (ipcRenderer),
-not through the orchestrator channel.
+Renderer `Store` clients talk to main directly (ipcRenderer), not through the
+orchestrator channel.
 
 Transport: this process shares its one `parentPort` with `index.ts`'s control-message
 handler; the proxy adds its own `message` listener and filters for
@@ -31,9 +30,8 @@ at runtime.
 ## Store-schema migration framework {#store-migrations}
 
 Source: `app/lib/store-migrations.ts`
-(`docs/proposals/calibration-records-v2.md` §Migration framework)
 
-MAIN owns the config store (692f0e3), so migrations run in MAIN at `StoreMain`
+MAIN owns the config store, so migrations run in MAIN at `StoreMain`
 construction — BEFORE any renderer or orchestrator client is served, so no client ever
 observes a half-migrated tree.
 
@@ -64,26 +62,24 @@ the tests cover.
 ## Renderer store client {#store-client}
 
 Source: `app/lib/store.ts`
-(`docs/proposals/config-store-main-authority.md`)
 
-Renderer-side config store client. Same public shape as before (`open`/`clear`/`list`/
-`read`) so every existing consumer keeps working, but the transport now targets MAIN (the
-single config authority) over `window.foveaBridge` (ipcRenderer), NOT the orchestrator
-channel. Two consequences that fix real data-loss classes:
+Renderer-side config store client. Public shape (`open`/`clear`/`list`/`read`) so every
+consumer keeps working; the transport targets MAIN (the single config authority) over
+`window.foveaBridge` (ipcRenderer), NOT the orchestrator channel. Two consequences that fix
+real data-loss classes:
 
 - The connection never dies with an orchestrator instance (ipcRenderer is always up), so a
-  Settings/TeleCanvas window that outlives its instance keeps persisting — the old one-shot
-  `connect()` decay is gone by construction.
+  Settings/TeleCanvas window that outlives its instance keeps persisting.
 - A local edit sends a key-level PATCH (a diff of the tracked doc against the last value
   main acked), not a whole-document write, so two windows editing DIFFERENT keys inside one
   round-trip both survive instead of clobbering.
 
-`open()` still returns a plain Vue-reactive object a module mutates directly; a deep
-mutation queues a patch on the next microtask (same debounce as before). A change from
-another window (or an orchestrator-internal session) arrives as `store:changed` and is
-applied onto the SAME object reference via the `applying` guard, so templates/computed
-update for free. Values cross via ipcRenderer's structured clone (bigint/Date/TypedArray
-survive) — no codec needed here.
+`open()` returns a plain Vue-reactive object a module mutates directly; a deep
+mutation queues a patch on the next microtask (debounced). A change from another window (or
+an orchestrator-internal session) arrives as `store:changed` and is applied onto the SAME
+object reference via the `applying` guard, so templates/computed update for free. Values
+cross via ipcRenderer's structured clone (bigint/Date/TypedArray survive) — no codec needed
+here.
 
 ## Config schema (shared constants) {#config-schema}
 
@@ -94,29 +90,27 @@ path, value unions, defaults, and clamp bounds that BOTH the renderer (`@lib/con
 Vue-bound) and the orchestrator readers (`@orchestrator/{prediction-rate,serial-latency,
 record-compression,anaglyph-style}`, which must stay Vue-free) need to agree on. It exists
 because `@lib/config` imports Vue, so a session-reachable reader cannot pull it in without
-bundling Vue into the utility process. Before this module the readers HAND-MIRRORED the
+bundling Vue into the utility process. Without this module the readers would HAND-MIRROR the
 path/union/default/clamp with "keep in sync" comments. Vue-free AND Node-free (types + plain
 data, zero imports); follows the `docs/schema/anaglyph.ts` precedent.
 
 ## Store authority core {#store-authority}
 
 Source: `app/lib/store-authority.ts`
-(`docs/proposals/config-store-main-authority.md`)
 
-The single config-store authority core: the old `orchestrator/store-hub` cache/serialize/
-notify engine, lifted out and made transport-free — a per-path in-memory cache, a
-per-document serialized op queue (so a broadcast never reflects an uncommitted value and
-concurrent writes never tear), and notify-except-origin (an originator is never echoed its
-own change). The fs backend is INJECTED (`StoreFsBackend`) so it's unit-testable with an
-in-memory map, and so the one real instance can live in MAIN over `orchestrator/store.ts`'s
-fs primitives (same on-disk codec, zero migration). `patch` is the key-level merge the
-renderer client drives; `write`/`update`/`clear` keep the exact orchestrator-internal
-semantics. Every mutating op returns the RESULTING document value so a proxy can cache +
-notify exactly what was persisted.
+The single config-store authority core: a transport-free cache/serialize/notify engine — a
+per-path in-memory cache, a per-document serialized op queue (so a broadcast never reflects
+an uncommitted value and concurrent writes never tear), and notify-except-origin (an
+originator is never echoed its own change). The fs backend is INJECTED (`StoreFsBackend`) so
+it's unit-testable with an in-memory map, and so the one real instance can live in MAIN over
+`orchestrator/store.ts`'s fs primitives (same on-disk codec, zero migration). `patch` is the
+key-level merge the renderer client drives; `write`/`update`/`clear` keep the exact
+orchestrator-internal semantics. Every mutating op returns the RESULTING document value so a
+proxy can cache + notify exactly what was persisted.
 
 ## Store proxy (client) {#store-proxy}
 
-Source: `app/lib/store-proxy.ts` (`docs/proposals/config-store-main-authority.md`)
+Source: `app/lib/store-proxy.ts`
 
 Client-side proxy over the MAIN config-store authority, used by the orchestrator + probe
 processes via their `parentPort`. Exposes the exact `store-hub` internal API
@@ -142,7 +136,7 @@ tear a concurrent read or lose a read-modify-write.
 
 ## Patch protocol helpers {#store-patch}
 
-Source: `app/lib/store-patch.ts` (`docs/proposals/config-store-main-authority.md`)
+Source: `app/lib/store-patch.ts`
 
 Pure diff/merge helpers for the config-store patch protocol. The renderer `Store` client
 diffs its tracked reactive document against the last value it knows main has (`diffKeys`) and

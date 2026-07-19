@@ -1,17 +1,14 @@
-# FoveaCamApp — De-facto Design Language (Phase 1 survey)
+# FoveaCamApp — Design Language
 
-> Read-only survey of the renderer as it stands on `refactor/decouple-orchestrator`.
-> This is a *reference* of what the code actually does today, not a proposal.
-> Proposals live in `improvement-proposals.md` (Phase 2). Every inconsistency is
-> cited `file:line`. Some files were concurrently dirty during the sweep; where a
-> surface looked mid-edit it is flagged rather than judged.
+> Reference of the renderer's de-facto design language — what the code
+> actually does. Every inconsistency is cited `file:line`.
 
 Context that shapes every judgement below: this is an **Electron control app run in a
 dark-room lab rig**. Operators glance at it from a distance, in low ambient light, while
 handling hardware. Glare control, glanceability, and *visible* error state matter more
 than polish.
 
-## Ruled principles (user, 2026-07-09) — binding on every implementation wave
+## Principles
 
 1. **Realtime feedback**: interactive elements give INSTANT visual cues on
    hover/interaction. No perceptible lag between input and visual response.
@@ -23,14 +20,14 @@ than polish.
    layout reflow — reserve space (fixed/min dimensions, `ch`-sized numeric
    fields, visibility over conditional mount) so live telemetry, state badges,
    toggling controls, and appearing overlays never shift their neighbors.
-4. **Icon-only title bars** (user, 2026-07-09): buttons in a window's title
+4. **Icon-only title bars**: buttons in a window's title
    bar NEVER use text labels — always icon only, with a clear `title=`
    tooltip naming the action (the tooltip is the only label, so it must be
    explicit). The shared idiom is AppWindow's `icon-button` + the
    `app/src/windows/icons.ts` set — reuse/extend it; keep hit targets at
    the established size. Labeled controls elsewhere (panel headers, drawers,
    launcher) are unaffected.
-5. **Borderless inline controls** (user, 2026-07-13): inline interactive
+5. **Borderless inline controls**: inline interactive
    elements — buttons, control shells, toggles, `<select>`s embedded in a bar
    or panel — carry **no always-visible border or outline** at rest.
    Interactivity reads as a **faint element background** (`--tint-2`) that
@@ -38,10 +35,7 @@ than polish.
    in a dark theme the wash lightens rather than darkens. Two carve-outs stay:
    **`:focus-visible` outlines** (keyboard a11y — never removed) and **primary
    / destructive emphasis**, which is carried by a **solid fill**, not a border
-   (e.g. a danger button is a filled red, not a red-bordered ghost). First swept
-   across the viewer (`ViewerWindow.vue` transport + modal buttons, `ExportTray`,
-   `ExportDialog`) in the timeline touch-up wave; the standing rule governs
-   future sweeps of the rest of the app.
+   (e.g. a danger button is a filled red, not a red-bordered ghost).
 
 ---
 
@@ -118,18 +112,18 @@ rung by eye.
 | `#00aaff` | `ViewerWindow.vue:112` | fourth blue (series palette) |
 | `#3498db` / `#2980b9` | `ErrorBoundary.vue:150,153` | **foreign Flat-UI blue, used nowhere else** |
 
-### Success / "done" / OK green — **fragmented (ruled vocabulary exists!)**
+### Success / "done" / OK green — **fragmented (a standing vocabulary exists)**
 | Value | Where |
 |---|---|
 | `#080` | `RecordControls.vue:184`, `SaveControls.vue:265`, `SnapshotOverlay.vue:138`, extrinsic capture button |
 | `#0f0` | `disparity-scope:302`, `calibrate-intrinsic:166` (marker fills) |
-| `#4caf50` | `ProgressMonitor.vue:107` (**the ruled progress "done" color**) |
+| `#4caf50` | `ProgressMonitor.vue:107` (**the standing progress "done" color**) |
 | `#8f8` | `RecordButton.vue:216` (fps ok) |
 | `#575` | `RecordButton.vue:227` (drops-ok) |
 | `#3a3` | `WelcomeWindow.vue:292` (connected dot) |
 | `#36d16f` | `ViewerWindow.vue:112` (series) |
 
-Seven greens for "good". The MEMORY notes a *ruled* progress vocabulary
+Seven greens for "good". There is a standing progress vocabulary
 (dimmed→bright→green-done); ProgressMonitor implements it with `#4caf50`, but nothing else
 in the app shares that green.
 
@@ -230,7 +224,7 @@ Reusable set under `app/src/components/**` (+ inputs/layouts/record/capture). "T
 | `PosView` | 2D XY pad (voltage/angle), drag | `pos, color, unit, lim` | `--color` (active) / gray (idle) | drag surface pattern |
 | `NavBack` | back arrow bar | slot; `back` event | `#fff3` hover | hand-rolled button + SVG |
 | `TitleBar` | window chrome + actions slot + overlay host | `title, subtitle, homeButton` | `#111`/`#333`/`#08c` | fullscreen-aware; drag regions |
-| `ProgressMonitor` | spin-up step overlay | `items`; `close` event | dimmed/bright/`#4caf50` | **the ruled progress vocabulary lives here only** |
+| `ProgressMonitor` | spin-up step overlay | `items`; `close` event | dimmed/bright/`#4caf50` | **the standing progress vocabulary lives here only** |
 | `RecordButton` + `RecordControls` | record toggle + destination popup | via `current_recording` | `#080`/`#a00` action buttons | `button.action` CSS **duplicated verbatim** with `SaveControls` |
 | `SaveControls` + `SaveReport` (capture) | save destination + report | `capture` | `#080`/`#a00`, `#0af` focus | see above duplication |
 | `SessionStatus` | session `status.error` banner | `name` | `#c0392b` scheme | **its own error palette** |
@@ -272,8 +266,7 @@ not shared.
   hover (`ProgressMonitor.vue:71,80`); StreamView/FrameView outline + title-color only on
   container hover (`FrameView.vue:427,471`); expand button `opacity 0.5→1` on hover
   (`:408`); record tooltip only while recording+hover (`RecordButton.vue:83`). Good for
-  glare reduction; **also means clickable things are invisible until hovered** — see
-  proposals.
+  glare reduction; **also means clickable things are invisible until hovered**.
 - **Disabled state:** dominant convention `opacity: 0.5` + `cursor: not-allowed`
   (RecordButton, SaveControls, AppWindow icon-button). But calibrate buttons instead go
   **transparent bg + `#666` outline/text** (`calibrate-intrinsic:297-302`) and extrinsic uses
@@ -295,8 +288,8 @@ not shared.
 - **Progress/spinners — three implementations:** ProgressMonitor CSS border-spinner
   (`:121`), `Loading.vue` 7-dot SVG spinner, record-blink keyframe (`RecordButton.vue:164`).
 
-### State-color vocabulary (the ruled one + drift)
-Ruled progress vocab (per project MEMORY): **pending = dimmed (`#777`) → active = bright
+### State-color vocabulary (the standing one + drift)
+Standing progress vocab: **pending = dimmed (`#777`) → active = bright
 (`#eee`) → done = green (`#4caf50`)** (`ProgressMonitor.vue:98-108`). Elsewhere the same
 three-state idea is expressed with different colors: idle-gray→active-`--color`
 (PosView `:25`), disabled-dim→enabled-bright, connected `#3a3`/disconnected `#a33` (welcome).
@@ -308,8 +301,7 @@ The *concept* is consistent; the *palette* is not.
 2. `ErrorBoundary.vue` — catches **Vue component render errors** only, full-screen Flat-UI
    panel with stack trace + "Try Again".
 3. **A process/orchestrator crash shows nothing** — no boundary catches an orchestrator-side
-   death; the app just goes blank/stale. (A lifecycle wave is adding a crash-report channel;
-   its UI shape is unspecified — see proposals.)
+   death; the app just goes blank/stale.
 
 ---
 

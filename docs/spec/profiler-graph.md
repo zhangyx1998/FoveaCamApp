@@ -1,22 +1,19 @@
 # Profiler graph & workloads — behavior spec
 
 Behavior contracts for the profiler window's view-model layer
-(`app/src/profiler/**`). Source files carry `// spec:` pointers here. Governing
-docs: `docs/history/refactor/workload-metering.md`,
-`docs/proposals/orchestrator-lifecycle-and-exit.md`,
-`docs/proposals/profiler-graph-handrolled.md`, and C-24's
-`@lib/orchestrator/graph-contract`. The pipeline graph is a HANDROLLED SVG
-component (`app/src/components/NodeGraph.vue`) — cytoscape + dagre are gone; the
-layered layout (`graph-layout.ts`) and viewport algebra (`graph-viewport.ts`)
-are pure, unit-tested modules. The whole view-model + geometry layer is Vue-free
-and DOM-free by design so the decision logic is unit-tested; the Vue components
-keep only thin event wiring + rendering.
+(`app/src/profiler/**`). Source files carry `// spec:` pointers here. The graph
+topology contract lives in `@lib/orchestrator/graph-contract`. The pipeline graph
+is a HANDROLLED SVG component (`app/src/components/NodeGraph.vue`); the layered
+layout (`graph-layout.ts`) and viewport algebra (`graph-viewport.ts`) are pure,
+unit-tested modules. The whole view-model + geometry layer is Vue-free and DOM-free
+by design so the decision logic is unit-tested; the Vue components keep only thin
+event wiring + rendering.
 
 ## Topology source selection {#topology-source}
 
 `graph-view.ts`. Two-stage source:
 
-- **Stage 2 (preferred, A-36)** — the orchestrator-SERVED topology: C-24's
+- **Stage 2 (preferred)** — the orchestrator-SERVED topology:
   `graphTopology()` riding `PerfSnapshot.graph` (exact byte rates, consumer sinks,
   session wirings). `selectTopology` prefers it.
 - **Stage 1 (fallback + mock story)** — `deriveTopology` reconstructs a
@@ -27,7 +24,7 @@ keep only thin event wiring + rendering.
   invisible because its name pattern is new). The fallback thunk is evaluated only on
   the fallback path.
 
-Node id scheme (C-24): pipe ids ARE path-like node ids —
+Node id scheme: pipe ids ARE path-like node ids —
 `camera/<serial>/convert`, `camera/<serial>/undistort`,
 `camera/<serial>/undistort/fovea/<slot>`. `kindOf` takes the last non-numeric
 segment. Meter names containing `/` (and not `:`) are path-like node ids attached
@@ -52,11 +49,11 @@ carries `idle` / `saturated` / `dropping`.
   `tokens.css --role-*`; a border tint only (fills stay kind-colored). Passed
   through element data (`roleColor`) and bound to a CSS custom property on the
   node; `KIND_COLORS` likewise seeds the `--kind` fill.
-- **Busy ring** (ruling 3) — metered nodes carry their raw `util` (0..1); the
+- **Busy ring** — metered nodes carry their raw `util` (0..1); the
   component draws a NATIVE SVG arc (`<circle>` with `stroke-dasharray`) pinned to
   the node's top-right corner, filling clockwise to `util` and tiered by the SAME
-  ok/warn/high thresholds as the Workloads table (saturated ≥ 0.9 → coral). The
-  old `busyRing` data-URI is gone. Fed live from each 1 Hz snapshot with no relayout.
+  ok/warn/high thresholds as the Workloads table (saturated ≥ 0.9 → coral). Fed
+  live from each 1 Hz snapshot with no relayout.
 
 ## Membership key (relayout gating) {#membership}
 
@@ -80,7 +77,7 @@ Idempotent + reference-stable when there is nothing to collapse.
 ## Idle vs stalled derivation {#idle}
 
 `deriveIdle` — IDLE = not running because nothing downstream DEMANDS the output (a
-consumer-gated producer parked by design, C-21 gate). An EXPECTED state: renders
+consumer-gated producer parked by design). An EXPECTED state: renders
 desaturated + dimmed with an "idle" caption, NOT the red stalled accent. Positive
 no-demand evidence, propagated UPSTREAM over the topology:
 
@@ -125,7 +122,7 @@ idle stays capped at `IDLE_OPACITY` no matter how near the hover.
 
 ## Workloads table {#workloads}
 
-`workload-view.ts` — pure snapshot→view-model transform (workload-metering.md §4).
+`workload-view.ts` — pure snapshot→view-model transform.
 Takes the current + previous `perfSnapshot.workloads` (already polled at 1 Hz and
 kept for the channel-rate table — same inputs, no new wire messages) and derives
 INTERVAL utilization/rates by diffing the two, falling back to the meter's own
@@ -133,19 +130,18 @@ cumulative numbers when there is nothing to diff. Why diff: snapshot rates are
 cumulative since registration (honest but slow-moving — an all-night registry loop
 averages the night in); a live profiler wants "what happened in the last poll
 tick." Time comes from each snapshot's `window.snapshotAt`, never `Date.now()`, so
-it stays testable. `maxIntervalMs` (C-18) is the largest inter-arrival interval
+it stays testable. `maxIntervalMs` is the largest inter-arrival interval
 over the trailing 10 s; `stalled` = it exceeds `STALL_FACTOR` × the stream's
 nominal period — the "obvious bad value" highlight.
 
-## Rendering + interactions {#rendering}
+## Rendering + interactions {#layout}
 
 `NodeGraph.vue` renders the reduced `GraphElement[]` as native SVG and owns every
 interaction; `GraphPanel.vue` is a thin adapter (topology → `toElements`, reads
 the hover-card config, hosts `<NodeGraph>`). The container fills its parent
-100%/100% and never scrolls (ruling 3 — the in-panel resize handle + height
-persistence are gone). One `<g transform="translate(pan) scale(zoom)">` applies
-the viewport (screen = model · zoom + pan), so everything below is drawn in model
-space.
+100%/100% and never scrolls. One `<g transform="translate(pan) scale(zoom)">`
+applies the viewport (screen = model · zoom + pan), so everything below is drawn in
+model space.
 
 - **Nodes** — `<rect rx>` + multiline `<text>`; kind fill (`--kind`), role border
   tint (`--role`), saturated red, idle desaturation as CSS; the busy-ring arc
@@ -162,19 +158,19 @@ space.
   a placed node. `reconcileDraggedPositions` re-applies surviving user-dragged
   positions over the fresh auto-layout (auto owns every untouched node).
 - **Drag** — pointer events move a node's model position LIVE; edge paths recompute
-  every pointermove (ruling 2), positions being reactive.
+  every pointermove, positions being reactive.
 - **Pan / zoom** (`graph-viewport`) — plain wheel = X/Y pan via `panBy` (clamped so
-  the canvas-center model point stays inside the graph bbox, ruling 4; macOS
+  the canvas-center model point stays inside the graph bbox; macOS
   two-finger trackpad pan works natively). `ctrl+wheel` (= macOS pinch, gated by
-  `isZoomGesture`) = `zoomAt` centered on the pointer (ruling 6, `nextZoomLevel`).
+  `isZoomGesture`) = `zoomAt` centered on the pointer (`nextZoomLevel`).
   No whitespace-drag panning.
-- **Viewport resize** (ruling 5) — a `ResizeObserver` drives `resizeViewport`
+- **Viewport resize** — a `ResizeObserver` drives `resizeViewport`
   (`viewportContent` refit + `clampPan`) on window resize, fullscreen enter/exit,
   and the tab reveal; the FIRST non-zero box fits the whole graph.
-- **Marching dash** (ruling 7) — hover-highlighted (BFS distance ≤ 1) NON-idle
+- **Marching dash** — hover-highlighted (BFS distance ≤ 1) NON-idle
   edges get a `stroke-dashoffset` keyframe marching source → target; idle edges
   keep their static dash (no flow to animate).
-- **Chips** — fit / reset layout (also clears dragged + refits; NO height reset) /
+- **Chips** — fit / reset layout (also clears dragged + refits) /
   fullscreen (Fullscreen API on the component root).
 
 ## Hover card + config {#hover-card}
@@ -210,6 +206,6 @@ configurable report rate. Canonical `ZOOM_MIN` / `ZOOM_MAX` live in
 A profiler pins AT OPEN to exactly one orchestrator instance; the binding rides the
 URL (`instance` + `session` params) and is immutable for the window's life. When
 its instance dies the profiler freezes with its accumulated data and NEVER
-re-attaches to a newer instance (ruling 2). `shortInstanceId` compacts a long id to
+re-attaches to a newer instance. `shortInstanceId` compacts a long id to
 its trailing 6 chars; `profilerSubtitle` reads `<session> · #<id>`, or "no active
 session" when unbound. See also [windows.md#profiler-binding](./windows.md#profiler-binding).

@@ -6,12 +6,11 @@ Source pointers are per section; the code carries only load-bearing invariants i
 ## Template-match kernel {#template-match}
 
 Source: `app/orchestrator/template-match-kernel.ts`
-(split-disparity-nodes proposal, ruled 2026-07-09)
 
 General-purpose template-match kernel: one `needle` pipe correlated into one `haystack`
 pipe — nothing app-specific inside.
 
-- Both inputs arrive pre-sized (ruling 5): a scale node in front of each input owns all
+- Both inputs arrive pre-sized: a scale node in front of each input owns all
   geometry, so this kernel does NO resizing — the caller computes tile/strip sizing
   (e.g. disparity's `foveaTileSize` / `matchMagnification`) and retunes the scalers.
 - Each haystack arrival drives one match tick (the needle is retained across ticks,
@@ -33,7 +32,7 @@ does this tile sit in that stream".
 
 ## IMM motion predictor {#imm-predictor}
 
-Source: `app/lib/imm-predictor.ts` (`docs/proposals/imm-delay-compensation.md`)
+Source: `app/lib/imm-predictor.ts`
 
 An Interacting Multiple Model (IMM) Kalman motion predictor chained after the
 disparity-scope tracker. The tracker emits target centers stamped with a trusted device
@@ -79,7 +78,7 @@ sequentially, so a kernel step is naturally non-reentrant.
 
 READ-ONLY SHM invariant: the worker `reader.open`s the parent-brokered `shmName`s and NEVER
 touches the broker/gate. The main-side host (`vision-worker-host.ts`) owns connect/disconnect
-(the C-21 gate stays a main-thread-only, race-free single writer): a session on acquire
+(the consumer gate stays a main-thread-only, race-free single writer): a session on acquire
 `connectPipe`s its camera pipes, then `createVisionWorker(...)` spawns the worker with the
 shmNames + reader-addon path and pumps params/results over a MessagePort; on release
 `terminate()` (tied to the session's ResourceScope). The protocol
@@ -90,12 +89,12 @@ imports neither core nor the frame transport) so it compiles into both bundles.
 
 Sources: `app/orchestrator/display-kernel.ts`, `display-transport.ts`
 
-The shared DISPLAY vision kernel (calibration-free since C-23) runs INSIDE the vision worker,
+The shared DISPLAY vision kernel (calibration-free) runs INSIDE the vision worker,
 producing tracking-single + manual-control's processed views (magnified slice,
 perspective-wrapped foveae, combined diff/depth) plus multi-fovea's center relay, off the JS
 event loop. Each session computes its calibration-derived matrices on the main thread and
-ships them as params (fovea homographies, depth Q-matrix, slice center). real-1g: the C input
+ships them as params (fovea homographies, depth Q-matrix, slice center). The C input
 is the `undistort:<serial>` pipe — frames arrive ALREADY undistorted from the native remap
-producer, so the in-worker `new Undistort(cal)` + the whole cal transport are gone; all
+producer, so there is no in-worker `new Undistort(cal)` and no cal transport; all
 display ops are synchronous. `display-transport.ts` holds the fork-independent, worker-safe
 transport types (numbers only).

@@ -2,8 +2,9 @@
 
 The operator's guide to FoveaCam Duo — what each screen does, how to run the
 rig day to day, and what to do when something looks wrong. Chapters narrate the
-app as you see it; for the engineering view of the same features, see
-[applications](../applications/README.md) and [architecture](../architecture/).
+app as you see it; for the engineering view of the same features, see the
+[architecture](../architecture/README.md) overview and the
+[behavior specs](../spec/README.md).
 
 Read in this order the first time:
 

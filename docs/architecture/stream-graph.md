@@ -82,8 +82,7 @@ validated window (V9). Dynamic pipes (fovea) allocate a **max-footprint
 ring**; each frame carries its own active w/h (+ crop origin), and every
 re-advertise of an id bumps its **epoch** so consumers detect reuse and
 reconnect. Consumers **reuse pre-allocated buffers** from a transfer pool —
-never per-frame allocation (the historical manage-cameras freeze was exactly
-that GC storm).
+never per-frame allocation.
 
 ## 3. Bricks
 
@@ -92,13 +91,13 @@ that GC storm).
 | camera source | Arv stream thread (`core`) | raw frames (native) |
 | converter | `ConverterStream` — one thread per (camera × format) | `camera/<serial>/convert` pipe |
 | undistort | `UndistortStream` — remap maps built natively at attach from the persisted calibration | `camera/<serial>/undistort` pipe |
-| fovea crop | `FoveaStream` — a ChainedStream taking a plain ROI crop of its upstream brick's frames (the undistort brick, or convert for raw crops); the v1 fused map-ROI convert+remap is retired — undistortion happens ONCE upstream and N foveas share it | `camera/<serial>/undistort/fovea/<n>` pipe |
+| fovea crop | `FoveaStream` — a ChainedStream taking a plain ROI crop of its upstream brick's frames (the undistort brick, or convert for raw crops); undistortion happens ONCE upstream and N foveas share it | `camera/<serial>/undistort/fovea/<n>` pipe |
 | scale | `ScaleStream` — ChainedStream `cv::resize` with reactive params (`ratio`/`dwidth`/`dheight`/`dsize`); out dims recomputed per frame from the active input dims; origin forwarded unscaled | `<sourceId>/scale/<name>` pipe |
 | stereo (SGBM) | `StereoStream` — the first TWO-input chained brick: SGBM over a left/right tap pair (latest-wins; ticks on left arrivals), F32 disparity out in left-frame coords; parked unless demanded (the on-demand SGBM view) | `stereo/<name>` pipe (F32) |
 | heatmap | `HeatmapStream` — ChainedStream colormap (TURBO) of a 1-channel F32/U8 source to BGRA8; reactive `{min,max}` (absent = per-frame auto-normalize) | `<sourceId>/heatmap/<name>` pipe |
 | composite | `CompositeStream` — two-input BGRA8 color join (StereoStream skeleton, no SGBM): reactive `{mode: anaglyph\|difference}`; anaglyph = LEFT's R + RIGHT's G/B (red = left eye), difference = per-channel `absdiff`; left-paced, latest-wins right; alpha 255 | `stereo/<name>` pipe (BGRA8) |
-| pair | `PairStream` — per-stage L/R join on its own thread; two in-process FIFO `TapChannel` inputs (`OwnedFrame::Ptr` — pins references, no pixel copy); anchors pushed via NAPI at FIN rate; `root` tolerance-matches raw arrivals to the FIN, `exact` joins on carried deviceTimestamps; batched record iterator + meter; always-running with the trigger topology (`pairing-nodes.md`) | pair records (async generator + meter) |
-| compress | `CompressRunner`/`CompressBinding` (`CompressStream.cpp` — no class named `CompressStream`) — taps any frame brick (`OwnedFrame` FIFO), republishes each frame as an INDEPENDENT zlib blob (seekable) into a `/zlib` sibling pipe; ring-v5 `payloadBytes` carries the variable length. Driven by the app-level `record_compression` setting: under `"zlib"` the generic recording facility (`raw-recording`) routes ALL its raw streams here; multi-fovea keeps per-stream toggles that gate WHICH streams use it (`multi-fovea-recording.md` ruling 9) | `<sourceId>/zlib` pipe |
+| pair | `PairStream` — per-stage L/R join on its own thread; two in-process FIFO `TapChannel` inputs (`OwnedFrame::Ptr` — pins references, no pixel copy); anchors pushed via NAPI at FIN rate; `root` tolerance-matches raw arrivals to the FIN, `exact` joins on carried deviceTimestamps; batched record iterator + meter; always-running with the trigger topology | pair records (async generator + meter) |
+| compress | `CompressRunner`/`CompressBinding` (`CompressStream.cpp` — no class named `CompressStream`) — taps any frame brick (`OwnedFrame` FIFO), republishes each frame as an INDEPENDENT zlib blob (seekable) into a `/zlib` sibling pipe; ring-v5 `payloadBytes` carries the variable length. Driven by the app-level `record_compression` setting: under `"zlib"` the generic recording facility (`raw-recording`) routes ALL its raw streams here; multi-fovea keeps per-stream toggles that gate WHICH streams use it | `<sourceId>/zlib` pipe |
 | KCF tracker | native thread, latest-frame-wins; a CHAINED variant (`camera/<serial>/undistort/kcf`, controller-node §3.5) tracks the undistorted view on its own thread | track results (async generator + meter) |
 | marker detector | `detector.stream` (native) | detection sets |
 | vision kernels | per-session `worker_thread` (`vision-worker.ts`), dispatched by kind | results + derived frames over MessagePort |
@@ -120,8 +119,6 @@ receive segment names.
   `capture-node.ts`'s capture worker) reads a held pipe's latest SHM slot
   on demand — pinned to the latest seq at read time, so a steer-then-capture
   pass can never grab a pre-steer frame; a read timeout fails the pass loudly.
-  (The old standalone `readNextPipeFrame`/`pipe-read-once.ts` one-shot reader
-  it replaced has been removed.)
 - **Workers:** vision workers SHM-read pipes directly (reader addon path
   passed by the host) — read-only; the broker/gate stays orchestrator-side.
 

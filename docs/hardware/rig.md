@@ -24,11 +24,9 @@ exclusive — `architecture/processes.md`).
   ms-scale pulse widths `pairTriggerBudget` derives.
 - **Controller side:** `firmware/include/Board.h` `camera[]` pairs are
   controller-directional — `trigger` (Teensy OUTPUT → camera Line0),
-  `strobe` (Teensy INPUT ← camera Line1). The pre-2026-07-13 fields were
-  named `input`/`output` from the camera's perspective and the firmware
-  drove them controller-side — both links inverted, both dead.
+  `strobe` (Teensy INPUT ← camera Line1).
 - 12-bit readout formats are supported end-to-end in code (preview-safe
-  option filtering); live A/B on the rig is a Stage-F item.
+  option filtering); live A/B requires the full hardware rig.
 
 ## MEMS controller
 
@@ -40,6 +38,6 @@ connect; v2-only surfaces are gated on `v2Capable`.
 ## Bench flow
 
 Firmware flashing + bench verification precede rig sessions (PlatformIO,
-`firmware/`). The HIL workflow: run the pre-flight + playbook passes
-(`docs/dev/verification-playbook.md`), export profiler snapshots as the
-baseline, and work through `stage-f.md`.
+`firmware/`). Hardware verification runs the pre-flight and playbook passes,
+exports profiler snapshots as the baseline, and works through the remaining
+hardware-gated checks.
