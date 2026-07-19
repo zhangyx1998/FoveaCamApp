@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, useTemplateRef } from "vue";
+import { computed, ref, useTemplateRef, type PropType } from "vue";
 
 const props = defineProps({
   modelValue: {
@@ -21,10 +21,14 @@ const props = defineProps({
     required: false,
     default: 1,
   },
+  /** Right-click reset target + infill anchor. UNDECLARED = no meaningful
+   *  neutral: right-click reset is disabled (a stray context-click on e.g. a
+   *  live camera-exposure slider must not slam the hardware to range-min) and
+   *  the infill anchors at `min`. */
   neutral: {
     type: Number,
     required: false,
-    default: 0,
+    default: undefined,
   },
   disabled: {
     type: Boolean,
@@ -40,6 +44,14 @@ const props = defineProps({
     type: String,
     required: false,
     default: "currentColor",
+  },
+  /** Opt-in snap targets in model-value units. Mouse drags landing within
+   *  0.5% of the min–max span lock to the detent exactly; keyboard steps and
+   *  right-click reset are unaffected. Each detent draws a static tick. */
+  detents: {
+    type: Array as PropType<number[]>,
+    required: false,
+    default: undefined,
   },
 });
 const emit = defineEmits(["update:modelValue"]);
@@ -57,9 +69,16 @@ const cursorStyle = computed(() => {
   };
 });
 
+const tickStyles = computed(() =>
+  (props.detents ?? [])
+    .map(ratioOf)
+    .filter((r) => r >= 0 && r <= 1)
+    .map((r) => ({ left: `${r * 100}%` })),
+);
+
 const infillStyle = computed(() => {
   const a = ratioOf(props.modelValue);
-  const b = ratioOf(props.neutral);
+  const b = ratioOf(props.neutral ?? props.min);
   const l = Math.min(a, b);
   const r = Math.max(a, b);
   return {
@@ -75,6 +94,19 @@ function clamp(value: number) {
   return Math.max(a, Math.min(b, value));
 }
 
+const DETENT_SNAP_SPAN = 0.005;
+function snap(value: number) {
+  const detents = props.detents;
+  if (!detents?.length) return value;
+  let best = value;
+  let bestDist = Math.abs(props.max - props.min) * DETENT_SNAP_SPAN;
+  for (const d of detents) {
+    const dist = Math.abs(value - d);
+    if (dist <= bestDist) [best, bestDist] = [d, dist];
+  }
+  return best;
+}
+
 const drag = ref(false);
 function trackUntilRelease(e: MouseEvent) {
   if (!(e.buttons & 1)) {
@@ -88,10 +120,11 @@ function trackUntilRelease(e: MouseEvent) {
   const { min: l, max: r } = props;
   const rect = el.getBoundingClientRect();
   const ratio = (e.clientX - rect.left) / rect.width;
-  emit("update:modelValue", clamp(l + ratio * (r - l)));
+  emit("update:modelValue", snap(clamp(l + ratio * (r - l))));
 }
 
 function track(e: MouseEvent) {
+  if (props.disabled) return;
   drag.value = true;
   window.addEventListener("mousemove", trackUntilRelease);
   trackUntilRelease(e);
@@ -105,10 +138,12 @@ function increment(delta: number) {
 
 function resetToNeutral(e: MouseEvent) {
   e.preventDefault();
+  if (props.disabled || props.neutral === undefined) return;
   emit("update:modelValue", clamp(props.neutral));
 }
 
 function handleKeydown(e: KeyboardEvent) {
+  if (props.disabled) return;
   const modifiers = [e.ctrlKey, e.metaKey, e.altKey, e.shiftKey];
   const scale = modifiers.reduce((a, b) => a * (b ? 0.1 : 1), 1);
   switch (e.key) {
@@ -130,8 +165,13 @@ function handleKeydown(e: KeyboardEvent) {
   <div
     ref="el"
     class="range-slider"
+    role="slider"
     :style="{ color }"
     :tabindex="disabled ? -1 : 0"
+    :aria-valuemin="min"
+    :aria-valuemax="max"
+    :aria-valuenow="modelValue"
+    :aria-disabled="disabled || undefined"
     @mousedown="track"
     @contextmenu="resetToNeutral"
     @keydown="handleKeydown"
@@ -141,6 +181,7 @@ function handleKeydown(e: KeyboardEvent) {
       <slot></slot>
       <div class="infill" :style="infillStyle"></div>
     </div>
+    <div v-for="(t, i) in tickStyles" :key="i" class="detent" :style="t"></div>
     <div class="cursor" :style="cursorStyle"></div>
   </div>
 </template>
@@ -152,13 +193,15 @@ function handleKeydown(e: KeyboardEvent) {
   height: 2em;
   border-radius: 4px;
   opacity: 0.8;
-  background-color: #fff2;
-  outline: 1px solid #fff4;
+  background-color: var(--tint-2);
+  outline: 1px solid var(--tint-4);
   cursor: ew-resize;
   user-select: none;
   margin-top: calc(1ch + 8px);
   margin-bottom: calc(1ch + 8px);
-  &:disabled {
+  // [disabled]: `:disabled` never matches a <div>; Vue reflects the boolean
+  // prop as a bare attribute.
+  &[disabled] {
     cursor: not-allowed;
     opacity: 0.5;
     filter: grayscale(0.5);
@@ -170,7 +213,7 @@ function handleKeydown(e: KeyboardEvent) {
   }
   &:active,
   &:focus {
-    outline: 2px solid var(--theme, #08c);
+    outline: 2px solid var(--theme, var(--accent));
   }
   .intent {
     position: absolute;
@@ -193,6 +236,22 @@ function handleKeydown(e: KeyboardEvent) {
     bottom: 0;
     pointer-events: none;
     background-color: currentColor;
+  }
+  // Static detent ticks: 4px notches on the top/bottom edges only, so they
+  // never collide with the slot labels.
+  .detent {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    transform: translateX(-50%);
+    pointer-events: none;
+    opacity: 0.4;
+    background: linear-gradient(
+      currentColor 0 4px,
+      transparent 4px calc(100% - 4px),
+      currentColor calc(100% - 4px) 100%
+    );
   }
   .cursor {
     width: 0.2ch;

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, useTemplateRef, watch, onUnmounted } from "vue";
-import { register } from "./RemoteCanvas.vue";
+import { register } from "./telecanvas/registry";
 const container = useTemplateRef<SVGSVGElement>("container");
 const content = ref<string>("");
 const observer = computed(() => {

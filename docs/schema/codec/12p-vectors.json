@@ -1,0 +1,21 @@
+{
+  "format": "GenICam-12p",
+  "layout": "two 12-bit pixels per 3 bytes: b0=a[7:0], b1=b[3:0]<<4 | a[11:8], b2=b[11:4]; odd trailing pixels use b0,b1",
+  "vectors": [
+    {
+      "name": "edges-even",
+      "samples": [0, 1, 100, 2000, 3000, 4095],
+      "packedHex": "00100064007db8fbff"
+    },
+    {
+      "name": "odd-trailing",
+      "samples": [4095, 0, 2048],
+      "packedHex": "ff0f000008"
+    },
+    {
+      "name": "nibbles",
+      "samples": [2748, 291, 1110, 1929],
+      "packedHex": "bc3a12569478"
+    }
+  ]
+}

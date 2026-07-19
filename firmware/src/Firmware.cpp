@@ -10,22 +10,34 @@
 #include <Protocol/Protocol.h>
 
 #include "Board.h"
+#include "Capture.h"
 #include "Global.h"
+#include "Streams.h"
 
 void setup() {
   Serial.begin(115200);
   SPI.begin();
   Board::init();
   Board::low_pass_filter.freq(Global::lpf_frequency);
+  Capture::init();
 }
 
 void handle(const Protocol::RawPacket &&packet);
+namespace Protocol {
+void tick(); // Non-blocking Actuate/Trigger completion (Protocol.cpp)
+}
 
 void loop() {
   Global::time.update();
-  auto byte = Serial.read();
-  if (byte >= 0 && COBS::rx.recv(byte))
-    handle(COBS::rx.get());
+  Streams::housekeeping(); // M1 periodic MEMS config re-assertion (~1 Hz)
+  Streams::tick();
+  Capture::tick();
+  Protocol::tick();
+  for (int available = Serial.available(); available > 0; available--) {
+    auto byte = Serial.read();
+    if (byte >= 0 && COBS::rx.recv(byte))
+      handle(COBS::rx.get());
+  }
 }
 
 #define HEADER(M, P)                                                           \
@@ -35,6 +47,17 @@ void loop() {
   case Protocol::header(Protocol::Method::GET, Packet::P::PROPERTY):           \
     Packet::P::GET(seq);                                                       \
     break;
+
+// Payload-carrying GET (CMD_FRAME) — validate + inflate like CASE_SET, but
+// dispatch to the two-argument Prototype::GET overload.
+#define CASE_GET_PAYLOAD(P)                                                    \
+  case Protocol::header(Protocol::Method::GET, Packet::P::PROPERTY): {         \
+    if (Packet::P::validate(packet))                                          \
+      Packet::P::GET(seq, Packet::P::inflate(packet));                        \
+    else                                                                      \
+      Packet::P::reject(seq, "Invalid packet");                               \
+    break;                                                                    \
+  }
 
 #define CASE_SET(P)                                                            \
   case Protocol::header(Protocol::Method::SET, Packet::P::PROPERTY): {         \
@@ -54,12 +77,16 @@ void handle(const Protocol::RawPacket &&packet) {
     CASE_SET(System::Reset);
     CASE_GET(System::Enable);
     CASE_SET(System::Enable);
+    CASE_GET(System::Timestamp);
+    CASE_SET(System::Timestamp);
     CASE_GET(Config::Log);
     CASE_SET(Config::Log);
     CASE_GET(Config::LPF);
     CASE_SET(Config::LPF);
     CASE_GET(Config::Bias);
     CASE_SET(Config::Bias);
+    CASE_SET(Command::MirrorStream);
+    CASE_GET_PAYLOAD(Command::Frame);
     CASE_SET(Command::Actuate);
     CASE_SET(Command::Trigger);
   case Protocol::INVALID: {

@@ -5,6 +5,8 @@
 // -------------------------------------------------------
 #include "napi-helper.h"
 
+#include <cmath> // std::isnan / std::isinf (libstdc++ needs the explicit include)
+
 static std::string objectKey(const Napi::Value &key) {
   if (key.IsNumber())
     return repr(key);

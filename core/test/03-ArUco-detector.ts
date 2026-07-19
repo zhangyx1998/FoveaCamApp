@@ -26,13 +26,16 @@ const detector = new MarkerDetector("4X4_50");
 console.log("Created detector:", detector);
 
 async function detect(stream: Stream<Frame>) {
-    let frame!: Frame;
-    for await (frame of stream) break;
+    let frame: Frame | null = null;
+    for await (frame of stream) {
+        if (frame) break;
+    }
+    if (!frame) throw new Error("Stream ended before a frame was captured");
     console.log("Captured frame:", frame, frame.id);
     const result = await detector.detect(frame);
     console.log(`Detected ${result.length} markers:`);
     for (const d of result) {
-        console.log(d.id, d.w, d.h, ...d);
+        console.log(d.id, d.width, d.height, ...d);
     }
     frame.release();
 }

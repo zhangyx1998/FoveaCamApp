@@ -1,0 +1,282 @@
+# Disparity Scope
+
+Disparity Scope is the closed-loop vergence bench. You lock onto a target in the
+wide (center) view; the app extracts a template around it, matches it against the
+left and right fovea streams, and drives the mirror vergence with a PID so both
+foveas converge onto the same point at the right depth. This is where you tune
+that control loop, watch how well the two eyes agree, and inspect the raw
+template-match evidence in a dedicated debugger window.
+
+**Prerequisites:** a full calibration present (see
+[Calibration](./calibration.md)) and all three cameras connected (see
+[Manage Cameras](./manage-cameras.md)). On an uncalibrated rig the wide view
+falls back to the raw image and the overlays will not register.
+
+## The layout
+
+Three live columns across the top:
+
+- **Left Fovea** (cyan) and **Right Fovea** (greenyellow) — the fovea views,
+  each with a voltage bar showing its mirror's commanded position.
+- **Center** (orange) — two stacked views plus a status line. The upper view is
+  the selectable center composite (its title is the view selector). The lower
+  view is the clickable wide view carrying the overlays and the status readout,
+  with a **Debugger** button beneath it.
+
+A pull-up **drawer** along the bottom holds the tuning columns. Live views expand
+into projection windows via their expand button, and `Ctrl-Shift-I` toggles the
+diagnostics overlay.
+
+### The overlays on the wide view
+
+The lower Center view shows, in undistorted wide pixels:
+
+- the **target dot** (orange) at the current lock point;
+- two **fovea footprint rectangles** (cyan / greenyellow) — where each eye's
+  fovea currently projects onto the wide frame;
+- the **tracker bounding box** (green) when the tracker is following content.
+
+The status line under it reads out **Vergence** in degrees, **Depth** in metres
+(or `∞` when parallel), and the current **status** word. An **override** badge
+appears while a drag is pinning the target (see below).
+
+## The center-view selector
+
+The upper Center view's title is a selector with four options; only the selected
+view is computed, so switching parks the others.
+
+- **Wide Angle Sliced** — a magnified crop around the target.
+- **Disparity (Left v.s. Right)** — the left-vs-right difference image.
+- **Anaglyph (Red = Left, Cyan = Right)** — the two eyes overlaid in colored 3D. The label names the colors for the current **Anaglyph style** (set in **Settings → Application**; the default is red = left, cyan = right) and the view follows a change live.
+- **SGBM Disparity** — a colored depth heatmap from block matching.
+
+## Steering by dragging (tracker override)
+
+Dragging on the lower wide view takes manual control of the vergence loop:
+
+1. Press on the wide view. On pointer-down the loop **resets** its pan, vertical,
+   and verge corrections.
+2. Drag. Both eyes track the raw cursor ray **in parallel** — vergence goes to
+   infinity and the PID does not step, so the foveas follow your pointer
+   regardless of match quality. The **override** badge is lit and the status
+   reads manual.
+3. Release. The tracker re-arms at that point and the PID resumes smoothly from
+   the parallel pose, then re-converges every axis from scratch.
+
+This is deliberate: the earlier "keep the PID running during the drag" behavior
+could never chase a drag onto new content, because the match score collapses and
+the loop holds. Parallel follow lets you point the rig anywhere first, then let
+it converge.
+
+## The tracker
+
+In the **Tracker** column of the drawer:
+
+- The **power toggle** (⏻ — lit while enabled) arms the wide-view auto-follow
+  tracker.
+- **Tracker** selects the engine, switchable **on the fly** (the two nodes are
+  drop-in replacements running on their own native threads):
+  - **Hybrid (NCC + re-detect)** — the default: a normalized-cross-correlation
+    template match with a re-detect stage, so a momentarily lost target can
+    **recover** rather than staying dropped.
+  - **KCF (GRAY)** — the classic kernelized correlation filter.
+  Switching mid-tracking re-arms the new engine at the current target and
+  keeps steering; if the requested engine is unavailable the selector snaps
+  back to the one actually running. A switch requested mid-drag applies when
+  the drag ends.
+- **Kernel** sets the template width × height (applied on the next re-arm).
+- **Status** reads **tracking** (locked), **armed** (enabled, not yet locked),
+  **lost** (the toggle is on but ~10 consecutive misses released the
+  auto-follow gate — re-enable or drag to re-arm), or **off**. While the
+  tracker is **armed or tracking** the vergence **convergence timeout never
+  fires** — tracking counts as activity, including the armed-but-hunting
+  phase. After a **lost** latch the timeout resumes (from that moment, not a
+  stale window).
+
+When armed, the tracker follows the target and steers the match crop, recovering
+its lock if the content briefly drops out; a drag overrides it as described
+above.
+
+## Tuning the control loop
+
+The drawer's columns, left to right:
+
+- **Parameters** — **Sensitivity** (loop step per elapsed time), **Template
+  Scale** (match detail; on a calibrated rig the true match scale comes from
+  calibration and this reads out the measured magnification), **Min Match Score**
+  (the confidence below which a correction is not trusted), **Timeout** (the
+  convergence window in ms; hard left reads **disabled** and freezes the
+  auto-vergence corrections — a running tracker stays on and the foveas keep
+  following its target at the frozen vergence; hard right is `∞`, never times
+  out), and
+  **X / Y Expansion** (the guide-strip size around the target). **Display**
+  holds the **Zoom Ratio**, which sizes the sliced-view crop. Each column's
+  ↺ **reset** button (hover any icon button for its tooltip) restores its
+  defaults.
+- **Pan PID**, **Depth PID**, **Vertical PID** — the Kp / Ki / Kd gains for each
+  degree of freedom, each with its own **reset**.
+- **Vergence Angles** — two-way sliders for **Verge**, **Pan X**, **Pan Y**, and
+  **V-Shift**: they read out the live loop state, and dragging one takes over —
+  the auto-vergence corrections freeze immediately (even mid-track) and the
+  dragged value applies. A running tracker is **not** disturbed: it keeps its
+  target, and the foveas keep following it through your manual values — you
+  are steering the vergence geometry while the tracker steers the aim. The
+  sliders shift to the accent color while manual control holds the loop, and
+  Status reads **held** (or **auto off** when the Timeout slider sits at
+  **disabled** — moving that slider right does not clear a slider-write hold),
+  with a **· following** suffix while a tracker is steering the aim.
+  A new pointer drag on the view or toggling the tracker off and back on hands
+  control back.
+
+  The **pause** button (⏸ in the column header) is the same hold without
+  touching a value: one click freezes the corrections exactly where they are —
+  a following tracker keeps steering — and the button flips to **play** (▶) to
+  resume auto-vergence. It goes inert while the Timeout slider sits at
+  **disabled** (auto-vergence is already off there; the slider is the way
+  back). Pausing or resuming during an auto-tune run aborts the run first.
+
+  The **PID Debug** panel reads out live Status, Pan X / Y, Verge, commanded
+  Distance, V-Shift, and the actuation round-trip in ms. The ↺
+  **reset** zeroes the loop state — under auto the eyes re-converge fresh;
+  under a manual hold it zeroes your corrections (with a tracker following,
+  the eyes re-center on its target; otherwise they re-aim, parallel, at the
+  last target).
+
+If corrections stop applying, check **Min Match Score** against the live match
+quality: when the score drops below it the loop holds rather than trusting a bad
+match. A steady scene should hold steady Vergence and Depth numbers.
+
+### Capture mode: trigger sync
+
+The **Capture Mode** group at the bottom of the Parameters column selects how
+the two foveas capture frames:
+
+- **Free-run** (the default) — each fovea streams at its own configured frame
+  rate, and the loop pairs each new match with the freshest result from the
+  other eye, within a staleness bound.
+- **Trigger sync** — both foveas expose **simultaneously**, each pair off one
+  hardware trigger pulse, so every measurement is a true stereo pair at a
+  uniform rate. The rate derives from the fovea pair's exposure — the same
+  budget the **Trigger Budget** row in
+  [Manage Cameras](./manage-cameras.md#fovea-pair) reads out. While the
+  trigger is engaged the per-camera **Frame Rate** setting has no effect (the
+  trigger decides when frames happen); to raise the rate, shorten the pair's
+  exposure. The wide camera always free-runs.
+
+The selector is **intent**: it remembers what you asked for (persisted), and
+the app engages the trigger when the preconditions permit — and keeps trying
+without further action from you (with one exception: a detected hardware
+fault, below). While intent is on but not yet engaged the
+selected option's outline tints to the warning color, and the reason —
+**no controller connected**, **controller firmware is not v2-capable
+(CMD_FRAME unavailable)**, and so on — lands in the title-bar **error tray**
+as a warning: one row whose message always shows the latest reason (the
+count ticks up as the reason changes, and real errors always sort above
+warnings in the panel). The **Status** line under the selector stays
+compact:
+
+- **engaged · measuring…** — the trigger just engaged; the first rate
+  measurement is still maturing.
+- **≈ 12.5 Hz · pulse 5.0 ms** — engaged, showing the live trigger rate and
+  pulse width (hover for the frame/reject/timeout counters).
+- **free-run — waiting** — not yet engaged: the cameras are still
+  free-running; hover for the reason, or open the error tray for the detail.
+
+Flipping the selector before the controller connects — or a controller detach
+mid-session — needs no re-toggle; the mode engages (or re-engages) by itself
+once it can. If the firmware predates v2 the mode waits indefinitely — flash
+v2 firmware, or flip back to **Free-run** to clear the notice.
+
+While engaged, a transient **pair skew** status word means an L/R pair
+straddled two trigger slots and was discarded; persistent skew shows up as
+rejects and timeouts in the Status hover.
+
+**Hardware trigger fault.** If, right after engaging, the firmware rejects
+every frame with one repeated reason and no frame ever arrives (the signature
+of a trigger pulse that never reaches the cameras — a wiring fault), the app
+detects it within about half a second: an **error** lands in the title-bar
+tray naming the firmware's reason, and the cameras are automatically restored
+to free-run so the views recover instead of freezing. In this one case the
+app does **not** keep retrying — the intent stays remembered, but re-engaging
+would just fault again. Fix the wiring (the
+[Manage Cameras](./manage-cameras.md#fovea-pair) **Trigger** test isolates
+which leg is broken), then flip the selector off and back on to re-arm;
+restarting the session also re-arms.
+
+Prefer **Trigger sync** for depth accuracy on moving targets and a uniform
+control cadence: simultaneous exposures remove the left/right timing skew that
+a moving target would otherwise turn into false disparity — note the paired
+rate is usually lower than free-run's. Prefer **Free-run** when you want each
+fovea's maximum frame rate. *This feature is code-complete but not yet
+verified on hardware.*
+
+### Auto-tuning the gains
+
+The **Auto-Tune** group (in the Tracker column) can derive the PID gains
+experimentally instead of hand-tuning the nine sliders. These are **real
+experiments on the rig** — the mirrors move — so the buttons only enable with a
+calibrated triple and no drag in flight; run them on a static, well-matched
+target (for the depth gains, converge on a **near** target first — a
+parallel/infinity pose gives the depth axis nothing to push against).
+Starting a tune while the tracker is following **disengages the tracker**
+(the toggle turns off — the tune scripts the target itself, so a live tracker
+would fight the experiment) and runs from the held pose. *This feature is code-complete but not yet verified on
+hardware.*
+
+- **tune** — the relay stage: each axis in turn is wiggled with a small square
+  wave (2–10 % of its range, hard-bounded) until a steady oscillation appears,
+  and conservative Tyreus–Luyben gains are computed from it. Seconds per axis.
+  An axis that will not oscillate keeps its previous gains (the status line
+  names it).
+- **tune + polish** — relay first, then a joint optimization (CMA-ES): the
+  target is stepped sideways repeatedly and each candidate gain set is scored
+  on tracking error, overshoot, and actuation effort. Budget-capped; takes
+  minutes.
+- **abort** (shown while running) — stops the experiment and restores the
+  pre-tune gains and pose. Any takeover (dragging the view, moving a Vergence
+  Angles slider, re-enabling the tracker, editing a gain) also aborts — except
+  that editing a gain keeps **your** edited value rather than restoring the
+  pre-tune gains (only the pose is restored).
+
+The status line tracks progress (axis and cycles during relay, evaluations and
+best cost during polish). On completion the new gains land in the PID columns,
+and the loop stays **held** at the pre-tune pose — drag on the view or re-enable
+the tracker to resume closed-loop control with the new gains.
+
+> **Delay compensation.** A per-triple **Delay compensation** value (set in
+> [Settings → Device config](./settings.md#per-triple-settings)) chains a motion
+> predictor after the tracker so the mirrors act on the target's *estimated*
+> position a few milliseconds ahead (positive **leads**, to offset tracking-chain
+> latency) or behind (negative **lags**). It is read at session start, so change
+> it in Settings and re-enter Disparity Scope to apply it.
+
+## The Debugger sub-window
+
+The **Debugger** button (below the Center view) opens — and closes — the
+template-match debugger, a separate window that rides alongside this app and
+closes with it. Press it again to toggle it off.
+
+It stacks three column-aligned views, so a feature at one horizontal position in
+the top strip shows its match score at the same position in the two heatmaps:
+
+- **Template Match Guide Strip** — the wide guide strip with overlay rectangles
+  marking the center template (orange), the left match (cyan), and the right
+  match (greenyellow).
+- **Left Match (Red = Match, Blue = Mismatch)** — the correlation heatmap of the
+  strip against the left fovea needle.
+- **Right Match (Red = Match, Blue = Mismatch)** — the same for the right fovea.
+
+Use it to see *why* the loop is or isn't converging: strong, well-aligned red
+peaks in both heatmaps mean a confident match; weak or scattered scores explain a
+held or drifting vergence.
+
+## Recording and capture
+
+The title-bar record button (or `Cmd/Ctrl-R`) records the raw left/center/right
+streams, and the camera icon opens the shared capture preview. See
+[Recording and Capture](./recording-and-capture.md).
+
+## Related
+
+- [Manual Control](./manual-control.md) — open-loop direct steering.
+- [Tracking - Multi](./multi-fovea.md) — track several targets at once.

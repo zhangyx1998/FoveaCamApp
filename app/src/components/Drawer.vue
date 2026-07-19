@@ -152,7 +152,7 @@ function track(e: MouseEvent) {
   bottom: 0;
   display: flex;
   overflow: visible;
-  background-color: #0008;
+  background-color: var(--shadow);
   backdrop-filter: blur(4px);
   .on-top {
     position: absolute;
@@ -169,13 +169,13 @@ function track(e: MouseEvent) {
     cursor: pointer;
     width: 8em;
     height: 1.6em;
-    background-color: #222;
+    background-color: var(--bg-app);
     border-radius: 0.5em 0.5em 0 0;
-    border: 2px solid #08f;
+    border: 2px solid var(--accent-bright);
     border-bottom: none;
     &:not(:hover):not(:active) {
       opacity: 0.2;
-      background-color: #fff2;
+      background-color: var(--tint-2);
       filter: grayscale(1);
     }
   }
@@ -184,9 +184,10 @@ function track(e: MouseEvent) {
     backdrop-filter: blur(8px);
     width: 100%;
     height: 1em;
+    /* translucent surface wash (kept literal — alpha on --bg-app) */
     background-color: #2228;
-    border-top: 0.5px solid #fff8;
-    border-bottom: 0.5px solid #fff8;
+    border-top: 0.5px solid var(--tint-8);
+    border-bottom: 0.5px solid var(--tint-8);
   }
 }
 </style>

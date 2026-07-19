@@ -11,6 +11,7 @@
 #include <Threading/Guard.h>
 #include <condition_variable>
 #include <pointer.h>
+#include <queue>
 #include <stdexcept>
 
 #include "CoreObject.h"
@@ -28,27 +29,37 @@ public:
   using Subscriber<T>::Subscriber;
   static inline const std::string NAME =
       "Subscriber<" + type_name<T>() + ">::Queue";
+  static constexpr size_t MAX_BUFFERED = 8;
 
 private:
   // Push-pull data model. Only one of data_queue or future_queue is
   // non-empty at any time.
-  typedef struct {
+  struct Data {
     // Holds incoming data
     std::queue<T> data_queue;
     // Holds pending futures
     std::queue<Future::Ptr> future_queue;
-  } Data;
+    size_t dropped = 0;
+  };
   // Guarded access ensures thread safety
   Threading::Guard<Data> data;
 
   void push(const T &value) override {
     auto ref = data.ref();
     if (ref->future_queue.empty()) {
+      if (ref->data_queue.size() >= MAX_BUFFERED) {
+        ref->data_queue.pop();
+        ref->dropped++;
+        WARN("%s dropped stale queued frame (%zu total)", NAME.c_str(),
+             ref->dropped);
+      }
       ref->data_queue.push(value);
       VERBOSE("%s::push(%p) -> data queue [%p]", NAME.c_str(), value.get(),
               &ref->data_queue.back());
     } else {
-      auto &future = ref->future_queue.front();
+      // COPY the Ptr out before pop() — a reference into the queue would
+      // dangle once popped.
+      auto future = ref->future_queue.front();
       VERBOSE("%s::push(%p) -> Future[%p]", NAME.c_str(), value.get(),
               future.get());
       auto task = [future, value](Napi::Env env) {
@@ -64,25 +75,27 @@ private:
   void close(bool unsubscribe, TracedError::Ptr err) override {
     VERBOSE("%s::close()", NAME.c_str());
     Subscriber<T>::close(unsubscribe, err);
-    auto ref = data.ref();
-    if (err) {
-      while (!ref->future_queue.empty()) {
-        auto &future = ref->future_queue.front();
+    // Drain ALL pending futures under ONE guard hold, then dispatch after
+    // release. Releasing the guard inside the loop and re-evaluating
+    // `ref->future_queue.empty()` in the while condition would be a Guard
+    // use-after-release (a queue closing with a pending future).
+    std::queue<Future::Ptr> drained;
+    {
+      auto ref = data.ref();
+      drained.swap(ref->future_queue);
+    }
+    while (!drained.empty()) {
+      auto future = drained.front();
+      drained.pop();
+      if (err) {
         auto task = [future, err](Napi::Env env) {
           auto error = Napi::Error::New(env, err->what());
           injectNativeStack(error, err->stack);
           future->Reject(error.Value());
         };
-        ref->future_queue.pop();
-        ref.release();
         dispatch(future->Env(), task);
-      }
-    } else {
-      while (!ref->future_queue.empty()) {
-        auto &future = ref->future_queue.front();
+      } else {
         auto task = [future](Napi::Env env) { future->Resolve(IterNext(env)); };
-        ref->future_queue.pop();
-        ref.release();
         dispatch(future->Env(), task);
       }
     }
@@ -110,7 +123,11 @@ public:
   };
   FN(stop) {
     VERBOSE("%s::stop([From JS])", NAME.c_str());
-    Subscriber<T>::close();
+    // VIRTUAL close — must reach Queue::close so pending futures are drained
+    // ({done} resolution). A QUALIFIED (static) `Subscriber<T>::close()` call
+    // bypasses the override, leaving a consumer parked on a pending next()
+    // (from JS return()) unresolved — its await leaks forever.
+    close(true, nullptr);
     auto env = info.Env();
     auto deferred = Napi::Promise::Deferred::New(env);
     deferred.Resolve(IterNext(env));
@@ -129,10 +146,27 @@ public:
 private:
   Threading::Guard<T> data = {nullptr};
   std::condition_variable signal;
+  // Frames overwritten before they were consumed — a latest-wins "drop". The
+  // count is the load-bearing "the consumer can't keep up" signal (e.g. the
+  // 1d KCF thread falling behind the camera fps); metered off it. Written on
+  // the producing stream's thread, read (delta) by the consumer's thread.
+  std::atomic<uint64_t> dropped_{0};
   void push(const T &value) override {
-    *data.ref() = value;
+    {
+      auto ref = data.ref();
+      if (*ref != nullptr) // overwriting an unconsumed frame == a drop
+        dropped_.fetch_add(1, std::memory_order_relaxed);
+      *ref = value;
+    }
     signal.notify_all();
   };
+
+public:
+  uint64_t droppedCount() const {
+    return dropped_.load(std::memory_order_relaxed);
+  }
+
+private:
   void close(bool unsubscribe = true, TracedError::Ptr err = nullptr) override {
     Subscriber<T>::close(unsubscribe, err);
     signal.notify_all();
@@ -187,7 +221,9 @@ public:
   FN(stop) {
     VERBOSE("%s::stop()", NAME.c_str());
     auto env = info.Env();
-    Subscriber<T>::close();
+    // Virtual close (same as Queue::stop): reach Latest::close so the
+    // native `wait()` blockers are notified, not just the base state flip.
+    close(true, nullptr);
     return IterNext(env);
   };
   GET(current) {
@@ -250,8 +286,15 @@ public:
 
 private:
   Sub::Latest<I>::Ptr sub = nullptr;
+
+protected:
+  // start/stop are overridable (call the base!) so a brick can release its
+  // reused full-frame buffers on the active→parked edge — both run on the
+  // stream thread, so the single-writer rule over transform-owned state holds.
   void start() override { sub = Sub::Latest<I>::create(upstream()); }
   void stop() override { sub = nullptr; }
+
+private:
   O iterate() override {
     auto sub = this->sub;
     if (!sub)
@@ -275,6 +318,11 @@ private:
 protected:
   virtual Stream<I> *upstream() = 0;
   virtual O transform(const I &input) = 0;
+
+  // Cumulative upstream frames dropped by the latest-wins handoff (frames that
+  // arrived while `transform` was busy). A subclass reads the delta each
+  // `transform` to meter "producer outran the transform". Valid once started.
+  uint64_t upstreamDrops() const { return sub ? sub->droppedCount() : 0; }
 };
 
 template <typename S, SmartPtrLike P = S::Ptr>
@@ -285,6 +333,11 @@ public:
   using Payload = typename S::Payload;
   using CoreObject<StreamObject<S, P>, P>::CoreObject;
   static inline const std::string name = "Stream<" + type_name<Payload>() + ">";
+
+  /** Native cascade seam: drop the wrapped core (what JS `release()` does),
+   *  callable from another CoreObject's `destruct` — including finalizer
+   *  context, where calling back into JS is forbidden. Idempotent. */
+  void releaseNative() { this->releaseCoreObject(); }
   static inline Napi::Function Init(Napi::Env env) {
     auto iterator = Napi::Symbol::WellKnown(env, "iterator");
     auto asyncIterator = Napi::Symbol::WellKnown(env, "asyncIterator");

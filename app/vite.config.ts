@@ -1,16 +1,35 @@
-import { resolve } from "path";
+import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
 import fs from "node:fs";
 import { defineConfig, Plugin } from "vite";
 import vue from "@vitejs/plugin-vue";
+import svgLoader from "@zhangyx1998/svg-loader";
 import electron from "vite-plugin-electron/simple";
+import electronPreload from "vite-plugin-electron";
 import root_package from "../package.json";
 import workspace_package from "./package.json";
+import { allEntries, entryTitle } from "./lib/windows";
 
+// The `dependencies` blocks are LOAD-BEARING: every key here becomes a Node
+// runtime EXTERNAL — excluded from prebundling, and the renderer build marks
+// it `type: "cjs"` (imports rewritten to bare `require(...)`). Only
+// Node-runtime packages belong in `dependencies` (core, serialport,
+// telecanvas, ...); a browser library placed there crashes every renderer at
+// launch with "require is not defined" from inside its ESM entry (e.g.
+// @fortawesome/fontawesome-svg-core). Browser/renderer libs go in
+// `devDependencies` — vite bundles them.
 const external = Object.keys({
     ...(root_package.dependencies ?? {}),
     ...(workspace_package.dependencies ?? {}),
 }) as string[];
+
+// Externalize the native/runtime deps AND their subpaths (e.g. `core/Aravis`,
+// `core/Vision`). Exact-string `external` misses subpaths, so the bundler would
+// inline `core`'s loader — whose internal `require("./index.cjs")` then resolves
+// against the bundle's directory (`.dist/electron`) instead of `core/dist`,
+// crashing the orchestrator with MODULE_NOT_FOUND.
+const isExternal = (id: string) =>
+    external.some((e) => id === e || id.startsWith(`${e}/`));
 
 const target = resolve(
     fileURLToPath(import.meta.url),
@@ -18,6 +37,109 @@ const target = resolve(
     ".dist",
     "electron"
 );
+
+// HMR boundary. The danger class
+// is stateful singletons and shared wire code: `lib/orchestrator/**` (Channel,
+// the module-level `connect()` channel promise, shm read pool, protocol types
+// compiled into BOTH renderer and orchestrator bundles), `lib/store.ts`, and
+// module `contract.ts` files. Hot-swapping any of these in a renderer while
+// the orchestrator keeps running old code = wire mismatch, duplicated
+// subscriptions, leaked ports/pools. Vue HMR would happily re-execute them as
+// a dep of a self-accepting SFC — so any hot update whose invalidation chain
+// REACHES one of these modules (walked via the module graph's importers)
+// escalates to a full page reload instead. Plain SFC/UI edits keep
+// hot-reloading as before. (Protocol edits additionally rebuild the
+// orchestrator via vite-plugin-electron's watch → Electron restarts → the
+// reload converges with the dev restart+restore flow.)
+const isProtocolLayer = (file: string): boolean =>
+    /\/lib\/orchestrator\//.test(file) ||
+    /\/lib\/store\.ts$/.test(file) ||
+    /\/contract\.ts$/.test(file);
+
+const hmrBoundary = (): Plugin => ({
+    name: "fovea:hmr-boundary",
+    apply: "serve",
+    handleHotUpdate(ctx) {
+        // Walk the changed modules' importer closure: a protocol-layer module
+        // anywhere in the propagation path (including the changed file
+        // itself) means this update cannot be safely hot-applied.
+        const seen = new Set<unknown>();
+        const stack = [...ctx.modules];
+        let hit = isProtocolLayer(ctx.file) ? ctx.file : null;
+        while (!hit && stack.length > 0) {
+            const mod = stack.pop()!;
+            if (seen.has(mod)) continue;
+            seen.add(mod);
+            if (mod.file && isProtocolLayer(mod.file)) {
+                hit = mod.file;
+                break;
+            }
+            stack.push(...mod.importers);
+        }
+        if (!hit) return; // normal HMR
+        ctx.server.config.logger.info(
+            `[hmr-boundary] full reload — protocol-layer module in update path: ${hit}`
+        );
+        ctx.server.ws.send({ type: "full-reload" });
+        return []; // stop HMR propagation for this update
+    },
+});
+
+// Window entry-HTML generator. The ~16 windows/*.html files were near-
+// identical — same head/body/reset, differing only in <title> and the boot
+// script — and each shipped with a one-line src/windows/<name>.ts entry. Both
+// are now GENERATED from the `@lib/windows` registry: adding a window = one
+// registry row. The 16 hand-written HTML + 6 boot one-liners are deleted; this
+// plugin re-emits the HTML (title from the registry, one inlined module script
+// that calls `bootEntry(<key>)`) on every `buildStart`, which fires for both
+// `serve` and `build` before rollup loads the inputs / before the dev server
+// responds. Generated files are gitignored; `rollupOptions.input`, the main-
+// process URL loading, and `appIdFromPathname` all keep pointing at the same
+// `windows/<key>.html` paths — they simply become generated.
+const GEN_HEADER =
+    "<!-- GENERATED by foveaWindowEntries — do not edit; source: lib/windows.ts -->";
+
+function renderEntryHtml(key: string, title: string): string {
+    return `<!doctype html>
+${GEN_HEADER}
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>${title}</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      /* No visible scroll bar */
+      ::-webkit-scrollbar {
+        display: none;
+      }
+    </style>
+  </head>
+  <body oncontextmenu="return false;" style="background-color: black">
+    <div id="app"></div>
+    <script type="module">
+      import { bootEntry } from "/src/windows/boot-entry.ts";
+      bootEntry(${JSON.stringify(key)});
+    </script>
+  </body>
+</html>
+`;
+}
+
+const foveaWindowEntries = (root: string): Plugin => ({
+    name: "fovea:window-entries",
+    buildStart() {
+        for (const [key, relPath] of Object.entries(allEntries())) {
+            const file = resolve(root, relPath);
+            fs.mkdirSync(dirname(file), { recursive: true });
+            fs.writeFileSync(file, renderEntryHtml(key, entryTitle(key)));
+        }
+    },
+});
 
 // https://vitejs.dev/config/
 export default defineConfig(({ command }) => {
@@ -28,14 +150,72 @@ export default defineConfig(({ command }) => {
     const PROJECT_ROOT = resolve(fileURLToPath(import.meta.url), "..");
     console.log("External Modules:", external);
 
+    // Shared path aliases. Applied to both the renderer and the Node (main +
+    // orchestrator) build so orchestrator code can reuse the pure-compute libs
+    // under `@lib` (pid, stereo, geometry, vergence, ...) without relocating them.
+    const alias = {
+        "@": resolve(PROJECT_ROOT, "src"),
+        "@lib": resolve(PROJECT_ROOT, "lib"),
+        "@src": resolve(PROJECT_ROOT, "src"),
+        "@modules": resolve(PROJECT_ROOT, "modules"),
+        "@orchestrator": resolve(PROJECT_ROOT, "orchestrator"),
+    };
+
     return {
         plugins: [
+            foveaWindowEntries(PROJECT_ROOT),
+            hmrBoundary(),
+            // Renderer-only (top-level plugins do NOT propagate into the
+            // electron main/preload sub-builds below — each carries its own
+            // `vite` config): compiles `import X from "./x.svg"` into an
+            // inline, style-scoped Vue component (enforce: "pre"). NOTE: the
+            // plugin's default `escapeIds` suffixes every element id with the
+            // file's scope hash — runtime consumers must match by prefix
+            // (`[id^="..."]`), see WelcomeWindow.vue. Bare `.svg` imports that
+            // want Vite's default URL handling opt out via `?url`.
+            svgLoader(),
             vue(),
             electron({
                 main: {
-                    // Shortcut of `build.lib.entry`
-                    entry: "electron/main.ts",
+                    // Shortcut of `build.lib.entry`. The orchestrator is a
+                    // second Node entry built alongside main; the main process
+                    // forks it as a utilityProcess (.dist/electron/orchestrator.js).
+                    // `vision-worker` is the per-session vision worker_thread,
+                    // bundled the SAME way as the orchestrator — the shared
+                    // `rollupOptions.external: isExternal` below externalizes `core`
+                    // + native `.node` for it identically (the worker does
+                    // `require("core")` / core/Vision + core/Tracker at runtime and
+                    // loads the shm-reader addon via a parent-passed absolute path).
+                    entry: {
+                        main: "electron/main.ts",
+                        orchestrator: "orchestrator/index.ts",
+                        "vision-worker": "orchestrator/vision-worker.ts",
+                        // Standalone viewer playback ENGINE:
+                        // forked by MAIN as a utilityProcess (one per viewer
+                        // window) — `utilityProcess.fork(DIR/viewer-worker.js)`
+                        // — NOT a renderer worker (Electron renderers can't
+                        // construct Node workers). Bundled as a Node entry like
+                        // the orchestrator: external `core` / `@mcap/core`
+                        // resolve from node_modules at runtime.
+                        "viewer-worker": "src/viewer/worker.ts",
+                        // Hardware-safety failsafe: forked by main whenever
+                        // the orchestrator dies without confirming quiescence
+                        // (MEMS disable + camera acquisition stop).
+                        janitor: "orchestrator/janitor.ts",
+                        // Camera-enumeration PROBE: a small persistent enumerate-only process
+                        // main forks at startup to feed the status-only Welcome
+                        // window a live camera list. Never opens a camera; a
+                        // Node entry like the orchestrator (external `core`).
+                        probe: "orchestrator/probe.ts",
+                        // TeleCanvas HOST server (standalone dual-mode module):
+                        // the published `telecanvas` package's server, forked by
+                        // main when `tele_canvas_mode` is "host". Its own tiny
+                        // entry (like probe) — pulls in no session graph; the
+                        // `telecanvas` dep is externalized like `core`.
+                        "telecanvas-host": "electron/telecanvas-host.ts",
+                    },
                     vite: {
+                        resolve: { alias },
                         build: {
                             sourcemap,
                             minify: isBuild,
@@ -44,20 +224,7 @@ export default defineConfig(({ command }) => {
                             // we can use `external` to exclude them to ensure they work correctly.
                             // Others need to put them in `dependencies` to ensure they are collected into `app.asar` after the app is built.
                             // Of course, this is not absolute, just this way is relatively simple. :)
-                            rollupOptions: { external },
-                        },
-                    },
-                },
-                preload: {
-                    // Shortcut of `build.rollupOptions.input`.
-                    // Preload scripts may contain Web assets, so use the `build.rollupOptions.input` instead `build.lib.entry`.
-                    input: "electron/preload.ts",
-                    vite: {
-                        build: {
-                            sourcemap: sourcemap ? "inline" : undefined, // #332
-                            minify: isBuild,
-                            outDir: target,
-                            rollupOptions: { external },
+                            rollupOptions: { external: isExternal },
                         },
                     },
                 },
@@ -72,6 +239,38 @@ export default defineConfig(({ command }) => {
                     },
                 },
             }),
+            // Preload entries build via the low-level plugin: ONE BUILD PER
+            // ENTRY, so modules shared between preloads (preload-bridge.ts)
+            // are inlined into each output instead of split into a sibling
+            // chunk — sandboxed preloads cannot require sibling chunks.
+            // Output is CJS named .cjs: unsandboxed preloads load .mjs as
+            // real ESM where bare `require` throws.
+            electronPreload(
+                ["preload-renderer", "preload-profiler", "preload-viewer"].map((name) => ({
+                    // Preload change → reload pages; never args.startup()
+                    // here (the simple() plugin above owns the Electron
+                    // process — a second startup would double-launch).
+                    onstart: (args) => args.reload(),
+                    vite: {
+                        resolve: { alias },
+                        build: {
+                            sourcemap: sourcemap ? "inline" : undefined,
+                            minify: isBuild,
+                            outDir: target,
+                            // Explicit lib config: the plugin otherwise
+                            // derives formats from package `type` (module →
+                            // "es"), emitting ESM into a .cjs file — the same
+                            // bare-`require`-throws failure, one layer down.
+                            lib: {
+                                entry: { [name]: `electron/${name}.ts` },
+                                formats: ["cjs"],
+                                fileName: () => `${name}.cjs`,
+                            },
+                            rollupOptions: { external: isExternal },
+                        },
+                    },
+                }))
+            ),
         ],
         server:
             process.env.VSCODE_DEBUG &&
@@ -86,16 +285,23 @@ export default defineConfig(({ command }) => {
         optimizeDeps: {
             exclude: external,
         },
-        resolve: {
-            alias: {
-                "@": resolve(PROJECT_ROOT, "src"),
-                "@lib": resolve(PROJECT_ROOT, "lib"),
-                "@src": resolve(PROJECT_ROOT, "src"),
-                "@modules": resolve(PROJECT_ROOT, "modules"),
-            },
-        },
+        resolve: { alias },
         build: {
             outDir: resolve(PROJECT_ROOT, ".dist", "renderer"),
+            // Multi-entry renderer:
+            // one entry HTML per window class/app from the `@lib/windows`
+            // catalog. The legacy single-window index.html is gone — every
+            // window is a windows/* entry. Renderer entries MAY share chunks
+            // — they're http/file-served pages; the one-build-per-entry rule
+            // applies to preloads only.
+            rollupOptions: {
+                input: Object.fromEntries(
+                    Object.entries(allEntries()).map(([name, entry]) => [
+                        name,
+                        resolve(PROJECT_ROOT, entry),
+                    ])
+                ),
+            },
         },
     };
 });

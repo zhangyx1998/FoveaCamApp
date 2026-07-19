@@ -74,7 +74,7 @@ function update(value: number) {
       border-radius: 4px;
       padding: 0.1em;
       &:focus {
-        outline: 2px solid var(--theme, #08c);
+        outline: 2px solid var(--theme, var(--accent));
       }
     }
   }

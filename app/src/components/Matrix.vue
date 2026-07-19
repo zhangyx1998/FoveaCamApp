@@ -4,7 +4,7 @@
  * You may find the full license in project root directory.
  --------------------------------------------------------- -->
 <script setup lang="ts">
-import { Mat } from "core/Vision";
+import type { Mat } from "core/Vision";
 import { computed } from "vue";
 const props = defineProps<{ mat: Mat; round?: number }>();
 const h = computed(() => props.mat.shape[0] ?? 0);
@@ -33,7 +33,7 @@ function format(v?: number | bigint) {
 
 <style scoped lang="scss">
 .matrix {
-  border: 1px solid #ccc;
+  border: 1px solid var(--text-dim);
   .row {
     .cell {
       //   width: 2em;
@@ -41,8 +41,8 @@ function format(v?: number | bigint) {
       //   line-height: 2em;
       text-align: right;
       padding: 0.2em 0.5em;
-      border: 1px solid #eee;
-      font-family: monospace;
+      border: 1px solid var(--text-bright);
+      font-family: var(--font-mono);
     }
   }
 }

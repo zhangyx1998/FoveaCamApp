@@ -13,34 +13,51 @@
 
 namespace Protocol {
 
+// Methods occupy the header's upper nibble. GET/SET are requests; ACK/REJ/FIN
+// are responses. FIN completes the originating request sequence only for
+// two-phase properties (CMD_ACTUATE, CMD_TRIGGER, CMD_FRAME); single-phase
+// properties resolve on ACK alone. SYN is push data, not a request response.
+#define FOVEA_PROTOCOL_METHODS(X)                                             \
+  X(NOP, 0x00)                                                                \
+  X(GET, 0x10)                                                                \
+  X(SET, 0x20)                                                                \
+  X(ACK, 0x30)                                                                \
+  X(REJ, 0x40)                                                                \
+  X(FIN, 0x50)                                                                \
+  X(SYN, 0xF0)
+
 typedef enum Method : uint8_t {
-  NOP = 0x00,
-  // Request
-  GET = 0x10,
-  SET = 0x20,
-  // Response
-  ACK = 0x30,
-  REJ = 0x40,
-  // Push data (not by request)
-  SYN = 0xF0,
+#define FOVEA_PROTOCOL_METHOD_ENUM(Name, Value) Name = Value,
+  FOVEA_PROTOCOL_METHODS(FOVEA_PROTOCOL_METHOD_ENUM)
+#undef FOVEA_PROTOCOL_METHOD_ENUM
 } Method;
 
+// Properties occupy the header's lower nibble. SYS_* are System properties;
+// CFG_* are Configuration properties; CMD_STREAM/CMD_FRAME cover stream
+// lifecycle, continuous position updates, and triggered frames; CMD_ACTUATE
+// and CMD_TRIGGER are Commands. LOG is pushed from the MCU to the host.
+// SYS_TIMESTAMP (clock calibration, v1.1) sits out of group order because the
+// existing nibble values are frozen on the wire.
+#define FOVEA_PROTOCOL_PROPERTIES(X)                                          \
+  X(NONE, 0x00)                                                               \
+  X(SYS_INFO, 0x01)                                                           \
+  X(SYS_VERSION, 0x02)                                                        \
+  X(SYS_RESET, 0x03)                                                          \
+  X(SYS_ENABLE, 0x04)                                                         \
+  X(CFG_LOG, 0x05)                                                            \
+  X(CFG_LPF, 0x06)                                                            \
+  X(CFG_BIAS, 0x07)                                                           \
+  X(CMD_STREAM, 0x08)                                                         \
+  X(CMD_FRAME, 0x09)                                                          \
+  X(CMD_ACTUATE, 0x0A)                                                        \
+  X(CMD_TRIGGER, 0x0B)                                                        \
+  X(SYS_TIMESTAMP, 0x0C)                                                      \
+  X(LOG, 0x0F)
+
 typedef enum Property : uint8_t {
-  NONE = 0x00,
-  // System
-  SYS_INFO = 0x01,
-  SYS_VERSION = 0x02,
-  SYS_RESET = 0x03,
-  SYS_ENABLE = 0x04,
-  // Configuration
-  CFG_LOG = 0x05,
-  CFG_LPF = 0x06,
-  CFG_BIAS = 0x07,
-  // Commands
-  CMD_ACTUATE = 0x0A,
-  CMD_TRIGGER = 0x0B,
-  // Push LOG to host
-  LOG = 0x0F,
+#define FOVEA_PROTOCOL_PROPERTY_ENUM(Name, Value) Name = Value,
+  FOVEA_PROTOCOL_PROPERTIES(FOVEA_PROTOCOL_PROPERTY_ENUM)
+#undef FOVEA_PROTOCOL_PROPERTY_ENUM
 } Property;
 
 using Vector = std::vector<uint8_t>;
@@ -67,6 +84,9 @@ template <typename Int> inline constexpr uint8_t u8(Int v, unsigned shift) {
   typedef struct NAME NAME;                                                    \
   struct __attribute__((__packed__)) NAME
 
+// Sequence == 0 marks a fire-and-forget request: the firmware performs the
+// action but sends no ACK/FIN/REJ (used for high-rate stream UPDATEs). SYN
+// pushes (e.g. LOG) are unrelated and always sent regardless of sequence.
 typedef uint16_t Sequence;
 
 PACKED(Header) {
@@ -173,6 +193,12 @@ public:
   }
 };
 
+// Finalizes and transmits a response/push packet, honoring the seq==0
+// fire-and-forget convention (no bytes go out for ACK/FIN/REJ with seq==0).
+// Implemented per-platform (firmware/src/Protocol.cpp on the MCU side);
+// unused (and unimplemented) on the host.
+void send(RawPacket &packet);
+
 template <Property P> class Packet {
 public:
   static inline constexpr Property PROPERTY = P;
@@ -189,6 +215,9 @@ public:
     }
     static inline RawPacket REJ(uint16_t seq) {
       return {Method::REJ, PROPERTY, seq};
+    }
+    static inline RawPacket FIN(uint16_t seq) {
+      return {Method::FIN, PROPERTY, seq};
     }
     static inline RawPacket SYN(uint16_t seq) {
       return {Method::SYN, PROPERTY, seq};
@@ -219,6 +248,9 @@ public:
   // Declaration of packet handler, may not be implemented if unused
   // Only used on MCU side
   static void GET(const Sequence &seq);
+  // Payload-carrying GET overload (e.g. CMD_FRAME, a request with an
+  // argument rather than a plain read).
+  static void GET(const Sequence &seq, Inflated);
   static void SET(const Sequence &seq, Inflated);
   static void ACK(const Sequence &seq, Inflated);
   static void SYN(const Sequence &seq, Inflated);

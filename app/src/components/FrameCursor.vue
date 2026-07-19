@@ -1,12 +1,16 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import type { Point, Size } from "core/Geometry";
+import type { Point, Point2d, Size } from "core/Geometry";
 import type { Undistort } from "core/Vision";
 import { deg } from "@lib/util/math";
 
 const props = defineProps<{
   cursor: (Point & Partial<Size>) | null;
   undistort?: Undistort | null;
+  // Pre-resolved angle (radians) for the degree label — for callers that no
+  // longer hold an `Undistort` locally (orchestrator-migrated modules).
+  // Takes precedence over `undistort` when present.
+  angle?: Point2d | null;
   color?: string;
   box?: "rect" | "circle" | "dot";
   size?: number;
@@ -21,8 +25,10 @@ const r = computed(() => {
   return Math.min(width, height) * 0.01 * (props.size ?? 1);
 });
 const a = computed(() => {
+  if (!props.cursor) return null;
+  if (props.angle) return { x: deg(props.angle.x), y: deg(props.angle.y) };
   const { undistort: u } = props;
-  if (!props.cursor || !u) return null;
+  if (!u) return null;
   const [angle] = u.angular([props.cursor], true);
   return {
     x: deg(angle.x),
@@ -77,7 +83,7 @@ const a = computed(() => {
         :font-size="r * 3"
         :text-anchor="x < w / 2 ? 'start' : 'end'"
         dominant-baseline="hanging"
-        >{{ a.x.toFixed(2) }} deg</text
+        >{{ a.x.toFixed(2) }}°</text
       >
       <text
         :x="r"
@@ -86,7 +92,7 @@ const a = computed(() => {
         :font-size="r * 3"
         text-anchor="start"
         :dominant-baseline="y < h / 2 ? 'hanging' : 'bottom'"
-        >{{ a.y.toFixed(2) }} deg</text
+        >{{ a.y.toFixed(2) }}°</text
       >
     </template>
     <rect

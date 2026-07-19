@@ -1,15 +1,17 @@
 {
   "compilerOptions": {
-    "baseUrl": ".",
     "paths": {
       "@lib/*": [
-        "lib/*"
+        "./lib/*"
       ],
       "@src/*": [
-        "src/*"
+        "./src/*"
       ],
       "@modules/*": [
-        "modules/*"
+        "./modules/*"
+      ],
+      "@orchestrator/*": [
+        "./orchestrator/*"
       ],
     },
     "target": "ESNext",
@@ -26,18 +28,19 @@
       "DOM"
     ],
     "skipLibCheck": true,
-    "noEmit": true
+    "noEmit": true,
+    "types": [
+      "vite/client",
+      "@zhangyx1998/svg-loader/client"
+    ]
   },
   "include": [
     "src",
     "lib",
     "modules",
+    "orchestrator",
     "scripts",
+    "test/port-pipe.types.ts",
     "*.d.ts"
-  ],
-  "references": [
-    {
-      "path": "./tsconfig.node.json"
-    }
   ]
 }

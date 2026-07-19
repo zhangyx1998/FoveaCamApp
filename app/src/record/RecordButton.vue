@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { FontAwesomeIcon as Icon } from "@fortawesome/vue-fontawesome";
 import { faCircle } from "@fortawesome/free-solid-svg-icons";
 import { overlay } from "@src/components/Overlay.vue";
@@ -12,6 +12,44 @@ const isRecording = computed(
 );
 const streams = computed(() => current_recording.value?.streams);
 const hover = ref(false);
+
+// Cmd/Ctrl-R consumer. Main rebinds plain
+// Cmd/Ctrl-R off reload and pushes `recorder:trigger` to the focused window;
+// here it toggles recording where a context exists — start (resolving the save
+// path exactly like RecordControls' Start button) / stop — else a no-op.
+let triggerBusy = false;
+async function handleRecorderTrigger(): Promise<void> {
+  if (triggerBusy) return;
+  const rec = current_recording.value;
+  if (!rec) return; // no recording context here → no-op
+  triggerBusy = true;
+  try {
+    if (rec.active.value) {
+      await rec.stop();
+    } else {
+      // Same resolution RecordControls.start() does, but against the current
+      // save-path defaults (no dialog): resolve <dir>/<sequence>, start, bump.
+      const path = rec.current_path;
+      const full = await window.foveaBridge.resolvePath(path, rec.sequence);
+      await rec.start(full);
+      rec.updateSequence(rec.sequence);
+      rec.current_path = path;
+    }
+  } finally {
+    triggerBusy = false;
+  }
+}
+
+let disposeTrigger: (() => void) | null = null;
+onMounted(() => {
+  disposeTrigger =
+    window.foveaBridge?.onRecorderTrigger?.(() => void handleRecorderTrigger()) ??
+    null;
+});
+onBeforeUnmount(() => {
+  disposeTrigger?.();
+  disposeTrigger = null;
+});
 
 function formatSize(bytes: number): string {
   if (bytes >= 1024 * 1024 * 1024)
@@ -43,13 +81,33 @@ function handleClick() {
       </div>
     </button>
     <table v-if="isRecording && hover && streams" class="record-tooltip">
-      <tr v-for="[name, info] of streams" :key="name">
-        <td class="stream-name">{{ name }}</td>
-        <td class="stream-frames">{{ info.frames }}</td>
-        <td class="stream-fps">{{ info.fps.toFixed(1) }} fps</td>
-        <td class="stream-bytes">{{ formatSize(info.bytes) }}</td>
-        <td v-if="info.dropped" class="stream-dropped">-{{ info.dropped }}</td>
-      </tr>
+      <thead>
+        <tr>
+          <th></th>
+          <th>pub</th>
+          <th>wrote</th>
+          <th>fps</th>
+          <th>size</th>
+          <th>drops</th>
+        </tr>
+      </thead>
+      <tbody>
+        <!-- published = written + drops (pinned invariant); the drops cell
+             splits queue-overflow (q) vs ring-lapped (r) so a recording run
+             reads the cause without devtools. -->
+        <tr v-for="[name, info] of streams" :key="name">
+          <td class="stream-name">{{ name }}</td>
+          <td class="stream-pub">{{ info.frames + info.dropped }}</td>
+          <td class="stream-frames">{{ info.frames }}</td>
+          <td class="stream-fps">{{ info.fps.toFixed(1) }}</td>
+          <td class="stream-bytes">{{ formatSize(info.bytes) }}</td>
+          <td v-if="info.dropped" class="stream-dropped">
+            -{{ info.dropped }}
+            <span class="drop-cause">(q{{ info.droppedQueue ?? 0 }}/r{{ info.droppedRing ?? 0 }})</span>
+          </td>
+          <td v-else class="stream-dropped ok">0</td>
+        </tr>
+      </tbody>
     </table>
   </div>
 </template>
@@ -67,15 +125,16 @@ function handleClick() {
   cursor: pointer;
   color: inherit;
   border-radius: 4px;
-  transition: all 0.1s;
+  // Critical control (record toggle): instant hover feedback, no transition
+  // (realtime feedback / snap over smooth).
   outline: 1px solid transparent;
 
   &:hover {
-    background: #fff1;
+    background: var(--tint-1);
   }
 
   &:not(.active):not(:disabled):hover {
-    outline: 1px solid #666;
+    outline: 1px solid var(--border-muted);
   }
   .circle-outline {
     border-radius: 50%;
@@ -93,7 +152,7 @@ function handleClick() {
   }
 
   &.active .circle-outline {
-    color: #f33;
+    color: var(--danger-strong);
     animation: record-blink 1s steps(1, end) infinite;
   }
 
@@ -120,36 +179,61 @@ function handleClick() {
   right: 0;
   margin-top: 4px;
   padding: 0.5em 0.8em;
+  /* translucent panel wash (kept literal — no semantic token for the alpha) */
   background: #222e;
   backdrop-filter: blur(8px);
-  border: 1px solid #fff3;
+  border: 1px solid var(--tint-3);
   border-radius: 4px;
   white-space: nowrap;
   font-size: 0.75em;
   z-index: 100;
   pointer-events: none;
 
+  th {
+    font-family: var(--font-mono);
+    padding: 0 0.5ch 0.2em;
+    color: var(--text-faint);
+    font-weight: 600;
+    text-align: right;
+    &:first-child {
+      text-align: left;
+    }
+  }
+
   td {
-    font-family: monospace;
+    font-family: var(--font-mono);
     padding: 0 0.5ch;
     &.stream-name {
-      color: #aaa;
+      color: var(--text-muted);
+    }
+    &.stream-pub {
+      color: var(--text-dim);
+      text-align: right;
     }
     &.stream-frames {
-      color: #fff;
+      color: var(--text);
       text-align: right;
     }
     &.stream-fps {
-      color: #8f8;
+      color: var(--ok);
       text-align: right;
     }
+    // Telemetry categorical accents (bytes blue / drop-cause dim red / drops-ok
+    // dim green) kept literal — a per-column palette, not a semantic role.
     &.stream-bytes {
       color: #8cf;
       text-align: right;
     }
     &.stream-dropped {
-      color: #f66;
+      color: var(--danger-text);
       text-align: right;
+      &.ok {
+        color: #575;
+      }
+      .drop-cause {
+        color: #b77;
+        font-size: 0.85em;
+      }
     }
   }
 }

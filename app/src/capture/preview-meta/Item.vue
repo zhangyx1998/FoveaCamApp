@@ -69,7 +69,7 @@ const entries = computed(() => {
       font-weight: bold;
     }
     .preview {
-      color: gray;
+      color: var(--text-faint);
     }
   }
 }

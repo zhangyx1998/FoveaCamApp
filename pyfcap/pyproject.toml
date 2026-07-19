@@ -1,0 +1,40 @@
+# ------------------------------------------------------
+# Copyright (c) 2026 Yuxuan Zhang, dev@z-yx.cc
+# This source code is licensed under the MIT license.
+# You may find the full license in project root directory.
+# -------------------------------------------------------
+#
+# fcap — Python reader/CLI for FoveaCam recordings (.fcap MCAP containers,
+# legacy .fovea containers, + the legacy .stream/.meta dumps). The
+# distribution name is "fcap"; check PyPI name availability before publishing.
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fcap"
+version = "0.1.0"
+description = "Reader and CLI for FoveaCam Duo recordings (.fcap MCAP containers, legacy .fovea, and legacy .stream/.meta dumps)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Yuxuan Zhang", email = "dev@z-yx.cc" }]
+dependencies = [
+    "mcap>=1.4",
+    "numpy>=1.26",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+# Demosaic/display helpers use OpenCV when present; the core reader does not.
+cv = ["opencv-python>=4.8"]
+
+[project.scripts]
+fcap = "fcap.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

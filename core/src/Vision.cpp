@@ -118,10 +118,21 @@ static FN(convertType) {
   JS_EXCEPT(env.Undefined())
 }
 
+// MatView adoption: the hot READ-ONLY kernels below take `convert<cv::MatView>`
+// — a zero-copy Mat header over the caller's TypedArray (the JS ref is pinned
+// for the view's lifetime) — instead of memcpy'ing the full input into a fresh
+// Mat. Each adopted kernel is verified for in-place aliasing: none may write
+// through the view (a kernel that mutates its input keeps the copying
+// converter). Sync kernels drop the view before returning; the async ones
+// (matchTemplate) ride shared_ptr<MatView> captured into the AsyncTask —
+// AsyncWorker destroys the lambda on the JS thread, so the pinned ref is
+// released where NAPI requires. Conformance + micro-bench: core/test/48.
+
 static FN(cvtColor) {
   auto env = info.Env();
   try {
-    auto mat = convert<cv::Mat>(info[0]);
+    // READ-ONLY: cvtColor(src → dst), dst distinct — never writes the view.
+    const auto mat = convert<cv::MatView>(info[0]);
     const auto code = convert<CvtColorCode>(info[1]);
     cv::Mat converted;
     cv::cvtColor(mat, converted, code);
@@ -133,7 +144,8 @@ static FN(cvtColor) {
 static FN(slice) {
   auto env = info.Env();
   try {
-    auto mat = convert<cv::Mat>(info[0]);
+    // READ-ONLY: the ROI is copyTo'd into the fresh zero-filled output.
+    const auto mat = convert<cv::MatView>(info[0]);
     auto rect = convert<cv::Rect>(info[1]);
     if (rect.width <= 0 || rect.height <= 0)
       throw JS::Error(env, "Invalid slice size " + to_string(rect.width) + "x" +
@@ -198,34 +210,52 @@ static FN(resize) {
 static FN(heatmap) {
   const auto env = info.Env();
   try {
-    auto mat = convert<cv::Mat>(info[0]);
+    // READ-ONLY: the caller's buffer is a zero-copy view, so every step lands
+    // in a distinct working Mat and the caller's buffer is never written. The
+    // no-op 8U/no-norm path shares the view's header (read-only below).
+    const auto view = convert<cv::MatView>(info[0]);
     auto norm = optionalArgument<bool>(info[1], false);
-    if (mat.channels() != 1)
+    if (view.channels() != 1)
       throw JS::Error(env, "Heatmap input must be single channel matrix");
-    switch (mat.type()) {
+    cv::Mat mat; // the 8U mono working image
+    switch (view.type()) {
     case CV_8UC1:
       if (norm)
-        cv::normalize(mat, mat, 0xff, 0, NORM_MINMAX);
+        cv::normalize(view, mat, 0xff, 0, NORM_MINMAX);
+      else
+        mat = view; // header share — strictly read from here on
       break;
     case CV_16UC1:
-      if (norm)
-        cv::normalize(mat, mat, 0xffff, 0, NORM_MINMAX);
-      mat.convertTo(mat, CV_8UC1, 255.0 / 65535.0);
+      if (norm) {
+        cv::Mat n;
+        cv::normalize(view, n, 0xffff, 0, NORM_MINMAX);
+        n.convertTo(mat, CV_8UC1, 255.0 / 65535.0);
+      } else {
+        view.convertTo(mat, CV_8UC1, 255.0 / 65535.0);
+      }
       break;
     case CV_16SC1:
-      if (norm)
-        cv::normalize(mat, mat, static_cast<double>(INT32_MAX), 0, NORM_MINMAX);
-      mat.convertTo(mat, CV_8UC1, 255.0 / static_cast<double>(INT32_MAX));
+      if (norm) {
+        cv::Mat n;
+        cv::normalize(view, n, static_cast<double>(INT32_MAX), 0, NORM_MINMAX);
+        n.convertTo(mat, CV_8UC1, 255.0 / static_cast<double>(INT32_MAX));
+      } else {
+        view.convertTo(mat, CV_8UC1, 255.0 / static_cast<double>(INT32_MAX));
+      }
       break;
     case CV_16FC1:
     case CV_32FC1:
     case CV_64FC1:
-      if (norm)
-        cv::normalize(mat, mat, 1.0, 0, NORM_MINMAX);
-      mat.convertTo(mat, CV_8UC1, 255.0);
+      if (norm) {
+        cv::Mat n;
+        cv::normalize(view, n, 1.0, 0, NORM_MINMAX);
+        n.convertTo(mat, CV_8UC1, 255.0);
+      } else {
+        view.convertTo(mat, CV_8UC1, 255.0);
+      }
       break;
     default:
-      throw JS::Error(env, "Unsupported matrix type " + to_string(mat.type()) +
+      throw JS::Error(env, "Unsupported matrix type " + to_string(view.type()) +
                                " for heatmap conversion");
     }
     cv::Mat channels[4];                             // RGBA8
@@ -252,12 +282,39 @@ inline Size2i toSize(const Napi::Value &value) {
 static FN(gaussian) {
   const auto env = info.Env();
   try {
-    auto mat = convert<cv::Mat>(info[0]);
+    // READ-ONLY: a zero-copy view must blur src → dst (distinct) so the
+    // caller's buffer stays unwritten. Same observable result: a fresh blurred
+    // output array.
+    const auto mat = convert<cv::MatView>(info[0]);
     const auto ksize = toSize(info[1]); // Ensure odd size
     const auto sigmaX = optionalArgument<double>(info[2], 2);
     const auto sigmaY = optionalArgument<double>(info[3], sigmaX);
-    cv::GaussianBlur(mat, mat, ksize, sigmaX, sigmaY);
-    return convert(env, mat);
+    cv::Mat blurred;
+    cv::GaussianBlur(mat, blurred, ksize, sigmaX, sigmaY);
+    return convert(env, blurred);
+  }
+  JS_EXCEPT(env.Undefined())
+}
+
+// ASYNC gaussian: moves the marker tracker's fitSubPix full-frame blur OFF the
+// orchestrator loop (it otherwise runs synchronously every detection tick).
+// Same math/args as `gaussian`; the work runs on the
+// AsyncTask worker, with the input riding a shared_ptr<MatView> (the
+// matchTemplate pattern — read-only, ref released on the JS thread by the
+// AsyncWorker; the caller must not mutate the input while pending).
+static FN(gaussianAsync) {
+  const auto env = info.Env();
+  try {
+    auto mat = std::make_shared<cv::MatView>(convert<cv::MatView>(info[0]));
+    const auto ksize = toSize(info[1]); // Ensure odd size
+    const auto sigmaX = optionalArgument<double>(info[2], 2);
+    const auto sigmaY = optionalArgument<double>(info[3], sigmaX);
+    auto task = [mat, ksize, sigmaX, sigmaY] {
+      cv::Mat blurred;
+      cv::GaussianBlur(*mat, blurred, ksize, sigmaX, sigmaY);
+      return blurred;
+    };
+    return AsyncTask<cv::Mat>::run(env, task, "gaussianAsync(" + tag(*mat) + ")");
   }
   JS_EXCEPT(env.Undefined())
 }
@@ -284,18 +341,25 @@ inline cv::Mat mono(const cv::Mat &mat) {
 static FN(diff) {
   const auto env = info.Env();
   try {
-    auto a = convert<cv::Mat>(info[0]);
-    auto b = convert<cv::Mat>(info[1]);
+    // mono() returns a SHARING header when the input is already grayscale, so
+    // the CLAHE stage below must write into a DISTINCT mat — an in-place apply
+    // would mutate the caller's buffer through the view. Everything else only
+    // reads a/b (merge inputs).
+    const auto va = convert<cv::MatView>(info[0]);
+    const auto vb = convert<cv::MatView>(info[1]);
     auto norm = optionalArgument(info[2], false);
-    if (a.cols != b.cols || a.rows != b.rows || a.type() != b.type())
+    if (va.cols != vb.cols || va.rows != vb.rows || va.type() != vb.type())
       throw JS::Error(env, "Frame size or type mismatch for image diff");
     // Ensure a and b are grayscale
-    a = mono(a);
-    b = mono(b);
+    cv::Mat a = mono(va);
+    cv::Mat b = mono(vb);
     if (norm) {
       cv::Ptr<cv::CLAHE> clahe = cv::createCLAHE(2.0, cv::Size(8, 8));
-      clahe->apply(a, a);
-      clahe->apply(b, b);
+      cv::Mat an, bn;
+      clahe->apply(a, an);
+      clahe->apply(b, bn);
+      a = an;
+      b = bn;
     }
     // Red v.s. Blue, green = min of both
     // Use OpenCV's vectorized operations for efficiency
@@ -316,7 +380,8 @@ static FN(diff) {
 static FN(minMaxLoc) {
   auto env = info.Env();
   try {
-    auto mat = convert<cv::Mat>(info[0]);
+    // READ-ONLY: pure reduction over the view.
+    const auto mat = convert<cv::MatView>(info[0]);
     double minVal, maxVal;
     cv::Point minLoc, maxLoc;
     cv::minMaxLoc(mat, &minVal, &maxVal, &minLoc, &maxLoc);
@@ -341,22 +406,27 @@ static FN(minMaxLoc) {
 static FN(matchTemplate) {
   auto env = info.Env();
   try {
-    auto haystack = convert<cv::Mat>(info[0]);
-    auto needle = convert<cv::Mat>(info[1]);
+    // READ-ONLY + ASYNC: matchTemplate(src, tmpl → result) never writes its
+    // inputs. The views ride shared_ptr into the AsyncTask lambda (MatView is
+    // move-only; std::function needs copyable) — the AsyncWorker destroys the
+    // lambda on the JS thread, releasing the pinned refs where NAPI requires.
+    // Caveat (same as any zero-copy async read): the caller must not MUTATE
+    // the input TypedArrays while the promise is pending — the worker thread
+    // reads them live, not a snapshot.
+    auto haystack =
+        std::make_shared<cv::MatView>(convert<cv::MatView>(info[0]));
+    auto needle = std::make_shared<cv::MatView>(convert<cv::MatView>(info[1]));
     const auto method =
         optionalArgument<TemplateMatchModes>(info[2], TM_SQDIFF_NORMED);
     auto task = [haystack, needle, method] {
       cv::Mat result;
-      cv::matchTemplate(haystack, needle, result, method);
+      cv::matchTemplate(*haystack, *needle, result, method);
       return result;
     };
-    const auto action = "matchTemplate(" + tag(haystack) + ", " + tag(needle) +
-                        ", " + convert<std::string>(method) + ")";
     return AsyncTask<cv::Mat>::run(env, task,
-                                   "matchTemplate(" + tag(haystack) + ", " +
-                                       tag(needle) + ", " +
+                                   "matchTemplate(" + tag(*haystack) + ", " +
+                                       tag(*needle) + ", " +
                                        convert<std::string>(method) + ")");
-    return env.Undefined();
   }
   JS_EXCEPT(env.Undefined())
 }
@@ -406,15 +476,25 @@ static FN(calibrateCamera) {
     auto sensor_size = convert<cv::Size2i>(info[0]);
     auto img_points = convert<vector<Points2D>>(info[1]);
     auto obj_points = convert<vector<Points3D>>(info[2]);
+    // Termination: a loose epsilon (e.g. 0.01, vs OpenCV's own DBL_EPSILON) can
+    // freeze the distortion coefficients after the first LM steps on well-posed
+    // sets, so use 1e-9 to let the solve actually converge; 50 iterations give
+    // a tight epsilon headroom to be the terminating condition (a solve this
+    // size is milliseconds per iteration — the AsyncTask keeps it off the loop).
     auto criteria = optionalArgument<cv::TermCriteria>(
         info[3],
-        {cv::TermCriteria::EPS + cv::TermCriteria::MAX_ITER, 30, 0.01});
+        {cv::TermCriteria::EPS + cv::TermCriteria::MAX_ITER, 50, 1e-9});
     auto task = [env, sensor_size, img_points, obj_points, criteria] {
       auto ret = CameraCalibration::create();
       ret->sensor_size = sensor_size;
-      cv::calibrateCamera(obj_points, img_points, sensor_size,
-                          ret->camera_matrix, ret->dist_coeffs, ret->rvecs,
-                          ret->tvecs, 0, criteria);
+      // flags = 0 keeps k3 FREE. CALIB_FIX_K3 was considered (k3 is poorly
+      // constrained by few boards and can go wild) and DEFERRED: few-board
+      // solves are gated by the min-record count upstream instead of biasing
+      // well-sampled solves, and the persisted
+      // record format carries all 5 coefficients either way.
+      ret->rms = cv::calibrateCamera(obj_points, img_points, sensor_size,
+                                     ret->camera_matrix, ret->dist_coeffs,
+                                     ret->rvecs, ret->tvecs, 0, criteria);
       return ret;
     };
     return AsyncTask<CameraCalibration::Ptr>::run(env, task,
@@ -441,6 +521,30 @@ static FN(findHomography) {
   JS_EXCEPT(env.Undefined());
 }
 
+// ASYNC findHomography: moves fitSubPix's up-to-3× RANSAC per tick OFF the
+// orchestrator loop. Same args/defaults as the sync form; inputs are plain
+// point vectors (copied — no buffer aliasing).
+static FN(findHomographyAsync) {
+  const auto env = info.Env();
+  try {
+    auto src_points = convert<Points2D>(info[0]);
+    auto dst_points = convert<Points2D>(info[1]);
+    const auto method =
+        optionalArgument<EstimationMethod>(info[2], EstimationMethod::RANSAC);
+    const auto ransacReprojThreshold = optionalArgument<double>(info[3], 3.0);
+    const auto maxIters = optionalArgument<int>(info[4], 2000);
+    const auto confidence = optionalArgument<double>(info[5], 0.995);
+    auto task = [src_points, dst_points, method, ransacReprojThreshold,
+                 maxIters, confidence] {
+      return cv::findHomography(src_points, dst_points, method,
+                                ransacReprojThreshold, noArray(), maxIters,
+                                confidence);
+    };
+    return AsyncTask<cv::Mat>::run(env, task, "findHomographyAsync");
+  }
+  JS_EXCEPT(env.Undefined());
+}
+
 static FN(projectHomography) {
   const auto env = info.Env();
   try {
@@ -456,7 +560,9 @@ static FN(projectHomography) {
 static FN(wrapPerspective) {
   const auto env = info.Env();
   try {
-    auto src = convert<cv::Mat>(info[0]);
+    // READ-ONLY src: warpPerspective(src → dst), dst distinct. The 3×3
+    // homography stays on the copying converter (trivial size).
+    const auto src = convert<cv::MatView>(info[0]);
     auto homography = convert<cv::Mat>(info[1]);
     const auto flags =
         optionalArgument<InterpolationFlags>(info[2], cv::INTER_LINEAR);
@@ -473,13 +579,25 @@ static FN(wrapPerspective) {
 static FN(disparity) {
   const auto env = info.Env();
   try {
-    auto left = mono(convert<cv::Mat>(info[0]));
-    auto right = mono(convert<cv::Mat>(info[1]));
+    // READ-ONLY: StereoBM reads both inputs, writes a fresh disparity map.
+    // mono() shares the view's header when the input is already grayscale
+    // (no copy); the returned local Mats keep the JS buffers alive for the
+    // synchronous compute only.
+    const auto vl = convert<cv::MatView>(info[0]);
+    const auto vr = convert<cv::MatView>(info[1]);
+    cv::Mat left = mono(vl);
+    cv::Mat right = mono(vr);
     const auto numDisparities = optionalArgument<int>(info[2], 0);
     const auto blockSize = optionalArgument<int>(info[3], 21);
+    // Signed search window: foveated (independently steered) gaze makes the
+    // true L↔R disparity SIGNED; an unsigned 0…N default matches garbage.
+    // Default 0 preserves the prior unsigned behavior byte-for-byte.
+    const auto minDisparity = optionalArgument<int>(info[4], 0);
     cv::Mat disparity;
     cv::Ptr<cv::StereoBM> stereo =
         cv::StereoBM::create(numDisparities, blockSize);
+    if (minDisparity != 0)
+      stereo->setMinDisparity(minDisparity);
     stereo->compute(left, right, disparity);
     return convert(env, disparity);
   }
@@ -509,33 +627,44 @@ static FN(depthFromProjection) {
     // Check if projected has 3 channels
     if (projected.channels() != 3)
       throw JS::Error(env, "Input to depthFromProjection must have 3 channels");
-    // Extract Z channel
+    // Extract Z channel. Edge handling: pass 1 clamps FINITE Z into [near, far]
+    // and accumulates min/max over finite values ONLY (an Inf reaching min/max
+    // — possible with the default ±Inf clamp bounds — would poison the
+    // normalization); pass 2 maps non-finite pixels into the DISPLAY range
+    // (NaN/−Inf → 0 = near end, +Inf → 255 = far end) instead of writing raw mm
+    // into a 0-255 image, and a zero span (flat scene / single depth) renders
+    // mid-scale instead of dividing 0/0 into NaN pixels. The finite path with
+    // finite bounds is byte-identical to a plain clamp+normalize.
     cv::Mat z = cv::Mat(projected.rows, projected.cols, CV_32FC1);
-    // Clamp Z values to [near, far]
     double z_min = INFINITY, z_max = -INFINITY;
     for (int y = 0; y < projected.rows; ++y) {
       for (int x = 0; x < projected.cols; ++x) {
         float z_val = projected.at<cv::Vec3f>(y, x)[2];
-        if (z_val < near) {
-          z.at<float>(y, x) = near;
-        } else if (z_val > far) {
-          z.at<float>(y, x) = far;
-        } else {
-          z.at<float>(y, x) = z_val;
+        if (std::isfinite(z_val)) {
+          if (z_val < near)
+            z_val = static_cast<float>(near);
+          else if (z_val > far)
+            z_val = static_cast<float>(far);
+          // near/far may themselves be ±Inf (defaults) — only fold FINITE
+          // results into the normalization range.
+          if (std::isfinite(z_val)) {
+            z_min = std::min(z_min, static_cast<double>(z_val));
+            z_max = std::max(z_max, static_cast<double>(z_val));
+          }
         }
-        z_min = std::min(z_min, static_cast<double>(z.at<float>(y, x)));
-        z_max = std::max(z_max, static_cast<double>(z.at<float>(y, x)));
+        z.at<float>(y, x) = z_val;
       }
     }
+    const double span = z_max - z_min;
     for (int y = 0; y < z.rows; ++y) {
       for (int x = 0; x < z.cols; ++x) {
         float &z_val = z.at<float>(y, x);
-        if (std::isinf(z_val)) {
-          z_val = far;
-        } else if (std::isnan(z_val)) {
-          z_val = near;
+        if (std::isnan(z_val) || z_val == -INFINITY) {
+          z_val = 0; // near end of the display range
+        } else if (z_val == INFINITY) {
+          z_val = 255; // far end of the display range
         } else {
-          z_val = 255.0 * (z_val - z_min) / (z_max - z_min);
+          z_val = span > 0 ? 255.0 * (z_val - z_min) / span : 128;
         }
       }
     }
@@ -897,6 +1026,7 @@ void exportVisionNamespace(Napi::Env env, Napi::Object &exports) {
   EXPORT(exports, resize);
   EXPORT(exports, heatmap);
   EXPORT(exports, gaussian);
+  EXPORT(exports, gaussianAsync);
   EXPORT(exports, diff);
   EXPORT(exports, minMaxLoc);
   EXPORT(exports, matchTemplate);
@@ -904,6 +1034,7 @@ void exportVisionNamespace(Napi::Env env, Napi::Object &exports) {
   EXPORT(exports, cornerSubPix);
   EXPORT(exports, calibrateCamera);
   EXPORT(exports, findHomography);
+  EXPORT(exports, findHomographyAsync);
   EXPORT(exports, projectHomography);
   EXPORT(exports, wrapPerspective);
   EXPORT(exports, disparity);

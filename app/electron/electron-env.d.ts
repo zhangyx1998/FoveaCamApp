@@ -1,7 +1,11 @@
-/// <reference types="vite-plugin-electron/electron-env" />
+// `Window.foveaBridge`'s ambient declaration lives in `../types.d.ts`
+// instead of here: this file is only in tsconfig.node.json's program
+// (main/preload), but `foveaBridge` is consumed by renderer code, which
+// type-checks under the separate root tsconfig.json.
 
 declare namespace NodeJS {
   interface ProcessEnv {
+    VITE_DEV_SERVER_URL: string
     VSCODE_DEBUG?: 'true'
     /**
      * The built directory structure

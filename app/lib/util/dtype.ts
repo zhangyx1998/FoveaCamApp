@@ -1,4 +1,6 @@
 import type { TypedArray } from "core/types";
+import type { PixelFormat } from "core/Aravis";
+import { pixelFormatSpec } from "../../../docs/schema/pixel-formats.js";
 
 export type Dtype =
   | "U8"
@@ -41,6 +43,42 @@ export function dtypeOf(mat: TypedArray): Dtype {
         `Unknown TypedArray type: ${(mat as any).constructor?.name}`,
       );
   }
+}
+
+/**
+ * Effective bit depth of the pixel data. 12p formats carry 12 significant bits
+ * in a 16-bit container, so consumers must scale by 4095 rather than 65535.
+ * Moved here (from `src/record/stream.ts`) so it — and anything that imports
+ * it, e.g. `lib/imgproc.ts`'s `stack()` — stays reachable from the
+ * orchestrator, which must not pull in Vue (`src/record/stream.ts` imports
+ * `FreqMeter` from `@lib/util/perf.ts`, a Vue-touching file).
+ */
+export function significantBits(format: PixelFormat): number {
+  // Single source of truth: the pixel-format registry (docs/schema) —
+  // so this can't drift from the C++ tables / pyfovea decode. The suffix
+  // heuristic survives only as a defensive fallback for names outside the
+  // table; every real format is a table row and the conformance test
+  // pins that the table path equals the suffix heuristic for each one.
+  const spec = pixelFormatSpec(format);
+  if (spec) return spec.significantBits;
+  if (format.endsWith("12p")) return 12;
+  if (format.endsWith("16")) return 16;
+  return 8;
+}
+
+/** Registry-backed dtype for a pixel format, with the recorded Mat dtype as
+ *  fallback for unknown/legacy names outside the table. */
+export function pixelFormatDtype(
+  format: PixelFormat,
+  fallback: Dtype = "U8",
+): Dtype {
+  return pixelFormatSpec(format)?.dtype ?? fallback;
+}
+
+/** Registry-backed channel count for a pixel format, with the Mat's actual
+ *  channel count as fallback for unknown/legacy names outside the table. */
+export function pixelFormatChannels(format: PixelFormat, fallback = 1): number {
+  return pixelFormatSpec(format)?.channels ?? fallback;
 }
 
 /** TypedArray constructor keyed by short dtype name. */

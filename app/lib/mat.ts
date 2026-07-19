@@ -4,8 +4,17 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 
-import { TypedArray } from "core/types";
-import { Mat } from "core/Vision";
+import type { TypedArray } from "core/types";
+import type { Mat } from "core/Vision";
+
+/** Independent copy of an 8-bit Mat — safe to retain past an `await` or across
+ *  vision-worker ticks, unlike a reused SHM read buffer (overwritten on the next
+ *  frame). Used by the vision worker kernels when a derived Mat must outlive
+ *  the frame it came from. */
+export function copyMat<T extends Mat<Uint8Array>>(m: T): T {
+  const data = new Uint8Array(m.buffer.slice(m.byteOffset, m.byteOffset + m.byteLength));
+  return Object.assign(data, { shape: m.shape, channels: m.channels }) as unknown as T;
+}
 
 export function makeMat<T extends TypedArray>(
   arr: T,

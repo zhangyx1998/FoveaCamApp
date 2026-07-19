@@ -34,6 +34,52 @@ function objectPoints() {
 }
 const obj_points = objectPoints();
 
+// Hardware-independent check that `calibrateCamera` now surfaces OpenCV's RMS
+// re-projection error (additive core change). Synthesizes several perfect
+// pinhole views of the planar board so the solve is well-conditioned without a
+// rig; asserts `rms` is a finite, non-negative number.
+async function syntheticRmsCheck() {
+    const fx = 800, fy = 800, cx = 320, cy = 240;
+    const sensor_size: Size = { width: 640, height: 480 };
+    // Rotation Rz*Ry*Rx from Euler angles (radians).
+    function rot(rx: number, ry: number, rz: number) {
+        const cxx = Math.cos(rx), sx = Math.sin(rx);
+        const cyy = Math.cos(ry), sy = Math.sin(ry);
+        const czz = Math.cos(rz), sz = Math.sin(rz);
+        return [
+            [czz * cyy, czz * sy * sx - sz * cxx, czz * sy * cxx + sz * sx],
+            [sz * cyy, sz * sy * sx + czz * cxx, sz * sy * cxx - czz * sx],
+            [-sy, cyy * sx, cyy * cxx],
+        ];
+    }
+    function project(
+        R: number[][],
+        t: [number, number, number],
+    ): Point[] {
+        return obj_points.map((p) => {
+            const X = R[0][0] * p.x + R[0][1] * p.y + R[0][2] * p.z + t[0];
+            const Y = R[1][0] * p.x + R[1][1] * p.y + R[1][2] * p.z + t[1];
+            const Z = R[2][0] * p.x + R[2][1] * p.y + R[2][2] * p.z + t[2];
+            return { x: (fx * X) / Z + cx, y: (fy * Y) / Z + cy };
+        });
+    }
+    const poses: Array<{ r: [number, number, number]; t: [number, number, number] }> = [
+        { r: [0.2, 0.1, 0.0], t: [0, 0, 10] },
+        { r: [-0.2, 0.15, 0.05], t: [1, 0, 11] },
+        { r: [0.1, -0.2, -0.05], t: [-1, 1, 9] },
+        { r: [-0.15, -0.1, 0.1], t: [0, -1, 10] },
+    ];
+    const img_pts = poses.map((v) => project(rot(...v.r), v.t));
+    const obj_pts = poses.map(() => obj_points);
+    const result = await calibrateCamera(sensor_size, img_pts, obj_pts);
+    console.log("Synthetic calibration rms:", result.rms);
+    if (typeof result.rms !== "number" || !Number.isFinite(result.rms) || result.rms < 0)
+        throw new Error(`Expected finite non-negative rms, got ${result.rms}`);
+    console.log("Synthetic RMS assertion passed.");
+}
+
+await syntheticRmsCheck();
+
 async function detect(stream: Stream<Frame>) {
     type Result = {
         gray: Mat<Uint8Array>;
@@ -82,6 +128,9 @@ async function detect(stream: Stream<Frame>) {
     const obj_pts = detections.map((d) => obj_points);
     const result = await calibrateCamera(sensor_size, img_pts, obj_pts);
     console.log("Calibration result:", result);
+    if (!Number.isFinite(result.rms))
+        throw new Error(`Expected finite rms, got ${result.rms}`);
+    console.log("Live calibration rms:", result.rms);
 }
 
 // List cameras again should not throw error

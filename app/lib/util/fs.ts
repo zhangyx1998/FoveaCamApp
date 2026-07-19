@@ -5,12 +5,19 @@
 // -------------------------------------------------------
 
 import { resolve } from "node:path";
+import { homedir } from "node:os";
 import {
   existsSync,
   statSync,
   accessSync,
   constants as fs_flags,
 } from "node:fs";
+
+// Node-only (main process). Not reachable from the renderer directly once
+// contextIsolation is on — `node:fs`/`node:os` need a real `require`, which
+// the renderer only gets under `nodeIntegration: true`. The renderer calls
+// these indirectly via `window.foveaBridge`, whose `preload.ts`/`main.ts` wiring
+// forwards straight into these functions.
 
 export function validateWritablePath(path: string): boolean {
   if (path.trim() === "") return false;
@@ -27,4 +34,17 @@ export function validateWritablePath(path: string): boolean {
   } catch {
     return false;
   }
+}
+
+/** Preferred default save directory for a capture/recording namespace. When the
+ *  user has configured a base directory (`AppConfig.default_save_dir`, passed
+ *  through from the renderer) and it exists, that wins; otherwise an external
+ *  volume if mounted, else `~/Downloads`. The per-namespace `<directory>` is
+ *  always appended. */
+export function resolveDefaultSavePath(directory: string, base?: string): string {
+  if (base && base.trim() !== "" && existsSync(base))
+    return resolve(base, directory);
+  if (existsSync("/Volumes/Yuxuan Mobile/"))
+    return resolve("/Volumes/Yuxuan Mobile/", directory);
+  return resolve(homedir(), "Downloads", directory);
 }

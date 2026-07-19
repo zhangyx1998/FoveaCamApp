@@ -22,10 +22,18 @@ const meta = computed(() => {
     return meta;
   }
 });
+
+// Matches the on-disk name of the shown index (save() pad rule).
+const title = computed(() => {
+  const { name, meta } = props;
+  if (!Array.isArray(meta)) return name;
+  const pad = Math.max(2, meta.length.toString().length);
+  return `${name}/${i.value.toString().padStart(pad, "0")}`;
+});
 </script>
 
 <template>
-  <Block :name="name" :meta="meta" v-if="meta !== null">
+  <Block :name="title" :meta="meta" v-if="meta !== null">
     <RangeSelect v-if="count !== null" v-model="i" :count="count" />
   </Block>
 </template>

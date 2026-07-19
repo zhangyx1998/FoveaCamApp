@@ -5,11 +5,21 @@
  --------------------------------------------------------- -->
 
 <script setup lang="ts">
-import { ref, computed, useTemplateRef } from "vue";
+import { ref, computed, getCurrentInstance, useTemplateRef } from "vue";
+import { pointerObscured } from "@lib/pointer-obscured";
 
 export type Pos = { x: number; y: number };
 const emit = defineEmits<{ (e: "select", v: Pos | null): void }>();
 const canvas = useTemplateRef("canvas");
+
+// INTERACTIVE only when a parent actually listens for `select` — four
+// consumers use PosView as a pure display (disparity-scope, multi-fovea,
+// profiler, extrinsic PRV), and an unconditional crosshair + mousedown-track
+// there would be a false affordance / phantom drag.
+// Declared emits don't appear in useAttrs(), so read the vnode props.
+const interactive = computed(
+  () => !!(getCurrentInstance()?.vnode.props as { onSelect?: unknown } | null)?.onSelect,
+);
 
 const props = defineProps<{
   pos: Pos;
@@ -81,8 +91,19 @@ function format(v: number, unit: string, radix: number = 1) {
   return " " + s;
 }
 
+// Device-rate drag: `mousemove` is coalesced to the display refresh (~60 Hz),
+// which capped the
+// split-eye voltage drag at 60 wire updates/s; `pointerrawupdate` delivers at
+// the device's polling rate (125 Hz–1 kHz) — the same MOVE_EVENT pattern
+// FrameView uses. `mousemove` stays the fallback where unsupported.
+const MOVE_EVENT = "onpointerrawupdate" in window ? "pointerrawupdate" : "mousemove";
+
 function trackUntilRelease(e: MouseEvent) {
   if (!(e.buttons & 1)) return untrack();
+  // Obscuration gate: a drag under
+  // an overlaying element (drawer/dialog) pauses — skip the emit, keep the
+  // drag alive (mouseup above still ends it; off-edge drags still clamp).
+  if (pointerObscured(canvas.value, e)) return;
   // Compute position
   const el = canvas.value;
   if (!el) return console.warn("No SVG element found");
@@ -106,14 +127,15 @@ function trackUntilRelease(e: MouseEvent) {
 
 function untrack() {
   drag.value = false;
-  window.removeEventListener("mousemove", trackUntilRelease);
+  window.removeEventListener(MOVE_EVENT, trackUntilRelease as EventListener);
   window.removeEventListener("mouseup", trackUntilRelease);
   emit("select", null);
 }
 
 function track(e: MouseEvent) {
+  if (!interactive.value) return; // display-only consumer: no phantom drag
   drag.value = true;
-  window.addEventListener("mousemove", trackUntilRelease);
+  window.addEventListener(MOVE_EVENT, trackUntilRelease as EventListener);
   window.addEventListener("mouseup", trackUntilRelease);
   trackUntilRelease(e);
 }
@@ -136,7 +158,7 @@ function track(e: MouseEvent) {
       stroke="gray"
       :stroke-width="T"
       @mousedown="track"
-      style="pointer-events: all"
+      :style="{ pointerEvents: 'all', cursor: interactive ? 'crosshair' : 'default' }"
     />
     <!-- Decorations -->
     <circle
@@ -212,7 +234,7 @@ function track(e: MouseEvent) {
 
 <style scoped lang="scss">
 svg {
-  font-family: "Cascadia Code", "Courier New", Courier, monospace;
+  font-family: var(--font-mono);
   --reactive-color: gray;
 
   &:hover,

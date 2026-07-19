@@ -4,11 +4,9 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 
-import { resolve } from "node:path";
-import { homedir } from "node:os";
 import { ref } from "vue";
 import { getDateTimeString } from "./util/string";
-import { existsSync } from "node:fs";
+import { useAppConfig } from "./config.js";
 
 export class SavePath {
   readonly prefix = getDateTimeString();
@@ -28,11 +26,15 @@ export class SavePath {
   }
 
   private __last_save_path = ref<string | null>(null);
+  // `existsSync`/`homedir` aren't reachable from the renderer once
+  // contextIsolation is on, so the default resolves asynchronously via
+  // `foveaBridge` — starts empty,
+  // filled in shortly after construction (usually well under the time it
+  // takes a user to open the save dialog).
+  private __default_path = ref<string>("");
 
   get default_path() {
-    if (existsSync("/Volumes/Yuxuan Mobile/"))
-      return resolve("/Volumes/Yuxuan Mobile/", this.directory);
-    else return resolve(homedir(), "Downloads", this.directory);
+    return this.__default_path.value;
   }
 
   get current_path() {
@@ -50,5 +52,23 @@ export class SavePath {
     this.__last_save_path.value = null;
   }
 
-  constructor(public readonly namespace: string) {}
+  constructor(public readonly namespace: string) {
+    // The default resolves through main (external volume / ~/Downloads), now
+    // honoring the user's configured base dir (`AppConfig.default_save_dir`)
+    // when set. Read once at construction — a later change applies to the next
+    // capture/record control that mounts (a fresh `SavePath`), not this live
+    // one. `useAppConfig` needs the store; degrade to no base if unavailable.
+    void (async () => {
+      let base: string | undefined;
+      try {
+        base = (await useAppConfig()).default_save_dir || undefined;
+      } catch {
+        base = undefined;
+      }
+      this.__default_path.value = await window.foveaBridge.resolveDefaultSavePath(
+        this.directory,
+        base,
+      );
+    })();
+  }
 }

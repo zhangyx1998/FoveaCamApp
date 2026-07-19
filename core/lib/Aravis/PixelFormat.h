@@ -7,6 +7,8 @@
 
 #include <convert.h>
 
+#include "PixelFormat.gen.h"
+
 namespace cv {
 
 typedef enum Format : int {
@@ -60,64 +62,54 @@ public:
       : std::runtime_error("Unknown pixel format: " + fmt) {}
 };
 
+// Enum members + their string/Aravis/cv::Format/significantBits/isPacked facts
+// come from ONE source table (docs/schema/pixel-formats.ts → PixelFormat.gen.h).
+// The trailing five are GenICam 12-bit packed (12p): 2 pixels in 3 bytes,
+// unpacked to CV_16UC1.
 typedef enum PixelFormat : uint8_t {
-  Mono8,
-  Mono16,
-  RGB8,
-  BGR8,
-  RGBA8,
-  BGRA8,
-  BayerGR8,
-  BayerRG8,
-  BayerGB8,
-  BayerBG8,
-  BayerGR16,
-  BayerRG16,
-  BayerGB16,
-  // GenICam 12-bit packed (12p): 2 pixels in 3 bytes, unpacked to CV_16UC1.
-  Mono12p,
-  BayerGR12p,
-  BayerRG12p,
-  BayerGB12p,
-  BayerBG12p,
+#define FOVEA_PF_ENUM(Name, Arv, Cv, Bits, Packed) Name,
+  FOVEA_PIXEL_FORMATS(FOVEA_PF_ENUM)
+#undef FOVEA_PF_ENUM
 } Format;
 
 Format getPixelFormat(ArvBuffer *buffer);
 
 cv::ColorConversionCodes cvtColorCode(PixelFormat src, PixelFormat dst);
 
+inline bool canViewAs(PixelFormat src, PixelFormat dst) {
+  if (src == dst)
+    return true;
+  try {
+    (void)cvtColorCode(src, dst);
+    return true;
+  } catch (const UnknownPixelFormat &) {
+    return false;
+  }
+}
+
 // Significant bit depth of the pixel data. 12p data lives 0..4095 in a 16-bit
 // container, so display scaling must use 4095 (not the container's 65535).
 inline int significantBits(PixelFormat format) {
   switch (format) {
-  case Mono12p:
-  case BayerGR12p:
-  case BayerRG12p:
-  case BayerGB12p:
-  case BayerBG12p:
-    return 12;
-  case Mono16:
-  case BayerGR16:
-  case BayerRG16:
-  case BayerGB16:
-    return 16;
-  default:
-    return 8;
+#define FOVEA_PF_BITS(Name, Arv, Cv, Bits, Packed)                             \
+  case Name:                                                                   \
+    return Bits;
+    FOVEA_PIXEL_FORMATS(FOVEA_PF_BITS)
+#undef FOVEA_PF_BITS
   }
+  return 8;
 }
 
 // True for GenICam 12p packed formats, which need bit-unpacking (not memcpy).
 inline bool isPacked(PixelFormat format) {
   switch (format) {
-  case Mono12p:
-  case BayerGR12p:
-  case BayerRG12p:
-  case BayerGB12p:
-  case BayerBG12p:
-    return true;
-  default:
-    return false;
+#define FOVEA_PF_PACKED(Name, Arv, Cv, Bits, Packed)                          \
+  case Name:                                                                   \
+    return Packed;
+    FOVEA_PIXEL_FORMATS(FOVEA_PF_PACKED)
+#undef FOVEA_PF_PACKED
   }
+  return false;
 }
 
 } // namespace Arv

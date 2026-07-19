@@ -3,24 +3,87 @@
 // This source code is licensed under the MIT license.
 // You may find the full license in project root directory.
 // -------------------------------------------------------
-import { app, BrowserWindow, shell, ipcMain } from "electron";
-// import { createRequire } from "node:module";
+import {
+  app,
+  BrowserWindow,
+  crashReporter,
+  dialog,
+  Menu,
+  shell,
+  ipcMain,
+  utilityProcess,
+  webContents,
+  MessageChannelMain,
+} from "electron";
+import {
+  OrchestratorInstances,
+  type InstanceKind,
+  type InstanceProc,
+  type InstanceView,
+} from "./orchestrator-instances";
+import type { OrchestratorDownReport } from "./orchestrator-exit";
+import type { ProbeCamera } from "@lib/orchestrator/probe";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import os from "node:os";
+import { spawn } from "node:child_process";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { mkdir, writeFile, readFile } from "node:fs/promises";
+import { LogRing, type TeeFn } from "./log-ring";
+import { enrichDownReport } from "./crash-report";
+import { ViewerEngineManager, type EngineHandle } from "./viewer-engine";
+import { TeleCanvasManager, type HostHandle } from "./telecanvas-manager";
+import {
+  DEFAULT_TELECANVAS_PORT,
+  IDLE_TELECANVAS_TARGET,
+  type TeleCanvasMode,
+  type TeleCanvasStatus,
+  type TeleCanvasTarget,
+} from "@lib/telecanvas";
+import { reviver } from "@lib/store-codec";
+import { StoreMain } from "./store-main";
+import { migrateStoreOnBoot } from "./store-migrate";
+import type { StoreClientMessage } from "@lib/store-proxy";
+import type { AppConfig } from "@lib/config";
 import { getIcon } from "./util";
+import { startOpenFileServer, type OpenFileServer } from "./open-file-server";
+import { resolveDefaultSavePath, validateWritablePath } from "@lib/util/fs";
+import {
+  WindowManager,
+  type ManagedWindow,
+  type WindowDescriptor,
+} from "./window-manager";
+import {
+  consumeManifest,
+  planFromManifest,
+  saveManifest,
+} from "./window-manifest";
+import { APPS, appById, WINDOWS, type AppMeta } from "@lib/windows";
+import type { InvokeChannels, PushChannels, SendChannels } from "./bridge";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const DATA = app.getPath("userData");
+// MAIN is the config-store authority: its own fs
+// primitives (orchestrator/store.ts, reused) resolve the store root from
+// `FOVEA_DATA_PATH`, which main otherwise only sets for its CHILDREN. Set it for
+// main's own process too. Resolved lazily per call there, so this body-top
+// assignment (after the static import graph evaluated) is in time.
+process.env.FOVEA_DATA_PATH ??= DATA;
 
 // The built directory structure
 //
 // ├─┬ .dist/electron
-// │ ├─┬ main
-// │ │ └── index.js    > Electron-Main
-// │ └─┬ preload
-// │   └── index.mjs   > Preload-Scripts
+// │ ├── main.js / orchestrator.js / preload-*.cjs
 // ├─┬ .dist/renderer
-// │ └── index.html    > Electron-Renderer
+// │ └── windows/*.html      (multi-window entries)
 //
 const DIST = path.join(DIR, "..");
 process.env.APP_ROOT = path.join(DIR, "../..");
@@ -28,6 +91,7 @@ process.env.APP_ROOT = path.join(DIR, "../..");
 export const MAIN_DIST = path.join(DIST, "electron");
 export const RENDERER_DIST = path.join(DIST, "renderer");
 export const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL;
+const IS_DEV = !!VITE_DEV_SERVER_URL;
 
 process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL
   ? path.join(process.env.APP_ROOT, "public")
@@ -36,99 +100,1453 @@ process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL
 // Set application name for Windows 10+ notifications
 if (process.platform === "win32") app.setAppUserModelId(app.getName());
 
+// Disable Chromium's Graphite (Skia's new raster backend, default-on in this
+// Electron's Chromium): under our sustained many-canvas putImageData load
+// (disparity-scope paints ~7 full-rate views) it dies after minutes with
+// "Graphite insertRecording failed with status 5" → GPU process exit_code=5.
+// Ganesh (the fallback) carries the same load stably. Must be appended BEFORE
+// app ready; revisit on Electron upgrades in case Graphite stabilizes.
+app.commandLine.appendSwitch("disable-features", "SkiaGraphite");
+
+// ---- Native-crash minidumps -----------------------------------------------
+// LOCAL-only minidumps for native faults in the utilityProcess children (the
+// orchestrator owns core/Aravis/OpenCV). Must run before app-ready + any child
+// fork; redirect Chromium's own `crashDumps` key FIRST (distinct from our
+// `crash-logs` ring dir) so the reporter picks up the stable userData path.
+// spec: docs/spec/windows.md#crash-diagnostics
+const CRASH_DUMPS_DIR = path.join(DATA, "crash-dumps");
+const CRASH_LOGS_DIR = path.join(DATA, "crash-logs");
+try {
+  app.setPath("crashDumps", CRASH_DUMPS_DIR);
+} catch (e) {
+  console.warn("[crash] setPath(crashDumps) failed:", e);
+}
+crashReporter.start({
+  // Local-only: no collection endpoint, nothing leaves the machine.
+  uploadToServer: false,
+  submitURL: undefined,
+  productName: "FoveaCam",
+  // Keep OS crash reporting too (belt-and-suspenders) — crashpad still writes
+  // our minidump either way.
+  ignoreSystemCrashHandler: false,
+  compress: false,
+});
+
 if (!app.requestSingleInstanceLock()) {
   app.quit();
   process.exit(0);
 }
 
-let win: BrowserWindow | null = null;
-const preload = path.join(DIR, "preload.mjs");
-const indexHtml = path.join(RENDERER_DIST, "index.html");
+const preload = {
+  renderer: path.join(DIR, "preload-renderer.cjs"),
+  profiler: path.join(DIR, "preload-profiler.cjs"),
+  // Standalone viewer: bridge + the in-window playback worker; no shm reader,
+  // no orchestrator port.
+  viewer: path.join(DIR, "preload-viewer.cjs"),
+};
 
-async function createWindow() {
-  win = new BrowserWindow({
-    title: "FoveaCam Duo",
-    icon: getIcon("icon.ico"),
-    // Don't show until ready
-    // show: false,
-    // Window customization
-    // frame: false,
-    titleBarStyle: "hidden",
-    titleBarOverlay: {
-      color: "#2f3241",
-      symbolColor: "#74b1be",
-      height: 40,
+function customizeApp() {
+  app.setName("FoveaCam Duo");
+  // Application menu WITHOUT the reload role: plain Ctrl/Cmd-R is reserved
+  // for the recorder trigger in every mode — the
+  // default menu's View→Reload/Force-Reload accelerators would bypass the
+  // per-window `before-input-event` interception below.
+  // Direct app-switch affordance: an "Apps" submenu
+  // over the `lib/windows.ts` catalog. Selecting an app routes through the
+  // window manager's existing openApp drain/switch flow — exclusivity, the
+  // busy-refusal prompt, and welcome-close all apply unchanged. Being the
+  // application-level menu, every window class (welcome/app/profiler/
+  // projection) gets it for free.
+  const appItem = (a: AppMeta): Electron.MenuItemConstructorOptions => ({
+    label: a.title,
+    click: () => void manager.openApp(a.id),
+  });
+  const launchable = APPS.filter((a) => !a.dev || IS_DEV);
+  const appsMenu: Electron.MenuItemConstructorOptions = {
+    label: "Apps",
+    submenu: [
+      ...launchable.filter((a) => a.group === "application").map(appItem),
+      { type: "separator" },
+      ...launchable.filter((a) => a.group === "calibration").map(appItem),
+      { type: "separator" },
+      ...launchable.filter((a) => a.group === "utility").map(appItem),
+    ],
+  };
+  const isMac = process.platform === "darwin";
+  // "Settings…" / Cmd+, — OS Preferences convention: on macOS it lives in the
+  // app menu (right after About); on Windows/Linux it lives in the File menu.
+  // Both route to the singleton config window (open-or-focus).
+  const settingsItem: Electron.MenuItemConstructorOptions = {
+    label: "Settings…",
+    accelerator: "CmdOrCtrl+,",
+    click: () => openConfigWindow(),
+  };
+  const template: Electron.MenuItemConstructorOptions[] = [
+    // macOS app menu, hand-built (not `role: "appMenu"`) so the Settings item
+    // lands where the platform expects it.
+    ...(isMac
+      ? [
+          {
+            label: app.name,
+            submenu: [
+              { role: "about" as const },
+              { type: "separator" as const },
+              settingsItem,
+              { type: "separator" as const },
+              { role: "services" as const },
+              { type: "separator" as const },
+              { role: "hide" as const },
+              { role: "hideOthers" as const },
+              { role: "unhide" as const },
+              { type: "separator" as const },
+              { role: "quit" as const },
+            ],
+          } as Electron.MenuItemConstructorOptions,
+        ]
+      : []),
+    {
+      label: "File",
+      submenu: [
+        // Open a `.fovea` recording in a viewer window (one per file).
+        {
+          label: "Open Recording…",
+          accelerator: "CmdOrCtrl+O",
+          click: () => void openRecordingDialog(),
+        },
+        // Windows/Linux Preferences convention: Settings under File.
+        ...(!isMac
+          ? [{ type: "separator" as const }, settingsItem]
+          : []),
+        { type: "separator" },
+        // OS-standard close-window shortcut for Cmd/Ctrl-W. Routes through
+        // win.close() like the traffic light (welcome respawn / owner-close
+        // unchanged).
+        { role: "close", accelerator: "CmdOrCtrl+W" },
+      ],
     },
-    minHeight: 600,
-    minWidth: 800,
-    height: 900,
-    width: 1200,
-    backgroundColor: "black",
-    webPreferences: {
-      preload,
-      // Warning: Enable nodeIntegration and disable contextIsolation is not secure in production
-      nodeIntegration: true,
-      // Consider using contextBridge.exposeInMainWorld
-      // Read more on https://www.electronjs.org/docs/latest/tutorial/context-isolation
-      contextIsolation: false,
+    { role: "editMenu" },
+    {
+      label: "View",
+      submenu: [
+        ...(IS_DEV ? [{ role: "toggleDevTools" as const }] : []),
+        { role: "togglefullscreen" as const },
+      ],
+    },
+    appsMenu,
+    { role: "windowMenu" },
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
+// Recording container extensions the app opens: `.fcap` is what the recorder
+// writes; `.fovea` stays accepted as a READ-ONLY legacy so existing recordings
+// still open. The dialog filter, macOS `open-file`, and the Windows/Linux
+// `second-instance` arg association all derive from this one list.
+const RECORDING_EXTENSIONS = ["fcap", "fovea"] as const;
+const isRecordingPath = (p: string): boolean =>
+  RECORDING_EXTENSIONS.some((ext) => p.toLowerCase().endsWith(`.${ext}`));
+
+/** File→Open Recording…: `.fcap`/`.fovea` filter, one viewer window per
+ *  file (a re-open of an already-viewed file focuses its window). */
+async function openRecordingDialog(): Promise<void> {
+  const result = await dialog.showOpenDialog({
+    title: "Open Recording",
+    filters: [
+      { name: "FoveaCam Recording", extensions: [...RECORDING_EXTENSIONS] },
+    ],
+    properties: ["openFile", "multiSelections"],
+  });
+  if (result.canceled) return;
+  for (const p of result.filePaths) manager.openViewer(p);
+}
+
+// Typed `ipcMain` wrappers over the shared channel registry (bridge.ts) — the
+// main-side counterpart to preload-bridge.ts's `invoke`/`send`/`listen`. A bad
+// channel name or handler arg/return shape is a compile error, so the two ends
+// of every bridge channel can't drift.
+function handle<K extends keyof InvokeChannels>(
+  channel: K,
+  fn: (
+    ...args: InvokeChannels[K]["args"]
+  ) => InvokeChannels[K]["ret"] | Promise<InvokeChannels[K]["ret"]>,
+): void {
+  ipcMain.handle(channel, (_e, ...args) => fn(...(args as InvokeChannels[K]["args"])));
+}
+function onRenderer<K extends keyof SendChannels>(
+  channel: K,
+  fn: (...args: SendChannels[K]) => void,
+): void {
+  ipcMain.on(channel, (_e, ...args) => fn(...(args as SendChannels[K])));
+}
+function pushTo<K extends keyof PushChannels>(
+  wc: Electron.WebContents,
+  channel: K,
+  ...args: PushChannels[K]
+): void {
+  // A push to a dying window is correct to DROP, never fatal: `orchestrator:down`
+  // can otherwise throw "Render frame was disposed before WebFrameMain could be
+  // accessed" while the parent restarts. Guard the obvious destroyed case, and
+  // wrap `send` too — the render frame can be disposed in the window between this
+  // check and the actual send (webFrameMain race), which `isDestroyed()` won't
+  // catch. Log at debug; never throw.
+  if (wc.isDestroyed()) {
+    console.debug(`[push] drop "${String(channel)}" → destroyed webContents`);
+    return;
+  }
+  try {
+    wc.send(channel, ...args);
+  } catch (e) {
+    console.debug(
+      `[push] drop "${String(channel)}" → ${(e as Error).message}`,
+    );
+  }
+}
+/** Like `handle` but the handler also receives the sending `WebContents` — the
+ *  config-store needs it to track per-window subscriptions + push `store:changed`
+ *  back to the right window. */
+function handleSender<K extends keyof InvokeChannels>(
+  channel: K,
+  fn: (
+    wc: Electron.WebContents,
+    ...args: InvokeChannels[K]["args"]
+  ) => InvokeChannels[K]["ret"] | Promise<InvokeChannels[K]["ret"]>,
+): void {
+  ipcMain.handle(channel, (e, ...args) =>
+    fn(e.sender, ...(args as InvokeChannels[K]["args"])),
+  );
+}
+
+// ---- Config store: MAIN is the single authority --------------------------
+// One `StoreMain` owns the cache + fs + broadcast; renderer windows reach it via
+// these IPC channels, instances + probe via their parentPort (wired in
+// `forkInstance` / `spawnProbe`).
+// spec: docs/spec/windows.md#config-store
+const storeMain = new StoreMain((wc, path, value) => pushTo(wc, "store:changed", path, value));
+handleSender("store:read", (wc, path, fallback) => storeMain.read(wc, path, fallback));
+handle("store:read-once", (path, fallback) => storeMain.readOnce(path, fallback));
+handleSender("store:patch", (wc, path, ops) =>
+  storeMain.patch(wc, path, ops).then(() => undefined),
+);
+handleSender("store:clear", (wc, path) => storeMain.clear(wc, path));
+handle("store:list", (path) => storeMain.list(path));
+// Refcount-to-zero record delete: move the backing
+// store file to the OS TRASH (recoverable), THEN clear the doc from the
+// authority cache + broadcast. The clear's `rm` no-ops on the already-trashed
+// file. Store docs live at `<DATA>/store/<...segments>.json`.
+handleSender("store:trash", async (wc, storePath) => {
+  const file = path.join(DATA, "store", ...storePath) + ".json";
+  if (existsSync(file)) {
+    try {
+      await shell.trashItem(file);
+    } catch (e) {
+      console.error(`[store] trashItem failed for ${file}: ${e}`);
+    }
+  }
+  await storeMain.clear(wc, storePath);
+});
+
+// ---- JSON import/export dialogs + files (calibration records) --------------
+handle("dialog:save-json", async (defaultName) => {
+  const focused = BrowserWindow.getFocusedWindow();
+  const options = {
+    defaultPath: `${defaultName}.json`,
+    filters: [{ name: "JSON", extensions: ["json"] }],
+  };
+  const result = focused
+    ? await dialog.showSaveDialog(focused, options)
+    : await dialog.showSaveDialog(options);
+  if (result.canceled || !result.filePath) return null;
+  return result.filePath.endsWith(".json") ? result.filePath : `${result.filePath}.json`;
+});
+handle("dialog:open-json", async () => {
+  const focused = BrowserWindow.getFocusedWindow();
+  const options = {
+    properties: ["openFile"] as const,
+    filters: [{ name: "JSON", extensions: ["json"] }],
+  };
+  const result = focused
+    ? await dialog.showOpenDialog(focused, options)
+    : await dialog.showOpenDialog(options);
+  return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0]!;
+});
+handle("fs:write-text", async (file, content) => {
+  await writeFile(file, content, "utf8");
+});
+handle("fs:read-text", async (file) => {
+  try {
+    return await readFile(file, "utf8");
+  } catch {
+    return null;
+  }
+});
+
+// ---- Renderer bridge handlers ---------------------------------------------
+// The renderer's `SavePath`/`SaveControls`/`RecordControls` can't call
+// `node:path`/`node:fs`/`node:os` directly from an isolated renderer, so these
+// mirror that logic here and `foveaBridge` (preload-bridge.ts) forwards to it
+// over IPC.
+handle("save-path:resolve", (segments) => path.resolve(...segments));
+handle("save-path:resolve-default", (directory, base) =>
+  resolveDefaultSavePath(directory, base),
+);
+handle("fs:exists", (p) => existsSync(p));
+handle("fs:validate-writable", (p) => validateWritablePath(p));
+handle("perf-snapshot:write", async (content) => {
+  const dir = path.join(DATA, "perf-snapshots");
+  await mkdir(dir, { recursive: true });
+  const file = path.join(
+    dir,
+    `${new Date().toISOString().replace(/[:.]/g, "-")}.json`,
+  );
+  await writeFile(file, content);
+  console.log(`[perf] snapshot written: ${file}`);
+  return file;
+});
+
+// Reveal the perf-snapshots folder in the OS file browser (Finder/Explorer).
+handle("perf-snapshot:open-folder", async () => {
+  const dir = path.join(DATA, "perf-snapshots");
+  await mkdir(dir, { recursive: true });
+  const err = await shell.openPath(dir);
+  if (err) console.error(`[perf] openPath failed for ${dir}: ${err}`);
+  else console.log(`[perf] revealed snapshot folder: ${dir}`);
+  return dir;
+});
+
+// Reveal ONE written snapshot file (selects it in Finder/Explorer). Accepts
+// only paths inside the perf-snapshots dir — keep the bridge surface narrow.
+handle("perf-snapshot:reveal", (file) => {
+  const dir = path.join(DATA, "perf-snapshots");
+  if (!path.resolve(file).startsWith(dir + path.sep)) return;
+  shell.showItemInFolder(file);
+});
+
+// Reveal a recording container in Finder/Explorer (selects the file) — the
+// viewer window's "Open folder" button.
+handle("viewer:reveal", (file) => {
+  if (typeof file === "string" && file) shell.showItemInFolder(file);
+});
+
+// Reveal a crash-diagnostics file (the flushed ring log or a native minidump)
+// in Finder/Explorer — the CrashReport banner's "Reveal in Finder" affordance.
+handle("crash:reveal", (file) => {
+  if (typeof file === "string" && file && existsSync(file))
+    shell.showItemInFolder(file);
+});
+
+// ---- Orchestrator instances (disposable per app) --------------------------
+// The registry (`orchestrator-instances.ts`, Electron-free + unit-tested) owns
+// the typed table + ≤1-hardware gate; the fork/port/janitor wiring is injected
+// below. Main brokers a direct MessagePort renderer↔instance.
+// spec: docs/spec/windows.md#instances
+let registry!: OrchestratorInstances;
+let drainSeq = 0;
+// Per-instance window:drain resolvers (the switch busy-check) — keyed by
+// instance id then request seq, so a dying instance's pending drains can be
+// settled without touching another instance's.
+const instanceDrains = new Map<string, Map<number, (r: { ok: boolean; reason?: string }) => void>>();
+// windowId → its live webContents, so the registry's `notifyDown` can push a
+// crash report to a dying instance's OWNED windows only.
+const webContentsByWindowId = new Map<string, Electron.WebContents>();
+// instanceId → its last down report, so a profiler that connects AFTER its
+// bound instance already died still gets the typed frozen banner (the connect
+// broker replays it — the profiler never re-attaches to another instance).
+const lastDownReports = new Map<string, OrchestratorDownReport>();
+// instanceId → its stdout/stderr ring + fork timestamp (crash diagnostics). The
+// orchestrator (ONLY) is forked with piped stdio; every chunk is tee'd faithfully
+// to this parent's terminal while the ring keeps a bounded tail. On a non-clean
+// exit `enrichDownReport` flushes the ring to a file and pairs a fresh minidump.
+const instanceLogs = new Map<string, { ring: LogRing; spawnTs: number }>();
+
+/** Find the newest `.dmp` minidump under the crashDumps dir whose mtime is at
+ *  or after `sinceMs` (the instance's fork time) — best-effort: a minidump may
+ *  not be flushed by the time we observe the exit, and multiple instances share
+ *  the dir, so we can only attribute by "newer than this fork". */
+function findRecentDump(sinceMs: number): string | undefined {
+  try {
+    const entries = readdirSync(CRASH_DUMPS_DIR, {
+      recursive: true,
+      withFileTypes: true,
+    });
+    let best: { path: string; mtime: number } | undefined;
+    for (const e of entries) {
+      if (!e.isFile() || !e.name.endsWith(".dmp")) continue;
+      const full = path.join(e.parentPath, e.name);
+      let mtime: number;
+      try {
+        mtime = statSync(full).mtimeMs;
+      } catch {
+        continue;
+      }
+      // `- 1000` tolerance: fork-ts and file-mtime clocks aren't identical.
+      if (mtime >= sinceMs - 1000 && (!best || mtime > best.mtime))
+        best = { path: full, mtime };
+    }
+    return best?.path;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Flush an instance's ring text to `<userData>/crash-logs/<id>-<ts>.log`;
+ *  return the path written, or undefined on failure (best-effort — the injected
+ *  `writeLog` dep for the pure `enrichDownReport`). */
+function writeCrashLog(id: string, text: string): string | undefined {
+  try {
+    mkdirSync(CRASH_LOGS_DIR, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const file = path.join(CRASH_LOGS_DIR, `${id}-${stamp}.log`);
+    writeFileSync(file, text, "utf8");
+    console.warn(`[crash] ${id}: log written → ${file}`);
+    return file;
+  } catch (e) {
+    console.warn(`[crash] failed to write crash log for ${id}:`, e);
+    return undefined;
+  }
+}
+
+// ---- Hardware janitor (safety invariant) ----------------------------------
+// One-shot cleanup process forked on ANY non-clean instance death (decided by
+// the `quiesced` ack, never the exit code): fresh device claims, disable the
+// MEMS controller, stop every camera (also clearing TLParamsLocked). One run
+// covers everything armed by the dead orchestrator — dedupe concurrent triggers
+// (unexpected-exit racing the quit path).
+// spec: docs/spec/windows.md#quiescence
+let janitorRun: Promise<void> | null = null;
+function ensureJanitor(reason: string): Promise<void> {
+  janitorRun ??= runJanitor(reason).finally(() => {
+    janitorRun = null;
+  });
+  return janitorRun;
+}
+function runJanitor(reason: string): Promise<void> {
+  console.warn(`[janitor] launching (${reason})`);
+  return new Promise((resolve) => {
+    const proc = utilityProcess.fork(path.join(DIR, "janitor.js"), [], {
+      stdio: "inherit",
+      env: { ...process.env, FOVEA_DATA_PATH: DATA },
+    });
+    const timer = setTimeout(() => {
+      console.error("[janitor] timed out — killing");
+      proc.kill();
+    }, 10_000);
+    proc.on("exit", () => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
+}
+
+// ---- Main-crash watchdog (safety invariant) -------------------------------
+// Closes the hole where main's OWN hard crash (SIGKILL/SIGSEGV) reaps the
+// orchestrator with nothing left to disarm the mirrors. A DETACHED sibling (not
+// a utilityProcess child — those die with main), `janitor.js` in
+// FOVEA_JANITOR_MODE=watchdog so there is ONE quiescence codebase.
+//
+//   OS
+//   ├─ main (Electron)            spawns ↓ once, detached, at startup
+//   │   ├─ orchestrator  (utilityProcess.fork — dies WITH main, no quiesce)
+//   │   └─ janitor       (utilityProcess.fork — one-shot, on orch death)
+//   └─ watchdog (detached, ELECTRON_RUN_AS_NODE — OUTLIVES main)
+//
+// spec: docs/spec/windows.md#quiescence
+const watchdogStatePath = path.join(DATA, `watchdog-${process.pid}.json`);
+let watchdogSpawned = false;
+
+/** (Re)write this main instance's watchdog state file — mainPid is fixed;
+ *  `orchestratorPids` is the CURRENT set of live instance pids (disposable
+ *  model: 0..N alive), refreshed whenever the set changes so the
+ *  watchdog waits on the right orphans before quiescing. */
+function writeWatchdogState(): void {
+  try {
+    writeFileSync(
+      watchdogStatePath,
+      JSON.stringify({
+        mainPid: process.pid,
+        orchestratorPids: registry?.livePids() ?? [],
+      }),
+    );
+  } catch (e) {
+    console.error("[watchdog] state write failed:", e);
+  }
+}
+
+/** Spawn the detached watchdog ONCE, at orchestrator-spawn time. */
+function spawnWatchdog(): void {
+  if (watchdogSpawned) return;
+  watchdogSpawned = true;
+  writeWatchdogState();
+  try {
+    const wd = spawn(process.execPath, [path.join(DIR, "janitor.js")], {
+      detached: true,
+      stdio: "ignore",
+      env: {
+        ...process.env,
+        // Run the Electron binary as plain Node (no window/dock) so the
+        // watchdog survives main and can still load the native `core` addon.
+        ELECTRON_RUN_AS_NODE: "1",
+        FOVEA_JANITOR_MODE: "watchdog",
+        FOVEA_WATCHDOG_STATE: watchdogStatePath,
+        FOVEA_MAIN_PID: String(process.pid),
+        FOVEA_DATA_PATH: DATA,
+      },
+    });
+    wd.unref();
+  } catch (e) {
+    console.error("[watchdog] spawn failed:", e);
+    watchdogSpawned = false;
+  }
+}
+
+/** Clean-shutdown stand-down: delete this instance's state file so the watchdog
+ *  exits quietly instead of quiescing. Synchronous — must complete before main
+ *  exits. */
+function standDownWatchdog(): void {
+  try {
+    unlinkSync(watchdogStatePath);
+  } catch {
+    /* already gone (or never created) */
+  }
+}
+
+/** Best-effort sweep of watchdog state files left by a dead main whose watchdog
+ *  also died before cleaning up (double-fault) — keeps the data dir tidy. */
+function sweepStaleWatchdogState(): void {
+  try {
+    for (const f of readdirSync(DATA)) {
+      const m = /^watchdog-(\d+)\.json$/.exec(f);
+      if (!m) continue;
+      const pid = Number(m[1]);
+      if (pid === process.pid) continue;
+      const alive = (() => {
+        try {
+          process.kill(pid, 0);
+          return true;
+        } catch (e) {
+          return (e as NodeJS.ErrnoException).code === "EPERM";
+        }
+      })();
+      if (!alive) unlinkSync(path.join(DATA, f));
+    }
+  } catch {
+    /* best-effort */
+  }
+}
+
+const delay = (ms: number): Promise<void> => new Promise<void>((r) => setTimeout(r, ms));
+/** Poll `pred` until true or the deadline lapses (bounded quit waits). */
+async function waitUntil(pred: () => boolean, timeoutMs: number): Promise<void> {
+  const start = Date.now();
+  while (!pred() && Date.now() - start < timeoutMs) await delay(50);
+}
+
+/** Fork + wire ONE orchestrator instance (the registry's `fork` dep). Routes
+ *  the instance's ack / drain-result / recording-finished / exit back to the
+ *  registry + window manager. `id` scopes the per-instance drain map. */
+function forkInstance(id: string, kind: InstanceKind): InstanceProc {
+  const entry = path.join(DIR, "orchestrator.js");
+  const forkTs = Date.now();
+  // The orchestrator (and ONLY the orchestrator — janitor/probe/viewer/
+  // telecanvas keep `inherit`) is forked with PIPED stdio so a per-instance ring
+  // buffer can keep its last output for the crash report. Every chunk is tee'd
+  // faithfully (unbuffered, in order) straight through to this parent's
+  // stdout/stderr, so the dev-terminal experience is unchanged.
+  const proc = utilityProcess.fork(entry, [], {
+    stdio: ["ignore", "pipe", "pipe"],
+    env: {
+      ...process.env,
+      // Each instance reads/writes the same config store as the renderer.
+      FOVEA_DATA_PATH: DATA,
+      // Boot-span baseline — stamped as close to `fork()` as possible
+      // so `index.ts` can measure fork -> first-useful-work timing per instance.
+      FOVEA_FORK_TS: String(forkTs),
+      FOVEA_INSTANCE_KIND: kind,
     },
   });
+  // Per-instance ring: keep the last ~256 lines / 64 KiB of interleaved stdout+
+  // stderr (crash diagnostics). Tee each raw chunk to the matching parent stream
+  // FIRST so the terminal sees exactly the child's bytes.
+  const ring = new LogRing();
+  instanceLogs.set(id, { ring, spawnTs: forkTs });
+  const teeOut: TeeFn = (c) => process.stdout.write(c);
+  const teeErr: TeeFn = (c) => process.stderr.write(c);
+  proc.stdout?.on("data", (c: Buffer) => ring.push(c, teeOut));
+  proc.stderr?.on("data", (c: Buffer) => ring.push(c, teeErr));
+  // The watchdog needs the CURRENT instance pids; `pid` is populated on spawn.
+  proc.on("spawn", () => writeWatchdogState());
+  // Config-store client: route this instance's `store:*` parentPort messages to
+  // the MAIN authority; detach on exit.
+  const store = storeMain.attachProcess((m) => proc.postMessage(m));
+  proc.on("message", (data: unknown) => {
+    const msg = data as {
+      type?: string;
+      id?: number;
+      ok?: boolean;
+      reason?: string;
+      path?: string;
+    };
+    if (msg?.type === "store:req" || msg?.type === "store:subscribe") {
+      store.handleMessage(data as StoreClientMessage);
+      return;
+    }
+    if (msg?.type === "quiesced") {
+      // The authoritative clean-exit ack — the registry reaps it.
+      registry.onAck(id);
+      return;
+    }
+    // Auto-open: a recorder node finalized a container — surface it in a
+    // STANDALONE viewer window (one per file; the window does its own playback).
+    if (msg?.type === "recording:finished") {
+      if (typeof msg.path === "string" && msg.path) manager.openViewer(msg.path);
+      return;
+    }
+    if (msg?.type !== "window:drain-result" || msg.id === undefined) return;
+    const map = instanceDrains.get(id);
+    map?.get(msg.id)?.({ ok: !!msg.ok, reason: msg.reason });
+    map?.delete(msg.id);
+  });
+  proc.on("exit", (code) => {
+    console.warn(`Orchestrator instance ${id} exited:`, code);
+    store.detach();
+    // Registry classifies (ack-based), janitors non-clean paths, surfaces the
+    // down report to owned windows, and re-attempts the hardware-clear gate.
+    // `notifyDown` runs synchronously inside this call and reads `instanceLogs`,
+    // so the ring must still be present here — drop it only AFTER onExit.
+    registry.onExit(id, code ?? null);
+    instanceLogs.delete(id);
+    // A dead instance has nothing left to drain — unblock any switch waiting on
+    // it rather than letting it time out.
+    const map = instanceDrains.get(id);
+    if (map) {
+      for (const resolve of map.values()) resolve({ ok: true });
+      instanceDrains.delete(id);
+    }
+  });
+  return {
+    postMessage: (message: unknown, transfer?: unknown[]) =>
+      proc.postMessage(message, transfer as Electron.MessagePortMain[] | undefined),
+    kill: () => proc.kill(),
+    get pid() {
+      return proc.pid;
+    },
+  };
+}
 
-  // Show window when ready to avoid white/black flash
-  // win.once("ready-to-show", () => win.show());
+// ---- Camera-enumeration probe ---------------------------------------------
+// A small persistent enumerate-only process that feeds the status-only Welcome
+// window a live camera list + connected state. It NEVER opens a camera, holds
+// no hardware, gates nothing, and outlives app instances; main restarts it if
+// it dies and kills it at quit. Paused while a hardware instance is alive (the
+// registry's `onHardwareAliveChange` dep below) so its `Camera.list()` never
+// contends with an app's exclusive acquisition; resumed back at Welcome.
+let probe: ReturnType<typeof utilityProcess.fork> | null = null;
+let probeQuitting = false;
+function spawnProbe(): void {
+  if (probe || probeQuitting) return;
+  const probeProc = utilityProcess.fork(path.join(DIR, "probe.js"), [], {
+    stdio: "inherit",
+    env: { ...process.env, FOVEA_DATA_PATH: DATA },
+  });
+  probe = probeProc;
+  // The probe reads config (camera roles) through store-hub → the MAIN authority
+  // over its parentPort, same as an orchestrator instance.
+  const probeStore = storeMain.attachProcess((m) => probeProc.postMessage(m));
+  probe.on("message", (data: unknown) => {
+    const msg = data as { type?: string; cameras?: ProbeCamera[] };
+    if (msg?.type === "store:req" || msg?.type === "store:subscribe") {
+      probeStore.handleMessage(data as StoreClientMessage);
+      return;
+    }
+    if (msg?.type === "probe:cameras")
+      for (const w of BrowserWindow.getAllWindows())
+        pushTo(w.webContents, "probe:cameras", msg.cameras ?? []);
+  });
+  probe.on("exit", (code) => {
+    probe = null;
+    probeStore.detach();
+    if (probeQuitting) return;
+    console.warn("[probe] exited unexpectedly — restarting:", code);
+    setTimeout(spawnProbe, 500);
+  });
+  // If a hardware instance is already alive when the probe (re)spawns, it must
+  // start paused so it never contends with the app's exclusive acquisition.
+  if (registry?.hardwareAlive()) probe.postMessage({ type: "probe:pause" });
+}
+function killProbe(): void {
+  probeQuitting = true;
+  probe?.kill();
+  probe = null;
+}
 
-  win.maximize();
+registry = new OrchestratorInstances({
+  fork: forkInstance,
+  sendHardwareClear: (inst) => inst.proc.postMessage({ type: "hardware-clear" }),
+  sendShutdown: (inst) => inst.proc.postMessage({ type: "shutdown" }),
+  kill: (inst) => inst.proc.kill(),
+  // Reuse the deduped hardware janitor as the per-instance non-clean-death
+  // sweep; it disarms ALL hardware in a fresh process regardless of instance.
+  runJanitor: (inst, reason) => ensureJanitor(`${inst.id}: ${reason}`),
+  notifyDown: (inst, rawReport) => {
+    // Enrich a non-clean exit with crash diagnostics (flush the stdout/stderr
+    // ring to a file, inline a tail, pair a fresh minidump) BEFORE it is
+    // remembered/pushed, so both the live banner and a late-attaching profiler
+    // replay see the same enriched report. Clean exits pass through untouched.
+    const report = enrichDownReport(rawReport, instanceLogs.get(inst.id), {
+      writeLog: (text) => writeCrashLog(inst.id, text),
+      findDump: findRecentDump,
+    });
+    // Remember it so a profiler that attaches after this death still gets the
+    // frozen banner (the connect broker replays it below).
+    lastDownReports.set(inst.id, report);
+    // Scope the down report to the DYING instance's OWNED windows
+    // PLUS its attached observer windows (the profiler — it freezes
+    // with its accumulated data and shows "session ended/crashed"): a NEW
+    // instance's app window must never react to the OLD instance's death. On a
+    // crash the app window is still open (its channel rejects in-flight calls +
+    // CrashReport.vue shows); on a clean switch/close its app window is already
+    // gone, so only a surviving profiler is informed (correct).
+    const targets = new Set([
+      ...registry.windowsOf(inst.id),
+      ...registry.attachmentsOf(inst.id),
+    ]);
+    for (const windowId of targets) {
+      const wc = webContentsByWindowId.get(windowId);
+      if (wc && !wc.isDestroyed()) pushTo(wc, "orchestrator:down", report);
+    }
+  },
+  // Pause the enumerate-only probe while a hardware instance is alive (Aravis
+  // is per-process exclusive — a background `Camera.list()` must not contend
+  // with the app's exclusive acquisition); resume at the Welcome screen.
+  onHardwareAliveChange: (alive) => {
+    probe?.postMessage({ type: alive ? "probe:pause" : "probe:resume" });
+    // Viewer banner: tell every window a live capture
+    // session started/stopped (function-declaration-hoisted; runs at edge time).
+    broadcastAppSessionActive(alive);
+  },
+  // Keep the crash-watchdog state file tracking whichever instances are alive.
+  onLivePidsChange: () => writeWatchdogState(),
+  quiesceMs: 4000,
+});
 
-  if (VITE_DEV_SERVER_URL) {
-    win.loadURL(VITE_DEV_SERVER_URL);
-    // Open devTool if the app is not packaged
-    // win.webContents.openDevTools();
+/** Ask an instance to idle every camera-owning session and wait for the
+ *  releases to settle ("closed" = session-idle-drained).
+ *  `{ok: false}` = refused: a session is mid-capture/recording. */
+function drainInstance(inst: InstanceView): Promise<{ ok: boolean; reason?: string }> {
+  const seq = ++drainSeq;
+  let map = instanceDrains.get(inst.id);
+  if (!map) instanceDrains.set(inst.id, (map = new Map()));
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      map!.delete(seq);
+      resolve({ ok: false, reason: "session drain timed out (10s)" });
+    }, 10_000);
+    map!.set(seq, (result) => {
+      clearTimeout(timer);
+      resolve(result);
+    });
+    inst.proc.postMessage({ type: "window:drain", id: seq });
+  });
+}
+
+/** The switch drain (window-manager dep): busy-check + best-effort session
+ *  drain of the OUTGOING hardware instance, then dispose it (its process death
+ *  is the containment). `{ok:false}` keeps the current app (mid-capture/
+ *  recording). With no current instance (first app from Welcome) it's a no-op
+ *  pass. Note the new instance forks separately at app-window spawn and defers
+ *  hardware until this outgoing one is confirmed dead + swept. */
+function drainSessions(): Promise<{ ok: boolean; reason?: string }> {
+  const cur = registry.currentHardware();
+  if (!cur) return Promise.resolve({ ok: true });
+  return drainInstance(cur).then((result) => {
+    if (result.ok) registry.teardown(cur.id, "app switch");
+    return result;
+  });
+}
+
+// Sender (webContents id) → stable windowId, maintained by spawnWindow.
+// Lets the connect handshake below tag each channel with the window it
+// belongs to — the orchestrator side keys per-window state
+// (`win/<windowId>/...` namespaces) on it.
+const windowIdBySender = new Map<number, string>();
+
+// A renderer asks to connect; hand both ends of a fresh channel out. Already
+// generic per-`event.sender` — every window class connecting just gets its
+// own port pair. The handoff message carries the sender's stable windowId so
+// the Hub can tag the channel; null for a sender the manager doesn't know
+// (shouldn't happen).
+ipcMain.on("orchestrator:connect" satisfies keyof SendChannels, (event) => {
+  const windowId = windowIdBySender.get(event.sender.id) ?? null;
+  // Instance-scoped brokering. A window BOUND to a specific instance
+  // — an app window (owns it) or a profiler (attached at open, per-instance
+  // binding) — routes to THAT instance and NOTHING else. If its instance is
+  // already dead, fail CLOSED: replay the typed down report (frozen "session
+  // ended/crashed" banner) and broker no port — a profiler must never connect
+  // to another session. An UNBOUND window (projection/debug) routes
+  // to the CURRENT live app instance. With no app instance at all — the
+  // status-only Welcome, which never connects — there is nothing to broker.
+  const bound = windowId ? registry.boundInstance(windowId) : null;
+  let target: InstanceProc | null;
+  if (bound) {
+    if (bound.phase === "dead") {
+      const report = lastDownReports.get(bound.id) ?? { reason: "killed", code: null };
+      pushTo(event.sender, "orchestrator:down", report);
+      return;
+    }
+    target = bound.proc;
   } else {
-    win.loadFile(indexHtml);
+    target = registry.connectTarget();
   }
+  if (!target) return;
+  const { port1, port2 } = new MessageChannelMain();
+  target.postMessage({ type: "channel:connect", windowId }, [port1]);
+  event.sender.postMessage("orchestrator:port", null, [port2]);
+});
 
-  // Make all links open with the browser, not with the application
+// Sender-scoped pin toggle (the profiler nav bar): keep THIS window above all
+// others. The renderer owns persistence (localStorage) and re-applies on mount.
+ipcMain.on("window:set-pinned" satisfies keyof SendChannels, (event, pinned) => {
+  BrowserWindow.fromWebContents(event.sender)?.setAlwaysOnTop(!!pinned);
+});
+
+// ---- Viewer playback engines ----------------------------------------------
+// One MAIN-owned utilityProcess per viewer window: the playback engine can't be
+// a renderer worker (Electron renderers can't construct Node workers), so main
+// forks it exactly like the orchestrator and brokers a MessagePort between the
+// window and its engine. Main owns the lifecycle invariants — single-writer
+// sidecar (one engine per file, keyed per window), terminate-before-respawn
+// (dev full-reload), and flush-before-close (bounded grace) — in
+// ViewerEngineManager; the Electron process/port wiring is injected here.
+const VIEWER_ENGINE_ENTRY = path.join(DIR, "viewer-worker.js");
+
+/** Fork + wire one viewer engine for the window `senderId`, over `file`. */
+function createViewerEngine(senderId: number, file: string): EngineHandle {
+  const wc = webContents.fromId(senderId) ?? null;
+  const proc = utilityProcess.fork(VIEWER_ENGINE_ENTRY, [], {
+    stdio: "inherit",
+    env: { ...process.env, FOVEA_DATA_PATH: DATA },
+  });
+  const { port1, port2 } = new MessageChannelMain();
+  // Hand port1 + the file to the engine (it opens eagerly), deliver port2 to the
+  // window. Posting before "spawn" is fine — utilityProcess queues until the
+  // child is up (same as the orchestrator connect handshake).
+  proc.postMessage({ type: "init", file }, [port1]);
+  if (wc && !wc.isDestroyed()) wc.postMessage("viewer:port", null, [port2]);
+
+  let killed = false;
+  const flushWaiters: Array<() => void> = [];
+  proc.on("message", (data: unknown) => {
+    if ((data as { type?: string })?.type === "flushed")
+      for (const w of flushWaiters.splice(0)) w();
+  });
+  proc.on("exit", (code) => {
+    if (killed) return; // expected teardown — the manager already dropped us
+    // Unexpected engine death: drop the handle + tell the window to stop
+    // waiting for frames (its crash surface).
+    viewerEngines.forget(senderId);
+    if (wc && !wc.isDestroyed())
+      pushTo(wc, "viewer:engine-down", `Viewer engine exited unexpectedly (code ${code}).`);
+  });
+
+  return {
+    requestFlush: () =>
+      new Promise<void>((resolve) => {
+        if (killed) return resolve();
+        flushWaiters.push(resolve);
+        proc.postMessage({ type: "close" }); // engine flushes sidecar → acks `flushed`
+      }),
+    kill: () => {
+      killed = true;
+      proc.kill();
+    },
+  };
+}
+
+const viewerEngines = new ViewerEngineManager({ graceMs: 500, create: createViewerEngine });
+
+// A viewer window asks main to (re)fork its engine over `file`. Sender-scoped:
+// the engine is keyed by the window's webContents id, and the window manager's
+// one-window-per-file dedupe makes that one-engine-per-file transitively. A
+// re-spawn (dev full-reload) terminates the previous engine first.
+ipcMain.on("viewer:spawn" satisfies keyof SendChannels, (event, file) => {
+  if (typeof file === "string" && file) void viewerEngines.spawn(event.sender.id, file);
+});
+
+// ---- Viewer video export --------------------------------------------------
+// Main owns the system save dialog + the window-close abort intercept. The
+// ffmpeg pipeline itself lives in the viewer ENGINE (utility process) — main
+// only brokers the save path + the close handshake.
+
+// Sender (viewer webContents id) → does it have queued/running exports? The
+// renderer pushes on every 0-crossing; `close` reads it to decide whether to
+// intercept. A confirmed-abort close is recorded so the re-`close()` passes.
+const viewerExportsActive = new Map<number, boolean>();
+const viewerCloseConfirmed = new Set<number>();
+
+ipcMain.on("viewer:exports-active" satisfies keyof SendChannels, (event, active) => {
+  viewerExportsActive.set(event.sender.id, !!active);
+});
+ipcMain.on("viewer:close-confirmed" satisfies keyof SendChannels, (event) => {
+  const id = event.sender.id;
+  viewerCloseConfirmed.add(id); // let the next close() through the intercept
+  viewerExportsActive.set(id, false);
+  BrowserWindow.fromWebContents(event.sender)?.close();
+});
+
+// The video-export save dialog: default filename `<recording>-<stream>`
+// with the codec's container extension, filtered to that extension.
+handle("export:save-dialog", async (defaultName, ext) => {
+  const focused = BrowserWindow.getFocusedWindow();
+  const options = {
+    defaultPath: `${defaultName}.${ext}`,
+    filters: [{ name: `${ext.toUpperCase()} video`, extensions: [ext] }],
+  };
+  const result = focused
+    ? await dialog.showSaveDialog(focused, options)
+    : await dialog.showSaveDialog(options);
+  return result.canceled || !result.filePath ? null : result.filePath;
+});
+
+// ---- Live-session banner broadcast ----------------------------------------
+// Main is the only process that knows BOTH a viewer window and the per-app
+// hardware instances (registry). Mirror the telecanvas:target seed+push pattern:
+// seed via invoke, push to EVERY window on the hardware-alive edge.
+handle("app-session:active", () => registry.hardwareAlive());
+
+function broadcastAppSessionActive(active: boolean): void {
+  for (const w of BrowserWindow.getAllWindows())
+    pushTo(w.webContents, "app-session:active", active);
+}
+
+// ---- TeleCanvas host server (standalone dual-mode module) -----------------
+// Main owns the host utilityProcess: spawn when `tele_canvas_mode` is "host",
+// kill on client/off or quit, respawn on crash (TeleCanvasManager). Main has no
+// live store watcher, so its knowledge of {mode, port} comes from (1) the
+// persisted config read once at startup and (2) an IPC nudge (`telecanvas:apply`)
+// the config-editing windows send on change — apply() is idempotent, so a nudge
+// from more than one window is harmless. Status is broadcast to every renderer.
+const TELECANVAS_HOST_ENTRY = path.join(DIR, "telecanvas-host.js");
+
+function createTeleCanvasHost(port: number): HostHandle {
+  const proc = utilityProcess.fork(TELECANVAS_HOST_ENTRY, [], {
+    stdio: "inherit",
+    env: { ...process.env, FOVEA_TELECANVAS_PORT: String(port) },
+  });
+  const handle: HostHandle = { kill: () => proc.kill() };
+  proc.on("message", (data: unknown) => {
+    const msg = data as { type?: string; port?: number; error?: string };
+    if (msg?.type === "telecanvas:listening")
+      telecanvas.onListening(handle, msg.port ?? port);
+    else if (msg?.type === "telecanvas:error")
+      telecanvas.onError(handle, msg.error ?? "host server failed to listen");
+  });
+  proc.on("exit", () => telecanvas.onExit(handle));
+  return handle;
+}
+
+// The authoritative push-target config {mode, url, port} — main is the single
+// always-alive process, so an app-window `Pusher` in a DIFFERENT orchestrator
+// instance learns a settings edit here (the per-instance `["config"]` store-hub
+// broadcast does NOT cross instances). Seeded from persisted config at startup,
+// updated on every `telecanvas:apply` nudge, and re-broadcast on every host
+// status change (so a fresh host after a respawn gets its buffer refilled by the
+// next Pusher PUT).
+let telePushTarget: TeleCanvasTarget = { ...IDLE_TELECANVAS_TARGET };
+
+function broadcastTeleCanvasTarget(): void {
+  for (const w of BrowserWindow.getAllWindows())
+    pushTo(w.webContents, "telecanvas:target", telePushTarget);
+}
+
+function broadcastTeleCanvasStatus(status: TeleCanvasStatus): void {
+  for (const w of BrowserWindow.getAllWindows())
+    pushTo(w.webContents, "telecanvas:status", status);
+  // Re-announce the target alongside every status change: a host (re)listen
+  // (crash respawn / port change) then re-fires the Pusher so it re-PUTs the
+  // current content into the fresh server's empty buffer (content preservation).
+  broadcastTeleCanvasTarget();
+}
+
+const telecanvas = new TeleCanvasManager({
+  fork: createTeleCanvasHost,
+  interfaces: () => os.networkInterfaces(),
+  onStatus: broadcastTeleCanvasStatus,
+});
+
+onRenderer("telecanvas:apply", (mode, port, url) => {
+  const m: TeleCanvasMode = mode === "host" ? "host" : "client";
+  const p = Number(port) || DEFAULT_TELECANVAS_PORT;
+  telePushTarget = { mode: m, port: p, url: typeof url === "string" ? url : "" };
+  telecanvas.apply(m, p); // host lifecycle (also re-broadcasts the target via onStatus)
+  broadcastTeleCanvasTarget(); // ensure a client-only change (no host status) still reaches app windows
+});
+handle("telecanvas:get-status", () => telecanvas.status());
+handle("telecanvas:get-target", () => telePushTarget);
+
+/** Read the persisted app config directly off disk (like the window manifest) —
+ *  main has no store-hub client, and this is only needed once at startup to
+ *  decide whether the host should come up before any window nudges it. */
+function readPersistedConfig(): Partial<AppConfig> {
+  try {
+    const file = path.join(DATA, "store", "config.json");
+    if (!existsSync(file)) return {};
+    const text = readFileSync(file, "utf8");
+    if (text.trim() === "") return {};
+    return JSON.parse(text, reviver) as Partial<AppConfig>;
+  } catch (e) {
+    console.error("[telecanvas] failed to read persisted config:", e);
+    return {};
+  }
+}
+
+function applyPersistedTeleCanvas(): void {
+  const cfg = readPersistedConfig();
+  const mode: TeleCanvasMode = cfg.tele_canvas_mode === "host" ? "host" : "client";
+  const port = Number(cfg.tele_canvas_port) || DEFAULT_TELECANVAS_PORT;
+  // Seed the authoritative push target so a `getTeleCanvasTarget` at app-window
+  // mount reflects the persisted config before any settings-window nudge.
+  telePushTarget = { mode, port, url: cfg.tele_canvas_url ?? "" };
+  telecanvas.apply(mode, port);
+}
+
+// ---- Window manager -------------------------------------------------------
+
+function entryURL(desc: WindowDescriptor): { url?: string; file?: string; search?: string } {
+  // A manifest-restored window lands on its persisted URL (carries the state
+  // params) — but only in dev, where the dev-server origin matches.
+  if (desc.url && IS_DEV && desc.url.startsWith(VITE_DEV_SERVER_URL!))
+    return { url: desc.url };
+  // State-in-URL params (e.g. a projection's `?session=…&frame=…`)
+  // ride the query string in both modes: appended to the dev URL, passed as
+  // `loadFile`'s `search` in a packaged build.
+  if (IS_DEV)
+    return { url: new URL(desc.entry + (desc.search ?? ""), VITE_DEV_SERVER_URL).href };
+  return { file: path.join(RENDERER_DIST, desc.entry), search: desc.search };
+}
+
+// Pure metadata → BrowserWindow options adapter. The taxonomy facts (preload,
+// sandbox, bounds, base title) live in the `WINDOWS` table (@lib/windows) so
+// every window consumer derives from one source; only the Electron-specific
+// chrome (hidden titlebar + overlay, icon, background) stays here.
+function windowOptions(desc: WindowDescriptor): Electron.BrowserWindowConstructorOptions {
+  // Shared chrome: every window class uses the hidden titlebar + overlay so the
+  // one TitleBar component renders the chrome consistently, profiler included.
+  const chrome: Electron.BrowserWindowConstructorOptions = {
+    titleBarStyle: "hidden",
+    titleBarOverlay: { color: "#2f3241", symbolColor: "#74b1be", height: 40 },
+    backgroundColor: "black",
+    icon: getIcon("icon.ico"),
+  };
+  const spec = WINDOWS[desc.class];
+  const { width, height, minWidth, minHeight } = spec.bounds;
+  // App windows carry the app's own title; every other class uses the base.
+  const title =
+    desc.class === "app"
+      ? `FoveaCam Duo — ${appById(desc.appId!)?.title ?? desc.appId}`
+      : spec.title;
+  return {
+    ...chrome,
+    title,
+    width,
+    height,
+    ...(minWidth !== undefined ? { minWidth } : {}),
+    ...(minHeight !== undefined ? { minHeight } : {}),
+    webPreferences: {
+      preload: preload[spec.preload],
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: spec.sandbox,
+    },
+  };
+}
+
+function spawnWindow(desc: WindowDescriptor): ManagedWindow {
+  const win = new BrowserWindow({
+    ...windowOptions(desc),
+    ...(desc.bounds ?? {}),
+    // Switch inheritance: land in the same display state as the window this
+    // one replaces (welcome↔app switches thread these through the manager).
+    ...(desc.fullscreen ? { fullscreen: true } : {}),
+  });
+  if (desc.maximized && !desc.fullscreen) win.maximize();
+  // App windows maximize by default unless restoring or inheriting a specific
+  // display state.
+  else if (desc.class === "app" && !desc.bounds && !desc.fullscreen) win.maximize();
+
+  const target = entryURL(desc);
+  if (target.url) void win.loadURL(target.url);
+  else void win.loadFile(target.file!, target.search ? { search: target.search } : undefined);
+
+  // Make all links open with the browser, not with the application.
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith("https:")) shell.openExternal(url);
     return { action: "deny" };
   });
-  // win.webContents.on('will-navigate', (event, url) => { }) #344
-}
+  // Renderer-initiated reloads/navigation blocked in production — the packaged
+  // windows never navigate legitimately. Dev keeps navigation for the vite
+  // dev-server flows.
+  if (!IS_DEV)
+    win.webContents.on("will-navigate", (e) => e.preventDefault());
 
-function customizeApp() {
-  if (process.platform === "darwin") {
-    const icon = getIcon("1024x1024.png");
-    app.dock.setIcon(icon);
+  // Forward fullscreen transitions so the shared chrome can adjust
+  // traffic-light inset + drag regions on BOTH edges.
+  win.on("enter-full-screen", () => pushTo(win.webContents, "window:fullscreen", true));
+  win.on("leave-full-screen", () => pushTo(win.webContents, "window:fullscreen", false));
+
+  // Reload accelerator policy, enforced per-window:
+  //   plain Ctrl/Cmd-R  → recorder trigger stub, NEVER reload (all modes)
+  //   Ctrl/Cmd-Shift-R  → dev only: full restart (main + orchestrator) with
+  //                       window-layout restore; blocked in production.
+  win.webContents.on("before-input-event", (event, input) => {
+    if (input.type !== "keyDown") return;
+    const mod = process.platform === "darwin" ? input.meta : input.control;
+    if (!mod || input.key.toLowerCase() !== "r") return;
+    event.preventDefault();
+    if (input.shift) {
+      if (IS_DEV) void devRestart();
+    } else {
+      // Emit the recorder trigger; the renderer's RecordButton consumes it.
+      pushTo(win.webContents, "recorder:trigger");
+    }
+  });
+
+  // Last-known display state, refreshed at "close" (before destruction) — the
+  // welcome rule respawns AFTER "closed", when the BrowserWindow can no longer
+  // answer; this is what lets app→welcome inherit bounds + fullscreen.
+  let lastDisplayState = {
+    bounds: win.getBounds(),
+    fullscreen: win.isFullScreen(),
+    maximized: win.isMaximized(),
+  };
+  win.on("close", () => {
+    lastDisplayState = {
+      bounds: win.getBounds(),
+      fullscreen: win.isFullScreen(),
+      maximized: win.isMaximized(),
+    };
+  });
+
+  const managed: ManagedWindow = {
+    class: desc.class,
+    appId: desc.appId,
+    fileKey: desc.fileKey,
+    owner: desc.owner, // parent pointer (set by the sub-window opener)
+    key: desc.key, // toggle dedupe key
+    windowId: desc.windowId, // manager-minted stable instance id
+    focus: () => {
+      if (win.isMinimized()) win.restore();
+      win.focus();
+    },
+    close: () => win.close(),
+    isDestroyed: () => win.isDestroyed(),
+    getURL: () => win.webContents.getURL(),
+    getBounds: () => (win.isDestroyed() ? lastDisplayState.bounds : win.getBounds()),
+    isFullScreen: () =>
+      win.isDestroyed() ? lastDisplayState.fullscreen : win.isFullScreen(),
+    isMaximized: () =>
+      win.isDestroyed() ? lastDisplayState.maximized : win.isMaximized(),
+  };
+  // Disposable-orchestrator: an APP window forks a FRESH hardware
+  // instance and owns it. The window is claimed now so its close disposes the
+  // instance (registry.onWindowClosed → drain-and-quiesce → kill → janitor).
+  // The renderer's `orchestrator:connect` (after load) then brokers to it.
+  if (desc.class === "app" && desc.windowId) {
+    // Name the instance by its activating app id — a bound profiler titles
+    // itself with this session (e.g. "manual-control · #hw-1").
+    const inst = registry.open("hardware", desc.appId);
+    registry.claimWindow(inst.id, desc.windowId);
   }
-  app.setName("FoveaCam Duo");
+  // Sender→windowId lookup for the orchestrator channel handshake (the
+  // connect IPC only knows `event.sender`), + the close-teardown signal the
+  // composition keys `win/<windowId>/...` namespaces on.
+  if (desc.windowId) {
+    const windowId = desc.windowId;
+    const senderId = win.webContents.id; // captured now — webContents is gone by "closed"
+    windowIdBySender.set(senderId, windowId);
+    webContentsByWindowId.set(windowId, win.webContents);
+    win.on("closed", () => {
+      windowIdBySender.delete(senderId);
+      webContentsByWindowId.delete(windowId);
+      // Route the per-window teardown signal (`win/<id>` compose state) to
+      // the instance BOUND to this window (owned app, or an attached profiler),
+      // else the current instance (an unbound projection/debug). Skip a DEAD
+      // binding — a profiler that outlived its instance has nothing to notify
+      // (and its instance's process is gone). Then let the registry dispose the
+      // instance when its last OWNED window is gone (attachments never gate it).
+      const owner = registry.boundInstance(windowId) ?? registry.currentHardware();
+      if (owner && owner.phase !== "dead")
+        owner.proc.postMessage({ type: "window:closed", windowId });
+      registry.onWindowClosed(windowId);
+    });
+  }
+  // Viewer windows: flush + kill this window's playback engine on close
+  // (flush-before-close single-writer sidecar). Captured now — the webContents
+  // is gone by "closed".
+  if (desc.class === "viewer") {
+    const engineKey = win.webContents.id;
+    // Export abort-on-close intercept: while this window
+    // has queued/running exports, the FIRST close is intercepted — ask the
+    // renderer to confirm the abort; it aborts + calls `confirmViewerClose`,
+    // which re-`close()`s with the confirmed flag set (letting this pass).
+    win.on("close", (e) => {
+      if (viewerCloseConfirmed.has(engineKey)) return; // confirmed → proceed
+      if (!viewerExportsActive.get(engineKey)) return; // no exports → proceed
+      e.preventDefault();
+      pushTo(win.webContents, "viewer:confirm-close");
+    });
+    win.on("closed", () => {
+      viewerExportsActive.delete(engineKey);
+      viewerCloseConfirmed.delete(engineKey);
+      void viewerEngines.close(engineKey); // engine also abortAll()s exports
+    });
+  }
+  // Settings / TeleCanvas windows need no orchestrator instance — their store
+  // goes straight to MAIN, so there is no non-hardware "settings" instance to
+  // release on close.
+  win.on("closed", () => manager.onWindowClosed(managed));
+  return managed;
 }
 
-// IPC handler to provide DATA path to renderer
-ipcMain.handle("get-data-path", () => DATA);
-
-app.whenReady().then(customizeApp).then(createWindow);
-
-app.on("window-all-closed", () => {
-  // On macOS it is common for applications and their menu bar
-  // to stay active until the user quits explicitly with Cmd + Q
-  if (process.platform !== "darwin") app.quit();
+const manager = new WindowManager({
+  spawn: spawnWindow,
+  drainSessions,
+  notifyRefusal: (reason) => {
+    void dialog.showMessageBox({
+      type: "warning",
+      title: "Cannot switch apps",
+      message: "The current app is busy.",
+      detail: `${reason}. Finish or stop it, then try again.`,
+    });
+  },
 });
 
-app.on("second-instance", () => {
-  if (win) {
-    // Focus on the main window if the user tried to open another
-    if (win.isMinimized()) win.restore();
-    win.focus();
-  } else {
-    createWindow();
+// ---- App-wide Settings window (Cmd+, / "Settings…") -----------------------
+// The config + TeleCanvas windows are SINGLETON, UNBOUND windows that consume
+// ONLY the config store (MAIN-backed) plus main-brokered bridge data (probe
+// cameras, TeleCanvas host status). They never connect to an orchestrator
+// instance, so main forks NO lightweight "settings" instance to back their
+// store. A config edit applies live across every window via main's authority
+// broadcast.
+function openConfigWindow(): void {
+  manager.openConfig();
+}
+function openTeleCanvasWindow(): void {
+  manager.openTeleCanvas();
+}
+onRenderer("window:open-config", () => openConfigWindow());
+onRenderer("window:open-telecanvas", () => openTeleCanvasWindow());
+
+onRenderer("window:open-app", (appId) => {
+  if (typeof appId === "string" && appById(appId)) void manager.openApp(appId);
+});
+// Open a profiler pinned to the CURRENT live app instance (per-instance
+// binding).
+// The binding is stamped into the window URL + registered as an observer
+// ATTACHMENT (never an owned window, so closing the profiler can't dispose the
+// instance, and the instance's death can't close the profiler). Opened from the
+// status-only Welcome (no live instance) it's unbound — "no active session".
+onRenderer("open-profiler-window", () => {
+  const inst = registry.currentHardware();
+  const win = manager.openProfiler(
+    inst ? { instanceId: inst.id, sessionName: inst.sessionName } : {},
+  );
+  if (inst && win.windowId) registry.attachWindow(inst.id, win.windowId);
+});
+onRenderer("window:open-projection", (pane) => {
+  // `pane` is a serialized pane descriptor — the
+  // window seeds a single-leaf layout from it, then owns its own split tree.
+  if (typeof pane === "string" && pane) manager.openProjection({ pane });
+});
+// Toggle a module's `debug`-class sub-window. Owner = the current app
+// window (apps are exclusive, so it's the opener); cascade tears it down on
+// switch. `kind` selects the module component (debugger vs capture-preview)
+// and keys a distinct window per kind.
+onRenderer("window:toggle-debug", (session, kind) => {
+  if (typeof session === "string" && session)
+    manager.toggleDebug(session, manager.appWindow(), kind);
+});
+// Idempotent open-or-focus of the same `debug`-class sub-window: the capture /
+// raster buttons ENSURE the preview window is up.
+onRenderer("window:open-debug", (session, kind) => {
+  if (typeof session === "string" && session)
+    manager.openDebug(session, manager.appWindow(), kind);
+});
+
+// ---- Dev restart (Ctrl/Cmd-Shift-R) ---------------------------------------
+// Persist the window manifest → relaunch the whole app (orchestrator dies
+// with main and boots fresh) → startup consumes the manifest below.
+let restarting = false;
+async function devRestart(): Promise<void> {
+  if (restarting) return;
+  restarting = true;
+  manager.markQuitting();
+  try {
+    await saveManifest(DATA, manager.collectManifest());
+  } catch (error) {
+    console.error("Failed to persist window manifest:", error);
   }
+  app.relaunch();
+  // `app.exit()` skips `before-quit`, so dispose the current instance(s) here:
+  // each drains + disarms hardware + acks (the registry kills + janitors any
+  // that wedge). Bounded so a hung quiesce can't stall the relaunch over armed
+  // hardware. The probe (utilityProcess child) dies with main; the relaunched
+  // main spawns fresh ones (an instance killed here re-forks on next open; the
+  // probe survives via respawn).
+  registry.teardownAll("dev restart");
+  await waitUntil(() => !registry.anyAlive(), 3000);
+  killProbe();
+  telecanvas.killAll();
+  // The relaunched main spawns its own watchdog — stand this instance's down.
+  standDownWatchdog();
+  app.exit(0);
+}
+
+// ---- File association ------------------------------------------------------
+// macOS delivers double-clicked/dragged `.fcap`/`.fovea` files via `open-file` —
+// which can fire BEFORE `whenReady` when the app is launched by the file
+// itself, so pre-ready paths queue until the window manager can spawn.
+// A running instance is also notified over a userData Unix socket by the
+// dev-mode shim — that callback and a fresh
+// launch's own argv both funnel through `openExternal` too, so no path opens a
+// second Electron. (Windows/Linux still route argv via `second-instance`.)
+const pendingOpenFiles: string[] = [];
+let windowsReady = false;
+let openFileServer: OpenFileServer | null = null;
+
+function openExternal(p: string): void {
+  if (!isRecordingPath(p)) return;
+  if (windowsReady) manager.openViewer(p);
+  else pendingOpenFiles.push(p);
+}
+
+app.on("open-file", (event, filePath) => {
+  event.preventDefault();
+  openExternal(filePath);
+});
+
+// Cold-start argv (macOS shim connect-failure path, or a direct CLI launch):
+// seed recording args now so they queue behind the initial window layout.
+for (const arg of process.argv.filter(isRecordingPath)) openExternal(arg);
+
+// ---- Startup ---------------------------------------------------------------
+
+async function createInitialWindows(): Promise<void> {
+  // Dev restart restore: consume (one-shot) the persisted manifest and
+  // restore that exact layout; anything else boots the default welcome.
+  const manifest = IS_DEV ? await consumeManifest(DATA) : null;
+  await manager.restore(planFromManifest(manifest));
+  // Files double-clicked before/at launch (macOS open-file) open now, next
+  // to the default layout (a viewer never suppresses welcome — it doesn't
+  // count toward the welcome rule).
+  windowsReady = true;
+  for (const f of pendingOpenFiles.splice(0)) manager.openViewer(f);
+}
+
+app
+  .whenReady()
+  // Open-file socket FIRST — the dev-mode shim polls for it to deliver
+  // double-clicked recordings (queued until windows exist), and the rest of
+  // this chain can take minutes on hardware (probe enumeration).
+  .then(() => {
+    openFileServer = startOpenFileServer(
+      path.join(DATA, "open-file.sock"),
+      openExternal,
+    );
+  })
+  .then(sweepStaleWatchdogState)
+  .then(customizeApp)
+  // Store-schema migrations run FIRST — before the
+  // probe or any window can read the store — so no client observes a
+  // half-migrated tree. Auto-snapshots the store git repo around the change.
+  .then(migrateStoreOnBoot)
+  // Disposable model: no orchestrator is spawned at startup — app
+  // instances fork on demand at app-window open. The enumerate-only PROBE and
+  // the detached main-crash WATCHDOG come up now instead, so Welcome shows the
+  // live camera list and the safety net is armed for the whole session.
+  .then(spawnProbe)
+  .then(spawnWatchdog)
+  // TeleCanvas host: if the persisted config selected host mode, bring the
+  // server up now so an external display can connect before any app opens.
+  .then(applyPersistedTeleCanvas)
+  .then(createInitialWindows);
+
+// Quit = graceful hardware quiescence first (safety invariant): dispose EVERY
+// live instance (each drains sessions, DISABLES the MEMS controller over serial
+// — an async write a bare SIGTERM can't complete — releases the cameras, and
+// confirms `quiesced`); the registry kills + janitors any that wedge. Then kill
+// the probe + stand the watchdog down, and quit for real.
+let quitting = false;
+app.on("before-quit", (event) => {
+  manager.markQuitting();
+  if (quitting) return; // second pass: proceed with the real quit
+  quitting = true;
+  event.preventDefault();
+  void (async () => {
+    try {
+      // WINDOW-FIRST teardown order: close owned sub-windows (they
+      // cascade) then app/top windows, and let their teardown (pipe reads,
+      // `window:closed`) flush BEFORE the instance handshakes, so no renderer is
+      // mid pipe-read while an instance disarms. Bounded so a stuck window can't
+      // hang quit. (Closing an app window already begins its instance teardown.)
+      manager.closeAll();
+      await waitUntil(
+        () => BrowserWindow.getAllWindows().every((w) => w.isDestroyed()),
+        3000,
+      );
+      // Viewer engines are MAIN-owned utilityProcesses independent of the
+      // instances/hardware — flush their sidecars (bounded) and reap them.
+      await viewerEngines.killAll();
+      // Instance handshakes: every live instance quiesces + acks;
+      // the registry reaps on the ack or kills + janitors at the bounded
+      // deadline. Await all deaths (bounded — the per-instance timers guarantee
+      // progress even if this outer wait lapses).
+      registry.teardownAll("app quit");
+      await waitUntil(() => !registry.anyAlive(), 6000);
+    } finally {
+      killProbe();
+      openFileServer?.close();
+      // Kill the TeleCanvas host (main-owned utilityProcess, no hardware).
+      telecanvas.killAll();
+      // Clean shutdown reached — stand the crash watchdog down before we exit.
+      standDownWatchdog();
+      app.quit();
+    }
+  })();
+});
+
+app.on("window-all-closed", () => {
+  // before-quit already owns the teardown order — don't race it (and on
+  // non-darwin, closing the last window here during a controlled quit would
+  // otherwise fire a premature app.quit()).
+  if (quitting) return;
+  // On non-macOS, no windows = quit.
+  if (process.platform !== "darwin") {
+    app.quit();
+    return;
+  }
+  // Disposable model: with no app window there is no hardware instance at all —
+  // closing the app window already disposed its instance (drain → quiesce →
+  // kill → janitor), so nothing is held headless. The enumerate-only probe
+  // holds nothing; the macOS app idles safely with the menu bar until a dock
+  // re-activate re-opens Welcome.
+});
+
+app.on("second-instance", (_e, commandLine = []) => {
+  // Windows/Linux file association: a second launch with recording args
+  // (`.fcap`/legacy `.fovea`) lands here (single-instance lock) — open viewers
+  // instead of focusing.
+  const files = commandLine.filter(isRecordingPath);
+  if (files.length > 0) {
+    for (const f of files) manager.openViewer(f);
+    return;
+  }
+  // Otherwise: focus an existing window, or bring the welcome window back.
+  const open = manager.open();
+  if (open.length > 0) open[0].focus();
+  else manager.ensureWelcome();
 });
 
 app.on("activate", () => {
-  const allWindows = BrowserWindow.getAllWindows();
-  if (allWindows.length) {
-    allWindows[0].focus();
-  } else {
-    createWindow();
-  }
+  const open = manager.open();
+  if (open.length > 0) open[0].focus();
+  else manager.ensureWelcome();
 });

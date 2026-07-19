@@ -1,319 +1,204 @@
+<!-- -------------------------------------------------
+Copyright (c) 2025 Yuxuan Zhang, dev@z-yx.cc
+This source code is licensed under the MIT license.
+You may find the full license in project root directory.
+--------------------------------------------------- -->
+<!--
+  Per-fovea drift measurement — a thin client over the `calibrate-drift` session
+  (renders the three streams + derived/saved drift readouts, drives
+  target-id/override/commit). The `controller` session is read directly for pos/dv.
+-->
 <script setup lang="ts">
-import { computed, onUnmounted, ref, watch } from "vue";
-import { MarkerDetector } from "core/Vision";
-import { Point2d } from "core/Geometry";
-import { ROLE, THEME, useCalibratedTriple } from "@lib/camera";
+import { computed, ref } from "vue";
+import { ROLE, THEME } from "@lib/camera-config";
+import { useAppConfig } from "@lib/config";
+import { useTripleBaseline } from "@lib/triple-baseline";
+import { useController, useSession, usePipeFrame, usePidOverride } from "@lib/orchestrator/client";
+import { nodeId } from "@lib/orchestrator/graph-contract";
+import { calibrateDrift } from "./contract";
+import Recording from "@src/record";
+import Capture from "@src/capture";
 import StreamView from "@src/components/StreamView.vue";
-import PosView, { Pos } from "@src/components/PosView.vue";
-import { getController } from "@src/components/Controller.vue";
-import FrameCursor from "@src/components/FrameCursor.vue";
-import Tracker, { actuate } from "@modules/calibrate-extrinsic/tracker";
-import ConfigEntry from "@src/components/ConfigEntry.vue";
-import MarkerDetection from "@modules/calibrate-extrinsic/MarkerDetection.vue";
+import PosView, { type Pos } from "@src/components/PosView.vue";
+import MarkerTargetInputs from "@src/components/MarkerTargetInputs.vue";
 import Drift from "./Drift.vue";
 import RemoteCanvasTeleport from "@src/components/RemoteCanvasTeleport.vue";
 import Marker from "@src/graphics/Marker.vue";
 import CrossHair from "@src/graphics/CrossHair.vue";
-import { useAppConfig } from "@lib/config";
 import RangeSlider from "@src/inputs/range-slider.vue";
 import Drawer from "@src/components/Drawer.vue";
+import { driftUpdatable } from "./drift-gate";
+import type { Point2d } from "core/Geometry";
 
 const app_config = await useAppConfig();
+const drawer_height = ref(0);
+const session = useSession(calibrateDrift, "calibrate-drift");
+const ctrl = useController();
+const { state, telemetry } = session;
+// Title-bar RecordButton + camera-icon Capture toggle (shared facades).
+new Recording(session, "calibrate-drift");
+new Capture(session, "calibrate-drift");
 
-const controller = computed(getController);
-const { L, C, R, CI, LE, RE, config, release } = await useCalibratedTriple();
-const undistort = CI.undistort!;
-if (!undistort)
-  throw new Error("Intrinsic calibration not found for center camera.");
-
-const detector = new MarkerDetector("4X4_50");
-
-const tracker = {
-  L: new Tracker(L, detector, 1, 0.25),
-  C: new Tracker(C, detector, 0, 1.0),
-  R: new Tracker(R, detector, 2, 0.25),
-};
-
-const override: { left: Pos | null; right: Pos | null } = {
-  left: null,
-  right: null,
-};
-
-const angular = computed(() => {
-  if (!tracker.C.center_absolute) return null;
-  return undistort.angular([tracker.C.center_absolute], true)[0];
-});
-
-function applyDrift(r: Point2d, d: Point2d = { x: 0, y: 0 }) {
-  return {
-    x: r.x + d.x,
-    y: r.y + d.y,
-  };
+// Derived-vs-saved delta per eye; `updatable*` gates the Update buttons — a delta
+// within the tracker's measurement-noise floor is churn, not signal (drift-gate.ts).
+function delta(derived: Point2d | null, saved: Point2d | null): Point2d | null {
+  if (!derived) return null;
+  return { x: derived.x - (saved?.x ?? 0), y: derived.y - (saved?.y ?? 0) };
 }
+const deltaL = computed(() => delta(telemetry.derived.L, telemetry.saved.L));
+const deltaR = computed(() => delta(telemetry.derived.R, telemetry.saved.R));
+const updatableL = computed(() => driftUpdatable(telemetry.derived.L, telemetry.saved.L));
+const updatableR = computed(() => driftUpdatable(telemetry.derived.R, telemetry.saved.R));
 
-function deriveDrift(fovea: Point2d | null) {
-  const r = angular.value;
-  return r && fovea
-    ? {
-        x: r.x - fovea.x,
-        y: r.y - fovea.y,
-      }
-    : null;
+// Raw L/C/R previews ride the native `camera:<serial>` pipe; marker overlays draw
+// client-side from `telemetry.detection`.
+const pipe = (role: "L" | "C" | "R") =>
+  usePipeFrame(() => (state.serials?.[role] ? nodeId.convert(state.serials[role]) : null));
+const frameL = pipe("L");
+const frameC = pipe("C");
+const frameR = pipe("R");
+
+function stroke(): number {
+  return 3;
 }
-
-const derived = {
-  get L() {
-    return (
-      tracker.L.target &&
-      controller.value &&
-      deriveDrift(LE.V2A.predict(controller.value.pos.left))
-    );
-  },
-  get R() {
-    return (
-      tracker.R.target &&
-      controller.value &&
-      deriveDrift(RE.V2A.predict(controller.value.pos.right))
-    );
-  },
-};
-
-const actuator = computed(
-  () =>
-    controller.value &&
-    actuate(
-      controller.value,
-      tracker.L,
-      tracker.R,
-      {
-        kp: 10.0,
-        get origin_left() {
-          const r = angular.value;
-          return r
-            ? LE.A2V.predict(applyDrift(r, config.drift_l))
-            : { x: 0, y: 0 };
-        },
-        get origin_right() {
-          const r = angular.value;
-          return r
-            ? RE.A2V.predict(applyDrift(r, config.drift_r))
-            : { x: 0, y: 0 };
-        },
-      },
-      override,
-    ),
-);
 
 const marker_size = computed(() => app_config.cal_marker_size_mm);
 const marker_ratio = computed(() => app_config.cal_marker_ratio);
-const center_marker_size = computed(
-  () => marker_size.value * marker_ratio.value,
-);
+const center_marker_size = computed(() => marker_size.value * marker_ratio.value);
+// Live per-triple baseline: the marker pair sits at ±baseline/2, resolved
+// reactively from the triple's `baseline_mm` (legacy app value, else 200).
+const baseline = useTripleBaseline(() => state.configPath, app_config);
 
-watch(actuator, (_, prev) => prev?.abort());
-
-onUnmounted(async () => {
-  await Promise.all([
-    tracker.L.task.abort(),
-    tracker.C.task.abort(),
-    tracker.R.task.abort(),
-    actuator.value?.abort(),
-  ]);
-  release();
+// Per-eye PID-node override proxies: dragging a PosView pins that eye's servo
+// output; release emits null → the proxy releases (seeded resume).
+const overrideL = usePidOverride<typeof calibrateDrift, Pos>(session, {
+  stateKey: "pidOverrideL",
+  command: "pidOverrideL",
+});
+const overrideR = usePidOverride<typeof calibrateDrift, Pos>(session, {
+  stateKey: "pidOverrideR",
+  command: "pidOverrideR",
 });
 </script>
 
 <template>
-  <div class="cameras">
+  <!-- --p reserves the drawer's height below the content (manual-control
+       idiom) so the fixed drawer never obscures the scrollable tail. -->
+  <div
+    class="cameras"
+    :style="{ '--p': (drawer_height ? drawer_height + 20 : 0) + 'px' }"
+  >
     <div class="view">
-      <StreamView
-        class="stream"
-        :title="ROLE.L"
-        :footnote="`Marker Tracker @ ${tracker.L.fps ?? 'N/A'}`"
-        :camera="L"
-        :theme="THEME.L"
-      >
-        <MarkerDetection
-          v-if="tracker.L.target"
-          :detection="tracker.L.target"
-        />
-        <MarkerDetection
-          v-for="(d, i) in tracker.L.other_targets"
+      <StreamView class="stream" :title="ROLE.L" :payload="frameL" :theme="THEME.L">
+        <circle
+          v-for="(p, i) in telemetry.detection.L?.points ?? []"
           :key="i"
-          :detection="d"
-          color="gray"
+          :cx="p.x"
+          :cy="p.y"
+          :r="stroke()"
+          :fill="THEME.L"
         />
       </StreamView>
-      <ConfigEntry>
-        <span>
-          {{ tracker.L.target ? "✓" : "✗" }}
-          Marker ID to Track:
-        </span>
-        <input type="number" v-model.number="tracker.L.target_id" step="1" />
-      </ConfigEntry>
-      <Drift :drift="derived.L">Derived Drift</Drift>
+      <MarkerTargetInputs :session="session" role="L" :detected="!!telemetry.detection.L" />
+      <Drift :drift="telemetry.derived.L">Derived Drift</Drift>
+      <Drift :drift="deltaL">&Delta; vs Saved</Drift>
       <PosView
-        v-if="controller"
-        :pos="controller.pos.left"
-        :lim="controller.dv"
+        v-if="ctrl.telemetry.connected"
+        :pos="ctrl.telemetry.pos.left"
+        :lim="ctrl.telemetry.dv"
         :color="THEME.L"
         style="width: 100%"
         :font-size="12"
-        @select="(p) => (override.left = p)"
-      ></PosView>
+        @select="(p) => (overrideL.value = p)"
+      />
     </div>
     <div class="view">
-      <StreamView
-        class="stream"
-        :title="ROLE.C"
-        :footnote="`Marker Tracker @ ${tracker.C.fps ?? 'N/A'}`"
-        :camera="C"
-        :theme="THEME.C"
-      >
-        <MarkerDetection
-          v-if="tracker.C.target"
-          :detection="tracker.C.target"
-        />
-        <MarkerDetection
-          v-for="(d, i) in tracker.C.other_targets"
+      <StreamView class="stream" :title="ROLE.C" :payload="frameC" :theme="THEME.C">
+        <circle
+          v-for="(p, i) in telemetry.detection.C?.points ?? []"
           :key="i"
-          :detection="d"
-          color="gray"
-        />
-        <FrameCursor
-          v-if="tracker.C.center_absolute"
-          :cursor="tracker.C.center_absolute"
-          :undistort="undistort"
-          box="rect"
+          :cx="p.x"
+          :cy="p.y"
+          :r="stroke()"
+          :fill="THEME.C"
         />
       </StreamView>
-      <ConfigEntry>
-        <span>
-          {{ tracker.C.target ? "✓" : "✗" }}
-          Marker ID to Track:
-        </span>
-        <input type="number" v-model.number="tracker.C.target_id" step="1" />
-      </ConfigEntry>
+      <MarkerTargetInputs :session="session" role="C" :detected="!!telemetry.detection.C" />
       <div class="actions">
-        <button
-          :disabled="!derived.L"
-          @click="config.drift_l = { ...derived.L! }"
-          @keydown.backspace.prevent="config.drift_l = undefined"
-        >
+        <button :disabled="!updatableL" @click="session.call('updateDrift', { role: 'L' })">
           Update Drift (L)
         </button>
         <button
-          :disabled="!derived.L || !derived.R"
-          @click="
-            config.drift_l = { ...derived.L! };
-            config.drift_r = { ...derived.R! };
-          "
-          @keydown.backspace.prevent="
-            config.drift_l = undefined;
-            config.drift_r = undefined;
-          "
+          :disabled="!updatableL || !updatableR"
+          @click="session.call('updateDrift', { role: 'ALL' })"
         >
           Update Drift (All)
         </button>
-        <button
-          :disabled="!derived.R"
-          @click="config.drift_r = { ...derived.R! }"
-          @keydown.backspace.prevent="config.drift_r = undefined"
-        >
+        <button :disabled="!updatableR" @click="session.call('updateDrift', { role: 'R' })">
           Update Drift (R)
         </button>
       </div>
-      <Drift :drift="config.drift_l">Saved Drift (L)</Drift>
-      <Drift :drift="config.drift_r">Saved Drift (R)</Drift>
+      <Drift :drift="telemetry.saved.L">Saved Drift (L)</Drift>
+      <Drift :drift="telemetry.saved.R">Saved Drift (R)</Drift>
     </div>
     <div class="view">
-      <StreamView
-        class="stream"
-        :title="ROLE.R"
-        :footnote="`Marker Tracker @ ${tracker.R.fps ?? 'N/A'}`"
-        :camera="R"
-        :theme="THEME.R"
-      >
-        <MarkerDetection
-          v-if="tracker.R.target"
-          :detection="tracker.R.target"
-        />
-        <MarkerDetection
-          v-for="(d, i) in tracker.R.other_targets"
+      <StreamView class="stream" :title="ROLE.R" :payload="frameR" :theme="THEME.R">
+        <circle
+          v-for="(p, i) in telemetry.detection.R?.points ?? []"
           :key="i"
-          :detection="d"
-          color="gray"
+          :cx="p.x"
+          :cy="p.y"
+          :r="stroke()"
+          :fill="THEME.R"
         />
       </StreamView>
-      <ConfigEntry>
-        <span>
-          {{ tracker.R.target ? "✓" : "✗" }}
-          Marker ID to Track:
-        </span>
-        <input
-          type="number"
-          v-model.number="tracker.R.target_id"
-          style="width: 2ch"
-        />
-      </ConfigEntry>
-      <Drift :drift="derived.R">Derived Drift</Drift>
+      <MarkerTargetInputs :session="session" role="R" :detected="!!telemetry.detection.R" />
+      <Drift :drift="telemetry.derived.R">Derived Drift</Drift>
+      <Drift :drift="deltaR">&Delta; vs Saved</Drift>
       <PosView
-        v-if="controller"
-        :pos="controller.pos.right"
-        :lim="controller.dv"
+        v-if="ctrl.telemetry.connected"
+        :pos="ctrl.telemetry.pos.right"
+        :lim="ctrl.telemetry.dv"
         :color="THEME.R"
         style="width: 100%"
         :font-size="12"
-        @select="(p) => (override.right = p)"
-      ></PosView>
+        @select="(p) => (overrideR.value = p)"
+      />
     </div>
   </div>
-  <Drawer>
+  <Drawer v-model="drawer_height">
     <div class="options fill">
-      <RangeSlider
-        v-model="app_config.cal_marker_size_mm"
-        :min="10"
-        :max="120"
-        :neutral="60"
-        :step="1"
-      >
+      <RangeSlider v-model="app_config.cal_marker_size_mm" :min="10" :max="120" :neutral="60" :step="1">
         <span>Marker Size</span>
         <span>{{ app_config.cal_marker_size_mm.toFixed(1) }} mm</span>
       </RangeSlider>
-      <RangeSlider
-        v-model="app_config.cal_marker_ratio"
-        :min="0.2"
-        :max="1.2"
-        :neutral="1.0"
-        :step="0.02"
-      >
+      <RangeSlider v-model="app_config.cal_marker_ratio" :min="0.2" :max="1.2" :neutral="1.0" :step="0.02">
         <span>Center Marker</span>
         <span>{{ (app_config.cal_marker_ratio * 100).toFixed(0) }}%</span>
+      </RangeSlider>
+      <!-- Centering-servo gain, live (the session restarts the servo debounced;
+           velocity-form — one real gain; see contract). Extrinsic's pattern. -->
+      <RangeSlider v-model="state.servoGain" :min="1" :max="64" :neutral="10" :step="1">
+        <span>Servo Gain</span>
+        <span>{{ state.servoGain.toFixed(0) }}</span>
       </RangeSlider>
     </div>
   </Drawer>
   <RemoteCanvasTeleport>
     <CrossHair
-      :cx="app_config.baseline_distance_mm / 2 + marker_size"
+      :cx="baseline / 2 + marker_size"
       :cy="center_marker_size"
       weight="2"
     />
-    <Marker
-      :id="tracker.L.target_id"
-      :size="marker_size"
-      :cx="-app_config.baseline_distance_mm / 2"
-    />
-    <Marker
-      :id="tracker.R.target_id"
-      :size="marker_size"
-      :cx="app_config.baseline_distance_mm / 2"
-    />
-    <Marker :id="tracker.C.target_id" :size="center_marker_size" />
+    <Marker :id="state.targetId.L" :size="marker_size" :cx="-baseline / 2" />
+    <Marker :id="state.targetId.R" :size="marker_size" :cx="baseline / 2" />
+    <Marker :id="state.targetId.C" :size="center_marker_size" />
   </RemoteCanvasTeleport>
 </template>
 
 <style scoped lang="scss">
 .cameras {
+  --p: 0; // drawer-height bottom reserve (bound inline from drawer_height)
   position: relative;
   display: flex;
   justify-content: space-evenly;
@@ -321,7 +206,7 @@ onUnmounted(async () => {
   flex-wrap: wrap;
   flex-direction: row;
   width: 100%;
-  padding: 1em 0;
+  padding: 1em 0 calc(1em + var(--p)) 0;
   margin: 0;
 
   & > * {

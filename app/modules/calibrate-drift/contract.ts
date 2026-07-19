@@ -1,0 +1,86 @@
+// ------------------------------------------------------
+// Copyright (c) 2025 Yuxuan Zhang, dev@z-yx.cc
+// This source code is licensed under the MIT license.
+// You may find the full license in project root directory.
+// -------------------------------------------------------
+//
+// Typed boundary for the calibrate-drift session — measures + persists the small
+// per-fovea angular offset between the regression's predicted marker position and
+// the observed one. Continuous live tracking; the renderer also reads the
+// `controller` session directly for `pos`/`dv`.
+
+import { cmd, defineContract } from "@lib/orchestrator/protocol";
+import {
+  pidOverrideCmd,
+  pidOverrideState,
+} from "@lib/orchestrator/pid-override-contract";
+import type { Point2d } from "core/Geometry";
+import type { Pos } from "@lib/controller-codec";
+import { captureCommands, captureTelemetry, recordingCommands, recordingTelemetry } from "@lib/orchestrator/contracts";
+
+/** Live per-camera detection overlay — a generic point list (the matched
+ *  marker's 4 corners), same simplification as calibrate-intrinsic. */
+export type DetectionView = { points: Point2d[] } | null;
+
+export const calibrateDrift = defineContract({
+  state: {
+    targetId: { L: 1, C: 0, R: 2 },
+    /** Per-eye PID-node OVERRIDE slots (reusable fragment,
+     *  `@lib/orchestrator/pid-override-contract`): a drag on `PosView` pins that
+     *  eye's servo output at the dragged pose (control law held reset); the
+     *  renderer reads it back via `usePidOverride`. Two named instances because
+     *  each eye is a separate PID node — `applyPidOverride` stays generic. */
+    pidOverrideL: pidOverrideState<Pos>(),
+    pidOverrideR: pidOverrideState<Pos>(),
+    /** Leased camera serials per role — the renderer binds raw previews
+     *  to the `camera:<serial>` pipe via `usePipeFrame`. Set on acquire. */
+    serials: {} as Partial<Record<"L" | "C" | "R", string>>,
+    /** The leased triple's config store path (`["triples", <hash>]`), or []
+     *  pre-lease — the renderer opens this doc reactively to read the per-triple
+     *  `baseline_mm` for LIVE marker spacing (`useTripleBaseline`). Set on
+     *  acquire. */
+    configPath: [] as string[],
+    /** Centering visual-servo gain (velocity-form: `startServo`'s single `kp`,
+     *  which maps to `ki` internally — kp/kd are structurally 0 in this control
+     *  law). Drawer-tunable; the session restarts the servo (debounced) on
+     *  change — the servo re-seeds from the live pose, so retuning never snaps.
+     *  Default = drift's baseline gain (extrinsic's drawer pattern). */
+    servoGain: 10,
+  },
+  telemetry: {
+    ready: false as boolean,
+    detection: { L: null, C: null, R: null } as Record<"L" | "C" | "R", DetectionView>,
+    /** Wide-camera angle the center tracker currently sees (drives the
+     *  drift derivation and the servo's origin), or null with no target. */
+    center_angle: null as Point2d | null,
+    /** Live-derived drift (what "Update Drift" would write), per fovea. */
+    derived: { L: null, R: null } as Record<"L" | "R", Point2d | null>,
+    /** Currently-saved drift (the triple config's `drift_l`/`drift_r`). */
+    saved: { L: null, R: null } as Record<"L" | "R", Point2d | null>,
+    // Recording.
+    ...captureTelemetry(),
+    ...recordingTelemetry(),
+  },
+  // No session frames: the raw L/C/R previews bind the `camera:<serial>` pipe
+  // via `usePipeFrame`; marker overlays are drawn from the
+  // `detection` telemetry, not frames.
+  frames: [] as const,
+  commands: {
+    setTargetId: cmd<{ role: "L" | "C" | "R"; id: number }>(),
+    /** Per-eye override slot drivers (reusable `pidOverride` fragment): `{ value }`
+     *  pins that eye's output (engage/update), `{ release: true }` resumes control
+     *  (the servo node's `seed` keeps it continuous). Driven by `usePidOverride`. */
+    pidOverrideL: pidOverrideCmd<Pos>(),
+    pidOverrideR: pidOverrideCmd<Pos>(),
+    /** Commit the live-derived drift to the triple's persisted config. */
+    updateDrift: cmd<{ role: "L" | "R" | "ALL" }>(),
+    /** Clear a fovea's saved drift. */
+    clearDrift: cmd<{ role: "L" | "R" | "ALL" }>(),
+    // Recording: records the raw L/C/R sensor streams (advert-verbatim, the
+    // OBVIOUS default set).
+    ...captureCommands(),
+    ...recordingCommands(),
+  },
+});
+
+export type CalibrateDriftContract = typeof calibrateDrift;

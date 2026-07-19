@@ -3,7 +3,14 @@
 .cache
 node_modules
 package-lock.json
-playground/
+playground/*
+# except the recorder bench (B-4 deliverable — committed, re-runnable);
+# note: `playground/` (dir exclude) would make the negation impossible —
+# a file can't be re-included under an excluded parent dir.
+!playground/bench-recorder/
+playground/bench-recorder/node_modules/
+playground/bench-recorder/out/
+playground/bench-recorder/package-lock.json
 
 # C++ Core
 build
@@ -18,8 +25,24 @@ compile_commands.json
 
 # Electron APP
 .dist
+*.tsbuildinfo
+# Window entry HTML — GENERATED from the @lib/windows registry by the
+# foveaWindowEntries vite plugin (A-27); never hand-edited, never committed.
+app/windows/*.html
 
 # Temporary files
 *.tmp
 *.txt
 .DS_Store
+
+# Symlink
+/store
+
+# Test logs
+*.log
+.worker-logs/
+
+# VitePress build output + dev cache (generated; never committed)
+docs/.vitepress/dist/
+docs/.vitepress/cache/
+

@@ -24,6 +24,11 @@ typedef enum Device : uint8_t {
 using Packet::Command::MirrorPosition;
 
 void enable();
+// Periodic config re-assertion: re-send the idempotent DAC-power /
+// internal-reference / software-LDAC setup
+// words to BOTH mirrors. Never RESETs, never writes a value — the mirror does
+// not move, so it is safe to call mid-capture.
+void refresh();
 void disable();
 void set(Device device, const MirrorPosition &pos);
 void apply();

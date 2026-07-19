@@ -1,0 +1,22 @@
+# electron-builder configuration (first landed with A-11 — there was no
+# packaging config before; `npm run build` ran electron-builder on pure
+# defaults). Kept minimal: the load-bearing part this round is
+# `fileAssociations` for `.fovea` (docs/history/refactor/recorder-container.md §4);
+# a packaged-build verification pass is deferred (runtime handling — macOS
+# `open-file`, second-instance argv, File→Open Recording… — landed with it).
+#
+# NOTE: appId is a placeholder derived from the author domain (z-yx.cc) —
+# confirm before any signed/distributed build.
+appId: cc.z-yx.foveacam-duo
+productName: FoveaCam Duo
+directories:
+  output: .dist/pack
+files:
+  - ".dist/electron/**"
+  - ".dist/renderer/**"
+  - "package.json"
+fileAssociations:
+  - ext: fovea
+    name: FoveaCam Recording
+    description: FoveaCam Duo recording container (MCAP content)
+    role: Viewer

@@ -1,0 +1,16 @@
+00:00.100 [VERB] [Controller]: trace tx seq=7 SET:CMD_ACTUATE two_phase=1 v2_capable=1 bytes=13
+00:00.102 [VERB] [Controller]: trace rx seq=7 ACK:CMD_ACTUATE matched=1 retire=0 pending=[7]
+00:00.103 [VERB] [Controller]: trace task seq=7 branch=ack two_phase=1 payload=10 first8=01 00 00 00 00 00 00 00
+00:00.104 [VERB] [Controller]: trace resolve seq=7 phase=accepted ok
+00:00.140 [VERB] [Controller]: trace rx seq=7 FIN:CMD_ACTUATE matched=1 retire=1 pending=[7]
+00:00.141 [VERB] [Controller]: trace task seq=7 branch=fin two_phase=1 payload=10 first8=01 00 00 00 00 00 00 00
+00:00.142 [VERB] [Controller]: trace resolve seq=7 phase=completed ok
+00:00.200 [VERB] [Controller]: trace tx seq=8 SET:CMD_TRIGGER two_phase=1 v2_capable=1 bytes=9
+00:00.202 [VERB] [Controller]: trace rx seq=8 ACK:CMD_TRIGGER matched=1 retire=0 pending=[8]
+00:00.203 [VERB] [Controller]: trace task seq=8 branch=ack two_phase=1 payload=2 first8=40 00
+00:00.204 [VERB] [Controller]: trace resolve seq=8 phase=accepted ok
+00:00.260 [VERB] [Controller]: trace drop seq=8 unsettled=completed
+00:00.300 [VERB] [Controller]: trace tx seq=9 GET:SYS_VERSION two_phase=0 v2_capable=0 bytes=5
+00:00.306 [VERB] [Controller]: trace rx seq=9 ACK:SYS_VERSION matched=1 retire=1 pending=[9]
+00:00.307 [VERB] [Controller]: trace task seq=9 branch=ack two_phase=0 payload=3 first8=01 00 00
+00:00.309 [VERB] [Controller]: trace resolve seq=9 phase=completed ok

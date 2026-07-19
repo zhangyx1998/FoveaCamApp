@@ -77,7 +77,21 @@ private:
   };
 
 private:
-  static inline Threading::Guard<Map<napi_env, Registry>> registry;
+  // INTENTIONALLY LEAKED (never destroyed). On an ABNORMAL exit (uncaught
+  // exception / process.exit) node takes the fast-exit path and SKIPS env
+  // teardown, so the per-env AddCleanupHook(clear) never fires and every hook
+  // is still registered when libc runs the addon's static destructors. If this
+  // map were a plain static, ~Registry would then RUN those hooks from
+  // __run_exit_handlers — touching sibling statics (the CoreObject Local
+  // contexts) whose destruction order across TUs is unspecified, and joining
+  // brick threads inside exit handlers (observed SIGSEGV: test 45, an
+  // assert-failure exit crashed in a Local-context hook after the Iterator
+  // class's `locals` static was already gone). Leaking the map means hooks run
+  // ONLY through the live-env path (`clear`, via napi env teardown /
+  // `core.cleanup()`); a crash-shaped exit runs NO native hooks — hardware
+  // quiescence on those exits is the janitor's job BY DESIGN (janitor.ts).
+  static inline Threading::Guard<Map<napi_env, Registry>> &registry =
+      *new Threading::Guard<Map<napi_env, Registry>>();
 
   static inline Registry &
   get(Napi::Env env, Threading::Guard<Map<napi_env, Registry>>::Ref &ref) {

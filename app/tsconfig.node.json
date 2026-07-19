@@ -1,10 +1,18 @@
 {
   "compilerOptions": {
-    "composite": true,
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
     "resolveJsonModule": true,
-    "allowSyntheticDefaultImports": true
+    "allowSyntheticDefaultImports": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "paths": {
+      "@lib/*": ["./lib/*"],
+      "@src/*": ["./src/*"],
+      "@modules/*": ["./modules/*"],
+      "@orchestrator/*": ["./orchestrator/*"]
+    }
   },
   "include": ["vite.config.ts", "package.json", "electron"]
 }

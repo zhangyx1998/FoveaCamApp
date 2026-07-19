@@ -9,167 +9,70 @@
 
 using namespace Arv;
 
-#define CASE(SRC, DST)                                                         \
-  case SRC:                                                                    \
-    return DST;
+// All five 19-entry conversion tables below expand the single source registry
+// (docs/schema/pixel-formats.ts → PixelFormat.gen.h): Aravis↔internal,
+// string↔internal, and internal→cv::Format. Adding a format = editing that
+// table + regenerating; no switch here changes.
 template <>
 PixelFormat convert(const ArvPixelFormat &fmt) {
   switch (fmt) {
-    CASE(ARV_PIXEL_FORMAT_MONO_8, Mono8);
-    CASE(ARV_PIXEL_FORMAT_MONO_16, Mono16);
-    CASE(ARV_PIXEL_FORMAT_RGB_8_PACKED, RGB8);
-    CASE(ARV_PIXEL_FORMAT_BGR_8_PACKED, BGR8);
-    CASE(ARV_PIXEL_FORMAT_RGBA_8_PACKED, RGBA8);
-    CASE(ARV_PIXEL_FORMAT_BGRA_8_PACKED, BGRA8);
-    CASE(ARV_PIXEL_FORMAT_BAYER_GR_8, BayerGR8);
-    CASE(ARV_PIXEL_FORMAT_BAYER_RG_8, BayerRG8);
-    CASE(ARV_PIXEL_FORMAT_BAYER_GB_8, BayerGB8);
-    CASE(ARV_PIXEL_FORMAT_BAYER_BG_8, BayerBG8);
-    CASE(ARV_PIXEL_FORMAT_BAYER_GR_16, BayerGR16);
-    CASE(ARV_PIXEL_FORMAT_BAYER_RG_16, BayerRG16);
-    CASE(ARV_PIXEL_FORMAT_BAYER_GB_16, BayerGB16);
-    CASE(ARV_PIXEL_FORMAT_MONO_12P, Mono12p);
-    CASE(ARV_PIXEL_FORMAT_BAYER_GR_12P, BayerGR12p);
-    CASE(ARV_PIXEL_FORMAT_BAYER_RG_12P, BayerRG12p);
-    CASE(ARV_PIXEL_FORMAT_BAYER_GB_12P, BayerGB12p);
-    CASE(ARV_PIXEL_FORMAT_BAYER_BG_12P, BayerBG12p);
+#define FOVEA_PF_FROM_ARV(Name, Arv, Cv, Bits, Packed)                        \
+  case Arv:                                                                    \
+    return Name;
+    FOVEA_PIXEL_FORMATS(FOVEA_PF_FROM_ARV)
+#undef FOVEA_PF_FROM_ARV
   default:
     auto name = arv_pixel_format_to_gst_caps_string(fmt);
     throw UnknownPixelFormat(name ? name : "(unknown)");
   }
 }
-#undef CASE
 
 PixelFormat Arv::getPixelFormat(ArvBuffer *buffer) {
   auto fmt = arv_buffer_get_image_pixel_format(buffer);
   return convert<PixelFormat>(fmt);
 }
 
-#define CASE(F)                                                                \
-  if (fmt == #F)                                                               \
-    return F;
 template <> PixelFormat convert(const std::string &fmt) {
-  CASE(Mono8);
-  CASE(Mono16);
-  CASE(RGB8);
-  CASE(BGR8);
-  CASE(RGBA8);
-  CASE(BGRA8);
-  CASE(BayerGR8);
-  CASE(BayerRG8);
-  CASE(BayerGB8);
-  CASE(BayerBG8);
-  CASE(BayerGR16);
-  CASE(BayerRG16);
-  CASE(BayerGB16);
-  CASE(Mono12p);
-  CASE(BayerGR12p);
-  CASE(BayerRG12p);
-  CASE(BayerGB12p);
-  CASE(BayerBG12p);
+#define FOVEA_PF_FROM_STR(Name, Arv, Cv, Bits, Packed)                        \
+  if (fmt == #Name)                                                            \
+    return Name;
+  FOVEA_PIXEL_FORMATS(FOVEA_PF_FROM_STR)
+#undef FOVEA_PF_FROM_STR
   throw UnknownPixelFormat(fmt);
 }
-#undef CASE
 
-#define CASE(F)                                                                \
-  case F:                                                                      \
-    return #F;
 template <> std::string convert(const PixelFormat &fmt) {
   switch (fmt) {
-    CASE(Mono8);
-    CASE(Mono16);
-    CASE(RGB8);
-    CASE(BGR8);
-    CASE(RGBA8);
-    CASE(BGRA8);
-    CASE(BayerGR8);
-    CASE(BayerRG8);
-    CASE(BayerGB8);
-    CASE(BayerBG8);
-    CASE(BayerGR16);
-    CASE(BayerRG16);
-    CASE(BayerGB16);
-    CASE(Mono12p);
-    CASE(BayerGR12p);
-    CASE(BayerRG12p);
-    CASE(BayerGB12p);
-    CASE(BayerBG12p);
-    throw UnknownPixelFormat(std::to_string(fmt));
+#define FOVEA_PF_TO_STR(Name, Arv, Cv, Bits, Packed)                          \
+  case Name:                                                                   \
+    return #Name;
+    FOVEA_PIXEL_FORMATS(FOVEA_PF_TO_STR)
+#undef FOVEA_PF_TO_STR
   }
+  throw UnknownPixelFormat(std::to_string(fmt));
 }
-#undef CASE
 
+// 12p packed formats are unpacked into a 16-bit single-channel container.
 template <> cv::Format convert(const PixelFormat &fmt) {
   switch (fmt) {
-  case Mono8:
-  case BayerGR8:
-  case BayerRG8:
-  case BayerGB8:
-  case BayerBG8:
-    return cv::Format::U8C1;
-  case Mono16:
-  case BayerGR16:
-  case BayerRG16:
-  case BayerGB16:
-  // 12p packed formats are unpacked into a 16-bit single-channel container.
-  case Mono12p:
-  case BayerGR12p:
-  case BayerRG12p:
-  case BayerGB12p:
-  case BayerBG12p:
-    return cv::Format::U16C1;
-  case RGB8:
-  case BGR8:
-    return cv::Format::U8C3;
-  case RGBA8:
-  case BGRA8:
-    return cv::Format::U8C4;
-  default:
-    throw UnknownPixelFormat(std::to_string(fmt));
+#define FOVEA_PF_TO_CV(Name, Arv, Cv, Bits, Packed)                           \
+  case Name:                                                                   \
+    return cv::Format::Cv;
+    FOVEA_PIXEL_FORMATS(FOVEA_PF_TO_CV)
+#undef FOVEA_PF_TO_CV
   }
+  throw UnknownPixelFormat(std::to_string(fmt));
 }
 
 template <> ArvPixelFormat convert(const PixelFormat &fmt) {
   switch (fmt) {
-  case Mono8:
-    return ARV_PIXEL_FORMAT_MONO_8;
-  case Mono16:
-    return ARV_PIXEL_FORMAT_MONO_16;
-  case RGB8:
-    return ARV_PIXEL_FORMAT_RGB_8_PACKED;
-  case BGR8:
-    return ARV_PIXEL_FORMAT_BGR_8_PACKED;
-  case RGBA8:
-    return ARV_PIXEL_FORMAT_RGBA_8_PACKED;
-  case BGRA8:
-    return ARV_PIXEL_FORMAT_BGRA_8_PACKED;
-  case BayerGR8:
-    return ARV_PIXEL_FORMAT_BAYER_GR_8;
-  case BayerRG8:
-    return ARV_PIXEL_FORMAT_BAYER_RG_8;
-  case BayerGB8:
-    return ARV_PIXEL_FORMAT_BAYER_GB_8;
-  case BayerBG8:
-    return ARV_PIXEL_FORMAT_BAYER_BG_8;
-  case BayerGR16:
-    return ARV_PIXEL_FORMAT_BAYER_GR_16;
-  case BayerRG16:
-    return ARV_PIXEL_FORMAT_BAYER_RG_16;
-  case BayerGB16:
-    return ARV_PIXEL_FORMAT_BAYER_GB_16;
-  case Mono12p:
-    return ARV_PIXEL_FORMAT_MONO_12P;
-  case BayerGR12p:
-    return ARV_PIXEL_FORMAT_BAYER_GR_12P;
-  case BayerRG12p:
-    return ARV_PIXEL_FORMAT_BAYER_RG_12P;
-  case BayerGB12p:
-    return ARV_PIXEL_FORMAT_BAYER_GB_12P;
-  case BayerBG12p:
-    return ARV_PIXEL_FORMAT_BAYER_BG_12P;
-  default:
-    throw UnknownPixelFormat(std::to_string(fmt));
+#define FOVEA_PF_TO_ARV(Name, Arv, Cv, Bits, Packed)                          \
+  case Name:                                                                   \
+    return Arv;
+    FOVEA_PIXEL_FORMATS(FOVEA_PF_TO_ARV)
+#undef FOVEA_PF_TO_ARV
   }
+  throw UnknownPixelFormat(std::to_string(fmt));
 }
 
 #define CASE(DST, CVT)                                                         \
@@ -224,89 +127,31 @@ cv::ColorConversionCodes Arv::cvtColorCode(PixelFormat src, PixelFormat dst) {
       CASE(Mono8, BGRA2GRAY);
       DEFAULT;
     }
-  case BayerGR8:
-    switch (dst) {
-      CASE(RGB8, BayerGR2RGB);
-      CASE(BGR8, BayerGR2BGR);
-      CASE(RGBA8, BayerGR2RGBA);
-      CASE(BGRA8, BayerGR2BGRA);
-      CASE(Mono8, BayerGR2GRAY);
-      CASE(Mono16, BayerGR2GRAY);
-      DEFAULT;
+  // Bayer families: the OpenCV demosaic constant carries the OpenCV↔PFNC
+  // off-by-one R/B-swap correction (channel-order-fix.md) — e.g. a GenICam
+  // BayerRG (RGGB) sensor demosaics with cv::COLOR_BayerBG2*, NOT BayerRG2*.
+  // The cv prefix is GENERATED from the shared registry (FOVEA_BAYER_CV_FORMATS,
+  // docs/schema/pixel-formats.ts) so this table can't drift from the viewer /
+  // capture JS mirrors. Greens are unchanged — a PURE R/B swap, NO demosaic
+  // phase shift. 16/12p reuse their 8-bit family's demosaic.
+#define FOVEA_BAYER_CVT(SrcFmt, CvPfx)                                         \
+  case SrcFmt:                                                                 \
+    switch (dst) {                                                             \
+    case RGB8:                                                                 \
+      return cv::COLOR_##CvPfx##2RGB;                                          \
+    case BGR8:                                                                 \
+      return cv::COLOR_##CvPfx##2BGR;                                          \
+    case RGBA8:                                                                \
+      return cv::COLOR_##CvPfx##2RGBA;                                         \
+    case BGRA8:                                                                \
+      return cv::COLOR_##CvPfx##2BGRA;                                         \
+    case Mono8:                                                                \
+    case Mono16:                                                               \
+      return cv::COLOR_##CvPfx##2GRAY;                                         \
+      DEFAULT;                                                                 \
     }
-  case BayerRG8:
-    switch (dst) {
-      CASE(RGB8, BayerRG2RGB);
-      CASE(BGR8, BayerRG2BGR);
-      CASE(RGBA8, BayerRG2RGBA);
-      CASE(BGRA8, BayerRG2BGRA);
-      CASE(Mono8, BayerRG2GRAY);
-      CASE(Mono16, BayerRG2GRAY);
-      DEFAULT;
-    }
-  case BayerGB8:
-    switch (dst) {
-      CASE(RGB8, BayerGB2RGB);
-      CASE(BGR8, BayerGB2BGR);
-      CASE(RGBA8, BayerGB2RGBA);
-      CASE(BGRA8, BayerGB2BGRA);
-      CASE(Mono8, BayerGB2GRAY);
-      CASE(Mono16, BayerGB2GRAY);
-      DEFAULT;
-    }
-  case BayerBG8:
-    switch (dst) {
-      CASE(RGB8, BayerBG2RGB);
-      CASE(BGR8, BayerBG2BGR);
-      CASE(RGBA8, BayerBG2RGBA);
-      CASE(BGRA8, BayerBG2BGRA);
-      CASE(Mono8, BayerBG2GRAY);
-      CASE(Mono16, BayerBG2GRAY);
-      DEFAULT;
-    }
-  case BayerGR16:
-  case BayerGR12p:
-    switch (dst) {
-      CASE(RGB8, BayerGR2RGB);
-      CASE(BGR8, BayerGR2BGR);
-      CASE(RGBA8, BayerGR2RGBA);
-      CASE(BGRA8, BayerGR2BGRA);
-      CASE(Mono8, BayerGR2GRAY);
-      CASE(Mono16, BayerGR2GRAY);
-      DEFAULT;
-    }
-  case BayerRG16:
-  case BayerRG12p:
-    switch (dst) {
-      CASE(RGB8, BayerRG2RGB);
-      CASE(BGR8, BayerRG2BGR);
-      CASE(RGBA8, BayerRG2RGBA);
-      CASE(BGRA8, BayerRG2BGRA);
-      CASE(Mono8, BayerRG2GRAY);
-      CASE(Mono16, BayerRG2GRAY);
-      DEFAULT;
-    }
-  case BayerGB16:
-  case BayerGB12p:
-    switch (dst) {
-      CASE(RGB8, BayerGB2RGB);
-      CASE(BGR8, BayerGB2BGR);
-      CASE(RGBA8, BayerGB2RGBA);
-      CASE(BGRA8, BayerGB2BGRA);
-      CASE(Mono8, BayerGB2GRAY);
-      CASE(Mono16, BayerGB2GRAY);
-      DEFAULT;
-    }
-  case BayerBG12p:
-    switch (dst) {
-      CASE(RGB8, BayerBG2RGB);
-      CASE(BGR8, BayerBG2BGR);
-      CASE(RGBA8, BayerBG2RGBA);
-      CASE(BGRA8, BayerBG2BGRA);
-      CASE(Mono8, BayerBG2GRAY);
-      CASE(Mono16, BayerBG2GRAY);
-      DEFAULT;
-    }
+    FOVEA_BAYER_CV_FORMATS(FOVEA_BAYER_CVT)
+#undef FOVEA_BAYER_CVT
     DEFAULT;
   }
 }

@@ -1,0 +1,141 @@
+// ------------------------------------------------------
+// Copyright (c) 2026 Yuxuan Zhang, dev@z-yx.cc
+// This source code is licensed under the MIT license.
+// You may find the full license in project root directory.
+// -------------------------------------------------------
+//
+// Main-side spawner for the per-session vision worker: a session on acquire connectPipes
+// its camera pipes (bumping the consumer gate), then createVisionWorker spawns the bundled
+// worker with the shmNames + reader-addon path and pumps params/results over a MessagePort;
+// on release terminate() (tied to the ResourceScope). This host owns the broker/gate and
+// passes only shmNames — the worker is READ-ONLY SHM. Orchestrator-side, Vue-free.
+// spec: docs/spec/vision.md#vision-worker
+
+import { Worker } from "node:worker_threads";
+import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+import { report } from "./diagnostics.js";
+import { registerNativeProbe } from "./native-probes.js";
+import type { WorkloadSnapshot } from "@lib/orchestrator/stats.js";
+import type {
+  VisionInit,
+  VisionResult,
+  VisionWorkerIn,
+  VisionWorkerOut,
+} from "./vision-worker-protocol.js";
+
+const requireHere = createRequire(import.meta.url);
+
+/** Resolve the shm-reader addon path the parent hands the worker (bare
+ *  `require` in a worker resolves against cwd, not the app dir — same reason
+ *  the recorder worker gets its `@mcap/core` path from the parent). Exported
+ *  for `pipe-read-once.ts` (one-shot capture read — same addon, loaded on
+ *  the orchestrator thread for a single on-demand frame). */
+export function readerAddonPath(): string {
+  const coreEntry = requireHere.resolve("core");
+  const dir = coreEntry.slice(0, coreEntry.lastIndexOf("/"));
+  const runtime = process.versions.electron ? "electron" : "node";
+  const version = process.versions[runtime as "electron" | "node"]!;
+  return `${dir}/.bin/${runtime}-${version}-${process.arch}-shm-reader.node`;
+}
+
+/** The bundled worker entry, next to this orchestrator bundle in
+ *  `.dist/electron/`. Resolved via path.join — NOT `new URL("./vision-worker.js",
+ *  import.meta.url)`: Vite statically rewrites that pattern as an ASSET import,
+ *  resolving `./vision-worker.js` to the SOURCE `vision-worker.ts` and inlining
+ *  the raw TS as a `data:video/mp2t;base64` URL (MIME guessed from `.ts`), which
+ *  Node's Worker rejects ("Unknown module format"). Rig-found. path.join over a
+ *  runtime `import.meta.url` is opaque to the bundler and resolves to the
+ *  sibling built file in both dev and build. */
+const workerPath = (): string =>
+  join(dirname(fileURLToPath(import.meta.url)), "vision-worker.js");
+
+export interface VisionWorkerHandle {
+  /** Push a live param update (homography matrices, tuning, zoom, view, …). */
+  sendParams(params: Record<string, unknown>): void;
+  /** Terminate the worker (idempotent). */
+  terminate(): void;
+}
+
+/** The subset of `worker_threads.Worker` the host drives — injectable so the
+ *  message routing is unit-testable without spawning the (build-gated) real
+ *  worker file. */
+export interface WorkerLike {
+  postMessage(msg: unknown, transfer?: readonly unknown[]): void;
+  on(event: "message", cb: (msg: VisionWorkerOut) => void): void;
+  on(event: "error", cb: (err: Error) => void): void;
+  on(event: "exit", cb: (code: number) => void): void;
+  terminate(): Promise<number> | void;
+}
+
+/** Test seams for `createVisionWorker` (both default to production). */
+export interface VisionWorkerOpts {
+  /** Spawn the worker (default: the bundled `.dist/electron/vision-worker.js`). */
+  spawn?: () => WorkerLike;
+  /** Override the reader-addon path (default: parent-resolved via createRequire —
+   *  unresolvable under vitest, so tests inject it). */
+  readerPath?: string;
+}
+
+/**
+ * Spawn the vision worker for a session. `init` carries the pipe `shmName`s +
+ * initial params; `onResult` receives each vision tick (scalar `values` +
+ * transferred derived `frames`). Errors are routed to `diagnostics.report`.
+ */
+export function createVisionWorker(
+  init: Omit<VisionInit, "kind" | "readerPath">,
+  onResult: (r: VisionResult) => void,
+  opts: VisionWorkerOpts = {},
+): VisionWorkerHandle {
+  const worker = (opts.spawn ?? (() => new Worker(workerPath()) as unknown as WorkerLike))();
+  const readerPath = opts.readerPath ?? readerAddonPath();
+  let alive = true;
+
+  // Worker self-meter splice (VisionInit.meterName): the latest posted stats
+  // row is served as a native-probe source — the kernel appears in
+  // `perfSnapshot.workloads` (and on its graph node) exactly like a native
+  // thread. Staleness-gated so a wedged worker's frozen row drops out; the
+  // probe is disposed with the worker (no ghost rows).
+  let latestStats: WorkloadSnapshot | null = null;
+  let statsAt = 0;
+  const disposeProbe = init.meterName
+    ? registerNativeProbe(() =>
+        latestStats && Date.now() - statsAt < 3000
+          ? { [latestStats.name]: latestStats }
+          : {},
+      )
+    : null;
+
+  worker.on("message", (msg: VisionWorkerOut) => {
+    if (msg.kind === "result") onResult(msg);
+    else if (msg.kind === "stats") {
+      latestStats = msg.workload;
+      statsAt = Date.now();
+    } else if (msg.kind === "error") report("vision-worker", msg.message);
+  });
+  worker.on("error", (err) => report("vision-worker", err.message));
+  worker.on("exit", () => {
+    alive = false;
+    disposeProbe?.();
+  });
+
+  const post = (msg: VisionWorkerIn) => {
+    if (alive) worker.postMessage(msg);
+  };
+
+  post({ kind: "init", readerPath, ...init });
+
+  return {
+    sendParams(params) {
+      post({ kind: "params", params });
+    },
+    terminate() {
+      if (!alive) return;
+      post({ kind: "stop" }); // post BEFORE clearing `alive` (post is gated on it)
+      alive = false;
+      disposeProbe?.();
+      void worker.terminate();
+    },
+  };
+}

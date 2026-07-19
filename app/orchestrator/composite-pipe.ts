@@ -1,0 +1,88 @@
+// ------------------------------------------------------
+// Copyright (c) 2026 Yuxuan Zhang, dev@z-yx.cc
+// This source code is licensed under the MIT license.
+// You may find the full license in project root directory.
+// -------------------------------------------------------
+//
+// General-purpose session-owned COMPOSITE node: a two-input native brick
+// (CompositeStream) — a per-pixel BGRA op (anaglyph / L-vs-R difference) over an L/R
+// pair, publishing an RGBA8 pipe. Ticks on each LEFT arrival paired with the latest
+// RIGHT (latest-wins); output in left-frame coords, mode reactive; on-demand
+// (selecting the center view IS the demand). Seam-injected (never imports core).
+// spec: docs/spec/pipes.md#composite-pipe
+
+import type { PipeSpec } from "@lib/orchestrator/pipe-contract.js";
+import type { AnaglyphStyle } from "../../docs/schema/anaglyph.js";
+
+/** Reactive composite params — `mode` = `anaglyph` (left/right split by color)
+ *  or `difference` (|L − R| per color channel); `style` = the anaglyph left/
+ *  right color arrangement (default `RC` = red-left/cyan-right; ignored by
+ *  `difference`). Both are applied on the next tick with no re-attach. */
+export type CompositeParams = {
+  mode?: "anaglyph" | "difference";
+  style?: AnaglyphStyle;
+};
+
+export interface CompositePipeSeam {
+  advertise(spec: PipeSpec): number;
+  unadvertise(pipeId: string): void;
+  attach(
+    leftPipeId: string,
+    rightPipeId: string,
+    pipeId: string,
+    params: CompositeParams,
+  ): void;
+  retune(pipeId: string, params: CompositeParams): void;
+  detach(pipeId: string): void;
+}
+
+export interface CompositePipeOptions {
+  params?: CompositeParams;
+  /** Ring footprint = the LEFT source's max dims (output is left-sized). */
+  maxWidth: number;
+  maxHeight: number;
+}
+
+export interface CompositeHandle {
+  readonly pipeId: string;
+  /** Reactively retune the composite mode (applied on the next tick). */
+  retune(params: CompositeParams): void;
+  /** Detach the producer + un-advertise (consumers see CLOSED). */
+  retire(): void;
+}
+
+/** Advertise the RGBA8 composite pipe + attach the composite brick chained on
+ *  the two source pipes. Advertise BEFORE attach. */
+export function createCompositePipe(
+  seam: CompositePipeSeam,
+  leftPipeId: string,
+  rightPipeId: string,
+  pipeId: string,
+  opts: CompositePipeOptions,
+): CompositeHandle {
+  const { maxWidth, maxHeight } = opts;
+  const channels = 4;
+  seam.advertise({
+    id: pipeId,
+    pixelFormat: "RGBA8",
+    dtype: "U8",
+    width: maxWidth,
+    height: maxHeight,
+    channels,
+    stride: maxWidth * channels,
+    bytesPerFrame: maxWidth * maxHeight * channels,
+    ringDepth: 4,
+    maxWidth,
+    maxHeight,
+    maxBytes: maxWidth * maxHeight * channels,
+  });
+  seam.attach(leftPipeId, rightPipeId, pipeId, opts.params ?? {});
+  return {
+    pipeId,
+    retune: (p) => seam.retune(pipeId, p),
+    retire: () => {
+      seam.detach(pipeId);
+      seam.unadvertise(pipeId);
+    },
+  };
+}

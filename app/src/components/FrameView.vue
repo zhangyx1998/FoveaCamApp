@@ -3,7 +3,7 @@ export type TransformFunction = (mat: any) => any;
 </script>
 
 <script setup lang="ts">
-import { convertType, cvtColor, type Mat } from "core/Vision";
+import type { Mat } from "core/Vision";
 import type { Point, Size } from "core/Geometry";
 import {
   computed,
@@ -14,13 +14,21 @@ import {
   watch,
 } from "vue";
 import { FontAwesomeIcon as Icon } from "@fortawesome/vue-fontawesome";
-import { faExpand } from "@fortawesome/free-solid-svg-icons";
+import { faExpand, faUpRightFromSquare } from "@fortawesome/free-solid-svg-icons";
 
 import ElementSize from "@lib/element-size";
 import { NoCheck } from "@lib/util/vue";
+import { pointerObscured } from "@lib/pointer-obscured";
 import FrameOverlay from "./FrameOverlay.vue";
-import { current_capture, Delegation } from "../capture";
 import { clamp } from "@lib/util";
+import { windowId } from "@lib/url-state";
+import {
+  paneFromDescriptor,
+  serializeDragPayload,
+  serializePane,
+  type PaneDescriptor,
+} from "@lib/projection/descriptor";
+import { effectAllowedFor, PANE_MIME } from "@lib/projection/dnd";
 
 const props = defineProps({
   title: {
@@ -63,8 +71,15 @@ const props = defineProps({
     required: false,
     default: null,
   },
-  capture: {
-    type: NoCheck<Delegation | string | null>(),
+  // Projectable source for the DEDICATED project-to-window button:
+  // a `{kind:"frame",…}` or
+  // `{kind:"pipe",…}` pane descriptor. When set, a SECOND title-bar icon
+  // appears next to the element-fullscreen one — click opens a projection
+  // window seeded with this pane; in an app window the same icon is the drag
+  // handle (drag → carries the descriptor over the custom MIME). null = the
+  // feed isn't addressable, so only the fullscreen icon shows.
+  projection: {
+    type: NoCheck<PaneDescriptor | null>(),
     required: false,
     default: null,
   },
@@ -80,19 +95,49 @@ const emit = defineEmits<{
 
 const container = useTemplateRef<HTMLDivElement>("container");
 const canvas = useTemplateRef<HTMLCanvasElement>("canvas");
+
+// Element-fullscreen button: ALWAYS DOM-fullscreens the container — separate
+// from projection (that has its own icon so the two actions are never
+// confused).
+function expand(): void {
+  container.value?.requestFullscreen();
+}
+
+// Origin of a projection drag from THIS window: only a projection window is a
+// "move" source; every other host (app windows, welcome previews) has a rigid
+// layout, so its drags advertise copy-only.
+const dragOrigin: "app" | "projection" =
+  typeof location !== "undefined" && location.pathname.endsWith("projection.html")
+    ? "projection"
+    : "app";
+
+// Dedicated project-to-window button: open a NEW projection window seeded with
+// this pane (the click path — "opens a new projection window as today").
+function project(): void {
+  if (!props.projection) return;
+  window.foveaBridge.openProjectionWindow(
+    serializePane(paneFromDescriptor(props.projection)),
+  );
+}
+
+// The same icon is a DnD source (in app windows it is the ONLY drag handle —
+// canvas drags are steering gestures and must not be hijacked). Carries the
+// pane descriptor under the custom MIME so a drop lands it in a projection
+// window's split tree.
+function onProjectDragStart(e: DragEvent): void {
+  if (!props.projection || !e.dataTransfer) return;
+  const pane = paneFromDescriptor(props.projection);
+  e.dataTransfer.setData(
+    PANE_MIME,
+    serializeDragPayload({ pane, srcWindowId: windowId(), origin: dragOrigin }),
+  );
+  e.dataTransfer.effectAllowed = effectAllowedFor(dragOrigin);
+}
 const size = new ElementSize(container);
 const canvasSize = new ElementSize(canvas);
 const overlayToggle = ref(false);
 
 const image = shallowRef<ImageData | null>(null);
-const { capture } = props;
-if (typeof capture === "function")
-  capture(() => (mat.value ? { image: mat.value } : null));
-else if (typeof capture === "string")
-  current_capture.value?.provide((provide) => {
-    const image = mat.value;
-    if (image) provide(capture, { image });
-  });
 
 const canvasStyle = computed(() => {
   if (!image.value) return {};
@@ -106,12 +151,42 @@ const canvasStyle = computed(() => {
   };
 });
 
-watch(canvas, (canvas) => {
-  if (!canvas) return;
-  const ctx = canvas.getContext("2d");
-  if (ctx && image.value) {
-    ctx.putImageData(image.value, 0, 0);
+// --- paint path ---------------------------------------------------------------
+// putImageData is a SYNCHRONOUS full-res raster on the Vue main thread — per
+// frame per view (~9 MB for a 1920×1200 RGBA frame, even in a 300 px tile).
+// createImageBitmap decodes ASYNC (off the main thread) and drawImage blits
+// the GPU-resident bitmap; the canvas backing store keeps the image's native
+// dimensions (template :width/:height), so sizing/inspector/annotation
+// semantics are unchanged — only the raster cost moves off the loop.
+// putImageData remains the fallback where bitmap creation fails.
+let paintSeq = 0; // stale-frame guard across the async decode
+async function paint(img: ImageData): Promise<void> {
+  const seq = ++paintSeq;
+  try {
+    const bitmap = await createImageBitmap(img);
+    // A newer frame finished decoding (or the frame changed) while we awaited.
+    if (seq !== paintSeq || image.value !== img) return bitmap.close();
+    const ctx = canvas.value?.getContext("2d");
+    if (ctx) {
+      // REPLACE semantics, matching putImageData: the default source-over
+      // drawImage BLENDS, so a frame's transparent pixels pass the previous
+      // frame's leftovers through instead of showing the element behind the
+      // canvas (matters for alpha-carrying views).
+      ctx.globalCompositeOperation = "copy";
+      ctx.drawImage(bitmap, 0, 0);
+    }
+    bitmap.close(); // release the GPU/decoder copy eagerly
+  } catch {
+    // Bitmap creation unavailable/failed — synchronous fallback.
+    if (seq !== paintSeq || image.value !== img) return;
+    const ctx = canvas.value?.getContext("2d");
+    if (ctx) ctx.putImageData(img, 0, 0);
   }
+}
+
+watch(canvas, (canvas) => {
+  // (Re)mount: repaint the last frame onto the fresh canvas.
+  if (canvas && image.value) void paint(image.value);
 });
 
 const mat = computed(() => {
@@ -126,33 +201,61 @@ const mat = computed(() => {
   return mat;
 });
 
+// Expand a 1- or 3-channel Mat to 4-channel (RGBA, alpha=255) in plain JS —
+// every renderer-reachable Mat arrives via `payloadToMat` (always
+// `Uint8Array`, always 4-channel BGRA/RGBA already, see the wire's
+// `toFramePayload`), so this is dead code on any current call path, but
+// kept as a real (not native-backed) implementation so the component stays
+// correct for a 1/3-channel Mat rather than silently regressing if one ever
+// shows up again.
+function expandToRGBA(src: Uint8Array, channels: 1 | 3): Uint8Array {
+  const pixels = src.length / channels;
+  const out = new Uint8Array(pixels * 4);
+  if (channels === 1) {
+    for (let i = 0, j = 0; i < src.length; i++, j += 4) {
+      out[j] = out[j + 1] = out[j + 2] = src[i];
+      out[j + 3] = 255;
+    }
+  } else {
+    for (let i = 0, j = 0; i < src.length; i += 3, j += 4) {
+      out[j] = src[i];
+      out[j + 1] = src[i + 1];
+      out[j + 2] = src[i + 2];
+      out[j + 3] = 255;
+    }
+  }
+  return out;
+}
+
 watch(
   mat,
   async (mat) => {
     if (!mat) return (image.value = null);
-    if (!(mat instanceof Uint8Array)) mat = convertType(mat, "8U");
+    if (!(mat instanceof Uint8Array)) {
+      console.error("FrameView: expected a Uint8Array Mat, got", mat);
+      return (image.value = null);
+    }
     const [height, width] = mat.shape;
+    let data: Uint8Array;
     switch (mat.channels) {
       case 1:
-        mat = cvtColor(mat, "GRAY2RGBA");
-        break;
       case 3:
-        mat = cvtColor(mat, "RGB2RGBA");
+        data = expandToRGBA(mat, mat.channels);
         break;
       case 4:
+        data = mat;
         break;
       default:
         console.error(`Unsupported number of channels: ${mat.channels}`);
         return (image.value = null);
     }
-    const clamped = new Uint8ClampedArray(mat.buffer);
+    const clamped = new Uint8ClampedArray(data.buffer, data.byteOffset, data.byteLength);
     image.value = new ImageData(
       clamped as Uint8ClampedArray<ArrayBuffer>,
       width,
       height,
     );
-    const ctx = canvas.value?.getContext("2d");
-    if (ctx) ctx.putImageData(image.value, 0, 0);
+    void paint(image.value);
   },
   { immediate: true },
 );
@@ -218,23 +321,44 @@ function translatePos(
 }
 
 const drag = ref(false);
+// Chromium coalesces `mousemove` to the display refresh (~60 Hz) — which
+// caps the manual-control MEMS stream at 60 packets/s.
+// `pointerrawupdate` delivers input at the device's polling rate (125 Hz–1
+// kHz), which the fire-and-forget CMD_STREAM path is built to carry;
+// `mousemove` stays as the fallback where the raw event isn't supported.
+const MOVE_EVENT = "onpointerrawupdate" in window ? "pointerrawupdate" : "mousemove";
 function trackUntilRelease(e: MouseEvent) {
   if (!(e.buttons & 1)) return untrack();
+  // Obscuration gate: a drag that wanders
+  // over an overlaying element (the drawer) must stop STEERING while covered —
+  // skip the emit, do NOT end the drag (mouseup above still ends it globally,
+  // so releasing over the drawer never wedges the drag state). Steering
+  // resumes the moment the pointer re-emerges. Off-edge drags (outside the
+  // container box) are NOT obscured — the clamped-steer gesture keeps working.
+  if (pointerObscured(container.value, e)) return;
   return emit("update:modelValue", translatePos(e));
 }
 
 function untrack() {
   drag.value = false;
-  window.removeEventListener("mousemove", trackUntilRelease);
+  window.removeEventListener(MOVE_EVENT, trackUntilRelease as EventListener);
   window.removeEventListener("mouseup", trackUntilRelease);
   return emit("update:modelValue", null);
 }
 
 function track(e: MouseEvent) {
   drag.value = true;
-  window.addEventListener("mousemove", trackUntilRelease);
+  window.addEventListener(MOVE_EVENT, trackUntilRelease as EventListener);
   window.addEventListener("mouseup", trackUntilRelease);
   trackUntilRelease(e);
+}
+
+// Hover/cursor ('mouse') emits, obscuration-gated: while a foreign element
+// tops the pointer inside our box, the
+// cursor handler must read "not over the frame" — emit null (the mouseleave
+// shape), never a translated position through the drawer.
+function gatedMouse(e: MouseEvent) {
+  emit("mouse", pointerObscured(container.value, e) ? null : translatePos(e));
 }
 
 function mix<T, P>(t: T, p: P): T & P {
@@ -253,15 +377,28 @@ function mix<T, P>(t: T, p: P): T & P {
     ref="container"
     @mousedown.right.prevent="overlayToggle = !overlayToggle"
   >
-    <div class="title" v-if="title !== null">
+    <div class="title" v-if="title !== null || !!$slots.title">
       <span>{{ title }}</span>
       <div class="title-slot">
         <slot name="title"></slot>
       </div>
+      <!-- TWO distinct title-bar icons. The project-to-window
+           icon shows only for an addressable feed and doubles as the drag
+           handle; element-fullscreen is always present. -->
       <button
-        class="fullscreen"
-        title="Toggle Fullscreen"
-        @click="container?.requestFullscreen()"
+        v-if="projection"
+        class="titlebar-icon project"
+        :draggable="true"
+        title="Project to window (drag to a projection window)"
+        @click="project"
+        @dragstart="onProjectDragStart"
+      >
+        <Icon :icon="faUpRightFromSquare" />
+      </button>
+      <button
+        class="titlebar-icon fullscreen"
+        title="Toggle fullscreen"
+        @click="expand"
       >
         <Icon :icon="faExpand" />
       </button>
@@ -278,11 +415,11 @@ function mix<T, P>(t: T, p: P): T & P {
         :width="image?.width"
         :height="image?.height"
         :style="canvasStyle"
-        @mousedown="(e) => [track(e), emit('mouse', translatePos(e))]"
-        @mousemove="(e) => emit('mouse', translatePos(e))"
+        @mousedown="(e) => [track(e), gatedMouse(e)]"
+        @mousemove="gatedMouse"
         @mouseleave="() => emit('mouse', null)"
-        @mouseenter="(e) => emit('mouse', translatePos(e))"
-        @mouseup="(e) => emit('mouse', translatePos(e))"
+        @mouseenter="gatedMouse"
+        @mouseup="gatedMouse"
       ></canvas>
       <FrameOverlay
         v-if="overlay && overlayToggle"
@@ -321,13 +458,13 @@ function mix<T, P>(t: T, p: P): T & P {
 <style scoped lang="scss">
 .container {
   position: relative;
-  background-color: black;
+  background-color: var(--bg-canvas);
   background: repeating-linear-gradient(
     45deg,
-    #111,
-    #111 10px,
-    #222 10px,
-    #222 20px
+    var(--bg-chrome),
+    var(--bg-chrome) 10px,
+    var(--bg-app) 10px,
+    var(--bg-app) 20px
   );
   overflow: visible;
   outline: 2px solid var(--theme, gray);
@@ -355,7 +492,7 @@ function mix<T, P>(t: T, p: P): T & P {
       justify-content: flex-start;
     }
 
-    .fullscreen {
+    .titlebar-icon {
       background: none;
       border: none;
       color: inherit;
@@ -364,6 +501,14 @@ function mix<T, P>(t: T, p: P): T & P {
       opacity: 0.5;
       &:hover {
         opacity: 1;
+      }
+      // The project icon is a drag handle in app windows — hint it (canvas
+      // drags stay steering gestures; only this icon initiates a pane drag).
+      &.project {
+        cursor: grab;
+      }
+      &.project:active {
+        cursor: grabbing;
       }
     }
   }
@@ -397,11 +542,11 @@ function mix<T, P>(t: T, p: P): T & P {
   }
 
   &.no-frame {
-    outline-color: #444 !important;
+    outline-color: var(--border-strong) !important;
   }
 
   .no-frame-text {
-    color: #444;
+    color: var(--border-strong);
     justify-content: center;
     align-items: center;
     font-size: 2em;
@@ -412,6 +557,13 @@ function mix<T, P>(t: T, p: P): T & P {
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%);
+    // UI-2 / 3b (first-pass guard): bound the centered frame content to the
+    // container box so it can't ride up and spill over a stacked neighbor when
+    // the container height resolves late. `.container` stays `overflow: visible`
+    // for the title/footnote that sit outside it. NEEDS LIVE-UI ITERATION — the
+    // stacked `.view` height behavior can only be tuned against a running app.
+    max-width: 100%;
+    max-height: 100%;
   }
 
   .annotations {
@@ -427,8 +579,8 @@ function mix<T, P>(t: T, p: P): T & P {
   background-color: rgba(0, 0, 0, 0.5);
   backdrop-filter: blur(4px) saturate(50%) brightness(80%);
   -webkit-backdrop-filter: blur(4px) saturate(50%) brightness(80%);
-  color: white;
-  font-family: "Cascadia Code", "Courier New", Courier, monospace;
+  color: var(--text);
+  font-family: var(--font-mono);
   z-index: 10;
   white-space: pre;
 }

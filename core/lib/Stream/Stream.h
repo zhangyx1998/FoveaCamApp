@@ -7,8 +7,10 @@
 
 #include "Threading/Guard.h"
 #include "utils/error.h"
+#include <atomic>
 #include <condition_variable>
 #include <exception>
+#include <functional>
 #include <iostream>
 #include <mutex>
 #include <thread>
@@ -16,6 +18,7 @@
 #include <pointer.h>
 #include <type_name.h>
 #include <utils/debug.h>
+#include <utils/thread.h>
 #include <utils/map-set.h>
 #include <utils/stacktrace.h>
 
@@ -39,23 +42,26 @@ public:
   static inline const std::string NAME = "Stream<" + type_name<T>() + ">";
 
 private:
-  // State transfer: false -> true (not the other way)
-  // The flag is not protected by mutex given its state transfer type.
+  // Latching false->true only, so it needs no mutex protection of its own (but
+  // see #lost-wakeup: shutdown() still flips it under `mutex`).
   std::atomic<bool> flag_terminate{false};
   std::mutex mutex;
   std::condition_variable unfreeze;
   Set<Subscriber<T> *> subscribers;
   std::thread thread;
+  // Teardown gate: close()s holding a provably-live stream pointer, in flight
+  // toward unsubscribe(). shutdown() drains this to 0 before ~Stream frees
+  // `mutex`. spec: docs/spec/core-streams.md#lifetime-order
+  std::atomic<int> closes_in_flight_{0};
 
 protected:
-  Stream() : thread(&Stream::thread_main, this) {}
+  Stream() = default;
   ~Stream() { assert_shutdown_called(); };
 
+  // Derived destructors MUST call shutdown() before their members die — the
+  // producer thread may still call into derived virtuals.
+  // spec: docs/spec/core-streams.md#assert-shutdown
   void assert_shutdown_called() {
-    // Thread must be joined before derived class destruction
-    // Because the thread may call into virtual functions of derived class.
-    // This is checked here to avoid potential hard-to-debug issues.
-    // Derived classes should call shutdown() in their destructor
     if (thread.joinable()) {
       ERROR("%s [%p] destroyed without calling shutdown(). Aborting...",
             NAME.c_str(), this);
@@ -63,13 +69,35 @@ protected:
     }
   }
 
-  // Call this from derived class destructor to safely stop the thread
+  /** Stop the producer thread and sever subscribers; call from derived dtors. */
   void shutdown() {
     VERBOSE("Shutting down Stream<%s> [%p]", type_name<T>().c_str(), this);
-    flag_terminate = true;
+    // Flip flag_terminate UNDER `mutex` (never lock-free) so notify_all cannot
+    // race the parking thread's predicate check.
+    // spec: docs/spec/core-streams.md#lost-wakeup
+    {
+      std::scoped_lock lock(mutex);
+      flag_terminate = true;
+    }
     unfreeze.notify_all();
     if (thread.joinable())
       thread.join();
+    eject_all_and_drain();
+  }
+
+  // Sever every remaining subscriber, then wait out any in-flight close().
+  // Idempotent, teardown-only. Lock order matches the publisher fan-out (stream
+  // `mutex`, then each subscriber's state guard via detach()).
+  // spec: docs/spec/core-streams.md#eject-and-drain
+  void eject_all_and_drain() {
+    {
+      std::scoped_lock lock(mutex);
+      for (Subscriber<T> *sub : subscribers)
+        sub->detach();
+      subscribers.clear();
+    }
+    while (closes_in_flight_.load(std::memory_order_acquire) != 0)
+      std::this_thread::yield();
   }
 
   Stream *subscribe(Subscriber<T> *subscriber) {
@@ -82,6 +110,8 @@ protected:
     }
     std::scoped_lock lock(mutex);
     subscribers.insert(subscriber);
+    if (!thread.joinable())
+      thread = std::thread(&Stream::thread_main, this);
     unfreeze.notify_all();
     return this;
   };
@@ -114,6 +144,9 @@ protected:
       while (!flag_terminate) {
         auto item = iterate();
         if (item == nullptr) {
+          std::scoped_lock lock(mutex);
+          if (subscribers.empty())
+            break;
           std::this_thread::yield();
           continue;
         }
@@ -176,9 +209,9 @@ protected:
     unfreeze.wait(lock, [this] { return __activate__(); });
   }
   void thread_main() {
-    pthread_setname_np(("Stream<" + type_name<T>() + "> @ " +
-                        std::to_string(reinterpret_cast<uintptr_t>(this)))
-                           .c_str());
+    set_thread_name(("Stream<" + type_name<T>() + "> @ " +
+                     std::to_string(reinterpret_cast<uintptr_t>(this)))
+                        .c_str());
     while (true) {
       VERBOSE("Stream<%s> [%p] waiting", type_name<T>().c_str(), this);
       wait_activate();
@@ -215,17 +248,24 @@ public:
   public:
     State() = delete;
     inline State(Stream<T> *stream) : stream(stream) {}
-    // Pointer back to the stream we are subscribed to.
-    // This is used to notify the stream to remove us when destructed.
+    // Back-pointer to our stream; nulled on close/detach to notify removal.
     Stream<T> *stream;
-    // Error state set by Stream::crash().
-    // Once set, the error message is immutable and can be read without lock.
-    // i.e. It's safe to check and read error without acquiring state_mutex.
+    // Set by Stream::crash(); immutable once set, so it reads without the guard.
     TracedError::Ptr error = nullptr;
-    // Utility function to check if the subscriber is still active.
     inline bool isActive() const { return stream != nullptr && !error; }
   };
   Threading::Guard<State> state;
+
+private:
+  // Stream-side sever, called ONLY by Stream::eject_all_and_drain() (holding the
+  // stream `mutex` + this state guard). Nulls the back-pointer WITHOUT any
+  // derived close() hook — teardown-safe (no JS/N-API from env-cleanup). A later
+  // own close() then sees stream==nullptr and returns early.
+  // spec: docs/spec/core-streams.md#eject-and-drain
+  void detach() {
+    auto ref = state.ref();
+    ref->stream = nullptr;
+  }
 
 protected:
   /*
@@ -237,18 +277,35 @@ protected:
   virtual void push(const T &item) = 0;
 
 public:
-  // NOTE: All calls from Stream must specify `unsubscribe = false` to avoid
-  //       calling back to Stream::unsubscribe, which will cause deadlock.
-  // Overrides of the function must first call the base class close().
-  // This ensures the state is frozen before executing additional close code.
+  /** Freeze the subscriber (null the stream, set the error), then unsubscribe.
+   *  Overrides MUST call this base FIRST — it guarantees the state is frozen
+   *  before any additional close code. `unsubscribe=false` is Stream-internal
+   *  (caller already holds the stream mutex / is erasing us).
+   *
+   *  Two rules are load-bearing and MUST NOT be undone:
+   *  - LOCK ORDER: freeze under the state guard, RELEASE it, THEN unsubscribe —
+   *    never hold the state guard across Stream::unsubscribe (opposite of the
+   *    fan-out order → deadlock).
+   *  - LIFETIME ORDER: bump closes_in_flight_ WHILE holding the state guard,
+   *    where `stream` is provably alive, so the drain keeps the mutex alive
+   *    across unsubscribe (destroyed-mutex EINVAL abort otherwise).
+   *  spec: docs/spec/core-streams.md#lock-order , #lifetime-order */
   virtual void close(bool unsubscribe = true, TracedError::Ptr err = nullptr) {
-    auto ref = state.ref();
-    if (!ref->stream) // Already closed, do nothing
-      return;
-    if (ref->stream && unsubscribe)
-      ref->stream->unsubscribe(this);
-    ref->stream = nullptr;
-    ref->error = err;
+    Stream<T> *stream;
+    {
+      auto ref = state.ref();
+      if (!ref->stream) // Already closed, do nothing
+        return;
+      stream = ref->stream;
+      ref->stream = nullptr;
+      ref->error = err;
+      if (unsubscribe)
+        stream->closes_in_flight_.fetch_add(1, std::memory_order_acq_rel);
+    } // release the state guard BEFORE reaching for the stream mutex (lock-order)
+    if (unsubscribe) {
+      stream->unsubscribe(this);
+      stream->closes_in_flight_.fetch_sub(1, std::memory_order_acq_rel);
+    }
   }
 
 public:

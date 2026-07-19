@@ -12,7 +12,12 @@
 #include <Protocol/Packet.h>
 #include <crash.h>
 
-#include <Time.h>
+// The clock counter lives in TimeCounter.h, not Time.h: on macOS's
+// case-insensitive filesystem a `Time.h` on the -I path SHADOWS the SDK's
+// <time.h> for every TU of the host fw-sim build — libc++'s <ctime> then can't
+// resolve ::time_t/::tm. The MCU build is unaffected; the name just must not
+// collide.
+#include <TimeCounter.h>
 
 #define SYSTEM_INFO "FoveaCam Duo Controller"
 
@@ -25,7 +30,7 @@ extern TX tx;
 
 namespace Global {
 
-extern Time<micros> time;
+extern Time<micros, uint64_t> time;
 
 extern bool system_enabled;
 extern Packet::Config::Log::Level log_level;

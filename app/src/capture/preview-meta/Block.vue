@@ -55,6 +55,6 @@ const data = computed(() => {
 }
 
 .error {
-  color: red;
+  color: var(--danger-text);
 }
 </style>

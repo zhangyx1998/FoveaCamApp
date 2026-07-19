@@ -1,40 +1,38 @@
+<!-- -------------------------------------------------
+Copyright (c) 2025 Yuxuan Zhang, dev@z-yx.cc
+This source code is licensed under the MIT license.
+You may find the full license in project root directory.
+--------------------------------------------------- -->
+<!--
+  Single-capture — a thin client over the `liveview` session: pick a camera, the
+  orchestrator opens it and streams frames here. No core/hardware in the renderer.
+-->
 <script setup lang="ts">
-import { computed, onUnmounted, ref, watch } from "vue";
-import useCameras, { initCamera, useCameraConfig } from "@lib/camera";
-import StreamView from "@src/components/StreamView.vue";
-const cameras = await useCameras();
-const camera = ref<string | null>(null);
-const stream = computed(() => {
-  if (!camera.value) return;
-  return cameras.get(camera.value)?.stream;
-});
-watch(camera, async (id) => {
-  if (!id) return;
-  const cam = cameras.get(id);
-  if (!cam) return;
-  const config = await useCameraConfig(cam);
-  initCamera(cam, config);
-});
-onUnmounted(() => {
-  cameras.release();
-});
+import { computed, onMounted } from "vue";
+import { useSession, usePipeFrame, payloadToMat } from "@lib/orchestrator/client";
+import { nodeId } from "@lib/orchestrator/graph-contract";
+import { liveview } from "./contract";
+import FrameView from "@src/components/FrameView.vue";
+
+const session = useSession(liveview, "liveview");
+const { state, telemetry } = session;
+// Live view off the selected camera's native pipe.
+const frame = usePipeFrame(() => (state.serial ? nodeId.convert(state.serial) : null));
+const mat = computed(() => payloadToMat(frame.value));
+
+onMounted(() => session.call("refresh", undefined));
 </script>
 
 <template>
   <div class="content">
-    <StreamView
-      class="stream"
-      title="Camera View"
-      :stream="stream"
-      theme="yellow"
-    ></StreamView>
+    <FrameView class="stream" title="Camera View" :mat="mat" theme="yellow" />
     <div class="controls">
       <label>
         Camera
-        <select v-model="camera">
-          <option :value="null">Select a Camera</option>
-          <option v-for="k of cameras.keys()" :key="k" :value="k">
-            {{ k }}
+        <select v-model="state.serial">
+          <option value="">Select a Camera</option>
+          <option v-for="c in telemetry.cameras" :key="c.serial" :value="c.serial">
+            {{ c.vendor }} {{ c.model }} ({{ c.serial }})
           </option>
         </select>
       </label>

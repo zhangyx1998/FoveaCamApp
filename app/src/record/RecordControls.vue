@@ -1,8 +1,6 @@
 <script setup lang="ts">
-import { resolve } from "node:path";
-import { existsSync } from "node:fs";
 import { computed, ref, watch } from "vue";
-import { validateWritablePath } from "@lib/util/fs";
+import { useAsyncComputed } from "@lib/util/vue";
 import { FontAwesomeIcon as Icon } from "@fortawesome/vue-fontawesome";
 import { faCircle, faXmark } from "@fortawesome/free-solid-svg-icons";
 import { current_recording } from ".";
@@ -28,17 +26,36 @@ const sequence = computed({
 });
 
 const save_path = ref(recording.current_path);
+watch(
+  () => recording.current_path,
+  (p) => {
+    if (save_path.value === "") save_path.value = p;
+  },
+);
 
-const path_valid = computed(() => validateWritablePath(save_path.value));
+const path_valid = useAsyncComputed(
+  () => window.foveaBridge.validateWritablePath(save_path.value),
+  false,
+);
 
-const seq_valid = computed(() => {
-  const path = resolve(save_path.value, sequence.value);
-  return !existsSync(path);
-});
+// The recording is a single `<dir>/<seq>.fcap` file (no per-recording
+// directory) — mirrors FOVEA_EXTENSION in @orchestrator/recorder/schema.
+const FCAP_SUFFIX = ".fcap";
+
+const resolved_seq_path = useAsyncComputed(
+  () => window.foveaBridge.resolvePath(save_path.value, sequence.value),
+  "",
+);
+const seq_valid = useAsyncComputed(
+  async () =>
+    resolved_seq_path.value !== "" &&
+    !(await window.foveaBridge.pathExists(resolved_seq_path.value + FCAP_SUFFIX)),
+  true,
+);
 
 async function start() {
   const path = save_path.value || recording.current_path;
-  const full = resolve(path, sequence.value);
+  const full = await window.foveaBridge.resolvePath(path, sequence.value);
   await recording.start(full);
   recording.updateSequence(sequence.value);
   recording.current_path = path;
@@ -67,6 +84,7 @@ async function start() {
           :style="{ width: Math.max(sequence.length, 6) + 'ch' }"
         />
       </div>
+      <div class="suffix">{{ FCAP_SUFFIX }}</div>
     </div>
     <div class="buttons">
       <button
@@ -90,9 +108,10 @@ async function start() {
   right: 10px;
   min-width: 70ch;
   max-width: 120ch;
+  /* translucent panel wash (kept literal — no semantic token for the alpha) */
   background: #222e;
   backdrop-filter: blur(12px);
-  border: 1px solid #fff3;
+  border: 1px solid var(--tint-3);
   border-radius: 6px 6px;
   padding: 0.8em 1em;
   display: flex;
@@ -102,7 +121,7 @@ async function start() {
 }
 
 .title {
-  color: #aaa;
+  color: var(--text-muted);
   font-weight: 600;
   font-size: 0.9em;
 }
@@ -110,39 +129,47 @@ async function start() {
 .path-row {
   display: flex;
   align-items: center;
-  border: 1px solid #fff3;
+  border: 1px solid var(--tint-3);
   border-radius: 4px;
-  background-color: #fff1;
+  background-color: var(--tint-1);
   padding: 0.3em 0.5em;
-  font-family: monospace;
+  font-family: var(--font-mono);
   &:focus-within {
-    outline: 1px solid #0af;
+    outline: 1px solid var(--accent-bright);
   }
+  // Invalid: a single --danger signal (P2c — dropped the yellow double-signal).
   &.invalid {
-    outline: 1px solid red !important;
+    outline: 1px solid var(--danger) !important;
   }
   .directory {
     flex: 1;
     min-width: 0;
   }
-  .separator {
+  .separator,
+  .suffix {
     padding: 0 0.3ch;
-    color: #666;
+    color: var(--text-disabled);
+  }
+  .suffix {
+    flex-shrink: 0;
+    user-select: none;
+    // Flush against the sequence — the real filename is contiguous `0001.fcap`.
+    padding-left: 0;
   }
   .sequence {
     flex-shrink: 0;
   }
   .invalid,
   .invalid input {
-    color: #ff0;
+    color: var(--danger-text);
   }
   input {
-    font-family: monospace;
+    font-family: var(--font-mono);
     font-size: 1em;
     width: 100%;
     border: none;
     background: none;
-    color: white;
+    color: var(--text);
     outline: none;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -162,21 +189,21 @@ button.action {
   padding: 0.4em 0.8em;
   border: none;
   border-radius: 4px;
-  color: white;
+  color: var(--text);
   font-weight: 600;
   font-size: 0.9em;
   cursor: pointer;
   &.green {
-    background: #080;
+    background: var(--ok);
   }
   &.red {
-    background: #a00;
+    background: var(--danger);
   }
   &:hover:not(:disabled) {
     filter: brightness(1.2);
   }
   &:disabled {
-    background-color: #fff2;
+    background-color: var(--tint-2);
     cursor: not-allowed;
     opacity: 0.5;
   }

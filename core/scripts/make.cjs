@@ -1,7 +1,7 @@
-const { execSync } = require("child_process");
 const { BuildSystem } = require("cmake-js");
 const { existsSync, rmSync, mkdirSync, copyFileSync } = require("fs");
 const { resolve } = require("path");
+const { findOpenCVOptions, getElectronVersion } = require("./env.cjs");
 
 const cmd = process.argv[2];
 const arch = process.arch;
@@ -19,6 +19,7 @@ async function make(runtime, version, arch, options = {}) {
         arch: arch,
         cMakeOptions: {
             CMAKE_COLOR_DIAGNOSTICS: process.stdout.isTTY ? "ON" : "OFF",
+            ...findOpenCVOptions(),
             ...options,
         },
     });
@@ -28,8 +29,14 @@ async function make(runtime, version, arch, options = {}) {
     await buildSystem[cmd]();
     const src = resolve("build", prefix, "Release", "core.node");
     const dst = resolve(bin, `${prefix}.node`);
-    if (["build", "rebuild", "install"].includes(cmd)) copyFileSync(src, dst);
+    const readerSrc = resolve("build", prefix, "Release", "fovea_shm_reader.node");
+    const readerDst = resolve(bin, `${prefix}-shm-reader.node`);
+    if (["build", "rebuild", "install"].includes(cmd)) {
+        copyFileSync(src, dst);
+        copyFileSync(readerSrc, readerDst);
+    }
     if (cmd === "clean" && existsSync(dst)) rmSync(dst);
+    if (cmd === "clean" && existsSync(readerDst)) rmSync(readerDst);
 }
 
 async function main() {
@@ -39,14 +46,10 @@ async function main() {
         const version = process.versions.node;
         await make(runtime, version, arch);
     }
-
     // Detect if electron is available
     try {
         const runtime = "electron";
-        const version = execSync("npx electron --version")
-            .toString()
-            .replace(/^v/, "")
-            .trim();
+        const version = getElectronVersion();
         const options = { CXX_FLAGS: "-DV8_MEMORY_CAGE" };
         await make(runtime, version, arch, options);
     } catch (e) {

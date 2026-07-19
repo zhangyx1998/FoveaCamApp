@@ -64,15 +64,19 @@ function reset() {
 </template>
 
 <style scoped lang="scss">
+/* One app-native error identity: app dark surfaces, --danger family,
+   --font-mono. No fade-in on the surface itself — a crash must be instantly
+   legible and layout-stable. */
 .error-boundary {
     width: 100%;
     height: 100%;
     display: flex;
     justify-content: center;
     align-items: center;
-    background-color: #222;
+    background-color: var(--bg-app);
     padding: 2rem;
     overflow: auto;
+    font-family: var(--font-mono);
 }
 
 .error-container {
@@ -81,53 +85,20 @@ function reset() {
     display: flex;
     flex-direction: column;
     align-items: center;
-    color: #ddd;
+    color: var(--text-strong);
 }
 
 .error-icon {
-    color: #e74c3c;
+    color: var(--danger-strong);
     margin-bottom: 1.5rem;
-    animation: error-shake 0.5s ease-in-out;
-}
-
-@keyframes error-shake {
-    0%,
-    100% {
-        transform: translateX(0);
-    }
-    10%,
-    30%,
-    50%,
-    70%,
-    90% {
-        transform: translateX(-5px);
-    }
-    20%,
-    40%,
-    60%,
-    80% {
-        transform: translateX(5px);
-    }
 }
 
 h1 {
-    font-size: 2rem;
+    font-size: var(--fs-xl);
     font-weight: 500;
-    color: #ddd;
+    color: var(--text-strong);
     margin: 0 0 1rem 0;
     text-align: center;
-}
-
-.error-message {
-    color: #aaa;
-    text-align: center;
-    margin: 0 0 2rem 0;
-    padding: 1rem;
-    background-color: #333;
-    border-radius: 0.5rem;
-    border-left: 4px solid #e74c3c;
-    width: 100%;
-    font-family: "Consolas", "Monaco", "Courier New", monospace;
 }
 
 .error-actions {
@@ -144,27 +115,13 @@ h1 {
         font-size: 1rem;
         font-family: inherit;
         cursor: pointer;
-        transition: all 0.2s ease;
 
         &.primary {
-            background-color: #3498db;
-            color: white;
+            background-color: var(--accent);
+            color: var(--text);
 
             &:hover {
-                background-color: #2980b9;
-            }
-
-            &:active {
-                transform: scale(0.98);
-            }
-        }
-
-        &.secondary {
-            background-color: #555;
-            color: #ddd;
-
-            &:hover {
-                background-color: #666;
+                background-color: var(--accent-bright);
             }
 
             &:active {
@@ -177,18 +134,6 @@ h1 {
 .error-details {
     width: 100%;
     margin-top: 1rem;
-    animation: fade-in 0.3s ease-in-out;
-}
-
-@keyframes fade-in {
-    from {
-        opacity: 0;
-        transform: translateY(-10px);
-    }
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
 }
 
 .detail-section {
@@ -197,7 +142,7 @@ h1 {
     overflow: auto;
 
     h3 {
-        color: #aaa;
+        color: var(--text-muted);
         font-size: 0.9rem;
         font-weight: 500;
         text-transform: uppercase;
@@ -206,15 +151,15 @@ h1 {
     }
 
     pre {
-        background-color: #1a1a1a;
-        color: #e74c3c;
+        background-color: var(--bg-panel-alt);
+        color: var(--danger-text);
         padding: 1rem;
         border-radius: 0.5rem;
         overflow-x: auto;
         font-size: 0.85rem;
         line-height: 1.5;
         margin: 0;
-        font-family: "Consolas", "Monaco", "Courier New", monospace;
+        font-family: var(--font-mono);
         white-space: pre-wrap;
         word-break: break-word;
     }

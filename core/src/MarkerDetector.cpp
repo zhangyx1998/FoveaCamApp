@@ -7,9 +7,21 @@
 #include <cstring>
 
 #include <napi.h>
-#include <opencv2/aruco.hpp>
 #include <opencv2/core.hpp>
+#include <opencv2/core/version.hpp>
+
+// The ArUco module was refactored in OpenCV 4.7: Dictionary moved into the
+// objdetect module, the enum was renamed PREDEFINED_DICTIONARY_NAME ->
+// PredefinedDictionaryType, DICT_ARUCO_MIP_36h12 was added, and
+// getPredefinedDictionary() now returns a Dictionary by value instead of a
+// Ptr<Dictionary>. Ubuntu 24.04 ships 4.6; macOS/Homebrew ships >= 4.7.
+#define CV_ARUCO_OBJDETECT                                                     \
+  (CV_VERSION_MAJOR > 4 || (CV_VERSION_MAJOR == 4 && CV_VERSION_MINOR >= 7))
+
+#include <opencv2/aruco.hpp>
+#if CV_ARUCO_OBJDETECT
 #include <opencv2/objdetect/aruco_dictionary.hpp>
+#endif
 
 #include <Aravis/Frame.h>
 #include <Aravis/PixelFormat.h>
@@ -19,11 +31,22 @@
 
 #include "AsyncTask.h"
 #include "Iterator.h"
+#include "ThreadMeter.h" // B-24: detector node meter (graph stats)
 #include "napi-helper.h"
+
+// Defined in core/lib/Aravis/ConverterStream.cpp (shared snapshot serializer;
+// forward-declared to avoid pulling the pipe headers into this TU).
+namespace Arv {
+Napi::Value meterSnapshotToJs(Napi::Env env, const Meter::Snapshot &s);
+}
 
 using namespace Napi;
 using namespace cv;
+#if CV_ARUCO_OBJDETECT
 using DictType = aruco::PredefinedDictionaryType;
+#else
+using DictType = aruco::PREDEFINED_DICTIONARY_NAME;
+#endif
 
 template <> std::string convert(const DictType &type) {
 #define CASE(NAME)                                                             \
@@ -51,7 +74,9 @@ template <> std::string convert(const DictType &type) {
     CASE(APRILTAG_25h9);
     CASE(APRILTAG_36h10);
     CASE(APRILTAG_36h11);
-    CASE(ARUCO_MIP_36h12);
+#if CV_ARUCO_OBJDETECT
+    CASE(ARUCO_MIP_36h12); // added in OpenCV 4.7
+#endif
   default:
     throw std::invalid_argument("Invalid marker dictionary type: " +
                                 std::to_string(type));
@@ -84,7 +109,9 @@ template <> DictType convert(const std::string &type) {
   CASE(APRILTAG_25h9);
   CASE(APRILTAG_36h10);
   CASE(APRILTAG_36h11);
-  CASE(ARUCO_MIP_36h12);
+#if CV_ARUCO_OBJDETECT
+  CASE(ARUCO_MIP_36h12); // added in OpenCV 4.7
+#endif
   throw std::invalid_argument("Invalid marker dictionary type: " + type);
 #undef CASE
 }
@@ -157,22 +184,37 @@ inline Result::Ptr detect(const Arv::Frame::Ptr &frame,
                           double scale = 1.0) {
   auto gray = frame->view(Arv::PixelFormat::Mono8);
   cv::Mat mat;
-  if (scale != 1.0)
+  if (scale != 1.0) {
+    // The resize output is a private buffer — in-place normalize is safe.
     cv::resize(gray, mat, {}, scale, scale, cv::INTER_AREA);
-  else
-    mat = gray;
-  cv::normalize(mat, mat, 0, 255, cv::NORM_MINMAX);
+    cv::normalize(mat, mat, 0, 255, cv::NORM_MINMAX);
+  } else {
+    // At scale 1.0 `gray` is a HEADER OVER THE LIVE SHARED Mono8 frame
+    // buffer — an in-place normalize would contrast-stretch the frame under
+    // concurrent preview/recording/capture consumers (data race + visible
+    // corruption). Normalize into a DISTINCT mat.
+    cv::normalize(gray, mat, 0, 255, cv::NORM_MINMAX);
+  }
   std::vector<int> ids;
   std::vector<std::vector<cv::Point2f>> corners;
   aruco::detectMarkers(mat, dict, corners, ids);
   if (ids.size() != corners.size())
     throw std::runtime_error("Detected ids and corners size mismatch");
   auto n = ids.size();
-  // Scale corners back to original size
-  if (scale != 1.0)
+  // Scale corners back to original size. CLAMP into the full-res rect: the
+  // sub-pixel corner of an edge-touching marker can rescale marginally past
+  // cols-1/rows-1, and downstream cornerSubPix ASSERTS on any out-of-rect
+  // point.
+  if (scale != 1.0) {
+    const float xMax = static_cast<float>(gray.cols - 1);
+    const float yMax = static_cast<float>(gray.rows - 1);
     for (auto &corner_set : corners)
-      for (auto &pt : corner_set)
+      for (auto &pt : corner_set) {
         pt /= scale;
+        pt.x = std::min(std::max(pt.x, 0.0f), xMax);
+        pt.y = std::min(std::max(pt.y, 0.0f), yMax);
+      }
+  }
   // Save results
   auto results = Result::create(frame);
   results->detections.reserve(n);
@@ -181,24 +223,48 @@ inline Result::Ptr detect(const Arv::Frame::Ptr &frame,
   return results;
 }
 
+static int64_t nowMs() {
+  using namespace std::chrono;
+  return duration_cast<milliseconds>(steady_clock::now().time_since_epoch())
+      .count();
+}
+
 class MarkerStream : public TransformStream<Arv::Frame::Ptr, Result::Ptr>,
                      public Shared<MarkerStream> {
 public:
   const Arv::Stream::Ptr stream;
   const cv::Ptr<aruco::Dictionary> dict;
   const double scale;
+  // Optional `name` = the graph node id (B-24: meter names ARE node ids).
   MarkerStream(const Arv::Stream::Ptr &upstream,
-               const cv::Ptr<aruco::Dictionary> &dict, double scale)
-      : stream(upstream), dict(dict), scale(scale) {}
+               const cv::Ptr<aruco::Dictionary> &dict, double scale,
+               std::string name = "detector")
+      : stream(upstream), dict(dict), scale(scale),
+        meter_(std::move(name), {"frame"}, {"detect"}, nowMs()) {}
   ~MarkerStream() { shutdown(); }
+  Meter::Snapshot probe() const { return meter_.probe(nowMs()); }
   Stream<Arv::Frame::Ptr> *upstream() override { return stream.get(); }
   Result::Ptr transform(const Arv::Frame::Ptr &input) override {
+    const int64_t t = nowMs();
+    const uint64_t d = upstreamDrops();
+    if (d > lastDrops_) { // camera outran detection (latest-wins overwrote)
+      meter_.drop(d - lastDrops_);
+      lastDrops_ = d;
+    }
+    meter_.ingest("frame", t);
     std::string name = "Frame[" + input->tag + "]";
     VERBOSE("MarkerStream::transform(%s) start", name.c_str());
+    meter_.begin(t);
     auto result = detect(input, dict, scale);
+    meter_.end(nowMs());
     VERBOSE("MarkerStream::transform(%s) done", name.c_str());
+    meter_.emit("detect", nowMs());
     return result;
   }
+
+private:
+  Meter::ThreadMeter meter_; // single writer = the transform thread
+  uint64_t lastDrops_ = 0;   // transform-thread only
 };
 
 class MarkerDetectorObject : public ObjectWrap<MarkerDetectorObject> {
@@ -219,7 +285,13 @@ public:
     auto env = info.Env();
     try {
       const auto type = convert<DictType>(info[0]);
+#if CV_ARUCO_OBJDETECT
+      // >= 4.7: getPredefinedDictionary returns a Dictionary by value.
       dict = makePtr<aruco::Dictionary>(aruco::getPredefinedDictionary(type));
+#else
+      // <= 4.6: getPredefinedDictionary already returns a Ptr<Dictionary>.
+      dict = aruco::getPredefinedDictionary(type);
+#endif
     }
     JS_EXCEPT()
   }
@@ -271,10 +343,32 @@ private:
       if (scale <= 0.0)
         throw std::invalid_argument("Scale must be positive");
       const auto upstream = convert<Arv::Stream::Ptr>(info[0]);
-      const auto downstream = MarkerStream::create(upstream, dict, scale);
+      // Optional info[2]: the graph node id → meter/probe name (B-24).
+      const auto downstream =
+          info.Length() >= 3 && info[2].IsString()
+              ? MarkerStream::create(upstream, dict, scale,
+                                     info[2].As<Napi::String>().Utf8Value())
+              : MarkerStream::create(upstream, dict, scale);
       auto stream = StreamObject<MarkerStream>::Create(env, downstream);
-      if (stream.IsObject())
-        stream.As<Napi::Object>().Set("upstream", info[0]);
+      if (stream.IsObject()) {
+        auto obj = stream.As<Napi::Object>();
+        obj.Set("upstream", info[0]);
+        // B-24: out-of-loop meter probe. WEAK capture — the closure must not
+        // extend the MarkerStream's lifetime past its release() (B-20: the
+        // stream object is the Arv-ref holder; a strong capture would leak
+        // the camera stream reference).
+        std::weak_ptr<MarkerStream> weak = downstream;
+        obj.Set("probe",
+                Napi::Function::New(
+                    env,
+                    [weak](const Napi::CallbackInfo &cb) -> Napi::Value {
+                      auto env = cb.Env();
+                      if (auto s = weak.lock())
+                        return Arv::meterSnapshotToJs(env, s->probe());
+                      return env.Null(); // released
+                    },
+                    "probe"));
+      }
       return stream;
     }
     JS_EXCEPT(env.Undefined())

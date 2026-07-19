@@ -4,88 +4,132 @@
 // You may find the full license in project root directory.
 // -------------------------------------------------------
 //
-// Auto-vergence: drive both fovea cameras to fixate the same physical point.
-//
-// Each frame triple is processed in two stages:
-//
-//   1. analyzeVergence() — template-match each fovea tile into a strip taken
-//      from the wide center frame to find where each fovea is *actually*
-//      looking, in wide-frame pixels.
-//   2. stepVergence() — constrained proportional control on {pan, verge,
-//      v_shift}, reconstructing both fovea poses symmetrically about the gaze
-//      ray, returning new actuator voltages.
-//
-// The loop feeds back on the image-matched position rather than the
-// calibration-predicted one, so a constant extrinsic-calibration offset is
-// absorbed by the loop instead of biasing convergence.
+// Auto-vergence PURE geometry + control math (the SESSION/PID-node side of the
+// split): sizing (`foveaTileSize`, `matchMagnification`), `stepVergence`,
+// `followTarget`, `seedVergence`, and the capture-epoch target ring
+// (`recordTarget`/`targetAtEpoch`). Core-free (types only) so the control law +
+// its tests never load the native addon. Behavior spec: docs/spec/disparity-scope.md
+// (§control-law, §seed-space, §magnification, §needle-geometry).
 
-import type { Point2d, Rect, Size } from "core/Geometry";
-import {
-  cvtColor,
-  gaussian,
-  heatmap,
-  Mat,
-  matchTemplate,
-  minMaxLoc,
-  resize,
-  slice,
-} from "core/Vision";
-import { RECT, VEC } from "@lib/util/geometry";
+import type { Point2d, Size } from "core/Geometry";
+import { VEC } from "@lib/util/geometry";
 import { PID } from "@lib/pid";
-import { inverseTriangulate, vergeToDistance } from "@lib/stereo";
-import type { CoordinateConversions } from "@lib/camera";
+import { distanceToVerge, inverseTriangulate, vergeToDistance } from "@lib/stereo";
+import type { CoordinateConversions } from "@lib/coordinate-conversions";
 
-export type MatchResult = {
-  /** Heatmap visualization of the correlation map (red = match). */
-  mat: Mat<Uint8Array>;
-  /** Matched fovea footprint within the guide strip, full-resolution pixels. */
-  rect: Rect;
-  /** CCOEFF_NORMED peak score in [-1, 1]; higher = more confident. */
-  score: number;
-};
-
-export type VergenceAnalysis = {
-  /** Full-resolution wide strip used as the match guide. */
-  guide: Mat<Uint8Array>;
-  ml: MatchResult;
-  mr: MatchResult;
-  /** Target footprint within the guide strip. */
-  center: { rect: Rect };
-  /** Position of the top left corner of the guide strip on wide frame */
-  ox: number;
-  oy: number;
-};
-
-export type VergenceOptions = {
-  /** Wide center frame dimensions (pixels). */
+/** Fovea tile `dsize` for the needle SCALE node = `(width*scale)/zoom` per axis,
+ *  landing the fovea view at `scale` px per wide px (CCOEFF is not scale-
+ *  invariant, so it must meet the strip). `zoom` is the MATCH MAGNIFICATION (not
+ *  the display crop zoom); `width`/`height` MUST be paired with `zoom`'s units —
+ *  the session's `needleGeometry` owns the pairing (spec §needle-geometry). */
+export function foveaTileSize(opts: {
+  /** Frame width paired with `zoom` (fovea dims for measured, center for nominal). */
   width: number;
+  /** Frame height, same pairing as `width`. */
   height: number;
-  /** Zoom ratio = FOV(wide) / FOV(fovea). */
+  /** Match magnification (measured fovea↔wide ratio, else nominal zoom). */
   zoom: number;
-  /** Scale of the fovea tiles (1.0 ~ zoom); higher = more detail, more compute. */
   scale: number;
-  /** Target center within the wide frame (pixels). */
-  target: Point2d;
-  /** Expansion factor for the match strip. */
-  expand_x: number;
-  expand_y: number;
-};
+}): Size {
+  const { width, height, zoom: z, scale: s } = opts;
+  return { width: (width * s) / z, height: (height * s) / z };
+}
 
-/**
- * Per-DOF controllers. Rather than commanding the four fovea pixel DOF
- * (L.x, L.y, R.x, R.y) independently — which lets the foveas drift apart on
- * noisy frames — the loop integrates these physically-meaningful DOF
- * (each a {@link PID} whose clamped integrator is the command) and reconstructs
- * both fovea poses symmetrically about the gaze ray.
- */
-export type VergencePIDs = {
+// Re-export the fovea-footprint display math from the core-free
+// display-geometry.ts (the renderer uses it and must not pull core/Vision) so
+// the vision/control side keeps one import surface.
+export { foveaFootprintOnWide } from "./display-geometry";
+
+/** The fovea↔wide template-match magnification under the resolution order
+ *  (spec §magnification): knob > per-triple override > measured > 1; each tier
+ *  must be finite and > 0 or it falls through. `nominalZoom === 0` is "Auto". */
+export function matchMagnification(
+  measured: number | null | undefined,
+  nominalZoom: number,
+  tripleOverride?: number | null,
+): number {
+  if (Number.isFinite(nominalZoom) && nominalZoom > 0) return nominalZoom;
+  if (tripleOverride != null && Number.isFinite(tripleOverride) && tripleOverride > 0)
+    return tripleOverride;
+  if (measured != null && Number.isFinite(measured) && measured > 0)
+    return measured;
+  return 1;
+}
+
+/** The minimal 2D controller shape {@link stepVergence} drives for `pan` —
+ *  structurally satisfied by @lib/pid's `PID2D`, declared here (not imported) so
+ *  the vergence math + its test stay independent of the 2D class. */
+export interface Vec2Controller {
+  step(error: Point2d, dt?: number, measurement?: Point2d): Point2d;
+  readonly value: Point2d;
+}
+
+// --- capture-epoch target ring (spec §control-law) ----------------------
+
+/** One target write: `t` = host steady-clock ns (the trusted-time domain every
+ *  pipe frame's `deviceTimestamp` is calibrated into), `target` = the value
+ *  written. The session appends one at EVERY `state.target` write. */
+export type TargetSample = { t: number; target: Point2d };
+
+/** Append a target write to the ring: monotonic-`t` (an out-of-order stamp is
+ *  dropped so {@link targetAtEpoch}'s scan stays ordered), capped to
+ *  `capacity` oldest-first. */
+export function recordTarget(
+  ring: TargetSample[],
+  sample: TargetSample,
+  capacity: number,
+): void {
+  const newest = ring[ring.length - 1];
+  if (newest && sample.t < newest.t) return;
+  ring.push(sample);
+  if (ring.length > capacity) ring.splice(0, ring.length - capacity);
+}
+
+/** The target in effect at `epoch`: the NEWEST sample with `t ≤ epoch` (a
+ *  write applies from its stamp onward). `fallback` (the live target) when the
+ *  ring is empty, the epoch is missing/non-finite, or every sample is newer
+ *  than the epoch — the out-of-coverage epoch an UNCALIBRATED camera clock
+ *  produces lands here, degrading to the live-target fallback instead of
+ *  resolving an arbitrarily stale entry. */
+export function targetAtEpoch(
+  ring: readonly TargetSample[],
+  epoch: number | undefined,
+  fallback: Point2d,
+): Point2d {
+  if (epoch === undefined || !Number.isFinite(epoch)) return fallback;
+  for (let i = ring.length - 1; i >= 0; i--) {
+    const s = ring[i]!;
+    if (s.t <= epoch) return s.target;
+  }
+  return fallback;
+}
+
+/** The named DOF controllers the vergence step integrates (spec §control-law) —
+ *  physically-meaningful DOF reconstructed symmetrically about the gaze ray,
+ *  not four independent fovea pixel DOF. Live inside the PID node post-replumb. */
+export type VergenceControllers = {
+  /** Common-mode ray correction, x/y (rad) — a 2D controller. */
+  pan: Vec2Controller;
   /** Inverse-√depth verge parameter (0 ⇒ ∞, larger ⇒ nearer). */
   verge: PID;
   /** Vertical half-shift between the foveas (rad). */
   v_shift: PID;
-  /** Common-mode ray correction, x/y (rad). */
-  panX: PID;
-  panY: PID;
+};
+
+/** The scope's control INPUT: matched fovea centers + target on the UNDISTORTED
+ *  wide frame (full-res px) + per-eye match confidence. Composed by the session's
+ *  join from the two template-match results (spec §match-join). */
+export type ScopeProjection = {
+  l: Point2d;
+  r: Point2d;
+  /** The target AS OF THE MATCHED FRAME'S CAPTURE EPOCH (spec
+   *  §control-law) — resolved by the join via {@link targetAtEpoch}, so the
+   *  error pairs setpoint and measurement at the same instant. */
+  target: Point2d;
+  scores: { l: number; r: number };
+  /** True while a pointer drag pins the target (session-local; the join stamps
+   *  it) → DIRECT follow, not a PID step (spec §drag). */
+  overridden: boolean;
 };
 
 export type VergenceControl = {
@@ -95,173 +139,117 @@ export type VergenceControl = {
   minScore: number;
 };
 
-// Smoothing applied to each correlation map before peak-finding, so a single
-// noisy pixel can't win over a broader, more confident lobe.
-const GAUSS_KSIZE = 9;
-const GAUSS_SIGMA = 10;
-
-/** Grayscale, downsampled fovea tile at its wide-frame footprint size. */
-async function getFoveaTile(f: Mat<Uint8Array>, size: Size) {
-  return await resize(cvtColor(f, "RGBA2GRAY"), size);
-}
-
-/** Grayscale horizontal strip from the wide frame, scaled by `s`. */
-async function getMatchTile(
-  f: Mat<Uint8Array>,
-  ox: number,
-  oy: number,
-  W: number,
-  H: number,
-  s: number,
-) {
-  const m = cvtColor(f, "RGBA2GRAY");
-  const sliced = slice(m, { x: ox, y: oy, width: W, height: H });
-  return await resize(sliced, {}, s, s);
-}
-
 /**
- * Locate the correlation peak and un-scale it back to full-resolution strip
- * coordinates (`s` is the inverse of the strip's scale factor).
- */
-async function processMatch(
-  match: Mat<Float32Array>,
-  needle: Mat,
-  s: number,
-): Promise<MatchResult> {
-  const { max } = minMaxLoc(match);
-  const [height = 0, width = 0] = needle.shape;
-  const rect = RECT.fromTopLeft(max, { width, height });
-  const [h1 = 0, w1 = 0] = match.shape;
-  const [, w2 = 0] = needle.shape;
-  const sliced = slice(match, {
-    x: -w2 / 2,
-    y: 0,
-    width: w1 + w2 * 2,
-    height: h1,
-  });
-  const resized = await resize(sliced, {}, s);
-  return {
-    mat: heatmap(resized),
-    rect: VEC.mul(rect, s),
-    score: max.value,
-  };
-}
-
-/**
- * Stage 1: template-match each fovea tile into the wide-frame strip and report
- * where each fovea is currently looking, plus the target footprint.
- */
-export async function analyzeVergence(
-  frames: { l: Mat<Uint8Array>; c: Mat<Uint8Array>; r: Mat<Uint8Array> },
-  opts: VergenceOptions,
-): Promise<VergenceAnalysis> {
-  const { l, c, r } = frames;
-  const {
-    width,
-    height,
-    zoom: z,
-    scale: s,
-    target,
-    expand_x = 3.0,
-    expand_y = 2.0,
-  } = opts;
-  const h = (height * s) / z; // Height of fovea tile (scaled)
-  const w = (width * s) / z; // Width of fovea tile (scaled)
-  const W = (width / z) * expand_x; // Strip width
-  const H = (height / z) * expand_y; // Strip height
-  const ox = target.x - W / 2;
-  const oy = target.y - H / 2;
-  const [tl, tc, tr] = await Promise.all([
-    getFoveaTile(l, { width: w, height: h }),
-    getMatchTile(c, ox, oy, W, H, s),
-    getFoveaTile(r, { width: w, height: h }),
-  ]);
-  // Identical pipeline per eye: correlate the fovea tile into the wide strip,
-  // smooth, then un-scale the peak back to full-resolution strip coordinates.
-  const matchFovea = (tile: Mat<Uint8Array>) =>
-    matchTemplate(tc, tile, "CCOEFF_NORMED").then((m) =>
-      processMatch(gaussian(m, GAUSS_KSIZE, GAUSS_SIGMA), tile, 1 / s),
-    );
-  const [guide, ml, mr] = await Promise.all([
-    resize(tc, {}, 1 / s),
-    matchFovea(tl),
-    matchFovea(tr),
-  ]);
-  const center = {
-    rect: RECT.fromCenter(VEC.sub(target, { x: ox, y: oy }), {
-      width: w / s,
-      height: h / s,
-    }),
-  };
-  return { guide, ml, mr, center, ox, oy };
-}
-
-/**
- * Stage 2: constrained vergence step.
+ * Constrained vergence step (spec §control-law): lift matched centers + target
+ * to center-camera angles (`P2A.C(px, false)` — undistorted input), decompose
+ * into {pan, verge, v_shift} errors, integrate through the per-DOF PIDs
+ * (velocity form; caller-supplied `dt` normalizes the rate), reconstruct both
+ * fovea voltages via {@link inverseTriangulate}. Returns `null` (hold,
+ * controllers untouched) when either match is below `minScore`.
  *
- * The matched fovea centers and the target are lifted into center-camera angle
- * space, decomposed into {pan, verge, v_shift} errors, fed through the per-DOF
- * {@link PID} controllers (which integrate, dt-scale, and saturate), and the
- * resulting commands are turned back into both fovea voltages via
- * {@link inverseTriangulate} — guaranteeing the two foveas stay symmetric about
- * the gaze ray.
+ * Error decomposition (`dL = aT − aL`, `dR = aT − aR`):
+ *   pan     = (dL + dR) / 2                — common-mode mis-centering
+ *   verge   = aR.x − aL.x = 2b(1/Z − 1/z)  — horizontal disparity ⇒ depth
+ *   v_shift = (aR.y − aL.y) / 2            — residual vertical disparity (sign
+ *             opposite pan.y: the foveas move OPPOSITE vertically — spec §control-law)
  *
- * Error decomposition (with `dL = aT - aL`, `dR = aT - aR`):
- *   pan     = (dL + dR) / 2          — common-mode mis-centering (calibration)
- *   verge   = aR.x - aL.x = 2b(1/Z - 1/z)  — horizontal disparity ⇒ depth
- *   v_shift = (aR.y - aL.y) / 2      — residual vertical disparity
- *
- * The `v_shift` sign is opposite the common-vertical (`pan.y`) one: `v_shift`
- * drives the two foveas in *opposite* vertical directions
- * (`out.l.y = ray.y + v_shift`, `out.r.y = ray.y - v_shift`), so given a stable
- * common-vertical loop, nulling the differential disparity needs the negated
- * error — otherwise `v_shift` slowly winds away to its limit.
- *
- * The PID integration is incremental (velocity) form, so its effect scales with
- * the call rate; `dt` (a rate-normalized step supplied by the caller) keeps
- * convergence wall-clock consistent across the variable pipeline throughput.
- *
- * Returns `null` (hold) when either match is too weak to trust — the PIDs are
- * left untouched so a low-confidence frame neither integrates nor winds down.
+ * Each PID also receives the DOF's measurement point (error = setpoint −
+ * measurement), so measurement-derivative controllers never differentiate
+ * target motion — see the inline decomposition table.
  */
 export function stepVergence(
-  analysis: VergenceAnalysis,
-  pids: VergencePIDs,
+  projection: ScopeProjection,
+  ctl: VergenceControllers,
   conv: Pick<CoordinateConversions, "P2A" | "A2V">,
   ctrl: VergenceControl,
   dt: number,
 ): { left: Point2d; right: Point2d } | null {
-  const { ml, mr, center: mc, ox, oy } = analysis;
   if (
-    !(ml.score >= ctrl.minScore) ||
-    !(mr.score >= ctrl.minScore) // also rejects NaN scores from flat patches
+    !(projection.scores.l >= ctrl.minScore) ||
+    !(projection.scores.r >= ctrl.minScore) // also rejects NaN scores
   )
     return null;
-  // Lift matched centers (strip coords) into center-camera angles.
-  const toAngle = (rect: Rect) => {
-    const p = RECT.getCenter(rect);
-    return conv.P2A.C({ x: p.x + ox, y: p.y + oy });
-  };
-  const aL = toAngle(ml.rect);
-  const aR = toAngle(mr.rect);
-  const aT = toAngle(mc.rect); // == target ray
-  // Constrained errors (see header).
+  // Undistorted wide pixel → center-camera angle (already strip-offset-folded).
+  const toAngle = (p: Point2d) => conv.P2A.C(p, false);
+  const aL = toAngle(projection.l);
+  const aR = toAngle(projection.r);
+  const aT = toAngle(projection.target); // == target ray
+  // Constrained errors (see JSDoc).
   const dL = VEC.sub(aT, aL);
   const dR = VEC.sub(aT, aR);
   const ePan = VEC.mul(VEC.add(dL, dR), 0.5);
   const eVerge = aR.x - aL.x;
   const eVshift = (aR.y - aL.y) / 2;
-  // Each PID integrates its error, dt-scales it, and saturates to a physical
-  // range so a bad estimate can at worst rest at a limit — never fling a fovea.
-  const shift = {
-    x: pids.panX.step(ePan.x, dt),
-    y: pids.panY.step(ePan.y, dt),
-  };
-  const verge = pids.verge.step(eVerge, dt);
-  const v_shift = pids.v_shift.step(eVshift, dt);
+  // Per-DOF MEASUREMENT points (spec §control-law), decomposed so
+  // error = setpoint − measurement holds:
+  //   pan     setpoint aT,  measurement (aL+aR)/2 — the ONLY DOF whose
+  //           setpoint moves; measurement-derivative kills the target kick
+  //   verge   setpoint 0 (disparity nulled), measurement aL.x − aR.x
+  //   v_shift setpoint 0,                    measurement (aL.y − aR.y)/2
+  // For verge/v_shift the constant-0 setpoint makes measurement mode
+  // numerically identical to error mode — passed for uniformity.
+  const mPan = VEC.mul(VEC.add(aL, aR), 0.5);
+  // Each controller integrates its error, dt-scales it, and saturates to a
+  // physical range so a bad estimate can at worst rest at a limit — never fling
+  // a fovea. `pan` is a 2D controller (separate x/y integrators).
+  const shift = ctl.pan.step(ePan, dt, mPan);
+  const verge = ctl.verge.step(eVerge, dt, aL.x - aR.x);
+  const v_shift = ctl.v_shift.step(eVshift, dt, (aL.y - aR.y) / 2);
   // Reconstruct both poses symmetrically about the (shift-corrected) ray.
   const ray = VEC.add(aT, shift);
   const distance = vergeToDistance(verge, ctrl.baseline);
   const A = inverseTriangulate(ray, ctrl.baseline, distance, v_shift);
   return { left: conv.A2V.L(A.l), right: conv.A2V.R(A.r) };
+}
+
+/** The controller state {@link seedVergence} reconstructs — one value per DOF
+ *  {@link stepVergence} integrates. Seeding a released PID node with these makes
+ *  the resumed command continuous (velocity-form integrator = command). */
+export type VergenceSeed = { pan: Point2d; verge: number; v_shift: number };
+
+/** DIRECT target follow — the drag path (spec §drag): the forward map of
+ *  {@link stepVergence}'s tail (`ray = aT + pan`, then `inverseTriangulate`)
+ *  with NO PID stepping and NO match-score gate, so a drag moves the foveas even
+ *  where the template match fails. Generic over `held`. */
+export function followTarget(
+  target: Point2d,
+  held: VergenceSeed,
+  conv: Pick<CoordinateConversions, "P2A" | "A2V">,
+  baseline: number,
+): { left: Point2d; right: Point2d } {
+  const ray = VEC.add(conv.P2A.C(target, false), held.pan);
+  const distance = vergeToDistance(held.verge, baseline);
+  const A = inverseTriangulate(ray, baseline, distance, held.v_shift);
+  return { left: conv.A2V.L(A.l), right: conv.A2V.R(A.r) };
+}
+
+/** Reconstruct the `{pan, verge, v_shift}` state whose forward map reproduces a
+ *  pair of per-eye gaze ANGLES `gL`/`gR` about the target ray `aT` — the exact
+ *  inverse of {@link stepVergence}'s reconstruction, seeding a released PID node
+ *  for output continuity. Inputs are ANGLES, not volts: the V2A round-trip is
+ *  lossy and a parallel-ray caller MUST pass `gL = gR = ray` (spec §seed-space).
+ *
+ *  @param parallelEps `|tan gL.x − tan gR.x|` below this ⇒ parallel (verge 0),
+ *    guarding the `z = baseline/tanDiff` divide. */
+export function seedVergence(
+  gL: Point2d,
+  gR: Point2d,
+  aT: Point2d,
+  baseline: number,
+  parallelEps = 1e-9,
+): VergenceSeed {
+  const v_shift = (gL.y - gR.y) / 2;
+  const rayY = (gL.y + gR.y) / 2;
+  const tanDiff = Math.tan(gL.x) - Math.tan(gR.x);
+  let rayX: number;
+  let verge: number;
+  if (Math.abs(tanDiff) < parallelEps) {
+    rayX = (gL.x + gR.x) / 2;
+    verge = 0;
+  } else {
+    const z = baseline / tanDiff;
+    rayX = Math.atan2((z * (Math.tan(gL.x) + Math.tan(gR.x))) / 2, z);
+    verge = distanceToVerge(z, baseline);
+  }
+  return { pan: { x: rayX - aT.x, y: rayY - aT.y }, verge, v_shift };
 }

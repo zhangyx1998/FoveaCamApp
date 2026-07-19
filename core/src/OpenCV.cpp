@@ -107,8 +107,8 @@ CVT(cv::Rect_, double, 4, x, y, width, height)
     MATCH_MAT_TYPE_CASE(CV_16U, uint16_t, RET, SIZE, AB, OFFSET);              \
     MATCH_MAT_TYPE_CASE(CV_16S, int16_t, RET, SIZE, AB, OFFSET);               \
     MATCH_MAT_TYPE_CASE(CV_32S, int32_t, RET, SIZE, AB, OFFSET);               \
-    MATCH_MAT_TYPE_CASE(CV_32F, float32_t, RET, SIZE, AB, OFFSET);             \
-    MATCH_MAT_TYPE_CASE(CV_64F, float64_t, RET, SIZE, AB, OFFSET);             \
+    MATCH_MAT_TYPE_CASE(CV_32F, float, RET, SIZE, AB, OFFSET);                 \
+    MATCH_MAT_TYPE_CASE(CV_64F, double, RET, SIZE, AB, OFFSET);                \
   default:                                                                     \
     throw JS::TypeError(env, "Unsupported Mat type " +                         \
                                  std::to_string(MAT.type()) +                  \
@@ -343,6 +343,9 @@ template <> CameraCalibration::Ptr convert(const Napi::Value &value) {
   cal->dist_coeffs = convert<cv::Mat>(obj.Get("dist_coeffs"));
   cal->rvecs = convert<std::vector<cv::Mat>>(obj.Get("rvecs"));
   cal->tvecs = convert<std::vector<cv::Mat>>(obj.Get("tvecs"));
+  // Optional (additive): absent on calibrations persisted before `rms` existed.
+  if (obj.Has("rms"))
+    cal->rms = convert<double>(obj.Get("rms"));
   return cal;
 }
 
@@ -355,6 +358,7 @@ Napi::Value convert(Napi::Env env, const Napi::Value &container,
   obj.Set("dist_coeffs", convert(env, cal->dist_coeffs));
   obj.Set("rvecs", convert(env, cal->rvecs));
   obj.Set("tvecs", convert(env, cal->tvecs));
+  obj.Set("rms", convert(env, cal->rms));
   return obj;
 }
 

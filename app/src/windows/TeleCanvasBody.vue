@@ -1,0 +1,366 @@
+<!-- -------------------------------------------------
+Copyright (c) 2026 Yuxuan Zhang, dev@z-yx.cc
+This source code is licensed under the MIT license.
+You may find the full license in project root directory.
+--------------------------------------------------- -->
+<!--
+  TeleCanvas window body (async; mounted under TeleCanvasWindow's <Suspense>).
+  Live projection preview + mode switch + per-mode controls:
+    • client — the remote TeleCanvas server URL + a note that the running app's
+      windows push the content there. Preview mirrors THIS window's local
+      providers (none here → the splash).
+    • host — this app's own server (the published `telecanvas` package): listening
+      state, reachable viewer URLs (each with a copy button), and a live preview
+      (`telecanvas/view` mountView) subscribed to the server itself (truthful —
+      it renders exactly what an external display renders).
+
+  mode/url/port bind to the shared `["config"]` document via `useConfigRef`, so
+  edits apply live across windows (the push watchers pick up the new target). On
+  a mode/port change this window also nudges main (`applyTeleCanvas`) so the
+  main-owned host process reconciles.
+-->
+<script setup lang="ts">
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { mountView, type ViewHandle } from "telecanvas/view";
+import { useConfigRef } from "@lib/config";
+import { content, hasProviders } from "../components/telecanvas/registry";
+import {
+  DEFAULT_TELECANVAS_PORT,
+  IDLE_TELECANVAS_STATUS,
+  type TeleCanvasStatus,
+} from "@lib/telecanvas";
+import { FontAwesomeIcon as Icon } from "@fortawesome/vue-fontawesome";
+import { faCopy, faCheck, faTelevision } from "@fortawesome/free-solid-svg-icons";
+
+// ---- Config (live, writable refs over the shared document) -----------------
+const mode = await useConfigRef("tele_canvas_mode");
+const url = await useConfigRef("tele_canvas_url");
+const port = await useConfigRef("tele_canvas_port");
+
+const isHost = computed(() => (mode.value ?? "client") === "host");
+
+// Presentation-only URL validity (client mode): empty = disabled (not invalid);
+// a non-empty string that isn't a parseable URL gets the settings `.invalid`
+// underline. No effect on the push path — the pusher already guards bad URLs.
+const urlInvalid = computed(() => {
+  const u = (url.value ?? "").trim();
+  if (!u) return false;
+  try {
+    new URL(u);
+    return false;
+  } catch {
+    return true;
+  }
+});
+
+function setMode(next: "client" | "host") {
+  mode.value = next;
+}
+
+// The port input commits lazily (change/blur) and is normalized before it
+// reaches main — a half-typed or cleared field must never respawn the host on
+// a bogus port (declared before the immediate watcher below — TDZ).
+const normalizedPort = computed(() => {
+  const p = Number(port.value);
+  return Number.isInteger(p) && p >= 1 && p <= 65535 ? p : DEFAULT_TELECANVAS_PORT;
+});
+
+// Nudge main with the full push target on any mode/port/url change (+ once on
+// open). Main reconciles the host process AND re-broadcasts {mode, url, port} to
+// every window so app-window pushers in OTHER orchestrator instances follow.
+watch(
+  () => [mode.value ?? "client", normalizedPort.value, url.value ?? ""] as const,
+  ([m, p, u]) => window.foveaBridge.applyTeleCanvas(m, p, u),
+  { immediate: true },
+);
+
+// ---- Host status from main -------------------------------------------------
+const status = ref<TeleCanvasStatus>(IDLE_TELECANVAS_STATUS);
+let disposeStatus: (() => void) | null = null;
+onMounted(async () => {
+  try {
+    status.value = await window.foveaBridge.getTeleCanvasStatus();
+  } catch {
+    /* keep idle default */
+  }
+  disposeStatus = window.foveaBridge.onTeleCanvasStatus((s) => (status.value = s));
+});
+
+// ---- Preview ---------------------------------------------------------------
+// host + listening: a live package viewer (`telecanvas/view` mountView) inside
+// the app-owned fixed-16:9 `.preview` box, subscribed to the server itself
+// (truthful — the same WebSocket wire an external display uses). Otherwise: the
+// v-if mirror of this window's local providers (splash when none). The 480×270
+// mm emulated display exactly reproduces the projection viewBox the app windows
+// push in, with zero letterbox in the 16:9 box.
+const hostPreview = computed(() => isHost.value && status.value.listening);
+const hostUrl = computed(
+  () => `http://127.0.0.1:${status.value.port ?? normalizedPort.value}/`,
+);
+const previewBox = ref<HTMLElement | null>(null);
+let view: ViewHandle | null = null;
+watch(
+  () => [hostPreview.value, hostUrl.value, previewBox.value] as const,
+  ([show, src, el]) => {
+    if (show && el) {
+      if (view) view.update({ src });
+      else view = mountView(el, { src, width: 480, height: 270 });
+    } else {
+      view?.unmount();
+      view = null;
+    }
+  },
+  { immediate: true },
+);
+onUnmounted(() => {
+  view?.unmount();
+  view = null;
+  disposeStatus?.();
+});
+
+// ---- Copy-to-clipboard -----------------------------------------------------
+const copied = ref<string | null>(null);
+async function copy(u: string) {
+  try {
+    await navigator.clipboard.writeText(u);
+    copied.value = u;
+    setTimeout(() => {
+      if (copied.value === u) copied.value = null;
+    }, 1200);
+  } catch {
+    /* clipboard unavailable */
+  }
+}
+</script>
+
+<template>
+  <div class="scroll">
+    <!-- Live preview (the div is the fixed 16:9 box; mountView appends its own
+         svg for the host stream, the v-if svg is the local-provider mirror) -->
+    <div
+      class="preview"
+      ref="previewBox"
+      title="Shows the splash until an app window pushes its live markers; in host mode it mirrors the server's own stream."
+    >
+      <svg v-if="!hostPreview" viewBox="-240 -135 480 270" v-html="content"></svg>
+    </div>
+
+    <!-- Mode switch -->
+    <div class="mode">
+      <button :class="{ active: !isHost }" @click="setMode('client')">Client</button>
+      <button :class="{ active: isHost }" @click="setMode('host')">Host</button>
+    </div>
+
+    <!-- Client mode -->
+    <section v-if="!isHost">
+      <label class="row" title="The app's windows push their projection to this remote TeleCanvas server. Empty = disabled.">
+        <span class="label">Server URL</span>
+        <input type="text" v-model="url" :class="{ invalid: urlInvalid }" placeholder="empty = disabled" />
+      </label>
+    </section>
+
+    <!-- Host mode -->
+    <section v-else>
+      <label class="row" title="Open a listed URL in a browser on a TV or tablet on the same network to see the live projection.">
+        <span class="label">Server port</span>
+        <span class="field">
+          <input type="number" step="1" min="1" max="65535" v-model.lazy.number="port" />
+        </span>
+      </label>
+      <div class="status-row">
+        <span class="dot" :class="{ ok: status.listening, err: !!status.error }"></span>
+        <span v-if="status.listening">Serving on port {{ status.port }}</span>
+        <span v-else-if="status.error" class="err">{{ status.error }}</span>
+        <span v-else>Starting…</span>
+      </div>
+      <ul class="urls" v-if="status.urls.length">
+        <li v-for="u in status.urls" :key="u">
+          <Icon :icon="faTelevision" class="u-icon" />
+          <span class="u-text" :title="u">{{ u }}</span>
+          <button class="icon-button" :title="copied === u ? 'Copied' : 'Copy'" @click="copy(u)">
+            <Icon :icon="copied === u ? faCheck : faCopy" />
+          </button>
+        </li>
+      </ul>
+    </section>
+  </div>
+</template>
+
+<style scoped lang="scss">
+.scroll {
+  height: 100%;
+  overflow-y: auto;
+  padding: 1rem 1.5rem 2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.preview {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background-color: var(--bg-canvas);
+  border: 2px solid var(--border-muted);
+  border-radius: 4px;
+  overflow: hidden;
+  // Both the Vue-owned mirror svg and the mountView-appended svg fill the box.
+  :deep(svg) {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+  :deep(text) {
+    fill: white;
+    dominant-baseline: middle;
+    text-anchor: middle;
+  }
+}
+
+.mode {
+  display: flex;
+  gap: 0;
+  align-self: center;
+  border: 1px solid var(--border-muted);
+  border-radius: 6px;
+  overflow: hidden;
+
+  button {
+    font-family: inherit;
+    font-size: 1em;
+    padding: 0.4em 1.4em;
+    background: var(--bg-chrome);
+    color: var(--text-muted);
+    border: none;
+    cursor: pointer;
+    &:not(:last-child) {
+      border-right: 1px solid var(--border-muted);
+    }
+    &.active {
+      background: var(--accent-bright);
+      color: var(--bg-app);
+    }
+    &:not(.active):hover {
+      background: var(--tint-1);
+      color: var(--text);
+    }
+  }
+}
+
+section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1ch;
+  min-height: 2.2em;
+
+  .label {
+    color: var(--text-muted);
+  }
+  input[type="text"] {
+    flex: 1;
+    min-width: 20ch;
+    max-width: 42ch;
+  }
+  input[type="number"] {
+    width: 10ch;
+    text-align: right;
+  }
+}
+
+input {
+  font-family: inherit;
+  font-size: 1em;
+  color: var(--text);
+  background-color: var(--bg-chrome);
+  border: none;
+  border-bottom: 2px solid var(--border-muted);
+  outline: none;
+  padding: 0.3em 0.5em;
+  &:hover {
+    border-bottom-color: var(--text-muted);
+  }
+  &:focus {
+    border-bottom-color: var(--accent-bright);
+  }
+  &.invalid {
+    border-bottom-color: var(--danger);
+  }
+}
+
+.status-row {
+  display: flex;
+  align-items: center;
+  gap: 1ch;
+  color: var(--text-dim);
+  font-size: 0.95em;
+
+  .dot {
+    width: 0.7em;
+    height: 0.7em;
+    border-radius: 50%;
+    background: var(--warn); /* starting / transient — not yet an error */
+    flex-shrink: 0;
+    &.ok {
+      background: var(--ok);
+    }
+    &.err {
+      background: var(--danger);
+    }
+  }
+  .err {
+    color: var(--danger-text);
+  }
+}
+
+.urls {
+  list-style: none;
+  margin: 0.2rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+
+  li {
+    display: flex;
+    align-items: center;
+    gap: 1ch;
+    padding: 0.4em 0.6em;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background-color: var(--bg-panel-alt);
+
+    .u-icon {
+      color: var(--text-muted);
+    }
+    .u-text {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-variant-numeric: tabular-nums;
+      user-select: text;
+    }
+  }
+}
+
+.icon-button {
+  background: none;
+  border: none;
+  padding: 0.4em;
+  margin: 0;
+  cursor: pointer;
+  color: inherit;
+  border-radius: 4px;
+  outline: 1px solid transparent;
+  &:not(:disabled):hover {
+    background: var(--tint-1);
+    outline: 1px solid var(--border-muted);
+  }
+}
+</style>

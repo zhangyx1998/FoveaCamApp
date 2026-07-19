@@ -64,6 +64,20 @@ export class FreqMeter extends RollingAverage {
     }
 }
 
+// Global inspector toggle for the frame-transport OSD.
+// Ctrl+Shift+I flips it in any renderer
+// window; `StreamView` shows the extra profiling lines when it (or its own
+// `inspector` prop) is on. Kept here rather than a new file since it's the
+// same "profiling display" concern as the meters above.
+export const inspectorMode = ref(false);
+if (typeof window !== "undefined") {
+    window.addEventListener("keydown", (e) => {
+        if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "i") {
+            inspectorMode.value = !inspectorMode.value;
+        }
+    });
+}
+
 export class PerfTimer extends RollingAverage {
     constructor(
         decay: number = 0.9,

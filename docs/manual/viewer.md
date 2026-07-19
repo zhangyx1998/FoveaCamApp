@@ -1,0 +1,184 @@
+# Viewer
+
+The Viewer plays back a `.fcap` recording as a multi-track timeline: a preview panel of live tiles on top, a video-editor-style timeline of stream blocks below. It is a standalone window — it plays recordings entirely on its own and does **not** need the cameras, the orchestrator, or any running app. Use it to review, scrub, and compare the streams you recorded with [Recording](./recording-and-capture.md).
+
+**Prerequisites:** none. The Viewer works with no cameras connected. All you need is a `.fcap` recording file (legacy `.fovea` files also open, read-only).
+
+The recording itself is always opened **read-only** — the Viewer never modifies it. Your layout and playback choices are saved separately in a small **layout sidecar** (a `ui.json` file next to the recording); see [Layout persistence](#layout-persistence).
+
+---
+
+## Opening a recording
+
+There are several ways to open one, and each opens its own Viewer window (opening the same file again just focuses the existing window):
+
+- **Automatically** — when you stop a recording, the Viewer opens on the new file (see [Recording](./recording-and-capture.md)).
+- **`Cmd/Ctrl-O`** — from any window, opens a file picker filtered to `.fcap`/`.fovea`. On macOS this is also **File → Open Recording…**.
+- **Double-click a `.fcap` file** in Finder/Explorer, or drag it onto the app.
+
+While the file loads, the window shows **Opening &lt;filename&gt;…**. If it cannot be read, the window shows the error message instead.
+
+The title bar shows the file name and a compact path (your home folder shown as `~`). Two title-bar buttons are available once a file is open:
+
+- **Open folder** — reveals the recording in Finder/Explorer.
+- **Reset UI state** — re-runs the automatic layout, discarding your current arrangement (see [Layout persistence](#layout-persistence)).
+
+---
+
+## The preview panel (top)
+
+The upper panel shows one **tile** per enabled stream whose block spans the current playhead time. Tiles are drawn in **Z-order** — the master track first, then top-to-bottom through the timeline tracks — so the arrangement of your tracks controls which view sits where.
+
+The panel header shows the number of views and an optional **no wide designation** warning (see below). (The **3D View** control now lives on the transport bar — see [Playback controls](#playback-controls).)
+
+There is **one tile slot per track**. A slot with no view right now — an empty or disabled track, or the second track of a stereo pair that is merged into one tile — shows a subdued **placeholder** naming the track and why it is empty, so the tile row always lines up with the tracks below.
+
+- If a tile's stream has no decoded frame yet at the playhead, the tile shows **no frame** until you play or scrub onto a frame.
+- If nothing is enabled under the playhead, the tiles are all placeholders.
+- Click a tile to **focus** its stream (it gets an outline); its details appear in the [Property panel](#property-panel) and it can be toggled with **`v`**.
+- Hovering or focusing a tile **highlights** its block in the timeline, and hovering or focusing a block highlights its tile — so you can always see which tile matches which track. Tiles are borderless at rest; on highlight or focus the outline raises in the track's color. Each tile's header also carries a small **color chip** matching its track's color in the timeline.
+- **Rearrange tiles** by dragging a tile's **header** left or right; a drop line shows where it will land. The order is saved in the layout sidecar. (Because there is one slot per track, this reorders the previews without touching the tracks themselves.)
+- **Project a tile to its own window.** Each stream tile has the **project-to-window** button (top-right of the tile, the same one every live view has) — click it to open a projection window that **mirrors** that tile, or drag it onto an existing projection window. The projection follows the tile exactly — its playhead, its 3D mode, everything — because it shows the very frame the tile is showing. Close the tile's recording (or the tile stops having a frame) and the projection freezes, then reports the source has closed.
+
+When you open a recording, the playhead starts on the **first recorded frame** (the earliest block), not at time zero — so you always see content immediately instead of a blank panel. If you had a saved playhead position from last time, that is restored instead.
+
+### Master / wide stream
+
+If the recorder marked a wide/center stream, it becomes the **master** and its tile leads. If none was designated, the Viewer uses the first stream as master and shows a **no wide designation** hint in the header — playback is unaffected, only the ordering is a best guess.
+
+### Tile widths
+
+The tiles always fill the width of the panel in one row — they never scroll sideways. To make one tile wider (and its neighbor narrower), **drag the thin divider** between them; the pair resizes and the rest stay put. Each tile keeps a minimum width so nothing collapses to nothing. Your sizes are saved in the layout sidecar.
+
+### 3D View (stereo pairs)
+
+When the recording contains a left/right pair, a **3D View** dropdown appears on the transport bar and applies to **every** left/right pair at once. Choose:
+
+- **disabled** — show left and right as two separate tiles.
+- **left-only** / **right-only** — collapse the pair to a single eye.
+- **anaglyph** — merge the pair into one colored 3D tile (view through anaglyph glasses). The left/right colors follow the **Anaglyph style** in **Settings → Application** (default red = left, cyan = right); changing it recomposes the open tile. It is a view-time choice — the recording is never altered.
+
+---
+
+## Property panel
+
+Click the **property-panel** button on the transport bar (the columns icon on the right) to open a right-side inspector of the **focused** stream — the tile or block you last clicked. It shows the full details of that stream:
+
+- **channel** id / topic and **encoding** (schema) name.
+- **format** (pixel format · bit depth · codec), **resolution**, and message **count** with average fps.
+- **timestamps** — the **first** and **last** message as an absolute wall-clock time *and* its position within the recording, plus each one's offset from the current playhead, and the total **span**.
+- **live** playback figures — frames **decoded**, current decode **rate**, and the **frame** currently shown for the stream (with its offset from the playhead).
+- **layout** — which **track** the stream sits on, whether it is **enabled**, and — for a stereo stream — its **pair** and side and the active **3D mode**.
+
+When nothing is focused, the panel reads **Select a stream to inspect**. Drag the panel's left edge to resize it. The panel's open/closed state and width are saved in the layout sidecar, so it comes back the way you left it.
+
+The right-click stats popover (right-click a tile or a timeline block) still works as the quick, throwaway view; the property panel is the persistent one.
+
+The property panel also carries the **Export…** button that opens the video-export dialog for the focused stream (see [Exporting a stream to video](#exporting-a-stream-to-video)).
+
+---
+
+## Exporting a stream to video
+
+Each frame stream can be exported to a standalone video file. Focus the stream (click its tile or block) and press **Export…** in the [property panel](#property-panel). Export is powered by **ffmpeg**, which must be installed on your machine — if the Viewer can't find it, the dialog explains how to install it and the controls stay disabled. (The Viewer looks for ffmpeg on your `PATH` and in the usual Homebrew/MacPorts locations, so a Homebrew install works even when the app is launched from Finder.)
+
+The dialog offers:
+
+- **Format** — ProRes (profiles **422**, **422 HQ**, **4444**), **H.264 (x264)**, **H.265 (x265)**, **VP9 (WebM)**, or **AV1 (WebM)**. The container is chosen for you (`.mov` for ProRes, `.mp4` for H.264/H.265, `.webm` for VP9/AV1).
+- **Pixel format** — the options depend on the format (e.g. ProRes 4:2:2 10-bit vs 4444 10-bit with alpha; x265 adds 10-bit variants).
+- **Frame rate** — defaults to the stream's detected rate; type a different number to override, or click **detected** to reset.
+- **Timing** — **As-is** (default; feeds the recorded frames in order at the target rate — best when frames are evenly spaced) or **More accurate** (resamples onto a uniform timeline, blending neighbouring frames — smoother when frame intervals vary).
+- **Undistort** — corrects lens distortion using the calibration embedded in the recording. This is **on by default** for the **wide/center** stream when the recording carries a wide-camera calibration. Fovea (left/right) streams use per-frame maps that aren't reconstructed here, so their toggle is disabled with a note; recordings without calibration disable it too.
+- **Transparency** — when Undistort is on and the chosen pixel format has an alpha channel (ProRes 4444, VP9 `yuva420p`), the regions that fall outside the original frame after undistortion become **transparent** instead of black. It's on by default when available and disabled (with a reason) otherwise.
+- **Run exports in parallel** — a global, remembered setting. Off (default) runs one export at a time and queues the rest; on runs them together.
+
+Press **Export…**, choose where to save (the filename defaults to `<recording>-<stream>`), and the export starts. Progress appears in the **film-strip tray** on the title bar: it shows overall progress across all exports, and hovering it expands a per-stream report with each export's percentage, encode rate, time remaining, and state (queued / running / done / failed). Each running or queued export has an **✕** to abort it.
+
+If you close a Viewer window while exports are still running, it asks you to confirm — confirming aborts the exports and deletes their partial files; cancelling keeps the window open.
+
+> If a live capture session is running in another window while you export, a banner warns that playback and export may be slower (they share the machine with live capture). It can be dismissed, and reappears if a new session starts later.
+
+---
+
+## The timeline panel (bottom)
+
+The lower panel is a read-only editor of **tracks** (rows) and **blocks** (the time span each stream covers). Row 0 is labelled **master**; the rest are numbered. A draggable **playhead** marks the current time. A **time ruler** runs along the top of the panel with labelled tick marks.
+
+Each track carries a **color**: left/right/center streams take the standard **L / C / R** role colors (cyan / orange / greenyellow), and other tracks get a distinct muted color. The color tints the track's label and its block edges, and matches the color chip on that track's preview tile — so a track, its block, and its tile are easy to connect at a glance.
+
+### Zooming and panning the timeline
+
+- **Zoom** the time axis with **Ctrl + scroll** (or a trackpad pinch) — it zooms centered on the pointer, so you can dive into a busy stretch without losing your place.
+- **Pan** by scrolling horizontally (two-finger swipe); scroll vertically to move through a long list of tracks. Scrolling past the start or end of the recording rubber-bands and springs back. The areas **before** the first frame and **after** the last are drawn as dimmed hatched **bleed** strips, marking the recording's boundaries.
+
+### Playback controls
+
+The **transport bar** is the horizontal bar between the preview and the timeline (it is also the divider you drag to resize the split — see [Resizing the panels](#resizing-the-panels)). It carries, from left to right:
+
+- **▶ / ⏸** — play or pause (or press **Space**) — and a **rate** dropdown (`0.25×` to `4×`).
+- The current timecode in the centre as **playhead / total**, each `HH:MM:SS.sss`.
+- On the right: the **3D View** dropdown (for stereo pairs), the **property-panel** toggle, and a chevron that **collapses / expands** the timeline.
+
+### Seeking
+
+- **Drag the playhead** — the vertical marker with the hourglass ornaments — left or right to scrub. Its grab area is wider than the line, so you don't have to be pixel-perfect. The playhead and its ornaments are **solid red while playing** and neutral when paused. During playback the marker **glides smoothly** between position updates rather than stepping.
+- Or **click / drag on the time ruler** at the top of the panel to jump the playhead.
+- Or **click anywhere on a track lane** to jump the playhead to that point.
+- Or use the **← / →** arrow keys to step the playhead (about one 30 fps frame per press; hold **Shift** for a 1-second jump).
+
+### Keyboard shortcuts
+
+- **Space** — play / pause.
+- **← / →** — step back / forward (**Shift** = 1 s).
+- **`v`** — with a stream focused, enable / disable it (see below).
+- **Esc** — dismiss the topmost open panel: a confirmation dialog, the export dialog, or the stats popover. Esc never aborts a running export — it resolves a "close exports?" prompt to *keep the window open*.
+
+### Rearranging tracks
+
+Drag a block up or down onto another lane to move its stream between tracks. A drop is refused (the block snaps back) if it would collide with another block already occupying that time on the target lane. Drag a block onto the thin gap **between two lanes** — a colored insertion line appears — to split it out onto a **brand-new track** at that position. Drag a block below the last lane, onto the **＋ new track** zone, to give it a track at the bottom. Valid drop targets highlight; invalid ones show red.
+
+To restack the **previews**, drag the tiles directly (see [The preview panel](#the-preview-panel-top)) — tile order is saved independently of track order.
+
+### Focusing and disabling a stream
+
+Click a block to focus it (it gets an outline). With a block focused, press **`v`** to disable that stream: it is hidden from the previews and dimmed in the timeline. Press **`v`** again to re-enable it. Disabling streams you are not reviewing keeps the preview panel uncluttered and reduces decode work.
+
+### Descriptor overlays
+
+For a multi-fovea recording, the master/center tile draws colored target boxes over the frame at each moment, one color per fovea target — the same targets you were tracking when you recorded.
+
+### Fovea footprint projections
+
+For a multi-fovea recording, each recorded fovea stream also knows **where its mirror was pointing** at every frame (recorded per-frame as the mirror angle and a projection homography). The Viewer draws that as a **projected box** on the master/center tile: the fovea sensor's frame outline mapped into the wide camera's view — the *footprint* of what that fovea was looking at.
+
+- **Color coding.** The left/right streams of a fovea **pair** share one color. Colors are reused between streams whose timeline blocks do not overlap in time, so distinct streams stay visually separable.
+- **Show all projections.** A checkbox in the preview header (default **off**). When **off**, only the stream you are **hovering or have focused** projects its box — hover a timeline block (or a box) to reveal it. When **on**, every stream active at the playhead projects at once.
+- **Hover = timeline hover.** Hovering a projected box is the same as hovering that stream's block in the timeline, and vice-versa — one shared highlight, both directions.
+- **Depth readout.** Each box is labelled with its **stream id**. Hover it and the label also shows the **depth of the vergence plane** for the pair — how far in front of the cameras the two eyes are converging, computed from the recorded angles and the recording's stereo baseline. It reads **—** when the recording carries no baseline (older recordings) or the partner eye has no data yet, and **∞** when the eyes are pointing parallel.
+
+Footprints are a **view-time** overlay computed from recorded metadata — the recording itself is never altered.
+
+---
+
+## Resizing the panels
+
+The **transport bar** doubles as the divider between the preview and timeline panels. Drag it up or down to change the split; the preview keeps a minimum height. (The play, rate, 3D, panel, and collapse controls on the bar are interactive — dragging anywhere else on the bar resizes.)
+
+Use the **collapse chevron** on the right of the bar to fold the timeline away: the tracks disappear and the transport bar stays put at the bottom, still fully usable for playback. The chevron flips to an up-arrow — click it (or just drag the bar upward) to bring the timeline back.
+
+---
+
+## Layout persistence
+
+Everything about how you arranged the Viewer — track layout, tile order, disabled streams, 3D View modes, the preview/timeline split, tile sizes, and the playhead position — is saved to a **layout sidecar** (`<recording>.fcap.ui.json`) right next to the recording. Reopen the file later and your arrangement comes back. The recording file itself is never touched.
+
+Two situations prompt you before anything is overwritten:
+
+- **View layout unreadable** — the sidecar is present but corrupt. The Viewer opens with a fresh default layout and asks whether to **Reset** it (overwrite with the fresh layout) or **Not now** (leave the corrupt file untouched for this session).
+- **Streams changed** — the recording's streams no longer match your saved layout. The Viewer merges what it can and asks whether to **Reset** to a fresh auto-packed layout or **Keep mine** (keep the merged layout and save it going forward).
+
+The **Reset UI state** title-bar button re-runs the automatic layout at any time and saves it, discarding your current arrangement.
+
+---
+
+See also: [Recording and Capture](./recording-and-capture.md) for producing the `.fcap` files this window opens.

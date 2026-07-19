@@ -38,10 +38,10 @@ const size = new ElementSize(bar);
     left: 0;
     right: 0;
     height: 3em;
-    background-color: #222;
+    background-color: var(--bg-app);
     justify-content: flex-start;
     align-items: center;
-    border-bottom: 1px solid #666;
+    border-bottom: 1px solid var(--border-muted);
     & > :deep(*) {
         margin: 0.5em 1em;
     }
@@ -57,7 +57,7 @@ const size = new ElementSize(bar);
         padding: 1em;
         margin: 0;
         &:hover {
-            background-color: #fff3;
+            background-color: var(--tint-3);
         }
     }
 }

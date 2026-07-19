@@ -46,3 +46,67 @@ template <> Packet::Config::Log::Level convert(const std::string &level) {
   return Packet::Config::Log::Level::OFF;
 #endif
 }
+
+template <> std::string convert(const Packet::System::Reset::Type &type) {
+  switch (type) {
+  case Packet::System::Reset::Type::SOFT:
+    return "SOFT";
+  case Packet::System::Reset::Type::HARD:
+    return "HARD";
+  case Packet::System::Reset::Type::MEMS:
+    return "MEMS";
+  default:
+#if defined(__EXCEPTIONS) || defined(__cpp_exceptions)
+    throw std::invalid_argument("Unknown Packet::System::Reset::Type: " +
+                                std::to_string(static_cast<uint8_t>(type)));
+#else
+    return "SOFT";
+#endif
+  }
+}
+
+template <> Packet::System::Reset::Type convert(const std::string &type) {
+  if (type == "SOFT")
+    return Packet::System::Reset::Type::SOFT;
+  if (type == "HARD")
+    return Packet::System::Reset::Type::HARD;
+  if (type == "MEMS")
+    return Packet::System::Reset::Type::MEMS;
+#if defined(__EXCEPTIONS) || defined(__cpp_exceptions)
+  throw std::invalid_argument("Unknown reset type: " + type);
+#else
+  return Packet::System::Reset::Type::SOFT;
+#endif
+}
+
+template <> std::string convert(const Packet::Command::MirrorStream::Op &op) {
+  switch (op) {
+  case Packet::Command::MirrorStream::Op::CREATE:
+    return "CREATE";
+  case Packet::Command::MirrorStream::Op::UPDATE:
+    return "UPDATE";
+  case Packet::Command::MirrorStream::Op::TERMINATE:
+    return "TERMINATE";
+  default:
+#if defined(__EXCEPTIONS) || defined(__cpp_exceptions)
+    throw std::invalid_argument("Unknown Packet::Command::MirrorStream::Op: " +
+                                std::to_string(static_cast<uint8_t>(op)));
+#else
+    return "CREATE";
+#endif
+  }
+}
+
+template <> Packet::Command::MirrorStream::Op convert(const std::string &op) {
+  if (op == "CREATE")
+    return Packet::Command::MirrorStream::Op::CREATE;
+  if (op == "UPDATE")
+    return Packet::Command::MirrorStream::Op::UPDATE;
+  if (op == "TERMINATE")
+    return Packet::Command::MirrorStream::Op::TERMINATE;
+#if defined(__EXCEPTIONS) || defined(__cpp_exceptions)
+  throw std::invalid_argument("Unknown Packet::Command::MirrorStream::Op: " + op);
+#else
+  return Packet::Command::MirrorStream::Op::CREATE;
+#endif
+}

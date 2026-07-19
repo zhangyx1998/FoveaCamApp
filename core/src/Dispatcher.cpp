@@ -23,20 +23,27 @@ using Threading::Guard;
 
 static void async_cb(uv_async_t *handle);
 
-struct Context {
+// The uv_async_t lives in a heap holder that OUTLIVES its Context. `~Context`
+// must not block waiting for the async close callback: when `~Context` is
+// reached from inside the uv loop (e.g. `cleanup()` invoked from a module
+// top-level await, resuming inside `uv_run`), a nested `uv_run` never advances
+// to the "closing handles" phase → the callback never fires → hang (B-21).
+// Instead `~Context` calls `uv_close(&h->async, close_cb)` and RETURNS; the
+// owning loop drains the close and `close_cb` frees the holder.
+struct AsyncHandle {
   uv_async_t async;
-  uv_handle_t *handle() { return reinterpret_cast<uv_handle_t *>(&async); }
+};
 
-  bool closed = false;
+struct Context {
+  napi_env env;
+  AsyncHandle *h; // freed by close_cb after uv_close (outlives this Context)
+  Napi::AsyncContext async_context;
+  uv_handle_t *handle() { return reinterpret_cast<uv_handle_t *>(&h->async); }
+
   unsigned future = 0;
 
-  // Get Context pointer from uv_handle_t pointer
-  // This is safe because uv_async_t is the first member of Context
   static Context *from_handle(uv_handle_t *handle) {
-    static_assert(offsetof(Context, async) == 0,
-                  "async must be the first member of Context");
-    auto *async = reinterpret_cast<uv_async_t *>(handle);
-    return reinterpret_cast<Context *>(async);
+    return static_cast<Context *>(handle->data);
   }
 
   inline void incFuture() {
@@ -57,7 +64,7 @@ struct Context {
   void dispatch(Task &&task) {
     queue.push_back(std::move(task));
     updateRef();
-    uv_async_send(&async);
+    uv_async_send(&h->async);
   }
 
   Task getNextTask() {
@@ -67,6 +74,8 @@ struct Context {
     queue.pop_front();
     return task;
   }
+
+  size_t queueSize() const { return queue.size(); }
 
   bool referenced = true; // uv handle is referenced by default
 
@@ -85,21 +94,29 @@ struct Context {
     }
   }
 
-  Context(napi_env env) : async({.data = env}) {
-    VERBOSE("Dispatcher created @ %p (async handle)", &async);
+  Context(napi_env env)
+      : env(env), h(new AsyncHandle{}), async_context(env, "Dispatcher") {
+    h->async.data = this;
+    VERBOSE("Dispatcher created @ %p (async handle)", &h->async);
     uv_loop_t *loop;
     napi_status s = napi_get_uv_event_loop(env, &loop);
-    if (s != napi_ok)
+    if (s != napi_ok) {
+      delete h;
       throw JS::Error(env, "napi_get_uv_event_loop failed");
-    if (uv_async_init(loop, &async, async_cb) != 0)
+    }
+    if (uv_async_init(loop, &h->async, async_cb) != 0) {
+      delete h;
       throw JS::Error(env, "uv_async_init failed");
+    }
     updateRef();
   }
 
+  // Runs on the OWNING uv loop after this Context is already gone; frees the
+  // holder that outlived it. Recovers the holder from the handle pointer
+  // (uv_async_t is AsyncHandle's only member) — never touches the dead Context.
   static void close_cb(uv_handle_t *handle) {
     VERBOSE("Dispatcher UV handle closed @ %p", handle);
-    Context *ctx = from_handle(handle);
-    ctx->closed = true;
+    delete reinterpret_cast<AsyncHandle *>(handle);
   }
 
   ~Context() {
@@ -107,19 +124,14 @@ struct Context {
       WARN("Dispatcher destroyed with active references");
       uv_unref(handle());
     }
+    // Close asynchronously and RETURN — do NOT block on the close callback. The
+    // holder `h` is handed to close_cb (which frees it on the owning loop); the
+    // old `while (!closed) uv_run(NOWAIT)` deadlocked when reached from inside
+    // the loop (B-21). `h` is a raw pointer, so ~Context does not free it.
     if (!uv_is_closing(handle())) {
       VERBOSE("Closing dispatcher UV handle");
       uv_close(handle(), close_cb);
     }
-    // Wait for the handle to finish closing
-    // This is necessary because uv_close is asynchronous and the handle
-    // must not be freed until the close callback has been invoked
-    VERBOSE("Waiting for dispatcher UV handle to close...");
-    while (!closed) {
-      // Run the event loop to allow the close callback to execute
-      uv_run(async.loop, UV_RUN_NOWAIT);
-    }
-    VERBOSE("Dispatcher UV handle closed");
   }
 };
 
@@ -145,13 +157,17 @@ Dispatcher::Ptr get(Napi::Env env) {
 }
 
 static void async_cb(uv_async_t *handle) {
-  const auto &env = static_cast<napi_env>(handle->data);
+  auto *ctx = Context::from_handle(reinterpret_cast<uv_handle_t *>(handle));
+  const auto &env = ctx->env;
   auto dispatcher = get(env);
   if (!dispatcher) {
     WARN("Dispatcher async_cb called after cleanup");
     return;
   }
   Napi::HandleScope hs(env);
+  auto ref = dispatcher->ref();
+  Napi::CallbackScope cs(env, ref->async_context);
+  ref.release();
   size_t processed = 0;
   while (true) {
     auto task = dispatcher->ref()->getNextTask();
@@ -168,8 +184,10 @@ static void async_cb(uv_async_t *handle) {
   }
   // Update ref count once after processing all tasks
   if (processed > 0) {
-    VERBOSE("Dispatcher processed %zu tasks in single async_cb", processed);
-    dispatcher->ref()->updateRef();
+    auto ref = dispatcher->ref();
+    auto remaining = ref->queueSize();
+    VERBOSE("drain n=%zu remaining=%zu", processed, remaining);
+    ref->updateRef();
   }
 }
 
@@ -182,9 +200,20 @@ void init(Napi::Env env) {
   Cleanup::add(
       env,
       [env] {
-        auto ref = registry.ref();
-        if (ref->has(env))
-          ref->erase(env);
+        // Extract + erase under the registry lock, then DROP the Dispatcher's
+        // last reference OUTSIDE the lock. Destroying it runs ~Context, which
+        // (now that it no longer hangs on the uv close — B-21) proceeds to
+        // destroy its pending-task queue → ~Future → decFuture → get(env),
+        // which re-acquires this same registry lock. Dropping under the lock
+        // would deadlock (a pending future at cleanup() reproduces it).
+        Dispatcher::Ptr dying;
+        {
+          auto ref = registry.ref();
+          if (ref->has(env)) {
+            dying = ref->get(env);
+            ref->erase(env);
+          }
+        }
       },
       "Dispatcher");
 }

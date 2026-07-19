@@ -31,6 +31,9 @@ typedef struct CameraCalibration : public Shared<CameraCalibration> {
   cv::Size2i sensor_size;
   cv::Mat camera_matrix, dist_coeffs;
   std::vector<cv::Mat> rvecs, tvecs;
+  // Overall RMS re-projection error returned by cv::calibrateCamera (0 when the
+  // calibration was built from persisted JSON that predates this field).
+  double rms = 0;
 } CameraCalibration;
 
 typedef enum CvtColorCode {

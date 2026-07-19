@@ -46,6 +46,16 @@ export function diff(values: Vector) {
   return max(values) - min(values);
 }
 
+// Vue-free home for `clamp` (moved here from `lib/util/index.ts`, which pulls
+// in `vue` for several unrelated exports — importing `clamp` from there
+// broke the orchestrator's Vue-free bundle once, see `lib/pid.ts`'s history;
+// this file has no imports at all, so it can't repeat that mistake).
+export function clamp(val: number, [lo, hi]: [number, number]) {
+  if (val < lo) return lo;
+  if (val > hi) return hi;
+  return val;
+}
+
 export function rad(deg: number) {
   return (deg * Math.PI) / 180;
 }
